@@ -79,7 +79,12 @@ through the same policy/approval path as direct tool calls. The result comes bac
 the shim's `text()` blocks -- each flushed to disk per call, so deliberate results
 survive a timeout/abort kill -- with stdout/stderr demoted to a labeled diagnostics
 tail; `notify()` streams progress through the tool's update callback and `batch()`
-dispatches parallel helper calls (pump waves bounded by `max_parallel_rpc`). It runs as
+dispatches parallel helper calls (pump waves bounded by `max_parallel_rpc`). Claimed
+RPC requests always end answered (a killed sweep leaves in-flight claim markers the
+successor sweep or cancel path answers in writing), approval prompts left pending by
+a killed dispatch are cancelled, persistent cells reset the per-cell bridge (fresh
+text budget, thread-tag quarantine), and the `text()` budget charges the
+JSON-encoded frame. It runs as
 host code with bash-equivalent authority -- never a sandbox. The
 default `kernel_mode = "per_call"` gives every run a fresh process; the opt-in `"session"`
 mode dispatches serialized cells to a persistent supervised interpreter keyed by persisted

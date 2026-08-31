@@ -24,7 +24,7 @@ timeout_ms = 120000                    # end-to-end wall-time cap per run, inclu
 max_rpc_calls = 100                    # helper calls one run may make
 max_rpc_result_bytes = 5242880         # total helper-result bytes one run may consume (5 MiB)
 max_output_bytes = 50000               # script stdout/stderr bytes returned as diagnostics
-max_text_bytes = 65536                 # total text() result-block bytes one run may emit
+max_text_bytes = 65536                 # total JSON-encoded text() frame bytes one run may emit
 max_parallel_rpc = 4                   # helper calls the pump dispatches concurrently
 tools = []                             # helper subset; empty = full fixed allowlist
 kernel_mode = "per_call"               # "per_call" (default) | "session"
@@ -182,15 +182,24 @@ module-level functions:
   never deferred to exit), so everything written before a timeout or abort kill
   still reaches the tool result. Blocks are lock-guarded, so they are safe from
   `batch()` worker threads, and the total emitted bytes are capped at
-  `max_text_bytes` (default 64 KiB); an over-budget call raises `ToolError`
-  while the blocks already flushed stay in the result. Non-strings are
-  `str()`-coerced.
+  `max_text_bytes` (default 64 KiB). The cap charges the **JSON-encoded frame**
+  — exactly the bytes `json.dump` writes to disk, escaping included — so a
+  NUL-heavy string that six-folds under `\u0000` escaping is refused by the same
+  budget the host enforces on the file, never written by one side and silently
+  dropped by the other. An over-budget call raises `ToolError` while the blocks
+  already flushed stay in the result. Non-strings are `str()`-coerced.
 - **`notify(msg)`** — a fire-and-forget streaming side channel. The pump
   consumes `notify-<n>.json` frames on every sweep and forwards each message
   to the tool's streaming update callback as a partial update
-  (`notify: <msg>`), capped at 4 KiB per message and 64 messages per run;
-  anything beyond is silently dropped, and a run with no callback consumes and
-  discards them so they never accumulate.
+  (`notify: <msg>`), capped at 4 KiB per message and 64 forwarded messages per
+  run — the counter rides the run's stats, so it spans sweeps and the final
+  drain. Anything beyond is silently dropped, malformed frames are consumed
+  without being forwarded or counted, and a run with no callback consumes and
+  discards them so they never accumulate. A `notify()` issued immediately
+  before exit is still forwarded: the per-call pump and the persistent stop
+  path each run one notification-only final drain. Tool requests are never
+  drained after the run — a posthumous request would be tool work nobody is
+  waiting for.
 - **`batch([(tool, params), ...])`** — parallel helper calls. Each element runs
   the plain blocking call inside a bounded stdlib thread pool (16 workers max);
   the Elixir pump dispatches claimed requests as supervised tasks in waves of
@@ -214,15 +223,27 @@ included) instead of surfacing it in the labeled diagnostics tail.
 Accounting under parallel dispatch stays exact because claiming —
 authentication, replay detection, and call-budget reservation — happens
 serially in the pump before any task starts, and the result-byte budget is
-spent by the pump as each task returns. Approvals stay on the existing
-`ToolExecutor` path inside each task: it is function-call based with no
-process-affine state, and the backing approval store serializes concurrent
-requests, so N concurrent gated calls produce exactly one prompt each — never
-duplicated, never lost.
+spent by the pump as each task returns. A claimed request always ends
+answered: when it becomes dispatch-bound its `req-<id>.json` is renamed to an
+in-flight `req-<id>.claim` marker that the response write retires, so a sweep
+that dies mid-wave leaves durable evidence — the next sweep (or the server's
+cancel path, where no successor runs) answers those ids in writing with
+`rpc dispatch interrupted`, reconstructs their call reservations and replay
+memory in the stats, and never re-dispatches them. Approvals stay on the
+existing `ToolExecutor` path inside each task; each approval-requiring claim
+pre-allocates its approval id, and a tiny unlinked watcher cancels the pending
+prompt if the sweep or the dispatch task dies while it is pending, so no
+approval prompt outlives the script that triggered it and a cancelled prompt
+can never install policy.
 
-In session mode the `text()` budget is baked into the staged `lemon_tools.py`
-source, so a live kernel keeps the budget it was first staged with until it is
-reset or reaped.
+In session mode the kernel stages `lemon_tools.py` once and `_configure`
+installs a fresh bridge for every cell: new rpc dir and token, a full fresh
+`text()` budget (the per-call `max_text_bytes` rides the bridge), and reset
+sequence counters. Threads are stamped with the cell that started them, and
+the shim refuses bridge calls from threads stamped with an earlier cell, so a
+thread a finished cell left behind can neither spend a later cell's budget nor
+write into its rpc directory (its `ToolError` is harmless). This is isolation
+hygiene, not a sandbox.
 
 ## Output
 

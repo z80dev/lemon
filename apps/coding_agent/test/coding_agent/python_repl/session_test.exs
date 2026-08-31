@@ -313,6 +313,32 @@ defmodule CodingAgent.PythonRepl.SessionTest do
     end
   end
 
+  defp await_file_contents(path, attempts \\ 200) do
+    case File.read(path) do
+      {:ok, contents} ->
+        contents
+
+      _error when attempts > 0 ->
+        Process.sleep(25)
+        await_file_contents(path, attempts - 1)
+
+      _error ->
+        flunk("file was never written: #{path}")
+    end
+  end
+
+  # The text-<n>.json blocks a cell flushed, decoded and in order.
+  defp text_blocks(dir) do
+    dir
+    |> Path.join("text-*.json")
+    |> Path.wildcard()
+    |> Enum.sort_by(fn path ->
+      {n, _} = Integer.parse(path |> Path.basename(".json") |> String.replace_prefix("text-", ""))
+      n
+    end)
+    |> Enum.map(fn path -> path |> File.read!() |> Jason.decode!() |> Map.fetch!("text") end)
+  end
+
   defp monitor(pid), do: Process.monitor(pid)
 
   defp assert_stops(pid, ref, expected_reason \\ :any) do
@@ -353,8 +379,8 @@ defmodule CodingAgent.PythonRepl.SessionTest do
       source = PythonShim.render_module(["read"])
 
       assert PythonShim.render_prelude(["read"]) == source
-      assert String.contains?(source, "_RPC_DIR = None")
-      assert String.contains?(source, "_TOKEN = None")
+      assert String.contains?(source, "_BRIDGE = None")
+      refute String.contains?(source, "_configure(\"")
 
       pid = start_session(ctx, helper_source: source)
       workspace = FakeProcess.start_opts() |> Keyword.fetch!(:cwd)
@@ -400,15 +426,15 @@ defmodule CodingAgent.PythonRepl.SessionTest do
 
       first_code = """
       import lemon_tools
-      assert lemon_tools._RPC_DIR == #{Jason.encode!(first_dir)}
-      assert lemon_tools._TOKEN == "first-token"
+      assert lemon_tools._BRIDGE.dir == #{Jason.encode!(first_dir)}
+      assert lemon_tools._BRIDGE.token == "first-token"
       print("first")
       """
 
       second_code = """
       import lemon_tools
-      assert lemon_tools._RPC_DIR == #{Jason.encode!(second_dir)}
-      assert lemon_tools._TOKEN == "second-token"
+      assert lemon_tools._BRIDGE.dir == #{Jason.encode!(second_dir)}
+      assert lemon_tools._BRIDGE.token == "second-token"
       print("second")
       """
 
@@ -425,6 +451,107 @@ defmodule CodingAgent.PythonRepl.SessionTest do
                  %{code: second_code, bridge: %{dir: second_dir, token: "second-token"}},
                  2_000
                )
+
+      ref = monitor(pid)
+      assert :ok = Session.shutdown(pid)
+      assert_stops(pid, ref)
+      assert_no_workspace_leak(before)
+    end
+
+    test "the real runner resets the per-cell text budget and quarantines stale-cell threads" do
+      before = pyrepl_dirs()
+      interpreter = System.find_executable("python3") || flunk("python3 is required")
+      runner = Application.app_dir(:coding_agent, "priv/python_repl/runner.py")
+      source = PythonShim.render_module([], 4_096)
+
+      {:ok, pid} =
+        Session.start_link(
+          key: {:scope, "budget-cells"},
+          cwd: System.tmp_dir!(),
+          interpreter: interpreter,
+          runner_path: runner,
+          helper_source: source,
+          startup_timeout_ms: 3_000
+        )
+
+      Process.unlink(pid)
+
+      on_exit(fn ->
+        if Process.alive?(pid), do: Session.shutdown(pid, 2_000)
+      end)
+
+      unique = System.unique_integer([:positive])
+      first_dir = Path.join(System.tmp_dir!(), "budget-first-#{unique}")
+      second_dir = Path.join(System.tmp_dir!(), "budget-second-#{unique}")
+      outcome = Path.join(System.tmp_dir!(), "budget-outcome-#{unique}.txt")
+      File.mkdir_p!(first_dir)
+      File.mkdir_p!(second_dir)
+
+      # Cell 1 consumes nearly the whole budget and plants a thread that
+      # waits for the next cell's bridge — the exact stale-thread injection
+      # the per-cell reset must survive — then reports its fate through a
+      # file (its cell is long over by the time it runs).
+      first_code = """
+      import lemon_tools, threading, time
+
+      def stale():
+          for _ in range(500):
+              bridge = lemon_tools._BRIDGE
+              if bridge is not None and bridge.token == "second-token":
+                  break
+              time.sleep(0.02)
+          try:
+              text("STALE THREAD OUTPUT")
+          except Exception as exc:
+              with open(#{Jason.encode!(outcome)}, "w") as f:
+                  f.write(type(exc).__name__ + ": " + str(exc))
+              return
+          with open(#{Jason.encode!(outcome)}, "w") as f:
+              f.write("STALE WROTE A BLOCK")
+
+      threading.Thread(target=stale).start()
+      text("c" * 3800)
+      """
+
+      second_code = """
+      text("fresh cell budget")
+      text("d" * 3000)
+      """
+
+      assert {:ok, %{cells_completed: 1}} =
+               Session.execute(
+                 pid,
+                 %{
+                   code: first_code,
+                   bridge: %{dir: first_dir, token: "first-token", max_text_bytes: 4_096}
+                 },
+                 10_000
+               )
+
+      assert {:ok, %{cells_completed: 2}} =
+               Session.execute(
+                 pid,
+                 %{
+                   code: second_code,
+                   bridge: %{dir: second_dir, token: "second-token", max_text_bytes: 4_096}
+                 },
+                 10_000
+               )
+
+      # The stale thread had its say: it must have been refused by the
+      # bridge's cell tag, never silently written.
+      stale_fate = await_file_contents(outcome)
+      assert stale_fate =~ "ToolError"
+      assert stale_fate =~ "finished cell"
+
+      # Cell 1 kept the block it flushed before dying...
+      assert text_blocks(first_dir) == [String.duplicate("c", 3800)]
+
+      # ...and cell 2 ran on a full fresh budget: with cell 1's 3.8k still
+      # charged, the 3.0k block would have blown the 4k cap.
+      assert text_blocks(second_dir) == ["fresh cell budget", String.duplicate("d", 3000)]
+
+      refute File.exists?(Path.join(second_dir, "text-3.json"))
 
       ref = monitor(pid)
       assert :ok = Session.shutdown(pid)

@@ -40,6 +40,7 @@ Only the python3 standard library is used.
 import base64
 import builtins
 import importlib
+import inspect
 import io
 import json
 import os
@@ -598,7 +599,7 @@ def _emit_exception(cell_id, exc):
 # ---------------------------------------------------------------------------
 
 
-def _configure_bridge(bridge):
+def _configure_bridge(bridge, cell_id):
     if not isinstance(bridge, dict):
         raise RuntimeError("eval bridge must be an object with dir and token")
     directory = bridge.get("dir")
@@ -615,11 +616,13 @@ def _configure_bridge(bridge):
             "lemon_tools was not staged next to the runner; helper calls are unavailable"
         ) from exc
 
-    # Phase 4 gives the shim per-cell credentials; older shims bake the rpc
-    # dir in at render time and have nothing to configure.
+    # The shim rotates per-cell credentials (and, since per-cell budgets,
+    # resets the text accumulator and counters). Older shims bake the rpc dir
+    # in at render time and have nothing to configure; pass only the
+    # arguments the staged shim accepts so either generation works.
     configure = getattr(module, "_configure", None)
     if configure is not None:
-        configure(directory, token)
+        _invoke_configure(configure, directory, token, bridge.get("max_text_bytes"), cell_id)
 
     _namespace["lemon_tools"] = module
     for name in HELPER_NAMES:
@@ -627,7 +630,43 @@ def _configure_bridge(bridge):
             _namespace[name] = getattr(module, name)
 
 
-def _prepare_cell(cwd, bridge):
+def _invoke_configure(configure, directory, token, budget, cell_id):
+    try:
+        arity = len(inspect.signature(configure).parameters)
+    except (TypeError, ValueError):
+        arity = 2
+
+    args = [directory, token]
+    if arity >= 3:
+        args.append(budget if isinstance(budget, int) and budget > 0 else None)
+    if arity >= 4:
+        args.append(cell_id)
+    configure(*args)
+
+
+def _install_thread_cell_tags():
+    """Stamp started threads with the cell that was running when they started.
+
+    lemon_tools refuses bridge calls from threads stamped with an earlier
+    cell (see `_live_bridge` in the shim), so a thread a finished cell left
+    behind can neither spend a later cell's text budget nor write frames into
+    its rpc directory. Threads the runner itself starts outside any cell are
+    unstamped and unaffected.
+    """
+    if getattr(threading.Thread.start, "_lemon_tagged", False):
+        return
+
+    original_start = threading.Thread.start
+
+    def start(self, *args, **kwargs):
+        self._lemon_gen = _current_cell()
+        return original_start(self, *args, **kwargs)
+
+    start._lemon_tagged = True
+    threading.Thread.start = start
+
+
+def _prepare_cell(cwd, bridge, cell_id):
     try:
         os.chdir(cwd)
     except OSError as exc:
@@ -635,7 +674,7 @@ def _prepare_cell(cwd, bridge):
             "cell cwd is no longer accessible: %s (%s)" % (cwd, exc.strerror or exc)
         ) from exc
     if bridge is not None:
-        _configure_bridge(bridge)
+        _configure_bridge(bridge, cell_id)
 
 
 def _run_cell(request):
@@ -649,7 +688,7 @@ def _run_cell(request):
         _set_open_cell(cell_id)
         try:
             code = compile(request["code"], CELL_FILENAME, "exec")
-            _prepare_cell(cwd, request.get("bridge"))
+            _prepare_cell(cwd, request.get("bridge"), cell_id)
             exec(code, _namespace)
         except BaseException as exc:  # noqa: BLE001 - the kernel must survive cells
             _emit_exception(cell_id, exc)
@@ -722,6 +761,7 @@ def main():
 
     stdin = sys.stdin
     _install_input_rejection()
+    _install_thread_cell_tags()
     _setup_descriptors()
 
     initialized = False

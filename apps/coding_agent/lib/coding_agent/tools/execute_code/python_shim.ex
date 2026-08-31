@@ -14,13 +14,14 @@ defmodule CodingAgent.Tools.ExecuteCode.PythonShim do
   `threading`, `time`, and `concurrent.futures` are used, so the shim works on
   any stock python3.
 
-  Besides the per-tool stubs the module always defines three helpers:
-
     * `text(s)` — the result channel. Each call atomically flushes a numbered
       `text-<n>.json` block into the rpc dir (write-through, never at exit, so
-      blocks survive a timeout or kill) under a shared lock, within a baked-in
-      byte budget; an over-budget call raises `ToolError` and leaves the
-      previously flushed blocks intact.
+      blocks survive a timeout or kill) under a shared lock, within a byte
+      budget; the *encoded frame* — exactly the bytes `json.dump` writes to
+      disk, JSON escaping included — is what the budget charges, so a
+      NUL-heavy string that quadruples under escaping is refused by the same
+      budget the host enforces on the file. An over-budget call raises
+      `ToolError` and leaves the previously flushed blocks intact.
     * `notify(msg)` — the streaming side channel. Fire-and-forget numbered
       `notify-<n>.json` frames; the Elixir pump consumes and forwards them as
       partial updates, never as responses.
@@ -28,6 +29,19 @@ defmodule CodingAgent.Tools.ExecuteCode.PythonShim do
       `ThreadPoolExecutor`, each worker running the plain blocking `_call`.
       All calls are waited out before any error is re-raised, so a mixed
       batch never tears its side effects.
+
+  ## Per-cell bridge isolation
+
+  All authority lives in one immutable-per-cell `_Bridge` object (rpc dir,
+  token, text budget, generation, and the per-cell sequence counters and
+  text accumulator). `_configure/4` installs a fresh bridge — so a new cell
+  always starts with clean counters and a full budget, no matter what
+  earlier cells consumed — and every helper captures the current bridge once
+  at entry. The persistent runner stamps each started thread with the cell
+  that started it; a thread from an earlier cell is refused (`ToolError`)
+  rather than let it spend or write into a later cell's bridge. This is
+  isolation hygiene, not a sandbox: a genuinely hostile script can always
+  write raw protocol files itself.
   """
 
   alias CodingAgent.Tools.ExecuteCode.Config
@@ -50,9 +64,10 @@ defmodule CodingAgent.Tools.ExecuteCode.PythonShim do
   `batch()` for parallel helper calls.
 
   Persistent Python sessions stage this source once and rotate its bridge
-  credentials per cell with `_configure/2`. The `text()` byte budget is baked
-  into the module source, so a live kernel keeps the budget it was first
-  staged with until it is reset or reaped.
+  per cell with `_configure/4`, which resets the per-cell counters and
+  installs the caller's `max_text_bytes` budget. The budget baked here is
+  the fallback for `_configure` calls that omit one, so a live kernel keeps
+  the budget it was first staged with until it is reset or reaped.
   """
   @spec render_module(tools :: [String.t()], max_text_bytes :: pos_integer()) :: String.t()
   def render_module(tools, max_text_bytes \\ @default_text_budget)
@@ -64,32 +79,73 @@ defmodule CodingAgent.Tools.ExecuteCode.PythonShim do
     import json, os, threading, time
     from concurrent.futures import ThreadPoolExecutor
 
-    _RPC_DIR = None
-    _TOKEN = None
-    _SEQ = 0
-    _TEXT_SEQ = 0
-    _NOTIFY_SEQ = 0
-    _TEXT_BYTES = 0
-    _TEXT_BUDGET = #{max_text_bytes}
+    _DEFAULT_TEXT_BUDGET = #{max_text_bytes}
     _POLL_S = 0.02
     _BATCH_MAX_WORKERS = #{@batch_max_workers}
     _LOCK = threading.Lock()
+    _BRIDGE = None
 
 
-    def _configure(rpc_dir, token):
-        global _RPC_DIR, _TOKEN
-        _RPC_DIR = rpc_dir
-        _TOKEN = token
+    class _Bridge:
+        # One cell's complete bridge state: where to write, with what
+        # authority, under which text budget, and with which sequence
+        # counters. Immutable credentials, mutable counters that only the
+        # owning cell's calls touch — nothing leaks between cells.
+        __slots__ = (
+            "dir",
+            "token",
+            "budget",
+            "gen",
+            "seq",
+            "text_seq",
+            "notify_seq",
+            "text_bytes",
+        )
+
+        def __init__(self, rpc_dir, token, budget, gen):
+            self.dir = rpc_dir
+            self.token = token
+            self.budget = budget
+            self.gen = gen
+            self.seq = 0
+            self.text_seq = 0
+            self.notify_seq = 0
+            self.text_bytes = 0
+
+
+    def _configure(rpc_dir, token, budget=None, generation=None):
+        # Per-cell reset: every configure installs a brand-new bridge, so the
+        # sequence counters and the text budget start fresh no matter what
+        # earlier cells (or threads they left behind) consumed.
+        global _BRIDGE
+        with _LOCK:
+            cap = (
+                budget
+                if isinstance(budget, int) and budget > 0
+                else _DEFAULT_TEXT_BUDGET
+            )
+            _BRIDGE = _Bridge(rpc_dir, token, cap, generation)
+
+
+    def _live_bridge():
+        # One capture of the current bridge, used consistently for the whole
+        # call. A thread started in an earlier cell is stamped with that
+        # cell's generation by the persistent runner and is refused here: its
+        # writes can never land in — and its bytes can never come out of — a
+        # cell it was not part of. (The stamp only exists in persistent
+        # kernels; per-call processes never configure a second bridge.)
+        with _LOCK:
+            bridge = _BRIDGE
+        if bridge is None:
+            raise ToolError("lemon_tools is not configured for this cell")
+        tag = getattr(threading.current_thread(), "_lemon_gen", None)
+        if tag is not None and tag != bridge.gen:
+            raise ToolError("lemon_tools bridge belongs to a finished cell")
+        return bridge
+
 
     class ToolError(Exception):
         pass
-
-
-    def _next_req_id():
-        global _SEQ
-        with _LOCK:
-            _SEQ += 1
-            return _SEQ
 
 
     def _atomic_write(rpc_dir, final_name, payload):
@@ -124,25 +180,26 @@ defmodule CodingAgent.Tools.ExecuteCode.PythonShim do
         # (never at exit), so everything emitted before a timeout or kill
         # still reaches the tool result. Numbering and the byte budget are
         # lock-guarded because batch() workers call this from many threads.
-        global _TEXT_SEQ, _TEXT_BYTES
         if s is None:
             s = ""
         elif not isinstance(s, str):
             s = str(s)
-        payload = s.encode("utf-8")
+        bridge = _live_bridge()
         with _LOCK:
-            if _TEXT_BYTES + len(payload) > _TEXT_BUDGET:
+            seq = bridge.text_seq + 1
+            frame = {"n": seq, "text": s}
+            # Charge the encoded frame — exactly the bytes json.dump writes
+            # to disk — so the script-side budget and the host-side size
+            # check always agree, whatever JSON escaping expands the text to.
+            encoded = len(json.dumps(frame))
+            if bridge.text_bytes + encoded > bridge.budget:
                 raise ToolError(
                     "text() byte budget exceeded (%d bytes accumulated, %d more requested, cap %d)"
-                    % (_TEXT_BYTES, len(payload), _TEXT_BUDGET)
+                    % (bridge.text_bytes, encoded, bridge.budget)
                 )
-            _TEXT_BYTES += len(payload)
-            _TEXT_SEQ += 1
-            seq = _TEXT_SEQ
-        rpc_dir = _RPC_DIR
-        if not rpc_dir:
-            raise ToolError("lemon_tools is not configured for this cell")
-        _atomic_write(rpc_dir, "text-%d.json" % seq, {"n": seq, "text": s})
+            bridge.text_seq = seq
+            bridge.text_bytes += encoded
+        _atomic_write(bridge.dir, "text-%d.json" % seq, frame)
 
 
     def notify(msg):
@@ -151,14 +208,11 @@ defmodule CodingAgent.Tools.ExecuteCode.PythonShim do
             msg = ""
         elif not isinstance(msg, str):
             msg = str(msg)
-        global _NOTIFY_SEQ
+        bridge = _live_bridge()
         with _LOCK:
-            _NOTIFY_SEQ += 1
-            seq = _NOTIFY_SEQ
-        rpc_dir = _RPC_DIR
-        if not rpc_dir:
-            raise ToolError("lemon_tools is not configured for this cell")
-        _atomic_write(rpc_dir, "notify-%d.json" % seq, {"n": seq, "msg": msg})
+            bridge.notify_seq += 1
+            seq = bridge.notify_seq
+        _atomic_write(bridge.dir, "notify-%d.json" % seq, {"n": seq, "msg": msg})
 
 
     def batch(calls):
@@ -187,18 +241,17 @@ defmodule CodingAgent.Tools.ExecuteCode.PythonShim do
 
 
     def _call(tool, params):
-        rpc_dir = _RPC_DIR
-        token = _TOKEN
-        if not rpc_dir or not token:
-            raise ToolError("lemon_tools is not configured for this cell")
-        req_id = _next_req_id()
+        bridge = _live_bridge()
+        with _LOCK:
+            bridge.seq += 1
+            req_id = bridge.seq
         params = {k: v for k, v in params.items() if v is not None}
         _atomic_write(
-            rpc_dir,
+            bridge.dir,
             "req-%d.json" % req_id,
-            {"id": req_id, "token": token, "tool": tool, "params": params},
+            {"id": req_id, "token": bridge.token, "tool": tool, "params": params},
         )
-        res_path = os.path.join(rpc_dir, "res-%d.json" % req_id)
+        res_path = os.path.join(bridge.dir, "res-%d.json" % req_id)
         while True:
             if os.path.exists(res_path):
                 with open(res_path) as f:
@@ -225,8 +278,9 @@ defmodule CodingAgent.Tools.ExecuteCode.PythonShim do
   @doc """
   Render `lemon_tools.py` preconfigured for a one-shot `execute_code` run.
 
-  `max_text_bytes` defaults to #{@default_text_budget} and is baked into the
-  module source as the `text()` budget.
+  `max_text_bytes` defaults to #{@default_text_budget} and is installed as
+  the one bridge's `text()` budget (the module default and the configure
+  call agree, so there is exactly one source of truth on disk).
   """
   @spec render_prelude(
           rpc_dir :: String.t(),
@@ -237,7 +291,7 @@ defmodule CodingAgent.Tools.ExecuteCode.PythonShim do
   def render_prelude(rpc_dir, token, tools, max_text_bytes \\ @default_text_budget)
       when is_binary(rpc_dir) and is_binary(token) and is_list(tools) do
     render_module(tools, max_text_bytes) <>
-      "\n\n_configure(#{Jason.encode!(rpc_dir)}, #{Jason.encode!(token)})\n"
+      "\n\n_configure(#{Jason.encode!(rpc_dir)}, #{Jason.encode!(token)}, #{max_text_bytes})\n"
   end
 
   @doc """

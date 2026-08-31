@@ -16,27 +16,38 @@ defmodule CodingAgent.Tools.ExecuteCode do
 
     * `text(s)` — the result. Each call atomically flushes a numbered
       `text-<n>.json` block into the rpc dir (write-through, never at exit),
-      under a lock, within the `max_text_bytes` budget; an over-budget call
-      raises `ToolError` and keeps the blocks already flushed. After the run
-      — including a timeout/abort kill — the flushed blocks are read in order
-      and assembled as the labeled result, with stdout/stderr demoted to a
-      clearly labeled diagnostics tail (already capped at `max_output_bytes`).
-      This fixes two defects of the stdout-only era: incidental prints and
-      library warnings no longer impersonate the answer, and a deliberate
-      result now survives the kill that discards half-captured stdout
-      mid-line.
+      under a lock, within the `max_text_bytes` budget; the budget charges the
+      *encoded frame* — the exact bytes `json.dump` writes, JSON escaping
+      included — so script-side charging and host-side reading can never
+      disagree about a NUL-heavy string that expands six-fold under escaping.
+      An over-budget call raises `ToolError` and keeps the blocks already
+      flushed. After the run — including a timeout/abort kill — the flushed
+      blocks are read in order and assembled as the labeled result, with
+      stdout/stderr demoted to a clearly labeled diagnostics tail (already
+      capped at `max_output_bytes`). This fixes two defects of the stdout-only
+      era: incidental prints and library warnings no longer impersonate the
+      answer, and a deliberate result now survives the kill that discards
+      half-captured stdout mid-line.
     * `notify(msg)` — a fire-and-forget side channel. The RPC pump consumes
       `notify-<n>.json` frames on every sweep and forwards each message to
       the tool's `on_update` callback as a partial update (bounded: 4 KiB per
-      message, 64 per run, silently dropped beyond), so long scripts can
-      surface progress without splitting into separate calls.
+      message, 64 forwarded messages per run — the count spans sweeps and the
+      final drain — silently dropped beyond), so long scripts can surface
+      progress without splitting into separate calls. A notify() issued
+      immediately before exit is still forwarded: both `serve/2` and the
+      persistent stop path drain notifications one final time. Only requests
+      are never drained after the run.
     * `batch([(tool, params), ...])` — parallel helper calls. Each element
       runs the plain blocking call inside a bounded thread pool; the pump
       dispatches claimed requests as supervised tasks in waves of
       `max_parallel_rpc` (default 4), so a batch of independent reads really
       does overlap. Claiming — authentication, replay detection, and the call
       budget — stays serialized in the pump, so accounting remains exact under
-      concurrency.
+      concurrency, and a claimed request always ends answered: killed sweeps
+      leave in-flight claim markers that a successor sweep or the cancel path
+      answers in writing (never re-dispatched), and any approval prompt a
+      doomed dispatch left pending is cancelled, so no prompt outlives the
+      script that triggered it.
 
   Backward compatibility is byte-exact: a script that never calls `text()`
   gets the historic stdout-only result, unchanged, in both kernel modes.
@@ -515,7 +526,7 @@ defmodule CodingAgent.Tools.ExecuteCode do
 
     case maybe_reset(repl, key, owner_pid, params, opts) do
       {:ok, reset_performed} ->
-        case build_bridge() do
+        case build_bridge(config) do
           {:ok, base, bridge} ->
             cell_signal = AbortSignal.new()
 
@@ -685,12 +696,15 @@ defmodule CodingAgent.Tools.ExecuteCode do
     end
   end
 
-  defp build_bridge do
+  defp build_bridge(config) do
     token = :crypto.strong_rand_bytes(32) |> Base.url_encode64(padding: false)
 
     case private_base("lemon-exec-code-cell", fn base ->
            with {:ok, rpc_dir} <- PrivateTmp.reserve_dir(base, "rpc") do
-             {:ok, %{dir: rpc_dir, token: token}}
+             # The budget rides with the bridge: every persistent cell gets a
+             # fresh text() allowance, installed by the shim's per-cell
+             # `_configure` reset.
+             {:ok, %{dir: rpc_dir, token: token, max_text_bytes: config.max_text_bytes}}
            end
          end) do
       {:ok, base, bridge} -> {:ok, base, bridge}

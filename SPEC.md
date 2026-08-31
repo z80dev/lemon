@@ -80,3 +80,39 @@ Note: python3 must be on PATH for these tests (they spawn real interpreters). If
 ## Deliverable
 
 Commit(s) on `feat/execute-code-result-channel` in the worktree with clear messages. Final report: what changed per requirement (R1/R2/R3), design decisions (concurrency approach for the pump, stderr decision, budget enforcement points), verification output, and anything deferred. Do NOT push, do NOT open a PR.
+
+## Fix round 1 (post-review)
+
+Six verified findings from the independent audit of the feature commit, fixed:
+
+1. **Claimed requests always end answered.** A dispatch-bound request is
+   renamed to an in-flight `req-<id>.claim` marker (no longer deleted at claim
+   time); the response write retires the marker. A marker visible to a later
+   sweep — or to the RpcServer cancel path, where no successor sweep runs —
+   proves its owning sweep died owing the answer: `Rpc.recover_orphaned_claims/2`
+   writes the `rpc dispatch interrupted` error response, reconstructs the call
+   reservation, error count, and replay memory in the stats, and never
+   re-dispatches. Verified by killing a sweep task for real mid-wave.
+2. **No approval prompt outlives its script.** Each approval-requiring claim
+   pre-allocates its approval id (`LemonCore.ExecApprovals.request/1` accepts
+   `:approval_id`); the pump wraps the approval fun with an unlinked watcher
+   monitoring both the sweep and the dispatch task, and the first death calls
+   the new `LemonCore.ExecApprovals.cancel/2` — pending record removed, blocked
+   waiter resolved as denied, a late `resolve/2` a no-op that installs no
+   policy.
+3. **Per-cell bridge isolation in persistent kernels.** `_configure/4` installs
+   a fresh bridge (dir, token, budget, generation, counters); the runner passes
+   the cell's `max_text_bytes` and cell id, and stamps started threads with
+   their starting cell; the shim refuses bridge calls from threads stamped with
+   an earlier cell. Verified with two sequential cells plus a stale thread that
+   waits for the new bridge and tries to inject.
+4. **Encoded-frame text budget.** `text()` charges `len(json.dumps(frame))` —
+   exactly the bytes on disk — so a NUL-heavy string that six-folds under
+   escaping is refused by the script side at the same budget the host enforces;
+   no in-budget block can be dropped by JSON expansion anymore.
+5. **Per-run notify accounting.** `notify_forwarded` rides the pump stats (cap
+   spans sweeps), and both `serve/2`'s terminal branches and the RpcServer stop
+   path run a notification-only final drain, so a `notify()` immediately before
+   exit is forwarded. Requests are still never drained after the run.
+6. **Malformed notify frames** are consumed but neither forwarded nor counted
+   against the cap.

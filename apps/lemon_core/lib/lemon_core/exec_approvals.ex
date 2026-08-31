@@ -44,9 +44,12 @@ defmodule LemonCore.ExecApprovals do
   - `:action` - Action details map
   - `:rationale` - Optional rationale for the request
   - `:expires_in_ms` - Timeout in milliseconds (default: no timeout)
+  - `:approval_id` - Optional caller-allocated approval id. Callers that may
+  have to cancel the prompt before it resolves (execute_code dispatches,
+  which can be killed while waiting) allocate the id up front so they can
+  name it to `cancel/2` with no registration race.
 
   ## Returns
-
   - `{:ok, :approved, scope}` - Approved at the given scope
   - `{:ok, :denied}` - Denied
   - `{:error, :timeout}` - Request timed out
@@ -67,7 +70,11 @@ defmodule LemonCore.ExecApprovals do
     # Tool calls should not enforce timeouts by default.
     expires_in_ms = params[:expires_in_ms] || :infinity
 
-    approval_id = LemonCore.Id.approval_id()
+    approval_id =
+      case params[:approval_id] do
+        id when is_binary(id) and id != "" -> id
+        _other -> LemonCore.Id.approval_id()
+      end
 
     case check_existing_approval(tool, action, session_key, agent_id, node_id) do
       {:approved, scope} ->
@@ -131,6 +138,57 @@ defmodule LemonCore.ExecApprovals do
         )
 
         wait_for_resolution(approval_id, expires_in_ms)
+    end
+  end
+
+  @doc """
+  Cancel a pending approval that will never be decided by a user.
+
+  For owners of a blocking `request/1` that can no longer wait — an
+  execute_code dispatch whose sweep was killed while an approval prompt was
+  pending. Removes the pending record (so the prompt disappears and a late
+  `resolve/2` can no longer install policy at any scope), wakes a blocked
+  waiter as denied, and records the cancellation distinctly from a user
+  decision. Idempotent: an unknown or already-resolved approval is a no-op.
+  """
+  @spec cancel(approval_id(), binary() | nil) :: :ok
+  def cancel(approval_id, reason \\ nil) when is_binary(approval_id) do
+    case ExecApprovalStore.get_pending(approval_id) do
+      nil ->
+        :ok
+
+      pending ->
+        ExecApprovalStore.delete_pending(approval_id)
+
+        record_approval_event(:approval_cancelled, pending, %{
+          approval_id: approval_id,
+          tool: pending.tool,
+          reason: reason
+        })
+
+        LemonCore.Telemetry.approval_resolved(approval_id, :cancelled, %{
+          tool: pending.tool,
+          run_id: pending.run_id
+        })
+
+        LemonCore.Bus.broadcast(
+          "exec_approvals",
+          LemonCore.Event.new(
+            :approval_resolved,
+            ApprovalResolved.new(%{
+              approval_id: approval_id,
+              decision: :cancelled,
+              pending: pending
+            }),
+            %{
+              run_id: pending.run_id,
+              session_id: Map.get(pending, :session_id),
+              session_key: pending.session_key
+            }
+          )
+        )
+
+        :ok
     end
   end
 
@@ -338,6 +396,11 @@ defmodule LemonCore.ExecApprovals do
 
         case decision do
           :deny ->
+            {:ok, :denied}
+
+          # An owner cancel (`cancel/2`) resolves the waiter like a denial:
+          # nobody granted the approval, so the gated call must not run.
+          :cancelled ->
             {:ok, :denied}
 
           scope

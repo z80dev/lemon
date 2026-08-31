@@ -16,6 +16,18 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   that never call `text()` keep the historic stdout-only result byte-for-byte.
   New knobs: `max_text_bytes` (text budget, default 64 KiB) and
   `max_parallel_rpc` (pump dispatch concurrency, default 4).
+- `execute_code` result-channel hardening (fix round): the `text()` budget now
+  charges the JSON-encoded frame, so NUL-heavy strings that expand six-fold
+  under escaping are refused on the script side instead of being written and
+  silently dropped by the host; persistent kernels reset the per-cell bridge
+  (fresh text budget, fresh counters) and refuse calls from threads stamped
+  with an earlier cell; `notify()` caps are per run across sweeps, malformed
+  frames are no longer forwarded or counted, and a final notification drain
+  forwards a `notify()` issued immediately before exit; claimed RPC requests
+  always end answered (a killed sweep leaves in-flight claim markers that the
+  successor sweep or the cancel path answers in writing, reconstructing the
+  call accounting), and an approval prompt left pending by a killed dispatch
+  is cancelled, so it can never be approved into policy after the script died.
 - `execute_code` scripts gained `notify(msg)` — a streaming side channel whose
   messages are forwarded to the tool's partial-update callback (capped at 4 KiB
   per message, 64 per run) — and `batch([...])`, which runs helper calls in

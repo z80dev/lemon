@@ -802,7 +802,7 @@ defmodule CodingAgent.Tools.ExecuteCodeAdversarialTest do
     source = File.read!(Path.join(base, "lemon_tools.py"))
 
     [_, encoded] =
-      Regex.run(~r/_configure\(.*,\s*("(?:[^"\\]|\\.)*")\)\s*\z/s, source)
+      Regex.run(~r/_configure\("[^"]+",\s*("(?:[^"\\]|\\.)*")(?:, \d+)?\)\s*\z/s, source)
 
     Jason.decode!(encoded)
   end

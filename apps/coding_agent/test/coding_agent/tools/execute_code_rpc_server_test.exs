@@ -8,6 +8,7 @@ defmodule CodingAgent.Tools.ExecuteCodeRpcServerTest do
   use ExUnit.Case, async: false
 
   alias CodingAgent.Tools.ExecuteCode.{Rpc, RpcServer}
+  alias LemonCore.ExecApprovalStore
   alias LemonAgent.AbortSignal
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAi.Types.TextContent
@@ -34,7 +35,8 @@ defmodule CodingAgent.Tools.ExecuteCodeRpcServerTest do
         errors: 0,
         bytes: 0,
         tools_used: MapSet.new(),
-        seen_ids: MapSet.new()
+        seen_ids: MapSet.new(),
+        notify_forwarded: 0
       }
     end
 
@@ -42,6 +44,66 @@ defmodule CodingAgent.Tools.ExecuteCodeRpcServerTest do
       ctx.rpc_dir
       |> pending_ids()
       |> Enum.reduce(stats, fn id, acc -> process_request(id, ctx, acc) end)
+    end
+
+    # Faithful marker model: answer every unanswered in-flight claim and
+    # reconstruct its call reservation, like the real pump.
+    def recover_orphaned_claims(rpc_dir, stats) do
+      rpc_dir
+      |> Path.join("req-*.claim")
+      |> Path.wildcard()
+      |> Enum.reduce(stats, fn marker, acc ->
+        case Integer.parse(Path.basename(marker, ".claim") |> String.replace_prefix("req-", "")) do
+          {id, ""} ->
+            unless File.exists?(response_path(rpc_dir, id)) do
+              respond_error(rpc_dir, id, "rpc dispatch interrupted")
+            end
+
+            File.rm(marker)
+
+            acc
+            |> Map.update!(:calls, &(&1 + 1))
+            |> Map.update!(:errors, &(&1 + 1))
+            |> Map.update!(:seen_ids, &MapSet.put(&1, id))
+
+          :error ->
+            File.rm(marker)
+            acc
+        end
+      end)
+    end
+
+    def drain_notifications(ctx, stats) do
+      forwarded = Map.get(stats, :notify_forwarded, 0)
+
+      frames =
+        ctx.rpc_dir
+        |> Path.join("notify-*.json")
+        |> Path.wildcard()
+        |> Enum.flat_map(fn path ->
+          case Integer.parse(Path.basename(path, ".json") |> String.replace_prefix("notify-", "")) do
+            {n, ""} -> [{n, path}]
+            _ -> []
+          end
+        end)
+        |> Enum.sort()
+
+      forwarded =
+        Enum.reduce(frames, forwarded, fn {_n, path}, acc ->
+          message =
+            with {:ok, body} <- File.read(path),
+                 {:ok, %{"msg" => msg}} when is_binary(msg) <- Jason.decode(body) do
+              msg
+            else
+              _ -> nil
+            end
+
+          File.rm(path)
+
+          if is_binary(message) and acc < 64, do: acc + 1, else: acc
+        end)
+
+      Map.put(stats, :notify_forwarded, forwarded)
     end
 
     def process_request(id, ctx, stats) do
@@ -184,6 +246,11 @@ defmodule CodingAgent.Tools.ExecuteCodeRpcServerTest do
 
     def initial_stats, do: FakeRpc.initial_stats()
 
+    def recover_orphaned_claims(rpc_dir, stats),
+      do: FakeRpc.recover_orphaned_claims(rpc_dir, stats)
+
+    def drain_notifications(ctx, stats), do: FakeRpc.drain_notifications(ctx, stats)
+
     def process_pending(ctx, stats) do
       if File.exists?(Path.join(ctx.rpc_dir, ".raise-sweep")) do
         File.touch(Path.join(ctx.rpc_dir, ".raise-sweep-hit"))
@@ -198,6 +265,11 @@ defmodule CodingAgent.Tools.ExecuteCodeRpcServerTest do
     @moduledoc false
 
     def initial_stats, do: FakeRpc.initial_stats()
+
+    def recover_orphaned_claims(rpc_dir, stats),
+      do: FakeRpc.recover_orphaned_claims(rpc_dir, stats)
+
+    def drain_notifications(ctx, stats), do: FakeRpc.drain_notifications(ctx, stats)
 
     def process_pending(%{test_pid: test_pid}, stats) do
       send(test_pid, {:approval_pending, self()})
@@ -214,6 +286,113 @@ defmodule CodingAgent.Tools.ExecuteCodeRpcServerTest do
     rpc_dir = Path.join(tmp_dir, "rpc")
     File.mkdir_p!(rpc_dir)
     {:ok, rpc_dir: rpc_dir}
+  end
+
+  defp await_pending_approval(run_id, attempts \\ 400) do
+    pending =
+      ExecApprovalStore.list_pending()
+      |> Enum.find(fn {_id, pending} -> pending.run_id == run_id end)
+
+    case pending do
+      {id, map} ->
+        {id, map}
+
+      nil when attempts > 0 ->
+        Process.sleep(5)
+        await_pending_approval(run_id, attempts - 1)
+
+      nil ->
+        flunk("no pending approval appeared for run #{run_id}")
+    end
+  end
+
+  defp await_no_pending(run_id, attempts \\ 400) do
+    pending? =
+      ExecApprovalStore.list_pending()
+      |> Enum.any?(fn {_id, pending} -> pending.run_id == run_id end)
+
+    if pending? do
+      if attempts > 0 do
+        Process.sleep(5)
+        await_no_pending(run_id, attempts - 1)
+      else
+        flunk("pending approval for run #{run_id} was never cancelled")
+      end
+    else
+      :ok
+    end
+  end
+
+  describe "abort and claim recovery" do
+    @tag :capture_log
+    test "abort mid-dispatch answers the claimed ids and preserves their accounting", %{
+      rpc_dir: rpc_dir
+    } do
+      ctx = %{ctx(rpc_dir) | tools: blocking_tools(self())}
+      {:ok, server} = start_server(ctx, rpc: Rpc, poll_interval_ms: 5)
+
+      for id <- 1..2, do: write_request(rpc_dir, id, "block", %{})
+
+      for id <- 1..2 do
+        call_id = "exec_code_rpc_#{id}"
+        assert_receive {:blocking_dispatch, ^call_id, _sweep_pid}, 2_000
+      end
+
+      assert Enum.sort(Path.wildcard(Path.join(rpc_dir, "req-*.claim"))) ==
+               Enum.map(1..2, &Path.join(rpc_dir, "req-#{&1}.claim"))
+
+      # The cancel path kills the sweep; its claimed ids must still end
+      # answered — in writing, never by running their blocked tools.
+      :ok = RpcServer.abort(server)
+
+      for id <- 1..2 do
+        assert %{"id" => ^id, "ok" => false, "error" => "rpc dispatch interrupted"} =
+                 read_response(rpc_dir, id)
+      end
+
+      assert Path.wildcard(Path.join(rpc_dir, "req-*.claim")) == []
+      refute_receive {:blocking_dispatch, _, _}, 25
+
+      stats = RpcServer.stats(server)
+      assert stats.calls == 2
+      assert stats.errors == 2
+
+      assert :ok = RpcServer.stop(server)
+    end
+
+    @tag :capture_log
+    test "abort cancels a pending ExecApprovals prompt from a killed sweep", %{rpc_dir: rpc_dir} do
+      run_id = "server-f2-#{System.unique_integer([:positive])}"
+
+      ctx =
+        ctx(rpc_dir,
+          tool_policy: CodingAgent.ToolPolicy.custom(require_approval: ["echo"]),
+          approval_context: %{run_id: run_id, session_key: "server-f2"}
+        )
+
+      {:ok, server} = start_server(ctx, rpc: Rpc, poll_interval_ms: 5)
+
+      write_request(rpc_dir, 1, "echo", %{"value" => "gated"})
+
+      # The dispatch task is blocked on a real approval prompt.
+      {approval_id, _pending} = await_pending_approval(run_id)
+
+      :ok = RpcServer.abort(server)
+
+      # The claim's watcher cancelled the orphaned prompt: no pending record
+      # survives the abort, and a late approval installs no policy.
+      assert :ok = await_no_pending(run_id)
+      :ok = LemonCore.ExecApprovals.resolve(approval_id, :approve_global)
+
+      assert ExecApprovalStore.list_global_policies()
+             |> Enum.reject(fn {{tool, _hash}, _value} -> tool != "echo" end)
+             |> Enum.empty?()
+
+      assert %{"id" => 1, "ok" => false, "error" => "rpc dispatch interrupted"} =
+               read_response(rpc_dir, 1)
+
+      assert :ok = RpcServer.stop(server)
+    end
   end
 
   describe "start_link/2" do
@@ -301,6 +480,34 @@ defmodule CodingAgent.Tools.ExecuteCodeRpcServerTest do
       assert MapSet.to_list(stats.tools_used) == ["echo"]
 
       assert :ok = RpcServer.stop(server)
+    end
+
+    test "a notify frame that lands just before stop is still forwarded", %{
+      rpc_dir: rpc_dir
+    } do
+      test = self()
+
+      {:ok, server} =
+        start_server(
+          ctx(rpc_dir,
+            on_update: fn %AgentToolResult{} = partial ->
+              send(test, {:notify, hd(partial.content).text})
+            end
+          ),
+          rpc: Rpc,
+          poll_interval_ms: 1_000
+        )
+
+      # With polls a second apart, the frame written now can only be
+      # forwarded by the stop path's final notification drain.
+      tmp = Path.join(rpc_dir, "notify-1.json.tmp")
+      File.write!(tmp, Jason.encode!(%{"n" => 1, "msg" => "at the bitter end"}))
+      File.rename!(tmp, Path.join(rpc_dir, "notify-1.json"))
+
+      assert :ok = RpcServer.stop(server)
+
+      assert_received {:notify, "notify: at the bitter end"}
+      assert File.ls(rpc_dir) == {:ok, []}
     end
 
     test "wrong or missing tokens are denied and never dispatched", %{rpc_dir: rpc_dir} do
@@ -528,8 +735,8 @@ defmodule CodingAgent.Tools.ExecuteCodeRpcServerTest do
   defp ctx(rpc_dir, overrides \\ []) do
     %{
       tools: stub_tools(),
-      tool_policy: nil,
-      approval_context: nil,
+      tool_policy: Keyword.get(overrides, :tool_policy),
+      approval_context: Keyword.get(overrides, :approval_context),
       max_calls: Keyword.get(overrides, :max_calls, 100),
       max_result_bytes: Keyword.get(overrides, :max_result_bytes, 5_242_880),
       max_requests_per_sweep: Keyword.get(overrides, :max_requests_per_sweep, 100),

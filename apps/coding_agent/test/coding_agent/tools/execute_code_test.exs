@@ -161,30 +161,30 @@ defmodule CodingAgent.Tools.ExecuteCodeSchemaTest do
     test "the persistent module starts without bridge authority" do
       module = PythonShim.render_module(["read"])
 
-      assert module =~ "def _configure(rpc_dir, token):"
+      assert module =~ "def _configure(rpc_dir, token, budget=None, generation=None):"
       assert module =~ "lemon_tools is not configured for this cell"
       refute module =~ "_configure(\""
-      refute module =~ "_TOKEN = \""
+      assert module =~ "_BRIDGE = None"
     end
 
     test "the result channels are always present, budget baked in" do
       module = PythonShim.render_module(["read"], 2_048)
 
-      assert module =~ "_TEXT_BUDGET = 2048"
+      assert module =~ "_DEFAULT_TEXT_BUDGET = 2048"
       assert module =~ "def text(s):"
       assert module =~ "def notify(msg):"
       assert module =~ "def batch(calls):"
       assert module =~ "threading.Lock()"
 
       # The default budget matches Config's pinned default.
-      assert PythonShim.render_module([]) =~ "_TEXT_BUDGET = 65536"
+      assert PythonShim.render_module([]) =~ "_DEFAULT_TEXT_BUDGET = 65536"
     end
 
     test "a configured prelude embeds its rpc dir and token exactly once, json-escaped" do
       token = "token-0123"
-      prelude = PythonShim.render_prelude("/tmp/it's here", token, Config.allowlist())
+      prelude = PythonShim.render_prelude("/tmp/it's here", token, Config.allowlist(), 2_048)
 
-      assert prelude =~ ~s|_configure("/tmp/it's here", "token-0123")|
+      assert prelude =~ ~s|_configure("/tmp/it's here", "token-0123", 2048)|
       assert length(String.split(prelude, "/tmp/it's here")) == 2
       assert length(String.split(prelude, token)) == 2
     end
@@ -201,21 +201,23 @@ defmodule CodingAgent.Tools.ExecuteCodeSchemaTest do
     test "the rendered shim rotates bridge configuration for each call", %{tmp_dir: tmp_dir} do
       File.write!(Path.join(tmp_dir, "lemon_tools.py"), PythonShim.render_prelude(["read"]))
 
+      # Every _configure installs a fresh bridge: credentials rotate and the
+      # request-id space restarts at 1, because ids only need uniqueness
+      # inside one cell's rpc directory.
       script = """
       import json, os
       import lemon_tools
 
       requests = []
-      for request_id, token in enumerate(("first-token", "second-token"), 1):
-          rpc_dir = "rpc-%d" % request_id
+      for rpc_dir, token in (("rpc-1", "first-token"), ("rpc-2", "second-token")):
           os.mkdir(rpc_dir)
-          with open(os.path.join(rpc_dir, "res-%d.json" % request_id), "w") as response:
-              json.dump({"id": request_id, "ok": True, "content": ""}, response)
+          with open(os.path.join(rpc_dir, "res-1.json"), "w") as response:
+              json.dump({"id": 1, "ok": True, "content": ""}, response)
 
           lemon_tools._configure(rpc_dir, token)
           lemon_tools.read("ignored")
 
-          with open(os.path.join(rpc_dir, "req-%d.json" % request_id)) as request:
+          with open(os.path.join(rpc_dir, "req-1.json")) as request:
               requests.append(json.load(request))
 
       print(json.dumps(requests))
@@ -225,7 +227,7 @@ defmodule CodingAgent.Tools.ExecuteCodeSchemaTest do
 
       assert [
                %{"id" => 1, "token" => "first-token", "tool" => "read"},
-               %{"id" => 2, "token" => "second-token", "tool" => "read"}
+               %{"id" => 1, "token" => "second-token", "tool" => "read"}
              ] = Jason.decode!(output)
     end
 
@@ -643,7 +645,9 @@ defmodule CodingAgent.Tools.ExecuteCodeTest do
         # here, inside the runner — not after execute/6 has cleaned up.
         base = command_base(command)
         shim = File.read!(Path.join(base, "lemon_tools.py"))
-        [_, rpc_dir, _token] = Regex.run(~r/_configure\("([^"]+)", "([^"]+)"\)/, shim)
+
+        [_, rpc_dir, _token, _budget] =
+          Regex.run(~r/_configure\("([^"]+)", "([^"]+)"(?:, (\d+))?\)/, shim)
 
         modes = %{
           base: mode(base),
@@ -681,10 +685,10 @@ defmodule CodingAgent.Tools.ExecuteCodeTest do
       assert_received {:shim, second_shim}
 
       [_, first_rpc_dir, first_token] =
-        Regex.run(~r/_configure\("([^"]+)", "([^"]+)"\)/, first_shim)
+        Regex.run(~r/_configure\("([^"]+)", "([^"]+)"(?:, \d+)?\)/, first_shim)
 
       [_, second_rpc_dir, second_token] =
-        Regex.run(~r/_configure\("([^"]+)", "([^"]+)"\)/, second_shim)
+        Regex.run(~r/_configure\("([^"]+)", "([^"]+)"(?:, \d+)?\)/, second_shim)
 
       assert first_token =~ ~r/^[A-Za-z0-9_-]{43}$/
       assert second_token =~ ~r/^[A-Za-z0-9_-]{43}$/
@@ -802,24 +806,77 @@ defmodule CodingAgent.Tools.ExecuteCodeTest do
 
     test "an over-budget text() call raises ToolError and the flushed partial blocks still return",
          %{tmp_dir: cwd} do
+      # The budget charges the encoded frame ({"n": 1, "text": ...} envelope
+      # included), so 10 digits fit a cap of 64 and a second block does not.
       script = """
       text("0123456789")
       try:
-          text("X")
+          text("X" * 40)
           print("NO ERROR")
       except Exception as e:
           print(str(e))
       """
 
-      result = run(cwd, script, opts(%{max_text_bytes: 10}))
+      result = run(cwd, script, opts(%{max_text_bytes: 64}))
       body = text(result)
       # The refusing call surfaces like every other limit violation, in the
       # diagnostics tail...
       assert body =~ "text() byte budget exceeded"
-      assert body =~ "cap 10"
+      assert body =~ "cap 64"
       # ...while every block flushed before the refusal is still the result.
       assert index_of(body, "0123456789") < index_of(body, "Diagnostics")
+    end
+
+    test "the budget charges the JSON-encoded frame, not the raw string", %{
+      tmp_dir: cwd
+    } do
+      # A NUL-heavy string roughly six-folds under JSON escaping: 8000 raw
+      # bytes encode to ~48 KiB. Under raw-string accounting the second call
+      # (4000 more raw bytes) would still fit the 64 KiB cap; charging the
+      # encoded frame refuses it — on the script side, consistently.
+      script = """
+      text("\\0" * 8000)
+      print("flushed one")
+      try:
+          text("\\0" * 4000)
+          print("SECOND BLOCK WRITTEN")
+      except Exception as e:
+          print(str(e))
+      """
+
+      result = run(cwd, script, opts(%{max_text_bytes: 65_536}))
+      body = text(result)
+
+      refute body =~ "SECOND BLOCK WRITTEN"
       assert body =~ "text() byte budget exceeded"
+      assert body =~ "48020 bytes accumulated"
+      # The in-budget first block is delivered in full, NULs included: the
+      # 8000 raw NULs sit in the result section, ahead of the diagnostics
+      # tail where the (printed) marker lines live.
+      assert index_of(body, String.duplicate("\0", 8_000)) < index_of(body, "Diagnostics")
+      assert index_of(body, "flushed one") > index_of(body, "Diagnostics")
+    end
+
+    test "a control-char string whose encoding exceeds the cap is refused, never silently dropped",
+         %{tmp_dir: cwd} do
+      # 11000 NULs are 11 KiB raw (well under the 64 KiB cap) but encode to
+      # ~66 KiB on disk. Both sides must agree: the shim refuses it, so no
+      # in-budget block is dropped later by the host's file-size check.
+      script = """
+      try:
+          text("\\0" * 11000)
+          print("BLOCK WRITTEN")
+      except Exception as e:
+          print(str(e))
+      """
+
+      result = run(cwd, script, opts(%{max_text_bytes: 65_536}))
+      body = text(result)
+
+      refute body =~ "BLOCK WRITTEN"
+      refute body =~ "Script result (text()):"
+      assert body =~ "text() byte budget exceeded"
+      assert result.details.exit_code == 0
     end
 
     test "blocks flushed before a wall-clock kill survive into the result", %{tmp_dir: cwd} do
@@ -872,6 +929,29 @@ defmodule CodingAgent.Tools.ExecuteCodeTest do
       first = receive(do: ({:notification, message} -> message))
       second = receive(do: ({:notification, message} -> message))
       assert {first, second} == {"notify: step one", "notify: step two"}
+    end
+
+    test "a notify() as the last statement before exit is still forwarded", %{
+      tmp_dir: cwd
+    } do
+      test_pid = self()
+
+      on_update = fn %AgentToolResult{content: [%TextContent{text: message} | _]} ->
+        send(test_pid, {:notification, message})
+      end
+
+      result =
+        ExecuteCode.execute(
+          "call-1",
+          %{"script" => ~s|notify("last statement")|},
+          nil,
+          on_update,
+          cwd,
+          opts()
+        )
+
+      assert text(result) == "(script produced no output)"
+      assert_received {:notification, "notify: last statement"}
     end
 
     test "a nil on_update consumes notifications without crashing the run", %{tmp_dir: cwd} do

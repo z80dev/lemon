@@ -50,9 +50,14 @@ defmodule CodingAgent.Tools.ExecuteCode.RpcServer do
     * The process is `restart: :temporary`: a dead cell server is never
       resurrected against a directory its token has already rotated out of.
 
-  There is deliberately no final drain, mirroring `Rpc.serve/2`: a request
-  that is still pending when the server stops belongs to a cell that is
-  already over, and running its tool would be work nobody is waiting for.
+  There is deliberately no final drain of requests, mirroring `Rpc.serve/2`:
+  a request that is still pending when the server stops belongs to a cell
+  that is already over, and running its tool would be work nobody is waiting
+  for. Requests that were already *claimed* when a sweep was cancelled are
+  different: the cancel path answers them in writing (see
+  `recover_orphaned_claims/2` below) without ever running their tools, and
+  `notify-*.json` frames still on disk are drained on stop so a `notify()`
+  issued immediately before the cell ended still reaches the conversation.
 
   ## Expected shared `Rpc` contract
 
@@ -83,6 +88,12 @@ defmodule CodingAgent.Tools.ExecuteCode.RpcServer do
     * `process_request(id, ctx, stats)` — the single-request building block
       shared with `Rpc.serve/2`; not called by this server, which always
       sweeps via `process_pending/2`.
+    * `recover_orphaned_claims(rpc_dir, stats)` — answers the in-flight
+      claim markers a cancelled sweep leaves behind and returns stats with
+      their call reservations reconstructed; called from the cancel path
+      (`abort/2`, `terminate/2`) after the sweep task is brutally killed.
+    * `drain_notifications(ctx, stats)` — the notification-only final drain;
+      called once from `terminate/2` before protocol-file cleanup.
     * `request_path/2` and `response_path/2` — protocol file naming, used by
       the integration and tests; the server itself never builds paths.
 
@@ -301,7 +312,12 @@ defmodule CodingAgent.Tools.ExecuteCode.RpcServer do
 
   @impl true
   def terminate(_reason, state) do
-    _ = cancel_sweep(state)
+    state = cancel_sweep(state)
+    # A notify() issued immediately before the cell ended must still reach
+    # the conversation; the stop path is the persistent mode's final drain.
+    # (Notifications only — requests are deliberately never drained, see the
+    # moduledoc.)
+    drain_final_notifications(state)
     cleanup_files(state.ctx.rpc_dir)
     :ok
   end
@@ -338,10 +354,48 @@ defmodule CodingAgent.Tools.ExecuteCode.RpcServer do
       {:ok, stats} when is_map(stats) ->
         %{state | stats: stats, sweep_task: nil}
 
-      _ ->
+      _still_running ->
         _ = Task.shutdown(task, :brutal_kill)
-        %{state | sweep_task: nil}
+
+        # The killed sweep can no longer answer the requests it claimed, and
+        # after an abort no successor sweep will run either (the server stops
+        # polling); pay its debts here so every claimed id ends answered and
+        # its call reservations survive in the final stats.
+        stats = recover_claims(state)
+
+        %{state | stats: stats, sweep_task: nil}
     end
+  end
+
+  # Same containment discipline as `sweep/3`: a broken pump must not take
+  # the server (and the cell's result) down with it.
+  defp recover_claims(state) do
+    state.rpc.recover_orphaned_claims(state.ctx.rpc_dir, state.stats)
+  rescue
+    error ->
+      Logger.warning(
+        "execute_code rpc claim recovery failed (#{inspect(error.__struct__)}); keeping previous stats"
+      )
+
+      state.stats
+  catch
+    kind, _value ->
+      Logger.warning("execute_code rpc claim recovery failed (#{kind}); keeping previous stats")
+      state.stats
+  end
+
+  defp drain_final_notifications(state) do
+    _ = state.rpc.drain_notifications(state.ctx, state.stats)
+    :ok
+  rescue
+    error ->
+      Logger.warning("execute_code rpc notification drain failed (#{inspect(error.__struct__)})")
+
+      :ok
+  catch
+    kind, _value ->
+      Logger.warning("execute_code rpc notification drain failed (#{kind})")
+      :ok
   end
 
   defp abort_signal(nil), do: :ok
