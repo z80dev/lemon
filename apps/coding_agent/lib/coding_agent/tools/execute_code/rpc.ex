@@ -77,19 +77,22 @@ defmodule CodingAgent.Tools.ExecuteCode.Rpc do
   replay memory): for an unanswered claim, an error response plus the call
   reservation and error count reconstructed in the stats; for a claim beside
   an already-published successful response, the REAL accounting (ok status,
-  result bytes, tool usage) restored from the response file and the claim's
-  own request body — the marker's body, or the ledger's tool name when the
-  script destroyed the marker. A ledger entry whose marker is gone AND whose
-  response is gone marks `accounting_loss: true` in the returned stats: the
-  tool may have executed with side effects no surviving evidence can
-  account for, so everything in those stats is a lower bound. Every sweep
-  starts with recovery, so a killed sweep's claimed ids always end answered
-  — answered in writing, never re-dispatched, so a cancelled request still
-  never executes its tool, and a replayed id is refused by the reconstructed
-  replay memory even when its marker was destroyed. A marker whose deletion
-  fails is retried a bounded number of times and then left inert (the id is
-  already in the stats' replay memory, so no later sweep re-charges it; the
-  workspace teardown owns the rest).
+  result bytes, tool usage) restored from the response file and the claim
+  itself — the LEDGER's tool name whenever the ledger recorded the id
+  (host-owned beats script-writable, so a hostile script cannot forge the
+  recorded tool identity by overwriting the marker body), and only the
+  marker's own body for ids the ledger never saw. A ledger entry whose
+  marker is gone AND whose response is gone marks `accounting_loss: true`
+  in the returned stats: the tool may have executed with side effects no
+  surviving evidence can account for, so everything in those stats is a
+  lower bound. Every sweep starts with recovery, so a killed sweep's
+  claimed ids always end answered — answered in writing, never
+  re-dispatched, so a cancelled request still never executes its tool, and
+  a replayed id is refused by the reconstructed replay memory even when its
+  marker was destroyed. A marker whose deletion fails is retried a bounded
+  number of times and then left inert (the id is already in the stats'
+  replay memory, so no later sweep re-charges it; the workspace teardown
+  owns the rest).
 
   Approval-requiring claims are additionally cancellation-safe: the approval
   id is allocated at claim time and an unlinked watcher cancels the pending
@@ -291,11 +294,13 @@ defmodule CodingAgent.Tools.ExecuteCode.Rpc do
   Each recovered id receives the response the dead sweep owed — the error
   response, unless a successful response was already published, in which
   case the REAL accounting (ok status, result bytes, tool usage) is
-  restored from the response file and the claim itself (the marker's
-  renamed request body, or the ledger's tool name when the script destroyed
-  the marker). `stats` recovers the call reservation and the replay memory
-  the dead sweep would have recorded, so the call budget, replay refusal,
-  and trust classification stay exact across a killed sweep.
+  restored from the response file and the claim itself. The tool identity
+  is the LEDGER's name whenever the ledger recorded the id — host-owned
+  beats script-writable, so overwriting the marker body cannot forge the
+  recorded tool — and the marker's renamed request body only for ids the
+  ledger never saw. `stats` recovers the call reservation and the replay
+  memory the dead sweep would have recorded, so the call budget, replay
+  refusal, and trust classification stay exact across a killed sweep.
 
   A LEDGER entry whose marker is gone and whose response is gone marks
   `accounting_loss: true` in the returned stats: the script destroyed the
@@ -322,15 +327,17 @@ defmodule CodingAgent.Tools.ExecuteCode.Rpc do
   def recover_orphaned_claims(rpc_dir, stats, claimed)
       when is_binary(rpc_dir) and is_map(claimed) do
     stats
-    |> recover_orphaned_markers(rpc_dir)
+    |> recover_orphaned_markers(rpc_dir, claimed)
     |> recover_ledger_claims(rpc_dir, claimed)
   end
 
   # The on-disk half of the claim evidence. A sweep that dies mid-flight
   # leaves one marker per claimed-but-unanswered id; a script that deleted
   # a marker leaves nothing here, which is exactly what the ledger half
-  # below exists to cover.
-  defp recover_orphaned_markers(stats, rpc_dir) do
+  # below exists to cover. The ledger is passed in because it outranks the
+  # marker BODY wherever both exist for an id: the body is script-writable,
+  # so it can only supply the tool identity for ids the ledger never saw.
+  defp recover_orphaned_markers(stats, rpc_dir, claimed) do
     rpc_dir
     |> Path.join("req-*.claim")
     |> Path.wildcard()
@@ -346,7 +353,7 @@ defmodule CodingAgent.Tools.ExecuteCode.Rpc do
       {:invalid, path} -> {1, path}
     end)
     |> Enum.reduce(stats, fn
-      {:marker, id, path}, acc -> recover_claim(rpc_dir, id, path, acc)
+      {:marker, id, path}, acc -> recover_claim(rpc_dir, id, path, acc, claimed)
       {:invalid, path}, acc -> consume_request(path) && acc
     end)
   end
@@ -761,7 +768,7 @@ defmodule CodingAgent.Tools.ExecuteCode.Rpc do
   # exactly once. `seen?` is the idempotency gate — the id entered the stats'
   # replay memory when its debt was paid, so a marker that outlived its own
   # deletion (deletion retried, still failing) is cleanup-only from here on.
-  defp recover_claim(rpc_dir, id, marker, stats) do
+  defp recover_claim(rpc_dir, id, marker, stats, claimed) do
     if seen?(stats, id) do
       ensure_answered(rpc_dir, id)
       discard_marker(marker)
@@ -773,11 +780,15 @@ defmodule CodingAgent.Tools.ExecuteCode.Rpc do
             # The dead sweep died between publishing a successful response
             # and retiring its marker: restore the REAL accounting — the ok
             # status, the result bytes, the tool usage — instead of
-            # inventing an error the script never saw.
+            # inventing an error the script never saw. The tool identity is
+            # the LEDGER's name when the ledger recorded the id (host-owned
+            # beats script-writable: the marker body sits in the rpc
+            # directory, where a hostile script can forge it) and the
+            # marker's own body only for ids the ledger never saw.
             stats
             |> Map.update!(:calls, &(&1 + 1))
             |> Map.update!(:bytes, &(&1 + byte_size(content)))
-            |> remember_tool(claimed_tool(marker))
+            |> remember_tool(ledger_tool(claimed, id, marker))
             |> remember_id(id)
 
           :error ->
@@ -791,6 +802,17 @@ defmodule CodingAgent.Tools.ExecuteCode.Rpc do
 
       discard_marker(marker)
       stats
+    end
+  end
+
+  # The tool identity for a recovered marker: the ledger's name when it has
+  # one for the id, else the marker body's own claim. The ledger entry was
+  # recorded before the marker was published, so a ledger-covered marker is
+  # provably the same claim the host already knows the tool for.
+  defp ledger_tool(claimed, id, marker) do
+    case claimed do
+      %{^id => tool} when is_binary(tool) -> tool
+      _ledger_never_saw_it -> claimed_tool(marker)
     end
   end
 

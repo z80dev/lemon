@@ -42,6 +42,7 @@ defmodule CodingAgent.Tools.ExecuteCode.RpcServer do
       (100 by default); once aborted it retains its final stats without
       dispatching new requests. Sweeps never overlap, so accounting stays
       single-threaded. A sweep that dies ABNORMALLY (any exit but `:normal`)
+      — or is caught raising/throwing (a contained fault, see `sweep/3`) —
       is treated as potential accounting loss: its published-but-unreturned
       stats are gone, so `accounting_loss: true` is stamped and its claims
       are recovered immediately (markers plus the claim ledger below)
@@ -114,9 +115,11 @@ defmodule CodingAgent.Tools.ExecuteCode.RpcServer do
       `claimed` ledger map (`%{id => tool}`) this server accumulated through
       `:on_claim`, returning stats with their call reservations and replay
       memory reconstructed (and `accounting_loss: true` when destroyed
-      ledger evidence forces a lower bound). Called from the cancel path
-      (`abort/2`, `terminate/2`) and the abnormal-:DOWN path after the
-      sweep task is brutally killed or dies on its own.
+      ledger evidence forces a lower bound). Called from every path that
+      settles a sweep whose stats cannot be trusted — the cancel path
+      (`abort/2`, `terminate/2`), the abnormal-:DOWN path, and the
+      contained-fault result path — after the sweep task is brutally
+      killed, dies on its own, or returns `{:sweep_failed, stats}`.
     * `drain_notifications(ctx, stats)` — the notification-only final drain;
       called from `drain_and_stats/2` (the teardown read ExecuteCode uses)
       and once more from `terminate/2` as a last-resort backstop before
@@ -127,8 +130,12 @@ defmodule CodingAgent.Tools.ExecuteCode.RpcServer do
   `ctx` is the `Rpc` ctx extended with the per-cell `:token`. A wrong sweep
   implementation must not take the server down with it: a raising or throwing
   sweep is contained, logged (exception class only — exception payloads can
-  embed the request body, which carries the token), and the previous stats
-  are kept so the next poll resumes cleanly.
+  embed the request body, which carries the token), and reported as a
+  distinctly-tagged `{:sweep_failed, stats}` result carrying the pre-sweep
+  snapshot. The handler then settles it exactly like an abnormal death —
+  ledger recovery, `accounting_loss: true`, rescheduled polls — because a
+  fault at an arbitrary sweep point may have dispatched and answered claims
+  whose accounting died with the fault; only the process is kept alive.
   """
 
   use GenServer, restart: :temporary
@@ -256,9 +263,10 @@ defmodule CodingAgent.Tools.ExecuteCode.RpcServer do
   can be handed to the cell's result details unchanged.
 
   A stats map may carry one server-added key: `:accounting_loss => true` is
-  stamped when a sweep had to be brutally killed or died abnormally — work
-  the dead sweep dispatched and answered without leaving recoverable claim
-  evidence can no longer be reconstructed, so the accounting is a lower
+  stamped when a sweep had to be brutally killed, died abnormally, or was
+  caught faulting (see the contained-fault handling above) — work the dead
+  sweep dispatched and answered without leaving recoverable claim evidence
+  can no longer be reconstructed, so the accounting is a lower
   bound. Consumers must treat that conservatively (ExecuteCode forces
   `trust: :untrusted`).
   """
@@ -381,13 +389,31 @@ defmodule CodingAgent.Tools.ExecuteCode.RpcServer do
     {:noreply, state}
   end
 
+  # A contained sweep fault (see sweep/3): the sweep could not return
+  # trustworthy stats, which is exactly the abnormal-death accounting
+  # hazard — it may have dispatched and answered claims whose accounting
+  # died with the fault. It takes the same conservative path as an abnormal
+  # :DOWN: settle its ledger entries through recovery NOW so no claimed id
+  # waits for the next poll, flag the stats as a lower bound, and keep
+  # serving — containment was never allowed to cost accounting correctness.
+  def handle_info({ref, {:sweep_failed, stats_before}}, %{sweep_task: %Task{ref: ref}} = state) do
+    Process.demonitor(ref, [:flush])
+    # The pre-sweep snapshot is all a failed sweep can vouch for; recovery
+    # reconstructs the claims it can prove on top of it.
+    state = %{state | stats: stats_before, sweep_task: nil}
+
+    state = settle_failed_sweep(state)
+    schedule_next_poll(state)
+    {:noreply, state}
+  end
+
   def handle_info({:DOWN, ref, :process, _pid, reason}, %{sweep_task: %Task{ref: ref}} = state) do
     state = %{state | sweep_task: nil}
 
     state =
       if reason == :normal do
         # The task finished; its result message is already queued ahead of
-        # this DOWN and will be consumed by the result handler above.
+        # this DOWN and will be consumed by a result handler above.
         state
       else
         # Abnormal sweep exit. The dead sweep may have published responses
@@ -395,10 +421,7 @@ defmodule CodingAgent.Tools.ExecuteCode.RpcServer do
         # evidence survives that window, so the accounting is a lower bound:
         # flag it (never overstate trust), settle its ledger entries, and
         # run recovery NOW so no claimed id waits for the next poll.
-        state
-        |> drain_queued_claims()
-        |> mark_accounting_loss()
-        |> settle_dead_sweep_claims()
+        settle_failed_sweep(state)
       end
 
     schedule_next_poll(state)
@@ -451,8 +474,12 @@ defmodule CodingAgent.Tools.ExecuteCode.RpcServer do
   # ==========================================================================
 
   # A broken sweep must never take the server down: the cell would hang
-  # waiting for responses nobody will write. Keep the previous stats so the
-  # next poll resumes from a consistent accounting state.
+  # waiting for responses nobody will write. The fault is contained here
+  # and reported as `{:sweep_failed, stats}` — the PRE-sweep snapshot — so
+  # the result handler can treat it exactly like an abnormal death
+  # (ledger recovery plus `accounting_loss`) instead of mistaking the stale
+  # snapshot for a completed sweep's truth, which would silently discard
+  # every claim the failed sweep had already dispatched.
   defp sweep(rpc, ctx, stats) do
     rpc.process_pending(ctx, stats)
   rescue
@@ -460,15 +487,15 @@ defmodule CodingAgent.Tools.ExecuteCode.RpcServer do
       # Class only: exception payloads can embed the request body, which
       # carries the per-cell token, and tokens never appear in logs.
       Logger.warning(
-        "execute_code rpc sweep failed (#{inspect(error.__struct__)}); keeping previous stats"
+        "execute_code rpc sweep failed (#{inspect(error.__struct__)}); settling conservatively"
       )
 
-      stats
+      {:sweep_failed, stats}
   catch
     kind, _value ->
-      Logger.warning("execute_code rpc sweep failed (#{kind}); keeping previous stats")
+      Logger.warning("execute_code rpc sweep failed (#{kind}); settling conservatively")
 
-      stats
+      {:sweep_failed, stats}
   end
 
   # a small grace yield before the brutal kill covers the common "done but not
@@ -482,44 +509,67 @@ defmodule CodingAgent.Tools.ExecuteCode.RpcServer do
   defp cancel_sweep(%{sweep_task: task} = state) do
     case Task.yield(task, @sweep_cancel_grace_ms) do
       {:ok, stats} when is_map(stats) ->
-        # The sweep completed: its markers are retired and every response is
-        # published, so its stats are the truth — and its ledger entries are
-        # settled (every claim it made was answered before it could return).
-        # Recovery would find nothing, but run it anyway — stale markers from
-        # an even earlier sweep are still answered here because no successor
-        # poll may exist.
-        state = %{state | stats: stats, sweep_task: nil, pending_claims: %{}}
-        %{state | stats: recover_claims(state)}
+        settle_completed_sweep(state, stats)
 
       _miss ->
         case Task.shutdown(task, :brutal_kill) do
           # Finished between the yield miss and the kill: same as above.
           {:ok, stats} when is_map(stats) ->
-            state = %{state | stats: stats, sweep_task: nil, pending_claims: %{}}
-            %{state | stats: recover_claims(state)}
+            settle_completed_sweep(state, stats)
 
-          _killed ->
-            # The killed sweep can no longer answer the requests it claimed,
-            # and after an abort no successor sweep will run either (the
-            # server stops polling); pay its debts here so every claimed id
-            # ends answered and its call reservations survive in the final
-            # stats. Ids neither the markers nor the ledger can prove
-            # (answered but never accounted) are unknowable now: flag the
-            # loss so the trust classification falls back to untrusted
-            # instead of trusted.
-            state
-            |> drain_queued_claims()
-            |> mark_accounting_loss()
-            |> settle_dead_sweep_claims()
+          # Everything else — a genuinely killed sweep, or a contained fault
+          # whose failure result raced the cancel — is a sweep that is
+          # verifiably over and can no longer answer the requests it
+          # claimed. After an abort no successor sweep will run either (the
+          # server stops polling); pay its debts here so every claimed id
+          # ends answered and its call reservations survive in the final
+          # stats. Ids neither the markers nor the ledger can prove
+          # (answered but never accounted) are unknowable now: flag the
+          # loss so the trust classification falls back to untrusted
+          # instead of trusted.
+          _dead ->
+            settle_failed_sweep(state)
         end
     end
   end
 
-  # Settle a dead sweep's ledger: run claim recovery with BOTH halves of the
-  # evidence (markers plus the ledger), then clear the ledger — every entry
-  # has now been paid into the stats. The sweep task is over too: shutdown
-  # already returned, so nothing may yield or kill it a second time.
-  defp settle_dead_sweep_claims(state) do
+  # A sweep that verifiably answered everything it claimed (it returned its
+  # stats): its markers are retired, every response is published, so its
+  # stats are the truth — and its ledger entries are settled by its own
+  # return. Task.yield/shutdown consumed ONLY the task result, so the
+  # sweep's claim_started messages may still sit queued behind the
+  # in-flight call — fold them through the settlement below, where the
+  # returned stats' replay memory settles them as harmless duplicates
+  # (every claim a completed sweep made was answered before it could
+  # return). Recovery would find nothing else, but run it anyway — stale
+  # markers from an even earlier sweep are still answered here because no
+  # successor poll may exist.
+  defp settle_completed_sweep(state, stats) do
+    state = %{state | stats: stats, sweep_task: nil}
+
+    state
+    |> drain_queued_claims()
+    |> settle_claims()
+  end
+
+  # A sweep whose fate was decided WITHOUT a trustworthy stats return
+  # (abnormal :DOWN, brutal kill, or a contained fault): fold every ledger
+  # entry in, flag the accounting as a lower bound, and pay the debts.
+  defp settle_failed_sweep(state) do
+    state
+    |> drain_queued_claims()
+    |> mark_accounting_loss()
+    |> settle_claims()
+  end
+
+  # Settle the recorded claim ledger: run claim recovery with BOTH halves
+  # of the evidence (markers plus the ledger), then clear the ledger —
+  # every entry has now been paid into the stats (freshly owed, or already
+  # settled by the sweep's own return and deduplicated by the replay
+  # memory). The sweep task is over too: its result was consumed or its
+  # shutdown already returned, so nothing may yield or kill it a second
+  # time.
+  defp settle_claims(state) do
     stats = recover_claims(state)
     %{state | stats: stats, sweep_task: nil, pending_claims: %{}}
   end

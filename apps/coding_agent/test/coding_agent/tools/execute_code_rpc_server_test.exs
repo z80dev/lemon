@@ -289,6 +289,85 @@ defmodule CodingAgent.Tools.ExecuteCodeRpcServerTest do
     end
   end
 
+  defmodule ExplodingSweepRpc do
+    @moduledoc """
+    Real pump that explodes mid-sweep AFTER request 1 was fully claimed,
+    dispatched, and answered — the fault window where the sweep's own stats
+    die with the raise while the claim ledger entry and the published
+    response survive as the only recovery evidence.
+    """
+
+    def initial_stats, do: Rpc.initial_stats()
+
+    def recover_orphaned_claims(rpc_dir, stats, claimed \\ %{}),
+      do: Rpc.recover_orphaned_claims(rpc_dir, stats, claimed)
+
+    def drain_notifications(ctx, stats), do: Rpc.drain_notifications(ctx, stats)
+
+    def process_pending(ctx, stats) do
+      flag = Path.join(ctx.rpc_dir, ".explode-sweep")
+
+      if File.exists?(flag) do
+        File.rm!(flag)
+        _stats = Rpc.process_request(1, ctx, stats)
+        File.touch(Path.join(ctx.rpc_dir, ".explode-hit"))
+        raise "sweep exploded after claim"
+      end
+
+      Rpc.process_pending(ctx, stats)
+    end
+  end
+
+  defmodule LateLedgerRpc do
+    @moduledoc """
+    Pump whose sweep feeds its claim ledger entry only after the owning
+    server has entered the abort call, reproducing the mailbox shape a
+    successful cancel races: `handle_call(:abort)` sets the abort signal
+    BEFORE running `cancel_sweep/1`, so once the flag flips, the sweep's
+    `{:claim_started, id, tool}` message is queued behind the in-flight
+    call while the sweep completes inside the yield grace.
+    """
+
+    def initial_stats, do: FakeRpc.initial_stats()
+
+    # Recovery finds nothing in this scenario — the claim was answered
+    # before the sweep returned — so identity is the honest minimal fake.
+    def recover_orphaned_claims(_rpc_dir, stats, _claimed), do: stats
+
+    def drain_notifications(_ctx, stats), do: stats
+
+    def process_pending(ctx, stats) do
+      if Map.get(ctx, :late_claim?) do
+        send(Map.get(ctx, :test_pid), {:late_sweep_started, self()})
+        await_abort(ctx.signal)
+
+        Map.get(ctx, :on_claim).(1, "echo")
+        send(Map.get(ctx, :test_pid), {:late_claim_fed, 1, "echo"})
+
+        tmp = Path.join(ctx.rpc_dir, "res-1.json.tmp")
+        File.write!(tmp, Jason.encode!(%{"id" => 1, "ok" => true, "content" => "settled"}))
+        File.rename!(tmp, Path.join(ctx.rpc_dir, "res-1.json"))
+
+        stats
+        |> Map.update!(:calls, &(&1 + 1))
+        |> Map.update!(:bytes, &(&1 + byte_size("settled")))
+        |> Map.update!(:tools_used, &MapSet.put(&1, "echo"))
+        |> Map.update!(:seen_ids, &MapSet.put(&1, 1))
+      else
+        FakeRpc.process_pending(ctx, stats)
+      end
+    end
+
+    defp await_abort(signal) do
+      if AbortSignal.aborted?(signal) do
+        :ok
+      else
+        Process.sleep(1)
+        await_abort(signal)
+      end
+    end
+  end
+
   defmodule DrainCountingRpc do
     @moduledoc """
     `FakeRpc` whose `drain_notifications/2` reports the stats it was called
@@ -432,7 +511,6 @@ defmodule CodingAgent.Tools.ExecuteCodeRpcServerTest do
       # accounting must survive — never revert to the stale snapshot.
       assert %{"id" => 1, "ok" => true, "content" => "released"} = await_response(rpc_dir, 1)
       :ok = RpcServer.abort(server)
-
       stats = RpcServer.stats(server)
       assert stats.calls == 1
       assert stats.errors == 0
@@ -508,6 +586,40 @@ defmodule CodingAgent.Tools.ExecuteCodeRpcServerTest do
       assert stats.calls == 1
       assert stats.errors == 1
       assert stats.accounting_loss == true
+
+      assert :ok = RpcServer.stop(server)
+    end
+
+    @tag :capture_log
+    test "a successful cancel settles the sweep's still-queued claim messages", %{
+      rpc_dir: rpc_dir
+    } do
+      signal = AbortSignal.new()
+
+      ctx =
+        Map.put(ctx(rpc_dir, signal: signal, test_pid: self()), :late_claim?, true)
+
+      {:ok, server} = start_server(ctx, rpc: LateLedgerRpc)
+
+      assert_receive {:late_sweep_started, _sweep_pid}, 2_000
+      :ok = RpcServer.abort(server)
+
+      # The claim feed fired while the server was inside the abort call —
+      # the stub only feeds after the signal flips, and the signal flips
+      # inside handle_call(:abort) before cancel_sweep runs — so its
+      # message was queued behind the in-flight call when the successful
+      # cancel settled the sweep.
+      assert_received {:late_claim_fed, 1, "echo"}
+
+      # The completed sweep took the SUCCESS cancel path: no kill, no loss.
+      stats = RpcServer.stats(server)
+      assert stats.calls == 1
+      refute Map.get(stats, :accounting_loss)
+      assert %{"id" => 1, "ok" => true, "content" => "settled"} = read_response(rpc_dir, 1)
+
+      # Its queued claim message was settled with the sweep — not left in
+      # the mailbox to reinsert a stale ledger entry no sweep owns.
+      assert :sys.get_state(server).pending_claims == %{}
 
       assert :ok = RpcServer.stop(server)
     end
@@ -936,6 +1048,39 @@ defmodule CodingAgent.Tools.ExecuteCodeRpcServerTest do
 
       assert %{"ok" => true, "content" => "after the storm"} = await_response(rpc_dir, 1)
       assert RpcServer.stats(server).calls == 1
+
+      assert :ok = RpcServer.stop(server)
+    end
+
+    @tag :capture_log
+    test "a sweep that fails after a dispatched claim recovers it and flags the loss", %{
+      rpc_dir: rpc_dir
+    } do
+      File.touch(Path.join(rpc_dir, ".explode-sweep"))
+      {:ok, server} = start_server(ctx(rpc_dir), rpc: ExplodingSweepRpc)
+
+      write_request(rpc_dir, 1, "echo", %{"value" => "claimed then lost"})
+      await_file(Path.join(rpc_dir, ".explode-hit"))
+
+      # The failed sweep's own stats died with the raise; the ledger entry
+      # plus the published response are the only surviving evidence, and a
+      # caught failure must pay them through the same conservative path as
+      # an abnormal death — lower bound flagged, so the result can never be
+      # reported trusted.
+      stats = await_flagged_stats(server)
+      assert stats.accounting_loss == true
+      assert stats.calls == 1
+      assert stats.errors == 0
+      assert stats.bytes == byte_size("claimed then lost")
+      assert MapSet.to_list(stats.tools_used) == ["echo"]
+
+      assert %{"id" => 1, "ok" => true, "content" => "claimed then lost"} =
+               read_response(rpc_dir, 1)
+
+      # Containment still means survival: the server reschedules and serves.
+      write_request(rpc_dir, 2, "echo", %{"value" => "resumed"})
+      assert %{"id" => 2, "ok" => true, "content" => "resumed"} = await_response(rpc_dir, 2)
+      assert RpcServer.stats(server).calls == 2
 
       assert :ok = RpcServer.stop(server)
     end

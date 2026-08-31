@@ -246,16 +246,22 @@ no successor runs): its claimed ids are answered in writing and never
 re-dispatched, the replay memory is reconstructed so a replayed id is refused
 even when its marker was destroyed, and real accounting (ok status, result
 bytes, tool usage) is restored from a surviving response file plus the
-marker's own request body — or the ledger's tool name when the script
-destroyed the marker. A ledger entry with neither marker nor response
-surviving stamps `rpc_accounting_loss: true`: the accounting is then a lower
-bound and the cell's result is forced to `trust: :untrusted`. The same flag
-is stamped whenever a sweep is brutally killed or dies abnormally — work it
-dispatched and answered without returning its stats is unknowable. Recovery
-trusts only regular-file markers (planted directories and symlinks at marker
-names are ignored outright) and charges each dead claim **exactly once**; a
-marker whose deletion fails (bounded retries) can never re-charge the budget
-on a later sweep.
+claim's tool identity — the ledger's name whenever the ledger recorded the
+id (host-owned beats script-writable, so overwriting the marker body cannot
+forge the recorded tool), and the marker's own body only for ids the ledger
+never saw. A ledger entry with neither marker nor response surviving stamps
+`rpc_accounting_loss: true`: the accounting is then a lower bound and the
+cell's result is forced to `trust: :untrusted`. The same flag is stamped
+whenever a sweep is brutally killed, dies abnormally, or is caught
+raising/throwing mid-sweep — a contained fault is contained only in the
+process sense: its result settles through the same recovery-plus-lower-bound
+path, because work it dispatched and answered without returning its stats
+is unknowable. A successful cancel also settles the sweep's still-queued
+claim-ledger messages through the same deduplicating recovery, so no stale
+ledger entry outlives its sweep. Recovery trusts only regular-file markers
+(planted directories and symlinks at marker names are ignored outright) and
+charges each dead claim **exactly once**; a marker whose deletion fails
+(bounded retries) can never re-charge the budget on a later sweep.
 
 Approvals stay on the existing `ToolExecutor` path inside each task; each
 approval-requiring claim pre-allocates its approval id, and a tiny unlinked

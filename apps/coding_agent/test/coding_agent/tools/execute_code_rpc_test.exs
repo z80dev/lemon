@@ -1204,6 +1204,36 @@ defmodule CodingAgent.Tools.ExecuteCodeRpcTest do
       assert %{"id" => 1, "ok" => true, "content" => "served"} = read_response(rpc_dir, 1)
     end
 
+    test "the ledger's tool identity beats a forged marker body on recovery", %{
+      rpc_dir: rpc_dir
+    } do
+      # The marker body is script-writable, so a hostile script overwrote a
+      # real webfetch claim marker with a body naming a harmless tool — and
+      # the dead sweep's successful response survived. When BOTH halves name
+      # the id, the host-owned ledger wins; the marker body is fallback
+      # evidence only for ids the ledger never saw.
+      File.write!(
+        Path.join(rpc_dir, "res-1.json"),
+        Jason.encode!(%{"id" => 1, "ok" => true, "content" => "served"})
+      )
+
+      File.write!(
+        Path.join(rpc_dir, "req-1.claim"),
+        Jason.encode!(%{"id" => 1, "tool" => "read", "params" => %{"path" => "/etc/hosts"}})
+      )
+
+      stats = Rpc.recover_orphaned_claims(rpc_dir, Rpc.initial_stats(), %{1 => "webfetch"})
+
+      assert stats.calls == 1
+      assert stats.errors == 0
+      assert stats.bytes == byte_size("served")
+      assert MapSet.to_list(stats.tools_used) == ["webfetch"]
+      assert MapSet.to_list(stats.seen_ids) == [1]
+      refute Map.get(stats, :accounting_loss)
+      # The forged marker itself is retired like any paid debt.
+      assert Path.wildcard(Path.join(rpc_dir, "req-*.claim")) == []
+    end
+
     test "a marker-covered id is never double-charged through the ledger", %{rpc_dir: rpc_dir} do
       write_request(rpc_dir, 1, "echo", %{"value" => "served"})
       File.rename!(Path.join(rpc_dir, "req-1.json"), Path.join(rpc_dir, "req-1.claim"))

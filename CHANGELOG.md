@@ -45,6 +45,18 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   stale; the `text()` host-side budget charges the encoded frame (identical
   to the shim) and the shim normalizes lone surrogates, so an in-budget
   block is always delivered.
+- `execute_code` result-channel hardening (fix round 4): a sweep caught
+  raising or throwing mid-flight is still contained (the server stays
+  alive) but no longer reported as if it had merely kept its old stats —
+  it settles through the same recovery-plus-`rpc_accounting_loss` path as
+  an abnormal death, so claims it dispatched are answered and charged from
+  the host-side claim ledger and surviving responses instead of being
+  silently discarded; claim recovery takes the tool identity from the
+  host-owned ledger whenever both ledger and script-writable marker exist,
+  so overwriting a marker body can no longer forge the recorded tool; and
+  a successful cancel folds the sweep's still-queued claim-ledger messages
+  through the same deduplicating recovery instead of reinserting them as
+  stale ledger entries.
 - `execute_code` scripts gained `notify(msg)` — a streaming side channel whose
   messages are forwarded to the tool's partial-update callback (capped at 4 KiB
   per message, 64 per run) — and `batch([...])`, which runs helper calls in
