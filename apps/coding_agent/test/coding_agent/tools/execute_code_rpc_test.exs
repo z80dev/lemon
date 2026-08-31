@@ -1179,12 +1179,14 @@ defmodule CodingAgent.Tools.ExecuteCodeRpcTest do
 
       write_request(rpc_dir, 1, "echo", %{"value" => "never dispatched"})
 
-      # Spawned unlinked — never Task.async, whose link could deliver the
-      # child's untrappable self-kill into this test process before an
-      # unlink could race to remove it. The monitor is the sole, orderly
-      # death observer.
-      sweep_pid = spawn(fn -> Rpc.process_pending(ctx, Rpc.initial_stats()) end)
-      monitor_ref = Process.monitor(sweep_pid)
+      # spawn_monitor — never Task.async (whose link could deliver the
+      # child's untrappable self-kill into this test process) and never a
+      # bare spawn + separate Process.monitor (not atomic: a fast self-kill
+      # could beat the monitor install and surface as :noproc). The spawn
+      # and monitor are installed atomically AND unlinked; the monitor is
+      # the sole, orderly death observer.
+      {sweep_pid, monitor_ref} =
+        spawn_monitor(fn -> Rpc.process_pending(ctx, Rpc.initial_stats()) end)
 
       assert_receive {:reserved_fed, 1}, 2_000
 

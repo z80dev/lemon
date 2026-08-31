@@ -265,7 +265,8 @@ policy-denied) can no longer erase that spend and let later sweeps exceed
 which precedes the spend, and the fate branch) charges the call exactly
 and counts one error, the conservative split of a branch that never ran —
 and writes no response, leaving the request file to the successor sweep's
-replay refusal. A `:claimed` entry with
+replay refusal (or the abort teardown — the cancel/abnormal-exit path
+where no successor runs). A `:claimed` entry with
 neither marker nor response surviving stamps `rpc_accounting_loss: true`:
 the accounting is then a lower bound and the
 cell's result is forced to `trust: :untrusted`. The same flag is stamped
