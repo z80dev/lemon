@@ -237,20 +237,31 @@ publication-failure error and its tool never runs). But the rpc directory is
 script-writable, so a marker alone is evidence only against crashes, never
 against a hostile script that deletes or replaces it after the gate. In
 session mode the claim therefore has a **second, host-side half**: the
-`RpcServer` records every dispatch-bound claim (`{id, tool}`) in its own
-process memory — via the pump's `:on_claim` hook, fed *before* the marker is
-published, making the ledger a superset of the published claims — where the
-script cannot reach it. A sweep that dies mid-wave is recovered from **both
-halves** by the next sweep (or the server's cancel/abnormal-exit path, where
-no successor runs): its claimed ids are answered in writing and never
-re-dispatched, the replay memory is reconstructed so a replayed id is refused
-even when its marker was destroyed, and real accounting (ok status, result
-bytes, tool usage) is restored from a surviving response file plus the
-claim's tool identity — the ledger's name whenever the ledger recorded the
-id (host-owned beats script-writable, so overwriting the marker body cannot
-forge the recorded tool), and the marker's own body only for ids the ledger
-never saw. A ledger entry with neither marker nor response surviving stamps
-`rpc_accounting_loss: true`: the accounting is then a lower bound and the
+`RpcServer` records one ledger entry per **spent call slot** in its own
+process memory — via the pump's `:on_claim` hook, first a `:reserved` entry
+the moment a request passes the replay and call-budget gates, then the
+entry's disposition (`:invalid`/`:unknown_tool`/`:denied` for requests
+answered inside the claim without dispatching, `:claimed` for a
+dispatch-bound request, fed *before* the marker is published, making the
+ledger a superset of the published claims) — where the script cannot reach
+it. A sweep that dies mid-wave is recovered from **both halves** by the
+next sweep (or the server's cancel/abnormal-exit path, where no successor
+runs): its claimed ids are answered in writing and never re-dispatched,
+the replay memory is reconstructed so a replayed id is refused even when
+its marker was destroyed, and real accounting (ok status, result bytes,
+tool usage) is restored from a surviving response file plus the claim's
+tool identity — the ledger's name whenever the ledger recorded the id
+(host-owned beats script-writable, so overwriting the marker body cannot
+forge the recorded tool), and the marker's own body only for ids the
+ledger never saw. Reservation entries settle exactly — one call, one error
+or denial, the replay memory, and no response writes — so a contained
+fault after an answered-but-never-dispatched request (invalid, unknown
+tool, policy-denied) can no longer erase that spend and let later sweeps
+exceed `max_calls`; an entry still bare `:reserved` (death between the
+spend and the fate branch) charges the call exactly and counts one error,
+the conservative split of a branch that never ran. A `:claimed` entry with
+neither marker nor response surviving stamps `rpc_accounting_loss: true`:
+the accounting is then a lower bound and the
 cell's result is forced to `trust: :untrusted`. The same flag is stamped
 whenever a sweep is brutally killed, dies abnormally, or is caught
 raising/throwing mid-sweep — a contained fault is contained only in the

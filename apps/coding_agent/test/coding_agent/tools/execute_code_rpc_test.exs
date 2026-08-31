@@ -1129,25 +1129,30 @@ defmodule CodingAgent.Tools.ExecuteCodeRpcTest do
              |> Enum.empty?()
     end
 
-    test "the claim ledger is fed before the marker is published", %{rpc_dir: rpc_dir} do
-      # The on_claim hook must fire BEFORE the rename: that is what makes
-      # the ledger a superset of the published claims (a sweep killed after
-      # the send has already delivered its ledger entry, whatever the script
-      # then does to the marker).
+    test "the claim ledger is fed at reservation time and before the marker is published", %{
+      rpc_dir: rpc_dir
+    } do
+      # The reservation entry must fire the moment the call slot is spent —
+      # before the request's fate branch — and the `:claimed` refinement
+      # must fire BEFORE the rename: that is what makes the ledger cover
+      # every spent slot (never re-spendable after a fault) and a superset
+      # of the published claims (a sweep killed after the send has already
+      # delivered its entry, whatever the script then does to the marker).
       test = self()
 
       ctx =
         ctx(rpc_dir,
-          on_claim: fn id, tool ->
+          on_claim: fn id, kind, tool ->
             marker = Path.join(rpc_dir, "req-#{id}.claim")
-            send(test, {:claim_ledger_entry, id, tool, File.exists?(marker)})
+            send(test, {:claim_ledger_entry, id, kind, tool, File.exists?(marker)})
           end
         )
 
       write_request(rpc_dir, 1, "echo", %{"value" => "served"})
       stats = Rpc.process_pending(ctx, Rpc.initial_stats())
 
-      assert_received {:claim_ledger_entry, 1, "echo", false}
+      assert_received {:claim_ledger_entry, 1, :reserved, nil, false}
+      assert_received {:claim_ledger_entry, 1, :claimed, "echo", false}
       assert %{"id" => 1, "ok" => true, "content" => "served"} = read_response(rpc_dir, 1)
       assert stats.calls == 1
     end
@@ -1156,7 +1161,10 @@ defmodule CodingAgent.Tools.ExecuteCodeRpcTest do
          %{rpc_dir: rpc_dir} do
       # The hostile script deleted both halves of the on-disk evidence after
       # the claim; the host-side ledger still proves the claim happened.
-      stats = Rpc.recover_orphaned_claims(rpc_dir, Rpc.initial_stats(), %{1 => "webfetch"})
+      stats =
+        Rpc.recover_orphaned_claims(rpc_dir, Rpc.initial_stats(), %{
+          1 => %{kind: :claimed, tool: "webfetch"}
+        })
 
       assert %{"id" => 1, "ok" => false, "error" => "rpc dispatch interrupted"} =
                read_response(rpc_dir, 1)
@@ -1193,12 +1201,14 @@ defmodule CodingAgent.Tools.ExecuteCodeRpcTest do
         Jason.encode!(%{"id" => 1, "ok" => true, "content" => "served"})
       )
 
-      stats = Rpc.recover_orphaned_claims(rpc_dir, Rpc.initial_stats(), %{1 => "webfetch"})
+      stats =
+        Rpc.recover_orphaned_claims(rpc_dir, Rpc.initial_stats(), %{
+          1 => %{kind: :claimed, tool: "webfetch"}
+        })
 
       assert stats.calls == 1
       assert stats.errors == 0
       assert stats.bytes == byte_size("served")
-      assert MapSet.to_list(stats.tools_used) == ["webfetch"]
       assert MapSet.to_list(stats.seen_ids) == [1]
       refute Map.get(stats, :accounting_loss)
       assert %{"id" => 1, "ok" => true, "content" => "served"} = read_response(rpc_dir, 1)
@@ -1222,7 +1232,10 @@ defmodule CodingAgent.Tools.ExecuteCodeRpcTest do
         Jason.encode!(%{"id" => 1, "tool" => "read", "params" => %{"path" => "/etc/hosts"}})
       )
 
-      stats = Rpc.recover_orphaned_claims(rpc_dir, Rpc.initial_stats(), %{1 => "webfetch"})
+      stats =
+        Rpc.recover_orphaned_claims(rpc_dir, Rpc.initial_stats(), %{
+          1 => %{kind: :claimed, tool: "webfetch"}
+        })
 
       assert stats.calls == 1
       assert stats.errors == 0
@@ -1238,12 +1251,89 @@ defmodule CodingAgent.Tools.ExecuteCodeRpcTest do
       write_request(rpc_dir, 1, "echo", %{"value" => "served"})
       File.rename!(Path.join(rpc_dir, "req-1.json"), Path.join(rpc_dir, "req-1.claim"))
 
-      stats = Rpc.recover_orphaned_claims(rpc_dir, Rpc.initial_stats(), %{1 => "echo"})
+      stats =
+        Rpc.recover_orphaned_claims(rpc_dir, Rpc.initial_stats(), %{
+          1 => %{kind: :claimed, tool: "echo"}
+        })
 
       assert stats.calls == 1
       assert stats.errors == 1
       assert MapSet.to_list(stats.seen_ids) == [1]
       assert Path.wildcard(Path.join(rpc_dir, "req-*.claim")) == []
+    end
+
+    test "a denied reservation entry reconstructs exactly and never rewrites its answer", %{
+      rpc_dir: rpc_dir
+    } do
+      # The dead sweep answered the policy denial before dying; its response
+      # must be left untouched (settlement writes nothing) and the stats it
+      # lost — one call, one denial, the replay memory — re-applied exactly.
+      File.write!(
+        Path.join(rpc_dir, "res-1.json"),
+        Jason.encode!(%{"id" => 1, "ok" => false, "error" => "Tool 'webfetch' is in deny list"})
+      )
+
+      stats =
+        Rpc.recover_orphaned_claims(rpc_dir, Rpc.initial_stats(), %{
+          1 => %{kind: :denied, tool: "webfetch"}
+        })
+
+      assert stats.calls == 1
+      assert stats.denied == 1
+      assert stats.errors == 0
+      assert stats.bytes == 0
+      assert MapSet.to_list(stats.tools_used) == []
+      assert MapSet.to_list(stats.seen_ids) == [1]
+      # Exact reconstruction is not a loss: nothing is missing.
+      refute Map.get(stats, :accounting_loss)
+
+      assert %{"id" => 1, "ok" => false, "error" => "Tool 'webfetch' is in deny list"} =
+               read_response(rpc_dir, 1)
+    end
+
+    test "invalid and unknown-tool reservation entries reconstruct as charged errors", %{
+      rpc_dir: rpc_dir
+    } do
+      stats =
+        Rpc.recover_orphaned_claims(rpc_dir, Rpc.initial_stats(), %{
+          1 => %{kind: :invalid, tool: nil},
+          2 => %{kind: :unknown_tool, tool: "nosuch"}
+        })
+
+      assert stats.calls == 2
+      assert stats.errors == 2
+      assert stats.denied == 0
+      assert MapSet.to_list(stats.seen_ids) == [1, 2]
+      refute Map.get(stats, :accounting_loss)
+      # Answered-in-claim paths never dispatched: no responses are written.
+      refute File.exists?(Path.join(rpc_dir, "res-1.json"))
+      refute File.exists?(Path.join(rpc_dir, "res-2.json"))
+    end
+
+    test "a bare reserved entry charges its call slot and a surviving request is replay-refused",
+         %{rpc_dir: rpc_dir} do
+      # The sweep died between spending the call slot and taking the fate
+      # branch: the entry still carries the spend, and the request file the
+      # fault left behind must be answered by replay refusal — never
+      # re-charged, never dispatched.
+      write_request(rpc_dir, 1, "echo", %{"value" => "straggler"})
+
+      stats =
+        Rpc.recover_orphaned_claims(rpc_dir, Rpc.initial_stats(), %{
+          1 => %{kind: :reserved, tool: nil}
+        })
+
+      assert stats.calls == 1
+      assert stats.errors == 1
+      assert MapSet.to_list(stats.seen_ids) == [1]
+
+      stats = Rpc.process_pending(ctx(rpc_dir), stats)
+
+      assert %{"id" => 1, "ok" => false, "error" => "rpc request already processed"} =
+               read_response(rpc_dir, 1)
+
+      assert stats.calls == 1
+      refute_receive {:ordered, 1}, 25
     end
   end
 

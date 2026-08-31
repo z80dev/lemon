@@ -1133,8 +1133,10 @@ defmodule CodingAgent.Tools.ExecuteCode do
     }
     |> maybe_put(:full_output_path, Map.get(result, :full_output_path))
     |> maybe_put(:reason, Map.get(result, :reason))
-    # True only when the RpcServer brutally killed a sweep: the rpc_* numbers
-    # above are then a lower bound (see session_tool_result's trust rule).
+    # True when the RpcServer settled a sweep without a trustworthy stats
+    # return — a brutal kill (abort/stop), an abnormal exit, or a contained
+    # fault: the rpc_* numbers above are then a lower bound (see
+    # session_tool_result's trust rule).
     |> maybe_put(:rpc_accounting_loss, Map.get(stats, :accounting_loss))
   end
 

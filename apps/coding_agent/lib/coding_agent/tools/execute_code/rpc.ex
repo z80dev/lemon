@@ -61,38 +61,57 @@ defmodule CodingAgent.Tools.ExecuteCode.Rpc do
   script can delete or replace a marker after the publication gate. The
   marker is therefore only HALF the claim evidence. The other half is the
   host-side claim ledger: when the ctx carries `:on_claim`, the sweeping
-  process invokes it with `(id, tool)` BEFORE publishing the marker, and the
+  process feeds it one entry per spent call slot — first a `:reserved`
+  entry the moment a request passes the replay and call-budget gates and
+  owes a call (before its fate branch is even taken), then a disposition
+  entry refining it: `:invalid`, `:unknown_tool`, or `:denied` for the
+  requests answered inside the claim (never dispatched), and `:claimed`
+  for the dispatch-bound path, sent BEFORE the marker is published. The
   ledger owner (the RpcServer, which keeps the entries in its own process
-  state — memory the script cannot reach) holds them until the sweep's fate
-  is decided. Sending before publishing makes the ledger a SUPERSET of the
-  published claims: a ledger entry may name an id that was never dispatched
-  (the sweep died between the send and the rename — recovery then answers
-  that id with a conservative error and one charge), but every id that WAS
+  state — memory the script cannot reach) holds them until the sweep's
+  fate is decided. Every entry corresponds to exactly one spent call slot,
+  which is what makes a sweep that dies holding answered-but-never-
+  dispatched requests reconstructible: their stats mutations — the call
+  charge, the error or denial, the replay memory — die with the sweep,
+  and the reservation entry re-applies them exactly. Dispatch entries
+  additionally make the ledger a SUPERSET of the published claims: a
+  `:claimed` entry may name an id that was never dispatched (the sweep
+  died between the send and the rename — recovery then answers that id
+  with a conservative error and one charge), but every id that WAS
   dispatched is in the ledger no matter what the script later did to its
   marker. A script that deletes a marker therefore only destroys the
   on-disk half of its claim's evidence, never the claim itself.
 
   `recover_orphaned_claims/3` pays the debt of both halves, exactly once per
   id (markers first, ledger entries second, deduplicated by the stats'
-  replay memory): for an unanswered claim, an error response plus the call
-  reservation and error count reconstructed in the stats; for a claim beside
-  an already-published successful response, the REAL accounting (ok status,
-  result bytes, tool usage) restored from the response file and the claim
-  itself — the LEDGER's tool name whenever the ledger recorded the id
-  (host-owned beats script-writable, so a hostile script cannot forge the
-  recorded tool identity by overwriting the marker body), and only the
-  marker's own body for ids the ledger never saw. A ledger entry whose
-  marker is gone AND whose response is gone marks `accounting_loss: true`
-  in the returned stats: the tool may have executed with side effects no
-  surviving evidence can account for, so everything in those stats is a
-  lower bound. Every sweep starts with recovery, so a killed sweep's
-  claimed ids always end answered — answered in writing, never
-  re-dispatched, so a cancelled request still never executes its tool, and
-  a replayed id is refused by the reconstructed replay memory even when its
-  marker was destroyed. A marker whose deletion fails is retried a bounded
-  number of times and then left inert (the id is already in the stats'
-  replay memory, so no later sweep re-charges it; the workspace teardown
-  owns the rest).
+  replay memory). Dispatch claims settle from evidence: for an unanswered
+  claim, an error response plus the call reservation and error count
+  reconstructed in the stats; for a claim beside an already-published
+  successful response, the REAL accounting (ok status, result bytes, tool
+  usage) restored from the response file and the claim itself — the
+  LEDGER's tool name whenever the ledger recorded the id (host-owned beats
+  script-writable, so a hostile script cannot forge the recorded tool
+  identity by overwriting the marker body), and only the marker's own body
+  for ids the ledger never saw. A `:claimed` entry whose marker is gone AND
+  whose response is gone marks `accounting_loss: true` in the returned
+  stats: the tool may have executed with side effects no surviving
+  evidence can account for, so everything in those stats is a lower bound.
+  Reservation entries settle exactly instead: an answered-path entry
+  re-applies the mutations the dead sweep's stats lost — one call, one
+  error or denial, the replay memory — and writes NO response (the answer
+  predates the entry; a request file the fault left unconsumed is answered
+  by the next sweep's replay refusal). An entry still bare `:reserved`
+  (the sweep died between reserving and its fate branch) charges the call
+  and the replay memory exactly and counts one error — the error-vs-denial
+  split of a branch that never ran is unknowable, and `errors` is the
+  conservative choice; the call budget is exact either way. Every sweep
+  starts with recovery, so a killed sweep's claimed ids always end
+  answered — answered in writing, never re-dispatched, so a cancelled
+  request still never executes its tool, and a replayed id is refused by
+  the reconstructed replay memory even when its marker was destroyed. A
+  marker whose deletion fails is retried a bounded number of times and
+  then left inert (the id is already in the stats' replay memory, so no
+  later sweep re-charges it; the workspace teardown owns the rest).
 
   Approval-requiring claims are additionally cancellation-safe: the approval
   id is allocated at claim time and an unlinked watcher cancels the pending
@@ -141,6 +160,27 @@ defmodule CodingAgent.Tools.ExecuteCode.Rpc do
   # this large is not shim-written; it is dropped without being read.
   @notify_file_max_bytes 65_536
 
+  @typedoc """
+  The disposition kinds a claim-ledger entry can carry.
+
+  `:reserved` is fed the moment a call slot is spent — before the
+  request's fate is known. The disposition kinds refine it: `:invalid`,
+  `:unknown_tool`, and `:denied` for requests answered inside the claim
+  (never dispatched), `:claimed` for a dispatch-bound request (fed before
+  its marker is published).
+  """
+  @type ledger_entry_kind :: :reserved | :invalid | :unknown_tool | :denied | :claimed
+
+  @typedoc """
+  One host-side claim-ledger entry: the ledger owner's evidence that one
+  call slot was spent. `:tool` is nil wherever the tool name is unknown or
+  unvalidated (`:reserved` and `:invalid`).
+  """
+  @type ledger_entry :: %{
+          required(:kind) => ledger_entry_kind(),
+          required(:tool) => String.t() | nil
+        }
+
   # Must match `Config`'s `@default_max_text_bytes`; pinned by tests. Used only
   # when `read_text_blocks/2` is called without an explicit budget.
   @default_max_text_bytes 65_536
@@ -174,10 +214,14 @@ defmodule CodingAgent.Tools.ExecuteCode.Rpc do
           optional(:max_parallel_rpc) => pos_integer(),
           optional(:on_update) => (AgentToolResult.t() -> :ok) | nil,
           # Host-side claim ledger hook: invoked in the sweeping process
-          # with (id, tool) BEFORE the claim marker is published, so a
-          # ledger owner learns about every dispatched claim independently
-          # of the script-writable marker (see the moduledoc).
-          optional(:on_claim) => (integer(), String.t() -> any()) | nil
+          # with (id, kind, tool) — first as a `:reserved` entry the
+          # moment a call slot is spent, then with the request's
+          # disposition (`:invalid` | `:unknown_tool` | `:denied` for the
+          # answered-in-claim paths, `:claimed` before the claim marker is
+          # published), so a ledger owner holds reconstructible evidence
+          # for every spent call slot independently of the script-writable
+          # marker and of the sweep's own stats (see the moduledoc).
+          optional(:on_claim) => (integer(), ledger_entry_kind(), String.t() | nil -> any()) | nil
         }
 
   @type stats :: %{
@@ -239,8 +283,10 @@ defmodule CodingAgent.Tools.ExecuteCode.Rpc do
   The sweep first recovers claim markers a previous sweep left behind (see
   `recover_orphaned_claims/3`) and then consumes `notify-*.json` frames under
   the stats' per-run forwarding cap. When the ctx carries `:on_claim`, every
-  dispatch-bound claim is recorded with it before its marker is published —
-  the persistent server's claim ledger (see its moduledoc).
+  spent call slot is recorded with it — a `:reserved` entry first, then the
+  request's disposition, with dispatch-bound claims recorded before their
+  markers are published — the persistent server's claim ledger (see its
+  moduledoc).
 
   This is the shared polling entry point for the persistent-cell RPC server.
   """
@@ -279,9 +325,9 @@ defmodule CodingAgent.Tools.ExecuteCode.Rpc do
 
   Claim evidence has two halves (see the moduledoc): the script-writable
   `req-<id>.claim` marker, and the host-side ledger the ctx's `:on_claim`
-  hook feeds. This function recovers BOTH, markers first and `claimed`
-  ledger entries (`%{id => tool}`) second, deduplicated per id by the
-  stats' replay memory.
+  hook feeds — one `%{id => %{kind: kind, tool: tool}}` entry per spent
+  call slot. This function recovers BOTH, markers first and ledger entries
+  second, deduplicated per id by the stats' replay memory.
 
   `req-<id>.claim` exists exactly while a claimed, call-budgeted request is
   being dispatched; `write_response/3` removes it as the answer is
@@ -302,11 +348,16 @@ defmodule CodingAgent.Tools.ExecuteCode.Rpc do
   memory the dead sweep would have recorded, so the call budget, replay
   refusal, and trust classification stay exact across a killed sweep.
 
-  A LEDGER entry whose marker is gone and whose response is gone marks
-  `accounting_loss: true` in the returned stats: the script destroyed the
-  on-disk evidence, so the tool's execution and side effects can no longer
-  be reconstructed and the stats are a lower bound (consumers must treat
-  that conservatively; ExecuteCode forces `trust: :untrusted`).
+  A `:claimed` ledger entry whose marker is gone and whose response is gone
+  marks `accounting_loss: true` in the returned stats: the script destroyed
+  the on-disk evidence, so the tool's execution and side effects can no
+  longer be reconstructed and the stats are a lower bound (consumers must
+  treat that conservatively; ExecuteCode forces `trust: :untrusted`).
+  Reservation entries settle exactly instead — one call, one error or
+  denial, the replay memory, and no response writes — so a sweep that dies
+  after ANSWERING a request without dispatching it (invalid, unknown tool,
+  policy-denied) still spends exactly one budget slot; see the moduledoc
+  for the bare-`:reserved` fallback.
 
   Charging is exactly-once: the id is recorded in the stats' replay memory
   when its debt is paid, and a marker that survives its own deletion (the
@@ -322,7 +373,7 @@ defmodule CodingAgent.Tools.ExecuteCode.Rpc do
   def recover_orphaned_claims(rpc_dir, stats) when is_binary(rpc_dir),
     do: recover_orphaned_claims(rpc_dir, stats, %{})
 
-  @spec recover_orphaned_claims(String.t(), stats(), %{optional(integer()) => String.t()}) ::
+  @spec recover_orphaned_claims(String.t(), stats(), %{optional(integer()) => ledger_entry()}) ::
           stats()
   def recover_orphaned_claims(rpc_dir, stats, claimed)
       when is_binary(rpc_dir) and is_map(claimed) do
@@ -358,20 +409,61 @@ defmodule CodingAgent.Tools.ExecuteCode.Rpc do
     end)
   end
 
-  # The host-side half: ids the ctx's :on_claim ledger recorded for the dead
-  # sweep. `seen?/2` skips ids the marker pass already paid, so the two
-  # halves never double-charge.
+  # The host-side half: the entries the ctx's :on_claim ledger recorded for
+  # the dead sweep — one per spent call slot. `seen?/2` skips ids the marker
+  # pass already paid, so the two halves never double-charge.
   defp recover_ledger_claims(stats, rpc_dir, claimed) do
     claimed
     |> Enum.sort()
-    |> Enum.reduce(stats, fn {id, tool}, acc ->
-      if seen?(acc, id), do: acc, else: recover_ledger_claim(rpc_dir, id, tool, acc)
+    |> Enum.reduce(stats, fn {id, entry}, acc ->
+      if seen?(acc, id), do: acc, else: recover_ledger_entry(rpc_dir, id, entry, acc)
     end)
   end
 
-  # A ledger entry is a superset of the published claims, so treat it as
+  # A `:claimed` entry is a superset of the published claims, so treat it as
   # claimed fact regardless of what remains on disk: the marker may have
   # been deleted by the script after the publication gate.
+  defp recover_ledger_entry(rpc_dir, id, %{kind: :claimed, tool: tool}, stats)
+       when is_binary(tool),
+       do: recover_ledger_claim(rpc_dir, id, tool, stats)
+
+  # A denied reservation: the dead sweep answered the denial before dying,
+  # so the only debt is the stats that died with it — one spent call, one
+  # denial, the replay memory. No response is written (the answer predates
+  # the entry); a request file the fault left unconsumed is answered by the
+  # next sweep's replay refusal.
+  defp recover_ledger_entry(_rpc_dir, id, %{kind: :denied}, stats) do
+    stats
+    |> Map.update!(:calls, &(&1 + 1))
+    |> Map.update!(:denied, &(&1 + 1))
+    |> remember_id(id)
+  end
+
+  # An error-settled reservation (`:invalid`, `:unknown_tool`) or one still
+  # bare `:reserved` (the sweep died between spending the slot and taking
+  # the fate branch): the call slot and the replay memory are certain, so
+  # charge them exactly. The error count is exact for the settled kinds;
+  # for a bare `:reserved` the error-vs-denial split of a branch that never
+  # ran is unknowable, and `errors` is the conservative choice — the call
+  # budget is exact either way.
+  defp recover_ledger_entry(_rpc_dir, id, %{kind: kind}, stats)
+       when kind in [:invalid, :unknown_tool, :reserved],
+       do: charge_error_reservation(stats, id)
+
+  # A ledger owner speaking a different contract version must not crash
+  # recovery (the server would keep the pre-sweep snapshot and re-open the
+  # budget gap this ledger exists to close): fail closed with the
+  # reservation charge.
+  defp recover_ledger_entry(_rpc_dir, id, _entry, stats),
+    do: charge_error_reservation(stats, id)
+
+  defp charge_error_reservation(stats, id) do
+    stats
+    |> Map.update!(:calls, &(&1 + 1))
+    |> increment_errors()
+    |> remember_id(id)
+  end
+
   defp recover_ledger_claim(rpc_dir, id, tool, stats) do
     case successful_response(rpc_dir, id) do
       {:ok, content} ->
@@ -706,7 +798,12 @@ defmodule CodingAgent.Tools.ExecuteCode.Rpc do
   # claim marker — after first recording the claim in the host-side ledger
   # via `:on_claim` — so a sweep that dies mid-flight always leaves enough
   # evidence (marker, ledger, or both) for `recover_orphaned_claims/3` to
-  # answer every claimed id, even when the script deletes the marker.
+  # answer every claimed id, even when the script deletes the marker. The
+  # ledger's reservation entry (fed the moment the call slot is spent,
+  # before the fate branch) extends the same durability to the answered-in-
+  # claim paths: a sweep that dies after ANSWERING such a request leaves a
+  # reconstructible record of the spend, so the budget can never re-spend
+  # that slot after recovery.
   defp claim_request(id, request, ctx, stats, claimed) do
     if response_present?(response_path(ctx.rpc_dir, id)) do
       consume_request(request)
@@ -811,7 +908,7 @@ defmodule CodingAgent.Tools.ExecuteCode.Rpc do
   # provably the same claim the host already knows the tool for.
   defp ledger_tool(claimed, id, marker) do
     case claimed do
-      %{^id => tool} when is_binary(tool) -> tool
+      %{^id => %{kind: :claimed, tool: tool}} when is_binary(tool) -> tool
       _ledger_never_saw_it -> claimed_tool(marker)
     end
   end
@@ -946,11 +1043,24 @@ defmodule CodingAgent.Tools.ExecuteCode.Rpc do
       true ->
         stats = stats |> remember_id(id) |> Map.update!(:calls, &(&1 + 1))
 
+        # The reservation entry: from this moment the request owes one call
+        # slot whatever branch it takes — dispatched, denied, or answered as
+        # invalid — and those stats mutations die with the sweep if it
+        # faults before returning them. The entry is what makes the spend
+        # reconstructible; the disposition entries below refine it once the
+        # branch is known.
+        notify_ledger(ctx, id, :reserved, nil)
+
         case parse_call(body) do
           {:ok, tool_name, params} ->
             claim_tool(id, request, tool_name, params, ctx, stats, claimed)
 
           :error ->
+            # Fed before the answer write: a sweep that dies past this send
+            # settles with the exact disposition, and one that dies before
+            # it settles the still-`:reserved` entry (exact call charge,
+            # conservative error split).
+            notify_ledger(ctx, id, :invalid, nil)
             respond_error(ctx, id, @invalid_request_error)
             consume_request(request)
             {increment_errors(stats), claimed}
@@ -970,6 +1080,7 @@ defmodule CodingAgent.Tools.ExecuteCode.Rpc do
   defp claim_tool(id, request, tool_name, params, ctx, stats, claimed) do
     cond do
       not Map.has_key?(ctx.tools, tool_name) ->
+        notify_ledger(ctx, id, :unknown_tool, tool_name)
         respond_error(ctx, id, "tool '#{tool_name}' is not available inside execute_code scripts")
         consume_request(request)
         {increment_errors(stats), claimed}
@@ -979,18 +1090,20 @@ defmodule CodingAgent.Tools.ExecuteCode.Rpc do
           ToolPolicy.denial_reason(ctx.tool_policy, tool_name) ||
             "tool '#{tool_name}' denied by policy"
 
+        notify_ledger(ctx, id, :denied, tool_name)
         respond_error(ctx, id, reason)
         consume_request(request)
         {%{stats | denied: stats.denied + 1}, claimed}
 
       true ->
-        # The claim ledger is fed BEFORE the marker is published (a local
-        # `send` enqueues immediately, so a sweep killed anywhere past this
-        # point has already delivered its ledger entry). That makes the
-        # ledger a SUPERSET of the published claims — the script can delete
-        # or replace the on-disk marker after the gate below, but it cannot
-        # un-claim what the ledger already recorded.
-        notify_claim(ctx, id, tool_name)
+        # The reservation entry above is refined to a dispatch claim BEFORE
+        # the marker is published (a local `send` enqueues immediately, so
+        # a sweep killed anywhere past this point has already delivered its
+        # ledger entry). That keeps the ledger a SUPERSET of the published
+        # claims — the script can delete or replace the on-disk marker
+        # after the gate below, but it cannot un-claim what the ledger
+        # already recorded.
+        notify_ledger(ctx, id, :claimed, tool_name)
 
         # Publication is the dispatch gate: the tool runs only behind a
         # published, regular-file claim marker. Any publication failure is
@@ -1017,13 +1130,16 @@ defmodule CodingAgent.Tools.ExecuteCode.Rpc do
     end
   end
 
-  # The host-side claim ledger hook. Must stay cheap and never raise into
-  # the claiming path; a broken hook is swallowed like a broken
-  # notification forwarder — the claim itself is the load-bearing part.
-  defp notify_claim(ctx, id, tool_name) do
+  # The host-side claim-ledger hook: one send per entry — the `:reserved`
+  # entry the moment a call slot is spent, then the disposition entry
+  # (`:invalid`/`:unknown_tool`/`:denied`/`:claimed`) once the request's
+  # fate is known. Must stay cheap and never raise into the claiming path;
+  # a broken hook is swallowed like a broken notification forwarder — the
+  # ledger entry is the load-bearing part.
+  defp notify_ledger(ctx, id, kind, tool) do
     case Map.get(ctx, :on_claim) do
-      on_claim when is_function(on_claim, 2) ->
-        on_claim.(id, tool_name)
+      on_claim when is_function(on_claim, 3) ->
+        on_claim.(id, kind, tool)
         :ok
 
       _none ->

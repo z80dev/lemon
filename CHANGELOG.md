@@ -57,6 +57,15 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   a successful cancel folds the sweep's still-queued claim-ledger messages
   through the same deduplicating recovery instead of reinserting them as
   stale ledger entries.
+- `execute_code` result-channel hardening (fix round 5): the persistent
+  server's claim ledger now records a reservation entry the moment a
+  request spends its `max_calls` slot — refined by its disposition
+  (`:invalid`, `:unknown_tool`, `:denied` when answered without dispatch,
+  `:claimed` for dispatch-bound requests) — and sweep-failure settlement
+  re-applies reserved entries exactly (one call, one error or denial, the
+  replay memory, no response writes), so a contained fault after an
+  answered-but-never-dispatched request can no longer erase that spend and
+  let resumed sweeps exceed the call budget.
 - `execute_code` scripts gained `notify(msg)` — a streaming side channel whose
   messages are forwarded to the tool's partial-update callback (capped at 4 KiB
   per message, 64 per run) — and `batch([...])`, which runs helper calls in

@@ -61,15 +61,23 @@ defmodule CodingAgent.Tools.ExecuteCode.RpcServer do
   can write — so a hostile script can delete or replace a marker after the
   pump's publication gate. This server therefore keeps its OWN claim
   evidence: at `init/1` the ctx's `:on_claim` hook is installed to send
-  every dispatch-bound claim (`{id, tool}`) to this process, which records
-  it in `pending_claims` BEFORE the pump publishes the marker. The ledger
-  is a superset of the published claims; it is cleared when the owning
-  sweep's fate is decided — a consumed result (the sweep answered
-  everything it claimed) or a death whose recovery just ran. A script that
-  destroys markers only destroys half its claims' evidence; the ledger
-  half still forces the answer, the call charge, the replay memory, and —
-  when no response survives either — the `accounting_loss` lower-bound
-  flag (see `Rpc.recover_orphaned_claims/3`).
+  every ledger event to this process — a `:reserved` entry the moment a
+  request spends its call slot (before its fate branch is taken), then the
+  disposition entry that refines it (`:invalid`, `:unknown_tool`, or
+  `:denied` for requests answered inside the claim without dispatching,
+  `:claimed` for a dispatch-bound claim) — which records it in
+  `pending_claims` BEFORE the pump publishes any marker. Every entry
+  corresponds to exactly one spent call slot, so a sweep that dies holding
+  answered-but-never-dispatched requests is reconstructible too: without
+  the reservation entry, a contained fault after such an answer would erase
+  the spend and let later sweeps exceed `max_calls`. The ledger is a
+  superset of the published claims; it is cleared when the owning sweep's
+  fate is decided — a consumed result (the sweep answered everything it
+  claimed) or a death whose recovery just ran. A script that destroys
+  markers only destroys half its claims' evidence; the ledger half still
+  forces the answer, the call charge, the replay memory, and — for a
+  `:claimed` entry when no response survives either — the
+  `accounting_loss` lower-bound flag (see `Rpc.recover_orphaned_claims/3`).
 
   There is deliberately no final drain of requests, mirroring `Rpc.serve/2`:
   a request that is still pending when the server stops belongs to a cell
@@ -104,22 +112,24 @@ defmodule CodingAgent.Tools.ExecuteCode.RpcServer do
       replay-tracking state, so a request id that was already answered —
       including one replayed after its response was consumed — is refused and
       never re-dispatched. Sweeps also consume `notify-*.json` side-channel
-      frames, forwarding each through `ctx.on_update` when present (see
-      `Rpc` for the caps); `text-*.json` result blocks are never touched by
-      the sweep — the owning execute process reads them after the cell ends.
+      frames, forwarding each through `ctx.on_update` when present (see `Rpc`
+      for the caps); `text-*.json` result blocks are never touched by the
+      sweep — the owning execute process reads them after the cell ends.
+    * `recover_orphaned_claims(rpc_dir, stats, claimed)` — answers the
+      in-flight claims a dead sweep leaves behind: on-disk markers plus the
+      `claimed` ledger map (`%{id => %{kind: kind, tool: tool}}`, one entry
+      per spent call slot — a `:reserved` entry refined by its disposition)
+      this server accumulated through `:on_claim`, returning stats with
+      their call reservations and replay memory reconstructed (and
+      `accounting_loss: true` when destroyed ledger evidence forces a lower
+      bound). Called from every path that settles a sweep whose stats
+      cannot be trusted — the cancel path (`abort/2`, `terminate/2`), the
+      abnormal-:DOWN path, and the contained-fault result path — after the
+      sweep task is brutally killed, dies on its own, or returns
+      `{:sweep_failed, stats}`.
     * `process_request(id, ctx, stats)` — the single-request building block
       shared with `Rpc.serve/2`; not called by this server, which always
       sweeps via `process_pending/2`.
-    * `recover_orphaned_claims(rpc_dir, stats, claimed)` — answers the
-      in-flight claims a dead sweep leaves behind: on-disk markers plus the
-      `claimed` ledger map (`%{id => tool}`) this server accumulated through
-      `:on_claim`, returning stats with their call reservations and replay
-      memory reconstructed (and `accounting_loss: true` when destroyed
-      ledger evidence forces a lower bound). Called from every path that
-      settles a sweep whose stats cannot be trusted — the cancel path
-      (`abort/2`, `terminate/2`), the abnormal-:DOWN path, and the
-      contained-fault result path — after the sweep task is brutally
-      killed, dies on its own, or returns `{:sweep_failed, stats}`.
     * `drain_notifications(ctx, stats)` — the notification-only final drain;
       called from `drain_and_stats/2` (the teardown read ExecuteCode uses)
       and once more from `terminate/2` as a last-resort backstop before
@@ -164,19 +174,17 @@ defmodule CodingAgent.Tools.ExecuteCode.RpcServer do
   @type ctx :: %{
           required(:tools) => %{String.t() => LemonAgent.Types.AgentTool.t()},
           required(:tool_policy) => map() | nil,
-          required(:approval_context) => map() | nil,
-          required(:max_calls) => pos_integer(),
-          required(:max_result_bytes) => pos_integer(),
           required(:signal) => reference() | nil,
           required(:rpc_dir) => String.t(),
           required(:token) => String.t(),
           optional(:poll_interval_ms) => pos_integer(),
-          optional(:max_requests_per_sweep) => pos_integer(),
-          optional(:max_parallel_rpc) => pos_integer(),
-          optional(:on_update) => (LemonAgent.Types.AgentToolResult.t() -> :ok) | nil,
           # Injected by this server at init (see "The claim ledger" in the
           # moduledoc); never supplied by the caller.
-          optional(:on_claim) => (integer(), String.t() -> any()) | nil
+          optional(:on_claim) =>
+            (integer(), Rpc.ledger_entry_kind(), String.t() | nil -> any()) | nil,
+          optional(:max_requests_per_sweep) => pos_integer(),
+          optional(:max_parallel_rpc) => pos_integer(),
+          optional(:on_update) => (LemonAgent.Types.AgentToolResult.t() -> :ok) | nil
         }
 
   @type option ::
@@ -193,9 +201,10 @@ defmodule CodingAgent.Tools.ExecuteCode.RpcServer do
     :caller,
     :caller_monitor,
     :sweep_task,
-    # The claim ledger: %{id => tool} for every claim the in-flight sweep
-    # recorded via :on_claim and whose fate is not yet decided. See "The
-    # claim ledger" in the moduledoc.
+    # The claim ledger: %{id => %{kind:, tool:}} for every call slot the
+    # in-flight sweep spent and whose fate is not yet decided — one entry
+    # per reservation, refined by its disposition. See "The claim ledger"
+    # in the moduledoc.
     pending_claims: %{}
   ]
 
@@ -309,17 +318,24 @@ defmodule CodingAgent.Tools.ExecuteCode.RpcServer do
     schedule_poll(poll_interval_ms)
 
     # The claim ledger hook (the server owns it — never the caller): the
-    # sweeping process feeds every dispatch-bound claim BEFORE the pump
-    # publishes its marker, so this process's memory holds claim evidence
-    # the script cannot delete. `send/2` from the sweep enqueues
-    # immediately, so a sweep killed anywhere past that point has already
-    # delivered its entry.
+    # sweeping process feeds every ledger event — the `:reserved` entry the
+    # moment a request spends its call slot, then the disposition entry
+    # (`:invalid`/`:unknown_tool`/`:denied` for answered-in-claim requests,
+    # `:claimed` before the pump publishes its marker) — so this process's
+    # memory holds evidence for every spent call slot that the script
+    # cannot delete. `send/2` from the sweep enqueues immediately, so a
+    # sweep killed anywhere past a spend has already delivered its entry.
     ledger_pid = self()
 
     ctx =
-      Map.put(ctx, :on_claim, fn id, tool when is_integer(id) and is_binary(tool) ->
-        send(ledger_pid, {:claim_started, id, tool})
-      end)
+      Map.put(
+        ctx,
+        :on_claim,
+        fn id, kind, tool
+           when is_integer(id) and is_atom(kind) and (is_binary(tool) or is_nil(tool)) ->
+          send(ledger_pid, {:claim_started, id, kind, tool})
+        end
+      )
 
     {:ok,
      %__MODULE__{
@@ -369,13 +385,16 @@ defmodule CodingAgent.Tools.ExecuteCode.RpcServer do
     end
   end
 
-  # The claim ledger feed: a sweep records each dispatch-bound claim here
-  # before publishing its marker. Entries accumulate while the sweep runs
-  # and are settled together with the sweep (result consumed → the sweep
-  # answered everything it claimed; sweep dead → recovery just paid them).
-  def handle_info({:claim_started, id, tool}, state)
-      when is_integer(id) and is_binary(tool) do
-    {:noreply, %{state | pending_claims: Map.put(state.pending_claims, id, tool)}}
+  # The claim ledger feed: a sweep records each spent call slot here —
+  # first the `:reserved` entry, then the disposition that refines it
+  # (`:claimed` for a dispatch-bound request, fed before its marker is
+  # published). Entries accumulate while the sweep runs and are settled
+  # together with the sweep (result consumed → the sweep answered
+  # everything it claimed; sweep dead → recovery just paid them).
+  def handle_info({:claim_started, id, kind, tool}, state)
+      when is_integer(id) and is_atom(kind) and (is_binary(tool) or is_nil(tool)) do
+    {:noreply,
+     %{state | pending_claims: Map.put(state.pending_claims, id, %{kind: kind, tool: tool})}}
   end
 
   def handle_info({ref, stats}, %{sweep_task: %Task{ref: ref}} = state) when is_map(stats) do
@@ -584,8 +603,10 @@ defmodule CodingAgent.Tools.ExecuteCode.RpcServer do
     # Selective receive: non-matching messages stay in the mailbox untouched
     # — there is deliberately no catch-all, which would consume them.
     receive do
-      {:claim_started, id, tool} when is_integer(id) and is_binary(tool) ->
-        drain_queued_claims(%{state | pending_claims: Map.put(claims, id, tool)})
+      {:claim_started, id, kind, tool}
+      when is_integer(id) and is_atom(kind) and (is_binary(tool) or is_nil(tool)) ->
+        entry = %{kind: kind, tool: tool}
+        drain_queued_claims(%{state | pending_claims: Map.put(claims, id, entry)})
     after
       0 -> state
     end

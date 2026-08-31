@@ -318,14 +318,44 @@ defmodule CodingAgent.Tools.ExecuteCodeRpcServerTest do
     end
   end
 
+  defmodule DeniedThenExplodeRpc do
+    @moduledoc """
+    Real pump that answers a policy-DENIED request through the real claim
+    path — reservation ledger entry included — and then raises, so the
+    failed sweep's stats die carrying an answered, consumed, budget-charged
+    request that never became dispatch-bound: the reservation ledger entry
+    is the only surviving evidence the call slot was spent.
+    """
+
+    def initial_stats, do: Rpc.initial_stats()
+
+    def recover_orphaned_claims(rpc_dir, stats, claimed \\ %{}),
+      do: Rpc.recover_orphaned_claims(rpc_dir, stats, claimed)
+
+    def drain_notifications(ctx, stats), do: Rpc.drain_notifications(ctx, stats)
+
+    def process_pending(ctx, stats) do
+      flag = Path.join(ctx.rpc_dir, ".explode-denied")
+
+      if File.exists?(flag) do
+        File.rm!(flag)
+        _stats = Rpc.process_request(1, ctx, stats)
+        File.touch(Path.join(ctx.rpc_dir, ".explode-denied-hit"))
+        raise "sweep exploded after denial"
+      end
+
+      Rpc.process_pending(ctx, stats)
+    end
+  end
+
   defmodule LateLedgerRpc do
     @moduledoc """
     Pump whose sweep feeds its claim ledger entry only after the owning
     server has entered the abort call, reproducing the mailbox shape a
     successful cancel races: `handle_call(:abort)` sets the abort signal
     BEFORE running `cancel_sweep/1`, so once the flag flips, the sweep's
-    `{:claim_started, id, tool}` message is queued behind the in-flight
-    call while the sweep completes inside the yield grace.
+    `{:claim_started, id, kind, tool}` message is queued behind the
+    in-flight call while the sweep completes inside the yield grace.
     """
 
     def initial_stats, do: FakeRpc.initial_stats()
@@ -341,7 +371,7 @@ defmodule CodingAgent.Tools.ExecuteCodeRpcServerTest do
         send(Map.get(ctx, :test_pid), {:late_sweep_started, self()})
         await_abort(ctx.signal)
 
-        Map.get(ctx, :on_claim).(1, "echo")
+        Map.get(ctx, :on_claim).(1, :claimed, "echo")
         send(Map.get(ctx, :test_pid), {:late_claim_fed, 1, "echo"})
 
         tmp = Path.join(ctx.rpc_dir, "res-1.json.tmp")
@@ -1084,6 +1114,61 @@ defmodule CodingAgent.Tools.ExecuteCodeRpcServerTest do
 
       assert :ok = RpcServer.stop(server)
     end
+
+    @tag :capture_log
+    test "a sweep that fails after answering a denied request keeps its budget charge exact",
+         %{rpc_dir: rpc_dir} do
+      # max_calls 2: the denied request (id 1) must keep costing one slot
+      # after the fault, so id 2 spends the last true slot and id 3 is
+      # refused for budget — never admitted into a budget the fault erased.
+      ctx =
+        %{
+          ctx(rpc_dir,
+            max_calls: 2,
+            tool_policy: CodingAgent.ToolPolicy.custom(deny: ["webfetch"])
+          )
+          | tools: Map.put(stub_tools(), "webfetch", stub_tool("webfetch"))
+        }
+
+      File.touch(Path.join(rpc_dir, ".explode-denied"))
+      {:ok, server} = start_server(ctx, rpc: DeniedThenExplodeRpc)
+
+      write_request(rpc_dir, 1, "webfetch", %{"url" => "https://example.com"})
+      await_file(Path.join(rpc_dir, ".explode-denied-hit"))
+
+      # The denial was answered in writing before the raise...
+      assert %{"id" => 1, "ok" => false, "error" => "Tool 'webfetch' is in deny list"} =
+               read_response(rpc_dir, 1)
+
+      # ...and settlement reconstructed it EXACTLY from the reservation
+      # ledger entry: one call, one denial, nothing dispatched.
+      stats = await_flagged_stats(server)
+      assert stats.calls == 1
+      assert stats.denied == 1
+      assert stats.errors == 0
+      assert stats.accounting_loss == true
+
+      # Resume: id 2 spends the last slot of the true remaining budget...
+      write_request(rpc_dir, 2, "echo", %{"value" => "resumed"})
+      assert %{"id" => 2, "ok" => true, "content" => "resumed"} = await_response(rpc_dir, 2)
+
+      # ...and id 3 is refused against the budget the fault could not erase.
+      write_request(rpc_dir, 3, "echo", %{"value" => "over"})
+
+      assert %{
+               "id" => 3,
+               "ok" => false,
+               "error" => "rpc call limit exceeded (max 2 calls per script)"
+             } =
+               await_response(rpc_dir, 3)
+
+      stats = RpcServer.stats(server)
+      assert stats.calls == 2
+      assert stats.denied == 1
+      assert stats.errors == 1
+
+      assert :ok = RpcServer.stop(server)
+    end
   end
 
   describe "stop/1 and cleanup" do
@@ -1151,6 +1236,20 @@ defmodule CodingAgent.Tools.ExecuteCodeRpcServerTest do
           }
         end
       }
+    }
+  end
+
+  # A minimal tool body for the tools map: requests aimed at it are answered
+  # by policy before its execution matters.
+  defp stub_tool(name) do
+    %AgentTool{
+      name: name,
+      description: "stub",
+      label: name,
+      parameters: %{"type" => "object", "properties" => %{}},
+      execute: fn _call_id, _params, _signal, _on_update ->
+        %AgentToolResult{content: [%TextContent{text: "stub"}]}
+      end
     }
   end
 
