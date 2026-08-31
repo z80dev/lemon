@@ -8,6 +8,14 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
+### Fixed
+
+- Source `./bin/lemon` now detects and reuses a healthy local control plane
+  before compilation or Erlang distribution startup, so invoking it beside an
+  existing runtime no longer fails with a duplicate `lemon@host` node name.
+  Web health probes tolerate bounded slow responses and trailing whitespace,
+  and the quality lane exercises both direct-launch and `web --no-open` reuse.
+
 ### Added
 
 - Bun TUI portable-blueprint management over the authenticated shared catalog:

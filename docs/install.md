@@ -213,15 +213,18 @@ preconfigured.
 ## Browser interface
 
 The full release profile also includes a local browser interface. The launcher
-starts the daemon if necessary, waits for the Web health check, prints the URL,
-and opens the default browser:
+reuses a healthy runtime on the configured local control-plane port, starts the
+daemon only when necessary, waits for the Web health check, prints the URL, and
+opens the default browser:
 
 ```bash
 lemon web
 ```
 
 Use `lemon web --no-open` on SSH/headless systems. A source checkout uses
-`./bin/lemon web`. The browser checks the same config, secrets, provider,
+`./bin/lemon web`; invoking `./bin/lemon` beside an already healthy source
+runtime also reports and reuses it instead of registering a duplicate Erlang
+node. The browser checks the same config, secrets, provider,
 credential, and model readiness as setup. If anything is missing it lists the
 pending items, disables prompt/file submission, and points back to `lemon
 setup`; it never waits for a failed agent request to explain first-run setup.

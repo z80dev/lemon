@@ -140,8 +140,16 @@ run_source_runtime_cli() {
 
 web_healthy() {
   local body
-  body="$(curl -fsS --max-time 2 "http://127.0.0.1:$1/healthz" 2>/dev/null || true)"
+  body="$(curl -fsS --connect-timeout 1 --max-time 5 "http://127.0.0.1:$1/healthz" 2>/dev/null || true)"
+  body="${body//[[:space:]]/}"
   [[ "$body" == "ok" ]]
+}
+
+control_plane_healthy() {
+  local body
+  body="$(curl -fsS --connect-timeout 1 --max-time 5 "http://127.0.0.1:$1/healthz" 2>/dev/null || true)"
+  body="${body//[[:space:]]/}"
+  [[ "$body" == '{"ok":true}' || "$body" == "ok" ]]
 }
 
 open_web_browser() {
@@ -584,6 +592,23 @@ fi
 if ! [[ "$SIM_PORT" =~ ^[0-9]+$ ]]; then
   error "Invalid --sim-port value: $SIM_PORT"
   exit 1
+fi
+
+# Perform the already-running guard before compiling or registering the Erlang
+# node name. The in-VM Boot guard cannot help when distribution rejects a
+# duplicate `lemon@host` name before LemonCore.Runtime.Boot gets control.
+if control_plane_healthy "$PORT"; then
+  info "A healthy Lemon runtime is already running; reusing it."
+  info "Control plane: ws://localhost:$PORT/ws"
+
+  if web_healthy "$WEB_PORT"; then
+    info "Web UI:        http://localhost:$WEB_PORT/"
+  else
+    warn "The existing runtime is not serving a healthy Web UI on port $WEB_PORT."
+  fi
+
+  info "Run ./bin/lemon web to open the existing browser interface."
+  exit 0
 fi
 
 if [[ -z "$NODE_MODE" ]]; then

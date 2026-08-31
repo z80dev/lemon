@@ -193,6 +193,7 @@ run_quality() {
   bash scripts/lint_ci_docs.sh
   bash scripts/test_contract.sh
   bash scripts/test_lemon_tui_auth.sh
+  bash scripts/test_lemon_launcher_reuse.sh
   mix lemon.skill.lint
   mix lemon.quality
   mix test apps/lemon_core/test/lemon_core/quality apps/lemon_evals/test/lemon_evals/harness_test.exs

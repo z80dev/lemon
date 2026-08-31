@@ -88,7 +88,8 @@ lemon
 ```
 
 Or launch the local browser interface (the full release profile starts the
-daemon automatically and waits for the page):
+daemon automatically and waits for the page). The launcher reuses an already
+healthy local runtime instead of starting a duplicate Erlang node:
 
 ```bash
 lemon web

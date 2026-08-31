@@ -291,6 +291,12 @@ npm run dev      # Watch mode
 ./bin/lemon-tui    # Dev TUI; securely token-pairs with a launcher-owned runtime
 ```
 
+The source launcher probes the configured local control plane before compiling
+or registering its Erlang node name. If a healthy runtime is already present,
+`./bin/lemon` reports and reuses it; `./bin/lemon web` opens that runtime's Web
+UI. Keep this guard ahead of distribution startup so duplicate `lemon@host`
+registration cannot preempt the in-VM `LemonCore.Runtime.Boot` check.
+
 The named-node command runs a destination-side worker capable of starting
 native coding sessions against an already-running controller. Use `--pair` on
 first connection; later starts reuse the private token stored for that durable

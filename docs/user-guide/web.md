@@ -3,8 +3,8 @@
 Last reviewed: 2026-08-30
 
 The full Lemon runtime includes a local browser interface. The launcher starts
-the daemon when needed, waits for the Web UI to become healthy, and opens the
-page:
+the daemon when needed, reuses a healthy runtime already serving the configured
+control-plane port, waits for the Web UI to become healthy, and opens the page:
 
 ```bash
 lemon web
@@ -23,6 +23,11 @@ repository wrapper:
 ```bash
 ./bin/lemon web
 ```
+
+Running `./bin/lemon` while that local runtime is already healthy is also
+idempotent: the launcher reports the existing control-plane and Web addresses
+and exits successfully instead of compiling or attempting to register a second
+`lemon@host` Erlang node.
 
 `lemon web` requires the `lemon_runtime_full` release profile. If the launcher
 reports that the Web UI is unavailable in the minimal profile, reinstall with
