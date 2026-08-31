@@ -21,6 +21,12 @@ This is the **base app** of the Lemon umbrella. All other apps depend on it. It 
 
 ## Key Module Reference
 
+- `LemonCore.A2A.Protocol` and `LemonCore.A2A.Client` own generic A2A v1.0
+  JSON-RPC shapes and secret-safe HTTP transport without naming a peer product.
+- `LemonCore.A2AStore` is the only supported accessor for the
+  `:a2a_contexts`, `:a2a_default_contexts`, `:a2a_tasks`, and `:a2a_messages`
+  tables. Remote context IDs are data, never Lemon session keys.
+
 | Module | Purpose |
 |--------|---------|
 | `LemonCore` | Main module with module list |

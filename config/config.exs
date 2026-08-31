@@ -88,7 +88,8 @@ config :lemon_core, :doctor_checks, [
 config :lemon_core, :gateway_channels, [
   LemonChannels.Adapters.Telegram.Config,
   LemonChannels.Adapters.Discord.Config,
-  LemonChannels.Adapters.Xmtp.Config
+  LemonChannels.Adapters.Xmtp.Config,
+  LemonControlPlane.A2A.Config
 ]
 
 # Environment-variable declarations live with the app that reads them; the

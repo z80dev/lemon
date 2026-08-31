@@ -10,6 +10,90 @@ defmodule LemonControlPlane.Env do
 
   @declarations [
     %{
+      name: :lemon_gateway_enable_a2a,
+      env_var: "LEMON_GATEWAY_ENABLE_A2A",
+      aliases: [],
+      type: :boolean,
+      default: false,
+      doc: "Enable the A2A peer listener.",
+      secret?: false,
+      required?: false,
+      area: :endpoints,
+      apps: [:lemon_control_plane]
+    },
+    %{
+      name: :lemon_a2a_host,
+      env_var: "LEMON_A2A_HOST",
+      aliases: [],
+      type: :string,
+      default: nil,
+      doc: "Host address for the A2A peer listener.",
+      secret?: false,
+      required?: false,
+      area: :endpoints,
+      apps: [:lemon_control_plane]
+    },
+    %{
+      name: :lemon_a2a_port,
+      env_var: "LEMON_A2A_PORT",
+      aliases: [],
+      type: :integer,
+      default: nil,
+      doc: "Port for the A2A peer listener.",
+      secret?: false,
+      required?: false,
+      area: :endpoints,
+      apps: [:lemon_control_plane]
+    },
+    %{
+      name: :lemon_a2a_public_url,
+      env_var: "LEMON_A2A_PUBLIC_URL",
+      aliases: [],
+      type: :string,
+      default: nil,
+      doc: "Public A2A JSON-RPC URL advertised in Lemon's Agent Card.",
+      secret?: false,
+      required?: false,
+      area: :endpoints,
+      apps: [:lemon_control_plane]
+    },
+    %{
+      name: :lemon_a2a_reply_timeout_ms,
+      env_var: "LEMON_A2A_REPLY_TIMEOUT_MS",
+      aliases: [],
+      type: :integer,
+      default: nil,
+      doc: "Maximum synchronous wait for an A2A peer run.",
+      secret?: false,
+      required?: false,
+      area: :endpoints,
+      apps: [:lemon_control_plane]
+    },
+    %{
+      name: :lemon_a2a_rate_limit_per_minute,
+      env_var: "LEMON_A2A_RATE_LIMIT_PER_MINUTE",
+      aliases: [],
+      type: :integer,
+      default: nil,
+      doc: "Per-peer A2A JSON-RPC request limit per minute.",
+      secret?: false,
+      required?: false,
+      area: :endpoints,
+      apps: [:lemon_control_plane]
+    },
+    %{
+      name: :lemon_a2a_max_context_turns,
+      env_var: "LEMON_A2A_MAX_CONTEXT_TURNS",
+      aliases: [],
+      type: :integer,
+      default: nil,
+      doc: "Maximum accepted inbound turns per A2A context.",
+      secret?: false,
+      required?: false,
+      area: :endpoints,
+      apps: [:lemon_control_plane]
+    },
+    %{
       name: :lemon_acp_api_token,
       env_var: "LEMON_ACP_API_TOKEN",
       aliases: [],

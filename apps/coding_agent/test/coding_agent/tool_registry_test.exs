@@ -125,6 +125,7 @@ defmodule CodingAgent.ToolRegistryTest do
       assert "bash" in names
       assert "todo" in names
       assert "kanban" in names
+      assert "peer" in names
       assert "grep" in names
       assert "media_status" in names
       assert "media_generate_image" in names

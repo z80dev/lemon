@@ -180,6 +180,7 @@ enable_telegram = false
 enable_discord = false
 enable_webhook = false
 enable_xmtp = false
+enable_a2a = false
 require_engine_lock = true
 engine_lock_timeout_ms = 60000
 
@@ -222,6 +223,34 @@ require_live = true
 connect_timeout_ms = 15000
 # Set true only for local development without live XMTP
 mock_mode = false
+
+# A2A v1.0 peer-to-peer agent conversations. The listener defaults to
+# loopback-only port 9901. Set token secret names before binding remotely.
+[gateway.a2a]
+host = "127.0.0.1"
+port = 9901
+public_url = "http://127.0.0.1:9901"
+name = "Lemon"
+description = "My persistent Lemon agent"
+agent_id = "default"
+skills = ["coordination", "coding"]
+reply_timeout_ms = 300000
+rate_limit_per_minute = 60
+max_context_turns = 100
+# Inbound peer runs receive this conservative tool set unless a peer overrides it.
+default_allow_tools = ["read", "read_skill", "search_memory", "session_search", "grep", "find", "ls", "webfetch", "websearch", "kanban", "peer"]
+
+[gateway.a2a.peers.hermes]
+url = "http://127.0.0.1:9900"
+# Store the token with `lemon secrets set a2a/hermes <token>`.
+# One secret can authenticate both directions; separate inbound/outbound names
+# are also supported as `inbound_token_secret` / `outbound_token_secret`.
+token_secret = "a2a/hermes"
+agent_id = "default"
+capabilities = ["coordination", "coding"]
+timeout_ms = 300000
+# Empty means the conservative gateway.a2a.default_allow_tools list.
+allow_tools = []
 
 [gateway.projects.example]
 root = "/path/to/project"

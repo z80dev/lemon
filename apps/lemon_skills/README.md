@@ -134,6 +134,7 @@ The OTP application (`LemonSkills.Application`) performs two actions on start:
 | `LemonSkills.Tools.MediaAnalyzeImage` | `lib/lemon_skills/tools/media_analyze_image.ex` | Agent tool for managed image analysis artifacts |
 | `LemonSkills.Tools.MediaGenerateVideo` | `lib/lemon_skills/tools/media_generate_video.ex` | Agent tool for managed video generation artifacts |
 | `LemonSkills.Tools.Kanban` | `lib/lemon_skills/tools/kanban.ex` | Agent tool for durable Lemon kanban boards and tasks |
+| `LemonSkills.Tools.Peer` | `lib/lemon_skills/tools/peer.ex` | Agent tool for persistent A2A peer conversations and remote task lifecycle |
 | `LemonSkills.SkillView` | `lib/lemon_skills/skill_view.ex` | Display projection of an entry: active state and what is missing |
 | `LemonSkills.PromptView` | `lib/lemon_skills/prompt_view.ex` | Renders bounded skill metadata into an agent's system prompt |
 | `LemonSkills.McpSource` | `lib/lemon_skills/mcp_source.ex` | MCP servers as a runtime tool source (stdio, HTTP, SSE) |

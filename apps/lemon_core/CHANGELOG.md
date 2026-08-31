@@ -18,6 +18,11 @@ Telegram, run history, durable memory, kanban boards, or `~/.lemon`.
 
 ### Added
 
+- `LemonCore.A2A.Protocol`, `LemonCore.A2A.Client`, and `LemonCore.A2AStore`
+  provide the generic A2A v1.0 wire helpers, credential-scrubbing HTTP client,
+  and typed durable context/task/message storage shared by peer transports and
+  agent tools.
+
 - `LemonCore.Events.ChannelDelivery` — a typed `:channel_delivery` payload,
   registered in `LemonCore.Events.registry/0`, which makes `"channels"` a typed
   contract topic with a real publisher for the first time: the channels

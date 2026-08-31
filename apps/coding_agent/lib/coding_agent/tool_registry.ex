@@ -80,6 +80,7 @@ defmodule CodingAgent.ToolRegistry do
     {:media_generate_video, LemonSkills.Tools.MediaGenerateVideo},
     {:todo, Tools.Todo},
     {:kanban, LemonSkills.Tools.Kanban},
+    {:peer, LemonSkills.Tools.Peer},
     {:task, Tools.Task},
     {:agent, Tools.Agent},
     {:parent_question, Tools.ParentQuestion},

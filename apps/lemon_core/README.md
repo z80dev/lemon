@@ -100,6 +100,8 @@ and `lemon_lsp`. Core doctor diagnostics may probe them at runtime, but
 | `LemonCore.ConfigReloader.Watcher` | FileSystem watcher targeting config.toml and .env paths |
 | `LemonCore.Setup.Readiness` | Read-only first-run readiness shared by setup, TUI, Web, and launchers |
 | `LemonCore.GatewayConfig` | Unified gateway config access merging TOML, app env, and transport overrides |
+| `LemonCore.A2A.Protocol` / `LemonCore.A2A.Client` | Generic A2A v1.0 wire shapes and credential-scrubbing HTTP client |
+| `LemonCore.A2AStore` | Typed persistent A2A contexts, default peer conversations, tasks, and message history |
 | `LemonCore.Dotenv` | `.env` file loader preserving existing env vars |
 | `LemonCore.Logging` | Runtime log-to-file handler from `[logging]` config |
 | `LemonCore.OAuth.LocalCallbackListener` | One-shot localhost OAuth callback capture with monitored listener failure and bounded wait/cleanup |

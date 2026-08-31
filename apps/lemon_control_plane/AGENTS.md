@@ -12,6 +12,13 @@ HTTP/WebSocket API server for controlling the Lemon agent system.
 
 ## Purpose and Responsibilities
 
+The application also owns Lemon's optional A2A v1.0 network edge. Keep A2A
+authentication, Agent Cards, JSON-RPC/SSE framing, rate limiting, and supervised
+task reattachment in `LemonControlPlane.A2A.*`. Conversation persistence and
+generic wire/client helpers belong to `lemon_core`; agent-facing outbound peer
+actions belong to `lemon_skills`. A2A peers are independent principals and
+must never be treated as named execution nodes or operator WebSocket clients.
+
 The control plane provides the external interface for clients (TUI, web, mobile, browser extensions) to:
 
 - **Submit agent runs** - Send prompts to agents via `agent` or `chat.send`

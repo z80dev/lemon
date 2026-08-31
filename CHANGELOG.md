@@ -18,6 +18,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- Bidirectional A2A v1.0 peer interoperability for durable Lemon-Hermes
+  conversations: Agent Card discovery, authenticated JSON-RPC and SSE,
+  persistent context/session mapping, peer-scoped task lifecycle and
+  cancellation, untrusted-content boundaries, and a built-in `peer` tool that
+  resumes one long-running default conversation per configured agent.
+
 - Bun TUI portable-blueprint management over the authenticated shared catalog:
   content-free `/blueprints` browsing and `/blueprint` inspect/validate/preview,
   exact fresh-digest activation, stale/refused-plan clearing with preserved

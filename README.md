@@ -157,6 +157,15 @@ for the catalog, safety, provenance, and duplicate-safe activation contract.
 
 ## Connect Messaging Channels
 
+### Connect independent agents with A2A
+
+Lemon can maintain durable A2A v1.0 conversations with Hermes and other
+independent agents. The inbound listener maps each remote context to a private
+Lemon session; the built-in `peer` tool resumes one default outbound context
+per configured peer and supports discovery, task status, cancellation, and
+history. See [Persistent A2A peer conversations](docs/user-guide/a2a-peers.md)
+for the paired Lemon/Hermes setup and security model.
+
 Connect Lemon to your favorite chat platforms:
 
 ### Telegram

@@ -89,6 +89,9 @@ LemonControlPlane.Supervisor (one_for_one)
   |-- ConnectionSupervisor     (DynamicSupervisor for WS connections)
   |-- ConnectionRegistry       (Registry for connection process lookup)
   |-- Bandit                   (HTTP server, Plug router)
+  |-- A2A.TaskSupervisor       (A2A runs outlive HTTP/SSE clients)
+  |-- A2A.RateLimiter          (per-authenticated-peer request bounds, when enabled)
+  |-- A2A.Server               (optional A2A v1.0 listener, default port 9901)
 ```
 
 ## HTTP Endpoints
@@ -106,6 +109,12 @@ LemonControlPlane.Supervisor (one_for_one)
 | GET | `/v1/runs/:run_id` | Preview redacted run status metadata |
 | POST | `/v1/runs/:run_id/cancel` | Preview run cancellation dispatch through the Lemon router |
 | POST | `/acp` | Preview Agent Client Protocol JSON-RPC bridge for initialize, session lifecycle, prompt, cancel, and close over Lemon router runs |
+
+When `[gateway] enable_a2a = true`, a separate listener serves the A2A v1.0
+Agent Card, JSON-RPC, and SSE task surface on port 9901 by default. It is kept
+off the operator control-plane port so peer credentials and exposure policy do
+not become control-plane authorization. See
+[`docs/user-guide/a2a-peers.md`](../../docs/user-guide/a2a-peers.md).
 
 The `/v1` generation endpoints are compatibility adapters, not a separate
 runtime path. They submit through the Lemon router and return `lemon.runId` by

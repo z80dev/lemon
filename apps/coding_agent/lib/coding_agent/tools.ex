@@ -3,7 +3,7 @@ defmodule CodingAgent.Tools do
   Tool registry and factory functions for coding agent tools.
 
   Provides pre-configured tool sets for different use cases:
-  - `coding_tools/2` - Full access tools (read, read_skill, skill_manage, memory_topic, memory, search_memory, session_search, checkpoint, write, edit, hashline_edit, patch, lsp_diagnostics, bash, grep, find, ls, webfetch, websearch, browser tools, media_status, media_generate_image, media_generate_speech, media_transcribe_audio, media_analyze_image, media_generate_video, todo, kanban, task, agent, parent_question, tool_auth, extensions_status) plus any runtime-registered tools
+  - `coding_tools/2` - Full access tools (read, read_skill, skill_manage, memory_topic, memory, search_memory, session_search, checkpoint, write, edit, hashline_edit, patch, lsp_diagnostics, bash, grep, find, ls, webfetch, websearch, browser tools, media_status, media_generate_image, media_generate_speech, media_transcribe_audio, media_analyze_image, media_generate_video, todo, kanban, peer, task, agent, parent_question, tool_auth, extensions_status) plus any runtime-registered tools
   - `read_only_tools/2` - Exploration tools (read, read_skill, search_memory, session_search, grep, find, ls)
   - `all_tools/2` - All available tools as a map
   """
@@ -70,11 +70,12 @@ defmodule CodingAgent.Tools do
     MediaTranscribeAudio,
     MediaAnalyzeImage,
     MediaGenerateVideo,
-    Kanban
+    Kanban,
+    Peer
   }
 
   @doc """
-  Get the default coding tools (read, read_skill, skill_manage, memory_topic, memory, search_memory, session_search, checkpoint, write, edit, hashline_edit, patch, lsp_diagnostics, bash, grep, find, ls, webfetch, websearch, browser tools, media_status, media_generate_image, media_generate_speech, media_transcribe_audio, media_analyze_image, media_generate_video, todo, kanban, task, agent, parent_question, tool_auth, extensions_status) plus any runtime-registered tools.
+  Get the default coding tools (read, read_skill, skill_manage, memory_topic, memory, search_memory, session_search, checkpoint, write, edit, hashline_edit, patch, lsp_diagnostics, bash, grep, find, ls, webfetch, websearch, browser tools, media_status, media_generate_image, media_generate_speech, media_transcribe_audio, media_analyze_image, media_generate_video, todo, kanban, peer, task, agent, parent_question, tool_auth, extensions_status) plus any runtime-registered tools.
 
   ## Options
   - Any options are passed through to individual tools
@@ -135,6 +136,7 @@ defmodule CodingAgent.Tools do
       MediaGenerateVideo.tool(cwd, opts),
       Todo.tool(cwd, opts),
       Kanban.tool(cwd, opts),
+      Peer.tool(cwd, opts),
       Task.tool(cwd, opts),
       Agent.tool(cwd, opts),
       ParentQuestion.tool(cwd, opts),
@@ -230,6 +232,7 @@ defmodule CodingAgent.Tools do
       "media_generate_video" => MediaGenerateVideo.tool(cwd, opts),
       "todo" => Todo.tool(cwd, opts),
       "kanban" => Kanban.tool(cwd, opts),
+      "peer" => Peer.tool(cwd, opts),
       "truncate" => Truncate.tool(opts),
       "task" => Task.tool(cwd, opts),
       "agent" => Agent.tool(cwd, opts),

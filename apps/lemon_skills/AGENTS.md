@@ -20,6 +20,11 @@ of `CHANGELOG.md`.
 
 ## Key Files and Purposes
 
+- `lib/lemon_skills/tools/peer.ex` — configured-only A2A peer discovery,
+  persistent default conversations, local history, and remote task
+  status/cancellation. Every remote result is untrusted; this tool never
+  accepts a caller-supplied URL or literal credential.
+
 ### Core Modules
 
 | File | What it does | When to touch it |

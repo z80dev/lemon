@@ -22,6 +22,7 @@
 | Work on packaged/source command help, completion, sessions, or blueprint UX | `apps/lemon_cli/` (`CommandRegistry`, `CompletionCommand`, `SessionsCommand`, `BlueprintsCommand`) |
 | Work on agent routing or message flow | `apps/lemon_router/` |
 | Build HTTP/WebSocket API features | `apps/lemon_control_plane/` |
+| Work on persistent A2A peer communication | `apps/lemon_control_plane/` (server/auth/tasks), `apps/lemon_core/` (protocol/store/client), `apps/lemon_skills/` (`peer` tool) |
 | Manage configuration, secrets, or storage | `apps/lemon_core/` |
 | Resolve bounded files, folders, diffs, URLs, sessions, or documents | `apps/lemon_core/` (`LemonCore.Context`), `apps/lemon_cli/` (`lemon context`) |
 | Review/confirm learning from files, folders, or URLs | `apps/lemon_skills/` (`LemonSkills.Learn`), `apps/lemon_cli/` (`lemon learn`) |
@@ -379,6 +380,14 @@ Disconnects, stale sessions, terminal races, and timeouts fail closed.
 Outbound message delivery goes through `lemon_channels` (Telegram, Discord, WhatsApp, XMTP, email adapters).
 The control plane (`lemon_control_plane`) provides the JSON-RPC API used by TUI/web clients.
 
+Independent agents communicate through the optional A2A v1.0 listener owned by
+`lemon_control_plane`, not through named execution nodes. Inbound remote
+contexts map to private stable Lemon sessions; `LemonSkills.Tools.Peer` uses
+`LemonCore.A2A.Client` plus `LemonCore.A2AStore` to retain one default outbound
+conversation per configured peer. Keep remote data untrusted, peer credentials
+secret-referenced, and all task reads/mutations scoped to authenticated peer
+identity.
+
 User-managed profiles reuse the canonical `[profiles.<id>]` router plane rather
 than introducing another agent engine. `LemonCore.ProfileStore` owns atomic
 lifecycle edits and derives `~/.lemon/profiles/<id>/` boundaries;
@@ -472,6 +481,8 @@ Key env vars:
 - `LEMON_WEB_ACCESS_TOKEN` - Optional chat gate and required credential for the `/manage` session-operations shell
 - `LEMON_CONTROL_PLANE_OPERATOR_TOKEN` - Shared WebSocket operator credential required by default and used for named-node pairing against an authenticated controller
 - `LEMON_CONTROL_PLANE_ALLOW_UNAUTHENTICATED_LOOPBACK` - Explicit, default-off legacy tokenless loopback compatibility
+- `LEMON_GATEWAY_ENABLE_A2A` / `LEMON_A2A_HOST` / `LEMON_A2A_PORT` / `LEMON_A2A_PUBLIC_URL` - Enable and expose the independent-agent A2A v1.0 listener
+- `LEMON_A2A_REPLY_TIMEOUT_MS` / `LEMON_A2A_RATE_LIMIT_PER_MINUTE` / `LEMON_A2A_MAX_CONTEXT_TURNS` - Bound peer waits, request rate, and persistent context turns
 - `LEMON_WEB_HOST` / `LEMON_WEB_PORT` - Web server binding (prod)
 - `LEMON_WEB_SECRET_KEY_BASE` - Required in prod
 - `LEMON_SIM_UI_MAX_CONCURRENT_RUNNERS` / `LEMON_SIM_UI_MAX_STORED_SIMS` - Bound Sim UI model concurrency and terminal snapshot retention; per-arena `MAX_GAME_RECORDS` bounds league history
