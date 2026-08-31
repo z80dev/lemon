@@ -152,6 +152,119 @@ control_plane_healthy() {
   [[ "$body" == '{"ok":true}' || "$body" == "ok" ]]
 }
 
+# Persistent daemons need a credential rendezvous that a later TUI process can
+# read without putting the bearer in argv or weakening loopback authentication.
+# Explicit operator tokens remain caller-owned and are never persisted here.
+managed_operator_token_path() {
+  printf '%s/.lemon/run/control-plane-%s.token\n' "$HOME" "$1"
+}
+
+private_file_mode() {
+  local path="$1"
+  local mode=""
+
+  if mode="$(stat -f '%Lp' "$path" 2>/dev/null)"; then
+    printf '%s\n' "$mode"
+  elif mode="$(stat -c '%a' "$path" 2>/dev/null)"; then
+    printf '%s\n' "$mode"
+  else
+    return 1
+  fi
+}
+
+load_managed_operator_token() {
+  local port="$1"
+  local path
+  local mode
+  local token
+
+  if [[ -n "${LEMON_CONTROL_PLANE_OPERATOR_TOKEN:-}" ]]; then
+    return 0
+  fi
+
+  path="$(managed_operator_token_path "$port")"
+
+  if [[ ! -e "$path" && ! -L "$path" ]]; then
+    return 1
+  fi
+
+  if [[ -L "$path" || ! -f "$path" || ! -O "$path" ]]; then
+    error "Refusing unsafe managed control-plane credential: $path"
+    return 2
+  fi
+
+  mode="$(private_file_mode "$path")" || {
+    error "Could not verify permissions on managed control-plane credential: $path"
+    return 2
+  }
+
+  if [[ "$mode" != "600" ]]; then
+    error "Managed control-plane credential must have mode 600: $path"
+    return 2
+  fi
+
+  IFS= read -r token < "$path" || true
+
+  if [[ ! "$token" =~ ^[0-9a-fA-F]{64}$ ]]; then
+    error "Managed control-plane credential is invalid: $path"
+    return 2
+  fi
+
+  export LEMON_CONTROL_PLANE_OPERATOR_TOKEN="$token"
+}
+
+ensure_managed_operator_token() {
+  local port="$1"
+  local status=0
+  local state_dir="$HOME/.lemon/run"
+  local path
+  local temporary
+  local token
+
+  if [[ -n "${LEMON_CONTROL_PLANE_OPERATOR_TOKEN:-}" ]]; then
+    return 0
+  fi
+
+  load_managed_operator_token "$port" || status=$?
+  if [[ "$status" == "0" ]]; then
+    return 0
+  elif [[ "$status" != "1" ]]; then
+    return "$status"
+  fi
+
+  umask 077
+  mkdir -p "$state_dir"
+  chmod 700 "$HOME/.lemon" "$state_dir"
+  path="$(managed_operator_token_path "$port")"
+  temporary="$(mktemp "$state_dir/.control-plane-${port}.XXXXXX")"
+
+  if command -v openssl >/dev/null 2>&1; then
+    token="$(openssl rand -hex 32)"
+  else
+    token="$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')"
+  fi
+
+  if [[ ! "$token" =~ ^[0-9a-fA-F]{64}$ ]]; then
+    rm -f "$temporary"
+    error "Could not generate a secure managed control-plane credential."
+    return 2
+  fi
+
+  printf '%s\n' "$token" > "$temporary"
+  chmod 600 "$temporary"
+
+  # Linking a fully-written temporary file makes concurrent first launches
+  # converge on one credential without ever exposing a partial file.
+  if ! ln "$temporary" "$path" 2>/dev/null && [[ ! -f "$path" ]]; then
+    rm -f "$temporary"
+    error "Could not install managed control-plane credential: $path"
+    return 2
+  fi
+
+  rm -f "$temporary"
+  load_managed_operator_token "$port"
+}
+
 open_web_browser() {
   local url="$1"
 
@@ -621,6 +734,10 @@ fi
 
 if [[ "$DISTRIBUTED" == "1" ]] && [[ -z "$NODE_COOKIE" ]]; then
   error "Distributed mode requires a non-empty cookie. Pass --cookie or set LEMON_GATEWAY_NODE_COOKIE."
+  exit 1
+fi
+
+if ! ensure_managed_operator_token "$PORT"; then
   exit 1
 fi
 

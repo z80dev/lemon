@@ -41,9 +41,64 @@ error() {
 }
 
 PORT="${LEMON_CONTROL_PLANE_PORT:-4040}"
+if ! [[ "$PORT" =~ ^[0-9]+$ ]]; then
+  error "Invalid LEMON_CONTROL_PLANE_PORT value: $PORT"
+  exit 1
+fi
 RUNTIME_LAUNCHER="${LEMON_TUI_RUNTIME_LAUNCHER:-$LEMON_ROOT/bin/lemon}"
 RUNTIME_PID_FILE=""
 STARTED_RUNTIME=0
+MANAGED_TOKEN_FILE="$HOME/.lemon/run/control-plane-${PORT}.token"
+
+private_file_mode() {
+  local path="$1"
+  local mode=""
+
+  if mode="$(stat -f '%Lp' "$path" 2>/dev/null)"; then
+    printf '%s\n' "$mode"
+  elif mode="$(stat -c '%a' "$path" 2>/dev/null)"; then
+    printf '%s\n' "$mode"
+  else
+    return 1
+  fi
+}
+
+load_managed_operator_token() {
+  local mode
+  local token
+
+  if [[ -n "${LEMON_CONTROL_PLANE_OPERATOR_TOKEN:-}" || -n "${LEMON_WS_TOKEN:-}" ]]; then
+    return 0
+  fi
+
+  if [[ ! -e "$MANAGED_TOKEN_FILE" && ! -L "$MANAGED_TOKEN_FILE" ]]; then
+    return 1
+  fi
+
+  if [[ -L "$MANAGED_TOKEN_FILE" || ! -f "$MANAGED_TOKEN_FILE" || ! -O "$MANAGED_TOKEN_FILE" ]]; then
+    error "Refusing unsafe managed control-plane credential: $MANAGED_TOKEN_FILE"
+    return 2
+  fi
+
+  mode="$(private_file_mode "$MANAGED_TOKEN_FILE")" || {
+    error "Could not verify permissions on managed control-plane credential: $MANAGED_TOKEN_FILE"
+    return 2
+  }
+
+  if [[ "$mode" != "600" ]]; then
+    error "Managed control-plane credential must have mode 600: $MANAGED_TOKEN_FILE"
+    return 2
+  fi
+
+  IFS= read -r token < "$MANAGED_TOKEN_FILE" || true
+
+  if [[ ! "$token" =~ ^[0-9a-fA-F]{64}$ ]]; then
+    error "Managed control-plane credential is invalid: $MANAGED_TOKEN_FILE"
+    return 2
+  fi
+
+  export LEMON_CONTROL_PLANE_OPERATOR_TOKEN="$token"
+}
 
 cleanup() {
   if [[ "$STARTED_RUNTIME" == "1" && -n "$RUNTIME_PID_FILE" && -f "$RUNTIME_PID_FILE" ]]; then
@@ -97,6 +152,13 @@ runtime_healthy() {
   curl -sS -m 2 "http://127.0.0.1:${PORT}/healthz" >/dev/null 2>&1
 }
 
+managed_token_status=0
+load_managed_operator_token || managed_token_status=$?
+if [[ "$managed_token_status" != "0" && "$managed_token_status" != "1" ]]; then
+  exit 1
+fi
+
+
 if ! runtime_healthy; then
   if [[ -z "${LEMON_CONTROL_PLANE_OPERATOR_TOKEN:-}" ]]; then
     if command -v openssl >/dev/null 2>&1; then
@@ -140,12 +202,12 @@ if ! runtime_healthy; then
 
   info "Runtime is healthy."
 else
-  if [[ -z "${LEMON_CONTROL_PLANE_OPERATOR_TOKEN:-}" ]]; then
+  if [[ -z "${LEMON_CONTROL_PLANE_OPERATOR_TOKEN:-}" && -z "${LEMON_WS_TOKEN:-}" ]]; then
     case "${LEMON_CONTROL_PLANE_ALLOW_UNAUTHENTICATED_LOOPBACK:-}" in
       1|true|TRUE|yes|YES) ;;
       *)
-        error "An existing runtime is using secure operator authentication."
-        error "Set LEMON_CONTROL_PLANE_OPERATOR_TOKEN to the token used to start it, then retry."
+        error "No credential is available for the existing runtime."
+        error "Start managed daemons with ./bin/lemon --daemon, or set LEMON_CONTROL_PLANE_OPERATOR_TOKEN."
         exit 1
         ;;
     esac

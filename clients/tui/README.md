@@ -21,16 +21,19 @@ placed in command arguments, or printed.
 
 Every runtime started by `../../bin/lemon-tui` is launcher-owned and stopped
 with the TUI, including when `LEMON_CONTROL_PLANE_OPERATOR_TOKEN` was already
-set. For a persistent daemon, start `../../bin/lemon --daemon` separately with
-the token, then launch the TUI with the same token; the launcher never stops an
-already-running runtime.
+set. The source `../../bin/lemon --daemon` and installed `lemon daemon`
+launchers instead create a port-scoped operator credential at
+`~/.lemon/run/control-plane-<port>.token`, with a mode-0700 parent and mode-0600
+file, and pass it to the persistent runtime. A later TUI validates the file is
+regular, owned by the current user, mode 0600, and a full 256-bit token before
+loading it automatically.
 
-To attach to a persistent or already-running daemon, set the same
-`LEMON_CONTROL_PLANE_OPERATOR_TOKEN` in both launch environments. The launcher
-cannot recover an existing process's secret and fails closed when it is absent.
-The client sends the token only inside the WebSocket `connect.auth` envelope
-and does not include it in debug frame summaries. `LEMON_WS_TOKEN` remains a
-legacy client-side alias; it does not configure the daemon.
+Explicit `LEMON_CONTROL_PLANE_OPERATOR_TOKEN` values remain caller-owned and
+are never written to the managed credential file. Attaching to a runtime
+started with an explicit token therefore still requires the same environment
+value. The client sends credentials only inside the WebSocket `connect.auth`
+envelope and does not include them in debug frame summaries. `LEMON_WS_TOKEN`
+remains a legacy client-side alias; it does not configure the daemon.
 
 ## Features
 

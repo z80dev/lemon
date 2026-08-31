@@ -106,6 +106,114 @@ STATE_DIR="$LEMON_HOME_DIR/run"
 PIDFILE="$STATE_DIR/lemon.pid"
 ROOTFILE="$STATE_DIR/lemon.root"
 
+managed_operator_token_path() {
+  printf '%s/control-plane-%s.token\n' "$STATE_DIR" "$1"
+}
+
+private_file_mode() {
+  local path="$1"
+  local mode=""
+
+  if mode="$(stat -f '%Lp' "$path" 2>/dev/null)"; then
+    printf '%s\n' "$mode"
+  elif mode="$(stat -c '%a' "$path" 2>/dev/null)"; then
+    printf '%s\n' "$mode"
+  else
+    return 1
+  fi
+}
+
+load_managed_operator_token() {
+  local port="$1"
+  local path
+  local mode
+  local token
+  if ! [[ "$port" =~ ^[0-9]+$ ]]; then
+    error "invalid LEMON_CONTROL_PLANE_PORT value: $port"
+    return 2
+  fi
+
+
+  if [[ -n "${LEMON_CONTROL_PLANE_OPERATOR_TOKEN:-}" ]]; then
+    return 0
+  fi
+
+  path="$(managed_operator_token_path "$port")"
+
+  if [[ ! -e "$path" && ! -L "$path" ]]; then
+    return 1
+  fi
+
+  if [[ -L "$path" || ! -f "$path" || ! -O "$path" ]]; then
+    error "refusing unsafe managed control-plane credential: $path"
+    return 2
+  fi
+
+  mode="$(private_file_mode "$path")" || {
+    error "could not verify permissions on managed control-plane credential: $path"
+    return 2
+  }
+
+  if [[ "$mode" != "600" ]]; then
+    error "managed control-plane credential must have mode 600: $path"
+    return 2
+  fi
+
+  IFS= read -r token < "$path" || true
+
+  if [[ ! "$token" =~ ^[0-9a-fA-F]{64}$ ]]; then
+    error "managed control-plane credential is invalid: $path"
+    return 2
+  fi
+
+  export LEMON_CONTROL_PLANE_OPERATOR_TOKEN="$token"
+}
+
+ensure_managed_operator_token() {
+  local port="$1"
+  local status=0
+  local path
+  local temporary
+  local token
+
+  if [[ -n "${LEMON_CONTROL_PLANE_OPERATOR_TOKEN:-}" ]]; then
+    return 0
+  fi
+
+  load_managed_operator_token "$port" || status=$?
+  if [[ "$status" == "0" ]]; then
+    return 0
+  elif [[ "$status" != "1" ]]; then
+    return "$status"
+  fi
+
+  umask 077
+  mkdir -p "$LEMON_HOME_DIR" "$STATE_DIR"
+  chmod 700 "$LEMON_HOME_DIR" "$STATE_DIR"
+  path="$(managed_operator_token_path "$port")"
+  temporary="$(mktemp "$STATE_DIR/.control-plane-${port}.XXXXXX")"
+  require_cmd openssl
+  token="$(openssl rand -hex 32)"
+
+  if [[ ! "$token" =~ ^[0-9a-fA-F]{64}$ ]]; then
+    rm -f "$temporary"
+    error "could not generate a secure managed control-plane credential"
+    return 2
+  fi
+
+  printf '%s\n' "$token" > "$temporary"
+  chmod 600 "$temporary"
+
+  if ! ln "$temporary" "$path" 2>/dev/null && [[ ! -f "$path" ]]; then
+    rm -f "$temporary"
+    error "could not install managed control-plane credential: $path"
+    return 2
+  fi
+
+  rm -f "$temporary"
+  load_managed_operator_token "$port"
+}
+
 # ── stop/restart must keep working after `versions/current` is flipped to a
 # newer release, so they prefer the root recorded at `daemon` time over the
 # root this invocation of the shim happens to live under. ──
@@ -270,6 +378,10 @@ open_web_browser() {
 
 # ── Start the daemon and record pid + root. Shared by `daemon` and `tui`. ──
 start_daemon() {
+  if ! ensure_managed_operator_token "${LEMON_CONTROL_PLANE_PORT:-4040}"; then
+    exit 1
+  fi
+
   "$RELEASE_BIN" daemon "$@"
 
   pid=""
@@ -408,6 +520,14 @@ EOF
     fi
 
     control_port="${LEMON_CONTROL_PLANE_PORT:-4040}"
+    managed_token_status=0
+    if [[ -z "${LEMON_CONTROL_PLANE_OPERATOR_TOKEN:-}" && -z "${LEMON_WS_TOKEN:-}" ]]; then
+      load_managed_operator_token "$control_port" || managed_token_status=$?
+      if [[ "$managed_token_status" != "0" && "$managed_token_status" != "1" ]]; then
+        exit 1
+      fi
+    fi
+
 
     if ! control_plane_healthy "$control_port"; then
       info "daemon not running; starting it"
@@ -429,11 +549,25 @@ EOF
       fi
     fi
 
+    if [[ -z "${LEMON_CONTROL_PLANE_OPERATOR_TOKEN:-}" && -z "${LEMON_WS_TOKEN:-}" ]]; then
+      case "${LEMON_CONTROL_PLANE_ALLOW_UNAUTHENTICATED_LOOPBACK:-}" in
+        1|true|TRUE|yes|YES) ;;
+        *)
+          error "no credential is available for the existing runtime"
+          error "start managed daemons with 'lemon daemon', or set LEMON_CONTROL_PLANE_OPERATOR_TOKEN"
+          exit 1
+          ;;
+      esac
+    fi
+
     exec "$TUI_BIN" --ws-url "ws://127.0.0.1:$control_port/ws" "$@"
     ;;
 
   start)
     shift
+    if ! ensure_managed_operator_token "${LEMON_CONTROL_PLANE_PORT:-4040}"; then
+      exit 1
+    fi
     exec "$RELEASE_BIN" start "$@"
     ;;
 

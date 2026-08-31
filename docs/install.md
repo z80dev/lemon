@@ -204,9 +204,13 @@ The source wrapper follows the same setup and provider behavior described
 above. `./bin/lemon-tui` is the development TUI entry point after the source
 runtime is configured. When it starts a fresh runtime, the launcher generates
 and shares an in-memory operator token with the TUI, then stops that owned
-runtime when the TUI exits. To attach to a persistent runtime, export the same
-high-entropy `LEMON_CONTROL_PLANE_OPERATOR_TOKEN` used to start that runtime.
-Start persistent runtimes separately with `./bin/lemon --daemon`; every runtime
+runtime when the TUI exits.
+
+Persistent runtimes started with `./bin/lemon --daemon` receive a private,
+port-scoped credential at `~/.lemon/run/control-plane-<port>.token`; later TUI
+launches load it automatically after validating ownership, mode 0600, and
+format. Explicit `LEMON_CONTROL_PLANE_OPERATOR_TOKEN` values are not persisted,
+so runtimes started with one still require it when attaching. Every runtime
 started by `./bin/lemon-tui` is stopped with the TUI, even when a token was
 preconfigured.
 

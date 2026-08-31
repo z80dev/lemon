@@ -48,7 +48,7 @@ under `~/.lemon`:
 ~/.lemon/versions/current      symlink to the active version
 ~/.lemon/bin/lemon             -> ../versions/current/bin/lemon
 ~/.lemon/{cookie,env}          generated once by the launcher, mode 600 from creation
-~/.lemon/run/                  pid and runtime-root records, mode 700
+~/.lemon/run/                  pid, runtime-root, and mode-600 port-token records; directory mode 700
 ~/.lemon/store                 default store path for user installs
 ```
 
@@ -344,10 +344,16 @@ snapshot from `exec.approvals.get`.
 
 The source launcher creates a high-entropy process-scoped operator token when
 it boots a new local runtime, shares it only through the daemon and TUI process
-environments, and stops that owned runtime when the TUI exits. For a persistent
-runtime, set the same `LEMON_CONTROL_PLANE_OPERATOR_TOKEN` when starting the
-runtime and launching the TUI. An existing runtime's secret cannot be safely
-discovered, so tokenless attachment fails by default.
+environments, and stops that owned runtime when the TUI exits.
+
+Persistent runtimes started by `./bin/lemon --daemon` or installed
+`lemon daemon` create a port-scoped credential under `~/.lemon/run`. A later
+TUI loads that credential automatically only when it is a regular current-user
+file with mode 0600 and a valid 256-bit token. Explicit
+`LEMON_CONTROL_PLANE_OPERATOR_TOKEN` values are never persisted; the same value
+must still be supplied to attach to a runtime started with an explicit token.
+Missing or unsafe credentials fail closed rather than enabling tokenless
+loopback access.
 
 Runtime ownership is independent of token origin: every daemon started by
 `./bin/lemon-tui` is stopped when that client exits, including when the token

@@ -18,6 +18,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- Persistent source and packaged launchers now provision a private,
+  port-scoped control-plane operator credential under `~/.lemon/run`, allowing
+  later TUI processes to attach automatically without exposing the bearer in
+  argv or enabling tokenless loopback access. Explicit operator tokens remain
+  caller-managed and are never persisted by this handoff.
+
 - Bidirectional A2A v1.0 peer interoperability for durable Lemon-Hermes
   conversations: Agent Card discovery, authenticated JSON-RPC and SSE,
   persistent context/session mapping, peer-scoped task lifecycle and
