@@ -170,8 +170,9 @@ defmodule CodingAgent.Tools.ExecuteCode.Rpc do
   @typedoc """
   The disposition kinds a claim-ledger entry can carry.
 
-  `:reserved` is fed the moment a call slot is spent — before the
-  request's fate is known. The disposition kinds refine it: `:invalid`,
+  `:reserved` is fed before the call slot is spent — the moment a
+  request passes the replay and call-budget gates, ahead of the request's
+  fate being known. The disposition kinds refine it: `:invalid`,
   `:unknown_tool`, and `:denied` for requests answered inside the claim
   (never dispatched), `:claimed` for a dispatch-bound request (fed before
   its marker is published).
@@ -221,8 +222,8 @@ defmodule CodingAgent.Tools.ExecuteCode.Rpc do
           optional(:max_parallel_rpc) => pos_integer(),
           optional(:on_update) => (AgentToolResult.t() -> :ok) | nil,
           # Host-side claim ledger hook: invoked in the sweeping process
-          # with (id, kind, tool) — first as a `:reserved` entry the
-          # moment a call slot is spent, then with the request's
+          # with (id, kind, tool) — first as a `:reserved` entry fed
+          # before the call slot is spent, then with the request's
           # disposition (`:invalid` | `:unknown_tool` | `:denied` for the
           # answered-in-claim paths, `:claimed` before the claim marker is
           # published), so a ledger owner holds reconstructible evidence
@@ -849,7 +850,7 @@ defmodule CodingAgent.Tools.ExecuteCode.Rpc do
   # via `:on_claim` — so a sweep that dies mid-flight always leaves enough
   # evidence (marker, ledger, or both) for `recover_orphaned_claims/3` to
   # answer every claimed id, even when the script deletes the marker. The
-  # ledger's reservation entry (fed the moment the call slot is spent,
+  # ledger's reservation entry (fed before the call slot is spent, and
   # before the fate branch) extends the same durability to the answered-in-
   # claim paths: a sweep that dies after ANSWERING such a request leaves a
   # reconstructible record of the spend, so the budget can never re-spend
@@ -1194,7 +1195,7 @@ defmodule CodingAgent.Tools.ExecuteCode.Rpc do
   end
 
   # The host-side claim-ledger hook: one send per entry — the `:reserved`
-  # entry the moment a call slot is spent, then the disposition entry
+  # entry fed before the call slot is spent, then the disposition entry
   # (`:invalid`/`:unknown_tool`/`:denied`/`:claimed`) once the request's
   # fate is known. Must stay cheap and never raise into the claiming path;
   # a broken hook is swallowed like a broken notification forwarder — the

@@ -1160,7 +1160,7 @@ defmodule CodingAgent.Tools.ExecuteCodeRpcTest do
 
     test "a sweep killed between the reservation feed and the spend charges exactly once",
          %{rpc_dir: rpc_dir} do
-      # The pre-feed kill window: the reservation entry is enqueued BEFORE
+      # The feed-to-spend kill window: the reservation entry is enqueued BEFORE
       # the sweep-local spend, so a brutal kill between the two leaves
       # "entry exists, stats never mutated" — the shape settlement
       # reconstructs — instead of losing the spend AND its evidence. The
@@ -1179,15 +1179,18 @@ defmodule CodingAgent.Tools.ExecuteCodeRpcTest do
 
       write_request(rpc_dir, 1, "echo", %{"value" => "never dispatched"})
 
-      sweep = Task.async(fn -> Rpc.process_pending(ctx, Rpc.initial_stats()) end)
-      # Unlinked first so the kill cannot propagate into this test.
-      Process.unlink(sweep.pid)
+      # Spawned unlinked — never Task.async, whose link could deliver the
+      # child's untrappable self-kill into this test process before an
+      # unlink could race to remove it. The monitor is the sole, orderly
+      # death observer.
+      sweep_pid = spawn(fn -> Rpc.process_pending(ctx, Rpc.initial_stats()) end)
+      monitor_ref = Process.monitor(sweep_pid)
 
       assert_receive {:reserved_fed, 1}, 2_000
 
       # The kill is untrappable and lands at the sweep's next instruction
-      # boundary — no monitor race, just wait out the delivery.
-      await_dead(sweep.pid)
+      # boundary; the monitor's DOWN is the deterministic death proof.
+      assert_receive {:DOWN, ^monitor_ref, :process, ^sweep_pid, :killed}, 2_000
 
       # Dead between the feed and the fate branch: nothing was answered,
       # nothing was marked, and the request file survives unconsumed.
@@ -1499,21 +1502,6 @@ defmodule CodingAgent.Tools.ExecuteCodeRpcTest do
         await_pending_gone(approval_id, attempts - 1)
       else
         flunk("pending approval #{approval_id} was never cancelled")
-      end
-    else
-      :ok
-    end
-  end
-
-  # An untrappable self-kill lands at the killed process's next instruction
-  # boundary; poll until the scheduler has observed it.
-  defp await_dead(pid, attempts \\ 400) do
-    if Process.alive?(pid) do
-      if attempts > 0 do
-        Process.sleep(5)
-        await_dead(pid, attempts - 1)
-      else
-        flunk("process #{inspect(pid)} never died")
       end
     else
       :ok

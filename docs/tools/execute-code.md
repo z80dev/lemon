@@ -239,10 +239,11 @@ against a hostile script that deletes or replaces it after the gate. In
 session mode the claim therefore has a **second, host-side half**: the
 `RpcServer` records one ledger entry per **spent call slot** in its own
 process memory — via the pump's `:on_claim` hook, first a `:reserved` entry
-the moment a request passes the replay and call-budget gates, then the
-entry's disposition (`:invalid`/`:unknown_tool`/`:denied` for requests
-answered inside the claim without dispatching, `:claimed` for a
-dispatch-bound request, fed *before* the marker is published, making the
+the moment a request passes the replay and call-budget gates, fed before
+the sweep-local spend itself so no kill can spend a call the ledger cannot
+prove, then the entry's disposition (`:invalid`/`:unknown_tool`/`:denied`
+for requests answered inside the claim without dispatching, `:claimed` for
+a dispatch-bound request, fed *before* the marker is published, making the
 ledger a superset of the published claims) — where the script cannot reach
 it. A sweep that dies mid-wave is recovered from **both halves** by the
 next sweep (or the server's cancel/abnormal-exit path, where no successor
@@ -254,12 +255,17 @@ tool identity — the ledger's name whenever the ledger recorded the id
 (host-owned beats script-writable, so overwriting the marker body cannot
 forge the recorded tool), and the marker's own body only for ids the
 ledger never saw. Reservation entries settle exactly — one call, one error
-or denial, the replay memory, and no response writes — so a contained
-fault after an answered-but-never-dispatched request (invalid, unknown
-tool, policy-denied) can no longer erase that spend and let later sweeps
-exceed `max_calls`; an entry still bare `:reserved` (death between the
-spend and the fate branch) charges the call exactly and counts one error,
-the conservative split of a branch that never ran. A `:claimed` entry with
+or denial, the replay memory — and a disposition entry (`:invalid`,
+`:unknown_tool`, `:denied`) is answered in the settle: recovery writes the
+kind's error via `ensure_answered` whenever no response survives (a
+sweep-written answer is never overwritten), so a contained fault after an
+answered-but-never-dispatched request (invalid, unknown tool,
+policy-denied) can no longer erase that spend and let later sweeps exceed
+`max_calls`; an entry still bare `:reserved` (death between the feed,
+which precedes the spend, and the fate branch) charges the call exactly
+and counts one error, the conservative split of a branch that never ran —
+and writes no response, leaving the request file to the successor sweep's
+replay refusal. A `:claimed` entry with
 neither marker nor response surviving stamps `rpc_accounting_loss: true`:
 the accounting is then a lower bound and the
 cell's result is forced to `trust: :untrusted`. The same flag is stamped
