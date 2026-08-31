@@ -1122,4 +1122,8 @@ When a secret value is an OAuth payload, `LemonAgent.ModelRuntime.Credentials` d
 - Use `async: false` for tests that modify global state (extensions, ETS tables, ProcessManager)
 - `await` and `exec`/`process` tools depend on `ProcessStore` being started; start `ProcessStoreServer` in test setup if needed
 - `ToolRegistry` uses an ETS cache for extensions; call `ToolRegistry.invalidate_extension_cache()` in teardown if tests prime the cache
+- Test-only globally named recorder processes must be unlinked from ExUnit test
+  processes. Reset them with bounded, monitor-confirmed teardown that tolerates a
+  process disappearing concurrently; avoid `whereis` followed by `Agent.stop/1`,
+  which has a check-then-stop `:noproc` race.
 Task-tool normalization is intentionally tolerant of provider variance: if a model supplies a prompt but omits the optional-looking `description` field, `CodingAgent.Tools.Task.Params` derives a short description from the prompt instead of rejecting the task call. Bash-only internal tasks also have a direct fast path for both backticked `Run \`cmd\`` prompts and plain `Run this exact command and return the output: cmd` phrasing so tool-using providers do not pay for a full child session just to execute one shell command.
