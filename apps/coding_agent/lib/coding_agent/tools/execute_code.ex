@@ -1087,10 +1087,12 @@ defmodule CodingAgent.Tools.ExecuteCode do
   defp maybe_full_output(output, _result), do: output
 
   defp session_tool_result(text, result, stats, reset_performed, started_at, opts) do
-    # Trust must never flip to trusted through LOST accounting: when the
-    # RpcServer had to kill a sweep, tools_used is a lower bound (executed
-    # work may be missing from it), so the cell falls back to :untrusted —
-    # the conservative side — instead of trusting by absence of evidence.
+    # Trust must never flip to trusted through LOST accounting: when a sweep
+    # settles without a trustworthy stats return — a brutal kill (abort/stop),
+    # an abnormal exit, or a contained fault — tools_used is a lower bound
+    # (executed work may be missing from it), so the cell falls back to
+    # :untrusted — the conservative side — instead of trusting by absence of
+    # evidence.
     untrusted? =
       Map.get(stats, :accounting_loss) == true or
         MapSet.member?(stats.tools_used, "webfetch")

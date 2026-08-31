@@ -61,13 +61,14 @@ defmodule CodingAgent.Tools.ExecuteCode.RpcServer do
   can write — so a hostile script can delete or replace a marker after the
   pump's publication gate. This server therefore keeps its OWN claim
   evidence: at `init/1` the ctx's `:on_claim` hook is installed to send
-  every ledger event to this process — a `:reserved` entry the moment a
-  request spends its call slot (before its fate branch is taken), then the
-  disposition entry that refines it (`:invalid`, `:unknown_tool`, or
-  `:denied` for requests answered inside the claim without dispatching,
-  `:claimed` for a dispatch-bound claim) — which records it in
-  `pending_claims` BEFORE the pump publishes any marker. Every entry
-  corresponds to exactly one spent call slot, so a sweep that dies holding
+  every ledger event to this process — a `:reserved` entry immediately
+  BEFORE the request's call slot is spent (and before its fate branch is
+  taken), then the disposition entry that refines it (`:invalid`,
+  `:unknown_tool`, or `:denied` for requests answered inside the claim
+  without dispatching, `:claimed` for a dispatch-bound claim) — which
+  records it in `pending_claims` BEFORE the pump publishes any marker.
+  Every entry corresponds to exactly one spent call slot, so a sweep that
+  dies holding
   answered-but-never-dispatched requests is reconstructible too: without
   the reservation entry, a contained fault after such an answer would erase
   the spend and let later sweeps exceed `max_calls`. The ledger is a
@@ -85,7 +86,10 @@ defmodule CodingAgent.Tools.ExecuteCode.RpcServer do
   for. Requests that were already *claimed* when a sweep was cancelled are
   different: the cancel path (and the abnormal-:DOWN path) answers them in
   writing (see `recover_orphaned_claims/3` below) without ever running
-  their tools, and `notify-*.json` frames still on disk are drained on stop
+  their tools — disposition entries (denied, invalid, unknown-tool
+  requests the dead sweep had answered in the claim but not yet on disk)
+  get their kind's error written the same way — and `notify-*.json`
+  frames still on disk are drained on stop
   so a `notify()` issued immediately before the cell ended still reaches
   the conversation.
 
@@ -318,13 +322,15 @@ defmodule CodingAgent.Tools.ExecuteCode.RpcServer do
     schedule_poll(poll_interval_ms)
 
     # The claim ledger hook (the server owns it — never the caller): the
-    # sweeping process feeds every ledger event — the `:reserved` entry the
-    # moment a request spends its call slot, then the disposition entry
-    # (`:invalid`/`:unknown_tool`/`:denied` for answered-in-claim requests,
-    # `:claimed` before the pump publishes its marker) — so this process's
-    # memory holds evidence for every spent call slot that the script
-    # cannot delete. `send/2` from the sweep enqueues immediately, so a
-    # sweep killed anywhere past a spend has already delivered its entry.
+    # sweeping process feeds every ledger event — the `:reserved` entry
+    # immediately BEFORE the request's call slot is spent, then the
+    # disposition entry (`:invalid`/`:unknown_tool`/`:denied` for
+    # answered-in-claim requests, `:claimed` before the pump publishes its
+    # marker) — so this process's memory holds evidence for every spent
+    # call slot that the script cannot delete. `send/2` from the sweep
+    # enqueues immediately, and the feed precedes the spend: a sweep
+    # killed anywhere past the feed has already delivered its entry, and
+    # one killed before it never spent the slot.
     ledger_pid = self()
 
     ctx =

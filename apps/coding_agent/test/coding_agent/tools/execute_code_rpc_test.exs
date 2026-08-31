@@ -1132,11 +1132,12 @@ defmodule CodingAgent.Tools.ExecuteCodeRpcTest do
     test "the claim ledger is fed at reservation time and before the marker is published", %{
       rpc_dir: rpc_dir
     } do
-      # The reservation entry must fire the moment the call slot is spent —
-      # before the request's fate branch — and the `:claimed` refinement
-      # must fire BEFORE the rename: that is what makes the ledger cover
-      # every spent slot (never re-spendable after a fault) and a superset
-      # of the published claims (a sweep killed after the send has already
+      # The reservation entry must fire before the request's fate branch —
+      # fed BEFORE the call slot is spent, so no kill can spend a call the
+      # ledger cannot prove — and the `:claimed` refinement must fire
+      # BEFORE the rename: that is what makes the ledger cover every spent
+      # slot (never re-spendable after a fault) and a superset of the
+      # published claims (a sweep killed after the send has already
       # delivered its entry, whatever the script then does to the marker).
       test = self()
 
@@ -1154,6 +1155,64 @@ defmodule CodingAgent.Tools.ExecuteCodeRpcTest do
       assert_received {:claim_ledger_entry, 1, :reserved, nil, false}
       assert_received {:claim_ledger_entry, 1, :claimed, "echo", false}
       assert %{"id" => 1, "ok" => true, "content" => "served"} = read_response(rpc_dir, 1)
+      assert stats.calls == 1
+    end
+
+    test "a sweep killed between the reservation feed and the spend charges exactly once",
+         %{rpc_dir: rpc_dir} do
+      # The pre-feed kill window: the reservation entry is enqueued BEFORE
+      # the sweep-local spend, so a brutal kill between the two leaves
+      # "entry exists, stats never mutated" — the shape settlement
+      # reconstructs — instead of losing the spend AND its evidence. The
+      # on_claim hook runs in the sweep process itself; killing self()
+      # right after the feed pins the window deterministically, and the
+      # test plays the ledger owner the RpcServer normally plays.
+      test = self()
+
+      ctx =
+        ctx(rpc_dir,
+          on_claim: fn id, :reserved, nil ->
+            send(test, {:reserved_fed, id})
+            Process.exit(self(), :kill)
+          end
+        )
+
+      write_request(rpc_dir, 1, "echo", %{"value" => "never dispatched"})
+
+      sweep = Task.async(fn -> Rpc.process_pending(ctx, Rpc.initial_stats()) end)
+      # Unlinked first so the kill cannot propagate into this test.
+      Process.unlink(sweep.pid)
+
+      assert_receive {:reserved_fed, 1}, 2_000
+
+      # The kill is untrappable and lands at the sweep's next instruction
+      # boundary — no monitor race, just wait out the delivery.
+      await_dead(sweep.pid)
+
+      # Dead between the feed and the fate branch: nothing was answered,
+      # nothing was marked, and the request file survives unconsumed.
+      refute File.exists?(Path.join(rpc_dir, "res-1.json"))
+      assert Path.wildcard(Path.join(rpc_dir, "req-*.claim")) == []
+      assert File.exists?(Path.join(rpc_dir, "req-1.json"))
+
+      # Settlement with the fed entry (what settle_failed_sweep does): one
+      # exact call charge, one conservative error, the replay memory kept.
+      stats =
+        Rpc.recover_orphaned_claims(rpc_dir, Rpc.initial_stats(), %{
+          1 => %{kind: :reserved, tool: nil}
+        })
+
+      assert stats.calls == 1
+      assert stats.errors == 1
+      assert MapSet.to_list(stats.seen_ids) == [1]
+
+      # The leftover request is answered by replay refusal — never
+      # re-dispatched, never re-charged.
+      stats = Rpc.process_pending(ctx(rpc_dir), stats)
+
+      assert %{"id" => 1, "ok" => false, "error" => "rpc request already processed"} =
+               read_response(rpc_dir, 1)
+
       assert stats.calls == 1
     end
 
@@ -1265,9 +1324,11 @@ defmodule CodingAgent.Tools.ExecuteCodeRpcTest do
     test "a denied reservation entry reconstructs exactly and never rewrites its answer", %{
       rpc_dir: rpc_dir
     } do
-      # The dead sweep answered the policy denial before dying; its response
-      # must be left untouched (settlement writes nothing) and the stats it
-      # lost — one call, one denial, the replay memory — re-applied exactly.
+      # The dead sweep answered the policy denial in writing before dying;
+      # settlement re-applies the stats it lost — one call, one denial, the
+      # replay memory — and never overwrites the surviving answer (the
+      # sweep's own wording, with its exact policy reason, beats the
+      # reconstruction).
       File.write!(
         Path.join(rpc_dir, "res-1.json"),
         Jason.encode!(%{"id" => 1, "ok" => false, "error" => "Tool 'webfetch' is in deny list"})
@@ -1291,9 +1352,36 @@ defmodule CodingAgent.Tools.ExecuteCodeRpcTest do
                read_response(rpc_dir, 1)
     end
 
-    test "invalid and unknown-tool reservation entries reconstruct as charged errors", %{
-      rpc_dir: rpc_dir
-    } do
+    test "a denied reservation with no surviving answer writes the denial", %{rpc_dir: rpc_dir} do
+      # The sweep fed the :denied entry and died before its answer write. A
+      # successor sweep would replay-refuse the leftover request, but on
+      # abort there is no successor and the teardown deletes the files — so
+      # recovery itself must write the kind's error and release the caller.
+      # The exact policy reason died with the sweep; the tool-named
+      # fallback wording is the reconstruction.
+      write_request(rpc_dir, 1, "webfetch", %{"url" => "https://example.com"})
+
+      stats =
+        Rpc.recover_orphaned_claims(rpc_dir, Rpc.initial_stats(), %{
+          1 => %{kind: :denied, tool: "webfetch"}
+        })
+
+      assert %{"id" => 1, "ok" => false, "error" => "tool 'webfetch' denied by policy"} =
+               read_response(rpc_dir, 1)
+
+      assert stats.calls == 1
+      assert stats.denied == 1
+      assert stats.errors == 0
+      assert MapSet.to_list(stats.seen_ids) == [1]
+      refute Map.get(stats, :accounting_loss)
+    end
+
+    test "invalid and unknown-tool reservation entries reconstruct as charged, answered errors",
+         %{rpc_dir: rpc_dir} do
+      # The sweep fed each disposition entry and died before its answer
+      # write. On abort nobody else would answer these ids, so recovery
+      # writes the kind's own error — exact wording — and charges exactly
+      # one call, one error, and the replay memory per id.
       stats =
         Rpc.recover_orphaned_claims(rpc_dir, Rpc.initial_stats(), %{
           1 => %{kind: :invalid, tool: nil},
@@ -1305,17 +1393,25 @@ defmodule CodingAgent.Tools.ExecuteCodeRpcTest do
       assert stats.denied == 0
       assert MapSet.to_list(stats.seen_ids) == [1, 2]
       refute Map.get(stats, :accounting_loss)
-      # Answered-in-claim paths never dispatched: no responses are written.
-      refute File.exists?(Path.join(rpc_dir, "res-1.json"))
-      refute File.exists?(Path.join(rpc_dir, "res-2.json"))
+
+      assert %{"id" => 1, "ok" => false, "error" => "invalid rpc request"} =
+               read_response(rpc_dir, 1)
+
+      assert %{
+               "id" => 2,
+               "ok" => false,
+               "error" => "tool 'nosuch' is not available inside execute_code scripts"
+             } =
+               read_response(rpc_dir, 2)
     end
 
     test "a bare reserved entry charges its call slot and a surviving request is replay-refused",
          %{rpc_dir: rpc_dir} do
-      # The sweep died between spending the call slot and taking the fate
-      # branch: the entry still carries the spend, and the request file the
-      # fault left behind must be answered by replay refusal — never
-      # re-charged, never dispatched.
+      # The sweep died between feeding the reservation entry and taking the
+      # fate branch: the entry still carries the spend, and the request file
+      # the fault left behind must be answered by replay refusal — never
+      # re-charged, never dispatched. A bare entry never writes a response
+      # of its own: it does not say the sweep answered anything.
       write_request(rpc_dir, 1, "echo", %{"value" => "straggler"})
 
       stats =
@@ -1403,6 +1499,21 @@ defmodule CodingAgent.Tools.ExecuteCodeRpcTest do
         await_pending_gone(approval_id, attempts - 1)
       else
         flunk("pending approval #{approval_id} was never cancelled")
+      end
+    else
+      :ok
+    end
+  end
+
+  # An untrappable self-kill lands at the killed process's next instruction
+  # boundary; poll until the scheduler has observed it.
+  defp await_dead(pid, attempts \\ 400) do
+    if Process.alive?(pid) do
+      if attempts > 0 do
+        Process.sleep(5)
+        await_dead(pid, attempts - 1)
+      else
+        flunk("process #{inspect(pid)} never died")
       end
     else
       :ok

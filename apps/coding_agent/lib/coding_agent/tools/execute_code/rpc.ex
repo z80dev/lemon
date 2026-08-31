@@ -62,11 +62,13 @@ defmodule CodingAgent.Tools.ExecuteCode.Rpc do
   marker is therefore only HALF the claim evidence. The other half is the
   host-side claim ledger: when the ctx carries `:on_claim`, the sweeping
   process feeds it one entry per spent call slot — first a `:reserved`
-  entry the moment a request passes the replay and call-budget gates and
-  owes a call (before its fate branch is even taken), then a disposition
-  entry refining it: `:invalid`, `:unknown_tool`, or `:denied` for the
-  requests answered inside the claim (never dispatched), and `:claimed`
-  for the dispatch-bound path, sent BEFORE the marker is published. The
+  entry the moment a request passes the replay and call-budget gates, fed
+  BEFORE the sweep-local spend itself so no kill can spend a call the
+  ledger cannot prove (and before the request's fate branch is even
+  taken), then a disposition entry refining it: `:invalid`,
+  `:unknown_tool`, or `:denied` for the requests answered inside the
+  claim (never dispatched), and `:claimed` for the dispatch-bound path,
+  sent BEFORE the marker is published. The
   ledger owner (the RpcServer, which keeps the entries in its own process
   state — memory the script cannot reach) holds them until the sweep's
   fate is decided. Every entry corresponds to exactly one spent call slot,
@@ -96,16 +98,21 @@ defmodule CodingAgent.Tools.ExecuteCode.Rpc do
   whose response is gone marks `accounting_loss: true` in the returned
   stats: the tool may have executed with side effects no surviving
   evidence can account for, so everything in those stats is a lower bound.
-  Reservation entries settle exactly instead: an answered-path entry
-  re-applies the mutations the dead sweep's stats lost — one call, one
-  error or denial, the replay memory — and writes NO response (the answer
-  predates the entry; a request file the fault left unconsumed is answered
-  by the next sweep's replay refusal). An entry still bare `:reserved`
-  (the sweep died between reserving and its fate branch) charges the call
-  and the replay memory exactly and counts one error — the error-vs-denial
-  split of a branch that never ran is unknowable, and `errors` is the
-  conservative choice; the call budget is exact either way. Every sweep
-  starts with recovery, so a killed sweep's claimed ids always end
+  Reservation entries settle exactly instead: a DISPOSITION entry
+  (`:invalid`, `:unknown_tool`, `:denied`) was fed before its answer
+  write, so a sweep killed in that window answered in the ledger but not
+  on disk — settlement re-applies the mutations the dead sweep's stats
+  lost (one call, one error or denial, the replay memory) and writes the
+  kind's error response, never over a surviving one, because on abort no
+  successor sweep exists to replay-refuse the leftover request and the
+  server teardown deletes it: a caller blocked on that id must be
+  released. An entry still bare `:reserved` (the sweep died between
+  feeding the reservation and its fate branch) charges the call and the
+  replay memory exactly and counts one error — the error-vs-denial split
+  of a branch that never ran is unknowable, and `errors` is the
+  conservative choice; the call budget is exact either way — and writes
+  no response (a bare entry does not say the sweep answered anything).
+  Every sweep starts with recovery, so a killed sweep's claimed ids always end
   answered — answered in writing, never re-dispatched, so a cancelled
   request still never executes its tool, and a replayed id is refused by
   the reconstructed replay memory even when its marker was destroyed. A
@@ -283,10 +290,10 @@ defmodule CodingAgent.Tools.ExecuteCode.Rpc do
   The sweep first recovers claim markers a previous sweep left behind (see
   `recover_orphaned_claims/3`) and then consumes `notify-*.json` frames under
   the stats' per-run forwarding cap. When the ctx carries `:on_claim`, every
-  spent call slot is recorded with it — a `:reserved` entry first, then the
-  request's disposition, with dispatch-bound claims recorded before their
-  markers are published — the persistent server's claim ledger (see its
-  moduledoc).
+  spent call slot is recorded with it — a `:reserved` entry first, fed
+  before the slot is spent, then the request's disposition, with
+  dispatch-bound claims recorded before their markers are published — the
+  persistent server's claim ledger (see its moduledoc).
 
   This is the shared polling entry point for the persistent-cell RPC server.
   """
@@ -354,10 +361,14 @@ defmodule CodingAgent.Tools.ExecuteCode.Rpc do
   longer be reconstructed and the stats are a lower bound (consumers must
   treat that conservatively; ExecuteCode forces `trust: :untrusted`).
   Reservation entries settle exactly instead — one call, one error or
-  denial, the replay memory, and no response writes — so a sweep that dies
-  after ANSWERING a request without dispatching it (invalid, unknown tool,
-  policy-denied) still spends exactly one budget slot; see the moduledoc
-  for the bare-`:reserved` fallback.
+  denial, and the replay memory — so a sweep that dies after ANSWERING a
+  request without dispatching it (invalid, unknown tool, policy-denied)
+  still spends exactly one budget slot. Disposition entries additionally
+  write their kind's error response, never over a surviving one: the
+  entry was fed before the answer write, and on abort no successor sweep
+  exists to replay-refuse the leftover request. A bare `:reserved` entry
+  writes no response — it does not say the sweep answered anything; see
+  the moduledoc for that fallback.
 
   Charging is exactly-once: the id is recorded in the stats' replay memory
   when its debt is paid, and a marker that survives its own deletion (the
@@ -427,28 +438,50 @@ defmodule CodingAgent.Tools.ExecuteCode.Rpc do
        when is_binary(tool),
        do: recover_ledger_claim(rpc_dir, id, tool, stats)
 
-  # A denied reservation: the dead sweep answered the denial before dying,
-  # so the only debt is the stats that died with it — one spent call, one
-  # denial, the replay memory. No response is written (the answer predates
-  # the entry); a request file the fault left unconsumed is answered by the
-  # next sweep's replay refusal.
-  defp recover_ledger_entry(_rpc_dir, id, %{kind: :denied}, stats) do
+  # A denied reservation: the disposition entry was fed BEFORE the denial
+  # was written, so a sweep killed in that window answered in the ledger
+  # but not on disk. Write the denial now — only when no response
+  # survives, so the sweep's own answer (with its exact policy reason) is
+  # never overwritten — because on abort no successor sweep exists to
+  # replay-refuse the leftover request file. The stats debt is exactly one
+  # spent call, one denial, and the replay memory; the exact policy reason
+  # died with the sweep, so the tool-named fallback the sweep itself uses
+  # is the reconstruction.
+  defp recover_ledger_entry(rpc_dir, id, %{kind: :denied, tool: tool}, stats) do
+    ensure_answered(rpc_dir, id, denied_error(tool))
+
     stats
     |> Map.update!(:calls, &(&1 + 1))
     |> Map.update!(:denied, &(&1 + 1))
     |> remember_id(id)
   end
 
-  # An error-settled reservation (`:invalid`, `:unknown_tool`) or one still
-  # bare `:reserved` (the sweep died between spending the slot and taking
-  # the fate branch): the call slot and the replay memory are certain, so
-  # charge them exactly. The error count is exact for the settled kinds;
-  # for a bare `:reserved` the error-vs-denial split of a branch that never
-  # ran is unknowable, and `errors` is the conservative choice — the call
-  # budget is exact either way.
-  defp recover_ledger_entry(_rpc_dir, id, %{kind: kind}, stats)
-       when kind in [:invalid, :unknown_tool, :reserved],
-       do: charge_error_reservation(stats, id)
+  # An error-settled reservation (`:invalid`, `:unknown_tool`): the same
+  # fed-before-the-write shape as the denial above — the kind's error is
+  # written (only when absent), and the call slot, one error, and the
+  # replay memory are charged exactly.
+  defp recover_ledger_entry(rpc_dir, id, %{kind: :invalid}, stats) do
+    ensure_answered(rpc_dir, id, @invalid_request_error)
+    charge_error_reservation(stats, id)
+  end
+
+  defp recover_ledger_entry(rpc_dir, id, %{kind: :unknown_tool, tool: tool}, stats) do
+    ensure_answered(rpc_dir, id, unknown_tool_error(tool))
+    charge_error_reservation(stats, id)
+  end
+
+  # A reservation still bare `:reserved` — the sweep died between feeding
+  # the entry and its fate branch, including between the feed and the
+  # sweep-local spend itself (the window the feed-first ordering in
+  # `claim_authenticated/6` closes): the call slot and the replay memory
+  # are certain, so charge them exactly. The error-vs-denial split of a
+  # branch that never ran is unknowable, and `errors` is the conservative
+  # choice — the call budget is exact either way. NO response is written:
+  # unlike the disposition kinds, a bare entry does not say the sweep
+  # answered anything, so the request file belongs to the successor
+  # sweep's replay refusal (or the abort teardown).
+  defp recover_ledger_entry(_rpc_dir, id, %{kind: :reserved}, stats),
+    do: charge_error_reservation(stats, id)
 
   # A ledger owner speaking a different contract version must not crash
   # recovery (the server would keep the pre-sweep snapshot and re-open the
@@ -456,6 +489,23 @@ defmodule CodingAgent.Tools.ExecuteCode.Rpc do
   # reservation charge.
   defp recover_ledger_entry(_rpc_dir, id, _entry, stats),
     do: charge_error_reservation(stats, id)
+
+  # The exact wording of the answered-in-claim errors, shared by the claim
+  # path and disposition recovery so a reconstructed answer can never
+  # drift from the one a live sweep writes. A denial's policy-specific
+  # reason is NOT reconstructible (the policy lives in the ctx, not the
+  # entry), so recovery falls back to the tool-named wording the sweep
+  # itself uses.
+  defp unknown_tool_error(tool_name) when is_binary(tool_name),
+    do: "tool '#{tool_name}' is not available inside execute_code scripts"
+
+  defp unknown_tool_error(_tool_name),
+    do: "tool is not available inside execute_code scripts"
+
+  defp denied_error(tool_name) when is_binary(tool_name),
+    do: "tool '#{tool_name}' denied by policy"
+
+  defp denied_error(_tool_name), do: "rpc tool call denied by policy"
 
   defp charge_error_reservation(stats, id) do
     stats
@@ -913,10 +963,16 @@ defmodule CodingAgent.Tools.ExecuteCode.Rpc do
     end
   end
 
-  # The answer a dead sweep owed, written only when nobody answered yet.
-  defp ensure_answered(rpc_dir, id) do
+  # The answer a dead sweep owed, written only when nobody answered yet —
+  # a surviving response (the sweep's own, with its exact wording) always
+  # wins. Defaults to the interrupted error; disposition recovery passes
+  # the kind's own message, so a caller blocked on an id whose sweep died
+  # between the disposition feed and its answer write is released with
+  # the answer the sweep meant to write (on abort there is no successor
+  # sweep to replay-refuse the leftover request).
+  defp ensure_answered(rpc_dir, id, message \\ @interrupted_error) do
     unless response_present?(response_path(rpc_dir, id)) do
-      write_response(rpc_dir, id, %{"id" => id, "ok" => false, "error" => @interrupted_error})
+      write_response(rpc_dir, id, %{"id" => id, "ok" => false, "error" => message})
     end
 
     :ok
@@ -1041,15 +1097,22 @@ defmodule CodingAgent.Tools.ExecuteCode.Rpc do
         {stats |> remember_id(id) |> increment_errors(), claimed}
 
       true ->
-        stats = stats |> remember_id(id) |> Map.update!(:calls, &(&1 + 1))
-
-        # The reservation entry: from this moment the request owes one call
-        # slot whatever branch it takes — dispatched, denied, or answered as
-        # invalid — and those stats mutations die with the sweep if it
-        # faults before returning them. The entry is what makes the spend
-        # reconstructible; the disposition entries below refine it once the
+        # Feed-first ordering: the reservation entry is enqueued to the
+        # ledger owner BEFORE the sweep-local spend runs, so no kill can
+        # spend a call slot the ledger cannot prove. The only kill shapes
+        # are both exact — dead before the send (nothing happened: no
+        # charge, no entry, the request file remains for the successor
+        # sweep) and dead after it (entry exists, stats never mutated:
+        # settlement charges the bare reservation exactly once). The send
+        # enqueues immediately, nothing between it and the spend can raise
+        # (`remember_id/2` and `Map.update!/2` are total on the host-owned
+        # stats), and a sweep that RETURNS settles its entries by its own
+        # stats — the ledger only ever charges a sweep that died. The
+        # disposition entries below refine the reservation once the fate
         # branch is known.
         notify_ledger(ctx, id, :reserved, nil)
+
+        stats = stats |> remember_id(id) |> Map.update!(:calls, &(&1 + 1))
 
         case parse_call(body) do
           {:ok, tool_name, params} ->
@@ -1081,14 +1144,14 @@ defmodule CodingAgent.Tools.ExecuteCode.Rpc do
     cond do
       not Map.has_key?(ctx.tools, tool_name) ->
         notify_ledger(ctx, id, :unknown_tool, tool_name)
-        respond_error(ctx, id, "tool '#{tool_name}' is not available inside execute_code scripts")
+        respond_error(ctx, id, unknown_tool_error(tool_name))
         consume_request(request)
         {increment_errors(stats), claimed}
 
       denied_by_policy?(ctx.tool_policy, tool_name) ->
         reason =
           ToolPolicy.denial_reason(ctx.tool_policy, tool_name) ||
-            "tool '#{tool_name}' denied by policy"
+            denied_error(tool_name)
 
         notify_ledger(ctx, id, :denied, tool_name)
         respond_error(ctx, id, reason)
@@ -1251,8 +1314,13 @@ defmodule CodingAgent.Tools.ExecuteCode.Rpc do
   # The approval id was allocated at claim time (in the sweeping process,
   # before this task existed), so it always names this one prompt: the wrapper
   # hands the id to the request function, and the watcher below cancels that
-  # id when the process owning the prompt dies. No approval prompt may
-  # outlive the script that triggered it.
+  # id after EACH monitored death. Prompts die with their dispatch task,
+  # which dies with its sweep because trap_exit is forced off on entry —
+  # with exactly one boundary, as the moduledoc states: tool code on the
+  # approval path that re-enables trap_exit AFTER entry keeps its task
+  # (and its prompt) alive past the sweep's death until some other kill
+  # ends it; adversarial behavior, not a supported mode, and the watcher
+  # still reaps the prompt once that task dies.
   defp approval_context(nil, _claim, _sweep_pid), do: %{}
 
   defp approval_context(context, claim, sweep_pid) when is_map(context) do
