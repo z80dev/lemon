@@ -212,6 +212,12 @@ defmodule CodingAgent.Tools.ExecuteCode.RpcServer do
   The map is the shared pump's opaque stats (`calls`, `denied`, `errors`,
   `bytes`, `tools_used`, plus the pump's private replay-tracking state); it
   can be handed to the cell's result details unchanged.
+
+  A stats map may carry one server-added key: `:accounting_loss => true` is
+  stamped when a sweep had to be brutally killed — work the killed sweep
+  dispatched and answered without leaving a claim marker can no longer be
+  reconstructed, so the accounting is a lower bound. Consumers must treat
+  that conservatively (ExecuteCode forces `trust: :untrusted`).
   """
   @spec stats(GenServer.server(), timeout()) :: Rpc.stats()
   def stats(server, timeout \\ @stats_timeout_ms) do
@@ -316,8 +322,9 @@ defmodule CodingAgent.Tools.ExecuteCode.RpcServer do
     # A notify() issued immediately before the cell ended must still reach
     # the conversation; the stop path is the persistent mode's final drain.
     # (Notifications only — requests are deliberately never drained, see the
-    # moduledoc.)
-    drain_final_notifications(state)
+    # moduledoc.) The drain's returned stats — its forwarded counts — become
+    # the final stats.
+    state = drain_final_notifications(state)
     cleanup_files(state.ctx.rpc_dir)
     :ok
   end
@@ -347,24 +354,52 @@ defmodule CodingAgent.Tools.ExecuteCode.RpcServer do
       stats
   end
 
+  # a small grace yield before the brutal kill covers the common "done but not
+  # yet delivered" window. Only a genuinely killed sweep loses stats — that
+  # path reconstructs what the markers can prove and flags the rest as lost.
+  @sweep_cancel_grace_ms 25
+
   defp cancel_sweep(%{sweep_task: nil} = state), do: state
 
   defp cancel_sweep(%{sweep_task: task} = state) do
-    case Task.yield(task, 0) do
+    case Task.yield(task, @sweep_cancel_grace_ms) do
       {:ok, stats} when is_map(stats) ->
-        %{state | stats: stats, sweep_task: nil}
+        # The sweep completed: its markers are retired and every response is
+        # published, so its stats are the truth. Recovery would find nothing,
+        # but run it anyway — stale markers from an even earlier sweep are
+        # still answered here because no successor poll may exist.
+        state = %{state | stats: stats, sweep_task: nil}
+        %{state | stats: recover_claims(state)}
 
-      _still_running ->
-        _ = Task.shutdown(task, :brutal_kill)
+      _miss ->
+        case Task.shutdown(task, :brutal_kill) do
+          # Finished between the yield miss and the kill: same as above.
+          {:ok, stats} when is_map(stats) ->
+            state = %{state | stats: stats, sweep_task: nil}
+            %{state | stats: recover_claims(state)}
 
-        # The killed sweep can no longer answer the requests it claimed, and
-        # after an abort no successor sweep will run either (the server stops
-        # polling); pay its debts here so every claimed id ends answered and
-        # its call reservations survive in the final stats.
-        stats = recover_claims(state)
+          _killed ->
+            # The killed sweep can no longer answer the requests it claimed,
+            # and after an abort no successor sweep will run either (the
+            # server stops polling); pay its debts here so every claimed id
+            # ends answered and its call reservations survive in the final
+            # stats. Ids the markers cannot prove (answered but never
+            # accounted) are unknowable now: flag the loss so the trust
+            # classification falls back to untrusted instead of trusted.
+            state = mark_accounting_loss(state)
 
-        %{state | stats: stats, sweep_task: nil}
+            %{state | stats: recover_claims(state), sweep_task: nil}
+        end
     end
+  end
+
+  # The stats stay opaque to this server, but it owns the value it hands
+  # out, so it stamps its own conservative marker on it: executed work may
+  # be missing from these stats. ExecuteCode reads the flag to force
+  # `trust: :untrusted` — lost accounting must never classify network work
+  # as trusted.
+  defp mark_accounting_loss(%{stats: stats} = state) do
+    %{state | stats: Map.put(stats, :accounting_loss, true)}
   end
 
   # Same containment discipline as `sweep/3`: a broken pump must not take
@@ -385,17 +420,18 @@ defmodule CodingAgent.Tools.ExecuteCode.RpcServer do
   end
 
   defp drain_final_notifications(state) do
-    _ = state.rpc.drain_notifications(state.ctx, state.stats)
-    :ok
+    # The drained counts are the cell's last stats update: keep them, so
+    # notify_forwarded (and anything else the drain accounts) is not
+    # undercounted on stop.
+    %{state | stats: state.rpc.drain_notifications(state.ctx, state.stats)}
   rescue
     error ->
       Logger.warning("execute_code rpc notification drain failed (#{inspect(error.__struct__)})")
-
-      :ok
+      state
   catch
     kind, _value ->
       Logger.warning("execute_code rpc notification drain failed (#{kind})")
-      :ok
+      state
   end
 
   defp abort_signal(nil), do: :ok

@@ -174,6 +174,17 @@ defmodule CodingAgent.Tools.ExecuteCode.PythonShim do
             raise
         os.replace(tmp, final)
 
+    def _json_safe(s):
+        # The host must be able to decode every frame this module writes and
+        # re-encode its text into the conversation. Lone surrogates are legal
+        # Python str contents but not valid UTF-8, so they are replaced with
+        # U+FFFD before the frame is built: an in-budget block can never be
+        # silently dropped by the host for being undecodable.
+        try:
+            return s.encode("utf-8").decode("utf-8")
+        except UnicodeEncodeError:
+            return s.encode("utf-8", "surrogatepass").decode("utf-8", "replace")
+
 
     def text(s):
         # Result channel: each block is flushed to disk as it is written
@@ -184,14 +195,16 @@ defmodule CodingAgent.Tools.ExecuteCode.PythonShim do
             s = ""
         elif not isinstance(s, str):
             s = str(s)
+        s = _json_safe(s)
         bridge = _live_bridge()
         with _LOCK:
             seq = bridge.text_seq + 1
             frame = {"n": seq, "text": s}
             # Charge the encoded frame — exactly the bytes json.dump writes
             # to disk — so the script-side budget and the host-side size
-            # check always agree, whatever JSON escaping expands the text to.
-            encoded = len(json.dumps(frame))
+            # check and byte charge always agree, whatever JSON escaping
+            # expands the text to. The host charges the same file body.
+            encoded = len(json.dumps(frame).encode("utf-8"))
             if bridge.text_bytes + encoded > bridge.budget:
                 raise ToolError(
                     "text() byte budget exceeded (%d bytes accumulated, %d more requested, cap %d)"
@@ -204,10 +217,13 @@ defmodule CodingAgent.Tools.ExecuteCode.PythonShim do
 
     def notify(msg):
         # Streaming side channel: fire-and-forget, never blocks for a reply.
+        # Same normalization as text(): the frame must be decodable by the
+        # host, and its message must be re-encodable into the conversation.
         if msg is None:
             msg = ""
         elif not isinstance(msg, str):
             msg = str(msg)
+        msg = _json_safe(msg)
         bridge = _live_bridge()
         with _LOCK:
             bridge.notify_seq += 1

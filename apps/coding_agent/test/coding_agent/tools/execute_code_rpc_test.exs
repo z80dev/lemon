@@ -532,7 +532,11 @@ defmodule CodingAgent.Tools.ExecuteCodeRpcTest do
       write_text_block(rpc_dir, 1, "0123456789")
       write_text_block(rpc_dir, 2, "0123456789")
 
-      assert Rpc.read_text_blocks(rpc_dir, max_text_bytes: 10) == ["0123456789"]
+      # The budget charges the ENCODED frame (the JSON envelope included),
+      # exactly like the shim: one frame fits, the second does not.
+      one_frame = Path.join(rpc_dir, "text-1.json") |> File.read!() |> byte_size()
+
+      assert Rpc.read_text_blocks(rpc_dir, max_text_bytes: one_frame) == ["0123456789"]
     end
   end
 
@@ -878,13 +882,17 @@ defmodule CodingAgent.Tools.ExecuteCodeRpcTest do
       refute_received {:inflight, _value, _pid}
     end
 
-    test "an in-flight claim marker next to a published response is only cleaned up", %{
-      rpc_dir: rpc_dir
-    } do
+    test "an in-flight claim marker next to a published response restores the real accounting",
+         %{
+           rpc_dir: rpc_dir
+         } do
       write_request(rpc_dir, 1, "echo", %{"value" => "served"})
 
       # The response was published but the sweep died before retiring the
-      # marker: recovery must keep the answer and only remove the evidence.
+      # marker: recovery must keep the answer and restore the REAL
+      # accounting — the ok status, the result bytes, and the tool usage
+      # (the marker is the renamed request, so it still names the tool) —
+      # instead of inventing an error the script never saw.
       File.rename!(Path.join(rpc_dir, "req-1.json"), Path.join(rpc_dir, "req-1.claim"))
 
       File.write!(
@@ -897,8 +905,114 @@ defmodule CodingAgent.Tools.ExecuteCodeRpcTest do
       assert %{"id" => 1, "ok" => true, "content" => "served"} = read_response(rpc_dir, 1)
       assert Path.wildcard(Path.join(rpc_dir, "req-*.claim")) == []
       assert stats.calls == 1
-      assert stats.errors == 1
+      assert stats.errors == 0
+      assert stats.bytes == byte_size("served")
+      assert MapSet.to_list(stats.tools_used) == ["echo"]
       assert MapSet.to_list(stats.seen_ids) == [1]
+    end
+
+    test "a planted directory at a claim marker name is ignored, never charged", %{
+      rpc_dir: rpc_dir
+    } do
+      File.mkdir_p!(Path.join(rpc_dir, "req-1.claim"))
+      File.mkdir_p!(Path.join(rpc_dir, "req-not-a-number.claim"))
+
+      stats = Rpc.recover_orphaned_claims(rpc_dir, Rpc.initial_stats())
+
+      # Directories are not markers: nothing is answered, nothing is
+      # charged, nothing is written — and no sweep re-examines them as debt.
+      assert stats.calls == 0
+      assert stats.errors == 0
+      assert MapSet.to_list(stats.seen_ids) == []
+      refute File.exists?(Path.join(rpc_dir, "res-1.json"))
+      assert File.dir?(Path.join(rpc_dir, "req-1.claim"))
+      assert File.dir?(Path.join(rpc_dir, "req-not-a-number.claim"))
+    end
+
+    test "a planted directory at the marker name answers the id and never dispatches", %{
+      rpc_dir: rpc_dir
+    } do
+      File.mkdir_p!(Path.join(rpc_dir, "req-1.claim"))
+      write_request(rpc_dir, 1, "order", %{"value" => "no dispatch", "id" => 1})
+
+      stats = Rpc.process_pending(ctx(rpc_dir), Rpc.initial_stats())
+
+      # Publication is the dispatch gate: the tool never ran, the call slot
+      # the claim already reserved is spent, and the id is answered.
+      assert %{"id" => 1, "ok" => false, "error" => "rpc dispatch could not be marked in-flight"} =
+               read_response(rpc_dir, 1)
+
+      refute_receive {:ordered, 1}, 25
+      assert stats.calls == 1
+      assert stats.errors == 1
+      assert File.dir?(Path.join(rpc_dir, "req-1.claim"))
+      refute File.exists?(Path.join(rpc_dir, "req-1.json"))
+    end
+
+    test "a symlinked request becomes a non-marker and is answered, never dispatched", %{
+      rpc_dir: rpc_dir
+    } do
+      real =
+        Path.join(Path.dirname(rpc_dir), "real-req-#{System.unique_integer([:positive])}.json")
+
+      File.write!(
+        real,
+        Jason.encode!(%{
+          "id" => 1,
+          "token" => @token,
+          "tool" => "order",
+          "params" => %{"value" => "no dispatch", "id" => 1}
+        })
+      )
+
+      on_exit(fn -> File.rm(real) end)
+      File.ln_s!(real, Path.join(rpc_dir, "req-1.json"))
+
+      stats = Rpc.process_pending(ctx(rpc_dir), Rpc.initial_stats())
+
+      # The rename publishes a symlink, not a regular file: recovery would
+      # never trust it, so dispatch is refused and the id answered.
+      assert %{"id" => 1, "ok" => false, "error" => "rpc dispatch could not be marked in-flight"} =
+               read_response(rpc_dir, 1)
+
+      refute_receive {:ordered, 1}, 25
+      assert stats.calls == 1
+      assert stats.errors == 1
+      assert Path.wildcard(Path.join(rpc_dir, "req-*")) == []
+    end
+
+    test "a marker whose deletion fails is never re-charged by a later sweep", %{
+      rpc_dir: rpc_dir
+    } do
+      write_request(rpc_dir, 1, "echo", %{"value" => "served"})
+
+      File.rename!(Path.join(rpc_dir, "req-1.json"), Path.join(rpc_dir, "req-1.claim"))
+
+      File.write!(
+        Path.join(rpc_dir, "res-1.json"),
+        Jason.encode!(%{"id" => 1, "ok" => true, "content" => "served"})
+      )
+
+      # Without write permission on the rpc dir the marker cannot be
+      # deleted: recovery still charges once (reads work), the marker stays.
+      File.chmod!(rpc_dir, 0o500)
+      stats = Rpc.recover_orphaned_claims(rpc_dir, Rpc.initial_stats())
+      File.chmod!(rpc_dir, 0o700)
+
+      assert stats.calls == 1
+      assert stats.bytes == byte_size("served")
+      assert stats.errors == 0
+      assert File.exists?(Path.join(rpc_dir, "req-1.claim"))
+
+      # The next sweep sees the surviving marker, but the id is already in
+      # the replay memory: cleanup only — the budget is never re-charged.
+      stats = Rpc.recover_orphaned_claims(rpc_dir, stats)
+
+      assert stats.calls == 1
+      assert stats.bytes == byte_size("served")
+      assert stats.errors == 0
+      assert Path.wildcard(Path.join(rpc_dir, "req-*.claim")) == []
+      assert %{"ok" => true, "content" => "served"} = read_response(rpc_dir, 1)
     end
 
     test "killing a sweep cancels its pending approval so no late approval can install policy",
@@ -924,10 +1038,81 @@ defmodule CodingAgent.Tools.ExecuteCodeRpcTest do
       assert_receive {:DOWN, ^monitor, :process, _pid, :killed}, 2_000
 
       # The claim's watcher cancels the orphaned prompt: the pending record
-      # disappears, so the prompt cannot be approved later.
+      # disappears, so a late approval LOSES the atomic transition and can
+      # install no policy.
       assert :ok = await_no_pending(run_id)
 
-      :ok = LemonCore.ExecApprovals.resolve(approval_id, :approve_global)
+      assert {:error, :not_pending} =
+               LemonCore.ExecApprovals.resolve(approval_id, :approve_global)
+
+      assert ExecApprovalStore.list_global_policies()
+             |> Enum.reject(fn {{tool, _hash}, _value} -> tool != "echo" end)
+             |> Enum.empty?()
+    end
+
+    test "a prompt registered after the sweep died cannot be orphaned", %{rpc_dir: rpc_dir} do
+      run_id = "rpc-watcher-#{System.unique_integer([:positive])}"
+      test = self()
+
+      ctx =
+        ctx(rpc_dir,
+          tool_policy: ToolPolicy.custom(require_approval: ["echo"]),
+          approval_context: %{
+            run_id: run_id,
+            session_key: "watcher-session",
+            approval_request_fun: fn params ->
+              # Deliberately subvert teardown by outliving the sweep (the
+              # watcher cannot rely on the task dying with it), then
+              # register the prompt AFTER the watcher's first cancel has
+              # already found nothing — the exact register-after-cancel
+              # interleaving the watcher must close.
+              Process.flag(:trap_exit, true)
+              send(test, {:approval_path, params[:approval_id], self()})
+
+              receive(do: (:register -> :ok))
+
+              ExecApprovalStore.put_pending(params[:approval_id], %{
+                "id" => params[:approval_id],
+                "tool" => "echo",
+                "run_id" => run_id
+              })
+
+              send(test, :registered)
+              receive(do: (:finish -> :ok))
+            end
+          }
+        )
+
+      write_request(rpc_dir, 1, "echo", %{"value" => "gated"})
+
+      sweep = Task.async(fn -> Rpc.process_pending(ctx, Rpc.initial_stats()) end)
+
+      {approval_id, task_pid} =
+        receive do
+          {:approval_path, id, pid} -> {id, pid}
+        after
+          5_000 -> flunk("the approval path never ran")
+        end
+
+      # Kill the sweep first: the watcher's first cancel finds nothing,
+      # because the registration is still parked in the receive above.
+      Process.unlink(sweep.pid)
+      monitor = Process.monitor(sweep.pid)
+      Process.exit(sweep.pid, :kill)
+      assert_receive {:DOWN, ^monitor, :process, _pid, :killed}, 2_000
+
+      # The trapped dispatch task survives and registers the prompt late...
+      send(task_pid, :register)
+      assert_receive :registered, 2_000
+      assert ExecApprovalStore.get_pending(approval_id) != nil
+
+      # ...and only then dies. The watcher has stayed alive for exactly this
+      # death; its second cancel must remove the late-registered prompt.
+      Process.exit(task_pid, :kill)
+      assert :ok = await_pending_gone(approval_id)
+
+      assert {:error, :not_pending} =
+               LemonCore.ExecApprovals.resolve(approval_id, :approve_global)
 
       assert ExecApprovalStore.list_global_policies()
              |> Enum.reject(fn {{tool, _hash}, _value} -> tool != "echo" end)
@@ -991,6 +1176,19 @@ defmodule CodingAgent.Tools.ExecuteCodeRpcTest do
           }
         end)
     }
+  end
+
+  defp await_pending_gone(approval_id, attempts \\ 400) do
+    if ExecApprovalStore.get_pending(approval_id) != nil do
+      if attempts > 0 do
+        Process.sleep(5)
+        await_pending_gone(approval_id, attempts - 1)
+      else
+        flunk("pending approval #{approval_id} was never cancelled")
+      end
+    else
+      :ok
+    end
   end
 
   defp stub_tool(name, fun) do

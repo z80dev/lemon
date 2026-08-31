@@ -182,12 +182,15 @@ module-level functions:
   never deferred to exit), so everything written before a timeout or abort kill
   still reaches the tool result. Blocks are lock-guarded, so they are safe from
   `batch()` worker threads, and the total emitted bytes are capped at
-  `max_text_bytes` (default 64 KiB). The cap charges the **JSON-encoded frame**
-  — exactly the bytes `json.dump` writes to disk, escaping included — so a
-  NUL-heavy string that six-folds under `\u0000` escaping is refused by the same
-  budget the host enforces on the file, never written by one side and silently
-  dropped by the other. An over-budget call raises `ToolError` while the blocks
-  already flushed stay in the result. Non-strings are `str()`-coerced.
+`max_text_bytes` (default 64 KiB). The cap charges the **JSON-encoded frame**
+— exactly the bytes `json.dump` writes to disk, escaping included — on both
+sides of the bridge: the shim charges what it is about to write and the host
+charges the file body it actually reads, so a NUL-heavy string that six-folds
+under `\u0000` escaping is refused by the same budget on both sides, and an
+in-budget block is always delivered. The payload is normalized first (lone
+surrogates become U+FFFD), so every frame the shim writes is valid JSON the
+host can decode. An over-budget call raises `ToolError` while the blocks
+already flushed stay in the result. Non-strings are `str()`-coerced.
 - **`notify(msg)`** — a fire-and-forget streaming side channel. The pump
   consumes `notify-<n>.json` frames on every sweep and forwards each message
   to the tool's streaming update callback as a partial update
@@ -225,25 +228,38 @@ authentication, replay detection, and call-budget reservation — happens
 serially in the pump before any task starts, and the result-byte budget is
 spent by the pump as each task returns. A claimed request always ends
 answered: when it becomes dispatch-bound its `req-<id>.json` is renamed to an
-in-flight `req-<id>.claim` marker that the response write retires, so a sweep
-that dies mid-wave leaves durable evidence — the next sweep (or the server's
-cancel path, where no successor runs) answers those ids in writing with
-`rpc dispatch interrupted`, reconstructs their call reservations and replay
-memory in the stats, and never re-dispatches them. Approvals stay on the
-existing `ToolExecutor` path inside each task; each approval-requiring claim
-pre-allocates its approval id, and a tiny unlinked watcher cancels the pending
-prompt if the sweep or the dispatch task dies while it is pending, so no
-approval prompt outlives the script that triggered it and a cancelled prompt
-can never install policy.
+in-flight `req-<id>.claim` marker, and **publication is the dispatch gate** —
+the rename must succeed and the published marker must be a regular file (a
+planted object at the marker name, or a symlinked request, is answered with a
+publication-failure error and its tool never runs). A sweep that dies
+mid-wave leaves durable evidence — the next sweep (or the server's cancel
+path, where no successor runs) answers those ids in writing and never
+re-dispatches them. Recovery trusts only regular-file markers (planted
+directories and symlinks at marker names are ignored outright) and charges
+each dead claim **exactly once**: an unanswered marker gets
+`rpc dispatch interrupted` plus its call reservation and replay memory
+reconstructed, while a marker beside an already-published successful
+response restores the real accounting (ok status, result bytes, tool usage)
+from the response file. A marker whose deletion fails (bounded retries) can
+never re-charge the budget on a later sweep. Approvals stay on the existing
+`ToolExecutor` path inside each task; each approval-requiring claim
+pre-allocates its approval id, and a tiny unlinked watcher cancels the
+pending prompt after the death of the sweep **and** again after the death of
+the dispatch task (it exits once both are gone), so no approval prompt
+outlives the script that triggered it — even one registered after the sweep
+died — and a cancelled prompt can never install policy (cancel and resolve
+are one atomic transition; the loser is `{:error, :not_pending}`).
 
 In session mode the kernel stages `lemon_tools.py` once and `_configure`
 installs a fresh bridge for every cell: new rpc dir and token, a full fresh
 `text()` budget (the per-call `max_text_bytes` rides the bridge), and reset
-sequence counters. Threads are stamped with the cell that started them, and
-the shim refuses bridge calls from threads stamped with an earlier cell, so a
-thread a finished cell left behind can neither spend a later cell's budget nor
-write into its rpc directory (its `ToolError` is harmless). This is isolation
-hygiene, not a sandbox.
+sequence counters. Threads **inherit the cell generation of the thread that
+created them, captured at construction time** (an untagged creator — the main
+thread — falls back to the currently open cell), and the shim refuses bridge
+calls from threads tagged with an earlier cell, so a thread a finished cell
+left behind — and every thread it later spawns — can neither spend a later
+cell's budget nor write into its rpc directory (its `ToolError` is
+harmless). This is isolation hygiene, not a sandbox.
 
 ## Output
 

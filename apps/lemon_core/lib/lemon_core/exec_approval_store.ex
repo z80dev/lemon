@@ -84,6 +84,18 @@ defmodule LemonCore.ExecApprovalStore do
   def delete_pending(approval_id) when is_binary(approval_id),
     do: Store.delete(@pending_table, approval_id)
 
+  @doc """
+  Atomically remove and return one pending approval record.
+
+  The read and the delete share a single store call, so of any number of
+  concurrent takers exactly one receives the record; every other caller gets
+  `nil`. This is the primitive `ExecApprovals.cancel/2` and
+  `ExecApprovals.resolve/2` both use to make their transition atomic.
+  """
+  @spec take_pending(binary()) :: map() | nil
+  def take_pending(approval_id) when is_binary(approval_id),
+    do: Store.take(@pending_table, approval_id)
+
   @spec list_pending() :: list()
   def list_pending, do: Store.list(@pending_table)
 end

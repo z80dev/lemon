@@ -261,6 +261,29 @@ defmodule CodingAgent.Tools.ExecuteCodeRpcServerTest do
     end
   end
 
+  defmodule DrainCountingRpc do
+    @moduledoc """
+    `FakeRpc` whose `drain_notifications/2` reports the stats it was called
+    with and the stats it returns, so a test can prove the stop path keeps
+    the drain's accounting in the server state.
+    """
+
+    def initial_stats, do: FakeRpc.initial_stats()
+
+    def recover_orphaned_claims(rpc_dir, stats),
+      do: FakeRpc.recover_orphaned_claims(rpc_dir, stats)
+
+    def process_pending(ctx, stats), do: FakeRpc.process_pending(ctx, stats)
+
+    def drain_notifications(ctx, stats) do
+      test_pid = Map.get(ctx, :test_pid)
+      send(test_pid, {:drain_called, %{notify_forwarded: stats.notify_forwarded}})
+      drained = FakeRpc.drain_notifications(ctx, stats)
+      send(test_pid, {:drain_returned, %{notify_forwarded: drained.notify_forwarded}})
+      drained
+    end
+  end
+
   defmodule BlockingApprovalRpc do
     @moduledoc false
 
@@ -357,6 +380,39 @@ defmodule CodingAgent.Tools.ExecuteCodeRpcServerTest do
       assert stats.calls == 2
       assert stats.errors == 2
 
+      # The sweep was genuinely killed mid-flight: its stats are a lower
+      # bound and the loss is flagged so trust classification falls back to
+      # untrusted.
+      assert stats.accounting_loss == true
+
+      assert :ok = RpcServer.stop(server)
+    end
+
+    @tag :capture_log
+    test "abort preserves a just-completed sweep's accounting", %{rpc_dir: rpc_dir} do
+      ctx = %{ctx(rpc_dir) | tools: blocking_tools(self())}
+      {:ok, server} = start_server(ctx, rpc: Rpc, poll_interval_ms: 5)
+
+      write_request(rpc_dir, 1, "block", %{})
+
+      assert_receive {:blocking_dispatch, "exec_code_rpc_1", sweep_pid}, 2_000
+      send(sweep_pid, :release)
+
+      # The sweep has published its answer and is only a heartbeat from
+      # returning its stats; aborting now races the cancel against that
+      # return. Whichever way the race lands, the completed call's
+      # accounting must survive — never revert to the stale snapshot.
+      assert %{"id" => 1, "ok" => true, "content" => "released"} = await_response(rpc_dir, 1)
+      :ok = RpcServer.abort(server)
+
+      stats = RpcServer.stats(server)
+      assert stats.calls == 1
+      assert stats.errors == 0
+      assert stats.bytes == byte_size("released")
+      assert MapSet.to_list(stats.tools_used) == ["block"]
+      # A completed sweep lost nothing: no loss flag.
+      refute Map.get(stats, :accounting_loss)
+
       assert :ok = RpcServer.stop(server)
     end
 
@@ -379,10 +435,12 @@ defmodule CodingAgent.Tools.ExecuteCodeRpcServerTest do
 
       :ok = RpcServer.abort(server)
 
-      # The claim's watcher cancelled the orphaned prompt: no pending record
-      # survives the abort, and a late approval installs no policy.
+      # The claim's watcher cancelled the orphaned prompt; a late approval
+      # loses the atomic transition and installs no policy.
       assert :ok = await_no_pending(run_id)
-      :ok = LemonCore.ExecApprovals.resolve(approval_id, :approve_global)
+
+      assert {:error, :not_pending} =
+               LemonCore.ExecApprovals.resolve(approval_id, :approve_global)
 
       assert ExecApprovalStore.list_global_policies()
              |> Enum.reject(fn {{tool, _hash}, _value} -> tool != "echo" end)
@@ -499,7 +557,8 @@ defmodule CodingAgent.Tools.ExecuteCodeRpcServerTest do
         )
 
       # With polls a second apart, the frame written now can only be
-      # forwarded by the stop path's final notification drain.
+      # forwarded by the stop path's final notification drain — whose
+      # returned stats become the server's final state (see terminate/2).
       tmp = Path.join(rpc_dir, "notify-1.json.tmp")
       File.write!(tmp, Jason.encode!(%{"n" => 1, "msg" => "at the bitter end"}))
       File.rename!(tmp, Path.join(rpc_dir, "notify-1.json"))
@@ -508,6 +567,34 @@ defmodule CodingAgent.Tools.ExecuteCodeRpcServerTest do
 
       assert_received {:notify, "notify: at the bitter end"}
       assert File.ls(rpc_dir) == {:ok, []}
+    end
+
+    test "the stop path keeps the drained notification accounting", %{rpc_dir: rpc_dir} do
+      test = self()
+
+      {:ok, server} =
+        start_server(
+          ctx(rpc_dir,
+            test_pid: test,
+            on_update: fn %AgentToolResult{} = partial ->
+              send(test, {:notify, hd(partial.content).text})
+            end
+          ),
+          rpc: DrainCountingRpc,
+          poll_interval_ms: 1_000
+        )
+
+      tmp = Path.join(rpc_dir, "notify-7.json.tmp")
+      File.write!(tmp, Jason.encode!(%{"n" => 7, "msg" => "drained at stop"}))
+      File.rename!(tmp, Path.join(rpc_dir, "notify-7.json"))
+
+      # The drain runs inside terminate/2 and its return value is kept in
+      # the server state — observable here as the stats the drain reports
+      # back to the test after being called with the pre-drain stats.
+      assert :ok = RpcServer.stop(server)
+
+      assert_received {:drain_called, %{notify_forwarded: 0}}
+      assert_received {:drain_returned, %{notify_forwarded: 1}}
     end
 
     test "wrong or missing tokens are denied and never dispatched", %{rpc_dir: rpc_dir} do

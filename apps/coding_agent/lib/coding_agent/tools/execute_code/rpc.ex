@@ -48,21 +48,35 @@ defmodule CodingAgent.Tools.ExecuteCode.Rpc do
   ## Sweep death, claim markers, and approvals
 
   A request becomes dispatch-bound by renaming `req-<id>.json` to an
-  in-flight marker `req-<id>.claim`; `write_response/3` removes the marker
-  once the answer is published. A marker therefore proves its id was claimed,
-  counted, and dispatched but never answered — and because sweeps never
-  overlap, a marker visible to a later sweep (or to the RpcServer's cancel
-  path) proves its owning sweep is gone for good. `recover_orphaned_claims/2`
-  pays that debt: an error response for every unanswered marker, the call
-  reservation and error count reconstructed in the stats, and the marker
-  removed. Every sweep starts with recovery, so a killed sweep's claimed ids
-  always end answered — answered in writing, never re-dispatched, so a
-  cancelled request still never executes its tool.
+  in-flight marker `req-<id>.claim` — and dispatch is GATED on that
+  publication: the rename must succeed and the published marker must be a
+  regular file, or the tool never runs and the id is answered with a
+  publication-failure error. `write_response/3` removes the marker once the
+  answer is published. A regular-file marker therefore proves its id was
+  claimed, counted, and dispatched but never answered — and because sweeps
+  never overlap, such a marker visible to a later sweep (or to the RpcServer's
+  cancel path) proves its owning sweep is gone for good. Markers that are not
+  regular files (a planted directory or symlink at a marker name) prove
+  nothing and are ignored by recovery outright.
+
+  `recover_orphaned_claims/2` pays that debt, exactly once per id: for an
+  unanswered marker, an error response plus the call reservation and error
+  count reconstructed in the stats; for a marker beside an already-published
+  successful response, the REAL accounting (ok status, result bytes, tool
+  usage) restored from the response file and the marker's own request body.
+  Every sweep starts with recovery, so a killed sweep's claimed ids always end
+  answered — answered in writing, never re-dispatched, so a cancelled request
+  still never executes its tool. A marker whose deletion fails is retried a
+  bounded number of times and then left inert (the id is already in the
+  stats' replay memory, so no later sweep re-charges it; the workspace
+  teardown owns the rest).
 
   Approval-requiring claims are additionally cancellation-safe: the approval
-  id is allocated at claim time and a tiny unlinked watcher cancels the
-  pending prompt if the sweep or the dispatch task dies while it is pending
-  (see `approval_context/3`), so no approval prompt outlives the script that
+  id is allocated at claim time and an unlinked watcher cancels the pending
+  prompt when the sweep or the dispatch task dies — after EACH death, exiting
+  only when both are gone, so a prompt registered in the window between the
+  first cancel and the task's own death is still cancelled (see
+  `approval_context/3`). No approval prompt outlives the script that
   triggered it.
   """
 
@@ -80,6 +94,7 @@ defmodule CodingAgent.Tools.ExecuteCode.Rpc do
   @replay_error "rpc request already processed"
   @unexpected_error "rpc request failed"
   @interrupted_error "rpc dispatch interrupted"
+  @claim_failed_error "rpc dispatch could not be marked in-flight"
 
   @default_max_requests_per_sweep 100
   @default_max_parallel_rpc 4
@@ -225,11 +240,23 @@ defmodule CodingAgent.Tools.ExecuteCode.Rpc do
   `req-<id>.claim` exists exactly while a claimed, call-budgeted request is
   being dispatched; `write_response/3` removes it as the answer is published.
   Sweeps never overlap, so a marker visible now proves its owning sweep is
-  gone and the id can never be answered by it. Each such id receives the
-  error response the dead sweep owed (unless a response is already present),
-  and `stats` recovers the call reservation, the error, and the replay memory
-  the dead sweep would have recorded — so the call budget and replay refusal
-  stay exact across a killed sweep.
+  gone and the id can never be answered by it. Only REGULAR files count as
+  markers (lstat, the same discipline as text blocks): a planted directory or
+  symlink at a marker name is ignored outright — never answered, never
+  charged — and left to the workspace teardown.
+
+  Each recovered id receives the response the dead sweep owed — the error
+  response, unless a successful response was already published, in which case
+  the REAL accounting (ok status, result bytes, tool usage) is restored from
+  the response file and the marker (the renamed request still carries the
+  tool name). `stats` recovers the call reservation and the replay memory the
+  dead sweep would have recorded, so the call budget, replay refusal, and
+  trust classification stay exact across a killed sweep.
+
+  Charging is exactly-once: the id is recorded in the stats' replay memory
+  when its debt is paid, and a marker that survives its own deletion (the
+  deletion is retried a bounded number of times) is treated as cleanup-only
+  by every later sweep, so a sticky marker can never re-charge the budget.
 
   Called at the start of every sweep and by the RpcServer's cancel path, where
   no successor sweep will run. It answers in writing; it never dispatches, so
@@ -240,6 +267,7 @@ defmodule CodingAgent.Tools.ExecuteCode.Rpc do
     rpc_dir
     |> Path.join("req-*.claim")
     |> Path.wildcard()
+    |> Enum.filter(&regular_file?/1)
     |> Enum.map(fn path ->
       case Integer.parse(Path.basename(path, ".claim") |> String.replace_prefix("req-", "")) do
         {id, ""} -> {:marker, id, path}
@@ -277,12 +305,18 @@ defmodule CodingAgent.Tools.ExecuteCode.Rpc do
   before it died is exactly what lands in the tool result. Blocks are left in
   place for the rpc directory's normal teardown.
 
+  The budget charges the ENCODED frame — `byte_size/1` of the file body
+  actually read — which is exactly what the shim charged and exactly what the
+  size gate admits, so the script-side and host-side accounts can never
+  disagree: every in-budget block the shim wrote is delivered, and nothing
+  the shim refused ever fits.
+
   Defensive posture (the files are script-authored): anything that is not a
   regular file — a planted symlink, like the `res-<id>.json` defense — any
   frame larger than the whole byte budget plus its JSON envelope, any
-  undecodable body, and any block that would push the accumulated total past
-  `max_text_bytes` (default #{@default_max_text_bytes}) is skipped without
-  crashing.
+  undecodable body or body whose text is not valid UTF-8, and any block that
+  would push the accumulated total past `max_text_bytes` (default
+  #{@default_max_text_bytes}) is skipped without crashing.
   """
   @spec read_text_blocks(String.t(), keyword()) :: [String.t()]
   def read_text_blocks(rpc_dir, opts \\ []) when is_binary(rpc_dir) do
@@ -505,23 +539,39 @@ defmodule CodingAgent.Tools.ExecuteCode.Rpc do
     |> Enum.sort()
   end
 
+  # The charge is the encoded frame size (`byte_size/1` of the body read),
+  # matching the shim's `len(json.dumps(frame))` charge and the lstat size
+  # gate above — one currency on both sides of the bridge.
   defp read_text_block(path, accumulated, max_bytes) do
     with {:ok, %File.Stat{type: :regular, size: size}}
          when size <= max_bytes + @text_block_envelope_slack <- File.lstat(path),
          {:ok, body} <- File.read(path),
-         {:ok, %{"text" => text}} when is_binary(text) <- Jason.decode(body),
-         :ok <- within_budget(text, accumulated, max_bytes) do
-      {:ok, text, byte_size(text)}
+         {:ok, text} <- decode_text_block(body),
+         :ok <- within_budget(body, accumulated, max_bytes) do
+      {:ok, text, byte_size(body)}
     else
       _ -> :skip
     end
   end
 
-  defp within_budget(text, accumulated, max_bytes)
-       when accumulated + byte_size(text) <= max_bytes,
+  # Only decodable frames whose text is valid UTF-8 count. Shim-written
+  # frames always are — the shim normalizes lone surrogates — so this never
+  # drops a block the script paid for; a hand-built frame that decodes to
+  # non-UTF-8 text could not be re-encoded into the tool result safely.
+  defp decode_text_block(body) do
+    with {:ok, %{"text" => text}} when is_binary(text) <- Jason.decode(body),
+         true <- String.valid?(text) do
+      {:ok, text}
+    else
+      _ -> :error
+    end
+  end
+
+  defp within_budget(body, accumulated, max_bytes)
+       when accumulated + byte_size(body) <= max_bytes,
        do: :ok
 
-  defp within_budget(_text, _accumulated, _max_bytes), do: :error
+  defp within_budget(_body, _accumulated, _max_bytes), do: :error
 
   # ==========================================================================
   # Claiming (serial, in the sweeping process)
@@ -556,35 +606,138 @@ defmodule CodingAgent.Tools.ExecuteCode.Rpc do
   # its sweep died owing that answer.
   defp claim_marker_path(rpc_dir, id), do: Path.join(rpc_dir, "req-#{id}.claim")
 
+  # Publish the in-flight claim marker: the request renamed out of the
+  # `req-*.json` namespace at the moment it becomes dispatch-bound, and the
+  # published marker must be a REGULAR file — that is the only shape
+  # `recover_orphaned_claims/2` trusts, so it is the only shape that may
+  # authorize a dispatch. Publication is the gate: when the rename fails
+  # (a planted object already sits at the marker name) or the renamed object
+  # is not a regular file (a symlinked request), the request is consumed and
+  # answered with `@claim_failed_error` — its tool NEVER runs, because a
+  # dispatch whose marker no later sweep would recover would strand the id.
+  # The already-reserved call is spent, so the answer is an error.
   defp mark_in_flight(rpc_dir, id, request) do
-    case File.rename(request, claim_marker_path(rpc_dir, id)) do
-      :ok ->
-        :ok
+    marker = claim_marker_path(rpc_dir, id)
 
-      # A planted object at the marker name (or any rename failure) must never
-      # fall back to leaving the request reclaimable: that would re-dispatch a
-      # counted call. Consume it instead, leaving this one claim unmarked.
-      _error ->
+    case File.rename(request, marker) do
+      :ok ->
+        case File.lstat(marker) do
+          {:ok, %File.Stat{type: :regular}} ->
+            :ok
+
+          # A symlinked request renames into a symlinked marker: not a
+          # trustworthy claim shape, so it is consumed like any failure.
+          _not_regular ->
+            consume_request(marker)
+            {:error, :not_regular}
+        end
+
+      _rename_failed ->
+        # A planted object at the marker name (or any rename failure) must
+        # never fall back to leaving the request reclaimable: that would
+        # re-dispatch a counted call. Consume it and answer the id.
         consume_request(request)
+        {:error, :rename}
     end
   end
 
-  # Recovery body of `recover_orphaned_claims/2`: pay one dead claim's debt.
+  # Recovery body of `recover_orphaned_claims/2`: pay one dead claim's debt
+  # exactly once. `seen?` is the idempotency gate — the id entered the stats'
+  # replay memory when its debt was paid, so a marker that outlived its own
+  # deletion (deletion retried, still failing) is cleanup-only from here on.
   defp recover_claim(rpc_dir, id, marker, stats) do
+    if seen?(stats, id) do
+      ensure_answered(rpc_dir, id)
+      discard_marker(marker)
+      stats
+    else
+      stats =
+        case successful_response(rpc_dir, id) do
+          {:ok, content} ->
+            # The dead sweep died between publishing a successful response
+            # and retiring its marker: restore the REAL accounting — the ok
+            # status, the result bytes, the tool usage — instead of
+            # inventing an error the script never saw.
+            stats
+            |> Map.update!(:calls, &(&1 + 1))
+            |> Map.update!(:bytes, &(&1 + byte_size(content)))
+            |> remember_tool(claimed_tool(marker))
+            |> remember_id(id)
+
+          :error ->
+            ensure_answered(rpc_dir, id)
+
+            stats
+            |> Map.update!(:calls, &(&1 + 1))
+            |> increment_errors()
+            |> remember_id(id)
+        end
+
+      discard_marker(marker)
+      stats
+    end
+  end
+
+  # The answer a dead sweep owed, written only when nobody answered yet.
+  defp ensure_answered(rpc_dir, id) do
     unless response_present?(response_path(rpc_dir, id)) do
       write_response(rpc_dir, id, %{"id" => id, "ok" => false, "error" => @interrupted_error})
     end
 
-    # The dead sweep reserved the call and would have counted the error; a
-    # normal `write_response/3` already removed the marker, but a marker left
-    # next to a published response is removed here too.
-    consume_request(marker)
-
-    stats
-    |> Map.update!(:calls, &(&1 + 1))
-    |> increment_errors()
-    |> remember_id(id)
+    :ok
   end
+
+  # A successful response the dead sweep published before dying: its content
+  # is the accounting evidence the lost stats would have carried.
+  defp successful_response(rpc_dir, id) do
+    path = response_path(rpc_dir, id)
+
+    with {:ok, %File.Stat{type: :regular}} <- File.lstat(path),
+         {:ok, body} <- File.read(path),
+         {:ok, %{"ok" => true, "content" => content}} when is_binary(content) <-
+           Jason.decode(body) do
+      {:ok, content}
+    else
+      _ -> :error
+    end
+  end
+
+  # The marker IS the claimed request renamed in place, so it still carries
+  # the tool name needed to restore tool-use accounting.
+  defp claimed_tool(marker) do
+    with {:ok, body} <- File.read(marker),
+         {:ok, %{"tool" => tool}} when is_binary(tool) <- Jason.decode(body) do
+      tool
+    else
+      _ -> nil
+    end
+  end
+
+  defp remember_tool(stats, tool_name) when is_binary(tool_name),
+    do: Map.update!(stats, :tools_used, &MapSet.put(&1, tool_name))
+
+  defp remember_tool(stats, _unreadable), do: stats
+
+  # Bounded marker deletion: failures (permissions, type errors) are
+  # persistent within a run, so retrying more would only stall the sweep.
+  # The id is already in the replay memory by now, so a surviving marker is
+  # inert cleanup work for the next sweep and, in the end, the workspace
+  # teardown — never a repeat charge.
+  @claim_marker_delete_attempts 3
+
+  defp discard_marker(marker) do
+    if File.rm(marker) == :ok do
+      :ok
+    else
+      Enum.each(2..@claim_marker_delete_attempts, fn _attempt ->
+        _ = File.rm(marker)
+      end)
+
+      :ok
+    end
+  end
+
+  defp regular_file?(path), do: match?({:ok, %File.Stat{type: :regular}}, File.lstat(path))
 
   # Only a regular file published by the atomic rename counts as an answered
   # id. `File.exists?/1` follows symlinks, so a planted `res-<id>.json`
@@ -693,17 +846,28 @@ defmodule CodingAgent.Tools.ExecuteCode.Rpc do
         {%{stats | denied: stats.denied + 1}, claimed}
 
       true ->
-        mark_in_flight(ctx.rpc_dir, id, request)
+        # Publication is the dispatch gate: the tool runs only behind a
+        # published, regular-file claim marker. Any publication failure is
+        # answered with `@claim_failed_error` and counted as an error — the
+        # call slot was already reserved, and a dispatch whose marker no
+        # later sweep would recover would strand the id.
+        case mark_in_flight(ctx.rpc_dir, id, request) do
+          :ok ->
+            claim = %{
+              id: id,
+              tool: tool_name,
+              params: params,
+              approval?: approval_required?(ctx, tool_name),
+              approval_id: LemonCore.Id.approval_id()
+            }
 
-        claim = %{
-          id: id,
-          tool: tool_name,
-          params: params,
-          approval?: approval_required?(ctx, tool_name),
-          approval_id: LemonCore.Id.approval_id()
-        }
+            {stats, [claim | claimed]}
 
-        {stats, [claim | claimed]}
+          {:error, _reason} ->
+            respond_error(ctx, id, @claim_failed_error)
+            consume_request(request)
+            {increment_errors(stats), claimed}
+        end
     end
   end
 
@@ -775,6 +939,12 @@ defmodule CodingAgent.Tools.ExecuteCode.Rpc do
   # result-byte accounting and the response write, both of which stay with the
   # sweeping process.
   defp run_claim(claim, ctx, sweep_pid) do
+    # A dispatch task must die with its sweep (the linked teardown above), so
+    # it may not trap exits — the flag is forced off on entry, before any
+    # tool code runs. `watch_approval/3` relies on this: the task's DOWN is
+    # what closes the register-after-cancel window, so a trapping task would
+    # leave the watcher waiting forever.
+    Process.flag(:trap_exit, false)
     tool = Map.fetch!(ctx.tools, claim.tool)
     inner = fn -> run_inner(tool, claim.id, claim.params, ctx.signal) end
 
@@ -799,13 +969,10 @@ defmodule CodingAgent.Tools.ExecuteCode.Rpc do
   # Cancellation-safe approval context for one dispatch task.
   #
   # The approval id was allocated at claim time (in the sweeping process,
-  # before this task existed), so there is no registration race to lose: the
-  # wrapper hands the id to the request function, and if the sweep or this
-  # task dies while the prompt is pending, the watcher below cancels it with
-  # `LemonCore.ExecApprovals.cancel/2` — the pending record disappears and a
-  # blocked waiter resolves as denied. No approval prompt may outlive the
-  # script that triggered it, and cancel of an already-resolved approval is a
-  # no-op, so the normal path never misfires.
+  # before this task existed), so it always names this one prompt: the wrapper
+  # hands the id to the request function, and the watcher below cancels that
+  # id when the process owning the prompt dies. No approval prompt may
+  # outlive the script that triggered it.
   defp approval_context(nil, _claim, _sweep_pid), do: %{}
 
   defp approval_context(context, claim, sweep_pid) when is_map(context) do
@@ -819,8 +986,8 @@ defmodule CodingAgent.Tools.ExecuteCode.Rpc do
       try do
         original.(Map.put(params, :approval_id, approval_id))
       after
-        # Normal completion: the watcher's cancel would be a no-op anyway, but
-        # it must not sit around monitoring dead processes.
+        # Normal completion: the prompt resolved (or was never registered),
+        # so the watcher must not sit around monitoring dead processes.
         Process.exit(watcher, :kill)
       end
     end)
@@ -828,15 +995,41 @@ defmodule CodingAgent.Tools.ExecuteCode.Rpc do
 
   # Unlinked on purpose: it must survive both the sweeping process and the
   # dispatch task it watches, because either death can orphan a pending
-  # approval. The first DOWN wins; the process exits with the cancel.
+  # approval.
+  #
+  # Closing the register-after-cancel window (the chosen rule, per the
+  # preallocated approval id): the watcher cancels after EVERY death and
+  # exits only once both monitored processes are gone. The first death (say,
+  # the sweep's) may cancel before the dispatch task's own
+  # `ExecApprovals.request/1` has inserted the pending record — the cancel
+  # finds nothing. The task is then killed asynchronously and MAY complete
+  # that insertion first; because the watcher is still waiting for the task's
+  # DOWN, its second cancel runs strictly after the task is dead — after any
+  # late registration — and removes the record. Both cancels go through the
+  # atomic `ExecApprovals.cancel/2`, so the loser of a race against a user
+  # resolution is a `{:error, :not_pending}` no-op and can never disturb a
+  # decided approval.
+  #
+  # This holds because dispatch tasks do not trap exits (run_claim forces the
+  # flag off on entry), so a dead sweep reliably kills them; the wrapper's
+  # `after` still reaps the watcher on normal completion, and a watcher whose
+  # monitored processes all died exits by itself.
   defp watch_approval(approval_id, sweep_pid, task_pid) do
-    _sweep_monitor = Process.monitor(sweep_pid)
-    _task_monitor = Process.monitor(task_pid)
+    refs = %{
+      Process.monitor(sweep_pid) => :sweep,
+      Process.monitor(task_pid) => :task
+    }
 
+    watch_approval_loop(approval_id, refs)
+  end
+
+  defp watch_approval_loop(_approval_id, refs) when map_size(refs) == 0, do: :ok
+
+  defp watch_approval_loop(approval_id, refs) do
     receive do
-      {:DOWN, _ref, :process, _pid, _reason} ->
-        LemonCore.ExecApprovals.cancel(approval_id, "execute_code dispatch ended")
-        :ok
+      {:DOWN, ref, :process, _pid, _reason} ->
+        _ = LemonCore.ExecApprovals.cancel(approval_id, "execute_code dispatch ended")
+        watch_approval_loop(approval_id, Map.delete(refs, ref))
     end
   end
 

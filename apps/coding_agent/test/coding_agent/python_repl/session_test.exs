@@ -489,8 +489,11 @@ defmodule CodingAgent.PythonRepl.SessionTest do
 
       # Cell 1 consumes nearly the whole budget and plants a thread that
       # waits for the next cell's bridge — the exact stale-thread injection
-      # the per-cell reset must survive — then reports its fate through a
-      # file (its cell is long over by the time it runs).
+      # the per-cell reset must survive. The stale thread then tries BOTH
+      # escape hatches: spawning a CHILD thread during cell 2 (the child
+      # must inherit the stale generation at construction time, so the
+      # bridge refuses it too) and calling text() directly. Both report
+      # their fate through a file (their cell is long over by then).
       first_code = """
       import lemon_tools, threading, time
 
@@ -500,14 +503,29 @@ defmodule CodingAgent.PythonRepl.SessionTest do
               if bridge is not None and bridge.token == "second-token":
                   break
               time.sleep(0.02)
+
+          def child():
+              try:
+                  text("CHILD OF STALE THREAD")
+              except Exception as exc:
+                  with open(#{Jason.encode!(outcome)}, "w") as f:
+                      f.write("child: " + type(exc).__name__ + ": " + str(exc))
+                  return
+              with open(#{Jason.encode!(outcome)}, "w") as f:
+                  f.write("child: WROTE A BLOCK")
+
+          t = threading.Thread(target=child)
+          t.start()
+          t.join()
+
           try:
               text("STALE THREAD OUTPUT")
           except Exception as exc:
-              with open(#{Jason.encode!(outcome)}, "w") as f:
-                  f.write(type(exc).__name__ + ": " + str(exc))
+              with open(#{Jason.encode!(outcome)}, "a") as f:
+                  f.write("\\ndirect: " + type(exc).__name__ + ": " + str(exc))
               return
-          with open(#{Jason.encode!(outcome)}, "w") as f:
-              f.write("STALE WROTE A BLOCK")
+          with open(#{Jason.encode!(outcome)}, "a") as f:
+              f.write("\\ndirect: WROTE A BLOCK")
 
       threading.Thread(target=stale).start()
       text("c" * 3800)
@@ -538,11 +556,17 @@ defmodule CodingAgent.PythonRepl.SessionTest do
                  10_000
                )
 
-      # The stale thread had its say: it must have been refused by the
-      # bridge's cell tag, never silently written.
-      stale_fate = await_file_contents(outcome)
-      assert stale_fate =~ "ToolError"
-      assert stale_fate =~ "finished cell"
+      # The stale thread had its say — both escape hatches refused: the
+      # child inherited the stale generation at construction time (so the
+      # bridge refuses it during cell 2), and the direct call is refused by
+      # the same tag. Neither ever writes a block.
+      [child_fate, direct_fate] =
+        outcome |> await_file_contents() |> String.split("\n")
+
+      assert child_fate =~ "child: ToolError"
+      assert child_fate =~ "finished cell"
+      assert direct_fate =~ "direct: ToolError"
+      assert direct_fate =~ "finished cell"
 
       # Cell 1 kept the block it flushed before dying...
       assert text_blocks(first_dir) == [String.duplicate("c", 3800)]

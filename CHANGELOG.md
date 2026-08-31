@@ -28,6 +28,23 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   successor sweep or the cancel path answers in writing, reconstructing the
   call accounting), and an approval prompt left pending by a killed dispatch
   is cancelled, so it can never be approved into policy after the script died.
+- `execute_code` result-channel adversarial hardening (fix round 2): RPC
+  dispatch is now gated on publishing a regular-file claim marker (a planted
+  object at the marker name or a symlinked request is answered with an error
+  and never dispatched), recovery trusts only regular-file markers (planted
+  directories are ignored, never charged) and restores the real accounting
+  beside an already-published successful response, marker deletion failures
+  can never re-charge the budget on a later sweep, and approval cancel/resolve
+  is one atomic store transition (`LemonCore.ExecApprovals.cancel/2` and
+  `resolve/2` now return `{:error, :not_pending}` to the loser) with the
+  dispatch watcher cancelling after each owner death so a prompt registered
+  after its sweep died cannot be orphaned; a killed sweep's lost accounting
+  is flagged (`rpc_accounting_loss`) and forces the result to `:untrusted`;
+  persistent-cell thread quarantine now stamps threads with their creator's
+  cell generation at construction time, so a stale thread's descendants stay
+  stale; the `text()` host-side budget charges the encoded frame (identical
+  to the shim) and the shim normalizes lone surrogates, so an in-budget
+  block is always delivered.
 - `execute_code` scripts gained `notify(msg)` — a streaming side channel whose
   messages are forwarded to the tool's partial-update callback (capped at 4 KiB
   per message, 64 per run) — and `batch([...])`, which runs helper calls in

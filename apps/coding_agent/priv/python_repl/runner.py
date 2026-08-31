@@ -645,25 +645,40 @@ def _invoke_configure(configure, directory, token, budget, cell_id):
 
 
 def _install_thread_cell_tags():
-    """Stamp started threads with the cell that was running when they started.
+    """Make threads inherit the cell generation of the thread that created them.
 
-    lemon_tools refuses bridge calls from threads stamped with an earlier
+    lemon_tools refuses bridge calls from threads tagged with an earlier
     cell (see `_live_bridge` in the shim), so a thread a finished cell left
     behind can neither spend a later cell's text budget nor write frames into
-    its rpc directory. Threads the runner itself starts outside any cell are
-    unstamped and unaffected.
+    its rpc directory.
+
+    The tag is captured in `Thread.__init__` — at CONSTRUCTION time, in the
+    creating thread — and children inherit their creator's generation. A
+    start-time stamp could be bypassed: a stale cell-1 thread can wait for
+    cell 2 and then spawn, and the spawn would be stamped with cell 2 (the
+    *current* cell) rather than the stale thread that caused it. With
+    construction-time inheritance, a stale thread's descendants carry the
+    stale generation forever and are refused by the bridge.
+
+    The main thread (and any thread without a tag, e.g. ones this runner
+    starts outside any cell) has no generation, so its children fall back to
+    the currently open cell — exactly the behavior runner-internal threads
+    always had.
     """
-    if getattr(threading.Thread.start, "_lemon_tagged", False):
+    if getattr(threading.Thread.__init__, "_lemon_tagged", False):
         return
 
-    original_start = threading.Thread.start
+    original_init = threading.Thread.__init__
 
-    def start(self, *args, **kwargs):
-        self._lemon_gen = _current_cell()
-        return original_start(self, *args, **kwargs)
+    def __init__(self, *args, **kwargs):
+        inherited = getattr(threading.current_thread(), "_lemon_gen", None)
+        original_init(self, *args, **kwargs)
+        self._lemon_gen = (
+            inherited if inherited is not None else _current_cell()
+        )
 
-    start._lemon_tagged = True
-    threading.Thread.start = start
+    __init__._lemon_tagged = True
+    threading.Thread.__init__ = __init__
 
 
 def _prepare_cell(cwd, bridge, cell_id):

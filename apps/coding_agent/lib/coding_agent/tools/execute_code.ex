@@ -18,16 +18,20 @@ defmodule CodingAgent.Tools.ExecuteCode do
       `text-<n>.json` block into the rpc dir (write-through, never at exit),
       under a lock, within the `max_text_bytes` budget; the budget charges the
       *encoded frame* — the exact bytes `json.dump` writes, JSON escaping
-      included — so script-side charging and host-side reading can never
-      disagree about a NUL-heavy string that expands six-fold under escaping.
-      An over-budget call raises `ToolError` and keeps the blocks already
-      flushed. After the run — including a timeout/abort kill — the flushed
-      blocks are read in order and assembled as the labeled result, with
-      stdout/stderr demoted to a clearly labeled diagnostics tail (already
-      capped at `max_output_bytes`). This fixes two defects of the stdout-only
-      era: incidental prints and library warnings no longer impersonate the
-      answer, and a deliberate result now survives the kill that discards
-      half-captured stdout mid-line.
+      included — on BOTH sides of the bridge: the shim charges what it is
+      about to write and the host charges the file body it actually reads, so
+      an in-budget block is always delivered and nothing the shim refused
+      ever fits. The payload is normalized first (lone surrogates become
+      U+FFFD), so every frame the shim writes is valid JSON with valid-UTF-8
+      text and can never be silently dropped by the host. An over-budget call
+      raises `ToolError` and keeps the blocks already flushed. After the run —
+      including a timeout/abort kill — the flushed blocks are read in order
+      and assembled as the labeled result, with stdout/stderr demoted to a
+      clearly labeled diagnostics tail (already capped at `max_output_bytes`).
+      This fixes two defects of the stdout-only era: incidental prints and
+      library warnings no longer impersonate the answer, and a deliberate
+      result now survives the kill that discards half-captured stdout
+      mid-line.
     * `notify(msg)` — a fire-and-forget side channel. The RPC pump consumes
       `notify-<n>.json` frames on every sweep and forwards each message to
       the tool's `on_update` callback as a partial update (bounded: 4 KiB per
@@ -1074,13 +1078,22 @@ defmodule CodingAgent.Tools.ExecuteCode do
   defp maybe_full_output(output, _result), do: output
 
   defp session_tool_result(text, result, stats, reset_performed, started_at, opts) do
-    used_webfetch? = MapSet.member?(stats.tools_used, "webfetch")
+    # Trust must never flip to trusted through LOST accounting: when the
+    # RpcServer had to kill a sweep, tools_used is a lower bound (executed
+    # work may be missing from it), so the cell falls back to :untrusted —
+    # the conservative side — instead of trusting by absence of evidence.
+    untrusted? =
+      Map.get(stats, :accounting_loss) == true or
+        MapSet.member?(stats.tools_used, "webfetch")
 
     %AgentToolResult{
       content: [
         %TextContent{
           text:
-            if(used_webfetch?, do: ExternalContent.wrap_web_content(text, :web_fetch), else: text)
+            if(untrusted?,
+              do: ExternalContent.wrap_web_content(text, :web_fetch),
+              else: text
+            )
         }
       ],
       details:
@@ -1090,7 +1103,7 @@ defmodule CodingAgent.Tools.ExecuteCode do
           reset_performed,
           clock_now(opts) - started_at
         ),
-      trust: if(used_webfetch?, do: :untrusted, else: :trusted)
+      trust: if(untrusted?, do: :untrusted, else: :trusted)
     }
   end
 
@@ -1111,6 +1124,9 @@ defmodule CodingAgent.Tools.ExecuteCode do
     }
     |> maybe_put(:full_output_path, Map.get(result, :full_output_path))
     |> maybe_put(:reason, Map.get(result, :reason))
+    # True only when the RpcServer brutally killed a sweep: the rpc_* numbers
+    # above are then a lower bound (see session_tool_result's trust rule).
+    |> maybe_put(:rpc_accounting_loss, Map.get(stats, :accounting_loss))
   end
 
   defp session_fallback(

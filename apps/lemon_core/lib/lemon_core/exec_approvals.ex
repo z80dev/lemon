@@ -149,17 +149,26 @@ defmodule LemonCore.ExecApprovals do
   pending. Removes the pending record (so the prompt disappears and a late
   `resolve/2` can no longer install policy at any scope), wakes a blocked
   waiter as denied, and records the cancellation distinctly from a user
-  decision. Idempotent: an unknown or already-resolved approval is a no-op.
+  decision.
+
+  The transition is atomic (`ExecApprovalStore.take_pending/1`): `cancel/2`
+  and `resolve/2` racing on the same approval cannot both act — exactly one
+  takes the record, the loser gets `{:error, :not_pending}` without any
+  side effects.
+
+  ## Returns
+
+    * `:ok` — this call took the pending record and cancelled it
+    * `{:error, :not_pending}` — nothing was pending under `approval_id`
+      (unknown, already resolved, or already cancelled); a no-op
   """
-  @spec cancel(approval_id(), binary() | nil) :: :ok
+  @spec cancel(approval_id(), binary() | nil) :: :ok | {:error, :not_pending}
   def cancel(approval_id, reason \\ nil) when is_binary(approval_id) do
-    case ExecApprovalStore.get_pending(approval_id) do
+    case ExecApprovalStore.take_pending(approval_id) do
       nil ->
-        :ok
+        {:error, :not_pending}
 
       pending ->
-        ExecApprovalStore.delete_pending(approval_id)
-
         record_approval_event(:approval_cancelled, pending, %{
           approval_id: approval_id,
           tool: pending.tool,
@@ -195,6 +204,12 @@ defmodule LemonCore.ExecApprovals do
   @doc """
   Resolve a pending approval request.
 
+  The transition is atomic (`ExecApprovalStore.take_pending/1`): `resolve/2`
+  and `cancel/2` racing on the same approval cannot both act. Only the winner
+  takes the pending record — and only then may policy be installed — while
+  the loser gets `{:error, :not_pending}` with no side effects, so a prompt
+  cancelled by its owner can never be approved afterwards.
+
   ## Parameters
 
   - `approval_id` - The approval request ID
@@ -204,16 +219,20 @@ defmodule LemonCore.ExecApprovals do
     - `:approve_agent` - Approve for the agent
     - `:approve_global` - Approve globally
     - `:deny` - Deny the request
+
+  ## Returns
+
+    * `:ok` — this call took the pending record and resolved it
+    * `{:error, :not_pending}` — nothing was pending under `approval_id`
+      (unknown, already resolved, or cancelled)
   """
-  @spec resolve(approval_id(), decision :: atom()) :: :ok
+  @spec resolve(approval_id(), decision :: atom()) :: :ok | {:error, :not_pending}
   def resolve(approval_id, decision) when is_binary(approval_id) and is_atom(decision) do
-    case ExecApprovalStore.get_pending(approval_id) do
+    case ExecApprovalStore.take_pending(approval_id) do
       nil ->
-        :ok
+        {:error, :not_pending}
 
       pending ->
-        ExecApprovalStore.delete_pending(approval_id)
-
         if decision != :deny do
           store_approval(pending, decision)
         end

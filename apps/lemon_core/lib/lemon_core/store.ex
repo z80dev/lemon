@@ -309,6 +309,20 @@ defmodule LemonCore.Store do
   end
 
   @doc """
+  Atomically remove and return the value stored at `key` in a named table.
+
+  Returns `nil` if the key doesn't exist. The read and the delete share one
+  store call, so of N concurrent takers exactly one sees the value — the
+  get-then-delete race between two `get/3` + `delete/3` callers cannot happen.
+  A backend failure replies `nil` and leaves the entry in place, so a failed
+  take never hands the value to more than one caller.
+  """
+  @spec take(server(), table :: atom(), key :: term()) :: term() | nil
+  def take(server \\ __MODULE__, table, key) do
+    safe_store_call(server, {:generic_take, table, key}, nil, op: :take, table: table, key: key)
+  end
+
+  @doc """
   List all key-value pairs in a named table.
   """
   @spec list(server(), table :: atom()) :: [{term(), term()}]
@@ -1097,6 +1111,43 @@ defmodule LemonCore.Store do
       other ->
         log_backend_unexpected(:delete, table, key, other)
         {:reply, {:error, {:unexpected_backend_response, other}}, state}
+    end
+  end
+
+  # Atomic delete-and-return: the get and the delete share this one store
+  # call, so exactly one of N concurrent takers can observe the value. The
+  # read-cache mirror is invalidated exactly like `:generic_delete`.
+  def handle_call({:generic_take, table, key}, _from, state) do
+    case state.backend.get(state.backend_state, table, key) do
+      {:ok, nil, backend_state} ->
+        {:reply, nil, %{state | backend_state: backend_state}}
+
+      {:ok, value, backend_state} ->
+        case state.backend.delete(backend_state, table, key) do
+          {:ok, final_state} ->
+            if table in state.cached_tables do
+              ReadCache.delete(state.read_cache, table, key)
+            end
+
+            {:reply, value, %{state | backend_state: final_state}}
+
+          {:error, reason} ->
+            log_backend_error(:take_delete, table, key, reason)
+            # The entry survives a failed take; no caller was handed it.
+            {:reply, nil, %{state | backend_state: backend_state}}
+
+          other ->
+            log_backend_unexpected(:take_delete, table, key, other)
+            {:reply, nil, %{state | backend_state: backend_state}}
+        end
+
+      {:error, reason} ->
+        log_backend_error(:take_get, table, key, reason)
+        {:reply, nil, state}
+
+      other ->
+        log_backend_unexpected(:take_get, table, key, other)
+        {:reply, nil, state}
     end
   end
 

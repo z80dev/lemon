@@ -6,6 +6,7 @@ defmodule LemonCore.ExecApprovalsTest do
   @moduletag with_store: true
 
   alias LemonCore.ExecApprovals
+  alias LemonCore.ExecApprovalStore
   alias LemonCore.Store
 
   setup do
@@ -406,8 +407,94 @@ defmodule LemonCore.ExecApprovalsTest do
       assert Store.get(:exec_approvals_pending, pending.id) == nil
     end
 
-    test "returns :ok for non-existent approval" do
-      assert :ok = ExecApprovals.resolve("non_existent_id", :approve_once)
+    test "reports :not_pending for an approval that is not pending" do
+      assert {:error, :not_pending} = ExecApprovals.resolve("non_existent_id", :approve_once)
+    end
+  end
+
+  describe "atomic cancel/resolve transition" do
+    test "take_pending hands the record to exactly one taker" do
+      pending = %{id: "approval_take", tool: "bash", run_id: "run_123"}
+      Store.put(:exec_approvals_pending, pending.id, pending)
+
+      assert {%{id: "approval_take"}, nil} =
+               {ExecApprovalStore.take_pending(pending.id),
+                ExecApprovalStore.take_pending(pending.id)}
+
+      assert Store.get(:exec_approvals_pending, pending.id) == nil
+    end
+
+    test "resolve after cancel loses and installs no policy" do
+      pending = %{
+        id: "approval_c1",
+        run_id: "run_123",
+        session_key: "agent:test:main",
+        agent_id: "test",
+        tool: "bash",
+        action: %{command: "ls"}
+      }
+
+      Store.put(:exec_approvals_pending, pending.id, pending)
+
+      assert :ok = ExecApprovals.cancel(pending.id, "dispatch ended")
+      assert {:error, :not_pending} = ExecApprovals.resolve(pending.id, :approve_global)
+
+      assert Store.get(:exec_approvals_policy, {"bash", hash_action(pending.action)}) == nil
+    end
+
+    test "cancel after resolve loses and leaves the decision standing" do
+      pending = %{
+        id: "approval_c2",
+        run_id: "run_123",
+        session_key: "agent:test:main",
+        agent_id: "test",
+        tool: "bash",
+        action: %{command: "ls"}
+      }
+
+      Store.put(:exec_approvals_pending, pending.id, pending)
+
+      assert :ok = ExecApprovals.resolve(pending.id, :approve_session)
+      assert {:error, :not_pending} = ExecApprovals.cancel(pending.id, "dispatch ended")
+
+      assert Store.get(
+               :exec_approvals_policy_session,
+               {"agent:test:main", "bash", hash_action(pending.action)}
+             ).approved ==
+               true
+    end
+
+    test "a concurrent cancel-vs-resolve storm has exactly one winner" do
+      pending = %{
+        id: "approval_storm",
+        run_id: "run_123",
+        session_key: "agent:test:main",
+        agent_id: "test",
+        tool: "bash",
+        action: %{command: "ls"}
+      }
+
+      Store.put(:exec_approvals_pending, pending.id, pending)
+
+      callers =
+        for i <- 1..16 do
+          Task.async(fn ->
+            if rem(i, 2) == 0,
+              do: ExecApprovals.resolve(pending.id, :approve_global),
+              else: ExecApprovals.cancel(pending.id, "dispatch ended")
+          end)
+        end
+
+      results = Task.await_many(callers, 5_000)
+
+      # Exactly one caller won the atomic transition; every loser reported
+      # :not_pending with no side effects.
+      assert Enum.count(results, &(&1 == :ok)) == 1
+      assert Enum.count(results, &(&1 == {:error, :not_pending})) == 15
+      assert Store.get(:exec_approvals_pending, pending.id) == nil
+
+      global = Store.get(:exec_approvals_policy, {"bash", hash_action(pending.action)})
+      assert global == nil or global.approved == true
     end
   end
 

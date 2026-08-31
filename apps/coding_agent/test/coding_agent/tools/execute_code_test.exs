@@ -268,6 +268,7 @@ defmodule CodingAgent.Tools.ExecuteCodeTest do
   alias CodingAgent.BashExecutor
   alias CodingAgent.ToolPolicy
   alias CodingAgent.Tools.ExecuteCode
+  alias CodingAgent.Tools.ExecuteCode.{PythonShim, Rpc}
   alias LemonAgent.AbortSignal
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAi.Types.TextContent
@@ -877,6 +878,93 @@ defmodule CodingAgent.Tools.ExecuteCodeTest do
       refute body =~ "Script result (text()):"
       assert body =~ "text() byte budget exceeded"
       assert result.details.exit_code == 0
+    end
+
+    test "shim-charged bytes equal host-charged bytes over a nasty-string corpus",
+         %{tmp_dir: cwd} do
+      rpc_dir = Path.join(cwd, "equiv-rpc")
+      File.mkdir_p!(rpc_dir)
+      token = String.duplicate("e", 43)
+
+      # Stage the real shim plus a driver that configures the bridge and
+      # emits the corpus through text(), reporting (a) the shim-side charged
+      # total and (b) the sanitized strings it actually delivered.
+      File.write!(Path.join(cwd, "lemon_tools.py"), PythonShim.render_module([], 65_536))
+
+      driver = """
+      import json, lemon_tools
+
+      lemon_tools._configure(#{Jason.encode!(rpc_dir)}, #{Jason.encode!(token)}, None, "cell-1")
+
+      corpus = [
+          "",
+          "plain ascii",
+          "\\0" * 100,
+          "".join(chr(i) for i in range(1, 128)),
+          "emoji: \\U0001F600\\U0001F680",
+          "bmp: \\u00e9\\u4e2d\\u05d0",
+          "lone low surrogate: \\ud800",
+          "lone high surrogate: \\ud83d",
+          "mixed pairs and loners: \\ud83d\\ude00\\ud800\\udfff",
+          "tab\\tnewline\\nquote\\"backslash\\\\",
+          "\\u2028\\u2029line separators",
+          "x" * 1000,
+      ]
+      delivered = []
+      for s in corpus:
+          try:
+              lemon_tools.text(s)
+              delivered.append(s)
+          except Exception:
+              print("UNEXPECTED REFUSAL")
+
+      # The big block cannot fit the remaining budget: the shim must refuse
+      # it — delivered iff charged, on the script side too.
+      try:
+          lemon_tools.text("Y" * 64000)
+          delivered.append("big")
+          print("BIG WRITTEN")
+      except Exception:
+          print("BIG REFUSED")
+
+      print("RESULT " + json.dumps({
+          "charged": lemon_tools._BRIDGE.text_bytes,
+          "delivered": [lemon_tools._json_safe(s) for s in delivered],
+      }))
+      """
+
+      File.write!(Path.join(cwd, "driver.py"), driver)
+
+      {out, 0} = System.cmd(System.find_executable("python3"), ["driver.py"], cd: cwd)
+
+      assert out =~ "BIG REFUSED"
+      refute out =~ "BIG WRITTEN"
+      refute out =~ "UNEXPECTED REFUSAL"
+
+      %{"charged" => charged, "delivered" => delivered} =
+        out
+        |> String.split("\n")
+        |> Enum.find(&String.starts_with?(&1, "RESULT "))
+        |> String.trim_leading("RESULT ")
+        |> Jason.decode!()
+
+      # Host side: read the same frames with the real reader.
+      blocks = Rpc.read_text_blocks(rpc_dir, max_text_bytes: 65_536)
+
+      host_charged =
+        rpc_dir
+        |> Path.join("text-*.json")
+        |> Path.wildcard()
+        |> Enum.map(&File.read!/1)
+        |> Enum.map(&byte_size/1)
+        |> Enum.sum()
+
+      # Bidirectional equivalence: what the shim charged, the host charged;
+      # what the shim delivered, the host delivers — sanitized lone
+      # surrogates included, never silently dropped.
+      assert host_charged == charged
+      assert blocks == delivered
+      assert length(blocks) == 12
     end
 
     test "blocks flushed before a wall-clock kill survive into the result", %{tmp_dir: cwd} do
