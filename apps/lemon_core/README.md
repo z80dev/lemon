@@ -1,6 +1,11 @@
 # LemonCore
 
-Foundational shared library for the Lemon umbrella project. All other apps depend on `lemon_core` -- it provides configuration management, encrypted secrets, pluggable storage, an event bus, session routing primitives, idempotency, execution approvals, telemetry, and quality tooling.
+Foundational shared library for the Lemon umbrella project. All other apps depend on `lemon_core` -- it provides configuration management, encrypted secrets, pluggable storage, an event bus, live named-node invocation routing, session routing primitives, idempotency, execution approvals, telemetry, and quality tooling.
+
+`LemonCore.Context` is the shared versioned preview/resolve boundary for
+root-confined file and folder references, shell-free git diffs, SSRF-guarded
+public URLs, redacted session exports, and format-sniffed document text. See
+[`docs/user-guide/context-references.md`](../../docs/user-guide/context-references.md).
 
 This app has **zero dependencies on other umbrella apps** and must remain that way.
 
@@ -21,8 +26,8 @@ This app has **zero dependencies on other umbrella apps** and must remain that w
           |                    |                    |
 +---------+--------+ +--------+--------+ +---------+--------+
 | LemonCore.Secrets| | LemonCore.Store | | LemonCore.Bus    |
-| .Crypto          | | .EtsBackend     | | (Phoenix.PubSub) |
-| .Keychain        | | .SqliteBackend  | |                  |
+| .Crypto/.External| | .EtsBackend     | | (Phoenix.PubSub) |
+| .Source/.Runner  | | .SqliteBackend  | |                  |
 | .MasterKey       | | .JsonlBackend   | | LemonCore.Event  |
 +------------------+ | .ReadCache      | +------------------+
                      +-----------------+
@@ -50,11 +55,15 @@ This app has **zero dependencies on other umbrella apps** and must remain that w
 | # | Child | Purpose |
 |---|-------|---------|
 | 1 | `Phoenix.PubSub` (name: `LemonCore.PubSub`), or a `Registry` | Backbone for the Bus; see `LemonCore.Bus` for which one is used |
-| 2 | `LemonCore.ConfigCache` | ETS-backed config cache with TTL fingerprinting |
-| 3 | `LemonCore.Store` | Key-value storage GenServer with pluggable backends |
-| 4 | `LemonCore.RunHistoryStore` | Run history persistence (only when `:exqlite` is available) |
-| 5 | `LemonCore.ConfigReloader` | Reload orchestrator with diff computation |
-| 6 | `LemonCore.ConfigReloader.Watcher` | FileSystem watcher for `config.toml` and `.env` |
+| 2 | `LemonCore.ACPClientBridge` | Registry for direct ACP client request/reply |
+| 3 | `LemonCore.NodeRegistry` | Live named-node registry and targeted invocation broker |
+| 4 | `LemonCore.ConfigCache` | ETS-backed config cache with TTL fingerprinting |
+| 5 | `LemonCore.Store` | Key-value storage GenServer with pluggable backends |
+| 6 | `LemonCore.Secrets.SourceTaskSupervisor` | Owns bounded external-source tasks |
+| 7 | `LemonCore.Secrets.SourceCache` | Bounded optional process-local source cache |
+| 8 | `LemonCore.RunHistoryStore` | Run history persistence (only when `:exqlite` is available) |
+| 9 | `LemonCore.ConfigReloader` | Reload orchestrator with diff computation |
+| 10 | `LemonCore.ConfigReloader.Watcher` | FileSystem watcher for `config.toml` and `.env` |
 
 Durable memory moved to `lemon_memory`, the workspace stores to `agent_core`,
 and provider credential-pool rotation to `lemon_agent`
@@ -74,6 +83,7 @@ and `lemon_lsp`. Core doctor diagnostics may probe them at runtime, but
 | `LemonCore.Config` | Canonical TOML config loader with global/project merge and env overrides |
 | `LemonCore.Config.Modular` | Newer typed config interface delegating to per-domain sub-modules |
 | `LemonCore.Config.Providers` | LLM provider config (API keys, base URLs, secret refs, OAuth) |
+| `LemonCore.Config.Secrets` | Exact configuration for explicitly enabled external secret sources |
 | `LemonCore.Config.Agent` | Agent behavior settings sub-module |
 | `LemonCore.Config.Gateway` | Gateway settings sub-module |
 | `LemonCore.Config.Tools` | Web tools and WASM config sub-module |
@@ -88,9 +98,11 @@ and `lemon_lsp`. Core doctor diagnostics may probe them at runtime, but
 | `LemonCore.ConfigReloader` | Central reload orchestrator with digest diffing and Bus broadcast |
 | `LemonCore.ConfigReloader.Digest` | File/env/secrets digest computation |
 | `LemonCore.ConfigReloader.Watcher` | FileSystem watcher targeting config.toml and .env paths |
+| `LemonCore.Setup.Readiness` | Read-only first-run readiness shared by setup, TUI, Web, and launchers |
 | `LemonCore.GatewayConfig` | Unified gateway config access merging TOML, app env, and transport overrides |
 | `LemonCore.Dotenv` | `.env` file loader preserving existing env vars |
 | `LemonCore.Logging` | Runtime log-to-file handler from `[logging]` config |
+| `LemonCore.OAuth.LocalCallbackListener` | One-shot localhost OAuth callback capture with monitored listener failure and bounded wait/cleanup |
 
 ### Doctor and Support
 
@@ -135,8 +147,13 @@ ids, message bodies, proof details, credentials, or secret names.
 
 | Module | Purpose |
 |--------|---------|
-| `LemonCore.Secrets` | Encrypted secrets API (get/set/list/delete/resolve with env fallback) |
+| `LemonCore.Secrets` | Encrypted secrets API and store/external/environment resolution |
 | `LemonCore.Secrets.Crypto` | AES-256-GCM encryption with HKDF-SHA256 key derivation |
+| `LemonCore.Secrets.EnvCatalog` | Ordered environment-secret catalog for packaged and Mix check/import commands |
+| `LemonCore.Secrets.External` | Ordered, supervised, fail-closed external-source orchestration and redacted diagnostics |
+| `LemonCore.Secrets.Source` | Read-only source behaviour implemented by 1Password, Bitwarden, and command adapters |
+| `LemonCore.Secrets.SourceRunner` | Minimal-environment argv runner with timeout and output caps |
+| `LemonCore.Secrets.SourceCache` | Bounded optional process-local TTL cache |
 | `LemonCore.Secrets.Keychain` | macOS Keychain integration for master key storage |
 | `LemonCore.Secrets.MasterKey` | Master key resolution chain (keychain -> env var) |
 
@@ -254,7 +271,9 @@ default suggestions just because the upstream provider documents them.
 - `providers` -- LLM API keys and base URLs (anthropic, openai, openai-codex, opencode, kimi, google)
 - `defaults` -- Preferred home for default provider/model/thinking level/engine
 - `runtime` -- Runtime behavior (compaction, retry, shell, tools, cli, extensions, theme)
-- `profiles` -- Per-agent profiles with tool policies
+- `profiles` -- Per-agent identity/model/node defaults and tool policies. The
+  user-managed lifecycle lives in `LemonCore.ProfileStore`, with derived homes
+  at `~/.lemon/profiles/<id>/` and stable `agent:<id>:main` session keys.
 - `agent` -- Legacy alias for runtime/default settings (still supported)
 - `agents` -- Legacy alias for profile settings (still supported)
 - `tui` -- Theme, debug mode
@@ -293,6 +312,15 @@ LemonCore.ConfigReloader.reload/1
   |-- Broadcast :config_reloaded on "system" topic
   |-- On failure: keep last good snapshot, emit :config_reload_failed
 ```
+
+### First-run readiness
+
+`LemonCore.Setup.Readiness.status/1` derives one shared readiness state from the
+global config, secrets backend, default provider/model, and credential source.
+It never performs a network request or mutates setup state. Clients use
+`pending_steps/1` and `ready?/1` so a setup wizard, first-run gate, or browser
+cannot silently invent a different definition of “ready.” Live provider
+verification remains in `lemon_cli` and doctor diagnostics.
 
 ### Environment Variable Overrides
 
@@ -347,8 +375,9 @@ For local Linux/dev usage, treat `~/.lemon/secrets_master_key` as the canonical 
 # Retrieve a secret
 {:ok, value} = LemonCore.Secrets.get("api_key")
 
-# Resolve (store first, then env fallback)
+# Resolve (store first, then external sources, then env fallback)
 {:ok, value, :store} = LemonCore.Secrets.resolve("api_key")
+{:ok, value, "external:command:local_helper"} = LemonCore.Secrets.resolve("api_key")
 {:ok, value, :env} = LemonCore.Secrets.resolve("MISSING_FROM_STORE")
 
 # Convenience (returns value or nil)
@@ -367,7 +396,32 @@ exists? = LemonCore.Secrets.exists?("api_key")
 status = LemonCore.Secrets.status()
 ```
 
-Secrets automatically fall back to environment variables of the same name. Use `env_fallback: false` to disable. Secret reads update usage metadata (`usage_count`, `last_used_at`) without mutating `updated_at`.
+External sources are read-only fallbacks behind the encrypted store and ahead
+of environment variables. They are disabled unless their config contains the
+exact boolean `enabled = true`. Enabled-source failures stop resolution before
+environment fallback; a source that succeeds without the requested name may
+continue. Use `env_fallback: false` to disable both external and environment
+fallbacks. Secret reads update usage metadata (`usage_count`, `last_used_at`)
+without mutating `updated_at`.
+
+1Password, Bitwarden Secrets Manager, and arbitrary argv-only command adapters
+share one supervised runner with exact config validation, minimal child
+environments, stable redacted errors, and configured time/output limits. The
+optional bounded process-local cache defaults off. Inspect or live-test them
+without revealing values:
+
+```bash
+lemon secrets sources status --json
+lemon secrets sources test [source-id] --json
+```
+
+See [`docs/config.md`](../../docs/config.md#external-secret-sources) for the
+exact source schemas and bootstrap rules.
+
+`LemonCore.Secrets.EnvCatalog.names/0` is the canonical ordered set used by
+the packaged `lemon secrets check` / `lemon secrets import-env` commands and
+their Mix equivalents. It is intentionally separate from the release-profile
+runtime declarations in `LemonCore.Env`.
 
 ## Storage Backends
 
@@ -401,7 +455,7 @@ MyApp.WidgetStore.put(id, widget)
 widget = MyApp.WidgetStore.get(id)
 ```
 
-`put_new/3` is the insert-if-absent primitive for durable claims. It returns `:ok` for the first writer and `{:error, :exists}` for later writers without overwriting the original value.
+`put_new/3` is the insert-if-absent primitive for durable claims. It returns `:ok` for the first writer and `{:error, :exists}` for later writers without overwriting the original value. `take/2` atomically consumes a key, and `compare_and_swap/4` replaces a value only when its exact expected value is still current; both are serialized inside the Store process.
 
 Store calls are fail-soft: if the GenServer is overloaded/unavailable, write APIs return `{:error, :store_unavailable}` and read/list APIs return `nil`/`[]`.
 

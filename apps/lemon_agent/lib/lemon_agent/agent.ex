@@ -371,11 +371,13 @@ defmodule LemonAgent.Agent do
   delivered before the next model call without canceling anything. When no run
   is active it degrades to `follow_up/3` semantics. Pass `system_prompt:
   prompt` to apply a per-turn prompt refresh when the queued message is
-  consumed.
+  consumed. The call returns only after the correction is queued and any
+  active model request has been signaled, so a fast completion cannot race
+  ahead of an accepted redirect.
   """
   @spec redirect(GenServer.server(), Types.agent_message(), keyword()) :: :ok
   def redirect(agent, message, opts \\ []) do
-    GenServer.cast(agent, {:redirect, queued_message(message, opts)})
+    GenServer.call(agent, {:redirect, queued_message(message, opts)})
   end
 
   @doc """
@@ -662,6 +664,10 @@ defmodule LemonAgent.Agent do
     {:reply, :ok, %{state | follow_up_mode: mode}}
   end
 
+  def handle_call({:redirect, message}, _from, state) do
+    {:reply, :ok, apply_redirect(state, message)}
+  end
+
   def handle_call(:get_state, _from, state) do
     {:reply, state.agent_state, state}
   end
@@ -748,44 +754,11 @@ defmodule LemonAgent.Agent do
   end
 
   def handle_cast({:redirect, message}, state) do
-    case {state.running_task, state.abort_ref} do
-      {task, abort_ref} when not is_nil(task) and is_reference(abort_ref) ->
-        # Enqueue the correction before raising the redirect flag so it is
-        # already in the steering queue when the loop observes the flag and
-        # drains steering. The abort_ref stays a plain reference: a redirect
-        # must never flip it to the {:aborted, ref} sentinel, or was_aborted
-        # bookkeeping would misreport.
-        state = %{state | steering_queue: state.steering_queue ++ [message]}
-        AbortSignal.request_redirect(abort_ref)
-        {:noreply, state}
-
-      _ ->
-        # No live run (idle, or the current run is already aborting):
-        # degrade to follow-up semantics.
-        handle_cast({:follow_up, message}, state)
-    end
+    {:noreply, apply_redirect(state, message)}
   end
 
   def handle_cast({:follow_up, message}, state) do
-    state = %{state | follow_up_queue: state.follow_up_queue ++ [message]}
-
-    state =
-      case state.follow_up_poll do
-        %{from: from, abort_ref: poll_abort_ref} = poll ->
-          if abort_ref_matches?(state.abort_ref, poll_abort_ref) do
-            if poll[:timer_ref], do: Process.cancel_timer(poll.timer_ref)
-            {messages, new_queue} = consume_queue(state.follow_up_queue, state.follow_up_mode)
-            GenServer.reply(from, messages)
-            %{state | follow_up_queue: new_queue, follow_up_poll: nil}
-          else
-            state
-          end
-
-        _ ->
-          state
-      end
-
-    {:noreply, state}
+    {:noreply, enqueue_follow_up(state, message)}
   end
 
   def handle_cast({:unsubscribe, pid}, state) do
@@ -1300,6 +1273,44 @@ defmodule LemonAgent.Agent do
 
   @spec consume_queue(list(Types.agent_message()), queue_mode()) ::
           {list(Types.agent_message()), list(Types.agent_message())}
+  defp apply_redirect(state, message) do
+    case {state.running_task, state.abort_ref} do
+      {task, abort_ref} when not is_nil(task) and is_reference(abort_ref) ->
+        # Enqueue the correction before raising the redirect flag so it is
+        # already in the steering queue when the loop observes the flag and
+        # drains steering. The abort_ref stays a plain reference: a redirect
+        # must never flip it to the {:aborted, ref} sentinel, or was_aborted
+        # bookkeeping would misreport.
+        state = %{state | steering_queue: state.steering_queue ++ [message]}
+        AbortSignal.request_redirect(abort_ref)
+        state
+
+      _ ->
+        # No live run (idle, or the current run is already aborting):
+        # degrade to follow-up semantics.
+        enqueue_follow_up(state, message)
+    end
+  end
+
+  defp enqueue_follow_up(state, message) do
+    state = %{state | follow_up_queue: state.follow_up_queue ++ [message]}
+
+    case state.follow_up_poll do
+      %{from: from, abort_ref: poll_abort_ref} = poll ->
+        if abort_ref_matches?(state.abort_ref, poll_abort_ref) do
+          if poll[:timer_ref], do: Process.cancel_timer(poll.timer_ref)
+          {messages, new_queue} = consume_queue(state.follow_up_queue, state.follow_up_mode)
+          GenServer.reply(from, messages)
+          %{state | follow_up_queue: new_queue, follow_up_poll: nil}
+        else
+          state
+        end
+
+      _ ->
+        state
+    end
+  end
+
   defp consume_queue([], _mode), do: {[], []}
 
   defp consume_queue(queue, :one_at_a_time) do

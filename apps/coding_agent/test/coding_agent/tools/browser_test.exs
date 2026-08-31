@@ -42,6 +42,67 @@ defmodule CodingAgent.Tools.BrowserTest do
     assert result.details["networkPolicy"]["targetKind"] == "public_network"
   end
 
+  test "browser tab lifecycle tools expose and forward stable target IDs" do
+    parent = self()
+
+    request = fn method, args, timeout_ms ->
+      send(parent, {:browser_request, method, args, timeout_ms})
+
+      {:ok,
+       %{
+         "targetId" => args["targetId"] || "target-new",
+         "activeTargetId" => args["targetId"] || "target-new",
+         "tabs" => []
+       }}
+    end
+
+    tabs = Tools.get_tool("browser_tabs", "/tmp", browser_request: request)
+    open = Tools.get_tool("browser_tab_open", "/tmp", browser_request: request)
+    activate = Tools.get_tool("browser_tab_activate", "/tmp", browser_request: request)
+    close = Tools.get_tool("browser_tab_close", "/tmp", browser_request: request)
+
+    assert %AgentToolResult{} = run_browser_tool(tabs, %{"timeoutMs" => 500})
+
+    assert %AgentToolResult{} =
+             run_browser_tool(open, %{"url" => "https://example.com", "timeoutMs" => 500})
+
+    assert %AgentToolResult{} =
+             run_browser_tool(activate, %{"targetId" => "target-1", "timeoutMs" => 500})
+
+    assert %AgentToolResult{} =
+             run_browser_tool(close, %{"targetId" => "target-1", "timeoutMs" => 500})
+
+    assert_received {:browser_request, "browser.tabs", %{}, 500}
+
+    assert_received {:browser_request, "browser.tabOpen", %{"url" => "https://example.com"}, 500}
+
+    assert_received {:browser_request, "browser.tabActivate", %{"targetId" => "target-1"}, 500}
+
+    assert_received {:browser_request, "browser.tabClose", %{"targetId" => "target-1"}, 500}
+  end
+
+  test "page tools accept an explicit targetId without exposing it as content" do
+    parent = self()
+
+    request = fn method, args, timeout_ms ->
+      send(parent, {:browser_request, method, args, timeout_ms})
+      {:ok, %{"url" => args["url"], "title" => "Example"}}
+    end
+
+    tool = Tools.get_tool("browser_navigate", "/tmp", browser_request: request)
+    assert tool.parameters["properties"]["targetId"]["type"] == "string"
+
+    assert %AgentToolResult{} =
+             run_browser_tool(tool, %{
+               "url" => "https://example.com",
+               "targetId" => "target-2",
+               "timeoutMs" => 500
+             })
+
+    assert_received {:browser_request, "browser.navigate",
+                     %{"url" => "https://example.com", "targetId" => "target-2"}, 500}
+  end
+
   test "browser_navigate enforces public and local route guards before the browser worker" do
     request = fn _method, _args, _timeout_ms ->
       flunk("browser request should not run for blocked navigation")

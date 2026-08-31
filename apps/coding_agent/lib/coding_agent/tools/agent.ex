@@ -16,13 +16,14 @@ defmodule CodingAgent.Tools.Agent do
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAi.Types.TextContent
   alias CodingAgent.AsyncFollowups
-  alias CodingAgent.{RunGraph, Subagents, TaskStore}
+  alias CodingAgent.{JoinAwait, RunGraph, Subagents, TaskStore}
   alias LemonCore.{Bus, Events, RouterBridge, RunRequest, SessionKey, Store}
 
   @valid_actions ["run", "poll", "join"]
   @valid_queue_modes ["collect", "followup", "steer", "steer_backlog", "interrupt"]
   @default_sync_timeout_ms 120_000
   @default_watcher_timeout_ms 30 * 60 * 1000
+  @default_reconciliation_timeout_ms 30 * 60 * 1000
   @default_run_orchestrator RouterBridge
   @completion_poll_interval_ms 250
 
@@ -97,7 +98,13 @@ defmodule CodingAgent.Tools.Agent do
           },
           "cwd" => %{
             "type" => "string",
-            "description" => "Optional delegated working directory (defaults to current cwd)"
+            "description" =>
+              "Optional delegated working directory. Local runs default to the current cwd; named-node runs default to the destination cwd."
+          },
+          "node" => %{
+            "type" => "string",
+            "description" =>
+              "Optional execution node name. Omit or use local for this node; named nodes use their own credentials and default cwd unless cwd is explicit."
           },
           "meta" => %{
             "type" => "object",
@@ -146,7 +153,7 @@ defmodule CodingAgent.Tools.Agent do
     else
       case normalize_action(Map.get(params, "action")) do
         "poll" -> do_poll(params)
-        "join" -> do_join(params)
+        "join" -> do_join(params, signal)
         "run" -> do_run(params, cwd, opts)
         other -> {:error, "Unsupported action: #{inspect(other)}"}
       end
@@ -183,15 +190,45 @@ defmodule CodingAgent.Tools.Agent do
     end
   end
 
-  defp do_join(params) do
+  defp do_join(params, signal) do
     with {:ok, task_ids} <- validate_join_task_ids(params),
          {:ok, mode} <- validate_join_mode(params),
-         {:ok, run_ids} <- resolve_run_ids(task_ids),
-         {:ok, join_result} <- RunGraph.await(run_ids, mode, :infinity) do
-      build_join_result(task_ids, join_result)
+         {:ok, run_ids} <- resolve_run_ids(task_ids) do
+      join_token = make_ref()
+
+      try do
+        TaskStore.begin_auto_followup_join(task_ids, join_token)
+
+        case JoinAwait.await(run_ids, task_ids, mode, signal) do
+          {:ok, join_result} ->
+            suppressed = joined_completion_task_ids(task_ids, join_result)
+            TaskStore.finish_auto_followup_join(task_ids, suppressed, join_token)
+            build_join_result(task_ids, join_result)
+
+          {:parent_question, request} ->
+            build_parent_question_join_result(task_ids, mode, request)
+
+          {:error, :aborted} ->
+            {:error, "Operation aborted"}
+
+          {:error, {:unknown_run, run_id}} ->
+            {:error, "Unknown run_id: #{run_id}"}
+
+          {:error, reason} ->
+            {:error, reason}
+        end
+      after
+        release_join_reservation(task_ids, join_token)
+      end
     else
       {:error, reason} -> {:error, reason}
     end
+  end
+
+  defp release_join_reservation(task_ids, join_token) do
+    TaskStore.finish_auto_followup_join(task_ids, [], join_token)
+  catch
+    :exit, _reason -> :ok
   end
 
   defp validate_join_task_ids(params) do
@@ -245,6 +282,60 @@ defmodule CodingAgent.Tools.Agent do
     end
   end
 
+  defp joined_completion_task_ids(task_ids, %{mode: :wait_any, run: run}) do
+    if RunGraph.normalize_status(run[:status]) == :completed do
+      task_ids
+      |> Enum.find(fn task_id ->
+        case TaskStore.get(task_id) do
+          {:ok, record, _events} -> Map.get(record, :run_id) == run[:id]
+          _ -> false
+        end
+      end)
+      |> List.wrap()
+    else
+      []
+    end
+  end
+
+  defp joined_completion_task_ids(task_ids, %{mode: :wait_all, runs: runs}) do
+    completed_run_ids =
+      runs
+      |> Enum.filter(&(RunGraph.normalize_status(&1[:status]) == :completed))
+      |> MapSet.new(& &1[:id])
+
+    Enum.filter(task_ids, fn task_id ->
+      case TaskStore.get(task_id) do
+        {:ok, record, _events} ->
+          MapSet.member?(completed_run_ids, Map.get(record, :run_id))
+
+        _ ->
+          false
+      end
+    end)
+  end
+
+  defp build_parent_question_join_result(task_ids, mode, request) do
+    %AgentToolResult{
+      content: [
+        %TextContent{
+          text:
+            "A joined child needs a parent decision before it can continue. " <>
+              "Question: #{request.question}\nBlocked because: #{request.why_blocked}"
+        }
+      ],
+      details: %{
+        status: "needs_parent_answer",
+        mode: Atom.to_string(mode),
+        task_ids: task_ids,
+        request_id: request.id,
+        question: request.question,
+        why_blocked: request.why_blocked,
+        options: request.options,
+        recommended_option: request.recommended_option
+      }
+    }
+  end
+
   defp build_join_result(task_ids, %{mode: :wait_all, runs: runs}) do
     %AgentToolResult{
       content: [%TextContent{text: "Joined #{length(task_ids)} delegated task(s)."}],
@@ -285,7 +376,7 @@ defmodule CodingAgent.Tools.Agent do
   end
 
   defp maybe_promote_from_run_store(_task_id, %{status: status})
-       when status not in [:queued, :running],
+       when status not in [:queued, :running, :tracking_lost],
        do: :ok
 
   defp maybe_promote_from_run_store(task_id, record) do
@@ -322,11 +413,32 @@ defmodule CodingAgent.Tools.Agent do
         run_id: run_id,
         agent_id: validated.agent_id,
         delegated_session_key: delegated_session_key,
-        role: validated.role_id
+        role: validated.role_id,
+        node: result_node(validated)
       })
 
-    start_completion_watcher(task_id, run_id, validated, delegated_session_key, request, opts)
+    :ok = register_delegated_run(run_id, task_id, validated, delegated_session_key)
 
+    watcher_result =
+      start_completion_watcher(
+        task_id,
+        run_id,
+        validated,
+        delegated_session_key,
+        request,
+        opts
+      )
+
+    build_async_submission_result(
+      watcher_result,
+      task_id,
+      run_id,
+      validated,
+      delegated_session_key
+    )
+  end
+
+  defp build_async_submission_result(:ok, task_id, run_id, validated, delegated_session_key) do
     %AgentToolResult{
       content: [
         %TextContent{
@@ -341,9 +453,73 @@ defmodule CodingAgent.Tools.Agent do
         agent_id: validated.agent_id,
         session_key: delegated_session_key,
         auto_followup: validated.auto_followup,
-        role: validated.role_id
+        role: validated.role_id,
+        node: result_node(validated)
       }
     }
+  end
+
+  defp build_async_submission_result(
+         {:error, reason},
+         task_id,
+         run_id,
+         validated,
+         delegated_session_key
+       ) do
+    tracking_error = {:completion_watcher_start_failed, reason}
+    mark_delegated_run_failed(run_id, tracking_error)
+    TaskStore.fail(task_id, tracking_error)
+
+    Logger.warning(
+      "Agent tool submitted run but failed to start completion watcher " <>
+        "task_id=#{inspect(task_id)} run_id=#{inspect(run_id)} reason=#{inspect(reason)}"
+    )
+
+    %AgentToolResult{
+      content: [
+        %TextContent{
+          text:
+            "Delegated run #{run_id} was submitted, but local completion tracking failed " <>
+              "(task #{task_id})."
+        }
+      ],
+      details: %{
+        status: "tracking_error",
+        task_id: task_id,
+        run_id: run_id,
+        agent_id: validated.agent_id,
+        session_key: delegated_session_key,
+        auto_followup: false,
+        role: validated.role_id,
+        node: result_node(validated),
+        error: inspect(reason)
+      }
+    }
+  end
+
+  defp register_delegated_run(run_id, task_id, validated, delegated_session_key) do
+    case RunGraph.get(run_id) do
+      {:ok, _record} ->
+        :ok
+
+      {:error, :not_found} ->
+        now = System.system_time(:second)
+
+        RunGraph.insert_record(run_id, %{
+          id: run_id,
+          status: :queued,
+          inserted_at: now,
+          updated_at: now,
+          parent: nil,
+          children: [],
+          type: :agent,
+          task_id: task_id,
+          agent_id: validated.agent_id,
+          delegated_session_key: delegated_session_key,
+          description: validated.description,
+          node: result_node(validated)
+        })
+    end
   end
 
   defp wait_sync_completion(run_id, validated, delegated_session_key) do
@@ -360,7 +536,8 @@ defmodule CodingAgent.Tools.Agent do
               agent_id: validated.agent_id,
               session_key: delegated_session_key,
               duration_ms: completion.duration_ms,
-              role: validated.role_id
+              role: validated.role_id,
+              node: result_node(validated)
             }
           }
         else
@@ -401,6 +578,15 @@ defmodule CodingAgent.Tools.Agent do
       meta =
         base_meta
         |> Map.merge(validated.meta)
+        |> Map.drop([
+          :node,
+          "node",
+          :remote_cwd,
+          "remote_cwd",
+          :remote_cwd_explicit,
+          "remote_cwd_explicit"
+        ])
+        |> put_execution_node(validated)
         |> compact_map()
 
       request =
@@ -461,17 +647,29 @@ defmodule CodingAgent.Tools.Agent do
       opts: opts
     }
 
-    Task.Supervisor.start_child(CodingAgent.TaskSupervisor, fn ->
-      monitor_completion(watcher_opts)
-    end)
+    task_supervisor = Keyword.get(opts, :task_supervisor, CodingAgent.TaskSupervisor)
 
-    receive do
-      {:agent_tool_watcher_ready, ^ready_ref} -> :ok
-    after
-      150 -> :ok
+    case start_watcher(task_supervisor, watcher_opts) do
+      {:ok, _pid} ->
+        receive do
+          {:agent_tool_watcher_ready, ^ready_ref} -> :ok
+        after
+          150 -> :ok
+        end
+
+        :ok
+
+      {:error, reason} ->
+        {:error, reason}
     end
+  end
 
-    :ok
+  defp start_watcher(task_supervisor, watcher_opts) do
+    Task.Supervisor.start_child(task_supervisor, fn -> monitor_completion(watcher_opts) end)
+  rescue
+    error -> {:error, {:exception, error}}
+  catch
+    kind, reason -> {:error, {kind, reason}}
   end
 
   defp monitor_completion(%{
@@ -485,6 +683,7 @@ defmodule CodingAgent.Tools.Agent do
          opts: opts
        }) do
     TaskStore.mark_running(task_id)
+    mark_delegated_run_running(run_id)
 
     on_subscribed =
       if match?({pid, _} when is_pid(pid), subscribe_notify) do
@@ -500,23 +699,83 @@ defmodule CodingAgent.Tools.Agent do
           run_id: run_id,
           agent_id: validated.agent_id,
           delegated_session_key: delegated_session_key,
-          role: validated.role_id
+          role: validated.role_id,
+          node: result_node(validated)
         })
 
-        if validated.auto_followup do
+        if validated.auto_followup and not TaskStore.auto_followup_suppressed?(task_id) do
           maybe_send_auto_followup(completion, run_id, task_id, validated, request, opts)
         end
 
       {:error, :timeout} ->
-        TaskStore.fail(task_id, :timeout)
+        TaskStore.mark_tracking_lost(task_id, :watcher_timeout)
+
+        reconcile_late_completion(
+          task_id,
+          run_id,
+          validated,
+          delegated_session_key,
+          request,
+          opts
+        )
 
       {:error, reason} ->
+        mark_delegated_run_failed(run_id, reason)
         TaskStore.fail(task_id, reason)
     end
   rescue
     error ->
       Logger.warning("Agent tool watcher crashed for task_id=#{task_id}: #{inspect(error)}")
+      mark_delegated_run_failed(run_id, {:watcher_crash, error})
       TaskStore.fail(task_id, {:watcher_crash, error})
+  catch
+    kind, reason ->
+      Logger.warning(
+        "Agent tool watcher exited for task_id=#{task_id}: #{inspect({kind, reason})}"
+      )
+
+      mark_delegated_run_failed(run_id, {:watcher_crash, {kind, reason}})
+      TaskStore.fail(task_id, {:watcher_crash, {kind, reason}})
+  end
+
+  defp reconcile_late_completion(
+         task_id,
+         run_id,
+         validated,
+         delegated_session_key,
+         request,
+         opts
+       ) do
+    timeout_ms =
+      Keyword.get(
+        opts,
+        :agent_tool_reconciliation_timeout_ms,
+        @default_reconciliation_timeout_ms
+      )
+
+    case await_run_completion(run_id, timeout_ms) do
+      {:ok, completion} ->
+        finalize_task_from_completion(task_id, completion, %{
+          run_id: run_id,
+          agent_id: validated.agent_id,
+          delegated_session_key: delegated_session_key,
+          role: validated.role_id
+        })
+
+        if validated.auto_followup and not TaskStore.auto_followup_suppressed?(task_id) do
+          maybe_send_auto_followup(completion, run_id, task_id, validated, request, opts)
+        end
+
+      {:error, :timeout} ->
+        Logger.warning(
+          "Agent tool reconciliation still has no terminal result for task_id=#{task_id} run_id=#{run_id}"
+        )
+
+      {:error, reason} ->
+        Logger.warning(
+          "Agent tool reconciliation failed for task_id=#{task_id}: #{inspect(reason)}"
+        )
+    end
   end
 
   defp maybe_send_auto_followup(completion, run_id, task_id, validated, request, opts) do
@@ -568,6 +827,14 @@ defmodule CodingAgent.Tools.Agent do
     error ->
       Logger.warning(
         "Failed to auto-followup delegated run #{run_id} (task #{task_id}): #{inspect(error)}"
+      )
+
+      :ok
+  catch
+    kind, reason ->
+      Logger.warning(
+        "Failed to auto-followup delegated run #{run_id} (task #{task_id}): " <>
+          inspect({kind, reason})
       )
 
       :ok
@@ -840,16 +1107,47 @@ defmodule CodingAgent.Tools.Agent do
           |> Map.put(:duration_ms, completion.duration_ms)
       }
 
+      mark_delegated_run_finished(Map.get(details, :run_id), result)
       TaskStore.finish(task_id, result)
     else
-      TaskStore.fail(task_id, %{
+      error = %{
         status: "error",
         error: completion.error,
         answer: completion.answer,
         details: details
-      })
+      }
+
+      mark_delegated_run_failed(Map.get(details, :run_id), error)
+      TaskStore.fail(task_id, error)
     end
   end
+
+  defp mark_delegated_run_running(run_id) when is_binary(run_id) do
+    case RunGraph.mark_running(run_id) do
+      :ok -> :ok
+      {:error, :invalid_transition} -> :ok
+    end
+  end
+
+  defp mark_delegated_run_running(_run_id), do: :ok
+
+  defp mark_delegated_run_finished(run_id, result) when is_binary(run_id) do
+    case RunGraph.finish(run_id, result) do
+      :ok -> :ok
+      {:error, :invalid_transition} -> :ok
+    end
+  end
+
+  defp mark_delegated_run_finished(_run_id, _result), do: :ok
+
+  defp mark_delegated_run_failed(run_id, error) when is_binary(run_id) do
+    case RunGraph.fail(run_id, error) do
+      :ok -> :ok
+      {:error, :invalid_transition} -> :ok
+    end
+  end
+
+  defp mark_delegated_run_failed(_run_id, _error), do: :ok
 
   defp auto_followup_text(completion, run_id, validated) do
     agent_id = validated.agent_id
@@ -956,7 +1254,10 @@ defmodule CodingAgent.Tools.Agent do
     timeout_ms = Map.get(params, "timeout_ms", @default_sync_timeout_ms)
     tool_policy = Map.get(params, "tool_policy")
     meta = Map.get(params, "meta")
-    delegated_cwd = Map.get(params, "cwd")
+    raw_delegated_cwd = Map.get(params, "cwd")
+    delegated_cwd = normalize_optional_string(raw_delegated_cwd)
+    raw_node = Map.get(params, "node")
+    node = normalize_optional_string(raw_node)
     model = Map.get(params, "model")
     role_cwd = delegated_cwd || cwd
 
@@ -997,8 +1298,11 @@ defmodule CodingAgent.Tools.Agent do
       not is_nil(meta) and not is_map(meta) ->
         {:error, "meta must be an object"}
 
-      not is_nil(delegated_cwd) and not is_binary(delegated_cwd) ->
+      not is_nil(raw_delegated_cwd) and not is_binary(raw_delegated_cwd) ->
         {:error, "cwd must be a string"}
+
+      not is_nil(raw_node) and not is_binary(raw_node) ->
+        {:error, "node must be a string"}
 
       not is_nil(model) and not is_binary(model) ->
         {:error, "model must be a string"}
@@ -1024,6 +1328,7 @@ defmodule CodingAgent.Tools.Agent do
            tool_policy: tool_policy,
            meta: meta || %{},
            cwd: delegated_cwd,
+           node: node,
            model: normalize_optional_string(model)
          }}
     end
@@ -1112,6 +1417,7 @@ defmodule CodingAgent.Tools.Agent do
               task_id: task_id,
               status: "completed",
               result: result,
+              node: Map.get(record, :node, "local"),
               events: Enum.take(events, -5)
             }
           }
@@ -1126,6 +1432,7 @@ defmodule CodingAgent.Tools.Agent do
             task_id: task_id,
             status: "error",
             error: error,
+            node: Map.get(record, :node, "local"),
             events: Enum.take(events, -5)
           }
         }
@@ -1139,6 +1446,7 @@ defmodule CodingAgent.Tools.Agent do
             run_id: Map.get(record, :run_id),
             agent_id: Map.get(record, :agent_id),
             session_key: Map.get(record, :delegated_session_key),
+            node: Map.get(record, :node, "local"),
             events: Enum.take(events, -5)
           }
         }
@@ -1210,6 +1518,25 @@ defmodule CodingAgent.Tools.Agent do
     |> Map.new()
   end
 
+  defp put_execution_node(meta, %{node: nil}), do: meta
+
+  defp put_execution_node(meta, %{node: "local"}) do
+    Map.put(meta, :node, "local")
+  end
+
+  defp put_execution_node(meta, %{node: node, cwd: cwd}) do
+    meta
+    |> Map.put(:node, node)
+    |> Map.put(:remote_cwd_explicit, is_binary(cwd))
+    |> maybe_put_remote_cwd(cwd)
+  end
+
+  defp maybe_put_remote_cwd(meta, cwd) when is_binary(cwd), do: Map.put(meta, :remote_cwd, cwd)
+  defp maybe_put_remote_cwd(meta, _cwd), do: meta
+
+  defp result_node(%{node: node}) when is_binary(node), do: node
+  defp result_node(_), do: "local"
+
   defp format_error(nil), do: "unknown"
   defp format_error(error) when is_binary(error), do: error
   defp format_error(error), do: inspect(error)
@@ -1243,6 +1570,7 @@ defmodule CodingAgent.Tools.Agent do
     - queue_mode: delegated run submission mode (default: collect)
     - followup_queue_mode: delegated completion delivery mode (default: app config, fallback: followup)
     - model: optional model override (e.g., "gemini-2.5-pro" for complex tasks)
+    - node: optional named execution node (omitted or "local" runs locally)
     """
     |> String.trim()
   end

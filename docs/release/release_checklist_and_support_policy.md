@@ -28,7 +28,7 @@ local artifact proof, and support-bundle verification for each target.
 
 The Release workflow automates the repeatable candidate gates against the exact
 tagged commit. It validates version/changelog consistency and release notes,
-runs `scripts/lint_ci_docs.sh`, `scripts/verify_source_install`,
+runs `scripts/verify_source_install`,
 `scripts/verify_install_script`, `scripts/test fast`, `scripts/test quality`,
 `scripts/test clients`, and `scripts/test eval-fast`, then builds and
 boot-verifies the published artifacts. Do not repeat these manually for an
@@ -491,6 +491,12 @@ steps.
 - [ ] Run `scripts/test clients`.
 - [ ] Build `lemon_runtime_min` with `MIX_ENV=prod mix release lemon_runtime_min --overwrite`.
 - [ ] Build `lemon_runtime_full` with `MIX_ENV=prod mix release lemon_runtime_full --overwrite`.
+- [ ] Confirm `release-smoke.yml` builds both runtime profiles and evaluates the
+      packaged releases directly, while `scripts/verify_release_runtime_boot`
+      repeats the same check on each min/full release tarball. Each release must
+      load `LemonMCP.Client`, report `LemonSkills.McpSource.mcp_enabled?/0`, keep
+      `:lemon_mcp` loaded but not started, expose no application callback, and
+      contain no `LemonMCP.Application` module.
 - [ ] Build local Sim UI assets and `sim_broadcast_platform` with
       `MIX_ENV=prod mix sim_ui.assets.deploy` and
       `MIX_ENV=prod mix release sim_broadcast_platform --overwrite`.
@@ -529,45 +535,9 @@ steps.
 - [ ] Confirm the Bun TUI package and release lanes validate `clients/tui` and
       publish all three `lemon_tui` platform artifacts without publishing a
       separate package.
-- [ ] Run `LEMON_DISCORD_LIVE_PROOF_JSON=tmp/discord-live-proof.json
-      LEMON_DISCORD_LIVE_REDACTED_PROOF_JSON=.lemon/proofs/discord-live-matrix-latest.json
-      LEMON_DISCORD_MEDIA_SLASH_PROOF_JSON=tmp/discord-media-slash-proof-check.json
-      LEMON_DISCORD_MEDIA_SLASH_REDACTED_PROOF_JSON=.lemon/proofs/discord-media-slash-registration-latest.json
-      LEMON_DISCORD_ROLLBACK_SLASH_PROOF_JSON=tmp/discord-rollback-slash-proof-check.json
-      LEMON_DISCORD_ROLLBACK_SLASH_REDACTED_PROOF_JSON=.lemon/proofs/discord-rollback-slash-registration-latest.json
-      LEMON_DISCORD_ALL_SLASH_PROOF_JSON=tmp/discord-all-slash-proof-check.json
-      LEMON_DISCORD_ALL_SLASH_REDACTED_PROOF_JSON=.lemon/proofs/discord-all-slash-registration-latest.json
-      LEMON_TELEGRAM_MEDIA_DIRECTIVE_REDACTED_PROOF_JSON=.lemon/proofs/telegram-media-directive-latest.json
-      LEMON_DISCORD_MEDIA_DIRECTIVE_REDACTED_PROOF_JSON=.lemon/proofs/discord-media-directive-latest.json
-      LEMON_DISCORD_DM_REDACTED_PROOF_JSON=.lemon/proofs/discord-dm-latest.json
-      LEMON_DISCORD_FREE_RESPONSE_REDACTED_PROOF_JSON=.lemon/proofs/discord-free-response-latest.json
-      LEMON_DISCORD_SLASH_CLIENT_CLICK_PROOF_JSON=.lemon/proofs/discord-slash-client-click-proof-latest.json
-      LEMON_MEDIA_IMAGE_PROOF_JSON=.lemon/proofs/media-image-smoke-latest.json
-      LEMON_MEDIA_SPEECH_PROOF_JSON=.lemon/proofs/media-speech-smoke-latest.json
-      LEMON_MEDIA_TRANSCRIPTION_PROOF_JSON=.lemon/proofs/media-transcription-smoke-latest.json
-      LEMON_MEDIA_VISION_PROOF_JSON=.lemon/proofs/media-vision-smoke-latest.json
-      LEMON_MEDIA_VIDEO_PROOF_JSON=.lemon/proofs/media-video-smoke-latest.json
-      LEMON_BROWSER_PROOF_JSON=.lemon/proofs/browser-smoke-latest.json
-      LEMON_OPENAI_COMPAT_PROOF_JSON=.lemon/proofs/openai-compat-smoke-latest.json
-      LEMON_ACP_STDIO_PROOF_JSON=.lemon/proofs/acp-stdio-smoke-latest.json
-      LEMON_ACP_EXTERNAL_CLIENT_PROOF_JSON=.lemon/proofs/acp-stdio-external-client-latest.json
-      LEMON_ACP_OFFICIAL_SDK_PROOF_JSON=.lemon/proofs/acp-official-sdk-client-latest.json
-      LEMON_MCP_STDIO_PROOF_JSON=.lemon/proofs/mcp-stdio-latest.json
-      LEMON_MCP_HTTP_PROOF_JSON=.lemon/proofs/mcp-http-latest.json
-      LEMON_MCP_SSE_PROOF_JSON=.lemon/proofs/mcp-sse-latest.json
-      LEMON_LSP_PROJECT_FIXTURES_PROOF_JSON=.lemon/proofs/lsp-project-fixtures-latest.json
-      LEMON_LSP_REAL_REPO_PROOF_JSON=.lemon/proofs/lsp-real-repo-fixtures-latest.json
-      LEMON_EXTENSION_HOST_PROOF_JSON=.lemon/proofs/extension-host-smoke-latest.json
-      LEMON_WASM_TELEMETRY_PROOF_JSON=.lemon/proofs/wasm-tool-telemetry-latest.json
-      LEMON_WASM_POLICY_PROOF_JSON=.lemon/proofs/wasm-policy-latest.json
-      LEMON_EXTENSION_REGISTRY_AUDIT_PROOF_JSON=.lemon/proofs/extension-registry-audit-latest.json
-      LEMON_WASM_LIFECYCLE_PROOF_JSON=.lemon/proofs/wasm-lifecycle-latest.json
-      LEMON_CRON_DIAGNOSTICS_PROOF_JSON=.lemon/proofs/cron-diagnostics-latest.json
-      LEMON_CRON_RUNTIME_RESTART_PROOF_JSON=.lemon/proofs/cron-runtime-restart-latest.json
-      LEMON_CRON_CHANNEL_ORIGIN_PROOF_JSON=.lemon/proofs/cron-channel-origin-latest.json
-      LEMON_TERMINAL_BACKEND_PROOF_JSON=.lemon/proofs/terminal-backend-latest.json
-      scripts/audit_1_0_readiness {version} {artifact-directory}` and treat any
-      failure or blocker as release-blocking.
+- [ ] Run `scripts/test all` from the tagged commit.
+- [ ] Run the applicable provider-backed and external-channel smoke tests, then
+      verify their redacted proof artifacts through the supported diagnostics.
 
 ## Dependency Audit Policy
 
@@ -704,7 +674,8 @@ For runtimes installed by `install.sh` into `~/.lemon`, the two most recent
 previous versions are retained on disk:
 
 ```bash
-lemon update --rollback   # flips ~/.lemon/versions/current back
+lemon update history
+lemon update rollback --receipt <apply-receipt-id> --confirm <rollback-digest>
 lemon stop && lemon daemon
 lemon status
 ```
@@ -747,9 +718,12 @@ Supported with scope:
   and installs into the `~/.lemon` layout. Installing a `preview` or `nightly`
   release requires an explicit `LEMON_VERSION` pin.
 - Remote update through `lemon update` for runtimes installed in that layout.
-  Update is a symlink flip plus an operator restart, with `--rollback` to the
-  previous retained version. Manual tarball and container installs are not
-  managed by the updater.
+  Update is a non-mutating plan followed by exact-confirm, checksum/size
+  verification, archive confinement, atomic symlink flip, private content-free
+  receipt, and operator restart. Rollback requires the exact apply
+  receipt/digest and verified retained checkpoint. Manual tarball and container
+  installs are not managed by the updater. Schema-2 manifests are
+  checksum-authenticated but not publisher-signed.
 - Multi-arch container images on `ghcr.io/z80dev/lemon` (`amd64`, `arm64`).
 
 Not supported for stable 1.0:
@@ -789,11 +763,8 @@ state, Elixir/OTP versions, OS, and CPU architecture.
 
 ## Required Evidence Files
 
-Keep these files current during the 1.0 launch process:
+Keep these release contracts current:
 
-- `docs/plans/lemon-1.0-mainstream-readiness.md`
-- `docs/plans/lemon-1.0-fresh-install-proof-2026-05-11.md`
-- `docs/plans/lemon-1.0-release-artifact-proof-2026-05-11.md`
 - `docs/release/versioning_and_channels.md`
 - `docs/release/deployment_flows.md`
 - `.github/workflows/release.yml`
@@ -804,8 +775,6 @@ Keep these files current during the 1.0 launch process:
 - `.github/workflows/osv-scanner.yml`
 - `.github/workflows/release-smoke.yml`
 - `scripts/bump_version.sh`
-- `scripts/lint_ci_docs.sh`
-- `scripts/audit_1_0_readiness`
 - `scripts/prepare_release_notes`
 - `scripts/prepare_product_release`
 - `scripts/verify_release_artifacts`

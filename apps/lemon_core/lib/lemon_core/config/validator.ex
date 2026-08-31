@@ -61,6 +61,7 @@ defmodule LemonCore.Config.Validator do
     errors = validate_gateway(config.gateway, errors)
     errors = validate_logging(config.logging, errors)
     errors = validate_providers(config.providers, errors)
+    errors = validate_secrets(config.secrets, errors)
     errors = validate_tools(config.tools, errors)
     errors = validate_tui(config.tui, errors)
     errors = validate_features(config.features, errors)
@@ -537,6 +538,16 @@ defmodule LemonCore.Config.Validator do
     errors
     |> validate_providers_map(Map.get(providers, :providers))
   end
+
+  @doc "Validates external secret-source configuration exactly."
+  @spec validate_secrets(LemonCore.Config.Secrets.t() | nil, [String.t()]) :: [String.t()]
+  def validate_secrets(nil, errors), do: errors
+
+  def validate_secrets(%LemonCore.Config.Secrets{} = secrets, errors) do
+    Enum.reduce(secrets.errors, errors, &[&1 | &2])
+  end
+
+  def validate_secrets(_secrets, errors), do: ["secrets: must be a map" | errors]
 
   @doc """
   Validates tools configuration.

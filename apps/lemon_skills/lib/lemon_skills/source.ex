@@ -13,6 +13,7 @@ defmodule LemonSkills.Source do
   | `:local` | `LemonSkills.Sources.Local` | `:trusted` |
   | `:git` | `LemonSkills.Sources.Git` | `:community` |
   | `:git` | `LemonSkills.Sources.Github` | `:community` |
+  | `:git` | `LemonSkills.Sources.Hermes` | `:official` |
   | `:registry` | `LemonSkills.Sources.Registry` | `:official` |
 
   ## Usage

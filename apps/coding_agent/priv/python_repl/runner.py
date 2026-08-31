@@ -323,6 +323,16 @@ def _setup_descriptors():
     os.close(out_w)
     os.close(err_w)
 
+    # The interpreter created these TextIO wrappers while stdout was attached
+    # to the host pipe, so they are block-buffered even after fd 1/2 move to
+    # our capture pipes. Flush each user-visible line immediately to preserve
+    # ordering with child processes that write directly to the inherited fds.
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(line_buffering=True, write_through=True)
+        except (AttributeError, OSError, ValueError):
+            pass
+
     _drainers.extend([_Drainer(out_r, "stdout"), _Drainer(err_r, "stderr")])
     for drainer in _drainers:
         drainer.start()

@@ -7,11 +7,13 @@ defmodule Mix.Tasks.Lemon.Sim.Verify do
 
   use Mix.Task
 
+  alias Mix.Tasks.Lemon.Sim.Common
+
   @impl true
   def run(args) do
     case args do
       [artifact_dir] ->
-        ensure_runtime_started!()
+        Common.ensure_runtime_started!()
 
         case LemonSim.Bench.Artifacts.Verifier.verify_run(artifact_dir) do
           {:ok, %{legacy: true} = result} ->
@@ -39,9 +41,5 @@ defmodule Mix.Tasks.Lemon.Sim.Verify do
         Mix.shell().error(@moduledoc)
         exit({:shutdown, 1})
     end
-  end
-
-  defp ensure_runtime_started! do
-    Application.ensure_all_started(:lemon_sim)
   end
 end

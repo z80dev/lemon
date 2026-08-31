@@ -22,9 +22,9 @@ import {
 // ============================================================================
 
 export interface UseControlPlaneOptions {
-  /** Override WS URL. Defaults to same-origin /ws with token appended. */
+  /** Override WS URL. Defaults to same-origin /ws. */
   url?: string;
-  /** Auth token appended as ?token=TOKEN */
+  /** Auth token sent only in the WebSocket `connect.auth` envelope. */
   token?: string;
   /** Automatically connect on mount. Default: true */
   autoConnect?: boolean;
@@ -100,8 +100,8 @@ export function useControlPlane(
   // Derive the WebSocket URL once.
   const resolvedUrl = useMemo<string>(() => {
     if (url) return url;
-    return buildControlPlaneUrl(token);
-  }, [url, token]);
+    return buildControlPlaneUrl();
+  }, [url]);
 
   // connect / disconnect helpers exposed to callers.
   const connect = useCallback(() => {

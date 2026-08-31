@@ -3,32 +3,21 @@ defmodule LemonMedia.MediaJobWorker do
   Runs one media job and records redacted lifecycle metadata.
   """
 
-  use GenServer
-
   alias LemonMedia.MediaJobs
 
   @topic "media_jobs"
 
-  @spec start_link(keyword()) :: GenServer.on_start()
+  @spec start_link(keyword()) :: {:ok, pid()} | {:error, term()}
   def start_link(opts) do
-    GenServer.start_link(__MODULE__, opts)
+    Task.start_link(__MODULE__, :run, [opts])
   end
 
-  @impl true
-  def init(opts) do
-    state = %{
-      attrs: Keyword.fetch!(opts, :attrs),
-      opts: Keyword.get(opts, :opts, []),
-      runner: opts |> Keyword.get(:opts, []) |> Keyword.get(:runner)
-    }
-
-    {:ok, state, {:continue, :run}}
-  end
-
-  @impl true
-  def handle_continue(:run, state) do
-    attrs = attrs_map(state.attrs)
-    record_opts = record_opts(state.opts)
+  @doc false
+  @spec run(keyword()) :: :ok
+  def run(opts) do
+    attrs = opts |> Keyword.fetch!(:attrs) |> attrs_map()
+    job_opts = Keyword.get(opts, :opts, [])
+    record_opts = record_opts(job_opts)
     job_id = Map.fetch!(attrs, :job_id)
 
     running_attrs =
@@ -39,7 +28,7 @@ defmodule LemonMedia.MediaJobWorker do
     {:ok, running_job} = MediaJobs.record(running_attrs, record_opts)
     _ = publish(:running, running_job)
 
-    case run_media_job(state.runner, running_attrs) do
+    case run_media_job(Keyword.get(job_opts, :runner), running_attrs) do
       {:ok, updates} ->
         completed_attrs =
           running_attrs
@@ -48,7 +37,7 @@ defmodule LemonMedia.MediaJobWorker do
 
         {:ok, completed_job} = MediaJobs.record(completed_attrs, record_opts)
         _ = publish(:completed, completed_job)
-        {:stop, :normal, state}
+        :ok
 
       {:error, reason} ->
         failed_attrs =
@@ -59,7 +48,7 @@ defmodule LemonMedia.MediaJobWorker do
 
         {:ok, failed_job} = MediaJobs.record(failed_attrs, record_opts)
         _ = publish(:failed, failed_job)
-        {:stop, :normal, state}
+        :ok
     end
   end
 

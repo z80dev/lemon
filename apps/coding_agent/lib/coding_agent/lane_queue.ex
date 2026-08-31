@@ -50,13 +50,17 @@ defmodule CodingAgent.LaneQueue do
        lanes: %{},
        jobs: %{},
        # O(1) lookup: task_ref -> job_id
-       task_ref_index: %{}
+       task_ref_index: %{},
+       # Queued callers are monitored so abandoned calls do not consume a lane.
+       caller_ref_index: %{}
      }}
   end
 
   @impl true
   def handle_call({:enqueue, lane, fun, meta}, from, st) do
     job_id = make_ref()
+    {caller_pid, _tag} = from
+    caller_ref = Process.monitor(caller_pid)
     cap = cap_for_lane(st, lane)
     ls = lane_state(st, lane)
     queue_len = :queue.len(ls.q)
@@ -65,7 +69,17 @@ defmodule CodingAgent.LaneQueue do
       "LaneQueue enqueue lane=#{inspect(lane)} job_id=#{inspect(job_id)} cap=#{cap} queued=#{queue_len} running=#{ls.running}"
     )
 
-    st = put_in(st.jobs[job_id], %{from: from, lane: lane, fun: fun, meta: meta, task_ref: nil})
+    st =
+      st
+      |> put_in([:jobs, job_id], %{
+        from: from,
+        lane: lane,
+        fun: fun,
+        meta: meta,
+        task_ref: nil,
+        caller_ref: caller_ref
+      })
+      |> put_in([:caller_ref_index, caller_ref], job_id)
 
     st =
       st
@@ -84,17 +98,28 @@ defmodule CodingAgent.LaneQueue do
   @impl true
   def handle_info({ref, {:ok, result}}, st) do
     Logger.debug("LaneQueue job completed successfully ref=#{inspect(ref)}")
+    Process.demonitor(ref, [:flush])
     {:noreply, complete_job(ref, {:ok, result}, st)}
   end
 
   def handle_info({ref, {:error, reason}}, st) do
     Logger.warning("LaneQueue job failed ref=#{inspect(ref)} reason=#{inspect(reason)}")
+    Process.demonitor(ref, [:flush])
     {:noreply, complete_job(ref, {:error, reason}, st)}
   end
 
   def handle_info({:DOWN, ref, :process, _pid, reason}, st) do
-    Logger.warning("LaneQueue job process down ref=#{inspect(ref)} reason=#{inspect(reason)}")
-    {:noreply, complete_job(ref, {:error, reason}, st)}
+    cond do
+      Map.has_key?(st.task_ref_index, ref) ->
+        Logger.warning("LaneQueue job process down ref=#{inspect(ref)} reason=#{inspect(reason)}")
+        {:noreply, complete_job(ref, {:error, reason}, st)}
+
+      Map.has_key?(st.caller_ref_index, ref) ->
+        {:noreply, cancel_queued_caller(ref, st)}
+
+      true ->
+        {:noreply, st}
+    end
   end
 
   def handle_info(_msg, st), do: {:noreply, st}
@@ -142,8 +167,8 @@ defmodule CodingAgent.LaneQueue do
           "LaneQueue starting job lane=#{inspect(lane)} job_id=#{inspect(job_id)} running=#{ls.running + 1}/#{cap}"
         )
 
-        task =
-          Task.Supervisor.async_nolink(st.task_sup, fn ->
+        task_result =
+          start_supervised_job(st.task_sup, fn ->
             try do
               result = job.fun.()
               Logger.debug("LaneQueue job function completed job_id=#{inspect(job_id)}")
@@ -165,18 +190,36 @@ defmodule CodingAgent.LaneQueue do
             end
           end)
 
-        job = %{job | task_ref: task.ref}
+        case task_result do
+          {:ok, task} ->
+            job = %{job | task_ref: task.ref}
 
-        # Update both jobs map and task_ref index
-        st =
-          st
-          |> put_in([:jobs, job_id], job)
-          |> put_in([:task_ref_index, task.ref], job_id)
+            st =
+              st
+              |> put_in([:jobs, job_id], job)
+              |> put_in([:task_ref_index, task.ref], job_id)
 
-        ls = %{ls | running: ls.running + 1, q: q2}
-        st = put_in(st.lanes[lane], ls)
+            ls = %{ls | running: ls.running + 1, q: q2}
+            st = put_in(st.lanes[lane], ls)
 
-        drain_lane(st, lane)
+            drain_lane(st, lane)
+
+          {:error, reason} ->
+            Logger.warning(
+              "LaneQueue could not admit job job_id=#{inspect(job_id)} reason=#{inspect(reason)}"
+            )
+
+            Process.demonitor(job.caller_ref, [:flush])
+            GenServer.reply(job.from, {:error, {:task_start_failed, reason}})
+
+            st =
+              st
+              |> put_in([:lanes, lane], %{ls | q: q2})
+              |> update_in([:jobs], &Map.delete(&1, job_id))
+              |> update_in([:caller_ref_index], &Map.delete(&1, job.caller_ref))
+
+            drain_lane(st, lane)
+        end
     end
   end
 
@@ -196,6 +239,7 @@ defmodule CodingAgent.LaneQueue do
           )
 
           GenServer.reply(job.from, reply)
+          Process.demonitor(job.caller_ref, [:flush])
 
           lane = job.lane
           ls = lane_state(st, lane)
@@ -206,12 +250,40 @@ defmodule CodingAgent.LaneQueue do
             |> update_in([:lanes, lane], fn _ -> ls end)
             |> update_in([:jobs], &Map.delete(&1, job_id))
             |> update_in([:task_ref_index], &Map.delete(&1, task_ref))
+            |> update_in([:caller_ref_index], &Map.delete(&1, job.caller_ref))
             |> drain_lane(lane)
 
           st
         else
           st
         end
+    end
+  end
+
+  defp start_supervised_job(task_supervisor, fun) do
+    {:ok, Task.Supervisor.async_nolink(task_supervisor, fun)}
+  rescue
+    error -> {:error, {:exception, error}}
+  catch
+    :exit, reason -> {:error, {:exit, reason}}
+    kind, reason -> {:error, {kind, reason}}
+  end
+
+  defp cancel_queued_caller(caller_ref, st) do
+    job_id = Map.fetch!(st.caller_ref_index, caller_ref)
+
+    case Map.get(st.jobs, job_id) do
+      %{task_ref: nil, lane: lane} ->
+        ls = lane_state(st, lane)
+        filtered = :queue.filter(&(&1 != job_id), ls.q)
+
+        st
+        |> put_in([:lanes, lane], %{ls | q: filtered})
+        |> update_in([:jobs], &Map.delete(&1, job_id))
+        |> update_in([:caller_ref_index], &Map.delete(&1, caller_ref))
+
+      _running_or_missing ->
+        update_in(st.caller_ref_index, &Map.delete(&1, caller_ref))
     end
   end
 end

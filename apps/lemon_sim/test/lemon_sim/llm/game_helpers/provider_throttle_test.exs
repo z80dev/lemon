@@ -60,12 +60,10 @@ defmodule LemonSim.LLM.GameHelpers.ProviderThrottleTest do
 
     throttled = Keyword.fetch!(opts, :complete_fn)
 
-    start = System.monotonic_time(:millisecond)
     {:ok, _} = throttled.(fake_model(:zai), Context.new(), %{})
     {:ok, _} = throttled.(fake_model(:zai), Context.new(), %{})
-    elapsed = System.monotonic_time(:millisecond) - start
 
-    assert elapsed < 150
+    assert Agent.get(throttle_agent, & &1) == %{}
 
     ProviderThrottle.stop(throttle_agent)
   end
@@ -112,12 +110,10 @@ defmodule LemonSim.LLM.GameHelpers.ProviderThrottleTest do
     assert is_pid(throttle_agent)
     throttled = Keyword.fetch!(opts, :complete_fn)
 
-    start = System.monotonic_time(:millisecond)
     {:ok, _} = throttled.(fake_model(:anthropic), Context.new(), %{})
     {:ok, _} = throttled.(fake_model(:anthropic), Context.new(), %{})
-    elapsed = System.monotonic_time(:millisecond) - start
 
-    assert elapsed < 55
+    assert Agent.get(throttle_agent, & &1) == %{}
 
     ProviderThrottle.stop(throttle_agent)
   end

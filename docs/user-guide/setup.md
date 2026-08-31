@@ -16,7 +16,10 @@ $HOME/.lemon/bin/lemon
 ```
 
 The installer prints the PATH entry; after adding `~/.lemon/bin`, use `lemon`.
-That is your first chat. The TUI starts the daemon when needed. Full installer
+That is your first chat. The TUI starts the daemon when needed. To use a local
+browser instead, run `lemon web`; it starts the full runtime when needed,
+checks the same readiness state, and opens the page only after Web health is
+confirmed. Full installer
 behavior, including platform support and updates, is in the
 [Install guide](../install.md).
 
@@ -45,6 +48,12 @@ If the first interactive `lemon` launch detects that a usable provider is not
 ready, it opens this setup flow before starting the daemon. If no controlling
 terminal is available, it does not start an unconfigured daemon; run `lemon
 setup` later from an interactive terminal.
+
+The browser is also fail-closed. `lemon web` may start before setup is complete
+so the page can explain what is missing, but the page disables prompts and
+uploads until config, secure secrets, and a usable provider/model are all
+ready. After setup changes, choose **Check again**; a running Web client also
+refreshes on config and secret change events. See the [browser guide](web.md).
 
 ### Provider, auth, and model
 
@@ -189,4 +198,13 @@ For non-interactive source configuration, use the same wrapper forms:
 ```
 
 `./bin/lemon-tui` is the source-development TUI entry point once the source
-runtime is configured.
+runtime is configured. A fresh launcher-owned runtime receives a generated,
+process-scoped operator token and is stopped when the TUI exits. Attaching to
+an existing or persistent runtime requires exporting its matching
+`LEMON_CONTROL_PLANE_OPERATOR_TOKEN`; the launcher does not read or persist the
+daemon's credential.
+
+Supplying a token does not make a runtime started by `./bin/lemon-tui`
+persistent: the launcher still stops it when the client exits. Start
+`./bin/lemon --daemon` separately, then attach with the same token, when the
+runtime should outlive the TUI.

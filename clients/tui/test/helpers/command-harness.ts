@@ -5,12 +5,18 @@
  * all a command test needs: what did it send, and what did it say.
  */
 
-import type { CommandContext, CommandHost, PickerSpec } from "../../src/commands/index.ts";
+import type {
+	CommandContext,
+	CommandHost,
+	MultiPickerSpec,
+	PickerSpec,
+} from "../../src/commands/index.ts";
 import { createCommandRegistry } from "../../src/commands/index.ts";
 import { FakeControlPlane, type FakeControlPlaneOptions } from "../../src/dev/fake-server.ts";
 import { ControlPlaneClient } from "../../src/protocol/client.ts";
 import { ControlPlaneMethods } from "../../src/protocol/methods.ts";
 import type { ChatHistoryMessage } from "../../src/protocol/types.ts";
+import type { SubmissionMode } from "../../src/store/app-store.ts";
 import { AppStore } from "../../src/store/app-store.ts";
 import type { NoticeLevel } from "../../src/store/transcript-model.ts";
 
@@ -22,6 +28,7 @@ export interface RecordedNotice {
 export class RecordingHost implements CommandHost {
 	readonly notices: RecordedNotice[] = [];
 	readonly pickers: PickerSpec[] = [];
+	readonly multiPickers: MultiPickerSpec[] = [];
 	readonly exits: number[] = [];
 	readonly replays: ChatHistoryMessage[][] = [];
 	cleared = 0;
@@ -30,6 +37,11 @@ export class RecordingHost implements CommandHost {
 	draft = "";
 	frames: string[] = [];
 	modelPickerOpens = 0;
+	readonly deliveries: Array<{ text: string; mode: SubmissionMode }> = [];
+	readonly profileOpens: Array<{ profileId: string; sessionKey: string }> = [];
+	readonly forgottenProfiles: Array<{ profileId: string; sessionKey: string }> = [];
+	readonly createdSessions: Array<{ sessionKey?: string; prompt?: string }> = [];
+	readonly forgottenSessions: string[] = [];
 
 	notice(text: string, level: NoticeLevel = "info"): void {
 		this.notices.push({ text, level });
@@ -67,6 +79,10 @@ export class RecordingHost implements CommandHost {
 		this.pickers.push(spec);
 	}
 
+	openMultiPicker(spec: MultiPickerSpec): void {
+		this.multiPickers.push(spec);
+	}
+
 	closeOverlay(): void {}
 
 	frameLog(): readonly string[] {
@@ -79,6 +95,26 @@ export class RecordingHost implements CommandHost {
 
 	openModelPicker(): void {
 		this.modelPickerOpens += 1;
+	}
+
+	deliverPrompt(text: string, mode: SubmissionMode): void {
+		this.deliveries.push({ text, mode });
+	}
+
+	openProfile(profileId: string, sessionKey: string): void {
+		this.profileOpens.push({ profileId, sessionKey });
+	}
+
+	forgetProfile(profileId: string, sessionKey: string): void {
+		this.forgottenProfiles.push({ profileId, sessionKey });
+	}
+
+	createSession(sessionKey?: string, prompt?: string): void {
+		this.createdSessions.push({ sessionKey, prompt });
+	}
+
+	forgetDeletedSession(sessionKey: string): void {
+		this.forgottenSessions.push(sessionKey);
 	}
 
 	/** Every notice body joined, for `toContain` assertions. */
@@ -106,9 +142,9 @@ export interface Harness {
 }
 
 export async function createHarness(
-	options: FakeControlPlaneOptions & { sessionKey?: string } = {},
+	options: FakeControlPlaneOptions & { sessionKey?: string; cwd?: string } = {},
 ): Promise<Harness> {
-	const { sessionKey = "tui-test", ...serverOptions } = options;
+	const { sessionKey = "tui-test", cwd = process.cwd(), ...serverOptions } = options;
 	const server = await FakeControlPlane.start(serverOptions);
 	const client = new ControlPlaneClient({
 		url: server.url,
@@ -124,7 +160,7 @@ export async function createHarness(
 		},
 	});
 
-	const base = () => ({ store, session: store.focused, methods, client, ui: host });
+	const base = () => ({ store, session: store.focused, methods, client, ui: host, cwd });
 
 	return {
 		server,

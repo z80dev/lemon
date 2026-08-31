@@ -156,29 +156,20 @@ defmodule LemonChannels.Doctor.Diagnostics do
   end
 
   defp discord_slash_command_status do
-    commands = [
-      "lemon",
-      "session",
-      "model",
-      "thinking",
-      "resume",
-      "cancel",
-      "checkpoint",
-      "rollback",
-      "goal",
-      "kanban",
-      "media",
-      "trigger",
-      "cwd",
-      "reload",
-      "topic",
-      "file"
-    ]
+    commands =
+      LemonChannels.Adapters.Discord.SlashCommands.slash_commands()
+      |> Enum.map(& &1.name)
 
     %{
       schema_export_supported: true,
       expected_command_count: length(commands),
       expected_commands: commands,
+      compatibility_commands: %{
+        checkpoint: "checkpoint" in commands,
+        rollback: "rollback" in commands,
+        kanban: "kanban" in commands,
+        media: "media" in commands
+      },
       live_registration_proof_required: true,
       live_registration_proof_source: "live_discord_matrix",
       deterministic_runtime_decoder_proof_source: "discord_slash_interaction_proof",

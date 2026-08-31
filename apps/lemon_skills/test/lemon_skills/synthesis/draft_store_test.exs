@@ -19,7 +19,10 @@ defmodule LemonSkills.Synthesis.DraftStoreTest do
       key: key,
       name: "Deploy K8s",
       content: "---\nname: \"Deploy K8s\"\n---\n\n# Deploy K8s\nDeploys to Kubernetes.",
-      source_doc_id: "doc-abc123"
+      source_doc_id: "doc-abc123",
+      source_digest: String.duplicate("a", 64),
+      source_provenance: [%{"type" => "file", "referenceDigest" => String.duplicate("b", 64)}],
+      source_text_redacted: true
     }
   end
 
@@ -47,6 +50,12 @@ defmodule LemonSkills.Synthesis.DraftStoreTest do
       dir = DraftStore.draft_dir(draft.key, opts(ctx))
       meta = Jason.decode!(File.read!(Path.join(dir, ".draft_meta.json")))
       assert meta["source_doc_id"] == "doc-abc123"
+      assert meta["source_digest"] == String.duplicate("a", 64)
+
+      assert [%{"type" => "file"}] =
+               Enum.map(meta["source_provenance"], &Map.take(&1, ["type"]))
+
+      assert meta["source_text_redacted"] == true
     end
 
     test "record_audit stores audit metadata in the draft meta file", ctx do
@@ -94,6 +103,18 @@ defmodule LemonSkills.Synthesis.DraftStoreTest do
 
     test "returns error when content is missing", ctx do
       assert {:error, _} = DraftStore.put(%{key: "synth-foo"}, opts(ctx))
+    end
+  end
+
+  describe "put_new/2" do
+    test "atomically preserves the first exact draft", ctx do
+      draft = sample_draft()
+      conflicting = %{draft | content: "concurrent conflicting draft"}
+
+      assert :ok = DraftStore.put_new(draft, opts(ctx))
+      assert {:error, :already_exists} = DraftStore.put_new(conflicting, opts(ctx))
+      assert {:ok, persisted} = DraftStore.get(draft.key, opts(ctx))
+      assert persisted.content == draft.content
     end
   end
 

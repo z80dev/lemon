@@ -107,7 +107,7 @@ defmodule CodingAgent.SystemPromptTest do
   end
 
   @tag :tmp_dir
-  test "includes relevance-selected skill hints when skill context matches", %{tmp_dir: tmp_dir} do
+  test "keeps the system prompt stable across unrelated skill contexts", %{tmp_dir: tmp_dir} do
     workspace_dir = Path.join(tmp_dir, "workspace")
     File.mkdir_p!(workspace_dir)
     File.write!(Path.join(workspace_dir, "AGENTS.md"), "agents")
@@ -134,17 +134,25 @@ defmodule CodingAgent.SystemPromptTest do
       """
     )
 
-    prompt =
+    github_prompt =
       SystemPrompt.build(tmp_dir, %{
         workspace_dir: workspace_dir,
         session_scope: :main,
         skill_context: "please create a GitHub pull request and watch CI"
       })
 
-    assert String.contains?(prompt, "<relevant-skills>")
-    assert String.contains?(prompt, "github-pr-workflow")
-    assert String.contains?(prompt, "Use `read_skill` with <key>")
-    refute String.contains?(prompt, skill_body)
+    unrelated_prompt =
+      SystemPrompt.build(tmp_dir, %{
+        workspace_dir: workspace_dir,
+        session_scope: :main,
+        skill_context: "explain an unrelated database migration"
+      })
+
+    assert github_prompt == unrelated_prompt
+    refute String.contains?(github_prompt, "<relevant-skills>")
+    assert String.contains?(github_prompt, "<available_skills>")
+    assert String.contains?(github_prompt, "github-pr-workflow")
+    refute String.contains?(github_prompt, skill_body)
   end
 
   @tag :tmp_dir

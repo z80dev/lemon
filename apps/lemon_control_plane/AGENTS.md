@@ -20,7 +20,7 @@ The control plane provides the external interface for clients (TUI, web, mobile,
 - **Manage secrets** - Store and retrieve API keys securely
 - **Schedule cron jobs** - Create recurring agent runs
 - **Install skills** - Manage agent capabilities
-- **Pair nodes/devices** - Connect browser extensions and mobile devices
+- **Pair nodes/devices** - Connect restricted clients, including named native coding execution nodes
 - **Stream real-time events** - WebSocket events for runs, chat deltas, approvals
 
 ## Architecture Overview
@@ -78,16 +78,22 @@ The control plane provides the external interface for clients (TUI, web, mobile,
 | `LemonControlPlane.ACP.NDJSON` | `lib/lemon_control_plane/acp/ndjson.ex` | Newline-delimited JSON transport helper used by `scripts/lemon_acp_stdio.exs` for spawned ACP stdio clients, including intermediate `session/update` notification lines and permission/read/write/delete/rename client requests while prompt waits are active |
 | `LemonControlPlane.WS.Connection` | `lib/lemon_control_plane/ws/connection.ex` | WebSocket connection handler (`WebSock` behaviour) |
 | `LemonControlPlane.Presence` | `lib/lemon_control_plane/presence.ex` | Connected client tracking (ETS-backed GenServer) |
+| `LemonControlPlane.NodeStore` | `lib/lemon_control_plane/node_store.ex` | Durable node identities, unique-name reservations, pairing challenges, and invocation status |
 | `LemonControlPlane.EventBridge` | `lib/lemon_control_plane/event_bridge.ex` | Bus events -> WebSocket fanout (GenServer + Task.Supervisor) |
-| `LemonControlPlane.Auth.Authorize` | `lib/lemon_control_plane/auth/authorize.ex` | Role-based access control; `from_params/1`, `authorize/3`, `default_operator/0` |
+| `LemonControlPlane.Auth.Authorize` | `lib/lemon_control_plane/auth/authorize.ex` | Role-based access control; peer-aware `from_params/2`, constant-time operator-token validation, `authorize/3`, `default_operator/0` |
 | `LemonControlPlane.Auth.TokenStore` | `lib/lemon_control_plane/auth/token_store.ex` | Token storage/validation for node/device auth (backed by `LemonCore.Store`) |
 | `LemonControlPlane.AgentIdentityStore` | `lib/lemon_control_plane/agent_identity_store.ex` | Typed wrapper for persisted agent identity records |
 | `LemonControlPlane.UpdateStore` | `lib/lemon_control_plane/update_store.ex` | Typed wrapper for update config and pending-update state |
 | `LemonControlPlane.SkillsConfigStore` | `lib/lemon_control_plane/skills_config_store.ex` | Typed wrapper for fallback persisted skill config |
 | `LemonControlPlane.Methods.Registry` | `lib/lemon_control_plane/methods/registry.ex` | Method dispatch registry (ETS); `dispatch/3`, `register/1`, `unregister/1`. Also defines `LemonControlPlane.Method` behaviour. |
+| `LemonControlPlane.Methods.CommandsCatalog` | `lib/lemon_control_plane/methods/commands_catalog.ex` | Read-only `commands.catalog` discovery projection over `LemonChannels.CommandCatalog`; execution remains with consuming surfaces and runtime owners. |
+| `LemonControlPlane.Methods.Background*` / `SessionBtw` | `lib/lemon_control_plane/methods/background_commands.ex` | Provider-backed lifecycle RPCs for isolated `/bg` sessions and bounded no-tools `/btw` questions; the control plane owns only validation and wire projection. |
+| `LemonControlPlane.Methods.SessionHeartbeat` | `lib/lemon_control_plane/methods/session_heartbeat.ex` | Admin projection for status/set/pause/resume/clear of a live durable coding-session heartbeat; validates provider state before returning it. |
+| `LemonControlPlane.Methods.Profiles*` / `ProfileChat` | `lib/lemon_control_plane/methods/profiles.ex` | Lifecycle, node-aware roster, credential-safe export, and stable canonical chat projection over `LemonCore.ProfileStore` and the existing router. |
 | `LemonControlPlane.Protocol.Frames` | `lib/lemon_control_plane/protocol/frames.ex` | Protocol frame encoding/decoding; `parse/1`, `encode_response/2`, `encode_event/4`, `encode_hello_ok/1` |
 | `LemonControlPlane.Protocol.Errors` | `lib/lemon_control_plane/protocol/errors.ex` | Standard error constructors; `invalid_request/1`, `not_found/1`, `forbidden/1`, etc. |
 | `LemonControlPlane.Protocol.Schemas` | `lib/lemon_control_plane/protocol/schemas.ex` | Param and event payload schema validation; `validate/2`, `validate_event/2` |
+| `LemonCore.NodeRegistry` | `apps/lemon_core/lib/lemon_core/node_registry.ex` | Live name/ID resolution, targeted delivery, timeout/cancellation, disconnect failure, and invocation ownership |
 
 ## JSON-RPC Method Structure
 
@@ -189,6 +195,7 @@ Supported types: `:string`, `:integer`, `:boolean`, `:map`, `:list`, `:any`.
 | `logs.tail` | read | Tail recent log lines with filter summary, cleanup flags, and sensitive log-value redaction |
 | `models.list` | read | List available AI models plus capability/provider summaries |
 | `providers.status` | read | Redacted provider credential readiness, route preview, fallback candidates, config-shape diagnostics, live fallback proof status, and top-level summary |
+| `providers.configure` | admin | Preview or apply comment-preserving fallback and credential-pool reference edits; optional `expectedRevision` rejects stale applies, destructive changes require exact operation confirmation, and responses never include credential references |
 | `memory.status` | read | Redacted memory-provider registry metadata plus provider health and searchable-scope summaries |
 | `proofs.status` | read | Redacted live-proof diagnostics with top-level counts and launch-gate summaries for Discord DM, Discord client-click, provider media, and terminal backends |
 | `extensions.status` | read | Redacted extension/plugin load, conflict, provider, WASM diagnostics, and host/runtime summary |
@@ -203,15 +210,30 @@ Supported types: `:string`, `:integer`, `:boolean`, `:map`, `:list`, `:any`.
 
 | Method | Scope | Description |
 |--------|-------|-------------|
-| `sessions.list` | read | List all sessions with pagination plus summary and cleanup flags |
+| `sessions.list` | read | List/search sessions with pagination, agent/title/content query, pin/archive filters, lifecycle metadata, and query-redaction summary |
 | `sessions.active` | read | Get currently active session plus active-run cleanup summary |
 | `sessions.active.list` | read | List all active sessions plus summary/cleanup flags; includes best-effort `harness` progress (todos/checkpoints/requirements) when coding-agent telemetry is available |
+| `sessions.stats` | read | Exact aggregate durable-session totals with list/search-compatible filters and bounded redacted agent/origin dimensions; never includes keys, titles, prompts, paths, URLs, or credentials |
 | `sessions.preview` | read | Preview truncated session messages plus sensitive-preview redaction, truncation summary, and cleanup flags |
 | `sessions.patch` | admin | Modify session policy/model/thinking overrides plus patch summary and cleanup flags |
+| `sessions.metadata.patch` | admin | Set/clear a session title and update pin/archive state without echoing title text in the mutation response |
+| `sessions.export` | read | Return bounded JSON or Markdown with selected run/tool fields, mandatory sensitive-value redaction, SHA-256 digest, and explicit raw-internal omissions |
+| `sessions.prune` | admin | Dry-run-first stale-session prune; archived-only/unpinned by default and execution requires a token bound to the exact current candidate set |
 | `sessions.reset` | admin | Clear session history plus cleanup summary |
-| `sessions.delete` | admin | Delete a session plus cleanup summary |
+| `sessions.heartbeat` | admin | Inspect or set/pause/resume/clear one live session's idle-only recurring prompt by logical session key; ambiguous ownership is a conflict |
+| `sessions.delete` | admin | Delete canonical run history plus chat/policy/lifecycle metadata and verify the deletion before reporting success |
 | `sessions.compact` | admin | Compact session storage plus no-text cleanup summary |
 | `session.detail` | read | Deep session/run internals with summary, sensitive preview/run-internal redaction, and explicit opt-ins for full text, raw run events, and run records |
+| `session.btw` | write | Ask a bounded no-tools question against a frozen live session or durable session-key history without mutating the parent conversation |
+
+The session lifecycle methods share `LemonCore.SessionLifecycle`. Aggregate
+statistics use this service rather than paginated `sessions.list` summaries.
+Conversation
+content remains canonical in `RunStore`/`RunHistoryStore`; the only additional
+table stores title/pin/archive annotations. `sessions.export` never exposes the
+service's trusted internal unredacted-history option. Prune preview tokens bind
+the operation parameters and each candidate's stable key/index/metadata state,
+so any intervening lifecycle change forces a new preview.
 
 ### Monitoring / Introspection
 
@@ -247,6 +269,15 @@ The run/task list methods also include compact summaries for status, engine, age
 | `agents.files.set` | admin | Set file content plus content-cleanup summary |
 
 ### Chat
+
+Profile RPCs are `profiles.list`, `profiles.get`, `profiles.create`,
+`profiles.clone`, `profiles.rename`, `profiles.export`, `profiles.delete`,
+`profiles.roster`, and `profile.chat`. Reads require `read`, chat requires
+`write`, and lifecycle mutations/exports require `admin`. `profile.chat`
+refreshes the router profile cache, submits the stable `agent:<id>:main`
+session through `LemonCore.RouterBridge`, and never echoes prompt text in its
+summary. Export summaries report selected/omitted/redacted counts and never
+claim to include sessions, memory, credentials, or secret values.
 
 | Method | Scope | Description |
 |--------|-------|-------------|
@@ -326,11 +357,12 @@ when to render the full payload.
 
 | Method | Scope | Description |
 |--------|-------|-------------|
-| `node.list` | read | List paired nodes plus summary and cleanup flags |
+| `node.list` | read | List durable paired nodes with live online/offline status plus summary and cleanup flags |
 | `node.describe` | read | Get node details with redacted metadata summary and cleanup flags |
 | `node.rename` | write | Rename a node plus summary and cleanup flags |
-| `node.invoke` | write | Invoke a method on a node plus arg/result cleanup summary |
-| `node.invoke.result` | invoke | Node reports result of an invocation (node-only) plus result/error cleanup summary |
+| `node.invoke` | write | Invoke a method on one authenticated live node plus arg/result cleanup summary |
+| `node.invoke.result` | invoke | Owning node reports an invocation result; another node cannot settle it |
+| `node.invoke.control.result` | invoke | Owning node acknowledges steer/redirect against the exact live invocation and run identity |
 | `node.event` | event | Node sends an event (node-only) plus payload summary and cleanup flags |
 | `node.pair.request` | pairing | Request to pair a node plus pairing-code delivery summary |
 | `node.pair.list` | pairing | List pending pairing requests plus summary and cleanup flags |
@@ -338,22 +370,111 @@ when to render the full payload.
 | `node.pair.reject` | pairing | Reject a pairing request plus cleanup flags |
 | `node.pair.verify` | pairing | Verify a pairing code plus status cleanup summary |
 
+Node names are trimmed and reserved durably per controller; a second identity
+cannot pair or rename to a reserved name. `node.list` retains offline durable
+identities but derives status from `LemonCore.NodeRegistry`, so only a currently
+authenticated WebSocket can receive work. Pending invocations are bound to one
+node ID, fail when the node disconnects, and accept explicit targeted
+cancellation. Registry timeouts fail the source recipient but do not by
+themselves claim that destination execution was cancelled. Steer and redirect
+are separate invocation-bound controls: the registry pins each one to the
+original node connection, credential generation, invocation ID, and run ID,
+and reports acceptance only after the worker applies the bounded text to its
+live native executor context. Terminal races, disconnects, and acknowledgement
+timeouts are rejected rather than guessed successful.
+
+An approved pairing ID may reissue a fresh one-time challenge for its existing
+durable node identity, allowing the joining worker to recover from socket loss
+after approval or challenge consumption without orphaning the reserved name.
+Challenge exchange is an atomic take: concurrent exchanges can issue at most
+one credential. Node credential replacement is also serialized per durable
+identity. Advancing its session generation immediately invalidates the prior
+token, closes the prior live socket, and prevents that socket from settling
+work dispatched by another generation.
+Named-node requests/results enforce the advertised `maxPayload` (1 MiB by
+default) plus shared depth/item-count limits. Raw request arguments exist only
+in the targeted live dispatch; durable invocation records retain a content-free
+argument summary. The raw terminal result is sent only to the source recipient,
+and awaited `browser.request` calls consume that private registry delivery
+directly. Durable invocation status and `node.invoke.completed` events contain
+content-free summaries, never raw request, result, or error values.
+
+The source-checkout coding worker advertises `coding_agent.run` version 1 and
+targeted cancellation. Its payload is a JSON-safe execution request/result
+contract; provider credentials, callbacks, executor options, and source BEAM
+state remain on the source or destination that owns them. The destination
+resolves its own credentials and cwd. This path uses the native
+`CodingAgent.Executor` and never a vendor CLI runner.
+
 ### Channels and Transports
 
 | Method | Scope | Description |
 |--------|-------|-------------|
+| `commands.catalog` | read | Return the portable command catalog with aliases, descriptions, arguments, busy policies, semantic capability ids, category counts, and versioned summary; discovery only, never command execution |
+| `background.start` | write | Start an isolated full-tool native agent session, validating and normalizing any `thinkingLevel`, and return its durable lifecycle id immediately |
+| `background.list` | read | List sanitized durable background-run lifecycle summaries, optionally filtered by status |
+| `background.status` | read | Read one sanitized background-run lifecycle summary |
+| `background.result` | read | Read the visible answer after completion, or report that the run is not ready |
+| `background.cancel` | write | Cancel a queued or running background session by durable id |
 | `channels.status` | read | Status of configured channel adapters plus Telegram/Discord diagnostics, proof, shared launch-gate readiness, compact gate status/reason maps, and cleanup summaries |
 | `transports.status` | read | Status of configured legacy gateway transports plus registry/module health summary |
 | `channels.logout` | admin | Logout from a channel plus credential/state cleanup summary |
+
+The background/side-query provider boundary is fail-closed. Project only the
+documented lifecycle fields, derive terminal `errorCode` from status, and map
+all provider failures to fixed operation-specific JSON-RPC messages and
+`details.code` values. Never stringify provider return maps or attach raw
+reason terms: they may contain persisted errors, local paths, provider
+metadata, or credentials.
 
 ### Skills
 
 | Method | Scope | Description |
 |--------|-------|-------------|
 | `skills.status` | read | List skills with readiness details plus activation/source/missing-requirement summaries |
+| `skills.hermes.catalog` | read | Browse the live official Hermes catalog by category, collection, or query |
 | `skills.bins` | invoke | Get skill bin paths plus bin/requirement counts and cleanup summary |
 | `skills.install` | admin | Install a skill plus install-source return-state and approval-context cleanup summary |
 | `skills.update` | admin | Update/configure a skill plus env-key/update-mode summary with sensitive env response redaction |
+
+### Portable Blueprints
+
+| Method | Scope | Description |
+|--------|-------|-------------|
+| `blueprints.list` | read | List valid bundles from the canonical local catalog without paths or content |
+| `blueprints.inspect` | read | Inspect one catalog `bundleId` through the activation validation path |
+| `blueprints.validate` | read | Re-run manifest, policy, lint, and deterministic skill audit checks |
+| `blueprints.preview` | read | Return a content-free exact plan plus confirmation digest for one profile |
+| `blueprints.activate` | admin | Re-plan and apply only an exact fresh confirmation digest |
+| `learn.review` | read | Resolve bounded references and return content-free memory/skill proposals, audit codes, conflicts, and exact confirmation digest |
+| `learn.confirm` | admin | Re-resolve and write canonical memory plus an audited draft only for the exact fresh digest |
+
+Keep this surface catalog-scoped: never add caller-provided `root` or `path`
+parameters. `bundleId` must resolve directly below `~/.lemon/bundles` with
+containment, symlink, and manifest-ID checks. Responses must remain free of
+absolute paths, skill bodies, prompt/command text, and secret values. The admin
+mutation delegates to `LemonAutomation.Blueprint`, which binds the target
+profile and current destination state and creates cron jobs only through
+`CronManager.add_new/1`.
+
+`lemon blueprints` is the source and packaged CLI projection over these exact
+methods. Its one-shot VM must not load bundle paths or start automation; the
+packaged launcher starts the existing runtime when necessary, preview is the
+default bundle-ID action, and only `blueprints.activate` carries the exact
+fresh confirmation digest to this long-running service.
+
+The Bun TUI uses the same methods for `/blueprints` and `/blueprint`. Its own
+projection is intentionally narrower than the RPC: only bounded IDs, counts,
+actions, booleans, and digests may enter terminal state. It obtains a fresh
+preview before activation, disables offline queuing for the admin request, and
+clears refused/stale plans while preserving the profile draft. Keep free-form
+manifest prose, prompts, skill text, schedules, commands, environment values,
+paths, URLs, tokens, secrets, and raw error terms out of terminal rendering.
+
+Learn methods may accept bounded context references and an explicit root, but
+must never return source text, generated prompts, paths, URLs, secret names, or
+secret values. `learn.confirm` delegates to `LemonSkills.Learn`; do not persist
+review plans or add a second learning store.
 
 ### Voice / TTS (capability-gated)
 
@@ -386,7 +507,12 @@ when to render the full payload.
 | `last-heartbeat` | read | Get last heartbeat for an agent plus response summary and redaction flags |
 | `talk.mode` | write | Get or set talk mode for a session plus audio/transcript cleanup summary |
 | `browser.status` | read | Inspect local browser driver status, artifacts, browser nodes, and live browser proof state |
-| `browser.request` | write | Send a browser request with route-policy and result cleanup summaries |
+| `browser.request` | write | Send a browser request with route-policy summaries and optional private awaited result delivery |
+| `browser.controller.ticket` | write | Mint a short-lived single-use ticket bound to the authenticated principal, controller, profile, session/run, and capabilities |
+| `browser.controller.register` | write | Consume a ticket and bind the exact WebSocket process as a browser controller |
+| `browser.controller.heartbeat` | write | Refresh liveness for the exact registered controller process |
+| `browser.controller.result` | write | Return one command result from the exact registered controller process |
+| `browser.controller.status` | read | Inspect redacted controller/binding status without tickets, credentials, or page content |
 | `checkpoint.status` | read | Inspect redacted checkpoint-store metadata plus filtered lifecycle event counts/history |
 | `checkpoint.diff` | read | Preview filesystem changes for a checkpoint with path/diff cleanup summary |
 | `checkpoint.restore` | write | Restore all or selected checkpoint paths with restore cleanup summary |
@@ -433,7 +559,7 @@ when to render the full payload.
 
 | Role | Scopes | How established |
 |------|--------|-----------------|
-| `operator` | `admin`, `read`, `write`, `approvals`, `pairing` | Default (no token); scope list in `connect` params |
+| `operator` | `admin`, `read`, `write`, `approvals`, `pairing` | Configured `LEMON_CONTROL_PLANE_OPERATOR_TOKEN`; legacy tokenless direct-loopback access requires an explicit compatibility opt-in |
 | `node` | `invoke`, `event` | Token from `connect.challenge` after node pairing |
 | `device` | `control` | Token from `connect.challenge` after device pairing |
 
@@ -449,7 +575,7 @@ Scope strings in `connect` params: `operator.admin`, `operator.read`, `operator.
      "id": "uuid",
      "method": "connect",
      "params": {
-       "auth": {"token": "optional-token"},
+       "auth": {"token": "configured-operator-token"},
        "role": "operator",
        "scopes": ["operator.read", "operator.write"]
      }
@@ -458,16 +584,36 @@ Scope strings in `connect` params: `operator.admin`, `operator.read`, `operator.
 3. Server responds with `hello-ok` frame (not a `res` frame) containing `features.methods`, `features.events`, `snapshot`, `auth`, and `policy`
 4. All subsequent requests use the established auth context
 
-Without a token, operators receive the scopes listed in `connect` params (or all operator scopes by default). With a valid token, role and scopes are derived from the stored identity.
+The HTTP router passes the actual socket peer into authorization. An operator
+token is required by default for every operator connection and compared in
+constant time. `LEMON_CONTROL_PLANE_ALLOW_UNAUTHENTICATED_LOOPBACK=true`
+explicitly restores the legacy tokenless path for direct loopback peers only;
+it defaults to `false`, and non-loopback peers always fail closed. Node/device
+session tokens derive role and scopes only from known stored identity types.
 
 ### Token-Based Auth (Nodes/Devices)
 
-1. Node calls `node.pair.request` -> operator approves via `node.pair.approve`
-2. Node calls `node.pair.verify` with the pairing code -> gets a challenge
-3. Node calls `connect.challenge` with the challenge -> receives a session token (TTL: 24 hours)
-4. Node uses `{"auth": {"token": "..."}}` in future `connect` calls
+1. Node calls `node.pair.request` -> operator approves via `node.pair.approve`, which returns a one-time challenge
+2. Node calls `connect.challenge` with that challenge -> receives a session token (TTL: seven days for this pairing flow)
+3. Node uses `{"auth": {"token": "..."}}` in future `connect` calls
+
+`node.pair.verify` is a pairing-code status check; it does not return the
+approval challenge or session token.
 
 Token validation is handled by `LemonControlPlane.Auth.TokenStore` (backed by `LemonCore.Store` under `:session_tokens` namespace).
+
+`./bin/lemon node join --pair` automates this exchange for the named coding
+worker when its operator connection has pairing scope. The worker persists the
+issued session and recovery credentials in a mode-0600 destination file keyed
+by durable node ID and records the exact controller URL; reuse fails closed
+when that controller does not match. ID-based recovery material is not loaded
+unless the caller supplies that exact stored controller URL. After the
+seven-day session expires,
+`--pair` recovers the same durable node and issues a fresh session while
+atomically revoking older sessions and their live sockets. Controller renames remain valid because recovery uses
+the node ID and controller's current name. An explicit operator-authorized
+`--pair --repair --node-id ID` rotates recovery credentials for compatible
+legacy records that lack one.
 
 ## Presence System
 
@@ -604,7 +750,7 @@ config :lemon_control_plane, capabilities: %{tts: true, wizard: false}
 
 ## EventBridge
 
-`LemonControlPlane.EventBridge` subscribes to `LemonCore.Bus` topics (`exec_approvals`, `channels`, `cron`, `goals`, `system`, `nodes`, `presence`) plus dynamic `run:*` and `session:*` topics. It maps bus event types to WS event names and fans out via a `Task.Supervisor`; each WebSocket connection then applies its own topic filter before pushing the event frame. New connections keep legacy all-event delivery until they set explicit subscriptions, while a clear-all unsubscribe suppresses later events for that connection. Subscribe to run events with `EventBridge.subscribe_run(run_id)` or generic dynamic topics with `EventBridge.subscribe_topics/1`.
+`LemonControlPlane.EventBridge` subscribes to `LemonCore.Bus` topics (`exec_approvals`, `channels`, `cron`, `goals`, `system`, `nodes`, `presence`) plus dynamic `run:*` and `session:*` topics. It maps bus event types to WS event names and fans out via a `Task.Supervisor`; each non-node WebSocket connection then applies its own topic filter before pushing the event frame. Authenticated node connections are excluded from this general fanout and receive only targeted `node_event` traffic. New non-node connections keep legacy all-event delivery until they set explicit subscriptions, while a clear-all unsubscribe suppresses later events for that connection. Subscribe to run events with `EventBridge.subscribe_run(run_id)` or generic dynamic topics with `EventBridge.subscribe_topics/1`.
 
 Key bus-event-to-WS-event mappings:
 
@@ -638,6 +784,29 @@ Key bus-event-to-WS-event mappings:
 The fanout uses `Task.Supervisor` for resilience. If the supervisor is temporarily unavailable (crash/restart), it falls back to inline dispatch. Telemetry events are emitted on `[:lemon, :control_plane, :event_bridge, :broadcast]` and `[:lemon, :control_plane, :event_bridge, :dropped]`.
 
 ## Common Tasks
+
+### Join a Named Coding Execution Node
+
+Start the controller normally, then run from the destination source checkout:
+
+```bash
+LEMON_NODE_OPERATOR_TOKEN=... ./bin/lemon node join \
+  --name worker-1 \
+  --controller wss://controller.example/ws \
+  --pair \
+  --cwd /srv/project
+```
+
+Later starts omit `--pair` and reuse the controller-bound token. Re-run with
+`--pair` when that seven-day session expires. Use
+`LEMON_NODE_TOKEN` to supply an existing token without placing it in shell
+history. A name must be unique on the controller, and the destination cwd must
+already exist.
+
+Non-loopback plaintext `ws://` is rejected by default. A Tailscale deployment
+may use `--controller ws://controller:4040/ws --allow-insecure-controller`
+only after verifying that the complete path stays on the authenticated,
+encrypted overlay; otherwise use `wss://`.
 
 ### Run Tests
 
@@ -712,9 +881,21 @@ LemonControlPlane.EventBridge.subscribe_run("some-run-id")
 
 ## Testing Guidelines
 
+Control-plane WebSocket operator authentication uses
+`LEMON_CONTROL_PLANE_OPERATOR_TOKEN`. The HTTP router must pass the actual socket
+peer to `WS.Connection`; tokenless operator compatibility must remain default-off
+and, when explicitly enabled, direct-loopback-only. Do not restore params-only
+node/device roles or map an unknown session-token identity to operator scopes.
+Keep credentials out of URLs, auth contexts, logs, status formatting, and error
+payloads.
+
 - Use `async: true` for method tests that don't depend on shared state
 - Tests requiring the full runtime should be marked `async: false`
-- The `test_helper.exs` stops and restarts `:lemon_channels` (and related apps) to ensure a clean baseline; it also disables Telegram
+- The `test_helper.exs` stops and restarts `:lemon_channels` (and related apps),
+  then explicitly ensures `:lemon_control_plane` is running. Umbrella app suites
+  share one BEAM, so the suite must establish its own supervised Registry/ETS
+  baseline even when an earlier app suite stopped the control plane; it also
+  disables Telegram.
 - Mock external dependencies; test method logic in isolation
 - Test error cases: missing params, invalid auth, not found scenarios
 - For WebSocket tests, use `test/lemon_control_plane/ws/connection_test.exs` as the reference pattern
@@ -731,6 +912,7 @@ LemonControlPlane.EventBridge.subscribe_run("some-run-id")
 | `methods/node_methods_test.exs` | Node management and invocation |
 | `methods/secrets_methods_test.exs` | Secrets CRUD |
 | `methods/skills_methods_test.exs` | Skills status, install, update |
+| `methods/blueprints_test.exs` | Catalog containment, content-free review, exact confirmation, profile activation, and duplicate-safe replay |
 | `methods/system_methods_test.exs` | System event, presence |
 | `methods/config_reload_test.exs` | Config reload lifecycle summaries |
 | `methods/system_reload_test.exs` | System reload scopes |
@@ -747,6 +929,7 @@ LemonControlPlane.EventBridge.subscribe_run("some-run-id")
 | `auth/authorize_test.exs` / `authorize_expiration_test.exs` | Authorization logic |
 | `auth/token_store_persistence_test.exs` | Token storage |
 | `ws/connection_test.exs` | WebSocket connection lifecycle |
+| `tui_profiles_wire_e2e_test.exs` | Authenticated real-Bandit profile lifecycle/canonical-chat proof driven by the typed Bun TUI client |
 | `protocol/errors_test.exs` / `frames_test.exs` / `schemas_test.exs` | Protocol layer |
 | `presence_test.exs` | Presence tracking |
 | `event_bridge_test.exs` / `event_bridge_tick_test.exs` / `event_bridge_monitoring_test.exs` / `event_bridge_mapping_test.exs` | EventBridge fanout |
@@ -755,11 +938,11 @@ LemonControlPlane.EventBridge.subscribe_run("some-run-id")
 
 | Dependency | How Used |
 |------------|----------|
-| `lemon_core` | `LemonCore.Store` (token persistence, idempotency), `LemonCore.Bus` (event pub/sub), `LemonCore.Secrets`, `LemonCore.Event`, `LemonCore.Telemetry` |
+| `lemon_core` | `LemonCore.Store` (token persistence, idempotency), `LemonCore.NodeRegistry` (live named-node delivery), `LemonCore.Bus` (event pub/sub), `LemonCore.Secrets`, `LemonCore.Event`, `LemonCore.Telemetry` |
 | `lemon_router` | `LemonRouter.submit/1` and `LemonRouter.RunOrchestrator.submit/1` for agent run submission; `LemonRouter.RunRegistry` for active run queries |
 | `lemon_channels` | `LemonChannels.Outbox` for `send` method; channel status queries |
 | `lemon_skills` | Skill status, installation, and binary path queries |
-| `lemon_automation` | `LemonAutomation.CronManager` for cron CRUD; heartbeat management |
+| `lemon_automation` | `LemonAutomation.CronManager` for cron CRUD and heartbeat management; `LemonAutomation.Blueprint` for safe catalog-scoped skill + cron activation |
 | _(none)_ | The agent is reached through `LemonControlPlane.AgentRuntime`; an agent registers a provider at boot. No compile-time dependency. |
 | `ai` | AI model listing and configuration |
 

@@ -30,6 +30,22 @@ defmodule LemonChannels.Adapters.Telegram.Transport.Commands do
 
   def rollback_command?(text, bot_username), do: telegram_command?(text, "rollback", bot_username)
 
+  @portable_execution_commands ~w(status usage agents tasks compress compact commands help bg btw queue q steer)
+
+  def portable_command?(text, bot_username) do
+    Enum.any?(@portable_execution_commands, &telegram_command?(text, &1, bot_username))
+  end
+
+  def portable_command_parts(text) do
+    trimmed = String.trim_leading(text || "")
+
+    case Regex.run(~r/^\/([a-z][a-z0-9_]*)(?:@[\w_]+)?(?:\s+(.*))?$/is, trimmed) do
+      [_, command, args] -> {String.downcase(command), String.trim(args || "")}
+      [_, command] -> {String.downcase(command), ""}
+      _ -> {"", ""}
+    end
+  end
+
   # ---------------------------------------------------------------------------
   # Message entry / joining helpers
   # ---------------------------------------------------------------------------
@@ -70,6 +86,30 @@ defmodule LemonChannels.Adapters.Telegram.Transport.Commands do
   # ---------------------------------------------------------------------------
   # Telegram command parsing helpers
   # ---------------------------------------------------------------------------
+
+  @portable_aliases %{
+    "reset" => "new",
+    "reasoning" => "thinking",
+    "stop" => "cancel"
+  }
+
+  @doc """
+  Normalize Hermes-compatible aliases to Lemon's canonical channel commands.
+
+  Leading whitespace and Telegram's optional `@BotName` suffix are preserved.
+  """
+  def canonicalize_portable_alias(text) when is_binary(text) do
+    case Regex.run(~r/^(\s*)\/(reset|reasoning|stop)(@[\w_]+)?(?=\s|$)(.*)$/is, text) do
+      [_, leading, command, target, rest] ->
+        canonical = Map.fetch!(@portable_aliases, String.downcase(command))
+        leading <> "/" <> canonical <> (target || "") <> rest
+
+      _ ->
+        text
+    end
+  end
+
+  def canonicalize_portable_alias(text), do: text
 
   @doc """
   Check whether `text` starts with `/cmd` (optionally suffixed with `@BotName`).

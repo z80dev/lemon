@@ -41,6 +41,45 @@ defmodule CodingAgent.ControlPlaneProvider do
     end
   end
 
+  def session_heartbeat(session_key, action, params) do
+    case CodingAgent.SessionRegistry.lookup_session_key(session_key) do
+      {:ok, pid} -> dispatch_session_heartbeat(pid, action, params)
+      :error -> {:error, :session_not_found}
+      {:error, :ambiguous} -> {:error, :session_ambiguous}
+    end
+  end
+
+  def background_start(prompt, opts), do: CodingAgent.BackgroundRun.start(prompt, opts)
+
+  def background_list(opts) do
+    opts
+    |> normalize_background_list_opts()
+    |> CodingAgent.BackgroundRun.list()
+  end
+
+  def background_list_scoped(session_key, opts) do
+    opts
+    |> normalize_background_list_opts()
+    |> then(&CodingAgent.BackgroundRun.list_scoped(session_key, &1))
+  end
+
+  def background_status(id), do: CodingAgent.BackgroundRun.status(id)
+
+  def background_status_scoped(id, session_key),
+    do: CodingAgent.BackgroundRun.status_scoped(id, session_key)
+
+  def background_result(id), do: CodingAgent.BackgroundRun.result(id)
+
+  def background_result_scoped(id, session_key),
+    do: CodingAgent.BackgroundRun.result_scoped(id, session_key)
+
+  def background_cancel(id), do: CodingAgent.BackgroundRun.cancel(id)
+
+  def background_cancel_scoped(id, session_key),
+    do: CodingAgent.BackgroundRun.cancel_scoped(id, session_key)
+
+  def side_query(source, question, opts), do: CodingAgent.SideQuery.ask(source, question, opts)
+
   def run_graph(run_id), do: CodingAgent.RunGraph.get(run_id)
 
   def progress_snapshot(session_id, cwd), do: CodingAgent.Progress.snapshot(session_id, cwd)
@@ -60,4 +99,33 @@ defmodule CodingAgent.ControlPlaneProvider do
   def wasm_sidecar_running? do
     is_pid(Process.whereis(CodingAgent.Wasm.SidecarSupervisor))
   end
+
+  defp normalize_background_list_opts(opts) do
+    case Keyword.get(opts, :status) do
+      status
+      when status in ~w(queued running completed error lost killed cancelled tracking_lost) ->
+        Keyword.put(opts, :status, String.to_existing_atom(status))
+
+      _ ->
+        Keyword.delete(opts, :status)
+    end
+  end
+
+  defp dispatch_session_heartbeat(pid, :status, _params),
+    do: CodingAgent.Session.heartbeat_status(pid)
+
+  defp dispatch_session_heartbeat(pid, :set, params) do
+    CodingAgent.Session.heartbeat_set(pid, params[:prompt], params[:interval_seconds])
+  end
+
+  defp dispatch_session_heartbeat(pid, :pause, _params),
+    do: CodingAgent.Session.heartbeat_pause(pid)
+
+  defp dispatch_session_heartbeat(pid, :resume, _params),
+    do: CodingAgent.Session.heartbeat_resume(pid)
+
+  defp dispatch_session_heartbeat(pid, :clear, _params),
+    do: CodingAgent.Session.heartbeat_clear(pid)
+
+  defp dispatch_session_heartbeat(_pid, _action, _params), do: {:error, :invalid_action}
 end

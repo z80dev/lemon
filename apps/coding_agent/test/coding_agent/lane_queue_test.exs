@@ -1,5 +1,5 @@
 defmodule CodingAgent.LaneQueueTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias CodingAgent.LaneQueue
 
@@ -204,6 +204,84 @@ defmodule CodingAgent.LaneQueueTest do
     assert {:ok, :hello} = LaneQueue.run(pid, :main, fn -> :hello end)
   end
 
+  test "completed task replies consume their monitor without a duplicate DOWN warning", %{
+    task_sup: sup
+  } do
+    {:ok, pid} =
+      LaneQueue.start_link(
+        name: :lane_queue_monitor_cleanup,
+        caps: %{main: 1},
+        task_supervisor: sup
+      )
+
+    log =
+      ExUnit.CaptureLog.capture_log([level: :warning], fn ->
+        assert {:ok, :done} = LaneQueue.run(pid, :main, fn -> :done end)
+        Process.sleep(20)
+      end)
+
+    refute log =~ "complete_job unknown task_ref"
+  end
+
+  test "drops a queued job when its caller exits", %{task_sup: sup} do
+    {:ok, pid} =
+      LaneQueue.start_link(
+        name: :lane_queue_caller_cancel,
+        caps: %{main: 1},
+        task_supervisor: sup
+      )
+
+    test_pid = self()
+
+    first =
+      Task.async(fn ->
+        LaneQueue.run(pid, :main, fn ->
+          send(test_pid, :first_started)
+          receive do: (:release -> :first_done)
+        end)
+      end)
+
+    assert_receive :first_started, 1_000
+
+    caller =
+      spawn(fn ->
+        LaneQueue.run(pid, :main, fn ->
+          send(test_pid, :cancelled_job_started)
+          :unexpected
+        end)
+      end)
+
+    wait_until(fn -> GenServer.call(pid, :status).jobs_count == 2 end)
+    Process.exit(caller, :kill)
+    wait_until(fn -> GenServer.call(pid, :status).jobs_count == 1 end)
+
+    Enum.each(Task.Supervisor.children(sup), &send(&1, :release))
+    assert {:ok, :first_done} = Task.await(first, 1_000)
+    refute_receive :cancelled_job_started, 100
+    assert GenServer.call(pid, :status).jobs_count == 0
+  end
+
+  test "contains task-supervisor admission failure and continues with the next job" do
+    missing_supervisor = :lane_queue_late_task_supervisor
+
+    {:ok, pid} =
+      LaneQueue.start_link(
+        name: :lane_queue_admission_failure,
+        caps: %{main: 1},
+        task_supervisor: missing_supervisor
+      )
+
+    assert {:error, {:task_start_failed, {:exit, _reason}}} =
+             LaneQueue.run(pid, :main, fn -> :never end)
+
+    assert Process.alive?(pid)
+    assert GenServer.call(pid, :status).jobs_count == 0
+
+    start_supervised!({Task.Supervisor, name: missing_supervisor})
+    assert {:ok, :recovered} = LaneQueue.run(pid, :main, fn -> :recovered end)
+    assert Process.alive?(pid)
+  end
+
   test "sequential execution with cap 1 preserves FIFO order", %{task_sup: sup} do
     {:ok, pid} =
       LaneQueue.start_link(
@@ -350,5 +428,17 @@ defmodule CodingAgent.LaneQueueTest do
     assert status.caps == %{main: 3, subagent: 5}
     assert status.jobs_count == 0
     assert is_map(status.lanes)
+  end
+
+  defp wait_until(fun, attempts \\ 100)
+  defp wait_until(_fun, 0), do: flunk("condition did not become true")
+
+  defp wait_until(fun, attempts) do
+    if fun.() do
+      :ok
+    else
+      Process.sleep(10)
+      wait_until(fun, attempts - 1)
+    end
   end
 end

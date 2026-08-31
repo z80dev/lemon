@@ -16,12 +16,22 @@ defmodule LemonControlPlane.Methods.SecretsMethodsTest do
   setup do
     clear_secrets_table()
 
+    previous_secrets_config = Application.get_env(:lemon_core, LemonCore.Secrets)
+    previous_master_key = System.get_env("LEMON_SECRETS_MASTER_KEY")
     master_key = :crypto.strong_rand_bytes(32) |> Base.encode64()
+
+    Application.put_env(
+      :lemon_core,
+      LemonCore.Secrets,
+      Keyword.put(previous_secrets_config || [], :key_providers, [:env])
+    )
+
     System.put_env("LEMON_SECRETS_MASTER_KEY", master_key)
 
     on_exit(fn ->
       clear_secrets_table()
-      System.delete_env("LEMON_SECRETS_MASTER_KEY")
+      restore_application_env(:lemon_core, LemonCore.Secrets, previous_secrets_config)
+      restore_system_env("LEMON_SECRETS_MASTER_KEY", previous_master_key)
     end)
 
     :ok
@@ -145,4 +155,10 @@ defmodule LemonControlPlane.Methods.SecretsMethodsTest do
       Store.delete(Secrets.table(), key)
     end)
   end
+
+  defp restore_application_env(app, key, nil), do: Application.delete_env(app, key)
+  defp restore_application_env(app, key, value), do: Application.put_env(app, key, value)
+
+  defp restore_system_env(name, nil), do: System.delete_env(name)
+  defp restore_system_env(name, value), do: System.put_env(name, value)
 end

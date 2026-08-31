@@ -5,13 +5,16 @@ This is the **base app** of the Lemon umbrella. All other apps depend on it. It 
 ## Purpose and Responsibilities
 
 - **Configuration management** - TOML-based config loading, caching, validation, and hot reloading
-- **Secrets management** - Encrypted storage with AES-256-GCM, keychain integration
+- **First-run readiness** - Shared read-only config/secrets/provider/model readiness for all clients
+- **Secrets management** - Encrypted storage with AES-256-GCM, keychain integration, and bounded read-only external sources
 - **Storage backends** - Pluggable storage (ETS, SQLite, JSONL) for state persistence
 - **Event bus** - Process-safe PubSub via Phoenix.PubSub for cross-app communication
 - **Session key management** - Canonical session key formats for routing
 - **Idempotency** - Deduplication for at-most-once operations
 - **Execution approvals** - Tool execution gating with scope-based persistence
 - **Checkpoints and rollback** - Shared checkpoint store, filesystem diff/restore, and lifecycle events
+- **User-state backup and restore** - Atomic, versioned, checksum-verified `~/.lemon` bundles with guarded overwrite
+- **Managed release updates** - Non-mutating exact plans, confined artifact staging, private receipts, and receipt-bound rollback
 - **Quality checks** - Docs catalog and architecture boundary validation
 - **Telemetry** - Consistent event emission across the umbrella
 - **HTTP client** - Thin wrapper around Erlang's `:httpc`
@@ -22,15 +25,23 @@ This is the **base app** of the Lemon umbrella. All other apps depend on it. It 
 |--------|---------|
 | `LemonCore` | Main module with module list |
 | `LemonCore.Config` | TOML config facade; delegates to `LemonCore.Config.Modular` for parsing/resolution and converts output into the legacy struct shape |
-| `LemonCore.Config.Modular` | Canonical modular config loader with typed sub-structs per section (sole parser/resolver for runtime config semantics) |
+| `LemonCore.Config.Modular` | Canonical modular config loader with typed sub-structs per section (sole parser/resolver for runtime config semantics); `validate_settings/1` validates an already-decoded merged candidate before comment-preserving editors replace a live file |
 | `LemonCore.ConfigCache` | ETS-backed config cache with mtime-based invalidation |
 | `LemonCore.ConfigReloader` | Hot reload orchestrator with diff computation and Bus broadcast |
 | `LemonCore.ConfigReloader.Watcher` | FileSystem watcher that targets `config.toml`/`.env` paths (file-first, parent-dir fallback) and triggers reload only for those files |
-| `LemonCore.Secrets` | Encrypted secrets API (get/set/list/delete) |
+| `LemonCore.Setup.Readiness` | Derives stable `:config`, `:secrets`, and `:provider` first-run steps without mutation or network calls |
+| `LemonCore.Secrets` | Encrypted secrets API plus store/external/environment resolution |
+| `LemonCore.Config.Secrets` | Exact `[secrets.sources.<id>]` schema and validation |
 | `LemonCore.Secrets.Crypto` | AES-256-GCM encryption with HKDF key derivation |
+| `LemonCore.Secrets.EnvCatalog` | Ordered environment-secret catalog shared by packaged and Mix check/import commands |
+| `LemonCore.Secrets.External` | Ordered, supervised, fail-closed external-source orchestrator and redacted diagnostics |
+| `LemonCore.Secrets.Source` | Read-only external source behaviour implemented by 1Password, Bitwarden, and command adapters |
+| `LemonCore.Secrets.SourceRunner` | Minimal-environment, argv-only subprocess boundary with time/output limits |
+| `LemonCore.Secrets.SourceCache` | Bounded optional process-local TTL cache; disabled by default |
 | `LemonCore.Secrets.Keychain` | macOS keychain integration for master key storage |
 | `LemonCore.Secrets.MasterKey` | Master key resolution (keychain first, then env var) |
-| `LemonCore.Store` | Storage GenServer with pluggable backends and `put_new/3` insert-if-absent claims |
+| `LemonCore.OAuth.LocalCallbackListener` | Caller-owned one-shot localhost OAuth callback listener; monitors its listener manager so early failure returns immediately instead of consuming the authorization timeout |
+| `LemonCore.Store` | Storage GenServer with pluggable backends, `put_new/3` claims, serialized `take/2`, and exact-value `compare_and_swap/4` |
 | `LemonCore.Store.ReadCache` | ETS read cache for hot domains (`:chat`, `:runs`, `:progress`, `:sessions_index`, plus tables collaborators add with `register_cached_table/1`) |
 | `LemonCore.Store.EtsBackend` | In-memory ETS (ephemeral, default) with `:ets.insert_new/2` claims |
 | `LemonCore.Store.SqliteBackend` | SQLite with WAL mode (persistent) and `ON CONFLICT DO NOTHING` claims |
@@ -38,6 +49,11 @@ This is the **base app** of the Lemon umbrella. All other apps depend on it. It 
 | `LemonCore.Bus` | PubSub wrapper with topic helpers |
 | `LemonCore.Event` | Canonical event struct for Bus and persistence |
 | `LemonCore.EventBridge` | Cross-app event translation |
+| `LemonCore.NodeRegistry` | Live named-node registry and targeted invocation broker; binds results, cancellation, and acknowledged steer/redirect controls to the selected node connection/run and retains monotonic credential-generation floors |
+| `LemonCore.JSONPayload` | Shared byte/depth/item validation for JSON protocol boundaries; defaults to the control-plane 1 MiB payload policy |
+| `LemonCore.Context` | Canonical bounded preview/resolve service for root-confined files/folders, git diffs, public URLs, redacted sessions, and format-sniffed documents |
+| `LemonCore.Context.Document` | PDF/DOCX/XLSX/PPTX/ipynb/text extraction with pre-inflation archive and explicit page/item/depth/byte limits |
+| `LemonCore.Context.URLFetcher` | DNS/IP-pinned HTTP(S) fetches with SSRF, redirect, credential, body-size, and timeout defenses |
 | `LemonCore.InboundMessage` | Normalized inbound message from any channel; adapters build the struct directly |
 | `LemonCore.RunRequest` | Canonical run submission struct used by router-facing callers |
 | `LemonCore.ExecutionCommand` | Canonical execution command handed from router to a configured engine runtime |
@@ -45,6 +61,8 @@ This is the **base app** of the Lemon umbrella. All other apps depend on it. It 
 | `LemonCore.RunPhase` | Canonical cross-subsystem run lifecycle phase vocabulary |
 | `LemonCore.RunPhaseGraph` | Valid transition graph for canonical run lifecycle phases |
 | `LemonCore.RunPhaseEvent` | Canonical run phase-change payload builder for bus/event emission |
+| `LemonCore.SessionLifecycle` | Shared operator-facing session list/search/statistics/history/export/delete/prune service over the canonical run/chat/policy stores; statistics keep exact totals while bounding and redacting dimensions |
+| `LemonCore.SessionMetadataStore` | Typed title/pin/archive annotations stored separately from conversation content |
 | `LemonCore.RouterBridge` | Runtime bridge to `:lemon_router` without compile-time coupling |
 | `LemonCore.SessionKey` | Session key generation and parsing |
 | `LemonCore.Idempotency` | At-most-once deduplication backed by `LemonCore.Store` with 24h TTL |
@@ -56,6 +74,12 @@ This is the **base app** of the Lemon umbrella. All other apps depend on it. It 
 | `LemonCore.Telemetry` | Telemetry event helpers |
 | `LemonCore.Introspection` | Canonical introspection envelope builder and persistence API |
 | `LemonCore.Checkpoint` | Shared checkpoint store plus filesystem diff/restore and lifecycle events |
+| `LemonCore.Backup` | Versioned `~/.lemon` data contract plus atomic create/list/verify and verified-before-mutation restore |
+| `LemonCore.Update.Plan` | Pure exact-plan validation and digest binding over current/running release plus raw manifest/artifact identity |
+| `LemonCore.Update.Archive` | Pre-extraction archive path/type confinement and post-extraction entry/expanded-byte bounds |
+| `LemonCore.Update.ManagedInstall` | Installer-layout validation, launcher proof, atomic promotion/pointer flips, and confined retention |
+| `LemonCore.Update.ReceiptStore` | Serialized owner-only content-free checkpoints and update/rollback receipts |
+| `LemonCore.Update.Remote` | Network/update orchestration over the focused plan/archive/install/receipt boundaries |
 | `Lemon.Reload` | Runtime BEAM/extension reload orchestration with global lock and telemetry |
 | `LemonCore.Httpc` | `:httpc` wrapper ensuring `:inets`/`:ssl` started |
 | `LemonCore.Clock` | Time utilities (monotonic timestamps) |
@@ -68,6 +92,30 @@ This is the **base app** of the Lemon umbrella. All other apps depend on it. It 
 | `LemonCore.BindingResolver` | Resolves bindings for inbound messages |
 | `LemonCore.TerminalBackend` / `TerminalBackends` / `TerminalBackendPolicy` | Shared terminal/process backend contract, registry, policy, and redacted diagnostics |
 | `LemonCore.Testing` | Test harness builder (`Harness`, `Case`, `Helpers`) for lemon_core tests |
+
+`LemonCore.Backup` owns the user-state backup contract. Never widen its default
+scope silently: local credentials remain opt-in, project-local `.lemon` and
+platform keychains remain out of scope, and symlinks/special files are never
+followed. Manifest compatibility, exact file-set checks, owner-only bundle
+permissions, and per-file checksums must all pass before restore stages data.
+Overwrite authorization must remain derived from both the verified manifest
+digest and expanded target root. Restore modes are exact manifest owner modes
+from the explicit allowlist; group/world widening is a verification failure.
+
+`LemonSkills.Learn` is the review/confirm consumer for learn-from-source. Keep
+all filesystem, archive, document, URL/SSRF, session-redaction, and budget
+semantics in `LemonCore.Context`; the learning layer must not fork those rules.
+
+Managed update invariants are similarly fail-closed. Never mutate a source
+checkout, accept a caller path as a rollback target, weaken schema-2 exact
+size/SHA-256 verification, extract before `Update.Archive` accepts every entry,
+or flip `versions/current` before the staged launcher reports the target
+version. Plan must remain non-mutating and bind the raw manifest hash plus exact
+running/current pointer. Apply and rollback share `Update.ReceiptStore`'s lock;
+receipts remain content-free and owner-only. The published schema authenticates
+checksums but has no publisher signature, and `:httpc` currently enforces an
+exact post-download rather than exact in-flight byte cutoff; keep both residuals
+explicit in user/release documentation.
 
 Media doctor remediation should keep provider-backed image/TTS/STT/vision/video
 proof commands copy-ready and include the default redacted
@@ -159,17 +207,35 @@ config = LemonCore.Config.Modular.load!(project_dir: cwd)  # raises on invalid
 
 **Important**: `LemonCore.Config.Modular` is the canonical config implementation. `LemonCore.Config` is a facade that delegates to modular for parsing/resolution and converts the output into the legacy struct shape. Do not add independent parsing rules to the facade.
 
+`LemonCore.Setup.Readiness` is the canonical cross-client first-run predicate.
+Keep it read-only and network-free. Provider live checks belong in `lemon_cli`;
+browser/TUI/setup callers must not duplicate the config, credential, or
+provider/model-match rules.
+
 ### Config Sections (valid top-level TOML sections)
 
 - `[defaults]` - Default provider, model, thinking level, engine
 - `[runtime]` - Runtime behavior (compaction, retry, shell, provider_routing, tools, cli, extensions, theme, budget_defaults)
-- `[profiles.<id>]` - Per-agent profiles with tool policies
+- `[profiles.<id>]` - Per-agent profiles with identity, model/node defaults, and tool policies. `LemonCore.ProfileStore` is the user-managed lifecycle boundary; it patches only the selected table and derives isolated homes under `~/.lemon/profiles/<id>/`.
 - `[providers.<name>]` - LLM API keys, base URLs, and secret refs (anthropic, openai, openai-codex, opencode, opencode_go, github_copilot, kimi, zai, minimax, google, google_vertex, azure_openai_responses, amazon_bedrock). Secret-ref fields: `api_key_secret`, `oauth_secret`, `project_secret`, `location_secret`, etc.
 - `[gateway]` - Max concurrent runs, engine bindings, SMS/voice/webhook settings, projects. Per-platform sub-tables (`[gateway.<id>]`) and their `enable_<id>` flags are resolved and validated by the app that implements the platform; see `LemonCore.Config.Gateway.Channel`. Secret-ref fields: `bot_token_secret`, `auth_token_secret`, `wallet_key_secret`.
 - `[tui]` - Theme, debug mode
 - `[logging]` - File logging, level, rotation
 
 **Deprecated sections cause hard failure**: `[agent]`, `[agents.*]`, `[agent.tools.*]`, and top-level `[tools.*]` are no longer supported and will fail validation with migration guidance. Use `[defaults]`/`[runtime]` instead of `[agent]`, `[profiles.<id>]` instead of `[agents.<id>]`, and `[runtime.tools.*]` instead of `[agent.tools.*]` or `[tools.*]`.
+
+### User-managed profile lifecycle
+
+`LemonCore.ProfileStore` is deliberately a metadata/filesystem service. It may
+return derived home/workspace/memory/skill/session paths and canonical session
+keys, but must not depend on `coding_agent`, `lemon_skills`, or router runtime
+modules. Lifecycle writes are serialized per config path, use same-directory
+atomic replacement, and preserve unknown TOML keys/comments. Profile IDs are
+validated before path derivation; symlinked/special homes are rejected. Delete
+requires exact-ID confirmation and moves the home to `~/.lemon/trash/profiles`
+before removing config. Default exports include only selected text bootstrap,
+profile-local config, and skill files after credential redaction; sessions,
+memory, artifacts, binaries, and secret-like paths remain omitted.
 
 ### Config vs Runtime State
 
@@ -223,7 +289,8 @@ The chain is configurable (`LemonCore.Secrets.KeyProvider`): `config :lemon_core
 
 Key material must be base64-encoded 32 bytes. Raw passphrase-like strings are rejected with `:weak_master_key` unless `allow_legacy_raw_keys: true` is set. Rotation (re-encrypting under a new key) is not implemented — see the `LemonCore.Secrets` moduledoc.
 
-For a path-by-path audit matrix (including error and fallback semantics), see `docs/security/secrets-keychain-audit-matrix.md`.
+For the path-by-path resolution contract, including error and fallback semantics,
+see `docs/security/secrets-and-keychain.md`.
 
 ### API Usage
 
@@ -246,7 +313,39 @@ exists? = LemonCore.Secrets.exists?("api_key")
 
 ### Env Fallback
 
-Secrets automatically fallback to environment variables (same name). Use `env_fallback: false` to disable.
+Resolution uses the encrypted store first, then explicitly enabled external
+sources in priority/id order, then an environment variable of the same name.
+Use `env_fallback: false` to disable both external and environment fallbacks.
+An enabled external source that fails stops before the environment fallback;
+only a successful source that lacks the requested name continues. Bootstrap
+credentials deliberately use `resolve_local/2` so sources cannot recursively
+invoke themselves.
+
+### External Sources
+
+`[secrets.sources.<id>]` supports `onepassword`, `bitwarden`, and `command`.
+Every source requires exact `enabled = true`, exact known settings, an argv-only
+program boundary, and validated time/output/cache bounds. Source processes run
+under `LemonCore.Secrets.SourceTaskSupervisor`; combined stdout/stderr is
+bounded and never copied into errors, logs, status, or proof output. The
+optional `SourceCache` holds at most 32 process-local entries and defaults off.
+
+Readiness and live source proof are exposed in both source and packaged
+runtimes:
+
+```bash
+lemon secrets sources status --json
+lemon secrets sources test [source-id] --json
+```
+
+These commands report only readiness/provenance/count/byte/duration metadata.
+See `docs/config.md#external-secret-sources` for the exact provider schemas.
+
+`LemonCore.Secrets.EnvCatalog` owns the ordered set of environment-backed
+credentials shown by `secrets check` and considered by `secrets import-env` in
+both packaged releases and Mix tasks. Add operator-facing default import/check
+names there. Do not derive this list from `LemonCore.Env`: that registry owns
+runtime declarations and varies with the release profile.
 
 ## Storage Backends
 
@@ -283,7 +382,7 @@ Store client calls are fail-soft: if `LemonCore.Store` is overloaded/unavailable
 
 `LemonCore.Store.SqliteBackend` logs decode failures and returns explicit corruption errors for bad payloads instead of collapsing corrupted rows to `nil`/missing. SQLite release/close failures are also logged so cleanup issues stay observable.
 
-Use the generic table API only for backend internals, wrapper modules, or explicitly app-local legacy tables. Shared-domain callers should go through typed wrappers such as `LemonCore.RunStore`, `LemonCore.ChatStateStore`, `LemonCore.ProgressStore`, `LemonCore.PolicyStore`, `LemonCore.IdempotencyStore`, `LemonCore.IntrospectionStore`, `LemonCore.ExecApprovalStore`, `LemonCore.UsageStore`, and `LemonCore.Checkpoint`. Agent workspace callers should use `LemonAgent.Workspace.HeartbeatStore`, `LemonAgent.Workspace.GoalStore`, and `LemonAgent.Workspace.KanbanStore`. Channel model-policy callers should use `LemonChannels.ModelPolicyStore`.
+Use the generic table API only for backend internals, wrapper modules, or explicitly app-local legacy tables. Shared-domain callers should go through typed wrappers such as `LemonCore.RunStore`, `LemonCore.SessionMetadataStore`, `LemonCore.ChatStateStore`, `LemonCore.ProgressStore`, `LemonCore.PolicyStore`, `LemonCore.IdempotencyStore`, `LemonCore.IntrospectionStore`, `LemonCore.ExecApprovalStore`, `LemonCore.UsageStore`, and `LemonCore.Checkpoint`. Operator surfaces should use `LemonCore.SessionLifecycle` rather than reimplementing session search, aggregate statistics, export, or prune over those stores. Agent workspace callers should use `LemonAgent.Workspace.HeartbeatStore`, `LemonAgent.Workspace.GoalStore`, and `LemonAgent.Workspace.KanbanStore`. Channel model-policy callers should use `LemonChannels.ModelPolicyStore`.
 
 ### Specialized APIs
 
@@ -398,6 +497,7 @@ LemonCore.Bus.broadcast("session:" <> session_key, event)
 1. Secrets are provider-agnostic -- the `provider` field is metadata only
 2. To add a new master key source, implement `LemonCore.Secrets.KeyProvider` and add it to `key_providers`
 3. To add a new keychain backend, implement the same interface as `LemonCore.Secrets.Keychain`
+4. To add an external read-only source, implement `LemonCore.Secrets.Source`, register its type in `Config.Secrets` and `Secrets.External`, and preserve the shared runner, stable error vocabulary, and redacted diagnostic contract
 
 ### Adding a New Onboarding Provider
 
@@ -508,6 +608,14 @@ mix lemon.secrets.set API_KEY abc123 --provider manual --expires-at 173568960000
 
 # Delete a secret
 mix lemon.secrets.delete API_KEY
+
+# Inspect/test external read-only sources without revealing values
+./bin/lemon secrets sources status
+./bin/lemon secrets sources test [source-id] --json
+
+# Check/import the shared environment-secret catalog
+mix lemon.secrets.check
+mix lemon.secrets.import_env --dry-run
 ```
 
 ### Onboarding Tasks
@@ -516,6 +624,14 @@ Onboarding, setup, and Hermes migration tasks live in `apps/lemon_cli`; see
 `apps/lemon_cli/README.md`.
 
 ### Quality Tasks
+
+The architecture check parses the complete `deps/0` body in every umbrella
+`mix.exs`, including dependency lists wrapped by `Lemon.HexPackage.deps/1`.
+The direct-dependency policy is exact: both an undeclared edge and a policy
+permission left behind after an edge is removed fail the check. Cross-app source
+references that intentionally avoid a direct Mix dependency live in the
+separate reference-only exception map and are shown separately in the generated
+architecture table.
 
 ```bash
 # Run all quality checks
@@ -531,6 +647,14 @@ mix lemon.quality --validate-config
 # Specific root directory
 mix lemon.quality --root /path/to/repo
 ```
+
+The docs catalog uses a data-only `%{defaults: ..., entries: ...}` structure.
+Keep shared ownership and age policy in `defaults`; entry overrides should only
+describe exceptions. `DocsCatalog` deliberately decodes a bounded AST instead
+of evaluating the file. `DocsCheck` treats the Git index (`git ls-files`) as
+the source of truth for repository coverage and uses a filesystem fallback only
+for synthetic non-Git test roots. Catalog `last_reviewed` is the canonical
+freshness date; do not introduce a second document-footer review date.
 
 ### Store Tasks
 
@@ -825,14 +949,18 @@ UUIDs come from the vendored `LemonCore.UUID` (v4 + v7), not the unmaintained `:
 
 ## Supervised Process Tree
 
-The `LemonCore.Application` supervisor starts (`:one_for_one`):
+The `LemonCore.Application` supervisor starts (`:one_for_one`), including:
 
 1. `Phoenix.PubSub` (name: `LemonCore.PubSub`) - PubSub backbone
-2. `LemonCore.ConfigCache` - ETS-backed config cache
-3. `LemonCore.Store` - Storage GenServer
-4. `LemonCore.RunHistoryStore` - Run history persistence (requires the optional `exqlite` dep)
-5. `LemonCore.ConfigReloader` - Reload orchestrator
-6. `LemonCore.ConfigReloader.Watcher` - File-system watcher (optional, requires `file_system` dep)
+2. `LemonCore.ACPClientBridge` - Direct ACP client request/reply registry
+3. `LemonCore.NodeRegistry` - Live named-node registry and invocation broker
+4. `LemonCore.ConfigCache` - ETS-backed config cache
+5. `LemonCore.Store` - Storage GenServer
+6. `LemonCore.Secrets.SourceTaskSupervisor` - Bounded external-source task owner
+7. `LemonCore.Secrets.SourceCache` - Bounded optional process-local source cache
+8. `LemonCore.RunHistoryStore` - Run history persistence (requires the optional `exqlite` dep)
+9. `LemonCore.ConfigReloader` - Reload orchestrator
+10. `LemonCore.ConfigReloader.Watcher` - File-system watcher (optional, requires `file_system` dep)
 
 Durable memory is supervised by the `lemon_memory` app, not here.
 
@@ -842,7 +970,7 @@ Durable memory is supervised by the `lemon_memory` app, not here.
 - Browser, media-job, and LSP drivers live in `lemon_browser`, `lemon_media`, and `lemon_lsp`; core doctor diagnostics may only probe them at runtime.
 - Keep module interfaces stable - other apps depend on them
 - `LemonCore.Config.load/2` uses the cache by default; `LemonCore.Config.reload/2` forces a disk read and updates the cache
-- Secrets values are never logged or returned by list/status APIs
+- Secrets values are never logged or returned by list/status/test/proof APIs
 - Secret reads (`get/2`) update usage metadata (`usage_count`, `last_used_at`) but do not mutate `updated_at`
 - SQLite serializes keys and values with `:erlang.term_to_binary/1`; JSONL uses
   a JSON codec that preserves atoms, tuples, structs, and nested map keys

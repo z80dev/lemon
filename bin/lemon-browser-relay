@@ -1,0 +1,61 @@
+#!/bin/bash
+# Launch or locate Lemon's token-gated Chrome extension relay.
+
+set -euo pipefail
+
+SCRIPT_PATH="${BASH_SOURCE[0]}"
+SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
+LEMON_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+CLIENT_DIR="$LEMON_ROOT/clients/lemon-browser-node"
+EXTENSION_DIR="$CLIENT_DIR/extension"
+ACTION="${1:-start}"
+
+case "$ACTION" in
+  path)
+    echo "$EXTENSION_DIR"
+    exit 0
+    ;;
+  install)
+    INSTALL_BASE="${LEMON_BROWSER_EXTENSION_INSTALL_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/lemon/browser-relay}"
+    INSTALL_DIR="$INSTALL_BASE/extension-1.0.0"
+    mkdir -p "$INSTALL_DIR"
+    cp "$EXTENSION_DIR/manifest.json" "$INSTALL_DIR/manifest.json"
+    cp "$EXTENSION_DIR/background.js" "$INSTALL_DIR/background.js"
+    cp "$EXTENSION_DIR/options.html" "$INSTALL_DIR/options.html"
+    cp "$EXTENSION_DIR/options.js" "$INSTALL_DIR/options.js"
+    echo "$INSTALL_DIR"
+    exit 0
+    ;;
+  start)
+    shift || true
+    ;;
+  help|--help|-h)
+    cat <<'EOF'
+Usage: ./bin/lemon-browser-relay start [--port PORT] [--token TOKEN]
+       ./bin/lemon-browser-relay install
+       ./bin/lemon-browser-relay path
+
+The relay binds to loopback only and requires a token. Set the same token in
+the unpacked Chrome extension and in LEMON_BROWSER_CDP_ENDPOINT:
+
+  export LEMON_BROWSER_RELAY_TOKEN="$(openssl rand -hex 32)"
+  ./bin/lemon-browser-relay start
+  export LEMON_BROWSER_CDP_ENDPOINT="ws://127.0.0.1:9224/cdp?token=$LEMON_BROWSER_RELAY_TOKEN"
+EOF
+    exit 0
+    ;;
+  *)
+    echo "Unknown action: $ACTION" >&2
+    exit 2
+    ;;
+esac
+
+cd "$CLIENT_DIR"
+if [[ ! -d node_modules ]]; then
+  npm install
+fi
+if [[ ! -f dist/relay-cli.js ]]; then
+  npm run build
+fi
+
+exec node dist/relay-cli.js "$@"

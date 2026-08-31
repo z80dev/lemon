@@ -6,11 +6,14 @@
   "type": "module",
   "main": "dist/index.js",
   "bin": {
-    "lemon-browser-node": "dist/cli.js"
+    "lemon-browser-node": "dist/cli.js",
+    "lemon-browser-relay": "dist/relay-cli.js"
   },
   "scripts": {
-    "build": "tsup src/cli.ts src/index.ts src/local-driver.ts --format esm --clean",
-    "dev": "tsup src/cli.ts src/index.ts src/local-driver.ts --format esm --watch",
+    "build": "tsup src/cli.ts src/index.ts src/local-driver.ts src/relay-cli.ts --format esm --clean",
+    "dev": "tsup src/cli.ts src/index.ts src/local-driver.ts src/relay-cli.ts --format esm --watch",
+    "relay": "node dist/relay-cli.js",
+    "smoke:extension": "npm run build && node scripts/live-extension-smoke.mjs",
     "start": "node dist/cli.js",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",

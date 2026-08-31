@@ -17,16 +17,27 @@ defmodule LemonGateway.TransportSupervisorTest do
   """
   use ExUnit.Case, async: false
 
-  alias Elixir.LemonGateway.TransportSupervisor
   alias Elixir.LemonGateway.TransportRegistry
+  alias Elixir.LemonGateway.TransportSupervisor
+
+  @isolated_applications [:lemon_gateway, :lemon_channels]
 
   setup_all do
     # `mix test` starts the current application by default. This test suite is a
     # unit test for the legacy `TransportSupervisor`, so we explicitly stop the
-    # running apps and start only the minimal processes we need per test.
-    _ = Application.stop(:lemon_gateway)
-    _ = Application.stop(:lemon_channels)
-    _ = Application.stop(:lemon_control_plane)
+    # running apps and start only the minimal processes we need per test. Record
+    # the original lifecycle first: umbrella tests share one BEAM, so leaving a
+    # previously-running application stopped deletes its owned ETS tables and
+    # poisons whichever app suite runs next.
+    originally_running = running_applications(@isolated_applications)
+
+    on_exit(fn ->
+      stop_if_running(TransportSupervisor)
+      stop_if_running(TransportRegistry)
+      restore_applications(originally_running)
+    end)
+
+    Enum.each(@isolated_applications, &Application.stop/1)
     :ok
   end
 
@@ -193,6 +204,32 @@ defmodule LemonGateway.TransportSupervisorTest do
             :ok
         end
     end
+  end
+
+  defp running_applications(applications) do
+    started =
+      Application.started_applications()
+      |> Enum.map(fn {application, _description, _version} -> application end)
+      |> MapSet.new()
+
+    MapSet.intersection(started, MapSet.new(applications))
+  end
+
+  defp restore_applications(originally_running) do
+    # Restore dependency providers before the control plane. `ensure_all_started`
+    # is intentionally used instead of `start`: it is idempotent and restores
+    # transitive runtime dependencies exactly as OTP does during normal boot.
+    Enum.each(@isolated_applications, fn application ->
+      if MapSet.member?(originally_running, application) do
+        case Application.ensure_all_started(application) do
+          {:ok, _started} ->
+            :ok
+
+          {:error, reason} ->
+            raise "failed to restore #{application} after transport tests: #{inspect(reason)}"
+        end
+      end
+    end)
   end
 
   defp setup_app(transports, config \\ %{}) do
@@ -477,7 +514,6 @@ defmodule LemonGateway.TransportSupervisorTest do
       # get restarted by the test supervisor (which would re-register children).
       _ = Application.stop(:lemon_gateway)
       _ = Application.stop(:lemon_channels)
-      _ = Application.stop(:lemon_control_plane)
 
       stop_if_running(TransportSupervisor)
       stop_if_running(TransportRegistry)

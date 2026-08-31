@@ -14,6 +14,19 @@ modules nothing outside the package touches are marked internal.
 
 ### Added
 
+- `LemonSkills.Learn` composes bounded context resolution, durable memory, and
+  audited synthesis drafts into a non-mutating review plus exact-digest
+  confirmation workflow. Reviews expose only hashes, counts, audit codes, and
+  conflicts; confirmation re-resolves changed sources before atomic
+  create-if-absent writes, preserves inspectable hashed provenance, disables
+  optional LLM audit for selected source text, and rolls back a newly created
+  draft if the memory write returns, raises, throws, or exits with failure.
+
+- Dynamic official Hermes skill discovery and sparse import via
+  `LemonSkills.Sources.Hermes`, `hermes:` installer identifiers, the
+  `mix lemon.skill hermes` browser, and the control-plane catalog used by the
+  terminal client's multi-select importer.
+
 - `LemonSkills` — the facade: `list/1`, `list_by_category/1`, `get/2`,
   `refresh/1`, `find_relevant/2`, `status/2`, `install/2`, `update/2`,
   `uninstall/2`, `enable/2`, `disable/2`, `global_skills_dir/0`,
@@ -27,10 +40,11 @@ modules nothing outside the package touches are marked internal.
 - `LemonSkills.Status` — readiness gating: missing binaries, missing
   configuration, missing environment variables, platform compatibility.
 - `LemonSkills.Installer`, `LemonSkills.SourceRouter` and the
-  `LemonSkills.Source` behaviour with its five implementations
+  `LemonSkills.Source` behaviour with its six implementations
   (`Sources.Builtin`, `Sources.Local`, `Sources.Git`, `Sources.Github`,
-  `Sources.Registry`) — install from a directory, a git remote, GitHub or the
-  skill registry, each carrying a trust level.
+  `Sources.Hermes`, `Sources.Registry`) — install from a directory, a git
+  remote, GitHub, the official Hermes catalog, or the skill registry, each
+  carrying a trust level.
 - `LemonSkills.TrustPolicy` — which trust levels require an audit and which
   auto-approve.
 - `LemonSkills.Audit.Engine`, `LemonSkills.Audit.BundleAudit`,
@@ -64,6 +78,13 @@ modules nothing outside the package touches are marked internal.
   from the shell.
 
 ### Changed
+
+- Avoid unnecessary full-list traversal when validating official Hermes skill
+  identifiers.
+
+- YAML skill frontmatter now uses `YamlElixir`, enabling nested objects and
+  flow lists used by Hermes manifests. Hermes platform and prerequisite aliases
+  normalize to Lemon's canonical readiness fields.
 
 - API-stabilization pass ahead of the first release. Every module an
   application outside this package calls now documents its real contract —

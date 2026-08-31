@@ -4,7 +4,7 @@ defmodule LemonCore.Quality.ArchitectureDocs do
   architecture boundaries document.
   """
 
-  alias LemonCore.Quality.ArchitecturePolicy
+  alias LemonCore.Quality.{ArchitectureCheck, ArchitecturePolicy}
 
   @doc_relative_path "docs/architecture_boundaries.md"
   @section_start "<!-- architecture_policy:start -->"
@@ -25,29 +25,35 @@ defmodule LemonCore.Quality.ArchitectureDocs do
   @spec doc_relative_path() :: String.t()
   def doc_relative_path, do: @doc_relative_path
 
-  @spec render_dependency_policy_markdown() :: String.t()
-  def render_dependency_policy_markdown do
-    deps = ArchitecturePolicy.allowed_direct_deps()
+  @spec render_dependency_policy_markdown(String.t()) :: String.t()
+  def render_dependency_policy_markdown(root \\ File.cwd!()) do
+    actual = ArchitectureCheck.actual_direct_deps(root)
+    allowed = ArchitecturePolicy.allowed_direct_deps()
+    exceptions = ArchitecturePolicy.reference_only_namespace_exceptions()
 
-    header = """
-    | App | Allowed direct umbrella deps |
-    | --- | --- |
-    """
+    header = [
+      "| App | Actual direct deps from `mix.exs` | Allowed direct deps | Reference-only exceptions |",
+      "| --- | --- | --- | --- |"
+    ]
 
     rows =
-      deps
-      |> Enum.sort_by(fn {app, _deps} -> Atom.to_string(app) end)
-      |> Enum.map(fn {app, allowed} ->
-        deps_cell =
-          case allowed do
-            [] -> "*(none)*"
-            list -> Enum.map_join(list, ", ", &"`#{&1}`")
+      allowed
+      |> Map.keys()
+      |> Enum.sort()
+      |> Enum.map(fn app ->
+        actual_cell =
+          case Map.fetch(actual, app) do
+            {:ok, deps} -> dependency_cell(deps)
+            :error -> "*(missing app)*"
           end
 
-        "| `#{app}` | #{deps_cell} |"
+        allowed_cell = allowed |> Map.fetch!(app) |> dependency_cell()
+        exception_cell = exceptions |> Map.get(app, []) |> dependency_cell()
+
+        "| `#{app}` | #{actual_cell} | #{allowed_cell} | #{exception_cell} |"
       end)
 
-    Enum.join([header | rows], "\n")
+    Enum.join(header ++ rows, "\n")
   end
 
   @spec replace_generated_section(String.t(), String.t()) :: {:ok, String.t()} | {:error, issue()}
@@ -119,8 +125,10 @@ defmodule LemonCore.Quality.ArchitectureDocs do
   def generate(root) do
     path = doc_path(root)
 
+    rendered_markdown = render_dependency_policy_markdown(root)
+
     with {:ok, existing} <- File.read(path),
-         {:ok, generated} <- replace_generated_section(existing) do
+         {:ok, generated} <- replace_generated_section(existing, rendered_markdown) do
       {:ok, existing, generated}
     else
       {:error, %{} = issue} ->
@@ -132,6 +140,9 @@ defmodule LemonCore.Quality.ArchitectureDocs do
   end
 
   defp doc_path(root), do: Path.join(root, @doc_relative_path)
+
+  defp dependency_cell([]), do: "*(none)*"
+  defp dependency_cell(deps), do: Enum.map_join(deps, ", ", &"`#{&1}`")
 
   defp read_or_write_issue(code, action, reason) do
     %{

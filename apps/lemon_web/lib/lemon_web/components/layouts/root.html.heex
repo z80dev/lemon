@@ -5,10 +5,19 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="csrf-token" content={get_csrf_token()} />
     <title><%= assigns[:page_title] || "Lemon Dashboard" %></title>
-    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="icon" type="image/svg+xml" href={~p"/favicon.svg"} />
+    <link phx-track-static rel="stylesheet" href={~p"/assets/app.css"} />
+    <link phx-track-static rel="stylesheet" href={~p"/assets/session.css"} />
+    <link phx-track-static rel="stylesheet" href={~p"/assets/management.css"} />
     <script defer phx-track-static type="module" src={~p"/assets/app.js"}></script>
   </head>
   <body class="min-h-screen bg-slate-100 text-slate-900 antialiased">
+    <a
+      href="#main-content"
+      class="sr-only z-50 rounded bg-slate-950 px-3 py-2 text-white focus:not-sr-only focus:fixed focus:left-3 focus:top-3"
+    >
+      Skip to main content
+    </a>
     <%= @inner_content %>
   </body>
 </html>

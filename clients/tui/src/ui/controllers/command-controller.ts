@@ -11,7 +11,7 @@
  *
  * {@link PromptSink} is the seam P4 owns: `deliver` is the single function
  * between "the user submitted a prompt" and `chat.send`, so queue / steer /
- * interrupt is implemented by wrapping it, not by editing this file.
+ * redirect / interrupt is implemented by wrapping it, not by editing this file.
  */
 
 import type { CommandHost, CommandRegistry } from "../../commands/index.ts";
@@ -132,6 +132,7 @@ export class CommandController {
 	#context() {
 		return {
 			store: this.#options.store,
+			cwd: this.#options.cwd,
 			session: this.#options.store.focused,
 			methods: this.#options.methods,
 			client: this.#options.client,

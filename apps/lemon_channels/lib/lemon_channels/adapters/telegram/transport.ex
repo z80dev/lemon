@@ -356,6 +356,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
       handle_media_auto_put: &handle_media_auto_put/2,
       handle_model_command: &ModelPicker.handle_model_command/2,
       handle_new_session: &handle_new_session/3,
+      handle_portable_command: &handle_portable_command/2,
       handle_reload_command: &handle_reload_command/2,
       handle_resume_command: &handle_resume_command/2,
       handle_thinking_command: &handle_thinking_command/2,
@@ -1273,6 +1274,46 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
           user_msg_id,
           LemonChannels.MediaStatusMessage.handle(args)
         )
+    end
+
+    state
+  rescue
+    _ -> state
+  end
+
+  defp handle_portable_command(state, inbound) do
+    {chat_id, thread_id, user_msg_id} = extract_message_ids(inbound)
+
+    if is_integer(chat_id) do
+      scope = %ChatScope{transport: :telegram, chat_id: chat_id, topic_id: thread_id}
+      session_key = build_session_key(state, inbound, scope)
+      {command, args} = Commands.portable_command_parts(inbound.message.text || "")
+
+      context = %{
+        session_key: session_key,
+        cwd: BindingResolver.resolve_cwd(scope),
+        model: inbound.meta[:model],
+        thinking_level: inbound.meta[:thinking_level]
+      }
+
+      run = fn ->
+        text =
+          case LemonChannels.PortableCommand.handle(command, args, context) do
+            {:ok, result} -> result
+            {:error, message} -> message
+          end
+
+        send_system_message(state, chat_id, thread_id, user_msg_id, text)
+      end
+
+      if command == "btw" do
+        _ =
+          send_system_message(state, chat_id, thread_id, user_msg_id, "Answering side question…")
+
+        _ = start_async_task(state, run)
+      else
+        _ = run.()
+      end
     end
 
     state

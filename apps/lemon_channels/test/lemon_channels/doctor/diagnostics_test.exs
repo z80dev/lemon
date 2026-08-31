@@ -112,11 +112,19 @@ defmodule LemonChannels.Doctor.DiagnosticsTest do
     assert discord.inbound_replay.live_gateway_reconnect_proof_required == true
     assert discord.inbound_replay.live_gateway_reconnect_proof_source == "live_discord_matrix"
     assert discord.slash_commands.schema_export_supported == true
-    assert discord.slash_commands.expected_command_count == 16
+    assert discord.slash_commands.expected_command_count == 32
     assert "checkpoint" in discord.slash_commands.expected_commands
     assert "rollback" in discord.slash_commands.expected_commands
     assert "kanban" in discord.slash_commands.expected_commands
     assert "media" in discord.slash_commands.expected_commands
+
+    assert discord.slash_commands.compatibility_commands == %{
+             checkpoint: true,
+             rollback: true,
+             kanban: true,
+             media: true
+           }
+
     assert discord.slash_commands.live_registration_proof_required == true
     assert discord.slash_commands.live_registration_proof_source == "live_discord_matrix"
 

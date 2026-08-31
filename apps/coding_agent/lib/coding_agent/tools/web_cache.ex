@@ -59,7 +59,7 @@ defmodule CodingAgent.Tools.WebCache do
         default_cache_dir()
 
     value
-    |> expand_home_path()
+    |> CodingAgent.Tools.PathHelpers.expand_home()
     |> Path.expand()
   end
 
@@ -523,19 +523,6 @@ defmodule CodingAgent.Tools.WebCache do
   end
 
   defp normalize_optional_string(_), do: nil
-
-  defp expand_home_path(path) when is_binary(path) do
-    if String.starts_with?(path, "~") do
-      home =
-        System.user_home() ||
-          System.get_env("HOME") ||
-          ""
-
-      String.replace_prefix(path, "~", home)
-    else
-      path
-    end
-  end
 
   defp now_ms, do: System.system_time(:millisecond)
 end

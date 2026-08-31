@@ -141,6 +141,7 @@ defmodule LemonAgent.ModelRuntime.ProviderStatusTest do
 
     status = LemonAgent.ModelRuntime.ProviderStatus.snapshot(%{"projectDir" => cwd})
     routing = status["routing"]
+    routing_config = status["routingConfig"]
 
     assert routing["selectedProfile"] == "ops"
     assert routing["selectedCredentialPool"] == "burst"
@@ -154,6 +155,10 @@ defmodule LemonAgent.ModelRuntime.ProviderStatusTest do
 
     assert routing["selectedProvider"] == "zai"
     assert "zai" in routing["fallbackProviders"]
+    assert routing_config["defaultPool"] == "burst"
+    assert routing_config["credentialPoolCount"] == 1
+    assert routing_config["credentialReferenceCount"] == 0
+    assert routing_config["cleanup"]["includesCredentialReferences"] == false
     refute inspect(status) =~ "zai-secret-value"
     refute inspect(status) =~ "ZAI_API_KEY"
   end

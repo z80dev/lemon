@@ -8,6 +8,7 @@ defmodule Mix.Tasks.Lemon.Secrets.CheckTest do
 
   alias Mix.Tasks.Lemon.Secrets.Check
   alias LemonCore.Secrets
+  alias LemonCore.Secrets.EnvCatalog
   alias LemonCore.Store
 
   setup do
@@ -106,6 +107,7 @@ defmodule Mix.Tasks.Lemon.Secrets.CheckTest do
     end
 
     test "known_secrets list is non-empty" do
+      assert Check.known_secrets() == EnvCatalog.names()
       assert match?([_ | _], Check.known_secrets())
     end
   end
@@ -118,9 +120,11 @@ defmodule Mix.Tasks.Lemon.Secrets.CheckTest do
         end)
 
       assert output =~ "missing"
-      # Summary should show 0 from store, 0 from env, N missing
+      # Summary should show no resolved sources and N missing.
       missing_count = length(Check.known_secrets())
-      assert output =~ "0 from store, 0 from env, #{missing_count} missing"
+
+      assert output =~
+               "0 from store, 0 from external sources, 0 from env, #{missing_count} missing"
     end
 
     test "displays header line" do
@@ -146,8 +150,8 @@ defmodule Mix.Tasks.Lemon.Secrets.CheckTest do
 
       assert output =~ "ANTHROPIC_API_KEY"
       assert output =~ "store"
-      # Masked value: first 4 + ... + last 4
-      assert output =~ "sk-a...6789"
+      assert output =~ "present"
+      refute output =~ "sk-ant-test-123456789"
     end
   end
 
@@ -162,13 +166,13 @@ defmodule Mix.Tasks.Lemon.Secrets.CheckTest do
 
       assert output =~ "GITHUB_TOKEN"
       assert output =~ "env"
-      # Masked value: first 4 + ... + last 4
-      assert output =~ "ghp_...9xyz"
+      assert output =~ "present"
+      refute output =~ "ghp_abcdef123456789xyz"
     end
   end
 
-  describe "value masking" do
-    test "masks long values showing first 4 and last 4 chars" do
+  describe "value redaction" do
+    test "does not print any part of long values" do
       {:ok, _} = Secrets.set("OPENAI_API_KEY", "sk-longvalue12345678", provider: "manual")
 
       output =
@@ -176,10 +180,12 @@ defmodule Mix.Tasks.Lemon.Secrets.CheckTest do
           Check.run([])
         end)
 
-      assert output =~ "sk-l...5678"
+      assert output =~ "present"
+      refute output =~ "sk-l"
+      refute output =~ "5678"
     end
 
-    test "masks short values as ***" do
+    test "does not print short values" do
       {:ok, _} = Secrets.set("AWS_ACCESS_KEY_ID", "short", provider: "manual")
 
       output =
@@ -187,7 +193,8 @@ defmodule Mix.Tasks.Lemon.Secrets.CheckTest do
           Check.run([])
         end)
 
-      assert output =~ "***"
+      assert output =~ "present"
+      refute output =~ "short"
     end
   end
 

@@ -9,9 +9,11 @@ usage: scripts/verify_release_runtime_boot [--platform <tag>] <artifact-director
 Verifies Lemon release artifacts beyond checksums:
   - validates manifest and artifact checksums (manifest mode)
   - extracts release profile(s) into clean temp dirs
+  - evaluates MCP library composition in packaged min/full releases
   - starts each release daemon without Mix
   - checks control-plane /healthz or sim broadcast /readyz
   - checks Web /healthz for lemon_runtime_full
+  - checks `lemon web --no-open` reports the healthy packaged Web URL
   - checks lemon_runtime_full asset-digest artifacts and daemon log
   - stops the daemon
   - generates a release-runtime support bundle with release eval (non-sim profiles)
@@ -242,6 +244,11 @@ assert_full_profile_static_files() {
     exit 1
   fi
 
+  if ! compgen -G "$extract_dir/lib/lemon_web-*/priv/static/assets/app*.css" > /dev/null; then
+    echo "$profile: missing bundled lemon_web CSS (runtime CDN fallback is forbidden)" >&2
+    exit 1
+  fi
+
   if ! compgen -G "$extract_dir/lib/lemon_sim_ui-*/priv/static/cache_manifest.json" > /dev/null; then
     echo "$profile: missing lemon_sim_ui cache_manifest.json (asset digest step likely skipped)" >&2
     exit 1
@@ -426,10 +433,39 @@ boot_one_profile() {
         -u VERCEL_GIT_COMMIT_SHA \
         -u GITHUB_REF_NAME \
         -u VERCEL_GIT_COMMIT_REF \
+        -u LEMON_MCP_DISABLED \
         "${env_vars[@]}" \
         "$release_bin" "$@"
     )
   }
+
+  if [ "$profile" = "lemon_runtime_min" ] || [ "$profile" = "lemon_runtime_full" ]; then
+    run_release eval '
+      checks = %{
+        client_loaded: Code.ensure_loaded?(LemonMCP.Client),
+        source_loaded: Code.ensure_loaded?(LemonSkills.McpSource),
+        source_enabled: LemonSkills.McpSource.mcp_enabled?(),
+        application_loaded:
+          Enum.any?(Application.loaded_applications(), fn {app, _, _} ->
+            app == :lemon_mcp
+          end),
+        application_not_started:
+          not Enum.any?(Application.started_applications(), fn {app, _, _} ->
+            app == :lemon_mcp
+          end),
+        no_application_callback: Application.spec(:lemon_mcp, :mod) == [],
+        no_application_module: not Code.ensure_loaded?(LemonMCP.Application)
+      }
+
+      failures = for {name, false} <- checks, do: name
+
+      if failures != [] do
+        raise "packaged MCP library contract failed: #{inspect(failures)}"
+      end
+
+      IO.puts("packaged MCP library contract passed: #{inspect(checks)}")
+    '
+  fi
 
   if [ -n "$expected_commit" ]; then
     local build_info_output reported_commit
@@ -499,6 +535,19 @@ boot_one_profile() {
 
     if [ "$profile" = "lemon_runtime_full" ]; then
       wait_for_health "http://127.0.0.1:$web_port/healthz" "$profile web"
+
+      launcher_output="$(
+        (
+          cd "$extract_dir"
+          env "${env_vars[@]}" "$extract_dir/bin/lemon" web --no-open
+        ) 2>&1
+      )"
+      if ! printf '%s\n' "$launcher_output" | grep -q "Lemon Web: http://127.0.0.1:$web_port/"; then
+        echo "$profile: packaged 'lemon web --no-open' did not report the healthy Web URL" >&2
+        printf '%s\n' "$launcher_output" >&2
+        exit 1
+      fi
+
       assert_no_asset_warmup_failure "$profile" "$extract_dir"
     fi
 

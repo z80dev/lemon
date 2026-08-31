@@ -68,6 +68,20 @@ defmodule CodingAgent.Session.ModelResolverTest do
     assert model.id == "gpt-4"
   end
 
+  test "default model canonicalizes underscored Codex config provider to its registry API" do
+    settings = %SettingsManager{
+      default_model: %{provider: :openai_codex, model_id: "gpt-5.6-sol", base_url: nil},
+      providers: %{},
+      provider_routing: %{enabled: false, fallback_providers: [], require_credentials: true}
+    }
+
+    model = ModelResolver.resolve_session_model(nil, settings)
+
+    assert model.provider == :"openai-codex"
+    assert model.api == :openai_codex_responses
+    assert model.id == "gpt-5.6-sol"
+  end
+
   test "default model routing uses default profile and credential pool ordering" do
     settings = %SettingsManager{
       default_model: %{provider: :openai, model_id: "gpt-4", base_url: nil},

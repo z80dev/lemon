@@ -8,6 +8,8 @@ defmodule Mix.Tasks.Lemon.Sim.Leaderboard do
 
   use Mix.Task
 
+  alias Mix.Tasks.Lemon.Sim.Common
+
   @switches [
     recompute: :boolean,
     help: :boolean
@@ -30,7 +32,7 @@ defmodule Mix.Tasks.Lemon.Sim.Leaderboard do
         exit({:shutdown, 1})
 
       true ->
-        ensure_runtime_started!()
+        Common.ensure_runtime_and_core_started()
         [suite_dir | _] = argv
 
         case LemonSim.Bench.Suite.write_leaderboard(suite_dir, recompute: opts[:recompute]) do
@@ -42,10 +44,5 @@ defmodule Mix.Tasks.Lemon.Sim.Leaderboard do
             exit({:shutdown, 1})
         end
     end
-  end
-
-  defp ensure_runtime_started! do
-    Application.ensure_all_started(:lemon_sim)
-    Application.ensure_all_started(:lemon_core)
   end
 end

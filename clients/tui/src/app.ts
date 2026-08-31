@@ -24,6 +24,7 @@
  *   - nothing here calls `process.exit`; `onExit` hands that to main.ts
  */
 
+import { matchesKey } from "@oh-my-pi/pi-tui/keys";
 import { ProcessTerminal, type Terminal } from "@oh-my-pi/pi-tui/terminal";
 import { Container, TUI } from "@oh-my-pi/pi-tui/tui";
 import { indentBlock, pickNumber, pickString } from "./commands/format.ts";
@@ -33,6 +34,7 @@ import { SUBMISSION_MODES } from "./commands/registry.ts";
 import { editInExternalEditor } from "./external-editor.ts";
 import { getGitModeline } from "./git-utils.ts";
 import { ControlPlaneClient } from "./protocol/client.ts";
+import { ControlPlaneError } from "./protocol/errors.ts";
 import { ControlPlaneMethods, METHOD } from "./protocol/methods.ts";
 import type {
 	AgentCompletedEvent,
@@ -68,6 +70,8 @@ import { getEditorTheme } from "./ui/theme/tui-adapters.ts";
 
 export interface AppShellOptions {
 	url: string;
+	/** Shared control-plane operator credential. Never displayed or logged. */
+	operatorToken?: string;
 	/** Session to talk to. Defaults to a fresh `tui-<timestamp>` key. */
 	sessionKey?: string;
 	version?: string;
@@ -139,12 +143,19 @@ export class AppShell {
 	#queueFocused = false;
 	/** Set by Alt+Enter; consumed by the very next submission and then forgotten. */
 	#modeOverride: SubmissionMode | undefined;
+	/**
+	 * Ephemeral routing hints for profile chats opened in this process. The
+	 * daemon remains authoritative: entries come from profile RPC responses,
+	 * are never persisted, and `profile.chat` revalidates the id on every send.
+	 */
+	readonly #profileSessions = new Map<string, string>();
 
 	constructor(options: AppShellOptions) {
 		this.#version = options.version ?? "dev";
 		this.#onExit = options.onExit;
 		this.#cwd = options.cwd ?? process.cwd();
-		this.client = options.client ?? new ControlPlaneClient({ url: options.url });
+		this.client =
+			options.client ?? new ControlPlaneClient({ url: options.url, token: options.operatorToken });
 		this.methods = new ControlPlaneMethods(this.client);
 		this.tui = options.tui ?? new TUI(options.terminal ?? new ProcessTerminal());
 		this.store = new AppStore(options.sessionKey ?? defaultSessionKey());
@@ -626,15 +637,16 @@ export class AppShell {
 	/**
 	 * The prompt sink, and the whole submission state machine.
 	 *
-	 *   idle                     -> `chat.send` (the daemon's default, collect)
+	 *   idle                     -> `chat.send`, or `profile.chat` for a canonical profile session
 	 *   busy + queue             -> held in the {@link QueueStore}, never sent
-	 *   busy + steer             -> `chat.send queueMode: steer`
-	 *   busy + interrupt         -> `chat.send queueMode: interrupt`, and the
+	 *   busy + steer             -> authoritative route with `queueMode: steer`
+	 *   busy + redirect          -> authoritative route with `queueMode: redirect`
+	 *   busy + interrupt         -> authoritative route with `queueMode: interrupt`, and the
 	 *                               partial answer is sealed as interrupted
 	 *
 	 * Both degradations are visible rather than silent. Steering a run that just
 	 * ended is a lost race, not a mistake, so the prompt still goes out as a new
-	 * turn and says so; a daemon that refuses `steer` or `interrupt` outright
+	 * turn and says so; a daemon that refuses `steer`, `redirect`, or `interrupt` outright
 	 * leaves the prompt in the queue, where the user can still get at it, instead
 	 * of dropping it on the floor.
 	 */
@@ -664,15 +676,11 @@ export class AppShell {
 		await this.#sendWhileBusy(prompt, session, mode);
 	}
 
-	/** A plain send: echo, dispatch, remember the run. */
+	/** A plain send: echo, dispatch through the session's authoritative route, remember the run. */
 	async #send(prompt: string, session: SessionStore, queueMode?: QueueMode): Promise<void> {
 		this.events.addUserBlock(prompt, session);
 		try {
-			const result = await this.methods.chatSend({
-				sessionKey: session.key,
-				prompt,
-				...(queueMode ? { queueMode } : {}),
-			});
+			const result = await this.#dispatchPrompt(session.key, prompt, queueMode);
 			if (result?.runId) this.events.noteRunStarted(result.runId, session);
 		} catch (error) {
 			this.events.notice(`send failed: ${describeError(error)}`, "error", session);
@@ -680,7 +688,7 @@ export class AppShell {
 	}
 
 	/**
-	 * Steer or interrupt a run in flight.
+	 * Steer, redirect, or interrupt a run in flight.
 	 *
 	 * The send is awaited *before* anything is drawn: an interrupt that the
 	 * daemon refuses must not leave a run marked as stopped when it is still
@@ -694,11 +702,7 @@ export class AppShell {
 	): Promise<void> {
 		const runId = session.activeRunId;
 		try {
-			const result = await this.methods.chatSend({
-				sessionKey: session.key,
-				prompt,
-				queueMode: mode,
-			});
+			const result = await this.#dispatchPrompt(session.key, prompt, mode);
 			if (mode === "interrupt" && runId) this.events.markInterrupted(runId, session);
 			this.events.addUserBlock(prompt, session);
 			if (result?.runId) this.events.noteRunStarted(result.runId, session);
@@ -709,6 +713,80 @@ export class AppShell {
 				"warning",
 				session,
 			);
+		}
+	}
+
+	/**
+	 * Resolve canonical `agent:<id>:main` sessions through the profile API.
+	 *
+	 * A remembered route can be queued while disconnected. An unremembered
+	 * canonical key is probed with `profiles.get` while online. Only that initial
+	 * probe may prove the key belongs to a legacy non-profile session and fall
+	 * back to `chat.send`. Once a profile route is confirmed, `profile.chat`
+	 * failures never bypass the profile boundary (including deletion races).
+	 */
+	async #dispatchPrompt(sessionKey: string, prompt: string, queueMode?: QueueMode) {
+		const remembered = this.#profileSessions.get(sessionKey);
+		if (remembered) {
+			return await this.methods.profileChat({
+				id: remembered,
+				prompt,
+				...(queueMode ? { queueMode } : {}),
+			});
+		}
+
+		const candidate = canonicalProfileId(sessionKey);
+		if (
+			!candidate ||
+			!this.methods.supports(METHOD.profilesGet) ||
+			!this.methods.supports(METHOD.profileChat)
+		) {
+			return await this.methods.chatSend({
+				sessionKey,
+				prompt,
+				...(queueMode ? { queueMode } : {}),
+			});
+		}
+
+		if (this.client.online) {
+			try {
+				const result = await this.methods.profilesGet({ id: candidate });
+				if (!result.profile || result.profile.canonicalSessionKey !== sessionKey) {
+					throw new Error(`profile ${candidate} returned a non-canonical session`);
+				}
+			} catch (error) {
+				if (
+					!ControlPlaneError.is(error, "NOT_FOUND") &&
+					!ControlPlaneError.is(error, "METHOD_NOT_FOUND")
+				) {
+					throw error;
+				}
+				return await this.methods.chatSend({
+					sessionKey,
+					prompt,
+					...(queueMode ? { queueMode } : {}),
+				});
+			}
+		}
+
+		try {
+			const result = await this.methods.profileChat({
+				id: candidate,
+				prompt,
+				...(queueMode ? { queueMode } : {}),
+			});
+			if (result.sessionKey !== sessionKey) {
+				throw new Error(`profile ${candidate} routed to an unexpected session`);
+			}
+			this.#profileSessions.set(sessionKey, candidate);
+			return result;
+		} catch (error) {
+			if (!ControlPlaneError.is(error, "METHOD_NOT_FOUND")) throw error;
+			return await this.methods.chatSend({
+				sessionKey,
+				prompt,
+				...(queueMode ? { queueMode } : {}),
+			});
 		}
 	}
 
@@ -756,15 +834,66 @@ export class AppShell {
 				});
 				this.selectors.open(overlay);
 			},
+			openMultiPicker: (spec) => {
+				const selected = new Set(spec.selectedValues ?? []);
+				const disabled = new Set(spec.disabledValues ?? []);
+				const sourceItems = spec.items;
+				const decoratedItems = () =>
+					sourceItems.map((item) => ({
+						...item,
+						label: disabled.has(item.value)
+							? `[installed] ${item.label}`
+							: `${selected.has(item.value) ? "[x]" : "[ ]"} ${item.label}`,
+					}));
+
+				let overlay: PickerOverlay;
+				overlay = new PickerOverlay({
+					title: spec.title,
+					items: decoratedItems(),
+					footer: spec.footer ?? "space toggles · enter imports · esc cancels",
+					detail: () => `${selected.size} selected`,
+					onKey: (data) => {
+						if (!matchesKey(data, "space")) return false;
+						const current = overlay.selected;
+						if (!current || disabled.has(current.value)) return true;
+						if (selected.has(current.value)) selected.delete(current.value);
+						else selected.add(current.value);
+						const index = overlay.items.findIndex((item) => item.value === current.value);
+						overlay.setItems(decoratedItems(), overlay.filter);
+						overlay.setSelectedIndex(Math.max(0, index));
+						return true;
+					},
+					onSelect: () => {
+						this.selectors.close();
+						void spec.onConfirm(sourceItems.filter((item) => selected.has(item.value)));
+					},
+					onCancel: () => {
+						this.selectors.close();
+						spec.onCancel?.();
+					},
+				});
+				this.selectors.open(overlay);
+			},
 			closeOverlay: () => this.selectors.close(),
 			openSessionSwitcher: () => void this.#switcher.open(),
 			switchSession: (sessionKey: string) => this.sessions.switch(sessionKey),
+			openProfile: async (profileId: string, sessionKey: string) => {
+				this.#profileSessions.set(sessionKey, profileId);
+				await this.sessions.switch(sessionKey);
+			},
+			forgetProfile: (profileId: string, sessionKey: string) => {
+				if (this.#profileSessions.get(sessionKey) === profileId) {
+					this.#profileSessions.delete(sessionKey);
+				}
+			},
 			createSession: async (sessionKey?: string, prompt?: string) => {
 				await this.sessions.create(sessionKey, prompt);
 			},
 			closeSession: (sessionKey: string) => this.sessions.requestClose(sessionKey),
+			forgetDeletedSession: (sessionKey: string) => this.sessions.forgetDeleted(sessionKey),
 			resetSession: (sessionKey: string) => this.sessions.resetLocal(sessionKey),
 			focusQueue: () => this.focusQueue(),
+			deliverPrompt: (text: string, mode: SubmissionMode) => this.sendPrompt(text, { mode }),
 			queuedPrompts: () => this.store.queue.items(this.store.focusedKey).map((item) => item.text),
 			resolveApproval: (approvalId: string, decision: string) =>
 				this.approvals.resolve(approvalId, decision),
@@ -899,11 +1028,17 @@ function describeError(error: unknown): string {
 	return String(error);
 }
 
-/** How long after a run ends a `steer` still counts as having lost a race. */
+/** Extract only the stable profile main-session shape; no arbitrary keys qualify. */
+export function canonicalProfileId(sessionKey: string): string | undefined {
+	const match = sessionKey.match(/^agent:([a-z0-9][a-z0-9_-]{0,63}):main$/);
+	return match?.[1];
+}
+
+/** How long after a run ends a live correction still counts as having lost a race. */
 export const STEER_GRACE_MS = 2000;
 
 /**
- * True when the session's run ended moments ago. A `steer` submitted in that
+ * True when the session's run ended moments ago. A steer or redirect submitted in that
  * window was aimed at a run that was still going when the user pressed Enter,
  * so it earns an explanation; one typed into a long-idle session is just a
  * prompt and gets none.

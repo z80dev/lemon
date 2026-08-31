@@ -12,18 +12,24 @@
 | Add/modify AI provider support | `apps/lemon_ai/` |
 | Work on model runtime credential glue | `apps/lemon_agent/` |
 | Work on coding tools or session management | `apps/coding_agent/` |
+| Work on named execution nodes | `apps/coding_agent/` (worker/executor), `apps/lemon_control_plane/` (pairing/presence) |
 | Modify Telegram/Discord channel adapters | `apps/lemon_channels/` |
 | Modify SMS/voice transports | `apps/lemon_gateway/` |
 | Add new messaging channel adapters (X, XMTP, etc.) | `apps/lemon_channels/` |
 | Modify setup, onboarding, or Hermes migration CLI flows | `apps/lemon_cli/` |
+| Modify managed release planning, apply, receipts, or rollback | `apps/lemon_core/lib/lemon_core/update/`, `apps/lemon_cli/` |
+| Modify terminal profile/session/blueprint UX | `clients/tui/` (commands/pickers), `apps/lemon_control_plane/` (authoritative RPCs) |
+| Work on packaged/source command help, completion, sessions, or blueprint UX | `apps/lemon_cli/` (`CommandRegistry`, `CompletionCommand`, `SessionsCommand`, `BlueprintsCommand`) |
 | Work on agent routing or message flow | `apps/lemon_router/` |
 | Build HTTP/WebSocket API features | `apps/lemon_control_plane/` |
 | Manage configuration, secrets, or storage | `apps/lemon_core/` |
+| Resolve bounded files, folders, diffs, URLs, sessions, or documents | `apps/lemon_core/` (`LemonCore.Context`), `apps/lemon_cli/` (`lemon context`) |
+| Review/confirm learning from files, folders, or URLs | `apps/lemon_skills/` (`LemonSkills.Learn`), `apps/lemon_cli/` (`lemon learn`) |
 | Work on browser capability driver | `apps/lemon_browser/` |
 | Work on media job capability driver | `apps/lemon_media/` |
 | Work on LSP capability driver | `apps/lemon_lsp/` |
 | Build reusable simulation harnesses | `apps/lemon_sim/` |
-| Work on native in-process subagent spawning | `apps/coding_agent/` (`task`/`agent` tools, `CodingAgent.Coordinator`) |
+| Work on native in-process subagent spawning | `apps/coding_agent/` (`task` tool, `CodingAgent.Coordinator`) |
 | Create or modify skills and assistant-platform tools | `apps/lemon_skills/` |
 | Work on Honcho memory integration | `apps/lemon_honcho/` |
 | Work on deterministic eval harnesses | `apps/lemon_evals/` |
@@ -165,7 +171,7 @@ apps/
 ├── lemon_honcho/        # Honcho-backed long-term memory: registers a LemonMemory provider and agent tools
 ├── lemon_lsp/           # LSP server registry and supervised JSON-RPC sessions
 ├── lemon_mcp/           # MCP (Model Context Protocol) server/client bridge for CodingAgent tools
-├── lemon_media/         # Media job supervisor, metadata store, and mix lemon.media
+├── lemon_media/         # Media Task.Supervisor, metadata store, and mix lemon.media
 ├── lemon_memory/        # Durable agent memory: SQLite full-text store, provider fan-out search, run ingest, redaction
 ├── lemon_platform_test/ # Contract-test kit (ExUnit case templates) for Lemon extension behaviours
 ├── lemon_router/        # Message routing, agent directory, run orchestration, queue semantics
@@ -231,6 +237,11 @@ commits product version metadata, creates the annotated tag, builds and verifies
 all native artifacts, publishes the GitHub Release, and then promotes mutable
 GHCR channel tags. See `docs/release/versioning_and_channels.md`.
 
+Both runtime profiles assemble `lemon_mcp` with the OTP release mode `:load`
+before its dynamic consumers. MCP is a library application with no application
+callback; consuming applications supervise every client, server, or transport
+process they start.
+
 ### TUI Client (Bun)
 
 ```bash
@@ -246,7 +257,8 @@ bun src/main.ts      # Dev mode
 ```bash
 cd clients/lemon-web
 npm install
-npm run dev      # Start web server + frontend
+npm run dev      # Build shared once, then start shared/server/web watchers
+npm start        # Build generated shared/server entrypoints, then start the server
 npm run build    # Build shared/server/web packages
 npm run test:coverage
 ```
@@ -265,13 +277,65 @@ npm run dev      # Watch mode
 
 ```bash
 ./bin/lemon        # Unified runtime (gateway + control plane + router + channels + web)
+./bin/lemon web   # Start the unified runtime if needed and open the local Web UI
 ./bin/lemon send --to telegram:<chat_id> "done"  # Script notification to Telegram/Discord
 ./bin/lemon send --to discord:#ops --attach report.txt --attach trace.log "done"  # Upload script artifacts
 ./bin/lemon send --dry-run --to discord:#ops --attach report.txt "done"  # Validate without delivery
-./bin/lemon-tui    # Dev TUI; runs clients/tui/src/main.ts and auto-starts runtime
+./bin/lemon backup create --json  # Atomic, verified durable-user-state backup
+./bin/lemon backup verify ~/.lemon/backups/<bundle>.lemonbackup --json
+./bin/lemon sessions list --limit 20 --json  # Bounded durable session inventory
+./bin/lemon sessions stats --active --json  # Exact redacted aggregate statistics
+./bin/lemon blueprints daily-note --profile operator --json  # Preview a catalog bundle without mutation
+./bin/lemon completion zsh  # Generate source-launcher-aware completion
+./bin/lemon node join --name worker-1 --controller wss://controller.example/ws --pair --cwd /path/to/project
+./bin/lemon-tui    # Dev TUI; securely token-pairs with a launcher-owned runtime
 ```
 
+The source launcher probes the configured local control plane before compiling
+or registering its Erlang node name. If a healthy runtime is already present,
+`./bin/lemon` reports and reuses it; `./bin/lemon web` opens that runtime's Web
+UI. Keep this guard ahead of distribution startup so duplicate `lemon@host`
+registration cannot preempt the in-VM `LemonCore.Runtime.Boot` check.
+
+The named-node command runs a destination-side worker capable of starting
+native coding sessions against an already-running controller. Use `--pair` on
+first connection; later starts reuse the private token stored for that durable
+node ID and exact controller URL. Re-run with `--pair` to rotate an expired
+seven-day session without creating a second identity or colliding with its
+name. Use `--pair --repair --node-id ID` with operator authorization only when
+migrating an older local record that has no recovery credential.
+Prefer `LEMON_NODE_OPERATOR_TOKEN` / `LEMON_NODE_TOKEN` over token flags. The
+`--cwd` directory and provider credentials belong to the destination machine.
+Non-loopback controllers require `wss://` by default. Plaintext `ws://` needs
+`--allow-insecure-controller` and is acceptable only for development or across
+a verified encrypted overlay such as Tailscale.
+
 On Linux and other non-keychain environments, keep `~/.lemon/secrets_master_key` as the canonical local master key file. `./bin/lemon` now normalizes `LEMON_SECRETS_MASTER_KEY` from that file at startup so stale inherited shell env does not break provider or transport secret decryption.
+
+`lemon backup` and `./bin/lemon backup` share the versioned `~/.lemon` data
+contract in `docs/user-guide/backups.md`. Durable regular files are included;
+installed versions, launchers, runtime state, prior backups, symlinks, special
+files, project-local state, and platform keychains are excluded. Local cookie,
+environment, master-key, and execution-node credentials require the explicit
+`--include-credentials` flag. Restore must verify the entire bundle before
+mutation; overwrite authorization is bound to the manifest digest and expanded
+target root.
+
+`lemon sessions` and `./bin/lemon sessions` reuse
+`LemonCore.SessionLifecycle`: history and exports remain redacted, reads are
+bounded, aggregate statistics return exact totals with capped safe dimensions,
+single deletion is verified and exact-key confirmed, and prune must preview
+before using the exact candidate-bound token with the preview's millisecond
+cutoff. `LemonCli.CommandRegistry` is the runtime-family source for
+dispatch, help, and Bash/Zsh/Fish completion; keep source-only and
+release-only launcher commands in their separate registry sets.
+
+`lemon blueprints` and `./bin/lemon blueprints` are thin authenticated clients
+for the existing catalog-scoped control-plane methods. The one-shot CLI never
+accepts a bundle path or starts automation locally: list/inspect/validate and
+preview are non-mutating, while activation requires the exact fresh preview
+digest and is performed by the long-running runtime through
+`LemonAutomation.Blueprint` and `CronManager.add_new/1`.
 
 ---
 
@@ -287,25 +351,77 @@ On Linux and other non-keychain environments, keep `~/.lemon/secrets_master_key`
 [lemon_router] - Route to appropriate agent, run orchestration, queue semantics
     ↓
 [lemon_gateway] - Execution slots and engine lifecycle
-    ↓
-[coding_agent] - Execute tools, manage sessions, budget enforcement
-    ↓
+    ├─ local → [coding_agent] ─────────────────────────────┐
+    └─ named → [LemonCore.NodeRegistry → control-plane WebSocket]
+                    → [destination coding_agent] ────────────┤
+                                                        ↓
 [lemon_agent] - Agentic loop, tool registry, subagent orchestration, model routing/credentials
     ↓
 [lemon_ai] - LLM provider calls (Anthropic, OpenAI, Google, Azure, Bedrock)
 ```
 
-Subagents take an in-process path off the same chain: CodingAgent's `task`/`agent` tools spawn
-native subagent sessions (`CodingAgent.Session`) coordinated by `CodingAgent.Coordinator`, reusing
-the in-process `coding_agent` → `lemon_agent` → `lemon_ai` chain rather than an external process.
-There are no vendor CLI subprocess runners — all subagent execution is native.
+The `task` tool and `@name` personas spawn native in-process child sessions
+coordinated by `CodingAgent.Coordinator`. The `agent` tool delegates through
+the router and can select the local executor or a named destination. Both paths
+reuse `coding_agent` → `lemon_agent` → `lemon_ai`; there are no vendor CLI
+subprocess runners.
+
+For named delegation, the `agent` tool's optional `node` parameter selects a
+live, uniquely named execution node. Omit it or use `"local"` for local
+execution. Only JSON-safe execution-request data crosses the WebSocket
+boundary; resolved provider credentials, callbacks, executor options, and
+source process state do not. Explicit cancellation is routed to the targeted
+destination run. Steer and redirect are bound to the same invocation, run, and
+authenticated node session; only bounded correction text crosses, and the
+source reports success only after the destination native session accepts it.
+Disconnects, stale sessions, terminal races, and timeouts fail closed.
 
 Outbound message delivery goes through `lemon_channels` (Telegram, Discord, WhatsApp, XMTP, email adapters).
 The control plane (`lemon_control_plane`) provides the JSON-RPC API used by TUI/web clients.
 
+User-managed profiles reuse the canonical `[profiles.<id>]` router plane rather
+than introducing another agent engine. `LemonCore.ProfileStore` owns atomic
+lifecycle edits and derives `~/.lemon/profiles/<id>/` boundaries;
+`profile.chat` and `lemon profile chat` always submit `agent:<id>:main` through
+the existing router. Packaged one-shot chat connects to the authenticated local
+control plane so the run outlives its CLI VM; it never starts a second router.
+`CodingAgent.Executor.SessionRunner` selects the profile workspace only from
+validated `meta.profile_id`. Keep lifecycle storage in `lemon_core` free of
+coding-agent/skill dependencies, and never export profile sessions, memory, or
+unredacted credential-like content.
+
+The Bun TUI discovers profiles through `profiles.roster` and opens only the
+returned canonical session key. It uses `profile.chat` for ordinary prompts in
+a confirmed profile session, including steer/redirect/interrupt modes, so
+selecting a profile never degrades to generic `chat.send` and lose the derived
+workspace or named-node route. TUI lifecycle commands call the existing
+`profiles.*` methods; they do not persist a client-side profile store or accept
+caller-controlled profile workspace paths.
+
+The Bun TUI also consumes the shared `sessions.*` lifecycle directly: its live
+search/filter picker, exact-key resume, title/pin/archive edits, redacted
+preview/export, guarded prune, and verified delete do not introduce a second
+session store. Keep destructive lifecycle calls non-queued while offline.
+Prune must bind confirmation to the server's exact candidate set; delete may
+forget local UI state only after a verified server receipt. Session lists,
+status, picker details, errors, and proof output must never expose prompts,
+responses, credentials, raw local paths, or arbitrary server error details.
+
+The Bun TUI consumes `blueprints.*` through a separate content-free projection,
+not a second catalog or scheduler. `/blueprints` and `/blueprint` retain only
+bounded IDs, counts, actions, booleans, and digests. Preview is non-mutating;
+activation always obtains a fresh preview, compares the exact digest, and sends
+the admin mutation with offline queuing disabled. Refusal or drift clears the
+pending plan while preserving the bounded profile draft. Never place manifest
+names/descriptions, prompt or skill text, schedules, commands, environment
+values, paths, URLs, tokens, secrets, or raw server errors in TUI state.
+
 ### Key Dependencies Between Apps
 
-Derived from mix.exs files and enforced by `mix lemon.quality` (architecture boundary check):
+Derived from complete `deps/0` bodies in the `mix.exs` files and enforced by
+`mix lemon.quality` (architecture boundary check). The direct policy must match
+this graph exactly; reference-only namespace exceptions are tracked separately
+and do not permit adding a Mix dependency:
 
 ```
 lemon_control_plane ──→ lemon_core, lemon_memory, lemon_browser, lemon_media, lemon_lsp, lemon_router, lemon_channels, lemon_skills, lemon_automation, lemon_agent, lemon_ai
@@ -313,7 +429,7 @@ lemon_router ─────────→ lemon_ai, lemon_core, lemon_memory, 
 lemon_gateway ────────→ lemon_agent, lemon_core
 lemon_automation ─────→ lemon_agent, lemon_core, lemon_router, lemon_skills
 lemon_channels ───────→ lemon_core, lemon_media, lemon_agent
-lemon_cli ────────────→ lemon_core, lemon_memory, lemon_ai
+lemon_cli ────────────→ lemon_agent, lemon_ai, lemon_core, lemon_memory, lemon_skills
 coding_agent ─────────→ lemon_agent, lemon_ai, lemon_skills, lemon_core, lemon_gateway, lemon_memory, lemon_browser, lemon_platform_test*
 coding_agent_ui ──────→ coding_agent, lemon_core
 lemon_agent ──────────→ lemon_ai, lemon_core
@@ -329,7 +445,7 @@ lemon_browser ────────→ lemon_core
 lemon_lsp ────────────→ lemon_core
 lemon_media ──────────→ lemon_core
 lemon_platform_test ──→ lemon_core, lemon_channels, lemon_memory, lemon_ai, lemon_agent (all optional: true)
-lemon_web ────────────→ lemon_core, lemon_router
+lemon_web ────────────→ lemon_agent, lemon_automation, lemon_core, lemon_memory, lemon_router
 x_api ────────────────→ lemon_core, lemon_channels, lemon_agent, lemon_ai, lemon_platform_test*
 lemon_ai ─────────────→ (no umbrella deps - standalone LLM client library)
 lemon_core ───────────→ (no umbrella deps - foundational shared library)
@@ -343,7 +459,7 @@ lemon_core ───────────→ (no umbrella deps - foundational
 
 - **User config**: `~/.lemon/config.toml`
 - **Project config**: `.lemon/config.toml` (optional, in repo root; not tracked — copy from `examples/config.example.toml`)
-- **Secrets**: Managed via `mix lemon.secrets.*` tasks (`set`, `list`, `delete`, `status`, `init`)
+- **Secrets**: Managed via `mix lemon.secrets.*` tasks; explicitly enabled external sources are inspected/tested with `lemon secrets sources status|test` and remain read-only fallbacks behind the encrypted store
 - **Config inspection**: `mix lemon.config` - show resolved runtime config
 - **Store migration**: `mix lemon.store.migrate_jsonl_to_sqlite`
 
@@ -353,13 +469,17 @@ Key env vars:
 - `LEMON_LOG_LEVEL` - Log level (debug/info/warning/error)
 - `LEMON_STORE_PATH` - Persistent store path
 - `LEMON_HARNESS_SKILLS_DIR` - Override harness-compatible global skills path (`~/.agents/skills`) for isolated runtimes/tests
-- `LEMON_WEB_ACCESS_TOKEN` - Web UI auth token
+- `LEMON_WEB_ACCESS_TOKEN` - Optional chat gate and required credential for the `/manage` session-operations shell
+- `LEMON_CONTROL_PLANE_OPERATOR_TOKEN` - Shared WebSocket operator credential required by default and used for named-node pairing against an authenticated controller
+- `LEMON_CONTROL_PLANE_ALLOW_UNAUTHENTICATED_LOOPBACK` - Explicit, default-off legacy tokenless loopback compatibility
 - `LEMON_WEB_HOST` / `LEMON_WEB_PORT` - Web server binding (prod)
 - `LEMON_WEB_SECRET_KEY_BASE` - Required in prod
 - `LEMON_SIM_UI_MAX_CONCURRENT_RUNNERS` / `LEMON_SIM_UI_MAX_STORED_SIMS` - Bound Sim UI model concurrency and terminal snapshot retention; per-arena `MAX_GAME_RECORDS` bounds league history
 - `LEMON_SIM_UI_ACCESS_TOKEN` / `LEMON_SIM_UI_ADMIN_SESSION_TTL_SECONDS` - Protect the Sim UI control room/API and bound browser admin sessions; browser login is form-based and APIs are bearer-only
 - `LEMON_WEREWOLF_HOSTED_ENABLED` / `LEMON_WEREWOLF_HOST_CREATE_TOKEN` / `LEMON_WEREWOLF_HOSTED_*` - Opt-in HTTPS hosted Werewolf, creation access, room TTL/retention, and bounded AI configuration
 - `LEMON_GATEWAY_HEALTH_PORT` / `LEMON_ROUTER_HEALTH_PORT` - Health server port overrides for local parallel runtimes
+- `LEMON_NODE_OPERATOR_TOKEN` / `LEMON_NODE_TOKEN` - Pairing-only operator token or existing session token for `./bin/lemon node join`; prefer these to CLI token flags
+- `LEMON_NODE_ALLOW_INSECURE_CONTROLLER` - Explicitly permit non-loopback plaintext `ws://` for development or a verified encrypted overlay only; secure `wss://` remains the default
 - `LEMON_TELEGRAM_DEFAULT_CHAT_ID` / `LEMON_DISCORD_DEFAULT_CHANNEL_ID` - Optional env overrides for `./bin/lemon send`; config fallbacks live in `[gateway.telegram] default_chat_id/default_thread_id/default_topic_id` and `[gateway.discord] default_channel_id/default_thread_id`
 - `DEEPGRAM_API_KEY` - Speech-to-text
 - `ELEVENLABS_API_KEY` / `ELEVENLABS_VOICE_ID` - TTS
@@ -375,6 +495,8 @@ Key env vars:
 2. Implement the tool pattern (see existing tools in the `CodingAgent.Tools.*` namespace)
 3. Add to `CodingAgent.Tools` registry
 4. Update tool policy if needed
+
+Data-bearing tool output must follow `LemonAgent.Types.AgentToolResult.trust`: ordinary local file/search/shell results, remote/API data, and community/project skill content are untrusted and fenced at the pre-LLM boundary. Intentional bootstrap instruction loading and audited builtin skill semantics are the explicit trusted paths.
 
 ### Adding an AI Provider
 
@@ -394,14 +516,16 @@ Gateway-native transports remain in `apps/lemon_gateway/` (SMS/Twilio, voice, em
 ### Adding a Native Subagent
 
 Top-level conversations always run through the configured native `CodingAgent.Executor`;
-the gateway does not support selectable or custom engines. Subagents are native
-in-process executions: the `task`/`agent` tools spawn a `CodingAgent.Session`
-coordinated by `CodingAgent.Coordinator`, not an external process.
+the gateway does not support selectable or custom engines. The `task` tool and
+`@name` personas spawn native in-process `CodingAgent.Session` children through
+`CodingAgent.Coordinator`. The `agent` tool delegates through the router and
+can place that native run locally or on a named execution node.
 
 1. Add a subagent persona (`id`, `description`, `prompt`) to `.lemon/subagents.json` or
    `~/.lemon/agent/subagents.json`; built-ins live in `CodingAgent.Subagents`.
 2. Invoke it through the `task` or `agent` tool (or `@name` mentions); execution stays
-   inside the BEAM on the `coding_agent` → `lemon_agent` → `lemon_ai` chain.
+   on the native `coding_agent` → `lemon_agent` → `lemon_ai` chain, locally or
+   on the named destination selected by `agent.node`.
 3. There are no vendor CLI subprocess runners (Claude Code, Codex, Kimi, OpenCode, Pi
    were removed); do not wrap external CLIs as subagents.
 
@@ -485,13 +609,16 @@ This repository includes an optional pre-push hook that uses **kimi** to review 
 - `docs/architecture_boundaries.md` - Dependency boundaries and allowed cross-app references
 - `docs/platform/` - Per-package platform guides (lemon_core, lemon_agent, lemon_ai, lemon_channels, lemon_gateway, lemon_memory, lemon_router, lemon_platform_test)
 - `docs/config.md` - Runtime configuration reference
+- `docs/user-guide/backups.md` - Versioned user-state backup and guarded restore contract
+- `docs/user-guide/cli.md` - Runtime CLI families, durable sessions, exit codes, JSON, and shell completion
 - `docs/mix-tasks.md` - Grouped reference for every `mix lemon.*` task, including the quality/cleanup harness (`mix lemon.quality`, `mix lemon.cleanup`)
 - `docs/skills.md` - Skill system documentation
 - `docs/testing.md` - Canonical repo-level test lanes and CI parity guidance
 - `docs/assistant_bootstrap_contract.md` - Bootstrap contract
 - `docs/context.md` - Context management
 - `docs/long-running-agent-harnesses.md` - Long-running harness primitives that keep coding sessions structured across multi-step work
-- `docs/plans/2026-03-19-ai-boundary-extraction-plan.md` - Plan for moving auth/config/storage ownership out of `apps/lemon_ai` before extracting it into its own repo
+- `docs/user-guide/web.md` - Browser chat/resume plus authenticated session management, redacted export, and guarded prune
+- `docs/user-guide/context-references.md` - Bounded context preview/resolve, document formats, budgets, and safety contract
 - `docs/subagent-parent-questions.md` - Design for subagent-to-parent clarification requests via a narrow `ask_parent` path
 - `docs/telemetry.md` - Telemetry and observability
 - `docs/extensions.md` - Extension system
@@ -548,4 +675,22 @@ Each app has its own `AGENTS.md` with detailed context:
 
 ---
 
-*Last updated: 2026-08-21* (`lemon_cli_runners` removed — vendor CLI task runners are gone and all subagents are native in-process `CodingAgent.Session` executions coordinated by `CodingAgent.Coordinator`: 25-app structure tree, dependency graph regenerated from mix.exs, message flow, doc index, and app guide table)
+*Last updated: 2026-08-30* (authenticated Web memory management now consumes
+the shared bounded/redacted `LemonMemory.Lifecycle` rather than raw store rows;
+the TUI projects the shared portable-blueprint catalog through bounded
+content-free browsing, validation, fresh-digest activation, and duplicate-safe
+replay; external 1Password, Bitwarden, and argv-only command secret sources now
+share one supervised, bounded, fail-closed resolver and
+redacted source/packaged diagnostics; the TUI discovers and manages server-owned
+profiles while preserving canonical `profile.chat` routing and consumes the
+shared redacted, exact-confirm session lifecycle without client persistence;
+the Mix-free command registry drives runtime
+dispatch/help/completion; the packaged/source blueprint CLI reuses the safe
+control-plane plan/activation path; and the packaged/source sessions CLI reuses
+the shared redacted lifecycle; architecture reporting parses complete `deps/0`
+bodies and distinguishes direct dependencies from reference-only exceptions;
+`lemon_mcp` is assembled as a library-only `:load` application with no empty
+application supervisor; one-shot media jobs use `Task.Supervisor` rather than a
+bespoke worker GenServer; documented named execution nodes including controller
+pairing, live name-based routing, destination-local cwd/credentials,
+cancellation, and the native-only execution boundary)

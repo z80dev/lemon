@@ -24,7 +24,9 @@ defmodule CodingAgent.Session.State do
                ContextGuardrails.transform(messages, signal, context_guardrail_opts)
              ),
            {:ok, wrapped} <-
-             normalize_transform_result(UntrustedToolBoundary.transform(guarded, signal)) do
+             normalize_transform_result(
+               UntrustedToolBoundary.transform(guarded, signal, context_guardrail_opts)
+             ) do
         {:ok, wrapped}
       end
     end
@@ -38,7 +40,9 @@ defmodule CodingAgent.Session.State do
                ContextGuardrails.transform(messages, signal, context_guardrail_opts)
              ),
            {:ok, wrapped} <-
-             normalize_transform_result(UntrustedToolBoundary.transform(guarded, signal)),
+             normalize_transform_result(
+               UntrustedToolBoundary.transform(guarded, signal, context_guardrail_opts)
+             ),
            {:ok, transformed} <- normalize_transform_result(transform_fn.(wrapped, signal)) do
         {:ok, transformed}
       end

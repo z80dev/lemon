@@ -65,6 +65,10 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
     end
   end
 
+  defmodule TaskAsyncExitingRunOrchestrator do
+    def submit(%RunRequest{}), do: exit(:router_unavailable)
+  end
+
   setup do
     previous_async_followups = Application.get_env(:coding_agent, :async_followups)
 
@@ -1426,6 +1430,41 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
   # ============================================================================
 
   describe "task_auto_followup_text formatting" do
+    test "router exits are contained after the background task has terminalized" do
+      run_id = RunGraph.new_run(%{type: :task, description: "Exit-safe followup"})
+      task_id = TaskStore.new_task(%{description: "Exit-safe followup", run_id: run_id})
+      assert :ok = RunGraph.mark_running(run_id)
+      assert :ok = TaskStore.mark_running(task_id)
+
+      outcome =
+        {:ok,
+         %LemonAgent.Types.AgentToolResult{
+           content: [%LemonAi.Types.TextContent{text: "Completed before delivery"}],
+           details: %{status: "completed"}
+         }}
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert :ok =
+                   Followup.maybe_send_async_followup(
+                     %{
+                       auto_followup: true,
+                       queue_mode: :followup,
+                       parent_session_key: "agent:main:main",
+                       parent_agent_id: "main",
+                       run_orchestrator: __MODULE__.TaskAsyncExitingRunOrchestrator
+                     },
+                     task_id,
+                     run_id,
+                     outcome
+                   )
+        end)
+
+      assert log =~ "Task tool failed to auto-followup"
+      assert {:ok, %{status: :completed}, _events} = TaskStore.get(task_id)
+      assert {:ok, %{status: :completed}} = RunGraph.get(run_id)
+    end
+
     test "sending a followup also terminalizes the task and run" do
       run_id = RunGraph.new_run(%{type: :task, description: "Backfill terminal state"})
       task_id = TaskStore.new_task(%{description: "Backfill terminal state", run_id: run_id})

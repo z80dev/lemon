@@ -132,6 +132,122 @@ defmodule LemonMedia.MediaJobSupervisorTest do
     assert recent.error_kind == "provider_failed:invalid_request_error"
   end
 
+  test "terminating a worker cancels it without restart or a synthetic terminal event" do
+    tmp_dir = tmp_dir()
+    jobs_dir = Path.join(tmp_dir, "jobs")
+    parent = self()
+    on_exit(fn -> File.rm_rf!(tmp_dir) end)
+
+    Phoenix.PubSub.subscribe(LemonCore.PubSub, "media_jobs")
+
+    runner = fn attrs ->
+      send(parent, {:runner_started, self(), attrs.job_id})
+
+      receive do
+        :finish -> {:ok, %{}}
+      end
+    end
+
+    assert {:ok, pid, _queued_job} =
+             MediaJobSupervisor.start_job(
+               %{job_id: "cancelled image", type: :image},
+               dir: jobs_dir,
+               runner: runner
+             )
+
+    assert_receive {:media_job, :running, %{job_id: "cancelled_image"}}, 1_000
+    assert_receive {:runner_started, ^pid, "cancelled_image"}, 1_000
+    assert pid in Task.Supervisor.children(MediaJobSupervisor)
+
+    assert_eventually(fn ->
+      match?(
+        %{active_jobs: 1, workers: 1, supervisors: 0},
+        MediaJobSupervisor.status()
+      )
+    end)
+
+    monitor = Process.monitor(pid)
+    Process.exit(pid, :kill)
+
+    assert_receive {:DOWN, ^monitor, :process, ^pid, :killed}, 1_000
+
+    assert_eventually(fn ->
+      match?(
+        %{active_jobs: 0, workers: 0, supervisors: 0},
+        MediaJobSupervisor.status()
+      )
+    end)
+
+    refute_receive {:runner_started, _pid, "cancelled_image"}, 100
+    refute_receive {:media_job, :completed, %{job_id: "cancelled_image"}}, 100
+    refute_receive {:media_job, :failed, %{job_id: "cancelled_image"}}, 100
+    refute_receive {:media_job, :cancelled, %{job_id: "cancelled_image"}}, 100
+
+    [recent] = MediaJobs.recent(dir: jobs_dir)
+    assert recent.status == :running
+  end
+
+  test "restarting the job supervisor abandons rather than restarts active work" do
+    tmp_dir = tmp_dir()
+    jobs_dir = Path.join(tmp_dir, "jobs")
+    parent = self()
+    on_exit(fn -> File.rm_rf!(tmp_dir) end)
+
+    Phoenix.PubSub.subscribe(LemonCore.PubSub, "media_jobs")
+
+    runner = fn attrs ->
+      send(parent, {:restart_runner_started, self(), attrs.job_id})
+
+      receive do
+        :finish -> {:ok, %{}}
+      end
+    end
+
+    assert {:ok, task_pid, _queued_job} =
+             MediaJobSupervisor.start_job(
+               %{job_id: "restart image", type: :image},
+               dir: jobs_dir,
+               runner: runner
+             )
+
+    assert_receive {:media_job, :running, %{job_id: "restart_image"}}, 1_000
+    assert_receive {:restart_runner_started, ^task_pid, "restart_image"}, 1_000
+
+    supervisor_pid = Process.whereis(MediaJobSupervisor)
+    task_monitor = Process.monitor(task_pid)
+    supervisor_monitor = Process.monitor(supervisor_pid)
+    Process.exit(supervisor_pid, :kill)
+
+    assert_receive {:DOWN, ^supervisor_monitor, :process, ^supervisor_pid, :killed}, 1_000
+    assert_receive {:DOWN, ^task_monitor, :process, ^task_pid, :killed}, 1_000
+
+    assert_eventually(fn ->
+      case Process.whereis(MediaJobSupervisor) do
+        pid when is_pid(pid) -> pid != supervisor_pid
+        nil -> false
+      end
+    end)
+
+    assert MediaJobSupervisor.status().active_jobs == 0
+    refute_receive {:restart_runner_started, _pid, "restart_image"}, 100
+
+    [recent] = MediaJobs.recent(dir: jobs_dir)
+    assert recent.status == :running
+  end
+
+  defp assert_eventually(fun, attempts \\ 100)
+
+  defp assert_eventually(fun, attempts) when attempts > 0 do
+    if fun.() do
+      :ok
+    else
+      Process.sleep(10)
+      assert_eventually(fun, attempts - 1)
+    end
+  end
+
+  defp assert_eventually(fun, 0), do: assert(fun.())
+
   defp tmp_dir do
     Path.join(
       System.tmp_dir!(),

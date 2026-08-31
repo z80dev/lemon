@@ -75,7 +75,8 @@ private from their first byte (directories 0700, files 0600).
 lemon daemon    # background start, recording pid and version root in ~/.lemon/run
 lemon status    # pidfile plus a control-plane /healthz probe
 lemon stop      # stops through the recorded root, so it works across a flip
-lemon update    # stage runtime + TUI atomically, then flip current
+lemon update plan
+lemon update apply --confirm <exact-plan-digest>
 lemon stop && lemon daemon   # restart to apply a staged version
 ```
 
@@ -87,12 +88,19 @@ lemon doctor --json                 # ordinary runtime diagnostics
 lemon doctor --bundle               # redacted support bundle
 ```
 
-Updating stages the runtime and matching TUI artifacts together for full/min
-profiles, then flips the symlink; the sim profile has no TUI artifact. There
-are no hot upgrades. Roll back
-with `lemon update --rollback`, which flips `versions/current` back to the
-previously installed version (the two most recent are retained) and again needs
-a restart to take effect.
+Updating stages the checksum/size-authenticated runtime and matching TUI
+artifacts together for full/min profiles, then flips the symlink; the sim
+profile has no TUI artifact. Planning is non-mutating and apply needs its exact
+fresh digest. There are no hot upgrades. Inspect the successful apply receipt
+with `lemon update history`, then roll back only that receipt-bound checkpoint:
+
+```bash
+lemon update rollback --receipt <apply-receipt-id> \
+  --confirm <rollback-digest>
+```
+
+Rollback never chooses a retained version by recency and again needs a restart
+to take effect. See [the update safety contract](../user-guide/updates.md).
 
 Environment knobs, the uninstall procedure, and the platform support table live
 in `docs/install.md`. `scripts/verify_install_script` proves this flow against a
@@ -129,6 +137,11 @@ MIX_ENV=prod mix release lemon_runtime_full
 MIX_ENV=prod mix sim_ui.assets.deploy
 MIX_ENV=prod mix release sim_broadcast_platform
 ```
+
+Both full and minimal runtime compositions assemble `lemon_mcp` with release
+mode `:load`. The library has no application callback and starts no processes;
+this entry makes its client modules available to `LemonSkills.McpSource` while
+the consuming application remains responsible for supervising each connection.
 
 The full profile bundles both web surfaces. `lemon_sim_ui` has an esbuild/
 tailwind pipeline, so it needs `sim_ui.assets.deploy`; `lemon_web` ships static
@@ -293,8 +306,8 @@ endpoint during release boot before the eval expression is executed.
 
 | Profile | Apps | Use case |
 |---|---|---|
-| `lemon_runtime_min` | gateway, CLI, router, channels, control-plane | Headless / API-only server |
-| `lemon_runtime_full` | + automation, skills, web, sim-ui | Full local runtime with UI |
+| `lemon_runtime_min` | gateway, CLI, router, channels, control-plane; MCP client library loaded on demand | Headless / API-only server |
+| `lemon_runtime_full` | + automation, skills, web, sim-ui; MCP client library loaded on demand | Full local runtime with UI |
 | `sim_broadcast_platform` | lemon_core, lemon_sim, lemon_sim_ui | Public sim broadcast deployment |
 | `lemon_tui` | `tui/bin/lemon-tui` | Bun-compiled client pseudo-profile, not a BEAM release |
 
@@ -329,6 +342,19 @@ which routes to the control-plane `exec.approval.resolve` method. Use
 `/approval` or `/approval list` to refresh the current pending approval
 snapshot from `exec.approvals.get`.
 
+The source launcher creates a high-entropy process-scoped operator token when
+it boots a new local runtime, shares it only through the daemon and TUI process
+environments, and stops that owned runtime when the TUI exits. For a persistent
+runtime, set the same `LEMON_CONTROL_PLANE_OPERATOR_TOKEN` when starting the
+runtime and launching the TUI. An existing runtime's secret cannot be safely
+discovered, so tokenless attachment fails by default.
+
+Runtime ownership is independent of token origin: every daemon started by
+`./bin/lemon-tui` is stopped when that client exits, including when the token
+was preconfigured. Start `./bin/lemon --daemon` separately before attaching if
+the source runtime must remain persistent; already-running runtimes are never
+stopped by the TUI launcher.
+
 ### Web client (`lemon-web`)
 
 ```bash
@@ -336,7 +362,19 @@ cd clients/lemon-web
 npm start
 ```
 
-Connects to `http://localhost:4080` (the web Phoenix endpoint).
+`npm start` runs the root `prestart` hook first, rebuilding the ignored shared
+and server entrypoints so this works from a clean checkout after dependencies
+are installed.
+
+This source command starts the Node debug bridge on `http://localhost:3939` by
+default. The packaged Phoenix Web endpoint remains `http://localhost:4080`.
+
+The separate browser monitoring client has no delegated browser-session login
+exchange today. It therefore does not receive the server's shared operator
+token and cannot connect to an authenticated control plane. Do not put that
+secret in a `VITE_*` variable or URL, and do not enable tokenless loopback
+behind a reverse proxy. Authenticated browser monitoring requires a future
+short-lived, scoped server-issued browser credential flow.
 
 
 ---

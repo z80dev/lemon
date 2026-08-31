@@ -18,26 +18,34 @@ defmodule CodingAgent.Tools.Task.Execution do
         ) ::
           term()
   def run(tool_call_id, validated, signal, on_update, cwd, opts) do
-    execution = build_execution_context(tool_call_id, validated, cwd, opts)
-    run_fun = build_run_fun(execution, signal, on_update, opts)
+    case build_execution_context(tool_call_id, validated, cwd, opts) do
+      {:error, message} ->
+        {:error, message}
 
-    if execution.async? do
-      :ok =
-        Async.run_async(
-          execution.task_id,
-          execution.run_id,
-          run_fun,
-          execution.followup_context,
-          execution.lifecycle_context
-        )
+      {:ok, execution} ->
+        run_fun = build_run_fun(execution, signal, on_update, opts)
 
-      CodingAgent.Tools.Task.Result.build_async_result(
-        execution.task_id,
-        execution.description,
-        execution.run_id
-      )
-    else
-      Async.run_sync(run_fun)
+        if execution.async? do
+          case Async.run_async(
+                 execution.task_id,
+                 execution.run_id,
+                 run_fun,
+                 execution.followup_context,
+                 execution.lifecycle_context
+               ) do
+            :ok ->
+              CodingAgent.Tools.Task.Result.build_async_result(
+                execution.task_id,
+                execution.description,
+                execution.run_id
+              )
+
+            {:error, reason} ->
+              {:error, async_launch_error_message(reason)}
+          end
+        else
+          Async.run_sync(run_fun)
+        end
     end
   end
 
@@ -87,18 +95,12 @@ defmodule CodingAgent.Tools.Task.Execution do
       description: description,
       role: role_id,
       queue_mode: validated.resolved_queue_mode,
-      meta: validated.meta
+      meta: validated.meta,
+      task_supervisor: Keyword.get(opts, :task_supervisor, CodingAgent.TaskSupervisor)
     }
-
-    maybe_create_progress_binding(task_id, run_id, lifecycle_context)
 
     if run_id do
       BudgetEnforcer.on_run_start(run_id, opts)
-    end
-
-    if run_id && parent_run_id do
-      RunGraph.add_child(parent_run_id, run_id)
-      BudgetEnforcer.on_subagent_spawn(parent_run_id, run_id, opts)
     end
 
     followup_context = %{
@@ -116,7 +118,7 @@ defmodule CodingAgent.Tools.Task.Execution do
       run_orchestrator: Keyword.get(opts, :run_orchestrator, Followup.default_run_orchestrator())
     }
 
-    %{
+    execution = %{
       description: description,
       prompt: prompt,
       role_id: role_id,
@@ -130,7 +132,42 @@ defmodule CodingAgent.Tools.Task.Execution do
       followup_context: followup_context,
       validated: validated
     }
+
+    case reserve_parent_budget(run_id, parent_run_id, opts) do
+      :ok ->
+        if run_id && parent_run_id do
+          RunGraph.add_child(parent_run_id, run_id)
+        end
+
+        maybe_create_progress_binding(task_id, run_id, lifecycle_context)
+        {:ok, execution}
+
+      {:error, _kind, _details} = reason ->
+        if task_id, do: TaskStore.fail(task_id, reason)
+        if run_id, do: RunGraph.fail(run_id, reason)
+        {:error, budget_reservation_error(reason)}
+
+      {:error, _kind} = reason ->
+        if task_id, do: TaskStore.fail(task_id, reason)
+        if run_id, do: RunGraph.fail(run_id, reason)
+        {:error, budget_reservation_error(reason)}
+    end
   end
+
+  defp reserve_parent_budget(run_id, parent_run_id, opts)
+       when is_binary(run_id) and is_binary(parent_run_id) do
+    BudgetEnforcer.on_subagent_spawn(parent_run_id, run_id, opts)
+  end
+
+  defp reserve_parent_budget(_run_id, _parent_run_id, _opts), do: :ok
+
+  defp budget_reservation_error({:error, :budget_exceeded, details}) when is_map(details) do
+    {_action, message} = BudgetEnforcer.handle_budget_exceeded("unknown", details)
+    message
+  end
+
+  defp budget_reservation_error(reason),
+    do: "Unable to reserve parent task budget: #{inspect(reason)}"
 
   defp build_run_fun(execution, signal, on_update, opts) do
     fn ->
@@ -240,4 +277,12 @@ defmodule CodingAgent.Tools.Task.Execution do
     do: {:status_task, root_action_id}
 
   defp default_surface(_), do: nil
+
+  defp async_launch_error_message(:task_supervisor_unavailable),
+    do: "Background task supervisor is unavailable"
+
+  defp async_launch_error_message(:task_capacity_reached),
+    do: "Background task capacity is exhausted"
+
+  defp async_launch_error_message(_reason), do: "Background task could not be started"
 end

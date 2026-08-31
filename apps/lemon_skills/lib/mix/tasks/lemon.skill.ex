@@ -12,6 +12,7 @@ defmodule Mix.Tasks.Lemon.Skill do
       mix lemon.skill browse            # Browse installed skills with activation state
       mix lemon.skill search <query>    # Search for skills (local + online)
       mix lemon.skill discover <query>  # Discover skills from GitHub
+      mix lemon.skill hermes [query]    # Browse the live official Hermes catalog
       mix lemon.skill install <source>  # Install a skill from URL or path
       mix lemon.skill update <key>      # Update an installed skill
       mix lemon.skill remove <key>      # Remove an installed skill
@@ -61,6 +62,7 @@ defmodule Mix.Tasks.Lemon.Skill do
   use Mix.Task
 
   alias LemonSkills.{Registry, Installer, Entry, Manifest, SkillView, Curator}
+  alias LemonSkills.Sources.Hermes
   alias LemonSkills.Synthesis.{DraftStore, Pipeline}
 
   @impl true
@@ -80,6 +82,9 @@ defmodule Mix.Tasks.Lemon.Skill do
 
       ["discover", query | opts] ->
         discover_skills(query, opts)
+
+      ["hermes" | args] ->
+        browse_hermes(args)
 
       ["install", source | opts] ->
         install_skill(source, opts)
@@ -237,6 +242,53 @@ defmodule Mix.Tasks.Lemon.Skill do
 
     :ok
   end
+
+  # ============================================================================
+  # Hermes Catalog Command
+  # ============================================================================
+
+  defp browse_hermes(args) do
+    {query_parts, opts} = Enum.split_with(args, &(not String.starts_with?(&1, "--")))
+
+    catalog_opts =
+      [query: Enum.join(query_parts, " "), details: "--details" in opts]
+      |> maybe_catalog_opt(:category, get_opt(opts, "--category", nil))
+      |> maybe_catalog_opt(:collection, get_opt(opts, "--collection", nil))
+
+    Mix.shell().info("Loading the live official Hermes skill catalog...")
+
+    case Hermes.catalog(catalog_opts) do
+      {:ok, entries} when entries == [] ->
+        Mix.shell().info("No matching Hermes skills.")
+
+      {:ok, entries} ->
+        IO.puts(
+          "\n#{String.pad_trailing("ID", 55)} #{String.pad_trailing("CATEGORY", 22)} DESCRIPTION"
+        )
+
+        IO.puts(String.duplicate("-", 110))
+
+        Enum.each(entries, fn entry ->
+          description = if entry.description == "", do: "(use --details)", else: entry.description
+
+          IO.puts(
+            "#{String.pad_trailing(entry.id, 55)} #{String.pad_trailing(entry.category, 22)} #{description}"
+          )
+        end)
+
+        IO.puts("\n#{length(entries)} official Hermes skill(s).")
+        IO.puts("Install one with: mix lemon.skill install <ID>")
+
+      {:error, reason} ->
+        Mix.shell().error("Unable to load Hermes catalog: #{inspect(reason)}")
+        Mix.raise("Hermes catalog lookup failed")
+    end
+
+    :ok
+  end
+
+  defp maybe_catalog_opt(opts, _key, nil), do: opts
+  defp maybe_catalog_opt(opts, key, value), do: Keyword.put(opts, key, value)
 
   # ============================================================================
   # Install Command

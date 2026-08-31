@@ -2,11 +2,14 @@ defmodule CodingAgent.Tools.WebSearch do
   @moduledoc """
   WebSearch tool for the coding agent.
 
-  Supports Brave Search API (default) and Perplexity Sonar (direct/OpenRouter).
+  Uses the capability-aware search provider registry. Bundled providers include
+  Brave Search, Exa, Perplexity Sonar, keyless DuckDuckGo, and configurable SearXNG.
   """
 
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias CodingAgent.Security.ExternalContent
+  alias CodingAgent.Search.Registry, as: SearchRegistry
+  alias CodingAgent.Search.SingleFlight
   alias CodingAgent.Tools.WebCache
   alias LemonCore.Secrets
 
@@ -30,7 +33,6 @@ defmodule CodingAgent.Tools.WebSearch do
   @max_snippet_max_chars 5_000
   @max_citation_max_chars 2_000
   @max_citations 20
-  @brave_search_endpoint "https://api.search.brave.com/res/v1/web/search"
   @rate_limit_window_ms 1_000
   @rate_limit_max_requests 5
   @rate_limit_table :coding_agent_websearch_rate_limit
@@ -39,7 +41,7 @@ defmodule CodingAgent.Tools.WebSearch do
   @openrouter_key_prefixes ["sk-or-"]
   @brave_freshness_shortcuts MapSet.new(["pd", "pw", "pm", "py"])
 
-  @tool_description "Search the web using Brave Search API (default) or Perplexity Sonar. Returns structured JSON."
+  @tool_description "Search the web through registered providers with deterministic fallback. Returns structured JSON."
 
   @tool_parameters %{
     "type" => "object",
@@ -47,6 +49,17 @@ defmodule CodingAgent.Tools.WebSearch do
       "query" => %{
         "type" => "string",
         "description" => "Search query string."
+      },
+      "provider" => %{
+        "type" => "string",
+        "description" =>
+          "Optional registered provider id for this call. Omit to use configured automatic selection."
+      },
+      "fallbackProviders" => %{
+        "type" => "array",
+        "items" => %{"type" => "string"},
+        "description" =>
+          "Optional ordered registered provider ids to try after the requested provider."
       },
       "count" => %{
         "type" => "integer",
@@ -130,6 +143,7 @@ defmodule CodingAgent.Tools.WebSearch do
       with :ok <- check_abort(signal),
            :ok <- enforce_rate_limit(),
            {:ok, query} <- normalize_query(Map.get(params, "query")),
+           {:ok, runtime} <- apply_provider_overrides(runtime, params),
            {:ok, freshness} <- normalize_freshness(Map.get(params, "freshness")),
            :ok <- check_abort(signal),
            request <- normalize_request_params(params, runtime),
@@ -155,112 +169,148 @@ defmodule CodingAgent.Tools.WebSearch do
   end
 
   defp run_search(query, freshness, request, runtime) do
-    primary_provider = runtime.provider
-    failover = failover_context(runtime, freshness)
+    providers = [runtime.provider | runtime.fallback_providers] |> Enum.uniq()
 
-    case run_provider_attempt(primary_provider, query, freshness, request, runtime) do
-      {:ok, payload, cached?} ->
-        payload =
-          annotate_payload(
-            payload,
-            primary_provider,
-            primary_provider,
-            failover_payload(false, false, primary_provider, nil)
-          )
-          |> maybe_mark_cached(cached?)
-
-        json_result(payload)
-
-      primary_failure ->
-        maybe_failover(
-          primary_failure,
-          primary_provider,
-          query,
-          freshness,
-          request,
-          runtime,
-          failover
-        )
+    if not is_nil(freshness) and runtime.provider == "brave" and
+         Enum.any?(runtime.fallback_providers, &(&1 != "brave")) do
+      run_with_freshness_blocked_fallback(query, freshness, request, runtime)
+    else
+      run_provider_chain(providers, providers, query, freshness, request, runtime, [])
     end
   end
 
-  defp maybe_failover(
-         primary_failure,
-         primary_provider,
+  defp run_with_freshness_blocked_fallback(query, freshness, request, runtime) do
+    reason = "Failover skipped because freshness is only supported by Brave."
+
+    case run_provider_attempt("brave", query, freshness, request, runtime) do
+      {:ok, payload, cached?} ->
+        payload
+        |> annotate_payload("brave", "brave", failover_payload(false, false, "brave", nil))
+        |> Map.put("provider_attempts", [%{"provider" => "brave", "status" => "ok"}])
+        |> maybe_mark_cached(cached?)
+        |> json_result()
+
+      {:setup_error, payload} ->
+        payload
+        |> annotate_payload("brave", "brave", failover_payload(false, false, "brave", reason))
+        |> Map.put("provider_attempts", [
+          %{
+            "provider" => "brave",
+            "status" => "error",
+            "reason" => failure_summary({:setup_error, payload})
+          }
+        ])
+        |> json_result()
+
+      {:runtime_error, failure_reason} ->
+        {:error, "#{failure_reason} (#{reason})"}
+    end
+  end
+
+  defp run_provider_chain(
+         [],
+         all_providers,
          _query,
          _freshness,
          _request,
          _runtime,
-         %{
-           secondary_provider: nil
-         }
+         failures
        ) do
-    render_failure(
-      primary_failure,
-      primary_provider,
-      failover_payload(false, false, primary_provider, nil)
-    )
+    render_chain_failure(all_providers, Enum.reverse(failures))
   end
 
-  defp maybe_failover(
-         primary_failure,
-         primary_provider,
-         _query,
-         _freshness,
-         _request,
-         _runtime,
-         %{
-           blocked_reason: blocked_reason
-         }
-       )
-       when is_binary(blocked_reason) do
-    render_failure(
-      primary_failure,
-      primary_provider,
-      failover_payload(false, false, primary_provider, blocked_reason)
-    )
-  end
-
-  defp maybe_failover(
-         primary_failure,
-         primary_provider,
+  defp run_provider_chain(
+         [provider | rest],
+         all_providers,
          query,
          freshness,
          request,
          runtime,
-         %{secondary_provider: secondary_provider}
+         failures
        ) do
-    case run_provider_attempt(secondary_provider, query, freshness, request, runtime) do
-      {:ok, payload, cached?} ->
-        payload =
-          annotate_payload(
-            payload,
-            primary_provider,
-            secondary_provider,
-            failover_payload(
-              true,
-              true,
-              primary_provider,
-              failure_summary(primary_failure)
+    requested_provider = hd(all_providers)
+
+    if not is_nil(freshness) and provider != "brave" do
+      failure =
+        {:runtime_error,
+         "Failover to #{provider} skipped because freshness is only supported by Brave."}
+
+      run_provider_chain(
+        rest,
+        all_providers,
+        query,
+        freshness,
+        request,
+        runtime,
+        [{provider, failure} | failures]
+      )
+    else
+      case run_provider_attempt(provider, query, freshness, request, runtime) do
+        {:ok, payload, cached?} ->
+          failures = Enum.reverse(failures)
+          used_failover? = provider != requested_provider
+
+          reason =
+            failures
+            |> Enum.map(fn {_id, failure} -> failure_summary(failure) end)
+            |> Enum.join("; ")
+
+          payload =
+            payload
+            |> annotate_payload(
+              requested_provider,
+              provider,
+              failover_payload(
+                failures != [],
+                used_failover?,
+                requested_provider,
+                if(reason == "", do: nil, else: reason)
+              )
             )
+            |> Map.put("provider_attempts", provider_attempts(failures, provider))
+            |> maybe_mark_cached(cached?)
+
+          json_result(payload)
+
+        failure ->
+          run_provider_chain(
+            rest,
+            all_providers,
+            query,
+            freshness,
+            request,
+            runtime,
+            [{provider, failure} | failures]
           )
-          |> maybe_mark_cached(cached?)
-
-        json_result(payload)
-
-      secondary_failure ->
-        render_combined_failure(
-          primary_failure,
-          secondary_failure,
-          primary_provider,
-          secondary_provider
-        )
+      end
     end
+  end
+
+  defp provider_attempts(failures, used_provider) do
+    Enum.map(failures, fn {provider, failure} ->
+      %{"provider" => provider, "status" => "error", "reason" => failure_summary(failure)}
+    end) ++ [%{"provider" => used_provider, "status" => "ok"}]
   end
 
   defp run_provider_attempt(provider, query, freshness, request, runtime) do
     cache_key = build_cache_key(query, freshness, request, provider)
 
+    case WebCache.read_cache(@search_cache_table, cache_key, runtime.cache_opts) do
+      {:hit, payload} ->
+        {:ok, payload, true}
+
+      :miss ->
+        SingleFlight.run(
+          cache_key,
+          fn ->
+            run_uncached_provider(provider, query, freshness, request, runtime, cache_key)
+          end,
+          runtime.timeout_ms + 1_000
+        )
+    end
+  end
+
+  defp run_uncached_provider(provider, query, freshness, request, runtime, cache_key) do
     case WebCache.read_cache(@search_cache_table, cache_key, runtime.cache_opts) do
       {:hit, payload} ->
         {:ok, payload, true}
@@ -292,208 +342,31 @@ defmodule CodingAgent.Tools.WebSearch do
   end
 
   defp perform_search(provider, query, freshness, request, api_cfg, runtime) do
-    start_ms = System.monotonic_time(:millisecond)
-
-    case provider do
-      "perplexity" ->
-        with {:ok, payload} <-
-               run_perplexity_search(provider, query, request, api_cfg, runtime, start_ms) do
-          {:ok, payload}
-        end
-
-      _ ->
-        with {:ok, payload} <-
-               run_brave_search(provider, query, freshness, request, api_cfg, runtime, start_ms) do
-          {:ok, payload}
-        end
+    with {:ok, spec} <- SearchRegistry.fetch(provider),
+         :ok <- ensure_search_capability(spec),
+         context <-
+           api_cfg
+           |> Map.merge(%{
+             timeout_ms: runtime.timeout_ms,
+             http_get: runtime.http_get,
+             http_post: runtime.http_post
+           }),
+         :ok <- spec.module.available?(:search, context) do
+      spec.module.search(Map.merge(request, %{query: query, freshness: freshness}), context)
+    else
+      {:error, :not_found} -> {:error, "websearch provider is not registered: #{provider}"}
+      {:error, reason} -> {:error, provider_error_text(provider, reason)}
     end
   end
 
-  defp run_brave_search(provider, query, freshness, request, api_cfg, runtime, start_ms) do
-    params =
-      [
-        {"q", query},
-        {"count", Integer.to_string(request.count)}
-      ]
-      |> maybe_put_query_param("country", request.country)
-      |> maybe_put_query_param("search_lang", request.search_lang)
-      |> maybe_put_query_param("ui_lang", request.ui_lang)
-      |> maybe_put_query_param("freshness", freshness)
-
-    url = @brave_search_endpoint <> "?" <> URI.encode_query(params)
-
-    case runtime.http_get.(url, brave_request_opts(api_cfg.api_key, runtime.timeout_ms)) do
-      {:ok, %Req.Response{status: status} = response} when status in 200..299 ->
-        body = decode_json_body(response.body)
-        raw_results = get_in(body, ["web", "results"]) || []
-
-        mapped =
-          raw_results
-          |> Enum.map(&map_brave_result(&1, request.snippet_max_chars, request.max_chars))
-          |> Enum.reject(&is_nil/1)
-
-        {:ok,
-         %{
-           "query" => query,
-           "provider" => provider,
-           "count" => length(mapped),
-           "took_ms" => elapsed_ms(start_ms),
-           "results" => mapped,
-           "trust_metadata" =>
-             web_search_trust_metadata(["results[].title", "results[].description"])
-         }}
-
-      {:ok, %Req.Response{status: status} = response} ->
-        detail = response.body |> to_string_safe() |> String.trim()
-
-        {:error,
-         "Brave Search API error (#{status}): #{if(detail == "", do: "request failed", else: detail)}"}
-
-      {:error, reason} ->
-        {:error, "Brave Search request failed: #{format_reason(reason)}"}
-
-      other ->
-        {:error, "Unexpected Brave Search result: #{inspect(other)}"}
-    end
+  defp ensure_search_capability(%{capabilities: capabilities}) do
+    if :search in capabilities, do: :ok, else: {:error, :unsupported_search_capability}
   end
 
-  defp run_perplexity_search(provider, query, request, api_cfg, runtime, start_ms) do
-    endpoint = build_perplexity_endpoint(api_cfg)
-    request_opts = build_perplexity_request_opts(api_cfg, query, runtime)
+  defp provider_error_text(_provider, reason) when is_binary(reason), do: reason
 
-    case runtime.http_post.(endpoint, request_opts) do
-      {:ok, %Req.Response{status: status} = response} when status in 200..299 ->
-        {:ok,
-         build_perplexity_success_response(
-           response,
-           provider,
-           api_cfg.model,
-           query,
-           request,
-           start_ms
-         )}
-
-      {:ok, %Req.Response{status: status} = response} ->
-        {:error, format_perplexity_api_error(status, response.body)}
-
-      {:error, reason} ->
-        {:error, "Perplexity request failed: #{format_reason(reason)}"}
-
-      other ->
-        {:error, "Unexpected Perplexity result: #{inspect(other)}"}
-    end
-  end
-
-  defp build_perplexity_endpoint(api_cfg) do
-    String.trim_trailing(api_cfg.base_url, "/") <> "/chat/completions"
-  end
-
-  defp build_perplexity_request_opts(api_cfg, query, runtime) do
-    request_body = %{
-      "model" => api_cfg.model,
-      "messages" => [%{"role" => "user", "content" => query}]
-    }
-
-    [
-      headers: [
-        {"content-type", "application/json"},
-        {"authorization", "Bearer #{api_cfg.api_key}"},
-        {"http-referer", "https://lemon.agent"},
-        {"x-title", "Lemon Web Search"}
-      ],
-      json: request_body,
-      connect_options: [timeout: runtime.timeout_ms],
-      receive_timeout: runtime.timeout_ms
-    ]
-  end
-
-  defp build_perplexity_success_response(response, provider, model, query, request, start_ms) do
-    body = decode_json_body(response.body)
-
-    raw_content =
-      get_in(body, ["choices", Access.at(0), "message", "content"]) || "No response"
-
-    content = truncate_text(to_string(raw_content), request.max_chars)
-    citations = normalize_citations(Map.get(body, "citations", []), request)
-
-    %{
-      "query" => query,
-      "provider" => provider,
-      "model" => model,
-      "took_ms" => elapsed_ms(start_ms),
-      "content" => ExternalContent.wrap_web_content(content, :web_search),
-      "citations" => citations,
-      "trust_metadata" => web_search_trust_metadata(["content"])
-    }
-  end
-
-  defp format_perplexity_api_error(status, body) do
-    detail = body |> to_string_safe() |> String.trim()
-    "Perplexity API error (#{status}): #{if(detail == "", do: "request failed", else: detail)}"
-  end
-
-  defp map_brave_result(entry, snippet_max_chars, content_max_chars) when is_map(entry) do
-    title =
-      Map.get(entry, "title")
-      |> normalize_optional_string()
-      |> truncate_optional_text(snippet_max_chars)
-
-    description =
-      Map.get(entry, "description")
-      |> normalize_optional_string()
-      |> truncate_optional_text(content_max_chars)
-
-    url = normalize_optional_string(Map.get(entry, "url"))
-    published = normalize_optional_string(Map.get(entry, "age"))
-    site_name = site_name(url)
-
-    %{
-      "title" => if(title, do: ExternalContent.wrap_web_content(title, :web_search), else: ""),
-      "url" => url || "",
-      "description" =>
-        if(description, do: ExternalContent.wrap_web_content(description, :web_search), else: ""),
-      "published" => published,
-      "site_name" => site_name
-    }
-  end
-
-  defp map_brave_result(_, _snippet_max_chars, _content_max_chars), do: nil
-
-  defp web_search_trust_metadata(wrapped_fields) do
-    ExternalContent.web_trust_metadata(:web_search, wrapped_fields, warning_included: false)
-  end
-
-  defp brave_request_opts(api_key, timeout_ms) do
-    [
-      headers: [
-        {"accept", "application/json"},
-        {"x-subscription-token", api_key}
-      ],
-      connect_options: [timeout: timeout_ms],
-      receive_timeout: timeout_ms
-    ]
-  end
-
-  defp failover_context(runtime, freshness) do
-    secondary_provider = runtime.secondary_provider
-
-    blocked_reason =
-      cond do
-        is_nil(secondary_provider) ->
-          nil
-
-        not is_nil(freshness) and secondary_provider != "brave" ->
-          "Failover to #{secondary_provider} skipped because freshness is only supported by Brave."
-
-        true ->
-          nil
-      end
-
-    %{
-      secondary_provider: secondary_provider,
-      blocked_reason: blocked_reason
-    }
-  end
+  defp provider_error_text(provider, reason),
+    do: "#{provider} provider unavailable: #{inspect(reason)}"
 
   defp failover_payload(attempted, used, from, reason) do
     %{
@@ -518,49 +391,36 @@ defmodule CodingAgent.Tools.WebSearch do
   defp maybe_mark_cached(payload, true), do: Map.put(payload, "cached", true)
   defp maybe_mark_cached(payload, _), do: payload
 
-  defp render_failure({:setup_error, payload}, primary_provider, failover) do
-    payload
-    |> annotate_payload(primary_provider, primary_provider, failover)
-    |> json_result()
-  end
-
-  defp render_failure({:runtime_error, reason}, _primary_provider, failover) do
-    reason_text = to_string(reason)
-
-    case Map.get(failover, "reason") do
-      nil -> {:error, reason_text}
-      context -> {:error, "#{reason_text} (#{context})"}
-    end
-  end
-
-  defp render_combined_failure(
-         primary_failure,
-         secondary_failure,
-         primary_provider,
-         secondary_provider
-       ) do
+  defp render_chain_failure([primary | _], failures) do
     summary =
-      "Primary provider #{primary_provider} failed: #{failure_summary(primary_failure)}. " <>
-        "Failover provider #{secondary_provider} failed: #{failure_summary(secondary_failure)}."
+      failures
+      |> Enum.with_index()
+      |> Enum.map_join(" ", fn {{provider, failure}, index} ->
+        label = if index == 0, do: "Primary provider", else: "Failover provider"
+        "#{label} #{provider} failed: #{failure_summary(failure)}."
+      end)
 
-    failover = failover_payload(true, false, primary_provider, summary)
+    failover = failover_payload(length(failures) > 1, false, primary, summary)
 
-    case {primary_failure, secondary_failure} do
-      {{:setup_error, payload}, _} ->
+    case Enum.find(failures, fn {_provider, failure} -> match?({:setup_error, _}, failure) end) do
+      {_provider, {:setup_error, payload}} ->
         payload
-        |> annotate_payload(primary_provider, primary_provider, failover)
+        |> annotate_payload(primary, primary, failover)
+        |> Map.put("provider_attempts", provider_failure_attempts(failures))
         |> Map.put("warning", summary)
         |> json_result()
 
-      {_, {:setup_error, payload}} ->
-        payload
-        |> annotate_payload(primary_provider, primary_provider, failover)
-        |> Map.put("warning", summary)
-        |> json_result()
-
-      {{:runtime_error, reason}, _} ->
-        {:error, "#{to_string(reason)} (#{summary})"}
+      nil ->
+        {:error, summary}
     end
+  end
+
+  defp render_chain_failure([], _failures), do: {:error, "No websearch providers configured"}
+
+  defp provider_failure_attempts(failures) do
+    Enum.map(failures, fn {provider, failure} ->
+      %{"provider" => provider, "status" => "error", "reason" => failure_summary(failure)}
+    end)
   end
 
   defp failure_summary({:setup_error, payload}) when is_map(payload) do
@@ -610,7 +470,59 @@ defmodule CodingAgent.Tools.WebSearch do
     end
   end
 
-  defp resolve_api_config(_provider, runtime) do
+  defp resolve_api_config("duckduckgo", _runtime), do: {:ok, %{}}
+
+  defp resolve_api_config("exa", runtime) do
+    config = provider_config(runtime, "exa")
+
+    api_key =
+      normalize_optional_string(get_map_value(config, :api_key, nil)) ||
+        resolve_secret_ref(get_map_value(config, :api_key_secret, nil)) ||
+        env_optional("EXA_API_KEY")
+
+    if api_key do
+      {:ok,
+       %{
+         api_key: api_key,
+         base_url:
+           normalize_optional_string(get_map_value(config, :base_url, nil)) ||
+             "https://api.exa.ai"
+       }}
+    else
+      {:error,
+       %{
+         "error" => "missing_exa_api_key",
+         "message" =>
+           "websearch (exa) needs an API key. Set EXA_API_KEY or configure runtime.tools.web.search.providers.exa.api_key.",
+         "docs" => "docs/tools/web.md"
+       }}
+    end
+  end
+
+  defp resolve_api_config("searxng", runtime) do
+    config = provider_config(runtime, "searxng")
+    base_url = normalize_optional_string(get_map_value(config, :base_url, nil))
+
+    if base_url do
+      {:ok,
+       %{
+         base_url: base_url,
+         api_key:
+           normalize_optional_string(get_map_value(config, :api_key, nil)) ||
+             resolve_secret_ref(get_map_value(config, :api_key_secret, nil))
+       }}
+    else
+      {:error,
+       %{
+         "error" => "missing_searxng_base_url",
+         "message" =>
+           "websearch (searxng) needs agent.tools.web.search.providers.searxng.base_url.",
+         "docs" => "docs/tools/web.md"
+       }}
+    end
+  end
+
+  defp resolve_api_config("brave", runtime) do
     api_key =
       normalize_optional_string(runtime.api_key) ||
         resolve_secret_ref(runtime.api_key_secret) ||
@@ -627,6 +539,17 @@ defmodule CodingAgent.Tools.WebSearch do
     else
       {:ok, %{api_key: api_key}}
     end
+  end
+
+  defp resolve_api_config(provider, runtime), do: {:ok, provider_config(runtime, provider)}
+
+  defp provider_config(runtime, provider) do
+    configs = Map.get(runtime, :provider_configs, %{})
+
+    Map.get(configs, provider) ||
+      Enum.find_value(configs, %{}, fn {key, value} ->
+        if to_string(key) == provider, do: value
+      end)
   end
 
   defp resolve_perplexity_api_key(perplexity_cfg) do
@@ -847,38 +770,6 @@ defmodule CodingAgent.Tools.WebSearch do
     end
   end
 
-  defp decode_json_body(body) when is_map(body), do: body
-
-  defp decode_json_body(body) when is_binary(body) do
-    case Jason.decode(body) do
-      {:ok, decoded} -> decoded
-      _ -> %{}
-    end
-  end
-
-  defp decode_json_body(body) when is_list(body), do: decode_json_body(IO.iodata_to_binary(body))
-  defp decode_json_body(_), do: %{}
-
-  defp maybe_put_query_param(params, _key, nil), do: params
-  defp maybe_put_query_param(params, _key, ""), do: params
-  defp maybe_put_query_param(params, key, value), do: params ++ [{key, value}]
-
-  defp normalize_citations(citations, request) do
-    citations
-    |> ensure_list()
-    |> Enum.map(fn citation ->
-      citation
-      |> to_string()
-      |> normalize_optional_string()
-      |> case do
-        nil -> nil
-        value -> truncate_text(value, request.citation_max_chars)
-      end
-    end)
-    |> Enum.reject(&is_nil/1)
-    |> Enum.take(request.max_citations)
-  end
-
   defp read_integer(params, keys, fallback) do
     keys
     |> Enum.find_value(fn key ->
@@ -945,15 +836,6 @@ defmodule CodingAgent.Tools.WebSearch do
 
   defp normalize_country(_), do: nil
 
-  defp site_name(nil), do: nil
-
-  defp site_name(url) when is_binary(url) do
-    case URI.parse(url) do
-      %URI{host: host} when is_binary(host) and host != "" -> host
-      _ -> nil
-    end
-  end
-
   defp normalize_optional_string(value) when is_binary(value) do
     trimmed = String.trim(value)
     if trimmed == "", do: nil, else: trimmed
@@ -961,25 +843,12 @@ defmodule CodingAgent.Tools.WebSearch do
 
   defp normalize_optional_string(_), do: nil
 
-  defp truncate_optional_text(nil, _max_chars), do: nil
-  defp truncate_optional_text(text, max_chars), do: truncate_text(text, max_chars)
-
-  defp truncate_text(text, max_chars)
-       when is_binary(text) and is_integer(max_chars) and max_chars > 0 do
-    if String.length(text) <= max_chars do
-      text
-    else
-      String.slice(text, 0, max_chars) <> "..."
-    end
-  end
-
-  defp truncate_text(text, _max_chars) when is_binary(text), do: text
-
   defp normalize_provider(value, fallback) when is_binary(value) do
-    case String.downcase(String.trim(value)) do
-      "perplexity" -> "perplexity"
-      "brave" -> "brave"
-      _ -> fallback
+    candidate = String.downcase(String.trim(value))
+
+    case SearchRegistry.fetch(candidate) do
+      {:ok, _spec} -> candidate
+      {:error, :not_found} -> fallback
     end
   end
 
@@ -992,10 +861,11 @@ defmodule CodingAgent.Tools.WebSearch do
   defp normalize_provider_optional(nil), do: nil
 
   defp normalize_provider_optional(value) when is_binary(value) do
-    case String.downcase(String.trim(value)) do
-      "perplexity" -> "perplexity"
-      "brave" -> "brave"
-      _ -> nil
+    candidate = String.downcase(String.trim(value))
+
+    case SearchRegistry.fetch(candidate) do
+      {:ok, _spec} -> candidate
+      {:error, :not_found} -> nil
     end
   end
 
@@ -1006,7 +876,7 @@ defmodule CodingAgent.Tools.WebSearch do
   defp resolve_secondary_provider(primary, true, configured) do
     candidate =
       cond do
-        configured in ["brave", "perplexity"] ->
+        is_binary(configured) ->
           configured
 
         primary == "brave" ->
@@ -1028,6 +898,61 @@ defmodule CodingAgent.Tools.WebSearch do
 
   defp resolve_secret_ref(_), do: nil
 
+  defp apply_provider_overrides(runtime, params) do
+    requested = normalize_optional_string(Map.get(params, "provider"))
+
+    with {:ok, provider} <- validate_requested_provider(requested, runtime.provider),
+         {:ok, fallbacks} <- validate_fallback_providers(Map.get(params, "fallbackProviders")) do
+      fallbacks =
+        if is_nil(Map.get(params, "fallbackProviders")),
+          do: runtime.fallback_providers,
+          else: fallbacks
+
+      {:ok,
+       %{
+         runtime
+         | provider: provider,
+           fallback_providers: Enum.reject(fallbacks, &(&1 == provider))
+       }}
+    end
+  end
+
+  defp validate_requested_provider(nil, configured), do: {:ok, configured}
+
+  defp validate_requested_provider(value, _configured) do
+    candidate = String.downcase(value)
+
+    case SearchRegistry.fetch(candidate) do
+      {:ok, %{capabilities: capabilities}} ->
+        if :search in capabilities,
+          do: {:ok, candidate},
+          else: {:error, "Provider #{candidate} does not support search"}
+
+      {:error, :not_found} ->
+        {:error, "Unknown websearch provider: #{candidate}"}
+    end
+  end
+
+  defp validate_fallback_providers(nil), do: {:ok, []}
+
+  defp validate_fallback_providers(values) when is_list(values) do
+    Enum.reduce_while(values, {:ok, []}, fn value, {:ok, acc} ->
+      case normalize_optional_string(value) do
+        nil ->
+          {:cont, {:ok, acc}}
+
+        candidate ->
+          case validate_requested_provider(candidate, nil) do
+            {:ok, id} -> {:cont, {:ok, acc ++ [id]}}
+            {:error, reason} -> {:halt, {:error, reason}}
+          end
+      end
+    end)
+  end
+
+  defp validate_fallback_providers(_),
+    do: {:error, "fallbackProviders must be an array of provider ids"}
+
   defp env_optional(name), do: normalize_optional_string(Secrets.fetch_value(name))
 
   defp present?(value), do: not is_nil(normalize_optional_string(value))
@@ -1038,18 +963,6 @@ defmodule CodingAgent.Tools.WebSearch do
   end
 
   defp key_has_prefix?(_, _), do: false
-
-  defp to_string_safe(body) when is_binary(body), do: body
-  defp to_string_safe(body) when is_list(body), do: IO.iodata_to_binary(body)
-  defp to_string_safe(body), do: inspect(body)
-
-  defp elapsed_ms(start_monotonic_ms) do
-    System.monotonic_time(:millisecond) - start_monotonic_ms
-  end
-
-  defp format_reason(reason) when is_binary(reason), do: reason
-  defp format_reason(reason) when is_atom(reason), do: Atom.to_string(reason)
-  defp format_reason(reason), do: inspect(reason)
 
   defp json_result(payload) do
     ExternalContent.untrusted_json_result(payload)
@@ -1071,6 +984,8 @@ defmodule CodingAgent.Tools.WebSearch do
       %{
         provider: provider,
         secondary_provider: secondary_provider,
+        fallback_providers: if(is_nil(secondary_provider), do: [], else: [secondary_provider]),
+        provider_configs: search_cfg |> get_map_value(:providers, %{}) |> ensure_map(),
         enabled: truthy?(get_map_value(search_cfg, :enabled, true)),
         api_key: normalize_optional_string(get_map_value(search_cfg, :api_key, nil)),
         api_key_secret:
@@ -1245,9 +1160,6 @@ defmodule CodingAgent.Tools.WebSearch do
 
   defp ensure_map(value) when is_map(value), do: value
   defp ensure_map(_), do: %{}
-
-  defp ensure_list(value) when is_list(value), do: value
-  defp ensure_list(_), do: []
 
   defp truthy?(value) when value in [false, "false", "0", 0], do: false
   defp truthy?(_), do: true

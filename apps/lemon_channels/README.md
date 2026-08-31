@@ -1,6 +1,6 @@
 # LemonChannels
 
-Channel adapter layer for the Lemon AI assistant platform. Provides a pluggable adapter system for external messaging platforms (Telegram, Discord, X/Twitter, XMTP), a router-facing semantic delivery dispatcher, channel-owned presentation state, a reliable outbox delivery queue with retry, chunking, deduplication, and rate limiting, and inbound message normalization that submits canonical `LemonCore.RunRequest` structs to the router.
+Channel adapter layer for the Lemon AI assistant platform. Provides a pluggable adapter system for external messaging platforms (Telegram, Discord, X/Twitter, XMTP, WhatsApp), a router-facing semantic delivery dispatcher, channel-owned presentation state, a reliable outbox delivery queue with retry, chunking, deduplication, and rate limiting, and inbound message normalization that submits canonical `LemonCore.RunRequest` structs to the router.
 
 This app depends only on `lemon_core` (in-umbrella), plus `jason`, `earmark_parser`, `req`, and `nostrum` (runtime: false).
 
@@ -46,6 +46,43 @@ Channel adapters also use `LemonCore.RouterBridge` for busy-session and active-r
 
 **Script send**: `LemonChannels.ScriptSend` gives shell scripts, cron jobs, and CI a Hermes-style notification path for the promoted Telegram and Discord platforms. It builds direct text or file `OutboundPayload` structs and calls the platform outbound adapter directly without starting inbound transports.
 
+**Command discovery**: `LemonChannels.CommandCatalog` is the portable,
+JSON-safe source of command names, aliases, descriptions, argument hints,
+busy-state presentation policy, and semantic capability ids shared by channel
+and interactive clients. It covers the Hermes-compatible `/queue`/`/q`,
+`/steer`, `/reset`, `/reasoning`, `/stop`, `/status`, `/usage`,
+`/agents`/`/tasks`, `/compress`, `/commands`, `/help`, `/bg`, and `/btw`
+surface while retaining native Lemon aliases such as `/new`, `/thinking`, and
+`/cancel`. The catalog is metadata only: adapters and clients dispatch through
+the existing router, session, task, and control-plane owners. In particular,
+Lemon `/stop` means cancelling the active conversation run, not killing every
+runtime process.
+
+Telegram and Discord execute the portable information/session commands through
+`LemonChannels.PortableCommand`. Queue and steer remain router-owned submission
+modes; reset/reasoning/stop reuse the native new/thinking/cancel handlers;
+status and usage read redacted core diagnostics; agent/task inspection and
+compaction call the registered agent-runtime provider. `/bg` starts an isolated
+full-tool session and returns its complete durable id; `/bg list`, `/bg status
+<id>`, `/bg result <id>`, and `/bg cancel <id>` expose the lifecycle from the
+same Telegram or Discord conversation. Lifecycle access is enforced by the
+originating channel session key; another user/conversation sees neither the run
+nor whether a supplied id exists. `/btw` runs asynchronously from a
+no-tools transcript snapshot so it does not block the channel transport or
+mutate parent history. Discord applies the configured guild/channel allowlists
+and binding requirement before any application slash command executes. Channel
+responses map runtime failures to stable public messages and leave internal
+error details in runtime logs.
+
+```elixir
+LemonChannels.CommandCatalog.catalog()
+LemonChannels.CommandCatalog.find("/q")
+LemonChannels.CommandCatalog.categories()
+LemonChannels.CommandCatalog.summary()
+LemonChannels.PortableCommand.handle("status", "", %{session_key: session_key})
+LemonChannels.PortableCommand.handle("bg", "result bg_...", %{session_key: session_key})
+```
+
 ### Delivery Groups
 
 The Outbox preserves FIFO ordering within each "delivery group" while allowing full concurrency across independent groups. A delivery group is identified by the tuple `{channel_id, account_id, peer.kind, peer.id, peer.thread_id}`. When a long message is chunked into multiple parts, all chunks share the same group and are delivered sequentially to prevent reordering.
@@ -68,6 +105,9 @@ LemonChannels.Application
     |   +-- Discord.Transport             (Nostrum consumer)
     +-- XApi.TokenManager                 (if configured, GenServer from apps/x_api)
     +-- XMTP.Transport                    (if configured, GenServer + Port)
+    +-- WhatsApp.Supervisor               (if configured)
+        +-- WhatsApp.AsyncSupervisor      (Task.Supervisor)
+        +-- WhatsApp.Transport            (GenServer + Port)
 ```
 
 Adapters are selected from `config :lemon_channels, :adapters` during application boot. Each adapter runs under the `AdapterSupervisor` DynamicSupervisor; adapter modules may still no-op internally when credentials or transport-specific enablement are absent.
@@ -474,6 +514,11 @@ Supports edit, delete, images, files, and threads.
 - `/rollback status`, `/rollback events limit:<n>`, `/rollback diff checkpoint_id:<id>`, `/rollback restore checkpoint_id:<id> confirm:true` -- Hermes-style alias for the same preview checkpoint rollback controls
 - `/media status` -- preview generated-media job status with redacted type/status/artifact counts and cleanup policy
 
+Channel diagnostics expose the expected slash-command inventory plus boolean
+`compatibility_commands` coverage for `checkpoint`, `rollback`, `kanban`, and
+`media`. Support bundles and release-readiness checks can therefore detect a
+generated command-schema regression without inspecting Discord credentials.
+
 #### Delivery Notes
 
 - Shared-channel debounce buffering is keyed by channel, thread, and session/user identity so rapid messages from different Discord users do not get merged into one run.
@@ -533,13 +578,29 @@ Web3 messaging adapter. Supports threads only (no edit, delete, voice, images, f
 | `XMTP` (plugin) | Plugin behaviour implementation |
 | `XMTP.Transport` | GenServer for message send/receive, `normalize_inbound_message/1`, `deliver/1` |
 | `XMTP.Bridge` | Communication with the Node.js bridge (connect, poll, send_message) |
-| `XMTP.PortServer` | Port process management for the Node.js bridge subprocess |
+| `XMTP.PortServer` | XMTP-specific public GenServer identity around the shared Node.js port lifecycle |
 
-XMTP uses a Node.js bridge process managed via an Erlang Port. The bridge handles the XMTP protocol specifics while the Elixir side manages lifecycle, message normalization, and delivery through the standard plugin interface.
+XMTP uses a Node.js bridge process managed via an Erlang Port. The bridge handles the XMTP protocol specifics while the Elixir side manages lifecycle, message normalization, and delivery through the standard plugin interface. `XMTP.PortServer` remains the public GenServer callback/process and warning-log module while supplying the XMTP script name, event tag, and log label to the shared `LemonChannels.PortBridge` callback implementation.
 
 #### Configuration
 
 Add `LemonChannels.Adapters.Xmtp` to `config :lemon_channels, :adapters`. The XMTP transport still checks `enable_xmtp: true` before starting its bridge.
+
+### WhatsApp
+
+**Plugin ID**: `"whatsapp"` | **Chunk limit**: 4096
+
+The WhatsApp adapter uses its own Node.js bridge script and event tag behind the same internal port lifecycle as XMTP.
+
+#### Module Layout
+
+| Module | Purpose |
+|--------|---------|
+| `WhatsApp` (plugin) | Plugin behaviour implementation |
+| `WhatsApp.Supervisor` | Starts the async supervisor and transport when credentials are configured |
+| `WhatsApp.Transport` | GenServer for message send/receive and bridge event handling |
+| `WhatsApp.Bridge` | Communication with the Node.js bridge |
+| `WhatsApp.PortServer` | WhatsApp-specific public GenServer identity around `LemonChannels.PortBridge` |
 
 ## Adding a New Channel Adapter
 
@@ -646,6 +707,7 @@ Adapters run under `LemonChannels.AdapterSupervisor` (DynamicSupervisor).
 | `LemonChannels.Capabilities` | Capability type definitions and defaults |
 | `LemonChannels.PresentationState` | Channels-owned message-id/send-vs-edit state per `{route, run, surface}` |
 | `LemonChannels.OutboundPayload` | Core delivery struct with constructors |
+| `LemonChannels.PortBridge` (internal) | Shared line-delimited JSON port lifecycle used by the XMTP and WhatsApp public PortServer wrappers |
 | `LemonChannels.BindingResolver` | Chat scope to project/agent/cwd/queue binding resolution (delegates to LemonCore) |
 | `LemonChannels.GatewayConfig` | Thin delegation to `LemonCore.GatewayConfig` |
 | LemonChannels.Runtime (internal) | Runtime bridge for session/run cancel, keepalive, and busy checks via `LemonCore.RouterBridge` |
@@ -719,7 +781,17 @@ Adapters run under `LemonChannels.AdapterSupervisor` (DynamicSupervisor).
 | `Adapters.XMTP` | Plugin behaviour implementation |
 | `XMTP.Transport` | Message send/receive GenServer |
 | `XMTP.Bridge` | Node.js bridge communication |
-| `XMTP.PortServer` | Port process management |
+| `XMTP.PortServer` | XMTP-specific public wrapper around `LemonChannels.PortBridge` |
+
+### WhatsApp
+
+| Module | Purpose |
+|--------|---------|
+| `Adapters.WhatsApp` | Plugin behaviour implementation |
+| `WhatsApp.Supervisor` | Credentials-gated adapter supervisor |
+| `WhatsApp.Transport` | Message send/receive GenServer |
+| `WhatsApp.Bridge` | Node.js bridge communication |
+| `WhatsApp.PortServer` | WhatsApp-specific public wrapper around `LemonChannels.PortBridge` |
 
 ## Testing
 
@@ -753,6 +825,7 @@ mix test apps/lemon_channels/test/lemon_channels/outbox_test.exs
 | `telegram/file_transfer_test.exs` | File handling |
 | `media_status_message_test.exs` | Telegram `/media` command recognition and redacted status formatting |
 | `capabilities_test.exs` | Includes X adapter capability lookup |
+| `port_bridge_contract_test.exs` | Shared XMTP/WhatsApp PortServer API, parser, event-tag, and reconnect contract |
 
 ### Mock Adapter Pattern
 

@@ -66,6 +66,12 @@ defmodule LemonChannels.Adapters.Discord.SlashCommands do
     ]
   }
 
+  @reasoning_command %{
+    @thinking_command
+    | name: "reasoning",
+      description: "Alias for /thinking"
+  }
+
   @resume_command %{
     name: "resume",
     description: "Switch to a previous session",
@@ -84,10 +90,117 @@ defmodule LemonChannels.Adapters.Discord.SlashCommands do
     ]
   }
 
+  @queue_command %{
+    name: "queue",
+    description: "Queue a follow-up prompt behind the active run",
+    type: 1,
+    options: [
+      %{type: 3, name: "prompt", description: "Follow-up prompt", required: true}
+    ]
+  }
+
+  @q_command %{
+    @queue_command
+    | name: "q",
+      description: "Alias for /queue"
+  }
+
+  @steer_command %{
+    name: "steer",
+    description: "Steer the active run with an additional instruction",
+    type: 1,
+    options: [
+      %{type: 3, name: "prompt", description: "Steering instruction", required: true}
+    ]
+  }
+
   @cancel_command %{
     name: "cancel",
     description: "Cancel the current run",
     type: 1
+  }
+
+  @stop_command %{
+    @cancel_command
+    | name: "stop",
+      description: "Alias for /cancel"
+  }
+
+  @reset_command %{
+    name: "reset",
+    description: "Alias for /session new",
+    type: 1,
+    options: [
+      %{type: 3, name: "project", description: "Project path or ID", required: false}
+    ]
+  }
+
+  @status_command %{
+    name: "status",
+    description: "Show the current Lemon session and run status",
+    type: 1
+  }
+
+  @usage_command %{
+    name: "usage",
+    description: "Show Lemon token and cost usage",
+    type: 1
+  }
+
+  @agents_command %{
+    name: "agents",
+    description: "Show native Lemon agents and delegated tasks",
+    type: 1
+  }
+
+  @tasks_command %{
+    @agents_command
+    | name: "tasks",
+      description: "Alias for /agents"
+  }
+
+  @compress_command %{
+    name: "compress",
+    description: "Compact the current Lemon session context",
+    type: 1
+  }
+
+  @commands_command %{
+    name: "commands",
+    description: "Browse portable Lemon commands",
+    type: 1
+  }
+
+  @help_command %{
+    name: "help",
+    description: "Show grouped portable Lemon command help",
+    type: 1,
+    options: [
+      %{type: 3, name: "filter", description: "Optional command filter", required: false}
+    ]
+  }
+
+  @bg_command %{
+    name: "bg",
+    description: "Start or inspect an isolated background Lemon run",
+    type: 1,
+    options: [
+      %{
+        type: 3,
+        name: "prompt",
+        description: "Prompt, or list/status/result/cancel",
+        required: true
+      }
+    ]
+  }
+
+  @btw_command %{
+    name: "btw",
+    description: "Ask a no-tools side question from a conversation snapshot",
+    type: 1,
+    options: [
+      %{type: 3, name: "question", description: "Side question", required: true}
+    ]
   }
 
   @checkpoint_command %{
@@ -493,9 +606,24 @@ defmodule LemonChannels.Adapters.Discord.SlashCommands do
       @session_command,
       @model_command,
       @thinking_command,
+      @reasoning_command,
       @resume_command,
       @redirect_command,
+      @queue_command,
+      @q_command,
+      @steer_command,
       @cancel_command,
+      @stop_command,
+      @reset_command,
+      @status_command,
+      @usage_command,
+      @agents_command,
+      @tasks_command,
+      @compress_command,
+      @commands_command,
+      @help_command,
+      @bg_command,
+      @btw_command,
       @checkpoint_command,
       @rollback_command,
       @goal_command,

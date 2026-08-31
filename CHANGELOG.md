@@ -8,6 +8,196 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
+### Fixed
+
+- Source `./bin/lemon` now detects and reuses a healthy local control plane
+  before compilation or Erlang distribution startup, so invoking it beside an
+  existing runtime no longer fails with a duplicate `lemon@host` node name.
+  Web health probes tolerate bounded slow responses and trailing whitespace,
+  and the quality lane exercises both direct-launch and `web --no-open` reuse.
+
+### Added
+
+- Bun TUI portable-blueprint management over the authenticated shared catalog:
+  content-free `/blueprints` browsing and `/blueprint` inspect/validate/preview,
+  exact fresh-digest activation, stale/refused-plan clearing with preserved
+  profile drafts, nonqueueable offline mutation, and duplicate-safe replay.
+  The terminal retains and renders only bounded IDs, counts, actions, booleans,
+  and digests; real Bandit/Bun proof verifies planted manifest prose, prompts,
+  skill bodies, commands, environment values, paths, tokens, and secrets stay
+  out of terminal state and proof output.
+- Token-required Web durable-memory management at `/manage/memory`, backed by
+  a shared `LemonMemory.Lifecycle` over the canonical SQLite/FTS store. The
+  responsive browser supports bounded search and safe scope/agent/workspace
+  digest/kind filters, Safety-redacted run and learned-source previews,
+  digest-only provenance, and exact single-record delete preview/confirmation.
+  Deletion binds the document ID to a deterministic revision of every
+  persisted field, compares it in constant time inside the same transaction
+  that removes the document and FTS row, and fails stale/forged/malformed
+  requests without mutation. Memory updates now replace their prior FTS row,
+  preventing duplicate search hits for an updated document ID.
+
+- Source and packaged `lemon learn` plus authenticated `learn.review` /
+  `learn.confirm` control-plane methods for auditable learning from existing
+  bounded file, folder, URL, diff, document, and redacted-session references.
+  Review is non-mutating and content-free; confirmation is bound to an exact
+  fresh digest and writes only canonical durable memory plus an audited skill
+  draft, with traversal/SSRF defenses, redaction, collision checks, and
+  idempotent re-review. Exact create-if-absent writes prevent stale destination
+  overwrites, provenance-bearing records remain removable through their
+  existing stores, and selected source content never enters LLM audit.
+
+- Registry-driven source/packaged `lemon update check|plan|apply|history|rollback`
+  with non-mutating manifest/current-bound plans, exact fresh-digest apply,
+  serialized checksum/size-authenticated staging, pre-extraction archive
+  confinement, verified private checkpoints, atomic pointer recovery,
+  content-free receipts, and exact receipt/digest rollback. Source checkouts
+  keep binary mutation fail-closed; schema-2 publisher-signing and exact
+  in-flight `:httpc` byte cancellation remain explicitly documented residuals.
+- Explicitly enabled, read-only 1Password, Bitwarden Secrets Manager, and
+  argv-only command secret sources integrated behind the encrypted Lemon store,
+  with exact schema validation, supervised time/output bounds, minimal child
+  environments, fail-closed fallback behavior, optional bounded in-memory
+  caching, and source/packaged `lemon secrets sources status|test` diagnostics
+  that expose readiness/provenance only.
+- Source and packaged `lemon blueprints` catalog list, sanitized inspect and
+  validate, non-mutating default preview, and exact-digest activation over the
+  existing authenticated control-plane/`CronManager` path, with stable redacted
+  JSON/exit codes, registry-driven help/completion, duplicate-safe results, and
+  real source plus assembled minimal-runtime proof.
+- Token-required Web blueprint management at `/manage/blueprints`, backed by
+  the shared `LemonAutomation.Blueprint.Catalog` service. The responsive page
+  lists only safe IDs/counts, validates bundles, previews profile-local skill
+  and schedule actions without mutation, requires the exact fresh digest, and
+  reports create-once or unchanged replay without retaining manifest prose,
+  prompts, skill bodies, paths, commands, environment values, or secrets.
+- Authenticated Web provider-routing management at `/manage/providers`, with
+  redacted effective status, ordered fallback controls, credential-pool and
+  credential-reference lifecycle, preview-first writes, exact confirmation for
+  destructive changes, and stale-preview rejection through opaque config
+  revisions. Credential references are password-masked, filtered from logs,
+  re-entered for apply, and never retained or rendered by the LiveView.
+- Source and packaged `lemon sessions` commands for bounded list/search/show,
+  exact redacted aggregate statistics with capped agent/origin breakdowns,
+  and redacted history, title/pin/archive lifecycle, always-redacted
+  JSON/Markdown export, exact-candidate preview-confirm prune, and verified
+  exact-key delete; plus registry-generated `lemon completion bash|zsh|fish`
+  scripts that preserve source and release launcher-specific commands.
+- Bun TUI session lifecycle parity over the same authenticated control-plane
+  service: live `/sessions` search/filter/picker UX; `/session` inspect, resume,
+  title, pin, archive, redacted preview/export, exact-candidate guarded prune,
+  and verified export-before-delete. Destructive mutations are never queued
+  offline, refused/stale results do not discard drafts, and list/status/error
+  rendering omits paths, prompts, credentials, and unredacted content.
+- Source and packaged `lemon providers` readiness and routing management with
+  comment-preserving fallback and credential-pool reference edits, stable
+  redacted JSON/exit codes, exact confirmation for destructive changes, and a
+  matching admin-scoped `providers.configure` control-plane method.
+- A client-independent `LemonCore.Context` preview/resolve contract and
+  packaged `lemon context` command for bounded `@file`, `@folder`, `@git-diff`,
+  `@url`, and redacted `@session` references. PDF, DOCX, XLSX, PPTX, notebook,
+  and text content is format-sniffed with explicit byte/page/item/depth/time
+  limits, archive-bomb/traversal and symlink defenses, SSRF-safe pinned URL
+  fetching, sensitive-value redaction, and structured omission metadata.
+- Versioned portable skill + automation bundles with bounded manifest and
+  filesystem policy, deterministic source-and-stage audit, profile-local skill
+  enablement, content-free control-plane list/inspect/validate/preview, exact
+  digest confirmation, and create-once idempotent cron activation.
+- An authenticated Lemon Web session-management shell with runtime and live-node
+  status, durable search/resume, title/pin/archive controls, redacted structured
+  run/tool inspection, bounded JSON/Markdown export, and exact-candidate guarded
+  prune. Query-token bootstrap redirects server-side to a clean URL before
+  rendering, and named chat routes reconstruct durable history before resuming.
+- A shared `LemonCore.SessionLifecycle` service and control-plane
+  `sessions.metadata.patch`, `sessions.export`, and `sessions.prune` methods.
+  Export fails closed against raw run/event payloads and secrets; prune commits
+  canonical history last, verifies deletion, and binds confirmation to exact
+  parameters and stable candidate state.
+- Source and packaged `lemon backup contract|create|list|verify|restore`
+  commands backed by a versioned `~/.lemon` data contract, atomic private
+  directory bundles, exact file-set and SHA-256 verification, credential
+  exclusions, permission-widening rejection, target-bound overwrite
+  confirmation, staged restore, rollback receipts, stable JSON, and documented
+  exit codes.
+- First-class user-managed profiles over the existing router agent plane, with
+  atomic/comment-preserving create, list, show, clone, rename, credential-safe
+  export, and guarded recoverable delete; isolated profile workspaces for
+  bootstrap/memory/skills; stable `agent:<id>:main` chats; node-aware rosters;
+  packaged `lemon profile` commands; matching control-plane methods; and TUI
+  `/profiles` roster/picker plus `/profile` inspection, canonical-chat, and
+  guarded lifecycle commands. Normal TUI prompts in an opened profile route
+  through `profile.chat`, preserving derived workspaces and named nodes. The
+  authenticated Web shell now adds a responsive `/manage/profiles` roster and
+  preview-first create/clone/rename/recoverable-delete journey with stale
+  revision refusal, exact delete confirmation, canonical-chat links, and no
+  profile paths or system prompts retained in LiveView state.
+- `lemon web [--no-open]` in source and full packaged launchers, with daemon
+  auto-start, exact Web health polling, browser opening, and actionable profile
+  or startup errors.
+- A shared `LemonCore.Setup.Readiness` contract plus a fail-closed Web first-run
+  guide, live config/secret refresh, active-run stop control, and accessible
+  responsive status/composer states.
+- Durable same-session heartbeats with idle-only recurring turns, queued-user
+  priority, missed-tick coalescing, pause/resume/clear lifecycle, restart-safe
+  fire claims, reset tombstones, logical session-key resolution, an admin
+  `sessions.heartbeat` API, and TUI `/heartbeat`/`/hb` commands.
+- Portable Hermes-compatible slash-command discovery metadata for channel and
+  interactive clients, exposed through the read-only `commands.catalog`
+  control-plane method while preserving Lemon's router/session ownership and
+  active-run-only `/stop` semantics.
+- End-to-end Hermes-compatible `/queue`/`/q`, `/steer`, `/reset`, `/reasoning`,
+  `/stop`, `/status`, `/usage`, `/agents`/`/tasks`, `/compress`, `/commands`,
+  `/help`, `/bg`, and `/btw` support across Telegram, Discord, the TUI, and the
+  control plane. Background runs are isolated full-tool sessions; side
+  questions use bounded no-tools transcript snapshots without changing parent
+  history.
+- Channel `/bg` receipts now retain the complete durable job id and Telegram and
+  Discord expose `/bg list`, `/bg status <id>`, `/bg result <id>`, and `/bg
+  cancel <id>`. Discord portable slash commands also enforce configured
+  guild/channel and binding policy before execution, and channel command errors
+  no longer render arbitrary internal runtime reasons. Background lifecycle
+  access is scoped to its originating channel session so foreign ids are hidden
+  as not found, and Discord now applies the same policy gate to every application
+  command before reset/reasoning/cancel or other command dispatch.
+- Hermes-compatible `/bg` backend sessions with durable lifecycle ids,
+  isolated full-tool execution, status/result/list/cancel APIs, and
+  restart-safe lost-run reporting; plus bounded `/btw` no-tools queries over
+  immutable live snapshots or durable channel session-key history without
+  mutating the parent conversation.
+- Extensible capability-aware web search/extraction providers with deterministic
+  fallback, provider isolation, request-level selection, extension registration,
+  keyless DuckDuckGo, configurable SearXNG, Exa search/highlights and batch
+  contents extraction, and concurrent
+  single-flight request coalescing
+- Backend-neutral multi-tab browser control with stable target IDs, safe
+  attached-browser lifecycle semantics, authenticated single-use controller
+  tickets, and a bundled token-gated Manifest V3 relay for existing signed-in
+  Chrome tabs
+- Hosted browser lifecycle adapters for Browserbase, Browser Use Cloud,
+  Firecrawl, and Camofox; explicit public/local hybrid routing; bounded
+  `browser_exec` programs with developer-gated raw CDP; and cross-platform
+  `computer_use` backed by exact-session cua-driver state
+- Redaction-safe live leadership acceptance harnesses covering real
+  `gpt-5.6-luna`/`xhigh` search fallback, multi-source synthesis, multi-tab and
+  stale-target browser control, screenshot analysis, extension relay ownership,
+  and fail-closed controller consent boundaries
+- Named execution nodes can now pair with a Lemon controller through
+  `./bin/lemon node join`, advertise live presence under a unique name, and
+  run native delegated `CodingAgent.Session` work selected by the `agent`
+  tool's `node` parameter. Pairing persists a private, controller-bound token
+  on the destination machine; remote runs keep credentials and default working
+  directories destination-local and support targeted cancellation plus
+  invocation-bound steer/redirect with authenticated destination
+  acknowledgement and fail-closed terminal races.
+- The control-plane chat surfaces and TUI now preserve redirect as a distinct
+  active-run mode. The TUI exposes `/redirect` and cycles queue, steer,
+  redirect, and interrupt without conflating redirect with non-canceling steer.
+- Lemon Web now discovers an already-active session run and presents explicit,
+  responsive follow-up, steer, and redirect choices. The text-only controls
+  recheck run eligibility at submit time, keep stop bound to the real active
+  run, preserve a refused draft, and report bounded user-facing outcomes
+  without rendering internal node/runtime errors.
+
 ### Changed
 
 - `execute_code` gained an explicit result channel: `text()` blocks are the tool
@@ -72,10 +262,165 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   parallel through the pump's bounded wave dispatch with exact call-limit,
   replay, and byte-budget accounting.
 
+
+- Packaged and Mix `secrets check` output now reports only `present` and source
+  category counts; it no longer reveals credential prefixes or suffixes.
+- Lemon Web now ships compiled CSS inside the release instead of loading
+  Tailwind from a runtime CDN, so the local chat shell works offline.
+- Vendored Phoenix and LiveView browser clients now match the locked server
+  dependencies, removing the live asset-version mismatch warning.
+- Lemon Web declares and serves a bundled favicon instead of logging a missing
+  route on each new browser session.
+- Background and side-query public APIs now use stable content-free failure
+  classifications; their control-plane RPCs allowlist lifecycle fields and
+  return fixed bounded error codes/messages without provider terms, persisted
+  errors, filesystem paths, or credential details.
+- Background and durable side-query launches now normalize string-valued
+  reasoning policy to the native atom contract before provider execution.
+- Packaged and Mix secrets check/import commands now share one ordered
+  environment-credential catalog instead of maintaining three copies
+- LemonSim scenarios now share one bounded model/provider/credential resolver;
+  unknown provider input no longer creates BEAM atoms, while scenario-specific
+  setup errors and provider aliases remain intact
+- LemonSim Mix tasks now share ordinary runtime, option, and bounded
+  provider/model helpers instead of maintaining two dozen private copies;
+  arbitrary provider CLI input no longer creates atoms
+- Fifteen LemonSim scenario logs now share one JSONL lifecycle and encoding
+  implementation while retaining their existing public APIs and domain fields
+- XMTP and WhatsApp now share one supervised Node bridge port lifecycle while
+  retaining their adapter-specific `PortServer` callback/process identities,
+  scripts, event tags, and module-scoped warning logs
+- Documentation quality checks now use a compact catalog with shared defaults,
+  explicit lifecycle/visibility metadata, and Git-index-based coverage that
+  ignores untracked local drafts
+- Pull-request client quality now exercises Lemon Web startup from clean
+  generated artifacts, and release smoke evaluates the MCP library contract
+  inside both packaged runtime profiles and their release tarballs
+- Local coding-agent patches now preflight every hunk before mutation, reject
+  duplicate paths and destructive move overwrites, revalidate each operation,
+  exclusively create new targets, and report any committed prefix or partial
+  current operation when a later mutation fails. Local writes canonicalize the
+  path used for both validation and mutation, then reject symlink redirection
+  and special-file targets by default.
+- Skill manifests now reject unsafe or oversized prompt metadata, relevance
+  searches use cached excerpts/status views outside the Registry server, and
+  prompt listings expose bounded source/trust provenance with deterministic
+  ordering.
+- Turn-specific skill relevance no longer changes the cacheable system prompt;
+  missed-skill introspection uses turn-local keys, and local file/search/shell
+  plus community skill results are fenced as untrusted data before model calls.
+- Skill discovery now invalidates content-addressed caches after file, directory,
+  lockfile, environment, or disabled-config changes; malformed typed metadata is
+  rejected without crashing. Pre-LLM tool fencing ignores spoofed trust metadata,
+  bounds hostile text, avoids double-fencing web output, and attests builtin skill
+  content against the bundled release copy before granting instruction trust.
 - Product releases can now be cut and published from one manual Release
   workflow dispatch; the workflow derives CalVer, consumes the Unreleased
   notes, commits and tags the release, verifies every artifact, publishes the
   GitHub Release, and only then promotes mutable container channel tags
+- Lemon Web shared/server `dist` directories are generated by their build
+  commands instead of being tracked as source.
+
+### Fixed
+
+- Redirect acknowledgement now waits until the correction is queued and the
+  active model request is signaled, preventing a fast completion from silently
+  racing ahead of an accepted redirect.
+- Persistent Python kernels now preserve parent/child stdout and stderr ordering
+  instead of allowing block-buffered parent output to appear after child-process
+  output.
+- MCP HTTP transports now supervise the protocol server and Bandit listener as
+  one lifecycle and track live node-local instances through supervised members,
+  preventing stale or orphaned processes across child failures, concurrent
+  starts, and transport shutdowns
+- Lemon Web now builds its ignored shared/server entrypoints before clean-checkout
+  `npm run dev` and `npm start`; the client quality lane exercises that
+  clean-artifact startup contract
+- Authenticated TUI control-plane handshakes now send the token in the server's
+  `params.auth.token` envelope
+- Packaged minimal and full runtimes now assemble the MCP client library, so
+  configured MCP tools are discoverable without starting a no-op application
+  supervisor
+- Named execution nodes now recover the same durable identity after their
+  seven-day session expires, survive controller-side renames, revoke older
+  sessions on rotation, and provide an explicit repair path for legacy local
+  credentials. Non-loopback plaintext controller connections now fail closed
+  unless development or a verified encrypted overlay is explicitly selected.
+- Named-node challenge exchange and per-identity credential replacement are now
+  atomic. Rotation closes stale live sockets, binds result settlement to the
+  authorized connection generation, retains a monotonic generation floor
+  against delayed handshakes, and withholds ID-based recovery material unless
+  the exact stored controller is supplied.
+- Closed unauthenticated named-node operator access on the control-plane
+  WebSocket: non-loopback operators now fail closed, configured operator tokens
+  use constant-time validation, unknown session identities cannot escalate, and
+  node pairing reports credential problems without exposing secrets. Tokenless
+  loopback operator access is now a default-off explicit compatibility opt-in,
+  and browser clients keep operator credentials out of WebSocket URLs.
+- The source TUI launcher now gives a fresh launcher-owned daemon and client the
+  same high-entropy process-scoped operator token, keeps it out of arguments and
+  disk, stops every daemon it starts with the TUI regardless of whether the
+  token was generated or preconfigured, and fails closed when attaching to an
+  existing runtime without its configured token.
+- Named execution nodes now cancel destination work when callers time out,
+  disappear, reconnect, or lose their controller socket; bind stored tokens to
+  the paired node identity; persist fast results without racing dispatch; and
+  resolve relative/default working directories from the joining shell. Node
+  sockets now send idle keepalives, pairing resumes safely after approval or a
+  lost challenge response, bounded JSON request/result limits prevent
+  unbounded worker output, and durable status/events retain only redacted
+  result summaries while private source delivery remains intact.
+- Router and gateway launch lifecycle now bounds pre-start runtime submission
+  and run-launch retries, emits one structured terminal failure before queue
+  cleanup, deduplicates tokenized scheduler requests, preserves engine-lock
+  exclusivity for live owners, and observes over-age live locks without stealing
+  them. Gateway cwd fallback also accepts mixed-key proplists without crashing.
+- Async task lifecycle, event retention, and join-followup suppression are now
+  serialized and terminal state is first-writer-wins. Run-budget usage and
+  child admission are atomic, repeated child completion aggregates once, and
+  RunGraph finishes DETS recovery before accepting live calls.
+- Corrected context truncation ordering, hard bookends character limits, and
+  atomic tool-call/result retention; made pending-compaction retries survive
+  submit errors with injection-safe whole-entry history envelopes; and cleared
+  stale session follow-up diagnostics/background compaction when turns end or a
+  new prompt supersedes the snapshot.
+- Heartbeat reconfiguration now updates cron jobs with mutable fields only,
+  disables the superseded cron or timer mechanism, preserves nonrepresentable
+  intervals with exact timers, records timer terminal/suppression state, and
+  skips overlapping timer runs with telemetry. Automation submit-and-wait paths
+  now subscribe before submission through one fixed-run-id lifecycle, closing
+  synchronous-completion races in cron, goal, heartbeat, and Kanban runs.
+- Cron retries now persist due time and lineage across manager restarts, claim
+  deterministic attempt IDs, and share one terminal policy path for normal,
+  stale, aborted, start-failed, and crashed-worker outcomes. Cron work is
+  monitored under the automation task supervisor, with unsupervised execution
+  reserved for explicit standalone mode.
+- Kanban board stop now hard-cancels owned workers and reclaims their exact
+  leases immediately; lease-guarded completion rejects late results, and board
+  restart reconciles unexpired leases from the prior dispatcher. Board-scoped
+  mutation locks also prevent concurrent dispatchers from leasing the same task
+  or racing a stale terminal write against a replacement lease. Goal-loop hard
+  stop now claims the fixed run ID before submission, aborts that authoritative
+  router run once, and prevents another tick. Router abort tombstones close the
+  accepted-before-callback window without delaying stop; graceful stop still
+  lets the bounded loop finish and API deadlines enclose configured
+  judge/continuation waits.
+- Async subagent launches now fail and terminalize their bookkeeping when the
+  supervised worker cannot start, completed task/agent followup delivery
+  contains router exits, and lane-scheduled jobs no longer process a duplicate
+  normal monitor event after every result. Delegated agent runs now participate
+  in the run graph used by `agent action=join`, and explicit joins suppress the
+  redundant automatic completion followup.
+- Child `ask_parent` requests now wake idle parent sessions and release parents
+  blocked in task/agent joins so clarification cannot deadlock. Parent-question
+  creation and terminal transitions are serialized, resolver authorization is
+  exact to both session and agent, and terminal lifecycle events emit once.
+- Multi-task `wait_any` joins now suppress automatic followup only for the
+  completed winner; failed, aborted, crashed, and restarted joins release
+  transient suppression.
+  Lane queues discard abandoned callers and contain per-job admission failure,
+  while delegated watcher timeouts preserve still-running router authority and
+  reconcile late completion from a `tracking_lost` state.
 
 ### Removed
 

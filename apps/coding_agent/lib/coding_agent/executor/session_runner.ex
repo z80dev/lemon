@@ -163,6 +163,7 @@ defmodule CodingAgent.Executor.SessionRunner do
     }
 
     meta = request.meta || %{}
+    workspace_dir = profile_workspace(meta)
 
     session_opts =
       [
@@ -177,6 +178,7 @@ defmodule CodingAgent.Executor.SessionRunner do
         acp_client_fs_write_text_file: get_in(meta, [:acp_client_fs_write_text_file]),
         stream_options: get_opt(run_opts, :stream_options),
         resume_source: get_in(meta, [:resume_source]) || get_in(meta, ["resume_source"]),
+        workspace_dir: workspace_dir,
         extra_tools: extra_tools
       ]
       |> Presentation.build_session_opts(cwd, run_id, session_key, agent_id)
@@ -217,7 +219,7 @@ defmodule CodingAgent.Executor.SessionRunner do
 
       {:error, reason} ->
         emit_resume_failure(state, reason)
-        {:stop, :normal}
+        {:stop, reason}
     end
   end
 
@@ -304,7 +306,7 @@ defmodule CodingAgent.Executor.SessionRunner do
       LemonGateway.Tools.SmsClaimMessage.tool(cwd, session_key: request.session_key)
     ]
 
-    workspace_dir = CodingAgent.Config.workspace_dir()
+    workspace_dir = profile_workspace(request.meta || %{})
 
     cond do
       telegram_session?(request) ->
@@ -372,6 +374,19 @@ defmodule CodingAgent.Executor.SessionRunner do
     meta = request.meta || %{}
     meta[:async_followups] || meta["async_followups"]
   end
+
+  @doc false
+  @spec profile_workspace(map()) :: String.t()
+  def profile_workspace(meta) when is_map(meta) do
+    profile_id = meta[:profile_id] || meta["profile_id"]
+
+    case LemonCore.ProfileStore.paths(profile_id) do
+      {:ok, %{"workspace" => workspace}} -> workspace
+      _ -> CodingAgent.Config.workspace_dir()
+    end
+  end
+
+  def profile_workspace(_), do: CodingAgent.Config.workspace_dir()
 
   defp get_opt(opts, key) when is_map(opts), do: Map.get(opts, key)
   defp get_opt(opts, key) when is_list(opts), do: Keyword.get(opts, key)

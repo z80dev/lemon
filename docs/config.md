@@ -5,11 +5,18 @@ Lemon uses a single canonical configuration file in TOML format. Configuration i
 1. Global: `~/.lemon/config.toml`
 2. Project: `<project>/.lemon/config.toml` (overrides global)
 3. Environment variables (override file values; `.env` may auto-populate missing env vars at startup)
-4. Lemon secrets referenced from config (for secret-backed fields)
+4. Credential references resolved through Lemon's encrypted store, explicitly
+   enabled external sources, and the ordinary same-name environment fallback
 
 Runtime state and policy are separate from config. Per-session or per-route "current"
 model/thinking values override config defaults at runtime, but they are not persisted in
 `config.toml`.
+
+Operational backup policy is also intentionally separate from TOML. Use
+`lemon backup contract|create|list|verify|restore`; there are no implicit
+backup directories or credential-inclusion settings in `config.toml`. See
+[Back up and restore Lemon user state](user-guide/backups.md) for the versioned
+`~/.lemon` data contract.
 
 ## Example
 
@@ -178,6 +185,17 @@ chat_id = 12345678
 agent_id = "default"
 ```
 
+`LemonCore.ProfileStore` is the lifecycle owner for user-managed profiles.
+Commands such as `lemon profile create research` patch only the selected
+`[profiles.<id>]` table, preserving unrelated global-config keys and comments.
+Managed records may include `name`, `description`, `avatar`, `model`,
+`system_prompt`, `node`, `status`, `profile_version`, `created_at`, and
+`updated_at`. Home/workspace paths and the stable `agent:<id>:main` session key
+are derived from the validated ID rather than stored; do not add credentials or
+filesystem paths to the profile table. See
+[User-managed profiles](user-guide/profiles.md) for clone, credential-safe
+export, recoverable deletion, and named-node routing.
+
 ## Native Execution and Subagents
 
 Lemon uses its native executor for every top-level TUI and gateway run. Configure
@@ -187,6 +205,70 @@ key is supported.
 Delegated tasks run as native in-process subagents (child `CodingAgent.Session`
 executions) when the agent invokes its `task` tool. There are no vendor CLI task
 runners and no `[runtime.cli.*]` configuration.
+
+### Named Execution Nodes
+
+The `agent` tool can route a delegated run to an authenticated execution node
+with its optional `node` parameter. Omit `node` or use `"local"` for the
+controller host. A named value must be online in the controller's live node
+registry. This placement is a per-run tool parameter, not a TOML engine or
+provider setting:
+
+```json
+{
+  "action": "run",
+  "agent_id": "default",
+  "prompt": "Run the focused checks.",
+  "node": "worker-1"
+}
+```
+
+Join a destination from a source checkout with:
+
+```bash
+LEMON_NODE_OPERATOR_TOKEN=... ./bin/lemon node join \
+  --name worker-1 \
+  --controller wss://controller.example/ws \
+  --pair \
+  --cwd /srv/project
+```
+
+On first connection, `--pair` creates the durable controller identity and
+stores its issued seven-day session plus recovery credential in a mode-0600
+file under `~/.lemon/nodes/execution/`; the containing directory is mode 0700.
+Each record is keyed by a hash of the durable node ID and includes the exact
+controller URL, so reuse fails closed for a different controller. The token
+store requires that exact URL even for direct durable-ID lookup and returns no
+recovery material for a missing or mismatched controller. Later starts
+omit `--pair`. Re-run with `--pair` after session expiry to keep the same
+identity and controller-side name while rotating the session and revoking older
+tokens and live sockets. Concurrent challenge exchange can mint only one
+credential, and result settlement is accepted only from the connection and
+session generation that received the invocation. Controller renames do not
+change the local key. Compatible legacy records
+without recovery credentials use the explicit operator-authorized
+`--pair --repair --node-id ID` migration path.
+
+`LEMON_NODE_OPERATOR_TOKEN` supplies pairing authority and is used only during
+pairing. `LEMON_NODE_TOKEN` supplies an existing session token. Prefer these
+environment variables to `--operator-token` / `--token` so credentials do not
+enter shell history. These values are runtime CLI inputs, not `config.toml`
+keys.
+
+Non-loopback controllers require `wss://` by default. Plaintext `ws://` needs
+`--allow-insecure-controller` or
+`LEMON_NODE_ALLOW_INSECURE_CONTROLLER=true`, and that override is acceptable
+only for development or a verified authenticated and encrypted overlay such as
+Tailscale.
+
+Provider credentials and default cwd are destination-local. If the `agent`
+tool omits `cwd`, the destination uses the directory passed to `node join`; an
+explicit `cwd` is resolved and validated on that machine. Only JSON-safe run
+data crosses the controller WebSocket. Source executor options, resolved
+provider credentials, callbacks, and BEAM state do not. Explicit cancellation
+is delivered to the targeted worker; disconnects fail pending invocations.
+Remote execution still uses the native `CodingAgent.Executor`, never a vendor
+CLI runner.
 
 ### Removed Top-Level Engine Configuration
 
@@ -208,6 +290,25 @@ own parameters.
 Environment variables override file values. Common overrides:
 
 - `LEMON_DEFAULT_PROVIDER`, `LEMON_DEFAULT_MODEL`
+- `LEMON_CONTROL_PLANE_OPERATOR_TOKEN` — shared WebSocket operator credential;
+  required by default for every WebSocket operator connection. Named node
+  pairing supplies the same value from `LEMON_NODE_OPERATOR_TOKEN` on the
+  joining host. The source `./bin/lemon-tui` launcher generates an ephemeral
+  value when it owns a fresh local runtime; persistent or existing runtimes
+  require the operator to provide the same high-entropy value to both runtime
+  and client. Token origin does not control process lifetime: every runtime
+  started by `./bin/lemon-tui` is stopped with the TUI. Start persistent
+  runtimes separately with `./bin/lemon --daemon`, then attach with the same
+  token.
+- `LEMON_CONTROL_PLANE_ALLOW_UNAUTHENTICATED_LOOPBACK` — explicit legacy
+  compatibility opt-in (`true`/`false` or `1`/`0`) for tokenless operator
+  connections from direct loopback peers. Defaults to `false`; never enable it
+  for a reverse-proxied control plane.
+
+The browser monitoring client intentionally has no build-time or URL-based
+operator-token setting. Lemon does not yet implement the short-lived delegated
+browser-session exchange needed to authenticate that client safely. Never
+place the shared server token in `VITE_*` configuration.
 - `LEMON_PROVIDER_ROUTING_ENABLED`, `LEMON_PROVIDER_FALLBACK_PROVIDERS`, `LEMON_PROVIDER_ROUTING_REQUIRE_CREDENTIALS`
 - `LEMON_THEME`, `LEMON_DEBUG`
 - `<PROVIDER>_API_KEY`, `<PROVIDER>_BASE_URL` (e.g., `ANTHROPIC_API_KEY`, `OPENAI_BASE_URL`, `OPENCODE_API_KEY`, `ZAI_API_KEY`, `MINIMAX_API_KEY`)
@@ -221,6 +322,7 @@ Environment variables override file values. Common overrides:
 - `LEMON_DOCKER_TERMINAL_READ_ONLY_ROOTFS`, `LEMON_DOCKER_TERMINAL_TMPFS_SIZE`, `LEMON_DOCKER_TERMINAL_ALLOWED_IMAGES`
 - `LEMON_SSH_TERMINAL_TARGET`, `LEMON_SSH_TERMINAL_WORKDIR`, `LEMON_SSH_TERMINAL_PORT`, `LEMON_SSH_TERMINAL_CONNECT_TIMEOUT`, `LEMON_SSH_TERMINAL_STRICT_HOST_KEY_CHECKING`, `LEMON_SSH_TERMINAL_ALLOWED_TARGETS`
 - `LEMON_GATEWAY_HEALTH_PORT`, `LEMON_ROUTER_HEALTH_PORT`
+- `LEMON_NODE_OPERATOR_TOKEN`, `LEMON_NODE_TOKEN`, `LEMON_NODE_ALLOW_INSECURE_CONTROLLER`
 - `LEMON_LOG_FILE`, `LEMON_LOG_LEVEL`
 - `BRAVE_API_KEY`, `PERPLEXITY_API_KEY`, `OPENROUTER_API_KEY`, `FIRECRAWL_API_KEY`
 
@@ -281,6 +383,7 @@ Use only these top-level sections:
 - `defaults`
 - `runtime`
 - `features`
+- `secrets.sources.<source_id>`
 - `profiles.<agent_id>`
 - `providers.<name>`
 - `gateway`
@@ -293,6 +396,128 @@ Deprecated sections now fail validation and runtime loading:
 - `[agents.<id>]` -> move to `[profiles.<id>]`
 - `[agent.tools.*]` -> move to `[runtime.tools.*]`
 - `[tools.*]` -> move to `[runtime.tools.*]`
+
+## External secret sources
+
+External sources are read-only adapters integrated into
+`LemonCore.Secrets.resolve/2`; they are not another secret store. Resolution is
+ordered as follows:
+
+1. Lemon's encrypted store;
+2. enabled external sources ordered by `priority`, then source id;
+3. the same-name environment variable when `env_fallback` is enabled.
+
+A successful source that does not contain the requested name continues to the
+next source. Any enabled source configuration, spawn, timeout, output, parse,
+or bootstrap failure stops resolution before the ordinary environment
+fallback. This fail-closed behavior prevents an unhealthy configured manager
+from being silently bypassed. `env_fallback: false` disables both the external
+and environment fallbacks; internal bootstrap reads use only the encrypted
+store and ordinary environment path so sources cannot recurse.
+
+Every source requires the exact TOML boolean `enabled = true`. A quoted
+`"true"`, unknown setting, unknown source type, relative executable path with a
+slash, shell command string, or out-of-range limit fails validation. Programs
+are started directly from an argv array, never through a shell. Each child gets
+only a small operating environment (`HOME`, platform path/temp/locale fields,
+and `NO_COLOR`) plus explicitly passed variables. Stdout and stderr are
+captured together under one byte limit and are never returned in errors,
+status, logs, or proof output.
+
+Common source settings:
+
+| Setting | Default | Contract |
+| --- | --- | --- |
+| `type` | required | `onepassword`, `bitwarden`, or `command` |
+| `enabled` | `false` | Only the exact boolean `true` enables execution |
+| `priority` | `100` | Integer `0..1000`; lower runs first |
+| `executable` | provider default | Absolute path or bare executable name |
+| `timeout_ms` | `3000` | Integer `100..30000` |
+| `max_output_bytes` | `65536` | Integer `1..1048576`, stdout and stderr combined |
+| `cache_ttl_ms` | `0` | Integer `0..300000`; `0` disables caching |
+
+The optional cache is bounded to 32 process-local entries and disappears on
+restart. It never persists source values to config or the encrypted store.
+
+### 1Password
+
+Map each Lemon secret name to an `op://` reference. Lemon invokes `op read
+--no-newline [--account ACCOUNT] -- REFERENCE` separately for each mapping.
+If `auth_secret` is set, Lemon resolves that bootstrap credential only from its
+existing encrypted store or same-name environment fallback and gives it to the
+child as `auth_env`. Without `auth_secret`, an already authenticated local `op`
+session or the named ambient auth variable may be used.
+
+```toml
+[secrets.sources.onepassword]
+type = "onepassword"
+enabled = true
+priority = 10
+executable = "op"
+timeout_ms = 3000
+max_output_bytes = 65536
+cache_ttl_ms = 0
+account = "team"
+auth_secret = "op_service_account_token"
+auth_env = "OP_SERVICE_ACCOUNT_TOKEN"
+refs = { anthropic_api_key = "op://Lemon/Anthropic/api-key", openai_api_key = "op://Lemon/OpenAI/api-key" }
+```
+
+### Bitwarden Secrets Manager
+
+Bitwarden uses `bws secret list PROJECT_ID --output json` and accepts only a
+JSON list of unique non-empty `{"key": ..., "value": ...}` objects. Store the
+bootstrap access token in Lemon under `access_token_secret`, or provide the
+same-name environment variable. `access_token_env` controls the variable name
+passed to `bws`; an optional `server_url` must be credential-free HTTPS with no
+query or fragment.
+
+```toml
+[secrets.sources.bitwarden]
+type = "bitwarden"
+enabled = true
+priority = 20
+executable = "bws"
+project_id = "team-project-id"
+access_token_secret = "bws_access_token"
+access_token_env = "BWS_ACCESS_TOKEN"
+# server_url = "https://vault.example.com"
+```
+
+### Arbitrary command
+
+Command sources accept only an argv array. Output is UTF-8 `NAME=VALUE`, one
+entry per line; blank lines and lines beginning with `#` are ignored. Names
+must be unique and values non-empty. `pass_env` copies only the listed ambient
+variables. `secret_env` maps a child environment name to an existing Lemon
+encrypted-store/same-name-environment secret; it never resolves another
+external source.
+
+```toml
+[secrets.sources.local_helper]
+type = "command"
+enabled = true
+priority = 30
+argv = ["/usr/local/bin/lemon-secret-helper", "export", "--profile", "prod"]
+timeout_ms = 2000
+max_output_bytes = 32768
+cache_ttl_ms = 0
+pass_env = ["HELPER_PROFILE"]
+secret_env = { HELPER_TOKEN = "helper_bootstrap_token" }
+```
+
+Inspect readiness without invoking any source, then perform a redaction-safe
+live test:
+
+```bash
+lemon secrets sources status --json
+lemon secrets sources test --json
+lemon secrets sources test local_helper
+```
+
+These commands reveal source id/type, readiness, provenance, counts, output
+byte count, duration, and stable error kinds only. They never reveal secret
+values. `lemon secrets check` reports a resolved credential only as `present`.
 
 ## Dotenv Autoload
 
@@ -426,8 +651,9 @@ Provider onboarding flows:
 - Write the relevant `providers.<provider>` config keys
 - Support `--set-default`, `--model`, and `--config-path`
 
-Provider readiness is visible through the read-only control-plane
-`providers.status` method. It uses the same
+Provider readiness is visible through the source and packaged
+`lemon providers status` command and the read-only control-plane
+`providers.status` method. They use the same
 `LemonAgent.ModelRuntime.Credentials` credential resolver as model execution, so env keys, encrypted
 secret references, OAuth/default-secret paths, and provider-specific credential
 shapes are checked the same way runtime calls check them. The response reports
@@ -435,6 +661,48 @@ booleans such as `credentialReady`, `apiKeyConfigured`,
 `apiKeySecretConfigured`, `oauthSecretConfigured`, `baseUrlConfigured`, and
 `envConfigured`; it does not return raw API keys, secret names, base URLs, or
 env var names.
+
+Fallbacks and credential-pool references can be edited through the same
+packaged/source command boundary:
+
+```bash
+# Installed release (use ./bin/lemon from a source checkout)
+lemon providers fallback add zai
+lemon providers pool set burst --provider openai --provider zai \
+  --strategy round_robin --activate
+lemon providers pool credential add burst openai secret:openai_backup
+lemon providers status --json
+```
+
+Only explicit `secret:NAME` and `env:NAME` references are accepted for pool
+credentials; values remain owned by the encrypted secret store or process
+environment. The command preserves unrelated comments, validates the complete
+resulting TOML, and atomically replaces the selected global or project config.
+Mutations apply by default; use `--dry-run` to preview. Removing a fallback,
+deleting or updating an existing pool, and removing or clearing credential
+references require the exact confirmation value shown by the preview:
+
+```bash
+lemon providers fallback remove zai --dry-run --json
+lemon providers fallback remove zai --confirm zai
+```
+
+The admin-scoped `providers.configure` control-plane method exposes the same
+actions (`fallback.add`, `fallback.remove`, `fallback.clear`, `pool.upsert`,
+`pool.delete`, `pool.credential.add`, `pool.credential.remove`, and
+`pool.credential.clear`). RPC mutations are preview-only unless `apply: true`
+is explicit. Remote callers may select `global` or `project` scope but cannot
+provide an arbitrary config path. Results expose provider and pool names plus
+counts; they never include raw keys, secret names, credential references, base
+URLs, or environment-variable names.
+
+Preview results include an opaque `configRevision`. A caller that passes it
+back as `expectedRevision` on apply gets an atomic stale-write guard: the shared
+service compares the revision while holding its target-config lock and rejects
+the mutation if any config content changed after preview. `/manage/providers`
+uses this contract for all Web mutations, then adds exact confirmation for
+destructive actions and requires credential-reference values to be re-entered
+instead of retaining them in LiveView state.
 
 Memory-provider readiness is visible through read-only `memory.status` and
 support-bundle `memory_diagnostics.json`. These surfaces expose
@@ -469,7 +737,9 @@ credential_pool = "burst"
 distribution = { openai = 70, zai = 20, anthropic = 10 }
 ```
 
-`providers.status` includes a redacted `routing` block with the requested
+`providers.status` and `lemon providers status` include a redacted
+`routingConfig` block for effective fallback/pool configuration and a `routing`
+block with the requested
 provider/model, selected provider/model, fallback candidates, candidate
 readiness booleans, selected routing profile, selected credential pool,
 profile distribution weights, pool provider names, pool strategy, and
@@ -581,7 +851,7 @@ Lemon includes web tools under `runtime.tools.web`. For full setup and troublesh
 ```toml
 [runtime.tools.web.search]
 enabled = true
-provider = "brave"   # "brave" | "perplexity"
+provider = "brave"   # brave | exa | perplexity | duckduckgo | searxng | extension id
 max_results = 5
 timeout_seconds = 30
 cache_ttl_minutes = 15
@@ -595,6 +865,16 @@ provider = "perplexity"
 api_key = "<perplexity-api-key>"
 base_url = "https://api.perplexity.ai"
 model = "perplexity/sonar-pro"
+
+[runtime.tools.web.search.providers.searxng]
+# Required only when selecting the SearXNG provider.
+base_url = "https://search.example.com"
+# Optional bearer token or Lemon secret name.
+api_key_secret = "SEARXNG_API_KEY"
+
+[runtime.tools.web.search.providers.exa]
+# Optional if EXA_API_KEY is set.
+api_key = "<exa-api-key>"
 
 [runtime.tools.web.fetch]
 enabled = true
@@ -620,6 +900,34 @@ persistent = true
 path = "~/.lemon/cache/web_tools"
 max_entries = 100
 ```
+
+## Browser backends and existing Chrome
+
+Browser tools default to Lemon's managed local Chromium backend. These
+environment variables select an existing CDP browser or the opt-in MV3 relay:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `LEMON_BROWSER_DRIVER_PATH` | auto | Browser Node driver path |
+| `LEMON_BROWSER_CDP_ENDPOINT` | none | HTTP discovery or direct `ws`/`wss` CDP endpoint |
+| `LEMON_BROWSER_ATTACH_ONLY` | `false` | Never launch a replacement browser |
+| `LEMON_BROWSER_CDP_PORT` | `18800` | Managed local Chrome CDP port |
+| `LEMON_BROWSER_RELAY_PORT` | `9224` | Loopback MV3 relay port |
+| `LEMON_BROWSER_RELAY_TOKEN` | none | Required relay shared secret |
+| `LEMON_BROWSER_BACKEND` | `local` | `local`, `controller`, `hybrid`, `browserbase`, `browser_use`, `firecrawl`, or `camofox` |
+| `LEMON_BROWSER_HYBRID_LOCAL_BACKEND` | `local` | Local/private route used by `hybrid` |
+| `LEMON_BROWSER_HYBRID_PUBLIC_BACKEND` | none | Required public route used by `hybrid` |
+| `BROWSERBASE_API_KEY` / `BROWSERBASE_PROJECT_ID` | none | Browserbase hosted sessions |
+| `BROWSER_USE_API_KEY` | none | Browser Use Cloud hosted sessions |
+| `CAMOFOX_URL` / `CAMOFOX_API_KEY` | none | Camofox REST/Firefox server |
+| `LEMON_CUA_DRIVER_CMD` | PATH lookup | cua-driver executable for `computer_use` |
+
+For the existing-Chrome relay, set `LEMON_BROWSER_CDP_ENDPOINT` to
+`ws://127.0.0.1:<port>/cdp?token=<token>` and set attach-only mode. Treat that
+endpoint as a secret: Lemon redacts common credential query parameters and
+reports only endpoint hashes in status surfaces. Backend/controller identity is
+explicit and fail-closed; an unavailable controller never falls back to a
+different browser profile. See [`docs/tools/web.md`](tools/web.md).
 
 ## WASM Tools
 

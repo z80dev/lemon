@@ -69,10 +69,11 @@ references:
 | Field | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
 | `name` | string | No | Directory name | Skill identifier used in CLI and registry. |
-| `description` | string | **Yes** | `""` | Used for relevance matching. Keep under 200 chars. |
+| `description` | string | **Yes** | `""` | Used for relevance matching. Present values are limited to 1,024 UTF-8 bytes. |
 | `version` | string | No | — | Semantic version string. |
 | `author` | string | No | — | Author or org name. |
 | `tags` | list of strings | No | `[]` | Free-form tags for filtering. |
+| `keywords` | list of strings | No | `[]` | Curated relevance terms. |
 | `requires.bins` | list of strings | No | `[]` | Binaries checked with `which` at status-check time. |
 | `requires.config` | list of strings | No | `[]` | Environment variables required at runtime. Promoted to `required_environment_variables` automatically. |
 
@@ -80,13 +81,20 @@ references:
 
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
-| `platforms` | list of strings | `["any"]` | Platforms where this skill is applicable. Allowed values: `linux`, `darwin`, `win32`, `any`. Skills are hidden (not `not-ready`) on non-matching platforms. |
+| `platforms` | list of strings | `["any"]` | Platforms where this skill is applicable. Canonical values: `linux`, `darwin`, `win32`, `any`; imported `macos` and `windows` aliases normalize to `darwin` and `win32`. Skills are hidden (not `not-ready`) on non-matching platforms. |
 | `metadata.lemon.category` | string | — | Registry category path, e.g. `devops` or `languages/elixir`. |
 | `requires_tools` | list of strings | `[]` | Semantic tool names required by this skill. Checked against installed tools at activation time. |
 | `fallback_for_tools` | list of strings | `[]` | Tools this skill provides fallback guidance for when the tool is unavailable. |
 | `required_environment_variables` | list of strings | Promoted from `requires.config` | Environment variables that must be set for the skill to be `ready`. Preferred over `requires.config` in v2 skills. |
 | `verification` | map | — | Verification specification. See [Verification](#verification) below. |
 | `references` | list | `[]` | Supplementary files or URLs. See [References](#references) below. |
+
+All prompt- or status-facing list fields (`tags`, `keywords`, `platforms`,
+`requires.bins`, `requires.config`, `requires_tools`, `fallback_for_tools`, and
+`required_environment_variables`) accept at most 32 strings. Each item must be
+non-empty, single-line, valid UTF-8 without control or bidirectional formatting
+characters, and no more than 128 bytes. Wrong YAML/TOML scalar, list, or nested
+map types are rejected during discovery instead of being coerced.
 
 ### Verification
 
@@ -129,12 +137,20 @@ references:
 
 ## Validation rules
 
-1. `platforms` values must be one of `linux`, `darwin`, `win32`, `any`. Unknown values are rejected.
-2. `requires_tools`, `fallback_for_tools`, `required_environment_variables` must be lists when present.
-3. `verification` must be a map when present.
-4. `references` entries must be strings or maps with at least a `path` or `url` key.
-5. Legacy `requires.bins` and `requires.config` remain valid and are not deprecated.
-6. `required_environment_variables` and `requires.config` may coexist; both are checked.
+1. Present `name` and `description` values must be non-empty, single-line, valid UTF-8 strings without control or bidirectional formatting characters. Their limits are 128 and 1,024 bytes respectively. Omitting either field remains compatible with legacy directory-name/empty-description defaults.
+2. `tags` and `keywords` must each be lists of at most 32 safe strings, with each item limited to 128 UTF-8 bytes.
+3. `platforms` values must be one of `linux`, `darwin`, `win32`, `any`; `macos` and `windows` are accepted as compatibility aliases. Unknown values are rejected.
+4. `requires_tools`, `fallback_for_tools`, `required_environment_variables` must be lists when present.
+5. `verification` must be a map when present.
+6. `references` entries must be strings or maps with at least a `path` or `url` key.
+7. Legacy `requires.bins` and `requires.config` remain valid and are not deprecated.
+8. `required_environment_variables` and `requires.config` may coexist; both are checked.
+
+For Hermes compatibility, `prerequisites.commands` is normalized to
+`requires.bins` and `prerequisites.env_vars` to both `requires.config` and
+`required_environment_variables` when the corresponding Lemon field is absent.
+Hermes' structured environment declarations are reduced to their `name` values;
+entries explicitly marked `optional: true` do not block Lemon readiness.
 
 ---
 

@@ -30,6 +30,8 @@ defmodule LemonControlPlane.Protocol.SchemasTest do
       assert Schemas.get("cron.audit") != nil
       assert Schemas.get("chat.send") != nil
       assert Schemas.get("agent") != nil
+      assert Schemas.get("learn.review") != nil
+      assert Schemas.get("learn.confirm") != nil
     end
 
     test "returns schema for contract-backed events" do
@@ -291,6 +293,33 @@ defmodule LemonControlPlane.Protocol.SchemasTest do
       assert {:error, msg} = Schemas.validate("providers.status", %{"providers" => "openai"})
       assert msg =~ "providers"
       assert msg =~ "expected list"
+    end
+
+    test "validates providers.configure schema" do
+      assert :ok =
+               Schemas.validate("providers.configure", %{
+                 "action" => "pool.upsert",
+                 "pool" => "burst",
+                 "providers" => ["openai", "zai"],
+                 "strategy" => "round_robin",
+                 "apply" => true,
+                 "expectedRevision" => "opaque-revision",
+                 "activate" => true,
+                 "confirm" => "burst",
+                 "scope" => "project",
+                 "projectDir" => "/tmp/project"
+               })
+
+      assert {:error, message} = Schemas.validate("providers.configure", %{})
+      assert message =~ "action"
+
+      assert {:error, message} =
+               Schemas.validate("providers.configure", %{
+                 "action" => "fallback.add",
+                 "providers" => "openai"
+               })
+
+      assert message =~ "providers"
     end
 
     test "validates extensions.status schema" do

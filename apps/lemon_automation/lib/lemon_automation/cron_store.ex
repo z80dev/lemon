@@ -13,6 +13,11 @@ defmodule LemonAutomation.CronStore do
   - `:cron_monitor_state` - Monitor-mode output fingerprints keyed by job ID
   - `:cron_preflight_notice_state` - Preflight-failure fingerprints keyed by job ID
 
+  Retry intent is stored on the terminal source run (`retry_due_at_ms`,
+  `retry_next_attempt`, and root/source lineage). The retry run itself uses a
+  deterministic ID derived from the root run and attempt number, so rebuilding
+  timers after a manager restart cannot create a duplicate attempt.
+
   ## Examples
 
       # Store a job
@@ -43,6 +48,19 @@ defmodule LemonAutomation.CronStore do
   @spec put_job(CronJob.t()) :: :ok
   def put_job(%CronJob{} = job) do
     LemonCore.Store.put(@jobs_table, job.id, CronJob.to_map(job))
+  end
+
+  @doc """
+  Atomically store a cron job only when its stable ID is unused.
+
+  Blueprint activation uses this create-once boundary so a concurrent or
+  restarted activator cannot replace an unrelated job after its collision
+  preview. Normal operator updates continue to use `put_job/1` through
+  `CronManager.update/2`.
+  """
+  @spec claim_job(CronJob.t()) :: :ok | {:error, :exists} | {:error, term()}
+  def claim_job(%CronJob{} = job) do
+    LemonCore.Store.put_new(@jobs_table, job.id, CronJob.to_map(job))
   end
 
   @doc """
@@ -144,6 +162,46 @@ defmodule LemonAutomation.CronStore do
   end
 
   @doc """
+  Atomically claim one persisted retry attempt.
+
+  The source run must contain retry intent metadata written by CronManager.
+  The deterministic run ID is the uniqueness invariant for `{root, attempt}`.
+  """
+  @spec claim_retry_run(CronJob.t(), CronRun.t(), binary() | nil) ::
+          {:ok, CronRun.t()} | {:error, :exists | :invalid_retry_intent} | {:error, term()}
+  def claim_retry_run(%CronJob{} = job, %CronRun{} = source_run, router_run_id) do
+    with attempt when is_integer(attempt) and attempt > 0 <-
+           meta_value(source_run.meta, :retry_next_attempt),
+         root_id when is_binary(root_id) and root_id != "" <-
+           meta_value(source_run.meta, :retry_root_id) || source_run.id do
+      run_id = retry_run_id(root_id, attempt)
+
+      run =
+        job.id
+        |> CronRun.new(:retry)
+        |> Map.put(:id, run_id)
+        |> Map.put(:meta, %{
+          mode: CronJob.execution_mode(job),
+          agent_id: job.agent_id,
+          session_key: job.session_key,
+          job_name: job.name,
+          retry_attempt: attempt,
+          retry_of: source_run.id,
+          retry_root_id: root_id,
+          source_triggered_by: source_run.triggered_by
+        })
+        |> CronRun.start(router_run_id)
+
+      case claim_run(run) do
+        :ok -> {:ok, run}
+        {:error, _} = error -> error
+      end
+    else
+      _ -> {:error, :invalid_retry_intent}
+    end
+  end
+
+  @doc """
   Return the deterministic run ID for a scheduled job occurrence.
   """
   @spec scheduled_run_id(binary(), non_neg_integer()) :: binary()
@@ -154,6 +212,20 @@ defmodule LemonAutomation.CronStore do
       |> binary_part(0, 24)
 
     "cron_sched_#{digest}"
+  end
+
+  @doc """
+  Return the deterministic ID for one retry lineage attempt.
+  """
+  @spec retry_run_id(binary(), pos_integer()) :: binary()
+  def retry_run_id(root_run_id, attempt)
+      when is_binary(root_run_id) and is_integer(attempt) and attempt > 0 do
+    digest =
+      :crypto.hash(:sha256, "#{root_run_id}:retry:#{attempt}")
+      |> Base.url_encode64(padding: false)
+      |> binary_part(0, 24)
+
+    "cron_retry_#{digest}"
   end
 
   @doc """
@@ -210,6 +282,21 @@ defmodule LemonAutomation.CronStore do
   def active_runs(job_id) do
     list_runs(job_id, limit: 1000)
     |> Enum.filter(&CronRun.active?/1)
+  end
+
+  @doc """
+  List terminal source runs with durable retry intent that has not been marked
+  dispatched. The caller still atomically claims the deterministic retry run.
+  """
+  @spec pending_retries() :: [CronRun.t()]
+  def pending_retries do
+    list_all_runs(limit: 100_000)
+    |> Enum.filter(fn run ->
+      is_integer(meta_value(run.meta, :retry_due_at_ms)) and
+        is_integer(meta_value(run.meta, :retry_next_attempt)) and
+        is_nil(meta_value(run.meta, :retry_dispatched_run_id))
+    end)
+    |> Enum.sort_by(&meta_value(&1.meta, :retry_due_at_ms), :asc)
   end
 
   @doc """
@@ -391,6 +478,15 @@ defmodule LemonAutomation.CronStore do
       value -> value
     end
   end
+
+  defp meta_value(meta, key) when is_map(meta) do
+    case Map.fetch(meta, key) do
+      {:ok, value} -> value
+      :error -> Map.get(meta, Atom.to_string(key))
+    end
+  end
+
+  defp meta_value(_meta, _key), do: nil
 
   defp query_runs(opts, extra_filter \\ nil) do
     limit = Keyword.get(opts, :limit, 100)

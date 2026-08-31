@@ -1,5 +1,15 @@
 defmodule LemonAutomation.KanbanDispatcher do
-  @moduledoc false
+  @moduledoc """
+  Supervised dispatcher for durable Kanban task leases.
+
+  `stop_board/2` is a hard stop: owned worker processes are killed, their exact
+  lease IDs are reclaimed immediately, and their monitor associations are
+  removed before the call returns. Late replies are ignored, and guarded store
+  updates prevent an obsolete worker from terminalizing a newer lease.
+
+  Starting a board reconciles unexpired leases left by the same dispatcher
+  worker ID, which makes manager restart recovery independent of lease expiry.
+  """
 
   use GenServer
 
@@ -47,13 +57,16 @@ defmodule LemonAutomation.KanbanDispatcher do
         if Map.has_key?(state.boards, board_id) do
           {:reply, {:error, :already_running}, state}
         else
+          worker_id = Keyword.get(opts, :worker_id, "kanban-dispatcher")
+          {:ok, _reclaimed} = KanbanStore.reclaim_worker_leases(board_id, worker_id)
+
           dispatcher = %{
             board_id: board.id,
             status: "running",
             interval_ms: Keyword.get(opts, :interval_ms, 1_000),
             max_concurrency: Keyword.get(opts, :max_concurrency, 1),
             lease_ms: Keyword.get(opts, :lease_ms, 300_000),
-            worker_id: Keyword.get(opts, :worker_id, "kanban-dispatcher"),
+            worker_id: worker_id,
             worker_profile: Keyword.get(opts, :worker_profile),
             worker_mod: Keyword.get(opts, :worker_mod, state.worker_mod),
             worker_opts: Keyword.get(opts, :worker_opts, []),
@@ -82,8 +95,10 @@ defmodule LemonAutomation.KanbanDispatcher do
 
         state =
           dispatcher.running
-          |> Enum.reduce(state, fn {ref, _task_id}, acc ->
+          |> Enum.reduce(state, fn {ref, worker}, acc ->
+            Process.exit(worker.pid, :kill)
             Process.demonitor(ref, [:flush])
+            _ = KanbanStore.reclaim_task_lease(worker.task_id, worker.lease_id)
             update_in(acc.refs, &Map.delete(&1, ref))
           end)
           |> update_in([:boards], &Map.delete(&1, board_id))
@@ -147,12 +162,25 @@ defmodule LemonAutomation.KanbanDispatcher do
            worker_profile: dispatcher.worker_profile
          ) do
       {:ok, task} ->
-        task_ref =
-          start_task(state.task_supervisor, dispatcher.worker_mod, task, dispatcher.worker_opts)
+        lease_id = lease_id(task)
 
-        state
-        |> put_in([:refs, task_ref.ref], {board_id, task.id})
-        |> put_in([:boards, board_id, :running, task_ref.ref], task.id)
+        case start_task(
+               state.task_supervisor,
+               dispatcher.worker_mod,
+               task,
+               dispatcher.worker_opts
+             ) do
+          {:ok, task_ref} ->
+            worker = %{task_id: task.id, lease_id: lease_id, pid: task_ref.pid}
+
+            state
+            |> put_in([:refs, task_ref.ref], Map.put(worker, :board_id, board_id))
+            |> put_in([:boards, board_id, :running, task_ref.ref], worker)
+
+          {:error, _reason} ->
+            _ = KanbanStore.reclaim_task_lease(task.id, lease_id)
+            state
+        end
 
       {:error, :no_available_task} ->
         state
@@ -163,11 +191,16 @@ defmodule LemonAutomation.KanbanDispatcher do
   end
 
   defp start_task(task_supervisor, worker_mod, task, worker_opts) do
-    if Process.whereis(task_supervisor) do
-      Task.Supervisor.async_nolink(task_supervisor, fn -> worker_mod.run(task, worker_opts) end)
+    if supervisor_alive?(task_supervisor) do
+      {:ok,
+       Task.Supervisor.async_nolink(task_supervisor, fn -> worker_mod.run(task, worker_opts) end)}
     else
-      Task.async(fn -> worker_mod.run(task, worker_opts) end)
+      {:error, :task_supervisor_unavailable}
     end
+  rescue
+    error -> {:error, {:task_start_exception, error}}
+  catch
+    :exit, reason -> {:error, {:task_start_exit, reason}}
   end
 
   defp finish_worker(ref, result, state) do
@@ -175,24 +208,24 @@ defmodule LemonAutomation.KanbanDispatcher do
       {nil, state} ->
         state
 
-      {{board_id, task_id}, state} ->
+      {%{board_id: board_id, task_id: task_id, lease_id: lease_id}, state} ->
         state = update_in(state.boards[board_id].running, &Map.delete(&1 || %{}, ref))
 
         case result do
           :ok ->
-            KanbanStore.complete_task(task_id)
+            KanbanStore.complete_leased_task(task_id, lease_id)
 
           {:ok, attrs} when is_map(attrs) ->
-            KanbanStore.complete_task(task_id, Map.to_list(attrs))
+            KanbanStore.complete_leased_task(task_id, lease_id, Map.to_list(attrs))
 
           {:ok, _value} ->
-            KanbanStore.complete_task(task_id)
+            KanbanStore.complete_leased_task(task_id, lease_id)
 
           {:error, reason} ->
-            KanbanStore.fail_task(task_id, inspect(reason, limit: 120))
+            KanbanStore.fail_leased_task(task_id, lease_id, inspect(reason, limit: 120))
 
           other ->
-            KanbanStore.fail_task(task_id, inspect(other, limit: 120))
+            KanbanStore.fail_leased_task(task_id, lease_id, inspect(other, limit: 120))
         end
 
         state
@@ -234,4 +267,13 @@ defmodule LemonAutomation.KanbanDispatcher do
 
   defp app_env(key, default), do: Application.get_env(:lemon_automation, key, default)
   defp now_ms, do: System.system_time(:millisecond)
+
+  defp supervisor_alive?(pid) when is_pid(pid), do: Process.alive?(pid)
+  defp supervisor_alive?(name) when is_atom(name), do: is_pid(Process.whereis(name))
+  defp supervisor_alive?(_), do: false
+
+  defp lease_id(task) do
+    lease = task.meta["kanbanLease"] || task.meta[:kanbanLease] || %{}
+    lease["id"] || lease[:id]
+  end
 end

@@ -105,7 +105,16 @@ defmodule LemonSkills.Status do
   @spec check_entry(Entry.t(), keyword()) :: status_result()
   def check_entry(%Entry{} = entry, opts \\ []) do
     cwd = Keyword.get(opts, :cwd)
-    disabled = not entry.enabled or Config.skill_disabled?(entry.key, cwd)
+    disabled_keys = Keyword.get(opts, :disabled_keys)
+
+    disabled_by_config =
+      if match?(%MapSet{}, disabled_keys) do
+        MapSet.member?(disabled_keys, entry.key)
+      else
+        Config.skill_disabled?(entry.key, cwd)
+      end
+
+    disabled = not entry.enabled or disabled_by_config
 
     if disabled do
       %{

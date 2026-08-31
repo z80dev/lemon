@@ -107,17 +107,23 @@ describe("session commands with the switcher mounted", () => {
 		expect(spy.reset).toEqual(["tui-session"]);
 	});
 
-	test("/session delete hands the confirmation to the host", async () => {
-		harness.server.respondWith("sessions.delete", { ok: true });
+	test("/session delete shows a safe exact-key preview without deleting", async () => {
+		harness.server.respondWith("sessions.list", {
+			sessions: [{ sessionKey: "tui-other", runCount: 2, pinned: false, archived: true }],
+		});
 		await runWired("/session delete tui-other");
-		// The host asks in an overlay; the command must not delete behind it.
-		expect(spy.closed).toEqual(["tui-other"]);
+		expect(spy.closed).toEqual([]);
 		expect(harness.server.requestsFor("sessions.delete")).toHaveLength(0);
+		expect(harness.host.text).toContain("--confirm tui-other");
 	});
 
-	test("/session delete with no key means the focused one", async () => {
+	test("/session delete with no key previews the focused one", async () => {
+		harness.server.respondWith("sessions.list", {
+			sessions: [{ sessionKey: "tui-session", runCount: 1, pinned: false, archived: false }],
+		});
 		await runWired("/session delete");
-		expect(spy.closed).toEqual(["tui-session"]);
+		expect(spy.closed).toEqual([]);
+		expect(harness.host.text).toContain("delete preview · tui-session");
 	});
 
 	test("/resume for another session switches to it rather than mixing transcripts", async () => {

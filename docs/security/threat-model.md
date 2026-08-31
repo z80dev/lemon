@@ -70,8 +70,8 @@ host" with `{:error, :unavailable}`; any other error is a hard failure surfaced
 once the chain is exhausted. Key material must be base64-encoded 32 bytes; a
 raw passphrase-like string is rejected (`:weak_master_key`) because there is no
 password stretching. `mix lemon.secrets.init` is the bootstrap path. The full
-resolution matrix and error semantics are in
-[`secrets-keychain-audit-matrix.md`](secrets-keychain-audit-matrix.md).
+resolution and error semantics are in
+[`secrets-and-keychain.md`](secrets-and-keychain.md).
 
 **What is protected:** secret values at rest, against an attacker who reads the
 store but does not hold the master key. **What is not:**

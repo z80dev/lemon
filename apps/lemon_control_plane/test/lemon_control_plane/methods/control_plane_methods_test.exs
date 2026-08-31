@@ -462,6 +462,24 @@ defmodule LemonControlPlane.Methods.ControlPlaneMethodsTest do
       assert result["summary"]["cleanup"]["includesSecretValues"] == false
       refute inspect(result) =~ "private chat prompt"
     end
+
+    test "preserves redirect as a distinct queue mode" do
+      {:ok, _} = Application.ensure_all_started(:lemon_router)
+
+      session_key = "agent:chat-redirect:main:#{System.unique_integer([:positive, :monotonic])}"
+
+      assert {:ok, result} =
+               ChatSend.handle(
+                 %{
+                   "sessionKey" => session_key,
+                   "prompt" => "replace the pending direction",
+                   "queueMode" => "redirect"
+                 },
+                 %{}
+               )
+
+      assert result["summary"]["queueMode"] == "redirect"
+    end
   end
 
   describe "Wake" do

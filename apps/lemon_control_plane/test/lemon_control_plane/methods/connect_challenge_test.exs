@@ -6,8 +6,12 @@ defmodule LemonControlPlane.Methods.ConnectChallengeTest do
     DevicePairRequest,
     DevicePairApprove,
     NodePairRequest,
-    NodePairApprove
+    NodePairApprove,
+    NodeRename
   }
+
+  alias LemonControlPlane.Auth.TokenStore
+  alias LemonControlPlane.NodeStore
 
   @admin_ctx %{conn_id: "test-conn", auth: %{role: :operator}}
   @pairing_ctx %{conn_id: "test-conn", auth: %{role: :operator, scopes: [:pairing]}}
@@ -53,6 +57,15 @@ defmodule LemonControlPlane.Methods.ConnectChallengeTest do
         |> Enum.each(fn {k, _} ->
           LemonCore.Store.delete(:nodes_registry, k)
         end)
+
+        LemonCore.Store.list(:nodes_by_name)
+        |> Enum.each(fn {k, _} -> LemonCore.Store.delete(:nodes_by_name, k) end)
+
+        LemonCore.Store.list(:session_tokens)
+        |> Enum.each(fn {k, _} -> LemonCore.Store.delete(:session_tokens, k) end)
+
+        LemonCore.Store.list(:session_token_heads)
+        |> Enum.each(fn {k, _} -> LemonCore.Store.delete(:session_token_heads, k) end)
       rescue
         _ -> :ok
       end
@@ -262,6 +275,33 @@ defmodule LemonControlPlane.Methods.ConnectChallengeTest do
       assert {:unauthorized, "Invalid challenge"} = error
     end
 
+    test "concurrent exchanges atomically consume a node challenge once" do
+      {:ok, request} =
+        NodePairRequest.handle(
+          %{"nodeType" => "coding_agent", "nodeName" => "Concurrent Challenge Node"},
+          @pairing_ctx
+        )
+
+      {:ok, approved} =
+        NodePairApprove.handle(%{"pairingId" => request["pairingId"]}, @pairing_ctx)
+
+      results =
+        1..12
+        |> Enum.map(fn index ->
+          Task.async(fn ->
+            ConnectChallenge.handle(
+              %{"challenge" => approved["challengeToken"]},
+              %{conn_id: "concurrent-#{index}"}
+            )
+          end)
+        end)
+        |> Enum.map(&Task.await(&1, 2_000))
+
+      assert Enum.count(results, &match?({:ok, %{"verified" => true}}, &1)) == 1
+      assert Enum.count(results, &match?({:error, {:unauthorized, "Invalid challenge"}}, &1)) == 11
+      assert NodeStore.get_challenge(approved["challengeToken"]) == nil
+    end
+
     test "expired node challenge returns error" do
       expired_challenge = "expired-node-challenge-456"
 
@@ -278,6 +318,107 @@ defmodule LemonControlPlane.Methods.ConnectChallengeTest do
 
       # Challenge should be cleaned up
       assert LemonCore.Store.get(:node_challenges, expired_challenge) == nil
+    end
+
+    test "expired seven-day session rotates on the same durable node and revokes older sessions" do
+      {:ok, request} =
+        NodePairRequest.handle(
+          %{"nodeType" => "coding_agent", "nodeName" => "Rotating Worker"},
+          @pairing_ctx
+        )
+
+      {:ok, approved} =
+        NodePairApprove.handle(%{"pairingId" => request["pairingId"]}, @pairing_ctx)
+
+      node_id = approved["nodeId"]
+      recovery_token = approved["token"]
+
+      {:ok, first} =
+        ConnectChallenge.handle(%{"challenge" => approved["challengeToken"]}, @challenge_ctx)
+
+      first_info = TokenStore.get_info(first["token"])
+      assert first_info.expires_at_ms - first_info.issued_at_ms == 7 * 24 * 60 * 60 * 1_000
+
+      LemonCore.Store.put(
+        :session_tokens,
+        first["token"],
+        Map.put(first_info, :expires_at_ms, System.system_time(:millisecond) - 1)
+      )
+
+      assert {:error, :expired_token} = TokenStore.validate(first["token"])
+
+      {:ok, _old_active} =
+        TokenStore.store(
+          "older-active-session",
+          %{"type" => "node", "nodeId" => node_id, "nodeName" => "Rotating Worker"},
+          ttl_ms: 60_000
+        )
+
+      {:ok, recovery} =
+        NodePairRequest.handle(
+          %{
+            "nodeId" => node_id,
+            "nodeName" => "Rotating Worker",
+            "nodeType" => "coding_agent",
+            "recoveryToken" => recovery_token
+          },
+          @pairing_ctx
+        )
+
+      {:ok, rotated} =
+        NodePairApprove.handle(%{"pairingId" => recovery["pairingId"]}, @pairing_ctx)
+
+      assert rotated["nodeId"] == node_id
+      assert rotated["summary"]["recovered"] == true
+      refute Map.has_key?(rotated, "token")
+
+      {:ok, second} =
+        ConnectChallenge.handle(%{"challenge" => rotated["challengeToken"]}, @challenge_ctx)
+
+      assert {:ok, %{"nodeId" => ^node_id}} = TokenStore.validate(second["token"])
+      assert {:error, :invalid_token} = TokenStore.validate("older-active-session")
+      assert length(NodeStore.list_nodes()) == 1
+    end
+
+    test "controller rename preserves ID-based recovery and issues the renamed identity" do
+      {:ok, request} =
+        NodePairRequest.handle(
+          %{"nodeType" => "coding_agent", "nodeName" => "Before Rename"},
+          @pairing_ctx
+        )
+
+      {:ok, approved} =
+        NodePairApprove.handle(%{"pairingId" => request["pairingId"]}, @pairing_ctx)
+
+      node_id = approved["nodeId"]
+
+      assert {:ok, %{"name" => "After Rename"}} =
+               NodeRename.handle(%{"nodeId" => node_id, "name" => "After Rename"}, @admin_ctx)
+
+      {:ok, recovery} =
+        NodePairRequest.handle(
+          %{
+            "nodeId" => node_id,
+            "nodeName" => "Before Rename",
+            "nodeType" => "coding_agent",
+            "recoveryToken" => approved["token"]
+          },
+          @pairing_ctx
+        )
+
+      pairing = NodeStore.get_pairing(recovery["pairingId"])
+      assert pairing.node_id == node_id
+      assert pairing.node_name == "After Rename"
+
+      {:ok, rotated} =
+        NodePairApprove.handle(%{"pairingId" => recovery["pairingId"]}, @pairing_ctx)
+
+      {:ok, verified} =
+        ConnectChallenge.handle(%{"challenge" => rotated["challengeToken"]}, @challenge_ctx)
+
+      assert verified["identity"]["nodeId"] == node_id
+      assert verified["identity"]["nodeName"] == "After Rename"
+      assert length(NodeStore.list_nodes()) == 1
     end
   end
 
@@ -303,7 +444,6 @@ defmodule LemonControlPlane.Methods.ConnectChallengeTest do
   end
 
   describe "session token storage and validation" do
-    alias LemonControlPlane.Auth.TokenStore
     alias LemonControlPlane.Auth.Authorize
 
     setup do

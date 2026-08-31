@@ -32,13 +32,15 @@ CronManager (tick every 60s)
             |
             +-- RunSubmitter.submit/2
                     |
-                    +-- pre-subscribes to Bus.run_topic(run_id)
                     +-- forks session key into sub-session for isolation
                     +-- reads/injects CronMemory context into prompt
-                    +-- calls LemonRouter.submit(params)
-                    +-- RunCompletionWaiter.wait_already_subscribed/3
+                    +-- RunCompletionWaiter.submit_and_wait/2
                             |
-                            +-- sends {:run_complete, run_id, result} to CronManager
+                            +-- assigns fixed run id and pre-subscribes
+                            +-- calls LemonRouter.submit(params)
+                            +-- waits for terminal event and unsubscribes
+                            |
+                            +-- returns through a monitored Task ref owned by CronManager
                                     |
                                     +-- updates CronStore
                                     +-- emits :cron_run_completed
@@ -51,8 +53,10 @@ pending/running runs for the same job, then claims a deterministic scheduled-run
 slot through `LemonCore.Store.put_new/3`. It skips duplicate scheduled starts
 while an active run exists, and competing dispatchers claiming the same scheduled
 slot preserve the first persisted run instead of overwriting it. Active runs
-older than the job's `timeout_ms` are recovered as `:timeout` so a crashed
-runtime cannot leave the job locked forever. On `CronManager` restart, persisted
+older than the job's `timeout_ms` are recovered through the normal terminalizer
+as `:timeout`, including monitor suppression, forwarding, audit, and retry
+policy, so a crashed runtime cannot leave the job locked forever. On
+`CronManager` restart, persisted
 jobs are reloaded and the same active-run recovery path runs during
 initialization, so a manager crash cannot immediately double-submit a scheduled
 job that already has a pending/running persisted run. The opt-in
@@ -64,8 +68,13 @@ Discord plugins, completes channel-peer cron runs through `CronManager`, and
 proves forwarded run history plus outbox delivery without exposing raw channel,
 peer, session, or cron IDs in the proof artifact.
 Scheduled failures and timeouts can retry when `max_retries` is greater than
-zero. Retries are separate `CronRun` records with `triggered_by: :retry` and
-redacted lineage metadata; manual and wake runs do not retry by default.
+zero. The terminal source run persists retry due time, attempt, and root/source
+lineage. Restart rebuilds the wake timer from that state, while a deterministic
+retry ID and atomic claim enforce one run per `{root, attempt}`. Retries are
+separate `CronRun` records with `triggered_by: :retry`; manual and wake runs do
+not retry by default. Cron workers are monitored supervised tasks, so
+supervisor start failures and worker `:DOWN` messages terminalize immediately.
+An unsupervised fallback is available only in explicit standalone mode.
 Operators can abort an active cron run by cron run id. The abort path calls the
 underlying LemonRouter run cancellation when the router run is still active,
 persists the cron run as `:aborted`, emits the normal completion event, and
@@ -92,6 +101,13 @@ stops at `max_ticks`, failure, timeout, or a terminal judge verdict. Passing
 manager scheduler scans active goals and re-starts only those persisted loops
 when no loop for that session is already running. Loop status and auto state are
 stored in `LemonAgent.Workspace.GoalStore` and emitted as redacted goal events.
+The manager synchronously claims the fixed run ID before each judge or
+continuation enters router submission. A hard stop (the default) disables auto
+restart, aborts that owned run once, kills the loop task, and prevents another
+tick. Router abort tombstones are serialized with submission acceptance, so a
+hard stop cannot miss a run accepted before the submit callback returns. A
+graceful stop disables auto restart and lets the bounded loop finish. Manager
+call deadlines are computed above configured judge/continuation wait deadlines.
 
 `GoalJudge` supports explicit verdicts for tests/manual control, a pluggable
 `judge_runner` route with `judge_model` metadata, and deterministic fallback
@@ -104,6 +120,15 @@ the real router, a router `RunProcess`, and `RunCompletionWaiter` with a
 deterministic runtime. Set `LEMON_GOAL_JUDGE_MODEL` to pin the judge run model.
 Judge failures pause the goal by default, with an explicit `:continue_once`
 policy for fail-open one-shot continuation.
+
+Every automation path that both submits and waits uses
+`RunCompletionWaiter.submit_and_wait/2`. Cron, goal judge, autonomous goal
+continuation, timer heartbeat, and Kanban worker runs subscribe to their fixed
+run id before router submission and always unsubscribe after a terminal result.
+A goal-loop ownership claim runs synchronously after subscription and before
+submission; rejection prevents the router call.
+A router run-id mismatch is an explicit error rather than a late subscription
+to a replacement id, because a synchronous completion may already have fired.
 
 **KanbanDispatcher** is the first supervised fleet-work layer for durable boards.
 It scans `LemonAgent.Workspace.KanbanStore` boards, reclaims expired leases, leases
@@ -119,8 +144,22 @@ is a git repository. The worktree layer creates
 `<repo>/.worktrees/kanban-<task_id>` on a
 `lemon-kanban/<task_id>` branch before submitting the router run, so broad
 multi-agent execution does not share one mutable checkout.
+Stopping a board is a hard cancellation: worker pids are killed and their exact
+lease IDs are reclaimed before return. Completion/failure writes require the
+same lease ID, so late worker results cannot mutate a newer lease. Starting a
+board reconciles unexpired leases left by the same dispatcher worker ID after a
+manager restart.
 
-**HeartbeatManager** subscribes to the `"cron"` bus and auto-processes every `:cron_run_completed` event, checking for the exact `"HEARTBEAT_OK"` response to decide suppression.
+**HeartbeatManager** subscribes to the `"cron"` bus and auto-processes every
+`:cron_run_completed` event, checking for the exact `"HEARTBEAT_OK"` response to
+decide suppression. Cron is selected only for intervals that stay exact at UTC
+day boundaries (minute divisors of 60, hour divisors of 24, and daily); every
+other positive interval, including 90 minutes and 5 hours, uses an exact Erlang
+timer. Reconfiguration disables the previous mechanism before enabling the new
+one. Timer runs persist terminal status, router run id, response, and suppression
+state in `HeartbeatStore` and allow only one in-flight run per agent; overlapping
+ticks increment skip stats, log the decision, and emit
+`[:lemon, :heartbeat, :skipped]` telemetry.
 
 **SkillCuratorManager** runs Lemon's learned-skill curator after the runtime has
 been idle long enough and the persisted curator interval gate is due. It asks
@@ -141,12 +180,39 @@ Each cron run executes in a forked sub-session (e.g., `agent:abc:main:sub:cron_1
 
 The `CronMemory` module gives each cron job a markdown file that accumulates run results across executions. On each run, the prompt is augmented with the memory file's contents so the agent has context from prior runs. The memory file auto-compacts when it exceeds 24,000 characters, retaining the most recent 14,000 characters and summarizing older content.
 
+### Portable Skill and Automation Blueprints
+
+`LemonAutomation.Blueprint` activates a versioned, unpacked bundle containing
+one or more audited skills and exactly one agent-backed cron definition. The
+control-plane catalog is `~/.lemon/bundles/<bundle-id>/`; its RPC methods accept
+only the safe `bundleId`, never a caller-provided filesystem path.
+
+Activation is always preview-first. The preview's `confirmationDigest` binds
+the normalized manifest, skill content hashes, target profile, exact cron
+projection, and current destination/job state. Activation replans under a lock,
+requires that exact digest, stages and re-audits copied skill bytes, enables the
+skills only inside the derived profile workspace, then claims the stable cron
+ID through `CronManager.add_new/1`. A replay with identical content is
+unchanged; a changed destination, stale digest, or ID collision fails without
+overwriting the existing job.
+
+Version 1 is intentionally narrow: no archives, symlinks, commands, shell
+scripts, environment injection, arbitrary working directories, memory-file
+overrides, secret-like manifest values, non-UTC schedules, or overwrite mode.
+The public list/inspect/validate/preview/activate results omit paths, skill
+bodies, prompt text, and secret values. See
+[`docs/user-guide/skills.md`](../../docs/user-guide/skills.md#portable-skill-and-automation-bundles)
+and the harmless disabled example under
+`examples/skill-automation-bundles/daily-note/`.
+
 ## Module Inventory
 
 | Module | File | Purpose |
 |--------|------|---------|
 | `LemonAutomation` | `lib/lemon_automation.ex` | Top-level facade with `defdelegate` functions |
 | `LemonAutomation.Application` | `lib/lemon_automation/application.ex` | OTP application and supervisor setup |
+| `LemonAutomation.Blueprint` | `lib/lemon_automation/blueprint.ex` | Validates, previews, digest-confirms, and idempotently activates portable profile skill + cron bundles |
+| `LemonAutomation.Blueprint.Catalog` | `lib/lemon_automation/blueprint/catalog.ex` | Resolves bounded local bundle IDs and provides the shared Web/control-plane list, inspect, validate, preview, and activate boundary |
 | `LemonAutomation.CronManager` | `lib/lemon_automation/cron_manager.ex` | Core scheduling GenServer; owns in-memory job state, persists to CronStore, handles ticks, execution, and completion |
 | `LemonAutomation.CronJob` | `lib/lemon_automation/cron_job.ex` | Job struct with CRUD operations, `due?/1` predicate, serialization |
 | `LemonAutomation.CronRun` | `lib/lemon_automation/cron_run.ex` | Run struct with state machine transitions (pending -> running -> completed/failed/timeout/aborted) |
@@ -168,7 +234,7 @@ The `CronMemory` module gives each cron job a markdown file that accumulates run
 | `LemonAutomation.KanbanWorktree` | `lib/lemon_automation/kanban_worktree.ex` | Creates per-task git worktrees under `.worktrees/` for isolated kanban worker execution |
 | `LemonAutomation.Wake` | `lib/lemon_automation/wake.ex` | Manual immediate job triggering with batch and pattern-matching support |
 | `LemonAutomation.RunSubmitter` | `lib/lemon_automation/run_submitter.ex` | Builds run params, pre-subscribes to bus, submits to LemonRouter, appends to CronMemory |
-| `LemonAutomation.RunCompletionWaiter` | `lib/lemon_automation/run_completion_waiter.ex` | Waits on Bus for `:run_completed` events; handles multiple payload formats |
+| `LemonAutomation.RunCompletionWaiter` | `lib/lemon_automation/run_completion_waiter.ex` | Owns fixed-id pre-subscribe/submit/wait cleanup and parses terminal events |
 | `LemonAutomation.Events` | `lib/lemon_automation/events.ex` | Event emission helpers for all automation events |
 
 ## Configuration
@@ -328,9 +394,12 @@ results = LemonAutomation.Wake.trigger_matching("heartbeat")
 results = LemonAutomation.Wake.trigger_for_agent("agent_abc")
 ```
 
-### Heartbeat Jobs
+### Heartbeats
 
-Heartbeats are cron jobs for agent health checks. A job is treated as a heartbeat if its name contains `"heartbeat"` (case-insensitive) or its `meta` has `heartbeat: true` (atom key).
+Heartbeats are scheduled agent health checks. Intervals that remain exact at
+UTC day boundaries use cron jobs; every other positive interval uses an Erlang
+timer. A cron job is treated as a heartbeat if its name contains `"heartbeat"`
+(case-insensitive) or its `meta` has `heartbeat: true` (atom key).
 
 ```elixir
 # Create a heartbeat job
@@ -342,17 +411,17 @@ Heartbeats are cron jobs for agent health checks. A job is treated as a heartbea
   prompt: "HEARTBEAT"
 })
 
-# Configure heartbeat via HeartbeatManager (creates/updates cron job automatically)
+# Configure a cron-exact heartbeat via HeartbeatManager
 LemonAutomation.HeartbeatManager.update_config("agent_abc", %{
   enabled: true,
   interval_ms: 300_000,
   prompt: "HEARTBEAT"
 })
 
-# Sub-minute heartbeats use Erlang timers instead of cron
+# Intervals cron cannot represent exactly use Erlang timers
 LemonAutomation.HeartbeatManager.update_config("agent_abc", %{
   enabled: true,
-  interval_ms: 30_000,
+  interval_ms: 90 * 60_000,
   prompt: "HEARTBEAT"
 })
 
@@ -362,7 +431,12 @@ LemonAutomation.HeartbeatManager.get_last("agent_abc")
 LemonAutomation.HeartbeatManager.stats()
 ```
 
-**Suppression rules**: Only responses that trim to exactly `"HEARTBEAT_OK"` are suppressed. Suppressed responses are not broadcast to channels but are logged in run history and emit `:heartbeat_suppressed` events. Any other response emits `:heartbeat_alert` with `severity: :warning`.
+**Suppression rules**: Only responses that trim to exactly `"HEARTBEAT_OK"` are
+suppressed. Cron heartbeat runs retain suppression in cron history; timer runs
+retain terminal and suppression state in `HeartbeatStore`. Any other response
+emits `:heartbeat_alert` with `severity: :warning`. Overlapping timer ticks are
+skipped rather than submitted concurrently and increment
+`HeartbeatManager.stats().skipped_overlap`.
 
 ### Events
 
@@ -456,6 +530,9 @@ mix test apps/lemon_automation
 # Specific test file
 mix test apps/lemon_automation/test/lemon_automation/cron_schedule_test.exs
 
+# Portable bundle validation, confirmation, rollback, and replay
+mix test apps/lemon_automation/test/lemon_automation/blueprint_test.exs --seed 1
+
 # Focused cron diagnostics/support proof
 MIX_ENV=test mix test \
   apps/lemon_core/test/lemon_core/doctor/cron_diagnostics_test.exs \
@@ -469,6 +546,7 @@ MIX_ENV=test mix test \
   apps/lemon_automation/test/lemon_automation/cron_store_test.exs \
   apps/lemon_automation/test/lemon_automation/cron_run_test.exs \
   apps/lemon_automation/test/lemon_automation/cron_manager_retry_test.exs \
+  apps/lemon_automation/test/lemon_automation/cron_manager_worker_lifecycle_test.exs \
   apps/lemon_automation/test/lemon_automation/cron_manager_scheduler_lock_test.exs \
   apps/lemon_automation/test/lemon_automation/cron_manager_update_test.exs \
   apps/lemon_automation/test/lemon_automation/cron_manager_forwarding_test.exs \
@@ -485,6 +563,9 @@ MIX_ENV=test mix run scripts/live_cron_channel_origin_smoke.exs
 
 # Full-runtime cron restart smoke (boots runtime_full twice; minute-granularity)
 MIX_ENV=dev mix run --no-start scripts/live_cron_runtime_restart_smoke.exs
+
+# Booted control-plane bundle activation and duplicate-safe replay
+MIX_ENV=dev mix run --no-start scripts/live_skill_automation_blueprint_smoke.exs
 
 # Provider-backed goal-judge proof
 ZAI_API_KEY="$(MIX_ENV=dev mix run --no-start -e 'Logger.configure(level: :emergency); Logger.remove_backend(:console); {:ok, _} = Application.ensure_all_started(:lemon_core); IO.write(LemonCore.Secrets.fetch_value("llm_zai_api_key") || "")')" \
@@ -520,22 +601,24 @@ mix test --cover apps/lemon_automation
 | Test File | Coverage |
 |-----------|----------|
 | `cron_job_test.exs` | CronJob struct creation, update, due?, serialization |
+| `blueprint_test.exs` | Portable manifest policy, staged revalidation, profile-local enablement, exact confirmation, rollback, stable cron provenance, and idempotent replay |
 | `cron_run_test.exs` | CronRun state transitions, duration computation, serialization |
 | `cron_schedule_test.exs` | Cron parsing, next_run computation, matches?, common patterns |
 | `cron_store_test.exs` | Persistence CRUD, filtering, ordering, cleanup_old_runs |
-| `cron_manager_retry_test.exs` | Scheduled failure retry/backoff and manual no-retry behavior |
+| `cron_manager_retry_test.exs` | Scheduled retry/backoff, restart reconstruction, deterministic attempt uniqueness, stale recovery, and manual no-retry behavior |
+| `cron_manager_worker_lifecycle_test.exs` | Monitored submitter crash and task-supervisor start failure terminalization |
 | `cron_manager_scheduler_lock_test.exs` | Scheduled ticks and manager restarts skip duplicate launches when a persisted active run exists and recover stale active runs as timeouts |
 | `cron_manager_update_test.exs` | Immutable field rejection, mutable field updates |
 | `cron_manager_forwarding_test.exs` | Summary forwarding to main/channel_peer sessions and channel outbox delivery |
 | `events_test.exs` | Event emission for all event types |
 | `heartbeat_manager_test.exs` | Suppression logic, heartbeat? detection |
 | `heartbeat_scheduling_test.exs` | Cron-based heartbeat scheduling and interval conversion |
-| `heartbeat_timer_test.exs` | Timer-based sub-minute heartbeats |
+| `heartbeat_timer_test.exs` | Exact timer-based heartbeats for intervals cron cannot represent, including terminal persistence and overlap suppression |
 | `run_completion_waiter_test.exs` | Bus-based completion waiting, output truncation |
 | `run_submitter_test.exs` | Router submission, session key forking, error handling, memory file writes |
-| `goal_loop_test.exs` | Goal loop verdicts, bounded loops, auto scheduling, router judge proof |
+| `goal_loop_test.exs` | Goal loop verdicts, bounded loops, auto scheduling, router judge proof, authoritative run tracking, and hard-stop abort/no-next-tick semantics |
 | `goal_judge_router_live_test.exs` | Opt-in provider-backed router judge proof; passed locally on 2026-05-15 with Z.ai `glm-5-turbo` |
-| `kanban_dispatcher_test.exs` | Durable kanban task leasing, bounded concurrency, real-worker dispatch proof, completion, failure, crash marking, and lease reclaim |
+| `kanban_dispatcher_test.exs` | Durable kanban task leasing, bounded concurrency, real-worker dispatch proof, completion, failure, crash marking, hard-stop reclaim, stale-result rejection, and restart reconciliation |
 | `kanban_dispatcher_live_test.exs` | Opt-in provider-backed dispatcher proof; passed locally on 2026-05-15 with Z.ai `glm-5-turbo` |
 | `kanban_run_worker_test.exs` | Router request construction, run wait behavior, and failure return for leased kanban tasks |
 | `wake_test.exs` | Wake triggering, batch operations, pattern matching, agent filtering |

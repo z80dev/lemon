@@ -1,0 +1,15 @@
+{
+  "manifest_version": 3,
+  "name": "Lemon Browser Relay",
+  "version": "1.0.0",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAp/e6k21xbKUdORMMvnwsV+hi+dAxWMOFu2oI11oK/3JZS/6XIM5n75f917sn5UgeevfsUuGPZ6dhl9lsCxHG5PINtm0bP4OloGG+h/S6ZaNBVEKatyr20wEoJgFhLPMypcJJ+ct6/R2VF6kGH2OoaQwpgA3ZhhlyGvN2G2S2JATR3uhfTFwNWCWIiIMYUzlp3ZxgHpGnQsPIjqQQEe6BCTa2QS7OZulYXh0b/NwR1TTshxVB1rnQx6ytNfFyckpAdOXUbGN2TFGbHy7jMWsQ5U5ZDSTYKJJz/i8v3rWvVqbt4F6ujuBNQdsBYypYRKq46YJ3C1E0OMIKWjgnd1KT4wIDAQAB",
+  "description": "Lets Lemon securely control opted-in existing Chrome tabs through a local CDP relay.",
+  "permissions": ["debugger", "tabs", "storage", "alarms"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "options_page": "options.html",
+  "action": {
+    "default_title": "Lemon Browser Relay settings"
+  }
+}

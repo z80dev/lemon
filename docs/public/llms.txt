@@ -1,0 +1,59 @@
+# Lemon
+
+> Lemon is a local-first, BEAM-native AI agent runtime with durable sessions, memory, skills, supervised tools, automation, channels, and deterministic simulation.
+
+- [Complete machine-readable documentation](https://z80dev.github.io/lemon/llms-full.txt)
+- [Source repository](https://github.com/z80dev/lemon)
+
+## Start here
+
+- [Index](https://z80dev.github.io/lemon/): Product overview and paths into the documentation.
+- [Lemon quickstart](https://z80dev.github.io/lemon/getting-started/quickstart): Install, verify a provider-backed chat, resume the session, choose a next feature, and recover from failures.
+- [Install Lemon](https://z80dev.github.io/lemon/install): Release installer, source install, first-run setup, and supported platforms.
+- [Demo Lemon](https://z80dev.github.io/lemon/demo): A deterministic local walkthrough for the runtime and interfaces.
+- [Set up Lemon](https://z80dev.github.io/lemon/user-guide/setup): Configure providers, secrets, runtime settings, and channels.
+- [Back up and restore Lemon user state](https://z80dev.github.io/lemon/user-guide/backups): Create, verify, and safely restore private user-state backups.
+- [User-managed profiles](https://z80dev.github.io/lemon/user-guide/profiles): Create, route, clone, export, and delete isolated specialist profiles.
+- [Support](https://z80dev.github.io/lemon/support): Diagnose startup, provider, runtime, and release problems.
+- [Compare Lemon](https://z80dev.github.io/lemon/compare): Current product positioning and honest support boundaries.
+
+## Use Lemon
+
+- [Memory User Guide](https://z80dev.github.io/lemon/user-guide/memory): Durable local memory and recall behavior.
+- [Skills User Guide](https://z80dev.github.io/lemon/user-guide/skills): Discover, install, audit, and use skills.
+- [Adaptive Behavior User Guide](https://z80dev.github.io/lemon/user-guide/adaptive): Opt-in learning, synthesis, and rollout controls.
+- [Honcho Memory User Guide](https://z80dev.github.io/lemon/user-guide/honcho): Configure the optional Honcho memory provider.
+- [Migrating From Hermes](https://z80dev.github.io/lemon/user-guide/migrate-from-hermes): Preview and import supported Hermes state.
+- [Lemon Configuration (TOML)](https://z80dev.github.io/lemon/config): Runtime configuration and environment-variable ownership.
+- [Mix task reference](https://z80dev.github.io/lemon/mix-tasks): Reference for Lemon Mix tasks.
+
+## Tools and interfaces
+
+- [Web and Browser Tools](https://z80dev.github.io/lemon/tools/web): Web search, fetch, and browser automation tools.
+- [Execute Code (executecode)](https://z80dev.github.io/lemon/tools/execute-code): Persistent Python RPC execution over allowlisted agent tools.
+- [Media Tools](https://z80dev.github.io/lemon/tools/media): Media generation and artifact workflows.
+- [LSP Diagnostics](https://z80dev.github.io/lemon/tools/lsp): Language-server diagnostics.
+- [ACP Preview](https://z80dev.github.io/lemon/tools/acp): ACP-shaped editor integration.
+- [OpenAI-Compatible API Preview](https://z80dev.github.io/lemon/tools/openai-compatible-api): OpenAI-compatible API surface.
+- [Extensions](https://z80dev.github.io/lemon/extensions): MCP, native, and WASM extension boundaries.
+- [LemonSkills - Skill Definitions and Loading](https://z80dev.github.io/lemon/skills): Skill format, discovery, trust, and lifecycle reference.
+
+## Architecture and operations
+
+- [Architecture Overview](https://z80dev.github.io/lemon/architecture/overview): System architecture and message flow.
+- [BEAM Agent Architecture and Invariants](https://z80dev.github.io/lemon/beam_agents): BEAM-native agent processes, supervision, and coordination.
+- [LemonAgent.Context - Conversation Context Management](https://z80dev.github.io/lemon/context): Context assembly, compaction, and overflow behavior.
+- [Decoupling Model Selection from Profile Binding](https://z80dev.github.io/lemon/model-selection-decoupling): Provider and model selection design.
+- [Lemon Safety](https://z80dev.github.io/lemon/security/safety): Approval, redaction, and execution safety boundaries.
+- [Lemon testing lanes](https://z80dev.github.io/lemon/testing): Canonical test lanes and focused verification guidance.
+- [Telemetry](https://z80dev.github.io/lemon/telemetry): Runtime telemetry and observability events.
+- [Versioning and Release Channels](https://z80dev.github.io/lemon/release/versioning_and_channels): CalVer releases and update channels.
+
+## Benchmarks
+
+- [Benchmarks Quickstart](https://z80dev.github.io/lemon/benchmarks/quickstart): Run a LemonSim benchmark locally.
+- [Benchmark Platform Guarantees](https://z80dev.github.io/lemon/benchmarks/platform): Determinism, replay, and benchmark guarantees.
+
+## Notes for agents
+
+- Public documentation describes supported behavior. Source modules and tests remain authoritative for implementation details.

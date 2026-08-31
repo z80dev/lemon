@@ -3,10 +3,13 @@ defmodule LemonWeb.SessionLive do
 
   use LemonWeb, :live_view
 
-  alias LemonCore.{Bus, MapHelpers, SessionKey}
+  alias LemonCore.{Bus, MapHelpers, NodeRegistry, RouterBridge, SessionKey, SessionLifecycle}
+  alias LemonCore.Setup.Readiness
   alias LemonWeb.Live.Components.{FileUploadComponent, MessageComponent}
 
   @max_messages 250
+  @max_history_runs 100
+  @active_control_modes [:followup, :steer, :redirect]
 
   @impl true
   def mount(params, _session, socket) do
@@ -15,7 +18,12 @@ defmodule LemonWeb.SessionLive do
 
     if connected?(socket) do
       Bus.subscribe(Bus.session_topic(session_key))
+      Bus.subscribe("system")
     end
+
+    setup_state = setup_readiness()
+    messages = history_messages(session_key)
+    {last_run_id, run_status} = active_run_state(session_key)
 
     socket =
       socket
@@ -23,8 +31,13 @@ defmodule LemonWeb.SessionLive do
       |> assign(:session_key, session_key)
       |> assign(:agent_id, agent_id)
       |> assign(:prompt, "")
-      |> assign(:messages, [])
-      |> assign(:last_run_id, nil)
+      |> assign(:messages, messages)
+      |> assign(:last_run_id, last_run_id)
+      |> assign(:run_status, run_status)
+      |> assign(:control_mode, :followup)
+      |> assign(:control_notice, nil)
+      |> assign(:setup_state, setup_state)
+      |> assign(:setup_ready?, Readiness.ready?(setup_state))
       |> assign(:submit_error, nil)
       |> allow_upload(:files,
         accept: :any,
@@ -37,8 +50,13 @@ defmodule LemonWeb.SessionLive do
   end
 
   @impl true
-  def handle_event("validate", %{"chat" => %{"prompt" => prompt}}, socket) do
-    {:noreply, assign(socket, :prompt, prompt || "")}
+  def handle_event("validate", %{"chat" => chat}, socket) when is_map(chat) do
+    socket =
+      socket
+      |> assign(:prompt, chat["prompt"] || "")
+      |> maybe_assign_control_mode(chat["mode"])
+
+    {:noreply, socket}
   end
 
   def handle_event("cancel-upload", %{"ref" => ref}, socket) do
@@ -50,9 +68,149 @@ defmodule LemonWeb.SessionLive do
     {:noreply, socket}
   end
 
-  def handle_event("submit", %{"chat" => %{"prompt" => prompt}}, socket) do
-    prompt = String.trim(prompt || "")
+  def handle_event("refresh-setup", _params, socket) do
+    {:noreply, refresh_setup_readiness(socket)}
+  end
 
+  def handle_event("refresh-run-status", _params, socket) do
+    case reconcile_active_run(socket) do
+      {:ok, socket, _run_id} ->
+        message =
+          if socket.assigns.run_status == :stopping,
+            do: "The stop request is still pending.",
+            else: "The active run is ready for guidance."
+
+        {:noreply, assign_control_notice(socket, :info, message)}
+
+      {:error, socket} ->
+        {:noreply,
+         assign_control_notice(
+           socket,
+           :warning,
+           "No active run is available. Send a new message to start one."
+         )}
+    end
+  end
+
+  def handle_event("stop-run", _params, %{assigns: %{last_run_id: run_id}} = socket)
+      when is_binary(run_id) do
+    case abort_run(run_id) do
+      :ok ->
+        socket =
+          socket
+          |> assign(:run_status, :stopping)
+          |> assign(:submit_error, nil)
+          |> assign(:control_notice, nil)
+          |> maybe_append_system("Stop requested.")
+
+        {:noreply, socket}
+
+      {:error, _reason} ->
+        {:noreply,
+         assign(
+           socket,
+           :submit_error,
+           "Lemon could not stop that run. Check its status and try again."
+         )}
+    end
+  end
+
+  def handle_event("stop-run", _params, socket), do: {:noreply, socket}
+
+  def handle_event("submit", %{"chat" => chat}, socket) when is_map(chat) do
+    prompt = String.trim(chat["prompt"] || "")
+    mode = normalize_submit_mode(chat["mode"])
+    socket = assign(socket, :prompt, chat["prompt"] || "")
+
+    if not Map.get(socket.assigns, :setup_ready?, true) do
+      {:noreply, assign(socket, :submit_error, setup_recovery_message())}
+    else
+      if mode in @active_control_modes do
+        submit_active_control(socket, prompt, mode)
+      else
+        submit_prompt(socket, prompt)
+      end
+    end
+  end
+
+  defp submit_active_control(socket, prompt, mode) do
+    cond do
+      prompt == "" ->
+        {:noreply,
+         socket
+         |> assign(:submit_error, "Enter guidance for the active run.")
+         |> assign(:control_notice, nil)}
+
+      byte_size(prompt) > NodeRegistry.max_control_text_bytes() ->
+        {:noreply,
+         socket
+         |> assign(
+           :submit_error,
+           "Active-run guidance must be 16 KB or less. Shorten the message and try again."
+         )
+         |> assign(:control_notice, nil)}
+
+      upload_entries?(socket) ->
+        {:noreply,
+         socket
+         |> assign(
+           :submit_error,
+           "Active-run guidance is text only. Remove the attachment or wait and send it with a new message."
+         )
+         |> assign(:control_notice, nil)}
+
+      true ->
+        do_submit_active_control(socket, prompt, mode)
+    end
+  end
+
+  defp do_submit_active_control(socket, prompt, mode) do
+    case reconcile_active_run(socket) do
+      {:ok, socket, active_run_id} ->
+        case submit_run(
+               socket.assigns.session_key,
+               socket.assigns.agent_id,
+               prompt,
+               [],
+               mode
+             ) do
+          {:ok, _submission_run_id} ->
+            socket =
+              socket
+              |> append_message(%{
+                id: message_id("user"),
+                kind: :user,
+                content: prompt,
+                control_mode: mode,
+                ts_ms: now_ms()
+              })
+              |> assign(:prompt, "")
+              |> assign(:last_run_id, active_run_id)
+              |> assign(:run_status, :running)
+              |> assign(:submit_error, nil)
+              |> assign_control_notice(:success, control_success_message(mode))
+
+            {:noreply, socket}
+
+          {:error, reason} ->
+            {:noreply,
+             socket
+             |> assign(:submit_error, nil)
+             |> assign_control_notice(:error, control_refusal_message(reason))}
+        end
+
+      {:error, socket} ->
+        {:noreply,
+         socket
+         |> assign(:submit_error, nil)
+         |> assign_control_notice(
+           :warning,
+           "That run has already finished. Your message was not sent; send it as a new message instead."
+         )}
+    end
+  end
+
+  defp submit_prompt(socket, prompt) do
     if uploads_in_progress?(socket) do
       {:noreply,
        assign(socket, :submit_error, "Please wait for uploads to finish before submitting.")}
@@ -60,7 +218,8 @@ defmodule LemonWeb.SessionLive do
       case persist_uploads(socket) do
         {:ok, uploads} ->
           if prompt == "" and uploads == [] do
-            {:noreply, assign(socket, :submit_error, "Enter a prompt or upload at least one file.")}
+            {:noreply,
+             assign(socket, :submit_error, "Enter a prompt or upload at least one file.")}
           else
             submission_prompt = build_submission_prompt(prompt, uploads)
             user_text = build_user_message(prompt, uploads)
@@ -75,26 +234,33 @@ defmodule LemonWeb.SessionLive do
               })
               |> assign(:prompt, "")
               |> assign(:submit_error, nil)
+              |> assign(:control_notice, nil)
 
             case submit_run(
                    socket.assigns.session_key,
                    socket.assigns.agent_id,
                    submission_prompt,
-                   uploads
+                   uploads,
+                   :collect
                  ) do
               {:ok, run_id} ->
-                {:noreply, assign(socket, :last_run_id, run_id)}
+                {:noreply,
+                 socket
+                 |> assign(:last_run_id, run_id)
+                 |> assign(:run_status, :running)}
 
-              {:error, reason} ->
+              {:error, _reason} ->
+                notice = "Lemon could not start that run. Check runtime status and try again."
+
                 socket =
                   socket
                   |> append_message(%{
                     id: message_id("system"),
                     kind: :system,
-                    content: "Submit failed: #{format_error(reason)}",
+                    content: notice,
                     ts_ms: now_ms()
                   })
-                  |> assign(:submit_error, format_error(reason))
+                  |> assign(:submit_error, notice)
 
                 {:noreply, socket}
             end
@@ -114,6 +280,8 @@ defmodule LemonWeb.SessionLive do
     socket =
       socket
       |> assign(:last_run_id, run_id || socket.assigns.last_run_id)
+      |> assign(:run_status, :running)
+      |> assign(:control_notice, nil)
       |> maybe_append_system("Run started#{if is_binary(engine), do: " (#{engine})", else: ""}.")
 
     {:noreply, socket}
@@ -156,8 +324,16 @@ defmodule LemonWeb.SessionLive do
       socket
       |> finalize_assistant_message(run_id, answer)
       |> maybe_append_run_completion(ok?, error)
+      |> assign(:last_run_id, nil)
+      |> assign(:run_status, :idle)
+      |> assign(:control_notice, nil)
 
     {:noreply, socket}
+  end
+
+  def handle_info(%LemonCore.Event{type: type}, socket)
+      when type in [:config_reloaded, :secret_changed] do
+    {:noreply, refresh_setup_readiness(socket)}
   end
 
   def handle_info(%{type: :coalesced_output}, socket) do
@@ -171,23 +347,81 @@ defmodule LemonWeb.SessionLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <main class="min-h-screen bg-slate-100">
+    <main id="main-content" class="min-h-screen bg-slate-100">
       <div class="mx-auto flex min-h-screen w-full max-w-3xl flex-col px-3 py-4 sm:px-6 sm:py-6">
         <header class="rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
-          <p class="text-xs font-medium uppercase tracking-wide text-slate-500">Lemon Web Dashboard</p>
-          <h1 class="mt-1 text-lg font-semibold text-slate-900 sm:text-xl">Session Console</h1>
-          <div class="mt-3 space-y-1 text-xs text-slate-600 sm:flex sm:items-center sm:justify-between sm:space-y-0">
-            <p>session: <code class="rounded bg-slate-100 px-1 py-0.5">{@session_key}</code></p>
-            <p>agent: <code class="rounded bg-slate-100 px-1 py-0.5">{@agent_id}</code></p>
+          <div class="flex items-start justify-between gap-4">
+            <div>
+              <p class="text-xs font-medium uppercase tracking-wide text-slate-500">Lemon</p>
+              <h1 class="mt-1 text-lg font-semibold text-slate-900 sm:text-xl">Chat</h1>
+              <p class="mt-1 text-sm text-slate-600">Your local agent workspace.</p>
+            </div>
+            <div class="flex flex-col items-end gap-2">
+              <span class={setup_badge_class(@setup_ready?)} data-testid="setup-status">
+                <span class="h-2 w-2 rounded-full bg-current" aria-hidden="true"></span>
+                {if @setup_ready?, do: "Ready", else: "Setup needed"}
+              </span>
+              <.link href={~p"/manage"} class="text-xs font-medium text-slate-600 underline">
+                Manage sessions
+              </.link>
+            </div>
           </div>
+          <details class="mt-3 text-xs text-slate-500">
+            <summary class="cursor-pointer rounded font-medium focus:outline-none focus:ring">Session details</summary>
+            <div class="mt-2 space-y-1 border-l-2 border-slate-200 pl-3">
+              <p>Session: <code class="break-all rounded bg-slate-100 px-1 py-0.5">{@session_key}</code></p>
+              <p>Agent: <code class="rounded bg-slate-100 px-1 py-0.5">{@agent_id}</code></p>
+            </div>
+          </details>
         </header>
+
+        <%= unless @setup_ready? do %>
+          <section
+            id="setup-readiness"
+            role="alert"
+            aria-labelledby="setup-title"
+            class="mt-4 rounded-2xl border border-amber-300 bg-amber-50 p-4 shadow-sm"
+          >
+            <h2 id="setup-title" class="font-semibold text-amber-950">Finish setup before chatting</h2>
+            <p class="mt-1 text-sm text-amber-900">
+              Lemon is running, but it still needs the items below. Run <code class="rounded bg-amber-100 px-1 py-0.5 font-semibold">lemon setup</code>
+              in a terminal, then refresh this check.
+            </p>
+            <ul class="mt-3 list-disc space-y-2 pl-5 text-sm text-amber-950">
+              <%= for step <- Readiness.pending_steps(@setup_state) do %>
+                <li>
+                  <strong>{setup_step_title(step)}</strong> — {setup_step_help(step, @setup_state)}
+                </li>
+              <% end %>
+            </ul>
+            <div class="mt-4 flex flex-wrap items-center gap-3">
+              <button
+                type="button"
+                phx-click="refresh-setup"
+                class="rounded-lg bg-amber-950 px-3 py-2 text-sm font-medium text-white transition hover:bg-amber-800 focus:outline-none focus:ring focus:ring-amber-400"
+              >
+                Check again
+              </button>
+              <p class="text-xs text-amber-800">
+                Still stuck? Run <code class="rounded bg-amber-100 px-1 py-0.5">lemon doctor</code>.
+              </p>
+            </div>
+          </section>
+        <% end %>
 
         <section
           id="messages"
+          aria-label="Conversation"
+          aria-live="polite"
           class="mt-4 flex-1 space-y-3 overflow-y-auto rounded-2xl border border-slate-200 bg-slate-50 p-3 sm:p-4"
         >
           <%= if @messages == [] do %>
-            <p class="text-sm text-slate-500">No messages yet. Send a prompt to start streaming output.</p>
+            <div class="mx-auto max-w-md py-8 text-center">
+              <p class="font-medium text-slate-800">Start with a small task</p>
+              <p class="mt-1 text-sm text-slate-500">
+                Ask a question, explain what you are working on, or attach files for Lemon to inspect.
+              </p>
+            </div>
           <% else %>
             <%= for message <- @messages do %>
               <MessageComponent.message message={message} />
@@ -195,38 +429,174 @@ defmodule LemonWeb.SessionLive do
           <% end %>
         </section>
 
-        <section class="mt-4 rounded-2xl border border-slate-200 bg-white p-3 shadow-sm sm:p-4">
+        <section
+          aria-labelledby="composer-title"
+          class="mt-4 rounded-2xl border border-slate-200 bg-white p-3 shadow-sm sm:p-4"
+        >
+          <h2 id="composer-title" class="sr-only">Message composer</h2>
+
+          <%= if @run_status in [:running, :stopping] and is_binary(@last_run_id) do %>
+            <div
+              id="active-run-status"
+              class="active-run-status"
+              role="status"
+              aria-live="polite"
+            >
+              <span class="active-run-status-dot" aria-hidden="true"></span>
+              <div>
+                <p class="active-run-status-title">
+                  {if @run_status == :stopping, do: "Stopping active run", else: "Run active"}
+                </p>
+                <p class="active-run-status-copy">
+                  <%= if @run_status == :stopping do %>
+                    Waiting for Lemon to stop safely.
+                  <% else %>
+                    Choose how this message should affect the work already in progress.
+                  <% end %>
+                </p>
+              </div>
+            </div>
+          <% end %>
+
           <.form
-            for={to_form(%{"prompt" => @prompt}, as: :chat)}
+            for={
+              to_form(
+                %{"prompt" => @prompt, "mode" => Atom.to_string(@control_mode)},
+                as: :chat
+              )
+            }
             id="chat-form"
             phx-change="validate"
             phx-submit="submit"
             multipart
             class="space-y-3"
           >
+            <%= if @run_status == :running and is_binary(@last_run_id) do %>
+              <fieldset id="active-run-controls" class="active-run-controls">
+                <legend class="active-run-controls-legend">Use this message as</legend>
+                <div class="active-run-control-grid">
+                  <label class={control_option_class(@control_mode, :followup)}>
+                    <input
+                      type="radio"
+                      name="chat[mode]"
+                      value="followup"
+                      checked={@control_mode == :followup}
+                      class="active-run-control-input"
+                    />
+                    <span class="active-run-control-name">Follow-up</span>
+                    <span class="active-run-control-description">
+                      Queue a separate turn after the current run finishes.
+                    </span>
+                  </label>
+
+                  <label class={control_option_class(@control_mode, :steer)}>
+                    <input
+                      type="radio"
+                      name="chat[mode]"
+                      value="steer"
+                      checked={@control_mode == :steer}
+                      class="active-run-control-input"
+                    />
+                    <span class="active-run-control-name">Steer</span>
+                    <span class="active-run-control-description">
+                      Add guidance to the work in progress without replacing its direction.
+                    </span>
+                  </label>
+
+                  <label class={control_option_class(@control_mode, :redirect)}>
+                    <input
+                      type="radio"
+                      name="chat[mode]"
+                      value="redirect"
+                      checked={@control_mode == :redirect}
+                      class="active-run-control-input"
+                    />
+                    <span class="active-run-control-name">Redirect</span>
+                    <span class="active-run-control-description">
+                      Replace the pending direction while keeping completed tool work.
+                    </span>
+                  </label>
+                </div>
+              </fieldset>
+            <% else %>
+              <input type="hidden" name="chat[mode]" value="collect" />
+            <% end %>
+
             <label for="chat_prompt" class="text-xs font-medium uppercase tracking-wide text-slate-500">
-              Prompt
+              {if @run_status == :running, do: "Guidance", else: "Prompt"}
             </label>
             <textarea
               id="chat_prompt"
               name="chat[prompt]"
               rows="4"
               value={@prompt}
-              placeholder="Ask Lemon to do work..."
-              class="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-slate-500 focus:ring"
+              placeholder={composer_placeholder(@run_status, @control_mode)}
+              disabled={!@setup_ready? or @run_status == :stopping}
+              aria-describedby="composer-help"
+              class="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-slate-500 focus:ring disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-500"
             ></textarea>
 
-            <FileUploadComponent.file_upload upload={@uploads.files} />
+            <%= if @setup_ready? and @run_status == :idle do %>
+              <FileUploadComponent.file_upload upload={@uploads.files} />
+            <% else %>
+              <%= if @setup_ready? and @run_status in [:running, :stopping] do %>
+                <p class="active-run-text-note">
+                  Active-run guidance is text only. Attach files after the current run finishes.
+                </p>
+              <% else %>
+                <p class="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-500">
+                  Attachments become available after setup is complete.
+                </p>
+              <% end %>
+            <% end %>
+
+            <%= if is_map(@control_notice) do %>
+              <p
+                id="control-notice"
+                role={if @control_notice.tone == :error, do: "alert", else: "status"}
+                aria-live="polite"
+                class={control_notice_class(@control_notice.tone)}
+              >
+                {@control_notice.message}
+              </p>
+            <% end %>
 
             <%= if is_binary(@submit_error) and @submit_error != "" do %>
-              <p class="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
+              <p role="alert" class="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
                 {@submit_error}
               </p>
             <% end %>
 
-            <div class="flex items-center justify-between gap-3">
-              <p class="text-xs text-slate-500">Supports multi-file upload and live streaming updates.</p>
-              <.button type="submit">Send</.button>
+            <div class="flex flex-wrap items-center justify-between gap-3">
+              <p id="composer-help" class="text-xs text-slate-500">
+                <%= if @run_status in [:running, :stopping] do %>
+                  {composer_help(@run_status, @control_mode)}
+                <% else %>
+                  Supports up to five files and live streaming updates.
+                <% end %>
+              </p>
+              <div class="composer-actions">
+                <%= if @run_status in [:running, :stopping] and is_binary(@last_run_id) do %>
+                  <button
+                    type="button"
+                    phx-click="refresh-run-status"
+                    class="active-run-secondary-button"
+                  >
+                    Check status
+                  </button>
+                  <button
+                    type="button"
+                    phx-click="stop-run"
+                    disabled={@run_status == :stopping}
+                    class="rounded-lg border border-rose-300 bg-white px-4 py-2 text-sm font-medium text-rose-700 transition hover:bg-rose-50 focus:outline-none focus:ring disabled:cursor-wait disabled:opacity-50"
+                  >
+                    {if @run_status == :stopping, do: "Stopping…", else: "Stop"}
+                  </button>
+                <% end %>
+                <.button type="submit" disabled={!@setup_ready? or @run_status == :stopping}>
+                  {submit_label(@run_status, @control_mode)}
+                </.button>
+              </div>
             </div>
           </.form>
         </section>
@@ -235,19 +605,203 @@ defmodule LemonWeb.SessionLive do
     """
   end
 
-  defp submit_run(session_key, agent_id, prompt, uploads) do
-    LemonRouter.submit(%{
+  defp submit_run(session_key, agent_id, prompt, uploads, queue_mode) do
+    request = %{
       origin: :control_plane,
       session_key: session_key,
       agent_id: agent_id,
       prompt: prompt,
+      queue_mode: queue_mode,
       meta: %{
         source: :lemon_web,
         web_dashboard: true,
         uploads: uploads
       }
-    })
+    }
+
+    case Application.get_env(:lemon_web, :submit_run_fun) do
+      fun when is_function(fun, 1) -> fun.(request)
+      _ -> LemonRouter.submit(request)
+    end
   end
+
+  defp active_run_state(session_key) do
+    case active_run_for_session(session_key) do
+      {:ok, run_id} -> {run_id, :running}
+      :none -> {nil, :idle}
+    end
+  end
+
+  defp active_run_for_session(session_key) do
+    result =
+      case Application.get_env(:lemon_web, :active_run_fun) do
+        fun when is_function(fun, 1) -> fun.(session_key)
+        _ -> RouterBridge.active_run(session_key)
+      end
+
+    case result do
+      {:ok, run_id} when is_binary(run_id) and run_id != "" -> {:ok, run_id}
+      run_id when is_binary(run_id) and run_id != "" -> {:ok, run_id}
+      _ -> :none
+    end
+  rescue
+    _ -> :none
+  catch
+    :exit, _ -> :none
+  end
+
+  defp reconcile_active_run(socket) do
+    case active_run_for_session(socket.assigns.session_key) do
+      {:ok, run_id} ->
+        run_status =
+          if socket.assigns.run_status == :stopping and socket.assigns.last_run_id == run_id,
+            do: :stopping,
+            else: :running
+
+        socket =
+          socket
+          |> assign(:last_run_id, run_id)
+          |> assign(:run_status, run_status)
+
+        {:ok, socket, run_id}
+
+      :none ->
+        socket =
+          socket
+          |> assign(:last_run_id, nil)
+          |> assign(:run_status, :idle)
+
+        {:error, socket}
+    end
+  end
+
+  defp abort_run(run_id) do
+    case Application.get_env(:lemon_web, :abort_run_fun) do
+      fun when is_function(fun, 2) -> fun.(run_id, :user_requested)
+      _ -> LemonRouter.abort_run(run_id, :user_requested)
+    end
+  end
+
+  defp setup_readiness do
+    case Application.get_env(:lemon_web, :setup_readiness_fun) do
+      fun when is_function(fun, 0) -> fun.()
+      _ -> Readiness.status()
+    end
+  end
+
+  defp refresh_setup_readiness(socket) do
+    state = setup_readiness()
+
+    socket
+    |> assign(:setup_state, state)
+    |> assign(:setup_ready?, Readiness.ready?(state))
+    |> assign(:submit_error, nil)
+  end
+
+  defp maybe_assign_control_mode(socket, mode) do
+    case normalize_submit_mode(mode) do
+      mode when mode in @active_control_modes -> assign(socket, :control_mode, mode)
+      _ -> socket
+    end
+  end
+
+  defp normalize_submit_mode(mode) when is_atom(mode) and mode in @active_control_modes,
+    do: mode
+
+  defp normalize_submit_mode("followup"), do: :followup
+  defp normalize_submit_mode("steer"), do: :steer
+  defp normalize_submit_mode("redirect"), do: :redirect
+  defp normalize_submit_mode(_), do: :collect
+
+  defp assign_control_notice(socket, tone, message)
+       when tone in [:success, :info, :warning, :error] and is_binary(message) do
+    assign(socket, :control_notice, %{tone: tone, message: message})
+  end
+
+  defp control_success_message(:followup),
+    do: "Follow-up queued. It will run after the active work finishes."
+
+  defp control_success_message(:steer),
+    do: "Steer request sent to the active run."
+
+  defp control_success_message(:redirect),
+    do: "Redirect request sent. Completed tool work will be preserved."
+
+  defp control_refusal_message(:unavailable),
+    do: "The active run is no longer available. Check its status and try again."
+
+  defp control_refusal_message(:invalid_run_request),
+    do: "Lemon could not accept that guidance. Review the message and try again."
+
+  defp control_refusal_message(_reason),
+    do: "Lemon refused that active-run request. The message was not sent."
+
+  defp control_option_class(selected, mode) when selected == mode,
+    do: "active-run-control-option active-run-control-option-selected"
+
+  defp control_option_class(_selected, _mode), do: "active-run-control-option"
+
+  defp control_notice_class(:success), do: "active-run-notice active-run-notice-success"
+  defp control_notice_class(:info), do: "active-run-notice active-run-notice-info"
+  defp control_notice_class(:warning), do: "active-run-notice active-run-notice-warning"
+  defp control_notice_class(:error), do: "active-run-notice active-run-notice-error"
+
+  defp composer_placeholder(:running, :followup), do: "What should Lemon do next?"
+  defp composer_placeholder(:running, :steer), do: "What should Lemon adjust right now?"
+  defp composer_placeholder(:running, :redirect), do: "What should Lemon do instead?"
+  defp composer_placeholder(:stopping, _mode), do: "Wait for the current run to stop..."
+  defp composer_placeholder(_status, _mode), do: "Ask Lemon to do work..."
+
+  defp composer_help(:stopping, _mode), do: "Stopping the current run..."
+
+  defp composer_help(:running, :followup),
+    do: "Follow-up starts as a separate turn after this run."
+
+  defp composer_help(:running, :steer), do: "Steer adds guidance to this run."
+
+  defp composer_help(:running, :redirect),
+    do: "Redirect changes the pending direction but keeps completed tool work."
+
+  defp composer_help(_status, _mode), do: "Lemon is working..."
+
+  defp submit_label(:running, :followup), do: "Queue follow-up"
+  defp submit_label(:running, :steer), do: "Send steer"
+  defp submit_label(:running, :redirect), do: "Request redirect"
+  defp submit_label(_status, _mode), do: "Send"
+
+  defp setup_recovery_message do
+    "Finish setup before chatting: run `lemon setup` in a terminal, then check again."
+  end
+
+  defp setup_badge_class(true) do
+    "inline-flex items-center gap-2 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-medium text-emerald-700"
+  end
+
+  defp setup_badge_class(false) do
+    "inline-flex items-center gap-2 rounded-full border border-amber-300 bg-amber-50 px-3 py-1 text-xs font-medium text-amber-800"
+  end
+
+  defp setup_step_title(:config), do: "Configuration"
+  defp setup_step_title(:secrets), do: "Secure secret storage"
+  defp setup_step_title(:provider), do: "Provider and model"
+
+  defp setup_step_help(:config, _state), do: "create the local Lemon config"
+  defp setup_step_help(:secrets, _state), do: "initialize the encrypted credential store"
+
+  defp setup_step_help(:provider, %{provider: %{reason: :missing_default_provider}}),
+    do: "choose an AI provider"
+
+  defp setup_step_help(:provider, %{provider: %{reason: :missing_default_model}}),
+    do: "choose a default model"
+
+  defp setup_step_help(:provider, %{provider: %{reason: :credential_not_usable}}),
+    do: "store a usable provider credential"
+
+  defp setup_step_help(:provider, %{provider: %{reason: :model_provider_mismatch}}),
+    do: "choose a model that matches the provider"
+
+  defp setup_step_help(:provider, _state),
+    do: "configure a usable provider, model, and credential"
 
   defp persist_uploads(socket) do
     if persist_fun = Application.get_env(:lemon_web, :upload_persist_fun) do
@@ -299,6 +853,7 @@ defmodule LemonWeb.SessionLive do
         else
           {:error, failures}
         end
+
       {:error, reason} ->
         {:error, [%{name: upload_root, error: format_error(reason)}]}
     end
@@ -430,7 +985,32 @@ defmodule LemonWeb.SessionLive do
   defp maybe_append_run_completion(socket, true, _error), do: socket
 
   defp maybe_append_run_completion(socket, _ok, error) do
-    maybe_append_system(socket, "Run failed: #{format_error(error)}")
+    maybe_append_system(socket, run_failure_notice(error))
+  end
+
+  defp run_failure_notice(error) do
+    reason = read(error, :reason) || read(error, :type) || error
+
+    case reason do
+      reason
+      when reason in [:aborted, :cancelled, :canceled, "aborted", "cancelled", "canceled"] ->
+        "Run stopped."
+
+      reason
+      when reason in [
+             :runtime_unavailable,
+             :runtime_submission_failed,
+             "runtime_unavailable",
+             "runtime_submission_failed"
+           ] ->
+        "The run could not start because the execution runtime is unavailable. Check runtime status and try again."
+
+      reason when reason in [:timeout, :timed_out, "timeout", "timed_out"] ->
+        "The run timed out before it finished. Try again or use a smaller request."
+
+      _reason ->
+        "The run did not finish. Check runtime status and try again."
+    end
   end
 
   defp maybe_append_system(socket, text) when is_binary(text) and text != "" do
@@ -451,6 +1031,80 @@ defmodule LemonWeb.SessionLive do
 
   defp trim_messages(messages) when length(messages) <= @max_messages, do: messages
   defp trim_messages(messages), do: Enum.take(messages, -@max_messages)
+
+  defp history_messages(session_key) do
+    session_key
+    |> SessionLifecycle.history(limit: @max_history_runs, redact: false)
+    |> Enum.flat_map(&run_messages/1)
+    |> trim_messages()
+  rescue
+    _ -> []
+  catch
+    :exit, _ -> []
+  end
+
+  defp run_messages(run) do
+    run_id = run.run_id || "unknown"
+    ts_ms = run.started_at_ms || 0
+
+    prompt =
+      if is_binary(run.prompt) and run.prompt != "" do
+        [
+          %{
+            id: history_message_id(run_id, "user"),
+            kind: :user,
+            content: run.prompt,
+            ts_ms: ts_ms
+          }
+        ]
+      else
+        []
+      end
+
+    tools =
+      run.tools
+      |> Enum.with_index()
+      |> Enum.map(fn {tool, index} ->
+        %{
+          id: history_message_id(run_id, "tool-#{index}"),
+          kind: :tool_call,
+          event: %{
+            action: %{
+              title: tool.title,
+              kind: tool.kind,
+              detail: tool.detail
+            },
+            phase: tool.phase,
+            ok: tool.ok,
+            message: tool.message
+          },
+          ts_ms: ts_ms
+        }
+      end)
+
+    answer =
+      if is_binary(run.answer) and run.answer != "" do
+        [
+          %{
+            id: history_message_id(run_id, "assistant"),
+            kind: :assistant,
+            run_id: run_id,
+            content: run.answer,
+            pending: false,
+            ts_ms: ts_ms
+          }
+        ]
+      else
+        []
+      end
+
+    prompt ++ tools ++ answer
+  end
+
+  defp history_message_id(run_id, suffix) do
+    digest = :crypto.hash(:sha256, "#{run_id}:#{suffix}") |> Base.url_encode64(padding: false)
+    "history-#{binary_part(digest, 0, 16)}"
+  end
 
   defp resolve_session_key(params) when is_map(params) do
     candidate = params["session_key"]
@@ -497,6 +1151,8 @@ defmodule LemonWeb.SessionLive do
     socket.assigns.uploads.files.entries
     |> Enum.any?(fn entry -> not Map.get(entry, :done?, false) end)
   end
+
+  defp upload_entries?(socket), do: socket.assigns.uploads.files.entries != []
 
   defp read(map, key), do: MapHelpers.get_key(map, key)
 

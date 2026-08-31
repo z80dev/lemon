@@ -16,26 +16,22 @@ Protocol version targeted: **"2024-11-05"**
 
 ```
                      CLIENT SIDE                           SERVER SIDE
-                 ___________________               ________________________
-                |                   |             |                        |
-                |  LemonMCP.Client  |             | LemonMCP.Transport.HTTP|
-                | LemonMCP.Client.HTTP            |                        |
-                |    (GenServer)    |             |  (Plug.Router / Bandit)|
-                |___________________|             |________________________|
-                         |                                    |
-                         v                                    v
-              LemonMCP.Transport.Stdio           LemonMCP.Server.Handler
-               (GenServer, Port-based)           (pure request dispatcher)
-                         |                                    |
-                         v                                    v
-               External MCP server              LemonMCP.Server (GenServer)
-               process via stdin/stdout          - holds tool registration
-                                                 - tracks init state
-                                                          |
-                                                          v
-                                               LemonMCP.ToolAdapter
-                                               - bridges to CodingAgent tools
-                                               - converts parameter schemas
+                 ___________________               __________________________
+                |                   |             | LemonMCP.Transport.HTTP  |
+                |  LemonMCP.Client  |             | unnamed :one_for_all sup |
+                | LemonMCP.Client.HTTP            |__________________________|
+                |    (GenServer)    |                    |             |
+                |___________________|                    v             v
+                         |                        Bandit / Plug   LemonMCP.Server
+                         v                              |          (GenServer)
+              LemonMCP.Transport.Stdio                 v             |
+               (GenServer, Port-based)       LemonMCP.Server.Handler <+
+                         |                    (pure request dispatcher)
+                         v                                    |
+               External MCP server                        v
+               process via stdin/stdout          LemonMCP.ToolAdapter
+                                                 - bridges to CodingAgent tools
+                                                 - converts parameter schemas
 ```
 
 Both sides share `LemonMCP.Protocol` for all struct definitions and encode/decode helpers.
@@ -47,7 +43,6 @@ lib/
   lemon_mcp.ex                     # Public façade: protocol_version/0, parse_request/1,
                                    #   create_response/2, create_error/3-4, encode!/1
   lemon_mcp/
-    application.ex                 # OTP application; supervision tree (currently no children)
     protocol.ex                    # All MCP message structs + encode/decode + builder helpers
     client.ex                      # GenServer client (stdio transport, state machine)
     client/
@@ -59,7 +54,9 @@ lib/
       handler.ex                   # Pure request router: initialize/initialized/tools/list/tools/call
     transport/
       stdio.ex                     # GenServer wrapping an Erlang Port for subprocess I/O
-      http.ex                      # Plug.Router + Bandit HTTP transport for server side
+      http.ex                      # Plug.Router + public HTTP transport facade
+      http/supervisor.ex           # Owns the registry member, MCP Server, and Bandit as one lifecycle
+      http/registry_member.ex      # Supervised node-local membership and start ordering
 
 test/
   lemon_mcp/
@@ -70,6 +67,7 @@ test/
     server/
       handler_test.exs
     transport/
+      http_test.exs
       stdio_test.exs
 ```
 
@@ -86,7 +84,7 @@ test/
 | `LemonMCP.Transport.Stdio` | GenServer backed by an Erlang `Port`; newline-delimited JSON framing; calls `message_handler` callback for each inbound line |
 | `LemonMCP.Server` | GenServer; holds tool list or `tool_provider` module reference; tracks `initialized` flag; also declares the `@behaviour` for tool provider modules |
 | `LemonMCP.Server.Handler` | Pure functions; routes `JSONRPCRequest` structs to handlers; validates params; calls into `Server` GenServer |
-| `LemonMCP.Transport.HTTP` | `Plug.Router` mounted via Bandit; injects `mcp_server` PID into `conn.assigns`; supports single and batch JSON-RPC; exposes `POST /mcp` and `GET /health` |
+| `LemonMCP.Transport.HTTP` | `Plug.Router` plus transport facade; an unnamed internal `:one_for_all` supervisor owns the MCP Server and Bandit listener, resolves the current server child for each request, supports single and batch JSON-RPC, and exposes `POST /mcp` plus `GET /health` |
 | `LemonMCP.ToolAdapter` | Struct + functions that bridge `CodingAgent.Tools.*` modules to MCP format; also a `__using__` macro that generates a `@behaviour LemonMCP.Server` implementation at compile time |
 
 ## Key Types
@@ -208,7 +206,17 @@ Then start the server with `tool_provider: MyApp.MCPProvider`.
 )
 ```
 
-The HTTP transport automatically starts a `LemonMCP.Server` internally and stores the server PID in `:persistent_term` under `{LemonMCP.Transport.HTTP, :mcp_server}`. Retrieve it via `LemonMCP.Transport.HTTP.get_server_pid/0`.
+The HTTP transport starts an unnamed internal `:one_for_all` supervisor that
+owns a lightweight node-local registry member, its `LemonMCP.Server`, and
+Bandit listener. If any child fails, the whole group is replaced together, so
+the listener never retains a dead server and a restarted listener never leaves
+the old server behind. Registry updates use a node-local serialized critical
+section; reads and registrations prune dead membership as an additional guard
+for abnormal shutdown. `get_server_pid/0` follows the most recently started
+live transport supervisor on the current node to its current server child,
+falling back to older live instances rather than caching a child PID. Use
+`get_server_pid/1` with the supervisor returned by `start_link/1` when multiple
+transports are running.
 
 **Configuration alternative** (app config):
 
@@ -377,16 +385,22 @@ Standard JSON-RPC 2.0 codes used throughout:
 
 Use `Protocol.error_code(:atom)` to convert; falls back to `-32603` for unknown atoms.
 
-## Supervision Tree
+## Lifecycle and Release Composition
 
-The application's supervision tree is currently minimal:
+`lemon_mcp` is a library application. It has no application callback or
+supervisor and starts no processes by default. `LemonMCP.Client`,
+`LemonMCP.Server`, and the transport modules are started on demand; the host
+application that needs one owns its supervision strategy.
 
-```
-LemonMCP.Supervisor (one_for_one)
-  (empty — no children started by default)
-```
-
-`LemonMCP.Server` and `LemonMCP.Transport.HTTP` are started on demand by callers, not by the application supervisor. If you need them always running, add them to `LemonMCP.Application.start/2`.
+The `lemon_runtime_min` and `lemon_runtime_full` releases explicitly include
+`lemon_mcp: :load` before `coding_agent` and `lemon_skills`. This assembles and
+loads the client modules so `LemonSkills.McpSource.mcp_enabled?/0` can discover
+them, without pretending the MCP library owns long-lived runtime processes.
+`release-smoke.yml` builds both profiles and evaluates that contract inside
+each packaged release; `scripts/verify_release_runtime_boot` repeats it against
+each min/full release tarball. The client and source modules must load, MCP
+feature detection must be enabled, `:lemon_mcp` must be loaded but not started,
+and no application callback or `LemonMCP.Application` module may exist.
 
 ## Testing Guidance
 
@@ -394,7 +408,7 @@ LemonMCP.Supervisor (one_for_one)
 
 ```bash
 # All lemon_mcp tests (from umbrella root)
-mix test apps/lemon_mcp
+mix test apps/lemon_mcp/test
 
 # Specific file
 mix test apps/lemon_mcp/test/lemon_mcp/server/handler_test.exs
@@ -473,9 +487,12 @@ end
 
 - **ToolAdapter `new/2` options use `include_tools`/`exclude_tools` but the `__using__` macro does not pass `include_tools`.** If you need to restrict tools via the macro, pass `:exclude_tools` explicitly.
 
-- **HTTP transport port defaults to `0` in test env.** `@default_port` is set at compile time via `Mix.env()`. In test, a random available port is assigned, which avoids conflicts. To find the actual port in tests, inspect the Bandit supervisor or use the server PID.
+- **HTTP transport port defaults to `0` in test env.** `@default_port` is set at compile time via `Mix.env()`. In test, a random available port is assigned, which avoids conflicts. The PID returned by `start_link/1` is the unnamed transport supervisor, not the Bandit listener. Use `get_server_pid/1` for a specific transport or the compatibility `get_server_pid/0` lookup for the newest live instance.
 
-- **`LemonMCP.Application` supervision tree is empty.** The application starts but supervises nothing by default. All server/transport processes must be started explicitly by the consuming app (e.g. `lemon_channels`). If you want fault-tolerant MCP services, add them to a supervisor in the host app rather than modifying `LemonMCP.Application`.
+- **There is no `LemonMCP.Application` callback.** All client, server, and
+  transport processes must be started and supervised by the consuming app.
+  Keep the runtime release entry at `:load`; changing it to `:permanent` does
+  not create useful lifecycle ownership.
 
 - **`ToolAdapter` calls `module.tool/2` during both `list_tools/1` and `call_tool/3`.** The tool definition is fetched twice per operation. If constructing the `AgentTool` struct is expensive, this could matter.
 
@@ -483,4 +500,9 @@ end
 
 - **`coding_agent`** (dependency): `ToolAdapter` maps `CodingAgent.Tools.*` module names to MCP tool definitions. All `@builtin_tools` entries reference `CodingAgent.Tools` modules.
 - **`agent_core`** (dependency): `LemonAgent.Types.AgentToolResult` and `LemonAgent.Types.AgentTool` are used by `ToolAdapter` for result conversion.
-- **Consumers**: Any app wanting to expose Lemon tools over MCP or consume external MCP servers depends on `{:lemon_mcp, in_umbrella: true}` and calls `LemonMCP.Client.start_link/1`, `LemonMCP.Client.HTTP.start_link/1`, or `LemonMCP.Transport.HTTP.start_link/1`.
+- **Consumers**: Apps with a direct compile-time dependency use
+  `{:lemon_mcp, in_umbrella: true}` and call `LemonMCP.Client.start_link/1`,
+  `LemonMCP.Client.HTTP.start_link/1`, or
+  `LemonMCP.Transport.HTTP.start_link/1`. `LemonSkills.McpSource` deliberately
+  discovers the client dynamically; the runtime release contract assembles the
+  library for that path.

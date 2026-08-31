@@ -13,6 +13,7 @@ defmodule LemonSkills.SourceRouter do
   | SSH git URL (`git@…`) | `Sources.Git` | `:git` |
   | `https://` or `http://` URL | `Sources.Git` | `:git` |
   | `gh:<owner>/<repo>` | `Sources.Github` | `:git` |
+  | `hermes:<collection>/<path>` | `Sources.Hermes` | `:git` |
   | Registry ref (`<ns>/<cat>/<name>`) | `Sources.Registry` | `:registry` |
 
   ## Usage
@@ -27,7 +28,7 @@ defmodule LemonSkills.SourceRouter do
       # => {:ok, LemonSkills.Sources.Github, "acme/k8s-skill"}
   """
 
-  alias LemonSkills.Sources.{Builtin, Git, Github, Local, Registry}
+  alias LemonSkills.Sources.{Builtin, Git, Github, Hermes, Local, Registry}
 
   @type routed :: {module(), String.t() | nil}
 
@@ -44,6 +45,12 @@ defmodule LemonSkills.SourceRouter do
     cond do
       id == "builtin" ->
         {:ok, Builtin, nil}
+
+      String.starts_with?(id, "hermes:") ->
+        case Hermes.parse_id(id) do
+          {:ok, parsed} -> {:ok, Hermes, parsed.id}
+          {:error, _} -> {:error, "Invalid Hermes skill identifier: #{inspect(id)}"}
+        end
 
       # Explicit git+ prefix strips the scheme prefix
       String.starts_with?(id, "git+") ->
@@ -89,6 +96,7 @@ defmodule LemonSkills.SourceRouter do
   def source_kind(Local), do: :local
   def source_kind(Git), do: :git
   def source_kind(Github), do: :git
+  def source_kind(Hermes), do: :git
   def source_kind(Registry), do: :registry
 
   # ---------------------------------------------------------------------------

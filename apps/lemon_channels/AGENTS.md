@@ -1,6 +1,6 @@
 # LemonChannels AGENTS.md
 
-Channel adapter application for external messaging platforms (Telegram, Discord, X/Twitter, XMTP).
+Channel adapter application for external messaging platforms (Telegram, Discord, X/Twitter, XMTP, WhatsApp).
 
 ## Quick Orientation
 
@@ -60,6 +60,8 @@ share a group and are never delivered concurrently to prevent reordering.
 | `lib/lemon_channels/application.ex` | `LemonChannels.Application` | Supervision tree, adapter lifecycle (`register_and_start_adapter/2`, `start_adapter/2`, `stop_adapter/1`) |
 | `lib/lemon_channels/dispatcher.ex` | `LemonChannels.Dispatcher` | Router-facing semantic delivery entrypoint. Picks a channel renderer from `DeliveryIntent.route.channel_id`. After every dispatch (success or failure) it emits `[:lemon, :channels, :dispatch]` telemetry and broadcasts a typed `LemonCore.Events.ChannelDelivery` on the `"channels"` bus topic — the hook for tests and the control plane to observe exactly what lemon sent to a channel. Emission is post-result and rescue-wrapped, so it can never break a real send. |
 | `lib/lemon_channels/presentation_state.ex` | `LemonChannels.PresentationState` | Channels-owned presentation state: message ids, pending creates, pending edits, deferred/coalesced edits, deferred chunk sets for long Telegram/Discord replies, post-edit follow-up chunks, and surface tracking. Telegram and Discord overflow follow-up chunks should preserve the original reply target so long answers stay attached to the triggering prompt instead of jumping to the topic root, and final long-answer tails for an already-live message must wait for the winning edit ack before they are enqueued. If that ack wins the race before the tails or deferred final edit finish staging, `PresentationState` must flush those late-staged follow-ups or deferred chunks immediately instead of waiting for another ack that will never arrive. Supports moving a live message from one semantic surface to another so router coalescers can keep editing the same Telegram message across answer/status handoffs, including task-specific status surfaces such as `{:status_task, task_id}`. |
+| `lib/lemon_channels/command_catalog.ex` | `LemonChannels.CommandCatalog` | Portable JSON-safe slash-command presentation metadata for channel and interactive clients. Defines canonical names, aliases, descriptions, arguments, busy policies, and semantic capability ids without dispatching commands or taking conversation semantics from the router/session owners. |
+| `lib/lemon_channels/portable_command.ex` | `LemonChannels.PortableCommand` | Shared Telegram/Discord renderer and execution adapter for catalog commands. It calls router/core diagnostics and the registered agent-runtime provider, keeps prompts, transcript bodies, and arbitrary runtime errors out of channel output, and delegates `/bg` and `/btw` to their coding-agent owners. `/bg` returns the full durable id and provides list/status/result/cancel lifecycle commands scoped to the originating channel session; missing and foreign ids render the same not-found response. |
 | `lib/lemon_channels/plugin.ex` | `LemonChannels.Plugin` | Behaviour definition: `id/0`, `meta/0`, `child_spec/1`, `normalize_inbound/1`, `deliver/1`, `gateway_methods/0` |
 | `lib/lemon_channels/registry.ex` | `LemonChannels.Registry` | GenServer plugin registry, status tracking (running/stopped/connected) from DynamicSupervisor children |
 | `lib/lemon_channels/run_request_builder.ex` | `LemonChannels.RunRequestBuilder` | Converts adapter-normalized `InboundMessage` values into router-facing `LemonCore.RunRequest` structs. |
@@ -69,6 +71,7 @@ share a group and are never delivered concurrently to prevent reordering.
 | `lib/lemon_channels/target_directory.ex` | `LemonChannels.TargetDirectory` | Channels-owned normalized directory of recently seen Telegram and Discord targets for router/control-plane discovery. |
 | `lib/lemon_channels/model_policy.ex` | `LemonChannels.ModelPolicy` | Channels-owned route-based model and thinking policy resolution for adapters. Persists through `LemonCore.Store` via `ModelPolicyStore` using the unchanged `:model_policies` table. |
 | `lib/lemon_channels/model_policy_store.ex` | `LemonChannels.ModelPolicyStore` | Typed wrapper for persisted route-based model policies. |
+| `lib/lemon_channels/port_bridge.ex` | `LemonChannels.PortBridge` | Shared GenServer callback implementation for line-delimited JSON Node bridge ports. XMTP and WhatsApp keep their public `PortServer` modules as the callback/process and logging identities while sharing lifecycle, parsing, restart, and reconnect behavior here. |
 | `lib/lemon_channels/discord/known_target_store.ex` | `LemonChannels.Discord.KnownTargetStore` | Store-backed Discord channel/thread directory used by script-send list mode. |
 | `lib/lemon_channels/binding_resolver.ex` | `LemonChannels.BindingResolver` | Maps ChatScope to project/agent/cwd/queue_mode. Delegates to `LemonCore.BindingResolver`; bindings never select the fixed native top-level executor. |
 | `lib/lemon_channels/gateway_config.ex` | `LemonChannels.GatewayConfig` | Channels-local config facade. Prefers `:lemon_gateway` full-replacement runtime config when present, then delegates to `LemonCore.GatewayConfig`. |
@@ -171,7 +174,17 @@ Provider availability in the Telegram `/model` picker should match the real prov
 | `adapters/xmtp.ex` | Plugin impl. id: `"xmtp"`, chunk_limit: 2000, thread support only. |
 | `adapters/xmtp/transport.ex` | GenServer. Message send/receive, `normalize_inbound_message/1`, `deliver/1`. |
 | `adapters/xmtp/bridge.ex` | Communication with Node.js bridge (connect, poll, send_message). |
-| `adapters/xmtp/port_server.ex` | Port process management for the Node.js bridge subprocess. |
+| `adapters/xmtp/port_server.ex` | Thin public GenServer wrapper that remains the XMTP process/logging identity and supplies its script name, event tag, and log label to `LemonChannels.PortBridge`. |
+
+### WhatsApp Adapter
+
+| File | What It Does |
+|------|-------------|
+| `adapters/whatsapp.ex` | Plugin impl. id: `"whatsapp"`, chunk_limit: 4096, with voice, image, file, reaction, and thread support. |
+| `adapters/whatsapp/supervisor.ex` | Starts the async supervisor and transport when a credentials path is configured. |
+| `adapters/whatsapp/transport.ex` | GenServer for message send/receive and bridge event handling. |
+| `adapters/whatsapp/bridge.ex` | Communication with the Node.js bridge. |
+| `adapters/whatsapp/port_server.ex` | Thin public GenServer wrapper that remains the WhatsApp process/logging identity and supplies its script name, event tag, and log label to `LemonChannels.PortBridge`. |
 
 ## Adapter Architecture
 
@@ -459,11 +472,16 @@ Auto-refresh is owned by the `XApi.TokenManager` GenServer in `apps/x_api`; the 
 
 - Uses Node.js bridge process managed via Erlang Port
 - Bridge handles XMTP protocol; Elixir side manages lifecycle and normalization
+- XMTP and WhatsApp keep separate public `PortServer` callback/process identities, module-scoped warning logs, scripts, and event tags while delegating the identical port lifecycle to `LemonChannels.PortBridge`
 - Add `LemonChannels.Adapters.Xmtp` to `config :lemon_channels, :adapters`; `enable_xmtp: true` still gates the bridge process
 
 ## Discord Adapter
 
 - Uses `nostrum` library (declared `runtime: false`)
+- Every application slash command must pass the same configured guild/channel
+  allowlists and `deny_unbound_channels` binding check as ordinary messages and
+  queue/steer commands before reading or mutating session state, cancelling a
+  run, reflecting memory, or invoking the agent runtime.
 - Slash commands include `/lemon`, `/session new`, `/session info`, and preview
   `/goal status`/`set` with optional max-continuation budget/`pause`/`resume`/`continue`/loop controls including opt-in auto scheduling/`clear`
 - Preview `/kanban` slash commands expose board list/create/show/archive, task create/update/comment, and dispatcher start/status/stop with redacted responses.
@@ -482,6 +500,11 @@ doctor framework through the reference runtime's registrations in
 `channel_readiness:` and `channel_proofs:`, plus the `:doctor_checks` list.
 `ProofSpec` implements `LemonCore.Doctor.ChannelProofs`; adding a platform gate
 or proof check name means editing `ProofSpec`, not core.
+
+Discord diagnostics also publish a redacted `compatibility_commands` map for
+the generated `checkpoint`, `rollback`, `kanban`, and `media` slash schemas.
+Keep those booleans derived from `SlashCommands.slash_commands/0`; the static
+names are release-readiness sentinels, not a second command registry.
 
 All of it must stay redacted. Discord DM, free-response, reconnect, slash
 registration, deterministic slash and real client-click gates use
@@ -647,6 +670,7 @@ mix test apps/lemon_channels/test/lemon_channels/adapters/telegram/inbound_test.
 | `discord/inbound_test.exs` | Discord inbound normalization |
 | `capabilities_test.exs` | Includes X adapter capability lookup |
 | `xmtp/transport_test.exs` | XMTP transport |
+| `port_bridge_contract_test.exs` | Shared XMTP/WhatsApp PortServer API, parser, event-tag, and reconnect contract |
 | `gateway_config_test.exs` | Config merging |
 | `application_test.exs` | App startup |
 

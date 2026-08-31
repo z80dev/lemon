@@ -20,6 +20,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.CommandRouter do
           handle_media_auto_put: (map(), map() -> map()),
           handle_model_command: (map(), map() -> map()),
           handle_new_session: (map(), map(), binary() | nil -> map()),
+          handle_portable_command: (map(), map() -> map()),
           handle_reload_command: (map(), map() -> map()),
           handle_resume_command: (map(), map() -> map()),
           handle_thinking_command: (map(), map() -> map()),
@@ -38,8 +39,9 @@ defmodule LemonChannels.Adapters.Telegram.Transport.CommandRouter do
 
   @spec handle_inbound_message(map(), map(), callbacks()) :: map()
   def handle_inbound_message(state, inbound, callbacks) do
-    text = inbound.message.text || ""
-    original_text = text
+    original_text = inbound.message.text || ""
+    text = Commands.canonicalize_portable_alias(original_text)
+    inbound = %{inbound | message: Map.put(inbound.message, :text, text)}
     bot_username = callbacks.bot_username
 
     {state, handled_model_picker?} =
@@ -95,19 +97,22 @@ defmodule LemonChannels.Adapters.Telegram.Transport.CommandRouter do
         Commands.model_command?(original_text, bot_username) ->
           callbacks.handle_model_command.(state, inbound)
 
-        Commands.thinking_command?(original_text, bot_username) ->
+        Commands.thinking_command?(text, bot_username) ->
           callbacks.handle_thinking_command.(state, inbound)
 
         Commands.reload_command?(original_text, bot_username) ->
           callbacks.handle_reload_command.(state, inbound)
 
-        Commands.new_command?(original_text, bot_username) ->
-          args = Commands.telegram_command_args(original_text, "new")
+        Commands.new_command?(text, bot_username) ->
+          args = Commands.telegram_command_args(text, "new")
           callbacks.handle_new_session.(state, inbound, args)
 
-        Commands.cancel_command?(original_text, bot_username) ->
+        Commands.cancel_command?(text, bot_username) ->
           callbacks.maybe_cancel_by_reply.(state, inbound)
           state
+
+        Commands.portable_command?(text, bot_username) ->
+          callbacks.handle_portable_command.(state, inbound)
 
         true ->
           cond do

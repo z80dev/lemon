@@ -33,8 +33,10 @@ The main coding agent implementation for the Lemon AI assistant platform. This a
 |  +-- CodingAgent.SessionSupervisor (dynamic, one_for_one)                   |
 |  |   +-- CodingAgent.Session processes (temporary restart)                  |
 |  +-- CodingAgent.SessionRegistry (via Registry)                             |
+|  +-- CodingAgent.BackgroundRun.Registry (via Registry)                     |
 |  +-- CodingAgent.RunGraphServer (ETS + DETS persistence)                    |
 |  +-- CodingAgent.TaskSupervisor (for async operations)                      |
+|  +-- CodingAgent.BackgroundRun.Supervisor (isolated `/bg` workers)          |
 |  +-- CodingAgent.ProcessStoreServer (background process tracking)           |
 |  +-- CodingAgent.TaskStoreServer (async task tracking with DETS)            |
 |  +-- CodingAgent.ParentQuestionStoreServer (parent-question tracking)       |
@@ -50,25 +52,34 @@ The main coding agent implementation for the Lemon AI assistant platform. This a
 |--------|---------|
 | `CodingAgent.Session` | Main GenServer orchestrating the agent loop |
 | `CodingAgent.SessionManager` | JSONL persistence with tree structure |
+| `CodingAgent.Session.Heartbeat` | Durable same-session recurring prompt state, idle scheduling, fire claims, and clear tombstones |
 | `CodingAgent.SessionSupervisor` | DynamicSupervisor for session processes |
-| `CodingAgent.SessionRegistry` | Registry for session lookup by ID |
+| `CodingAgent.SessionRegistry` | Registry for persisted-ID lookup plus ambiguity-safe logical session-key lookup from registration metadata |
 | `CodingAgent.SessionRootSupervisor` | Top-level supervisor for all session infra |
+| `CodingAgent.ExecutionNode.Worker` | Authenticated named-node worker that maintains application-level health keepalives and executes targeted `coding_agent.run` requests through the native executor |
+| `CodingAgent.ExecutionNode.Socket` | Reconnecting control-plane WebSocket client with authenticated handshakes and redacted status |
+| `CodingAgent.ExecutionNode.TokenStore` | Mode-0600, durable-node-ID-keyed local session and recovery credential storage with legacy-name migration |
+| `CodingAgent.Executor.RemoteSessionRunner` | Source-side bridge from one native gateway execution to one live named node |
+| `CodingAgent.Executor.RemoteRequestCodec` | JSON-safe request/result boundary with destination-local cwd semantics |
 
 Session lifecycle calls to `save/1` and auto-compaction state reads are treated as best-effort.
 When downstream store or agent processes time out, callers should log and continue instead of crashing the session/runner process.
+The session's steering/follow-up queues are diagnostic mirrors of queues owned
+by `LemonAgent.Agent`; all terminal, cancel, error, abort, and agent-exit paths
+clear both mirrors so diagnostics never report already-consumed work.
 
 ### Tools
 
 Tools are divided into two sets. `coding_tools/2` is the default set passed to sessions; `all_tools/2` includes extras not in the default set.
 
-**Default `coding_tools/2`** (55 tools registered in `CodingAgent.Tools.coding_tools/2` and `@builtin_tools` in `ToolRegistry`):
+**Default `coding_tools/2`** (58 platform builtins, plus any non-conflicting tools registered by satellite apps):
 
 | Category | Tools |
 |----------|-------|
 | **File Operations / Skills** | `read`, `read_skill`, `skill_manage`, `memory_topic`, `memory`, `search_memory`, `session_search`, `checkpoint`, `write`, `edit`, `patch`, `hashline_edit`, `lsp_diagnostics`, `ls` |
 | **Search** | `grep`, `find` |
 | **Execution** | `bash` (`execute_code` is a config-gated builtin appended last in `@builtin_tools`: default-off via `[runtime.tools.execute_code] enabled`, bash-equivalent, and filtered out of the disclosed set unless enabled) |
-| **Web / Browser / Media** | `websearch`, `webfetch`, `browser_navigate`, `browser_snapshot`, `browser_get_content`, `browser_click`, `browser_type`, `browser_hover`, `browser_select_option`, `browser_upload_file`, `browser_download`, `browser_press`, `browser_scroll`, `browser_back`, `browser_wait_for_selector`, `browser_evaluate`, `browser_events`, `browser_get_cookies`, `browser_set_cookies`, `browser_clear_state`, `browser_screenshot`, `browser_analyze`, `media_status`, `media_generate_image`, `media_generate_speech`, `media_transcribe_audio`, `media_analyze_image`, `media_generate_video` |
+| **Web / Browser / Media** | `websearch`, `webfetch`, `browser_tabs`, `browser_tab_open`, `browser_tab_activate`, `browser_tab_close`, `browser_navigate`, `browser_snapshot`, `browser_get_content`, `browser_click`, `browser_type`, `browser_hover`, `browser_select_option`, `browser_upload_file`, `browser_download`, `browser_press`, `browser_scroll`, `browser_back`, `browser_wait_for_selector`, `browser_evaluate`, `browser_events`, `browser_get_cookies`, `browser_set_cookies`, `browser_clear_state`, `browser_screenshot`, `browser_analyze`, `browser_exec`, `computer_use`, `media_status`, `media_generate_image`, `media_generate_speech`, `media_transcribe_audio`, `media_analyze_image`, `media_generate_video` |
 | **Task/Agent** | `task`, `agent`, `parent_question`, `todo`, `kanban` |
 | **Social** | `x_search`, `post_to_x`, `get_x_mentions` |
 | **System** | `tool_auth`, `extensions_status` |
@@ -119,6 +130,16 @@ private, or local-document target kind; `route: "public"` rejects local/private
 targets, `route: "local"` rejects public web targets, and metadata endpoints
 are always blocked before the browser worker.
 
+Browser tools dispatch through the backend-neutral `LemonBrowser` facade.
+Page-scoped tools accept optional `targetId`; the tab tools list, open,
+activate, and close stable real Chrome targets. The default managed local
+backend remains isolated. The controller backend binds exact principal,
+controller, profile, session, run, and capabilities through short-lived
+single-use tickets and fails closed when the binding is offline or mismatched.
+The optional MV3 extension/local relay exposes existing signed-in Chrome tabs
+over token-authenticated loopback CDP, while attached-session shutdown never
+closes the user's browser.
+
 `browser_get_cookies`, `browser_set_cookies`, and `browser_clear_state` expose
 session-state controls over the supervised browser boundary. Cookie values are
 redacted by default unless `includeValues: true` is explicit. `browser_clear_state`
@@ -132,6 +153,22 @@ duplicates, requires unique text for replace/remove, enforces compact file
 limits, and screens writes for common secrets, prompt-injection phrases, NUL
 bytes, and invisible/bidirectional controls. Use `memory_topic` for longer
 structured notes under `memory/topics/`.
+
+`websearch` and `webfetch` resolve their backends through
+`CodingAgent.Search.Registry`. Bundled providers include Brave, Exa search and
+contents extraction, Perplexity, keyless DuckDuckGo, SearXNG, guarded direct
+extraction, and Firecrawl.
+Providers implement `CodingAgent.Search.Provider`, declare `:search` and/or
+`:extract`, run behind bounded isolation and deterministic fallback, and may be
+registered by trusted extensions with provider type `:search`. Concurrent
+identical requests are coalesced by `CodingAgent.Search.SingleFlight` before
+successful results enter the existing bounded/persistent web cache.
+
+`browser_exec` is the bounded provider-neutral BUA-style program surface; raw
+CDP steps require explicit developer mode. `computer_use` is the separate
+native-app surface backed by exact-session cua-driver state. It defaults to
+background input delivery, returns driver verification verdicts, writes managed
+capture artifacts, and never automatically replays an uncertain action.
 
 `session_search` is the Hermes-compatible no-LLM recall tool. It infers
 discovery, scroll, or browse mode from the argument shape and reads from Lemon's
@@ -164,6 +201,15 @@ requirement state for resume flows.
 pass `checkpoint_paths` and a session id, and commands such as `rm`, `mv`,
 `sed -i`, `find ... -delete`, `git reset`, or `git clean` will create a
 filesystem checkpoint before backend launch.
+Local `patch` calls prepare all hunks before the first mutation, reject duplicate
+paths and existing move destinations, revalidate each operation immediately
+before commit, and exclusively create new targets. Commits remain sequential: a
+later I/O failure reports the already-committed prefix and any possibly changed
+current paths instead of attempting a destructive rollback. Local `write` calls
+canonicalize the path used for validation and mutation, then reject symlinks,
+caller-controlled symlinked parent components, directories, and special files by default;
+`allow_symlinks: true` is an internal trusted-caller override. Keep ACP-backed
+mutation semantics separate from these local filesystem claims.
 
 `lsp_diagnostics` is the model-facing diagnostics tool. It runs workspace-aware
 file diagnostics with graceful fallback when a checker is unavailable, and
@@ -201,16 +247,22 @@ the `kanban` tool through tool policy to avoid recursive board management.
 
 Internal `task` children default to the `:leaf_worker` policy. They keep normal work tools such as `read`, `write`, and `bash`, but recursive `task`/`agent` delegation is blocked unless a caller passes an explicit `tool_policy` override.
 
+The `agent` tool's optional `node` parameter selects execution placement for a
+delegated router run. Omit it or use `"local"` for the controller host. Named
+values resolve through the live `LemonCore.NodeRegistry`; omitted `cwd` uses the
+destination worker's default, while an explicit `cwd` is interpreted and
+validated on that destination. `task` stays in-process on the current host.
+
 ### Budget & Resource Management
 
 | Module | Purpose |
 |--------|---------|
-| `CodingAgent.BudgetTracker` | Token/cost budget tracking per run |
+| `CodingAgent.BudgetTracker` | Atomic token/cost accounting plus child reservation/completion tracking per run |
 | `CodingAgent.BudgetEnforcer` | Budget limit enforcement |
 | `CodingAgent.ParentQuestions` | ETS+DETS-backed child-to-parent clarification request store with lifecycle events |
 | `CodingAgent.ParentQuestionStoreServer` | Owns the ParentQuestions ETS/DETS tables and cleanup |
 | `CodingAgent.RunGraph` | ETS-backed parent/child run relationships |
-| `CodingAgent.RunGraphServer` | DETS persistence for run graph |
+| `CodingAgent.RunGraphServer` | Serialized run/budget mutation authority with synchronous DETS startup recovery |
 
 ### Memory & Context
 
@@ -219,17 +271,25 @@ Internal `task` children default to the `:leaf_worker` policy. They keep normal 
 | `CodingAgent.Compaction` | Context compaction when conversations grow large |
 | `CodingAgent.CompactionHooks` | Hooks for compaction events |
 | `CodingAgent.ContextGuardrails` | Pre-LLM hard caps for large tool outputs/args with optional spill-to-disk references |
-| `CodingAgent.Workspace` | Bootstrap file loading (AGENTS.md, SOUL.md, etc.) from the assistant home at `~/.lemon/agent/workspace/` |
+| `CodingAgent.Workspace` | Bootstrap file loading (AGENTS.md, SOUL.md, etc.) from the default assistant home at `~/.lemon/agent/workspace/` or a validated profile workspace at `~/.lemon/profiles/<id>/workspace/` |
+
+`CodingAgent.Executor.SessionRunner` accepts `meta.profile_id` from canonical
+profile chat submission and derives the assistant workspace through
+`LemonCore.ProfileStore.paths/1`. The derived workspace feeds lifecycle,
+bootstrap prompt composition, memory-path resolution, and extra tool loading;
+invalid/missing profile IDs fall back to the default workspace. Never accept a
+workspace path from profile metadata or config—only the validated stable ID.
 | `CodingAgent.SystemPrompt` | Builds the Lemon base system prompt (assistant-home bootstrap files + skills) |
 | `CodingAgent.PromptBuilder` | Higher-level prompt builder adding skills, commands, @mentions sections |
 | `CodingAgent.ResourceLoader` | Loads CLAUDE.md/AGENTS.md from cwd up to filesystem root, then home dir |
 
-`CodingAgent.Session` now composes `ContextGuardrails -> UntrustedToolBoundary -> custom transform_context` at the pre-LLM boundary. Oversized tool results are truncated with stable spill references under `~/.lemon/agent/sessions/<encoded-cwd>/spill/<session-id>/...` so the model can fetch full payloads via file tools when needed.
+`CodingAgent.Session` composes `ContextGuardrails -> UntrustedToolBoundary -> custom transform_context` at the pre-LLM boundary. Oversized tool results are truncated with stable spill references under `~/.lemon/agent/sessions/<encoded-cwd>/spill/<session-id>/...` so the model can fetch full payloads via file tools when needed. The untrusted boundary fences ordinary `read`, `grep`, `find`, `bash`, and community/project `read_skill` output using source-aware labels, strips unsafe control/bidirectional characters, and keeps the complete envelope within the configured result budget. Idempotence uses an opaque marker added only to the ephemeral pre-LLM copy; tool-returned metadata cannot claim that wrapping already happened. The audited `webfetch`/`websearch` paths retain their existing single external-content fence. Intentional AGENTS/bootstrap loading and builtin skills whose installed bundle matches the release bundle remain explicit trusted instruction paths.
 Its public GenServer shell stays `CodingAgent.Session`, but the larger internal concern clusters are now split into helper modules under `lib/coding_agent/session/`:
 - `Lifecycle` for startup, extension reload, and reset orchestration
 - `State` for state-building, prompt/reset shaping, diagnostics, and guardrail transform composition
 - `Notifier` for UI notifications plus subscriber/event-stream lifecycle and fanout
 - `Persistence` for message/session persistence helpers and session-file saving
+- `Heartbeat` for validation, append-only persistence, timer-token bookkeeping, idle-only recurring turns, and reset-safe tombstones
 - `BackgroundTasks` for deferred branch-summary/background work and branch navigation helpers
 - `CompactionLifecycle` for auto-compaction triggering/result handling
 - `OverflowRecovery` for context-window recovery and retry flow
@@ -251,13 +311,15 @@ Its public GenServer shell stays `CodingAgent.Session`, but the larger internal 
 | Module | Purpose |
 |--------|---------|
 | `CodingAgent.LaneQueue` | Lane-aware FIFO queue with per-lane concurrency caps |
+| `CodingAgent.BackgroundRun` | Durable lifecycle facade for isolated full-tool `/bg` sessions |
+| `CodingAgent.SideQuery` | Bounded no-tools `/btw` facade over a live snapshot, durable session key, or explicit transcript snapshot |
 | `CodingAgent.Coordinator` | Orchestrates concurrent subagent executions |
 | `CodingAgent.ProcessManager` | DynamicSupervisor for background exec processes |
 | `CodingAgent.ProcessSession` | GenServer for a single background process |
 | `CodingAgent.ProcessStore` | ETS store for background process state |
 | `LemonCore.TerminalBackend` / `TerminalBackends` | Shared backend contract and registry for supervised terminal/process execution |
-| `CodingAgent.TaskStore` | ETS+DETS store for async task tool runs |
-| `CodingAgent.TaskStoreServer` | Owns the TaskStore ETS/DETS tables |
+| `CodingAgent.TaskStore` | Read facade for the ETS+DETS async-task store and monotonic lifecycle API |
+| `CodingAgent.TaskStoreServer` | Serializes task records, events, suppression, terminal transitions, and persistence |
 | `CodingAgent.TaskProgressBindingStore` | ETS-backed parent-task surface bindings for async child runs; lazily restores `TaskProgressBindingServer` if the child is missing at runtime |
 
 `CodingAgent.Tools.Task` now emits lifecycle events (`:task_started`, `:task_completed`, `:task_error`, `:task_timeout`, `:task_aborted`) to both `LemonCore.Bus` (`run:*` topics) and `LemonCore.Introspection`, with run/parent/session/agent lineage metadata for monitoring UIs.
@@ -272,7 +334,31 @@ Its public entry module stays `CodingAgent.Tools.Task`, but the internals are no
 `CodingAgent.Tools.Task` now defaults omitted `async` to `true`, matching the tool contract. Internal task runs also infer a restrictive `tool_policy` plus a verification-prefixed prompt when the request explicitly says `use ... tools only`, so tool-constrained subtasks do not answer from model priors with the default full toolset.
 When an internal task omits `model`, `Task.Params` resolves the inherited model from the live parent session before falling back to captured tool opts, so Telegram/session-scoped `/model` overrides still propagate into async child sessions.
 Internal task child sessions now poll for aborts/session exit in `Task.Runner`, with an optional explicit `task_session_timeout_ms` guard when callers want a bounded wait. If a provider stream wedges or the child session dies without a terminal event, the task still fails with a timeout/session-exit error instead of leaving `task action=join` and the parent Telegram thread stuck indefinitely.
-Queued async task results should be treated as launch receipts. When a workflow needs one final answer in the same turn, the model/tooling should keep the returned `task_id`s and call `task action=join` before responding instead of relying on later auto-followup delivery to stitch the workflow back together. `task action=join` now suppresses the later async completion followup for those task ids so the parent session does not receive a second completion prompt after it already waited. Task result surfaces (`poll`, `join`, `get`, and auto-followup) are intentionally sanitized to visible assistant output plus task metadata, without leaking stored events, tool-call internals, or thinking deltas back into the parent session. Structured child reasoning is preserved in `details.reasoning` and projected as a reasoning action for operator surfaces, but it is not embedded as `[thinking]` text in parent-visible task answers. For non-terminal tasks, `poll` and `get` behave as status queries: they return the task status in user-visible text and keep the latest structured `current_action`/`reasoning` metadata in `details` instead of surfacing raw command/tool event text as answer content. Async followup delivery also idempotently backfills terminal task/run state, so a delivered completion message cannot leave the task store stranded in `queued` or `running`. Auto-followup now forwards the full visible task answer into the followup path instead of slicing it to a fixed prefix before routing, and router-delivered task followups use the `echo` engine so the raw completion text reaches the user without going back through the parent model. Any transport-specific chunking happens later at the channel layer.
+Async task launch is fail-fast: if `CodingAgent.TaskSupervisor` cannot accept the worker, `Task.Execution` returns an error and terminalizes the `TaskStore`, `RunGraph`, budget, lifecycle event, and progress-binding state instead of returning a permanently queued receipt. Once an async task has terminalized, auto-followup routing is best-effort and contains router exits so delivery outages do not crash the completed worker. `LaneQueue` consumes the task monitor when it receives a result, monitors queued callers so abandoned work is removed, and contains `Task.Supervisor` admission/start exits per job so one failure does not terminate the queue. `ProcessManager` treats LaneQueue `GenServer.call` exits as an unavailable-queue fallback, not only raised exceptions.
+Task lifecycle writes are serialized by `TaskStoreServer`. Event appends and followup suppression cannot overwrite each other, terminal status/payload is first-writer-wins across finish/fail races, and late `mark_running` calls cannot revive terminal tasks. Transient join reservations are owned and monitored by `TaskStoreServer`: a crashed joiner releases its reservations, and stale persisted reservations are discarded on store restart instead of suppressing completion forever. `RunGraphServer` synchronously loads DETS before startup readiness and serializes initial inserts/deletes as well as lifecycle updates, so a live write cannot be overwritten by a late startup fold.
+
+Hermes-compatible `/bg` work enters through `CodingAgent.BackgroundRun`. It
+returns a durable `TaskStore` id immediately, owns a separately supervised
+full-tool session on the `:subagent` lane, and exposes list/status/result/cancel
+without appending to a parent. Channel callers must use the `*_scoped` lifecycle
+functions: they require the originating `session_key`, filter lists by that key,
+and return `:not_found` for missing or foreign ids. The unscoped functions remain
+available for trusted operator/control-plane inspection. A supplied channel
+`session_key` is also retained as lineage metadata;
+queued or running background records become `:lost` after restart because the
+in-memory session cannot be resumed implicitly. `/btw` uses
+`CodingAgent.SideQuery.ask/3`: a new session receives either one atomic frozen
+live-session snapshot or bounded durable `RunStore` history, always with
+`tools: []` and a distinct ephemeral session key. Neither path mutates or
+steers the source conversation. Normalize string-valued reasoning policy from
+durable session state before starting the atom-valued native session.
+Background task records retain raw internal failures for runtime diagnosis,
+but the `BackgroundRun` lifecycle facade and emitted lifecycle events expose
+only stable content-free classifications. `SideQuery` likewise collapses
+runner failures to `:timeout`, `:cancelled`, or `:query_failed`; never pass a
+provider error term, filesystem path, or credential detail to an adapter.
+Async delegated-agent runs mirror the router run id into `RunGraph`; the completion watcher advances both `RunGraph` and `TaskStore`, which makes `agent action=join` wait on the production lifecycle rather than treating an unknown graph entry as already terminal. Explicit joins use transient followup reservations: `wait_all` suppresses completed joined tasks, while `wait_any` permanently suppresses only its completed winner and releases losers or failed/aborted joins. If the watcher cannot start, the agent tool returns a `tracking_error` receipt with task/run ids and terminalizes its local tracking records; watcher and followup exits are contained. A watcher timeout does not authoritatively fail a still-running router run: the task enters `:tracking_lost`, the run graph stays running, and a bounded reconciliation wait can still record a late terminal result.
+Queued async task results should be treated as launch receipts. When a workflow needs one final answer in the same turn, the model/tooling should keep the returned `task_id`s and call `task action=join` before responding instead of relying on later auto-followup delivery to stitch the workflow back together. `task action=join` now suppresses the later async completion followup for those task ids so the parent session does not receive a second completion prompt after it already waited. Task result surfaces (`poll`, `join`, `get`, and auto-followup) are intentionally sanitized to visible assistant output plus task metadata, without leaking stored events, tool-call internals, or thinking deltas back into the parent session. Structured child reasoning is preserved in `details.reasoning` and projected as a reasoning action for operator surfaces, but it is not embedded as `[thinking]` text in parent-visible task answers. For non-terminal tasks, `poll` and `get` behave as status queries: they return the task status in user-visible text and keep the latest structured `current_action`/`reasoning` metadata in `details` instead of surfacing raw command/tool event text as answer content. Async followup delivery also idempotently backfills terminal task/run state, so a delivered completion message cannot leave the task store stranded in `queued` or `running`. Auto-followup forwards the full visible task answer into the followup path instead of slicing it to a fixed prefix before routing, and router fallbacks are native followup runs. Any transport-specific chunking happens later at the channel layer.
 Sessions with an approval context subscribe to the shared `exec_approvals` topic and rebroadcast matching request/resolution records as status-only approval action events. These events use the same RunTranslator path as tool and reasoning events for native gateway and LemonRunner parity, and they must not enter the delta channel.
 
 `exec` and `process` now carry terminal backend metadata through
@@ -309,7 +395,7 @@ boundary: it runs a fixed command through every available registered backend,
 records hashed proof JSON, skips unavailable backends, and fails the smoke on
 backend errors or missing expected output.
 
-Child sessions launched through `CodingAgent.Tools.Task` can receive a child-only `ask_parent` extra tool when they have a live parent session plus run lineage. The parent answers through the default `parent_question` tool, and `CodingAgent.ParentQuestions` persists request state plus broadcasts lifecycle events (`:parent_question_requested`, `:parent_question_answered`, `:parent_question_timed_out`, `:parent_question_cancelled`, `:parent_question_error`). Native task sessions preserve async `task_id`, status, latest `current_action`, and tool-reported metadata so router/channel layers can keep later `task action=poll` updates and failed command summaries attached to the original task status surface.
+Child sessions launched through `CodingAgent.Tools.Task` can receive a child-only `ask_parent` extra tool when they have a live parent session plus run lineage. `Session.deliver_parent_question/2` starts an idle parent turn and queues the same visible question for a streaming parent; task/agent joins observe matching open questions and yield with `needs_parent_answer` so parent and child cannot deadlock. The parent answers through the default `parent_question` tool with exact matching session and agent identity. `ParentQuestionStoreServer` serializes one-open-per-child-scope creation and first-writer-wins answer/timeout/cancel/error transitions, so exactly one terminal lifecycle event is broadcast (`:parent_question_answered`, `:parent_question_timed_out`, `:parent_question_cancelled`, or `:parent_question_error`). Native task sessions preserve async `task_id`, status, latest `current_action`, and tool-reported metadata so router/channel layers can keep later `task action=poll` updates and failed command summaries attached to the original task status surface.
 When compacted history is restored, `SessionManager` preserves older async followup entries as
 custom `async_followup` messages with provenance metadata so the next LLM projection still knows
 which system-delivered completions came from task/delegated runs.
@@ -484,10 +570,19 @@ Sessions are persisted as JSONL files via `CodingAgent.SessionManager`:
 - Format: Each line is a JSON entry
 - First entry: `SessionHeader` with version, id, cwd
 - Subsequent: `SessionEntry` with tree structure (id, parent_id)
-- Entry types: `:message`, `:compaction`, `:branch_summary`, `:label`, etc.
+- Entry types: `:message`, `:compaction`, `:branch_summary`, `:label`, and custom
+  entries such as the latest-wins `session_heartbeat` state/tombstone.
 
 Location: `~/.lemon/agent/sessions/{encoded-cwd}/{session_id}.jsonl`
 (cwd is encoded with path separators replaced by `--`, e.g. `--home-user-project--`)
+
+Same-session heartbeats must remain append-only and persistence-first: persist a
+fire claim before provider dispatch, and persist a clear tombstone before reset
+rotates the session identity. A reset persistence failure must leave the old
+identity intact. Real queued prompts/steers/follow-ups win over a due heartbeat;
+elapsed ticks coalesce and resume re-anchors the interval. Client-facing lookup
+uses `SessionRegistry.lookup_session_key/1` because the TUI's logical key is not
+necessarily the JSONL header ID; ambiguous live claims fail closed.
 
 ## Workspace Management
 
@@ -529,6 +624,8 @@ The final system prompt is built in this order (later parts are appended):
 
 The composed prompt is refreshed before each user prompt to pick up edits to workspace/memory files.
 
+The available-skills listing is part of the cacheable system prefix, but turn-specific relevance results are not. `CodingAgent.Session` keeps displayable selected keys in turn-local state for missed-skill introspection and emits relevance-render telemetry without persisting or presenting a synthetic relevance message. This keeps the system prompt byte-stable across unrelated turns while retaining telemetry about skills the model could have loaded.
+
 ## Budget Tracking
 
 Budgets track token/cost resource usage per run with parent/child inheritance via `RunGraph`:
@@ -550,7 +647,7 @@ CodingAgent.BudgetTracker.check_budget(run_id)
 # Returns: :ok | {:warning, message} | {:exceeded, message}
 ```
 
-`CodingAgent.BudgetEnforcer` wraps the tracker and raises on exceeded budgets during agent runs.
+`CodingAgent.BudgetEnforcer` wraps the tracker and raises on exceeded budgets during agent runs. Usage increments execute as one `RunGraphServer` mutation. Child starts atomically reserve a child id against `max_children`; only a successful reservation launches work, and repeated completion callbacks release/aggregate that child's usage once.
 
 ## Extension System
 
@@ -646,6 +743,7 @@ Compaction:
 - Generates an LLM summary of compacted messages
 - Preserves file operation context
 - Estimates request size from conversation messages plus system prompt and tool schema payloads
+- Cancels and demonitors an in-flight background auto-compaction snapshot when a new idle prompt arrives; late results are ignored and cannot mutate the new turn
 - Overflow recovery is also attempted if context window is exhausted mid-run
 
 Settings controlling compaction (in `SettingsManager`/`config.toml`):
@@ -664,6 +762,7 @@ Session and EventHandler emit introspection events via `LemonCore.Introspection.
 | `:session_started` | `init/1` after state is built | `session_id`, `cwd`, `model`, `session_scope` |
 | `:session_ended` | `terminate/2` | `session_id`, `turn_count` |
 | `:compaction_triggered` | `apply_compaction_result/3` on success | `tokens_before`, `first_kept_entry_id` |
+| `:session_heartbeat` | Heartbeat set/pause/resume/clear/fire | `action`, `status`, `interval_seconds`, `fire_count`, `prompt_bytes` (never prompt text) |
 
 ### EventHandler Events
 
@@ -706,6 +805,73 @@ The `Task` and `Agent` tools can use `Subagents` to prepend a role prompt before
 With the default `:steer_backlog` config, live streaming parent sessions now attempt in-session steer delivery before router backlog fallback so async task/agent completions can converge back into the active turn.
 
 ## Common Tasks
+
+### Joining a Named Execution Node
+
+Run a native worker against a Lemon controller from the source checkout:
+
+```bash
+./bin/lemon node join --name worker-name --controller wss://controller.example/ws --pair --cwd /path/to/project
+```
+
+`--pair` creates a controller-owned durable node identity, exchanges its
+one-time challenge for a seven-day session token, and stores the session plus
+recovery credential under a durable-node-ID-keyed file in
+`~/.lemon/nodes/execution/`. The directory is mode 0700 and each record is mode
+0600. Records include the exact controller URL; later starts omit `--pair` and
+reuse a record only when its controller matches. Durable-ID lookup requires the
+controller argument and returns no session or recovery material when it is
+missing or differs from the stored controller. After session expiry, re-run
+with `--pair`: the recovery credential preserves the same ID and current
+controller-side name while the new challenge revokes every older node session.
+Controller renames therefore do not invalidate the local credential. Legacy
+records with a node ID but no recovery credential require the explicit
+operator-authorized `--pair --repair --node-id ID` path, which rotates the
+recovery credential instead of creating another node.
+Prefer `LEMON_NODE_OPERATOR_TOKEN` and `LEMON_NODE_TOKEN` to the corresponding
+CLI flags so credentials do not enter shell history.
+For a controller configured with `LEMON_CONTROL_PLANE_OPERATOR_TOKEN`, the
+joining host's `LEMON_NODE_OPERATOR_TOKEN` must contain the same value; remote
+controllers fail closed when operator authentication is not configured.
+Pairing reports missing, wrong, and controller-misconfigured credentials
+without echoing them.
+Non-loopback controllers require `wss://`. `--allow-insecure-controller` (or
+`LEMON_NODE_ALLOW_INSECURE_CONTROLLER=true`) permits plaintext `ws://` only for
+development or when the entire path is already authenticated and encrypted by
+a verified overlay such as Tailscale.
+
+Node names are trimmed and durably unique per controller. `node.list` reports
+paired identities with online/offline status derived from the live registry;
+only an authenticated live connection is executable. The worker advertises
+`coding_agent.run` version 1, invocation-bound steer/redirect, and targeted
+cancellation. It accepts only that run method, strips `meta.node` before local
+execution, and validates the selected local working directory.
+
+The cross-node payload includes only JSON-safe execution request data such as
+prompt, images, session/run identity, resume token, tool policy, metadata, and
+explicit cwd intent. Source-side executor options, provider credentials,
+callbacks, and BEAM process state are never serialized. The destination
+resolves its own provider credentials, restores `resume_source` to the
+`:auto`/`:explicit` semantics used by the native runner, and uses its own
+default cwd. Explicit
+cancellation sends `node.invoke.cancel`; a source timeout, caller death,
+explicit cancel, node replacement, or WebSocket disconnect also cancels the
+destination work. Relative explicit paths resolve from the worker's configured
+default cwd, and an omitted `--cwd` uses the shell directory from which the join
+command was launched. Stored credentials are bound to the paired node ID, so a
+swapped token file cannot silently turn one named host into another host's
+executor. Remote steer/redirect correction text is UTF-8 and capped at 16 KiB;
+the controller reports acceptance only after the authenticated destination has
+applied it to the live native session context. Terminal races, stale sessions,
+disconnects, and acknowledgement timeouts fail closed. No vendor CLI runner is
+used anywhere in this path.
+
+The socket sends a 25-second protocol ping to remain below the controller's
+idle timeout. Pairing reconnects resume the same pairing ID, and an approved
+pairing can reissue a one-time challenge for the same durable node if the prior
+challenge response was lost. Requests/results obey the advertised `maxPayload`
+(1 MiB by default) plus shared depth/item limits; streaming output is cancelled
+before unbounded accumulation.
 
 ### Running Tests
 
@@ -787,6 +953,7 @@ apps/coding_agent/
 |   |   +-- session/
 |   |   |   +-- compaction_manager.ex        # Auto-compaction state machine
 |   |   |   +-- event_handler.ex             # Agent event -> session state
+|   |   |   +-- heartbeat.ex                 # Durable idle-only recurring turns
 |   |   |   +-- message_serialization.ex     # Message format conversion
 |   |   |   +-- model_resolver.ex            # Model + API key resolution
 |   |   |   +-- prompt_composer.ex           # System prompt layering
@@ -836,6 +1003,9 @@ apps/coding_agent/
 |   |   +-- subagents.ex, mentions.ex         # Subagent definitions and @mention parsing
 |   |   +-- commands.ex                       # Slash command loading
 |   |   +-- coordinator.ex                    # Concurrent subagent orchestration
+|   |   +-- executor.ex                       # Local/named-node native runner selection
+|   |   +-- executor/                         # Local/remote session runners and wire codec
+|   |   +-- execution_node/                   # CLI, worker, WebSocket client, token storage
 |   |   +-- lane_queue.ex                     # Concurrency-capped lane queue
 |   |   +-- parallel.ex                       # Semaphore and bounded parallelism
 |   |   +-- process_manager.ex                # DynamicSupervisor for background processes
@@ -849,7 +1019,6 @@ apps/coding_agent/
 |   |   +-- progress.ex                       # Progress reporting
 |   |   +-- ui.ex                             # Pluggable UI abstraction
 |   |   +-- ui/context.ex                     # UI context helpers
-|   |   +-- cli_runners/                      # CLI runner integrations
 |   +-- mix/tasks/                            # Mix tasks
 +-- test/
 |   +-- coding_agent/
@@ -944,6 +1113,11 @@ Key config paths (via `CodingAgent.Config`):
 | `workspace_dir/0` | `~/.lemon/agent/workspace/` (assistant home bootstrap dir, distinct from `cwd`) |
 | `project_extensions_dir/1` | `<cwd>/.lemon/extensions/` |
 
+Execution-node tokens are not config keys. `LEMON_NODE_OPERATOR_TOKEN` is read
+only for `--pair`, and `LEMON_NODE_TOKEN` can supply an existing session token
+without writing it to shell history. An explicit `--token` overrides the stored
+record for that process; pairing still writes the newly issued session token.
+
 Provider API key resolution is handled by `CodingAgent.Session.ModelResolver` with fixed precedence:
 1. Provider env vars (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, etc.)
 2. Plain `providers.<name>.api_key`
@@ -962,4 +1136,8 @@ When a secret value is an OAuth payload, `LemonAgent.ModelRuntime.Credentials` d
 - Use `async: false` for tests that modify global state (extensions, ETS tables, ProcessManager)
 - `await` and `exec`/`process` tools depend on `ProcessStore` being started; start `ProcessStoreServer` in test setup if needed
 - `ToolRegistry` uses an ETS cache for extensions; call `ToolRegistry.invalidate_extension_cache()` in teardown if tests prime the cache
+- Test-only globally named recorder processes must be unlinked from ExUnit test
+  processes. Reset them with bounded, monitor-confirmed teardown that tolerates a
+  process disappearing concurrently; avoid `whereis` followed by `Agent.stop/1`,
+  which has a check-then-stop `:noproc` race.
 Task-tool normalization is intentionally tolerant of provider variance: if a model supplies a prompt but omits the optional-looking `description` field, `CodingAgent.Tools.Task.Params` derives a short description from the prompt instead of rejecting the task call. Bash-only internal tasks also have a direct fast path for both backticked `Run \`cmd\`` prompts and plain `Run this exact command and return the output: cmd` phrasing so tool-using providers do not pay for a full child session just to execute one shell command.

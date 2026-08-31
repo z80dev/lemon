@@ -9,6 +9,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportFakeApiTest do
   use ExUnit.Case, async: false
 
   alias LemonChannels.Telegram.FakeAPI
+  alias LemonChannels.Adapters.Telegram
 
   defmodule FakeApiTestRouter do
     def handle_inbound(msg) do
@@ -47,6 +48,48 @@ defmodule LemonChannels.Adapters.Telegram.TransportFakeApiTest do
     end
   end
 
+  defmodule FakeBackgroundRuntime do
+    def background_start("index the repository", opts) do
+      :persistent_term.put({__MODULE__, :owner_session}, opts[:session_key])
+      {:ok, %{id: "bg_telegram_full_identifier", status: :queued}}
+    end
+
+    def background_list_scoped(session_key, []) do
+      if owner?(session_key) do
+        [%{id: "bg_telegram_full_identifier", status: :completed, result_available: true}]
+      else
+        []
+      end
+    end
+
+    def background_status_scoped("bg_telegram_full_identifier", session_key) do
+      if owner?(session_key),
+        do:
+          {:ok, %{id: "bg_telegram_full_identifier", status: :completed, result_available: true}},
+        else: {:error, :not_found}
+    end
+
+    def background_result_scoped("bg_telegram_full_identifier", session_key) do
+      if owner?(session_key),
+        do: {:ok, "Telegram checks passed."},
+        else: {:error, :not_found}
+    end
+
+    def background_cancel_scoped("bg_telegram_full_identifier", session_key) do
+      if owner?(session_key) do
+        if pid = :persistent_term.get({__MODULE__, :test_pid}, nil),
+          do: send(pid, :telegram_background_cancelled)
+
+        :ok
+      else
+        {:error, :not_found}
+      end
+    end
+
+    defp owner?(session_key),
+      do: session_key == :persistent_term.get({__MODULE__, :owner_session}, nil)
+  end
+
   setup do
     stop_transport()
     FakeAPI.reset()
@@ -63,6 +106,8 @@ defmodule LemonChannels.Adapters.Telegram.TransportFakeApiTest do
       stop_transport()
       FakeAPI.reset()
       :persistent_term.erase({FakeApiTestRouter, :pid})
+      :persistent_term.erase({FakeBackgroundRuntime, :owner_session})
+      :persistent_term.erase({FakeBackgroundRuntime, :test_pid})
       restore_router_bridge(old_router_bridge)
     end)
 
@@ -108,6 +153,150 @@ defmodule LemonChannels.Adapters.Telegram.TransportFakeApiTest do
   end
 
   describe "transport round trip" do
+    test "portable /commands is handled by the running transport and delivered through Telegram" do
+      chat_id = 310_000
+      gateway_config_key = :"Elixir.LemonGateway.Config"
+      previous_gateway_config = Application.get_env(:lemon_gateway, gateway_config_key)
+
+      Application.put_env(:lemon_gateway, gateway_config_key, %{
+        telegram: %{bot_token: "fake-token", api_mod: FakeAPI}
+      })
+
+      on_exit(fn ->
+        if previous_gateway_config do
+          Application.put_env(:lemon_gateway, gateway_config_key, previous_gateway_config)
+        else
+          Application.delete_env(:lemon_gateway, gateway_config_key)
+        end
+      end)
+
+      assert {:ok, _pid} = start_transport(%{allowed_chat_ids: [chat_id]})
+
+      _update = FakeAPI.simulate_message(chat_id, "/commands")
+
+      assert {:ok, %{fun: :send_message, args: [^chat_id, text, _opts, _parse_mode]}} =
+               FakeAPI.await_send(
+                 fn
+                   %{fun: :send_message, args: [^chat_id, text, _, _]} ->
+                     String.contains?(text, "/queue <prompt>") and
+                       String.contains?(text, "/bg <prompt>") and
+                       String.contains?(text, "/btw <question>")
+
+                   _ ->
+                     false
+                 end,
+                 2_000
+               )
+
+      assert text =~ "Information"
+      refute_received {:inbound, _msg}
+    end
+
+    test "portable /bg returns a full id and retrieves its result through Telegram" do
+      chat_id = 310_010
+      foreign_chat_id = 310_011
+      gateway_config_key = :"Elixir.LemonGateway.Config"
+      previous_gateway_config = Application.get_env(:lemon_gateway, gateway_config_key)
+      previous_runtime = Application.get_env(:lemon_control_plane, :agent_runtime_provider)
+
+      Application.put_env(:lemon_gateway, gateway_config_key, %{
+        telegram: %{bot_token: "fake-token", api_mod: FakeAPI}
+      })
+
+      Application.put_env(
+        :lemon_control_plane,
+        :agent_runtime_provider,
+        FakeBackgroundRuntime
+      )
+
+      :persistent_term.put({FakeBackgroundRuntime, :test_pid}, self())
+
+      on_exit(fn ->
+        if previous_gateway_config do
+          Application.put_env(:lemon_gateway, gateway_config_key, previous_gateway_config)
+        else
+          Application.delete_env(:lemon_gateway, gateway_config_key)
+        end
+
+        if previous_runtime do
+          Application.put_env(:lemon_control_plane, :agent_runtime_provider, previous_runtime)
+        else
+          Application.delete_env(:lemon_control_plane, :agent_runtime_provider)
+        end
+      end)
+
+      assert {:ok, _pid} = start_transport(%{allowed_chat_ids: [chat_id, foreign_chat_id]})
+
+      _update = FakeAPI.simulate_message(chat_id, "/bg index the repository")
+
+      assert {:ok, %{fun: :send_message, args: [^chat_id, receipt, _, _]}} =
+               FakeAPI.await_send(
+                 fn
+                   %{fun: :send_message, args: [^chat_id, text, _, _]} ->
+                     String.contains?(text, "Background run started: bg_telegram_full_identifier")
+
+                   _ ->
+                     false
+                 end,
+                 2_000
+               )
+
+      assert receipt =~ "/bg result bg_telegram_full_identifier"
+
+      _update = FakeAPI.simulate_message(chat_id, "/bg result bg_telegram_full_identifier")
+
+      assert {:ok, %{fun: :send_message, args: [^chat_id, result, _, _]}} =
+               FakeAPI.await_send(
+                 fn
+                   %{fun: :send_message, args: [^chat_id, text, _, _]} ->
+                     String.contains?(text, "Background result bg_telegram_full_identifier")
+
+                   _ ->
+                     false
+                 end,
+                 2_000
+               )
+
+      assert result =~ "Telegram checks passed."
+
+      _update = FakeAPI.simulate_message(foreign_chat_id, "/bg list")
+
+      assert {:ok, %{args: [^foreign_chat_id, "No background runs are recorded.", _, _]}} =
+               FakeAPI.await_send(
+                 fn
+                   %{fun: :send_message, args: [^foreign_chat_id, text, _, _]} ->
+                     text == "No background runs are recorded."
+
+                   _ ->
+                     false
+                 end,
+                 2_000
+               )
+
+      for action <- ["status", "result", "cancel"] do
+        _update =
+          FakeAPI.simulate_message(
+            foreign_chat_id,
+            "/bg #{action} bg_telegram_full_identifier"
+          )
+
+        assert {:ok, %{args: [^foreign_chat_id, "Background run not found.", _, _]}} =
+                 FakeAPI.await_send(
+                   fn
+                     %{fun: :send_message, args: [^foreign_chat_id, text, _, _]} ->
+                       text == "Background run not found."
+
+                     _ ->
+                       false
+                   end,
+                   2_000
+                 )
+      end
+
+      refute_received :telegram_background_cancelled
+      refute_received {:inbound, _msg}
+    end
+
     test "inbound private message flows through the pipeline to router and captured outbound" do
       chat_id = 310_001
       assert {:ok, _pid} = start_transport(%{allowed_chat_ids: [chat_id]})
@@ -205,7 +394,12 @@ defmodule LemonChannels.Adapters.Telegram.TransportFakeApiTest do
       }
       |> Map.merge(overrides)
 
-    LemonChannels.Adapters.Telegram.Transport.start_link(config: config)
+    case LemonChannels.Registry.register(Telegram) do
+      :ok -> :ok
+      {:error, :already_registered} -> :ok
+    end
+
+    Telegram.Transport.start_link(config: config)
   end
 
   defp restore_router_bridge(nil), do: Application.delete_env(:lemon_core, :router_bridge)
@@ -216,6 +410,10 @@ defmodule LemonChannels.Adapters.Telegram.TransportFakeApiTest do
       if Process.alive?(pid) do
         GenServer.stop(pid, :normal)
       end
+    end
+
+    if Process.whereis(LemonChannels.Registry) do
+      LemonChannels.Registry.unregister("telegram")
     end
   catch
     :exit, _ -> :ok

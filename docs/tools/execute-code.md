@@ -314,7 +314,9 @@ harmless). This is isolation hygiene, not a sandbox.
 ## Output
 
 Only what the script writes to stdout/stderr is captured — there is no implicit
-final-expression repr. Output is sanitized, capped at `max_output_bytes` keeping the first
+final-expression repr. Line-buffered Python output preserves its order relative to child
+processes writing directly to the inherited stdout/stderr descriptors. Output is sanitized,
+capped at `max_output_bytes` keeping the first
 40% plus a rolling last 60% with a truncation marker, and the full combined output spills
 to a `0600` file whose path appears in the result as `full_output_path` and in
 `[Full output saved to: ...]` text. The path remains readable after the cell completes. A

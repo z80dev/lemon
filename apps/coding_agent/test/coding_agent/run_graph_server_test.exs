@@ -371,6 +371,80 @@ defmodule CodingAgent.RunGraphServerTest do
   end
 
   describe "DETS persistence" do
+    test "startup does not accept live writes until the DETS snapshot is loaded" do
+      unique = System.unique_integer([:positive])
+      table = String.to_atom("run_graph_startup_ets_#{unique}")
+      dets_table = String.to_atom("run_graph_startup_dets_#{unique}")
+      server_name = String.to_atom("run_graph_startup_server_#{unique}")
+      dets_path = Path.join(System.tmp_dir!(), "run_graph_startup_#{unique}.dets")
+      parent = self()
+
+      {:ok, ^dets_table} =
+        :dets.open_file(dets_table, file: String.to_charlist(dets_path), type: :set)
+
+      :ok =
+        :dets.insert(dets_table, {
+          "same-run",
+          %{id: "same-run", status: :completed, result: :persisted}
+        })
+
+      :ok = :dets.close(dets_table)
+
+      starter =
+        Task.async(fn ->
+          result =
+            RunGraphServer.start_link(
+              name: server_name,
+              table: table,
+              dets_table: dets_table,
+              dets_path: dets_path,
+              before_dets_load: fn ->
+                send(parent, {:load_blocked, self()})
+
+                receive do
+                  :continue_load -> :ok
+                end
+              end
+            )
+
+          send(parent, {:server_started, result})
+
+          receive do
+            :release_owner -> result
+          end
+        end)
+
+      assert_receive {:load_blocked, loader_pid}
+      assert Task.yield(starter, 0) == nil
+
+      live_write =
+        Task.async(fn ->
+          RunGraphServer.insert_record(
+            "same-run",
+            %{id: "same-run", status: :running, result: :live},
+            server_name
+          )
+        end)
+
+      assert Task.yield(live_write, 0) == nil
+      send(loader_pid, :continue_load)
+
+      assert_receive {:server_started, {:ok, server_pid}}
+      assert :ok = Task.await(live_write)
+
+      assert [{"same-run", %{status: :running, result: :live}}] =
+               :ets.lookup(table, "same-run")
+
+      status = RunGraphServer.dets_status(server_pid)
+      assert status.state.loaded_from_dets
+      refute status.state.loading
+
+      GenServer.stop(server_pid)
+      send(starter.pid, :release_owner)
+      assert {:ok, ^server_pid} = Task.await(starter)
+      File.rm(dets_path)
+    end
+
     test "running runs are marked as lost on server restart" do
       RunGraph.clear()
 

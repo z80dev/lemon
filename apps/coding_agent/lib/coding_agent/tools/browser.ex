@@ -8,7 +8,6 @@ defmodule CodingAgent.Tools.Browser do
   alias CodingAgent.Security.ExternalContent
   alias CodingAgent.Tools.PathHelpers
   alias LemonBrowser.Artifacts
-  alias LemonBrowser.LocalServer
   alias LemonBrowser.RoutePolicy
 
   import CodingAgent.Tools.AbortHelpers, only: [check_abort: 1]
@@ -20,7 +19,33 @@ defmodule CodingAgent.Tools.Browser do
   @spec tool(String.t(), keyword(), map()) :: AgentTool.t()
   def tool(cwd, opts, spec) do
     runtime = %{
-      browser_request: Keyword.get(opts, :browser_request, &LocalServer.request/3),
+      browser_request:
+        Keyword.get_lazy(opts, :browser_request, fn ->
+          browser_opts =
+            opts
+            |> Keyword.take([
+              :browser_backend,
+              :browser_controller_id,
+              :browser_profile_id,
+              :browser_provider_config,
+              :browser_hybrid_local_backend,
+              :browser_hybrid_public_backend,
+              :session_id,
+              :run_id
+            ])
+            |> Enum.map(fn
+              {:browser_backend, value} -> {:backend, value}
+              {:browser_controller_id, value} -> {:controller_id, value}
+              {:browser_provider_config, value} -> {:provider_config, value}
+              {:browser_hybrid_local_backend, value} -> {:hybrid_local_backend, value}
+              {:browser_hybrid_public_backend, value} -> {:hybrid_public_backend, value}
+              pair -> pair
+            end)
+
+          fn method, args, timeout_ms ->
+            LemonBrowser.request(method, args, timeout_ms, browser_opts)
+          end
+        end),
       artifacts_dir: Keyword.get(opts, :browser_artifacts_dir),
       tool_opts: opts
     }
@@ -29,7 +54,7 @@ defmodule CodingAgent.Tools.Browser do
       name: spec.name,
       description: spec.description,
       label: spec.label,
-      parameters: spec.parameters,
+      parameters: maybe_add_target_parameter(spec.parameters, spec),
       execute: fn tool_call_id, params, signal, on_update ->
         execute(tool_call_id, params, signal, on_update, cwd, runtime, spec)
       end
@@ -39,6 +64,7 @@ defmodule CodingAgent.Tools.Browser do
   def execute(_tool_call_id, params, signal, on_update, cwd, runtime, spec) do
     with :ok <- check_abort(signal),
          {:ok, request} <- spec.normalize.(params),
+         request <- maybe_attach_target_id(request, params),
          :ok <- check_abort(signal) do
       emit_browser_update(on_update, spec.name, request, "started")
 
@@ -176,6 +202,103 @@ defmodule CodingAgent.Tools.Browser do
              method: "browser.navigate",
              args: %{"url" => url},
              network_policy: network_policy,
+             timeout_ms: timeout_ms(params)
+           }}
+        end
+      end
+    }
+  end
+
+  def spec(:tabs) do
+    %{
+      name: "browser_tabs",
+      label: "Browser Tabs",
+      description:
+        "List every controllable browser tab with stable target IDs and identify the active tab.",
+      parameters: %{
+        "type" => "object",
+        "properties" => %{"timeoutMs" => timeout_schema()},
+        "required" => []
+      },
+      session_method: true,
+      normalize: fn params ->
+        {:ok, %{method: "browser.tabs", args: %{}, timeout_ms: timeout_ms(params)}}
+      end
+    }
+  end
+
+  def spec(:tab_open) do
+    %{
+      name: "browser_tab_open",
+      label: "Browser Open Tab",
+      description: "Open a new browser tab, make it active, and return its stable target ID.",
+      parameters: %{
+        "type" => "object",
+        "properties" => %{
+          "url" => %{
+            "type" => "string",
+            "description" => "Optional HTTP, HTTPS, or local URL. Defaults to about:blank."
+          },
+          "route" => %{
+            "type" => "string",
+            "description" => "Optional navigation route guard: auto, public, or local.",
+            "enum" => ["auto", "public", "local"]
+          },
+          "timeoutMs" => timeout_schema()
+        },
+        "required" => []
+      },
+      session_method: true,
+      normalize: fn params ->
+        url = optional_string(params, ["url"]) || "about:blank"
+
+        with {:ok, network_policy} <-
+               RoutePolicy.validate_navigation(url, optional_string(params, ["route"])) do
+          {:ok,
+           %{
+             method: "browser.tabOpen",
+             args: %{"url" => url},
+             network_policy: network_policy,
+             timeout_ms: timeout_ms(params)
+           }}
+        end
+      end
+    }
+  end
+
+  def spec(:tab_activate) do
+    %{
+      name: "browser_tab_activate",
+      label: "Browser Activate Tab",
+      description: "Make a browser tab active using the stable target ID from browser_tabs.",
+      parameters: target_id_parameters(),
+      session_method: true,
+      normalize: fn params ->
+        with {:ok, target_id} <- required_string(params, ["targetId"]) do
+          {:ok,
+           %{
+             method: "browser.tabActivate",
+             args: %{"targetId" => target_id},
+             timeout_ms: timeout_ms(params)
+           }}
+        end
+      end
+    }
+  end
+
+  def spec(:tab_close) do
+    %{
+      name: "browser_tab_close",
+      label: "Browser Close Tab",
+      description: "Close a browser tab using the stable target ID from browser_tabs.",
+      parameters: target_id_parameters(),
+      session_method: true,
+      normalize: fn params ->
+        with {:ok, target_id} <- required_string(params, ["targetId"]) do
+          {:ok,
+           %{
+             method: "browser.tabClose",
+             args: %{"targetId" => target_id},
              timeout_ms: timeout_ms(params)
            }}
         end
@@ -1307,6 +1430,9 @@ defmodule CodingAgent.Tools.Browser do
       "autoSendFileCount" => result["auto_send_files"] |> List.wrap() |> length(),
       "eventCount" => result["count"] || list_count(result["events"]),
       "cookieCount" => list_count(result["cookies"]),
+      "tabCount" => list_count(result["tabs"]),
+      "targetId" => result["targetId"],
+      "activeTargetId" => result["activeTargetId"],
       "errorKind" => result["errorKind"]
     }
     |> Enum.reject(fn {_key, value} -> value in [nil, false, 0] end)
@@ -1316,10 +1442,10 @@ defmodule CodingAgent.Tools.Browser do
   defp browser_progress_result_summary(_result), do: %{}
 
   defp maybe_add_navigation_policy(result, %{
-         method: "browser.navigate",
+         method: method,
          network_policy: network_policy
        })
-       when is_map(result) do
+       when method in ["browser.navigate", "browser.tabOpen"] and is_map(result) do
     Map.put(result, "networkPolicy", RoutePolicy.safe(network_policy))
   end
 
@@ -1381,6 +1507,30 @@ defmodule CodingAgent.Tools.Browser do
       nil when allow_empty -> {:ok, ""}
       nil -> {:error, "#{List.first(keys)} is required"}
       value -> {:ok, value}
+    end
+  end
+
+  defp maybe_add_target_parameter(parameters, %{session_method: true}), do: parameters
+
+  defp maybe_add_target_parameter(%{"properties" => properties} = parameters, _spec) do
+    Map.put(parameters, "properties", Map.put(properties, "targetId", target_id_schema()))
+  end
+
+  defp maybe_add_target_parameter(parameters, _spec), do: parameters
+
+  defp maybe_attach_target_id(%{method: method} = request, _params)
+       when method in [
+              "browser.tabs",
+              "browser.tabOpen",
+              "browser.tabActivate",
+              "browser.tabClose"
+            ],
+       do: request
+
+  defp maybe_attach_target_id(request, params) do
+    case optional_string(params, ["targetId"]) do
+      nil -> request
+      target_id -> Map.update!(request, :args, &Map.put(&1, "targetId", target_id))
     end
   end
 
@@ -1578,12 +1728,55 @@ defmodule CodingAgent.Tools.Browser do
   defp timeout_schema do
     %{"type" => "integer", "description" => "Request timeout in milliseconds."}
   end
+
+  defp target_id_schema do
+    %{
+      "type" => "string",
+      "description" =>
+        "Optional stable tab target ID from browser_tabs. Omit to use the active tab."
+    }
+  end
+
+  defp target_id_parameters do
+    %{
+      "type" => "object",
+      "properties" => %{
+        "targetId" => target_id_schema(),
+        "timeoutMs" => timeout_schema()
+      },
+      "required" => ["targetId"]
+    }
+  end
 end
 
 defmodule CodingAgent.Tools.BrowserNavigate do
   @moduledoc false
   def tool(cwd, opts \\ []),
     do: CodingAgent.Tools.Browser.tool(cwd, opts, CodingAgent.Tools.Browser.spec(:navigate))
+end
+
+defmodule CodingAgent.Tools.BrowserTabs do
+  @moduledoc false
+  def tool(cwd, opts \\ []),
+    do: CodingAgent.Tools.Browser.tool(cwd, opts, CodingAgent.Tools.Browser.spec(:tabs))
+end
+
+defmodule CodingAgent.Tools.BrowserTabOpen do
+  @moduledoc false
+  def tool(cwd, opts \\ []),
+    do: CodingAgent.Tools.Browser.tool(cwd, opts, CodingAgent.Tools.Browser.spec(:tab_open))
+end
+
+defmodule CodingAgent.Tools.BrowserTabActivate do
+  @moduledoc false
+  def tool(cwd, opts \\ []),
+    do: CodingAgent.Tools.Browser.tool(cwd, opts, CodingAgent.Tools.Browser.spec(:tab_activate))
+end
+
+defmodule CodingAgent.Tools.BrowserTabClose do
+  @moduledoc false
+  def tool(cwd, opts \\ []),
+    do: CodingAgent.Tools.Browser.tool(cwd, opts, CodingAgent.Tools.Browser.spec(:tab_close))
 end
 
 defmodule CodingAgent.Tools.BrowserSnapshot do

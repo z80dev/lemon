@@ -17,20 +17,32 @@ defmodule LemonCli.CLI do
       gateway setup [transport] [--transport NAME] [--non-interactive]
       doctor [--verbose] [--json] [--bundle [PATH]] [--bundle-path PATH] [--project-dir PATH]
       config [validate|show] [--verbose] [--project-dir PATH]
-      secrets <status|init|set|list|delete|check|import-env>
+      secrets <status|init|set|list|delete|check|import-env|sources>
       channels [--project-dir PATH] [--json]
+      providers [status|fallback|pool] [options]
+      blueprints [list|inspect|validate|preview|activate] [options]
+      profile <list|show|create|clone|rename|export|delete|roster|chat>
+      backup <contract|create|list|verify|restore> [options]
+      context <preview|resolve> <reference>... [bounded options]
+      sessions <list|search|show|history|title|pin|unpin|archive|restore|export|prune|delete>
+      learn [review|confirm] <reference>... [options]
+      update <check|plan|apply|history|rollback> [options]
+      completion <bash|zsh|fish>
 
   `model` delegates to provider onboarding; `gateway setup` delegates to the
   gateway setup adapters.
   """
 
+  alias LemonCore.Backup
   alias LemonCore.Config.Modular
   alias LemonCli.Onboarding.Runner
   alias LemonCli.Setup.{Gateway, Provider, Verification, Wizard}
   alias LemonCore.Doctor
   alias LemonCore.Doctor.{Check, Report, SupportBundle}
   alias LemonCore.Secrets
+  alias LemonCore.Secrets.EnvCatalog
   alias LemonCore.Secrets.MasterKey
+  alias LemonCli.CommandRegistry
 
   defmodule Error do
     @moduledoc """
@@ -44,56 +56,9 @@ defmodule LemonCli.CLI do
     defexception [:message, exit_code: 1]
   end
 
-  @commands ~w(setup model gateway doctor config secrets channels)
-
   @exit_ok 0
   @exit_error 1
   @exit_usage 2
-
-  # Mirrors `Mix.Tasks.Lemon.Secrets.Check` / `Lemon.Secrets.ImportEnv`, the
-  # canonical list of env-var secret names. Kept here so `lemon secrets`
-  # works from packaged releases, where Mix task modules do not exist.
-  @known_secrets [
-    # AI providers
-    "ANTHROPIC_API_KEY",
-    "OPENAI_API_KEY",
-    "OPENAI_CODEX_API_KEY",
-    "CHATGPT_TOKEN",
-    "GOOGLE_GENERATIVE_AI_API_KEY",
-    "GOOGLE_API_KEY",
-    "GEMINI_API_KEY",
-    "AWS_ACCESS_KEY_ID",
-    "AWS_SECRET_ACCESS_KEY",
-    "AWS_SESSION_TOKEN",
-    "AZURE_OPENAI_API_KEY",
-    "GROQ_API_KEY",
-    "MISTRAL_API_KEY",
-    "XAI_API_KEY",
-    "CEREBRAS_API_KEY",
-    "KIMI_API_KEY",
-    "MOONSHOT_API_KEY",
-    "OPENCODE_API_KEY",
-    # Coding agent tools
-    "PERPLEXITY_API_KEY",
-    "OPENROUTER_API_KEY",
-    "FIRECRAWL_API_KEY",
-    "BRAVE_API_KEY",
-    "GITHUB_TOKEN",
-    # X/Twitter API
-    "X_API_CLIENT_ID",
-    "X_API_CLIENT_SECRET",
-    "X_API_BEARER_TOKEN",
-    "X_API_ACCESS_TOKEN",
-    "X_API_REFRESH_TOKEN",
-    "X_API_CONSUMER_KEY",
-    "X_API_CONSUMER_SECRET",
-    "X_API_ACCESS_TOKEN_SECRET",
-    # Market intel
-    "MARKET_INTEL_BASESCAN_KEY",
-    "MARKET_INTEL_DEXSCREENER_KEY",
-    "MARKET_INTEL_OPENAI_KEY",
-    "MARKET_INTEL_ANTHROPIC_KEY"
-  ]
 
   @doc """
   Returns whether interactive setup is still required.
@@ -162,19 +127,23 @@ defmodule LemonCli.CLI do
     @exit_ok
   end
 
-  defp dispatch([command | rest]) when command in @commands do
+  defp dispatch([command | rest]) do
     # Intercept help anywhere in the command's arguments — including after
     # subcommand words like `gateway setup --help` — so nothing downstream
     # (wizard, provider picker, gateway adapters, prompts on EOF) ever runs.
-    if help_requested?(rest) do
-      print_command_usage(command)
-      @exit_ok
+    if CommandRegistry.command?(command) do
+      if help_requested?(rest) do
+        print_command_usage(command)
+        @exit_ok
+      else
+        run_command(command, rest)
+      end
     else
-      run_command(command, rest)
+      unknown_command(command)
     end
   end
 
-  defp dispatch([command | _rest]) do
+  defp unknown_command(command) do
     IO.puts(:stderr, "Unknown command: #{command}")
     IO.puts(:stderr, "")
     print_usage(:stderr)
@@ -190,6 +159,15 @@ defmodule LemonCli.CLI do
   defp run_command("config", args), do: run_config(args)
   defp run_command("secrets", args), do: run_secrets(args)
   defp run_command("channels", args), do: run_channels(args)
+  defp run_command("providers", args), do: LemonCli.ProvidersCommand.run(args)
+  defp run_command("blueprints", args), do: LemonCli.BlueprintsCommand.run(args)
+  defp run_command("profile", args), do: LemonCli.ProfileCommand.run(args)
+  defp run_command("backup", args), do: run_backup(args)
+  defp run_command("context", args), do: LemonCli.ContextCommand.run(args)
+  defp run_command("sessions", args), do: LemonCli.SessionsCommand.run(args)
+  defp run_command("learn", args), do: LemonCli.LearnCommand.run(args)
+  defp run_command("update", args), do: LemonCli.UpdateCommand.run(args)
+  defp run_command("completion", args), do: LemonCli.CompletionCommand.run(args)
 
   # ──────────────────────────────────────────────────────────────────────────
   # setup / model / gateway
@@ -508,18 +486,8 @@ defmodule LemonCli.CLI do
     end
   end
 
-  defp print_config_usage(device \\ :stdio) do
-    IO.puts(device, """
-    Usage: lemon config [validate|show] [options]
-
-    Commands:
-      validate   Validate the current configuration
-      show       Show the current configuration
-
-    Options:
-      --verbose, -v           Verbose output
-      --project-dir, -p PATH  Project directory for project-config checks
-    """)
+  defp print_config_usage(device) do
+    IO.write(device, CommandRegistry.help("config"))
   end
 
   # ──────────────────────────────────────────────────────────────────────────
@@ -533,6 +501,11 @@ defmodule LemonCli.CLI do
   defp run_secrets(["delete" | rest]), do: secrets_delete(rest)
   defp run_secrets(["check" | _rest]), do: secrets_check()
   defp run_secrets(["import-env" | rest]), do: secrets_import_env(rest)
+
+  defp run_secrets(["sources" | rest]) do
+    ensure_apps_started!([:lemon_core])
+    LemonCli.SecretSourcesCommand.run(rest)
+  end
 
   defp run_secrets(_other) do
     print_secrets_usage()
@@ -725,29 +698,34 @@ defmodule LemonCli.CLI do
   defp secrets_check do
     ensure_apps_started!([:lemon_core])
 
-    max_name_len = @known_secrets |> Enum.map(&String.length/1) |> Enum.max()
+    max_name_len = EnvCatalog.names() |> Enum.map(&String.length/1) |> Enum.max()
 
     IO.puts(String.pad_trailing("NAME", max_name_len) <> "  SOURCE   VALUE")
     IO.puts(String.duplicate("-", max_name_len + 30))
 
-    results = Enum.map(@known_secrets, &check_secret(&1, max_name_len))
+    results = Enum.map(EnvCatalog.names(), &check_secret(&1, max_name_len))
 
     from_store = Enum.count(results, &(&1 == :store))
     from_env = Enum.count(results, &(&1 == :env))
+    from_external = Enum.count(results, &external_source?/1)
     missing = Enum.count(results, &(&1 == :missing))
 
     IO.puts("")
-    IO.puts("#{from_store} from store, #{from_env} from env, #{missing} missing")
+
+    IO.puts(
+      "#{from_store} from store, #{from_external} from external sources, " <>
+        "#{from_env} from env, #{missing} missing"
+    )
 
     @exit_ok
   end
 
   defp check_secret(name, max_name_len) do
     case Secrets.resolve(name) do
-      {:ok, value, source} ->
+      {:ok, _value, source} ->
         padded_name = String.pad_trailing(name, max_name_len)
-        padded_source = String.pad_trailing(to_string(source), 7)
-        IO.puts("#{padded_name}  #{padded_source}  #{mask(value)}")
+        padded_source = String.pad_trailing(format_secret_source(source), 7)
+        IO.puts("#{padded_name}  #{padded_source}  present")
         source
 
       {:error, _reason} ->
@@ -758,13 +736,13 @@ defmodule LemonCli.CLI do
     end
   end
 
-  defp mask(value) when byte_size(value) > 8 do
-    first = String.slice(value, 0, 4)
-    last = String.slice(value, -4, 4)
-    "#{first}...#{last}"
-  end
+  defp format_secret_source(source) when is_binary(source), do: source
+  defp format_secret_source(source), do: to_string(source)
 
-  defp mask(_value), do: "***"
+  defp external_source?(source) when is_binary(source),
+    do: String.starts_with?(source, "external:")
+
+  defp external_source?(_source), do: false
 
   defp secrets_import_env(args) do
     ensure_apps_started!([:lemon_core])
@@ -782,7 +760,7 @@ defmodule LemonCli.CLI do
       IO.puts("Dry run mode — no changes will be made")
     end
 
-    results = Enum.map(@known_secrets, &process_secret(&1, dry_run, force))
+    results = Enum.map(EnvCatalog.names(), &process_secret(&1, dry_run, force))
 
     imported = Enum.count(results, &(&1 == :imported))
     already = Enum.count(results, &(&1 == :already_in_store))
@@ -845,18 +823,7 @@ defmodule LemonCli.CLI do
   defp maybe_put(opts, key, value), do: Keyword.put(opts, key, value)
 
   defp print_secrets_usage do
-    IO.puts("""
-    Usage: lemon secrets <command> [args]
-
-    Commands:
-      status
-      init [--target file|keychain] [--force]
-      set <name> <value> [--provider P] [--expires-at N]
-      list
-      delete <name>
-      check
-      import-env [--dry-run] [--force]
-    """)
+    IO.write(CommandRegistry.help("secrets"))
   end
 
   # ──────────────────────────────────────────────────────────────────────────
@@ -924,6 +891,280 @@ defmodule LemonCli.CLI do
   defp truthy?(value), do: if(value, do: "true", else: "false")
 
   # ──────────────────────────────────────────────────────────────────────────
+  # backup
+  # ──────────────────────────────────────────────────────────────────────────
+
+  defp run_backup(["contract" | args]) do
+    with {:ok, opts} <- parse_backup_options(args, include_credentials: :boolean, json: :boolean),
+         :ok <- require_backup_positionals(opts, []) do
+      result = Backup.contract(include_credentials: opts.options[:include_credentials] == true)
+      backup_success("contract", result, opts.options[:json] == true)
+    else
+      {:error, :usage} -> backup_usage_error()
+    end
+  end
+
+  defp run_backup(["create" | args]) do
+    with {:ok, opts} <-
+           parse_backup_options(args,
+             output: :string,
+             include_credentials: :boolean,
+             json: :boolean
+           ),
+         :ok <- require_backup_positionals(opts, []) do
+      backup_opts =
+        []
+        |> maybe_put_backup_opt(:output, opts.options[:output])
+        |> Keyword.put(:include_credentials, opts.options[:include_credentials] == true)
+
+      run_backup_operation("create", opts.options[:json] == true, fn ->
+        Backup.create(backup_opts)
+      end)
+    else
+      {:error, :usage} -> backup_usage_error()
+    end
+  end
+
+  defp run_backup(["list" | args]) do
+    with {:ok, opts} <- parse_backup_options(args, root: :string, json: :boolean),
+         :ok <- require_backup_positionals(opts, []) do
+      backup_opts = maybe_put_backup_opt([], :backup_root, opts.options[:root])
+
+      run_backup_operation("list", opts.options[:json] == true, fn ->
+        Backup.list(backup_opts)
+      end)
+    else
+      {:error, :usage} -> backup_usage_error()
+    end
+  end
+
+  defp run_backup(["verify" | args]) do
+    with {:ok, opts} <- parse_backup_options(args, target: :string, json: :boolean),
+         [bundle] <- opts.positionals do
+      backup_opts = maybe_put_backup_opt([], :target, opts.options[:target])
+
+      run_backup_operation("verify", opts.options[:json] == true, fn ->
+        Backup.verify(bundle, backup_opts)
+      end)
+    else
+      _ -> backup_usage_error()
+    end
+  end
+
+  defp run_backup(["restore" | args]) do
+    with {:ok, opts} <-
+           parse_backup_options(args,
+             target: :string,
+             overwrite: :boolean,
+             confirm: :string,
+             json: :boolean
+           ),
+         [bundle] <- opts.positionals,
+         :ok <- validate_restore_cli_options(opts.options) do
+      backup_opts =
+        []
+        |> maybe_put_backup_opt(:target, opts.options[:target])
+        |> Keyword.put(:overwrite, opts.options[:overwrite] == true)
+        |> maybe_put_backup_opt(:confirmation, opts.options[:confirm])
+
+      run_backup_operation("restore", opts.options[:json] == true, fn ->
+        Backup.restore(bundle, backup_opts)
+      end)
+    else
+      _ -> backup_usage_error()
+    end
+  end
+
+  defp run_backup(_args), do: backup_usage_error()
+
+  defp parse_backup_options(args, strict) do
+    {options, positionals, invalid} = OptionParser.parse(args, strict: strict)
+
+    if invalid == [] do
+      {:ok, %{options: options, positionals: positionals}}
+    else
+      {:error, :usage}
+    end
+  end
+
+  defp require_backup_positionals(%{positionals: expected}, expected), do: :ok
+  defp require_backup_positionals(_parsed, _expected), do: {:error, :usage}
+
+  defp validate_restore_cli_options(options) do
+    if options[:confirm] && options[:overwrite] != true,
+      do: {:error, :usage},
+      else: :ok
+  end
+
+  defp maybe_put_backup_opt(opts, _key, nil), do: opts
+  defp maybe_put_backup_opt(opts, key, value), do: Keyword.put(opts, key, value)
+
+  defp run_backup_operation(operation, json?, fun) do
+    result =
+      try do
+        fun.()
+      rescue
+        _error -> {:error, :unexpected_backup_failure}
+      catch
+        _kind, _reason -> {:error, :unexpected_backup_failure}
+      end
+
+    case result do
+      {:ok, value} -> backup_success(operation, value, json?)
+      {:error, reason} -> backup_failure(operation, reason, json?)
+    end
+  end
+
+  defp backup_success(operation, value, true) do
+    IO.puts(Jason.encode!(%{ok: true, operation: operation, result: value}))
+    @exit_ok
+  end
+
+  defp backup_success(operation, value, false) do
+    print_backup_success(operation, value)
+    @exit_ok
+  end
+
+  defp backup_failure(operation, reason, true) do
+    {code, message} = backup_error(reason)
+
+    IO.puts(
+      :stderr,
+      Jason.encode!(%{ok: false, operation: operation, error: %{code: code, message: message}})
+    )
+
+    @exit_error
+  end
+
+  defp backup_failure(_operation, reason, false) do
+    {_code, message} = backup_error(reason)
+    IO.puts(:stderr, "Backup failed: #{message}")
+    @exit_error
+  end
+
+  defp print_backup_success("contract", contract) do
+    IO.puts("Lemon backup contract v#{contract.contract_version}")
+    IO.puts("Scope: #{contract.source} (durable user state only)")
+    IO.puts("Credentials included: #{contract.include_credentials}")
+    IO.puts("Symlinks followed: #{contract.follows_symlinks}")
+    IO.puts("Exclusions:")
+    Enum.each(contract.excludes, &IO.puts("  - #{&1}"))
+  end
+
+  defp print_backup_success("create", result) do
+    IO.puts("Backup created: #{result.path}")
+    IO.puts("ID: #{result.id}")
+    IO.puts("Files: #{result.file_count}; bytes: #{result.total_bytes}")
+    IO.puts("Credentials included: #{result.includes_credentials}")
+    IO.puts("Verified: #{result.verified}")
+  end
+
+  defp print_backup_success("list", []) do
+    IO.puts("No Lemon backups found.")
+  end
+
+  defp print_backup_success("list", backups) do
+    IO.puts("Lemon backups: #{length(backups)}")
+
+    Enum.each(backups, fn backup ->
+      IO.puts(
+        "  #{backup.id}  #{backup.created_at}  files=#{backup.file_count} " <>
+          "bytes=#{backup.total_bytes} credentials=#{backup.includes_credentials} " <>
+          "path=#{backup.path}"
+      )
+    end)
+  end
+
+  defp print_backup_success("verify", result) do
+    IO.puts("Backup verified: #{result.id}")
+    IO.puts("Manifest SHA-256: #{result.manifest_sha256}")
+    IO.puts("Files: #{result.file_count}; bytes: #{result.total_bytes}")
+    IO.puts("Overwrite confirmation: #{result.overwrite_confirmation}")
+  end
+
+  defp print_backup_success("restore", result) do
+    IO.puts("Backup restored: #{result.backup_id}")
+    IO.puts("Target: #{result.target}")
+
+    IO.puts(
+      "Restored: #{result.restored_count}; identical: #{result.identical_count}; " <>
+        "overwritten: #{result.overwritten_count}"
+    )
+
+    if result.rollback_path, do: IO.puts("Rollback directory: #{result.rollback_path}")
+  end
+
+  defp backup_error(:source_not_found),
+    do: {"source_not_found", "The Lemon user-state directory does not exist."}
+
+  defp backup_error(:backup_not_found),
+    do: {"backup_not_found", "The backup bundle does not exist."}
+
+  defp backup_error(:backup_not_directory),
+    do: {"backup_not_directory", "The backup path is not a directory bundle."}
+
+  defp backup_error(:path_exists),
+    do: {"path_exists", "The output or rollback path already exists."}
+
+  defp backup_error(:backup_restore_locked),
+    do: {"operation_locked", "Another backup or restore operation is already running."}
+
+  defp backup_error({:unsupported_backup_schema, _schema}),
+    do: {"unsupported_schema", "This backup schema is not supported by this Lemon version."}
+
+  defp backup_error({:restore_conflicts, count}),
+    do:
+      {"restore_conflicts",
+       "Restore found #{count} differing destination file(s). Verify with the exact target, then retry with --overwrite --confirm TOKEN."}
+
+  defp backup_error(:restore_confirmation_required),
+    do:
+      {"confirmation_required",
+       "Overwrite requires the confirmation emitted by verify for this manifest and target."}
+
+  defp backup_error(:restore_confirmation_mismatch),
+    do:
+      {"confirmation_mismatch",
+       "The overwrite confirmation does not match this verified manifest and target."}
+
+  defp backup_error(:unsafe_bundle_permissions),
+    do:
+      {"unsafe_permissions",
+       "Backup permissions are wider than owner-only; verification refused the bundle."}
+
+  defp backup_error(:unsafe_restore_target),
+    do: {"unsafe_target", "The restore target must be an absent path or a real directory."}
+
+  defp backup_error(:structural_restore_conflict),
+    do:
+      {"structural_conflict",
+       "Restore encountered a symlink, special file, or non-directory parent and refused to continue."}
+
+  defp backup_error(:manifest_checksum_mismatch),
+    do: {"manifest_checksum_mismatch", "The backup manifest checksum does not match."}
+
+  defp backup_error(:file_checksum_mismatch),
+    do: {"file_checksum_mismatch", "A backed-up file failed checksum verification."}
+
+  defp backup_error(:bundle_file_set_mismatch),
+    do: {"file_set_mismatch", "The bundle file set does not exactly match its manifest."}
+
+  defp backup_error({:restore_apply_and_rollback_failed, _reason}),
+    do:
+      {"rollback_incomplete",
+       "Restore failed and automatic rollback was incomplete; rollback material was retained."}
+
+  defp backup_error(_reason),
+    do: {"backup_failed", "The operation failed safely; no secret values were printed."}
+
+  defp backup_usage_error do
+    IO.puts(:stderr, "Invalid backup command or options.")
+    IO.puts(:stderr, "")
+    print_backup_usage(:stderr)
+    @exit_usage
+  end
+
+  # ──────────────────────────────────────────────────────────────────────────
   # Shared helpers
   # ──────────────────────────────────────────────────────────────────────────
 
@@ -958,93 +1199,17 @@ defmodule LemonCli.CLI do
   end
 
   defp print_usage(device \\ :stdio) do
-    IO.puts(device, """
-    Usage: lemon <command> [options]
-
-    Commands:
-      setup [provider|runtime|gateway|doctor]   First-time setup and configuration
-      model [--provider P] [--token T] [flags]  Onboard an AI provider
-      gateway setup [transport] [flags]         Configure gateway adapters
-      doctor [--verbose] [--json] [--bundle]    Run diagnostics / write support bundle
-      config [validate|show]                    Validate or show configuration
-      secrets <status|init|set|list|delete|check|import-env>
-      channels [--project-dir PATH] [--json]    Channel launch readiness
-
-    Run `lemon <command> --help` for command options.
-    """)
+    IO.write(device, CommandRegistry.help())
   end
 
-  defp print_command_usage("setup") do
-    IO.puts("""
-    Usage: lemon setup [provider|runtime|gateway|doctor] [options]
+  defp print_command_usage("providers"), do: LemonCli.ProvidersCommand.print_usage()
+  defp print_command_usage(command), do: IO.write(CommandRegistry.help(command))
 
-    Subcommands:
-      provider [args]   Configure an AI provider (same flags as `lemon model`)
-      runtime [args]    Configure runtime profile and port bindings
-      gateway [args]    Configure gateway adapters
-      doctor [args]     Validate config and report health
-
-    Options:
-      --non-interactive, -n   Skip prompts, use defaults / CLI flags
-      --config-path PATH      Config file to read/write (full wizard only)
-    """)
+  defp print_backup_usage(device) do
+    IO.write(device, CommandRegistry.help("backup"))
   end
 
-  defp print_command_usage("model") do
-    IO.puts("""
-    Usage: lemon model [provider] [options]
-
-    Onboards an AI provider: OAuth or API-key credentials are stored in the
-    encrypted secrets store and referenced from config.toml. Without a
-    provider, an interactive picker is shown.
-
-    Options:
-      --provider P            Provider id (or pass it positionally)
-      --token T               Non-interactive API key
-      --auth oauth|api_key    Authentication mode
-      --secret-name NAME      Secret name to store the credential under
-      --model M               Default model when used with --set-default
-      --set-default           Set the provider/model as default
-      --config-path PATH      Config file to update
-    """)
-  end
-
-  defp print_command_usage("gateway") do
-    IO.puts("""
-    Usage: lemon gateway setup [transport] [options]
-
-    Options:
-      --transport NAME, -t    Gateway adapter (e.g. telegram, discord)
-      --non-interactive, -n   Skip prompts
-    """)
-  end
-
-  defp print_command_usage("doctor"), do: print_doctor_usage()
-
-  defp print_command_usage("config"), do: print_config_usage()
-
-  defp print_command_usage("secrets"), do: print_secrets_usage()
-
-  defp print_command_usage("channels") do
-    IO.puts("""
-    Usage: lemon channels [options]
-
-    Options:
-      --project-dir PATH  Project root to scan (defaults to the cwd)
-      --json              Emit the raw redacted readiness JSON
-    """)
-  end
-
-  defp print_doctor_usage(device \\ :stdio) do
-    IO.puts(device, """
-    Usage: lemon doctor [options]
-
-    Options:
-      --verbose, -v       Show all checks including passing and skipped ones
-      --json              Output results as a JSON document (CI-friendly)
-      --project-dir PATH  Use a specific project directory for checks
-      --bundle [PATH]     Write a redacted support bundle zip
-      --bundle-path PATH  Write the support bundle to a specific path
-    """)
+  defp print_doctor_usage(device) do
+    IO.write(device, CommandRegistry.help("doctor"))
   end
 end

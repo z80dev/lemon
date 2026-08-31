@@ -55,7 +55,6 @@ defmodule CodingAgent.SystemPrompt do
     max_chars = Map.get(opts, :bootstrap_max_chars, Workspace.default_max_chars())
     session_scope = normalize_session_scope(Map.get(opts, :session_scope, :main))
     skill_context = Map.get(opts, :skill_context, "")
-    max_relevant_skills = Map.get(opts, :max_relevant_skills, 3)
     skill_trace_opts = skill_trace_opts(opts)
 
     bootstrap_files =
@@ -68,7 +67,6 @@ defmodule CodingAgent.SystemPrompt do
     sections = [
       "You are a personal assistant running inside Lemon.",
       build_runtime_section(session_scope),
-      build_relevant_skills_section(cwd, skill_context, max_relevant_skills, skill_trace_opts),
       build_skills_section(cwd, skill_trace_opts),
       build_memory_workflow_section(session_scope),
       build_learning_workflow_section(session_scope),
@@ -105,21 +103,6 @@ defmodule CodingAgent.SystemPrompt do
   # ============================================================================
   # Sections
   # ============================================================================
-
-  defp build_relevant_skills_section(_cwd, context, _max_skills, _trace_opts)
-       when context in [nil, ""],
-       do: ""
-
-  defp build_relevant_skills_section(cwd, context, max_skills, trace_opts)
-       when is_binary(context) do
-    views =
-      context
-      |> LemonSkills.find_relevant(cwd: cwd, max_results: max_skills, refresh: false)
-      |> Enum.map(&LemonSkills.SkillView.from_entry(&1, cwd: cwd))
-      |> Enum.filter(&LemonSkills.SkillView.displayable?/1)
-
-    PromptView.render_relevant_skills(views, Keyword.put(trace_opts, :cwd, cwd))
-  end
 
   defp build_skills_section(cwd, trace_opts) do
     PromptView.render_for_prompt(cwd, trace_opts)

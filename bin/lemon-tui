@@ -3,7 +3,8 @@
 # lemon-tui - Launch Lemon TUI against a shared runtime.
 #
 # If a control-plane runtime is already up, this attaches over WebSocket.
-# If not, it boots ./bin/lemon in daemon mode, waits for readiness, then starts TUI.
+# If not, it boots ./bin/lemon with a process-scoped operator token, waits for
+# readiness, then stops that owned runtime when the TUI exits.
 #
 # Usage:
 #   ./bin/lemon-tui [all TUI args]
@@ -40,10 +41,56 @@ error() {
 }
 
 PORT="${LEMON_CONTROL_PLANE_PORT:-4040}"
+RUNTIME_LAUNCHER="${LEMON_TUI_RUNTIME_LAUNCHER:-$LEMON_ROOT/bin/lemon}"
+RUNTIME_PID_FILE=""
+STARTED_RUNTIME=0
+
+cleanup() {
+  if [[ "$STARTED_RUNTIME" == "1" && -n "$RUNTIME_PID_FILE" && -f "$RUNTIME_PID_FILE" ]]; then
+    runtime_pid="$(<"$RUNTIME_PID_FILE")"
+
+    if [[ "$runtime_pid" =~ ^[0-9]+$ && "$runtime_pid" -gt 1 ]] && kill -0 "$runtime_pid" 2>/dev/null; then
+      info "Stopping launcher-owned runtime (pid: $runtime_pid)"
+      kill -TERM "$runtime_pid" 2>/dev/null || true
+
+      for _ in $(seq 1 50); do
+        kill -0 "$runtime_pid" 2>/dev/null || break
+        sleep 0.1
+      done
+
+      if kill -0 "$runtime_pid" 2>/dev/null; then
+        kill -KILL "$runtime_pid" 2>/dev/null || true
+      fi
+    fi
+  fi
+
+  if [[ -n "$RUNTIME_PID_FILE" ]]; then
+    rm -f "$RUNTIME_PID_FILE"
+  fi
+
+  return 0
+}
+
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 if ! command -v bun >/dev/null 2>&1; then
   error "Bun is required to run the TUI. Install Bun and ensure 'bun' is on PATH."
   exit 1
+fi
+
+TUI_DIR="$LEMON_ROOT/clients/tui"
+if [[ ! -d "$TUI_DIR" ]]; then
+  error "TUI directory not found: $TUI_DIR"
+  exit 1
+fi
+
+cd "$TUI_DIR"
+
+if [[ ! -d "node_modules" ]]; then
+  info "Installing TUI dependencies..."
+  env -u LEMON_CONTROL_PLANE_OPERATOR_TOKEN -u LEMON_WS_TOKEN bun install --frozen-lockfile
 fi
 
 runtime_healthy() {
@@ -51,8 +98,30 @@ runtime_healthy() {
 }
 
 if ! runtime_healthy; then
+  if [[ -z "${LEMON_CONTROL_PLANE_OPERATOR_TOKEN:-}" ]]; then
+    if command -v openssl >/dev/null 2>&1; then
+      LEMON_CONTROL_PLANE_OPERATOR_TOKEN="$(openssl rand -hex 32)"
+    else
+      LEMON_CONTROL_PLANE_OPERATOR_TOKEN="$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')"
+    fi
+
+    if [[ ! "$LEMON_CONTROL_PLANE_OPERATOR_TOKEN" =~ ^[0-9a-fA-F]{64}$ ]]; then
+      error "Could not generate a secure process-scoped operator token."
+      exit 1
+    fi
+
+    export LEMON_CONTROL_PLANE_OPERATOR_TOKEN
+  fi
+
+  # Process ownership follows who started the runtime, not who supplied its
+  # credential. Every daemon started here must be reaped when this TUI exits.
+  STARTED_RUNTIME=1
+  RUNTIME_PID_FILE="$(mktemp "${TMPDIR:-/tmp}/lemon-tui-runtime.XXXXXX")"
+  chmod 600 "$RUNTIME_PID_FILE"
+  export LEMON_RUNTIME_PID_FILE="$RUNTIME_PID_FILE"
+
   warn "No control-plane runtime detected on :${PORT}; starting ./bin/lemon --daemon"
-  "$LEMON_ROOT/bin/lemon" --daemon --port "$PORT"
+  "$RUNTIME_LAUNCHER" --daemon --port "$PORT"
 
   ready=0
   for _ in $(seq 1 40); do
@@ -71,21 +140,19 @@ if ! runtime_healthy; then
 
   info "Runtime is healthy."
 else
+  if [[ -z "${LEMON_CONTROL_PLANE_OPERATOR_TOKEN:-}" ]]; then
+    case "${LEMON_CONTROL_PLANE_ALLOW_UNAUTHENTICATED_LOOPBACK:-}" in
+      1|true|TRUE|yes|YES) ;;
+      *)
+        error "An existing runtime is using secure operator authentication."
+        error "Set LEMON_CONTROL_PLANE_OPERATOR_TOKEN to the token used to start it, then retry."
+        exit 1
+        ;;
+    esac
+  fi
+
   info "Using existing runtime on :${PORT}"
 fi
 
-TUI_DIR="$LEMON_ROOT/clients/tui"
-if [[ ! -d "$TUI_DIR" ]]; then
-  error "TUI directory not found: $TUI_DIR"
-  exit 1
-fi
-
-cd "$TUI_DIR"
-
-if [[ ! -d "node_modules" ]]; then
-  info "Installing TUI dependencies..."
-  bun install --frozen-lockfile
-fi
-
 info "Launching TUI (ws: ws://127.0.0.1:${PORT}/ws)"
-exec bun src/main.ts --ws-url "ws://127.0.0.1:$PORT/ws" "$@"
+bun src/main.ts --ws-url "ws://127.0.0.1:$PORT/ws" "$@"

@@ -1,52 +1,7 @@
 import { act, renderHook } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { MockWebSocket } from '../test/MockWebSocket';
 import { useControlPlane } from './useControlPlane';
-
-// ============================================================================
-// MockWebSocket (same pattern as controlPlaneTransport.test.ts)
-// ============================================================================
-
-class MockWebSocket {
-  static instances: MockWebSocket[] = [];
-
-  static readonly CONNECTING = 0;
-  static readonly OPEN = 1;
-  static readonly CLOSING = 2;
-  static readonly CLOSED = 3;
-
-  readyState: number = MockWebSocket.CONNECTING;
-  onopen: ((ev: Event) => void) | null = null;
-  onmessage: ((ev: MessageEvent) => void) | null = null;
-  onclose: ((ev: CloseEvent) => void) | null = null;
-  onerror: ((ev: Event) => void) | null = null;
-  sentMessages: string[] = [];
-
-  constructor(public url: string) {
-    MockWebSocket.instances.push(this);
-  }
-
-  send(data: string): void {
-    this.sentMessages.push(data);
-  }
-
-  close(): void {
-    this.readyState = MockWebSocket.CLOSED;
-  }
-
-  simulateOpen(): void {
-    this.readyState = MockWebSocket.OPEN;
-    this.onopen?.(new Event('open'));
-  }
-
-  simulateMessage(data: unknown): void {
-    this.onmessage?.(new MessageEvent('message', { data: JSON.stringify(data) }));
-  }
-
-  simulateClose(code = 1000): void {
-    this.readyState = MockWebSocket.CLOSED;
-    this.onclose?.(new CloseEvent('close', { code, wasClean: code === 1000 }));
-  }
-}
 
 // ============================================================================
 // Helpers
@@ -67,7 +22,7 @@ const HELLO_OK_FRAME = {
 // ============================================================================
 
 beforeEach(() => {
-  MockWebSocket.instances = [];
+  MockWebSocket.reset();
   vi.stubGlobal('WebSocket', MockWebSocket);
   vi.useFakeTimers();
 });
@@ -86,6 +41,26 @@ describe('useControlPlane', () => {
     const { unmount } = renderHook(() => useControlPlane());
 
     expect(MockWebSocket.instances).toHaveLength(1);
+
+    unmount();
+  });
+
+  it('keeps the operator token out of the WebSocket URL and sends it in connect.auth', () => {
+    const token = 'full-privilege-operator-secret';
+    const { unmount } = renderHook(() => useControlPlane(undefined, { token }));
+
+    const ws = MockWebSocket.instances[0];
+    expect(ws.url).not.toContain(token);
+    expect(ws.url).not.toContain('token=');
+
+    ws.simulateOpen();
+
+    const connectFrame = JSON.parse(ws.sentMessages[0]) as {
+      method: string;
+      params: { auth?: { token?: string } };
+    };
+    expect(connectFrame.method).toBe('connect');
+    expect(connectFrame.params.auth?.token).toBe(token);
 
     unmount();
   });

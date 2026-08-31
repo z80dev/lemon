@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 import { pathToFileURL } from 'node:url';
 
-import { handleBrowserMethod } from './browser-methods.js';
 import { asBool, asInt, asString, parseCliArgs, type CliArgs } from './cli-args.js';
 import { ChromeSession } from './chrome.js';
+import { dispatchBrowserRequest } from './driver-dispatch.js';
 import { resolveOpenClawUserDataDir } from './openclaw-profile.js';
 
 export type RequestMsg = {
@@ -153,8 +153,7 @@ async function main() {
       const response = queue.then(() =>
         executeLocalDriverRequest({
           line,
-          invoke: (method, methodArgs) =>
-            chrome.withPage((page) => handleBrowserMethod(page, method, methodArgs)),
+          invoke: (method, methodArgs) => dispatchBrowserRequest(chrome, method, methodArgs),
         }),
       );
 

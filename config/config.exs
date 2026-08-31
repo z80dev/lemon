@@ -10,7 +10,16 @@
 import Config
 
 config :phoenix, :json_library, Jason
-config :phoenix, :filter_parameters, ["password", "secret", "token", "hosted_werewolf_", "params"]
+
+config :phoenix, :filter_parameters, [
+  "password",
+  "secret",
+  "token",
+  "credential_ref",
+  "credentialRef",
+  "hosted_werewolf_",
+  "params"
+]
 
 config :logger, :default_formatter,
   metadata: [

@@ -41,6 +41,56 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
     def unreact(_channel_id, _message_id, _emoji), do: {:ok}
   end
 
+  defmodule FakePortableRuntime do
+    def background_start("index the repository", opts) do
+      :persistent_term.put({__MODULE__, :owner_session}, opts[:session_key])
+      notify(:background_start)
+      {:ok, %{id: "bg_discord_full_identifier", status: :queued}}
+    end
+
+    def background_list_scoped(session_key, []) do
+      if owner?(session_key) do
+        [%{id: "bg_discord_full_identifier", status: :completed, result_available: true}]
+      else
+        []
+      end
+    end
+
+    def background_status_scoped("bg_discord_full_identifier", session_key) do
+      if owner?(session_key),
+        do:
+          {:ok, %{id: "bg_discord_full_identifier", status: :completed, result_available: true}},
+        else: {:error, :not_found}
+    end
+
+    def background_result_scoped("bg_discord_full_identifier", session_key) do
+      if owner?(session_key) do
+        notify(:background_result)
+        {:ok, "Discord checks passed."}
+      else
+        {:error, :not_found}
+      end
+    end
+
+    def background_cancel_scoped("bg_discord_full_identifier", session_key) do
+      if owner?(session_key) do
+        notify(:background_cancel)
+        :ok
+      else
+        {:error, :not_found}
+      end
+    end
+
+    defp owner?(session_key),
+      do: session_key == :persistent_term.get({__MODULE__, :owner_session}, nil)
+
+    defp notify(event) do
+      if pid = :persistent_term.get({__MODULE__, :test_pid}, nil) do
+        send(pid, {event, self()})
+      end
+    end
+  end
+
   @gateway_config_key :"Elixir.LemonGateway.Config"
 
   test "ignores messages authored by the bot" do
@@ -237,6 +287,21 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
              submit_discord_text("/redirect use the staging db")
   end
 
+  test "/steer message prefix submits a steer queue mode" do
+    assert %{queue_mode: :steer, prompt: "focus on the current failure"} =
+             submit_discord_text("/steer focus on the current failure")
+  end
+
+  test "/queue message prefix submits a follow-up queue mode" do
+    assert %{queue_mode: :followup, prompt: "then run the full suite"} =
+             submit_discord_text("/queue then run the full suite")
+  end
+
+  test "/q is the Hermes-compatible queue alias" do
+    assert %{queue_mode: :followup, prompt: "summarize the diff"} =
+             submit_discord_text("/q summarize the diff")
+  end
+
   test "plain messages mentioning redirect keep the default queue mode" do
     run_request = submit_discord_text("please redirect the build output")
 
@@ -261,6 +326,194 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
     assert options["correction"].type == 3
     assert options["correction"].required
     assert "redirect" in Enum.map(Transport.slash_commands(), & &1.name)
+  end
+
+  test "exports Hermes-compatible queue and steer slash commands" do
+    commands = Map.new(Transport.slash_commands(), &{&1.name, &1})
+
+    assert commands["queue"].description == "Queue a follow-up prompt behind the active run"
+    assert commands["q"].description == "Alias for /queue"
+
+    assert commands["steer"].description ==
+             "Steer the active run with an additional instruction"
+
+    assert hd(commands["queue"].options).required
+    assert hd(commands["steer"].options).required
+  end
+
+  test "exports Hermes-compatible lifecycle aliases" do
+    commands = Map.new(Transport.slash_commands(), &{&1.name, &1})
+
+    assert commands["reset"].description == "Alias for /session new"
+    assert commands["reasoning"].description == "Alias for /thinking"
+    assert commands["stop"].description == "Alias for /cancel"
+  end
+
+  test "exports portable status, task, compaction, help, and side-run commands" do
+    commands = Map.new(Transport.slash_commands(), &{&1.name, &1})
+
+    for name <- ~w(status usage agents tasks compress commands help bg btw) do
+      assert Map.has_key?(commands, name)
+    end
+
+    assert hd(commands["bg"].options).required
+    assert hd(commands["btw"].options).required
+    refute hd(commands["help"].options).required
+  end
+
+  test "portable slash commands reject denied guilds" do
+    assert_portable_interaction_denied(%{
+      allowed_guild_ids: MapSet.new([999]),
+      allowed_channel_ids: nil,
+      deny_unbound_channels: false
+    })
+  end
+
+  test "portable slash commands reject denied channels" do
+    assert_portable_interaction_denied(%{
+      allowed_guild_ids: nil,
+      allowed_channel_ids: MapSet.new([999]),
+      deny_unbound_channels: false
+    })
+  end
+
+  test "portable slash commands reject unbound guild channels when configured" do
+    denied_interaction =
+      interaction("bg", option("prompt", "index the repository"), %{
+        channel_id: "1475727417372049999",
+        guild_id: "1475727417372049998"
+      })
+
+    assert_portable_interaction_denied(
+      %{
+        allowed_guild_ids: nil,
+        allowed_channel_ids: nil,
+        deny_unbound_channels: true
+      },
+      denied_interaction
+    )
+  end
+
+  test "all lifecycle aliases reject denied guilds, channels, and unbound locations" do
+    interactions = [
+      interaction("reset", []),
+      interaction("session", subcommand("new")),
+      interaction("reasoning", option("level", "high")),
+      interaction("thinking", option("level", "high")),
+      interaction("stop", []),
+      interaction("cancel", [])
+    ]
+
+    policies = [
+      %{allowed_guild_ids: MapSet.new([999]), allowed_channel_ids: nil},
+      %{allowed_guild_ids: nil, allowed_channel_ids: MapSet.new([999])},
+      %{
+        allowed_guild_ids: nil,
+        allowed_channel_ids: nil,
+        deny_unbound_channels: true
+      }
+    ]
+
+    with_interaction_responder(fn ->
+      for policy <- policies, interaction <- interactions do
+        state = Map.merge(discord_message_state(), policy)
+
+        assert {:noreply, ^state} =
+                 Transport.handle_info(
+                   {:discord_event, {:INTERACTION_CREATE, interaction, nil}},
+                   state
+                 )
+
+        assert_receive {:interaction_response, ^interaction,
+                        %{
+                          type: 4,
+                          data: %{
+                            content: "This command is not available in this Discord location.",
+                            flags: 64
+                          }
+                        }}
+      end
+
+      refute_receive {:abort_run, _, _}, 50
+    end)
+  end
+
+  test "portable /bg returns a full id and retrieves its result through Discord" do
+    with_portable_runtime(fn ->
+      with_interaction_responder(fn ->
+        start_interaction = interaction("bg", option("prompt", "index the repository"))
+        state = discord_message_state()
+
+        assert {:noreply, ^state} =
+                 Transport.handle_info(
+                   {:discord_event, {:INTERACTION_CREATE, start_interaction, nil}},
+                   state
+                 )
+
+        assert_receive {:background_start, _}
+
+        assert_receive {:interaction_response, ^start_interaction,
+                        %{type: 4, data: %{content: receipt, flags: 64}}}
+
+        assert receipt =~ "Background run started: bg_discord_full_identifier"
+        assert receipt =~ "/bg result bg_discord_full_identifier"
+
+        result_interaction =
+          interaction("bg", option("prompt", "result bg_discord_full_identifier"))
+
+        assert {:noreply, ^state} =
+                 Transport.handle_info(
+                   {:discord_event, {:INTERACTION_CREATE, result_interaction, nil}},
+                   state
+                 )
+
+        assert_receive {:background_result, _}
+
+        assert_receive {:interaction_response, ^result_interaction,
+                        %{type: 4, data: %{content: result, flags: 64}}}
+
+        assert result =~ "Background result bg_discord_full_identifier"
+        assert result =~ "Discord checks passed."
+      end)
+    end)
+  end
+
+  test "portable /bg lifecycle is isolated between Discord user principals" do
+    with_portable_runtime(fn ->
+      with_interaction_responder(fn ->
+        owner = interaction("bg", option("prompt", "index the repository"))
+        state = discord_message_state()
+
+        assert {:noreply, ^state} =
+                 Transport.handle_info({:discord_event, {:INTERACTION_CREATE, owner, nil}}, state)
+
+        assert_receive {:background_start, _}
+        assert_receive {:interaction_response, ^owner, %{type: 4}}
+
+        foreign_user = %{user: %{id: "1476753643834183999"}}
+
+        for {prompt, expected} <- [
+              {"list", "No background runs are recorded."},
+              {"status bg_discord_full_identifier", "Background run not found."},
+              {"result bg_discord_full_identifier", "Background run not found."},
+              {"cancel bg_discord_full_identifier", "Background run not found."}
+            ] do
+          foreign =
+            interaction("bg", option("prompt", prompt), %{member: foreign_user})
+
+          assert {:noreply, ^state} =
+                   Transport.handle_info(
+                     {:discord_event, {:INTERACTION_CREATE, foreign, nil}},
+                     state
+                   )
+
+          assert_receive {:interaction_response, ^foreign,
+                          %{type: 4, data: %{content: ^expected, flags: 64}}}
+        end
+
+        refute_receive {:background_cancel, _}, 50
+      end)
+    end)
   end
 
   test "exports media slash command schema" do
@@ -398,7 +651,7 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
       assert proof["proof_object"] == "lemon.discord_slash_client_click"
       assert proof["proof_scope"] == "discord_slash_client_click_observed"
       assert proof["status"] == "completed"
-      assert proof["coverage"]["registered_command_count"] == 17
+      assert proof["coverage"]["registered_command_count"] == length(Transport.slash_commands())
       assert proof["coverage"]["client_click_command_count"] == 1
       assert proof["coverage"]["real_client_click_proof"] == true
       assert proof["details"]["command"] == "media"
@@ -922,6 +1175,48 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
       fun.()
     after
       Application.delete_env(:lemon_channels, :discord_interaction_responder)
+    end
+  end
+
+  defp assert_portable_interaction_denied(state_overrides, denied_interaction \\ nil) do
+    with_portable_runtime(fn ->
+      with_interaction_responder(fn ->
+        interaction =
+          denied_interaction || interaction("bg", option("prompt", "index the repository"))
+
+        state = Map.merge(discord_message_state(), state_overrides)
+
+        assert {:noreply, ^state} =
+                 Transport.handle_info(
+                   {:discord_event, {:INTERACTION_CREATE, interaction, nil}},
+                   state
+                 )
+
+        assert_receive {:interaction_response, ^interaction,
+                        %{
+                          type: 4,
+                          data: %{
+                            content: "This command is not available in this Discord location.",
+                            flags: 64
+                          }
+                        }}
+
+        refute_receive {:background_start, _}, 50
+      end)
+    end)
+  end
+
+  defp with_portable_runtime(fun) do
+    previous = Application.get_env(:lemon_control_plane, :agent_runtime_provider)
+    :persistent_term.put({FakePortableRuntime, :test_pid}, self())
+    Application.put_env(:lemon_control_plane, :agent_runtime_provider, FakePortableRuntime)
+
+    try do
+      fun.()
+    after
+      :persistent_term.erase({FakePortableRuntime, :test_pid})
+      :persistent_term.erase({FakePortableRuntime, :owner_session})
+      restore_env(:lemon_control_plane, :agent_runtime_provider, previous)
     end
   end
 

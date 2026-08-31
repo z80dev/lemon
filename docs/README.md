@@ -10,7 +10,27 @@
 
 - **Start here** if you need to understand how Lemon works at a system level.
 - **Per-app docs** live in each app's own `README.md` and `AGENTS.md` (see `apps/*/`).
-- **Every file in `docs/`** must be registered in [`docs/catalog.exs`](https://github.com/z80dev/lemon/blob/main/docs/catalog.exs) with `owner`, `last_reviewed`, and `max_age_days`. Run `mix lemon.quality` to enforce freshness.
+- **Every tracked Markdown file in `docs/`** must be registered in [`docs/catalog.exs`](https://github.com/z80dev/lemon/blob/main/docs/catalog.exs). Run `mix lemon.quality` to enforce coverage, metadata, freshness, and links.
+
+### Catalog Metadata
+
+`docs/catalog.exs` is a data-only map with shared `defaults` and an `entries`
+list. Each normalized entry has:
+
+- `path`, `owner`, `last_reviewed`, and `max_age_days` for ownership and freshness
+- `kind`: `guide`, `plan`, `proof`, `reference`, or `review`
+- `status`: `current`, `historical`, or `superseded`
+- `public`: whether a current document is eligible for future public navigation
+
+The defaults are intentionally conservative: entries are current references
+but are not public unless opted in. Historical and superseded entries cannot be
+public. Override a default only on the entry that differs.
+
+The catalog's `last_reviewed` value is the sole freshness authority. Do not add
+or update a second `Last reviewed` footer in a document; dates in document prose
+should identify the snapshot or event they describe. Coverage uses `git
+ls-files`, so local drafts and other untracked Markdown do not create quality
+failures.
 
 ---
 
@@ -19,13 +39,19 @@
 | Doc | What it covers |
 |-----|---------------|
 | [index.md](index.md) | Public docs-site homepage: positioning, entry points, current launch stage |
-| [install.md](install.md) | Short install landing page for source install and release-artifact status |
+| [getting-started/quickstart.md](getting-started/quickstart.md) | Task-first release install, provider-backed chat proof, session continuity, next features, and recovery |
+| [install.md](install.md) | Verified release install, source install, first-run setup, platforms, updates, and uninstall |
 | [compare.md](compare.md) | Product comparison against adjacent assistant, CLI, harness, and self-hosted runtime categories |
-| [demo.md](demo.md) | Deterministic local demo paths for runtime health, Web ops, TUI, support bundles, and docs quality |
+| [demo.md](demo.md) | Deterministic local demo paths for runtime health, session Web UI, TUI, support bundles, and docs quality |
 | [support.md](support.md) | Public support boundaries, issue data requirements, support-bundle commands, and security-reporting path |
 | [user-guide/setup.md](user-guide/setup.md) | Full setup walkthrough: install, configure, run, Telegram setup |
+| [user-guide/backups.md](user-guide/backups.md) | Versioned `~/.lemon` data contract, atomic backup verification, and guarded restore |
+| [user-guide/web.md](user-guide/web.md) | Launch the local browser, complete readiness, stop runs, configure access, and recover errors |
+| [user-guide/profiles.md](user-guide/profiles.md) | Create isolated specialist profiles, use canonical chats/roster, clone/export safely, and delete recoverably |
+| [user-guide/learn-from-sources.md](user-guide/learn-from-sources.md) | Review bounded files, folders, documents, diffs, URLs, and sessions before exact-digest learning into memory and skill drafts |
+| [user-guide/cli.md](user-guide/cli.md) | Runtime command families, durable session lifecycle, stable exit codes, JSON, and shell completion |
 | [user-guide/migrate-from-hermes.md](user-guide/migrate-from-hermes.md) | Preview-first migration path for Hermes memories, skills, config, secrets, and session recall |
-| [user-guide/skills.md](user-guide/skills.md) | Skills: listing, installing, inspecting, synthesizing drafts |
+| [user-guide/skills.md](user-guide/skills.md) | Skills: listing, installing, inspecting, portable profile automation bundles, and synthesized drafts |
 | [user-guide/memory.md](user-guide/memory.md) | Memory documents, session search, retention management |
 | [user-guide/adaptive.md](user-guide/adaptive.md) | Adaptive routing, routing feedback, skill synthesis pipeline |
 | [user-guide/rollout.md](user-guide/rollout.md) | Feature promotion gates, rollback procedure, promotion checklist |
@@ -46,6 +72,8 @@
 | [long-running-agent-harnesses.md](long-running-agent-harnesses.md) | Long-running harness patterns, eval loops, and runtime validation workflows |
 | [testing.md](testing.md) | Canonical local test lanes and CI parity guidance |
 | [config.md](config.md) | TOML configuration reference (providers, runtime, gateway, profiles, tools) |
+| [user-guide/backups.md](user-guide/backups.md) | Local user-state backup, verification, restore, and rollback safety model |
+| [user-guide/updates.md](user-guide/updates.md) | Non-mutating update plans, exact-confirm apply, receipts, and receipt-bound rollback |
 | [extensions.md](extensions.md) | Extension/plugin API, tool hooks, conflict resolution |
 | [release/release_checklist_and_support_policy.md](release/release_checklist_and_support_policy.md) | 1.0 release-candidate checklist, rollback checklist, and support boundaries |
 | [security/safety.md](security/safety.md) | Plain-language Lemon safety model, recommended defaults, and support-bundle guidance |
@@ -55,7 +83,7 @@
 
 | Doc | What it covers |
 |-----|---------------|
-| [assistant_bootstrap_contract.md](assistant_bootstrap_contract.md) | How sessions bootstrap: system prompt assembly, skill injection, context setup |
+| [assistant_bootstrap_contract.md](assistant_bootstrap_contract.md) | How sessions bootstrap: system prompt assembly, skill discovery/loading, context setup |
 | [context.md](context.md) | Context management, compaction, branch summarization, token budgets |
 | [subagent-parent-questions.md](subagent-parent-questions.md) | Design for the `ask_parent` clarification path from child subagents back to their parent session |
 | [runtime-hot-reload.md](runtime-hot-reload.md) | Hot code reload system for live-patching without restarts |
@@ -65,19 +93,8 @@
 
 - [`docs/skills.md`](skills.md)
 - [`docs/compare.md`](compare.md) - Lemon positioning against hosted assistants, single-engine CLIs, agent harnesses, and self-hosted automation
-- [`docs/demo.md`](demo.md) - Local deterministic demo flows for runtime, Web operations, TUI, support bundles, and docs quality
+- [`docs/demo.md`](demo.md) - Local deterministic demo flows for runtime, session Web UI, TUI, support bundles, and docs quality
 - [`docs/support.md`](support.md) - Public support policy landing page and issue-prep checklist
-- [`docs/plans/lemon-1.0-mainstream-readiness.md`](plans/lemon-1.0-mainstream-readiness.md) - Hermes-on-BEAM product goal, readiness plan, and parity execution ledger
-- [`docs/plans/lemon-1.0-fresh-install-proof-2026-05-11.md`](plans/lemon-1.0-fresh-install-proof-2026-05-11.md) - Source-dev fresh install proof for the Lemon 1.0 launch goal
-- [`docs/plans/lemon-1.0-release-artifact-proof-2026-05-11.md`](plans/lemon-1.0-release-artifact-proof-2026-05-11.md) - Local release-artifact proof for `lemon_runtime_full`
-- [`docs/plans/lemon-1.0-interface-supportability-audit-2026-05-11.md`](plans/lemon-1.0-interface-supportability-audit-2026-05-11.md) - Interface supportability audit for Web, TUI, Telegram, Discord, and the control plane
-- [`docs/plans/lemon-1.0-interface-proof-pack-2026-05-11.md`](plans/lemon-1.0-interface-proof-pack-2026-05-11.md) - Release-candidate proof pack for automated TUI, Web, and Telegram-adjacent interface coverage
-- [`docs/plans/lemon-1.0-completion-audit-2026-05-12.md`](plans/lemon-1.0-completion-audit-2026-05-12.md) - Prompt-to-artifact completion audit and product proof blockers
-- [`docs/plans/lemon-hermes-feature-parity-matrix-2026-05-12.md`](plans/lemon-hermes-feature-parity-matrix-2026-05-12.md) - Source-grounded Lemon-vs-Hermes feature parity matrix and launch gap ledger
-- [`docs/plans/lemon-channel-command-parity-matrix-2026-05-12.md`](plans/lemon-channel-command-parity-matrix-2026-05-12.md) - Telegram and Discord command-surface comparison against Hermes messaging slash commands
-- [`docs/plans/lemon-sim-platform-mission-2026-05-12.md`](plans/lemon-sim-platform-mission-2026-05-12.md) - LemonSim mission for watchable Werewolf and Vending Bench 2.0
-- [`docs/plans/lemon-hermes-agent-harness-parity-scorecard.md`](plans/lemon-hermes-agent-harness-parity-scorecard.md) - Hermes-class agent harness parity scorecard
-- [`docs/plans/lemon-hermes-parity-expansion-goal-2026-05-24.md`](plans/lemon-hermes-parity-expansion-goal-2026-05-24.md) - Active expansion goal for browser, external API/editor, migration v2, terminal, plugin/provider, LSP, and observability parity
 - [`docs/for-dummies/README.md`](for-dummies/README.md) - Plain-English guided tour of Lemon for non-Elixir users
 - [`docs/skills_v2.md`](skills_v2.md) - Skill manifest v2 and newer skill-system direction
 - [`docs/tools/web.md`](tools/web.md)
@@ -111,16 +128,14 @@ All diagrams are in `docs/diagrams/` as both Excalidraw source and exported SVG:
 | `apps/*/AGENTS.md` | Per-app AI agent context (key files, patterns, testing, gotchas) |
 | `AGENTS.md` (root) | Project-wide agent guide (navigation, team composition, conventions) |
 | `README.md` (root) | 5-minute orientation: what it is, quickstart, feature summary, doc links |
-| `docs/plans/lemon-1.0-mainstream-readiness.md` | Living launch goal: mainstream readiness workstreams, milestones, and acceptance criteria |
 | `config/` | Elixir application configuration (config.exs, runtime.exs, etc.) |
 | `examples/config.example.toml` | Annotated example TOML configuration |
 
 ## Maintenance Rules
 
-1. **Register every doc** in [`docs/catalog.exs`](https://github.com/z80dev/lemon/blob/main/docs/catalog.exs) with `owner`, `last_reviewed`, and `max_age_days`.
+1. **Register every tracked Markdown doc** in [`docs/catalog.exs`](https://github.com/z80dev/lemon/blob/main/docs/catalog.exs); rely on catalog defaults and override only differing metadata.
 2. **Run `mix lemon.quality`** after any docs edit or app dependency change.
 3. **Keep `AGENTS.md` short and operational** — place durable implementation details in `docs/` files.
 4. **Update diagrams** when architecture changes — edit the `.excalidraw` source, export to `.svg`.
-5. **Review cycle**: docs are checked for staleness based on `max_age_days` in the catalog.
-
-*Last reviewed: 2026-05-11*
+5. **Review cycle**: docs are checked for staleness based on the catalog's canonical `last_reviewed` and `max_age_days` values.
+6. **Regenerate machine-readable docs** with `scripts/generate_docs_llms.py`; `scripts/generate_docs_llms.py --check` verifies `docs/public/llms.txt` and `llms-full.txt` are current.

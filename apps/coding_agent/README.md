@@ -12,6 +12,7 @@ CodingAgent is an umbrella app within the Lemon AI assistant platform. It turns 
 - **Budget enforcement** -- Token and cost tracking per run with parent/child inheritance via a persistent run graph
 - **Extension system** -- Dynamic tool and hook injection from Elixir modules or WASM sidecars
 - **Subagent orchestration** -- Concurrent subagent sessions via a Coordinator with timeout management
+- **Named execution nodes** -- Native delegated sessions can run on an authenticated destination selected by name, with destination-local credentials and working-directory defaults
 - **Workspace and prompt composition** -- Layered system prompt from bootstrap files, skills, commands, @mentions, and project-local CLAUDE.md/AGENTS.md
 - **Provider routing** -- Default model selection can fall back through configured fallback providers, routing profiles, and credential pools before starting the supervised agent loop, and default-model streams retry another ready provider when the first provider fails before useful output starts; explicit model specs stay fixed.
 
@@ -51,14 +52,23 @@ CodingAgent is an umbrella app within the Lemon AI assistant platform. It turns 
                                         +----------+
 ```
 
+`CodingAgent.Executor` keeps normal requests local. When request metadata names
+an execution node, it starts `Executor.RemoteSessionRunner`, which asks
+`LemonCore.NodeRegistry` to deliver a versioned `coding_agent.run` request to
+the authenticated destination WebSocket. The destination starts the same native
+executor/session path and returns one JSON-safe terminal result; no vendor CLI
+or subprocess agent runner is involved.
+
 ### Supervision Tree
 
 ```
 CodingAgent.Supervisor (one_for_one)
   +-- Registry (SessionRegistry)
+  +-- Registry (BackgroundRun.Registry)
   +-- Registry (ProcessRegistry)
   +-- TodoStoreOwner
   +-- SessionSupervisor (DynamicSupervisor for Session processes)
+  +-- BackgroundRun.Supervisor (DynamicSupervisor for isolated `/bg` workers)
   +-- Wasm.SidecarSupervisor
   +-- TaskSupervisor (Task.Supervisor for async ops)
   +-- PythonRepl.Supervisor (one_for_all: PythonRepl.Registry + PythonRepl.SessionSupervisor;
@@ -80,7 +90,9 @@ CodingAgent.Supervisor (one_for_one)
 
 | Module | Description |
 |--------|-------------|
-| `CodingAgent` | Top-level facade -- `start_session/1`, `start_supervised_session/1`, `lookup_session/1`, `coding_tools/2`, `read_only_tools/2`, `load_settings/1` |
+| `CodingAgent` | Top-level facade -- session/tool/settings APIs plus `start_background/2` and `ask_btw/3` |
+| `CodingAgent.BackgroundRun` | Durable isolated full-tool background-run lifecycle API |
+| `CodingAgent.SideQuery` | Bounded no-tools side-query API for live or durable parent context |
 | `CodingAgent.Application` | OTP application callback; starts the full supervision tree and optionally a primary session |
 | `CodingAgent.ParentQuestions` | DETS-backed store and lifecycle helpers for child-to-parent clarification requests |
 | `CodingAgent.ParentQuestionStoreServer` | Owns the parent-question ETS/DETS tables and TTL cleanup |
@@ -90,16 +102,29 @@ CodingAgent.Supervisor (one_for_one)
 | Module | Description |
 |--------|-------------|
 | `CodingAgent.Session` | Main GenServer orchestrating the agent loop, event dispatch, steering, follow-ups, compaction, and persistence |
-| `CodingAgent.Session.EventHandler` | Translates `LemonAgent` events into session state updates, triggers compaction, and fires extension hooks |
-| `CodingAgent.Session.CompactionManager` | Auto-compaction scheduling, overflow recovery state machine, and compaction result application |
+| `CodingAgent.Session.EventHandler` | Translates `LemonAgent` events into session state updates, clears diagnostic queue mirrors on every terminal path, triggers compaction, and fires extension hooks |
+| `CodingAgent.Session.Heartbeat` | Persists and schedules one idle-only recurring prompt inside the current session, including pause/resume/clear and reset tombstones |
+| `CodingAgent.Session.CompactionManager` | Auto-compaction scheduling, tracked worker cleanup, overflow recovery state machine, and compaction result application |
 | `CodingAgent.Session.MessageSerialization` | Serializes/deserializes messages between session and agent core formats |
 | `CodingAgent.Session.ModelResolver` | Resolves model structs from string specs, maps, or settings; handles API key lookup via env vars and secrets with OAuth refresh |
-| `CodingAgent.Session.PromptComposer` | Composes the final system prompt by layering base prompt, prompt templates, explicit system prompt, current-prompt relevant skill hints, and resource loader instructions |
+| `CodingAgent.Session.PromptComposer` | Composes the final system prompt by layering the stable base prompt and available-skill metadata, prompt templates, an explicit system prompt, and resource-loader instructions; turn relevance stays outside the prompt |
 | `CodingAgent.Session.WasmBridge` | Bridges WASM sidecar tools into the session tool set |
 | `CodingAgent.SessionManager` | JSONL persistence engine with tree-structured entries (branching, compaction, labels), atomic writes, append-only incremental saves, and version migrations (v1-v3) |
 | `CodingAgent.SessionSupervisor` | DynamicSupervisor for session processes with health check and list capabilities |
 | `CodingAgent.SessionRegistry` | Registry wrapper for session lookup by ID |
 | `CodingAgent.SessionRootSupervisor` | Top-level supervisor for all session infrastructure (currently delegated into `Application`) |
+| `CodingAgent.Executor` | Selects the normal local runner or a named-node remote runner from execution request metadata |
+| `CodingAgent.Executor.RemoteSessionRunner` | Bridges one local gateway execution to one live named node and propagates completion/cancellation |
+
+### Named Execution Nodes
+
+| Module | Description |
+|--------|-------------|
+| `CodingAgent.ExecutionNode.CLI` | Implements `./bin/lemon node join` for a source checkout |
+| `CodingAgent.ExecutionNode.Worker` | Authenticates to a controller, maintains the connection with application-level health keepalives, and executes targeted, versioned `coding_agent.run` requests through `CodingAgent.Executor` |
+| `CodingAgent.ExecutionNode.Socket` | Reconnecting WebSocket client for control-plane handshakes, requests, responses, and node events |
+| `CodingAgent.ExecutionNode.TokenStore` | Stores durable-node-ID-keyed session and recovery credentials under `~/.lemon/nodes/execution/` with a mode-0700 directory and mode-0600 files; migrates compatible legacy name-keyed records |
+| `CodingAgent.Executor.RemoteRequestCodec` | Restricts the cross-node boundary to JSON-safe execution request/result fields and destination-cwd intent |
 
 ### Tool System
 
@@ -119,10 +144,17 @@ CodingAgent.Supervisor (one_for_one)
 | File I/O / Skills | `read`, `read_skill`, `skill_manage`, `memory_topic`, `memory`, `search_memory`, `session_search`, `checkpoint`, `write`, `edit`, `hashline_edit`, `patch`, `lsp_diagnostics`, `ls` |
 | Search | `grep`, `find` |
 | Execution | `bash` (`execute_code` is a config-gated builtin appended last: default-off via `[runtime.tools.execute_code] enabled`, bash-equivalent, and absent from the disclosed set unless enabled) |
-| Web / Browser / Media | `websearch`, `webfetch`, `browser_navigate`, `browser_snapshot`, `browser_get_content`, `browser_click`, `browser_type`, `browser_hover`, `browser_select_option`, `browser_upload_file`, `browser_download`, `browser_press`, `browser_scroll`, `browser_back`, `browser_wait_for_selector`, `browser_evaluate`, `browser_events`, `browser_get_cookies`, `browser_set_cookies`, `browser_clear_state`, `browser_screenshot`, `browser_analyze`, `media_status`, `media_generate_image`, `media_generate_speech`, `media_transcribe_audio`, `media_analyze_image`, `media_generate_video` |
+| Web / Browser / Media | `websearch`, `webfetch`, `browser_navigate`, `browser_snapshot`, `browser_get_content`, `browser_click`, `browser_type`, `browser_hover`, `browser_select_option`, `browser_upload_file`, `browser_download`, `browser_press`, `browser_scroll`, `browser_back`, `browser_wait_for_selector`, `browser_evaluate`, `browser_events`, `browser_get_cookies`, `browser_set_cookies`, `browser_clear_state`, `browser_screenshot`, `browser_analyze`, `browser_exec`, `computer_use`, `media_status`, `media_generate_image`, `media_generate_speech`, `media_transcribe_audio`, `media_analyze_image`, `media_generate_video` |
 | Task / Agent | `task`, `agent`, `parent_question`, `todo`, `kanban` |
 | Social | `x_search`, `post_to_x`, `get_x_mentions` |
 | System | `tool_auth`, `extensions_status` |
+
+The `agent` tool accepts an optional `node` string for delegated runs. Omit it
+or pass `"local"` to use the controller host. A named value must resolve to a
+currently connected execution node. If `cwd` is omitted, the destination uses
+the default supplied to `node join`; an explicit `cwd` is interpreted and
+validated on the destination. The `task` tool remains an in-process child of
+the current coding session and does not expose named-node routing.
 
 `execute_code` is programmatic tool calling: the model submits a python3 script that can
 call a fixed compile-time allowlist of agent tools (`read`, `grep`, `find`, `ls`,
@@ -207,6 +239,17 @@ metadata and synthesize nonzero `bash` exits as structured `result_meta` with
 `error_type`, `tool_name`, `exit_code`, and a safe message so router and channel
 status surfaces do not need to parse terminal text.
 
+Local `patch` calls preflight every hunk in memory, reject duplicate paths and
+destructive move overwrites, revalidate each operation immediately before
+commit, and exclusively create new targets. Commits remain sequential, so a
+later I/O failure reports the already-committed prefix and any possibly changed
+current paths without risking rollback over concurrent filesystem changes.
+Local `write` calls canonicalize the path used for validation and mutation,
+then reject symlinks, caller-controlled symlinked parent components,
+directories, devices, and other special-file targets by default; trusted
+internal callers can opt into legacy symlink following with
+`allow_symlinks: true`.
+
 `lsp_diagnostics` runs workspace-aware language diagnostics for a single file.
 `write`, `edit`, and `patch` can opt into post-edit diagnostics with
 baseline/delta reporting so newly introduced issues are surfaced without
@@ -243,11 +286,11 @@ Internal task runs infer a restrictive `tool_policy` and verification guardrail 
 
 | Module | Description |
 |--------|-------------|
-| `CodingAgent.BudgetTracker` | Token/cost budget tracking per run with parent/child inheritance |
+| `CodingAgent.BudgetTracker` | Atomic token/cost accounting with parent/child inheritance, bounded child reservations, and idempotent completion aggregation |
 | `CodingAgent.BudgetEnforcer` | Raises on exceeded budgets during agent runs |
 | `CodingAgent.ParentQuestions` | ETS+DETS-backed child-to-parent clarification request store with lifecycle events |
 | `CodingAgent.RunGraph` | ETS-backed parent/child run graph with monotonic state machine (`queued -> running -> completed/error/killed/cancelled/lost`); await via PubSub |
-| `CodingAgent.RunGraphServer` | GenServer owning the RunGraph ETS table with DETS persistence, atomic transitions, and TTL-based cleanup |
+| `CodingAgent.RunGraphServer` | GenServer owning RunGraph ETS/DETS state, serialized lifecycle/budget writes, synchronous startup recovery, and TTL cleanup |
 
 ### Memory and Context
 
@@ -256,7 +299,7 @@ Internal task runs infer a restrictive `tool_policy` and verification guardrail 
 | `CodingAgent.Compaction` | Context compaction engine -- finds valid cut points, generates LLM summaries, preserves file context |
 | `CodingAgent.CompactionHooks` | Hooks for compaction lifecycle events |
 | `CodingAgent.Workspace` | Loads bootstrap files (AGENTS.md, SOUL.md, TOOLS.md, IDENTITY.md, USER.md, HEARTBEAT.md, BOOTSTRAP.md, MEMORY.md) from the assistant home at `~/.lemon/agent/workspace/` |
-| `CodingAgent.SystemPrompt` | Builds the Lemon base system prompt (assistant-home bootstrap files + available skills list + current-prompt relevant skill hints + memory workflow + runtime metadata) |
+| `CodingAgent.SystemPrompt` | Builds the Lemon base system prompt (assistant-home bootstrap files + stable available-skills metadata + memory workflow + runtime metadata) |
 | `CodingAgent.PromptBuilder` | Higher-level prompt builder adding skills, commands, @mention sections |
 | `CodingAgent.ResourceLoader` | Loads CLAUDE.md/AGENTS.md from cwd hierarchy up to root, then home directory; also loads prompts, themes, and skills |
 
@@ -280,6 +323,8 @@ Internal task runs infer a restrictive `tool_policy` and verification guardrail 
 | Module | Description |
 |--------|-------------|
 | `CodingAgent.LaneQueue` | Lane-aware FIFO queue with per-lane concurrency caps (default: main=4, subagent=8, background_exec=2) |
+| `CodingAgent.BackgroundRun` | Durable `/bg` lifecycle facade (`start`, `list`, `status`, `result`, `cancel`) for isolated full-tool sessions |
+| `CodingAgent.SideQuery` | Bounded `/btw` query facade using an immutable live snapshot or durable session-key history with tools disabled |
 | `CodingAgent.Coordinator` | GenServer orchestrating concurrent subagent sessions with timeout management |
 | `CodingAgent.Parallel` | Semaphore-based concurrency control and `map_with_concurrency_limit` |
 | `CodingAgent.ProcessManager` | DynamicSupervisor for background `exec` processes |
@@ -289,7 +334,7 @@ Internal task runs infer a restrictive `tool_policy` and verification guardrail 
 | `CodingAgent.ProcessSession` | GenServer for a single background process |
 | `CodingAgent.ProcessStore` / `ProcessStoreServer` | ETS store for background process state |
 | `LemonCore.TerminalBackend` / `TerminalBackends` | Shared backend contract and registry for supervised terminal/process execution |
-| `CodingAgent.TaskStore` / `TaskStoreServer` | ETS+DETS store for async task tool runs |
+| `CodingAgent.TaskStore` / `TaskStoreServer` | ETS+DETS async-task store with direct reads and serialized event, suppression, and monotonic lifecycle writes |
 | `CodingAgent.ParentQuestions` / `ParentQuestionStoreServer` | ETS+DETS store for child-to-parent clarification requests |
 
 The task tool runs all work in a native in-process `CodingAgent.Session`.
@@ -297,7 +342,42 @@ When a provider omits the task `description` field but sends a valid `prompt`, L
 When a native task omits `model`, the child session inherits the live parent session model at execution time instead of relying only on the captured tool opts, so Telegram/session-scoped model overrides also apply to async subtasks.
 Native task child sessions also have a bounded wait for terminal session events. If a child provider stream wedges or the child session exits without emitting `agent_end` / `error`, the task returns a timeout or session-exit error instead of leaving `join` blocked forever.
 
-For coordination workflows that must produce one final same-turn answer, queued task results should be treated as launch receipts, not completion. Keep the returned `task_id`s and call `action=join` before responding; auto-followup is for later delivery, not guaranteed same-turn aggregation. `action=join` now suppresses the later async auto-followup for those task ids so the parent session does not get a redundant completion prompt after it already waited. Task result surfaces (`poll`, `join`, `get`, and async auto-followup) expose only visible assistant output plus task metadata, not stored event streams, tool-call internals, or thinking deltas. For non-terminal tasks, `poll` and `get` behave as status queries: user-visible text shows task status, while the latest structured `current_action` stays in `details` instead of leaking raw command/tool event text into answer content. Async followup delivery also backfills terminal task/run state before posting the completion message, which prevents delivered completions from leaving task records stranded in `queued` or `running`. Auto-followup now preserves the full visible task answer instead of pre-truncating it in the followup builder, and router-delivered task followups use the `echo` engine so the raw completion text is delivered without asking the parent model to re-summarize or truncate it. When `:coding_agent, :async_followups` is set to `:steer_backlog`, live streaming parent sessions now attempt an in-session steer first before falling back to router backlog semantics.
+Task state uses a single-writer contract. `TaskStoreServer` serializes record changes, bounded event appends, explicit-join followup reservations/suppression, and terminalization. Competing completion/error callbacks are first-writer-wins, repeated terminal callbacks are idempotent, and late running/progress updates preserve the terminal state. `RunGraphServer` completes its DETS recovery before reporting startup readiness, then serializes live inserts, transitions, budget updates, and deletes so recovery cannot overwrite accepted live state.
+
+For coordination workflows that must produce one final same-turn answer, queued task results should be treated as launch receipts, not completion. Keep the returned `task_id`s and call `action=join` before responding; auto-followup is for later delivery, not guaranteed same-turn aggregation. Joins reserve followup delivery while waiting. `wait_all` permanently suppresses completed joined tasks, while `wait_any` suppresses only its completed winner and releases every loser; failure, abort, an unknown run, or a child clarification releases the reservation without permanent suppression. Task result surfaces (`poll`, `join`, `get`, and async auto-followup) expose only visible assistant output plus task metadata, not stored event streams, tool-call internals, or thinking deltas. For non-terminal tasks, `poll` and `get` behave as status queries: user-visible text shows task status, while the latest structured `current_action` stays in `details` instead of leaking raw command/tool event text into answer content. Async followup delivery also backfills terminal task/run state before posting the completion message, which prevents delivered completions from leaving task records stranded in `queued` or `running`. Auto-followup preserves the full visible task answer and submits router fallbacks as native followup runs; delivery failures are contained after task/run state is terminalized. Async launches fail immediately when their supervised worker cannot start, rather than returning a task id that remains queued forever. When `:coding_agent, :async_followups` is set to `:steer_backlog`, live streaming parent sessions attempt an in-session steer first before falling back to router backlog semantics.
+
+The delegated `agent` tool mirrors each accepted async router run into `RunGraph`, so `agent action=join` waits on the same lifecycle that its completion watcher updates. A completion watcher that cannot start returns a `tracking_error` receipt with both task and router run ids instead of presenting an untracked run as normally queued. If a running watch exceeds its local timeout, TaskStore reports `tracking_lost` without failing the authoritative router run; a bounded reconciliation phase accepts a late success or failure and advances both stores.
+
+Eligible native child sessions receive `ask_parent`. Its request is delivered through `Session.deliver_parent_question/2`: idle parents start processing immediately, and a parent currently inside `task` or `agent` join yields that join with `needs_parent_answer` before processing the visible question. Parent-question creation and terminal transitions are serialized, one child scope may have only one waiting request, resolver credentials must exactly match both parent session and agent, and only the winning answer/timeout/cancel/error transition emits a terminal event.
+
+`LaneQueue` monitors callers while jobs wait, removes abandoned queued jobs, and turns a missing or failing task supervisor into a per-job `task_start_failed` result while continuing to drain. Background process execution catches LaneQueue GenServer exits and uses the documented direct fallback rather than hanging the caller.
+
+Hermes-compatible background commands use the same native runtime. Call
+`CodingAgent.BackgroundRun.start/2` to receive a durable id immediately, then
+use `list/1`, `status/1`, `result/1`, or `cancel/2`. Each run owns a fresh
+full-tool session on the subagent lane; `:session_key` is retained only as
+lineage metadata, and neither the prompt nor result is appended to that parent.
+Channel surfaces use `list_scoped/2`, `status_scoped/2`, `result_scoped/2`, and
+`cancel_scoped/3`, which require that lineage key and make a foreign id
+indistinguishable from a missing id. The unscoped lifecycle remains reserved for
+trusted operator/control-plane views.
+Queued/running background records recover as `:lost` after a VM restart rather
+than pretending an in-memory worker survived.
+Internal worker/provider failures remain in the task store for runtime
+diagnostics, while `status/1` and `result/1` expose only stable classifications
+such as `:failed`, `:lost`, and `:cancelled`. Background lifecycle events use
+the same content-free classifications and do not copy retained error terms.
+
+`CodingAgent.SideQuery.ask/3` implements `/btw` as a synchronous, bounded,
+no-tools session. Its source may be a live session pid/id, a durable channel
+session key, or an explicit `%{messages: ..., system_prompt: ...}` snapshot.
+Live context is captured atomically and frozen for the child; durable keys use
+bounded `LemonCore.RunStore` history plus session policy. Persisted string
+reasoning levels are normalized to the atom-valued native session contract
+before the no-tools child starts. Side queries use a separate ephemeral
+session key and never mutate parent history.
+Runner failures are collapsed to bounded atoms (`:timeout`, `:cancelled`, or
+`:query_failed`) so adapters never receive provider details or local paths.
 
 `exec` and `process` now expose terminal backend metadata. Registered backends
 include `:local`, backed by the supervised `ProcessSession` Erlang Port runner,
@@ -361,6 +441,14 @@ The eval harness is intentionally lightweight and deterministic. It should catch
 | `LemonAgent.Security.ExternalContent` | External content sanitization; `CodingAgent.Security.ExternalContent` remains a compatibility wrapper |
 | `CodingAgent.Security.UntrustedToolBoundary` | Pre-LLM boundary for untrusted tool output; composed with `ContextGuardrails` |
 
+Named-node execution does not serialize source-side provider credentials,
+executor options, callbacks, or BEAM process state. The worker accepts only the
+versioned `coding_agent.run` method, removes `meta.node` before local execution
+to prevent recursive selection, and requires the selected cwd to exist locally.
+Node session tokens are stored only on the destination and are accepted from
+`LEMON_NODE_OPERATOR_TOKEN` / `LEMON_NODE_TOKEN` so they need not appear in
+shell history.
+
 ### Utilities
 
 | Module | Description |
@@ -398,9 +486,17 @@ A session is a `GenServer` process that wraps an `LemonAgent.Agent` loop. Each s
 - JSONL persistence with tree-structured entries
 - Event subscription (direct send or backpressure-aware streams)
 - Steering (mid-run interrupts) and follow-up (post-run) queues
+- One optional durable same-session heartbeat that fires only while idle
 - Auto-compaction and overflow recovery
 
-Sessions are started under `SessionSupervisor` (dynamic) and registered in `SessionRegistry` by their UUID.
+The Session queue fields are diagnostic mirrors; `LemonAgent.Agent` owns actual
+delivery and consumption. Terminal, cancel, error, abort, and agent-exit paths
+clear the mirrors so `diagnostics/1` cannot report stale follow-ups.
+
+Sessions are started under `SessionSupervisor` (dynamic) and registered in
+`SessionRegistry` by their persisted UUID. Registry metadata also retains the
+logical runtime session key used by clients; logical-key lookup fails closed if
+more than one live process claims it.
 
 ### Tool Execution
 
@@ -427,11 +523,17 @@ When conversations grow large, auto-compaction kicks in:
 4. A compaction entry is appended to the session tree
 5. Overflow recovery handles cases where the context window is exhausted mid-run
 
+Auto-compaction runs in a tracked background worker after a completed turn. If
+a new prompt arrives before that worker finishes, Session cancels and demonitors
+the stale snapshot immediately, clears its timeout, and starts the prompt
+without waiting. Any already-sent late result is ignored by signature/state
+checks and cannot append a compaction entry to the new turn.
+
 Settings: `compaction_enabled` (default: true), `reserve_tokens` (default: 16,384), `keep_recent_tokens` (default: 20,000).
 
 ### Budget Tracking
 
-Budgets track token and cost usage per run. The `RunGraph` maintains parent/child relationships with DETS persistence. Budgets cascade: subagents inherit (and can further restrict) parent limits. The state machine enforces monotonic transitions (`queued -> running -> completed|error|killed|cancelled|lost`).
+Budgets track token and cost usage per run. The `RunGraph` maintains parent/child relationships with DETS persistence. Budgets cascade: subagents inherit (and can further restrict) parent limits. Token/cost increments are atomic, child ids reserve `max_children` capacity atomically, and repeated child completion notifications aggregate usage exactly once before releasing the slot. The state machine enforces monotonic transitions (`queued -> running -> completed|error|killed|cancelled|lost`).
 
 ### Extensions
 
@@ -454,6 +556,27 @@ Settings are loaded from TOML files and merged (global, then project):
 | `extensions_dir/0` | `~/.lemon/agent/extensions/` | -- |
 | `workspace_dir/0` | `~/.lemon/agent/workspace/` | -- |
 | `project_extensions_dir/1` | `<cwd>/.lemon/extensions/` | -- |
+
+Named-node session-token records are separate from TOML settings. They live at
+`~/.lemon/nodes/execution/<sha256-of-durable-node-id>.json`, include the exact
+controller URL, and are reused only when that URL matches. Durable-ID lookup
+requires that exact controller argument before it returns session or recovery
+material. A controller-issued node session token currently expires after seven
+days. The CLI does not refresh it automatically; re-run with `--pair` and
+operator authority to recover the same durable identity and rotate its session.
+The controller invalidates the previous token and live socket immediately.
+
+The worker sends a WebSocket ping every 25 seconds so the controller's idle
+timeout does not interrupt live-node registration. During `--pair`, transient
+socket loss resumes the same pairing ID; approving an already approved pairing
+reissues a one-time challenge for the same durable node, including when the
+previous challenge response was lost after token issuance.
+
+Named-node requests and results use the controller's advertised `maxPayload`
+byte limit (1 MiB by default) plus shared depth and item-count limits. Streaming
+answer accumulation is cancelled before it can exceed that boundary, and the
+worker returns a compact protocol error instead of retaining an unbounded
+result.
 
 ### Application Environment
 
@@ -514,7 +637,21 @@ Loaded from `~/.lemon/agent/workspace/` (initialized from `priv/templates/worksp
 
 # Abort current operation
 :ok = CodingAgent.Session.abort(session)
+
+# Recur inside this same durable conversation every ten minutes
+{:ok, heartbeat} =
+  CodingAgent.Session.heartbeat_set(session, "review CI and report changes", 600)
+
+{:ok, heartbeat} = CodingAgent.Session.heartbeat_pause(session)
+{:ok, heartbeat} = CodingAgent.Session.heartbeat_resume(session)
+{:ok, heartbeat} = CodingAgent.Session.heartbeat_clear(session)
 ```
+
+Session heartbeats use the ordinary prompt/agent/provider path after the
+session becomes idle; queued user input takes priority and missed ticks
+coalesce. See
+[`docs/user-guide/session-heartbeats.md`](../../docs/user-guide/session-heartbeats.md)
+for TUI, control-plane, persistence, and live-smoke details.
 
 ### Subscribing to Events
 
@@ -563,6 +700,56 @@ results = CodingAgent.Coordinator.run_subagents(coordinator, [
   %{prompt: "Review for bugs", subagent: "review"}
 ], timeout: 60_000)
 ```
+
+### Running on a Named Execution Node
+
+Start the controller on one machine, then join from the destination source
+checkout. The first command pairs and stores the controller-issued session
+token; subsequent starts omit `--pair`:
+
+```bash
+# destination machine
+LEMON_NODE_OPERATOR_TOKEN=... ./bin/lemon node join \
+  --name worker-1 \
+  --controller wss://controller.example/ws \
+  --pair \
+  --cwd /srv/project
+
+./bin/lemon node join \
+  --name worker-1 \
+  --controller wss://controller.example/ws \
+  --cwd /srv/project
+```
+
+The private record is keyed by durable node ID, not the launch name. A
+controller rename therefore survives destination restarts. Re-run with
+`--pair` after the seven-day session expires; recovery keeps the existing
+identity and name reservation and revokes older sessions. For a legacy record
+that has a node ID but no recovery credential, use the explicit
+operator-authorized `--pair --repair --node-id ID` migration path.
+
+Non-loopback plaintext controllers are rejected by default. Prefer `wss://`.
+For a development endpoint or a verified encrypted overlay such as Tailscale,
+add `--allow-insecure-controller` (or set
+`LEMON_NODE_ALLOW_INSECURE_CONTROLLER=true`) explicitly; do not use that
+override on an unverified network.
+
+Once `worker-1` is online, a model can route a delegated run through the
+`agent` tool with parameters such as:
+
+```json
+{
+  "action": "run",
+  "agent_id": "default",
+  "prompt": "Run the focused tests and report failures.",
+  "node": "worker-1"
+}
+```
+
+An explicit abort cancels the registry invocation and sends
+`node.invoke.cancel` to the targeted worker. Node disconnects fail pending
+invocations. Steering and redirect operations are not supported across this
+remote boundary.
 
 ## Dependencies
 

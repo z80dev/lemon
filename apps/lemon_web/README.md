@@ -1,10 +1,10 @@
 # LemonWeb
 
-Phoenix web interface for the Lemon platform. Provides a real-time dashboard for interacting with Lemon agents via LiveView and optional token-based access control.
+Phoenix web interface for the Lemon platform. Provides real-time agent chat and a token-required local operations shell over shared Lemon runtime/session services.
 
 ## Architecture Overview
 
-LemonWeb is a Phoenix 1.7 application inside an Elixir umbrella project. It uses Phoenix LiveView for interactive pages, Bandit as the HTTP server, vendored Phoenix JavaScript from umbrella dependencies, and Tailwind CSS loaded from CDN for styling.
+LemonWeb is a Phoenix 1.7 application inside an Elixir umbrella project. It uses Phoenix LiveView for interactive pages, Bandit as the HTTP server, and checked-in release assets for both Phoenix JavaScript and compiled Tailwind CSS. The page has no runtime CDN dependency.
 
 ### OTP Supervision Tree
 
@@ -47,7 +47,7 @@ All LiveView pages communicate over this socket. There are no custom Phoenix Cha
 
 ## Route Inventory
 
-### Authenticated Browser Pipeline (`:browser`)
+### Browser Pipeline (`:browser`)
 
 Includes `RequireAccessToken` plug. When `LEMON_WEB_ACCESS_TOKEN` is set, requests must present a valid token.
 
@@ -56,10 +56,28 @@ Includes `RequireAccessToken` plug. When `LEMON_WEB_ACCESS_TOKEN` is set, reques
 | `/` | `SessionLive` | `:index` | Dashboard home; generates an isolated session key per browser tab |
 | `/sessions/:session_key` | `SessionLive` | `:show` | Dashboard bound to a specific session key |
 
+### Required Management Pipeline (`:management_browser`)
+
+The `/manage` surface always requires a configured `LEMON_WEB_ACCESS_TOKEN`.
+It returns HTTP 503 when no token is configured and HTTP 401 for missing or
+invalid credentials. A valid query token stores only a token-derived session
+marker and immediately redirects to the same URL with `token` removed; bearer
+authentication establishes the same marker without redirecting.
+
+| Path | Handler | Description |
+|------|---------|-------------|
+| `/manage` | `ManagementLive` | Runtime/node status and searchable active/archived sessions |
+| `/manage/memory` | `MemoryManagementLive` | Bounded, redacted durable-memory search, provenance inspection, and exact digest-confirmed deletion |
+| `/manage/blueprints` | `BlueprintManagementLive` | Content-free catalog inspection, validation, exact preview, and digest-confirmed activation |
+| `/manage/profiles` | `ProfileManagementLive` | Bounded roster plus preview-first create, clone, rename, recoverable delete, and canonical-chat links |
+| `/manage/providers` | `ProviderManagementLive` | Redacted provider fallback/pool/reference preview and apply |
+| `/manage/sessions/:session_key` | `ManagementLive` | Redacted run/tool inspection and lifecycle controls |
+| `/manage/sessions/:session_key/export/:format` | `SessionExportController` | Always-redacted `json` or `markdown` download |
+
 ### Query Parameters
 
 - `/?agent_id=<id>` -- Sets the agent for the auto-generated session (default: `"default"`)
-- `/?token=<token>` -- Authenticates the request (stripped from URL by client-side JS after consumption)
+- `/?token=<token>` -- Authenticates the request (stripped by an immediate server redirect before rendering)
 - `/sessions/:session_key?token=<token>` -- Same token authentication for named sessions
 
 ## LiveView Pages
@@ -69,11 +87,14 @@ Includes `RequireAccessToken` plug. When `LEMON_WEB_ACCESS_TOKEN` is set, reques
 The primary dashboard page. Provides a chat-style interface for sending prompts to Lemon agents and receiving streaming responses.
 
 **Features:**
+- Shared first-run readiness through `LemonCore.Setup.Readiness`; incomplete setup is explained before prompt or file persistence
 - Real-time streaming of assistant responses via PubSub deltas
 - Multi-file upload (up to 5 files, 20 MB each) with progress tracking and cancellation
 - Tool call visualization in collapsible detail panels
 - System notifications for run lifecycle events (started, completed, failed)
+- Active-run stop control through `LemonRouter.abort_run/2`
 - Message history capped at 250 messages
+- Durable history reconstruction on `/sessions/:session_key`, including ordered prompt, tool, and answer messages for resume
 
 **Session key resolution:**
 1. If `params["session_key"]` is present and valid, use it directly
@@ -85,12 +106,83 @@ The primary dashboard page. Provides a chat-style interface for sending prompts 
 - `:delta` -- Streams text into the current assistant message bubble
 - `:engine_action` -- Renders a tool call detail panel
 - `:run_completed` -- Finalizes the assistant message; shows error if the run failed
+- `:config_reloaded` / `:secret_changed` on the `"system"` topic -- Re-derives browser setup readiness
 
 **Submission flow:**
-1. User enters prompt and/or uploads files
-2. Files are persisted to the uploads directory with timestamped names
-3. Prompt is enriched with file paths and submitted via `LemonRouter.submit/1`
-4. Response streams back through PubSub events
+1. The shared readiness contract confirms config, secrets, provider, credential, and model are usable
+2. User enters a prompt and/or uploads files
+3. Files are persisted to the uploads directory with timestamped names
+4. Prompt is enriched with file paths and submitted via `LemonRouter.submit/1`
+5. Response streams back through PubSub events; **Stop** calls `LemonRouter.abort_run/2`
+
+### ManagementLive (`/manage`)
+
+The management page delegates to `LemonCore.SessionLifecycle` and does not own
+a second session store. It provides bounded list/search, active/archive
+filtering, title/pin/archive mutation, resume links, redacted structured
+run/tool inspection, and redacted JSON/Markdown export. Runtime status comes
+from `LemonCore.Runtime.Health`; live named-node presence comes from
+`LemonCore.NodeRegistry` with node metadata deliberately omitted from the UI.
+
+Guarded prune is preview-first and defaults to archived, unpinned sessions.
+The confirmation token binds the threshold, policy flags, stable session keys,
+index timestamps, and lifecycle metadata. If anything changes, execution fails
+closed and requires a fresh preview. Canonical run history is committed last
+after fallible ancillary cleanup, and deletion is verified.
+
+Management inspection and downloads are always redacted and never expose raw
+run records or event payloads. Chat resume is an internal trusted consumer of
+unredacted history so the user can continue their own conversation; no operator
+JSON-RPC method offers that mode.
+
+### ProviderManagementLive (`/manage/providers`)
+
+The provider page depends on the existing
+`LemonAgent.ModelRuntime.ProviderConfiguration` service rather than owning a
+second config writer. It shows only validated provider/pool identifiers and
+credential-reference counts, and supports ordered fallback add/remove/clear,
+pool create/update/activate/delete, and credential-reference add/remove/clear.
+
+Every change is preview-first. Apply passes the preview's opaque config
+revision back to the service, so any concurrent target change rejects the
+write. Destructive operations also require the exact provider/pool confirmation
+shown in the preview. Credential-reference values are password-masked, filtered
+from LiveView logs, omitted from socket drafts, and re-entered on apply; the UI
+keeps only a digest long enough to match the exact preview. Service errors are
+mapped to bounded fixed text and never rendered verbatim.
+
+### MemoryManagementLive (`/manage/memory`)
+
+The memory page delegates to `LemonMemory.Lifecycle`, which reads and mutates
+the canonical `LemonMemory.Store`. It provides globally bounded search and
+recent-record listing with scope, kind, agent, and one-way workspace-digest
+filters. Run summaries and reviewed-learning provenance are projected through
+the central memory safety redactor before entering LiveView state; raw source
+bodies, paths, URLs, workspace keys, provider details, and error terms are not
+part of the page contract.
+
+Deletion is single-record and preview-first. The confirmation binds the exact
+document ID to a deterministic revision of every persisted document field.
+The store compares that revision again inside the same SQLite transaction that
+deletes both the full-text row and canonical document, returning only
+`deleted`, `not_found`, or `stale`. Filter drafts survive rejected or stale
+confirmations so operators can refresh without rebuilding their search.
+
+### BlueprintManagementLive (`/manage/blueprints`)
+
+The blueprint page delegates every operation to
+`LemonAutomation.Blueprint.Catalog`, the same bounded-ID service used by the
+control-plane RPC methods. It lists safe bundle IDs/counts, re-runs validation,
+and previews exact profile skill plus cron actions without mutation. Apply
+requires the displayed fresh 64-character digest; the service re-plans under
+its lock, so catalog, profile, schedule, or destination drift rejects the
+request and forces a new preview. Identical replay reports `unchanged` and
+does not create a duplicate job.
+
+The LiveView allowlists its own state projection. It does not retain or render
+free-form manifest names/descriptions, prompts, skill bodies, commands,
+environment values, tokens, paths, or service error terms. The profile draft
+survives stale/refused operations, while the stale plan digest is cleared.
 
 ## Components
 
@@ -114,31 +206,35 @@ Shared function components auto-imported into all LiveViews:
 
 ### Layouts (`lib/lemon_web/components/layouts/`)
 
-- `root.html.heex` -- HTML shell with `<head>` (meta, CSRF token, Tailwind CDN, `app.js`), renders `@inner_content`
+- `root.html.heex` -- HTML shell with `<head>` (meta, CSRF token, bundled `app.css` and `app.js`) plus the skip-navigation link
 - `app.html.heex` -- Passthrough layout, renders `@inner_content` directly
 
 ## Static Assets and Frontend
 
-LemonWeb uses a small static frontend strategy with no local build tools (no esbuild, no Node.js):
+LemonWeb uses a small checked-in static frontend strategy with no runtime build tools:
 
-- **Tailwind CSS**: Loaded from `https://cdn.tailwindcss.com` in the root layout
+- **Tailwind CSS**: Precompiled and minified into `priv/static/assets/app.css`; release digests include it and runtime startup never contacts a CSS CDN
 - **Phoenix JS**: Vendored from `deps/phoenix/priv/static/phoenix.mjs` into `priv/static/assets/vendor/phoenix.mjs`
 - **Phoenix LiveView JS**: Vendored from `deps/phoenix_live_view/priv/static/phoenix_live_view.esm.js` into `priv/static/assets/vendor/phoenix_live_view.esm.js`
 - **app.js** (`priv/static/assets/app.js`): Client-side entry point that initializes the LiveSocket, generates stable per-tab session keys via `sessionStorage`, normalizes agent IDs, and strips token params from the URL after authentication
 
-Static files are served by `Plug.Static` at `/` for paths matching `~w(assets favicon.ico robots.txt)`.
+Static files are served by `Plug.Static` at `/` for paths matching
+`~w(assets favicon.ico favicon.svg robots.txt)`. The root layout declares the
+bundled SVG favicon explicitly, avoiding a first-load missing-favicon request.
 
 ## Authentication
 
-Authentication is handled by the `LemonWeb.Plugs.RequireAccessToken` plug, which is optional and only active when a token is configured.
+Authentication is handled by `LemonWeb.Plugs.RequireAccessToken`. Chat routes
+retain the optional local gate, while management routes pass `required: true`
+and fail closed without a configured token.
 
 **Behavior:**
-1. If `config :lemon_web, :access_token` is `nil` or `""`, all requests pass through (no gate)
+1. If `config :lemon_web, :access_token` is `nil` or `""`, optional chat routes pass through; required management routes return HTTP 503
 2. When a token is configured, it is checked from three sources (in order):
    - `Authorization: Bearer <token>` header
    - `?token=<token>` query parameter
    - Session marker (SHA256 hash stored in cookie under `:lemon_web_auth`)
-3. On valid token: a SHA256 hash is stored in the session so subsequent requests skip the token check
+3. On valid token: a SHA256 hash is stored in the session so subsequent requests skip the token check; query bootstrap redirects server-side to a token-free URL while bearer auth continues directly
 4. On invalid or missing token: responds with `401 Unauthorized` and halts
 
 **Token comparison** uses constant-time comparison via `Plug.Crypto.secure_compare/2`.
@@ -162,7 +258,7 @@ Configured in `SessionLive.mount/3`:
 
 | Variable | Purpose | Default |
 |----------|---------|---------|
-| `LEMON_WEB_ACCESS_TOKEN` | Dashboard access token | `nil` (no auth) |
+| `LEMON_WEB_ACCESS_TOKEN` | Chat gate and required management credential | `nil` (chat open; management unavailable) |
 | `LEMON_WEB_UPLOADS_DIR` | Directory for uploaded files | `System.tmp_dir!/0 <> "/lemon_web_uploads"` |
 | `LEMON_WEB_HOST` | Production hostname | `"localhost"` |
 | `LEMON_WEB_PORT` | HTTP port for unified runtime and production | `4080` |
@@ -203,7 +299,9 @@ config :lemon_web, :uploads_dir, Path.join(System.tmp_dir!(), "lemon_web_uploads
 
 | App | Purpose |
 |-----|---------|
-| `lemon_core` | PubSub (`LemonCore.Bus`), session keys (`LemonCore.SessionKey`), events (`LemonCore.Event`), map helpers |
+| `lemon_agent` | Shared provider configuration validation, atomic mutation, revision, confirmation, and redaction boundary |
+| `lemon_automation` | Shared bounded blueprint catalog, validation, exact preview, profile activation, and create-once scheduler boundary |
+| `lemon_core` | PubSub, session keys/events, shared session lifecycle, runtime health, and live node presence |
 | `lemon_router` | Request routing (`LemonRouter.submit/1`) for submitting prompts to agents |
 
 ### External Dependencies
@@ -222,17 +320,20 @@ config :lemon_web, :uploads_dir, Path.join(System.tmp_dir!(), "lemon_web_uploads
 ## Running
 
 ```bash
-# Start the entire umbrella (includes lemon_web)
-mix phx.server
+# Installed full release: start if needed, wait for Web health, and open browser
+lemon web
 
-# Or start with an interactive shell
-iex -S mix phx.server
+# Source checkout: same behavior
+./bin/lemon web
+
+# Print the address without opening a browser
+lemon web --no-open
 
 # Run lemon_web tests only
 mix test apps/lemon_web
 
-# Access the dashboard
-open http://localhost:4080
+# Contributor-only direct Phoenix path
+mix phx.server
 ```
 
 ## File Organization
@@ -249,9 +350,11 @@ apps/lemon_web/
 |       |-- telemetry.ex                           # Telemetry supervisor
 |       |-- gettext.ex                             # i18n backend
 |       |-- plugs/
-|       |   |-- require_access_token.ex            # Optional token authentication plug
+|       |   |-- require_access_token.ex            # Optional/required token authentication plug
 |       |-- live/
 |       |   |-- session_live.ex                    # Main dashboard LiveView
+|       |   |-- management_live.ex                 # Authenticated session operations LiveView
+|       |   |-- provider_management_live.ex        # Authenticated provider-routing LiveView
 |       |   |-- components/
 |       |       |-- file_upload_component.ex        # File upload UI
 |       |       |-- message_component.ex            # Chat message bubbles
@@ -263,6 +366,7 @@ apps/lemon_web/
 |       |       |-- root.html.heex                 # HTML document shell
 |       |       |-- app.html.heex                  # App layout (passthrough)
 |       |-- controllers/
+|           |-- session_export_controller.ex       # Redacted session downloads
 |           |-- error_html.ex                      # HTML error renderer
 |           |-- error_json.ex                      # JSON error renderer
 |           |-- error_html/
@@ -271,6 +375,8 @@ apps/lemon_web/
 |-- priv/
 |   |-- static/
 |   |   |-- assets/
+|   |       |-- app.css                            # Precompiled Tailwind stylesheet
+|   |       |-- management.css                     # Responsive management-shell styles
 |   |       |-- app.js                             # Client-side JS (LiveSocket init, session keys)
 |   |-- gettext/
 |       |-- .keep

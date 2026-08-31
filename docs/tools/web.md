@@ -3,14 +3,19 @@
 `websearch`, `webfetch`, and the `browser_*` tools are built-in
 external-content tools:
 
-- `websearch`: query the web with Brave (default) or Perplexity Sonar.
-- `webfetch`: fetch a URL, extract readable content, and optionally fall back to Firecrawl.
+- `websearch`: query registered providers. Bundled providers are Brave
+  (default), Exa, Perplexity Sonar, keyless DuckDuckGo, and user-hosted SearXNG.
+- `webfetch`: extract readable content through registered providers. Guarded
+  direct extraction is the default and optionally falls back to Firecrawl.
 - `browser_navigate`: navigate the supervised local browser session.
+- `browser_tabs`, `browser_tab_open`, `browser_tab_activate`,
+  `browser_tab_close`: enumerate and manage tabs through stable Chrome target
+  IDs.
 - `browser_snapshot`: inspect the current page as a compact DOM snapshot.
 - `browser_get_content`: return text and optionally sanitized HTML from the current page.
 - `browser_click`, `browser_type`, `browser_hover`, `browser_select_option`,
   `browser_upload_file`, `browser_download`, `browser_press`, `browser_scroll`, `browser_back`:
-  interact with the current page.
+  interact with the current page, or an explicit `targetId`.
 - `browser_wait_for_selector`: wait until a selector appears.
 - `browser_evaluate`: evaluate a JavaScript expression in the current page and
   return untrusted JSON-serializable output.
@@ -23,9 +28,47 @@ external-content tools:
   final Telegram/Discord answer path.
 - `browser_analyze`: capture a managed screenshot and pass it through
   `media_analyze_image` in one supervised BEAM-owned operation.
+- `browser_exec`: run a bounded BUA-style program of up to 25 typed browser
+  actions; raw CDP steps require explicit developer mode.
+- `computer_use`: capture and drive native apps through cua-driver with SOM,
+  vision, or AX state and background-first input delivery.
 
-Browser tools use `LemonBrowser.LocalServer`, an OTP-supervised
-Node/Playwright helper. They require the browser node client to be built:
+## Search and extraction providers
+
+Both web tools use `CodingAgent.Search.Provider` and the shared
+capability-aware registry. Providers declare `search`, `extract`, or both.
+Selection is ordered and deterministic: an explicit request provider is
+attempted first, followed by the request's `fallbackProviders`; otherwise the
+configured provider and fallback are used. Each result includes the
+requested/used provider and a safe attempt summary.
+
+Identical concurrent requests are single-flight. One supervised operation calls
+the provider while other callers await the same result; successful results then
+enter the existing bounded ETS and optional persistent cache. Providers run in
+isolated, timeout-bounded processes, so an exception, exit, or slow provider can
+fall through without crashing the agent turn. URL-policy failures from guarded
+direct extraction are terminal and never fall back through a remote extractor.
+
+| Provider | Capability | Setup |
+|---|---|---|
+| `brave` | search | `BRAVE_API_KEY` or `runtime.tools.web.search.api_key` |
+| `exa` | search/highlights and batch extract | `EXA_API_KEY` or configured key |
+| `perplexity` | search/answer | `PERPLEXITY_API_KEY`, `OPENROUTER_API_KEY`, or configured key |
+| `duckduckgo` | keyless search | none |
+| `searxng` | search | `runtime.tools.web.search.providers.searxng.base_url` |
+| `direct` | extract | built in; guarded HTTP plus readability |
+| `firecrawl` | extract | `FIRECRAWL_API_KEY` or configured key |
+
+Extensions may register additional providers with `type: :search`; the module
+must implement `CodingAgent.Search.Provider`. Built-ins win identifier
+conflicts, and extension providers are removed during extension reload.
+
+Browser tools use the backend-neutral `LemonBrowser` facade. The default
+`:local` backend dispatches to `LemonBrowser.LocalServer`, an OTP-supervised
+Node/Playwright helper; `:controller` dispatches only to an exactly bound,
+authenticated controller. Unknown, unavailable, offline, or mismatched
+backends fail closed and never switch browser identity or profile implicitly.
+The local backend requires the browser node client to be built:
 
 ```bash
 cd clients/lemon-browser-node
@@ -33,12 +76,78 @@ npm install
 npm run build
 ```
 
+Additional built-ins cover Browserbase (`browserbase`), Browser Use Cloud
+(`browser_use`), Firecrawl hosted browser sessions (`firecrawl`), Camofox
+REST/Firefox (`camofox`), and explicit local/public routing (`hybrid`). Hosted
+backends require an exact Lemon `session_id`, create one provider session per
+session/profile/run scope, attach the Node driver without launching a browser,
+redact CDP authority from status, and release provider state on idle. Camofox
+uses snapshot refs such as `@e5` as selectors. Hybrid requires
+`LEMON_BROWSER_HYBRID_PUBLIC_BACKEND`; local/private URLs stay on its local
+backend, public URLs use that configured backend, and provider failure never
+falls back across identities.
+
+`browser_exec` is the provider-neutral Browser Use Agent code-mode equivalent.
+Its program is a bounded typed action list rather than arbitrary Python, so
+Lemon can audit every navigation, input, evaluation, screenshot, and tab step.
+Use `targetId = "$active"` to carry the prior tab result. A `cdp` step requires
+`browser_developer_mode: true`; `Browser.close`, `Target.closeTarget`, and raw
+download-policy mutation remain blocked.
+
+`computer_use` drives native desktop apps through a lazily started private
+`cua-driver` daemon in standard permission mode. Capture supports `som`,
+`vision`, and `ax`; input supports element or coordinates, click variants,
+drag, scroll, type, key/hotkey, value setting, app focus, and optional
+post-action capture. Input defaults to `background`. Foreground focus is an
+explicit escalation, capture artifacts follow browser retention, driver
+session ids are derived hashes, and timeouts/errors are not automatically
+replayed because the external effect may already have happened.
+
 By default the helper launches local Chrome/Chromium and connects over CDP on
 `127.0.0.1`. Set `LEMON_BROWSER_CDP_ENDPOINT` or pass `--cdp-endpoint` to the
 local driver to attach to an already-running local or managed CDP endpoint
 instead. Endpoint attach mode is attach-only: Lemon will not try to launch a
 replacement browser if that endpoint is unreachable, and connection errors
 redact endpoint credentials before surfacing to operators.
+
+Every page-scoped browser tool accepts optional `targetId`. When omitted it
+uses the session's active target; `browser_tab_activate` changes that active
+target. `browser_tabs` returns stable real Chrome target IDs. Lemon separately
+tracks browsers it launched and browsers it merely attached to; stopping an
+attached session never sends `Browser.close` and never terminates the user's
+browser.
+
+### Existing signed-in Chrome via MV3
+
+The opt-in extension relay exposes existing signed-in tabs without launching a
+debugging profile:
+
+```bash
+export LEMON_BROWSER_RELAY_TOKEN="$(openssl rand -hex 32)"
+./bin/lemon-browser-relay start
+./bin/lemon-browser-relay install
+
+export LEMON_BROWSER_CDP_ENDPOINT="ws://127.0.0.1:9224/cdp?token=$LEMON_BROWSER_RELAY_TOKEN"
+export LEMON_BROWSER_ATTACH_ONLY=true
+```
+
+Load the directory printed by `install` through Chrome's **Load unpacked** UI,
+then enter the same token and port in the extension settings. The relay binds
+only to loopback, requires constant-time token authentication on discovery and
+both WebSocket paths, hides restricted Chrome pages, and acknowledges rather
+than forwards `Browser.close`. The extension displays connection state in its
+badge and reconnects with bounded backoff. See
+[`clients/lemon-browser-node/README.md`](../../clients/lemon-browser-node/README.md).
+
+Remote controllers use `browser.controller.ticket`, `register`, `heartbeat`,
+`result`, and `status`. Tickets are strong, short-lived, hashed at rest, and
+single-use. Registration binds the authenticated principal, exact controller,
+browser profile, Lemon session/run, and allowlisted capabilities. Each command
+has bounded completion, and results are accepted only from the exact registered
+WebSocket process. Controller-backend requests must supply the exact controller,
+profile, and session binding; omitted identities never select the only available
+controller implicitly. Offline, expired, replayed, mismatched, incomplete, or
+under-capability requests fail closed.
 
 Screenshots default to `.lemon/browser-artifacts/` under the active working
 directory unless a `path` is provided.
@@ -162,6 +271,38 @@ assertions. Pass
 `LEMON_BROWSER_CDP_ENDPOINT` when the browser is already managed by another
 local service, a container, or a remote CDP provider.
 
+The real MV3/Chrome relay proof is:
+
+```bash
+cd clients/lemon-browser-node
+npm run smoke:extension
+```
+
+It launches a disposable Chrome-for-Testing profile, loads the unpacked
+extension, authenticates the loopback relay, enumerates existing tabs, opens a
+new tab, reads title and DOM content through Playwright, detaches, and verifies
+that the attached Chrome process remains alive. The smoke writes a redacted
+`.lemon/proofs/browser-extension-smoke-latest.json` artifact; it persists no
+relay token, loopback port, raw target ID, URL, or page content. Mocked
+service-worker tests separately exercise the real toolbar-click opt-in/detach
+state and debugger-event filtering.
+
+The opt-in live model acceptance harness is:
+
+```bash
+mix run --no-start scripts/live_search_browser_leadership_smoke.exs
+```
+
+It starts real `CodingAgent.Session` turns on `openai-codex:gpt-5.6-luna` with
+`:xhigh` reasoning, using isolated run-history and memory stores, a disposable
+Chrome profile, and restricted trial-specific tool lists. It asserts ordered
+SearXNG-to-DuckDuckGo fallback and multi-source synthesis, stable target-scoped
+multi-tab reads, stale-target recovery, screenshot analysis, and refusal to
+bypass an unpaired controller's consent/capability boundary. The latest and
+archived results under `.lemon/proofs/search-browser-leadership-*.json` contain
+only model/tool identifiers, counts, booleans, durations, and hashes—not
+credentials, prompts, answers, URLs, target IDs, or tool result bodies.
+
 ## API Key Setup
 
 Set keys in your shell or `.env` (autoloaded by Lemon startup scripts):
@@ -176,6 +317,7 @@ export FIRECRAWL_API_KEY="..."       # optional; used by webfetch fallback
 Key resolution behavior:
 
 - Brave search uses `runtime.tools.web.search.api_key`, then `BRAVE_API_KEY`.
+- Exa uses `runtime.tools.web.search.providers.exa.api_key`, then `EXA_API_KEY`.
 - Perplexity search uses `runtime.tools.web.search.perplexity.api_key`, then `PERPLEXITY_API_KEY`, then `OPENROUTER_API_KEY`.
 - Firecrawl uses `runtime.tools.web.fetch.firecrawl.api_key`, then `FIRECRAWL_API_KEY`.
 
@@ -184,7 +326,7 @@ Key resolution behavior:
 ```toml
 [runtime.tools.web.search]
 enabled = true
-provider = "brave"                    # "brave" | "perplexity"
+provider = "brave"                    # "brave" | "perplexity" | "duckduckgo" | "searxng"
 max_results = 5
 timeout_seconds = 30
 cache_ttl_minutes = 15
@@ -197,6 +339,9 @@ provider = "perplexity"
 api_key = "<perplexity-api-key>"
 # base_url can be omitted; Lemon auto-selects Perplexity vs OpenRouter by key source/prefix.
 model = "perplexity/sonar-pro"
+
+[runtime.tools.web.search.providers.searxng]
+base_url = "https://search.example.com"
 
 [runtime.tools.web.fetch]
 enabled = true

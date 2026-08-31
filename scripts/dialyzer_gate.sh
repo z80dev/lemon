@@ -2,9 +2,8 @@
 #
 # Dialyzer green gate.
 #
-# The umbrella as a whole still carries a large Dialyzer backlog (see
-# docs/plans/dialyzer-burndown.md). Rather than gate the whole tree "all or
-# nothing", this script enforces zero Dialyzer findings for an explicit
+# The umbrella as a whole still carries a large Dialyzer backlog. Rather than
+# gate the whole tree "all or nothing", this script enforces zero Dialyzer findings for an explicit
 # allowlist of apps that have been driven to green and are expected to STAY
 # green. Apps graduate onto this list as their findings are burned down; the
 # list only ever grows, so the gate ratchets forward and can never silently

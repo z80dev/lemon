@@ -10,6 +10,7 @@ import {
 } from "../../src/protocol/errors.ts";
 import { ControlPlaneMethods } from "../../src/protocol/methods.ts";
 import type { ChatDeltaEvent } from "../../src/protocol/types.ts";
+import { AUTHENTICATED_CONNECT_PARAMS } from "./fixtures/control-plane-connect-contract.ts";
 
 const teardown: Array<() => void> = [];
 
@@ -54,6 +55,19 @@ describe("handshake", () => {
 		expect(states).toContain("online");
 	});
 
+	test("sends the operator token in the auth envelope without logging it", async () => {
+		const server = await withServer();
+		const token = "control-plane-operator-secret";
+		const client = makeClient(server.url, { token });
+
+		await client.connect();
+
+		const connect = server.requestsFor("connect");
+		expect(connect).toHaveLength(1);
+		expect(connect[0].params).toMatchObject({ auth: { token } });
+		expect(client.recentFrames().join("\n")).not.toContain(token);
+	});
+
 	test("hello-ok event reports the first handshake as not resumed", async () => {
 		const server = await withServer();
 		const client = makeClient(server.url);
@@ -61,6 +75,21 @@ describe("handshake", () => {
 		client.events.on("hello-ok", ({ resumed }) => seen.push(resumed));
 		await client.connect();
 		expect(seen).toEqual([false]);
+	});
+
+	test("sends authenticated connect params using the server contract envelope", async () => {
+		const server = await withServer();
+		const client = makeClient(server.url, {
+			clientId: AUTHENTICATED_CONNECT_PARAMS.client.id,
+			token: AUTHENTICATED_CONNECT_PARAMS.auth.token,
+		});
+
+		await client.connect();
+
+		const connect = server.requestsFor("connect");
+		expect(connect).toHaveLength(1);
+		expect(connect[0].params).toEqual(AUTHENTICATED_CONNECT_PARAMS);
+		expect(connect[0].params).not.toHaveProperty("token");
 	});
 
 	test("an auth rejection rejects connect()", async () => {
@@ -134,6 +163,37 @@ describe("request correlation", () => {
 		const client = makeClient("ws://127.0.0.1:1/ws");
 		const error: any = await client.request("health").catch((e: any) => e);
 		expect(error).toBeInstanceOf(NotConnectedError);
+	});
+});
+
+describe("session lifecycle offline safety", () => {
+	test("metadata, prune, delete, and export never enter the reconnect queue", async () => {
+		const client = makeClient("ws://127.0.0.1:1/ws");
+		const methods = new ControlPlaneMethods(client);
+		for (const request of [
+			methods.sessionsMetadataPatch({ sessionKey: "s1", pinned: true }),
+			methods.sessionsPrune({ olderThanMs: 1, dryRun: false, confirmToken: "token" }),
+			methods.sessionsDelete({ sessionKey: "s1" }),
+			methods.sessionsExport({ sessionKey: "s1", format: "json" }),
+		]) {
+			await expect(request).rejects.toBeInstanceOf(NotConnectedError);
+		}
+		expect(client.queued).toHaveLength(0);
+	});
+});
+
+describe("blueprint activation offline safety", () => {
+	test("activation never enters the reconnect queue", async () => {
+		const client = makeClient("ws://127.0.0.1:1/ws");
+		const methods = new ControlPlaneMethods(client);
+		await expect(
+			methods.blueprintsActivate({
+				bundleId: "daily-note",
+				profileId: "operator",
+				confirmationDigest: "a".repeat(64),
+			}),
+		).rejects.toBeInstanceOf(NotConnectedError);
+		expect(client.queued).toHaveLength(0);
 	});
 });
 
@@ -275,6 +335,21 @@ describe("method gating", () => {
 		void methods.chatSend({ sessionKey: "s1", prompt: "hi" }).catch(() => {});
 		await Bun.sleep(5);
 		expect(client.queued.map((entry) => entry.method)).toEqual(["chat.send"]);
+	});
+
+	test("profile.chat can be queued offline without losing its canonical route", async () => {
+		const client = makeClient("ws://127.0.0.1:1/ws");
+		const methods = new ControlPlaneMethods(client);
+		void methods
+			.profileChat({ id: "research", prompt: "keep going", queueMode: "steer" })
+			.catch(() => {});
+		await Bun.sleep(5);
+
+		expect(client.queued).toHaveLength(1);
+		expect(client.queued[0]).toMatchObject({
+			method: "profile.chat",
+			params: { id: "research", prompt: "keep going", queueMode: "steer" },
+		});
 	});
 
 	test("chatHistory defaults includeFullText to true", async () => {

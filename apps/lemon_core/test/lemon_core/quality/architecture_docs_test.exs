@@ -3,19 +3,27 @@ defmodule LemonCore.Quality.ArchitectureDocsTest do
 
   alias LemonCore.Quality.ArchitectureDocs
 
-  describe "render_dependency_policy_markdown/0" do
-    test "renders empty deps as none" do
-      assert ArchitectureDocs.render_dependency_policy_markdown() =~
-               "| `lemon_core` | *(none)* |"
+  @repo_root Path.expand("../../../../..", __DIR__)
+
+  describe "render_dependency_policy_markdown/1" do
+    test "renders actual, allowed, and reference-only dependency columns" do
+      assert ArchitectureDocs.render_dependency_policy_markdown(@repo_root) =~
+               "| App | Actual direct deps from `mix.exs` | Allowed direct deps | Reference-only exceptions |"
+
+      assert ArchitectureDocs.render_dependency_policy_markdown(@repo_root) =~
+               "| `lemon_core` | *(none)* | *(none)* | *(none)* |"
+
+      assert ArchitectureDocs.render_dependency_policy_markdown(@repo_root) =~
+               "| `lemon_gateway` | `lemon_agent`, `lemon_core` | `lemon_agent`, `lemon_core` | `lemon_ai`, `lemon_automation` |"
     end
 
     test "renders rows in sorted app order" do
       apps =
-        ArchitectureDocs.render_dependency_policy_markdown()
+        ArchitectureDocs.render_dependency_policy_markdown(@repo_root)
         |> String.split("\n", trim: true)
         |> Enum.drop(2)
         |> Enum.map(fn row ->
-          [_, app, _deps] = Regex.run(~r/^\| `([^`]+)` \| (.+) \|$/, row)
+          [_, app] = Regex.run(~r/^\| `([^`]+)` \|/, row)
           app
         end)
 

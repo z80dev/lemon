@@ -10,11 +10,11 @@ export default {
   themeConfig: {
     nav: [
       { text: "Home", link: "/" },
+      { text: "Quickstart", link: "/getting-started/quickstart" },
       { text: "Install", link: "/install" },
       { text: "Compare", link: "/compare" },
       { text: "Benchmarks", link: "/benchmarks/quickstart" },
       { text: "Demo", link: "/demo" },
-      { text: "Launch Plan", link: "/plans/lemon-1.0-mainstream-readiness" },
       { text: "Support", link: "/support" },
       { text: "Architecture", link: "/architecture/overview" },
     ],
@@ -24,6 +24,7 @@ export default {
         text: "Product",
         items: [
           { text: "Home", link: "/" },
+          { text: "Quickstart", link: "/getting-started/quickstart" },
           { text: "Install", link: "/install" },
           { text: "Compare", link: "/compare" },
           { text: "Demo", link: "/demo" },
@@ -31,25 +32,14 @@ export default {
         ],
       },
       {
-        text: "Launch",
-        items: [
-          { text: "Lemon 1.0 Readiness", link: "/plans/lemon-1.0-mainstream-readiness" },
-          { text: "Fresh Install Proof", link: "/plans/lemon-1.0-fresh-install-proof-2026-05-11" },
-          { text: "Release Artifact Proof", link: "/plans/lemon-1.0-release-artifact-proof-2026-05-11" },
-          { text: "Interface Supportability Audit", link: "/plans/lemon-1.0-interface-supportability-audit-2026-05-11" },
-          { text: "Interface Proof Pack", link: "/plans/lemon-1.0-interface-proof-pack-2026-05-11" },
-          { text: "Hermes Feature Matrix", link: "/plans/lemon-hermes-feature-parity-matrix-2026-05-12" },
-          { text: "Channel Command Matrix", link: "/plans/lemon-channel-command-parity-matrix-2026-05-12" },
-          { text: "LemonSim Platform Mission", link: "/plans/lemon-sim-platform-mission-2026-05-12" },
-          { text: "Hermes Parity Scorecard", link: "/plans/lemon-hermes-agent-harness-parity-scorecard" },
-        ],
-      },
-      {
         text: "User Guide",
         items: [
           { text: "Setup", link: "/user-guide/setup" },
+          { text: "Backup and Restore", link: "/user-guide/backups" },
           { text: "Skills", link: "/user-guide/skills" },
           { text: "Memory", link: "/user-guide/memory" },
+          { text: "Honcho Memory", link: "/user-guide/honcho" },
+          { text: "Migrate from Hermes", link: "/user-guide/migrate-from-hermes" },
           { text: "Adaptive Features", link: "/user-guide/adaptive" },
           { text: "Feature Rollout", link: "/user-guide/rollout" },
         ],
@@ -84,6 +74,7 @@ export default {
         text: "Operations",
         items: [
           { text: "Configuration", link: "/config" },
+          { text: "Backup and Restore", link: "/user-guide/backups" },
           { text: "Testing", link: "/testing" },
           { text: "Extensions", link: "/extensions" },
           { text: "Versioning & Channels", link: "/release/versioning_and_channels" },
@@ -103,6 +94,10 @@ export default {
           { text: "Web", link: "/tools/web" },
           { text: "Firecrawl", link: "/tools/firecrawl" },
           { text: "Execute Code", link: "/tools/execute-code" },
+          { text: "Media", link: "/tools/media" },
+          { text: "LSP", link: "/tools/lsp" },
+          { text: "OpenAI-Compatible API", link: "/tools/openai-compatible-api" },
+          { text: "ACP", link: "/tools/acp" },
           { text: "WASM", link: "/tools/wasm" },
         ],
       },
@@ -161,5 +156,5 @@ export default {
   // These links are not unchecked: LemonCore.Quality.DocsCheck (run by
   // `mix lemon.quality`) resolves every local markdown link against the
   // filesystem, which is the correct check for a path outside the site root.
-  ignoreDeadLinks: [/(^|\/)\.\.\/apps\//],
+  ignoreDeadLinks: [/(^|\/)\.\.\/(apps|clients|bin)\//],
 }

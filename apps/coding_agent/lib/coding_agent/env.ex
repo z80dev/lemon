@@ -10,6 +10,18 @@ defmodule CodingAgent.Env do
 
   @declarations [
     %{
+      name: :exa_api_key,
+      env_var: "EXA_API_KEY",
+      aliases: [],
+      type: :string,
+      default: nil,
+      doc: "Exa API key used by the registered Exa search and contents provider.",
+      secret?: true,
+      required?: false,
+      area: :runtime,
+      apps: [:coding_agent]
+    },
+    %{
       name: :lemon_allow_restart_tool,
       env_var: "LEMON_ALLOW_RESTART_TOOL",
       aliases: [],

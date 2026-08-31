@@ -36,9 +36,19 @@ export const abortCommand: SlashCommand = {
 
 export const queueCommand: SlashCommand = {
 	name: "queue",
-	summary: "show prompts waiting for the current run",
+	aliases: ["q"],
+	summary: "queue a prompt, or show prompts waiting for the current run",
+	usage: "[prompt]",
 	group: "runs",
-	run(ctx) {
+	async run(ctx) {
+		if (ctx.rest) {
+			if (!ctx.ui.deliverPrompt) {
+				ctx.ui.notice("this build cannot submit a queued prompt", "warning");
+				return;
+			}
+			await ctx.ui.deliverPrompt(ctx.rest, "queue");
+			return;
+		}
 		const queued = ctx.ui.queuedPrompts?.() ?? [];
 		const parked = ctx.client.queued.filter((entry) => entry.method === METHOD.chatSend);
 		if (queued.length === 0 && parked.length === 0) {
@@ -55,6 +65,42 @@ export const queueCommand: SlashCommand = {
 			lines.push(`(offline) ${oneLine(prompt)}`);
 		}
 		ctx.ui.noticeBlock(lines);
+	},
+};
+
+export const steerCommand: SlashCommand = {
+	name: "steer",
+	summary: "send guidance into the active run",
+	usage: "<prompt>",
+	group: "runs",
+	async run(ctx) {
+		if (!ctx.rest) {
+			ctx.ui.notice("usage: /steer <prompt>", "error");
+			return;
+		}
+		if (!ctx.ui.deliverPrompt) {
+			ctx.ui.notice("this build cannot submit steering guidance", "warning");
+			return;
+		}
+		await ctx.ui.deliverPrompt(ctx.rest, "steer");
+	},
+};
+
+export const redirectCommand: SlashCommand = {
+	name: "redirect",
+	summary: "replace the active run's pending direction",
+	usage: "<prompt>",
+	group: "runs",
+	async run(ctx) {
+		if (!ctx.rest) {
+			ctx.ui.notice("usage: /redirect <prompt>", "error");
+			return;
+		}
+		if (!ctx.ui.deliverPrompt) {
+			ctx.ui.notice("this build cannot submit redirect guidance", "warning");
+			return;
+		}
+		await ctx.ui.deliverPrompt(ctx.rest, "redirect");
 	},
 };
 

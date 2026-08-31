@@ -44,7 +44,14 @@ Expected result:
 
 ## Demo 2: Web Session UI
 
-With `./bin/lemon` running, open:
+Start the Web UI directly; the command reuses a healthy runtime or starts one,
+waits for the exact Web health response, and prints the address:
+
+```bash
+./bin/lemon web --no-open
+```
+
+Then open:
 
 - `http://127.0.0.1:4080/` — the session index (`LemonWeb.SessionLive`)
 - `http://127.0.0.1:4080/sessions/<session_key>` — a specific session
@@ -53,8 +60,9 @@ Current launch proof screenshot:
 
 ![Web session proof](assets/launch/web-session-proof-2026-05-11.png)
 
-The web surface is intentionally minimal: it lists sessions and streams a single
-session's activity. The standalone `/ops` dashboard was removed
+The Web surface shows the shared setup-readiness state before accepting a
+prompt, streams one session's activity, accepts bounded file uploads, and
+exposes **Stop** while a run is active. The standalone `/ops` dashboard was removed
 (`refactor(lemon_web): remove ops dashboard`); operations introspection now lives
 in the control plane and the doctor, not in the web UI.
 
@@ -108,8 +116,8 @@ Release-runtime support bundles are generated with:
 bin/lemon_runtime_full eval 'LemonCore.Doctor.CLI.bundle!()'
 ```
 
-The exact release artifact proof is tracked in
-[Release Artifact Proof](plans/lemon-1.0-release-artifact-proof-2026-05-11.md).
+Release artifact validation is documented in the
+[Release Checklist](release/release_checklist_and_support_policy.md).
 
 ## Demo 5: Docs and Quality
 
@@ -144,5 +152,4 @@ still tracks:
 - broader adversarial safety-depth variants beyond the launch-focused web,
   email, skill, and extension-style tool coverage
 
-Use the [Hermes-on-BEAM Readiness Plan](plans/lemon-1.0-mainstream-readiness.md)
-for the current source of truth.
+Use the task guides and release checklist for the current supported behavior.

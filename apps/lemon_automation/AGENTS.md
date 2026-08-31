@@ -12,6 +12,7 @@ LemonAutomation provides scheduled and triggered automation for agents:
 - **Goal Continuation** - Supervised one-shot continuation runs for active session goals
 - **Goal Loop Preview** - One supervised judge tick that continues, completes, or pauses a goal
 - **Kanban Dispatch** - Supervised leasing/reclaim loop for durable board tasks
+- **Portable Blueprints** - Preview and explicitly confirm profile-local skill bundles plus one agent cron job
 - **Run Tracking** - Full lifecycle tracking of job executions
 
 ## Supervision Tree
@@ -40,15 +41,15 @@ CronManager (GenServer, ticks every 60s)
            +- emits :cron_run_started on "cron" bus
            +- spawns Task via TaskSupervisor
                   |
-                  +- RunSubmitter.submit/2
+                  +- RunCompletionWaiter.submit_and_wait/2
                          |
                          +- reads CronMemory, injects into prompt
                          +- pre-subscribes to Bus.run_topic(run_id)
                          +- forks session_key into sub-session
                          +- calls LemonRouter.submit(params)
-                         +- RunCompletionWaiter.wait_already_subscribed/3
+                         +- calls RunCompletionWaiter.wait_already_subscribed/3
                                 |
-                                +- sends {:run_complete, run_id, result} to CronManager
+                                +- returns its result through the monitored Task ref
                                            |
                                            +- CronManager updates CronStore, emits :cron_run_completed
                                            +- For `agent:*:main` base sessions, CronManager forwards a synthetic
@@ -76,6 +77,14 @@ and stops at `max_ticks`, failure, timeout, or a terminal judge verdict. Passing
 manager scheduler scans active goals and re-starts only persisted auto loops
 when no loop for that session is already running. Focused tests cover that
 persisted-auto path through the real goal loop and router judge runner.
+Before each judge or continuation submission, the manager synchronously claims
+the fixed router run id from `RunCompletionWaiter`. `stop_loop/2` defaults to
+hard stop: it disables auto restart, aborts that owned router run once, kills
+the loop task, and prevents another tick. The router serializes an abort
+tombstone with submission acceptance, so a stop cannot miss a run between
+acceptance and the later submitted callback. `mode: :graceful` disables auto
+restart but lets the already bounded loop finish. The outer `run_once/2` call
+timeout encloses the configured judge/continuation wait deadlines.
 
 `GoalJudge` supports explicit verdicts, a pluggable `judge_runner` with
 `judge_model` metadata, and deterministic fallback. `GoalJudge.RouterRunner`
@@ -87,6 +96,16 @@ and `RunCompletionWaiter` using a deterministic runtime. Set
 failures pause goals by default;
 `judge_failure_policy: :continue_once` is the explicit fail-open path for one
 continuation.
+
+All automation paths that submit and then wait use
+`RunCompletionWaiter.submit_and_wait/2`. It assigns a fixed run id and owns the
+subscription from before router submission through terminal wait cleanup.
+Goal loops also use its synchronous pre-submit ownership claim; a rejected
+claim prevents the router call entirely.
+Router run-id mismatches are explicit errors; callers never subscribe to a
+replacement id after submission because a synchronous completion could already
+have been lost. Cron, goal judge, autonomous goal continuation, timer heartbeat,
+and Kanban worker paths share this lifecycle.
 
 **KanbanDispatcher** is the first BEAM-native fleet-work supervisor. It scans
 durable `LemonAgent.Workspace.KanbanStore` boards, reclaims expired leases, leases
@@ -101,6 +120,10 @@ through `LemonRouter` with `origin: :kanban`, board/task metadata, a blocked
 is a git repository. Worktrees are created under
 `<repo>/.worktrees/kanban-<task_id>` on `lemon-kanban/<task_id>` branches, so
 concurrent board workers do not edit the same checkout.
+`stop_board/2` is a hard stop: owned worker pids are killed and their exact
+lease IDs are reclaimed before return. Completion/failure writes are guarded by
+lease ID, so late results cannot mutate a re-leased task. Starting a board also
+reclaims unexpired leases left by the same dispatcher worker id after restart.
 
 **HeartbeatManager** subscribes to the "cron" bus and auto-processes every `:cron_run_completed` event for suppression checks.
 
@@ -110,6 +133,22 @@ configured idle window, then calls `LemonAutomation.SkillCurator`. That module
 delegates lifecycle transitions and prompt rendering to `LemonSkills.Curator`
 and submits the review prompt to `LemonRouter` only when review is required.
 
+**Blueprint** is the portable distribution boundary for a coherent skill plus
+automation workflow. It reuses `LemonSkills.Bundle`, manifest/lint/audit, the
+derived `LemonCore.ProfileStore` workspace, and `CronManager`; do not add a
+second skill registry, profile store, or scheduler. A preview digest binds the
+manifest, content hashes, target profile, exact job projection, and current
+collision state. Activation replans under a lock, stages and re-audits exact
+copied bytes, enables profile-local skills, and calls `CronManager.add_new/1`
+last. The create-once manager/store path must never overwrite an existing
+stable ID. Version 1 remains agent-prompt-only and rejects commands, archives,
+symlinks, environment/cwd overrides, secret-like values, and non-UTC schedules.
+`LemonAutomation.Blueprint.Catalog` is the shared caller boundary for Web and
+control-plane clients: it derives the canonical catalog path from trusted
+profile options, accepts only bounded bundle IDs, rejects traversal and
+symlinked entries, enforces manifest/directory identity, and delegates all
+inspection, validation, preview, and activation semantics to `Blueprint`.
+
 ## Key Flow Details
 
 - `RunSubmitter` pre-subscribes to `Bus.run_topic(run_id)` BEFORE submitting to `LemonRouter` (avoids race condition)
@@ -117,18 +156,27 @@ and submits the review prompt to `LemonRouter` only when review is required.
 - `RunSubmitter` executes each cron run in a forked `:sub:<id>` session for isolation; the originating base session is preserved in run metadata
 - `RunSubmitter` adds a cron-run tool policy with `blocked_tools: ["cron"]`; scheduled runs may do the task work, but they cannot recursively manage cron jobs through a cron tool
 - `RunSubmitter` reads `CronMemory` for the job and injects memory context into the prompt, then appends run results back to the memory file
-- If the router returns a different `run_id`, `RunSubmitter` falls back to `RunCompletionWaiter.wait/3`
+- If the router returns a different `run_id`, submission fails explicitly; no late replacement-id subscription is attempted
 - Output is truncated to 1000 chars before storage
-- Jobs execute in supervised tasks; fallback to `Task.start/1` if supervisor is unavailable
+- Jobs execute in monitored `TaskSupervisor.async_nolink/2` tasks owned by `CronManager`; task-start failure and `:DOWN` terminalize the run immediately. Unsupervised fallback exists only when the manager is started with explicit `standalone_mode: true`.
 - For cron jobs created from `agent:*:main`, completion summaries are mirrored back into the base main session as synthetic `run_completed` entries (`meta.cron_forwarded_summary = true`)
-- Scheduled ticks and `CronManager` restarts consult persisted active runs before launching; active runs older than the job timeout recover as `:timeout`.
+- Scheduled ticks and `CronManager` restarts consult persisted active runs before launching; active runs older than the job timeout recover through the same monitor/delivery/retry terminalizer as normal completions.
 - Scheduled runs use deterministic slot ids and `CronStore.claim_scheduled_run/3`, backed by `LemonCore.Store.put_new/3`, so competing dispatchers preserve the first claimant instead of overwriting a run.
 - `scripts/live_cron_runtime_restart_smoke.exs` boots `:runtime_full` twice against one isolated durable store, then proves a scheduled run before restart, persisted job/run history after restart, and a fresh scheduled run after restart.
 - `scripts/live_cron_channel_origin_smoke.exs` registers proof-only Telegram and Discord plugins, completes channel-peer cron runs through `CronManager`, and proves forwarded run history plus `LemonRouter.ChannelsDelivery` -> `LemonChannels` outbox delivery with redacted proof metadata.
-- Scheduled failures/timeouts can retry as separate `:retry` runs when `max_retries` is set. Manual and wake runs stay single-shot by default.
+- Scheduled failures/timeouts persist retry due time, attempt, source, and root lineage on the terminal source run. Restart reconstructs the timer, while a deterministic `{root, attempt}` retry-run ID and atomic claim prevent duplicate attempts. Manual and wake runs stay single-shot by default.
 - Active cron runs can be aborted by cron run id. `CronManager.abort_run/1` calls the underlying router cancellation when possible, persists terminal `:aborted`, emits the normal completion event, and ignores late submitter completions.
 - Cron lifecycle actions write durable operator audit events to `:cron_audit_events`. The audit stream covers job create/update/pause/resume/delete, manual run requests, run start/abort/retry/stale recovery, and scheduled-run claim/suppression decisions. Audit entries keep operator-useful IDs in the store; support-bundle diagnostics redact those IDs.
 - `cron.status` reads the durable cron run and audit stores directly for operator-facing scheduler-health counters: active run locks, retry runs, suppressed scheduled slots, stale-run recoveries, scheduled retries, and next/last run timestamps.
+- Portable bundle activation must remain preview-first and content-free at the
+  Web/control-plane boundary. Keep arbitrary paths local-only;
+  `Blueprint.Catalog` resolves a safe `bundleId` below `~/.lemon/bundles`,
+  returns no prompt/skill/path/secret text,
+  and requires the exact fresh `confirmationDigest` for mutation.
+- Source and packaged `lemon blueprints` are thin clients of that RPC boundary.
+  Do not move bundle loading or scheduler startup into the one-shot CLI VM;
+  preview remains the bundle-ID shorthand and activation remains an explicit
+  exact-digest request handled by the long-running `CronManager` runtime.
 
 ## Top-Level Facade
 
@@ -338,7 +386,12 @@ CronRun.suppress(run)                => suppressed: true (can combine with any t
 
 Helper predicates: `CronRun.active?/1` (pending or running), `CronRun.finished?/1`.
 
-Scheduled failures and timeouts retry only when `max_retries > 0`. Each retry is a separate run with `triggered_by: :retry` and lineage metadata (`retry_attempt`, `retry_of`, `retry_root_id`). Manual and wake-triggered runs do not retry by default.
+Scheduled failures and timeouts retry only when `max_retries > 0`. The terminal
+source run persists `retry_due_at_ms`, `retry_next_attempt`, `retry_of`, and
+`retry_root_id`; each claimed retry is a separate run with
+`triggered_by: :retry`. Deterministic retry IDs make one root/attempt pair a
+stable uniqueness slot across manager restarts. Manual and wake-triggered runs
+do not retry by default.
 
 ## CronMemory (Persistent Cross-Run Memory)
 
@@ -353,7 +406,10 @@ Each cron job can have a persistent markdown memory file that accumulates contex
 
 ## Heartbeat Management
 
-Heartbeats are special cron jobs for agent health checks. Responses containing exactly `"HEARTBEAT_OK"` (trimmed) are suppressed from channels but still logged.
+Cron-backed heartbeats are special cron jobs for agent health checks; intervals
+that cron cannot represent exactly use the timer path documented below.
+Responses containing exactly `"HEARTBEAT_OK"` (trimmed) are suppressed from
+channels but still logged.
 
 ### Identifying Heartbeat Jobs
 
@@ -407,7 +463,14 @@ LemonAutomation.HeartbeatManager.update_config(agent_id, %{
 
 ### Sub-Minute Heartbeats (Timer-Based)
 
-For `interval_ms < 60_000`, `HeartbeatManager` uses Erlang timers instead of cron jobs. These create synthetic run IDs (`"timer-heartbeat-{agent_id}-{timestamp}"`), submit directly to `LemonRouter`, and broadcast events on the "cron" bus. They do NOT create `CronJob` records in `CronStore`.
+Intervals that cannot be represented exactly by a five-field cron expression
+use Erlang timers instead of cron jobs. This includes sub-minute values and
+longer values such as 90 minutes or 5 hours. Timer heartbeats create synthetic
+run IDs (`"timer-heartbeat-{agent_id}-{timestamp}"`), submit through the shared
+race-free submit-and-wait lifecycle, and broadcast events on the "cron" bus.
+They do NOT create `CronJob` or `CronRun` records in `CronStore`; terminal status,
+router run id, response, and suppression state are persisted in
+`HeartbeatStore`.
 
 ```elixir
 LemonAutomation.HeartbeatManager.update_config("agent_abc", %{
@@ -417,11 +480,19 @@ LemonAutomation.HeartbeatManager.update_config("agent_abc", %{
 })
 ```
 
-### Heartbeat Cron Schedule Conversion
+### Heartbeat Schedule Selection
 
-For `interval_ms >= 60_000`, `HeartbeatManager` auto-generates a cron schedule:
-- `>= 3_600_000` (1 hour): `"0 */N * * *"` (every N hours)
-- `>= 60_000` (1 minute): `"*/N * * * *"` (every N minutes, rounded to nearest minute)
+`HeartbeatManager` chooses cron only when the interval stays exact at UTC day
+boundaries: minute intervals must divide 60, hour intervals must divide 24, and
+24 hours maps to daily midnight UTC. Every other positive interval falls back
+to an exact Erlang timer. Invalid non-positive intervals return
+`{:error, :invalid_interval}`. Cron-to-timer transitions disable the cron job;
+timer-to-cron transitions cancel the timer before enabling or updating the cron
+job with mutable fields only.
+
+Only one timer run may be in flight per agent. A tick that overlaps an active
+run is skipped, increments `stats().skipped_overlap`, logs the skip, and records
+`[:lemon, :heartbeat, :skipped]` telemetry with `reason: :overlap`.
 
 ### Heartbeat Suppression Behavior
 
@@ -516,6 +587,9 @@ CronStore.list_due_jobs()       # enabled and due?(job) == true
 CronStore.put_run(run)
 CronStore.claim_run(run)
 CronStore.claim_scheduled_run(job, scheduled_for_ms, router_run_id)
+CronStore.claim_retry_run(job, source_run, router_run_id)
+CronStore.retry_run_id(root_run_id, attempt)
+CronStore.pending_retries()
 CronStore.get_run(run_id)
 CronStore.delete_run(run_id)
 CronStore.list_runs(job_id, opts)    # opts: limit (100), status (atom), since_ms
@@ -637,6 +711,16 @@ exit "$rc"
 
 # With coverage
 mix test --cover apps/lemon_automation
+
+# Portable bundle policy, rollback, exact confirmation, and replay
+mix test apps/lemon_automation/test/lemon_automation/blueprint_test.exs --seed 1
+
+# Booted control-plane activation proof (disabled job; cleans up after itself)
+MIX_ENV=dev mix run --no-start scripts/live_skill_automation_blueprint_smoke.exs
+
+# Source and assembled minimal-runtime CLI proof uses an isolated catalog,
+# profile, control-plane port, and store, then replays activation once.
+scripts/live_blueprint_cli_smoke
 ```
 
 ### Key Testing Patterns
@@ -720,6 +804,7 @@ LemonAutomation.CronManager.tick()
 |--------|---------|
 | `LemonAutomation` | Top-level facade with delegating functions |
 | `LemonAutomation.Application` | OTP supervisor (TaskSupervisor, CronManager, HeartbeatManager, SkillCuratorManager) |
+| `LemonAutomation.Blueprint` | Portable manifest validation, exact preview confirmation, profile-local skill activation, and idempotent cron claim |
 | `LemonAutomation.CronManager` | Scheduling GenServer; owns job state in-memory + persists to CronStore |
 | `LemonAutomation.CronJob` | Job struct, CRUD ops, `due?/1` predicate |
 | `LemonAutomation.CronRun` | Run struct, state machine transitions |
@@ -730,6 +815,6 @@ LemonAutomation.CronManager.tick()
 | `LemonAutomation.SkillCurator` | Idle/config gates plus background submission for learned-skill curator prompts with a learning-only default tool policy |
 | `LemonAutomation.SkillCuratorManager` | Periodic idle scheduler for `SkillCurator.run_once/1` |
 | `LemonAutomation.Wake` | Manual immediate triggering (fire-and-forget, enabled jobs only) |
-| `LemonAutomation.RunCompletionWaiter` | Waits on Bus for `:run_completed` event; handles multiple payload formats |
+| `LemonAutomation.RunCompletionWaiter` | Owns race-free fixed-id submit/wait subscriptions and parses terminal events |
 | `LemonAutomation.RunSubmitter` | Builds params, pre-subscribes to bus, submits to LemonRouter, manages CronMemory |
 | `LemonAutomation.Events` | Event emission helpers for all automation events |

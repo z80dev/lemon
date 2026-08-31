@@ -8,6 +8,7 @@ defmodule CodingAgent.Tools.Bash do
 
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAgent.AbortSignal
+  alias LemonAgent.Security.ToolResultTrust
   alias LemonAi.Types.TextContent
   alias CodingAgent.BashExecutor
 
@@ -76,11 +77,11 @@ defmodule CodingAgent.Tools.Bash do
   def execute(_tool_call_id, params, signal, on_update, cwd, opts) do
     # Check abort signal before starting
     if signal && AbortSignal.aborted?(signal) do
-      %AgentToolResult{
-        content: [%TextContent{text: "Command cancelled."}]
-      }
+      %AgentToolResult{content: [%TextContent{text: "Command cancelled."}]}
     else
-      do_execute(params, signal, on_update, cwd, opts)
+      params
+      |> do_execute(signal, on_update, cwd, opts)
+      |> ToolResultTrust.untrusted(:shell)
     end
   end
 
@@ -131,9 +132,12 @@ defmodule CodingAgent.Tools.Bash do
           {new_acc, new_acc}
         end)
 
-      on_update.(%AgentToolResult{
-        content: [%TextContent{text: accumulated}]
-      })
+      on_update.(
+        ToolResultTrust.untrusted(
+          %AgentToolResult{content: [%TextContent{text: accumulated}]},
+          :shell
+        )
+      )
     end
 
     {accumulator, callback}

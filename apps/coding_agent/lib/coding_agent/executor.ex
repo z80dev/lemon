@@ -1,13 +1,16 @@
 defmodule CodingAgent.Executor do
   @moduledoc """
-  Native executor for in-process `CodingAgent.Session` runs.
+  Native executor for local and named-node `CodingAgent.Session` runs.
 
-  Starts a session runner for each submitted execution request.
+  Requests with no execution node, or with `node: "local"`, start the normal
+  in-process session runner. A named node starts a remote runner backed by
+  `LemonCore.NodeRegistry`; model credentials are always resolved by the
+  destination because executor options are never serialized to that node.
   """
 
   @behaviour LemonGateway.Executor
 
-  alias CodingAgent.Executor.SessionRunner
+  alias CodingAgent.Executor.{RemoteSessionRunner, SessionRunner}
   alias CodingAgent.Session.Presentation
   alias LemonCore.ResumeToken
   alias LemonGateway.Event
@@ -35,6 +38,10 @@ defmodule CodingAgent.Executor do
   def start_run(_request, _opts, _sink_pid), do: {:error, :invalid_execution_request}
 
   @impl true
+  def cancel(%{runner_pid: pid, runner_module: RemoteSessionRunner}) when is_pid(pid) do
+    RemoteSessionRunner.cancel(pid, :user_requested)
+  end
+
   def cancel(%{runner_pid: pid}) when is_pid(pid) do
     SessionRunner.cancel(pid, :user_requested)
     :ok
@@ -43,6 +50,10 @@ defmodule CodingAgent.Executor do
   def cancel(_ctx), do: :ok
 
   @impl true
+  def steer(%{runner_pid: pid, runner_module: RemoteSessionRunner}, text) when is_pid(pid) do
+    RemoteSessionRunner.steer(pid, text)
+  end
+
   def steer(%{runner_pid: pid}, text) when is_pid(pid) do
     SessionRunner.steer(pid, text)
   end
@@ -50,6 +61,10 @@ defmodule CodingAgent.Executor do
   def steer(_ctx, _text), do: {:error, :unsupported}
 
   @impl true
+  def redirect(%{runner_pid: pid, runner_module: RemoteSessionRunner}, text) when is_pid(pid) do
+    RemoteSessionRunner.redirect(pid, text)
+  end
+
   def redirect(%{runner_pid: pid}, text) when is_pid(pid) do
     SessionRunner.redirect(pid, text)
   end
@@ -57,6 +72,14 @@ defmodule CodingAgent.Executor do
   def redirect(_ctx, _text), do: {:error, :unsupported}
 
   defp start_session_runner(request, opts, sink_pid) do
+    case execution_node(request) do
+      nil -> start_local_session_runner(request, opts, sink_pid)
+      "local" -> start_local_session_runner(request, opts, sink_pid)
+      node -> start_remote_session_runner(node, request, opts, sink_pid)
+    end
+  end
+
+  defp start_local_session_runner(request, opts, sink_pid) do
     run_ref = make_ref()
     cwd = request.cwd || get_opt(opts, :cwd) || File.cwd!()
     resume = normalize_resume(request.resume)
@@ -83,6 +106,26 @@ defmodule CodingAgent.Executor do
     end
   end
 
+  defp start_remote_session_runner(node, request, opts, sink_pid) do
+    run_ref = make_ref()
+
+    case RemoteSessionRunner.start_link(
+           node: node,
+           request: request,
+           opts: opts,
+           sink_pid: sink_pid,
+           run_ref: run_ref
+         ) do
+      {:ok, runner_pid} ->
+        {:ok, run_ref, %{runner_pid: runner_pid, runner_module: RemoteSessionRunner}}
+
+      {:error, reason} ->
+        completed = Event.completed(%{engine: @engine, ok: false, error: reason, answer: ""})
+        send(sink_pid, {:engine_event, run_ref, completed})
+        {:error, reason}
+    end
+  end
+
   defp normalize_resume(%ResumeToken{engine: @engine} = token), do: token
 
   defp normalize_resume(%{engine: @engine, value: value}) when is_binary(value),
@@ -97,6 +140,19 @@ defmodule CodingAgent.Executor do
       :auto -> :auto
       "auto" -> :auto
       _ -> :explicit
+    end
+  end
+
+  defp execution_node(request) do
+    meta = request.meta || %{}
+
+    case meta[:node] || meta["node"] do
+      node when is_binary(node) ->
+        node = String.trim(node)
+        if node == "", do: nil, else: node
+
+      _ ->
+        nil
     end
   end
 

@@ -69,6 +69,22 @@ defmodule LemonControlPlane.EventBridgeTest do
     end
   end
 
+  defp start_event_collector(label) do
+    parent = self()
+    spawn(fn -> collect_events(parent, label) end)
+  end
+
+  defp collect_events(parent, label) do
+    receive do
+      {:event, _event_name, _payload, _state_version} = event ->
+        send(parent, {:client_event, label, event})
+        collect_events(parent, label)
+
+      :stop ->
+        :ok
+    end
+  end
+
   describe "subscribe_run/1" do
     test "subscribes to run topic" do
       run_id = "run_#{System.unique_integer()}"
@@ -158,6 +174,107 @@ defmodule LemonControlPlane.EventBridgeTest do
   end
 
   describe "event forwarding" do
+    test "never forwards prompt, chat, tool, or approval events to node clients" do
+      operator_pid = start_event_collector(:operator)
+      node_pid = start_event_collector(:node)
+      operator_conn_id = "operator_#{System.unique_integer()}"
+      node_conn_id = "node_#{System.unique_integer()}"
+      run_id = "run_private_#{System.unique_integer()}"
+      session_key = "session:private"
+
+      assert :ok =
+               Presence.register(operator_conn_id, %{
+                 role: :operator,
+                 client_id: "operator",
+                 pid: operator_pid,
+                 subscription_mode: :all,
+                 subscriptions: MapSet.new()
+               })
+
+      assert :ok =
+               Presence.register(node_conn_id, %{
+                 role: :node,
+                 client_id: "node-1",
+                 pid: node_pid,
+                 subscription_mode: :all,
+                 subscriptions: MapSet.new(["all"])
+               })
+
+      bridge = Process.whereis(EventBridge)
+
+      send(
+        bridge,
+        LemonCore.Event.new(
+          :task_started,
+          %{
+            task_id: "task-private",
+            run_id: run_id,
+            session_key: session_key,
+            description: "private delegated prompt"
+          },
+          %{run_id: run_id, session_key: session_key}
+        )
+      )
+
+      send(
+        bridge,
+        LemonCore.Event.new(
+          :delta,
+          %{run_id: run_id, seq: 1, text: "private chat text"},
+          %{run_id: run_id, session_key: session_key}
+        )
+      )
+
+      send(
+        bridge,
+        LemonCore.Event.engine_action(
+          %{
+            engine: "lemon",
+            action: %{
+              id: "tool-private",
+              kind: "tool",
+              title: "private tool",
+              detail: %{command: "private command"}
+            },
+            phase: :started
+          },
+          %{run_id: run_id, session_key: session_key}
+        )
+      )
+
+      send(
+        bridge,
+        LemonCore.Event.new(
+          :approval_requested,
+          %{
+            pending: %{
+              id: "approval-private",
+              run_id: run_id,
+              session_key: session_key,
+              tool: "bash",
+              action: %{command: "private approval command"},
+              rationale: "private approval rationale"
+            }
+          },
+          %{}
+        )
+      )
+
+      for event_name <- ["task.started", "chat", "agent", "exec.approval.requested"] do
+        assert_receive {:client_event, :operator, {:event, ^event_name, _payload, _version}},
+                       1_000
+      end
+
+      for event_name <- ["task.started", "chat", "agent", "exec.approval.requested"] do
+        refute_receive {:client_event, :node, {:event, ^event_name, _payload, _version}}, 50
+      end
+
+      send(operator_pid, :stop)
+      send(node_pid, :stop)
+      Presence.unregister(operator_conn_id)
+      Presence.unregister(node_conn_id)
+    end
+
     test "maps channel_delivery events to channel.delivery frames" do
       conn_id = "conn_#{System.unique_integer()}"
 

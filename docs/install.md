@@ -135,6 +135,36 @@ export PATH="$HOME/.lemon/bin:$PATH"
 For lifecycle commands and release verification, see `lemon --help` and
 [Versioning and Channels](release/versioning_and_channels.md).
 
+## Updating an installed release
+
+Installer-managed releases use a preview-confirm lifecycle:
+
+```bash
+lemon update check
+lemon update plan
+lemon update apply --confirm <exact-plan-digest>
+lemon stop && lemon daemon
+```
+
+Plan does not write or download anything. Apply revalidates the exact active
+release and manifest under an exclusive lock, creates a verified private
+checkpoint, checks artifact size/SHA-256, rejects unsafe archive entries,
+verifies the staged launcher's version, and atomically moves only
+`versions/current`. Inspect private content-free receipts and roll back the
+exact recorded checkpoint with:
+
+```bash
+lemon update history
+lemon update rollback --receipt <apply-receipt-id> \
+  --confirm <rollback-digest>
+lemon stop && lemon daemon
+```
+
+Update rollback does not restore config, credentials, sessions, memory, or
+stores. Schema-2 manifests provide mandatory checksums/sizes but do not yet have
+a publisher signature. See [Safely update and roll back Lemon](user-guide/updates.md)
+for the full safety and residual contract.
+
 ## Source development
 
 Use a source checkout for Lemon development, unsupported platforms, or building
@@ -172,4 +202,33 @@ For a source checkout, use the `./bin/lemon` wrapper for Lemon commands:
 
 The source wrapper follows the same setup and provider behavior described
 above. `./bin/lemon-tui` is the development TUI entry point after the source
-runtime is configured.
+runtime is configured. When it starts a fresh runtime, the launcher generates
+and shares an in-memory operator token with the TUI, then stops that owned
+runtime when the TUI exits. To attach to a persistent runtime, export the same
+high-entropy `LEMON_CONTROL_PLANE_OPERATOR_TOKEN` used to start that runtime.
+Start persistent runtimes separately with `./bin/lemon --daemon`; every runtime
+started by `./bin/lemon-tui` is stopped with the TUI, even when a token was
+preconfigured.
+
+## Browser interface
+
+The full release profile also includes a local browser interface. The launcher
+reuses a healthy runtime on the configured local control-plane port, starts the
+daemon only when necessary, waits for the Web health check, prints the URL, and
+opens the default browser:
+
+```bash
+lemon web
+```
+
+Use `lemon web --no-open` on SSH/headless systems. A source checkout uses
+`./bin/lemon web`; invoking `./bin/lemon` beside an already healthy source
+runtime also reports and reuses it instead of registering a duplicate Erlang
+node. The browser checks the same config, secrets, provider,
+credential, and model readiness as setup. If anything is missing it lists the
+pending items, disables prompt/file submission, and points back to `lemon
+setup`; it never waits for a failed agent request to explain first-run setup.
+
+The Web UI is not bundled in `lemon_runtime_min`. Reinstall with
+`LEMON_PROFILE=full` when browser access is wanted. See
+[Use Lemon in a Browser](user-guide/web.md) for access control and recovery.

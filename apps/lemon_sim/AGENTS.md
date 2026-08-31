@@ -12,8 +12,8 @@ The product mission is broader than test harnessing: LemonSim should become the
 BEAM-native platform for simulations people can watch, replay, and benchmark.
 Werewolf is the flagship watchable social-deduction game, and Vending Bench
 is the flagship nested operator/physical-worker business simulation. Keep
-`docs/plans/lemon-sim-platform-mission-2026-05-12.md` current when these
-mission targets change.
+this guide and the benchmark documentation current when these mission targets
+change.
 
 ## Current Dogfood Examples
 
@@ -164,6 +164,8 @@ Boundary namespaces:
 | `lib/lemon_sim/bench/artifacts/verifier.ex` | `LemonSim.Bench.Artifacts.Verifier` | Verifies run artifact manifests and file hashes |
 | `lib/lemon_sim/llm/game_helpers/config.ex` | `LemonSim.LLM.GameHelpers.Config` | Shared model and provider credential resolution for sim runners |
 | `lib/lemon_sim/llm/game_helpers/provider_throttle.ex` | `LemonSim.LLM.GameHelpers.ProviderThrottle` | Shared provider request throttling with explicit process stop |
+| `lib/mix/tasks/lemon.sim.common.ex` | `Mix.Tasks.Lemon.Sim.Common` | Ordinary shared functions for Mix-task startup, bounded provider/model lookup, and optional keyword construction |
+| `lib/lemon_sim/examples/game_log.ex` | `LemonSim.Examples.GameLog` | Shared JSONL lifecycle, entry envelopes, event normalization, and JSON-safe encoding for scenario logs |
 | `lib/lemon_sim/llm/deciders/tool_loop_decider.ex` | `LemonSim.LLM.Deciders.ToolLoopDecider` | Concrete LLM/tool loop decider |
 | `lib/lemon_sim/kernel/runner.ex` | `LemonSim.Kernel.Runner` | Ingest-until-decision, decide-once, composed `step/3`, and `run_until_terminal/3` orchestration |
 | `lib/lemon_sim/kernel/store.ex` | `LemonSim.Kernel.Store` | `LemonCore.Store` persistence wrapper |
@@ -189,6 +191,16 @@ Boundary namespaces:
 - Keep memory policy out of the kernel harness; pass memory tools in explicitly as an optional bundle (see `LemonSim.LLM.Memory.Tools`).
 - Put reusable benchmark artifact, manifest, scorecard, and replay-check mechanics under `LemonSim.Bench`.
 - Put reusable model/provider/tool-loop mechanics under `LemonSim.LLM`.
+- Keep scenario-specific game-log modules focused on domain metadata and their
+  existing public APIs. File lifecycle, JSONL reading/writing, timestamps,
+  event normalization, and JSON-safe encoding belong to
+  `LemonSim.Examples.GameLog`; do not copy that plumbing into new scenarios.
+- Keep CLI-wrapper-only mechanics in ordinary functions under
+  `Mix.Tasks.Lemon.Sim.Common`; do not add a `use` macro or copy startup,
+  model parsing, provider normalization, or `maybe_put/3` into individual tasks.
+  `Common` delegates provider normalization to
+  `LemonSim.LLM.GameHelpers.Config`; provider strings must resolve against the
+  bounded `LemonAi.Models` registry, never through input-driven atom creation.
 - Prefer direct top-level `"event"` / `"events"` on decision maps when a decider can produce them; use `DecisionAdapter` for shape translation or legacy paths rather than as mandatory ceremony.
 - If a decision includes `"executed_calls"` and a non-default adapter is configured, `Runner.step/3` adapts through that adapter before direct terminal events so support-tool events are preserved.
 - VendingBench uses the generic `SingleTerminal` policy with `ExecutedCallEvents`; do not reintroduce benchmark-local copies of generic tool-loop policy or executed-call event extraction.
@@ -211,6 +223,7 @@ Boundary namespaces:
 - Canonical Werewolf actor IDs are the generated villager names (`"Alice"`, `"Bram"`, etc.). Hosted display names are presentation metadata outside the engine and must not replace these stable IDs in commands or persisted state.
 - Werewolf run scripts should use the onboarded Gemini CLI provider (`:google_gemini_cli`, user-facing alias `gemini`) plus Codex (`:"openai-codex"`) and Kimi models. `:google` is the separate AI Studio provider and will not use `mix lemon.onboard gemini` credentials.
 - LemonSim game credential helpers should resolve OAuth-backed `api_key_secret` values through `LemonAi.Auth.OAuthSecretResolver` or `LemonAgent.ModelRuntime.Credentials` before handing them to providers. This matters for Gemini CLI, Antigravity, Copilot, and other providers whose stored secret payload is not itself the final runtime token format.
+- Scenario facades must use `LemonSim.LLM.GameHelpers.Config` for default-model, provider-alias, base-URL, and credential resolution. Provider strings are matched against `LemonAi.Models.get_providers/0`; never turn config or CLI provider input into atoms with `String.to_atom/1`.
 - `LemonSim.LLM.GameHelpers.Runner` supports `provider_min_interval_ms` for per-provider request spacing without changing core `LemonSim.Kernel.Runner`. Werewolf uses this to slow `:google_gemini_cli` seats to one request every 5 seconds by default.
 - Werewolf day play uses a hard cap on public discussion turns so accusations or back-and-forth cannot extend the phase indefinitely. Accusations may pull one future speaker forward for an immediate defense, but they must not rewind the floor to someone who already spoke or create 2-player bounce loops. Day 1 should still have enough room for real claim-and-response play when the board state sharpens quickly.
 - Werewolf benchmark output should emphasize objective signals by role, such as correct wolf votes, wolf kill conversion, seer wolf checks, and doctor saves, rather than a single opaque score.

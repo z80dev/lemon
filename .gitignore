@@ -18,6 +18,7 @@ apps/*/doc/
 .lemon/skill/
 .lemon/browser-artifacts/
 .lemon/browser-smoke/
+.lemon/live-agent-smoke/
 .lemon/media-artifacts/
 .lemon/media-jobs/
 .lemon/proofs/
@@ -62,6 +63,8 @@ __pycache__/
 # JavaScript/node artifacts
 node_modules/
 coverage/
+/clients/lemon-web/server/dist/
+/clients/lemon-web/shared/dist/
 
 # Local generated SQLite/SQLite WAL artifacts
 *.db3

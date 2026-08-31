@@ -3,8 +3,9 @@ defmodule LemonCore.Quality.ArchitectureCheck do
   Enforces architecture boundaries for umbrella dependencies and module references.
 
   The check ensures:
-  - each app's direct `in_umbrella: true` dependencies remain a subset of policy
-  - each app's source files do not reference forbidden umbrella namespaces
+  - each app's direct `in_umbrella: true` dependencies exactly match policy
+  - stale dependency permissions are removed when a `mix.exs` edge disappears
+  - each app's source files reference only dependency or explicit exception namespaces
   """
 
   alias LemonCore.Quality.ArchitecturePolicy
@@ -30,6 +31,8 @@ defmodule LemonCore.Quality.ArchitectureCheck do
           issue_count: non_neg_integer(),
           issues: [issue()],
           actual_dependencies: %{optional(atom()) => [atom()]},
+          allowed_dependencies: %{optional(atom()) => [atom()]},
+          reference_only_namespace_exceptions: %{optional(atom()) => [atom()]},
           target_drift_count: non_neg_integer(),
           target_dependency_drifts: [target_drift()]
         }
@@ -95,13 +98,14 @@ defmodule LemonCore.Quality.ArchitectureCheck do
   @spec run(keyword()) :: {:ok, report()} | {:error, report()}
   def run(opts \\ []) do
     root = Keyword.get(opts, :root, File.cwd!())
-    actual = load_actual_dependencies(root)
+    actual = actual_direct_deps(root)
 
     issues =
       []
       |> check_unknown_apps(actual)
       |> check_missing_apps(actual)
       |> check_dependency_violations(actual)
+      |> check_stale_dependency_permissions(actual)
       |> check_namespace_violations(root, actual)
 
     target_dependency_drifts = target_dependency_drifts(actual)
@@ -112,6 +116,8 @@ defmodule LemonCore.Quality.ArchitectureCheck do
       issue_count: length(issues),
       issues: Enum.reverse(issues),
       actual_dependencies: actual,
+      allowed_dependencies: allowed_direct_deps(),
+      reference_only_namespace_exceptions: reference_only_namespace_exceptions(),
       target_drift_count: length(target_dependency_drifts),
       target_dependency_drifts: target_dependency_drifts
     }
@@ -144,8 +150,15 @@ defmodule LemonCore.Quality.ArchitectureCheck do
   @spec target_allowed_direct_deps() :: %{optional(atom()) => [atom()]}
   def target_allowed_direct_deps, do: ArchitecturePolicy.target_allowed_direct_deps()
 
-  @spec load_actual_dependencies(String.t()) :: %{optional(atom()) => [atom()]}
-  defp load_actual_dependencies(root) do
+  @doc """
+  Reads the direct umbrella dependency graph declared by `apps/*/mix.exs`.
+
+  Dependency lists may be returned directly or wrapped by a helper such as
+  `Lemon.HexPackage.deps/1`; the parser walks the complete `deps/0` body so both
+  forms produce the same graph.
+  """
+  @spec actual_direct_deps(String.t()) :: %{optional(atom()) => [atom()]}
+  def actual_direct_deps(root) do
     root
     |> Path.join("apps/*/mix.exs")
     |> Path.wildcard()
@@ -187,13 +200,13 @@ defmodule LemonCore.Quality.ArchitectureCheck do
   end
 
   defp extract_umbrella_dep_atoms(deps_ast) do
-    deps_ast
-    |> dependency_entries()
-    |> Enum.flat_map(&extract_umbrella_dep_atom/1)
-  end
+    {_ast, dependencies} =
+      Macro.prewalk(deps_ast, [], fn node, dependencies ->
+        {node, extract_umbrella_dep_atom(node) ++ dependencies}
+      end)
 
-  defp dependency_entries(list) when is_list(list), do: list
-  defp dependency_entries(_), do: []
+    dependencies
+  end
 
   defp extract_umbrella_dep_atom({dep, opts}) when is_atom(dep) and is_list(opts) do
     if keyword_true?(opts, :in_umbrella), do: [dep], else: []
@@ -285,6 +298,39 @@ defmodule LemonCore.Quality.ArchitectureCheck do
     end)
   end
 
+  @spec check_stale_dependency_permissions(
+          [issue()],
+          %{optional(atom()) => [atom()]}
+        ) :: [issue()]
+  defp check_stale_dependency_permissions(issues, actual) do
+    allowed_direct_deps()
+    |> Enum.sort_by(fn {app, _deps} -> app end)
+    |> Enum.reduce(issues, fn {app, allowed}, acc ->
+      case Map.fetch(actual, app) do
+        {:ok, declared} ->
+          stale_permissions = allowed -- declared
+
+          stale_permissions
+          |> Enum.reduce(acc, fn dependency, inner_acc ->
+            [
+              %{
+                code: :stale_dependency_permission,
+                message:
+                  "Policy permits #{app} to depend on #{dependency}, but apps/#{app}/mix.exs does not declare that direct umbrella dependency. Remove the permission; source-only access belongs in the reference exception policy.",
+                app: app,
+                path: "apps/#{app}/mix.exs"
+              }
+              | inner_acc
+            ]
+          end)
+
+        :error ->
+          # Missing applications already receive one focused :missing_app issue.
+          acc
+      end
+    end)
+  end
+
   @spec target_dependency_drifts(%{optional(atom()) => [atom()]}) :: [target_drift()]
   defp target_dependency_drifts(actual) do
     target_allowed_direct_deps = target_allowed_direct_deps()
@@ -317,9 +363,13 @@ defmodule LemonCore.Quality.ArchitectureCheck do
           [issue()]
   defp check_namespace_violations(issues, root, actual) do
     allowed_direct_deps = allowed_direct_deps()
+    reference_exceptions = reference_only_namespace_exceptions()
 
     Enum.reduce(actual, issues, fn {app, _deps}, acc ->
-      allowed_owners = MapSet.new([app | Map.get(allowed_direct_deps, app, [])])
+      allowed_owners =
+        [app | Map.get(allowed_direct_deps, app, [])]
+        |> Kernel.++(Map.get(reference_exceptions, app, []))
+        |> MapSet.new()
 
       app
       |> app_source_files(root)
@@ -332,8 +382,7 @@ defmodule LemonCore.Quality.ArchitectureCheck do
                   ref_acc
 
                 owner ->
-                  if MapSet.member?(allowed_owners, owner) or
-                       runtime_probe_reference_allowed?(app, file, owner) do
+                  if MapSet.member?(allowed_owners, owner) do
                     ref_acc
                   else
                     issue = %{
@@ -369,14 +418,6 @@ defmodule LemonCore.Quality.ArchitectureCheck do
     |> Path.join("apps/#{app}/lib/**/*.ex")
     |> Path.wildcard()
   end
-
-  defp runtime_probe_reference_allowed?(:lemon_core, file, owner)
-       when owner in [:lemon_browser, :lemon_lsp, :lemon_media] do
-    String.ends_with?(file, "apps/lemon_core/lib/lemon_core/doctor/support_bundle.ex") or
-      String.ends_with?(file, "apps/lemon_core/lib/lemon_core/doctor/lsp_diagnostics.ex")
-  end
-
-  defp runtime_probe_reference_allowed?(_app, _file, _owner), do: false
 
   defp parse_module_references(file) do
     with {:ok, source} <- File.read(file),
@@ -421,9 +462,17 @@ defmodule LemonCore.Quality.ArchitectureCheck do
   end
 
   defp allowed_list(app) do
-    allowed_direct_deps()
-    |> Map.get(app, [])
+    direct = Map.get(allowed_direct_deps(), app, [])
+    exceptions = Map.get(reference_only_namespace_exceptions(), app, [])
+
+    (direct ++ exceptions)
+    |> Enum.uniq()
+    |> Enum.sort()
     |> Enum.map(&to_string/1)
     |> Enum.join(", ")
+  end
+
+  defp reference_only_namespace_exceptions do
+    ArchitecturePolicy.reference_only_namespace_exceptions()
   end
 end

@@ -8,18 +8,19 @@ defmodule CodingAgent.Session.Lifecycle do
 
   alias CodingAgent.Session.{
     BackgroundTasks,
+    Heartbeat,
     ModelResolver,
     Notifier,
     Persistence,
-    ProviderFallback,
     PromptComposer,
+    ProviderFallback,
     State,
     WasmBridge
   }
 
   alias CodingAgent.SessionManager
-  alias CodingAgent.Workspace
   alias CodingAgent.Tools.ExecuteCode.Config, as: ExecuteCodeConfig
+  alias CodingAgent.Workspace
 
   @spec initialize(keyword(), pid()) ::
           {:ok, Session.t(), Extensions.extension_status_report() | nil}
@@ -30,6 +31,8 @@ defmodule CodingAgent.Session.Lifecycle do
     session_file = Keyword.get(opts, :session_file)
     session_id = Keyword.get(opts, :session_id)
     parent_session = Keyword.get(opts, :parent_session)
+    context_snapshot = normalize_context_snapshot(Keyword.get(opts, :context_snapshot))
+    initial_messages = normalize_initial_messages(Keyword.get(opts, :initial_messages))
     ui_context = Keyword.get(opts, :ui_context)
     custom_tools = Keyword.get(opts, :tools)
     extra_tools = State.normalize_extra_tools(Keyword.get(opts, :extra_tools, []))
@@ -66,20 +69,26 @@ defmodule CodingAgent.Session.Lifecycle do
     agent_id = Keyword.get(opts, :agent_id, "default")
 
     system_prompt =
-      PromptComposer.compose_system_prompt(
-        cwd,
-        explicit_system_prompt,
-        prompt_template,
-        workspace_dir,
-        session_scope,
-        "",
-        %{
-          run_id: run_id,
-          session_key: session_key,
-          session_id: session_manager.header.id,
-          agent_id: agent_id
-        }
-      )
+      case context_snapshot do
+        %{system_prompt: prompt} ->
+          prompt
+
+        nil ->
+          PromptComposer.compose_system_prompt(
+            cwd,
+            explicit_system_prompt,
+            prompt_template,
+            workspace_dir,
+            session_scope,
+            "",
+            %{
+              run_id: run_id,
+              session_key: session_key,
+              session_id: session_manager.header.id,
+              agent_id: agent_id
+            }
+          )
+      end
 
     model = ModelResolver.resolve_session_model(Keyword.get(opts, :model), settings_manager)
     thinking_level = Keyword.get(opts, :thinking_level) || settings_manager.default_thinking_level
@@ -189,7 +198,17 @@ defmodule CodingAgent.Session.Lifecycle do
 
     LemonAgent.Agent.subscribe(agent, session_pid)
 
-    messages = Persistence.restore_messages_from_session(session_manager)
+    messages =
+      case context_snapshot do
+        %{messages: snapshot_messages} ->
+          Persistence.prepare_initial_messages(snapshot_messages, session_manager)
+
+        nil ->
+          case initial_messages do
+            nil -> Persistence.restore_messages_from_session(session_manager)
+            messages -> Persistence.prepare_initial_messages(messages, session_manager)
+          end
+      end
 
     if messages != [] do
       LemonAgent.Agent.replace_messages(agent, messages)
@@ -217,6 +236,7 @@ defmodule CodingAgent.Session.Lifecycle do
       # `tool_opts` from state rather than from the original opts.
       tool_disclosure: Keyword.get(opts, :tool_disclosure),
       session_scope: session_scope,
+      context_frozen: not is_nil(context_snapshot),
       is_streaming: false,
       pending_prompt_timer_ref: nil,
       event_listeners: [],
@@ -260,6 +280,16 @@ defmodule CodingAgent.Session.Lifecycle do
 
     {:ok, state, lifecycle.extension_status_report}
   end
+
+  defp normalize_context_snapshot(%{messages: messages, system_prompt: system_prompt})
+       when is_list(messages) and is_binary(system_prompt) do
+    %{messages: messages, system_prompt: system_prompt}
+  end
+
+  defp normalize_context_snapshot(_), do: nil
+
+  defp normalize_initial_messages(messages) when is_list(messages), do: messages
+  defp normalize_initial_messages(_), do: nil
 
   @spec reload_extensions(Session.t()) ::
           {:ok, Extensions.extension_status_report() | nil, Session.t()}
@@ -324,7 +354,9 @@ defmodule CodingAgent.Session.Lifecycle do
     {:ok, lifecycle.extension_status_report, new_state}
   end
 
-  @spec reset(Session.t(), non_neg_integer()) :: {:ok, Session.t()} | {:error, :busy, Session.t()}
+  @spec reset(Session.t(), non_neg_integer()) ::
+          {:ok, Session.t()}
+          | {:error, :busy | {:heartbeat_persistence_failed, term()}, Session.t()}
   def reset(state, reset_abort_wait_ms) when is_integer(reset_abort_wait_ms) do
     was_streaming = state.is_streaming
     had_pending_prompt = not is_nil(state.pending_prompt_timer_ref)
@@ -352,28 +384,39 @@ defmodule CodingAgent.Session.Lifecycle do
                 state
               end
 
-            :ok = LemonAgent.Agent.reset(state.agent)
+            case clear_heartbeat_for_rotation(state) do
+              {:ok, state} ->
+                :ok = LemonAgent.Agent.reset(state.agent)
 
-            previous_session_id = state.session_manager.header.id
-            new_session_manager = SessionManager.new(state.cwd)
+                previous_session_id = state.session_manager.header.id
+                new_session_manager = SessionManager.new(state.cwd)
 
-            Persistence.maybe_unregister_session(
-              previous_session_id,
-              state.register_session,
-              state.session_registry
-            )
+                Persistence.maybe_unregister_session(
+                  previous_session_id,
+                  state.register_session,
+                  state.session_registry
+                )
 
-            Persistence.maybe_register_session(
-              new_session_manager,
-              state.cwd,
-              state.register_session,
-              state.session_registry
-            )
+                Persistence.maybe_register_session(
+                  new_session_manager,
+                  state.cwd,
+                  state.register_session,
+                  state.session_registry,
+                  state.session_key
+                )
 
-            Notifier.ui_set_working_message(state, nil)
+                Notifier.ui_set_working_message(state, nil)
 
-            {:ok,
-             State.reset_runtime(state, new_session_manager, System.system_time(:millisecond))}
+                {:ok,
+                 State.reset_runtime(
+                   state,
+                   new_session_manager,
+                   System.system_time(:millisecond)
+                 )}
+
+              {:error, reason, state} ->
+                {:error, {:heartbeat_persistence_failed, reason}, state}
+            end
 
           {:error, :busy} ->
             {:error, :busy, state}
@@ -392,6 +435,9 @@ defmodule CodingAgent.Session.Lifecycle do
     LemonAgent.Agent.abort(state.agent)
     LemonAgent.Agent.wait_for_idle(state.agent, timeout: reset_abort_wait_ms)
   end
+
+  defp clear_heartbeat_for_rotation(%{heartbeat: nil} = state), do: {:ok, state}
+  defp clear_heartbeat_for_rotation(state), do: Heartbeat.clear(state)
 
   # Persistent Python REPL owner cleanup. The module is injectable via the
   # `:python_repl_mod` Session option; `nil` means the subsystem is not

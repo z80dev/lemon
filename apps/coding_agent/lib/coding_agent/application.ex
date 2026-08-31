@@ -22,10 +22,14 @@ defmodule CodingAgent.Application do
 
     children = [
       {Registry, keys: :unique, name: CodingAgent.SessionRegistry},
+      {Registry, keys: :unique, name: CodingAgent.BackgroundRun.Registry},
       {Registry, keys: :unique, name: CodingAgent.ProcessRegistry},
       {Registry, keys: :unique, name: CodingAgent.RateLimitHealerRegistry},
+      {Task.Supervisor, name: CodingAgent.Search.TaskSupervisor},
+      CodingAgent.Search.SingleFlight,
       CodingAgent.Tools.TodoStoreOwner,
       CodingAgent.SessionSupervisor,
+      CodingAgent.BackgroundRun.Supervisor,
       CodingAgent.Wasm.SidecarSupervisor,
       CodingAgent.Tools.Task.LiveBridgeSupervisor,
       {Task.Supervisor, name: CodingAgent.TaskSupervisor},
@@ -50,6 +54,7 @@ defmodule CodingAgent.Application do
 
     case Supervisor.start_link(children, opts) do
       {:ok, _supervisor} = ok ->
+        CodingAgent.Search.Registry.init()
         register_control_plane_provider()
         maybe_start_primary_session()
         ok

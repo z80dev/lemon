@@ -106,6 +106,27 @@ defmodule LemonMemory.Store do
     meta_blob = excluded.meta_blob
   """
 
+  @put_new_sql """
+  INSERT INTO memory_documents (
+    doc_id, run_id, session_key, agent_id, workspace_key, scope,
+    started_at_ms, ingested_at_ms,
+    prompt_summary, answer_summary,
+    tools_used_blob, provider, model, outcome, meta_blob
+  )
+  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
+  ON CONFLICT(doc_id) DO NOTHING
+  """
+
+  @get_document_sql """
+  SELECT doc_id, run_id, session_key, agent_id, workspace_key, scope,
+         started_at_ms, ingested_at_ms,
+         prompt_summary, answer_summary,
+         tools_used_blob, provider, model, outcome, meta_blob
+  FROM memory_documents
+  WHERE doc_id = ?1
+  LIMIT 1
+  """
+
   @get_by_session_sql """
   SELECT doc_id, run_id, session_key, agent_id, workspace_key, scope,
          started_at_ms, ingested_at_ms,
@@ -178,6 +199,16 @@ defmodule LemonMemory.Store do
   LIMIT ?3
   """
 
+  @list_recent_sql """
+  SELECT doc_id, run_id, session_key, agent_id, workspace_key, scope,
+         started_at_ms, ingested_at_ms,
+         prompt_summary, answer_summary,
+         tools_used_blob, provider, model, outcome, meta_blob
+  FROM memory_documents
+  ORDER BY ingested_at_ms DESC, doc_id DESC
+  LIMIT ?1
+  """
+
   @delete_by_session_sql """
   DELETE FROM memory_documents WHERE session_key = ?1
   """
@@ -188,6 +219,14 @@ defmodule LemonMemory.Store do
 
   @delete_by_workspace_sql """
   DELETE FROM memory_documents WHERE workspace_key = ?1
+  """
+
+  @delete_document_sql """
+  DELETE FROM memory_documents WHERE doc_id = ?1
+  """
+
+  @fts_delete_document_sql """
+  DELETE FROM memory_fts WHERE doc_id = ?1
   """
 
   @sweep_sql """
@@ -313,6 +352,46 @@ defmodule LemonMemory.Store do
   end
 
   @doc """
+  Persist one document synchronously.
+
+  This is intended for explicit review/confirm workflows that must not report
+  success before SQLite has accepted the exact document. Ordinary finalized-run
+  ingestion should continue using `put/1` so it does not block the run path.
+  """
+  @spec put_sync(Document.t()) :: :ok | {:error, term()}
+  def put_sync(%Document{} = doc), do: put_sync(__MODULE__, doc)
+
+  @spec put_sync(GenServer.server(), Document.t()) :: :ok | {:error, term()}
+  def put_sync(server, %Document{} = doc) do
+    GenServer.call(server, {:put_sync, doc}, 5_000)
+  catch
+    :exit, reason -> {:error, {:timeout_or_down, reason}}
+  end
+
+  @doc "Synchronously create one document without overwriting an existing ID."
+  @spec put_new_sync(Document.t()) :: {:ok, :created | :exists} | {:error, term()}
+  def put_new_sync(%Document{} = doc), do: put_new_sync(__MODULE__, doc)
+
+  @spec put_new_sync(GenServer.server(), Document.t()) ::
+          {:ok, :created | :exists} | {:error, term()}
+  def put_new_sync(server, %Document{} = doc) do
+    GenServer.call(server, {:put_new_sync, doc}, 5_000)
+  catch
+    :exit, reason -> {:error, {:timeout_or_down, reason}}
+  end
+
+  @doc "Fetch one exact document ID."
+  @spec get_document(binary()) :: {:ok, Document.t()} | {:error, term()}
+  def get_document(doc_id) when is_binary(doc_id), do: get_document(__MODULE__, doc_id)
+
+  @spec get_document(GenServer.server(), binary()) :: {:ok, Document.t()} | {:error, term()}
+  def get_document(server, doc_id) when is_binary(doc_id) do
+    GenServer.call(server, {:get_document, doc_id}, 5_000)
+  catch
+    :exit, reason -> {:error, {:timeout_or_down, reason}}
+  end
+
+  @doc """
   Fetch documents for a session.
 
   ## Options
@@ -371,6 +450,25 @@ defmodule LemonMemory.Store do
     :exit, _ -> []
   end
 
+  @doc """
+  Fetch the newest memory documents across scopes.
+
+  This deliberately exposes only a bounded recent window. Operator-facing
+  filtering, redaction, and deletion belong in `LemonMemory.Lifecycle` rather
+  than in callers that might otherwise grow a second memory read model.
+  """
+  @spec list_recent(keyword()) :: {:ok, [Document.t()]} | {:error, term()}
+  def list_recent(opts \\ []), do: list_recent(__MODULE__, opts)
+
+  @spec list_recent(GenServer.server(), keyword()) ::
+          {:ok, [Document.t()]} | {:error, term()}
+  def list_recent(server, opts) when is_list(opts) do
+    limit = opts |> Keyword.get(:limit, 20) |> clamp_limit(500)
+    GenServer.call(server, {:list_recent, limit}, 5_000)
+  catch
+    :exit, reason -> {:error, {:timeout_or_down, reason}}
+  end
+
   defp query_opts(opts) do
     since_ms =
       case Keyword.get(opts, :since_ms) do
@@ -418,6 +516,66 @@ defmodule LemonMemory.Store do
   @spec delete_by_workspace(GenServer.server(), binary()) :: :ok
   def delete_by_workspace(server, workspace_key) when is_binary(workspace_key) do
     GenServer.cast(server, {:delete_by_workspace, workspace_key})
+  end
+
+  @doc "Synchronously delete one exact memory document and its FTS row."
+  @spec delete_document(binary()) :: {:ok, :deleted | :not_found} | {:error, term()}
+  def delete_document(doc_id) when is_binary(doc_id), do: delete_document(__MODULE__, doc_id)
+
+  @spec delete_document(GenServer.server(), binary()) ::
+          {:ok, :deleted | :not_found} | {:error, term()}
+  def delete_document(server, doc_id) when is_binary(doc_id) do
+    GenServer.call(server, {:delete_document, doc_id}, 5_000)
+  catch
+    :exit, reason -> {:error, {:timeout_or_down, reason}}
+  end
+
+  @doc """
+  Atomically delete one document only when it still equals a previously read
+  snapshot.
+
+  The comparison and deletion execute in one Store callback, so a concurrent
+  write observed before this call makes the operation fail stale instead of
+  deleting changed content. This is the low-level primitive used by guarded
+  lifecycle deletion; ordinary callers should prefer `LemonMemory.Lifecycle`.
+  """
+  @spec delete_document_if_unchanged(binary(), binary()) ::
+          {:ok, :deleted | :not_found | :stale} | {:error, term()}
+  def delete_document_if_unchanged(doc_id, revision),
+    do: delete_document_if_unchanged(__MODULE__, doc_id, revision)
+
+  @spec delete_document_if_unchanged(GenServer.server(), binary(), binary()) ::
+          {:ok, :deleted | :not_found | :stale} | {:error, term()}
+  def delete_document_if_unchanged(server, doc_id, revision)
+      when is_binary(doc_id) and is_binary(revision) do
+    GenServer.call(server, {:delete_document_if_unchanged, doc_id, revision}, 5_000)
+  catch
+    :exit, reason -> {:error, {:timeout_or_down, reason}}
+  end
+
+  @doc "Deterministic SHA-256 revision over every persisted document field."
+  @spec document_revision(Document.t()) :: binary()
+  def document_revision(%Document{} = doc) do
+    [
+      doc.doc_id,
+      doc.run_id,
+      doc.session_key,
+      doc.agent_id,
+      doc.workspace_key,
+      doc.scope,
+      doc.started_at_ms,
+      doc.ingested_at_ms,
+      doc.prompt_summary,
+      doc.answer_summary,
+      doc.tools_used,
+      doc.provider,
+      doc.model,
+      doc.outcome,
+      doc.meta
+    ]
+    |> :erlang.term_to_binary([:deterministic])
+    |> then(&:crypto.hash(:sha256, &1))
+    |> Base.encode16(case: :lower)
   end
 
   @doc """
@@ -568,6 +726,22 @@ defmodule LemonMemory.Store do
     {:reply, result, state}
   end
 
+  def handle_call({:put_sync, doc}, _from, state) do
+    {:reply, do_put(state, doc), state}
+  end
+
+  def handle_call({:put_new_sync, doc}, _from, state) do
+    {:reply, do_put_new(state, doc), state}
+  end
+
+  def handle_call({:get_document, doc_id}, _from, state) do
+    {:reply, fetch_document(state, doc_id), state}
+  end
+
+  def handle_call({:delete_document, doc_id}, _from, state) do
+    {:reply, do_delete_document(state, doc_id), state}
+  end
+
   def handle_call({:get_by_agent, agent_id, opts}, _from, state) do
     result = do_scoped_query(state, :get_by_agent, agent_id, opts)
     {:reply, result, state}
@@ -576,6 +750,14 @@ defmodule LemonMemory.Store do
   def handle_call({:get_by_workspace, workspace_key, opts}, _from, state) do
     result = do_scoped_query(state, :get_by_workspace, workspace_key, opts)
     {:reply, result, state}
+  end
+
+  def handle_call({:list_recent, limit}, _from, state) do
+    {:reply, do_query_result(state, state.stmts.list_recent, [limit]), state}
+  end
+
+  def handle_call({:delete_document_if_unchanged, doc_id, revision}, _from, state) do
+    {:reply, do_delete_document_if_unchanged(state, doc_id, revision), state}
   end
 
   def handle_call({:search, query, scope, scope_key, limit}, _from, state) do
@@ -667,21 +849,26 @@ defmodule LemonMemory.Store do
 
   defp prepare_statements(conn) do
     with {:ok, put} <- Sqlite3.prepare(conn, @put_sql),
+         {:ok, put_new} <- Sqlite3.prepare(conn, @put_new_sql),
+         {:ok, get_document} <- Sqlite3.prepare(conn, @get_document_sql),
          {:ok, get_by_session} <- Sqlite3.prepare(conn, @get_by_session_sql),
          {:ok, get_by_agent} <- Sqlite3.prepare(conn, @get_by_agent_sql),
          {:ok, get_by_workspace} <- Sqlite3.prepare(conn, @get_by_workspace_sql),
          {:ok, get_by_session_since} <- Sqlite3.prepare(conn, @get_by_session_since_sql),
          {:ok, get_by_agent_since} <- Sqlite3.prepare(conn, @get_by_agent_since_sql),
          {:ok, get_by_workspace_since} <- Sqlite3.prepare(conn, @get_by_workspace_since_sql),
+         {:ok, list_recent} <- Sqlite3.prepare(conn, @list_recent_sql),
          {:ok, delete_by_session} <- Sqlite3.prepare(conn, @delete_by_session_sql),
          {:ok, delete_by_agent} <- Sqlite3.prepare(conn, @delete_by_agent_sql),
          {:ok, delete_by_workspace} <- Sqlite3.prepare(conn, @delete_by_workspace_sql),
+         {:ok, delete_document} <- Sqlite3.prepare(conn, @delete_document_sql),
          {:ok, sweep} <- Sqlite3.prepare(conn, @sweep_sql),
          {:ok, stats} <- Sqlite3.prepare(conn, @stats_sql),
          {:ok, fts_put} <- Sqlite3.prepare(conn, @fts_put_sql),
          {:ok, fts_delete_by_session} <- Sqlite3.prepare(conn, @fts_delete_by_session_sql),
          {:ok, fts_delete_by_agent} <- Sqlite3.prepare(conn, @fts_delete_by_agent_sql),
          {:ok, fts_delete_by_workspace} <- Sqlite3.prepare(conn, @fts_delete_by_workspace_sql),
+         {:ok, fts_delete_document} <- Sqlite3.prepare(conn, @fts_delete_document_sql),
          {:ok, fts_sweep} <- Sqlite3.prepare(conn, @fts_sweep_sql),
          {:ok, search_session} <- Sqlite3.prepare(conn, @search_session_sql),
          {:ok, search_agent} <- Sqlite3.prepare(conn, @search_agent_sql),
@@ -692,21 +879,26 @@ defmodule LemonMemory.Store do
       {:ok,
        %{
          put: put,
+         put_new: put_new,
+         get_document: get_document,
          get_by_session: get_by_session,
          get_by_agent: get_by_agent,
          get_by_workspace: get_by_workspace,
          get_by_session_since: get_by_session_since,
          get_by_agent_since: get_by_agent_since,
          get_by_workspace_since: get_by_workspace_since,
+         list_recent: list_recent,
          delete_by_session: delete_by_session,
          delete_by_agent: delete_by_agent,
          delete_by_workspace: delete_by_workspace,
+         delete_document: delete_document,
          sweep: sweep,
          stats: stats,
          fts_put: fts_put,
          fts_delete_by_session: fts_delete_by_session,
          fts_delete_by_agent: fts_delete_by_agent,
          fts_delete_by_workspace: fts_delete_by_workspace,
+         fts_delete_document: fts_delete_document,
          fts_sweep: fts_sweep,
          search_session: search_session,
          search_agent: search_agent,
@@ -721,32 +913,16 @@ defmodule LemonMemory.Store do
   end
 
   defp do_put(state, %Document{} = doc) do
-    tools_blob = encode(doc.tools_used)
-    meta_blob = encode(doc.meta)
-
-    params = [
-      doc.doc_id,
-      doc.run_id,
-      doc.session_key,
-      doc.agent_id,
-      doc.workspace_key,
-      Atom.to_string(doc.scope),
-      doc.started_at_ms,
-      doc.ingested_at_ms,
-      doc.prompt_summary,
-      doc.answer_summary,
-      {:blob, tools_blob},
-      doc.provider,
-      doc.model,
-      Atom.to_string(doc.outcome),
-      {:blob, meta_blob}
-    ]
+    params = document_params(doc)
 
     :ok = Sqlite3.execute(state.conn, "BEGIN")
 
     with :ok <- Sqlite3.reset(state.stmts.put),
          :ok <- Sqlite3.bind(state.stmts.put, params),
          :done <- Sqlite3.step(state.conn, state.stmts.put),
+         :ok <- Sqlite3.reset(state.stmts.fts_delete_document),
+         :ok <- Sqlite3.bind(state.stmts.fts_delete_document, [doc.doc_id]),
+         :done <- Sqlite3.step(state.conn, state.stmts.fts_delete_document),
          :ok <- Sqlite3.reset(state.stmts.fts_put),
          :ok <-
            Sqlite3.bind(state.stmts.fts_put, [doc.doc_id, doc.prompt_summary, doc.answer_summary]),
@@ -769,6 +945,159 @@ defmodule LemonMemory.Store do
       {:error, {:exception, Exception.message(e)}}
   end
 
+  defp do_put_new(state, %Document{} = doc) do
+    params = document_params(doc)
+    :ok = Sqlite3.execute(state.conn, "BEGIN")
+
+    with :ok <- Sqlite3.reset(state.stmts.put_new),
+         :ok <- Sqlite3.bind(state.stmts.put_new, params),
+         :done <- Sqlite3.step(state.conn, state.stmts.put_new) do
+      case Sqlite3.changes(state.conn) do
+        {:ok, 0} ->
+          :ok = Sqlite3.execute(state.conn, "ROLLBACK")
+          {:ok, :exists}
+
+        {:ok, _} ->
+          with :ok <- Sqlite3.reset(state.stmts.fts_put),
+               :ok <-
+                 Sqlite3.bind(state.stmts.fts_put, [
+                   doc.doc_id,
+                   doc.prompt_summary,
+                   doc.answer_summary
+                 ]),
+               :done <- Sqlite3.step(state.conn, state.stmts.fts_put) do
+            :ok = Sqlite3.execute(state.conn, "COMMIT")
+            {:ok, :created}
+          else
+            error ->
+              _ = Sqlite3.execute(state.conn, "ROLLBACK")
+              {:error, error}
+          end
+
+        error ->
+          _ = Sqlite3.execute(state.conn, "ROLLBACK")
+          {:error, error}
+      end
+    else
+      error ->
+        _ = Sqlite3.execute(state.conn, "ROLLBACK")
+        {:error, error}
+    end
+  rescue
+    error ->
+      _ = Sqlite3.execute(state.conn, "ROLLBACK")
+      {:error, {:exception, Exception.message(error)}}
+  end
+
+  defp document_params(doc) do
+    [
+      doc.doc_id,
+      doc.run_id,
+      doc.session_key,
+      doc.agent_id,
+      doc.workspace_key,
+      Atom.to_string(doc.scope),
+      doc.started_at_ms,
+      doc.ingested_at_ms,
+      doc.prompt_summary,
+      doc.answer_summary,
+      {:blob, encode(doc.tools_used)},
+      doc.provider,
+      doc.model,
+      Atom.to_string(doc.outcome),
+      {:blob, encode(doc.meta)}
+    ]
+  end
+
+  defp do_delete_document(state, doc_id) do
+    :ok = Sqlite3.execute(state.conn, "BEGIN")
+
+    with :ok <- Sqlite3.reset(state.stmts.fts_delete_document),
+         :ok <- Sqlite3.bind(state.stmts.fts_delete_document, [doc_id]),
+         :done <- Sqlite3.step(state.conn, state.stmts.fts_delete_document),
+         :ok <- Sqlite3.reset(state.stmts.delete_document),
+         :ok <- Sqlite3.bind(state.stmts.delete_document, [doc_id]),
+         :done <- Sqlite3.step(state.conn, state.stmts.delete_document) do
+      result =
+        case Sqlite3.changes(state.conn) do
+          {:ok, 0} -> :not_found
+          {:ok, _} -> :deleted
+          _ -> :deleted
+        end
+
+      :ok = Sqlite3.execute(state.conn, "COMMIT")
+      {:ok, result}
+    else
+      error ->
+        _ = Sqlite3.execute(state.conn, "ROLLBACK")
+        {:error, error}
+    end
+  rescue
+    error ->
+      _ = Sqlite3.execute(state.conn, "ROLLBACK")
+      {:error, {:exception, Exception.message(error)}}
+  end
+
+  defp do_delete_document_if_unchanged(state, doc_id, expected_revision) do
+    :ok = Sqlite3.execute(state.conn, "BEGIN IMMEDIATE")
+
+    result =
+      case fetch_document(state, doc_id) do
+        {:error, :not_found} ->
+          {:ok, :not_found}
+
+        {:error, reason} ->
+          {:error, reason}
+
+        {:ok, current} ->
+          current_revision = document_revision(current)
+
+          if secure_equal?(current_revision, expected_revision) do
+            delete_document_in_transaction(state, doc_id)
+          else
+            {:ok, :stale}
+          end
+      end
+
+    case result do
+      {:ok, :deleted} ->
+        :ok = Sqlite3.execute(state.conn, "COMMIT")
+        result
+
+      _ ->
+        _ = Sqlite3.execute(state.conn, "ROLLBACK")
+        result
+    end
+  rescue
+    error ->
+      _ = Sqlite3.execute(state.conn, "ROLLBACK")
+      {:error, {:exception, Exception.message(error)}}
+  end
+
+  defp delete_document_in_transaction(state, doc_id) do
+    with :ok <- Sqlite3.reset(state.stmts.fts_delete_document),
+         :ok <- Sqlite3.bind(state.stmts.fts_delete_document, [doc_id]),
+         :done <- Sqlite3.step(state.conn, state.stmts.fts_delete_document),
+         :ok <- Sqlite3.reset(state.stmts.delete_document),
+         :ok <- Sqlite3.bind(state.stmts.delete_document, [doc_id]),
+         :done <- Sqlite3.step(state.conn, state.stmts.delete_document) do
+      case Sqlite3.changes(state.conn) do
+        {:ok, 0} -> {:ok, :not_found}
+        {:ok, _} -> {:ok, :deleted}
+        error -> {:error, error}
+      end
+    end
+  end
+
+  defp fetch_document(state, doc_id) do
+    case do_query_result(state, state.stmts.get_document, [doc_id]) do
+      {:ok, [doc]} -> {:ok, doc}
+      {:ok, []} -> {:error, :not_found}
+      {:ok, _multiple} -> {:error, :ambiguous_document}
+      {:error, _} = error -> error
+    end
+  end
+
   defp do_query(state, stmt, params) do
     with :ok <- Sqlite3.reset(stmt),
          :ok <- Sqlite3.bind(stmt, params),
@@ -783,6 +1112,26 @@ defmodule LemonMemory.Store do
       err ->
         Logger.warning("[Store] query failed: #{inspect(err)}")
         []
+    end
+  end
+
+  defp do_query_result(state, stmt, params) do
+    with :ok <- Sqlite3.reset(stmt),
+         :ok <- Sqlite3.bind(stmt, params),
+         {:ok, rows} <- Sqlite3.fetch_all(state.conn, stmt) do
+      Enum.reduce_while(rows, {:ok, []}, fn row, {:ok, documents} ->
+        case decode_row(row) do
+          {:ok, doc} -> {:cont, {:ok, [doc | documents]}}
+          {:error, reason} -> {:halt, {:error, reason}}
+        end
+      end)
+      |> case do
+        {:ok, documents} -> {:ok, Enum.reverse(documents)}
+        {:error, _} = error -> error
+      end
+    else
+      {:error, reason} -> {:error, reason}
+      other -> {:error, {:query_failed, other}}
     end
   end
 
@@ -960,6 +1309,9 @@ defmodule LemonMemory.Store do
     end
   end
 
+  defp clamp_limit(value, max) when is_integer(value) and value > 0, do: min(value, max)
+  defp clamp_limit(_, _max), do: 20
+
   # Strip FTS5 special characters and join tokens for AND-matching.
   # Individual words must all appear in the document; order doesn't matter.
   defp sanitize_fts_query(query) when is_binary(query) do
@@ -983,6 +1335,12 @@ defmodule LemonMemory.Store do
   end
 
   defp decode(nil), do: {:ok, %{}}
+
+  defp secure_equal?(left, right)
+       when is_binary(left) and is_binary(right) and byte_size(left) == byte_size(right),
+       do: :crypto.hash_equals(left, right)
+
+  defp secure_equal?(_, _), do: false
 
   defp safe_atom(str, default) when is_binary(str) do
     String.to_existing_atom(str)

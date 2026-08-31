@@ -108,7 +108,9 @@ it is released when the process dies, for any reason, including the node being k
 
 What happens to the second message instead of being dropped is the job of
 `LemonRouter.SessionCoordinator` — one process per conversation — which interprets queue
-modes (`:steer`, `:steer_backlog`, `:collect`, `:interrupt`). The decisions themselves live
+modes (`:followup`, `:steer`, `:steer_backlog`, `:redirect`, `:collect`, `:interrupt`).
+Redirect replaces only the active model request while keeping completed tool work; steer
+does not cancel that request. The decisions themselves live
 in [`session_transitions.ex`](../apps/lemon_router/lib/lemon_router/session_transitions.ex)
 as a pure reducer; the process only performs the I/O the reducer asks for.
 

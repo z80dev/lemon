@@ -15,6 +15,8 @@ defmodule Mix.Tasks.Lemon.Sim.Suite do
 
   use Mix.Task
 
+  alias Mix.Tasks.Lemon.Sim.Common
+
   @switches [
     scenario: :string,
     preset: :string,
@@ -40,7 +42,7 @@ defmodule Mix.Tasks.Lemon.Sim.Suite do
         exit({:shutdown, 1})
 
       true ->
-        ensure_runtime_started!()
+        Common.ensure_runtime_and_core_started()
         run_suite(opts)
     end
   end
@@ -55,7 +57,7 @@ defmodule Mix.Tasks.Lemon.Sim.Suite do
 
     suite_opts =
       [suite_dir: opts[:out]]
-      |> maybe_put(:max_concurrency, opts[:max_concurrency])
+      |> Common.maybe_put(:max_concurrency, opts[:max_concurrency])
 
     case LemonSim.Bench.Suite.run(spec, suite_opts) do
       {:ok, %{leaderboard: leaderboard}} ->
@@ -113,13 +115,5 @@ defmodule Mix.Tasks.Lemon.Sim.Suite do
     |> String.split(",", trim: true)
     |> Enum.map(&String.trim/1)
     |> Enum.reject(&(&1 == ""))
-  end
-
-  defp maybe_put(opts, _key, nil), do: opts
-  defp maybe_put(opts, key, value), do: Keyword.put(opts, key, value)
-
-  defp ensure_runtime_started! do
-    Application.ensure_all_started(:lemon_sim)
-    Application.ensure_all_started(:lemon_core)
   end
 end

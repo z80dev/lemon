@@ -1,6 +1,65 @@
 # Provider credentials — prefer secret refs (api_key_secret) over plaintext api_key.
 # Run `mix lemon.secrets.set <secret_name> <value>` to store keys in the encrypted keychain.
 # Plaintext api_key is supported but discouraged; use it only for quick local testing.
+#
+# Control-plane operator authentication is environment-only so the shared secret
+# is not written to this file. Set LEMON_CONTROL_PLANE_OPERATOR_TOKEN for normal
+# WebSocket operator access. Legacy tokenless loopback access is disabled unless
+# LEMON_CONTROL_PLANE_ALLOW_UNAUTHENTICATED_LOOPBACK=true is explicitly set.
+# The source ./bin/lemon-tui launcher generates a process-scoped token for a
+# runtime it starts; attaching to an existing runtime requires its matching env
+# value. Every runtime it starts is stopped with the TUI, even with a
+# preconfigured token; start persistent runtimes separately with ./bin/lemon
+# --daemon. Never put the shared token in a browser VITE_* variable or URL.
+# Named node pairing sends the operator token from LEMON_NODE_OPERATOR_TOKEN on
+# the joining host. Named workers require wss:// for non-loopback controllers by
+# default. LEMON_NODE_ALLOW_INSECURE_CONTROLLER=true is an explicit development
+# or verified-encrypted-overlay override and is not safe on an unverified path.
+# Backups have no TOML settings. Use `lemon backup create`; local credential
+# files remain excluded unless `--include-credentials` is explicit.
+
+# External secret sources are read-only fallbacks behind Lemon's encrypted
+# store. Every source is disabled unless `enabled = true` is the exact TOML
+# boolean. Commands are argv arrays and are never passed through a shell.
+# Status/test commands never print values:
+#   lemon secrets sources status
+#   lemon secrets sources test [source-id]
+
+[secrets.sources.onepassword]
+type = "onepassword"
+enabled = false
+priority = 10
+executable = "op"
+timeout_ms = 3000
+max_output_bytes = 65536
+cache_ttl_ms = 0
+auth_secret = "op_service_account_token"
+auth_env = "OP_SERVICE_ACCOUNT_TOKEN"
+refs = { anthropic_api_key = "op://Lemon/Anthropic/api-key" }
+
+[secrets.sources.bitwarden]
+type = "bitwarden"
+enabled = false
+priority = 20
+executable = "bws"
+timeout_ms = 3000
+max_output_bytes = 65536
+cache_ttl_ms = 0
+project_id = "replace-with-project-id"
+access_token_secret = "bws_access_token"
+access_token_env = "BWS_ACCESS_TOKEN"
+# server_url = "https://vault.example.com"
+
+[secrets.sources.local_helper]
+type = "command"
+enabled = false
+priority = 30
+argv = ["/absolute/path/to/lemon-secret-helper", "export"]
+timeout_ms = 3000
+max_output_bytes = 65536
+cache_ttl_ms = 0
+pass_env = []
+secret_env = { HELPER_TOKEN = "helper_bootstrap_token" }
 
 [providers.anthropic]
 api_key_secret = "anthropic_api_key"
@@ -39,6 +98,27 @@ thinking_level = "medium"
 theme = "default"
 extension_paths = []
 
+# Provider routing can be managed without exposing credentials:
+#   lemon providers status
+#   lemon providers fallback add zai
+#   lemon providers pool set burst --provider openai --provider zai --activate
+#   lemon providers pool credential add burst openai secret:openai_backup
+# Values stay in the encrypted secret store or environment; only explicit
+# secret:NAME / env:NAME references belong in this file.
+#
+# [runtime.provider_routing]
+# enabled = true
+# fallback_providers = ["zai"]
+# default_pool = "burst"
+# require_credentials = true
+#
+# [runtime.provider_routing.credential_pools.burst]
+# providers = ["openai", "zai"]
+# strategy = "round_robin" # priority | round_robin
+#
+# [runtime.provider_routing.credential_pools.burst.credentials]
+# openai = ["secret:openai_backup", "env:OPENAI_API_KEY_BACKUP"]
+
 [runtime.compaction]
 enabled = true
 reserve_tokens = 16384
@@ -48,6 +128,11 @@ keep_recent_tokens = 20000
 enabled = true
 max_retries = 3
 base_delay_ms = 1000
+
+# `lemon context preview|resolve` budgets are explicit per invocation rather
+# than persisted here. This prevents shared config from silently raising a
+# caller's file/URL/archive/page/item/time limits. See
+# docs/user-guide/context-references.md for the bounded flags and defaults.
 
 # Programmatic tool calling: the model submits a python3 script that can call a fixed
 # allowlist of agent tools (read, grep, find, ls, webfetch). The result comes back
@@ -164,7 +249,7 @@ queue_mode = "collect"
 
 # [runtime.tools.web.search]
 # enabled = true
-# provider = "brave"      # "brave" | "perplexity"
+# provider = "brave"      # brave | exa | perplexity | duckduckgo | searxng | extension id
 # max_results = 5
 # timeout_seconds = 30
 # cache_ttl_minutes = 15
@@ -172,6 +257,13 @@ queue_mode = "collect"
 # [runtime.tools.web.search.perplexity]
 # api_key = "<perplexity-api-key>"
 # model = "perplexity/sonar-pro"
+#
+# [runtime.tools.web.search.providers.searxng]
+# base_url = "https://search.example.com"
+# api_key_secret = "SEARXNG_API_KEY" # optional
+
+# [runtime.tools.web.search.providers.exa]
+# api_key = "<exa-api-key>" # optional if EXA_API_KEY is set
 
 # [runtime.tools.web.fetch]
 # enabled = true
@@ -181,6 +273,13 @@ queue_mode = "collect"
 # [runtime.tools.web.fetch.firecrawl]
 # enabled = true
 # api_key = "fc-..."
+
+# Browser backend selection is environment-based so secrets stay out of TOML:
+# LEMON_BROWSER_BACKEND=local|controller|hybrid|browserbase|browser_use|firecrawl|camofox
+# LEMON_BROWSER_HYBRID_PUBLIC_BACKEND=browser_use # required with hybrid
+# BROWSERBASE_API_KEY / BROWSERBASE_PROJECT_ID, BROWSER_USE_API_KEY,
+# FIRECRAWL_API_KEY, or CAMOFOX_URL / CAMOFOX_API_KEY configure hosted backends.
+# LEMON_CUA_DRIVER_CMD optionally selects the cua-driver used by computer_use.
 
 # --- WASM Tool Configuration ---
 
@@ -214,6 +313,16 @@ name = "Default Agent"
 # allow = "all"
 # deny = []
 # require_approval = ["bash", "write", "edit"]
+
+# User-managed specialist profiles can be created with `lemon profile create`.
+# Their stable IDs derive ~/.lemon/profiles/<id>/ and agent:<id>:main; do not
+# configure filesystem paths here.
+# [profiles.research]
+# name = "Research"
+# description = "Evidence-first research specialist"
+# model = "openai:gpt-5"
+# system_prompt = "Cite primary sources and state uncertainty."
+# node = "local" # or the name of an authenticated execution node
 
 # --- Feature Flags ---
 # Each flag is an operator kill switch for a subsystem; all ship enabled.

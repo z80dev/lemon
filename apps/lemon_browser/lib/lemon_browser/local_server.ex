@@ -26,7 +26,11 @@ defmodule LemonBrowser.LocalServer do
 
   def start_link(opts \\ []) do
     name = Keyword.get(opts, :name, @name)
-    GenServer.start_link(__MODULE__, opts, name: name)
+
+    case name do
+      nil -> GenServer.start_link(__MODULE__, opts)
+      name -> GenServer.start_link(__MODULE__, opts, name: name)
+    end
   end
 
   @spec stop(server()) :: :ok
@@ -65,7 +69,7 @@ defmodule LemonBrowser.LocalServer do
   end
 
   @impl true
-  def init(_opts) do
+  def init(opts) do
     Process.flag(:trap_exit, true)
 
     {:ok,
@@ -80,7 +84,8 @@ defmodule LemonBrowser.LocalServer do
        last_request_at: nil,
        last_error: nil,
        last_error_at: nil,
-       driver_config: nil
+       driver_config: nil,
+       driver_opts: Keyword.take(opts, [:cdp_endpoint, :attach_only, :driver_path])
      }}
   end
 
@@ -196,8 +201,8 @@ defmodule LemonBrowser.LocalServer do
 
   defp ensure_port(state) do
     with {:ok, node_path} <- find_node(),
-         {:ok, driver_path} <- find_driver() do
-      args = [driver_path]
+         {:ok, driver_path} <- find_driver(state.driver_opts) do
+      args = [driver_path | driver_args(state.driver_opts)]
 
       port =
         Port.open({:spawn_executable, node_path}, [
@@ -214,7 +219,7 @@ defmodule LemonBrowser.LocalServer do
            started_at: now_iso8601(),
            last_error: nil,
            last_error_at: nil,
-           driver_config: driver_config_summary()
+           driver_config: driver_config_summary(state.driver_opts)
        }}
     else
       {:error, reason} -> {:error, reason}
@@ -228,8 +233,10 @@ defmodule LemonBrowser.LocalServer do
     end
   end
 
-  defp find_driver do
-    override = Env.get(:lemon_browser_driver_path) |> to_string_safe()
+  defp find_driver(opts) do
+    override =
+      Keyword.get(opts, :driver_path) ||
+        (Env.get(:lemon_browser_driver_path) |> to_string_safe())
 
     if override != "" do
       expanded = Path.expand(override)
@@ -346,7 +353,7 @@ defmodule LemonBrowser.LocalServer do
       request_count: state.request_count,
       completed_count: state.completed_count,
       failed_count: state.failed_count,
-      driver_config: state.driver_config || driver_config_summary(),
+      driver_config: state.driver_config || driver_config_summary(state.driver_opts),
       started_at: state.started_at,
       last_request_at: state.last_request_at,
       last_error: state.last_error,
@@ -365,9 +372,32 @@ defmodule LemonBrowser.LocalServer do
     %{state | last_error: to_string(reason), last_error_at: now_iso8601()}
   end
 
-  defp driver_config_summary do
-    endpoint = Env.get(:lemon_browser_cdp_endpoint) |> to_string_safe()
-    attach_only? = Env.get(:lemon_browser_attach_only) == true or endpoint != ""
+  defp driver_args(opts) do
+    endpoint = configured_endpoint(opts)
+
+    []
+    |> maybe_append_arg(endpoint != "", "--cdp-endpoint", endpoint)
+    |> maybe_append_flag(Keyword.get(opts, :attach_only, false) == true or endpoint != "", "--attach-only")
+  end
+
+  defp maybe_append_arg(args, true, flag, value), do: args ++ [flag, value]
+  defp maybe_append_arg(args, false, _flag, _value), do: args
+  defp maybe_append_flag(args, true, flag), do: args ++ [flag]
+  defp maybe_append_flag(args, false, _flag), do: args
+
+  defp configured_endpoint(opts) do
+    case Keyword.get(opts, :cdp_endpoint) do
+      value when is_binary(value) and value != "" -> value
+      _ -> Env.get(:lemon_browser_cdp_endpoint) |> to_string_safe()
+    end
+  end
+
+  defp driver_config_summary(opts) do
+    endpoint = configured_endpoint(opts)
+
+    attach_only? =
+      Keyword.get(opts, :attach_only, false) == true or
+        Env.get(:lemon_browser_attach_only) == true or endpoint != ""
     # Note: intentionally not `Env.get/2` -- LEMON_BROWSER_CDP_PORT only
     # accepts *positive* integers (0/negative fall back to the default),
     # which is stricter than the standard :integer cast's "any parseable

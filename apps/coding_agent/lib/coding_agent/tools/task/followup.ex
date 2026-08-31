@@ -59,10 +59,11 @@ defmodule CodingAgent.Tools.Task.Followup do
     end
   rescue
     error ->
-      Logger.warning(
-        "Task tool failed to auto-followup task_id=#{inspect(task_id)} run_id=#{inspect(run_id)}: #{inspect(error)}"
-      )
-
+      log_auto_followup_failure(task_id, run_id, {:exception, error})
+      :ok
+  catch
+    kind, reason ->
+      log_auto_followup_failure(task_id, run_id, {kind, reason})
       :ok
   end
 
@@ -327,6 +328,13 @@ defmodule CodingAgent.Tools.Task.Followup do
   defp log_followup_failure(task_id, run_id, reason) do
     Logger.warning(
       "Task tool followup submit failed for task_id=#{inspect(task_id)} run_id=#{inspect(run_id)}: #{inspect(reason)}"
+    )
+  end
+
+  defp log_auto_followup_failure(task_id, run_id, reason) do
+    Logger.warning(
+      "Task tool failed to auto-followup task_id=#{inspect(task_id)} " <>
+        "run_id=#{inspect(run_id)}: #{inspect(reason)}"
     )
   end
 end

@@ -7,6 +7,7 @@
  */
 
 import { approvalsCommand, approveCommand, denyCommand } from "./approvals.ts";
+import { blueprintCommand, blueprintsCommand } from "./blueprints.ts";
 import {
 	clearCommand,
 	debugCommand,
@@ -18,10 +19,34 @@ import {
 	themeCommand,
 } from "./core.ts";
 import { costCommand, logsCommand, statusCommand, usageCommand } from "./diagnostics.ts";
+import {
+	agentsCommand,
+	backgroundCommand,
+	btwCommand,
+	commandsCommand,
+	compressCommand,
+	heartbeatCommand,
+	tasksCommand,
+} from "./hermes.ts";
 import { modelCommand, thinkCommand, toolPolicyCommand } from "./model.ts";
+import { profileCommand, profilesCommand } from "./profiles.ts";
 import { CommandRegistry } from "./registry.ts";
-import { abortCommand, goalCommand, queueCommand, runsCommand } from "./run.ts";
-import { historyCommand, resumeCommand, sessionCommand, sessionsCommand } from "./session.ts";
+import {
+	abortCommand,
+	goalCommand,
+	queueCommand,
+	redirectCommand,
+	runsCommand,
+	steerCommand,
+} from "./run.ts";
+import {
+	historyCommand,
+	resetCommand,
+	resumeCommand,
+	sessionCommand,
+	sessionsCommand,
+} from "./session.ts";
+import { skillsCommand } from "./skills.ts";
 
 export interface RegistryOptions {
 	/** Opens $EDITOR on the draft. Defaults to a notice that it is unavailable. */
@@ -34,6 +59,7 @@ export function createCommandRegistry(options: RegistryOptions = {}): CommandReg
 		(() => Promise.reject(new Error("no external editor is wired up")));
 	return new CommandRegistry().registerAll([
 		helpCommand,
+		commandsCommand,
 		quitCommand,
 		clearCommand,
 		modeCommand,
@@ -42,16 +68,30 @@ export function createCommandRegistry(options: RegistryOptions = {}): CommandReg
 
 		sessionsCommand,
 		sessionCommand,
+		resetCommand,
 		resumeCommand,
 		historyCommand,
+		compressCommand,
+		heartbeatCommand,
+		profilesCommand,
+		profileCommand,
+		blueprintsCommand,
+		blueprintCommand,
 
 		modelCommand,
 		thinkCommand,
 		toolPolicyCommand,
+		skillsCommand,
 
 		abortCommand,
 		queueCommand,
+		steerCommand,
+		redirectCommand,
+		backgroundCommand,
+		btwCommand,
 		runsCommand,
+		agentsCommand,
+		tasksCommand,
 		goalCommand,
 
 		approvalsCommand,
@@ -71,6 +111,7 @@ export function createCommandRegistry(options: RegistryOptions = {}): CommandReg
 export type {
 	CommandContext,
 	CommandHost,
+	MultiPickerSpec,
 	PickerChoice,
 	PickerSpec,
 	SlashCommand,

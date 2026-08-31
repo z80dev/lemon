@@ -165,18 +165,42 @@ are not the "latest" release and therefore require an explicit version.
 There are two update paths, and they do different jobs.
 
 **Installed runtimes** (`~/.lemon`, from `install.sh` or a previous
-`lemon update`) use the launcher's `lemon update`. It fetches the manifest for
-the configured channel, compares versions with `LemonCore.Update.Version`,
-downloads and SHA-256 verifies the matching runtime and, unless
-`LEMON_NO_TUI=1` or the profile is `sim_broadcast_platform`, the matching
-`lemon_tui` artifact. It stages both into the new version before flipping
-`~/.lemon/versions/current`. Applying the new version requires a restart: Lemon
-does not hot-upgrade a running node. The two previous versions are retained for
-`lemon update --rollback`.
+`lemon update`) use the launcher's preview-confirm lifecycle:
 
-**Source checkouts** use `mix lemon.update` (or the source wrapper
+```bash
+lemon update check
+lemon update plan
+lemon update apply --confirm <exact-plan-digest>
+lemon update history
+lemon update rollback --receipt <exact-apply-receipt> \
+  --confirm <exact-rollback-digest>
+```
+
+The non-mutating plan binds the exact running/current versions, raw manifest
+SHA-256 and commit, channel/target/profile/platform, artifact names, declared
+sizes, and checksums. Apply re-plans under an exclusive lock, records a verified
+private checkpoint first, downloads and exact-size/SHA-256 verifies the runtime
+and optional TUI, rejects unconfined or special archive entries before
+extraction, validates the staged launcher version, then atomically flips
+`~/.lemon/versions/current`. A post-flip failure restores the prior pointer.
+Successful apply writes a content-free receipt; rollback accepts no path and
+requires that exact receipt/digest plus an unchanged current pointer and
+checkpoint checksum. Both operations require a restart; Lemon does not
+hot-upgrade a running node.
+
+Schema 2 authenticates the artifact against the manifest's checksum and size.
+It is **not publisher-signed**: no detached manifest proof or trusted publisher
+key is currently published. Artifact requests are time-bounded and
+streamed to disk with a declared/post-download hard size check; the current
+`:httpc` boundary cannot cancel at the exact in-flight byte where an overlong
+body crosses its declaration, so the refused file is deleted after the bounded
+response completes. See [the update guide](../user-guide/updates.md).
+
+**Source checkouts** use `mix lemon.update` (or the no-subcommand source wrapper
 `./bin/lemon update`), which remains a stage-1 local maintenance task and never
-replaces binaries. The same source
+replaces binaries. `./bin/lemon update check|history` expose read-only release
+visibility and receipts; packaged `plan`, `apply`, and `rollback` fail closed
+with Git workflow guidance. The same source
 wrapper family exposes `./bin/lemon setup ...` and `./bin/lemon doctor ...` as
 delegates for the setup and diagnostics Mix tasks, plus
 `./bin/lemon channels ...` for redacted Telegram/Discord launch readiness,
@@ -229,4 +253,3 @@ pinned_version = "2026.03.0"
 - `docs/release/deployment_flows.md` — supported runtime/deployment modes
 - `install.sh` / `scripts/verify_install_script` — installer and its fixture-server verifier
 - `apps/lemon_core/lib/mix/tasks/lemon.update.ex` — stage-1 source-checkout update task
-- `docs/plans/lemon-1.0-mainstream-readiness.md` — Hermes-on-BEAM readiness plan

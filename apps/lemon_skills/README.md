@@ -1,5 +1,20 @@
 # LemonSkills
 
+## Learn from bounded sources
+
+`LemonSkills.Learn` turns existing `LemonCore.Context` references into one
+durable-memory proposal and one audited synthesis draft. `review/2` never
+writes; it returns hashes, counts, audit rule identifiers, and destination
+conflicts without returning source text, prompts, paths, URLs, or secrets.
+`confirm/3` re-runs the complete selection and accepts only the exact digest
+from the fresh review. It writes to `LemonMemory.Store` and
+`LemonSkills.Synthesis.DraftStore`; there is no separate learning database and
+the resulting skill remains a draft until the existing promotion flow reviews
+it. The service disables optional LLM audit for selected source content,
+atomically creates exact memory/draft destinations, and stores only hashed
+source provenance plus the exact source-memory ID and audited bundle digest in
+ordinary records removable through the existing store APIs.
+
 Skill registry, discovery, installation, audit, and lifecycle management for the Lemon agent platform.
 
 LemonSkills provides a centralized system for extending agent capabilities through modular, file-based skills. Skills are directories containing a `SKILL.md` manifest file with optional YAML/TOML frontmatter, and the system handles discovery from disk, online sources, installation with approval gating, static security audit, optional LLM-backed audit review, status checking, and relevance-based retrieval.
@@ -68,10 +83,18 @@ LemonSkills does not execute skills directly. Instead, it serves as a **content 
 
 1. **Registration** -- On application start, the `Registry` GenServer loads all skills from global and project directories into an in-memory cache. Built-in skills are seeded first via `BuiltinSeeder`.
 2. **Retrieval** -- Agents and tools query the registry for skills by key or by relevance to a context string. The `find_relevant/2` function scores skills using keyword matching across name, description, keywords, and body content.
-3. **Content delivery** -- The `Entry.content/1` function reads the raw `SKILL.md` content, which is then injected into agent system prompts or returned via the `read_skill` tool.
+3. **Content delivery** -- The stable system prompt receives bounded metadata through `PromptView`; full `SKILL.md` content is read only when a caller requests `Entry.content/1`, normally through the `read_skill` tool.
 4. **Status gating** -- Before a skill is used, `Status.check/2` verifies that required binaries and environment variables are present.
-5. **Installation** -- New skills can be installed from Git repositories or local paths, with approval gating via `LemonCore.ExecApprovals`.
+5. **Installation** -- New skills can be installed from Git repositories, local paths, or the live official Hermes catalog, with approval gating via `LemonCore.ExecApprovals`.
 6. **Audit** -- All non-builtin installs and updates run through deterministic audit checks plus an optional LLM reviewer. `:block` verdicts fail the operation, and `:warn` verdicts require explicit approval before the skill is kept.
+
+Portable skill + automation bundles are orchestrated by
+`LemonAutomation.Blueprint`, not by another LemonSkills registry or installer.
+That service reuses this package's deterministic bundle hash, manifest lint,
+audit engine, project config, and registry refresh while placing skills only in
+the target profile's derived project workspace. See the
+[`daily-note` example](../../examples/skill-automation-bundles/daily-note/)
+and [user guide](../../docs/user-guide/skills.md#portable-skill-and-automation-bundles).
 
 ### Application Startup
 
@@ -89,7 +112,7 @@ The OTP application (`LemonSkills.Application`) performs two actions on start:
 | `LemonSkills.Application` | `lib/lemon_skills/application.ex` | OTP application; seeds builtins, starts Registry |
 | `LemonSkills.Registry` | `lib/lemon_skills/registry.ex` | GenServer for in-memory skill cache; list, get, find_relevant, discover, search, counts, register, unregister |
 | `LemonSkills.Entry` | `lib/lemon_skills/entry.ex` | Skill entry struct with metadata, content access, and factory functions |
-| `LemonSkills.Manifest` | `lib/lemon_skills/manifest.ex` | Hand-rolled YAML/TOML frontmatter parser for SKILL.md files |
+| `LemonSkills.Manifest` | `lib/lemon_skills/manifest.ex` | YAML/TOML frontmatter parsing and normalized manifest access |
 | `LemonSkills.Status` | `lib/lemon_skills/status.ex` | Status checking: binary availability, config presence, disabled state |
 | `LemonSkills.Installer` | `lib/lemon_skills/installer.ex` | Install/update/uninstall with approval gating via LemonCore.ExecApprovals |
 | `LemonSkills.Audit.Engine` | `lib/lemon_skills/audit/engine.ex` | Static security audit and verdict aggregation |
@@ -112,10 +135,11 @@ The OTP application (`LemonSkills.Application`) performs two actions on start:
 | `LemonSkills.Tools.MediaGenerateVideo` | `lib/lemon_skills/tools/media_generate_video.ex` | Agent tool for managed video generation artifacts |
 | `LemonSkills.Tools.Kanban` | `lib/lemon_skills/tools/kanban.ex` | Agent tool for durable Lemon kanban boards and tasks |
 | `LemonSkills.SkillView` | `lib/lemon_skills/skill_view.ex` | Display projection of an entry: active state and what is missing |
-| `LemonSkills.PromptView` | `lib/lemon_skills/prompt_view.ex` | Renders skills into an agent's system prompt |
+| `LemonSkills.PromptView` | `lib/lemon_skills/prompt_view.ex` | Renders bounded skill metadata into an agent's system prompt |
 | `LemonSkills.McpSource` | `lib/lemon_skills/mcp_source.ex` | MCP servers as a runtime tool source (stdio, HTTP, SSE) |
 | `LemonSkills.Source` | `lib/lemon_skills/source.ex` | Behaviour every skill source implements; `Sources.*` are its implementations |
 | `LemonSkills.SourceRouter` | `lib/lemon_skills/source_router.ex` | Resolves a URL or path to the source module that handles it |
+| `LemonSkills.Sources.Hermes` | `lib/lemon_skills/sources/hermes.ex` | Live official Nous Hermes catalog and sparse skill import source |
 | `LemonSkills.TrustPolicy` | `lib/lemon_skills/trust_policy.ex` | Which trust levels require an audit and which auto-approve |
 | `LemonSkills.Audit.BundleAudit` | `lib/lemon_skills/audit/bundle_audit.ex` | Whole-bundle audit with a fingerprinted verdict cache |
 | `LemonSkills.Curator` | `lib/lemon_skills/curator.ex` | Usage-driven curation pass over installed skills |
@@ -199,7 +223,27 @@ Instructions here.
 | `requires.bins` | list | Required binaries, checked via `System.find_executable/1` |
 | `requires.config` | list | Required environment variables, checked via `System.get_env/1` |
 
-The manifest parser is hand-rolled and handles basic YAML/TOML structures. It does not support YAML anchors, references, multi-line strings, or other advanced features.
+YAML frontmatter is parsed with `YamlElixir`; TOML frontmatter supports Lemon's flat scalar/list subset. Hermes platform aliases (`macos`, `windows`) and `prerequisites.commands` / `prerequisites.env_vars` are normalized to Lemon's platform and requirement fields.
+
+## Importing official Hermes skills
+
+The official Nous Research catalog is looked up dynamically from the current
+`NousResearch/hermes-agent` GitHub tree, so newly added official skills appear
+without a Lemon release. Browse it from a source checkout:
+
+```bash
+mix lemon.skill hermes
+mix lemon.skill hermes research --details
+mix lemon.skill hermes --collection=optional --category=research --details
+mix lemon.skill install hermes:optional/research/arxiv
+```
+
+In `lemon-tui`, run `/skills` to choose a category, filter skills, toggle any
+number with Space, and confirm the batch with Enter. `/skills <query>` opens a
+filtered skill list directly. Already installed skills are marked and cannot be
+selected. Imports retain Lemon's official-source audit and approval flow;
+deselecting a row only removes it from the pending batch and never uninstalls an
+existing skill.
 
 ## How Skills Are Registered
 
@@ -275,14 +319,12 @@ Detailed audit state is persisted separately from provenance lockfiles:
 
 ## How Skills Are Executed (Consumed)
 
-Skills are not executed by this app. They are consumed as text content by agents. The typical flow:
+Skills are not executed by this app. They are consumed as text content by agents. The typical flow is explicit:
 
-1. An agent session calls `LemonSkills.find_relevant("kubernetes deployment")` to get contextually relevant skills.
-2. For each returned entry, `LemonSkills.Entry.content(entry)` reads the SKILL.md content.
-3. The content is injected into the agent's system prompt or context window.
-4. The agent follows the instructions in the skill content.
-
-Alternatively, agents can use the `read_skill` tool to fetch skill content on demand during a conversation.
+1. The stable system prompt lists bounded metadata for every displayable skill.
+2. `LemonSkills.find_relevant("kubernetes deployment")` can select turn-local relevance keys without changing that prompt.
+3. The agent calls `read_skill` for the selected key (or an application caller explicitly invokes `LemonSkills.Entry.content/1`).
+4. The returned full content enters the conversation under the caller's trust boundary, and the agent follows the selected skill only after that explicit load.
 
 ## Built-in Skills
 

@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Lemon Browser Relay</title>
+    <style>
+      body { font: 15px system-ui, sans-serif; max-width: 34rem; margin: 3rem auto; padding: 0 1rem; color: #17211b; }
+      h1 { margin-bottom: .25rem; }
+      p { color: #506057; line-height: 1.5; }
+      label { display: block; margin: 1.25rem 0 .35rem; font-weight: 650; }
+      input { box-sizing: border-box; width: 100%; padding: .65rem; font: inherit; border: 1px solid #a9b5ad; border-radius: .4rem; }
+      button { margin-top: 1.25rem; padding: .65rem 1.2rem; font: inherit; border: 0; border-radius: .4rem; background: #b7ef60; color: #17211b; font-weight: 700; }
+      #status { margin-left: .75rem; color: #16713a; }
+      code { background: #eff3ef; padding: .1rem .25rem; }
+    </style>
+  </head>
+  <body>
+    <h1>Lemon Browser Relay</h1>
+    <p>Connects opted-in Chrome tabs to Lemon through a loopback-only relay. The token must match <code>LEMON_BROWSER_RELAY_TOKEN</code>. Click the Lemon toolbar icon on a normal tab to grant or revoke access; an <code>L</code> badge marks opted-in tabs.</p>
+    <label for="port">Relay port</label>
+    <input id="port" type="number" min="1" max="65535" />
+    <label for="token">Relay token</label>
+    <input id="token" type="password" autocomplete="off" />
+    <button id="save">Save</button><span id="status"></span>
+    <script src="options.js"></script>
+  </body>
+</html>
