@@ -1,6 +1,6 @@
 # Hermes parity implementation initiatives
 
-Status: implemented; final integration gates pending
+Status: complete; integrated validation passed
 Owner: Codex
 Baseline: `ff4adf1e`
 Source matrix: [`lemon-hermes-gap-audit-2026-08-11.md`](lemon-hermes-gap-audit-2026-08-11.md)
@@ -105,3 +105,22 @@ remain follow-ons.
   checks against a real runtime.
 - The source-pinned parity audit is updated only for behavior proven in the
   integrated tree. Anything not shipped remains explicitly partial or missing.
+
+## Final validation
+
+The integrated branch passed the canonical serial gates on 2026-08-30:
+
+- `scripts/test fast --seed 964452`
+- `scripts/test quality`
+- `scripts/test clients`
+- `MIX_ENV=prod mix release lemon_runtime_min --overwrite`
+- `scripts/verify_hermes_parity_sources --remote`
+- `python3 scripts/generate_docs_llms.py --check`
+- source/package CLI smokes, authenticated control-plane and TUI workflows,
+  and real Bandit browser workflows at desktop and mobile sizes
+
+The parity audit and runtime-functionality review remain the source of truth for
+explicit residuals. In particular, this program does not claim transport
+parity, publisher-signed update manifests, exact in-flight download abort,
+multi-controller merged rosters, native desktop packaging, or full-fidelity
+OCR/encrypted-document extraction.
