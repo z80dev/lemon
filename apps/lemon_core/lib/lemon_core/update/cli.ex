@@ -1,51 +1,34 @@
 defmodule LemonCore.Update.CLI do
   @moduledoc """
-  Entry point for `bin/<profile> eval 'LemonCore.Update.CLI.main(System.argv())'`.
+  Core-only update CLI used by packaged profiles that do not assemble
+  `lemon_cli` (currently the simulation release).
 
-  `eval` boots the VM without starting any OTP application — no supervision
-  tree, no store. `run/1` starts exactly what `LemonCore.Update.Remote` needs
-  (`:crypto`, `:ssl`, `:inets`, `:jason`) and never touches anything else.
+  Managed releases expose the same safe update lifecycle as the shared CLI:
+  `check`, `plan`, `apply`, `history`, and `rollback`. Planning never mutates
+  the installation. Applying and rolling back require exact, fresh digests.
 
-  ## Subcommands
-
-    * (none) — check, then apply if an update is available.
-    * `--check` — check only, no download.
-    * `--rollback` — flip `current` to the previous version.
-    * `--channel <c>` — override the update channel.
-    * `--version <v>` — pin to a specific published version.
-    * `--json` — emit a single JSON object instead of human-readable text.
-
-  If `argv` is empty, falls back to splitting `LEMON_UPDATE_ARGS` — the shim
-  exports this so the overlay's `update` subcommand can hand off arguments
-  after `--` without relying on the release `eval` invocation to preserve
-  argv shape.
+  `eval` boots the VM without the ordinary supervision tree, so `run/1`
+  starts only the OTP applications required by `LemonCore.Update.Remote`.
   """
 
   alias LemonCore.Update.Remote
 
   @apps [:crypto, :ssl, :inets, :jason]
+  @commands ~w(check plan apply history rollback)
 
-  @doc """
-  Halting entry point. Exits `0` on success, `1` on error.
-  """
+  @doc "Halting entry point."
   @spec main([String.t()]) :: no_return()
-  def main(argv) do
-    System.halt(run(argv))
-  end
+  def main(argv), do: System.halt(run(argv))
 
-  @doc """
-  Runs the requested subcommand and returns an exit code instead of halting.
-
-  Prefer this in tests — `main/1` calls `System.halt/1`.
-  """
-  @spec run([String.t()]) :: 0 | 1
+  @doc "Runs an update command and returns 0, 1, or 2 instead of halting."
+  @spec run([String.t()]) :: 0 | 1 | 2
   def run(argv) do
     ensure_started()
 
-    argv
-    |> effective_argv()
-    |> parse_args()
-    |> execute()
+    case parse(effective_argv(argv)) do
+      {:ok, command, opts} -> execute(command, opts)
+      {:error, :usage} -> usage_error()
+    end
   end
 
   defp ensure_started, do: Enum.each(@apps, &Application.ensure_all_started/1)
@@ -56,81 +39,83 @@ defmodule LemonCore.Update.CLI do
 
   defp effective_argv(argv), do: argv
 
-  defp parse_args(argv) do
-    {opts, _rest, _invalid} =
+  defp parse(argv) do
+    {opts, positional, invalid} =
       OptionParser.parse(argv,
-        switches: [
+        strict: [
           check: :boolean,
           rollback: :boolean,
           channel: :string,
           version: :string,
+          confirm: :string,
+          receipt: :string,
+          limit: :integer,
           json: :boolean
         ]
       )
 
-    opts
+    check? = opts[:check] == true
+    rollback? = opts[:rollback] == true
+
+    command =
+      cond do
+        positional == [] and check? and not rollback? ->
+          "check"
+
+        positional == [] and rollback? and not check? ->
+          "rollback"
+
+        positional == [] and not check? and not rollback? ->
+          "plan"
+
+        length(positional) == 1 and not check? and not rollback? and hd(positional) in @commands ->
+          hd(positional)
+
+        true ->
+          nil
+      end
+
+    if invalid == [] and command, do: {:ok, command, opts}, else: {:error, :usage}
   end
 
-  defp execute(opts) do
-    json? = Keyword.get(opts, :json, false)
-    remote_opts = remote_opts(opts)
+  defp execute("check", opts), do: call(:check, fn -> Remote.check(remote_opts(opts)) end, opts)
+  defp execute("plan", opts), do: call(:plan, fn -> Remote.plan(remote_opts(opts)) end, opts)
+  defp execute("apply", opts), do: call(:apply, fn -> Remote.apply(remote_opts(opts)) end, opts)
 
-    cond do
-      opts[:rollback] -> run_rollback(remote_opts, json?)
-      opts[:check] -> run_check(remote_opts, json?)
-      true -> run_default(remote_opts, json?)
-    end
-  end
+  defp execute("history", opts),
+    do: call(:history, fn -> Remote.history(remote_opts(opts)) end, opts)
+
+  defp execute("rollback", opts),
+    do: call(:rollback, fn -> Remote.rollback(remote_opts(opts)) end, opts)
 
   defp remote_opts(opts) do
     []
     |> maybe_put(:channel, opts[:channel])
     |> maybe_put(:version, opts[:version])
+    |> maybe_put(:confirm, opts[:confirm])
+    |> maybe_put(:receipt, opts[:receipt])
+    |> maybe_put(:limit, opts[:limit])
   end
 
   defp maybe_put(opts, _key, nil), do: opts
   defp maybe_put(opts, key, value), do: Keyword.put(opts, key, value)
 
-  defp run_check(remote_opts, json?) do
-    case Remote.check(remote_opts) do
-      {:ok, info} ->
-        report(:check, info, json?)
+  defp call(action, fun, opts) do
+    case fun.() do
+      {:ok, result} ->
+        report(action, result, opts[:json] || false)
         0
 
       {:error, reason} ->
-        report_error(reason, json?)
+        report_error(reason, opts[:json] || false)
         1
     end
   end
 
-  defp run_default(remote_opts, json?) do
-    case Remote.apply(remote_opts) do
-      {:ok, info} ->
-        report(:apply, info, json?)
-        0
-
-      {:error, reason} ->
-        report_error(reason, json?)
-        1
-    end
-  end
-
-  defp run_rollback(remote_opts, json?) do
-    case Remote.rollback(remote_opts) do
-      {:ok, info} ->
-        report(:rollback, info, json?)
-        0
-
-      {:error, reason} ->
-        report_error(reason, json?)
-        1
-    end
-  end
-
-  defp report(kind, info, true) do
-    info
-    |> Map.new(fn {k, v} -> {to_string(k), v} end)
-    |> Map.put("action", to_string(kind))
+  defp report(action, result, true) do
+    result
+    |> sanitize_result()
+    |> then(&%{"action" => to_string(action), "ok" => true, "result" => &1})
     |> Jason.encode!()
     |> IO.puts()
   end
@@ -138,37 +123,112 @@ defmodule LemonCore.Update.CLI do
   defp report(:check, info, false) do
     IO.puts("Current: #{info.current}")
     IO.puts("Latest:  #{info.latest || "unknown"}")
-    report_artifact("Runtime", info[:artifact])
-    report_artifact("TUI", info[:tui_artifact])
     IO.puts(if info.update_available?, do: "Update available.", else: "Up to date.")
   end
 
-  defp report(:apply, %{staged: nil} = info, false) do
-    IO.puts("Already up to date (#{info.current}).")
-  end
+  defp report(:plan, plan, false) do
+    IO.puts("Update plan: #{plan.current} -> #{plan.target}")
+    IO.puts("Channel: #{plan.channel}  Profile: #{plan.profile}  Platform: #{plan.platform}")
+    IO.puts("Plan digest: #{plan.digest}")
 
-  defp report(:apply, info, false) do
-    IO.puts("Staged #{info.staged}. Restart to apply.")
-  end
-
-  defp report(:rollback, info, false) do
-    IO.puts("Rolled back. Active version: #{info.active}")
-  end
-
-  defp report_artifact(_label, nil), do: :ok
-
-  defp report_artifact(label, artifact) do
-    case artifact["file"] do
-      file when is_binary(file) -> IO.puts("#{label}: #{file}")
-      _ -> :ok
+    if plan.action == "apply" do
+      IO.puts("Apply with: lemon update apply --confirm #{plan.digest}")
+    else
+      IO.puts("No update will be applied.")
     end
   end
 
-  defp report_error(reason, true) do
-    IO.puts(:stderr, Jason.encode!(%{"error" => inspect(reason)}))
+  defp report(:apply, %{staged: nil} = result, false) do
+    IO.puts("Already up to date (#{result.current}).")
   end
 
-  defp report_error(reason, false) do
-    IO.puts(:stderr, "Error: #{inspect(reason)}")
+  defp report(:apply, result, false) do
+    IO.puts("Staged #{result.staged}. Restart Lemon to use it.")
+    IO.puts("Receipt: #{result.receipt["id"]}")
+    IO.puts("Rollback digest: #{result.receipt["rollback_digest"]}")
+  end
+
+  defp report(:history, receipts, false) do
+    if receipts == [] do
+      IO.puts("No update receipts.")
+    else
+      Enum.each(receipts, fn receipt ->
+        IO.puts(
+          "#{receipt["id"]}  #{receipt["action"]}  #{receipt["status"]}  " <>
+            "#{receipt["from_version"]} -> #{receipt["to_version"]}"
+        )
+      end)
+    end
+  end
+
+  defp report(:rollback, result, false) do
+    IO.puts("Rolled back to #{result.active}. Restart Lemon to use it.")
+    IO.puts("Receipt: #{result.receipt["id"]}")
+  end
+
+  defp sanitize_result(result) when is_map(result) do
+    result
+    |> Map.drop([:path, "path"])
+    |> Map.new(fn {key, value} -> {to_string(key), sanitize_result(value)} end)
+  end
+
+  defp sanitize_result(result) when is_list(result), do: Enum.map(result, &sanitize_result/1)
+  defp sanitize_result(result), do: result
+
+  defp report_error(reason, json?) do
+    error = error_payload(reason)
+
+    if json? do
+      IO.puts(:stderr, Jason.encode!(%{"ok" => false, "error" => error}))
+    else
+      IO.puts(:stderr, "Update failed (#{error["kind"]}): #{error["message"]}")
+    end
+  end
+
+  defp error_payload({:confirmation_required, digest}) do
+    %{
+      "kind" => "confirmation_required",
+      "message" => "Run a fresh plan and provide its exact digest.",
+      "confirm" => digest
+    }
+  end
+
+  defp error_payload(reason) do
+    kind = reason_kind(reason)
+    %{"kind" => to_string(kind), "message" => safe_message(kind)}
+  end
+
+  defp reason_kind({kind, _detail}) when is_atom(kind), do: kind
+  defp reason_kind({kind, _a, _b}) when is_atom(kind), do: kind
+  defp reason_kind(kind) when is_atom(kind), do: kind
+  defp reason_kind(_reason), do: :update_failed
+
+  defp safe_message(:confirmation_mismatch), do: "The confirmation digest is stale or incorrect."
+  defp safe_message(:plan_expired), do: "The update plan expired; create a fresh plan."
+  defp safe_message(:unsupported_layout), do: "This is not an installer-managed Lemon release."
+  defp safe_message(:update_locked), do: "Another update operation is active."
+  defp safe_message(:receipt_not_found), do: "The update receipt was not found."
+
+  defp safe_message(:stale_current_version),
+    do: "The active version no longer matches the receipt."
+
+  defp safe_message(:archive_path_escape), do: "The release archive contains an unsafe path."
+
+  defp safe_message(:archive_unsafe_entry_type),
+    do: "The release archive contains an unsafe entry type."
+
+  defp safe_message(:checksum_mismatch), do: "The downloaded artifact checksum did not match."
+
+  defp safe_message(:artifact_size_mismatch),
+    do: "The downloaded artifact size did not match."
+
+  defp safe_message(:staged_version_mismatch),
+    do: "The staged launcher reported the wrong version."
+
+  defp safe_message(_kind), do: "The update operation was refused safely."
+
+  defp usage_error do
+    IO.puts(:stderr, "Usage: lemon update <check|plan|apply|history|rollback> [options]")
+    2
   end
 end

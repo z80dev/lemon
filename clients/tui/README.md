@@ -41,17 +41,33 @@ legacy client-side alias; it does not configure the daemon.
   merging of consecutive completed tools, and collapsible reasoning sections.
 - Exec approval panel (allow once / session / always / deny, number
   quick-pick, wrapped command preview, expiry countdown).
-- Three submission modes while the agent is busy: `queue` (client-side,
-  editable), `steer`, `interrupt` — with graceful fallbacks. Interrupted
+- Four submission modes while the agent is busy: `queue` (client-side,
+  editable), `steer`, `redirect`, `interrupt` — with graceful fallbacks. Redirect
+  replaces pending model direction while preserving completed tool work. Interrupted
   replies keep their partial text.
 - Multi-session: Ctrl+X switcher (live + recent, fuzzy filter, new-with-
   prompt, close), per-session drafts, unread badges, history hydration.
+- Durable session lifecycle: `/sessions` adds server-backed text, agent,
+  pin, and archive filters to the draft-preserving picker; `/session` can
+  inspect, resume, title, pin, archive, preview, privately export, prune, and
+  delete through the authenticated server-owned lifecycle. Prune and delete
+  are preview-confirm workflows, and offline mutations never claim success.
 - Ctrl+O model picker (two-stage, draft-preserving), capability-aware slash commands with
   autocomplete, `!cmd` shell escape, `{!cmd}` inline interpolation,
   Ctrl+G `$EDITOR` handoff.
 - `/skills` live official Hermes catalog browser: category drill-down, fuzzy
   filtering, descriptions, installed markers, and Space-toggle multi-select
   import through Lemon's normal audit/approval flow.
+- `/profiles` live profile roster with current-chat, model, named-node, and
+  availability context; `/profile` opens stable canonical chats and exposes
+  guarded create/clone/rename/export/delete lifecycle commands. Ordinary
+  prompts in an opened profile use `profile.chat`, preserving the server-owned
+  derived workspace and named-node route.
+- `/blueprints` bounded catalog picker plus `/blueprint` content-free inspect,
+  validate, profile preview, and exact-digest activation. The TUI re-previews
+  before every mutation, never queues activation offline, preserves the profile
+  draft after refusal, and reports create-once or unchanged replay without
+  retaining manifest prose or executable/source content.
 - Progressive-disclosure status bar (model + context gauge pinned), git
   branch, connection state, session counters.
 - Dark/light themes with OSC 11 terminal-background auto-detection; mouse
@@ -66,6 +82,7 @@ and control plane authoritative:
 | --- | --- |
 | `/queue [prompt]`, `/q [prompt]` | With a prompt, use queue mode for that submission; without one, inspect and edit the pending queue. `/q` is intentionally queue, not quit. |
 | `/steer <prompt>` | Send one steering submission without changing the default submission mode. |
+| `/redirect <prompt>` | Replace the active run's pending model direction without changing the default submission mode. |
 | `/reset` | Reset the current session through `sessions.reset` and clear its local transcript. |
 | `/reasoning [level]` | Alias for Lemon's `/think` reasoning-effort control. |
 | `/stop` | Alias for `/abort`; partial output remains visible and is marked interrupted. |
@@ -81,6 +98,15 @@ and control plane authoritative:
 | `/btw <question>` | Ask an isolated side question through `session.btw` when advertised. |
 | `/commands [command]` | Prefer the daemon's `commands.catalog`; fall back to the TUI's local registry during rolling upgrades. |
 | `/help [command]` | Show the local TUI command and key reference, including unavailable capability annotations. |
+| `/profiles` | Browse the live node-aware profile roster and open the selected `agent:<id>:main` chat. |
+| `/profile [current|show|open|chat|create|clone|rename|export|delete] …` | Inspect or manage profiles through the authenticated `profile.*` / `profiles.*` APIs. Create/clone accept only server-supported profile fields such as `--model` and `--node`; delete requires `--confirm <same-id>`. |
+| `/sessions [query…] [--pinned\|--unpinned] [--archived\|--active] [--agent <id>] [--limit <n>]` | Search and filter the durable server roster, then type to refine in the accessible picker. With no arguments, open the merged live/recent session switcher. |
+| `/session current\|show\|search\|open\|resume\|title\|pin\|unpin\|archive\|unarchive …` | Inspect safe lifecycle metadata, resume durable history, open an exact key, or update title/pin/archive state without a client-side metadata store. |
+| `/session preview\|export …` | Read a bounded redacted preview or write a digest-verified JSON/Markdown export through a private atomic file operation. Use `/session help` for exact syntax. |
+| `/session prune --older-than <cutoff> …` | Preview the complete exact candidate set and receive its confirmation token; repeat with `--confirm <token>` to prune only an unchanged set. Archived, unpinned sessions are the safe default. |
+| `/session delete [key] …` | Preview one exact durable session, then repeat its key with `--confirm`; optionally use `--export json\|markdown` to verify a redacted export before verified deletion. |
+| `/blueprints [bundle-id filter]` | Browse bounded catalog IDs/counts, then inspect the selected entry through the shared authenticated service. |
+| `/blueprint [help\|list\|inspect\|validate\|preview\|activate] …` | Inspect and validate content-free metadata, preview one profile without mutation, or activate only after a fresh exact digest match. Refused/stale plans preserve the profile draft and never queue offline. |
 
 Use `/quit` (or the existing keyboard exit binding) to leave the TUI. `/clear`
 remains visual-only: it clears terminal scrollback and the rendered transcript
@@ -103,7 +129,36 @@ bun run gallery           # headless render of every component/state
 ```
 
 The fake control plane (`src/dev/fake-server.ts`) powers the tests and the
-gallery; no daemon or credentials are needed for either.
+gallery; no daemon or credentials are needed for either. Profile and session
+lifecycle verticals also have authenticated real-Bandit proofs that launch the
+production typed Bun client against isolated server-owned state:
+
+```sh
+cd ../..
+MIX_ENV=test mix test apps/lemon_control_plane/test/lemon_control_plane/tui_profiles_wire_e2e_test.exs --seed 1
+MIX_ENV=test mix test apps/lemon_control_plane/test/lemon_control_plane/tui_sessions_wire_e2e_test.exs --seed 1
+MIX_ENV=test mix test apps/lemon_control_plane/test/lemon_control_plane/tui_blueprints_wire_e2e_test.exs --seed 1
+```
+
+Profile commands deliberately do not accept a profile home or workspace path.
+The daemon derives that boundary from the validated profile ID. The only path
+accepted by the profile UX is the output destination for the credential-safe
+`/profile export` operation, matching the control-plane export contract.
+
+Session list, status, picker, and error views intentionally render lifecycle
+metadata only—never prompts, responses, credentials, raw server details, or
+local paths. Export content comes from the server's redacted contract; the TUI
+then verifies its key, format, byte count, and SHA-256 before a private write.
+Delete only forgets the local transcript after the server returns a verified
+receipt. Prune confirmation binds the cutoff, flags, and exact candidate set.
+
+Blueprint picker, status, preview, and receipt views intentionally render only
+bounded IDs, counts, actions, booleans, and digests. Free-form manifest names or
+descriptions, prompts, skill bodies, schedules, commands, environment values,
+paths, URLs, tokens, secrets, and raw daemon errors are discarded before TUI
+state. Activation re-previews through `blueprints.preview`, requires its exact
+fresh digest, then calls nonqueueable `blueprints.activate`; replay with the new
+unchanged digest leaves one scheduler job.
 
 ### Layout
 

@@ -135,6 +135,36 @@ export PATH="$HOME/.lemon/bin:$PATH"
 For lifecycle commands and release verification, see `lemon --help` and
 [Versioning and Channels](release/versioning_and_channels.md).
 
+## Updating an installed release
+
+Installer-managed releases use a preview-confirm lifecycle:
+
+```bash
+lemon update check
+lemon update plan
+lemon update apply --confirm <exact-plan-digest>
+lemon stop && lemon daemon
+```
+
+Plan does not write or download anything. Apply revalidates the exact active
+release and manifest under an exclusive lock, creates a verified private
+checkpoint, checks artifact size/SHA-256, rejects unsafe archive entries,
+verifies the staged launcher's version, and atomically moves only
+`versions/current`. Inspect private content-free receipts and roll back the
+exact recorded checkpoint with:
+
+```bash
+lemon update history
+lemon update rollback --receipt <apply-receipt-id> \
+  --confirm <rollback-digest>
+lemon stop && lemon daemon
+```
+
+Update rollback does not restore config, credentials, sessions, memory, or
+stores. Schema-2 manifests provide mandatory checksums/sizes but do not yet have
+a publisher signature. See [Safely update and roll back Lemon](user-guide/updates.md)
+for the full safety and residual contract.
+
 ## Source development
 
 Use a source checkout for Lemon development, unsupported platforms, or building

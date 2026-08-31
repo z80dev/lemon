@@ -153,7 +153,6 @@ defmodule LemonCore.ConfigTest do
     System.delete_env("LEMON_TUI_DEBUG")
   end
 
-
   test "env overrides provider base_url", %{home: home} do
     global_dir = Path.join(home, ".lemon")
     File.mkdir_p!(global_dir)
@@ -184,6 +183,24 @@ defmodule LemonCore.ConfigTest do
     config = Config.load()
 
     assert config.providers["openai"].api_key_secret == "llm_openai_api_key"
+  end
+
+  test "to_map keeps external secret-source configuration plain", %{home: home} do
+    global_dir = Path.join(home, ".lemon")
+    File.mkdir_p!(global_dir)
+
+    File.write!(Path.join(global_dir, "config.toml"), """
+    [secrets.sources.helper]
+    type = "command"
+    enabled = false
+    argv = ["secret-helper"]
+    """)
+
+    secrets = Config.load() |> Config.to_map() |> Map.fetch!(:secrets)
+
+    refute is_struct(secrets)
+    refute is_struct(hd(secrets.sources))
+    assert hd(secrets.sources).id == "helper"
   end
 
   test "parses agents from profiles config (including tool_policy)", %{home: home} do

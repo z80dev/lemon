@@ -48,6 +48,13 @@ defmodule LemonCore.Update.CLITest do
       end)
 
     assert {:ok, decoded} = Jason.decode(String.trim(stderr))
-    assert decoded["error"] =~ "unsupported_layout"
+
+    assert decoded == %{
+             "ok" => false,
+             "error" => %{
+               "kind" => "unsupported_layout",
+               "message" => "This is not an installer-managed Lemon release."
+             }
+           }
   end
 end

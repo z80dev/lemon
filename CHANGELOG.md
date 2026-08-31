@@ -10,6 +10,119 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- Bun TUI portable-blueprint management over the authenticated shared catalog:
+  content-free `/blueprints` browsing and `/blueprint` inspect/validate/preview,
+  exact fresh-digest activation, stale/refused-plan clearing with preserved
+  profile drafts, nonqueueable offline mutation, and duplicate-safe replay.
+  The terminal retains and renders only bounded IDs, counts, actions, booleans,
+  and digests; real Bandit/Bun proof verifies planted manifest prose, prompts,
+  skill bodies, commands, environment values, paths, tokens, and secrets stay
+  out of terminal state and proof output.
+- Token-required Web durable-memory management at `/manage/memory`, backed by
+  a shared `LemonMemory.Lifecycle` over the canonical SQLite/FTS store. The
+  responsive browser supports bounded search and safe scope/agent/workspace
+  digest/kind filters, Safety-redacted run and learned-source previews,
+  digest-only provenance, and exact single-record delete preview/confirmation.
+  Deletion binds the document ID to a deterministic revision of every
+  persisted field, compares it in constant time inside the same transaction
+  that removes the document and FTS row, and fails stale/forged/malformed
+  requests without mutation. Memory updates now replace their prior FTS row,
+  preventing duplicate search hits for an updated document ID.
+
+- Source and packaged `lemon learn` plus authenticated `learn.review` /
+  `learn.confirm` control-plane methods for auditable learning from existing
+  bounded file, folder, URL, diff, document, and redacted-session references.
+  Review is non-mutating and content-free; confirmation is bound to an exact
+  fresh digest and writes only canonical durable memory plus an audited skill
+  draft, with traversal/SSRF defenses, redaction, collision checks, and
+  idempotent re-review. Exact create-if-absent writes prevent stale destination
+  overwrites, provenance-bearing records remain removable through their
+  existing stores, and selected source content never enters LLM audit.
+
+- Registry-driven source/packaged `lemon update check|plan|apply|history|rollback`
+  with non-mutating manifest/current-bound plans, exact fresh-digest apply,
+  serialized checksum/size-authenticated staging, pre-extraction archive
+  confinement, verified private checkpoints, atomic pointer recovery,
+  content-free receipts, and exact receipt/digest rollback. Source checkouts
+  keep binary mutation fail-closed; schema-2 publisher-signing and exact
+  in-flight `:httpc` byte cancellation remain explicitly documented residuals.
+- Explicitly enabled, read-only 1Password, Bitwarden Secrets Manager, and
+  argv-only command secret sources integrated behind the encrypted Lemon store,
+  with exact schema validation, supervised time/output bounds, minimal child
+  environments, fail-closed fallback behavior, optional bounded in-memory
+  caching, and source/packaged `lemon secrets sources status|test` diagnostics
+  that expose readiness/provenance only.
+- Source and packaged `lemon blueprints` catalog list, sanitized inspect and
+  validate, non-mutating default preview, and exact-digest activation over the
+  existing authenticated control-plane/`CronManager` path, with stable redacted
+  JSON/exit codes, registry-driven help/completion, duplicate-safe results, and
+  real source plus assembled minimal-runtime proof.
+- Token-required Web blueprint management at `/manage/blueprints`, backed by
+  the shared `LemonAutomation.Blueprint.Catalog` service. The responsive page
+  lists only safe IDs/counts, validates bundles, previews profile-local skill
+  and schedule actions without mutation, requires the exact fresh digest, and
+  reports create-once or unchanged replay without retaining manifest prose,
+  prompts, skill bodies, paths, commands, environment values, or secrets.
+- Authenticated Web provider-routing management at `/manage/providers`, with
+  redacted effective status, ordered fallback controls, credential-pool and
+  credential-reference lifecycle, preview-first writes, exact confirmation for
+  destructive changes, and stale-preview rejection through opaque config
+  revisions. Credential references are password-masked, filtered from logs,
+  re-entered for apply, and never retained or rendered by the LiveView.
+- Source and packaged `lemon sessions` commands for bounded list/search/show,
+  exact redacted aggregate statistics with capped agent/origin breakdowns,
+  and redacted history, title/pin/archive lifecycle, always-redacted
+  JSON/Markdown export, exact-candidate preview-confirm prune, and verified
+  exact-key delete; plus registry-generated `lemon completion bash|zsh|fish`
+  scripts that preserve source and release launcher-specific commands.
+- Bun TUI session lifecycle parity over the same authenticated control-plane
+  service: live `/sessions` search/filter/picker UX; `/session` inspect, resume,
+  title, pin, archive, redacted preview/export, exact-candidate guarded prune,
+  and verified export-before-delete. Destructive mutations are never queued
+  offline, refused/stale results do not discard drafts, and list/status/error
+  rendering omits paths, prompts, credentials, and unredacted content.
+- Source and packaged `lemon providers` readiness and routing management with
+  comment-preserving fallback and credential-pool reference edits, stable
+  redacted JSON/exit codes, exact confirmation for destructive changes, and a
+  matching admin-scoped `providers.configure` control-plane method.
+- A client-independent `LemonCore.Context` preview/resolve contract and
+  packaged `lemon context` command for bounded `@file`, `@folder`, `@git-diff`,
+  `@url`, and redacted `@session` references. PDF, DOCX, XLSX, PPTX, notebook,
+  and text content is format-sniffed with explicit byte/page/item/depth/time
+  limits, archive-bomb/traversal and symlink defenses, SSRF-safe pinned URL
+  fetching, sensitive-value redaction, and structured omission metadata.
+- Versioned portable skill + automation bundles with bounded manifest and
+  filesystem policy, deterministic source-and-stage audit, profile-local skill
+  enablement, content-free control-plane list/inspect/validate/preview, exact
+  digest confirmation, and create-once idempotent cron activation.
+- An authenticated Lemon Web session-management shell with runtime and live-node
+  status, durable search/resume, title/pin/archive controls, redacted structured
+  run/tool inspection, bounded JSON/Markdown export, and exact-candidate guarded
+  prune. Query-token bootstrap redirects server-side to a clean URL before
+  rendering, and named chat routes reconstruct durable history before resuming.
+- A shared `LemonCore.SessionLifecycle` service and control-plane
+  `sessions.metadata.patch`, `sessions.export`, and `sessions.prune` methods.
+  Export fails closed against raw run/event payloads and secrets; prune commits
+  canonical history last, verifies deletion, and binds confirmation to exact
+  parameters and stable candidate state.
+- Source and packaged `lemon backup contract|create|list|verify|restore`
+  commands backed by a versioned `~/.lemon` data contract, atomic private
+  directory bundles, exact file-set and SHA-256 verification, credential
+  exclusions, permission-widening rejection, target-bound overwrite
+  confirmation, staged restore, rollback receipts, stable JSON, and documented
+  exit codes.
+- First-class user-managed profiles over the existing router agent plane, with
+  atomic/comment-preserving create, list, show, clone, rename, credential-safe
+  export, and guarded recoverable delete; isolated profile workspaces for
+  bootstrap/memory/skills; stable `agent:<id>:main` chats; node-aware rosters;
+  packaged `lemon profile` commands; matching control-plane methods; and TUI
+  `/profiles` roster/picker plus `/profile` inspection, canonical-chat, and
+  guarded lifecycle commands. Normal TUI prompts in an opened profile route
+  through `profile.chat`, preserving derived workspaces and named nodes. The
+  authenticated Web shell now adds a responsive `/manage/profiles` roster and
+  preview-first create/clone/rename/recoverable-delete journey with stale
+  revision refusal, exact delete confirmation, canonical-chat links, and no
+  profile paths or system prompts retained in LiveView state.
 - `lemon web [--no-open]` in source and full packaged launchers, with daemon
   auto-start, exact Web health polling, browser opening, and actionable profile
   or startup errors.
@@ -65,10 +178,22 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   run native delegated `CodingAgent.Session` work selected by the `agent`
   tool's `node` parameter. Pairing persists a private, controller-bound token
   on the destination machine; remote runs keep credentials and default working
-  directories destination-local and support targeted cancellation.
+  directories destination-local and support targeted cancellation plus
+  invocation-bound steer/redirect with authenticated destination
+  acknowledgement and fail-closed terminal races.
+- The control-plane chat surfaces and TUI now preserve redirect as a distinct
+  active-run mode. The TUI exposes `/redirect` and cycles queue, steer,
+  redirect, and interrupt without conflating redirect with non-canceling steer.
+- Lemon Web now discovers an already-active session run and presents explicit,
+  responsive follow-up, steer, and redirect choices. The text-only controls
+  recheck run eligibility at submit time, keep stop bound to the real active
+  run, preserve a refused draft, and report bounded user-facing outcomes
+  without rendering internal node/runtime errors.
 
 ### Changed
 
+- Packaged and Mix `secrets check` output now reports only `present` and source
+  category counts; it no longer reveals credential prefixes or suffixes.
 - Lemon Web now ships compiled CSS inside the release instead of loading
   Tailwind from a runtime CDN, so the local chat shell works offline.
 - Vendored Phoenix and LiveView browser clients now match the locked server
@@ -127,6 +252,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Redirect acknowledgement now waits until the correction is queued and the
+  active model request is signaled, preventing a fast completion from silently
+  racing ahead of an accepted redirect.
+- Persistent Python kernels now preserve parent/child stdout and stderr ordering
+  instead of allowing block-buffered parent output to appear after child-process
+  output.
 - MCP HTTP transports now supervise the protocol server and Bandit listener as
   one lifecycle and track live node-local instances through supervised members,
   preventing stale or orphaned processes across child failures, concurrent

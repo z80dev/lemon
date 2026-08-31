@@ -45,6 +45,7 @@ defmodule LemonCore.Config.Modular do
     Gateway,
     Logging,
     Providers,
+    Secrets,
     Tools,
     TUI,
     ValidationError,
@@ -58,6 +59,7 @@ defmodule LemonCore.Config.Modular do
     :logging,
     :tui,
     :providers,
+    :secrets,
     :features
   ]
 
@@ -68,6 +70,7 @@ defmodule LemonCore.Config.Modular do
           logging: Logging.t(),
           tui: TUI.t(),
           providers: Providers.t(),
+          secrets: Secrets.t(),
           features: Features.t()
         }
 
@@ -167,6 +170,18 @@ defmodule LemonCore.Config.Modular do
     project_dir = Keyword.get(opts, :project_dir, File.cwd!())
     settings = load_merged_settings(project_dir)
 
+    validate_settings(settings)
+  end
+
+  @doc """
+  Resolve and validate an already-decoded configuration map.
+
+  Comment-preserving editors use this before replacing a TOML file: they can
+  validate the exact merged candidate without first making it visible at the
+  canonical global or project path.
+  """
+  @spec validate_settings(map()) :: {:ok, t()} | {:error, [String.t()]}
+  def validate_settings(settings) when is_map(settings) do
     # Return removed-setting errors alongside resolved-config validation errors.
     removed_setting_errors =
       case Validator.validate_deprecated_sections(settings) do
@@ -229,6 +244,7 @@ defmodule LemonCore.Config.Modular do
       logging: Logging.resolve(settings),
       tui: TUI.resolve(settings),
       providers: Providers.resolve(settings),
+      secrets: Secrets.resolve(settings),
       features: Features.resolve(settings)
     }
   end

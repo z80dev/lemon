@@ -5,14 +5,47 @@ defmodule CodingAgent.PythonRepl.RegistryTest do
   alias CodingAgent.PythonRepl.{Key, Registry, SessionSupervisor}
 
   defmodule Director do
-    def reset do
-      if pid = Process.whereis(__MODULE__), do: Agent.stop(pid)
+    @reset_attempts 3
+    @reset_timeout_ms 1_000
 
-      {:ok, _pid} =
-        Agent.start_link(
-          fn -> %{starts: [], fail?: false, shutdowns: []} end,
-          name: __MODULE__
-        )
+    def reset, do: reset(@reset_attempts)
+
+    defp reset(0), do: raise("could not reset Python REPL test director")
+
+    defp reset(attempts_remaining) do
+      stop_current()
+
+      case Agent.start(fn -> %{starts: [], fail?: false, shutdowns: []} end,
+             name: __MODULE__
+           ) do
+        {:ok, pid} ->
+          {:ok, pid}
+
+        {:error, {:already_started, _pid}} ->
+          reset(attempts_remaining - 1)
+
+        {:error, reason} ->
+          raise "could not start Python REPL test director: #{inspect(reason)}"
+      end
+    end
+
+    defp stop_current do
+      case Process.whereis(__MODULE__) do
+        nil ->
+          :ok
+
+        pid ->
+          ref = Process.monitor(pid)
+          Process.exit(pid, :kill)
+
+          receive do
+            {:DOWN, ^ref, :process, ^pid, _reason} -> :ok
+          after
+            @reset_timeout_ms ->
+              Process.demonitor(ref, [:flush])
+              raise "timed out stopping Python REPL test director"
+          end
+      end
     end
 
     def record(pid, opts),
@@ -108,6 +141,17 @@ defmodule CodingAgent.PythonRepl.RegistryTest do
     )
 
     %{registry: registry, sup: sup, key: key(), owner: owner()}
+  end
+
+  test "director reset tolerates its prior recorder exiting concurrently" do
+    previous = Process.whereis(Director)
+    previous_ref = Process.monitor(previous)
+    Process.exit(previous, :kill)
+
+    assert {:ok, replacement} = Director.reset()
+    assert_receive {:DOWN, ^previous_ref, :process, ^previous, _reason}
+    assert Process.whereis(Director) == replacement
+    assert Director.starts() == []
   end
 
   test "coalesces concurrent first use and retains all owners", %{
@@ -960,7 +1004,7 @@ defmodule CodingAgent.PythonRepl.RegistryTest do
         scope_id: "registry-#{suffix}-#{System.unique_integer([:positive])}",
         agent_id: "agent",
         cwd: System.tmp_dir!(),
-        interpreter: "/bin/true",
+        interpreter: System.find_executable("true") || raise("true executable is required"),
         helpers: [],
         protocol_version: 1
       })

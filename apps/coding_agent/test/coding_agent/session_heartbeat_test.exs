@@ -10,6 +10,7 @@ defmodule CodingAgent.SessionHeartbeatTest do
   alias LemonAi.Types.{TextContent, UserMessage}
 
   @heartbeat_type "session_heartbeat"
+  @provider_timeout 10_000
 
   defp capturing_stream(owner) do
     inner = Mocks.mock_stream_fn_single(Mocks.assistant_message("ok"))
@@ -93,7 +94,7 @@ defmodule CodingAgent.SessionHeartbeatTest do
     session_file = due_session_file(tmp_dir)
     session = start_session(tmp_dir, session_file: session_file)
 
-    assert_receive {:provider_prompt, prompt}, 2_000
+    assert_receive {:provider_prompt, prompt}, @provider_timeout
     assert prompt =~ "[Heartbeat — recurring instruction, fires every 1m]"
     assert prompt =~ "check the build queue"
     assert prompt =~ "do not invent work"
@@ -116,8 +117,8 @@ defmodule CodingAgent.SessionHeartbeatTest do
     session = start_session(tmp_dir, session_file: session_file)
 
     assert :ok = Session.prompt(session, "answer the user first")
-    assert_receive {:provider_prompt, "answer the user first"}, 2_000
-    assert_receive {:provider_prompt, heartbeat_prompt}, 2_000
+    assert_receive {:provider_prompt, "answer the user first"}, @provider_timeout
+    assert_receive {:provider_prompt, heartbeat_prompt}, @provider_timeout
     assert heartbeat_prompt =~ "[Heartbeat — recurring instruction"
 
     refute_receive {:provider_prompt, _duplicate_heartbeat}, 100

@@ -180,12 +180,39 @@ Each cron run executes in a forked sub-session (e.g., `agent:abc:main:sub:cron_1
 
 The `CronMemory` module gives each cron job a markdown file that accumulates run results across executions. On each run, the prompt is augmented with the memory file's contents so the agent has context from prior runs. The memory file auto-compacts when it exceeds 24,000 characters, retaining the most recent 14,000 characters and summarizing older content.
 
+### Portable Skill and Automation Blueprints
+
+`LemonAutomation.Blueprint` activates a versioned, unpacked bundle containing
+one or more audited skills and exactly one agent-backed cron definition. The
+control-plane catalog is `~/.lemon/bundles/<bundle-id>/`; its RPC methods accept
+only the safe `bundleId`, never a caller-provided filesystem path.
+
+Activation is always preview-first. The preview's `confirmationDigest` binds
+the normalized manifest, skill content hashes, target profile, exact cron
+projection, and current destination/job state. Activation replans under a lock,
+requires that exact digest, stages and re-audits copied skill bytes, enables the
+skills only inside the derived profile workspace, then claims the stable cron
+ID through `CronManager.add_new/1`. A replay with identical content is
+unchanged; a changed destination, stale digest, or ID collision fails without
+overwriting the existing job.
+
+Version 1 is intentionally narrow: no archives, symlinks, commands, shell
+scripts, environment injection, arbitrary working directories, memory-file
+overrides, secret-like manifest values, non-UTC schedules, or overwrite mode.
+The public list/inspect/validate/preview/activate results omit paths, skill
+bodies, prompt text, and secret values. See
+[`docs/user-guide/skills.md`](../../docs/user-guide/skills.md#portable-skill-and-automation-bundles)
+and the harmless disabled example under
+`examples/skill-automation-bundles/daily-note/`.
+
 ## Module Inventory
 
 | Module | File | Purpose |
 |--------|------|---------|
 | `LemonAutomation` | `lib/lemon_automation.ex` | Top-level facade with `defdelegate` functions |
 | `LemonAutomation.Application` | `lib/lemon_automation/application.ex` | OTP application and supervisor setup |
+| `LemonAutomation.Blueprint` | `lib/lemon_automation/blueprint.ex` | Validates, previews, digest-confirms, and idempotently activates portable profile skill + cron bundles |
+| `LemonAutomation.Blueprint.Catalog` | `lib/lemon_automation/blueprint/catalog.ex` | Resolves bounded local bundle IDs and provides the shared Web/control-plane list, inspect, validate, preview, and activate boundary |
 | `LemonAutomation.CronManager` | `lib/lemon_automation/cron_manager.ex` | Core scheduling GenServer; owns in-memory job state, persists to CronStore, handles ticks, execution, and completion |
 | `LemonAutomation.CronJob` | `lib/lemon_automation/cron_job.ex` | Job struct with CRUD operations, `due?/1` predicate, serialization |
 | `LemonAutomation.CronRun` | `lib/lemon_automation/cron_run.ex` | Run struct with state machine transitions (pending -> running -> completed/failed/timeout/aborted) |
@@ -503,6 +530,9 @@ mix test apps/lemon_automation
 # Specific test file
 mix test apps/lemon_automation/test/lemon_automation/cron_schedule_test.exs
 
+# Portable bundle validation, confirmation, rollback, and replay
+mix test apps/lemon_automation/test/lemon_automation/blueprint_test.exs --seed 1
+
 # Focused cron diagnostics/support proof
 MIX_ENV=test mix test \
   apps/lemon_core/test/lemon_core/doctor/cron_diagnostics_test.exs \
@@ -533,6 +563,9 @@ MIX_ENV=test mix run scripts/live_cron_channel_origin_smoke.exs
 
 # Full-runtime cron restart smoke (boots runtime_full twice; minute-granularity)
 MIX_ENV=dev mix run --no-start scripts/live_cron_runtime_restart_smoke.exs
+
+# Booted control-plane bundle activation and duplicate-safe replay
+MIX_ENV=dev mix run --no-start scripts/live_skill_automation_blueprint_smoke.exs
 
 # Provider-backed goal-judge proof
 ZAI_API_KEY="$(MIX_ENV=dev mix run --no-start -e 'Logger.configure(level: :emergency); Logger.remove_backend(:console); {:ok, _} = Application.ensure_all_started(:lemon_core); IO.write(LemonCore.Secrets.fetch_value("llm_zai_api_key") || "")')" \
@@ -568,6 +601,7 @@ mix test --cover apps/lemon_automation
 | Test File | Coverage |
 |-----------|----------|
 | `cron_job_test.exs` | CronJob struct creation, update, due?, serialization |
+| `blueprint_test.exs` | Portable manifest policy, staged revalidation, profile-local enablement, exact confirmation, rollback, stable cron provenance, and idempotent replay |
 | `cron_run_test.exs` | CronRun state transitions, duration computation, serialization |
 | `cron_schedule_test.exs` | Cron parsing, next_run computation, matches?, common patterns |
 | `cron_store_test.exs` | Persistence CRUD, filtering, ordering, cleanup_old_runs |

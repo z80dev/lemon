@@ -7,6 +7,7 @@
  */
 
 import { approvalsCommand, approveCommand, denyCommand } from "./approvals.ts";
+import { blueprintCommand, blueprintsCommand } from "./blueprints.ts";
 import {
 	clearCommand,
 	debugCommand,
@@ -28,8 +29,16 @@ import {
 	tasksCommand,
 } from "./hermes.ts";
 import { modelCommand, thinkCommand, toolPolicyCommand } from "./model.ts";
+import { profileCommand, profilesCommand } from "./profiles.ts";
 import { CommandRegistry } from "./registry.ts";
-import { abortCommand, goalCommand, queueCommand, runsCommand, steerCommand } from "./run.ts";
+import {
+	abortCommand,
+	goalCommand,
+	queueCommand,
+	redirectCommand,
+	runsCommand,
+	steerCommand,
+} from "./run.ts";
 import {
 	historyCommand,
 	resetCommand,
@@ -64,6 +73,10 @@ export function createCommandRegistry(options: RegistryOptions = {}): CommandReg
 		historyCommand,
 		compressCommand,
 		heartbeatCommand,
+		profilesCommand,
+		profileCommand,
+		blueprintsCommand,
+		blueprintCommand,
 
 		modelCommand,
 		thinkCommand,
@@ -73,6 +86,7 @@ export function createCommandRegistry(options: RegistryOptions = {}): CommandReg
 		abortCommand,
 		queueCommand,
 		steerCommand,
+		redirectCommand,
 		backgroundCommand,
 		btwCommand,
 		runsCommand,

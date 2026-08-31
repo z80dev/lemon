@@ -10,8 +10,10 @@ defmodule LemonWebTest do
   import Phoenix.LiveViewTest
 
   setup do
-    keys = [:setup_readiness_fun, :submit_run_fun, :abort_run_fun]
+    keys = [:access_token, :setup_readiness_fun, :submit_run_fun, :abort_run_fun, :active_run_fun]
     previous = Map.new(keys, &{&1, Application.get_env(:lemon_web, &1)})
+
+    Application.put_env(:lemon_web, :active_run_fun, fn _session_key -> :none end)
 
     on_exit(fn ->
       Enum.each(previous, fn
@@ -112,7 +114,7 @@ defmodule LemonWebTest do
 
     assert socket.assigns.submit_error == "Upload failed: receipt.pdf: permission denied"
     assert socket.assigns.messages == []
-    refute Map.has_key?(socket.assigns, :prompt)
+    assert socket.assigns.prompt == ""
   end
 
   test "browser explains incomplete setup and fails closed before persistence" do
@@ -167,6 +169,220 @@ defmodule LemonWebTest do
     assert rendered =~ "Stopping"
   end
 
+  test "active run exposes distinct follow-up, steer, and redirect controls" do
+    parent = self()
+    session_key = "agent:web_controls:main"
+
+    Application.put_env(:lemon_web, :setup_readiness_fun, fn -> readiness_state(true) end)
+
+    Application.put_env(:lemon_web, :active_run_fun, fn requested_session_key ->
+      send(parent, {:active_run_lookup, requested_session_key})
+      {:ok, "run-active-web"}
+    end)
+
+    Application.put_env(:lemon_web, :submit_run_fun, fn request ->
+      send(parent, {:submitted_control, request})
+      {:ok, "run-control-#{request.queue_mode}"}
+    end)
+
+    Application.put_env(:lemon_web, :abort_run_fun, fn run_id, reason ->
+      send(parent, {:aborted, run_id, reason})
+      :ok
+    end)
+
+    {:ok, view, html} = live(build_conn(), "/sessions/#{session_key}")
+
+    assert html =~ "Run active"
+    assert html =~ "Queue a separate turn after the current run finishes."
+    assert html =~ "Add guidance to the work in progress"
+    assert html =~ "Replace the pending direction while keeping completed tool work."
+    assert has_element?(view, "#active-run-controls")
+    assert has_element?(view, ~s|input[name="chat[mode]"][value="followup"][checked]|)
+    refute has_element?(view, ~s|input[type="file"]|)
+
+    for {mode, prompt, notice} <- [
+          {"followup", "Check the tests next", "Follow-up queued"},
+          {"steer", "Focus on the failing assertion", "Steer request sent"},
+          {"redirect", "Use the smaller implementation", "Redirect request sent"}
+        ] do
+      rendered =
+        render_submit(view, "submit", %{
+          "chat" => %{"prompt" => prompt, "mode" => mode}
+        })
+
+      expected_mode = String.to_existing_atom(mode)
+
+      assert_receive {:submitted_control,
+                      %{
+                        session_key: ^session_key,
+                        prompt: ^prompt,
+                        queue_mode: ^expected_mode,
+                        meta: %{source: :lemon_web, uploads: []}
+                      }}
+
+      assert rendered =~ notice
+      assert has_element?(view, "#control-notice[role=status]")
+      assert has_element?(view, "#messages", prompt)
+    end
+
+    render_click(view, "stop-run")
+    assert_receive {:aborted, "run-active-web", :user_requested}
+    assert_receive {:active_run_lookup, ^session_key}
+  end
+
+  test "active controls fail closed when the run finishes before submit" do
+    parent = self()
+    {:ok, active?} = Agent.start_link(fn -> true end)
+
+    Application.put_env(:lemon_web, :setup_readiness_fun, fn -> readiness_state(true) end)
+
+    Application.put_env(:lemon_web, :active_run_fun, fn _session_key ->
+      if Agent.get(active?, & &1), do: {:ok, "run-racing"}, else: :none
+    end)
+
+    Application.put_env(:lemon_web, :submit_run_fun, fn request ->
+      send(parent, {:unexpected_submit, request})
+      {:ok, "should-not-submit"}
+    end)
+
+    {:ok, view, _html} = live(build_conn(), "/sessions/agent:web_race:main")
+    assert has_element?(view, "#active-run-controls")
+
+    Agent.update(active?, fn _ -> false end)
+
+    rendered =
+      render_submit(view, "submit", %{
+        "chat" => %{"prompt" => "keep this draft", "mode" => "redirect"}
+      })
+
+    refute_receive {:unexpected_submit, _request}
+    assert rendered =~ "That run has already finished"
+    assert rendered =~ "keep this draft"
+    refute has_element?(view, "#active-run-controls")
+    assert has_element?(view, ~s|input[name="chat[mode]"][value="collect"]|)
+  end
+
+  test "active control refusal never renders internal error details" do
+    secret = "internal-node-token-#{System.unique_integer([:positive])}"
+
+    Application.put_env(:lemon_web, :setup_readiness_fun, fn -> readiness_state(true) end)
+
+    Application.put_env(:lemon_web, :active_run_fun, fn _session_key ->
+      {:ok, "run-refused"}
+    end)
+
+    Application.put_env(:lemon_web, :submit_run_fun, fn _request ->
+      {:error, {:remote_control_failed, %{credential: secret, path: "/private/node"}}}
+    end)
+
+    {:ok, view, _html} = live(build_conn(), "/sessions/agent:web_refusal:main")
+
+    rendered =
+      render_submit(view, "submit", %{
+        "chat" => %{"prompt" => "change course", "mode" => "steer"}
+      })
+
+    assert rendered =~ "Lemon refused that active-run request"
+    assert has_element?(view, "#control-notice[role=alert]")
+    refute rendered =~ secret
+    refute rendered =~ "/private/node"
+    refute has_element?(view, "#messages", "change course")
+  end
+
+  test "run completion returns the composer to a new-message state" do
+    Application.put_env(:lemon_web, :setup_readiness_fun, fn -> readiness_state(true) end)
+
+    Application.put_env(:lemon_web, :active_run_fun, fn _session_key ->
+      {:ok, "run-completing"}
+    end)
+
+    {:ok, view, _html} = live(build_conn(), "/sessions/agent:web_completion:main")
+    assert has_element?(view, "#active-run-controls")
+
+    send(
+      view.pid,
+      LemonCore.Event.new(
+        :run_completed,
+        %{run_id: "run-completing", completed: %{ok: true, answer: "Finished"}},
+        %{run_id: "run-completing"}
+      )
+    )
+
+    rendered = render(view)
+    assert rendered =~ "Finished"
+    refute has_element?(view, "#active-run-controls")
+    refute has_element?(view, "#active-run-status")
+    assert has_element?(view, ~s|input[type="file"]|)
+    assert has_element?(view, "#chat-form button[type=submit]", "Send")
+  end
+
+  test "submission and terminal run failures do not expose internal reasons" do
+    Application.put_env(:lemon_web, :setup_readiness_fun, fn -> readiness_state(true) end)
+
+    secret = "/private/runtime/socket"
+
+    Application.put_env(:lemon_web, :submit_run_fun, fn _request ->
+      {:error, {:runtime_submission_failed, %{attempts: 19, path: secret}}}
+    end)
+
+    {:ok, view, _html} = live(build_conn(), "/sessions/agent:web_failures:main")
+
+    rendered =
+      render_submit(view, "submit", %{
+        "chat" => %{"prompt" => "start work", "mode" => "collect"}
+      })
+
+    assert rendered =~ "Lemon could not start that run"
+    refute rendered =~ "runtime_submission_failed"
+    refute rendered =~ secret
+
+    send(
+      view.pid,
+      LemonCore.Event.new(
+        :run_completed,
+        %{
+          run_id: "run-failed",
+          completed: %{
+            ok: false,
+            error: %{
+              reason: :runtime_unavailable,
+              type: :runtime_submission_failed,
+              attempts: 19,
+              path: secret
+            }
+          }
+        },
+        %{run_id: "run-failed"}
+      )
+    )
+
+    rendered = render(view)
+    assert rendered =~ "execution runtime is unavailable"
+    refute rendered =~ "runtime_submission_failed"
+    refute rendered =~ "attempts"
+    refute rendered =~ secret
+  end
+
+  test "configured chat auth still gates active-run controls and strips query tokens" do
+    token = "web-control-token-#{System.unique_integer([:positive])}"
+    path = "/sessions/agent:web_auth:main"
+
+    Application.put_env(:lemon_web, :access_token, token)
+    Application.put_env(:lemon_web, :setup_readiness_fun, fn -> readiness_state(true) end)
+    Application.put_env(:lemon_web, :active_run_fun, fn _session_key -> {:ok, "run-auth"} end)
+
+    assert get(build_conn(), path) |> response(401) == "Unauthorized"
+
+    conn = get(build_conn(), "#{path}?view=chat&token=#{token}")
+    assert redirected_to(conn, 302) == "#{path}?view=chat"
+    refute response(conn, 302) =~ token
+
+    {:ok, view, html} = live(recycle(conn), "#{path}?view=chat")
+    assert html =~ "Run active"
+    assert has_element?(view, "#active-run-controls")
+    refute html =~ token
+  end
+
   test "readiness can refresh without restarting the Web UI" do
     {:ok, readiness_agent} = Agent.start_link(fn -> readiness_state(false) end)
 
@@ -210,12 +426,21 @@ defmodule LemonWebTest do
 
     app_css = File.read!(Path.join(static_root, "app.css"))
     assert app_css =~ ".min-h-screen"
+    session_css = File.read!(Path.join(static_root, "session.css"))
+    assert session_css =~ ".active-run-control-grid"
+    assert session_css =~ "@media (max-width: 640px)"
+    management_css = File.read!(Path.join(static_root, "management.css"))
+    assert management_css =~ ".management-layout"
+    assert management_css =~ ".provider-management-grid"
+    assert management_css =~ "@media (max-width: 640px)"
 
     root_layout =
       Path.expand("../lib/lemon_web/components/layouts/root.html.heex", __DIR__)
       |> File.read!()
 
     assert root_layout =~ ~s|href={~p"/assets/app.css"}|
+    assert root_layout =~ ~s|href={~p"/assets/session.css"}|
+    assert root_layout =~ ~s|href={~p"/assets/management.css"}|
     assert root_layout =~ "Skip to main content"
     refute root_layout =~ "cdn.tailwindcss.com"
   end

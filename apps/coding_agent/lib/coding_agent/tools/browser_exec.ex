@@ -248,6 +248,8 @@ defmodule CodingAgent.Tools.BrowserExec do
       "properties" => %{
         "steps" => %{
           "type" => "array",
+          "description" =>
+            "A bounded sequence of typed browser actions executed against one browser session.",
           "minItems" => 1,
           "maxItems" => @max_steps,
           "items" => %{

@@ -128,6 +128,24 @@ defmodule LemonControlPlane.Protocol.Schemas do
         "cwd" => :string
       }
     },
+    "providers.configure" => %{
+      required: %{"action" => :string},
+      optional: %{
+        "provider" => :string,
+        "providers" => :list,
+        "pool" => :string,
+        "strategy" => :string,
+        "credentialRef" => :string,
+        "expectedRevision" => :string,
+        "apply" => :boolean,
+        "activate" => :boolean,
+        "confirm" => :string,
+        "scope" => :string,
+        "projectDir" => :string,
+        "project_dir" => :string,
+        "cwd" => :string
+      }
+    },
     "extensions.status" => %{
       optional: %{
         "cwd" => :string,
@@ -138,6 +156,49 @@ defmodule LemonControlPlane.Protocol.Schemas do
       }
     },
     "memory.status" => %{optional: %{}},
+
+    # User-managed profiles
+    "profiles.list" => %{optional: %{}},
+    "profiles.get" => %{required: %{"id" => :string}, optional: %{}},
+    "profiles.create" => %{
+      required: %{"id" => :string},
+      optional: %{
+        "name" => :string,
+        "description" => :string,
+        "avatar" => :string,
+        "model" => :string,
+        "systemPrompt" => :string,
+        "node" => :string
+      }
+    },
+    "profiles.clone" => %{
+      required: %{"sourceId" => :string, "id" => :string},
+      optional: %{
+        "name" => :string,
+        "description" => :string,
+        "avatar" => :string,
+        "model" => :string,
+        "systemPrompt" => :string,
+        "node" => :string
+      }
+    },
+    "profiles.rename" => %{required: %{"id" => :string, "name" => :string}, optional: %{}},
+    "profiles.export" => %{
+      required: %{"id" => :string, "path" => :string},
+      optional: %{"force" => :boolean}
+    },
+    "profiles.delete" => %{
+      required: %{"id" => :string, "confirm" => :string},
+      optional: %{}
+    },
+    "profiles.roster" => %{optional: %{}},
+    "profile.chat" => %{
+      required: %{"id" => :string, "prompt" => :string},
+      optional: %{
+        "model" => :string,
+        "queueMode" => :string
+      }
+    },
 
     # Agent methods
     "agents.list" => %{optional: %{}},
@@ -491,13 +552,82 @@ defmodule LemonControlPlane.Protocol.Schemas do
         "env" => :map
       }
     },
+    "blueprints.list" => %{},
+    "blueprints.inspect" => %{
+      required: %{
+        "bundleId" => :string
+      }
+    },
+    "blueprints.validate" => %{
+      required: %{
+        "bundleId" => :string
+      }
+    },
+    "blueprints.preview" => %{
+      required: %{
+        "bundleId" => :string,
+        "profileId" => :string
+      }
+    },
+    "blueprints.activate" => %{
+      required: %{
+        "bundleId" => :string,
+        "profileId" => :string,
+        "confirmationDigest" => :string
+      }
+    },
+    "learn.review" => %{
+      required: %{"references" => :list},
+      optional: %{
+        "root" => :string,
+        "agentId" => :string,
+        "sessionKey" => :string,
+        "project" => :boolean,
+        "maxBytes" => :integer,
+        "maxInputBytes" => :integer,
+        "maxItems" => :integer,
+        "maxPages" => :integer,
+        "maxDepth" => :integer,
+        "timeoutMs" => :integer
+      }
+    },
+    "learn.confirm" => %{
+      required: %{
+        "references" => :list,
+        "confirmationDigest" => :string
+      },
+      optional: %{
+        "root" => :string,
+        "agentId" => :string,
+        "sessionKey" => :string,
+        "project" => :boolean,
+        "maxBytes" => :integer,
+        "maxInputBytes" => :integer,
+        "maxItems" => :integer,
+        "maxPages" => :integer,
+        "maxDepth" => :integer,
+        "timeoutMs" => :integer
+      }
+    },
 
     # Session methods
     "sessions.list" => %{
       optional: %{
         "limit" => :integer,
         "offset" => :integer,
-        "agentId" => :string
+        "agentId" => :string,
+        "query" => :string,
+        "pinned" => :boolean,
+        "archived" => :boolean
+      }
+    },
+    "sessions.stats" => %{
+      optional: %{
+        "agentId" => :string,
+        "query" => :string,
+        "pinned" => :boolean,
+        "archived" => :boolean,
+        "groupLimit" => :integer
       }
     },
     "sessions.preview" => %{
@@ -516,6 +646,35 @@ defmodule LemonControlPlane.Protocol.Schemas do
         "toolPolicy" => :map,
         "model" => :string,
         "thinkingLevel" => :string
+      }
+    },
+    "sessions.metadata.patch" => %{
+      required: %{
+        "sessionKey" => :string
+      },
+      optional: %{
+        "title" => :any,
+        "pinned" => :boolean,
+        "archived" => :boolean
+      }
+    },
+    "sessions.export" => %{
+      required: %{
+        "sessionKey" => :string
+      },
+      optional: %{
+        "format" => :string
+      }
+    },
+    "sessions.prune" => %{
+      required: %{
+        "olderThanMs" => :integer
+      },
+      optional: %{
+        "archivedOnly" => :boolean,
+        "includePinned" => :boolean,
+        "dryRun" => :boolean,
+        "confirmToken" => :string
       }
     },
     "sessions.reset" => %{
@@ -1055,6 +1214,17 @@ defmodule LemonControlPlane.Protocol.Schemas do
       optional: %{
         "result" => :any,
         "error" => :string
+      }
+    },
+    "node.invoke.control.result" => %{
+      required: %{
+        "controlId" => :string,
+        "invokeId" => :string,
+        "runId" => :string,
+        "accepted" => :boolean
+      },
+      optional: %{
+        "reason" => :string
       }
     },
     "node.event" => %{

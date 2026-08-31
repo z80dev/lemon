@@ -1,8 +1,10 @@
 # Secrets + Keychain Audit Matrix
 
-_Last updated: 2026-02-25_
+_Last updated: 2026-08-30_
 
-This document captures the current, tested contract for Lemon secret resolution across keychain, encrypted store, and environment fallback paths.
+This document captures the current, tested contract for Lemon secret resolution
+across keychain, encrypted store, explicitly enabled external sources, and
+environment fallback paths.
 
 ## Flow Matrix
 
@@ -11,8 +13,10 @@ This document captures the current, tested contract for Lemon secret resolution 
 | macOS Keychain master key | `LemonCore.Secrets.MasterKey.init/1` -> `Keychain.put_master_key/2` | `LemonCore.Secrets.MasterKey.resolve/1` -> `Keychain.get_master_key/1` | On `:missing` / `:keychain_unavailable` / command failures, tries env master key, then local file | `apps/lemon_core/lib/lemon_core/secrets/keychain.ex`, `apps/lemon_core/lib/lemon_core/secrets/master_key.ex` |
 | Master key env fallback | Manual set of `LEMON_SECRETS_MASTER_KEY` (external) | `MasterKey.resolve/1` via `resolve_from_env/1` | On missing env, tries `~/.lemon/secrets_master_key`; malformed env still fails as `:invalid_master_key` | `apps/lemon_core/lib/lemon_core/secrets/master_key.ex` |
 | Local master key file fallback | `~/.lemon/secrets_master_key` | `MasterKey.resolve/1` via local file fallback | Returns `:missing_master_key` or `:invalid_master_key` when no valid source exists | `apps/lemon_core/lib/lemon_core/secrets/master_key.ex` |
-| Encrypted secret store | `LemonCore.Secrets.set/3` (AES-256-GCM at rest) | `LemonCore.Secrets.get/2`, `resolve/2`, `exists?/2` | `resolve/2` can fallback to env by same secret name (`env_fallback: true`) | `apps/lemon_core/lib/lemon_core/secrets.ex` |
-| Coding Agent provider secret refs | Configured `api_key_secret` names in provider config | `CodingAgent.Session.resolve_secret_api_key/1` -> `LemonCore.Secrets.resolve/2` | Store first, env fallback enabled | `apps/coding_agent/lib/coding_agent/session.ex` |
+| Encrypted secret store | `LemonCore.Secrets.set/3` (AES-256-GCM at rest) | `LemonCore.Secrets.get/2`, `resolve/2`, `exists?/2` | `resolve/2` uses store, enabled external sources, then same-name env when `env_fallback: true` | `apps/lemon_core/lib/lemon_core/secrets.ex` |
+| External secret sources | Read-only; no external result is persisted | `LemonCore.Secrets.External` invokes 1Password, Bitwarden, or argv-only command adapters under shared supervision | Ordered by priority/id; a source miss continues, but any enabled-source failure stops before env fallback | `apps/lemon_core/lib/lemon_core/secrets/external.ex`, `apps/lemon_core/lib/lemon_core/secrets/source_runner.ex` |
+| External bootstrap credentials | Existing Lemon encrypted secret or same-name env only | `LemonCore.Secrets.resolve_local/2` from a source adapter | Never invokes an external source, preventing recursion | `apps/lemon_core/lib/lemon_core/secrets.ex`, `apps/lemon_core/lib/lemon_core/secrets/source/` |
+| Coding Agent provider secret refs | Configured `api_key_secret` names in provider config | `CodingAgent.Session.resolve_secret_api_key/1` -> `LemonCore.Secrets.resolve/2` | Store first, enabled external sources second, env fallback last | `apps/coding_agent/lib/coding_agent/session.ex` |
 
 ## Keychain Error Semantics (Current Contract)
 
@@ -56,6 +60,12 @@ Additional nuance:
 - `mix lemon.secrets.init` is the preferred bootstrap path everywhere: it stores the generated key in the keychain on macOS and writes the key file (`0600`) on other platforms. It refuses to overwrite an existing key file unless `--force` is passed.
 - For local non-macOS development, keep `~/.lemon/secrets_master_key` as the canonical master key file. `bin/lemon` will export that value into `LEMON_SECRETS_MASTER_KEY` before boot when the file exists.
 - `secrets.list` and `secrets.status` return metadata only (never plaintext secret values).
+- `lemon secrets sources status|test` returns only source readiness,
+  provenance, counts, byte counts, duration, and stable error kinds. Combined
+  stdout/stderr and resolved values are never included.
+- External commands are direct argv execution with exact configuration,
+  minimal child environments, `100..30000` ms timeouts, `1..1048576` byte
+  output bounds, and an optional bounded process-local cache that defaults off.
 - If keychain prompts are denied (`User interaction is not allowed`), Lemon can still operate via env fallback when configured.
 
 ## Validation References
@@ -63,3 +73,7 @@ Additional nuance:
 - `apps/lemon_core/test/lemon_core/secrets/keychain_test.exs`
 - `apps/lemon_core/test/lemon_core/secrets/master_key_test.exs`
 - `apps/lemon_core/test/lemon_core/secrets_test.exs`
+- `apps/lemon_core/test/lemon_core/secrets/external_test.exs`
+- `apps/lemon_core/test/lemon_core/secrets/source_contract_test.exs`
+- `apps/lemon_core/test/lemon_core/config/secrets_test.exs`
+- `apps/lemon_cli/test/lemon_cli/secret_sources_command_test.exs`

@@ -128,9 +128,7 @@ defmodule LemonAgent.AgentRedirectTest do
 
       # Redirect with no run active: should queue as a follow-up
       :ok = CoreAgent.redirect(agent, user_message("Queued while idle"))
-
-      # Give the cast time to land before prompting
-      Process.sleep(50)
+      assert length(:sys.get_state(agent).follow_up_queue) == 1
 
       :ok = CoreAgent.prompt(agent, "Hello")
       assert :ok = CoreAgent.wait_for_idle(agent, timeout: 10_000)

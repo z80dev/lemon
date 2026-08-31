@@ -234,6 +234,131 @@ defmodule LemonCore.NodeRegistryTest do
     assert_receive {:lemon_node_result, ^invoke_id, {:error, :user_requested}}
   end
 
+  test "pins invocation controls to run identity and authenticated connection generation" do
+    other = spawn(fn -> Process.sleep(:infinity) end)
+    assert :ok = NodeRegistry.register_session("control-node", "control-newphy", self(), 7)
+
+    assert {:ok, invoke_id} =
+             NodeRegistry.invoke("control-newphy", "coding_agent.run", %{"runId" => "run-1"})
+
+    assert_receive {:node_event, "node.invoke.request", %{"invokeId" => ^invoke_id}}
+
+    assert {:ok, control_id} = NodeRegistry.control(invoke_id, :steer, "tighten the proof")
+
+    assert_receive {:node_event, "node.invoke.control",
+                    %{
+                      "controlId" => ^control_id,
+                      "invokeId" => ^invoke_id,
+                      "runId" => "run-1",
+                      "operation" => "steer",
+                      "text" => "tighten the proof"
+                    }}
+
+    assert {:error, :stale_session} =
+             NodeRegistry.complete_control_session(
+               "control-node",
+               other,
+               7,
+               control_id,
+               invoke_id,
+               "run-1",
+               true
+             )
+
+    assert :ok =
+             NodeRegistry.complete_control_session(
+               "control-node",
+               self(),
+               7,
+               control_id,
+               invoke_id,
+               "run-1",
+               true
+             )
+
+    assert_receive {:lemon_node_control_result, ^control_id, ^invoke_id, :ok}
+    Process.exit(other, :kill)
+  end
+
+  test "fails pending controls closed when invocation becomes terminal" do
+    assert :ok = NodeRegistry.register("node-1", "newphy", self())
+
+    assert {:ok, invoke_id} =
+             NodeRegistry.invoke("newphy", "coding_agent.run", %{"runId" => "run-1"})
+
+    assert_receive {:node_event, "node.invoke.request", %{"invokeId" => ^invoke_id}}
+    assert {:ok, control_id} = NodeRegistry.control(invoke_id, :redirect, "change course")
+    assert_receive {:node_event, "node.invoke.control", %{"controlId" => ^control_id}}
+
+    assert :ok = NodeRegistry.complete("node-1", invoke_id, %{"ok" => true})
+    assert_receive {:lemon_node_control_result, ^control_id, ^invoke_id, {:error, :terminal}}
+    assert_receive {:lemon_node_result, ^invoke_id, {:ok, %{"ok" => true}}}
+    assert {:error, :terminal} = NodeRegistry.control(invoke_id, :steer, "too late")
+  end
+
+  test "times out an unacknowledged control without claiming acceptance" do
+    assert :ok = NodeRegistry.register("node-1", "newphy", self())
+
+    assert {:ok, invoke_id} =
+             NodeRegistry.invoke("newphy", "coding_agent.run", %{"runId" => "run-timeout"})
+
+    assert_receive {:node_event, "node.invoke.request", %{"invokeId" => ^invoke_id}}
+
+    assert {:ok, control_id} =
+             NodeRegistry.control(invoke_id, :steer, "acknowledge me", timeout_ms: 10)
+
+    assert_receive {:node_event, "node.invoke.control", %{"controlId" => ^control_id}}
+
+    assert_receive {:lemon_node_control_result, ^control_id, ^invoke_id, {:error, :timeout}},
+                   1_000
+
+    assert :ok = NodeRegistry.complete("node-1", invoke_id, %{"ok" => true})
+    assert_receive {:lemon_node_result, ^invoke_id, {:ok, %{"ok" => true}}}
+  end
+
+  test "fails pending controls closed when the owning connection disconnects" do
+    parent = self()
+    node = spawn(fn -> relay(parent, :control_connection) end)
+    assert :ok = NodeRegistry.register("node-1", "newphy", node)
+
+    assert {:ok, invoke_id} =
+             NodeRegistry.invoke("newphy", "coding_agent.run", %{"runId" => "run-disconnect"})
+
+    assert_receive {:control_connection,
+                    {:node_event, "node.invoke.request", %{"invokeId" => ^invoke_id}}}
+
+    assert {:ok, control_id} =
+             NodeRegistry.control(invoke_id, :redirect, "change direction")
+
+    assert_receive {:control_connection,
+                    {:node_event, "node.invoke.control", %{"controlId" => ^control_id}}}
+
+    Process.exit(node, :kill)
+
+    assert_receive {:lemon_node_control_result, ^control_id, ^invoke_id,
+                    {:error, {:node_disconnected, :disconnected}}},
+                   1_000
+
+    assert_receive {:lemon_node_result, ^invoke_id,
+                    {:error, {:node_disconnected, :disconnected}}},
+                   1_000
+  end
+
+  test "rejects oversized correction text before it crosses the node boundary" do
+    assert :ok = NodeRegistry.register("node-1", "newphy", self())
+
+    assert {:ok, invoke_id} =
+             NodeRegistry.invoke("newphy", "coding_agent.run", %{"runId" => "run-1"})
+
+    assert_receive {:node_event, "node.invoke.request", %{"invokeId" => ^invoke_id}}
+    oversized = String.duplicate("x", NodeRegistry.max_control_text_bytes() + 1)
+
+    assert {:error, {:text_too_large, 16_384}} =
+             NodeRegistry.control(invoke_id, :steer, oversized)
+
+    refute_receive {:node_event, "node.invoke.control", _payload}
+  end
+
   defp relay(parent, tag) do
     receive do
       message ->

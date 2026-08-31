@@ -2,6 +2,16 @@
 
 HTTP and WebSocket control plane API server for the Lemon agent system. Provides a frame-based JSON protocol over WebSocket for real-time bidirectional communication.
 
+## Review-first source learning
+
+`learn.review` (read scope) resolves bounded context references and returns a
+content-free proposal with provenance hashes, memory/draft actions, audit rule
+codes, conflicts, and an exact confirmation digest. `learn.confirm` (admin
+scope) recomputes the source and destination state, then writes through the
+existing durable-memory and synthesis-draft stores only when that digest still
+matches. Neither response includes source text, prompts, paths, URLs, or
+secrets.
+
 ## Overview
 
 LemonControlPlane is the external interface through which clients (terminal UI, web dashboards, mobile apps, browser extensions) interact with the Lemon agent runtime. It exposes 100+ JSON-RPC-style methods over WebSocket for submitting agent runs, managing sessions, configuring the system, scheduling cron jobs, pairing nodes/devices, and streaming real-time events.
@@ -371,6 +381,7 @@ Each method declares required scopes. A connection must have at least one matchi
 | `logs.tail` | read | Tail recent log lines with filter summary, cleanup flags, and sensitive log-value redaction |
 | `models.list` | read | List available AI models plus capability/provider summaries |
 | `providers.status` | read | Redacted provider credential readiness, route preview, fallback candidates, config-shape diagnostics, live fallback proof status, and top-level summary |
+| `providers.configure` | admin | Preview or apply fallback/pool/reference edits through the shared comment-preserving service; `expectedRevision` rejects stale applies, destructive changes require exact confirmation, and responses omit credential references |
 | `memory.status` | read | Redacted memory-provider registry metadata plus provider health and searchable-scope summaries |
 | `proofs.status` | read | Redacted live-proof diagnostics with top-level counts and launch-gate summaries for Discord DM, Discord slash registration, Discord client-click, provider media, and terminal backends |
 | `readiness.status` | read | Compact launch-readiness summary for doctor, Telegram/Discord gates, shared proof-gate counts/statuses, provider-media proof, proof totals, unresolved gates with summary reason-kind lists, and cleanup flags |
@@ -405,15 +416,18 @@ Each method declares required scopes. A connection must have at least one matchi
 
 | Method | Scope | Description |
 |--------|-------|-------------|
-| `sessions.list` | read | List all sessions with pagination plus summary and cleanup flags |
+| `sessions.list` | read | List/search sessions with lifecycle metadata and pin/archive filters; raw search text is not echoed |
 | `sessions.active` | read | Get currently active session plus active-run cleanup summary |
 | `sessions.active.list` | read | List all active sessions with harness progress plus summary and cleanup flags |
 | `sessions.preview` | read | Preview truncated session messages plus sensitive-preview redaction, truncation summary, and cleanup flags |
 | `session.detail` | read | Deep session/run internals with summary, sensitive preview/run-internal redaction, and explicit opt-ins for full text, raw run events, and run records |
 | `sessions.patch` | admin | Modify session policy/model/thinking overrides plus patch summary and cleanup flags |
+| `sessions.metadata.patch` | admin | Set/clear title and update pin/archive state without echoing title text in the mutation response |
+| `sessions.export` | read | Return bounded, always-redacted JSON or Markdown with selected tool fields, digest, and omission summary |
+| `sessions.prune` | admin | Preview or execute stale-session pruning with archived-only/unpinned defaults and an exact-candidate confirmation token |
 | `sessions.reset` | admin | Clear session history plus cleanup summary |
 | `sessions.heartbeat` | admin | Inspect or set/pause/resume/clear one live durable session's idle-only recurring prompt; accepts the logical client session key and fails closed on ambiguity |
-| `sessions.delete` | admin | Delete a session plus cleanup summary |
+| `sessions.delete` | admin | Delete and verify run history, chat state, policy, and lifecycle metadata |
 | `sessions.compact` | admin | Compact session storage plus no-text cleanup summary |
 | `session.btw` | write | Ask a bounded no-tools question against a frozen live session or durable session-key history without mutating the parent conversation |
 
@@ -536,6 +550,7 @@ when to render the full payload.
 | `node.rename` | write | Rename a node plus summary and cleanup flags |
 | `node.invoke` | write | Invoke a method on one authenticated live node plus arg/result cleanup summary |
 | `node.invoke.result` | invoke | Owning node reports an invocation result; results from another node are rejected |
+| `node.invoke.control.result` | invoke | Owning node acknowledges steer/redirect against the exact live invocation and run |
 | `node.event` | event | Node sends an event (node-only) plus payload summary and cleanup flags |
 | `node.pair.request` | pairing | Request to pair a node plus pairing-code delivery summary |
 | `node.pair.list` | pairing | List pending pairing requests plus summary and cleanup flags |
@@ -548,7 +563,11 @@ the same uniqueness while connections are online. A durable record alone is
 not executable: `node.invoke` fails with `UNAVAILABLE` unless its authenticated
 WebSocket is registered. Pending invocations are bound to their node ID, fail
 when that connection disconnects, and support targeted `node.invoke.cancel`
-delivery through the internal registry path.
+delivery through the internal registry path. Invocation-bound `steer` and
+`redirect` carry only bounded UTF-8 correction text and exact
+control/invocation/run identity. The controller reports success only after the
+owning authenticated worker applies the operation to its live native executor
+context.
 
 For coding delegation the supported worker method is versioned
 `coding_agent.run`. The WebSocket payload contains JSON-safe execution request
@@ -596,6 +615,31 @@ are never copied into the JSON-RPC response.
 | `skills.bins` | read | Get skill bin paths plus bin/requirement counts and cleanup summary |
 | `skills.install` | admin | Install a skill plus install-source return-state and approval-context cleanup summary |
 | `skills.update` | admin | Update/configure a skill plus env-key/update-mode summary with sensitive env response redaction |
+
+### Portable Blueprints
+
+| Method | Scope | Description |
+|--------|-------|-------------|
+| `blueprints.list` | read | List valid versioned bundles in the canonical local catalog without returning paths or content |
+| `blueprints.inspect` | read | Inspect one `bundleId` with normalized manifest, provenance, and cleanup summaries |
+| `blueprints.validate` | read | Re-run manifest, lint, policy, and deterministic skill audit for one `bundleId` |
+| `blueprints.preview` | read | Return the exact profile skill + cron plan and fresh `confirmationDigest` |
+| `blueprints.activate` | admin | Re-plan and activate only when the exact confirmation digest still matches |
+
+Blueprint RPC never accepts `root` or `path`. It resolves a safe `bundleId`
+directly below `~/.lemon/bundles`, rejects traversal, symlinked catalog entries,
+and manifest/directory ID mismatches, and returns no absolute paths, skill
+bodies, prompt text, commands, or secret values. Activation targets a derived
+profile workspace and creates the disabled or enabled agent cron definition
+only through the create-once `CronManager` API. See the
+[skills user guide](../../docs/user-guide/skills.md#portable-skill-and-automation-bundles).
+Source and packaged `lemon blueprints` commands are thin authenticated clients
+of these methods; a bundle ID previews by default, and activation requires the
+fresh plan's exact confirmation digest.
+The Bun TUI exposes the same boundary through `/blueprints` and `/blueprint`.
+It renders only bounded IDs, counts, actions, booleans, and digests; re-previews
+immediately before activation; never queues the admin mutation offline; and
+preserves the profile draft when a plan is refused or stale.
 
 ### Events and Subscriptions
 
@@ -826,6 +870,9 @@ mix test apps/lemon_control_plane
 
 # Run a specific test file
 mix test apps/lemon_control_plane/test/lemon_control_plane/methods/control_plane_methods_test.exs
+
+# Safe catalog resolution, exact confirmation, and duplicate-safe activation
+mix test apps/lemon_control_plane/test/lemon_control_plane/methods/blueprints_test.exs --seed 1
 ```
 
 The server starts automatically via the OTP application supervision tree. Connect with any WebSocket client to `ws://localhost:4040/ws` and send a `connect` request to begin.

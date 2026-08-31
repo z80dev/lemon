@@ -428,7 +428,7 @@ silent permissions.
 | `lemon_automation` | `lemon_agent`, `lemon_core`, `lemon_router`, `lemon_skills` | `lemon_agent`, `lemon_core`, `lemon_router`, `lemon_skills` | *(none)* |
 | `lemon_browser` | `lemon_core` | `lemon_core` | *(none)* |
 | `lemon_channels` | `lemon_agent`, `lemon_core`, `lemon_media` | `lemon_agent`, `lemon_core`, `lemon_media` | *(none)* |
-| `lemon_cli` | `lemon_ai`, `lemon_core`, `lemon_memory` | `lemon_ai`, `lemon_core`, `lemon_memory` | *(none)* |
+| `lemon_cli` | `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_memory`, `lemon_skills` | `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_memory`, `lemon_skills` | *(none)* |
 | `lemon_control_plane` | `lemon_agent`, `lemon_ai`, `lemon_automation`, `lemon_browser`, `lemon_channels`, `lemon_core`, `lemon_lsp`, `lemon_media`, `lemon_memory`, `lemon_router`, `lemon_skills` | `lemon_agent`, `lemon_ai`, `lemon_automation`, `lemon_browser`, `lemon_channels`, `lemon_core`, `lemon_lsp`, `lemon_media`, `lemon_memory`, `lemon_router`, `lemon_skills` | *(none)* |
 | `lemon_core` | *(none)* | *(none)* | *(none)* |
 | `lemon_evals` | `coding_agent`, `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_skills` | `coding_agent`, `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_skills` | *(none)* |
@@ -444,7 +444,7 @@ silent permissions.
 | `lemon_sim_ui` | `lemon_ai`, `lemon_core`, `lemon_sim` | `lemon_ai`, `lemon_core`, `lemon_sim` | *(none)* |
 | `lemon_skills` | `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_media`, `lemon_memory` | `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_media`, `lemon_memory` | *(none)* |
 | `lemon_tcg` | `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_sim` | `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_sim` | *(none)* |
-| `lemon_web` | `lemon_core`, `lemon_router` | `lemon_core`, `lemon_router` | *(none)* |
+| `lemon_web` | `lemon_agent`, `lemon_automation`, `lemon_core`, `lemon_memory`, `lemon_router` | `lemon_agent`, `lemon_automation`, `lemon_core`, `lemon_memory`, `lemon_router` | *(none)* |
 | `x_api` | `lemon_agent`, `lemon_ai`, `lemon_channels`, `lemon_core`, `lemon_platform_test` | `lemon_agent`, `lemon_ai`, `lemon_channels`, `lemon_core`, `lemon_platform_test` | *(none)* |
 <!-- architecture_policy:end -->
 
@@ -2133,9 +2133,10 @@ The largest remaining differences are product integration and usability:
 - Hermes exposes an extensive coherent CLI. Lemon's packaged CLI covers setup,
   model, gateway, doctor, config, secrets, and channels; additional operations
   are split across the source wrapper, Mix tasks, TUI, and JSON-RPC.
-- Hermes has richer session search/export/archive/prune, update/backup/profile
-  lifecycle, external secret sources, and an outbound credential-injection
-  proxy.
+- Hermes has richer update/profile lifecycle and an outbound
+  credential-injection proxy. Lemon now has read-only 1Password, Bitwarden, and
+  argv-only command sources behind its encrypted store, but no general egress
+  broker that withholds credentials from arbitrary remote/browser/tool work.
 - Hermes documentation has a more complete install-to-daily-use information
   architecture and many more task guides. Lemon's architecture and proof docs
   are deep, but some user workflows remain under-documented.
@@ -2175,8 +2176,8 @@ Do not choose Lemon yet if your requirement depends on:
 - isolated user-created profiles/bots with clone/export/delete and group-chat UX
 - complete session search/export/archive/pin/prune workflows
 - an integrated update-plan/rollback and whole-data backup/restore lifecycle
-- 1Password/Bitwarden/command-backed secret sources or a general egress
-  credential broker
+- a general egress credential broker that withholds real credentials from
+  arbitrary remote/browser/tool execution
 - a hosted managed service
 - Discord behavior beyond the live-proven text-first and file-delivery boundary
 
@@ -2672,11 +2673,18 @@ Lemon uses a single canonical configuration file in TOML format. Configuration i
 1. Global: `~/.lemon/config.toml`
 2. Project: `<project>/.lemon/config.toml` (overrides global)
 3. Environment variables (override file values; `.env` may auto-populate missing env vars at startup)
-4. Lemon secrets referenced from config (for secret-backed fields)
+4. Credential references resolved through Lemon's encrypted store, explicitly
+   enabled external sources, and the ordinary same-name environment fallback
 
 Runtime state and policy are separate from config. Per-session or per-route "current"
 model/thinking values override config defaults at runtime, but they are not persisted in
 `config.toml`.
+
+Operational backup policy is also intentionally separate from TOML. Use
+`lemon backup contract|create|list|verify|restore`; there are no implicit
+backup directories or credential-inclusion settings in `config.toml`. See
+[Back up and restore Lemon user state](user-guide/backups.md) for the versioned
+`~/.lemon` data contract.
 
 ## Example
 
@@ -2844,6 +2852,17 @@ transport = "telegram"
 chat_id = 12345678
 agent_id = "default"
 ```
+
+`LemonCore.ProfileStore` is the lifecycle owner for user-managed profiles.
+Commands such as `lemon profile create research` patch only the selected
+`[profiles.<id>]` table, preserving unrelated global-config keys and comments.
+Managed records may include `name`, `description`, `avatar`, `model`,
+`system_prompt`, `node`, `status`, `profile_version`, `created_at`, and
+`updated_at`. Home/workspace paths and the stable `agent:<id>:main` session key
+are derived from the validated ID rather than stored; do not add credentials or
+filesystem paths to the profile table. See
+[User-managed profiles](user-guide/profiles.md) for clone, credential-safe
+export, recoverable deletion, and named-node routing.
 
 ## Native Execution and Subagents
 
@@ -3032,6 +3051,7 @@ Use only these top-level sections:
 - `defaults`
 - `runtime`
 - `features`
+- `secrets.sources.<source_id>`
 - `profiles.<agent_id>`
 - `providers.<name>`
 - `gateway`
@@ -3044,6 +3064,128 @@ Deprecated sections now fail validation and runtime loading:
 - `[agents.<id>]` -> move to `[profiles.<id>]`
 - `[agent.tools.*]` -> move to `[runtime.tools.*]`
 - `[tools.*]` -> move to `[runtime.tools.*]`
+
+## External secret sources
+
+External sources are read-only adapters integrated into
+`LemonCore.Secrets.resolve/2`; they are not another secret store. Resolution is
+ordered as follows:
+
+1. Lemon's encrypted store;
+2. enabled external sources ordered by `priority`, then source id;
+3. the same-name environment variable when `env_fallback` is enabled.
+
+A successful source that does not contain the requested name continues to the
+next source. Any enabled source configuration, spawn, timeout, output, parse,
+or bootstrap failure stops resolution before the ordinary environment
+fallback. This fail-closed behavior prevents an unhealthy configured manager
+from being silently bypassed. `env_fallback: false` disables both the external
+and environment fallbacks; internal bootstrap reads use only the encrypted
+store and ordinary environment path so sources cannot recurse.
+
+Every source requires the exact TOML boolean `enabled = true`. A quoted
+`"true"`, unknown setting, unknown source type, relative executable path with a
+slash, shell command string, or out-of-range limit fails validation. Programs
+are started directly from an argv array, never through a shell. Each child gets
+only a small operating environment (`HOME`, platform path/temp/locale fields,
+and `NO_COLOR`) plus explicitly passed variables. Stdout and stderr are
+captured together under one byte limit and are never returned in errors,
+status, logs, or proof output.
+
+Common source settings:
+
+| Setting | Default | Contract |
+| --- | --- | --- |
+| `type` | required | `onepassword`, `bitwarden`, or `command` |
+| `enabled` | `false` | Only the exact boolean `true` enables execution |
+| `priority` | `100` | Integer `0..1000`; lower runs first |
+| `executable` | provider default | Absolute path or bare executable name |
+| `timeout_ms` | `3000` | Integer `100..30000` |
+| `max_output_bytes` | `65536` | Integer `1..1048576`, stdout and stderr combined |
+| `cache_ttl_ms` | `0` | Integer `0..300000`; `0` disables caching |
+
+The optional cache is bounded to 32 process-local entries and disappears on
+restart. It never persists source values to config or the encrypted store.
+
+### 1Password
+
+Map each Lemon secret name to an `op://` reference. Lemon invokes `op read
+--no-newline [--account ACCOUNT] -- REFERENCE` separately for each mapping.
+If `auth_secret` is set, Lemon resolves that bootstrap credential only from its
+existing encrypted store or same-name environment fallback and gives it to the
+child as `auth_env`. Without `auth_secret`, an already authenticated local `op`
+session or the named ambient auth variable may be used.
+
+```toml
+[secrets.sources.onepassword]
+type = "onepassword"
+enabled = true
+priority = 10
+executable = "op"
+timeout_ms = 3000
+max_output_bytes = 65536
+cache_ttl_ms = 0
+account = "team"
+auth_secret = "op_service_account_token"
+auth_env = "OP_SERVICE_ACCOUNT_TOKEN"
+refs = { anthropic_api_key = "op://Lemon/Anthropic/api-key", openai_api_key = "op://Lemon/OpenAI/api-key" }
+```
+
+### Bitwarden Secrets Manager
+
+Bitwarden uses `bws secret list PROJECT_ID --output json` and accepts only a
+JSON list of unique non-empty `{"key": ..., "value": ...}` objects. Store the
+bootstrap access token in Lemon under `access_token_secret`, or provide the
+same-name environment variable. `access_token_env` controls the variable name
+passed to `bws`; an optional `server_url` must be credential-free HTTPS with no
+query or fragment.
+
+```toml
+[secrets.sources.bitwarden]
+type = "bitwarden"
+enabled = true
+priority = 20
+executable = "bws"
+project_id = "team-project-id"
+access_token_secret = "bws_access_token"
+access_token_env = "BWS_ACCESS_TOKEN"
+# server_url = "https://vault.example.com"
+```
+
+### Arbitrary command
+
+Command sources accept only an argv array. Output is UTF-8 `NAME=VALUE`, one
+entry per line; blank lines and lines beginning with `#` are ignored. Names
+must be unique and values non-empty. `pass_env` copies only the listed ambient
+variables. `secret_env` maps a child environment name to an existing Lemon
+encrypted-store/same-name-environment secret; it never resolves another
+external source.
+
+```toml
+[secrets.sources.local_helper]
+type = "command"
+enabled = true
+priority = 30
+argv = ["/usr/local/bin/lemon-secret-helper", "export", "--profile", "prod"]
+timeout_ms = 2000
+max_output_bytes = 32768
+cache_ttl_ms = 0
+pass_env = ["HELPER_PROFILE"]
+secret_env = { HELPER_TOKEN = "helper_bootstrap_token" }
+```
+
+Inspect readiness without invoking any source, then perform a redaction-safe
+live test:
+
+```bash
+lemon secrets sources status --json
+lemon secrets sources test --json
+lemon secrets sources test local_helper
+```
+
+These commands reveal source id/type, readiness, provenance, counts, output
+byte count, duration, and stable error kinds only. They never reveal secret
+values. `lemon secrets check` reports a resolved credential only as `present`.
 
 ## Dotenv Autoload
 
@@ -3177,8 +3319,9 @@ Provider onboarding flows:
 - Write the relevant `providers.<provider>` config keys
 - Support `--set-default`, `--model`, and `--config-path`
 
-Provider readiness is visible through the read-only control-plane
-`providers.status` method. It uses the same
+Provider readiness is visible through the source and packaged
+`lemon providers status` command and the read-only control-plane
+`providers.status` method. They use the same
 `LemonAgent.ModelRuntime.Credentials` credential resolver as model execution, so env keys, encrypted
 secret references, OAuth/default-secret paths, and provider-specific credential
 shapes are checked the same way runtime calls check them. The response reports
@@ -3186,6 +3329,48 @@ booleans such as `credentialReady`, `apiKeyConfigured`,
 `apiKeySecretConfigured`, `oauthSecretConfigured`, `baseUrlConfigured`, and
 `envConfigured`; it does not return raw API keys, secret names, base URLs, or
 env var names.
+
+Fallbacks and credential-pool references can be edited through the same
+packaged/source command boundary:
+
+```bash
+# Installed release (use ./bin/lemon from a source checkout)
+lemon providers fallback add zai
+lemon providers pool set burst --provider openai --provider zai \
+  --strategy round_robin --activate
+lemon providers pool credential add burst openai secret:openai_backup
+lemon providers status --json
+```
+
+Only explicit `secret:NAME` and `env:NAME` references are accepted for pool
+credentials; values remain owned by the encrypted secret store or process
+environment. The command preserves unrelated comments, validates the complete
+resulting TOML, and atomically replaces the selected global or project config.
+Mutations apply by default; use `--dry-run` to preview. Removing a fallback,
+deleting or updating an existing pool, and removing or clearing credential
+references require the exact confirmation value shown by the preview:
+
+```bash
+lemon providers fallback remove zai --dry-run --json
+lemon providers fallback remove zai --confirm zai
+```
+
+The admin-scoped `providers.configure` control-plane method exposes the same
+actions (`fallback.add`, `fallback.remove`, `fallback.clear`, `pool.upsert`,
+`pool.delete`, `pool.credential.add`, `pool.credential.remove`, and
+`pool.credential.clear`). RPC mutations are preview-only unless `apply: true`
+is explicit. Remote callers may select `global` or `project` scope but cannot
+provide an arbitrary config path. Results expose provider and pool names plus
+counts; they never include raw keys, secret names, credential references, base
+URLs, or environment-variable names.
+
+Preview results include an opaque `configRevision`. A caller that passes it
+back as `expectedRevision` on apply gets an atomic stale-write guard: the shared
+service compares the revision while holding its target-config lock and rejects
+the mutation if any config content changed after preview. `/manage/providers`
+uses this contract for all Web mutations, then adds exact confirmation for
+destructive actions and requires credential-reference values to be re-entered
+instead of retaining them in LiveView state.
 
 Memory-provider readiness is visible through read-only `memory.status` and
 support-bundle `memory_diagnostics.json`. These surfaces expose
@@ -3220,7 +3405,9 @@ credential_pool = "burst"
 distribution = { openai = 70, zai = 20, anthropic = 10 }
 ```
 
-`providers.status` includes a redacted `routing` block with the requested
+`providers.status` and `lemon providers status` include a redacted
+`routingConfig` block for effective fallback/pool configuration and a `routing`
+block with the requested
 provider/model, selected provider/model, fallback candidates, candidate
 readiness booleans, selected routing profile, selected credential pool,
 profile distribution weights, pool provider names, pool strategy, and
@@ -9230,6 +9417,36 @@ export PATH="$HOME/.lemon/bin:$PATH"
 For lifecycle commands and release verification, see `lemon --help` and
 [Versioning and Channels](release/versioning_and_channels.md).
 
+## Updating an installed release
+
+Installer-managed releases use a preview-confirm lifecycle:
+
+```bash
+lemon update check
+lemon update plan
+lemon update apply --confirm <exact-plan-digest>
+lemon stop && lemon daemon
+```
+
+Plan does not write or download anything. Apply revalidates the exact active
+release and manifest under an exclusive lock, creates a verified private
+checkpoint, checks artifact size/SHA-256, rejects unsafe archive entries,
+verifies the staged launcher's version, and atomically moves only
+`versions/current`. Inspect private content-free receipts and roll back the
+exact recorded checkpoint with:
+
+```bash
+lemon update history
+lemon update rollback --receipt <apply-receipt-id> \
+  --confirm <rollback-digest>
+lemon stop && lemon daemon
+```
+
+Update rollback does not restore config, credentials, sessions, memory, or
+stores. Schema-2 manifests provide mandatory checksums/sizes but do not yet have
+a publisher signature. See [Safely update and roll back Lemon](user-guide/updates.md)
+for the full safety and residual contract.
+
 ## Source development
 
 Use a source checkout for Lemon development, unsupported platforms, or building
@@ -9432,6 +9649,7 @@ lemon gateway setup
 lemon config validate
 lemon secrets status
 lemon channels
+lemon providers status
 lemon doctor
 
 # Source checkout
@@ -9441,6 +9659,7 @@ lemon doctor
 ./bin/lemon config validate
 ./bin/lemon secrets status
 ./bin/lemon channels
+./bin/lemon providers status
 ./bin/lemon doctor
 ./bin/lemon node join --name worker-1 --controller ws://controller:4040/ws --pair --cwd /srv/project
 ```
@@ -9466,7 +9685,7 @@ Getting a fresh checkout or a fresh machine to a working agent.
 | `mix lemon.onboard.copilot` | Interactive onboarding for the GitHub Copilot provider. |
 | `mix lemon.onboard.gemini` | Interactive onboarding for the Google Gemini CLI provider. |
 | `mix lemon.onboard.antigravity` | Interactive onboarding for the Google Antigravity provider. |
-| `mix lemon.providers` | Show redacted provider readiness. |
+| `mix lemon.providers` | Show redacted provider readiness. This contributor task remains read-only; use `lemon providers` / `./bin/lemon providers` for fallback and credential-pool reference edits. |
 | `mix lemon.workspace` | Initialize `~/.lemon/agent/workspace` bootstrap files. |
 | `mix lemon.update` | Update Lemon: config migration and bundled-skill sync. |
 | `mix lemon.hermes.audit` | Audit Hermes data compatibility without writing files. |
@@ -19941,10 +20160,10 @@ must not be copied into new plans.
 | --- | --- | --- |
 | No programmatic tool calling | [`execute_code.ex`](../../apps/coding_agent/lib/coding_agent/tools/execute_code.ex) provides bounded Python RPC over an allowlist; [usage docs](../tools/execute-code.md) cover per-call and persistent kernels. | Disabled by default and its allowlist is smaller than the whole tool catalog, but the mechanism exists end to end. |
 | No progressive tool disclosure | [`tool_disclosure.ex`](../../apps/coding_agent/lib/coding_agent/tool_disclosure.ex) freezes a session catalog and substitutes `tool_search`/`tool_invoke` when schema cost crosses the configured budget. | Built-ins stay visible; deferred MCP/extension/WASM tools still pass the normal policy and approval path. |
-| No redirect interruption | [`AbortSignal`](../../apps/lemon_agent/lib/lemon_agent/abort_signal.ex), the [streaming loop](../../apps/lemon_agent/lib/lemon_agent/loop/streaming.ex), and [`CodingAgent.Session`](../../apps/coding_agent/lib/coding_agent/session.ex) implement redirect while preserving completed tool results and degrading to steer during tool execution. | Local native runs support it. Remote named-node steering/redirect remains an explicit boundary. |
-| Provider fallback was only a preview ordering | [`ProviderRouting`](../../apps/lemon_agent/lib/lemon_agent/model_runtime/provider_routing.ex) builds route candidates; [`ProviderFallback`](../../apps/coding_agent/lib/coding_agent/session/provider_fallback.ex) executes per-turn provider and credential failover with cooldowns and session pinning. | Runtime resilience is implemented; self-service pool/fallback administration is still weak. |
+| No redirect interruption | [`AbortSignal`](../../apps/lemon_agent/lib/lemon_agent/abort_signal.ex), the [streaming loop](../../apps/lemon_agent/lib/lemon_agent/loop/streaming.ex), and [`CodingAgent.Session`](../../apps/coding_agent/lib/coding_agent/session.ex) implement redirect while preserving completed tool results and degrading to steer during tool execution. | Local and named-node native runs support invocation-bound steer/redirect with authenticated destination acknowledgement and fail-closed terminal races. Control-plane chat methods and the TUI preserve redirect as a distinct mode; equivalent Web discoverability remains. |
+| Provider fallback was only a preview ordering | [`ProviderRouting`](../../apps/lemon_agent/lib/lemon_agent/model_runtime/provider_routing.ex) builds route candidates; [`ProviderFallback`](../../apps/coding_agent/lib/coding_agent/session/provider_fallback.ex) executes per-turn provider and credential failover with cooldowns and session pinning. Source/package CLI and token-required Web management now share preview-first pool/fallback configuration. | Runtime resilience and normal self-service administration are implemented; provider subscription OAuth and named MoA presets remain separate gaps. |
 | No same-provider credential rotation | [`ProviderPoolRotator`](../../apps/lemon_agent/lib/lemon_agent/model_runtime/provider_pool_rotator.ex) and session fallback implement pool rotation; [live test guidance](../testing.md) covers invalid-to-valid credential proof. | No Hermes-like `auth`/pool management UX in the packaged CLI or Web. |
-| Cron lacked monitor mode, command jobs, chaining, drift guard, and preflight | [`CronManager`](../../apps/lemon_automation/lib/lemon_automation/cron_manager.ex), [`CronMonitor`](../../apps/lemon_automation/lib/lemon_automation/cron_monitor.ex), [`CronContext`](../../apps/lemon_automation/lib/lemon_automation/cron_context.ex), [`CronPreflight`](../../apps/lemon_automation/lib/lemon_automation/cron_preflight.ex), and [`CronCommandRunner`](../../apps/lemon_automation/lib/lemon_automation/cron_command_runner.ex) implement all five. | Automation blueprints/suggestions and a simple recurring `/loop` UX remain gaps. |
+| Cron lacked monitor mode, command jobs, chaining, drift guard, and preflight | [`CronManager`](../../apps/lemon_automation/lib/lemon_automation/cron_manager.ex), [`CronMonitor`](../../apps/lemon_automation/lib/lemon_automation/cron_monitor.ex), [`CronContext`](../../apps/lemon_automation/lib/lemon_automation/cron_context.ex), [`CronPreflight`](../../apps/lemon_automation/lib/lemon_automation/cron_preflight.ex), and [`CronCommandRunner`](../../apps/lemon_automation/lib/lemon_automation/cron_command_runner.ex) implement all five. [`Blueprint`](../../apps/lemon_automation/lib/lemon_automation/blueprint.ex) now adds one exact-confirmed skill + agent-cron template exposed through source/package CLI, Web, and TUI. | Consent-first suggestions, richer template shapes, and a simple recurring `/loop` UX remain gaps. |
 | Multi-engine execution was a Lemon advantage | Lemon deliberately removed vendor-CLI engines and now has one native supervised executor with provider/model routing and in-process subagents. | This is a simplification and reliability choice, not a current multi-engine differentiator. |
 
 ## Functionality and product gap matrix
@@ -19954,22 +20173,22 @@ must not be copied into new plans.
 | User job | Hermes at pinned upstream | Lemon at pinned baseline | Status | Priority | Concrete next closure |
 | --- | --- | --- | --- | --- | --- |
 | Install on a supported computer and reach first chat | The [installer](https://hermes-agent.nousresearch.com/docs/getting-started/installation) covers one-line shell, PowerShell/native Windows, desktop installers, WSL, Nix/NixOS, Termux, Docker, and setup entry. Quick Portal setup can authorize model plus hosted search/image/TTS/browser services through one account; see pinned [quickstart](https://github.com/NousResearch/hermes-agent/blob/4f22543509d1b91dc45bcb369447126c5eb14fb7/website/docs/getting-started/quickstart.md). | [Install Lemon](../install.md) now provides verified one-line release installation, idempotent setup, and a first-TUI readiness gate for macOS and Linux artifacts. Provider credentials are configured individually; Linux requires the documented glibc baseline. No native Windows, Nix, Android, or desktop installer. | Partial | **High** | Add a platform-aware launcher UX, native Windows or an explicit supported WSL path, broader Linux compatibility, and an optional bundled account/OAuth path for a useful no-key first run. |
-| Discover and administer the product from one CLI | Hermes documents roughly sixty top-level families in its pinned [CLI reference](https://github.com/NousResearch/hermes-agent/blob/4f22543509d1b91dc45bcb369447126c5eb14fb7/website/docs/reference/cli-commands.md): chat, models/fallback/MoA, sessions, cron, profiles, skills, memory, approvals, backups, updates, logs, plugins, MCP, completions, and more. | Packaged [`LemonCli.CLI`](../../apps/lemon_cli/lib/lemon_cli/cli.ex) has seven families: setup, model, gateway, doctor, config, secrets, channels. Source `bin/lemon` adds node, send, media, model/provider inspection, policy, proofs, readiness, skill, usage, and update through Mix tasks. TUI commands cover additional runtime functions, but there is no single stable command map. | Partial | **High** | Promote the supported runtime surfaces into the packaged CLI, with consistent help, JSON output, exit codes, shell completions, and a generated reference. |
+| Discover and administer the product from one CLI | Hermes documents roughly sixty top-level families in its pinned [CLI reference](https://github.com/NousResearch/hermes-agent/blob/4f22543509d1b91dc45bcb369447126c5eb14fb7/website/docs/reference/cli-commands.md): chat, models/fallback/MoA, sessions, cron, profiles, skills, memory, approvals, backups, updates, logs, plugins, MCP, completions, and more. | Packaged [`LemonCli.CLI`](../../apps/lemon_cli/lib/lemon_cli/cli.ex) now covers setup, model/provider routing, gateway, doctor, config, secrets and external sources, channels, verified backup/restore, profiles/canonical chat, context references, learn-from-source, blueprints, durable session lifecycle/statistics, managed updates, and registry-generated Bash/Zsh/Fish completion. Source `bin/lemon` additionally exposes node, send, media, policy, proofs, readiness, skill, and usage through Mix tasks. | Near for daily administration; partial for broad operator families | **High** | Promote only the remaining stable source-only runtime surfaces—especially approvals, logs, MCP, and general cron—into the same help/JSON/errors/completion contract. |
 | Use a polished native daily-agent interface | The pinned [Desktop guide](https://github.com/NousResearch/hermes-agent/blob/4f22543509d1b91dc45bcb369447126c5eb14fb7/website/docs/user-guide/desktop.md) covers onboarding, tabs/panes, chat, artifacts, files, terminal, git/worktrees, reviews, memory, voice, settings, plugins, multi-profile concurrency, and remote connections. | Lemon has a capable Bun TUI, a session LiveView, JSON-RPC clients, and LemonSim UI. It has no native desktop product or a single interface that composes files, terminal, artifacts, git review, memory, settings, and remote connections. | Missing | **High** | Choose and ship a desktop/product-shell strategy. A wrapper is useful only if it owns onboarding, connection management, updates, file/artifact UX, and settings—not merely a WebView around chat. |
-| Create durable specialist agents and collaborate among them | [Bot Mode](https://hermes-agent.nousresearch.com/docs/user-guide/bot-mode) presents profiles as bots with independent config/model/memory/skills/SOUL, canonical chats, cron routines, DMs, groups, cross-machine roster, and remote creation. Profiles also have full [CLI lifecycle](https://hermes-agent.nousresearch.com/docs/reference/profile-commands). | Lemon has named agents/personas, native child sessions, router delegation, kanban, agent inboxes, and authenticated named execution nodes. It does not offer isolated user-managed agent homes, profile create/clone/export/delete, canonical bot chats, a roster, or group-room UX. | Partial | **High** | Define a first-class profile record over existing agent/node primitives, including isolated config/memory/skills, create/clone/export lifecycle, canonical chat, and TUI/Web roster before attempting group rooms. |
+| Create durable specialist agents and collaborate among them | [Bot Mode](https://hermes-agent.nousresearch.com/docs/user-guide/bot-mode) presents profiles as bots with independent config/model/memory/skills/SOUL, canonical chats, cron routines, DMs, groups, cross-machine roster, and remote creation. Profiles also have full [CLI lifecycle](https://hermes-agent.nousresearch.com/docs/reference/profile-commands). | Lemon now has a first-class profile record over its existing router agents and named nodes: isolated homes/workspaces, create/list/show/clone/rename/credential-safe-export/recoverable-delete, stable `agent:<id>:main` chats, named-node routing, a node-aware roster, packaged CLI/control-plane lifecycle, a TUI picker/editor, and preview-first token-required Web management. | **Near** across CLI/TUI/Web for lifecycle and canonical chat | **High** | Add profile import/restore and profile-scoped automation next; design group rooms and merged multi-controller rosters only over the shared lifecycle. |
 | Manage several local or remote runtimes from one client | Hermes Desktop registers local, URL, SSH, Docker, and cloud connections and merges their agent rosters; see [multi-connection Desktop](https://hermes-agent.nousresearch.com/docs/user-guide/multi-connection-desktop). | Lemon's authenticated named nodes are stronger as native remote execution workers and have real name-based routing, cancellation, pairing, and presence. The TUI/Web do not provide a multi-controller connection registry or merged agent/session roster. | Different | **High** | Preserve Lemon's execution-node advantage, then add connection profiles, health/re-auth UX, and a merged node/agent/session picker. |
-| Administer a machine in the browser | Hermes's [Web Dashboard](https://hermes-agent.nousresearch.com/docs/user-guide/features/web-dashboard) manages profiles, real TUI chat, status/resources, a large config surface, credentials, sessions, models, skills, MCP, pairing, webhooks, gateways, memory, cron, plugins, logs, and analytics. | [`LemonWeb.Router`](../../apps/lemon_web/lib/lemon_web/router.ex) exposes only chat at `/` and `/sessions/:session_key`, plus `/healthz`. It supports streaming, tool cards, and multi-file upload. Rich operator methods exist in the control plane, but the old `/ops` dashboard no longer exists. | Partial | **High** | Build an authenticated management shell over the existing control-plane methods, starting with runtime health, sessions, providers/credentials, approvals, cron, skills/MCP, memory, nodes, logs, and config. Delete stale `/ops` claims from old ledgers. |
-| Browse, search, resume, export, archive, and safely prune sessions | Hermes [sessions](https://hermes-agent.nousresearch.com/docs/user-guide/sessions) support workspace-aware resume, rename/pin/archive/read state, FTS search, rich filtering, lineage, redacted JSONL/HTML/Markdown/QMD/trace exports, verified delete-after-export, prune, handoff, recovery, and recap. | The TUI [`session.ts`](../../clients/tui/src/commands/session.ts) provides merged active/stored listing, switch/new/reset/delete/info/resume/history and unread state. Lemon stores durable run/session history and exposes control-plane reads, but lacks supported search/export/archive/pin/rename/prune/backup workflows and Web session management. | Partial | **High** | Add a shared session-service lifecycle API, then expose it identically in TUI, packaged CLI, and Web. Start with search, title/pin/archive, redacted export, and guarded prune. |
+| Administer a machine in the browser | Hermes's [Web Dashboard](https://hermes-agent.nousresearch.com/docs/user-guide/features/web-dashboard) manages profiles, real TUI chat, status/resources, a large config surface, credentials, sessions, models, skills, MCP, pairing, webhooks, gateways, memory, cron, plugins, logs, and analytics. | [`LemonWeb.Router`](../../apps/lemon_web/lib/lemon_web/router.ex) now has a fail-closed token-required `/manage` shell for runtime/live-node health, durable sessions and active-run controls, provider routing, exact-confirmed skill + cron blueprints, bounded/redacted durable-memory inspection/deletion, and preview-first profile lifecycle, alongside chat and `/healthz`. Approvals, general cron, skills/MCP, logs, and broad config do not yet have equivalent Web journeys. | Partial, six bounded verticals shipped | **High** | Extend the authenticated shell one existing service at a time: approvals, general cron, skills/MCP, logs, and config. Keep each mutation scoped and browser-tested. |
+| Browse, search, resume, export, archive, and safely prune sessions | Hermes [sessions](https://hermes-agent.nousresearch.com/docs/user-guide/sessions) support workspace-aware resume, rename/pin/archive/read state, FTS search, rich filtering, lineage, redacted JSONL/HTML/Markdown/QMD/trace exports, verified delete-after-export, prune, handoff, recovery, and recap. | `LemonCore.SessionLifecycle` composes the canonical stores for bounded search, title/pin/archive, redacted JSON/Markdown export, verified delete, and exact-candidate guarded prune. Web, source/package CLI, and Bun TUI now reuse the authenticated lifecycle. The TUI adds a live filterable picker, exact-key resume, digest-verified private exports, export-before-delete, non-queued destructive calls, and stable redacted errors; its authenticated Bandit proof asserts exact candidate sets and deletion/retention over isolated real session rows. Lineage, handoff, recovery, recap, read state, and richer formats remain gaps. | **Near** cross-client for the shared lifecycle | **High** | Add lineage/read state and recovery/backup semantics through the canonical store, then richer export formats where a concrete workflow needs them. |
 
 ### Agent runtime, models, tools, context, and media
 
 | User job | Hermes at pinned upstream | Lemon at pinned baseline | Status | Priority | Concrete next closure |
 | --- | --- | --- | --- | --- | --- |
-| Configure models, auth pools, fallback, and per-task routing | Hermes has interactive provider/model setup, OAuth credentials, credential pools, ordered fallbacks, auxiliary task models, provider routing, custom endpoints, and selectable [Mixture of Agents](https://hermes-agent.nousresearch.com/docs/user-guide/features/mixture-of-agents) presets. The [provider catalog](https://hermes-agent.nousresearch.com/docs/integrations/providers) is user-facing. | Lemon supports a broad provider set, custom endpoints, model catalogs, per-session resolution, live provider fallback, credential pools, cooldowns, and route preview. Setup can configure a provider and default model. Pool/fallback editing is not a cohesive end-user workflow; MoA reference fan-out/presets are absent. | Near at runtime; partial in UX | **High** | Ship `lemon auth`, `lemon fallback`, and pool commands plus equivalent Web forms and health proof. Treat MoA as a separate opt-in orchestration feature with cost/budget visibility. |
-| Interrupt, steer, or redirect a running agent | Hermes distinguishes hard interrupt, non-canceling steer, and model-request redirect. | Lemon implements the same local-native semantics through router queue modes, `CodingAgent.Session`, and `LemonAgent.Loop`. | Near | Medium | Expose all three consistently in every client and carry steer/redirect over named-node invocation rather than falling back at the remote boundary. |
+| Configure models, auth pools, fallback, and per-task routing | Hermes has interactive provider/model setup, OAuth credentials, credential pools, ordered fallbacks, auxiliary task models, provider routing, custom endpoints, and selectable [Mixture of Agents](https://hermes-agent.nousresearch.com/docs/user-guide/features/mixture-of-agents) presets. The [provider catalog](https://hermes-agent.nousresearch.com/docs/integrations/providers) is user-facing. | Lemon supports a broad provider set, custom endpoints, model catalogs, per-session resolution, live fallback, credential pools/cooldowns, and route preview. Source/package `lemon providers` and token-required preview-first Web forms now inspect/edit fallback and credential-reference pools through one comment-preserving configuration boundary. | Near across runtime/CLI/Web; partial for subscription OAuth and MoA | **High** | Add only provider-specific OAuth/account ergonomics with a real need; treat MoA as a separate opt-in feature with explicit cost/budget visibility. |
+| Interrupt, steer, or redirect a running agent | Hermes distinguishes hard interrupt, non-canceling steer, and model-request redirect. | Lemon implements the same semantics through router queue modes, `CodingAgent.Session`, and `LemonAgent.Loop`; named-node runs carry bounded controls to the destination and wait for authenticated acceptance. Control-plane, TUI, and Web active-run forms keep follow-up, steer, redirect, and stop distinct, preserve refused drafts, and avoid asynchronous success races. | **Parity+** for local and named-node run control | Medium | Preserve these semantics in future clients; do not collapse redirect into steer. |
 | Avoid context bloat from large tool catalogs and intermediate data | Hermes documents [Tool Search](https://hermes-agent.nousresearch.com/docs/user-guide/features/tool-search), [`execute_code`](https://hermes-agent.nousresearch.com/docs/user-guide/features/code-execution), result offloading, and multiple compaction paths. | Lemon has frozen progressive disclosure, `execute_code`, output truncation/blob offload, context guardrails, summarization/hybrid compaction, overflow recovery, and cache-stable tool catalogs. | Near | Medium | Enable and explain safe defaults, widen the execute-code allowlist based on policy, and add live compaction/cost observability rather than another mechanism. |
 | Browse and operate the Web or desktop | Hermes exposes local/cloud browser providers, browser profiles, computer use, screenshots, and document/deliverable workflows in its [tools overview](https://hermes-agent.nousresearch.com/docs/user-guide/features/tools). | Lemon has a deep supervised browser driver, CDP/Playwright client, route policy, downloads/uploads, events/cookies/state, screenshots, image analysis, artifacts, and a `computer_use` tool. | **Parity+** for browser automation; partial for integrated desktop use | Medium | Promote one stable browser setup path and surface live driver/session/artifact state in the product UI. Keep computer use separately approval-gated. |
-| Attach files and reference repository context naturally | Hermes supports `@file`, `@folder`, `@git-diff`, `@url`, session references, PDF/Office/notebook extraction, and deliverable attachments; see [context references](https://hermes-agent.nousresearch.com/docs/user-guide/features/context-references) and [document extraction](https://hermes-agent.nousresearch.com/docs/user-guide/features/document-extraction). | Lemon agents can read/search files, inspect git through tools, accept Web uploads, and create media artifacts. There is no consistent composer-level reference syntax or general PDF/Office/notebook extraction pipeline. | Partial | Medium | Add a client-independent context-reference resolver with explicit previews/budgets, then safe extractors for PDF, DOCX, XLSX, PPTX, and notebooks. |
+| Attach files and reference repository context naturally | Hermes supports `@file`, `@folder`, `@git-diff`, `@url`, session references, PDF/Office/notebook extraction, and deliverable attachments; see [context references](https://hermes-agent.nousresearch.com/docs/user-guide/features/context-references) and [document extraction](https://hermes-agent.nousresearch.com/docs/user-guide/features/document-extraction). | `LemonCore.Context` and source/package `lemon context` now provide one bounded preview/resolve syntax for files, folders, git diffs, public URLs, redacted sessions, PDF, DOCX, XLSX, PPTX, notebooks, and text, with traversal/symlink/archive/SSRF/redirect defenses and explicit budgets. | Near for safe text context; partial for scanned/encrypted document fidelity and composer shortcuts | Medium | Add client composer affordances over the shared resolver and bounded OCR only behind an explicit dependency/policy decision. |
 | Use voice and multimodal interaction | Hermes provides voice mode, wake word, streaming TTS, voice input, vision, and desktop/gateway integration; see [voice mode](https://hermes-agent.nousresearch.com/docs/user-guide/features/voice-mode). | Lemon has Deepgram STT, TTS/media generation, image analysis, Twilio voice, and media artifacts, but no cohesive push-to-talk/realtime TUI or desktop voice experience and no wake word. | Partial | Medium | Prove one polished voice loop in the primary interface: record, transcribe, editable preview, submit, streaming playback, cancel, and artifact retention. Wake word can remain low priority. |
 | Run code in alternate environments | Hermes supports local, Docker, SSH, Singularity, Modal, Daytona, and Vercel-style sandboxes, plus a [terminal-environment plugin API](https://github.com/NousResearch/hermes-agent/blob/4f22543509d1b91dc45bcb369447126c5eb14fb7/website/docs/developer-guide/terminal-environment-plugin.md). | Lemon has local, local PTY, SSH, and Docker terminal backends with policy, plus named execution nodes that run the whole native agent remotely. | Partial | Medium | Stabilize/document existing backends and named-node selection first; add serverless/hibernating environments only behind the existing backend behavior and contract tests. |
 
@@ -19977,14 +20196,14 @@ must not be copied into new plans.
 
 | User job | Hermes at pinned upstream | Lemon at pinned baseline | Status | Priority | Concrete next closure |
 | --- | --- | --- | --- | --- | --- |
-| Keep durable personal and project memory | Hermes combines local USER/MEMORY files, session search, background review/curation, a learning journey, and a broad set of [memory providers](https://hermes-agent.nousresearch.com/docs/user-guide/features/memory-providers). | Lemon has SQLite FTS memory, redaction-aware ingest, provider fan-out, session search, project context, memory tools, scheduled skill synthesis/curation, and a production Honcho integration. Local and Honcho are the implemented providers; adaptive features remain intentionally opt-in. | Near for durable recall; partial for ecosystem/UX | Medium | Add a memory browser with provenance/edit/delete, measure whether safe defaults should enable recall, and prioritize provider conformance over provider count. |
-| Teach the agent from a URL, directory, or corpus and inspect what it learned | Hermes exposes `/learn`, curator flows, and the Journey learning graph/timeline. | Lemon synthesizes candidates from finalized runs and can curate/install skills, but has no direct “learn this source” job or learning-graph UI. | Missing | Medium | Build an auditable ingestion job that shows sources, proposed memories/skills, conflicts, and approval before write; visualize the same records rather than inventing a second learning store. |
-| Find, audit, install, update, bundle, and distribute skills | Hermes's [skills system](https://hermes-agent.nousresearch.com/docs/user-guide/features/skills) includes a Hub, taps, bundles, a large catalog, publishing, audit, curator, and profile distributions. | Lemon has agentskills-compatible discovery, local/project/builtin precedence, official Hermes catalog import, risk audit, trust metadata, atomic install/update, curator, model-facing management, and MCP-based discovery. It lacks a credible public registry, taps/bundles UX, publishing, and profile distribution. | Near in engine; partial in ecosystem | Medium | Ship a real signed registry/index, bundle/export format, profile-scoped enablement, and TUI/Web browse/review/install UX. |
-| Schedule recurring agent and script work safely | Hermes provides cron, heartbeats, recurring [loops](https://hermes-agent.nousresearch.com/docs/user-guide/features/loops), monitor jobs, no-agent scripts, chaining, blueprints, suggestions, preflight, and multiple delivery modes. | Lemon has durable cron, exact timers, jitter/retries/lineage, overlap locks, pause/resume/abort/run-now, heartbeat suppression, monitor mode, command jobs, chaining, preflight, default-model drift guard, goal continuation/auto loops, and kanban dispatch. | Near in engine; partial in UX | Medium | Add natural-language recurring-loop commands, templates/blueprints with explicit consent, and first-class TUI/Web/packaged CLI management. Avoid duplicating the existing cron and goal stores. |
+| Keep durable personal and project memory | Hermes combines local USER/MEMORY files, session search, background review/curation, a learning journey, and a broad set of [memory providers](https://hermes-agent.nousresearch.com/docs/user-guide/features/memory-providers). | Lemon has SQLite FTS memory, redaction-aware ingest, provider fan-out, session search, project context, memory tools, scheduled skill synthesis/curation, and a production Honcho integration. `/manage/memory` now adds bounded/redacted scope/agent/workspace-digest/kind filtering, ordinary-run and learned-source inspection, provenance/digests, and exact revision-bound single-record deletion over that same Store. Local and Honcho are the implemented providers; adaptive features remain intentionally opt-in. | Near for durable recall and safe inspection; partial for ecosystem/edit UX | Medium | Measure whether safe defaults should enable recall, add guarded edits only behind a shared review contract, and prioritize provider conformance over provider count. |
+| Teach the agent from a URL, directory, or corpus and inspect what it learned | Hermes exposes `/learn`, curator flows, and the Journey learning graph/timeline. | Lemon now exposes source/packaged `lemon learn` and authenticated `learn.review`/`learn.confirm` over the existing bounded context, durable memory, deterministic skill audit, and synthesis-draft stores. Review is non-mutating and content-free; confirmation re-resolves sources and requires an exact fresh digest. `/manage/memory` renders the resulting learned-source provenance as allowlisted source types, counts, and digests without adding a second database. A full learning graph/timeline is not implemented. | Near for auditable ingestion and provenance inspection; partial for visualization | Medium | Add graph/timeline projection only if it can remain a bounded view over canonical provenance records. |
+| Find, audit, install, update, bundle, and distribute skills | Hermes's [skills system](https://hermes-agent.nousresearch.com/docs/user-guide/features/skills) includes a Hub, taps, bundles, a large catalog, publishing, audit, curator, and profile distributions. | Lemon has agentskills-compatible discovery, local/project/builtin precedence, official Hermes catalog import, risk audit, trust metadata, atomic install/update, curator, model-facing management, and MCP-based discovery. Versioned unpacked bundles reuse those audits for explicit profile-local enablement, with safe catalog list/inspect/validate/preview RPC plus source/package CLI, token-required Web, and content-free Bun TUI browse/review/activate UX. Lemon still lacks a signed public registry/index, taps, publishing/export, and archive import. | Near in engine and local UX; partial in ecosystem | Medium | Add signed index/distribution and export/publish lifecycle. Do not weaken the unpacked, path-bounded activation policy for archive convenience. |
+| Schedule recurring agent and script work safely | Hermes provides cron, heartbeats, recurring [loops](https://hermes-agent.nousresearch.com/docs/user-guide/features/loops), monitor jobs, no-agent scripts, chaining, blueprints, suggestions, preflight, and multiple delivery modes. | Lemon has durable cron, exact timers, jitter/retries/lineage, overlap locks, pause/resume/abort/run-now, heartbeat suppression, monitor mode, command jobs, chaining, preflight, default-model drift guard, goal continuation/auto loops, and kanban dispatch. A versioned agent-cron blueprint requires an exact plan digest, persists provenance, enables skills in the derived profile workspace, and replays without duplicate jobs through the existing scheduler; source/package CLI, token-required Web, and Bun TUI activation share one catalog service. The TUI refreshes the preview before its nonqueueable mutation and retains only bounded IDs/counts/actions/booleans/digests. | Near in engine and first local UX; partial in suggestions/templates | Medium | Add natural-language recurring-loop commands and consent-first suggestions. Expand beyond one agent cron only when a concrete workflow preserves exact confirmation and existing cron/heartbeat stores. |
 | Review dangerous actions and constrain agent execution | Hermes documents smart/manual/off [approvals and security](https://hermes-agent.nousresearch.com/docs/user-guide/security), deny rules, circuit breakers, container isolation, checkpoints, and managed scope. | Lemon has centralized execution approvals, per-node policies, tool policy profiles, structured approval events across interfaces, file/checkpoint guards, URL/SSRF policy, extension capability approvals, redaction, support-bundle cleanup, and proof artifacts. | **Parity+** in auditable policy; partial in enterprise scope | Medium | Add admin-pinned managed settings and a human-readable policy editor. Preserve Lemon's proof/redaction advantages. |
-| Keep credentials out of config and remote sandboxes | Hermes resolves credentials from 1Password, Bitwarden, or an arbitrary command and can inject them through an [egress proxy](https://hermes-agent.nousresearch.com/docs/user-guide/egress/iron-proxy) so a remote sandbox never receives the real secret. | Lemon encrypts a local secret store, uses platform key storage or a protected master-key file, supports OAuth token persistence, redacts outputs, and avoids sending resolved provider credentials to named nodes. It has no external secret-source interface or general credential-injecting egress proxy for arbitrary tools. | Partial | **High** | Add a supervised secret-source behavior (1Password/Bitwarden/command implementations) and design an explicit outbound credential-broker boundary for remote/browser/tool workloads. |
+| Keep credentials out of config and remote sandboxes | Hermes resolves credentials from 1Password, Bitwarden, or an arbitrary command and can inject them through an [egress proxy](https://hermes-agent.nousresearch.com/docs/user-guide/egress/iron-proxy) so a remote sandbox never receives the real secret. | Lemon's encrypted store now resolves through explicitly enabled, ordered [`LemonCore.Secrets.External`](../../apps/lemon_core/lib/lemon_core/secrets/external.ex) adapters for 1Password, Bitwarden Secrets Manager, and argv-only command helpers. One shared supervised runner enforces exact config, minimal child environments, stable redacted failures, timeout/output bounds, and optional bounded process-local caching; source/packaged `lemon secrets sources status|test` exposes only readiness/provenance/count metadata. Encrypted-store values still win, enabled-source failures stop before environment fallback, bootstrap credentials cannot recurse, and named nodes still receive destination-local rather than controller-resolved credentials. A general credential-injecting egress proxy for arbitrary remote/browser/tool work is not implemented. | Near for host provider credentials; partial for remote/tool egress | **High** | Design and prove an explicit outbound credential-broker boundary for remote/browser/tool workloads without passing real secrets into those execution environments. |
 | Install extensions and hooks without patching core | Hermes supports typed plugins across providers, memory, browsers, media, cron, observability, platforms, dashboard, and terminal environments, plus hooks and package lifecycle UI/CLI; see [plugins](https://hermes-agent.nousresearch.com/docs/user-guide/features/plugins). | Lemon has MCP clients/server bridge, native extension manifests, WASM tools, OAuth-aware remote MCP, capability approvals, conflict rules, supervised hosts, registry metadata, and platform contract tests. Third-party distribution and end-user lifecycle remain preview. | Different | Medium | Finish one signed package/install/update/remove flow with compatibility and capability review, then expose host health in Web/TUI. Do not create a second plugin format for every subsystem. |
-| Update, back up, migrate, recover, and uninstall the product | Hermes has update check/plan/backup, receipts, multi-profile restart/version verification, full backup/import, profile distributions, checkpoints, doctor/dump/debug/logs/status/insights, completions, and uninstall commands; see [updating](https://hermes-agent.nousresearch.com/docs/getting-started/updating). | Lemon has release channels and signed checksums, source `lemon update --check`, config/skill migration, a release installer/uninstaller, doctor and redacted support bundles, readiness/proofs, hot reload, and deployment-specific backup guidance. It lacks a coherent data backup/restore/export command, update plan/receipt/rollback, fleet/profile restart, and shell completion. | Partial | **High** | Define the entire `~/.lemon` data contract, then ship atomic backup/verify/restore and update plan/apply/rollback with receipts before adding more updater intelligence. |
+| Update, back up, migrate, recover, and uninstall the product | Hermes has update check/plan/backup, receipts, multi-profile restart/version verification, full backup/import, profile distributions, checkpoints, doctor/dump/debug/logs/status/insights, completions, and uninstall commands; see [updating](https://hermes-agent.nousresearch.com/docs/getting-started/updating). | Lemon has a versioned `~/.lemon` contract; atomic source/package backup/verify/restore; release channels; registry-driven update check/non-mutating plan/exact-confirm apply/private history/receipt-bound rollback; config/skill migration; installer/uninstaller; doctor/support bundles; readiness/proofs; and shell completion. Managed updates verify exact artifact size/checksum, confine archives, prove launcher version, and recover failed pointer flips. | Near/lead for safe local lifecycle; partial for fleet restart and publisher authentication | **High** | Add publisher signatures and exact in-flight download cancellation, then prove coordinated multi-profile restart across a real version transition. |
 | Read task-oriented and machine-readable documentation | Hermes offers structured learning paths, user/task guides, full references, FAQs, edit links, and both curated/full machine indexes. | Lemon's VitePress site builds and has deep architecture/test plans, but navigation favors internal launch artifacts, several user features lack task guides, CLI reference is incomplete, and stale claims persisted in prominent pages. This refresh adds a task-first quickstart plus generated `llms.txt` and `llms-full.txt`. | Partial | **High** | Continue the install → first task → daily use → administration → troubleshooting information architecture, generate CLI/config/tool references, and demote historical plans from the primary navigation. |
 | Run deterministic simulations and evaluation arenas | Hermes has batch processing, trajectory export, evaluation skills, and training-oriented Atropos/RL workflows. | LemonSim provides event-sourced worlds, deterministic replay verification, leagues/ratings, hosted observation, benchmark domains, usage persistence, and tamper-evident artifacts. | **Parity+** for simulation/benchmark products; partial for generic trajectory pipelines | Low | Keep LemonSim as the differentiated surface; add standard trajectory export only when a concrete training/eval consumer requires it. |
 
@@ -20005,8 +20224,9 @@ At the Lemon baseline:
    and still characterized binary installation as future work.
 3. `compare.md` listed shipped provider fallback, cron, goal, kanban, LSP,
    browser, media, checkpoint, API, and ACP capabilities as future targets.
-4. The old feature matrix still claims a Web `/ops` surface that does not exist
-   in the current `lemon_web` router.
+4. The old feature matrix claimed a removed Web `/ops` surface. The current
+   router instead provides a focused token-required `/manage` session vertical;
+   historical `/ops` claims remain invalid and should not be restored.
 5. Lemon has strong implementation documents for many tools but lacks a complete
    user-facing CLI reference, session guide, automation guide, Web guide,
    provider/auth guide, node guide, extension install guide, and task-recipe
@@ -20027,38 +20247,52 @@ These are intentionally vertical bundles rather than isolated modules.
 
 ### High: product shell and daily operation
 
-1. **Management Web vertical** — authenticated shell; runtime health; sessions;
-   providers/credentials/fallback pools; approvals; cron; skills/MCP; memory;
-   nodes; logs; config. Reuse JSON-RPC and do real browser tests against a running
-   Lemon instance.
+1. **Management Web vertical** — the authenticated shell, runtime/live-node
+   health, sessions/run controls, provider pools/fallback, blueprints, memory,
+   and profiles are implemented over shared services. Continue with approvals,
+   general cron, skills/MCP, logs, and config, with real browser tests per slice.
 2. **Packaged CLI convergence** — promote supported source-only and TUI-only
    operations into `LemonCli.CLI`; consistent help/JSON/errors; generate the
    reference and completions from the command registry.
 3. **Profile/bot primitive** — isolated homes and capability config; create,
-   clone, rename, export, delete; canonical chat; agent/node roster. Add group
-   rooms only after this lifecycle is boring and reliable.
-4. **Session lifecycle** — shared search/title/pin/archive/export/prune service,
-   surfaced in TUI, CLI, and Web with redaction and verified-before-delete.
-5. **Install/update/backup** — widen supported installation, add update
-   plan/apply/rollback receipts, and make backup/restore cover the documented
-   data contract.
-6. **Secret sources and outbound credential boundary** — external secret
-   providers plus credential brokerage for arbitrary remote/browser/tool
-   execution.
+   clone, rename, export, recoverable delete; canonical chat; and node-aware
+   roster now reach CLI/control plane/TUI/Web. Add import/restore and
+   profile-scoped automation before group rooms or merged-controller rosters.
+4. **Session lifecycle** — the shared service, authenticated RPC, Web,
+   source/package CLI, and Bun TUI now reuse one redacted,
+   verified-before-delete contract. Continue with lineage/read state/recovery
+   rather than a parallel store.
+5. **Install/update/backup** — documented atomic user-state backup/restore and
+   managed update plan/exact apply/private history/receipt-bound rollback now
+   ship in source and packaged CLI. Next add publisher signatures, exact
+   in-flight download cancellation, broader platforms, and fleet restart proof.
+6. **Outbound credential boundary** — supervised external 1Password,
+   Bitwarden, and argv-only command sources are implemented behind the
+   encrypted Lemon store. Next add credential brokerage for arbitrary
+   remote/browser/tool execution without handing those environments the real
+   secret.
 
 ### Medium: capability completion and polish
 
-7. Provider/auth/pool/fallback management UI and an opt-in cost-bounded MoA
-   design.
-8. Auditable learn-from-source ingestion and a memory/learning inspection UI.
-9. Skill registry, bundles, profile enablement, and signed distribution.
-10. Natural-language loops plus automation templates/blueprints and management
-    surfaces over the existing scheduler.
-11. Composer context references and document extraction with preview and budget
-    controls.
+7. Provider subscription OAuth/account ergonomics and an opt-in cost-bounded
+   MoA design; normal pool/fallback management already ships in CLI and Web.
+8. Extend shipped auditable learn-from-source plus Web provenance inspection
+   only with a bounded learning lineage/timeline over the canonical stores.
+9. **Skill distribution** — the first versioned unpacked bundle and
+   profile-local enablement slice is implemented over the existing skill
+   registry/audit, with source/package CLI plus Web and TUI review/activation.
+   Continue with signed indexing and export/publish without adding another store.
+10. **Automation templates** — the first exact-confirmed, duplicate-safe
+    skill + agent-cron blueprint is implemented over `CronManager`. Continue
+    with natural-language loops, suggestions, and management surfaces; keep
+    command or multi-job expansion separately justified and explicitly
+    confirmed.
+11. Composer affordances over the shipped bounded context/document resolver;
+    add OCR only behind an explicit dependency and policy boundary.
 12. One polished voice workflow in the primary interface.
 13. Extension package lifecycle and host-health UX.
-14. Remote steer/redirect plus multi-controller connection management.
+14. Multi-controller connection management and merged node/session roster UX;
+    authenticated remote steer/redirect is now closed.
 
 ## Lemon advantages to preserve
 
@@ -22032,7 +22266,8 @@ private from their first byte (directories 0700, files 0600).
 lemon daemon    # background start, recording pid and version root in ~/.lemon/run
 lemon status    # pidfile plus a control-plane /healthz probe
 lemon stop      # stops through the recorded root, so it works across a flip
-lemon update    # stage runtime + TUI atomically, then flip current
+lemon update plan
+lemon update apply --confirm <exact-plan-digest>
 lemon stop && lemon daemon   # restart to apply a staged version
 ```
 
@@ -22044,12 +22279,19 @@ lemon doctor --json                 # ordinary runtime diagnostics
 lemon doctor --bundle               # redacted support bundle
 ```
 
-Updating stages the runtime and matching TUI artifacts together for full/min
-profiles, then flips the symlink; the sim profile has no TUI artifact. There
-are no hot upgrades. Roll back
-with `lemon update --rollback`, which flips `versions/current` back to the
-previously installed version (the two most recent are retained) and again needs
-a restart to take effect.
+Updating stages the checksum/size-authenticated runtime and matching TUI
+artifacts together for full/min profiles, then flips the symlink; the sim
+profile has no TUI artifact. Planning is non-mutating and apply needs its exact
+fresh digest. There are no hot upgrades. Inspect the successful apply receipt
+with `lemon update history`, then roll back only that receipt-bound checkpoint:
+
+```bash
+lemon update rollback --receipt <apply-receipt-id> \
+  --confirm <rollback-digest>
+```
+
+Rollback never chooses a retained version by recency and again needs a restart
+to take effect. See [the update safety contract](../user-guide/updates.md).
 
 Environment knobs, the uninstall procedure, and the platform support table live
 in `docs/install.md`. `scripts/verify_install_script` proves this flow against a
@@ -23285,7 +23527,8 @@ For runtimes installed by `install.sh` into `~/.lemon`, the two most recent
 previous versions are retained on disk:
 
 ```bash
-lemon update --rollback   # flips ~/.lemon/versions/current back
+lemon update history
+lemon update rollback --receipt <apply-receipt-id> --confirm <rollback-digest>
 lemon stop && lemon daemon
 lemon status
 ```
@@ -23328,9 +23571,12 @@ Supported with scope:
   and installs into the `~/.lemon` layout. Installing a `preview` or `nightly`
   release requires an explicit `LEMON_VERSION` pin.
 - Remote update through `lemon update` for runtimes installed in that layout.
-  Update is a symlink flip plus an operator restart, with `--rollback` to the
-  previous retained version. Manual tarball and container installs are not
-  managed by the updater.
+  Update is a non-mutating plan followed by exact-confirm, checksum/size
+  verification, archive confinement, atomic symlink flip, private content-free
+  receipt, and operator restart. Rollback requires the exact apply
+  receipt/digest and verified retained checkpoint. Manual tarball and container
+  installs are not managed by the updater. Schema-2 manifests are
+  checksum-authenticated but not publisher-signed.
 - Multi-arch container images on `ghcr.io/z80dev/lemon` (`amd64`, `arm64`).
 
 Not supported for stable 1.0:
@@ -23565,18 +23811,42 @@ are not the "latest" release and therefore require an explicit version.
 There are two update paths, and they do different jobs.
 
 **Installed runtimes** (`~/.lemon`, from `install.sh` or a previous
-`lemon update`) use the launcher's `lemon update`. It fetches the manifest for
-the configured channel, compares versions with `LemonCore.Update.Version`,
-downloads and SHA-256 verifies the matching runtime and, unless
-`LEMON_NO_TUI=1` or the profile is `sim_broadcast_platform`, the matching
-`lemon_tui` artifact. It stages both into the new version before flipping
-`~/.lemon/versions/current`. Applying the new version requires a restart: Lemon
-does not hot-upgrade a running node. The two previous versions are retained for
-`lemon update --rollback`.
+`lemon update`) use the launcher's preview-confirm lifecycle:
 
-**Source checkouts** use `mix lemon.update` (or the source wrapper
+```bash
+lemon update check
+lemon update plan
+lemon update apply --confirm <exact-plan-digest>
+lemon update history
+lemon update rollback --receipt <exact-apply-receipt> \
+  --confirm <exact-rollback-digest>
+```
+
+The non-mutating plan binds the exact running/current versions, raw manifest
+SHA-256 and commit, channel/target/profile/platform, artifact names, declared
+sizes, and checksums. Apply re-plans under an exclusive lock, records a verified
+private checkpoint first, downloads and exact-size/SHA-256 verifies the runtime
+and optional TUI, rejects unconfined or special archive entries before
+extraction, validates the staged launcher version, then atomically flips
+`~/.lemon/versions/current`. A post-flip failure restores the prior pointer.
+Successful apply writes a content-free receipt; rollback accepts no path and
+requires that exact receipt/digest plus an unchanged current pointer and
+checkpoint checksum. Both operations require a restart; Lemon does not
+hot-upgrade a running node.
+
+Schema 2 authenticates the artifact against the manifest's checksum and size.
+It is **not publisher-signed**: no detached manifest proof or trusted publisher
+key is currently published. Artifact requests are time-bounded and
+streamed to disk with a declared/post-download hard size check; the current
+`:httpc` boundary cannot cancel at the exact in-flight byte where an overlong
+body crosses its declaration, so the refused file is deleted after the bounded
+response completes. See [the update guide](../user-guide/updates.md).
+
+**Source checkouts** use `mix lemon.update` (or the no-subcommand source wrapper
 `./bin/lemon update`), which remains a stage-1 local maintenance task and never
-replaces binaries. The same source
+replaces binaries. `./bin/lemon update check|history` expose read-only release
+visibility and receipts; packaged `plan`, `apply`, and `rollback` fail closed
+with Git workflow guidance. The same source
 wrapper family exposes `./bin/lemon setup ...` and `./bin/lemon doctor ...` as
 delegates for the setup and diagnostics Mix tasks, plus
 `./bin/lemon channels ...` for redacted Telegram/Discord launch readiness,
@@ -23922,9 +24192,11 @@ Source: https://z80dev.github.io/lemon/security/secrets-keychain-audit-matrix
 
 # Secrets + Keychain Audit Matrix
 
-_Last updated: 2026-02-25_
+_Last updated: 2026-08-30_
 
-This document captures the current, tested contract for Lemon secret resolution across keychain, encrypted store, and environment fallback paths.
+This document captures the current, tested contract for Lemon secret resolution
+across keychain, encrypted store, explicitly enabled external sources, and
+environment fallback paths.
 
 ## Flow Matrix
 
@@ -23933,8 +24205,10 @@ This document captures the current, tested contract for Lemon secret resolution 
 | macOS Keychain master key | `LemonCore.Secrets.MasterKey.init/1` -> `Keychain.put_master_key/2` | `LemonCore.Secrets.MasterKey.resolve/1` -> `Keychain.get_master_key/1` | On `:missing` / `:keychain_unavailable` / command failures, tries env master key, then local file | `apps/lemon_core/lib/lemon_core/secrets/keychain.ex`, `apps/lemon_core/lib/lemon_core/secrets/master_key.ex` |
 | Master key env fallback | Manual set of `LEMON_SECRETS_MASTER_KEY` (external) | `MasterKey.resolve/1` via `resolve_from_env/1` | On missing env, tries `~/.lemon/secrets_master_key`; malformed env still fails as `:invalid_master_key` | `apps/lemon_core/lib/lemon_core/secrets/master_key.ex` |
 | Local master key file fallback | `~/.lemon/secrets_master_key` | `MasterKey.resolve/1` via local file fallback | Returns `:missing_master_key` or `:invalid_master_key` when no valid source exists | `apps/lemon_core/lib/lemon_core/secrets/master_key.ex` |
-| Encrypted secret store | `LemonCore.Secrets.set/3` (AES-256-GCM at rest) | `LemonCore.Secrets.get/2`, `resolve/2`, `exists?/2` | `resolve/2` can fallback to env by same secret name (`env_fallback: true`) | `apps/lemon_core/lib/lemon_core/secrets.ex` |
-| Coding Agent provider secret refs | Configured `api_key_secret` names in provider config | `CodingAgent.Session.resolve_secret_api_key/1` -> `LemonCore.Secrets.resolve/2` | Store first, env fallback enabled | `apps/coding_agent/lib/coding_agent/session.ex` |
+| Encrypted secret store | `LemonCore.Secrets.set/3` (AES-256-GCM at rest) | `LemonCore.Secrets.get/2`, `resolve/2`, `exists?/2` | `resolve/2` uses store, enabled external sources, then same-name env when `env_fallback: true` | `apps/lemon_core/lib/lemon_core/secrets.ex` |
+| External secret sources | Read-only; no external result is persisted | `LemonCore.Secrets.External` invokes 1Password, Bitwarden, or argv-only command adapters under shared supervision | Ordered by priority/id; a source miss continues, but any enabled-source failure stops before env fallback | `apps/lemon_core/lib/lemon_core/secrets/external.ex`, `apps/lemon_core/lib/lemon_core/secrets/source_runner.ex` |
+| External bootstrap credentials | Existing Lemon encrypted secret or same-name env only | `LemonCore.Secrets.resolve_local/2` from a source adapter | Never invokes an external source, preventing recursion | `apps/lemon_core/lib/lemon_core/secrets.ex`, `apps/lemon_core/lib/lemon_core/secrets/source/` |
+| Coding Agent provider secret refs | Configured `api_key_secret` names in provider config | `CodingAgent.Session.resolve_secret_api_key/1` -> `LemonCore.Secrets.resolve/2` | Store first, enabled external sources second, env fallback last | `apps/coding_agent/lib/coding_agent/session.ex` |
 
 ## Keychain Error Semantics (Current Contract)
 
@@ -23978,6 +24252,12 @@ Additional nuance:
 - `mix lemon.secrets.init` is the preferred bootstrap path everywhere: it stores the generated key in the keychain on macOS and writes the key file (`0600`) on other platforms. It refuses to overwrite an existing key file unless `--force` is passed.
 - For local non-macOS development, keep `~/.lemon/secrets_master_key` as the canonical master key file. `bin/lemon` will export that value into `LEMON_SECRETS_MASTER_KEY` before boot when the file exists.
 - `secrets.list` and `secrets.status` return metadata only (never plaintext secret values).
+- `lemon secrets sources status|test` returns only source readiness,
+  provenance, counts, byte counts, duration, and stable error kinds. Combined
+  stdout/stderr and resolved values are never included.
+- External commands are direct argv execution with exact configuration,
+  minimal child environments, `100..30000` ms timeouts, `1..1048576` byte
+  output bounds, and an optional bounded process-local cache that defaults off.
 - If keychain prompts are denied (`User interaction is not allowed`), Lemon can still operate via env fallback when configured.
 
 ## Validation References
@@ -23985,6 +24265,10 @@ Additional nuance:
 - `apps/lemon_core/test/lemon_core/secrets/keychain_test.exs`
 - `apps/lemon_core/test/lemon_core/secrets/master_key_test.exs`
 - `apps/lemon_core/test/lemon_core/secrets_test.exs`
+- `apps/lemon_core/test/lemon_core/secrets/external_test.exs`
+- `apps/lemon_core/test/lemon_core/secrets/source_contract_test.exs`
+- `apps/lemon_core/test/lemon_core/config/secrets_test.exs`
+- `apps/lemon_cli/test/lemon_cli/secret_sources_command_test.exs`
 
 ---
 
@@ -24607,6 +24891,20 @@ Force a reload of all skills from disk.
 ```elixir
 :ok = LemonSkills.refresh()
 ```
+
+### Portable skill and automation bundles
+
+`LemonAutomation.Blueprint` composes the existing bundle hash, manifest lint,
+deterministic audit, project config, registry refresh, profile store, and cron
+manager into one preview-confirm-activate workflow. It does not add a second
+skill registry. Remote operators address only safe IDs below
+`~/.lemon/bundles`; local service callers may validate a trusted unpacked path.
+The source and packaged `lemon blueprints` CLI is the normal operator UX over
+that catalog-scoped control-plane boundary; a bundle ID plus `--profile`
+previews by default, and mutation requires the exact fresh digest.
+See the [skills user guide](user-guide/skills.md#portable-skill-and-automation-bundles)
+for the version 1 manifest, exact confirmation flow, policy boundary, and
+disabled example.
 
 ## Creating Skills
 
@@ -27314,6 +27612,27 @@ scripts/test path apps/lemon_core/test/lemon_core/quality --seed 1
 - `quality`: runs Lemon's lightweight policy/quality gates: `scripts/lint_ci_docs.sh`, `scripts/test_contract.sh`, the hermetic `scripts/test_lemon_tui_auth.sh` source-launcher credential/lifecycle contract, `mix lemon.skill.lint`, `mix lemon.quality`, and the focused quality/eval contract tests used by CI. `mix lemon.quality` already runs the duplicate test module guard internally and keeps its default docs/architecture checks static; use `mix lemon.quality --validate-config` when runtime config validation is needed.
 - `clients`: covers the Bun TUI in `clients/tui` plus the web and browser clients. The TUI path uses `bun install --frozen-lockfile`, `bun run check`, `bun run lint`, and `bun test`; the web and browser clients continue to use their Node package checks. Set `LEMON_TEST_REUSE_NODE_MODULES=1` only for fast local loops that intentionally reuse existing installs.
 - Source-install changes should keep `scripts/verify_source_install --skip-compile` green after a local compile. For release-candidate source installs, run `scripts/verify_source_install` without skips so it checks the BEAM toolchain, source-wrapper help discoverability for setup/channels/config/doctor/send/media/models/providers/policy/proofs/readiness/secrets/skill/usage/update, locked dependency resolution, warning-free test compile, source-wrapper non-interactive setup dispatch through `./bin/lemon setup runtime --profile runtime_min --non-interactive`, source-wrapper promoted channel readiness through `./bin/lemon channels --project-dir`, source-wrapper config validation through `./bin/lemon config validate --project-dir`, source-wrapper media diagnostics through `./bin/lemon media --project-dir --limit 1`, source-wrapper model catalog listing through `./bin/lemon models --provider anthropic --limit 1`, source-wrapper provider readiness listing through `./bin/lemon providers --provider anthropic --project-dir`, source-wrapper model policy listing through `./bin/lemon policy list`, source-wrapper proof artifact listing through `./bin/lemon proofs --project-dir --limit 1`, source-wrapper readiness summary through `./bin/lemon readiness --project-dir --limit 1`, source-wrapper secrets status through `./bin/lemon secrets status`, source-wrapper skill listing through `./bin/lemon skill list`, source-wrapper usage diagnostics through `./bin/lemon usage`, source-wrapper stage-1 local update dry-run dispatch through `./bin/lemon update --check --no-skill-sync --verbose`, source-wrapper doctor JSON diagnostics through `./bin/lemon doctor --json`, and redacted support-bundle generation with compact launch readiness plus proof-gate status/counts in `readiness_summary.json`.
+
+Managed release-update changes must additionally run the focused update and
+registry lanes:
+
+```bash
+mix test apps/lemon_core/test/lemon_core/update --seed 1
+mix test \
+  apps/lemon_cli/test/lemon_cli/command_registry_test.exs \
+  apps/lemon_cli/test/lemon_cli/update_command_test.exs --seed 1
+bash -n bin/lemon rel/overlays/bin/lemon
+```
+
+The fixture-server proof uses only temporary homes/install layouts. It must
+show that plan, incorrect confirmation, and a manifest-stale confirmation do
+not change the managed tree; exact apply verifies the staged launcher's target
+version and writes private content-free history; exact receipt/digest rollback
+restores the checkpoint; injected post-promotion verification failure restores
+the old pointer; and replays do not create another successful receipt. Archive
+coverage must reject absolute/parent paths, symlinks, hard links, devices, and
+FIFOs before extraction and enforce post-extraction entry/expanded-byte bounds.
+Never point this proof at a developer checkout or real `~/.lemon` install.
 - Packaged first-run onboarding changes should keep `scripts/verify_install_script` green. Its hermetic localhost release fixture allocates a pseudo-terminal with either util-linux or BSD/macOS `script` to prove the default installer invokes the absolute installed `lemon setup` once; it separately proves `--skip-setup`, sim, and forced-no-TTY installs never invoke it, with the no-TTY path printing the exact absolute setup handoff. Linux exercises the sim install; macOS verifies its documented Linux-only refusal without entering setup. The same fixture launches an incomplete TUI through setup once and verifies a ready rerun does not reopen it. `scripts/verify_source_install --skip-compile --skip-doctor` proves the shared `LemonCli.CLI.setup_required?/0` predicate transitions from required to ready using an isolated HOME, fixture config/default model, and local encrypted test secret—never a live provider credential. The fixture preserves the invoking `MIX_HOME` so replacing HOME isolates Lemon state without hiding the already-verified Hex/Mix toolchain.
 - `eval-fast`: runs a small deterministic eval harness invocation with `mix lemon.eval --iterations ${LEMON_EVAL_ITERATIONS:-3}`. The harness includes memory scope/topic contracts, relevant-skill prompt disclosure, scripted skill-curator behavior, async delegation joins, and child artifact verification contracts. Increase `LEMON_EVAL_ITERATIONS` locally when you need more confidence.
 - `live-eval`: runs the opt-in provider-backed eval lane with `mix lemon.eval --live-model --iterations ${LEMON_EVAL_ITERATIONS:-3}`. It fails before app startup unless `LEMON_EVAL_API_KEY`, `LEMON_EVAL_API_KEY_SECRET`, `INTEGRATION_API_KEY`, `INTEGRATION_API_KEY_SECRET`, or legacy `ANTHROPIC_API_KEY` is set. Secret variables hold the name of a Lemon secret and resolve with env fallback, so local release-candidate runs can use the normal encrypted secret store without printing credentials. Configure the model with `LEMON_EVAL_PROVIDER`, `LEMON_EVAL_MODEL`, `LEMON_EVAL_BASE_URL`, and `LEMON_EVAL_API_TYPE`; matching generic `INTEGRATION_*` variables are also accepted. The current live lane checks that an independent model calls `search_memory` for prior-work recall, chooses `read_skill`/`skill_manage` for reusable skill capture, performs a curator-style umbrella consolidation, respects the scheduled-run blocked cron surface, delegates parallel child work before answering, handles untrusted external content, preserves leaf-worker tool restrictions, verifies child side effects before finalizing, and completes a tiny Elixir coding repair by reading source, patching code, running `elixir test/lemon_release_report_test.exs`, and answering only after the test passes.
@@ -29574,7 +29893,9 @@ content, exactly like the direct tool.
 ## Output
 
 Only what the script writes to stdout/stderr is returned — there is no implicit
-final-expression repr. Output is sanitized, capped at `max_output_bytes` keeping the first
+final-expression repr. Line-buffered Python output preserves its order relative to child
+processes writing directly to the inherited stdout/stderr descriptors. Output is sanitized,
+capped at `max_output_bytes` keeping the first
 40% plus a rolling last 60% with a truncation marker, and the full combined output spills
 to a `0600` file whose path appears in the result as `full_output_path` and in
 `[Full output saved to: ...]` text. The path remains readable after the cell completes. A
@@ -31521,6 +31842,604 @@ max_documents  = 10000    # Hard cap before oldest documents are pruned
 
 ---
 
+Source: https://z80dev.github.io/lemon/user-guide/backups
+
+# Back up and restore Lemon user state
+
+Lemon can create, verify, list, and restore private backups of durable state in
+`~/.lemon`. The same commands are available in an installed release as
+`lemon backup ...` and from a source checkout as `./bin/lemon backup ...`.
+
+```bash
+lemon backup contract
+lemon backup create
+lemon backup list
+lemon backup verify ~/.lemon/backups/<bundle>.lemonbackup
+lemon backup restore ~/.lemon/backups/<bundle>.lemonbackup
+```
+
+The current backup format and data-contract version are both `1`. Restore
+checks both versions before staging or changing the target. A newer or malformed
+schema fails closed instead of being interpreted approximately.
+
+## The `~/.lemon` data contract
+
+The default scope is durable user state under `~/.lemon`. Project-local
+`<project>/.lemon` directories are separate and are never discovered by this
+command.
+
+| Included by default | Excluded by default |
+| --- | --- |
+| `config.toml` | Installed `bin/` launchers and `versions/` |
+| Durable `agent/` sessions, workspace, and skills | `run/`, `tmp/`, caches, logs, pid/socket files, and operation locks |
+| Durable stores such as `store/` | Existing `backups/`, support bundles, and restore rollback material |
+| Other regular files not covered by an exclusion | Symlinks and special files |
+|  | Project-local `.lemon` directories and platform keychain contents |
+|  | `cookie`, `env`, `secrets_master_key`, and `nodes/execution/` credentials |
+
+Use `--include-credentials` only when the backup destination has the same
+security as the machine's credential store:
+
+```bash
+lemon backup create --include-credentials
+```
+
+This opt-in includes Lemon's local cookie, environment file, file-backed
+secrets master key, and execution-node credential files. It cannot export
+platform keychain contents. Backed-up bytes are opaque: neither human nor JSON
+CLI output contains file contents or secret values.
+
+`lemon backup contract --json` returns the policy as machine-readable metadata.
+There are no TOML settings for backups; the command's explicit flags and paths
+are the safety boundary.
+
+## Bundle format and creation guarantees
+
+The default destination is `~/.lemon/backups/`. A bundle is a private directory
+named `lemon-backup-<timestamp>-<unique>.lemonbackup`:
+
+```text
+<bundle>.lemonbackup/
+├── manifest.json
+├── manifest.sha256
+└── data/
+    └── <relative paths from ~/.lemon>
+```
+
+`manifest.json` records format and contract versions, creation time, relative
+paths, byte counts, SHA-256 checksums, and an allowlisted owner mode for every
+file. It never records the absolute source path. The bundle root and all of its
+directories are owner-only; files are owner-only as well.
+
+Creation copies into a private partial directory, checks that each source file
+did not change during the copy, syncs file and manifest metadata where the
+platform permits, verifies the completed partial bundle, then exposes the final
+path with one atomic directory rename. A failed create removes the partial path
+and never reports it as a backup.
+
+Choose another final path with `--output`:
+
+```bash
+lemon backup create --output /secure/offline/lemon-2026-08-30.lemonbackup
+```
+
+The destination must not already exist.
+
+## Verification
+
+Always verify a copied or transported bundle before restore:
+
+```bash
+lemon backup verify /secure/offline/lemon-2026-08-30.lemonbackup
+```
+
+Verification checks all of the following without reading values into CLI
+output:
+
+- supported product, format schema, and data-contract versions;
+- manifest checksum and bounded manifest structure;
+- safe normalized relative paths with no traversal;
+- an exact match between the manifest and the files below `data/`;
+- every recorded size and SHA-256 checksum;
+- regular-file/directory types only, with no symlinks or special entries;
+- owner-only permissions throughout the bundle.
+
+Permission widening is a verification failure. Tightening a bundle file's mode
+does not change the restore mode: restore applies the exact owner mode recorded
+in the manifest, and only `0400`, `0500`, `0600`, or `0700` are accepted.
+
+## Safe restore and overwrite confirmation
+
+Restore is additive. It installs missing files, skips byte-and-mode-identical
+files, and leaves excluded runtime installations such as `versions/` and
+`bin/` untouched. A symlink, special file, or non-directory parent in the
+target is always a structural conflict.
+
+Differing regular files are refused by default:
+
+```bash
+lemon backup restore /secure/offline/lemon-2026-08-30.lemonbackup
+```
+
+To replace them, first verify against the exact target:
+
+```bash
+lemon backup verify /secure/offline/lemon-2026-08-30.lemonbackup \
+  --target "$HOME/.lemon" --json
+```
+
+Copy `result.overwrite_confirmation` from that output, then use it explicitly:
+
+```bash
+lemon backup restore /secure/offline/lemon-2026-08-30.lemonbackup \
+  --target "$HOME/.lemon" \
+  --overwrite \
+  --confirm <overwrite_confirmation>
+```
+
+The confirmation is derived from the verified manifest SHA-256 plus the
+expanded, normalized target root. A token for another bundle or target is
+rejected. `--confirm` without `--overwrite` is a usage error.
+
+Before mutation, restore re-verifies the complete bundle and stages all new
+bytes in a private sibling directory. Differing destination files are moved to
+`<target>.pre-restore.<backup-id>/`, then staged files are renamed into place
+and directory metadata is synced where supported. The retained rollback
+directory includes `restore-receipt.json` with counts and timestamps, never
+file contents. It also records the manifest digest and normalized local target
+so an operator can identify the authorized restore. If apply fails, Lemon
+removes newly installed files and moves the displaced originals back. If that
+rollback cannot finish, Lemon retains the rollback material and reports a
+fail-closed error.
+
+## JSON and exit codes
+
+Every subcommand supports `--json`. A successful command writes exactly one
+JSON document to stdout:
+
+```json
+{"ok":true,"operation":"verify","result":{"verified":true}}
+```
+
+An operational or verification failure writes one redacted JSON document to
+stderr. Exit codes are stable:
+
+| Code | Meaning |
+| --- | --- |
+| `0` | Success |
+| `1` | Operational, conflict, or verification failure |
+| `2` | Invalid command or options |
+
+Aggregate output may include bundle/target paths, identifiers, timestamps,
+file counts, byte counts, checksums, and the target-bound confirmation. It does
+not include backed-up contents or secret values.
+
+## Boundaries
+
+This command backs up local durable user state. It does not:
+
+- back up project-local `.lemon` directories;
+- export macOS Keychain or another platform credential manager;
+- upload a bundle or transmit it to a named execution node;
+- provide update plan/apply/rollback receipts;
+- replace application-level database snapshots required by a separately
+  managed deployment.
+
+Keep offline copies according to your own retention policy, verify them after
+transport, and test restore into an isolated `--target` before relying on a
+backup for recovery.
+
+---
+
+Source: https://z80dev.github.io/lemon/user-guide/cli
+
+# Lemon command-line reference
+
+Lemon exposes the same Mix-free command families from an installed
+`lemon_runtime_min` or `lemon_runtime_full` release and from a source checkout.
+Use `lemon ...` after installation and `./bin/lemon ...` in the repository.
+
+## Learn from bounded sources
+
+```bash
+lemon learn '@file:docs/runbook.md' --root "$PWD" --json
+lemon learn confirm '@file:docs/runbook.md' --root "$PWD" \
+  --confirm <exact-review-digest> --json
+```
+
+Review is the default and never writes. Confirmation re-runs the bounded
+context selection and destination checks, then writes one canonical memory row
+and one audited skill draft only when the exact digest still matches. Responses
+omit source text, prompts, paths, URLs, secret names, and secret values. See
+[Learn from files, folders, and URLs](learn-from-sources.md).
+
+The runtime command boundary has stable exit codes:
+
+- `0` means the command completed successfully;
+- `1` means a safe operational or verification failure;
+- `2` means the command or its arguments are invalid.
+
+`--help`, `-h`, and `help` print command help without running the command body.
+Commands that support `--json` write one JSON document to stdout on success
+and one redacted JSON error document to stderr on operational failure. Invalid
+arguments remain human-readable usage errors with exit code `2`.
+
+## Runtime command families
+
+| Family | Purpose |
+| --- | --- |
+| `setup` | Complete first-run configuration |
+| `model` | Configure a model provider |
+| `gateway` | Configure Telegram or Discord |
+| `doctor` | Run diagnostics or create a support bundle |
+| `config` | Validate or show resolved configuration |
+| `secrets` | Manage encrypted credentials and inspect external read-only sources |
+| `channels` | Inspect channel launch readiness |
+| `providers` | Inspect provider readiness and manage routing |
+| `blueprints` | Review and exactly confirm cataloged skill automation bundles |
+| `profile` | Manage isolated specialist profiles |
+| `backup` | Create, verify, list, or restore user-state backups |
+| `context` | Preview or resolve bounded context references |
+| `learn` | Review bounded sources and exactly confirm memory plus a skill draft |
+| `sessions` | Inspect and manage durable sessions |
+| `update` | Check, non-mutating plan, exact-confirm apply/history/rollback |
+| `completion` | Generate shell completion scripts |
+
+The source and packaged launchers also expose commands specific to their own
+runtime lifecycle. Run `lemon --help` or `./bin/lemon --help` for that exact
+launcher. Completion generation detects the launcher, so it does not advertise
+packaged daemon commands in a source checkout or source-only commands in an
+installed release.
+
+## Update lifecycle
+
+Managed releases use an explicit preview-confirm flow:
+
+```bash
+lemon update check
+lemon update plan
+lemon update apply --confirm <exact-plan-digest>
+lemon update history
+lemon update rollback --receipt <exact-apply-receipt> \
+  --confirm <exact-rollback-digest>
+```
+
+Planning does not mutate disk. Apply re-plans under an exclusive lock, verifies
+the schema-2 manifest's exact size/SHA-256 metadata, rejects unsafe archives,
+checks the staged launcher's reported version, and writes a private content-free
+receipt only after the atomic pointer flip verifies. Rollback is receipt-bound;
+it accepts no path and restores no config, credentials, sessions, or stores.
+Source checkouts expose check/history but fail packaged plan/apply/rollback
+closed. See [Safely update and roll back Lemon](updates.md) for the complete
+safety contract and current publisher-signing/network-cap residuals.
+
+## External secret sources
+
+External source diagnostics are available through the same packaged and source
+command boundary:
+
+```bash
+lemon secrets sources status
+lemon secrets sources status --json
+lemon secrets sources test
+lemon secrets sources test vault --json
+
+# Source checkout
+./bin/lemon secrets sources test --source-id vault
+```
+
+`status` validates configuration plus executable/bootstrap readiness without
+executing the source. `test` runs all enabled sources, or one named source,
+under the configured timeout and output bound. Human and JSON responses expose
+only source id/type, readiness, provenance, counts, byte counts, duration, and
+stable error kinds; they never include secret values. Operational test failure
+exits `1`, invalid options exit `2`, and an empty/not-configured selection is an
+operational failure.
+
+`lemon secrets check` likewise reports only `present` for resolved entries; it
+does not print prefixes or suffixes. External sources remain read-only
+fallbacks behind the encrypted Lemon store. See
+[External secret sources](../config.md#external-secret-sources) for the exact
+configuration and fail-closed resolution contract.
+
+## Portable blueprints
+
+`lemon blueprints` talks only to the authenticated local control plane. It
+never accepts a filesystem root or path and never starts a scheduler in the
+one-shot CLI VM. Installed releases start the daemon when needed; from a source
+checkout, start `./bin/lemon --daemon` first.
+
+```bash
+lemon blueprints
+lemon blueprints inspect daily-note
+lemon blueprints validate daily-note --json
+lemon blueprints daily-note --profile operator
+lemon blueprints preview daily-note --profile operator --json
+```
+
+The bundle-ID shorthand is preview, not activation. These reads return only
+the control plane's sanitized projections: IDs/names, content hashes and byte
+counts, profile/session target, cron schedule/state, provenance, collision
+actions, and cleanup flags. They omit absolute paths, skill bodies, prompt or
+command text, and secret values.
+
+Activation requires the exact 64-character `confirmationDigest` from a fresh
+preview:
+
+```bash
+lemon blueprints activate daily-note --profile operator \
+  --confirm <exact-confirmation-digest>
+```
+
+The long-running runtime re-plans under the existing blueprint lock before any
+write. Content, profile destination, enabled-skill state, or cron collision
+changes invalidate the digest. Successful replay reports `unchanged` and keeps
+one stable cron job. JSON success is one sanitized document on stdout;
+operational failures are one redacted error document on stderr with exit `1`;
+invalid CLI arguments use exit `2`. See the
+[bundle manifest and safety guide](skills.md#portable-skill-and-automation-bundles).
+
+## Durable sessions
+
+`lemon sessions` is the operator boundary over Lemon's canonical run history,
+chat state, policy, and session metadata stores. It does not create another
+conversation database. All list and history reads are bounded; history and
+exports are always redacted.
+
+### List, search, show, and history
+
+```bash
+lemon sessions list --limit 20
+lemon sessions list --archived --pinned --agent-id research --json
+lemon sessions search "deployment follow-up" --limit 10
+lemon sessions stats --active --group-limit 10
+lemon sessions stats "deployment follow-up" --agent-id research --json
+lemon sessions show agent:research:main
+lemon sessions history agent:research:main --limit 25 --json
+```
+
+List and search accept `--limit` from 1 to 500 and `--offset` from 0 to
+1,000,000. History accepts `--limit` from 1 to 200. Lifecycle filters are
+explicit pairs: `--pinned` or `--unpinned`, and `--archived` or `--active`.
+Contradictory filters are usage errors rather than silently selecting one.
+
+Search checks session identifiers, agent identifiers, titles, and a bounded
+redacted history selection. Human output avoids store paths and secret values;
+JSON output contains normalized session and run fields only.
+
+`sessions stats` applies the same agent, pin, archive, and bounded redacted
+history-search filters. It reports exact valid-store and matched session counts,
+active/archived/pinned/titled counts, the canonical run-count sum, and oldest
+and newest update timestamps. Agent and origin dimensions are deterministically
+ordered and capped from 1 to 50 entries (`--group-limit`, default 10); omitted
+cardinality is reported. The report never contains session keys, titles,
+messages, prompts, answers, paths, URLs, or credentials. Message/turn counts are
+not inferred because no single canonical store exposes them reliably.
+
+### Title, pin, and archive state
+
+```bash
+lemon sessions title agent:research:main "Literature review"
+lemon sessions title agent:research:main --clear
+lemon sessions pin agent:research:main
+lemon sessions unpin agent:research:main
+lemon sessions archive agent:research:main
+lemon sessions restore agent:research:main
+```
+
+Titles are trimmed and limited to 160 characters. These commands update the
+shared lifecycle metadata and verify the session still exists before reporting
+success.
+
+### Redacted export
+
+Print an always-redacted JSON or Markdown export:
+
+```bash
+lemon sessions export agent:research:main --format json
+lemon sessions export agent:research:main --format markdown
+```
+
+Write the selected export to an owner-only file:
+
+```bash
+lemon sessions export agent:research:main \
+  --format json \
+  --output research-session.json \
+  --json
+```
+
+Existing files are refused unless `--force` is explicit. Symlinks and special
+files are always refused. With `--output --json`, stdout contains safe export
+metadata and only the output basename; the exported content stays in the file.
+Without `--output`, `--json` returns the redacted content in its JSON envelope.
+Exports contain selected session/run/tool fields, SHA-256 integrity metadata,
+and omission counts. They never contain raw run records or raw event payloads.
+
+### Preview-confirm prune
+
+Prune is dry-run by default. It selects only archived sessions older than the
+cutoff and excludes pinned sessions:
+
+```bash
+lemon sessions prune --older-than 30d
+```
+
+`--older-than` accepts a positive age with `s`, `m`, `h`, `d`, or `w`, an
+ISO-8601 date/time, or epoch milliseconds. The preview prints the exact
+`older_than_ms`, candidate keys, and confirmation token. Review the candidates,
+then execute with the exact millisecond cutoff and token printed by the
+preview:
+
+```bash
+lemon sessions prune \
+  --older-than 1788062400000 \
+  --confirm <preview-token>
+```
+
+Do not repeat a relative value such as `30d` for execution: time has advanced,
+so the derived cutoff and token will differ. If any candidate or lifecycle
+metadata changes after preview, execution fails and requires a new preview.
+
+`--all` also considers non-archived sessions. `--include-pinned` also considers
+pinned sessions. Both widen deletion scope and are included in the token, so
+they must be identical at preview and execution. Deletion removes core-owned
+chat, policy, metadata, index, and history state and verifies each session is
+gone before reporting success.
+
+### Verified single-session delete
+
+Single-session deletion requires the exact session key twice:
+
+```bash
+lemon sessions delete agent:research:main \
+  --confirm agent:research:main
+```
+
+A mismatch is a usage error and does not mutate state. The lifecycle service
+deletes canonical run history last, verifies all core-owned state is gone, and
+restores recoverable ancillary metadata if final deletion or verification
+fails.
+
+## Shell completion
+
+Completion scripts are generated from the same registry used by CLI dispatch
+and help, so new runtime families cannot be added to one surface while being
+omitted from the others.
+
+### Bash
+
+```bash
+mkdir -p "$HOME/.local/share/bash-completion/completions"
+lemon completion bash > "$HOME/.local/share/bash-completion/completions/lemon"
+```
+
+### Zsh
+
+```zsh
+mkdir -p "$HOME/.zfunc"
+lemon completion zsh > "$HOME/.zfunc/_lemon"
+fpath=("$HOME/.zfunc" $fpath)
+autoload -Uz compinit && compinit
+```
+
+Persist the `fpath` line in `.zshrc` if `$HOME/.zfunc` is not already in the
+completion path.
+
+### Fish
+
+```fish
+mkdir -p "$HOME/.config/fish/completions"
+lemon completion fish > "$HOME/.config/fish/completions/lemon.fish"
+```
+
+Regenerate the script after upgrading Lemon so it reflects the installed
+command registry.
+
+---
+
+Source: https://z80dev.github.io/lemon/user-guide/context-references
+
+# Context references and document extraction
+
+Lemon has one client-independent context service for inspecting and selecting
+repository, URL, document, diff, and prior-session material before it is handed
+to another workflow. The source and packaged launchers expose that service as
+`lemon context`; both commands return the same versioned, redacted contract.
+
+## Preview before resolving
+
+Use preview to run the real selection and safety checks without returning the
+selected text:
+
+```bash
+./bin/lemon context preview \
+  '@file:docs/brief.docx' \
+  '@folder:notes' \
+  '@git-diff' \
+  --root "$PWD" \
+  --max-bytes 120000 \
+  --json
+```
+
+Resolve uses the same budget and returns the selected text:
+
+```bash
+./bin/lemon context resolve '@file:analysis.ipynb' --root "$PWD"
+```
+
+Installed releases use `lemon context ...` with the same arguments. Quote
+references in a shell so characters such as `?`, `*`, and `~` are not expanded
+before Lemon receives them.
+
+## Reference forms
+
+| Form | Selection |
+| --- | --- |
+| `@file:<path>` | One regular file below `--root`. PDF, Office, notebook, and text formats are sniffed from bytes. |
+| `@folder:<path>` | Deterministic recursive selection of regular files below `--root`. |
+| `@git-diff` | Unstaged working-tree diff for `--root`. |
+| `@git-diff:staged` | Staged diff. |
+| `@git-diff:<revision>` | Diff from a validated revision. Git is invoked directly, never through a shell. |
+| `@url:<http(s)-url>` | Public URL fetched through DNS/IP SSRF checks and redirect revalidation. |
+| `@session:<session-key>` | Existing canonical, always-redacted Markdown session export. |
+
+Local paths are expanded beneath the selected root. Absolute paths outside the
+root, `..` traversal, symlinks at any selected component, special files, and
+symlinked folder entries are rejected or recorded as omissions. Folder walks
+never follow symlinks.
+
+## Budget and output contract
+
+Every response is version `1` and contains:
+
+- the exact effective input, output, item, depth, page, archive, ratio, and
+  operation-time limits;
+- selected source metadata and, for resolve, selected redacted text;
+- selected byte/item/source counts and a redaction count;
+- structured omissions for unsupported, unsafe, over-budget, truncated, or
+  unavailable material.
+
+The useful CLI bounds are `--max-bytes`, `--max-input-bytes`, `--max-items`,
+`--max-pages`, `--max-depth`, and `--timeout-ms`. The operation timeout is
+hard-capped at 60 seconds. Limits are per invocation by design: a shared config
+file cannot silently raise a caller's review budget.
+
+Sensitive-looking assignments, bearer credentials, and private-key blocks are
+redacted from selected text. URL output strips credentials, query strings, and
+fragments from returned metadata; session keys are represented by a short
+SHA-256 label. The selected text remains untrusted source material and should
+not be treated as instructions.
+
+## Document formats and safety
+
+Lemon recognizes content rather than trusting extensions:
+
+- PDF files start with the PDF signature. Literal text operators are selected;
+  page count is bounded before selection.
+- DOCX, XLSX, and PPTX are identified from ZIP members. Only the minimum text
+  members are inflated.
+- ipynb files must be JSON notebooks with a supported notebook structure. Cell
+  source is selected; rich outputs are omitted.
+- valid UTF-8 otherwise falls back to plain text.
+
+Office containers are rejected before extraction when they exceed member,
+expanded-byte, or compression-ratio limits, or contain absolute/traversal
+member names. Macros, embedded objects, external relationships, notebook
+outputs, and non-text payloads are never executed or selected.
+
+The built-in PDF reader is deliberately conservative. Scanned, encrypted, and
+many font-encoded or compressed-content PDFs return `pdf_text_unavailable`
+instead of invoking an external program or guessing. Convert such a document
+to trusted text with an operator-reviewed tool, then reference that text.
+
+URL requests accept only HTTP(S), reject URL credentials, `.local`, loopback,
+private, link-local, multicast, and metadata targets, connect to the validated
+IP while retaining the original TLS SNI/Host identity, revalidate every
+redirect, and cap request body and wall-clock time.
+
+---
+
 Source: https://z80dev.github.io/lemon/user-guide/honcho
 
 # Honcho Memory User Guide
@@ -32140,6 +33059,97 @@ Worth knowing before you go looking for them:
 
 ---
 
+Source: https://z80dev.github.io/lemon/user-guide/learn-from-sources
+
+# Learn from files, folders, and URLs
+
+Lemon can turn bounded context sources into durable memory and a reviewable
+skill draft without executing the source or creating another learning
+database. The workflow is always review first: the first command does not write
+anything, and the second command must repeat the exact source selection with
+the confirmation digest from that review.
+
+## Review without writing
+
+```bash
+lemon learn \
+  '@file:docs/operations.md' \
+  '@folder:runbooks' \
+  '@url:https://example.com/public-guide' \
+  --root "$PWD" \
+  --agent-id operator \
+  --json
+```
+
+A source checkout uses `./bin/lemon learn ...` with the same arguments. Review
+returns:
+
+- selected source/item/byte and omission counts;
+- SHA-256 provenance and content digests, never source paths or URLs;
+- the deterministic memory ID, scope, action, summary size, and digest;
+- the synthesis-draft key, action, bundle size/digest, audit verdict, and audit
+  rule identifiers;
+- destination conflicts and `canConfirm`;
+- one exact `confirmationDigest`.
+
+It never returns source text, extracted document text, a generated prompt,
+skill body, local path, URL, secret name, or secret value. Content selected by
+`LemonCore.Context` is redacted again at the durable-memory boundary.
+
+## Confirm the exact fresh plan
+
+Repeat every reference and option from review:
+
+```bash
+lemon learn confirm \
+  '@file:docs/operations.md' \
+  '@folder:runbooks' \
+  '@url:https://example.com/public-guide' \
+  --root "$PWD" \
+  --agent-id operator \
+  --confirm <64-character-review-digest> \
+  --json
+```
+
+Confirmation re-resolves all sources under the same byte, item, page, depth,
+archive, redirect, SSRF, and timeout limits. It also checks the current memory
+row, draft destination, and deterministic skill audit. A changed source,
+changed destination, collision, or blocked audit fails closed before a durable
+write.
+
+On success Lemon writes one deterministic `LemonMemory.Document` through the
+existing SQLite memory store and one audited candidate through the existing
+synthesis `DraftStore`. The skill is not installed or executed; it remains in
+the ordinary draft/promotion flow for inspection and editing. Both records
+carry the source content digest and hashed per-source provenance; the draft
+also carries its exact source memory document ID and audited bundle digest.
+They remain ordinary records: remove the memory by exact document ID through
+`LemonMemory.Store.delete_document/1` and the candidate by exact key through
+`LemonSkills.Synthesis.DraftStore.delete/2`.
+
+Run review again after confirmation to get an idempotent `unchanged` plan. This
+fresh digest can be confirmed without creating a duplicate memory row or skill
+draft.
+
+## Scope and safety
+
+- Local paths remain confined to `--root`; traversal, symlinks, and special
+  files are rejected or omitted.
+- URLs use DNS/IP-pinned public HTTP(S) fetching and revalidate every redirect.
+- PDF, Office, notebook, archive, folder, and text extraction use the same
+  explicit limits documented in [Context references](context-references.md).
+- `--project` writes the candidate draft under the project `.lemon` scope;
+  otherwise it uses the existing global draft scope.
+- `--agent-id` selects the durable memory owner. `--session-key` is available
+  for an explicit canonical learning session.
+- Learning uses only the deterministic skill audit. It never sends selected
+  source content to the optional LLM audit reviewer.
+
+The authenticated control plane exposes the same service as `learn.review`
+(read scope) and `learn.confirm` (admin scope).
+
+---
+
 Source: https://z80dev.github.io/lemon/user-guide/memory
 
 # Memory User Guide
@@ -32485,6 +33495,154 @@ yet fully translate Hermes cron jobs, gateway bindings, provider pools, MCP
 servers, plugin state, checkpoints, browser state, or exact run-history replay.
 Those files are either skipped or archived for manual review so the migration
 does not silently invent unsafe Lemon config.
+
+---
+
+Source: https://z80dev.github.io/lemon/user-guide/profiles
+
+# User-managed profiles
+
+Profiles let one Lemon runtime host durable specialist agents without adding a
+second execution engine. A profile is the canonical `[profiles.<id>]` router
+record plus an isolated home derived from its validated ID:
+
+```text
+~/.lemon/profiles/research/
+├── config.toml
+├── profile.json
+├── sessions/
+└── workspace/
+    ├── memory/
+    └── .lemon/skill/
+```
+
+The profile ID is stable. Its main conversation is always
+`agent:<id>:main`; renaming the display name does not fork or lose that chat.
+The native `coding_agent -> lemon_agent -> lemon_ai` path remains unchanged.
+
+## Create and chat
+
+```bash
+lemon profile create research \
+  --name "Research" \
+  --description "Evidence-first research specialist" \
+  --model openai:gpt-5
+
+lemon profile show research
+lemon profile chat research "Map the unresolved questions"
+lemon profile roster
+```
+
+The terminal UI exposes the same server-owned records. Run `/profiles` for a
+filterable node-aware roster; selecting an entry opens its stable
+`agent:<id>:main` conversation. `/profile current`, `/profile show <id>`, and
+`/profile open <id>` inspect or select a profile. After selection, ordinary
+prompt submissions use `profile.chat` rather than generic `chat.send`, so the
+daemon still derives the profile workspace and named-node route:
+
+```text
+/profiles
+/profile create research --name "Research" --model openai:gpt-5 --node newphy
+/profile chat research Map the unresolved questions
+```
+
+The TUI also supports `clone`, `rename`, credential-safe `export`, and guarded
+`delete` subcommands. Use `/profile help` for exact syntax. Delete requires the
+same profile ID again through `--confirm`; the TUI never accepts a profile home
+or workspace path. Export's destination is the sole lifecycle output path.
+
+The token-required browser management shell exposes the same core lifecycle at
+`/manage/profiles`. It provides a bounded filterable roster, local/named-node
+availability, profile detail, create, clone, rename, recoverable delete, and a
+direct link to the stable canonical chat. Every write is preview-first. Clone,
+rename, and delete previews bind an opaque hash of the current profile and fail
+closed if it changes; delete also requires the exact profile ID. The page never
+loads derived paths or system prompts into LiveView state. Credential-safe
+export remains available through the CLI, TUI, and control-plane API.
+
+In an installed release, `profile chat` uses the authenticated local control
+plane and starts the packaged daemon when it is not already healthy. In a
+source checkout, start `./bin/lemon --daemon` first; the one-shot
+`./bin/lemon profile chat ...` process then submits to that runtime rather than
+starting a second router whose work would disappear when the CLI exits.
+
+Use `--node <name>` at creation time to route canonical chat through an
+authenticated named execution node. The roster reports `local`, `online`, or
+`offline`. For named execution, provider credentials and the effective working
+directory stay destination-local; `profile_id` lets the destination derive its
+own profile workspace rather than trusting a controller filesystem path.
+
+All lifecycle reads support `--json`. Chat also accepts `--model` and
+`--queue-mode collect|followup|steer|interrupt` overrides. Its working boundary
+remains the derived profile workspace; generic chat/delegation APIs own any
+explicit project-directory selection. Omitting overrides uses the profile and
+normal runtime defaults.
+
+## Clone, rename, and delete
+
+```bash
+lemon profile clone research research-copy --name "Research Copy"
+lemon profile rename research "Research Prime"
+lemon profile delete research-copy --confirm research-copy
+```
+
+Clone copies regular profile-home files but rejects symlinks and special files.
+Rename updates only presentation metadata. Delete refuses the reserved
+`default` profile, requires an exact matching confirmation value, and moves the
+managed home to `~/.lemon/trash/profiles/` before removing its TOML table. A
+failed config commit restores the home.
+
+Lifecycle config edits are serialized and atomically replace the global config
+file. Targeted TOML patching preserves unrelated tables, unknown keys, and
+comments instead of decoding and rewriting the entire user file.
+
+## Credential-safe export
+
+```bash
+lemon profile export research ./research-profile.json
+```
+
+The default export is deliberately selected-file, not a backup of the entire
+home. It includes portable profile metadata, profile-local config, known
+bootstrap markdown, and text files under the profile skill tree. Before
+encoding it redacts sensitive assignments and recognizable inline credential
+patterns.
+
+It does not include:
+
+- sessions or message history;
+- memory content or artifacts;
+- binary files or special files;
+- secret-like paths such as `.env`, token, password, credential, or private-key
+  files.
+
+The JSON `exportPolicy` and command result report selected file, omission, and
+redaction counts. There is intentionally no packaged CLI option to include
+secrets. Review any export before sharing it.
+
+## Control-plane API
+
+Clients can use the equivalent JSON-RPC methods:
+
+- `profiles.list`, `profiles.get`, and `profiles.roster` (`read` scope);
+- `profiles.create`, `profiles.clone`, `profiles.rename`, `profiles.export`, and
+  `profiles.delete` (`admin` scope);
+- `profile.chat` (`write` scope).
+
+`profile.chat` returns the run ID and stable session key without echoing the
+prompt. It does not accept a caller-supplied working directory or node: both
+come from the validated profile record. Lifecycle and export summaries are
+credential-free by construction.
+
+## Current boundaries
+
+This first-class vertical covers durable local records, isolated assistant
+workspaces, lifecycle, canonical one-to-one chat, node routing, and a roster.
+Group rooms, profile-scoped cron management, import/restore, free-form prompt
+editing in browser/TUI surfaces, browser export, and merged multi-controller
+rosters remain separate product work. The TUI and Web lifecycle journeys are
+complete for their documented bounded surfaces; they intentionally do not
+invent APIs for those remaining capabilities.
 
 ---
 
@@ -33087,6 +34245,151 @@ Audit state files:
 
 ---
 
+## Portable Skill and Automation Bundles
+
+A versioned bundle can distribute an audited skill together with one
+agent-backed cron blueprint without creating another skill registry or
+scheduler. Put each unpacked bundle directly below the local catalog:
+
+```text
+~/.lemon/bundles/daily-note/
+├── bundle.json
+└── skills/
+    └── daily-note/
+        └── SKILL.md
+```
+
+The repository includes a harmless disabled example. Copy it into the catalog:
+
+```bash
+mkdir -p ~/.lemon/bundles
+cp -R examples/skill-automation-bundles/daily-note ~/.lemon/bundles/daily-note
+```
+
+The directory name, `bundle.json` `id`, skill key, and declared
+`skills/<key>` path use lowercase safe IDs. Version 1 requires this manifest
+header, at least one skill, and exactly one cron automation:
+
+```json
+{
+  "format": "lemon-skill-automation-bundle",
+  "version": 1,
+  "id": "daily-note",
+  "skills": [{"key": "daily-note", "path": "skills/daily-note"}],
+  "automations": [{
+    "id": "daily-note-reminder",
+    "kind": "cron",
+    "name": "Daily note reminder",
+    "schedule": "0 0 1 1 *",
+    "prompt": "Use the daily-note skill to summarize completed work.",
+    "enabled": false,
+    "timezone": "UTC"
+  }]
+}
+```
+
+### Review and activate
+
+Start the unified runtime, then use the same catalog-scoped CLI in a source
+checkout or packaged release. The packaged launcher starts its daemon when
+needed; source users run `./bin/lemon --daemon` first. With no arguments the
+family lists the bounded catalog, and a bundle ID plus `--profile` is preview
+shorthand:
+
+```bash
+lemon blueprints
+lemon blueprints inspect daily-note
+lemon blueprints validate daily-note --json
+lemon blueprints daily-note --profile operator
+lemon blueprints preview daily-note --profile operator --json
+```
+
+These commands never accept an arbitrary filesystem path. The CLI delegates to
+the authenticated catalog-scoped control-plane methods rather than loading the
+bundle or starting automation in its one-shot VM. Direct WebSocket clients can
+use the same RPCs:
+
+```json
+{"type":"req","id":"1","method":"blueprints.list","params":{}}
+{"type":"req","id":"2","method":"blueprints.inspect","params":{"bundleId":"daily-note"}}
+{"type":"req","id":"3","method":"blueprints.validate","params":{"bundleId":"daily-note"}}
+{"type":"req","id":"4","method":"blueprints.preview","params":{"bundleId":"daily-note","profileId":"operator"}}
+```
+
+`blueprints.preview` does not mutate anything. Review its exact skill and cron
+actions, target profile, content hashes, schedule, enabled state, and cleanup
+flags. The response deliberately contains prompt byte/hash metadata rather than
+prompt text. If the plan is correct, send its exact `confirmationDigest`:
+
+```bash
+lemon blueprints activate daily-note --profile operator \
+  --confirm <digest-from-preview>
+```
+
+Or through JSON-RPC:
+
+```json
+{"type":"req","id":"5","method":"blueprints.activate","params":{"bundleId":"daily-note","profileId":"operator","confirmationDigest":"<digest from preview>"}}
+```
+
+Or open the token-required Web management page at `/manage/blueprints`. The
+browser lists safe IDs/counts, validates the selected entry, and previews the
+same exact profile skill and cron actions. Type the displayed digest to apply.
+The Web socket deliberately omits free-form manifest prose as well as prompts,
+skill bodies, commands, environment values, paths, tokens, and secrets.
+
+The Bun TUI uses the same catalog and activation service:
+
+```text
+/blueprints
+/blueprint inspect daily-note
+/blueprint validate daily-note
+/blueprint preview daily-note --profile operator
+/blueprint activate daily-note --profile operator --confirm <digest-from-preview>
+```
+
+The picker and command receipts are deliberately narrower than the RPC and Web
+projections: only bounded IDs, counts, actions, booleans, and digests enter
+terminal state. Every activation obtains a fresh preview before mutation,
+refuses a changed or incorrect digest without calling activate, never queues
+the admin method offline, clears the pending plan on refusal, and preserves the
+bounded profile draft. Preview again after a create to obtain the new unchanged
+digest for duplicate-safe replay.
+
+Activation reloads and re-plans under a lock. Any content change, destination
+change, existing-ID conflict, or stale digest rejects the operation. A
+successful activation copies the skill only into the profile's derived
+`workspace/.lemon/skill/` boundary, enables it in that workspace, and claims a
+stable cron ID through the existing `CronManager`. Previewing and activating
+the same bundle again reports `unchanged` and leaves one job.
+
+### Security boundary
+
+Portable bundles are untrusted input. Version 1 rejects archives, symlinks,
+unknown paths or fields, oversized trees, unsupported file types, control/bidi
+characters, command/shell/script jobs, environment or working-directory
+overrides, memory-file overrides, credential-like keys or values, and non-UTC
+timezones. Skill manifest/lint and deterministic audit checks run on the source
+and again on the staged copy before any rename. Public results omit absolute
+paths, skill bodies, prompt text, command text, and secret values.
+
+This first vertical does not provide archive import, signing, publishing, a
+remote registry, command blueprints, heartbeats, or multiple jobs per bundle.
+Use the local `LemonAutomation.Blueprint` service directly
+only for trusted source-checkout administration that genuinely needs a local
+path; normal operators should use `lemon blueprints`, and remote clients should
+use the catalog-scoped RPC.
+
+Run the booted-runtime proof to activate the disabled example, verify
+profile-local discovery and persisted provenance, replay it without a
+duplicate, then clean up the isolated profile and job:
+
+```bash
+MIX_ENV=dev mix run --no-start scripts/live_skill_automation_blueprint_smoke.exs
+```
+
+---
+
 ## Skill Drafts (Synthesized Skills)
 
 Lemon can automatically generate draft skills from your past successful runs.
@@ -33190,7 +34493,130 @@ skills_hub_v2                = "default-on"   # full hub UX
 skill_synthesis_drafts       = "off"          # auto-generate drafts from memory
 ```
 
-*Last reviewed: 2026-05-16*
+*Last reviewed: 2026-08-30*
+
+---
+
+Source: https://z80dev.github.io/lemon/user-guide/updates
+
+# Safely update and roll back Lemon
+
+Installer-managed `lemon_runtime_min`, `lemon_runtime_full`, and simulation
+releases expose a preview-confirm update lifecycle. Lemon never replaces the
+running process in place: it stages a verified version, atomically moves the
+`~/.lemon/versions/current` pointer, and asks you to restart.
+
+## Check and plan
+
+```bash
+lemon update check
+lemon update plan
+```
+
+`check` compares the running release with the published schema-2 manifest.
+`plan` is non-mutating: it creates no update directory, receipt, checkpoint,
+download, or staged version. Its opaque digest binds all of the following:
+
+- the exact running version and `versions/current` target;
+- channel, target version, release profile, and platform;
+- the SHA-256 of the raw manifest plus its source commit;
+- each selected runtime/TUI artifact filename, declared size, and SHA-256;
+- a short expiry window.
+
+The digest is authorization for one exact plan, not a general `--yes` switch.
+Changing the manifest, active version, artifact, or time window makes it stale.
+
+## Apply the exact plan
+
+```bash
+lemon update apply --confirm <plan-digest>
+lemon stop && lemon daemon
+lemon status
+```
+
+Apply re-plans once before taking the update lock and again under the exclusive
+lock. It refuses a missing, stale, or incorrect digest before downloading or
+writing update state. Before staging, it records a private verified checkpoint
+of the exact current launcher. It then:
+
+1. downloads only the manifest-selected artifacts with bounded time and a hard
+   declared-size ceiling;
+2. verifies each downloaded byte count and SHA-256;
+3. rejects unsafe archives before extraction: absolute or parent-traversing
+   names, symlinks, hard links, devices, FIFOs, and excessive entry/expanded
+   sizes all fail closed;
+4. extracts into a partial directory, verifies the resulting tree and the
+   staged `bin/lemon version`, then promotes it with a same-filesystem rename;
+5. atomically flips `versions/current`, verifies the active launcher, and only
+   then writes the successful receipt.
+
+If validation fails after the pointer moves, Lemon restores the exact prior
+pointer. Downloads and partial directories are removed on every outcome.
+
+The current schema-2 release manifest provides **checksum authentication**, not
+publisher signing: the artifact SHA-256 and declared size are mandatory, but
+Lemon releases do not currently publish a detached signature or trusted signing
+key for the manifest. Do not describe this flow as cryptographically signed.
+
+Erlang `:httpc` streams artifacts directly to a file and Lemon enforces the
+manifest's declared maximum plus the exact post-download size. The current
+client boundary cannot cancel an in-progress response at the exact byte that it
+crosses the declared size; an overlong response is deleted and refused after
+the bounded request returns. This is a known residual, not an unlimited install
+or an integrity bypass.
+
+## Inspect receipts and roll back
+
+```bash
+lemon update history
+lemon update history --limit 5 --json
+lemon update rollback --receipt <apply-receipt-id> \
+  --confirm <rollback-digest>
+lemon stop && lemon daemon
+```
+
+History is newest first and bounded. Receipts live under
+`~/.lemon/updates/receipts`; verified checkpoints live beside them under
+`checkpoints`. Directories are owner-only (`0700`) and files are owner-only
+(`0600`). Records contain only version/profile/platform identity, timestamps,
+receipt/checkpoint IDs, manifest/plan integrity metadata, and status. They do
+not contain artifact contents, command output, environment values, credentials,
+secret names, or absolute paths.
+
+Rollback never picks a directory by recency and never accepts a filesystem
+path. It requires the exact successful apply receipt and that receipt's exact
+rollback digest. Lemon verifies that the current pointer still names the
+receipt's target and that the retained checkpoint launcher still matches its
+recorded SHA-256 before flipping to the receipt-bound prior version. A failed
+rollback receipt write restores the update target instead of leaving an
+unrecorded state.
+
+User configuration, encrypted credentials, sessions, memory, and stores are
+outside the managed `versions/` target and are never restored by update
+rollback. Use [`lemon backup`](backups.md) for user-state recovery.
+
+## Source checkouts and other layouts
+
+Source checkouts are not binary installations. They support the read-only
+published-version visibility and receipt history surfaces:
+
+```bash
+./bin/lemon update check
+./bin/lemon update history
+```
+
+`plan`, `apply`, and `rollback` fail closed with source-update guidance. Use
+your reviewed Git workflow to update a checkout. The legacy no-subcommand
+`./bin/lemon update` and its contributor flags remain the local stage-1
+maintenance task; it does not download or replace release artifacts.
+
+Manual tarball directories and container images also fail the managed-layout
+guard. Replace or roll those deployments back through their service/container
+orchestrator instead of pointing Lemon at an arbitrary path.
+
+All update commands use exit `0` for success, `1` for an operational or
+verification refusal, and `2` for invalid arguments. `--json` emits one stable
+success document on stdout or one redacted error document on stderr.
 
 ---
 
@@ -33251,19 +34677,94 @@ not become ready, run `lemon doctor` and follow its recovery guidance.
 
 Once the page shows **Ready**, enter a prompt or attach up to five files (20 MB
 each). Responses and tool activity stream into the page. While a run is active,
-choose **Stop** to request cancellation. Session identifiers are available
-under **Session details** when debugging, but are hidden during ordinary use.
+the composer switches to text-only active-run controls:
+
+- **Follow-up** queues a separate turn after the current run finishes.
+- **Steer** adds guidance to the current run without replacing its direction.
+- **Redirect** replaces the pending direction while preserving tool work that
+  has already completed.
+
+The page discovers active work when a named session is opened, rechecks the
+same shared router state before submitting guidance, and keeps the draft if the
+run ended in the meantime. A successful message confirms what was requested;
+a refused request uses a bounded explanation and never displays node
+credentials, remote paths, or internal runtime terms. Choose **Check status**
+to reconcile the controls manually or **Stop** to request cancellation of the
+actual active run. Session and run identifiers remain hidden during ordinary
+use and are available under **Session details** only when debugging.
 
 Each browser tab gets its own stable session in `sessionStorage`. Use
 `/sessions/<session-key>` only when deliberately attaching to a known Lemon
-session.
+session. Named routes reload durable prompt, tool, and answer history before
+subscribing to new streaming events, so an existing conversation can be
+continued rather than merely reused as an empty routing key.
+
+## Management access
+
+Set `LEMON_WEB_ACCESS_TOKEN`, launch the full runtime, and open `/manage` with
+the token once:
+
+```text
+http://127.0.0.1:4080/manage?token=<your-token>
+```
+
+The server validates the token, stores only a derived signed-session marker,
+and redirects to the same address without `token` before rendering the page.
+The server validates the same token for every page under `/manage`. The
+sessions page shows local runtime health, live named-node names, and
+durable-session counts. From there you can:
+
+- search session keys, titles, prompts, and answers, then filter active,
+  archived, or all sessions;
+- add a title, pin important work, archive completed work, and resume a chat;
+- inspect redacted prompts, answers, and structured tool activity;
+- download bounded, redacted JSON or Markdown exports; and
+- preview and confirm pruning of archived, unpinned sessions older than a
+  chosen threshold.
+
+Prune never accepts a count-only confirmation. The preview token binds the
+threshold and exact candidate identities plus their current lifecycle state.
+If any candidate changes, no deletion occurs and the page asks for a fresh
+preview. Export and inspection omit raw run records, raw event payloads,
+credentials, and secret values and report any size-bound run omissions.
+
+### Manage provider routing
+
+Choose **Providers** from the sessions page, or open `/manage/providers`, to
+inspect effective routing without displaying config paths, prompts, base URLs,
+environment-variable names, secret names, or credential references. The page
+supports:
+
+- ordered fallback append, removal, and clear;
+- credential-pool create/update, strategy selection, activation, and delete;
+- credential-reference add, remove, and provider-level clear; and
+- redacted pool/reference counts plus the active pool.
+
+Every mutation starts as a preview and writes nothing. The preview is bound to
+an opaque revision of the target config; if another process changes that config
+before apply, Lemon rejects the stale apply and keeps the non-secret form draft
+for another preview. Removing or clearing fallbacks, updating or deleting an
+existing pool, and removing or clearing credential references also require the
+provider or pool confirmation shown by the preview to be typed exactly.
+
+Credential references accept only `secret:NAME` or `env:NAME`. Their names are
+entered through a password field, filtered from LiveView logs, and never stored
+in socket draft state or rendered back into HTML. For an apply, the browser asks
+you to re-enter the same reference and Lemon compares only its digest before
+calling the shared provider-configuration service. The service remains the
+single owner of comment-preserving validation and atomic TOML replacement.
+
+Approvals, automation, skills/MCP, memory, logs, and broader configuration still
+use their existing CLI/TUI/control-plane surfaces.
 
 ## Access control
 
 The Web UI binds to localhost in the supported local launch path. To require a
-token as well, set a high-entropy `LEMON_WEB_ACCESS_TOKEN` before starting
-Lemon. `lemon web` passes URL-safe configured tokens to the browser for the
-one-time login; the client removes the query parameter after the authenticated
+token for chat as well, set a high-entropy `LEMON_WEB_ACCESS_TOKEN` before
+starting Lemon. The management surface always requires this token and returns
+HTTP 503 when it is not configured. `lemon web` passes URL-safe configured
+tokens to the browser for the one-time login; the server consumes the query
+parameter with an immediate token-free redirect after the authenticated
 session cookie is established.
 
 For a remote deployment, terminate TLS in front of Lemon and require the token.
@@ -33280,6 +34781,9 @@ Do not expose an unauthenticated HTTP listener to an untrusted network.
 | Minimal-profile error | Reinstall with `LEMON_PROFILE=full`. |
 | Browser did not open | Use `lemon web --no-open` and open the printed URL manually. |
 | HTTP 401 | Launch through `lemon web` with the same `LEMON_WEB_ACCESS_TOKEN`, or supply the token once as `?token=...`. |
+| Management HTTP 503 | Set a non-empty `LEMON_WEB_ACCESS_TOKEN`, restart Lemon, and authenticate once. |
+| Provider preview became stale | Keep the preserved non-secret draft, review the refreshed status, and preview the exact change again. |
+| Active-run choices disappeared | The run finished or is no longer eligible. Send the preserved draft as a new message, or choose **Check status** if the run is still active elsewhere. |
 
 The UI ships its CSS and Phoenix client assets inside the Lemon release. It
 does not require a JavaScript or CSS CDN at runtime. The page includes a skip
@@ -33400,7 +34904,9 @@ it is released when the process dies, for any reason, including the node being k
 
 What happens to the second message instead of being dropped is the job of
 `LemonRouter.SessionCoordinator` — one process per conversation — which interprets queue
-modes (`:steer`, `:steer_backlog`, `:collect`, `:interrupt`). The decisions themselves live
+modes (`:followup`, `:steer`, `:steer_backlog`, `:redirect`, `:collect`, `:interrupt`).
+Redirect replaces only the active model request while keeping completed tool work; steer
+does not cancel that request. The decisions themselves live
 in [`session_transitions.ex`](../apps/lemon_router/lib/lemon_router/session_transitions.ex)
 as a pure reducer; the process only performs the I/O the reducer asks for.
 

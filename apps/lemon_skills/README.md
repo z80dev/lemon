@@ -1,5 +1,20 @@
 # LemonSkills
 
+## Learn from bounded sources
+
+`LemonSkills.Learn` turns existing `LemonCore.Context` references into one
+durable-memory proposal and one audited synthesis draft. `review/2` never
+writes; it returns hashes, counts, audit rule identifiers, and destination
+conflicts without returning source text, prompts, paths, URLs, or secrets.
+`confirm/3` re-runs the complete selection and accepts only the exact digest
+from the fresh review. It writes to `LemonMemory.Store` and
+`LemonSkills.Synthesis.DraftStore`; there is no separate learning database and
+the resulting skill remains a draft until the existing promotion flow reviews
+it. The service disables optional LLM audit for selected source content,
+atomically creates exact memory/draft destinations, and stores only hashed
+source provenance plus the exact source-memory ID and audited bundle digest in
+ordinary records removable through the existing store APIs.
+
 Skill registry, discovery, installation, audit, and lifecycle management for the Lemon agent platform.
 
 LemonSkills provides a centralized system for extending agent capabilities through modular, file-based skills. Skills are directories containing a `SKILL.md` manifest file with optional YAML/TOML frontmatter, and the system handles discovery from disk, online sources, installation with approval gating, static security audit, optional LLM-backed audit review, status checking, and relevance-based retrieval.
@@ -72,6 +87,14 @@ LemonSkills does not execute skills directly. Instead, it serves as a **content 
 4. **Status gating** -- Before a skill is used, `Status.check/2` verifies that required binaries and environment variables are present.
 5. **Installation** -- New skills can be installed from Git repositories, local paths, or the live official Hermes catalog, with approval gating via `LemonCore.ExecApprovals`.
 6. **Audit** -- All non-builtin installs and updates run through deterministic audit checks plus an optional LLM reviewer. `:block` verdicts fail the operation, and `:warn` verdicts require explicit approval before the skill is kept.
+
+Portable skill + automation bundles are orchestrated by
+`LemonAutomation.Blueprint`, not by another LemonSkills registry or installer.
+That service reuses this package's deterministic bundle hash, manifest lint,
+audit engine, project config, and registry refresh while placing skills only in
+the target profile's derived project workspace. See the
+[`daily-note` example](../../examples/skill-automation-bundles/daily-note/)
+and [user guide](../../docs/user-guide/skills.md#portable-skill-and-automation-bundles).
 
 ### Application Startup
 

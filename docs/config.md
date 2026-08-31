@@ -5,11 +5,18 @@ Lemon uses a single canonical configuration file in TOML format. Configuration i
 1. Global: `~/.lemon/config.toml`
 2. Project: `<project>/.lemon/config.toml` (overrides global)
 3. Environment variables (override file values; `.env` may auto-populate missing env vars at startup)
-4. Lemon secrets referenced from config (for secret-backed fields)
+4. Credential references resolved through Lemon's encrypted store, explicitly
+   enabled external sources, and the ordinary same-name environment fallback
 
 Runtime state and policy are separate from config. Per-session or per-route "current"
 model/thinking values override config defaults at runtime, but they are not persisted in
 `config.toml`.
+
+Operational backup policy is also intentionally separate from TOML. Use
+`lemon backup contract|create|list|verify|restore`; there are no implicit
+backup directories or credential-inclusion settings in `config.toml`. See
+[Back up and restore Lemon user state](user-guide/backups.md) for the versioned
+`~/.lemon` data contract.
 
 ## Example
 
@@ -177,6 +184,17 @@ transport = "telegram"
 chat_id = 12345678
 agent_id = "default"
 ```
+
+`LemonCore.ProfileStore` is the lifecycle owner for user-managed profiles.
+Commands such as `lemon profile create research` patch only the selected
+`[profiles.<id>]` table, preserving unrelated global-config keys and comments.
+Managed records may include `name`, `description`, `avatar`, `model`,
+`system_prompt`, `node`, `status`, `profile_version`, `created_at`, and
+`updated_at`. Home/workspace paths and the stable `agent:<id>:main` session key
+are derived from the validated ID rather than stored; do not add credentials or
+filesystem paths to the profile table. See
+[User-managed profiles](user-guide/profiles.md) for clone, credential-safe
+export, recoverable deletion, and named-node routing.
 
 ## Native Execution and Subagents
 
@@ -365,6 +383,7 @@ Use only these top-level sections:
 - `defaults`
 - `runtime`
 - `features`
+- `secrets.sources.<source_id>`
 - `profiles.<agent_id>`
 - `providers.<name>`
 - `gateway`
@@ -377,6 +396,128 @@ Deprecated sections now fail validation and runtime loading:
 - `[agents.<id>]` -> move to `[profiles.<id>]`
 - `[agent.tools.*]` -> move to `[runtime.tools.*]`
 - `[tools.*]` -> move to `[runtime.tools.*]`
+
+## External secret sources
+
+External sources are read-only adapters integrated into
+`LemonCore.Secrets.resolve/2`; they are not another secret store. Resolution is
+ordered as follows:
+
+1. Lemon's encrypted store;
+2. enabled external sources ordered by `priority`, then source id;
+3. the same-name environment variable when `env_fallback` is enabled.
+
+A successful source that does not contain the requested name continues to the
+next source. Any enabled source configuration, spawn, timeout, output, parse,
+or bootstrap failure stops resolution before the ordinary environment
+fallback. This fail-closed behavior prevents an unhealthy configured manager
+from being silently bypassed. `env_fallback: false` disables both the external
+and environment fallbacks; internal bootstrap reads use only the encrypted
+store and ordinary environment path so sources cannot recurse.
+
+Every source requires the exact TOML boolean `enabled = true`. A quoted
+`"true"`, unknown setting, unknown source type, relative executable path with a
+slash, shell command string, or out-of-range limit fails validation. Programs
+are started directly from an argv array, never through a shell. Each child gets
+only a small operating environment (`HOME`, platform path/temp/locale fields,
+and `NO_COLOR`) plus explicitly passed variables. Stdout and stderr are
+captured together under one byte limit and are never returned in errors,
+status, logs, or proof output.
+
+Common source settings:
+
+| Setting | Default | Contract |
+| --- | --- | --- |
+| `type` | required | `onepassword`, `bitwarden`, or `command` |
+| `enabled` | `false` | Only the exact boolean `true` enables execution |
+| `priority` | `100` | Integer `0..1000`; lower runs first |
+| `executable` | provider default | Absolute path or bare executable name |
+| `timeout_ms` | `3000` | Integer `100..30000` |
+| `max_output_bytes` | `65536` | Integer `1..1048576`, stdout and stderr combined |
+| `cache_ttl_ms` | `0` | Integer `0..300000`; `0` disables caching |
+
+The optional cache is bounded to 32 process-local entries and disappears on
+restart. It never persists source values to config or the encrypted store.
+
+### 1Password
+
+Map each Lemon secret name to an `op://` reference. Lemon invokes `op read
+--no-newline [--account ACCOUNT] -- REFERENCE` separately for each mapping.
+If `auth_secret` is set, Lemon resolves that bootstrap credential only from its
+existing encrypted store or same-name environment fallback and gives it to the
+child as `auth_env`. Without `auth_secret`, an already authenticated local `op`
+session or the named ambient auth variable may be used.
+
+```toml
+[secrets.sources.onepassword]
+type = "onepassword"
+enabled = true
+priority = 10
+executable = "op"
+timeout_ms = 3000
+max_output_bytes = 65536
+cache_ttl_ms = 0
+account = "team"
+auth_secret = "op_service_account_token"
+auth_env = "OP_SERVICE_ACCOUNT_TOKEN"
+refs = { anthropic_api_key = "op://Lemon/Anthropic/api-key", openai_api_key = "op://Lemon/OpenAI/api-key" }
+```
+
+### Bitwarden Secrets Manager
+
+Bitwarden uses `bws secret list PROJECT_ID --output json` and accepts only a
+JSON list of unique non-empty `{"key": ..., "value": ...}` objects. Store the
+bootstrap access token in Lemon under `access_token_secret`, or provide the
+same-name environment variable. `access_token_env` controls the variable name
+passed to `bws`; an optional `server_url` must be credential-free HTTPS with no
+query or fragment.
+
+```toml
+[secrets.sources.bitwarden]
+type = "bitwarden"
+enabled = true
+priority = 20
+executable = "bws"
+project_id = "team-project-id"
+access_token_secret = "bws_access_token"
+access_token_env = "BWS_ACCESS_TOKEN"
+# server_url = "https://vault.example.com"
+```
+
+### Arbitrary command
+
+Command sources accept only an argv array. Output is UTF-8 `NAME=VALUE`, one
+entry per line; blank lines and lines beginning with `#` are ignored. Names
+must be unique and values non-empty. `pass_env` copies only the listed ambient
+variables. `secret_env` maps a child environment name to an existing Lemon
+encrypted-store/same-name-environment secret; it never resolves another
+external source.
+
+```toml
+[secrets.sources.local_helper]
+type = "command"
+enabled = true
+priority = 30
+argv = ["/usr/local/bin/lemon-secret-helper", "export", "--profile", "prod"]
+timeout_ms = 2000
+max_output_bytes = 32768
+cache_ttl_ms = 0
+pass_env = ["HELPER_PROFILE"]
+secret_env = { HELPER_TOKEN = "helper_bootstrap_token" }
+```
+
+Inspect readiness without invoking any source, then perform a redaction-safe
+live test:
+
+```bash
+lemon secrets sources status --json
+lemon secrets sources test --json
+lemon secrets sources test local_helper
+```
+
+These commands reveal source id/type, readiness, provenance, counts, output
+byte count, duration, and stable error kinds only. They never reveal secret
+values. `lemon secrets check` reports a resolved credential only as `present`.
 
 ## Dotenv Autoload
 
@@ -510,8 +651,9 @@ Provider onboarding flows:
 - Write the relevant `providers.<provider>` config keys
 - Support `--set-default`, `--model`, and `--config-path`
 
-Provider readiness is visible through the read-only control-plane
-`providers.status` method. It uses the same
+Provider readiness is visible through the source and packaged
+`lemon providers status` command and the read-only control-plane
+`providers.status` method. They use the same
 `LemonAgent.ModelRuntime.Credentials` credential resolver as model execution, so env keys, encrypted
 secret references, OAuth/default-secret paths, and provider-specific credential
 shapes are checked the same way runtime calls check them. The response reports
@@ -519,6 +661,48 @@ booleans such as `credentialReady`, `apiKeyConfigured`,
 `apiKeySecretConfigured`, `oauthSecretConfigured`, `baseUrlConfigured`, and
 `envConfigured`; it does not return raw API keys, secret names, base URLs, or
 env var names.
+
+Fallbacks and credential-pool references can be edited through the same
+packaged/source command boundary:
+
+```bash
+# Installed release (use ./bin/lemon from a source checkout)
+lemon providers fallback add zai
+lemon providers pool set burst --provider openai --provider zai \
+  --strategy round_robin --activate
+lemon providers pool credential add burst openai secret:openai_backup
+lemon providers status --json
+```
+
+Only explicit `secret:NAME` and `env:NAME` references are accepted for pool
+credentials; values remain owned by the encrypted secret store or process
+environment. The command preserves unrelated comments, validates the complete
+resulting TOML, and atomically replaces the selected global or project config.
+Mutations apply by default; use `--dry-run` to preview. Removing a fallback,
+deleting or updating an existing pool, and removing or clearing credential
+references require the exact confirmation value shown by the preview:
+
+```bash
+lemon providers fallback remove zai --dry-run --json
+lemon providers fallback remove zai --confirm zai
+```
+
+The admin-scoped `providers.configure` control-plane method exposes the same
+actions (`fallback.add`, `fallback.remove`, `fallback.clear`, `pool.upsert`,
+`pool.delete`, `pool.credential.add`, `pool.credential.remove`, and
+`pool.credential.clear`). RPC mutations are preview-only unless `apply: true`
+is explicit. Remote callers may select `global` or `project` scope but cannot
+provide an arbitrary config path. Results expose provider and pool names plus
+counts; they never include raw keys, secret names, credential references, base
+URLs, or environment-variable names.
+
+Preview results include an opaque `configRevision`. A caller that passes it
+back as `expectedRevision` on apply gets an atomic stale-write guard: the shared
+service compares the revision while holding its target-config lock and rejects
+the mutation if any config content changed after preview. `/manage/providers`
+uses this contract for all Web mutations, then adds exact confirmation for
+destructive actions and requires credential-reference values to be re-entered
+instead of retaining them in LiveView state.
 
 Memory-provider readiness is visible through read-only `memory.status` and
 support-bundle `memory_diagnostics.json`. These surfaces expose
@@ -553,7 +737,9 @@ credential_pool = "burst"
 distribution = { openai = 70, zai = 20, anthropic = 10 }
 ```
 
-`providers.status` includes a redacted `routing` block with the requested
+`providers.status` and `lemon providers status` include a redacted
+`routingConfig` block for effective fallback/pool configuration and a `routing`
+block with the requested
 provider/model, selected provider/model, fallback candidates, candidate
 readiness booleans, selected routing profile, selected credential pool,
 profile distribution weights, pool provider names, pool strategy, and

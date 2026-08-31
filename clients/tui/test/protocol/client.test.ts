@@ -166,6 +166,37 @@ describe("request correlation", () => {
 	});
 });
 
+describe("session lifecycle offline safety", () => {
+	test("metadata, prune, delete, and export never enter the reconnect queue", async () => {
+		const client = makeClient("ws://127.0.0.1:1/ws");
+		const methods = new ControlPlaneMethods(client);
+		for (const request of [
+			methods.sessionsMetadataPatch({ sessionKey: "s1", pinned: true }),
+			methods.sessionsPrune({ olderThanMs: 1, dryRun: false, confirmToken: "token" }),
+			methods.sessionsDelete({ sessionKey: "s1" }),
+			methods.sessionsExport({ sessionKey: "s1", format: "json" }),
+		]) {
+			await expect(request).rejects.toBeInstanceOf(NotConnectedError);
+		}
+		expect(client.queued).toHaveLength(0);
+	});
+});
+
+describe("blueprint activation offline safety", () => {
+	test("activation never enters the reconnect queue", async () => {
+		const client = makeClient("ws://127.0.0.1:1/ws");
+		const methods = new ControlPlaneMethods(client);
+		await expect(
+			methods.blueprintsActivate({
+				bundleId: "daily-note",
+				profileId: "operator",
+				confirmationDigest: "a".repeat(64),
+			}),
+		).rejects.toBeInstanceOf(NotConnectedError);
+		expect(client.queued).toHaveLength(0);
+	});
+});
+
 describe("events", () => {
 	test("demuxes server events to typed listeners", async () => {
 		const server = await withServer();
@@ -304,6 +335,21 @@ describe("method gating", () => {
 		void methods.chatSend({ sessionKey: "s1", prompt: "hi" }).catch(() => {});
 		await Bun.sleep(5);
 		expect(client.queued.map((entry) => entry.method)).toEqual(["chat.send"]);
+	});
+
+	test("profile.chat can be queued offline without losing its canonical route", async () => {
+		const client = makeClient("ws://127.0.0.1:1/ws");
+		const methods = new ControlPlaneMethods(client);
+		void methods
+			.profileChat({ id: "research", prompt: "keep going", queueMode: "steer" })
+			.catch(() => {});
+		await Bun.sleep(5);
+
+		expect(client.queued).toHaveLength(1);
+		expect(client.queued[0]).toMatchObject({
+			method: "profile.chat",
+			params: { id: "research", prompt: "keep going", queueMode: "steer" },
+		});
 	});
 
 	test("chatHistory defaults includeFullText to true", async () => {

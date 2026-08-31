@@ -36,7 +36,7 @@ defmodule LemonCore.Secrets do
 
   alias LemonCore.Clock
   alias LemonCore.MapHelpers
-  alias LemonCore.Secrets.{Crypto, MasterKey}
+  alias LemonCore.Secrets.{Crypto, External, MasterKey}
   alias LemonCore.Store
 
   @table :secrets_v1
@@ -142,39 +142,58 @@ defmodule LemonCore.Secrets do
   end
 
   @spec resolve(name(), keyword()) ::
-          {:ok, String.t(), :store | :env} | {:error, error_reason()}
+          {:ok, String.t(), :store | :env | String.t()} | {:error, error_reason()}
   def resolve(name, opts \\ []) do
+    prefer_env = Keyword.get(opts, :prefer_env, false)
+    env_fallback = Keyword.get(opts, :env_fallback, true)
+    external_fallback = Keyword.get(opts, :external_fallback, env_fallback)
+
+    if prefer_env do
+      case fetch_env(name, opts) do
+        {:ok, value} -> {:ok, value, :env}
+        :error -> resolve_from_store(name, external_fallback, env_fallback, opts)
+      end
+    else
+      resolve_from_store(name, external_fallback, env_fallback, opts)
+    end
+  end
+
+  @doc """
+  Resolves only the encrypted store and same-name environment fallback.
+
+  External-source implementations use this for bootstrap credentials so a
+  source can never recurse through itself or another external source.
+  """
+  @spec resolve_local(name(), keyword()) ::
+          {:ok, String.t(), :store | :env} | {:error, error_reason()}
+  def resolve_local(name, opts \\ []) do
     prefer_env = Keyword.get(opts, :prefer_env, false)
     env_fallback = Keyword.get(opts, :env_fallback, true)
 
     if prefer_env do
       case fetch_env(name, opts) do
         {:ok, value} -> {:ok, value, :env}
-        :error -> resolve_from_store(name, env_fallback, opts)
+        :error -> resolve_from_store_local(name, env_fallback, opts)
       end
     else
-      resolve_from_store(name, env_fallback, opts)
+      resolve_from_store_local(name, env_fallback, opts)
     end
   end
 
   @spec exists?(name(), keyword()) :: boolean()
   def exists?(name, opts \\ []) do
+    match?({:ok, _value, _source}, resolve(name, opts))
+  end
+
+  @doc "Checks only the encrypted store and same-name environment fallback."
+  @spec exists_local?(name(), keyword()) :: boolean()
+  def exists_local?(name, opts \\ []) do
     prefer_env = Keyword.get(opts, :prefer_env, false)
     env_fallback = Keyword.get(opts, :env_fallback, true)
 
-    cond do
-      prefer_env and match?({:ok, _}, fetch_env(name, opts)) ->
-        true
-
-      store_exists?(name, opts) ->
-        true
-
-      env_fallback ->
-        match?({:ok, _}, fetch_env(name, opts))
-
-      true ->
-        false
-    end
+    (prefer_env and match?({:ok, _}, fetch_env(name, opts))) or
+      store_exists?(name, opts) or
+      (env_fallback and match?({:ok, _}, fetch_env(name, opts)))
   end
 
   @doc """
@@ -286,22 +305,43 @@ defmodule LemonCore.Secrets do
     }
   end
 
-  defp resolve_from_store(name, env_fallback, opts) do
+  defp resolve_from_store(name, external_fallback, env_fallback, opts) do
     case get(name, opts) do
       {:ok, value} ->
         {:ok, value, :store}
 
       {:error, reason} ->
-        if env_fallback do
-          case fetch_env(name, opts) do
-            {:ok, value} -> {:ok, value, :env}
-            :error -> {:error, reason}
-          end
-        else
-          {:error, reason}
-        end
+        resolve_after_store(name, reason, external_fallback, env_fallback, opts)
     end
   end
+
+  defp resolve_after_store(name, store_reason, true, env_fallback, opts) do
+    case External.resolve(name, opts) do
+      {:ok, value, provenance} -> {:ok, value, provenance}
+      {:error, :not_found} -> maybe_resolve_env(name, store_reason, env_fallback, opts)
+      {:error, reason} -> {:error, {:external_source, reason}}
+    end
+  end
+
+  defp resolve_after_store(name, store_reason, false, env_fallback, opts) do
+    maybe_resolve_env(name, store_reason, env_fallback, opts)
+  end
+
+  defp resolve_from_store_local(name, env_fallback, opts) do
+    case get(name, opts) do
+      {:ok, value} -> {:ok, value, :store}
+      {:error, reason} -> maybe_resolve_env(name, reason, env_fallback, opts)
+    end
+  end
+
+  defp maybe_resolve_env(name, reason, true, opts) do
+    case fetch_env(name, opts) do
+      {:ok, value} -> {:ok, value, :env}
+      :error -> {:error, reason}
+    end
+  end
+
+  defp maybe_resolve_env(_name, reason, false, _opts), do: {:error, reason}
 
   defp store_exists?(name, opts) do
     with {:ok, normalized_name} <- normalize_name(name),

@@ -72,7 +72,7 @@ clear both mirrors so diagnostics never report already-consumed work.
 
 Tools are divided into two sets. `coding_tools/2` is the default set passed to sessions; `all_tools/2` includes extras not in the default set.
 
-**Default `coding_tools/2`** (66 tools registered in `CodingAgent.Tools.coding_tools/2` and `@builtin_tools` in `ToolRegistry`):
+**Default `coding_tools/2`** (58 platform builtins, plus any non-conflicting tools registered by satellite apps):
 
 | Category | Tools |
 |----------|-------|
@@ -257,7 +257,14 @@ validated on that destination. `task` stays in-process on the current host.
 | `CodingAgent.Compaction` | Context compaction when conversations grow large |
 | `CodingAgent.CompactionHooks` | Hooks for compaction events |
 | `CodingAgent.ContextGuardrails` | Pre-LLM hard caps for large tool outputs/args with optional spill-to-disk references |
-| `CodingAgent.Workspace` | Bootstrap file loading (AGENTS.md, SOUL.md, etc.) from the assistant home at `~/.lemon/agent/workspace/` |
+| `CodingAgent.Workspace` | Bootstrap file loading (AGENTS.md, SOUL.md, etc.) from the default assistant home at `~/.lemon/agent/workspace/` or a validated profile workspace at `~/.lemon/profiles/<id>/workspace/` |
+
+`CodingAgent.Executor.SessionRunner` accepts `meta.profile_id` from canonical
+profile chat submission and derives the assistant workspace through
+`LemonCore.ProfileStore.paths/1`. The derived workspace feeds lifecycle,
+bootstrap prompt composition, memory-path resolution, and extra tool loading;
+invalid/missing profile IDs fall back to the default workspace. Never accept a
+workspace path from profile metadata or config—only the validated stable ID.
 | `CodingAgent.SystemPrompt` | Builds the Lemon base system prompt (assistant-home bootstrap files + skills) |
 | `CodingAgent.PromptBuilder` | Higher-level prompt builder adding skills, commands, @mentions sections |
 | `CodingAgent.ResourceLoader` | Loads CLAUDE.md/AGENTS.md from cwd up to filesystem root, then home dir |
@@ -822,9 +829,9 @@ a verified overlay such as Tailscale.
 Node names are trimmed and durably unique per controller. `node.list` reports
 paired identities with online/offline status derived from the live registry;
 only an authenticated live connection is executable. The worker advertises
-`coding_agent.run` version 1 and targeted cancellation, accepts only that run
-method, strips `meta.node` before local execution, and validates the selected
-local working directory.
+`coding_agent.run` version 1, invocation-bound steer/redirect, and targeted
+cancellation. It accepts only that run method, strips `meta.node` before local
+execution, and validates the selected local working directory.
 
 The cross-node payload includes only JSON-safe execution request data such as
 prompt, images, session/run identity, resume token, tool policy, metadata, and
@@ -839,8 +846,11 @@ destination work. Relative explicit paths resolve from the worker's configured
 default cwd, and an omitted `--cwd` uses the shell directory from which the join
 command was launched. Stored credentials are bound to the paired node ID, so a
 swapped token file cannot silently turn one named host into another host's
-executor. Remote steer/redirect are unsupported. No vendor CLI runner is used
-anywhere in this path.
+executor. Remote steer/redirect correction text is UTF-8 and capped at 16 KiB;
+the controller reports acceptance only after the authenticated destination has
+applied it to the live native session context. Terminal races, stale sessions,
+disconnects, and acknowledgement timeouts fail closed. No vendor CLI runner is
+used anywhere in this path.
 
 The socket sends a 25-second protocol ping to remain below the controller's
 idle timeout. Pairing reconnects resume the same pairing ID, and an approved
@@ -1112,4 +1122,8 @@ When a secret value is an OAuth payload, `LemonAgent.ModelRuntime.Credentials` d
 - Use `async: false` for tests that modify global state (extensions, ETS tables, ProcessManager)
 - `await` and `exec`/`process` tools depend on `ProcessStore` being started; start `ProcessStoreServer` in test setup if needed
 - `ToolRegistry` uses an ETS cache for extensions; call `ToolRegistry.invalidate_extension_cache()` in teardown if tests prime the cache
+- Test-only globally named recorder processes must be unlinked from ExUnit test
+  processes. Reset them with bounded, monitor-confirmed teardown that tolerates a
+  process disappearing concurrently; avoid `whereis` followed by `Agent.stop/1`,
+  which has a check-then-stop `:noproc` race.
 Task-tool normalization is intentionally tolerant of provider variance: if a model supplies a prompt but omits the optional-looking `description` field, `CodingAgent.Tools.Task.Params` derives a short description from the prompt instead of rejecting the task call. Bash-only internal tasks also have a direct fast path for both backticked `Run \`cmd\`` prompts and plain `Run this exact command and return the output: cmd` phrasing so tool-using providers do not pay for a full child session just to execute one shell command.

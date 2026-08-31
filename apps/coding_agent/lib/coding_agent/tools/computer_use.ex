@@ -234,41 +234,64 @@ defmodule CodingAgent.Tools.ComputerUse do
     %{
       "type" => "object",
       "properties" => %{
-        "action" => %{"type" => "string", "enum" => @actions},
-        "mode" => %{"type" => "string", "enum" => ~w(som vision ax)},
-        "app" => %{"type" => "string"},
-        "pid" => %{"type" => "integer", "minimum" => 1},
-        "window_id" => %{"type" => "integer", "minimum" => 1},
-        "element" => %{"type" => "integer", "minimum" => 1},
-        "coordinate" => coordinate_schema(),
-        "button" => %{"type" => "string", "enum" => ~w(left right middle)},
+        "action" =>
+          schema(%{"type" => "string", "enum" => @actions}, "Native computer action to run."),
+        "mode" => schema(%{"type" => "string", "enum" => ~w(som vision ax)}, "Driver mode."),
+        "app" => schema(%{"type" => "string"}, "Application name or bundle identifier."),
+        "pid" => schema(%{"type" => "integer", "minimum" => 1}, "Target process identifier."),
+        "window_id" => schema(%{"type" => "integer", "minimum" => 1}, "Target window ID."),
+        "element" => schema(%{"type" => "integer", "minimum" => 1}, "Target element ID."),
+        "coordinate" => schema(coordinate_schema(), "Target screen coordinate as [x, y]."),
+        "button" =>
+          schema(%{"type" => "string", "enum" => ~w(left right middle)}, "Mouse button."),
         "modifiers" => %{
           "type" => "array",
+          "description" => "Keyboard modifiers held during the action.",
           "items" => %{
             "type" => "string",
             "enum" => ~w(cmd shift option alt ctrl fn win windows super meta)
           }
         },
-        "from_element" => %{"type" => "integer", "minimum" => 1},
-        "to_element" => %{"type" => "integer", "minimum" => 1},
-        "from_coordinate" => coordinate_schema(),
-        "to_coordinate" => coordinate_schema(),
-        "direction" => %{"type" => "string", "enum" => ~w(up down left right)},
-        "amount" => %{"type" => "integer", "minimum" => 1, "maximum" => 50},
-        "value" => %{"type" => "string"},
-        "text" => %{"type" => "string"},
-        "keys" => %{"type" => "string"},
-        "seconds" => %{"type" => "number", "minimum" => 0, "maximum" => 30},
-        "raise_window" => %{"type" => "boolean"},
-        "delivery_mode" => %{"type" => "string", "enum" => ~w(background foreground)},
-        "bring_to_front" => %{"type" => "boolean"},
-        "capture_after" => %{"type" => "boolean"},
-        "timeoutMs" => %{"type" => "integer", "minimum" => 1, "maximum" => 120_000}
+        "from_element" =>
+          schema(%{"type" => "integer", "minimum" => 1}, "Drag source element ID."),
+        "to_element" =>
+          schema(%{"type" => "integer", "minimum" => 1}, "Drag destination element ID."),
+        "from_coordinate" =>
+          schema(coordinate_schema(), "Drag source screen coordinate as [x, y]."),
+        "to_coordinate" =>
+          schema(coordinate_schema(), "Drag destination screen coordinate as [x, y]."),
+        "direction" =>
+          schema(%{"type" => "string", "enum" => ~w(up down left right)}, "Scroll direction."),
+        "amount" =>
+          schema(%{"type" => "integer", "minimum" => 1, "maximum" => 50}, "Scroll amount."),
+        "value" => schema(%{"type" => "string"}, "Value used by a set-value action."),
+        "text" => schema(%{"type" => "string"}, "Text to type."),
+        "keys" => schema(%{"type" => "string"}, "Key sequence to press."),
+        "seconds" =>
+          schema(%{"type" => "number", "minimum" => 0, "maximum" => 30}, "Wait duration."),
+        "raise_window" =>
+          schema(%{"type" => "boolean"}, "Whether observation may raise the target window."),
+        "delivery_mode" =>
+          schema(
+            %{"type" => "string", "enum" => ~w(background foreground)},
+            "Input delivery mode."
+          ),
+        "bring_to_front" =>
+          schema(%{"type" => "boolean"}, "Whether to bring the target app to the foreground."),
+        "capture_after" =>
+          schema(%{"type" => "boolean"}, "Whether to capture the resulting screen state."),
+        "timeoutMs" =>
+          schema(
+            %{"type" => "integer", "minimum" => 1, "maximum" => 120_000},
+            "Action timeout in milliseconds."
+          )
       },
       "required" => ["action"],
       "additionalProperties" => false
     }
   end
+
+  defp schema(definition, description), do: Map.put(definition, "description", description)
 
   defp coordinate_schema do
     %{

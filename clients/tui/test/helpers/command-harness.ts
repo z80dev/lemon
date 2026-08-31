@@ -38,6 +38,10 @@ export class RecordingHost implements CommandHost {
 	frames: string[] = [];
 	modelPickerOpens = 0;
 	readonly deliveries: Array<{ text: string; mode: SubmissionMode }> = [];
+	readonly profileOpens: Array<{ profileId: string; sessionKey: string }> = [];
+	readonly forgottenProfiles: Array<{ profileId: string; sessionKey: string }> = [];
+	readonly createdSessions: Array<{ sessionKey?: string; prompt?: string }> = [];
+	readonly forgottenSessions: string[] = [];
 
 	notice(text: string, level: NoticeLevel = "info"): void {
 		this.notices.push({ text, level });
@@ -95,6 +99,22 @@ export class RecordingHost implements CommandHost {
 
 	deliverPrompt(text: string, mode: SubmissionMode): void {
 		this.deliveries.push({ text, mode });
+	}
+
+	openProfile(profileId: string, sessionKey: string): void {
+		this.profileOpens.push({ profileId, sessionKey });
+	}
+
+	forgetProfile(profileId: string, sessionKey: string): void {
+		this.forgottenProfiles.push({ profileId, sessionKey });
+	}
+
+	createSession(sessionKey?: string, prompt?: string): void {
+		this.createdSessions.push({ sessionKey, prompt });
+	}
+
+	forgetDeletedSession(sessionKey: string): void {
+		this.forgottenSessions.push(sessionKey);
 	}
 
 	/** Every notice body joined, for `toContain` assertions. */

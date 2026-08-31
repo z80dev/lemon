@@ -82,10 +82,16 @@ export interface CommandHost {
 	openSessionSwitcher?(): void;
 	/** Focus another session, hydrating it if cold. */
 	switchSession?(sessionKey: string): void | Promise<void>;
+	/** Remember one server-confirmed profile route and open its canonical chat. */
+	openProfile?(profileId: string, sessionKey: string): void | Promise<void>;
+	/** Forget a route after the server deletes that profile. */
+	forgetProfile?(profileId: string, sessionKey: string): void;
 	/** Mint a session (optionally keyed, optionally with a first prompt). */
 	createSession?(sessionKey?: string, prompt?: string): void | Promise<void>;
 	/** Drop a session locally and server-side, after confirming. */
 	closeSession?(sessionKey: string): void | Promise<void>;
+	/** Forget a session locally after the daemon has verified lifecycle deletion. */
+	forgetDeletedSession?(sessionKey: string): void | Promise<void>;
 	/** Forget a session's transcript locally without touching the daemon. */
 	resetSession?(sessionKey: string): void;
 	/** Focus the pending-queue panel (`/queue`, Ctrl+Q). */
@@ -332,4 +338,9 @@ export function describeError(error: unknown): string {
 }
 
 /** Submission modes `/mode` sets and Alt+Enter cycles. */
-export const SUBMISSION_MODES: readonly SubmissionMode[] = ["queue", "steer", "interrupt"];
+export const SUBMISSION_MODES: readonly SubmissionMode[] = [
+	"queue",
+	"steer",
+	"redirect",
+	"interrupt",
+];

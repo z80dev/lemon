@@ -12,6 +12,7 @@ LemonAutomation provides scheduled and triggered automation for agents:
 - **Goal Continuation** - Supervised one-shot continuation runs for active session goals
 - **Goal Loop Preview** - One supervised judge tick that continues, completes, or pauses a goal
 - **Kanban Dispatch** - Supervised leasing/reclaim loop for durable board tasks
+- **Portable Blueprints** - Preview and explicitly confirm profile-local skill bundles plus one agent cron job
 - **Run Tracking** - Full lifecycle tracking of job executions
 
 ## Supervision Tree
@@ -132,6 +133,22 @@ configured idle window, then calls `LemonAutomation.SkillCurator`. That module
 delegates lifecycle transitions and prompt rendering to `LemonSkills.Curator`
 and submits the review prompt to `LemonRouter` only when review is required.
 
+**Blueprint** is the portable distribution boundary for a coherent skill plus
+automation workflow. It reuses `LemonSkills.Bundle`, manifest/lint/audit, the
+derived `LemonCore.ProfileStore` workspace, and `CronManager`; do not add a
+second skill registry, profile store, or scheduler. A preview digest binds the
+manifest, content hashes, target profile, exact job projection, and current
+collision state. Activation replans under a lock, stages and re-audits exact
+copied bytes, enables profile-local skills, and calls `CronManager.add_new/1`
+last. The create-once manager/store path must never overwrite an existing
+stable ID. Version 1 remains agent-prompt-only and rejects commands, archives,
+symlinks, environment/cwd overrides, secret-like values, and non-UTC schedules.
+`LemonAutomation.Blueprint.Catalog` is the shared caller boundary for Web and
+control-plane clients: it derives the canonical catalog path from trusted
+profile options, accepts only bounded bundle IDs, rejects traversal and
+symlinked entries, enforces manifest/directory identity, and delegates all
+inspection, validation, preview, and activation semantics to `Blueprint`.
+
 ## Key Flow Details
 
 - `RunSubmitter` pre-subscribes to `Bus.run_topic(run_id)` BEFORE submitting to `LemonRouter` (avoids race condition)
@@ -151,6 +168,15 @@ and submits the review prompt to `LemonRouter` only when review is required.
 - Active cron runs can be aborted by cron run id. `CronManager.abort_run/1` calls the underlying router cancellation when possible, persists terminal `:aborted`, emits the normal completion event, and ignores late submitter completions.
 - Cron lifecycle actions write durable operator audit events to `:cron_audit_events`. The audit stream covers job create/update/pause/resume/delete, manual run requests, run start/abort/retry/stale recovery, and scheduled-run claim/suppression decisions. Audit entries keep operator-useful IDs in the store; support-bundle diagnostics redact those IDs.
 - `cron.status` reads the durable cron run and audit stores directly for operator-facing scheduler-health counters: active run locks, retry runs, suppressed scheduled slots, stale-run recoveries, scheduled retries, and next/last run timestamps.
+- Portable bundle activation must remain preview-first and content-free at the
+  Web/control-plane boundary. Keep arbitrary paths local-only;
+  `Blueprint.Catalog` resolves a safe `bundleId` below `~/.lemon/bundles`,
+  returns no prompt/skill/path/secret text,
+  and requires the exact fresh `confirmationDigest` for mutation.
+- Source and packaged `lemon blueprints` are thin clients of that RPC boundary.
+  Do not move bundle loading or scheduler startup into the one-shot CLI VM;
+  preview remains the bundle-ID shorthand and activation remains an explicit
+  exact-digest request handled by the long-running `CronManager` runtime.
 
 ## Top-Level Facade
 
@@ -685,6 +711,16 @@ exit "$rc"
 
 # With coverage
 mix test --cover apps/lemon_automation
+
+# Portable bundle policy, rollback, exact confirmation, and replay
+mix test apps/lemon_automation/test/lemon_automation/blueprint_test.exs --seed 1
+
+# Booted control-plane activation proof (disabled job; cleans up after itself)
+MIX_ENV=dev mix run --no-start scripts/live_skill_automation_blueprint_smoke.exs
+
+# Source and assembled minimal-runtime CLI proof uses an isolated catalog,
+# profile, control-plane port, and store, then replays activation once.
+scripts/live_blueprint_cli_smoke
 ```
 
 ### Key Testing Patterns
@@ -768,6 +804,7 @@ LemonAutomation.CronManager.tick()
 |--------|---------|
 | `LemonAutomation` | Top-level facade with delegating functions |
 | `LemonAutomation.Application` | OTP supervisor (TaskSupervisor, CronManager, HeartbeatManager, SkillCuratorManager) |
+| `LemonAutomation.Blueprint` | Portable manifest validation, exact preview confirmation, profile-local skill activation, and idempotent cron claim |
 | `LemonAutomation.CronManager` | Scheduling GenServer; owns job state in-memory + persists to CronStore |
 | `LemonAutomation.CronJob` | Job struct, CRUD ops, `due?/1` predicate |
 | `LemonAutomation.CronRun` | Run struct, state machine transitions |

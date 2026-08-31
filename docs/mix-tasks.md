@@ -28,6 +28,7 @@ lemon gateway setup
 lemon config validate
 lemon secrets status
 lemon channels
+lemon providers status
 lemon doctor
 
 # Source checkout
@@ -37,6 +38,7 @@ lemon doctor
 ./bin/lemon config validate
 ./bin/lemon secrets status
 ./bin/lemon channels
+./bin/lemon providers status
 ./bin/lemon doctor
 ./bin/lemon node join --name worker-1 --controller ws://controller:4040/ws --pair --cwd /srv/project
 ```
@@ -62,7 +64,7 @@ Getting a fresh checkout or a fresh machine to a working agent.
 | `mix lemon.onboard.copilot` | Interactive onboarding for the GitHub Copilot provider. |
 | `mix lemon.onboard.gemini` | Interactive onboarding for the Google Gemini CLI provider. |
 | `mix lemon.onboard.antigravity` | Interactive onboarding for the Google Antigravity provider. |
-| `mix lemon.providers` | Show redacted provider readiness. |
+| `mix lemon.providers` | Show redacted provider readiness. This contributor task remains read-only; use `lemon providers` / `./bin/lemon providers` for fallback and credential-pool reference edits. |
 | `mix lemon.workspace` | Initialize `~/.lemon/agent/workspace` bootstrap files. |
 | `mix lemon.update` | Update Lemon: config migration and bundled-skill sync. |
 | `mix lemon.hermes.audit` | Audit Hermes data compatibility without writing files. |

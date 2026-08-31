@@ -49,8 +49,9 @@ defmodule LemonSkills.Synthesis.DraftStore do
   @doc """
   Write a draft to disk.
 
-  `draft` must include `:key` and `:content`.  Optional field `:source_doc_id`
-  is stored in the draft metadata.
+  `draft` must include `:key` and `:content`. Optional `:source_doc_id`,
+  `:source_digest`, and hashed `:source_provenance` fields are stored in the
+  draft metadata.
 
   ## Options
 
@@ -62,7 +63,6 @@ defmodule LemonSkills.Synthesis.DraftStore do
   def put(draft, opts \\ []) when is_map(draft) do
     key = draft[:key] || draft["key"]
     content = draft[:content] || draft["content"]
-    source_doc_id = draft[:source_doc_id] || draft["source_doc_id"]
 
     if is_nil(key) or is_nil(content) do
       {:error, "draft must include :key and :content"}
@@ -73,7 +73,45 @@ defmodule LemonSkills.Synthesis.DraftStore do
       if File.dir?(dir) and not force do
         {:error, "draft '#{key}' already exists; pass force: true to overwrite"}
       else
-        do_write_draft(dir, key, content, source_doc_id)
+        do_write_draft(dir, key, content, draft)
+      end
+    end
+  end
+
+  @doc """
+  Create a draft only when its exact destination directory is absent.
+
+  The directory claim uses `File.mkdir/1`, so concurrent reviewers cannot
+  overwrite one another between a fresh plan and confirmation.
+  """
+  @spec put_new(map(), keyword()) :: :ok | {:error, :already_exists | term()}
+  def put_new(draft, opts \\ []) when is_map(draft) do
+    key = draft[:key] || draft["key"]
+    content = draft[:content] || draft["content"]
+
+    if is_nil(key) or is_nil(content) do
+      {:error, "draft must include :key and :content"}
+    else
+      dir = draft_dir(key, opts)
+
+      with :ok <- File.mkdir_p(Path.dirname(dir)) do
+        case claim_directory(dir) do
+          :ok ->
+            case do_write_draft(dir, key, content, draft) do
+              :ok ->
+                :ok
+
+              {:error, _} = error ->
+                File.rm_rf(dir)
+                error
+            end
+
+          {:error, :already_exists} ->
+            {:error, :already_exists}
+
+          {:error, _} = error ->
+            error
+        end
       end
     end
   end
@@ -238,17 +276,38 @@ defmodule LemonSkills.Synthesis.DraftStore do
 
   # ── Private helpers ─────────────────────────────────────────────────────────
 
-  defp do_write_draft(dir, key, content, source_doc_id) do
+  defp do_write_draft(dir, key, content, draft) do
     with :ok <- File.mkdir_p(dir),
          :ok <- File.write(Path.join(dir, @skill_filename), content) do
-      meta = %{
-        "key" => key,
-        "source_doc_id" => source_doc_id,
-        "created_at" => DateTime.to_iso8601(DateTime.utc_now()),
-        "status" => "draft"
-      }
+      meta =
+        %{
+          "key" => key,
+          "created_at" => DateTime.to_iso8601(DateTime.utc_now()),
+          "status" => "draft"
+        }
+        |> put_present("source_doc_id", draft[:source_doc_id] || draft["source_doc_id"])
+        |> put_present("source_digest", draft[:source_digest] || draft["source_digest"])
+        |> put_present(
+          "source_provenance",
+          draft[:source_provenance] || draft["source_provenance"]
+        )
+        |> put_present(
+          "source_text_redacted",
+          draft[:source_text_redacted] || draft["source_text_redacted"]
+        )
 
       write_meta(dir, meta)
+    end
+  end
+
+  defp put_present(map, _key, nil), do: map
+  defp put_present(map, key, value), do: Map.put(map, key, value)
+
+  defp claim_directory(dir) do
+    case File.mkdir(dir) do
+      :ok -> :ok
+      {:error, :eexist} -> {:error, :already_exists}
+      error -> error
     end
   end
 

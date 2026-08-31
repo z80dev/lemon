@@ -38,6 +38,7 @@ of `CHANGELOG.md`.
 | `lib/lemon_skills/audit/state.ex` | Reads/writes persisted bundle audit state per scope | Changing audit cache storage or state schema |
 | `lib/lemon_skills/usage.ex` | Persists skill usage counters, agent-authored provenance, and curation state (`active`/`stale`/`archived`/`pinned`) | Changing skill curation, pin/archive behavior, or usage analytics |
 | `lib/lemon_skills/curator.ex` | Applies conservative stale/archive lifecycle transitions and renders curator review prompts | Changing automated skill curation or curator scheduler state |
+| `lib/lemon_skills/learn.ex` | Non-mutating bounded-source review plus exact-digest writes to canonical memory and audited draft stores | Changing direct learn-from-file/folder/URL semantics |
 | `lib/lemon_skills/builtin_seeder.ex` | Copies `priv/builtin_skills/` to `~/.lemon/agent/skill/` on startup (idempotent) | Adding/modifying bundled skills |
 | `lib/lemon_skills/discovery.ex` | GitHub topic search + registry URL probing for online skill discovery | Changing online discovery sources |
 
@@ -127,6 +128,20 @@ fields into Lemon's canonical schema.
 Nous Research skills. Keep `hermes:` identifiers routed through `Installer` so
 official-source audit and approval remain mandatory; do not copy these bundles
 directly into the registry.
+
+Portable skill + automation distribution is owned by
+`LemonAutomation.Blueprint`. It deliberately composes `Bundle`, `Manifest`,
+`Audit.Engine`, `Audit.SkillLint`, project `Config`, and `Registry.refresh/1`;
+do not introduce a second registry or a separate profile skill store here.
+Blueprint activation copies only the already audited file set, then hashes,
+lints, and audits the staged copy again before it can enter the derived profile
+workspace.
+
+Direct source learning is owned by `LemonSkills.Learn`. Keep it as composition
+over `LemonCore.Context`, `LemonMemory.Store`, and the existing synthesis draft
+store. Review must stay non-mutating and content-free on the wire; confirmation
+must re-resolve sources, recompute destination conflicts, and require the exact
+fresh digest. Never create a learning database or execute source content.
 
 When present, `name` and `description` must be non-empty, single-line, valid UTF-8 strings without control or bidirectional formatting characters. They are bounded to 128 and 1,024 bytes respectively. `tags` and `keywords` must be lists of at most 32 strings, with each item subject to the same safe-text checks and a 128-byte limit. Missing `name`/`description` remain compatible with legacy manifests and use registry defaults.
 

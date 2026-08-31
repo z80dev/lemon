@@ -31,6 +31,8 @@ const row = (overrides: Partial<SessionRow> = {}): SessionRow => ({
 	active: false,
 	local: true,
 	unread: 0,
+	pinned: false,
+	archived: false,
 	...overrides,
 });
 

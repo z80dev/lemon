@@ -11,7 +11,7 @@
  *
  * Offline behaviour
  * -----------------
- *   `chat.send` issued while not online is parked (the UI is told via the
+ *   `chat.send` or `profile.chat` issued while not online is parked (the UI is told via the
  *   `queued` event) and flushed FIFO once the handshake completes — typing
  *   before the daemon is ready is a normal thing to do. Every other method
  *   rejects with NotConnectedError rather than silently buffering state-changing
@@ -49,7 +49,7 @@ export const DEFAULT_REQUEST_TIMEOUT_MS = 15_000;
 export const DEFAULT_WS_URL = "ws://127.0.0.1:4040/ws";
 
 /** Methods held rather than rejected while offline. */
-export const DEFAULT_QUEUEABLE_METHODS: readonly string[] = ["chat.send"];
+export const DEFAULT_QUEUEABLE_METHODS: readonly string[] = ["chat.send", "profile.chat"];
 
 /** Cheap reads used to prove a quiet connection is still alive, in order. */
 const LIVENESS_PROBE_METHODS = ["health", "status"] as const;

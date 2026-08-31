@@ -76,7 +76,18 @@ defmodule LemonControlPlane.Methods.Registry do
     # Models
     LemonControlPlane.Methods.ModelsList,
     LemonControlPlane.Methods.ProvidersStatus,
+    LemonControlPlane.Methods.ProvidersConfigure,
     LemonControlPlane.Methods.MemoryStatus,
+    # User-managed profiles
+    LemonControlPlane.Methods.ProfilesList,
+    LemonControlPlane.Methods.ProfilesGet,
+    LemonControlPlane.Methods.ProfilesCreate,
+    LemonControlPlane.Methods.ProfilesClone,
+    LemonControlPlane.Methods.ProfilesRename,
+    LemonControlPlane.Methods.ProfilesExport,
+    LemonControlPlane.Methods.ProfilesDelete,
+    LemonControlPlane.Methods.ProfilesRoster,
+    LemonControlPlane.Methods.ProfileChat,
     # Agents
     LemonControlPlane.Methods.AgentsList,
     LemonControlPlane.Methods.AgentsFilesList,
@@ -89,11 +100,24 @@ defmodule LemonControlPlane.Methods.Registry do
     LemonControlPlane.Methods.SkillsInstall,
     LemonControlPlane.Methods.SkillsUpdate,
     LemonControlPlane.Methods.ExtensionsStatus,
+    # Portable skill bundles and automation blueprints
+    LemonControlPlane.Methods.BlueprintsList,
+    LemonControlPlane.Methods.BlueprintsInspect,
+    LemonControlPlane.Methods.BlueprintsValidate,
+    LemonControlPlane.Methods.BlueprintsPreview,
+    LemonControlPlane.Methods.BlueprintsActivate,
+    # Review-first learning from bounded sources
+    LemonControlPlane.Methods.LearnReview,
+    LemonControlPlane.Methods.LearnConfirm,
     # Sessions
     LemonControlPlane.Methods.SessionsList,
+    LemonControlPlane.Methods.SessionsStats,
     LemonControlPlane.Methods.SessionsPreview,
     LemonControlPlane.Methods.SessionsDelete,
     LemonControlPlane.Methods.SessionsPatch,
+    LemonControlPlane.Methods.SessionsMetadataPatch,
+    LemonControlPlane.Methods.SessionsExport,
+    LemonControlPlane.Methods.SessionsPrune,
     LemonControlPlane.Methods.SessionsReset,
     LemonControlPlane.Methods.SessionsCompact,
     LemonControlPlane.Methods.SessionHeartbeat,
@@ -174,6 +198,7 @@ defmodule LemonControlPlane.Methods.Registry do
     LemonControlPlane.Methods.NodeDescribe,
     LemonControlPlane.Methods.NodeInvoke,
     LemonControlPlane.Methods.NodeInvokeResult,
+    LemonControlPlane.Methods.NodeInvokeControlResult,
     LemonControlPlane.Methods.NodeEvent,
     # System methods
     LemonControlPlane.Methods.SystemPresence,

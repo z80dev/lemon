@@ -15,6 +15,15 @@
 - **Model-agnostic** — Connect to 27 configured LLM providers, including Anthropic, OpenAI, Google Gemini, Bedrock, Azure, and OpenAI-compatible services. Lemon provides unified streaming, automatic retries, rate limiting, and cost accounting (`lemon_ai`); compatible local endpoints can be configured separately.
 - **Coding agent and MCP** — Native tool execution, MCP (Model Context Protocol) client/server bridge, native in-process subagent orchestration, browser automation, and LSP integration.
 - **Durable memory** — SQLite-backed full-text recall, document ingestion, and a provider interface for optional semantic backends, including Honcho long-term memory integration (`lemon_memory`).
+- **User-managed profiles** — Create durable specialist agents with stable chats,
+  separate bootstrap/memory/skill workspaces, optional model/node assignment,
+  node-aware roster status, safe clone/export, and guarded deletion.
+- **Durable session operations** — Search and inspect bounded redacted history,
+  title/pin/archive sessions, create redacted exports, and preview-confirm
+  verified pruning from the packaged or source CLI.
+- **Local-first credential resolution** — Keep encrypted secrets in Lemon or
+  explicitly opt in to supervised 1Password, Bitwarden Secrets Manager, and
+  argv-only command sources with fail-closed bounds and value-free diagnostics.
 - **LemonSim and benchmark arenas** — Event-sourced simulation worlds (Werewolf, Space Station, Stock Market, Survivor, Poker) and reproducible offline benchmark scoring without provider API keys.
 - **Supervised on the BEAM** — Each agent run is an isolated OTP process. Separate conversations execute concurrently, crashed workers are supervised, and durable session state survives individual requests.
 
@@ -48,6 +57,28 @@ Verify your setup with the diagnostic doctor:
 lemon doctor
 ```
 
+Optional external secret managers remain read-only fallbacks behind Lemon's
+encrypted store. Configure them under `[secrets.sources.<id>]`, then inspect or
+live-test readiness without printing values:
+
+```bash
+lemon secrets sources status
+lemon secrets sources test --json
+```
+
+See [External secret sources](docs/config.md#external-secret-sources) for the
+exact schemas, bootstrap rules, and security contract.
+
+Create a verified private backup of durable `~/.lemon` state before changing
+machines or performing maintenance:
+
+```bash
+lemon backup create
+```
+
+See [Back up and restore Lemon user state](docs/user-guide/backups.md) for the
+versioned data contract, credential exclusions, and guarded overwrite flow.
+
 ### 3. Start Chatting
 
 Launch the interactive Terminal UI (TUI):
@@ -65,6 +96,61 @@ lemon web
 
 See [Use Lemon in a Browser](docs/user-guide/web.md) for setup recovery,
 access-control, and headless launch details.
+
+Create a specialist profile and send work to its canonical chat:
+
+```bash
+lemon profile create research --name "Research" --model openai:gpt-5
+lemon profile chat research "Summarize the open questions"
+lemon profile roster
+```
+
+Inside the TUI, `/profiles` opens the same live roster and switches to the
+selected canonical chat. `/profile create|clone|rename|export|delete` uses the
+authenticated control plane for lifecycle actions, while normal prompts from
+an opened profile retain its derived workspace and named-node routing.
+
+In the browser, `/manage/profiles` provides the token-required roster plus
+preview-first create, clone, rename, and recoverable delete. It links each
+profile to its stable canonical chat while keeping profile paths and system
+prompts out of Web state.
+
+The TUI also exposes the shared durable-session lifecycle directly. Use
+`/sessions deployment --pinned --active` for a live searchable picker,
+`/session resume <key>` to hydrate exact durable history, and `/session help`
+for guarded title/pin/archive, redacted export, prune, and delete workflows.
+Session metadata stays server-owned, and destructive operations are never
+queued while disconnected.
+
+See [User-managed profiles](docs/user-guide/profiles.md) for lifecycle,
+filesystem isolation, named-node routing, and export safeguards.
+
+Inspect or safely manage durable sessions, and install completion generated
+from the same registry as CLI help and dispatch:
+
+```bash
+lemon sessions list --limit 20
+lemon sessions search "deployment follow-up"
+lemon sessions export agent:research:main --format markdown
+lemon completion zsh > "$HOME/.zfunc/_lemon"
+```
+
+See the [Lemon command-line reference](docs/user-guide/cli.md) for the complete
+packaged-CLI session lifecycle, guarded prune, exit-code, JSON, and shell setup
+contracts, and the [TUI reference](clients/tui/README.md) for interactive
+picker and lifecycle commands.
+
+Review a local portable skill + automation bundle without revealing its skill
+body or cron prompt, then activate only the exact reviewed plan:
+
+```bash
+lemon blueprints daily-note --profile operator
+lemon blueprints activate daily-note --profile operator \
+  --confirm <exact-confirmation-digest>
+```
+
+See [Portable skill and automation bundles](docs/user-guide/skills.md#portable-skill-and-automation-bundles)
+for the catalog, safety, provenance, and duplicate-safe activation contract.
 
 ---
 
@@ -162,7 +248,7 @@ Lemon is organized as an Elixir umbrella split into 9 modular core packages, a r
 | Package | Role & Contents |
 | --- | --- |
 | [`lemon_ai`](apps/lemon_ai/README.md) | Provider-agnostic LLM client (27 configured providers), streaming API, rate limiting, circuit breaker, cost tracking |
-| [`lemon_core`](apps/lemon_core/README.md) | Shared bus, `Event` envelopes, `Store` (ETS/JSONL/SQLite), encrypted secrets, config management |
+| [`lemon_core`](apps/lemon_core/README.md) | Shared bus, `Event` envelopes, `Store` (ETS/JSONL/SQLite), encrypted secrets plus bounded external sources, config management |
 | [`lemon_agent`](apps/lemon_agent/README.md) | Core agentic loop, tool registry, subagents, and model runtime |
 | [`lemon_memory`](apps/lemon_memory/README.md) | SQLite full-text search, memory provider registry, document ingestion pipeline, session search |
 | [`lemon_media`](apps/lemon_media/README.md) | Redacted-by-construction media job records, hashing, and audio/image processing |
@@ -275,6 +361,9 @@ graph TD
 | [Documentation Index](docs/README.md) | Complete documentation catalog |
 | [Installation Guide](docs/install.md) | Prebuilt releases, platform support, and headless setup |
 | [Configuration Reference](docs/config.md) | Runtime configuration and environment variables |
+| [Command-line Reference](docs/user-guide/cli.md) | Runtime commands, blueprint activation, durable sessions, exit codes, and shell completion |
+| [Safe Updates](docs/user-guide/updates.md) | Non-mutating plans, exact-confirm apply, private receipts, and receipt-bound rollback |
+| [Backup and Restore](docs/user-guide/backups.md) | `~/.lemon` data contract, verification, guarded restore, and rollback |
 | [Testing Guide](docs/testing.md) | Test suites, quality gates, and CI parity |
 | [Mix Tasks Reference](docs/mix-tasks.md) | Grouped reference for all `mix lemon.*` commands |
 | [Skills Documentation](docs/skills.md) | Skill registry, discovery, and custom assistant tools |

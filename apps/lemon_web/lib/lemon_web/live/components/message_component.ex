@@ -5,13 +5,14 @@ defmodule LemonWeb.Live.Components.MessageComponent do
 
   alias LemonWeb.Live.Components.ToolCallComponent
 
-  attr :message, :map, required: true
+  attr(:message, :map, required: true)
 
   def message(assigns) do
     assigns =
       assigns
       |> assign(:container_class, container_class(assigns.message))
       |> assign(:bubble_class, bubble_class(assigns.message))
+      |> assign(:control_label, control_label(assigns.message))
 
     ~H"""
     <div class={@container_class}>
@@ -19,6 +20,11 @@ defmodule LemonWeb.Live.Components.MessageComponent do
         <ToolCallComponent.tool_call event={@message.event} />
       <% else %>
         <div class={@bubble_class}>
+          <%= if is_binary(@control_label) do %>
+            <p class="text-[11px] font-medium uppercase tracking-wide text-slate-400">
+              {@control_label}
+            </p>
+          <% end %>
           <p class="whitespace-pre-wrap break-words text-sm leading-relaxed">{@message.content}</p>
           <%= if @message.kind == :assistant and Map.get(@message, :pending, false) do %>
             <p class="mt-2 text-[11px] uppercase tracking-wide text-slate-400">streaming</p>
@@ -45,4 +51,9 @@ defmodule LemonWeb.Live.Components.MessageComponent do
   defp bubble_class(_) do
     "max-w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-slate-700"
   end
+
+  defp control_label(%{kind: :user, control_mode: :followup}), do: "Follow-up"
+  defp control_label(%{kind: :user, control_mode: :steer}), do: "Steer"
+  defp control_label(%{kind: :user, control_mode: :redirect}), do: "Redirect"
+  defp control_label(_message), do: nil
 end

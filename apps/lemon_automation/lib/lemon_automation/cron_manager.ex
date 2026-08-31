@@ -133,6 +133,19 @@ defmodule LemonAutomation.CronManager do
   end
 
   @doc """
+  Add a cron job only when its explicit stable ID is unused.
+
+  This is the collision-safe creation primitive for confirmed automation
+  blueprints. It validates through the same path as `add/1`, claims durable
+  storage before updating scheduler state, and never overwrites an existing
+  job. Callers must supply a non-empty `id`.
+  """
+  @spec add_new(map()) :: {:ok, CronJob.t()} | {:error, term()}
+  def add_new(params) do
+    GenServer.call(__MODULE__, {:add_new, params}, @call_timeout_ms)
+  end
+
+  @doc """
   Update an existing cron job.
   """
   @spec update(binary(), map()) ::
@@ -279,11 +292,57 @@ defmodule LemonAutomation.CronManager do
 
         Events.emit_job_created(job)
 
-        Logger.info("[CronManager] Added job: #{job.id} (#{job.name})")
+        # Names may originate in untrusted portable manifests. Keep routine
+        # lifecycle logs identifier-only; operators can inspect authorized
+        # structured job state when they need the display name.
+        Logger.info("[CronManager] Added job: #{job.id}")
         {:reply, {:ok, job}, put_in(state.jobs[job.id], job)}
 
       {:error, _} = error ->
         {:reply, error, state}
+    end
+  end
+
+  @impl true
+  def handle_call({:add_new, params}, _from, state) do
+    id = params[:id] || params["id"]
+
+    cond do
+      not is_binary(id) or String.trim(id) == "" ->
+        {:reply, {:error, {:missing_keys, [:id]}}, state}
+
+      Map.has_key?(state.jobs, id) ->
+        {:reply, {:error, :already_exists}, state}
+
+      true ->
+        case validate_params(params) do
+          {:ok, params} ->
+            job = params |> CronJob.new() |> capture_default_model()
+            next_run = CronSchedule.next_run_ms(job.schedule, job.timezone)
+            job = CronJob.set_next_run(job, next_run)
+
+            case CronStore.claim_job(job) do
+              :ok ->
+                CronStore.record_audit(:job_created, %{
+                  job_id: job.id,
+                  source: :automation_blueprint,
+                  status: if(job.enabled, do: :enabled, else: :disabled)
+                })
+
+                Events.emit_job_created(job)
+                Logger.info("[CronManager] Added claimed job: #{job.id}")
+                {:reply, {:ok, job}, put_in(state.jobs[job.id], job)}
+
+              {:error, :exists} ->
+                {:reply, {:error, :already_exists}, state}
+
+              {:error, _} = error ->
+                {:reply, error, state}
+            end
+
+          {:error, _} = error ->
+            {:reply, error, state}
+        end
     end
   end
 

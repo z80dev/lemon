@@ -169,6 +169,18 @@ For auto-resume, inspect `LemonCore.ChatStateStore` and the native executor's re
 state. For transport startup, inspect `TransportRegistry`; Telegram, Discord, XMTP,
 and email remain channel-owned.
 
+### Test application isolation
+
+Umbrella tests share one BEAM and one OTP application controller. A test module that
+stops globally named runtime applications must capture which applications were
+running and restore that exact running set in `setup_all` cleanup. Limit this
+isolation to applications the unit test actually owns: gateway transport tests may
+restart `:lemon_gateway` and `:lemon_channels`, but must not stop
+`:lemon_control_plane` or other consumer applications. Each app suite establishes
+its own production baseline. Use `Application.ensure_all_started/1` for restoration
+so transitive runtime dependencies return through their production supervision
+trees.
+
 ## Integration Points
 
 1. Submit execution through `LemonGateway.Runtime.submit_execution/1`.

@@ -74,6 +74,49 @@ defmodule CodingAgent.ExecutorRemoteNodeTest do
                     }}
   end
 
+  test "a canonical profile request reaches the executor-selected named node" do
+    assert :ok = NodeRegistry.register("node-profile", "newphy", self())
+
+    profile = %{
+      "id" => "research",
+      "name" => "Research",
+      "node" => "newphy",
+      "model" => nil,
+      "canonicalSessionKey" => "agent:research:main",
+      "paths" => %{"workspace" => "/controller-only/profile/workspace"}
+    }
+
+    assert {:ok, canonical} =
+             LemonCore.ProfileStore.chat_request(profile, "remote profile work",
+               meta: %{node: "forged", profile_id: "forged"}
+             )
+
+    execution = %ExecutionRequest{
+      run_id: "profile-node-route",
+      session_key: canonical.session_key,
+      prompt: canonical.prompt,
+      cwd: canonical.cwd,
+      conversation_key: {:session, canonical.session_key},
+      meta: canonical.meta
+    }
+
+    assert {:ok, run_ref, %{runner_module: RemoteSessionRunner}} =
+             Executor.start_run(execution, %{}, self())
+
+    assert_receive {:node_event, "node.invoke.request", invocation}
+    assert invocation["nodeName"] == "newphy"
+    assert invocation["args"]["cwd"] == nil
+    assert invocation["args"]["meta"]["profile_id"] == "research"
+
+    assert :ok =
+             NodeRegistry.complete("node-profile", invocation["invokeId"], %{
+               "ok" => true,
+               "answer" => "routed"
+             })
+
+    assert_receive {:engine_event, ^run_ref, %{__event__: :completed, ok: true}}
+  end
+
   test "preserves an explicitly supplied remote cwd verbatim" do
     assert :ok = NodeRegistry.register("node-1", "newphy", self())
 
@@ -137,6 +180,68 @@ defmodule CodingAgent.ExecutorRemoteNodeTest do
 
     assert_receive {:node_event, "node.invoke.cancel",
                     %{"invokeId" => ^invoke_id, "reason" => ":user_requested"}}
+  end
+
+  test "waits for destination acceptance before reporting remote steer and redirect" do
+    assert :ok = NodeRegistry.register("node-1", "newphy", self())
+    assert {:ok, _run_ref, ctx} = Executor.start_run(request(%{node: "newphy"}), %{}, self())
+    assert_receive {:node_event, "node.invoke.request", invocation}
+    invoke_id = invocation["invokeId"]
+    run_id = invocation["args"]["runId"]
+
+    steer = Task.async(fn -> Executor.steer(ctx, "verify the native session") end)
+
+    assert_receive {:node_event, "node.invoke.control",
+                    %{
+                      "controlId" => steer_id,
+                      "invokeId" => ^invoke_id,
+                      "runId" => ^run_id,
+                      "operation" => "steer",
+                      "text" => "verify the native session"
+                    }}
+
+    assert :ok =
+             NodeRegistry.complete_control_session(
+               "node-1",
+               self(),
+               0,
+               steer_id,
+               invoke_id,
+               run_id,
+               true
+             )
+
+    assert :ok = Task.await(steer)
+
+    redirect = Task.async(fn -> Executor.redirect(ctx, "replace the remaining direction") end)
+
+    assert_receive {:node_event, "node.invoke.control",
+                    %{
+                      "controlId" => redirect_id,
+                      "invokeId" => ^invoke_id,
+                      "runId" => ^run_id,
+                      "operation" => "redirect",
+                      "text" => "replace the remaining direction"
+                    }}
+
+    assert :ok =
+             NodeRegistry.complete_control_session(
+               "node-1",
+               self(),
+               0,
+               redirect_id,
+               invoke_id,
+               run_id,
+               true
+             )
+
+    assert :ok = Task.await(redirect)
+
+    assert :ok =
+             NodeRegistry.complete("node-1", invoke_id, %{
+               "ok" => true,
+               "answer" => "done"
+             })
   end
 
   defp request(meta) do

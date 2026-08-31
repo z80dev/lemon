@@ -23,6 +23,11 @@
  */
 
 import type { TUI } from "@oh-my-pi/pi-tui/tui";
+import {
+	ControlPlaneError,
+	NotConnectedError,
+	RequestTimeoutError,
+} from "../../protocol/errors.ts";
 import type { ControlPlaneMethods } from "../../protocol/methods.ts";
 import { METHOD } from "../../protocol/methods.ts";
 import type {
@@ -197,6 +202,19 @@ export class SessionController {
 		} else {
 			this.#notice(`closed ${key} locally (daemon does not support ${METHOD.sessionsDelete})`);
 		}
+		this.#refreshStatus?.();
+	}
+
+	/**
+	 * Drop only the client copy after `sessions.delete` or `sessions.prune`
+	 * returned a verified deletion. This must not call the daemon again: the
+	 * lifecycle response is the commit point, and a duplicate destructive call
+	 * could turn a successful operation into a misleading error during a race.
+	 */
+	async forgetDeleted(key: string): Promise<void> {
+		if (key === this.#store.focusedKey) await this.switch(this.#nextFocusAfter(key));
+		this.#store.forgetSession(key);
+		this.#hydrated.delete(key);
 		this.#refreshStatus?.();
 	}
 
@@ -502,7 +520,9 @@ export function pendingApprovalsFrom(result: unknown): ApprovalRequestedEvent[] 
 }
 
 function describeError(error: unknown): string {
-	return error instanceof Error ? error.message : String(error);
+	if (error instanceof ControlPlaneError) return error.code;
+	if (error instanceof NotConnectedError || error instanceof RequestTimeoutError) return error.code;
+	return "UNAVAILABLE";
 }
 
 function asString(value: unknown): string | undefined {

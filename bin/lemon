@@ -13,19 +13,25 @@
 #   ./bin/lemon gateway setup telegram --non-interactive
 #   ./bin/lemon node join --name worker --controller wss://controller.example/ws
 #   ./bin/lemon config validate
+#   ./bin/lemon context preview '@file:README.md' --root "$PWD"
+#   ./bin/lemon sessions list --limit 20
+#   ./bin/lemon blueprints daily-note --profile operator
+#   ./bin/lemon completion zsh
 #   ./bin/lemon doctor --json
+#   ./bin/lemon backup create --json
 #   ./bin/lemon web
 #   ./bin/lemon send --to telegram:<chat_id> "deploy finished"
 #   ./bin/lemon media
 #   ./bin/lemon models --provider anthropic
 #   ./bin/lemon providers --provider openai
+#   ./bin/lemon profile create research --name "Research"
 #   ./bin/lemon policy list
 #   ./bin/lemon proofs --limit 5
 #   ./bin/lemon readiness
 #   ./bin/lemon secrets status
 #   ./bin/lemon skill list
 #   ./bin/lemon usage
-#   ./bin/lemon update --check
+#   ./bin/lemon update check
 #
 
 set -euo pipefail
@@ -51,8 +57,14 @@ Usage: ./bin/lemon [options]
        ./bin/lemon gateway setup [transport] --non-interactive
        ./bin/lemon node join --name NAME --controller wss://HOST/ws
        ./bin/lemon channels
+       ./bin/lemon profile <list|show|create|clone|rename|export|delete|roster|chat>
        ./bin/lemon config validate
+       ./bin/lemon context preview '@file:README.md' --root "$PWD"
+       ./bin/lemon sessions <list|search|stats|show|history|title|pin|unpin|archive|restore|export|prune|delete>
+       ./bin/lemon blueprints [list|inspect|validate|preview|activate]
+       ./bin/lemon completion <bash|zsh|fish>
        ./bin/lemon doctor --json
+       ./bin/lemon backup create --json
        ./bin/lemon web [--no-open]
        ./bin/lemon send --to telegram:<chat_id> "message"
        ./bin/lemon media
@@ -64,7 +76,7 @@ Usage: ./bin/lemon [options]
        ./bin/lemon secrets status
        ./bin/lemon skill list
        ./bin/lemon usage
-       ./bin/lemon update --check
+       ./bin/lemon update <check|plan|apply|history|rollback>
 
 Options:
   --daemon                Run in background and print PID
@@ -110,6 +122,20 @@ warn() {
 
 error() {
   echo -e "${RED}[lemon]${NC} $1" >&2
+}
+
+run_source_runtime_cli() {
+  cd "$LEMON_ROOT"
+  # Completion and JSON session output must remain machine-clean on stdout.
+  # Compile quietly first, then use the same fixed-expression, argv-as-data
+  # boundary as packaged releases.
+  if ! mix deps.check >/dev/null 2>&1; then
+    mix deps.get >/dev/null
+  fi
+  mix compile >/dev/null
+  export LEMON_CLI_LAUNCHER=source
+  exec mix run --no-start --no-compile --no-deps-check \
+    -e 'LemonCli.CLI.main(System.argv())' -- "$@"
 }
 
 web_healthy() {
@@ -321,16 +347,60 @@ if [[ "${1:-}" == "channels" ]]; then
   exec mix lemon.channels "$@"
 fi
 
+if [[ "${1:-}" == "profile" ]]; then
+  shift
+  cd "$LEMON_ROOT"
+  exec mix run --no-start -e 'System.halt(LemonCli.CLI.run(["profile" | System.argv()]))' -- "$@"
+fi
+
 if [[ "${1:-}" == "config" ]]; then
   shift
   cd "$LEMON_ROOT"
   exec mix lemon.config "$@"
 fi
 
+if [[ "${1:-}" == "context" ]]; then
+  shift
+  cd "$LEMON_ROOT"
+  # Keep structured stdout parseable even when this first invocation needs to
+  # compile changed source files. Runtime application logs are silenced by the
+  # JSON command boundary itself; MIX_QUIET covers Mix's compile progress.
+  export MIX_QUIET=1
+  exec mix run --no-start -e 'System.halt(LemonCli.CLI.run(["context" | System.argv()]))' -- "$@"
+fi
+
+if [[ "${1:-}" == "learn" ]]; then
+  shift
+  cd "$LEMON_ROOT"
+  export MIX_QUIET=1
+  exec mix run --no-start -e 'System.halt(LemonCli.CLI.run(["learn" | System.argv()]))' -- "$@"
+fi
+
+if [[ "${1:-}" == "sessions" ]]; then
+  run_source_runtime_cli "$@"
+fi
+
+if [[ "${1:-}" == "blueprints" ]]; then
+  run_source_runtime_cli "$@"
+fi
+
+if [[ "${1:-}" == "completion" ]]; then
+  run_source_runtime_cli "$@"
+fi
+
 if [[ "${1:-}" == "doctor" ]]; then
   shift
   cd "$LEMON_ROOT"
   exec mix lemon.doctor "$@"
+fi
+
+if [[ "${1:-}" == "backup" ]]; then
+  shift
+  cd "$LEMON_ROOT"
+  # Keep --json stdout machine-clean after the documented source build step;
+  # dependency checks and compilation can otherwise print before the payload.
+  exec mix run --no-start --no-compile --no-deps-check \
+    -e 'LemonCli.CLI.main(["backup" | System.argv()])' -- "$@"
 fi
 
 if [[ "${1:-}" == "media" ]]; then
@@ -348,7 +418,9 @@ fi
 if [[ "${1:-}" == "providers" ]]; then
   shift
   cd "$LEMON_ROOT"
-  exec mix lemon.providers "$@"
+  export MIX_QUIET=1
+  exec mix run --no-start \
+    -e 'System.halt(LemonCli.CLI.run(["providers" | System.argv()]))' -- "$@"
 fi
 
 if [[ "${1:-}" == "policy" ]]; then
@@ -373,6 +445,9 @@ if [[ "${1:-}" == "secrets" ]]; then
   shift
   subcommand="${1:-}"
   case "$subcommand" in
+    sources)
+      run_source_runtime_cli "secrets" "$@"
+      ;;
     check|delete|import-env|init|list|set|status)
       shift
       cd "$LEMON_ROOT"
@@ -391,6 +466,7 @@ Commands:
   delete <name>
   check <name>
   import-env
+  sources <status|test> [source-id] [--json]
 EOF
       exit 0
       ;;
@@ -415,8 +491,16 @@ fi
 
 if [[ "${1:-}" == "update" ]]; then
   shift
-  cd "$LEMON_ROOT"
-  exec mix lemon.update "$@"
+
+  case "${1:-}" in
+    check|plan|apply|history|rollback|help|--help|-h)
+      run_source_runtime_cli "update" "$@"
+      ;;
+    *)
+      cd "$LEMON_ROOT"
+      exec mix lemon.update "$@"
+      ;;
+  esac
 fi
 
 DEBUG=""

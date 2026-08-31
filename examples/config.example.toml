@@ -15,6 +15,51 @@
 # the joining host. Named workers require wss:// for non-loopback controllers by
 # default. LEMON_NODE_ALLOW_INSECURE_CONTROLLER=true is an explicit development
 # or verified-encrypted-overlay override and is not safe on an unverified path.
+# Backups have no TOML settings. Use `lemon backup create`; local credential
+# files remain excluded unless `--include-credentials` is explicit.
+
+# External secret sources are read-only fallbacks behind Lemon's encrypted
+# store. Every source is disabled unless `enabled = true` is the exact TOML
+# boolean. Commands are argv arrays and are never passed through a shell.
+# Status/test commands never print values:
+#   lemon secrets sources status
+#   lemon secrets sources test [source-id]
+
+[secrets.sources.onepassword]
+type = "onepassword"
+enabled = false
+priority = 10
+executable = "op"
+timeout_ms = 3000
+max_output_bytes = 65536
+cache_ttl_ms = 0
+auth_secret = "op_service_account_token"
+auth_env = "OP_SERVICE_ACCOUNT_TOKEN"
+refs = { anthropic_api_key = "op://Lemon/Anthropic/api-key" }
+
+[secrets.sources.bitwarden]
+type = "bitwarden"
+enabled = false
+priority = 20
+executable = "bws"
+timeout_ms = 3000
+max_output_bytes = 65536
+cache_ttl_ms = 0
+project_id = "replace-with-project-id"
+access_token_secret = "bws_access_token"
+access_token_env = "BWS_ACCESS_TOKEN"
+# server_url = "https://vault.example.com"
+
+[secrets.sources.local_helper]
+type = "command"
+enabled = false
+priority = 30
+argv = ["/absolute/path/to/lemon-secret-helper", "export"]
+timeout_ms = 3000
+max_output_bytes = 65536
+cache_ttl_ms = 0
+pass_env = []
+secret_env = { HELPER_TOKEN = "helper_bootstrap_token" }
 
 [providers.anthropic]
 api_key_secret = "anthropic_api_key"
@@ -53,6 +98,27 @@ thinking_level = "medium"
 theme = "default"
 extension_paths = []
 
+# Provider routing can be managed without exposing credentials:
+#   lemon providers status
+#   lemon providers fallback add zai
+#   lemon providers pool set burst --provider openai --provider zai --activate
+#   lemon providers pool credential add burst openai secret:openai_backup
+# Values stay in the encrypted secret store or environment; only explicit
+# secret:NAME / env:NAME references belong in this file.
+#
+# [runtime.provider_routing]
+# enabled = true
+# fallback_providers = ["zai"]
+# default_pool = "burst"
+# require_credentials = true
+#
+# [runtime.provider_routing.credential_pools.burst]
+# providers = ["openai", "zai"]
+# strategy = "round_robin" # priority | round_robin
+#
+# [runtime.provider_routing.credential_pools.burst.credentials]
+# openai = ["secret:openai_backup", "env:OPENAI_API_KEY_BACKUP"]
+
 [runtime.compaction]
 enabled = true
 reserve_tokens = 16384
@@ -62,6 +128,11 @@ keep_recent_tokens = 20000
 enabled = true
 max_retries = 3
 base_delay_ms = 1000
+
+# `lemon context preview|resolve` budgets are explicit per invocation rather
+# than persisted here. This prevents shared config from silently raising a
+# caller's file/URL/archive/page/item/time limits. See
+# docs/user-guide/context-references.md for the bounded flags and defaults.
 
 # Programmatic tool calling: the model submits a python3 script that can call a fixed
 # allowlist of agent tools (read, grep, find, ls, webfetch); only what the script prints
@@ -239,6 +310,16 @@ name = "Default Agent"
 # allow = "all"
 # deny = []
 # require_approval = ["bash", "write", "edit"]
+
+# User-managed specialist profiles can be created with `lemon profile create`.
+# Their stable IDs derive ~/.lemon/profiles/<id>/ and agent:<id>:main; do not
+# configure filesystem paths here.
+# [profiles.research]
+# name = "Research"
+# description = "Evidence-first research specialist"
+# model = "openai:gpt-5"
+# system_prompt = "Cite primary sources and state uncertainty."
+# node = "local" # or the name of an authenticated execution node
 
 # --- Feature Flags ---
 # Each flag is an operator kill switch for a subsystem; all ship enabled.

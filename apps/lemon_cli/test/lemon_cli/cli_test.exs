@@ -162,7 +162,9 @@ defmodule LemonCli.CLITest do
           assert CLI.run(["secrets", "check"]) == 0
         end)
 
-      assert output =~ "0 from store, 0 from env, #{length(EnvCatalog.names())} missing"
+      assert output =~
+               "0 from store, 0 from external sources, 0 from env, #{length(EnvCatalog.names())} missing"
+
       assert output =~ "ANTHROPIC_API_KEY"
       assert output =~ "MARKET_INTEL_ANTHROPIC_KEY"
     end)

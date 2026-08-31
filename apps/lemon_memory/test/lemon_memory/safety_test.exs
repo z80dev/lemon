@@ -4,6 +4,27 @@ defmodule LemonMemory.SafetyTest do
   alias LemonMemory.Document
   alias LemonMemory.Safety
 
+  test "redact removes complete secret matches and reports the count" do
+    planted = "sk-abcdefghijklmnopqrstuvwxyz123456"
+    {text, count} = Safety.redact("visible #{planted} password=hunter2")
+
+    assert count == 2
+    assert text == "visible [REDACTED] [REDACTED]"
+    refute text =~ planted
+    refute text =~ "hunter2"
+  end
+
+  test "operator redaction removes arbitrary paths, URLs, authorization values, and secret names" do
+    content =
+      "Read CUSTOM_CLIENT_SECRET at /custom/work/private.txt or " <>
+        "ssh://internal.example/repo with Bearer abcdefghijklmnop"
+
+    {text, count} = Safety.redact_for_operator(content)
+
+    assert count == 4
+    assert text == "Read [REDACTED] at [REDACTED] or [REDACTED] with [REDACTED]"
+  end
+
   describe "contains_secret?/1" do
     test "detects documented secret patterns" do
       samples = [
