@@ -977,11 +977,15 @@ defmodule CodingAgent.Tools.ExecuteCode.Rpc do
 
   defp approval_context(context, claim, sweep_pid) when is_map(context) do
     original = Map.get(context, :approval_request_fun) || (&LemonCore.ExecApprovals.request/1)
+    # Test seam (same pattern as :approval_request_fun above): invoked in
+    # the watcher after each cancel attempt, so tests can observe the
+    # watcher's first cancel and pin cancel-vs-register interleavings.
+    on_cancel = Map.get(context, :approval_watcher_on_cancel)
     approval_id = claim.approval_id
 
     Map.put(context, :approval_request_fun, fn params ->
       task_pid = self()
-      watcher = spawn(fn -> watch_approval(approval_id, sweep_pid, task_pid) end)
+      watcher = spawn(fn -> watch_approval(approval_id, sweep_pid, task_pid, on_cancel) end)
 
       try do
         original.(Map.put(params, :approval_id, approval_id))
@@ -1014,22 +1018,23 @@ defmodule CodingAgent.Tools.ExecuteCode.Rpc do
   # flag off on entry), so a dead sweep reliably kills them; the wrapper's
   # `after` still reaps the watcher on normal completion, and a watcher whose
   # monitored processes all died exits by itself.
-  defp watch_approval(approval_id, sweep_pid, task_pid) do
+  defp watch_approval(approval_id, sweep_pid, task_pid, on_cancel \\ nil) do
     refs = %{
       Process.monitor(sweep_pid) => :sweep,
       Process.monitor(task_pid) => :task
     }
 
-    watch_approval_loop(approval_id, refs)
+    watch_approval_loop(approval_id, refs, on_cancel)
   end
 
-  defp watch_approval_loop(_approval_id, refs) when map_size(refs) == 0, do: :ok
+  defp watch_approval_loop(_approval_id, refs, _on_cancel) when map_size(refs) == 0, do: :ok
 
-  defp watch_approval_loop(approval_id, refs) do
+  defp watch_approval_loop(approval_id, refs, on_cancel) do
     receive do
       {:DOWN, ref, :process, _pid, _reason} ->
         _ = LemonCore.ExecApprovals.cancel(approval_id, "execute_code dispatch ended")
-        watch_approval_loop(approval_id, Map.delete(refs, ref))
+        if on_cancel, do: on_cancel.()
+        watch_approval_loop(approval_id, Map.delete(refs, ref), on_cancel)
     end
   end
 

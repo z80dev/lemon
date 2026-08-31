@@ -1060,6 +1060,10 @@ defmodule CodingAgent.Tools.ExecuteCodeRpcTest do
           approval_context: %{
             run_id: run_id,
             session_key: "watcher-session",
+            # Seam: the watcher reports each cancel attempt so the test can
+            # wait for its first (sweep-death) cancel before releasing the
+            # registration — pinning the interleaving instead of racing it.
+            approval_watcher_on_cancel: fn -> send(test, :watcher_cancelled) end,
             approval_request_fun: fn params ->
               # Deliberately subvert teardown by outliving the sweep (the
               # watcher cannot rely on the task dying with it), then
@@ -1100,6 +1104,12 @@ defmodule CodingAgent.Tools.ExecuteCodeRpcTest do
       monitor = Process.monitor(sweep.pid)
       Process.exit(sweep.pid, :kill)
       assert_receive {:DOWN, ^monitor, :process, _pid, :killed}, 2_000
+      # Pin the interleaving: wait for the watcher's first cancel (the one
+      # triggered by the sweep's death) to complete BEFORE the registration
+      # is released. Without this, that cancel races the registration; when
+      # it lands after `:registered` it deletes the pending record and the
+      # intermediate assert below flakes.
+      assert_receive :watcher_cancelled, 2_000
 
       # The trapped dispatch task survives and registers the prompt late...
       send(task_pid, :register)
