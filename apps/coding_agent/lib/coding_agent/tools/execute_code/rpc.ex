@@ -1285,7 +1285,7 @@ defmodule CodingAgent.Tools.ExecuteCode.Rpc do
   defp run_claim(claim, ctx, sweep_pid) do
     # A dispatch task must die with its sweep (the linked teardown above), so
     # it may not trap exits — the flag is forced off on entry, before any
-    # tool code runs. `watch_approval/3` relies on this: the task's DOWN is
+    # tool code runs. `watch_approval/4` relies on this: the task's DOWN is
     # what closes the register-after-cancel window, so a trapping task would
     # leave the watcher waiting forever.
     Process.flag(:trap_exit, false)
@@ -1367,7 +1367,7 @@ defmodule CodingAgent.Tools.ExecuteCode.Rpc do
   # flag off on entry), so a dead sweep reliably kills them; the wrapper's
   # `after` still reaps the watcher on normal completion, and a watcher whose
   # monitored processes all died exits by itself.
-  defp watch_approval(approval_id, sweep_pid, task_pid, on_cancel \\ nil) do
+  defp watch_approval(approval_id, sweep_pid, task_pid, on_cancel) do
     refs = %{
       Process.monitor(sweep_pid) => :sweep,
       Process.monitor(task_pid) => :task
