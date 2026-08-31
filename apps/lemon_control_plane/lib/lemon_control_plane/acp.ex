@@ -490,7 +490,7 @@ defmodule LemonControlPlane.ACP do
           summarize_client_response("session/request_permission", response)
 
         {:error, reason} ->
-          if is_binary(approval_id), do: LemonCore.ExecApprovals.resolve(approval_id, :deny)
+          deny_if_pending(approval_id)
 
           %{
             "method" => "session/request_permission",
@@ -508,7 +508,7 @@ defmodule LemonControlPlane.ACP do
 
   defp perform_approval_request(result, pending, _callback) do
     approval_id = map_get(pending, :id) || map_get(pending, :approval_id)
-    if is_binary(approval_id), do: LemonCore.ExecApprovals.resolve(approval_id, :deny)
+    deny_if_pending(approval_id)
 
     add_client_request_result(result, %{
       "method" => "session/request_permission",
@@ -516,6 +516,17 @@ defmodule LemonControlPlane.ACP do
       "reason" => "client request callback unavailable"
     })
   end
+
+  # A failed or skipped client prompt denies the pending approval so the
+  # gated call cannot run. `{:error, :not_pending}` (already resolved,
+  # cancelled, or timed out) leaves nothing to deny, so the outcome is
+  # deliberately dropped.
+  defp deny_if_pending(approval_id) when is_binary(approval_id) do
+    _ = LemonCore.ExecApprovals.resolve(approval_id, :deny)
+    :ok
+  end
+
+  defp deny_if_pending(_approval_id), do: :ok
 
   defp approval_content(pending) do
     case map_get(pending, :rationale) do
@@ -547,7 +558,12 @@ defmodule LemonControlPlane.ACP do
         _ -> :deny
       end
 
-    LemonCore.ExecApprovals.resolve(approval_id, decision)
+    # `:not_pending` means the prompt was cancelled or timed out before the
+    # client's answer arrived — the record is gone and there is nothing
+    # left to resolve, so the outcome is deliberately dropped.
+    _ = LemonCore.ExecApprovals.resolve(approval_id, decision)
+
+    :ok
   end
 
   defp resolve_approval_from_response(_approval_id, _response), do: :ok

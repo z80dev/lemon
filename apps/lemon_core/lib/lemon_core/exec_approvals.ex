@@ -462,8 +462,8 @@ defmodule LemonCore.ExecApprovals do
     max(deadline - System.monotonic_time(:millisecond), 0)
   end
 
-  defp record_approval_timeout(_approval_id, nil), do: :ok
-
+  # Called only after `take_pending/1` handed the waiter the record, so
+  # `pending` is always the taken struct — there is no nil path.
   defp record_approval_timeout(approval_id, pending) do
     record_approval_event(:approval_timed_out, pending, %{
       approval_id: approval_id,
@@ -472,8 +472,6 @@ defmodule LemonCore.ExecApprovals do
       action_hash: hash_action(pending.action)
     })
   end
-
-  defp emit_approval_timeout(_approval_id, nil), do: :ok
 
   defp emit_approval_timeout(approval_id, pending) do
     record_approval_timeout(approval_id, pending)
@@ -501,12 +499,18 @@ defmodule LemonCore.ExecApprovals do
     )
   end
 
+  # Introspection is best-effort observability: a rejected payload must not
+  # fail the approval transition that already happened (same posture as
+  # `LemonCore.Checkpoint`), so the record outcome is deliberately dropped.
   defp record_approval_event(event_type, pending, payload) do
-    LemonCore.Introspection.record(event_type, payload,
-      run_id: pending.run_id,
-      session_key: pending.session_key,
-      agent_id: pending.agent_id
-    )
+    _ =
+      LemonCore.Introspection.record(event_type, payload,
+        run_id: pending.run_id,
+        session_key: pending.session_key,
+        agent_id: pending.agent_id
+      )
+
+    :ok
   end
 
   defp action_type(action) when is_map(action) do

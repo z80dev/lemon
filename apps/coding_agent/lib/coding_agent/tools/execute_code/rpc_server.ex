@@ -669,10 +669,16 @@ defmodule CodingAgent.Tools.ExecuteCode.RpcServer do
     unless AbortSignal.aborted?(state.ctx.signal) do
       schedule_poll(state.poll_interval_ms)
     end
+
+    :ok
   end
 
   defp schedule_poll(poll_interval_ms) do
-    Process.send_after(self(), :poll, poll_interval_ms)
+    # The timer ref is deliberately dropped: polls are never cancelled, the
+    # server's stop is process death, and a stray :poll to a dead process is
+    # discarded by the VM.
+    _ = Process.send_after(self(), :poll, poll_interval_ms)
+    :ok
   end
 
   defp cleanup_files(rpc_dir) do

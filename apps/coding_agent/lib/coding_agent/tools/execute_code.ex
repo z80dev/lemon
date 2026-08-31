@@ -631,7 +631,10 @@ defmodule CodingAgent.Tools.ExecuteCode do
                 end
 
               {:error, reason} ->
-                File.rm_rf(base)
+                # Best-effort teardown of the cell bridge we reserved; the
+                # error below is the cell's verdict, and PrivateTmp's root
+                # cleanup owns any residue.
+                _ = File.rm_rf(base)
 
                 session_error(
                   reason,
@@ -1257,7 +1260,9 @@ defmodule CodingAgent.Tools.ExecuteCode do
           {:ok, base, value}
 
         {:error, reason} ->
-          File.rm_rf(base)
+          # Best-effort removal of exactly the base this call reserved; a
+          # reservation mktemp never confirmed is never deleted speculatively.
+          _ = File.rm_rf(base)
           {:error, reason}
       end
     end

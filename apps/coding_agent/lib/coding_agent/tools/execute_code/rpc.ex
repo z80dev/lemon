@@ -247,7 +247,13 @@ defmodule CodingAgent.Tools.ExecuteCode.Rpc do
   """
   @spec initial_stats() :: stats()
   def initial_stats do
-    %{
+    # Built through `Map.new/1` deliberately: Elixir 1.19's MapSet carries an
+    # opaque internal (`MapSet.internal/1`), and a bare map literal with
+    # `MapSet.new()` fields infers the structurally-expanded form, which
+    # violates the `MapSet.t()` fields of `stats()` at every spec'd call
+    # site. `Map.new/1`'s generic `map()` success typing erases that literal
+    # so this function's `stats()` spec types callers opaquely.
+    Map.new(
       calls: 0,
       denied: 0,
       errors: 0,
@@ -255,7 +261,7 @@ defmodule CodingAgent.Tools.ExecuteCode.Rpc do
       tools_used: MapSet.new(),
       seen_ids: MapSet.new(),
       notify_forwarded: 0
-    }
+    )
   end
 
   @doc """
