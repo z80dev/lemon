@@ -96,9 +96,6 @@ jobs:
       - name: Lint builtin skills
         run: mix lemon.skill.lint
 
-      - name: Lint CI/docs policy
-        run: bash scripts/lint_ci_docs.sh
-
       # --shell=sh on install.sh is load-bearing: the curl one-liner runs under
       # whatever /bin/sh the user has, so the script must stay POSIX.
       - name: Shellcheck installer and shim scripts

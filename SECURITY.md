@@ -43,7 +43,7 @@ boundary guarantee — see [`docs/security/threat-model.md`](docs/security/threa
 
 API keys and secrets are stored in an encrypted keychain, not in `config.toml`
 in plaintext. Skills and memory documents are scanned for common secret patterns
-before storage. See [`docs/security/secrets-keychain-audit-matrix.md`](docs/security/secrets-keychain-audit-matrix.md).
+before storage. See [`docs/security/secrets-and-keychain.md`](docs/security/secrets-and-keychain.md).
 
 ### Skill synthesis
 

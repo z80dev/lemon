@@ -17,12 +17,8 @@ Scope: every `LemonCore.Bus.broadcast/2` call site in the umbrella (78 in `lib/`
 "catalog first will reveal undocumented consumer assumptions." It does — §6 lists thirteen, two
 of which are live bugs.
 
-> **Prior work check.** I grepped `docs/plans/` and `docs/platform/` for earlier bus/event design
-> work. There is none: the bus is mentioned in passing by `lemon-stack-reshape-2026-07-02.md`,
-> `gateway-channels-transport-migration.md` and `2026-04-12-subagent-reasoning-surfacing-plan.md`,
-> but no document has ever catalogued the topics or proposed payload types. Unlike 2.4, this phase
-> starts from scratch. `docs/platform/lemon_core.md` names the Bus in one sentence and documents
-> nothing about it.
+This document is the canonical catalog for bus topics and payload types.
+`docs/platform/lemon_core.md` provides the higher-level core boundary.
 
 > **Top-level execution end state.** `engine` remains in run events, completion
 > records, and `ResumeToken` as provenance, with the fixed value `"lemon"` for

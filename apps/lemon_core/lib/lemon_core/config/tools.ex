@@ -416,7 +416,7 @@ defmodule LemonCore.Config.Tools do
   # `kernel_mode = "session"` keeps Python state across calls while
   # `"per_call"` (the default) keeps today's fresh-process behavior, and the
   # three bounds cap idle reaping, concurrent live kernels, and queued cells
-  # per kernel (docs/plans/2026-08-17-persistent-python-repl-plan.md).
+  # per kernel.
   defp resolve_execute_code(settings) do
     ec = settings["execute_code"] || %{}
 

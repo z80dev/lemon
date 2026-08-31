@@ -1,8 +1,6 @@
-# Secrets + Keychain Audit Matrix
+# Secrets and Keychain Contract
 
-_Last updated: 2026-08-30_
-
-This document captures the current, tested contract for Lemon secret resolution
+This document defines the tested contract for Lemon secret resolution
 across keychain, encrypted store, explicitly enabled external sources, and
 environment fallback paths.
 

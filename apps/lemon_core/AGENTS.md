@@ -289,7 +289,8 @@ The chain is configurable (`LemonCore.Secrets.KeyProvider`): `config :lemon_core
 
 Key material must be base64-encoded 32 bytes. Raw passphrase-like strings are rejected with `:weak_master_key` unless `allow_legacy_raw_keys: true` is set. Rotation (re-encrypting under a new key) is not implemented — see the `LemonCore.Secrets` moduledoc.
 
-For a path-by-path audit matrix (including error and fallback semantics), see `docs/security/secrets-keychain-audit-matrix.md`.
+For the path-by-path resolution contract, including error and fallback semantics,
+see `docs/security/secrets-and-keychain.md`.
 
 ### API Usage
 

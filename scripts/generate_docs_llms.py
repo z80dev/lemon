@@ -71,18 +71,10 @@ SECTIONS: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
         ),
     ),
     (
-        "Benchmarks and parity",
+        "Benchmarks",
         (
             ("benchmarks/quickstart.md", "Run a LemonSim benchmark locally."),
             ("benchmarks/platform.md", "Determinism, replay, and benchmark guarantees."),
-            (
-                "plans/lemon-hermes-gap-audit-2026-08-11.md",
-                "Current pinned non-transport Hermes comparison and implementation backlog.",
-            ),
-            (
-                "plans/lemon-hermes-agent-harness-parity-scorecard.md",
-                "Detailed Lemon harness implementation ledger.",
-            ),
         ),
     ),
 )
@@ -125,13 +117,6 @@ FULL_DIRECTORIES = (
     "tools/",
     "user-guide/",
 )
-FULL_PLAN_FILES = {
-    "plans/lemon-1.0-mainstream-readiness.md",
-    "plans/lemon-hermes-agent-harness-parity-scorecard.md",
-    "plans/lemon-hermes-gap-audit-2026-08-11.md",
-}
-
-
 def canonical_url(relative: str) -> str:
     path = relative.removesuffix(".md")
     if path == "index":
@@ -168,7 +153,6 @@ def render_index() -> str:
             "",
             "## Notes for agents",
             "",
-            "- Treat historical matrices and plans as dated evidence; the current Hermes gap audit identifies its exact upstream and Lemon revisions.",
             "- Public documentation describes supported behavior. Source modules and tests remain authoritative for implementation details.",
             "",
         )
@@ -183,9 +167,7 @@ def full_documents() -> list[Path]:
         if relative == "README.md":
             continue
         if (
-            relative in FULL_ROOT_FILES
-            or relative in FULL_PLAN_FILES
-            or relative.startswith(FULL_DIRECTORIES)
+            relative in FULL_ROOT_FILES or relative.startswith(FULL_DIRECTORIES)
         ):
             documents.append(path)
     return sorted(documents, key=lambda path: path.relative_to(DOCS).as_posix())
@@ -195,7 +177,7 @@ def render_full() -> str:
     lines = [
         "# Lemon complete documentation",
         "",
-        "> Generated from Lemon's public product, user, tool, architecture, operations, benchmark, and current parity documentation.",
+        "> Generated from Lemon's public product, user, tool, architecture, operations, and benchmark documentation.",
         "",
         f"Curated index: {SITE}/llms.txt",
         "",

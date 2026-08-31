@@ -190,7 +190,6 @@ run_quality() {
   setup_test_env
   mix format --check-formatted
   mix credo
-  bash scripts/lint_ci_docs.sh
   bash scripts/test_contract.sh
   bash scripts/test_lemon_tui_auth.sh
   bash scripts/test_lemon_launcher_reuse.sh

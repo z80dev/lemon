@@ -49,14 +49,11 @@
 - [Telemetry](https://z80dev.github.io/lemon/telemetry): Runtime telemetry and observability events.
 - [Versioning and Release Channels](https://z80dev.github.io/lemon/release/versioning_and_channels): CalVer releases and update channels.
 
-## Benchmarks and parity
+## Benchmarks
 
 - [Benchmarks Quickstart](https://z80dev.github.io/lemon/benchmarks/quickstart): Run a LemonSim benchmark locally.
 - [Benchmark Platform Guarantees](https://z80dev.github.io/lemon/benchmarks/platform): Determinism, replay, and benchmark guarantees.
-- [Lemon ↔ Hermes Functionality and UX Gap Audit](https://z80dev.github.io/lemon/plans/lemon-hermes-gap-audit-2026-08-11): Current pinned non-transport Hermes comparison and implementation backlog.
-- [Lemon ↔ Hermes-Class Agent Harness Parity Scorecard](https://z80dev.github.io/lemon/plans/lemon-hermes-agent-harness-parity-scorecard): Detailed Lemon harness implementation ledger.
 
 ## Notes for agents
 
-- Treat historical matrices and plans as dated evidence; the current Hermes gap audit identifies its exact upstream and Lemon revisions.
 - Public documentation describes supported behavior. Source modules and tests remain authoritative for implementation details.

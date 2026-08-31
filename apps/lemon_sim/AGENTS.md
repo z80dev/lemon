@@ -12,8 +12,8 @@ The product mission is broader than test harnessing: LemonSim should become the
 BEAM-native platform for simulations people can watch, replay, and benchmark.
 Werewolf is the flagship watchable social-deduction game, and Vending Bench
 is the flagship nested operator/physical-worker business simulation. Keep
-`docs/plans/lemon-sim-platform-mission-2026-05-12.md` current when these
-mission targets change.
+this guide and the benchmark documentation current when these mission targets
+change.
 
 ## Current Dogfood Examples
 

@@ -245,9 +245,7 @@ Local `write` calls canonicalize the path used for validation and mutation,
 then reject symlinks, caller-controlled symlinked parent components,
 directories, devices, and other special-file targets by default; trusted
 internal callers can opt into legacy symlink following with
-`allow_symlinks: true`. See
-[`docs/tools/omp-tooling-audit.md`](../../docs/tools/omp-tooling-audit.md) for
-the source-backed OMP comparison and follow-on tool roadmap.
+`allow_symlinks: true`.
 
 `lsp_diagnostics` runs workspace-aware language diagnostics for a single file.
 `write`, `edit`, and `patch` can opt into post-edit diagnostics with

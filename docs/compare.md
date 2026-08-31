@@ -21,7 +21,7 @@ durable events, explicit policy, and replayable state underneath.
 | --- | --- | --- |
 | Runtime | Supervised BEAM applications, one native executor, typed events, durable run state, hot reload, and explicit control-plane APIs | [Architecture](architecture/overview.md), [BEAM agents](beam_agents.md), [Hot reload](runtime-hot-reload.md) |
 | Models | Provider/model selection, custom endpoints, live provider fallback, credential pools, cooldowns, and per-session pinning | [Model selection](model-selection-decoupling.md), [Configuration](config.md), [Testing](testing.md) |
-| Harness | Native subagents, approval-aware tools, redirect/steer/abort, progressive tool disclosure, programmatic tool calling, compaction, and long-running goal support | [Context](context.md), [Execute Code](tools/execute-code.md), [Harness scorecard](plans/lemon-hermes-agent-harness-parity-scorecard.md) |
+| Harness | Native subagents, approval-aware tools, redirect/steer/abort, progressive tool disclosure, programmatic tool calling, compaction, and long-running goal support | [Context](context.md), [Execute Code](tools/execute-code.md), [Long-running harnesses](long-running-agent-harnesses.md) |
 | Browser and media | Supervised browser automation, Web search/fetch, downloads/uploads, screenshots, computer use, media jobs, and artifacts | [Web and Browser Tools](tools/web.md), [Media Tools](tools/media.md) |
 | Memory and skills | SQLite full-text memory, project context, Honcho integration, skill discovery/audit/install/update, and opt-in synthesis/curation | [Memory](user-guide/memory.md), [Honcho](user-guide/honcho.md), [Skills](user-guide/skills.md), [Adaptive behavior](user-guide/adaptive.md) |
 | Automation | Durable cron and timers, retries/lineage, overlap locks, monitor suppression, no-agent commands, chaining, model-drift guard, preflight, goals, and kanban | [Configuration](config.md), [Testing](testing.md), [Support](support.md) |
@@ -50,13 +50,9 @@ The largest remaining differences are product integration and usability:
   architecture and many more task guides. Lemon's architecture and proof docs
   are deep, but some user workflows remain under-documented.
 
-The current, source-pinned comparison is the
-[Hermes Functionality and UX Gap Audit](plans/lemon-hermes-gap-audit-2026-08-11.md).
-It records the exact official Hermes and Lemon revisions, corrections to stale
-findings, evidence for every status, and prioritized vertical implementation
-bundles. The older
-[May feature matrix](plans/lemon-hermes-feature-parity-matrix-2026-05-12.md) is
-historical evidence only.
+This page describes the supported product boundary. Implementation details are
+kept in the linked architecture, user, tool, and testing documentation rather
+than in point-in-time comparison ledgers.
 
 ## What is ready to evaluate
 
@@ -99,6 +95,6 @@ broad support claims.
 1. Follow [Install Lemon](install.md).
 2. Complete [Setup](user-guide/setup.md).
 3. Start the TUI and run [Demo Lemon](demo.md).
-4. Exercise the workflows relevant to you, then inspect the
-   [current Hermes gap audit](plans/lemon-hermes-gap-audit-2026-08-11.md).
+4. Exercise the workflows relevant to you, then inspect the linked task guides
+   and [testing contracts](testing.md).
 5. Use [Support](support.md) for diagnostics and a redacted support bundle.

@@ -833,4 +833,4 @@ safety guidance in [Lemon Safety](security/safety.md).
 | Run a local proof | [Demo Lemon](demo.md) |
 | Safety and redaction model | [Safety](security/safety.md) |
 | Release support matrix | [Release Checklist](release/release_checklist_and_support_policy.md) |
-| Current product gaps | [Hermes-on-BEAM Readiness Plan](plans/lemon-1.0-mainstream-readiness.md) |
+| Product boundaries | [Compare Lemon](compare.md) |

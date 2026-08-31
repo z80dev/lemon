@@ -253,4 +253,3 @@ pinned_version = "2026.03.0"
 - `docs/release/deployment_flows.md` — supported runtime/deployment modes
 - `install.sh` / `scripts/verify_install_script` — installer and its fixture-server verifier
 - `apps/lemon_core/lib/mix/tasks/lemon.update.ex` — stage-1 source-checkout update task
-- `docs/plans/lemon-1.0-mainstream-readiness.md` — Hermes-on-BEAM readiness plan

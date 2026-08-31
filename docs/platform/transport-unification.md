@@ -6,13 +6,9 @@ Status: **design (Phase A).** Written 2026-08-10 against `463db837..8f76026d`.
 > tests). The inventory below has been updated to the post-deletion tree; the analysis of why
 > it did not fit `Plugin` is retained because it is the reasoning behind the decision.
 
-> **Read this first.** A prior investigation of exactly this migration already exists:
-> [`docs/plans/gateway-channels-transport-migration.md`](../plans/gateway-channels-transport-migration.md)
-> (2026-07-07). Its analysis is sound and I re-verified its load-bearing claims against
-> today's tree — they all still hold. This document does not repeat it; it (a) records what
-> re-verification found, (b) answers the questions that plan did not cover (control-plane
-> coupling, env vars, the chat_state unblock, the telegram surfaces), and (c) recommends an
-> amendment to **D2**, which as written is not supportable by the code.
+This document records the verified inventory, control-plane coupling, environment
+variables, chat-state dependency, Telegram surfaces, and the recommended amendment
+to **D2**.
 
 ## 1. Headline recommendation
 

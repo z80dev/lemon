@@ -173,7 +173,7 @@ mix lemon.config --show-secrets-source
 
 ## See Also
 
-- [`docs/security/secrets-keychain-audit-matrix.md`](secrets-keychain-audit-matrix.md) - Detailed security audit
+- [`docs/security/secrets-and-keychain.md`](secrets-and-keychain.md) - Resolution and fallback contract
 - `mix help lemon.secrets.init` - Initialize secrets store
 - `mix help lemon.secrets.set` - Store a secret
 - `mix help lemon.secrets.check` - Check secret sources

@@ -116,8 +116,8 @@ Release-runtime support bundles are generated with:
 bin/lemon_runtime_full eval 'LemonCore.Doctor.CLI.bundle!()'
 ```
 
-The exact release artifact proof is tracked in
-[Release Artifact Proof](plans/lemon-1.0-release-artifact-proof-2026-05-11.md).
+Release artifact validation is documented in the
+[Release Checklist](release/release_checklist_and_support_policy.md).
 
 ## Demo 5: Docs and Quality
 
@@ -152,5 +152,4 @@ still tracks:
 - broader adversarial safety-depth variants beyond the launch-focused web,
   email, skill, and extension-style tool coverage
 
-Use the [Hermes-on-BEAM Readiness Plan](plans/lemon-1.0-mainstream-readiness.md)
-for the current source of truth.
+Use the task guides and release checklist for the current supported behavior.

@@ -86,8 +86,6 @@ failures.
 | [assistant_bootstrap_contract.md](assistant_bootstrap_contract.md) | How sessions bootstrap: system prompt assembly, skill discovery/loading, context setup |
 | [context.md](context.md) | Context management, compaction, branch summarization, token budgets |
 | [subagent-parent-questions.md](subagent-parent-questions.md) | Design for the `ask_parent` clarification path from child subagents back to their parent session |
-| [reviews/assistant-runtime-polish-audit-2026-08-30.md](reviews/assistant-runtime-polish-audit-2026-08-30.md) | Assistant-focused audit of tasks, delegated agents, async lifecycle, joins, skills, and background work |
-| [reviews/hermes-web-setup-audit-2026-08-30.md](reviews/hermes-web-setup-audit-2026-08-30.md) | Source-grounded Hermes comparison for installation, setup, Web/desktop UX, lifecycle, migration, docs, and accessibility |
 | [runtime-hot-reload.md](runtime-hot-reload.md) | Hot code reload system for live-patching without restarts |
 | [telemetry.md](telemetry.md) | Telemetry events, observability, correlation IDs, monitoring |
 
@@ -97,25 +95,12 @@ failures.
 - [`docs/compare.md`](compare.md) - Lemon positioning against hosted assistants, single-engine CLIs, agent harnesses, and self-hosted automation
 - [`docs/demo.md`](demo.md) - Local deterministic demo flows for runtime, session Web UI, TUI, support bundles, and docs quality
 - [`docs/support.md`](support.md) - Public support policy landing page and issue-prep checklist
-- [`docs/plans/lemon-1.0-mainstream-readiness.md`](plans/lemon-1.0-mainstream-readiness.md) - Hermes-on-BEAM product goal, readiness plan, and parity execution ledger
-- [`docs/plans/lemon-1.0-fresh-install-proof-2026-05-11.md`](plans/lemon-1.0-fresh-install-proof-2026-05-11.md) - Source-dev fresh install proof for the Lemon 1.0 launch goal
-- [`docs/plans/lemon-1.0-release-artifact-proof-2026-05-11.md`](plans/lemon-1.0-release-artifact-proof-2026-05-11.md) - Local release-artifact proof for `lemon_runtime_full`
-- [`docs/plans/lemon-1.0-interface-supportability-audit-2026-05-11.md`](plans/lemon-1.0-interface-supportability-audit-2026-05-11.md) - Interface supportability audit for Web, TUI, Telegram, Discord, and the control plane
-- [`docs/plans/lemon-1.0-interface-proof-pack-2026-05-11.md`](plans/lemon-1.0-interface-proof-pack-2026-05-11.md) - Release-candidate proof pack for automated TUI, Web, and Telegram-adjacent interface coverage
-- [`docs/plans/lemon-1.0-completion-audit-2026-05-12.md`](plans/lemon-1.0-completion-audit-2026-05-12.md) - Prompt-to-artifact completion audit and product proof blockers
-- [`docs/plans/lemon-hermes-gap-audit-2026-08-11.md`](plans/lemon-hermes-gap-audit-2026-08-11.md) - Current source-pinned Lemon-vs-Hermes functionality, setup, Web, CLI, and documentation audit
-- [`docs/plans/lemon-hermes-feature-parity-matrix-2026-05-12.md`](plans/lemon-hermes-feature-parity-matrix-2026-05-12.md) - Historical May Lemon-vs-Hermes feature matrix
-- [`docs/plans/lemon-channel-command-parity-matrix-2026-05-12.md`](plans/lemon-channel-command-parity-matrix-2026-05-12.md) - Telegram and Discord command-surface comparison against Hermes messaging slash commands
-- [`docs/plans/lemon-sim-platform-mission-2026-05-12.md`](plans/lemon-sim-platform-mission-2026-05-12.md) - LemonSim mission for watchable Werewolf and Vending Bench 2.0
-- [`docs/plans/lemon-hermes-agent-harness-parity-scorecard.md`](plans/lemon-hermes-agent-harness-parity-scorecard.md) - Hermes-class agent harness parity scorecard
-- [`docs/plans/lemon-hermes-parity-expansion-goal-2026-05-24.md`](plans/lemon-hermes-parity-expansion-goal-2026-05-24.md) - Active expansion goal for browser, external API/editor, migration v2, terminal, plugin/provider, LSP, and observability parity
 - [`docs/for-dummies/README.md`](for-dummies/README.md) - Plain-English guided tour of Lemon for non-Elixir users
 - [`docs/skills_v2.md`](skills_v2.md) - Skill manifest v2 and newer skill-system direction
 - [`docs/tools/web.md`](tools/web.md)
 - [`docs/tools/firecrawl.md`](tools/firecrawl.md)
 - [`docs/tools/media.md`](tools/media.md)
 - [`docs/tools/lsp.md`](tools/lsp.md)
-- [`docs/tools/omp-tooling-audit.md`](tools/omp-tooling-audit.md) - Source-backed OMP tool comparison, shipped mutation hardening, and prioritized Lemon tool roadmap
 - [`docs/tools/openai-compatible-api.md`](tools/openai-compatible-api.md)
 - [`docs/tools/acp.md`](tools/acp.md)
 - [`docs/tools/wasm.md`](tools/wasm.md)
@@ -143,7 +128,6 @@ All diagrams are in `docs/diagrams/` as both Excalidraw source and exported SVG:
 | `apps/*/AGENTS.md` | Per-app AI agent context (key files, patterns, testing, gotchas) |
 | `AGENTS.md` (root) | Project-wide agent guide (navigation, team composition, conventions) |
 | `README.md` (root) | 5-minute orientation: what it is, quickstart, feature summary, doc links |
-| `docs/plans/lemon-1.0-mainstream-readiness.md` | Living launch goal: mainstream readiness workstreams, milestones, and acceptance criteria |
 | `config/` | Elixir application configuration (config.exs, runtime.exs, etc.) |
 | `examples/config.example.toml` | Annotated example TOML configuration |
 

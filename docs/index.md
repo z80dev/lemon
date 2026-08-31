@@ -54,11 +54,8 @@ interface polish for non-contributors to use Lemon without repo expertise.
 | Chat in the local browser | [Use Lemon in a Browser](user-guide/web.md) |
 | Understand why Lemon runs on the BEAM | [Agents Are a Concurrency Problem](why-beam-for-agents.md) |
 | Understand the runtime architecture | [Architecture Overview](architecture/overview.md) |
-| Track the Hermes-on-BEAM product goal | [Hermes-on-BEAM Readiness Plan](plans/lemon-1.0-mainstream-readiness.md) |
-| Check current Hermes functionality and UX gaps | [Current Hermes Gap Audit](plans/lemon-hermes-gap-audit-2026-08-11.md) |
-| Inspect the historical May Hermes baseline | [Historical Feature Parity Matrix](plans/lemon-hermes-feature-parity-matrix-2026-05-12.md) |
-| Check channel command parity | [Command Parity Matrix](plans/lemon-channel-command-parity-matrix-2026-05-12.md) |
-| Check harness contract parity | [Harness Parity Scorecard](plans/lemon-hermes-agent-harness-parity-scorecard.md) |
+| Review supported behavior and product boundaries | [Compare Lemon](compare.md) |
+| Prepare and validate a release | [Release Checklist](release/release_checklist_and_support_policy.md) |
 | Configure LSP diagnostics | [LSP Diagnostics](tools/lsp.md) |
 | Generate and inspect media artifacts | [Media Tools](tools/media.md) |
 | Use OpenAI-compatible HTTP clients | [OpenAI-Compatible API Preview](tools/openai-compatible-api.md) |
@@ -70,7 +67,5 @@ interface polish for non-contributors to use Lemon without repo expertise.
 
 Lemon is still pre-1.0. Verified release artifacts and a one-line installer now
 exist for the documented macOS and Linux targets. Platform breadth, packaged CLI
-coverage, management Web UI, native desktop/profile UX, complete session
-lifecycle, and install/update/backup polish remain active work. See the
-[current Hermes gap audit](plans/lemon-hermes-gap-audit-2026-08-11.md) for the
-source-pinned comparison.
+coverage, management Web UI, native desktop/profile UX, session lifecycle, and
+install/update/backup behavior are documented in the task guides linked above.

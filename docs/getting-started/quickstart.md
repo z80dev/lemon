@@ -106,10 +106,8 @@ is the daily continuity path. `/reset` intentionally clears the current
 session; `/session delete <session-key>` deletes stored history and requires the
 explicit key.
 
-Lemon does not yet have Hermes-level session rename, pin, archive, search,
-export, and prune workflows. The
-[current Hermes audit](../plans/lemon-hermes-gap-audit-2026-08-11.md) tracks that
-gap explicitly.
+Session rename, pin, archive, search, export, and guarded prune workflows are
+documented in the [CLI guide](../user-guide/cli.md).
 
 ## 5. Try the next useful capability
 

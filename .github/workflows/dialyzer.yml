@@ -2,8 +2,7 @@ name: Dialyzer
 
 # Static-analysis lane with a real green GATE.
 #
-# The umbrella as a whole still carries a large Dialyzer backlog (categorized
-# in docs/plans/dialyzer-burndown.md), so the *full* run stays advisory for
+# The umbrella as a whole still carries a large Dialyzer backlog, so the *full* run stays advisory for
 # visibility. On top of it we enforce a hard gate: an explicit allowlist of
 # apps (scripts/dialyzer_gate.sh) that have been driven to green and must STAY
 # green. The gate step has no `continue-on-error`, so a regression in any gated
@@ -25,10 +24,8 @@ on:
 permissions:
   contents: read
 
-# Version pins for the PLT/deps cache keys below. The setup-beam step keeps
-# LITERAL pins (not these vars): scripts/lint_ci_docs.sh J28 requires every
-# first-party workflow's otp-version/elixir-version fields to be the literal
-# 28.5 / 1.19.5 so pins stay greppable and bump uniformly. Keep both in sync.
+# Version pins for the PLT/deps cache keys below. Keep these aligned with the
+# literal otp-version/elixir-version fields in first-party workflows.
 env:
   OTP_VERSION: "28.5"
   ELIXIR_VERSION: "1.19.5"
