@@ -52,7 +52,11 @@ defmodule LemonCore.ExecApprovals do
   ## Returns
   - `{:ok, :approved, scope}` - Approved at the given scope
   - `{:ok, :denied}` - Denied
-  - `{:error, :timeout}` - Request timed out
+  - `{:error, :timeout}` - Request timed out. The timeout is decided by the
+    same atomic single-winner transition as `resolve/2`/`cancel/2`: when a
+    resolver wins the record first, the waiter reports this without emitting
+    any timeout side effects of its own (the resolver's decision — and any
+    policy it installed — stands).
   """
   @spec request(map()) ::
           {:ok, :approved, scope :: atom()}
@@ -151,10 +155,12 @@ defmodule LemonCore.ExecApprovals do
   waiter as denied, and records the cancellation distinctly from a user
   decision.
 
-  The transition is atomic (`ExecApprovalStore.take_pending/1`): `cancel/2`
-  and `resolve/2` racing on the same approval cannot both act — exactly one
-  takes the record, the loser gets `{:error, :not_pending}` without any
-  side effects.
+  The transition is atomic (`ExecApprovalStore.take_pending/1`): `cancel/2`,
+  `resolve/2`, and a waiter's own timeout are all the same single-winner
+  transition — racing callers cannot both act; exactly one takes the record,
+  the losers get `{:error, :not_pending}` (or, for a timed-out waiter,
+  `{:error, :timeout}` with no side effects) without disturbing the winner's
+  decision.
 
   ## Returns
 
@@ -429,10 +435,24 @@ defmodule LemonCore.ExecApprovals do
     after
       wait_remaining(deadline_or_infinity) ->
         LemonCore.Bus.unsubscribe("exec_approvals")
-        pending = ExecApprovalStore.get_pending(approval_id)
-        emit_approval_timeout(approval_id, pending)
-        ExecApprovalStore.delete_pending(approval_id)
-        {:error, :timeout}
+
+        # The timeout must win the record through the SAME atomic transition
+        # as `resolve/2` and `cancel/2` (`ExecApprovalStore.take_pending/1`):
+        # whoever takes the record decides its fate, exactly one winner. A
+        # nil take means a resolver or canceller already owned the record —
+        # its decision and its side effects stand, and this waiter reports
+        # `{:error, :timeout}` WITHOUT emitting timeout events or deleting
+        # anything for a record it no longer owns.
+        case ExecApprovalStore.take_pending(approval_id) do
+          nil ->
+            {:error, :timeout}
+
+          pending ->
+            # The take removed the record; emit the timeout side effects for
+            # the record this waiter owns.
+            emit_approval_timeout(approval_id, pending)
+            {:error, :timeout}
+        end
     end
   end
 

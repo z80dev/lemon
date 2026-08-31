@@ -31,7 +31,7 @@ defmodule CodingAgent.Tools.ExecuteCode.RpcServer do
       # ... cell runs; the runner configured lemon_tools with the same
       # {dir, token} pair ...
 
-      stats = RpcServer.stats(server)
+      stats = RpcServer.drain_and_stats(server)
       :ok = RpcServer.stop(server)
 
     * `start_link/2` validates the ctx, is linked to its `start_link/2`
@@ -41,7 +41,11 @@ defmodule CodingAgent.Tools.ExecuteCode.RpcServer do
       runs one bounded sweep of at most `:max_requests_per_sweep` requests
       (100 by default); once aborted it retains its final stats without
       dispatching new requests. Sweeps never overlap, so accounting stays
-      single-threaded.
+      single-threaded. A sweep that dies ABNORMALLY (any exit but `:normal`)
+      is treated as potential accounting loss: its published-but-unreturned
+      stats are gone, so `accounting_loss: true` is stamped and its claims
+      are recovered immediately (markers plus the claim ledger below)
+      before the next poll is scheduled.
     * `stop/2` is synchronous and idempotent. Every stop path — explicit
       stop, caller death, supervisor shutdown — funnels through
       `terminate/2`, which materializes the directory entries and then removes
@@ -50,14 +54,31 @@ defmodule CodingAgent.Tools.ExecuteCode.RpcServer do
     * The process is `restart: :temporary`: a dead cell server is never
       resurrected against a directory its token has already rotated out of.
 
+  ## The claim ledger
+
+  The in-flight claim markers live in the rpc directory, which the script
+  can write — so a hostile script can delete or replace a marker after the
+  pump's publication gate. This server therefore keeps its OWN claim
+  evidence: at `init/1` the ctx's `:on_claim` hook is installed to send
+  every dispatch-bound claim (`{id, tool}`) to this process, which records
+  it in `pending_claims` BEFORE the pump publishes the marker. The ledger
+  is a superset of the published claims; it is cleared when the owning
+  sweep's fate is decided — a consumed result (the sweep answered
+  everything it claimed) or a death whose recovery just ran. A script that
+  destroys markers only destroys half its claims' evidence; the ledger
+  half still forces the answer, the call charge, the replay memory, and —
+  when no response survives either — the `accounting_loss` lower-bound
+  flag (see `Rpc.recover_orphaned_claims/3`).
+
   There is deliberately no final drain of requests, mirroring `Rpc.serve/2`:
   a request that is still pending when the server stops belongs to a cell
   that is already over, and running its tool would be work nobody is waiting
   for. Requests that were already *claimed* when a sweep was cancelled are
-  different: the cancel path answers them in writing (see
-  `recover_orphaned_claims/2` below) without ever running their tools, and
-  `notify-*.json` frames still on disk are drained on stop so a `notify()`
-  issued immediately before the cell ended still reaches the conversation.
+  different: the cancel path (and the abnormal-:DOWN path) answers them in
+  writing (see `recover_orphaned_claims/3` below) without ever running
+  their tools, and `notify-*.json` frames still on disk are drained on stop
+  so a `notify()` issued immediately before the cell ended still reaches
+  the conversation.
 
   ## Expected shared `Rpc` contract
 
@@ -88,12 +109,18 @@ defmodule CodingAgent.Tools.ExecuteCode.RpcServer do
     * `process_request(id, ctx, stats)` — the single-request building block
       shared with `Rpc.serve/2`; not called by this server, which always
       sweeps via `process_pending/2`.
-    * `recover_orphaned_claims(rpc_dir, stats)` — answers the in-flight
-      claim markers a cancelled sweep leaves behind and returns stats with
-      their call reservations reconstructed; called from the cancel path
-      (`abort/2`, `terminate/2`) after the sweep task is brutally killed.
+    * `recover_orphaned_claims(rpc_dir, stats, claimed)` — answers the
+      in-flight claims a dead sweep leaves behind: on-disk markers plus the
+      `claimed` ledger map (`%{id => tool}`) this server accumulated through
+      `:on_claim`, returning stats with their call reservations and replay
+      memory reconstructed (and `accounting_loss: true` when destroyed
+      ledger evidence forces a lower bound). Called from the cancel path
+      (`abort/2`, `terminate/2`) and the abnormal-:DOWN path after the
+      sweep task is brutally killed or dies on its own.
     * `drain_notifications(ctx, stats)` — the notification-only final drain;
-      called once from `terminate/2` before protocol-file cleanup.
+      called from `drain_and_stats/2` (the teardown read ExecuteCode uses)
+      and once more from `terminate/2` as a last-resort backstop before
+      protocol-file cleanup.
     * `request_path/2` and `response_path/2` — protocol file naming, used by
       the integration and tests; the server itself never builds paths.
 
@@ -139,7 +166,10 @@ defmodule CodingAgent.Tools.ExecuteCode.RpcServer do
           optional(:poll_interval_ms) => pos_integer(),
           optional(:max_requests_per_sweep) => pos_integer(),
           optional(:max_parallel_rpc) => pos_integer(),
-          optional(:on_update) => (LemonAgent.Types.AgentToolResult.t() -> :ok) | nil
+          optional(:on_update) => (LemonAgent.Types.AgentToolResult.t() -> :ok) | nil,
+          # Injected by this server at init (see "The claim ledger" in the
+          # moduledoc); never supplied by the caller.
+          optional(:on_claim) => (integer(), String.t() -> any()) | nil
         }
 
   @type option ::
@@ -148,7 +178,19 @@ defmodule CodingAgent.Tools.ExecuteCode.RpcServer do
           | {:caller, pid()}
           | {:name, GenServer.name()}
 
-  defstruct [:ctx, :rpc, :stats, :poll_interval_ms, :caller, :caller_monitor, :sweep_task]
+  defstruct [
+    :ctx,
+    :rpc,
+    :stats,
+    :poll_interval_ms,
+    :caller,
+    :caller_monitor,
+    :sweep_task,
+    # The claim ledger: %{id => tool} for every claim the in-flight sweep
+    # recorded via :on_claim and whose fate is not yet decided. See "The
+    # claim ledger" in the moduledoc.
+    pending_claims: %{}
+  ]
 
   @doc """
   Starts a pump server for one cell.
@@ -214,14 +256,35 @@ defmodule CodingAgent.Tools.ExecuteCode.RpcServer do
   can be handed to the cell's result details unchanged.
 
   A stats map may carry one server-added key: `:accounting_loss => true` is
-  stamped when a sweep had to be brutally killed — work the killed sweep
-  dispatched and answered without leaving a claim marker can no longer be
-  reconstructed, so the accounting is a lower bound. Consumers must treat
-  that conservatively (ExecuteCode forces `trust: :untrusted`).
+  stamped when a sweep had to be brutally killed or died abnormally — work
+  the dead sweep dispatched and answered without leaving recoverable claim
+  evidence can no longer be reconstructed, so the accounting is a lower
+  bound. Consumers must treat that conservatively (ExecuteCode forces
+  `trust: :untrusted`).
   """
   @spec stats(GenServer.server(), timeout()) :: Rpc.stats()
   def stats(server, timeout \\ @stats_timeout_ms) do
     GenServer.call(server, :stats, timeout)
+  end
+
+  @doc """
+  Runs the notification-only final drain, then returns the merged stats.
+
+  The teardown read for the owning execute process: a `notify()` frame the
+  cell flushed after its last sweep — including one written immediately
+  before the cell ended — is forwarded here, and its count rides in the
+  returned stats (`notify_forwarded`), so stop-time notifications are
+  observable by the caller instead of dying with `terminate/2` (which still
+  drains once more as a last-resort backstop). Requests are deliberately
+  never drained; see the moduledoc. Meant for the teardown sequence, after
+  the cell's dispatch was aborted — a sweep still in flight would return its
+  own stats afterwards and supersede this read.
+
+  Like `stats/2`, the returned map may carry `:accounting_loss => true`.
+  """
+  @spec drain_and_stats(GenServer.server(), timeout()) :: Rpc.stats()
+  def drain_and_stats(server, timeout \\ @stats_timeout_ms) do
+    GenServer.call(server, :drain_and_stats, timeout)
   end
 
   # ==========================================================================
@@ -237,6 +300,19 @@ defmodule CodingAgent.Tools.ExecuteCode.RpcServer do
     caller_monitor = Process.monitor(caller)
     schedule_poll(poll_interval_ms)
 
+    # The claim ledger hook (the server owns it — never the caller): the
+    # sweeping process feeds every dispatch-bound claim BEFORE the pump
+    # publishes its marker, so this process's memory holds claim evidence
+    # the script cannot delete. `send/2` from the sweep enqueues
+    # immediately, so a sweep killed anywhere past that point has already
+    # delivered its entry.
+    ledger_pid = self()
+
+    ctx =
+      Map.put(ctx, :on_claim, fn id, tool when is_integer(id) and is_binary(tool) ->
+        send(ledger_pid, {:claim_started, id, tool})
+      end)
+
     {:ok,
      %__MODULE__{
        ctx: ctx,
@@ -244,12 +320,22 @@ defmodule CodingAgent.Tools.ExecuteCode.RpcServer do
        stats: rpc.initial_stats(),
        poll_interval_ms: poll_interval_ms,
        caller: caller,
-       caller_monitor: caller_monitor
+       caller_monitor: caller_monitor,
+       pending_claims: %{}
      }}
   end
 
   @impl true
   def handle_call(:stats, _from, state) do
+    {:reply, state.stats, state}
+  end
+
+  def handle_call(:drain_and_stats, _from, state) do
+    # The teardown read: forward any notify() frames that landed after the
+    # last sweep and fold their count into the stats the caller takes away
+    # (terminate/2 keeps its own drain only as a backstop for callers that
+    # never get here).
+    state = drain_final_notifications(state)
     {:reply, state.stats, state}
   end
 
@@ -275,15 +361,46 @@ defmodule CodingAgent.Tools.ExecuteCode.RpcServer do
     end
   end
 
+  # The claim ledger feed: a sweep records each dispatch-bound claim here
+  # before publishing its marker. Entries accumulate while the sweep runs
+  # and are settled together with the sweep (result consumed → the sweep
+  # answered everything it claimed; sweep dead → recovery just paid them).
+  def handle_info({:claim_started, id, tool}, state)
+      when is_integer(id) and is_binary(tool) do
+    {:noreply, %{state | pending_claims: Map.put(state.pending_claims, id, tool)}}
+  end
+
   def handle_info({ref, stats}, %{sweep_task: %Task{ref: ref}} = state) when is_map(stats) do
     Process.demonitor(ref, [:flush])
-    state = %{state | stats: stats, sweep_task: nil}
+    # The sweep returned: it answered every claim it made (each claimed id
+    # gets its response written before the sweep can return), so its ledger
+    # entries are settled — all sends from the sweep precede this result in
+    # the mailbox, so nothing of its is still in flight.
+    state = %{state | stats: stats, sweep_task: nil, pending_claims: %{}}
     schedule_next_poll(state)
     {:noreply, state}
   end
 
-  def handle_info({:DOWN, ref, :process, _pid, _reason}, %{sweep_task: %Task{ref: ref}} = state) do
+  def handle_info({:DOWN, ref, :process, _pid, reason}, %{sweep_task: %Task{ref: ref}} = state) do
     state = %{state | sweep_task: nil}
+
+    state =
+      if reason == :normal do
+        # The task finished; its result message is already queued ahead of
+        # this DOWN and will be consumed by the result handler above.
+        state
+      else
+        # Abnormal sweep exit. The dead sweep may have published responses
+        # and retired markers without ever returning its stats — no marker
+        # evidence survives that window, so the accounting is a lower bound:
+        # flag it (never overstate trust), settle its ledger entries, and
+        # run recovery NOW so no claimed id waits for the next poll.
+        state
+        |> drain_queued_claims()
+        |> mark_accounting_loss()
+        |> settle_dead_sweep_claims()
+      end
+
     schedule_next_poll(state)
     {:noreply, state}
   end
@@ -356,7 +473,8 @@ defmodule CodingAgent.Tools.ExecuteCode.RpcServer do
 
   # a small grace yield before the brutal kill covers the common "done but not
   # yet delivered" window. Only a genuinely killed sweep loses stats — that
-  # path reconstructs what the markers can prove and flags the rest as lost.
+  # path reconstructs what the markers and the claim ledger can prove and
+  # flags the rest as lost.
   @sweep_cancel_grace_ms 25
 
   defp cancel_sweep(%{sweep_task: nil} = state), do: state
@@ -365,17 +483,19 @@ defmodule CodingAgent.Tools.ExecuteCode.RpcServer do
     case Task.yield(task, @sweep_cancel_grace_ms) do
       {:ok, stats} when is_map(stats) ->
         # The sweep completed: its markers are retired and every response is
-        # published, so its stats are the truth. Recovery would find nothing,
-        # but run it anyway — stale markers from an even earlier sweep are
-        # still answered here because no successor poll may exist.
-        state = %{state | stats: stats, sweep_task: nil}
+        # published, so its stats are the truth — and its ledger entries are
+        # settled (every claim it made was answered before it could return).
+        # Recovery would find nothing, but run it anyway — stale markers from
+        # an even earlier sweep are still answered here because no successor
+        # poll may exist.
+        state = %{state | stats: stats, sweep_task: nil, pending_claims: %{}}
         %{state | stats: recover_claims(state)}
 
       _miss ->
         case Task.shutdown(task, :brutal_kill) do
           # Finished between the yield miss and the kill: same as above.
           {:ok, stats} when is_map(stats) ->
-            state = %{state | stats: stats, sweep_task: nil}
+            state = %{state | stats: stats, sweep_task: nil, pending_claims: %{}}
             %{state | stats: recover_claims(state)}
 
           _killed ->
@@ -383,29 +503,50 @@ defmodule CodingAgent.Tools.ExecuteCode.RpcServer do
             # and after an abort no successor sweep will run either (the
             # server stops polling); pay its debts here so every claimed id
             # ends answered and its call reservations survive in the final
-            # stats. Ids the markers cannot prove (answered but never
-            # accounted) are unknowable now: flag the loss so the trust
-            # classification falls back to untrusted instead of trusted.
-            state = mark_accounting_loss(state)
-
-            %{state | stats: recover_claims(state), sweep_task: nil}
+            # stats. Ids neither the markers nor the ledger can prove
+            # (answered but never accounted) are unknowable now: flag the
+            # loss so the trust classification falls back to untrusted
+            # instead of trusted.
+            state
+            |> drain_queued_claims()
+            |> mark_accounting_loss()
+            |> settle_dead_sweep_claims()
         end
     end
   end
 
-  # The stats stay opaque to this server, but it owns the value it hands
-  # out, so it stamps its own conservative marker on it: executed work may
-  # be missing from these stats. ExecuteCode reads the flag to force
-  # `trust: :untrusted` — lost accounting must never classify network work
-  # as trusted.
-  defp mark_accounting_loss(%{stats: stats} = state) do
-    %{state | stats: Map.put(stats, :accounting_loss, true)}
+  # Settle a dead sweep's ledger: run claim recovery with BOTH halves of the
+  # evidence (markers plus the ledger), then clear the ledger — every entry
+  # has now been paid into the stats. The sweep task is over too: shutdown
+  # already returned, so nothing may yield or kill it a second time.
+  defp settle_dead_sweep_claims(state) do
+    stats = recover_claims(state)
+    %{state | stats: stats, sweep_task: nil, pending_claims: %{}}
+  end
+
+  # After a sweep is verifiably dead (brutal kill returned, or its :DOWN is
+  # being processed), every claim_started message it sent is already in this
+  # process's mailbox (local sends enqueue immediately, and a dead sender
+  # sends nothing more) — but entries sent after the current message was
+  # queued have not been processed by the handler yet. Fold them in here so
+  # recovery sees the complete ledger.
+  defp drain_queued_claims(%{pending_claims: claims} = state) do
+    # Selective receive: non-matching messages stay in the mailbox untouched
+    # — there is deliberately no catch-all, which would consume them.
+    receive do
+      {:claim_started, id, tool} when is_integer(id) and is_binary(tool) ->
+        drain_queued_claims(%{state | pending_claims: Map.put(claims, id, tool)})
+    after
+      0 -> state
+    end
   end
 
   # Same containment discipline as `sweep/3`: a broken pump must not take
-  # the server (and the cell's result) down with it.
+  # the server (and the cell's result) down with it. Called only when the
+  # owning sweep's fate is decided, so the ledger entries it passes are
+  # exactly the claims that may still be owed.
   defp recover_claims(state) do
-    state.rpc.recover_orphaned_claims(state.ctx.rpc_dir, state.stats)
+    state.rpc.recover_orphaned_claims(state.ctx.rpc_dir, state.stats, state.pending_claims)
   rescue
     error ->
       Logger.warning(
@@ -416,7 +557,17 @@ defmodule CodingAgent.Tools.ExecuteCode.RpcServer do
   catch
     kind, _value ->
       Logger.warning("execute_code rpc claim recovery failed (#{kind}); keeping previous stats")
+
       state.stats
+  end
+
+  # The stats stay opaque to this server, but it owns the value it hands
+  # out, so it stamps its own conservative marker on it: executed work may
+  # be missing from these stats. ExecuteCode reads the flag to force
+  # `trust: :untrusted` — lost accounting must never classify network work
+  # as trusted.
+  defp mark_accounting_loss(%{stats: stats} = state) do
+    %{state | stats: Map.put(stats, :accounting_loss, true)}
   end
 
   defp drain_final_notifications(state) do

@@ -80,9 +80,12 @@ the shim's `text()` blocks -- each flushed to disk per call, so deliberate resul
 survive a timeout/abort kill -- with stdout/stderr demoted to a labeled diagnostics
 tail; `notify()` streams progress through the tool's update callback and `batch()`
 dispatches parallel helper calls (pump waves bounded by `max_parallel_rpc`). Claimed
-RPC requests always end answered (a killed sweep leaves in-flight claim markers the
-successor sweep or cancel path answers in writing), approval prompts left pending by
-a killed dispatch are cancelled, persistent cells reset the per-cell bridge (fresh
+RPC requests always end answered (a killed sweep leaves claim evidence -- in-flight
+markers plus, in session mode, a host-side claim ledger the script cannot delete --
+that the successor sweep or cancel/abnormal-exit path answers in writing, flagging
+`rpc_accounting_loss` when the evidence forces a lower bound), approval prompts left
+pending by a killed dispatch are cancelled when the dispatch task dies, persistent
+cells reset the per-cell bridge (fresh
 text budget, thread-tag quarantine), and the `text()` budget charges the
 JSON-encoded frame. It runs as
 host code with bash-equivalent authority -- never a sandbox. The

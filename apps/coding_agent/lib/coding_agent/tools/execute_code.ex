@@ -47,11 +47,14 @@ defmodule CodingAgent.Tools.ExecuteCode do
       `max_parallel_rpc` (default 4), so a batch of independent reads really
       does overlap. Claiming — authentication, replay detection, and the call
       budget — stays serialized in the pump, so accounting remains exact under
-      concurrency, and a claimed request always ends answered: killed sweeps
-      leave in-flight claim markers that a successor sweep or the cancel path
-      answers in writing (never re-dispatched), and any approval prompt a
-      doomed dispatch left pending is cancelled, so no prompt outlives the
-      script that triggered it.
+      concurrency, and a claimed request always ends answered: a killed sweep
+      leaves claim evidence (an in-flight marker plus, in session mode, a
+      host-side ledger entry the script cannot delete) that a successor sweep
+      or the cancel path answers in writing — never re-dispatched. Any
+      approval prompt a doomed dispatch left pending is cancelled when the
+      dispatch task dies; prompts cannot outlive the script unless tool code
+      on the approval path re-enables trap_exit and blocks past its task's
+      death (an adversarial-only boundary — see `Rpc`'s moduledoc).
 
   Backward compatibility is byte-exact: a script that never calls `text()`
   gets the historic stdout-only result, unchanged, in both kernel modes.
@@ -580,7 +583,7 @@ defmodule CodingAgent.Tools.ExecuteCode do
                         opts
                       )
 
-                    stats = rpc_stats(rpc_server_module, rpc_server)
+                    stats = rpc_final_stats(rpc_server_module, rpc_server)
 
                     # Same write-through guarantee as the per-call path: read
                     # whatever the cell flushed before it ended — including a
@@ -856,8 +859,14 @@ defmodule CodingAgent.Tools.ExecuteCode do
     end
   end
 
-  defp rpc_stats(rpc_server, server) do
-    rpc_server.stats(server)
+  # Drain-then-read: the cell's stop-time notify() frames must land in the
+  # stats this cell reports. A plain stats read here would miss everything
+  # the server's final drain forwards — its counts only reach state that
+  # dies with terminate/2 — so the teardown read runs the drain itself and
+  # returns the merged stats (terminate/2 keeps its own drain purely as a
+  # backstop).
+  defp rpc_final_stats(rpc_server, server) do
+    rpc_server.drain_and_stats(server)
   catch
     :exit, _ -> Rpc.initial_stats()
   end

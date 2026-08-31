@@ -45,39 +45,69 @@ defmodule CodingAgent.Tools.ExecuteCode.Rpc do
   which supervisor owns them). Responses stay atomic per id, so ordering
   between requests never matters.
 
-  ## Sweep death, claim markers, and approvals
+  ## Sweep death, claim markers, the claim ledger, and approvals
 
   A request becomes dispatch-bound by renaming `req-<id>.json` to an
   in-flight marker `req-<id>.claim` — and dispatch is GATED on that
   publication: the rename must succeed and the published marker must be a
   regular file, or the tool never runs and the id is answered with a
   publication-failure error. `write_response/3` removes the marker once the
-  answer is published. A regular-file marker therefore proves its id was
-  claimed, counted, and dispatched but never answered — and because sweeps
-  never overlap, such a marker visible to a later sweep (or to the RpcServer's
-  cancel path) proves its owning sweep is gone for good. Markers that are not
-  regular files (a planted directory or symlink at a marker name) prove
-  nothing and are ignored by recovery outright.
+  answer is published. Markers that are not regular files (a planted
+  directory or symlink at a marker name) prove nothing and are ignored by
+  recovery outright.
 
-  `recover_orphaned_claims/2` pays that debt, exactly once per id: for an
-  unanswered marker, an error response plus the call reservation and error
-  count reconstructed in the stats; for a marker beside an already-published
-  successful response, the REAL accounting (ok status, result bytes, tool
-  usage) restored from the response file and the marker's own request body.
-  Every sweep starts with recovery, so a killed sweep's claimed ids always end
-  answered — answered in writing, never re-dispatched, so a cancelled request
-  still never executes its tool. A marker whose deletion fails is retried a
-  bounded number of times and then left inert (the id is already in the
-  stats' replay memory, so no later sweep re-charges it; the workspace
-  teardown owns the rest).
+  A marker lives in the rpc directory, which the script can write — so it is
+  durable evidence only against crashes, never against a hostile script: the
+  script can delete or replace a marker after the publication gate. The
+  marker is therefore only HALF the claim evidence. The other half is the
+  host-side claim ledger: when the ctx carries `:on_claim`, the sweeping
+  process invokes it with `(id, tool)` BEFORE publishing the marker, and the
+  ledger owner (the RpcServer, which keeps the entries in its own process
+  state — memory the script cannot reach) holds them until the sweep's fate
+  is decided. Sending before publishing makes the ledger a SUPERSET of the
+  published claims: a ledger entry may name an id that was never dispatched
+  (the sweep died between the send and the rename — recovery then answers
+  that id with a conservative error and one charge), but every id that WAS
+  dispatched is in the ledger no matter what the script later did to its
+  marker. A script that deletes a marker therefore only destroys the
+  on-disk half of its claim's evidence, never the claim itself.
+
+  `recover_orphaned_claims/3` pays the debt of both halves, exactly once per
+  id (markers first, ledger entries second, deduplicated by the stats'
+  replay memory): for an unanswered claim, an error response plus the call
+  reservation and error count reconstructed in the stats; for a claim beside
+  an already-published successful response, the REAL accounting (ok status,
+  result bytes, tool usage) restored from the response file and the claim's
+  own request body — the marker's body, or the ledger's tool name when the
+  script destroyed the marker. A ledger entry whose marker is gone AND whose
+  response is gone marks `accounting_loss: true` in the returned stats: the
+  tool may have executed with side effects no surviving evidence can
+  account for, so everything in those stats is a lower bound. Every sweep
+  starts with recovery, so a killed sweep's claimed ids always end answered
+  — answered in writing, never re-dispatched, so a cancelled request still
+  never executes its tool, and a replayed id is refused by the reconstructed
+  replay memory even when its marker was destroyed. A marker whose deletion
+  fails is retried a bounded number of times and then left inert (the id is
+  already in the stats' replay memory, so no later sweep re-charges it; the
+  workspace teardown owns the rest).
 
   Approval-requiring claims are additionally cancellation-safe: the approval
   id is allocated at claim time and an unlinked watcher cancels the pending
   prompt when the sweep or the dispatch task dies — after EACH death, exiting
   only when both are gone, so a prompt registered in the window between the
   first cancel and the task's own death is still cancelled (see
-  `approval_context/3`). No approval prompt outlives the script that
-  triggered it.
+  `approval_context/3`). The exact guarantee — and its one boundary — is
+  this: prompts are cancelled when the dispatch task dies, and a dispatch
+  task has trap_exit forced off on entry so it dies with its sweep. But the
+  forcing happens at entry only: nothing stops TOOL code on the approval
+  path from re-enabling trap_exit afterwards, and such a task survives its
+  sweep's death. The watcher then stays parked on the task until some other
+  kill ends it — and until that happens the prompt outlives the script that
+  triggered it. This is adversarial tool behavior, not a supported mode; the
+  boundary (a trapping task whose late registration is still reaped, but
+  only once the task itself dies) is demonstrated by `ExecuteCodeRpcTest`'s
+  "a prompt registered after the sweep died cannot be orphaned" test, which
+  re-enables trap_exit exactly this way.
   """
 
   require Logger
@@ -139,7 +169,12 @@ defmodule CodingAgent.Tools.ExecuteCode.Rpc do
           required(:poll_interval_ms) => pos_integer(),
           optional(:max_requests_per_sweep) => pos_integer(),
           optional(:max_parallel_rpc) => pos_integer(),
-          optional(:on_update) => (AgentToolResult.t() -> :ok) | nil
+          optional(:on_update) => (AgentToolResult.t() -> :ok) | nil,
+          # Host-side claim ledger hook: invoked in the sweeping process
+          # with (id, tool) BEFORE the claim marker is published, so a
+          # ledger owner learns about every dispatched claim independently
+          # of the script-writable marker (see the moduledoc).
+          optional(:on_claim) => (integer(), String.t() -> any()) | nil
         }
 
   @type stats :: %{
@@ -199,8 +234,10 @@ defmodule CodingAgent.Tools.ExecuteCode.Rpc do
   `:max_parallel_rpc` (default #{@default_max_parallel_rpc}) supervised tasks.
 
   The sweep first recovers claim markers a previous sweep left behind (see
-  `recover_orphaned_claims/2`) and then consumes `notify-*.json` frames under
-  the stats' per-run forwarding cap.
+  `recover_orphaned_claims/3`) and then consumes `notify-*.json` frames under
+  the stats' per-run forwarding cap. When the ctx carries `:on_claim`, every
+  dispatch-bound claim is recorded with it before its marker is published —
+  the persistent server's claim ledger (see its moduledoc).
 
   This is the shared polling entry point for the persistent-cell RPC server.
   """
@@ -235,35 +272,65 @@ defmodule CodingAgent.Tools.ExecuteCode.Rpc do
   end
 
   @doc """
-  Answer the in-flight claim markers a dead sweep left behind.
+  Answer the in-flight claims a dead sweep left behind.
+
+  Claim evidence has two halves (see the moduledoc): the script-writable
+  `req-<id>.claim` marker, and the host-side ledger the ctx's `:on_claim`
+  hook feeds. This function recovers BOTH, markers first and `claimed`
+  ledger entries (`%{id => tool}`) second, deduplicated per id by the
+  stats' replay memory.
 
   `req-<id>.claim` exists exactly while a claimed, call-budgeted request is
-  being dispatched; `write_response/3` removes it as the answer is published.
-  Sweeps never overlap, so a marker visible now proves its owning sweep is
-  gone and the id can never be answered by it. Only REGULAR files count as
-  markers (lstat, the same discipline as text blocks): a planted directory or
-  symlink at a marker name is ignored outright — never answered, never
-  charged — and left to the workspace teardown.
+  being dispatched; `write_response/3` removes it as the answer is
+  published. Sweeps never overlap, so a marker visible now proves its owning
+  sweep is gone and the id can never be answered by it. Only REGULAR files
+  count as markers (lstat, the same discipline as text blocks): a planted
+  directory or symlink at a marker name is ignored outright — never
+  answered, never charged — and left to the workspace teardown.
 
   Each recovered id receives the response the dead sweep owed — the error
-  response, unless a successful response was already published, in which case
-  the REAL accounting (ok status, result bytes, tool usage) is restored from
-  the response file and the marker (the renamed request still carries the
-  tool name). `stats` recovers the call reservation and the replay memory the
-  dead sweep would have recorded, so the call budget, replay refusal, and
-  trust classification stay exact across a killed sweep.
+  response, unless a successful response was already published, in which
+  case the REAL accounting (ok status, result bytes, tool usage) is
+  restored from the response file and the claim itself (the marker's
+  renamed request body, or the ledger's tool name when the script destroyed
+  the marker). `stats` recovers the call reservation and the replay memory
+  the dead sweep would have recorded, so the call budget, replay refusal,
+  and trust classification stay exact across a killed sweep.
+
+  A LEDGER entry whose marker is gone and whose response is gone marks
+  `accounting_loss: true` in the returned stats: the script destroyed the
+  on-disk evidence, so the tool's execution and side effects can no longer
+  be reconstructed and the stats are a lower bound (consumers must treat
+  that conservatively; ExecuteCode forces `trust: :untrusted`).
 
   Charging is exactly-once: the id is recorded in the stats' replay memory
   when its debt is paid, and a marker that survives its own deletion (the
   deletion is retried a bounded number of times) is treated as cleanup-only
   by every later sweep, so a sticky marker can never re-charge the budget.
 
-  Called at the start of every sweep and by the RpcServer's cancel path, where
-  no successor sweep will run. It answers in writing; it never dispatches, so
-  a cancelled request still never executes its tool.
+  Called at the start of every sweep and by the RpcServer's cancel and
+  abnormal-:DOWN paths, where the successor sweep may never run. It answers
+  in writing; it never dispatches, so a cancelled request still never
+  executes its tool.
   """
   @spec recover_orphaned_claims(String.t(), stats()) :: stats()
-  def recover_orphaned_claims(rpc_dir, stats) when is_binary(rpc_dir) do
+  def recover_orphaned_claims(rpc_dir, stats) when is_binary(rpc_dir),
+    do: recover_orphaned_claims(rpc_dir, stats, %{})
+
+  @spec recover_orphaned_claims(String.t(), stats(), %{optional(integer()) => String.t()}) ::
+          stats()
+  def recover_orphaned_claims(rpc_dir, stats, claimed)
+      when is_binary(rpc_dir) and is_map(claimed) do
+    stats
+    |> recover_orphaned_markers(rpc_dir)
+    |> recover_ledger_claims(rpc_dir, claimed)
+  end
+
+  # The on-disk half of the claim evidence. A sweep that dies mid-flight
+  # leaves one marker per claimed-but-unanswered id; a script that deleted
+  # a marker leaves nothing here, which is exactly what the ledger half
+  # below exists to cover.
+  defp recover_orphaned_markers(stats, rpc_dir) do
     rpc_dir
     |> Path.join("req-*.claim")
     |> Path.wildcard()
@@ -282,6 +349,47 @@ defmodule CodingAgent.Tools.ExecuteCode.Rpc do
       {:marker, id, path}, acc -> recover_claim(rpc_dir, id, path, acc)
       {:invalid, path}, acc -> consume_request(path) && acc
     end)
+  end
+
+  # The host-side half: ids the ctx's :on_claim ledger recorded for the dead
+  # sweep. `seen?/2` skips ids the marker pass already paid, so the two
+  # halves never double-charge.
+  defp recover_ledger_claims(stats, rpc_dir, claimed) do
+    claimed
+    |> Enum.sort()
+    |> Enum.reduce(stats, fn {id, tool}, acc ->
+      if seen?(acc, id), do: acc, else: recover_ledger_claim(rpc_dir, id, tool, acc)
+    end)
+  end
+
+  # A ledger entry is a superset of the published claims, so treat it as
+  # claimed fact regardless of what remains on disk: the marker may have
+  # been deleted by the script after the publication gate.
+  defp recover_ledger_claim(rpc_dir, id, tool, stats) do
+    case successful_response(rpc_dir, id) do
+      {:ok, content} ->
+        # The dead sweep published the answer before dying and only the
+        # marker was destroyed: the response plus the ledger's tool name
+        # restore the real accounting exactly.
+        stats
+        |> Map.update!(:calls, &(&1 + 1))
+        |> Map.update!(:bytes, &(&1 + byte_size(content)))
+        |> remember_tool(tool)
+        |> remember_id(id)
+
+      :error ->
+        # No marker, no response: the script destroyed every on-disk trace
+        # of a claim the ledger proves happened. Answer once and charge
+        # once, but the tool may have executed with side effects nothing
+        # can account for anymore — the stats are a lower bound from here.
+        ensure_answered(rpc_dir, id)
+
+        stats
+        |> Map.update!(:calls, &(&1 + 1))
+        |> increment_errors()
+        |> remember_id(id)
+        |> Map.put(:accounting_loss, true)
+    end
   end
 
   @doc """
@@ -588,8 +696,10 @@ defmodule CodingAgent.Tools.ExecuteCode.Rpc do
   # A request file is consumed only after its fate is durable: answered-in-
   # claim paths write the response first and delete second, and the one path
   # that defers the answer (dispatch) renames the request into its in-flight
-  # claim marker instead, so a sweep that dies mid-flight always leaves enough
-  # evidence for `recover_orphaned_claims/2` to answer every claimed id.
+  # claim marker — after first recording the claim in the host-side ledger
+  # via `:on_claim` — so a sweep that dies mid-flight always leaves enough
+  # evidence (marker, ledger, or both) for `recover_orphaned_claims/3` to
+  # answer every claimed id, even when the script deletes the marker.
   defp claim_request(id, request, ctx, stats, claimed) do
     if response_present?(response_path(ctx.rpc_dir, id)) do
       consume_request(request)
@@ -609,13 +719,19 @@ defmodule CodingAgent.Tools.ExecuteCode.Rpc do
   # Publish the in-flight claim marker: the request renamed out of the
   # `req-*.json` namespace at the moment it becomes dispatch-bound, and the
   # published marker must be a REGULAR file — that is the only shape
-  # `recover_orphaned_claims/2` trusts, so it is the only shape that may
-  # authorize a dispatch. Publication is the gate: when the rename fails
+  # `recover_orphaned_claims/3` trusts on disk, so it is the only shape that
+  # may authorize a dispatch. Publication is the gate: when the rename fails
   # (a planted object already sits at the marker name) or the renamed object
   # is not a regular file (a symlinked request), the request is consumed and
   # answered with `@claim_failed_error` — its tool NEVER runs, because a
-  # dispatch whose marker no later sweep would recover would strand the id.
-  # The already-reserved call is spent, so the answer is an error.
+  # dispatch whose claim no later sweep would recover would strand the id.
+  # The already-reserved call is spent, so the answer is an error. The
+  # ledger entry fed before this call still stands (superset): a publication
+  # failure only ever over-answers conservatively, never under-answers.
+  #
+  # The published marker itself is script-deletable AFTER this gate — that
+  # is precisely why the claim was recorded in the ledger first; see
+  # `notify_claim/3` and the moduledoc.
   defp mark_in_flight(rpc_dir, id, request) do
     marker = claim_marker_path(rpc_dir, id)
 
@@ -846,6 +962,14 @@ defmodule CodingAgent.Tools.ExecuteCode.Rpc do
         {%{stats | denied: stats.denied + 1}, claimed}
 
       true ->
+        # The claim ledger is fed BEFORE the marker is published (a local
+        # `send` enqueues immediately, so a sweep killed anywhere past this
+        # point has already delivered its ledger entry). That makes the
+        # ledger a SUPERSET of the published claims — the script can delete
+        # or replace the on-disk marker after the gate below, but it cannot
+        # un-claim what the ledger already recorded.
+        notify_claim(ctx, id, tool_name)
+
         # Publication is the dispatch gate: the tool runs only behind a
         # published, regular-file claim marker. Any publication failure is
         # answered with `@claim_failed_error` and counted as an error — the
@@ -869,6 +993,24 @@ defmodule CodingAgent.Tools.ExecuteCode.Rpc do
             {increment_errors(stats), claimed}
         end
     end
+  end
+
+  # The host-side claim ledger hook. Must stay cheap and never raise into
+  # the claiming path; a broken hook is swallowed like a broken
+  # notification forwarder — the claim itself is the load-bearing part.
+  defp notify_claim(ctx, id, tool_name) do
+    case Map.get(ctx, :on_claim) do
+      on_claim when is_function(on_claim, 2) ->
+        on_claim.(id, tool_name)
+        :ok
+
+      _none ->
+        :ok
+    end
+  rescue
+    _error -> :ok
+  catch
+    _kind, _value -> :ok
   end
 
   defp denied_by_policy?(nil, _tool_name), do: false

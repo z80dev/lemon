@@ -499,6 +499,10 @@ defmodule CodingAgent.Tools.ExecuteCodePersistentTest do
     set_response({:ok, %{output: "internet", state_retained: true, kernel_reused: true}})
     result = execute(cwd, %{"script" => "print(webfetch('https://example.test'))"})
 
+    # The teardown read went through drain_and_stats (the R3-5 observable):
+    # stop-time notifications land in the stats the caller takes away.
+    assert_receive {:rpc_drained, _server}
+
     assert result.trust == :untrusted
     assert text(result) =~ "<<<EXTERNAL_UNTRUSTED_CONTENT>>>"
     assert result.details.rpc_calls == 2
@@ -728,6 +732,12 @@ defmodule CodingAgent.Tools.ExecuteCodePersistentTest do
     end
 
     def stats(_server), do: Agent.get(@state, & &1.stats)
+
+    def drain_and_stats(server) do
+      state = Agent.get(@state, & &1)
+      send(state.test_pid, {:rpc_drained, server})
+      state.stats
+    end
 
     def stop(server) do
       state = Agent.get(@state, & &1)

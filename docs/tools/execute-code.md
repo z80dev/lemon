@@ -200,9 +200,11 @@ already flushed stay in the result. Non-strings are `str()`-coerced.
   without being forwarded or counted, and a run with no callback consumes and
   discards them so they never accumulate. A `notify()` issued immediately
   before exit is still forwarded: the per-call pump and the persistent stop
-  path each run one notification-only final drain. Tool requests are never
-  drained after the run — a posthumous request would be tool work nobody is
-  waiting for.
+  path each run one notification-only final drain, and in session mode that
+  drain runs as part of the teardown stats read (`RpcServer.drain_and_stats`)
+  so its count is included in the stats the cell's result reports.
+  Tool requests are never drained after the run — a posthumous request would
+  be tool work nobody is waiting for.
 - **`batch([(tool, params), ...])`** — parallel helper calls. Each element runs
   the plain blocking call inside a bounded stdlib thread pool (16 workers max);
   the Elixir pump dispatches claimed requests as supervised tasks in waves of
@@ -231,24 +233,48 @@ answered: when it becomes dispatch-bound its `req-<id>.json` is renamed to an
 in-flight `req-<id>.claim` marker, and **publication is the dispatch gate** —
 the rename must succeed and the published marker must be a regular file (a
 planted object at the marker name, or a symlinked request, is answered with a
-publication-failure error and its tool never runs). A sweep that dies
-mid-wave leaves durable evidence — the next sweep (or the server's cancel
-path, where no successor runs) answers those ids in writing and never
-re-dispatches them. Recovery trusts only regular-file markers (planted
-directories and symlinks at marker names are ignored outright) and charges
-each dead claim **exactly once**: an unanswered marker gets
-`rpc dispatch interrupted` plus its call reservation and replay memory
-reconstructed, while a marker beside an already-published successful
-response restores the real accounting (ok status, result bytes, tool usage)
-from the response file. A marker whose deletion fails (bounded retries) can
-never re-charge the budget on a later sweep. Approvals stay on the existing
-`ToolExecutor` path inside each task; each approval-requiring claim
-pre-allocates its approval id, and a tiny unlinked watcher cancels the
-pending prompt after the death of the sweep **and** again after the death of
-the dispatch task (it exits once both are gone), so no approval prompt
-outlives the script that triggered it — even one registered after the sweep
-died — and a cancelled prompt can never install policy (cancel and resolve
-are one atomic transition; the loser is `{:error, :not_pending}`).
+publication-failure error and its tool never runs). But the rpc directory is
+script-writable, so a marker alone is evidence only against crashes, never
+against a hostile script that deletes or replaces it after the gate. In
+session mode the claim therefore has a **second, host-side half**: the
+`RpcServer` records every dispatch-bound claim (`{id, tool}`) in its own
+process memory — via the pump's `:on_claim` hook, fed *before* the marker is
+published, making the ledger a superset of the published claims — where the
+script cannot reach it. A sweep that dies mid-wave is recovered from **both
+halves** by the next sweep (or the server's cancel/abnormal-exit path, where
+no successor runs): its claimed ids are answered in writing and never
+re-dispatched, the replay memory is reconstructed so a replayed id is refused
+even when its marker was destroyed, and real accounting (ok status, result
+bytes, tool usage) is restored from a surviving response file plus the
+marker's own request body — or the ledger's tool name when the script
+destroyed the marker. A ledger entry with neither marker nor response
+surviving stamps `rpc_accounting_loss: true`: the accounting is then a lower
+bound and the cell's result is forced to `trust: :untrusted`. The same flag
+is stamped whenever a sweep is brutally killed or dies abnormally — work it
+dispatched and answered without returning its stats is unknowable. Recovery
+trusts only regular-file markers (planted directories and symlinks at marker
+names are ignored outright) and charges each dead claim **exactly once**; a
+marker whose deletion fails (bounded retries) can never re-charge the budget
+on a later sweep.
+
+Approvals stay on the existing `ToolExecutor` path inside each task; each
+approval-requiring claim pre-allocates its approval id, and a tiny unlinked
+watcher cancels the pending prompt after the death of the sweep **and** again
+after the death of the dispatch task (it exits once both are gone), so a
+prompt registered in the window between the first cancel and the task's own
+death is still cancelled, and a cancelled prompt can never install policy
+(cancel, resolve, and a waiter's timeout are one atomic single-winner
+transition; the loser is `{:error, :not_pending}` — or a timeout with no
+side effects — and installs nothing). The exact lifetime guarantee: **prompts
+are cancelled when the dispatch task dies.** Dispatch tasks have trap_exit
+forced off at entry so they die with their sweep; the boundary is that tool
+code on the approval path can re-enable trap_exit afterwards and block past
+its task's death — such a task keeps its (cancelled-once) watcher parked
+until some other kill ends it, and until then the prompt outlives the
+script. This is adversarial tool behavior, not a supported mode; the
+boundary is demonstrated by the "a prompt registered after the sweep died
+cannot be orphaned" test in
+`apps/coding_agent/test/coding_agent/tools/execute_code_rpc_test.exs`.
 
 In session mode the kernel stages `lemon_tools.py` once and `_configure`
 installs a fresh bridge for every cell: new rpc dir and token, a full fresh

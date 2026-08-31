@@ -496,6 +496,124 @@ defmodule LemonCore.ExecApprovalsTest do
       global = Store.get(:exec_approvals_policy, {"bash", hash_action(pending.action)})
       assert global == nil or global.approved == true
     end
+
+    test "a timeout that wins the atomic take leaves nothing for a late resolve" do
+      run_id = "run_timeout_take_#{System.unique_integer([:positive])}"
+      approval_id = "timeout_take_#{System.unique_integer([:positive])}"
+
+      task =
+        Task.async(fn ->
+          ExecApprovals.request(%{
+            run_id: run_id,
+            session_key: "agent:test:main",
+            tool: "bash",
+            action: %{command: "ls"},
+            approval_id: approval_id,
+            expires_in_ms: 25
+          })
+        end)
+
+      assert {:error, :timeout} = Task.await(task, 1_000)
+
+      # The timeout won `take_pending`: the decision and its events belong
+      # to the timeout alone, and a late resolve loses without side effects.
+      assert {:error, :not_pending} = ExecApprovals.resolve(approval_id, :approve_global)
+
+      assert Store.get(:exec_approvals_policy, {"bash", hash_action(%{command: "ls"})}) == nil
+      assert Store.get(:exec_approvals_pending, approval_id) == nil
+
+      assert LemonCore.Introspection.list(
+               run_id: run_id,
+               event_type: :approval_timed_out,
+               limit: 1
+             )
+             |> List.first()
+             |> Map.get(:payload)
+             |> Map.get(:approval_id) == approval_id
+    end
+
+    test "a concurrent timeout-vs-resolve storm has exactly one winner with no double side effects" do
+      # Each iteration races a waiter's deadline against a resolve. The
+      # timeout decides through the SAME atomic take as resolve/cancel, so
+      # per approval id exactly one side may act: resolve wins (policy
+      # installed, no timeout decision) or the timeout wins (timeout
+      # decision broadcast, resolve loses, no policy) — never both.
+      test = self()
+
+      collector =
+        spawn(fn ->
+          LemonCore.Bus.subscribe("exec_approvals")
+          send(test, :collector_ready)
+          collect_timeout_decisions(test, [])
+        end)
+
+      assert_receive :collector_ready
+
+      for i <- 1..300 do
+        approval_id = "timeout_storm_#{i}"
+
+        Task.start(fn ->
+          ExecApprovals.request(%{
+            run_id: "run_123",
+            session_key: "agent:test:main",
+            tool: "bash",
+            action: %{command: "ls"},
+            approval_id: approval_id,
+            expires_in_ms: Enum.random(0..1)
+          })
+        end)
+
+        Process.sleep(Enum.random(0..1))
+        resolve_result = ExecApprovals.resolve(approval_id, :approve_session)
+        # Let the waiter settle its own deadline race.
+        Process.sleep(2)
+
+        assert Store.get(:exec_approvals_pending, approval_id) == nil
+
+        case resolve_result do
+          :ok ->
+            :ok
+
+          {:error, :not_pending} ->
+            action_hash = hash_action(%{command: "ls"})
+
+            assert Store.get(:exec_approvals_policy_session, {
+                     "agent:test:main",
+                     "bash",
+                     action_hash
+                   }) == nil,
+                   "iteration #{i}: resolve lost the take but installed policy"
+        end
+
+        # Keep iterations independent.
+        Store.delete(:exec_approvals_policy_session, {
+          "agent:test:main",
+          "bash",
+          hash_action(%{command: "ls"})
+        })
+      end
+
+      send(collector, {:report, test})
+
+      decisions =
+        receive do
+          {:timeout_decisions, decisions} -> decisions
+        after
+          1_000 -> flunk("collector never reported")
+        end
+
+      # The double-side-effect invariant: no approval id carries both a
+      # :timeout and a user-decision resolution.
+      storm_ids =
+        for {id, _decision} <- decisions, String.starts_with?(id, "timeout_storm_"), do: id
+
+      for id <- Enum.uniq(storm_ids) do
+        ids_decisions = for {^id, decision} <- decisions, do: decision
+
+        refute :timeout in ids_decisions and :approve_session in ids_decisions,
+               "approval #{id} was decided by both the timeout and the resolve"
+      end
+    end
   end
 
   describe "approval scope hierarchy" do
@@ -606,6 +724,39 @@ defmodule LemonCore.ExecApprovalsTest do
         })
 
       assert {:ok, :approved, :global} = result
+    end
+  end
+
+  # Storm-test collector: records every approval_resolved decision keyed by
+  # approval id (the timeout path and resolve/cancel all broadcast here), so
+  # a test can prove no id was decided twice with different decisions. On
+  # {:report, pid} it drains anything still queued, then answers.
+  defp collect_timeout_decisions(report_to, acc) do
+    receive do
+      {:report, report_to} ->
+        acc = drain_resolution_events(acc)
+        send(report_to, {:timeout_decisions, Enum.reverse(acc)})
+
+      %LemonCore.Event{
+        type: :approval_resolved,
+        payload: %{approval_id: id, decision: decision}
+      } ->
+        collect_timeout_decisions(report_to, [{id, decision} | acc])
+    end
+  end
+
+  defp drain_resolution_events(acc) do
+    receive do
+      %LemonCore.Event{
+        type: :approval_resolved,
+        payload: %{approval_id: id, decision: decision}
+      } ->
+        drain_resolution_events([{id, decision} | acc])
+
+      _other ->
+        drain_resolution_events(acc)
+    after
+      0 -> acc
     end
   end
 

@@ -1128,6 +1128,93 @@ defmodule CodingAgent.Tools.ExecuteCodeRpcTest do
              |> Enum.reject(fn {{tool, _hash}, _value} -> tool != "echo" end)
              |> Enum.empty?()
     end
+
+    test "the claim ledger is fed before the marker is published", %{rpc_dir: rpc_dir} do
+      # The on_claim hook must fire BEFORE the rename: that is what makes
+      # the ledger a superset of the published claims (a sweep killed after
+      # the send has already delivered its ledger entry, whatever the script
+      # then does to the marker).
+      test = self()
+
+      ctx =
+        ctx(rpc_dir,
+          on_claim: fn id, tool ->
+            marker = Path.join(rpc_dir, "req-#{id}.claim")
+            send(test, {:claim_ledger_entry, id, tool, File.exists?(marker)})
+          end
+        )
+
+      write_request(rpc_dir, 1, "echo", %{"value" => "served"})
+      stats = Rpc.process_pending(ctx, Rpc.initial_stats())
+
+      assert_received {:claim_ledger_entry, 1, "echo", false}
+      assert %{"id" => 1, "ok" => true, "content" => "served"} = read_response(rpc_dir, 1)
+      assert stats.calls == 1
+    end
+
+    test "a ledger entry whose marker and response were destroyed still answers, charges once, and flags the loss",
+         %{rpc_dir: rpc_dir} do
+      # The hostile script deleted both halves of the on-disk evidence after
+      # the claim; the host-side ledger still proves the claim happened.
+      stats = Rpc.recover_orphaned_claims(rpc_dir, Rpc.initial_stats(), %{1 => "webfetch"})
+
+      assert %{"id" => 1, "ok" => false, "error" => "rpc dispatch interrupted"} =
+               read_response(rpc_dir, 1)
+
+      assert stats.calls == 1
+      assert stats.errors == 1
+      assert MapSet.to_list(stats.seen_ids) == [1]
+      # Destroyed evidence means a lower bound: the tool may have executed
+      # with side effects nothing can account for anymore.
+      assert stats.accounting_loss == true
+
+      # And the reconstructed replay memory refuses a replayed id even after
+      # the script also consumed the recovery answer — no re-dispatch.
+      File.rm!(Path.join(rpc_dir, "res-1.json"))
+      write_request(rpc_dir, 1, "echo", %{"value" => "replay"})
+
+      stats = Rpc.process_pending(ctx(rpc_dir), stats)
+
+      assert %{"id" => 1, "ok" => false, "error" => "rpc request already processed"} =
+               read_response(rpc_dir, 1)
+
+      assert stats.calls == 1
+      assert stats.errors == 2
+      refute_receive {:ordered, 1}, 25
+    end
+
+    test "a ledger entry beside a surviving response restores the real accounting exactly",
+         %{rpc_dir: rpc_dir} do
+      # The script deleted the marker but the dead sweep's published answer
+      # survives: response + ledger tool name restore the REAL accounting —
+      # no loss flag, because nothing is actually missing.
+      File.write!(
+        Path.join(rpc_dir, "res-1.json"),
+        Jason.encode!(%{"id" => 1, "ok" => true, "content" => "served"})
+      )
+
+      stats = Rpc.recover_orphaned_claims(rpc_dir, Rpc.initial_stats(), %{1 => "webfetch"})
+
+      assert stats.calls == 1
+      assert stats.errors == 0
+      assert stats.bytes == byte_size("served")
+      assert MapSet.to_list(stats.tools_used) == ["webfetch"]
+      assert MapSet.to_list(stats.seen_ids) == [1]
+      refute Map.get(stats, :accounting_loss)
+      assert %{"id" => 1, "ok" => true, "content" => "served"} = read_response(rpc_dir, 1)
+    end
+
+    test "a marker-covered id is never double-charged through the ledger", %{rpc_dir: rpc_dir} do
+      write_request(rpc_dir, 1, "echo", %{"value" => "served"})
+      File.rename!(Path.join(rpc_dir, "req-1.json"), Path.join(rpc_dir, "req-1.claim"))
+
+      stats = Rpc.recover_orphaned_claims(rpc_dir, Rpc.initial_stats(), %{1 => "echo"})
+
+      assert stats.calls == 1
+      assert stats.errors == 1
+      assert MapSet.to_list(stats.seen_ids) == [1]
+      assert Path.wildcard(Path.join(rpc_dir, "req-*.claim")) == []
+    end
   end
 
   # ==========================================================================
@@ -1144,6 +1231,7 @@ defmodule CodingAgent.Tools.ExecuteCodeRpcTest do
       max_requests_per_sweep: Keyword.get(overrides, :max_requests_per_sweep, 100),
       max_parallel_rpc: Keyword.get(overrides, :max_parallel_rpc, 4),
       on_update: Keyword.get(overrides, :on_update),
+      on_claim: Keyword.get(overrides, :on_claim),
       signal: Keyword.get(overrides, :signal),
       rpc_dir: rpc_dir,
       token: Keyword.get(overrides, :token, @token),

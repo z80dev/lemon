@@ -47,8 +47,16 @@ defmodule CodingAgent.Tools.ExecuteCodeRpcServerTest do
     end
 
     # Faithful marker model: answer every unanswered in-flight claim and
-    # reconstruct its call reservation, like the real pump.
-    def recover_orphaned_claims(rpc_dir, stats) do
+    # reconstruct its call reservation, like the real pump. The `claimed`
+    # ledger covers ids whose marker the "script" deleted: the real pump's
+    # host-side half of the claim evidence.
+    def recover_orphaned_claims(rpc_dir, stats, claimed \\ %{}) do
+      stats
+      |> recover_markers(rpc_dir)
+      |> recover_ledger(rpc_dir, claimed)
+    end
+
+    defp recover_markers(stats, rpc_dir) do
       rpc_dir
       |> Path.join("req-*.claim")
       |> Path.wildcard()
@@ -69,6 +77,26 @@ defmodule CodingAgent.Tools.ExecuteCodeRpcServerTest do
           :error ->
             File.rm(marker)
             acc
+        end
+      end)
+    end
+
+    defp recover_ledger(stats, rpc_dir, claimed) do
+      claimed
+      |> Enum.sort()
+      |> Enum.reduce(stats, fn {id, _tool}, acc ->
+        if MapSet.member?(acc.seen_ids, id) do
+          acc
+        else
+          unless File.exists?(response_path(rpc_dir, id)) do
+            respond_error(rpc_dir, id, "rpc dispatch interrupted")
+          end
+
+          acc
+          |> Map.update!(:calls, &(&1 + 1))
+          |> Map.update!(:errors, &(&1 + 1))
+          |> Map.update!(:seen_ids, &MapSet.put(&1, id))
+          |> Map.put(:accounting_loss, true)
         end
       end)
     end
@@ -246,7 +274,7 @@ defmodule CodingAgent.Tools.ExecuteCodeRpcServerTest do
 
     def initial_stats, do: FakeRpc.initial_stats()
 
-    def recover_orphaned_claims(rpc_dir, stats),
+    def recover_orphaned_claims(rpc_dir, stats, _claimed),
       do: FakeRpc.recover_orphaned_claims(rpc_dir, stats)
 
     def drain_notifications(ctx, stats), do: FakeRpc.drain_notifications(ctx, stats)
@@ -270,7 +298,7 @@ defmodule CodingAgent.Tools.ExecuteCodeRpcServerTest do
 
     def initial_stats, do: FakeRpc.initial_stats()
 
-    def recover_orphaned_claims(rpc_dir, stats),
+    def recover_orphaned_claims(rpc_dir, stats, _claimed),
       do: FakeRpc.recover_orphaned_claims(rpc_dir, stats)
 
     def process_pending(ctx, stats), do: FakeRpc.process_pending(ctx, stats)
@@ -289,7 +317,7 @@ defmodule CodingAgent.Tools.ExecuteCodeRpcServerTest do
 
     def initial_stats, do: FakeRpc.initial_stats()
 
-    def recover_orphaned_claims(rpc_dir, stats),
+    def recover_orphaned_claims(rpc_dir, stats, _claimed),
       do: FakeRpc.recover_orphaned_claims(rpc_dir, stats)
 
     def drain_notifications(ctx, stats), do: FakeRpc.drain_notifications(ctx, stats)
@@ -451,6 +479,94 @@ defmodule CodingAgent.Tools.ExecuteCodeRpcServerTest do
 
       assert :ok = RpcServer.stop(server)
     end
+
+    @tag :capture_log
+    test "abort answers a claim whose marker the script deleted after the gate", %{
+      rpc_dir: rpc_dir
+    } do
+      ctx = %{ctx(rpc_dir) | tools: blocking_tools(self())}
+      {:ok, server} = start_server(ctx, rpc: Rpc, poll_interval_ms: 5)
+
+      write_request(rpc_dir, 1, "block", %{})
+
+      assert_receive {:blocking_dispatch, "exec_code_rpc_1", _sweep_pid}, 2_000
+
+      # The hostile script removes its own in-flight marker after the
+      # publication gate passed: on-disk evidence gone.
+      File.rm!(Path.join(rpc_dir, "req-1.claim"))
+      assert Path.wildcard(Path.join(rpc_dir, "req-*.claim")) == []
+
+      :ok = RpcServer.abort(server)
+
+      # The host-side claim ledger still proves the claim: answered in
+      # writing, charged once, and the loss flagged (the tool ran under a
+      # sweep that was killed — its accounting is a lower bound).
+      assert %{"id" => 1, "ok" => false, "error" => "rpc dispatch interrupted"} =
+               read_response(rpc_dir, 1)
+
+      stats = RpcServer.stats(server)
+      assert stats.calls == 1
+      assert stats.errors == 1
+      assert stats.accounting_loss == true
+
+      assert :ok = RpcServer.stop(server)
+    end
+  end
+
+  describe "abnormal sweep death" do
+    @tag :capture_log
+    test "a sweep killed after publishing a response flags the loss and recovers immediately",
+         %{rpc_dir: rpc_dir} do
+      # Waves of one: request 1 (echo) is answered and its marker retired
+      # before the sweep blocks awaiting request 2 (block). Killing the
+      # sweep exactly there means its stats — which account request 1 — die
+      # with it, and no marker for 1 survives.
+      ctx = %{
+        ctx(rpc_dir, max_parallel_rpc: 1)
+        | tools: Map.merge(stub_tools(), blocking_tools(self()))
+      }
+
+      {:ok, server} = start_server(ctx, rpc: Rpc, poll_interval_ms: 5)
+
+      write_request(rpc_dir, 1, "echo", %{"value" => "one"})
+      write_request(rpc_dir, 2, "block", %{})
+
+      assert %{"id" => 1, "ok" => true, "content" => "one"} = await_response(rpc_dir, 1)
+      assert_receive {:blocking_dispatch, "exec_code_rpc_2", _task_pid}, 2_000
+
+      sweep_pid = await_sweep_pid(server)
+      Process.exit(sweep_pid, :kill)
+
+      # The abnormal :DOWN is treated as accounting loss, and recovery runs
+      # immediately: the still-marked claim 2 is answered in writing, and
+      # the destroyed-evidence claim 1 is reconstructed from its response
+      # plus the ledger.
+      stats = await_flagged_stats(server)
+      assert stats.accounting_loss == true
+      assert stats.calls == 2
+      assert stats.errors == 1
+      assert stats.bytes == byte_size("one")
+      assert MapSet.to_list(stats.tools_used) == ["echo"]
+
+      assert %{"id" => 2, "ok" => false, "error" => "rpc dispatch interrupted"} =
+               read_response(rpc_dir, 2)
+
+      assert %{"id" => 1, "ok" => true, "content" => "one"} = read_response(rpc_dir, 1)
+
+      # The server recovered and keeps serving: a successor sweep answers a
+      # fresh request, and a replay of the dead sweep's answered id is
+      # refused — never re-dispatched.
+      write_request(rpc_dir, 3, "echo", %{"value" => "after death"})
+      assert %{"id" => 3, "ok" => true, "content" => "after death"} = await_response(rpc_dir, 3)
+
+      File.rm!(Path.join(rpc_dir, "res-1.json"))
+      write_request(rpc_dir, 1, "echo", %{"value" => "replay"})
+
+      assert %{"id" => 1, "ok" => false, "error" => "rpc request already processed"} =
+               await_response(rpc_dir, 1)
+
+      assert :ok = RpcServer.stop(server)
+    end
   end
 
   describe "start_link/2" do
@@ -595,6 +711,38 @@ defmodule CodingAgent.Tools.ExecuteCodeRpcServerTest do
 
       assert_received {:drain_called, %{notify_forwarded: 0}}
       assert_received {:drain_returned, %{notify_forwarded: 1}}
+    end
+
+    test "drain_and_stats forwards and counts stop-time notifications through the public path",
+         %{rpc_dir: rpc_dir} do
+      test = self()
+
+      {:ok, server} =
+        start_server(
+          ctx(rpc_dir,
+            on_update: fn %AgentToolResult{} = partial ->
+              send(test, {:notify, hd(partial.content).text})
+            end
+          ),
+          rpc: Rpc,
+          poll_interval_ms: 1_000
+        )
+
+      # With polls a second apart, the frame written now can only be
+      # forwarded by the teardown drain — which must be observable in the
+      # stats the CALLER receives, not only inside the dying terminate/2.
+      tmp = Path.join(rpc_dir, "notify-9.json.tmp")
+      File.write!(tmp, Jason.encode!(%{"n" => 9, "msg" => "last gasp"}))
+      File.rename!(tmp, Path.join(rpc_dir, "notify-9.json"))
+
+      stats = RpcServer.drain_and_stats(server)
+
+      assert stats.notify_forwarded == 1
+      assert_received {:notify, "notify: last gasp"}
+      # The count persists in the server's stats too.
+      assert RpcServer.stats(server).notify_forwarded == 1
+
+      assert :ok = RpcServer.stop(server)
     end
 
     test "wrong or missing tokens are denied and never dispatched", %{rpc_dir: rpc_dir} do
@@ -921,6 +1069,35 @@ defmodule CodingAgent.Tools.ExecuteCodeRpcServerTest do
       true ->
         Process.sleep(5)
         await_file(path, attempts - 1)
+    end
+  end
+
+  # The sweep task's pid while a dispatch is holding it open. The struct is
+  # not opaque to the test: the server owns sweep_task as a %Task{}.
+  defp await_sweep_pid(server, attempts \\ 400) do
+    case :sys.get_state(server) do
+      %{sweep_task: %Task{pid: pid}} when is_pid(pid) ->
+        pid
+
+      _none when attempts > 0 ->
+        Process.sleep(5)
+        await_sweep_pid(server, attempts - 1)
+
+      _none ->
+        flunk("no sweep task was running")
+    end
+  end
+
+  # Polls until the server's stats carry the accounting-loss flag, so a test
+  # never races the :DOWN handling.
+  defp await_flagged_stats(server, attempts \\ 400) do
+    stats = RpcServer.stats(server)
+
+    if Map.get(stats, :accounting_loss) == true or attempts <= 0 do
+      stats
+    else
+      Process.sleep(5)
+      await_flagged_stats(server, attempts - 1)
     end
   end
 end
