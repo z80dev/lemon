@@ -177,6 +177,11 @@
       last_reviewed: ~D[2026-09-01],
       max_age_days: 120
     },
+    %{
+      path: "docs/platform/failure-handling.md",
+      last_reviewed: ~D[2026-09-01],
+      max_age_days: 120
+    },
     %{path: "docs/platform/phase-5-extraction.md", last_reviewed: ~D[2026-08-10]},
     %{path: "docs/why-beam-for-agents.md", last_reviewed: ~D[2026-08-10], max_age_days: 180},
     %{

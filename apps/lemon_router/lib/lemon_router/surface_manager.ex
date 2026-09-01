@@ -12,11 +12,11 @@ defmodule LemonRouter.SurfaceManager do
 
   require Logger
 
-  alias LemonCore.{DeliveryIntent, DeliveryRoute, Event, Introspection, MapHelpers}
+  alias LemonCore.{DeliveryIntent, DeliveryRoute, Event, Failure, Introspection, MapHelpers}
   alias LemonRouter.{ChannelContext, DeliveryRouteResolver, StreamCoalescer, ToolStatusCoalescer}
   alias LemonRouter.RunProcess.{CompactionTrigger, RetryHandler}
 
-  @spec ingest_answer_delta(map(), map()) :: :ok
+  @spec ingest_answer_delta(map(), map()) :: :ok | {:error, Exception.t()}
   def ingest_answer_delta(state, delta) do
     with {:ok, channel_id} <- ChannelContext.channel_id(state.session_key),
          seq when is_integer(seq) <- MapHelpers.get_key(delta, :seq),
@@ -33,7 +33,7 @@ defmodule LemonRouter.SurfaceManager do
 
     :ok
   rescue
-    _ -> :ok
+    exception -> report("answer delta ingest", state, exception, __STACKTRACE__)
   end
 
   @spec prepare_status_action(map(), map()) :: {map(), term(), boolean()}
@@ -71,7 +71,7 @@ defmodule LemonRouter.SurfaceManager do
     end
   end
 
-  @spec handoff_answer_to_status(map(), term()) :: :ok
+  @spec handoff_answer_to_status(map(), term()) :: :ok | {:error, Exception.t()}
   def handoff_answer_to_status(state, surface) do
     with {:ok, channel_id} <- ChannelContext.channel_id(state.session_key),
          {:ok, text} <-
@@ -93,10 +93,10 @@ defmodule LemonRouter.SurfaceManager do
 
     :ok
   rescue
-    _ -> :ok
+    exception -> report("answer handoff to status", state, exception, __STACKTRACE__)
   end
 
-  @spec ingest_status_action(map(), map(), term()) :: :ok
+  @spec ingest_status_action(map(), map(), term()) :: :ok | {:error, Exception.t()}
   def ingest_status_action(state, action_event, surface) do
     _ = maybe_start_async_task_surface_subscriber(state, action_event, surface)
 
@@ -113,10 +113,10 @@ defmodule LemonRouter.SurfaceManager do
 
     :ok
   rescue
-    _ -> :ok
+    exception -> report("status action ingest", state, exception, __STACKTRACE__)
   end
 
-  @spec ingest_projected_child_action(map(), map(), term()) :: :ok
+  @spec ingest_projected_child_action(map(), map(), term()) :: :ok | {:error, Exception.t()}
   def ingest_projected_child_action(state, action_event, surface) do
     with {:ok, channel_id} <- ChannelContext.channel_id(state.session_key) do
       ToolStatusCoalescer.ingest_projected_child_action(
@@ -131,10 +131,10 @@ defmodule LemonRouter.SurfaceManager do
 
     :ok
   rescue
-    _ -> :ok
+    exception -> report("projected child action ingest", state, exception, __STACKTRACE__)
   end
 
-  @spec commit_status_segment(map(), term()) :: :ok
+  @spec commit_status_segment(map(), term()) :: :ok | {:error, Exception.t()}
   def commit_status_segment(state, surface \\ :status) do
     with {:ok, channel_id} <- ChannelContext.channel_id(state.session_key) do
       ToolStatusCoalescer.commit_segment(
@@ -148,10 +148,10 @@ defmodule LemonRouter.SurfaceManager do
 
     :ok
   rescue
-    _ -> :ok
+    exception -> report("status segment commit", state, exception, __STACKTRACE__)
   end
 
-  @spec finalize_status(map(), Event.t()) :: :ok
+  @spec finalize_status(map(), Event.t()) :: :ok | {:error, Exception.t()}
   def finalize_status(state, %Event{} = event) do
     with {:ok, channel_id} <- ChannelContext.channel_id(state.session_key) do
       ok? =
@@ -177,10 +177,10 @@ defmodule LemonRouter.SurfaceManager do
 
     :ok
   rescue
-    _ -> :ok
+    exception -> report("status finalize", state, exception, __STACKTRACE__)
   end
 
-  @spec flush_status(map()) :: :ok
+  @spec flush_status(map()) :: :ok | {:error, Exception.t()}
   def flush_status(state) do
     with {:ok, channel_id} <- ChannelContext.channel_id(state.session_key) do
       Enum.each(active_status_surfaces(state), fn surface ->
@@ -190,10 +190,10 @@ defmodule LemonRouter.SurfaceManager do
 
     :ok
   rescue
-    _ -> :ok
+    exception -> report("status flush", state, exception, __STACKTRACE__)
   end
 
-  @spec flush_all(map()) :: :ok
+  @spec flush_all(map()) :: :ok | {:error, Exception.t()}
   def flush_all(state) do
     with {:ok, channel_id} <- ChannelContext.channel_id(state.session_key) do
       StreamCoalescer.flush(state.session_key, channel_id)
@@ -205,10 +205,10 @@ defmodule LemonRouter.SurfaceManager do
 
     :ok
   rescue
-    _ -> :ok
+    exception -> report("flush", state, exception, __STACKTRACE__)
   end
 
-  @spec finalize_answer(map(), Event.t(), map()) :: :ok
+  @spec finalize_answer(map(), Event.t(), map()) :: :ok | {:error, Exception.t()}
   def finalize_answer(state, %Event{} = event, extra_meta) when is_map(extra_meta) do
     with {:ok, channel_id} <- ChannelContext.channel_id(state.session_key) do
       resume =
@@ -281,10 +281,10 @@ defmodule LemonRouter.SurfaceManager do
 
     :ok
   rescue
-    _ -> :ok
+    exception -> report("answer finalize", state, exception, __STACKTRACE__)
   end
 
-  @spec maybe_seed_final_answer(map(), Event.t()) :: :ok
+  @spec maybe_seed_final_answer(map(), Event.t()) :: :ok | {:error, Exception.t()}
   def maybe_seed_final_answer(state, %Event{} = event) do
     with false <- state.saw_delta,
          answer when is_binary(answer) and answer != "" <-
@@ -302,10 +302,10 @@ defmodule LemonRouter.SurfaceManager do
 
     :ok
   rescue
-    _ -> :ok
+    exception -> report("final answer seed", state, exception, __STACKTRACE__)
   end
 
-  @spec fanout_final_answer(map(), Event.t()) :: :ok
+  @spec fanout_final_answer(map(), Event.t()) :: :ok | {:error, Exception.t()}
   def fanout_final_answer(state, %Event{} = event) do
     with answer when is_binary(answer) <- CompactionTrigger.extract_completed_answer(event),
          true <- String.trim(answer) != "",
@@ -343,7 +343,7 @@ defmodule LemonRouter.SurfaceManager do
 
     :ok
   rescue
-    _ -> :ok
+    exception -> report("final answer fanout", state, exception, __STACKTRACE__)
   end
 
   defp coalescer_meta(%{execution_request: %LemonCore.ExecutionCommand{} = request}) do
@@ -383,7 +383,9 @@ defmodule LemonRouter.SurfaceManager do
       Process.alive?(pid) and subscriber_owns_surface?(pid, surface)
     end)
   rescue
-    _ -> false
+    exception ->
+      Failure.log("async task surface subscriber lookup", exception, __STACKTRACE__)
+      false
   end
 
   defp subscriber_owns_surface?(pid, surface) when is_pid(pid) do
@@ -548,8 +550,6 @@ defmodule LemonRouter.SurfaceManager do
           thread_id: if(is_binary(thread_id) and thread_id != "", do: thread_id, else: nil)
         }
     end
-  rescue
-    _ -> nil
   end
 
   defp normalize_fanout_route(_), do: nil
@@ -609,7 +609,9 @@ defmodule LemonRouter.SurfaceManager do
   defp streamed_final_text(state, channel_id, _final_text) do
     stream_coalescer().current_text(state.session_key, channel_id, state.run_id)
   rescue
-    _ -> nil
+    exception ->
+      _ = report("streamed final text lookup", state, exception, __STACKTRACE__)
+      nil
   end
 
   defp record_finalize_dispatch(state, mode) when is_atom(mode) do
@@ -621,8 +623,6 @@ defmodule LemonRouter.SurfaceManager do
       engine: "lemon",
       provenance: :direct
     )
-  rescue
-    _ -> :ok
   end
 
   defp dispatch_direct_final_answer(_state, _channel_id, text, _meta)
@@ -651,6 +651,7 @@ defmodule LemonRouter.SurfaceManager do
               "Streamed final dispatch failed for run_id=#{inspect(state.run_id)} reason=#{inspect(dispatch_reason)}"
             )
         end
+
       _ ->
         Logger.warning(
           "Streamed final route resolution failed for run_id=#{inspect(state.run_id)}"
@@ -659,12 +660,7 @@ defmodule LemonRouter.SurfaceManager do
 
     :ok
   rescue
-    error ->
-      Logger.warning(
-        "Streamed final dispatch raised for run_id=#{inspect(state.run_id)} error=#{Exception.message(error)}"
-      )
-
-      :ok
+    exception -> report("streamed final dispatch", state, exception, __STACKTRACE__)
   end
 
   defp maybe_dispatch_fallback_final_text(_state, _channel_id, text, _meta, _reason)
@@ -701,6 +697,7 @@ defmodule LemonRouter.SurfaceManager do
               "Fallback final dispatch failed for run_id=#{inspect(state.run_id)} reason=#{inspect(dispatch_reason)} coalescer_reason=#{inspect(reason)}"
             )
         end
+
       _ ->
         Logger.warning(
           "Fallback final route resolution failed for run_id=#{inspect(state.run_id)} coalescer_reason=#{inspect(reason)}"
@@ -709,12 +706,13 @@ defmodule LemonRouter.SurfaceManager do
 
     :ok
   rescue
-    error ->
-      Logger.warning(
-        "Fallback final dispatch raised for run_id=#{inspect(state.run_id)} error=#{Exception.message(error)} coalescer_reason=#{inspect(reason)}"
+    exception ->
+      report(
+        "fallback final dispatch coalescer_reason=#{inspect(reason)}",
+        state,
+        exception,
+        __STACKTRACE__
       )
-
-      :ok
   end
 
   # ---- Async task surface subscriber wiring ----
@@ -737,10 +735,12 @@ defmodule LemonRouter.SurfaceManager do
           fallback_binding: fallback_binding,
           meta: coalescer_meta(state)
         )
-      _ -> :ok
+
+      _ ->
+        :ok
     end
   rescue
-    _ -> :ok
+    exception -> report("async task surface subscriber start", state, exception, __STACKTRACE__)
   end
 
   defp async_task_child_binding_fields(action_event) do
@@ -763,5 +763,19 @@ defmodule LemonRouter.SurfaceManager do
     else
       _ -> :error
     end
+  end
+
+  # These functions sit between the run process and the delivery side. A
+  # raise here would take the run down with its output, so it is reported at
+  # error (with the run and session it belongs to) and answered instead.
+  defp report(what, state, exception, stacktrace) do
+    Failure.log(
+      "SurfaceManager #{what} run_id=#{inspect(state.run_id)} session_key=#{inspect(state.session_key)}",
+      exception,
+      stacktrace,
+      level: :error
+    )
+
+    {:error, exception}
   end
 end

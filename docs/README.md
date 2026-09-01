@@ -66,6 +66,7 @@ failures.
 | [platform/reliability-contracts.md](platform/reliability-contracts.md) | What each seam between apps promises when something goes wrong, and how the promise is enforced |
 | [platform/owned-storage.md](platform/owned-storage.md) | How persistent state is split between the modules that own it and the store that keeps it |
 | [platform/run-ownership.md](platform/run-ownership.md) | Who owns each transition of a run across the router, the execution runtime and the agent, and the public run-event contract |
+| [platform/failure-handling.md](platform/failure-handling.md) | When code may catch an exception: the failure is observable, the caller gets an accurate outcome, and the state stays valid |
 | [beam_agents.md](beam_agents.md) | BEAM/OTP architecture: process-per-agent, supervision, message passing |
 | [model-selection-decoupling.md](model-selection-decoupling.md) | Model selection design: provider abstraction, routing, fallback |
 

@@ -27,6 +27,12 @@ Telegram, run history, durable memory, kanban boards, or `~/.lemon`.
 
 ### Added
 
+- `LemonCore.Failure.log/4` and `log_caught/5`: the one way a boundary
+  reports a caught exception, exit or throw, with the stacktrace and the
+  standard `crash_reason` metadata. `docs/platform/failure-handling.md` is
+  the policy it serves. `LemonCore.Quality.RatchetCheck` gained the
+  `silent_rescues` metric (rescue clauses whose first clause discards the
+  exception).
 - `LemonCore.Events.RunCompleted.failure/2`: the terminal event for a run
   that ended without a result from its engine, used by every publisher of a
   synthetic completion so subscribers see one shape.

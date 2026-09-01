@@ -10,7 +10,7 @@ defmodule LemonRouter.RunProcess.CompactionTrigger do
   require Logger
 
   alias LemonAi.Tokens
-  alias LemonCore.{ExecutionCommand, ResumeToken}
+  alias LemonCore.{ExecutionCommand, Failure, ResumeToken}
   alias LemonRouter.ChannelContext
 
   @default_compaction_reserve_tokens 16_384
@@ -93,8 +93,6 @@ defmodule LemonRouter.RunProcess.CompactionTrigger do
     {primary_key, primary_tokens} = find_primary_token_count(usage)
     cached_tokens = sum_cached_tokens(usage)
     compute_total_input_tokens(primary_key, primary_tokens, cached_tokens)
-  rescue
-    _ -> nil
   end
 
   def usage_input_tokens(_), do: nil
@@ -126,8 +124,6 @@ defmodule LemonRouter.RunProcess.CompactionTrigger do
     else
       nil
     end
-  rescue
-    _ -> nil
   end
 
   @spec context_length_exceeded_error?(term()) :: boolean()
@@ -146,8 +142,6 @@ defmodule LemonRouter.RunProcess.CompactionTrigger do
       |> String.downcase()
 
     Enum.any?(@context_overflow_error_markers, &String.contains?(text, &1))
-  rescue
-    _ -> false
   end
 
   # ---- Compaction marker logic ----
@@ -184,7 +178,15 @@ defmodule LemonRouter.RunProcess.CompactionTrigger do
 
     :ok
   rescue
-    _ -> :ok
+    exception ->
+      Failure.log(
+        "RunProcess context overflow reset run_id=#{inspect(state.run_id)} session_key=#{inspect(state.session_key)}",
+        exception,
+        __STACKTRACE__,
+        level: :error
+      )
+
+      :ok
   end
 
   def maybe_reset_resume_on_context_overflow(_state, _event), do: :ok
@@ -216,8 +218,6 @@ defmodule LemonRouter.RunProcess.CompactionTrigger do
     end
 
     :ok
-  rescue
-    _ -> :ok
   end
 
   def maybe_store_chat_state(_state, _event), do: :ok
@@ -276,7 +276,15 @@ defmodule LemonRouter.RunProcess.CompactionTrigger do
 
     :ok
   rescue
-    _ -> :ok
+    exception ->
+      Failure.log(
+        "RunProcess pending compaction marker run_id=#{inspect(state.run_id)} session_key=#{inspect(state.session_key)}",
+        exception,
+        __STACKTRACE__,
+        level: :error
+      )
+
+      :ok
   end
 
   def maybe_mark_pending_compaction_near_limit(_state, _event), do: :ok
@@ -337,8 +345,6 @@ defmodule LemonRouter.RunProcess.CompactionTrigger do
       end
 
     fetch(completed, :ok) === true
-  rescue
-    _ -> false
   end
 
   defp explicit_completed_ok_true?(_), do: false
@@ -364,14 +370,6 @@ defmodule LemonRouter.RunProcess.CompactionTrigger do
           @default_preemptive_compaction_trigger_ratio
         )
     }
-  rescue
-    _ ->
-      %{
-        enabled: true,
-        context_window_tokens: nil,
-        reserve_tokens: default_compaction_reserve_tokens(),
-        trigger_ratio: @default_preemptive_compaction_trigger_ratio
-      }
   end
 
   defp preemptive_compaction_config(_session_key) do
@@ -394,14 +392,6 @@ defmodule LemonRouter.RunProcess.CompactionTrigger do
           @default_preemptive_compaction_trigger_ratio
         )
     }
-  rescue
-    _ ->
-      %{
-        enabled: true,
-        context_window_tokens: nil,
-        reserve_tokens: @default_compaction_reserve_tokens,
-        trigger_ratio: @default_preemptive_compaction_trigger_ratio
-      }
   end
 
   defp resolve_compaction_config do
@@ -410,7 +400,7 @@ defmodule LemonRouter.RunProcess.CompactionTrigger do
       |> normalize_map()
 
     config_cfg =
-      case LemonCore.Config.cached() do
+      case cached_config() do
         %{runtime: runtime} when is_map(runtime) ->
           runtime
           |> fetch(:compaction)
@@ -427,12 +417,10 @@ defmodule LemonRouter.RunProcess.CompactionTrigger do
 
     # Prefer app-level overrides in tests/runtime, then fall back to config file.
     Map.merge(config_cfg, router_cfg)
-  rescue
-    _ -> %{}
   end
 
   defp default_compaction_reserve_tokens do
-    case LemonCore.Config.cached() do
+    case cached_config() do
       %{agent: agent_cfg} when is_map(agent_cfg) ->
         agent_cfg
         |> fetch(:compaction)
@@ -443,8 +431,6 @@ defmodule LemonRouter.RunProcess.CompactionTrigger do
       _ ->
         @default_compaction_reserve_tokens
     end
-  rescue
-    _ -> @default_compaction_reserve_tokens
   end
 
   defp resolve_preemptive_compaction_context_window(state, cfg) when is_map(cfg) do
@@ -461,8 +447,6 @@ defmodule LemonRouter.RunProcess.CompactionTrigger do
       end
 
     model_context_window(model)
-  rescue
-    _ -> nil
   end
 
   defp resolve_context_window_from_model(_), do: nil
@@ -471,18 +455,11 @@ defmodule LemonRouter.RunProcess.CompactionTrigger do
     model
     |> model_lookup_candidates()
     |> Enum.find_value(fn candidate ->
-      if Code.ensure_loaded?(LemonAi.Models) and
-           function_exported?(LemonAi.Models, :find_by_id, 1) do
-        case LemonAi.Models.find_by_id(candidate) do
-          %{context_window: cw} when is_integer(cw) and cw > 0 -> cw
-          _ -> nil
-        end
-      else
-        nil
+      case LemonAi.Models.find_by_id(candidate) do
+        %{context_window: cw} when is_integer(cw) and cw > 0 -> cw
+        _ -> nil
       end
     end)
-  rescue
-    _ -> nil
   end
 
   defp model_context_window(_), do: nil
@@ -584,8 +561,6 @@ defmodule LemonRouter.RunProcess.CompactionTrigger do
     end
 
     :ok
-  rescue
-    _ -> :ok
   end
 
   defp reset_telegram_resume_state(_), do: :ok
@@ -638,4 +613,15 @@ defmodule LemonRouter.RunProcess.CompactionTrigger do
   end
 
   defp positive_int_or(_value, default), do: default
+
+  # The config cache answers the loaded config, or raises while the cache is
+  # not available yet. A raise here must not fail a run's completion, so it is
+  # reported and the compaction defaults apply.
+  defp cached_config do
+    LemonCore.Config.cached()
+  rescue
+    exception ->
+      Failure.log("compaction config lookup", exception, __STACKTRACE__)
+      %{}
+  end
 end

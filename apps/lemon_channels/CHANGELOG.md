@@ -95,6 +95,16 @@ keeping it small and honest.
 
 ### Changed
 
+- The Discord and Telegram transports follow `docs/platform/failure-handling.md`:
+  every remaining `rescue` reports the exception with its stacktrace through
+  `LemonCore.Failure` and answers what actually happened (`{:error, exception}`
+  for a send that did not go out, "Command failed." for a slash command that
+  raised before answering Discord), and the blanket rescues inside helpers
+  that a boundary already covers are gone, so a bug in a command handler
+  reaches the log instead of a silent default. The dedupe mark is written
+  with an explicit `Store.put/3` result instead of a `:ok =` match under a
+  rescue.
+
 - `LemonChannels.BindingResolver` returns `LemonCore.Binding` and reads the
   gateway config through `LemonCore.GatewayConfig`; `LemonChannels.Binding`,
   `LemonChannels.Cwd` and `LemonChannels.GatewayConfig` are removed. Adapters

@@ -53,6 +53,7 @@ export default {
           { text: "Reliability Contracts", link: "/platform/reliability-contracts" },
           { text: "Owned Storage", link: "/platform/owned-storage" },
           { text: "Run Ownership", link: "/platform/run-ownership" },
+          { text: "Failure Handling", link: "/platform/failure-handling" },
           { text: "Model Selection", link: "/model-selection-decoupling" },
           { text: "Context Management", link: "/context" },
           { text: "Bootstrap Contract", link: "/assistant_bootstrap_contract" },

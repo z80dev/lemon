@@ -32,6 +32,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
     ChatStateStore,
     Event,
     Events,
+    Failure,
     InboundMessage,
     ProjectBindingStore,
     ResumeToken,
@@ -202,7 +203,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
     state =
       case run_id && Map.get(state.pending_new, run_id) do
         %{session_key: sk, channel_id: channel_id, thread_id: thread_id} = pending ->
-          _ = safe_delete_chat_state(sk)
+          _ = ChatStateStore.delete(sk)
 
           ok? = run_completed_ok?(event)
 
@@ -254,11 +255,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
               _ = Outbound.create_reaction(channel_id, user_msg_id, reaction_emoji)
             end)
 
-          if Code.ensure_loaded?(LemonCore.Bus) and
-               function_exported?(LemonCore.Bus, :unsubscribe, 1) do
-            topic = LemonCore.Bus.session_topic(matched_sk)
-            _ = LemonCore.Bus.unsubscribe(topic)
-          end
+          _ = LemonCore.Bus.unsubscribe(LemonCore.Bus.session_topic(matched_sk))
 
           %{state | reaction_runs: Map.delete(state.reaction_runs, matched_sk)}
 
@@ -268,7 +265,9 @@ defmodule LemonChannels.Adapters.Discord.Transport do
 
     {:noreply, state}
   rescue
-    _ -> {:noreply, state}
+    exception ->
+      Failure.log("discord run completion handling", exception, __STACKTRACE__, level: :error)
+      {:noreply, state}
   end
 
   # Approval requests
@@ -307,8 +306,8 @@ defmodule LemonChannels.Adapters.Discord.Transport do
         state
     end
   rescue
-    error ->
-      Logger.warning("discord inbound message handling failed: #{inspect(error)}")
+    exception ->
+      Failure.log("discord inbound message handling", exception, __STACKTRACE__)
       state
   end
 
@@ -327,19 +326,29 @@ defmodule LemonChannels.Adapters.Discord.Transport do
 
     case Store.get(:idempotency, store_key) do
       %{"inserted_at_ms" => inserted_at_ms} when is_integer(inserted_at_ms) ->
-        if now - inserted_at_ms <= state.dedupe_ttl_ms do
-          :seen
-        else
-          :ok = Store.put(:idempotency, store_key, %{"inserted_at_ms" => now})
-          :new
-        end
+        if now - inserted_at_ms <= state.dedupe_ttl_ms,
+          do: :seen,
+          else: mark_persistent_dedupe(store_key, now)
 
       _ ->
-        :ok = Store.put(:idempotency, store_key, %{"inserted_at_ms" => now})
+        mark_persistent_dedupe(store_key, now)
+    end
+  end
+
+  # A message whose dedupe mark cannot be written is still handled: losing a
+  # duplicate is cheaper than losing a message, and the failed write is logged.
+  defp mark_persistent_dedupe(store_key, now) do
+    case Store.put(:idempotency, store_key, %{"inserted_at_ms" => now}) do
+      :ok ->
+        :new
+
+      {:error, reason} ->
+        Logger.warning(
+          "discord dedupe mark not written key=#{inspect(store_key)}: #{inspect(reason)}"
+        )
+
         :new
     end
-  rescue
-    _ -> :new
   end
 
   defp persistent_dedupe_key(inbound, key) do
@@ -374,11 +383,8 @@ defmodule LemonChannels.Adapters.Discord.Transport do
       end
     end
   rescue
-    e ->
-      Logger.warning(
-        "discord inbound handler crashed: #{Exception.format(:error, e, __STACKTRACE__)}"
-      )
-
+    exception ->
+      Failure.log("discord inbound message handler", exception, __STACKTRACE__)
       state
   end
 
@@ -614,8 +620,13 @@ defmodule LemonChannels.Adapters.Discord.Transport do
       _ -> state
     end
   rescue
-    error ->
-      Logger.warning("discord interaction handling failed: #{inspect(error)}")
+    exception ->
+      Failure.log("discord interaction handling", exception, __STACKTRACE__)
+
+      # A slash command that raised has not answered Discord; say so rather
+      # than leaving the interaction to time out.
+      if map_get(interaction, :type) == 2, do: respond_ephemeral(interaction, "Command failed.")
+
       state
   end
 
@@ -735,8 +746,6 @@ defmodule LemonChannels.Adapters.Discord.Transport do
         handle_approval_component(interaction, custom_id)
         state
     end
-  rescue
-    _ -> state
   end
 
   # ============================================================================
@@ -848,10 +857,6 @@ defmodule LemonChannels.Adapters.Discord.Transport do
     end
 
     state
-  rescue
-    _ ->
-      respond_ephemeral(interaction, "Command failed safely.")
-      state
   end
 
   # ============================================================================
@@ -946,7 +951,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
         )
 
         # Clear state
-        _ = safe_delete_chat_state(session_key)
+        _ = ChatStateStore.delete(session_key)
         _ = ModelPolicyAdapter.delete_session_model_override(session_key)
 
         project = extract_project_info(project_result)
@@ -1014,8 +1019,6 @@ defmodule LemonChannels.Adapters.Discord.Transport do
         }
       )
     end)
-  rescue
-    _ -> :ok
   end
 
   # ============================================================================
@@ -1758,8 +1761,6 @@ defmodule LemonChannels.Adapters.Discord.Transport do
     end
 
     state
-  rescue
-    _ -> state
   end
 
   defp handle_file_put_interaction(interaction, state) do
@@ -1775,8 +1776,6 @@ defmodule LemonChannels.Adapters.Discord.Transport do
         {:error, msg} -> respond_ephemeral(interaction, msg)
       end
     end
-  rescue
-    _ -> respond_ephemeral(interaction, "File upload failed.")
   end
 
   defp handle_file_get_interaction(interaction, state) do
@@ -1790,8 +1789,6 @@ defmodule LemonChannels.Adapters.Discord.Transport do
         {:error, msg} -> respond_ephemeral(interaction, msg)
       end
     end
-  rescue
-    _ -> respond_ephemeral(interaction, "File download failed.")
   end
 
   defp file_subcommand(interaction) do
@@ -1822,8 +1819,6 @@ defmodule LemonChannels.Adapters.Discord.Transport do
     end
 
     state
-  rescue
-    _ -> state
   end
 
   # ============================================================================
@@ -1853,8 +1848,6 @@ defmodule LemonChannels.Adapters.Discord.Transport do
           state
       end
     end
-  rescue
-    _ -> state
   end
 
   defp create_thread_or_forum_post(channel_id, name, initial_message)
@@ -1877,7 +1870,9 @@ defmodule LemonChannels.Adapters.Discord.Transport do
         })
     end
   rescue
-    _ -> {:error, :thread_creation_failed}
+    exception ->
+      Failure.log("discord thread creation", exception, __STACKTRACE__)
+      {:error, :thread_creation_failed}
   end
 
   # ============================================================================
@@ -1905,7 +1900,9 @@ defmodule LemonChannels.Adapters.Discord.Transport do
 
     state
   rescue
-    _ -> state
+    exception ->
+      Failure.log("discord thread create handling", exception, __STACKTRACE__)
+      state
   end
 
   # Model picker input from regular messages (text matching for DMs)
@@ -1935,8 +1932,6 @@ defmodule LemonChannels.Adapters.Discord.Transport do
       _ ->
         false
     end
-  rescue
-    _ -> false
   end
 
   defp resolve_trigger_mode(account_id, channel_id, nil) do
@@ -1968,8 +1963,6 @@ defmodule LemonChannels.Adapters.Discord.Transport do
       reply_to_bot?(inbound, state) -> true
       true -> false
     end
-  rescue
-    _ -> false
   end
 
   defp reply_to_bot?(%{meta: %{reply_to_author_id: author_id}}, %{bot_user_id: bot_id})
@@ -2020,7 +2013,9 @@ defmodule LemonChannels.Adapters.Discord.Transport do
 
     :ok
   rescue
-    _ -> :ok
+    exception ->
+      Failure.log("discord approval request rendering", exception, __STACKTRACE__)
+      {:error, exception}
   end
 
   defp maybe_send_approval_request(_state, _payload), do: :ok
@@ -2129,8 +2124,6 @@ defmodule LemonChannels.Adapters.Discord.Transport do
       thinking_usage()
     ]
     |> Enum.join("\n")
-  rescue
-    _ -> thinking_usage()
   end
 
   defp render_thinking_set(%ChatScope{topic_id: topic_id}, level) when is_integer(topic_id) do
@@ -2195,8 +2188,6 @@ defmodule LemonChannels.Adapters.Discord.Transport do
     else
       "No working directory configured for #{scope_label}.\nUsage: `/cwd [project_id|path|clear]`"
     end
-  rescue
-    _ -> "Usage: `/cwd [project_id|path|clear]`"
   end
 
   defp render_cwd_set(scope, root) do
@@ -2225,8 +2216,6 @@ defmodule LemonChannels.Adapters.Discord.Transport do
           _ -> "(not configured)"
         end
     end
-  rescue
-    _ -> "(not configured)"
   end
 
   defp format_model_line(model_value, model_scope)
@@ -2270,8 +2259,6 @@ defmodule LemonChannels.Adapters.Discord.Transport do
       end
 
     Enum.join(lines, "\n")
-  rescue
-    _ -> base_msg
   end
 
   # ============================================================================
@@ -2323,8 +2310,6 @@ defmodule LemonChannels.Adapters.Discord.Transport do
             {:error, "Unknown project: #{sel}"}
         end
     end
-  rescue
-    _ -> {:error, "Failed to select project."}
   end
 
   defp looks_like_path?(s) when is_binary(s) do
@@ -2337,15 +2322,11 @@ defmodule LemonChannels.Adapters.Discord.Transport do
       override when is_binary(override) and override != "" -> true
       _ -> false
     end
-  rescue
-    _ -> false
   end
 
   defp clear_cwd_override(%ChatScope{} = scope) do
     _ = ProjectBindingStore.delete_override(scope)
     :ok
-  rescue
-    _ -> :ok
   end
 
   defp extract_project_info({:ok, %{id: id, root: root}}), do: %{id: id, root: root}
@@ -2408,10 +2389,10 @@ defmodule LemonChannels.Adapters.Discord.Transport do
     record_slash_client_click_proof(interaction, payload, :completed)
     result
   rescue
-    error ->
+    exception ->
       record_slash_client_click_proof(interaction, payload, :failed)
-      Logger.warning("discord interaction response failed: #{inspect(error)}")
-      :ok
+      Failure.log("discord interaction response", exception, __STACKTRACE__)
+      {:error, exception}
   end
 
   defp record_slash_client_click_proof(interaction, payload, status) do
@@ -2475,8 +2456,11 @@ defmodule LemonChannels.Adapters.Discord.Transport do
       write_slash_client_click_proof(proof, now)
     end
   rescue
-    error ->
-      Logger.debug("discord slash client-click proof write failed: #{inspect(error)}")
+    exception ->
+      Failure.log("discord slash client-click proof write", exception, __STACKTRACE__,
+        level: :debug
+      )
+
       :ok
   end
 
@@ -2548,7 +2532,9 @@ defmodule LemonChannels.Adapters.Discord.Transport do
       })
     end
   rescue
-    _ -> :ok
+    exception ->
+      Failure.log("discord follow-up send", exception, __STACKTRACE__)
+      {:error, exception}
   end
 
   defp send_channel_message(channel_id, text) when is_integer(channel_id) and is_binary(text) do
@@ -2557,7 +2543,9 @@ defmodule LemonChannels.Adapters.Discord.Transport do
       allowed_mentions: safe_allowed_mentions()
     })
   rescue
-    _ -> :ok
+    exception ->
+      Failure.log("discord channel message send", exception, __STACKTRACE__)
+      {:error, exception}
   end
 
   defp safe_allowed_mentions, do: %{parse: [], replied_user: false}
@@ -2760,12 +2748,6 @@ defmodule LemonChannels.Adapters.Discord.Transport do
     end
   end
 
-  defp safe_delete_chat_state(key) do
-    ChatStateStore.delete(key)
-  rescue
-    _ -> :ok
-  end
-
   defp maybe_subscribe_to_session(session_key) when is_binary(session_key) do
     if Code.ensure_loaded?(LemonCore.Bus) and function_exported?(LemonCore.Bus, :subscribe, 1) do
       topic = LemonCore.Bus.session_topic(session_key)
@@ -2774,13 +2756,12 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   end
 
   defp maybe_subscribe_exec_approvals do
-    if Code.ensure_loaded?(LemonCore.Bus) and function_exported?(LemonCore.Bus, :subscribe, 1) do
-      _ = LemonCore.Bus.subscribe("exec_approvals")
-    end
-
+    _ = LemonCore.Bus.subscribe("exec_approvals")
     :ok
   rescue
-    _ -> :ok
+    exception ->
+      Failure.log("discord exec approvals subscription", exception, __STACKTRACE__, level: :error)
+      :ok
   end
 
   defp run_completed_ok?(event) do
@@ -2841,7 +2822,9 @@ defmodule LemonChannels.Adapters.Discord.Transport do
 
     :ok
   rescue
-    _ -> :ok
+    exception ->
+      Failure.log("discord known target indexing", exception, __STACKTRACE__)
+      :ok
   end
 
   defp coalesce_text(value, _existing, _key) when is_binary(value) and value != "", do: value
@@ -2902,8 +2885,6 @@ defmodule LemonChannels.Adapters.Discord.Transport do
     else
       true
     end
-  rescue
-    _ -> false
   end
 
   # ============================================================================
@@ -2916,7 +2897,14 @@ defmodule LemonChannels.Adapters.Discord.Transport do
         try do
           ApplicationCommand.create_global_command(cmd)
         rescue
-          _ -> :ok
+          exception ->
+            Failure.log(
+              "discord slash command registration name=#{inspect(cmd[:name])}",
+              exception,
+              __STACKTRACE__
+            )
+
+            {:error, exception}
         end
     end
 

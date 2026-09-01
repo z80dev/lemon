@@ -55,6 +55,7 @@ defmodule LemonCore.Quality.RatchetCheckTest do
              dynamic_module_atoms: 1,
              reflection_sites: 2,
              rescue_clauses: 1,
+             silent_rescues: 1,
              catch_clauses: 0,
              generic_store_tables: 3,
              store_wrapper_modules: 1,
@@ -87,7 +88,8 @@ defmodule LemonCore.Quality.RatchetCheckTest do
   test "metrics missing from the file are reported", %{root: root} do
     File.write!(Path.join(root, RatchetCheck.baseline_file()), "%{lib_lines: 17}\n")
 
-    assert {:error, %{issue_count: 11, issues: issues}} = RatchetCheck.run(root: root)
+    missing = length(RatchetCheck.metrics()) - 1
+    assert {:error, %{issue_count: ^missing, issues: issues}} = RatchetCheck.run(root: root)
     assert Enum.all?(issues, &(&1.code == :missing_ratchet))
     assert Enum.any?(issues, &(&1.message =~ "test_sleeps has no ratchet"))
   end

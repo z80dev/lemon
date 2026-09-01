@@ -8,6 +8,20 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
+### Changed
+
+- Failure handling has a written policy (`docs/platform/failure-handling.md`):
+  code may catch an exception only where the failure stays observable, the
+  caller gets an accurate outcome and the state stays valid. `LemonCore.Failure`
+  logs a caught exception with its stacktrace and `crash_reason` metadata,
+  and `mix lemon.quality` ratchets `silent_rescues`, the `rescue` clauses
+  that discard the exception. The Discord and Telegram transports and the
+  router's run path (`SurfaceManager`, `RunProcess`, `CompactionTrigger`) were
+  reworked to it: 92 silent rescues became reported boundaries or were
+  removed where a boundary above already reports, and eleven
+  `Code.ensure_loaded?`/`function_exported?` guards around compile-time
+  dependencies went with them.
+
 ### Fixed
 
 - Channel run controls no longer pretend. Cancel, keep-alive and busy checks

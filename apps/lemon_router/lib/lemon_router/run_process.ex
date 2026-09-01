@@ -27,7 +27,7 @@ defmodule LemonRouter.RunProcess do
 
   require Logger
 
-  alias LemonCore.{Bus, Events, ExecutionCommand, Introspection}
+  alias LemonCore.{Bus, Events, ExecutionCommand, Failure, Introspection}
   alias LemonRouter.MediaJobRecorder
   alias LemonRouter.SurfaceManager
   alias LemonRouter.SyntheticCompletion
@@ -456,7 +456,9 @@ defmodule LemonRouter.RunProcess do
       end
     end
   rescue
-    _ -> {:noreply, state}
+    exception ->
+      report_failure("watchdog timeout handling", state, exception, __STACKTRACE__)
+      {:noreply, state}
   end
 
   def handle_info(:run_watchdog_confirmation_timeout, state) do
@@ -468,7 +470,9 @@ defmodule LemonRouter.RunProcess do
       {:noreply, Watchdog.fail_run_for_idle_timeout(state)}
     end
   rescue
-    _ -> {:noreply, state}
+    exception ->
+      report_failure("watchdog confirmation timeout handling", state, exception, __STACKTRACE__)
+      {:noreply, state}
   end
 
   # If the gateway run process dies without emitting a completion event, synthesize a failure
@@ -496,7 +500,9 @@ defmodule LemonRouter.RunProcess do
       {:noreply, state}
     end
   rescue
-    _ -> {:noreply, state}
+    exception ->
+      report_failure("gateway run down handling", state, exception, __STACKTRACE__)
+      {:noreply, state}
   end
 
   def handle_info({:finalize_aborted_run, reason}, state) do
@@ -518,7 +524,9 @@ defmodule LemonRouter.RunProcess do
         {:noreply, state}
     end
   rescue
-    _ -> {:noreply, state}
+    exception ->
+      report_failure("aborted run finalization", state, exception, __STACKTRACE__)
+      {:noreply, state}
   end
 
   def handle_info(:ensure_gateway_bound, state) do
@@ -547,7 +555,9 @@ defmodule LemonRouter.RunProcess do
         {:noreply, state}
     end
   rescue
-    _ -> {:noreply, state}
+    exception ->
+      report_failure("gateway binding check", state, exception, __STACKTRACE__)
+      {:noreply, state}
   end
 
   def handle_info(:finalize_missing_gateway_after_start, state) do
@@ -576,7 +586,9 @@ defmodule LemonRouter.RunProcess do
         {:noreply, state}
     end
   rescue
-    _ -> {:noreply, state}
+    exception ->
+      report_failure("missing gateway finalization", state, exception, __STACKTRACE__)
+      {:noreply, state}
   end
 
   def handle_info(_msg, state) do
@@ -673,12 +685,9 @@ defmodule LemonRouter.RunProcess do
         )
       )
 
-      # Best-effort abort of the gateway run on abnormal termination
-      try do
-        cancel_runtime_run(state.engine_runtime, state.run_id, :run_process_terminated)
-      rescue
-        _ -> :ok
-      end
+      # Best-effort abort of the gateway run on abnormal termination;
+      # cancel_runtime_run/3 reports a raising runtime itself.
+      _ = cancel_runtime_run(state.engine_runtime, state.run_id, :run_process_terminated)
     end
 
     # Flush any pending coalescer output
@@ -717,11 +726,7 @@ defmodule LemonRouter.RunProcess do
         provenance: :direct
       )
 
-      Logger.warning(
-        "RunProcess artifact finalize_meta failed run_id=#{inspect(state.run_id)} " <>
-          "session_key=#{inspect(state.session_key)} error=#{Exception.message(error)}"
-      )
-
+      report_failure("artifact finalize_meta", state, error, __STACKTRACE__, :warning)
       %{}
   end
 
@@ -773,30 +778,29 @@ defmodule LemonRouter.RunProcess do
         provenance: :direct
       )
 
+      report_failure("media job recording", state, error, __STACKTRACE__, :warning)
       %{recorded_count: 0, skipped_count: 0, failed_count: 1}
   end
 
-  defp maybe_monitor_gateway_run(%{gateway_run_ref: ref} = state) when not is_nil(ref), do: state
-
   defp maybe_monitor_gateway_run(state) do
-    with true <- Code.ensure_loaded?(Registry),
-         pid when is_pid(pid) <- runtime_run_pid(state.engine_runtime, state.run_id) do
-      %{state | gateway_run_pid: pid, gateway_run_ref: Process.monitor(pid)}
-    else
-      _ -> state
+    case runtime_run_pid(state.engine_runtime, state.run_id) do
+      pid when is_pid(pid) ->
+        %{state | gateway_run_pid: pid, gateway_run_ref: Process.monitor(pid)}
+
+      _ ->
+        state
     end
-  rescue
-    _ -> state
   end
 
   defp maybe_demonitor_gateway_run(%{gateway_run_ref: nil} = state), do: state
 
-  defp maybe_demonitor_gateway_run(%{gateway_run_ref: ref} = state) do
+  defp maybe_demonitor_gateway_run(%{gateway_run_ref: ref} = state) when is_reference(ref) do
     Process.demonitor(ref, [:flush])
     %{state | gateway_run_ref: nil, gateway_run_pid: nil}
-  rescue
-    _ -> %{state | gateway_run_ref: nil, gateway_run_pid: nil}
   end
+
+  defp maybe_demonitor_gateway_run(state),
+    do: %{state | gateway_run_ref: nil, gateway_run_pid: nil}
 
   defp gateway_down_grace_ms(:normal), do: 200
   defp gateway_down_grace_ms(:shutdown), do: 200
@@ -1014,5 +1018,17 @@ defmodule LemonRouter.RunProcess do
     state
     |> cancel_gateway_submit_deadline()
     |> Map.put(:gateway_submit_terminalized?, true)
+  end
+
+  # Timer, monitor and completion handlers are boundaries: a raise in one
+  # would take the run down mid-flight, so it is reported with the run it
+  # belongs to and the run carries on.
+  defp report_failure(what, state, exception, stacktrace, level \\ :error) do
+    Failure.log(
+      "RunProcess #{what} run_id=#{inspect(state.run_id)} session_key=#{inspect(state.session_key)}",
+      exception,
+      stacktrace,
+      level: level
+    )
   end
 end

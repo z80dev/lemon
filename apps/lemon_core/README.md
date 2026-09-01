@@ -216,6 +216,7 @@ it only through the `LemonCore.Store` finalize-run hook the runtime configures.
 | `LemonCore` | Root module with module list |
 | `LemonCore.Id` | UUID and unique ID generation |
 | `LemonCore.Clock` | Time utilities (monotonic timestamps) |
+| `LemonCore.Failure` | Reports a caught exception, exit or throw with its stacktrace (`docs/platform/failure-handling.md`) |
 | `LemonCore.Httpc` | `:httpc` wrapper ensuring `:inets`/`:ssl` started |
 | `LemonCore.MapHelpers` | Map key access helpers (atom/string agnostic) |
 | `LemonCore.Telemetry` | Telemetry event helpers and named event emitters |

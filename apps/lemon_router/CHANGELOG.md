@@ -26,6 +26,14 @@ internals other applications reached into.
 
 ### Changed
 
+- `LemonRouter.SurfaceManager`, `LemonRouter.RunProcess` and
+  `LemonRouter.RunProcess.CompactionTrigger` follow `docs/platform/failure-handling.md`:
+  the surface functions answer `{:error, exception}` and log at error, with
+  the run and session key, when the delivery side raises; the run process's
+  timer and monitor handlers report a raise instead of swallowing it; pure
+  helpers no longer rescue; and the reflection guards around `Registry`
+  and `LemonAi.Models` are gone.
+
 - `LemonRouter.SyntheticCompletion` is the one place the router ends a run
   whose engine will never report a result (submission deadline, start
   failure, watchdog, aborted before binding, engine process gone); every

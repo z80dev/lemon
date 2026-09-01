@@ -11,8 +11,9 @@ defmodule LemonCore.Quality.RatchetCheck do
   The metrics are the ones named in the September 2026 architecture review
   (`docs/architecture/review-2026-09.md`). They count the mechanisms that let
   the umbrella grow past its own boundaries (dynamic module atoms, runtime
-  reflection, blanket `rescue`, generic store tables, wrapper modules) and the
-  habits that keep the suite slow (`Process.sleep`, synchronous test files).
+  reflection, blanket and silent `rescue`, generic store tables, wrapper
+  modules) and the habits that keep the suite slow (`Process.sleep`,
+  synchronous test files).
 
   Counts are pattern counts over `apps/*/lib/**/*.ex` and
   `apps/*/test/**/*.exs`, excluding this directory. They include the occasional
@@ -31,6 +32,7 @@ defmodule LemonCore.Quality.RatchetCheck do
   @dynamic_atom ~r/:"Elixir\./
   @reflection ~r/\b(?:Code\.ensure_loaded\??|function_exported\?)\(/
   @rescue_clause ~r/^[ \t]*rescue\b/m
+  @silent_rescue ~r/^[ \t]*rescue[ \t]*\n[ \t]*_[A-Za-z0-9_]*[ \t]*->/m
   @catch_clause ~r/^[ \t]*catch\b/m
   @sleep ~r/(?:Process|:timer)\.sleep\(/
   @async_marker ~r/async:\s*true/
@@ -45,6 +47,7 @@ defmodule LemonCore.Quality.RatchetCheck do
     {:dynamic_module_atoms, ~s(:"Elixir.Some.Module" atoms in lib)},
     {:reflection_sites, "Code.ensure_loaded?/1 and function_exported?/3 calls in lib"},
     {:rescue_clauses, "rescue clauses in lib"},
+    {:silent_rescues, "rescue clauses whose first clause discards the exception"},
     {:catch_clauses, "catch clauses in lib"},
     {:generic_store_tables,
      "distinct tables named in generic LemonCore.Store calls outside Store.Table modules"},
@@ -119,6 +122,7 @@ defmodule LemonCore.Quality.RatchetCheck do
       dynamic_module_atoms: count(lib, @dynamic_atom),
       reflection_sites: count(lib, @reflection),
       rescue_clauses: count(lib, @rescue_clause),
+      silent_rescues: count(lib, @silent_rescue),
       catch_clauses: count(lib, @catch_clause),
       generic_store_tables: generic_store_tables(root, lib),
       store_wrapper_modules:

@@ -92,3 +92,8 @@ other, gathered from their contracts and the code that keeps them:
 - `LemonCore.Quality.ArchitectureRulesCheck` keeps the composition in
   `config/config.exs`: a lower app never names a higher app's module in
   code.
+- [Failure Handling](failure-handling.md) is the policy for every other
+  `rescue`: a caught failure is logged with its stacktrace through
+  `LemonCore.Failure`, the caller gets an accurate outcome, and the
+  `silent_rescues` ratchet counts the clauses that still discard the
+  exception.

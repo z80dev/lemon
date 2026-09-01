@@ -5,15 +5,17 @@
 # in the commit message.
 %{
   # lines in apps/*/lib/**/*.ex
-  lib_lines: 337815,
+  lib_lines: 337890,
   # lib files over 1000 lines, excluding the lemon_ai model catalogs
   large_lib_files: 50,
   # :"Elixir.Some.Module" atoms in lib
   dynamic_module_atoms: 1,
   # Code.ensure_loaded?/1 and function_exported?/3 calls in lib
-  reflection_sites: 295,
+  reflection_sites: 284,
   # rescue clauses in lib
-  rescue_clauses: 1130,
+  rescue_clauses: 1079,
+  # rescue clauses whose first clause discards the exception
+  silent_rescues: 628,
   # catch clauses in lib
   catch_clauses: 381,
   # distinct tables named in generic LemonCore.Store calls outside Store.Table modules
