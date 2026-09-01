@@ -240,6 +240,14 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Changed
 
+- Run ownership is written down (`docs/platform/run-ownership.md`): the
+  router owns the logical run, the execution runtime owns an attempt, the
+  agent owns the session, and each transition has one owner. The overlap
+  the code demonstrated is gone: the router's dead `RunSupervisor` module,
+  six copies of the fabricated failure completion (now
+  `LemonRouter.SyntheticCompletion` over `LemonCore.Events.RunCompleted.failure/2`),
+  the gateway's unpublished duplicate of the phase graph, and a delta
+  encoded twice on its way to the bus.
 - Storage ownership. `LemonCore.Store` no longer implements chat state, run
   records, progress mappings, policies or introspection events; the modules
   that own those tables do, and declare them with `LemonCore.Store.Table` so

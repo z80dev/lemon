@@ -91,7 +91,7 @@ never merely because a live owner is older than the configured observation thres
 | `lib/lemon_gateway/thread_worker.ex` | `ThreadWorker` | Per-conversation slot waiter and launcher |
 | `lib/lemon_gateway/run.ex` | `Run` | Executor lifecycle, bus events, steering, cancellation, and locks |
 | `lib/lemon_gateway/engine_lock.ex` | `EngineLock` | Per-session mutex with FIFO wait queue, owner-death release, and over-age live-owner telemetry |
-| `lib/lemon_gateway/event.ex` | `Event`, `Event.Delta` | Lifecycle-event constructors and streamed delta struct |
+| `lib/lemon_gateway/event.ex` | `Event` | Executor-sink lifecycle event constructors |
 
 ### Configuration and ingress
 

@@ -21,7 +21,9 @@ defmodule LemonRouter.SessionCoordinator do
 
   require Logger
 
-  alias LemonCore.{Bus, Events, MapHelpers}
+  alias LemonCore.MapHelpers
+
+  alias LemonRouter.SyntheticCompletion
 
   alias LemonRouter.{
     PhasePublisher,
@@ -546,27 +548,13 @@ defmodule LemonRouter.SessionCoordinator do
   defp emit_start_failure(%Submission{} = submission, reason) do
     safe_reason = start_failure_reason(reason)
 
-    event =
-      LemonCore.Event.new(
-        :run_completed,
-        Events.RunCompleted.new(%{
-          completed:
-            Events.Completion.new(%{
-              ok: false,
-              error: %{type: :run_start_failed, reason: safe_reason},
-              answer: ""
-            }),
-          duration_ms: 0
-        }),
-        %{
-          run_id: submission.run_id,
-          session_key: submission.session_key,
-          synthetic: true,
-          failure_stage: :run_start
-        }
-      )
-
-    Bus.broadcast(Bus.run_topic(submission.run_id), event)
+    SyntheticCompletion.broadcast(
+      submission.run_id,
+      submission.session_key,
+      %{type: :run_start_failed, reason: safe_reason},
+      duration_ms: 0,
+      failure_stage: :run_start
+    )
   rescue
     error ->
       Logger.error(

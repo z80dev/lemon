@@ -379,7 +379,13 @@ defmodule LemonGateway.ThreadWorker do
         Bus.run_topic(request.run_id),
         LemonCore.Event.new(
           :run_completed,
-          Events.RunCompleted.new(%{completed: completed, duration_ms: 0}),
+          Events.RunCompleted.failure(completed.error,
+            duration_ms: 0,
+            engine: completed.engine,
+            run_id: request.run_id,
+            session_key: request.session_key,
+            meta: completed.meta
+          ),
           %{
             run_id: request.run_id,
             session_key: request.session_key,

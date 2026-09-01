@@ -20,6 +20,34 @@ defmodule LemonCore.Events.RunCompleted do
         }
 
   @doc """
+  The terminal event for a run that ended without a result from its engine.
+
+  `error` says why; the completion carries `ok: false` and an empty answer.
+  Options: `:duration_ms`, and the `:engine`, `:run_id`, `:session_key` and
+  `:meta` recorded on the completion. Every synthetic completion in the
+  platform is built here, so subscribers see one shape whether the run was
+  never submitted, never started, timed out, was aborted, or lost its engine
+  process; the publisher marks the event's meta with `synthetic: true` and a
+  `failure_stage` where it knows one.
+  """
+  @spec failure(term(), keyword()) :: t()
+  def failure(error, opts \\ []) when is_list(opts) do
+    %__MODULE__{
+      completed:
+        Completion.new(%{
+          ok: false,
+          error: error,
+          answer: "",
+          engine: Keyword.get(opts, :engine),
+          run_id: Keyword.get(opts, :run_id),
+          session_key: Keyword.get(opts, :session_key),
+          meta: Keyword.get(opts, :meta, %{})
+        }),
+      duration_ms: Keyword.get(opts, :duration_ms)
+    }
+  end
+
+  @doc """
   Build from a legacy map, coercing the nested completion too.
   """
   @spec from_map(map() | struct() | keyword()) :: t()

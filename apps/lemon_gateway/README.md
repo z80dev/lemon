@@ -256,7 +256,7 @@ in-process subagents.
 ### Streaming
 
 - The native executor sends `{:engine_delta, run_ref, text}` messages for incremental text output.
-- The Run process assigns monotonic sequence numbers, builds `Event.Delta` structs, and broadcasts them to `LemonCore.Bus`.
+- The Run process assigns monotonic sequence numbers, builds `LemonCore.Events.Delta` payloads, and broadcasts them to `LemonCore.Bus`.
 - First-token latency telemetry is emitted on the first delta.
 
 ### Completion

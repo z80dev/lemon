@@ -30,6 +30,7 @@ defmodule LemonRouter.RunProcess do
   alias LemonCore.{Bus, Events, ExecutionCommand, Introspection}
   alias LemonRouter.MediaJobRecorder
   alias LemonRouter.SurfaceManager
+  alias LemonRouter.SyntheticCompletion
   alias LemonRouter.RunProcess.{ArtifactTracker, CompactionTrigger, RetryHandler, Watchdog}
 
   @gateway_submit_retry_base_ms 100
@@ -491,26 +492,7 @@ defmodule LemonRouter.RunProcess do
           "session_key=#{inspect(state.session_key)} reason=#{inspect(reason)}"
       )
 
-      event =
-        LemonCore.Event.new(
-          :run_completed,
-          Events.RunCompleted.new(%{
-            completed:
-              Events.Completion.new(%{
-                ok: false,
-                error: {:gateway_run_down, reason},
-                answer: ""
-              }),
-            duration_ms: nil
-          }),
-          %{
-            run_id: state.run_id,
-            session_key: state.session_key,
-            synthetic: true
-          }
-        )
-
-      Bus.broadcast(Bus.run_topic(state.run_id), event)
+      SyntheticCompletion.broadcast(state.run_id, state.session_key, {:gateway_run_down, reason})
       {:noreply, state}
     end
   rescue
@@ -532,26 +514,7 @@ defmodule LemonRouter.RunProcess do
             "session_key=#{inspect(state.session_key)} reason=#{inspect(reason)}"
         )
 
-        event =
-          LemonCore.Event.new(
-            :run_completed,
-            Events.RunCompleted.new(%{
-              completed:
-                Events.Completion.new(%{
-                  ok: false,
-                  error: reason,
-                  answer: ""
-                }),
-              duration_ms: nil
-            }),
-            %{
-              run_id: state.run_id,
-              session_key: state.session_key,
-              synthetic: true
-            }
-          )
-
-        Bus.broadcast(Bus.run_topic(state.run_id), event)
+        SyntheticCompletion.broadcast(state.run_id, state.session_key, reason)
         {:noreply, state}
     end
   rescue
@@ -604,26 +567,12 @@ defmodule LemonRouter.RunProcess do
             "run_id=#{inspect(state.run_id)} session_key=#{inspect(state.session_key)}"
         )
 
-        event =
-          LemonCore.Event.new(
-            :run_completed,
-            Events.RunCompleted.new(%{
-              completed:
-                Events.Completion.new(%{
-                  ok: false,
-                  error: :gateway_run_missing_after_start,
-                  answer: ""
-                }),
-              duration_ms: nil
-            }),
-            %{
-              run_id: state.run_id,
-              session_key: state.session_key,
-              synthetic: true
-            }
-          )
+        SyntheticCompletion.broadcast(
+          state.run_id,
+          state.session_key,
+          :gateway_run_missing_after_start
+        )
 
-        Bus.broadcast(Bus.run_topic(state.run_id), event)
         {:noreply, state}
     end
   rescue
@@ -1057,27 +1006,10 @@ defmodule LemonRouter.RunProcess do
       deadline_ms: state.gateway_submit_deadline_ms
     }
 
-    event =
-      LemonCore.Event.new(
-        :run_completed,
-        Events.RunCompleted.new(%{
-          completed:
-            Events.Completion.new(%{
-              ok: false,
-              error: error,
-              answer: ""
-            }),
-          duration_ms: LemonCore.Clock.now_ms() - state.start_ts_ms
-        }),
-        %{
-          run_id: state.run_id,
-          session_key: state.session_key,
-          synthetic: true,
-          failure_stage: :runtime_submission
-        }
-      )
-
-    Bus.broadcast(Bus.run_topic(state.run_id), event)
+    SyntheticCompletion.broadcast(state.run_id, state.session_key, error,
+      duration_ms: LemonCore.Clock.now_ms() - state.start_ts_ms,
+      failure_stage: :runtime_submission
+    )
 
     state
     |> cancel_gateway_submit_deadline()

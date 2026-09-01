@@ -24,6 +24,9 @@ Telegram, run history, durable memory, kanban boards, or `~/.lemon`.
 
 ### Added
 
+- `LemonCore.Events.RunCompleted.failure/2`: the terminal event for a run
+  that ended without a result from its engine, used by every publisher of a
+  synthetic completion so subscribers see one shape.
 - `LemonCore.Store.Table`: a domain module declares the tables it owns
   (`use LemonCore.Store.Table, tables: [...]`) with a read-cache mirror, a
   retention policy and a persistence hint, and registers them with the store

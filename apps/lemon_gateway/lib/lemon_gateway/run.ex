@@ -29,12 +29,7 @@ defmodule LemonGateway.Run do
   require Logger
   import LemonGateway.Event, only: [is_started: 1, is_action_event: 1, is_completed: 1]
 
-  alias LemonCore.{
-    ProgressStore,
-    RunPhase,
-    RunPhaseGraph,
-    RunStore
-  }
+  alias LemonCore.{ProgressStore, RunStore}
 
   alias LemonCore.Events
   alias LemonGateway.{Cwd, Event, ExecutionRequest, Executor}
@@ -108,7 +103,6 @@ defmodule LemonGateway.Run do
       completed: false,
       lock_release_fn: lock_release_fn,
       last_resume: request.resume,
-      current_phase: nil,
       cancelled: false,
       delta_seq: 0,
       start_ts_ms: System.system_time(:millisecond),
@@ -212,7 +206,6 @@ defmodule LemonGateway.Run do
   end
 
   def handle_continue({:start_run, {:ok, executor}}, state) do
-    state = maybe_track_phase(state, :dispatched_to_gateway)
     request = state.execution_request
 
     Logger.debug(
@@ -220,7 +213,6 @@ defmodule LemonGateway.Run do
         "resume=#{inspect(request.resume)} cwd=#{inspect(request.cwd)}"
     )
 
-    state = maybe_track_phase(state, :starting_engine)
     renderer_state = state.renderer.init(%{engine: @engine_provenance})
 
     cwd =
@@ -346,12 +338,6 @@ defmodule LemonGateway.Run do
   def handle_info({:engine_event, run_ref, event}, %{run_ref: run_ref} = state) do
     RunStore.append_event(state.run_id, event)
 
-    state =
-      cond do
-        is_action_event(event) -> maybe_track_phase(state, :streaming)
-        true -> state
-      end
-
     cond do
       is_started(event) ->
         Logger.debug(
@@ -404,7 +390,6 @@ defmodule LemonGateway.Run do
   # Handle delta events from engine (for streaming)
   def handle_info({:engine_delta, run_ref, text}, %{run_ref: run_ref} = state)
       when is_binary(text) do
-    state = maybe_track_phase(state, :streaming)
     new_seq = state.delta_seq + 1
 
     # Emit first_token telemetry on first delta
@@ -426,19 +411,17 @@ defmodule LemonGateway.Run do
         state
       end
 
-    delta = Event.Delta.new(state.run_id, new_seq, text, %{session_key: state.session_key})
-
-    # Emit delta to bus (subscribers like StreamCoalescer will handle channel delivery)
-    # Bus payloads must be plain maps; do not leak LemonGateway.Event structs.
+    # Subscribers such as the router's StreamCoalescer take deltas from the bus;
+    # `seq` is monotonic per run so they can drop duplicates and reorder safely.
     emit_to_bus(
       state.run_id,
       :delta,
       Events.Delta.new(%{
-        run_id: delta.run_id,
-        ts_ms: delta.ts_ms,
-        seq: delta.seq,
-        text: delta.text,
-        meta: delta.meta || %{}
+        run_id: state.run_id,
+        ts_ms: System.system_time(:millisecond),
+        seq: new_seq,
+        text: text,
+        meta: %{session_key: state.session_key}
       }),
       build_event_meta(state)
     )
@@ -593,13 +576,6 @@ defmodule LemonGateway.Run do
 
   defp finalize(state, %{__event__: :completed} = completed) do
     state = %{state | completed: true}
-    terminal_phase = terminal_phase_for_completion(state, completed)
-
-    state =
-      case terminal_phase do
-        :completed -> maybe_track_phase(state, :finalizing)
-        _ -> state
-      end
 
     # Release engine lock first (if acquired)
     if is_function(state.lock_release_fn) do
@@ -680,7 +656,6 @@ defmodule LemonGateway.Run do
       unregister_progress_mapping(state.execution_request)
     end
 
-    maybe_track_phase(state, terminal_phase)
     :ok
   end
 
@@ -748,60 +723,6 @@ defmodule LemonGateway.Run do
     meta = Map.merge(%{run_id: run_id}, extra_meta)
     event = DependencyManager.build_event(event_type, payload, meta)
     DependencyManager.broadcast(topic, event)
-  end
-
-  # Tracks the run's phase and validates each transition, but does not publish it.
-  # `:run_phase_changed` has a single publisher — `LemonRouter.PhasePublisher` — because the
-  # router owns the phase graph. The gateway published the same transitions until Phase 3.1,
-  # which meant two events per transition with different `source` values. The local tracking
-  # stays: it is what makes an out-of-order phase visible in the gateway's own logs.
-  defp maybe_track_phase(%{run_id: run_id} = state, phase) when is_binary(run_id) do
-    previous_phase = Map.get(state, :current_phase)
-
-    cond do
-      previous_phase == phase ->
-        state
-
-      not RunPhase.valid?(phase) ->
-        Logger.warning(
-          "Gateway run phase skipped run_id=#{inspect(run_id)} invalid_phase=#{inspect(phase)}"
-        )
-
-        state
-
-      is_nil(previous_phase) ->
-        %{state | current_phase: phase}
-
-      true ->
-        case RunPhaseGraph.transition(previous_phase, phase) do
-          :ok ->
-            %{state | current_phase: phase}
-
-          {:error, {:invalid_transition, _, _}} ->
-            Logger.warning(
-              "Gateway run phase skipped run_id=#{inspect(run_id)} previous_phase=#{inspect(previous_phase)} phase=#{inspect(phase)}"
-            )
-
-            state
-        end
-    end
-  end
-
-  defp maybe_track_phase(state, _phase), do: state
-
-  defp terminal_phase_for_completion(%{cancelled: true}, _completed), do: :aborted
-
-  defp terminal_phase_for_completion(_state, %{__event__: :completed} = completed) do
-    cond do
-      Map.get(completed, :ok) == true ->
-        :completed
-
-      Map.get(completed, :error) in [:user_requested, :interrupted, :new_session, :aborted] ->
-        :aborted
-
-      true ->
-        :failed
-    end
   end
 
   # Helper to build standard meta from state

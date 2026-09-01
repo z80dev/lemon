@@ -65,6 +65,7 @@ failures.
 | [architecture/review-2026-09.md](architecture/review-2026-09.md) | September 2026 architecture review: findings with evidence, a phased plan, and quality ratchets |
 | [platform/reliability-contracts.md](platform/reliability-contracts.md) | What each seam between apps promises when something goes wrong, and how the promise is enforced |
 | [platform/owned-storage.md](platform/owned-storage.md) | How persistent state is split between the modules that own it and the store that keeps it |
+| [platform/run-ownership.md](platform/run-ownership.md) | Who owns each transition of a run across the router, the execution runtime and the agent, and the public run-event contract |
 | [beam_agents.md](beam_agents.md) | BEAM/OTP architecture: process-per-agent, supervision, message passing |
 | [model-selection-decoupling.md](model-selection-decoupling.md) | Model selection design: provider abstraction, routing, fallback |
 

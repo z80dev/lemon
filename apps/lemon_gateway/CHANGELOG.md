@@ -20,6 +20,11 @@ scheduler and lifecycle owner rather than a selectable engine host.
 
 ### Changed
 
+- `LemonGateway.Run` no longer tracks run phases against the phase graph;
+  the router publishes phases and owns the graph. A streaming delta is
+  built once as `LemonCore.Events.Delta` (the `LemonGateway.Event.Delta`
+  struct is gone), and the worker's start-failure completion uses
+  `LemonCore.Events.RunCompleted.failure/2`. See `docs/platform/run-ownership.md`.
 - `LemonGateway.Run` invokes the configured executor directly while retaining
   scheduling, launch locks, cancellation, persistence, telemetry, normalized
   events, and exactly-once terminalization.

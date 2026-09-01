@@ -26,6 +26,13 @@ internals other applications reached into.
 
 ### Changed
 
+- `LemonRouter.SyntheticCompletion` is the one place the router ends a run
+  whose engine will never report a result (submission deadline, start
+  failure, watchdog, aborted before binding, engine process gone); every
+  such event is a `LemonCore.Events.RunCompleted.failure/2` marked
+  `synthetic: true`. The dead `LemonRouter.RunSupervisor` module is removed;
+  the dynamic supervisor of that name that the application starts is
+  unchanged. See `docs/platform/run-ownership.md`.
 - The router is the single writer of chat state (`LemonCore.ChatState`). The
   gateway's writes were redundant — the overflow delete was already duplicated
   by the router on the same event, and the completion event carries the resume

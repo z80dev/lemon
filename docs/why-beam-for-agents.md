@@ -56,18 +56,21 @@ Three properties follow, and they are the actual reason this matters:
   result does not stall the other 499. There is no `await` I can forget to write.
 - *A heap per process.* A conversation carrying a 200k-token history garbage-collects on
   its own heap. Nothing stops the world.
-- *Admission control instead of degradation.* `RunSupervisor` caps concurrent runs
-  ([`run_supervisor.ex:15`](../apps/lemon_router/lib/lemon_router/run_supervisor.ex),
-  default 500) and returns `{:error, :max_children}` at the limit rather than accepting
-  work it will serve badly.
+- *Admission control instead of degradation.* `LemonRouter.RunSupervisor`, the dynamic
+  supervisor the application starts, caps concurrent runs
+  ([`application.ex:29`](../apps/lemon_router/lib/lemon_router/application.ex), default
+  500), and `RunStarter` turns its `{:error, :max_children}` into
+  `{:error, :run_capacity_reached}`
+  ([`run_starter.ex:36`](../apps/lemon_router/lib/lemon_router/run_starter.ex)) rather
+  than accepting work it will serve badly.
 
 ### Supervision is a retry policy you can read
 
 The interesting question is never "restart on crash." It is *what* to restart, and the
 BEAM makes you answer it in one visible line.
 
-Run processes are started `restart: :temporary`
-([`run_supervisor.ex:54`](../apps/lemon_router/lib/lemon_router/run_supervisor.ex)). A
+Run processes declare `restart: :temporary` in their child spec
+([`run_process.ex:54`](../apps/lemon_router/lib/lemon_router/run_process.ex)). A
 crashed run is deliberately *not* restarted, because replaying an LLM turn replays its
 tool calls, and those wrote files and sent messages. The supervisor still receives the
 exit, the Registry entry still disappears, monitors still fire — I get the cleanup without

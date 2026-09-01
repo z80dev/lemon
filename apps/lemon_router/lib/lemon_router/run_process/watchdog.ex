@@ -218,25 +218,9 @@ defmodule LemonRouter.RunProcess.Watchdog do
       _ -> :ok
     end
 
-    event =
-      LemonCore.Event.new(
-        :run_completed,
-        LemonCore.Events.RunCompleted.new(%{
-          completed: LemonCore.Events.Completion.new(%{
-            ok: false,
-            error: error,
-            answer: ""
-          }),
-          duration_ms: duration_ms
-        }),
-        %{
-          run_id: state.run_id,
-          session_key: state.session_key,
-          synthetic: true
-        }
-      )
-
-    LemonCore.Bus.broadcast(LemonCore.Bus.run_topic(state.run_id), event)
+    LemonRouter.SyntheticCompletion.broadcast(state.run_id, state.session_key, error,
+      duration_ms: duration_ms
+    )
   end
 
   defp put_in_watchdog_confirmation(state, ref) do
