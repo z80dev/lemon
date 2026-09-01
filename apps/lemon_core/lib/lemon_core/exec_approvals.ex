@@ -44,12 +44,19 @@ defmodule LemonCore.ExecApprovals do
   - `:action` - Action details map
   - `:rationale` - Optional rationale for the request
   - `:expires_in_ms` - Timeout in milliseconds (default: no timeout)
+  - `:approval_id` - Optional caller-allocated approval id. Callers that may
+  have to cancel the prompt before it resolves (execute_code dispatches,
+  which can be killed while waiting) allocate the id up front so they can
+  name it to `cancel/2` with no registration race.
 
   ## Returns
-
   - `{:ok, :approved, scope}` - Approved at the given scope
   - `{:ok, :denied}` - Denied
-  - `{:error, :timeout}` - Request timed out
+  - `{:error, :timeout}` - Request timed out. The timeout is decided by the
+    same atomic single-winner transition as `resolve/2`/`cancel/2`: when a
+    resolver wins the record first, the waiter reports this without emitting
+    any timeout side effects of its own (the resolver's decision — and any
+    policy it installed — stands).
   """
   @spec request(map()) ::
           {:ok, :approved, scope :: atom()}
@@ -67,7 +74,11 @@ defmodule LemonCore.ExecApprovals do
     # Tool calls should not enforce timeouts by default.
     expires_in_ms = params[:expires_in_ms] || :infinity
 
-    approval_id = LemonCore.Id.approval_id()
+    approval_id =
+      case params[:approval_id] do
+        id when is_binary(id) and id != "" -> id
+        _other -> LemonCore.Id.approval_id()
+      end
 
     case check_existing_approval(tool, action, session_key, agent_id, node_id) do
       {:approved, scope} ->
@@ -135,7 +146,75 @@ defmodule LemonCore.ExecApprovals do
   end
 
   @doc """
+  Cancel a pending approval that will never be decided by a user.
+
+  For owners of a blocking `request/1` that can no longer wait — an
+  execute_code dispatch whose sweep was killed while an approval prompt was
+  pending. Removes the pending record (so the prompt disappears and a late
+  `resolve/2` can no longer install policy at any scope), wakes a blocked
+  waiter as denied, and records the cancellation distinctly from a user
+  decision.
+
+  The transition is atomic (`ExecApprovalStore.take_pending/1`): `cancel/2`,
+  `resolve/2`, and a waiter's own timeout are all the same single-winner
+  transition — racing callers cannot both act; exactly one takes the record,
+  the losers get `{:error, :not_pending}` (or, for a timed-out waiter,
+  `{:error, :timeout}` with no side effects) without disturbing the winner's
+  decision.
+
+  ## Returns
+
+    * `:ok` — this call took the pending record and cancelled it
+    * `{:error, :not_pending}` — nothing was pending under `approval_id`
+      (unknown, already resolved, or already cancelled); a no-op
+  """
+  @spec cancel(approval_id(), binary() | nil) :: :ok | {:error, :not_pending}
+  def cancel(approval_id, reason \\ nil) when is_binary(approval_id) do
+    case ExecApprovalStore.take_pending(approval_id) do
+      nil ->
+        {:error, :not_pending}
+
+      pending ->
+        record_approval_event(:approval_cancelled, pending, %{
+          approval_id: approval_id,
+          tool: pending.tool,
+          reason: reason
+        })
+
+        LemonCore.Telemetry.approval_resolved(approval_id, :cancelled, %{
+          tool: pending.tool,
+          run_id: pending.run_id
+        })
+
+        LemonCore.Bus.broadcast(
+          "exec_approvals",
+          LemonCore.Event.new(
+            :approval_resolved,
+            ApprovalResolved.new(%{
+              approval_id: approval_id,
+              decision: :cancelled,
+              pending: pending
+            }),
+            %{
+              run_id: pending.run_id,
+              session_id: Map.get(pending, :session_id),
+              session_key: pending.session_key
+            }
+          )
+        )
+
+        :ok
+    end
+  end
+
+  @doc """
   Resolve a pending approval request.
+
+  The transition is atomic (`ExecApprovalStore.take_pending/1`): `resolve/2`
+  and `cancel/2` racing on the same approval cannot both act. Only the winner
+  takes the pending record — and only then may policy be installed — while
+  the loser gets `{:error, :not_pending}` with no side effects, so a prompt
+  cancelled by its owner can never be approved afterwards.
 
   ## Parameters
 
@@ -146,16 +225,20 @@ defmodule LemonCore.ExecApprovals do
     - `:approve_agent` - Approve for the agent
     - `:approve_global` - Approve globally
     - `:deny` - Deny the request
+
+  ## Returns
+
+    * `:ok` — this call took the pending record and resolved it
+    * `{:error, :not_pending}` — nothing was pending under `approval_id`
+      (unknown, already resolved, or cancelled)
   """
-  @spec resolve(approval_id(), decision :: atom()) :: :ok
+  @spec resolve(approval_id(), decision :: atom()) :: :ok | {:error, :not_pending}
   def resolve(approval_id, decision) when is_binary(approval_id) and is_atom(decision) do
-    case ExecApprovalStore.get_pending(approval_id) do
+    case ExecApprovalStore.take_pending(approval_id) do
       nil ->
-        :ok
+        {:error, :not_pending}
 
       pending ->
-        ExecApprovalStore.delete_pending(approval_id)
-
         if decision != :deny do
           store_approval(pending, decision)
         end
@@ -340,6 +423,11 @@ defmodule LemonCore.ExecApprovals do
           :deny ->
             {:ok, :denied}
 
+          # An owner cancel (`cancel/2`) resolves the waiter like a denial:
+          # nobody granted the approval, so the gated call must not run.
+          :cancelled ->
+            {:ok, :denied}
+
           scope
           when scope in [:approve_once, :approve_session, :approve_agent, :approve_global] ->
             {:ok, :approved, scope}
@@ -347,10 +435,24 @@ defmodule LemonCore.ExecApprovals do
     after
       wait_remaining(deadline_or_infinity) ->
         LemonCore.Bus.unsubscribe("exec_approvals")
-        pending = ExecApprovalStore.get_pending(approval_id)
-        emit_approval_timeout(approval_id, pending)
-        ExecApprovalStore.delete_pending(approval_id)
-        {:error, :timeout}
+
+        # The timeout must win the record through the SAME atomic transition
+        # as `resolve/2` and `cancel/2` (`ExecApprovalStore.take_pending/1`):
+        # whoever takes the record decides its fate, exactly one winner. A
+        # nil take means a resolver or canceller already owned the record —
+        # its decision and its side effects stand, and this waiter reports
+        # `{:error, :timeout}` WITHOUT emitting timeout events or deleting
+        # anything for a record it no longer owns.
+        case ExecApprovalStore.take_pending(approval_id) do
+          nil ->
+            {:error, :timeout}
+
+          pending ->
+            # The take removed the record; emit the timeout side effects for
+            # the record this waiter owns.
+            emit_approval_timeout(approval_id, pending)
+            {:error, :timeout}
+        end
     end
   end
 
@@ -360,8 +462,8 @@ defmodule LemonCore.ExecApprovals do
     max(deadline - System.monotonic_time(:millisecond), 0)
   end
 
-  defp record_approval_timeout(_approval_id, nil), do: :ok
-
+  # Called only after `take_pending/1` handed the waiter the record, so
+  # `pending` is always the taken struct — there is no nil path.
   defp record_approval_timeout(approval_id, pending) do
     record_approval_event(:approval_timed_out, pending, %{
       approval_id: approval_id,
@@ -370,8 +472,6 @@ defmodule LemonCore.ExecApprovals do
       action_hash: hash_action(pending.action)
     })
   end
-
-  defp emit_approval_timeout(_approval_id, nil), do: :ok
 
   defp emit_approval_timeout(approval_id, pending) do
     record_approval_timeout(approval_id, pending)
@@ -399,12 +499,18 @@ defmodule LemonCore.ExecApprovals do
     )
   end
 
+  # Introspection is best-effort observability: a rejected payload must not
+  # fail the approval transition that already happened (same posture as
+  # `LemonCore.Checkpoint`), so the record outcome is deliberately dropped.
   defp record_approval_event(event_type, pending, payload) do
-    LemonCore.Introspection.record(event_type, payload,
-      run_id: pending.run_id,
-      session_key: pending.session_key,
-      agent_id: pending.agent_id
-    )
+    _ =
+      LemonCore.Introspection.record(event_type, payload,
+        run_id: pending.run_id,
+        session_key: pending.session_key,
+        agent_id: pending.agent_id
+      )
+
+    :ok
   end
 
   defp action_type(action) when is_map(action) do

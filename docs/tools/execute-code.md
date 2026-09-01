@@ -1,10 +1,12 @@
 # Execute Code (`execute_code`)
 
 `execute_code` is programmatic tool calling: the model submits a python3 script, the
-script calls agent tools through pre-imported helper functions, and only what the script
-prints comes back as the tool result. A script can read fifty files, grep a whole tree, or
-fetch a page and then print a three-line summary; intermediate tool results travel over a
-file-based RPC bridge and never enter the model transcript.
+script calls agent tools through pre-imported helper functions, and the script's result
+comes back through an explicit channel: `text()` blocks are the result, while everything
+printed to stdout/stderr lands in a clearly labeled diagnostics tail. A script can read
+fifty files, grep a whole tree, or fetch a page and then emit a three-line summary via
+`text()`; intermediate tool results travel over a file-based RPC bridge and never enter
+the model transcript.
 
 The tool is **disabled by default** and **bash-equivalent**: scripts run as ordinary host
 code with the user's permissions. This is not a sandbox — see [Security](#security).
@@ -21,7 +23,9 @@ python_path = ""                       # explicit interpreter; empty = find pyth
 timeout_ms = 120000                    # end-to-end wall-time cap per run, including session queue wait
 max_rpc_calls = 100                    # helper calls one run may make
 max_rpc_result_bytes = 5242880         # total helper-result bytes one run may consume (5 MiB)
-max_output_bytes = 50000               # script stdout/stderr bytes returned to the model
+max_output_bytes = 50000               # script stdout/stderr bytes returned as diagnostics
+max_text_bytes = 65536                 # total JSON-encoded text() frame bytes one run may emit
+max_parallel_rpc = 4                   # helper calls the pump dispatches concurrently
 tools = []                             # helper subset; empty = full fixed allowlist
 kernel_mode = "per_call"               # "per_call" (default) | "session"
 kernel_idle_timeout_ms = 1800000       # idle kernels reaped after 30 minutes
@@ -37,6 +41,8 @@ Environment overrides (env wins over TOML):
 - `LEMON_EXECUTE_CODE_MAX_RPC_CALLS`
 - `LEMON_EXECUTE_CODE_MAX_RPC_RESULT_BYTES`
 - `LEMON_EXECUTE_CODE_MAX_OUTPUT_BYTES`
+- `LEMON_EXECUTE_CODE_MAX_TEXT_BYTES`
+- `LEMON_EXECUTE_CODE_MAX_PARALLEL_RPC`
 - `LEMON_EXECUTE_CODE_TOOLS` (comma-separated subset of the allowlist)
 - `LEMON_EXECUTE_CODE_KERNEL_MODE`
 - `LEMON_EXECUTE_CODE_KERNEL_IDLE_TIMEOUT_MS`
@@ -94,10 +100,6 @@ by `max_queued_cells_per_kernel` (default 8). A full queue returns a busy error 
 silently falls back, because a fresh process would not see the expected namespace. A queued
 call whose external abort fires or whose deadline expires simply leaves the queue; the active
 cell is undisturbed.
-
-`timeout_ms` (minimum 1,000 ms, clamped to the configured `timeout_ms`) is an
-**end-to-end wall-clock limit from session-run entry**. In session mode it includes FIFO queue
-wait, active-cell execution, and ordinary helper/approval waits.
 
 ## State retention and loss
 
@@ -159,21 +161,159 @@ fallen back.
 Scripts call agent tools through pre-imported helpers from a fixed, compile-time
 allowlist: `read`, `grep`, `find`, `ls`, `webfetch`. The `tools` setting (or
 `LEMON_EXECUTE_CODE_TOOLS`) may only **narrow** this list — no configuration can add
-`bash`, `write`, or any other tool. A configured empty list means the full allowlist.
-
 Every helper call goes through the same `ToolPolicy` and approval handling as a direct
 tool call, in both kernel modes. Each cell gets a **fresh bridge**: a new owner-only
 (`0700`) RPC directory and a new random 256-bit token, validated in constant time; stale
 or cross-cell requests cannot call helpers. Helper failures raise a catchable
-`ToolError`. Per-run budgets: `max_rpc_calls` calls and `max_rpc_result_bytes` total
-result bytes; exceeding either raises `ToolError`.
+`ToolError`. Per-run budgets: `max_rpc_calls` calls (dispatched `max_parallel_rpc` at a
+time), `max_rpc_result_bytes` total result bytes, and `max_text_bytes` total `text()`
+block bytes; exceeding any of them raises `ToolError`.
 
 `webfetch` results mark the tool result untrusted and wrap printed output as external
 content, exactly like the direct tool.
 
+## Result channels: `text()`, `notify()`, `batch()`
+
+Besides the per-tool helpers, every shim (both kernel modes) defines three
+module-level functions:
+
+- **`text(s)`** — the explicit result channel. Each call atomically flushes a
+  numbered `text-<n>.json` block into the per-run rpc directory (write-through,
+  never deferred to exit), so everything written before a timeout or abort kill
+  still reaches the tool result. Blocks are lock-guarded, so they are safe from
+  `batch()` worker threads, and the total emitted bytes are capped at
+`max_text_bytes` (default 64 KiB). The cap charges the **JSON-encoded frame**
+— exactly the bytes `json.dump` writes to disk, escaping included — on both
+sides of the bridge: the shim charges what it is about to write and the host
+charges the file body it actually reads, so a NUL-heavy string that six-folds
+under `\u0000` escaping is refused by the same budget on both sides, and an
+in-budget block is always delivered. The payload is normalized first (lone
+surrogates become U+FFFD), so every frame the shim writes is valid JSON the
+host can decode. An over-budget call raises `ToolError` while the blocks
+already flushed stay in the result. Non-strings are `str()`-coerced.
+- **`notify(msg)`** — a fire-and-forget streaming side channel. The pump
+  consumes `notify-<n>.json` frames on every sweep and forwards each message
+  to the tool's streaming update callback as a partial update
+  (`notify: <msg>`), capped at 4 KiB per message and 64 forwarded messages per
+  run — the counter rides the run's stats, so it spans sweeps and the final
+  drain. Anything beyond is silently dropped, malformed frames are consumed
+  without being forwarded or counted, and a run with no callback consumes and
+  discards them so they never accumulate. A `notify()` issued immediately
+  before exit is still forwarded: the per-call pump and the persistent stop
+  path each run one notification-only final drain, and in session mode that
+  drain runs as part of the teardown stats read (`RpcServer.drain_and_stats`)
+  so its count is included in the stats the cell's result reports.
+  Tool requests are never drained after the run — a posthumous request would
+  be tool work nobody is waiting for.
+- **`batch([(tool, params), ...])`** — parallel helper calls. Each element runs
+  the plain blocking call inside a bounded stdlib thread pool (16 workers max);
+  the Elixir pump dispatches claimed requests as supervised tasks in waves of
+  `max_parallel_rpc` (default 4), so independent reads genuinely overlap.
+  Results return in input order; if any call fails, every call is still waited
+  out and then the first failure (in input order) is re-raised as the same
+  `ToolError` a plain call raises.
+
+When a run emitted at least one `text()` block, the tool result is assembled
+as: the headline (if any) → `Script result (text()):` with the blocks verbatim
+in flush order → a `Diagnostics (stdout/stderr, not the result):` tail carrying
+the captured stdout/stderr (still capped at `max_output_bytes`, with the
+spill-to-file marker when truncated). On a timeout or abort the flushed blocks
+are still included — that is the point of write-through. A script that never
+calls `text()` keeps the historic stdout-only result byte-for-byte.
+
+Stderr remains merged into stdout on purpose: the port has no separate stderr
+capture, so un-merging would silently *discard* stderr (python tracebacks
+included) instead of surfacing it in the labeled diagnostics tail.
+
+Accounting under parallel dispatch stays exact because claiming —
+authentication, replay detection, and call-budget reservation — happens
+serially in the pump before any task starts, and the result-byte budget is
+spent by the pump as each task returns. A claimed request always ends
+answered: when it becomes dispatch-bound its `req-<id>.json` is renamed to an
+in-flight `req-<id>.claim` marker, and **publication is the dispatch gate** —
+the rename must succeed and the published marker must be a regular file (a
+planted object at the marker name, or a symlinked request, is answered with a
+publication-failure error and its tool never runs). But the rpc directory is
+script-writable, so a marker alone is evidence only against crashes, never
+against a hostile script that deletes or replaces it after the gate. In
+session mode the claim therefore has a **second, host-side half**: the
+`RpcServer` records one ledger entry per **spent call slot** in its own
+process memory — via the pump's `:on_claim` hook, first a `:reserved` entry
+the moment a request passes the replay and call-budget gates, fed before
+the sweep-local spend itself so no kill can spend a call the ledger cannot
+prove, then the entry's disposition (`:invalid`/`:unknown_tool`/`:denied`
+for requests answered inside the claim without dispatching, `:claimed` for
+a dispatch-bound request, fed *before* the marker is published, making the
+ledger a superset of the published claims) — where the script cannot reach
+it. A sweep that dies mid-wave is recovered from **both halves** by the
+next sweep (or the server's cancel/abnormal-exit path, where no successor
+runs): its claimed ids are answered in writing and never re-dispatched,
+the replay memory is reconstructed so a replayed id is refused even when
+its marker was destroyed, and real accounting (ok status, result bytes,
+tool usage) is restored from a surviving response file plus the claim's
+tool identity — the ledger's name whenever the ledger recorded the id
+(host-owned beats script-writable, so overwriting the marker body cannot
+forge the recorded tool), and the marker's own body only for ids the
+ledger never saw. Reservation entries settle exactly — one call, one error
+or denial, the replay memory — and a disposition entry (`:invalid`,
+`:unknown_tool`, `:denied`) is answered in the settle: recovery writes the
+kind's error via `ensure_answered` whenever no response survives (a
+sweep-written answer is never overwritten), so a contained fault after an
+answered-but-never-dispatched request (invalid, unknown tool,
+policy-denied) can no longer erase that spend and let later sweeps exceed
+`max_calls`; an entry still bare `:reserved` (death between the feed,
+which precedes the spend, and the fate branch) charges the call exactly
+and counts one error, the conservative split of a branch that never ran —
+and writes no response, leaving the request file to the successor sweep's
+replay refusal (or the abort teardown — the cancel/abnormal-exit path
+where no successor runs). A `:claimed` entry with
+neither marker nor response surviving stamps `rpc_accounting_loss: true`:
+the accounting is then a lower bound and the
+cell's result is forced to `trust: :untrusted`. The same flag is stamped
+whenever a sweep is brutally killed, dies abnormally, or is caught
+raising/throwing mid-sweep — a contained fault is contained only in the
+process sense: its result settles through the same recovery-plus-lower-bound
+path, because work it dispatched and answered without returning its stats
+is unknowable. A successful cancel also settles the sweep's still-queued
+claim-ledger messages through the same deduplicating recovery, so no stale
+ledger entry outlives its sweep. Recovery trusts only regular-file markers
+(planted directories and symlinks at marker names are ignored outright) and
+charges each dead claim **exactly once**; a marker whose deletion fails
+(bounded retries) can never re-charge the budget on a later sweep.
+
+Approvals stay on the existing `ToolExecutor` path inside each task; each
+approval-requiring claim pre-allocates its approval id, and a tiny unlinked
+watcher cancels the pending prompt after the death of the sweep **and** again
+after the death of the dispatch task (it exits once both are gone), so a
+prompt registered in the window between the first cancel and the task's own
+death is still cancelled, and a cancelled prompt can never install policy
+(cancel, resolve, and a waiter's timeout are one atomic single-winner
+transition; the loser is `{:error, :not_pending}` — or a timeout with no
+side effects — and installs nothing). The exact lifetime guarantee: **prompts
+are cancelled when the dispatch task dies.** Dispatch tasks have trap_exit
+forced off at entry so they die with their sweep; the boundary is that tool
+code on the approval path can re-enable trap_exit afterwards and block past
+its task's death — such a task keeps its (cancelled-once) watcher parked
+until some other kill ends it, and until then the prompt outlives the
+script. This is adversarial tool behavior, not a supported mode; the
+boundary is demonstrated by the "a prompt registered after the sweep died
+cannot be orphaned" test in
+`apps/coding_agent/test/coding_agent/tools/execute_code_rpc_test.exs`.
+
+In session mode the kernel stages `lemon_tools.py` once and `_configure`
+installs a fresh bridge for every cell: new rpc dir and token, a full fresh
+`text()` budget (the per-call `max_text_bytes` rides the bridge), and reset
+sequence counters. Threads **inherit the cell generation of the thread that
+created them, captured at construction time** (an untagged creator — the main
+thread — falls back to the currently open cell), and the shim refuses bridge
+calls from threads tagged with an earlier cell, so a thread a finished cell
+left behind — and every thread it later spawns — can neither spend a later
+cell's budget nor write into its rpc directory (its `ToolError` is
+harmless). This is isolation hygiene, not a sandbox.
+
 ## Output
 
-Only what the script writes to stdout/stderr is returned — there is no implicit
+Only what the script writes to stdout/stderr is captured — there is no implicit
 final-expression repr. Line-buffered Python output preserves its order relative to child
 processes writing directly to the inherited stdout/stderr descriptors. Output is sanitized,
 capped at `max_output_bytes` keeping the first
@@ -183,11 +323,9 @@ to a `0600` file whose path appears in the result as `full_output_path` and in
 finished spill becomes eligible for best-effort reaping after 24 hours; an active capture
 owned by a live BEAM process is never reaped.
 
-Result `details` always include `rpc_calls`, `rpc_denied`, `rpc_errors`, `rpc_bytes`,
-`rpc_tools`, `exit_code`, and `truncated`. Session-mode details add `persistent`,
-`kernel_reused`, `reset_performed`, `state_retained`, `duration_ms`, and — on fallback —
-`fallback_reason`. Details never contain PIDs, keys, owners, tokens, bridge paths, or
-generations.
+For a run that used `text()`, this captured output is the **diagnostics tail**
+of the result, not the result itself — see
+[Result channels](#result-channels-text-notify-batch).
 
 ## Bounds and reaping
 

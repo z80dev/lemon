@@ -1,6 +1,7 @@
 defmodule LemonCore.Events.ApprovalResolved do
   @moduledoc """
-  A pending approval was decided, denied or timed out. Published on `exec_approvals`.
+  A pending approval was decided, denied, timed out, or cancelled by its
+  owner. Published on `exec_approvals`.
   """
 
   use LemonCore.Events.Payload,
@@ -16,11 +17,18 @@ defmodule LemonCore.Events.ApprovalResolved do
     :approve_agent,
     :approve_global,
     :deny,
-    :timeout
+    :timeout,
+    :cancelled
   ]
 
   @type decision ::
-          :approve_once | :approve_session | :approve_agent | :approve_global | :deny | :timeout
+          :approve_once
+          | :approve_session
+          | :approve_agent
+          | :approve_global
+          | :deny
+          | :timeout
+          | :cancelled
   @type t :: %__MODULE__{
           approval_id: String.t(),
           decision: decision(),

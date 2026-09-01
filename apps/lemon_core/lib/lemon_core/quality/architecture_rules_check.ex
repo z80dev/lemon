@@ -364,6 +364,7 @@ defmodule LemonCore.Quality.ArchitectureRulesCheck do
         "LemonCore.Store.get(:exec_approvals_pending",
         "LemonCore.Store.put(:exec_approvals_pending",
         "LemonCore.Store.delete(:exec_approvals_pending",
+        "LemonCore.Store.take(:exec_approvals_pending",
         "LemonCore.Store.list(:exec_approvals_pending"
       ]
     },
@@ -582,7 +583,8 @@ defmodule LemonCore.Quality.ArchitectureRulesCheck do
     },
     %{
       code: :engine_catalog_boundary,
-      message: "Top-level execution must not use LemonCore.EngineCatalog; execution is native Lemon",
+      message:
+        "Top-level execution must not use LemonCore.EngineCatalog; execution is native Lemon",
       prefixes: ["LemonCore.EngineCatalog"],
       files: ["apps/*/lib/**/*.ex"]
     },

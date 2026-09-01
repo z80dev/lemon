@@ -294,6 +294,53 @@ defmodule CodingAgent.Tools.ExecuteCodePersistentTest do
     assert text(result) =~ "Script cancelled."
   end
 
+  test "accounting loss forces untrusted even when the stats name no webfetch", %{cwd: cwd} do
+    set_response(:block)
+
+    # A brutally killed sweep lost part of its accounting: the RpcServer
+    # flags it. Even though tools_used names no webfetch, trust must fall
+    # back to untrusted — lost accounting may hide executed network work.
+    set_stats(%{
+      calls: 1,
+      denied: 0,
+      errors: 0,
+      bytes: 8,
+      tools_used: MapSet.new(["read"]),
+      seen_ids: MapSet.new([1]),
+      accounting_loss: true
+    })
+
+    signal = AbortSignal.new()
+
+    task =
+      Task.async(fn ->
+        opts = [
+          settings_manager: settings(),
+          session_id: "session-1",
+          session_pid: self(),
+          session_module: FakeSessionConfig,
+          agent_id: "agent-1",
+          python_repl: FakePythonRepl,
+          rpc_server: FakeRpcServer,
+          python_repl_registry: self()
+        ]
+
+        ExecuteCode.execute("call-1", %{"script" => "mutate()"}, signal, nil, cwd, opts)
+      end)
+
+    assert_receive {:execute, _request}
+    assert_receive {:rpc_started, %{signal: cell_signal}, _modes}
+    refute cell_signal == signal
+
+    :ok = AbortSignal.abort(signal)
+
+    result = Task.await(task, 5_000)
+    assert result.trust == :untrusted
+    assert text(result) =~ "<<<EXTERNAL_UNTRUSTED_CONTENT>>>"
+    assert result.details.rpc_accounting_loss == true
+    assert result.details.rpc_tools == ["read"]
+  end
+
   test "outer execute caller death kills its linked facade task", %{cwd: cwd} do
     outer =
       spawn(fn ->
@@ -451,6 +498,10 @@ defmodule CodingAgent.Tools.ExecuteCodePersistentTest do
 
     set_response({:ok, %{output: "internet", state_retained: true, kernel_reused: true}})
     result = execute(cwd, %{"script" => "print(webfetch('https://example.test'))"})
+
+    # The teardown read went through drain_and_stats (the R3-5 observable):
+    # stop-time notifications land in the stats the caller takes away.
+    assert_receive {:rpc_drained, _server}
 
     assert result.trust == :untrusted
     assert text(result) =~ "<<<EXTERNAL_UNTRUSTED_CONTENT>>>"
@@ -681,6 +732,12 @@ defmodule CodingAgent.Tools.ExecuteCodePersistentTest do
     end
 
     def stats(_server), do: Agent.get(@state, & &1.stats)
+
+    def drain_and_stats(server) do
+      state = Agent.get(@state, & &1)
+      send(state.test_pid, {:rpc_drained, server})
+      state.stats
+    end
 
     def stop(server) do
       state = Agent.get(@state, & &1)

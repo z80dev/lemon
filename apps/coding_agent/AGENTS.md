@@ -86,8 +86,22 @@ Tools are divided into two sets. `coding_tools/2` is the default set passed to s
 
 `execute_code` is programmatic tool calling: the model submits a python3 script that
 invokes a fixed compile-time helper allowlist (`read`, `grep`, `find`, `ls`, `webfetch`)
-through the same policy/approval path as direct tool calls, and only printed output
-returns. It runs as host code with bash-equivalent authority -- never a sandbox. The
+through the same policy/approval path as direct tool calls. The result comes back via
+the shim's `text()` blocks -- each flushed to disk per call, so deliberate results
+survive a timeout/abort kill -- with stdout/stderr demoted to a labeled diagnostics
+tail; `notify()` streams progress through the tool's update callback and `batch()`
+dispatches parallel helper calls (pump waves bounded by `max_parallel_rpc`).
+RPC requests always end answered (a killed or faulting sweep leaves claim evidence --
+in-flight markers plus, in session mode, a host-side claim ledger the script cannot
+delete -- that the successor sweep or the cancel/abnormal-exit/contained-fault path
+answers in writing, with the ledger's tool identity outranking the script-writable
+marker body, flagging `rpc_accounting_loss` when the evidence forces a lower bound),
+approval prompts left pending by a killed dispatch are cancelled when the dispatch
+task dies, persistent
+cells reset the per-cell bridge (fresh
+text budget, thread-tag quarantine), and the `text()` budget charges the
+JSON-encoded frame. It runs as
+host code with bash-equivalent authority -- never a sandbox. The
 default `kernel_mode = "per_call"` gives every run a fresh process; the opt-in `"session"`
 mode dispatches serialized cells to a persistent supervised interpreter keyed by persisted
 session id + agent id + canonical cwd/interpreter + helper set + protocol version (see

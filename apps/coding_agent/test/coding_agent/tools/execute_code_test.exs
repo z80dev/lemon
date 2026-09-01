@@ -33,7 +33,7 @@ defmodule CodingAgent.Tools.ExecuteCodeSchemaTest do
       for name <- Config.allowlist(), do: assert(tool.description =~ "#{name}(")
       assert tool.description =~ "45000 ms wall time"
       assert tool.description =~ "9 tool calls"
-      assert tool.description =~ "only what the script prints to stdout is returned"
+      assert tool.description =~ "only the text() blocks are the result"
       assert tool.description =~ "offset by 1"
     end
 
@@ -161,17 +161,30 @@ defmodule CodingAgent.Tools.ExecuteCodeSchemaTest do
     test "the persistent module starts without bridge authority" do
       module = PythonShim.render_module(["read"])
 
-      assert module =~ "def _configure(rpc_dir, token):"
+      assert module =~ "def _configure(rpc_dir, token, budget=None, generation=None):"
       assert module =~ "lemon_tools is not configured for this cell"
       refute module =~ "_configure(\""
-      refute module =~ "_TOKEN = \""
+      assert module =~ "_BRIDGE = None"
+    end
+
+    test "the result channels are always present, budget baked in" do
+      module = PythonShim.render_module(["read"], 2_048)
+
+      assert module =~ "_DEFAULT_TEXT_BUDGET = 2048"
+      assert module =~ "def text(s):"
+      assert module =~ "def notify(msg):"
+      assert module =~ "def batch(calls):"
+      assert module =~ "threading.Lock()"
+
+      # The default budget matches Config's pinned default.
+      assert PythonShim.render_module([]) =~ "_DEFAULT_TEXT_BUDGET = 65536"
     end
 
     test "a configured prelude embeds its rpc dir and token exactly once, json-escaped" do
       token = "token-0123"
-      prelude = PythonShim.render_prelude("/tmp/it's here", token, Config.allowlist())
+      prelude = PythonShim.render_prelude("/tmp/it's here", token, Config.allowlist(), 2_048)
 
-      assert prelude =~ ~s|_configure("/tmp/it's here", "token-0123")|
+      assert prelude =~ ~s|_configure("/tmp/it's here", "token-0123", 2048)|
       assert length(String.split(prelude, "/tmp/it's here")) == 2
       assert length(String.split(prelude, token)) == 2
     end
@@ -188,21 +201,23 @@ defmodule CodingAgent.Tools.ExecuteCodeSchemaTest do
     test "the rendered shim rotates bridge configuration for each call", %{tmp_dir: tmp_dir} do
       File.write!(Path.join(tmp_dir, "lemon_tools.py"), PythonShim.render_prelude(["read"]))
 
+      # Every _configure installs a fresh bridge: credentials rotate and the
+      # request-id space restarts at 1, because ids only need uniqueness
+      # inside one cell's rpc directory.
       script = """
       import json, os
       import lemon_tools
 
       requests = []
-      for request_id, token in enumerate(("first-token", "second-token"), 1):
-          rpc_dir = "rpc-%d" % request_id
+      for rpc_dir, token in (("rpc-1", "first-token"), ("rpc-2", "second-token")):
           os.mkdir(rpc_dir)
-          with open(os.path.join(rpc_dir, "res-%d.json" % request_id), "w") as response:
-              json.dump({"id": request_id, "ok": True, "content": ""}, response)
+          with open(os.path.join(rpc_dir, "res-1.json"), "w") as response:
+              json.dump({"id": 1, "ok": True, "content": ""}, response)
 
           lemon_tools._configure(rpc_dir, token)
           lemon_tools.read("ignored")
 
-          with open(os.path.join(rpc_dir, "req-%d.json" % request_id)) as request:
+          with open(os.path.join(rpc_dir, "req-1.json")) as request:
               requests.append(json.load(request))
 
       print(json.dumps(requests))
@@ -212,16 +227,16 @@ defmodule CodingAgent.Tools.ExecuteCodeSchemaTest do
 
       assert [
                %{"id" => 1, "token" => "first-token", "tool" => "read"},
-               %{"id" => 2, "token" => "second-token", "tool" => "read"}
+               %{"id" => 1, "token" => "second-token", "tool" => "read"}
              ] = Jason.decode!(output)
     end
 
-    test "the import line only imports enabled names" do
+    test "the import line only imports enabled tool names plus the channels" do
       assert PythonShim.import_line(["read", "ls"]) ==
-               "from lemon_tools import ToolError, read, ls"
+               "from lemon_tools import ToolError, read, ls, text, notify, batch"
 
       assert PythonShim.import_line(Config.allowlist()) ==
-               "from lemon_tools import ToolError, read, grep, find, ls, webfetch"
+               "from lemon_tools import ToolError, read, grep, find, ls, webfetch, text, notify, batch"
     end
 
     test "render_script adds exactly one line" do
@@ -253,6 +268,7 @@ defmodule CodingAgent.Tools.ExecuteCodeTest do
   alias CodingAgent.BashExecutor
   alias CodingAgent.ToolPolicy
   alias CodingAgent.Tools.ExecuteCode
+  alias CodingAgent.Tools.ExecuteCode.{PythonShim, Rpc}
   alias LemonAgent.AbortSignal
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAi.Types.TextContent
@@ -630,7 +646,9 @@ defmodule CodingAgent.Tools.ExecuteCodeTest do
         # here, inside the runner — not after execute/6 has cleaned up.
         base = command_base(command)
         shim = File.read!(Path.join(base, "lemon_tools.py"))
-        [_, rpc_dir, _token] = Regex.run(~r/_configure\("([^"]+)", "([^"]+)"\)/, shim)
+
+        [_, rpc_dir, _token, _budget] =
+          Regex.run(~r/_configure\("([^"]+)", "([^"]+)"(?:, (\d+))?\)/, shim)
 
         modes = %{
           base: mode(base),
@@ -668,10 +686,10 @@ defmodule CodingAgent.Tools.ExecuteCodeTest do
       assert_received {:shim, second_shim}
 
       [_, first_rpc_dir, first_token] =
-        Regex.run(~r/_configure\("([^"]+)", "([^"]+)"\)/, first_shim)
+        Regex.run(~r/_configure\("([^"]+)", "([^"]+)"(?:, \d+)?\)/, first_shim)
 
       [_, second_rpc_dir, second_token] =
-        Regex.run(~r/_configure\("([^"]+)", "([^"]+)"\)/, second_shim)
+        Regex.run(~r/_configure\("([^"]+)", "([^"]+)"(?:, \d+)?\)/, second_shim)
 
       assert first_token =~ ~r/^[A-Za-z0-9_-]{43}$/
       assert second_token =~ ~r/^[A-Za-z0-9_-]{43}$/
@@ -759,6 +777,340 @@ defmodule CodingAgent.Tools.ExecuteCodeTest do
     end
   end
 
+  describe "text() result channel" do
+    test "blocks return in flush order with stdout demoted to a labeled diagnostics tail", %{
+      tmp_dir: cwd
+    } do
+      script = """
+      print("DeprecationWarning: incidental library noise")
+      text("deliberate answer: 42")
+      text("second deliberate line")
+      print("more incidental output")
+      """
+
+      result = run(cwd, script)
+      body = text(result)
+
+      assert result.details.exit_code == 0
+      assert body =~ "Script result (text()):"
+
+      # The blocks are the labeled result, verbatim, in order.
+      assert index_of(body, "deliberate answer: 42") < index_of(body, "second deliberate line")
+      assert index_of(body, "second deliberate line") < index_of(body, "Diagnostics")
+
+      # Stdout never impersonates the result: it only appears after the
+      # diagnostics label.
+      diagnostics_at = index_of(body, "Diagnostics (stdout/stderr, not the result):")
+      assert diagnostics_at < index_of(body, "DeprecationWarning")
+      assert diagnostics_at < index_of(body, "more incidental output")
+    end
+
+    test "an over-budget text() call raises ToolError and the flushed partial blocks still return",
+         %{tmp_dir: cwd} do
+      # The budget charges the encoded frame ({"n": 1, "text": ...} envelope
+      # included), so 10 digits fit a cap of 64 and a second block does not.
+      script = """
+      text("0123456789")
+      try:
+          text("X" * 40)
+          print("NO ERROR")
+      except Exception as e:
+          print(str(e))
+      """
+
+      result = run(cwd, script, opts(%{max_text_bytes: 64}))
+      body = text(result)
+      # The refusing call surfaces like every other limit violation, in the
+      # diagnostics tail...
+      assert body =~ "text() byte budget exceeded"
+      assert body =~ "cap 64"
+      # ...while every block flushed before the refusal is still the result.
+      assert index_of(body, "0123456789") < index_of(body, "Diagnostics")
+    end
+
+    test "the budget charges the JSON-encoded frame, not the raw string", %{
+      tmp_dir: cwd
+    } do
+      # A NUL-heavy string roughly six-folds under JSON escaping: 8000 raw
+      # bytes encode to ~48 KiB. Under raw-string accounting the second call
+      # (4000 more raw bytes) would still fit the 64 KiB cap; charging the
+      # encoded frame refuses it — on the script side, consistently.
+      script = """
+      text("\\0" * 8000)
+      print("flushed one")
+      try:
+          text("\\0" * 4000)
+          print("SECOND BLOCK WRITTEN")
+      except Exception as e:
+          print(str(e))
+      """
+
+      result = run(cwd, script, opts(%{max_text_bytes: 65_536}))
+      body = text(result)
+
+      refute body =~ "SECOND BLOCK WRITTEN"
+      assert body =~ "text() byte budget exceeded"
+      assert body =~ "48020 bytes accumulated"
+      # The in-budget first block is delivered in full, NULs included: the
+      # 8000 raw NULs sit in the result section, ahead of the diagnostics
+      # tail where the (printed) marker lines live.
+      assert index_of(body, String.duplicate("\0", 8_000)) < index_of(body, "Diagnostics")
+      assert index_of(body, "flushed one") > index_of(body, "Diagnostics")
+    end
+
+    test "a control-char string whose encoding exceeds the cap is refused, never silently dropped",
+         %{tmp_dir: cwd} do
+      # 11000 NULs are 11 KiB raw (well under the 64 KiB cap) but encode to
+      # ~66 KiB on disk. Both sides must agree: the shim refuses it, so no
+      # in-budget block is dropped later by the host's file-size check.
+      script = """
+      try:
+          text("\\0" * 11000)
+          print("BLOCK WRITTEN")
+      except Exception as e:
+          print(str(e))
+      """
+
+      result = run(cwd, script, opts(%{max_text_bytes: 65_536}))
+      body = text(result)
+
+      refute body =~ "BLOCK WRITTEN"
+      refute body =~ "Script result (text()):"
+      assert body =~ "text() byte budget exceeded"
+      assert result.details.exit_code == 0
+    end
+
+    test "shim-charged bytes equal host-charged bytes over a nasty-string corpus",
+         %{tmp_dir: cwd} do
+      rpc_dir = Path.join(cwd, "equiv-rpc")
+      File.mkdir_p!(rpc_dir)
+      token = String.duplicate("e", 43)
+
+      # Stage the real shim plus a driver that configures the bridge and
+      # emits the corpus through text(), reporting (a) the shim-side charged
+      # total and (b) the sanitized strings it actually delivered.
+      File.write!(Path.join(cwd, "lemon_tools.py"), PythonShim.render_module([], 65_536))
+
+      driver = """
+      import json, lemon_tools
+
+      lemon_tools._configure(#{Jason.encode!(rpc_dir)}, #{Jason.encode!(token)}, None, "cell-1")
+
+      corpus = [
+          "",
+          "plain ascii",
+          "\\0" * 100,
+          "".join(chr(i) for i in range(1, 128)),
+          "emoji: \\U0001F600\\U0001F680",
+          "bmp: \\u00e9\\u4e2d\\u05d0",
+          "lone low surrogate: \\ud800",
+          "lone high surrogate: \\ud83d",
+          "mixed pairs and loners: \\ud83d\\ude00\\ud800\\udfff",
+          "tab\\tnewline\\nquote\\"backslash\\\\",
+          "\\u2028\\u2029line separators",
+          "x" * 1000,
+      ]
+      delivered = []
+      for s in corpus:
+          try:
+              lemon_tools.text(s)
+              delivered.append(s)
+          except Exception:
+              print("UNEXPECTED REFUSAL")
+
+      # The big block cannot fit the remaining budget: the shim must refuse
+      # it — delivered iff charged, on the script side too.
+      try:
+          lemon_tools.text("Y" * 64000)
+          delivered.append("big")
+          print("BIG WRITTEN")
+      except Exception:
+          print("BIG REFUSED")
+
+      print("RESULT " + json.dumps({
+          "charged": lemon_tools._BRIDGE.text_bytes,
+          "delivered": [lemon_tools._json_safe(s) for s in delivered],
+      }))
+      """
+
+      File.write!(Path.join(cwd, "driver.py"), driver)
+
+      {out, 0} = System.cmd(System.find_executable("python3"), ["driver.py"], cd: cwd)
+
+      assert out =~ "BIG REFUSED"
+      refute out =~ "BIG WRITTEN"
+      refute out =~ "UNEXPECTED REFUSAL"
+
+      %{"charged" => charged, "delivered" => delivered} =
+        out
+        |> String.split("\n")
+        |> Enum.find(&String.starts_with?(&1, "RESULT "))
+        |> String.trim_leading("RESULT ")
+        |> Jason.decode!()
+
+      # Host side: read the same frames with the real reader.
+      blocks = Rpc.read_text_blocks(rpc_dir, max_text_bytes: 65_536)
+
+      host_charged =
+        rpc_dir
+        |> Path.join("text-*.json")
+        |> Path.wildcard()
+        |> Enum.map(&File.read!/1)
+        |> Enum.map(&byte_size/1)
+        |> Enum.sum()
+
+      # Bidirectional equivalence: what the shim charged, the host charged;
+      # what the shim delivered, the host delivers — sanitized lone
+      # surrogates included, never silently dropped.
+      assert host_charged == charged
+      assert blocks == delivered
+      assert length(blocks) == 12
+    end
+
+    test "blocks flushed before a wall-clock kill survive into the result", %{tmp_dir: cwd} do
+      script = """
+      text("partial answer survives the kill")
+      while True:
+          pass
+      """
+
+      result = run(cwd, script, opts(%{timeout_ms: 2_000}))
+      body = text(result)
+
+      assert body =~ "Script timed out after 2000ms."
+
+      assert index_of(body, "Script timed out after 2000ms.") <
+               index_of(body, "partial answer survives the kill")
+
+      assert index_of(body, "partial answer survives the kill") < index_of(body, "Diagnostics")
+    end
+
+    test "a script that never calls text() keeps the historic stdout-only result", %{tmp_dir: cwd} do
+      result = run(cwd, ~s|print("plain output")|)
+
+      assert text(result) == "plain output\n"
+      assert result.details.exit_code == 0
+    end
+  end
+
+  describe "notify() streaming" do
+    test "on_update receives notify() messages in order during the run", %{tmp_dir: cwd} do
+      test_pid = self()
+
+      on_update = fn %AgentToolResult{content: [%TextContent{text: message} | _]} ->
+        send(test_pid, {:notification, message})
+      end
+
+      script = """
+      import time
+      notify("step one")
+      notify("step two")
+      time.sleep(0.3)
+      print("done")
+      """
+
+      result = ExecuteCode.execute("call-1", %{"script" => script}, nil, on_update, cwd, opts())
+
+      assert text(result) =~ "done"
+
+      # Both arrived, in flush order (receive drains the mailbox oldest-first).
+      first = receive(do: ({:notification, message} -> message))
+      second = receive(do: ({:notification, message} -> message))
+      assert {first, second} == {"notify: step one", "notify: step two"}
+    end
+
+    test "a notify() as the last statement before exit is still forwarded", %{
+      tmp_dir: cwd
+    } do
+      test_pid = self()
+
+      on_update = fn %AgentToolResult{content: [%TextContent{text: message} | _]} ->
+        send(test_pid, {:notification, message})
+      end
+
+      result =
+        ExecuteCode.execute(
+          "call-1",
+          %{"script" => ~s|notify("last statement")|},
+          nil,
+          on_update,
+          cwd,
+          opts()
+        )
+
+      assert text(result) == "(script produced no output)"
+      assert_received {:notification, "notify: last statement"}
+    end
+
+    test "a nil on_update consumes notifications without crashing the run", %{tmp_dir: cwd} do
+      script = """
+      import time
+      notify("ignored one")
+      notify("ignored two")
+      time.sleep(0.3)
+      print("still fine")
+      """
+
+      result = run(cwd, script)
+
+      assert text(result) =~ "still fine"
+      assert result.details.exit_code == 0
+    end
+  end
+
+  describe "batch() parallel helper calls" do
+    test "a batch of blocking calls overlaps: every call is in flight before any completes",
+         %{tmp_dir: cwd} do
+      # A barrier tool that only returns once `needed` calls are concurrently
+      # in flight. Under serial dispatch the first call would spin to its
+      # deadline alone and report a barrier timeout; only real parallel
+      # dispatch can open the barrier.
+      {:ok, counter} = Agent.start_link(fn -> 0 end)
+
+      read_override = barrier_read_override(counter, 3)
+
+      script = """
+      results = batch([
+          ("read", {"value": "r1"}),
+          ("read", {"value": "r2"}),
+          ("read", {"value": "r3"}),
+      ])
+      print("|".join(results))
+      """
+
+      result =
+        run(
+          cwd,
+          script,
+          opts(%{},
+            execute_code_tool_overrides: %{"read" => read_override}
+          )
+        )
+
+      on_exit(fn -> if Process.alive?(counter), do: Agent.stop(counter) end)
+
+      assert text(result) =~ "r1|r2|r3"
+      refute text(result) =~ "BARRIER TIMEOUT"
+      assert result.details.rpc_calls == 3
+    end
+
+    test "the call limit stays exact when a batch exceeds the remaining budget", %{tmp_dir: cwd} do
+      script = """
+      try:
+          batch([("ls", {}), ("ls", {}), ("ls", {})])
+          print("NO ERROR")
+      except Exception as e:
+          print(str(e))
+      """
+
+      result = run(cwd, script, opts(%{max_rpc_calls: 2}))
+
+      assert text(result) =~ "rpc call limit exceeded (max 2 calls per script)"
+      assert result.details.rpc_calls == 2
+      assert result.details.rpc_errors == 1
+    end
+  end
+
   # ==========================================================================
   # Helpers
   # ==========================================================================
@@ -817,4 +1169,49 @@ defmodule CodingAgent.Tools.ExecuteCodeTest do
   end
 
   defp text(%AgentToolResult{content: [%TextContent{text: text} | _]}), do: text
+
+  defp index_of(haystack, needle) do
+    {index, _} = :binary.match(haystack, needle)
+    index
+  end
+
+  # A helper stub that returns only once `needed` calls are concurrently in
+  # flight (a barrier): proof by construction that dispatch overlapped.
+  defp barrier_read_override(counter, needed) do
+    %AgentTool{
+      name: "read",
+      description: "barrier read",
+      label: "read",
+      parameters: %{"type" => "object", "properties" => %{}},
+      execute: fn _id, params, _signal, _on_update ->
+        _in_flight = Agent.get_and_update(counter, fn n -> {n + 1, n + 1} end)
+
+        if spin_until(fn -> Agent.get(counter, & &1) >= needed end, 10_000) do
+          %AgentToolResult{content: [%TextContent{text: params["value"] || ""}]}
+        else
+          %AgentToolResult{content: [%TextContent{text: "BARRIER TIMEOUT"}]}
+        end
+      end
+    }
+  end
+
+  defp spin_until(fun, deadline_ms) do
+    deadline = System.monotonic_time(:millisecond) + deadline_ms
+
+    if fun.() do
+      true
+    else
+      spin_wait(fun, deadline)
+    end
+  end
+
+  defp spin_wait(fun, deadline) do
+    if System.monotonic_time(:millisecond) >= deadline do
+      false
+    else
+      Process.sleep(10)
+
+      if fun.(), do: true, else: spin_wait(fun, deadline)
+    end
+  end
 end

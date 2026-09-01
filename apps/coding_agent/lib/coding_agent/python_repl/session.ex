@@ -109,7 +109,11 @@ defmodule CodingAgent.PythonRepl.Session do
 
   @type phase :: :starting | :idle | :running | :cancelling | :stopping
 
-  @type bridge :: %{dir: String.t(), token: String.t()}
+  @type bridge :: %{
+          required(:dir) => String.t(),
+          required(:token) => String.t(),
+          optional(:max_text_bytes) => pos_integer()
+        }
 
   @type request :: %{
           required(:code) => String.t(),
@@ -443,11 +447,18 @@ defmodule CodingAgent.PythonRepl.Session do
     end
   end
 
-  defp valid_bridge?(%{dir: dir, token: token})
+  defp valid_bridge?(%{dir: dir, token: token} = bridge)
        when is_binary(dir) and dir != "" and is_binary(token) and token != "",
-       do: true
+       do: valid_bridge_budget?(Map.get(bridge, :max_text_bytes))
 
   defp valid_bridge?(_), do: false
+
+  # The optional budget travels with the bridge so each persistent cell gets
+  # a fresh `text()` allowance (the runner hands it to the shim's
+  # `_configure`, which resets the per-cell accumulator).
+  defp valid_bridge_budget?(bytes) when is_integer(bytes) and bytes > 0, do: true
+  defp valid_bridge_budget?(nil), do: true
+  defp valid_bridge_budget?(_), do: false
 
   defp enqueue_cell(state, from, caller, request, timeout) do
     monitor = Process.monitor(caller)
@@ -1172,8 +1183,19 @@ defmodule CodingAgent.PythonRepl.Session do
     do: %{"v" => 1, "type" => "eval", "id" => id, "code" => code, "cwd" => cwd}
 
   defp eval_request(id, code, cwd, bridge) do
+    payload = %{"dir" => bridge.dir, "token" => bridge.token}
+
+    payload =
+      case Map.get(bridge, :max_text_bytes) do
+        bytes when is_integer(bytes) and bytes > 0 ->
+          Map.put(payload, "max_text_bytes", bytes)
+
+        _no_budget ->
+          payload
+      end
+
     %{"v" => 1, "type" => "eval", "id" => id, "code" => code, "cwd" => cwd}
-    |> Map.put("bridge", %{"dir" => bridge.dir, "token" => bridge.token})
+    |> Map.put("bridge", payload)
   end
 
   defp shutdown_request, do: %{"v" => 1, "type" => "shutdown"}

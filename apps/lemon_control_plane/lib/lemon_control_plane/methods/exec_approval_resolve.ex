@@ -34,7 +34,11 @@ defmodule LemonControlPlane.Methods.ExecApprovalResolve do
             "Invalid decision. Must be one of: approve_once, approve_session, approve_agent, approve_global, deny",
             nil}}
         else
-          LemonCore.ExecApprovals.resolve(approval_id, decision_atom)
+          # The resolve transition is single-winner and idempotent: a
+          # `{:error, :not_pending}` here only means the prompt was already
+          # resolved, cancelled, or timed out — nothing left to decide, so
+          # the outcome is deliberately dropped.
+          _ = LemonCore.ExecApprovals.resolve(approval_id, decision_atom)
 
           {:ok,
            %{

@@ -584,7 +584,8 @@ case LemonCore.ExecApprovals.request(%{
   {:error, :timeout} -> handle_timeout()
 end
 
-# Resolve (called by UI/admin)
+# Resolve (called by UI/admin). Atomic: a racing cancel/resolve on the same
+# id has exactly one winner; the loser gets {:error, :not_pending}.
 :ok = LemonCore.ExecApprovals.resolve(approval_id, :approve_session)
 ```
 

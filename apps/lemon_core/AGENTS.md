@@ -770,14 +770,17 @@ case LemonCore.ExecApprovals.request(%{
   {:error, :timeout} -> handle_timeout()
 end
 
-# Resolve approval (called by UI/admin)
+# Resolve approval (called by UI/admin); the transition is atomic — cancel/2
+# and resolve/2 racing on one approval cannot both act, the loser gets
+# {:error, :not_pending} and installs nothing.
 # Scopes: :approve_once (not persisted), :approve_session, :approve_agent, :approve_global
 :ok = LemonCore.ExecApprovals.resolve(approval_id, :approve_once)
 :ok = LemonCore.ExecApprovals.resolve(approval_id, :approve_session)
 :ok = LemonCore.ExecApprovals.resolve(approval_id, :approve_agent)
 :ok = LemonCore.ExecApprovals.resolve(approval_id, :approve_global)
 :ok = LemonCore.ExecApprovals.resolve(approval_id, :deny)
-```
+{:error, :not_pending} = LemonCore.ExecApprovals.resolve(approval_id, :deny)
+{:error, :not_pending} = LemonCore.ExecApprovals.cancel(approval_id, "dispatch ended")
 
 Approval requests, resolutions, and timeouts write redacted
 `approval_requested`, `approval_resolved`, and `approval_timed_out`

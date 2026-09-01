@@ -15,10 +15,9 @@ defmodule CodingAgent.Tools.ExecuteCodeConfigTest do
       assert config.max_rpc_calls == 100
       assert config.max_rpc_result_bytes == 5_242_880
       assert config.max_output_bytes == 50_000
+      assert config.max_text_bytes == 65_536
+      assert config.max_parallel_rpc == 4
       assert config.kernel_mode == "per_call"
-      assert config.kernel_idle_timeout_ms == 1_800_000
-      assert config.max_live_kernels == 16
-      assert config.max_queued_cells_per_kernel == 8
       assert config.tools == Config.allowlist()
     end
 
@@ -91,11 +90,16 @@ defmodule CodingAgent.Tools.ExecuteCodeConfigTest do
     test "integer strings" do
       assert Config.load(@cwd, settings(%{timeout_ms: "120000"})).timeout_ms == 120_000
       assert Config.load(@cwd, settings(%{max_rpc_calls: "7"})).max_rpc_calls == 7
+      assert Config.load(@cwd, settings(%{max_text_bytes: "1024"})).max_text_bytes == 1_024
+      assert Config.load(@cwd, settings(%{max_parallel_rpc: "8"})).max_parallel_rpc == 8
     end
 
     test "invalid integers keep the default and non-positive values clamp to 1" do
       assert Config.load(@cwd, settings(%{timeout_ms: "abc"})).timeout_ms == 120_000
       assert Config.load(@cwd, settings(%{max_output_bytes: 0})).max_output_bytes == 1
+      assert Config.load(@cwd, settings(%{max_text_bytes: "abc"})).max_text_bytes == 65_536
+      assert Config.load(@cwd, settings(%{max_parallel_rpc: 0})).max_parallel_rpc == 1
+      assert Config.load(@cwd, settings(%{max_parallel_rpc: nil})).max_parallel_rpc == 4
     end
 
     test "python_path is expanded, and blank means nil" do

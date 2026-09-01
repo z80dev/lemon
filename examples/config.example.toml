@@ -135,8 +135,10 @@ base_delay_ms = 1000
 # docs/user-guide/context-references.md for the bounded flags and defaults.
 
 # Programmatic tool calling: the model submits a python3 script that can call a fixed
-# allowlist of agent tools (read, grep, find, ls, webfetch); only what the script prints
-# comes back. The script runs as HOST CODE with bash-equivalent permissions — this is not
+# allowlist of agent tools (read, grep, find, ls, webfetch). The result comes back
+# through text() blocks; everything the script prints to stdout/stderr is returned as a
+# labeled diagnostics tail (a script that never calls text() keeps the stdout-only
+# result). The script runs as HOST CODE with bash-equivalent permissions — this is not
 # a sandbox. Default-off; requires python3 (or python_path) plus, on GNU/Linux, GNU
 # mktemp and a local-filesystem TMPDIR for the private workspace.
 # See docs/tools/execute-code.md before enabling.
@@ -147,7 +149,9 @@ base_delay_ms = 1000
 # timeout_ms = 120000           # wall-time cap per run
 # max_rpc_calls = 100           # helper calls per run
 # max_rpc_result_bytes = 5242880
-# max_output_bytes = 50000
+# max_output_bytes = 50000      # stdout/stderr cap, returned as the diagnostics tail
+# max_text_bytes = 65536        # total text() result-block bytes per run
+# max_parallel_rpc = 4          # helper calls the pump dispatches concurrently
 # tools = []                    # helper subset; empty = full fixed allowlist
 #
 # kernel_mode = "per_call"      # "per_call" (default): every run is a fresh process.
@@ -161,8 +165,7 @@ base_delay_ms = 1000
 #
 # Env overrides: LEMON_EXECUTE_CODE_ENABLED, LEMON_EXECUTE_CODE_PYTHON_PATH,
 # LEMON_EXECUTE_CODE_TIMEOUT_MS, LEMON_EXECUTE_CODE_MAX_RPC_CALLS,
-# LEMON_EXECUTE_CODE_MAX_RPC_RESULT_BYTES, LEMON_EXECUTE_CODE_MAX_OUTPUT_BYTES,
-# LEMON_EXECUTE_CODE_TOOLS, LEMON_EXECUTE_CODE_KERNEL_MODE,
+# LEMON_EXECUTE_CODE_MAX_TEXT_BYTES, LEMON_EXECUTE_CODE_MAX_PARALLEL_RPC,
 # LEMON_EXECUTE_CODE_KERNEL_IDLE_TIMEOUT_MS, LEMON_EXECUTE_CODE_MAX_LIVE_KERNELS,
 # LEMON_EXECUTE_CODE_MAX_QUEUED_CELLS_PER_KERNEL
 

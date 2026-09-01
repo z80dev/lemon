@@ -227,6 +227,69 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Changed
 
+- `execute_code` gained an explicit result channel: `text()` blocks are the tool
+  result (write-through flushed per call, so they survive a timeout/abort kill),
+  while stdout/stderr is demoted to a clearly labeled diagnostics tail. Scripts
+  that never call `text()` keep the historic stdout-only result byte-for-byte.
+  New knobs: `max_text_bytes` (text budget, default 64 KiB) and
+  `max_parallel_rpc` (pump dispatch concurrency, default 4).
+- `execute_code` result-channel hardening (fix round): the `text()` budget now
+  charges the JSON-encoded frame, so NUL-heavy strings that expand six-fold
+  under escaping are refused on the script side instead of being written and
+  silently dropped by the host; persistent kernels reset the per-cell bridge
+  (fresh text budget, fresh counters) and refuse calls from threads stamped
+  with an earlier cell; `notify()` caps are per run across sweeps, malformed
+  frames are no longer forwarded or counted, and a final notification drain
+  forwards a `notify()` issued immediately before exit; claimed RPC requests
+  always end answered (a killed sweep leaves in-flight claim markers that the
+  successor sweep or the cancel path answers in writing, reconstructing the
+  call accounting), and an approval prompt left pending by a killed dispatch
+  is cancelled, so it can never be approved into policy after the script died.
+- `execute_code` result-channel adversarial hardening (fix round 2): RPC
+  dispatch is now gated on publishing a regular-file claim marker (a planted
+  object at the marker name or a symlinked request is answered with an error
+  and never dispatched), recovery trusts only regular-file markers (planted
+  directories are ignored, never charged) and restores the real accounting
+  beside an already-published successful response, marker deletion failures
+  can never re-charge the budget on a later sweep, and approval cancel/resolve
+  is one atomic store transition (`LemonCore.ExecApprovals.cancel/2` and
+  `resolve/2` now return `{:error, :not_pending}` to the loser) with the
+  dispatch watcher cancelling after each owner death so a prompt registered
+  after its sweep died cannot be orphaned; a killed sweep's lost accounting
+  is flagged (`rpc_accounting_loss`) and forces the result to `:untrusted`;
+  persistent-cell thread quarantine now stamps threads with their creator's
+  cell generation at construction time, so a stale thread's descendants stay
+  stale; the `text()` host-side budget charges the encoded frame (identical
+  to the shim) and the shim normalizes lone surrogates, so an in-budget
+  block is always delivered.
+- `execute_code` result-channel hardening (fix round 4): a sweep caught
+  raising or throwing mid-flight is still contained (the server stays
+  alive) but no longer reported as if it had merely kept its old stats —
+  it settles through the same recovery-plus-`rpc_accounting_loss` path as
+  an abnormal death, so claims it dispatched are answered and charged from
+  the host-side claim ledger and surviving responses instead of being
+  silently discarded; claim recovery takes the tool identity from the
+  host-owned ledger whenever both ledger and script-writable marker exist,
+  so overwriting a marker body can no longer forge the recorded tool; and
+  a successful cancel folds the sweep's still-queued claim-ledger messages
+  through the same deduplicating recovery instead of reinserting them as
+  stale ledger entries.
+- `execute_code` result-channel hardening (fix round 5): the persistent
+  server's claim ledger now records a reservation entry the moment a
+  request spends its `max_calls` slot — refined by its disposition
+  (`:invalid`, `:unknown_tool`, `:denied` when answered without dispatch,
+  `:claimed` for dispatch-bound requests) — and sweep-failure settlement
+  re-applies reserved entries exactly (one call, one error or denial, the
+  replay memory, no response writes), so a contained fault after an
+  answered-but-never-dispatched request can no longer erase that spend and
+  let resumed sweeps exceed the call budget.
+- `execute_code` scripts gained `notify(msg)` — a streaming side channel whose
+  messages are forwarded to the tool's partial-update callback (capped at 4 KiB
+  per message, 64 per run) — and `batch([...])`, which runs helper calls in
+  parallel through the pump's bounded wave dispatch with exact call-limit,
+  replay, and byte-budget accounting.
+
+
 - Packaged and Mix `secrets check` output now reports only `present` and source
   category counts; it no longer reveals credential prefixes or suffixes.
 - Lemon Web now ships compiled CSS inside the release instead of loading

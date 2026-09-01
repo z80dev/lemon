@@ -328,10 +328,15 @@ defmodule LemonCore.Store do
   end
 
   @doc """
-  Retrieves and deletes a key as one serialized Store operation.
+  Atomically remove and return the value stored at `key` in a named table.
 
-  Returns `nil` when the key is absent. If backend deletion fails, the value is
-  left in place and the backend error is returned.
+  Returns `nil` if the key doesn't exist. The read and the delete share one
+  store call, so of N concurrent takers exactly one sees the value — the
+  get-then-delete race between two `get/3` + `delete/3` callers cannot happen.
+  A backend failure leaves the entry in place and returns `{:error, reason}`
+  (or `{:error, :store_unavailable}` when the store itself is down), so a
+  failed take is distinguishable from losing the race and never hands the
+  value to more than one caller.
   """
   @spec take(server(), atom(), term()) :: term() | nil | {:error, term()}
   def take(server \\ __MODULE__, table, key) do
@@ -1169,6 +1174,9 @@ defmodule LemonCore.Store do
     end
   end
 
+  # Atomic delete-and-return: the get and the delete share this one store
+  # call, so exactly one of N concurrent takers can observe the value. The
+  # read-cache mirror is invalidated exactly like `:generic_delete`.
   def handle_call({:generic_take, table, key}, _from, state) do
     case state.backend.get(state.backend_state, table, key) do
       {:ok, nil, backend_state} ->
@@ -1185,6 +1193,8 @@ defmodule LemonCore.Store do
 
           {:error, reason} ->
             log_backend_error(:take, table, key, reason)
+            # The entry survives a failed take: no caller was handed it, and
+            # the error is distinguishable from `nil` "lost the race".
             {:reply, {:error, reason}, %{state | backend_state: backend_state}}
 
           other ->
