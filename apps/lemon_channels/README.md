@@ -625,7 +625,7 @@ config :lemon_channels,
 
 ### Gateway Config
 
-Adapter module startup is selected by `config :lemon_channels, :adapters`. Runtime gateway settings still come from `LemonChannels.GatewayConfig`, a thin delegation to `LemonCore.GatewayConfig`.
+Adapter module startup is selected by `config :lemon_channels, :adapters`. Runtime gateway settings come from `LemonCore.GatewayConfig`.
 
 Common gateway config keys:
 
@@ -720,9 +720,7 @@ Adapters run under `LemonChannels.AdapterSupervisor` (DynamicSupervisor).
 | `LemonChannels.OutboundPayload` | Core delivery struct with constructors |
 | `LemonChannels.PortBridge` (internal) | Shared line-delimited JSON port lifecycle used by the XMTP and WhatsApp public PortServer wrappers |
 | `LemonChannels.BindingResolver` | Chat scope to project/agent/cwd/queue binding resolution (delegates to LemonCore) |
-| `LemonChannels.GatewayConfig` | Thin delegation to `LemonCore.GatewayConfig` |
 | LemonChannels.Runtime (internal) | Runtime bridge for session/run cancel, keepalive, and busy checks via `LemonCore.RouterBridge` |
-| LemonChannels.Cwd (internal) | Working directory resolution |
 | `LemonChannels.Types` | ChatScope and other shared type definitions |
 
 ### Outbox

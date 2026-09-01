@@ -220,7 +220,7 @@ and the harmless disabled example under
 | `LemonAutomation.CronStore` | `lib/lemon_automation/cron_store.ex` | Persistence layer using `LemonCore.Store` (tables: `:cron_jobs`, `:cron_runs`) |
 | `LemonAutomation.CronMemory` | `lib/lemon_automation/cron_memory.ex` | Persistent markdown-based cross-run memory for cron jobs |
 | `LemonAutomation.CronCommandRunner` | `lib/lemon_automation/cron_command_runner.ex` | Supervised no-agent local shell command runner for operator-created command cron jobs |
-| `LemonCore.Doctor.CronDiagnostics` | `apps/lemon_core/lib/lemon_core/doctor/cron_diagnostics.ex` | Core-owned redacted support-bundle diagnostics for cron jobs and runs |
+| `LemonAutomation.Doctor.CronDiagnostics` | `apps/lemon_automation/lib/lemon_automation/doctor/cron_diagnostics.ex` | Redacted support-bundle diagnostics for cron jobs and runs, reached by the doctor through `config :lemon_core, :doctor_runtime` |
 | `LemonAutomation.HeartbeatManager` | `lib/lemon_automation/heartbeat_manager.ex` | Heartbeat suppression GenServer; manages both cron-based and timer-based heartbeats |
 | `LemonAutomation.GoalContinuation` | `lib/lemon_automation/goal_continuation.ex` | Builds and submits one persistent-goal continuation run through LemonRouter |
 | `LemonAutomation.GoalContinuationManager` | `lib/lemon_automation/goal_continuation_manager.ex` | Supervised task entrypoint for one-shot goal continuation |
@@ -535,7 +535,7 @@ mix test apps/lemon_automation/test/lemon_automation/blueprint_test.exs --seed 1
 
 # Focused cron diagnostics/support proof
 MIX_ENV=test mix test \
-  apps/lemon_core/test/lemon_core/doctor/cron_diagnostics_test.exs \
+  apps/lemon_automation/test/lemon_automation/doctor/cron_diagnostics_test.exs \
   apps/lemon_core/test/lemon_core/doctor/support_bundle_test.exs \
   --seed 1
 

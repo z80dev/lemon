@@ -74,7 +74,6 @@ share a group and are never delivered concurrently to prevent reordering.
 | `lib/lemon_channels/port_bridge.ex` | `LemonChannels.PortBridge` | Shared GenServer callback implementation for line-delimited JSON Node bridge ports. XMTP and WhatsApp keep their public `PortServer` modules as the callback/process and logging identities while sharing lifecycle, parsing, restart, and reconnect behavior here. |
 | `lib/lemon_channels/discord/known_target_store.ex` | `LemonChannels.Discord.KnownTargetStore` | Store-backed Discord channel/thread directory used by script-send list mode. |
 | `lib/lemon_channels/binding_resolver.ex` | `LemonChannels.BindingResolver` | Maps ChatScope to project/agent/cwd/queue_mode. Delegates to `LemonCore.BindingResolver`; bindings never select the fixed native top-level executor. |
-| `lib/lemon_channels/gateway_config.ex` | `LemonChannels.GatewayConfig` | Channels-local config facade. Prefers `:lemon_gateway` full-replacement runtime config when present, then delegates to `LemonCore.GatewayConfig`. |
 | `lib/lemon_channels/checkpoint_status_message.ex` | `LemonChannels.CheckpointStatusMessage` | Shared redacted `/checkpoint` and `/rollback` formatter/action handler for Telegram and Discord. Calls `LemonCore.Checkpoint` for diff/restore and projects redacted lifecycle event counts and browsable event history while keeping ordinary chat free of unsolicited checkpoint notices, raw paths, file contents, and session ids. |
 | `lib/lemon_channels/kanban_status_message.ex` | `LemonChannels.KanbanStatusMessage` | Shared redacted `/kanban` command formatter for Telegram and Discord. Uses `LemonAgent.Workspace.KanbanStore` directly for board/task state and calls the automation dispatcher by configured module atom at runtime to keep compile-time boundaries clean. |
 | `lib/lemon_channels/runtime.ex` | `LemonChannels.Runtime` | Channel side of `LemonCore.RouterBridge`: `submit_inbound`, `cancel_session`, `cancel_by_progress_msg`, `cancel_by_run_id`, `keep_run_alive`, `session_busy?`; returns the bridge's `:ok` / `{:error, _}` unchanged |
@@ -605,11 +604,11 @@ Gateway transport config comes only from the canonical TOML `[gateway]` section 
 In test mode (`config_test_mode`), a full-replacement app env layer is supported for test isolation.
 
 ```elixir
-LemonChannels.GatewayConfig.get(:bindings, [])
-LemonChannels.GatewayConfig.get(:projects, %{})
+LemonCore.GatewayConfig.get(:bindings, [])
+LemonCore.GatewayConfig.get(:projects, %{})
 ```
 
-Direct `Application.get_env(:lemon_channels, :telegram)`, `Application.get_env(:lemon_channels, :discord)`, `Application.get_env(:lemon_channels, :xmtp)`, and `Application.get_env(:lemon_channels, :gateway)` reads are forbidden in runtime modules. Use `LemonChannels.GatewayConfig` or `LemonCore.GatewayConfig` instead.
+Direct `Application.get_env(:lemon_channels, :telegram)`, `Application.get_env(:lemon_channels, :discord)`, `Application.get_env(:lemon_channels, :xmtp)`, and `Application.get_env(:lemon_channels, :gateway)` reads are forbidden in runtime modules. Use `LemonCore.GatewayConfig` instead.
 
 ## Common Tasks
 

@@ -52,6 +52,22 @@ defmodule LemonAutomation.CronStore do
   @preflight_notice_table :cron_preflight_notice_state
 
   # ============================================================================
+  # Stored entries, for diagnostics
+  # ============================================================================
+
+  @doc "Every stored job as written, `{id, map}`, for redacted diagnostics."
+  @spec stored_jobs() :: [{term(), map()}]
+  def stored_jobs, do: LemonCore.Store.list(@jobs_table)
+
+  @doc "Every stored run as written, `{id, map}`, for redacted diagnostics."
+  @spec stored_runs() :: [{term(), map()}]
+  def stored_runs, do: LemonCore.Store.list(@runs_table)
+
+  @doc "Every stored audit event as written, `{id, map}`, for redacted diagnostics."
+  @spec stored_audit_events() :: [{term(), map()}]
+  def stored_audit_events, do: LemonCore.Store.list(@audit_table)
+
+  # ============================================================================
   # Job Operations
   # ============================================================================
 

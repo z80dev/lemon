@@ -240,6 +240,17 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Changed
 
+- One of each: `LemonCore.Binding`, `LemonCore.BindingResolver`, `LemonCore.Cwd`
+  and `LemonCore.GatewayConfig` are the only binding struct, resolver,
+  working-directory resolver and `[gateway]` accessor. The channel and
+  gateway copies (`LemonChannels.Binding`, `LemonGateway.Binding`,
+  `LemonGateway.BindingResolver`, `LemonChannels.Cwd`, `LemonGateway.Cwd`,
+  `LemonChannels.GatewayConfig`) and the `:gateway_config` capability of
+  `LemonCore.EngineInfoBridge` are gone; `LemonChannels.BindingResolver`
+  remains as the adapters' one call and returns `LemonCore.Binding`. The
+  test-mode replacement config has one reader, `LemonCore.GatewayConfig`.
+  Cron diagnostics live in `LemonAutomation.Doctor.CronDiagnostics`, reached
+  by the doctor through `config :lemon_core, :doctor_runtime`.
 - Run ownership is written down (`docs/platform/run-ownership.md`): the
   router owns the logical run, the execution runtime owns an attempt, the
   agent owns the session, and each transition has one owner. The overlap

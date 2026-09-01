@@ -15,7 +15,7 @@ defmodule LemonChannels.Adapters.WhatsApp.Supervisor do
   @impl true
   def init(opts) do
     # Allow running lemon_channels without any WhatsApp credentials configured.
-    base = LemonChannels.GatewayConfig.get(:whatsapp, %{}) || %{}
+    base = LemonCore.GatewayConfig.get(:whatsapp, %{}) || %{}
 
     config =
       base

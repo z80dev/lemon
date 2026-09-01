@@ -12,7 +12,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   require Logger
 
   alias LemonChannels.BindingResolver
-  alias LemonChannels.Cwd
+  alias LemonCore.Cwd
   alias LemonChannels.Telegram.{OffsetStore, PollerLock}
   alias LemonChannels.Telegram.Delivery
   alias LemonChannels.Telegram.TransportShared
@@ -52,7 +52,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
 
   @impl true
   def init(opts) do
-    base = LemonChannels.GatewayConfig.get(:telegram, %{})
+    base = LemonCore.GatewayConfig.get(:telegram, %{})
 
     config =
       base

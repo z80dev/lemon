@@ -12,6 +12,9 @@ theme of every change below is the same: nothing in `lemon_core` knows about
 Telegram, run history, durable memory, kanban boards, or `~/.lemon`.
 ### Removed
 
+- `LemonCore.Doctor.CronDiagnostics` (now `LemonAutomation.Doctor.CronDiagnostics`),
+  and the two router rules that guarded `LemonGateway.Cwd` and
+  `LemonChannels.GatewayConfig`, whose modules no longer exist.
 - The domain functions of `LemonCore.Store` (`put_chat_state/3`,
   `get_chat_state/2`, `append_run_event/3`, `finalize_run/3`, `get_run/2`,
   `get_run_history/3`, the progress-mapping, policy and introspection
@@ -90,6 +93,11 @@ Telegram, run history, durable memory, kanban boards, or `~/.lemon`.
 
 ### Changed
 
+- `LemonCore.EngineInfoBridge` keeps one capability, `:transport_registry`;
+  the `:gateway_config` capability and `LemonCore.EngineInfoBridge.GatewayConfig`
+  are removed, since `LemonCore.GatewayConfig` is the one accessor and the
+  one reader of the test-mode replacement layer. `LemonCore.Doctor.CronDiagnostics`
+  moved to `lemon_automation` behind the `:cron_diagnostics` doctor runtime key.
 - `LemonCore.ChatStateStore`, `LemonCore.RunStore`, `LemonCore.ProgressStore`,
   `LemonCore.PolicyStore`, `LemonCore.IntrospectionStore` and
   `LemonCore.IdempotencyStore` own their tables' meaning, defaults and

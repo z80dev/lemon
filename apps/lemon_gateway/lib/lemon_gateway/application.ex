@@ -32,10 +32,7 @@ defmodule LemonGateway.Application do
 
       # Channels and the control plane ask core for transport/config facts rather
       # than reaching into this app; register ourselves as the implementation.
-      LemonCore.EngineInfoBridge.configure(
-        transport_registry: LemonGateway.TransportRegistry,
-        gateway_config: LemonGateway.Config
-      )
+      LemonCore.EngineInfoBridge.configure(transport_registry: LemonGateway.TransportRegistry)
 
       # See https://hexdocs.pm/elixir/Supervisor.html
       # for other strategies and supported options

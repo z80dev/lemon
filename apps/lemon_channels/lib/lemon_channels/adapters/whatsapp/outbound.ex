@@ -269,7 +269,7 @@ defmodule LemonChannels.Adapters.WhatsApp.Outbound do
   defp normalize_batch_file_entry(_), do: {:error, :invalid_file_payload}
 
   defp whatsapp_use_markdown do
-    config = LemonChannels.GatewayConfig.get(:whatsapp, %{}) || %{}
+    config = LemonCore.GatewayConfig.get(:whatsapp, %{}) || %{}
 
     case Map.fetch(config, :use_markdown) do
       {:ok, nil} -> true

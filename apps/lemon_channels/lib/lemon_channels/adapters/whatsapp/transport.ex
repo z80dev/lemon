@@ -20,7 +20,8 @@ defmodule LemonChannels.Adapters.WhatsApp.Transport do
     SessionRouting
   }
 
-  alias LemonChannels.{BindingResolver, GatewayConfig}
+  alias LemonChannels.BindingResolver
+  alias LemonCore.GatewayConfig
   alias LemonCore.ChatScope
   alias LemonCore.{InboundMessage, RouterBridge}
 

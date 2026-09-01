@@ -246,7 +246,39 @@ defmodule LemonCore.Doctor.SupportBundle do
   end
 
   defp cron_diagnostics(opts) do
-    LemonCore.Doctor.CronDiagnostics.status(limit: Keyword.get(opts, :cron_limit, 20))
+    probe(
+      runtime_module(:cron_diagnostics),
+      :status,
+      [[limit: Keyword.get(opts, :cron_limit, 20)]],
+      %{
+        job_count: 0,
+        enabled_count: 0,
+        disabled_count: 0,
+        run_count: 0,
+        active_run_count: 0,
+        failed_run_count: 0,
+        next_run_at_ms: nil,
+        last_run_at_ms: nil,
+        status_counts: %{},
+        trigger_counts: %{},
+        audit_event_count: 0,
+        audit_action_counts: %{},
+        recent_jobs: [],
+        recent_runs: [],
+        recent_audit_events: [],
+        cleanup: %{
+          includes_prompts: false,
+          includes_commands: false,
+          includes_outputs: false,
+          includes_errors: false,
+          includes_raw_session_ids: false,
+          includes_raw_agent_ids: false,
+          includes_raw_memory_paths: false,
+          includes_meta_values: false,
+          includes_raw_audit_ids: false
+        }
+      }
+    )
   end
 
   defp extension_diagnostics(opts) do

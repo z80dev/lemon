@@ -86,18 +86,6 @@ defmodule LemonCore.Quality.ArchitectureRulesCheck do
       patterns: ["LemonChannels.Telegram."]
     },
     %{
-      code: :router_channels_runtime_dependency,
-      message: "Router must not depend on LemonChannels runtime/config helpers directly",
-      files: ["apps/lemon_router/lib/**/*.ex"],
-      patterns: ["LemonChannels.GatewayConfig"]
-    },
-    %{
-      code: :router_gateway_cwd_dependency,
-      message: "Router must use LemonCore.Cwd instead of LemonGateway.Cwd",
-      files: ["apps/lemon_router/lib/**/*.ex"],
-      patterns: ["LemonGateway.Cwd"]
-    },
-    %{
       code: :router_session_registry_boundary,
       message: "Apps outside lemon_router must not reference router-internal session state",
       files: ["apps/**/*.ex", "apps/**/*.exs"],

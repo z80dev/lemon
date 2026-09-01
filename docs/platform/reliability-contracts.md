@@ -19,7 +19,7 @@ raised" into the same successful-looking value.
 | `LemonCore.RouterBridge` (`:router`) | `LemonRouter.Application` | `LemonCore.RouterBridge.Router` | `configure/1`, via `LemonCore.Contract.validate/2` |
 | `LemonCore.RouterBridge` (`:run_orchestrator`) | `LemonRouter.Application` | `LemonCore.RouterBridge.RunOrchestrator` | `configure/1` |
 | `LemonCore.EventBridge` | `LemonControlPlane.Application` | `LemonCore.EventBridge.Fanout` | `configure/1` |
-| `LemonCore.EngineInfoBridge` | `LemonGateway.Application` | `LemonCore.EngineInfoBridge.TransportRegistry`, `LemonCore.EngineInfoBridge.GatewayConfig` | `configure/1` |
+| `LemonCore.EngineInfoBridge` | `LemonGateway.Application` | `LemonCore.EngineInfoBridge.TransportRegistry` | `configure/1` |
 | `LemonCore.EngineRuntime` | `config :lemon_router, :engine_runtime` | `LemonCore.EngineRuntime` | `LemonRouter.Application` at boot, `LemonRouter.RunProcess` at init |
 | `LemonGateway.Executor` | `config :lemon_gateway, :executor` | `LemonGateway.Executor` | `LemonGateway.Application` at boot |
 

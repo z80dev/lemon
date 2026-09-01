@@ -659,7 +659,7 @@ defmodule LemonChannels.ScriptSend do
 
   defp gateway_section_value(section, keys) do
     section
-    |> LemonChannels.GatewayConfig.get(%{})
+    |> LemonCore.GatewayConfig.get(%{})
     |> find_section_value(keys)
     |> to_nonempty_string()
   rescue

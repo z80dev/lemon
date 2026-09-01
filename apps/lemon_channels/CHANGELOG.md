@@ -95,6 +95,10 @@ keeping it small and honest.
 
 ### Changed
 
+- `LemonChannels.BindingResolver` returns `LemonCore.Binding` and reads the
+  gateway config through `LemonCore.GatewayConfig`; `LemonChannels.Binding`,
+  `LemonChannels.Cwd` and `LemonChannels.GatewayConfig` are removed. Adapters
+  use `LemonCore.Cwd` and `LemonCore.GatewayConfig` directly.
 - `LemonChannels.Telegram.KnownTargetStore` declares its table with
   `LemonCore.Store.Table` (cached), and `LemonChannels.Application`
   registers the declaration at boot instead of asking the store to mirror a

@@ -1,16 +1,24 @@
-defmodule LemonCore.Doctor.CronDiagnostics do
+defmodule LemonAutomation.Doctor.CronDiagnostics do
   @moduledoc """
   Redacted diagnostics for cron jobs and scheduled-run history.
+
+  Owned by the application that owns the cron tables. The doctor framework in
+  `lemon_core` reaches it through `config :lemon_core, :doctor_runtime`
+  (`:cron_diagnostics`), so core never names this module or its tables.
+  Every value is hashed or counted; no prompt, command, output, error,
+  session id or memory path leaves this module.
   """
+
+  alias LemonAutomation.CronStore
 
   @default_limit 20
 
   @spec status(keyword()) :: map()
   def status(opts \\ []) do
     limit = Keyword.get(opts, :limit, @default_limit)
-    jobs = store_entries(:cron_jobs)
-    runs = store_entries(:cron_runs)
-    audit_events = store_entries(:cron_audit_events)
+    jobs = entries(CronStore.stored_jobs())
+    runs = entries(CronStore.stored_runs())
+    audit_events = entries(CronStore.stored_audit_events())
 
     %{
       job_count: length(jobs),
@@ -64,10 +72,8 @@ defmodule LemonCore.Doctor.CronDiagnostics do
     _, _ -> empty_status()
   end
 
-  defp store_entries(table) do
-    table
-    |> LemonCore.Store.list()
-    |> Enum.map(fn {id, data} -> %{id: to_string(id), data: normalize_map(data)} end)
+  defp entries(stored) do
+    Enum.map(stored, fn {id, data} -> %{id: to_string(id), data: normalize_map(data)} end)
   end
 
   defp format_job(%{id: id, data: job}) do

@@ -5,7 +5,7 @@ defmodule LemonChannels.Adapters.Email.Config do
     * `config :lemon_channels, LemonChannels.Adapters.Email, ...` — the
       channels-native surface, and the one to document for new deployments.
     * the canonical TOML `[gateway]` config's `email` block, read through
-      `LemonChannels.GatewayConfig`.
+      `LemonCore.GatewayConfig`.
 
   The TOML source exists because email was configured there for as long as it
   lived in `lemon_gateway`. Keeping it readable means an existing deployment's
@@ -114,7 +114,7 @@ defmodule LemonChannels.Adapters.Email.Config do
   end
 
   defp gateway_email do
-    LemonChannels.GatewayConfig.get(:email, %{}) |> to_map()
+    LemonCore.GatewayConfig.get(:email, %{}) |> to_map()
   end
 
   defp to_map(value) when is_map(value), do: value

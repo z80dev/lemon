@@ -69,7 +69,8 @@ config :lemon_core, :doctor_runtime,
   lsp_server_manager: LemonLsp.ServerManager,
   channel_diagnostics: LemonChannels.Doctor.Diagnostics,
   channel_readiness: LemonChannels.Doctor.Readiness,
-  channel_proofs: LemonChannels.Doctor.ProofSpec
+  channel_proofs: LemonChannels.Doctor.ProofSpec,
+  cron_diagnostics: LemonAutomation.Doctor.CronDiagnostics
 
 # Diagnostics owned by apps that depend on lemon_core register themselves here.
 # Modules missing from a given build are skipped (see LemonCore.Doctor).

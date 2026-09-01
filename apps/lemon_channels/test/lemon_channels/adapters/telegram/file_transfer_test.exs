@@ -218,7 +218,7 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
 
   test "/file put defaults to channels.default_cwd when no project is bound" do
     chat_id = 12_346
-    root = Elixir.LemonChannels.Cwd.default_cwd()
+    root = LemonCore.Cwd.default_cwd()
 
     rel =
       Path.join("incoming", "lemon-file-put-default-#{System.unique_integer([:positive])}.txt")
@@ -280,7 +280,7 @@ defmodule LemonChannels.Adapters.Telegram.FileTransferTest do
 
   test "/file get defaults to channels.default_cwd when no project is bound" do
     chat_id = 22_223
-    root = Elixir.LemonChannels.Cwd.default_cwd()
+    root = LemonCore.Cwd.default_cwd()
 
     rel =
       Path.join("incoming", "lemon-file-get-default-#{System.unique_integer([:positive])}.txt")

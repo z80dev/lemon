@@ -3,8 +3,8 @@ defmodule LemonGateway.ConfigLoader do
   Loads gateway configuration and converts raw maps into typed structs
   (Project, Binding, etc.) for use by the LemonGateway.Config GenServer.
 
-  Base config loading and override merging is delegated to
-  `LemonCore.GatewayConfig.load/0`.
+  Loading is delegated to `LemonCore.GatewayConfig.load/0`, which also owns
+  the test-mode replacement layer; this module only types the result.
   """
 
   alias LemonCore.Binding
@@ -16,28 +16,7 @@ defmodule LemonGateway.ConfigLoader do
     |> parse_gateway()
   end
 
-  defp load_gateway do
-    if test_env?() do
-      case Application.get_env(:lemon_gateway, LemonGateway.Config) do
-        nil -> LemonCore.GatewayConfig.load()
-        config -> normalize_test_config(config)
-      end
-    else
-      LemonCore.GatewayConfig.load()
-    end
-  end
-
-  defp test_env? do
-    function_exported?(Mix, :env, 0) and Mix.env() == :test
-  end
-
-  defp normalize_test_config(config) when is_map(config), do: config
-
-  defp normalize_test_config(config) when is_list(config) do
-    if Keyword.keyword?(config), do: Enum.into(config, %{}), else: %{bindings: config}
-  end
-
-  defp normalize_test_config(_), do: %{}
+  defp load_gateway, do: LemonCore.GatewayConfig.load()
 
   defp parse_gateway(gateway) when is_map(gateway) do
     projects = parse_projects(fetch(gateway, :projects) || %{})

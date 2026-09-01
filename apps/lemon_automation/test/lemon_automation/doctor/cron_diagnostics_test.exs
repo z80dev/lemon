@@ -1,7 +1,7 @@
-defmodule LemonCore.Doctor.CronDiagnosticsTest do
+defmodule LemonAutomation.Doctor.CronDiagnosticsTest do
   use ExUnit.Case, async: false
 
-  alias LemonCore.Doctor.CronDiagnostics
+  alias LemonAutomation.Doctor.CronDiagnostics
   alias LemonCore.Store
 
   test "summarizes cron jobs and runs without raw prompt, output, or identifiers" do

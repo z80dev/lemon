@@ -2,10 +2,12 @@ defmodule LemonCore.GatewayConfig do
   @moduledoc """
   Unified gateway configuration access.
 
-  Gateway config comes from the canonical TOML `[gateway]` section only.
-  In test mode (`config_test_mode`), a full-replacement app env layer
-  (`Application.get_env(:lemon_gateway, LemonGateway.Config)`) is supported
-  for test isolation.
+  The one accessor for the `[gateway]` section: channels, the gateway's own
+  loader and `LemonCore.Cwd` all read through here. Gateway config comes
+  from the canonical TOML section. In test mode (`config_test_mode`), a
+  full-replacement app env layer (`Application.get_env(:lemon_gateway,
+  LemonGateway.Config)`) is read first, for test isolation; this is the only
+  reader of that layer.
   """
 
   @doc """

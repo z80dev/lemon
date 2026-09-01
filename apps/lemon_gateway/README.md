@@ -135,7 +135,6 @@ Webhook, SMS, and voice are gateway-owned by design, not pending migration: `Lem
 | `LemonGateway.Types` | `types.ex` | Shared gateway lane type |
 | `LemonGateway.Event` | `event.ex` | Run lifecycle events (plain tagged maps with guards) and `Delta` struct |
 | `LemonCore.ChatState` | `../lemon_core/lib/lemon_core/chat_state.ex` | Session state struct for auto-resume tracking |
-| `LemonGateway.Cwd` | `cwd.ex` | Default working directory resolver |
 | `LemonGateway.Project` | `project.ex` | Project configuration struct (`id`, `root`) |
 | `LemonGateway.Shared` | `shared.ex` | Shared utilities (config access, data normalization, IP parsing) |
 | `LemonGateway.DependencyManager` | `dependency_manager.ex` | Centralized app startup, module availability checks, safe bus/telemetry |
@@ -190,8 +189,6 @@ in-process subagents.
 
 | Module | File | Purpose |
 |--------|------|---------|
-| `LemonGateway.Binding` | `binding_resolver.ex` | Struct mapping transport/chat/topic to project, agent, and queue mode |
-| `LemonGateway.BindingResolver` | `binding_resolver.ex` | Resolves cwd, agent_id, and queue_mode from `ChatScope` |
 | `LemonGateway.Renderer` | `renderer.ex` | Behaviour for event-to-text rendering |
 | `LemonGateway.Renderers.Basic` | `renderers/basic.ex` | Plain-text renderer with action lists and resume info |
 

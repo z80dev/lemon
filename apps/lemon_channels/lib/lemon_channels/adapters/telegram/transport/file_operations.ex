@@ -8,7 +8,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.FileOperations do
   """
 
   alias LemonChannels.BindingResolver
-  alias LemonChannels.Cwd
+  alias LemonCore.Cwd
   alias LemonCore.ChatScope
   alias LemonChannels.Adapters.Telegram.Transport.Commands
 

@@ -2,20 +2,18 @@ defmodule LemonCore.EngineInfoBridge do
   @moduledoc """
   Optional bridge to the gateway runtime, without compile-time coupling.
 
-  Channels and the control plane use the gateway runtime (`:lemon_gateway` in
-  the reference runtime) for transport-registry ops introspection and any
-  full-replacement gateway config it holds. The gateway registers itself here
-  at boot and callers ask core:
+  The control plane uses the gateway runtime (`:lemon_gateway` in the
+  reference runtime) for transport-registry ops introspection. The gateway
+  registers itself here at boot and callers ask core:
 
       LemonCore.EngineInfoBridge.configure(
-        transport_registry: LemonGateway.TransportRegistry,
-        gateway_config: LemonGateway.Config
+        transport_registry: LemonGateway.TransportRegistry
       )
 
-  Each capability is a behaviour (`LemonCore.EngineInfoBridge.TransportRegistry`,
-  `LemonCore.EngineInfoBridge.GatewayConfig`), and `configure/1` verifies the
-  registered module against it with `LemonCore.Contract.validate/2`, so a
-  configured capability is one the bridge can call directly.
+  Each capability is a behaviour (`LemonCore.EngineInfoBridge.TransportRegistry`),
+  and `configure/1` verifies the registered module against it with
+  `LemonCore.Contract.validate/2`, so a configured capability is one the
+  bridge can call directly.
 
   Every function answers `{:error, :unavailable}` (or the documented empty
   value) when its capability is unconfigured or its process is not running, so
@@ -29,13 +27,10 @@ defmodule LemonCore.EngineInfoBridge do
   require Logger
 
   @bridge_key :engine_info_bridge
-  @capabilities [
-    transport_registry: LemonCore.EngineInfoBridge.TransportRegistry,
-    gateway_config: LemonCore.EngineInfoBridge.GatewayConfig
-  ]
+  @capabilities [transport_registry: LemonCore.EngineInfoBridge.TransportRegistry]
   @config_keys Keyword.keys(@capabilities)
 
-  @type capability :: :transport_registry | :gateway_config
+  @type capability :: :transport_registry
   @type config :: %{optional(capability()) => module()}
 
   @doc """
@@ -92,32 +87,6 @@ defmodule LemonCore.EngineInfoBridge do
   @spec get_transport(term()) :: {:ok, module()} | {:error, :unavailable}
   def get_transport(id), do: registry_call(:get_transport, [id])
 
-  @doc """
-  A full-replacement gateway config map, or `:none`.
-
-  The gateway runtime may hold a config that replaces the canonical one
-  wholesale (used by tests and by embedders that drive the gateway directly).
-  """
-  @spec gateway_config() :: {:ok, map()} | :none
-  def gateway_config do
-    case impl(:gateway_config) do
-      nil -> :none
-      module -> normalize_config(module.replacement_config())
-    end
-  rescue
-    exception ->
-      Logger.error(
-        "EngineInfoBridge gateway_config raised: " <>
-          Exception.format(:error, exception, __STACKTRACE__)
-      )
-
-      :none
-  catch
-    :exit, reason ->
-      Logger.warning("EngineInfoBridge gateway_config unavailable: #{inspect(reason)}")
-      :none
-  end
-
   defp registry_call(function, args) do
     case impl(:transport_registry) do
       nil ->
@@ -146,18 +115,6 @@ defmodule LemonCore.EngineInfoBridge do
 
       {:error, :unavailable}
   end
-
-  defp normalize_config(config) when is_map(config), do: {:ok, config}
-
-  defp normalize_config(config) when is_list(config) do
-    if Keyword.keyword?(config) do
-      {:ok, Enum.into(config, %{})}
-    else
-      {:ok, %{bindings: config}}
-    end
-  end
-
-  defp normalize_config(_config), do: :none
 
   defp validate(incoming) do
     Enum.reduce_while(incoming, :ok, fn {capability, module}, :ok ->

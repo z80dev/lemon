@@ -29,10 +29,10 @@ defmodule LemonGateway.Run do
   require Logger
   import LemonGateway.Event, only: [is_started: 1, is_action_event: 1, is_completed: 1]
 
-  alias LemonCore.{ProgressStore, RunStore}
+  alias LemonCore.{Cwd, ProgressStore, RunStore}
 
   alias LemonCore.Events
-  alias LemonGateway.{Cwd, Event, ExecutionRequest, Executor}
+  alias LemonGateway.{Event, ExecutionRequest, Executor}
   alias LemonCore.ResumeToken
 
   @engine_provenance "lemon"

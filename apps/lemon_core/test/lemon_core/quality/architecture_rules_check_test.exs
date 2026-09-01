@@ -177,27 +177,6 @@ defmodule LemonCore.Quality.ArchitectureRulesCheckTest do
     end
   end
 
-  test "flags router use of gateway cwd" do
-    tmp_dir = tmp_repo!()
-
-    try do
-      write_file!(
-        tmp_dir,
-        "apps/lemon_router/lib/lemon_router/bad_boundary.ex",
-        """
-        defmodule LemonRouter.BadBoundary do
-          def bad, do: LemonGateway.Cwd.default_cwd()
-        end
-        """
-      )
-
-      assert {:error, report} = ArchitectureRulesCheck.run(root: tmp_dir)
-      assert Enum.any?(report.issues, &(&1.code == :router_gateway_cwd_dependency))
-    after
-      File.rm_rf!(tmp_dir)
-    end
-  end
-
   test "flags raw generic shared-domain session store access" do
     tmp_dir = tmp_repo!()
 

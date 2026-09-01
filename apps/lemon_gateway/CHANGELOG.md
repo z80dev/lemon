@@ -20,6 +20,12 @@ scheduler and lifecycle owner rather than a selectable engine host.
 
 ### Changed
 
+- `LemonGateway.Binding`, `LemonGateway.BindingResolver` and `LemonGateway.Cwd`
+  are removed in favour of the `LemonCore` modules they duplicated;
+  `LemonGateway.Run` resolves the default working directory with
+  `LemonCore.Cwd`. `LemonGateway.ConfigLoader` no longer keeps its own
+  test-mode replacement branch, and `LemonGateway.Config.replacement_config/0`
+  is gone with the bridge capability that exposed it.
 - `LemonGateway.Run` no longer tracks run phases against the phase graph;
   the router publishes phases and owns the graph. A streaming delta is
   built once as `LemonCore.Events.Delta` (the `LemonGateway.Event.Delta`

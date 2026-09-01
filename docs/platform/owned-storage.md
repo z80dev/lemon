@@ -159,9 +159,10 @@ What remains, and is not this phase's job:
   retention, mirror or ownership record from the store. Adopt the
   declaration when a module is next touched. The measure is the
   `generic_store_tables` ratchet, not the number of wrapper modules.
-- `LemonCore.Doctor.CronDiagnostics` reads the cron tables from `lemon_core`,
-  below the application that owns them. That is a boundary question for
-  Phase 5, not a storage one.
+- The cron diagnostics used to read the cron tables from `lemon_core`, below
+  the application that owns them; they now live in
+  `LemonAutomation.Doctor.CronDiagnostics` and read through `CronStore`, and
+  the doctor reaches them through `config :lemon_core, :doctor_runtime`.
 - `LemonCore.Store.JsonlBackend` still lists domain tables to preload; it
   also discovers tables from disk, so the list is a legacy it can lose.
 

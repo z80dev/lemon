@@ -12,7 +12,8 @@ defmodule LemonChannels.Adapters.WhatsApp.Renderer do
   """
 
   alias LemonChannels.Adapters.WhatsApp.StatusRenderer
-  alias LemonChannels.{GatewayConfig, OutboundPayload, Outbox, PresentationState}
+  alias LemonChannels.{OutboundPayload, Outbox, PresentationState}
+  alias LemonCore.GatewayConfig
   alias LemonCore.{DeliveryIntent, DeliveryRoute}
 
   @spec dispatch(DeliveryIntent.t()) :: :ok | {:error, term()}

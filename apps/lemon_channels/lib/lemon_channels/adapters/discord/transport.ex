@@ -23,7 +23,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   alias LemonChannels.Adapters.Telegram.Transport.MemoryReflection
   alias LemonChannels.Adapters.Telegram.Transport.ResumeSelection
   alias LemonChannels.BindingResolver
-  alias LemonChannels.Cwd
+  alias LemonCore.Cwd
   alias LemonChannels.Discord.KnownTargetStore
   alias LemonChannels.Telegram.TransportShared
   alias LemonCore.ChatScope
@@ -95,7 +95,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
 
   @impl true
   def init(opts) do
-    base = LemonChannels.GatewayConfig.get(:discord, %{}) || %{}
+    base = LemonCore.GatewayConfig.get(:discord, %{}) || %{}
 
     config =
       base

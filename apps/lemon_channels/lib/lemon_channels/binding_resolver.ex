@@ -1,119 +1,43 @@
-defmodule LemonChannels.Binding do
-  @moduledoc """
-  Resolved routing binding for a chat scope: the transport, chat/topic ids and
-  the project, agent, and queue mode a message routes to. Produced by
-  `LemonChannels.BindingResolver.resolve_binding/1`.
-  """
-  defstruct [:transport, :chat_id, :topic_id, :project, :agent_id, :queue_mode]
-
-  @type t :: %__MODULE__{
-          transport: atom(),
-          chat_id: integer(),
-          topic_id: integer() | nil,
-          project: String.t() | nil,
-          agent_id: String.t() | nil,
-          queue_mode: atom() | nil
-        }
-end
-
 defmodule LemonChannels.BindingResolver do
   @moduledoc """
-  Resolves bindings and settings for a Telegram chat scope.
+  Bindings and settings for a chat scope, as channels need them.
 
-  Thin delegation layer that converts channels-local structs to
-  `LemonCore` types and delegates to `LemonCore.BindingResolver`.
+  A binding maps a transport, chat and optional topic to a project, an agent
+  and a queue mode. The rules live in `LemonCore.BindingResolver`; this
+  module only supplies the bindings and projects from the gateway config, so
+  every adapter resolves the same way with one call.
   """
 
-  alias LemonChannels.{Binding, GatewayConfig}
-  alias LemonCore.ChatScope
-  alias LemonCore.BindingResolver, as: CoreResolver
-
-  # ---------------------------------------------------------------------------
-  # Public API — same signatures as before
-  # ---------------------------------------------------------------------------
+  alias LemonCore.{Binding, BindingResolver, ChatScope, GatewayConfig}
 
   @spec resolve_binding(ChatScope.t()) :: Binding.t() | nil
-  def resolve_binding(%ChatScope{} = scope) do
-    scope
-    |> to_core_scope()
-    |> CoreResolver.resolve_binding(resolver_opts())
-    |> from_core_binding()
-  end
+  def resolve_binding(%ChatScope{} = scope), do: BindingResolver.resolve_binding(scope, opts())
 
   @spec resolve_agent_id(ChatScope.t()) :: String.t()
-  def resolve_agent_id(%ChatScope{} = scope) do
-    scope
-    |> to_core_scope()
-    |> CoreResolver.resolve_agent_id(resolver_opts())
-  end
+  def resolve_agent_id(%ChatScope{} = scope), do: BindingResolver.resolve_agent_id(scope, opts())
 
-  @spec resolve_cwd(ChatScope.t()) :: String.t() | nil
-  def resolve_cwd(%ChatScope{} = scope) do
-    scope
-    |> to_core_scope()
-    |> CoreResolver.resolve_cwd(resolver_opts())
-  end
-
+  @spec resolve_cwd(ChatScope.t() | term()) :: String.t() | nil
+  def resolve_cwd(%ChatScope{} = scope), do: BindingResolver.resolve_cwd(scope, opts())
   def resolve_cwd(_), do: nil
 
   @spec resolve_queue_mode(ChatScope.t()) :: atom() | nil
   def resolve_queue_mode(%ChatScope{} = scope) do
-    scope
-    |> to_core_scope()
-    |> CoreResolver.resolve_queue_mode(resolver_opts())
+    BindingResolver.resolve_queue_mode(scope, opts())
   end
 
   @doc false
-  def get_project_override(%ChatScope{} = scope) do
-    scope
-    |> to_core_scope()
-    |> CoreResolver.get_project_override()
-  end
+  def get_project_override(%ChatScope{} = scope), do: BindingResolver.get_project_override(scope)
 
   @doc false
   def lookup_project(project_id) when is_binary(project_id) do
-    CoreResolver.lookup_project(project_id, &config_projects/0)
+    BindingResolver.lookup_project(project_id, &projects/0)
   end
 
   def lookup_project(_), do: nil
 
-  # ---------------------------------------------------------------------------
-  # Private helpers
-  # ---------------------------------------------------------------------------
+  defp opts, do: [bindings: bindings(), config_provider: &projects/0]
 
-  defp resolver_opts do
-    [
-      bindings: bindings(),
-      config_provider: &config_projects/0
-    ]
-  end
+  defp bindings, do: GatewayConfig.get(:bindings, []) |> List.wrap()
 
-  defp to_core_scope(%ChatScope{} = s) do
-    %LemonCore.ChatScope{transport: s.transport, chat_id: s.chat_id, topic_id: s.topic_id}
-  end
-
-  defp from_core_binding(nil), do: nil
-
-  defp from_core_binding(%LemonCore.Binding{} = b) do
-    %Binding{
-      transport: b.transport,
-      chat_id: b.chat_id,
-      topic_id: b.topic_id,
-      project: b.project,
-      agent_id: b.agent_id,
-      queue_mode: b.queue_mode
-    }
-  end
-
-  defp bindings do
-    GatewayConfig.get(:bindings, []) |> List.wrap()
-  rescue
-    _ -> []
-  end
-
-  defp config_projects do
-    GatewayConfig.get(:projects, %{}) || %{}
-  rescue
-    _ -> %{}
-  end
+  defp projects, do: GatewayConfig.get(:projects, %{}) || %{}
 end

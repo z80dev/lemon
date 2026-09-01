@@ -12,20 +12,9 @@ defmodule LemonCore.EngineInfoBridgeTest do
     def get_transport(_id), do: nil
   end
 
-  defmodule GatewayConfigStub do
-    def replacement_config, do: %{bindings: [%{transport: :demo}]}
-  end
-
-  defmodule KeywordConfigStub do
-    def replacement_config, do: [enable_demo: true]
-  end
-
-  defmodule ListConfigStub do
-    def replacement_config, do: [%{transport: :demo}]
-  end
-
-  defmodule EmptyConfigStub do
-    def replacement_config, do: nil
+  defmodule NoApiStub do
+    @moduledoc false
+    def unrelated, do: :ok
   end
 
   setup do
@@ -51,19 +40,13 @@ defmodule LemonCore.EngineInfoBridgeTest do
       assert EngineInfoBridge.list_transports() == {:error, :unavailable}
       assert EngineInfoBridge.enabled_transports() == {:error, :unavailable}
       assert EngineInfoBridge.get_transport(:email) == {:error, :unavailable}
-      assert EngineInfoBridge.gateway_config() == :none
     end
   end
 
   describe "configure/1" do
-    test "registers retained capabilities and leaves others alone" do
+    test "registers the capability" do
       assert EngineInfoBridge.configure(transport_registry: BridgeTransportRegistryStub) == :ok
       assert EngineInfoBridge.impl(:transport_registry) == BridgeTransportRegistryStub
-      assert EngineInfoBridge.impl(:gateway_config) == nil
-
-      assert EngineInfoBridge.configure(gateway_config: GatewayConfigStub) == :ok
-      assert EngineInfoBridge.impl(:transport_registry) == BridgeTransportRegistryStub
-      assert EngineInfoBridge.impl(:gateway_config) == GatewayConfigStub
     end
 
     test "rejects a non-module value" do
@@ -74,8 +57,8 @@ defmodule LemonCore.EngineInfoBridgeTest do
     test "rejects a module that does not implement the capability" do
       assert {:error,
               {:invalid_implementation, :transport_registry,
-               {:missing_callbacks, GatewayConfigStub, missing}}} =
-               EngineInfoBridge.configure(transport_registry: GatewayConfigStub)
+               {:missing_callbacks, NoApiStub, missing}}} =
+               EngineInfoBridge.configure(transport_registry: NoApiStub)
 
       assert Keyword.has_key?(missing, :list_transports)
       assert EngineInfoBridge.impl(:transport_registry) == nil
@@ -107,32 +90,6 @@ defmodule LemonCore.EngineInfoBridgeTest do
       assert EngineInfoBridge.running?(:transport_registry)
       Agent.stop(BridgeTransportRegistryStub)
       refute EngineInfoBridge.running?(:transport_registry)
-    end
-  end
-
-  describe "gateway config capability" do
-    test "returns a map as-is" do
-      EngineInfoBridge.configure(gateway_config: GatewayConfigStub)
-
-      assert {:ok, %{bindings: [%{transport: :demo}]}} = EngineInfoBridge.gateway_config()
-    end
-
-    test "normalizes a keyword list into a map" do
-      EngineInfoBridge.configure(gateway_config: KeywordConfigStub)
-
-      assert EngineInfoBridge.gateway_config() == {:ok, %{enable_demo: true}}
-    end
-
-    test "treats a bare list as bindings, matching the previous reader" do
-      EngineInfoBridge.configure(gateway_config: ListConfigStub)
-
-      assert EngineInfoBridge.gateway_config() == {:ok, %{bindings: [%{transport: :demo}]}}
-    end
-
-    test "reports :none when the runtime holds no replacement config" do
-      EngineInfoBridge.configure(gateway_config: EmptyConfigStub)
-
-      assert EngineInfoBridge.gateway_config() == :none
     end
   end
 end

@@ -649,7 +649,7 @@ defmodule LemonChannels.Adapters.Telegram.Outbound do
   end
 
   defp telegram_runtime_config do
-    LemonChannels.GatewayConfig.get(:telegram, %{}) || %{}
+    LemonCore.GatewayConfig.get(:telegram, %{}) || %{}
   end
 
   defp fetch_config(config, key) when is_map(config) and is_atom(key) do

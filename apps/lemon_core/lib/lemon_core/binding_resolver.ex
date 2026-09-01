@@ -5,8 +5,8 @@ defmodule LemonCore.BindingResolver do
   Resolves bindings and settings for a given chat scope. Bindings map
   transport/chat/topic combinations to projects and queue modes.
 
-  Both `LemonGateway.BindingResolver` and `LemonChannels.BindingResolver`
-  delegate here after converting their local structs to `LemonCore` types.
+  `LemonChannels.BindingResolver` calls these with the bindings and projects
+  from the gateway config; the gateway resolves through the same functions.
   """
 
   alias LemonCore.Binding
