@@ -134,6 +134,14 @@ defmodule LemonSkills.EntryTest do
   end
 
   describe "with_provenance/2" do
+    test "preserves an explicit blocked-bundle override", %{tmp_dir: tmp_dir} do
+      entry = Entry.new(Path.join(tmp_dir, "overridden-skill"))
+      updated = Entry.with_provenance(entry, %{"audit_status" => "overridden"})
+
+      assert updated.audit_status == :overridden
+      assert Entry.to_lockfile_record(updated)["audit_status"] == "overridden"
+    end
+
     test "applies provenance fields from a map", %{tmp_dir: tmp_dir} do
       entry = Entry.new(Path.join(tmp_dir, "prov-skill"))
 

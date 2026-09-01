@@ -109,6 +109,33 @@ defmodule LemonSkills.StatusTest do
       assert result.disabled == false
     end
 
+    test "keeps an explicitly overridden blocked bundle active", %{tmp_dir: tmp_dir} do
+      entry = %Entry{
+        key: "overridden-skill",
+        path: tmp_dir,
+        enabled: true,
+        audit_status: :overridden,
+        audit_findings: ["[block] remote_exec: remote execution"]
+      }
+
+      result = Status.check_entry(entry, cwd: tmp_dir)
+      assert result.activation_state == :active
+      assert result.ready == true
+    end
+
+    test "keeps an unapproved audit block inactive", %{tmp_dir: tmp_dir} do
+      entry = %Entry{
+        key: "blocked-skill",
+        path: tmp_dir,
+        enabled: true,
+        audit_status: :block
+      }
+
+      result = Status.check_entry(entry, cwd: tmp_dir)
+      assert result.activation_state == :blocked
+      assert result.ready == false
+    end
+
     test "returns not_ready when bins are missing", %{tmp_dir: tmp_dir} do
       missing_bin = "definitely-missing-bin-#{System.unique_integer([:positive])}"
 

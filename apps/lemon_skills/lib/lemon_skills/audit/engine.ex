@@ -44,7 +44,7 @@ defmodule LemonSkills.Audit.Engine do
   alias LemonSkills.Audit.LlmReviewer
 
   @type verdict :: :pass | :warn | :block
-  @version 2
+  @version 3
 
   @doc "Version tag for cache invalidation when deterministic audit rules change."
   @spec version() :: pos_integer()
@@ -241,9 +241,9 @@ defmodule LemonSkills.Audit.Engine do
   # ── Rule: remote_exec ────────────────────────────────────────────────────────
 
   @remote_exec_patterns [
-    {~r/curl\s+[^|]+\|\s*(bash|sh|python\d*|ruby|perl|node)\b/i,
+    {~r/curl\s+[^|]+(?<!\\)\|\s*(bash|sh|python\d*|ruby|perl|node)\b/i,
      "curl piped to shell interpreter (remote code execution)"},
-    {~r/wget\s+[^|]+\|\s*(bash|sh|python\d*|ruby|perl|node)\b/i,
+    {~r/wget\s+[^|]+(?<!\\)\|\s*(bash|sh|python\d*|ruby|perl|node)\b/i,
      "wget piped to shell interpreter (remote code execution)"},
     {~r/\beval\s*\$\s*[\(\`].*curl/, "eval of curl output (remote code execution)"},
     {~r/\beval\s*\$\s*[\(\`].*wget/, "eval of wget output (remote code execution)"},

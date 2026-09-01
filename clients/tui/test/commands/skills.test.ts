@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { errorResult } from "../../src/dev/fake-server.ts";
 import { initTheme, resetTheme } from "../../src/ui/theme/theme.ts";
 import { invalidateThemeAdapters } from "../../src/ui/theme/tui-adapters.ts";
 import { createHarness, type Harness } from "../helpers/command-harness.ts";
@@ -81,5 +82,34 @@ describe("/skills", () => {
 		expect(harness.host.multiPickers[0].disabledValues).toEqual([
 			"hermes:bundled/apple/apple-notes",
 		]);
+	});
+
+	test("shows a security audit block instead of a generic install failure", async () => {
+		harness.server.respondWith("skills.hermes.catalog", {
+			skills: [
+				{
+					id: "hermes:bundled/autonomous-ai-agents/hermes-agent",
+					key: "hermes-agent",
+					name: "hermes-agent",
+					description: "Operate Hermes.",
+					category: "autonomous-ai-agents",
+					collection: "bundled",
+					installed: false,
+				},
+			],
+			categories: [],
+			summary: { count: 1, categoryCount: 1, installedCount: 0 },
+		});
+		harness.server.onMethod("skills.install", () =>
+			errorResult("PERMISSION_DENIED", "Skill blocked by security audit: remote code execution"),
+		);
+
+		await harness.run("/skills hermes-agent");
+		const picker = harness.host.multiPickers[0];
+		await picker.onConfirm([picker.items[0]]);
+
+		expect(harness.host.text).toContain(
+			"hermes-agent: Skill blocked by security audit: remote code execution",
+		);
 	});
 });

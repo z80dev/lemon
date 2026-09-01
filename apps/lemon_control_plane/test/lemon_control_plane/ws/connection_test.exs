@@ -1,7 +1,87 @@
 defmodule LemonControlPlane.WS.ConnectionTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
+  alias LemonControlPlane.Methods.Registry
   alias LemonControlPlane.WS.Connection
+
+  defmodule AsyncHandler do
+    @behaviour LemonControlPlane.Method
+
+    @impl true
+    def name, do: "connection.test.async"
+
+    @impl true
+    def scopes, do: []
+
+    @impl true
+    def dispatch_mode, do: :async
+
+    @impl true
+    def handle(_params, ctx) do
+      send(ctx.auth.test_pid, {:async_handler_started, self()})
+
+      receive do
+        :finish -> {:ok, %{"finished" => true}}
+      after
+        1_000 -> {:error, {:timeout, "test handler timed out"}}
+      end
+    end
+  end
+
+  describe "async method dispatch" do
+    test "keeps event delivery live while an approval-style method is waiting" do
+      :ok = Registry.register(AsyncHandler)
+      on_exit(fn -> Registry.unregister(AsyncHandler.name()) end)
+
+      state = %Connection{
+        conn_id: "async-test-conn",
+        auth: %{
+          role: :operator,
+          scopes: [:admin, :read, :write],
+          client_id: "test-client",
+          test_pid: self()
+        },
+        connected: true,
+        event_seq: 0,
+        state_version: %{},
+        subscription_mode: :all,
+        subscriptions: MapSet.new()
+      }
+
+      request =
+        Jason.encode!(%{
+          "type" => "req",
+          "id" => "slow-request",
+          "method" => AsyncHandler.name(),
+          "params" => %{}
+        })
+
+      assert {:ok, ^state} = Connection.handle_in({request, [opcode: :text]}, state)
+      assert_receive {:async_handler_started, worker}
+
+      assert {:push, {:text, event_frame}, event_state} =
+               Connection.handle_info(
+                 {:event, "exec.approval.requested", %{"approvalId" => "approval-1"}},
+                 state
+               )
+
+      assert %{"type" => "event", "event" => "exec.approval.requested"} =
+               Jason.decode!(event_frame)
+
+      send(worker, :finish)
+      assert_receive {:method_result, "slow-request", {:ok, %{"finished" => true}}} = result
+
+      assert {:push, {:text, response_frame}, ^event_state} =
+               Connection.handle_info(result, event_state)
+
+      assert %{
+               "type" => "res",
+               "id" => "slow-request",
+               "ok" => true,
+               "payload" => %{"finished" => true}
+             } = Jason.decode!(response_frame)
+    end
+  end
 
   describe "handle_info/2 event delivery" do
     setup do

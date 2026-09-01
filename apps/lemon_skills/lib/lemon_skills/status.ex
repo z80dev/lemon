@@ -17,7 +17,8 @@ defmodule LemonSkills.Status do
   - `:not_ready` — enabled and platform-compatible but one or more deps missing
   - `:hidden` — disabled via `enabled: false` or per-skill config
   - `:platform_incompatible` — the `platforms` field excludes the current OS
-  - `:blocked` — audit verdict blocks use (set by M4-02 audit engine)
+  - `:blocked` — an unapproved audit block prevents use; an explicit exact-bundle
+    security override is recorded as `audit_status: :overridden` and remains active
 
   ## Status result
 

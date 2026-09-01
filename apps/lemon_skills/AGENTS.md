@@ -192,9 +192,15 @@ All non-builtin skills are audited during install/update. The audit path is:
 
 - `LemonSkills.Bundle` computes a deterministic bundle hash across `SKILL.md` plus supported files under `references/`, `templates/`, `scripts/`, and `assets/`; symlinked bundle entries are rejected so audit never escapes the skill root
 - `LemonSkills.Audit.BundleAudit` checks `skills.audit.json` and reuses cached results only when the bundle hash and audit fingerprint still match
-- `LemonSkills.Audit.Engine` scans all auditable text files in the bundle
+- `LemonSkills.Audit.Engine` scans all auditable text files in the bundle;
+  backslash-escaped Markdown operators are prose rather than executable shell,
+  while real unescaped download-to-interpreter pipelines remain hard blocks
 - optional `LemonSkills.Audit.LlmReviewer` reviews a bundle payload built from the same file set
-- installer enforcement: `:block` rejects, `:warn` requires explicit approval
+- installer enforcement: `:warn` requires explicit approval; `:block` requires
+  a distinct `skills.<operation>.security_override` approval whose action is
+  bound to the exact bundle hash and findings. Ordinary approval and
+  non-interactive `approve: true` cannot bypass it. Accepted bundles persist as
+  `audit_status: :overridden`; changed content is audited and approved again.
 - synthesized drafts persist the same audit metadata and warned drafts default to requiring approval on promotion
 
 LLM audit config lives under:

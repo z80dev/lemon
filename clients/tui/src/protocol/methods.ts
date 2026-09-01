@@ -120,6 +120,9 @@ export const METHOD = {
 
 export type MethodName = (typeof METHOD)[keyof typeof METHOD];
 
+/** Skill mutations may wait for a human approval and then fetch from Git. */
+export const SKILL_MUTATION_REQUEST_TIMEOUT_MS = 360_000;
+
 export class ControlPlaneMethods {
 	readonly #client: ControlPlaneClient;
 
@@ -484,7 +487,10 @@ export class ControlPlaneMethods {
 		params: { skillKey: string; cwd?: string },
 		options?: RequestOptions,
 	): Promise<Record<string, unknown>> {
-		return this.#call<Record<string, unknown>>(METHOD.skillsInstall, params, options);
+		return this.#call<Record<string, unknown>>(METHOD.skillsInstall, params, {
+			...options,
+			timeoutMs: options?.timeoutMs ?? SKILL_MUTATION_REQUEST_TIMEOUT_MS,
+		});
 	}
 
 	// -- portable blueprints ------------------------------------------------

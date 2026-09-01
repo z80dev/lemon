@@ -296,12 +296,12 @@ Agent-authored skill writes use the same bundle audit path through `skill_manage
 
 1. The package computes a deterministic bundle hash across `SKILL.md` plus supported files under `references/`, `templates/`, `scripts/`, and `assets/`. Symlinked bundle entries are rejected so the audit payload cannot escape the skill root.
 2. `LemonSkills.Audit.BundleAudit` reuses cached results from `skills.audit.json` only when the bundle hash and audit fingerprint still match.
-3. `LemonSkills.Audit.Engine` runs deterministic checks for destructive commands, remote execution, exfiltration, traversal, and escape patterns across all auditable text files in the bundle.
+3. `LemonSkills.Audit.Engine` runs deterministic checks for destructive commands, remote execution, exfiltration, traversal, and escape patterns across all auditable text files in the bundle. Backslash-escaped Markdown operators are treated as prose, while real unescaped download-to-interpreter pipelines remain hard blocks.
 4. If configured, `LemonSkills.Audit.LlmReviewer` reviews a bundle payload and classifies the skill as `pass`, `warn`, or `block`.
 5. The installer enforces the verdict:
    - `:pass` continues
    - `:warn` requires explicit approval before the install/update completes
-   - `:block` aborts the operation
+   - `:block` opens a separate security-override approval. Ordinary install approval and non-interactive `approve: true` cannot satisfy it. The override action includes the exact audited bundle hash and bounded findings, so a standing approval cannot carry over to changed content. Approval records the installed entry as `:overridden`; denial or timeout aborts without activation.
 
 Enable the optional LLM reviewer with:
 

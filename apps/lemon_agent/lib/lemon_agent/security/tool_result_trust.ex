@@ -53,7 +53,7 @@ defmodule LemonAgent.Security.ToolResultTrust do
 
   defp builtin_skill?(entry) do
     Map.get(entry, :source_kind) == :builtin and Map.get(entry, :trust_level) == :builtin and
-      Map.get(entry, :audit_status) not in [:warn, :block]
+      Map.get(entry, :audit_status) not in [:warn, :block, :overridden]
   end
 
   defp put_trust_metadata(nil, metadata), do: %{trust_boundary: metadata}

@@ -14,6 +14,11 @@ defmodule LemonControlPlane.Methods.Registry do
       @callback handle(params :: map() | nil, ctx :: map()) ::
         {:ok, payload :: term()}
         | {:error, code :: atom(), message :: String.t(), details :: term() | nil}
+
+  Handlers that wait for user input or other slow external work may also return
+  `:async` from the optional `dispatch_mode/0` callback. The WebSocket then
+  executes that handler outside the connection process so event and approval
+  traffic remains live while the request is pending.
   """
 
   use GenServer
@@ -296,6 +301,20 @@ defmodule LemonControlPlane.Methods.Registry do
     |> Enum.sort()
   end
 
+  @doc "Returns whether a registered handler must run outside the WebSocket process."
+  @spec dispatch_mode(String.t()) :: :inline | :async
+  def dispatch_mode(method) do
+    case lookup(method) do
+      {:ok, module} ->
+        if function_exported?(module, :dispatch_mode, 0) and module.dispatch_mode() == :async,
+          do: :async,
+          else: :inline
+
+      {:error, :not_found} ->
+        :inline
+    end
+  end
+
   @doc """
   Dispatches a method call to the appropriate handler.
 
@@ -458,6 +477,16 @@ defmodule LemonControlPlane.Method do
   Return an empty list for public methods.
   """
   @callback scopes() :: [atom()]
+
+  @doc """
+  Selects how the WebSocket runs the handler.
+
+  Use `:async` only for handlers that can block on user approval or slow
+  external work and do not require `self()` to remain the connection process.
+  All other handlers default to `:inline`.
+  """
+  @callback dispatch_mode() :: :inline | :async
+  @optional_callbacks dispatch_mode: 0
 
   @doc """
   Handles the method call.

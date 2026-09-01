@@ -63,6 +63,29 @@ describe("ApprovalPanelComponent", () => {
 		expect(text).toContain("expires in 45s");
 	});
 
+	test("makes a blocked-skill override unmistakable and exact-bundle scoped", () => {
+		const { panel } = build(
+			request({
+				tool: "skills.install.security_override",
+				action: {
+					description: "Override BLOCKED security audit for 'hermes-agent' bundle abc123",
+					security_override: true,
+					bundle_hash: "abc123",
+					findings: ["[block] remote_exec: curl piped to shell interpreter"],
+				},
+				rationale: "SECURITY WARNING: remote execution was detected",
+			}),
+		);
+		const text = renderPlain(panel.render(100));
+		expect(text).toContain("SECURITY OVERRIDE · skills.install.security_override");
+		expect(text).toContain("Override BLOCKED security audit");
+		expect(text).toContain("bundle: abc123");
+		expect(text).toContain("[block] remote_exec: curl piped to shell interpreter");
+		expect(text).toContain("SECURITY WARNING: remote execution was detected");
+		expect(text).toContain("accept this blocked bundle once");
+		expect(text).toContain("accept this exact bundle always");
+	});
+
 	test("a long command is wrapped, not truncated", () => {
 		const command = `find . ${"-name '*.ts' ".repeat(20)}`;
 		const { panel } = build(request({ action: { command } }));

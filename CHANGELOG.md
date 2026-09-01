@@ -10,6 +10,21 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Hermes skill install/update requests no longer block their own control-plane
+  WebSocket while waiting for approval or Git work. Approval events and
+  liveness probes remain deliverable, and the TUI keeps the correlated skill
+  mutation request open long enough for human approval and installation.
+- Hermes imports now report security-audit refusals directly, and escaped
+  Markdown examples such as `curl ... \\| bash` no longer trigger the
+  executable-pipeline rule. Real unescaped remote-script pipelines remain hard
+  blocks, but operators can accept an exact audited bundle through a separate,
+  conspicuous security-override approval that cannot be satisfied by ordinary
+  install approval or reused after content changes.
+- Telegram, Discord, and WhatsApp tool-status bubbles now omit fixed internal
+  engine provenance and reasoning-only actions, so step counts reflect
+  user-relevant tools. Automatic filesystem checkpoint lifecycle events remain
+  auditable internally and available through explicit `/checkpoint` and
+  `/rollback` commands without being pushed into ordinary channel chats.
 - Source `./bin/lemon` now detects and reuses a healthy local control plane
   before compilation or Erlang distribution startup, so invoking it beside an
   existing runtime no longer fails with a duplicate `lemon@host` node name.

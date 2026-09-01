@@ -60,7 +60,12 @@ remains a legacy client-side alias; it does not configure the daemon.
   Ctrl+G `$EDITOR` handoff.
 - `/skills` live official Hermes catalog browser: category drill-down, fuzzy
   filtering, descriptions, installed markers, and Space-toggle multi-select
-  import through Lemon's normal audit/approval flow.
+  import through Lemon's normal audit/approval flow. A blocked bundle opens a
+  conspicuous `SECURITY OVERRIDE` panel whose choices say that acceptance is
+  limited to the exact audited bundle; ordinary install approval cannot satisfy
+  it. Skill mutations use a six-minute request window so the approval panel and Git fetch can complete
+  without inheriting the ordinary 15-second RPC deadline; the connection stays
+  live for approval events and health probes throughout.
 - `/profiles` live profile roster with current-chat, model, named-node, and
   availability context; `/profile` opens stable canonical chats and exposes
   guarded create/clone/rename/export/delete lifecycle commands. Ordinary

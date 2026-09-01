@@ -158,6 +158,10 @@ defmodule LemonControlPlane.WS.Connection do
     {:push, {:text, frame}, state}
   end
 
+  def handle_info({:method_result, id, result}, state) when is_binary(id) do
+    {:push, {:text, Frames.encode_response(id, result)}, state}
+  end
+
   def handle_info({:node_session_revoked, node_id, generation}, state) do
     Logger.info(
       "Closing superseded node session #{state.conn_id} for #{node_id} before generation #{generation}"
@@ -291,10 +295,39 @@ defmodule LemonControlPlane.WS.Connection do
       subscriptions: state.subscriptions
     }
 
-    result = Registry.dispatch(method, params, ctx)
-    response = Frames.encode_response(id, result)
+    case Registry.dispatch_mode(method) do
+      :async ->
+        connection_pid = self()
 
-    {:push, {:text, response}, state}
+        case Task.start(fn ->
+               result = safe_async_dispatch(method, params, ctx)
+               send(connection_pid, {:method_result, id, result})
+             end) do
+          {:ok, _pid} ->
+            {:ok, state}
+
+          {:error, _reason} ->
+            error = Errors.unavailable("Method could not be started")
+            {:push, {:text, Frames.encode_response(id, {:error, error})}, state}
+        end
+
+      :inline ->
+        result = Registry.dispatch(method, params, ctx)
+        response = Frames.encode_response(id, result)
+
+        {:push, {:text, response}, state}
+    end
+  end
+
+  defp safe_async_dispatch(method, params, ctx) do
+    Registry.dispatch(method, params, ctx)
+  catch
+    kind, reason ->
+      Logger.error(
+        "Async WebSocket method #{method} failed: #{Exception.format_banner(kind, reason)}"
+      )
+
+      {:error, Errors.internal_error("Method execution failed")}
   end
 
   ## Helpers

@@ -22,6 +22,9 @@ defmodule LemonControlPlane.Methods.SkillsUpdate do
   def scopes, do: [:admin]
 
   @impl true
+  def dispatch_mode, do: :async
+
+  @impl true
   def handle(params, ctx) do
     cwd = params["cwd"]
     skill_key = params["skillKey"] || params["skill_key"]
@@ -145,6 +148,15 @@ defmodule LemonControlPlane.Methods.SkillsUpdate do
              "updated" => true,
              "summary" => update_summary(entry.key, entry.enabled, nil, true)
            }}
+
+        {:error, "Skill update security override denied by user"} ->
+          {:error, Errors.permission_denied("Skill security override was denied")}
+
+        {:error, "Skill update security override approval timed out"} ->
+          {:error, Errors.timeout("Skill security override approval timed out")}
+
+        {:error, "Skill blocked by security audit:" <> _ = reason} ->
+          {:error, Errors.permission_denied(reason)}
 
         {:error, reason} ->
           {:error, Errors.internal_error("Update failed", inspect(reason))}

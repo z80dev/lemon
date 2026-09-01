@@ -186,7 +186,11 @@ export class ApprovalPanelComponent implements Component {
 			),
 		);
 
-		const title = truncateToWidth(`approval required · ${event.tool ?? "tool"}`, inner);
+		const securityOverride = event.action?.security_override === true;
+		const title = truncateToWidth(
+			`${securityOverride ? "SECURITY OVERRIDE" : "approval required"} · ${event.tool ?? "tool"}`,
+			inner,
+		);
 		line(title, theme.fg("warning", title));
 
 		for (const row of previewRows(describeAction(event.action), inner)) {
@@ -209,7 +213,8 @@ export class ApprovalPanelComponent implements Component {
 
 		for (const [index, option] of APPROVAL_OPTIONS.entries()) {
 			const marker = index === this.#selected ? theme.cursor : " ";
-			const text = truncateToWidth(`${marker} ${option.key}  ${option.label}`, inner);
+			const label = securityOverride ? securityOverrideLabel(option) : option.label;
+			const text = truncateToWidth(`${marker} ${option.key}  ${label}`, inner);
 			line(
 				text,
 				index === this.#selected
@@ -227,6 +232,19 @@ export class ApprovalPanelComponent implements Component {
 			),
 		);
 		return rows;
+	}
+}
+
+function securityOverrideLabel(option: ApprovalOption): string {
+	switch (option.decision) {
+		case "approve_once":
+			return "accept this blocked bundle once";
+		case "approve_session":
+			return "accept this exact bundle for session";
+		case "approve_global":
+			return "accept this exact bundle always";
+		default:
+			return option.label;
 	}
 }
 
@@ -330,6 +348,20 @@ export function previewRows(text: string, width: number): string[] {
  */
 export function describeAction(action: Record<string, unknown> | undefined | null): string {
 	if (!action) return "(no action detail)";
+	if (action.security_override === true) {
+		const description =
+			typeof action.description === "string" && action.description.trim().length > 0
+				? action.description
+				: "Override blocked security audit";
+		const bundle =
+			typeof action.bundle_hash === "string" && action.bundle_hash.length > 0
+				? `bundle: ${action.bundle_hash}`
+				: "bundle: unknown";
+		const findings = Array.isArray(action.findings)
+			? action.findings.filter((finding): finding is string => typeof finding === "string")
+			: [];
+		return [description, bundle, ...findings.map((finding) => `finding: ${finding}`)].join("\n");
+	}
 	for (const key of ["command", "cmd", "script", "path", "url", "description"]) {
 		const value = action[key];
 		if (typeof value === "string" && value.trim().length > 0) return value;

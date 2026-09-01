@@ -8,7 +8,8 @@ defmodule LemonSkills.Installer do
   ## Installation flow
 
       resolve → plan → check_existing → approve → fetch_to_staging
-        → load_manifest → audit_entry → activate → write_lockfile → register
+        → load_manifest → audit_entry → authorize_audit_result
+        → activate → write_lockfile → register
 
   ## Update flow
 
@@ -19,7 +20,9 @@ defmodule LemonSkills.Installer do
   ## Approval gating
 
   Per parity requirement, skill install/update/uninstall operations require
-  user approval. Override via `:approve` option or configure globally.
+  user approval. Override via `:approve` option or configure globally. An audit
+  block is different: it requires a dedicated exact-bundle security approval,
+  and ordinary `:approve` never bypasses it.
   """
 
   alias LemonSkills.{
@@ -51,6 +54,7 @@ defmodule LemonSkills.Installer do
   - `:cwd` — project directory; required when `global: false`
   - `:global` — install globally (default: `true`)
   - `:approve` — pre-approve installation (default: `false`)
+    This does not override an audit block.
   - `:force` — overwrite existing installation (default: `false`)
   - `:branch` — git branch for `:git` sources (default: `"main"`)
 
@@ -74,8 +78,7 @@ defmodule LemonSkills.Installer do
       with_staged_fetch(plan.source_module, plan.source_id, plan.dest_dir, opts, fn staged_dir ->
         with {:ok, entry} <- load_entry_from_dir(staged_dir, plan),
              {:ok, entry} <- audit_entry(entry, plan.scope, opts),
-             :ok <- check_audit_verdict(entry),
-             :ok <- request_audit_warning_approval_if_needed(:install, entry, source, opts),
+             {:ok, entry} <- authorize_audit_result(:install, entry, source, opts),
              {:ok, activation} <- activate_staged_install(staged_dir, plan.dest_dir, plan.force),
              {:ok, entry} <-
                persist_activated_install(plan.scope, entry, activation, previous_entry) do
@@ -85,7 +88,27 @@ defmodule LemonSkills.Installer do
     end
   end
 
-  defp check_audit_verdict(%Entry{audit_status: :block, audit_findings: findings}) do
+  defp authorize_audit_result(operation, %Entry{audit_status: :block} = entry, source, opts) do
+    if Keyword.get(opts, :approve, false) do
+      blocked_audit_error(entry)
+    else
+      case request_audit_block_override(operation, entry, source, opts) do
+        :ok -> {:ok, %{entry | audit_status: :overridden}}
+        {:error, _reason} = error -> error
+      end
+    end
+  end
+
+  defp authorize_audit_result(operation, %Entry{audit_status: :warn} = entry, source, opts) do
+    case request_audit_warning_approval_if_needed(operation, entry, source, opts) do
+      :ok -> {:ok, entry}
+      {:error, _reason} = error -> error
+    end
+  end
+
+  defp authorize_audit_result(_operation, %Entry{} = entry, _source, _opts), do: {:ok, entry}
+
+  defp blocked_audit_error(%Entry{audit_findings: findings}) do
     reason =
       findings
       |> Enum.take(3)
@@ -93,8 +116,6 @@ defmodule LemonSkills.Installer do
 
     {:error, "Skill blocked by security audit: #{reason}"}
   end
-
-  defp check_audit_verdict(_entry), do: :ok
 
   @doc """
   Update an installed skill.
@@ -473,8 +494,7 @@ defmodule LemonSkills.Installer do
            },
            updated_entry <- maybe_set_upstream_hash(updated_entry, new_upstream_hash),
            {:ok, updated_entry} <- audit_entry(updated_entry, scope, opts),
-           :ok <- check_audit_verdict(updated_entry),
-           :ok <- request_audit_warning_approval_if_needed(:update, updated_entry, id, opts),
+           {:ok, updated_entry} <- authorize_audit_result(:update, updated_entry, id, opts),
            {:ok, activation} <- activate_staged_install(staged_dir, entry.path, true),
            {:ok, updated_entry} <-
              persist_activated_install(scope, updated_entry, activation, entry) do
@@ -753,12 +773,52 @@ defmodule LemonSkills.Installer do
     )
   end
 
-  defp request_skill_approval(operation, skill_name, source, ctx, rationale \\ nil) do
-    tool = "skills.#{operation}"
+  defp request_audit_block_override(operation, %Entry{} = entry, source, opts) do
+    ctx = %{
+      session_key: Keyword.get(opts, :session_key),
+      agent_id: Keyword.get(opts, :agent_id),
+      run_id: Keyword.get(opts, :run_id)
+    }
 
-    action = %{operation: operation, skill_name: skill_name, source: source}
+    request_skill_approval(
+      operation,
+      entry.key,
+      source,
+      ctx,
+      build_audit_block_rationale(operation, entry, source),
+      tool: "skills.#{operation}.security_override",
+      action: build_audit_block_action(operation, entry, source),
+      denied_reason: "Skill #{operation} security override denied by user",
+      timeout_reason: "Skill #{operation} security override approval timed out",
+      unavailable_reason: "Security override approval service unavailable"
+    )
+  end
+
+  defp request_skill_approval(
+         operation,
+         skill_name,
+         source,
+         ctx,
+         rationale \\ nil,
+         request_opts \\ []
+       ) do
+    tool = Keyword.get(request_opts, :tool, "skills.#{operation}")
+
+    action =
+      Keyword.get(request_opts, :action, %{
+        operation: operation,
+        skill_name: skill_name,
+        source: source
+      })
+
     rationale = rationale || build_rationale(operation, skill_name, source)
     timeout_ms = Application.get_env(:lemon_skills, :approval_timeout_ms, 300_000)
+
+    denied_reason =
+      Keyword.get(request_opts, :denied_reason, "Skill #{operation} denied by user")
+
+    timeout_reason =
+      Keyword.get(request_opts, :timeout_reason, "Skill #{operation} approval timed out")
 
     params = %{
       run_id: ctx[:run_id],
@@ -779,14 +839,15 @@ defmodule LemonSkills.Installer do
 
       {:ok, :denied} ->
         Logger.warning("[Installer] #{operation} denied for '#{skill_name}'")
-        {:error, "Skill #{operation} denied by user"}
+        {:error, denied_reason}
 
       {:error, :timeout} ->
         Logger.warning("[Installer] #{operation} approval timed out for '#{skill_name}'")
-        {:error, "Skill #{operation} approval timed out"}
+        {:error, timeout_reason}
     end
   rescue
-    _ -> {:error, "Approval service unavailable"}
+    _ ->
+      {:error, Keyword.get(request_opts, :unavailable_reason, "Approval service unavailable")}
   end
 
   defp build_rationale(:install, name, source), do: "Install skill '#{name}' from #{source}"
@@ -801,4 +862,29 @@ defmodule LemonSkills.Installer do
 
     "#{build_rationale(operation, entry.key, source)}. Security audit warnings: #{findings}"
   end
+
+  defp build_audit_block_action(operation, %Entry{} = entry, source) do
+    %{
+      operation: operation,
+      skill_name: entry.key,
+      source: source,
+      description:
+        "Override BLOCKED security audit for '#{entry.key}' bundle #{short_hash(entry.bundle_hash)}",
+      security_override: true,
+      audit_status: :block,
+      bundle_hash: entry.bundle_hash,
+      findings: Enum.take(entry.audit_findings, 3)
+    }
+  end
+
+  defp build_audit_block_rationale(operation, %Entry{} = entry, source) do
+    findings = entry.audit_findings |> Enum.take(3) |> Enum.join("; ")
+
+    "SECURITY WARNING: #{build_rationale(operation, entry.key, source)} was blocked by the audit. " <>
+      "Approving this override permits potentially dangerous instructions from this exact bundle " <>
+      "(#{short_hash(entry.bundle_hash)}). Findings: #{findings}"
+  end
+
+  defp short_hash(hash) when is_binary(hash), do: String.slice(hash, 0, 12)
+  defp short_hash(_hash), do: "unknown"
 end

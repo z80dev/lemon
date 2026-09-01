@@ -12,6 +12,16 @@ umbrella and is published as part of the platform split (D14 in
 applications actually call are documented with their real contracts, and the
 modules nothing outside the package touches are marked internal.
 
+### Fixed
+
+- The deterministic remote-execution audit no longer interprets a
+  backslash-escaped Markdown pipe such as `curl ... \\| bash` as an executable
+  shell pipeline. Real unescaped download-to-interpreter pipelines remain hard
+  blocks, but an operator can now accept one through a separate, conspicuous
+  security-override approval bound to the exact audited bundle hash and
+  findings. Ordinary approval cannot bypass a block, changed content requires
+  a new decision, and the engine-version bump invalidates older cached verdicts.
+
 ### Added
 
 - `LemonSkills.Tools.Peer`, an untrusted-result A2A agent tool for discovering

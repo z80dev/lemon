@@ -7,6 +7,10 @@ defmodule LemonControlPlane.Methods.SkillsInstall do
   Per parity requirement, skill installation goes through the approval flow
   when approvals are enabled. The install will request approval via
   ApprovalsBridge and wait for resolution before proceeding.
+
+  A blocking security verdict creates a second, conspicuous approval whose
+  action is bound to the exact audited bundle hash. An ordinary install approval
+  cannot satisfy that request.
   """
 
   @behaviour LemonControlPlane.Method
@@ -18,6 +22,9 @@ defmodule LemonControlPlane.Methods.SkillsInstall do
 
   @impl true
   def scopes, do: [:admin]
+
+  @impl true
+  def dispatch_mode, do: :async
 
   @impl true
   def handle(params, ctx) do
@@ -74,6 +81,15 @@ defmodule LemonControlPlane.Methods.SkillsInstall do
 
           {:error, "Skill install approval timed out"} ->
             {:error, Errors.timeout("Skill installation approval timed out")}
+
+          {:error, "Skill install security override denied by user"} ->
+            {:error, Errors.permission_denied("Skill security override was denied")}
+
+          {:error, "Skill install security override approval timed out"} ->
+            {:error, Errors.timeout("Skill security override approval timed out")}
+
+          {:error, "Skill blocked by security audit:" <> _ = reason} ->
+            {:error, Errors.permission_denied(reason)}
 
           {:error, reason} ->
             {:error, Errors.internal_error("Install failed", inspect(reason))}

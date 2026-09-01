@@ -8,7 +8,10 @@ import {
 	NotConnectedError,
 	RequestTimeoutError,
 } from "../../src/protocol/errors.ts";
-import { ControlPlaneMethods } from "../../src/protocol/methods.ts";
+import {
+	ControlPlaneMethods,
+	SKILL_MUTATION_REQUEST_TIMEOUT_MS,
+} from "../../src/protocol/methods.ts";
 import type { ChatDeltaEvent } from "../../src/protocol/types.ts";
 import { AUTHENTICATED_CONNECT_PARAMS } from "./fixtures/control-plane-connect-contract.ts";
 
@@ -393,5 +396,23 @@ describe("liveness", () => {
 
 		await Bun.sleep(400);
 		expect(server.requestsFor("connect").length).toBeGreaterThanOrEqual(2);
+	});
+});
+
+describe("slow mutations", () => {
+	test("skills.install outlives the ordinary request deadline for approval and fetch", async () => {
+		const server = await withServer();
+		server.onMethod("skills.install", async () => {
+			await Bun.sleep(40);
+			return { installed: true, skillKey: "codex" };
+		});
+		const client = makeClient(server.url, { requestTimeoutMs: 10 });
+		const methods = new ControlPlaneMethods(client);
+		await client.connect();
+
+		await expect(
+			methods.skillsInstall({ skillKey: "hermes:bundled/autonomous-ai-agents/codex" }),
+		).resolves.toMatchObject({ installed: true, skillKey: "codex" });
+		expect(SKILL_MUTATION_REQUEST_TIMEOUT_MS).toBeGreaterThan(300_000);
 	});
 });

@@ -204,6 +204,15 @@ for HTTP.
 }
 ```
 
+Method handlers run inline by default. A handler that can wait for human input
+or slow external work may declare `dispatch_mode/0` as `:async`; the server then
+keeps the correlated request open while the WebSocket process continues to
+deliver events and answer other requests. Approval-gated `skills.install` and
+`skills.update` use this mode so their own approval events and client liveness
+probes cannot deadlock behind the pending mutation. Async handlers must use the
+`conn_pid` in their context when they need the authenticated connection; they
+must not assume their own `self()` is the socket process.
+
 **Hello-OK** (handshake completion, replaces `res` for `connect`):
 ```json
 {
@@ -622,7 +631,7 @@ are never copied into the JSON-RPC response.
 | `skills.status` | read | List skills with readiness details plus activation/source/missing-requirement summaries |
 | `skills.hermes.catalog` | read | Browse the live official Hermes catalog by category, collection, or query |
 | `skills.bins` | read | Get skill bin paths plus bin/requirement counts and cleanup summary |
-| `skills.install` | admin | Install a skill plus install-source return-state and approval-context cleanup summary |
+| `skills.install` | admin | Install a skill plus install-source return-state and approval-context cleanup summary; audit blocks require a distinct exact-bundle security-override approval and denial returns a safe permission error |
 | `skills.update` | admin | Update/configure a skill plus env-key/update-mode summary with sensitive env response redaction |
 
 ### Portable Blueprints

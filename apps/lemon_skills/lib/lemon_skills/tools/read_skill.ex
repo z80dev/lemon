@@ -439,7 +439,7 @@ defmodule LemonSkills.Tools.ReadSkill do
          key: key,
          path: installed_path
        })
-       when audit_status not in [:warn, :block] do
+       when audit_status not in [:warn, :block, :overridden] do
     with priv_dir when is_list(priv_dir) <- :code.priv_dir(:lemon_skills),
          canonical_path <- Path.join([List.to_string(priv_dir), "builtin_skills", key]),
          true <- File.dir?(canonical_path),

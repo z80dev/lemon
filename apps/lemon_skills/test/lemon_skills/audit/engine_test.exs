@@ -93,6 +93,14 @@ defmodule LemonSkills.Audit.EngineTest do
       refute Enum.any?(findings, &(&1.rule == "remote_exec")), "got: #{inspect(findings)}"
       _ = verdict
     end
+
+    test "does not treat an escaped Markdown pipe as executable shell" do
+      content = "The driver blocks dangerous patterns such as `curl ... \\| bash`."
+
+      assert {verdict, findings} = Engine.audit_content(content)
+      refute Enum.any?(findings, &(&1.rule == "remote_exec")), "got: #{inspect(findings)}"
+      assert verdict in [:pass, :warn]
+    end
   end
 
   describe "exfiltration rule" do

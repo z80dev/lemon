@@ -27,7 +27,7 @@ defmodule LemonSkills.Entry do
   - `upstream_hash` — last known remote hash (used for update detection)
   - `installed_at` — `DateTime` of first install
   - `updated_at` — `DateTime` of last update
-  - `audit_status` — `:pending`, `:pass`, `:warn`, or `:block`
+  - `audit_status` — `:pending`, `:pass`, `:warn`, `:block`, or `:overridden`
   - `audit_findings` — list of audit finding strings
 
   Backward-compatible: all v2 fields default to `nil`. Existing call sites
@@ -55,7 +55,7 @@ defmodule LemonSkills.Entry do
   @type status :: :ready | :missing_deps | :missing_config | :disabled | :error
   @type source_kind :: :builtin | :local | :git | :registry | :well_known
   @type trust_level :: :builtin | :official | :trusted | :community
-  @type audit_status :: :pending | :pass | :warn | :block
+  @type audit_status :: :pending | :pass | :warn | :block | :overridden
 
   @type t :: %__MODULE__{
           key: String.t(),
@@ -290,7 +290,7 @@ defmodule LemonSkills.Entry do
   @valid_atoms ~w(
     builtin local git registry well_known
     official trusted community
-    pending pass warn block
+    pending pass warn block overridden
     ready missing_deps missing_config disabled error
     global project
   )a

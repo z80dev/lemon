@@ -441,7 +441,7 @@ metadata, or credentials.
 | `skills.status` | read | List skills with readiness details plus activation/source/missing-requirement summaries |
 | `skills.hermes.catalog` | read | Browse the live official Hermes catalog by category, collection, or query |
 | `skills.bins` | invoke | Get skill bin paths plus bin/requirement counts and cleanup summary |
-| `skills.install` | admin | Install a skill plus install-source return-state and approval-context cleanup summary |
+| `skills.install` | admin | Install a skill plus install-source return-state and approval-context cleanup summary; audit blocks require a distinct exact-bundle security-override approval and denial returns a safe permission error |
 | `skills.update` | admin | Update/configure a skill plus env-key/update-mode summary with sensitive env response redaction |
 
 ### Portable Blueprints
@@ -758,6 +758,14 @@ config :lemon_control_plane, capabilities: %{tts: true, wizard: false}
 ## EventBridge
 
 `LemonControlPlane.EventBridge` subscribes to `LemonCore.Bus` topics (`exec_approvals`, `channels`, `cron`, `goals`, `system`, `nodes`, `presence`) plus dynamic `run:*` and `session:*` topics. It maps bus event types to WS event names and fans out via a `Task.Supervisor`; each non-node WebSocket connection then applies its own topic filter before pushing the event frame. Authenticated node connections are excluded from this general fanout and receive only targeted `node_event` traffic. New non-node connections keep legacy all-event delivery until they set explicit subscriptions, while a clear-all unsubscribe suppresses later events for that connection. Subscribe to run events with `EventBridge.subscribe_run(run_id)` or generic dynamic topics with `EventBridge.subscribe_topics/1`.
+
+WebSocket method handlers are inline unless their optional
+`dispatch_mode/0` callback returns `:async`. Reserve async dispatch for work
+that waits on human approval or slow external systems and does not require
+`self()` to be the connection process. Approval-gated skill install/update
+handlers are async so `exec.approval.*` events, approval resolution requests,
+and liveness probes continue flowing while the mutation waits. Such handlers
+must use `ctx.conn_pid` for the authenticated socket identity.
 
 Key bus-event-to-WS-event mappings:
 
