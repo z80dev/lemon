@@ -182,7 +182,7 @@ defmodule XApi.Tools.GetXMentionsTest do
     assert is_nil(mention.author_name)
   end
 
-  defp configure_oauth2(overrides \\ []) do
+  defp configure_oauth2(overrides) do
     config =
       Keyword.merge(
         [
