@@ -100,6 +100,7 @@
     %{path: "docs/getting-started/add-a-tool.md", last_reviewed: ~D[2026-08-10]},
     %{path: "docs/getting-started/add-a-channel.md", last_reviewed: ~D[2026-08-10]},
     %{path: "docs/getting-started/persist-memory.md", last_reviewed: ~D[2026-08-10]},
-    %{path: "docs/ci/self-hosted-runner.md", last_reviewed: ~D[2026-08-30]}
+    %{path: "docs/ci/self-hosted-runner.md", last_reviewed: ~D[2026-08-30]},
+    %{path: "docs/architecture/review-2026-09.md", last_reviewed: ~D[2026-09-01], kind: :review, max_age_days: 120}
   ]
 }

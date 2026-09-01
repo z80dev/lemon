@@ -62,6 +62,7 @@ failures.
 |-----|---------------|
 | [architecture/overview.md](architecture/overview.md) | System design, app map, data flow, key abstractions |
 | [architecture_boundaries.md](architecture_boundaries.md) | Dependency policy between umbrella apps, enforcement via `mix lemon.quality` |
+| [architecture/review-2026-09.md](architecture/review-2026-09.md) | September 2026 architecture review: findings with evidence, a phased plan, and quality ratchets |
 | [beam_agents.md](beam_agents.md) | BEAM/OTP architecture: process-per-agent, supervision, message passing |
 | [model-selection-decoupling.md](model-selection-decoupling.md) | Model selection design: provider abstraction, routing, fallback |
 
