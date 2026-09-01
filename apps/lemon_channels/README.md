@@ -658,15 +658,26 @@ Delegated tasks run exclusively as native in-process subagents. A subagent's ide
 
 ### Runtime Bridge
 
-The internal LemonChannels.Runtime module provides thin wrappers to interact with router-owned run lifecycle APIs without a hard compile-time dependency. Busy checks go through `LemonCore.RouterBridge.session_busy?/1` rather than reaching into router internals directly:
+`LemonChannels.Runtime` is the channel side of `LemonCore.RouterBridge`: it
+submits inbound messages, cancels runs, applies keep-alive decisions and asks
+whether a session is busy, all without a compile-time dependency on the
+router. It returns the bridge's answer unchanged, so an adapter can tell its
+user what actually happened:
 
 ```elixir
-LemonChannels.Runtime.cancel_session(session_key)
-LemonChannels.Runtime.cancel_by_run_id(run_id)
-LemonChannels.Runtime.cancel_by_progress_msg(session_key, progress_msg_id)
-LemonChannels.Runtime.keep_run_alive(run_id, :continue | :cancel)
-LemonChannels.Runtime.session_busy?(session_key)
+LemonChannels.Runtime.cancel_session(session_key)               # :ok | {:error, :unavailable | term()}
+LemonChannels.Runtime.cancel_by_run_id(run_id)                  # :ok | {:error, ...}
+LemonChannels.Runtime.cancel_by_progress_msg(session_key, msg_id) # :ok | {:error, ...}
+LemonChannels.Runtime.keep_run_alive(run_id, :continue | :cancel) # :ok | {:error, ...}
+LemonChannels.Runtime.session_busy?(session_key)                # {:ok, boolean()} | {:error, :unavailable}
 ```
+
+`{:error, :unavailable}` means no router is registered or its process is not
+running; `{:error, exception}` means the router raised (and was logged). There
+is no fallback path and no soft answer: the adapters render "router
+unavailable" rather than "cancelling", and an unreachable router is logged
+before a session is treated as idle. See
+`docs/platform/reliability-contracts.md`.
 
 ## Application Lifecycle
 

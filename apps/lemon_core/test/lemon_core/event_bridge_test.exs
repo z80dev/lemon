@@ -1,18 +1,34 @@
 defmodule LemonCore.EventBridgeTest do
   use ExUnit.Case, async: false
 
+  import ExUnit.CaptureLog
+
   alias LemonCore.EventBridge
 
   defmodule ImplA do
     @moduledoc false
-    def subscribe_run(run_id), do: send(self(), {:impl_a_subscribe, run_id})
-    def unsubscribe_run(run_id), do: send(self(), {:impl_a_unsubscribe, run_id})
+    def subscribe_run(run_id) do
+      send(self(), {:impl_a_subscribe, run_id})
+      :ok
+    end
+
+    def unsubscribe_run(run_id) do
+      send(self(), {:impl_a_unsubscribe, run_id})
+      :ok
+    end
   end
 
   defmodule ImplB do
     @moduledoc false
-    def subscribe_run(run_id), do: send(self(), {:impl_b_subscribe, run_id})
-    def unsubscribe_run(run_id), do: send(self(), {:impl_b_unsubscribe, run_id})
+    def subscribe_run(run_id) do
+      send(self(), {:impl_b_subscribe, run_id})
+      :ok
+    end
+
+    def unsubscribe_run(run_id) do
+      send(self(), {:impl_b_unsubscribe, run_id})
+      :ok
+    end
   end
 
   defmodule ImplNoFunctions do
@@ -124,17 +140,25 @@ defmodule LemonCore.EventBridgeTest do
              EventBridge.configure(nil, mode: :garbage)
   end
 
-  test "dispatch handles module without subscribe_run/unsubscribe_run gracefully" do
-    :ok = EventBridge.configure(ImplNoFunctions)
+  test "configure rejects a module without subscribe_run/unsubscribe_run and keeps the current one" do
+    :ok = EventBridge.configure(ImplA)
 
-    assert :ok = EventBridge.subscribe_run("run_missing_fn")
-    assert :ok = EventBridge.unsubscribe_run("run_missing_fn")
+    assert {:error, {:invalid_implementation, {:missing_callbacks, ImplNoFunctions, missing}}} =
+             EventBridge.configure(ImplNoFunctions)
+
+    assert Enum.sort(missing) == [subscribe_run: 1, unsubscribe_run: 1]
+    assert EventBridge.impl() == ImplA
   end
 
-  test "dispatch handles module that raises gracefully" do
+  test "a fan-out that raises is reported and logged, not swallowed" do
     :ok = EventBridge.configure(ImplRaises)
 
-    assert :ok = EventBridge.subscribe_run("run_raises")
-    assert :ok = EventBridge.unsubscribe_run("run_raises")
+    log =
+      capture_log(fn ->
+        assert {:error, %RuntimeError{message: "boom"}} = EventBridge.subscribe_run("run_raises")
+      end)
+
+    assert log =~ "EventBridge subscribe_run/1 raised"
+    assert {:error, %RuntimeError{message: "boom"}} = EventBridge.unsubscribe_run("run_raises")
   end
 end

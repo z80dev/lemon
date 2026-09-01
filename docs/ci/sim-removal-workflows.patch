@@ -1,0 +1,469 @@
+From 77ae4bf6419ed7b27f3161c0f4ef4b28241bdf5d Mon Sep 17 00:00:00 2001
+From: z80 <z80@ophy.xyz>
+Date: Tue, 1 Sep 2026 20:31:28 +0000
+Subject: [PATCH] ci: drop the sim product from the release, smoke and bench
+ workflows
+
+Companion to the Phase 1 removal. Kept as its own commit because the
+session's GitHub credential cannot update workflow files; apply it from a
+checkout with workflow permission.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VQ7WJ1BdrVnZxHzHnabUfT
+---
+ .github/workflows/product-smoke.yml |   1 -
+ .github/workflows/release-smoke.yml | 241 ----------------------------
+ .github/workflows/release.yml       |  42 +----
+ .github/workflows/sim-bench.yml     |  57 -------
+ 4 files changed, 8 insertions(+), 333 deletions(-)
+ delete mode 100644 .github/workflows/sim-bench.yml
+
+diff --git a/.github/workflows/product-smoke.yml b/.github/workflows/product-smoke.yml
+index dc01034..07415f8 100644
+--- a/.github/workflows/product-smoke.yml
++++ b/.github/workflows/product-smoke.yml
+@@ -31,7 +31,6 @@ env:
+   LEMON_SECRETS_MASTER_KEY: "smoke-test-dummy-key-32-chars-!!"
+   LEMON_CONTROL_PLANE_PORT: "14040"
+   LEMON_WEB_PORT: "14080"
+-  LEMON_SIM_UI_PORT: "14090"
+   LEMON_GATEWAY_NODE_COOKIE: "product-smoke-cookie"
+   OPENAI_API_KEY: "product-smoke-local-provider-key"
+   # Phoenix releases never bind an HTTP listener on their own — the `:server`
+diff --git a/.github/workflows/release-smoke.yml b/.github/workflows/release-smoke.yml
+index d5697fc..d6afd43 100644
+--- a/.github/workflows/release-smoke.yml
++++ b/.github/workflows/release-smoke.yml
+@@ -16,8 +16,6 @@ on:
+       - "apps/lemon_core/lib/mix/tasks/lemon.doctor.ex"
+       - "apps/lemon_mcp/**"
+       - "apps/lemon_skills/lib/lemon_skills/mcp_source.ex"
+-      - "apps/lemon_sim/lib/lemon_sim/examples/werewolf/**"
+-      - "apps/lemon_sim_ui/**"
+       - "config/prod.exs"
+       - "config/runtime.exs"
+       - ".dockerignore"
+@@ -49,7 +47,6 @@ env:
+   LEMON_CONTROL_PLANE_PORT: "14040"
+   LEMON_WEB_PORT: "14080"
+   LEMON_WEB_SECRET_KEY_BASE: "runtime_smoke_web_secret_key_base_runtime_smoke_web_secret_key_base_runtime"
+-  LEMON_SIM_UI_PORT: "14090"
+   LEMON_GATEWAY_NODE_COOKIE: "release-smoke-cookie"
+ 
+ jobs:
+@@ -335,244 +332,6 @@ jobs:
+           retention-days: 7
+           if-no-files-found: ignore
+ 
+-  sim-container-smoke:
+-    name: Sim broadcast container
+-    runs-on: ubuntu-latest
+-    timeout-minutes: 30
+-
+-    steps:
+-      - name: Checkout
+-        uses: actions/checkout@v4
+-
+-      - name: Setup Node
+-        uses: actions/setup-node@v4
+-        with:
+-          node-version: "22"
+-          cache: npm
+-          cache-dependency-path: apps/lemon_sim_ui/assets/package-lock.json
+-
+-      - name: Build production image
+-        run: |
+-          docker build \
+-            --build-arg "LEMON_GIT_SHA=$GITHUB_SHA" \
+-            --file apps/lemon_sim_ui/Dockerfile \
+-            --tag lemon-sim-broadcast:smoke \
+-            .
+-
+-      - name: Start container
+-        run: |
+-          mkdir -p /tmp/lemon-sim-smoke-data
+-          docker run --detach \
+-            --name lemon-sim-smoke \
+-            --publish 14090:4090 \
+-            --env LEMON_SIM_UI_HOST=localhost \
+-            --env LEMON_SIM_UI_PORT=4090 \
+-            --env LEMON_SIM_UI_URL_SCHEME=http \
+-            --env LEMON_SIM_UI_URL_PORT=14090 \
+-            --env LEMON_SIM_UI_SECRET_KEY_BASE=runtime_smoke_secret_key_base_runtime_smoke_secret_key_base_runtime_smoke \
+-            --env LEMON_SIM_UI_ACCESS_TOKEN=runtime-smoke-access-token-32-bytes-minimum \
+-            --volume /tmp/lemon-sim-smoke-data:/app/data \
+-            lemon-sim-broadcast:smoke
+-
+-      - name: Verify health, identity, auth, and assets
+-        run: |
+-          for attempt in $(seq 1 30); do
+-            if curl --fail --silent --show-error http://127.0.0.1:14090/readyz > /tmp/ready.json; then
+-              break
+-            fi
+-            sleep 2
+-          done
+-
+-          curl --fail --silent --show-error http://127.0.0.1:14090/healthz | grep -Fx ok
+-          grep -F "\"commit\":\"$GITHUB_SHA\"" /tmp/ready.json
+-          test "$(docker exec lemon-sim-smoke awk '/^Uid:/{print $2}' /proc/1/status)" = "10001"
+-
+-          curl --fail --silent --show-error http://127.0.0.1:14090/ > /tmp/lobby.html
+-          test "$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:14090/admin)" = "401"
+-
+-          asset_path=$(grep -oE '/assets/app-[a-f0-9]+\.css' /tmp/lobby.html | head -1)
+-          test -n "$asset_path"
+-          curl --silent --show-error --head \
+-            --header 'Accept-Encoding: gzip' \
+-            "http://127.0.0.1:14090$asset_path" > /tmp/asset-headers.txt
+-          grep -i '^content-encoding: gzip' /tmp/asset-headers.txt
+-          grep -i '^cache-control: public,max-age=31536000,immutable' /tmp/asset-headers.txt
+-
+-      - name: Seed persisted Werewolf fixture
+-        run: |
+-          docker exec lemon-sim-smoke \
+-            /app/bin/sim_broadcast_platform rpc \
+-            'state = LemonSim.Examples.Werewolf.initial_state(sim_id: "ci_werewolf", player_count: 5, seed: 7); state = LemonSim.Kernel.State.put_world(state, %{phase: "game_over", status: "game_over", winner: "villagers"}); LemonSim.Kernel.Store.put_state(state)'
+-          curl --fail --silent --show-error http://127.0.0.1:14090/watch/ci_werewolf | grep -F 'VILLAGERS WIN'
+-
+-      - name: Verify responsive LiveView browser updates
+-        run: |
+-          npm ci --prefix apps/lemon_sim_ui/assets --cache /tmp/lemon-sim-ui-npm-cache
+-
+-          docker exec lemon-sim-smoke \
+-            /app/bin/sim_broadcast_platform rpc \
+-            'state = LemonSim.Examples.Werewolf.initial_state(sim_id: "ci_werewolf_browser", player_count: 5, seed: 11); state = LemonSim.Kernel.State.put_world(state, %{phase: "night", status: "in_progress", active_actor_id: "player_1"}); LemonSim.Kernel.Store.put_state(state)'
+-
+-          ready_file=/tmp/werewolf-browser-ready
+-          rm -f "$ready_file"
+-          CHROME_BIN="$(command -v google-chrome || command -v chromium)" \
+-          WEREWOLF_SMOKE_URL=http://localhost:14090/watch/ci_werewolf_browser \
+-          WEREWOLF_SMOKE_READY_FILE="$ready_file" \
+-          WEREWOLF_SMOKE_INITIAL_PHASE=Nightfall \
+-          WEREWOLF_SMOKE_UPDATED_PHASE='Town Square' \
+-            npm --prefix apps/lemon_sim_ui/assets run smoke:werewolf &
+-          browser_pid=$!
+-
+-          for attempt in $(seq 1 30); do
+-            test -f "$ready_file" && break
+-            sleep 1
+-          done
+-          test -f "$ready_file"
+-
+-          docker exec lemon-sim-smoke \
+-            /app/bin/sim_broadcast_platform rpc \
+-            'state = LemonSim.Kernel.Store.get_state("ci_werewolf_browser"); world = state.world |> Map.put(:phase, "day_discussion") |> Map.put(:active_actor_id, "player_2"); state = %{state | world: world, version: state.version + 1}; :ok = LemonSim.Kernel.Store.put_state(state); LemonSim.Kernel.Bus.broadcast_world_update("ci_werewolf_browser", %{state: state})'
+-
+-          wait "$browser_pid"
+-
+-      - name: Verify graceful restart and persistence
+-        run: |
+-          docker stop --timeout 30 lemon-sim-smoke
+-          docker run --rm \
+-            --entrypoint chown \
+-            --volume /tmp/lemon-sim-smoke-data:/app/data \
+-            lemon-sim-broadcast:smoke \
+-            --recursive 0:0 /app/data
+-          docker start lemon-sim-smoke
+-
+-          for attempt in $(seq 1 30); do
+-            if curl --fail --silent --show-error http://127.0.0.1:14090/readyz > /dev/null; then
+-              break
+-            fi
+-            sleep 2
+-          done
+-
+-          curl --fail --silent --show-error http://127.0.0.1:14090/watch/ci_werewolf | grep -F 'VILLAGERS WIN'
+-
+-      - name: Verify production hosted mode and room recovery
+-        run: |
+-          mkdir -p /tmp/lemon-hosted-smoke-data
+-          docker run --detach \
+-            --name lemon-sim-hosted-smoke \
+-            --publish 14092:4090 \
+-            --env LEMON_SIM_UI_HOST=hosted.example.test \
+-            --env LEMON_SIM_UI_PORT=4090 \
+-            --env LEMON_SIM_UI_URL_SCHEME=https \
+-            --env LEMON_SIM_UI_URL_PORT=443 \
+-            --env LEMON_SIM_UI_SECRET_KEY_BASE=hosted_runtime_smoke_secret_key_base_hosted_runtime_smoke_secret_key_base \
+-            --env LEMON_SIM_UI_ACCESS_TOKEN=hosted-runtime-smoke-access-token-minimum \
+-            --env LEMON_WEREWOLF_HOSTED_ENABLED=true \
+-            --env LEMON_WEREWOLF_HOST_CREATE_TOKEN=hosted-runtime-smoke-create-token-minimum \
+-            --volume /tmp/lemon-hosted-smoke-data:/app/data \
+-            lemon-sim-broadcast:smoke
+-
+-          for attempt in $(seq 1 30); do
+-            if curl --fail --silent --show-error http://127.0.0.1:14092/readyz > /dev/null; then
+-              break
+-            fi
+-            sleep 2
+-          done
+-
+-          curl --silent --show-error --dump-header /tmp/hosted-headers.txt \
+-            --output /dev/null http://127.0.0.1:14092/play
+-          grep -i '^cache-control: private, no-store' /tmp/hosted-headers.txt
+-          grep -i '^set-cookie: .*; secure;' /tmp/hosted-headers.txt
+-
+-          docker exec lemon-sim-hosted-smoke \
+-            /app/bin/sim_broadcast_platform rpc \
+-            'alias LemonSimUi.HostedGame; {:ok, created} = HostedGame.create_room(%{player_count: 5, ai_seats: 0, visibility: "private", rules_preset: "classic", turn_timeout_seconds: 30}); {:ok, host} = HostedGame.host_view(created.room_id, created.host_token); Enum.each(host.seats, fn seat -> {:ok, _claim} = HostedGame.claim_seat(created.join_code, seat.id, "CI " <> seat.id) end); :ok = HostedGame.control(created.room_id, created.host_token, "start"); :ok = HostedGame.control(created.room_id, created.host_token, "pause")'
+-
+-          docker restart lemon-sim-hosted-smoke
+-
+-          for attempt in $(seq 1 30); do
+-            if curl --fail --silent --show-error http://127.0.0.1:14092/readyz > /dev/null; then
+-              break
+-            fi
+-            sleep 2
+-          done
+-
+-          docker exec lemon-sim-hosted-smoke \
+-            /app/bin/sim_broadcast_platform rpc \
+-            'alias LemonCore.Store; alias LemonSimUi.HostedGame; alias LemonSimUi.HostedGame.Room; rooms = Store.list(HostedGame.room_table()); true = Enum.any?(rooms, fn {_id, value} -> room = Room.normalize(value); match?(%Room{status: "paused", match_number: 1, command_seq: 0}, room) and is_integer(room.paused_remaining_ms) end)'
+-
+-      - name: Collect container logs
+-        if: failure()
+-        run: |
+-          docker logs lemon-sim-smoke || true
+-          docker logs lemon-sim-hosted-smoke || true
+-
+-      - name: Stop container
+-        if: always()
+-        run: |
+-          docker rm --force lemon-sim-smoke >/dev/null 2>&1 || true
+-          docker rm --force lemon-sim-hosted-smoke >/dev/null 2>&1 || true
+-
+-  hosted-werewolf-browser-smoke:
+-    name: Hosted Werewolf multiplayer browser
+-    runs-on: ubuntu-latest
+-    timeout-minutes: 20
+-
+-    steps:
+-      - name: Checkout
+-        uses: actions/checkout@v4
+-
+-      - name: Setup BEAM
+-        uses: erlef/setup-beam@v1
+-        with:
+-          otp-version: "28.5"
+-          elixir-version: "1.19.5"
+-
+-      - name: Setup Node
+-        uses: actions/setup-node@v4
+-        with:
+-          node-version: "22"
+-          cache: npm
+-          cache-dependency-path: apps/lemon_sim_ui/assets/package-lock.json
+-
+-      - name: Install and build
+-        env:
+-          MIX_ENV: dev
+-        run: |
+-          mix deps.get
+-          mix compile --warnings-as-errors
+-          npm ci --prefix apps/lemon_sim_ui/assets --cache /tmp/lemon-sim-ui-npm-cache
+-          npm --prefix apps/lemon_sim_ui/assets run build
+-
+-      - name: Start hosted test server
+-        env:
+-          MIX_ENV: dev
+-          LEMON_STORE_PATH: /tmp/lemon-hosted-browser-store
+-          LEMON_SIM_UI_PORT: "14091"
+-        run: |
+-          mix phx.server > /tmp/lemon-hosted-browser.log 2>&1 &
+-          echo "HOSTED_SERVER_PID=$!" >> "$GITHUB_ENV"
+-          for attempt in $(seq 1 45); do
+-            if curl --fail --silent http://127.0.0.1:14091/readyz > /dev/null; then
+-              exit 0
+-            fi
+-            sleep 2
+-          done
+-          cat /tmp/lemon-hosted-browser.log
+-          exit 1
+-
+-      - name: Run five-session hosted smoke
+-        env:
+-          HOSTED_WEREWOLF_SMOKE_URL: http://127.0.0.1:14091
+-        run: npm --prefix apps/lemon_sim_ui/assets run smoke:hosted-werewolf
+-
+-      - name: Collect hosted server logs
+-        if: failure()
+-        run: cat /tmp/lemon-hosted-browser.log || true
+-
+-      - name: Stop hosted test server
+-        if: always()
+-        run: kill "$HOSTED_SERVER_PID" 2>/dev/null || true
+-
+   tui-smoke:
+     name: TUI binary (${{ matrix.os }})
+     runs-on: ${{ matrix.os }}
+diff --git a/.github/workflows/release.yml b/.github/workflows/release.yml
+index 062d8b0..ca8ce7a 100644
+--- a/.github/workflows/release.yml
++++ b/.github/workflows/release.yml
+@@ -12,11 +12,11 @@ name: Release
+ # second tag-push workflow. Release runs are serialized so two automatic cuts
+ # cannot derive the same version.
+ #
+-# The build publishes 11 native artifacts: lemon_runtime_min and
+-# lemon_runtime_full on linux-x86_64/linux-arm64/darwin-arm64,
+-# sim_broadcast_platform on both Linux platforms, and the compiled Bun
+-# lemon_tui client on all three. Every artifact is verified before the GitHub
+-# Release is created; mutable container channel tags move only afterward.
++# The build publishes 9 native artifacts: lemon_runtime_min and
++# lemon_runtime_full on linux-x86_64/linux-arm64/darwin-arm64, and the
++# compiled Bun lemon_tui client on all three. Every artifact is verified
++# before the GitHub Release is created; mutable container channel tags move
++# only afterward.
+ #
+ # See docs/release/versioning_and_channels.md for the versioning model.
+ 
+@@ -266,18 +266,12 @@ jobs:
+           - os: ubuntu-24.04
+             platform: linux-x86_64
+             profile: lemon_runtime_full
+-          - os: ubuntu-24.04
+-            platform: linux-x86_64
+-            profile: sim_broadcast_platform
+           - os: ubuntu-24.04-arm
+             platform: linux-arm64
+             profile: lemon_runtime_min
+           - os: ubuntu-24.04-arm
+             platform: linux-arm64
+             profile: lemon_runtime_full
+-          - os: ubuntu-24.04-arm
+-            platform: linux-arm64
+-            profile: sim_broadcast_platform
+           - os: macos-15
+             platform: darwin-arm64
+             profile: lemon_runtime_min
+@@ -309,16 +303,6 @@ jobs:
+           otp-version: ${{ env.OTP_VERSION }}
+           elixir-version: ${{ env.ELIXIR_VERSION }}
+ 
+-      # Both lemon_runtime_full and sim_broadcast_platform bundle lemon_sim_ui,
+-      # so both need its npm-built, digested assets.
+-      - name: Setup Node
+-        if: matrix.profile != 'lemon_runtime_min'
+-        uses: actions/setup-node@v4
+-        with:
+-          node-version: "22"
+-          cache: npm
+-          cache-dependency-path: apps/lemon_sim_ui/assets/package-lock.json
+-
+       - name: Cache Mix deps and build
+         uses: actions/cache@v4
+         with:
+@@ -333,27 +317,19 @@ jobs:
+       - name: Install deps
+         run: mix deps.get --only prod
+ 
+-      - name: Build Sim UI assets
+-        if: matrix.profile != 'lemon_runtime_min'
+-        run: mix sim_ui.assets.deploy
+-
+       # lemon_web ships its static assets checked into priv/static with no
+       # npm/esbuild pipeline of its own; it only needs a checksum digest so
+       # cache_static_manifest (config/prod.exs) has a manifest to read.
+       # `--app` is required: at the umbrella root, a bare `mix phx.digest <path>`
+       # re-runs per child app with that app as cwd, fails on the relative path in
+-      # all of them, and still exits 0 — producing no manifest. Neither digest
+-      # task fails loudly, hence the explicit manifest assertions below.
++      # all of them, and still exits 0 — producing no manifest. The digest task
++      # never fails loudly, hence the explicit manifest assertion.
+       - name: Digest lemon_web assets
+         if: matrix.profile == 'lemon_runtime_full'
+         run: |
+           mix 'do' --app lemon_web phx.digest
+           test -f apps/lemon_web/priv/static/cache_manifest.json
+ 
+-      - name: Assert Sim UI digest manifest
+-        if: matrix.profile != 'lemon_runtime_min'
+-        run: test -f apps/lemon_sim_ui/priv/static/cache_manifest.json
+-
+       - name: Compile (prod)
+         run: mix compile
+       # Cached _build trees may retain files from an older release assembly.
+@@ -614,8 +590,6 @@ jobs:
+       # generate the two secrets below, but passing them explicitly keeps them in
+       # the container config so `docker exec` sees them too (config/runtime.exs
+       # calls System.fetch_env! for LEMON_WEB_SECRET_KEY_BASE on every entry).
+-      # Sim-UI vars are deliberately absent: setting LEMON_SIM_UI_SECRET_KEY_BASE
+-      # switches that endpoint on and drags in its whole required env block.
+       - name: Container smoke (amd64)
+         if: matrix.arch == 'amd64'
+         env:
+@@ -800,7 +774,7 @@ jobs:
+           name_re = re.compile(
+             r'^lemon-' + re.escape(version) + r'-' + re.escape(channel) + r'-'
+             r'(linux-x86_64|linux-arm64|darwin-arm64)-'
+-            r'(lemon_runtime_min|lemon_runtime_full|sim_broadcast_platform|lemon_tui)\.tar\.gz$'
++            r'(lemon_runtime_min|lemon_runtime_full|lemon_tui)\.tar\.gz$'
+           )
+ 
+           artifacts = []
+diff --git a/.github/workflows/sim-bench.yml b/.github/workflows/sim-bench.yml
+deleted file mode 100644
+index 7bccc3a..0000000
+--- a/.github/workflows/sim-bench.yml
++++ /dev/null
+@@ -1,57 +0,0 @@
+-name: Simulation Bench
+-
+-on:
+-  pull_request:
+-  push:
+-    branches:
+-      - main
+-
+-permissions:
+-  contents: read
+-
+-jobs:
+-  sim-bench:
+-    runs-on: ubuntu-latest
+-    timeout-minutes: 45
+-
+-    steps:
+-      - name: Checkout
+-        uses: actions/checkout@v4
+-
+-      - name: Setup BEAM
+-        uses: erlef/setup-beam@v1
+-        with:
+-          otp-version: "28.5"
+-          elixir-version: "1.19.5"
+-
+-      - name: Cache Mix deps and build
+-        uses: actions/cache@v4
+-        with:
+-          path: |
+-            deps
+-            _build
+-          key: ${{ runner.os }}-mix-sim-bench-${{ hashFiles('mix.lock') }}
+-          restore-keys: |
+-            ${{ runner.os }}-mix-sim-bench-
+-
+-      - name: Install system deps
+-        run: sudo apt-get update && sudo apt-get install -y inotify-tools
+-
+-      - name: Install deps
+-        run: mix deps.get
+-
+-      - name: Compile
+-        run: mix compile --warnings-as-errors
+-
+-      - name: Run simulation bench lane
+-        run: scripts/ci_sim_bench.sh
+-
+-      - name: Upload simulation bench artifacts
+-        uses: actions/upload-artifact@v4
+-        with:
+-          name: sim-bench
+-          path: |
+-            ${{ runner.temp }}/sim-bench-ci/suites
+-            ${{ runner.temp }}/sim-bench-ci/scores
+-            ${{ runner.temp }}/sim-bench-ci/ratings/ratings.md
+-            ${{ runner.temp }}/sim-bench-ci/ratings/ratings.json
+-- 
+2.43.0
+

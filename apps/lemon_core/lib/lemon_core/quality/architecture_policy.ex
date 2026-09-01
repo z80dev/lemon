@@ -30,7 +30,7 @@ defmodule LemonCore.Quality.ArchitecturePolicy do
     ],
     coding_agent_ui: [:coding_agent, :lemon_core],
     lemon_automation: [:lemon_agent, :lemon_core, :lemon_router, :lemon_skills],
-    lemon_channels: [:lemon_agent, :lemon_core, :lemon_media],
+    lemon_channels: [:lemon_agent, :lemon_ai, :lemon_core, :lemon_media],
     lemon_control_plane: [
       :lemon_ai,
       :lemon_agent,

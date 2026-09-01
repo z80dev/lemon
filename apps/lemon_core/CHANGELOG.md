@@ -73,6 +73,27 @@ Telegram, run history, durable memory, kanban boards, or `~/.lemon`.
 
 ### Changed
 
+- `LemonCore.RouterBridge.configure/1`, `LemonCore.EventBridge.configure/1` and
+  `LemonCore.EngineInfoBridge.configure/1` validate the registered module with
+  `LemonCore.Contract.validate/2` against the new behaviours
+  (`LemonCore.RouterBridge.Router`, `LemonCore.RouterBridge.RunOrchestrator`,
+  `LemonCore.EventBridge.Fanout`, `LemonCore.EngineInfoBridge.TransportRegistry`,
+  `LemonCore.EngineInfoBridge.GatewayConfig`) and reject an unloadable or
+  incomplete implementation as `{:error, {:invalid_implementation, ...}}`.
+  Call sites then call the implementation directly, without
+  `function_exported?/3` guards.
+- `LemonCore.RouterBridge.session_busy?/1` returns `{:ok, boolean()}` or
+  `{:error, :unavailable}`; `active_run/1` and `list_active_sessions/0` return
+  `{:error, :unavailable}` instead of `:none` / `[]` when the router cannot be
+  consulted. A router that raises is logged with its stacktrace and reported
+  as `{:error, exception}`; `LemonCore.EventBridge` reports a raising fan-out
+  as `{:error, exception}` instead of `:ok`.
+- `LemonCore.EngineRuntime.validate/1` checks a runtime module against the
+  behaviour; `use LemonCore.RouterBridge.Router` and
+  `use LemonCore.RouterBridge.RunOrchestrator` give partial implementations
+  (test doubles) defaults that raise `LemonCore.RouterBridge.NotImplementedError`.
+- `mix lemon.update` refreshes bundled skills through
+  `config :lemon_core, :skill_sync` instead of naming `LemonSkills` modules.
 - `LemonCore.ResumeToken` is now a struct plus generic parse/format over the
   registered resume formats. The per-vendor regex families it used to hold
   (codex, claude, kimi, opencode, pi) moved to the packages that wrap those

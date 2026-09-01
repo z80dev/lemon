@@ -779,13 +779,18 @@ defmodule LemonRouter.SessionCoordinator do
   defp clear_active_session_registry(state), do: state
 
   defp runtime_run_pid(run_id) when is_binary(run_id) do
-    runtime = configured_engine_runtime()
-
-    if Code.ensure_loaded?(runtime) and function_exported?(runtime, :run_pid, 1) do
-      runtime.run_pid(run_id)
+    case configured_engine_runtime() do
+      nil -> nil
+      runtime -> runtime.run_pid(run_id)
     end
   rescue
-    _ -> nil
+    error ->
+      Logger.error(
+        "engine runtime raised on run_pid/1 run_id=#{run_id}: " <>
+          Exception.format(:error, error, __STACKTRACE__)
+      )
+
+      nil
   end
 
   defp runtime_run_pid(_), do: nil

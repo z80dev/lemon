@@ -43,6 +43,13 @@ defmodule LemonChannels do
 
   @doc """
   Enqueue an outbound payload for delivery.
+
+  A plain map with the payload's fields is accepted from apps that must not
+  name `LemonChannels.OutboundPayload`; unknown fields raise.
   """
-  defdelegate enqueue(payload), to: Outbox
+  def enqueue(%LemonChannels.OutboundPayload{} = payload), do: Outbox.enqueue(payload)
+
+  def enqueue(%{} = attrs) when not is_struct(attrs) do
+    attrs |> Map.to_list() |> LemonChannels.OutboundPayload.new() |> Outbox.enqueue()
+  end
 end

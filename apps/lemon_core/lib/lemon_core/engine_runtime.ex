@@ -124,6 +124,13 @@ defmodule LemonCore.EngineRuntime do
   alias LemonCore.ExecutionCommand
 
   @doc """
+  Validates that `module` is loadable and implements every callback of this
+  behaviour, so the router can call it directly once configured.
+  """
+  @spec validate(term()) :: :ok | {:error, LemonCore.Contract.error()}
+  def validate(module), do: LemonCore.Contract.validate(module, __MODULE__)
+
+  @doc """
   Accept a command for execution.
 
   `:ok` (or `{:ok, term}`, which the router treats identically) means the

@@ -10,6 +10,19 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Channel run controls no longer pretend. Cancel, keep-alive and busy checks
+  in the Telegram, Discord and WhatsApp adapters now report when the router is
+  unavailable ("Could not cancel: the router is unavailable") instead of
+  answering "Cancelling..." for a request nobody received, and the dynamic
+  fallback that called the router module by name is gone. `LemonCore.RouterBridge`,
+  `LemonCore.EventBridge` and `LemonCore.EngineInfoBridge` validate their
+  implementations against a behaviour at configure time and log a raising
+  implementation with its stacktrace; the bridge's query functions answer
+  `{:error, :unavailable}` rather than a soft `false` / `:none` / `[]`. The
+  router validates its configured engine runtime at boot and at run start and
+  parks runs loudly when it is invalid. `transports.status` reads the
+  transport registry through the same validated bridge instead of a dynamic
+  module atom. See `docs/platform/reliability-contracts.md`.
 - Hermes skill install/update requests no longer block their own control-plane
   WebSocket while waiting for approval or Git work. Approval events and
   liveness probes remain deliverable, and the TUI keeps the correlated skill

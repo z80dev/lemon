@@ -1,5 +1,5 @@
 defmodule LemonChannels.Telegram.PerChatStateTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
 
   alias LemonChannels.Adapters.Telegram.Transport.ResumeSelection
   alias LemonCore.{ChatState, ResumeToken}

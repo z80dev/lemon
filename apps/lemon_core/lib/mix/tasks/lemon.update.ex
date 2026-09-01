@@ -1,9 +1,6 @@
 defmodule Mix.Tasks.Lemon.Update do
   use Mix.Task
 
-  @builtin_seeder :"Elixir.LemonSkills.BuiltinSeeder"
-  @skills_migrator :"Elixir.LemonSkills.Migrator"
-
   alias LemonCore.Config.Modular
   alias LemonCore.Update.{ConfigMigrator, Remote, Version}
 
@@ -187,32 +184,42 @@ defmodule Mix.Tasks.Lemon.Update do
   defp run_skill_sync(check_only?, verbose?) do
     shell = Mix.shell()
 
-    cond do
-      check_only? ->
-        if verbose?, do: shell.info("Skill sync: --check mode, skipping.")
-        :ok
-
-      Code.ensure_loaded?(@builtin_seeder) ->
-        shell.info("Skill sync: refreshing bundled skills ...")
-        apply(@builtin_seeder, :seed!, [])
-
-        if Code.ensure_loaded?(@skills_migrator) do
-          case apply(@skills_migrator, :migrate, []) do
-            {:ok, %{classified: n}} when n > 0 ->
-              shell.info("Skill sync: classified #{n} existing skill(s) with provenance.")
-
-            _ ->
-              :ok
-          end
-        end
-
-        shell.info("Skill sync: complete.")
-        :ok
-
-      true ->
-        if verbose?, do: shell.info("Skill sync: lemon_skills not available, skipping.")
-        :ok
+    if check_only? do
+      if verbose?, do: shell.info("Skill sync: --check mode, skipping.")
+      :ok
+    else
+      sync_skills(shell, verbose?, Application.get_env(:lemon_core, :skill_sync))
     end
+  end
+
+  # The skill runtime is composed in config (`config :lemon_core, :skill_sync`)
+  # because this task lives in lemon_core and must not name lemon_skills.
+  defp sync_skills(shell, verbose?, nil) do
+    if verbose?, do: shell.info("Skill sync: no skill runtime configured, skipping.")
+    :ok
+  end
+
+  defp sync_skills(shell, _verbose?, skill_sync) do
+    seeder = Keyword.fetch!(skill_sync, :seeder)
+    shell.info("Skill sync: refreshing bundled skills ...")
+    seeder.seed!()
+
+    case Keyword.get(skill_sync, :migrator) do
+      nil ->
+        :ok
+
+      migrator ->
+        case migrator.migrate() do
+          {:ok, %{classified: n}} when n > 0 ->
+            shell.info("Skill sync: classified #{n} existing skill(s) with provenance.")
+
+          _ ->
+            :ok
+        end
+    end
+
+    shell.info("Skill sync: complete.")
+    :ok
   end
 
   # ──────────────────────────────────────────────────────────────────────────

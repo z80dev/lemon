@@ -1693,42 +1693,35 @@ defmodule LemonAutomation.CronManager do
   defp maybe_deliver_summary_to_channel(session_key, text, %CronRun{} = run) do
     case SessionKey.parse(session_key) do
       %{kind: :channel_peer} = parsed ->
-        payload_mod = Module.concat([:"Elixir.LemonChannels", :OutboundPayload])
-        delivery_mod = Module.concat([:"Elixir.LemonRouter", :ChannelsDelivery])
+        payload = %{
+          channel_id: parsed.channel_id,
+          account_id: parsed.account_id || "default",
+          peer: %{
+            kind: parsed.peer_kind,
+            id: parsed.peer_id,
+            thread_id: parsed.thread_id
+          },
+          kind: :text,
+          content: text,
+          idempotency_key: "cron_notify_#{run.id}",
+          meta: %{
+            origin: :cron,
+            cron_forwarded_summary: true,
+            cron_run_id: run.id,
+            cron_job_id: run.job_id
+          }
+        }
 
-        if Code.ensure_loaded?(payload_mod) and Code.ensure_loaded?(delivery_mod) and
-             function_exported?(delivery_mod, :enqueue, 2) do
-          payload =
-            struct!(payload_mod,
-              channel_id: parsed.channel_id,
-              account_id: parsed.account_id || "default",
-              peer: %{
-                kind: parsed.peer_kind,
-                id: parsed.peer_id,
-                thread_id: parsed.thread_id
-              },
-              kind: :text,
-              content: text,
-              idempotency_key: "cron_notify_#{run.id}",
-              meta: %{
-                origin: :cron,
-                cron_forwarded_summary: true,
-                cron_run_id: run.id,
-                cron_job_id: run.job_id
-              }
+        case LemonRouter.ChannelsDelivery.enqueue(payload,
+               context: %{component: :cron_manager, phase: :forwarded_summary}
+             ) do
+          {:ok, _ref} ->
+            :ok
+
+          {:error, reason} ->
+            Logger.warning(
+              "[CronManager] Failed to enqueue forwarded summary: #{inspect(reason)}"
             )
-
-          case delivery_mod.enqueue(payload,
-                 context: %{component: :cron_manager, phase: :forwarded_summary}
-               ) do
-            {:ok, _ref} ->
-              :ok
-
-            {:error, reason} ->
-              Logger.warning(
-                "[CronManager] Failed to enqueue forwarded summary: #{inspect(reason)}"
-              )
-          end
         end
 
       _ ->

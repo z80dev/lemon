@@ -11,6 +11,7 @@ defmodule LemonRouter.AgentInbox do
 
   alias LemonCore.{RunRequest, SessionKey}
   alias LemonRouter.{AgentDirectory, AgentEndpoints}
+  require Logger
 
   @typedoc "Session selector for inbox delivery."
   @type session_selector :: :latest | :new | binary()
@@ -367,11 +368,7 @@ defmodule LemonRouter.AgentInbox do
 
     case submitter() do
       mod when is_atom(mod) ->
-        if Code.ensure_loaded?(mod) and function_exported?(mod, :submit, 1) do
-          mod.submit(request)
-        else
-          {:error, {:invalid_submitter, mod}}
-        end
+        mod.submit(request)
 
       fun when is_function(fun, 1) ->
         fun.(request)
@@ -380,7 +377,10 @@ defmodule LemonRouter.AgentInbox do
         {:error, {:invalid_submitter, other}}
     end
   rescue
-    e -> {:error, e}
+    e ->
+      Logger.error("agent inbox submit raised: " <> Exception.format(:error, e, __STACKTRACE__))
+
+      {:error, e}
   end
 
   defp submitter do

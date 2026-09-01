@@ -95,6 +95,21 @@ keeping it small and honest.
 
 ### Changed
 
+- `LemonChannels.Runtime` returns the router bridge's answer unchanged
+  (`:ok`, `{:error, :unavailable}` or `{:error, exception}`) and
+  `session_busy?/1` answers `{:ok, boolean()} | {:error, :unavailable}`; the
+  dynamic fallback to `LemonRouter.Router` and the blanket `rescue _ -> :ok`
+  are gone. The Telegram, Discord and WhatsApp adapters render the outcome
+  ("router unavailable") instead of assuming success.
+- The goal and kanban status commands take their automation capabilities from
+  `config :lemon_channels` (`goal_continuation_module`, `goal_loop_module`,
+  `kanban_dispatcher_module`) instead of hardcoded module atoms; an
+  unconfigured capability answers `{:error, :not_available}`.
+- `LemonChannels.enqueue/1` accepts a plain map with the payload's fields, so
+  callers that must not name `LemonChannels.OutboundPayload` (automation) can
+  still deliver through `LemonRouter.ChannelsDelivery`.
+- `lemon_channels` now depends on `lemon_ai` directly; the Discord model
+  catalog calls `LemonAi.Models.list_models/0` instead of a dynamic atom.
 - Channels query gateway configuration through `LemonCore.EngineInfoBridge`
   instead of constructing `LemonGateway.*` atoms at runtime.
 - Capabilities are resolved through the plugin registry. An unregistered

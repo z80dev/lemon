@@ -2,6 +2,7 @@ defmodule LemonWeb.SessionLive do
   @moduledoc false
 
   use LemonWeb, :live_view
+  require Logger
 
   alias LemonCore.{Bus, MapHelpers, NodeRegistry, RouterBridge, SessionKey, SessionLifecycle}
   alias LemonCore.Setup.Readiness
@@ -640,9 +641,21 @@ defmodule LemonWeb.SessionLive do
       end
 
     case result do
-      {:ok, run_id} when is_binary(run_id) and run_id != "" -> {:ok, run_id}
-      run_id when is_binary(run_id) and run_id != "" -> {:ok, run_id}
-      _ -> :none
+      {:ok, run_id} when is_binary(run_id) and run_id != "" ->
+        {:ok, run_id}
+
+      run_id when is_binary(run_id) and run_id != "" ->
+        {:ok, run_id}
+
+      {:error, reason} ->
+        Logger.warning(
+          "active run lookup unavailable session=#{inspect(session_key)}: #{inspect(reason)}"
+        )
+
+        :none
+
+      _ ->
+        :none
     end
   rescue
     _ -> :none

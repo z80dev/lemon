@@ -509,32 +509,24 @@ defmodule LemonCli.Onboarding.Runner do
   end
 
   defp available_model_ids(%Provider{} = spec) do
-    models_module = Module.concat([:"Elixir.LemonAi", :Models])
-
-    with true <- Code.ensure_loaded?(models_module),
-         true <- function_exported?(models_module, :get_models, 1),
-         true <- function_exported?(models_module, :get_providers, 0),
-         provider when not is_nil(provider) <-
-           provider_atom_for_models(models_module, spec.id) do
-      models_module
-      |> apply(:get_models, [provider])
-      |> Enum.map(& &1.id)
-      |> Enum.uniq()
-      |> Enum.sort()
-    else
-      _ ->
+    case provider_atom_for_models(spec.id) do
+      nil ->
         []
+
+      provider ->
+        provider
+        |> LemonAi.Models.get_models()
+        |> Enum.map(& &1.id)
+        |> Enum.uniq()
+        |> Enum.sort()
     end
   end
 
-  defp provider_atom_for_models(models_module, provider_id) do
+  defp provider_atom_for_models(provider_id) do
     normalized = normalize_provider_name(provider_id)
 
-    models_module
-    |> apply(:get_providers, [])
-    |> Enum.find(fn provider ->
-      provider_str = provider |> Atom.to_string() |> normalize_provider_name()
-      provider_str == normalized
+    Enum.find(LemonAi.Models.get_providers(), fn provider ->
+      provider |> Atom.to_string() |> normalize_provider_name() == normalized
     end)
   end
 

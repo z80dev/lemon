@@ -3,6 +3,9 @@ defmodule LemonChannels.Adapters.Telegram.TransportAuthorizationTest do
   use ExUnit.Case, async: false
 
   defmodule AuthTestRouter do
+    use LemonCore.RouterBridge.Router
+    use LemonCore.RouterBridge.RunOrchestrator
+
     def handle_inbound(msg) do
       if pid = :persistent_term.get({__MODULE__, :pid}, nil) do
         send(pid, {:inbound, msg})
@@ -92,7 +95,10 @@ defmodule LemonChannels.Adapters.Telegram.TransportAuthorizationTest do
 
     :persistent_term.put({AuthTestRouter, :pid}, self())
     AuthMockAPI.register_test(self())
-    LemonCore.RouterBridge.configure(router: AuthTestRouter, run_orchestrator: AuthTestRouter)
+
+    :ok =
+      LemonCore.RouterBridge.configure(router: AuthTestRouter, run_orchestrator: AuthTestRouter)
+
     set_bindings([])
 
     on_exit(fn ->

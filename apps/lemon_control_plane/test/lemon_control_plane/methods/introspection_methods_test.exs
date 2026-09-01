@@ -17,6 +17,8 @@ defmodule LemonControlPlane.Methods.IntrospectionMethodsTest do
   alias LemonCore.SessionKey
 
   defmodule RouterBridgeStub do
+    use LemonCore.RouterBridge.Router
+
     @active_sessions_key {__MODULE__, :active_sessions}
 
     def set_active_sessions(entries) when is_list(entries) do
@@ -192,7 +194,7 @@ defmodule LemonControlPlane.Methods.IntrospectionMethodsTest do
         requirements_cwd
       )
 
-    LemonCore.RouterBridge.configure(router: RouterBridgeStub)
+    :ok = LemonCore.RouterBridge.configure(router: RouterBridgeStub)
     RouterBridgeStub.set_active_sessions([%{session_key: session_key, run_id: run_id}])
     Application.put_env(:lemon_router, :session_coordinator, SessionCoordinatorStub)
     SessionCoordinatorStub.set_active_sessions([%{session_key: session_key, run_id: run_id}])
@@ -652,10 +654,10 @@ defmodule LemonControlPlane.Methods.IntrospectionMethodsTest do
 
   describe "transports.status" do
     setup do
-      old_registry_module = Application.get_env(:lemon_control_plane, :transport_registry_module)
+      old_bridge = Application.get_env(:lemon_core, :engine_info_bridge)
 
       on_exit(fn ->
-        restore_transport_registry_module(old_registry_module)
+        restore_engine_info_bridge(old_bridge)
       end)
 
       :ok
@@ -687,17 +689,14 @@ defmodule LemonControlPlane.Methods.IntrospectionMethodsTest do
       end)
     end
 
-    test "returns empty snapshot when the gateway registry module is not loaded" do
-      Application.put_env(
-        :lemon_control_plane,
-        :transport_registry_module,
-        :"Elixir.LemonControlPlane.MissingTransportRegistryForTest"
-      )
+    test "returns empty snapshot when no execution runtime registered a registry" do
+      without_transport_registry()
 
       {:ok, result} = TransportsStatus.handle(%{}, %{})
 
       assert result["registryRunning"] == false
       assert result["registryLoaded"] == false
+      assert result["registryModule"] == nil
       assert result["transports"] == []
       assert result["total"] == 0
       assert result["enabled"] == 0
@@ -705,8 +704,8 @@ defmodule LemonControlPlane.Methods.IntrospectionMethodsTest do
       assert result["summary"]["status"] == "registry_stopped"
     end
 
-    test "returns empty snapshot when the gateway registry module is loaded but stopped" do
-      Application.put_env(:lemon_control_plane, :transport_registry_module, TransportRegistryStub)
+    test "returns empty snapshot when the registered registry is stopped" do
+      :ok = LemonCore.EngineInfoBridge.configure(transport_registry: TransportRegistryStub)
 
       {:ok, result} = TransportsStatus.handle(%{}, %{})
 
@@ -716,8 +715,8 @@ defmodule LemonControlPlane.Methods.IntrospectionMethodsTest do
       assert result["summary"]["status"] == "registry_stopped"
     end
 
-    test "returns configured and enabled transports when the legacy registry is running" do
-      Application.put_env(:lemon_control_plane, :transport_registry_module, TransportRegistryStub)
+    test "returns configured and enabled transports when the registry is running" do
+      :ok = LemonCore.EngineInfoBridge.configure(transport_registry: TransportRegistryStub)
 
       {:ok, pid} =
         TransportRegistryStub.start_link(%{
@@ -756,47 +755,43 @@ defmodule LemonControlPlane.Methods.IntrospectionMethodsTest do
       end
     end
 
-    test "degrades safely when the registry API is missing or fails" do
-      Application.put_env(
-        :lemon_control_plane,
-        :transport_registry_module,
-        TransportRegistryMissingApiStub
-      )
+    test "a registry without the introspection API is rejected at registration" do
+      assert {:error,
+              {:invalid_implementation, :transport_registry,
+               {:missing_callbacks, TransportRegistryMissingApiStub, missing}}} =
+               LemonCore.EngineInfoBridge.configure(
+                 transport_registry: TransportRegistryMissingApiStub
+               )
 
-      {:ok, missing_api_pid} = TransportRegistryMissingApiStub.start_link(%{})
+      assert Enum.sort(missing) == [enabled_transports: 0, get_transport: 1, list_transports: 0]
+    end
 
-      try do
-        {:ok, result} = TransportsStatus.handle(%{}, %{})
-        assert result["registryRunning"] == true
-        assert result["transports"] == []
-        assert result["summary"]["status"] == "empty"
-      after
-        Process.unlink(missing_api_pid)
-        Process.exit(missing_api_pid, :kill)
-      end
-
-      Application.put_env(
-        :lemon_control_plane,
-        :transport_registry_module,
-        TransportRegistryCrashingStub
-      )
+    test "reports a transport whose lookup raises as module-less and logs the failure" do
+      :ok =
+        LemonCore.EngineInfoBridge.configure(transport_registry: TransportRegistryCrashingStub)
 
       {:ok, crashing_pid} = TransportRegistryCrashingStub.start_link(%{})
 
       try do
-        {:ok, result} = TransportsStatus.handle(%{}, %{})
+        log =
+          ExUnit.CaptureLog.capture_log(fn ->
+            {:ok, result} = TransportsStatus.handle(%{}, %{})
 
-        assert result["registryRunning"] == true
-        assert result["summary"]["moduleMissingCount"] == 1
+            assert result["registryRunning"] == true
+            assert result["summary"]["moduleMissingCount"] == 1
 
-        assert result["transports"] == [
-                 %{
-                   "transportId" => "email",
-                   "module" => nil,
-                   "enabled" => false,
-                   "status" => "disabled"
-                 }
-               ]
+            assert result["transports"] == [
+                     %{
+                       "transportId" => "email",
+                       "module" => nil,
+                       "enabled" => false,
+                       "status" => "disabled"
+                     }
+                   ]
+          end)
+
+        assert log =~ "get_transport/1 raised"
+        assert log =~ "registry API failure"
       after
         Process.unlink(crashing_pid)
         Process.exit(crashing_pid, :kill)
@@ -910,12 +905,16 @@ defmodule LemonControlPlane.Methods.IntrospectionMethodsTest do
     Application.put_env(:lemon_router, :session_coordinator, config)
   end
 
-  defp restore_transport_registry_module(nil) do
-    Application.delete_env(:lemon_control_plane, :transport_registry_module)
+  defp without_transport_registry do
+    config = Application.get_env(:lemon_core, :engine_info_bridge, %{})
+    Application.put_env(:lemon_core, :engine_info_bridge, Map.delete(config, :transport_registry))
   end
 
-  defp restore_transport_registry_module(config) do
-    Application.put_env(:lemon_control_plane, :transport_registry_module, config)
+  defp restore_engine_info_bridge(nil),
+    do: Application.delete_env(:lemon_core, :engine_info_bridge)
+
+  defp restore_engine_info_bridge(config) do
+    Application.put_env(:lemon_core, :engine_info_bridge, config)
   end
 
   defp eventually(fun, attempts \\ 20)

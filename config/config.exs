@@ -128,6 +128,24 @@ config :lemon_channels,
 # and registers itself at boot (see XApi.Application), so the platform's config
 # does not name it either.
 
+# Automation-owned capabilities that channel status commands drive. Channels
+# never names lemon_automation; the reference runtime composes them here, and
+# an unconfigured capability answers {:error, :not_available}.
+config :lemon_channels,
+  goal_continuation_module: LemonAutomation.GoalContinuationManager,
+  goal_loop_module: LemonAutomation.GoalLoopManager,
+  kanban_dispatcher_module: LemonAutomation.KanbanDispatcher
+
+# The gateway health probe asks the XMTP transport for its status. The module
+# is composed here because lemon_gateway does not depend on lemon_channels.
+config :lemon_gateway, :xmtp_transport_module, LemonChannels.Adapters.Xmtp.Transport
+
+# `mix lemon.update` refreshes bundled skills through these modules; without
+# them the skill sync step is skipped.
+config :lemon_core, :skill_sync,
+  seeder: LemonSkills.BuiltinSeeder,
+  migrator: LemonSkills.Migrator
+
 # Filesystem layout for the reference runtime. These are LemonCore.Paths'
 # defaults, stated explicitly so the values live with the runtime rather than
 # inside the library.

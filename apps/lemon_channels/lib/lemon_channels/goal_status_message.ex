@@ -1,4 +1,6 @@
 defmodule LemonChannels.GoalStatusMessage do
+  require Logger
+
   @moduledoc false
 
   @spec handle(binary(), binary() | nil, keyword()) :: String.t()
@@ -549,30 +551,42 @@ defmodule LemonChannels.GoalStatusMessage do
     |> then(fn <<first::binary-size(1), rest::binary>> -> String.downcase(first) <> rest end)
   end
 
+  # The automation capability behind a status command is composed in config.
+  # Nothing configured is a normal state; a configured module that does not
+  # export the function does not offer the capability; anything else it raises
+  # is a bug worth logging.
+  defp call_module(nil, _function, _args), do: {:error, :not_available}
+
   defp call_module(module, function, args) do
-    with true <- Code.ensure_loaded?(module),
-         true <- function_exported?(module, function, length(args)) do
-      apply(module, function, args)
-    else
-      _ -> {:error, :not_available}
-    end
+    apply(module, function, args)
+  rescue
+    exception in UndefinedFunctionError ->
+      if exception.module == module and exception.function == function do
+        {:error, :not_available}
+      else
+        log_raise(module, function, args, exception, __STACKTRACE__)
+      end
+
+    exception ->
+      log_raise(module, function, args, exception, __STACKTRACE__)
+  end
+
+  defp log_raise(module, function, args, exception, stacktrace) do
+    Logger.error(
+      "#{inspect(module)}.#{function}/#{length(args)} raised: " <>
+        Exception.format(:error, exception, stacktrace)
+    )
+
+    {:error, {:raised, exception}}
   end
 
   defp continuation_module(opts) do
     opts[:continuation_module] ||
-      Application.get_env(
-        :lemon_channels,
-        :goal_continuation_module,
-        :"Elixir.LemonAutomation.GoalContinuationManager"
-      )
+      Application.get_env(:lemon_channels, :goal_continuation_module)
   end
 
   defp loop_module(opts) do
     opts[:loop_module] ||
-      Application.get_env(
-        :lemon_channels,
-        :goal_loop_module,
-        :"Elixir.LemonAutomation.GoalLoopManager"
-      )
+      Application.get_env(:lemon_channels, :goal_loop_module)
   end
 end

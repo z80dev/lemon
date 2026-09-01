@@ -51,6 +51,7 @@ defmodule LemonRouter.Application do
 
     case Supervisor.start_link(children, opts) do
       {:ok, pid} ->
+        validate_engine_runtime()
         configure_router_bridge()
         {:ok, pid}
 
@@ -99,7 +100,30 @@ defmodule LemonRouter.Application do
         )
 
       {:error, reason} ->
-        Logger.warning("RouterBridge guarded configure failed: #{inspect(reason)}")
+        Logger.error("RouterBridge rejected the router implementation: #{inspect(reason)}")
+    end
+  end
+
+  # A misconfigured runtime is a bug, not an availability problem: say so once
+  # at boot. Runs still park with backoff (see LemonCore.EngineRuntime), so a
+  # router-only node keeps booting and queueing.
+  defp validate_engine_runtime do
+    case Application.get_env(:lemon_router, :engine_runtime) do
+      nil ->
+        :ok
+
+      module ->
+        case LemonCore.EngineRuntime.validate(module) do
+          :ok ->
+            :ok
+
+          {:error, reason} ->
+            Logger.error(
+              "configured :engine_runtime #{inspect(module)} does not implement " <>
+                "LemonCore.EngineRuntime (#{inspect(reason)}); runs will park until a valid " <>
+                "runtime is configured"
+            )
+        end
     end
   end
 

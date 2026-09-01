@@ -10,6 +10,9 @@ defmodule LemonChannels.Adapters.Telegram.TransportTopicTest do
   alias LemonCore.ProjectBindingStore
 
   defmodule TestRouter do
+    use LemonCore.RouterBridge.Router
+    use LemonCore.RouterBridge.RunOrchestrator
+
     def handle_inbound(msg) do
       if pid = :persistent_term.get({__MODULE__, :pid}, nil) do
         send(pid, {:inbound, msg})
@@ -116,7 +119,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportTopicTest do
       {:error, :already_registered} -> :ok
     end
 
-    LemonCore.RouterBridge.configure(router: TestRouter, run_orchestrator: TestRouter)
+    :ok = LemonCore.RouterBridge.configure(router: TestRouter, run_orchestrator: TestRouter)
 
     set_bindings([])
 

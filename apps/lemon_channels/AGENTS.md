@@ -77,7 +77,7 @@ share a group and are never delivered concurrently to prevent reordering.
 | `lib/lemon_channels/gateway_config.ex` | `LemonChannels.GatewayConfig` | Channels-local config facade. Prefers `:lemon_gateway` full-replacement runtime config when present, then delegates to `LemonCore.GatewayConfig`. |
 | `lib/lemon_channels/checkpoint_status_message.ex` | `LemonChannels.CheckpointStatusMessage` | Shared redacted `/checkpoint` and `/rollback` formatter/action handler for Telegram and Discord. Calls `LemonCore.Checkpoint` for diff/restore and projects redacted lifecycle event counts and browsable event history while keeping ordinary chat free of unsolicited checkpoint notices, raw paths, file contents, and session ids. |
 | `lib/lemon_channels/kanban_status_message.ex` | `LemonChannels.KanbanStatusMessage` | Shared redacted `/kanban` command formatter for Telegram and Discord. Uses `LemonAgent.Workspace.KanbanStore` directly for board/task state and calls the automation dispatcher by configured module atom at runtime to keep compile-time boundaries clean. |
-| `lib/lemon_channels/runtime.ex` | `LemonChannels.Runtime` | Bridge to LemonRouter: `cancel_session`, `cancel_by_progress_msg`, `cancel_by_run_id`, `keep_run_alive`, `session_busy?` via `LemonCore.RouterBridge` |
+| `lib/lemon_channels/runtime.ex` | `LemonChannels.Runtime` | Channel side of `LemonCore.RouterBridge`: `submit_inbound`, `cancel_session`, `cancel_by_progress_msg`, `cancel_by_run_id`, `keep_run_alive`, `session_busy?`; returns the bridge's `:ok` / `{:error, _}` unchanged |
 
 ### Outbox Pipeline
 
@@ -554,15 +554,13 @@ Top-level channel resume parsing and selection accept only native `lemon` tokens
 
 ## Runtime Bridge
 
-Thin wrappers to interact with `LemonRouter` without compile-time dependency:
-
-```elixir
-LemonChannels.Runtime.cancel_session(session_key)
-LemonChannels.Runtime.cancel_by_run_id(run_id)
-LemonChannels.Runtime.cancel_by_progress_msg(session_key, progress_msg_id)
-LemonChannels.Runtime.keep_run_alive(run_id, :continue | :cancel)
-LemonChannels.Runtime.session_busy?(session_key)
-```
+`LemonChannels.Runtime` (`submit_inbound`, `cancel_*`, `keep_run_alive`,
+`session_busy?`) returns `LemonCore.RouterBridge`'s answer unchanged: `:ok` /
+`{:ok, _}`, `{:error, :unavailable}` or `{:error, exception}`. It never invents
+a soft answer; adapters render the outcome. Goal and kanban status commands
+reach automation through `config :lemon_channels` (`goal_continuation_module`,
+`goal_loop_module`, `kanban_dispatcher_module`); unconfigured answers
+`{:error, :not_available}`. Contract: `docs/platform/reliability-contracts.md`.
 
 ## Registry API
 
@@ -647,32 +645,6 @@ mix test apps/lemon_channels/test/lemon_channels/outbox_test.exs
 # Run a single test file
 mix test apps/lemon_channels/test/lemon_channels/adapters/telegram/inbound_test.exs
 ```
-
-### Key Test Files
-
-| Test File | Coverage |
-|-----------|----------|
-| `outbox_test.exs` | Queue, retry, delivery |
-| `outbox_architecture_test.exs` | Per-group ordering, concurrency |
-| `outbox_retry_behavior_test.exs` | Retry logic, non-retryable errors |
-| `outbox_rate_limiting_test.exs` | Rate limiter integration |
-| `outbox_chunking_test.exs` | Chunking via outbox |
-| `chunker_test.exs` | Chunker unit tests |
-| `dedupe_test.exs` | Idempotency |
-| `telegram/inbound_test.exs` | Inbound normalization |
-| `telegram/outbound_test.exs` | Outbound delivery |
-| `telegram/voice_transcription_test.exs` | Voice transcription |
-| `telegram/delivery_test.exs` | Delivery helpers |
-| `telegram/markdown_test.exs` | Markdown to entities |
-| `telegram/transport_*_test.exs` | Transport behaviors (cancel, offset, auth, dedupe, parallel) |
-| `telegram/transport_topic_test.exs` | `/topic` command |
-| `telegram/file_transfer_test.exs` | File handling |
-| `discord/inbound_test.exs` | Discord inbound normalization |
-| `capabilities_test.exs` | Includes X adapter capability lookup |
-| `xmtp/transport_test.exs` | XMTP transport |
-| `port_bridge_contract_test.exs` | Shared XMTP/WhatsApp PortServer API, parser, event-tag, and reconnect contract |
-| `gateway_config_test.exs` | Config merging |
-| `application_test.exs` | App startup |
 
 ### Test Patterns
 

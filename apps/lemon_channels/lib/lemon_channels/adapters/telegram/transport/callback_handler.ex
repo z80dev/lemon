@@ -1,4 +1,6 @@
 defmodule LemonChannels.Adapters.Telegram.Transport.CallbackHandler do
+  require Logger
+
   @moduledoc """
   Telegram-local callback query handler for inline keyboard actions.
 
@@ -39,27 +41,17 @@ defmodule LemonChannels.Adapters.Telegram.Transport.CallbackHandler do
       String.starts_with?(data, @idle_keepalive_continue_callback_prefix) ->
         run_id = String.trim_leading(data, @idle_keepalive_continue_callback_prefix)
 
-        if is_binary(run_id) and run_id != "" and
-             Code.ensure_loaded?(LemonChannels.Runtime) and
-             function_exported?(LemonChannels.Runtime, :keep_run_alive, 2) do
-          LemonChannels.Runtime.keep_run_alive(run_id, :continue)
-        end
-
-        _ = answer_callback_query(state, cb_id, "continuing...")
-        maybe_close_callback_buttons(state, cb, "Continuing run.")
+        outcome = LemonChannels.Runtime.keep_run_alive(run_id, :continue)
+        _ = answer_callback_query(state, cb_id, control_answer(outcome, "continuing..."))
+        maybe_close_callback_buttons(state, cb, control_notice(outcome, "Continuing run."))
         :ok
 
       String.starts_with?(data, @idle_keepalive_stop_callback_prefix) ->
         run_id = String.trim_leading(data, @idle_keepalive_stop_callback_prefix)
 
-        if is_binary(run_id) and run_id != "" and
-             Code.ensure_loaded?(LemonChannels.Runtime) and
-             function_exported?(LemonChannels.Runtime, :keep_run_alive, 2) do
-          LemonChannels.Runtime.keep_run_alive(run_id, :cancel)
-        end
-
-        _ = answer_callback_query(state, cb_id, "stopping...")
-        maybe_close_callback_buttons(state, cb, "Stopping run.")
+        outcome = LemonChannels.Runtime.keep_run_alive(run_id, :cancel)
+        _ = answer_callback_query(state, cb_id, control_answer(outcome, "stopping..."))
+        maybe_close_callback_buttons(state, cb, control_notice(outcome, "Stopping run."))
         :ok
 
       String.starts_with?(data, @model_callback_prefix <> ":") ->
@@ -88,25 +80,19 @@ defmodule LemonChannels.Adapters.Telegram.Transport.CallbackHandler do
                 thread_id: if(is_integer(topic_id), do: to_string(topic_id), else: nil)
               })
 
-          if Code.ensure_loaded?(LemonChannels.Runtime) and
-               function_exported?(LemonChannels.Runtime, :cancel_by_progress_msg, 2) do
-            LemonChannels.Runtime.cancel_by_progress_msg(session_key, message_id)
-          end
+          outcome = LemonChannels.Runtime.cancel_by_progress_msg(session_key, message_id)
+          _ = answer_callback_query(state, cb_id, control_answer(outcome, "cancelling..."))
+        else
+          _ = answer_callback_query(state, cb_id, "cancelling...")
         end
 
-        _ = answer_callback_query(state, cb_id, "cancelling...")
         :ok
 
       String.starts_with?(data, @cancel_callback_prefix <> ":") ->
         run_id = String.trim_leading(data, @cancel_callback_prefix <> ":")
 
-        if is_binary(run_id) and run_id != "" and
-             Code.ensure_loaded?(LemonChannels.Runtime) and
-             function_exported?(LemonChannels.Runtime, :cancel_by_run_id, 2) do
-          LemonChannels.Runtime.cancel_by_run_id(run_id, :user_requested)
-        end
-
-        _ = answer_callback_query(state, cb_id, "cancelling...")
+        outcome = LemonChannels.Runtime.cancel_by_run_id(run_id, :user_requested)
+        _ = answer_callback_query(state, cb_id, control_answer(outcome, "cancelling..."))
         :ok
 
       true ->
@@ -596,4 +582,16 @@ defmodule LemonChannels.Adapters.Telegram.Transport.CallbackHandler do
   end
 
   defp parse_int(_), do: nil
+
+  # Run-control callbacks answer what actually happened: the router took the
+  # request, or it could not be reached and the user should know.
+  defp control_answer(:ok, text), do: text
+
+  defp control_answer({:error, reason}, _text) do
+    Logger.warning("telegram run control failed: #{inspect(reason)}")
+    "run control unavailable"
+  end
+
+  defp control_notice(:ok, text), do: text
+  defp control_notice({:error, _reason}, _text), do: "Could not reach the run. Try again."
 end

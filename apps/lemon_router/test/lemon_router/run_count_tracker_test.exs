@@ -13,14 +13,53 @@ defmodule LemonRouter.RunCountTrackerTest do
 
   # The tracker is started by the LemonRouter application supervisor.
   # We verify it is running and test against the live instance.
-  # Because other test modules may emit telemetry that bumps counters,
-  # we reset to zero before each test to get deterministic assertions.
+  # The counters are global and every run process emits the telemetry they
+  # count, so a run left in flight by an earlier test would bump them while
+  # this module asserts exact values. Wait for those runs to finish, then
+  # reset to zero before each test.
+
+  @run_supervisors [LemonRouter.RunSupervisor, LemonGateway.RunSupervisor]
+  @idle_timeout_ms 5_000
 
   setup do
-    # Reset counters to a known state
-    send(Process.whereis(RunCountTracker), :midnight_reset)
-    Process.sleep(10)
+    wait_for_idle_runs(System.monotonic_time(:millisecond) + @idle_timeout_ms)
+    reset_counters()
     :ok
+  end
+
+  # The reset is a plain message; a system call after it is answered only once
+  # the reset has been handled.
+  defp reset_counters do
+    tracker = Process.whereis(RunCountTracker)
+    send(tracker, :midnight_reset)
+    _ = :sys.get_state(tracker)
+    :ok
+  end
+
+  defp wait_for_idle_runs(deadline) do
+    Enum.each(run_processes(), fn pid ->
+      ref = Process.monitor(pid)
+
+      receive do
+        {:DOWN, ^ref, :process, ^pid, _reason} -> :ok
+      after
+        max(deadline - System.monotonic_time(:millisecond), 0) ->
+          Process.demonitor(ref, [:flush])
+
+          flunk(
+            "run process #{inspect(pid)} was left in flight by an earlier test; " <>
+              "the global run counters cannot be asserted exactly"
+          )
+      end
+    end)
+  end
+
+  defp run_processes do
+    @run_supervisors
+    |> Enum.filter(&Process.whereis/1)
+    |> Enum.flat_map(&DynamicSupervisor.which_children/1)
+    |> Enum.map(fn {_id, pid, _type, _modules} -> pid end)
+    |> Enum.filter(&is_pid/1)
   end
 
   describe "queued counter" do
@@ -103,8 +142,7 @@ defmodule LemonRouter.RunCountTrackerTest do
         run_id: "r"
       })
 
-      send(Process.whereis(RunCountTracker), :midnight_reset)
-      Process.sleep(20)
+      reset_counters()
 
       assert RunCountTracker.queued() == 0
       assert RunCountTracker.completed_today() == 0

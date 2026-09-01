@@ -147,16 +147,7 @@ defmodule LemonRouter.RunProcess.RetryHandler do
   end
 
   defp submit_retry_request(run_orchestrator, %RunRequest{} = request) do
-    cond do
-      function_exported?(run_orchestrator, :submit, 1) ->
-        run_orchestrator.submit(request)
-
-      function_exported?(run_orchestrator, :submit_run, 1) ->
-        run_orchestrator.submit_run(request)
-
-      true ->
-        {:error, :run_orchestrator_unavailable}
-    end
+    run_orchestrator.submit(request)
   end
 
   defp normalize_retry_meta(meta) when is_map(meta), do: meta

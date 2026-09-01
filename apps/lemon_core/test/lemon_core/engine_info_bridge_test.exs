@@ -67,7 +67,18 @@ defmodule LemonCore.EngineInfoBridgeTest do
     end
 
     test "rejects a non-module value" do
-      assert EngineInfoBridge.configure(transport_registry: "nope") == {:error, :invalid_config}
+      assert EngineInfoBridge.configure(transport_registry: "nope") ==
+               {:error, {:invalid_implementation, :transport_registry, {:not_a_module, "nope"}}}
+    end
+
+    test "rejects a module that does not implement the capability" do
+      assert {:error,
+              {:invalid_implementation, :transport_registry,
+               {:missing_callbacks, GatewayConfigStub, missing}}} =
+               EngineInfoBridge.configure(transport_registry: GatewayConfigStub)
+
+      assert Keyword.has_key?(missing, :list_transports)
+      assert EngineInfoBridge.impl(:transport_registry) == nil
     end
 
     test "ignores keys that are not capabilities" do

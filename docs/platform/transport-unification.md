@@ -148,6 +148,9 @@ subsystems that are not channels and are off by default. That is the wrong trade
   not crash it, it just reports empty; (b) **this is the same anti-pattern 2.5 is removing** for
   `LemonGateway.Config`/`EngineRegistry`. Recommendation: fold `transports.status` into 2.5's
   `EngineInfoBridge` work rather than 2.4 — it is the same fix, and doing it twice is waste.
+  *Done (2026-09): `transports.status` now reads the registry through the validated
+  `:transport_registry` capability of `LemonCore.EngineInfoBridge`; the dynamic-atom
+  indirection is gone (see `docs/platform/reliability-contracts.md`).*
 - **Docs asserting the current design**: `apps/lemon_gateway/README.md:126,369`,
   `apps/lemon_gateway/AGENTS.md:3,25`, `docs/architecture_boundaries.md:58`. All describe the
   ingress set as "transitional legacy" implying eventual full retirement. If the recommendation

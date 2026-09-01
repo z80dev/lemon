@@ -107,7 +107,7 @@ defmodule LemonRouter.RunProcess do
     init_session_key = opts[:session_key]
 
     engine_runtime =
-      opts[:engine_runtime] || opts[:gateway_scheduler] || configured_engine_runtime()
+      validated_engine_runtime(opts[:engine_runtime] || configured_engine_runtime(), run_id)
 
     run_orchestrator = opts[:run_orchestrator] || LemonRouter.RunOrchestrator
     run_watchdog_timeout_ms = Watchdog.resolve_run_watchdog_timeout_ms(opts)
@@ -858,21 +858,25 @@ defmodule LemonRouter.RunProcess do
   # Utility helpers
   # ---------------------------------------------------------------------------
 
+  defp submit_runtime_execution(nil, _state), do: {:error, :engine_runtime_unavailable}
+
   defp submit_runtime_execution(runtime, state) do
-    if is_map(state.execution_request) and function_exported?(runtime, :submit_execution, 1) do
-      case runtime.submit_execution(
-             ExecutionCommand.ensure_conversation_key(state.execution_request)
-           ) do
-        :ok -> :ok
-        {:ok, _} -> :ok
-        {:error, reason} -> {:error, reason}
-        other -> {:error, {:unexpected_submit_result, other}}
-      end
-    else
-      :ok
+    command = ExecutionCommand.ensure_conversation_key(state.execution_request)
+
+    case runtime.submit_execution(command) do
+      :ok -> :ok
+      {:ok, _} -> :ok
+      {:error, reason} -> {:error, reason}
+      other -> {:error, {:unexpected_submit_result, other}}
     end
   rescue
-    error -> {:error, {error.__struct__, Exception.message(error)}}
+    error ->
+      Logger.error(
+        "engine runtime #{inspect(runtime)} raised on submit run_id=#{state.run_id}: " <>
+          Exception.format(:error, error, __STACKTRACE__)
+      )
+
+      {:error, {error.__struct__, Exception.message(error)}}
   catch
     :exit, reason -> {:error, {:exit, reason}}
   end
@@ -904,45 +908,70 @@ defmodule LemonRouter.RunProcess do
     Application.get_env(:lemon_router, :engine_runtime)
   end
 
-  @spec runtime_available?(term()) :: boolean()
-  defp runtime_available?(runtime) when is_atom(runtime) do
-    cond do
-      not Code.ensure_loaded?(runtime) ->
-        false
+  # A configured runtime that does not implement the behaviour is a bug; it is
+  # logged and the run parks as if no runtime were configured.
+  defp validated_engine_runtime(nil, _run_id), do: nil
 
-      function_exported?(runtime, :available?, 0) ->
-        runtime.available?()
+  defp validated_engine_runtime(runtime, run_id) do
+    case LemonCore.EngineRuntime.validate(runtime) do
+      :ok ->
+        runtime
 
-      true ->
-        case GenServer.whereis(runtime) do
-          pid when is_pid(pid) -> true
-          _ -> false
-        end
+      {:error, reason} ->
+        Logger.error(
+          "run #{run_id}: configured engine runtime #{inspect(runtime)} is invalid " <>
+            "(#{inspect(reason)}); parking the run"
+        )
+
+        nil
     end
+  end
+
+  @spec runtime_available?(term()) :: boolean()
+  defp runtime_available?(nil), do: false
+
+  defp runtime_available?(runtime) when is_atom(runtime) do
+    runtime.available?()
   rescue
-    _ -> false
+    error ->
+      Logger.error(
+        "engine runtime #{inspect(runtime)} raised on available?/0: " <>
+          Exception.format(:error, error, __STACKTRACE__)
+      )
+
+      false
   end
 
   defp runtime_available?(_), do: false
 
+  defp cancel_runtime_run(nil, _run_id, _reason), do: :ok
+
   defp cancel_runtime_run(runtime, run_id, reason) when is_atom(runtime) and is_binary(run_id) do
-    if Code.ensure_loaded?(runtime) and function_exported?(runtime, :cancel_by_run_id, 2) do
-      runtime.cancel_by_run_id(run_id, reason)
-    else
-      :ok
-    end
+    runtime.cancel_by_run_id(run_id, reason)
   rescue
-    _ -> :ok
+    error ->
+      Logger.error(
+        "engine runtime #{inspect(runtime)} raised on cancel run_id=#{run_id}: " <>
+          Exception.format(:error, error, __STACKTRACE__)
+      )
+
+      :ok
   end
 
   defp cancel_runtime_run(_, _, _), do: :ok
 
+  defp runtime_run_pid(nil, _run_id), do: nil
+
   defp runtime_run_pid(runtime, run_id) when is_atom(runtime) and is_binary(run_id) do
-    if Code.ensure_loaded?(runtime) and function_exported?(runtime, :run_pid, 1) do
-      runtime.run_pid(run_id)
-    end
+    runtime.run_pid(run_id)
   rescue
-    _ -> nil
+    error ->
+      Logger.error(
+        "engine runtime #{inspect(runtime)} raised on run_pid/1 run_id=#{run_id}: " <>
+          Exception.format(:error, error, __STACKTRACE__)
+      )
+
+      nil
   end
 
   defp runtime_run_pid(_, _), do: nil

@@ -1,57 +1,59 @@
 defmodule LemonCore.EventBridge do
   @moduledoc """
-  Optional bridge for subscribing/unsubscribing external event fanout.
+  Optional bridge for subscribing external event fan-out to a run.
 
-  `:lemon_router` wants to request "subscribe this run_id" for WebSocket/event
-  delivery, but should not depend on `:lemon_control_plane` at compile time.
+  `:lemon_router` asks for "subscribe this run_id" so WebSocket clients can
+  follow the run, but must not depend on `:lemon_control_plane` at compile
+  time. The control plane registers itself here at boot with `configure/1`;
+  the module it registers must implement `LemonCore.EventBridge.Fanout`,
+  which `configure/1` verifies with `LemonCore.Contract.validate/2`.
 
-  This module performs dynamic dispatch to a configured implementation module.
-  If no implementation is configured, calls are no-ops.
+  With no fan-out configured, `subscribe_run/1` and `unsubscribe_run/1` are
+  no-ops that answer `:ok`: a runtime without a control plane has nobody to
+  fan out to, and that is a normal state, not a failure. A configured fan-out
+  that raises or exits is a failure. It is logged with its reason and answered
+  as `{:error, reason}`, never as `:ok`.
   """
 
+  alias LemonCore.Contract
+
+  require Logger
+
   @impl_key :event_bridge_impl
+  @fanout LemonCore.EventBridge.Fanout
+
   @type configure_mode :: :replace | :if_unset
 
   @doc """
-  Configure the implementation module.
+  Configure the fan-out module, replacing any existing one. `nil` clears it.
 
   Typically called by `LemonControlPlane.Application` at startup:
 
       LemonCore.EventBridge.configure(LemonControlPlane.EventBridge)
   """
   @spec configure(module() | nil) :: :ok | {:error, term()}
-  def configure(nil) do
-    configure(nil, mode: :replace)
-  end
-
-  def configure(mod) when is_atom(mod) do
-    configure(mod, mode: :replace)
-  end
+  def configure(mod) when is_atom(mod), do: configure(mod, mode: :replace)
 
   @doc """
-  Configure the implementation module with overwrite controls.
+  Configure the fan-out module with overwrite controls.
 
   Modes:
-  - `:replace` - overwrite any existing implementation (legacy behavior)
-  - `:if_unset` - set only when unset or already matching
+  - `:replace` - overwrite any existing implementation
+  - `:if_unset` - set only when unset or already the same module
+
+  A module that does not implement `LemonCore.EventBridge.Fanout` is rejected
+  as `{:error, {:invalid_implementation, reason}}` and nothing changes.
   """
   @spec configure(module() | nil, keyword()) :: :ok | {:error, term()}
   def configure(nil, opts) when is_list(opts) do
-    mode = Keyword.get(opts, :mode, :replace)
-
-    case mode do
+    case Keyword.get(opts, :mode, :replace) do
       :replace ->
-        Application.delete_env(:lemon_core, @impl_key)
-        :ok
+        clear()
 
       :if_unset ->
         case current_impl() do
-          nil ->
-            Application.delete_env(:lemon_core, @impl_key)
-            :ok
-
-          _ ->
-            {:error, :already_configured}
+          nil -> clear()
+          _existing -> {:error, :already_configured}
         end
 
       other ->
@@ -60,76 +62,93 @@ defmodule LemonCore.EventBridge do
   end
 
   def configure(mod, opts) when is_atom(mod) and is_list(opts) do
-    mode = Keyword.get(opts, :mode, :replace)
+    with :ok <- validate(mod) do
+      case Keyword.get(opts, :mode, :replace) do
+        :replace ->
+          put(mod)
 
-    case mode do
-      :replace ->
-        Application.put_env(:lemon_core, @impl_key, %{impl: mod})
-        :ok
+        :if_unset ->
+          case current_impl() do
+            nil -> put(mod)
+            ^mod -> :ok
+            existing -> {:error, {:already_configured, existing}}
+          end
 
-      :if_unset ->
-        case current_impl() do
-          nil ->
-            Application.put_env(:lemon_core, @impl_key, %{impl: mod})
-            :ok
-
-          ^mod ->
-            :ok
-
-          existing ->
-            {:error, {:already_configured, existing}}
-        end
-
-      other ->
-        {:error, {:invalid_mode, other}}
+        other ->
+          {:error, {:invalid_mode, other}}
+      end
     end
   end
 
   @doc """
-  Configure the bridge implementation only if no conflicting implementation is set.
+  Configure the fan-out module only if no conflicting one is set.
   """
   @spec configure_guarded(module()) :: :ok | {:error, term()}
-  def configure_guarded(mod) when is_atom(mod) do
-    configure(mod, mode: :if_unset)
-  end
+  def configure_guarded(mod) when is_atom(mod), do: configure(mod, mode: :if_unset)
+
+  @doc "The configured fan-out module, or `nil`."
+  @spec impl() :: module() | nil
+  def impl, do: current_impl()
 
   @doc """
-  Subscribe to events for the given run ID.
-
-  Dispatches to the configured implementation module. No-op if unconfigured.
+  Subscribe external clients to the run's events. `:ok` when no fan-out is
+  configured.
   """
-  @spec subscribe_run(binary()) :: :ok
-  def subscribe_run(run_id) when is_binary(run_id) do
-    dispatch(:subscribe_run, [run_id])
-  end
+  @spec subscribe_run(binary()) :: :ok | {:error, term()}
+  def subscribe_run(run_id) when is_binary(run_id), do: dispatch(:subscribe_run, [run_id])
 
   @doc """
-  Unsubscribe from events for the given run ID.
-
-  Dispatches to the configured implementation module. No-op if unconfigured.
+  Unsubscribe external clients from the run's events. `:ok` when no fan-out
+  is configured.
   """
-  @spec unsubscribe_run(binary()) :: :ok
-  def unsubscribe_run(run_id) when is_binary(run_id) do
-    dispatch(:unsubscribe_run, [run_id])
-  end
+  @spec unsubscribe_run(binary()) :: :ok | {:error, term()}
+  def unsubscribe_run(run_id) when is_binary(run_id), do: dispatch(:unsubscribe_run, [run_id])
 
-  defp dispatch(fun, args) do
-    mod = current_impl()
+  defp dispatch(function, args) do
+    case current_impl() do
+      nil ->
+        :ok
 
-    if is_atom(mod) and Code.ensure_loaded?(mod) and function_exported?(mod, fun, length(args)) do
-      _ = apply(mod, fun, args)
-      :ok
-    else
-      :ok
+      mod ->
+        case apply(mod, function, args) do
+          :ok -> :ok
+          other -> {:error, {:unexpected_answer, other}}
+        end
     end
   rescue
-    _ -> :ok
+    exception ->
+      Logger.error(
+        "EventBridge #{function}/#{length(args)} raised: " <>
+          Exception.format(:error, exception, __STACKTRACE__)
+      )
+
+      {:error, exception}
+  catch
+    :exit, reason ->
+      Logger.warning("EventBridge #{function}/#{length(args)} unavailable: #{inspect(reason)}")
+      {:error, :unavailable}
+  end
+
+  defp validate(mod) do
+    case Contract.validate(mod, @fanout) do
+      :ok -> :ok
+      {:error, reason} -> {:error, {:invalid_implementation, reason}}
+    end
+  end
+
+  defp put(mod) do
+    Application.put_env(:lemon_core, @impl_key, %{impl: mod})
+    :ok
+  end
+
+  defp clear do
+    Application.delete_env(:lemon_core, @impl_key)
+    :ok
   end
 
   defp current_impl do
     case Application.get_env(:lemon_core, @impl_key) do
-      %{impl: mod} when is_atom(mod) -> mod
-      mod when is_atom(mod) -> mod
+      %{impl: mod} when is_atom(mod) and not is_nil(mod) -> mod
       _ -> nil
     end
   end

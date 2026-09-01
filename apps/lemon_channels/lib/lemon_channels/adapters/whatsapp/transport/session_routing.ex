@@ -121,10 +121,20 @@ defmodule LemonChannels.Adapters.WhatsApp.Transport.SessionRouting do
 
   defp pending_new_for_scope?(_pending_new, _peer_id, _thread_id), do: false
 
+  # An unreachable router cannot report a busy session. Treating it as idle is
+  # the answer the submit that follows will contradict, so say so here.
   defp session_busy?(session_key) when is_binary(session_key) and session_key != "" do
-    LemonChannels.Runtime.session_busy?(session_key)
-  rescue
-    _ -> false
+    case LemonChannels.Runtime.session_busy?(session_key) do
+      {:ok, busy?} ->
+        busy?
+
+      {:error, reason} ->
+        Logger.warning(
+          "session busy check unavailable session=#{inspect(session_key)}: #{inspect(reason)}; treating as idle"
+        )
+
+        false
+    end
   end
 
   defp session_busy?(_), do: false

@@ -10,6 +10,9 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
   @bot_user_id 1_476_753_643_834_183_690
 
   defmodule FakeRouter do
+    use LemonCore.RouterBridge.Router
+    use LemonCore.RouterBridge.RunOrchestrator
+
     def submit(run_request) do
       send(test_pid(), {:submit_run, run_request})
       {:ok, "run_discord_dedupe_proof"}

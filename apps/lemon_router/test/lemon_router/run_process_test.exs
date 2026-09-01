@@ -97,6 +97,10 @@ defmodule LemonRouter.RunProcessTest do
       GenServer.cast(__MODULE__, {:submit, request})
     end
 
+    def cancel_by_run_id(_run_id, _reason), do: :ok
+    def run_pid(_run_id), do: nil
+    def available?, do: is_pid(Process.whereis(__MODULE__))
+
     @impl true
     def init(state), do: {:ok, state}
 
@@ -111,6 +115,8 @@ defmodule LemonRouter.RunProcessTest do
     @moduledoc false
 
     def available?, do: true
+    def cancel_by_run_id(_run_id, _reason), do: :ok
+    def run_pid(_run_id), do: nil
 
     def submit_execution(%LemonCore.ExecutionCommand{} = request) do
       pid = :persistent_term.get({__MODULE__, :notify_pid}, nil)
@@ -547,7 +553,7 @@ defmodule LemonRouter.RunProcessTest do
                  run_id: run_id,
                  session_key: session_key,
                  execution_request: job,
-                 gateway_scheduler: RejectingScheduler,
+                 engine_runtime: RejectingScheduler,
                  gateway_submit_deadline_ms: 120
                })
 
@@ -591,7 +597,7 @@ defmodule LemonRouter.RunProcessTest do
                  run_id: run_id,
                  session_key: session_key,
                  execution_request: job,
-                 gateway_scheduler: RejectingScheduler
+                 engine_runtime: RejectingScheduler
                })
 
       assert_receive {:rejecting_scheduler_submit,
@@ -622,7 +628,7 @@ defmodule LemonRouter.RunProcessTest do
                  run_id: run_id,
                  session_key: session_key,
                  execution_request: job,
-                 gateway_scheduler: TestScheduler
+                 engine_runtime: TestScheduler
                })
 
       assert eventually(fn ->
@@ -659,7 +665,7 @@ defmodule LemonRouter.RunProcessTest do
                  run_id: run_id,
                  session_key: session_key,
                  execution_request: job,
-                 gateway_scheduler: TestScheduler
+                 engine_runtime: TestScheduler
                })
 
       assert eventually(fn ->

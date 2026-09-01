@@ -406,13 +406,21 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
             build_session_key(state, inbound, scope)
         end
 
-      if Code.ensure_loaded?(LemonChannels.Runtime) and
-           function_exported?(LemonChannels.Runtime, :cancel_session, 2) do
-        LemonChannels.Runtime.cancel_session(session_key, :user_requested)
-      end
+      notice =
+        case LemonChannels.Runtime.cancel_session(session_key, :user_requested) do
+          :ok ->
+            "Cancelling current run..."
+
+          {:error, reason} ->
+            Logger.warning(
+              "telegram cancel failed session=#{inspect(session_key)}: #{inspect(reason)}"
+            )
+
+            "Could not cancel: the router is unavailable."
+        end
 
       user_msg_id = inbound.meta[:user_msg_id] || parse_int(inbound.message.id)
-      _ = send_system_message(state, chat_id, thread_id, user_msg_id, "Cancelling current run...")
+      _ = send_system_message(state, chat_id, thread_id, user_msg_id, notice)
     end
 
     state

@@ -165,8 +165,15 @@ defmodule LemonGateway.Health do
   end
 
   defp xmtp_transport_check do
-    xmtp_transport_mod = xmtp_transport_module()
+    case xmtp_transport_module() do
+      nil -> {:error, :xmtp_transport_not_configured}
+      xmtp_transport_mod -> xmtp_status_check(xmtp_transport_mod)
+    end
+  end
 
+  # The transport is an optional module composed in config; probing whether it
+  # is loaded and exports status/0 is exactly what this health check is for.
+  defp xmtp_status_check(xmtp_transport_mod) do
     with {:module_loaded, true} <- {:module_loaded, Code.ensure_loaded?(xmtp_transport_mod)},
          {:status_exported, true} <-
            {:status_exported, function_exported?(xmtp_transport_mod, :status, 0)},
@@ -215,11 +222,7 @@ defmodule LemonGateway.Health do
   end
 
   defp xmtp_transport_module do
-    Application.get_env(
-      :lemon_gateway,
-      :xmtp_transport_module,
-      :"Elixir.LemonChannels.Adapters.Xmtp.Transport"
-    )
+    Application.get_env(:lemon_gateway, :xmtp_transport_module)
   end
 
   defp xmtp_enabled? do

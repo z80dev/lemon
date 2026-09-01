@@ -932,7 +932,7 @@ mix test --cover apps/lemon_core
 
 This is the foundational app. All other umbrella apps depend on it:
 
-- **lemon_router** -- Registers via `RouterBridge.configure/1` at startup; uses `SessionKey`, `Store`, `Bus`, `Config`
+- **lemon_router** -- Registers via `RouterBridge.configure/1` at startup (validated against the bridge behaviours); uses `SessionKey`, `Store`, `Bus`, `Config`
 - **lemon_gateway** -- Uses `GatewayConfig`, `Config`, `Bus`, `Store` for gateway lifecycle
 - **lemon_channels** -- Uses `InboundMessage`, `RouterBridge`, `Bus`, `Binding`, `SessionKey`
 - **coding_agent** -- Uses `Config` (provider/model resolution), `Secrets` (API key resolution), `Store`, `Bus`

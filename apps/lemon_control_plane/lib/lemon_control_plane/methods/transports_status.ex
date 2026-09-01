@@ -2,10 +2,16 @@ defmodule LemonControlPlane.Methods.TransportsStatus do
   @moduledoc """
   Handler for the `transports.status` method.
 
-  Returns configured gateway transports and enabled/disabled state.
+  Returns configured gateway transports and enabled/disabled state, read
+  through the `:transport_registry` capability of `LemonCore.EngineInfoBridge`.
+  The execution runtime registers its registry there at boot; without one, or
+  with its process stopped, the snapshot is empty and `summary.status` says
+  `registry_stopped`.
   """
 
   @behaviour LemonControlPlane.Method
+
+  alias LemonCore.EngineInfoBridge
 
   @impl true
   def name, do: "transports.status"
@@ -15,7 +21,7 @@ defmodule LemonControlPlane.Methods.TransportsStatus do
 
   @impl true
   def handle(_params, _ctx) do
-    registry_running? = transport_registry_running?()
+    registry_running? = EngineInfoBridge.running?(:transport_registry)
     configured = configured_transports(registry_running?)
     enabled_ids = enabled_transport_ids(registry_running?)
 
@@ -39,8 +45,8 @@ defmodule LemonControlPlane.Methods.TransportsStatus do
     {:ok,
      %{
        "registryRunning" => registry_running?,
-       "registryModule" => module_name(transport_registry_module()),
-       "registryLoaded" => registry_loaded?(),
+       "registryModule" => module_name(EngineInfoBridge.impl(:transport_registry)),
+       "registryLoaded" => EngineInfoBridge.available?(:transport_registry),
        "transports" => transports,
        "total" => length(transports),
        "enabled" => enabled_count,
@@ -68,89 +74,35 @@ defmodule LemonControlPlane.Methods.TransportsStatus do
     if Enum.any?(transports, &(&1["enabled"] == true)), do: "enabled", else: "disabled"
   end
 
-  defp transport_registry_running? do
-    case transport_registry_module() do
-      nil -> false
-      registry -> Code.ensure_loaded?(registry) and is_pid(Process.whereis(registry))
-    end
-  end
-
-  defp registry_loaded? do
-    case transport_registry_module() do
-      nil -> false
-      registry -> Code.ensure_loaded?(registry)
-    end
-  end
-
   defp configured_transports(false), do: []
 
   defp configured_transports(true) do
-    case registry_call(:list_transports, []) do
-      {:ok, ids} when is_list(ids) ->
-        Enum.map(ids, fn id -> {id, safe_get_transport(id)} end)
-
-      _ ->
-        []
+    case EngineInfoBridge.list_transports() do
+      {:ok, ids} -> Enum.map(ids, fn id -> {id, transport_module(id)} end)
+      {:error, :unavailable} -> []
     end
   end
 
   defp enabled_transport_ids(false), do: MapSet.new()
 
   defp enabled_transport_ids(true) do
-    case registry_call(:enabled_transports, []) do
-      {:ok, transports} when is_list(transports) ->
-        transports
-        |> Enum.map(fn {id, _mod} -> id end)
-        |> MapSet.new()
-
-      _ ->
-        MapSet.new()
+    case EngineInfoBridge.enabled_transports() do
+      {:ok, transports} -> MapSet.new(transports, fn {id, _mod} -> id end)
+      {:error, :unavailable} -> MapSet.new()
     end
   end
 
-  defp safe_get_transport(id) do
-    case registry_call(:get_transport, [id]) do
+  # A lookup the registry cannot answer (it raised, or stopped mid-call) is
+  # logged by the bridge; here the transport is simply reported without a
+  # module, which `summary.moduleMissingCount` counts.
+  defp transport_module(id) do
+    case EngineInfoBridge.get_transport(id) do
       {:ok, mod} -> mod
-      _ -> nil
+      {:error, :unavailable} -> nil
     end
   end
 
   defp module_name(nil), do: nil
   defp module_name(mod) when is_atom(mod), do: Atom.to_string(mod)
   defp module_name(_), do: nil
-
-  defp registry_call(function, args) when is_atom(function) and is_list(args) do
-    registry = transport_registry_module()
-    arity = length(args)
-
-    cond do
-      is_nil(registry) ->
-        {:error, :module_not_loaded}
-
-      not Code.ensure_loaded?(registry) ->
-        {:error, :module_not_loaded}
-
-      not function_exported?(registry, function, arity) ->
-        {:error, {:missing_function, function, arity}}
-
-      true ->
-        {:ok, apply(registry, function, args)}
-    end
-  rescue
-    error -> {:error, error}
-  catch
-    :exit, reason -> {:error, {:exit, reason}}
-    kind, reason -> {:error, {kind, reason}}
-  end
-
-  # The engine runtime registers its transport registry with
-  # LemonCore.EngineInfoBridge at boot, so this app names no engine-runtime
-  # module. The app-env override still wins, which is how tests substitute a
-  # stub registry.
-  defp transport_registry_module do
-    case Application.get_env(:lemon_control_plane, :transport_registry_module) do
-      module when is_atom(module) and not is_nil(module) -> module
-      _ -> LemonCore.EngineInfoBridge.impl(:transport_registry)
-    end
-  end
 end

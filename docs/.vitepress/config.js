@@ -50,6 +50,7 @@ export default {
           { text: "BEAM Agents", link: "/beam_agents" },
           { text: "App Boundaries", link: "/architecture_boundaries" },
           { text: "Review (Sep 2026)", link: "/architecture/review-2026-09" },
+          { text: "Reliability Contracts", link: "/platform/reliability-contracts" },
           { text: "Model Selection", link: "/model-selection-decoupling" },
           { text: "Context Management", link: "/context" },
           { text: "Bootstrap Contract", link: "/assistant_bootstrap_contract" },

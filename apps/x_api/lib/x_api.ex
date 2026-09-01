@@ -12,7 +12,7 @@ defmodule XApi do
   alias LemonCore.Secrets
 
   @legacy_app :lemon_channels
-  @legacy_module :"Elixir.XApi.ChannelAdapter"
+  @legacy_module XApi.ChannelAdapter
   @env_config_keys [
     client_id: "X_API_CLIENT_ID",
     client_secret: "X_API_CLIENT_SECRET",

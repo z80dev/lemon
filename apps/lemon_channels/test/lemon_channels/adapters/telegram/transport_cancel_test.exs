@@ -25,6 +25,9 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
   ]
 
   defmodule CancelTestRouter do
+    use LemonCore.RouterBridge.Router
+    use LemonCore.RouterBridge.RunOrchestrator
+
     def handle_inbound(msg) do
       if pid = :persistent_term.get({__MODULE__, :pid}, nil) do
         send(pid, {:inbound, msg})
@@ -162,7 +165,13 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
 
     :persistent_term.put({CancelTestRouter, :pid}, self())
     CancelMockAPI.register_test(self())
-    LemonCore.RouterBridge.configure(router: CancelTestRouter, run_orchestrator: CancelTestRouter)
+
+    :ok =
+      LemonCore.RouterBridge.configure(
+        router: CancelTestRouter,
+        run_orchestrator: CancelTestRouter
+      )
+
     set_bindings([])
     clear_env(@provider_env_vars)
     System.put_env("OPENAI_API_KEY", "test-openai-key")

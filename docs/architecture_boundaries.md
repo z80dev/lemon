@@ -17,7 +17,7 @@ silent permissions.
 | `lemon_ai` | *(none)* | *(none)* | *(none)* |
 | `lemon_automation` | `lemon_agent`, `lemon_core`, `lemon_router`, `lemon_skills` | `lemon_agent`, `lemon_core`, `lemon_router`, `lemon_skills` | *(none)* |
 | `lemon_browser` | `lemon_core` | `lemon_core` | *(none)* |
-| `lemon_channels` | `lemon_agent`, `lemon_core`, `lemon_media` | `lemon_agent`, `lemon_core`, `lemon_media` | *(none)* |
+| `lemon_channels` | `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_media` | `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_media` | *(none)* |
 | `lemon_cli` | `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_memory`, `lemon_skills` | `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_memory`, `lemon_skills` | *(none)* |
 | `lemon_control_plane` | `lemon_agent`, `lemon_ai`, `lemon_automation`, `lemon_browser`, `lemon_channels`, `lemon_core`, `lemon_lsp`, `lemon_media`, `lemon_memory`, `lemon_router`, `lemon_skills` | `lemon_agent`, `lemon_ai`, `lemon_automation`, `lemon_browser`, `lemon_channels`, `lemon_core`, `lemon_lsp`, `lemon_media`, `lemon_memory`, `lemon_router`, `lemon_skills` | *(none)* |
 | `lemon_core` | *(none)* | *(none)* | *(none)* |

@@ -69,6 +69,7 @@ defmodule LemonChannels.MixProject do
       {:lemon_core, in_umbrella: true},
       {:lemon_media, in_umbrella: true},
       {:lemon_agent, in_umbrella: true},
+      {:lemon_ai, in_umbrella: true},
       {:jason, "~> 1.4"},
       {:earmark_parser, "~> 1.4"},
       # LemonChannels.InboundHttp — the optional listener for adapters that
