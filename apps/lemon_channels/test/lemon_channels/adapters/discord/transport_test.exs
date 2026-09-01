@@ -1003,7 +1003,7 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
     end)
   end
 
-  test "pushes redacted checkpoint event notices for tracked sessions" do
+  test "keeps checkpoint lifecycle events internal during ordinary chat" do
     parent = self()
 
     state = %{
@@ -1030,7 +1030,7 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
 
     assert {:noreply, returned} = Transport.handle_info(event, state)
     assert returned == state
-    assert_receive {:checkpoint_notice, 456, "Checkpoint Event\ncreated chk_push (1 paths)"}
+    refute_receive {:checkpoint_notice, _, _}
   end
 
   defp interaction(name, options, overrides \\ %{}) do

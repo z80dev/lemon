@@ -104,13 +104,6 @@ defmodule LemonChannels.CheckpointStatusMessage do
     Enum.join(lines, "\n")
   end
 
-  @spec event_text(LemonCore.Event.t() | map()) :: String.t() | nil
-  def event_text(%{type: type, payload: payload}) when type in @checkpoint_events do
-    "Checkpoint Event\n#{event_summary(%{event_type: type, payload: payload || %{}})}"
-  end
-
-  def event_text(_event), do: nil
-
   defp events_text(args, opts) do
     limit = args |> List.first() |> parse_event_limit()
 

@@ -282,21 +282,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
     _ -> {:noreply, state}
   end
 
-  def handle_info(%LemonCore.Event{type: type, meta: meta} = event, state)
-      when type in [:checkpoint_created, :checkpoint_restored, :checkpoint_deleted] do
-    session_key = (meta || %{})[:session_key] || (meta || %{})["session_key"]
-
-    with %{chat_id: chat_id, thread_id: thread_id, user_msg_id: user_msg_id} <-
-           Map.get(state.reaction_runs, session_key),
-         text when is_binary(text) <- LemonChannels.CheckpointStatusMessage.event_text(event) do
-      _ = send_checkpoint_event_message(state, chat_id, thread_id, user_msg_id, text)
-    end
-
-    {:noreply, state}
-  rescue
-    _ -> {:noreply, state}
-  end
-
   def handle_info(_msg, state), do: {:noreply, state}
 
   @impl true
@@ -1027,21 +1012,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
     end
   rescue
     _ -> :ok
-  end
-
-  defp send_checkpoint_event_message(
-         %{checkpoint_event_sender: sender},
-         chat_id,
-         thread_id,
-         user_msg_id,
-         text
-       )
-       when is_function(sender, 4) do
-    sender.(chat_id, thread_id, user_msg_id, text)
-  end
-
-  defp send_checkpoint_event_message(state, chat_id, thread_id, user_msg_id, text) do
-    send_system_message(state, chat_id, thread_id, user_msg_id, text)
   end
 
   defp resolve_bot_identity(bot_id, bot_username, api_mod, token) do

@@ -53,27 +53,6 @@ defmodule LemonChannels.CheckpointStatusMessageTest do
     refute text =~ "secret"
   end
 
-  test "renders redacted checkpoint event text" do
-    event = %LemonCore.Event{
-      type: :checkpoint_restored,
-      ts_ms: System.system_time(:millisecond),
-      payload: %{
-        checkpoint_id: "chk_event",
-        restored_count: 2,
-        paths: ["/private/file.ex"],
-        content: "secret"
-      },
-      meta: %{session_key: "agent:private-session"}
-    }
-
-    text = CheckpointStatusMessage.event_text(event)
-
-    assert text == "Checkpoint Event\nrestored chk_event (2 paths)"
-    refute text =~ "/private/file.ex"
-    refute text =~ "secret"
-    refute text =~ "agent:private-session"
-  end
-
   @tag :tmp_dir
   test "renders redacted checkpoint lifecycle events", %{tmp_dir: tmp_dir} do
     session_id = "channel-event-#{System.unique_integer([:positive])}"

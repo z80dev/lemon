@@ -75,7 +75,7 @@ share a group and are never delivered concurrently to prevent reordering.
 | `lib/lemon_channels/discord/known_target_store.ex` | `LemonChannels.Discord.KnownTargetStore` | Store-backed Discord channel/thread directory used by script-send list mode. |
 | `lib/lemon_channels/binding_resolver.ex` | `LemonChannels.BindingResolver` | Maps ChatScope to project/agent/cwd/queue_mode. Delegates to `LemonCore.BindingResolver`; bindings never select the fixed native top-level executor. |
 | `lib/lemon_channels/gateway_config.ex` | `LemonChannels.GatewayConfig` | Channels-local config facade. Prefers `:lemon_gateway` full-replacement runtime config when present, then delegates to `LemonCore.GatewayConfig`. |
-| `lib/lemon_channels/checkpoint_status_message.ex` | `LemonChannels.CheckpointStatusMessage` | Shared redacted `/checkpoint` and `/rollback` formatter/action handler for Telegram and Discord. Calls `LemonCore.Checkpoint` for diff/restore and projects redacted lifecycle event counts, browsable event history, and pushed active-run event notices while keeping chat output free of raw paths, file contents, and session ids. |
+| `lib/lemon_channels/checkpoint_status_message.ex` | `LemonChannels.CheckpointStatusMessage` | Shared redacted `/checkpoint` and `/rollback` formatter/action handler for Telegram and Discord. Calls `LemonCore.Checkpoint` for diff/restore and projects redacted lifecycle event counts and browsable event history while keeping ordinary chat free of unsolicited checkpoint notices, raw paths, file contents, and session ids. |
 | `lib/lemon_channels/kanban_status_message.ex` | `LemonChannels.KanbanStatusMessage` | Shared redacted `/kanban` command formatter for Telegram and Discord. Uses `LemonAgent.Workspace.KanbanStore` directly for board/task state and calls the automation dispatcher by configured module atom at runtime to keep compile-time boundaries clean. |
 | `lib/lemon_channels/runtime.ex` | `LemonChannels.Runtime` | Bridge to LemonRouter: `cancel_session`, `cancel_by_progress_msg`, `cancel_by_run_id`, `keep_run_alive`, `session_busy?` via `LemonCore.RouterBridge` |
 
@@ -381,7 +381,7 @@ Outbox.stats()
 | `/model` | Interactive provider/model picker via reply keyboard |
 | `/goal` | Preview durable goal status/set with optional max-continuation budget/pause/resume/continue/loop controls, opt-in auto loop scheduling, and clear for the current session |
 | `/kanban` | Preview durable kanban board/task/archive/dispatcher controls with redacted board/task output |
-| `/checkpoint` | Preview checkpoint status/events, redacted event history, redacted diff count, pushed active-run checkpoint event notices, and restore via `/checkpoint restore <id> confirm` |
+| `/checkpoint` | Preview checkpoint status/events, redacted event history, redacted diff count, and restore via `/checkpoint restore <id> confirm`; lifecycle events are not pushed into ordinary chat |
 | `/rollback` | Hermes-style alias for preview checkpoint rollback, including `/rollback diff <id>` and `/rollback <id> confirm` |
 | `/thinking` | Toggle extended thinking |
 | `/trigger` | Switch `:all` / `:mentions` mode |
@@ -485,7 +485,7 @@ Auto-refresh is owned by the `XApi.TokenManager` GenServer in `apps/x_api`; the 
 - Slash commands include `/lemon`, `/session new`, `/session info`, and preview
   `/goal status`/`set` with optional max-continuation budget/`pause`/`resume`/`continue`/loop controls including opt-in auto scheduling/`clear`
 - Preview `/kanban` slash commands expose board list/create/show/archive, task create/update/comment, and dispatcher start/status/stop with redacted responses.
-- Preview `/checkpoint` slash commands expose redacted status, redacted event history, redacted diff counts, pushed active-run checkpoint event notices, and restore gated by a required `confirm` boolean.
+- Preview `/checkpoint` slash commands expose redacted status, redacted event history, redacted diff counts, and restore gated by a required `confirm` boolean. Checkpoint lifecycle events remain internal unless the user invokes the command.
 - Preview `/rollback` slash commands alias the same redacted checkpoint rollback flow for Hermes-style command parity.
 - Add `LemonChannels.Adapters.Discord` to `config :lemon_channels, :adapters`
 

@@ -49,7 +49,7 @@ Channel transport or gateway-native ingress
 | `LemonRouter.MediaJobRecorder` | Records generated final-answer files into redacted media job metadata before channel delivery |
 | LemonRouter.ChannelsDelivery (internal) | Narrow bridge from router-adjacent automation delivery requests into `LemonChannels`; must not construct `OutboundPayload` or own channel rendering |
 | `LemonRouter.StreamCoalescer` | Semantic answer coalescing that emits `DeliveryIntent` snapshots/finalization |
-| `LemonRouter.ToolStatusCoalescer` | Semantic tool-status coalescing that emits `DeliveryIntent` snapshots/finalization |
+| `LemonRouter.ToolStatusCoalescer` | Semantic tool-status coalescing that emits `DeliveryIntent` snapshots/finalization; chat surfaces hide reasoning-only actions and fixed engine provenance while operator surfaces retain structured reasoning |
 | `LemonRouter.PendingCompaction` | Shared pending-compaction preparation, injection-safe JSONL history envelopes, whole-entry truncation, and post-submit marker consumption |
 | `LemonRouter.PendingCompactionStore` | Router-owned typed wrapper for pending-compaction markers |
 | `LemonRouter.AgentEndpointStore` | Router-owned typed wrapper for persistent endpoint aliases |

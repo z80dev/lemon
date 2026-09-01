@@ -404,7 +404,7 @@ The most mature adapter. Supports edit, delete, voice, images, files, reactions,
 | `/model` | Interactive provider/model picker via reply keyboard |
 | `/goal` | Preview durable goal status/set with optional max-continuation budget/pause/resume/continue/loop controls, opt-in auto loop scheduling, and clear for the current session |
 | `/kanban` | Preview durable kanban board/task/archive/dispatcher controls with redacted board/task output |
-| `/checkpoint` | Preview checkpoint status with redacted lifecycle event counts, redacted event history, redacted diff count, pushed active-run checkpoint event notices, and restore via `/checkpoint restore <id> confirm` |
+| `/checkpoint` | Preview checkpoint status with redacted lifecycle event counts, redacted event history, redacted diff count, and restore via `/checkpoint restore <id> confirm`; lifecycle events are not pushed into ordinary chat |
 | `/rollback` | Hermes-style alias for preview checkpoint rollback, including `/rollback diff <id>` and `/rollback <id> confirm` |
 | `/media` | Preview generated-media job status with redacted type/status/artifact counts and cleanup policy |
 

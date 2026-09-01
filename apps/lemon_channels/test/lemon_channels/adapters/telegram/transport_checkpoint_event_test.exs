@@ -3,7 +3,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportCheckpointEventTest do
 
   alias LemonChannels.Adapters.Telegram.Transport
 
-  test "pushes redacted checkpoint event notices for tracked sessions" do
+  test "keeps checkpoint lifecycle events internal during ordinary chat" do
     parent = self()
 
     state = %{
@@ -31,7 +31,6 @@ defmodule LemonChannels.Adapters.Telegram.TransportCheckpointEventTest do
     assert {:noreply, returned} = Transport.handle_info(event, state)
     assert returned == state
 
-    assert_receive {:checkpoint_notice, 123, 456, 789,
-                    "Checkpoint Event\nrestored chk_push (1 paths)"}
+    refute_receive {:checkpoint_notice, _, _, _, _}
   end
 end

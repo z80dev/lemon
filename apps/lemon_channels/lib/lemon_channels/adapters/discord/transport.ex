@@ -279,22 +279,6 @@ defmodule LemonChannels.Adapters.Discord.Transport do
 
   def handle_info(%LemonCore.Event{type: :approval_resolved}, state), do: {:noreply, state}
 
-  def handle_info(%LemonCore.Event{type: type, meta: meta} = event, state)
-      when type in [:checkpoint_created, :checkpoint_restored, :checkpoint_deleted] do
-    session_key = (meta || %{})[:session_key] || (meta || %{})["session_key"]
-
-    with %{channel_id: channel_id, thread_id: thread_id} <-
-           Map.get(state.reaction_runs, session_key),
-         text when is_binary(text) <- LemonChannels.CheckpointStatusMessage.event_text(event) do
-      target_channel_id = thread_id || channel_id
-      _ = send_checkpoint_event_message(state, target_channel_id, text)
-    end
-
-    {:noreply, state}
-  rescue
-    _ -> {:noreply, state}
-  end
-
   def handle_info({:discord_event, {:THREAD_CREATE, thread, _ws_state}}, state) do
     state = maybe_handle_thread_create(thread, state)
     {:noreply, state}
@@ -2571,15 +2555,6 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   end
 
   defp safe_allowed_mentions, do: %{parse: [], replied_user: false}
-
-  defp send_checkpoint_event_message(%{checkpoint_event_sender: sender}, channel_id, text)
-       when is_function(sender, 2) do
-    sender.(channel_id, text)
-  end
-
-  defp send_checkpoint_event_message(_state, channel_id, text) do
-    send_channel_message(channel_id, text)
-  end
 
   # ============================================================================
   # Session & Routing Helpers

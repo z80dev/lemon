@@ -37,8 +37,7 @@ defmodule LemonRouter.ToolStatusCoalescer do
     :meta,
     :seq,
     :finalized,
-    :run_started_at,
-    :engine
+    :run_started_at
   ]
 
   def start_link(opts) do
@@ -69,17 +68,23 @@ defmodule LemonRouter.ToolStatusCoalescer do
       {:skip, _reason} ->
         :ok
 
-      {:ok, _id, _action_data} ->
-        case get_or_start_coalescer(session_key, channel_id, surface, meta) do
-          {:ok, pid} ->
-            GenServer.cast(pid, {:action, run_id, action_event, meta})
-
-          {:error, reason} ->
-            Logger.warning("Failed to start tool status coalescer: #{inspect(reason)}")
+      {:ok, _id, action_data} ->
+        if chat_visible_action?(channel_id, action_data) do
+          start_action_coalescer(session_key, channel_id, run_id, action_event, meta, surface)
         end
     end
 
     :ok
+  end
+
+  defp start_action_coalescer(session_key, channel_id, run_id, action_event, meta, surface) do
+    case get_or_start_coalescer(session_key, channel_id, surface, meta) do
+      {:ok, pid} ->
+        GenServer.cast(pid, {:action, run_id, action_event, meta})
+
+      {:error, reason} ->
+        Logger.warning("Failed to start tool status coalescer: #{inspect(reason)}")
+    end
   end
 
   @doc """
@@ -283,8 +288,7 @@ defmodule LemonRouter.ToolStatusCoalescer do
       meta: Keyword.get(opts, :meta, %{}),
       seq: 0,
       finalized: false,
-      run_started_at: nil,
-      engine: nil
+      run_started_at: nil
     }
 
     {:ok, state}
@@ -311,8 +315,7 @@ defmodule LemonRouter.ToolStatusCoalescer do
             seq: 0,
             finalized: false,
             meta: compact_meta(meta),
-            run_started_at: now,
-            engine: nil
+            run_started_at: now
         }
       else
         %{state | meta: Map.merge(state.meta || %{}, compact_meta(meta))}
@@ -329,22 +332,17 @@ defmodule LemonRouter.ToolStatusCoalescer do
           {:ok, _id, action_data} ->
             action_data
             |> expand_embedded_actions()
+            |> Enum.filter(&chat_visible_action?(state.channel_id, &1))
             |> Enum.reduce({state.actions, state.order}, fn data, {actions, order} ->
               upsert_action(actions, order, data.id, data)
             end)
             |> then(fn {actions, order} ->
-              engine =
-                state.engine ||
-                  (is_binary(action_data[:caller_engine]) && action_data[:caller_engine]) ||
-                  nil
-
               state = %{
                 state
                 | actions: actions,
                   order: order,
                   first_event_ts: state.first_event_ts || now,
-                  run_started_at: state.run_started_at || now,
-                  engine: engine
+                  run_started_at: state.run_started_at || now
               }
 
               maybe_flush(state, now)
@@ -382,8 +380,7 @@ defmodule LemonRouter.ToolStatusCoalescer do
               flush_timer: nil,
               finalized: false,
               meta: compact_meta(meta),
-              run_started_at: nil,
-              engine: nil
+              run_started_at: nil
           }
 
         true ->
@@ -431,8 +428,7 @@ defmodule LemonRouter.ToolStatusCoalescer do
               flush_timer: nil,
               seq: 0,
               finalized: false,
-              run_started_at: nil,
-              engine: nil
+              run_started_at: nil
           }
 
         state.run_id != run_id ->
@@ -451,8 +447,7 @@ defmodule LemonRouter.ToolStatusCoalescer do
               seq: 0,
               finalized: false,
               meta: compact_meta(meta),
-              run_started_at: nil,
-              engine: nil
+              run_started_at: nil
           }
 
         true ->
@@ -503,7 +498,6 @@ defmodule LemonRouter.ToolStatusCoalescer do
 
     opts = %{
       elapsed_ms: elapsed_since(state.run_started_at),
-      engine: state.engine,
       action_count: length(state.order)
     }
 
@@ -570,10 +564,23 @@ defmodule LemonRouter.ToolStatusCoalescer do
         last_kind: nil,
         first_event_ts: nil,
         flush_timer: nil,
-        finalized: false,
-        engine: nil
+        finalized: false
     }
   end
+
+  # Reasoning remains available to Web/TUI/monitoring consumers, but ordinary chat
+  # status bubbles should describe only actions the user can meaningfully follow.
+  defp chat_visible_action?(channel_id, action) when is_map(action) do
+    not (chat_channel?(channel_id) and action[:kind] in [:reasoning, "reasoning"])
+  end
+
+  defp chat_visible_action?(_channel_id, _action), do: true
+
+  defp chat_channel?(channel_id) when is_binary(channel_id) do
+    Enum.any?(["telegram", "discord", "whatsapp"], &String.starts_with?(channel_id, &1))
+  end
+
+  defp chat_channel?(_channel_id), do: false
 
   defp emit_output(state, kind, text) do
     case build_intent(state, kind, text) do
@@ -607,7 +614,9 @@ defmodule LemonRouter.ToolStatusCoalescer do
            controls: %{allow_cancel?: state.finalized != true},
            meta: Map.put(state.meta || %{}, :surface, state.surface)
          }}
-      _ -> :error
+
+      _ ->
+        :error
     end
   end
 

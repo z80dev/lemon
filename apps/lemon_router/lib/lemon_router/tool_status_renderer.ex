@@ -4,7 +4,7 @@ defmodule LemonRouter.ToolStatusRenderer do
 
   Produces takopi-style output with Unicode symbols, elapsed time, and step counts:
 
-      working · claude · 2m 30s · step 5
+      working · 2m 30s · step 5
 
       ▸ read: `lib/foo.ex`
       ✓ grep: pattern
@@ -26,7 +26,7 @@ defmodule LemonRouter.ToolStatusRenderer do
   @keep_tail 4
 
   @doc """
-  Render with opts map supporting `:elapsed_ms`, `:engine`, `:action_count`.
+  Render with opts map supporting `:elapsed_ms` and `:action_count`.
   """
   @spec render(String.t() | nil, map(), [String.t()], map()) :: String.t()
   def render(_channel_id, _actions, [], _opts) do
@@ -133,17 +133,9 @@ defmodule LemonRouter.ToolStatusRenderer do
 
   defp build_header(opts) do
     elapsed_ms = Map.get(opts, :elapsed_ms)
-    engine = Map.get(opts, :engine)
     action_count = Map.get(opts, :action_count)
 
     parts = ["working"]
-
-    parts =
-      if is_binary(engine) and engine != "" do
-        parts ++ [engine]
-      else
-        parts
-      end
 
     parts =
       if is_integer(elapsed_ms) and elapsed_ms > 0 do

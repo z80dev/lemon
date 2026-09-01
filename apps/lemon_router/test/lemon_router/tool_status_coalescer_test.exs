@@ -157,6 +157,64 @@ defmodule LemonRouter.ToolStatusCoalescerTest do
     assert :ok = ToolStatusCoalescer.flush(session_key, channel_id)
   end
 
+  test "hides reasoning from chat status while keeping tool step counts accurate" do
+    previous_dispatcher = Application.get_env(:lemon_router, :dispatcher)
+    Application.put_env(:lemon_router, :dispatcher, ToolStatusIntentDispatcherStub)
+    :persistent_term.put({ToolStatusIntentDispatcherStub, :test_pid}, self())
+
+    on_exit(fn ->
+      :persistent_term.erase({ToolStatusIntentDispatcherStub, :test_pid})
+
+      if is_nil(previous_dispatcher) do
+        Application.delete_env(:lemon_router, :dispatcher)
+      else
+        Application.put_env(:lemon_router, :dispatcher, previous_dispatcher)
+      end
+    end)
+
+    session_key = "agent:chat-reasoning:telegram:default:dm:456"
+    channel_id = "telegram"
+    run_id = "run_#{System.unique_integer([:positive])}"
+
+    reasoning = %{
+      engine: "lemon",
+      action: %{
+        id: "lemon.reasoning.1",
+        kind: "note",
+        title: "internal planning",
+        detail: %{reasoning: %{text: "internal planning", source: "lemon_reasoning"}}
+      },
+      phase: :completed,
+      ok: true,
+      message: nil,
+      level: nil
+    }
+
+    tool = %{
+      engine: "lemon",
+      action: %{id: "tool.1", kind: "tool", title: "memory", detail: %{}},
+      phase: :completed,
+      ok: true,
+      message: nil,
+      level: nil
+    }
+
+    assert :ok = ToolStatusCoalescer.ingest_action(session_key, channel_id, run_id, reasoning)
+    assert :ok = ToolStatusCoalescer.ingest_action(session_key, channel_id, run_id, tool)
+    assert :ok = ToolStatusCoalescer.flush(session_key, channel_id)
+
+    assert_receive {:dispatched_intent,
+                    %DeliveryIntent{kind: :tool_status_snapshot, body: %{text: text}}},
+                   1_000
+
+    assert text =~ "working"
+    assert text =~ "step 1"
+    assert text =~ "✓ memory"
+    refute text =~ "reasoning"
+    refute text =~ "internal planning"
+    refute text =~ "lemon"
+  end
+
   test "renders structured reasoning note actions for operator surfaces" do
     previous_dispatcher = Application.get_env(:lemon_router, :dispatcher)
     Application.put_env(:lemon_router, :dispatcher, ToolStatusIntentDispatcherStub)

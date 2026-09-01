@@ -271,7 +271,7 @@ defmodule LemonRouter.ToolStatusRendererTest do
     assert text == "working"
   end
 
-  test "render/4 with opts builds rich header" do
+  test "render/4 builds a rich header without internal engine provenance" do
     actions = %{
       "a1" => %{title: "read foo", phase: :started, ok: nil}
     }
@@ -279,7 +279,8 @@ defmodule LemonRouter.ToolStatusRendererTest do
     opts = %{elapsed_ms: 1500, engine: "claude", action_count: 3}
     text = ToolStatusRenderer.render("telegram", actions, ["a1"], opts)
 
-    assert String.starts_with?(text, "working \u00b7 claude \u00b7 1s \u00b7 step 3")
+    assert String.starts_with?(text, "working \u00b7 1s \u00b7 step 3")
+    refute text =~ "claude"
   end
 
   test "render/4 with nil elapsed_ms shows just working header" do
