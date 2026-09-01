@@ -112,6 +112,7 @@ The checks that run in `mix lemon.quality` on every push, plus adjacent guards.
 | Task | Purpose |
 | --- | --- |
 | `mix lemon.quality` | Run docs and architecture quality checks (`--root`, `--validate-config`). |
+| `mix lemon.ratchet` | Measure the quality ratchets and compare them with `.ratchets.exs` (`--update` lowers them, `--root`). |
 | `mix lemon.architecture.docs` | Generate architecture boundary docs from policy. |
 | `mix lemon.check_duplicate_tests` | Check for duplicate test module names. |
 | `mix lemon.extension.validate` | Validate Lemon extension package manifests. |

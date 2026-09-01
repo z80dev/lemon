@@ -183,3 +183,83 @@ See [SECURITY.md](SECURITY.md).
 ## License
 
 By contributing, you agree your contributions will be licensed under the MIT License.
+
+## Working with coding agents on this repo
+
+These conventions apply when several people or agents work on the tree at once.
+
+### Parallel Work & Git Worktrees
+
+When working on multiple tasks in parallel (either as the same agent or multiple agents), **use git worktrees to avoid file editing conflicts**.
+Store all worktrees under `.worktrees/` in the repository root.
+
+#### Workflow:
+
+1. **Create a worktree for each parallel task:**
+   ```bash
+   mkdir -p .worktrees
+   git worktree add .worktrees/task-name -b task-name
+   cd .worktrees/task-name
+   ```
+
+2. **Work in isolation** — Each worktree is an independent working directory backed by the same repo:
+   ```bash
+   git status
+   ```
+
+3. **Clean up when complete** — After the branch is merged/closed, remove the worktree:
+   ```bash
+   cd /path/to/main/lemon
+   git worktree remove .worktrees/task-name
+   git branch -d task-name
+   ```
+
+#### Why git Worktrees?
+
+- **No file editing conflicts** — Multiple agents can edit different files simultaneously without stepping on each other
+- **Clean build contexts** — Each worktree maintains separate `_build/` and `deps/` as needed
+- **Easy cleanup** — Remove worktrees when done without affecting the main checkout
+
+#### Golden Rule:
+
+> **Never have multiple agents editing the same working directory simultaneously.** Always use separate worktrees for parallel tasks.
+
+---
+
+### Agent Team Composition
+
+When spawning agents for parallel work, **match the agent tier to the task complexity**. Don't use Opus for investigation or Sonnet for architectural decisions.
+
+#### Role Model
+
+| Role | Internal Model | External Model | Typical Tasks |
+|------|---------------|----------------|---------------|
+| Junior/Mid Dev | Sonnet | Kimi | Investigation, plan file creation, test running, config cleanup, doc updates, dependency audits, simple refactors |
+| Senior Dev | Opus | — | Complex refactoring, architectural extraction, correctness-critical code, multi-module decomposition |
+| Staff Engineer | Codex (MCP) | — | Plan ownership/review, architectural oversight, cross-cutting design decisions, final validation |
+
+#### Guidelines
+
+- **Default to the lowest tier that can do the job** — Use Sonnet for exploration and investigation. Only escalate to Opus when the task involves complex logic, cross-module refactoring, or correctness-critical code.
+- **Codex owns plans** — Matches the existing `owner: codex` / `reviewer: codex` convention in the planning system. Codex reviews architectural decisions and validates decomposition strategies.
+- **Escalation pattern**: Sonnet investigates → Opus implements → Codex reviews. Not every task needs all three tiers.
+- **Kimi for external/security**: Security audits, pre-push hooks, and external review tasks (already established in the pre-push hook workflow).
+- **Planning metadata**: `owner:` and `reviewer:` fields in plan YAML front matter should reference these roles (e.g., `owner: codex`, `reviewer: codex`).
+
+#### Spawning Examples
+
+```bash
+# Sonnet for investigation (junior/mid)
+# Use model: "sonnet" in Task tool or --model sonnet in CLI
+
+# Opus for complex implementation (senior)
+# Use model: "opus" in Task tool or default CLI model
+
+# Codex for plan review (staff)
+# Use mcp__codex__codex tool with architectural review prompt
+
+# Kimi for security audit (external)
+# Use kimi CLI runner for pre-push or security review
+```
+
+---

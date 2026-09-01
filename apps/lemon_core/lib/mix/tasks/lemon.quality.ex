@@ -2,11 +2,18 @@ defmodule Mix.Tasks.Lemon.Quality do
   use Mix.Task
 
   alias LemonCore.Config.Modular
-  alias LemonCore.Quality.{ArchitectureCheck, ArchitectureDocs, ArchitectureRulesCheck, DocsCheck}
+
+  alias LemonCore.Quality.{
+    ArchitectureCheck,
+    ArchitectureDocs,
+    ArchitectureRulesCheck,
+    DocsCheck,
+    RatchetCheck
+  }
 
   @shortdoc "Run docs and architecture quality checks"
   @moduledoc """
-  Run quality checks that keep harness docs and architecture boundaries healthy.
+  Run quality checks that keep harness docs, architecture boundaries, and quality ratchets healthy.
 
   Usage:
     mix lemon.quality
@@ -43,7 +50,8 @@ defmodule Mix.Tasks.Lemon.Quality do
       {:docs, fn -> DocsCheck.run(root: root) end},
       {:architecture_docs, fn -> ArchitectureDocs.check(root) end},
       {:architecture, fn -> ArchitectureCheck.run(root: root) end},
-      {:architecture_rules, fn -> ArchitectureRulesCheck.run(root: root) end}
+      {:architecture_rules, fn -> ArchitectureRulesCheck.run(root: root) end},
+      {:ratchets, fn -> RatchetCheck.run(root: root) end}
     ]
 
     failures =

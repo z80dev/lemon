@@ -1,7 +1,7 @@
 # Architecture Overview
 
 Lemon is a BEAM-native stack for LLM interactions: a layered set of Elixir/OTP
-libraries (`ai` → `agent_core` → product apps) with two products on top — a
+libraries (`lemon_ai` → `lemon_agent` → product apps) with two products on top — a
 multi-channel personal assistant and **LemonSim**, a deterministic
 model-vs-model simulation arena. This document covers the system architecture,
 key design decisions, and component responsibilities.
@@ -24,7 +24,7 @@ For system diagrams see `docs/diagrams/`. For per-app details see each `apps/*/R
 4. **Live Steering** — users can inject messages mid-execution because the BEAM
    can send a message to any process at any time.
 
-5. **Multi-Provider Abstraction** — unified interface for 26 LLM providers with
+5. **Multi-Provider Abstraction** — unified interface for 27 configured LLM providers with
    automatic model configuration and cost tracking.
 
 6. **Native Execution** — every product run uses Lemon's executor. Local runs
@@ -43,7 +43,7 @@ For system diagrams see `docs/diagrams/`. For per-app details see each `apps/*/R
 └───────────────────────┬─────────────────────────────────────┘
                         │ JSON-RPC / WebSocket
 ┌───────────────────────▼────────────────────┐
-│ LemonControlPlane  (112+ RPC methods)       │
+│ LemonControlPlane  (170+ RPC methods)       │
 └───────────────────────┬────────────────────┘
                         │
 ┌───────────────────────▼────────────────────┐
@@ -97,10 +97,10 @@ The project is an Elixir umbrella with 25 applications:
 
 | App | Role |
 |---|---|
-| `ai` | Provider abstraction, streaming, cost tracking (standalone; no umbrella deps) |
+| `lemon_ai` | Provider abstraction, streaming, cost tracking (standalone; no umbrella deps) |
 | `lemon_core` | EventBus, TaskFingerprint, config, secrets (standalone; no umbrella deps) |
 | `lemon_memory` | Durable memory for agents: document schema, SQLite-backed full-text store, provider behaviour with isolated fan-out search, run ingest (published; extracted from `lemon_core`) |
-| `agent_core` | Core agent loop, tool execution, model runtime credential glue, abort/subagent semantics |
+| `lemon_agent` | Core agent loop, tool execution, model runtime credential glue, abort/subagent semantics |
 | `lemon_platform_test` | Contract-test kit for the platform's extension behaviours: ExUnit case templates that validate Plugin, Executor, Store backend, and memory-provider implementations (published) |
 
 **Assistant product:**
@@ -113,7 +113,7 @@ The project is an Elixir umbrella with 25 applications:
 | `lemon_gateway` | Native execution lifecycle, slots, and request adaptation |
 | `lemon_channels` | Transport adapters (Telegram, Discord, X/Twitter, WhatsApp), model policy |
 | `lemon_automation` | CronManager, HeartbeatManager, scheduled jobs |
-| `lemon_control_plane` | HTTP/WebSocket server, 112+ RPC methods |
+| `lemon_control_plane` | HTTP/WebSocket server, 170+ RPC methods |
 | `lemon_skills` | Skill catalog, manifest v2 parser, installer, audit, synthesis |
 | `lemon_mcp` | MCP protocol server |
 | `lemon_cli` | Onboarding/setup/migration mix tasks and CLI glue |
