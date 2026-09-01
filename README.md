@@ -2,10 +2,9 @@
 
 [![Quality](https://github.com/z80dev/lemon/actions/workflows/quality.yml/badge.svg?branch=main)](https://github.com/z80dev/lemon/actions/workflows/quality.yml)
 [![Dialyzer](https://github.com/z80dev/lemon/actions/workflows/dialyzer.yml/badge.svg?branch=main)](https://github.com/z80dev/lemon/actions/workflows/dialyzer.yml)
-[![Simulation Bench](https://github.com/z80dev/lemon/actions/workflows/sim-bench.yml/badge.svg?branch=main)](https://github.com/z80dev/lemon/actions/workflows/sim-bench.yml)
 [![OSV Scanner](https://github.com/z80dev/lemon/actions/workflows/osv-scanner.yml/badge.svg?branch=main)](https://github.com/z80dev/lemon/actions/workflows/osv-scanner.yml)
 
-**Lemon is a resilient, BEAM-native personal AI assistant and agent platform.** Built on Elixir/OTP, it provides supervised per-run agent processes, multi-channel messaging, a configured execution runtime, persistent memory, and deterministic simulation arenas.
+**Lemon is a resilient, BEAM-native personal AI assistant and agent platform.** Built on Elixir/OTP, it provides supervised per-run agent processes, multi-channel messaging, a configured execution runtime, and persistent memory.
 
 ---
 
@@ -24,7 +23,6 @@
 - **Local-first credential resolution** — Keep encrypted secrets in Lemon or
   explicitly opt in to supervised 1Password, Bitwarden Secrets Manager, and
   argv-only command sources with fail-closed bounds and value-free diagnostics.
-- **LemonSim and benchmark arenas** — Event-sourced simulation worlds (Werewolf, Space Station, Stock Market, Survivor, Poker) and reproducible offline benchmark scoring without provider API keys.
 - **Supervised on the BEAM** — Each agent run is an isolated OTP process. Separate conversations execute concurrently, crashed workers are supervised, and durable session state survives individual requests.
 
 > **Design:** [Agents Are a Concurrency Problem](docs/why-beam-for-agents.md) and [BEAM Agent Architecture](docs/beam_agents.md).
@@ -227,28 +225,6 @@ mix compile
 
 ---
 
-## LemonSim and Simulation Arenas
-
-Lemon includes **LemonSim**, an event-sourced simulation engine and arena system for benchmarking model behavior deterministically.
-
-You can run deterministic simulations locally without any API keys:
-
-```bash
-# Run offline Tic-Tac-Toe
-mix lemon.sim.tic_tac_toe --offline-strategy random --seed 42 --no-persist --max-turns 10
-
-# Run VendingBench benchmark preset
-mix lemon.sim.vending_bench --preset ci --offline-strategy baseline --sim-id vb_ci
-
-# Verify and score the game artifact
-mix lemon.sim.verify apps/lemon_sim/priv/game_logs/vending_bench/vb_ci
-mix lemon.sim.score  apps/lemon_sim/priv/game_logs/vending_bench/vb_ci
-```
-
-Learn more in the [LemonSim Guide](apps/lemon_sim/README.md) and [Benchmark Guides](docs/benchmarks/quickstart.md).
-
----
-
 ## Architecture
 
 Lemon is organized as an Elixir umbrella split into 9 modular core packages, a reference runtime, and product applications.
@@ -270,7 +246,7 @@ Lemon is organized as an Elixir umbrella split into 9 modular core packages, a r
 ### Reference Runtime & Products
 
 - **Reference Runtime** (in-repo): [`lemon_control_plane`](apps/lemon_control_plane/README.md) (JSON-RPC API), [`lemon_cli`](apps/lemon_cli/README.md), [`lemon_web`](apps/lemon_web/README.md), [`lemon_automation`](apps/lemon_automation/README.md), [`lemon_skills`](apps/lemon_skills/README.md), [`lemon_browser`](apps/lemon_browser/README.md), [`lemon_lsp`](apps/lemon_lsp/README.md).
-- **Products**: [`coding_agent`](apps/coding_agent/README.md), [`coding_agent_ui`](apps/coding_agent_ui/README.md), [`lemon_mcp`](apps/lemon_mcp/README.md), [`lemon_sim`](apps/lemon_sim/README.md), [`lemon_sim_ui`](apps/lemon_sim_ui/README.md), [`lemon_tcg`](apps/lemon_tcg/README.md), [`lemon_evals`](apps/lemon_evals/README.md).
+- **Products**: [`coding_agent`](apps/coding_agent/README.md), [`coding_agent_ui`](apps/coding_agent_ui/README.md), [`lemon_mcp`](apps/lemon_mcp/README.md), [`lemon_evals`](apps/lemon_evals/README.md).
 - **Satellites**: [`x_api`](apps/x_api/README.md) (self-registering X / Twitter integration).
 
 ### Dependency Graph
@@ -308,9 +284,6 @@ graph TD
         caui["coding_agent_ui"]
         mcp["lemon_mcp"]
         evals["lemon_evals"]
-        sim["lemon_sim"]
-        simui["lemon_sim_ui"]
-        tcg["lemon_tcg"]
     end
 
     subgraph satellite["Satellite · self-registering vendor integration"]
@@ -378,7 +351,6 @@ graph TD
 | [Mix Tasks Reference](docs/mix-tasks.md) | Grouped reference for all `mix lemon.*` commands |
 | [Skills Documentation](docs/skills.md) | Skill registry, discovery, and custom assistant tools |
 | [Platform Split Plan](docs/platform-split.md) | Architecture evolution and package decoupling roadmap |
-| [Benchmark Guides](docs/benchmarks/quickstart.md) | Running model benchmarks in LemonSim |
 
 ---
 

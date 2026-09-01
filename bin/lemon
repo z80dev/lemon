@@ -83,7 +83,6 @@ Options:
   --debug                 Enable debug logging
   --port <port>           Control plane port (default: 4040)
   --web-port <port>       lemon_web HTTP port (default: 4080)
-  --sim-port <port>       lemon_sim_ui HTTP port (default: 4090)
   --name <name@host>      Start as distributed long-name node
   --sname <name>          Start as distributed short-name node (default: lemon)
   --cookie <cookie>       Erlang cookie (default: $LEMON_GATEWAY_NODE_COOKIE or lemon_gateway_dev_cookie)
@@ -95,7 +94,6 @@ Environment fallbacks:
   LEMON_CONTROL_PLANE_OPERATOR_TOKEN
   LEMON_RUNTIME_PID_FILE (daemon launcher lifecycle handoff)
   LEMON_WEB_PORT
-  LEMON_SIM_UI_PORT
   LEMON_GATEWAY_HEALTH_PORT
   LEMON_ROUTER_HEALTH_PORT
   LEMON_GATEWAY_NODE_NAME
@@ -628,7 +626,6 @@ DEBUG=""
 DAEMON=0
 PORT="${LEMON_CONTROL_PLANE_PORT:-4040}"
 WEB_PORT="${LEMON_WEB_PORT:-4080}"
-SIM_PORT="${LEMON_SIM_UI_PORT:-4090}"
 NODE_MODE=""
 NODE_NAME="${LEMON_GATEWAY_NODE_NAME:-lemon}"
 NODE_COOKIE="${LEMON_GATEWAY_NODE_COOKIE:-${LEMON_GATEWAY_COOKIE:-lemon_gateway_dev_cookie}}"
@@ -652,11 +649,6 @@ while [[ $# -gt 0 ]]; do
     --web-port)
       [[ -n "${2:-}" ]] || { error "Missing value for --web-port"; exit 1; }
       WEB_PORT="$2"
-      shift 2
-      ;;
-    --sim-port)
-      [[ -n "${2:-}" ]] || { error "Missing value for --sim-port"; exit 1; }
-      SIM_PORT="$2"
       shift 2
       ;;
     --name)
@@ -702,11 +694,6 @@ if ! [[ "$WEB_PORT" =~ ^[0-9]+$ ]]; then
   exit 1
 fi
 
-if ! [[ "$SIM_PORT" =~ ^[0-9]+$ ]]; then
-  error "Invalid --sim-port value: $SIM_PORT"
-  exit 1
-fi
-
 # Perform the already-running guard before compiling or registering the Erlang
 # node name. The in-VM Boot guard cannot help when distribution rejects a
 # duplicate `lemon@host` name before LemonCore.Runtime.Boot gets control.
@@ -744,7 +731,6 @@ fi
 export LEMON_DOTENV_DIR="${LEMON_DOTENV_DIR:-$LAUNCH_CWD}"
 export LEMON_CONTROL_PLANE_PORT="$PORT"
 export LEMON_WEB_PORT="$WEB_PORT"
-export LEMON_SIM_UI_PORT="$SIM_PORT"
 
 if [[ -n "$DEBUG" ]]; then
   export LEMON_DEBUG=1
@@ -825,7 +811,6 @@ mix compile
 info "Starting unified Lemon runtime"
 info "Control plane: ws://localhost:$LEMON_CONTROL_PLANE_PORT/ws"
 info "Web UI:        http://localhost:$LEMON_WEB_PORT/"
-info "Sim UI:        http://localhost:$LEMON_SIM_UI_PORT/"
 info "Dotenv dir:    $LEMON_DOTENV_DIR"
 
 # Boot logic (already-running check, port wiring, and app start) is now

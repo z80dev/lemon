@@ -280,23 +280,6 @@ defmodule LemonCore.Update.RemoteTest do
                )
     end
 
-    test "the sim profile never selects a TUI artifact, even when one is published" do
-      artifacts = [
-        artifact("lemon-sim.tar.gz", "sim_broadcast_platform", "linux-x86_64", "aa", 10),
-        artifact("lemon-tui.tar.gz", "lemon_tui", "linux-x86_64", "bb", 10)
-      ]
-
-      base_url = start_server(manifest_router(manifest("2099.01.0", artifacts)))
-
-      assert {:ok, %{artifact: %{"file" => "lemon-sim.tar.gz"}, tui_artifact: nil}} =
-               Remote.check(
-                 base_url: base_url,
-                 channel: "stable",
-                 platform: "linux-x86_64",
-                 profile: "sim_broadcast_platform"
-               )
-    end
-
     test "LEMON_NO_TUI=1 opts out of the TUI artifact, as it does in the installer" do
       System.put_env("LEMON_NO_TUI", "1")
       on_exit(fn -> System.delete_env("LEMON_NO_TUI") end)
@@ -668,43 +651,6 @@ defmodule LemonCore.Update.RemoteTest do
         channel: "stable",
         platform: "test-platform",
         profile: "test_profile",
-        paths_opts: [home_dir: home],
-        release_root: release_root
-      ]
-
-      assert {:ok, %{staged: "2099.01.0"}} = apply_confirmed(opts)
-
-      versions_dir = Path.join(state, "versions")
-      assert File.exists?(Path.join([versions_dir, "2099.01.0", "bin", "lemon"]))
-      refute File.exists?(Path.join([versions_dir, "2099.01.0", "tui"]))
-    end
-
-    test "the sim profile stages the runtime without fetching a TUI", %{tmp_dir: tmp_dir} do
-      {bytes, sha256, size} = build_fixture_tarball(tmp_dir)
-      {_tui_bytes, tui_sha, tui_size} = build_fixture_tui_tarball(tmp_dir)
-
-      artifacts = [
-        artifact("pkg.tar.gz", "sim_broadcast_platform", "test-platform", sha256, size),
-        artifact("tui.tar.gz", "lemon_tui", "test-platform", tui_sha, tui_size)
-      ]
-
-      # The TUI tarball is deliberately not served: reaching for it 404s the
-      # update instead of silently succeeding.
-      router =
-        artifact_router(
-          manifest("2099.01.0", artifacts),
-          "/releases/download/v2099.01.0/pkg.tar.gz",
-          bytes
-        )
-
-      base_url = start_server(router)
-      {home, state, release_root} = install_layout(tmp_dir, "2020.01.0")
-
-      opts = [
-        base_url: base_url,
-        channel: "stable",
-        platform: "test-platform",
-        profile: "sim_broadcast_platform",
         paths_opts: [home_dir: home],
         release_root: release_root
       ]

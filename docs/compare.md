@@ -11,7 +11,7 @@ durable events, explicit policy, and replayable state underneath.
 | --- | --- | --- |
 | Hosted assistants | Immediate onboarding and managed infrastructure | Local runtime ownership, local files and secrets, configurable providers, and supportable self-hosting |
 | Vendor coding CLIs | Polished repository workflow tied to one provider runtime | One native supervised runtime with provider/model routing, persistent sessions, tools, and in-process subagents |
-| Agent harnesses | Repeatable tool loops, transcripts, and evaluation | A production assistant stack plus deterministic LemonSim worlds and replay verification |
+| Agent harnesses | Repeatable tool loops, transcripts, and evaluation | A production assistant stack with supervised tool loops, durable session transcripts, and deterministic eval harnesses |
 | Chat bridges | Reach an assistant from messaging apps | Channel adapters share the same sessions, approvals, memory, tools, events, and diagnostics |
 | Automation scripts | Flexible local control with limited product lifecycle | Durable cron, heartbeats, monitor jobs, goal loops, kanban workers, retries, lineage, and preflight under supervision |
 
@@ -27,7 +27,6 @@ durable events, explicit policy, and replayable state underneath.
 | Automation | Durable cron and timers, retries/lineage, overlap locks, monitor suppression, no-agent commands, chaining, model-drift guard, preflight, goals, and kanban | [Configuration](config.md), [Testing](testing.md), [Support](support.md) |
 | Multi-machine work | Authenticated named execution nodes route native Lemon agent runs to destination-local workspaces and credentials | [Architecture](architecture/overview.md) |
 | Safety and operations | Central approvals, URL and extension policy, redaction, doctor checks, support bundles, readiness/proof artifacts, release channels, and canonical test lanes | [Safety](security/safety.md), [Support](support.md), [Versioning](release/versioning_and_channels.md), [Testing](testing.md) |
-| Simulation | Event-sourced worlds, deterministic replay verification, leagues, ratings, hosted observation, and benchmark artifacts | [Benchmark quickstart](benchmarks/quickstart.md), [Platform guarantees](benchmarks/platform.md) |
 
 ## Hermes comparison
 
@@ -68,7 +67,7 @@ than in point-in-time comparison ledgers.
   runtime surfaces
 - local and authenticated named-node agent execution
 - doctor diagnostics, support bundles, readiness/proof commands, release
-  profiles, and deterministic LemonSim demos
+  profiles, and deterministic local demo flows
 
 ## Important current limits
 

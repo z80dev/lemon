@@ -48,7 +48,7 @@ The workflow serializes release cuts and performs the complete operation:
    and checks out the exact tag for every build.
 3. The canonical fast, quality, deterministic eval, and client lanes run
    against the exact tag.
-4. Native runners build and verify all 11 artifacts. The container builds are
+4. Native runners build and verify all nine artifacts. The container builds are
    smoke-tested and merged under the version-specific tag.
 5. The workflow verifies the assembled manifest and artifacts, publishes the
    GitHub Release, then promotes the selected mutable container channel tag.
@@ -102,8 +102,8 @@ Current release automation produces:
 - A `manifest.json` describing every artifact in the release.
 
 The published matrix is `lemon_runtime_min` and `lemon_runtime_full` on all
-three platform tags, `sim_broadcast_platform` on the two Linux tags, and
-`lemon_tui` on all three tags: 11 artifacts total. `lemon_tui` is a
+three platform tags and `lemon_tui` on all three tags: nine artifacts total.
+`lemon_tui` is a
 pseudo-profile for a Bun-compiled client tarball containing
 `tui/bin/lemon-tui`, not a BEAM release. The container image on
 `ghcr.io/z80dev/lemon` is published as a multi-arch (`amd64`/`arm64`) manifest

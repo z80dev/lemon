@@ -65,12 +65,12 @@ Environment:
   LEMON_VERSION               Pin an exact version, e.g. 2026.08.0. Required for
                               any channel other than stable.
   LEMON_CHANNEL               Release channel (default: stable).
-  LEMON_PROFILE               full | min | sim, or a full profile name
-                              (lemon_runtime_full, lemon_runtime_min,
-                              sim_broadcast_platform). Default: lemon_runtime_full.
+  LEMON_PROFILE               full | min, or a full profile name
+                              (lemon_runtime_full, lemon_runtime_min).
+                              Default: lemon_runtime_full.
   LEMON_NO_TUI                Set to 1 to install the runtime only, skipping the
                               terminal UI (\`lemon-tui\`). Roughly halves the
-                              download. The sim profile never ships a TUI.
+                              download.
   LEMON_INSTALL_IGNORE_GLIBC  Set to 1 to silence the Linux glibc baseline check.
   LEMON_INSTALL_BASE_URL      Override the GitHub release base URL (test seam).
 
@@ -198,16 +198,11 @@ check_glibc
 case "$PROFILE_INPUT" in
   full|lemon_runtime_full) PROFILE="lemon_runtime_full" ;;
   min|lemon_runtime_min) PROFILE="lemon_runtime_min" ;;
-  sim|sim_broadcast_platform) PROFILE="sim_broadcast_platform" ;;
   *)
     die "unknown LEMON_PROFILE '$PROFILE_INPUT'.
-  Use full, min, sim, or a profile name (lemon_runtime_full, lemon_runtime_min, sim_broadcast_platform)."
+  Use full, min, or a profile name (lemon_runtime_full, lemon_runtime_min)."
     ;;
 esac
-
-if [ "$PROFILE" = "sim_broadcast_platform" ] && [ "$PLATFORM_OS" != "linux" ]; then
-  die "the sim_broadcast_platform profile is built for Linux only; $PLATFORM has no such artifact."
-fi
 
 # --------------------------------------------------------------- manifest ----
 
@@ -507,13 +502,11 @@ sock.close()'
 verify_boot() {
   control_port="$(free_port)"
   web_port="$(free_port)"
-  sim_port="$(free_port)"
 
   info "Verifying: booting the runtime on port $control_port ..."
 
   if ! LEMON_CONTROL_PLANE_PORT="$control_port" \
     LEMON_WEB_PORT="$web_port" \
-    LEMON_SIM_UI_PORT="$sim_port" \
     "$BIN_DIR/lemon" daemon; then
     die "the installed runtime failed to start. Files are in $VERSIONS_DIR."
   fi
@@ -539,9 +532,7 @@ verify_boot() {
   info "ok runtime booted and answered /healthz"
 }
 setup_handoff() {
-  if [ "$PROFILE" = "sim_broadcast_platform" ]; then
-    info "Setup is not available for the sim profile."
-  elif [ "$SKIP_SETUP" = "1" ]; then
+  if [ "$SKIP_SETUP" = "1" ]; then
     info "Setup skipped. Run this when you are ready to configure Lemon:"
     info "    $BIN_DIR/lemon setup"
   elif (exec </dev/tty) 2>/dev/null; then
@@ -575,9 +566,9 @@ fi
 
 # The TUI is a second, optional artifact in the same manifest: a separate
 # per-platform tarball that unpacks into tui/ next to the runtime's bin/.
-# The sim profile has no terminal UI, and LEMON_NO_TUI=1 opts out.
+# LEMON_NO_TUI=1 opts out.
 WANT_TUI=1
-if [ "$PROFILE" = "sim_broadcast_platform" ] || [ "${LEMON_NO_TUI:-0}" = "1" ]; then
+if [ "${LEMON_NO_TUI:-0}" = "1" ]; then
   WANT_TUI=0
 fi
 

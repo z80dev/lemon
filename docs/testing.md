@@ -978,7 +978,6 @@ newline-delimited JSON handler used by spawned editor-style clients:
 ```bash
 LEMON_CONTROL_PLANE_PORT=0 \
 LEMON_WEB_PORT=0 \
-LEMON_SIM_UI_PORT=0 \
 LEMON_GATEWAY_HEALTH_PORT=0 \
 LEMON_ROUTER_HEALTH_PORT=0 \
 mix run scripts/live_acp_stdio_smoke.exs

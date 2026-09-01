@@ -27,7 +27,7 @@ If `$ARGUMENTS` is provided, scope the verification session to that feature.
 
 Discover the node name and cookie from the beam process args (or fall back to
 `bin/lemon` defaults: node `lemon`, cookie `lemon_gateway_dev_cookie`, control
-plane 4040, web 4080, sim UI 4090):
+plane 4040, web 4080):
 
 More than one beam can be running (production + a disposable instance you
 started, e.g. via `scripts/product_smoke_local`). NEVER pick one blindly —
@@ -205,7 +205,7 @@ PRODUCT_SMOKE_KEEP_WORKDIR=1 scripts/product_smoke_local   # keep workdir for de
 ```
 
 Port-collision env knobs (all honored by `config/runtime.exs`):
-`LEMON_CONTROL_PLANE_PORT`, `LEMON_WEB_PORT`, `LEMON_SIM_UI_PORT`,
+`LEMON_CONTROL_PLANE_PORT`, `LEMON_WEB_PORT`,
 `LEMON_GATEWAY_HEALTH_PORT=0`, `LEMON_ROUTER_HEALTH_PORT=0` (0 = ephemeral
 bind, avoids the running instance's fixed 4042), plus `LEMON_STORE_PATH`,
 `LEMON_DOTENV_DIR`, `LEMON_GATEWAY_NODE_NAME`, `LEMON_GATEWAY_NODE_COOKIE`.

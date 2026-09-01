@@ -159,7 +159,6 @@ defmodule LemonCli.Setup.Wizard do
           profile: :string,
           control_port: :integer,
           web_port: :integer,
-          sim_port: :integer,
           non_interactive: :boolean
         ],
         aliases: [n: :non_interactive]
@@ -468,22 +467,19 @@ defmodule LemonCli.Setup.Wizard do
   defp resolve_ports(cli_opts, env, io, non_interactive?) do
     current = %{
       control: env.control_port,
-      web: env.web_port,
-      sim: env.sim_port
+      web: env.web_port
     }
 
-    if non_interactive? or (cli_opts[:control_port] || cli_opts[:web_port] || cli_opts[:sim_port]) do
+    if non_interactive? or (cli_opts[:control_port] || cli_opts[:web_port]) do
       %{
         control: cli_opts[:control_port] || current.control,
-        web: cli_opts[:web_port] || current.web,
-        sim: cli_opts[:sim_port] || current.sim
+        web: cli_opts[:web_port] || current.web
       }
     else
       io.info.("")
       io.info.("Current ports:")
       io.info.("  control-plane : #{current.control}  (LEMON_CONTROL_PLANE_PORT)")
       io.info.("  web           : #{current.web}  (LEMON_WEB_PORT)")
-      io.info.("  sim-ui        : #{current.sim}  (LEMON_SIM_UI_PORT)")
       io.info.("")
       io.info.("Press Enter to keep each value, or type a new port number.")
 
@@ -491,9 +487,8 @@ defmodule LemonCli.Setup.Wizard do
         parse_port(io.prompt.("control-plane port [#{current.control}]: "), current.control)
 
       web = parse_port(io.prompt.("web port [#{current.web}]: "), current.web)
-      sim = parse_port(io.prompt.("sim-ui port [#{current.sim}]: "), current.sim)
 
-      %{control: control, web: web, sim: sim}
+      %{control: control, web: web}
     end
   end
 
@@ -520,12 +515,10 @@ defmodule LemonCli.Setup.Wizard do
     io.info.("Ports:")
     io.info.("  control-plane : #{ports.control}")
     io.info.("  web           : #{ports.web}")
-    io.info.("  sim-ui        : #{ports.sim}")
     io.info.("")
     io.info.("To persist these settings, add to your shell profile or .env file:")
     io.info.("  export LEMON_CONTROL_PLANE_PORT=#{ports.control}")
     io.info.("  export LEMON_WEB_PORT=#{ports.web}")
-    io.info.("  export LEMON_SIM_UI_PORT=#{ports.sim}")
     io.info.("")
     io.info.("To launch this profile:")
     io.info.("  MIX_ENV=prod mix release #{release_name(profile_name)}")

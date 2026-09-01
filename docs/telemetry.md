@@ -29,7 +29,7 @@ Three prefix families coexist. This is descriptive, not a recommendation — see
 |---|---|---|
 | `[:lemon, ...]` | Cross-cutting platform concerns: runs, channels, approvals, memory, scheduler, reload, WASM | `LemonCore.Telemetry.emit/3` and its named helpers |
 | `[:lemon_agent, ...]`, `[:coding_agent, ...]`, `[:lemon_ai, ...]` | App-local concerns, prefixed by OTP app | `LemonCore.Telemetry.emit/3` or `:telemetry.execute/3` directly |
-| `[:lemon_skills, ...]`, `[:lemon_sim_ui, ...]` | App-local, full app name as prefix | app-local helper module |
+| `[:lemon_skills, ...]` | App-local, full app name as prefix | app-local helper module |
 
 `LemonCore.Telemetry.emit/3` is a direct pass-through to `:telemetry.execute/3`
 ([`telemetry.ex`](../apps/lemon_core/lib/lemon_core/telemetry.ex)); attaching does not
@@ -336,16 +336,6 @@ session for that turn with successful `read_skill` load observations. It does no
 turn-specific XML from the system prompt; no relevance block is added to that cacheable
 prompt or to the persisted conversation.
 
-### Hosted sim rooms — `[:lemon_sim_ui, :hosted_werewolf, ...]`
-
-Emitted through `LemonSimUi.HostedGame.emit/3`
-([`hosted_game.ex:771`](../apps/lemon_sim_ui/lib/lemon_sim_ui/hosted_game.ex)), all with
-`count: 1` and a `room_id`. Runtime suffix values: `:seat_claimed`, `:player_connected`,
-`:player_disconnected`, `:command_accepted`, `:command_rejected`, `:turn_timeout`,
-`:game_started`, `:game_stopped`, `:game_completed`, `:ai_error`, `:room_failed`,
-`:persistence_error`. The `hosted_werewolf` segment is historical; the module now backs all
-hosted room types.
-
 ## Attaching a consumer
 
 This is the whole integration surface. Handlers run **synchronously in the emitting
@@ -527,13 +517,13 @@ the last remaining dead emitter. (The run-span helpers `run_start` / `run_first_
 `run_stop` and `cron_tick` were previously listed here as dead; they are in fact live — see
 their catalog entries above — and the genuinely dead `run_exception/3` helper was removed.)
 
-**Eight families build their final segment at runtime**, so they cannot be discovered by
+**Seven families build their final segment at runtime**, so they cannot be discovered by
 searching for a literal event name, and `attach_many/4` requires knowing every value in
 advance: `[:lemon, :gateway, :scheduler, _]`, `[:lemon_ai, :compacting_client, _]`,
 `[:lemon_ai, :context_compactor, _]`, `[:coding_agent, :rate_limit_pause, _]`,
 `[:coding_agent, :rate_limit_healer, _]`, `[:coding_agent, :rate_limit_recovery, _]`,
-`[:coding_agent, :session_fork, _]`, `[:coding_agent, :session, :overflow_recovery, _]`, and
-`[:lemon_sim_ui, :hosted_werewolf, _]`. The known values are listed in the catalog above.
+`[:coding_agent, :session_fork, _]`, and `[:coding_agent, :session, :overflow_recovery, _]`.
+The known values are listed in the catalog above.
 
 **Measurement gaps.** `[:coding_agent, :session_fork, _]` emits an empty measurement map, so
 it cannot drive a counter without a synthetic measurement. `[:lemon_agent, :loop, :end]`

@@ -30,7 +30,7 @@ defmodule Mix.Tasks.Lemon.Bench do
   suite inherits another's leftover processes.
 
   Results are written to stdout. Published numbers, with the caveats that
-  belong next to them, live in `docs/benchmarks/platform.md`.
+  belong next to them, live in `docs/benchmarks/platform-microbenchmarks.md`.
 
   These are deliberately **not** part of any CI lane — see the rationale in
   that document.

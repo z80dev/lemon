@@ -51,7 +51,7 @@ defmodule LemonCore.BuildInfoTest do
     old_vercel_sha = System.get_env("VERCEL_GIT_COMMIT_SHA")
     old_build_sha = Application.get_env(:lemon_core, :build_git_sha)
 
-    System.put_env("RELEASE_NAME", "sim_broadcast_platform")
+    System.put_env("RELEASE_NAME", "lemon_runtime_full")
     System.delete_env("LEMON_GIT_SHA")
     System.delete_env("GITHUB_SHA")
     System.delete_env("SOURCE_VERSION")

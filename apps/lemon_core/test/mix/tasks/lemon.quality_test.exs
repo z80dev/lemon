@@ -255,6 +255,9 @@ defmodule Mix.Tasks.Lemon.QualityTest do
       File.write!(Path.join(app_dir, "mix.exs"), mix_file_for(app, deps))
     end)
 
+    # The ratchet check needs a recorded baseline; record the fixture's own.
+    {:ok, _} = LemonCore.Quality.RatchetCheck.update_baselines(tmp_dir)
+
     tmp_dir
   end
 

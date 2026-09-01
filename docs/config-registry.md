@@ -1,15 +1,15 @@
 # Environment Variable Config Registry
 
-This is the reference for every environment variable Lemon reads today, grouped by area. The source of truth is `LemonCore.Env.all_declared/0`, which aggregates one registry module per app (plan 1.9): [`LemonCore.Env.Declarations`](../apps/lemon_core/lib/lemon_core/env/declarations.ex) for the platform's own variables, plus `<App>.Env` in each app that reads its own (e.g. [`LemonGateway.Env`](../apps/lemon_gateway/lib/lemon_gateway/env.ex), [`LemonSimUi.Env`](../apps/lemon_sim_ui/lib/lemon_sim_ui/env.ex)). The runtime lists them under `config :lemon_core, :env_registries`; registries whose app is absent from a build are skipped, so the aggregate always describes what the loaded code can actually read. [`LemonCore.Env`](../apps/lemon_core/lib/lemon_core/env.ex) itself is the framework (typing, aliases, defaults, resolution, redaction). This file documents the aggregate for humans.
+This is the reference for every environment variable Lemon reads today, grouped by area. The source of truth is `LemonCore.Env.all_declared/0`, which aggregates one registry module per app (plan 1.9): [`LemonCore.Env.Declarations`](../apps/lemon_core/lib/lemon_core/env/declarations.ex) for the platform's own variables, plus `<App>.Env` in each app that reads its own (e.g. [`LemonGateway.Env`](../apps/lemon_gateway/lib/lemon_gateway/env.ex), [`LemonWeb.Env`](../apps/lemon_web/lib/lemon_web/env.ex)). The runtime lists them under `config :lemon_core, :env_registries`; registries whose app is absent from a build are skipped, so the aggregate always describes what the loaded code can actually read. [`LemonCore.Env`](../apps/lemon_core/lib/lemon_core/env.ex) itself is the framework (typing, aliases, defaults, resolution, redaction). This file documents the aggregate for humans.
 
 As of this writing, `LemonCore.Env` is a **registry and typed accessor**, not yet the only way these variables are read. Call sites still read most of these directly via `System.get_env/1` or `LemonCore.Config.Helpers`; migrating them to `LemonCore.Env.get/2` is tracked as follow-up work (see "Migration order" below). New code should prefer `LemonCore.Env.get/2` for anything declared here, and add a declaration for anything new.
 
 ## Naming convention
 
-- **New variables MUST be named `LEMON_<AREA>_<NAME>`** (e.g. `LEMON_GATEWAY_MAX_CONCURRENT_RUNS`, `LEMON_ARENA_<DOMAIN>_MODELS`). This keeps `LEMON_`-prefixed variables greppable and namespaced away from third-party tooling.
+- **New variables MUST be named `LEMON_<AREA>_<NAME>`** (e.g. `LEMON_GATEWAY_MAX_CONCURRENT_RUNS`, `LEMON_WEB_ACCESS_TOKEN`). This keeps `LEMON_`-prefixed variables greppable and namespaced away from third-party tooling.
 - **Provider/vendor credentials keep their ecosystem-standard names** and are not renamed to the `LEMON_` scheme -- e.g. `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `AWS_ACCESS_KEY_ID`, `GOOGLE_APPLICATION_CREDENTIALS`, `TWILIO_ACCOUNT_SID`. Renaming these would break compatibility with the SDKs/CLIs/docs the ecosystem already documents them against.
 - **Standard platform/BEAM release variables are never renamed** -- `HOME`, `SHELL`, `TERM`, `MIX_ENV`, `RELEASE_NAME`, `RELEASE_NODE`, `RELEASE_VSN`, `PHX_SERVER`.
-- Every other pre-existing non-conforming name below is **grandfathered** and listed with its conforming replacement (if one exists) as an `aliases:` entry in its `LemonCore.Env` declaration -- the conforming name is checked first, then the legacy name, so existing deployments keep working. Grandfathered names in this registry: `VOICE_PUBLIC_URL`, `VOICE_RECORDINGS_DIR`, `WEREWOLF_ARENA_MODELS` / `WEREWOLF_ARENA_ENABLED` / `WEREWOLF_ARENA_PLAYER_COUNT` / `WEREWOLF_ARENA_GAME_DELAY_MS` / `WEREWOLF_LEAGUE_DIR` (superseded by the generalized `LEMON_ARENA_WEREWOLF_*` names), `LEMON_OPENAI_COMPAT_TOKEN` (superseded by `LEMON_OPENAI_COMPAT_API_TOKEN`), `LEMON_OPENAI_COMPAT_IMAGE_HOST_ALLOWLIST` (superseded by `LEMON_OPENAI_COMPAT_IMAGE_URL_ALLOWED_HOSTS`), `LEMON_GATEWAY_COOKIE` (superseded by `LEMON_GATEWAY_NODE_COOKIE`), and the `INTEGRATION_*` / legacy `ANTHROPIC_API_KEY` fallbacks for the `LEMON_EVAL_*` family.
+- Every other pre-existing non-conforming name below is **grandfathered** and listed with its conforming replacement (if one exists) as an `aliases:` entry in its `LemonCore.Env` declaration -- the conforming name is checked first, then the legacy name, so existing deployments keep working. Grandfathered names in this registry: `VOICE_PUBLIC_URL`, `VOICE_RECORDINGS_DIR`, `LEMON_OPENAI_COMPAT_TOKEN` (superseded by `LEMON_OPENAI_COMPAT_API_TOKEN`), `LEMON_OPENAI_COMPAT_IMAGE_HOST_ALLOWLIST` (superseded by `LEMON_OPENAI_COMPAT_IMAGE_URL_ALLOWED_HOSTS`), `LEMON_GATEWAY_COOKIE` (superseded by `LEMON_GATEWAY_NODE_COOKIE`), and the `INTEGRATION_*` / legacy `ANTHROPIC_API_KEY` fallbacks for the `LEMON_EVAL_*` family.
 
 ## Secrets
 
@@ -21,7 +21,7 @@ Call-site migration to `LemonCore.Env.get/2` is out of scope for this pass and i
 
 1. `LemonCore.Config.*` modules (`Agent`, `Tools`, `Gateway`, `Logging`, `TUI`) -- already funnel through `LemonCore.Config.Helpers`, so swapping the call site is mechanical and low-risk.
 2. Single-app leaf config (`lemon_browser`, `lemon_skills`, `lemon_evals`, terminal backends) -- self-contained modules with few callers.
-3. `config/runtime.exs` -- the always-on arena block and prod endpoint block are dynamic (`LEMON_ARENA_<DOMAIN>_<SUFFIX>`, `<PREFIX>_{HOST,PORT,SECRET_KEY_BASE}`); migrate once `LemonCore.Env` gets a documented pattern for iterating a family of declared names.
+3. `config/runtime.exs` -- the prod endpoint block is dynamic (`<PREFIX>_{HOST,PORT,SECRET_KEY_BASE}`); migrate once `LemonCore.Env` gets a documented pattern for iterating a family of declared names.
 4. Provider credential resolution (`LemonAgent.ProviderConfigResolver`, `LemonAgent.ModelRuntime.Credentials`) -- highest blast radius (every provider call), migrate last and behind the existing `architecture_rules_check.ex` boundary tests.
 
 ## Variables by area
@@ -256,17 +256,6 @@ When a session's resolved tool catalog costs more than `LEMON_TOOL_DISCLOSURE_BU
 | `LEMON_OPENAI_COMPAT_IMAGE_URL_ALLOWED_HOSTS`<br>_(alias: `LEMON_OPENAI_COMPAT_IMAGE_HOST_ALLOWLIST`)_ | list (comma-separated) | `[]` |  | `lemon_control_plane` | Comma-separated hostname allowlist for OpenAI-compat image URL fetch. |
 | `LEMON_OPENAI_COMPAT_IMAGE_URL_FETCH` | boolean | `false` |  | `lemon_control_plane` | Whether the OpenAI-compat endpoint is allowed to fetch image URLs from messages. |
 | `LEMON_ROUTER_HEALTH_PORT` | integer | _(none)_ |  | `lemon_router` | Port the router health-check endpoint listens on. |
-| `LEMON_SIM_UI_ACCESS_TOKEN` | string | _(none)_ | yes | `lemon_sim_ui` | Admin bearer/session token; required with at least 32 bytes for a production Sim UI endpoint. |
-| `LEMON_SIM_UI_BIND_IP` | string | `127.0.0.1` |  | `lemon_sim_ui` | Bind IP address for the LemonSimUi dev endpoint. |
-| `LEMON_SIM_UI_HOST` | string | `localhost` |  | `lemon_sim_ui` | Public hostname for the LemonSimUi prod endpoint; must be explicit in production. |
-| `LEMON_SIM_UI_MAX_CONCURRENT_RUNNERS` | integer | `8` |  | `lemon_sim_ui` | Maximum active simulation runners per instance; persisted recoveries queue until capacity is available. |
-| `LEMON_SIM_UI_MAX_STORED_SIMS` | integer | `500` |  | `lemon_sim_ui` | Maximum terminal simulation snapshots retained; active and recoverable runs are never pruned. |
-| `LEMON_SIM_UI_PORT` | integer | `4090` |  | `lemon_sim_ui` | Port LemonSimUi listens on. |
-| `LEMON_SIM_UI_URL_PORT` | integer | `443` |  | `lemon_sim_ui` | Public URL port for generated LemonSimUi links. |
-| `LEMON_SIM_UI_URL_SCHEME` | string | `https` |  | `lemon_sim_ui` | Public URL scheme for generated links. Hosted rooms require HTTPS in production. |
-| `LEMON_SIM_UI_PUBLIC_VENDING_LAUNCHER` | boolean | `false` |  | `lemon_sim_ui` | Whether the public VendingBench launcher page is exposed. |
-| `LEMON_SIM_UI_SECRET_KEY_BASE` | string | _(none)_ | yes | `lemon_sim_ui` | Phoenix secret_key_base; required with at least 64 bytes for a production Sim UI endpoint. |
-| `LEMON_SIM_UI_SUITE_ROOTS` | list (comma-separated) | `[]` |  | `lemon_sim_ui` | Colon-separated extra suite root directories for LemonSimUi. |
 | `LEMON_WEB_ACCESS_TOKEN` | string | _(none)_ | yes | `lemon_web` | Bearer token required to access the LemonWeb HTTP API. |
 | `LEMON_WEB_HOST` | string | `localhost` |  | `lemon_web` | Public hostname for the LemonWeb prod endpoint. |
 | `LEMON_WEB_PORT` | integer | `4080` |  | `lemon_web` | Port LemonWeb listens on. |
@@ -274,7 +263,7 @@ When a session's resolved tool catalog costs more than `LEMON_TOOL_DISCLOSURE_BU
 | `LEMON_WEB_URL_SCHEME` | string | `https` |  | `lemon_web` | Public URL scheme for generated LemonWeb links (http or https). |
 | `LEMON_WEB_SECRET_KEY_BASE` | string | _(none)_ | yes | `lemon_web` | Phoenix secret_key_base for the LemonWeb prod endpoint. |
 | `LEMON_WEB_UPLOADS_DIR` | string | _(none)_ |  | `lemon_web` | Directory used for LemonWeb file uploads. |
-| `PHX_SERVER` | boolean | `false` |  | `lemon_web`, `lemon_sim_ui` | Standard Phoenix flag to start the HTTP server in a release (ecosystem-standard name). |
+| `PHX_SERVER` | boolean | `false` |  | `lemon_web` | Standard Phoenix flag to start the HTTP server in a release (ecosystem-standard name). |
 
 ### Skills / MCP
 
@@ -363,14 +352,11 @@ When a session's resolved tool catalog costs more than `LEMON_TOOL_DISCLOSURE_BU
 | `GOOGLE_GEMINI_CLI_OAUTH_CLIENT_SECRET` | string | _(none)_ | yes | `ai` | Google Gemini CLI OAuth client secret override. |
 | `GOOGLE_GENERATIVE_AI_API_KEY` | string | _(none)_ | yes | `ai` | Google Generative AI API key (primary name). |
 | `LEMON_GEMINI_PROJECT_ID` | string | _(none)_ |  | `ai`, `lemon_cli`, `lemon_core` | Lemon-specific override for the Gemini/Vertex project id, checked before the GOOGLE_CLOUD_* names. |
-| `MAGIC_EDEN_API_KEY` | string | _(none)_ | yes | `lemon_tcg` | Magic Eden marketplace API key. |
 | `MISTRAL_API_KEY` | string | _(none)_ | yes | `ai` | Mistral API key. |
 | `OPENAI_API_KEY` | string | _(none)_ | yes | `ai` | OpenAI API key. |
 | `OPENAI_CODEX_API_KEY` | string | _(none)_ | yes | `ai` | OpenAI Codex API key. |
 | `OPENAI_CODEX_OAUTH_CLIENT_ID` | string | _(none)_ |  | `ai` | OpenAI Codex OAuth client id override. |
 | `OPENCODE_API_KEY` | string | _(none)_ | yes | `ai` | OpenCode provider API key. |
-| `OPENSEA_API_KEY` | string | _(none)_ | yes | `lemon_tcg` | OpenSea marketplace API key. |
-| `PRICECHARTING_API_TOKEN` | string | _(none)_ | yes | `lemon_tcg` | PriceCharting API token. |
 
 ### X (Twitter) API
 
@@ -380,14 +366,6 @@ When a session's resolved tool catalog costs more than `LEMON_TOOL_DISCLOSURE_BU
 | `X_API_ACCESS_TOKEN_SECRET` | string | _(none)_ | yes | `x_api` | X (Twitter) API OAuth1 access token secret. |
 | `X_API_CONSUMER_KEY` | string | _(none)_ | yes | `x_api` | X (Twitter) API OAuth1 consumer key. |
 | `X_API_CONSUMER_SECRET` | string | _(none)_ | yes | `x_api` | X (Twitter) API OAuth1 consumer secret. |
-
-### lemon_tcg wallets
-
-| Env Var | Type | Default | Secret | Apps | Description |
-|---|---|---|---|---|---|
-| `EVM_PRIVATE_KEY` | string | _(none)_ | yes | `lemon_tcg` | EVM wallet private key used to sign on-chain transactions. |
-| `SOLANA_KEYPAIR_FILE` | string | _(none)_ | yes | `lemon_tcg` | Path to a Solana keypair JSON file used to sign wallet transactions. |
-| `SOLANA_SECRET_KEY` | string | _(none)_ | yes | `lemon_tcg` | Base58/array-encoded Solana secret key used to sign wallet transactions. |
 
 ### lemon_evals live-model opt-in checks
 
@@ -400,55 +378,13 @@ When a session's resolved tool catalog costs more than `LEMON_TOOL_DISCLOSURE_BU
 | `LEMON_EVAL_MODEL`<br>_(alias: `INTEGRATION_MODEL`)_ | string | _(none)_ |  | `lemon_evals` | Live-eval model id (default: kimi-for-coding). |
 | `LEMON_EVAL_PROVIDER`<br>_(alias: `INTEGRATION_PROVIDER`)_ | string | _(none)_ |  | `lemon_evals` | Live-eval provider atom override (default: kimi). |
 
-### Always-on model arenas / sim
-
-| Env Var | Type | Default | Secret | Apps | Description |
-|---|---|---|---|---|---|
-| `LEMON_ARENA_LEAGUE_ROOT` | string | _(none)_ |  | `lemon_sim_ui` | Persistent root directory under which each arena domain's league dir defaults to `<domain>_league`; required when production arenas omit per-domain dirs. |
-| `LEMON_ARENA_POKER_ENABLED` | boolean | `true` |  | `lemon_sim_ui` | Whether the poker arena is enabled (only checked once MODELS is set). |
-| `LEMON_ARENA_POKER_GAME_DELAY_MS` | integer | _(none)_ |  | `lemon_sim_ui` | Delay between games (ms) for the poker arena. |
-| `LEMON_ARENA_POKER_LEAGUE_DIR` | string | _(none)_ |  | `lemon_sim_ui` | League standings directory for the poker arena. |
-| `LEMON_ARENA_POKER_MODELS` | list (comma-separated) | `[]` |  | `lemon_sim_ui` | Comma-separated provider:model specs enabling the poker arena. |
-| `LEMON_ARENA_POKER_PLAYER_COUNT` | integer | _(none)_ |  | `lemon_sim_ui` | Player count for the poker arena. |
-| `LEMON_ARENA_SPACE_STATION_ENABLED` | boolean | `true` |  | `lemon_sim_ui` | Whether the space_station arena is enabled (only checked once MODELS is set). |
-| `LEMON_ARENA_SPACE_STATION_GAME_DELAY_MS` | integer | _(none)_ |  | `lemon_sim_ui` | Delay between games (ms) for the space_station arena. |
-| `LEMON_ARENA_SPACE_STATION_LEAGUE_DIR` | string | _(none)_ |  | `lemon_sim_ui` | League standings directory for the space_station arena. |
-| `LEMON_ARENA_SPACE_STATION_MODELS` | list (comma-separated) | `[]` |  | `lemon_sim_ui` | Comma-separated provider:model specs enabling the space_station arena. |
-| `LEMON_ARENA_SPACE_STATION_PLAYER_COUNT` | integer | _(none)_ |  | `lemon_sim_ui` | Player count for the space_station arena. |
-| `LEMON_ARENA_STOCK_MARKET_ENABLED` | boolean | `true` |  | `lemon_sim_ui` | Whether the stock_market arena is enabled (only checked once MODELS is set). |
-| `LEMON_ARENA_STOCK_MARKET_GAME_DELAY_MS` | integer | _(none)_ |  | `lemon_sim_ui` | Delay between games (ms) for the stock_market arena. |
-| `LEMON_ARENA_STOCK_MARKET_LEAGUE_DIR` | string | _(none)_ |  | `lemon_sim_ui` | League standings directory for the stock_market arena. |
-| `LEMON_ARENA_STOCK_MARKET_MODELS` | list (comma-separated) | `[]` |  | `lemon_sim_ui` | Comma-separated provider:model specs enabling the stock_market arena. |
-| `LEMON_ARENA_STOCK_MARKET_PLAYER_COUNT` | integer | _(none)_ |  | `lemon_sim_ui` | Player count for the stock_market arena. |
-| `LEMON_ARENA_SURVIVOR_ENABLED` | boolean | `true` |  | `lemon_sim_ui` | Whether the survivor arena is enabled (only checked once MODELS is set). |
-| `LEMON_ARENA_SURVIVOR_GAME_DELAY_MS` | integer | _(none)_ |  | `lemon_sim_ui` | Delay between games (ms) for the survivor arena. |
-| `LEMON_ARENA_SURVIVOR_LEAGUE_DIR` | string | _(none)_ |  | `lemon_sim_ui` | League standings directory for the survivor arena. |
-| `LEMON_ARENA_SURVIVOR_MODELS` | list (comma-separated) | `[]` |  | `lemon_sim_ui` | Comma-separated provider:model specs enabling the survivor arena. |
-| `LEMON_ARENA_SURVIVOR_PLAYER_COUNT` | integer | _(none)_ |  | `lemon_sim_ui` | Player count for the survivor arena. |
-| `LEMON_ARENA_WEREWOLF_ENABLED`<br>_(alias: `WEREWOLF_ARENA_ENABLED`)_ | boolean | `true` |  | `lemon_sim_ui` | Whether the werewolf arena is enabled (only checked once MODELS is set). |
-| `LEMON_ARENA_WEREWOLF_GAME_DELAY_MS`<br>_(alias: `WEREWOLF_ARENA_GAME_DELAY_MS`)_ | integer | _(none)_ |  | `lemon_sim_ui` | Delay between games (ms) for the werewolf arena. |
-| `LEMON_ARENA_WEREWOLF_MAX_GAME_RECORDS`<br>_(alias: `WEREWOLF_ARENA_MAX_GAME_RECORDS`)_ | integer | `1000` |  | `lemon_sim_ui` | Rolling number of Werewolf league game records retained on disk and included in standings. |
-| `LEMON_ARENA_WEREWOLF_LEAGUE_DIR`<br>_(alias: `WEREWOLF_LEAGUE_DIR`)_ | string | _(none)_ |  | `lemon_sim_ui` | League standings directory for the werewolf arena. |
-| `LEMON_ARENA_WEREWOLF_MODELS`<br>_(alias: `WEREWOLF_ARENA_MODELS`)_ | list (comma-separated) | `[]` |  | `lemon_sim_ui` | Comma-separated provider:model specs enabling the werewolf arena. |
-| `LEMON_ARENA_WEREWOLF_PLAYER_COUNT`<br>_(alias: `WEREWOLF_ARENA_PLAYER_COUNT`)_ | integer | _(none)_ |  | `lemon_sim_ui` | Player count for the werewolf arena. |
-| `LEMON_WEREWOLF_HOSTED_ENABLED` | boolean | `false` in prod; `true` in dev/test |  | `lemon_sim_ui` | Enables hosted human Werewolf. Disabled boot does not recover room timers or AI work. |
-| `LEMON_WEREWOLF_HOST_CREATE_TOKEN` | string | _(none)_ | yes | `lemon_sim_ui` | Room-creation invite; required at 32+ bytes when production hosted rooms are enabled. |
-| `LEMON_WEREWOLF_HOSTED_ROOM_LIMIT` | integer | `100` |  | `lemon_sim_ui` | Maximum active hosted rooms per single-node instance (1–500). |
-| `LEMON_WEREWOLF_HOSTED_ROOM_RETENTION` | integer | `500` |  | `lemon_sim_ui` | Maximum retained terminal room records (25–5000). |
-| `LEMON_WEREWOLF_HOSTED_LOBBY_TTL_SECONDS` | integer | `86400` |  | `lemon_sim_ui` | Abandoned-lobby retention before serialized pruning (300–2592000 seconds). |
-| `LEMON_WEREWOLF_HOSTED_INACTIVE_TTL_SECONDS` | integer | `604800` |  | `lemon_sim_ui` | Paused-room retention before serialized pruning (3600–31536000 seconds). |
-| `LEMON_WEREWOLF_HOSTED_AI_MODEL` | string | _(none)_ |  | `lemon_sim_ui` | `provider:model` frozen into new rooms with AI seats; provider credentials are validated before start/recovery. |
-| `LEMON_WEREWOLF_HOSTED_AI_CONCURRENCY` | integer | `4` |  | `lemon_sim_ui` | Global hosted AI provider-task limit per instance (1–64). |
-| `LEMON_GOAL_JUDGE_MODEL` | string | _(none)_ |  | `lemon_automation` | Model id used to judge automation goal completion. |
-| `LEMON_SIM_AUTO_LOOP` | boolean | `false` |  | `lemon_sim_ui` | Whether the werewolf auto-loop starts automatically on boot. |
-| `LEMON_SIM_WEREWOLF_PLAYERS` | integer | `6` |  | `lemon_sim_ui` | Player count for the werewolf auto-loop. |
-
 ### Automation (cron)
 
 | Env Var | Type | Default | Secret | Apps | Description |
 |---|---|---|---|---|---|
 | `LEMON_CRON_PREFLIGHT_ENABLED` | boolean | _(none)_ |  | `lemon_automation` | Override the cron pre-dispatch preflight (provider/target readiness) toggle. |
 | `LEMON_CRON_DRIFT_GUARD_ENABLED` | boolean | _(none)_ |  | `lemon_automation` | Override the cron model drift guard (fail closed when the global default model changed under an unpinned job). |
+| `LEMON_GOAL_JUDGE_MODEL` | string | _(none)_ |  | `lemon_automation` | Model id used to judge automation goal completion. |
 
 ### Platform / BEAM release (standard names)
 
@@ -459,5 +395,4 @@ When a session's resolved tool catalog costs more than `LEMON_TOOL_DISCLOSURE_BU
 | `RELEASE_NAME` | string | _(none)_ |  | `lemon_core` | Standard Elixir release name; selects which endpoint(s) boot in a multi-app release. |
 | `RELEASE_NODE` | string | _(none)_ |  | `lemon_core` | Standard Elixir release node name; presence indicates a running release (vs. `mix`). |
 | `RELEASE_VSN` | string | _(none)_ |  | `lemon_core` | Standard Elixir release version. |
-| `SHELL` | string | `/bin/sh` |  | `lemon_sim` | Standard POSIX shell path, used as a fallback shell for the external decider. |
 | `TERM` | string | _(none)_ |  | `lemon_cli` | Standard terminal type variable; used to detect non-interactive/dumb terminals. |

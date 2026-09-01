@@ -198,11 +198,11 @@ defmodule LemonScripts.LiveLspServerSmoke do
   end
 
   defp server_fixture(:pyright, :real_repo) do
-    source_file = "examples/external_agents/baseline_agent.py"
+    source_file = "apps/coding_agent/priv/python_repl/runner.py"
     fixed_text = repo_file!(source_file)
 
     %{
-      path: "baseline_agent.py",
+      path: "runner.py",
       language_id: "python",
       text:
         String.replace(

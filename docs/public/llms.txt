@@ -1,6 +1,6 @@
 # Lemon
 
-> Lemon is a local-first, BEAM-native AI agent runtime with durable sessions, memory, skills, supervised tools, automation, channels, and deterministic simulation.
+> Lemon is a local-first, BEAM-native AI agent runtime with durable sessions, memory, skills, supervised tools, automation, and channels.
 
 - [Complete machine-readable documentation](https://z80dev.github.io/lemon/llms-full.txt)
 - [Source repository](https://github.com/z80dev/lemon)
@@ -51,8 +51,7 @@
 
 ## Benchmarks
 
-- [Benchmarks Quickstart](https://z80dev.github.io/lemon/benchmarks/quickstart): Run a LemonSim benchmark locally.
-- [Benchmark Platform Guarantees](https://z80dev.github.io/lemon/benchmarks/platform): Determinism, replay, and benchmark guarantees.
+- [Platform Microbenchmarks](https://z80dev.github.io/lemon/benchmarks/platform-microbenchmarks): Reproducible microbenchmarks for the store, event bus, coalescers, and process lifecycle.
 
 ## Notes for agents
 

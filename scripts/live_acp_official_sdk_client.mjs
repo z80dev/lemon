@@ -345,7 +345,6 @@ function spawnACP() {
       LEMON_GATEWAY_HEALTH_PORT: "0",
       LEMON_ROUTER_HEALTH_PORT: "0",
       LEMON_WEB_PORT: "0",
-      LEMON_SIM_UI_PORT: "0",
     },
   });
 }

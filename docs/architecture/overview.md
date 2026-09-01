@@ -1,9 +1,8 @@
 # Architecture Overview
 
 Lemon is a BEAM-native stack for LLM interactions: a layered set of Elixir/OTP
-libraries (`lemon_ai` → `lemon_agent` → product apps) with two products on top — a
-multi-channel personal assistant and **LemonSim**, a deterministic
-model-vs-model simulation arena. This document covers the system architecture,
+libraries (`lemon_ai` → `lemon_agent` → product apps) with a multi-channel
+personal assistant product on top. This document covers the system architecture,
 key design decisions, and component responsibilities.
 
 For system diagrams see `docs/diagrams/`. For per-app details see each `apps/*/README.md`.
@@ -91,7 +90,7 @@ destination `CodingAgent.Executor`.
 
 ## Application Map
 
-The project is an Elixir umbrella with 25 applications:
+The project is an Elixir umbrella with 22 applications:
 
 **Stack (bottom-up):**
 
@@ -129,19 +128,6 @@ The project is an Elixir umbrella with 25 applications:
 | `lemon_browser` | Local browser automation server, artifacts, route policy |
 | `lemon_media` | Media jobs, worker, supervisor |
 | `lemon_lsp` | LSP server manager |
-
-**Arena product:**
-
-| App | Role |
-|---|---|
-| `lemon_sim` | Deterministic model-vs-model simulation arena: event-sourced kernel, scenarios, verified benchmark artifacts |
-| `lemon_sim_ui` | Phoenix LiveView spectator/admin UI for the arena |
-
-**Other products:**
-
-| App | Role |
-|---|---|
-| `lemon_tcg` | Live market data and paper execution for an agent-operated on-chain TCG shop — the real-world counterpart of `LemonSim.Examples.TcgShop` |
 
 ### Package dependency graph
 
@@ -184,9 +170,6 @@ graph TD
         caui["coding_agent_ui"]
         mcp["lemon_mcp"]
         evals["lemon_evals"]
-        sim["lemon_sim"]
-        simui["lemon_sim_ui"]
-        tcg["lemon_tcg"]
     end
 
     subgraph satellite["Satellite · self-registering vendor integration"]

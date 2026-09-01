@@ -163,16 +163,10 @@ Registry when it is not, and its moduledoc
 ([`bus.ex`](../apps/lemon_core/lib/lemon_core/bus.ex)) says exactly that, because a fallback
 that silently stops crossing node boundaries is worse than no fallback.
 
-**Not everything wants to be a process.** LemonSim's simulation kernel is a pure reducer
-([`kernel/runner.ex`](../apps/lemon_sim/lib/lemon_sim/kernel/runner.ex)) specifically so
-that a run is reproducible from a seed and a scorecard is a function of final state. That
-is not just asserted: a test runs the same seed twice and checks the final world state and
-every artifact hash are byte-identical
-([`determinism_test.exs`](../apps/lemon_sim/test/lemon_sim/determinism_test.exs)).
-Processes wrap it — `Task.async_stream` for suite concurrency
-([`bench/suite.ex:237`](../apps/lemon_sim/lib/lemon_sim/bench/suite.ex), one always-on
-GenServer per arena domain in [`arena.ex`](../apps/lemon_sim_ui/lib/lemon_sim_ui/arena.ex))
-— but they stay out of the state machine. Determinism and concurrency want opposite things,
+**Not everything wants to be a process.** Anything that must be reproducible — a state
+machine that has to replay identically from the same inputs, a result that has to be a
+function of its final state — belongs in pure functions, with processes wrapping it for
+concurrency rather than reaching into it. Determinism and concurrency want opposite things,
 and nothing in the runtime draws that line for you.
 
 ## What this repo is evidence of
@@ -194,9 +188,12 @@ The claims above are checkable, which is the point of publishing them:
 - **The plan records its own reversals.** The Decision Log in
   [`platform-split.md`](platform-split.md) contains D2 and D11 — two decisions overturned
   after the code disagreed with them — with the evidence that overturned each.
-- **The concurrency story has a demo.** [LemonSim](../apps/lemon_sim) runs deterministic,
-  seeded, replay-verifiable multi-model games; the always-on arenas keep them running and
-  score them continuously.
+- **The concurrency story has numbers.**
+  [platform-microbenchmarks.md](benchmarks/platform-microbenchmarks.md) measures the store,
+  the bus, the streaming coalescers, and the per-conversation process lifecycle with
+  `mix lemon.bench`: a thousand simultaneous conversations, each with its own coalescer
+  process, absorb fifty thousand deltas in about 25 ms, and the code behind every number is
+  short enough to check.
 
 Deeper invariants and the supervision-tree diagrams are in
 [beam_agents.md](beam_agents.md), including its list of known limitations — event fan-out

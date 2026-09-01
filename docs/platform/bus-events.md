@@ -11,7 +11,7 @@ of what was found, and the migration tables in §8–§9 say which rows have sin
 > payload structs no longer implement `Access`, and a consumer that may still receive a legacy
 > map coerces it once at its entry point with `LemonCore.Events.coerce/2`. §9 is the end state.
 
-Scope: every `LemonCore.Bus.broadcast/2` call site in the umbrella (78 in `lib/`, 144 more in
+Scope: every `LemonCore.Bus.broadcast/2` call site in the umbrella (72 in `lib/`, 140 more in
 `test/`), the topics they publish to, and every process that subscribes. The plan of record is
 [`docs/platform-split.md`](../platform-split.md) §5 item **3.1**; its risk row predicts that
 "catalog first will reveal undocumented consumer assumptions." It does — §6 lists thirteen, two
@@ -44,11 +44,11 @@ payload crashes the control plane's entire WS fanout. With the shim, each publis
 independently and consumers migrate on their own schedule. Without it, `:run_completed` alone is a
 twelve-subscriber flag day. See §4.3.
 
-**R3 — The platform contract is 7 topics, not the 15 that exist.** `nodes`, `presence`,
-`run_graph:*`, `parent_question:*`, `kanban*` and the sim/arena family have their publisher and
-every subscriber inside a single app (or a single matched app pair). They should get documented
-shapes in their owning app, not `LemonCore.Events.*` structs. Putting sim or kanban payload types
-in `lemon_core` would re-domain the package that Phase 1 just spent ten items de-domaining. See §3.
+**R3 — The platform contract is 7 topics, not the 10 that exist.** `nodes`, `presence`,
+`run_graph:*`, `parent_question:*` and `kanban*` have their publisher and every subscriber
+inside a single app. They should get documented shapes in their owning app, not
+`LemonCore.Events.*` structs. Putting kanban payload types in `lemon_core` would re-domain the
+package that Phase 1 just spent ten items de-domaining. See §3.
 
 **R4 — Two control-plane methods make typed payloads unenforceable until they are narrowed.**
 `events.ingest` and `system-event` accept an arbitrary JSON object and broadcast it, under a
@@ -175,17 +175,12 @@ the only listener silently discards them.
 | `routing_feedback` | `lemon_memory/ingest.ex:175` | `lemon_router/routing_feedback_store.ex:217` | **cross-app**, already pattern-matched on exact keys |
 | `run_graph:<run_id>` | `coding_agent/run_graph_server.ex:400` | `coding_agent/run_graph.ex:327` | payload is the bare tuple `{:run_graph, :state_changed, run_id}` — **raw** |
 | `parent_question:<request_id>` | `coding_agent/parent_questions.ex:340` | `coding_agent/tools/ask_parent.ex:262` | matches on `meta.request_id` only, ignores payload |
-| `sim:<id>`, `sim:<id>:decisions` | `lemon_sim/kernel/bus.ex:30,36` | `lemon_sim_ui/arena.ex:504,520`, LiveViews | payload embeds a whole `%LemonSim.State{}` |
-| `sim:lobby` | `lemon_sim_ui/sim_manager.ex:1739` | 4 LiveViews + `arena.ex:179` | empty payload |
-| `arena:<domain>:league` | `lemon_sim_ui/arena.ex:752` | `arena_leaderboard_live.ex:21` | `%{game_id}` |
-| hosted-game topic | `hosted_game/room_server.ex:1676` | `hosted_werewolf_live.ex` (4 sites) | `%{room_id}` |
-| philosopher-chat topic | `philosopher_chat/thread_server.ex:844` | `philosopher_chat_api_controller.ex:172` | `%{type, event_seq, …}` |
 | `channels` | *(was none in `lib/`; since 2026-08-16 `lemon_channels/dispatcher.ex` publishes `:channel_delivery` — §10)* | `EventBridge` | now a typed contract topic |
 | `logs` | **none** | **none** | documented in the Bus contract; dead |
 
 ### 2.7 Envelope discipline, summarised
 
-Of 78 `lib/` publish sites, **75 use `%LemonCore.Event{}`**. The three that do not:
+Of 72 `lib/` publish sites, **69 use `%LemonCore.Event{}`**. The three that do not:
 
 - `run_process.ex:691` — `%{type: :run_failed, run_id, session_key, reason}` (§6.1)
 - `stream_coalescer.ex:483` — `%{type: :coalesced_output, …}`
@@ -213,8 +208,7 @@ crosses an app boundary *and* has a consumer that is not its publisher's sibling
 
 **App-internal — document the shape in the owning app, do not add a core struct:** `nodes`,
 `presence` (both ends in `lemon_control_plane`); `run_graph:*`, `parent_question:*` (both ends in
-`coding_agent`); the five sim/arena topics (`lemon_sim` + `lemon_sim_ui`, a matched pair shipped
-together).
+`coding_agent`).
 
 **Delete rather than type:** `kanban` and `kanban:<board_id>` (zero subscribers — either the UI
 that was going to consume them never landed, or it was removed); `channels` and `logs` (zero
@@ -433,7 +427,7 @@ is a submit facade.
 
 **`LemonCore.Bus`** — two changes worth bundling. Its moduledoc "Topic Contract (must be stable)"
 list is wrong in both directions: it omits `goals`, `kanban*`, `presence`, `run_graph:*`,
-`parent_question:*` and the sim/arena family, and it lists `channels` and `logs`, which have no
+`parent_question:*`, and it lists `channels` and `logs`, which have no
 publishers. Replace it with a pointer to this document plus the `Events.registry/0` table. Second,
 add `Bus.broadcast_event/3` (`topic, type, payload`) that asserts the payload's struct matches the
 registry entry for the type in `:dev`/`:test` and is a pass-through in `:prod` — the enforcement
@@ -474,9 +468,9 @@ Ordered by blast radius ascending, so the mechanism is proven on cheap topics be
 | S12 | `session:*` | 4 | Mostly falls out of S8–S11, since `run_process` forwards the same events. `:coalesced_output` gets an envelope here |
 | S13 | Remove the `Access` shim; `Bus.broadcast_event/4` enforcement raises in `:dev`/`:test` and coerces in `:prod` | — | **Done 2026-08-13 — see §9.** Landed pre-0.2, not at the next major: the shim's whole cost is a semver-major promise, and while every consumer is still in this repo it is a mechanical change rather than a break anyone downstream has to absorb |
 
-Test-side blast radius is larger than lib-side and is the real cost driver: **144
+Test-side blast radius is larger than lib-side and is the real cost driver: **140
 `Bus.broadcast` call sites in `test/`** hand-construct payloads —
-`lemon_control_plane` 57, `lemon_router` 52, `coding_agent` 18, `lemon_core` 10, `lemon_sim_ui` 4,
+`lemon_control_plane` 57, `lemon_router` 52, `coding_agent` 18, `lemon_core` 10,
 `lemon_automation` 2, `lemon_gateway` 1. The `Access` shim (R2) does not help these, because they
 *build* payloads. Mitigation: ship a `LemonPlatformTest.EventsFixtures` module in S1 with
 `run_completed(overrides \\ [])`-style builders, and convert tests topic-by-topic alongside each S

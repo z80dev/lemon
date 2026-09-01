@@ -10,7 +10,7 @@ defmodule LemonCore.Runtime.Profile do
   | Profile | Apps | Use case |
   |---|---|---|
   | `:runtime_min` | gateway, router, channels, control_plane, coding_agent | CI, headless, embedded |
-  | `:runtime_full` | all of the above + automation, skills, web, sim_ui | Local development |
+  | `:runtime_full` | all of the above + automation, skills, web | Local development |
 
   ## Usage
 
@@ -37,7 +37,7 @@ defmodule LemonCore.Runtime.Profile do
       [:coding_agent, :lemon_gateway, :lemon_router, :lemon_channels, :lemon_control_plane]
     },
     runtime_full: {
-      "Full runtime: all core apps including skills, web UI, and sim UI.",
+      "Full runtime: all core apps including skills and the web UI.",
       [
         :coding_agent,
         :lemon_gateway,
@@ -46,10 +46,7 @@ defmodule LemonCore.Runtime.Profile do
         :lemon_control_plane,
         :lemon_automation,
         :lemon_skills,
-        :lemon_web,
-        # lemon-sim product block — drop with the lemon-sim repo extraction
-        # (docs/platform-split.md Phase 5)
-        :lemon_sim_ui
+        :lemon_web
       ]
     }
   }

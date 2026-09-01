@@ -7,9 +7,8 @@ into exit codes. Its non-halting `run/1` and command handlers are shared by
 tests and source-checkout Mix adapters, so release commands do not depend on
 Mix at runtime.
 
-The runtime CLI is included in `lemon_runtime_min` and `lemon_runtime_full`
-artifacts. The `sim_broadcast_platform` artifact intentionally does not bundle
-`lemon_cli`; it supports only its release-specific `doctor --bundle` path.
+The runtime CLI is included in the `lemon_runtime_min` and `lemon_runtime_full`
+artifacts.
 
 ## Release CLI contract
 
@@ -78,8 +77,7 @@ releases. `plan` is non-mutating; `apply` requires its exact fresh digest;
 `history` reads private content-free receipts; and `rollback` requires the exact
 apply receipt plus its receipt-bound rollback digest. JSON results omit managed
 filesystem paths and errors expose stable safe kinds/messages rather than raw
-runtime terms. The sim profile uses `LemonCore.Update.CLI` because it does not
-assemble this app, but preserves the same command and confirmation contract.
+runtime terms.
 
 Source launchers support check/history and refuse binary plan/apply/rollback.
 See [the update guide](../../docs/user-guide/updates.md) for archive confinement,
@@ -286,7 +284,7 @@ read-only during setup: it lists pending items and rejects prompts/uploads until
 the shared state is ready.
 
 The one-line installer starts `lemon setup` by default when it has a controlling
-terminal. `--skip-setup`, an unavailable terminal, and the simulation profile
+terminal. `--skip-setup` and an unavailable terminal
 defer that interaction. The first interactive TUI launch consults the same
 readiness predicate and runs setup before starting an unconfigured agent; if
 setup remains incomplete, it directs the user to `lemon setup`.

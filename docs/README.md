@@ -72,6 +72,7 @@ failures.
 |-----|---------------|
 | [long-running-agent-harnesses.md](long-running-agent-harnesses.md) | Long-running harness patterns, eval loops, and runtime validation workflows |
 | [testing.md](testing.md) | Canonical local test lanes and CI parity guidance |
+| [benchmarks/platform-microbenchmarks.md](benchmarks/platform-microbenchmarks.md) | Reproducible `mix lemon.bench` numbers for the store, event bus, streaming coalescers, and per-conversation process lifecycle |
 | [config.md](config.md) | TOML configuration reference (providers, runtime, gateway, profiles, tools) |
 | [user-guide/backups.md](user-guide/backups.md) | Local user-state backup, verification, restore, and rollback safety model |
 | [user-guide/updates.md](user-guide/updates.md) | Non-mutating update plans, exact-confirm apply, receipts, and receipt-bound rollback |

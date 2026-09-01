@@ -1,5 +1,7 @@
 # Phase 5 — Product-Repo Extraction Readiness
 
+**Executed 2026-09-01 for the lemon-sim group; see [docs/platform-split.md](../platform-split.md).**
+
 Status: **investigation (2026-08-10).** Dep facts read from `apps/*/mix.exs` and grepped call
 sites against the tree at the time of writing. The coding_agent-blocker resolution below is a
 **proposed decision (needs user sign-off)** — actually extracting a repo is a larger commitment

@@ -34,7 +34,7 @@ Checks:
     preserved, and a --bundle path containing literal Elixir interpolation
     syntax survives verbatim
   - first-run setup is invoked once through an allocated fixture terminal,
-    while --skip-setup, the sim profile, and an unavailable terminal do not
+    while --skip-setup and an unavailable terminal do not
     invoke it; unavailable terminals print the exact absolute setup command
   - the fixture TUI gates an incomplete installation through setup once, then
     does not repeat setup once its config and credential source are ready
@@ -426,7 +426,6 @@ tarball_v5="$(build_fixture_tarball 9999.5.0)"
 tui_v1="$(build_fixture_tui_tarball 9999.1.0)"
 tui_v2="$(build_fixture_tui_tarball 9999.2.0)"
 tui_v5="$(build_fixture_tui_tarball 9999.5.0)"
-sim_v1="$(build_fixture_tarball 9999.1.0 sim_broadcast_platform)"
 
 forged_sha="$(python3 -c 'print("f" * 64)')"
 
@@ -437,8 +436,6 @@ forged_sha="$(python3 -c 'print("f" * 64)')"
 publish "$serve_root/releases/latest/download" 9999.1.0 "$tarball_v1" "" "$tui_v1"
 publish "$serve_root/releases/download/v9999.1.0" 9999.1.0 "$tarball_v1" "" "$tui_v1"
 publish "$serve_root/releases/download/v9999.2.0" 9999.2.0 "$tarball_v2" "" "$tui_v2"
-publish "$serve_root/sim/releases/latest/download" 9999.1.0 "$sim_v1" "" "" "" \
-  sim_broadcast_platform
 
 # A parallel tree whose manifest advertises a checksum the tarball does not have.
 publish "$serve_root/corrupt/releases/latest/download" 9999.3.0 "$tarball_v3" "$forged_sha"
@@ -662,37 +659,6 @@ if run_install "$work_dir/install-no-tty.log" "$no_tty_home" "$base_url"; then
 else
   fail "a non-TTY install exited non-zero"
   cat "$work_dir/install-no-tty.log" >&2
-fi
-
-# The sim profile never has an interactive setup journey, even when a terminal
-# is available. Its published runtime is Linux-only, so macOS verifies the
-# actionable platform refusal and that setup was never entered.
-sim_home="$work_dir/home-sim"
-mkdir -p "$sim_home"
-
-if [ "$PLATFORM_OS" = "linux" ]; then
-  if run_install_with_tty "$work_dir/install-sim.log" "$sim_home" "$base_url/sim" LEMON_PROFILE=sim; then
-    if [ "$(setup_count "$sim_home")" = "0" ] &&
-      ! grep -Fq "$sim_home/.lemon/bin/lemon setup" "$work_dir/install-sim.log"; then
-      ok "the sim profile skips setup even with an interactive terminal"
-    else
-      fail "the sim profile attempted or advertised setup"
-      cat "$work_dir/install-sim.log" >&2
-    fi
-  else
-    fail "the sim profile install exited non-zero"
-    cat "$work_dir/install-sim.log" >&2
-  fi
-else
-  if run_install_with_tty "$work_dir/install-sim.log" "$sim_home" "$base_url/sim" LEMON_PROFILE=sim; then
-    fail "the sim profile installed on an unsupported macOS host"
-  elif [ "$(setup_count "$sim_home")" = "0" ] &&
-    grep -Fq "built for Linux only" "$work_dir/install-sim.log"; then
-    ok "the sim profile refuses macOS without entering setup"
-  else
-    fail "the sim profile macOS refusal was not actionable or entered setup"
-    cat "$work_dir/install-sim.log" >&2
-  fi
 fi
 
 # --------------------------------------------------------------- assertions -

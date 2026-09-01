@@ -82,10 +82,7 @@ defmodule LemonCore.Quality.ArchitecturePolicy do
       :lemon_media,
       :lemon_memory
     ],
-    lemon_sim: [:lemon_agent, :lemon_ai, :lemon_core],
-    lemon_sim_ui: [:lemon_ai, :lemon_core, :lemon_sim],
     lemon_skills: [:lemon_agent, :lemon_ai, :lemon_core, :lemon_media, :lemon_memory],
-    lemon_tcg: [:lemon_agent, :lemon_ai, :lemon_core, :lemon_sim],
     # The management UI consumes agent-owned provider configuration,
     # automation-owned blueprint catalog, and memory-owned lifecycle
     # boundaries; mutation, confirmation, and redaction semantics stay

@@ -28,28 +28,6 @@ config :lemon_web, LemonWeb.Endpoint,
     "dev_secret_key_base_dev_secret_key_base_dev_secret_key_base_dev_secret_key_base",
   watchers: []
 
-# ── lemon-sim product block — moves to the lemon-sim repo (docs/platform-split.md Phase 5) ──
-sim_ui_bind_ip =
-  case :inet.parse_address(to_charlist(System.get_env("LEMON_SIM_UI_BIND_IP") || "127.0.0.1")) do
-    {:ok, address} -> address
-    {:error, _reason} -> raise "Invalid LEMON_SIM_UI_BIND_IP"
-  end
-
-config :lemon_sim_ui, LemonSimUi.Endpoint,
-  http: [
-    ip: sim_ui_bind_ip,
-    port: String.to_integer(System.get_env("LEMON_SIM_UI_PORT") || "4090")
-  ],
-  check_origin: false,
-  code_reloader: true,
-  debug_errors: true,
-  secret_key_base:
-    "dev_sim_ui_secret_key_base_dev_sim_ui_secret_key_base_dev_sim_ui_secret_key_base",
-  watchers: []
-
-config :lemon_sim_ui, :hosted_rooms_enabled, true
-# ── end lemon-sim product block ──
-
 # Voice transport configuration - zeebot phone integration
 config :lemon_gateway,
   voice_enabled: true,

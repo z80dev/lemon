@@ -107,7 +107,6 @@ rm -rf "$live_tmp_root"
 artifact_tmp="$(mktemp -d "${TMPDIR:-/tmp}/lemon-artifact-contract.XXXXXX")"
 printf 'min-runtime' > "$artifact_tmp/lemon-2026.05.0-stable-linux-x86_64-lemon_runtime_min.tar.gz"
 printf 'full-runtime' > "$artifact_tmp/lemon-2026.05.0-stable-linux-x86_64-lemon_runtime_full.tar.gz"
-printf 'sim-runtime' > "$artifact_tmp/lemon-2026.05.0-stable-linux-x86_64-sim_broadcast_platform.tar.gz"
 printf 'tui-binary' > "$artifact_tmp/lemon-2026.05.0-stable-linux-x86_64-lemon_tui.tar.gz"
 python3 - "$artifact_tmp" <<'PY'
 import hashlib
@@ -121,7 +120,7 @@ artifacts = []
 
 for path in sorted(root.glob("*.tar.gz")):
     match = re.fullmatch(
-        r"lemon-2026\.05\.0-stable-(linux-x86_64)-(lemon_runtime_min|lemon_runtime_full|sim_broadcast_platform|lemon_tui)\.tar\.gz",
+        r"lemon-2026\.05\.0-stable-(linux-x86_64)-(lemon_runtime_min|lemon_runtime_full|lemon_tui)\.tar\.gz",
         path.name,
     )
     platform, profile = match.groups()
@@ -157,7 +156,7 @@ for path in sorted(root.glob("*.tar.gz")):
 PY
 artifact_valid_out="$artifact_tmp/valid.out"
 "$ROOT/scripts/verify_release_artifacts" --platform linux-x86_64 "$artifact_tmp" >"$artifact_valid_out" 2>&1 ||
-  fail "release artifact verifier should accept complete min/full/sim/TUI Linux manifest"
+  fail "release artifact verifier should accept complete min/full/TUI Linux manifest"
 
 incomplete_artifact_tmp="$(mktemp -d "${TMPDIR:-/tmp}/lemon-artifact-contract-incomplete.XXXXXX")"
 cp "$artifact_tmp/lemon-2026.05.0-stable-linux-x86_64-lemon_runtime_min.tar.gz" "$incomplete_artifact_tmp/"
@@ -199,7 +198,7 @@ path = root / "lemon-2026.05.0-stable-linux-x86_64-lemon_runtime_min.tar.gz"
 PY
 artifact_incomplete_out="$incomplete_artifact_tmp/incomplete.out"
 "$ROOT/scripts/verify_release_artifacts" --platform linux-x86_64 "$incomplete_artifact_tmp" >"$artifact_incomplete_out" 2>&1 &&
-  fail "release artifact verifier should reject manifests missing full, sim, and TUI profiles"
+  fail "release artifact verifier should reject manifests missing full and TUI profiles"
 grep -q "missing required release artifact(s)" "$artifact_incomplete_out" ||
   fail "release artifact verifier should explain missing required artifacts"
 

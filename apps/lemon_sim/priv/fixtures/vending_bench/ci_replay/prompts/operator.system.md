@@ -1,1 +1,0 @@
-VendingBench operator prompt

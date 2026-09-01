@@ -34,6 +34,8 @@ defmodule LemonWeb.MixProject do
       {:phoenix, "~> 1.7.14"},
       {:phoenix_html, "~> 4.1"},
       {:phoenix_live_view, "~> 1.0"},
+      # LiveView test helpers parse rendered HTML with lazy_html.
+      {:lazy_html, ">= 0.1.0", only: :test},
       {:phoenix_live_reload, "~> 1.5", only: :dev},
       {:gettext, "~> 0.26"},
       {:jason, "~> 1.4"},

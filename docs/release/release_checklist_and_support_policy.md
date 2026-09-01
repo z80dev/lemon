@@ -12,7 +12,7 @@ The initial stable 1.0 release artifact support target is:
 | Area | Supported for 1.0 | Notes |
 | --- | --- | --- |
 | Release artifacts | `linux-x86_64`, `linux-arm64`, `darwin-arm64` tarballs | Built by `.github/workflows/release.yml` on pinned `ubuntu-24.04`, `ubuntu-24.04-arm`, and `macos-15` runners; Linux artifacts carry a glibc 2.39 baseline |
-| Release profiles | `lemon_runtime_min`, `lemon_runtime_full`, and `lemon_tui` on all platforms; `sim_broadcast_platform` on Linux | All BEAM runtime artifacts must boot from extracted tarballs; the three `lemon_tui` artifacts are Bun binaries verified on native runners; the sim profile also verifies local assets, access control, and persistent spectator state |
+| Release profiles | `lemon_runtime_min`, `lemon_runtime_full`, and `lemon_tui` on all platforms | All BEAM runtime artifacts must boot from extracted tarballs; the three `lemon_tui` artifacts are Bun binaries verified on native runners |
 | Source install | Linux and macOS, best effort | Requires Elixir 1.19.5+ and Erlang/OTP 28.5+ |
 | Windows and macOS `x86_64` | Not supported for 1.0 | Use WSL, the container image, or source-level experimentation |
 | Install script | Supported with scope | `install.sh` on the `stable` channel for the three platform tags; `preview`/`nightly` require a pinned `LEMON_VERSION` |
@@ -497,27 +497,17 @@ steps.
       load `LemonMCP.Client`, report `LemonSkills.McpSource.mcp_enabled?/0`, keep
       `:lemon_mcp` loaded but not started, expose no application callback, and
       contain no `LemonMCP.Application` module.
-- [ ] Build local Sim UI assets and `sim_broadcast_platform` with
-      `MIX_ENV=prod mix sim_ui.assets.deploy` and
-      `MIX_ENV=prod mix release sim_broadcast_platform --overwrite`.
 - [ ] Build and package the `clients/tui` Bun binary for
       `linux-x86_64`, `linux-arm64`, and `darwin-arm64` as the `lemon_tui`
       artifacts.
-- [ ] Verify SHA-256 for all 11 tarballs and include all 11 in `manifest.json`.
+- [ ] Verify SHA-256 for all nine tarballs and include all nine in `manifest.json`.
 - [ ] Run `scripts/verify_release_artifacts {artifact-directory}` against the
       assembled artifact directory. The verifier must see
-      the BEAM runtime tarballs plus the three `lemon_tui` tarballs (11 total).
+      the BEAM runtime tarballs plus the three `lemon_tui` tarballs (nine total).
 - [ ] Run `scripts/verify_release_runtime_boot {artifact-directory}` against
-      the assembled artifact directory. The verifier extracts the eight BEAM
+      the assembled artifact directory. The verifier extracts the six BEAM
       tarballs and skips the `lemon_tui` pseudo-profile. Min/full check
-      `/healthz` and generate support bundles through release `eval`; the sim profile checks `/readyz`, digested assets, admin
-      denial, a persisted Werewolf spectator fixture, and restart recovery.
-      When hosted rooms are enabled, also run
-      `npm --prefix apps/lemon_sim_ui/assets run smoke:hosted-werewolf` against
-      the candidate with five isolated sessions, then restart against the same
-      volume and verify host/player reconnect. Production hosted proof requires
-      HTTPS, a 32-byte creation token, private/no-store responses, and protected
-      metrics with no credentials or raw provider errors.
+      `/healthz` and generate support bundles through release `eval`.
       Min/full bundle inspection still requires `channel_readiness.json`,
       `readiness_summary.json`, shared readiness proof-gate ids, and
       `proof_gate_summary.gateCount`.
@@ -629,7 +619,7 @@ strictly-increasing version. The workflow then:
 4. runs the canonical fast, quality, deterministic eval, and client lanes
    against the exact tagged commit
 5. builds and verifies all native artifacts and the multi-arch container
-6. publishes the GitHub Release, `manifest.json`, `install.sh`, and all 11
+6. publishes the GitHub Release, `manifest.json`, `install.sh`, and all nine
    tarballs
 7. promotes the selected container channel; stable also promotes `latest`
 
@@ -650,7 +640,6 @@ The expected assets are:
 
 - three `lemon_runtime_min` tarballs
 - three `lemon_runtime_full` tarballs
-- two Linux `sim_broadcast_platform` tarballs
 - three `lemon_tui` tarballs
 - `manifest.json` schema 2
 - `install.sh`

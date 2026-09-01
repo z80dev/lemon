@@ -47,13 +47,11 @@ RUN mix deps.get --only prod
 # umbrella root Mix re-runs the task once per child app with that app as the cwd,
 # so a relative path resolves against every app in turn, prints "The input path
 # does not exist" 26 times, and still exits 0 — a silent no-op.
-RUN mix sim_ui.assets.deploy
 RUN mix do --app lemon_web phx.digest
 
-# Both digests are silent about failure; the release must not be assembled
-# without them (config/prod.exs sets cache_static_manifest for both endpoints).
-RUN test -f apps/lemon_web/priv/static/cache_manifest.json && \
-    test -f apps/lemon_sim_ui/priv/static/cache_manifest.json
+# The digest is silent about failure; the release must not be assembled
+# without it (config/prod.exs sets cache_static_manifest for the endpoint).
+RUN test -f apps/lemon_web/priv/static/cache_manifest.json
 
 RUN mix compile
 RUN mix release lemon_runtime_full --overwrite
@@ -110,10 +108,8 @@ RUN chmod -R g+rX /app && chmod 0755 /usr/local/bin/lemon-entrypoint
 
 VOLUME ["/data"]
 
-# control plane / lemon_web / sim UI. The sim UI endpoint only starts when
-# LEMON_SIM_UI_SECRET_KEY_BASE and its companion vars are supplied (see
-# config/runtime.exs); 4090 is declared so that deployment is a matter of env.
-EXPOSE 4040 4080 4090
+# control plane / lemon_web
+EXPOSE 4040 4080
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
   CMD curl --fail --silent --show-error "http://127.0.0.1:${LEMON_CONTROL_PLANE_PORT:-4040}/healthz" >/dev/null || exit 1

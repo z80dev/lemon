@@ -11,9 +11,8 @@ Source: https://z80dev.github.io/lemon/architecture/overview
 # Architecture Overview
 
 Lemon is a BEAM-native stack for LLM interactions: a layered set of Elixir/OTP
-libraries (`ai` → `agent_core` → product apps) with two products on top — a
-multi-channel personal assistant and **LemonSim**, a deterministic
-model-vs-model simulation arena. This document covers the system architecture,
+libraries (`lemon_ai` → `lemon_agent` → product apps) with a multi-channel
+personal assistant product on top. This document covers the system architecture,
 key design decisions, and component responsibilities.
 
 For system diagrams see `docs/diagrams/`. For per-app details see each `apps/*/README.md`.
@@ -34,7 +33,7 @@ For system diagrams see `docs/diagrams/`. For per-app details see each `apps/*/R
 4. **Live Steering** — users can inject messages mid-execution because the BEAM
    can send a message to any process at any time.
 
-5. **Multi-Provider Abstraction** — unified interface for 26 LLM providers with
+5. **Multi-Provider Abstraction** — unified interface for 27 configured LLM providers with
    automatic model configuration and cost tracking.
 
 6. **Native Execution** — every product run uses Lemon's executor. Local runs
@@ -53,7 +52,7 @@ For system diagrams see `docs/diagrams/`. For per-app details see each `apps/*/R
 └───────────────────────┬─────────────────────────────────────┘
                         │ JSON-RPC / WebSocket
 ┌───────────────────────▼────────────────────┐
-│ LemonControlPlane  (112+ RPC methods)       │
+│ LemonControlPlane  (170+ RPC methods)       │
 └───────────────────────┬────────────────────┘
                         │
 ┌───────────────────────▼────────────────────┐
@@ -101,16 +100,16 @@ destination `CodingAgent.Executor`.
 
 ## Application Map
 
-The project is an Elixir umbrella with 25 applications:
+The project is an Elixir umbrella with 22 applications:
 
 **Stack (bottom-up):**
 
 | App | Role |
 |---|---|
-| `ai` | Provider abstraction, streaming, cost tracking (standalone; no umbrella deps) |
+| `lemon_ai` | Provider abstraction, streaming, cost tracking (standalone; no umbrella deps) |
 | `lemon_core` | EventBus, TaskFingerprint, config, secrets (standalone; no umbrella deps) |
 | `lemon_memory` | Durable memory for agents: document schema, SQLite-backed full-text store, provider behaviour with isolated fan-out search, run ingest (published; extracted from `lemon_core`) |
-| `agent_core` | Core agent loop, tool execution, model runtime credential glue, abort/subagent semantics |
+| `lemon_agent` | Core agent loop, tool execution, model runtime credential glue, abort/subagent semantics |
 | `lemon_platform_test` | Contract-test kit for the platform's extension behaviours: ExUnit case templates that validate Plugin, Executor, Store backend, and memory-provider implementations (published) |
 
 **Assistant product:**
@@ -123,7 +122,7 @@ The project is an Elixir umbrella with 25 applications:
 | `lemon_gateway` | Native execution lifecycle, slots, and request adaptation |
 | `lemon_channels` | Transport adapters (Telegram, Discord, X/Twitter, WhatsApp), model policy |
 | `lemon_automation` | CronManager, HeartbeatManager, scheduled jobs |
-| `lemon_control_plane` | HTTP/WebSocket server, 112+ RPC methods |
+| `lemon_control_plane` | HTTP/WebSocket server, 170+ RPC methods |
 | `lemon_skills` | Skill catalog, manifest v2 parser, installer, audit, synthesis |
 | `lemon_mcp` | MCP protocol server |
 | `lemon_cli` | Onboarding/setup/migration mix tasks and CLI glue |
@@ -139,19 +138,6 @@ The project is an Elixir umbrella with 25 applications:
 | `lemon_browser` | Local browser automation server, artifacts, route policy |
 | `lemon_media` | Media jobs, worker, supervisor |
 | `lemon_lsp` | LSP server manager |
-
-**Arena product:**
-
-| App | Role |
-|---|---|
-| `lemon_sim` | Deterministic model-vs-model simulation arena: event-sourced kernel, scenarios, verified benchmark artifacts |
-| `lemon_sim_ui` | Phoenix LiveView spectator/admin UI for the arena |
-
-**Other products:**
-
-| App | Role |
-|---|---|
-| `lemon_tcg` | Live market data and paper execution for an agent-operated on-chain TCG shop — the real-world counterpart of `LemonSim.Examples.TcgShop` |
 
 ### Package dependency graph
 
@@ -194,9 +180,6 @@ graph TD
         caui["coding_agent_ui"]
         mcp["lemon_mcp"]
         evals["lemon_evals"]
-        sim["lemon_sim"]
-        simui["lemon_sim_ui"]
-        tcg["lemon_tcg"]
     end
 
     subgraph satellite["Satellite · self-registering vendor integration"]
@@ -406,6 +389,561 @@ Current flags: `session_search` (default `"default-on"`; disable with
 
 ---
 
+Source: https://z80dev.github.io/lemon/architecture/review-2026-09
+
+# Architecture Review, September 2026
+
+Snapshot of the tree at `86aa731` (2026-09-01). Counts come from `grep`,
+`wc`, and `git`; nothing here was compiled. Where a claim needs `mix xref` to
+be exact, the review says so.
+
+## 1. Verdict
+
+Lemon is not lost because the Elixir is bad. Module docs are unusually
+careful, spec coverage is decent, credo runs at zero violations, boundaries
+are checked in CI, and the extension behaviours (`LemonChannels.Plugin`,
+`LemonAi.Provider`, `LemonMemory.Provider`, `LemonCore.Store.Backend`,
+`LemonCore.EngineRuntime`) are the right idea, backed by a real contract-test
+kit.
+
+It is lost because it grew by accretion. The history was reset on 2026-08-18
+and 330 commits landed in the following two weeks, most of them integrated
+from parallel agent worktrees. Each worktree added its corner correctly and
+documented it thoroughly. Nobody was deleting. The result is a 25-app umbrella
+holding two products and a platform, where the dependency graph in `mix.exs`
+is clean and the real graph, wired through `config.exs`, application env,
+dynamic module atoms, and runtime reflection, is not.
+
+Three problems account for most of the damage:
+
+1. **The layering is defended by lint instead of design.** The boundary
+   checker has grown to roughly thirty substring bans of the form "X must go
+   through wrapper Y". When a rule is needed to stop two modules from
+   re-merging, they are one module.
+2. **Storage is a generic key-value bag with 77 implicit schemas.** Every
+   domain either adds functions to `LemonCore.Store` or wraps it in a
+   fifteen-line `*Store` module and then adds a ban so nobody bypasses the
+   wrapper.
+3. **One conversation turn crosses six processes in three apps and is
+   re-encoded through four event vocabularies.** The router and the gateway
+   both claim, in their own moduledocs, to own the run lifecycle.
+
+Everything else in this review is a consequence or a symptom of those three.
+
+## 2. The tree by the numbers
+
+| Measure | Value |
+| --- | --- |
+| Umbrella apps | 25 |
+| Library lines (`apps/*/lib/**/*.ex`, excluding the quality checker itself) | 469,704 |
+| Test lines (`apps/*/test/**/*.exs`) | 353,286 |
+| Modules | about 1,880 |
+| Library files over 1,000 lines, excluding the model catalogs | 71 |
+| Markdown files tracked | 191 |
+| Bytes of per-app `AGENTS.md` | 493,056 |
+| Modules defining `@callback` | 45 |
+| `*_store.ex` modules | 48 |
+| Distinct tables named in generic `Store` calls | 77 |
+| `Code.ensure_loaded?` and `function_exported?` sites in lib | 384 |
+| `:"Elixir.Some.Module"` atoms in lib | 19 |
+| `rescue` clauses in lib | 1,228 |
+| `catch` clauses in lib | 411 |
+| `Process.sleep` calls in tests | 1,243 |
+| Test files not `async: true` | 590 of 1,027 |
+| Plug routers or Phoenix endpoints across the runtime | 10, in 7 apps |
+| Processes per conversation turn (router, gateway, agent) | 6 |
+
+The counts that can be measured mechanically are the ones `mix lemon.ratchet`
+records in `.ratchets.exs` (added as Phase 0 of this plan), so the table above
+is reproducible and the ratchets fail `mix lemon.quality` if any of them rises.
+
+The lemon-sim product alone (`lemon_sim`, `lemon_sim_ui`, `lemon_tcg`) is
+131,500 library lines, 28% of the tree. `lemon_sim` has 350 modules; 204 of
+them are `@moduledoc false`, and 188 of those are the 22 example games.
+
+## 3. Findings
+
+Each finding states what was observed, why it matters, and what to do. They
+are ordered by leverage, not severity.
+
+### 3.1 Two products and a platform share one umbrella, and the split is a month overdue
+
+`config/config.exs` and `config/runtime.exs` carry three fenced blocks
+labelled "lemon-sim product block, moves to the lemon-sim repo". The
+[platform split plan](../platform-split.md) (v2, 2026-08-09) and the
+[extraction readiness doc](../platform/phase-5-extraction.md) (2026-08-10)
+both conclude that lemon-sim is ready to leave now, with no unpublished
+dependencies. It is still here.
+
+Why it matters: every reader, every `mix compile`, every `mix test`, and
+every architecture rule pays for 131K lines that the platform does not need
+and that `docs/platform-split.md` already decided belong elsewhere.
+
+Do: extract `lemon_sim`, `lemon_sim_ui`, `lemon_tcg`, `showcase/`,
+the sim mix aliases, the three config blocks, and the `LemonSimUi.Env` and
+`LemonTcg.Env` registry entries with `git filter-repo`, exactly as the plan
+describes. This is mechanical and it is the single largest legibility win
+available.
+
+### 3.2 The dependency graph on paper is not the dependency graph at runtime
+
+`lemon_core` declares zero umbrella dependencies. In its `lib/` it also
+contains:
+
+- five bridge modules (`RouterBridge`, `EngineRuntime`, `EngineInfoBridge`,
+  `EventBridge`, `ACPClientBridge`) whose purpose is to call upward into
+  router, gateway, and control plane without naming them;
+- `LemonCore.GatewayConfig`, which reads
+  `Application.get_env(:lemon_gateway, :"Elixir.LemonGateway.Config")`;
+- `Mix.Tasks.Lemon.Update`, which hardcodes
+  `:"Elixir.LemonSkills.BuiltinSeeder"` and `:"Elixir.LemonSkills.Migrator"`;
+- about 70 `Code.ensure_loaded?` / `function_exported?` sites, of which
+  perhaps a dozen are legitimate optional-dependency probes (Exqlite,
+  Phoenix.PubSub, FileSystem, Sentry).
+
+The same pattern repeats one layer up. `LemonChannels.Runtime.cancel_by_run_id/2`
+first tries `LemonCore.RouterBridge.abort_run/2`, then falls back to
+`apply(:"Elixir.LemonRouter.Router", :abort_run, ...)`. Two soft paths to the
+same function. `lemon_channels` has 75 reflection sites, `lemon_control_plane`
+45, `coding_agent` 43.
+
+`config/config.exs` then completes the hidden graph. Eleven injection points
+(`:engine_runtime`, `:executor`, `:workspace_dir`, `:doctor_runtime`,
+`:doctor_checks`, `:gateway_channels`, `:env_registries`,
+`:workspace_diagnostics`, `:runtime_endpoints`, `:finalize_run_hooks`,
+`:run_history_provider`) name about 45 modules from a dozen apps. The rule
+"the platform never names a product" is honoured by moving the naming into
+config, where no tool checks it.
+
+Why it matters: `mix lemon.quality` proves that `mix.exs` matches a policy
+table. It does not prove that `lemon_core` can boot, compile, or be published
+without the apps above it. The policy table has a
+`reference_only_namespace_exceptions` escape hatch precisely because the
+gateway needs `LemonAi` structs and `LemonAutomation` without declaring them.
+
+Do:
+
+- Keep exactly three inversion seams and make each a named behaviour with a
+  single registration call verified at configure time (`Code.ensure_loaded!`
+  plus a behaviour check), so no call site needs `function_exported?`:
+  - `LemonCore.Executor`: how a run is executed (today `EngineRuntime` plus
+    `LemonGateway.Executor`, two behaviours for one seam).
+  - `LemonCore.Inbox`: how an adapter submits and aborts work (today
+    `RouterBridge`, plus the dynamic-atom fallbacks that must go).
+  - `LemonCore.Doctor.Check` and `LemonCore.Env.Registry`: the two
+    registries that genuinely need many contributors.
+- Delete `EngineInfoBridge`, `LemonCore.GatewayConfig`, and every
+  `:"Elixir.X"` atom in `lib/`. Where a lower app needs something a higher
+  app owns, the thing is in the wrong app.
+- Replace the substring dependency check with `mix xref graph --format
+  stats --label compile-connected` per app, which sees aliases, remote calls,
+  and dynamic atoms that the checker's own AST pass already tries to
+  emulate.
+
+### 3.3 Storage: one generic bag, 77 tables, 48 wrappers, 36 bans
+
+`LemonCore.Store` is 1,781 lines with 70 public functions. Its moduledoc says
+it "deliberately knows nothing about run history, memory, chat platforms, or
+any other domain". It then exposes chat state with TTL sweeps, run event
+append and finalize hooks, progress-message-id to run-id mapping (a Telegram
+concept), four policy tables, and introspection events with retention, on top
+of the generic `get/put/put_new/delete/list/take/compare_and_swap`.
+
+Around it, 48 `*_store.ex` modules exist mostly to give one table a name.
+`LemonControlPlane.TtsStore` is fifteen lines wrapping
+`Store.get(:tts_config, :global)`. The control plane has thirteen of these,
+`lemon_core` fourteen, `coding_agent` nine. Seventy-seven distinct tables are
+named in generic `Store` calls across the umbrella, most of them through a
+`@table` attribute inside a wrapper. Then
+`LemonCore.Quality.ArchitectureRulesCheck` carries 36 rules, most of them with
+patterns are literal strings like `LemonCore.Store.get(:model_policies`, each
+banning a bypass of one wrapper in one directory.
+
+Why it matters: this is a type system implemented as grep. It cannot enumerate
+the tables that exist, cannot migrate them, cannot give a table its own
+backend or retention, and every new table costs a wrapper plus a rule. The
+platform split evidence (E1 in `docs/platform-split.md`) already lists the
+same symptoms.
+
+Do:
+
+- Add `LemonCore.Store.Table`. A table is declared once, in the app that owns
+  it:
+
+  ```elixir
+  defmodule LemonControlPlane.TtsConfig do
+    use LemonCore.Store.Table, name: :tts_config, key: :global, value: map()
+  end
+  ```
+
+  The macro generates `get/1`, `put/2`, `delete/1`, `list/0` with specs,
+  registers the table so `Store` can list and migrate it, and is the only
+  place allowed to call the generic API. One quality rule replaces thirty:
+  generic `Store` calls may appear only inside a `Store.Table` module.
+- Move the domain APIs out of `Store` into tables owned by the domain: chat
+  state and progress mapping to `lemon_channels`, policies to `lemon_router`,
+  introspection to its own module, run events to `lemon_router`. `Store`
+  becomes a backend-dispatching GenServer plus the read cache, well under
+  500 lines.
+- Retire the wrapper modules as tables are declared; the file count is the
+  progress meter.
+
+### 3.4 The run pipeline: six processes, four event vocabularies, two owners
+
+A single inbound message traverses, in order:
+
+| Hop | App | Process | Lines |
+| --- | --- | --- | --- |
+| `SessionCoordinator` (queue semantics) | lemon_router | per conversation | 837 |
+| `RunProcess` + 5 submodules ("owns a single run lifecycle") | lemon_router | per run | 1,057 |
+| `EngineRuntime` behaviour → `LemonGateway.Runtime` | lemon_core → lemon_gateway | | 174 + 74 |
+| `Scheduler` (slots) → `ThreadWorker` (per-conversation FIFO) | lemon_gateway | per conversation | 706 + 439 |
+| `Run` ("managing run lifecycle: start, steer, cancel, complete") | lemon_gateway | per run | 958 |
+| `Executor` behaviour → `CodingAgent.Executor` → `SessionRunner` | lemon_gateway → coding_agent | | 79 + 176 |
+| `Session` + 17 submodules, 65-field state | coding_agent | per session | 2,110 + 6,476 |
+| `Agent` → `Loop` | lemon_agent | per session | 1,328 + 878 |
+
+Events come back through `LemonAgent` loop tuples, then `{:session_event}`,
+then `{:engine_event}` / `{:engine_delta}`, then `LemonCore.Event` on the
+`run:<id>` bus topic, which `RunProcess` re-broadcasts on `session:<key>`,
+then `SurfaceManager` and `StreamCoalescer`, then `DeliveryIntent`, then
+`OutboundPayload`. `CodingAgent.Session.RunTranslator` is 370 lines of
+translation between two of those vocabularies, and `LemonCore.Events` has 26
+structs.
+
+The router/gateway boundary is held in place by eight dedicated lint rules
+(`gateway_execution_queue_mode`, `gateway_legacy_runtime_submit`,
+`gateway_conversation_key_selection`, `gateway_auto_resume_mutation`,
+`gateway_job_compatibility`, `router_gateway_cwd_dependency`, and the two
+router session-registry rules). Both apps have a `RunSupervisor`, a
+`BindingResolver`, a `Cwd`, a `Health` router, and a `Config`.
+
+Of `lemon_gateway`'s 11,967 lines, about 6,200 (`sms/`, `voice/`,
+`transports/`, `tools/`) are ingress that the project's own transport
+unification doc calls dead by default, behind a second transport behaviour
+(`LemonGateway.Transport`, three callbacks) that duplicates
+`LemonChannels.Plugin` (six callbacks). `coding_agent` depends on
+`lemon_gateway` for seven `LemonGateway.Tools.*` tools (SMS, Telegram image,
+Discord file, cron), which are product tools living inside an execution
+scheduler.
+
+Why it matters: this is where new features go to get complicated. Every
+run-level behaviour (steer, cancel, resume, compaction, watchdogs) must be
+threaded through two lifecycle owners and four encodings, and tested at each.
+It is also why `run_process_test.exs` is 3,399 lines and
+`apps/lemon_gateway/test/run_test.exs` is 2,882.
+
+The platform split plan's decision D1 kept router and gateway separate because
+"router↔gateway is already a published-package-quality boundary". The
+boundary that has package quality is `EngineRuntime`, the executor seam, and
+it survives a merge. There is no plausible third-party consumer of a scheduler
+without the router that feeds it.
+
+Do:
+
+- Fold the gateway's execution half (`Scheduler`, `ThreadWorker`, `Run`,
+  `RunSupervisor`, `EngineLock`, `RunRegistry`) into `lemon_router` as
+  `LemonRouter.Execution.*`. One lifecycle owner, one `RunSupervisor`.
+- Collapse `EngineRuntime` and `LemonGateway.Executor` into one
+  `LemonCore.Executor` behaviour (`submit/1`, `cancel/2`, `steer/2`,
+  `available?/0`) implemented by `CodingAgent.Executor`.
+- Have `CodingAgent.Session` emit `LemonCore.Event` structs directly; delete
+  `RunTranslator` and the `{:engine_event}` layer. Target: three processes
+  per turn (coordinator, run, agent) and one event vocabulary from executor
+  to channel.
+- Move the seven gateway tools next to the media tools in
+  `lemon_skills/tools`. Move SMS, voice, and webhook ingress into satellites
+  on the `x_api` model, or delete what has no user. Delete
+  `LemonGateway.Transport`.
+- Delete the eight lint rules as the code they guard disappears.
+
+### 3.5 The same concept implemented three times
+
+| Concept | Copies | Notes |
+| --- | --- | --- |
+| `Binding` struct | 3 | `LemonCore.Binding`, `LemonChannels.Binding`, `LemonGateway.Binding` are field-for-field identical |
+| `BindingResolver` | 3 | channels (119 lines) and gateway (133 lines) exist only to convert to core types, call the core resolver (196 lines), and convert back |
+| `Cwd` | 3 | `LemonChannels.Cwd` is an 8-line alias; `LemonGateway.Cwd` re-implements core with `Process.whereis` |
+| `[gateway]` TOML accessor | 4 | `LemonCore.GatewayConfig`, `LemonGateway.Config` (a GenServer), `LemonGateway.ConfigLoader`, `LemonChannels.GatewayConfig` via `EngineInfoBridge` |
+| Config loader layers | 3 | `LemonCore.Config` → `ConfigCache` → `Config.Modular`, each described as canonical somewhere |
+| `Health` HTTP router | 4 | gateway, router, control plane, plus per-endpoint health |
+| `Checkpoint` | 3 | core, coding_agent, coding_agent tool |
+| `Registry` modules | 11 | |
+| Modules named `*Config*` | 25 | |
+
+Do: one `Binding`, one resolver, one `Cwd`, one `LemonCore.Config.gateway/0`.
+Delete the GenServer that caches a TOML section and the bridge that reads it
+back. Each deletion also removes a lint rule or a reflection site.
+
+### 3.6 Swallow-everything error handling has become the house style
+
+There are 1,228 `rescue` clauses and 411 `catch` clauses in `lib/`. The
+Discord transport alone has 35 bare `rescue` clauses. Many wrap a single store call
+(`safe_delete_chat_state/1`, `clear_cwd_override/1`) or a `start_link`
+(`safe_start_consumer/0`).
+
+The bridges document this as a deliberate contract: "every function here
+answers rather than raises". That is correct at a process boundary. It has
+spread into ordinary domain functions, where it hides bugs from supervisors,
+from Dialyzer, and from the person reading the code.
+
+Do: adopt and enforce a two-line rule. A `rescue` is allowed only at a
+process boundary (adapter inbound handler, bridge call, tool execution,
+scheduled job body), and it must name the exception it expects. Add a ratchet
+to `mix lemon.quality` so the count can only go down.
+
+### 3.7 Tests are large, coupled, and clocked by `Process.sleep`
+
+About 1,240 `Process.sleep` calls in tests (360 of them `sleep(50)`, 199
+`sleep(10)`), while
+[deterministic-test-patterns.md](../testing/deterministic-test-patterns.md)
+says to prefer explicit synchronization and `LemonCore.Testing.AsyncHelpers`
+exists for the purpose. 590 of 1,027 test files are not async.
+`apps/coding_agent/test/test_helper.exs` rewrites `HOME`, `require_file`s
+support modules from sibling apps by relative path, and restarts applications
+because "earlier app suites may have stopped :coding_agent". Forty of the 80
+files in `scripts/` are `live_*_smoke` and `live_*_proof` scripts: a second,
+unstructured test layer.
+
+Do: replace every `sleep` with `assert_receive`, `AsyncHelpers`, or a
+monitor; make the suite async by default and mark the exceptions; move
+shared test support into `lemon_platform_test` where it already has a home;
+fold the live scripts into `@tag :integration` tests or delete them.
+
+### 3.8 God modules and one 65-field struct
+
+Seventy-one library files exceed 1,000 lines. The ones that matter are not
+data catalogs (the OpenRouter and Vercel model tables should simply become
+`priv/*.json`), they are the ones with behaviour:
+
+| File | Lines |
+| --- | --- |
+| `lemon_channels/adapters/discord/transport.ex` | 3,095 |
+| `coding_agent/session.ex` (plus 17 submodules, 6,476 lines) | 2,110 |
+| `coding_agent/tools/browser.ex` | 1,899 |
+| `lemon_automation/cron_manager.ex` | 1,825 |
+| `lemon_core/store.ex` | 1,781 |
+| `lemon_skills/mcp_source.ex` | 1,712 |
+| `coding_agent/tools/agent.ex` | 1,683 |
+| `lemon_control_plane/protocol/schemas.ex` | 1,623 |
+
+`CodingAgent.Session`'s state has 65 fields. Six are heartbeat timers, five
+are auto-compaction task bookkeeping, eight are overflow-recovery bookkeeping.
+Those are three state machines sharing one struct even though `session/`
+already has `heartbeat.ex`, `compaction_lifecycle.ex`, and
+`overflow_recovery.ex`.
+
+Do: give each submodule its own struct and a single field in `Session`.
+Split the Discord transport by concern (gateway events, slash commands,
+components, delivery). Extract the control-plane method schemas into
+per-method modules that declare their own schema, so `schemas.ex` and the
+3,071-line parity test stop being the two most-churned files in the repo.
+
+### 3.9 Documentation outpaces maintenance
+
+191 markdown files. Per-app `AGENTS.md` files total 493 KB; `coding_agent`'s
+alone is 66 KB and the control plane's 63 KB. The root `AGENTS.md` mixes
+architecture with agent-team process (model tiers, worktree conventions).
+`SPEC.md` at the repo root is a single-feature task spec containing a
+personal worktree path and "fix round" notes. `.credo.exs` and
+`.dialyzer_ignore.exs` both cite `docs/plans/`, which does not exist.
+`docs/architecture/overview.md` still uses the old app names (`ai`,
+`agent_core`) and says "112+ RPC methods"; there are 172 method modules.
+
+The docs catalog with owner and freshness metadata is a good mechanism, and
+`mix lemon.quality` enforces it. Date-based freshness does not catch the
+semantic drift above.
+
+Do: delete `SPEC.md`; move process guidance out of `AGENTS.md` into
+`CONTRIBUTING.md`; cap each app's `AGENTS.md` at roughly 5 KB covering
+purpose, boundaries, entry points, and invariants, with everything else in
+moduledocs where it is next to the code it describes; fix the stale
+references.
+
+### 3.10 What is genuinely good, and should be protected
+
+- `lemon_ai`: 32K lines, zero umbrella dependencies, 72 test files. A real
+  library.
+- The behaviours with written contracts and `lemon_platform_test` case
+  templates. This is the extension model; more of the tree should be built on
+  it.
+- The `x_api` satellite pattern: depends on the platform, registers itself at
+  boot, nothing names it. This should be how every vendor channel adapter
+  works.
+- `LemonCore.Env.Registry`: env vars declared as data next to the app that
+  reads them, rendered into `docs/config-registry.md`.
+- The publishing mechanics (`hex_package.exs`), the Elixir 1.15 floor lane,
+  warnings-as-errors, no skipped tests, zero credo violations, the Dialyzer
+  lane with a reasoned ignore file.
+- Moduledocs that explain failure contracts and rejected alternatives
+  (`RouterBridge`, `ACPClientBridge`, `EngineRuntime`).
+
+## 4. The plan
+
+Phases are ordered by leverage divided by risk. Each has an exit criterion
+that `mix lemon.quality` can measure; sizes are relative.
+
+### Phase 0: stop the accretion (size S)
+
+- Add ratchets to `mix lemon.quality` for the counts in section 5. A ratchet
+  fails when a count rises above the committed baseline and lowers the
+  baseline when a PR reduces it.
+- Delete `SPEC.md`. Move process guidance out of `AGENTS.md`. Fix the
+  `docs/plans` references and the stale numbers in
+  `docs/architecture/overview.md`.
+- Exit: ratchets green on `main`; no working artifacts at the repo root.
+
+### Phase 1: extract lemon-sim (size M, mechanical)
+
+- Execute the extraction that `docs/platform/phase-5-extraction.md` already
+  declares ready.
+- Exit: umbrella at 22 apps and about 340K library lines; no "product block"
+  fences in `config/`.
+
+### Phase 2: typed, owned storage (size M)
+
+- `LemonCore.Store.Table`; declare the 77 tables in their owning apps; move
+  the domain APIs out of `Store`; retire wrappers; replace the storage rules
+  with one.
+- Exit: `Store` under 500 lines; zero `*_store.ex` wrappers that only alias a
+  table; one storage rule in `ArchitectureRulesCheck`.
+
+### Phase 3: one run pipeline (size L, the real work)
+
+- Fold gateway execution into `LemonRouter.Execution`; one `LemonCore.Executor`
+  behaviour; `CodingAgent.Session` emits `LemonCore.Event` directly; gateway
+  tools to `lemon_skills`; ingress to satellites; delete
+  `LemonGateway.Transport`.
+- Exit: three processes per turn; `RunTranslator` gone; `{:engine_event}`
+  gone; eight router/gateway rules gone; `run_test.exs` and
+  `run_process_test.exs` merged into one suite under 2,000 lines.
+
+### Phase 4: dissolve the bridges and the duplicates (size M)
+
+- One `Binding`, one resolver, one `Cwd`, one gateway config accessor;
+  `EngineInfoBridge`, `LemonCore.GatewayConfig`, `LemonGateway.Config`
+  deleted; `RouterBridge` becomes `LemonCore.Inbox` with a verified
+  implementation and no fallbacks.
+- Move the Telegram adapter into a satellite app first, because it is the
+  adapter whose concepts leak into router and core; the five `telegram_*`
+  and `core_vendor_channel_reference` rules become compile errors instead.
+- Exit: zero `:"Elixir.` atoms in `lib/`; reflection sites under 40, all
+  optional-dependency probes; `mix xref graph` shows no edge from
+  `lemon_core` to any other umbrella app.
+
+### Phase 5: code-quality ratchets, ongoing
+
+- The `rescue` policy; `sleep` to `AsyncHelpers`; `Session` state split;
+  model catalogs to `priv/`; Discord transport and control-plane schemas
+  split; `AGENTS.md` caps.
+
+## 5. Ratchets
+
+Baselines recorded in `.ratchets.exs` by `mix lemon.ratchet`. Targets are
+end-of-plan values.
+
+| Metric | Today | Target |
+| --- | --- | --- |
+| Library lines in the umbrella | 469,704 | about 330,000 |
+| `ArchitectureRulesCheck` rules | 36 | 8 or fewer |
+| `*_store.ex` wrapper modules | 48 | 0 (tables instead) |
+| Distinct tables in generic `Store` calls outside `Store.Table` modules | 77 | 0 |
+| `:"Elixir.` atoms in lib | 19 | 0 |
+| `ensure_loaded?` / `function_exported?` in lib | 384 | under 40 |
+| `rescue` clauses in lib | 1,228 | under 300 |
+| `catch` clauses in lib | 411 | under 100 |
+| `Process.sleep` in tests | 1,243 | under 100 |
+| Test files not async | 590 | under 150 |
+| Library files over 1,000 lines, excluding data catalogs | 71 | under 10 |
+| Processes per conversation turn | 6 | 3 |
+| Event vocabularies between executor and channel | 4 | 1 |
+| Per-app `AGENTS.md` total | 493 KB | under 100 KB |
+
+## 6. What this review did not verify
+
+- No Elixir toolchain was available in the review environment, so nothing
+  was compiled and neither `mix lemon.quality` nor the test suite was run.
+  The reflection, rescue, and sleep counts are pattern counts and include a
+  small number of comments and doc examples. The first draft of this review
+  counted 44 generic store tables; resolving `@table` attributes per file,
+  as the ratchet now does, gives 77.
+- The run pipeline hop table was assembled from moduledocs and call sites,
+  not from a trace. `mix xref graph --label compile-connected` from each
+  app's directory is the authoritative check for section 3.2.
+- Effort sizes are relative. The phases are sequenced so that each one makes
+  the next one smaller.
+
+## 7. Revisions after review, 2026-09-01
+
+A second reviewer read this document against the same snapshot and
+challenged several of its prescriptions. The points below supersede the
+sections they name. The findings stand; the fixes change.
+
+- **Truthful failures first (3.2, 3.6).** The highest-value fix is making
+  failure observable. `LemonChannels.Runtime.cancel_by_run_id/2` and the
+  bridges answer `:ok` whether the work was done, no implementation exists,
+  or the implementation raised, so an expected no-op, a missing seam and a
+  bug are indistinguishable to the caller and invisible to supervisors. The
+  rescue rule becomes: a failure is observable, the caller receives an
+  accurate outcome, and continuing leaves valid state. Plugin and tool
+  boundaries may catch any exception as long as they report it. Counting
+  `rescue` clauses is a signal, not a target.
+- **Config injection is composition (3.2).** Choosing an implementation of a
+  documented contract in `config.exs` is how the seams are meant to be
+  composed. What must go is lower-level code naming higher-level modules
+  through dynamic atoms and substituting behaviour when they are missing.
+  Each seam keeps its behaviour and validates the configured implementation
+  at configure time, so call sites need no `function_exported?` guard. The
+  claim that a boundary needing a rule is not a boundary is withdrawn.
+  `mix xref` is one signal beside standalone package compiles and runtime
+  contract tests, not the authority.
+- **No router and gateway merge (3.4).** `EngineRuntime` (accept a command,
+  report availability, cancel by run id, expose a pid to monitor) and
+  `LemonGateway.Executor` (start an attempt against an event sink, cancel,
+  steer, redirect) are different contracts at different levels: controller,
+  execution host, agent. An execution-only host driven by another Lemon node
+  is a real consumer of the second without the first, which is the named
+  execution-node direction the project already has. The problem to solve is
+  two components claiming one lifecycle. Phase 4 therefore writes down
+  ownership for the logical run, the execution attempt and the agent
+  session, with one owner per transition, timeout, retry and terminal
+  result, and removes only the overlap that tests or traces demonstrate.
+  Process count per turn and test-file length are no longer exit criteria.
+  Each process is judged on what it exclusively owns, what it serializes,
+  its lifetime, and what should happen when it crashes.
+- **Define the event contract, keep the behaviour (3.4).** `RunTranslator`
+  tracks pending tool actions, approvals, streamed text and usage. Deleting
+  it does not delete that work. The goal is a public execution-event
+  contract with redundant representations removed, while agent-internal
+  events and delivery payloads may legitimately differ.
+- **Storage moves incrementally (3.3).** Domain behaviour leaves `Store`
+  first, into small domain modules that own meaning, validation, defaults and
+  retention, over a storage API that owns backend access, atomic operations
+  and cache coherence. Small domain modules are not the problem. Table
+  registration is trialled on two or three different domains before wider
+  adoption, with explicit answers on schema versioning, missing versus
+  failed reads, atomic update, retention and backend routing, and the
+  documented cache-coherence and sync/async semantics are preserved. The
+  measure is generic `Store` calls outside owning modules, not the number of
+  wrapper modules.
+- **Tests: global state before async (3.7).** The `HOME` rewrite, the
+  cross-app `require_file` calls and the application restarts in the
+  coding-agent helper are the coupling to remove. More `async: true` follows
+  from that, not the other way round.
+- **Sim extraction is a packaging decision (3.1).** It reduces this
+  repository, not the complexity maintained across the project, and nothing
+  later depends on it. It stays first because the project's own plan already
+  decided it and the work is mechanical, and it is reversible until merged.
+
+Revised order: Phase 0 ratchets, Phase 1 sim extraction, Phase 2 reliability
+contracts, Phase 3 owned storage, Phase 4 run ownership and the event
+contract, Phase 5 duplicates and bridges, Phase 6 code quality. The ratchets
+in section 5 are no-regression guards: they keep counts from rising while the
+work lowers them, and the target column is direction, not a definition of
+done.
+
+---
+
 Source: https://z80dev.github.io/lemon/architecture_boundaries
 
 # Architecture Boundaries
@@ -440,10 +978,7 @@ silent permissions.
 | `lemon_memory` | `lemon_core` | `lemon_core` | *(none)* |
 | `lemon_platform_test` | `lemon_agent`, `lemon_ai`, `lemon_channels`, `lemon_core`, `lemon_memory` | `lemon_agent`, `lemon_ai`, `lemon_channels`, `lemon_core`, `lemon_memory` | *(none)* |
 | `lemon_router` | `lemon_agent`, `lemon_ai`, `lemon_channels`, `lemon_core`, `lemon_media`, `lemon_memory` | `lemon_agent`, `lemon_ai`, `lemon_channels`, `lemon_core`, `lemon_media`, `lemon_memory` | *(none)* |
-| `lemon_sim` | `lemon_agent`, `lemon_ai`, `lemon_core` | `lemon_agent`, `lemon_ai`, `lemon_core` | *(none)* |
-| `lemon_sim_ui` | `lemon_ai`, `lemon_core`, `lemon_sim` | `lemon_ai`, `lemon_core`, `lemon_sim` | *(none)* |
 | `lemon_skills` | `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_media`, `lemon_memory` | `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_media`, `lemon_memory` | *(none)* |
-| `lemon_tcg` | `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_sim` | `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_sim` | *(none)* |
 | `lemon_web` | `lemon_agent`, `lemon_automation`, `lemon_core`, `lemon_memory`, `lemon_router` | `lemon_agent`, `lemon_automation`, `lemon_core`, `lemon_memory`, `lemon_router` | *(none)* |
 | `x_api` | `lemon_agent`, `lemon_ai`, `lemon_channels`, `lemon_core`, `lemon_platform_test` | `lemon_agent`, `lemon_ai`, `lemon_channels`, `lemon_core`, `lemon_platform_test` | *(none)* |
 <!-- architecture_policy:end -->
@@ -483,6 +1018,20 @@ The refactor quality rules also enforce a few concrete ownership boundaries:
 - Shared domains in `lemon_core` / `lemon_control_plane` must use typed wrappers such as `RunStore`, `ChatStateStore`, `PolicyStore`, and `ProjectBindingStore` instead of bypassing them with raw store helpers.
 
 Run `mix lemon.quality` after boundary changes. It now checks both dependency policy and these architecture guardrails.
+
+## Quality Ratchets
+
+`mix lemon.quality` also compares a set of repository-wide counts with the
+maximums recorded in `.ratchets.exs`. A count above its ratchet fails the
+check; `mix lemon.ratchet --update` lowers ratchets to the current
+measurements and never raises one. The metrics are the ones the
+[September 2026 architecture review](architecture/review-2026-09.md) uses to
+track the umbrella's shape: dynamic module atoms and runtime reflection in
+`lib/`, `rescue` and `catch` clauses, generic `LemonCore.Store` table atoms
+and `*_store.ex` wrappers, source-pattern rules in this checker, oversized
+files, `Process.sleep` and synchronous files in tests, and the size of the
+per-app `AGENTS.md` files. `LemonCore.Quality.RatchetCheck` is the source of
+truth for what each metric counts.
 
 ## Skill Source Taxonomy
 
@@ -1226,10 +1775,8 @@ Source: https://z80dev.github.io/lemon/benchmarks/platform-microbenchmarks
 Numbers for the primitives every agent run goes through: the store, the event
 bus, the streaming coalescers, and the per-conversation process lifecycle.
 
-These measure **infrastructure, not intelligence**. For model behaviour see
-[the simulation arenas](quickstart.md); for the artifact and verification
-guarantees those arenas provide, see [platform.md](platform.md). Nothing here
-calls a model or touches a network.
+These measure **infrastructure, not intelligence**. Nothing here calls a model
+or touches a network.
 
 Everything below is reproducible with `mix lemon.bench`. The suites live in
 [`bench/`](https://github.com/z80dev/lemon/tree/main/bench) and are about 700 lines total, so if a number looks
@@ -1615,478 +2162,6 @@ were the point.
 
 ---
 
-Source: https://z80dev.github.io/lemon/benchmarks/platform
-
-# Benchmark Platform Guarantees
-
-LemonSim benchmarks are designed to leave auditable artifacts, not just printed
-scores. VendingBench is the richest bundle today, and the shared verifier also
-supports registered scorecard scenarios across LemonSim.
-
-## Artifact Bundle Contract
-
-A VendingBench run emits:
-
-- `final_world.json`
-- `events.jsonl`
-- `actions.jsonl`
-- `commands.jsonl`
-- `facts.jsonl`
-- `tool_calls.jsonl`
-- `supplier_messages.json`
-- `worker_history.json`
-- `operator_transcript.json`
-- `reminders.json`
-- `scorecard.json`
-- `usage.json`
-- `config.json`
-- `manifest.json`
-- `hashes.json`
-- `prompts/operator.system.md`
-- `prompts/operator.initial.md`
-- `report.md`
-- `replay.json`
-- `replay.html`
-
-`manifest.json` uses `lemon_sim.run.v1`. It records the simulation id, version,
-seed, ruleset hash, model descriptor, runtime metadata, and integrity hashes for
-events, scorecard, usage, prompts, and tool schema. VendingBench computes its
-ruleset hash from the world, updater, action space, supplier, arena, and demand
-model source files.
-
-`hashes.json` uses `lemon_sim.hashes.v1` and stores the file hashes that make the
-bundle tamper-evident.
-
-## Verification
-
-```bash
-LEMON_STORE_PATH=/tmp/lemon-docs-store mix lemon.sim.verify /tmp/lemon-vb-ci-baseline-docs
-```
-
-The verifier checks:
-
-- manifest and hash schema
-- required files for the scenario
-- manifest integrity fields against `hashes.json`
-- every hashed file's current SHA-256
-- registered scorecard recomputation from `final_world.json`
-
-For VendingBench, a tampered `scorecard.json`, `events.jsonl`, `usage.json`, or
-other hashed file causes verification to fail. `mix lemon.sim.score` runs the
-same verification before printing the scorecard.
-
-## Suites And Leaderboards
-
-`mix lemon.sim.suite` writes:
-
-- `suite.json`
-- `leaderboard.md`
-- `runs/<competitor>/<seed>/...` artifact bundles
-
-`suite.json` uses `lemon_sim.suite.v1` and contains:
-
-- `spec`: scenario, preset, seeds, and competitors
-- `primary_metric`: metric key, display name, and direction
-- `runs`: one result per competitor and seed
-- `rankings`: verified aggregate rows with token and cost totals
-- `failures`: runs that were reported but excluded from rankings
-
-```bash
-LEMON_STORE_PATH=/tmp/lemon-docs-store mix lemon.sim.leaderboard /tmp/lemon-vb-suite-docs --recompute
-```
-
-`--recompute` re-verifies existing bundles and rewrites the leaderboard. Failed
-or tampered runs remain visible in `suite.json` and `leaderboard.md`, but they
-are excluded from rankings. The public LiveView leaderboard renders these under
-`Reported Not Ranked`.
-
-## Usage And Cost Accounting
-
-Every run writes `usage.json` with schema `lemon_sim.usage.v1`, total input,
-output, cache-read, cache-write tokens, decision count, and per-actor rows.
-
-Cost is computed from the `LemonAi.Models` pricing metadata. If pricing is unknown,
-`cost_usd` is `null` rather than `0`; CLI output prints unknown cost and the
-LiveView UI renders it as an unknown value. Suite aggregation preserves unknown
-cost instead of silently treating it as free.
-
-## Ratings
-
-`mix lemon.sim.ratings` consumes one or more `suite.json` files and writes:
-
-- `ratings.json`
-- `ratings.md`
-
-Ratings use a deterministic Bradley-Terry fit over pairwise seed-level
-comparisons. The implementation adds one pseudo draw per active pair so sparse
-suite sets do not produce unstable infinite ratings.
-
-## Replay And Public UI
-
-Each VendingBench run includes `replay.html`, a static browser replay bundle
-that can be opened directly from the artifact directory.
-
-The LiveView app also exposes:
-
-- `/` for the public LemonSim lobby
-- `/watch/:sim_id` for public read-only spectator views
-- `/leaderboards` for verified suite leaderboards
-- `/admin` and `/admin/sims/:sim_id` for private admin surfaces when an access token is configured
-
-The spectator route supports VendingBench, Werewolf, and TCG Shop. For
-artifact-backed VendingBench runs, it can refresh from `final_world.json` and
-render `usage.json` totals.
-
----
-
-Source: https://z80dev.github.io/lemon/benchmarks/quickstart
-
-# Benchmarks Quickstart
-
-This is the keyless path: no provider account, no model API key, and no network
-calls. It runs the deterministic VendingBench baseline, verifies the artifact
-bundle, scores it, then runs a two-competitor suite.
-
-The commands below write to `/tmp` so a source checkout stays clean.
-
-## Run One Benchmark
-
-```bash
-LEMON_STORE_PATH=/tmp/lemon-docs-store mix lemon.sim.vending_bench --preset ci --offline-strategy baseline --sim-id vb_ci_baseline_docs --artifact-dir /tmp/lemon-vb-ci-baseline-docs --deterministic-artifacts
-```
-
-Trimmed output from this run:
-
-```text
-Offline artifacts written to /tmp/lemon-vb-ci-baseline-docs
-usage: 0 in / 0 out, $0.00 (0 actors)
-```
-
-The `ci` preset is a seven-day run with a 25-turn driver limit. The offline
-strategies currently accepted by the task are `baseline` and `pressure`.
-
-## Inspect The Bundle
-
-```bash
-find /tmp/lemon-vb-ci-baseline-docs -maxdepth 2 -type f | sort
-```
-
-Trimmed output:
-
-```text
-/tmp/lemon-vb-ci-baseline-docs/actions.jsonl
-/tmp/lemon-vb-ci-baseline-docs/commands.jsonl
-/tmp/lemon-vb-ci-baseline-docs/config.json
-/tmp/lemon-vb-ci-baseline-docs/events.jsonl
-/tmp/lemon-vb-ci-baseline-docs/facts.jsonl
-/tmp/lemon-vb-ci-baseline-docs/final_world.json
-/tmp/lemon-vb-ci-baseline-docs/hashes.json
-/tmp/lemon-vb-ci-baseline-docs/manifest.json
-/tmp/lemon-vb-ci-baseline-docs/replay.html
-/tmp/lemon-vb-ci-baseline-docs/scorecard.json
-/tmp/lemon-vb-ci-baseline-docs/usage.json
-```
-
-## Verify And Score
-
-```bash
-LEMON_STORE_PATH=/tmp/lemon-docs-store mix lemon.sim.verify /tmp/lemon-vb-ci-baseline-docs
-```
-
-```text
-Verified vending_bench run
-Status: complete
-```
-
-```bash
-LEMON_STORE_PATH=/tmp/lemon-docs-store mix lemon.sim.score /tmp/lemon-vb-ci-baseline-docs
-```
-
-Trimmed output:
-
-```json
-{
-  "status": "complete",
-  "day_number": 7,
-  "units_sold": 183,
-  "cash_on_hand": 583.35,
-  "cash_in_machine": 63.75,
-  "inventory_value_wholesale": 127.95,
-  "active_failure_mode_count": 0,
-  "score_modes": {
-    "lemon_operational_score": 376.4,
-    "money_balance": 583.35,
-    "v1_net_worth": 775.05
-  }
-}
-```
-
-`verify` checks the manifest, hashes, required files, and the registered
-VendingBench scorecard recomputed from `final_world.json`. `score` runs verify
-first, then prints `scorecard.json`.
-
-## Run A Suite
-
-```bash
-LEMON_STORE_PATH=/tmp/lemon-docs-store mix lemon.sim.suite --scenario vending_bench --preset ci --seeds 7,8 --offline baseline,pressure --out /tmp/lemon-vb-suite-docs
-```
-
-Output:
-
-```text
-# LemonSim Suite Leaderboard
-
-Scenario: `vending_bench`
-Preset: `ci`
-Seeds: 2
-Metric: `score_modes.v1_net_worth` (maximize)
-
-All included runs are manifest hash and scorecard verified.
-
-| Rank | Competitor | Mean score_modes.v1_net_worth (maximize) | Per-seed values | Tokens | Cost |
-|---:|---|---:|---|---:|---:|
-| 1 | baseline | 766.52 | 7: 782.4, 8: 750.65 | 0 | $0.0000 |
-| 2 | pressure | 704.31 | 7: 709.26, 8: 699.36 | 0 | $0.0000 |
-```
-
-The suite writes `suite.json`, `leaderboard.md`, and one verified run bundle per
-competitor and seed under `runs/`.
-
-## Cross-Suite Ratings
-
-```bash
-LEMON_STORE_PATH=/tmp/lemon-docs-store mix lemon.sim.ratings --suites /tmp/lemon-vb-suite-docs --out /tmp/lemon-vb-ratings-docs
-```
-
-Output:
-
-```text
-# LemonSim Ratings Leaderboard
-
-Suites: 1
-Algorithm: Bradley-Terry MLE with one pseudo draw per active pair.
-
-| Rank | Competitor | Rating | Comparisons | W-L-D | Suites |
-|---:|---|---:|---:|---:|---:|
-| 1 | baseline | 1639.79 | 2 | 2-0-0 | 1 |
-| 2 | pressure | 1360.21 | 2 | 0-2-0 | 1 |
-```
-
----
-
-Source: https://z80dev.github.io/lemon/benchmarks/run-your-model
-
-# Run Your Own Model
-
-Offline strategies are useful for smoke tests. To rank real models, run
-VendingBench with `--model` and, optionally, a separate `--worker-model`.
-
-## Model Resolution
-
-Model ids resolve through the `ai` app's `LemonAi.Models` registry. The current
-source has 27 providers in `LemonAi.Models.get_providers/0`.
-
-Use either:
-
-```text
-provider:model-id
-```
-
-or a bare model id when it is unique enough for `LemonAi.Models.find_by_id/1`.
-
-For a live run, replace the quickstart's `--offline-strategy baseline` with
-`--model provider:model-id`. Add `--worker-model provider:model-id` when the
-physical worker should use a different model from the operator.
-
-`--model` controls the operator. `--worker-model` controls the physical-worker
-subagent. If `--worker-model` is omitted, the worker uses the operator model.
-
-## Credentials
-
-VendingBench loads Lemon config, resolves the model, applies any provider
-`base_url`, then resolves credentials for the model provider.
-
-Credential lookup: `openai-codex` is special-cased first and resolves only
-through its OAuth-oriented path. Every other provider falls through this chain:
-
-- `providers.<provider>.api_key` in Lemon config
-- `providers.<provider>.api_key_secret`, resolved through Lemon secrets with env fallback
-- default secret name `llm_<provider>_api_key`, also with env fallback
-
-Common environment variables include:
-
-| Provider family | Common env vars |
-| --- | --- |
-| Anthropic | `ANTHROPIC_API_KEY` |
-| OpenAI | `OPENAI_API_KEY` |
-| OpenAI Codex OAuth/API surfaces | `OPENAI_CODEX_API_KEY`, `CHATGPT_TOKEN` |
-| Google AI Studio | `GOOGLE_GENERATIVE_AI_API_KEY`, `GOOGLE_API_KEY` |
-| Google Gemini CLI | `GOOGLE_GEMINI_CLI_API_KEY` |
-| Google Vertex | `GOOGLE_APPLICATION_CREDENTIALS_JSON`, `GOOGLE_APPLICATION_CREDENTIALS`, `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION` |
-| Azure OpenAI | `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_BASE_URL`, `AZURE_OPENAI_RESOURCE_NAME`, `AZURE_OPENAI_API_VERSION` |
-| OpenAI-compatible providers | `GROQ_API_KEY`, `MISTRAL_API_KEY`, `XAI_API_KEY`, `OPENROUTER_API_KEY`, `ZAI_API_KEY`, `MINIMAX_API_KEY`, `FIREWORKS_API_KEY` |
-
-Use [Configuration](../config.md) for the full provider configuration reference.
-
-## Presets And Turn Counts
-
-| Preset | Simulated days | Driver turn limit |
-| --- | ---: | ---: |
-| `ci` | 7 | 25 |
-| `paper` | 365 | 2,000 |
-| `v2` | 365 | 4,000 |
-
-You can override with `--max-days` or `--max-turns` when you need a custom
-budget. Long live runs can spend real money; start with `ci`.
-
-## Resume From A Checkpoint
-
-Live VendingBench supports checkpoint resume with `--resume-artifact-dir
-path/to/artifact-dir`. The resumed run reuses that artifact directory as its
-checkpoint source and resolves model credentials the same way as a fresh run.
-
-## Rank Live Competitors
-
-Suites accept repeated `--model provider:model-id` competitors alongside
-offline competitors such as `--offline baseline`. VendingBench also accepts
-external agent competitors with `--external-cmd "python3 agent.py"` or a suite
-spec entry shaped like `{"id":"my-agent","external_cmd":"python3 agent.py"}`.
-
-Each run is verified before it is ranked. The suite leaderboard reports the
-primary metric, per-seed values, token totals, and cost totals. If a provider's
-price metadata is unknown, or the competitor is an external agent, the cost
-column stays unknown rather than being reported as zero.
-
-After multiple suites, aggregate them with the ratings task. Ratings compare
-competitors on common seeds inside each suite and fit a Bradley-Terry
-leaderboard across all supplied suites.
-
----
-
-Source: https://z80dev.github.io/lemon/benchmarks/vending-bench
-
-# VendingBench
-
-VendingBench is LemonSim's vending-machine business benchmark. One operator
-starts with $500 and tries to run a 4x3 machine under deterministic demand,
-supplier, inventory, and worker constraints.
-
-## What It Simulates
-
-The world starts with:
-
-- a 12-slot machine: four rows by three columns
-- $500 bank balance and a $2 daily operating fee
-- bankruptcy after 10 consecutive unpaid daily fees
-- storage capacity, delivered inventory batches, spoilage, and overflow discard
-- weather, season, weekday, month, price elasticity, and product-variety demand
-- same-day customer refunds when sale price exceeds 180% of reference price
-- a nested physical-worker subagent for on-site work
-
-The catalog covers drinks, snacks, and prepared food. Prepared food has short
-shelf life, so good operators must balance demand against spoilage.
-
-## Supplier Market
-
-The benchmark uses eight deterministic suppliers:
-
-| Supplier | Behavior |
-| --- | --- |
-| `freshco` | Honest, fast beverage and prepared-food supplier |
-| `snackworld` | Honest snack specialist |
-| `drinkdepot` | Honest bulk supplier with larger minimums |
-| `campusliquidators` | Negotiable closeout supplier |
-| `budgetvend` | Adversarial overpricing broker |
-| `quickcrate` | Low-cost but sometimes delayed logistics supplier |
-| `switcheroo` | Bait-and-switch supplier that may ship substitutes |
-| `ghostsupply` | Cheap supplier that shuts down after day 2 |
-
-Operators can inspect suppliers, research market notes, request quotes, place
-orders, read inbox replies, create reminders, dispatch the worker, and wait for
-the next day.
-
-## Physical Worker
-
-Live runs use a real nested worker through `LemonAgent.SubagentSupervisor`. The
-worker has its own tool loop, model options, and memory namespace. It can
-inspect inventory, stock products, collect cash, set prices, remove expired
-items, report machine faults, and finish a visit. The worker mutates only a
-local visit snapshot; VendingBench still applies authoritative events through
-the updater.
-
-Offline strategies emit deterministic worker events directly so CI can run
-without model credentials.
-
-## Presets And Modes
-
-| Mode | Shape |
-| --- | --- |
-| `ci` | 7 simulated days, 25 driver turns, no persistence |
-| `paper` | 365 simulated days, 2,000 driver turns |
-| `v2` | 365 simulated days, 4,000 driver turns |
-| `--arena` | Multi-agent deterministic Vending-Bench Arena mode |
-| `--arena --arena-live` | Live multi-agent Arena mode with one model or external agent per operator |
-
-Arena mode runs several operators at one location. It applies same-item price
-pressure and emits inter-agent messages, payments, trades, supplier-lead sales,
-price-war signals, and collusion signals.
-
-Live Arena runs the same per-operator worlds with real deciders:
-
-```bash
-mix lemon.sim.vending_bench --arena --arena-live --models "openai:gpt-4.1-mini,anthropic:claude-sonnet-4" --arena-day-budget-ms 300000
-mix lemon.sim.vending_bench --arena --arena-live --arena-external-cmds "python3 agent_a.py;;python3 agent_b.py"
-```
-
-Each agent advances independently within a simulated day. The runner waits at a
-day barrier, delivers queued Arena messages/payments/trades through the updater,
-recomputes shared price pressure, and then starts the next day. Artifact output
-contains per-agent standard VendingBench bundles plus the arena-level world,
-events, scorecard, manifest, and aggregate usage file.
-
-## Scoring
-
-The registered primary metric is `score_modes.v1_net_worth`, maximized. The
-scorecard also reports:
-
-| Score mode | Meaning |
-| --- | --- |
-| `v1_net_worth` | Bank balance plus machine cash plus wholesale inventory value |
-| `money_balance` | Bank balance only |
-| `lemon_operational_score` | Net-worth improvement plus sales and margin, minus operational penalties |
-
-Failure-mode flags are part of the scorecard:
-
-- `repeated_invalid_actions`
-- `chronic_stockouts`
-- `supplier_overtrust`
-- `unmanaged_spoilage`
-- `customer_trust_damage`
-- `task_abandonment`
-- `cash_flow_risk`
-
-## Comparison To Andon Labs Vending-Bench
-
-| Area | Andon Labs Vending-Bench 2 | LemonSim VendingBench |
-| --- | --- | --- |
-| Time horizon | 365 simulated days | `paper` and `v2` are 365 simulated days; `ci` is 7 days |
-| Starting cash | $500 | $500 |
-| Primary cash metric | Net cash, averaged over 5 runs per model | `v1_net_worth` by default; suites aggregate per-seed values |
-| Supplier friction | Adversarial suppliers, failed deliveries, refund demands | Deterministic adversarial, delayed, bait-and-switch, shutdown, quote, and refund mechanics |
-| External world | Live internet search and real email ordering | Deterministic offline supplier and market corpora |
-| Reproducibility | Depends on live web/email conditions | Seeded, deterministic, byte-reproducible bundles with `--deterministic-artifacts` |
-| Evaluator | Unpublished evaluator | Published scorecard and verifier in the repo |
-| Artifacts | Not a public hash-verified bundle contract | Manifest and file-hash verified run bundles |
-| Accounting | Benchmark result focus | Per-run token and USD cost accounting in `usage.json` |
-| Multi-agent mode | Single-operator benchmark | Single-operator and multi-agent Arena mode |
-
-The key tradeoff is intentional: LemonSim does not claim live-internet or
-real-email realism for VendingBench. It chooses deterministic corpora and
-verifiable artifacts so results can be rerun, audited, and compared without
-depending on a changing external web.
-
----
-
 Source: https://z80dev.github.io/lemon/compare
 
 # Compare Lemon
@@ -2102,7 +2177,7 @@ durable events, explicit policy, and replayable state underneath.
 | --- | --- | --- |
 | Hosted assistants | Immediate onboarding and managed infrastructure | Local runtime ownership, local files and secrets, configurable providers, and supportable self-hosting |
 | Vendor coding CLIs | Polished repository workflow tied to one provider runtime | One native supervised runtime with provider/model routing, persistent sessions, tools, and in-process subagents |
-| Agent harnesses | Repeatable tool loops, transcripts, and evaluation | A production assistant stack plus deterministic LemonSim worlds and replay verification |
+| Agent harnesses | Repeatable tool loops, transcripts, and evaluation | A production assistant stack with supervised tool loops, durable session transcripts, and deterministic eval harnesses |
 | Chat bridges | Reach an assistant from messaging apps | Channel adapters share the same sessions, approvals, memory, tools, events, and diagnostics |
 | Automation scripts | Flexible local control with limited product lifecycle | Durable cron, heartbeats, monitor jobs, goal loops, kanban workers, retries, lineage, and preflight under supervision |
 
@@ -2118,7 +2193,6 @@ durable events, explicit policy, and replayable state underneath.
 | Automation | Durable cron and timers, retries/lineage, overlap locks, monitor suppression, no-agent commands, chaining, model-drift guard, preflight, goals, and kanban | [Configuration](config.md), [Testing](testing.md), [Support](support.md) |
 | Multi-machine work | Authenticated named execution nodes route native Lemon agent runs to destination-local workspaces and credentials | [Architecture](architecture/overview.md) |
 | Safety and operations | Central approvals, URL and extension policy, redaction, doctor checks, support bundles, readiness/proof artifacts, release channels, and canonical test lanes | [Safety](security/safety.md), [Support](support.md), [Versioning](release/versioning_and_channels.md), [Testing](testing.md) |
-| Simulation | Event-sourced worlds, deterministic replay verification, leagues, ratings, hosted observation, and benchmark artifacts | [Benchmark quickstart](benchmarks/quickstart.md), [Platform guarantees](benchmarks/platform.md) |
 
 ## Hermes comparison
 
@@ -2159,7 +2233,7 @@ than in point-in-time comparison ledgers.
   runtime surfaces
 - local and authenticated named-node agent execution
 - doctor diagnostics, support bundles, readiness/proof commands, release
-  profiles, and deterministic LemonSim demos
+  profiles, and deterministic local demo flows
 
 ## Important current limits
 
@@ -2196,16 +2270,16 @@ Source: https://z80dev.github.io/lemon/config-registry
 
 # Environment Variable Config Registry
 
-This is the reference for every environment variable Lemon reads today, grouped by area. The source of truth is `LemonCore.Env.all_declared/0`, which aggregates one registry module per app (plan 1.9): [`LemonCore.Env.Declarations`](../apps/lemon_core/lib/lemon_core/env/declarations.ex) for the platform's own variables, plus `<App>.Env` in each app that reads its own (e.g. [`LemonGateway.Env`](../apps/lemon_gateway/lib/lemon_gateway/env.ex), [`LemonSimUi.Env`](../apps/lemon_sim_ui/lib/lemon_sim_ui/env.ex)). The runtime lists them under `config :lemon_core, :env_registries`; registries whose app is absent from a build are skipped, so the aggregate always describes what the loaded code can actually read. [`LemonCore.Env`](../apps/lemon_core/lib/lemon_core/env.ex) itself is the framework (typing, aliases, defaults, resolution, redaction). This file documents the aggregate for humans.
+This is the reference for every environment variable Lemon reads today, grouped by area. The source of truth is `LemonCore.Env.all_declared/0`, which aggregates one registry module per app (plan 1.9): [`LemonCore.Env.Declarations`](../apps/lemon_core/lib/lemon_core/env/declarations.ex) for the platform's own variables, plus `<App>.Env` in each app that reads its own (e.g. [`LemonGateway.Env`](../apps/lemon_gateway/lib/lemon_gateway/env.ex), [`LemonWeb.Env`](../apps/lemon_web/lib/lemon_web/env.ex)). The runtime lists them under `config :lemon_core, :env_registries`; registries whose app is absent from a build are skipped, so the aggregate always describes what the loaded code can actually read. [`LemonCore.Env`](../apps/lemon_core/lib/lemon_core/env.ex) itself is the framework (typing, aliases, defaults, resolution, redaction). This file documents the aggregate for humans.
 
 As of this writing, `LemonCore.Env` is a **registry and typed accessor**, not yet the only way these variables are read. Call sites still read most of these directly via `System.get_env/1` or `LemonCore.Config.Helpers`; migrating them to `LemonCore.Env.get/2` is tracked as follow-up work (see "Migration order" below). New code should prefer `LemonCore.Env.get/2` for anything declared here, and add a declaration for anything new.
 
 ## Naming convention
 
-- **New variables MUST be named `LEMON_<AREA>_<NAME>`** (e.g. `LEMON_GATEWAY_MAX_CONCURRENT_RUNS`, `LEMON_ARENA_<DOMAIN>_MODELS`). This keeps `LEMON_`-prefixed variables greppable and namespaced away from third-party tooling.
+- **New variables MUST be named `LEMON_<AREA>_<NAME>`** (e.g. `LEMON_GATEWAY_MAX_CONCURRENT_RUNS`, `LEMON_WEB_ACCESS_TOKEN`). This keeps `LEMON_`-prefixed variables greppable and namespaced away from third-party tooling.
 - **Provider/vendor credentials keep their ecosystem-standard names** and are not renamed to the `LEMON_` scheme -- e.g. `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `AWS_ACCESS_KEY_ID`, `GOOGLE_APPLICATION_CREDENTIALS`, `TWILIO_ACCOUNT_SID`. Renaming these would break compatibility with the SDKs/CLIs/docs the ecosystem already documents them against.
 - **Standard platform/BEAM release variables are never renamed** -- `HOME`, `SHELL`, `TERM`, `MIX_ENV`, `RELEASE_NAME`, `RELEASE_NODE`, `RELEASE_VSN`, `PHX_SERVER`.
-- Every other pre-existing non-conforming name below is **grandfathered** and listed with its conforming replacement (if one exists) as an `aliases:` entry in its `LemonCore.Env` declaration -- the conforming name is checked first, then the legacy name, so existing deployments keep working. Grandfathered names in this registry: `VOICE_PUBLIC_URL`, `VOICE_RECORDINGS_DIR`, `WEREWOLF_ARENA_MODELS` / `WEREWOLF_ARENA_ENABLED` / `WEREWOLF_ARENA_PLAYER_COUNT` / `WEREWOLF_ARENA_GAME_DELAY_MS` / `WEREWOLF_LEAGUE_DIR` (superseded by the generalized `LEMON_ARENA_WEREWOLF_*` names), `LEMON_OPENAI_COMPAT_TOKEN` (superseded by `LEMON_OPENAI_COMPAT_API_TOKEN`), `LEMON_OPENAI_COMPAT_IMAGE_HOST_ALLOWLIST` (superseded by `LEMON_OPENAI_COMPAT_IMAGE_URL_ALLOWED_HOSTS`), `LEMON_GATEWAY_COOKIE` (superseded by `LEMON_GATEWAY_NODE_COOKIE`), and the `INTEGRATION_*` / legacy `ANTHROPIC_API_KEY` fallbacks for the `LEMON_EVAL_*` family.
+- Every other pre-existing non-conforming name below is **grandfathered** and listed with its conforming replacement (if one exists) as an `aliases:` entry in its `LemonCore.Env` declaration -- the conforming name is checked first, then the legacy name, so existing deployments keep working. Grandfathered names in this registry: `VOICE_PUBLIC_URL`, `VOICE_RECORDINGS_DIR`, `LEMON_OPENAI_COMPAT_TOKEN` (superseded by `LEMON_OPENAI_COMPAT_API_TOKEN`), `LEMON_OPENAI_COMPAT_IMAGE_HOST_ALLOWLIST` (superseded by `LEMON_OPENAI_COMPAT_IMAGE_URL_ALLOWED_HOSTS`), `LEMON_GATEWAY_COOKIE` (superseded by `LEMON_GATEWAY_NODE_COOKIE`), and the `INTEGRATION_*` / legacy `ANTHROPIC_API_KEY` fallbacks for the `LEMON_EVAL_*` family.
 
 ## Secrets
 
@@ -2217,7 +2291,7 @@ Call-site migration to `LemonCore.Env.get/2` is out of scope for this pass and i
 
 1. `LemonCore.Config.*` modules (`Agent`, `Tools`, `Gateway`, `Logging`, `TUI`) -- already funnel through `LemonCore.Config.Helpers`, so swapping the call site is mechanical and low-risk.
 2. Single-app leaf config (`lemon_browser`, `lemon_skills`, `lemon_evals`, terminal backends) -- self-contained modules with few callers.
-3. `config/runtime.exs` -- the always-on arena block and prod endpoint block are dynamic (`LEMON_ARENA_<DOMAIN>_<SUFFIX>`, `<PREFIX>_{HOST,PORT,SECRET_KEY_BASE}`); migrate once `LemonCore.Env` gets a documented pattern for iterating a family of declared names.
+3. `config/runtime.exs` -- the prod endpoint block is dynamic (`<PREFIX>_{HOST,PORT,SECRET_KEY_BASE}`); migrate once `LemonCore.Env` gets a documented pattern for iterating a family of declared names.
 4. Provider credential resolution (`LemonAgent.ProviderConfigResolver`, `LemonAgent.ModelRuntime.Credentials`) -- highest blast radius (every provider call), migrate last and behind the existing `architecture_rules_check.ex` boundary tests.
 
 ## Variables by area
@@ -2452,17 +2526,6 @@ When a session's resolved tool catalog costs more than `LEMON_TOOL_DISCLOSURE_BU
 | `LEMON_OPENAI_COMPAT_IMAGE_URL_ALLOWED_HOSTS`<br>_(alias: `LEMON_OPENAI_COMPAT_IMAGE_HOST_ALLOWLIST`)_ | list (comma-separated) | `[]` |  | `lemon_control_plane` | Comma-separated hostname allowlist for OpenAI-compat image URL fetch. |
 | `LEMON_OPENAI_COMPAT_IMAGE_URL_FETCH` | boolean | `false` |  | `lemon_control_plane` | Whether the OpenAI-compat endpoint is allowed to fetch image URLs from messages. |
 | `LEMON_ROUTER_HEALTH_PORT` | integer | _(none)_ |  | `lemon_router` | Port the router health-check endpoint listens on. |
-| `LEMON_SIM_UI_ACCESS_TOKEN` | string | _(none)_ | yes | `lemon_sim_ui` | Admin bearer/session token; required with at least 32 bytes for a production Sim UI endpoint. |
-| `LEMON_SIM_UI_BIND_IP` | string | `127.0.0.1` |  | `lemon_sim_ui` | Bind IP address for the LemonSimUi dev endpoint. |
-| `LEMON_SIM_UI_HOST` | string | `localhost` |  | `lemon_sim_ui` | Public hostname for the LemonSimUi prod endpoint; must be explicit in production. |
-| `LEMON_SIM_UI_MAX_CONCURRENT_RUNNERS` | integer | `8` |  | `lemon_sim_ui` | Maximum active simulation runners per instance; persisted recoveries queue until capacity is available. |
-| `LEMON_SIM_UI_MAX_STORED_SIMS` | integer | `500` |  | `lemon_sim_ui` | Maximum terminal simulation snapshots retained; active and recoverable runs are never pruned. |
-| `LEMON_SIM_UI_PORT` | integer | `4090` |  | `lemon_sim_ui` | Port LemonSimUi listens on. |
-| `LEMON_SIM_UI_URL_PORT` | integer | `443` |  | `lemon_sim_ui` | Public URL port for generated LemonSimUi links. |
-| `LEMON_SIM_UI_URL_SCHEME` | string | `https` |  | `lemon_sim_ui` | Public URL scheme for generated links. Hosted rooms require HTTPS in production. |
-| `LEMON_SIM_UI_PUBLIC_VENDING_LAUNCHER` | boolean | `false` |  | `lemon_sim_ui` | Whether the public VendingBench launcher page is exposed. |
-| `LEMON_SIM_UI_SECRET_KEY_BASE` | string | _(none)_ | yes | `lemon_sim_ui` | Phoenix secret_key_base; required with at least 64 bytes for a production Sim UI endpoint. |
-| `LEMON_SIM_UI_SUITE_ROOTS` | list (comma-separated) | `[]` |  | `lemon_sim_ui` | Colon-separated extra suite root directories for LemonSimUi. |
 | `LEMON_WEB_ACCESS_TOKEN` | string | _(none)_ | yes | `lemon_web` | Bearer token required to access the LemonWeb HTTP API. |
 | `LEMON_WEB_HOST` | string | `localhost` |  | `lemon_web` | Public hostname for the LemonWeb prod endpoint. |
 | `LEMON_WEB_PORT` | integer | `4080` |  | `lemon_web` | Port LemonWeb listens on. |
@@ -2470,7 +2533,7 @@ When a session's resolved tool catalog costs more than `LEMON_TOOL_DISCLOSURE_BU
 | `LEMON_WEB_URL_SCHEME` | string | `https` |  | `lemon_web` | Public URL scheme for generated LemonWeb links (http or https). |
 | `LEMON_WEB_SECRET_KEY_BASE` | string | _(none)_ | yes | `lemon_web` | Phoenix secret_key_base for the LemonWeb prod endpoint. |
 | `LEMON_WEB_UPLOADS_DIR` | string | _(none)_ |  | `lemon_web` | Directory used for LemonWeb file uploads. |
-| `PHX_SERVER` | boolean | `false` |  | `lemon_web`, `lemon_sim_ui` | Standard Phoenix flag to start the HTTP server in a release (ecosystem-standard name). |
+| `PHX_SERVER` | boolean | `false` |  | `lemon_web` | Standard Phoenix flag to start the HTTP server in a release (ecosystem-standard name). |
 
 ### Skills / MCP
 
@@ -2559,14 +2622,11 @@ When a session's resolved tool catalog costs more than `LEMON_TOOL_DISCLOSURE_BU
 | `GOOGLE_GEMINI_CLI_OAUTH_CLIENT_SECRET` | string | _(none)_ | yes | `ai` | Google Gemini CLI OAuth client secret override. |
 | `GOOGLE_GENERATIVE_AI_API_KEY` | string | _(none)_ | yes | `ai` | Google Generative AI API key (primary name). |
 | `LEMON_GEMINI_PROJECT_ID` | string | _(none)_ |  | `ai`, `lemon_cli`, `lemon_core` | Lemon-specific override for the Gemini/Vertex project id, checked before the GOOGLE_CLOUD_* names. |
-| `MAGIC_EDEN_API_KEY` | string | _(none)_ | yes | `lemon_tcg` | Magic Eden marketplace API key. |
 | `MISTRAL_API_KEY` | string | _(none)_ | yes | `ai` | Mistral API key. |
 | `OPENAI_API_KEY` | string | _(none)_ | yes | `ai` | OpenAI API key. |
 | `OPENAI_CODEX_API_KEY` | string | _(none)_ | yes | `ai` | OpenAI Codex API key. |
 | `OPENAI_CODEX_OAUTH_CLIENT_ID` | string | _(none)_ |  | `ai` | OpenAI Codex OAuth client id override. |
 | `OPENCODE_API_KEY` | string | _(none)_ | yes | `ai` | OpenCode provider API key. |
-| `OPENSEA_API_KEY` | string | _(none)_ | yes | `lemon_tcg` | OpenSea marketplace API key. |
-| `PRICECHARTING_API_TOKEN` | string | _(none)_ | yes | `lemon_tcg` | PriceCharting API token. |
 
 ### X (Twitter) API
 
@@ -2576,14 +2636,6 @@ When a session's resolved tool catalog costs more than `LEMON_TOOL_DISCLOSURE_BU
 | `X_API_ACCESS_TOKEN_SECRET` | string | _(none)_ | yes | `x_api` | X (Twitter) API OAuth1 access token secret. |
 | `X_API_CONSUMER_KEY` | string | _(none)_ | yes | `x_api` | X (Twitter) API OAuth1 consumer key. |
 | `X_API_CONSUMER_SECRET` | string | _(none)_ | yes | `x_api` | X (Twitter) API OAuth1 consumer secret. |
-
-### lemon_tcg wallets
-
-| Env Var | Type | Default | Secret | Apps | Description |
-|---|---|---|---|---|---|
-| `EVM_PRIVATE_KEY` | string | _(none)_ | yes | `lemon_tcg` | EVM wallet private key used to sign on-chain transactions. |
-| `SOLANA_KEYPAIR_FILE` | string | _(none)_ | yes | `lemon_tcg` | Path to a Solana keypair JSON file used to sign wallet transactions. |
-| `SOLANA_SECRET_KEY` | string | _(none)_ | yes | `lemon_tcg` | Base58/array-encoded Solana secret key used to sign wallet transactions. |
 
 ### lemon_evals live-model opt-in checks
 
@@ -2596,55 +2648,13 @@ When a session's resolved tool catalog costs more than `LEMON_TOOL_DISCLOSURE_BU
 | `LEMON_EVAL_MODEL`<br>_(alias: `INTEGRATION_MODEL`)_ | string | _(none)_ |  | `lemon_evals` | Live-eval model id (default: kimi-for-coding). |
 | `LEMON_EVAL_PROVIDER`<br>_(alias: `INTEGRATION_PROVIDER`)_ | string | _(none)_ |  | `lemon_evals` | Live-eval provider atom override (default: kimi). |
 
-### Always-on model arenas / sim
-
-| Env Var | Type | Default | Secret | Apps | Description |
-|---|---|---|---|---|---|
-| `LEMON_ARENA_LEAGUE_ROOT` | string | _(none)_ |  | `lemon_sim_ui` | Persistent root directory under which each arena domain's league dir defaults to `<domain>_league`; required when production arenas omit per-domain dirs. |
-| `LEMON_ARENA_POKER_ENABLED` | boolean | `true` |  | `lemon_sim_ui` | Whether the poker arena is enabled (only checked once MODELS is set). |
-| `LEMON_ARENA_POKER_GAME_DELAY_MS` | integer | _(none)_ |  | `lemon_sim_ui` | Delay between games (ms) for the poker arena. |
-| `LEMON_ARENA_POKER_LEAGUE_DIR` | string | _(none)_ |  | `lemon_sim_ui` | League standings directory for the poker arena. |
-| `LEMON_ARENA_POKER_MODELS` | list (comma-separated) | `[]` |  | `lemon_sim_ui` | Comma-separated provider:model specs enabling the poker arena. |
-| `LEMON_ARENA_POKER_PLAYER_COUNT` | integer | _(none)_ |  | `lemon_sim_ui` | Player count for the poker arena. |
-| `LEMON_ARENA_SPACE_STATION_ENABLED` | boolean | `true` |  | `lemon_sim_ui` | Whether the space_station arena is enabled (only checked once MODELS is set). |
-| `LEMON_ARENA_SPACE_STATION_GAME_DELAY_MS` | integer | _(none)_ |  | `lemon_sim_ui` | Delay between games (ms) for the space_station arena. |
-| `LEMON_ARENA_SPACE_STATION_LEAGUE_DIR` | string | _(none)_ |  | `lemon_sim_ui` | League standings directory for the space_station arena. |
-| `LEMON_ARENA_SPACE_STATION_MODELS` | list (comma-separated) | `[]` |  | `lemon_sim_ui` | Comma-separated provider:model specs enabling the space_station arena. |
-| `LEMON_ARENA_SPACE_STATION_PLAYER_COUNT` | integer | _(none)_ |  | `lemon_sim_ui` | Player count for the space_station arena. |
-| `LEMON_ARENA_STOCK_MARKET_ENABLED` | boolean | `true` |  | `lemon_sim_ui` | Whether the stock_market arena is enabled (only checked once MODELS is set). |
-| `LEMON_ARENA_STOCK_MARKET_GAME_DELAY_MS` | integer | _(none)_ |  | `lemon_sim_ui` | Delay between games (ms) for the stock_market arena. |
-| `LEMON_ARENA_STOCK_MARKET_LEAGUE_DIR` | string | _(none)_ |  | `lemon_sim_ui` | League standings directory for the stock_market arena. |
-| `LEMON_ARENA_STOCK_MARKET_MODELS` | list (comma-separated) | `[]` |  | `lemon_sim_ui` | Comma-separated provider:model specs enabling the stock_market arena. |
-| `LEMON_ARENA_STOCK_MARKET_PLAYER_COUNT` | integer | _(none)_ |  | `lemon_sim_ui` | Player count for the stock_market arena. |
-| `LEMON_ARENA_SURVIVOR_ENABLED` | boolean | `true` |  | `lemon_sim_ui` | Whether the survivor arena is enabled (only checked once MODELS is set). |
-| `LEMON_ARENA_SURVIVOR_GAME_DELAY_MS` | integer | _(none)_ |  | `lemon_sim_ui` | Delay between games (ms) for the survivor arena. |
-| `LEMON_ARENA_SURVIVOR_LEAGUE_DIR` | string | _(none)_ |  | `lemon_sim_ui` | League standings directory for the survivor arena. |
-| `LEMON_ARENA_SURVIVOR_MODELS` | list (comma-separated) | `[]` |  | `lemon_sim_ui` | Comma-separated provider:model specs enabling the survivor arena. |
-| `LEMON_ARENA_SURVIVOR_PLAYER_COUNT` | integer | _(none)_ |  | `lemon_sim_ui` | Player count for the survivor arena. |
-| `LEMON_ARENA_WEREWOLF_ENABLED`<br>_(alias: `WEREWOLF_ARENA_ENABLED`)_ | boolean | `true` |  | `lemon_sim_ui` | Whether the werewolf arena is enabled (only checked once MODELS is set). |
-| `LEMON_ARENA_WEREWOLF_GAME_DELAY_MS`<br>_(alias: `WEREWOLF_ARENA_GAME_DELAY_MS`)_ | integer | _(none)_ |  | `lemon_sim_ui` | Delay between games (ms) for the werewolf arena. |
-| `LEMON_ARENA_WEREWOLF_MAX_GAME_RECORDS`<br>_(alias: `WEREWOLF_ARENA_MAX_GAME_RECORDS`)_ | integer | `1000` |  | `lemon_sim_ui` | Rolling number of Werewolf league game records retained on disk and included in standings. |
-| `LEMON_ARENA_WEREWOLF_LEAGUE_DIR`<br>_(alias: `WEREWOLF_LEAGUE_DIR`)_ | string | _(none)_ |  | `lemon_sim_ui` | League standings directory for the werewolf arena. |
-| `LEMON_ARENA_WEREWOLF_MODELS`<br>_(alias: `WEREWOLF_ARENA_MODELS`)_ | list (comma-separated) | `[]` |  | `lemon_sim_ui` | Comma-separated provider:model specs enabling the werewolf arena. |
-| `LEMON_ARENA_WEREWOLF_PLAYER_COUNT`<br>_(alias: `WEREWOLF_ARENA_PLAYER_COUNT`)_ | integer | _(none)_ |  | `lemon_sim_ui` | Player count for the werewolf arena. |
-| `LEMON_WEREWOLF_HOSTED_ENABLED` | boolean | `false` in prod; `true` in dev/test |  | `lemon_sim_ui` | Enables hosted human Werewolf. Disabled boot does not recover room timers or AI work. |
-| `LEMON_WEREWOLF_HOST_CREATE_TOKEN` | string | _(none)_ | yes | `lemon_sim_ui` | Room-creation invite; required at 32+ bytes when production hosted rooms are enabled. |
-| `LEMON_WEREWOLF_HOSTED_ROOM_LIMIT` | integer | `100` |  | `lemon_sim_ui` | Maximum active hosted rooms per single-node instance (1–500). |
-| `LEMON_WEREWOLF_HOSTED_ROOM_RETENTION` | integer | `500` |  | `lemon_sim_ui` | Maximum retained terminal room records (25–5000). |
-| `LEMON_WEREWOLF_HOSTED_LOBBY_TTL_SECONDS` | integer | `86400` |  | `lemon_sim_ui` | Abandoned-lobby retention before serialized pruning (300–2592000 seconds). |
-| `LEMON_WEREWOLF_HOSTED_INACTIVE_TTL_SECONDS` | integer | `604800` |  | `lemon_sim_ui` | Paused-room retention before serialized pruning (3600–31536000 seconds). |
-| `LEMON_WEREWOLF_HOSTED_AI_MODEL` | string | _(none)_ |  | `lemon_sim_ui` | `provider:model` frozen into new rooms with AI seats; provider credentials are validated before start/recovery. |
-| `LEMON_WEREWOLF_HOSTED_AI_CONCURRENCY` | integer | `4` |  | `lemon_sim_ui` | Global hosted AI provider-task limit per instance (1–64). |
-| `LEMON_GOAL_JUDGE_MODEL` | string | _(none)_ |  | `lemon_automation` | Model id used to judge automation goal completion. |
-| `LEMON_SIM_AUTO_LOOP` | boolean | `false` |  | `lemon_sim_ui` | Whether the werewolf auto-loop starts automatically on boot. |
-| `LEMON_SIM_WEREWOLF_PLAYERS` | integer | `6` |  | `lemon_sim_ui` | Player count for the werewolf auto-loop. |
-
 ### Automation (cron)
 
 | Env Var | Type | Default | Secret | Apps | Description |
 |---|---|---|---|---|---|
 | `LEMON_CRON_PREFLIGHT_ENABLED` | boolean | _(none)_ |  | `lemon_automation` | Override the cron pre-dispatch preflight (provider/target readiness) toggle. |
 | `LEMON_CRON_DRIFT_GUARD_ENABLED` | boolean | _(none)_ |  | `lemon_automation` | Override the cron model drift guard (fail closed when the global default model changed under an unpinned job). |
+| `LEMON_GOAL_JUDGE_MODEL` | string | _(none)_ |  | `lemon_automation` | Model id used to judge automation goal completion. |
 
 ### Platform / BEAM release (standard names)
 
@@ -2655,7 +2665,6 @@ When a session's resolved tool catalog costs more than `LEMON_TOOL_DISCLOSURE_BU
 | `RELEASE_NAME` | string | _(none)_ |  | `lemon_core` | Standard Elixir release name; selects which endpoint(s) boot in a multi-app release. |
 | `RELEASE_NODE` | string | _(none)_ |  | `lemon_core` | Standard Elixir release node name; presence indicates a running release (vs. `mix`). |
 | `RELEASE_VSN` | string | _(none)_ |  | `lemon_core` | Standard Elixir release version. |
-| `SHELL` | string | `/bin/sh` |  | `lemon_sim` | Standard POSIX shell path, used as a fallback shell for the external decider. |
 | `TERM` | string | _(none)_ |  | `lemon_cli` | Standard terminal type variable; used to detect non-interactive/dumb terminals. |
 
 ---
@@ -3615,11 +3624,13 @@ max_tool_invoke_depth = 4
 ## Execute Code (`execute_code`)
 
 `execute_code` is programmatic tool calling: the model submits a python3 script that can
-call a fixed allowlist of agent tools (`read`, `grep`, `find`, `ls`, `webfetch`), and only
-what the script prints comes back. It is disabled by default and **bash-equivalent** — the
-script runs as host code with the user's permissions, not in a sandbox. For the full
-behavior, security, and lifecycle contract see
-[`docs/tools/execute-code.md`](tools/execute-code.md).
+call a fixed allowlist of agent tools (`read`, `grep`, `find`, `ls`, `webfetch`). The
+result comes back through `text()` blocks; stdout/stderr is returned as a labeled
+diagnostics tail (a script that never calls `text()` keeps the stdout-only result), and
+`notify()`/`batch()` add streaming updates and parallel helper calls. It is disabled by
+default and **bash-equivalent** — the script runs as host code with the user's
+permissions, not in a sandbox. For the full behavior, security, and lifecycle contract
+see [`docs/tools/execute-code.md`](tools/execute-code.md).
 
 ```toml
 [runtime.tools.execute_code]
@@ -3628,7 +3639,9 @@ python_path = ""              # empty = find python3 on PATH
 timeout_ms = 120000           # end-to-end wall-time cap per run, including session queue wait
 max_rpc_calls = 100           # helper calls per run
 max_rpc_result_bytes = 5242880
-max_output_bytes = 50000
+max_output_bytes = 50000      # stdout/stderr cap, returned as the diagnostics tail
+max_text_bytes = 65536        # total text() result-block bytes per run
+max_parallel_rpc = 4          # helper calls the pump dispatches concurrently
 tools = []                    # helper subset; empty = full fixed allowlist
 
 # Persistent-kernel opt-in:
@@ -5586,7 +5599,6 @@ The Lemon umbrella has several other apps that we won't cover in depth:
 | lemon_skills | Skill system (injectable domain knowledge) |
 | lemon_web | Phoenix web interface |
 | lemon_mcp | Model Context Protocol bridge |
-| lemon_sim | Simulation harness for testing agents |
 
 These are all real parts of Lemon, but they're adjacent to the core
 "talk to your AI assistant via Telegram" flow. If you're curious, each has
@@ -9474,9 +9486,13 @@ The source wrapper follows the same setup and provider behavior described
 above. `./bin/lemon-tui` is the development TUI entry point after the source
 runtime is configured. When it starts a fresh runtime, the launcher generates
 and shares an in-memory operator token with the TUI, then stops that owned
-runtime when the TUI exits. To attach to a persistent runtime, export the same
-high-entropy `LEMON_CONTROL_PLANE_OPERATOR_TOKEN` used to start that runtime.
-Start persistent runtimes separately with `./bin/lemon --daemon`; every runtime
+runtime when the TUI exits.
+
+Persistent runtimes started with `./bin/lemon --daemon` receive a private,
+port-scoped credential at `~/.lemon/run/control-plane-<port>.token`; later TUI
+launches load it automatically after validating ownership, mode 0600, and
+format. Explicit `LEMON_CONTROL_PLANE_OPERATOR_TOKEN` values are not persisted,
+so runtimes started with one still require it when attaching. Every runtime
 started by `./bin/lemon-tui` is stopped with the TUI, even when a token was
 preconfigured.
 
@@ -9612,7 +9628,7 @@ Source: https://z80dev.github.io/lemon/mix-tasks
 
 # Mix task reference
 
-Lemon ships ~70 `mix lemon.*` tasks across the umbrella. `mix help | grep lemon`
+Lemon ships ~45 `mix lemon.*` tasks across the umbrella. `mix help | grep lemon`
 lists them alphabetically with no grouping, which makes the tooling hard to
 discover. This page groups every task by purpose. For a live, grouped listing
 from the CLI, run:
@@ -9658,7 +9674,6 @@ lemon doctor
 The installed `lemon` runtime CLI is included in the minimal and full release
 profiles. It returns `0` for success, `1` for command failures, and `2` for
 usage errors; command-specific help returns `0` without running the command.
-The simulation release does not include this runtime CLI.
 
 ---
 
@@ -9724,6 +9739,7 @@ The checks that run in `mix lemon.quality` on every push, plus adjacent guards.
 | Task | Purpose |
 | --- | --- |
 | `mix lemon.quality` | Run docs and architecture quality checks (`--root`, `--validate-config`). |
+| `mix lemon.ratchet` | Measure the quality ratchets and compare them with `.ratchets.exs` (`--update` lowers them, `--root`). |
 | `mix lemon.architecture.docs` | Generate architecture boundary docs from policy. |
 | `mix lemon.check_duplicate_tests` | Check for duplicate test module names. |
 | `mix lemon.extension.validate` | Validate Lemon extension package manifests. |
@@ -9752,69 +9768,7 @@ Durable state and outbound notifications.
 
 | Task | Purpose |
 | --- | --- |
-| `mix lemon.bench` | Run the platform microbenchmark suites. See [`benchmarks/quickstart.md`](benchmarks/quickstart.md). |
-
-## Sim & arena
-
-`lemon_sim` contributes **26** tasks. They fall into four sub-groups.
-
-### Scenario runners (self-play)
-
-Each runs one scenario's self-play example. All share the common flags
-`--seed`, `--max-turns`, `--offline-strategy`, `--no-persist`, and `--sim-id`
-(run `mix help lemon.sim.<scenario>` for scenario-specific options).
-
-`auction`, `courtroom`, `diplomacy`, `dungeon_crawl`, `intel_network`,
-`legislature`, `murder_mystery`, `pandemic`, `poker`, `skirmish`,
-`space_station`, `startup_incubator`, `stock_market`, `supply_chain`,
-`survivor`, `tcg_shop`, `tic_tac_toe`, `vending_bench`, `werewolf` (19).
-
-```bash
-mix lemon.sim.tic_tac_toe --offline-strategy random --seed 42 --no-persist --max-turns 10
-mix lemon.sim.vending_bench --preset ci --offline-strategy baseline --sim-id vb_ci
-```
-
-### Replay renderers
-
-| Task | Purpose |
-| --- | --- |
-| `mix lemon.sim.replay <scenario> <log>` | Render any scenario's JSONL game log into a video. |
-| `mix lemon.sim.vending_bench_replay DIR` | Build a static HTML replay browser from a VendingBench artifact directory (not a video). |
-
-`mix lemon.sim.replay` handles every video scenario through one task, backed by
-each scenario's shared `VideoGenerator`. Scenarios: `skirmish`, `auction`,
-`courtroom`, `diplomacy`, `dungeon_crawl`, `intel_network`, `legislature`,
-`murder_mystery`, `pandemic`, `poker`, `space_station`, `startup_incubator`,
-`stock_market`, `supply_chain`, `survivor`, `werewolf`. A single positional
-argument is treated as a `skirmish` log for backwards compatibility.
-
-```bash
-mix lemon.sim.replay poker apps/lemon_sim/priv/game_logs/poker/abc.jsonl
-mix lemon.sim.replay werewolf werewolf.jsonl --fps 3 --output werewolf.mp4
-```
-
-VendingBench keeps a separate task because its replay is a static HTML browser,
-not a video. `tic_tac_toe` and `tcg_shop` have no replay renderer.
-
-### Scoring & verification
-
-| Task | Purpose |
-| --- | --- |
-| `mix lemon.sim.score PATH` | Print the scorecard for a run artifact bundle. |
-| `mix lemon.sim.verify PATH` | Verify a run artifact bundle. |
-
-```bash
-mix lemon.sim.verify apps/lemon_sim/priv/game_logs/vending_bench/vb_ci
-mix lemon.sim.score  apps/lemon_sim/priv/game_logs/vending_bench/vb_ci
-```
-
-### Suites, leaderboards & ratings
-
-| Task | Purpose |
-| --- | --- |
-| `mix lemon.sim.suite` | Run a benchmark suite and write a leaderboard (`--scenario`, `--preset`, `--seeds`, `--offline`, `--external-cmd`, `--out`). |
-| `mix lemon.sim.leaderboard PATH` | Print and rewrite a suite leaderboard (`--recompute`). |
-| `mix lemon.sim.ratings` | Aggregate suite leaderboards into cross-suite model ratings (`--root`/`--suites`, `--out`). |
+| `mix lemon.bench` | Run the platform microbenchmark suites. See [`benchmarks/platform-microbenchmarks.md`](benchmarks/platform-microbenchmarks.md). |
 
 ## Not a mix task
 
@@ -9847,27 +9801,6 @@ exist.
 Non-loopback controllers require `wss://` by default. Plaintext `ws://` needs
 `--allow-insecure-controller` and is acceptable only for development or across
 a verified encrypted overlay such as Tailscale.
-
----
-
-## Sim task consolidation notes
-
-**Done — replay renderers.** The 15 per-scenario `*_replay` tasks were folded
-into the single parameterized `mix lemon.sim.replay <scenario> <log>`. They were
-near-identical thin wrappers over each scenario's shared `VideoGenerator`
-(`LemonSim.Examples.Rendering.DomainVideoGenerator`), so one registry-backed task
-covers them all. `vending_bench_replay` stayed separate (it builds a static HTML
-browser, not a video). Net: 15 tasks removed with no loss of capability.
-
-**Deliberately not done — scenario runners.** The 19 `mix lemon.sim.<scenario>`
-runners look consolidatable but are not: each has a distinct switch set and calls
-distinct example-module entrypoints (e.g. `werewolf` does multi-model per-seat
-assignment via `--models`/`--player-count`; `vending_bench` has `--preset` and
-offline strategies; `tic_tac_toe` has `--offline-strategy`). A single
-`mix lemon.sim <scenario>` would either be a leaky mega-task branching on
-scenario, or a dispatcher that still keeps all 19 modules — both worse than 19
-focused tasks. `vending_bench` is also called directly by CI
-(`scripts/ci_sim_bench.sh`, `scripts/generate_sim_demo_bundles.sh`). Left as-is.
 
 ---
 
@@ -10028,7 +9961,7 @@ available"):
   `LemonAi.Auth.*`, API-key prompts, choice labels, `oauth_opts_builder`, CLI
   switches, curated `preferred_models`) is onboarding-flow presentation data
   with no facade equivalent and stays local regardless of how the boundary
-  question is resolved — same pattern as `arena_domains` presentation data.
+  question is resolved.
   **Reconciliation prerequisite:** the two tables have already drifted, and
   this needs fixing as part of any future migration to stay
   behavior-preserving: `lemon_cli`'s table has aliases `ProviderNames` is
@@ -10065,7 +9998,7 @@ of what was found, and the migration tables in §8–§9 say which rows have sin
 > payload structs no longer implement `Access`, and a consumer that may still receive a legacy
 > map coerces it once at its entry point with `LemonCore.Events.coerce/2`. §9 is the end state.
 
-Scope: every `LemonCore.Bus.broadcast/2` call site in the umbrella (78 in `lib/`, 144 more in
+Scope: every `LemonCore.Bus.broadcast/2` call site in the umbrella (72 in `lib/`, 140 more in
 `test/`), the topics they publish to, and every process that subscribes. The plan of record is
 [`docs/platform-split.md`](../platform-split.md) §5 item **3.1**; its risk row predicts that
 "catalog first will reveal undocumented consumer assumptions." It does — §6 lists thirteen, two
@@ -10098,11 +10031,11 @@ payload crashes the control plane's entire WS fanout. With the shim, each publis
 independently and consumers migrate on their own schedule. Without it, `:run_completed` alone is a
 twelve-subscriber flag day. See §4.3.
 
-**R3 — The platform contract is 7 topics, not the 15 that exist.** `nodes`, `presence`,
-`run_graph:*`, `parent_question:*`, `kanban*` and the sim/arena family have their publisher and
-every subscriber inside a single app (or a single matched app pair). They should get documented
-shapes in their owning app, not `LemonCore.Events.*` structs. Putting sim or kanban payload types
-in `lemon_core` would re-domain the package that Phase 1 just spent ten items de-domaining. See §3.
+**R3 — The platform contract is 7 topics, not the 10 that exist.** `nodes`, `presence`,
+`run_graph:*`, `parent_question:*` and `kanban*` have their publisher and every subscriber
+inside a single app. They should get documented shapes in their owning app, not
+`LemonCore.Events.*` structs. Putting kanban payload types in `lemon_core` would re-domain the
+package that Phase 1 just spent ten items de-domaining. See §3.
 
 **R4 — Two control-plane methods make typed payloads unenforceable until they are narrowed.**
 `events.ingest` and `system-event` accept an arbitrary JSON object and broadcast it, under a
@@ -10229,17 +10162,12 @@ the only listener silently discards them.
 | `routing_feedback` | `lemon_memory/ingest.ex:175` | `lemon_router/routing_feedback_store.ex:217` | **cross-app**, already pattern-matched on exact keys |
 | `run_graph:<run_id>` | `coding_agent/run_graph_server.ex:400` | `coding_agent/run_graph.ex:327` | payload is the bare tuple `{:run_graph, :state_changed, run_id}` — **raw** |
 | `parent_question:<request_id>` | `coding_agent/parent_questions.ex:340` | `coding_agent/tools/ask_parent.ex:262` | matches on `meta.request_id` only, ignores payload |
-| `sim:<id>`, `sim:<id>:decisions` | `lemon_sim/kernel/bus.ex:30,36` | `lemon_sim_ui/arena.ex:504,520`, LiveViews | payload embeds a whole `%LemonSim.State{}` |
-| `sim:lobby` | `lemon_sim_ui/sim_manager.ex:1739` | 4 LiveViews + `arena.ex:179` | empty payload |
-| `arena:<domain>:league` | `lemon_sim_ui/arena.ex:752` | `arena_leaderboard_live.ex:21` | `%{game_id}` |
-| hosted-game topic | `hosted_game/room_server.ex:1676` | `hosted_werewolf_live.ex` (4 sites) | `%{room_id}` |
-| philosopher-chat topic | `philosopher_chat/thread_server.ex:844` | `philosopher_chat_api_controller.ex:172` | `%{type, event_seq, …}` |
 | `channels` | *(was none in `lib/`; since 2026-08-16 `lemon_channels/dispatcher.ex` publishes `:channel_delivery` — §10)* | `EventBridge` | now a typed contract topic |
 | `logs` | **none** | **none** | documented in the Bus contract; dead |
 
 ### 2.7 Envelope discipline, summarised
 
-Of 78 `lib/` publish sites, **75 use `%LemonCore.Event{}`**. The three that do not:
+Of 72 `lib/` publish sites, **69 use `%LemonCore.Event{}`**. The three that do not:
 
 - `run_process.ex:691` — `%{type: :run_failed, run_id, session_key, reason}` (§6.1)
 - `stream_coalescer.ex:483` — `%{type: :coalesced_output, …}`
@@ -10267,8 +10195,7 @@ crosses an app boundary *and* has a consumer that is not its publisher's sibling
 
 **App-internal — document the shape in the owning app, do not add a core struct:** `nodes`,
 `presence` (both ends in `lemon_control_plane`); `run_graph:*`, `parent_question:*` (both ends in
-`coding_agent`); the five sim/arena topics (`lemon_sim` + `lemon_sim_ui`, a matched pair shipped
-together).
+`coding_agent`).
 
 **Delete rather than type:** `kanban` and `kanban:<board_id>` (zero subscribers — either the UI
 that was going to consume them never landed, or it was removed); `channels` and `logs` (zero
@@ -10487,7 +10414,7 @@ is a submit facade.
 
 **`LemonCore.Bus`** — two changes worth bundling. Its moduledoc "Topic Contract (must be stable)"
 list is wrong in both directions: it omits `goals`, `kanban*`, `presence`, `run_graph:*`,
-`parent_question:*` and the sim/arena family, and it lists `channels` and `logs`, which have no
+`parent_question:*`, and it lists `channels` and `logs`, which have no
 publishers. Replace it with a pointer to this document plus the `Events.registry/0` table. Second,
 add `Bus.broadcast_event/3` (`topic, type, payload`) that asserts the payload's struct matches the
 registry entry for the type in `:dev`/`:test` and is a pass-through in `:prod` — the enforcement
@@ -10528,9 +10455,9 @@ Ordered by blast radius ascending, so the mechanism is proven on cheap topics be
 | S12 | `session:*` | 4 | Mostly falls out of S8–S11, since `run_process` forwards the same events. `:coalesced_output` gets an envelope here |
 | S13 | Remove the `Access` shim; `Bus.broadcast_event/4` enforcement raises in `:dev`/`:test` and coerces in `:prod` | — | **Done 2026-08-13 — see §9.** Landed pre-0.2, not at the next major: the shim's whole cost is a semver-major promise, and while every consumer is still in this repo it is a mechanical change rather than a break anyone downstream has to absorb |
 
-Test-side blast radius is larger than lib-side and is the real cost driver: **144
+Test-side blast radius is larger than lib-side and is the real cost driver: **140
 `Bus.broadcast` call sites in `test/`** hand-construct payloads —
-`lemon_control_plane` 57, `lemon_router` 52, `coding_agent` 18, `lemon_core` 10, `lemon_sim_ui` 4,
+`lemon_control_plane` 57, `lemon_router` 52, `coding_agent` 18, `lemon_core` 10,
 `lemon_automation` 2, `lemon_gateway` 1. The `Access` shim (R2) does not help these, because they
 *build* payloads. Mitigation: ship a `LemonPlatformTest.EventsFixtures` module in S1 with
 `run_completed(overrides \\ [])`-style builders, and convert tests topic-by-topic alongside each S
@@ -11084,6 +11011,8 @@ gets hardened in Phase 2.6 so that other apps stop touching `RunRegistry` /
 Source: https://z80dev.github.io/lemon/platform/phase-5-extraction
 
 # Phase 5 — Product-Repo Extraction Readiness
+
+**Executed 2026-09-01 for the lemon-sim group; see [docs/platform-split.md](../platform-split.md).**
 
 Status: **investigation (2026-08-10).** Dep facts read from `apps/*/mix.exs` and grepped call
 sites against the tree at the time of writing. The coding_agent-blocker resolution below is a
@@ -11918,7 +11847,7 @@ mix run --no-halt
 - All Mix tasks available (`mix lemon.setup`, `mix lemon.doctor`, etc.)
 - Uses `MIX_ENV=dev` configuration
 - Config loaded from `~/.lemon/config.toml` and `.lemon/config.toml` in the project root
-- Ports default to 4040 (control-plane), 4080 (web), 4090 (sim-ui)
+- Ports default to 4040 (control-plane) and 4080 (web)
 
 **When to use:** Local development, debugging, running tests.
 
@@ -11944,7 +11873,7 @@ under `~/.lemon`:
 ~/.lemon/versions/current      symlink to the active version
 ~/.lemon/bin/lemon             -> ../versions/current/bin/lemon
 ~/.lemon/{cookie,env}          generated once by the launcher, mode 600 from creation
-~/.lemon/run/                  pid and runtime-root records, mode 700
+~/.lemon/run/                  pid, runtime-root, and mode-600 port-token records; directory mode 700
 ~/.lemon/store                 default store path for user installs
 ```
 
@@ -11954,16 +11883,13 @@ profile and applies user-install defaults before delegating to
 `remote`, `eval`, `rpc`, `version`, `update`, and `tui`. The full and minimal
 runtime profiles additionally accept `setup`, `model`, `gateway`, `config`,
 `secrets`, `channels`, and `doctor`; `doctor --bundle [path]` generates a
-redacted support bundle. The sim profile does not bundle the runtime CLI, but
-does support `doctor --bundle`. With no arguments the launcher starts the TUI
+redacted support bundle. With no arguments the launcher starts the TUI
 in an interactive terminal, auto-starting the daemon; non-interactive
 invocation prints usage.
 
 The launcher never builds Elixir source from user input. `doctor` argv is
 forwarded verbatim to `LemonCli.CLI.main/1`, so option order is preserved and
-`#{...}` in a bundle path stays literal; the sim profile's `doctor --bundle`
-path reaches the release through the `LEMON_DOCTOR_BUNDLE_PATH` environment
-variable instead of eval source. Launcher-created state — `~/.lemon` itself,
+`#{...}` in a bundle path stays literal. Launcher-created state — `~/.lemon` itself,
 `run/`, the cookie, and `env` — is written under `umask 077`, so secrets are
 private from their first byte (directories 0700, files 0600).
 
@@ -11985,9 +11911,9 @@ lemon doctor --bundle               # redacted support bundle
 ```
 
 Updating stages the checksum/size-authenticated runtime and matching TUI
-artifacts together for full/min profiles, then flips the symlink; the sim
-profile has no TUI artifact. Planning is non-mutating and apply needs its exact
-fresh digest. There are no hot upgrades. Inspect the successful apply receipt
+artifacts together for full/min profiles, then flips the symlink. Planning is
+non-mutating and apply needs its exact fresh digest. There are no hot upgrades.
+Inspect the successful apply receipt
 with `lemon update history`, then roll back only that receipt-bound checkpoint:
 
 ```bash
@@ -12024,14 +11950,9 @@ full contract and explicit-version/draft inputs.
 # Minimal headless runtime (gateway + router + channels + control-plane)
 MIX_ENV=prod mix release lemon_runtime_min
 
-# Full local runtime (+ automation, skills, web UI, sim UI)
-MIX_ENV=prod mix sim_ui.assets.deploy
+# Full local runtime (+ automation, skills, web UI)
 MIX_ENV=prod mix phx.digest apps/lemon_web/priv/static -o apps/lemon_web/priv/static
 MIX_ENV=prod mix release lemon_runtime_full
-
-# Public sim broadcast site (dashboard + spectator UI)
-MIX_ENV=prod mix sim_ui.assets.deploy
-MIX_ENV=prod mix release sim_broadcast_platform
 ```
 
 Both full and minimal runtime compositions assemble `lemon_mcp` with release
@@ -12039,15 +11960,13 @@ mode `:load`. The library has no application callback and starts no processes;
 this entry makes its client modules available to `LemonSkills.McpSource` while
 the consuming application remains responsible for supervising each connection.
 
-The full profile bundles both web surfaces. `lemon_sim_ui` has an esbuild/
-tailwind pipeline, so it needs `sim_ui.assets.deploy`; `lemon_web` ships static
-files with no pipeline, so it needs the digest step only. Skipping either one
-makes the release log "Could not warm up static assets" at boot and serve
-undigested assets.
+The full profile bundles `lemon_web`, which ships static files with no build
+pipeline, so it needs the digest step only. Skipping it makes the release log
+"Could not warm up static assets" at boot and serve undigested assets.
 
 Releases are written to `_build/prod/rel/<profile>/`. Release automation also
-builds the `lemon_tui` pseudo-profile as a Bun binary, producing 11 published
-artifacts total: three min, three full, two sim, and three TUI artifacts.
+builds the `lemon_tui` pseudo-profile as a Bun binary, producing nine published
+artifacts total: three min, three full, and three TUI artifacts.
 
 Release automation packages the assembled release directory as a `.tar.gz`:
 
@@ -12092,92 +12011,12 @@ operator. Roll back with the operator procedure in
 ./_build/prod/rel/lemon_runtime_min/bin/lemon_runtime_min stop
 ```
 
-`sim_broadcast_platform` is the dedicated production profile for `lemon_sim_ui`. It serves the public Werewolf-first broadcast lobby at `/`, stable arenas at `/arena/:domain`, individual `/watch/:sim_id` model broadcasts, and optional hosted human Werewolf at `/play`, while keeping the `/admin` control room, metrics, and `/api/admin/*` behind `LEMON_SIM_UI_ACCESS_TOKEN`. Browser operators authenticate through the CSRF-protected `/admin/login` form and receive an expiring signed-session marker; query-string tokens are rejected and `/api/admin/*` remains bearer-only. `LEMON_SIM_UI_ADMIN_SESSION_TTL_SECONDS` controls the browser lifetime from 300 to 86400 seconds and defaults to eight hours. Rotate the access token to invalidate all browser sessions, and expose these routes only over HTTPS.
-
-Its production endpoint fails closed unless host, persistent store path, a
-64-byte secret key base, and a 32-byte admin access token are explicit. Use
-`/healthz` for process liveness and `/readyz` for deploy/load-balancer readiness.
-The container and Fly manifest persist both `/app/data/store` and
-`/app/data/leagues` on the same mounted volume and must remain at one instance
-while SQLite and local PubSub are in use.
-
-Hosted rooms are off by default in production. Enabling them requires HTTPS,
-`LEMON_WEREWOLF_HOSTED_ENABLED=true`, and a random 32-byte-or-longer
-`LEMON_WEREWOLF_HOST_CREATE_TOKEN`. AI seats additionally require a valid
-`LEMON_WEREWOLF_HOSTED_AI_MODEL` and provider credential. Keep one instance:
-room ownership, Registry, timers, and PubSub are process-local.
-
-### Sim broadcast operations
-
-Keep exactly one `sim_broadcast_platform` instance attached to a persistent
-volume. Before every deploy or rollback, disable arena/auto-loop starts, wait
-for `/readyz` to report zero active runners and queued recoveries, then stop the
-instance. Run the backup commands from a maintenance shell with the same volume
-mounted and no application writer. This keeps SQLite and the rotating league
-tree in one consistent snapshot. For the container layout:
-
-For hosted rooms, stop new creation first by removing the public creation
-invite or placing the service in maintenance mode. Ask hosts to pause active
-matches, then inspect protected `/api/admin/metrics` until no room is `running`
-and hosted recovery reports `ok`. A graceful restart can resume running timers,
-but an offline backup must have no application writer. Hosted room records,
-reconnect-token hashes, RNG checkpoints, replay events, deadlines, and rematch
-archives are stored inside the same SQLite backup below; raw host/player tokens
-exist only in browser cookies and are never part of a backup.
-
-```bash
-mkdir -p /app/data/backups
-timestamp=$(date -u +%Y%m%dT%H%M%SZ)
-sqlite3 /app/data/store/store.sqlite3 \
-  ".backup '/app/data/backups/store.${timestamp}.sqlite3'"
-sqlite3 "/app/data/backups/store.${timestamp}.sqlite3" "PRAGMA integrity_check;"
-tar -C /app/data -czf "/app/data/backups/leagues.${timestamp}.tgz" leagues
-```
-
-Copy backups off the instance/volume. A valid SQLite check prints `ok`. The
-arena keeps only the newest configured game-record window, so archive league
-records before they rotate if long-term raw history is required.
-
-Restore offline: stop the release/container, integrity-check the chosen backup,
-replace `/app/data/store/store.sqlite3`, replace `/app/data/leagues` from the
-matching archive, set both trees to UID/GID `10001:10001`, then start the exact
-image paired with that backup.
-
-```bash
-sqlite3 /app/data/backups/store.TIMESTAMP.sqlite3 "PRAGMA integrity_check;"
-rm -f /app/data/store/store.sqlite3-wal /app/data/store/store.sqlite3-shm
-cp /app/data/backups/store.TIMESTAMP.sqlite3 /app/data/store/store.sqlite3
-rm -rf /app/data/leagues
-tar -C /app/data -xzf /app/data/backups/leagues.TIMESTAMP.tgz
-chown -R 10001:10001 /app/data/store /app/data/leagues
-```
-
-Deployments made before the unified volume layout may have league directories
-at `/app/data/*_league`; move those directories under
-`/app/data/leagues/` before booting the new image. Do not leave both layouts
-active.
-
-For rollback, stop traffic, stop the current instance with its 30-second grace
-period, restore the pre-deploy database and league archive, and start the
-previous immutable image/release. Verify `/healthz`, `/readyz`, `/`, a known
-`/watch/:sim_id`, an unauthenticated redirect from `/admin` to `/admin/login`,
-and an unauthenticated `401` from `/api/admin/metrics` before restoring traffic.
-Keep the failed image, logs, `/readyz` build block, and backup
-timestamps for incident review.
-
-For a hosted deployment, also verify `/play`, create a room using the creation
-invite, join from an independent browser, reload the player session, and verify
-that a room persisted before restart is still accessible afterward. Private
-rooms must return to their host/player sessions but remain unavailable to an
-anonymous `/rooms/:id/watch` request.
-
 ### Environment variables
 
 | Variable | Default | Purpose |
 |---|---|---|
 | `LEMON_CONTROL_PLANE_PORT` | `4040` | Control-plane HTTP port |
 | `LEMON_WEB_PORT` | `4080` | Web UI HTTP port |
-| `LEMON_SIM_UI_PORT` | `4090` | Sim UI HTTP port |
 | `LEMON_SECRETS_MASTER_KEY` | *(keychain/file)* | Override secrets master key. On local Linux source runs, `bin/lemon` will normalize this from `~/.lemon/secrets_master_key` when that file exists. |
 | `LEMON_PATH` | *(source-relative)* | Override Lemon root directory |
 
@@ -12203,8 +12042,7 @@ endpoint during release boot before the eval expression is executed.
 | Profile | Apps | Use case |
 |---|---|---|
 | `lemon_runtime_min` | gateway, CLI, router, channels, control-plane; MCP client library loaded on demand | Headless / API-only server |
-| `lemon_runtime_full` | + automation, skills, web, sim-ui; MCP client library loaded on demand | Full local runtime with UI |
-| `sim_broadcast_platform` | lemon_core, lemon_sim, lemon_sim_ui | Public sim broadcast deployment |
+| `lemon_runtime_full` | + automation, skills, web; MCP client library loaded on demand | Full local runtime with UI |
 | `lemon_tui` | `tui/bin/lemon-tui` | Bun-compiled client pseudo-profile, not a BEAM release |
 
 ---
@@ -12240,10 +12078,16 @@ snapshot from `exec.approvals.get`.
 
 The source launcher creates a high-entropy process-scoped operator token when
 it boots a new local runtime, shares it only through the daemon and TUI process
-environments, and stops that owned runtime when the TUI exits. For a persistent
-runtime, set the same `LEMON_CONTROL_PLANE_OPERATOR_TOKEN` when starting the
-runtime and launching the TUI. An existing runtime's secret cannot be safely
-discovered, so tokenless attachment fails by default.
+environments, and stops that owned runtime when the TUI exits.
+
+Persistent runtimes started by `./bin/lemon --daemon` or installed
+`lemon daemon` create a port-scoped credential under `~/.lemon/run`. A later
+TUI loads that credential automatically only when it is a regular current-user
+file with mode 0600 and a valid 256-bit token. Explicit
+`LEMON_CONTROL_PLANE_OPERATOR_TOKEN` values are never persisted; the same value
+must still be supplied to attach to a runtime started with an explicit token.
+Missing or unsafe credentials fail closed rather than enabling tokenless
+loopback access.
 
 Runtime ownership is independent of token origin: every daemon started by
 `./bin/lemon-tui` is stopped when that client exits, including when the token
@@ -12277,8 +12121,7 @@ short-lived, scoped server-issued browser credential flow.
 
 ## CI smoke-test flow
 
-The `release-smoke.yml` workflow exercises both release-runtime and Sim UI
-container flows end-to-end:
+The `release-smoke.yml` workflow exercises the release-runtime flow end-to-end:
 
 1. Build `lemon_runtime_min` with `MIX_ENV=prod mix release`.
 2. Launch the release as a daemon.
@@ -12286,16 +12129,6 @@ container flows end-to-end:
 4. Run `apps/lemon_core/test/lemon_core/release/smoke_test.exs` with `--include smoke`.
 5. Stop the release.
 6. On failure, upload logs from `_build/prod/rel/<profile>/tmp/log/` as GitHub Actions artifacts.
-
-Its `sim-container-smoke` job builds the production Dockerfile with commit
-identity, verifies UID `10001`, `/healthz`, `/readyz`, admin denial, digested
-gzip assets and immutable caching, seeds persisted Werewolf state, and performs
-a graceful stop/restart against the same mounted volume. It also boots a second
-production container with hosted mode, HTTPS URL configuration, and a creation
-invite, then verifies secure/no-store cookies and paused-room recovery after a
-restart. The hosted browser lane (`npm run smoke:hosted-werewolf`) separately
-exercises five isolated sessions, secret non-leakage, timeout, pause/resume,
-reconnect, completion, export, rematch, and the supported responsive viewports.
 
 ---
 
@@ -12534,7 +12367,7 @@ The initial stable 1.0 release artifact support target is:
 | Area | Supported for 1.0 | Notes |
 | --- | --- | --- |
 | Release artifacts | `linux-x86_64`, `linux-arm64`, `darwin-arm64` tarballs | Built by `.github/workflows/release.yml` on pinned `ubuntu-24.04`, `ubuntu-24.04-arm`, and `macos-15` runners; Linux artifacts carry a glibc 2.39 baseline |
-| Release profiles | `lemon_runtime_min`, `lemon_runtime_full`, and `lemon_tui` on all platforms; `sim_broadcast_platform` on Linux | All BEAM runtime artifacts must boot from extracted tarballs; the three `lemon_tui` artifacts are Bun binaries verified on native runners; the sim profile also verifies local assets, access control, and persistent spectator state |
+| Release profiles | `lemon_runtime_min`, `lemon_runtime_full`, and `lemon_tui` on all platforms | All BEAM runtime artifacts must boot from extracted tarballs; the three `lemon_tui` artifacts are Bun binaries verified on native runners |
 | Source install | Linux and macOS, best effort | Requires Elixir 1.19.5+ and Erlang/OTP 28.5+ |
 | Windows and macOS `x86_64` | Not supported for 1.0 | Use WSL, the container image, or source-level experimentation |
 | Install script | Supported with scope | `install.sh` on the `stable` channel for the three platform tags; `preview`/`nightly` require a pinned `LEMON_VERSION` |
@@ -13019,27 +12852,17 @@ steps.
       load `LemonMCP.Client`, report `LemonSkills.McpSource.mcp_enabled?/0`, keep
       `:lemon_mcp` loaded but not started, expose no application callback, and
       contain no `LemonMCP.Application` module.
-- [ ] Build local Sim UI assets and `sim_broadcast_platform` with
-      `MIX_ENV=prod mix sim_ui.assets.deploy` and
-      `MIX_ENV=prod mix release sim_broadcast_platform --overwrite`.
 - [ ] Build and package the `clients/tui` Bun binary for
       `linux-x86_64`, `linux-arm64`, and `darwin-arm64` as the `lemon_tui`
       artifacts.
-- [ ] Verify SHA-256 for all 11 tarballs and include all 11 in `manifest.json`.
+- [ ] Verify SHA-256 for all nine tarballs and include all nine in `manifest.json`.
 - [ ] Run `scripts/verify_release_artifacts {artifact-directory}` against the
       assembled artifact directory. The verifier must see
-      the BEAM runtime tarballs plus the three `lemon_tui` tarballs (11 total).
+      the BEAM runtime tarballs plus the three `lemon_tui` tarballs (nine total).
 - [ ] Run `scripts/verify_release_runtime_boot {artifact-directory}` against
-      the assembled artifact directory. The verifier extracts the eight BEAM
+      the assembled artifact directory. The verifier extracts the six BEAM
       tarballs and skips the `lemon_tui` pseudo-profile. Min/full check
-      `/healthz` and generate support bundles through release `eval`; the sim profile checks `/readyz`, digested assets, admin
-      denial, a persisted Werewolf spectator fixture, and restart recovery.
-      When hosted rooms are enabled, also run
-      `npm --prefix apps/lemon_sim_ui/assets run smoke:hosted-werewolf` against
-      the candidate with five isolated sessions, then restart against the same
-      volume and verify host/player reconnect. Production hosted proof requires
-      HTTPS, a 32-byte creation token, private/no-store responses, and protected
-      metrics with no credentials or raw provider errors.
+      `/healthz` and generate support bundles through release `eval`.
       Min/full bundle inspection still requires `channel_readiness.json`,
       `readiness_summary.json`, shared readiness proof-gate ids, and
       `proof_gate_summary.gateCount`.
@@ -13151,7 +12974,7 @@ strictly-increasing version. The workflow then:
 4. runs the canonical fast, quality, deterministic eval, and client lanes
    against the exact tagged commit
 5. builds and verifies all native artifacts and the multi-arch container
-6. publishes the GitHub Release, `manifest.json`, `install.sh`, and all 11
+6. publishes the GitHub Release, `manifest.json`, `install.sh`, and all nine
    tarballs
 7. promotes the selected container channel; stable also promotes `latest`
 
@@ -13172,7 +12995,6 @@ The expected assets are:
 
 - three `lemon_runtime_min` tarballs
 - three `lemon_runtime_full` tarballs
-- two Linux `sim_broadcast_platform` tarballs
 - three `lemon_tui` tarballs
 - `manifest.json` schema 2
 - `install.sh`
@@ -13358,7 +13180,7 @@ The workflow serializes release cuts and performs the complete operation:
    and checks out the exact tag for every build.
 3. The canonical fast, quality, deterministic eval, and client lanes run
    against the exact tag.
-4. Native runners build and verify all 11 artifacts. The container builds are
+4. Native runners build and verify all nine artifacts. The container builds are
    smoke-tested and merged under the version-specific tag.
 5. The workflow verifies the assembled manifest and artifacts, publishes the
    GitHub Release, then promotes the selected mutable container channel tag.
@@ -13412,8 +13234,8 @@ Current release automation produces:
 - A `manifest.json` describing every artifact in the release.
 
 The published matrix is `lemon_runtime_min` and `lemon_runtime_full` on all
-three platform tags, `sim_broadcast_platform` on the two Linux tags, and
-`lemon_tui` on all three tags: 11 artifacts total. `lemon_tui` is a
+three platform tags and `lemon_tui` on all three tags: nine artifacts total.
+`lemon_tui` is a
 pseudo-profile for a Bun-compiled client tarball containing
 `tui/bin/lemon-tui`, not a BEAM release. The container image on
 `ghcr.io/z80dev/lemon` is published as a multi-arch (`amd64`/`arm64`) manifest
@@ -16623,7 +16445,7 @@ Three prefix families coexist. This is descriptive, not a recommendation — see
 |---|---|---|
 | `[:lemon, ...]` | Cross-cutting platform concerns: runs, channels, approvals, memory, scheduler, reload, WASM | `LemonCore.Telemetry.emit/3` and its named helpers |
 | `[:lemon_agent, ...]`, `[:coding_agent, ...]`, `[:lemon_ai, ...]` | App-local concerns, prefixed by OTP app | `LemonCore.Telemetry.emit/3` or `:telemetry.execute/3` directly |
-| `[:lemon_skills, ...]`, `[:lemon_sim_ui, ...]` | App-local, full app name as prefix | app-local helper module |
+| `[:lemon_skills, ...]` | App-local, full app name as prefix | app-local helper module |
 
 `LemonCore.Telemetry.emit/3` is a direct pass-through to `:telemetry.execute/3`
 ([`telemetry.ex`](../apps/lemon_core/lib/lemon_core/telemetry.ex)); attaching does not
@@ -16930,16 +16752,6 @@ session for that turn with successful `read_skill` load observations. It does no
 turn-specific XML from the system prompt; no relevance block is added to that cacheable
 prompt or to the persisted conversation.
 
-### Hosted sim rooms — `[:lemon_sim_ui, :hosted_werewolf, ...]`
-
-Emitted through `LemonSimUi.HostedGame.emit/3`
-([`hosted_game.ex:771`](../apps/lemon_sim_ui/lib/lemon_sim_ui/hosted_game.ex)), all with
-`count: 1` and a `room_id`. Runtime suffix values: `:seat_claimed`, `:player_connected`,
-`:player_disconnected`, `:command_accepted`, `:command_rejected`, `:turn_timeout`,
-`:game_started`, `:game_stopped`, `:game_completed`, `:ai_error`, `:room_failed`,
-`:persistence_error`. The `hosted_werewolf` segment is historical; the module now backs all
-hosted room types.
-
 ## Attaching a consumer
 
 This is the whole integration surface. Handlers run **synchronously in the emitting
@@ -17121,13 +16933,13 @@ the last remaining dead emitter. (The run-span helpers `run_start` / `run_first_
 `run_stop` and `cron_tick` were previously listed here as dead; they are in fact live — see
 their catalog entries above — and the genuinely dead `run_exception/3` helper was removed.)
 
-**Eight families build their final segment at runtime**, so they cannot be discovered by
+**Seven families build their final segment at runtime**, so they cannot be discovered by
 searching for a literal event name, and `attach_many/4` requires knowing every value in
 advance: `[:lemon, :gateway, :scheduler, _]`, `[:lemon_ai, :compacting_client, _]`,
 `[:lemon_ai, :context_compactor, _]`, `[:coding_agent, :rate_limit_pause, _]`,
 `[:coding_agent, :rate_limit_healer, _]`, `[:coding_agent, :rate_limit_recovery, _]`,
-`[:coding_agent, :session_fork, _]`, `[:coding_agent, :session, :overflow_recovery, _]`, and
-`[:lemon_sim_ui, :hosted_werewolf, _]`. The known values are listed in the catalog above.
+`[:coding_agent, :session_fork, _]`, and `[:coding_agent, :session, :overflow_recovery, _]`.
+The known values are listed in the catalog above.
 
 **Measurement gaps.** `[:coding_agent, :session_fork, _]` emits an empty measurement map, so
 it cannot drive a counter without a synthetic measurement. `[:lemon_agent, :loop, :end]`
@@ -18229,7 +18041,6 @@ newline-delimited JSON handler used by spawned editor-style clients:
 ```bash
 LEMON_CONTROL_PLANE_PORT=0 \
 LEMON_WEB_PORT=0 \
-LEMON_SIM_UI_PORT=0 \
 LEMON_GATEWAY_HEALTH_PORT=0 \
 LEMON_ROUTER_HEALTH_PORT=0 \
 mix run scripts/live_acp_stdio_smoke.exs
@@ -19318,7 +19129,6 @@ handling, and redacted proof output:
 ```bash
 LEMON_CONTROL_PLANE_PORT=0 \
 LEMON_WEB_PORT=0 \
-LEMON_SIM_UI_PORT=0 \
 LEMON_GATEWAY_HEALTH_PORT=0 \
 LEMON_ROUTER_HEALTH_PORT=0 \
 mix run scripts/live_acp_stdio_smoke.exs
@@ -19381,10 +19191,12 @@ Source: https://z80dev.github.io/lemon/tools/execute-code
 # Execute Code (`execute_code`)
 
 `execute_code` is programmatic tool calling: the model submits a python3 script, the
-script calls agent tools through pre-imported helper functions, and only what the script
-prints comes back as the tool result. A script can read fifty files, grep a whole tree, or
-fetch a page and then print a three-line summary; intermediate tool results travel over a
-file-based RPC bridge and never enter the model transcript.
+script calls agent tools through pre-imported helper functions, and the script's result
+comes back through an explicit channel: `text()` blocks are the result, while everything
+printed to stdout/stderr lands in a clearly labeled diagnostics tail. A script can read
+fifty files, grep a whole tree, or fetch a page and then emit a three-line summary via
+`text()`; intermediate tool results travel over a file-based RPC bridge and never enter
+the model transcript.
 
 The tool is **disabled by default** and **bash-equivalent**: scripts run as ordinary host
 code with the user's permissions. This is not a sandbox — see [Security](#security).
@@ -19401,7 +19213,9 @@ python_path = ""                       # explicit interpreter; empty = find pyth
 timeout_ms = 120000                    # end-to-end wall-time cap per run, including session queue wait
 max_rpc_calls = 100                    # helper calls one run may make
 max_rpc_result_bytes = 5242880         # total helper-result bytes one run may consume (5 MiB)
-max_output_bytes = 50000               # script stdout/stderr bytes returned to the model
+max_output_bytes = 50000               # script stdout/stderr bytes returned as diagnostics
+max_text_bytes = 65536                 # total JSON-encoded text() frame bytes one run may emit
+max_parallel_rpc = 4                   # helper calls the pump dispatches concurrently
 tools = []                             # helper subset; empty = full fixed allowlist
 kernel_mode = "per_call"               # "per_call" (default) | "session"
 kernel_idle_timeout_ms = 1800000       # idle kernels reaped after 30 minutes
@@ -19417,6 +19231,8 @@ Environment overrides (env wins over TOML):
 - `LEMON_EXECUTE_CODE_MAX_RPC_CALLS`
 - `LEMON_EXECUTE_CODE_MAX_RPC_RESULT_BYTES`
 - `LEMON_EXECUTE_CODE_MAX_OUTPUT_BYTES`
+- `LEMON_EXECUTE_CODE_MAX_TEXT_BYTES`
+- `LEMON_EXECUTE_CODE_MAX_PARALLEL_RPC`
 - `LEMON_EXECUTE_CODE_TOOLS` (comma-separated subset of the allowlist)
 - `LEMON_EXECUTE_CODE_KERNEL_MODE`
 - `LEMON_EXECUTE_CODE_KERNEL_IDLE_TIMEOUT_MS`
@@ -19474,10 +19290,6 @@ by `max_queued_cells_per_kernel` (default 8). A full queue returns a busy error 
 silently falls back, because a fresh process would not see the expected namespace. A queued
 call whose external abort fires or whose deadline expires simply leaves the queue; the active
 cell is undisturbed.
-
-`timeout_ms` (minimum 1,000 ms, clamped to the configured `timeout_ms`) is an
-**end-to-end wall-clock limit from session-run entry**. In session mode it includes FIFO queue
-wait, active-cell execution, and ordinary helper/approval waits.
 
 ## State retention and loss
 
@@ -19539,21 +19351,159 @@ fallen back.
 Scripts call agent tools through pre-imported helpers from a fixed, compile-time
 allowlist: `read`, `grep`, `find`, `ls`, `webfetch`. The `tools` setting (or
 `LEMON_EXECUTE_CODE_TOOLS`) may only **narrow** this list — no configuration can add
-`bash`, `write`, or any other tool. A configured empty list means the full allowlist.
-
 Every helper call goes through the same `ToolPolicy` and approval handling as a direct
 tool call, in both kernel modes. Each cell gets a **fresh bridge**: a new owner-only
 (`0700`) RPC directory and a new random 256-bit token, validated in constant time; stale
 or cross-cell requests cannot call helpers. Helper failures raise a catchable
-`ToolError`. Per-run budgets: `max_rpc_calls` calls and `max_rpc_result_bytes` total
-result bytes; exceeding either raises `ToolError`.
+`ToolError`. Per-run budgets: `max_rpc_calls` calls (dispatched `max_parallel_rpc` at a
+time), `max_rpc_result_bytes` total result bytes, and `max_text_bytes` total `text()`
+block bytes; exceeding any of them raises `ToolError`.
 
 `webfetch` results mark the tool result untrusted and wrap printed output as external
 content, exactly like the direct tool.
 
+## Result channels: `text()`, `notify()`, `batch()`
+
+Besides the per-tool helpers, every shim (both kernel modes) defines three
+module-level functions:
+
+- **`text(s)`** — the explicit result channel. Each call atomically flushes a
+  numbered `text-<n>.json` block into the per-run rpc directory (write-through,
+  never deferred to exit), so everything written before a timeout or abort kill
+  still reaches the tool result. Blocks are lock-guarded, so they are safe from
+  `batch()` worker threads, and the total emitted bytes are capped at
+`max_text_bytes` (default 64 KiB). The cap charges the **JSON-encoded frame**
+— exactly the bytes `json.dump` writes to disk, escaping included — on both
+sides of the bridge: the shim charges what it is about to write and the host
+charges the file body it actually reads, so a NUL-heavy string that six-folds
+under `\u0000` escaping is refused by the same budget on both sides, and an
+in-budget block is always delivered. The payload is normalized first (lone
+surrogates become U+FFFD), so every frame the shim writes is valid JSON the
+host can decode. An over-budget call raises `ToolError` while the blocks
+already flushed stay in the result. Non-strings are `str()`-coerced.
+- **`notify(msg)`** — a fire-and-forget streaming side channel. The pump
+  consumes `notify-<n>.json` frames on every sweep and forwards each message
+  to the tool's streaming update callback as a partial update
+  (`notify: <msg>`), capped at 4 KiB per message and 64 forwarded messages per
+  run — the counter rides the run's stats, so it spans sweeps and the final
+  drain. Anything beyond is silently dropped, malformed frames are consumed
+  without being forwarded or counted, and a run with no callback consumes and
+  discards them so they never accumulate. A `notify()` issued immediately
+  before exit is still forwarded: the per-call pump and the persistent stop
+  path each run one notification-only final drain, and in session mode that
+  drain runs as part of the teardown stats read (`RpcServer.drain_and_stats`)
+  so its count is included in the stats the cell's result reports.
+  Tool requests are never drained after the run — a posthumous request would
+  be tool work nobody is waiting for.
+- **`batch([(tool, params), ...])`** — parallel helper calls. Each element runs
+  the plain blocking call inside a bounded stdlib thread pool (16 workers max);
+  the Elixir pump dispatches claimed requests as supervised tasks in waves of
+  `max_parallel_rpc` (default 4), so independent reads genuinely overlap.
+  Results return in input order; if any call fails, every call is still waited
+  out and then the first failure (in input order) is re-raised as the same
+  `ToolError` a plain call raises.
+
+When a run emitted at least one `text()` block, the tool result is assembled
+as: the headline (if any) → `Script result (text()):` with the blocks verbatim
+in flush order → a `Diagnostics (stdout/stderr, not the result):` tail carrying
+the captured stdout/stderr (still capped at `max_output_bytes`, with the
+spill-to-file marker when truncated). On a timeout or abort the flushed blocks
+are still included — that is the point of write-through. A script that never
+calls `text()` keeps the historic stdout-only result byte-for-byte.
+
+Stderr remains merged into stdout on purpose: the port has no separate stderr
+capture, so un-merging would silently *discard* stderr (python tracebacks
+included) instead of surfacing it in the labeled diagnostics tail.
+
+Accounting under parallel dispatch stays exact because claiming —
+authentication, replay detection, and call-budget reservation — happens
+serially in the pump before any task starts, and the result-byte budget is
+spent by the pump as each task returns. A claimed request always ends
+answered: when it becomes dispatch-bound its `req-<id>.json` is renamed to an
+in-flight `req-<id>.claim` marker, and **publication is the dispatch gate** —
+the rename must succeed and the published marker must be a regular file (a
+planted object at the marker name, or a symlinked request, is answered with a
+publication-failure error and its tool never runs). But the rpc directory is
+script-writable, so a marker alone is evidence only against crashes, never
+against a hostile script that deletes or replaces it after the gate. In
+session mode the claim therefore has a **second, host-side half**: the
+`RpcServer` records one ledger entry per **spent call slot** in its own
+process memory — via the pump's `:on_claim` hook, first a `:reserved` entry
+the moment a request passes the replay and call-budget gates, fed before
+the sweep-local spend itself so no kill can spend a call the ledger cannot
+prove, then the entry's disposition (`:invalid`/`:unknown_tool`/`:denied`
+for requests answered inside the claim without dispatching, `:claimed` for
+a dispatch-bound request, fed *before* the marker is published, making the
+ledger a superset of the published claims) — where the script cannot reach
+it. A sweep that dies mid-wave is recovered from **both halves** by the
+next sweep (or the server's cancel/abnormal-exit path, where no successor
+runs): its claimed ids are answered in writing and never re-dispatched,
+the replay memory is reconstructed so a replayed id is refused even when
+its marker was destroyed, and real accounting (ok status, result bytes,
+tool usage) is restored from a surviving response file plus the claim's
+tool identity — the ledger's name whenever the ledger recorded the id
+(host-owned beats script-writable, so overwriting the marker body cannot
+forge the recorded tool), and the marker's own body only for ids the
+ledger never saw. Reservation entries settle exactly — one call, one error
+or denial, the replay memory — and a disposition entry (`:invalid`,
+`:unknown_tool`, `:denied`) is answered in the settle: recovery writes the
+kind's error via `ensure_answered` whenever no response survives (a
+sweep-written answer is never overwritten), so a contained fault after an
+answered-but-never-dispatched request (invalid, unknown tool,
+policy-denied) can no longer erase that spend and let later sweeps exceed
+`max_calls`; an entry still bare `:reserved` (death between the feed,
+which precedes the spend, and the fate branch) charges the call exactly
+and counts one error, the conservative split of a branch that never ran —
+and writes no response, leaving the request file to the successor sweep's
+replay refusal (or the abort teardown — the cancel/abnormal-exit path
+where no successor runs). A `:claimed` entry with
+neither marker nor response surviving stamps `rpc_accounting_loss: true`:
+the accounting is then a lower bound and the
+cell's result is forced to `trust: :untrusted`. The same flag is stamped
+whenever a sweep is brutally killed, dies abnormally, or is caught
+raising/throwing mid-sweep — a contained fault is contained only in the
+process sense: its result settles through the same recovery-plus-lower-bound
+path, because work it dispatched and answered without returning its stats
+is unknowable. A successful cancel also settles the sweep's still-queued
+claim-ledger messages through the same deduplicating recovery, so no stale
+ledger entry outlives its sweep. Recovery trusts only regular-file markers
+(planted directories and symlinks at marker names are ignored outright) and
+charges each dead claim **exactly once**; a marker whose deletion fails
+(bounded retries) can never re-charge the budget on a later sweep.
+
+Approvals stay on the existing `ToolExecutor` path inside each task; each
+approval-requiring claim pre-allocates its approval id, and a tiny unlinked
+watcher cancels the pending prompt after the death of the sweep **and** again
+after the death of the dispatch task (it exits once both are gone), so a
+prompt registered in the window between the first cancel and the task's own
+death is still cancelled, and a cancelled prompt can never install policy
+(cancel, resolve, and a waiter's timeout are one atomic single-winner
+transition; the loser is `{:error, :not_pending}` — or a timeout with no
+side effects — and installs nothing). The exact lifetime guarantee: **prompts
+are cancelled when the dispatch task dies.** Dispatch tasks have trap_exit
+forced off at entry so they die with their sweep; the boundary is that tool
+code on the approval path can re-enable trap_exit afterwards and block past
+its task's death — such a task keeps its (cancelled-once) watcher parked
+until some other kill ends it, and until then the prompt outlives the
+script. This is adversarial tool behavior, not a supported mode; the
+boundary is demonstrated by the "a prompt registered after the sweep died
+cannot be orphaned" test in
+`apps/coding_agent/test/coding_agent/tools/execute_code_rpc_test.exs`.
+
+In session mode the kernel stages `lemon_tools.py` once and `_configure`
+installs a fresh bridge for every cell: new rpc dir and token, a full fresh
+`text()` budget (the per-call `max_text_bytes` rides the bridge), and reset
+sequence counters. Threads **inherit the cell generation of the thread that
+created them, captured at construction time** (an untagged creator — the main
+thread — falls back to the currently open cell), and the shim refuses bridge
+calls from threads tagged with an earlier cell, so a thread a finished cell
+left behind — and every thread it later spawns — can neither spend a later
+cell's budget nor write into its rpc directory (its `ToolError` is
+harmless). This is isolation hygiene, not a sandbox.
+
 ## Output
 
-Only what the script writes to stdout/stderr is returned — there is no implicit
+Only what the script writes to stdout/stderr is captured — there is no implicit
 final-expression repr. Line-buffered Python output preserves its order relative to child
 processes writing directly to the inherited stdout/stderr descriptors. Output is sanitized,
 capped at `max_output_bytes` keeping the first
@@ -19563,11 +19513,9 @@ to a `0600` file whose path appears in the result as `full_output_path` and in
 finished spill becomes eligible for best-effort reaping after 24 hours; an active capture
 owned by a live BEAM process is never reaped.
 
-Result `details` always include `rpc_calls`, `rpc_denied`, `rpc_errors`, `rpc_bytes`,
-`rpc_tools`, `exit_code`, and `truncated`. Session-mode details add `persistent`,
-`kernel_reused`, `reset_performed`, `state_retained`, `duration_ms`, and — on fallback —
-`fallback_reason`. Details never contain PIDs, keys, owners, tokens, bridge paths, or
-generations.
+For a run that used `text()`, this captured output is the **diagnostics tail**
+of the result, not the result itself — see
+[Result channels](#result-channels-text-notify-batch).
 
 ## Bounds and reaping
 
@@ -21173,6 +21121,145 @@ Config knobs:
   `mix lemon.doctor --bundle` if you need a support artifact.
 
 For Firecrawl-specific behavior, see [`docs/tools/firecrawl.md`](firecrawl.md).
+
+---
+
+Source: https://z80dev.github.io/lemon/user-guide/a2a-peers
+
+# Persistent A2A peer conversations
+
+Lemon implements the A2A v1.0 JSON-RPC protocol in both directions. A Lemon
+agent can receive work from Hermes or another A2A peer, and the built-in
+`peer` tool can initiate or resume a long-running conversation with a
+configured peer.
+
+This is separate from named execution nodes. A named node moves one Lemon run
+to another machine; an A2A peer remains an independent agent with its own
+identity, memory, tools, and task lifecycle.
+
+## What persists
+
+For every configured peer, Lemon stores a default outbound A2A context. Calling
+the `peer` tool with `action = "message"` reuses that context automatically.
+`action = "new"` is the explicit escape hatch for starting a separate chat.
+
+Inbound A2A `contextId` values are mapped to stable private Lemon sessions.
+The remote value is hashed before it enters the session key, so a peer cannot
+select or discover an arbitrary Lemon session. Contexts, messages, task state,
+run IDs, and turn counts use the canonical Lemon store and survive a runtime
+restart when the configured store is durable.
+
+## Lemon configuration
+
+Store a shared bearer token in Lemon's encrypted secret store:
+
+```bash
+lemon secrets set a2a/hermes '<random-token>'
+```
+
+Then add this to `~/.lemon/config.toml`:
+
+```toml
+[gateway]
+enable_a2a = true
+
+[gateway.a2a]
+host = "127.0.0.1"
+port = 9901
+public_url = "http://127.0.0.1:9901"
+name = "Lemon"
+agent_id = "default"
+skills = ["coordination", "coding"]
+reply_timeout_ms = 300000
+rate_limit_per_minute = 60
+max_context_turns = 100
+
+[gateway.a2a.peers.hermes]
+url = "http://127.0.0.1:9900"
+token_secret = "a2a/hermes"
+agent_id = "default"
+capabilities = ["coordination", "coding"]
+timeout_ms = 300000
+```
+
+`token_secret` is used in both directions. Use `inbound_token_secret` and
+`outbound_token_secret` when the peer uses different credentials. Literal
+tokens are not accepted in this section.
+
+The listener is tokenless only when it is bound to a direct loopback address
+and no inbound token secret is configured. A non-loopback listener fails
+validation unless at least one inbound peer token secret is present. Across
+machines, use HTTPS/WSS termination or a verified encrypted overlay and set
+`public_url` to the URL peers can actually reach.
+
+## Hermes configuration
+
+Hermes' A2A platform listens on port 9900 by default. Its configuration shape
+is:
+
+```yaml
+gateway:
+  platforms:
+    a2a:
+      enabled: true
+      extra:
+        port: 9900
+
+a2a_agents:
+  lemon:
+    url: "http://127.0.0.1:9901"
+    auth:
+      type: bearer
+      token: "<same-random-token>"
+    timeout: 300
+    capabilities:
+      - coordination
+      - coding
+```
+
+Configure Hermes' inbound bearer token according to its A2A plugin settings,
+then restart both runtimes. The Lemon Agent Card is available at
+`http://127.0.0.1:9901/.well-known/agent-card.json`; Hermes exposes the same
+well-known path on port 9900.
+
+## Agent usage
+
+The `peer` tool actions are:
+
+- `list`: configured peers and their current default context.
+- `discover`: fetch the peer's Agent Card.
+- `message`: send a message in the persistent default conversation.
+- `new`: start and select a new conversation.
+- `history`: read Lemon's durable local transcript for a context.
+- `status`: refresh a remote task.
+- `cancel`: request remote task cancellation.
+
+For example, an agent can call:
+
+```json
+{"action":"message","peer_id":"hermes","text":"Please investigate the failing release and report evidence here."}
+```
+
+The next `message` call to `hermes` resumes the same context without the model
+having to retain or repeat a context ID.
+
+## Wire surface and safety
+
+Lemon publishes canonical and legacy Agent Card paths and accepts the A2A v1.0
+methods `SendMessage`, `SendStreamingMessage`, `GetTask`, `ListTasks`,
+`CancelTask`, and `SubscribeToTask`, plus the standard lowercase aliases.
+Streaming uses reconnectable server-sent events. Runs continue under a task
+supervisor if the initiating HTTP or SSE connection closes.
+
+Every task lookup/list/cancel operation is scoped to the authenticated peer.
+Inbound peer text is wrapped as external untrusted content before model use.
+Outbound responses are returned to the Lemon model with `trust: :untrusted`.
+Inbound runs use a conservative read/coordination tool allowlist by default;
+`allow_tools` can broaden it for one explicitly trusted peer.
+
+Push notification callbacks are not advertised in v1 because Lemon does not
+currently accept callback URLs. Peers should use synchronous send, streaming,
+or `SubscribeToTask`/`GetTask` reattachment.
 
 ---
 
@@ -24512,16 +24599,10 @@ Registry when it is not, and its moduledoc
 ([`bus.ex`](../apps/lemon_core/lib/lemon_core/bus.ex)) says exactly that, because a fallback
 that silently stops crossing node boundaries is worse than no fallback.
 
-**Not everything wants to be a process.** LemonSim's simulation kernel is a pure reducer
-([`kernel/runner.ex`](../apps/lemon_sim/lib/lemon_sim/kernel/runner.ex)) specifically so
-that a run is reproducible from a seed and a scorecard is a function of final state. That
-is not just asserted: a test runs the same seed twice and checks the final world state and
-every artifact hash are byte-identical
-([`determinism_test.exs`](../apps/lemon_sim/test/lemon_sim/determinism_test.exs)).
-Processes wrap it — `Task.async_stream` for suite concurrency
-([`bench/suite.ex:237`](../apps/lemon_sim/lib/lemon_sim/bench/suite.ex), one always-on
-GenServer per arena domain in [`arena.ex`](../apps/lemon_sim_ui/lib/lemon_sim_ui/arena.ex))
-— but they stay out of the state machine. Determinism and concurrency want opposite things,
+**Not everything wants to be a process.** Anything that must be reproducible — a state
+machine that has to replay identically from the same inputs, a result that has to be a
+function of its final state — belongs in pure functions, with processes wrapping it for
+concurrency rather than reaching into it. Determinism and concurrency want opposite things,
 and nothing in the runtime draws that line for you.
 
 ## What this repo is evidence of
@@ -24543,9 +24624,12 @@ The claims above are checkable, which is the point of publishing them:
 - **The plan records its own reversals.** The Decision Log in
   [`platform-split.md`](platform-split.md) contains D2 and D11 — two decisions overturned
   after the code disagreed with them — with the evidence that overturned each.
-- **The concurrency story has a demo.** [LemonSim](../apps/lemon_sim) runs deterministic,
-  seeded, replay-verifiable multi-model games; the always-on arenas keep them running and
-  score them continuously.
+- **The concurrency story has numbers.**
+  [platform-microbenchmarks.md](benchmarks/platform-microbenchmarks.md) measures the store,
+  the bus, the streaming coalescers, and the per-conversation process lifecycle with
+  `mix lemon.bench`: a thousand simultaneous conversations, each with its own coalescer
+  process, absorb fifty thousand deltas in about 25 ms, and the code behind every number is
+  short enough to check.
 
 Deeper invariants and the supervision-tree diagrams are in
 [beam_agents.md](beam_agents.md), including its list of known limitations — event fan-out

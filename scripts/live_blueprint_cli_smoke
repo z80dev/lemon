@@ -226,16 +226,14 @@ cd "$ROOT"
 SOURCE_HOME="$WORK_DIR/source-home"
 SOURCE_PORT="$(free_port)"
 SOURCE_WEB_PORT="$(free_port)"
-SOURCE_SIM_PORT="$(free_port)"
 mkdir -p "$SOURCE_HOME"
 prepare_fixture "$SOURCE_HOME" "$ROOT/bin/lemon" "$SOURCE_PORT"
 
 runtime_env "$SOURCE_HOME" "$SOURCE_PORT" \
   LEMON_RUNTIME_PID_FILE="$SOURCE_PID_FILE" \
   LEMON_WEB_PORT="$SOURCE_WEB_PORT" \
-  LEMON_SIM_UI_PORT="$SOURCE_SIM_PORT" \
   "$ROOT/bin/lemon" --daemon --no-distribution --port "$SOURCE_PORT" \
-  --web-port "$SOURCE_WEB_PORT" --sim-port "$SOURCE_SIM_PORT" \
+  --web-port "$SOURCE_WEB_PORT" \
   >"$WORK_DIR/source-launch.log" 2>&1
 wait_for_control_plane "$SOURCE_PORT"
 run_roundtrip "source-runtime-full" "$SOURCE_HOME" "$ROOT/bin/lemon" "$SOURCE_PORT" \

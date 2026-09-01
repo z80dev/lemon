@@ -153,7 +153,7 @@ available"):
   `LemonAi.Auth.*`, API-key prompts, choice labels, `oauth_opts_builder`, CLI
   switches, curated `preferred_models`) is onboarding-flow presentation data
   with no facade equivalent and stays local regardless of how the boundary
-  question is resolved — same pattern as `arena_domains` presentation data.
+  question is resolved.
   **Reconciliation prerequisite:** the two tables have already drifted, and
   this needs fixing as part of any future migration to stay
   behavior-preserving: `lemon_cli`'s table has aliases `ProviderNames` is

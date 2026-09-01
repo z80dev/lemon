@@ -1,11 +1,9 @@
-# Build context for docker/Dockerfile.runtime (whole umbrella, lemon_runtime_full)
-# and apps/lemon_sim_ui/Dockerfile (sim_broadcast_platform).
+# Build context for docker/Dockerfile.runtime (whole umbrella, lemon_runtime_full).
 #
 # This is a denylist: anything not excluded here is sent to the daemon. What the
 # prod build needs and must therefore survive: mix.exs, mix.lock, config/, every
 # app under apps/ (Mix compiles all umbrella children, not just the ones named in
-# a release), rel/ (release overlays), the committed priv/static assets, and
-# apps/lemon_sim_ui/assets (npm sources for the sim UI build).
+# a release), rel/ (release overlays), and the committed priv/static assets.
 
 # VCS, CI metadata and agent scratch dirs
 .git

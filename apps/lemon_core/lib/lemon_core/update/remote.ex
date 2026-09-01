@@ -27,8 +27,7 @@ defmodule LemonCore.Update.Remote do
   and both are staged into the same `versions/<version>.partial` directory, so
   the single rename plus symlink flip installs them together or not at all. A
   manifest without a `lemon_tui` entry updates the runtime only — the same
-  degradation the installer applies to pre-TUI releases. The
-  `sim_broadcast_platform` profile never fetches one, and `LEMON_NO_TUI=1`
+  degradation the installer applies to pre-TUI releases. `LEMON_NO_TUI=1`
   opts out, mirroring the installer.
 
   `apply/1` refuses to run outside this layout (manual tarball / server
@@ -58,7 +57,6 @@ defmodule LemonCore.Update.Remote do
   @default_channel "stable"
   @keep_versions 2
   @tui_profile "lemon_tui"
-  @sim_profile "sim_broadcast_platform"
   @manifest_max_bytes 1_048_576
   @artifact_max_bytes 2_147_483_648
 
@@ -236,11 +234,10 @@ defmodule LemonCore.Update.Remote do
   end
 
   # The terminal UI is optional: releases published before it existed have no
-  # such entry, the sim profile has no terminal UI at all, and LEMON_NO_TUI=1
-  # is the same opt-out the installer honours — an operator who installed
+  # such entry, and LEMON_NO_TUI=1 is the same opt-out the installer honours — an operator who installed
   # runtime-only should not have one appear underneath them on update.
   defp select_tui_artifact(manifest, opts) do
-    if profile(opts) == @sim_profile or System.get_env("LEMON_NO_TUI") == "1" do
+    if System.get_env("LEMON_NO_TUI") == "1" do
       nil
     else
       find_artifact(manifest, platform(opts), @tui_profile)

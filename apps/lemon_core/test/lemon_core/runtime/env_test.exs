@@ -6,27 +6,24 @@ defmodule LemonCore.Runtime.EnvTest do
 
   describe "resolve/0" do
     test "returns default ports when env vars are unset" do
-      clear_env(["LEMON_CONTROL_PLANE_PORT", "LEMON_WEB_PORT", "LEMON_SIM_UI_PORT"])
+      clear_env(["LEMON_CONTROL_PLANE_PORT", "LEMON_WEB_PORT"])
 
       env = Env.resolve()
 
       assert env.control_port == 4040
       assert env.web_port == 4080
-      assert env.sim_port == 4090
     end
 
     test "reads ports from environment variables" do
       System.put_env("LEMON_CONTROL_PLANE_PORT", "5050")
       System.put_env("LEMON_WEB_PORT", "5080")
-      System.put_env("LEMON_SIM_UI_PORT", "5090")
 
       env = Env.resolve()
 
       assert env.control_port == 5050
       assert env.web_port == 5080
-      assert env.sim_port == 5090
     after
-      clear_env(["LEMON_CONTROL_PLANE_PORT", "LEMON_WEB_PORT", "LEMON_SIM_UI_PORT"])
+      clear_env(["LEMON_CONTROL_PLANE_PORT", "LEMON_WEB_PORT"])
     end
 
     test "falls back to defaults for malformed port values" do
@@ -129,8 +126,7 @@ defmodule LemonCore.Runtime.EnvTest do
 
         env = %Env{
           control_port: 4040,
-          web_port: 9090,
-          sim_port: 4090
+          web_port: 9090
         }
 
         Env.apply_ports(env)
@@ -161,7 +157,7 @@ defmodule LemonCore.Runtime.EnvTest do
           {:web_port, :some_product_app, SomeProduct.Endpoint}
         ])
 
-        Env.apply_ports(%Env{control_port: 4040, web_port: 9191, sim_port: 4090})
+        Env.apply_ports(%Env{control_port: 4040, web_port: 9191})
 
         result = Application.get_env(:some_product_app, SomeProduct.Endpoint, [])
 
@@ -182,7 +178,7 @@ defmodule LemonCore.Runtime.EnvTest do
           {:no_such_port, :some_product_app, SomeProduct.Endpoint}
         ])
 
-        assert :ok = Env.apply_ports(%Env{control_port: 4040, web_port: 4080, sim_port: 4090})
+        assert :ok = Env.apply_ports(%Env{control_port: 4040, web_port: 4080})
         assert Application.get_env(:some_product_app, SomeProduct.Endpoint) == nil
       after
         Application.put_env(:lemon_core, :runtime_endpoints, original)
@@ -191,7 +187,7 @@ defmodule LemonCore.Runtime.EnvTest do
 
     test "the platform declares no product endpoint modules of its own" do
       # lemon_core must never name a product's endpoint: the bindings come from
-      # config so the sim (and any other product) can leave without touching it.
+      # config so a product can leave without touching it.
       for {_field, otp_app, endpoint} <- Env.runtime_endpoints() do
         assert is_atom(otp_app)
         assert is_atom(endpoint)

@@ -37,20 +37,7 @@ defmodule Mix.Tasks.Lemon.Help do
     {"Data, stores & messaging",
      ~w(lemon.store.migrate_jsonl_to_sqlite lemon.memory lemon.policy lemon.send)},
     {"Skills", ~w(lemon.skill lemon.skill.lint)},
-    {"Benchmarks (platform)", ~w(lemon.bench)},
-    # ── lemon-sim product block: these three groups and the lemon.sim.* entries
-    # in @fallback leave with the lemon-sim repo (docs/platform-split.md Phase 5).
-    # Task names only — no compile-time reference to any sim module. ──
-    {"Sim: scenario runners",
-     ~w(lemon.sim.auction lemon.sim.courtroom lemon.sim.diplomacy lemon.sim.dungeon_crawl
-        lemon.sim.intel_network lemon.sim.legislature lemon.sim.murder_mystery lemon.sim.pandemic
-        lemon.sim.poker lemon.sim.skirmish lemon.sim.space_station lemon.sim.startup_incubator
-        lemon.sim.stock_market lemon.sim.supply_chain lemon.sim.survivor lemon.sim.tcg_shop
-        lemon.sim.tic_tac_toe lemon.sim.vending_bench lemon.sim.werewolf)},
-    {"Sim: replay renderers", ~w(lemon.sim.replay lemon.sim.vending_bench_replay)},
-    {"Sim: scoring, suites & ratings",
-     ~w(lemon.sim.score lemon.sim.verify lemon.sim.suite lemon.sim.leaderboard lemon.sim.ratings)}
-    # ── end lemon-sim product block ──
+    {"Benchmarks (platform)", ~w(lemon.bench)}
   ]
 
   @fallback %{
@@ -62,17 +49,7 @@ defmodule Mix.Tasks.Lemon.Help do
     "lemon.readiness" => "Show a compact redacted launch-readiness summary",
     "lemon.usage" => "Show redacted usage, cost, token, and quota diagnostics",
     "lemon.media" => "Show redacted generated-media and provider-proof readiness",
-    "lemon.skill" => "Manage Lemon skills (discover/install/update/remove)",
-    # ── lemon-sim product block — leaves with the lemon-sim repo ──
-    "lemon.sim.leaderboard" => "Print and rewrite a suite leaderboard",
-    "lemon.sim.ratings" => "Aggregate suite leaderboards into cross-suite model ratings",
-    "lemon.sim.score" => "Print the scorecard for a run artifact bundle",
-    "lemon.sim.suite" => "Run a benchmark suite and write a leaderboard",
-    "lemon.sim.verify" => "Verify a LemonSim run artifact bundle",
-    "lemon.sim.tcg_shop" => "Run the TCG Shop simulation",
-    "lemon.sim.vending_bench" => "Run the Vending Bench simulation",
-    "lemon.sim.vending_bench_replay" =>
-      "Build a static replay browser from a VendingBench artifact dir"
+    "lemon.skill" => "Manage Lemon skills (discover/install/update/remove)"
   }
 
   @impl true

@@ -26,21 +26,7 @@ defmodule Lemon.MixProject do
   end
 
   defp aliases do
-    [
-      "sim_ui.assets.setup": [
-        "do --app lemon_sim_ui cmd --cd assets npm ci --cache /tmp/lemon-sim-ui-npm-cache"
-      ],
-      "sim_ui.assets.build": ["do --app lemon_sim_ui cmd --cd assets npm run build"],
-      "sim_ui.assets.audit": [
-        "do --app lemon_sim_ui cmd --cd assets npm audit --audit-level=high --cache /tmp/lemon-sim-ui-npm-cache"
-      ],
-      "sim_ui.assets.deploy": [
-        "sim_ui.assets.setup",
-        "sim_ui.assets.audit",
-        "sim_ui.assets.build",
-        "do --app lemon_sim_ui phx.digest"
-      ]
-    ]
+    []
   end
 
   # Advisory Dialyzer lane (see .github/workflows/dialyzer.yml). PLTs are
@@ -60,7 +46,7 @@ defmodule Lemon.MixProject do
     ]
   end
 
-  # Release configuration for games.zeebot.xyz
+  # Release configuration for the reference runtime.
   #
   # lemon_core carries :exqlite, :sentry and :finch as optional deps (see
   # apps/lemon_core/mix.exs), so the runtime releases name them explicitly:
@@ -122,18 +108,7 @@ defmodule Lemon.MixProject do
           lemon_control_plane: :permanent,
           lemon_automation: :permanent,
           lemon_skills: :permanent,
-          lemon_web: :permanent,
-          lemon_sim_ui: :permanent
-        ],
-        include_executables_for: [:unix],
-        steps: [:assemble, :tar]
-      ],
-      sim_broadcast_platform: [
-        applications: [
-          exqlite: :permanent,
-          lemon_core: :permanent,
-          lemon_sim: :permanent,
-          lemon_sim_ui: :permanent
+          lemon_web: :permanent
         ],
         include_executables_for: [:unix],
         steps: [:assemble, :tar]

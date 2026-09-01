@@ -13,7 +13,6 @@ export default {
       { text: "Quickstart", link: "/getting-started/quickstart" },
       { text: "Install", link: "/install" },
       { text: "Compare", link: "/compare" },
-      { text: "Benchmarks", link: "/benchmarks/quickstart" },
       { text: "Demo", link: "/demo" },
       { text: "Support", link: "/support" },
       { text: "Architecture", link: "/architecture/overview" },
@@ -45,19 +44,6 @@ export default {
         ],
       },
       {
-        text: "Benchmarks",
-        items: [
-          { text: "Quickstart", link: "/benchmarks/quickstart" },
-          { text: "VendingBench", link: "/benchmarks/vending-bench" },
-          { text: "Platform Guarantees", link: "/benchmarks/platform" },
-          {
-            text: "Platform Microbenchmarks",
-            link: "/benchmarks/platform-microbenchmarks",
-          },
-          { text: "Run Your Own Model", link: "/benchmarks/run-your-model" },
-        ],
-      },
-      {
         text: "Architecture",
         items: [
           { text: "Overview", link: "/architecture/overview" },
@@ -77,6 +63,7 @@ export default {
           { text: "Configuration", link: "/config" },
           { text: "Backup and Restore", link: "/user-guide/backups" },
           { text: "Testing", link: "/testing" },
+          { text: "Platform Microbenchmarks", link: "/benchmarks/platform-microbenchmarks" },
           { text: "Extensions", link: "/extensions" },
           { text: "Versioning & Channels", link: "/release/versioning_and_channels" },
           { text: "Release Checklist", link: "/release/release_checklist_and_support_policy" },

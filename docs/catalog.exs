@@ -8,11 +8,7 @@
   },
   entries: [
     %{path: "docs/README.md", last_reviewed: ~D[2026-08-30], max_age_days: 60},
-    %{path: "docs/benchmarks/quickstart.md", last_reviewed: ~D[2026-07-04]},
-    %{path: "docs/benchmarks/vending-bench.md", last_reviewed: ~D[2026-07-04]},
-    %{path: "docs/benchmarks/platform.md", last_reviewed: ~D[2026-07-04]},
     %{path: "docs/benchmarks/platform-microbenchmarks.md", last_reviewed: ~D[2026-08-10], max_age_days: 180},
-    %{path: "docs/benchmarks/run-your-model.md", last_reviewed: ~D[2026-07-04]},
     %{path: "docs/index.md", last_reviewed: ~D[2026-08-30], max_age_days: 60},
     %{path: "docs/install.md", last_reviewed: ~D[2026-08-30], max_age_days: 60},
     %{path: "docs/compare.md", last_reviewed: ~D[2026-08-30], max_age_days: 60},

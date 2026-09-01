@@ -30,10 +30,7 @@ silent permissions.
 | `lemon_memory` | `lemon_core` | `lemon_core` | *(none)* |
 | `lemon_platform_test` | `lemon_agent`, `lemon_ai`, `lemon_channels`, `lemon_core`, `lemon_memory` | `lemon_agent`, `lemon_ai`, `lemon_channels`, `lemon_core`, `lemon_memory` | *(none)* |
 | `lemon_router` | `lemon_agent`, `lemon_ai`, `lemon_channels`, `lemon_core`, `lemon_media`, `lemon_memory` | `lemon_agent`, `lemon_ai`, `lemon_channels`, `lemon_core`, `lemon_media`, `lemon_memory` | *(none)* |
-| `lemon_sim` | `lemon_agent`, `lemon_ai`, `lemon_core` | `lemon_agent`, `lemon_ai`, `lemon_core` | *(none)* |
-| `lemon_sim_ui` | `lemon_ai`, `lemon_core`, `lemon_sim` | `lemon_ai`, `lemon_core`, `lemon_sim` | *(none)* |
 | `lemon_skills` | `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_media`, `lemon_memory` | `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_media`, `lemon_memory` | *(none)* |
-| `lemon_tcg` | `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_sim` | `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_sim` | *(none)* |
 | `lemon_web` | `lemon_agent`, `lemon_automation`, `lemon_core`, `lemon_memory`, `lemon_router` | `lemon_agent`, `lemon_automation`, `lemon_core`, `lemon_memory`, `lemon_router` | *(none)* |
 | `x_api` | `lemon_agent`, `lemon_ai`, `lemon_channels`, `lemon_core`, `lemon_platform_test` | `lemon_agent`, `lemon_ai`, `lemon_channels`, `lemon_core`, `lemon_platform_test` | *(none)* |
 <!-- architecture_policy:end -->

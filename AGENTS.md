@@ -1,7 +1,7 @@
 # Lemon Agent Guide
 
 > **Effective agent context for the Lemon LLM interaction stack.**
-> Lemon is a BEAM-native stack of Elixir/OTP libraries for LLM interactions, with two flagship products on top: a multi-channel personal assistant and LemonSim, a deterministic model-vs-model simulation arena. The assistant uses the stack for local-first agent work across channels; LemonSim uses it for event-sourced, replay-verified benchmark worlds.
+> Lemon is a BEAM-native stack of Elixir/OTP libraries for LLM interactions, with a flagship product on top: a multi-channel personal assistant that uses the stack for local-first agent work across channels.
 
 ---
 
@@ -29,7 +29,6 @@
 | Work on browser capability driver | `apps/lemon_browser/` |
 | Work on media job capability driver | `apps/lemon_media/` |
 | Work on LSP capability driver | `apps/lemon_lsp/` |
-| Build reusable simulation harnesses | `apps/lemon_sim/` |
 | Work on native in-process subagent spawning | `apps/coding_agent/` (`task` tool, `CodingAgent.Coordinator`) |
 | Create or modify skills and assistant-platform tools | `apps/lemon_skills/` |
 | Work on Honcho memory integration | `apps/lemon_honcho/` |
@@ -39,8 +38,6 @@
 | Debug coding agent via RPC | `apps/coding_agent_ui/` |
 | Record or search durable agent memory | `apps/lemon_memory/` |
 | Work on the MCP client/server bridge | `apps/lemon_mcp/` |
-| Work on the LemonSim control room UI | `apps/lemon_sim_ui/` |
-| Work on the on-chain TCG shop arena | `apps/lemon_tcg/` |
 | Write contract tests for platform behaviours | `apps/lemon_platform_test/` |
 | Work on the X (Twitter) API client | `apps/x_api/` |
 | Browser automation via CDP/Playwright | `clients/lemon-browser-node/` |
@@ -100,10 +97,7 @@ apps/
 ├── lemon_memory/        # Durable agent memory: SQLite full-text store, provider fan-out search, run ingest, redaction
 ├── lemon_platform_test/ # Contract-test kit (ExUnit case templates) for Lemon extension behaviours
 ├── lemon_router/        # Message routing, agent directory, run orchestration, queue semantics
-├── lemon_sim/           # Reusable simulation harness primitives (projector/updater/action-space contracts)
-├── lemon_sim_ui/        # Phoenix LiveView control room for observing and driving lemon_sim runs
 ├── lemon_skills/        # Skill registry, discovery, installation, assistant-platform tools
-├── lemon_tcg/           # Live market data and execution for the agent-operated on-chain TCG shop
 ├── lemon_web/           # Phoenix LiveView web interface
 └── x_api/               # Reusable X API client, OAuth helpers, and token manager
 
@@ -129,10 +123,6 @@ mix deps.get
 
 # Compile all apps
 mix compile
-
-# Build the self-contained LemonSim UI browser bundle
-mix sim_ui.assets.build
-MIX_ENV=prod mix sim_ui.assets.deploy  # build + digest/precompress for release
 
 # Canonical repo-level test lanes
 scripts/test help
@@ -369,9 +359,6 @@ lemon_agent ──────────→ lemon_ai, lemon_core
 lemon_evals ──────────→ lemon_agent, lemon_ai, coding_agent, lemon_core, lemon_skills
 lemon_mcp ────────────→ coding_agent, lemon_core, lemon_skills, lemon_agent
 lemon_honcho ─────────→ lemon_core, lemon_memory, lemon_agent, lemon_ai, lemon_platform_test*
-lemon_sim ────────────→ lemon_core, lemon_agent, lemon_ai
-lemon_sim_ui ─────────→ lemon_ai, lemon_core, lemon_sim
-lemon_tcg ────────────→ lemon_core, lemon_agent, lemon_ai, lemon_sim
 lemon_skills ─────────→ lemon_core, lemon_memory, lemon_media, lemon_agent, lemon_ai
 lemon_memory ─────────→ lemon_core
 lemon_browser ────────→ lemon_core
@@ -409,9 +396,6 @@ Key env vars:
 - `LEMON_A2A_REPLY_TIMEOUT_MS` / `LEMON_A2A_RATE_LIMIT_PER_MINUTE` / `LEMON_A2A_MAX_CONTEXT_TURNS` - Bound peer waits, request rate, and persistent context turns
 - `LEMON_WEB_HOST` / `LEMON_WEB_PORT` - Web server binding (prod)
 - `LEMON_WEB_SECRET_KEY_BASE` - Required in prod
-- `LEMON_SIM_UI_MAX_CONCURRENT_RUNNERS` / `LEMON_SIM_UI_MAX_STORED_SIMS` - Bound Sim UI model concurrency and terminal snapshot retention; per-arena `MAX_GAME_RECORDS` bounds league history
-- `LEMON_SIM_UI_ACCESS_TOKEN` / `LEMON_SIM_UI_ADMIN_SESSION_TTL_SECONDS` - Protect the Sim UI control room/API and bound browser admin sessions; browser login is form-based and APIs are bearer-only
-- `LEMON_WEREWOLF_HOSTED_ENABLED` / `LEMON_WEREWOLF_HOST_CREATE_TOKEN` / `LEMON_WEREWOLF_HOSTED_*` - Opt-in HTTPS hosted Werewolf, creation access, room TTL/retention, and bounded AI configuration
 - `LEMON_GATEWAY_HEALTH_PORT` / `LEMON_ROUTER_HEALTH_PORT` - Health server port overrides for local parallel runtimes
 - `LEMON_NODE_OPERATOR_TOKEN` / `LEMON_NODE_TOKEN` - Pairing-only operator token or existing session token for `./bin/lemon node join`; prefer these to CLI token flags
 - `LEMON_NODE_ALLOW_INSECURE_CONTROLLER` - Explicitly permit non-loopback plaintext `ws://` for development or a verified encrypted overlay only; secure `wss://` remains the default
@@ -558,7 +542,7 @@ This repository includes an optional pre-push hook that uses **kimi** to review 
 - `docs/telemetry.md` - Telemetry and observability
 - `docs/extensions.md` - Extension system
 - `docs/beam_agents.md` - BEAM agent architecture
-- `docs/benchmarks/` - Benchmark platform guarantees, quickstart, and VendingBench guides
+- `docs/benchmarks/` - Platform microbenchmarks for the store, bus, coalescers, and process lifecycle (`mix lemon.bench`)
 - `docs/model-selection-decoupling.md` - Model selection design
 - `docs/testing/` - Testing guides
 - `docs/tools/` - Tool documentation
@@ -601,10 +585,7 @@ Each app has its own `AGENTS.md` with detailed context:
 | lemon_memory | `apps/lemon_memory/README.md` *(no AGENTS.md yet)* |
 | lemon_platform_test | `apps/lemon_platform_test/README.md` *(no AGENTS.md yet)* |
 | lemon_router | `apps/lemon_router/AGENTS.md` |
-| lemon_sim | `apps/lemon_sim/AGENTS.md` |
-| lemon_sim_ui | `apps/lemon_sim_ui/AGENTS.md` |
 | lemon_skills | `apps/lemon_skills/AGENTS.md` |
-| lemon_tcg | `apps/lemon_tcg/README.md` *(no AGENTS.md yet)* |
 | lemon_web | `apps/lemon_web/AGENTS.md` |
 | x_api | `apps/x_api/README.md` *(no AGENTS.md yet)* |
 

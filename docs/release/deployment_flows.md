@@ -22,7 +22,7 @@ mix run --no-halt
 - All Mix tasks available (`mix lemon.setup`, `mix lemon.doctor`, etc.)
 - Uses `MIX_ENV=dev` configuration
 - Config loaded from `~/.lemon/config.toml` and `.lemon/config.toml` in the project root
-- Ports default to 4040 (control-plane), 4080 (web), 4090 (sim-ui)
+- Ports default to 4040 (control-plane) and 4080 (web)
 
 **When to use:** Local development, debugging, running tests.
 
@@ -58,16 +58,13 @@ profile and applies user-install defaults before delegating to
 `remote`, `eval`, `rpc`, `version`, `update`, and `tui`. The full and minimal
 runtime profiles additionally accept `setup`, `model`, `gateway`, `config`,
 `secrets`, `channels`, and `doctor`; `doctor --bundle [path]` generates a
-redacted support bundle. The sim profile does not bundle the runtime CLI, but
-does support `doctor --bundle`. With no arguments the launcher starts the TUI
+redacted support bundle. With no arguments the launcher starts the TUI
 in an interactive terminal, auto-starting the daemon; non-interactive
 invocation prints usage.
 
 The launcher never builds Elixir source from user input. `doctor` argv is
 forwarded verbatim to `LemonCli.CLI.main/1`, so option order is preserved and
-`#{...}` in a bundle path stays literal; the sim profile's `doctor --bundle`
-path reaches the release through the `LEMON_DOCTOR_BUNDLE_PATH` environment
-variable instead of eval source. Launcher-created state — `~/.lemon` itself,
+`#{...}` in a bundle path stays literal. Launcher-created state — `~/.lemon` itself,
 `run/`, the cookie, and `env` — is written under `umask 077`, so secrets are
 private from their first byte (directories 0700, files 0600).
 
@@ -89,9 +86,9 @@ lemon doctor --bundle               # redacted support bundle
 ```
 
 Updating stages the checksum/size-authenticated runtime and matching TUI
-artifacts together for full/min profiles, then flips the symlink; the sim
-profile has no TUI artifact. Planning is non-mutating and apply needs its exact
-fresh digest. There are no hot upgrades. Inspect the successful apply receipt
+artifacts together for full/min profiles, then flips the symlink. Planning is
+non-mutating and apply needs its exact fresh digest. There are no hot upgrades.
+Inspect the successful apply receipt
 with `lemon update history`, then roll back only that receipt-bound checkpoint:
 
 ```bash
@@ -128,14 +125,9 @@ full contract and explicit-version/draft inputs.
 # Minimal headless runtime (gateway + router + channels + control-plane)
 MIX_ENV=prod mix release lemon_runtime_min
 
-# Full local runtime (+ automation, skills, web UI, sim UI)
-MIX_ENV=prod mix sim_ui.assets.deploy
+# Full local runtime (+ automation, skills, web UI)
 MIX_ENV=prod mix phx.digest apps/lemon_web/priv/static -o apps/lemon_web/priv/static
 MIX_ENV=prod mix release lemon_runtime_full
-
-# Public sim broadcast site (dashboard + spectator UI)
-MIX_ENV=prod mix sim_ui.assets.deploy
-MIX_ENV=prod mix release sim_broadcast_platform
 ```
 
 Both full and minimal runtime compositions assemble `lemon_mcp` with release
@@ -143,15 +135,13 @@ mode `:load`. The library has no application callback and starts no processes;
 this entry makes its client modules available to `LemonSkills.McpSource` while
 the consuming application remains responsible for supervising each connection.
 
-The full profile bundles both web surfaces. `lemon_sim_ui` has an esbuild/
-tailwind pipeline, so it needs `sim_ui.assets.deploy`; `lemon_web` ships static
-files with no pipeline, so it needs the digest step only. Skipping either one
-makes the release log "Could not warm up static assets" at boot and serve
-undigested assets.
+The full profile bundles `lemon_web`, which ships static files with no build
+pipeline, so it needs the digest step only. Skipping it makes the release log
+"Could not warm up static assets" at boot and serve undigested assets.
 
 Releases are written to `_build/prod/rel/<profile>/`. Release automation also
-builds the `lemon_tui` pseudo-profile as a Bun binary, producing 11 published
-artifacts total: three min, three full, two sim, and three TUI artifacts.
+builds the `lemon_tui` pseudo-profile as a Bun binary, producing nine published
+artifacts total: three min, three full, and three TUI artifacts.
 
 Release automation packages the assembled release directory as a `.tar.gz`:
 
@@ -196,92 +186,12 @@ operator. Roll back with the operator procedure in
 ./_build/prod/rel/lemon_runtime_min/bin/lemon_runtime_min stop
 ```
 
-`sim_broadcast_platform` is the dedicated production profile for `lemon_sim_ui`. It serves the public Werewolf-first broadcast lobby at `/`, stable arenas at `/arena/:domain`, individual `/watch/:sim_id` model broadcasts, and optional hosted human Werewolf at `/play`, while keeping the `/admin` control room, metrics, and `/api/admin/*` behind `LEMON_SIM_UI_ACCESS_TOKEN`. Browser operators authenticate through the CSRF-protected `/admin/login` form and receive an expiring signed-session marker; query-string tokens are rejected and `/api/admin/*` remains bearer-only. `LEMON_SIM_UI_ADMIN_SESSION_TTL_SECONDS` controls the browser lifetime from 300 to 86400 seconds and defaults to eight hours. Rotate the access token to invalidate all browser sessions, and expose these routes only over HTTPS.
-
-Its production endpoint fails closed unless host, persistent store path, a
-64-byte secret key base, and a 32-byte admin access token are explicit. Use
-`/healthz` for process liveness and `/readyz` for deploy/load-balancer readiness.
-The container and Fly manifest persist both `/app/data/store` and
-`/app/data/leagues` on the same mounted volume and must remain at one instance
-while SQLite and local PubSub are in use.
-
-Hosted rooms are off by default in production. Enabling them requires HTTPS,
-`LEMON_WEREWOLF_HOSTED_ENABLED=true`, and a random 32-byte-or-longer
-`LEMON_WEREWOLF_HOST_CREATE_TOKEN`. AI seats additionally require a valid
-`LEMON_WEREWOLF_HOSTED_AI_MODEL` and provider credential. Keep one instance:
-room ownership, Registry, timers, and PubSub are process-local.
-
-### Sim broadcast operations
-
-Keep exactly one `sim_broadcast_platform` instance attached to a persistent
-volume. Before every deploy or rollback, disable arena/auto-loop starts, wait
-for `/readyz` to report zero active runners and queued recoveries, then stop the
-instance. Run the backup commands from a maintenance shell with the same volume
-mounted and no application writer. This keeps SQLite and the rotating league
-tree in one consistent snapshot. For the container layout:
-
-For hosted rooms, stop new creation first by removing the public creation
-invite or placing the service in maintenance mode. Ask hosts to pause active
-matches, then inspect protected `/api/admin/metrics` until no room is `running`
-and hosted recovery reports `ok`. A graceful restart can resume running timers,
-but an offline backup must have no application writer. Hosted room records,
-reconnect-token hashes, RNG checkpoints, replay events, deadlines, and rematch
-archives are stored inside the same SQLite backup below; raw host/player tokens
-exist only in browser cookies and are never part of a backup.
-
-```bash
-mkdir -p /app/data/backups
-timestamp=$(date -u +%Y%m%dT%H%M%SZ)
-sqlite3 /app/data/store/store.sqlite3 \
-  ".backup '/app/data/backups/store.${timestamp}.sqlite3'"
-sqlite3 "/app/data/backups/store.${timestamp}.sqlite3" "PRAGMA integrity_check;"
-tar -C /app/data -czf "/app/data/backups/leagues.${timestamp}.tgz" leagues
-```
-
-Copy backups off the instance/volume. A valid SQLite check prints `ok`. The
-arena keeps only the newest configured game-record window, so archive league
-records before they rotate if long-term raw history is required.
-
-Restore offline: stop the release/container, integrity-check the chosen backup,
-replace `/app/data/store/store.sqlite3`, replace `/app/data/leagues` from the
-matching archive, set both trees to UID/GID `10001:10001`, then start the exact
-image paired with that backup.
-
-```bash
-sqlite3 /app/data/backups/store.TIMESTAMP.sqlite3 "PRAGMA integrity_check;"
-rm -f /app/data/store/store.sqlite3-wal /app/data/store/store.sqlite3-shm
-cp /app/data/backups/store.TIMESTAMP.sqlite3 /app/data/store/store.sqlite3
-rm -rf /app/data/leagues
-tar -C /app/data -xzf /app/data/backups/leagues.TIMESTAMP.tgz
-chown -R 10001:10001 /app/data/store /app/data/leagues
-```
-
-Deployments made before the unified volume layout may have league directories
-at `/app/data/*_league`; move those directories under
-`/app/data/leagues/` before booting the new image. Do not leave both layouts
-active.
-
-For rollback, stop traffic, stop the current instance with its 30-second grace
-period, restore the pre-deploy database and league archive, and start the
-previous immutable image/release. Verify `/healthz`, `/readyz`, `/`, a known
-`/watch/:sim_id`, an unauthenticated redirect from `/admin` to `/admin/login`,
-and an unauthenticated `401` from `/api/admin/metrics` before restoring traffic.
-Keep the failed image, logs, `/readyz` build block, and backup
-timestamps for incident review.
-
-For a hosted deployment, also verify `/play`, create a room using the creation
-invite, join from an independent browser, reload the player session, and verify
-that a room persisted before restart is still accessible afterward. Private
-rooms must return to their host/player sessions but remain unavailable to an
-anonymous `/rooms/:id/watch` request.
-
 ### Environment variables
 
 | Variable | Default | Purpose |
 |---|---|---|
 | `LEMON_CONTROL_PLANE_PORT` | `4040` | Control-plane HTTP port |
 | `LEMON_WEB_PORT` | `4080` | Web UI HTTP port |
-| `LEMON_SIM_UI_PORT` | `4090` | Sim UI HTTP port |
 | `LEMON_SECRETS_MASTER_KEY` | *(keychain/file)* | Override secrets master key. On local Linux source runs, `bin/lemon` will normalize this from `~/.lemon/secrets_master_key` when that file exists. |
 | `LEMON_PATH` | *(source-relative)* | Override Lemon root directory |
 
@@ -307,8 +217,7 @@ endpoint during release boot before the eval expression is executed.
 | Profile | Apps | Use case |
 |---|---|---|
 | `lemon_runtime_min` | gateway, CLI, router, channels, control-plane; MCP client library loaded on demand | Headless / API-only server |
-| `lemon_runtime_full` | + automation, skills, web, sim-ui; MCP client library loaded on demand | Full local runtime with UI |
-| `sim_broadcast_platform` | lemon_core, lemon_sim, lemon_sim_ui | Public sim broadcast deployment |
+| `lemon_runtime_full` | + automation, skills, web; MCP client library loaded on demand | Full local runtime with UI |
 | `lemon_tui` | `tui/bin/lemon-tui` | Bun-compiled client pseudo-profile, not a BEAM release |
 
 ---
@@ -387,8 +296,7 @@ short-lived, scoped server-issued browser credential flow.
 
 ## CI smoke-test flow
 
-The `release-smoke.yml` workflow exercises both release-runtime and Sim UI
-container flows end-to-end:
+The `release-smoke.yml` workflow exercises the release-runtime flow end-to-end:
 
 1. Build `lemon_runtime_min` with `MIX_ENV=prod mix release`.
 2. Launch the release as a daemon.
@@ -396,16 +304,6 @@ container flows end-to-end:
 4. Run `apps/lemon_core/test/lemon_core/release/smoke_test.exs` with `--include smoke`.
 5. Stop the release.
 6. On failure, upload logs from `_build/prod/rel/<profile>/tmp/log/` as GitHub Actions artifacts.
-
-Its `sim-container-smoke` job builds the production Dockerfile with commit
-identity, verifies UID `10001`, `/healthz`, `/readyz`, admin denial, digested
-gzip assets and immutable caching, seeds persisted Werewolf state, and performs
-a graceful stop/restart against the same mounted volume. It also boots a second
-production container with hosted mode, HTTPS URL configuration, and a creation
-invite, then verifies secure/no-store cookies and paused-room recovery after a
-restart. The hosted browser lane (`npm run smoke:hosted-werewolf`) separately
-exercises five isolated sessions, secret non-leakage, timeout, pause/resume,
-reconnect, completion, export, rematch, and the supported responsive viewports.
 
 ---
 

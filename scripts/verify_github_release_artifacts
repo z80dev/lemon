@@ -44,13 +44,10 @@ detect_platform() {
 
 # Platform -> release profiles, duplicated (with this cross-reference) from
 # the EXPECTED table in scripts/verify_release_artifacts: min+full+lemon_tui
-# on every platform, sim_broadcast_platform is Linux-only.
+# on every platform.
 platform_profiles() {
   case "$1" in
-    linux-x86_64|linux-arm64)
-      echo "lemon_runtime_min lemon_runtime_full sim_broadcast_platform lemon_tui"
-      ;;
-    darwin-arm64)
+    linux-x86_64|linux-arm64|darwin-arm64)
       echo "lemon_runtime_min lemon_runtime_full lemon_tui"
       ;;
     *)

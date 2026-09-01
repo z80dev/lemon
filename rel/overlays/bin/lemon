@@ -64,9 +64,6 @@ Commands:
   doctor [args]         Run runtime diagnostics
   doctor --bundle [path] Generate a support bundle (default: ~/.lemon/support-bundle-<ts>.zip)
   --help, -h            Show this help
-
-Runtime CLI commands are available in lemon_runtime_min and lemon_runtime_full.
-The sim_broadcast_platform profile supports only `doctor --bundle`.
 EOF
 }
 
@@ -83,7 +80,7 @@ LEMON_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 # ── Autodetect the release profile: first executable bin/<profile> wins. ──
 PROFILE=""
-for candidate in lemon_runtime_full lemon_runtime_min sim_broadcast_platform; do
+for candidate in lemon_runtime_full lemon_runtime_min; do
   if [ -x "$LEMON_ROOT/bin/$candidate" ]; then
     PROFILE="$candidate"
     break
@@ -92,7 +89,7 @@ done
 
 if [ -z "$PROFILE" ]; then
   error "no runtime profile found under $LEMON_ROOT/bin"
-  error "expected one of: lemon_runtime_full, lemon_runtime_min, sim_broadcast_platform"
+  error "expected one of: lemon_runtime_full, lemon_runtime_min"
   exit 1
 fi
 
@@ -284,17 +281,10 @@ setup_environment() {
   export PHX_SERVER="${PHX_SERVER:-true}"
 }
 
-# ── Runtime CLI commands need lemon_cli, which the sim-only release does not
-# bundle. The profile check turns a missing-module crash into a useful command
-# error. The release script owns the single eval argument boundary, so pass the
-# command argv directly after the expression. ──
+# ── Runtime CLI commands run through lemon_cli. The release script owns the
+# single eval argument boundary, so pass the command argv directly after the
+# expression. ──
 run_runtime_cli() {
-  if [ "$PROFILE" = "sim_broadcast_platform" ]; then
-    error "'$1' is unavailable in the sim_broadcast_platform release"
-    error "use lemon_runtime_min or lemon_runtime_full for runtime CLI commands"
-    exit 1
-  fi
-
   export LEMON_CLI_LAUNCHER=release
   exec "$RELEASE_BIN" eval 'LemonCli.CLI.main(System.argv())' "$@"
 }
@@ -303,10 +293,6 @@ run_runtime_cli() {
 # This calls the public Mix-free predicate directly in the release, rather
 # than parsing configuration or secrets in the shell. ──
 setup_required() {
-  if [ "$PROFILE" = "sim_broadcast_platform" ]; then
-    return 1
-  fi
-
   "$RELEASE_BIN" eval 'if LemonCli.CLI.setup_required?(), do: System.halt(0), else: System.halt(1)'
 }
 
@@ -652,12 +638,7 @@ EOF
 
   update)
     shift
-    if [ "$PROFILE" = "sim_broadcast_platform" ]; then
-      export LEMON_UPDATE_ARGS="$*"
-      exec "$RELEASE_BIN" eval 'LemonCore.Update.CLI.main(System.argv())' "$@"
-    else
-      run_runtime_cli update "$@"
-    fi
+    run_runtime_cli update "$@"
     ;;
 
   profile)
@@ -748,40 +729,11 @@ EOF
   doctor)
     shift
 
-    # Full and minimal releases bundle lemon_cli, whose doctor parser owns
-    # --bundle/--bundle-path handling. Forward the argv untouched: the eval
-    # expression stays a fixed constant, so no user string can become
-    # Elixir source, option order is preserved, and `#{...}` in a path
-    # stays literal.
-    if [ "$PROFILE" != "sim_broadcast_platform" ]; then
-      run_runtime_cli doctor "$@"
-    fi
-
-    # Sim-only `doctor --bundle [path]`: this release has no lemon_cli, so
-    # the shim drives LemonCore.Doctor.CLI.bundle!/1 itself. The path
-    # crosses the eval boundary through the environment, never as source
-    # text.
-    if [ "${1:-}" != "--bundle" ]; then
-      run_runtime_cli doctor "$@"
-    fi
-
-    shift
-
-    if [ "$#" -gt 1 ]; then
-      error "doctor --bundle accepts at most one output path"
-      exit 2
-    fi
-
-    bundle_path="${1:-}"
-
-    if [ -z "$bundle_path" ]; then
-      timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
-      bundle_path="$LEMON_HOME_DIR/support-bundle-$timestamp.zip"
-    fi
-
-    mkdir -p "$(dirname "$bundle_path")"
-    export LEMON_DOCTOR_BUNDLE_PATH="$bundle_path"
-    exec "$RELEASE_BIN" eval 'LemonCore.Doctor.CLI.bundle!(bundle_path: System.fetch_env!("LEMON_DOCTOR_BUNDLE_PATH"))'
+    # lemon_cli's doctor parser owns --bundle/--bundle-path handling. Forward
+    # the argv untouched: the eval expression stays a fixed constant, so no
+    # user string can become Elixir source, option order is preserved, and
+    # `#{...}` in a path stays literal.
+    run_runtime_cli doctor "$@"
     ;;
 
   *)

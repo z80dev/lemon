@@ -451,6 +451,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Removed
 
+- The lemon-sim product leaves the umbrella for its own repository, as planned
+  in `docs/platform-split.md` Phase 5: the `lemon_sim`, `lemon_sim_ui`, and
+  `lemon_tcg` apps, the `sim_broadcast_platform` release profile, the
+  `mix lemon.sim.*` tasks, `LEMON_SIM_UI_PORT` and `--sim-port`, and the
+  arena, hosted-room, and philosopher-chat runtime configuration. The code
+  stays in git history before this change.
 - Breaking: top-level engine selection and custom Gateway engine extensions
   were removed. Every conversation now uses the native `CodingAgent.Executor`;
   `LemonGateway.Engine`, `EngineRegistry`, Echo, vendor gateway adapters,

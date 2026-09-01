@@ -11,7 +11,6 @@ defmodule LemonCore.Runtime.Env do
   |------------|---------------------------|---------|
   | control    | `LEMON_CONTROL_PLANE_PORT` | 4040    |
   | web        | `LEMON_WEB_PORT`           | 4080    |
-  | sim        | `LEMON_SIM_UI_PORT`        | 4090    |
 
   ## Usage
 
@@ -23,11 +22,9 @@ defmodule LemonCore.Runtime.Env do
 
   @default_control_port 4040
   @default_web_port 4080
-  @default_sim_port 4090
 
   defstruct control_port: @default_control_port,
             web_port: @default_web_port,
-            sim_port: @default_sim_port,
             lemon_root: nil,
             dotenv_dir: nil,
             debug: false,
@@ -37,7 +34,6 @@ defmodule LemonCore.Runtime.Env do
   @type t :: %__MODULE__{
           control_port: pos_integer(),
           web_port: pos_integer(),
-          sim_port: pos_integer(),
           lemon_root: String.t() | nil,
           dotenv_dir: String.t() | nil,
           debug: boolean(),
@@ -53,7 +49,6 @@ defmodule LemonCore.Runtime.Env do
     %__MODULE__{
       control_port: resolve_port("LEMON_CONTROL_PLANE_PORT", @default_control_port),
       web_port: resolve_port("LEMON_WEB_PORT", @default_web_port),
-      sim_port: resolve_port("LEMON_SIM_UI_PORT", @default_sim_port),
       lemon_root: lemon_root(),
       dotenv_dir: System.get_env("LEMON_DOTENV_DIR"),
       debug: debug?(),
@@ -88,12 +83,6 @@ defmodule LemonCore.Runtime.Env do
   """
   @spec web_port() :: pos_integer()
   def web_port, do: resolve_port("LEMON_WEB_PORT", @default_web_port)
-
-  @doc """
-  Returns the effective sim-ui port.
-  """
-  @spec sim_port() :: pos_integer()
-  def sim_port, do: resolve_port("LEMON_SIM_UI_PORT", @default_sim_port)
 
   @doc """
   Returns `true` when debug mode is enabled via `LEMON_DEBUG` or `LEMON_LOG_LEVEL=debug`.

@@ -28,7 +28,6 @@ defmodule LemonCore.Doctor.SupportBundle do
     LANG
     LEMON_CONTROL_PLANE_PORT
     LEMON_PATH
-    LEMON_SIM_UI_PORT
     LEMON_STORE_PATH
     LEMON_WEB_HOST
     LEMON_WEB_PORT
