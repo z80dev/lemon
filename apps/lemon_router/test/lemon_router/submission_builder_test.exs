@@ -53,9 +53,9 @@ defmodule LemonRouter.SubmissionBuilderTest do
 
   test "meta thinking_level overrides session config thinking_level" do
     session_key = unique_session_key("thinking")
-    LemonCore.Store.put_session_policy(session_key, %{thinking_level: "low"})
+    LemonCore.PolicyStore.put_session(session_key, %{thinking_level: "low"})
 
-    on_exit(fn -> LemonCore.Store.delete_session_policy(session_key) end)
+    on_exit(fn -> LemonCore.PolicyStore.delete_session(session_key) end)
 
     assert {:ok, submission} =
              SubmissionBuilder.build(

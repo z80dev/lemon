@@ -55,9 +55,6 @@ defmodule LemonCore.Store.ReadCache do
 
   alias LemonCore.Store.ReadCache.CollisionError
 
-  # Domains the Store caches for its own typed APIs. Generic tables are added on
-  # top of these per instance (see `init/2`).
-  @intrinsic_domains [:chat, :runs, :progress]
   @default_store LemonCore.Store
 
   @type store :: atom()
@@ -83,7 +80,7 @@ defmodule LemonCore.Store.ReadCache do
   def init(store \\ @default_store, generic_tables \\ [])
 
   def init(store, generic_tables) when is_atom(store) and not is_nil(store) do
-    domains = Enum.uniq(@intrinsic_domains ++ generic_tables ++ live_published_domains(store))
+    domains = Enum.uniq(generic_tables ++ live_published_domains(store))
     tables = Map.new(domains, fn domain -> {domain, ensure_table(store, domain)} end)
     publish(store, tables)
     tables
@@ -111,10 +108,6 @@ defmodule LemonCore.Store.ReadCache do
       tables -> Map.keys(tables)
     end
   end
-
-  @doc "Domains the Store always caches for its typed APIs."
-  @spec intrinsic_domains() :: [atom()]
-  def intrinsic_domains, do: @intrinsic_domains
 
   @doc """
   Return the published `domain => table` map for a store, or `nil` when the

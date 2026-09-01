@@ -161,19 +161,19 @@ config :lemon_core, LemonCore.Secrets,
   env_var: "LEMON_SECRETS_MASTER_KEY"
 
 # Default to an in-memory store. Dev/prod override to disk-backed persistence.
-#
-# The store is a storage primitive and must not name its collaborators, so the
-# runtime wires them here: run history and memory ingest attach as finalize-run
-# hooks, and run-history reads forward to the same provider. Channels register
-# their own cached tables at boot (see LemonChannels.Application).
+# Applications register the tables they own with the store when they start
+# (see LemonCore.Store.Table).
 config :lemon_core, LemonCore.Store,
   backend: LemonCore.Store.EtsBackend,
-  backend_opts: [],
-  finalize_run_hooks: [
+  backend_opts: []
+
+# A finalized run notifies its collaborators through hooks the runtime wires
+# here, so the run store names neither run history nor memory ingest.
+config :lemon_core, LemonCore.RunStore,
+  finalize_hooks: [
     {LemonCore.RunHistoryStore, :handle_finalize_run},
     {LemonMemory.Ingest, :handle_finalize_run}
-  ],
-  run_history_provider: LemonCore.RunHistoryStore
+  ]
 
 config :lemon_web, LemonWeb.Endpoint,
   adapter: Bandit.PhoenixAdapter,

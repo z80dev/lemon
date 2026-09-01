@@ -17,7 +17,7 @@ defmodule CodingAgent.Tools.Agent do
   alias LemonAi.Types.TextContent
   alias CodingAgent.AsyncFollowups
   alias CodingAgent.{JoinAwait, RunGraph, Subagents, TaskStore}
-  alias LemonCore.{Bus, Events, RouterBridge, RunRequest, SessionKey, Store}
+  alias LemonCore.{Bus, Events, RouterBridge, RunRequest, RunStore, SessionKey}
 
   @valid_actions ["run", "poll", "join"]
   @valid_queue_modes ["collect", "followup", "steer", "steer_backlog", "interrupt"]
@@ -382,7 +382,7 @@ defmodule CodingAgent.Tools.Agent do
   defp maybe_promote_from_run_store(task_id, record) do
     case Map.get(record, :run_id) do
       run_id when is_binary(run_id) ->
-        case Store.get_run(run_id) do
+        case RunStore.get(run_id) do
           %{summary: summary} when is_map(summary) ->
             completion = completion_from_summary(summary)
 
@@ -1015,7 +1015,7 @@ defmodule CodingAgent.Tools.Agent do
   end
 
   defp completion_from_store(run_id, acc_answer) when is_binary(run_id) do
-    case Store.get_run(run_id) do
+    case RunStore.get(run_id) do
       %{summary: summary} when is_map(summary) ->
         case completion_from_summary(summary) do
           %{ok: _ok} = completion -> {:ok, merge_completion_answer(completion, acc_answer)}

@@ -1,7 +1,16 @@
 defmodule LemonCore.IdempotencyStore do
   @moduledoc """
-  Typed wrapper for persisted idempotency entries.
+  Persisted idempotency entries, keyed by scope and key.
+
+  Owns the `:idempotency` table. Entries record when they were inserted
+  under `"inserted_at_ms"` and are removed by the store's sweep 48 hours
+  later; an entry without that field is kept.
   """
+
+  use LemonCore.Store.Table,
+    tables: [
+      idempotency: [retention: [max_age_ms: 48 * 60 * 60 * 1000, timestamp: :inserted_at_ms]]
+    ]
 
   alias LemonCore.Store
 

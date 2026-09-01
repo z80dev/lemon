@@ -166,21 +166,6 @@ defmodule LemonCore.Quality.ArchitectureRulesCheck do
       ]
     },
     %{
-      code: :wrapper_bypass,
-      message:
-        "Shared-domain modules must use typed store wrappers instead of raw run/chat/policy APIs",
-      files: ["apps/lemon_core/lib/lemon_core/**/*.ex", "apps/lemon_control_plane/lib/**/*.ex"],
-      patterns: [
-        "LemonCore.Store.get_run(",
-        "LemonCore.Store.get_run_history(",
-        "LemonCore.Store.get_session_policy(",
-        "LemonCore.Store.put_session_policy(",
-        "LemonCore.Store.get_chat_state(",
-        "LemonCore.Store.put_chat_state(",
-        "LemonCore.Store.delete_chat_state("
-      ]
-    },
-    %{
       code: :shared_domain_generic_store_bypass,
       message:
         "Shared-domain session/run modules must use typed store wrappers instead of raw generic store tables",
@@ -215,8 +200,6 @@ defmodule LemonCore.Quality.ArchitectureRulesCheck do
         "apps/lemon_core/lib/lemon_core/idempotency_store.ex"
       ],
       patterns: [
-        "LemonCore.Store.append_introspection_event(",
-        "LemonCore.Store.list_introspection_events(",
         "LemonCore.Store.get(:model_policies",
         "LemonCore.Store.put(:model_policies",
         "LemonCore.Store.delete(:model_policies",
@@ -289,7 +272,6 @@ defmodule LemonCore.Quality.ArchitectureRulesCheck do
       files: ["apps/lemon_gateway/lib/**/*.ex"],
       patterns: [
         "LemonCore.ChatStateStore.get(",
-        "LemonCore.Store.get_chat_state(",
         "resolve_auto_resume(",
         "maybe_apply_auto_resume("
       ]

@@ -170,5 +170,15 @@ defmodule LemonCore.Store.Backend do
   """
   @callback ping(state()) :: {:ok, state()} | {:error, error_reason()}
 
-  @optional_callbacks list_recent: 3, ping: 1
+  @doc """
+  Learn a table's declared policy before it is used.
+
+  Optional. Called with each `LemonCore.Store.Table` registered with the
+  store, at the store's start and on later registrations. A backend honours
+  the hints it can — the SQLite backend keeps `persistence: :ephemeral`
+  tables in memory — and ignores the rest. Returns `{:ok, state}`.
+  """
+  @callback register_table(state(), LemonCore.Store.Table.t()) :: {:ok, state()}
+
+  @optional_callbacks list_recent: 3, ping: 1, register_table: 2
 end

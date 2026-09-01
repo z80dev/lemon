@@ -8,11 +8,11 @@ defmodule LemonControlPlane.SessionModelTest do
   describe "override/1" do
     test "returns the session's stored model and nothing else" do
       key = fresh_key()
-      LemonCore.Store.put_session_policy(key, %{model: "gpt-5.4"})
+      LemonCore.PolicyStore.put_session(key, %{model: "gpt-5.4"})
 
       assert SessionModel.override(key) == "gpt-5.4"
 
-      LemonCore.Store.delete_session_policy(key)
+      LemonCore.PolicyStore.delete_session(key)
     end
 
     test "is nil for a session that pinned nothing" do
@@ -29,7 +29,7 @@ defmodule LemonControlPlane.SessionModelTest do
     test "reports each pinned value verbatim" do
       key = fresh_key()
 
-      LemonCore.Store.put_session_policy(key, %{
+      LemonCore.PolicyStore.put_session(key, %{
         model: "claude-sonnet-4-20250514",
         thinking_level: :high
       })
@@ -39,7 +39,7 @@ defmodule LemonControlPlane.SessionModelTest do
                thinking_level: "high"
              } = SessionModel.overrides(key)
 
-      LemonCore.Store.delete_session_policy(key)
+      LemonCore.PolicyStore.delete_session(key)
     end
   end
 
@@ -78,7 +78,7 @@ defmodule LemonControlPlane.SessionModelTest do
   describe "resolve/2" do
     test "a session override wins and is labelled as such" do
       key = fresh_key()
-      LemonCore.Store.put_session_policy(key, %{model: "claude-sonnet-4-20250514"})
+      LemonCore.PolicyStore.put_session(key, %{model: "claude-sonnet-4-20250514"})
 
       resolved = SessionModel.resolve(key)
 
@@ -87,13 +87,13 @@ defmodule LemonControlPlane.SessionModelTest do
       assert resolved["modelSource"] == "session"
       assert is_integer(resolved["contextWindow"])
 
-      LemonCore.Store.delete_session_policy(key)
+      LemonCore.PolicyStore.delete_session(key)
     end
 
     test "carries thinking level with fixed native provenance" do
       key = fresh_key()
 
-      LemonCore.Store.put_session_policy(key, %{
+      LemonCore.PolicyStore.put_session(key, %{
         model: "gpt-5.4",
         thinking_level: "medium"
       })
@@ -104,7 +104,7 @@ defmodule LemonControlPlane.SessionModelTest do
       assert resolved["engine"] == "lemon"
       refute Map.has_key?(resolved, "preferredEngine")
 
-      LemonCore.Store.delete_session_policy(key)
+      LemonCore.PolicyStore.delete_session(key)
     end
 
     test "falls back to the config default and says so" do

@@ -36,7 +36,7 @@ defmodule LemonControlPlane.Methods.SessionsRoutingMetaTest do
         run_count: 1
       })
 
-      LemonCore.Store.put_session_policy(key, %{model: "gpt-5.4"})
+      LemonCore.PolicyStore.put_session(key, %{model: "gpt-5.4"})
 
       {:ok, result} = SessionsList.handle(%{"limit" => 500}, %{})
       row = Enum.find(result["sessions"], &(&1["sessionKey"] == key))
@@ -44,7 +44,7 @@ defmodule LemonControlPlane.Methods.SessionsRoutingMetaTest do
       assert row, "seeded session did not appear in sessions.list"
       assert row["model"] == "gpt-5.4"
 
-      LemonCore.Store.delete_session_policy(key)
+      LemonCore.PolicyStore.delete_session(key)
       LemonCore.RunStore.delete_session_index(key)
     end
   end
@@ -52,7 +52,7 @@ defmodule LemonControlPlane.Methods.SessionsRoutingMetaTest do
   describe "session.detail" do
     test "resolves the model, its provider and its context window" do
       key = fresh_key()
-      LemonCore.Store.put_session_policy(key, %{model: "claude-sonnet-4-20250514"})
+      LemonCore.PolicyStore.put_session(key, %{model: "claude-sonnet-4-20250514"})
 
       {:ok, result} = SessionDetail.handle(%{"sessionKey" => key}, %{})
       session = result["session"]
@@ -63,13 +63,13 @@ defmodule LemonControlPlane.Methods.SessionsRoutingMetaTest do
       assert session["modelOverride"] == "claude-sonnet-4-20250514"
       assert is_integer(session["contextWindow"]) and session["contextWindow"] > 0
 
-      LemonCore.Store.delete_session_policy(key)
+      LemonCore.PolicyStore.delete_session(key)
     end
 
     test "reports thinking level with fixed native provenance" do
       key = fresh_key()
 
-      LemonCore.Store.put_session_policy(key, %{
+      LemonCore.PolicyStore.put_session(key, %{
         model: "gpt-5.4",
         thinking_level: "high"
       })
@@ -80,7 +80,7 @@ defmodule LemonControlPlane.Methods.SessionsRoutingMetaTest do
       assert result["session"]["engine"] == "lemon"
       refute Map.has_key?(result["session"], "preferredEngine")
 
-      LemonCore.Store.delete_session_policy(key)
+      LemonCore.PolicyStore.delete_session(key)
     end
 
     test "an unpinned session reports a null override, not a null session" do

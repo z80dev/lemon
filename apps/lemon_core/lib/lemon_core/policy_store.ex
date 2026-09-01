@@ -1,50 +1,98 @@
 defmodule LemonCore.PolicyStore do
   @moduledoc """
-  Typed wrapper for policy domain storage.
+  Policy overrides by agent, channel and session, and the global runtime
+  policy.
 
-  Provides scoped access to agent, channel, session, and runtime policies
-  stored in `LemonCore.Store`.
+  Owns four tables, one per scope. Values are the plain maps the policy
+  readers interpret; this module only keys them:
+
+    * `:agent_policies` by agent id
+    * `:channel_policies` by channel id
+    * `:session_policies` by session key
+    * `:runtime_policy`, a single entry under `:global`
   """
+
+  use LemonCore.Store.Table,
+    tables: [
+      agent_policies: [],
+      channel_policies: [],
+      session_policies: [],
+      runtime_policy: []
+    ]
 
   alias LemonCore.Store
 
-  @doc "Fetches the policy for the given agent, or `nil` if not set."
-  @spec get_agent(binary()) :: map() | nil
-  def get_agent(agent_id), do: Store.get_agent_policy(agent_id)
+  @agent :agent_policies
+  @channel :channel_policies
+  @session :session_policies
+  @runtime :runtime_policy
+  @runtime_key :global
 
-  @doc "Stores a policy for the given agent."
-  @spec put_agent(binary(), map()) :: :ok | {:error, term()}
-  def put_agent(agent_id, policy), do: Store.put_agent_policy(agent_id, policy)
+  @type policy :: map()
 
-  @doc "Fetches the policy for the given channel, or `nil` if not set."
-  @spec get_channel(binary()) :: map() | nil
-  def get_channel(channel_id), do: Store.get_channel_policy(channel_id)
+  ## Agents
 
-  @doc "Stores a policy for the given channel."
-  @spec put_channel(binary(), map()) :: :ok | {:error, term()}
-  def put_channel(channel_id, policy), do: Store.put_channel_policy(channel_id, policy)
+  @doc "The policy for `agent_id`, or `nil`."
+  @spec get_agent(Store.server(), term()) :: policy() | nil
+  def get_agent(server \\ Store, agent_id), do: Store.get(server, @agent, agent_id)
 
-  @doc "Fetches the policy for the given session, or `nil` if not set."
-  @spec get_session(binary()) :: map() | nil
-  def get_session(session_key), do: Store.get_session_policy(session_key)
+  @spec put_agent(Store.server(), term(), policy()) :: :ok | {:error, term()}
+  def put_agent(server \\ Store, agent_id, policy),
+    do: Store.put(server, @agent, agent_id, policy)
 
-  @doc "Stores a policy for the given session."
-  @spec put_session(binary(), map()) :: :ok | {:error, term()}
-  def put_session(session_key, policy), do: Store.put_session_policy(session_key, policy)
+  @spec delete_agent(Store.server(), term()) :: :ok | {:error, term()}
+  def delete_agent(server \\ Store, agent_id), do: Store.delete(server, @agent, agent_id)
 
-  @doc "Deletes the policy for the given session."
-  @spec delete_session(binary()) :: :ok
-  def delete_session(session_key), do: Store.delete_session_policy(session_key)
+  @spec list_agents(Store.server()) :: [{term(), policy()}]
+  def list_agents(server \\ Store), do: Store.list(server, @agent)
 
-  @doc "Fetches the runtime policy, or `nil` if not set."
-  @spec get_runtime() :: map() | nil
-  def get_runtime, do: Store.get_runtime_policy()
+  ## Channels
 
-  @doc "Stores the runtime policy."
-  @spec put_runtime(map()) :: :ok | {:error, term()}
-  def put_runtime(policy), do: Store.put_runtime_policy(policy)
+  @doc "The policy for `channel_id`, or `nil`."
+  @spec get_channel(Store.server(), term()) :: policy() | nil
+  def get_channel(server \\ Store, channel_id), do: Store.get(server, @channel, channel_id)
 
-  @doc "Deletes the runtime policy."
-  @spec delete_runtime() :: :ok
-  def delete_runtime, do: Store.delete_runtime_policy()
+  @spec put_channel(Store.server(), term(), policy()) :: :ok | {:error, term()}
+  def put_channel(server \\ Store, channel_id, policy) do
+    Store.put(server, @channel, channel_id, policy)
+  end
+
+  @spec delete_channel(Store.server(), term()) :: :ok | {:error, term()}
+  def delete_channel(server \\ Store, channel_id), do: Store.delete(server, @channel, channel_id)
+
+  @spec list_channels(Store.server()) :: [{term(), policy()}]
+  def list_channels(server \\ Store), do: Store.list(server, @channel)
+
+  ## Sessions
+
+  @doc "The policy for `session_key`, or `nil`."
+  @spec get_session(Store.server(), term()) :: policy() | nil
+  def get_session(server \\ Store, session_key), do: Store.get(server, @session, session_key)
+
+  @spec put_session(Store.server(), term(), policy()) :: :ok | {:error, term()}
+  def put_session(server \\ Store, session_key, policy) do
+    Store.put(server, @session, session_key, policy)
+  end
+
+  @spec delete_session(Store.server(), term()) :: :ok | {:error, term()}
+  def delete_session(server \\ Store, session_key),
+    do: Store.delete(server, @session, session_key)
+
+  @spec list_sessions(Store.server()) :: [{term(), policy()}]
+  def list_sessions(server \\ Store), do: Store.list(server, @session)
+
+  ## Runtime
+
+  @doc "The global runtime policy overrides, or `nil`."
+  @spec get_runtime(Store.server()) :: policy() | nil
+  def get_runtime(server \\ Store), do: Store.get(server, @runtime, @runtime_key)
+
+  @spec put_runtime(Store.server(), policy()) :: :ok | {:error, term()}
+  def put_runtime(server \\ Store, policy), do: Store.put(server, @runtime, @runtime_key, policy)
+
+  @spec delete_runtime(Store.server()) :: :ok | {:error, term()}
+  def delete_runtime(server \\ Store), do: Store.delete(server, @runtime, @runtime_key)
+
+  @spec list_runtime(Store.server()) :: [{term(), policy()}]
+  def list_runtime(server \\ Store), do: Store.list(server, @runtime)
 end

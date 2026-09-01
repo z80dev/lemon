@@ -240,6 +240,13 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Changed
 
+- Storage ownership. `LemonCore.Store` no longer implements chat state, run
+  records, progress mappings, policies or introspection events; the modules
+  that own those tables do, and declare them with `LemonCore.Store.Table` so
+  the store applies their read-cache mirror, retention and persistence
+  hints without naming them. Cron runs and idempotency entries expire
+  through the same declared retention. Run finalize hooks are wired under
+  `config :lemon_core, LemonCore.RunStore`. See `docs/platform/owned-storage.md`.
 - `execute_code` gained an explicit result channel: `text()` blocks are the tool
   result (write-through flushed per call, so they survive a timeout/abort kill),
   while stdout/stderr is demoted to a clearly labeled diagnostics tail. Scripts

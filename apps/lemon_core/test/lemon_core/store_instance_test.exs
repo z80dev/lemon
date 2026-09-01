@@ -9,6 +9,7 @@ defmodule LemonCore.StoreInstanceTest do
   import ExUnit.CaptureLog
 
   alias LemonCore.Store
+  alias LemonCore.{ChatStateStore, RunStore, ProgressStore, IntrospectionStore}
   alias LemonCore.Store.EtsBackend
   alias LemonCore.Store.ReadCache
 
@@ -90,28 +91,28 @@ defmodule LemonCore.StoreInstanceTest do
     test "chat state and its read cache are isolated", %{alpha: alpha, beta: beta} do
       scope = {:store_instance_test, :chat}
 
-      assert :ok = Store.put_chat_state(alpha, scope, %{msg: "alpha"})
+      assert :ok = ChatStateStore.put(alpha, scope, %{msg: "alpha"})
 
-      assert %{msg: "alpha"} = Store.get_chat_state(alpha, scope)
-      assert Store.get_chat_state(beta, scope) == nil
+      assert %{msg: "alpha"} = ChatStateStore.get(alpha, scope)
+      assert ChatStateStore.get(beta, scope) == nil
 
-      assert :ok = Store.delete_chat_state(alpha, scope)
-      assert Store.get_chat_state(alpha, scope) == nil
+      assert :ok = ChatStateStore.delete(alpha, scope)
+      assert ChatStateStore.get(alpha, scope) == nil
     end
 
     test "progress mappings and runs are isolated", %{alpha: alpha, beta: beta} do
       scope = {:store_instance_test, :progress}
 
-      assert :ok = Store.put_progress_mapping(alpha, scope, 42, "run_alpha")
-      assert Store.get_run_by_progress(alpha, scope, 42) == "run_alpha"
-      assert Store.get_run_by_progress(beta, scope, 42) == nil
+      assert :ok = ProgressStore.put(alpha, scope, 42, "run_alpha")
+      assert ProgressStore.get_run(alpha, scope, 42) == "run_alpha"
+      assert ProgressStore.get_run(beta, scope, 42) == nil
 
-      assert :ok = Store.append_run_event(alpha, "run_alpha", %{type: :started})
+      assert :ok = RunStore.append_event(alpha, "run_alpha", %{type: :started})
       # Casts are async; wait for the write to land in the backend.
       assert :ok = Store.ping(alpha)
 
-      assert %{events: [%{type: :started}]} = Store.get_run(alpha, "run_alpha")
-      assert Store.get_run(beta, "run_alpha") == nil
+      assert %{events: [%{type: :started}]} = RunStore.get(alpha, "run_alpha")
+      assert RunStore.get(beta, "run_alpha") == nil
     end
 
     test "each instance owns its own read-cache tables", %{alpha: alpha, beta: beta} do
@@ -238,7 +239,7 @@ defmodule LemonCore.StoreInstanceTest do
 
       owner =
         spawn(fn ->
-          ReadCache.init(name)
+          ReadCache.init(name, [:chat])
           send(parent, :ready)
 
           receive do
@@ -250,7 +251,7 @@ defmodule LemonCore.StoreInstanceTest do
 
       log =
         capture_log(fn ->
-          assert_raise ReadCache.CollisionError, fn -> ReadCache.init(name) end
+          assert_raise ReadCache.CollisionError, fn -> ReadCache.init(name, [:chat]) end
         end)
 
       assert log =~ "already exists and is owned by"
@@ -265,7 +266,7 @@ defmodule LemonCore.StoreInstanceTest do
       owner =
         spawn(fn ->
           Process.register(self(), name)
-          tables = ReadCache.init(name)
+          tables = ReadCache.init(name, [:chat])
           send(parent, {:ready, tables})
 
           receive do
@@ -276,7 +277,7 @@ defmodule LemonCore.StoreInstanceTest do
       assert_receive {:ready, tables}
 
       # Same tables, no collision: the owner is the process registered as `name`.
-      assert ReadCache.init(name) == tables
+      assert ReadCache.init(name, [:chat]) == tables
 
       send(owner, :stop)
     end
@@ -292,7 +293,7 @@ defmodule LemonCore.StoreInstanceTest do
       # It used to reach Keyword.get/3 inside the DEFAULT store's handle_call
       # and terminate it, while safe_store_call handed the caller a plausible [].
       assert_raise FunctionClauseError, fn ->
-        Store.list_introspection_events(store)
+        IntrospectionStore.list(store)
       end
 
       assert Process.alive?(Process.whereis(LemonCore.Store)),
@@ -301,11 +302,11 @@ defmodule LemonCore.StoreInstanceTest do
 
     test "a store name where a session key belongs raises at the caller", %{store: store} do
       assert_raise FunctionClauseError, fn ->
-        Store.get_run_history(store, "not-opts")
+        RunStore.history(store, "not-opts")
       end
 
       assert_raise FunctionClauseError, fn ->
-        Store.get_run_history(store, limit: 5)
+        RunStore.history(store, limit: 5)
       end
     end
 
@@ -314,13 +315,13 @@ defmodule LemonCore.StoreInstanceTest do
       # the call is dispatched and answered, not that the node is quiet.
       unknown = "agent:no_such_session_#{System.unique_integer([:positive])}:main"
 
-      assert Store.get_run_history(unknown) == []
-      assert Store.get_run_history(unknown, limit: 5) == []
-      assert Store.get_run_history(store, unknown, limit: 5) == []
+      assert RunStore.history(unknown) == []
+      assert RunStore.history(unknown, limit: 5) == []
+      assert RunStore.get(store, unknown) == nil
 
-      assert is_list(Store.list_introspection_events())
-      assert is_list(Store.list_introspection_events(limit: 5))
-      assert Store.list_introspection_events(store, limit: 5) == []
+      assert is_list(IntrospectionStore.list())
+      assert is_list(IntrospectionStore.list(limit: 5))
+      assert IntrospectionStore.list(store, limit: 5) == []
     end
   end
 end

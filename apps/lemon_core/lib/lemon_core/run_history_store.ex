@@ -130,12 +130,12 @@ defmodule LemonCore.RunHistoryStore do
   end
 
   @doc """
-  `LemonCore.Store` finalize-run hook: persist the finalized run's history.
+  `LemonCore.RunStore` finalize hook: persist the finalized run's history.
 
-  Wired by the runtime, not by the store:
+  Wired by the runtime, not by the run store:
 
-      config :lemon_core, LemonCore.Store,
-        finalize_run_hooks: [{LemonCore.RunHistoryStore, :handle_finalize_run}]
+      config :lemon_core, LemonCore.RunStore,
+        finalize_hooks: [{LemonCore.RunHistoryStore, :handle_finalize_run}]
 
   Pass a store instance name as a leading argument to target a non-default
   history store: `{LemonCore.RunHistoryStore, :handle_finalize_run, [:my_history]}`.

@@ -8,10 +8,13 @@ defmodule LemonCore.Store.Hooks do
 
   ## Extension points
 
-    * `:finalize_run_hooks` — invoked after a run is finalized with a session
-      key. See `LemonCore.Store.finalize_run/3` for the payload.
+  A registration kind is any atom; the store and the domain modules built on
+  it each keep their own:
+
     * `:cached_tables` — generic tables the store mirrors into
-      `LemonCore.Store.ReadCache`.
+      `LemonCore.Store.ReadCache` (see `LemonCore.Store.register_cached_table/2`).
+    * `:finalize_run_hooks` — kept by `LemonCore.RunStore`, invoked after a
+      run is finalized with a session key. See `LemonCore.RunStore.finalize/3`.
 
   ## Hook shapes
 
@@ -28,7 +31,7 @@ defmodule LemonCore.Store.Hooks do
   starts. Runtime registrations live in `:persistent_term` keyed by store name,
   so they survive a store crash and can be made before the store boots.
 
-      LemonCore.Store.register_finalize_run_hook({MyApp.Archive, :on_run})
+      LemonCore.RunStore.register_finalize_hook({MyApp.Archive, :on_run})
       LemonCore.Store.register_cached_table(:my_index)
 
   Invocation is isolated: a hook that raises, throws, or exits is logged and
@@ -37,7 +40,7 @@ defmodule LemonCore.Store.Hooks do
 
   require Logger
 
-  @type kind :: :finalize_run_hooks | :cached_tables
+  @type kind :: atom()
   @type hook :: {module(), atom()} | {module(), atom(), [term()]} | (term() -> any())
 
   @doc """

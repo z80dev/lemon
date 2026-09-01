@@ -1,18 +1,19 @@
 defmodule LemonChannels.Telegram.KnownTargetStore do
   @moduledoc """
-  Typed wrapper for Telegram known-target metadata.
+  Telegram known-target metadata.
+
+  Owns the `:telegram_known_targets` table, declared cached so reads are
+  served from the store's read cache. Channels registers the declaration
+  with the store at boot (`LemonChannels.Application`).
   """
+
+  use LemonCore.Store.Table, tables: [telegram_known_targets: [cached: true]]
 
   alias LemonCore.Store
 
   @table :telegram_known_targets
 
-  @doc """
-  The generic store table backing known targets.
-
-  Channels registers this with `LemonCore.Store.register_cached_table/2` at
-  boot so reads are served from the store's read cache.
-  """
+  @doc "The generic store table backing known targets."
   @spec table() :: atom()
   def table, do: @table
 

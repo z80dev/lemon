@@ -78,8 +78,10 @@ other, gathered from their contracts and the code that keeps them:
 - **Persistence failures are answered, not hidden.** `LemonCore.Store`
   writes the backend before the read cache and only then answers, so a read
   after a successful write cannot observe the previous value and a failed
-  write never looks like a success. Asynchronous appends (`append_run_event/3`,
-  `finalize_run/3`) may lag a read by one message; `ping/1` is the barrier.
+  write never looks like a success. Asynchronous writes (`put_async/4`,
+  `update_async/5`, and so `LemonCore.RunStore.append_event/3`) may lag a
+  read by one message; `ping/1` is the barrier. See
+  [owned-storage.md](owned-storage.md) for who owns what a table means.
 
 ## How this is kept true
 

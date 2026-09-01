@@ -2,6 +2,7 @@ defmodule LemonCore.StoreTest do
   use ExUnit.Case, async: false
 
   alias LemonCore.Store
+  alias LemonCore.{ChatStateStore, RunStore, ProgressStore, PolicyStore, IntrospectionStore}
 
   setup do
     assert {:ok, _} = Application.ensure_all_started(:lemon_core)
@@ -67,31 +68,31 @@ defmodule LemonCore.StoreTest do
   end
 
   describe "chat state TTL semantics" do
-    test "put_chat_state persists expires_at using configured TTL" do
+    test "put persists expires_at using the configured TTL" do
       token = unique_token()
       chat_scope = scope(token, :ttl)
-      ttl_ms = :sys.get_state(Store).chat_state_ttl_ms
+      ttl_ms = ChatStateStore.ttl_ms()
 
       before_put = System.system_time(:millisecond)
-      :ok = Store.put_chat_state(chat_scope, %{phase: :active})
+      :ok = ChatStateStore.put(chat_scope, %{phase: :active})
       stored = Store.get(:chat, chat_scope)
       after_put = System.system_time(:millisecond)
 
       assert %{phase: :active, expires_at: expires_at} = stored
       assert expires_at >= before_put + ttl_ms
       assert expires_at <= after_put + ttl_ms
-      assert %{phase: :active} = Store.get_chat_state(chat_scope)
+      assert %{phase: :active} = ChatStateStore.get(chat_scope)
     end
 
-    test "put_chat_state preserves core chat state structs while adding expiry" do
+    test "put preserves core chat state structs while adding expiry" do
       token = unique_token()
       chat_scope = scope(token, :ttl_struct)
-      ttl_ms = :sys.get_state(Store).chat_state_ttl_ms
+      ttl_ms = ChatStateStore.ttl_ms()
 
       before_put = System.system_time(:millisecond)
 
       :ok =
-        Store.put_chat_state(chat_scope, %LemonCore.ChatState{
+        ChatStateStore.put(chat_scope, %LemonCore.ChatState{
           last_engine: "codex",
           last_resume_token: "thread-1"
         })
@@ -107,10 +108,10 @@ defmodule LemonCore.StoreTest do
 
       assert expires_at >= before_put + ttl_ms
       assert expires_at <= after_put + ttl_ms
-      assert %LemonCore.ChatState{last_engine: "codex"} = Store.get_chat_state(chat_scope)
+      assert %LemonCore.ChatState{last_engine: "codex"} = ChatStateStore.get(chat_scope)
     end
 
-    test "get_chat_state lazily evicts expired state" do
+    test "get lazily evicts expired state" do
       token = unique_token()
       chat_scope = scope(token, :lazy_expiry)
 
@@ -120,7 +121,7 @@ defmodule LemonCore.StoreTest do
           expires_at: System.system_time(:millisecond) - 1
         })
 
-      assert Store.get_chat_state(chat_scope) == nil
+      assert ChatStateStore.get(chat_scope) == nil
       assert Store.get(:chat, chat_scope) == nil
     end
 
@@ -133,16 +134,15 @@ defmodule LemonCore.StoreTest do
       :ok = Store.put(:chat, expired_scope, %{phase: :expired, expires_at: now - 1})
       :ok = Store.put(:chat, live_scope, %{phase: :live, expires_at: now + 60_000})
 
-      send(Store, :sweep_expired_chat_states)
+      :ok = Store.sweep()
 
-      # `get/2` is a call, so it acts as a barrier after the sweep message.
       assert Store.get(:chat, expired_scope) == nil
       assert %{phase: :live} = Store.get(:chat, live_scope)
     end
   end
 
   describe "run history ordering/backfill" do
-    test "get_run_history orders finalized runs by newest started_at first" do
+    test "history orders finalized runs by newest started_at first" do
       token = unique_token()
       session_key = session_key(token)
 
@@ -154,11 +154,11 @@ defmodule LemonCore.StoreTest do
       :ok = Store.put(:runs, middle, %{events: [%{step: 2}], summary: nil, started_at: 2_000})
       :ok = Store.put(:runs, newest, %{events: [%{step: 3}], summary: nil, started_at: 3_000})
 
-      :ok = Store.finalize_run(oldest, %{session_key: session_key})
-      :ok = Store.finalize_run(middle, %{session_key: session_key})
-      :ok = Store.finalize_run(newest, %{session_key: session_key})
+      :ok = RunStore.finalize(oldest, %{session_key: session_key})
+      :ok = RunStore.finalize(middle, %{session_key: session_key})
+      :ok = RunStore.finalize(newest, %{session_key: session_key})
 
-      history = Store.get_run_history(session_key, limit: 10)
+      history = RunStore.history(session_key, limit: 10)
 
       assert Enum.map(history, &elem(&1, 0)) == [newest, middle, oldest]
       assert Enum.map(history, fn {_run_id, data} -> data.started_at end) == [3_000, 2_000, 1_000]
@@ -190,10 +190,10 @@ defmodule LemonCore.StoreTest do
       # Use a synchronous call as a barrier to ensure async casts are applied
       _ = LemonCore.RunHistoryStore.get(session_key, limit: 1)
 
-      session_history = Store.get_run_history(session_key, limit: 10)
+      session_history = RunStore.history(session_key, limit: 10)
       assert Enum.map(session_history, &elem(&1, 0)) == [newer_run, older_run]
 
-      session_limited = Store.get_run_history(session_key, limit: 1)
+      session_limited = RunStore.history(session_key, limit: 1)
       assert Enum.map(session_limited, &elem(&1, 0)) == [newer_run]
     end
   end
@@ -205,24 +205,24 @@ defmodule LemonCore.StoreTest do
       scope_b = scope(token, :progress_b)
       progress_msg_id = 42_001
 
-      assert Store.get_run_by_progress(scope_a, progress_msg_id) == nil
+      assert ProgressStore.get_run(scope_a, progress_msg_id) == nil
 
-      :ok = Store.put_progress_mapping(scope_a, progress_msg_id, "run_a_v1")
-      :ok = Store.put_progress_mapping(scope_b, progress_msg_id, "run_b_v1")
+      :ok = ProgressStore.put(scope_a, progress_msg_id, "run_a_v1")
+      :ok = ProgressStore.put(scope_b, progress_msg_id, "run_b_v1")
 
-      assert Store.get_run_by_progress(scope_a, progress_msg_id) == "run_a_v1"
-      assert Store.get_run_by_progress(scope_b, progress_msg_id) == "run_b_v1"
+      assert ProgressStore.get_run(scope_a, progress_msg_id) == "run_a_v1"
+      assert ProgressStore.get_run(scope_b, progress_msg_id) == "run_b_v1"
 
-      :ok = Store.put_progress_mapping(scope_a, progress_msg_id, "run_a_v2")
+      :ok = ProgressStore.put(scope_a, progress_msg_id, "run_a_v2")
       # Use a synchronous call as a mailbox barrier so async casts are applied in order.
       assert Store.get(:progress, {scope_a, progress_msg_id}) == "run_a_v2"
-      assert Store.get_run_by_progress(scope_a, progress_msg_id) == "run_a_v2"
+      assert ProgressStore.get_run(scope_a, progress_msg_id) == "run_a_v2"
 
-      :ok = Store.delete_progress_mapping(scope_a, progress_msg_id)
+      :ok = ProgressStore.delete(scope_a, progress_msg_id)
 
-      assert Store.get_run_by_progress(scope_a, progress_msg_id) == nil
+      assert ProgressStore.get_run(scope_a, progress_msg_id) == nil
       assert Store.get(:progress, {scope_a, progress_msg_id}) == nil
-      assert Store.get_run_by_progress(scope_b, progress_msg_id) == "run_b_v1"
+      assert ProgressStore.get_run(scope_b, progress_msg_id) == "run_b_v1"
     end
   end
 
@@ -232,14 +232,14 @@ defmodule LemonCore.StoreTest do
       agent_id = "agent_#{token}"
       policy = %{approvals: %{"bash" => :always}}
 
-      :ok = Store.put_agent_policy(agent_id, policy)
+      :ok = PolicyStore.put_agent(agent_id, policy)
 
-      assert Store.get_agent_policy(agent_id) == policy
+      assert PolicyStore.get_agent(agent_id) == policy
       assert Store.get(:agent_policies, agent_id) == policy
-      assert {agent_id, policy} in Store.list_agent_policies()
+      assert {agent_id, policy} in PolicyStore.list_agents()
 
-      :ok = Store.delete_agent_policy(agent_id)
-      assert Store.get_agent_policy(agent_id) == nil
+      :ok = PolicyStore.delete_agent(agent_id)
+      assert PolicyStore.get_agent(agent_id) == nil
       assert Store.get(:agent_policies, agent_id) == nil
     end
 
@@ -248,14 +248,14 @@ defmodule LemonCore.StoreTest do
       channel_id = "channel_#{token}"
       policy = %{blocked_tools: ["exec_raw"]}
 
-      :ok = Store.put_channel_policy(channel_id, policy)
+      :ok = PolicyStore.put_channel(channel_id, policy)
 
-      assert Store.get_channel_policy(channel_id) == policy
+      assert PolicyStore.get_channel(channel_id) == policy
       assert Store.get(:channel_policies, channel_id) == policy
-      assert {channel_id, policy} in Store.list_channel_policies()
+      assert {channel_id, policy} in PolicyStore.list_channels()
 
-      :ok = Store.delete_channel_policy(channel_id)
-      assert Store.get_channel_policy(channel_id) == nil
+      :ok = PolicyStore.delete_channel(channel_id)
+      assert PolicyStore.get_channel(channel_id) == nil
       assert Store.get(:channel_policies, channel_id) == nil
     end
 
@@ -264,28 +264,28 @@ defmodule LemonCore.StoreTest do
       key = session_key(token)
       policy = %{thinking_level: "high"}
 
-      :ok = Store.put_session_policy(key, policy)
+      :ok = PolicyStore.put_session(key, policy)
 
-      assert Store.get_session_policy(key) == policy
+      assert PolicyStore.get_session(key) == policy
       assert Store.get(:session_policies, key) == policy
-      assert {key, policy} in Store.list_session_policies()
+      assert {key, policy} in PolicyStore.list_sessions()
 
-      :ok = Store.delete_session_policy(key)
-      assert Store.get_session_policy(key) == nil
+      :ok = PolicyStore.delete_session(key)
+      assert PolicyStore.get_session(key) == nil
       assert Store.get(:session_policies, key) == nil
     end
 
     test "runtime policy wrappers preserve :global key compatibility" do
       policy = %{sandbox: true}
 
-      :ok = Store.put_runtime_policy(policy)
+      :ok = PolicyStore.put_runtime(policy)
 
-      assert Store.get_runtime_policy() == policy
+      assert PolicyStore.get_runtime() == policy
       assert Store.get(:runtime_policy, :global) == policy
-      assert {:global, policy} in Store.list_runtime_policies()
+      assert {:global, policy} in PolicyStore.list_runtime()
 
-      :ok = Store.delete_runtime_policy()
-      assert Store.get_runtime_policy() == nil
+      :ok = PolicyStore.delete_runtime()
+      assert PolicyStore.get_runtime() == nil
       assert Store.get(:runtime_policy, :global) == nil
     end
   end
@@ -315,11 +315,11 @@ defmodule LemonCore.StoreTest do
           payload: %{tool_name: "bash", is_error: false}
         })
 
-      assert :ok = Store.append_introspection_event(older)
-      assert :ok = Store.append_introspection_event(middle)
-      assert :ok = Store.append_introspection_event(newest)
+      assert :ok = IntrospectionStore.append(older)
+      assert :ok = IntrospectionStore.append(middle)
+      assert :ok = IntrospectionStore.append(newest)
 
-      matching = Store.list_introspection_events(run_id: run_id, limit: 10)
+      matching = IntrospectionStore.list(run_id: run_id, limit: 10)
 
       assert Enum.map(matching, & &1.event_id) == [
                newest.event_id,
@@ -328,7 +328,7 @@ defmodule LemonCore.StoreTest do
              ]
 
       limited =
-        Store.list_introspection_events(
+        IntrospectionStore.list(
           run_id: run_id,
           session_key: session_key,
           limit: 2
@@ -337,11 +337,11 @@ defmodule LemonCore.StoreTest do
       assert Enum.map(limited, & &1.event_id) == [newest.event_id, middle.event_id]
       assert Enum.all?(limited, &(&1.session_key == session_key))
 
-      typed = Store.list_introspection_events(run_id: run_id, event_type: :tool_started)
+      typed = IntrospectionStore.list(run_id: run_id, event_type: :tool_started)
       assert Enum.map(typed, & &1.event_id) == [middle.event_id]
 
       ranged =
-        Store.list_introspection_events(
+        IntrospectionStore.list(
           run_id: run_id,
           since_ms: base_ts - 1_500,
           until_ms: base_ts - 500
@@ -350,18 +350,18 @@ defmodule LemonCore.StoreTest do
       assert Enum.map(ranged, & &1.event_id) == [middle.event_id]
     end
 
-    test "append_introspection_event rejects invalid canonical events" do
+    test "append rejects invalid canonical events" do
       token = unique_token()
       event = introspection_event(token, :invalid, System.system_time(:millisecond))
 
       assert {:error, :invalid_introspection_event} =
-               Store.append_introspection_event(Map.delete(event, :event_id))
+               IntrospectionStore.append(Map.delete(event, :event_id))
 
       assert {:error, :invalid_introspection_event} =
-               Store.append_introspection_event(%{event | provenance: :unknown})
+               IntrospectionStore.append(%{event | provenance: :unknown})
 
       assert {:error, :invalid_introspection_event} =
-               Store.append_introspection_event(%{event | payload: "not-a-map"})
+               IntrospectionStore.append(%{event | payload: "not-a-map"})
     end
 
     test "sweep removes introspection events older than retention" do
@@ -370,21 +370,115 @@ defmodule LemonCore.StoreTest do
       old_event = introspection_event(token, :old, now - 10_000)
       live_event = introspection_event(token, :live, now)
 
-      assert :ok = Store.append_introspection_event(old_event)
-      assert :ok = Store.append_introspection_event(live_event)
+      assert :ok = IntrospectionStore.append(old_event)
+      assert :ok = IntrospectionStore.append(live_event)
 
-      :sys.replace_state(Store, fn state ->
-        %{state | introspection_retention_ms: 2_000}
-      end)
+      # Retention is part of the table's declaration; the owner can shorten it
+      # by re-registering, which is what the test does for the duration.
+      original = LemonCore.Store.Table.fetch(Store, :introspection_log)
+      on_exit(fn -> :ok = Store.register_table(original) end)
 
-      send(Store, :sweep_expired_chat_states)
+      :ok =
+        Store.register_table(%{
+          original
+          | retention: [max_age_ms: 2_000, timestamp: {IntrospectionStore, :timestamp_ms}]
+        })
+
+      :ok = Store.sweep()
 
       filtered =
-        Store.list_introspection_events(run_id: old_event.run_id, limit: 10)
+        IntrospectionStore.list(run_id: old_event.run_id, limit: 10)
         |> Enum.map(& &1.event_id)
 
       assert live_event.event_id in filtered
       refute old_event.event_id in filtered
+    end
+  end
+
+  describe "reads that tell absent from failed" do
+    test "fetch answers :error for a missing key and {:error, reason} for a broken backend" do
+      key = "fetch_#{unique_token()}"
+
+      assert Store.fetch(:store_test_scratch, key) == :error
+      assert :ok = Store.put(:store_test_scratch, key, %{owner: :fetch})
+      assert Store.fetch(:store_test_scratch, key) == {:ok, %{owner: :fetch}}
+      assert Store.get(:store_test_scratch, key) == %{owner: :fetch}
+
+      original_state = swap_store_backend(BusyBackend, %{})
+      on_exit(fn -> :sys.replace_state(Store, fn _ -> original_state end) end)
+
+      assert Store.fetch(:store_test_scratch, key) == {:error, :sqlite_busy}
+      assert Store.get(:store_test_scratch, key) == nil
+    end
+
+    test "fetch of a mirrored table is served from the cache" do
+      key = session_key(unique_token())
+      entry = %{agent_id: "fetch"}
+
+      assert :ok = Store.put(:sessions_index, key, entry)
+      original_state = swap_store_backend(BusyBackend, %{})
+      on_exit(fn -> :sys.replace_state(Store, fn _ -> original_state end) end)
+
+      assert Store.fetch(:sessions_index, key) == {:ok, entry}
+    end
+  end
+
+  describe "atomic updates" do
+    test "update applies the function to the current value, or the default when absent" do
+      key = "update_#{unique_token()}"
+
+      assert {:ok, %{count: 1}} =
+               Store.update(:store_test_scratch, key, %{count: 0}, &%{&1 | count: &1.count + 1})
+
+      assert {:ok, %{count: 2}} =
+               Store.update(:store_test_scratch, key, %{count: 0}, &%{&1 | count: &1.count + 1})
+
+      assert Store.get(:store_test_scratch, key) == %{count: 2}
+    end
+
+    test "concurrent updates of one key are all applied" do
+      key = "update_race_#{unique_token()}"
+
+      1..25
+      |> Enum.map(fn _ ->
+        Task.async(fn -> Store.update(:store_test_scratch, key, 0, &(&1 + 1)) end)
+      end)
+      |> Enum.each(&Task.await(&1, 2_000))
+
+      assert Store.get(:store_test_scratch, key) == 25
+    end
+
+    test "an update function that raises writes nothing and is reported" do
+      key = "update_boom_#{unique_token()}"
+      :ok = Store.put(:store_test_scratch, key, %{count: 0})
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert {:error, {:update_failed, %RuntimeError{message: "owner bug"}}} =
+                   Store.update(:store_test_scratch, key, nil, fn _ -> raise "owner bug" end)
+        end)
+
+      assert log =~ "update function raised"
+      assert Store.get(:store_test_scratch, key) == %{count: 0}
+    end
+
+    test "update_async and put_async land before the next call answers" do
+      key = "async_#{unique_token()}"
+
+      :ok = Store.put_async(:store_test_scratch, key, [])
+      :ok = Store.update_async(:store_test_scratch, key, [], &[:first | &1])
+      :ok = Store.update_async(:store_test_scratch, key, [], &[:second | &1])
+
+      # A call is the barrier behind the casts.
+      :ok = Store.ping()
+      assert Store.get(:store_test_scratch, key) == [:second, :first]
+    end
+  end
+
+  describe "recent entries" do
+    test "list_recent is unsupported on a backend without write times" do
+      # The application store runs on the ETS backend in tests.
+      assert Store.list_recent(:store_test_scratch, 5) == {:error, :unsupported}
     end
   end
 
@@ -410,7 +504,7 @@ defmodule LemonCore.StoreTest do
       on_exit(fn -> :sys.replace_state(Store, fn _ -> original_state end) end)
 
       assert {:error, :sqlite_busy} =
-               Store.put(:cron_runs, "run_busy_#{unique_token()}", %{status: :pending})
+               Store.put(:store_test_scratch, "run_busy_#{unique_token()}", %{status: :pending})
 
       assert Process.alive?(Process.whereis(Store))
     end
@@ -419,9 +513,9 @@ defmodule LemonCore.StoreTest do
       token = unique_token()
       key = "claim_#{token}"
 
-      assert :ok = Store.put_new(:cron_runs, key, %{owner: :first})
-      assert {:error, :exists} = Store.put_new(:cron_runs, key, %{owner: :second})
-      assert Store.get(:cron_runs, key) == %{owner: :first}
+      assert :ok = Store.put_new(:store_test_scratch, key, %{owner: :first})
+      assert {:error, :exists} = Store.put_new(:store_test_scratch, key, %{owner: :second})
+      assert Store.get(:store_test_scratch, key) == %{owner: :first}
     end
 
     test "generic put_new allows exactly one concurrent claimant" do
@@ -432,7 +526,7 @@ defmodule LemonCore.StoreTest do
       tasks =
         for index <- 1..12 do
           Task.async(fn ->
-            result = Store.put_new(:cron_runs, key, %{owner: index})
+            result = Store.put_new(:store_test_scratch, key, %{owner: index})
             send(parent, {:put_new_result, result})
             result
           end)
@@ -442,34 +536,34 @@ defmodule LemonCore.StoreTest do
 
       assert Enum.count(results, &(&1 == :ok)) == 1
       assert Enum.count(results, &(&1 == {:error, :exists})) == 11
-      assert %{owner: owner} = Store.get(:cron_runs, key)
+      assert %{owner: owner} = Store.get(:store_test_scratch, key)
       assert owner in 1..12
     end
 
     test "generic take allows exactly one concurrent consumer" do
       key = "take_#{unique_token()}"
-      assert :ok = Store.put(:node_challenges, key, %{node_id: "node-1"})
+      assert :ok = Store.put(:store_test_scratch, key, %{node_id: "node-1"})
 
       results =
         1..12
-        |> Enum.map(fn _ -> Task.async(fn -> Store.take(:node_challenges, key) end) end)
+        |> Enum.map(fn _ -> Task.async(fn -> Store.take(:store_test_scratch, key) end) end)
         |> Enum.map(&Task.await(&1, 2_000))
 
       assert Enum.count(results, &(&1 == %{node_id: "node-1"})) == 1
       assert Enum.count(results, &is_nil/1) == 11
-      assert Store.get(:node_challenges, key) == nil
+      assert Store.get(:store_test_scratch, key) == nil
     end
 
     test "generic compare_and_swap serializes concurrent replacements" do
       key = "cas_#{unique_token()}"
-      assert :ok = Store.put(:session_token_heads, key, %{generation: 1})
+      assert :ok = Store.put(:store_test_scratch, key, %{generation: 1})
 
       results =
         2..13
         |> Enum.map(fn generation ->
           Task.async(fn ->
             Store.compare_and_swap(
-              :session_token_heads,
+              :store_test_scratch,
               key,
               %{generation: 1},
               %{generation: generation}
@@ -480,11 +574,11 @@ defmodule LemonCore.StoreTest do
 
       assert Enum.count(results, &(&1 == :ok)) == 1
       assert Enum.count(results, &(&1 == {:error, :mismatch})) == 11
-      assert %{generation: generation} = Store.get(:session_token_heads, key)
+      assert %{generation: generation} = Store.get(:store_test_scratch, key)
       assert generation in 2..13
     end
 
-    test "finalize_run writes history to RunHistoryStore" do
+    test "finalize writes history to RunHistoryStore" do
       token = unique_token()
       key = session_key(token)
       rid = run_id(token, :history_delegate)
@@ -497,31 +591,30 @@ defmodule LemonCore.StoreTest do
                })
 
       assert :ok =
-               Store.finalize_run(rid, %{
+               RunStore.finalize(rid, %{
                  session_key: key
                })
 
-      # Allow async cast to RunHistoryStore to complete
-      Process.sleep(100)
-
-      history = Store.get_run_history(key, limit: 50)
+      # `history/2` is a call on the history store, so it lands after the cast
+      # the finalize hook sent it.
+      history = RunStore.history(key, limit: 50)
       assert {^rid, data} = Enum.find(history, fn {id, _} -> id == rid end)
       assert data.session_key == key
     end
   end
 
-  describe "GenServer bottleneck fixes: append_introspection_event" do
-    test "append_introspection_event is asynchronous (cast)" do
+  describe "asynchronous introspection append" do
+    test "append is asynchronous" do
       token = unique_token()
       event = introspection_event(token, :async, System.system_time(:millisecond))
 
       # cast returns :ok immediately without blocking
-      assert :ok = Store.append_introspection_event(event)
+      assert :ok = IntrospectionStore.append(event)
 
       # Poll until the event is persisted (proves it was async, not a call)
       Enum.reduce_while(1..20, nil, fn _, _ ->
         Process.sleep(50)
-        events = Store.list_introspection_events(run_id: event.run_id, limit: 10)
+        events = IntrospectionStore.list(run_id: event.run_id, limit: 10)
 
         if Enum.any?(events, &(&1.event_id == event.event_id)) do
           {:halt, :found}
@@ -530,54 +623,54 @@ defmodule LemonCore.StoreTest do
         end
       end)
 
-      events = Store.list_introspection_events(run_id: event.run_id, limit: 10)
+      events = IntrospectionStore.list(run_id: event.run_id, limit: 10)
       assert Enum.any?(events, &(&1.event_id == event.event_id))
     end
 
-    test "append_introspection_event validates event_id client-side" do
+    test "append validates event_id before writing" do
       token = unique_token()
       event = introspection_event(token, :no_id, System.system_time(:millisecond))
       bad_event = Map.delete(event, :event_id)
 
       assert {:error, :invalid_introspection_event} =
-               Store.append_introspection_event(bad_event)
+               IntrospectionStore.append(bad_event)
     end
 
-    test "append_introspection_event validates ts_ms client-side" do
+    test "append validates ts_ms before writing" do
       token = unique_token()
       event = introspection_event(token, :bad_ts, System.system_time(:millisecond))
 
       assert {:error, :invalid_introspection_event} =
-               Store.append_introspection_event(%{event | ts_ms: -1})
+               IntrospectionStore.append(%{event | ts_ms: -1})
     end
 
-    test "append_introspection_event validates event_type client-side" do
+    test "append validates event_type before writing" do
       token = unique_token()
       event = introspection_event(token, :bad_type, System.system_time(:millisecond))
 
       assert {:error, :invalid_introspection_event} =
-               Store.append_introspection_event(%{event | event_type: nil})
+               IntrospectionStore.append(%{event | event_type: nil})
     end
 
-    test "append_introspection_event validates provenance client-side" do
+    test "append validates provenance before writing" do
       token = unique_token()
       event = introspection_event(token, :bad_prov, System.system_time(:millisecond))
 
       assert {:error, :invalid_introspection_event} =
-               Store.append_introspection_event(%{event | provenance: :unknown})
+               IntrospectionStore.append(%{event | provenance: :unknown})
     end
 
-    test "append_introspection_event validates payload client-side" do
+    test "append validates payload before writing" do
       token = unique_token()
       event = introspection_event(token, :bad_payload, System.system_time(:millisecond))
 
       assert {:error, :invalid_introspection_event} =
-               Store.append_introspection_event(%{event | payload: "not-a-map"})
+               IntrospectionStore.append(%{event | payload: "not-a-map"})
     end
 
-    test "append_introspection_event rejects non-map input" do
+    test "append rejects non-map input" do
       assert {:error, :invalid_introspection_event} =
-               Store.append_introspection_event("not a map")
+               IntrospectionStore.append("not a map")
     end
   end
 end

@@ -7,8 +7,12 @@ defmodule LemonAutomation.CronStore do
 
   ## Tables
 
+  Declared below and registered with the store when `lemon_automation`
+  starts (`LemonAutomation.Application`).
+
   - `:cron_jobs` - CronJob definitions keyed by job ID
-  - `:cron_runs` - CronRun history keyed by run ID
+  - `:cron_runs` - CronRun history keyed by run ID; runs older than 48 hours
+    (by `started_at_ms`) are removed by the store's sweep
   - `:cron_audit_events` - Durable lifecycle audit events
   - `:cron_monitor_state` - Monitor-mode output fingerprints keyed by job ID
   - `:cron_preflight_notice_state` - Preflight-failure fingerprints keyed by job ID
@@ -29,6 +33,15 @@ defmodule LemonAutomation.CronStore do
       # Get runs for a job
       runs = CronStore.list_runs("cron_abc123", limit: 10)
   """
+
+  use LemonCore.Store.Table,
+    tables: [
+      cron_jobs: [],
+      cron_runs: [retention: [max_age_ms: 48 * 60 * 60 * 1000, timestamp: :started_at_ms]],
+      cron_audit_events: [],
+      cron_monitor_state: [],
+      cron_preflight_notice_state: []
+    ]
 
   alias LemonAutomation.{CronJob, CronRun}
 

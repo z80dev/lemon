@@ -1231,7 +1231,7 @@ defmodule LemonGateway.RunTest do
       # Check mapping exists (stores run_id string, not PID)
       stored_run_id =
         wait_for(
-          fn -> LemonCore.Store.get_run_by_progress(scope, progress_msg_id) end,
+          fn -> LemonCore.ProgressStore.get_run(scope, progress_msg_id) end,
           500,
           10
         )
@@ -1246,7 +1246,7 @@ defmodule LemonGateway.RunTest do
 
       # Wait for unregistration to complete
       Elixir.LemonGateway.AsyncHelpers.assert_eventually(
-        fn -> LemonCore.Store.get_run_by_progress(scope, progress_msg_id) == nil end,
+        fn -> LemonCore.ProgressStore.get_run(scope, progress_msg_id) == nil end,
         message: "run progress mapping was not removed"
       )
     end
@@ -1260,7 +1260,7 @@ defmodule LemonGateway.RunTest do
       assert_receive {:run_complete, ^pid, _}, 2000
 
       # No mapping should exist
-      assert LemonCore.Store.get_run_by_progress(scope, nil) == nil
+      assert LemonCore.ProgressStore.get_run(scope, nil) == nil
     end
 
     test "unregisters progress mapping on completion" do
@@ -1275,7 +1275,7 @@ defmodule LemonGateway.RunTest do
 
       # Wait for cleanup to complete
       Elixir.LemonGateway.AsyncHelpers.assert_eventually(
-        fn -> LemonCore.Store.get_run_by_progress(scope, progress_msg_id) == nil end,
+        fn -> LemonCore.ProgressStore.get_run(scope, progress_msg_id) == nil end,
         message: "run progress mapping was not removed on completion"
       )
     end
@@ -1296,7 +1296,7 @@ defmodule LemonGateway.RunTest do
 
       # Verify mapping exists (stores run_id string, not PID)
       assert Enum.any?(1..20, fn _attempt ->
-               case LemonCore.Store.get_run_by_progress(scope, progress_msg_id) do
+               case LemonCore.ProgressStore.get_run(scope, progress_msg_id) do
                  run_id when is_binary(run_id) and run_id != "" ->
                    true
 
@@ -1313,7 +1313,7 @@ defmodule LemonGateway.RunTest do
 
       # Wait for cleanup to complete
       Elixir.LemonGateway.AsyncHelpers.assert_eventually(
-        fn -> LemonCore.Store.get_run_by_progress(scope, progress_msg_id) == nil end,
+        fn -> LemonCore.ProgressStore.get_run(scope, progress_msg_id) == nil end,
         message: "run progress mapping was not removed on cancellation"
       )
     end
@@ -2019,14 +2019,14 @@ defmodule LemonGateway.RunTest do
 
       # Wait for store operations to complete
       Elixir.LemonGateway.AsyncHelpers.assert_eventually(
-        fn -> LemonCore.Store.get_run(run_id) != nil end,
+        fn -> LemonCore.RunStore.get(run_id) != nil end,
         message: "run data was not stored"
       )
 
       # Events should be stored
-      run_data = LemonCore.Store.get_run(run_id)
+      run_data = LemonCore.RunStore.get(run_id)
       assert run_data != nil
-      assert LemonCore.Store.get_run(run_ref) == nil
+      assert LemonCore.RunStore.get(run_ref) == nil
       assert length(run_data.events) >= 2
     end
 
@@ -2221,7 +2221,7 @@ defmodule LemonGateway.RunTest do
 
       # Verify mapping exists (stores run_id string, not PID)
       assert Enum.any?(1..20, fn _attempt ->
-               case LemonCore.Store.get_run_by_progress(scope, progress_msg_id) do
+               case LemonCore.ProgressStore.get_run(scope, progress_msg_id) do
                  run_id when is_binary(run_id) and run_id != "" ->
                    true
 
@@ -2237,7 +2237,7 @@ defmodule LemonGateway.RunTest do
 
       # Wait for cleanup to complete
       Elixir.LemonGateway.AsyncHelpers.assert_eventually(
-        fn -> LemonCore.Store.get_run_by_progress(scope, progress_msg_id) == nil end,
+        fn -> LemonCore.ProgressStore.get_run(scope, progress_msg_id) == nil end,
         message: "run progress mapping was not removed"
       )
     end
@@ -2486,12 +2486,12 @@ defmodule LemonGateway.RunTest do
 
       # Wait for run history to be stored
       Elixir.LemonGateway.AsyncHelpers.assert_eventually(
-        fn -> LemonCore.Store.get_run_history(scope) != [] end,
+        fn -> LemonCore.RunStore.history(scope) != [] end,
         message: "run history was not stored"
       )
 
       # Run history should include this run
-      history = LemonCore.Store.get_run_history(scope)
+      history = LemonCore.RunStore.history(scope)
       assert history != []
     end
 

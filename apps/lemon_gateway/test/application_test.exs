@@ -9,10 +9,8 @@ defmodule LemonGateway.ApplicationTest do
   and configuration loading.
   """
 
-  # The `LemonCore.Store` key also carries the run-history/memory collaborator
-  # wiring (`:finalize_run_hooks`, `:run_history_provider`). Deleting or
-  # wholesale-replacing it leaks into every later test in the suite, which then
-  # silently stops recording run history. Snapshot the real config and restore.
+  # Deleting or wholesale-replacing the `LemonCore.Store` config leaks into
+  # every later test in the suite. Snapshot the real config and restore.
   @store_config Application.compile_env(:lemon_core, LemonCore.Store, [])
   @executor_config Application.compile_env(:lemon_gateway, :executor)
 
@@ -386,9 +384,9 @@ defmodule LemonGateway.ApplicationTest do
 
       # Store should be functional
       scope = {:test, 12_345}
-      LemonCore.Store.put_chat_state(scope, %{test: true})
+      LemonCore.ChatStateStore.put(scope, %{test: true})
       Process.sleep(10)
-      state = LemonCore.Store.get_chat_state(scope)
+      state = LemonCore.ChatStateStore.get(scope)
       assert state.test == true
     end
 
@@ -859,7 +857,7 @@ defmodule LemonGateway.ApplicationTest do
       assert is_pid(pid)
 
       # Should respond to calls
-      result = LemonCore.Store.get_chat_state({:test, 999})
+      result = LemonCore.ChatStateStore.get({:test, 999})
       assert result == nil
     end
 
@@ -921,19 +919,19 @@ defmodule LemonGateway.ApplicationTest do
       scope = {:integration_test, System.unique_integer()}
 
       # Write
-      LemonCore.Store.put_chat_state(scope, %{key: "value"})
+      LemonCore.ChatStateStore.put(scope, %{key: "value"})
       Process.sleep(10)
 
       # Read
-      state = LemonCore.Store.get_chat_state(scope)
+      state = LemonCore.ChatStateStore.get(scope)
       assert state.key == "value"
 
       # Delete
-      LemonCore.Store.delete_chat_state(scope)
+      LemonCore.ChatStateStore.delete(scope)
       Process.sleep(10)
 
       # Verify deleted
-      assert LemonCore.Store.get_chat_state(scope) == nil
+      assert LemonCore.ChatStateStore.get(scope) == nil
     end
 
     test "EngineLock provides mutual exclusion" do
@@ -1054,7 +1052,7 @@ defmodule LemonGateway.ApplicationTest do
       assert new_pid != original_pid
 
       # Should still be functional
-      result = LemonCore.Store.get_chat_state({:test, 1})
+      result = LemonCore.ChatStateStore.get({:test, 1})
       assert result == nil
     end
 

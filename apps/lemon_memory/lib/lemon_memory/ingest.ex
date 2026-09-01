@@ -44,7 +44,7 @@ defmodule LemonMemory.Ingest do
       {:ok, _} =
         LemonMemory.Ingest.start_link(name: :tenant_a_ingest, memory_store: :tenant_a_store)
 
-      LemonCore.Store.Hooks.register(:tenant_a_store, :finalize_run_hooks,
+      LemonCore.RunStore.register_finalize_hook(:tenant_a_store,
         {LemonMemory.Ingest, :handle_finalize_run, [:tenant_a_ingest]})
 
   Telemetry events and the `"routing_feedback"` bus topic are node-global by
@@ -109,12 +109,12 @@ defmodule LemonMemory.Ingest do
   end
 
   @doc """
-  `LemonCore.Store` finalize-run hook: enqueue the finalized run for ingest.
+  `LemonCore.RunStore` finalize hook: enqueue the finalized run for ingest.
 
-  Wired by the runtime, not by the store:
+  Wired by the runtime, not by the run store:
 
-      config :lemon_core, LemonCore.Store,
-        finalize_run_hooks: [{LemonMemory.Ingest, :handle_finalize_run}]
+      config :lemon_core, LemonCore.RunStore,
+        finalize_hooks: [{LemonMemory.Ingest, :handle_finalize_run}]
 
   A non-default instance binds its server name as the hook's leading argument:
   `{LemonMemory.Ingest, :handle_finalize_run, [:tenant_a_ingest]}`.

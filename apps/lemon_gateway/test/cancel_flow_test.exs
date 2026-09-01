@@ -25,7 +25,7 @@ defmodule LemonGateway.CancelFlowTest do
 
     assert_receive :registered, 1_000
 
-    LemonCore.Store.put_progress_mapping(scope, 1001, run_id)
+    LemonCore.ProgressStore.put(scope, 1001, run_id)
 
     :ok = LemonGateway.Runtime.cancel_by_progress_msg(scope, 1001)
 

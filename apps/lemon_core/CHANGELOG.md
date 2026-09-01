@@ -12,12 +12,26 @@ theme of every change below is the same: nothing in `lemon_core` knows about
 Telegram, run history, durable memory, kanban boards, or `~/.lemon`.
 ### Removed
 
+- The domain functions of `LemonCore.Store` (`put_chat_state/3`,
+  `get_chat_state/2`, `append_run_event/3`, `finalize_run/3`, `get_run/2`,
+  `get_run_history/3`, the progress-mapping, policy and introspection
+  functions) and its `:finalize_run_hooks`, `:run_history_provider` and
+  `:chat_state_ttl_ms` options. The behaviour moved to the modules that own
+  it; see `docs/platform/owned-storage.md`.
 - Vendor CLI wrapper extension points. Subagent tasks now execute natively, and
   `[runtime.cli]` is rejected.
 
 
 ### Added
 
+- `LemonCore.Store.Table`: a domain module declares the tables it owns
+  (`use LemonCore.Store.Table, tables: [...]`) with a read-cache mirror, a
+  retention policy and a persistence hint, and registers them with the store
+  at boot. Registration records ownership and refuses a table another
+  module owns. `LemonCore.Store` gained `fetch/3` (absent versus failed
+  reads), `update/5` and `update_async/5` (atomic updates in the store
+  process), `put_async/4`, `list_recent/3`, `sweep/1`, `register_table/2`
+  and `registered_tables/1`; backends may implement `register_table/2`.
 - `LemonCore.A2A.Protocol`, `LemonCore.A2A.Client`, and `LemonCore.A2AStore`
   provide the generic A2A v1.0 wire helpers, credential-scrubbing HTTP client,
   and typed durable context/task/message storage shared by peer transports and
@@ -73,6 +87,17 @@ Telegram, run history, durable memory, kanban boards, or `~/.lemon`.
 
 ### Changed
 
+- `LemonCore.ChatStateStore`, `LemonCore.RunStore`, `LemonCore.ProgressStore`,
+  `LemonCore.PolicyStore`, `LemonCore.IntrospectionStore` and
+  `LemonCore.IdempotencyStore` own their tables' meaning, defaults and
+  retention and declare them with `LemonCore.Store.Table`; every function
+  takes an optional store instance first. `LemonCore.RunStore.finalize/3` is
+  synchronous and runs the finalize hooks in the caller's process; the hooks
+  are wired with `config :lemon_core, LemonCore.RunStore, finalize_hooks:` or
+  `LemonCore.RunStore.register_finalize_hook/2`. The chat-state TTL is
+  `config :lemon_core, LemonCore.ChatStateStore, ttl_ms:`. The store's
+  periodic sweep applies every declared retention instead of four
+  hand-written ones.
 - `LemonCore.RouterBridge.configure/1`, `LemonCore.EventBridge.configure/1` and
   `LemonCore.EngineInfoBridge.configure/1` validate the registered module with
   `LemonCore.Contract.validate/2` against the new behaviours

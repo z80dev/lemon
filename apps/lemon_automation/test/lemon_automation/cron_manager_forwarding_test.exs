@@ -3,6 +3,7 @@ defmodule LemonAutomation.CronManagerForwardingTest do
 
   alias LemonAutomation.{CronManager, CronRun, CronStore}
   alias LemonCore.{Bus, Event, Store}
+  alias LemonCore.{RunStore}
 
   defmodule ForwardingTelegramPlugin do
     @behaviour LemonChannels.Plugin
@@ -83,7 +84,7 @@ defmodule LemonAutomation.CronManagerForwardingTest do
 
     {forwarded_run_id, forwarded_data} =
       await_value(fn ->
-        Store.get_run_history(base_session_key, limit: 20)
+        RunStore.history(base_session_key, limit: 20)
         |> Enum.find(fn {run_id, data} ->
           summary = data[:summary] || %{}
           summary_meta = summary[:meta] || %{}
@@ -140,7 +141,7 @@ defmodule LemonAutomation.CronManagerForwardingTest do
 
     {forwarded_run_id, forwarded_data} =
       await_value(fn ->
-        Store.get_run_history(channel_session_key, limit: 20)
+        RunStore.history(channel_session_key, limit: 20)
         |> Enum.find(fn {run_id, data} ->
           summary = data[:summary] || %{}
           summary_meta = summary[:meta] || %{}

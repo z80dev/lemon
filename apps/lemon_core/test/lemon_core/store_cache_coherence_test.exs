@@ -13,8 +13,10 @@ defmodule LemonCore.StoreCacheCoherenceTest do
   use ExUnit.Case, async: false
 
   alias LemonCore.Store
+  alias LemonCore.{ChatStateStore, ProgressStore}
   alias LemonCore.Store.EtsBackend
   alias LemonCore.Store.ReadCache
+  alias LemonCore.Store.Table
 
   defmodule RefusingBackend do
     @moduledoc """
@@ -59,9 +61,9 @@ defmodule LemonCore.StoreCacheCoherenceTest do
       scope = {:coherence, :chat}
 
       assert {:error, :backend_refused} =
-               Store.put_chat_state(store, scope, %{last_engine: "ghost"})
+               ChatStateStore.put(store, scope, %{last_engine: "ghost"})
 
-      assert Store.get_chat_state(store, scope) == nil
+      assert ChatStateStore.get(store, scope) == nil
       assert ReadCache.get(store, :chat, scope) == nil
     end
 
@@ -69,9 +71,9 @@ defmodule LemonCore.StoreCacheCoherenceTest do
       scope = {:coherence, :progress}
 
       assert {:error, :backend_refused} =
-               Store.put_progress_mapping(store, scope, 42, "run_ghost")
+               ProgressStore.put(store, scope, 42, "run_ghost")
 
-      assert Store.get_run_by_progress(store, scope, 42) == nil
+      assert ProgressStore.get_run(store, scope, 42) == nil
       assert ReadCache.get(store, :progress, {scope, 42}) == nil
     end
 
@@ -87,24 +89,30 @@ defmodule LemonCore.StoreCacheCoherenceTest do
   describe "sweeps evict what they delete" do
     test "a registered cached table does not keep serving swept rows" do
       store = unique(:coherence_sweep)
-      # Registered before boot so the store mirrors it from init.
-      :ok = Store.register_cached_table(store, :cron_runs)
-      on_exit(fn -> Store.unregister_cached_table(store, :cron_runs) end)
+      # Registered before boot so the store mirrors it from init: a cached
+      # table whose rows expire 48 hours after `started_at_ms`.
+      :ok =
+        Store.register_table(store, %Table{
+          name: :sweep_runs,
+          owner: __MODULE__,
+          cached: true,
+          retention: [max_age_ms: 48 * 60 * 60 * 1000, timestamp: :started_at_ms]
+        })
+
+      on_exit(fn -> Table.clear(store) end)
       start_store(store, backend: EtsBackend)
 
       ancient = System.system_time(:millisecond) - 72 * 60 * 60 * 1000
-      :ok = Store.put(store, :cron_runs, "job1", %{started_at_ms: ancient})
-      assert %{started_at_ms: ^ancient} = Store.get(store, :cron_runs, "job1")
+      :ok = Store.put(store, :sweep_runs, "job1", %{started_at_ms: ancient})
+      assert %{started_at_ms: ^ancient} = Store.get(store, :sweep_runs, "job1")
 
-      send(Process.whereis(store), :sweep_expired_chat_states)
-      # The sweep runs in the store process; a call afterwards is the barrier.
-      :ok = Store.ping(store)
+      :ok = Store.sweep(store)
 
-      assert Store.get(store, :cron_runs, "job1") == nil,
+      assert Store.get(store, :sweep_runs, "job1") == nil,
              "the sweeper deleted the backend row but the cache kept serving it"
 
-      assert Store.list(store, :cron_runs) == []
-      assert ReadCache.get(store, :cron_runs, "job1") == nil
+      assert Store.list(store, :sweep_runs) == []
+      assert ReadCache.get(store, :sweep_runs, "job1") == nil
     end
 
     test "expired chat state is evicted from the cache, not just the backend" do
@@ -112,7 +120,7 @@ defmodule LemonCore.StoreCacheCoherenceTest do
       scope = {:coherence, :expiring}
 
       # A TTL in the past: the row is already expired when the sweeper sees it.
-      :ok = Store.put_chat_state(store, scope, %{last_engine: "codex"})
+      :ok = ChatStateStore.put(store, scope, %{last_engine: "codex"})
 
       :sys.replace_state(Process.whereis(store), fn state ->
         expired = %{last_engine: "codex", expires_at: System.system_time(:millisecond) - 1_000}
@@ -121,8 +129,7 @@ defmodule LemonCore.StoreCacheCoherenceTest do
         %{state | backend_state: backend_state}
       end)
 
-      send(Process.whereis(store), :sweep_expired_chat_states)
-      :ok = Store.ping(store)
+      :ok = Store.sweep(store)
 
       assert ReadCache.get(store, :chat, scope) == nil,
              "expired chat state stayed in the ETS mirror, which grows without bound"
@@ -134,12 +141,12 @@ defmodule LemonCore.StoreCacheCoherenceTest do
       store = start_store(unique(:coherence_raw), backend: EtsBackend)
       scope = {:coherence, :raw}
 
-      :ok = Store.put_chat_state(store, scope, %{last_engine: "one"})
-      :ok = Store.put_chat_state(store, scope, %{last_engine: "two"})
+      :ok = ChatStateStore.put(store, scope, %{last_engine: "one"})
+      :ok = ChatStateStore.put(store, scope, %{last_engine: "two"})
 
       # No barrier: the write is synchronous, so the newest value is readable
       # immediately and an older one can never be applied on top of it.
-      assert %{last_engine: "two"} = Store.get_chat_state(store, scope)
+      assert %{last_engine: "two"} = ChatStateStore.get(store, scope)
     end
 
     test "a rapid write sequence ends on the newest value", %{} do
@@ -147,23 +154,23 @@ defmodule LemonCore.StoreCacheCoherenceTest do
       scope = {:coherence, :rapid}
 
       for i <- 1..50 do
-        :ok = Store.put_chat_state(store, scope, %{seq: i})
+        :ok = ChatStateStore.put(store, scope, %{seq: i})
         # No barrier anywhere in this loop: each write is applied before it
         # returns, so the mirror is never behind the caller.
-        assert %{seq: ^i} = Store.get_chat_state(store, scope)
+        assert %{seq: ^i} = ChatStateStore.get(store, scope)
       end
 
-      assert %{seq: 50} = Store.get_chat_state(store, scope)
+      assert %{seq: 50} = ChatStateStore.get(store, scope)
     end
 
     test "a deleted chat state stays deleted", %{} do
       store = start_store(unique(:coherence_del), backend: EtsBackend)
       scope = {:coherence, :del}
 
-      :ok = Store.put_chat_state(store, scope, %{last_engine: "one"})
-      :ok = Store.delete_chat_state(store, scope)
+      :ok = ChatStateStore.put(store, scope, %{last_engine: "one"})
+      :ok = ChatStateStore.delete(store, scope)
 
-      assert Store.get_chat_state(store, scope) == nil
+      assert ChatStateStore.get(store, scope) == nil
     end
   end
 

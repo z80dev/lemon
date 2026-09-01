@@ -5,27 +5,27 @@
 # in the commit message.
 %{
   # lines in apps/*/lib/**/*.ex
-  lib_lines: 338447,
+  lib_lines: 338480,
   # lib files over 1000 lines, excluding the lemon_ai model catalogs
-  large_lib_files: 51,
+  large_lib_files: 50,
   # :"Elixir.Some.Module" atoms in lib
   dynamic_module_atoms: 1,
   # Code.ensure_loaded?/1 and function_exported?/3 calls in lib
-  reflection_sites: 295,
+  reflection_sites: 296,
   # rescue clauses in lib
-  rescue_clauses: 1137,
+  rescue_clauses: 1138,
   # catch clauses in lib
   catch_clauses: 383,
   # distinct tables named in generic LemonCore.Store calls outside Store.Table modules
-  generic_store_tables: 73,
+  generic_store_tables: 66,
   # *_store.ex modules in lib
   store_wrapper_modules: 48,
   # source-pattern rules in LemonCore.Quality.ArchitectureRulesCheck
-  architecture_rules: 36,
+  architecture_rules: 35,
   # Process.sleep/1 and :timer.sleep/1 calls in tests
-  test_sleeps: 1223,
+  test_sleeps: 1222,
   # *_test.exs files that are not async: true
   sync_test_files: 563,
   # bytes across apps/*/AGENTS.md
-  agents_md_bytes: 441120
+  agents_md_bytes: 441119
 }

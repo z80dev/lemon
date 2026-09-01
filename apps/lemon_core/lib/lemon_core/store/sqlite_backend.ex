@@ -103,6 +103,13 @@ defmodule LemonCore.Store.SqliteBackend do
   end
 
   @impl true
+  def register_table(state, %LemonCore.Store.Table{name: name, persistence: :ephemeral}) do
+    {:ok, %{state | ephemeral_tables: MapSet.put(state.ephemeral_tables, name)}}
+  end
+
+  def register_table(state, %LemonCore.Store.Table{}), do: {:ok, state}
+
+  @impl true
   def put(state, table, key, value) do
     if ephemeral_table?(state, table) do
       {table_ets, state} = ensure_ephemeral_table(state, table)

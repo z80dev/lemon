@@ -20,7 +20,7 @@ defmodule CodingAgent.Tools.SessionSearch do
 
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAi.Types.TextContent
-  alias LemonCore.Store
+  alias LemonCore.RunStore
   alias LemonMemory.Safety
   alias LemonMemory.SessionSearch
 
@@ -39,7 +39,7 @@ defmodule CodingAgent.Tools.SessionSearch do
       scope: resolve_scope(opts),
       agent_id: parse_agent_id(session_key),
       search_fn: Keyword.get(opts, :session_search_fn, &SessionSearch.search/2),
-      history_fn: Keyword.get(opts, :session_history_fn, &Store.get_run_history/2)
+      history_fn: Keyword.get(opts, :session_history_fn, &RunStore.history/2)
     }
 
     %AgentTool{

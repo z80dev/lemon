@@ -5,6 +5,9 @@ defmodule LemonAutomation.Application do
 
   @impl true
   def start(_type, _args) do
+    # The tables this app owns get their retention from the store's sweep.
+    LemonCore.Store.Table.register(LemonAutomation.CronStore)
+
     children = [
       {Task.Supervisor, name: LemonAutomation.TaskSupervisor},
       LemonAutomation.CronManager,

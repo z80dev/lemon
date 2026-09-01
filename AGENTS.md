@@ -484,7 +484,7 @@ Useful runtime checks:
 DynamicSupervisor.which_children(LemonGateway.ThreadWorkerSupervisor)
 
 # Session history
-LemonCore.Store.get_run_history(session_key, limit: 10)
+LemonCore.RunStore.history(session_key, limit: 10)
 ```
 
 ### Telethon Debug Loop

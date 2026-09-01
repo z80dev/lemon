@@ -9,18 +9,9 @@ defmodule LemonCore.StoreHooksTest do
   import ExUnit.CaptureLog
 
   alias LemonCore.Store
+  alias LemonCore.{ChatStateStore, RunStore}
   alias LemonCore.Store.EtsBackend
   alias LemonCore.Store.ReadCache
-
-  defmodule FakeHistory do
-    @moduledoc false
-    def get(server, session_key, opts), do: [{:fake, server, session_key, opts}]
-  end
-
-  defmodule ExplodingHistory do
-    @moduledoc false
-    def get(_server, _session_key, _opts), do: raise("history provider is down")
-  end
 
   defp start_store(name, opts) do
     spec = Supervisor.child_spec({Store, Keyword.put(opts, :name, name)}, id: name)
@@ -28,21 +19,26 @@ defmodule LemonCore.StoreHooksTest do
     name
   end
 
+  # `finalize/3` is synchronous: when it returns, the record is written and
+  # every hook has run in this process.
   defp finalize(store, run_id, summary) do
-    :ok = Store.finalize_run(store, run_id, summary)
-    # finalize_run is a cast; a call afterwards acts as a barrier.
-    :ok = Store.ping(store)
+    :ok = RunStore.finalize(store, run_id, summary)
   end
 
-  describe "finalize_run hooks" do
-    test "configured hooks receive the finalized run" do
+  defp register_hook(store, hook) do
+    :ok = RunStore.register_finalize_hook(store, hook)
+    on_exit(fn -> RunStore.unregister_finalize_hook(store, hook) end)
+  end
+
+  describe "finalize hooks" do
+    test "registered hooks receive the finalized run" do
       parent = self()
       hook = fn event -> send(parent, {:hook_fired, event}) end
 
-      store =
-        start_store(:store_hooks_configured, backend: EtsBackend, finalize_run_hooks: [hook])
+      store = start_store(:store_hooks_configured, backend: EtsBackend)
+      register_hook(store, hook)
 
-      :ok = Store.append_run_event(store, "run_cfg", %{type: :started})
+      :ok = RunStore.append_event(store, "run_cfg", %{type: :started})
       finalize(store, "run_cfg", %{session_key: "agent:hooks:main", agent_id: "hooks"})
 
       assert_receive {:hook_fired, event}
@@ -59,13 +55,13 @@ defmodule LemonCore.StoreHooksTest do
       hook = fn event -> send(parent, {:runtime_hook, event.run_id}) end
       store = start_store(:store_hooks_runtime, backend: EtsBackend)
 
-      on_exit(fn -> Store.unregister_finalize_run_hook(:store_hooks_runtime, hook) end)
+      on_exit(fn -> RunStore.unregister_finalize_hook(:store_hooks_runtime, hook) end)
 
-      :ok = Store.register_finalize_run_hook(store, hook)
+      :ok = RunStore.register_finalize_hook(store, hook)
       finalize(store, "run_1", %{session_key: "agent:runtime:main"})
       assert_receive {:runtime_hook, "run_1"}
 
-      :ok = Store.unregister_finalize_run_hook(store, hook)
+      :ok = RunStore.unregister_finalize_hook(store, hook)
       finalize(store, "run_2", %{session_key: "agent:runtime:main"})
       refute_receive {:runtime_hook, "run_2"}
     end
@@ -76,11 +72,8 @@ defmodule LemonCore.StoreHooksTest do
       boom = fn _event -> raise "hook exploded" end
       last = fn _event -> send(parent, {:order, :last}) end
 
-      store =
-        start_store(:store_hooks_isolation,
-          backend: EtsBackend,
-          finalize_run_hooks: [first, boom, last]
-        )
+      store = start_store(:store_hooks_isolation, backend: EtsBackend)
+      Enum.each([first, boom, last], &register_hook(store, &1))
 
       log =
         capture_log(fn ->
@@ -98,8 +91,8 @@ defmodule LemonCore.StoreHooksTest do
       parent = self()
       hook = fn event -> send(parent, {:hook_fired, event}) end
 
-      store =
-        start_store(:store_hooks_no_session, backend: EtsBackend, finalize_run_hooks: [hook])
+      store = start_store(:store_hooks_no_session, backend: EtsBackend)
+      register_hook(store, hook)
 
       finalize(store, "run_orphan", %{agent_id: "nobody"})
       refute_receive {:hook_fired, _}
@@ -114,42 +107,6 @@ defmodule LemonCore.StoreHooksTest do
       refute source =~ "RunHistoryStore"
       refute source =~ "MemoryIngest"
       refute source =~ "known_targets"
-    end
-  end
-
-  describe "run history provider" do
-    test "reads forward to the configured provider" do
-      store =
-        start_store(:store_history_provider,
-          backend: EtsBackend,
-          run_history_provider: {FakeHistory, :fake_server}
-        )
-
-      assert Store.get_run_history(store, "agent:x:main", limit: 3) == [
-               {:fake, :fake_server, "agent:x:main", [limit: 3]}
-             ]
-    end
-
-    test "a store with no provider reports no history instead of failing" do
-      store = start_store(:store_history_none, backend: EtsBackend)
-
-      assert Store.get_run_history(store, "agent:x:main", []) == []
-    end
-
-    test "a provider that raises is isolated from the store" do
-      store =
-        start_store(:store_history_exploding,
-          backend: EtsBackend,
-          run_history_provider: ExplodingHistory
-        )
-
-      log =
-        capture_log(fn ->
-          assert Store.get_run_history(store, "agent:x:main", []) == []
-        end)
-
-      assert log =~ "history provider is down"
-      assert Store.ping(store) == :ok
     end
   end
 
@@ -181,10 +138,11 @@ defmodule LemonCore.StoreHooksTest do
       assert ReadCache.get(store, :my_index, "k") == "v"
       assert :ets.whereis(ReadCache.table_for(store, :my_index)) != :undefined
 
-      # Not in this instance's set: readable, but not mirrored.
-      :ok = Store.put(store, :sessions_index, "s", %{run_count: 1})
-      assert ReadCache.get(store, :sessions_index, "s") == nil
-      assert Store.get(store, :sessions_index, "s") == %{run_count: 1}
+      # Neither configured nor declared by a registered table module: readable,
+      # but not mirrored.
+      :ok = Store.put(store, :plain_index, "s", %{run_count: 1})
+      assert ReadCache.get(store, :plain_index, "s") == nil
+      assert Store.get(store, :plain_index, "s") == %{run_count: 1}
     end
 
     test "channel target tables are not a core default" do
@@ -229,15 +187,14 @@ defmodule LemonCore.StoreHooksTest do
     end
   end
 
-  describe "generic API still bypasses the cache for the store's own domains" do
-    test "reads of :chat go to the backend, not the chat read cache" do
+  describe "the generic API sees the rows the typed API writes" do
+    test "a chat state written through the typed API is a plain row" do
       store = start_store(:store_intrinsic_bypass, backend: EtsBackend)
       scope = {:intrinsic, :chat}
 
-      :ok = Store.put_chat_state(store, scope, %{phase: :active})
-      assert %{phase: :active} = Store.get_chat_state(store, scope)
+      :ok = ChatStateStore.put(store, scope, %{phase: :active})
+      assert %{phase: :active} = ChatStateStore.get(store, scope)
 
-      # The typed API caches; the generic API must still see the backend row.
       assert %{phase: :active} = Store.get(store, :chat, scope)
       assert :ok = Store.delete(store, :chat, scope)
       assert Store.get(store, :chat, scope) == nil
@@ -249,16 +206,27 @@ defmodule LemonCore.StoreHooksTest do
       parent = self()
       hook = {__MODULE__, :send_to, [parent]}
 
-      store = start_store(:hook_dedup_store, finalize_run_hooks: [hook])
+      # Configured hooks belong to the default store, so this test runs on it,
+      # standing in for the runtime's own wiring for the duration.
+      previous = Application.get_env(:lemon_core, LemonCore.RunStore)
+      Application.put_env(:lemon_core, LemonCore.RunStore, finalize_hooks: [hook])
+
+      on_exit(fn ->
+        if is_nil(previous),
+          do: Application.delete_env(:lemon_core, LemonCore.RunStore),
+          else: Application.put_env(:lemon_core, LemonCore.RunStore, previous)
+      end)
+
       # A collaborator that also self-registers at boot — the two mechanisms are
       # documented as interchangeable, so wiring both must not double-ingest.
-      :ok = Store.register_finalize_run_hook(store, hook)
-      on_exit(fn -> Store.unregister_finalize_run_hook(store, hook) end)
+      register_hook(Store, hook)
 
-      finalize(store, "run_dedup", %{session_key: "agent:dedup:main"})
+      finalize(Store, "run_dedup_#{System.unique_integer([:positive])}", %{
+        session_key: "agent:dedup:main"
+      })
 
-      assert_receive {:hook_fired, %{run_id: "run_dedup"}}
-      refute_receive {:hook_fired, %{run_id: "run_dedup"}}, 100
+      assert_receive {:hook_fired, %{session_key: "agent:dedup:main"}}
+      refute_receive {:hook_fired, %{session_key: "agent:dedup:main"}}, 100
     end
   end
 

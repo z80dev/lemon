@@ -47,8 +47,9 @@ This is the **base app** of the Lemon umbrella. All other apps depend on it. It 
 | `LemonCore.Secrets.Keychain` | macOS keychain integration for master key storage |
 | `LemonCore.Secrets.MasterKey` | Master key resolution (keychain first, then env var) |
 | `LemonCore.OAuth.LocalCallbackListener` | Caller-owned one-shot localhost OAuth callback listener; monitors its listener manager so early failure returns immediately instead of consuming the authorization timeout |
-| `LemonCore.Store` | Storage GenServer with pluggable backends, `put_new/3` claims, serialized `take/2`, and exact-value `compare_and_swap/4` |
-| `LemonCore.Store.ReadCache` | ETS read cache for hot domains (`:chat`, `:runs`, `:progress`, `:sessions_index`, plus tables collaborators add with `register_cached_table/1`) |
+| `LemonCore.Store` | Storage GenServer with pluggable backends; `fetch/3`, `put_new/4`, `update/5`, `compare_and_swap/5`, `take/3` |
+| `LemonCore.Store.Table` | Table declarations (owner, cache, retention, persistence); `docs/platform/owned-storage.md` |
+| `LemonCore.Store.ReadCache` | ETS mirror of tables declared `cached: true` |
 | `LemonCore.Store.EtsBackend` | In-memory ETS (ephemeral, default) with `:ets.insert_new/2` claims |
 | `LemonCore.Store.SqliteBackend` | SQLite with WAL mode (persistent) and `ON CONFLICT DO NOTHING` claims |
 | `LemonCore.Store.JsonlBackend` | Append-only JSONL (portable, human-readable) with serialized Store-process claims |
@@ -72,7 +73,7 @@ This is the **base app** of the Lemon umbrella. All other apps depend on it. It 
 | `LemonCore.RouterBridge` | Runtime bridge to `:lemon_router` without compile-time coupling |
 | `LemonCore.SessionKey` | Session key generation and parsing |
 | `LemonCore.Idempotency` | At-most-once deduplication backed by `LemonCore.Store` with 24h TTL |
-| `LemonCore.IdempotencyStore` | Typed wrapper for persisted idempotency entries |
+| `LemonCore.IdempotencyStore` | Idempotency entries, 48h retention |
 | `LemonCore.UsageStore` | Shared typed wrapper for usage records, current usage summaries, and quota counters used by control-plane surfaces |
 | `LemonCore.UsageDiagnostics` | Redacted aggregate usage diagnostics shared by doctor checks and support bundles |
 | `LemonCore.Dedupe.Ets` | Low-level ETS-backed TTL deduplication (`:seen?`, `:check_and_mark`) |

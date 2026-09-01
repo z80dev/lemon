@@ -152,31 +152,6 @@ defmodule LemonCore.Quality.ArchitectureRulesCheckTest do
     end
   end
 
-  test "flags raw shared-domain store access in control plane code" do
-    tmp_dir = tmp_repo!()
-
-    try do
-      write_file!(
-        tmp_dir,
-        "apps/lemon_control_plane/lib/lemon_control_plane/methods/bad.ex",
-        """
-        defmodule LemonControlPlane.Methods.Bad do
-          def bad(run_id), do: LemonCore.Store.get_run(run_id)
-        end
-        """
-      )
-
-      assert {:error, report} = ArchitectureRulesCheck.run(root: tmp_dir)
-
-      assert Enum.any?(report.issues, fn issue ->
-               issue.code == :wrapper_bypass and
-                 issue.path == "apps/lemon_control_plane/lib/lemon_control_plane/methods/bad.ex"
-             end)
-    after
-      File.rm_rf!(tmp_dir)
-    end
-  end
-
   test "flags router-internal session registry access outside lemon_router" do
     tmp_dir = tmp_repo!()
 
@@ -1055,7 +1030,6 @@ defmodule LemonCore.Quality.ArchitectureRulesCheckTest do
       File.rm_rf!(tmp_dir)
     end
   end
-
 
   test "flags CodingAgent references from the gateway" do
     tmp_dir = tmp_repo!()

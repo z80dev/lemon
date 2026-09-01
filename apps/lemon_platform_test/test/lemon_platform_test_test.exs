@@ -47,7 +47,7 @@ defmodule LemonPlatformTest.HelpersTest do
       %{required: required, optional: optional} =
         LemonPlatformTest.callbacks(LemonCore.Store.Backend)
 
-      assert Enum.sort(optional) == [list_recent: 3, ping: 1]
+      assert Enum.sort(optional) == [list_recent: 3, ping: 1, register_table: 2]
       assert {:put_new, 4} in required
       refute {:ping, 1} in required
     end

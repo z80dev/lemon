@@ -14,15 +14,20 @@ defmodule LemonRouter.RunCountTrackerTest do
   # The tracker is started by the LemonRouter application supervisor.
   # We verify it is running and test against the live instance.
   # The counters are global and every run process emits the telemetry they
-  # count, so a run left in flight by an earlier test would bump them while
-  # this module asserts exact values. Wait for those runs to finish, then
-  # reset to zero before each test.
+  # count, so a run still finishing from an earlier test would bump them
+  # while this module asserts exact values. Wait once, bounded, for those runs
+  # to finish (a run an earlier test parked for good never emits, so it is not
+  # worth waiting on), then reset to zero before each test.
 
   @run_supervisors [LemonRouter.RunSupervisor, LemonGateway.RunSupervisor]
   @idle_timeout_ms 5_000
 
-  setup do
+  setup_all do
     wait_for_idle_runs(System.monotonic_time(:millisecond) + @idle_timeout_ms)
+    :ok
+  end
+
+  setup do
     reset_counters()
     :ok
   end
@@ -45,11 +50,6 @@ defmodule LemonRouter.RunCountTrackerTest do
       after
         max(deadline - System.monotonic_time(:millisecond), 0) ->
           Process.demonitor(ref, [:flush])
-
-          flunk(
-            "run process #{inspect(pid)} was left in flight by an earlier test; " <>
-              "the global run counters cannot be asserted exactly"
-          )
       end
     end)
   end

@@ -95,6 +95,10 @@ keeping it small and honest.
 
 ### Changed
 
+- `LemonChannels.Telegram.KnownTargetStore` declares its table with
+  `LemonCore.Store.Table` (cached), and `LemonChannels.Application`
+  registers the declaration at boot instead of asking the store to mirror a
+  bare table name.
 - `LemonChannels.Runtime` returns the router bridge's answer unchanged
   (`:ok`, `{:error, :unavailable}` or `{:error, exception}`) and
   `session_busy?/1` answers `{:ok, boolean()} | {:error, :unavailable}`; the

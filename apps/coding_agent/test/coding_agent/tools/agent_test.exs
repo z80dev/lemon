@@ -10,6 +10,7 @@ defmodule CodingAgent.Tools.AgentTest do
   alias CodingAgent.Messages
   alias CodingAgent.Messages.CustomMessage
   alias LemonCore.{Bus, Event, ResumeToken, RunRequest, Store}
+  alias LemonCore.{RunStore}
   alias LemonPlatformTest.EventsFixtures
 
   defmodule AgentTestStubRunOrchestrator do
@@ -859,7 +860,7 @@ defmodule CodingAgent.Tools.AgentTest do
     assert_receive {:router_submit, %RunRequest{}, 1}
 
     :ok =
-      Store.finalize_run(result.details.run_id, %{
+      RunStore.finalize(result.details.run_id, %{
         completed: %{ok: true, answer: "hello from store"}
       })
 
