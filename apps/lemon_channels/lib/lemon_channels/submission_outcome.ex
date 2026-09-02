@@ -3,8 +3,9 @@ defmodule LemonChannels.SubmissionOutcome do
   Classifies router submission failures for transport delivery decisions.
 
   A definite rejection is safe for a transport to redeliver (or to forget a
-  provisional dedupe marker). `:outcome_unknown` is different: the router may
-  have accepted the run before its reply was lost, so transports retain their
+  provisional dedupe marker). `:outcome_unknown` and a malformed callback
+  acknowledgement are different: the router callback may have performed the
+  mutation without returning a valid success value, so transports retain their
   dedupe marker while telling the user that acceptance could not be confirmed.
 
   Error labels are deliberately bounded. Transport logs and user messages must
@@ -16,6 +17,7 @@ defmodule LemonChannels.SubmissionOutcome do
 
   @spec uncertain?(term()) :: boolean()
   def uncertain?({:error, :outcome_unknown}), do: true
+  def uncertain?({:error, {:unexpected_answer, _answer}}), do: true
   def uncertain?(_), do: false
 
   @spec retry_safe?(term()) :: boolean()

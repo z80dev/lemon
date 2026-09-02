@@ -1436,16 +1436,10 @@ defmodule LemonChannels.Adapters.Discord.Transport do
           :ok ->
             _ = respond_ephemeral(interaction, "Cancelling run...")
 
-          {:error, reason} ->
-            Logger.warning(
-              "discord cancel failed: reason=#{SubmissionOutcome.log_label({:error, reason})}"
-            )
+          {:error, _} = error ->
+            Logger.warning("discord cancel failed: reason=#{SubmissionOutcome.log_label(error)}")
 
-            _ =
-              respond_ephemeral(
-                interaction,
-                "Could not cancel the run: the router is unavailable."
-              )
+            _ = respond_ephemeral(interaction, cancellation_failure_message(error))
         end
 
       :none ->
@@ -1752,9 +1746,14 @@ defmodule LemonChannels.Adapters.Discord.Transport do
       :ok ->
         update_interaction(interaction, "Cancelling...", [])
 
-      {:error, reason} ->
-        Logger.warning("discord cancel failed run_id=#{inspect(run_id)}: #{inspect(reason)}")
-        update_interaction(interaction, "Could not cancel: the router is unavailable.", [])
+      {:error, _} = error ->
+        Logger.warning(
+          "discord cancel component failed: reason=#{SubmissionOutcome.log_label(error)}"
+        )
+
+        # An ephemeral response acknowledges the click without replacing the
+        # source message, so its cancel/retry controls remain available.
+        respond_ephemeral(interaction, cancellation_failure_message(error))
     end
   end
 
@@ -1765,23 +1764,40 @@ defmodule LemonChannels.Adapters.Discord.Transport do
         :cancel -> String.trim_leading(custom_id, @idle_keepalive_stop_prefix)
       end
 
-    msg =
-      case LemonChannels.Runtime.keep_run_alive(run_id, decision) do
-        :ok when decision == :continue ->
-          "Continuing run."
+    case LemonChannels.Runtime.keep_run_alive(run_id, decision) do
+      :ok when decision == :continue ->
+        update_interaction(interaction, "Continuing run.", [])
 
-        :ok ->
-          "Stopping run."
+      :ok ->
+        update_interaction(interaction, "Stopping run.", [])
 
-        {:error, reason} ->
-          Logger.warning(
-            "discord keep-alive failed run_id=#{inspect(run_id)}: #{inspect(reason)}"
-          )
+      {:error, _} = error ->
+        Logger.warning(
+          "discord keep-alive component failed: reason=#{SubmissionOutcome.log_label(error)}"
+        )
 
-          "Could not apply the decision: the router is unavailable."
-      end
+        # Do not update the source message on failure. Its controls are the
+        # user's safe retry path.
+        respond_ephemeral(interaction, keepalive_failure_message(error, decision))
+    end
+  end
 
-    update_interaction(interaction, msg, [])
+  defp cancellation_failure_message(error) do
+    if SubmissionOutcome.uncertain?(error) do
+      "I couldn't confirm whether cancellation was accepted. Check the run status before trying again."
+    else
+      "I couldn't cancel the run. Please try again."
+    end
+  end
+
+  defp keepalive_failure_message(error, decision) do
+    action = if decision == :cancel, do: "stopping the run", else: "continuing the run"
+
+    if SubmissionOutcome.uncertain?(error) do
+      "I couldn't confirm whether #{action} was accepted. Check the run status before trying again."
+    else
+      "I couldn't apply that decision. The controls remain available; please try again."
+    end
   end
 
   # ============================================================================

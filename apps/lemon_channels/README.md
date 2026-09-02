@@ -44,9 +44,11 @@ Router acceptance is the inbound delivery boundary. Telegram, Discord,
 WhatsApp, and XMTP hold provisional transport dedupe markers until submission
 finishes and emit progress reactions or typing signals only after `:ok`.
 Definite rejections release those markers so a repeated platform event can be
-submitted again; `{:error, :outcome_unknown}` retains the marker because a
-second submission could duplicate a run, while the channel tells the user that
-acceptance could not be confirmed. Error logs and user feedback use bounded
+submitted again. `{:error, :outcome_unknown}` and
+`{:error, {:unexpected_answer, _}}` retain the marker because the callback may
+have mutated before its acknowledgement was lost or malformed; a second
+submission could duplicate a run. The channel tells the user that acceptance
+could not be confirmed. Error logs and user feedback use bounded
 classifications rather than arbitrary router terms. Email applies the same
 boundary at HTTP level: only `:ok` returns 202, and every explicit or ambiguous
 handoff error returns 503 for provider redelivery.
@@ -699,8 +701,9 @@ checks return `{:ok, boolean()} | {:error, term()}`; an unreachable router is
 not equivalent to an idle session. Telegram, Discord, WhatsApp, and XMTP do not
 present a rejected submission as queued. Telegram and WhatsApp cancellation
 handlers likewise mutate local session state only after the router accepts
-cancellation. Telegram keepalive buttons remain intact when run control fails,
-so the user can retry.
+cancellation. Telegram and Discord component controls remain intact when run
+control fails, and ambiguous failures say the decision could not be confirmed
+so the user can reconcile status before retrying.
 
 ## Application Lifecycle
 
@@ -893,8 +896,9 @@ end
 - `Runtime` uses `LemonCore.RouterBridge` for router interaction and returns
   explicit `{:error, reason}` values when the router is unavailable
 - Inbound transport dedupe is provisional until router acceptance. Definite
-  rejection is retryable; `:outcome_unknown` remains deduped to avoid a second
-  run and is reported as uncertain rather than successful.
+  rejection is retryable; `:outcome_unknown` and malformed mutation
+  acknowledgements remain deduped to avoid a second run and are reported as
+  uncertain rather than successful.
 - Adapter status is derived from live `DynamicSupervisor` children, not stored state
 - The Telegram formatter avoids MarkdownV2 entirely, rendering to plain text + entity arrays instead
 - Transport-level known-target indexing throttles writes to 30s per target to avoid Store overload
