@@ -54,13 +54,39 @@ defmodule LemonGateway.Transports.Webhook.InvocationDispatch do
 
         {:ok, run_ctx |> Map.merge(wait_setup) |> Map.put(:run_id, submitted_run_id)}
 
-      {:error, reason} ->
+      {:error, :outcome_unknown} ->
+        outcome_unknown_result(run_ctx, wait_setup, idempotency_ctx)
+
+      {:error, _reason} ->
         ResponseBuilder.cleanup_wait_setup(wait_setup)
-        {:error, {:submit_failed, reason}}
+        {:error, :submit_rejected}
     end
   rescue
-    error ->
-      ResponseBuilder.cleanup_wait_setup(wait_setup)
-      {:error, {:submit_failed, Exception.message(error)}}
+    _error ->
+      outcome_unknown_result(run_ctx, wait_setup, idempotency_ctx)
+  catch
+    _kind, _reason ->
+      outcome_unknown_result(run_ctx, wait_setup, idempotency_ctx)
+  end
+
+  defp outcome_unknown_result(run_ctx, wait_setup, idempotency_ctx) do
+    _ =
+      try do
+        Idempotency.store_outcome_unknown(
+          idempotency_ctx,
+          run_ctx.run_id,
+          run_ctx.session_key,
+          run_ctx.mode
+        )
+      rescue
+        _error -> :ok
+      catch
+        _kind, _reason -> :ok
+      end
+
+    {:ok,
+     run_ctx
+     |> Map.merge(wait_setup)
+     |> Map.put(:submission_status, :outcome_unknown)}
   end
 end

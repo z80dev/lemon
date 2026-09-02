@@ -5,7 +5,14 @@ defmodule LemonCli.ProfileCommandTestRouter do
       {:profile_request, request}
     )
 
-    {:ok, "run-profile-cli"}
+    case Application.get_env(
+           :lemon_cli,
+           :profile_command_test_submit_result,
+           {:ok, "run-profile-cli"}
+         ) do
+      {:raise, message} -> raise message
+      result -> result
+    end
   end
 end
 
@@ -16,12 +23,16 @@ defmodule LemonCli.ProfileCommandTestControlPlane do
       {:profile_control_plane_request, method, params}
     )
 
-    {:ok,
-     %{
-       "runId" => "run-profile-control-plane",
-       "sessionKey" => "agent:remote-proof:main",
-       "node" => "newphy"
-     }}
+    Application.get_env(
+      :lemon_cli,
+      :profile_command_test_control_plane_result,
+      {:ok,
+       %{
+         "runId" => "run-profile-control-plane",
+         "sessionKey" => "agent:remote-proof:main",
+         "node" => "newphy"
+       }}
+    )
   end
 end
 
@@ -29,6 +40,7 @@ defmodule LemonCli.ProfileCommandTest do
   use ExUnit.Case, async: false
 
   import ExUnit.CaptureIO
+  import ExUnit.CaptureLog
 
   alias LemonCli.CLI
 
@@ -41,8 +53,21 @@ defmodule LemonCli.ProfileCommandTest do
     previous_paths = Application.get_env(:lemon_core, :paths)
     previous_bridge = Application.get_env(:lemon_core, :router_bridge)
     previous_control_plane_client = Application.get_env(:lemon_cli, :control_plane_client)
+
+    previous_submit_result =
+      Application.get_env(:lemon_cli, :profile_command_test_submit_result)
+
+    previous_control_plane_result =
+      Application.get_env(:lemon_cli, :profile_command_test_control_plane_result)
+
     Application.put_env(:lemon_core, :paths, home_state_dir: state, global_config: config)
     Application.put_env(:lemon_cli, :profile_command_test_pid, self())
+
+    Application.put_env(
+      :lemon_cli,
+      :profile_command_test_submit_result,
+      {:ok, "run-profile-cli"}
+    )
 
     :ok =
       LemonCore.RouterBridge.configure(
@@ -54,6 +79,14 @@ defmodule LemonCli.ProfileCommandTest do
       restore_env(:lemon_core, :paths, previous_paths)
       restore_env(:lemon_core, :router_bridge, previous_bridge)
       restore_env(:lemon_cli, :control_plane_client, previous_control_plane_client)
+      restore_env(:lemon_cli, :profile_command_test_submit_result, previous_submit_result)
+
+      restore_env(
+        :lemon_cli,
+        :profile_command_test_control_plane_result,
+        previous_control_plane_result
+      )
+
       Application.delete_env(:lemon_cli, :profile_command_test_pid)
 
       if Process.whereis(LemonRouter.AgentProfiles) do
@@ -189,6 +222,98 @@ defmodule LemonCli.ProfileCommandTest do
 
     refute Map.has_key?(params, "cwd")
     refute Map.has_key?(params, "node")
+  end
+
+  test "profile chat reports an ambiguous submission once with a reconciliation run id" do
+    secret = "profile-router-secret-#{System.unique_integer([:positive])}"
+
+    Application.put_env(
+      :lemon_cli,
+      :control_plane_client,
+      LemonCli.ProfileCommandTestControlPlane
+    )
+
+    Application.put_env(
+      :lemon_cli,
+      :profile_command_test_submit_result,
+      {:raise, secret}
+    )
+
+    capture_io(fn -> assert CLI.run(["profile", "create", "ambiguous"]) == 0 end)
+
+    log =
+      capture_log(fn ->
+        error =
+          capture_io(:stderr, fn ->
+            assert CLI.run(["profile", "chat", "ambiguous", "run", "once"]) == 1
+          end)
+
+        send(self(), {:profile_chat_stderr, error})
+      end)
+
+    assert_receive {:profile_request, request}
+    assert is_binary(request.run_id) and request.run_id != ""
+    assert_receive {:profile_chat_stderr, error}
+    assert error =~ request.run_id
+    assert error =~ "could not be confirmed"
+    assert String.downcase(error) =~ "do not retry automatically"
+    refute error =~ secret
+    refute log =~ secret
+    refute_receive {:profile_request, _request}
+    refute_receive {:profile_control_plane_request, _method, _params}
+  end
+
+  test "profile chat sanitizes explicit router rejection terms" do
+    secret = "profile-rejection-secret-#{System.unique_integer([:positive])}"
+
+    Application.put_env(
+      :lemon_cli,
+      :profile_command_test_submit_result,
+      {:error, {:rejected_with_secret, secret}}
+    )
+
+    capture_io(fn -> assert CLI.run(["profile", "create", "rejected"]) == 0 end)
+
+    error =
+      capture_io(:stderr, fn ->
+        assert CLI.run(["profile", "chat", "rejected", "run", "once"]) == 1
+      end)
+
+    assert_receive {:profile_request, request}
+    assert is_binary(request.run_id) and request.run_id != ""
+    assert error =~ "rejected before acceptance"
+    refute error =~ secret
+    refute_receive {:profile_request, _request}
+  end
+
+  test "profile chat treats a malformed control-plane acknowledgement as outcome unknown" do
+    secret = "profile-control-plane-secret-#{System.unique_integer([:positive])}"
+    :ok = LemonCore.RouterBridge.configure(run_orchestrator: nil)
+
+    Application.put_env(
+      :lemon_cli,
+      :control_plane_client,
+      LemonCli.ProfileCommandTestControlPlane
+    )
+
+    Application.put_env(
+      :lemon_cli,
+      :profile_command_test_control_plane_result,
+      {:ok, %{"runId" => 123, "diagnostic" => secret}}
+    )
+
+    capture_io(fn -> assert CLI.run(["profile", "create", "malformed-ack"]) == 0 end)
+
+    error =
+      capture_io(:stderr, fn ->
+        assert CLI.run(["profile", "chat", "malformed-ack", "run", "once"]) == 1
+      end)
+
+    assert error =~ "could not be confirmed"
+    assert String.downcase(error) =~ "do not retry automatically"
+    refute error =~ secret
+    assert_receive {:profile_control_plane_request, "profile.chat", _params}
+    refute_receive {:profile_control_plane_request, _method, _params}
   end
 
   defp restore_env(app, key, nil), do: Application.delete_env(app, key)

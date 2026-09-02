@@ -14,6 +14,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   router mutation failures into success-like results. Ambiguous cancel and
   keepalive callbacks now direct users to check run status before retrying,
   retain their inline controls, and log only bounded failure classes.
+- Gateway webhooks now acknowledge ambiguous router submissions with an
+  explicit non-retry-safe receipt instead of a redelivery-triggering 5xx,
+  profile chat preserves a reconciliation run ID without retrying or exposing
+  raw failures, and goal-loop hard stops report sanitized one-shot abort
+  outcomes.
 - MCP configuration validation now rejects non-boolean OAuth token-persistence
   flags and empty token secret names consistently before HTTP or SSE sources
   reach runtime startup.

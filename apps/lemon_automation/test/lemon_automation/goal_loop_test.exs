@@ -23,7 +23,11 @@ defmodule LemonAutomation.GoalLoopTest do
 
     def abort_run(run_id, reason) do
       send(:persistent_term.get({__MODULE__, :test_pid}), {:abortable_abort, run_id, reason})
-      :ok
+
+      case Application.get_env(:lemon_automation, :goal_loop_test_abort_result, :ok) do
+        {:raise, message} -> raise message
+        result -> result
+      end
     end
   end
 
@@ -685,7 +689,12 @@ defmodule LemonAutomation.GoalLoopTest do
              get_in(state, [:loops, session_key, :active_run, :id]) == run_id
            end)
 
-    assert {:ok, %{mode: :hard, loop: %{status: "stopped", active_run_id: ^run_id}}} =
+    assert {:ok,
+            %{
+              mode: :hard,
+              router_abort: :accepted,
+              loop: %{status: "stopped", active_run_id: ^run_id}
+            }} =
              GenServer.call(manager, {:stop_loop, session_key, :hard})
 
     assert_receive {:abortable_abort, ^run_id, :goal_loop_hard_stop}, 1_000
@@ -698,6 +707,68 @@ defmodule LemonAutomation.GoalLoopTest do
     goal = GoalStore.get(session_key)
     assert get_in(goal.meta, ["goalLoop", "status"]) == "stopped"
     assert get_in(goal.meta, ["goalLoop", "lastRunId"]) == run_id
+  end
+
+  test "manager reports a mutate-then-raise abort without retrying or exposing callback terms", %{
+    session_key: session_key
+  } do
+    secret = "goal-loop-abort-secret-#{System.unique_integer([:positive])}"
+    previous_abort_result = Application.get_env(:lemon_automation, :goal_loop_test_abort_result)
+
+    Application.put_env(
+      :lemon_automation,
+      :goal_loop_test_abort_result,
+      {:raise, secret}
+    )
+
+    on_exit(fn ->
+      restore_env(:goal_loop_test_abort_result, previous_abort_result)
+    end)
+
+    assert {:ok, _goal} =
+             GoalStore.set(session_key, "Stop with ambiguous abort",
+               agent_id: "agent_1",
+               meta: %{"testPid" => self()}
+             )
+
+    manager =
+      start_supervised!(
+        {GoalLoopManager,
+         name: :"goal_loop_manager_unknown_abort_#{System.unique_integer([:positive])}",
+         scheduler_interval_ms: 0}
+      )
+
+    run_id = "goal_unknown_abort_#{System.unique_integer([:positive])}"
+
+    assert {:ok, _loop} =
+             GenServer.call(
+               manager,
+               {:start_loop, session_key,
+                [
+                  judge_mod: ContinueJudge,
+                  router_mod: AbortableLoopRouter,
+                  waiter_mod: BlockingLoopWaiter,
+                  run_id: run_id,
+                  max_ticks: 2,
+                  wait_timeout_ms: 60_000,
+                  meta: %{test_pid: self()}
+                ]}
+             )
+
+    assert_receive {:abortable_submit, %{run_id: ^run_id}, _loop_pid}, 1_000
+    assert_receive {:blocking_waiter, ^run_id, 60_000, _loop_pid}, 1_000
+
+    assert eventually(fn ->
+             get_in(:sys.get_state(manager), [:loops, session_key, :active_run, :id]) == run_id
+           end)
+
+    assert {:ok, result} = GenServer.call(manager, {:stop_loop, session_key, :hard})
+    assert result.router_abort == :outcome_unknown
+    refute inspect(result) =~ secret
+    assert_receive {:abortable_abort, ^run_id, :goal_loop_hard_stop}, 1_000
+
+    assert {:error, :not_running} = GenServer.call(manager, {:stop_loop, session_key, :hard})
+    refute_receive {:abortable_abort, ^run_id, _reason}, 200
   end
 
   test "hard stop owns and aborts a run accepted before submit returns", %{

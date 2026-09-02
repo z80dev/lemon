@@ -144,6 +144,12 @@ Prefer `lemon_channels` for a new messaging channel. Use gateway-native ingress 
 for a non-channel surface that needs the Gateway runtime.
 
 - Submit `%LemonCore.RunRequest{}` through `LemonCore.RouterBridge.submit_run/1`.
+- Treat `{:error, :outcome_unknown}` as an ambiguous side effect, not a
+  rejection. Webhook ingress acknowledges the HTTP delivery with a `200`
+  `status: "outcome_unknown"` receipt and `retry_safe: false`, keeps the fixed
+  run ID for reconciliation, and never turns that result into a retryable 5xx.
+  An idempotency-key reservation stores the same receipt so redelivery cannot
+  submit a second run.
 - Build stable, unique session keys.
 - Return `:ignore` from `start_link/1` when disabled.
 - Resolve binding cwd and agent metadata through `BindingResolver`.

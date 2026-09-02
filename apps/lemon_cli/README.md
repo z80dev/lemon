@@ -237,6 +237,11 @@ the profile ID, prompt, queue mode, and optional model override—working
 directory and execution node are resolved again from the profile by the
 long-running runtime.
 
+The direct in-VM submission path assigns a run ID before calling the router. If
+acceptance cannot be confirmed, `profile chat` prints that safe run reference,
+does not fall back to a second submission, and tells the operator to reconcile
+before retrying. Raw router and control-plane failure terms are never printed.
+
 ## Context references
 
 `lemon context preview` and `lemon context resolve` are packaged adapters over

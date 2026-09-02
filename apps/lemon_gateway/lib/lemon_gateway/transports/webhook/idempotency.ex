@@ -66,6 +66,24 @@ defmodule LemonGateway.Transports.Webhook.Idempotency do
 
   def store_submission(_ctx, _run_id, _session_key, _mode), do: :ok
 
+  @doc "Persist an ambiguous submission without treating it as accepted."
+  @spec store_outcome_unknown(map() | nil, binary(), binary(), atom() | binary()) :: :ok
+  def store_outcome_unknown(nil, _run_id, _session_key, _mode), do: :ok
+
+  def store_outcome_unknown(%{} = idempotency_ctx, run_id, session_key, mode) do
+    merge_store_entry(idempotency_ctx, %{
+      run_id: run_id,
+      session_key: session_key,
+      mode: normalize_mode(mode),
+      idempotency_key: idempotency_ctx.idempotency_key,
+      integration_id: idempotency_ctx.integration_id,
+      state: "outcome_unknown",
+      updated_at_ms: System.system_time(:millisecond)
+    })
+  end
+
+  def store_outcome_unknown(_ctx, _run_id, _session_key, _mode), do: :ok
+
   @spec store_response(map() | nil, integer(), map()) :: :ok
   def store_response(nil, _status, _payload), do: :ok
 
@@ -147,6 +165,7 @@ defmodule LemonGateway.Transports.Webhook.Idempotency do
   defp fallback_payload(entry) when is_map(entry) do
     run_id = Request.normalize_blank(Request.fetch(entry, :run_id))
     session_key = Request.normalize_blank(Request.fetch(entry, :session_key))
+    state = Request.normalize_blank(Request.fetch(entry, :state))
 
     if is_binary(run_id) and is_binary(session_key) do
       %{
@@ -154,7 +173,7 @@ defmodule LemonGateway.Transports.Webhook.Idempotency do
         session_key: session_key
       }
       |> maybe_put(:mode, normalize_mode(Request.fetch(entry, :mode)))
-      |> maybe_put(:status, "accepted")
+      |> Map.merge(fallback_status(state))
     end
   end
 
@@ -172,17 +191,17 @@ defmodule LemonGateway.Transports.Webhook.Idempotency do
       :ok ->
         :ok
 
-      {:error, reason} ->
-        Logger.warning("webhook idempotency store write failed: #{inspect(reason)}")
+      {:error, _reason} ->
+        Logger.warning("webhook idempotency store write failed failure_class=write_error")
         :ok
 
-      other ->
-        Logger.warning("webhook idempotency store returned unexpected result: #{inspect(other)}")
+      _other ->
+        Logger.warning("webhook idempotency store write failed failure_class=unexpected_result")
         :ok
     end
   rescue
-    error ->
-      Logger.warning("webhook idempotency store failed: #{Exception.message(error)}")
+    _error ->
+      Logger.warning("webhook idempotency store write failed failure_class=exception")
       :ok
   end
 
@@ -208,6 +227,11 @@ defmodule LemonGateway.Transports.Webhook.Idempotency do
   defp normalize_mode(mode) when mode in [:sync, :async], do: Atom.to_string(mode)
   defp normalize_mode(mode) when mode in ["sync", "async"], do: mode
   defp normalize_mode(_), do: nil
+
+  defp fallback_status("outcome_unknown"),
+    do: %{status: "outcome_unknown", retry_safe: false}
+
+  defp fallback_status(_state), do: %{status: "accepted"}
 
   defp fetch_any(map, paths) when is_map(map) and is_list(paths) do
     Enum.find_value(paths, fn path -> fetch_path(map, path) end)

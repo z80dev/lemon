@@ -1,8 +1,27 @@
+defmodule LemonGateway.WebhookTransportTestOrchestrator do
+  @behaviour LemonCore.RouterBridge.RunOrchestrator
+
+  def submit(request) do
+    send(
+      Application.fetch_env!(:lemon_gateway, :webhook_transport_test_pid),
+      {:webhook_submit, request}
+    )
+
+    case Application.fetch_env!(:lemon_gateway, :webhook_transport_submit_result) do
+      {:raise, message} -> raise message
+      result -> result
+    end
+  end
+end
+
 defmodule LemonGateway.WebhookTransportTest do
   use ExUnit.Case, async: false
 
+  import ExUnit.CaptureLog
+
   alias LemonCore.Store
   alias LemonGateway.Transports.Webhook
+  alias LemonGateway.Transports.Webhook.{Idempotency, InvocationDispatch, ResponseBuilder}
   alias Plug.Conn
   alias Plug.Test
 
@@ -11,18 +30,136 @@ defmodule LemonGateway.WebhookTransportTest do
 
     original_webhook_env = Application.get_env(:lemon_gateway, :webhook)
     original_override = Application.get_env(:lemon_gateway, LemonGateway.Config)
+    original_bridge = Application.get_env(:lemon_core, :router_bridge)
+    original_test_pid = Application.get_env(:lemon_gateway, :webhook_transport_test_pid)
+
+    original_submit_result =
+      Application.get_env(:lemon_gateway, :webhook_transport_submit_result)
+
     clear_idempotency_table()
 
     Application.delete_env(:lemon_gateway, :webhook)
     Application.delete_env(:lemon_gateway, LemonGateway.Config)
+    Application.put_env(:lemon_gateway, :webhook_transport_test_pid, self())
+
+    Application.put_env(
+      :lemon_gateway,
+      :webhook_transport_submit_result,
+      {:ok, "run-webhook-default"}
+    )
+
+    :ok =
+      LemonCore.RouterBridge.configure(
+        run_orchestrator: LemonGateway.WebhookTransportTestOrchestrator,
+        router: original_bridge && original_bridge[:router]
+      )
 
     on_exit(fn ->
       restore_env(:lemon_gateway, :webhook, original_webhook_env)
       restore_env(:lemon_gateway, LemonGateway.Config, original_override)
+      restore_env(:lemon_core, :router_bridge, original_bridge)
+      restore_env(:lemon_gateway, :webhook_transport_test_pid, original_test_pid)
+
+      restore_env(
+        :lemon_gateway,
+        :webhook_transport_submit_result,
+        original_submit_result
+      )
+
       clear_idempotency_table()
     end)
 
     :ok
+  end
+
+  test "ambiguous submission returns a non-retryable HTTP receipt without claiming acceptance" do
+    run_id = "run-webhook-unknown-#{System.unique_integer([:positive])}"
+
+    Application.put_env(
+      :lemon_gateway,
+      :webhook_transport_submit_result,
+      {:error, :outcome_unknown}
+    )
+
+    assert {:ok, run_ctx} = dispatch_webhook(run_id, nil)
+    assert_receive {:webhook_submit, %{run_id: ^run_id}}
+
+    assert {:ok, 200, payload} = ResponseBuilder.response_for_run(run_ctx)
+    assert payload.run_id == run_id
+    assert payload.status == "outcome_unknown"
+    assert payload.retry_safe == false
+    refute Map.has_key?(payload, :accepted)
+    refute_receive {:webhook_submit, _request}
+  end
+
+  test "idempotency-key redelivery replays an ambiguous receipt without resubmission" do
+    integration_id = "demo-unknown-#{System.unique_integer([:positive])}"
+    idempotency_key = "idem-unknown-#{System.unique_integer([:positive])}"
+    run_id = "run-webhook-unknown-#{System.unique_integer([:positive])}"
+
+    conn =
+      Test.conn(:post, "/webhooks/#{integration_id}", "")
+      |> Conn.put_req_header("idempotency-key", idempotency_key)
+
+    assert {:ok, idempotency_ctx} =
+             Webhook.idempotency_context_for_test(conn, %{}, integration_id, %{})
+
+    Application.put_env(
+      :lemon_gateway,
+      :webhook_transport_submit_result,
+      {:error, :outcome_unknown}
+    )
+
+    assert {:ok, run_ctx} = dispatch_webhook(run_id, idempotency_ctx, integration_id)
+    assert_receive {:webhook_submit, %{run_id: ^run_id}}
+    assert {:ok, 200, payload} = ResponseBuilder.response_for_run(run_ctx)
+
+    assert {:duplicate, 202, pending_payload} =
+             Webhook.idempotency_context_for_test(conn, %{}, integration_id, %{})
+
+    assert pending_payload.run_id == run_id
+    assert pending_payload.status == "outcome_unknown"
+    assert pending_payload.retry_safe == false
+
+    assert :ok = Idempotency.store_response(idempotency_ctx, 200, payload)
+
+    assert {:duplicate, 200, ^payload} =
+             Webhook.idempotency_context_for_test(conn, %{}, integration_id, %{})
+
+    refute_receive {:webhook_submit, _request}
+  end
+
+  test "submission exceptions and explicit rejection terms cannot expose adversarial secrets" do
+    secret = "webhook-router-secret-#{System.unique_integer([:positive])}"
+    run_id = "run-webhook-secret-#{System.unique_integer([:positive])}"
+
+    Application.put_env(
+      :lemon_gateway,
+      :webhook_transport_submit_result,
+      {:raise, secret}
+    )
+
+    log =
+      capture_log(fn ->
+        assert {:ok, run_ctx} = dispatch_webhook(run_id, nil)
+        assert {:ok, 200, payload} = ResponseBuilder.response_for_run(run_ctx)
+        assert payload.status == "outcome_unknown"
+        refute inspect(payload) =~ secret
+      end)
+
+    assert_receive {:webhook_submit, %{run_id: ^run_id}}
+    refute log =~ secret
+
+    Application.put_env(
+      :lemon_gateway,
+      :webhook_transport_submit_result,
+      {:error, {:rejected_with_secret, secret}}
+    )
+
+    assert {:error, :submit_rejected} = dispatch_webhook(run_id <> "-rejected", nil)
+    assert_receive {:webhook_submit, %{run_id: rejected_run_id}}
+    assert rejected_run_id == run_id <> "-rejected"
+    refute_receive {:webhook_submit, _request}
   end
 
   test "idempotency helper reserves key and returns processing duplicate while pending" do
@@ -269,6 +406,28 @@ defmodule LemonGateway.WebhookTransportTest do
     |> Enum.each(fn {key, _value} ->
       Store.delete(Webhook.idempotency_table_for_test(), key)
     end)
+  end
+
+  defp dispatch_webhook(run_id, idempotency_ctx, integration_id \\ "demo") do
+    conn = Test.conn(:post, "/webhooks/#{integration_id}", "")
+    integration = %{"agent_id" => "webhook-test", "mode" => "async"}
+    normalized = %{prompt: "safe prompt", attachments: [], metadata: %{}}
+
+    InvocationDispatch.submit_run(
+      conn,
+      integration_id,
+      integration,
+      %{},
+      normalized,
+      idempotency_ctx,
+      webhook_config: %{},
+      default_timeout_ms: 100,
+      default_callback_wait_timeout_ms: 100,
+      callback_waiter_ready_timeout_ms: 100,
+      run_id: run_id,
+      validate_callback_url: fn _url, _allow_private, _opts -> {:ok, nil} end,
+      request_metadata_fun: fn _conn -> %{} end
+    )
   end
 
   defp restore_env(app, key, nil), do: Application.delete_env(app, key)

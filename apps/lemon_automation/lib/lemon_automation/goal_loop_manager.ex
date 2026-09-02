@@ -6,7 +6,9 @@ defmodule LemonAutomation.GoalLoopManager do
 
   * `:hard` (default) disables auto restart, aborts the currently authoritative
     judge or continuation router run once, kills the loop task, and prevents a
-    later tick.
+    later tick. Its result includes a sanitized `router_abort` status; an
+    `:outcome_unknown` status means the abort may have taken effect and is not
+    retried automatically.
   * `:graceful` disables auto restart but lets the already bounded loop finish;
     status remains `stopping` until its task returns.
 
@@ -160,7 +162,7 @@ defmodule LemonAutomation.GoalLoopManager do
 
       loop ->
         _ = GoalStore.configure_loop_auto(session_key, false)
-        abort_active_run(loop)
+        router_abort = abort_active_run(loop)
         Process.demonitor(loop.ref, [:flush])
         Process.exit(loop.pid, :kill)
 
@@ -173,7 +175,13 @@ defmodule LemonAutomation.GoalLoopManager do
           |> update_in([:loop_refs], &Map.delete(&1 || %{}, loop.ref))
 
         {:reply,
-         {:ok, %{loop: public_loop(%{loop | status: "stopped"}), goal: goal, mode: :hard}}, state}
+         {:ok,
+          %{
+            loop: public_loop(%{loop | status: "stopped"}),
+            goal: goal,
+            mode: :hard,
+            router_abort: router_abort
+          }}, state}
     end
   end
 
@@ -512,23 +520,32 @@ defmodule LemonAutomation.GoalLoopManager do
 
   defp abort_active_run(%{active_run: %{id: run_id, router_mod: router_mod}})
        when is_binary(run_id) do
-    cond do
-      function_exported?(router_mod, :abort_run, 2) ->
-        router_mod.abort_run(run_id, :goal_loop_hard_stop)
+    result =
+      cond do
+        function_exported?(router_mod, :abort_run, 2) ->
+          router_mod.abort_run(run_id, :goal_loop_hard_stop)
 
-      function_exported?(router_mod, :abort_run, 1) ->
-        router_mod.abort_run(run_id)
+        function_exported?(router_mod, :abort_run, 1) ->
+          router_mod.abort_run(run_id)
 
-      true ->
-        LemonCore.RouterBridge.abort_run(run_id, :goal_loop_hard_stop)
-    end
+        true ->
+          LemonCore.RouterBridge.abort_run(run_id, :goal_loop_hard_stop)
+      end
+
+    normalize_abort_result(result)
   rescue
-    _error -> :ok
+    _error -> :outcome_unknown
   catch
-    :exit, _reason -> :ok
+    _kind, _reason -> :outcome_unknown
   end
 
-  defp abort_active_run(_loop), do: :ok
+  defp abort_active_run(_loop), do: :not_needed
+
+  defp normalize_abort_result(:ok), do: :accepted
+  defp normalize_abort_result({:error, :outcome_unknown}), do: :outcome_unknown
+  defp normalize_abort_result({:error, :unavailable}), do: :unavailable
+  defp normalize_abort_result({:error, _reason}), do: :rejected
+  defp normalize_abort_result(_malformed_acknowledgement), do: :outcome_unknown
 
   defp active_run_id(%{active_run: %{id: run_id}}), do: run_id
   defp active_run_id(_loop), do: nil

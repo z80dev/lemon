@@ -7,7 +7,7 @@ defmodule LemonCli.ProfileCommand do
   application while still working in the assembled Lemon runtime release.
   """
 
-  alias LemonCore.{NodeRegistry, ProfileStore, RouterBridge}
+  alias LemonCore.{Id, NodeRegistry, ProfileStore, RouterBridge}
 
   @exit_ok 0
   @exit_error 1
@@ -174,11 +174,13 @@ defmodule LemonCli.ProfileCommand do
       @exit_ok
     else
       {:ok, _opts, _rest} -> usage_error("Usage: lemon profile chat <id> <message> [options]")
-      {:error, reason} -> operation_error(reason)
+      {:error, reason} -> chat_operation_error(reason)
     end
   end
 
   defp submit_chat(request, profile, opts) do
+    request = ensure_submission_run_id(request)
+
     case RouterBridge.submit_run(request) do
       {:ok, run_id} ->
         {:ok, chat_result(run_id, request, profile)}
@@ -193,24 +195,34 @@ defmodule LemonCli.ProfileCommand do
         params = if opts[:model], do: Map.put(params, "model", opts[:model]), else: params
 
         case control_plane_client().request("profile.chat", params) do
-          {:ok, %{"runId" => run_id} = result} ->
+          {:ok, %{"runId" => run_id} = result} when is_binary(run_id) and run_id != "" ->
             {:ok,
              Map.merge(chat_result(run_id, request, profile), %{
                "sessionKey" => result["sessionKey"] || request.session_key,
                "node" => result["node"] || profile["node"]
              })}
 
-          {:ok, other} ->
-            {:error, {:invalid_control_plane_response, other}}
+          {:ok, _malformed_acknowledgement} ->
+            {:error, {:submission_outcome_unknown, nil}}
 
-          {:error, reason} ->
-            {:error, reason}
+          {:error, _reason} ->
+            {:error, {:submission_outcome_unknown, nil}}
         end
 
-      {:error, reason} ->
-        {:error, reason}
+      {:error, :outcome_unknown} ->
+        {:error, {:submission_outcome_unknown, request.run_id}}
+
+      {:error, _reason} ->
+        {:error, :submission_rejected}
     end
   end
+
+  defp ensure_submission_run_id(%LemonCore.RunRequest{run_id: run_id} = request)
+       when is_binary(run_id) and run_id != "",
+       do: request
+
+  defp ensure_submission_run_id(%LemonCore.RunRequest{} = request),
+    do: %{request | run_id: Id.run_id()}
 
   defp chat_result(run_id, request, profile) do
     %{
@@ -342,6 +354,37 @@ defmodule LemonCli.ProfileCommand do
 
   defp operation_error(reason) do
     IO.puts(:stderr, "Profile operation failed: #{format_reason(reason)}")
+    @exit_error
+  end
+
+  defp chat_operation_error({:submission_outcome_unknown, nil}) do
+    IO.puts(
+      :stderr,
+      "Profile chat submission could not be confirmed and may already be running. " <>
+        "Do not retry automatically; reconcile the profile session first."
+    )
+
+    @exit_error
+  end
+
+  defp chat_operation_error({:submission_outcome_unknown, run_id})
+       when is_binary(run_id) and run_id != "" do
+    IO.puts(
+      :stderr,
+      "Profile chat submission could not be confirmed for run #{run_id}. " <>
+        "It may already be running; do not retry automatically. Reconcile that run first."
+    )
+
+    @exit_error
+  end
+
+  defp chat_operation_error(:submission_rejected) do
+    IO.puts(:stderr, "Profile chat submission was rejected before acceptance.")
+    @exit_error
+  end
+
+  defp chat_operation_error(_reason) do
+    IO.puts(:stderr, "Profile chat submission failed.")
     @exit_error
   end
 

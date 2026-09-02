@@ -108,6 +108,10 @@ tick. Router abort tombstones are serialized with submission acceptance, so a
 hard stop cannot miss a run accepted before the submit callback returns. A
 graceful stop disables auto restart and lets the bounded loop finish. Manager
 call deadlines are computed above configured judge/continuation wait deadlines.
+Hard-stop results include a sanitized `router_abort` status. An
+`:outcome_unknown` result is reported without retrying the abort, because the
+first request may already have taken effect; definite callback errors are
+reported only as `:rejected`, without their raw terms.
 
 `GoalJudge` supports explicit verdicts for tests/manual control, a pluggable
 `judge_runner` route with `judge_model` metadata, and deterministic fallback

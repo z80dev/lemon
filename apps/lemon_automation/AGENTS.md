@@ -86,6 +86,11 @@ acceptance and the later submitted callback. `mode: :graceful` disables auto
 restart but lets the already bounded loop finish. The outer `run_once/2` call
 timeout encloses the configured judge/continuation wait deadlines.
 
+The hard-stop result reports a sanitized `router_abort` status. It sends the
+abort exactly once: `:outcome_unknown` means the abort may already have taken
+effect, so the manager does not retry it; arbitrary callback errors and
+exceptions never enter stored goal metadata or returned diagnostics.
+
 `GoalJudge` supports explicit verdicts, a pluggable `judge_runner` with
 `judge_model` metadata, and deterministic fallback. `GoalJudge.RouterRunner`
 is the dev/prod default runner; it submits isolated `:goal_judge` runs through
