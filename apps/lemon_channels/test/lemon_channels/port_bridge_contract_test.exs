@@ -75,11 +75,15 @@ defmodule LemonChannels.PortBridgeContractTest do
 
   test "shared parser keeps adapter-specific event and error envelopes", %{tmp_dir: tmp_dir} do
     if System.find_executable("node") do
+      startup_marker_path = Path.join(tmp_dir, "bridge_parser_started.txt")
       script_path = Path.join(tmp_dir, "bridge_parser_fixture.mjs")
-      :ok = File.write(script_path, parser_fixture_script())
+      :ok = File.write(script_path, parser_fixture_script(startup_marker_path))
 
       Enum.each(@bridges, fn bridge ->
         with_bridge(bridge, script_path, fn pid ->
+          assert_receive {ready_event_tag, %{"type" => "bridge_test_ready"}}, 8_000
+          assert ready_event_tag == bridge.event_tag
+
           bridge.module.command(pid, %{op: "contract_probe", adapter: bridge.label})
 
           assert_receive {event_tag,
@@ -205,12 +209,22 @@ defmodule LemonChannels.PortBridgeContractTest do
     end
   end
 
-  defp parser_fixture_script do
+  defp parser_fixture_script(startup_marker_path) do
     """
     #!/usr/bin/env node
+    import fs from "node:fs";
     import readline from "node:readline";
 
+    const startupMarkerPath = #{inspect(startup_marker_path)};
     const emit = (payload) => process.stdout.write(JSON.stringify(payload) + "\\n");
+
+    // Make one fixture boot exceed the former response timeout. Port.open/2
+    // confirms the OS process exists, not that Node has installed its reader.
+    if (!fs.existsSync(startupMarkerPath)) {
+      fs.writeFileSync(startupMarkerPath, "started");
+      await new Promise((resolve) => setTimeout(resolve, 2500));
+    }
+
     const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
 
     rl.on("line", (line) => {
@@ -219,6 +233,8 @@ defmodule LemonChannels.PortBridgeContractTest do
       process.stdout.write("[]\\n");
       emit({ type: "bridge_contract", op: command.op, adapter: command.adapter });
     });
+
+    emit({ type: "bridge_test_ready" });
     """
   end
 
