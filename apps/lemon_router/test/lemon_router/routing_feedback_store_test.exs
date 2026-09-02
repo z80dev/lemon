@@ -3,13 +3,14 @@ defmodule LemonRouter.RoutingFeedbackStoreTest do
 
   alias LemonRouter.RoutingFeedbackStore
 
-  # Start a store instance backed by an in-memory (temp dir) database for each test.
+  # Start an independently named store backed by a fresh temp database for each test.
+  # These cases exercise explicit calls, so do not also consume process-wide Bus events.
   setup do
     dir = System.tmp_dir!() |> Path.join("rfs_test_#{:erlang.unique_integer([:positive])}")
     File.mkdir_p!(dir)
 
     {:ok, pid} =
-      GenServer.start_link(RoutingFeedbackStore, [path: dir],
+      GenServer.start_link(RoutingFeedbackStore, [path: dir, subscribe?: false],
         name: :"rfs_#{:erlang.unique_integer([:positive])}"
       )
 
