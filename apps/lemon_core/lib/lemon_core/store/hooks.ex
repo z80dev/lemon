@@ -8,8 +8,9 @@ defmodule LemonCore.Store.Hooks do
 
   ## Extension points
 
-    * `:finalize_run_hooks` — invoked after a run is finalized with a session
-      key. See `LemonCore.Store.finalize_run/3` for the payload.
+    * `:finalize_run_hooks` — invoked after a run and its session index are
+      finalized. Delivery is at least once, so hooks must be idempotent by run
+      id. See `LemonCore.Store.finalize_run/3` for the payload.
     * `:cached_tables` — generic tables the store mirrors into
       `LemonCore.Store.ReadCache`.
 

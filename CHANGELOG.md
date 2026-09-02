@@ -61,6 +61,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   control-plane, and portable-command callers were migrated atomically;
   user-facing run controls no longer report success for a request the router
   did not accept.
+- Run finalization no longer reports success when session indexing fails.
+  Retrying the same immutable summary repairs the derived index without
+  incrementing `run_count` twice; conflicting summaries fail closed, and
+  finalize hooks document their at-least-once delivery contract.
 - Hermes skill install/update requests no longer block their own control-plane
   WebSocket while waiting for approval or Git work. Approval events and
   liveness probes remain deliverable, and the TUI keeps the correlated skill
