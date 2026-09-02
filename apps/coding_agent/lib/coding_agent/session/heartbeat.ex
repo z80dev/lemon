@@ -9,7 +9,10 @@ defmodule CodingAgent.Session.Heartbeat do
   introducing a second scheduler or store.
 
   The session owns dispatch. This module owns state validation, persistence,
-  timer bookkeeping, and the prompt rendered when a due heartbeat fires.
+  timer bookkeeping, and the prompt rendered when a due heartbeat fires. Its
+  slot in the session state is one field, `heartbeat`, holding a
+  `CodingAgent.Session.Heartbeat.State`: the persisted configuration plus the
+  runtime timers, so the session never touches a timer reference directly.
   """
 
   require Logger
@@ -24,6 +27,30 @@ defmodule CodingAgent.Session.Heartbeat do
   @idle_defer_ms 25
   @retry_after_persist_error_ms 5_000
   @max_prompt_bytes 16_384
+
+  defmodule State do
+    @moduledoc """
+    The heartbeat's slot in the session state: the persisted configuration
+    (`config`, `nil` when no heartbeat is set), whether it is due, and the
+    timers the session process owns for it.
+    """
+
+    @type t :: %__MODULE__{
+            config: CodingAgent.Session.Heartbeat.t() | nil,
+            due: boolean(),
+            timer_ref: reference() | nil,
+            timer_token: reference() | nil,
+            idle_timer_ref: reference() | nil,
+            idle_token: reference() | nil
+          }
+
+    defstruct config: nil,
+              due: false,
+              timer_ref: nil,
+              timer_token: nil,
+              idle_timer_ref: nil,
+              idle_token: nil
+  end
 
   @typedoc "One session's persisted heartbeat configuration."
   @type t :: %{
@@ -44,8 +71,7 @@ defmodule CodingAgent.Session.Heartbeat do
   def restore(state) do
     state
     |> cancel_runtime_timers()
-    |> Map.put(:heartbeat, load(state.session_manager))
-    |> Map.put(:heartbeat_due, false)
+    |> put_config(load(state.session_manager))
     |> schedule_next()
   end
 
@@ -66,8 +92,10 @@ defmodule CodingAgent.Session.Heartbeat do
   end
 
   @doc "Return a user-facing status snapshot without exposing runtime timer refs."
-  @spec status(t() | nil, non_neg_integer()) :: map()
+  @spec status(State.t() | t() | nil, non_neg_integer()) :: map()
   def status(heartbeat, now_ms \\ now_ms())
+
+  def status(%State{config: config}, now_ms), do: status(config, now_ms)
 
   def status(nil, _now_ms) do
     %{
@@ -126,36 +154,32 @@ defmodule CodingAgent.Session.Heartbeat do
 
   @doc "Pause the heartbeat without deleting its prompt or history."
   @spec pause(map()) :: {:ok, map()} | {:error, term(), map()}
-  def pause(%{heartbeat: nil} = state), do: {:error, :not_configured, state}
+  def pause(%{heartbeat: %State{config: nil}} = state), do: {:error, :not_configured, state}
 
   def pause(state) do
-    heartbeat = %{state.heartbeat | status: :paused}
+    heartbeat = %{state.heartbeat.config | status: :paused}
     persist_and_install(state, heartbeat)
   end
 
   @doc "Resume and re-anchor the heartbeat so stale time never fires immediately."
   @spec resume(map()) :: {:ok, map()} | {:error, term(), map()}
-  def resume(%{heartbeat: nil} = state), do: {:error, :not_configured, state}
+  def resume(%{heartbeat: %State{config: nil}} = state), do: {:error, :not_configured, state}
 
   def resume(state) do
-    heartbeat = %{state.heartbeat | status: :active, last_fired_at_ms: now_ms()}
+    heartbeat = %{state.heartbeat.config | status: :active, last_fired_at_ms: now_ms()}
     persist_and_install(state, heartbeat)
   end
 
   @doc "Persist a cleared tombstone and remove the live heartbeat."
   @spec clear(map()) :: {:ok, map()} | {:error, term(), map()}
-  def clear(%{heartbeat: nil} = state), do: {:error, :not_configured, state}
+  def clear(%{heartbeat: %State{config: nil}} = state), do: {:error, :not_configured, state}
 
   def clear(state) do
-    data = encode(%{state.heartbeat | status: :paused}) |> Map.put("status", "cleared")
+    data = encode(%{state.heartbeat.config | status: :paused}) |> Map.put("status", "cleared")
 
     case persist_entry(state, data) do
       {:ok, persisted} ->
-        {:ok,
-         persisted
-         |> cancel_runtime_timers()
-         |> Map.put(:heartbeat, nil)
-         |> Map.put(:heartbeat_due, false)}
+        {:ok, persisted |> cancel_runtime_timers() |> put_config(nil)}
 
       {:error, reason} ->
         {:error, reason, state}
@@ -164,15 +188,17 @@ defmodule CodingAgent.Session.Heartbeat do
 
   @doc "Mark the active timer as due when its token is still current."
   @spec mark_due(map(), reference()) :: map()
-  def mark_due(%{heartbeat_timer_token: token} = state, token) when is_reference(token) do
-    state = %{state | heartbeat_timer_ref: nil, heartbeat_timer_token: nil}
+  def mark_due(%{heartbeat: %State{timer_token: token} = heartbeat} = state, token)
+      when is_reference(token) do
+    heartbeat = %{heartbeat | timer_ref: nil, timer_token: nil}
+    state = %{state | heartbeat: heartbeat}
 
     cond do
-      not active?(state.heartbeat) ->
+      not active?(heartbeat.config) ->
         state
 
-      due?(state.heartbeat) ->
-        %{state | heartbeat_due: true}
+      due?(heartbeat.config) ->
+        put_due(state, true)
 
       true ->
         schedule_next(state)
@@ -185,28 +211,31 @@ defmodule CodingAgent.Session.Heartbeat do
   @spec schedule_idle_check(map(), non_neg_integer()) :: map()
   def schedule_idle_check(state, delay_ms \\ @idle_defer_ms)
 
-  def schedule_idle_check(%{heartbeat_due: true, heartbeat_idle_timer_ref: nil} = state, delay_ms)
+  def schedule_idle_check(
+        %{heartbeat: %State{due: true, idle_timer_ref: nil} = heartbeat} = state,
+        delay_ms
+      )
       when is_integer(delay_ms) and delay_ms >= 0 do
     token = make_ref()
     timer_ref = Process.send_after(self(), {:session_heartbeat_idle, token}, delay_ms)
 
-    %{state | heartbeat_idle_timer_ref: timer_ref, heartbeat_idle_token: token}
+    %{state | heartbeat: %{heartbeat | idle_timer_ref: timer_ref, idle_token: token}}
   end
 
   def schedule_idle_check(state, _delay_ms), do: state
 
   @doc "Consume the current idle-check token, leaving stale checks harmless."
   @spec consume_idle_check(map(), reference()) :: {:current | :stale, map()}
-  def consume_idle_check(%{heartbeat_idle_token: token} = state, token)
+  def consume_idle_check(%{heartbeat: %State{idle_token: token} = heartbeat} = state, token)
       when is_reference(token) do
-    {:current, %{state | heartbeat_idle_timer_ref: nil, heartbeat_idle_token: nil}}
+    {:current, %{state | heartbeat: %{heartbeat | idle_timer_ref: nil, idle_token: nil}}}
   end
 
   def consume_idle_check(state, _stale_token), do: {:stale, state}
 
   @doc "Persist a fire claim before the recurring prompt enters the agent loop."
   @spec claim_fire(map()) :: {:ok, String.t(), map()} | {:error, term(), map()}
-  def claim_fire(%{heartbeat: heartbeat} = state) when is_map(heartbeat) do
+  def claim_fire(%{heartbeat: %State{config: %{} = heartbeat}} = state) do
     now = now_ms()
 
     claimed = %{
@@ -220,8 +249,7 @@ defmodule CodingAgent.Session.Heartbeat do
         next_state =
           persisted
           |> cancel_runtime_timers()
-          |> Map.put(:heartbeat, claimed)
-          |> Map.put(:heartbeat_due, false)
+          |> put_config(claimed)
           |> schedule_next()
 
         {:ok, render_prompt(claimed), next_state}
@@ -231,7 +259,7 @@ defmodule CodingAgent.Session.Heartbeat do
 
         {:error, reason,
          state
-         |> Map.put(:heartbeat_due, true)
+         |> put_due(true)
          |> schedule_idle_check(@retry_after_persist_error_ms)}
     end
   end
@@ -243,8 +271,7 @@ defmodule CodingAgent.Session.Heartbeat do
   def clear_runtime(state) do
     state
     |> cancel_runtime_timers()
-    |> Map.put(:heartbeat, nil)
-    |> Map.put(:heartbeat_due, false)
+    |> put_config(nil)
   end
 
   @doc "Whether a real user-facing prompt is already queued behind the idle check."
@@ -281,8 +308,7 @@ defmodule CodingAgent.Session.Heartbeat do
         {:ok,
          persisted
          |> cancel_runtime_timers()
-         |> Map.put(:heartbeat, heartbeat)
-         |> Map.put(:heartbeat_due, false)
+         |> put_config(heartbeat)
          |> schedule_next()}
 
       {:error, reason} ->
@@ -305,27 +331,39 @@ defmodule CodingAgent.Session.Heartbeat do
     end
   end
 
-  defp schedule_next(%{heartbeat: heartbeat} = state) do
-    if active?(heartbeat) do
+  defp schedule_next(%{heartbeat: %State{config: config} = heartbeat} = state) do
+    if active?(config) do
       token = make_ref()
-      delay_ms = min(max(next_fire_at_ms(heartbeat) - now_ms(), 0), @max_timer_ms)
+      delay_ms = min(max(next_fire_at_ms(config) - now_ms(), 0), @max_timer_ms)
       timer_ref = Process.send_after(self(), {:session_heartbeat_due, token}, delay_ms)
-      %{state | heartbeat_timer_ref: timer_ref, heartbeat_timer_token: token}
+      %{state | heartbeat: %{heartbeat | timer_ref: timer_ref, timer_token: token}}
     else
       state
     end
   end
 
   defp cancel_runtime_timers(state) do
-    cancel_timer(Map.get(state, :heartbeat_timer_ref))
-    cancel_timer(Map.get(state, :heartbeat_idle_timer_ref))
+    heartbeat = slot(state)
+    cancel_timer(heartbeat.timer_ref)
+    cancel_timer(heartbeat.idle_timer_ref)
 
-    state
-    |> Map.put(:heartbeat_timer_ref, nil)
-    |> Map.put(:heartbeat_timer_token, nil)
-    |> Map.put(:heartbeat_idle_timer_ref, nil)
-    |> Map.put(:heartbeat_idle_token, nil)
+    Map.put(state, :heartbeat, %{
+      heartbeat
+      | timer_ref: nil,
+        timer_token: nil,
+        idle_timer_ref: nil,
+        idle_token: nil
+    })
   end
+
+  # A state built before the heartbeat slot existed (a bare map in a test)
+  # gets an empty slot rather than a KeyError.
+  defp slot(state), do: Map.get(state, :heartbeat) || %State{}
+
+  defp put_config(state, config),
+    do: Map.put(state, :heartbeat, %{slot(state) | config: config, due: false})
+
+  defp put_due(state, due?), do: Map.put(state, :heartbeat, %{slot(state) | due: due?})
 
   defp cancel_timer(ref) when is_reference(ref) do
     _ = Process.cancel_timer(ref)

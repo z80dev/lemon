@@ -44,19 +44,22 @@ defmodule CodingAgent.Session.CompactionManager do
   @spec clear_auto_compaction_state(map()) :: map()
   def clear_auto_compaction_state(state) do
     state = clear_auto_compaction_task_tracking(state)
-    %{state | auto_compaction_in_progress: false, auto_compaction_signature: nil}
+    %{state | auto_compaction: %{state.auto_compaction | in_progress: false, signature: nil}}
   end
 
   @spec clear_auto_compaction_task_tracking(map()) :: map()
   def clear_auto_compaction_task_tracking(state) do
-    maybe_cancel_timer(state.auto_compaction_task_timeout_ref)
-    maybe_demonitor(state.auto_compaction_task_monitor_ref)
+    maybe_cancel_timer(state.auto_compaction.task_timeout_ref)
+    maybe_demonitor(state.auto_compaction.task_monitor_ref)
 
     %{
       state
-      | auto_compaction_task_pid: nil,
-        auto_compaction_task_monitor_ref: nil,
-        auto_compaction_task_timeout_ref: nil
+      | auto_compaction: %{
+          state.auto_compaction
+          | task_pid: nil,
+            task_monitor_ref: nil,
+            task_timeout_ref: nil
+        }
     }
   end
 
@@ -65,7 +68,7 @@ defmodule CodingAgent.Session.CompactionManager do
     state = clear_auto_compaction_task_tracking(state)
 
     cond do
-      not state.auto_compaction_in_progress ->
+      not state.auto_compaction.in_progress ->
         state
 
       true ->
@@ -83,32 +86,43 @@ defmodule CodingAgent.Session.CompactionManager do
 
     %{
       state
-      | overflow_recovery_in_progress: false,
-        overflow_recovery_signature: nil,
-        overflow_recovery_started_at_ms: nil
+      | overflow_recovery: %{
+          state.overflow_recovery
+          | in_progress: false,
+            signature: nil,
+            started_at_ms: nil
+        }
     }
   end
 
   @spec clear_overflow_recovery_state(map()) :: map()
   def clear_overflow_recovery_state(state) do
+    state = clear_overflow_recovery_task_state(state)
+
     %{
-      clear_overflow_recovery_task_state(state)
-      | overflow_recovery_attempted: false,
-        overflow_recovery_error_reason: nil,
-        overflow_recovery_partial_state: nil
+      state
+      | overflow_recovery: %{
+          state.overflow_recovery
+          | attempted: false,
+            error_reason: nil,
+            partial_state: nil
+        }
     }
   end
 
   @spec clear_overflow_recovery_task_tracking(map()) :: map()
   def clear_overflow_recovery_task_tracking(state) do
-    maybe_cancel_timer(state.overflow_recovery_task_timeout_ref)
-    maybe_demonitor(state.overflow_recovery_task_monitor_ref)
+    maybe_cancel_timer(state.overflow_recovery.task_timeout_ref)
+    maybe_demonitor(state.overflow_recovery.task_monitor_ref)
 
     %{
       state
-      | overflow_recovery_task_pid: nil,
-        overflow_recovery_task_monitor_ref: nil,
-        overflow_recovery_task_timeout_ref: nil
+      | overflow_recovery: %{
+          state.overflow_recovery
+          | task_pid: nil,
+            task_monitor_ref: nil,
+            task_timeout_ref: nil
+        }
     }
   end
 
@@ -117,7 +131,7 @@ defmodule CodingAgent.Session.CompactionManager do
     state = clear_overflow_recovery_task_tracking(state)
 
     cond do
-      not state.overflow_recovery_in_progress ->
+      not state.overflow_recovery.in_progress ->
         state
 
       true ->
@@ -133,7 +147,10 @@ defmodule CodingAgent.Session.CompactionManager do
 
         # Return the failed state; the caller should call finalize_overflow_recovery_failure
         # with the appropriate event handling callbacks
-        %{failed_state | overflow_recovery_error_reason: failure_reason}
+        %{
+          failed_state
+          | overflow_recovery: %{failed_state.overflow_recovery | error_reason: failure_reason}
+        }
     end
   end
 
@@ -181,7 +198,7 @@ defmodule CodingAgent.Session.CompactionManager do
 
   @spec overflow_recovery_duration_ms(map()) :: non_neg_integer() | nil
   def overflow_recovery_duration_ms(state) do
-    case state.overflow_recovery_started_at_ms do
+    case state.overflow_recovery.started_at_ms do
       started when is_integer(started) and started > 0 ->
         max(System.monotonic_time(:millisecond) - started, 0)
 

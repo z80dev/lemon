@@ -197,7 +197,7 @@ defmodule CodingAgent.SessionHeartbeatTest do
     old_state = Session.get_state(session)
     old_session_id = old_state.session_manager.header.id
     old_session_file = old_state.session_file
-    old_timer_token = old_state.heartbeat_timer_token
+    old_timer_token = old_state.heartbeat.timer_token
 
     assert :ok = Session.reset(session)
 

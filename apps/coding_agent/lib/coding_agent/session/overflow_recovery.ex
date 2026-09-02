@@ -1,10 +1,46 @@
 defmodule CodingAgent.Session.OverflowRecovery do
-  @moduledoc false
+  @moduledoc """
+  One attempt per turn to recover from a context-length error: compact in
+  the background, then retry the turn. Its slot in the session state is one
+  field, `overflow_recovery`, holding a
+  `CodingAgent.Session.OverflowRecovery.State`.
+  """
 
   require Logger
 
   alias CodingAgent.Session.CompactionLifecycle
   alias CodingAgent.Session.CompactionManager
+
+  defmodule State do
+    @moduledoc """
+    Overflow recovery's slot in the session state: whether a recovery is
+    running and whether one was already attempted this turn, the session
+    signature it captured, the task it tracks, and the error it is recovering
+    from (kept so the failure can be re-broadcast if the retry also fails).
+    """
+
+    @type t :: %__MODULE__{
+            in_progress: boolean(),
+            attempted: boolean(),
+            signature: CodingAgent.Session.CompactionManager.session_signature() | nil,
+            task_pid: pid() | nil,
+            task_monitor_ref: reference() | nil,
+            task_timeout_ref: reference() | nil,
+            started_at_ms: non_neg_integer() | nil,
+            error_reason: term() | nil,
+            partial_state: term() | nil
+          }
+
+    defstruct in_progress: false,
+              attempted: false,
+              signature: nil,
+              task_pid: nil,
+              task_monitor_ref: nil,
+              task_timeout_ref: nil,
+              started_at_ms: nil,
+              error_reason: nil,
+              partial_state: nil
+  end
 
   @type callbacks(state) :: %{
           required(:restore_messages_from_session) => (map() -> [map()]),
@@ -19,7 +55,7 @@ defmodule CodingAgent.Session.OverflowRecovery do
     state = CompactionManager.clear_overflow_recovery_task_tracking(state)
 
     cond do
-      not state.overflow_recovery_in_progress ->
+      not state.overflow_recovery.in_progress ->
         state
 
       true ->
@@ -47,10 +83,10 @@ defmodule CodingAgent.Session.OverflowRecovery do
       not state.is_streaming ->
         :no_recovery
 
-      state.overflow_recovery_in_progress ->
+      state.overflow_recovery.in_progress ->
         :no_recovery
 
-      state.overflow_recovery_attempted ->
+      state.overflow_recovery.attempted ->
         :no_recovery
 
       not CompactionManager.context_length_exceeded_error?(reason) ->
@@ -92,15 +128,17 @@ defmodule CodingAgent.Session.OverflowRecovery do
             {:ok,
              %{
                state
-               | overflow_recovery_in_progress: true,
-                 overflow_recovery_attempted: true,
-                 overflow_recovery_signature: signature,
-                 overflow_recovery_task_pid: task_meta.pid,
-                 overflow_recovery_task_monitor_ref: task_meta.monitor_ref,
-                 overflow_recovery_task_timeout_ref: task_meta.timeout_ref,
-                 overflow_recovery_started_at_ms: started_at_ms,
-                 overflow_recovery_error_reason: reason,
-                 overflow_recovery_partial_state: partial_state
+               | overflow_recovery: %State{
+                   in_progress: true,
+                   attempted: true,
+                   signature: signature,
+                   task_pid: task_meta.pid,
+                   task_monitor_ref: task_meta.monitor_ref,
+                   task_timeout_ref: task_meta.timeout_ref,
+                   started_at_ms: started_at_ms,
+                   error_reason: reason,
+                   partial_state: partial_state
+                 }
              }}
 
           {:error, task_reason} ->
@@ -116,10 +154,10 @@ defmodule CodingAgent.Session.OverflowRecovery do
   @spec handle_result(map(), term(), {:ok, map()} | {:error, term()}, callbacks(map())) :: map()
   def handle_result(state, signature, result, callbacks) do
     cond do
-      not state.overflow_recovery_in_progress ->
+      not state.overflow_recovery.in_progress ->
         state
 
-      state.overflow_recovery_signature != signature ->
+      state.overflow_recovery.signature != signature ->
         state
 
       signature != CompactionManager.session_signature(state) ->
@@ -172,13 +210,13 @@ defmodule CodingAgent.Session.OverflowRecovery do
 
   @spec handle_timeout(map(), reference(), callbacks(map())) :: {:handled, map()} | :stale
   def handle_timeout(state, monitor_ref, callbacks) do
-    if state.overflow_recovery_task_monitor_ref == monitor_ref do
+    if state.overflow_recovery.task_monitor_ref == monitor_ref do
       failure_reason = :overflow_recovery_timeout
 
       failed_state =
         state
         |> CompactionManager.maybe_kill_background_task(
-          state.overflow_recovery_task_pid,
+          state.overflow_recovery.task_pid,
           :overflow_recovery_timeout
         )
         |> CompactionManager.clear_overflow_recovery_task_state()
@@ -207,8 +245,11 @@ defmodule CodingAgent.Session.OverflowRecovery do
              %{
                state
                | is_streaming: true,
-                 overflow_recovery_error_reason: nil,
-                 overflow_recovery_partial_state: nil
+                 overflow_recovery: %{
+                   state.overflow_recovery
+                   | error_reason: nil,
+                     partial_state: nil
+                 }
              }}
 
           {:error, reason} ->
@@ -221,8 +262,8 @@ defmodule CodingAgent.Session.OverflowRecovery do
   end
 
   defp finalize_failure(state, fallback_reason, callbacks) do
-    reason = state.overflow_recovery_error_reason || fallback_reason
-    event = {:error, reason, state.overflow_recovery_partial_state}
+    reason = state.overflow_recovery.error_reason || fallback_reason
+    event = {:error, reason, state.overflow_recovery.partial_state}
 
     callbacks.broadcast_event.(state, event)
     state = callbacks.handle_agent_event.(event, state)
