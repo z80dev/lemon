@@ -108,17 +108,17 @@ defmodule LemonAi.Models.Catalog do
   defp to_model(key, %{"id" => id} = entry, source) when is_binary(id) do
     %Model{
       id: id,
-      name: Map.fetch!(entry, "name"),
+      name: fetch_string!(entry, "name"),
       api: normalize_atom!(:api, Map.fetch!(entry, "api"), @apis),
       provider: normalize_atom!(:provider, Map.fetch!(entry, "provider"), @providers),
-      base_url: Map.fetch!(entry, "base_url"),
-      reasoning: Map.fetch!(entry, "reasoning"),
-      input: Enum.map(Map.fetch!(entry, "input"), &normalize_atom!(:input, &1, @inputs)),
+      base_url: fetch_string!(entry, "base_url"),
+      reasoning: fetch_boolean!(entry, "reasoning"),
+      input: to_input(Map.fetch!(entry, "input")),
       cost: to_cost(Map.fetch!(entry, "cost")),
-      context_window: Map.fetch!(entry, "context_window"),
-      max_tokens: Map.fetch!(entry, "max_tokens"),
-      headers: Map.get(entry, "headers", %{}),
-      compat: Map.get(entry, "compat")
+      context_window: fetch_non_neg_integer!(entry, "context_window"),
+      max_tokens: fetch_non_neg_integer!(entry, "max_tokens"),
+      headers: optional_map!(entry, "headers", %{}),
+      compat: optional_map!(entry, "compat", nil)
     }
   rescue
     error in [ArgumentError, KeyError, Protocol.UndefinedError] ->
@@ -137,15 +137,61 @@ defmodule LemonAi.Models.Catalog do
 
   defp to_cost(%{} = cost) do
     %ModelCost{
-      input: Map.fetch!(cost, "input"),
-      output: Map.fetch!(cost, "output"),
-      cache_read: Map.fetch!(cost, "cache_read"),
-      cache_write: Map.fetch!(cost, "cache_write")
+      input: fetch_non_neg_number!(cost, "input", "cost.input"),
+      output: fetch_non_neg_number!(cost, "output", "cost.output"),
+      cache_read: fetch_non_neg_number!(cost, "cache_read", "cost.cache_read"),
+      cache_write: fetch_non_neg_number!(cost, "cache_write", "cost.cache_write")
     }
   end
 
   defp to_cost(other),
     do: raise(ArgumentError, "expected cost to be an object, got: #{inspect(other)}")
+
+  defp to_input(input) when is_list(input),
+    do: Enum.map(input, &normalize_atom!(:input, &1, @inputs))
+
+  defp to_input(other),
+    do: raise(ArgumentError, "expected input to be an array, got: #{inspect(other)}")
+
+  defp fetch_string!(entry, field) do
+    case Map.fetch!(entry, field) do
+      value when is_binary(value) -> value
+      value -> raise ArgumentError, "expected #{field} to be a string, got: #{inspect(value)}"
+    end
+  end
+
+  defp fetch_boolean!(entry, field) do
+    case Map.fetch!(entry, field) do
+      value when is_boolean(value) -> value
+      value -> raise ArgumentError, "expected #{field} to be a boolean, got: #{inspect(value)}"
+    end
+  end
+
+  defp fetch_non_neg_integer!(entry, field) do
+    case Map.fetch!(entry, field) do
+      value when is_integer(value) and value >= 0 ->
+        value
+
+      value ->
+        raise ArgumentError,
+              "expected #{field} to be a non-negative integer, got: #{inspect(value)}"
+    end
+  end
+
+  defp fetch_non_neg_number!(entry, field, label) do
+    case Map.fetch!(entry, field) do
+      value when is_number(value) and value >= 0 -> value
+      value -> raise ArgumentError, "expected #{label} to be non-negative, got: #{inspect(value)}"
+    end
+  end
+
+  defp optional_map!(entry, field, default) do
+    case Map.get(entry, field, default) do
+      nil when is_nil(default) -> nil
+      %{} = value -> value
+      value -> raise ArgumentError, "expected #{field} to be an object, got: #{inspect(value)}"
+    end
+  end
 
   defp normalize_atom!(field, value, allowed) when is_binary(value) do
     case allowed do

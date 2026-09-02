@@ -145,8 +145,9 @@ Each catalog is a JSON file under `priv/models/`, loaded at compile time by
 `LemonAi.Models.Catalog` into the provider's `LemonAi.Models.*` module. The
 files are compiler external resources, so edits recompile their provider
 modules. Invalid JSON and malformed entries fail compilation with catalog and
-model-key context; atom-valued API, provider, and input fields use explicit
-allowlists rather than creating atoms from arbitrary catalog strings.
+model-key context, including invalid field types, negative sizes, and negative
+costs; atom-valued API, provider, and input fields use explicit allowlists
+rather than creating atoms from arbitrary catalog strings.
 
 | Wire module (`api_id`) | Streaming | Tool calls | Vision (image input) | Reasoning / thinking | Cost data |
 |------------------------|:---------:|:----------:|:--------------------:|:--------------------:|:---------:|

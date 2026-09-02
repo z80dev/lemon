@@ -42,7 +42,8 @@ what in-repo code has been using.
   `LemonAi.Models.Catalog`. Existing provider module names and `models/0`
   return values are unchanged. Catalog files are external compiler resources;
   malformed top-level data and entries fail with source/model context, while
-  API, provider, and input strings normalize through fixed atom allowlists.
+  field types, token-size ranges, and costs are validated, and API, provider,
+  and input strings normalize through fixed atom allowlists.
 
 ### Notes
 

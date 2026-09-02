@@ -42,6 +42,36 @@ defmodule LemonAi.Models.CatalogTest do
                    fn -> Catalog.decode!(json, "broken.json") end
     end
 
+    test "rejects invalid model field types and ranges with entry context" do
+      invalid_fields = [
+        {["name"], 7, "expected name to be a string"},
+        {["base_url"], [], "expected base_url to be a string"},
+        {["reasoning"], "false", "expected reasoning to be a boolean"},
+        {["input"], %{}, "expected input to be an array"},
+        {["context_window"], "large", "expected context_window to be a non-negative integer"},
+        {["max_tokens"], -1, "expected max_tokens to be a non-negative integer"},
+        {["headers"], [], "expected headers to be an object"},
+        {["compat"], [], "expected compat to be an object"},
+        {["cost", "input"], "free", "expected cost.input to be non-negative"},
+        {["cost", "output"], -1, "expected cost.output to be non-negative"}
+      ]
+
+      for {path, value, expected_message} <- invalid_fields do
+        entry = put_in(valid_entry(), path, value)
+        json = Jason.encode!(%{"broken-model" => entry})
+
+        error =
+          assert_raise ArgumentError, fn ->
+            Catalog.decode!(json, "broken.json")
+          end
+
+        assert error.message =~
+                 ~s(invalid model entry "broken-model" in catalog "broken.json")
+
+        assert error.message =~ expected_message
+      end
+    end
+
     test "normalizes only explicitly supported atom fields" do
       json = Jason.encode!(%{"safe-model" => valid_entry()})
 
@@ -66,6 +96,19 @@ defmodule LemonAi.Models.CatalogTest do
                    fn -> Catalog.decode!(unsafe_json, "unsafe.json") end
 
       refute_existing_atom(unknown)
+
+      for {field, entry} <- [
+            {:provider, Map.put(valid_entry(), "provider", unknown)},
+            {:input, Map.put(valid_entry(), "input", [unknown])}
+          ] do
+        unsafe_json = Jason.encode!(%{"unsafe-model" => entry})
+
+        assert_raise ArgumentError,
+                     ~r/invalid model entry "unsafe-model".*unsupported #{field} value/,
+                     fn -> Catalog.decode!(unsafe_json, "unsafe.json") end
+
+        refute_existing_atom(unknown)
+      end
     end
   end
 
