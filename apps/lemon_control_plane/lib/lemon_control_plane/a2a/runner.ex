@@ -6,6 +6,7 @@ defmodule LemonControlPlane.A2A.Runner do
   alias LemonAgent.Security.ExternalContent
   alias LemonControlPlane.A2A.Config
   alias LemonCore.{A2AStore, Bus, Id, RouterBridge, RunRequest, RunStore, SessionKey}
+  alias LemonCore.A2A.Protocol
 
   @spec start(binary(), binary(), binary(), binary()) :: {:ok, map()} | {:error, term()}
   def start(peer_id, context_id, text, message_id) do
@@ -48,10 +49,11 @@ defmodule LemonControlPlane.A2A.Runner do
 
         {:error, reason} ->
           _ =
-            A2AStore.update_task(
-              task_id,
-              &Map.merge(&1, %{state: "TASK_STATE_FAILED", error: "runner unavailable"})
-            )
+            transition_nonterminal(task_id, %{
+              state: "TASK_STATE_FAILED",
+              answer: nil,
+              error: "runner unavailable"
+            })
 
           {:error, reason}
       end
@@ -91,9 +93,35 @@ defmodule LemonControlPlane.A2A.Runner do
     end
   end
 
-  defp execute(task, context, peer, config, text) do
-    {:ok, _} = A2AStore.update_task(task.id, &Map.put(&1, :state, "TASK_STATE_WORKING"))
+  @doc false
+  @spec mark_canceled(binary()) :: {:ok, map()} | {:error, term()}
+  def mark_canceled(task_id) when is_binary(task_id) do
+    case transition_nonterminal(task_id, %{state: "TASK_STATE_CANCELED"}) do
+      {:ok, %{state: "TASK_STATE_CANCELED"} = task} = result ->
+        notify(task.id)
+        result
 
+      result ->
+        result
+    end
+  end
+
+  defp execute(task, context, peer, config, text) do
+    case transition_nonterminal(task.id, %{state: "TASK_STATE_WORKING"}) do
+      {:ok, %{state: "TASK_STATE_WORKING"}} ->
+        execute_working(task, context, peer, config, text)
+
+      # Cancellation can win after the durable task is created but before this
+      # supervised runner is scheduled. A terminal task must never be revived.
+      {:ok, _terminal_task} ->
+        :ok
+
+      {:error, reason} ->
+        finalize(task, {:error, reason})
+    end
+  end
+
+  defp execute_working(task, context, peer, config, text) do
     allow_tools =
       if peer.allow_tools == [], do: config.default_allow_tools, else: peer.allow_tools
 
@@ -122,7 +150,7 @@ defmodule LemonControlPlane.A2A.Runner do
     finalize(task, result)
   rescue
     error ->
-      Logger.warning("A2A runner failed: #{Exception.message(error)}")
+      Logger.warning("A2A runner failed class=#{failure_class(error)}")
       finalize(task, {:error, :runner_failed})
   end
 
@@ -132,34 +160,63 @@ defmodule LemonControlPlane.A2A.Runner do
         do: "TASK_STATE_INPUT_REQUIRED",
         else: "TASK_STATE_COMPLETED"
 
-    {:ok, _} = A2AStore.update_task(task.id, &Map.merge(&1, %{state: state, answer: answer}))
-    {:ok, _} = A2AStore.increment_turn(:inbound, task.peer_id, task.context_id)
+    case transition_nonterminal(task.id, %{state: state, answer: answer, error: nil}) do
+      {:ok, %{state: ^state, answer: ^answer}} ->
+        {:ok, _} = A2AStore.increment_turn(:inbound, task.peer_id, task.context_id)
 
-    {:ok, _} =
-      A2AStore.append_message(%{
-        direction: :inbound,
-        peer_id: task.peer_id,
-        context_id: task.context_id,
-        task_id: task.id,
-        role: "ROLE_AGENT",
-        text: answer
-      })
+        {:ok, _} =
+          A2AStore.append_message(%{
+            direction: :inbound,
+            peer_id: task.peer_id,
+            context_id: task.context_id,
+            task_id: task.id,
+            role: "ROLE_AGENT",
+            text: answer
+          })
 
-    notify(task.id)
+        notify(task.id)
+
+      {:ok, _terminal_task} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("A2A task finalization failed class=#{failure_class(reason)}")
+    end
   end
 
   defp finalize(task, {:error, :canceled}) do
-    {:ok, _} = A2AStore.update_task(task.id, &Map.put(&1, :state, "TASK_STATE_CANCELED"))
-    notify(task.id)
+    _ = mark_canceled(task.id)
+    :ok
   end
 
   defp finalize(task, {:error, reason}) do
     error = if reason == :timeout, do: "peer run timed out", else: "peer run failed"
 
-    {:ok, _} =
-      A2AStore.update_task(task.id, &Map.merge(&1, %{state: "TASK_STATE_FAILED", error: error}))
+    case transition_nonterminal(task.id, %{
+           state: "TASK_STATE_FAILED",
+           answer: nil,
+           error: error
+         }) do
+      {:ok, %{state: "TASK_STATE_FAILED"}} ->
+        notify(task.id)
 
-    notify(task.id)
+      {:ok, _terminal_task} ->
+        :ok
+
+      {:error, update_reason} ->
+        Logger.warning("A2A task finalization failed class=#{failure_class(update_reason)}")
+    end
+  end
+
+  defp transition_nonterminal(task_id, attrs) when is_map(attrs) do
+    A2AStore.update_task(task_id, fn current ->
+      if terminal_task?(current), do: current, else: Map.merge(current, attrs)
+    end)
+  end
+
+  defp terminal_task?(%{state: state}) do
+    Protocol.terminal_state?(state) or
+      state in ["TASK_STATE_INPUT_REQUIRED", "TASK_STATE_AUTH_REQUIRED"]
   end
 
   defp wait_run(run_id, timeout_ms) do
@@ -231,4 +288,13 @@ defmodule LemonControlPlane.A2A.Runner do
     do: :crypto.hash(:sha256, value) |> Base.url_encode64(padding: false) |> binary_part(0, 22)
 
   defp notify(task_id), do: Bus.broadcast("a2a:task:#{task_id}", {:a2a_task_terminal, task_id})
+
+  defp failure_class(%{__exception__: true, __struct__: module}) when is_atom(module),
+    do: "exception:" <> inspect(module)
+
+  defp failure_class(reason) when is_atom(reason), do: "atom"
+  defp failure_class(reason) when is_tuple(reason), do: "tuple"
+  defp failure_class(reason) when is_map(reason), do: "map"
+  defp failure_class(reason) when is_list(reason), do: "list"
+  defp failure_class(_reason), do: "other"
 end

@@ -18,6 +18,11 @@ task reattachment in `LemonControlPlane.A2A.*`. Conversation persistence and
 generic wire/client helpers belong to `lemon_core`; agent-facing outbound peer
 actions belong to `lemon_skills`. A2A peers are independent principals and
 must never be treated as named execution nodes or operator WebSocket clients.
+Task terminal transitions are first-writer-wins: accepted cancellation cannot
+be overwritten by a delayed submit/finalize path, and no post-cancel agent
+message or context turn may be recorded. External A2A and `sessions.active`
+errors must use fixed bounded messages; classify failures for logs without
+interpolating raw reasons, paths, credentials, or exception messages.
 
 The control plane provides the external interface for clients (TUI, web, mobile, browser extensions) to:
 
@@ -218,7 +223,7 @@ Supported types: `:string`, `:integer`, `:boolean`, `:map`, `:list`, `:any`.
 | Method | Scope | Description |
 |--------|-------|-------------|
 | `sessions.list` | read | List/search sessions with pagination, agent/title/content query, pin/archive filters, lifecycle metadata, and query-redaction summary |
-| `sessions.active` | read | Get currently active session plus active-run cleanup summary |
+| `sessions.active` | read | Get currently active session plus active-run cleanup summary; returns fixed, reason-free errors when router state cannot be read |
 | `sessions.active.list` | read | List all active sessions plus summary/cleanup flags; includes best-effort `harness` progress (todos/checkpoints/requirements) when coding-agent telemetry is available |
 | `sessions.stats` | read | Exact aggregate durable-session totals with list/search-compatible filters and bounded redacted agent/origin dimensions; never includes keys, titles, prompts, paths, URLs, or credentials |
 | `sessions.preview` | read | Preview truncated session messages plus sensitive-preview redaction, truncation summary, and cleanup flags |

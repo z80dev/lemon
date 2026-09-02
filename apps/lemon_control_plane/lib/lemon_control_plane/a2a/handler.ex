@@ -1,6 +1,8 @@
 defmodule LemonControlPlane.A2A.Handler do
   @moduledoc false
 
+  require Logger
+
   alias LemonControlPlane.A2A.{Config, Runner, TaskView}
   alias LemonCore.{A2AStore, Id, RouterBridge}
   alias LemonCore.A2A.Protocol
@@ -73,18 +75,18 @@ defmodule LemonControlPlane.A2A.Handler do
       else
         case RouterBridge.abort_run(task.run_id, :a2a_peer_canceled) do
           :ok ->
-            {:ok, canceled} =
-              A2AStore.update_task(task.id, &Map.put(&1, :state, "TASK_STATE_CANCELED"))
+            case Runner.mark_canceled(task.id) do
+              {:ok, terminal} -> {:ok, TaskView.render(terminal)}
+              {:error, reason} -> cancel_store_error(reason)
+            end
 
-            LemonCore.Bus.broadcast(
-              "a2a:task:#{task.id}",
-              {:a2a_task_terminal, task.id}
-            )
-
-            {:ok, TaskView.render(canceled)}
+          {:error, :unavailable} ->
+            Logger.warning("A2A task cancellation unavailable")
+            {:error, -32_603, "Task cancellation is temporarily unavailable"}
 
           {:error, reason} ->
-            {:error, -32_603, "cancel failed: the run router is unavailable (#{inspect(reason)})"}
+            Logger.error("A2A task cancellation failed class=#{failure_class(reason)}")
+            {:error, -32_603, "Task cancellation failed"}
         end
       end
     end
@@ -107,4 +109,18 @@ defmodule LemonControlPlane.A2A.Handler do
 
   defp normalize_limit(value) when is_integer(value), do: value |> min(100) |> max(1)
   defp normalize_limit(_), do: 50
+
+  defp cancel_store_error(reason) do
+    Logger.error("A2A task cancellation persistence failed class=#{failure_class(reason)}")
+    {:error, -32_603, "Task cancellation failed"}
+  end
+
+  defp failure_class(%{__exception__: true, __struct__: module}) when is_atom(module),
+    do: "exception:" <> inspect(module)
+
+  defp failure_class(reason) when is_atom(reason), do: "atom"
+  defp failure_class(reason) when is_tuple(reason), do: "tuple"
+  defp failure_class(reason) when is_map(reason), do: "map"
+  defp failure_class(reason) when is_list(reason), do: "list"
+  defp failure_class(_reason), do: "other"
 end

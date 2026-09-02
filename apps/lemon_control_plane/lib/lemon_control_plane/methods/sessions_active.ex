@@ -11,6 +11,8 @@ defmodule LemonControlPlane.Methods.SessionsActive do
 
   @behaviour LemonControlPlane.Method
 
+  require Logger
+
   @impl true
   def name, do: "sessions.active"
 
@@ -31,8 +33,13 @@ defmodule LemonControlPlane.Methods.SessionsActive do
         :none ->
           {:ok, response(session_key, nil)}
 
+        {:error, :unavailable} ->
+          Logger.warning("sessions.active router lookup unavailable")
+          {:error, {:unavailable, "Run activity is temporarily unavailable", nil}}
+
         {:error, reason} ->
-          {:error, {:unavailable, "router unavailable: #{inspect(reason)}", nil}}
+          Logger.error("sessions.active router lookup failed class=#{failure_class(reason)}")
+          {:error, {:internal_error, "Unable to read active session state", nil}}
       end
     end
   end
@@ -60,4 +67,13 @@ defmodule LemonControlPlane.Methods.SessionsActive do
       }
     }
   end
+
+  defp failure_class(%{__exception__: true, __struct__: module}) when is_atom(module),
+    do: "exception:" <> inspect(module)
+
+  defp failure_class(reason) when is_atom(reason), do: "atom"
+  defp failure_class(reason) when is_tuple(reason), do: "tuple"
+  defp failure_class(reason) when is_map(reason), do: "map"
+  defp failure_class(reason) when is_list(reason), do: "list"
+  defp failure_class(_reason), do: "other"
 end

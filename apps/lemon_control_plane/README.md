@@ -115,6 +115,11 @@ Agent Card, JSON-RPC, and SSE task surface on port 9901 by default. It is kept
 off the operator control-plane port so peer credentials and exposure policy do
 not become control-plane authorization. See
 [`docs/user-guide/a2a-peers.md`](../../docs/user-guide/a2a-peers.md).
+Accepted cancellation is a terminal, first-writer-wins task transition: a
+delayed submission or run completion cannot revive a canceled task, add an
+agent reply, or increment its context turn count. Router/store failures are
+mapped to fixed bounded A2A error messages; internal reasons, paths, and secret
+values never cross the peer wire.
 
 The `/v1` generation endpoints are compatibility adapters, not a separate
 runtime path. They submit through the Lemon router and return `lemon.runId` by
@@ -435,7 +440,7 @@ Each method declares required scopes. A connection must have at least one matchi
 | Method | Scope | Description |
 |--------|-------|-------------|
 | `sessions.list` | read | List/search sessions with lifecycle metadata and pin/archive filters; raw search text is not echoed |
-| `sessions.active` | read | Get currently active session plus active-run cleanup summary |
+| `sessions.active` | read | Get currently active session plus active-run cleanup summary; router unavailability and internal failures use distinct bounded errors without raw reasons |
 | `sessions.active.list` | read | List all active sessions with harness progress plus summary and cleanup flags |
 | `sessions.preview` | read | Preview truncated session messages plus sensitive-preview redaction, truncation summary, and cleanup flags |
 | `session.detail` | read | Deep session/run internals with summary, sensitive preview/run-internal redaction, and explicit opt-ins for full text, raw run events, and run records |
