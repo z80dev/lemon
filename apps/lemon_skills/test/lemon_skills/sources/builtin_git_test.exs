@@ -100,14 +100,26 @@ defmodule LemonSkills.Sources.BuiltinGitTest do
 
   defp create_repo!(tmp_dir, name) do
     repo = Path.join(tmp_dir, name)
+    hooks_dir = Path.join(tmp_dir, "#{name}-hooks")
     File.mkdir_p!(repo)
+    File.mkdir_p!(hooks_dir)
     File.write!(Path.join(repo, "SKILL.md"), skill_document("Source Skill"))
 
     git!(repo, ["init", "--initial-branch=main"])
     git!(repo, ["config", "user.email", "skills-test@example.invalid"])
     git!(repo, ["config", "user.name", "Lemon Skills Test"])
+    git!(repo, ["config", "core.hooksPath", hooks_dir])
     git!(repo, ["add", "SKILL.md"])
-    git!(repo, ["commit", "-m", "initial skill"])
+
+    git!(repo, [
+      "-c",
+      "core.hooksPath=#{hooks_dir}",
+      "commit",
+      "--no-gpg-sign",
+      "-m",
+      "initial skill"
+    ])
+
     repo
   end
 
