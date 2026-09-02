@@ -1,6 +1,8 @@
 defmodule LemonCore.StoreTest do
   use ExUnit.Case, async: false
 
+  import ExUnit.CaptureLog
+
   alias LemonCore.Store
 
   setup do
@@ -66,6 +68,34 @@ defmodule LemonCore.StoreTest do
 
       {:ok, entries, state}
     end
+  end
+
+  defmodule DiagnosticLeakBackend do
+    @behaviour LemonCore.Store.Backend
+
+    @impl true
+    def init(_opts), do: {:ok, %{mode: :error, secret: "unset"}}
+
+    @impl true
+    def put(_state, _table, _key, _value), do: {:error, :read_only}
+
+    @impl true
+    def put_new(_state, _table, _key, _value), do: {:error, :read_only}
+
+    @impl true
+    def get(%{mode: :error, secret: secret}, _table, key) do
+      {:error, {:decode_failed, %{context: %{key: key}, detail: secret}}}
+    end
+
+    def get(%{mode: :unexpected, secret: secret}, _table, key) do
+      {:unexpected, %{context: %{key: key}, detail: secret}}
+    end
+
+    @impl true
+    def delete(_state, _table, _key), do: {:error, :read_only}
+
+    @impl true
+    def list(state, _table), do: {:ok, [], state}
   end
 
   defp unique_token do
@@ -620,6 +650,32 @@ defmodule LemonCore.StoreTest do
 
       assert Store.list(missing_store, :webhook_idempotency) == []
       assert Store.fetch_all(missing_store, :webhook_idempotency) == {:error, :store_unavailable}
+    end
+
+    test "idempotency diagnostics sanitize embedded raw keys and backend payloads" do
+      secret = "backend-diagnostic-secret-#{unique_token()}"
+      raw_key = {"integration", secret}
+      original_state = swap_store_backend(DiagnosticLeakBackend, %{mode: :error, secret: secret})
+      on_exit(fn -> :sys.replace_state(Store, fn _ -> original_state end) end)
+
+      error_log =
+        capture_log(fn ->
+          assert Store.fetch(:webhook_idempotency, raw_key) == {:error, :store_unavailable}
+        end)
+
+      refute error_log =~ secret
+
+      :sys.replace_state(Store, fn state ->
+        %{state | backend_state: %{mode: :unexpected, secret: secret}}
+      end)
+
+      unexpected_log =
+        capture_log(fn ->
+          assert Store.fetch(:webhook_idempotency_responses, raw_key) ==
+                   {:error, :store_unavailable}
+        end)
+
+      refute unexpected_log =~ secret
     end
 
     test "finalize_run writes history to RunHistoryStore" do

@@ -27,7 +27,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   any durable key, receipt, router request, or run metadata is built. Legacy
   raw webhook receipts migrate behind the hashed fence without reopening
   execution, invalid payload idempotency values are rejected before hashing,
-  and failed cleanup scans do not advance their watermark. Legacy router
+  released pending receipts without run identity remain safely ambiguous, and
+  failed cleanup scans do not advance their watermark. Store diagnostics also
+  sanitize nested idempotency-key context. Legacy router
   receipts are compacted and abort reasons sanitized during replay and
   background cleanup; goal hard stops persist abort intent before dispatch.
 - Telegram memory-reflection and per-chat abort helpers no longer collapse

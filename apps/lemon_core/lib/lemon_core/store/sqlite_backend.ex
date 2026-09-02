@@ -587,7 +587,6 @@ defmodule LemonCore.Store.SqliteBackend do
   rescue
     error in ArgumentError ->
       reason = {:sqlite_corrupt_data, Enum.into(context, %{}), Exception.message(error)}
-      Logger.warning("SQLite decode failed: #{inspect(reason)}")
       {:error, reason}
   end
 

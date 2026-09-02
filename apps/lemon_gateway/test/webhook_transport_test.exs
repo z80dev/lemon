@@ -315,6 +315,50 @@ defmodule LemonGateway.WebhookTransportTest do
     end)
   end
 
+  test "released bare pending receipt remains an ambiguous permanent fence after upgrade" do
+    suffix = System.unique_integer([:positive])
+    integration_id = "legacy-bare-pending-#{suffix}"
+    idempotency_key = "legacy-bare-pending-secret-#{suffix}"
+    raw_key = {integration_id, idempotency_key}
+
+    # This is the exact released shape: the old build persisted pending before
+    # submission but did not yet store any lease or execution identity.
+    legacy = %{
+      idempotency_key: idempotency_key,
+      integration_id: integration_id,
+      state: "pending",
+      updated_at_ms: 1
+    }
+
+    assert :ok = Store.put(Webhook.idempotency_table_for_test(), raw_key, legacy)
+
+    conn =
+      Test.conn(:post, "/webhooks/#{integration_id}", "")
+      |> Conn.put_req_header("idempotency-key", idempotency_key)
+
+    assert {:error, :idempotency_unavailable} =
+             Webhook.idempotency_context_for_test(conn, %{}, integration_id, %{})
+
+    assert Store.get(Webhook.idempotency_table_for_test(), raw_key) == nil
+
+    assert [{{:v1, _digest} = hashed_key, migrated}] =
+             Store.list(Webhook.idempotency_table_for_test())
+
+    assert migrated.state == "legacy_pending_unknown"
+    refute Map.has_key?(migrated, :run_id)
+    refute Map.has_key?(migrated, :reservation_id)
+    refute Map.has_key?(migrated, :lease_expires_at_ms)
+    refute inspect({hashed_key, migrated}) =~ idempotency_key
+
+    # A later process/version sees the same durable ambiguity and never
+    # manufactures a new run ID from the old acceptance window.
+    assert {:error, :idempotency_unavailable} =
+             Webhook.idempotency_context_for_test(conn, %{}, integration_id, %{})
+
+    assert Store.get(Webhook.idempotency_table_for_test(), hashed_key) == migrated
+    refute_receive {:webhook_submit, _request}
+  end
+
   test "legacy exact response receipt migrates before the raw primary is deleted" do
     suffix = System.unique_integer([:positive])
     integration_id = "legacy-response-#{suffix}"

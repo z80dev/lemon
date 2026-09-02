@@ -4,6 +4,8 @@ defmodule LemonCore.Store.SqliteBackendTest do
   """
   use ExUnit.Case, async: false
 
+  import ExUnit.CaptureLog
+
   alias Exqlite.Sqlite3
   alias LemonCore.Store.SqliteBackend
 
@@ -850,6 +852,24 @@ defmodule LemonCore.Store.SqliteBackendTest do
                SqliteBackend.list(state, :mytable)
 
       assert context.table == :mytable
+    end
+
+    test "decode returns structured failure without directly logging decoded sensitive keys", %{
+      state: state
+    } do
+      secret = "sqlite-idempotency-secret"
+      raw_key = {"integration", secret}
+      insert_corrupt_row!(state, :webhook_idempotency, raw_key, <<0>>)
+
+      log =
+        capture_log(fn ->
+          assert {:error, {:sqlite_corrupt_data, context, _message}} =
+                   SqliteBackend.list(state, :webhook_idempotency)
+
+          assert context.key == raw_key
+        end)
+
+      refute log =~ secret
     end
 
     test "list_recent returns an error for corrupted rows", %{state: state} do

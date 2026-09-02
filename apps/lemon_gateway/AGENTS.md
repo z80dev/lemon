@@ -161,7 +161,9 @@ for a non-channel surface that needs the Gateway runtime.
   On upgrade, migrate legacy raw-key reservations into the hashed namespace by
   durably creating the hashed fence and exact response first, then conditionally
   deleting the raw records; concurrent migration and any partial failure remain
-  fail closed. Expiry uses strict backend listing and removes the response
+  fail closed. A released-format `pending` row without a run ID remains a
+  permanent ambiguous fence rather than manufacturing a replay identity. Expiry
+  uses strict backend listing and removes the response
   snapshot before the primary execution fence on ordered backends; SQLite
   performs durable pairs in one transaction, and cleanup failures neither
   authorize replay nor advance the sweep watermark.

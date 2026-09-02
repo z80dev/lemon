@@ -2049,25 +2049,52 @@ defmodule LemonCore.Store do
     Logger.warning(
       "[LemonCore.Store] backend #{op} failed table=#{inspect(table)} " <>
         "key=#{inspect(safe_log_key(table, key))} " <>
-        "reason=#{inspect(reason)}"
+        "reason=#{inspect(safe_log_diagnostic(table, reason))}"
     )
   end
 
   defp log_backend_unexpected(op, table, key, response) do
     Logger.warning(
       "[LemonCore.Store] backend #{op} returned unexpected response table=#{inspect(table)} " <>
-        "key=#{inspect(safe_log_key(table, key))} response=#{inspect(response)}"
+        "key=#{inspect(safe_log_key(table, key))} " <>
+        "response=#{inspect(safe_log_diagnostic(table, response))}"
     )
   end
 
-  defp safe_log_key(table, key) when is_atom(table) do
-    if String.contains?(Atom.to_string(table), "idempotency") do
-      digest = :crypto.hash(:sha256, :erlang.term_to_binary(key)) |> Base.encode16(case: :lower)
-      {:sha256, binary_part(digest, 0, 16)}
+  defp safe_log_key(table, key), do: safe_log_diagnostic(table, key)
+
+  defp safe_log_diagnostic(table, term) when is_atom(table) do
+    if String.contains?(Atom.to_string(table), "idempotency"),
+      do: sanitize_sensitive_diagnostic(term),
+      else: term
+  end
+
+  defp safe_log_diagnostic(_table, term), do: term
+
+  defp sanitize_sensitive_diagnostic(term) when is_binary(term) do
+    digest = :crypto.hash(:sha256, term) |> Base.encode16(case: :lower)
+    {:sha256, binary_part(digest, 0, 16)}
+  end
+
+  defp sanitize_sensitive_diagnostic(term) when is_map(term) do
+    if is_struct(term) do
+      {:diagnostic, term.__struct__, sanitize_sensitive_diagnostic(Map.from_struct(term))}
     else
-      key
+      Map.new(term, fn {key, value} ->
+        {sanitize_sensitive_diagnostic(key), sanitize_sensitive_diagnostic(value)}
+      end)
     end
   end
 
-  defp safe_log_key(_table, key), do: key
+  defp sanitize_sensitive_diagnostic(term) when is_tuple(term) do
+    term
+    |> Tuple.to_list()
+    |> Enum.map(&sanitize_sensitive_diagnostic/1)
+    |> List.to_tuple()
+  end
+
+  defp sanitize_sensitive_diagnostic(term) when is_list(term),
+    do: Enum.map(term, &sanitize_sensitive_diagnostic/1)
+
+  defp sanitize_sensitive_diagnostic(term), do: term
 end

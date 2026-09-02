@@ -454,16 +454,36 @@ defmodule LemonGateway.Transports.Webhook.Idempotency do
   defp sanitize_legacy_entry(legacy_entry, integration_id, digest) do
     state = Request.normalize_blank(Request.fetch(legacy_entry, :state)) || "pending"
 
-    legacy_entry
-    |> Map.delete(:idempotency_key)
-    |> Map.delete("idempotency_key")
-    |> Map.put(:idempotency_digest, digest)
-    |> Map.put(:integration_id, integration_id)
-    |> Map.put_new(:state, state)
-    |> maybe_put_generated(:run_id, fn -> Id.run_id() end)
-    |> maybe_put_generated(:reservation_id, fn -> Id.uuid7() end)
-    |> maybe_put_legacy_lease(state)
+    sanitized =
+      legacy_entry
+      |> Map.delete(:idempotency_key)
+      |> Map.delete("idempotency_key")
+      |> Map.put(:idempotency_digest, digest)
+      |> Map.put(:integration_id, integration_id)
+
+    if unsafe_legacy_pending?(legacy_entry, state) do
+      sanitized
+      |> Map.delete(:state)
+      |> Map.delete("state")
+      |> Map.put(:state, "legacy_pending_unknown")
+    else
+      sanitized
+      |> Map.put_new(:state, state)
+      |> maybe_put_generated(:run_id, fn -> Id.run_id() end)
+      |> maybe_put_generated(:reservation_id, fn -> Id.uuid7() end)
+      |> maybe_put_legacy_lease(state)
+    end
   end
+
+  # Released builds wrote `pending` before the router call but carried no run
+  # identity. After an upgrade that row could represent either side of the
+  # acceptance boundary, so manufacturing a new run ID would risk duplicate
+  # execution. Keep a compact permanent ambiguous fence instead.
+  defp unsafe_legacy_pending?(entry, "pending") do
+    is_nil(Request.normalize_blank(Request.fetch(entry, :run_id)))
+  end
+
+  defp unsafe_legacy_pending?(_entry, _state), do: false
 
   defp maybe_put_generated(entry, key, generator) do
     if Request.normalize_blank(Request.fetch(entry, key)),
@@ -482,13 +502,22 @@ defmodule LemonGateway.Transports.Webhook.Idempotency do
   defp compatible_migration?(existing, legacy, integration_id, digest) do
     Request.fetch(existing, :idempotency_digest) == digest and
       Request.fetch(existing, :integration_id) == integration_id and
-      compatible_legacy_field?(existing, legacy, :state) and
+      compatible_legacy_state?(existing, legacy) and
       compatible_legacy_field?(existing, legacy, :run_id) and
       compatible_legacy_field?(existing, legacy, :reservation_id) and
       compatible_legacy_field?(existing, legacy, :session_key) and
       compatible_legacy_field?(existing, legacy, :mode) and
       compatible_legacy_field?(existing, legacy, :response_status) and
       compatible_legacy_field?(existing, legacy, :response_payload)
+  end
+
+  defp compatible_legacy_state?(existing, legacy) do
+    legacy_state = Request.normalize_blank(Request.fetch(legacy, :state)) || "pending"
+    existing_state = Request.normalize_blank(Request.fetch(existing, :state))
+
+    if unsafe_legacy_pending?(legacy, legacy_state),
+      do: existing_state == "legacy_pending_unknown",
+      else: existing_state == legacy_state
   end
 
   defp compatible_legacy_field?(existing, legacy, key) do

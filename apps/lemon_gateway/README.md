@@ -130,7 +130,12 @@ lease-owner token. Submission and response receipts are compare-and-swap
 updates owned by that token, and an HTTP success is not returned when the
 corresponding durable receipt cannot be stored. An expired pending lease may be
 reclaimed without duplicating an already accepted run because the router treats
-the fixed run ID as a durable idempotency key.
+the fixed run ID as a durable idempotency key. Payload-provided idempotency keys
+are opt-in and must be non-empty JSON strings; blank, numeric, list, or object
+values receive a bounded `422 invalid idempotency key` response before hashing
+or reservation. A legacy pending receipt without a run ID remains a permanent
+ambiguous fence after upgrade because its original acceptance outcome cannot be
+proven safely.
 
 ## Module Inventory
 
