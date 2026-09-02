@@ -36,6 +36,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- Configured engine runtimes are now checked against
+  `LemonCore.EngineRuntime` when the router starts. Invalid wiring is reported
+  once and disabled while preserving router-only boot and the existing
+  unavailable-runtime handling.
 - Persistent source and packaged launchers now provision a private,
   port-scoped control-plane operator credential under `~/.lemon/run`, allowing
   later TUI processes to attach automatically without exposing the bearer in

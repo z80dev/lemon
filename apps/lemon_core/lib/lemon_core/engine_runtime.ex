@@ -23,16 +23,25 @@ defmodule LemonCore.EngineRuntime do
 
   ## Contract
 
-  Rules the callback signatures cannot express. The router defends itself
-  against all of them — every call is wrapped in `rescue`/`catch` and a
-  `function_exported?/3` guard — but a runtime that violates them degrades into
-  silent no-ops rather than errors, which is much harder to diagnose than a
-  clean `{:error, reason}`.
+  The configured module is validated against this behaviour when the router
+  starts. A module that is not loadable or lacks a required callback is
+  rejected with a structured configuration error, logged once and disabled at
+  that boundary. For compatibility, a router-only node still boots in its
+  documented unavailable-runtime mode.
 
-    * **No callback may raise.** A raise from `c:submit_execution/1` is
-      converted to a submit failure and retried; a raise from the other three
-      is swallowed entirely, so a cancellation that raises simply does not
-      cancel.
+  Operational failures stay distinct from configuration errors. Expected
+  unavailability is a normal `false` or `{:error, reason}` return. An
+  implementation exception is isolated at the owning process boundary and
+  converted to that operation's documented error or degraded result. A
+  non-local exit is converted into a submit error by `c:submit_execution/1`'s
+  caller, but exits from the other callbacks can escape; implementations must
+  not exit their callers.
+
+    * **No callback should raise or exit.** `c:submit_execution/1` exceptions
+      and exits are surfaced as submit errors. Liveness, lookup and
+      cancellation exceptions are isolated by the owning process and degrade
+      according to the callback documentation below; exits from those three
+      callbacks violate the owning-process boundary and can terminate it.
     * **`c:submit_execution/1` is asynchronous.** `:ok` means *accepted*, not
       *finished*. Progress, output and completion travel back over the bus as
       run events keyed by the command's `run_id`; the return value carries no
@@ -50,21 +59,21 @@ defmodule LemonCore.EngineRuntime do
   ## Degradation
 
   Unavailability is a normal state, not a failure. When `c:available?/0`
-  returns `false`, when the configured module is not loadable, or when no
-  runtime is configured at all, the run process does not drop the run: it
-  re-arms `:submit_to_gateway` with exponential backoff and keeps the run
-  parked until a runtime shows up. A router-only node therefore boots and
-  queues work rather than crashing, and a gateway restart is absorbed.
+  returns `false`, or when no runtime is configured, the run process parks the
+  run and retries with exponential backoff. A router-only node therefore boots
+  and queues work rather than crashing, and a gateway restart is absorbed.
+  Persistent unavailability is bounded by the run's pre-start admission
+  deadline and then surfaced through its structured completion path.
 
   The same backoff handles `{:error, reason}` from `c:submit_execution/1`, and
-  it never gives up. Return `{:error, reason}` for a rejection the runtime
-  expects to outlive (a full queue, a locked engine); a permanently invalid
-  command will be retried forever, so reject those by completing the run with
-  an error event instead.
+  is bounded by that same deadline. Return `{:error, reason}` for a rejection
+  the runtime expects to outlive (a full queue, a locked engine); reject a
+  permanently invalid command by completing the run with an error event
+  instead of relying on retries.
 
-  For a runtime that predates `c:available?/0` and does not export it, the
-  router falls back to `GenServer.whereis/1` on the module name — implement the
-  callback rather than relying on that.
+  A runtime missing `c:available?/0` or any other required callback fails
+  startup validation. Missing callbacks are configuration errors, not a
+  degraded operational state.
 
   ## Cancellation reasons
 
@@ -124,6 +133,18 @@ defmodule LemonCore.EngineRuntime do
   alias LemonCore.ExecutionCommand
 
   @doc """
+  Validates that `module` is loadable and implements every required callback
+  of this behaviour.
+
+  The router runs this check for its configured runtime during startup.
+  Successful validation establishes that missing callbacks are impossible for
+  that configured module. An absent runtime remains a separately supported
+  router-only mode.
+  """
+  @spec validate(term()) :: :ok | {:error, LemonCore.Contract.error()}
+  def validate(module), do: LemonCore.Contract.validate(module, __MODULE__)
+
+  @doc """
   Accept a command for execution.
 
   `:ok` (or `{:ok, term}`, which the router treats identically) means the
@@ -136,7 +157,8 @@ defmodule LemonCore.EngineRuntime do
   different shape converts it into its own request type rather than pushing
   that type back across the boundary.
   """
-  @callback submit_execution(ExecutionCommand.t()) :: :ok | {:error, term()}
+  @callback submit_execution(ExecutionCommand.t()) ::
+              :ok | {:ok, term()} | {:error, term()}
 
   @doc """
   Cancel the run with this id, for this reason.
@@ -147,7 +169,10 @@ defmodule LemonCore.EngineRuntime do
   has the run.
 
   Cancellation is best-effort and asynchronous: returning `:ok` means the
-  request was delivered, not that the run has stopped.
+  request was delivered, not that the run has stopped. An implementation
+  exception violates the contract; the owning process isolates it and
+  preserves best-effort cancellation semantics. An exit can escape that
+  boundary and must not be used to report cancellation failure.
   """
   @callback cancel_by_run_id(binary(), term()) :: :ok
 
@@ -157,7 +182,10 @@ defmodule LemonCore.EngineRuntime do
   Used by the router to decide whether cancelling is worth attempting and to
   monitor the executing process so a runtime crash is noticed promptly. Return
   `nil` for unknown, finished or queued-but-not-started runs; a pid the router
-  monitors should be one whose death really means the run is over.
+  monitors should be one whose death really means the run is over. An
+  implementation exception violates the contract; the owning process isolates
+  it and treats the lookup as unknown (`nil`). An exit can escape that boundary
+  and must not be used to report an unknown run.
   """
   @callback run_pid(binary()) :: pid() | nil
 
@@ -169,6 +197,10 @@ defmodule LemonCore.EngineRuntime do
   makes this the right answer for "the runtime is down or still starting" and
   the wrong one for "the runtime is busy" — backpressure belongs in the
   runtime's own queue, where it can be reported and observed.
+
+  An implementation exception violates the contract; the owning process
+  isolates it and treats the runtime as unavailable. An exit can escape that
+  boundary and must not be used to report unavailability.
   """
   @callback available?() :: boolean()
 end

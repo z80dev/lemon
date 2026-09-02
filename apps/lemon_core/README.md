@@ -1,6 +1,6 @@
 # LemonCore
 
-Foundational shared library for the Lemon umbrella project. All other apps depend on `lemon_core` -- it provides configuration management, encrypted secrets, pluggable storage, an event bus, live named-node invocation routing, session routing primitives, idempotency, execution approvals, telemetry, and quality tooling.
+Foundational shared library for the Lemon umbrella project. All other apps depend on `lemon_core` -- it provides configuration management, configured-implementation contract validation, encrypted secrets, pluggable storage, an event bus, live named-node invocation routing, session routing primitives, idempotency, execution approvals, telemetry, and quality tooling.
 
 `LemonCore.Context` is the shared versioned preview/resolve boundary for
 root-confined file and folder references, shell-free git diffs, SSRF-guarded
@@ -91,6 +91,7 @@ and `lemon_lsp`. Core doctor diagnostics may probe them at runtime, but
 | `LemonCore.Config.Logging` | Log file and rotation sub-module |
 | `LemonCore.Config.Validator` | Validation for both legacy and modular config structs |
 | `LemonCore.Config.ValidationError` | Raised by `Config.Modular.load!/1` on invalid config |
+| `LemonCore.Contract` | Validates configuration-injected modules for loadability and required behaviour callbacks |
 | `LemonCore.Config.Helpers` | Shared config parsing helpers |
 | `LemonCore.Config.TomlPatch` | Textual TOML editing for targeted key upserts |
 | `LemonCore.ConfigCache` | ETS cache with mtime/size fingerprint-based invalidation |

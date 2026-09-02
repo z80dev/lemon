@@ -118,6 +118,10 @@ class/name, status, reason, message, and validation errors.
 
 ## Config Contract
 
+- `LemonRouter.Application` validates a configured `:engine_runtime` through
+  `LemonCore.EngineRuntime.validate/1` at startup. Invalid wiring is logged and
+  disabled, while router-only boot and existing unavailable-runtime handling
+  remain supported.
 - Default model and thinking level live in config (`[defaults]`) as defaults only.
 - Current per-session/per-route/per-chat values are runtime policy/state managed by `LemonCore.PolicyStore`, not config.
 - Direct `Application.get_env(:lemon_router, :default_model)`, `Application.get_env(:lemon_router, :agent_policies)`, and `Application.get_env(:lemon_router, :runtime_policy)` reads are forbidden in runtime modules. These values must come from config defaults or `PolicyStore`.
