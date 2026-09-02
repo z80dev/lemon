@@ -13,6 +13,11 @@ defmodule LemonCore.RouterBridge.RunOrchestrator do
   @doc """
   Accept a run request. `{:ok, run_id}` means the run was accepted, not that
   it finished; progress arrives as `LemonCore.Bus` events under that id.
+
+  An `{:error, reason}` other than `{:error, :outcome_unknown}` is a definite
+  rejection: implementations must return it only when they can guarantee the
+  request did not take effect. If acceptance may have happened but cannot be
+  acknowledged, return `{:error, :outcome_unknown}` instead.
   """
   @callback submit(RunRequest.t()) :: {:ok, run_id :: binary()} | {:error, term()}
 

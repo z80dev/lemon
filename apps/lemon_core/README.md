@@ -632,18 +632,24 @@ Channel adapters forward runs to `:lemon_router` without compile-time coupling. 
 {:ok, sessions} = LemonCore.RouterBridge.list_active_sessions()
 ```
 
-An unregistered router or a callback that proves its named process does not
-exist returns `{:error, :unavailable}`. A mutating callback that times out or
-otherwise exits without an acknowledgement returns
-`{:error, :outcome_unknown}`: the mutation may already have happened, so callers
-must not retry automatically without independent idempotency or reconciliation.
-Read-only query timeouts remain unavailable because they cannot duplicate a
-side effect. Query calls do not substitute `false`, `:none`, or `[]`; callers
-must handle unknown router state explicitly.
+An unregistered router returns `{:error, :unavailable}`. A configured mutating
+callback that raises, throws, returns a malformed acknowledgement, times out,
+or exits returns `{:error, :outcome_unknown}`: even a `:noproc` exit may follow
+an earlier side effect inside a multi-step callback. Callers must not retry
+automatically without independent idempotency or reconciliation. Read-only
+query exits and throws remain unavailable because they cannot duplicate a side
+effect. Query calls do not substitute `false`, `:none`, or `[]`; callers must
+handle unknown router state explicitly.
 
 Configured implementations are validated against the bridge behaviours before
 use. `submit_run/1` accepts only `{:ok, nonempty_binary_run_id}` as success, and
-any malformed callback answer becomes `{:error, {:unexpected_answer, value}}`.
+an explicit `{:error, reason}` other than `{:error, :outcome_unknown}` means
+the implementation guarantees the mutation did not take effect. Malformed
+mutation answers are outcome-unknown; malformed query answers remain
+`{:error, {:unexpected_answer, value}}`.
+For abort and keep-alive commands, `:ok` acknowledges that the router accepted
+or dispatched the decision; it does not wait for synchronous application by
+the target run process.
 Failure logs contain only a sanitized callback MFA and failure class; raw
 exceptions, exit reasons, stacktraces, and callback arguments are not logged.
 
@@ -756,7 +762,7 @@ Available helpers: `unique_token/0`, `unique_scope/0`, `unique_session_key/0`, `
   JSON codec with Elixir-term markers for portable persistence
 - Events use millisecond timestamps from `System.system_time(:millisecond)`
 - `RouterBridge` returns `{:error, :unavailable}` when `:lemon_router` has not
-  registered or is known absent, and `{:error, :outcome_unknown}` when a
-  mutation loses its acknowledgement; never automatically retry the latter
+  registered, and `{:error, :outcome_unknown}` when a configured mutation
+  loses its acknowledgement; never automatically retry the latter
 - `Dedupe.Ets` uses monotonic time for TTL; `Idempotency` uses wall-clock time
 - `Config.Modular` is the newer typed approach; `Config` is still the primary interface

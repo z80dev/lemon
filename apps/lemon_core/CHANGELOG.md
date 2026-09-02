@@ -67,15 +67,19 @@ Telegram, run history, durable memory, kanban boards, or `~/.lemon`.
 
 - `LemonCore.RouterBridge.configure/1` validates the router and run
   orchestrator against explicit behaviours before registration. Command
-  functions return `:ok` only for an exact `:ok` callback result; malformed
-  results become `{:error, {:unexpected_answer, value}}`.
-- `LemonCore.RouterBridge` now distinguishes a known-unavailable router from a
-  mutation that lost its acknowledgement. Timed-out or otherwise ambiguous
-  mutations return `{:error, :outcome_unknown}` and must not be retried without
-  independent idempotency or reconciliation. Successful run submission is
-  normalized to a non-empty binary run id, empty session/run keys return
-  structured validation errors, and bridge failure logs contain only a safe
-  callback MFA and failure class.
+  functions return `:ok` only for an exact `:ok` callback result. A malformed
+  mutation acknowledgement is now `{:error, :outcome_unknown}` because the
+  callback may already have applied the side effect; malformed query results
+  remain `{:error, {:unexpected_answer, value}}`.
+- `LemonCore.RouterBridge` now distinguishes an unregistered router from a
+  configured mutation that lost its acknowledgement. Raised, thrown,
+  malformed, timed-out, or exited mutations return
+  `{:error, :outcome_unknown}` and must not be retried without independent
+  idempotency or reconciliation; even a `:noproc` exit may follow an earlier
+  side effect inside the callback.
+  Successful run submission is normalized to a non-empty binary run id, empty
+  session/run keys return structured validation errors, and bridge failure
+  logs contain only a safe callback MFA and failure class.
 - `LemonCore.RouterBridge.session_busy?/1` now returns
   `{:ok, boolean()} | {:error, term()}`. `active_run/1` and
   `list_active_sessions/0` likewise report `{:error, :unavailable}` instead of

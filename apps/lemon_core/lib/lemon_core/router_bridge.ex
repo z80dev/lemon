@@ -26,31 +26,38 @@ defmodule LemonCore.RouterBridge do
 
     * **Not configured** — no module registered for the role:
       `{:error, :unavailable}`.
-    * **Reached and raised** — the router ran in the caller's process and
-      raised: `{:error, exception}`. The bridge logs only the callback MFA and
+    * **Explicit callback error** — an in-contract `{:error, reason}` returned
+      normally is passed through. Except for `:outcome_unknown` itself, bridge
+      implementations must return an error only when they can guarantee that
+      the mutation did not take effect; this is the definite-rejection path.
+    * **Reached and raised** — the callback ran in the caller's process and
+      raised. A read-only query returns `{:error, exception}`, while a mutation
+      returns `{:error, :outcome_unknown}` because the exception may have been
+      raised after the side effect. The bridge logs only the callback MFA and
       the safe failure class `exception`; exception messages and stacktraces
       may contain request data or credentials and are never rendered here.
-    * **Known absent process** — a callback exits with `:noproc` before it can
-      reach its named process: `{:error, :unavailable}`.
     * **Unacknowledged mutation** — a submission, inbound route, abort, or
-      keep-alive callback times out or exits without proving that no process
-      received it: `{:error, :outcome_unknown}`. The operation may already
-      have taken effect. Callers must not automatically retry it unless they
-      have an independent idempotency or reconciliation mechanism, because a
-      retry can duplicate the side effect.
+      keep-alive callback that raises, throws, returns a malformed
+      acknowledgement, times out, or exits returns
+      `{:error, :outcome_unknown}`. This includes `:noproc`: the callback may
+      have applied one side effect before reaching a missing downstream
+      process. The operation may already have taken effect. Callers must not
+      automatically retry it unless they have an independent idempotency or
+      reconciliation mechanism, because a retry can duplicate the side
+      effect.
 
-  Query callbacks are read-only, so an exit or timeout is reported as
+  Query callbacks are read-only, so any exit or timeout is reported as
   `{:error, :unavailable}` rather than `:outcome_unknown`; there is no side
   effect to duplicate. They never answer a soft value (`false`, `:none`, `[]`)
   for a router they could not reach. Deciding what an unknown router state
   means is the caller's job.
 
   Callback exits are logged at warning level, again using only the sanitized
-  callback MFA and failure class (`timeout`, `no_process`, or `exit`). Raw exit
-  reasons and callback arguments are never formatted or inspected for logs.
-
-  Throws are *not* caught: no router throws, and one that did would be a bug
-  worth surfacing rather than flattening into "unavailable".
+  callback MFA and failure class (`timeout`, `no_process`, or `exit`). Throws
+  are also caught without rendering their terms and logged with the fixed
+  failure class `throw`; they are outcome-unknown for mutations and unavailable
+  for queries. Raw exceptions, throw/exit reasons, and callback arguments are
+  never formatted or inspected for logs.
   """
 
   alias LemonCore.Contract
@@ -118,10 +125,11 @@ defmodule LemonCore.RouterBridge do
   @doc """
   Submit a canonical run request.
 
-  Success is normalized to `{:ok, nonempty_run_id}`. A timeout or ambiguous
-  callback exit returns `{:error, :outcome_unknown}`: the run may have been
-  accepted, so retrying can create a duplicate unless the caller reconciles
-  the original request independently.
+  Success is normalized to `{:ok, nonempty_run_id}`. A raised exception,
+  thrown term, malformed acknowledgement, timeout, or ambiguous callback exit
+  returns `{:error, :outcome_unknown}`: the run may have been accepted, so
+  retrying can create a duplicate unless the caller reconciles the original
+  request independently.
   """
   @spec submit_run(RunRequest.t()) ::
           {:ok, binary()} | unavailable() | outcome_unknown() | {:error, term()}
@@ -243,7 +251,7 @@ defmodule LemonCore.RouterBridge do
           "failure_class=exception"
       )
 
-      {:error, exception}
+      exception_result(operation_kind, exception)
   catch
     :exit, reason ->
       failure_class = exit_failure_class(reason)
@@ -254,6 +262,14 @@ defmodule LemonCore.RouterBridge do
       )
 
       exit_result(operation_kind, failure_class)
+
+    :throw, _reason ->
+      Logger.error(
+        "RouterBridge callback failed callback=#{callback_mfa(module, function, args)} " <>
+          "failure_class=throw"
+      )
+
+      throw_result(operation_kind)
   end
 
   defp callback_mfa(module, function, args) do
@@ -266,19 +282,24 @@ defmodule LemonCore.RouterBridge do
   defp exit_failure_class({:timeout, _call}), do: :timeout
   defp exit_failure_class(_reason), do: :exit
 
-  defp exit_result(_operation_kind, :no_process), do: {:error, :unavailable}
   defp exit_result(:query, _failure_class), do: {:error, :unavailable}
   defp exit_result(:mutation, _failure_class), do: {:error, :outcome_unknown}
+
+  defp exception_result(:query, exception), do: {:error, exception}
+  defp exception_result(:mutation, _exception), do: {:error, :outcome_unknown}
+
+  defp throw_result(:query), do: {:error, :unavailable}
+  defp throw_result(:mutation), do: {:error, :outcome_unknown}
 
   defp expect_run_id({:ok, run_id}) when is_binary(run_id) and run_id != "",
     do: {:ok, run_id}
 
   defp expect_run_id({:error, _reason} = error), do: error
-  defp expect_run_id(other), do: {:error, {:unexpected_answer, other}}
+  defp expect_run_id(_malformed_acknowledgement), do: {:error, :outcome_unknown}
 
   defp expect_ok(:ok), do: :ok
   defp expect_ok({:error, _reason} = error), do: error
-  defp expect_ok(other), do: {:error, {:unexpected_answer, other}}
+  defp expect_ok(_malformed_acknowledgement), do: {:error, :outcome_unknown}
 
   defp impl(key) do
     Map.get(current_config(), key)

@@ -12,31 +12,45 @@ defmodule LemonCore.RouterBridge.Router do
   `use LemonCore.RouterBridge.Router` injects an overridable implementation of
   every callback that raises `LemonCore.RouterBridge.NotImplementedError`. A
   partial router, typically a test double, therefore satisfies the contract
-  while any call it does not handle is reported by the bridge as
-  `{:error, %LemonCore.RouterBridge.NotImplementedError{}}` rather than
-  answered with an invented value.
+  while any call it does not handle fails visibly rather than answering with
+  an invented value. Because a raised mutation cannot prove that no side
+  effect occurred, the bridge conservatively reports a default mutation as
+  `{:error, :outcome_unknown}`; query defaults retain the exception error.
+
+  ## Mutation error contract
+
+  For `handle_inbound/1`, `abort/2`, `abort_run/2`, and `keep_run_alive/2`, an
+  `{:error, reason}` other than `{:error, :outcome_unknown}` is a definite
+  rejection: implementations must return it only when they can guarantee the
+  mutation did not take effect. If the outcome cannot be proved, return
+  `{:error, :outcome_unknown}`. Raised exceptions, thrown terms, and malformed
+  acknowledgements are normalized conservatively by the bridge.
   """
 
   alias LemonCore.InboundMessage
 
-  @doc "Route an inbound channel message."
+  @doc "Route an inbound channel message. `:ok` means the router accepted responsibility."
   @callback handle_inbound(InboundMessage.t()) :: :ok | {:error, term()}
 
   @doc """
-  Abort every run of a session. Unknown sessions are `:ok`; operational
-  failures are `{:error, reason}`.
+  Ask the router to abort every run of a session. `:ok` means the decision was
+  accepted or dispatched, not that each run process has synchronously applied
+  it. Unknown sessions are `:ok`; operational failures are `{:error, reason}`.
   """
   @callback abort(session_key :: binary(), reason :: term()) :: :ok | {:error, term()}
 
   @doc """
-  Abort one run by id. Finished or unknown runs are `:ok`; operational
-  failures are `{:error, reason}`.
+  Ask the router to abort one run by id. `:ok` means the decision was accepted
+  or dispatched, not that the run process has synchronously applied it.
+  Finished or unknown runs are `:ok`; operational failures are
+  `{:error, reason}`.
   """
   @callback abort_run(run_id :: binary(), reason :: term()) :: :ok | {:error, term()}
 
   @doc """
-  Apply a watchdog keep-alive decision to a run. Unknown runs are `:ok`;
-  operational failures are `{:error, reason}`.
+  Dispatch a watchdog keep-alive decision to a run. `:ok` acknowledges the
+  dispatch, not synchronous application by the run process. Unknown runs are
+  `:ok`; operational failures are `{:error, reason}`.
   """
   @callback keep_run_alive(run_id :: binary(), decision :: :continue | :cancel) ::
               :ok | {:error, term()}

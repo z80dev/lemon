@@ -856,14 +856,20 @@ Channel adapters and other producers forward runs to `:lemon_router` without a c
 {:ok, sessions} = LemonCore.RouterBridge.list_active_sessions()
 ```
 
-An unregistered or known-absent router returns `{:error, :unavailable}`. A
-mutating callback that times out or exits without an acknowledgement returns
-`{:error, :outcome_unknown}`. The mutation may already have taken effect, so do
-not automatically retry it without independent idempotency or reconciliation.
-Query timeouts remain unavailable because queries cannot duplicate a side
-effect. Bridge logs must contain only the sanitized callback MFA and failure
-class, never exception messages, stacktraces, exit reasons, or callback
-arguments.
+An unregistered router returns `{:error, :unavailable}`. A configured mutating
+callback that raises, throws, returns a malformed acknowledgement, times out,
+or exits returns `{:error, :outcome_unknown}`. Even `:noproc` does not prove
+non-acceptance: a multi-step callback may have mutated before reaching a
+missing downstream process. Do not automatically retry an unknown outcome
+without independent idempotency or reconciliation. A normally returned
+`{:error, reason}` other than `:outcome_unknown` is an implementation guarantee
+that the mutation did not take effect. Query exits remain unavailable because
+queries cannot duplicate a side effect. Bridge logs must contain only the
+sanitized callback MFA and failure class, never exception messages,
+stacktraces, exit reasons, or callback arguments.
+Abort and keep-alive `:ok` results acknowledge router acceptance or dispatch;
+they are not synchronous proof that the target run process applied the
+decision.
 
 ### Dotenv
 
@@ -998,10 +1004,12 @@ Durable memory is supervised by the `lemon_memory` app, not here.
   a JSON codec that preserves atoms, tuples, structs, and nested map keys
 - Events use millisecond timestamps from `System.system_time(:millisecond)`
 - `LemonCore.RouterBridge` returns `{:error, :unavailable}` when the router is
-  unregistered or known absent, and `{:error, :outcome_unknown}` when a
-  mutation loses its acknowledgement. The latter is duplicate-risk, not a
-  retry-safe availability failure. Query callers must not reinterpret
-  unavailable as `false`, `:none`, or `[]` without an explicit local policy.
+  unregistered, and `{:error, :outcome_unknown}` when a configured mutation
+  raises, throws, returns a malformed acknowledgement, or exits without a
+  definite acknowledgement. The latter is duplicate-risk, not a retry-safe
+  availability failure; this includes `:noproc` exits from configured
+  callbacks. Query callers must not reinterpret unavailable as `false`,
+  `:none`, or `[]` without an explicit local policy.
 - `LemonCore.Dedupe.Ets` uses monotonic time for TTL; `LemonCore.Idempotency` uses wall-clock time
 - `LemonCore.Config.Modular` is the canonical config implementation; `LemonCore.Config` is a facade that delegates to modular
 - Provider config resolution is centralized in `LemonAgent.ProviderConfigResolver` (agent_core); provider modules must not read env vars directly for normal request paths

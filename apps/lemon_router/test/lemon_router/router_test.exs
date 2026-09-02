@@ -212,6 +212,24 @@ defmodule LemonRouter.RouterTest do
     assert_receive {:orchestrator_submit, _request}, 500
   end
 
+  test "handle_inbound/1 treats malformed orchestrator acknowledgements as outcome unknown" do
+    msg = %InboundMessage{
+      channel_id: "email",
+      account_id: "default",
+      peer: %{kind: :dm, id: "sender@example.test", thread_id: nil},
+      sender: %{id: "sender@example.test"},
+      message: %{id: "mail-malformed", text: "run", timestamp: nil, reply_to_id: nil},
+      raw: %{},
+      meta: %{"agent_id" => "email-agent"}
+    }
+
+    for malformed <- [false, {:ok, 123}, {:ok, ""}] do
+      Process.put(:router_submit_result, malformed)
+      assert {:error, :outcome_unknown} = Router.handle_inbound(msg)
+      assert_receive {:orchestrator_submit, _request}, 500
+    end
+  end
+
   test "RouterBridge propagates a real Router rejection to the inbound application boundary" do
     Application.put_env(:lemon_router, :run_orchestrator, RejectingRunOrchestrator)
     :ok = RouterBridge.configure(router: Router)

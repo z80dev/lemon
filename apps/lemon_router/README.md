@@ -80,7 +80,12 @@ attachment policy.
 - `Router.handle_inbound/1` returns the exact `RunOrchestrator.submit/1` error
   when submission is rejected. Inbound transports must not acknowledge a
   message as accepted after that error, and pending-compaction markers remain
-  available for a later valid submission.
+  available for a later valid submission. A malformed acknowledgement is
+  `{:error, :outcome_unknown}` because submission may already have happened
+  without returning a usable run id; it is not automatically retry-safe.
+- Abort and keep-alive `:ok` results mean the router accepted or dispatched the
+  decision. These best-effort commands do not wait for synchronous application
+  by every target run process.
 - Top-level runs always use the native executor; model validation belongs to `LemonAi`, and default cwd resolution should use `LemonCore.Cwd`.
 - Router emits `LemonCore.DeliveryIntent`, not `LemonChannels.OutboundPayload`.
 - Tool-status failure summaries preserve safe structured fields from

@@ -37,12 +37,17 @@ defmodule LemonRouter.Router do
 
     # Submit to orchestrator
     case run_orchestrator().submit(request) do
-      {:ok, _run_id} ->
+      {:ok, run_id} when is_binary(run_id) and run_id != "" ->
         PendingCompaction.consume(session_key, PendingCompaction.prepared_marker(meta))
         :ok
 
       {:error, _reason} = error ->
         error
+
+      _malformed_acknowledgement ->
+        # Submission may already have reached the coordinator. Without a
+        # usable run id, neither acceptance nor safe redelivery can be proved.
+        {:error, :outcome_unknown}
     end
   end
 
