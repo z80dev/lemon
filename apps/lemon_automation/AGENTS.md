@@ -56,7 +56,10 @@ CronManager (GenServer, ticks every 60s)
                                               `:run_completed` summary into the base main session topic/history
 ```
 
-**Wake** is a separate module (not intermediary in the above flow). It creates runs with `triggered_by: :wake`, submits directly to `LemonRouter`, and sends `{:run_complete, ...}` back to `CronManager`.
+**Wake** is a separate module (not intermediary in the above flow). It creates
+runs with `triggered_by: :wake`, submits through the same configured
+`:cron_run_submitter` used by `CronManager` (normally `RunSubmitter` ->
+`LemonRouter`), and sends `{:run_complete, ...}` back to `CronManager`.
 
 **CronCommandRunner** is the operator-owned no-agent cron path. Jobs with
 `command` instead of `prompt` run as supervised local shell commands under
@@ -550,7 +553,10 @@ results = LemonAutomation.Wake.trigger_matching("heartbeat")
 results = LemonAutomation.Wake.trigger_for_agent("agent_abc")
 ```
 
-Wake runs use `triggered_by: :wake` and fire-and-forget: they return the `CronRun` immediately and completion is handled asynchronously by `CronManager`. Wake failures do not enter the scheduled retry path.
+Wake runs use `triggered_by: :wake` and fire-and-forget: they return the
+`CronRun` immediately, use the same configured `:cron_run_submitter` as
+`CronManager`, and have completion handled asynchronously by `CronManager`.
+Wake failures do not enter the scheduled retry path.
 
 ## Events
 

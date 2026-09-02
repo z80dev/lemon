@@ -86,7 +86,10 @@ scheduled-run claim/suppression decisions. Operator APIs can read raw IDs from
 `CronStore.list_audit_events/1`; support diagnostics redact audit IDs, job/run
 IDs, and reasons.
 
-**Wake** provides immediate out-of-schedule triggering. It creates runs with `triggered_by: :wake`, submits directly to LemonRouter, and routes completion back through CronManager.
+**Wake** provides immediate out-of-schedule triggering. It creates runs with
+`triggered_by: :wake`, submits through the same configured
+`:cron_run_submitter` used by CronManager (normally RunSubmitter ->
+LemonRouter), and routes completion back through CronManager.
 
 **GoalContinuationManager** is the preview persistent-goal runner. It accepts one
 active session goal at a time, starts the work through `TaskSupervisor`, submits
