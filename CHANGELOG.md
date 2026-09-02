@@ -10,6 +10,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Run finalization no longer reports success when session indexing fails.
+  Retrying the same immutable summary repairs the derived index without
+  incrementing `run_count` twice; conflicting summaries fail closed, and
+  finalize hooks document their at-least-once delivery contract.
 - Hermes skill install/update requests no longer block their own control-plane
   WebSocket while waiting for approval or Git work. Approval events and
   liveness probes remain deliverable, and the TUI keeps the correlated skill
@@ -35,8 +39,8 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 - `LemonCore.RunStore` now declares ownership of the `:runs` and
   `:sessions_index` tables through `LemonCore.Store.Table`. This is the first
-  focused domain adoption of the ownership metadata and architecture gate;
-  the existing run lifecycle and finalization behavior is unchanged.
+  focused domain adoption of the ownership metadata and architecture gate,
+  retaining the specialized Store lifecycle path.
 
 - `LemonCore.Store.Table` ownership metadata for incremental generic-store
   migrations. The architecture gate now analyzes generic Store calls from the

@@ -15,13 +15,19 @@ Telegram, run history, durable memory, kanban boards, or `~/.lemon`.
 - Vendor CLI wrapper extension points. Subagent tasks now execute natively, and
   `[runtime.cli]` is rejected.
 
+### Fixed
+
+- Run finalization is now synchronous and retry-safe. A session-index failure
+  is returned to the caller, retrying repairs the index without double-counting
+  the run, conflicting summaries fail without exposing the original summary,
+  and finalize hooks explicitly use at-least-once delivery.
 
 ### Added
 
 - `LemonCore.RunStore` declares `:runs` and `:sessions_index` as its owned
   tables. The declaration documents their cache and persistence intent and
-  brings the existing wrapper under the AST ownership gate without changing
-  the specialized `LemonCore.Store` run lifecycle or finalization semantics.
+  brings the existing wrapper under the AST ownership gate while retaining the
+  specialized `LemonCore.Store` run lifecycle path.
 
 - `LemonCore.Store.Table` lets a domain wrapper declare table ownership plus
   future cache, retention, persistence, and schema-version metadata without

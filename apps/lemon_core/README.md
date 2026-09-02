@@ -165,7 +165,7 @@ ids, message bodies, proof details, credentials, or secret names.
 |--------|---------|
 | `LemonCore.Store` | GenServer with pluggable backends and specialized APIs |
 | `LemonCore.Store.Table` | Declarative owner and policy metadata for generic Store tables |
-| `LemonCore.RunStore` | Typed run lifecycle/history wrapper and declared owner of `:runs` and `:sessions_index`; runtime writes still use the specialized Store lifecycle path |
+| `LemonCore.RunStore` | Typed run lifecycle/history wrapper and declared owner of `:runs` and `:sessions_index`; specialized finalization is synchronous and retry-safe |
 | `LemonCore.Store.Backend` | Behaviour for storage backends (init/put/put_new/get/delete/list) |
 | `LemonCore.Store.EtsBackend` | In-memory ETS backend (ephemeral, default) |
 | `LemonCore.Store.SqliteBackend` | SQLite backend with WAL mode and optional ephemeral tables |
@@ -487,6 +487,12 @@ Shared-domain callers should prefer typed wrappers:
 - **Introspection**: `LemonCore.IntrospectionStore.append/1`, `list/1`
 - **Project bindings**: `LemonCore.ProjectBindingStore.get_override/1`, `put_override/2`, `get_dynamic/1`
 - **Exec approvals**: `LemonCore.ExecApprovalStore.get_pending/1`, `put_pending/2`, policy getters/setters by scope
+
+`RunStore.finalize/2` returns `:ok` only after the immutable run record and its
+session index are written. Retrying the same summary repairs a partial index
+failure without double-counting the run. Finalize hooks run after both writes
+and use at-least-once delivery, so hook implementations must be idempotent by
+run id.
 
 Agent workspace coordination — goals, kanban boards, and heartbeats — is built on this Store but lives in `agent_core` as `LemonAgent.Workspace.{GoalStore, KanbanStore, HeartbeatStore}`.
 
