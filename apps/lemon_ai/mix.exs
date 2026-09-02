@@ -43,7 +43,7 @@ defmodule LemonAi.MixProject do
     [
       name: Lemon.HexPackage.name(:lemon_ai),
       licenses: ["MIT"],
-      files: ~w(lib .formatter.exs mix.exs README.md CHANGELOG.md LICENSE),
+      files: ~w(lib priv .formatter.exs mix.exs README.md CHANGELOG.md LICENSE),
       links: %{
         "GitHub" => @source_url,
         "Changelog" => "#{@source_url}/blob/main/apps/lemon_ai/CHANGELOG.md"

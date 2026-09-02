@@ -10,6 +10,17 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Changed
 
+- The model catalogs are JSON under `apps/lemon_ai/priv/models/`, loaded
+  at compile time by `LemonAi.Models.Catalog`; the provider modules keep
+  their names and `models/0`.
+- The two largest `AGENTS.md` files (coding_agent, control plane) lost the
+  reference material that duplicated their READMEs: the control plane's
+  per-method inventory, auth, presence, WebSocket and capability sections
+  now live only in its README (with the eight methods the README had
+  missed), and the coding agent's tool catalogue, file listing and struct
+  shapes are the README's (with the four browser tab tools it had missed).
+  `mix lemon.quality` now also ratchets the largest single `AGENTS.md`.
+
 - The coding-agent test suite no longer rewrites `HOME` for the whole VM or
   loads sibling apps' test support files by relative path. Test support
   modules compile with their app in the test environment (`elixirc_paths`),

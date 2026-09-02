@@ -5,8 +5,8 @@
 # in the commit message.
 %{
   # lines in apps/*/lib/**/*.ex
-  lib_lines: 337894,
-  # lib files over 1000 lines, excluding the lemon_ai model catalogs
+  lib_lines: 327335,
+  # lib files over 1000 lines
   large_lib_files: 50,
   # :"Elixir.Some.Module" atoms in lib
   dynamic_module_atoms: 1,
@@ -29,5 +29,7 @@
   # *_test.exs files that are not async: true
   sync_test_files: 563,
   # bytes across apps/*/AGENTS.md
-  agents_md_bytes: 440828
+  agents_md_bytes: 384871,
+  # bytes in the largest apps/*/AGENTS.md
+  agents_md_max_bytes: 48166
 }

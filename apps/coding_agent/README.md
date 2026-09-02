@@ -144,7 +144,7 @@ CodingAgent.Supervisor (one_for_one)
 | File I/O / Skills | `read`, `read_skill`, `skill_manage`, `memory_topic`, `memory`, `search_memory`, `session_search`, `checkpoint`, `write`, `edit`, `hashline_edit`, `patch`, `lsp_diagnostics`, `ls` |
 | Search | `grep`, `find` |
 | Execution | `bash` (`execute_code` is a config-gated builtin appended last: default-off via `[runtime.tools.execute_code] enabled`, bash-equivalent, and absent from the disclosed set unless enabled) |
-| Web / Browser / Media | `websearch`, `webfetch`, `browser_navigate`, `browser_snapshot`, `browser_get_content`, `browser_click`, `browser_type`, `browser_hover`, `browser_select_option`, `browser_upload_file`, `browser_download`, `browser_press`, `browser_scroll`, `browser_back`, `browser_wait_for_selector`, `browser_evaluate`, `browser_events`, `browser_get_cookies`, `browser_set_cookies`, `browser_clear_state`, `browser_screenshot`, `browser_analyze`, `browser_exec`, `computer_use`, `media_status`, `media_generate_image`, `media_generate_speech`, `media_transcribe_audio`, `media_analyze_image`, `media_generate_video` |
+| Web / Browser / Media | `websearch`, `webfetch`, `browser_tabs`, `browser_tab_open`, `browser_tab_activate`, `browser_tab_close`, `browser_navigate`, `browser_snapshot`, `browser_get_content`, `browser_click`, `browser_type`, `browser_hover`, `browser_select_option`, `browser_upload_file`, `browser_download`, `browser_press`, `browser_scroll`, `browser_back`, `browser_wait_for_selector`, `browser_evaluate`, `browser_events`, `browser_get_cookies`, `browser_set_cookies`, `browser_clear_state`, `browser_screenshot`, `browser_analyze`, `browser_exec`, `computer_use`, `media_status`, `media_generate_image`, `media_generate_speech`, `media_transcribe_audio`, `media_analyze_image`, `media_generate_video` |
 | Task / Agent | `task`, `agent`, `parent_question`, `todo`, `kanban` |
 | Social | `x_search`, `post_to_x`, `get_x_mentions` |
 | System | `tool_auth`, `extensions_status` |
@@ -187,6 +187,32 @@ The default `route: "auto"` preserves local-first use while reporting public,
 private, or local-document target kind; `route: "public"` rejects local/private
 targets, `route: "local"` rejects public web targets, and metadata endpoints
 are always blocked before the browser worker.
+
+Browser tools dispatch through the backend-neutral `LemonBrowser` facade.
+Page-scoped tools accept optional `targetId`; the tab tools list, open,
+activate, and close stable real Chrome targets. The default managed local
+backend remains isolated. The controller backend binds exact principal,
+controller, profile, session, run, and capabilities through short-lived
+single-use tickets and fails closed when the binding is offline or mismatched.
+The optional MV3 extension/local relay exposes existing signed-in Chrome tabs
+over token-authenticated loopback CDP, while attached-session shutdown never
+closes the user's browser.
+
+`websearch` and `webfetch` resolve their backends through
+`CodingAgent.Search.Registry`. Bundled providers include Brave, Exa search and
+contents extraction, Perplexity, keyless DuckDuckGo, SearXNG, guarded direct
+extraction, and Firecrawl.
+Providers implement `CodingAgent.Search.Provider`, declare `:search` and/or
+`:extract`, run behind bounded isolation and deterministic fallback, and may be
+registered by trusted extensions with provider type `:search`. Concurrent
+identical requests are coalesced by `CodingAgent.Search.SingleFlight` before
+successful results enter the existing bounded/persistent web cache.
+
+`browser_exec` is the bounded provider-neutral BUA-style program surface; raw
+CDP steps require explicit developer mode. `computer_use` is the separate
+native-app surface backed by exact-session cua-driver state. It defaults to
+background input delivery, returns driver verification verdicts, writes managed
+capture artifacts, and never automatically replays an uncertain action.
 
 `browser_get_cookies`, `browser_set_cookies`, and `browser_clear_state` expose
 supervised browser session-state controls. Cookie values are redacted by

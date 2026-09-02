@@ -434,6 +434,7 @@ Each method declares required scopes. A connection must have at least one matchi
 
 | Method | Scope | Description |
 |--------|-------|-------------|
+| `sessions.stats` | read | Exact aggregate durable-session totals with list/search-compatible filters and bounded redacted agent/origin dimensions; never includes keys, titles, prompts, paths, URLs, or credentials |
 | `sessions.list` | read | List/search sessions with lifecycle metadata and pin/archive filters; raw search text is not echoed |
 | `sessions.active` | read | Get currently active session plus active-run cleanup summary |
 | `sessions.active.list` | read | List all active sessions with harness progress plus summary and cleanup flags |
@@ -638,6 +639,8 @@ are never copied into the JSON-RPC response.
 
 | Method | Scope | Description |
 |--------|-------|-------------|
+| `learn.review` | read | Resolve bounded references and return content-free memory/skill proposals, audit codes, conflicts, and exact confirmation digest |
+| `learn.confirm` | admin | Re-resolve and write canonical memory plus an audited draft only for the exact fresh digest |
 | `blueprints.list` | read | List valid versioned bundles in the canonical local catalog without returning paths or content |
 | `blueprints.inspect` | read | Inspect one `bundleId` with normalized manifest, provenance, and cleanup summaries |
 | `blueprints.validate` | read | Re-run manifest, lint, policy, and deterministic skill audit for one `bundleId` |
@@ -702,6 +705,11 @@ preserves the profile draft when a plan is refused or stale.
 
 | Method | Scope | Description |
 |--------|-------|-------------|
+| `browser.controller.ticket` | write | Mint a short-lived single-use ticket bound to the authenticated principal, controller, profile, session/run, and capabilities |
+| `browser.controller.register` | write | Consume a ticket and bind the exact WebSocket process as a browser controller |
+| `browser.controller.heartbeat` | write | Refresh liveness for the exact registered controller process |
+| `browser.controller.result` | write | Return one command result from the exact registered controller process |
+| `browser.controller.status` | read | Inspect redacted controller/binding status without tickets, credentials, or page content |
 | `wake` | write | Wake an agent plus returned-id, prompt-byte, and cleanup summary |
 | `set-heartbeats` | write | Enable/configure heartbeat monitoring plus summary and prompt cleanup flags |
 | `last-heartbeat` | read | Get last heartbeat for an agent plus response summary and redaction flags |
@@ -788,13 +796,27 @@ State-versioned events include a `stateVersion` map for client reconciliation. V
 
 ## Presence System
 
-`LemonControlPlane.Presence` is an ETS-backed GenServer that tracks all connected WebSocket clients. It provides:
+`LemonControlPlane.Presence` tracks all connected WebSocket clients (ETS-backed GenServer):
 
-- Registration/unregistration on connect/disconnect
-- Role-based counting (operators, nodes, devices)
-- Client lookup by connection ID
-- Broadcast to all or filtered connected clients
-- Automatic `presence_changed` bus event emission on changes
+```elixir
+# Get connection counts
+LemonControlPlane.Presence.counts()
+# => %{total: 5, operators: 2, nodes: 2, devices: 1}
+
+# List all clients
+LemonControlPlane.Presence.list()
+# => [{conn_id, %{role: :operator, client_id: "...", pid: pid(), connected_at: ms}}]
+
+# Broadcast to all clients
+LemonControlPlane.Presence.broadcast("event_name", payload)
+
+# Broadcast with filter
+LemonControlPlane.Presence.broadcast("event", payload, fn info ->
+  info.role == :operator
+end)
+```
+
+Presence changes emit a `presence_changed` bus event, which EventBridge forwards to all WS clients as a `presence` event.
 
 ## Schema Validation
 
@@ -808,7 +830,7 @@ Methods or events without a schema entry accept any parameters. Approval events 
 
 ## Capability-Gated Methods
 
-Some method groups can be enabled/disabled via application configuration. Disabled capability methods are not registered in the ETS table at startup and return `METHOD_NOT_FOUND`.
+Some method groups are enabled/disabled via the `:lemon_control_plane, :capabilities` application env. Disabled capability methods are not registered in the ETS table at startup and return `METHOD_NOT_FOUND`.
 
 | Capability | Methods |
 |------------|---------|
@@ -817,6 +839,18 @@ Some method groups can be enabled/disabled via application configuration. Disabl
 | `updates` | `update.run` |
 | `device_pairing` | `device.pair.*`, `connect.challenge` |
 | `wizard` | `wizard.start`, `wizard.step`, `wizard.cancel` |
+
+Configure via:
+```elixir
+# Enable all (default)
+config :lemon_control_plane, capabilities: :default
+
+# Enable specific capabilities
+config :lemon_control_plane, capabilities: [:tts, :voicewake]
+
+# Enable/disable with map
+config :lemon_control_plane, capabilities: %{tts: true, wizard: false}
+```
 
 ## Configuration
 

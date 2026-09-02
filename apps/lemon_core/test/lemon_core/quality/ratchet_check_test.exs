@@ -62,7 +62,8 @@ defmodule LemonCore.Quality.RatchetCheckTest do
              architecture_rules: 0,
              test_sleeps: 2,
              sync_test_files: 1,
-             agents_md_bytes: 7
+             agents_md_bytes: 7,
+             agents_md_max_bytes: 7
            }
   end
 

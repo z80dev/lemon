@@ -42,6 +42,13 @@ what in-repo code has been using.
 
 ### Changed
 
+- The model catalogs are data files: `priv/models/<provider>.json`, one
+  object per model key, loaded at compile time by the new
+  `LemonAi.Models.Catalog` into the unchanged `LemonAi.Models.*` modules.
+  The 25 provider modules went from 11,142 lines of struct literals to 20
+  lines each; the registry, `mix lemon.models` and every consumer are
+  unaffected, and each JSON file was checked equal to the map it replaced.
+
 - `test/support` compiles with the app in the test environment
   (`elixirc_paths`), so `LemonAi.Test.IntegrationConfig` is available to
   dependent apps' suites without `Code.require_file/1`.

@@ -25,7 +25,6 @@ defmodule LemonCore.Quality.RatchetCheck do
   @self_dir "apps/lemon_core/lib/lemon_core/quality"
   @rules_file "apps/lemon_core/lib/lemon_core/quality/architecture_rules_check.ex"
   @store_file "apps/lemon_core/lib/lemon_core/store.ex"
-  @catalog_glob "apps/lemon_ai/lib/lemon_ai/models/*.ex"
   @table_marker "use LemonCore.Store.Table"
   @large_file_lines 1_000
 
@@ -42,8 +41,7 @@ defmodule LemonCore.Quality.RatchetCheck do
 
   @metrics [
     {:lib_lines, "lines in apps/*/lib/**/*.ex"},
-    {:large_lib_files,
-     "lib files over #{@large_file_lines} lines, excluding the lemon_ai model catalogs"},
+    {:large_lib_files, "lib files over #{@large_file_lines} lines"},
     {:dynamic_module_atoms, ~s(:"Elixir.Some.Module" atoms in lib)},
     {:reflection_sites, "Code.ensure_loaded?/1 and function_exported?/3 calls in lib"},
     {:rescue_clauses, "rescue clauses in lib"},
@@ -55,7 +53,8 @@ defmodule LemonCore.Quality.RatchetCheck do
     {:architecture_rules, "source-pattern rules in LemonCore.Quality.ArchitectureRulesCheck"},
     {:test_sleeps, "Process.sleep/1 and :timer.sleep/1 calls in tests"},
     {:sync_test_files, "*_test.exs files that are not async: true"},
-    {:agents_md_bytes, "bytes across apps/*/AGENTS.md"}
+    {:agents_md_bytes, "bytes across apps/*/AGENTS.md"},
+    {:agents_md_max_bytes, "bytes in the largest apps/*/AGENTS.md"}
   ]
 
   @type metric :: atom()
@@ -111,14 +110,11 @@ defmodule LemonCore.Quality.RatchetCheck do
   def measure(root) do
     lib = read_all(lib_files(root))
     tests = read_all(Path.wildcard(Path.join(root, "apps/*/test/**/*.exs")))
-    catalogs = root |> Path.join(@catalog_glob) |> Path.wildcard() |> MapSet.new()
 
     %{
       lib_lines: lib |> Enum.map(fn {_path, source} -> line_count(source) end) |> Enum.sum(),
       large_lib_files:
-        Enum.count(lib, fn {path, source} ->
-          not MapSet.member?(catalogs, path) and line_count(source) > @large_file_lines
-        end),
+        Enum.count(lib, fn {_path, source} -> line_count(source) > @large_file_lines end),
       dynamic_module_atoms: count(lib, @dynamic_atom),
       reflection_sites: count(lib, @reflection),
       rescue_clauses: count(lib, @rescue_clause),
@@ -133,13 +129,16 @@ defmodule LemonCore.Quality.RatchetCheck do
         Enum.count(tests, fn {path, source} ->
           String.ends_with?(path, "_test.exs") and not Regex.match?(@async_marker, source)
         end),
-      agents_md_bytes:
-        root
-        |> Path.join("apps/*/AGENTS.md")
-        |> Path.wildcard()
-        |> Enum.map(&File.stat!(&1).size)
-        |> Enum.sum()
+      agents_md_bytes: Enum.sum(agents_md_sizes(root)),
+      agents_md_max_bytes: Enum.max(agents_md_sizes(root), fn -> 0 end)
     }
+  end
+
+  defp agents_md_sizes(root) do
+    root
+    |> Path.join("apps/*/AGENTS.md")
+    |> Path.wildcard()
+    |> Enum.map(&File.stat!(&1).size)
   end
 
   @doc """

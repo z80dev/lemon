@@ -27,6 +27,11 @@ Telegram, run history, durable memory, kanban boards, or `~/.lemon`.
 
 ### Added
 
+- `LemonCore.Quality.RatchetCheck` gained `agents_md_max_bytes`, the size
+  of the largest `apps/*/AGENTS.md`, so no single file can grow past the
+  current largest; `large_lib_files` no longer excludes the lemon_ai model
+  catalogs, which are data files now.
+
 - `LemonCore.Failure.log/4` and `log_caught/5`: the one way a boundary
   reports a caught exception, exit or throw, with the stacktrace and the
   standard `crash_reason` metadata. `docs/platform/failure-handling.md` is

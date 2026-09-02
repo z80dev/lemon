@@ -141,6 +141,8 @@ Every provider is reached through one of **10 wire-protocol modules**. The 27 pr
 catalogs in `LemonAi.Models` route through these — for example Groq, xAI, DeepSeek, Qwen,
 Cerebras, OpenRouter, Vercel AI Gateway, HuggingFace, Fireworks, and Mistral's catalog
 all speak the OpenAI Chat Completions format, so they inherit its capabilities.
+Each catalog is a JSON file under `priv/models/`, loaded at compile time by
+`LemonAi.Models.Catalog` into the provider's `LemonAi.Models.*` module.
 
 | Wire module (`api_id`) | Streaming | Tool calls | Vision (image input) | Reasoning / thinking | Cost data |
 |------------------------|:---------:|:----------:|:--------------------:|:--------------------:|:---------:|
@@ -377,8 +379,8 @@ mappings survive process restarts.
 ## Adding a provider
 
 Implement the `LemonAi.Provider` behaviour (`stream/3`, `provider_id/0`, `api_id/0`, and
-optionally `get_env_api_key/0`), add a model catalog under `LemonAi.Models.*`, and register
-the module in `LemonAi.Application`:
+optionally `get_env_api_key/0`), add a catalog file under `priv/models/` with a
+`LemonAi.Models.*` module that loads it, and register the module in `LemonAi.Application`:
 
 ```elixir
 LemonAi.ProviderRegistry.register(:my_provider_api, LemonAi.Providers.MyProvider)

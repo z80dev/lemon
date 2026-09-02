@@ -658,16 +658,16 @@ LemonAi.Supervisor (one_for_one)
 ### Adding a New Provider
 
 1. Create `lib/ai/providers/my_provider.ex` implementing `@behaviour LemonAi.Provider`
-2. Create `lib/ai/models/my_provider.ex` with a `models/0` function returning `%{String.t() => Model.t()}`
+2. Create `priv/models/my_provider.json` (one object per model key, see any existing file) and `lib/lemon_ai/models/my_provider.ex`, which loads it with `LemonAi.Models.Catalog.load!/1` and exposes `models/0`
 3. Add the provider to `@models` and `@providers` in `LemonAi.Models`
 4. Register in `LemonAi.Application.register_providers/0`
 5. Add tests in `test/providers/my_provider_test.exs`
 
 ### Adding a New Model to an Existing Provider
 
-1. Open the relevant `lib/ai/models/<provider>.ex` file
-2. Add a new entry to the models map with a `%LemonAi.Types.Model{}` struct
-3. Ensure `api`, `provider`, and `base_url` match the existing provider convention
+1. Open the relevant `priv/models/<provider>.json` file
+2. Add a new entry under the model key, with the fields of `%LemonAi.Types.Model{}` (`api`, `provider` and `input` as strings, `cost` as an object)
+3. Ensure `api`, `provider`, and `base_url` match the existing provider convention; the module recompiles from the file, and `mix lemon.models` lists the result
 
 ### Adding OAuth Support for a New Provider
 
