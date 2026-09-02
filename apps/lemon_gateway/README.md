@@ -135,7 +135,8 @@ are opt-in and must be non-empty JSON strings; blank, numeric, list, or object
 values receive a bounded `422 invalid idempotency key` response before hashing
 or reservation. A legacy pending receipt without a run ID remains a permanent
 ambiguous fence after upgrade because its original acceptance outcome cannot be
-proven safely.
+proven safely; retries receive a duplicate `200 legacy_outcome_unknown` receipt
+with `retry_safe: false` and never submit another run.
 
 ## Module Inventory
 

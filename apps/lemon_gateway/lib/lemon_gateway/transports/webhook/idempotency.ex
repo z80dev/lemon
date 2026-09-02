@@ -180,6 +180,14 @@ defmodule LemonGateway.Transports.Webhook.Idempotency do
       {:error, :idempotency_unavailable} ->
         {:error, :idempotency_unavailable}
 
+      {:ok, nil} when state == "legacy_pending_unknown" ->
+        {:duplicate, 200,
+         %{
+           status: "legacy_outcome_unknown",
+           duplicate: true,
+           retry_safe: false
+         }}
+
       {:ok, nil} when state == "pending" ->
         {:duplicate, 503,
          (fallback_payload(entry) || %{})

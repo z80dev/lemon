@@ -336,8 +336,14 @@ defmodule LemonGateway.WebhookTransportTest do
       Test.conn(:post, "/webhooks/#{integration_id}", "")
       |> Conn.put_req_header("idempotency-key", idempotency_key)
 
-    assert {:error, :idempotency_unavailable} =
+    assert {:duplicate, 200, ambiguity} =
              Webhook.idempotency_context_for_test(conn, %{}, integration_id, %{})
+
+    assert ambiguity == %{
+             status: "legacy_outcome_unknown",
+             duplicate: true,
+             retry_safe: false
+           }
 
     assert Store.get(Webhook.idempotency_table_for_test(), raw_key) == nil
 
@@ -352,10 +358,62 @@ defmodule LemonGateway.WebhookTransportTest do
 
     # A later process/version sees the same durable ambiguity and never
     # manufactures a new run ID from the old acceptance window.
-    assert {:error, :idempotency_unavailable} =
+    assert {:duplicate, 200, ^ambiguity} =
              Webhook.idempotency_context_for_test(conn, %{}, integration_id, %{})
 
     assert Store.get(Webhook.idempotency_table_for_test(), hashed_key) == migrated
+    refute_receive {:webhook_submit, _request}
+  end
+
+  test "legacy ambiguous fence suppresses endpoint retries without a retry-safe claim" do
+    suffix = System.unique_integer([:positive])
+    integration_id = "legacy-endpoint-ambiguous-#{suffix}"
+    idempotency_key = "legacy-endpoint-secret-#{suffix}"
+    raw_key = {integration_id, idempotency_key}
+
+    assert :ok =
+             Store.put(Webhook.idempotency_table_for_test(), raw_key, %{
+               idempotency_key: idempotency_key,
+               integration_id: integration_id,
+               state: "pending",
+               updated_at_ms: 1
+             })
+
+    original_config_state = :sys.get_state(LemonGateway.Config)
+
+    :sys.replace_state(LemonGateway.Config, fn state ->
+      Map.put(state, :webhook, %{
+        integrations: %{
+          integration_id => %{
+            agent_id: "webhook-test",
+            mode: "async",
+            token: "endpoint-test-token"
+          }
+        }
+      })
+    end)
+
+    on_exit(fn ->
+      :sys.replace_state(LemonGateway.Config, fn _state -> original_config_state end)
+    end)
+
+    conn =
+      Test.conn(
+        :post,
+        "/webhooks/#{integration_id}",
+        Jason.encode!(%{prompt: "do not submit twice"})
+      )
+      |> Conn.put_req_header("content-type", "application/json")
+      |> Conn.put_req_header("authorization", "Bearer endpoint-test-token")
+      |> Conn.put_req_header("idempotency-key", idempotency_key)
+      |> Webhook.call([])
+
+    assert conn.status == 200
+    payload = Jason.decode!(conn.resp_body)
+    assert payload["status"] == "legacy_outcome_unknown"
+    assert payload["duplicate"] == true
+    assert payload["retry_safe"] == false
+    refute Map.has_key?(payload, "accepted")
     refute_receive {:webhook_submit, _request}
   end
 

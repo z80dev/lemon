@@ -1323,8 +1323,8 @@ defmodule LemonCore.Store do
         {:reply, {:error, reason}, %{state | backend_state: backend_state}}
 
       other ->
-        log_backend_unexpected(:compare_and_delete_many, :multiple, length(entries), other)
-        {:reply, {:error, {:unexpected_backend_response, other}}, state}
+        log_compare_and_delete_many_unexpected(entries, other)
+        {:reply, {:error, :unexpected_backend_response}, state}
     end
   end
 
@@ -2061,40 +2061,54 @@ defmodule LemonCore.Store do
     )
   end
 
+  defp log_compare_and_delete_many_unexpected(entries, response) do
+    sensitive_table =
+      Enum.find_value(entries, fn
+        {table, _key, _expected} -> if sensitive_log_table?(table), do: table
+        _malformed -> nil
+      end)
+
+    table = sensitive_table || :multiple
+
+    Logger.warning(
+      "[LemonCore.Store] backend compare_and_delete_many returned unexpected response " <>
+        "table=#{inspect(table)} entries=:redacted " <>
+        "response=#{inspect(safe_log_diagnostic(table, response))}"
+    )
+  end
+
   defp safe_log_key(table, key), do: safe_log_diagnostic(table, key)
 
   defp safe_log_diagnostic(table, term) when is_atom(table) do
-    if String.contains?(Atom.to_string(table), "idempotency"),
+    if sensitive_log_table?(table),
       do: sanitize_sensitive_diagnostic(term),
       else: term
   end
 
   defp safe_log_diagnostic(_table, term), do: term
 
-  defp sanitize_sensitive_diagnostic(term) when is_binary(term) do
-    digest = :crypto.hash(:sha256, term) |> Base.encode16(case: :lower)
-    {:sha256, binary_part(digest, 0, 16)}
-  end
+  defp sensitive_log_table?(table) when is_atom(table),
+    do: String.contains?(Atom.to_string(table), "idempotency")
 
-  defp sanitize_sensitive_diagnostic(term) when is_map(term) do
-    if is_struct(term) do
-      {:diagnostic, term.__struct__, sanitize_sensitive_diagnostic(Map.from_struct(term))}
-    else
-      Map.new(term, fn {key, value} ->
-        {sanitize_sensitive_diagnostic(key), sanitize_sensitive_diagnostic(value)}
-      end)
-    end
-  end
+  defp sensitive_log_table?(_table), do: false
 
-  defp sanitize_sensitive_diagnostic(term) when is_tuple(term) do
-    term
-    |> Tuple.to_list()
-    |> Enum.map(&sanitize_sensitive_diagnostic/1)
-    |> List.to_tuple()
-  end
+  # Sensitive diagnostics are deliberately summarized without traversal. This
+  # keeps the logger total and bounded even when a broken backend returns an
+  # improper list, an enormous collection, or an extremely deep term.
+  defp sanitize_sensitive_diagnostic(term), do: {:redacted, diagnostic_category(term)}
 
-  defp sanitize_sensitive_diagnostic(term) when is_list(term),
-    do: Enum.map(term, &sanitize_sensitive_diagnostic/1)
-
-  defp sanitize_sensitive_diagnostic(term), do: term
+  defp diagnostic_category(term) when is_binary(term), do: {:binary, byte_size(term)}
+  defp diagnostic_category(term) when is_bitstring(term), do: {:bitstring, bit_size(term)}
+  defp diagnostic_category(term) when is_map(term), do: {:map, map_size(term)}
+  defp diagnostic_category(term) when is_tuple(term), do: {:tuple, tuple_size(term)}
+  defp diagnostic_category([]), do: :empty_list
+  defp diagnostic_category([_head | _tail]), do: :list
+  defp diagnostic_category(term) when is_atom(term), do: :atom
+  defp diagnostic_category(term) when is_integer(term), do: :integer
+  defp diagnostic_category(term) when is_float(term), do: :float
+  defp diagnostic_category(term) when is_pid(term), do: :pid
+  defp diagnostic_category(term) when is_reference(term), do: :reference
+  defp diagnostic_category(term) when is_function(term), do: :function
+  defp diagnostic_category(term) when is_port(term), do: :port
+  defp diagnostic_category(_term), do: :term
 end

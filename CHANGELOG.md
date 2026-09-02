@@ -27,7 +27,8 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   any durable key, receipt, router request, or run metadata is built. Legacy
   raw webhook receipts migrate behind the hashed fence without reopening
   execution, invalid payload idempotency values are rejected before hashing,
-  released pending receipts without run identity remain safely ambiguous, and
+  released pending receipts without run identity return a permanent,
+  non-retryable duplicate ambiguity receipt, and
   failed cleanup scans do not advance their watermark. Store diagnostics also
   sanitize nested idempotency-key context. Legacy router
   receipts are compacted and abort reasons sanitized during replay and

@@ -162,8 +162,9 @@ for a non-channel surface that needs the Gateway runtime.
   durably creating the hashed fence and exact response first, then conditionally
   deleting the raw records; concurrent migration and any partial failure remain
   fail closed. A released-format `pending` row without a run ID remains a
-  permanent ambiguous fence rather than manufacturing a replay identity. Expiry
-  uses strict backend listing and removes the response
+  permanent ambiguous fence rather than manufacturing a replay identity; its
+  bounded duplicate receipt is non-retryable and never claims acceptance.
+  Expiry uses strict backend listing and removes the response
   snapshot before the primary execution fence on ordered backends; SQLite
   performs durable pairs in one transaction, and cleanup failures neither
   authorize replay nor advance the sweep watermark.

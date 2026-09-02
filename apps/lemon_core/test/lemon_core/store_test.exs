@@ -91,11 +91,20 @@ defmodule LemonCore.StoreTest do
       {:unexpected, %{context: %{key: key}, detail: secret}}
     end
 
+    def get(%{mode: {:error_term, reason}}, _table, _key), do: {:error, reason}
+
+    def get(%{mode: :ok} = state, table, key),
+      do: {:ok, Map.get(state.data, {table, key}), state}
+
     @impl true
     def delete(_state, _table, _key), do: {:error, :read_only}
 
     @impl true
     def list(state, _table), do: {:ok, [], state}
+
+    @impl true
+    def compare_and_delete_many(%{mode: {:compare_unexpected, response}}, _entries),
+      do: response
   end
 
   defp unique_token do
@@ -676,6 +685,92 @@ defmodule LemonCore.StoreTest do
         end)
 
       refute unexpected_log =~ secret
+    end
+
+    test "idempotency diagnostic sanitizer is total and preserves the Store process" do
+      secret = "total-sanitizer-secret-#{unique_token()}"
+      key = {"integration", secret}
+      fence = %{state: "accepted"}
+      store_pid = Process.whereis(Store)
+
+      original_state =
+        swap_store_backend(DiagnosticLeakBackend, %{
+          mode: {:error_term, [secret | :improper_tail]},
+          data: %{{:webhook_idempotency, key} => fence}
+        })
+
+      on_exit(fn -> :sys.replace_state(Store, fn _ -> original_state end) end)
+
+      improper_log =
+        capture_log(fn ->
+          assert Store.fetch(:webhook_idempotency, key) == {:error, :store_unavailable}
+        end)
+
+      refute improper_log =~ secret
+      assert Process.whereis(Store) == store_pid
+      assert Process.alive?(store_pid)
+
+      deep_term = Enum.reduce(1..1_000, secret, fn _, nested -> {nested} end)
+
+      :sys.replace_state(Store, fn state ->
+        %{state | backend_state: %{state.backend_state | mode: {:error_term, deep_term}}}
+      end)
+
+      deep_log =
+        capture_log(fn ->
+          assert Store.fetch(:webhook_idempotency, key) == {:error, :store_unavailable}
+        end)
+
+      refute deep_log =~ secret
+      assert Process.whereis(Store) == store_pid
+
+      large_term = List.duplicate(secret, 10_000)
+
+      :sys.replace_state(Store, fn state ->
+        %{state | backend_state: %{state.backend_state | mode: {:error_term, large_term}}}
+      end)
+
+      large_log =
+        capture_log(fn ->
+          assert Store.fetch(:webhook_idempotency, key) == {:error, :store_unavailable}
+        end)
+
+      refute large_log =~ secret
+      assert Process.whereis(Store) == store_pid
+
+      :sys.replace_state(Store, fn state ->
+        %{state | backend_state: %{state.backend_state | mode: :ok}}
+      end)
+
+      assert Store.get(:webhook_idempotency, key) == fence
+    end
+
+    test "unexpected multi-delete responses cannot expose sensitive entries" do
+      secret = "multi-delete-secret-#{unique_token()}"
+      key = {"integration", secret}
+      fence = %{state: "accepted", secret: secret}
+      response = {:unexpected, %{entries: [{:webhook_idempotency, key, fence}], secret: secret}}
+
+      original_state =
+        swap_store_backend(DiagnosticLeakBackend, %{
+          mode: {:compare_unexpected, response},
+          secret: secret
+        })
+
+      on_exit(fn -> :sys.replace_state(Store, fn _ -> original_state end) end)
+
+      {result, log} =
+        with_log(fn ->
+          Store.compare_and_delete_many([
+            {:webhook_idempotency_responses, {key, "receipt"}, fence},
+            {:webhook_idempotency, key, fence}
+          ])
+        end)
+
+      assert result == {:error, :unexpected_backend_response}
+      refute log =~ secret
+      refute inspect(result) =~ secret
+      assert Process.alive?(Process.whereis(Store))
     end
 
     test "finalize_run writes history to RunHistoryStore" do
