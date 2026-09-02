@@ -212,6 +212,48 @@ defmodule LemonControlPlane.A2A.RunnerTest do
     cleanup_task(task_id, context_id, message_id, run_id)
   end
 
+  test "replay reclaims an expired launch lease for a submitted durable task" do
+    context_id = unique_id("launch-crash-context")
+    message_id = unique_id("launch-crash-message")
+    task_id = unique_id("launch-crash-task")
+    run_id = unique_id("launch-crash-run")
+
+    assert {:ok, _context} =
+             A2AStore.ensure_context(:inbound, "local", context_id, %{
+               agent_id: "default",
+               session_key: "agent:default:main"
+             })
+
+    assert :ok =
+             A2AStore.put_task(%{
+               id: task_id,
+               direction: :inbound,
+               peer_id: "local",
+               context_id: context_id,
+               run_id: run_id,
+               state: "TASK_STATE_SUBMITTED",
+               runner_lease_id: "dead-runner",
+               runner_lease_expires_at_ms: 0
+             })
+
+    assert {:ok, _message} =
+             A2AStore.append_message(%{
+               id: message_id,
+               direction: :inbound,
+               peer_id: "local",
+               context_id: context_id,
+               task_id: task_id,
+               role: "ROLE_USER",
+               text: "resume me"
+             })
+
+    assert {:stream, ^task_id} = start_message(context_id, message_id)
+    assert_receive {:a2a_submit_blocked, %{run_id: ^run_id}, runner_pid}, 1_000
+    send(runner_pid, {:release_a2a_submit, {:error, :definite_rejection}})
+
+    cleanup_task(task_id, context_id, message_id, run_id)
+  end
+
   test "an unresolved outcome-unknown submit stays reattachable and later reconciles" do
     config = Application.fetch_env!(:lemon_control_plane, :a2a_config)
     Application.put_env(:lemon_control_plane, :a2a_config, Map.put(config, :reply_timeout_ms, 25))
@@ -261,6 +303,47 @@ defmodule LemonControlPlane.A2A.RunnerTest do
              "ROLE_USER",
              "ROLE_AGENT"
            ]
+
+    cleanup_task(task_id, context_id, message_id, run_id)
+  end
+
+  test "an accepted run reply timeout stays reattachable and later reconciles" do
+    config = Application.fetch_env!(:lemon_control_plane, :a2a_config)
+    Application.put_env(:lemon_control_plane, :a2a_config, Map.put(config, :reply_timeout_ms, 25))
+
+    context_id = unique_id("accepted-timeout-context")
+    message_id = unique_id("accepted-timeout-message")
+
+    assert {:stream, task_id} = start_message(context_id, message_id)
+    assert_receive {:a2a_submit_blocked, request, runner_pid}
+    run_id = request.run_id
+    runner_ref = Process.monitor(runner_pid)
+
+    send(runner_pid, {:release_a2a_submit, {:ok, run_id}})
+    assert_receive {:DOWN, ^runner_ref, :process, ^runner_pid, :normal}, 1_000
+
+    assert %{
+             state: "TASK_STATE_WORKING",
+             answer: nil,
+             error: "Run submission outcome is being reconciled"
+           } = A2AStore.get_task(task_id)
+
+    context = A2AStore.get_context(:inbound, "local", context_id)
+
+    assert :ok =
+             RunStore.finalize(run_id, %{
+               session_key: context.session_key,
+               agent_id: context.agent_id,
+               origin: :control_plane,
+               prompt: "redacted test prompt",
+               completed: %{ok: true, answer: "accepted run completed later"}
+             })
+
+    assert {:ok, rendered} = Handler.handle("GetTask", %{"id" => task_id}, "local")
+    assert get_in(rendered, ["status", "state"]) == "TASK_STATE_COMPLETED"
+
+    assert %{state: "TASK_STATE_COMPLETED", answer: "accepted run completed later", error: nil} =
+             A2AStore.get_task(task_id)
 
     cleanup_task(task_id, context_id, message_id, run_id)
   end

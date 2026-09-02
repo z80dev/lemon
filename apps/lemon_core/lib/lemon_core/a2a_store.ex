@@ -192,6 +192,10 @@ defmodule LemonCore.A2AStore do
       state: Map.get(task, :state) || Map.get(task, "state") || "TASK_STATE_SUBMITTED",
       answer: Map.get(task, :answer) || Map.get(task, "answer"),
       error: Map.get(task, :error) || Map.get(task, "error"),
+      runner_lease_id: Map.get(task, :runner_lease_id) || Map.get(task, "runner_lease_id"),
+      runner_lease_expires_at_ms:
+        Map.get(task, :runner_lease_expires_at_ms) ||
+          Map.get(task, "runner_lease_expires_at_ms"),
       created_at_ms: Map.get(task, :created_at_ms) || Map.get(task, "created_at_ms") || now,
       updated_at_ms: Map.get(task, :updated_at_ms) || Map.get(task, "updated_at_ms") || now
     }

@@ -162,7 +162,7 @@ defmodule LemonGateway.WebhookTransportTest do
     refute_receive {:webhook_submit, _request}
   end
 
-  test "idempotency helper reserves key and returns a non-retryable pending receipt" do
+  test "idempotency helper reserves key and returns a retryable pending receipt" do
     integration_id = "demo-pending-#{System.unique_integer([:positive])}"
     idempotency_key = "idem-pending-#{System.unique_integer([:positive])}"
 
@@ -175,11 +175,52 @@ defmodule LemonGateway.WebhookTransportTest do
 
     assert %{} = Store.get(Webhook.idempotency_table_for_test(), store_key)
 
-    assert {:duplicate, 202, response_payload} =
+    assert {:duplicate, 503, response_payload} =
              Webhook.idempotency_context_for_test(conn, %{}, integration_id, %{})
 
     assert response_payload.status == "reservation_pending"
-    assert response_payload.retry_safe == false
+    assert response_payload.retry_safe == true
+  end
+
+  test "an expired pending lease is reclaimed with the same durable run id" do
+    integration_id = "demo-reclaim-#{System.unique_integer([:positive])}"
+    idempotency_key = "idem-reclaim-#{System.unique_integer([:positive])}"
+
+    conn =
+      Test.conn(:post, "/webhooks/#{integration_id}", "")
+      |> Conn.put_req_header("idempotency-key", idempotency_key)
+
+    assert {:ok, first_ctx} =
+             Webhook.idempotency_context_for_test(conn, %{}, integration_id, %{})
+
+    entry = Store.get(Webhook.idempotency_table_for_test(), first_ctx.store_key)
+
+    assert :ok =
+             Store.put(
+               Webhook.idempotency_table_for_test(),
+               first_ctx.store_key,
+               Map.put(entry, :lease_expires_at_ms, 0)
+             )
+
+    assert {:ok, reclaimed_ctx} =
+             Webhook.idempotency_context_for_test(conn, %{}, integration_id, %{})
+
+    assert reclaimed_ctx.run_id == first_ctx.run_id
+    refute reclaimed_ctx.reservation_id == first_ctx.reservation_id
+  end
+
+  test "response persistence fails closed when its durable reservation disappears" do
+    integration_id = "demo-response-store-#{System.unique_integer([:positive])}"
+
+    conn =
+      Test.conn(:post, "/webhooks/#{integration_id}", "")
+      |> Conn.put_req_header("idempotency-key", "response-store")
+
+    assert {:ok, ctx} = Webhook.idempotency_context_for_test(conn, %{}, integration_id, %{})
+    assert :ok = Store.delete(Webhook.idempotency_table_for_test(), ctx.store_key)
+
+    assert {:error, :idempotency_unavailable} =
+             Idempotency.store_response(ctx, 202, %{run_id: ctx.run_id})
   end
 
   test "an unreadable existing idempotency claim fails closed without submission" do

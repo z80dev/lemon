@@ -29,6 +29,7 @@ defmodule LemonRouter.RunOrchestrator do
   }
 
   @abort_tombstone_ttl_ms 300_000
+  @serialized_mutation_timeout_ms 20_000
 
   def start_link(opts \\ []) do
     name = Keyword.get(opts, :name, __MODULE__)
@@ -86,7 +87,11 @@ defmodule LemonRouter.RunOrchestrator do
   @doc false
   @spec register_abort(GenServer.server(), binary(), term()) :: :ok
   def register_abort(server, run_id, reason) when is_binary(run_id) do
-    GenServer.call(server, {:register_abort, run_id, reason})
+    # Submit handling may spend up to 15 seconds inside coordinator admission.
+    # This call must wait past that serialized window: timing out earlier does
+    # not dequeue a GenServer call and would let a tombstone commit after its
+    # caller had already reported failure without dispatching cancellation.
+    GenServer.call(server, {:register_abort, run_id, reason}, @serialized_mutation_timeout_ms)
   end
 
   @doc """

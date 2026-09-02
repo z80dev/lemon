@@ -53,7 +53,7 @@ defmodule LemonRouter.SessionCoordinator do
     submit(conversation_key, Submission.new!(submission), opts)
   end
 
-  @spec cancel(binary() | term(), term()) :: :ok
+  @spec cancel(binary() | term(), term()) :: :ok | {:error, :unavailable}
   def cancel(conversation_or_session, reason \\ :user_requested)
   def cancel({_, _} = conversation_key, reason), do: cancel_conversation(conversation_key, reason)
 
@@ -61,39 +61,42 @@ defmodule LemonRouter.SessionCoordinator do
     do: cancel_conversation(conversation_key, reason)
 
   def cancel(session_key, reason) when is_binary(session_key) do
-    coordinator_entries()
-    |> Enum.each(fn {_conversation_key, pid, _meta} ->
-      if is_pid(pid) do
-        GenServer.cast(pid, {:cancel_session, session_key, reason})
-      end
-    end)
+    with {:ok, entries} <- coordinator_entries() do
+      Enum.each(entries, fn {_conversation_key, pid, _meta} ->
+        if is_pid(pid) do
+          GenServer.cast(pid, {:cancel_session, session_key, reason})
+        end
+      end)
 
-    :ok
+      :ok
+    end
   end
 
-  @spec abort_session(binary(), term()) :: :ok
+  @spec abort_session(binary(), term()) :: :ok | {:error, :unavailable}
   def abort_session(session_key, reason \\ :user_requested) when is_binary(session_key) do
-    coordinator_entries()
-    |> Enum.each(fn {_conversation_key, pid, _meta} ->
-      if is_pid(pid) do
-        GenServer.cast(pid, {:abort_session, session_key, reason})
-      end
-    end)
+    with {:ok, entries} <- coordinator_entries() do
+      Enum.each(entries, fn {_conversation_key, pid, _meta} ->
+        if is_pid(pid) do
+          GenServer.cast(pid, {:abort_session, session_key, reason})
+        end
+      end)
 
-    maybe_cancel_resume_conversation(session_key, reason)
-    :ok
+      maybe_cancel_resume_conversation(session_key, reason)
+      :ok
+    end
   end
 
-  @spec abort_run(binary(), term()) :: :ok
+  @spec abort_run(binary(), term()) :: :ok | {:error, :unavailable}
   def abort_run(run_id, reason \\ :user_requested) when is_binary(run_id) do
-    coordinator_entries()
-    |> Enum.each(fn {_conversation_key, pid, _meta} ->
-      if is_pid(pid) do
-        GenServer.cast(pid, {:abort_run, run_id, reason})
-      end
-    end)
+    with {:ok, entries} <- coordinator_entries() do
+      Enum.each(entries, fn {_conversation_key, pid, _meta} ->
+        if is_pid(pid) do
+          GenServer.cast(pid, {:abort_run, run_id, reason})
+        end
+      end)
 
-    :ok
+      :ok
+    end
   end
 
   @spec active_run(term()) :: {:ok, binary()} | :none
@@ -109,14 +112,12 @@ defmodule LemonRouter.SessionCoordinator do
 
   @spec active_run_for_session(binary()) :: {:ok, binary()} | :none | {:error, :unavailable}
   def active_run_for_session(session_key) when is_binary(session_key) and session_key != "" do
-    case Registry.lookup(LemonRouter.SessionRegistry, session_key) do
-      [{_pid, %{run_id: run_id}} | _] when is_binary(run_id) and run_id != "" -> {:ok, run_id}
-      _ -> :none
+    with {:ok, sessions} <- authoritative_active_sessions() do
+      case Enum.find(sessions, &(&1.session_key == session_key)) do
+        %{run_id: run_id} -> {:ok, run_id}
+        nil -> :none
+      end
     end
-  rescue
-    _ -> {:error, :unavailable}
-  catch
-    _, _ -> {:error, :unavailable}
   end
 
   def active_run_for_session(_), do: :none
@@ -134,10 +135,78 @@ defmodule LemonRouter.SessionCoordinator do
 
   @spec list_active_sessions() ::
           [%{session_key: binary(), run_id: binary()}] | {:error, :unavailable}
-  def list_active_sessions do
-    Registry.select(LemonRouter.SessionRegistry, [
-      {{:"$1", :"$2", %{run_id: :"$3"}}, [], [%{session_key: :"$1", run_id: :"$3"}]}
-    ])
+  def list_active_sessions, do: authoritative_active_sessions_unwrapped()
+
+  defp authoritative_active_sessions_unwrapped do
+    case authoritative_active_sessions() do
+      {:ok, sessions} -> sessions
+      {:error, :unavailable} = error -> error
+    end
+  end
+
+  defp authoritative_active_sessions do
+    with registry_sessions when is_list(registry_sessions) <-
+           Registry.select(LemonRouter.SessionRegistry, [
+             {{:"$1", :"$2", %{run_id: :"$3"}}, [], [%{session_key: :"$1", run_id: :"$3"}]}
+           ]),
+         children when is_list(children) <-
+           DynamicSupervisor.which_children(LemonRouter.SessionCoordinatorSupervisor),
+         {:ok, runtime_sessions} <- runtime_active_sessions() do
+      initial_sessions = Enum.uniq_by(runtime_sessions ++ registry_sessions, & &1.session_key)
+
+      Enum.reduce_while(children, {:ok, initial_sessions}, fn {_id, pid, _type, _modules},
+                                                              {:ok, sessions} ->
+        case GenServer.call(pid, :active_submission) do
+          {:ok, %{session_key: session_key, run_id: run_id}}
+          when is_binary(session_key) and session_key != "" and is_binary(run_id) and
+                 run_id != "" ->
+            sessions =
+              [%{session_key: session_key, run_id: run_id} | sessions]
+              |> Enum.uniq_by(& &1.session_key)
+
+            {:cont, {:ok, sessions}}
+
+          :none ->
+            {:cont, {:ok, sessions}}
+
+          {:error, :unavailable} ->
+            {:halt, {:error, :unavailable}}
+
+          _unexpected ->
+            {:halt, {:error, :unavailable}}
+        end
+      end)
+      |> case do
+        {:ok, sessions} -> {:ok, Enum.reverse(sessions)}
+        error -> error
+      end
+    end
+  rescue
+    _ -> {:error, :unavailable}
+  catch
+    _, _ -> {:error, :unavailable}
+  end
+
+  defp runtime_active_sessions do
+    sessions =
+      Registry.select(LemonRouter.RunRegistry, [
+        {{:"$1", :"$2", :"$3"}, [], [{{:"$1", :"$2"}}]}
+      ])
+      |> Enum.reduce([], fn {run_id, pid}, sessions ->
+        case :sys.get_state(pid, 250) do
+          %{session_key: session_key} when is_binary(session_key) and is_binary(run_id) ->
+            [%{session_key: session_key, run_id: run_id} | sessions]
+
+          %{execution_request: %{session_key: session_key}}
+          when is_binary(session_key) and is_binary(run_id) ->
+            [%{session_key: session_key, run_id: run_id} | sessions]
+
+          _ ->
+            sessions
+        end
+      end)
+
+    {:ok, sessions}
   rescue
     _ -> {:error, :unavailable}
   catch
@@ -164,6 +233,25 @@ defmodule LemonRouter.SessionCoordinator do
       end
 
     {:reply, reply, state}
+  end
+
+  # Live coordinators reconstruct the ephemeral read model after
+  # SessionRegistry restarts without restarting or losing their runs.
+  def handle_call(:active_submission, _from, state) do
+    case state.active do
+      %{session_key: session_key, run_id: run_id} = active
+      when is_binary(session_key) and is_binary(run_id) ->
+        case put_active_session_registry(active) do
+          :ok ->
+            {:reply, {:ok, %{session_key: session_key, run_id: run_id}}, state}
+
+          {:error, :unavailable} ->
+            {:reply, {:error, :unavailable}, state}
+        end
+
+      _ ->
+        {:reply, :none, state}
+    end
   end
 
   def handle_call({:submit, submission}, _from, state) do
@@ -757,15 +845,21 @@ defmodule LemonRouter.SessionCoordinator do
     Application.get_env(:lemon_router, :dispatcher, LemonChannels.Dispatcher)
   end
 
-  defp put_active_session_registry(%Submission{session_key: session_key, run_id: run_id}) do
+  defp put_active_session_registry(%{session_key: session_key, run_id: run_id}) do
     if is_binary(session_key) do
       _ = Registry.unregister(LemonRouter.SessionRegistry, session_key)
-      _ = Registry.register(LemonRouter.SessionRegistry, session_key, %{run_id: run_id})
-    end
 
-    :ok
+      case Registry.register(LemonRouter.SessionRegistry, session_key, %{run_id: run_id}) do
+        {:ok, _owner} -> :ok
+        {:error, _reason} -> {:error, :unavailable}
+      end
+    else
+      :ok
+    end
   rescue
-    _ -> :ok
+    _ -> {:error, :unavailable}
+  catch
+    _, _ -> {:error, :unavailable}
   end
 
   defp clear_active_session_registry(
@@ -804,11 +898,14 @@ defmodule LemonRouter.SessionCoordinator do
   end
 
   defp coordinator_entries do
-    Registry.select(LemonRouter.ConversationRegistry, [
-      {{:"$1", :"$2", :"$3"}, [], [{{:"$1", :"$2", :"$3"}}]}
-    ])
+    {:ok,
+     Registry.select(LemonRouter.ConversationRegistry, [
+       {{:"$1", :"$2", :"$3"}, [], [{{:"$1", :"$2", :"$3"}}]}
+     ])}
   rescue
-    _ -> []
+    _ -> {:error, :unavailable}
+  catch
+    _, _ -> {:error, :unavailable}
   end
 
   defp maybe_cancel_resume_conversation(session_key, reason) do

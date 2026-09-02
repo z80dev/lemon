@@ -64,6 +64,20 @@ defmodule LemonAutomation.RunCompletionWaiterTest do
     end
   end
 
+  defmodule AcceptedWithoutCompletionRouter do
+    @moduledoc false
+    def submit(params), do: {:ok, params.run_id}
+  end
+
+  defmodule MutateThenRaiseRouter do
+    @moduledoc false
+
+    def submit(params) do
+      send(params.test_pid, {:submit_side_effect, params.run_id})
+      raise "ack lost"
+    end
+  end
+
   test "submit_and_wait/2 observes synchronous completion and removes its subscription" do
     Process.put(:run_completion_waiter_test_pid, self())
 
@@ -128,6 +142,29 @@ defmodule LemonAutomation.RunCompletionWaiterTest do
     assert_received {:ambiguous_submit, "run_ambiguous"}
     assert_received {:bus_subscribed, "run:run_ambiguous"}
     assert_received {:bus_unsubscribed, "run:run_ambiguous"}
+  end
+
+  test "a submit exception is ambiguous and retains the fixed run ownership" do
+    assert {:error, {:submission_outcome_unknown, "run_raise"}} =
+             RunCompletionWaiter.submit_and_wait(
+               %{run_id: "run_raise", prompt: "maybe accepted", test_pid: self()},
+               router_mod: MutateThenRaiseRouter,
+               timeout_ms: 1
+             )
+
+    assert_received {:submit_side_effect, "run_raise"}
+  end
+
+  test "an accepted run timeout retains ownership and does not announce terminal" do
+    assert {:error, {:completion_outcome_unknown, "run_still_live"}} =
+             RunCompletionWaiter.submit_and_wait(
+               %{run_id: "run_still_live", prompt: "still running"},
+               router_mod: AcceptedWithoutCompletionRouter,
+               timeout_ms: 1,
+               on_terminal: fn run_id -> send(self(), {:terminal, run_id}) end
+             )
+
+    refute_received {:terminal, "run_still_live"}
   end
 
   test "wait/3 subscribes, extracts completion output, and unsubscribes" do

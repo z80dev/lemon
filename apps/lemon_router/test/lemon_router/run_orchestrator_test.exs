@@ -309,6 +309,21 @@ defmodule LemonRouter.RunOrchestratorTest do
       assert %{active: 0} = DynamicSupervisor.count_children(run_supervisor)
     end
 
+    test "abort registration waits beyond the default call timeout for serialized admission" do
+      {:ok, orchestrator_pid} = GenServer.start_link(RunOrchestrator, [])
+      :ok = :sys.suspend(orchestrator_pid)
+
+      task =
+        Task.async(fn ->
+          RunOrchestrator.register_abort(orchestrator_pid, "run_slow_serialized_abort", :hard_stop)
+        end)
+
+      Process.sleep(5_100)
+      refute Task.yield(task, 0)
+      :ok = :sys.resume(orchestrator_pid)
+      assert Task.await(task, 2_000) == :ok
+    end
+
     test "concurrent abort and submission leave no accepted run alive across repetitions" do
       run_supervisor = start_supervised!({DynamicSupervisor, strategy: :one_for_one})
 

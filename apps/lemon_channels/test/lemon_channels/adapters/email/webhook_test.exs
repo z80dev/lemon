@@ -48,13 +48,28 @@ defmodule LemonChannels.Adapters.Email.WebhookTest do
     end
   end
 
+  defmodule RejectStateWriteFailureStore do
+    @moduledoc false
+    alias LemonCore.Store
+
+    def put_new(table, key, value), do: Store.put_new(table, key, value)
+    def get(table, key), do: Store.get(table, key)
+    def compare_and_swap(table, key, expected, value),
+      do: Store.compare_and_swap(table, key, expected, value)
+
+    def put(_table, _key, %{"state" => "rejected"}), do: {:error, :injected_write_failure}
+    def put(table, key, value), do: Store.put(table, key, value)
+  end
+
   setup do
     previous_email = Application.get_env(:lemon_channels, Email)
     previous_bridge = Application.get_env(:lemon_core, :router_bridge)
+    previous_store = Application.get_env(:lemon_channels, :email_webhook_store)
 
     on_exit(fn ->
       restore(:lemon_channels, Email, previous_email)
       restore(:lemon_core, :router_bridge, previous_bridge)
+      restore(:lemon_channels, :email_webhook_store, previous_store)
     end)
 
     :ok
@@ -241,6 +256,50 @@ defmodule LemonChannels.Adapters.Email.WebhookTest do
 
       assert retry_conn.status == 202
       assert_received {:routed, %RunRequest{run_id: ^run_id}}
+    end
+
+    test "failed rejection persistence remains retryable through the reservation lease" do
+      configure(webhook_token: "s3cret")
+      route_to(RejectingRouter)
+      Application.put_env(:lemon_channels, :email_webhook_store, RejectStateWriteFailureStore)
+      message_id = "lease-retry@example.com"
+
+      first = Webhook.handle_inbound(authorized_payload(message_id))
+      assert first.status == 503
+      assert_received {:routed, %RunRequest{run_id: run_id}}
+
+      pending = Webhook.handle_inbound(authorized_payload(message_id))
+      assert pending.status == 503
+      refute_received {:routed, _request}
+
+      digest = Base.encode16(:crypto.hash(:sha256, message_id), case: :lower)
+      entry = LemonCore.Store.get(:email_inbound_idempotency, digest)
+
+      assert :ok =
+               LemonCore.Store.put(
+                 :email_inbound_idempotency,
+                 digest,
+                 Map.put(entry, "lease_expires_at_ms", 0)
+               )
+
+      route_to(AcceptingRouter)
+      retry_conn = Webhook.handle_inbound(authorized_payload(message_id))
+      assert retry_conn.status == 202
+      assert_received {:routed, %RunRequest{run_id: ^run_id}}
+    end
+
+    test "rejects a routable payload without a Message-ID before submission" do
+      configure(webhook_token: "s3cret")
+      route_to(AcceptingRouter)
+
+      conn =
+        authorized_payload("temporary@example.com")
+        |> Map.update!(:body_params, &Map.delete(&1, "message_id"))
+        |> Webhook.handle_inbound()
+
+      assert conn.status == 400
+      assert conn.resp_body == "missing message id"
+      refute_received {:routed, _request}
     end
 
     test "returns a truthful non-retry receipt and deduplicates an ambiguous handoff" do

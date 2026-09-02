@@ -146,9 +146,10 @@ defmodule LemonAutomation.GoalLoop do
   defp handle_judge_failure(
          _session_key,
          _goal,
-         {:submission_outcome_unknown, _run_id} = reason,
+         {ownership_state, _run_id} = reason,
          _opts
-       ),
+       )
+       when ownership_state in [:submission_outcome_unknown, :completion_outcome_unknown],
        do: {:error, reason}
 
   defp handle_judge_failure(session_key, _goal, reason, opts) do

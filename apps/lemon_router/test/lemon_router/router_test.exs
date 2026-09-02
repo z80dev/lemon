@@ -151,10 +151,10 @@ defmodule LemonRouter.RouterTest do
     end
   end
 
-  test "abort_run/2 propagates a coordinator rejection after registering the tombstone" do
+  test "abort_run/2 reports unknown after a coordinator rejection follows a tombstone" do
     Process.put(:router_abort_run_result, {:error, :coordinator_unavailable})
 
-    assert {:error, :coordinator_unavailable} =
+    assert {:error, :outcome_unknown} =
              Router.abort_run("run-coordinator-rejected", :test_abort)
 
     assert_receive {:abort_run, "run-coordinator-rejected", :test_abort}, 500

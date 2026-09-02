@@ -543,7 +543,7 @@ defmodule LemonAutomation.GoalLoopTest do
                meta: %{"testPid" => self()}
              )
 
-    assert {:error, {:run_timeout, "run_timeout"}} =
+    assert {:error, {:completion_outcome_unknown, "run_timeout"}} =
              GoalLoop.run_autonomous(session_key,
                judge_mod: ContinueJudge,
                router_mod: LoopRouterOk,
@@ -553,7 +553,7 @@ defmodule LemonAutomation.GoalLoopTest do
                meta: %{test_pid: self()}
              )
 
-    assert GoalStore.get(session_key).status == "paused"
+    assert GoalStore.get(session_key).status == "active"
   end
 
   test "manager persists opt-in auto loop options when starting a loop", %{
@@ -1011,6 +1011,30 @@ defmodule LemonAutomation.GoalLoopTest do
            end)
 
     assert get_in(GoalStore.get(session_key).meta, ["goalLoop", "status"]) == "error"
+  end
+
+  test "manager restart restores a persisted running claim as reconciliation ownership", %{
+    session_key: session_key
+  } do
+    run_id = "goal_claim_before_crash_#{System.unique_integer([:positive])}"
+
+    assert {:ok, _goal} = GoalStore.set(session_key, "Do not overlap restored work")
+    assert {:ok, _goal} = GoalStore.record_loop_status(session_key, :running, run_id: run_id)
+
+    manager =
+      start_supervised!(
+        {GoalLoopManager,
+         name: :"goal_loop_manager_claim_restore_#{System.unique_integer([:positive])}",
+         scheduler_interval_ms: 0},
+        id: {:goal_claim_restore, session_key}
+      )
+
+    assert {:ok,
+            %{running: true, loop: %{status: "reconciling", active_run_id: ^run_id}}} =
+             GenServer.call(manager, {:status, session_key})
+
+    assert {:error, :already_running} =
+             GenServer.call(manager, {:start_loop, session_key, [max_ticks: 1]})
   end
 
   test "run_once call timeout encloses judge and continuation wait deadlines" do

@@ -5,10 +5,11 @@ defmodule LemonGateway.Transports.Webhook.Idempotency do
 
   require Logger
 
-  alias LemonCore.Store
+  alias LemonCore.{Id, Store}
   alias LemonGateway.Transports.Webhook.Request
 
   @table :webhook_idempotency
+  @reservation_lease_ms 60_000
 
   @spec table() :: atom()
   def table, do: @table
@@ -119,50 +120,37 @@ defmodule LemonGateway.Transports.Webhook.Idempotency do
   defp body_params(%Plug.Conn{body_params: params}) when is_map(params), do: params
   defp body_params(_), do: %{}
 
-  defp response(integration_id, idempotency_key)
-       when is_binary(integration_id) and is_binary(idempotency_key) do
-    case Store.get(@table, store_key(integration_id, idempotency_key)) do
-      %{} = entry ->
-        response_status = Request.int_value(Request.fetch(entry, :response_status), nil)
-        response_payload = Request.fetch(entry, :response_payload)
-        state = Request.normalize_blank(Request.fetch(entry, :state))
+  defp response(%{} = entry) do
+    response_status = Request.int_value(Request.fetch(entry, :response_status), nil)
+    response_payload = Request.fetch(entry, :response_payload)
+    state = Request.normalize_blank(Request.fetch(entry, :state))
 
-        cond do
-          is_integer(response_status) and is_map(response_payload) ->
-            {:duplicate, response_status, response_payload}
+    cond do
+      is_integer(response_status) and is_map(response_payload) ->
+        {:duplicate, response_status, response_payload}
 
-          state == "pending" ->
-            {:duplicate, 202,
-             (fallback_payload(entry) || %{})
-             |> Map.put_new(:status, "reservation_pending")
-             |> Map.put_new(:retry_safe, false)}
+      state == "pending" ->
+        {:duplicate, 503,
+         (fallback_payload(entry) || %{})
+         |> Map.put(:status, "reservation_pending")
+         |> Map.put(:retry_safe, true)}
 
-          true ->
-            case fallback_payload(entry) do
-              %{} = payload -> {:duplicate, 202, payload}
-              _ -> nil
-            end
+      true ->
+        case fallback_payload(entry) do
+          %{} = payload -> {:duplicate, 202, payload}
+          _ -> nil
         end
-
-      _ ->
-        nil
     end
-  rescue
-    _ -> nil
   end
-
-  defp response(_, _), do: nil
 
   defp fallback_payload(entry) when is_map(entry) do
     run_id = Request.normalize_blank(Request.fetch(entry, :run_id))
     session_key = Request.normalize_blank(Request.fetch(entry, :session_key))
     state = Request.normalize_blank(Request.fetch(entry, :state))
 
-    if is_binary(run_id) and is_binary(session_key) do
-      %{
-        run_id: run_id,
-        session_key: session_key
-      }
+    if is_binary(run_id) do
+      %{run_id: run_id}
+      |> maybe_put(:session_key, session_key)
       |> maybe_put(:mode, normalize_mode(Request.fetch(entry, :mode)))
       |> Map.merge(fallback_status(state))
     end
@@ -172,24 +160,7 @@ defmodule LemonGateway.Transports.Webhook.Idempotency do
 
   defp merge_store_entry(%{store_key: store_key} = idempotency_ctx, entry)
        when is_tuple(store_key) and is_map(entry) do
-    merged_entry =
-      case Store.get(@table, store_key) do
-        %{} = existing -> Map.merge(existing, entry)
-        _ -> Map.merge(entry, %{idempotency_key: idempotency_ctx.idempotency_key})
-      end
-
-    case Store.put(@table, store_key, merged_entry) do
-      :ok ->
-        :ok
-
-      {:error, _reason} ->
-        Logger.warning("webhook idempotency store write failed failure_class=write_error")
-        {:error, :idempotency_unavailable}
-
-      _other ->
-        Logger.warning("webhook idempotency store write failed failure_class=unexpected_result")
-        {:error, :idempotency_unavailable}
-    end
+    merge_store_entry(idempotency_ctx, entry, 3)
   rescue
     _error ->
       Logger.warning("webhook idempotency store write failed failure_class=exception")
@@ -198,28 +169,64 @@ defmodule LemonGateway.Transports.Webhook.Idempotency do
 
   defp merge_store_entry(_ctx, _entry), do: :ok
 
+  defp merge_store_entry(%{store_key: store_key} = idempotency_ctx, entry, attempts_left) do
+    case Store.get(@table, store_key) do
+      %{} = existing ->
+        expected_reservation = Map.get(idempotency_ctx, :reservation_id)
+        current_reservation = Request.fetch(existing, :reservation_id)
+
+        if is_binary(expected_reservation) and current_reservation != expected_reservation do
+          Logger.warning("webhook idempotency store write failed failure_class=stale_lease")
+          {:error, :idempotency_unavailable}
+        else
+          replacement = Map.merge(existing, entry)
+
+          case Store.compare_and_swap(@table, store_key, existing, replacement) do
+            :ok ->
+              :ok
+
+            {:error, :mismatch} when attempts_left > 0 ->
+              merge_store_entry(idempotency_ctx, entry, attempts_left - 1)
+
+            {:error, _reason} ->
+              Logger.warning("webhook idempotency store write failed failure_class=write_error")
+              {:error, :idempotency_unavailable}
+
+            _other ->
+              Logger.warning(
+                "webhook idempotency store write failed failure_class=unexpected_result"
+              )
+
+              {:error, :idempotency_unavailable}
+          end
+        end
+
+      _ ->
+        Logger.warning("webhook idempotency store write failed failure_class=missing_reservation")
+        {:error, :idempotency_unavailable}
+    end
+  end
+
   defp reserve(store_key, integration_id, idempotency_key) do
+    now_ms = System.system_time(:millisecond)
+    reservation_id = Id.uuid7()
+
     entry = %{
       idempotency_key: idempotency_key,
       integration_id: integration_id,
+      run_id: Id.run_id(),
+      reservation_id: reservation_id,
+      lease_expires_at_ms: now_ms + @reservation_lease_ms,
       state: "pending",
-      updated_at_ms: System.system_time(:millisecond)
+      updated_at_ms: now_ms
     }
 
     case Store.put_new(@table, store_key, entry) do
       :ok ->
-        {:ok,
-         %{
-           integration_id: integration_id,
-           idempotency_key: idempotency_key,
-           store_key: store_key
-         }}
+        {:ok, reservation_context(entry, store_key)}
 
       {:error, :exists} ->
-        case response(integration_id, idempotency_key) do
-          {:duplicate, _status, _payload} = duplicate -> duplicate
-          _ -> {:error, :idempotency_unavailable}
-        end
+        resolve_existing_reservation(store_key, integration_id, idempotency_key, now_ms)
 
       {:error, _reason} ->
         Logger.warning("webhook idempotency reservation failed failure_class=write_error")
@@ -233,6 +240,74 @@ defmodule LemonGateway.Transports.Webhook.Idempotency do
     _error ->
       Logger.warning("webhook idempotency reservation failed failure_class=exception")
       {:error, :idempotency_unavailable}
+  end
+
+  defp resolve_existing_reservation(store_key, integration_id, idempotency_key, now_ms) do
+    case Store.get(@table, store_key) do
+      %{} = existing ->
+        if reclaimable_pending?(existing, now_ms) do
+          reclaim_pending(store_key, existing, integration_id, idempotency_key, now_ms)
+        else
+          case response(existing) do
+            {:duplicate, _status, _payload} = duplicate -> duplicate
+            _ -> {:error, :idempotency_unavailable}
+          end
+        end
+
+      _ ->
+        {:error, :idempotency_unavailable}
+    end
+  end
+
+  defp reclaim_pending(store_key, existing, integration_id, idempotency_key, now_ms) do
+    reservation_id = Id.uuid7()
+
+    replacement =
+      existing
+      |> Map.put(
+        :run_id,
+        Request.normalize_blank(Request.fetch(existing, :run_id)) || Id.run_id()
+      )
+      |> Map.put(:reservation_id, reservation_id)
+      |> Map.put(:lease_expires_at_ms, now_ms + @reservation_lease_ms)
+      |> Map.put(:updated_at_ms, now_ms)
+
+    case Store.compare_and_swap(@table, store_key, existing, replacement) do
+      :ok ->
+        {:ok,
+         reservation_context(
+           replacement,
+           store_key,
+           integration_id: integration_id,
+           idempotency_key: idempotency_key
+         )}
+
+      {:error, :mismatch} ->
+        resolve_existing_reservation(store_key, integration_id, idempotency_key, now_ms)
+
+      {:error, _reason} ->
+        {:error, :idempotency_unavailable}
+
+      _other ->
+        {:error, :idempotency_unavailable}
+    end
+  end
+
+  defp reclaimable_pending?(entry, now_ms) do
+    Request.normalize_blank(Request.fetch(entry, :state)) == "pending" and
+      Request.int_value(Request.fetch(entry, :lease_expires_at_ms), 0) <= now_ms
+  end
+
+  defp reservation_context(entry, store_key, overrides \\ []) do
+    %{
+      integration_id:
+        Keyword.get(overrides, :integration_id, Request.fetch(entry, :integration_id)),
+      idempotency_key:
+        Keyword.get(overrides, :idempotency_key, Request.fetch(entry, :idempotency_key)),
+      store_key: store_key,
+      run_id: Request.fetch(entry, :run_id),
+      reservation_id: Request.fetch(entry, :reservation_id)
+    }
   end
 
   defp store_key(integration_id, idempotency_key) do

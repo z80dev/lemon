@@ -9,6 +9,7 @@ defmodule LemonControlPlane.A2A.Runner do
   alias LemonCore.A2A.Protocol
 
   @submission_reconciling "Run submission outcome is being reconciled"
+  @runner_lease_ms 60_000
 
   @spec start(binary(), binary(), binary(), binary()) :: {:ok, map()} | {:error, term()}
   def start(peer_id, context_id, text, message_id) do
@@ -23,9 +24,10 @@ defmodule LemonControlPlane.A2A.Runner do
 
   defp start_once(peer_id, context_id, text, message_id) do
     case A2AStore.get_message(message_id) do
-      %{direction: :inbound, peer_id: ^peer_id, task_id: task_id} when is_binary(task_id) ->
+      %{direction: :inbound, peer_id: ^peer_id, task_id: task_id} = message
+      when is_binary(task_id) ->
         case A2AStore.get_task(task_id) do
-          %{} = task -> {:ok, task}
+          %{} = task -> resume_existing(task, message)
           _ -> {:error, :replay_task_unavailable}
         end
 
@@ -67,29 +69,93 @@ defmodule LemonControlPlane.A2A.Runner do
       }
 
       with :ok <- A2AStore.put_task(task),
-           {:ok, %{task_id: ^task_id}} <- A2AStore.append_message(message) do
-        case Task.Supervisor.start_child(LemonControlPlane.A2A.TaskSupervisor, fn ->
-               execute(task, context, peer, config, text)
-             end) do
-          {:ok, _pid} ->
-            {:ok, A2AStore.get_task(task_id)}
-
-          {:error, reason} ->
-            _ =
-              transition_nonterminal(task_id, %{
-                state: "TASK_STATE_FAILED",
-                answer: nil,
-                error: "runner unavailable"
-              })
-
-            {:error, reason}
-        end
+           {:ok, %{task_id: ^task_id}} <- A2AStore.append_message(message),
+           {:ok, _task} <- launch_submitted(task, context, peer, config, text) do
+        {:ok, A2AStore.get_task(task_id)}
       else
         {:ok, _other_message} -> {:error, :message_id_conflict}
         {:error, _reason} -> {:error, :a2a_store_unavailable}
         _other -> {:error, :a2a_store_unavailable}
       end
     end
+  end
+
+  defp resume_existing(%{state: "TASK_STATE_SUBMITTED"} = task, message) do
+    config = Config.current()
+    peer = Map.get(config.peers, task.peer_id, %{agent_id: config.agent_id, allow_tools: []})
+
+    case A2AStore.get_context(:inbound, task.peer_id, task.context_id) do
+      %{} = context -> launch_submitted(task, context, peer, config, message.text)
+      _ -> {:error, :replay_context_unavailable}
+    end
+  end
+
+  defp resume_existing(task, _message), do: {:ok, reconcile(task)}
+
+  defp launch_submitted(task, context, peer, config, text) do
+    case claim_runner_lease(task.id) do
+      {:ok, :claimed, claimed_task, lease_id} ->
+        case Task.Supervisor.start_child(LemonControlPlane.A2A.TaskSupervisor, fn ->
+               execute(claimed_task, context, peer, config, text, lease_id)
+             end) do
+          {:ok, _pid} ->
+            {:ok, A2AStore.get_task(task.id) || claimed_task}
+
+          {:error, reason} ->
+            _ = release_runner_lease(task.id, lease_id)
+            {:error, reason}
+        end
+
+      {:ok, :leased, current_task} ->
+        {:ok, current_task}
+
+      {:ok, :not_submitted, current_task} ->
+        {:ok, reconcile(current_task)}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp claim_runner_lease(task_id) do
+    lease_id = Id.uuid7()
+    now_ms = System.system_time(:millisecond)
+
+    case A2AStore.update_task(task_id, fn current ->
+           lease_expires_at_ms = current[:runner_lease_expires_at_ms] || 0
+
+           if current.state == "TASK_STATE_SUBMITTED" and lease_expires_at_ms <= now_ms do
+             current
+             |> Map.put(:runner_lease_id, lease_id)
+             |> Map.put(:runner_lease_expires_at_ms, now_ms + @runner_lease_ms)
+           else
+             current
+           end
+         end) do
+      {:ok, %{runner_lease_id: ^lease_id} = task} ->
+        {:ok, :claimed, task, lease_id}
+
+      {:ok, %{state: "TASK_STATE_SUBMITTED"} = task} ->
+        {:ok, :leased, task}
+
+      {:ok, task} ->
+        {:ok, :not_submitted, task}
+
+      {:error, _reason} = error ->
+        error
+    end
+  end
+
+  defp release_runner_lease(task_id, lease_id) do
+    A2AStore.update_task(task_id, fn current ->
+      if current.state == "TASK_STATE_SUBMITTED" and current[:runner_lease_id] == lease_id do
+        current
+        |> Map.put(:runner_lease_id, nil)
+        |> Map.put(:runner_lease_expires_at_ms, nil)
+      else
+        current
+      end
+    end)
   end
 
   @spec wait(binary(), non_neg_integer()) :: {:ok, map()} | {:error, :timeout | :not_found}
@@ -149,6 +215,23 @@ defmodule LemonControlPlane.A2A.Runner do
 
   @doc false
   @spec reconcile(map()) :: map()
+  def reconcile(%{state: "TASK_STATE_SUBMITTED"} = task) do
+    case submitted_message(task) do
+      %{} = message ->
+        case resume_existing(task, message) do
+          {:ok, current_task} -> current_task
+          {:error, _reason} -> task
+        end
+
+      nil ->
+        task
+    end
+  rescue
+    _ -> task
+  catch
+    _, _ -> task
+  end
+
   def reconcile(%{run_id: run_id} = task) when is_binary(run_id) do
     if terminal_task?(task) do
       task
@@ -166,22 +249,53 @@ defmodule LemonControlPlane.A2A.Runner do
 
   def reconcile(task), do: task
 
-  defp execute(task, context, peer, config, text) do
-    case transition_nonterminal(task.id, %{state: "TASK_STATE_WORKING"}) do
-      {:ok, :changed, %{state: "TASK_STATE_WORKING"}} ->
-        execute_working(task, context, peer, config, text)
+  defp submitted_message(task) do
+    task.peer_id
+    |> A2AStore.history(task.context_id, limit: 100)
+    |> Enum.find(fn message ->
+      message.task_id == task.id and message.direction == :inbound and message.role == "ROLE_USER"
+    end)
+  end
 
-      # Cancellation can win after the durable task is created but before this
-      # supervised runner is scheduled. A terminal task must never be revived.
-      {:ok, :unchanged, _terminal_task} ->
-        :ok
-
-      {:error, reason} ->
-        finalize(task, {:error, reason})
+  defp execute(task, context, peer, config, text, lease_id) do
+    case runner_lease_owned?(task.id, lease_id) do
+      true -> execute_claimed(task, context, peer, config, text, lease_id)
+      false -> :ok
     end
   end
 
-  defp execute_working(task, context, peer, config, text) do
+  defp runner_lease_owned?(task_id, lease_id) do
+    case A2AStore.get_task(task_id) do
+      %{state: "TASK_STATE_SUBMITTED", runner_lease_id: ^lease_id} -> true
+      _ -> false
+    end
+  rescue
+    _ -> false
+  catch
+    _, _ -> false
+  end
+
+  defp transition_submitted_to_working(task_id, lease_id) do
+    transition_id = Id.uuid7()
+
+    case A2AStore.update_task(task_id, fn current ->
+           if current.state == "TASK_STATE_SUBMITTED" and current[:runner_lease_id] == lease_id do
+             current
+             |> Map.put(:state, "TASK_STATE_WORKING")
+             |> Map.put(:runner_lease_id, nil)
+             |> Map.put(:runner_lease_expires_at_ms, nil)
+             |> Map.put(:transition_id, transition_id)
+           else
+             current
+           end
+         end) do
+      {:ok, %{transition_id: ^transition_id} = task} -> {:ok, :changed, task}
+      {:ok, task} -> {:ok, :unchanged, task}
+      {:error, _reason} = error -> error
+    end
+  end
+
+  defp execute_claimed(task, context, peer, config, text, lease_id) do
     allow_tools =
       if peer.allow_tools == [], do: config.default_allow_tools, else: peer.allow_tools
 
@@ -202,30 +316,48 @@ defmodule LemonControlPlane.A2A.Runner do
         meta: %{a2a: true, a2a_peer_id: task.peer_id, a2a_context_id: task.context_id}
       })
 
-    result =
-      case RouterBridge.submit_run(request) do
-        {:ok, _run_id} ->
-          wait_run(task.run_id, config.reply_timeout_ms)
-
-        {:error, :outcome_unknown} ->
-          # The router may have accepted this exact run before losing its
-          # acknowledgement. Never submit a second run: reconcile once through
-          # the caller-generated id and leave a truthful reattachable task when
-          # the bounded wait cannot prove a terminal outcome.
-          case wait_run(task.run_id, config.reply_timeout_ms) do
-            {:error, :timeout} -> {:error, :outcome_unknown}
-            completion -> completion
-          end
-
-        error ->
-          error
-      end
-
-    finalize(task, result)
+    case safe_submit(request) do
+      {:ok, _run_id} -> continue_accepted_run(task, config.reply_timeout_ms, lease_id)
+      {:error, :outcome_unknown} -> continue_accepted_run(task, config.reply_timeout_ms, lease_id)
+      error -> finalize(task, error)
+    end
   rescue
     error ->
       Logger.warning("A2A runner failed class=#{failure_class(error)}")
       finalize(task, {:error, :runner_failed})
+  end
+
+  defp safe_submit(request) do
+    RouterBridge.submit_run(request)
+  rescue
+    _error -> {:error, :outcome_unknown}
+  catch
+    _kind, _reason -> {:error, :outcome_unknown}
+  end
+
+  defp continue_accepted_run(task, timeout_ms, lease_id) do
+    case transition_submitted_to_working(task.id, lease_id) do
+      {:ok, :changed, %{state: "TASK_STATE_WORKING"}} ->
+        result =
+          case wait_run(task.run_id, timeout_ms) do
+            {:error, :timeout} -> {:error, :outcome_unknown}
+            completion -> completion
+          end
+
+        finalize(task, result)
+
+      # Cancellation or a newer recovery owner can win while submission is in
+      # flight. This runner must not revive or overwrite that durable state.
+      {:ok, :unchanged, _current_task} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning(
+          "A2A accepted-run ownership persistence failed class=#{failure_class(reason)}"
+        )
+
+        finalize(task, {:error, :outcome_unknown})
+    end
   end
 
   defp finalize(task, {:ok, answer}) when is_binary(answer) do

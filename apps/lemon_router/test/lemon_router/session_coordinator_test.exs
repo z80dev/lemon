@@ -383,6 +383,37 @@ defmodule LemonRouter.SessionCoordinatorTest do
     end
   end
 
+  test "active queries consult the surviving run registry after registry-linked coordinator loss",
+       %{
+         run_supervisor: run_supervisor
+       } do
+    session_key = unique_session_key()
+    key = {:session, session_key}
+
+    assert :ok =
+             SessionCoordinator.submit(
+               key,
+               submission(key, "run-registry-repair", "one", :collect, run_supervisor,
+                 run_process_module: SessionCoordinatorRuntimeRunStub
+               )
+             )
+
+    assert eventually(fn ->
+             Registry.lookup(LemonRouter.RunRegistry, "run-registry-repair") != []
+           end)
+
+    assert [{coordinator_pid, _meta}] = Registry.lookup(LemonRouter.ConversationRegistry, key)
+
+    assert :ok = Supervisor.terminate_child(LemonRouter.Supervisor, LemonRouter.SessionRegistry)
+
+    assert {:ok, _pid} =
+             Supervisor.restart_child(LemonRouter.Supervisor, LemonRouter.SessionRegistry)
+
+    refute Process.alive?(coordinator_pid)
+    assert Registry.lookup(LemonRouter.SessionRegistry, session_key) == []
+    assert {:ok, "run-registry-repair"} = SessionCoordinator.active_run_for_session(session_key)
+  end
+
   test "merged queued followups unsubscribe the superseded run", %{run_supervisor: run_supervisor} do
     key = {:session, unique_session_key()}
 

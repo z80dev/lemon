@@ -110,8 +110,11 @@ The channel runtime sends that completed `RunRequest` through
 `InboundMessage`.
 
 The RouterBridge is a clever indirection — it lets channels talk to the router
-without being directly wired to it. If the router isn't running for some reason,
-the bridge returns `{:error, :unavailable}` instead of crashing.
+without being directly wired to it. A request the router definitely refuses
+returns its bounded rejection, an unconfigured router returns
+`{:error, :unavailable}`, and a timeout, exit, exception, or malformed
+acknowledgement returns `{:error, :outcome_unknown}` because the fixed run ID
+may already have crossed the mutation boundary.
 
 ```
 LemonChannels.Runtime

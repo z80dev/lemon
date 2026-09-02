@@ -420,7 +420,13 @@ defmodule LemonAutomation.GoalLoopManager do
       persisted = get_in(goal, [:meta, "goalLoop"]) || %{}
       run_id = persisted["lastRunId"]
 
-      if persisted["status"] == "reconciling" and is_binary(run_id) do
+      if persisted["status"] in ["reconciling", "running"] and is_binary(run_id) do
+        _ =
+          GoalStore.record_loop_status(session_key, :reconciling,
+            run_id: run_id,
+            error: "run ownership restored after manager restart"
+          )
+
         abort_result = persisted_abort_result(persisted)
 
         loop = %{
@@ -491,6 +497,10 @@ defmodule LemonAutomation.GoalLoopManager do
   defp ambiguous_submission_run_id({:error, reason}), do: ambiguous_submission_run_id(reason)
 
   defp ambiguous_submission_run_id({:submission_outcome_unknown, run_id})
+       when is_binary(run_id),
+       do: run_id
+
+  defp ambiguous_submission_run_id({:completion_outcome_unknown, run_id})
        when is_binary(run_id),
        do: run_id
 

@@ -19,9 +19,12 @@ defmodule LemonChannels.Adapters.Email.Webhook do
 
   ## Delivery receipts
 
-  A normalized provider Message-ID is hashed before it is persisted and also
-  supplies a stable run reference. Router acceptance returns 202. A definite
-  rejection releases that reservation and returns 503 so redelivery is safe.
+  A normalized provider Message-ID is required, hashed before it is persisted,
+  and also supplies a stable run reference. A request is rejected before router
+  submission when its Message-ID is absent or the idempotency store is
+  unavailable; an untracked provider retry must never create a second run.
+  Router acceptance returns 202. A definite rejection marks that reservation
+  eligible for the next attempt and returns 503 so redelivery is safe.
   An ambiguous mutation retains the reservation and returns 200 with
   `outcome unknown`: this is a successful provider receipt, not a claim that
   the router accepted the run, and prevents an automatic retry from creating a
@@ -50,6 +53,7 @@ defmodule LemonChannels.Adapters.Email.Webhook do
   alias LemonCore.Store
 
   @idempotency_table :email_inbound_idempotency
+  @reservation_lease_ms 60_000
 
   @impl true
   def authorized?(conn) do
@@ -83,6 +87,8 @@ defmodule LemonChannels.Adapters.Email.Webhook do
         case reserve(message) do
           {:duplicate, receipt} -> duplicate_receipt(conn, receipt)
           {:new, reservation} -> handoff(conn, message, reservation)
+          {:error, :missing_message_id} -> Plug.Conn.send_resp(conn, 400, "missing message id")
+          {:error, :idempotency_unavailable} -> Plug.Conn.send_resp(conn, 503, "unavailable")
         end
 
       {:error, reason} ->
@@ -110,13 +116,21 @@ defmodule LemonChannels.Adapters.Email.Webhook do
 
           Plug.Conn.send_resp(conn, 200, "outcome unknown")
         else
-          release(reservation)
+          case release(reservation) do
+            :ok ->
+              Logger.error(
+                "email webhook handoff rejected; asking for redelivery: reason=#{SubmissionOutcome.log_label(error)}"
+              )
 
-          Logger.error(
-            "email webhook handoff rejected; asking for redelivery: reason=#{SubmissionOutcome.log_label(error)}"
-          )
+              Plug.Conn.send_resp(conn, 503, "unavailable")
 
-          Plug.Conn.send_resp(conn, 503, "unavailable")
+            {:error, :idempotency_unavailable} ->
+              Logger.error(
+                "email webhook handoff rejected but reservation update failed; retry remains lease-gated"
+              )
+
+              Plug.Conn.send_resp(conn, 503, "unavailable")
+          end
         end
 
       _unexpected ->
@@ -131,46 +145,53 @@ defmodule LemonChannels.Adapters.Email.Webhook do
   end
 
   defp reserve(%{message: %{id: message_id}}) when is_binary(message_id) and message_id != "" do
+    store = store_module()
     digest = Base.encode16(:crypto.hash(:sha256, message_id), case: :lower)
-    reservation = %{key: digest, run_id: "run_email_#{digest}", tracked?: true}
+    reservation = %{key: digest, run_id: "run_email_#{digest}"}
 
     entry = %{
       "run_id" => reservation.run_id,
       "state" => "pending",
-      "updated_at_ms" => System.system_time(:millisecond)
+      "updated_at_ms" => System.system_time(:millisecond),
+      "lease_expires_at_ms" => System.system_time(:millisecond) + @reservation_lease_ms
     }
 
-    case Store.put_new(@idempotency_table, reservation.key, entry) do
+    case store.put_new(@idempotency_table, reservation.key, entry) do
       :ok ->
         {:new, reservation}
 
       {:error, :exists} ->
-        {:duplicate, Store.get(@idempotency_table, reservation.key) || entry}
+        reclaim_or_duplicate(reservation, entry)
 
       {:error, _reason} ->
         Logger.warning("email webhook idempotency unavailable failure_class=store_error")
-        {:new, %{reservation | tracked?: false}}
+        {:error, :idempotency_unavailable}
 
       _unexpected ->
         Logger.warning("email webhook idempotency unavailable failure_class=unexpected_result")
-        {:new, %{reservation | tracked?: false}}
+        {:error, :idempotency_unavailable}
     end
   rescue
     _error ->
       Logger.warning("email webhook idempotency unavailable failure_class=exception")
-      {:new, %{key: nil, run_id: nil, tracked?: false}}
+      {:error, :idempotency_unavailable}
   end
 
-  defp reserve(_message), do: {:new, %{key: nil, run_id: nil, tracked?: false}}
+  defp reserve(_message), do: {:error, :missing_message_id}
 
   defp duplicate_receipt(conn, %{"state" => "accepted"}),
     do: Plug.Conn.send_resp(conn, 202, "accepted")
 
+  defp duplicate_receipt(conn, %{"state" => "pending"}),
+    do: Plug.Conn.send_resp(conn, 503, "delivery pending")
+
   defp duplicate_receipt(conn, _receipt),
     do: Plug.Conn.send_resp(conn, 200, "outcome unknown")
 
-  defp remember(%{tracked?: true, key: key, run_id: run_id}, state) do
-    case Store.put(@idempotency_table, key, %{
+  defp remember(%{key: key, run_id: run_id}, state) do
+    store = store_module()
+
+    case store.put(@idempotency_table, key, %{
            "run_id" => run_id,
            "state" => state,
            "updated_at_ms" => System.system_time(:millisecond)
@@ -182,25 +203,68 @@ defmodule LemonChannels.Adapters.Email.Webhook do
     _ -> Logger.warning("email webhook idempotency update failed failure_class=exception")
   end
 
-  defp remember(_reservation, _state), do: :ok
+  defp release(%{key: key, run_id: run_id}) do
+    store = store_module()
 
-  defp release(%{tracked?: true, key: key}) do
-    case Store.delete(@idempotency_table, key) do
-      :ok -> :ok
-      _ -> Logger.warning("email webhook idempotency release failed failure_class=store_error")
+    case store.put(@idempotency_table, key, %{
+           "run_id" => run_id,
+           "state" => "rejected",
+           "updated_at_ms" => System.system_time(:millisecond),
+           "lease_expires_at_ms" => 0
+         }) do
+      :ok ->
+        :ok
+
+      _ ->
+        Logger.warning("email webhook idempotency release failed failure_class=store_error")
+        {:error, :idempotency_unavailable}
     end
   rescue
-    _ -> Logger.warning("email webhook idempotency release failed failure_class=exception")
+    _ ->
+      Logger.warning("email webhook idempotency release failed failure_class=exception")
+      {:error, :idempotency_unavailable}
   end
 
-  defp release(_reservation), do: :ok
+  defp reclaim_or_duplicate(reservation, pending_entry) do
+    store = store_module()
+
+    case store.get(@idempotency_table, reservation.key) do
+      %{} = existing ->
+        state = existing["state"] || existing[:state]
+
+        lease_expires_at_ms =
+          existing["lease_expires_at_ms"] || existing[:lease_expires_at_ms] || 0
+
+        if state == "rejected" or
+             (state == "pending" and lease_expires_at_ms <= System.system_time(:millisecond)) do
+          case store.compare_and_swap(
+                 @idempotency_table,
+                 reservation.key,
+                 existing,
+                 pending_entry
+               ) do
+            :ok -> {:new, reservation}
+            {:error, :mismatch} -> reclaim_or_duplicate(reservation, pending_entry)
+            {:error, _reason} -> {:error, :idempotency_unavailable}
+            _unexpected -> {:error, :idempotency_unavailable}
+          end
+        else
+          {:duplicate, existing}
+        end
+
+      _ ->
+        {:error, :idempotency_unavailable}
+    end
+  rescue
+    _ -> {:error, :idempotency_unavailable}
+  catch
+    _, _ -> {:error, :idempotency_unavailable}
+  end
 
   # The runtime converts the message to the canonical RunRequest and crosses
   # RouterBridge.submit_run/1. A provider Message-ID supplies a stable run
   # reference so ambiguous submissions can be reconciled without inventing a
   # second identity.
-  defp deliver_to_router(message, nil), do: Runtime.submit_inbound(message)
-
   defp deliver_to_router(message, run_id),
     do: Runtime.submit_inbound(message, run_id: run_id)
 
@@ -214,4 +278,7 @@ defmodule LemonChannels.Adapters.Email.Webhook do
   defp secure_equal?(_, _), do: false
 
   defp configured_token, do: Email.Config.webhook_token()
+
+  defp store_module,
+    do: Application.get_env(:lemon_channels, :email_webhook_store, Store)
 end
