@@ -6,6 +6,9 @@ defmodule LemonChannels.Adapters.WhatsApp.TransportTest do
   alias LemonCore.{RouterBridge, RunRequest}
 
   defmodule WhatsAppTestRouter do
+    use LemonCore.RouterBridge.Router
+    use LemonCore.RouterBridge.RunOrchestrator
+
     def submit(%RunRequest{} = request) do
       send(:persistent_term.get({__MODULE__, :pid}), {:submitted, request})
       {:ok, "run-#{System.unique_integer([:positive])}"}
@@ -23,7 +26,7 @@ defmodule LemonChannels.Adapters.WhatsApp.TransportTest do
     missing_bridge = Path.join(System.tmp_dir!(), "missing_whatsapp_bridge.mjs")
 
     :persistent_term.put({WhatsAppTestRouter, :pid}, self())
-    RouterBridge.configure(router: WhatsAppTestRouter, run_orchestrator: WhatsAppTestRouter)
+    :ok = RouterBridge.configure(router: WhatsAppTestRouter, run_orchestrator: WhatsAppTestRouter)
 
     Application.put_env(:lemon_gateway, @gateway_config_key, %{
       enable_whatsapp: true,

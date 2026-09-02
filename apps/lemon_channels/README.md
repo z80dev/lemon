@@ -658,7 +658,9 @@ Delegated tasks run exclusively as native in-process subagents. A subagent's ide
 
 ### Runtime Bridge
 
-The internal LemonChannels.Runtime module provides thin wrappers to interact with router-owned run lifecycle APIs without a hard compile-time dependency. Busy checks go through `LemonCore.RouterBridge.session_busy?/1` rather than reaching into router internals directly:
+`LemonChannels.Runtime` is the channel side of `LemonCore.RouterBridge`. It
+returns the bridge outcome without a fallback or soft success, so adapters can
+tell users whether a control request was accepted:
 
 ```elixir
 LemonChannels.Runtime.cancel_session(session_key)
@@ -667,6 +669,11 @@ LemonChannels.Runtime.cancel_by_progress_msg(session_key, progress_msg_id)
 LemonChannels.Runtime.keep_run_alive(run_id, :continue | :cancel)
 LemonChannels.Runtime.session_busy?(session_key)
 ```
+
+Cancel and keep-alive calls return `:ok | {:error, term()}`. Busy checks return
+`{:ok, boolean()} | {:error, term()}`; an unreachable router is not equivalent
+to an idle session. Telegram, Discord, and WhatsApp render or log the local
+policy for that unavailable case.
 
 ## Application Lifecycle
 
@@ -856,7 +863,8 @@ end
 - The Outbox preserves per-delivery-group FIFO ordering; chunked messages from the same payload share a group and are never delivered concurrently
 - `GatewayConfig` is a thin delegation to `LemonCore.GatewayConfig`; new code should use the core module directly
 - `BindingResolver` delegates to `LemonCore.BindingResolver` after struct conversion
-- `Runtime` uses `LemonCore.RouterBridge` for router interaction and returns `:ok`/`false` gracefully when the router is unavailable
+- `Runtime` uses `LemonCore.RouterBridge` for router interaction and returns
+  explicit `{:error, reason}` values when the router is unavailable
 - Adapter status is derived from live `DynamicSupervisor` children, not stored state
 - The Telegram formatter avoids MarkdownV2 entirely, rendering to plain text + entity arrays instead
 - Transport-level known-target indexing throttles writes to 30s per target to avoid Store overload

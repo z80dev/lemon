@@ -95,6 +95,11 @@ keeping it small and honest.
 
 ### Changed
 
+- `LemonChannels.Runtime` now returns `LemonCore.RouterBridge` results without
+  rewriting failures as success. Cancel and keep-alive calls return
+  `:ok | {:error, term()}` and `session_busy?/1` returns
+  `{:ok, boolean()} | {:error, term()}`; Telegram, Discord, and WhatsApp render
+  or log the unavailable case explicitly.
 - Channels query gateway configuration through `LemonCore.EngineInfoBridge`
   instead of constructing `LemonGateway.*` atoms at runtime.
 - Capabilities are resolved through the plugin registry. An unregistered

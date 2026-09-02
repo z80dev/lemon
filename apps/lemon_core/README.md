@@ -627,9 +627,16 @@ Channel adapters forward runs to `:lemon_router` without compile-time coupling. 
 {:ok, run_id} = LemonCore.RouterBridge.submit_run(run_request)
 :ok = LemonCore.RouterBridge.handle_inbound(inbound_message)
 :ok = LemonCore.RouterBridge.abort_session(session_key, :user_requested)
+{:ok, busy?} = LemonCore.RouterBridge.session_busy?(session_key)
+{:ok, active_run_id} = LemonCore.RouterBridge.active_run(session_key)
+{:ok, sessions} = LemonCore.RouterBridge.list_active_sessions()
 ```
 
-Returns `{:error, :unavailable}` when `:lemon_router` has not registered; callers must handle this gracefully.
+Every operation returns `{:error, :unavailable}` when no router is registered
+or its process cannot answer. Query calls do not substitute `false`, `:none`,
+or `[]`; callers must handle unknown router state explicitly. Configured
+implementations are validated against the bridge behaviours before use, and a
+malformed callback answer becomes `{:error, {:unexpected_answer, value}}`.
 
 ## Telemetry Events
 

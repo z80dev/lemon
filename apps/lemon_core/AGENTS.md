@@ -849,6 +849,11 @@ Channel adapters and other producers forward runs to `:lemon_router` without a c
 
 # Watchdog keepalive decision for an active run
 :ok = LemonCore.RouterBridge.keep_run_alive(run_id, :continue)
+
+# Queries use explicit results; unavailable is never rewritten as idle/empty.
+{:ok, busy?} = LemonCore.RouterBridge.session_busy?(session_key)
+{:ok, active_run_id} = LemonCore.RouterBridge.active_run(session_key)
+{:ok, sessions} = LemonCore.RouterBridge.list_active_sessions()
 ```
 
 ### Dotenv
@@ -983,7 +988,9 @@ Durable memory is supervised by the `lemon_memory` app, not here.
 - SQLite serializes keys and values with `:erlang.term_to_binary/1`; JSONL uses
   a JSON codec that preserves atoms, tuples, structs, and nested map keys
 - Events use millisecond timestamps from `System.system_time(:millisecond)`
-- `LemonCore.RouterBridge` returns `{:error, :unavailable}` when `:lemon_router` has not registered itself; callers must handle this gracefully
+- `LemonCore.RouterBridge` returns `{:error, :unavailable}` when the router is
+  unregistered or unreachable. Query callers must not reinterpret that as
+  `false`, `:none`, or `[]` without an explicit local policy.
 - `LemonCore.Dedupe.Ets` uses monotonic time for TTL; `LemonCore.Idempotency` uses wall-clock time
 - `LemonCore.Config.Modular` is the canonical config implementation; `LemonCore.Config` is a facade that delegates to modular
 - Provider config resolution is centralized in `LemonAgent.ProviderConfigResolver` (agent_core); provider modules must not read env vars directly for normal request paths

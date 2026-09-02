@@ -7,6 +7,9 @@ defmodule LemonChannels.Adapters.Xmtp.TransportTest do
   alias LemonCore.InboundMessage
 
   defmodule XmtpTestRouter do
+    use LemonCore.RouterBridge.Router
+    use LemonCore.RouterBridge.RunOrchestrator
+
     def handle_inbound(msg) do
       if pid = :persistent_term.get({__MODULE__, :pid}, nil) do
         send(pid, {:inbound, msg})
@@ -52,7 +55,9 @@ defmodule LemonChannels.Adapters.Xmtp.TransportTest do
     old_gateway_env = Application.get_env(:lemon_gateway, @gateway_config_key)
 
     :persistent_term.put({XmtpTestRouter, :pid}, self())
-    LemonCore.RouterBridge.configure(router: XmtpTestRouter, run_orchestrator: XmtpTestRouter)
+
+    :ok =
+      LemonCore.RouterBridge.configure(router: XmtpTestRouter, run_orchestrator: XmtpTestRouter)
 
     Application.put_env(:lemon_gateway, @gateway_config_key, %{
       enable_xmtp: true,

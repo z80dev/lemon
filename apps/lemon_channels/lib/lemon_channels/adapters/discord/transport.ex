@@ -1327,26 +1327,24 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   defp handle_cancel_interaction(interaction, state) do
     session_key = interaction_session_key(interaction, state)
 
-    if Code.ensure_loaded?(RouterBridge) and function_exported?(RouterBridge, :active_run, 1) do
-      case RouterBridge.active_run(session_key) do
-        {:ok, run_id} ->
-          if Code.ensure_loaded?(LemonChannels.Runtime) and
-               function_exported?(LemonChannels.Runtime, :cancel_by_run_id, 2) do
-            LemonChannels.Runtime.cancel_by_run_id(run_id, :user_requested)
-          else
-            _ = RouterBridge.abort_run(run_id, :user_requested)
-          end
+    case RouterBridge.active_run(session_key) do
+      {:ok, run_id} ->
+        case LemonChannels.Runtime.cancel_by_run_id(run_id, :user_requested) do
+          :ok ->
+            respond_ephemeral(interaction, "Cancelling run...")
 
-          respond_ephemeral(interaction, "Cancelling run...")
+          {:error, reason} ->
+            Logger.warning("discord cancel failed run_id=#{run_id}: #{inspect(reason)}")
+            respond_ephemeral(interaction, "Could not cancel the run: the router is unavailable.")
+        end
 
-        _ ->
-          respond_ephemeral(interaction, "No active run to cancel.")
-      end
-    else
-      respond_ephemeral(interaction, "Cancel not available.")
+      :none ->
+        respond_ephemeral(interaction, "No active run to cancel.")
+
+      {:error, reason} ->
+        Logger.warning("discord cancel: router unavailable: #{inspect(reason)}")
+        respond_ephemeral(interaction, "Cancel not available: the router is unavailable.")
     end
-
-    state
   end
 
   defp handle_checkpoint_interaction(interaction, state) do
@@ -1635,14 +1633,14 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   defp handle_cancel_component(interaction, custom_id) do
     run_id = String.trim_leading(custom_id, @cancel_callback_prefix <> ":")
 
-    if is_binary(run_id) and run_id != "" do
-      if Code.ensure_loaded?(LemonChannels.Runtime) and
-           function_exported?(LemonChannels.Runtime, :cancel_by_run_id, 2) do
-        LemonChannels.Runtime.cancel_by_run_id(run_id, :user_requested)
-      end
-    end
+    case LemonChannels.Runtime.cancel_by_run_id(run_id, :user_requested) do
+      :ok ->
+        update_interaction(interaction, "Cancelling...", [])
 
-    update_interaction(interaction, "Cancelling...", [])
+      {:error, reason} ->
+        Logger.warning("discord cancel failed run_id=#{inspect(run_id)}: #{inspect(reason)}")
+        update_interaction(interaction, "Could not cancel: the router is unavailable.", [])
+    end
   end
 
   defp handle_keepalive_component(interaction, custom_id, decision) do
@@ -1652,14 +1650,22 @@ defmodule LemonChannels.Adapters.Discord.Transport do
         :cancel -> String.trim_leading(custom_id, @idle_keepalive_stop_prefix)
       end
 
-    if is_binary(run_id) and run_id != "" do
-      if Code.ensure_loaded?(LemonChannels.Runtime) and
-           function_exported?(LemonChannels.Runtime, :keep_run_alive, 2) do
-        LemonChannels.Runtime.keep_run_alive(run_id, decision)
-      end
-    end
+    msg =
+      case LemonChannels.Runtime.keep_run_alive(run_id, decision) do
+        :ok when decision == :continue ->
+          "Continuing run."
 
-    msg = if decision == :continue, do: "Continuing run.", else: "Stopping run."
+        :ok ->
+          "Stopping run."
+
+        {:error, reason} ->
+          Logger.warning(
+            "discord keep-alive failed run_id=#{inspect(run_id)}: #{inspect(reason)}"
+          )
+
+          "Could not apply the decision: the router is unavailable."
+      end
+
     update_interaction(interaction, msg, [])
   end
 

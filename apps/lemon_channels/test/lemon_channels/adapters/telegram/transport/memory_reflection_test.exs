@@ -6,6 +6,9 @@ defmodule LemonChannels.Adapters.Telegram.Transport.MemoryReflectionTest do
   alias LemonCore.{ChatScope, ChatStateStore, RouterBridge, RunHistoryStore, RunRequest, RunStore}
 
   defmodule CapturingRouter do
+    use LemonCore.RouterBridge.Router
+    use LemonCore.RouterBridge.RunOrchestrator
+
     def submit(%RunRequest{} = request) do
       send(:persistent_term.get({__MODULE__, :test_pid}), {:submitted, request})
       {:ok, "reflection-run"}
@@ -15,7 +18,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.MemoryReflectionTest do
   setup do
     previous_router_bridge = Application.get_env(:lemon_core, :router_bridge)
     :persistent_term.put({CapturingRouter, :test_pid}, self())
-    RouterBridge.configure(router: CapturingRouter, run_orchestrator: CapturingRouter)
+    :ok = RouterBridge.configure(router: CapturingRouter, run_orchestrator: CapturingRouter)
 
     on_exit(fn ->
       :persistent_term.erase({CapturingRouter, :test_pid})

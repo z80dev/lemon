@@ -7,6 +7,8 @@ defmodule LemonChannels.Adapters.Telegram.TransportParallelSessionsTest do
   alias LemonChannels.Telegram.{ResumeIndexStore, StateStore}
 
   defmodule ParallelTestRouter do
+    use LemonCore.RouterBridge.Router
+    use LemonCore.RouterBridge.RunOrchestrator
     @busy_sessions_key {__MODULE__, :busy_sessions}
 
     def handle_inbound(msg) do
@@ -122,10 +124,11 @@ defmodule LemonChannels.Adapters.Telegram.TransportParallelSessionsTest do
     :persistent_term.put({ParallelTestRouter, :pid}, self())
     ParallelMockAPI.register_test(self())
 
-    LemonCore.RouterBridge.configure(
-      router: ParallelTestRouter,
-      run_orchestrator: ParallelTestRouter
-    )
+    :ok =
+      LemonCore.RouterBridge.configure(
+        router: ParallelTestRouter,
+        run_orchestrator: ParallelTestRouter
+      )
 
     ParallelTestRouter.clear_busy_sessions()
 

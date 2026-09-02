@@ -71,17 +71,21 @@ defmodule LemonControlPlane.A2A.Handler do
       if Protocol.terminal_state?(task.state) do
         {:ok, TaskView.render(task)}
       else
-        :ok = RouterBridge.abort_run(task.run_id, :a2a_peer_canceled)
+        case RouterBridge.abort_run(task.run_id, :a2a_peer_canceled) do
+          :ok ->
+            {:ok, canceled} =
+              A2AStore.update_task(task.id, &Map.put(&1, :state, "TASK_STATE_CANCELED"))
 
-        {:ok, canceled} =
-          A2AStore.update_task(task.id, &Map.put(&1, :state, "TASK_STATE_CANCELED"))
+            LemonCore.Bus.broadcast(
+              "a2a:task:#{task.id}",
+              {:a2a_task_terminal, task.id}
+            )
 
-        LemonCore.Bus.broadcast(
-          "a2a:task:#{task.id}",
-          {:a2a_task_terminal, task.id}
-        )
+            {:ok, TaskView.render(canceled)}
 
-        {:ok, TaskView.render(canceled)}
+          {:error, reason} ->
+            {:error, -32_603, "cancel failed: the run router is unavailable (#{inspect(reason)})"}
+        end
       end
     end
   end

@@ -17,6 +17,8 @@ defmodule LemonControlPlane.Methods.IntrospectionMethodsTest do
   alias LemonCore.SessionKey
 
   defmodule RouterBridgeStub do
+    use LemonCore.RouterBridge.Router
+
     @active_sessions_key {__MODULE__, :active_sessions}
 
     def set_active_sessions(entries) when is_list(entries) do
@@ -192,7 +194,7 @@ defmodule LemonControlPlane.Methods.IntrospectionMethodsTest do
         requirements_cwd
       )
 
-    LemonCore.RouterBridge.configure(router: RouterBridgeStub)
+    :ok = LemonCore.RouterBridge.configure(router: RouterBridgeStub)
     RouterBridgeStub.set_active_sessions([%{session_key: session_key, run_id: run_id}])
     Application.put_env(:lemon_router, :session_coordinator, SessionCoordinatorStub)
     SessionCoordinatorStub.set_active_sessions([%{session_key: session_key, run_id: run_id}])

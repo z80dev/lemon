@@ -2,6 +2,8 @@ defmodule LemonCore.RouterBridgeTest do
   alias Elixir.LemonCore, as: LemonCore
   use ExUnit.Case, async: false
 
+  import ExUnit.CaptureLog
+
   alias Elixir.LemonCore.{RouterBridge, RunRequest}
 
   defmodule RouterBridgeTestRunOrchestrator do
@@ -14,6 +16,7 @@ defmodule LemonCore.RouterBridgeTest do
   end
 
   defmodule RouterBridgeTestRouter do
+    use LemonCore.RouterBridge.Router
     @moduledoc false
 
     def abort(session_key, reason) do
@@ -67,6 +70,7 @@ defmodule LemonCore.RouterBridgeTest do
 
   defmodule BridgeTimingOutRouter do
     @moduledoc false
+    use LemonCore.RouterBridge.Router
     # The other exit shape worth pinning: the process is alive but did not
     # answer in time. Same consequence for the caller — the work was not taken.
     def handle_inbound(_msg), do: exit({:timeout, {GenServer, :call, [__MODULE__, :x, 5000]}})
@@ -74,7 +78,18 @@ defmodule LemonCore.RouterBridgeTest do
 
   defmodule BridgeRaisingRouter do
     @moduledoc false
+    use LemonCore.RouterBridge.Router
     def handle_inbound(_msg), do: raise("router blew up")
+  end
+
+  defmodule BridgeMalformedCommandRouter do
+    @moduledoc false
+    use LemonCore.RouterBridge.Router
+
+    def handle_inbound(_msg), do: false
+    def abort(_session_key, _reason), do: nil
+    def abort_run(_run_id, _reason), do: :banana
+    def keep_run_alive(_run_id, _decision), do: {:ok, :unexpected_payload}
   end
 
   setup do
@@ -182,23 +197,23 @@ defmodule LemonCore.RouterBridgeTest do
       assert_receive {:active_run, "agent:bridge:main"}
     end
 
-    test "active_run/1 fails soft when router is unavailable" do
+    test "active_run/1 reports unavailable when no router is configured" do
       :ok = RouterBridge.configure(run_orchestrator: RouterBridgeTestRunOrchestrator)
-      assert RouterBridge.active_run("agent:x:main") == :none
+      assert RouterBridge.active_run("agent:x:main") == {:error, :unavailable}
     end
 
     test "list_active_sessions/0 delegates to router when configured" do
       :ok = RouterBridge.configure(router: RouterBridgeTestRouter)
 
       assert RouterBridge.list_active_sessions() ==
-               [%{session_key: "agent:bridge:main", run_id: "run_bridge"}]
+               {:ok, [%{session_key: "agent:bridge:main", run_id: "run_bridge"}]}
 
       assert_receive :list_active_sessions
     end
 
-    test "list_active_sessions/0 fails soft when router is unavailable" do
+    test "list_active_sessions/0 reports unavailable when no router is configured" do
       :ok = RouterBridge.configure(run_orchestrator: RouterBridgeTestRunOrchestrator)
-      assert RouterBridge.list_active_sessions() == []
+      assert RouterBridge.list_active_sessions() == {:error, :unavailable}
     end
   end
 
@@ -246,12 +261,15 @@ defmodule LemonCore.RouterBridgeTest do
       assert {:error, :unavailable} = RouterBridge.keep_run_alive("run-dead", :continue)
     end
 
-    test "the query functions fall back to their soft values" do
+    test "the query functions report unavailable instead of a soft answer" do
+      # "Not busy" for a router that cannot be reached would let a caller start
+      # work it would otherwise have queued; the caller decides what unknown
+      # means for it.
       :ok = RouterBridge.configure(router: BridgeDeadRouter)
 
-      assert RouterBridge.session_busy?("agent:dead:main") == false
-      assert RouterBridge.active_run("agent:dead:main") == :none
-      assert RouterBridge.list_active_sessions() == []
+      assert RouterBridge.session_busy?("agent:dead:main") == {:error, :unavailable}
+      assert RouterBridge.active_run("agent:dead:main") == {:error, :unavailable}
+      assert RouterBridge.list_active_sessions() == {:error, :unavailable}
     end
 
     test "a timeout is unavailable too, since the work was not taken either way" do
@@ -277,8 +295,71 @@ defmodule LemonCore.RouterBridgeTest do
       # retry loop over a bug that will fail identically every time.
       :ok = RouterBridge.configure(router: BridgeRaisingRouter)
 
-      assert {:error, %RuntimeError{message: "router blew up"}} =
+      log =
+        capture_log(fn ->
+          assert {:error, %RuntimeError{message: "router blew up"}} =
+                   RouterBridge.handle_inbound(%{any: :message})
+        end)
+
+      assert log =~ "RouterBridge router handle_inbound/1 raised"
+      assert log =~ "router blew up"
+    end
+
+    test "a callback the router left at its default is reported as not implemented" do
+      :ok = RouterBridge.configure(router: BridgeRaisingRouter)
+
+      assert {:error, %LemonCore.RouterBridge.NotImplementedError{function: :keep_run_alive}} =
+               RouterBridge.keep_run_alive("run-1", :continue)
+    end
+  end
+
+  describe "a router that returns a malformed command result" do
+    setup do
+      :ok = RouterBridge.configure(router: BridgeMalformedCommandRouter)
+      :ok
+    end
+
+    test "handle_inbound/1 does not reinterpret false as success" do
+      assert {:error, {:unexpected_answer, false}} =
                RouterBridge.handle_inbound(%{any: :message})
+    end
+
+    test "abort_session/2 does not reinterpret nil as success" do
+      assert {:error, {:unexpected_answer, nil}} =
+               RouterBridge.abort_session("agent:malformed:main")
+    end
+
+    test "abort_run/2 does not reinterpret an arbitrary atom as success" do
+      assert {:error, {:unexpected_answer, :banana}} = RouterBridge.abort_run("run-malformed")
+    end
+
+    test "keep_run_alive/2 does not reinterpret an unexpected ok tuple as success" do
+      assert {:error, {:unexpected_answer, {:ok, :unexpected_payload}}} =
+               RouterBridge.keep_run_alive("run-malformed", :continue)
+    end
+  end
+
+  describe "configure/1 validation" do
+    test "rejects an implementation that is not loadable" do
+      assert {:error, {:invalid_implementation, :router, {:not_loadable, No.Such.Router}}} =
+               RouterBridge.configure(router: No.Such.Router)
+    end
+
+    test "rejects an implementation missing callbacks and changes nothing" do
+      :ok = RouterBridge.configure(router: RouterBridgeTestRouter)
+
+      assert {:error,
+              {:invalid_implementation, :router,
+               {:missing_callbacks, RouterBridgeTestRunOrchestrator, missing}}} =
+               RouterBridge.configure(router: RouterBridgeTestRunOrchestrator)
+
+      assert Keyword.has_key?(missing, :handle_inbound)
+      assert RouterBridge.active_run("agent:bridge:main") == {:ok, "run_for_agent:bridge:main"}
+
+      assert {:error,
+              {:invalid_implementation, :run_orchestrator,
+               {:missing_callbacks, BridgeRaisingRouter, [submit: 1]}}} =
+               RouterBridge.configure(run_orchestrator: BridgeRaisingRouter)
     end
   end
 

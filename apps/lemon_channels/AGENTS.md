@@ -77,7 +77,7 @@ share a group and are never delivered concurrently to prevent reordering.
 | `lib/lemon_channels/gateway_config.ex` | `LemonChannels.GatewayConfig` | Channels-local config facade. Prefers `:lemon_gateway` full-replacement runtime config when present, then delegates to `LemonCore.GatewayConfig`. |
 | `lib/lemon_channels/checkpoint_status_message.ex` | `LemonChannels.CheckpointStatusMessage` | Shared redacted `/checkpoint` and `/rollback` formatter/action handler for Telegram and Discord. Calls `LemonCore.Checkpoint` for diff/restore and projects redacted lifecycle event counts and browsable event history while keeping ordinary chat free of unsolicited checkpoint notices, raw paths, file contents, and session ids. |
 | `lib/lemon_channels/kanban_status_message.ex` | `LemonChannels.KanbanStatusMessage` | Shared redacted `/kanban` command formatter for Telegram and Discord. Uses `LemonAgent.Workspace.KanbanStore` directly for board/task state and calls the automation dispatcher by configured module atom at runtime to keep compile-time boundaries clean. |
-| `lib/lemon_channels/runtime.ex` | `LemonChannels.Runtime` | Bridge to LemonRouter: `cancel_session`, `cancel_by_progress_msg`, `cancel_by_run_id`, `keep_run_alive`, `session_busy?` via `LemonCore.RouterBridge` |
+| `lib/lemon_channels/runtime.ex` | `LemonChannels.Runtime` | Channel side of `LemonCore.RouterBridge`; cancel/keepalive return `:ok | {:error, term()}` and busy checks return `{:ok, boolean()} | {:error, term()}` without soft-success fallbacks |
 
 ### Outbox Pipeline
 
@@ -554,7 +554,8 @@ Top-level channel resume parsing and selection accept only native `lemon` tokens
 
 ## Runtime Bridge
 
-Thin wrappers to interact with `LemonRouter` without compile-time dependency:
+Router interaction without a compile-time dependency. Outcomes are returned
+unchanged; adapters own the user-facing unavailable policy:
 
 ```elixir
 LemonChannels.Runtime.cancel_session(session_key)

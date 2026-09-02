@@ -13,6 +13,13 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - MCP configuration validation now rejects non-boolean OAuth token-persistence
   flags and empty token secret names consistently before HTTP or SSE sources
   reach runtime startup.
+- `LemonCore.RouterBridge` query calls now distinguish an idle router from an
+  unavailable one: `session_busy?/1`, `active_run/1`, and
+  `list_active_sessions/0` return explicit result tuples/errors, and command
+  callbacks accept only `:ok` or `{:error, reason}`. All channel, web, A2A,
+  control-plane, and portable-command callers were migrated atomically;
+  user-facing run controls no longer report success for a request the router
+  did not accept.
 - Hermes skill install/update requests no longer block their own control-plane
   WebSocket while waiting for approval or Git work. Approval events and
   liveness probes remain deliverable, and the TUI keeps the correlated skill

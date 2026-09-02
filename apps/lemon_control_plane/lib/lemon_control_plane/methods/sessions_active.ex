@@ -24,23 +24,25 @@ defmodule LemonControlPlane.Methods.SessionsActive do
     if is_nil(session_key) or session_key == "" do
       {:error, {:invalid_request, "sessionKey is required", nil}}
     else
-      run_id =
-        case LemonCore.RouterBridge.active_run(session_key) do
-          {:ok, active_run_id} -> active_run_id
-          :none -> nil
-        end
+      case LemonCore.RouterBridge.active_run(session_key) do
+        {:ok, run_id} ->
+          {:ok, response(session_key, run_id)}
 
-      {:ok,
-       %{
-         "sessionKey" => session_key,
-         "runId" => run_id,
-         "summary" => summary(session_key, run_id)
-       }}
+        :none ->
+          {:ok, response(session_key, nil)}
+
+        {:error, reason} ->
+          {:error, {:unavailable, "router unavailable: #{inspect(reason)}", nil}}
+      end
     end
-  rescue
-    _ ->
-      key = (params || %{})["sessionKey"]
-      {:ok, %{"sessionKey" => key, "runId" => nil, "summary" => summary(key, nil)}}
+  end
+
+  defp response(session_key, run_id) do
+    %{
+      "sessionKey" => session_key,
+      "runId" => run_id,
+      "summary" => summary(session_key, run_id)
+    }
   end
 
   defp summary(session_key, run_id) do

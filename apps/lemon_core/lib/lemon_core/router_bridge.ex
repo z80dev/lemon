@@ -1,49 +1,64 @@
 defmodule LemonCore.RouterBridge do
   @moduledoc """
-  Optional bridge to `:lemon_router` without compile-time coupling.
+  Bridge to `:lemon_router` without compile-time coupling.
 
-  Channel adapters and other producers can forward inbound messages and submit
-  runs without depending on `:lemon_router`. `:lemon_router` configures the
-  bridge at runtime.
+  Channel adapters and other producers forward inbound messages and submit runs
+  through this module; `:lemon_router` registers its implementation at boot
+  with `configure/1`. Two roles are registered, each defined by a behaviour:
 
-  `submit_run/1` accepts a canonical `%LemonCore.RunRequest{}`.
+    * `:router` — `LemonCore.RouterBridge.Router`: inbound routing, aborts,
+      keep-alive decisions and session queries.
+    * `:run_orchestrator` — `LemonCore.RouterBridge.RunOrchestrator`:
+      `submit/1` for a canonical `%LemonCore.RunRequest{}`.
+
+  `configure/1` validates each module with `LemonCore.Contract.validate/2`, so
+  a registered implementation is loadable and complete and the bridge calls it
+  directly. A partial implementation, typically a test double, uses
+  `use LemonCore.RouterBridge.Router` to get overridable defaults that fail
+  visibly instead of answering an invented value.
 
   ## Failure contract
 
-  Every function here answers rather than raises, because callers are channel
+  Every function answers rather than raises, because callers are channel
   adapters and webhook handlers for whom a router problem is not their problem
-  to crash over. Three failure modes, deliberately distinguished:
+  to crash over. Three failure modes, deliberately distinguished, and none of
+  them silent:
 
-    * **Not configured** — no module registered for the role. The documented
-      fallback: `{:error, :unavailable}`, or the soft value (`false`, `:none`,
-      `[]`) for the query functions.
-    * **Reached and raised** — the router ran in the caller's process and threw
-      an exception. Answered `{:error, exception}`, which is more useful than
-      `:unavailable` because the router *was* available; something else failed.
-    * **Configured but not running** — the router module exists, but the process
-      behind it does not answer, so `GenServer.call` **exits**. An exit is not
-      an exception and `rescue` does not catch it: before this was handled, that
-      exit travelled into whatever called the bridge, which for an HTTP handler
-      meant an opaque 500 and, for a mail webhook, a silently dropped message.
-      Now answered `{:error, :unavailable}` — the same as never having been
-      configured, because from the caller's side it is the same situation: the
-      router did not take this.
+    * **Not configured** — no module registered for the role:
+      `{:error, :unavailable}`.
+    * **Reached and raised** — the router ran in the caller's process and
+      raised: `{:error, exception}`. The exception is logged with its
+      stacktrace at error level, because it is a bug in the router (or a
+      default the router did not override), not an availability problem, and
+      a bug that only ever surfaces as a tuple is a bug nobody sees.
+    * **Configured but not running** — the module exists but the process
+      behind it does not answer, so the call exits: `{:error, :unavailable}`,
+      logged at warning level with the exit reason. A timeout, a dead process
+      and a mid-call crash differ in cause but not in consequence: the work
+      was not accepted and the caller's only real decision is whether to
+      retry.
 
-  Exits are collapsed to `:unavailable` rather than reported in detail on
-  purpose. A timeout, a dead process and a mid-call crash differ in cause but
-  not in consequence — the work was not accepted and the caller's only real
-  decision is whether to retry. Reporting them separately invites callers to
-  match on `:unavailable` alone and silently mishandle the rest, which is
-  exactly the bug this contract exists to prevent. Callers that want the detail
-  should log at their own layer, where they know what the failure means.
+  The query functions follow the same rule. They used to answer a soft value
+  (`false`, `:none`, `[]`) for a router they could not reach, which let a
+  caller start work it would otherwise have queued and hid the outage; they
+  now answer `{:error, :unavailable}` like everything else, and deciding what
+  an unknown router state means is the caller's job.
 
   Throws are *not* caught: no router throws, and one that did would be a bug
   worth surfacing rather than flattening into "unavailable".
   """
 
-  @bridge_key :router_bridge
+  alias LemonCore.Contract
   alias LemonCore.RunRequest
-  @config_keys [:run_orchestrator, :router]
+
+  require Logger
+
+  @bridge_key :router_bridge
+  @roles [
+    run_orchestrator: LemonCore.RouterBridge.RunOrchestrator,
+    router: LemonCore.RouterBridge.Router
+  ]
+  @config_keys Keyword.keys(@roles)
 
   @type config :: %{
           optional(:run_orchestrator) => module(),
@@ -51,6 +66,11 @@ defmodule LemonCore.RouterBridge do
         }
 
   @type configure_mode :: :replace | :merge | :safe_merge
+  @type unavailable :: {:error, :unavailable}
+
+  @doc "The behaviour each configurable role must implement."
+  @spec roles() :: keyword(module())
+  def roles, do: @roles
 
   @spec configure(keyword()) :: :ok | {:error, term()}
   def configure(opts) when is_list(opts) do
@@ -64,6 +84,10 @@ defmodule LemonCore.RouterBridge do
   - `:replace` - replace configured keys directly
   - `:merge` - merge with existing config, preserving unspecified keys
   - `:safe_merge` - like merge, but rejects conflicting non-nil overrides
+
+  Every non-nil module is validated against its role's behaviour; a module
+  that is not loadable or lacks a callback is rejected as
+  `{:error, {:invalid_implementation, role, reason}}` and nothing is changed.
   """
   @spec configure(keyword(), keyword()) :: :ok | {:error, term()}
   def configure(opts, config_opts) when is_list(opts) and is_list(config_opts) do
@@ -85,178 +109,111 @@ defmodule LemonCore.RouterBridge do
     configure(opts, mode: :safe_merge)
   end
 
-  @spec submit_run(RunRequest.t()) ::
-          {:ok, binary()} | {:error, :unavailable} | {:error, term()}
+  @spec submit_run(RunRequest.t()) :: {:ok, binary()} | unavailable() | {:error, term()}
   def submit_run(%RunRequest{} = params) do
-    do_submit_run(params)
+    call(:run_orchestrator, :submit, [params])
   end
 
-  defp do_submit_run(params) do
-    case impl(:run_orchestrator) do
-      nil ->
-        {:error, :unavailable}
-
-      mod ->
-        if Code.ensure_loaded?(mod) and function_exported?(mod, :submit, 1) do
-          apply(mod, :submit, [params])
-        else
-          {:error, :unavailable}
-        end
-    end
-  rescue
-    e -> {:error, e}
-  catch
-    :exit, _reason -> {:error, :unavailable}
-  end
-
-  @spec handle_inbound(term()) :: :ok | {:error, :unavailable} | {:error, term()}
+  @spec handle_inbound(term()) :: :ok | unavailable() | {:error, term()}
   def handle_inbound(msg) do
-    case impl(:router) do
-      nil ->
-        {:error, :unavailable}
-
-      mod ->
-        if Code.ensure_loaded?(mod) and function_exported?(mod, :handle_inbound, 1) do
-          _ = apply(mod, :handle_inbound, [msg])
-          :ok
-        else
-          {:error, :unavailable}
-        end
-    end
-  rescue
-    e -> {:error, e}
-  catch
-    :exit, _reason -> {:error, :unavailable}
+    :router
+    |> call(:handle_inbound, [msg])
+    |> expect_ok()
   end
 
-  @spec abort_session(binary(), term()) :: :ok | {:error, :unavailable} | {:error, term()}
+  @spec abort_session(binary(), term()) :: :ok | unavailable() | {:error, term()}
   def abort_session(session_key, reason \\ :user_requested) when is_binary(session_key) do
-    case impl(:router) do
-      nil ->
-        {:error, :unavailable}
-
-      mod ->
-        if Code.ensure_loaded?(mod) and function_exported?(mod, :abort, 2) do
-          _ = apply(mod, :abort, [session_key, reason])
-          :ok
-        else
-          {:error, :unavailable}
-        end
-    end
-  rescue
-    e -> {:error, e}
-  catch
-    :exit, _reason -> {:error, :unavailable}
+    :router
+    |> call(:abort, [session_key, reason])
+    |> expect_ok()
   end
 
-  @spec abort_run(binary(), term()) :: :ok | {:error, :unavailable} | {:error, term()}
+  @spec abort_run(binary(), term()) :: :ok | unavailable() | {:error, term()}
   def abort_run(run_id, reason \\ :user_requested) when is_binary(run_id) do
-    case impl(:router) do
-      nil ->
-        {:error, :unavailable}
-
-      mod ->
-        if Code.ensure_loaded?(mod) and function_exported?(mod, :abort_run, 2) do
-          _ = apply(mod, :abort_run, [run_id, reason])
-          :ok
-        else
-          {:error, :unavailable}
-        end
-    end
-  rescue
-    e -> {:error, e}
-  catch
-    :exit, _reason -> {:error, :unavailable}
+    :router
+    |> call(:abort_run, [run_id, reason])
+    |> expect_ok()
   end
 
-  @spec keep_run_alive(binary(), :continue | :cancel) ::
-          :ok | {:error, :unavailable} | {:error, term()}
+  @spec keep_run_alive(binary(), :continue | :cancel) :: :ok | unavailable() | {:error, term()}
   def keep_run_alive(run_id, decision \\ :continue)
       when is_binary(run_id) and decision in [:continue, :cancel] do
-    case impl(:router) do
+    :router
+    |> call(:keep_run_alive, [run_id, decision])
+    |> expect_ok()
+  end
+
+  @doc """
+  Whether the session has an active run.
+
+  `{:error, :unavailable}` when the router cannot be consulted: "not busy"
+  would be the wrong answer, since a caller may then start work it would
+  otherwise have queued.
+  """
+  @spec session_busy?(binary()) :: {:ok, boolean()} | unavailable() | {:error, term()}
+  def session_busy?(session_key) when is_binary(session_key) and session_key != "" do
+    case call(:router, :session_busy?, [session_key]) do
+      busy? when is_boolean(busy?) -> {:ok, busy?}
+      {:error, _} = error -> error
+      other -> {:error, {:unexpected_answer, other}}
+    end
+  end
+
+  @spec active_run(binary()) :: {:ok, binary()} | :none | unavailable() | {:error, term()}
+  def active_run(session_key) when is_binary(session_key) and session_key != "" do
+    case call(:router, :active_run, [session_key]) do
+      {:ok, run_id} when is_binary(run_id) -> {:ok, run_id}
+      :none -> :none
+      {:error, _} = error -> error
+      other -> {:error, {:unexpected_answer, other}}
+    end
+  end
+
+  @spec list_active_sessions() ::
+          {:ok, [%{session_key: binary(), run_id: binary()}]} | unavailable() | {:error, term()}
+  def list_active_sessions do
+    case call(:router, :list_active_sessions, []) do
+      sessions when is_list(sessions) -> {:ok, sessions}
+      {:error, _} = error -> error
+      other -> {:error, {:unexpected_answer, other}}
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # Dispatch
+  # ---------------------------------------------------------------------------
+
+  defp call(role, function, args) do
+    case impl(role) do
       nil ->
         {:error, :unavailable}
 
-      mod ->
-        if Code.ensure_loaded?(mod) and function_exported?(mod, :keep_run_alive, 2) do
-          _ = apply(mod, :keep_run_alive, [run_id, decision])
-          :ok
-        else
-          {:error, :unavailable}
-        end
+      module ->
+        apply(module, function, args)
     end
   rescue
-    e -> {:error, e}
+    exception ->
+      Logger.error(
+        "RouterBridge #{role} #{function}/#{length(args)} raised: " <>
+          Exception.format(:error, exception, __STACKTRACE__)
+      )
+
+      {:error, exception}
   catch
-    :exit, _reason -> {:error, :unavailable}
+    :exit, reason ->
+      Logger.warning(
+        "RouterBridge #{role} #{function}/#{length(args)} unavailable: #{inspect(reason)}"
+      )
+
+      {:error, :unavailable}
   end
 
-  @spec session_busy?(binary()) :: boolean()
-  def session_busy?(session_key) when is_binary(session_key) and session_key != "" do
-    case impl(:router) do
-      nil ->
-        false
-
-      mod ->
-        Code.ensure_loaded?(mod) and function_exported?(mod, :session_busy?, 1) and
-          apply(mod, :session_busy?, [session_key])
-    end
-  rescue
-    _ -> false
-  catch
-    # "Not busy" is the wrong answer if the router is merely unreachable — a
-    # caller may start work it would otherwise have queued. It is still the
-    # answer this function has always given for a router it cannot consult, and
-    # the boolean return has nowhere to put "don't know". Callers that must not
-    # act on a false negative should ask the router directly.
-    :exit, _reason -> false
-  end
-
-  def session_busy?(_), do: false
-
-  @spec active_run(binary()) :: {:ok, binary()} | :none
-  def active_run(session_key) when is_binary(session_key) and session_key != "" do
-    case impl(:router) do
-      nil ->
-        :none
-
-      mod ->
-        if Code.ensure_loaded?(mod) and function_exported?(mod, :active_run, 1) do
-          apply(mod, :active_run, [session_key])
-        else
-          :none
-        end
-    end
-  rescue
-    _ -> :none
-  catch
-    :exit, _reason -> :none
-  end
-
-  def active_run(_), do: :none
-
-  @spec list_active_sessions() :: [%{session_key: binary(), run_id: binary()}]
-  def list_active_sessions do
-    case impl(:router) do
-      nil ->
-        []
-
-      mod ->
-        if Code.ensure_loaded?(mod) and function_exported?(mod, :list_active_sessions, 0) do
-          apply(mod, :list_active_sessions, [])
-        else
-          []
-        end
-    end
-  rescue
-    _ -> []
-  catch
-    :exit, _reason -> []
-  end
+  defp expect_ok(:ok), do: :ok
+  defp expect_ok({:error, _reason} = error), do: error
+  defp expect_ok(other), do: {:error, {:unexpected_answer, other}}
 
   defp impl(key) do
-    config = current_config()
-    Map.get(config, key)
+    Map.get(current_config(), key)
   end
 
   defp current_config do
@@ -267,12 +224,18 @@ defmodule LemonCore.RouterBridge do
   end
 
   defp validate_config(config) do
-    Enum.reduce_while(config, :ok, fn {key, mod}, :ok ->
-      if key in @config_keys and (is_nil(mod) or is_atom(mod)) do
+    Enum.reduce_while(config, :ok, fn
+      {key, nil}, :ok when key in @config_keys ->
         {:cont, :ok}
-      else
-        {:halt, {:error, {:invalid_module, key, mod}}}
-      end
+
+      {key, module}, :ok when key in @config_keys ->
+        case Contract.validate(module, Keyword.fetch!(@roles, key)) do
+          :ok -> {:cont, :ok}
+          {:error, reason} -> {:halt, {:error, {:invalid_implementation, key, reason}}}
+        end
+
+      {key, module}, :ok ->
+        {:halt, {:error, {:invalid_module, key, module}}}
     end)
   end
 
