@@ -59,7 +59,7 @@ Inbound transport
 - Router may reference `LemonChannels.Dispatcher`, but not `LemonChannels.OutboundPayload`.
 - Router may emit `LemonCore.DeliveryIntent`, but channel renderers decide payload shape.
 - Router builds `%LemonCore.ExecutionCommand{}` and calls the configured `LemonCore.EngineRuntime`; it must not construct `%LemonGateway.ExecutionRequest{}` or call `LemonGateway.Runtime` directly.
-- Run-specific aborts are serialized through `RunOrchestrator` before coordinator/process cancellation. Its bounded tombstone map rejects a fixed run ID when abort wins the submission race; when submission wins, the same serialization guarantees normal cancellation sees the accepted run. Tombstone registration failure must propagate so the bridge can report an unknown mutation outcome; it must never be swallowed into `:ok`.
+- Run-specific aborts are serialized through `RunOrchestrator` before coordinator/process cancellation. Its bounded in-memory tombstone map is backed by a compact durable run-ID fence: expiry may stop active cancellation/cache behavior, but must never make an aborted fixed ID executable. When submission wins, the same serialization guarantees normal cancellation sees the accepted run. Tombstone registration failure must propagate so the bridge can report an unknown mutation outcome; it must never be swallowed into `:ok`.
 - Router owns pending-compaction prompt mutation.
 - Fresh pending-compaction markers are prepared before submission but consumed
   only after `SessionCoordinator.submit/2` accepts the run; submission errors

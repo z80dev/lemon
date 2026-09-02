@@ -82,11 +82,13 @@ defmodule LemonChannels.Adapters.Email.Webhook do
   end
 
   defp accept(conn) do
+    replay_content_identity = replay_content_identity(conn.body_params)
+
     case Email.normalize_inbound(conn.body_params) do
       {:ok, message} ->
         case reserve(message) do
           {:duplicate, receipt} -> duplicate_receipt(conn, receipt)
-          {:new, reservation} -> handoff(conn, message, reservation)
+          {:new, reservation} -> handoff(conn, message, reservation, replay_content_identity)
           {:error, :missing_message_id} -> Plug.Conn.send_resp(conn, 400, "missing message id")
           {:error, :idempotency_unavailable} -> Plug.Conn.send_resp(conn, 503, "unavailable")
         end
@@ -97,8 +99,8 @@ defmodule LemonChannels.Adapters.Email.Webhook do
     end
   end
 
-  defp handoff(conn, message, reservation) do
-    case deliver_to_router(message, reservation) do
+  defp handoff(conn, message, reservation, replay_content_identity) do
+    case deliver_to_router(message, reservation, replay_content_identity) do
       :ok ->
         case remember(reservation, "accepted") do
           :ok ->
@@ -301,12 +303,49 @@ defmodule LemonChannels.Adapters.Email.Webhook do
   # RouterBridge.submit_run/1. A provider Message-ID supplies a stable run
   # reference so ambiguous submissions can be reconciled without inventing a
   # second identity.
-  defp deliver_to_router(message, reservation),
+  defp deliver_to_router(message, reservation, replay_content_identity),
     do:
       Runtime.submit_inbound(message,
         run_id: reservation.run_id,
-        replay_identity: "email:" <> reservation.key
+        replay_identity: "email:" <> reservation.key,
+        replay_content_identity: replay_content_identity
       )
+
+  defp replay_content_identity(body_params) do
+    body_params
+    |> canonical_delivery_value()
+    |> :erlang.term_to_binary([:deterministic])
+    |> then(&:crypto.hash(:sha256, &1))
+    |> Base.encode16(case: :lower)
+  end
+
+  defp canonical_delivery_value(%Plug.Upload{} = upload) do
+    %{
+      filename: upload.filename,
+      content_type: upload.content_type,
+      content_sha256: file_digest(upload.path)
+    }
+  end
+
+  defp canonical_delivery_value(value) when is_map(value) do
+    value
+    |> Enum.map(fn {key, item} -> {key, canonical_delivery_value(item)} end)
+    |> Map.new()
+  end
+
+  defp canonical_delivery_value(value) when is_list(value),
+    do: Enum.map(value, &canonical_delivery_value/1)
+
+  defp canonical_delivery_value(value), do: value
+
+  defp file_digest(path) when is_binary(path) do
+    case File.read(path) do
+      {:ok, bytes} -> Base.encode16(:crypto.hash(:sha256, bytes), case: :lower)
+      {:error, _reason} -> :unreadable
+    end
+  end
+
+  defp file_digest(_path), do: :unreadable
 
   defp secure_equal?(nil, _token), do: false
 

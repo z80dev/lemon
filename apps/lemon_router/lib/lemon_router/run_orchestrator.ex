@@ -34,6 +34,7 @@ defmodule LemonRouter.RunOrchestrator do
   @abort_tombstone_table :router_abort_tombstones
   @request_identity_meta_key :router_request_identity
   @replay_identity_meta_key :router_replay_identity
+  @replay_content_identity_meta_key :router_replay_content_identity
   @run_admission_retention_ms 86_400_000
   @receipt_cleanup_interval_ms 60_000
 
@@ -276,7 +277,7 @@ defmodule LemonRouter.RunOrchestrator do
       {:ok, %Submission{} = submission} ->
         LemonCore.EventBridge.subscribe_run(run_id)
 
-        case SessionCoordinator.submit(submission.conversation_key, submission) do
+        case session_coordinator_mod().submit(submission.conversation_key, submission) do
           :ok ->
             execution_request = submission.execution_request
             meta = submission.meta || %{}
@@ -369,12 +370,15 @@ defmodule LemonRouter.RunOrchestrator do
   end
 
   defp claim_admission(params, identity, retention_ms) do
+    claimed_at_ms = System.system_time(:millisecond)
+
     entry = %{
       run_id: params.run_id,
       session_key: params.session_key,
       identity: identity,
       state: "claimed",
-      claimed_at_ms: System.system_time(:millisecond),
+      claimed_at_ms: claimed_at_ms,
+      expires_at_ms: claimed_at_ms + retention_ms,
       retention_ms: retention_ms
     }
 
@@ -423,21 +427,11 @@ defmodule LemonRouter.RunOrchestrator do
   end
 
   defp continue_accepted_admission(params, identity, admission, state) do
-    expires_at_ms = admission_expires_at_ms(admission, state.run_admission_retention_ms)
+    _ = admission
+    cache_until_ms = System.system_time(:millisecond) + state.run_admission_retention_ms
 
-    if expires_at_ms > System.system_time(:millisecond) do
-      {{:ok, params.run_id},
-       cache_accepted_admission(state, params.run_id, identity, expires_at_ms)}
-    else
-      case Store.delete(@run_admission_table, params.run_id) do
-        :ok ->
-          state = %{state | accepted_run_ids: Map.delete(state.accepted_run_ids, params.run_id)}
-          submit_idempotently(params, state)
-
-        _failure ->
-          {{:error, :outcome_unknown}, state}
-      end
-    end
+    {{:ok, params.run_id},
+     cache_accepted_admission(state, params.run_id, identity, cache_until_ms)}
   end
 
   # A durable terminal run is evidence that an earlier owner crossed the
@@ -493,8 +487,26 @@ defmodule LemonRouter.RunOrchestrator do
                 {{:error, :outcome_unknown}, state}
             end
 
-          error ->
-            {error, state}
+          {:error, :outcome_unknown} ->
+            {{:error, :outcome_unknown}, state}
+
+          {:error, _reason} = error ->
+            # No enqueue acknowledgement was returned, so this is the one
+            # safe point at which the durable claim can be made retryable.
+            # If that rollback cannot itself be durably recorded, the caller
+            # must treat the mutation as ambiguous.
+            case Store.compare_and_swap(
+                   @run_admission_table,
+                   params.run_id,
+                   submitting,
+                   admission
+                 ) do
+              :ok -> {error, state}
+              _failure -> {{:error, :outcome_unknown}, state}
+            end
+
+          _malformed_acknowledgement ->
+            {{:error, :outcome_unknown}, state}
         end
 
       _failure ->
@@ -650,27 +662,48 @@ defmodule LemonRouter.RunOrchestrator do
           MapHelpers.get_key(admission, :accepted_at_ms) ||
             MapHelpers.get_key(admission, :claimed_at_ms) || 0
 
-        base_ms + retention_ms
+        stored_retention_ms = MapHelpers.get_key(admission, :retention_ms)
+
+        effective_retention_ms =
+          if is_integer(stored_retention_ms), do: stored_retention_ms, else: retention_ms
+
+        base_ms + effective_retention_ms
     end
   end
 
   defp request_identity(%RunRequest{} = params) do
     replay_identity = MapHelpers.get_key(params.meta || %{}, @replay_identity_meta_key)
 
+    replay_content_identity =
+      MapHelpers.get_key(params.meta || %{}, @replay_content_identity_meta_key)
+
     semantic_request =
       if is_binary(replay_identity) and replay_identity != "" do
+        # Transport retries deliberately bind their stable delivery identity
+        # to the user content and logical target, while excluding retry-local
+        # material such as request IDs, temporary attachment paths and a
+        # freshly-resolved allow-tools snapshot. Those values may change while
+        # replaying the same delivery and are not a new user request.
         %{
+          origin: params.origin,
           session_key: params.session_key,
+          agent_id: params.agent_id,
           replay_identity: replay_identity,
-          prompt: params.prompt
-        }
-      else
-        %{
-          session_key: params.session_key,
-          prompt: params.prompt,
-          images: params.images,
+          content: replay_content_identity || params.prompt,
           resume: params.resume
         }
+      else
+        # Direct callers have no independent delivery identity, so every
+        # execution-changing field is part of admission identity. Only the
+        # run ID and the derived identity itself are excluded.
+        params
+        |> Map.from_struct()
+        |> Map.delete(:run_id)
+        |> Map.update!(:meta, fn meta ->
+          meta
+          |> Map.delete(@request_identity_meta_key)
+          |> Map.delete(Atom.to_string(@request_identity_meta_key))
+        end)
       end
 
     semantic_request
@@ -744,18 +777,17 @@ defmodule LemonRouter.RunOrchestrator do
       {:ok, tombstone} when is_map(tombstone) ->
         expires_at_ms = MapHelpers.get_key(tombstone, :expires_at_ms)
 
-        if is_integer(expires_at_ms) and expires_at_ms > System.system_time(:millisecond) do
-          normalized = %{
-            reason: MapHelpers.get_key(tombstone, :reason),
-            expires_at_ms: expires_at_ms
-          }
+        normalized = %{
+          reason: MapHelpers.get_key(tombstone, :reason),
+          expires_at_ms: expires_at_ms
+        }
 
-          {:active, normalized,
-           %{state | abort_tombstones: Map.put(state.abort_tombstones, run_id, normalized)}}
-        else
-          _ = Store.delete(@abort_tombstone_table, run_id)
-          {:none, %{state | abort_tombstones: Map.delete(state.abort_tombstones, run_id)}}
-        end
+        next_state =
+          if is_integer(expires_at_ms) and expires_at_ms > System.system_time(:millisecond),
+            do: %{state | abort_tombstones: Map.put(state.abort_tombstones, run_id, normalized)},
+            else: %{state | abort_tombstones: Map.delete(state.abort_tombstones, run_id)}
+
+        {:active, normalized, next_state}
 
       {:error, _reason} ->
         {:error, state}
@@ -786,12 +818,10 @@ defmodule LemonRouter.RunOrchestrator do
 
     if now_ms - state.last_receipt_cleanup_ms >= state.receipt_cleanup_interval_ms do
       cleanup_expired_rows(@run_admission_table, now_ms, fn entry ->
-        MapHelpers.get_key(entry, :state) == "accepted" and
-          expired_at?(MapHelpers.get_key(entry, :expires_at_ms), now_ms)
-      end)
+        state = MapHelpers.get_key(entry, :state)
 
-      cleanup_expired_rows(@abort_tombstone_table, now_ms, fn entry ->
-        expired_at?(MapHelpers.get_key(entry, :expires_at_ms), now_ms)
+        state == "claimed" and
+          expired_at?(admission_expires_at_ms(entry, @run_admission_retention_ms), now_ms)
       end)
 
       %{

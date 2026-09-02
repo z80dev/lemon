@@ -431,6 +431,43 @@ defmodule LemonChannels.Adapters.Email.WebhookTest do
       assert String.starts_with?(run_id, "run_email_")
     end
 
+    test "attachment retries keep a stable content identity across temporary upload paths" do
+      configure(webhook_token: "s3cret")
+      route_to(AcceptingRouter)
+      message_id = "attachment-replay@example.com"
+      suffix = System.unique_integer([:positive])
+      first_path = Path.join(System.tmp_dir!(), "email-upload-first-#{suffix}")
+      second_path = Path.join(System.tmp_dir!(), "email-upload-second-#{suffix}")
+      File.write!(first_path, "identical attachment bytes")
+      File.write!(second_path, "identical attachment bytes")
+      on_exit(fn -> Enum.each([first_path, second_path], &File.rm/1) end)
+
+      payload = fn path ->
+        authorized_payload(message_id)
+        |> Map.update!(:body_params, fn body ->
+          Map.put(body, "attachments", [
+            %Plug.Upload{path: path, filename: "notes.txt", content_type: "text/plain"}
+          ])
+        end)
+      end
+
+      assert %{status: 202} = payload.(first_path) |> Webhook.handle_inbound()
+      assert_received {:routed, %RunRequest{} = first_request}
+
+      digest = Base.encode16(:crypto.hash(:sha256, message_id), case: :lower)
+      table = :email_inbound_idempotency
+      receipt = LemonCore.Store.get(table, digest)
+      assert :ok = LemonCore.Store.put(table, digest, %{receipt | "state" => "rejected"})
+
+      assert %{status: 202} = payload.(second_path) |> Webhook.handle_inbound()
+      assert_received {:routed, %RunRequest{} = second_request}
+
+      refute first_request.prompt == second_request.prompt
+
+      assert first_request.meta.router_replay_content_identity ==
+               second_request.meta.router_replay_content_identity
+    end
+
     test "answers 400 for an authorized payload it cannot make sense of" do
       configure(webhook_token: "s3cret")
 

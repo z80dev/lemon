@@ -11,6 +11,9 @@ defmodule LemonGateway.Transports.Webhook.Idempotency do
   @table :webhook_idempotency
   @response_table :webhook_idempotency_responses
   @reservation_lease_ms 60_000
+  @response_retention_ms 86_400_000
+  @sweep_interval_ms 60_000
+  @last_sweep_key {__MODULE__, :last_response_sweep_ms}
 
   @spec table() :: atom()
   def table, do: @table
@@ -18,10 +21,52 @@ defmodule LemonGateway.Transports.Webhook.Idempotency do
   @doc false
   def response_table, do: @response_table
 
+  @doc false
+  def sweep_expired(
+        now_ms \\ System.system_time(:millisecond),
+        retention_ms \\ @response_retention_ms
+      )
+      when is_integer(now_ms) and is_integer(retention_ms) and retention_ms >= 0 do
+    cutoff_ms = now_ms - retention_ms
+
+    @response_table
+    |> Store.list()
+    |> Enum.each(fn
+      {{store_key, reservation_id} = receipt_key, receipt} when is_map(receipt) ->
+        if Request.int_value(Request.fetch(receipt, :stored_at_ms), now_ms) <= cutoff_ms do
+          sweep_response_receipt(store_key, reservation_id, receipt_key)
+        end
+
+      _ ->
+        :ok
+    end)
+
+    @table
+    |> Store.list()
+    |> Enum.each(fn
+      {store_key, entry} when is_map(entry) ->
+        if Request.normalize_blank(Request.fetch(entry, :state)) == "completed" and
+             Request.int_value(Request.fetch(entry, :updated_at_ms), now_ms) <= cutoff_ms do
+          Store.delete(@table, store_key)
+        end
+
+      _ ->
+        :ok
+    end)
+
+    :ok
+  rescue
+    _ -> {:error, :idempotency_unavailable}
+  catch
+    _, _ -> {:error, :idempotency_unavailable}
+  end
+
   @spec context(Plug.Conn.t(), map(), binary(), map(), map()) ::
           {:ok, map() | nil} | {:duplicate, integer(), map()} | {:error, :idempotency_unavailable}
   def context(conn, _payload, integration_id, integration, webhook_config)
       when is_binary(integration_id) and is_map(integration) and is_map(webhook_config) do
+    _ = maybe_sweep_expired()
+
     case resolve_idempotency_key(conn, integration, webhook_config) do
       nil ->
         {:ok, nil}
@@ -234,6 +279,55 @@ defmodule LemonGateway.Transports.Webhook.Idempotency do
     _error -> {:error, :idempotency_unavailable}
   catch
     _kind, _reason -> {:error, :idempotency_unavailable}
+  end
+
+  defp sweep_response_receipt(store_key, reservation_id, receipt_key) do
+    case Store.fetch(@table, store_key) do
+      {:ok, %{} = primary} ->
+        if Request.fetch(primary, :reservation_id) == reservation_id do
+          with :ok <- Store.delete(@response_table, receipt_key),
+               :ok <- Store.delete(@table, store_key) do
+            :ok
+          end
+        else
+          Store.delete(@response_table, receipt_key)
+        end
+
+      {:ok, nil} ->
+        Store.delete(@response_table, receipt_key)
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp maybe_sweep_expired do
+    now_ms = System.system_time(:millisecond)
+    last_ms = :persistent_term.get(@last_sweep_key, 0)
+
+    if now_ms - last_ms >= @sweep_interval_ms do
+      case :global.trans({{__MODULE__, :response_sweep}, self()}, fn ->
+             current = :persistent_term.get(@last_sweep_key, 0)
+
+             if now_ms - current >= @sweep_interval_ms do
+               result = sweep_expired(now_ms, @response_retention_ms)
+               :persistent_term.put(@last_sweep_key, now_ms)
+               result
+             else
+               :ok
+             end
+           end) do
+        :aborted -> :ok
+        {:aborted, _} -> :ok
+        result -> result
+      end
+    else
+      :ok
+    end
+  rescue
+    _ -> :ok
+  catch
+    _, _ -> :ok
   end
 
   defp fallback_payload(entry) when is_map(entry) do

@@ -11723,7 +11723,9 @@ anything.
   `{:error, :outcome_unknown}` rather than definite unavailability. The email webhook durably
   retains the fixed Message-ID/run reservation and answers 200 `outcome unknown`, preventing a
   provider retry from duplicating work. Failures before a durable idempotency reservation exists
-  still return 503 and ask the provider to redeliver.
+  still return 503 and ask the provider to redeliver. Email replay content hashes upload bytes
+  rather than provider-generated temporary paths, and exact webhook response receipts are removed
+  with their completed primary reservations after the configured replay horizon.
 
 **Contract kit.** `apps/lemon_platform_test/test/compliance/email_plugin_test.exs` relied on
 `deliver/1` being inert. Its probe is now a `:reaction` payload — a kind email has no concept of,

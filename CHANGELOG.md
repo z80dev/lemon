@@ -16,11 +16,13 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   responses have an independent durable replay receipt. Ambiguous goal-loop
   submissions retain their fixed run ownership until reconciliation or an
   explicit hard stop.
-- Fixed run IDs now have durable semantic admission claims, bounded accepted
-  receipt retention, and persistent abort tombstones. Replays cannot cross
-  session or content identity, volatile delivery metadata does not create false
-  conflicts, and surviving run ownership is indexed without probing unrelated
-  run processes.
+- Fixed run IDs now have durable semantic admission claims and compact permanent
+  accepted/aborted outcome fences; only safe never-enqueued claims and volatile
+  caches expire. Replays cannot cross session, content, or execution identity,
+  transport-local attachment paths do not create false conflicts, and surviving
+  run ownership is indexed without probing unrelated run processes. Exact
+  webhook response receipts are swept together with their completed primary
+  reservation after the replay horizon.
 - Telegram memory-reflection and per-chat abort helpers no longer collapse
   router mutation failures into success-like results. Ambiguous cancel and
   keepalive callbacks now direct users to check run status before retrying,

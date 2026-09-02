@@ -303,6 +303,41 @@ defmodule LemonGateway.WebhookTransportTest do
              Webhook.idempotency_context_for_test(conn, %{}, integration_id, %{})
   end
 
+  test "expired exact response receipts are swept with their primary reservation" do
+    integration_id = "demo-response-retention-#{System.unique_integer([:positive])}"
+    idempotency_key = "response-retention-#{System.unique_integer([:positive])}"
+
+    conn =
+      Test.conn(:post, "/webhooks/#{integration_id}", "")
+      |> Conn.put_req_header("idempotency-key", idempotency_key)
+
+    assert {:ok, ctx} = Webhook.idempotency_context_for_test(conn, %{}, integration_id, %{})
+    assert :ok = Idempotency.store_response(ctx, 200, %{run_id: ctx.run_id, exact: true})
+
+    receipt_key = {ctx.store_key, ctx.reservation_id}
+    receipt = Store.get(Idempotency.response_table(), receipt_key)
+
+    assert :ok =
+             Store.put(Idempotency.response_table(), receipt_key, %{receipt | stored_at_ms: 0})
+
+    primary = Store.get(Webhook.idempotency_table_for_test(), ctx.store_key)
+
+    assert :ok =
+             Store.put(Webhook.idempotency_table_for_test(), ctx.store_key, %{
+               primary
+               | updated_at_ms: 0
+             })
+
+    assert :ok = Idempotency.sweep_expired(10, 1)
+    assert Store.get(Idempotency.response_table(), receipt_key) == nil
+    assert Store.get(Webhook.idempotency_table_for_test(), ctx.store_key) == nil
+
+    assert {:ok, replacement_ctx} =
+             Webhook.idempotency_context_for_test(conn, %{}, integration_id, %{})
+
+    refute replacement_ctx.reservation_id == ctx.reservation_id
+  end
+
   test "a sync submission without a durable response never replays generic accepted" do
     integration_id = "demo-sync-unavailable-#{System.unique_integer([:positive])}"
 

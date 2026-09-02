@@ -145,6 +145,21 @@ defmodule LemonRouter.RunOrchestratorTest do
     end
   end
 
+  defmodule AdmissionOutcomeCoordinator do
+    @moduledoc false
+
+    def submit(_conversation_key, _submission) do
+      case Application.fetch_env!(:lemon_router, :admission_outcome) do
+        {:return, value} -> value
+        {:raise, message} -> raise message
+        {:throw, value} -> throw(value)
+        {:exit, value} -> exit(value)
+      end
+    end
+
+    def abort_run(_run_id, _reason), do: :ok
+  end
+
   defmodule UnavailableRunStore do
     @moduledoc false
     def fetch(_run_id), do: {:error, :store_unavailable}
@@ -326,6 +341,122 @@ defmodule LemonRouter.RunOrchestratorTest do
 
       assert {:error, :run_id_conflict} =
                RunOrchestrator.submit(orchestrator_pid, %{replay | prompt: "different content"})
+
+      assert {:error, :run_id_conflict} =
+               RunOrchestrator.submit(orchestrator_pid, %{
+                 replay
+                 | session_key: session_key <> ":other"
+               })
+
+      assert {:error, :run_id_conflict} =
+               RunOrchestrator.submit(orchestrator_pid, %{replay | agent_id: "other-agent"})
+    end
+
+    test "direct run identity binds every execution-changing request field" do
+      run_supervisor = start_supervised!({DynamicSupervisor, strategy: :one_for_one})
+      run_id = "run_semantic_identity_#{System.unique_integer([:positive])}"
+      on_exit(fn -> LemonCore.Store.delete(RunOrchestrator.admission_table(), run_id) end)
+
+      {:ok, orchestrator} =
+        GenServer.start_link(
+          RunOrchestrator,
+          run_supervisor: run_supervisor,
+          run_process_module: PersistentCapturingRunProcess,
+          run_process_opts: %{notify_pid: self()}
+        )
+
+      original =
+        request(%{
+          run_id: run_id,
+          session_key: "agent:semantic:test",
+          agent_id: "test",
+          prompt: "same prompt",
+          model: "model-a",
+          queue_mode: :collect,
+          cwd: "/tmp/semantic-a",
+          tool_policy: %{allow: ["read"]},
+          meta: %{execution_node: "local", semantic_option: "a"}
+        })
+
+      assert {:ok, ^run_id} = RunOrchestrator.submit(orchestrator, original)
+      assert_receive {:captured_run_opts, %{run_id: ^run_id}}, 500
+
+      for conflicting <- [
+            %{original | model: "model-b"},
+            %{original | queue_mode: :followup},
+            %{original | cwd: "/tmp/semantic-b"},
+            %{original | tool_policy: %{allow: ["write"]}},
+            %{original | agent_id: "other-agent"},
+            %{original | meta: %{execution_node: "remote", semantic_option: "a"}}
+          ] do
+        assert {:error, :run_id_conflict} = RunOrchestrator.submit(orchestrator, conflicting)
+      end
+    end
+
+    test "definite pre-enqueue rejection rolls the receipt back for retry" do
+      run_id = "run_definite_rejection_#{System.unique_integer([:positive])}"
+      previous = Application.get_env(:lemon_router, :session_coordinator)
+      Application.put_env(:lemon_router, :session_coordinator, AdmissionOutcomeCoordinator)
+      Application.put_env(:lemon_router, :admission_outcome, {:return, {:error, :rejected}})
+
+      on_exit(fn ->
+        restore_env(:lemon_router, :session_coordinator, previous)
+        Application.delete_env(:lemon_router, :admission_outcome)
+        LemonCore.Store.delete(RunOrchestrator.admission_table(), run_id)
+      end)
+
+      {:ok, orchestrator} = GenServer.start_link(RunOrchestrator, [])
+
+      replay =
+        request(%{
+          run_id: run_id,
+          session_key: "agent:definite-rejection:test",
+          agent_id: "test",
+          prompt: "retry me"
+        })
+
+      assert {:error, :rejected} = RunOrchestrator.submit(orchestrator, replay)
+      assert %{state: "claimed"} = LemonCore.Store.get(RunOrchestrator.admission_table(), run_id)
+      assert {:error, :rejected} = RunOrchestrator.submit(orchestrator, replay)
+      assert %{state: "claimed"} = LemonCore.Store.get(RunOrchestrator.admission_table(), run_id)
+    end
+
+    test "ambiguous submit outcomes preserve the submitting fence" do
+      previous = Application.get_env(:lemon_router, :session_coordinator)
+      Application.put_env(:lemon_router, :session_coordinator, AdmissionOutcomeCoordinator)
+
+      on_exit(fn ->
+        restore_env(:lemon_router, :session_coordinator, previous)
+        Application.delete_env(:lemon_router, :admission_outcome)
+      end)
+
+      for {label, outcome} <- [
+            {:explicit, {:return, {:error, :outcome_unknown}}},
+            {:throw, {:throw, :uncertain}},
+            {:exit, {:exit, :timeout}},
+            {:malformed, {:return, :unexpected}}
+          ] do
+        run_id = "run_ambiguous_#{label}_#{System.unique_integer([:positive])}"
+
+        on_exit(fn -> LemonCore.Store.delete(RunOrchestrator.admission_table(), run_id) end)
+        Application.put_env(:lemon_router, :admission_outcome, outcome)
+
+        replay =
+          request(%{
+            run_id: run_id,
+            session_key: "agent:ambiguous:#{label}",
+            agent_id: "test",
+            prompt: "do not retry blindly"
+          })
+
+        {:ok, orchestrator} = GenServer.start_link(RunOrchestrator, [])
+        assert {:error, :outcome_unknown} = RunOrchestrator.submit(orchestrator, replay)
+
+        assert %{state: "submitting"} =
+                 LemonCore.Store.get(RunOrchestrator.admission_table(), run_id)
+
+        assert {:error, :outcome_unknown} = RunOrchestrator.submit(orchestrator, replay)
+      end
     end
 
     test "a pending receipt after orchestrator loss never blindly re-enqueues" do
@@ -467,7 +598,10 @@ defmodule LemonRouter.RunOrchestratorTest do
       {:ok, recovered_orchestrator} = GenServer.start_link(RunOrchestrator, opts)
 
       cross_session = %{original | session_key: session_key <> ":other"}
-      assert {:error, :run_id_conflict} = RunOrchestrator.submit(recovered_orchestrator, cross_session)
+
+      assert {:error, :run_id_conflict} =
+               RunOrchestrator.submit(recovered_orchestrator, cross_session)
+
       refute_receive {:captured_job, _command}, 100
 
       assert :ok = LemonCore.Store.delete(RunOrchestrator.admission_table(), run_id)
@@ -511,7 +645,7 @@ defmodule LemonRouter.RunOrchestratorTest do
       assert_receive {:captured_job, _command}, 500
     end
 
-    test "accepted admissions expire while ambiguous submitting claims remain fenced" do
+    test "accepted and ambiguous submitting admissions remain permanently fenced" do
       run_supervisor = start_supervised!({DynamicSupervisor, strategy: :one_for_one})
       accepted_run_id = "run_retention_accepted_#{System.unique_integer([:positive])}"
       pending_run_id = "run_retention_pending_#{System.unique_integer([:positive])}"
@@ -540,13 +674,14 @@ defmodule LemonRouter.RunOrchestratorTest do
 
       assert {:ok, ^accepted_run_id} = RunOrchestrator.submit(orchestrator, accepted)
       assert_receive {:captured_job, _command}, 500
+
       assert %{state: "accepted", expires_at_ms: expires_at_ms} =
                LemonCore.Store.get(RunOrchestrator.admission_table(), accepted_run_id)
 
       assert is_integer(expires_at_ms)
       Process.sleep(20)
       assert {:ok, ^accepted_run_id} = RunOrchestrator.submit(orchestrator, accepted)
-      assert_receive {:captured_job, _command}, 500
+      refute_receive {:captured_job, _command}, 100
 
       pending =
         request(%{
@@ -560,7 +695,13 @@ defmodule LemonRouter.RunOrchestratorTest do
       assert_receive {:captured_job, _command}, 500
 
       entry = LemonCore.Store.get(RunOrchestrator.admission_table(), pending_run_id)
-      assert :ok = LemonCore.Store.put(RunOrchestrator.admission_table(), pending_run_id, %{entry | state: "submitting"})
+
+      assert :ok =
+               LemonCore.Store.put(RunOrchestrator.admission_table(), pending_run_id, %{
+                 entry
+                 | state: "submitting"
+               })
+
       Process.sleep(20)
       :ok = GenServer.stop(orchestrator)
       {:ok, recovered} = GenServer.start_link(RunOrchestrator, opts)
@@ -569,16 +710,24 @@ defmodule LemonRouter.RunOrchestratorTest do
       refute_receive {:captured_job, _command}, 100
     end
 
-    test "receipt cleanup evicts expired terminal rows but preserves ambiguous claims" do
+    test "receipt cleanup evicts only safe expired claims" do
       run_supervisor = start_supervised!({DynamicSupervisor, strategy: :one_for_one})
       suffix = System.unique_integer([:positive])
       expired_admission = "run_cleanup_accepted_#{suffix}"
+      expired_claim = "run_cleanup_claimed_#{suffix}"
+      legacy_expired_claim = "run_cleanup_legacy_claimed_#{suffix}"
       ambiguous_admission = "run_cleanup_submitting_#{suffix}"
       expired_abort = "run_cleanup_abort_#{suffix}"
       probe_run = "run_cleanup_probe_#{suffix}"
 
       on_exit(fn ->
-        for run_id <- [expired_admission, ambiguous_admission, probe_run] do
+        for run_id <- [
+              expired_admission,
+              expired_claim,
+              legacy_expired_claim,
+              ambiguous_admission,
+              probe_run
+            ] do
           LemonCore.Store.delete(RunOrchestrator.admission_table(), run_id)
         end
 
@@ -595,6 +744,19 @@ defmodule LemonRouter.RunOrchestratorTest do
                LemonCore.Store.put(RunOrchestrator.admission_table(), ambiguous_admission, %{
                  state: "submitting",
                  expires_at_ms: 0
+               })
+
+      assert :ok =
+               LemonCore.Store.put(RunOrchestrator.admission_table(), expired_claim, %{
+                 state: "claimed",
+                 expires_at_ms: 0
+               })
+
+      assert :ok =
+               LemonCore.Store.put(RunOrchestrator.admission_table(), legacy_expired_claim, %{
+                 state: "claimed",
+                 claimed_at_ms: 0,
+                 retention_ms: 1
                })
 
       assert :ok =
@@ -624,11 +786,18 @@ defmodule LemonRouter.RunOrchestratorTest do
                )
 
       assert_receive {:captured_job, _command}, 500
-      assert LemonCore.Store.get(RunOrchestrator.admission_table(), expired_admission) == nil
+
+      assert %{state: "accepted"} =
+               LemonCore.Store.get(RunOrchestrator.admission_table(), expired_admission)
+
+      assert LemonCore.Store.get(RunOrchestrator.admission_table(), expired_claim) == nil
+      assert LemonCore.Store.get(RunOrchestrator.admission_table(), legacy_expired_claim) == nil
+
       assert %{state: "submitting"} =
                LemonCore.Store.get(RunOrchestrator.admission_table(), ambiguous_admission)
 
-      assert LemonCore.Store.get(RunOrchestrator.abort_tombstone_table(), expired_abort) == nil
+      assert %{reason: :old} =
+               LemonCore.Store.get(RunOrchestrator.abort_tombstone_table(), expired_abort)
     end
 
     test "generates run_id" do
@@ -698,18 +867,27 @@ defmodule LemonRouter.RunOrchestratorTest do
     end
 
     test "returns unknown_agent_id error for unconfigured agent" do
+      run_id = "run_unknown_agent_#{System.unique_integer([:positive])}"
+      on_exit(fn -> LemonCore.Store.delete(RunOrchestrator.admission_table(), run_id) end)
+
+      request =
+        request(%{
+          run_id: run_id,
+          origin: :control_plane,
+          session_key: "agent:missing-agent:main",
+          agent_id: "missing-agent",
+          prompt: "Hello",
+          queue_mode: :collect
+        })
+
       result =
-        RunOrchestrator.submit(
-          request(%{
-            origin: :control_plane,
-            session_key: "agent:missing-agent:main",
-            agent_id: "missing-agent",
-            prompt: "Hello",
-            queue_mode: :collect
-          })
-        )
+        RunOrchestrator.submit(request)
 
       assert {:error, {:unknown_agent_id, "missing-agent"}} = result
+      assert %{state: "claimed"} = LemonCore.Store.get(RunOrchestrator.admission_table(), run_id)
+
+      assert {:error, {:unknown_agent_id, "missing-agent"}} =
+               RunOrchestrator.submit(request)
     end
   end
 
@@ -786,7 +964,7 @@ defmodule LemonRouter.RunOrchestratorTest do
       refute_receive {:captured_job, _command}, 100
     end
 
-    test "an expired durable abort tombstone no longer rejects the run id" do
+    test "an expired abort tombstone still fences the run id after restart" do
       run_supervisor = start_supervised!({DynamicSupervisor, strategy: :one_for_one})
       run_id = "run_expired_tombstone_#{System.unique_integer([:positive])}"
 
@@ -809,7 +987,7 @@ defmodule LemonRouter.RunOrchestratorTest do
 
       {:ok, recovered_orchestrator} = GenServer.start_link(RunOrchestrator, opts)
 
-      assert {:ok, ^run_id} =
+      assert {:error, {:run_aborted, :hard_stop}} =
                RunOrchestrator.submit(
                  recovered_orchestrator,
                  request(%{
@@ -820,7 +998,7 @@ defmodule LemonRouter.RunOrchestratorTest do
                  })
                )
 
-      assert_receive {:captured_job, _command}, 500
+      refute_receive {:captured_job, _command}, 100
     end
 
     test "abort registration waits beyond the default call timeout for serialized admission" do

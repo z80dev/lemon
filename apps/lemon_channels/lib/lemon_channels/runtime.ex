@@ -23,8 +23,9 @@ defmodule LemonChannels.Runtime do
   Submit one normalized inbound message through the canonical run boundary.
 
   A caller that already owns a stable reconciliation identity may pass
-  `run_id: value`; ordinary channel transports omit it and let the router
-  allocate a run ID.
+  `run_id: value`. A transport whose rendered prompt contains retry-local data
+  may also pass `replay_content_identity`; ordinary channel transports omit
+  both and let the router allocate and bind the complete request.
   """
   @spec submit_inbound(InboundMessage.t(), keyword()) :: :ok | failure()
   def submit_inbound(%InboundMessage{} = inbound, opts \\ []) when is_list(opts) do
@@ -34,6 +35,7 @@ defmodule LemonChannels.Runtime do
     |> LemonChannels.RunRequestBuilder.from_inbound()
     |> maybe_put_run_id(Keyword.get(opts, :run_id))
     |> maybe_put_replay_identity(Keyword.get(opts, :replay_identity))
+    |> maybe_put_replay_content_identity(Keyword.get(opts, :replay_content_identity))
     |> RouterBridge.submit_run()
     |> case do
       {:ok, _run_id} -> :ok
@@ -123,6 +125,16 @@ defmodule LemonChannels.Runtime do
   end
 
   defp maybe_put_replay_identity(request, _replay_identity), do: request
+
+  defp maybe_put_replay_content_identity(request, content_identity)
+       when is_binary(content_identity) and content_identity != "" do
+    %{
+      request
+      | meta: Map.put(request.meta || %{}, :router_replay_content_identity, content_identity)
+    }
+  end
+
+  defp maybe_put_replay_content_identity(request, _content_identity), do: request
 
   defp emit_inbound_telemetry(%InboundMessage{} = inbound) do
     meta = if is_map(inbound.meta), do: inbound.meta, else: %{}
