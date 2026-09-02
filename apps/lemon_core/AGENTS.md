@@ -70,6 +70,7 @@ This is the **base app** of the Lemon umbrella. All other apps depend on it. It 
 | `LemonCore.RunPhaseEvent` | Canonical run phase-change payload builder for bus/event emission |
 | `LemonCore.SessionLifecycle` | Shared operator-facing session list/search/statistics/history/export/delete/prune service over the canonical run/chat/policy stores; statistics keep exact totals while bounding and redacting dimensions |
 | `LemonCore.SessionMetadataStore` | Typed title/pin/archive annotations stored separately from conversation content |
+| `LemonCore.PolicyStore` | Typed agent/channel/session/runtime policy wrapper and declared owner of the four existing policy tables; specialized Store behavior remains authoritative |
 | `LemonCore.RouterBridge` | Runtime bridge to `:lemon_router` without compile-time coupling |
 | `LemonCore.SessionKey` | Session key generation and parsing |
 | `LemonCore.Idempotency` | At-most-once deduplication backed by `LemonCore.Store` with 24h TTL |

@@ -39,6 +39,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   resolving aliases and module attributes and rejecting dynamic or cross-table
   access from an owner module. The metadata is non-operational in this change;
   backend registration, retention, and domain migrations remain separate.
+- `LemonCore.PolicyStore` now declares the four existing policy tables it owns.
+  This is metadata-only; policy access still uses the specialized Store API and
+  its public functions are unchanged.
 
 - Persistent source and packaged launchers now provision a private,
   port-scoped control-plane operator credential under `~/.lemon/run`, allowing

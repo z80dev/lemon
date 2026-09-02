@@ -24,6 +24,9 @@ Telegram, run history, durable memory, kanban boards, or `~/.lemon`.
   architecture quality gate parses all supported generic Store operations at
   default and explicit server arities and permits owner calls only when their
   literal or module-attribute table matches the declaration.
+- `LemonCore.PolicyStore` now declares ownership metadata for the existing
+  agent, channel, session, and runtime policy tables while retaining its
+  specialized public API and Store behavior.
 
 - `LemonCore.A2A.Protocol`, `LemonCore.A2A.Client`, and `LemonCore.A2AStore`
   provide the generic A2A v1.0 wire helpers, credential-scrubbing HTTP client,
