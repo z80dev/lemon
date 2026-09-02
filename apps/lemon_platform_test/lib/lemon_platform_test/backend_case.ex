@@ -400,8 +400,8 @@ defmodule LemonPlatformTest.BackendCase do
             {:ok, state} = @backend.put(state, @beta, "fence", :claimed)
 
             mismatched = [
-              {@alpha, "first", %{version: 2}},
-              {@beta, "fence", :claimed}
+              {@alpha, "first", %{version: 1}},
+              {@beta, "fence", :released}
             ]
 
             assert {:error, :mismatch, state} =
