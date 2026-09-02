@@ -13,7 +13,7 @@
 #   WithClauses: micro-style preferences; rewriting working pattern-matched
 #   code for these adds churn without correctness value.
 # - Design.TagTODO is enabled at exit_status 2: the repo intentionally has
-#   zero TODO comments (tracked work lives in docs/plans + issues).
+#   zero TODO comments (tracked work lives in GitHub issues).
 %{
   configs: [
     %{
