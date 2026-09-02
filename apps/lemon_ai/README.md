@@ -137,17 +137,22 @@ end
 
 ## Provider capability matrix
 
-Every provider is reached through one of **10 wire-protocol modules**. The 27 provider
-catalogs in `LemonAi.Models` route through these — for example Groq, xAI, DeepSeek, Qwen,
-Cerebras, OpenRouter, Vercel AI Gateway, HuggingFace, Fireworks, and Mistral's catalog
-all speak the OpenAI Chat Completions format, so they inherit its capabilities.
-Each catalog is a JSON file under `priv/models/`, loaded at compile time by
-`LemonAi.Models.Catalog` into the provider's `LemonAi.Models.*` module. The
-files are compiler external resources, so edits recompile their provider
-modules. Invalid JSON and malformed entries fail compilation with catalog and
-model-key context, including invalid field types, negative sizes, and negative
-costs; atom-valued API, provider, and input fields use explicit allowlists
-rather than creating atoms from arbitrary catalog strings.
+Every provider is reached through one of **10 wire-protocol modules**. The 27 registered
+provider IDs in `LemonAi.Models` route through these — for example Groq, xAI, DeepSeek,
+Qwen, Cerebras, OpenRouter, Vercel AI Gateway, HuggingFace, Fireworks, and Mistral all
+speak the OpenAI Chat Completions format, so they inherit its capabilities.
+
+The migration replaced 25 provider-module literal catalogs with 26 JSON resources under
+`priv/models/`, loaded at compile time by `LemonAi.Models.Catalog`. The counts differ
+because Google uses `google.json` plus `google_antigravity_extras.json`. The
+`:google_antigravity` registry is derived from entries tagged for that provider plus the
+extras file; `:"openai-codex"` is derived from the direct OpenAI catalog plus OAuth-only
+model IDs and therefore has no separate JSON catalog. The files are compiler external
+resources, so edits recompile their provider modules. Invalid JSON and malformed entries
+fail compilation with catalog and model-key context, including invalid field types,
+negative sizes, negative costs, and unsupported compatibility overrides. Atom-valued API,
+provider, input, and compatibility keys use explicit allowlists rather than creating atoms
+from arbitrary catalog strings.
 
 | Wire module (`api_id`) | Streaming | Tool calls | Vision (image input) | Reasoning / thinking | Cost data |
 |------------------------|:---------:|:----------:|:--------------------:|:--------------------:|:---------:|
@@ -172,7 +177,7 @@ LemonAi.Models.supports_reasoning?(model)
 LemonAi.Models.supports_xhigh(model)
 ```
 
-The 27 provider catalogs: `:anthropic`, `:openai`, `:"openai-codex"`,
+The 27 registered provider IDs: `:anthropic`, `:openai`, `:"openai-codex"`,
 `:amazon_bedrock`, `:google`, `:google_antigravity`, `:kimi`, `:kimi_coding`,
 `:opencode`, `:opencode_go`, `:xai`, `:mistral`, `:cerebras`, `:deepseek`, `:qwen`,
 `:minimax`, `:zai`, `:azure_openai_responses`, `:github_copilot`, `:google_gemini_cli`,

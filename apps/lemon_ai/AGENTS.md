@@ -41,7 +41,7 @@ LemonAi (main API)
 | `LemonAi.RateLimiter` | Token bucket rate limiting per provider, lazy-started |
 | `LemonAi.ModelCache` | ETS-backed model availability cache (5-minute default TTL) |
 | `LemonAi.EventStream` | Async GenServer for streaming events with lifecycle management |
-| `LemonAi.Models` | All model definitions and metadata (large file: many thousands of lines). Registry entries should stay aligned with live provider IDs; dead preview/model aliases that return provider 404s should be removed instead of left selectable. |
+| `LemonAi.Models` | Compile-time registry assembled from per-provider modules whose catalogs live in `priv/models/*.json`. Registry entries should stay aligned with live provider IDs; dead preview/model aliases that return provider 404s should be removed instead of left selectable. |
 | `LemonAi.Types` | All type/struct definitions (inline in module) |
 | `LemonAi.Error` | HTTP error parsing, classification, retryability, and formatting utilities; provider-specific overloaded responses such as Anthropic HTTP 529 are transient retryable errors |
 | `LemonAi.HttpInspector` | Captures and saves request dumps for 4xx errors |
@@ -220,26 +220,31 @@ end
 
 ### 2. Add Model Definitions
 
-Add models to `LemonAi.Models` (the `@models` compile-time map at the bottom of the file):
+Add models to the provider's JSON object under `priv/models/`; each key maps to
+the fields of `LemonAi.Types.Model`:
 
-```elixir
-@my_provider_models %{
-  "my-model-id" => %Types.Model{
-    id: "my-model-id",
-    name: "My Model",
-    api: :my_provider_api,  # must match registered api_id
-    provider: :my_provider,
-    base_url: "https://api.myprovider.com",
-    reasoning: false,
-    input: [:text, :image],
-    cost: %Types.ModelCost{input: 1.0, output: 2.0, cache_read: 0.0, cache_write: 0.0},
-    context_window: 128_000,
-    max_tokens: 4096
+```json
+{
+  "my-model-id": {
+    "id": "my-model-id",
+    "name": "My Model",
+    "api": "my_provider_api",
+    "provider": "my_provider",
+    "base_url": "https://api.myprovider.com",
+    "reasoning": false,
+    "input": ["text", "image"],
+    "cost": {"input": 1.0, "output": 2.0, "cache_read": 0.0, "cache_write": 0.0},
+    "context_window": 128000,
+    "max_tokens": 4096
   }
 }
 ```
 
-Then add `:my_provider` to the `@providers` list and include the model map in the `@models` map.
+For a new provider, add a small `LemonAi.Models.*` module that registers the
+JSON path with `@external_resource`, loads it with
+`LemonAi.Models.Catalog.load!/1`, and exposes `models/0`. Add the provider and
+API strings to Catalog's fixed allowlists, then add the provider module to the
+`@models` registry and provider ID to `@providers` in `LemonAi.Models`.
 
 ### 3. Register Provider
 
@@ -401,7 +406,7 @@ LemonAi.Models.models_equal?(model_a, model_b)  # compares id + provider
 ids = LemonAi.Models.get_model_ids(:anthropic)
 ```
 
-**Supported providers in `@providers`**: `:anthropic`, `:openai`, `:"openai-codex"`, `:amazon_bedrock`, `:google`, `:google_antigravity`, `:kimi`, `:kimi_coding`, `:opencode`, `:opencode_go`, `:xai`, `:mistral`, `:cerebras`, `:deepseek`, `:qwen`, `:minimax`, `:zai`, `:azure_openai_responses`, `:github_copilot`, `:google_gemini_cli`, `:google_vertex`, `:groq`, `:huggingface`, `:minimax_cn`, `:openrouter`, `:vercel_ai_gateway`
+**Supported providers in `@providers`**: `:anthropic`, `:openai`, `:"openai-codex"`, `:amazon_bedrock`, `:google`, `:google_antigravity`, `:kimi`, `:kimi_coding`, `:opencode`, `:opencode_go`, `:xai`, `:mistral`, `:cerebras`, `:deepseek`, `:qwen`, `:minimax`, `:zai`, `:azure_openai_responses`, `:github_copilot`, `:google_gemini_cli`, `:google_vertex`, `:groq`, `:huggingface`, `:minimax_cn`, `:fireworks`, `:openrouter`, `:vercel_ai_gateway`
 
 ## Common Tasks
 

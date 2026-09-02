@@ -37,13 +37,16 @@ what in-repo code has been using.
 
 ### Changed
 
-- The 25 provider model catalogs moved from Elixir struct literals to
-  `priv/models/<provider>.json`, loaded and embedded at compile time by
-  `LemonAi.Models.Catalog`. Existing provider module names and `models/0`
-  return values are unchanged. Catalog files are external compiler resources;
-  malformed top-level data and entries fail with source/model context, while
-  field types, token-size ranges, and costs are validated, and API, provider,
-  and input strings normalize through fixed atom allowlists.
+- The 25 provider-module model catalogs moved from Elixir struct literals to 26
+  JSON resources under `priv/models/`, loaded and embedded at compile time by
+  `LemonAi.Models.Catalog`. Google uses a base file plus Antigravity extras;
+  the `:google_antigravity` registry is derived from both, while
+  `:"openai-codex"` derives from the direct OpenAI catalog plus OAuth-only IDs.
+  Existing provider module names and `models/0` return values are unchanged.
+  Catalog files are external compiler resources; malformed top-level data and
+  entries fail with source/model context, while field types, token-size ranges,
+  costs, and compatibility overrides are validated. API, provider, input, and
+  compatibility keys normalize through fixed atom allowlists.
 
 ### Notes
 

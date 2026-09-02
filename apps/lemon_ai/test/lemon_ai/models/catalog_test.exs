@@ -110,6 +110,109 @@ defmodule LemonAi.Models.CatalogTest do
         refute_existing_atom(unknown)
       end
     end
+
+    test "normalizes every supported compatibility override" do
+      compat = %{
+        "supports_store" => false,
+        "supports_developer_role" => true,
+        "supports_reasoning_effort" => false,
+        "supports_usage_in_streaming" => true,
+        "requires_tool_result_name" => true,
+        "requires_assistant_after_tool_result" => false,
+        "requires_thinking_as_text" => true,
+        "requires_mistral_tool_ids" => false,
+        "max_tokens_field" => "max_tokens",
+        "thinking_format" => "zai",
+        "open_router_routing" => %{
+          "order" => ["anthropic", "openai"],
+          "preferences" => %{"sort" => "price", "allow_fallbacks" => true}
+        }
+      }
+
+      entry = Map.put(valid_entry(), "compat", compat)
+      model = Catalog.decode!(Jason.encode!(%{"compatible-model" => entry}), "compat.json")
+
+      assert model["compatible-model"].compat == %{
+               supports_store: false,
+               supports_developer_role: true,
+               supports_reasoning_effort: false,
+               supports_usage_in_streaming: true,
+               requires_tool_result_name: true,
+               requires_assistant_after_tool_result: false,
+               requires_thinking_as_text: true,
+               requires_mistral_tool_ids: false,
+               max_tokens_field: "max_tokens",
+               thinking_format: "zai",
+               open_router_routing: %{
+                 "order" => ["anthropic", "openai"],
+                 "preferences" => %{"sort" => "price", "allow_fallbacks" => true}
+               }
+             }
+    end
+
+    test "accepts the alternate compatibility enums and null routing semantics" do
+      compat = %{
+        "max_tokens_field" => "max_completion_tokens",
+        "thinking_format" => "openai",
+        "open_router_routing" => nil
+      }
+
+      entry = Map.put(valid_entry(), "compat", compat)
+      model = Catalog.decode!(Jason.encode!(%{"compatible-model" => entry}), "compat.json")
+
+      assert model["compatible-model"].compat == %{
+               max_tokens_field: "max_completion_tokens",
+               thinking_format: "openai",
+               open_router_routing: nil
+             }
+
+      entry = Map.put(valid_entry(), "compat", nil)
+      model = Catalog.decode!(Jason.encode!(%{"compatible-model" => entry}), "compat.json")
+      assert model["compatible-model"].compat == nil
+    end
+
+    test "rejects invalid compatibility values with source and model context" do
+      invalid_compat = [
+        {%{"supports_store" => "false"}, "expected compat.supports_store to be a boolean"},
+        {%{"max_tokens_field" => false}, "expected compat.max_tokens_field to be a string"},
+        {%{"max_tokens_field" => "tokens"},
+         ~s(unsupported compat.max_tokens_field value: "tokens")},
+        {%{"thinking_format" => false}, "expected compat.thinking_format to be a string"},
+        {%{"thinking_format" => "anthropic"},
+         ~s(unsupported compat.thinking_format value: "anthropic")},
+        {%{"open_router_routing" => []}, "expected compat.open_router_routing to be an object"},
+        {%{"not_a_compat_flag" => true}, ~s(unsupported compat key: "not_a_compat_flag")}
+      ]
+
+      for {compat, expected_message} <- invalid_compat do
+        entry = Map.put(valid_entry(), "compat", compat)
+        json = Jason.encode!(%{"broken-compat-model" => entry})
+
+        error =
+          assert_raise ArgumentError, fn ->
+            Catalog.decode!(json, "broken-compat.json")
+          end
+
+        assert error.message =~
+                 ~s(invalid model entry "broken-compat-model" in catalog "broken-compat.json")
+
+        assert error.message =~ expected_message
+      end
+    end
+
+    test "rejecting an unknown compatibility key does not create an atom" do
+      unknown = "catalog_unknown_compat_#{System.unique_integer([:positive])}"
+      refute_existing_atom(unknown)
+
+      entry = Map.put(valid_entry(), "compat", %{unknown => true})
+      json = Jason.encode!(%{"unsafe-model" => entry})
+
+      assert_raise ArgumentError,
+                   ~r/invalid model entry "unsafe-model".*unsupported compat key/,
+                   fn -> Catalog.decode!(json, "unsafe.json") end
+
+      refute_existing_atom(unknown)
+    end
   end
 
   defp valid_entry do

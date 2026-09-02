@@ -16,6 +16,13 @@ defmodule LemonAi.Models.Catalog do
   so a catalog edit recompiles the module and the registry keeps its
   compile-time shape. Editing a model or its price is editing the JSON file;
   `mix lemon.models` lists what is currently defined.
+
+  The optional `compat` field is either `null` (the same as omitting overrides)
+  or an object with a fixed schema. Compatibility field names normalize to the
+  atom keys consumed by providers; enum values and routing object keys remain
+  strings. Routing may be `null` to omit the provider-routing request parameter,
+  or an object containing nested JSON values whose original types are retained;
+  every key at every object depth must be a string.
   """
 
   alias LemonAi.Types.{Model, ModelCost}
@@ -64,6 +71,20 @@ defmodule LemonAi.Models.Catalog do
   }
 
   @inputs %{"image" => :image, "text" => :text}
+
+  @compat_boolean_fields %{
+    "supports_store" => :supports_store,
+    "supports_developer_role" => :supports_developer_role,
+    "supports_reasoning_effort" => :supports_reasoning_effort,
+    "supports_usage_in_streaming" => :supports_usage_in_streaming,
+    "requires_tool_result_name" => :requires_tool_result_name,
+    "requires_assistant_after_tool_result" => :requires_assistant_after_tool_result,
+    "requires_thinking_as_text" => :requires_thinking_as_text,
+    "requires_mistral_tool_ids" => :requires_mistral_tool_ids
+  }
+
+  @max_tokens_fields ["max_tokens", "max_completion_tokens"]
+  @thinking_formats ["openai", "zai"]
 
   @doc """
   The source path of a catalog file, for `@external_resource`.
@@ -118,7 +139,7 @@ defmodule LemonAi.Models.Catalog do
       context_window: fetch_non_neg_integer!(entry, "context_window"),
       max_tokens: fetch_non_neg_integer!(entry, "max_tokens"),
       headers: optional_map!(entry, "headers", %{}),
-      compat: optional_map!(entry, "compat", nil)
+      compat: entry |> optional_map!("compat", nil) |> to_compat()
     }
   rescue
     error in [ArgumentError, KeyError, Protocol.UndefinedError] ->
@@ -192,6 +213,85 @@ defmodule LemonAi.Models.Catalog do
       value -> raise ArgumentError, "expected #{field} to be an object, got: #{inspect(value)}"
     end
   end
+
+  defp to_compat(nil), do: nil
+
+  defp to_compat(%{} = compat) do
+    Map.new(compat, fn {field, value} -> normalize_compat_field!(field, value) end)
+  end
+
+  defp normalize_compat_field!(field, value) do
+    case @compat_boolean_fields do
+      %{^field => atom} ->
+        {atom, compat_boolean!(field, value)}
+
+      %{} ->
+        normalize_non_boolean_compat_field!(field, value)
+    end
+  end
+
+  defp normalize_non_boolean_compat_field!("max_tokens_field", value) do
+    {:max_tokens_field, compat_enum!("max_tokens_field", value, @max_tokens_fields)}
+  end
+
+  defp normalize_non_boolean_compat_field!("thinking_format", value) do
+    {:thinking_format, compat_enum!("thinking_format", value, @thinking_formats)}
+  end
+
+  defp normalize_non_boolean_compat_field!("open_router_routing", %{} = value) do
+    {:open_router_routing, validate_routing_value!(value, "compat.open_router_routing")}
+  end
+
+  defp normalize_non_boolean_compat_field!("open_router_routing", nil) do
+    {:open_router_routing, nil}
+  end
+
+  defp normalize_non_boolean_compat_field!("open_router_routing", value) do
+    raise ArgumentError,
+          "expected compat.open_router_routing to be an object, got: #{inspect(value)}"
+  end
+
+  defp normalize_non_boolean_compat_field!(field, _value) do
+    raise ArgumentError, "unsupported compat key: #{inspect(field)}"
+  end
+
+  defp compat_boolean!(_field, value) when is_boolean(value), do: value
+
+  defp compat_boolean!(field, value) do
+    raise ArgumentError, "expected compat.#{field} to be a boolean, got: #{inspect(value)}"
+  end
+
+  defp compat_enum!(field, value, allowed) when is_binary(value) do
+    if value in allowed do
+      value
+    else
+      raise ArgumentError, "unsupported compat.#{field} value: #{inspect(value)}"
+    end
+  end
+
+  defp compat_enum!(field, value, _allowed) do
+    raise ArgumentError, "expected compat.#{field} to be a string, got: #{inspect(value)}"
+  end
+
+  defp validate_routing_value!(%{} = map, path) do
+    Map.new(map, fn
+      {key, value} when is_binary(key) ->
+        {key, validate_routing_value!(value, path <> "." <> key)}
+
+      {key, _value} ->
+        raise ArgumentError, "expected every #{path} key to be a string, got: #{inspect(key)}"
+    end)
+  end
+
+  defp validate_routing_value!(list, path) when is_list(list) do
+    list
+    |> Enum.with_index()
+    |> Enum.map(fn {value, index} -> validate_routing_value!(value, "#{path}[#{index}]") end)
+  end
+
+  defp validate_routing_value!(value, _path)
+       when is_binary(value) or is_boolean(value) or is_number(value) or is_nil(value),
+       do: value
 
   defp normalize_atom!(field, value, allowed) when is_binary(value) do
     case allowed do
