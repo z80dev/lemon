@@ -7,11 +7,36 @@ defmodule CodingAgent.Session.CompactionLifecycle do
   worker is canceled and demonitoring/timer cleanup happens synchronously
   before the prompt is deferred. This keeps prompt latency independent of the
   stale worker and prevents its late result from mutating the new turn.
+
+  Its slot in the session state is one field, `auto_compaction`, holding a
+  `CodingAgent.Session.CompactionLifecycle.State`.
   """
 
   require Logger
 
   alias CodingAgent.Session.CompactionManager
+
+  defmodule State do
+    @moduledoc """
+    Auto-compaction's slot in the session state: whether a background
+    compaction is running, the session signature it captured, and the task
+    it tracks (pid, monitor, timeout timer).
+    """
+
+    @type t :: %__MODULE__{
+            in_progress: boolean(),
+            signature: CodingAgent.Session.CompactionManager.session_signature() | nil,
+            task_pid: pid() | nil,
+            task_monitor_ref: reference() | nil,
+            task_timeout_ref: reference() | nil
+          }
+
+    defstruct in_progress: false,
+              signature: nil,
+              task_pid: nil,
+              task_monitor_ref: nil,
+              task_timeout_ref: nil
+  end
 
   @type callbacks(state) :: %{
           required(:restore_messages_from_session) => (map() -> [map()]),
@@ -35,14 +60,14 @@ defmodule CodingAgent.Session.CompactionLifecycle do
   end
 
   @spec cancel_for_new_prompt(map(), callbacks(map())) :: map()
-  def cancel_for_new_prompt(%{auto_compaction_in_progress: false} = state, _callbacks),
+  def cancel_for_new_prompt(%{auto_compaction: %State{in_progress: false}} = state, _callbacks),
     do: state
 
   def cancel_for_new_prompt(state, callbacks) do
     state =
       state
       |> CompactionManager.maybe_kill_background_task(
-        state.auto_compaction_task_pid,
+        state.auto_compaction.task_pid,
         :superseded_by_prompt
       )
       |> CompactionManager.clear_auto_compaction_state()
@@ -52,8 +77,12 @@ defmodule CodingAgent.Session.CompactionLifecycle do
   end
 
   @spec maybe_trigger(map(), pid(), callbacks(map())) :: map()
-  def maybe_trigger(%{auto_compaction_in_progress: true} = state, _session_pid, _callbacks),
-    do: state
+  def maybe_trigger(
+        %{auto_compaction: %State{in_progress: true}} = state,
+        _session_pid,
+        _callbacks
+      ),
+      do: state
 
   def maybe_trigger(state, session_pid, callbacks) do
     agent_state = LemonAgent.Agent.get_state(state.agent)
@@ -106,11 +135,13 @@ defmodule CodingAgent.Session.CompactionLifecycle do
         {:ok, task_meta} ->
           %{
             state
-            | auto_compaction_in_progress: true,
-              auto_compaction_signature: signature,
-              auto_compaction_task_pid: task_meta.pid,
-              auto_compaction_task_monitor_ref: task_meta.monitor_ref,
-              auto_compaction_task_timeout_ref: task_meta.timeout_ref
+            | auto_compaction: %State{
+                in_progress: true,
+                signature: signature,
+                task_pid: task_meta.pid,
+                task_monitor_ref: task_meta.monitor_ref,
+                task_timeout_ref: task_meta.timeout_ref
+              }
           }
 
         {:error, reason} ->
@@ -126,10 +157,10 @@ defmodule CodingAgent.Session.CompactionLifecycle do
   @spec handle_result(map(), term(), {:ok, map()} | {:error, term()}, callbacks(map())) :: map()
   def handle_result(state, signature, result, callbacks) do
     cond do
-      not state.auto_compaction_in_progress ->
+      not state.auto_compaction.in_progress ->
         state
 
-      state.auto_compaction_signature != signature ->
+      state.auto_compaction.signature != signature ->
         state
 
       signature != CompactionManager.session_signature(state) ->
@@ -153,11 +184,11 @@ defmodule CodingAgent.Session.CompactionLifecycle do
 
   @spec handle_timeout(map(), reference(), callbacks(map())) :: {:handled, map()} | :stale
   def handle_timeout(state, monitor_ref, callbacks) do
-    if state.auto_compaction_task_monitor_ref == monitor_ref do
+    if state.auto_compaction.task_monitor_ref == monitor_ref do
       state =
         state
         |> CompactionManager.maybe_kill_background_task(
-          state.auto_compaction_task_pid,
+          state.auto_compaction.task_pid,
           :auto_compaction_timeout
         )
         |> CompactionManager.clear_auto_compaction_state()

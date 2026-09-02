@@ -101,12 +101,6 @@ defmodule CodingAgent.Session do
     :context_frozen,
     :is_streaming,
     :pending_prompt_timer_ref,
-    :heartbeat,
-    :heartbeat_due,
-    :heartbeat_timer_ref,
-    :heartbeat_timer_token,
-    :heartbeat_idle_timer_ref,
-    :heartbeat_idle_token,
     :event_listeners,
     :event_streams,
     :abort_signal,
@@ -130,20 +124,9 @@ defmodule CodingAgent.Session do
     :wasm_sidecar_pid,
     :wasm_tool_names,
     :wasm_status,
-    :auto_compaction_in_progress,
-    :auto_compaction_signature,
-    :auto_compaction_task_pid,
-    :auto_compaction_task_monitor_ref,
-    :auto_compaction_task_timeout_ref,
-    :overflow_recovery_in_progress,
-    :overflow_recovery_attempted,
-    :overflow_recovery_signature,
-    :overflow_recovery_task_pid,
-    :overflow_recovery_task_monitor_ref,
-    :overflow_recovery_task_timeout_ref,
-    :overflow_recovery_started_at_ms,
-    :overflow_recovery_error_reason,
-    :overflow_recovery_partial_state
+    heartbeat: %Heartbeat.State{},
+    auto_compaction: %CompactionLifecycle.State{},
+    overflow_recovery: %OverflowRecovery.State{}
   ]
 
   @type session_signature ::
@@ -172,12 +155,7 @@ defmodule CodingAgent.Session do
           context_frozen: boolean(),
           is_streaming: boolean(),
           pending_prompt_timer_ref: reference() | nil,
-          heartbeat: Heartbeat.t() | nil,
-          heartbeat_due: boolean(),
-          heartbeat_timer_ref: reference() | nil,
-          heartbeat_timer_token: reference() | nil,
-          heartbeat_idle_timer_ref: reference() | nil,
-          heartbeat_idle_token: reference() | nil,
+          heartbeat: Heartbeat.State.t(),
           event_listeners: [{pid(), reference()}],
           event_streams: %{reference() => %{pid: pid(), stream: pid()}},
           abort_signal: reference() | nil,
@@ -201,20 +179,8 @@ defmodule CodingAgent.Session do
           wasm_sidecar_pid: pid() | nil,
           wasm_tool_names: [String.t()],
           wasm_status: map() | nil,
-          auto_compaction_in_progress: boolean(),
-          auto_compaction_signature: session_signature() | nil,
-          auto_compaction_task_pid: pid() | nil,
-          auto_compaction_task_monitor_ref: reference() | nil,
-          auto_compaction_task_timeout_ref: reference() | nil,
-          overflow_recovery_in_progress: boolean(),
-          overflow_recovery_attempted: boolean(),
-          overflow_recovery_signature: session_signature() | nil,
-          overflow_recovery_task_pid: pid() | nil,
-          overflow_recovery_task_monitor_ref: reference() | nil,
-          overflow_recovery_task_timeout_ref: reference() | nil,
-          overflow_recovery_started_at_ms: non_neg_integer() | nil,
-          overflow_recovery_error_reason: term() | nil,
-          overflow_recovery_partial_state: term() | nil
+          auto_compaction: CompactionLifecycle.State.t(),
+          overflow_recovery: OverflowRecovery.State.t()
         }
 
   @type event_handler_callbacks :: %{
@@ -1162,7 +1128,7 @@ defmodule CodingAgent.Session do
     # Stripped here, before the recovery branch, for the same reason the clause
     # below strips: everything this event reaches is a record of the
     # conversation. That includes the copy overflow recovery parks in
-    # `overflow_recovery_partial_state` and re-broadcasts if the retry also
+    # `overflow_recovery.partial_state` and re-broadcasts if the retry also
     # fails, which is why the strip has to happen above the branch and not
     # inside the `:no_recovery` arm.
     {:error, reason, partial_state} = event = strip_recalled_context_from_event(raw_event)
@@ -1207,10 +1173,10 @@ defmodule CodingAgent.Session do
 
   def handle_info({:DOWN, ref, :process, pid, _reason}, state) do
     cond do
-      state.auto_compaction_task_monitor_ref == ref ->
+      state.auto_compaction.task_monitor_ref == ref ->
         {:noreply, CompactionManager.handle_auto_compaction_task_down(state)}
 
-      state.overflow_recovery_task_monitor_ref == ref ->
+      state.overflow_recovery.task_monitor_ref == ref ->
         {:noreply, handle_overflow_recovery_task_down(state)}
 
       true ->
@@ -1363,7 +1329,7 @@ defmodule CodingAgent.Session do
     _ =
       CompactionManager.maybe_kill_background_task(
         state,
-        state.auto_compaction_task_pid,
+        state.auto_compaction.task_pid,
         :session_terminated
       )
 
@@ -1953,18 +1919,18 @@ defmodule CodingAgent.Session do
     end
   end
 
-  defp maybe_schedule_due_heartbeat(%{heartbeat_due: true} = state),
+  defp maybe_schedule_due_heartbeat(%{heartbeat: %Heartbeat.State{due: true}} = state),
     do: Heartbeat.schedule_idle_check(state)
 
   defp maybe_schedule_due_heartbeat(state), do: state
 
-  defp maybe_dispatch_heartbeat(%{heartbeat_due: false} = state), do: state
-  defp maybe_dispatch_heartbeat(%{heartbeat: nil} = state), do: state
+  defp maybe_dispatch_heartbeat(%{heartbeat: %Heartbeat.State{due: false}} = state), do: state
+  defp maybe_dispatch_heartbeat(%{heartbeat: %Heartbeat.State{config: nil}} = state), do: state
 
   defp maybe_dispatch_heartbeat(state) do
     cond do
       state.is_streaming or not is_nil(state.pending_prompt_timer_ref) or
-        state.auto_compaction_in_progress or state.overflow_recovery_in_progress ->
+        state.auto_compaction.in_progress or state.overflow_recovery.in_progress ->
         state
 
       Heartbeat.queued_user_input?() ->
@@ -2102,7 +2068,10 @@ defmodule CodingAgent.Session do
   defp apply_compaction_result(state, result, custom_summary),
     do: CompactionLifecycle.apply_result(state, result, custom_summary, session_callbacks())
 
-  defp maybe_trigger_compaction(%__MODULE__{auto_compaction_in_progress: true} = state), do: state
+  defp maybe_trigger_compaction(
+         %__MODULE__{auto_compaction: %CompactionLifecycle.State{in_progress: true}} = state
+       ),
+       do: state
 
   @spec maybe_trigger_compaction(t()) :: t()
   defp maybe_trigger_compaction(state),

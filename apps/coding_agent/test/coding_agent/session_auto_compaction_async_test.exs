@@ -26,14 +26,12 @@ defmodule CodingAgent.SessionAutoCompactionAsyncTest do
 
   defp mark_auto_compaction_in_progress(session, signature) do
     :sys.replace_state(session, fn state ->
-      state
-      |> Map.put(:auto_compaction_signature, signature)
-      |> Map.put(:auto_compaction_in_progress, true)
+      Map.update!(state, :auto_compaction, &%{&1 | signature: signature, in_progress: true})
     end)
   end
 
   defp auto_compaction_in_progress?(state) do
-    Map.get(state, :auto_compaction_in_progress) == true
+    state.auto_compaction.in_progress == true
   end
 
   defp trigger_auto_compaction_result(session, signature, result) do
@@ -141,19 +139,25 @@ defmodule CodingAgent.SessionAutoCompactionAsyncTest do
     monitor_ref = Process.monitor(task_pid)
 
     :sys.replace_state(session, fn current ->
-      current
-      |> Map.put(:auto_compaction_signature, signature)
-      |> Map.put(:auto_compaction_in_progress, true)
-      |> Map.put(:auto_compaction_task_pid, task_pid)
-      |> Map.put(:auto_compaction_task_monitor_ref, monitor_ref)
+      Map.update!(
+        current,
+        :auto_compaction,
+        &%{
+          &1
+          | signature: signature,
+            in_progress: true,
+            task_pid: task_pid,
+            task_monitor_ref: monitor_ref
+        }
+      )
     end)
 
     send(session, {:auto_compaction_task_timeout, monitor_ref})
 
     state_after = Session.get_state(session)
-    refute state_after.auto_compaction_in_progress
-    assert state_after.auto_compaction_task_pid == nil
-    assert state_after.auto_compaction_task_monitor_ref == nil
+    refute state_after.auto_compaction.in_progress
+    assert state_after.auto_compaction.task_pid == nil
+    assert state_after.auto_compaction.task_monitor_ref == nil
   end
 
   test "a new prompt cancels stale auto compaction without accepting its late result" do
@@ -179,22 +183,28 @@ defmodule CodingAgent.SessionAutoCompactionAsyncTest do
       timeout_ref =
         Process.send_after(self(), {:auto_compaction_task_timeout, monitor_ref}, 60_000)
 
-      current
-      |> Map.put(:auto_compaction_signature, signature)
-      |> Map.put(:auto_compaction_in_progress, true)
-      |> Map.put(:auto_compaction_task_pid, task_pid)
-      |> Map.put(:auto_compaction_task_monitor_ref, monitor_ref)
-      |> Map.put(:auto_compaction_task_timeout_ref, timeout_ref)
+      Map.update!(
+        current,
+        :auto_compaction,
+        &%{
+          &1
+          | signature: signature,
+            in_progress: true,
+            task_pid: task_pid,
+            task_monitor_ref: monitor_ref,
+            task_timeout_ref: timeout_ref
+        }
+      )
     end)
 
     assert :ok = Session.prompt(session, "new turn")
 
     state_after_prompt = Session.get_state(session)
-    refute state_after_prompt.auto_compaction_in_progress
-    assert state_after_prompt.auto_compaction_signature == nil
-    assert state_after_prompt.auto_compaction_task_pid == nil
-    assert state_after_prompt.auto_compaction_task_monitor_ref == nil
-    assert state_after_prompt.auto_compaction_task_timeout_ref == nil
+    refute state_after_prompt.auto_compaction.in_progress
+    assert state_after_prompt.auto_compaction.signature == nil
+    assert state_after_prompt.auto_compaction.task_pid == nil
+    assert state_after_prompt.auto_compaction.task_monitor_ref == nil
+    assert state_after_prompt.auto_compaction.task_timeout_ref == nil
     assert state_after_prompt.is_streaming
 
     assert eventually(fn -> not Process.alive?(task_pid) end)

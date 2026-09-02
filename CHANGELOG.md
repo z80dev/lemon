@@ -10,6 +10,14 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Changed
 
+- `CodingAgent.Session`'s state has three fewer state machines living as
+  loose fields. The heartbeat, auto-compaction and overflow-recovery
+  bookkeeping (twenty fields between them) are now one field each,
+  `heartbeat`, `auto_compaction` and `overflow_recovery`, holding a struct
+  owned by the module that runs that machine (`Heartbeat.State`,
+  `CompactionLifecycle.State`, `OverflowRecovery.State`). The session's
+  public API and the persisted session format are unchanged.
+
 - The model catalogs are JSON under `apps/lemon_ai/priv/models/`, loaded
   at compile time by `LemonAi.Models.Catalog`; the provider modules keep
   their names and `models/0`.

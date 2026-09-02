@@ -5,7 +5,7 @@
 # in the commit message.
 %{
   # lines in apps/*/lib/**/*.ex
-  lib_lines: 327335,
+  lib_lines: 327429,
   # lib files over 1000 lines
   large_lib_files: 50,
   # :"Elixir.Some.Module" atoms in lib
