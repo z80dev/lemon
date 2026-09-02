@@ -19,6 +19,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   profile chat preserves a reconciliation run ID without retrying or exposing
   raw failures, and goal-loop hard stops report sanitized one-shot abort
   outcomes.
+- Email webhooks now reserve a hashed provider Message-ID and stable run
+  reference before router submission. Definite rejection remains safely
+  retryable, while an ambiguous handoff returns a truthful non-retrying receipt
+  and retains dedupe state so provider redelivery cannot create a second run.
+  Telegram and WhatsApp busy-query fallbacks no longer log raw session keys or
+  exception terms.
 - MCP configuration validation now rejects non-boolean OAuth token-persistence
   flags and empty token secret names consistently before HTTP or SSE sources
   reach runtime startup.

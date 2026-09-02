@@ -14,31 +14,38 @@ defmodule LemonChannels.Adapters.Email.WebhookTest do
   alias LemonChannels.Adapters.Email
   alias LemonChannels.Adapters.Email.Webhook
   alias LemonChannels.InboundHttp.Router
+  alias LemonCore.RunRequest
 
   defmodule AcceptingRouter do
     @moduledoc false
-    def handle_inbound(message) do
-      send(self(), {:routed, message})
-      :ok
+    def submit(request) do
+      send(self(), {:routed, request})
+      {:ok, request.run_id}
     end
   end
 
   defmodule DeadRouter do
     @moduledoc false
-    # Stands in for a router that is configured but whose process is not
-    # running: `GenServer.call` to a dead named process exits, and an exit is
-    # not an exception, so `RouterBridge` does not convert it.
-    def handle_inbound(_message), do: exit({:noproc, {GenServer, :call, []}})
+    # Stands in for an orchestrator whose process is not running. RouterBridge
+    # catches the exit and reports the mutation as outcome-unknown because the
+    # callback may have applied a side effect before reaching the dead process.
+    def submit(_request), do: exit({:noproc, {GenServer, :call, []}})
   end
 
   defmodule RejectingRouter do
     @moduledoc false
-    def handle_inbound(_message), do: {:error, :rejected}
+    def submit(request) do
+      send(self(), {:routed, request})
+      {:error, :rejected}
+    end
   end
 
   defmodule AmbiguousRouter do
     @moduledoc false
-    def handle_inbound(_message), do: {:error, :outcome_unknown}
+    def submit(request) do
+      send(self(), {:routed, request})
+      {:error, :outcome_unknown}
+    end
   end
 
   setup do
@@ -58,7 +65,12 @@ defmodule LemonChannels.Adapters.Email.WebhookTest do
 
   defp route_to(module) do
     previous = Application.get_env(:lemon_core, :router_bridge, %{})
-    Application.put_env(:lemon_core, :router_bridge, Map.put(previous, :router, module))
+
+    Application.put_env(
+      :lemon_core,
+      :router_bridge,
+      previous |> Map.put(:router, module) |> Map.put(:run_orchestrator, module)
+    )
   end
 
   defp configure(opts), do: Application.put_env(:lemon_channels, Email, opts)
@@ -69,7 +81,9 @@ defmodule LemonChannels.Adapters.Email.WebhookTest do
     end)
   end
 
-  defp authorized_payload do
+  defp authorized_payload(message_id \\ nil) do
+    message_id = message_id || "webhook-#{System.unique_integer([:positive])}@example.com"
+
     :post
     |> conn("/email", "")
     |> put_req_header("x-webhook-token", "s3cret")
@@ -78,7 +92,7 @@ defmodule LemonChannels.Adapters.Email.WebhookTest do
       "to" => "agent@lemon.test",
       "subject" => "hello",
       "text" => "anyone home?",
-      "message_id" => "<webhook-#{System.unique_integer([:positive])}@example.com>"
+      "message_id" => "<#{message_id}>"
     })
   end
 
@@ -185,7 +199,8 @@ defmodule LemonChannels.Adapters.Email.WebhookTest do
       # 202 rather than 200: the provider's job is done once the message is
       # taken; whether a run results is not something it should wait on.
       assert conn.status == 202
-      assert_received {:routed, %LemonCore.InboundMessage{channel_id: "email"}}
+      assert_received {:routed, %RunRequest{origin: :channel, run_id: run_id}}
+      assert String.starts_with?(run_id, "run_email_")
     end
 
     test "asks for redelivery when the router is not wired at all" do
@@ -200,36 +215,70 @@ defmodule LemonChannels.Adapters.Email.WebhookTest do
       assert conn.resp_body == "unavailable"
     end
 
-    test "asks for redelivery when the router is wired but its process is dead" do
-      # The case `RouterBridge` cannot report on its own: it rescues exceptions,
-      # and this is an exit. Left unhandled it reaches the listener's catch-all
-      # and the provider gets an opaque 500.
+    test "suppresses redelivery when the router process dies after dispatch begins" do
       configure(webhook_token: "s3cret")
       route_to(DeadRouter)
 
       conn = Webhook.handle_inbound(authorized_payload())
 
-      assert conn.status == 503
+      assert conn.status == 200
+      assert conn.resp_body == "outcome unknown"
     end
 
     test "asks for redelivery when the router explicitly rejects submission" do
       configure(webhook_token: "s3cret")
       route_to(RejectingRouter)
+      message_id = "retryable@example.com"
 
-      conn = Webhook.handle_inbound(authorized_payload())
+      conn = Webhook.handle_inbound(authorized_payload(message_id))
 
       assert conn.status == 503
       assert conn.resp_body == "unavailable"
+      assert_received {:routed, %RunRequest{run_id: run_id}}
+
+      route_to(AcceptingRouter)
+      retry_conn = Webhook.handle_inbound(authorized_payload(message_id))
+
+      assert retry_conn.status == 202
+      assert_received {:routed, %RunRequest{run_id: ^run_id}}
     end
 
-    test "does not claim acceptance when the handoff outcome is ambiguous" do
+    test "returns a truthful non-retry receipt and deduplicates an ambiguous handoff" do
       configure(webhook_token: "s3cret")
       route_to(AmbiguousRouter)
+      message_id = "ambiguous@example.com"
 
-      conn = Webhook.handle_inbound(authorized_payload())
+      conn = Webhook.handle_inbound(authorized_payload(message_id))
 
-      assert conn.status == 503
-      assert conn.resp_body == "unavailable"
+      assert conn.status == 200
+      assert conn.resp_body == "outcome unknown"
+      assert_received {:routed, %RunRequest{run_id: run_id}}
+      assert String.starts_with?(run_id, "run_email_")
+
+      route_to(AcceptingRouter)
+      duplicate_conn = Webhook.handle_inbound(authorized_payload(message_id))
+
+      assert duplicate_conn.status == 200
+      assert duplicate_conn.resp_body == "outcome unknown"
+      refute_received {:routed, _request}
+    end
+
+    test "replays the accepted receipt without submitting the same Message-ID twice" do
+      configure(webhook_token: "s3cret")
+      route_to(AcceptingRouter)
+      message_id = "accepted-duplicate@example.com"
+
+      first_conn = Webhook.handle_inbound(authorized_payload(message_id))
+
+      assert first_conn.status == 202
+      assert_received {:routed, %RunRequest{run_id: run_id}}
+
+      duplicate_conn = Webhook.handle_inbound(authorized_payload(message_id))
+
+      assert duplicate_conn.status == 202
+      assert duplicate_conn.resp_body == "accepted"
+      refute_received {:routed, _request}
+      assert String.starts_with?(run_id, "run_email_")
     end
 
     test "answers 400 for an authorized payload it cannot make sense of" do

@@ -2,6 +2,10 @@ defmodule LemonChannels.RuntimeTest do
   # Mutates the router bridge configuration.
   use ExUnit.Case, async: false
 
+  import ExUnit.CaptureLog
+
+  alias LemonChannels.Adapters.Telegram.Transport.SessionRouting, as: TelegramSessionRouting
+  alias LemonChannels.Adapters.WhatsApp.Transport.SessionRouting, as: WhatsAppSessionRouting
   alias LemonChannels.Runtime
   alias LemonCore.RouterBridge
 
@@ -12,7 +16,13 @@ defmodule LemonChannels.RuntimeTest do
     def abort(session_key, reason), do: record({:abort, session_key, reason})
     def abort_run(run_id, reason), do: record({:abort_run, run_id, reason})
     def keep_run_alive(run_id, decision), do: record({:keep_run_alive, run_id, decision})
-    def session_busy?(session_key), do: session_key == "agent:busy:main"
+
+    def session_busy?(session_key) do
+      case :persistent_term.get({__MODULE__, :busy_query_mode}, :normal) do
+        :raise -> raise "sensitive-router-query"
+        :normal -> session_key == "agent:busy:main"
+      end
+    end
 
     defp record(event) do
       send(:persistent_term.get({__MODULE__, :test_pid}), event)
@@ -32,6 +42,11 @@ defmodule LemonChannels.RuntimeTest do
     end)
 
     :persistent_term.put({RecordingRouter, :test_pid}, self())
+
+    on_exit(fn ->
+      :persistent_term.erase({RecordingRouter, :busy_query_mode})
+    end)
+
     :ok
   end
 
@@ -73,6 +88,46 @@ defmodule LemonChannels.RuntimeTest do
     test "session_busy? answers the router's boolean" do
       assert Runtime.session_busy?("agent:busy:main") == {:ok, true}
       assert Runtime.session_busy?("agent:idle:main") == {:ok, false}
+    end
+
+    test "busy-query fallbacks log bounded classifications without session or exception data" do
+      :persistent_term.put({RecordingRouter, :busy_query_mode}, :raise)
+
+      telegram_inbound = %{
+        meta: %{agent_id: "private-agent", user_msg_id: 77},
+        message: %{reply_to_id: nil},
+        peer: %{kind: :dm, thread_id: nil}
+      }
+
+      whatsapp_inbound = %{
+        meta: %{agent_id: "private-agent", user_msg_id: "wa-77"},
+        message: %{reply_to_id: nil},
+        peer: %{kind: :dm, thread_id: nil}
+      }
+
+      log =
+        capture_log(fn ->
+          assert TelegramSessionRouting.maybe_mark_fork_when_busy(
+                   "private-account",
+                   telegram_inbound,
+                   123_456,
+                   nil
+                 ) == telegram_inbound
+
+          assert WhatsAppSessionRouting.maybe_mark_fork_when_busy(
+                   "private-account",
+                   whatsapp_inbound,
+                   "private-peer",
+                   nil
+                 ) == whatsapp_inbound
+        end)
+
+      assert log =~ "session busy check unavailable failure_class=query_error"
+      refute log =~ "sensitive-router-query"
+      refute log =~ "private-agent"
+      refute log =~ "private-account"
+      refute log =~ "private-peer"
+      refute log =~ "123456"
     end
 
     test "invalid arguments are errors, not silent successes" do

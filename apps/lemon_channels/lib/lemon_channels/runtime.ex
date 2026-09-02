@@ -19,12 +19,20 @@ defmodule LemonChannels.Runtime do
 
   @type failure :: {:error, :unavailable | term()}
 
-  @spec submit_inbound(InboundMessage.t()) :: :ok | failure()
-  def submit_inbound(%InboundMessage{} = inbound) do
+  @doc """
+  Submit one normalized inbound message through the canonical run boundary.
+
+  A caller that already owns a stable reconciliation identity may pass
+  `run_id: value`; ordinary channel transports omit it and let the router
+  allocate a run ID.
+  """
+  @spec submit_inbound(InboundMessage.t(), keyword()) :: :ok | failure()
+  def submit_inbound(%InboundMessage{} = inbound, opts \\ []) when is_list(opts) do
     emit_inbound_telemetry(inbound)
 
     inbound
     |> LemonChannels.RunRequestBuilder.from_inbound()
+    |> maybe_put_run_id(Keyword.get(opts, :run_id))
     |> RouterBridge.submit_run()
     |> case do
       {:ok, _run_id} -> :ok
@@ -102,6 +110,11 @@ defmodule LemonChannels.Runtime do
   end
 
   def clear_telegram_thread_state(_, _, _), do: :ok
+
+  defp maybe_put_run_id(request, run_id) when is_binary(run_id) and run_id != "",
+    do: %{request | run_id: run_id}
+
+  defp maybe_put_run_id(request, _run_id), do: request
 
   defp emit_inbound_telemetry(%InboundMessage{} = inbound) do
     meta = if is_map(inbound.meta), do: inbound.meta, else: %{}

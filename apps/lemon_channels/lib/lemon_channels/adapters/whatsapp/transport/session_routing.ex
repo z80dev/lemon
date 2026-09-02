@@ -129,8 +129,10 @@ defmodule LemonChannels.Adapters.WhatsApp.Transport.SessionRouting do
         busy?
 
       {:error, reason} ->
+        failure_class = busy_query_failure_class(reason)
+
         Logger.warning(
-          "session busy check unavailable session=#{inspect(session_key)}: #{inspect(reason)}; treating as idle"
+          "session busy check unavailable failure_class=#{failure_class}; treating as idle"
         )
 
         false
@@ -138,6 +140,9 @@ defmodule LemonChannels.Adapters.WhatsApp.Transport.SessionRouting do
   end
 
   defp session_busy?(_), do: false
+
+  defp busy_query_failure_class(:unavailable), do: :unavailable
+  defp busy_query_failure_class(_reason), do: :query_error
 
   defp extract_explicit_session_key(meta) when is_map(meta) do
     candidate =

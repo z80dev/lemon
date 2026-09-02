@@ -66,15 +66,7 @@ If either check fails, the message is silently dropped. Yours passes.
 
 ---
 
-## Step 4: The Bouncing Ball Reaction
-
-The adapter sends a reaction on your message in Telegram. You'll see a little
-eyes emoji (👀) appear on your message — this is Lemon's way of saying "got it,
-working on it."
-
----
-
-## Step 5: Hand-off to the Channel Runtime
+## Step 4: Hand-off to the Channel Runtime
 
 After normalization and platform-specific checks, the adapter calls
 `LemonChannels.Runtime.submit_inbound(inbound_message)`. This is the one shared
@@ -90,7 +82,7 @@ shared channel runtime.
 
 ---
 
-## Step 6: Build the Canonical Run Request
+## Step 5: Build the Canonical Run Request
 
 `LemonChannels.Runtime` passes the message to
 `LemonChannels.RunRequestBuilder.from_inbound/1`. The builder resolves the
@@ -110,7 +102,7 @@ your prompt, the `:channel` origin, queue mode, and safe channel metadata.
 
 ---
 
-## Step 7: Submit the Run to the Router
+## Step 6: Submit the Run to the Router
 
 The channel runtime sends that completed `RunRequest` through
 `RouterBridge.submit_run/1`. This is the boundary between `lemon_channels` and
@@ -129,6 +121,15 @@ LemonChannels.Runtime
 ```
 
 **Where we are:** Crossing into `lemon_router`.
+
+---
+
+## Step 7: The Bouncing Ball Reaction
+
+Only after the router confirms that it accepted the run does the adapter send a
+reaction on your Telegram message. You'll see a little eyes emoji (👀) appear —
+this is Lemon's way of saying "got it, working on it." A rejected or ambiguous
+submission does not get this success signal.
 
 ---
 

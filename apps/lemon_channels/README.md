@@ -50,8 +50,12 @@ have mutated before its acknowledgement was lost or malformed; a second
 submission could duplicate a run. The channel tells the user that acceptance
 could not be confirmed. Error logs and user feedback use bounded
 classifications rather than arbitrary router terms. Email applies the same
-boundary at HTTP level: only `:ok` returns 202, and every explicit or ambiguous
-handoff error returns 503 for provider redelivery.
+boundary at HTTP level and reserves a stable, hashed run reference for each
+provider Message-ID. Accepted and duplicate-accepted deliveries return 202;
+definite rejection releases the reservation and returns 503 for safe
+redelivery. An ambiguous or duplicate-ambiguous delivery retains the
+reservation and returns a truthful 200 `outcome unknown` receipt, preventing a
+provider retry from creating a second run without claiming acceptance.
 
 Telegram run-control callbacks distinguish definite rejection from an
 unacknowledged mutation. An unknown cancel or keepalive outcome tells the user

@@ -17,6 +17,16 @@ defmodule LemonChannels.Adapters.Email.Webhook do
   than running open. An inbound mail endpoint that accepts unauthenticated
   POSTs is a spam relay into someone's agent.
 
+  ## Delivery receipts
+
+  A normalized provider Message-ID is hashed before it is persisted and also
+  supplies a stable run reference. Router acceptance returns 202. A definite
+  rejection releases that reservation and returns 503 so redelivery is safe.
+  An ambiguous mutation retains the reservation and returns 200 with
+  `outcome unknown`: this is a successful provider receipt, not a claim that
+  the router accepted the run, and prevents an automatic retry from creating a
+  duplicate.
+
   The token is in a header rather than the body on purpose: that lets the check
   run as `c:LemonChannels.InboundHttp.Handler.authorized?/1`, which
   `LemonChannels.InboundHttp.Router` calls *before* parsing, so an
@@ -35,7 +45,11 @@ defmodule LemonChannels.Adapters.Email.Webhook do
   require Logger
 
   alias LemonChannels.Adapters.Email
+  alias LemonChannels.Runtime
   alias LemonChannels.SubmissionOutcome
+  alias LemonCore.Store
+
+  @idempotency_table :email_inbound_idempotency
 
   @impl true
   def authorized?(conn) do
@@ -66,7 +80,10 @@ defmodule LemonChannels.Adapters.Email.Webhook do
   defp accept(conn) do
     case Email.normalize_inbound(conn.body_params) do
       {:ok, message} ->
-        handoff(conn, message)
+        case reserve(message) do
+          {:duplicate, receipt} -> duplicate_receipt(conn, receipt)
+          {:new, reservation} -> handoff(conn, message, reservation)
+        end
 
       {:error, reason} ->
         Logger.warning("email webhook rejected payload: #{inspect(reason)}")
@@ -74,40 +91,118 @@ defmodule LemonChannels.Adapters.Email.Webhook do
     end
   end
 
-  defp handoff(conn, message) do
-    case deliver_to_router(message) do
+  defp handoff(conn, message, reservation) do
+    case deliver_to_router(message, reservation.run_id) do
       :ok ->
+        remember(reservation, "accepted")
+
         # The provider's job is done only after the router takes responsibility
         # for the message. The run itself remains asynchronous.
         Plug.Conn.send_resp(conn, 202, "accepted")
 
       {:error, _} = error ->
-        # A submission rejection must not become a false 202. This also covers
-        # an ambiguous outcome: returning 503 cannot claim acceptance, while
-        # the provider message ID keeps redelivery idempotent at the router.
-        Logger.error(
-          "email webhook handoff failed; asking for redelivery: reason=#{SubmissionOutcome.log_label(error)}"
-        )
+        if SubmissionOutcome.uncertain?(error) do
+          remember(reservation, "outcome_unknown")
 
-        Plug.Conn.send_resp(conn, 503, "unavailable")
+          Logger.error(
+            "email webhook handoff outcome unknown; suppressing redelivery: reason=#{SubmissionOutcome.log_label(error)}"
+          )
+
+          Plug.Conn.send_resp(conn, 200, "outcome unknown")
+        else
+          release(reservation)
+
+          Logger.error(
+            "email webhook handoff rejected; asking for redelivery: reason=#{SubmissionOutcome.log_label(error)}"
+          )
+
+          Plug.Conn.send_resp(conn, 503, "unavailable")
+        end
 
       _unexpected ->
+        remember(reservation, "outcome_unknown")
+
         Logger.error(
-          "email webhook handoff failed; asking for redelivery: reason=unexpected_result"
+          "email webhook handoff outcome unknown; suppressing redelivery: reason=unexpected_result"
         )
 
-        Plug.Conn.send_resp(conn, 503, "unavailable")
+        Plug.Conn.send_resp(conn, 200, "outcome unknown")
     end
   end
 
-  # Routed through LemonCore.RouterBridge so channels keeps no compile-time
-  # dependency on lemon_router (see the §2 dependency rules).
-  #
-  # The bridge preserves explicit routing rejections and distinguishes an
-  # ambiguous mutation outcome from a definite failure. Deciding what any
-  # non-acceptance means to a mail provider is this module's job, and that
-  # decision is `handoff/2`.
-  defp deliver_to_router(message), do: LemonCore.RouterBridge.handle_inbound(message)
+  defp reserve(%{message: %{id: message_id}}) when is_binary(message_id) and message_id != "" do
+    digest = Base.encode16(:crypto.hash(:sha256, message_id), case: :lower)
+    reservation = %{key: digest, run_id: "run_email_#{digest}", tracked?: true}
+
+    entry = %{
+      "run_id" => reservation.run_id,
+      "state" => "pending",
+      "updated_at_ms" => System.system_time(:millisecond)
+    }
+
+    case Store.put_new(@idempotency_table, reservation.key, entry) do
+      :ok ->
+        {:new, reservation}
+
+      {:error, :exists} ->
+        {:duplicate, Store.get(@idempotency_table, reservation.key) || entry}
+
+      {:error, _reason} ->
+        Logger.warning("email webhook idempotency unavailable failure_class=store_error")
+        {:new, %{reservation | tracked?: false}}
+
+      _unexpected ->
+        Logger.warning("email webhook idempotency unavailable failure_class=unexpected_result")
+        {:new, %{reservation | tracked?: false}}
+    end
+  rescue
+    _error ->
+      Logger.warning("email webhook idempotency unavailable failure_class=exception")
+      {:new, %{key: nil, run_id: nil, tracked?: false}}
+  end
+
+  defp reserve(_message), do: {:new, %{key: nil, run_id: nil, tracked?: false}}
+
+  defp duplicate_receipt(conn, %{"state" => "accepted"}),
+    do: Plug.Conn.send_resp(conn, 202, "accepted")
+
+  defp duplicate_receipt(conn, _receipt),
+    do: Plug.Conn.send_resp(conn, 200, "outcome unknown")
+
+  defp remember(%{tracked?: true, key: key, run_id: run_id}, state) do
+    case Store.put(@idempotency_table, key, %{
+           "run_id" => run_id,
+           "state" => state,
+           "updated_at_ms" => System.system_time(:millisecond)
+         }) do
+      :ok -> :ok
+      _ -> Logger.warning("email webhook idempotency update failed failure_class=store_error")
+    end
+  rescue
+    _ -> Logger.warning("email webhook idempotency update failed failure_class=exception")
+  end
+
+  defp remember(_reservation, _state), do: :ok
+
+  defp release(%{tracked?: true, key: key}) do
+    case Store.delete(@idempotency_table, key) do
+      :ok -> :ok
+      _ -> Logger.warning("email webhook idempotency release failed failure_class=store_error")
+    end
+  rescue
+    _ -> Logger.warning("email webhook idempotency release failed failure_class=exception")
+  end
+
+  defp release(_reservation), do: :ok
+
+  # The runtime converts the message to the canonical RunRequest and crosses
+  # RouterBridge.submit_run/1. A provider Message-ID supplies a stable run
+  # reference so ambiguous submissions can be reconciled without inventing a
+  # second identity.
+  defp deliver_to_router(message, nil), do: Runtime.submit_inbound(message)
+
+  defp deliver_to_router(message, run_id),
+    do: Runtime.submit_inbound(message, run_id: run_id)
 
   defp secure_equal?(nil, _token), do: false
 
