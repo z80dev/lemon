@@ -24,6 +24,10 @@ Telegram, run history, durable memory, kanban boards, or `~/.lemon`.
   architecture quality gate parses all supported generic Store operations at
   default and explicit server arities and permits owner calls only when their
   literal or module-attribute table matches the declaration.
+- `LemonCore.ChatStateStore` now declares ownership of the cached `:chat` table
+  and its `:expires_at` retention policy. Its public API and the specialized
+  Store runtime that applies TTL, expiry, sweeping, and cache behavior are
+  unchanged.
 
 - `LemonCore.A2A.Protocol`, `LemonCore.A2A.Client`, and `LemonCore.A2AStore`
   provide the generic A2A v1.0 wire helpers, credential-scrubbing HTTP client,

@@ -39,6 +39,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   resolving aliases and module attributes and rejecting dynamic or cross-table
   access from an owner module. The metadata is non-operational in this change;
   backend registration, retention, and domain migrations remain separate.
+- `LemonCore.ChatStateStore` now adopts that ownership contract for the cached
+  `:chat` table and its existing `:expires_at` retention policy without moving
+  TTL, expiry, sweep, or cache behavior out of the specialized Store runtime.
 
 - Persistent source and packaged launchers now provision a private,
   port-scoped control-plane operator credential under `~/.lemon/run`, allowing

@@ -393,6 +393,11 @@ Store client calls are fail-soft: if `LemonCore.Store` is overloaded/unavailable
 
 Use the generic table API only for backend internals, wrapper modules, or explicitly app-local legacy tables. Shared-domain callers should go through typed wrappers such as `LemonCore.RunStore`, `LemonCore.SessionMetadataStore`, `LemonCore.ChatStateStore`, `LemonCore.ProgressStore`, `LemonCore.PolicyStore`, `LemonCore.IdempotencyStore`, `LemonCore.IntrospectionStore`, `LemonCore.ExecApprovalStore`, `LemonCore.UsageStore`, and `LemonCore.Checkpoint`. Operator surfaces should use `LemonCore.SessionLifecycle` rather than reimplementing session search, aggregate statistics, export, or prune over those stores. Agent workspace callers should use `LemonAgent.Workspace.HeartbeatStore`, `LemonAgent.Workspace.GoalStore`, and `LemonAgent.Workspace.KanbanStore`. Channel model-policy callers should use `LemonChannels.ModelPolicyStore`.
 
+`LemonCore.ChatStateStore` owns the cached `:chat` table and declares
+`[expires_at: :expires_at]` retention. Keep its typed API delegated to the
+specialized Store operations, which remain responsible for configured TTL
+stamping, lazy expiry, periodic sweeping, and cache coherence.
+
 New generic-table wrappers must declare ownership with `use LemonCore.Store.Table`.
 The declaration generates no CRUD API and does not yet change backend runtime
 policy. `mix lemon.quality` resolves generic Store calls from the source AST,

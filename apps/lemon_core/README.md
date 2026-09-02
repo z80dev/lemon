@@ -478,7 +478,9 @@ cross-table access fails closed.
 
 Shared-domain callers should prefer typed wrappers:
 
-- **Chat state**: `LemonCore.ChatStateStore.put/2`, `get/1`, `delete/1`
+- **Chat state**: `LemonCore.ChatStateStore.put/2`, `get/1`, `delete/1`; owns
+  the cached `:chat` table with `:expires_at` retention metadata while the
+  specialized Store runtime continues to enforce TTL and expiry
 - **Run history**: `LemonCore.RunStore.append_event/2`, `finalize/2`, `history/2`, `get/1`
 - **Policies**: `LemonCore.PolicyStore.put_agent/2`, `put_channel/2`, `put_session/2`, `put_runtime/1`
 - **Idempotency**: `LemonCore.IdempotencyStore.put/3`, `get/2`, `delete/2`
