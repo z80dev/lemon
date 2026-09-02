@@ -398,9 +398,14 @@ defmodule LemonRouter.RunOrchestrator do
   defp existing_admission(run_id, identity) do
     case Store.fetch(@run_admission_table, run_id) do
       {:ok, %{} = entry} ->
-        if MapHelpers.get_key(entry, :identity) == identity,
-          do: {:ok, entry, :existing},
-          else: {:error, :run_id_conflict}
+        if MapHelpers.get_key(entry, :identity) == identity do
+          case compact_existing_admission(run_id, entry, identity) do
+            {:ok, compacted} -> {:ok, compacted, :existing}
+            {:error, _reason} -> {:error, :admission_store_unavailable}
+          end
+        else
+          {:error, :run_id_conflict}
+        end
 
       {:ok, nil} ->
         {:error, :admission_store_unavailable}
@@ -833,12 +838,8 @@ defmodule LemonRouter.RunOrchestrator do
     now_ms = System.system_time(:millisecond)
 
     if now_ms - state.last_receipt_cleanup_ms >= state.receipt_cleanup_interval_ms do
-      cleanup_expired_rows(@run_admission_table, now_ms, fn entry ->
-        state = MapHelpers.get_key(entry, :state)
-
-        state == "claimed" and
-          expired_at?(admission_expires_at_ms(entry, @run_admission_retention_ms), now_ms)
-      end)
+      compact_durable_admissions(now_ms)
+      compact_abort_tombstones(now_ms)
 
       %{
         state
@@ -855,18 +856,80 @@ defmodule LemonRouter.RunOrchestrator do
     _, _ -> %{state | last_receipt_cleanup_ms: System.system_time(:millisecond)}
   end
 
-  defp cleanup_expired_rows(table, now_ms, expired?) do
-    table
+  defp compact_existing_admission(run_id, entry, identity) do
+    case MapHelpers.get_key(entry, :state) do
+      state when state in ["accepted", "submitting"] ->
+        compacted = compact_admission(state, identity)
+
+        if entry == compacted do
+          {:ok, entry}
+        else
+          case Store.compare_and_swap(@run_admission_table, run_id, entry, compacted) do
+            :ok -> {:ok, compacted}
+            {:error, :mismatch} -> {:error, :concurrent_change}
+            {:error, reason} -> {:error, reason}
+            _unexpected -> {:error, :store_unavailable}
+          end
+        end
+
+      _state ->
+        {:ok, entry}
+    end
+  end
+
+  defp compact_durable_admissions(now_ms) do
+    @run_admission_table
     |> Store.list()
     |> Enum.each(fn
-      {key, entry} when is_map(entry) ->
-        if expired?.(entry), do: Store.compare_and_delete(table, key, entry)
+      {run_id, entry} when is_map(entry) ->
+        case MapHelpers.get_key(entry, :state) do
+          "claimed" ->
+            if expired_at?(
+                 admission_expires_at_ms(entry, @run_admission_retention_ms),
+                 now_ms
+               ) do
+              _ = Store.compare_and_delete(@run_admission_table, run_id, entry)
+            end
+
+          state when state in ["accepted", "submitting"] ->
+            identity = MapHelpers.get_key(entry, :identity)
+            compacted = compact_admission(state, identity)
+            if entry != compacted, do: Store.compare_and_swap(@run_admission_table, run_id, entry, compacted)
+
+          _state ->
+            :ok
+        end
 
       _invalid ->
         :ok
     end)
+  end
 
-    now_ms
+  defp compact_abort_tombstones(now_ms) do
+    @abort_tombstone_table
+    |> Store.list()
+    |> Enum.each(fn
+      {run_id, tombstone} when is_map(tombstone) ->
+        expires_at_ms = MapHelpers.get_key(tombstone, :expires_at_ms)
+
+        reason_code =
+          tombstone
+          |> MapHelpers.get_key(:reason_code)
+          |> then(fn stored -> stored || MapHelpers.get_key(tombstone, :reason) end)
+          |> normalize_abort_reason()
+
+        compacted =
+          if expired_at?(expires_at_ms, now_ms),
+            do: %{state: "aborted", reason_code: :aborted},
+            else: %{state: "aborted", reason_code: reason_code, expires_at_ms: expires_at_ms}
+
+        if tombstone != compacted do
+          _ = Store.compare_and_swap(@abort_tombstone_table, run_id, tombstone, compacted)
+        end
+
+      _invalid ->
+        :ok
+    end)
   end
 
   defp expired_at?(expires_at_ms, now_ms),

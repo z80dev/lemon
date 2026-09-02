@@ -459,7 +459,25 @@ defmodule LemonRouter.RunOrchestratorTest do
         assert is_binary(identity)
         assert Map.keys(submitting_receipt) |> Enum.sort() == [:identity, :state]
 
+        secret = "legacy-submitting-secret-#{label}"
+
+        assert :ok =
+                 LemonCore.Store.put(
+                   RunOrchestrator.admission_table(),
+                   run_id,
+                   Map.merge(submitting_receipt, %{
+                     session_key: secret,
+                     submitting_at_ms: 123,
+                     expires_at_ms: 456
+                   })
+                 )
+
         assert {:error, :outcome_unknown} = RunOrchestrator.submit(orchestrator, replay)
+
+        assert LemonCore.Store.get(RunOrchestrator.admission_table(), run_id) ==
+                 submitting_receipt
+
+        refute inspect(LemonCore.Store.get(RunOrchestrator.admission_table(), run_id)) =~ secret
       end
     end
 
@@ -685,8 +703,29 @@ defmodule LemonRouter.RunOrchestratorTest do
       assert %{state: "accepted", identity: identity} = accepted_receipt
       assert is_binary(identity)
       assert Map.keys(accepted_receipt) |> Enum.sort() == [:identity, :state]
+
+      secret = "legacy-accepted-session-secret"
+
+      assert :ok =
+               LemonCore.Store.put(
+                 RunOrchestrator.admission_table(),
+                 accepted_run_id,
+                 Map.merge(accepted_receipt, %{
+                   session_key: secret,
+                   accepted_at_ms: 123,
+                   expires_at_ms: 456
+                 })
+               )
+
       Process.sleep(20)
       assert {:ok, ^accepted_run_id} = RunOrchestrator.submit(orchestrator, accepted)
+
+      assert LemonCore.Store.get(RunOrchestrator.admission_table(), accepted_run_id) ==
+               accepted_receipt
+
+      refute inspect(LemonCore.Store.get(RunOrchestrator.admission_table(), accepted_run_id)) =~
+               secret
+
       refute_receive {:captured_job, _command}, 100
 
       pending =
@@ -743,13 +782,17 @@ defmodule LemonRouter.RunOrchestratorTest do
       assert :ok =
                LemonCore.Store.put(RunOrchestrator.admission_table(), expired_admission, %{
                  state: "accepted",
-                 expires_at_ms: 0
+                 identity: "accepted-identity",
+                 expires_at_ms: 0,
+                 session_key: "cleanup-accepted-secret"
                })
 
       assert :ok =
                LemonCore.Store.put(RunOrchestrator.admission_table(), ambiguous_admission, %{
                  state: "submitting",
-                 expires_at_ms: 0
+                 identity: "submitting-identity",
+                 expires_at_ms: 0,
+                 session_key: "cleanup-submitting-secret"
                })
 
       assert :ok =
@@ -767,7 +810,7 @@ defmodule LemonRouter.RunOrchestratorTest do
 
       assert :ok =
                LemonCore.Store.put(RunOrchestrator.abort_tombstone_table(), expired_abort, %{
-                 reason: :old,
+                 reason: {:secret, "cleanup-abort-secret"},
                  expires_at_ms: 0
                })
 
@@ -793,17 +836,23 @@ defmodule LemonRouter.RunOrchestratorTest do
 
       assert_receive {:captured_job, _command}, 500
 
-      assert %{state: "accepted"} =
-               LemonCore.Store.get(RunOrchestrator.admission_table(), expired_admission)
+      assert LemonCore.Store.get(RunOrchestrator.admission_table(), expired_admission) == %{
+               state: "accepted",
+               identity: "accepted-identity"
+             }
 
       assert LemonCore.Store.get(RunOrchestrator.admission_table(), expired_claim) == nil
       assert LemonCore.Store.get(RunOrchestrator.admission_table(), legacy_expired_claim) == nil
 
-      assert %{state: "submitting"} =
-               LemonCore.Store.get(RunOrchestrator.admission_table(), ambiguous_admission)
+      assert LemonCore.Store.get(RunOrchestrator.admission_table(), ambiguous_admission) == %{
+               state: "submitting",
+               identity: "submitting-identity"
+             }
 
-      assert %{reason: :old} =
-               LemonCore.Store.get(RunOrchestrator.abort_tombstone_table(), expired_abort)
+      assert LemonCore.Store.get(RunOrchestrator.abort_tombstone_table(), expired_abort) == %{
+               state: "aborted",
+               reason_code: :aborted
+             }
     end
 
     test "generates run_id" do

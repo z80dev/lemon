@@ -86,6 +86,11 @@ acceptance and the later submitted callback. `mode: :graceful` disables auto
 restart but lets the already bounded loop finish. The outer `run_once/2` call
 timeout encloses the configured judge/continuation wait deadlines.
 
+Before crossing the external abort boundary, hard stop durably records the
+fixed run's abort intent and marks the attempt outcome unknown. A manager crash
+after dispatch therefore restores reconciliation ownership and never repeats
+the abort; a normal acknowledgement updates that prewritten intent.
+
 The hard-stop result reports a sanitized `router_abort` status. It sends the
 abort exactly once: `:outcome_unknown` means the abort may already have taken
 effect, so the manager does not retry it; arbitrary callback errors and

@@ -347,6 +347,49 @@ defmodule LemonCore.Store.SqliteBackendTest do
     end
   end
 
+  describe "compare_and_delete_many/2" do
+    setup %{tmp_dir: tmp_dir} do
+      {:ok, state} = SqliteBackend.init(path: tmp_dir)
+      on_exit(fn -> SqliteBackend.close(state) end)
+      {:ok, state: state}
+    end
+
+    test "rolls every persistent delete back when a later delete fails", %{state: state} do
+      assert {:ok, state} = SqliteBackend.put(state, :atomic_first, "key", "first")
+      assert {:ok, state} = SqliteBackend.put(state, :atomic_second, "key", "second")
+
+      assert :ok =
+               Sqlite3.execute(state.conn, """
+               CREATE TRIGGER fail_atomic_second
+               BEFORE DELETE ON lemon_store_kv
+               WHEN OLD.table_name = 'atomic_second'
+               BEGIN
+                 SELECT RAISE(ABORT, 'injected second delete failure');
+               END;
+               """)
+
+      assert {:error, _reason, ^state} =
+               SqliteBackend.compare_and_delete_many(state, [
+                 {:atomic_first, "key", "first"},
+                 {:atomic_second, "key", "second"}
+               ])
+
+      assert {:ok, "first", _} = SqliteBackend.get(state, :atomic_first, "key")
+      assert {:ok, "second", _} = SqliteBackend.get(state, :atomic_second, "key")
+
+      assert :ok = Sqlite3.execute(state.conn, "DROP TRIGGER fail_atomic_second")
+
+      assert {:ok, ^state} =
+               SqliteBackend.compare_and_delete_many(state, [
+                 {:atomic_first, "key", "first"},
+                 {:atomic_second, "key", "second"}
+               ])
+
+      assert {:ok, nil, _} = SqliteBackend.get(state, :atomic_first, "key")
+      assert {:ok, nil, _} = SqliteBackend.get(state, :atomic_second, "key")
+    end
+  end
+
   describe "list/2" do
     setup %{tmp_dir: tmp_dir} do
       {:ok, state} = SqliteBackend.init(path: tmp_dir)

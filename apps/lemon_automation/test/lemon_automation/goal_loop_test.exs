@@ -70,6 +70,20 @@ defmodule LemonAutomation.GoalLoopTest do
     end
   end
 
+  defmodule CrashDuringAbortRouter do
+    @moduledoc false
+
+    def submit(params) do
+      send(:persistent_term.get({__MODULE__, :test_pid}), {:crash_abort_submit, params, self()})
+      {:ok, params.run_id}
+    end
+
+    def abort_run(run_id, reason) do
+      send(:persistent_term.get({__MODULE__, :test_pid}), {:crash_abort_dispatched, run_id, reason})
+      Process.exit(self(), :kill)
+    end
+  end
+
   defmodule BlockingGoalRuntime do
     @moduledoc false
 
@@ -305,6 +319,7 @@ defmodule LemonAutomation.GoalLoopTest do
     :persistent_term.put({AcceptedWindowLoopRouter, :test_pid}, self())
     :persistent_term.put({AmbiguousLoopRouter, :test_pid}, self())
     :persistent_term.put({AmbiguousLoopRouter, :abort_result}, :ok)
+    :persistent_term.put({CrashDuringAbortRouter, :test_pid}, self())
     :persistent_term.put({BlockingGoalRuntime, :test_pid}, self())
 
     on_exit(fn ->
@@ -313,6 +328,7 @@ defmodule LemonAutomation.GoalLoopTest do
       :persistent_term.erase({AcceptedWindowLoopRouter, :test_pid})
       :persistent_term.erase({AmbiguousLoopRouter, :test_pid})
       :persistent_term.erase({AmbiguousLoopRouter, :abort_result})
+      :persistent_term.erase({CrashDuringAbortRouter, :test_pid})
       :persistent_term.erase({BlockingGoalRuntime, :test_pid})
     end)
 
@@ -880,6 +896,72 @@ defmodule LemonAutomation.GoalLoopTest do
     goal = GoalStore.get(session_key)
     assert get_in(goal.meta, ["goalLoop", "status"]) == "stopped"
     assert get_in(goal.meta, ["goalLoop", "lastRunId"]) == run_id
+  end
+
+  test "hard-stop restart never repeats an abort dispatched after durable intent", %{
+    session_key: session_key
+  } do
+    assert {:ok, _goal} =
+             GoalStore.set(session_key, "Persist abort intent before dispatch",
+               agent_id: "agent_1",
+               meta: %{"testPid" => self()}
+             )
+
+    opts = [
+      scheduler_interval_ms: 0
+    ]
+
+    {:ok, manager} = GenServer.start(GoalLoopManager, opts)
+    run_id = "goal_abort_crash_#{System.unique_integer([:positive])}"
+
+    assert {:ok, %{status: "running"}} =
+             GenServer.call(
+               manager,
+               {:start_loop, session_key,
+                [
+                  judge_mod: ContinueJudge,
+                  router_mod: CrashDuringAbortRouter,
+                  waiter_mod: BlockingLoopWaiter,
+                  run_id: run_id,
+                  wait_timeout_ms: 60_000,
+                  meta: %{test_pid: self()}
+                ]}
+             )
+
+    assert_receive {:crash_abort_submit, %{run_id: ^run_id}, loop_pid}, 1_000
+    assert_receive {:blocking_waiter, ^run_id, 60_000, ^loop_pid}, 1_000
+
+    manager_ref = Process.monitor(manager)
+
+    stop_call =
+      Task.async(fn ->
+        try do
+          GenServer.call(manager, {:stop_loop, session_key, :hard})
+        catch
+          :exit, reason -> {:exit, reason}
+        end
+      end)
+
+    assert_receive {:crash_abort_dispatched, ^run_id, :goal_loop_hard_stop}, 1_000
+    assert_receive {:DOWN, ^manager_ref, :process, ^manager, :killed}, 1_000
+    assert match?({:exit, _reason}, Task.await(stop_call, 1_000))
+
+    persisted = GoalStore.get(session_key)
+    assert get_in(persisted.meta, ["goalLoop", "status"]) == "reconciling"
+    assert get_in(persisted.meta, ["goalLoop", "abortAttempted"]) == true
+    assert get_in(persisted.meta, ["goalLoop", "abortResult"]) == "outcome_unknown"
+
+    {:ok, restarted} = GenServer.start(GoalLoopManager, opts)
+
+    assert {:ok, %{running: true, loop: %{status: "reconciling"}}} =
+             GenServer.call(restarted, {:status, session_key})
+
+    assert {:ok, %{router_abort: :outcome_unknown, loop: %{status: "reconciling"}}} =
+             GenServer.call(restarted, {:stop_loop, session_key, :hard})
+
+    refute_receive {:crash_abort_dispatched, ^run_id, _reason}, 200
+    send(loop_pid, {:finish_wait, {:error, :canceled}})
+    GenServer.stop(restarted)
   end
 
   test "manager reports a mutate-then-raise abort without retrying or exposing callback terms", %{

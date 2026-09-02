@@ -155,7 +155,11 @@ for a non-channel surface that needs the Gateway runtime.
   whose exact response has no durable receipt returns
   `status: "response_persistence_unknown"` with `retry_safe: false` rather than
   replaying a generic accepted response. Mutation exceptions and exits are
-  outcome-unknown, never definite rejection.
+  outcome-unknown, never definite rejection. Hash the caller's idempotency key
+  with its integration identity before building any durable key, receipt, or
+  router request. Expiry removes the response snapshot before the primary
+  execution fence on ordered backends; SQLite performs the pair in a single
+  transaction, and any cleanup failure is surfaced without authorizing replay.
 - Build stable, unique session keys.
 - Return `:ignore` from `start_link/1` when disabled.
 - Resolve binding cwd and agent metadata through `BindingResolver`.

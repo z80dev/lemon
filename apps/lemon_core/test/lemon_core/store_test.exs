@@ -30,6 +30,44 @@ defmodule LemonCore.StoreTest do
     def list(_state, _table), do: {:error, :sqlite_busy}
   end
 
+  defmodule SecondDeleteFailureBackend do
+    @behaviour LemonCore.Store.Backend
+
+    @impl true
+    def init(_opts), do: {:ok, %{data: %{}, delete_count: 0}}
+
+    @impl true
+    def put(state, table, key, value),
+      do: {:ok, put_in(state, [:data, {table, key}], value)}
+
+    @impl true
+    def put_new(state, table, key, value) do
+      if Map.has_key?(state.data, {table, key}),
+        do: {:exists, state},
+        else: put(state, table, key, value)
+    end
+
+    @impl true
+    def get(state, table, key), do: {:ok, Map.get(state.data, {table, key}), state}
+
+    @impl true
+    def delete(%{delete_count: 1}, _table, _key), do: {:error, :injected_second_delete}
+
+    def delete(state, table, key) do
+      {:ok,
+       %{state | data: Map.delete(state.data, {table, key}), delete_count: state.delete_count + 1}}
+    end
+
+    @impl true
+    def list(state, table) do
+      entries =
+        for {{^table, key}, value} <- state.data,
+            do: {key, value}
+
+      {:ok, entries, state}
+    end
+  end
+
   defp unique_token do
     System.system_time(:microsecond) + System.unique_integer([:positive, :monotonic])
   end
@@ -542,6 +580,31 @@ defmodule LemonCore.StoreTest do
 
       assert Store.get(:session_token_heads, first_key) == nil
       assert Store.get(:session_token_heads, second_key) == nil
+    end
+
+    test "generic compare_and_delete_many propagates a later backend delete failure" do
+      response = %{kind: :expired_response}
+      primary_fence = %{kind: :execution_fence}
+
+      backend_state = %{
+        data: %{
+          {:responses, :response} => response,
+          {:primary, :fence} => primary_fence
+        },
+        delete_count: 0
+      }
+
+      original_state = swap_store_backend(SecondDeleteFailureBackend, backend_state)
+      on_exit(fn -> :sys.replace_state(Store, fn _ -> original_state end) end)
+
+      assert {:error, :injected_second_delete} =
+               Store.compare_and_delete_many([
+                 {:responses, :response, response},
+                 {:primary, :fence, primary_fence}
+               ])
+
+      assert Store.get(:responses, :response) == nil
+      assert Store.get(:primary, :fence) == primary_fence
     end
 
     test "finalize_run writes history to RunHistoryStore" do

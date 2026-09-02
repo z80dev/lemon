@@ -170,19 +170,25 @@ defmodule LemonAutomation.GoalLoopManager do
       loop ->
         case safe_configure_loop_auto(state.goal_store, session_key, false) do
           {:ok, _goal} ->
-            router_abort = abort_active_run(loop)
-            stop_loop_task(loop)
+            case persist_hard_stop_intent(session_key, loop, state) do
+              {:ok, _goal} ->
+                router_abort = abort_active_run(loop)
+                stop_loop_task(loop)
 
-            {loop, goal, state} = finish_hard_stop(session_key, loop, router_abort, state)
+                {loop, goal, state} = finish_hard_stop(session_key, loop, router_abort, state)
 
-            {:reply,
-             {:ok,
-              %{
-                loop: public_loop(loop),
-                goal: goal,
-                mode: :hard,
-                router_abort: router_abort
-              }}, state}
+                {:reply,
+                 {:ok,
+                  %{
+                    loop: public_loop(loop),
+                    goal: goal,
+                    mode: :hard,
+                    router_abort: router_abort
+                  }}, state}
+
+              {:error, _reason} ->
+                {:reply, {:error, :goal_store_unavailable}, state}
+            end
 
           {:error, _reason} ->
             {:reply, {:error, :goal_store_unavailable}, state}
@@ -432,6 +438,21 @@ defmodule LemonAutomation.GoalLoopManager do
       |> update_in([:loop_refs], &Map.delete(&1 || %{}, loop_ref))
 
     {loop, goal, state}
+  end
+
+  defp persist_hard_stop_intent(session_key, loop, state) do
+    case active_run_id(loop) do
+      run_id when is_binary(run_id) ->
+        safe_record_loop_status(state.goal_store, session_key, :reconciling,
+          run_id: run_id,
+          error: "router abort in progress",
+          abort_attempted: true,
+          abort_result: :outcome_unknown
+        )
+
+      _no_active_run ->
+        {:ok, nil}
+    end
   end
 
   defp reconcile_ambiguous_loops(state) do

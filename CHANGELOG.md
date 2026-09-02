@@ -22,8 +22,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   transport-local attachment paths do not create false conflicts, and surviving
   run ownership is indexed without probing unrelated run processes. Exact
   webhook response receipts are swept together with their completed primary
-  reservation after the replay horizon using exact-snapshot deletion, and raw
-  webhook idempotency keys are hashed before router or run metadata is built.
+  reservation after the replay horizon using transactional or fence-last
+  exact-snapshot deletion, and raw webhook idempotency keys are hashed before
+  any durable key, receipt, router request, or run metadata is built. Legacy
+  router receipts are compacted and abort reasons sanitized during replay and
+  background cleanup; goal hard stops persist abort intent before dispatch.
 - Telegram memory-reflection and per-chat abort helpers no longer collapse
   router mutation failures into success-like results. Ambiguous cancel and
   keepalive callbacks now direct users to check run status before retrying,

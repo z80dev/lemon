@@ -29,32 +29,10 @@ defmodule LemonGateway.Transports.Webhook.Idempotency do
       when is_integer(now_ms) and is_integer(retention_ms) and retention_ms >= 0 do
     cutoff_ms = now_ms - retention_ms
 
-    @response_table
-    |> Store.list()
-    |> Enum.each(fn
-      {{store_key, reservation_id} = receipt_key, receipt} when is_map(receipt) ->
-        if Request.int_value(Request.fetch(receipt, :stored_at_ms), now_ms) <= cutoff_ms do
-          sweep_response_receipt(store_key, reservation_id, receipt_key, receipt)
-        end
-
-      _ ->
-        :ok
-    end)
-
-    @table
-    |> Store.list()
-    |> Enum.each(fn
-      {store_key, entry} when is_map(entry) ->
-        if Request.normalize_blank(Request.fetch(entry, :state)) == "completed" and
-             Request.int_value(Request.fetch(entry, :updated_at_ms), now_ms) <= cutoff_ms do
-          Store.compare_and_delete(@table, store_key, entry)
-        end
-
-      _ ->
-        :ok
-    end)
-
-    :ok
+    with :ok <- sweep_response_receipts(cutoff_ms, now_ms),
+         :ok <- sweep_primary_receipts(cutoff_ms, now_ms) do
+      :ok
+    end
   rescue
     _ -> {:error, :idempotency_unavailable}
   catch
@@ -72,10 +50,11 @@ defmodule LemonGateway.Transports.Webhook.Idempotency do
         {:ok, nil}
 
       idempotency_key ->
-        store_key = store_key(integration_id, idempotency_key)
+        idempotency_digest = idempotency_digest(integration_id, idempotency_key)
+        store_key = store_key(idempotency_digest)
 
         case :global.trans({{__MODULE__, store_key}, self()}, fn ->
-               reserve(store_key, integration_id, idempotency_key)
+               reserve(store_key, integration_id, idempotency_digest)
              end) do
           :aborted -> {:error, :idempotency_unavailable}
           {:aborted, _reason} -> {:error, :idempotency_unavailable}
@@ -93,7 +72,7 @@ defmodule LemonGateway.Transports.Webhook.Idempotency do
       run_id: run_id,
       session_key: session_key,
       mode: normalize_mode(mode),
-      idempotency_key: idempotency_ctx.idempotency_key,
+      idempotency_digest: idempotency_ctx.idempotency_digest,
       integration_id: idempotency_ctx.integration_id,
       state: "submitted",
       updated_at_ms: System.system_time(:millisecond)
@@ -112,7 +91,7 @@ defmodule LemonGateway.Transports.Webhook.Idempotency do
       run_id: run_id,
       session_key: session_key,
       mode: normalize_mode(mode),
-      idempotency_key: idempotency_ctx.idempotency_key,
+      idempotency_digest: idempotency_ctx.idempotency_digest,
       integration_id: idempotency_ctx.integration_id,
       state: "outcome_unknown",
       updated_at_ms: System.system_time(:millisecond)
@@ -285,21 +264,93 @@ defmodule LemonGateway.Transports.Webhook.Idempotency do
     case Store.fetch(@table, store_key) do
       {:ok, %{} = primary} ->
         if Request.fetch(primary, :reservation_id) == reservation_id do
-          Store.compare_and_delete_many([
-            {@table, store_key, primary},
-            {@response_table, receipt_key, receipt}
-          ])
+          # The exact response is intentionally first for backends whose
+          # durable multi-delete protocol is ordered rather than transactional.
+          # A partial failure can lose an expired response, but the primary
+          # execution fence remains and can never authorize a duplicate run.
+          [
+            {@response_table, receipt_key, receipt},
+            {@table, store_key, primary}
+          ]
+          |> Store.compare_and_delete_many()
+          |> normalize_sweep_delete()
         else
-          Store.compare_and_delete(@response_table, receipt_key, receipt)
+          normalize_sweep_delete(Store.compare_and_delete(@response_table, receipt_key, receipt))
         end
 
       {:ok, nil} ->
-        Store.compare_and_delete(@response_table, receipt_key, receipt)
+        normalize_sweep_delete(Store.compare_and_delete(@response_table, receipt_key, receipt))
 
-      _ ->
-        :ok
+      {:error, _reason} ->
+        {:error, :idempotency_unavailable}
     end
   end
+
+  defp sweep_response_receipts(cutoff_ms, now_ms) do
+    @response_table
+    |> Store.list()
+    |> Enum.reduce_while(:ok, fn
+      {{store_key, reservation_id} = receipt_key, receipt}, :ok when is_map(receipt) ->
+        if Request.int_value(Request.fetch(receipt, :stored_at_ms), now_ms) <= cutoff_ms do
+          case sweep_response_receipt(store_key, reservation_id, receipt_key, receipt) do
+            :ok -> {:cont, :ok}
+            {:error, _reason} = error -> {:halt, error}
+          end
+        else
+          {:cont, :ok}
+        end
+
+      _, :ok ->
+        {:cont, :ok}
+    end)
+  end
+
+  defp sweep_primary_receipts(cutoff_ms, now_ms) do
+    @table
+    |> Store.list()
+    |> Enum.reduce_while(:ok, fn
+      {store_key, entry}, :ok when is_map(entry) ->
+        if Request.normalize_blank(Request.fetch(entry, :state)) == "completed" and
+             Request.int_value(Request.fetch(entry, :updated_at_ms), now_ms) <= cutoff_ms do
+          case sweep_unpaired_primary(store_key, entry) do
+            :ok -> {:cont, :ok}
+            {:error, _reason} = error -> {:halt, error}
+          end
+        else
+          {:cont, :ok}
+        end
+
+      _, :ok ->
+        {:cont, :ok}
+    end)
+  end
+
+  defp sweep_unpaired_primary(store_key, entry) do
+    case Request.normalize_blank(Request.fetch(entry, :reservation_id)) do
+      reservation_id when is_binary(reservation_id) ->
+        case Store.fetch(@response_table, {store_key, reservation_id}) do
+          {:ok, %{} = _response_owned_pair} ->
+            # The response sweeper removes this pair only when its exact
+            # response reaches the horizon. Never remove the execution fence
+            # independently while a newer response receipt still exists.
+            :ok
+
+          {:ok, nil} ->
+            normalize_sweep_delete(Store.compare_and_delete(@table, store_key, entry))
+
+          {:error, _reason} ->
+            {:error, :idempotency_unavailable}
+        end
+
+      _no_reservation ->
+        normalize_sweep_delete(Store.compare_and_delete(@table, store_key, entry))
+    end
+  end
+
+  defp normalize_sweep_delete(:ok), do: :ok
+  defp normalize_sweep_delete({:error, :mismatch}), do: :ok
+  defp normalize_sweep_delete({:error, _reason}), do: {:error, :idempotency_unavailable}
+  defp normalize_sweep_delete(_other), do: {:error, :idempotency_unavailable}
 
   defp maybe_sweep_expired do
     now_ms = System.system_time(:millisecond)
@@ -394,12 +445,12 @@ defmodule LemonGateway.Transports.Webhook.Idempotency do
     end
   end
 
-  defp reserve(store_key, integration_id, idempotency_key) do
+  defp reserve(store_key, integration_id, idempotency_digest) do
     now_ms = System.system_time(:millisecond)
     reservation_id = Id.uuid7()
 
     entry = %{
-      idempotency_key: idempotency_key,
+      idempotency_digest: idempotency_digest,
       integration_id: integration_id,
       run_id: Id.run_id(),
       reservation_id: reservation_id,
@@ -413,7 +464,7 @@ defmodule LemonGateway.Transports.Webhook.Idempotency do
         {:ok, reservation_context(entry, store_key)}
 
       {:error, :exists} ->
-        resolve_existing_reservation(store_key, integration_id, idempotency_key, now_ms)
+        resolve_existing_reservation(store_key, integration_id, idempotency_digest, now_ms)
 
       {:error, _reason} ->
         Logger.warning("webhook idempotency reservation failed failure_class=write_error")
@@ -429,11 +480,11 @@ defmodule LemonGateway.Transports.Webhook.Idempotency do
       {:error, :idempotency_unavailable}
   end
 
-  defp resolve_existing_reservation(store_key, integration_id, idempotency_key, now_ms) do
+  defp resolve_existing_reservation(store_key, integration_id, idempotency_digest, now_ms) do
     case Store.get(@table, store_key) do
       %{} = existing ->
         if reclaimable_pending?(existing, now_ms) do
-          reclaim_pending(store_key, existing, integration_id, idempotency_key, now_ms)
+          reclaim_pending(store_key, existing, integration_id, idempotency_digest, now_ms)
         else
           case response(existing, store_key) do
             {:duplicate, _status, _payload} = duplicate -> duplicate
@@ -446,7 +497,7 @@ defmodule LemonGateway.Transports.Webhook.Idempotency do
     end
   end
 
-  defp reclaim_pending(store_key, existing, integration_id, idempotency_key, now_ms) do
+  defp reclaim_pending(store_key, existing, integration_id, idempotency_digest, now_ms) do
     reservation_id = Id.uuid7()
 
     replacement =
@@ -466,11 +517,11 @@ defmodule LemonGateway.Transports.Webhook.Idempotency do
            replacement,
            store_key,
            integration_id: integration_id,
-           idempotency_key: idempotency_key
+           idempotency_digest: idempotency_digest
          )}
 
       {:error, :mismatch} ->
-        resolve_existing_reservation(store_key, integration_id, idempotency_key, now_ms)
+        resolve_existing_reservation(store_key, integration_id, idempotency_digest, now_ms)
 
       {:error, _reason} ->
         {:error, :idempotency_unavailable}
@@ -489,17 +540,27 @@ defmodule LemonGateway.Transports.Webhook.Idempotency do
     %{
       integration_id:
         Keyword.get(overrides, :integration_id, Request.fetch(entry, :integration_id)),
-      idempotency_key:
-        Keyword.get(overrides, :idempotency_key, Request.fetch(entry, :idempotency_key)),
+      idempotency_digest:
+        Keyword.get(
+          overrides,
+          :idempotency_digest,
+          Request.fetch(entry, :idempotency_digest)
+        ),
       store_key: store_key,
       run_id: Request.fetch(entry, :run_id),
       reservation_id: Request.fetch(entry, :reservation_id)
     }
   end
 
-  defp store_key(integration_id, idempotency_key) do
-    {to_string(integration_id), to_string(idempotency_key)}
+  defp idempotency_digest(integration_id, idempotency_key) do
+    :crypto.hash(
+      :sha256,
+      ["lemon:webhook-idempotency:v1", <<0>>, to_string(integration_id), <<0>>, idempotency_key]
+    )
+    |> Base.encode16(case: :lower)
   end
+
+  defp store_key(idempotency_digest), do: {:v1, idempotency_digest}
 
   defp allow_payload_idempotency_key?(integration, webhook_config) do
     [

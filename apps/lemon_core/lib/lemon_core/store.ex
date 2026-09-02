@@ -1281,15 +1281,28 @@ defmodule LemonCore.Store do
   end
 
   def handle_call({:generic_compare_and_delete_many, entries}, _from, state) do
-    case compare_delete_snapshots(state.backend, state.backend_state, entries) do
+    result =
+      if function_exported?(state.backend, :compare_and_delete_many, 2) do
+        state.backend.compare_and_delete_many(state.backend_state, entries)
+      else
+        compare_and_delete_many_fallback(state.backend, state.backend_state, entries)
+      end
+
+    case result do
       {:ok, backend_state} ->
-        case delete_snapshots(state.backend, backend_state, entries, state) do
-          {:ok, next_state} -> {:reply, :ok, next_state}
-          {:error, reason, next_state} -> {:reply, {:error, reason}, next_state}
-        end
+        invalidate_snapshot_cache(state, entries)
+        {:reply, :ok, %{state | backend_state: backend_state}}
 
       {:error, reason, backend_state} ->
+        # A non-transactional backend may have applied a safe prefix before
+        # reporting failure. Invalidate every involved cache key so reads
+        # reflect the backend's durable result.
+        invalidate_snapshot_cache(state, entries)
         {:reply, {:error, reason}, %{state | backend_state: backend_state}}
+
+      other ->
+        log_backend_unexpected(:compare_and_delete_many, :multiple, length(entries), other)
+        {:reply, {:error, {:unexpected_backend_response, other}}, state}
     end
   end
 
@@ -1942,6 +1955,12 @@ defmodule LemonCore.Store do
     end
   end
 
+  defp compare_and_delete_many_fallback(backend, backend_state, entries) do
+    with {:ok, backend_state} <- compare_delete_snapshots(backend, backend_state, entries) do
+      delete_snapshots(backend, backend_state, entries)
+    end
+  end
+
   defp compare_delete_snapshots(backend, backend_state, entries) do
     Enum.reduce_while(entries, {:ok, backend_state}, fn {table, key, expected},
                                                        {:ok, current_state} ->
@@ -1963,17 +1982,11 @@ defmodule LemonCore.Store do
     end)
   end
 
-  defp delete_snapshots(backend, backend_state, entries, state) do
-    Enum.reduce_while(entries, {:ok, %{state | backend_state: backend_state}}, fn {table, key, _},
-                                                                                 {:ok,
-                                                                                  current_state} ->
-      case backend.delete(current_state.backend_state, table, key) do
-        {:ok, next_backend_state} ->
-          if table in current_state.cached_tables do
-            ReadCache.delete(current_state.read_cache, table, key)
-          end
-
-          {:cont, {:ok, %{current_state | backend_state: next_backend_state}}}
+  defp delete_snapshots(backend, backend_state, entries) do
+    Enum.reduce_while(entries, {:ok, backend_state}, fn {table, key, _}, {:ok, current_state} ->
+      case backend.delete(current_state, table, key) do
+        {:ok, next_state} ->
+          {:cont, {:ok, next_state}}
 
         {:error, reason} ->
           log_backend_error(:compare_and_delete_many, table, key, reason)
@@ -1984,6 +1997,14 @@ defmodule LemonCore.Store do
 
           {:halt,
            {:error, {:unexpected_backend_response, other}, current_state}}
+      end
+    end)
+  end
+
+  defp invalidate_snapshot_cache(state, entries) do
+    Enum.each(entries, fn {table, key, _expected} ->
+      if table in state.cached_tables do
+        ReadCache.delete(state.read_cache, table, key)
       end
     end)
   end

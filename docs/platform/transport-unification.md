@@ -456,7 +456,10 @@ anything.
   provider retry from duplicating work. Failures before a durable idempotency reservation exists
   still return 503 and ask the provider to redeliver. Email replay content hashes upload bytes
   rather than provider-generated temporary paths, and exact webhook response receipts are removed
-  with their completed primary reservations after the fixed 24-hour replay horizon.
+  with their completed primary reservations after the fixed 24-hour replay horizon. Caller webhook
+  idempotency keys are domain-separated and hashed before they enter any durable key, receipt, or
+  run metadata; cleanup commits atomically on SQLite and preserves the primary execution fence on
+  any ordered-backend failure.
 
 **Contract kit.** `apps/lemon_platform_test/test/compliance/email_plugin_test.exs` relied on
 `deliver/1` being inert. Its probe is now a `:reaction` payload — a kind email has no concept of,

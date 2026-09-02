@@ -241,6 +241,23 @@ defmodule LemonCore.Store.SqliteBackend do
   end
 
   @impl true
+  def compare_and_delete_many(state, entries) do
+    case entries |> Enum.map(fn {table, _key, _expected} -> ephemeral_table?(state, table) end) |> Enum.uniq() do
+      [] ->
+        {:ok, state}
+
+      [true] ->
+        compare_and_delete_ephemeral(state, entries)
+
+      [false] ->
+        compare_and_delete_persistent(state, entries)
+
+      _mixed ->
+        {:error, :mixed_atomic_storage, state}
+    end
+  end
+
+  @impl true
   def list(state, table) do
     if ephemeral_table?(state, table) do
       {table_ets, state} = ensure_ephemeral_table(state, table)
@@ -444,6 +461,80 @@ defmodule LemonCore.Store.SqliteBackend do
 
     :ok
   end
+
+  defp compare_and_delete_ephemeral(state, entries) do
+    {resolved, state} =
+      Enum.map_reduce(entries, state, fn {table, key, expected}, acc ->
+        {table_ets, acc} = ensure_ephemeral_table(acc, table)
+        {{table_ets, key, expected}, acc}
+      end)
+
+    if Enum.all?(resolved, fn {table_ets, key, expected} ->
+         :ets.lookup(table_ets, key) == [{key, expected}]
+       end) do
+      Enum.each(resolved, fn {table_ets, key, _expected} -> :ets.delete(table_ets, key) end)
+      {:ok, state}
+    else
+      {:error, :mismatch, state}
+    end
+  end
+
+  defp compare_and_delete_persistent(state, entries) do
+    case Sqlite3.execute(state.conn, "BEGIN IMMEDIATE") do
+      :ok ->
+        result =
+          with :ok <- validate_persistent_snapshots(state, entries),
+               :ok <- delete_persistent_snapshots(state, entries),
+               :ok <- Sqlite3.execute(state.conn, "COMMIT") do
+            :ok
+          end
+
+        case result do
+          :ok ->
+            {:ok, state}
+
+          error ->
+            _ = Sqlite3.execute(state.conn, "ROLLBACK")
+            {:error, normalize_transaction_error(error), state}
+        end
+
+      error ->
+        {:error, normalize_transaction_error(error), state}
+    end
+  rescue
+    error ->
+      _ = Sqlite3.execute(state.conn, "ROLLBACK")
+      {:error, {:sqlite_transaction_failed, Exception.message(error)}, state}
+  catch
+    kind, reason ->
+      _ = Sqlite3.execute(state.conn, "ROLLBACK")
+      {:error, {:sqlite_transaction_failed, kind, reason}, state}
+  end
+
+  defp validate_persistent_snapshots(state, entries) do
+    Enum.reduce_while(entries, :ok, fn {table, key, expected}, :ok ->
+      case get(state, table, key) do
+        {:ok, current, _state} when current === expected -> {:cont, :ok}
+        {:ok, _current, _state} -> {:halt, {:error, :mismatch}}
+        {:error, reason} -> {:halt, {:error, reason}}
+        other -> {:halt, {:error, {:sqlite_get_failed, other}}}
+      end
+    end)
+  end
+
+  defp delete_persistent_snapshots(state, entries) do
+    Enum.reduce_while(entries, :ok, fn {table, key, _expected}, :ok ->
+      case delete(state, table, key) do
+        {:ok, _state} -> {:cont, :ok}
+        {:error, reason} -> {:halt, {:error, reason}}
+        other -> {:halt, {:error, {:sqlite_delete_failed, other}}}
+      end
+    end)
+  end
+
+  defp normalize_transaction_error({:error, reason}), do: reason
+  defp normalize_transaction_error(:busy), do: :sqlite_busy
+  defp normalize_transaction_error(other), do: {:sqlite_transaction_failed, other}
 
   # Guarded rather than matched on `%ExqliteError{}`: expanding that struct
   # needs the module at compile time, which breaks any consumer that doesn't
