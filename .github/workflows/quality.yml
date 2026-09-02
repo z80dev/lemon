@@ -250,6 +250,10 @@ jobs:
         with:
           bun-version-file: clients/tui/.bun-version
 
+      - name: Install TUI dependencies
+        working-directory: clients/tui
+        run: bun install --frozen-lockfile
+
       - name: Cache Mix deps and build
         uses: actions/cache@v4
         with:
