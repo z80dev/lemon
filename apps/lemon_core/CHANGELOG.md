@@ -18,6 +18,11 @@ Telegram, run history, durable memory, kanban boards, or `~/.lemon`.
 
 ### Added
 
+- `LemonCore.RunStore` declares `:runs` and `:sessions_index` as its owned
+  tables. The declaration documents their cache and persistence intent and
+  brings the existing wrapper under the AST ownership gate without changing
+  the specialized `LemonCore.Store` run lifecycle or finalization semantics.
+
 - `LemonCore.Store.Table` lets a domain wrapper declare table ownership plus
   future cache, retention, persistence, and schema-version metadata without
   generating CRUD functions or changing backend behavior. The existing

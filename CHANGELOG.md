@@ -33,6 +33,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- `LemonCore.RunStore` now declares ownership of the `:runs` and
+  `:sessions_index` tables through `LemonCore.Store.Table`. This is the first
+  focused domain adoption of the ownership metadata and architecture gate;
+  the existing run lifecycle and finalization behavior is unchanged.
+
 - `LemonCore.Store.Table` ownership metadata for incremental generic-store
   migrations. The architecture gate now analyzes generic Store calls from the
   AST across every supported operation and default/explicit server arity,

@@ -49,6 +49,7 @@ This is the **base app** of the Lemon umbrella. All other apps depend on it. It 
 | `LemonCore.OAuth.LocalCallbackListener` | Caller-owned one-shot localhost OAuth callback listener; monitors its listener manager so early failure returns immediately instead of consuming the authorization timeout |
 | `LemonCore.Store` | Storage GenServer with pluggable backends, `put_new/3` claims, serialized `take/2`, and exact-value `compare_and_swap/4` |
 | `LemonCore.Store.Table` | Declarative table owner and policy metadata; the architecture gate checks owner calls against exact declared tables |
+| `LemonCore.RunStore` | Typed run lifecycle/history wrapper and declared owner of `:runs` and `:sessions_index`; keep finalization behavior on the existing specialized Store path until its dedicated migration |
 | `LemonCore.Store.ReadCache` | ETS read cache for hot domains (`:chat`, `:runs`, `:progress`, `:sessions_index`, plus tables collaborators add with `register_cached_table/1`) |
 | `LemonCore.Store.EtsBackend` | In-memory ETS (ephemeral, default) with `:ets.insert_new/2` claims |
 | `LemonCore.Store.SqliteBackend` | SQLite with WAL mode (persistent) and `ON CONFLICT DO NOTHING` claims |

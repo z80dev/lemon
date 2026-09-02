@@ -165,6 +165,7 @@ ids, message bodies, proof details, credentials, or secret names.
 |--------|---------|
 | `LemonCore.Store` | GenServer with pluggable backends and specialized APIs |
 | `LemonCore.Store.Table` | Declarative owner and policy metadata for generic Store tables |
+| `LemonCore.RunStore` | Typed run lifecycle/history wrapper and declared owner of `:runs` and `:sessions_index`; runtime writes still use the specialized Store lifecycle path |
 | `LemonCore.Store.Backend` | Behaviour for storage backends (init/put/put_new/get/delete/list) |
 | `LemonCore.Store.EtsBackend` | In-memory ETS backend (ephemeral, default) |
 | `LemonCore.Store.SqliteBackend` | SQLite backend with WAL mode and optional ephemeral tables |
