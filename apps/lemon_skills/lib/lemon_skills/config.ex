@@ -1020,8 +1020,25 @@ defmodule LemonSkills.Config do
   defp validate_http_opts(opts) do
     with :ok <- validate_mcp_filter_opts(opts),
          :ok <- validate_http_headers(Keyword.get(opts, :headers, [])),
+         :ok <- validate_http_token_persistence(opts),
          :ok <- validate_http_oauth(Keyword.get(opts, :oauth, [])) do
       :ok
+    end
+  end
+
+  defp validate_http_token_persistence(opts) do
+    persist? = Keyword.get(opts, :persist_oauth_tokens)
+    secret = Keyword.get(opts, :oauth_token_secret)
+
+    cond do
+      not is_nil(persist?) and not is_boolean(persist?) ->
+        {:error, "persist_oauth_tokens must be a boolean"}
+
+      not is_nil(secret) and (not is_binary(secret) or secret == "") ->
+        {:error, "oauth_token_secret must be a non-empty string"}
+
+      true ->
+        :ok
     end
   end
 

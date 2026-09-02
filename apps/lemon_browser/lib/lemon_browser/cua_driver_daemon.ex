@@ -113,9 +113,6 @@ defmodule LemonBrowser.CuaDriverDaemon do
     error -> {:error, {:cua_driver_start_failed, Exception.message(error)}}
   end
 
-  defp wait_ready(_driver, _socket, port, _remaining) when not is_port(port),
-    do: {:error, :cua_driver_port_closed}
-
   defp wait_ready(_driver, _socket, _port, remaining) when remaining <= 0,
     do: {:error, :cua_driver_start_timeout}
 

@@ -33,6 +33,7 @@ env:
   LEMON_WEB_PORT: "14080"
   LEMON_SIM_UI_PORT: "14090"
   LEMON_GATEWAY_NODE_COOKIE: "product-smoke-cookie"
+  LEMON_CONTROL_PLANE_OPERATOR_TOKEN: "product-smoke-control-plane-operator-token"
   OPENAI_API_KEY: "product-smoke-local-provider-key"
   # Phoenix releases never bind an HTTP listener on their own — the `:server`
   # endpoint option (set here via configure_endpoint/5 in config/runtime.exs,
@@ -69,6 +70,14 @@ jobs:
           otp-version: "28.5"
           elixir-version: "1.19.5"
 
+      - name: Setup Node
+        if: matrix.profile != 'lemon_runtime_min'
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/lemon_sim_ui/assets/package-lock.json
+
       - name: Cache Mix deps and build
         uses: actions/cache@v4
         with:
@@ -85,6 +94,20 @@ jobs:
 
       - name: Install deps
         run: mix deps.get --only prod
+
+      - name: Build Sim UI assets
+        if: matrix.profile != 'lemon_runtime_min'
+        run: mix sim_ui.assets.deploy
+
+      - name: Digest lemon_web assets
+        if: matrix.profile == 'lemon_runtime_full'
+        run: |
+          mix 'do' --app lemon_web phx.digest
+          test -f apps/lemon_web/priv/static/cache_manifest.json
+
+      - name: Assert Sim UI digest manifest
+        if: matrix.profile != 'lemon_runtime_min'
+        run: test -f apps/lemon_sim_ui/priv/static/cache_manifest.json
 
       - name: Compile (prod)
         run: mix compile
@@ -304,6 +327,10 @@ jobs:
           end
 
           send_req.("connect-1", "connect", %{
+            "role" => "operator",
+            "auth" => %{
+              "token" => System.fetch_env!("LEMON_CONTROL_PLANE_OPERATOR_TOKEN")
+            },
             "client" => %{
               "id" => "product-smoke",
               "name" => "Product Smoke"

@@ -140,6 +140,7 @@ export LEMON_STORE_PATH="$WORK/store"
 export LEMON_DOTENV_DIR="$WORK/dotenv"
 export LEMON_GATEWAY_NODE_NAME="$SNAME"
 export LEMON_GATEWAY_NODE_COOKIE="$COOKIE"
+export LEMON_CONTROL_PLANE_OPERATOR_TOKEN="product-smoke-local-control-plane-operator-token"
 # Same non-secret dummy values the CI workflow uses.
 export LEMON_SECRETS_MASTER_KEY="smoke-test-dummy-key-32-chars-!!"
 export LEMON_WEB_SECRET_KEY_BASE="product_smoke_secret_key_base_product_smoke_secret_key_base_product_smoke"
@@ -321,6 +322,10 @@ if [ "$MODE" = "release" ]; then
 
   echo "[smoke] Building release $RELEASE_PROFILE (MIX_ENV=prod)..."
   mix deps.get --only prod
+  mix sim_ui.assets.deploy
+  mix 'do' --app lemon_web phx.digest
+  test -f apps/lemon_sim_ui/priv/static/cache_manifest.json
+  test -f apps/lemon_web/priv/static/cache_manifest.json
   mix compile
   mix release "$RELEASE_PROFILE" --overwrite
 
@@ -445,6 +450,10 @@ receive_response = fn id, timeout_ms ->
 end
 
 send_req.("connect-1", "connect", %{
+  "role" => "operator",
+  "auth" => %{
+    "token" => System.fetch_env!("LEMON_CONTROL_PLANE_OPERATOR_TOKEN")
+  },
   "client" => %{
     "id" => "product-smoke-local",
     "name" => "Product Smoke Local"

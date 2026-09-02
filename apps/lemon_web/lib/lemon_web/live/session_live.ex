@@ -1156,9 +1156,7 @@ defmodule LemonWeb.SessionLive do
 
   defp read(map, key), do: MapHelpers.get_key(map, key)
 
-  defp format_error(error) when is_binary(error), do: error
   defp format_error(error) when is_atom(error), do: Atom.to_string(error)
-  defp format_error(error), do: inspect(error)
 
   defp sanitize_filename(name) when is_binary(name) do
     name
