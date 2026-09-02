@@ -77,6 +77,10 @@ attachment policy.
   router still boots and runtime operations retain their existing
   unavailable-runtime handling.
 - Inbound callers should provide structured resume data through `LemonCore.RunRequest.resume` when they already know it.
+- `Router.handle_inbound/1` returns the exact `RunOrchestrator.submit/1` error
+  when submission is rejected. Inbound transports must not acknowledge a
+  message as accepted after that error, and pending-compaction markers remain
+  available for a later valid submission.
 - Top-level runs always use the native executor; model validation belongs to `LemonAi`, and default cwd resolution should use `LemonCore.Cwd`.
 - Router emits `LemonCore.DeliveryIntent`, not `LemonChannels.OutboundPayload`.
 - Tool-status failure summaries preserve safe structured fields from

@@ -64,6 +64,9 @@ Inbound transport
 - Fresh pending-compaction markers are prepared before submission but consumed
   only after `SessionCoordinator.submit/2` accepts the run; submission errors
   preserve the marker for retry, while stale/empty markers may clear eagerly.
+- `Router.handle_inbound/1` must propagate `RunOrchestrator.submit/1` errors to
+  the transport boundary. Logging a rejection and returning `:ok` falsely
+  acknowledges work the router did not accept.
 - Router uses `PendingCompactionStore`; it must not touch Telegram message-index tables directly.
 - Router uses `LemonChannels.TargetDirectory` for human-friendly channel target discovery; it must not read Telegram or Discord known-target stores directly.
 - Queue semantics belong in `SessionCoordinator`, not in gateway workers.

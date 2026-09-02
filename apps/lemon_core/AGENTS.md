@@ -837,7 +837,7 @@ req = LemonCore.RunRequest.new(%{
 Channel adapters and other producers forward runs to `:lemon_router` without a compile-time dependency. `:lemon_router` registers itself at startup.
 
 ```elixir
-# Submit a run (returns {:ok, run_id} or {:error, :unavailable})
+# Submit a run (success always contains a non-empty binary run id)
 {:ok, run_id} = LemonCore.RouterBridge.submit_run(run_request)
 
 # Forward inbound message to router
@@ -855,6 +855,15 @@ Channel adapters and other producers forward runs to `:lemon_router` without a c
 {:ok, active_run_id} = LemonCore.RouterBridge.active_run(session_key)
 {:ok, sessions} = LemonCore.RouterBridge.list_active_sessions()
 ```
+
+An unregistered or known-absent router returns `{:error, :unavailable}`. A
+mutating callback that times out or exits without an acknowledgement returns
+`{:error, :outcome_unknown}`. The mutation may already have taken effect, so do
+not automatically retry it without independent idempotency or reconciliation.
+Query timeouts remain unavailable because queries cannot duplicate a side
+effect. Bridge logs must contain only the sanitized callback MFA and failure
+class, never exception messages, stacktraces, exit reasons, or callback
+arguments.
 
 ### Dotenv
 
@@ -989,8 +998,10 @@ Durable memory is supervised by the `lemon_memory` app, not here.
   a JSON codec that preserves atoms, tuples, structs, and nested map keys
 - Events use millisecond timestamps from `System.system_time(:millisecond)`
 - `LemonCore.RouterBridge` returns `{:error, :unavailable}` when the router is
-  unregistered or unreachable. Query callers must not reinterpret that as
-  `false`, `:none`, or `[]` without an explicit local policy.
+  unregistered or known absent, and `{:error, :outcome_unknown}` when a
+  mutation loses its acknowledgement. The latter is duplicate-risk, not a
+  retry-safe availability failure. Query callers must not reinterpret
+  unavailable as `false`, `:none`, or `[]` without an explicit local policy.
 - `LemonCore.Dedupe.Ets` uses monotonic time for TTL; `LemonCore.Idempotency` uses wall-clock time
 - `LemonCore.Config.Modular` is the canonical config implementation; `LemonCore.Config` is a facade that delegates to modular
 - Provider config resolution is centralized in `LemonAgent.ProviderConfigResolver` (agent_core); provider modules must not read env vars directly for normal request paths

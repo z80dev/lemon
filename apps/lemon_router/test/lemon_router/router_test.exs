@@ -2,7 +2,7 @@ defmodule LemonRouter.RouterTest do
   use ExUnit.Case, async: false
 
   alias LemonRouter.Router
-  alias LemonCore.InboundMessage
+  alias LemonCore.{InboundMessage, RouterBridge, RunRequest}
 
   defmodule RunOrchestratorStubRouter do
     def submit(request) do
@@ -12,6 +12,10 @@ defmodule LemonRouter.RouterTest do
 
       Process.get(:router_submit_result, {:ok, "run_stub"})
     end
+  end
+
+  defmodule RejectingRunOrchestrator do
+    def submit(%RunRequest{}), do: {:error, :capacity_rejected}
   end
 
   defmodule SessionCoordinatorStubRouter do
@@ -49,6 +53,7 @@ defmodule LemonRouter.RouterTest do
 
     previous_orchestrator = Application.get_env(:lemon_router, :run_orchestrator)
     previous_session_coordinator = Application.get_env(:lemon_router, :session_coordinator)
+    previous_bridge = Application.get_env(:lemon_core, :router_bridge)
     Application.put_env(:lemon_router, :run_orchestrator, RunOrchestratorStubRouter)
     Application.put_env(:lemon_router, :session_coordinator, SessionCoordinatorStubRouter)
 
@@ -66,6 +71,11 @@ defmodule LemonRouter.RouterTest do
       case previous_session_coordinator do
         nil -> Application.delete_env(:lemon_router, :session_coordinator)
         mod -> Application.put_env(:lemon_router, :session_coordinator, mod)
+      end
+
+      case previous_bridge do
+        nil -> Application.delete_env(:lemon_core, :router_bridge)
+        config -> Application.put_env(:lemon_core, :router_bridge, config)
       end
 
       Process.delete(:router_test_pid)
@@ -185,7 +195,7 @@ defmodule LemonRouter.RouterTest do
     assert request.meta[:account_id] == "default"
   end
 
-  test "handle_inbound/1 returns :ok when orchestrator submit fails" do
+  test "handle_inbound/1 propagates orchestrator submit failures" do
     Process.put(:router_submit_result, {:error, :submit_failed})
 
     msg = %InboundMessage{
@@ -198,8 +208,25 @@ defmodule LemonRouter.RouterTest do
       meta: %{"agent_id" => "agent-y"}
     }
 
-    assert :ok = Router.handle_inbound(msg)
+    assert {:error, :submit_failed} = Router.handle_inbound(msg)
     assert_receive {:orchestrator_submit, _request}, 500
+  end
+
+  test "RouterBridge propagates a real Router rejection to the inbound application boundary" do
+    Application.put_env(:lemon_router, :run_orchestrator, RejectingRunOrchestrator)
+    :ok = RouterBridge.configure(router: Router)
+
+    msg = %InboundMessage{
+      channel_id: "email",
+      account_id: "default",
+      peer: %{kind: :dm, id: "sender@example.test", thread_id: nil},
+      sender: %{id: "sender@example.test"},
+      message: %{id: "mail-1", text: "run", timestamp: nil, reply_to_id: nil},
+      raw: %{},
+      meta: %{"agent_id" => "email-agent"}
+    }
+
+    assert {:error, :capacity_rejected} = RouterBridge.handle_inbound(msg)
   end
 
   test "handle_control_agent/2 builds control-plane request and default main session key" do

@@ -30,6 +30,9 @@ internals other applications reached into.
 
 ### Changed
 
+- `Router.handle_inbound/1` now propagates run-submission rejection instead of
+  logging it and returning `:ok`, so inbound transports can avoid false
+  accepted acknowledgements.
 - The router is the single writer of chat state (`LemonCore.ChatState`). The
   gateway's writes were redundant — the overflow delete was already duplicated
   by the router on the same event, and the completion event carries the resume

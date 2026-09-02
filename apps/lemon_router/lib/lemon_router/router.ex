@@ -14,15 +14,13 @@ defmodule LemonRouter.Router do
   alias LemonCore.SessionKey
   alias LemonRouter.{PendingCompaction, RunOrchestrator}
 
-  require Logger
-
   @doc """
   Handle an inbound message from a channel.
 
   Normalizes the message and submits it to the orchestrator.
   Before submission, applies any pending compaction marker for the session.
   """
-  @spec handle_inbound(LemonCore.InboundMessage.t()) :: :ok
+  @spec handle_inbound(LemonCore.InboundMessage.t()) :: :ok | {:error, term()}
   def handle_inbound(%LemonCore.InboundMessage{} = msg) do
     # Emit inbound telemetry
     emit_inbound_telemetry(msg)
@@ -43,16 +41,9 @@ defmodule LemonRouter.Router do
         PendingCompaction.consume(session_key, PendingCompaction.prepared_marker(meta))
         :ok
 
-      {:error, reason} ->
-        Logger.error(
-          "RunOrchestrator.submit failed for inbound (channel_id=#{inspect(msg.channel_id)} account_id=#{inspect(msg.account_id)} peer_id=#{inspect(msg.peer && msg.peer.id)}): " <>
-            inspect(reason)
-        )
-
-        :ok
+      {:error, _reason} = error ->
+        error
     end
-
-    :ok
   end
 
   @doc false

@@ -22,23 +22,35 @@ defmodule LemonCore.RouterBridge.Router do
   @doc "Route an inbound channel message."
   @callback handle_inbound(InboundMessage.t()) :: :ok | {:error, term()}
 
-  @doc "Abort every run of a session. Total and idempotent: unknown sessions are `:ok`."
-  @callback abort(session_key :: binary(), reason :: term()) :: :ok
+  @doc """
+  Abort every run of a session. Unknown sessions are `:ok`; operational
+  failures are `{:error, reason}`.
+  """
+  @callback abort(session_key :: binary(), reason :: term()) :: :ok | {:error, term()}
 
-  @doc "Abort one run by id. Total and idempotent: finished or unknown runs are `:ok`."
-  @callback abort_run(run_id :: binary(), reason :: term()) :: :ok
+  @doc """
+  Abort one run by id. Finished or unknown runs are `:ok`; operational
+  failures are `{:error, reason}`.
+  """
+  @callback abort_run(run_id :: binary(), reason :: term()) :: :ok | {:error, term()}
 
-  @doc "Apply a watchdog keep-alive decision to a run. Unknown runs are `:ok`."
-  @callback keep_run_alive(run_id :: binary(), decision :: :continue | :cancel) :: :ok
+  @doc """
+  Apply a watchdog keep-alive decision to a run. Unknown runs are `:ok`;
+  operational failures are `{:error, reason}`.
+  """
+  @callback keep_run_alive(run_id :: binary(), decision :: :continue | :cancel) ::
+              :ok | {:error, term()}
 
   @doc "Whether the session currently has an active run."
-  @callback session_busy?(session_key :: binary()) :: boolean()
+  @callback session_busy?(session_key :: binary()) :: boolean() | {:error, term()}
 
   @doc "The active run of a session, if any."
-  @callback active_run(session_key :: binary()) :: {:ok, binary()} | :none
+  @callback active_run(session_key :: binary()) ::
+              {:ok, binary()} | :none | {:error, term()}
 
   @doc "Every session with an active run."
-  @callback list_active_sessions() :: [%{session_key: binary(), run_id: binary()}]
+  @callback list_active_sessions() ::
+              [%{session_key: binary(), run_id: binary()}] | {:error, term()}
 
   defmacro __using__(_opts) do
     quote do
