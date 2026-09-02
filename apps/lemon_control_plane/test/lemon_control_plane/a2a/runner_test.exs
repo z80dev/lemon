@@ -159,6 +159,93 @@ defmodule LemonControlPlane.A2A.RunnerTest do
     cleanup_task(task_id, context_id, message_id, run_id)
   end
 
+  test "an outcome-unknown submit reconciles the original run without submitting twice" do
+    context_id = unique_id("accepted-unknown-context")
+    message_id = unique_id("accepted-unknown-message")
+
+    assert {:stream, task_id} = start_message(context_id, message_id)
+    assert_receive {:a2a_submit_blocked, request, runner_pid}
+    run_id = request.run_id
+    runner_ref = Process.monitor(runner_pid)
+    context = A2AStore.get_context(:inbound, "local", context_id)
+
+    assert :ok =
+             RunStore.finalize(run_id, %{
+               session_key: context.session_key,
+               agent_id: context.agent_id,
+               origin: :control_plane,
+               prompt: "redacted test prompt",
+               completed: %{ok: true, answer: "accepted before acknowledgement was lost"}
+             })
+
+    send(runner_pid, {:release_a2a_submit, {:error, :outcome_unknown}})
+    assert_receive {:DOWN, ^runner_ref, :process, ^runner_pid, :normal}
+
+    assert %{
+             state: "TASK_STATE_COMPLETED",
+             answer: "accepted before acknowledgement was lost",
+             error: nil
+           } = A2AStore.get_task(task_id)
+
+    refute_receive {:a2a_submit_blocked, _request, _runner_pid}, 50
+    assert %{turn_count: 1} = context = A2AStore.get_context(:inbound, "local", context_id)
+    assert context.session_key == request.session_key
+    cleanup_task(task_id, context_id, message_id, run_id)
+  end
+
+  test "an unresolved outcome-unknown submit stays reattachable and later reconciles" do
+    config = Application.fetch_env!(:lemon_control_plane, :a2a_config)
+    Application.put_env(:lemon_control_plane, :a2a_config, Map.put(config, :reply_timeout_ms, 25))
+
+    context_id = unique_id("unresolved-unknown-context")
+    message_id = unique_id("unresolved-unknown-message")
+
+    assert {:stream, task_id} = start_message(context_id, message_id)
+    assert_receive {:a2a_submit_blocked, request, runner_pid}
+    run_id = request.run_id
+    runner_ref = Process.monitor(runner_pid)
+
+    send(runner_pid, {:release_a2a_submit, {:error, :outcome_unknown}})
+    assert_receive {:DOWN, ^runner_ref, :process, ^runner_pid, :normal}, 1_000
+
+    assert %{
+             state: "TASK_STATE_WORKING",
+             answer: nil,
+             error: "Run submission outcome is being reconciled"
+           } = A2AStore.get_task(task_id)
+
+    refute_receive {:a2a_submit_blocked, _request, _runner_pid}, 50
+
+    context = A2AStore.get_context(:inbound, "local", context_id)
+
+    assert :ok =
+             RunStore.finalize(run_id, %{
+               session_key: context.session_key,
+               agent_id: context.agent_id,
+               origin: :control_plane,
+               prompt: "redacted test prompt",
+               completed: %{ok: true, answer: "reconciled later"}
+             })
+
+    assert {:ok, rendered} = Handler.handle("GetTask", %{"id" => task_id}, "local")
+    assert get_in(rendered, ["status", "state"]) == "TASK_STATE_COMPLETED"
+
+    assert {:ok, rendered_again} = Handler.handle("GetTask", %{"id" => task_id}, "local")
+    assert get_in(rendered_again, ["status", "state"]) == "TASK_STATE_COMPLETED"
+
+    assert %{state: "TASK_STATE_COMPLETED", answer: "reconciled later", error: nil} =
+             A2AStore.get_task(task_id)
+
+    assert %{turn_count: 1} = A2AStore.get_context(:inbound, "local", context_id)
+
+    assert Enum.map(A2AStore.history("local", context_id), & &1.role) == [
+             "ROLE_USER",
+             "ROLE_AGENT"
+           ]
+
+    cleanup_task(task_id, context_id, message_id, run_id)
+  end
+
   test "CancelTask JSON-RPC errors never expose router reasons, paths, or secrets" do
     secret = "A2A_CANCEL_SECRET_#{System.unique_integer([:positive])}"
     private_path = "/private/a2a/#{secret}"
@@ -184,9 +271,14 @@ defmodule LemonControlPlane.A2A.RunnerTest do
 
       assert response.status == 200
 
+      expected_message =
+        if match?({:raise, _message}, router_result),
+          do: "Task cancellation outcome is unknown",
+          else: "Task cancellation failed"
+
       assert response.body["error"] == %{
                "code" => -32_603,
-               "message" => "Task cancellation failed"
+               "message" => expected_message
              }
 
       refute response.raw_body =~ secret
@@ -205,6 +297,16 @@ defmodule LemonControlPlane.A2A.RunnerTest do
            }
 
     refute unavailable.raw_body =~ secret
+
+    AbortRouter.set_result({:error, :outcome_unknown})
+    uncertain = cancel_over_wire(task_id, unique_id("rpc"))
+
+    assert uncertain.body["error"] == %{
+             "code" => -32_603,
+             "message" => "Task cancellation outcome is unknown"
+           }
+
+    assert %{state: "TASK_STATE_WORKING"} = A2AStore.get_task(task_id)
     Store.delete(:a2a_tasks, task_id)
   end
 

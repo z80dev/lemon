@@ -1,6 +1,8 @@
 defmodule LemonControlPlane.Methods.ProfilesSupport do
   @moduledoc false
 
+  require Logger
+
   alias LemonControlPlane.Protocol.Errors
   alias LemonCore.{NodeRegistry, ProfileStore}
 
@@ -75,8 +77,39 @@ defmodule LemonControlPlane.Methods.ProfilesSupport do
   def error(:not_found), do: {:error, Errors.error(:not_found, "Profile not found")}
   def error(:already_exists), do: {:error, Errors.error(:conflict, "Profile already exists")}
 
+  def error(:confirmation_required),
+    do: {:error, Errors.invalid_request("Profile operation failed: confirmation_required")}
+
+  def error(reason) when reason in [:invalid_id, :invalid_profile, :reserved_profile] do
+    {:error, Errors.invalid_request("Profile operation is invalid")}
+  end
+
+  def error({:invalid_field, _field}),
+    do: {:error, Errors.invalid_request("Profile field is invalid")}
+
+  def error({:field_too_large, _field, _max}),
+    do: {:error, Errors.invalid_request("Profile field is too large")}
+
+  def error(reason) when reason in [:invalid_destination, :destination_is_directory],
+    do: {:error, Errors.invalid_request("Profile export destination is invalid")}
+
+  def error(:destination_exists),
+    do: {:error, Errors.error(:conflict, "Profile export destination already exists")}
+
   def error(reason) do
-    {:error, Errors.invalid_request("Profile operation failed: #{inspect(reason)}")}
+    Logger.warning("Profile operation failed class=#{failure_class(reason)}")
+    {:error, Errors.internal_error("Profile operation failed")}
+  end
+
+  def submission_outcome_unknown(request, profile) do
+    {:error,
+     Errors.error(:unavailable, "Profile chat submission outcome is unknown", %{
+       "code" => "SUBMISSION_OUTCOME_UNKNOWN",
+       "runId" => request.run_id,
+       "profileId" => profile["id"],
+       "sessionKey" => request.session_key,
+       "retrySafe" => false
+     })}
   end
 
   def queue_mode(nil), do: :collect
@@ -92,6 +125,15 @@ defmodule LemonControlPlane.Methods.ProfilesSupport do
   catch
     :exit, _ -> false
   end
+
+  defp failure_class(%{__exception__: true, __struct__: module}) when is_atom(module),
+    do: "exception:" <> inspect(module)
+
+  defp failure_class(reason) when is_atom(reason), do: "atom"
+  defp failure_class(reason) when is_tuple(reason), do: "tuple"
+  defp failure_class(reason) when is_map(reason), do: "map"
+  defp failure_class(reason) when is_list(reason), do: "list"
+  defp failure_class(_reason), do: "other"
 end
 
 defmodule LemonControlPlane.Methods.ProfilesList do
@@ -315,34 +357,44 @@ defmodule LemonControlPlane.Methods.ProfileChat do
 
     with {:ok, profile} <- LemonCore.ProfileStore.get(id),
          :ok <- ProfilesSupport.refresh(id),
-         {:ok, request} <-
+         {:ok, base_request} <-
            LemonCore.ProfileStore.chat_request(profile, params["prompt"],
              model: params["model"],
              queue_mode: ProfilesSupport.queue_mode(params["queueMode"]),
              meta: %{control_plane: true}
-           ),
-         {:ok, run_id} <- LemonCore.RouterBridge.submit_run(request) do
-      {:ok,
-       %{
-         "runId" => run_id,
-         "profileId" => id,
-         "sessionKey" => request.session_key,
-         "node" => profile["node"],
-         "summary" => %{
-           "runId" => run_id,
-           "profileId" => id,
-           "sessionKey" => request.session_key,
-           "node" => profile["node"],
-           "queueMode" => to_string(request.queue_mode),
-           "promptBytes" => byte_size(params["prompt"]),
-           "cleanup" => %{
-             "includesPromptText" => false,
-             "includesMessageBodies" => false,
-             "includesCredentials" => false,
-             "includesSecretValues" => false
-           }
-         }
-       }}
+           ) do
+      request = %{base_request | run_id: LemonCore.Id.run_id()}
+
+      case LemonCore.RouterBridge.submit_run(request) do
+        {:ok, run_id} ->
+          {:ok,
+           %{
+             "runId" => run_id,
+             "profileId" => id,
+             "sessionKey" => request.session_key,
+             "node" => profile["node"],
+             "summary" => %{
+               "runId" => run_id,
+               "profileId" => id,
+               "sessionKey" => request.session_key,
+               "node" => profile["node"],
+               "queueMode" => to_string(request.queue_mode),
+               "promptBytes" => byte_size(params["prompt"]),
+               "cleanup" => %{
+                 "includesPromptText" => false,
+                 "includesMessageBodies" => false,
+                 "includesCredentials" => false,
+                 "includesSecretValues" => false
+               }
+             }
+           }}
+
+        {:error, :outcome_unknown} ->
+          ProfilesSupport.submission_outcome_unknown(request, profile)
+
+        {:error, reason} ->
+          ProfilesSupport.error(reason)
+      end
     else
       {:error, reason} -> ProfilesSupport.error(reason)
     end

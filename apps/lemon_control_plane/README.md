@@ -119,7 +119,17 @@ Accepted cancellation is a terminal, first-writer-wins task transition: a
 delayed submission or run completion cannot revive a canceled task, add an
 agent reply, or increment its context turn count. Router/store failures are
 mapped to fixed bounded A2A error messages; internal reasons, paths, and secret
-values never cross the peer wire.
+values never cross the peer wire. If submission acknowledgement is lost, the
+runner never retries: it reconciles the caller-generated run ID for one bounded
+wait and otherwise leaves the task working with a fixed reconciliation status.
+Later task reads reconcile durable completion through that same run ID. An
+ambiguous cancellation acknowledgement likewise never invents a canceled task.
+
+`profile.chat` also generates its run ID before router submission. A definite
+acknowledgement returns the ordinary success projection; an ambiguous
+acknowledgement returns a bounded `UNAVAILABLE` error containing that run ID,
+the stable profile/session identifiers, and `retrySafe: false`. Raw router
+reasons are neither logged nor returned by the profile methods.
 
 The `/v1` generation endpoints are compatibility adapters, not a separate
 runtime path. They submit through the Lemon router and return `lemon.runId` by

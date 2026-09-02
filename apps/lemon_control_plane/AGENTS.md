@@ -23,6 +23,14 @@ be overwritten by a delayed submit/finalize path, and no post-cancel agent
 message or context turn may be recorded. External A2A and `sessions.active`
 errors must use fixed bounded messages; classify failures for logs without
 interpolating raw reasons, paths, credentials, or exception messages.
+A2A submission `:outcome_unknown` must never trigger a retry or a false failed
+task: reconcile the original caller-generated run ID for a bounded interval,
+retain a fixed nonterminal reconciliation status if it remains unknown, and
+reconcile later task reads from durable run state. Ambiguous abort
+acknowledgements do not prove cancellation. Profile chat follows the same
+no-retry rule and returns a bounded uncertain receipt with its pre-generated
+run ID and `retrySafe: false`; profile errors never inspect raw reasons into a
+client response or log.
 
 The control plane provides the external interface for clients (TUI, web, mobile, browser extensions) to:
 
@@ -288,8 +296,11 @@ Profile RPCs are `profiles.list`, `profiles.get`, `profiles.create`,
 `write`, and lifecycle mutations/exports require `admin`. `profile.chat`
 refreshes the router profile cache, submits the stable `agent:<id>:main`
 session through `LemonCore.RouterBridge`, and never echoes prompt text in its
-summary. Export summaries report selected/omitted/redacted counts and never
-claim to include sessions, memory, credentials, or secret values.
+summary. It assigns the run ID before submission so an `:outcome_unknown`
+response can return a bounded, non-retryable reconciliation receipt instead of
+inviting duplicate execution. Export summaries report selected/omitted/redacted
+counts and never claim to include sessions, memory, credentials, or secret
+values.
 
 | Method | Scope | Description |
 |--------|-------|-------------|

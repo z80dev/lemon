@@ -64,7 +64,12 @@ defmodule LemonControlPlane.A2A.Handler do
 
   defp list_tasks(params, peer_id) do
     limit = normalize_limit(params["pageSize"] || params["limit"])
-    tasks = A2AStore.list_tasks(peer_id, limit: limit) |> Enum.map(&TaskView.render/1)
+
+    tasks =
+      A2AStore.list_tasks(peer_id, limit: limit)
+      |> Enum.map(&Runner.reconcile/1)
+      |> Enum.map(&TaskView.render/1)
+
     {:ok, %{"tasks" => tasks, "nextPageToken" => nil}}
   end
 
@@ -84,6 +89,10 @@ defmodule LemonControlPlane.A2A.Handler do
             Logger.warning("A2A task cancellation unavailable")
             {:error, -32_603, "Task cancellation is temporarily unavailable"}
 
+          {:error, :outcome_unknown} ->
+            Logger.warning("A2A task cancellation outcome unknown")
+            {:error, -32_603, "Task cancellation outcome is unknown"}
+
           {:error, reason} ->
             Logger.error("A2A task cancellation failed class=#{failure_class(reason)}")
             {:error, -32_603, "Task cancellation failed"}
@@ -100,7 +109,7 @@ defmodule LemonControlPlane.A2A.Handler do
 
   defp owned_task(id, peer_id) when is_binary(id) do
     case A2AStore.get_task(id) do
-      %{peer_id: ^peer_id} = task -> {:ok, task}
+      %{peer_id: ^peer_id} = task -> {:ok, Runner.reconcile(task)}
       _ -> {:error, -32_001, "Task not found"}
     end
   end

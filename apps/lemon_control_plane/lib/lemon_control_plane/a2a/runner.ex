@@ -8,6 +8,8 @@ defmodule LemonControlPlane.A2A.Runner do
   alias LemonCore.{A2AStore, Bus, Id, RouterBridge, RunRequest, RunStore, SessionKey}
   alias LemonCore.A2A.Protocol
 
+  @submission_reconciling "Run submission outcome is being reconciled"
+
   @spec start(binary(), binary(), binary(), binary()) :: {:ok, map()} | {:error, term()}
   def start(peer_id, context_id, text, message_id) do
     config = Config.current()
@@ -66,7 +68,13 @@ defmodule LemonControlPlane.A2A.Runner do
     :ok = Bus.subscribe(topic)
 
     try do
-      case A2AStore.get_task(task_id) do
+      task =
+        case A2AStore.get_task(task_id) do
+          nil -> nil
+          task -> reconcile(task)
+        end
+
+      case task do
         nil ->
           {:error, :not_found}
 
@@ -97,23 +105,45 @@ defmodule LemonControlPlane.A2A.Runner do
   @spec mark_canceled(binary()) :: {:ok, map()} | {:error, term()}
   def mark_canceled(task_id) when is_binary(task_id) do
     case transition_nonterminal(task_id, %{state: "TASK_STATE_CANCELED"}) do
-      {:ok, %{state: "TASK_STATE_CANCELED"} = task} = result ->
+      {:ok, :changed, %{state: "TASK_STATE_CANCELED"} = task} ->
         notify(task.id)
-        result
+        {:ok, task}
+
+      {:ok, :unchanged, task} ->
+        {:ok, task}
 
       result ->
         result
     end
   end
 
+  @doc false
+  @spec reconcile(map()) :: map()
+  def reconcile(%{run_id: run_id} = task) when is_binary(run_id) do
+    if terminal_task?(task) do
+      task
+    else
+      case completed_from_store(run_id) do
+        :running ->
+          task
+
+        completion ->
+          finalize(task, completion)
+          A2AStore.get_task(task.id) || task
+      end
+    end
+  end
+
+  def reconcile(task), do: task
+
   defp execute(task, context, peer, config, text) do
     case transition_nonterminal(task.id, %{state: "TASK_STATE_WORKING"}) do
-      {:ok, %{state: "TASK_STATE_WORKING"}} ->
+      {:ok, :changed, %{state: "TASK_STATE_WORKING"}} ->
         execute_working(task, context, peer, config, text)
 
       # Cancellation can win after the durable task is created but before this
       # supervised runner is scheduled. A terminal task must never be revived.
-      {:ok, _terminal_task} ->
+      {:ok, :unchanged, _terminal_task} ->
         :ok
 
       {:error, reason} ->
@@ -143,8 +173,22 @@ defmodule LemonControlPlane.A2A.Runner do
       })
 
     result =
-      with {:ok, _run_id} <- RouterBridge.submit_run(request) do
-        wait_run(task.run_id, config.reply_timeout_ms)
+      case RouterBridge.submit_run(request) do
+        {:ok, _run_id} ->
+          wait_run(task.run_id, config.reply_timeout_ms)
+
+        {:error, :outcome_unknown} ->
+          # The router may have accepted this exact run before losing its
+          # acknowledgement. Never submit a second run: reconcile once through
+          # the caller-generated id and leave a truthful reattachable task when
+          # the bounded wait cannot prove a terminal outcome.
+          case wait_run(task.run_id, config.reply_timeout_ms) do
+            {:error, :timeout} -> {:error, :outcome_unknown}
+            completion -> completion
+          end
+
+        error ->
+          error
       end
 
     finalize(task, result)
@@ -161,7 +205,7 @@ defmodule LemonControlPlane.A2A.Runner do
         else: "TASK_STATE_COMPLETED"
 
     case transition_nonterminal(task.id, %{state: state, answer: answer, error: nil}) do
-      {:ok, %{state: ^state, answer: ^answer}} ->
+      {:ok, :changed, %{state: ^state, answer: ^answer}} ->
         {:ok, _} = A2AStore.increment_turn(:inbound, task.peer_id, task.context_id)
 
         {:ok, _} =
@@ -176,7 +220,7 @@ defmodule LemonControlPlane.A2A.Runner do
 
         notify(task.id)
 
-      {:ok, _terminal_task} ->
+      {:ok, :unchanged, _terminal_task} ->
         :ok
 
       {:error, reason} ->
@@ -189,6 +233,22 @@ defmodule LemonControlPlane.A2A.Runner do
     :ok
   end
 
+  defp finalize(task, {:error, :outcome_unknown}) do
+    case transition_nonterminal(task.id, %{
+           state: "TASK_STATE_WORKING",
+           answer: nil,
+           error: @submission_reconciling
+         }) do
+      {:ok, _, _task} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning(
+          "A2A task reconciliation persistence failed class=#{failure_class(reason)}"
+        )
+    end
+  end
+
   defp finalize(task, {:error, reason}) do
     error = if reason == :timeout, do: "peer run timed out", else: "peer run failed"
 
@@ -197,10 +257,10 @@ defmodule LemonControlPlane.A2A.Runner do
            answer: nil,
            error: error
          }) do
-      {:ok, %{state: "TASK_STATE_FAILED"}} ->
+      {:ok, :changed, %{state: "TASK_STATE_FAILED"}} ->
         notify(task.id)
 
-      {:ok, _terminal_task} ->
+      {:ok, :unchanged, _terminal_task} ->
         :ok
 
       {:error, update_reason} ->
@@ -209,9 +269,21 @@ defmodule LemonControlPlane.A2A.Runner do
   end
 
   defp transition_nonterminal(task_id, attrs) when is_map(attrs) do
-    A2AStore.update_task(task_id, fn current ->
-      if terminal_task?(current), do: current, else: Map.merge(current, attrs)
-    end)
+    transition_id = Id.uuid7()
+
+    case A2AStore.update_task(task_id, fn current ->
+           if terminal_task?(current) do
+             current
+           else
+             current
+             |> Map.merge(attrs)
+             |> Map.put(:transition_id, transition_id)
+           end
+         end) do
+      {:ok, %{transition_id: ^transition_id} = task} -> {:ok, :changed, task}
+      {:ok, task} -> {:ok, :unchanged, task}
+      {:error, _reason} = error -> error
+    end
   end
 
   defp terminal_task?(%{state: state}) do
