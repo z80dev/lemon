@@ -25,23 +25,23 @@ defmodule LemonCore.EngineRuntime do
 
   The configured module is validated against this behaviour when the router
   starts. A module that is not loadable or lacks a required callback is
-  rejected with a structured configuration error and logged at that boundary.
-  For compatibility, a router-only node still boots in its documented
-  unavailable-runtime mode. After successful validation, required callbacks
-  are an invariant: consumers must not treat a missing callback as ordinary
-  operational unavailability or add a legacy callback fallback.
+  rejected with a structured configuration error, logged once and disabled at
+  that boundary. For compatibility, a router-only node still boots in its
+  documented unavailable-runtime mode.
 
   Operational failures stay distinct from configuration errors. Expected
   unavailability is a normal `false` or `{:error, reason}` return. An
-  implementation exception or exit is isolated at the owning process
-  boundary, where it must be logged and surfaced as that operation's
-  documented error or degraded result rather than escaping and crashing the
-  owner.
+  implementation exception is isolated at the owning process boundary and
+  converted to that operation's documented error or degraded result. A
+  non-local exit is converted into a submit error by `c:submit_execution/1`'s
+  caller, but exits from the other callbacks can escape; implementations must
+  not exit their callers.
 
-    * **No callback should raise or exit.** `c:submit_execution/1` failures are
-      surfaced as submit errors. Liveness, lookup and cancellation failures
-      are isolated by the owning process and degrade according to the callback
-      documentation below.
+    * **No callback should raise or exit.** `c:submit_execution/1` exceptions
+      and exits are surfaced as submit errors. Liveness, lookup and
+      cancellation exceptions are isolated by the owning process and degrade
+      according to the callback documentation below; exits from those three
+      callbacks violate the owning-process boundary and can terminate it.
     * **`c:submit_execution/1` is asynchronous.** `:ok` means *accepted*, not
       *finished*. Progress, output and completion travel back over the bus as
       run events keyed by the command's `run_id`; the return value carries no
@@ -170,8 +170,9 @@ defmodule LemonCore.EngineRuntime do
 
   Cancellation is best-effort and asynchronous: returning `:ok` means the
   request was delivered, not that the run has stopped. An implementation
-  exception or exit violates the contract; the owning process isolates and
-  records it, then preserves best-effort cancellation semantics.
+  exception violates the contract; the owning process isolates it and
+  preserves best-effort cancellation semantics. An exit can escape that
+  boundary and must not be used to report cancellation failure.
   """
   @callback cancel_by_run_id(binary(), term()) :: :ok
 
@@ -182,8 +183,9 @@ defmodule LemonCore.EngineRuntime do
   monitor the executing process so a runtime crash is noticed promptly. Return
   `nil` for unknown, finished or queued-but-not-started runs; a pid the router
   monitors should be one whose death really means the run is over. An
-  implementation exception or exit violates the contract; the owning process
-  isolates and records it and treats the lookup as unknown (`nil`).
+  implementation exception violates the contract; the owning process isolates
+  it and treats the lookup as unknown (`nil`). An exit can escape that boundary
+  and must not be used to report an unknown run.
   """
   @callback run_pid(binary()) :: pid() | nil
 
@@ -196,8 +198,9 @@ defmodule LemonCore.EngineRuntime do
   the wrong one for "the runtime is busy" — backpressure belongs in the
   runtime's own queue, where it can be reported and observed.
 
-  An implementation exception or exit violates the contract; the owning
-  process isolates and records it and treats the runtime as unavailable.
+  An implementation exception violates the contract; the owning process
+  isolates it and treats the runtime as unavailable. An exit can escape that
+  boundary and must not be used to report unavailability.
   """
   @callback available?() :: boolean()
 end

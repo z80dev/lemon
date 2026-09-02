@@ -16,6 +16,7 @@ defmodule LemonCore.Contract do
   @type callback :: {atom(), arity()}
   @type error ::
           {:not_a_module, term()}
+          | {:not_a_behaviour, term()}
           | {:not_loadable, module()}
           | {:missing_callbacks, module(), [callback()]}
 
@@ -23,12 +24,18 @@ defmodule LemonCore.Contract do
   Validates that `module` is loadable and exports every required callback of
   `behaviour`.
   """
-  @spec validate(term(), module()) :: :ok | {:error, error()}
-  def validate(module, behaviour)
-      when is_atom(module) and not is_nil(module) and is_atom(behaviour) do
-    with :ok <- loadable(module) do
+  @spec validate(term(), term()) :: :ok | {:error, error()}
+  def validate(module, _behaviour) when not is_atom(module) or is_nil(module),
+    do: {:error, {:not_a_module, module}}
+
+  def validate(_module, behaviour) when not is_atom(behaviour) or is_nil(behaviour),
+    do: {:error, {:not_a_behaviour, behaviour}}
+
+  def validate(module, behaviour) do
+    with :ok <- loadable(module),
+         {:ok, required_callbacks} <- required_callbacks(behaviour) do
       missing_callbacks =
-        Enum.reject(required_callbacks(behaviour), fn {function, arity} ->
+        Enum.reject(required_callbacks, fn {function, arity} ->
           function_exported?(module, function, arity)
         end)
 
@@ -39,12 +46,29 @@ defmodule LemonCore.Contract do
     end
   end
 
-  def validate(other, _behaviour), do: {:error, {:not_a_module, other}}
+  defp required_callbacks(behaviour) do
+    with {:module, ^behaviour} <- Code.ensure_loaded(behaviour),
+         true <- function_exported?(behaviour, :behaviour_info, 1),
+         {:ok, callbacks, optional_callbacks} <- behaviour_callbacks(behaviour) do
+      {:ok, callbacks -- optional_callbacks}
+    else
+      _ -> {:error, {:not_a_behaviour, behaviour}}
+    end
+  rescue
+    _ -> {:error, {:not_a_behaviour, behaviour}}
+  catch
+    _, _ -> {:error, {:not_a_behaviour, behaviour}}
+  end
 
-  @doc "Every callback of `behaviour` that an implementation must export."
-  @spec required_callbacks(module()) :: [callback()]
-  def required_callbacks(behaviour) when is_atom(behaviour) do
-    behaviour.behaviour_info(:callbacks) -- behaviour.behaviour_info(:optional_callbacks)
+  defp behaviour_callbacks(behaviour) do
+    callbacks = behaviour.behaviour_info(:callbacks)
+    optional_callbacks = behaviour.behaviour_info(:optional_callbacks)
+
+    if is_list(callbacks) and is_list(optional_callbacks) do
+      {:ok, callbacks, optional_callbacks}
+    else
+      :error
+    end
   end
 
   defp loadable(module) do
@@ -52,5 +76,9 @@ defmodule LemonCore.Contract do
       {:module, ^module} -> :ok
       {:error, _reason} -> {:error, {:not_loadable, module}}
     end
+  rescue
+    _ -> {:error, {:not_loadable, module}}
+  catch
+    _, _ -> {:error, {:not_loadable, module}}
   end
 end

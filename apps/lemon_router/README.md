@@ -72,9 +72,10 @@ attachment policy.
 ## Important Contracts
 
 - Router startup validates the configured `:engine_runtime` through
-  `LemonCore.EngineRuntime.validate/1`. Invalid wiring is logged once without
-  changing the router-only degraded mode: the router still boots and runtime
-  operations retain their existing unavailable-runtime handling.
+  `LemonCore.EngineRuntime.validate/1`. Invalid wiring is logged once and its
+  binding is disabled without changing the router-only degraded mode: the
+  router still boots and runtime operations retain their existing
+  unavailable-runtime handling.
 - Inbound callers should provide structured resume data through `LemonCore.RunRequest.resume` when they already know it.
 - Top-level runs always use the native executor; model validation belongs to `LemonAi`, and default cwd resolution should use `LemonCore.Cwd`.
 - Router emits `LemonCore.DeliveryIntent`, not `LemonChannels.OutboundPayload`.

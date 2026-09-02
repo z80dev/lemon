@@ -26,13 +26,12 @@ defmodule LemonRouter.EngineRuntimeConfigurationTest do
   end
 
   setup do
-    original_runtime = Application.get_env(:lemon_router, :engine_runtime)
+    original_runtime = Application.fetch_env(:lemon_router, :engine_runtime)
 
     on_exit(fn ->
-      if original_runtime do
-        Application.put_env(:lemon_router, :engine_runtime, original_runtime)
-      else
-        Application.delete_env(:lemon_router, :engine_runtime)
+      case original_runtime do
+        {:ok, runtime} -> Application.put_env(:lemon_router, :engine_runtime, runtime)
+        :error -> Application.delete_env(:lemon_router, :engine_runtime)
       end
     end)
   end
@@ -43,6 +42,13 @@ defmodule LemonRouter.EngineRuntimeConfigurationTest do
 
   test "accepts a runtime implementing the complete configured contract" do
     assert EngineRuntimeConfiguration.validate(Runtime) == :ok
+  end
+
+  test "the startup boundary preserves a valid configured runtime" do
+    Application.put_env(:lemon_router, :engine_runtime, Runtime)
+
+    assert EngineRuntimeConfiguration.validate_configured() == :ok
+    assert Application.fetch_env(:lemon_router, :engine_runtime) == {:ok, Runtime}
   end
 
   test "rejects an invalid configured runtime with structured details" do
@@ -70,6 +76,7 @@ defmodule LemonRouter.EngineRuntimeConfigurationTest do
 
     assert log =~ "configured :engine_runtime #{inspect(IncompleteRuntime)}"
     assert log =~ "does not implement LemonCore.EngineRuntime"
-    assert log =~ "runtime operations will remain unavailable"
+    assert log =~ "disabling the invalid binding"
+    assert Application.fetch_env(:lemon_router, :engine_runtime) == :error
   end
 end

@@ -20,9 +20,16 @@ defmodule LemonCore.ContractTest do
     def unrelated, do: :ok
   end
 
+  defmodule RaisingBehaviourInfo do
+    def behaviour_info(_kind), do: raise("broken behaviour metadata")
+  end
+
+  defmodule ExitingBehaviourInfo do
+    def behaviour_info(_kind), do: exit(:broken_behaviour_metadata)
+  end
+
   test "accepts a loadable module with all required callbacks" do
     assert Contract.validate(GreeterImplementation, Greeter) == :ok
-    assert Contract.required_callbacks(Greeter) == [hello: 0]
   end
 
   test "does not require optional callbacks" do
@@ -41,6 +48,26 @@ defmodule LemonCore.ContractTest do
 
     assert Contract.validate("runtime", Greeter) == {:error, {:not_a_module, "runtime"}}
     assert Contract.validate(nil, Greeter) == {:error, {:not_a_module, nil}}
+  end
+
+  test "rejects invalid behaviour inputs without raising" do
+    assert Contract.validate(GreeterImplementation, nil) ==
+             {:error, {:not_a_behaviour, nil}}
+
+    assert Contract.validate(GreeterImplementation, "greeter") ==
+             {:error, {:not_a_behaviour, "greeter"}}
+
+    assert Contract.validate(GreeterImplementation, No.Such.Behaviour) ==
+             {:error, {:not_a_behaviour, No.Such.Behaviour}}
+
+    assert Contract.validate(GreeterImplementation, String) ==
+             {:error, {:not_a_behaviour, String}}
+
+    assert Contract.validate(GreeterImplementation, RaisingBehaviourInfo) ==
+             {:error, {:not_a_behaviour, RaisingBehaviourInfo}}
+
+    assert Contract.validate(GreeterImplementation, ExitingBehaviourInfo) ==
+             {:error, {:not_a_behaviour, ExitingBehaviourInfo}}
   end
 
   test "EngineRuntime.validate/1 reports its complete required surface" do

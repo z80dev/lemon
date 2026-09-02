@@ -14,10 +14,11 @@ defmodule LemonRouter.EngineRuntimeConfiguration do
       {:error, reason} = error ->
         Logger.error(
           "configured :engine_runtime #{inspect(module)} does not implement " <>
-            "LemonCore.EngineRuntime (#{inspect(reason)}); runtime operations will remain " <>
-            "unavailable until a valid runtime is configured"
+            "LemonCore.EngineRuntime (#{inspect(reason)}); disabling the invalid binding so " <>
+            "runtime operations use the supported unavailable-runtime path"
         )
 
+        Application.delete_env(:lemon_router, :engine_runtime)
         error
     end
   end
