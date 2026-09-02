@@ -81,13 +81,13 @@ defmodule LemonCore.Quality.StoreTableOwnershipCheck do
     attributes = module_attributes(body)
     aliases = store_aliases(body)
 
-    case declared_store_tables(body, attributes, aliases.table) do
+    case declared_store_tables(body, attributes, aliases) do
       :not_an_owner ->
         []
 
       {:ok, declared} ->
         body
-        |> generic_store_calls(attributes, aliases.store)
+        |> generic_store_calls(attributes, aliases)
         |> Enum.reject(fn
           %{table: {:resolved, name}} -> name in declared
           _call -> false
@@ -110,8 +110,9 @@ defmodule LemonCore.Quality.StoreTableOwnershipCheck do
   defp module_attributes(body) do
     {_ast, attributes} =
       Macro.prewalk(body, %{}, fn
-        {:@, _meta, [{name, _name_meta, [value]}]} = node, acc when is_atom(name) ->
-          {node, Map.put(acc, name, value)}
+        {:@, meta, [{name, name_meta, [value]}]} = node, acc when is_atom(name) ->
+          assignment = {source_location(meta, name_meta), value}
+          {node, Map.update(acc, name, [assignment], &[assignment | &1])}
 
         node, acc ->
           {node, acc}
@@ -122,9 +123,9 @@ defmodule LemonCore.Quality.StoreTableOwnershipCheck do
 
   defp store_aliases(body) do
     {_ast, aliases} =
-      Macro.prewalk(body, %{store: MapSet.new(), table: MapSet.new()}, fn
-        {:alias, _meta, args} = node, acc ->
-          {node, collect_store_alias(args, acc)}
+      Macro.prewalk(body, %{}, fn
+        {:alias, meta, args} = node, acc ->
+          {node, collect_store_alias(args, source_location(meta), acc)}
 
         node, acc ->
           {node, acc}
@@ -133,41 +134,47 @@ defmodule LemonCore.Quality.StoreTableOwnershipCheck do
     aliases
   end
 
-  defp collect_store_alias([{:__aliases__, _meta, [:LemonCore, :Store]} | opts], acc) do
-    put_store_alias(acc, :store, alias_name(opts, :Store))
-  end
-
-  defp collect_store_alias([{:__aliases__, _meta, [:LemonCore, :Store, :Table]} | opts], acc) do
-    put_store_alias(acc, :table, alias_name(opts, :Table))
-  end
-
-  defp collect_store_alias(
-         [
-           {{:., _dot_meta, [{:__aliases__, _base_meta, [:LemonCore]}, :{}]}, _call_meta,
-            children}
-         ],
-         acc
-       ) do
-    Enum.reduce(children, acc, fn
-      {:__aliases__, _meta, [:Store]}, found -> put_store_alias(found, :store, :Store)
-      _, found -> found
-    end)
+  defp collect_store_alias([{:__aliases__, _meta, segments} | opts], location, acc)
+       when is_list(segments) do
+    if Enum.all?(segments, &is_atom/1) do
+      default = List.last(segments)
+      put_store_alias(acc, alias_name(opts, default), alias_kind(segments), location)
+    else
+      acc
+    end
   end
 
   defp collect_store_alias(
          [
-           {{:., _dot_meta, [{:__aliases__, _base_meta, [:LemonCore, :Store]}, :{}]}, _call_meta,
-            children}
+           {{:., _dot_meta, [{:__aliases__, _base_meta, base}, :{}]}, _call_meta, children}
          ],
+         location,
          acc
-       ) do
-    Enum.reduce(children, acc, fn
-      {:__aliases__, _meta, [:Table]}, found -> put_store_alias(found, :table, :Table)
-      _, found -> found
-    end)
+       )
+       when is_list(base) do
+    if Enum.all?(base, &is_atom/1) do
+      Enum.reduce(children, acc, fn
+        {:__aliases__, _meta, child}, found when is_list(child) ->
+          if Enum.all?(child, &is_atom/1) do
+            put_store_alias(
+              found,
+              List.last(child),
+              alias_kind(base ++ child),
+              location
+            )
+          else
+            found
+          end
+
+        _, found ->
+          found
+      end)
+    else
+      acc
+    end
   end
 
-  defp collect_store_alias(_args, acc), do: acc
+  defp collect_store_alias(_args, _location, acc), do: acc
 
   defp alias_name([opts], default) when is_list(opts) do
     case Keyword.get(opts, :as) do
@@ -178,16 +185,23 @@ defmodule LemonCore.Quality.StoreTableOwnershipCheck do
 
   defp alias_name(_opts, default), do: default
 
-  defp put_store_alias(aliases, kind, name) do
-    Map.update!(aliases, kind, &MapSet.put(&1, name))
+  defp alias_kind([:LemonCore, :Store]), do: :store
+  defp alias_kind([:LemonCore, :Store, :Table]), do: :table
+  defp alias_kind(_segments), do: :other
+
+  defp put_store_alias(aliases, name, kind, location) when is_atom(name) do
+    binding = {location, kind}
+    Map.update(aliases, name, [binding], &[binding | &1])
   end
 
-  defp declared_store_tables(body, attributes, table_aliases) do
+  defp declared_store_tables(body, attributes, aliases) do
     {_ast, declarations} =
       Macro.prewalk(body, [], fn
-        {:use, _meta, [target, opts]} = node, acc when is_list(opts) ->
-          if store_table_module?(target, table_aliases) do
-            {node, [Keyword.get(opts, :tables) | acc]}
+        {:use, meta, [target, opts]} = node, acc when is_list(opts) ->
+          location = source_location(meta)
+
+          if store_table_module?(target, aliases, location) do
+            {node, [{Keyword.get(opts, :tables), source_location(meta)} | acc]}
           else
             {node, acc}
           end
@@ -200,8 +214,8 @@ defmodule LemonCore.Quality.StoreTableOwnershipCheck do
       [] ->
         :not_an_owner
 
-      [declaration] ->
-        case resolve_attribute(declaration, attributes) do
+      [{declaration, location}] ->
+        case resolve_attribute(declaration, attributes, location) do
           tables when is_list(tables) ->
             if Keyword.keyword?(tables) and Enum.all?(Keyword.keys(tables), &is_atom/1) do
               {:ok, Keyword.keys(tables)}
@@ -218,25 +232,31 @@ defmodule LemonCore.Quality.StoreTableOwnershipCheck do
     end
   end
 
-  defp store_table_module?({:__aliases__, _meta, [:LemonCore, :Store, :Table]}, _aliases),
-    do: true
+  defp store_table_module?(
+         {:__aliases__, _meta, [:LemonCore, :Store, :Table]},
+         _aliases,
+         _location
+       ),
+       do: true
 
-  defp store_table_module?({:__aliases__, _meta, [name]}, aliases),
-    do: MapSet.member?(aliases, name)
+  defp store_table_module?({:__aliases__, _meta, [name]}, aliases, location),
+    do: alias_resolves_to?(aliases, name, :table, location)
 
-  defp store_table_module?(_target, _aliases), do: false
+  defp store_table_module?(_target, _aliases, _location), do: false
 
-  defp generic_store_calls(body, attributes, store_aliases) do
+  defp generic_store_calls(body, attributes, aliases) do
     {_ast, calls} =
       Macro.prewalk(body, [], fn
         {{:., dot_meta, [target, function]}, call_meta, args} = node, acc
         when is_atom(function) and is_list(args) ->
-          with true <- store_module?(target, store_aliases),
+          location = source_location(call_meta, dot_meta)
+
+          with true <- store_module?(target, aliases, location),
                table_index when is_integer(table_index) <-
                  get_in(@store_table_arguments, [function, length(args)]),
                table_expression when not is_nil(table_expression) <- Enum.at(args, table_index) do
-            table = resolve_table(table_expression, attributes)
-            line = Keyword.get(call_meta, :line) || Keyword.get(dot_meta, :line)
+            table = resolve_table(table_expression, attributes, location)
+            line = elem(location, 0)
             {node, [%{function: function, arity: length(args), table: table, line: line} | acc]}
           else
             _ -> {node, acc}
@@ -249,30 +269,79 @@ defmodule LemonCore.Quality.StoreTableOwnershipCheck do
     Enum.reverse(calls)
   end
 
-  defp store_module?({:__aliases__, _meta, [:LemonCore, :Store]}, _aliases), do: true
+  defp store_module?({:__aliases__, _meta, [:LemonCore, :Store]}, _aliases, _location), do: true
 
-  defp store_module?({:__aliases__, _meta, [name]}, aliases),
-    do: MapSet.member?(aliases, name)
+  defp store_module?({:__aliases__, _meta, [name]}, aliases, location),
+    do: alias_resolves_to?(aliases, name, :store, location)
 
-  defp store_module?(_target, _aliases), do: false
+  defp store_module?(_target, _aliases, _location), do: false
 
-  defp resolve_table(table, _attributes) when is_atom(table), do: {:resolved, table}
+  defp alias_resolves_to?(aliases, name, expected, location) do
+    aliases
+    |> Map.get(name, [])
+    |> Enum.filter(fn {alias_location, _kind} -> alias_location < location end)
+    |> Enum.max_by(&elem(&1, 0), fn -> nil end)
+    |> case do
+      {_alias_location, ^expected} -> true
+      _other -> false
+    end
+  end
 
-  defp resolve_table({:@, _meta, [{name, _name_meta, _context}]}, attributes)
+  defp resolve_table(table, _attributes, _location) when is_atom(table), do: {:resolved, table}
+
+  defp resolve_table(
+         {:@, _meta, [{name, _name_meta, _context}]} = attribute,
+         attributes,
+         location
+       )
        when is_atom(name) do
-    case attributes |> Map.get(name) |> resolve_attribute(attributes) do
+    case resolve_attribute(attribute, attributes, location) do
       table when is_atom(table) -> {:resolved, table}
       _ -> :unresolved
     end
   end
 
-  defp resolve_table(_table, _attributes), do: :unresolved
+  defp resolve_table(_table, _attributes, _location), do: :unresolved
 
-  defp resolve_attribute({:@, _meta, [{name, _name_meta, _context}]}, attributes)
-       when is_atom(name),
-       do: Map.get(attributes, name)
+  defp resolve_attribute(value, attributes, location),
+    do: resolve_attribute(value, attributes, location, MapSet.new())
 
-  defp resolve_attribute(value, _attributes), do: value
+  defp resolve_attribute(
+         {:@, _meta, [{name, _name_meta, _context}]},
+         attributes,
+         location,
+         seen
+       )
+       when is_atom(name) do
+    if MapSet.member?(seen, name) do
+      nil
+    else
+      attributes
+      |> Map.get(name, [])
+      |> Enum.filter(fn {assignment_location, _value} -> assignment_location < location end)
+      |> Enum.max_by(&elem(&1, 0), fn -> nil end)
+      |> case do
+        {assignment_location, value} ->
+          resolve_attribute(
+            value,
+            attributes,
+            assignment_location,
+            MapSet.put(seen, name)
+          )
+
+        nil ->
+          nil
+      end
+    end
+  end
+
+  defp resolve_attribute(value, _attributes, _location, _seen), do: value
+
+  defp source_location(primary, fallback \\ []) do
+    line = Keyword.get(primary, :line) || Keyword.get(fallback, :line) || 0
+    column = Keyword.get(primary, :column) || Keyword.get(fallback, :column) || 0
+    {line, column}
+  end
 
   defp bypass_issue(call, declared, relative) do
     table =

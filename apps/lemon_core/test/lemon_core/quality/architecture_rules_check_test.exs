@@ -1348,6 +1348,135 @@ defmodule LemonCore.Quality.ArchitectureRulesCheckTest do
       end
     end
 
+    test "resolves grouped Store and Store.Table aliases" do
+      tmp_dir = tmp_repo!()
+
+      try do
+        write_file!(
+          tmp_dir,
+          "apps/demo/lib/demo/grouped_alias_store.ex",
+          """
+          defmodule Demo.GroupedAliasStore do
+            alias LemonCore.{Store, Store.Table}
+            use Table, tables: [owned: []]
+
+            def bad(key), do: Store.get(:other, key)
+          end
+          """
+        )
+
+        assert {:error, report} = ArchitectureRulesCheck.run(root: tmp_dir)
+
+        assert [%{code: :store_table_owner_bypass, message: message}] =
+                 Enum.filter(report.issues, &(&1.code == :store_table_owner_bypass))
+
+        assert message =~ "accesses :other"
+      after
+        File.rm_rf!(tmp_dir)
+      end
+    end
+
+    test "resolves aliases at each call's source position" do
+      tmp_dir = tmp_repo!()
+
+      try do
+        write_file!(
+          tmp_dir,
+          "apps/demo/lib/demo/alias_order_store.ex",
+          """
+          defmodule Demo.AliasOrderStore do
+            use LemonCore.Store.Table, tables: [owned: []]
+
+            alias LemonCore.Store, as: DataStore
+            def good(key), do: DataStore.get(:owned, key)
+
+            alias Demo.UnrelatedStore, as: DataStore
+            def unrelated(key), do: DataStore.get(:other, key)
+
+            alias LemonCore.Store, as: DataStore
+            def bad(key), do: DataStore.get(:other, key)
+          end
+          """
+        )
+
+        assert {:error, report} = ArchitectureRulesCheck.run(root: tmp_dir)
+
+        assert [%{code: :store_table_owner_bypass, message: message}] =
+                 Enum.filter(report.issues, &(&1.code == :store_table_owner_bypass))
+
+        assert message =~ "accesses :other"
+      after
+        File.rm_rf!(tmp_dir)
+      end
+    end
+
+    test "resolves module attributes at each call's source position" do
+      tmp_dir = tmp_repo!()
+
+      try do
+        write_file!(
+          tmp_dir,
+          "apps/demo/lib/demo/attribute_order_store.ex",
+          """
+          defmodule Demo.AttributeOrderStore do
+            use LemonCore.Store.Table, tables: [owned: []]
+
+            @table :other
+            def bad(key), do: LemonCore.Store.get(@table, key)
+
+            @table :owned
+            def good(key), do: LemonCore.Store.get(@table, key)
+          end
+
+          defmodule Demo.AttributeFalsePositiveStore do
+            use LemonCore.Store.Table, tables: [owned: []]
+
+            @table :owned
+            def good(key), do: LemonCore.Store.get(@table, key)
+
+            @table :other
+            def bad(key), do: LemonCore.Store.get(@table, key)
+          end
+          """
+        )
+
+        assert {:error, report} = ArchitectureRulesCheck.run(root: tmp_dir)
+
+        issues = Enum.filter(report.issues, &(&1.code == :store_table_owner_bypass))
+        assert length(issues) == 2
+        assert Enum.all?(issues, &(&1.message =~ "accesses :other"))
+      after
+        File.rm_rf!(tmp_dir)
+      end
+    end
+
+    test "resolves chained module attributes in declarations and calls" do
+      tmp_dir = tmp_repo!()
+
+      try do
+        write_file!(
+          tmp_dir,
+          "apps/demo/lib/demo/chained_attribute_store.ex",
+          """
+          defmodule Demo.ChainedAttributeStore do
+            @declared [owned: []]
+            @tables @declared
+            @owned :owned
+            @table @owned
+
+            use LemonCore.Store.Table, tables: @tables
+            def get(key), do: LemonCore.Store.get(@table, key)
+          end
+          """
+        )
+
+        assert {:ok, report} = ArchitectureRulesCheck.run(root: tmp_dir)
+        assert report.issue_count == 0
+      after
+        File.rm_rf!(tmp_dir)
+      end
+    end
+
     test "does not let an owner hide a cross-table call behind a Store alias or table attribute" do
       tmp_dir = tmp_repo!()
 
@@ -1468,6 +1597,28 @@ defmodule LemonCore.Quality.ArchitectureRulesCheckTest do
 
         assert {:ok, report} = ArchitectureRulesCheck.run(root: tmp_dir)
         assert report.issue_count == 0
+      after
+        File.rm_rf!(tmp_dir)
+      end
+    end
+
+    test "checks owners even when an unrelated source file shares the architecture checker basename" do
+      tmp_dir = tmp_repo!()
+
+      try do
+        write_file!(
+          tmp_dir,
+          "apps/demo/lib/demo/architecture_rules_check.ex",
+          """
+          defmodule Demo.ArchitectureRulesCheck do
+            use LemonCore.Store.Table, tables: [owned: []]
+            def bad(key), do: LemonCore.Store.get(:other, key)
+          end
+          """
+        )
+
+        assert {:error, report} = ArchitectureRulesCheck.run(root: tmp_dir)
+        assert Enum.any?(report.issues, &(&1.code == :store_table_owner_bypass))
       after
         File.rm_rf!(tmp_dir)
       end

@@ -101,7 +101,18 @@ defmodule LemonCore.Store.Table do
   end
 
   defp build!(owner, name, opts) do
-    case Keyword.keys(opts) -- @options do
+    keys = Keyword.keys(opts)
+
+    case keys -- Enum.uniq(keys) do
+      [] ->
+        :ok
+
+      duplicates ->
+        raise ArgumentError,
+              "#{inspect(owner)}.#{name}: duplicate options #{inspect(Enum.uniq(duplicates))}"
+    end
+
+    case Enum.uniq(keys) -- @options do
       [] ->
         :ok
 
@@ -133,6 +144,28 @@ defmodule LemonCore.Store.Table do
        do: [expires_at: field]
 
   defp retention!(owner, name, retention) when is_list(retention) do
+    keys = Keyword.keys(retention)
+
+    case keys -- Enum.uniq(keys) do
+      [] ->
+        :ok
+
+      duplicates ->
+        raise ArgumentError,
+              "#{inspect(owner)}.#{name}: retention has duplicate options " <>
+                inspect(Enum.uniq(duplicates))
+    end
+
+    case Enum.uniq(keys) -- [:max_age_ms, :timestamp] do
+      [] ->
+        :ok
+
+      unsupported ->
+        raise ArgumentError,
+              "#{inspect(owner)}.#{name}: retention has unsupported options " <>
+                inspect(unsupported)
+    end
+
     max_age_ms = Keyword.get(retention, :max_age_ms)
     timestamp = Keyword.get(retention, :timestamp)
 
@@ -143,7 +176,12 @@ defmodule LemonCore.Store.Table do
     end
 
     unless (is_atom(timestamp) and not is_nil(timestamp)) or
-             match?({module, function} when is_atom(module) and is_atom(function), timestamp) do
+             match?(
+               {module, function}
+               when is_atom(module) and not is_nil(module) and is_atom(function) and
+                      not is_nil(function),
+               timestamp
+             ) do
       raise ArgumentError,
             "#{inspect(owner)}.#{name}: retention :timestamp must be an atom field or " <>
               "{module, function}, got #{inspect(timestamp)}"
