@@ -16,6 +16,9 @@ compliance suite runs against your module.
 
 ### Added
 
+- `BackendCase` recognizes optional `compare_and_delete_many/2` implementations
+  and verifies that an exact-snapshot mismatch does not delete any entry before
+  exercising the successful multi-delete path.
 - `LemonPlatformTest.EventsFixtures.channel_delivery/1` — builder for the new
   `LemonCore.Events.ChannelDelivery` payload (`:channel_delivery` on the
   `channels` topic); `EventsCase` covers the module through the registry like

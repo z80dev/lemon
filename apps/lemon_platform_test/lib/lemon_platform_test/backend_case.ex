@@ -10,7 +10,7 @@ defmodule LemonPlatformTest.BackendCase do
 
   `LemonCore.Store` is the platform's key/value store: a `GenServer` that owns a
   backend and serialises access to it. The backend is the part that actually
-  persists, and it is deliberately tiny — eight callbacks, no supervision, no
+  persists, and it is deliberately tiny — nine callbacks, no supervision, no
   process of its own. `LemonCore.Store.EtsBackend` (ephemeral),
   `LemonCore.Store.SqliteBackend` (durable) and `LemonCore.Store.JsonlBackend`
   (append-only files) are the built-ins; a Redis or Postgres backend is a
@@ -64,13 +64,15 @@ defmodule LemonPlatformTest.BackendCase do
   references and functions are **not** required to round-trip, and this suite
   does not test them.
 
-  ### Optional callbacks are all-or-nothing
+  ### Optional callbacks degrade predictably
 
-  `list_recent/3` and `ping/1` are optional. If you export them they must honour
-  their contracts (`list_recent/3` returns at most `limit` entries, all of which
-  are real entries of that table; `ping/1` answers without disturbing data). If
-  you do not export them the store degrades: it falls back to `list/2` and
-  reports the backend as unpingable.
+  `compare_and_delete_many/2`, `list_recent/3`, and `ping/1` are optional. If
+  you export them they must honour their contracts: multi-delete validates
+  every exact snapshot before deleting in caller-provided order,
+  `list_recent/3` returns at most `limit` real entries of that table, and
+  `ping/1` answers without disturbing data. If you do not export them the store
+  falls back to its serialized validate/delete path, falls back to `list/2`, or
+  reports the backend as unpingable, respectively.
 
   ## Minimal implementation
 
@@ -390,6 +392,37 @@ defmodule LemonPlatformTest.BackendCase do
       # the compiler warn about an undefined function for every backend that
       # legitimately does not implement them.
       describe unquote(label <> " optional callbacks") do
+        test "compare_and_delete_many/2, when exported, validates before deleting", %{
+          state: state
+        } do
+          if function_exported?(@backend, :compare_and_delete_many, 2) do
+            {:ok, state} = @backend.put(state, @alpha, "first", %{version: 1})
+            {:ok, state} = @backend.put(state, @beta, "fence", :claimed)
+
+            mismatched = [
+              {@alpha, "first", %{version: 2}},
+              {@beta, "fence", :claimed}
+            ]
+
+            assert {:error, :mismatch, state} =
+                     apply(@backend, :compare_and_delete_many, [state, mismatched])
+
+            assert {:ok, %{version: 1}, state} = @backend.get(state, @alpha, "first")
+            assert {:ok, :claimed, state} = @backend.get(state, @beta, "fence")
+
+            exact = [
+              {@alpha, "first", %{version: 1}},
+              {@beta, "fence", :claimed}
+            ]
+
+            assert {:ok, state} =
+                     apply(@backend, :compare_and_delete_many, [state, exact])
+
+            assert {:ok, nil, state} = @backend.get(state, @alpha, "first")
+            assert {:ok, nil, _state} = @backend.get(state, @beta, "fence")
+          end
+        end
+
         test "list_recent/3, when exported, returns at most `limit` real entries", %{state: state} do
           if function_exported?(@backend, :list_recent, 3) do
             state =
