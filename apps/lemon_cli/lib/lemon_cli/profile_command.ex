@@ -23,6 +23,21 @@ defmodule LemonCli.ProfileCommand do
     node: :string
   ]
 
+  @definite_control_plane_rejection_codes ~w(
+    ALREADY_CONNECTED
+    CONFLICT
+    FORBIDDEN
+    HANDSHAKE_REQUIRED
+    INVALID_PARAMS
+    INVALID_REQUEST
+    METHOD_NOT_FOUND
+    NOT_FOUND
+    NOT_IMPLEMENTED
+    PERMISSION_DENIED
+    RATE_LIMITED
+    UNAUTHORIZED
+  )
+
   @spec run([String.t()]) :: 0 | 1 | 2
   def run(args) do
     case args do
@@ -205,8 +220,8 @@ defmodule LemonCli.ProfileCommand do
           {:ok, _malformed_acknowledgement} ->
             {:error, {:submission_outcome_unknown, nil}}
 
-          {:error, _reason} ->
-            {:error, {:submission_outcome_unknown, nil}}
+          {:error, reason} ->
+            {:error, classify_control_plane_submit_error(reason)}
         end
 
       {:error, :outcome_unknown} ->
@@ -223,6 +238,36 @@ defmodule LemonCli.ProfileCommand do
 
   defp ensure_submission_run_id(%LemonCore.RunRequest{} = request),
     do: %{request | run_id: Id.run_id()}
+
+  defp classify_control_plane_submit_error({:control_plane_unavailable, _reason}),
+    do: :submission_unavailable
+
+  defp classify_control_plane_submit_error({:unexpected_handshake, _frame}),
+    do: :submission_unavailable
+
+  defp classify_control_plane_submit_error({:control_plane, error}) when is_map(error) do
+    cond do
+      control_plane_outcome_unknown?(error) ->
+        {:submission_outcome_unknown, nil}
+
+      Map.get(error, "code") in @definite_control_plane_rejection_codes ->
+        :submission_rejected
+
+      true ->
+        {:submission_outcome_unknown, nil}
+    end
+  end
+
+  defp classify_control_plane_submit_error(_transport_or_protocol_failure),
+    do: {:submission_outcome_unknown, nil}
+
+  defp control_plane_outcome_unknown?(error) do
+    code = Map.get(error, "code")
+    message = Map.get(error, "message")
+
+    code == "OUTCOME_UNKNOWN" or
+      message in ["outcome_unknown", "Profile operation failed: :outcome_unknown"]
+  end
 
   defp chat_result(run_id, request, profile) do
     %{
@@ -380,6 +425,15 @@ defmodule LemonCli.ProfileCommand do
 
   defp chat_operation_error(:submission_rejected) do
     IO.puts(:stderr, "Profile chat submission was rejected before acceptance.")
+    @exit_error
+  end
+
+  defp chat_operation_error(:submission_unavailable) do
+    IO.puts(
+      :stderr,
+      "Profile chat could not reach the running control plane; nothing was submitted."
+    )
+
     @exit_error
   end
 

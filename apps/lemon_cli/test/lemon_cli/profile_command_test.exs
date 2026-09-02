@@ -316,6 +316,105 @@ defmodule LemonCli.ProfileCommandTest do
     refute_receive {:profile_control_plane_request, _method, _params}
   end
 
+  test "profile chat distinguishes a sanitized explicit control-plane rejection" do
+    secret = "profile-rpc-rejection-secret-#{System.unique_integer([:positive])}"
+    :ok = LemonCore.RouterBridge.configure(run_orchestrator: nil)
+
+    Application.put_env(
+      :lemon_cli,
+      :control_plane_client,
+      LemonCli.ProfileCommandTestControlPlane
+    )
+
+    Application.put_env(
+      :lemon_cli,
+      :profile_command_test_control_plane_result,
+      {:error,
+       {:control_plane,
+        %{
+          "code" => "INVALID_REQUEST",
+          "message" => "definite rejection #{secret}"
+        }}}
+    )
+
+    capture_io(fn -> assert CLI.run(["profile", "create", "rpc-rejected"]) == 0 end)
+
+    error =
+      capture_io(:stderr, fn ->
+        assert CLI.run(["profile", "chat", "rpc-rejected", "run", "once"]) == 1
+      end)
+
+    assert error =~ "rejected before acceptance"
+    refute error =~ secret
+    assert_receive {:profile_control_plane_request, "profile.chat", _params}
+    refute_receive {:profile_control_plane_request, _method, _params}
+  end
+
+  test "profile chat preserves an explicit server-side unknown outcome" do
+    secret = "profile-rpc-unknown-secret-#{System.unique_integer([:positive])}"
+    :ok = LemonCore.RouterBridge.configure(run_orchestrator: nil)
+
+    Application.put_env(
+      :lemon_cli,
+      :control_plane_client,
+      LemonCli.ProfileCommandTestControlPlane
+    )
+
+    Application.put_env(
+      :lemon_cli,
+      :profile_command_test_control_plane_result,
+      {:error,
+       {:control_plane,
+        %{
+          "code" => "INVALID_REQUEST",
+          "message" => "Profile operation failed: :outcome_unknown",
+          "details" => secret
+        }}}
+    )
+
+    capture_io(fn -> assert CLI.run(["profile", "create", "rpc-unknown"]) == 0 end)
+
+    error =
+      capture_io(:stderr, fn ->
+        assert CLI.run(["profile", "chat", "rpc-unknown", "run", "once"]) == 1
+      end)
+
+    assert error =~ "could not be confirmed"
+    assert String.downcase(error) =~ "do not retry automatically"
+    refute error =~ secret
+    assert_receive {:profile_control_plane_request, "profile.chat", _params}
+    refute_receive {:profile_control_plane_request, _method, _params}
+  end
+
+  test "profile chat reports pre-request control-plane unavailability as not submitted" do
+    secret = "profile-connect-secret-#{System.unique_integer([:positive])}"
+    :ok = LemonCore.RouterBridge.configure(run_orchestrator: nil)
+
+    Application.put_env(
+      :lemon_cli,
+      :control_plane_client,
+      LemonCli.ProfileCommandTestControlPlane
+    )
+
+    Application.put_env(
+      :lemon_cli,
+      :profile_command_test_control_plane_result,
+      {:error, {:control_plane_unavailable, {:econnrefused, secret}}}
+    )
+
+    capture_io(fn -> assert CLI.run(["profile", "create", "rpc-unavailable"]) == 0 end)
+
+    error =
+      capture_io(:stderr, fn ->
+        assert CLI.run(["profile", "chat", "rpc-unavailable", "run", "once"]) == 1
+      end)
+
+    assert error =~ "nothing was submitted"
+    refute error =~ secret
+    assert_receive {:profile_control_plane_request, "profile.chat", _params}
+    refute_receive {:profile_control_plane_request, _method, _params}
+  end
+
   defp restore_env(app, key, nil), do: Application.delete_env(app, key)
   defp restore_env(app, key, value), do: Application.put_env(app, key, value)
 end
