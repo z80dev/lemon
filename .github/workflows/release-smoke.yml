@@ -420,13 +420,14 @@ jobs:
           grep -Eiq '^location: /admin/login' /tmp/admin-headers.txt
           test "$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:14090/api/admin/metrics)" = "401"
 
-          asset_path=$(grep -oE '/assets/app-[a-f0-9]+\.css' /tmp/lobby.html | head -1)
-          test -n "$asset_path"
+          # Preserve ?vsn=d so Plug.Static applies its immutable cache policy.
+          asset_url=$(grep -oE '/assets/app-[a-f0-9]+\.css\?vsn=[^"]+' /tmp/lobby.html | head -1)
+          test -n "$asset_url"
           curl --silent --show-error --head \
             --header 'Accept-Encoding: gzip' \
-            "http://127.0.0.1:14090$asset_path" > /tmp/asset-headers.txt
+            "http://127.0.0.1:14090$asset_url" > /tmp/asset-headers.txt
           grep -i '^content-encoding: gzip' /tmp/asset-headers.txt
-          grep -i '^cache-control: public,max-age=31536000,immutable' /tmp/asset-headers.txt
+          grep -i '^cache-control: public, max-age=31536000, immutable' /tmp/asset-headers.txt
 
       - name: Seed persisted Werewolf fixture
         run: |
