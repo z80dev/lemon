@@ -30,7 +30,8 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   released pending receipts without run identity return a permanent,
   non-retryable duplicate ambiguity receipt, and
   failed cleanup scans do not advance their watermark. Store diagnostics also
-  sanitize nested idempotency-key context. Legacy router
+  sanitize nested idempotency-key context, and sensitive multi-delete failures
+  return bounded error categories instead of backend payloads. Legacy router
   receipts are compacted and abort reasons sanitized during replay and
   background cleanup; goal hard stops persist abort intent before dispatch.
 - Telegram memory-reflection and per-chat abort helpers no longer collapse

@@ -1320,7 +1320,8 @@ defmodule LemonCore.Store do
         # reporting failure. Invalidate every involved cache key so reads
         # reflect the backend's durable result.
         invalidate_snapshot_cache(state, entries)
-        {:reply, {:error, reason}, %{state | backend_state: backend_state}}
+        bounded_reason = bound_compare_and_delete_many_error(entries, reason)
+        {:reply, {:error, bounded_reason}, %{state | backend_state: backend_state}}
 
       other ->
         log_compare_and_delete_many_unexpected(entries, other)
@@ -2014,7 +2015,7 @@ defmodule LemonCore.Store do
 
         other ->
           log_backend_unexpected(:compare_and_delete_many, table, key, other)
-          {:halt, {:error, {:unexpected_backend_response, other}, current_state}}
+          {:halt, {:error, :unexpected_backend_response, current_state}}
       end
     end)
   end
@@ -2032,7 +2033,7 @@ defmodule LemonCore.Store do
         other ->
           log_backend_unexpected(:compare_and_delete_many, table, key, other)
 
-          {:halt, {:error, {:unexpected_backend_response, other}, current_state}}
+          {:halt, {:error, :unexpected_backend_response, current_state}}
       end
     end)
   end
@@ -2062,19 +2063,36 @@ defmodule LemonCore.Store do
   end
 
   defp log_compare_and_delete_many_unexpected(entries, response) do
-    sensitive_table =
-      Enum.find_value(entries, fn
-        {table, _key, _expected} -> if sensitive_log_table?(table), do: table
-        _malformed -> nil
-      end)
-
-    table = sensitive_table || :multiple
+    table = sensitive_entry_table(entries) || :multiple
 
     Logger.warning(
       "[LemonCore.Store] backend compare_and_delete_many returned unexpected response " <>
         "table=#{inspect(table)} entries=:redacted " <>
         "response=#{inspect(safe_log_diagnostic(table, response))}"
     )
+  end
+
+  defp bound_compare_and_delete_many_error(_entries, :mismatch), do: :mismatch
+
+  defp bound_compare_and_delete_many_error(_entries, :unexpected_backend_response),
+    do: :unexpected_backend_response
+
+  defp bound_compare_and_delete_many_error(entries, reason) do
+    case sensitive_entry_table(entries) do
+      nil ->
+        reason
+
+      table ->
+        log_backend_error(:compare_and_delete_many, table, :multiple, reason)
+        :store_unavailable
+    end
+  end
+
+  defp sensitive_entry_table(entries) do
+    Enum.find_value(entries, fn
+      {table, _key, _expected} -> if sensitive_log_table?(table), do: table
+      _malformed -> nil
+    end)
   end
 
   defp safe_log_key(table, key), do: safe_log_diagnostic(table, key)

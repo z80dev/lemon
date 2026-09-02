@@ -107,6 +107,43 @@ defmodule LemonCore.StoreTest do
       do: response
   end
 
+  defmodule FallbackUnexpectedBackend do
+    @behaviour LemonCore.Store.Backend
+
+    @impl true
+    def init(_opts), do: {:ok, %{data: %{}, mode: :ok, secret: "unset"}}
+
+    @impl true
+    def put(state, table, key, value),
+      do: {:ok, put_in(state, [:data, {table, key}], value)}
+
+    @impl true
+    def put_new(state, table, key, value) do
+      if Map.has_key?(state.data, {table, key}),
+        do: {:exists, state},
+        else: put(state, table, key, value)
+    end
+
+    @impl true
+    def get(%{mode: :unexpected_get, secret: secret}, _table, key),
+      do: {:unexpected_get, %{key: key, secret: secret}}
+
+    def get(state, table, key), do: {:ok, Map.get(state.data, {table, key}), state}
+
+    @impl true
+    def delete(%{mode: :unexpected_delete, secret: secret}, _table, key),
+      do: {:unexpected_delete, %{key: key, secret: secret}}
+
+    def delete(state, table, key),
+      do: {:ok, %{state | data: Map.delete(state.data, {table, key})}}
+
+    @impl true
+    def list(state, table) do
+      entries = for {{^table, key}, value} <- state.data, do: {key, value}
+      {:ok, entries, state}
+    end
+  end
+
   defp unique_token do
     System.system_time(:microsecond) + System.unique_integer([:positive, :monotonic])
   end
@@ -771,6 +808,57 @@ defmodule LemonCore.StoreTest do
       refute log =~ secret
       refute inspect(result) =~ secret
       assert Process.alive?(Process.whereis(Store))
+    end
+
+    test "fallback multi-delete bounds unexpected get and delete responses" do
+      secret = "fallback-response-secret-#{unique_token()}"
+      key = {"integration", secret}
+      response_key = {key, "receipt"}
+      fence = %{state: "accepted", secret: secret}
+      receipt = %{status: 200, secret: secret}
+
+      data = %{
+        {:webhook_idempotency, key} => fence,
+        {:webhook_idempotency_responses, response_key} => receipt
+      }
+
+      original_state =
+        swap_store_backend(FallbackUnexpectedBackend, %{
+          data: data,
+          mode: :unexpected_get,
+          secret: secret
+        })
+
+      on_exit(fn -> :sys.replace_state(Store, fn _ -> original_state end) end)
+      store_pid = Process.whereis(Store)
+
+      entries = [
+        {:webhook_idempotency_responses, response_key, receipt},
+        {:webhook_idempotency, key, fence}
+      ]
+
+      {get_result, get_log} = with_log(fn -> Store.compare_and_delete_many(entries) end)
+      assert get_result == {:error, :unexpected_backend_response}
+      refute inspect(get_result) =~ secret
+      refute get_log =~ secret
+      assert Process.whereis(Store) == store_pid
+
+      :sys.replace_state(Store, fn state ->
+        %{state | backend_state: %{state.backend_state | mode: :unexpected_delete}}
+      end)
+
+      {delete_result, delete_log} = with_log(fn -> Store.compare_and_delete_many(entries) end)
+      assert delete_result == {:error, :unexpected_backend_response}
+      refute inspect(delete_result) =~ secret
+      refute delete_log =~ secret
+      assert Process.whereis(Store) == store_pid
+
+      :sys.replace_state(Store, fn state ->
+        %{state | backend_state: %{state.backend_state | mode: :ok}}
+      end)
+
+      assert Store.get(:webhook_idempotency_responses, response_key) == receipt
+      assert Store.get(:webhook_idempotency, key) == fence
     end
 
     test "finalize_run writes history to RunHistoryStore" do
