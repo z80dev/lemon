@@ -164,6 +164,7 @@ ids, message bodies, proof details, credentials, or secret names.
 | Module | Purpose |
 |--------|---------|
 | `LemonCore.Store` | GenServer with pluggable backends and specialized APIs |
+| `LemonCore.Store.Table` | Declarative owner and policy metadata for generic Store tables |
 | `LemonCore.Store.Backend` | Behaviour for storage backends (init/put/put_new/get/delete/list) |
 | `LemonCore.Store.EtsBackend` | In-memory ETS backend (ephemeral, default) |
 | `LemonCore.Store.SqliteBackend` | SQLite backend with WAL mode and optional ephemeral tables |
@@ -231,6 +232,7 @@ it only through the `LemonCore.Store` finalize-run hook the runtime configures.
 | `LemonCore.Quality.DocsCatalog` | Documentation catalog checks |
 | `LemonCore.Quality.DocsCheck` | Documentation completeness validation |
 | `LemonCore.Quality.ArchitectureCheck` | Architecture boundary validation |
+| `LemonCore.Quality.StoreTableOwnershipCheck` | AST ownership analysis used by the architecture guardrail |
 
 ### Mix Tasks
 
@@ -448,6 +450,8 @@ config :lemon_core, LemonCore.Store,
 
 ```elixir
 defmodule MyApp.WidgetStore do
+  use LemonCore.Store.Table, tables: [widgets: []]
+
   def put(id, widget), do: LemonCore.Store.put(:widgets, id, widget)
   def claim(id, widget), do: LemonCore.Store.put_new(:widgets, id, widget)
   def get(id), do: LemonCore.Store.get(:widgets, id)
@@ -462,6 +466,13 @@ widget = MyApp.WidgetStore.get(id)
 Store calls are fail-soft: if the GenServer is overloaded/unavailable, write APIs return `{:error, :store_unavailable}` and read/list APIs return `nil`/`[]`.
 
 Use the generic table API only inside wrapper modules, backend internals, or explicitly app-local legacy tables. Shared-domain runtime code should go through typed wrappers so table ownership stays localized.
+
+New wrappers declare their table names with `use LemonCore.Store.Table`. The
+metadata does not generate accessors or change backend behavior. The quality
+gate parses generic Store calls and permits an owner only the exact tables it
+declares, across both default and explicit server arities; aliases and
+module-attribute table names are resolved from the AST, while dynamic or
+cross-table access fails closed.
 
 ### Specialized APIs
 

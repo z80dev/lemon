@@ -5,6 +5,27 @@ defmodule LemonCore.Quality.ArchitectureRulesCheckTest do
 
   @repo_root Path.expand("../../../../..", __DIR__)
 
+  @generic_store_calls [
+    {:get, "get(TABLE, :key)", "get(server, TABLE, :key)"},
+    {:fetch, "fetch(TABLE, :key)", "fetch(server, TABLE, :key)"},
+    {:put, "put(TABLE, :key, :value)", "put(server, TABLE, :key, :value)"},
+    {:put_async, "put_async(TABLE, :key, :value)", "put_async(server, TABLE, :key, :value)"},
+    {:put_new, "put_new(TABLE, :key, :value)", "put_new(server, TABLE, :key, :value)"},
+    {:delete, "delete(TABLE, :key)", "delete(server, TABLE, :key)"},
+    {:list, "list(TABLE)", "list(server, TABLE)"},
+    {:list_recent, "list_recent(TABLE, 10)", "list_recent(server, TABLE, 10)"},
+    {:take, "take(TABLE, :key)", "take(server, TABLE, :key)"},
+    {:update, "update(TABLE, :key, nil, fun)", "update(server, TABLE, :key, nil, fun)"},
+    {:update_async, "update_async(TABLE, :key, nil, fun)",
+     "update_async(server, TABLE, :key, nil, fun)"},
+    {:compare_and_swap, "compare_and_swap(TABLE, :key, :old, :new)",
+     "compare_and_swap(server, TABLE, :key, :old, :new)"},
+    {:register_cached_table, "register_cached_table(TABLE)",
+     "register_cached_table(server, TABLE)"},
+    {:unregister_cached_table, "unregister_cached_table(TABLE)",
+     "unregister_cached_table(server, TABLE)"}
+  ]
+
   test "passes for the current repository" do
     assert {:ok, report} = ArchitectureRulesCheck.run(root: @repo_root)
     assert report.issue_count == 0
@@ -1056,7 +1077,6 @@ defmodule LemonCore.Quality.ArchitectureRulesCheckTest do
     end
   end
 
-
   test "flags CodingAgent references from the gateway" do
     tmp_dir = tmp_repo!()
 
@@ -1254,6 +1274,206 @@ defmodule LemonCore.Quality.ArchitectureRulesCheckTest do
     end
   end
 
+  describe "Store.Table ownership" do
+    test "allows every generic Store operation at default and explicit server arities for an owned table" do
+      tmp_dir = tmp_repo!()
+
+      try do
+        write_file!(
+          tmp_dir,
+          "apps/demo/lib/demo/owned_store.ex",
+          store_owner_source(:owned, @generic_store_calls)
+        )
+
+        assert {:ok, report} = ArchitectureRulesCheck.run(root: tmp_dir)
+        assert report.issue_count == 0
+      after
+        File.rm_rf!(tmp_dir)
+      end
+    end
+
+    test "flags every generic Store operation and both arities when it crosses the declaration" do
+      tmp_dir = tmp_repo!()
+
+      try do
+        write_file!(
+          tmp_dir,
+          "apps/demo/lib/demo/cross_table_store.ex",
+          store_owner_source(:other, @generic_store_calls)
+        )
+
+        assert {:error, report} = ArchitectureRulesCheck.run(root: tmp_dir)
+
+        issues = Enum.filter(report.issues, &(&1.code == :store_table_owner_bypass))
+        assert length(issues) == length(@generic_store_calls) * 2
+
+        Enum.each(@generic_store_calls, fn {operation, default_call, explicit_call} ->
+          default_arity = call_arity(default_call)
+          explicit_arity = call_arity(explicit_call)
+
+          assert Enum.any?(issues, &(&1.message =~ "Store.#{operation}/#{default_arity}"))
+          assert Enum.any?(issues, &(&1.message =~ "Store.#{operation}/#{explicit_arity}"))
+        end)
+      after
+        File.rm_rf!(tmp_dir)
+      end
+    end
+
+    test "resolves Store and Store.Table aliases plus module-attribute declarations" do
+      tmp_dir = tmp_repo!()
+
+      try do
+        write_file!(
+          tmp_dir,
+          "apps/demo/lib/demo/aliased_store.ex",
+          """
+          defmodule Demo.AliasedStore do
+            alias LemonCore.Store, as: CoreStore
+            alias LemonCore.Store.Table
+
+            @tables [owned: [version: 2]]
+            @table :owned
+            use Table, tables: @tables
+
+            def get(key), do: CoreStore.get(@table, key)
+            def get(server, key), do: CoreStore.get(server, @table, key)
+          end
+          """
+        )
+
+        assert {:ok, report} = ArchitectureRulesCheck.run(root: tmp_dir)
+        assert report.issue_count == 0
+      after
+        File.rm_rf!(tmp_dir)
+      end
+    end
+
+    test "does not let an owner hide a cross-table call behind a Store alias or table attribute" do
+      tmp_dir = tmp_repo!()
+
+      try do
+        write_file!(
+          tmp_dir,
+          "apps/demo/lib/demo/aliased_bypass_store.ex",
+          """
+          defmodule Demo.AliasedBypassStore do
+            alias LemonCore.Store, as: CoreStore
+            use LemonCore.Store.Table, tables: [owned: []]
+
+            @other :other
+            def bad(key), do: CoreStore.get(@other, key)
+          end
+          """
+        )
+
+        assert {:error, report} = ArchitectureRulesCheck.run(root: tmp_dir)
+
+        assert [%{code: :store_table_owner_bypass, message: message}] =
+                 Enum.filter(report.issues, &(&1.code == :store_table_owner_bypass))
+
+        assert message =~ "declares [:owned]"
+        assert message =~ "accesses :other"
+      after
+        File.rm_rf!(tmp_dir)
+      end
+    end
+
+    test "fails closed when an owner call's table cannot be resolved" do
+      tmp_dir = tmp_repo!()
+
+      try do
+        write_file!(
+          tmp_dir,
+          "apps/demo/lib/demo/dynamic_bypass_store.ex",
+          """
+          defmodule Demo.DynamicBypassStore do
+            alias LemonCore.Store
+            use LemonCore.Store.Table, tables: [owned: []]
+
+            def bad(table, key), do: Store.get(table, key)
+          end
+          """
+        )
+
+        assert {:error, report} = ArchitectureRulesCheck.run(root: tmp_dir)
+
+        assert Enum.any?(report.issues, fn issue ->
+                 issue.code == :store_table_owner_bypass and
+                   issue.message =~ "accesses an unresolved table"
+               end)
+      after
+        File.rm_rf!(tmp_dir)
+      end
+    end
+
+    test "requires statically resolvable table declarations" do
+      tmp_dir = tmp_repo!()
+
+      try do
+        write_file!(
+          tmp_dir,
+          "apps/demo/lib/demo/dynamic_declaration_store.ex",
+          """
+          defmodule Demo.DynamicDeclarationStore do
+            use LemonCore.Store.Table, tables: tables()
+            defp tables, do: [owned: []]
+          end
+          """
+        )
+
+        assert {:error, report} = ArchitectureRulesCheck.run(root: tmp_dir)
+        assert Enum.any?(report.issues, &(&1.code == :store_table_declaration_unresolved))
+      after
+        File.rm_rf!(tmp_dir)
+      end
+    end
+
+    test "leaves non-owner legacy wrappers to the existing migration rules" do
+      tmp_dir = tmp_repo!()
+
+      try do
+        write_file!(
+          tmp_dir,
+          "apps/demo/lib/demo/legacy_store.ex",
+          """
+          defmodule Demo.LegacyStore do
+            def get(key), do: LemonCore.Store.get(:legacy, key)
+          end
+          """
+        )
+
+        assert {:ok, report} = ArchitectureRulesCheck.run(root: tmp_dir)
+        refute Enum.any?(report.issues, &(&1.code == :store_table_owner_bypass))
+      after
+        File.rm_rf!(tmp_dir)
+      end
+    end
+
+    test "ignores Store examples in owner documentation and comments" do
+      tmp_dir = tmp_repo!()
+
+      try do
+        write_file!(
+          tmp_dir,
+          "apps/demo/lib/demo/documented_store.ex",
+          """
+          defmodule Demo.DocumentedStore do
+            @moduledoc "LemonCore.Store.get(:other, :key)"
+            use LemonCore.Store.Table, tables: [owned: []]
+            # LemonCore.Store.delete(:other, :key)
+            def get(key), do: LemonCore.Store.get(:owned, key)
+          end
+          """
+        )
+
+        assert {:ok, report} = ArchitectureRulesCheck.run(root: tmp_dir)
+        assert report.issue_count == 0
+      after
+        File.rm_rf!(tmp_dir)
+      end
+    end
+  end
+
   test "allows lemon_router to use its own run internals" do
     tmp_dir = tmp_repo!()
 
@@ -1311,5 +1531,35 @@ defmodule LemonCore.Quality.ArchitectureRulesCheckTest do
     path = Path.join(root, relative_path)
     File.mkdir_p!(Path.dirname(path))
     File.write!(path, contents)
+  end
+
+  defp store_owner_source(table, calls) do
+    functions =
+      calls
+      |> Enum.flat_map(fn {_operation, default_call, explicit_call} ->
+        [default_call, explicit_call]
+      end)
+      |> Enum.with_index()
+      |> Enum.map_join("\n", fn {call, index} ->
+        call = String.replace(call, "TABLE", inspect(table))
+        "  def call_#{index}(server, fun), do: LemonCore.Store.#{call}"
+      end)
+
+    """
+    defmodule Demo.OwnedStore do
+      use LemonCore.Store.Table, tables: [owned: []]
+
+    #{functions}
+    end
+    """
+  end
+
+  defp call_arity(call) do
+    {open, 1} = :binary.match(call, "(")
+
+    call
+    |> String.slice((open + 1)..-2//1)
+    |> String.split(",")
+    |> length()
   end
 end

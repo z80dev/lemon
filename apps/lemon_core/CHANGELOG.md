@@ -18,6 +18,13 @@ Telegram, run history, durable memory, kanban boards, or `~/.lemon`.
 
 ### Added
 
+- `LemonCore.Store.Table` lets a domain wrapper declare table ownership plus
+  future cache, retention, persistence, and schema-version metadata without
+  generating CRUD functions or changing backend behavior. The existing
+  architecture quality gate parses all supported generic Store operations at
+  default and explicit server arities and permits owner calls only when their
+  literal or module-attribute table matches the declaration.
+
 - `LemonCore.A2A.Protocol`, `LemonCore.A2A.Client`, and `LemonCore.A2AStore`
   provide the generic A2A v1.0 wire helpers, credential-scrubbing HTTP client,
   and typed durable context/task/message storage shared by peer transports and

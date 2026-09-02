@@ -48,6 +48,7 @@ This is the **base app** of the Lemon umbrella. All other apps depend on it. It 
 | `LemonCore.Secrets.MasterKey` | Master key resolution (keychain first, then env var) |
 | `LemonCore.OAuth.LocalCallbackListener` | Caller-owned one-shot localhost OAuth callback listener; monitors its listener manager so early failure returns immediately instead of consuming the authorization timeout |
 | `LemonCore.Store` | Storage GenServer with pluggable backends, `put_new/3` claims, serialized `take/2`, and exact-value `compare_and_swap/4` |
+| `LemonCore.Store.Table` | Declarative table owner and policy metadata; the architecture gate checks owner calls against exact declared tables |
 | `LemonCore.Store.ReadCache` | ETS read cache for hot domains (`:chat`, `:runs`, `:progress`, `:sessions_index`, plus tables collaborators add with `register_cached_table/1`) |
 | `LemonCore.Store.EtsBackend` | In-memory ETS (ephemeral, default) with `:ets.insert_new/2` claims |
 | `LemonCore.Store.SqliteBackend` | SQLite with WAL mode (persistent) and `ON CONFLICT DO NOTHING` claims |
@@ -376,6 +377,8 @@ config :lemon_core, LemonCore.Store,
 
 ```elixir
 defmodule MyApp.WidgetStore do
+  use LemonCore.Store.Table, tables: [widgets: []]
+
   def put(id, widget), do: LemonCore.Store.put(:widgets, id, widget)
   def get(id), do: LemonCore.Store.get(:widgets, id)
 end
@@ -389,6 +392,13 @@ Store client calls are fail-soft: if `LemonCore.Store` is overloaded/unavailable
 `LemonCore.Store.SqliteBackend` logs decode failures and returns explicit corruption errors for bad payloads instead of collapsing corrupted rows to `nil`/missing. SQLite release/close failures are also logged so cleanup issues stay observable.
 
 Use the generic table API only for backend internals, wrapper modules, or explicitly app-local legacy tables. Shared-domain callers should go through typed wrappers such as `LemonCore.RunStore`, `LemonCore.SessionMetadataStore`, `LemonCore.ChatStateStore`, `LemonCore.ProgressStore`, `LemonCore.PolicyStore`, `LemonCore.IdempotencyStore`, `LemonCore.IntrospectionStore`, `LemonCore.ExecApprovalStore`, `LemonCore.UsageStore`, and `LemonCore.Checkpoint`. Operator surfaces should use `LemonCore.SessionLifecycle` rather than reimplementing session search, aggregate statistics, export, or prune over those stores. Agent workspace callers should use `LemonAgent.Workspace.HeartbeatStore`, `LemonAgent.Workspace.GoalStore`, and `LemonAgent.Workspace.KanbanStore`. Channel model-policy callers should use `LemonChannels.ModelPolicyStore`.
+
+New generic-table wrappers must declare ownership with `use LemonCore.Store.Table`.
+The declaration generates no CRUD API and does not yet change backend runtime
+policy. `mix lemon.quality` resolves generic Store calls from the source AST,
+including aliases, module attributes, and default/explicit server arities. An
+owner may access only its declared table names; dynamic table selection and
+cross-table calls fail the architecture gate.
 
 ### Specialized APIs
 
