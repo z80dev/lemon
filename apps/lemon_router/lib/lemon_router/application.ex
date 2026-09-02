@@ -8,6 +8,8 @@ defmodule LemonRouter.Application do
 
   @impl true
   def start(_type, _args) do
+    _ = LemonRouter.EngineRuntimeConfiguration.validate_configured()
+
     children =
       [
         # Agent profiles configuration

@@ -5,6 +5,7 @@ This is the **base app** of the Lemon umbrella. All other apps depend on it. It 
 ## Purpose and Responsibilities
 
 - **Configuration management** - TOML-based config loading, caching, validation, and hot reloading
+- **Configured implementation validation** - Shared loadability and required-callback checks for behaviour-injected modules
 - **First-run readiness** - Shared read-only config/secrets/provider/model readiness for all clients
 - **Secrets management** - Encrypted storage with AES-256-GCM, keychain integration, and bounded read-only external sources
 - **Storage backends** - Pluggable storage (ETS, SQLite, JSONL) for state persistence
@@ -31,6 +32,7 @@ This is the **base app** of the Lemon umbrella. All other apps depend on it. It 
 |--------|---------|
 | `LemonCore` | Main module with module list |
 | `LemonCore.Config` | TOML config facade; delegates to `LemonCore.Config.Modular` for parsing/resolution and converts output into the legacy struct shape |
+| `LemonCore.Contract` | Shared loadability and required-callback validation for behaviour-injected modules |
 | `LemonCore.Config.Modular` | Canonical modular config loader with typed sub-structs per section (sole parser/resolver for runtime config semantics); `validate_settings/1` validates an already-decoded merged candidate before comment-preserving editors replace a live file |
 | `LemonCore.ConfigCache` | ETS-backed config cache with mtime-based invalidation |
 | `LemonCore.ConfigReloader` | Hot reload orchestrator with diff computation and Bus broadcast |

@@ -18,6 +18,9 @@ Telegram, run history, durable memory, kanban boards, or `~/.lemon`.
 
 ### Added
 
+- `LemonCore.Contract` centralizes loadability and required-callback checks for
+  configuration-injected implementations. `LemonCore.EngineRuntime.validate/1`
+  exposes the check used by router startup; optional callbacks remain optional.
 - `LemonCore.A2A.Protocol`, `LemonCore.A2A.Client`, and `LemonCore.A2AStore`
   provide the generic A2A v1.0 wire helpers, credential-scrubbing HTTP client,
   and typed durable context/task/message storage shared by peer transports and

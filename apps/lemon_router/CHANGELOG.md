@@ -12,6 +12,10 @@ internals other applications reached into.
 
 ### Added
 
+- Startup validates a configured engine-runtime module through
+  `LemonCore.EngineRuntime.validate/1` and logs invalid wiring once. A missing
+  or invalid runtime still leaves the router available and follows its existing
+  unavailable-runtime behavior.
 - `LemonRouter` is the supported API surface: `submit/1`, `abort/2`,
   `abort_run/2`, plus the new `available?/0`, `active_runs/0`, `run_active?/1`,
   `active_run_count/0` and `counts/0`. These were designed from the thirteen
