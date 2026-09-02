@@ -379,9 +379,10 @@ defmodule LemonGateway.WebhookTransportTest do
                updated_at_ms: 1
              })
 
-    original_config_state = :sys.get_state(LemonGateway.Config)
+    config_pid = ensure_config_started()
+    original_config_state = :sys.get_state(config_pid)
 
-    :sys.replace_state(LemonGateway.Config, fn state ->
+    :sys.replace_state(config_pid, fn state ->
       Map.put(state, :webhook, %{
         integrations: %{
           integration_id => %{
@@ -394,7 +395,9 @@ defmodule LemonGateway.WebhookTransportTest do
     end)
 
     on_exit(fn ->
-      :sys.replace_state(LemonGateway.Config, fn _state -> original_config_state end)
+      if Process.alive?(config_pid) do
+        :sys.replace_state(config_pid, fn _state -> original_config_state end)
+      end
     end)
 
     conn =
@@ -424,6 +427,7 @@ defmodule LemonGateway.WebhookTransportTest do
     raw_key = {integration_id, idempotency_key}
     reservation_id = "legacy-response-reservation-#{suffix}"
     run_id = "legacy-response-run-#{suffix}"
+    now_ms = System.system_time(:millisecond)
 
     legacy = %{
       idempotency_key: idempotency_key,
@@ -433,10 +437,14 @@ defmodule LemonGateway.WebhookTransportTest do
       session_key: "agent:legacy-response:main",
       mode: "sync",
       state: "submitted",
-      updated_at_ms: 1
+      updated_at_ms: now_ms
     }
 
-    receipt = %{status: 200, payload: %{run_id: run_id, exact: true}, stored_at_ms: 1}
+    receipt = %{
+      status: 200,
+      payload: %{run_id: run_id, exact: true},
+      stored_at_ms: now_ms
+    }
 
     assert :ok = Store.put(Webhook.idempotency_table_for_test(), raw_key, legacy)
     assert :ok = Store.put(Idempotency.response_table(), {raw_key, reservation_id}, receipt)
@@ -1186,4 +1194,8 @@ defmodule LemonGateway.WebhookTransportTest do
 
   defp restore_env(app, key, nil), do: Application.delete_env(app, key)
   defp restore_env(app, key, value), do: Application.put_env(app, key, value)
+
+  defp ensure_config_started do
+    Process.whereis(LemonGateway.Config) || start_supervised!(LemonGateway.Config)
+  end
 end
