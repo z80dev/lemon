@@ -8,7 +8,8 @@ defmodule CodingAgent.Tools.PathHelpers do
   """
 
   @doc """
-  Expands a leading `~` in a path to the user's home directory.
+  Expands a leading `~` in a path to the user's home directory, as
+  `LemonCore.Paths.home_dir/1` resolves it.
 
   ## Examples
 
@@ -19,7 +20,7 @@ defmodule CodingAgent.Tools.PathHelpers do
       "/absolute/path"
   """
   @spec expand_home(String.t()) :: String.t()
-  def expand_home("~" <> rest), do: Path.expand("~") <> rest
+  def expand_home("~" <> rest), do: Path.expand(LemonCore.Paths.home_dir()) <> rest
   def expand_home(path), do: path
 
   @doc """

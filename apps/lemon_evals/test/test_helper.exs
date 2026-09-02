@@ -1,10 +1,6 @@
 ExUnit.configure(exclude: [:integration])
 ExUnit.start()
 
-Code.require_file(
-  Path.join([__DIR__, "..", "..", "coding_agent", "test", "support", "test_store.ex"])
-)
-
 Application.put_env(:lemon_core, :store_mod, CodingAgent.TestStore)
 
 if build_path = System.get_env("MIX_BUILD_PATH") do

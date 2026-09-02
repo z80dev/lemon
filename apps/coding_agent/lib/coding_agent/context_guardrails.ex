@@ -321,7 +321,7 @@ defmodule CodingAgent.ContextGuardrails do
 
   defp expand_home(path) do
     case path do
-      "~" <> rest -> Path.join(System.user_home!(), String.trim_leading(rest, "/"))
+      "~" <> rest -> Path.join(LemonCore.Paths.home_dir(), String.trim_leading(rest, "/"))
       other -> other
     end
   end

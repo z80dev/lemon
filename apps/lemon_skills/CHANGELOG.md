@@ -93,6 +93,11 @@ modules nothing outside the package touches are marked internal.
 
 ### Changed
 
+- `LemonSkills.Config.agent_dir/0` and `harness_global_skills_dir/0` resolve
+  the user's home through `LemonCore.Paths`, so a test or an embedder that
+  sets `config :lemon_core, :paths, home_dir:` scopes the skills directories
+  with everything else.
+
 - Avoid unnecessary full-list traversal when validating official Hermes skill
   identifiers.
 

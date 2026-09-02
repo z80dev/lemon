@@ -1759,6 +1759,18 @@ Because environment variables are process-wide, tests that call `System.put_env/
   the app directory those `.app` files are not on the code path and the helper
   aborts with `{:error, {:coding_agent, {~c"no such file or directory",
   ~c"coding_agent.app"}}}` before a single test runs.
+- Test support modules (`CodingAgent.TestStore`, `CodingAgent.Test.MockUI`,
+  `LemonAgent.Test.Mocks`, `LemonAi.Test.IntegrationConfig`, ...) are compiled
+  with their app in the test environment (`elixirc_paths/1` in the app's
+  `mix.exs`), so a dependent app's suite uses them like any other module and
+  never loads a sibling app's file by relative path.
+- A suite that must not touch the real `~/.lemon` scopes the home through
+  `Application.put_env(:lemon_core, :paths, home_dir: tmp)`, the way
+  `apps/coding_agent/test/test_helper.exs` does, rather than rewriting `HOME`.
+  `System.user_home!/0` and `Path.expand("~")` read the home the VM booted
+  with and ignore later `HOME` changes, so a `HOME` rewrite isolates only the
+  code that reads the variable directly, leaks for everything else, and
+  changes the environment of every later suite in the same VM.
 - `apps/lemon_ai` `Auth.*OAuth` tests (~22 tests) fail when run from the
   `apps/lemon_ai` directory because they need `lemon_core` services; treat
   those failures as an app-dir artifact, not a regression — run them from the

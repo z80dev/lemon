@@ -99,6 +99,10 @@ Telegram, run history, durable memory, kanban boards, or `~/.lemon`.
 
 ### Changed
 
+- `LemonCore.Cwd.default_cwd/0` falls back to `LemonCore.Paths.home_dir/1`
+  rather than `System.user_home/0`, so the `:paths` home override applies to
+  the default working directory too.
+
 - `LemonCore.EngineInfoBridge` keeps one capability, `:transport_registry`;
   the `:gateway_config` capability and `LemonCore.EngineInfoBridge.GatewayConfig`
   are removed, since `LemonCore.GatewayConfig` is the one accessor and the

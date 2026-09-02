@@ -31,6 +31,9 @@ defmodule CodingAgent.Config do
   This can be overridden with:
   - `LEMON_AGENT_DIR` environment variable
   - `config :coding_agent, :agent_dir, "/path"`
+  - the home and state directory settings of `LemonCore.Paths`
+    (`config :lemon_core, :paths, home_dir: ...`), which is how tests scope
+    the home without touching the OS environment
 
   ## Examples
 
@@ -41,7 +44,7 @@ defmodule CodingAgent.Config do
   def agent_dir do
     System.get_env("LEMON_AGENT_DIR") ||
       Application.get_env(:coding_agent, :agent_dir) ||
-      Path.join(System.user_home!(), ".lemon/agent")
+      LemonCore.Paths.home_path("agent")
   end
 
   @doc """

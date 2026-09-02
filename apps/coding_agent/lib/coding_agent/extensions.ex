@@ -1153,7 +1153,7 @@ defmodule CodingAgent.Extensions do
   # Discover extension files in a directory (without loading)
   @spec discover_extension_files(String.t()) :: [String.t()]
   defp discover_extension_files(dir) do
-    expanded = Path.expand(dir)
+    expanded = dir |> CodingAgent.Tools.PathHelpers.expand_home() |> Path.expand()
 
     # Look for .ex and .exs files at the top level without relying on glob
     top_level_files =

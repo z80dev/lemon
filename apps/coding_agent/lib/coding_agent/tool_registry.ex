@@ -558,9 +558,14 @@ defmodule CodingAgent.ToolRegistry do
 
   defp expand_path(path, cwd) do
     cond do
-      String.starts_with?(path, "~/") -> Path.expand(path)
-      Path.type(path) == :absolute -> Path.expand(path)
-      true -> Path.expand(path, cwd)
+      String.starts_with?(path, "~/") ->
+        path |> CodingAgent.Tools.PathHelpers.expand_home() |> Path.expand()
+
+      Path.type(path) == :absolute ->
+        Path.expand(path)
+
+      true ->
+        Path.expand(path, cwd)
     end
   end
 

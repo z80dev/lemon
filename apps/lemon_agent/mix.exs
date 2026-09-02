@@ -14,6 +14,7 @@ defmodule LemonAgent.MixProject do
       deps_path: "../../deps",
       lockfile: "../../mix.lock",
       test_pattern: "*_test.exs",
+      elixirc_paths: elixirc_paths(Mix.env()),
       elixir: "~> 1.15",
       start_permanent: Mix.env() == :prod,
       test_coverage: [summary: [threshold: 71]],
@@ -30,6 +31,12 @@ defmodule LemonAgent.MixProject do
       "supervised stateful agents, a tool registry, subagents, model routing " <>
       "and credentials, CLI engine runners, and workspace coordination stores."
   end
+
+  # Test support modules (mocks, stores, helpers) compile with the app in the
+  # test environment, so dependent apps' suites use them without loading
+  # files by relative path.
+  defp elixirc_paths(:test), do: ["lib", "test/support"]
+  defp elixirc_paths(_env), do: ["lib"]
 
   # The OTP application stays :lemon_agent; the hex package is lemon_agent.
   defp package do

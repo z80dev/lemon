@@ -82,7 +82,7 @@ defmodule CodingAgent.ExecutionNode.TokenStore do
 
   defp root(opts) do
     Keyword.get_lazy(opts, :root, fn ->
-      Path.join([System.user_home!(), ".lemon", "nodes", "execution"])
+      LemonCore.Paths.home_path(["nodes", "execution"])
     end)
   end
 

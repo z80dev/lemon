@@ -10,6 +10,15 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Changed
 
+- The coding-agent test suite no longer rewrites `HOME` for the whole VM or
+  loads sibling apps' test support files by relative path. Test support
+  modules compile with their app in the test environment (`elixirc_paths`),
+  and every reader of the user's home in `coding_agent`, `lemon_skills` and
+  `LemonCore.Cwd` resolves it through `LemonCore.Paths.home_dir/1`, so a
+  suite scopes the home with `config :lemon_core, :paths, home_dir:`.
+  `System.user_home!/0` ignores `HOME` changes made after boot, so the old
+  rewrite had been letting those readers use the real `~/.lemon` all along.
+
 - Failure handling has a written policy (`docs/platform/failure-handling.md`):
   code may catch an exception only where the failure stays observable, the
   caller gets an accurate outcome and the state stays valid. `LemonCore.Failure`

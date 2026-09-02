@@ -5,7 +5,7 @@
 # in the commit message.
 %{
   # lines in apps/*/lib/**/*.ex
-  lib_lines: 337890,
+  lib_lines: 337894,
   # lib files over 1000 lines, excluding the lemon_ai model catalogs
   large_lib_files: 50,
   # :"Elixir.Some.Module" atoms in lib

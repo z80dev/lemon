@@ -43,12 +43,7 @@ defmodule CodingAgent.Tools.WebCache do
 
   @spec default_cache_dir() :: String.t()
   def default_cache_dir do
-    home =
-      System.user_home() ||
-        System.get_env("HOME") ||
-        "."
-
-    Path.expand(Path.join([home, ".lemon", "cache", "web_tools"]))
+    Path.expand(LemonCore.Paths.home_path(["cache", "web_tools"]))
   end
 
   @spec resolve_cache_dir(term()) :: String.t()

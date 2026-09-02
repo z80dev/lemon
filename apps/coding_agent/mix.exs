@@ -10,12 +10,19 @@ defmodule CodingAgent.MixProject do
       deps_path: "../../deps",
       lockfile: "../../mix.lock",
       test_pattern: "*_test.exs",
+      elixirc_paths: elixirc_paths(Mix.env()),
       elixir: "~> 1.19",
       start_permanent: Mix.env() == :prod,
       test_coverage: [summary: [threshold: 67]],
       deps: deps()
     ]
   end
+
+  # Test support modules (mocks, stores, helpers) compile with the app in the
+  # test environment, so dependent apps' suites use them without loading
+  # files by relative path.
+  defp elixirc_paths(:test), do: ["lib", "test/support"]
+  defp elixirc_paths(_env), do: ["lib"]
 
   # Run "mix help compile.app" to learn about applications.
   def application do

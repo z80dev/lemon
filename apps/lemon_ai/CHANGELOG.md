@@ -39,3 +39,9 @@ what in-repo code has been using.
 
 - `lemon_ai` depends on no other Lemon package. It is usable on its own in any
   Elixir project; `lemon_agent` and the rest of the platform build on top of it.
+
+### Changed
+
+- `test/support` compiles with the app in the test environment
+  (`elixirc_paths`), so `LemonAi.Test.IntegrationConfig` is available to
+  dependent apps' suites without `Code.require_file/1`.

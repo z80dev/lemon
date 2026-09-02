@@ -61,7 +61,7 @@ defmodule CodingAgent.ConfigTest do
 
       result = Config.agent_dir()
 
-      assert String.starts_with?(result, System.user_home!())
+      assert String.starts_with?(result, LemonCore.Paths.home_dir())
       assert String.ends_with?(result, ".lemon/agent")
     end
 
@@ -509,9 +509,8 @@ defmodule CodingAgent.ConfigTest do
   # ============================================================================
 
   describe "ensure_dirs!/0" do
-    # Note: System.user_home!/0 caches the home directory at VM startup,
-    # so we cannot mock it by changing HOME environment variable.
-    # Instead, we test the actual directories that ensure_dirs! creates.
+    # The home is scoped per suite through `config :lemon_core, :paths` (see
+    # test_helper.exs), so these directories are created under a temp home.
 
     test "creates agent directory" do
       Config.ensure_dirs!()

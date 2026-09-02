@@ -29,6 +29,10 @@ application from the Lemon umbrella; the OTP application name and every
 
 ### Changed
 
+- `test/support` compiles with the app in the test environment
+  (`elixirc_paths`), so `LemonAgent.Test.Mocks` is available to dependent
+  apps' suites without `Code.require_file/1`.
+
 - `LemonAgent.Security.ExternalContent` is the canonical implementation for
   wrapping untrusted external content. It stays in this package rather than
   moving to `lemon_core` because it is defined in terms of

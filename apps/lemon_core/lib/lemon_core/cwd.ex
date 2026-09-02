@@ -18,7 +18,7 @@ defmodule LemonCore.Cwd do
   end
 
   defp home_or_process_cwd do
-    case System.user_home() |> normalize_existing_dir() do
+    case LemonCore.Paths.home_dir() |> normalize_existing_dir() do
       nil -> File.cwd!()
       cwd -> cwd
     end

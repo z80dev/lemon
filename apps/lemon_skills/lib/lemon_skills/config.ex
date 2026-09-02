@@ -93,7 +93,7 @@ defmodule LemonSkills.Config do
     System.get_env("LEMON_AGENT_DIR") ||
       Application.get_env(:lemon_skills, :agent_dir) ||
       Application.get_env(:coding_agent, :agent_dir) ||
-      Path.join(System.user_home!(), ".lemon/agent")
+      LemonCore.Paths.home_path("agent")
   end
 
   @doc """
@@ -152,7 +152,7 @@ defmodule LemonSkills.Config do
   def harness_global_skills_dir do
     System.get_env("LEMON_HARNESS_SKILLS_DIR") ||
       Application.get_env(:lemon_skills, :harness_global_skills_dir) ||
-      Path.join([System.user_home!(), ".agents", "skills"])
+      Path.join([LemonCore.Paths.home_dir(), ".agents", "skills"])
   end
 
   @doc """

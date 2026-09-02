@@ -440,7 +440,7 @@ defmodule CodingAgent.ResourceLoader do
   # Find files in home directory locations
   @spec find_in_home_directories([String.t()]) :: [String.t()]
   defp find_in_home_directories(filenames) do
-    home = System.user_home!()
+    home = LemonCore.Paths.home_dir()
 
     home_dirs = [
       Path.join(home, ".claude"),

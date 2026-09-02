@@ -2,7 +2,6 @@ ExUnit.configure(exclude: [:integration])
 ExUnit.start()
 
 # Use a test-local store backend so coding_agent tests don't depend on lemon_gateway.
-Code.require_file("support/test_store.ex", __DIR__)
 Application.put_env(:lemon_core, :store_mod, CodingAgent.TestStore)
 
 # Ensure consolidated protocol directory exists when using a custom build path
@@ -10,9 +9,11 @@ if build_path = System.get_env("MIX_BUILD_PATH") do
   File.mkdir_p!(Path.join(build_path, "consolidated"))
 end
 
-# Isolate HOME to avoid leaking user-level config (CLAUDE.md, config.toml, extensions)
-original_home = System.get_env("HOME")
-
+# Scope the user's home to a fresh directory so no test reads or writes the
+# real ~/.lemon, ~/.claude or ~/.agents. Everything that resolves the home
+# goes through LemonCore.Paths, which honours this override; the OS HOME is
+# left alone, so nothing else in the VM (toolchains, other apps' suites) is
+# affected.
 home =
   Path.join(
     System.tmp_dir!(),
@@ -20,43 +21,16 @@ home =
   )
 
 File.mkdir_p!(home)
-System.put_env("HOME", home)
+Application.put_env(:lemon_core, :paths, home_dir: home)
 
-# Keep rustup/cargo toolchain paths stable after HOME isolation so tests that call
-# cargo via rustup shims can still resolve installed toolchains and targets.
-if original_home do
-  if is_nil(System.get_env("RUSTUP_HOME")) do
-    System.put_env("RUSTUP_HOME", Path.join(original_home, ".rustup"))
-  end
-
-  if is_nil(System.get_env("CARGO_HOME")) do
-    System.put_env("CARGO_HOME", Path.join(original_home, ".cargo"))
-  end
-end
-
-# Ensure agent directories exist under the isolated HOME
+# Ensure agent directories exist under the scoped home
 CodingAgent.Config.ensure_dirs!()
-
-# Skills are now managed by lemon_skills (registry + installer).
-Application.ensure_all_started(:lemon_skills)
 
 # Earlier app suites in the same umbrella run may have stopped :coding_agent
 # (e.g. lemon_router's baseline reset); suite order no longer guarantees a
-# restart, so establish our own baseline.
+# restart, so establish our own baseline. lemon_skills starts with it.
 {:ok, _} = Application.ensure_all_started(:coding_agent)
 
-# Compile test support files
-Code.require_file("support/mock_ui.ex", __DIR__)
-Code.require_file("support/permission_helpers.ex", __DIR__)
-Code.require_file("support/async_helpers.ex", __DIR__)
-
-# Load shared test support from the lemon_agent and lemon_ai apps. These are
-# required unconditionally on purpose: an `if File.exists?` guard turns a moved
-# or renamed support file into dozens of confusing UndefinedFunctionError
-# failures inside individual tests, whereas a hard require fails once, here,
-# with the path that no longer resolves.
-Code.require_file(Path.join([__DIR__, "..", "..", "lemon_agent", "test", "support", "mocks.ex"]))
-
-Code.require_file(
-  Path.join([__DIR__, "..", "..", "lemon_ai", "test", "support", "integration_config.ex"])
-)
+# Test support modules (CodingAgent.TestStore, CodingAgent.Test.MockUI,
+# LemonAgent.Test.Mocks, LemonAi.Test.IntegrationConfig, ...) are compiled
+# with their apps in the test environment; see elixirc_paths/1 in mix.exs.

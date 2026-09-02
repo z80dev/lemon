@@ -48,7 +48,7 @@ defmodule LemonCore.CwdTest do
   end
 
   defp expected_home_fallback do
-    case System.user_home() do
+    case LemonCore.Paths.home_dir() do
       home when is_binary(home) and home != "" ->
         if File.dir?(home), do: Path.expand(home), else: File.cwd!()
 
