@@ -142,16 +142,21 @@ export async function runShellCommand(
 
 		let timedOut = false;
 		let forceKillTimer: ReturnType<typeof setTimeout> | undefined;
+		let forceKillPromise: Promise<void> | undefined;
 		const timer =
 			timeoutMs > 0
 				? setTimeout(() => {
 						timedOut = true;
 						killShellProcess(proc.pid, proc, detached, "SIGTERM");
-						forceKillTimer = setTimeout(
-							() => killShellProcess(proc.pid, proc, detached, "SIGKILL"),
-							250,
-						);
-						forceKillTimer.unref?.();
+						forceKillPromise = new Promise((resolve) => {
+							forceKillTimer = setTimeout(() => {
+								killShellProcess(proc.pid, proc, detached, "SIGKILL");
+								resolve();
+							}, 250);
+							// Captured POSIX commands await this escalation below. Preserve
+							// the existing non-blocking timer behavior everywhere else.
+							if (!detached) forceKillTimer.unref?.();
+						});
 					}, timeoutMs)
 				: undefined;
 		timer?.unref?.();
@@ -161,6 +166,11 @@ export async function runShellCommand(
 			: await Promise.all([readStream(proc.stdout), readStream(proc.stderr)]);
 		const code = await proc.exited;
 		if (timer) clearTimeout(timer);
+		// A TERM-resistant descendant can redirect stdio, letting the parent
+		// exit and close our pipes before the process group is gone. Complete
+		// the scheduled escalation before declaring a captured POSIX timeout
+		// finished so no member of the private group escapes.
+		if (detached && forceKillPromise) await forceKillPromise;
 		if (forceKillTimer) clearTimeout(forceKillTimer);
 
 		return {

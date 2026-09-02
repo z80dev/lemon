@@ -19,6 +19,25 @@ function fakeRun(outputs: Record<string, string>): (command: string) => Promise<
 	});
 }
 
+function processIsAlive(pid: number): boolean {
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ESRCH") return false;
+		throw error;
+	}
+}
+
+async function waitForProcessExit(pid: number, timeoutMs = 2_000): Promise<boolean> {
+	const deadline = Date.now() + timeoutMs;
+	while (Date.now() < deadline) {
+		if (!processIsAlive(pid)) return true;
+		await Bun.sleep(10);
+	}
+	return !processIsAlive(pid);
+}
+
 describe("!cmd lines", () => {
 	test("recognizes a leading bang", () => {
 		expect(isShellLine("!ls -la")).toBe(true);
@@ -122,6 +141,29 @@ describe("runShellCommand", () => {
 		expect(result.failure).toContain("timed out");
 		expect(result.code).not.toBe(0);
 	});
+
+	test.skipIf(process.platform === "win32")(
+		"kills a TERM-resistant descendant after its parent closes the capture pipes",
+		async () => {
+			let descendantPid: number | undefined;
+
+			try {
+				const result = await runShellCommand(
+					`/bin/sh -c 'trap "" TERM HUP; while :; do sleep 1; done' </dev/null >/dev/null 2>&1 & child=$!; echo "$child"; wait "$child"`,
+					{ timeoutMs: 50 },
+				);
+
+				descendantPid = Number.parseInt(result.stdout.trim(), 10);
+				expect(result.failure).toContain("timed out");
+				expect(Number.isSafeInteger(descendantPid)).toBe(true);
+				expect(await waitForProcessExit(descendantPid)).toBe(true);
+			} finally {
+				if (descendantPid && processIsAlive(descendantPid)) {
+					process.kill(descendantPid, "SIGKILL");
+				}
+			}
+		},
+	);
 });
 
 describe("formatShellResult", () => {
