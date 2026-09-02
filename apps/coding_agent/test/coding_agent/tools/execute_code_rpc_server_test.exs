@@ -1110,7 +1110,12 @@ defmodule CodingAgent.Tools.ExecuteCodeRpcServerTest do
       # Containment still means survival: the server reschedules and serves.
       write_request(rpc_dir, 2, "echo", %{"value" => "resumed"})
       assert %{"id" => 2, "ok" => true, "content" => "resumed"} = await_response(rpc_dir, 2)
-      assert RpcServer.stats(server).calls == 2
+
+      # The response is published inside the sweep before its updated counters
+      # are returned to the server. Synchronize on that state transition rather
+      # than racing the task result message.
+      stats = await_stats(server, &(&1.calls == 2))
+      assert stats.calls == 2
 
       assert :ok = RpcServer.stop(server)
     end
