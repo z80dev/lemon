@@ -247,8 +247,9 @@ defmodule LemonGateway.WebhookTransportTest do
     assert first_request.meta.router_replay_identity ==
              second_request.meta.router_replay_identity
 
-    assert first_request.meta.router_replay_identity ==
-             "webhook:#{integration_id}:#{idempotency_key}"
+    assert String.starts_with?(first_request.meta.router_replay_identity, "webhook:v1:")
+    refute inspect(first_request) =~ idempotency_key
+    refute inspect(second_request) =~ idempotency_key
   end
 
   test "response persistence fails closed when its durable reservation disappears" do

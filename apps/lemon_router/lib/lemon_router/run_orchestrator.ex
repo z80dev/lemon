@@ -218,14 +218,17 @@ defmodule LemonRouter.RunOrchestrator do
   def handle_call({:register_abort, run_id, reason}, _from, state) do
     state = maybe_cleanup_durable_receipts(state)
 
+    reason_code = normalize_abort_reason(reason)
+
     tombstone = %{
-      reason: reason,
+      state: "aborted",
+      reason_code: reason_code,
       expires_at_ms: System.system_time(:millisecond) + state.abort_tombstone_ttl_ms
     }
 
     case persist_abort_tombstone(run_id, tombstone) do
       :ok ->
-        emit_abort_tombstone_telemetry(:registered, reason)
+        emit_abort_tombstone_telemetry(:registered, reason_code)
         result = dispatch_registered_abort(run_id, reason)
         state = %{state | abort_tombstones: Map.put(state.abort_tombstones, run_id, tombstone)}
         {:reply, result, state}
@@ -373,8 +376,6 @@ defmodule LemonRouter.RunOrchestrator do
     claimed_at_ms = System.system_time(:millisecond)
 
     entry = %{
-      run_id: params.run_id,
-      session_key: params.session_key,
       identity: identity,
       state: "claimed",
       claimed_at_ms: claimed_at_ms,
@@ -465,10 +466,10 @@ defmodule LemonRouter.RunOrchestrator do
   end
 
   defp submit_new_admission(params, identity, admission, state) do
-    submitting =
-      admission
-      |> Map.put(:state, "submitting")
-      |> Map.put(:submitting_at_ms, System.system_time(:millisecond))
+    # Once the external-enqueue boundary becomes ambiguous, retain only the
+    # permanent idempotency fence. Delivery/session metadata and diagnostic
+    # timestamps are not needed to reject a replay and must not live forever.
+    submitting = compact_admission("submitting", identity)
 
     case Store.compare_and_swap(@run_admission_table, params.run_id, admission, submitting) do
       :ok ->
@@ -592,12 +593,7 @@ defmodule LemonRouter.RunOrchestrator do
 
   defp persist_accepted_admission(run_id, identity, expected, retention_ms, attempts_left \\ 3) do
     expires_at_ms = System.system_time(:millisecond) + retention_ms
-
-    replacement =
-      expected
-      |> Map.put(:state, "accepted")
-      |> Map.put(:accepted_at_ms, System.system_time(:millisecond))
-      |> Map.put(:expires_at_ms, expires_at_ms)
+    replacement = compact_admission("accepted", identity)
 
     case Store.compare_and_swap(@run_admission_table, run_id, expected, replacement) do
       :ok ->
@@ -669,6 +665,10 @@ defmodule LemonRouter.RunOrchestrator do
 
         base_ms + effective_retention_ms
     end
+  end
+
+  defp compact_admission(state, identity) when state in ["submitting", "accepted"] do
+    %{state: state, identity: identity}
   end
 
   defp request_identity(%RunRequest{} = params) do
@@ -777,17 +777,33 @@ defmodule LemonRouter.RunOrchestrator do
       {:ok, tombstone} when is_map(tombstone) ->
         expires_at_ms = MapHelpers.get_key(tombstone, :expires_at_ms)
 
-        normalized = %{
-          reason: MapHelpers.get_key(tombstone, :reason),
-          expires_at_ms: expires_at_ms
-        }
+        reason_code =
+          tombstone
+          |> MapHelpers.get_key(:reason_code)
+          |> then(fn stored -> stored || MapHelpers.get_key(tombstone, :reason) end)
+          |> normalize_abort_reason()
+
+        expired? =
+          not is_integer(expires_at_ms) or
+            expires_at_ms <= System.system_time(:millisecond)
+
+        normalized =
+          if expired?,
+            do: %{state: "aborted", reason_code: :aborted},
+            else: %{state: "aborted", reason_code: reason_code, expires_at_ms: expires_at_ms}
+
+        if expired? do
+          _ = Store.compare_and_swap(@abort_tombstone_table, run_id, tombstone, normalized)
+        end
 
         next_state =
-          if is_integer(expires_at_ms) and expires_at_ms > System.system_time(:millisecond),
-            do: %{state | abort_tombstones: Map.put(state.abort_tombstones, run_id, normalized)},
-            else: %{state | abort_tombstones: Map.delete(state.abort_tombstones, run_id)}
+          if expired? do
+            %{state | abort_tombstones: Map.delete(state.abort_tombstones, run_id)}
+          else
+            %{state | abort_tombstones: Map.put(state.abort_tombstones, run_id, normalized)}
+          end
 
-        {:active, normalized, next_state}
+        {:active, %{reason: Map.fetch!(normalized, :reason_code)}, next_state}
 
       {:error, _reason} ->
         {:error, state}
@@ -844,7 +860,7 @@ defmodule LemonRouter.RunOrchestrator do
     |> Store.list()
     |> Enum.each(fn
       {key, entry} when is_map(entry) ->
-        if expired?.(entry), do: Store.delete(table, key)
+        if expired?.(entry), do: Store.compare_and_delete(table, key, entry)
 
       _invalid ->
         :ok
@@ -873,6 +889,19 @@ defmodule LemonRouter.RunOrchestrator do
   catch
     _, _ -> :ok
   end
+
+  defp normalize_abort_reason(reason)
+       when reason in [
+              :user_requested,
+              :hard_stop,
+              :goal_loop_hard_stop,
+              :cron_aborted,
+              :a2a_peer_canceled,
+              :aborted
+            ],
+       do: reason
+
+  defp normalize_abort_reason(_reason), do: :aborted
 
   defp normalize_run_process_opts(opts) when is_map(opts), do: opts
   defp normalize_run_process_opts(opts) when is_list(opts), do: Map.new(opts)

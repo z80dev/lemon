@@ -155,6 +155,12 @@ defmodule LemonAutomation.GoalLoopTest do
     def wait_already_subscribed(_run_id, _timeout_ms, _opts), do: :timeout
   end
 
+  defmodule WaiterMalformed do
+    @moduledoc false
+
+    def wait_already_subscribed(_run_id, _timeout_ms, _opts), do: :not_terminal
+  end
+
   defmodule JudgeRouterOk do
     @moduledoc false
 
@@ -1074,6 +1080,54 @@ defmodule LemonAutomation.GoalLoopTest do
     assert_receive {:ambiguous_loop_abort, ^run_id, :goal_loop_hard_stop}, 1_000
     refute_receive {:ambiguous_loop_abort, ^run_id, _reason}, 100
     assert get_in(GoalStore.get(session_key).meta, ["goalLoop", "status"]) == "stopped"
+  end
+
+  test "malformed ambiguous wait result keeps the manager in reconciliation", %{
+    session_key: session_key
+  } do
+    assert {:ok, _goal} =
+             GoalStore.set(session_key, "Retain malformed waiter ownership",
+               agent_id: "agent_1",
+               meta: %{"testPid" => self()}
+             )
+
+    manager =
+      start_supervised!(
+        {GoalLoopManager,
+         name: :"goal_loop_manager_malformed_#{System.unique_integer([:positive])}",
+         scheduler_interval_ms: 0}
+      )
+
+    run_id = "goal_malformed_#{System.unique_integer([:positive])}"
+
+    assert {:ok, %{status: "running"}} =
+             GenServer.call(
+               manager,
+               {:start_loop, session_key,
+                [
+                  judge_mod: ContinueJudge,
+                  router_mod: AmbiguousLoopRouter,
+                  waiter_mod: WaiterMalformed,
+                  run_id: run_id,
+                  max_ticks: 2,
+                  wait_timeout_ms: 10,
+                  meta: %{test_pid: self()}
+                ]}
+             )
+
+    assert_receive {:ambiguous_loop_submit, %{run_id: ^run_id}}, 1_000
+
+    assert eventually(fn ->
+             match?(
+               {:ok, %{running: true, loop: %{status: "reconciling", active_run_id: ^run_id}}},
+               GenServer.call(manager, {:status, session_key})
+             )
+           end)
+
+    assert {:ok, %{router_abort: :accepted}} =
+             GenServer.call(manager, {:stop_loop, session_key, :hard})
+
+    assert_receive {:ambiguous_loop_abort, ^run_id, :goal_loop_hard_stop}, 1_000
   end
 
   test "an ambiguous hard-stop abort keeps ownership and blocks restart", %{

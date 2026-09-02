@@ -82,10 +82,10 @@ defmodule LemonChannels.Adapters.Email.Webhook do
   end
 
   defp accept(conn) do
-    replay_content_identity = replay_content_identity(conn.body_params)
-
     case Email.normalize_inbound(conn.body_params) do
       {:ok, message} ->
+        replay_content_identity = replay_content_identity(conn.body_params)
+
         case reserve(message) do
           {:duplicate, receipt} -> duplicate_receipt(conn, receipt)
           {:new, reservation} -> handoff(conn, message, reservation, replay_content_identity)
@@ -312,14 +312,26 @@ defmodule LemonChannels.Adapters.Email.Webhook do
       )
 
   defp replay_content_identity(body_params) do
-    body_params
-    |> canonical_delivery_value()
+    parsed = Email.parse(body_params)
+
+    %{
+      from: parsed.from,
+      from_name: parsed.from_name,
+      to: parsed.to,
+      subject: parsed.subject,
+      text: parsed.text,
+      html: parsed.html,
+      message_id: parsed.message_id,
+      in_reply_to: parsed.in_reply_to,
+      references: parsed.references,
+      attachments: Enum.map(parsed.attachments, &canonical_attachment/1)
+    }
     |> :erlang.term_to_binary([:deterministic])
     |> then(&:crypto.hash(:sha256, &1))
     |> Base.encode16(case: :lower)
   end
 
-  defp canonical_delivery_value(%Plug.Upload{} = upload) do
+  defp canonical_attachment(%Plug.Upload{} = upload) do
     %{
       filename: upload.filename,
       content_type: upload.content_type,
@@ -327,16 +339,59 @@ defmodule LemonChannels.Adapters.Email.Webhook do
     }
   end
 
-  defp canonical_delivery_value(value) when is_map(value) do
-    value
-    |> Enum.map(fn {key, item} -> {key, canonical_delivery_value(item)} end)
-    |> Map.new()
+  defp canonical_attachment(value) when is_map(value) do
+    upload = attachment_value(value, [:upload, :file, :attachment])
+
+    %{
+      filename:
+        attachment_value(value, [:filename, :name, :file_name]) || upload_filename(upload),
+      content_type:
+        attachment_value(value, [:content_type, :mime_type, :type]) || upload_content_type(upload),
+      url: attachment_value(value, [:url, :href]),
+      content_sha256: attachment_digest(value, upload)
+    }
   end
 
-  defp canonical_delivery_value(value) when is_list(value),
-    do: Enum.map(value, &canonical_delivery_value/1)
+  defp canonical_attachment(url) when is_binary(url), do: %{url: url}
+  defp canonical_attachment(_value), do: :ignored
 
-  defp canonical_delivery_value(value), do: value
+  defp attachment_digest(_value, %Plug.Upload{path: path}), do: file_digest(path)
+
+  defp attachment_digest(value, _upload) do
+    case attachment_value(value, [:content, :data, :content_base64, :base64, :body]) do
+      bytes when is_binary(bytes) ->
+        bytes
+        |> decoded_attachment_bytes()
+        |> then(&:crypto.hash(:sha256, &1))
+        |> Base.encode16(case: :lower)
+
+      _ ->
+        nil
+    end
+  end
+
+  defp decoded_attachment_bytes(bytes) do
+    trimmed = String.trim(bytes)
+
+    if byte_size(trimmed) > 20 and Regex.match?(~r/\A[A-Za-z0-9+\/=\r\n]+\z/, trimmed) do
+      case Base.decode64(trimmed, ignore: :whitespace) do
+        {:ok, decoded} -> decoded
+        :error -> bytes
+      end
+    else
+      bytes
+    end
+  end
+
+  defp attachment_value(map, keys) do
+    Enum.find_value(keys, fn key -> Map.get(map, key) || Map.get(map, Atom.to_string(key)) end)
+  end
+
+  defp upload_filename(%Plug.Upload{filename: filename}), do: filename
+  defp upload_filename(_upload), do: nil
+
+  defp upload_content_type(%Plug.Upload{content_type: content_type}), do: content_type
+  defp upload_content_type(_upload), do: nil
 
   defp file_digest(path) when is_binary(path) do
     case File.read(path) do

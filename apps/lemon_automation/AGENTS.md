@@ -93,7 +93,8 @@ exceptions never enter stored goal metadata or returned diagnostics.
 
 An ambiguous judge or continuation submission remains owned by its
 caller-generated run ID while the waiter reconciles terminal events. If that
-bounded wait also expires, the manager retains the loop in `reconciling` state
+bounded wait expires, crashes, or returns anything other than a confirmed
+terminal result, the manager retains the loop in `reconciling` state
 so another tick cannot overlap it. A durable terminal record releases that
 guard into an error state requiring an explicit restart. A hard stop aborts
 that exact run once; only a definite abort acceptance releases the guard, while

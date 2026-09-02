@@ -20,7 +20,9 @@ actions belong to `lemon_skills`. A2A peers are independent principals and
 must never be treated as named execution nodes or operator WebSocket clients.
 Task terminal transitions are first-writer-wins: accepted cancellation cannot
 be overwritten by a delayed submit/finalize path, and no post-cancel agent
-message or context turn may be recorded. External A2A and `sessions.active`
+message or context turn may be recorded. A runner lease remains the terminal
+write owner after submission becomes working; a stale reclaimed runner must
+not publish failure, timeout, or completion over the newer owner. External A2A and `sessions.active`
 errors must use fixed bounded messages; classify failures for logs without
 interpolating raw reasons, paths, credentials, or exception messages.
 A2A submission `:outcome_unknown` must never trigger a retry or a false failed

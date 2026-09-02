@@ -452,8 +452,12 @@ defmodule LemonRouter.RunOrchestratorTest do
         {:ok, orchestrator} = GenServer.start_link(RunOrchestrator, [])
         assert {:error, :outcome_unknown} = RunOrchestrator.submit(orchestrator, replay)
 
-        assert %{state: "submitting"} =
-                 LemonCore.Store.get(RunOrchestrator.admission_table(), run_id)
+        submitting_receipt =
+          LemonCore.Store.get(RunOrchestrator.admission_table(), run_id)
+
+        assert %{state: "submitting", identity: identity} = submitting_receipt
+        assert is_binary(identity)
+        assert Map.keys(submitting_receipt) |> Enum.sort() == [:identity, :state]
 
         assert {:error, :outcome_unknown} = RunOrchestrator.submit(orchestrator, replay)
       end
@@ -675,10 +679,12 @@ defmodule LemonRouter.RunOrchestratorTest do
       assert {:ok, ^accepted_run_id} = RunOrchestrator.submit(orchestrator, accepted)
       assert_receive {:captured_job, _command}, 500
 
-      assert %{state: "accepted", expires_at_ms: expires_at_ms} =
-               LemonCore.Store.get(RunOrchestrator.admission_table(), accepted_run_id)
+      accepted_receipt =
+        LemonCore.Store.get(RunOrchestrator.admission_table(), accepted_run_id)
 
-      assert is_integer(expires_at_ms)
+      assert %{state: "accepted", identity: identity} = accepted_receipt
+      assert is_binary(identity)
+      assert Map.keys(accepted_receipt) |> Enum.sort() == [:identity, :state]
       Process.sleep(20)
       assert {:ok, ^accepted_run_id} = RunOrchestrator.submit(orchestrator, accepted)
       refute_receive {:captured_job, _command}, 100
@@ -964,6 +970,51 @@ defmodule LemonRouter.RunOrchestratorTest do
       refute_receive {:captured_job, _command}, 100
     end
 
+    test "abort tombstones never persist or replay arbitrary caller reasons" do
+      run_supervisor = start_supervised!({DynamicSupervisor, strategy: :one_for_one})
+      run_id = "run_private_tombstone_#{System.unique_integer([:positive])}"
+      secret = "operator-secret-#{System.unique_integer([:positive])}"
+
+      on_exit(fn ->
+        LemonCore.Store.delete(RunOrchestrator.abort_tombstone_table(), run_id)
+      end)
+
+      opts = [
+        run_supervisor: run_supervisor,
+        run_process_module: CapturingRunProcess,
+        run_process_opts: %{notify_pid: self()},
+        abort_tombstone_ttl_ms: 10
+      ]
+
+      {:ok, first} = GenServer.start_link(RunOrchestrator, opts)
+      assert :ok = RunOrchestrator.register_abort(first, run_id, {:private_reason, secret})
+
+      stored = LemonCore.Store.get(RunOrchestrator.abort_tombstone_table(), run_id)
+      refute inspect(stored) =~ secret
+      assert %{state: "aborted", reason_code: :aborted} = stored
+
+      :ok = GenServer.stop(first)
+      Process.sleep(20)
+      {:ok, recovered} = GenServer.start_link(RunOrchestrator, opts)
+
+      assert {:error, {:run_aborted, :aborted}} =
+               RunOrchestrator.submit(
+                 recovered,
+                 request(%{
+                   run_id: run_id,
+                   session_key: "agent:private-tombstone:test",
+                   agent_id: "test",
+                   prompt: "must stay fenced"
+                 })
+               )
+
+      assert %{state: "aborted", reason_code: :aborted} =
+               LemonCore.Store.get(RunOrchestrator.abort_tombstone_table(), run_id)
+
+      refute inspect(LemonCore.Store.get(RunOrchestrator.abort_tombstone_table(), run_id)) =~
+               secret
+    end
+
     test "an expired abort tombstone still fences the run id after restart" do
       run_supervisor = start_supervised!({DynamicSupervisor, strategy: :one_for_one})
       run_id = "run_expired_tombstone_#{System.unique_integer([:positive])}"
@@ -987,7 +1038,7 @@ defmodule LemonRouter.RunOrchestratorTest do
 
       {:ok, recovered_orchestrator} = GenServer.start_link(RunOrchestrator, opts)
 
-      assert {:error, {:run_aborted, :hard_stop}} =
+      assert {:error, {:run_aborted, :aborted}} =
                RunOrchestrator.submit(
                  recovered_orchestrator,
                  request(%{

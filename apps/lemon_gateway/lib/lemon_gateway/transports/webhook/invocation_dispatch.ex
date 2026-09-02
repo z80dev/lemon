@@ -45,7 +45,14 @@ defmodule LemonGateway.Transports.Webhook.InvocationDispatch do
 
   defp replay_identity(%{integration_id: integration_id, idempotency_key: idempotency_key})
        when is_binary(integration_id) and is_binary(idempotency_key) do
-    "webhook:" <> integration_id <> ":" <> idempotency_key
+    digest =
+      :crypto.hash(
+        :sha256,
+        ["lemon:webhook-router-replay:v1", <<0>>, integration_id, <<0>>, idempotency_key]
+      )
+      |> Base.encode16(case: :lower)
+
+    "webhook:v1:" <> digest
   end
 
   defp replay_identity(_), do: nil

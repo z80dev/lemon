@@ -296,6 +296,46 @@ defmodule LemonCore.Store do
   end
 
   @doc """
+  Deletes a value only when its current value exactly matches `expected`.
+
+  The comparison and delete are serialized inside the Store process. This is
+  intended for sweepers and lease cleanup paths that must not erase a value
+  changed after their earlier list or fetch snapshot.
+  """
+  @spec compare_and_delete(server(), atom(), term(), term()) ::
+          :ok | {:error, :mismatch | term()}
+  def compare_and_delete(server \\ __MODULE__, table, key, expected) do
+    safe_store_call(
+      server,
+      {:generic_compare_and_delete, table, key, expected},
+      {:error, :store_unavailable},
+      op: :compare_and_delete,
+      table: table,
+      key: key
+    )
+  end
+
+  @doc """
+  Deletes several values only when every current value matches its snapshot.
+
+  All comparisons and deletes run in one Store call, so another Store caller
+  cannot renew one member between validation and deletion. Entries are
+  `{table, key, expected}` tuples.
+  """
+  @spec compare_and_delete_many(server(), [{atom(), term(), term()}]) ::
+          :ok | {:error, :mismatch | term()}
+  def compare_and_delete_many(server \\ __MODULE__, entries) when is_list(entries) do
+    safe_store_call(
+      server,
+      {:generic_compare_and_delete_many, entries},
+      {:error, :store_unavailable},
+      op: :compare_and_delete_many,
+      table: :multiple,
+      key: length(entries)
+    )
+  end
+
+  @doc """
   Get a value from a named table.
 
   Returns `nil` if the key doesn't exist.
@@ -1205,6 +1245,54 @@ defmodule LemonCore.Store do
     end
   end
 
+  def handle_call({:generic_compare_and_delete, table, key, expected}, _from, state) do
+    case state.backend.get(state.backend_state, table, key) do
+      {:ok, current, backend_state} when current === expected ->
+        case state.backend.delete(backend_state, table, key) do
+          {:ok, backend_state} ->
+            if table in state.cached_tables do
+              ReadCache.delete(state.read_cache, table, key)
+            end
+
+            {:reply, :ok, %{state | backend_state: backend_state}}
+
+          {:error, reason} ->
+            log_backend_error(:compare_and_delete, table, key, reason)
+            {:reply, {:error, reason}, %{state | backend_state: backend_state}}
+
+          other ->
+            log_backend_unexpected(:compare_and_delete, table, key, other)
+
+            {:reply, {:error, {:unexpected_backend_response, other}},
+             %{state | backend_state: backend_state}}
+        end
+
+      {:ok, _current, backend_state} ->
+        {:reply, {:error, :mismatch}, %{state | backend_state: backend_state}}
+
+      {:error, reason} ->
+        log_backend_error(:compare_and_delete, table, key, reason)
+        {:reply, {:error, reason}, state}
+
+      other ->
+        log_backend_unexpected(:compare_and_delete, table, key, other)
+        {:reply, {:error, {:unexpected_backend_response, other}}, state}
+    end
+  end
+
+  def handle_call({:generic_compare_and_delete_many, entries}, _from, state) do
+    case compare_delete_snapshots(state.backend, state.backend_state, entries) do
+      {:ok, backend_state} ->
+        case delete_snapshots(state.backend, backend_state, entries, state) do
+          {:ok, next_state} -> {:reply, :ok, next_state}
+          {:error, reason, next_state} -> {:reply, {:error, reason}, next_state}
+        end
+
+      {:error, reason, backend_state} ->
+        {:reply, {:error, reason}, %{state | backend_state: backend_state}}
+    end
+  end
+
   def handle_call({:generic_get, table, key}, _from, state) do
     case state.backend.get(state.backend_state, table, key) do
       {:ok, value, backend_state} ->
@@ -1852,6 +1940,52 @@ defmodule LemonCore.Store do
       _ ->
         backend_state
     end
+  end
+
+  defp compare_delete_snapshots(backend, backend_state, entries) do
+    Enum.reduce_while(entries, {:ok, backend_state}, fn {table, key, expected},
+                                                       {:ok, current_state} ->
+      case backend.get(current_state, table, key) do
+        {:ok, current, next_state} when current === expected ->
+          {:cont, {:ok, next_state}}
+
+        {:ok, _current, next_state} ->
+          {:halt, {:error, :mismatch, next_state}}
+
+        {:error, reason} ->
+          log_backend_error(:compare_and_delete_many, table, key, reason)
+          {:halt, {:error, reason, current_state}}
+
+        other ->
+          log_backend_unexpected(:compare_and_delete_many, table, key, other)
+          {:halt, {:error, {:unexpected_backend_response, other}, current_state}}
+      end
+    end)
+  end
+
+  defp delete_snapshots(backend, backend_state, entries, state) do
+    Enum.reduce_while(entries, {:ok, %{state | backend_state: backend_state}}, fn {table, key, _},
+                                                                                 {:ok,
+                                                                                  current_state} ->
+      case backend.delete(current_state.backend_state, table, key) do
+        {:ok, next_backend_state} ->
+          if table in current_state.cached_tables do
+            ReadCache.delete(current_state.read_cache, table, key)
+          end
+
+          {:cont, {:ok, %{current_state | backend_state: next_backend_state}}}
+
+        {:error, reason} ->
+          log_backend_error(:compare_and_delete_many, table, key, reason)
+          {:halt, {:error, reason, current_state}}
+
+        other ->
+          log_backend_unexpected(:compare_and_delete_many, table, key, other)
+
+          {:halt,
+           {:error, {:unexpected_backend_response, other}, current_state}}
+      end
+    end)
   end
 
   defp log_backend_error(op, table, key, reason) do

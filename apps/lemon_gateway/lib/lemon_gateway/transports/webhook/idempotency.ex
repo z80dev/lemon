@@ -34,7 +34,7 @@ defmodule LemonGateway.Transports.Webhook.Idempotency do
     |> Enum.each(fn
       {{store_key, reservation_id} = receipt_key, receipt} when is_map(receipt) ->
         if Request.int_value(Request.fetch(receipt, :stored_at_ms), now_ms) <= cutoff_ms do
-          sweep_response_receipt(store_key, reservation_id, receipt_key)
+          sweep_response_receipt(store_key, reservation_id, receipt_key, receipt)
         end
 
       _ ->
@@ -47,7 +47,7 @@ defmodule LemonGateway.Transports.Webhook.Idempotency do
       {store_key, entry} when is_map(entry) ->
         if Request.normalize_blank(Request.fetch(entry, :state)) == "completed" and
              Request.int_value(Request.fetch(entry, :updated_at_ms), now_ms) <= cutoff_ms do
-          Store.delete(@table, store_key)
+          Store.compare_and_delete(@table, store_key, entry)
         end
 
       _ ->
@@ -281,20 +281,20 @@ defmodule LemonGateway.Transports.Webhook.Idempotency do
     _kind, _reason -> {:error, :idempotency_unavailable}
   end
 
-  defp sweep_response_receipt(store_key, reservation_id, receipt_key) do
+  defp sweep_response_receipt(store_key, reservation_id, receipt_key, receipt) do
     case Store.fetch(@table, store_key) do
       {:ok, %{} = primary} ->
         if Request.fetch(primary, :reservation_id) == reservation_id do
-          with :ok <- Store.delete(@response_table, receipt_key),
-               :ok <- Store.delete(@table, store_key) do
-            :ok
-          end
+          Store.compare_and_delete_many([
+            {@table, store_key, primary},
+            {@response_table, receipt_key, receipt}
+          ])
         else
-          Store.delete(@response_table, receipt_key)
+          Store.compare_and_delete(@response_table, receipt_key, receipt)
         end
 
       {:ok, nil} ->
-        Store.delete(@response_table, receipt_key)
+        Store.compare_and_delete(@response_table, receipt_key, receipt)
 
       _ ->
         :ok

@@ -145,12 +145,16 @@ defmodule LemonAutomation.RunCompletionWaiter do
       )
 
     case result do
-      {:error, {:timeout, ^run_id}} ->
-        {:error, {:submission_outcome_unknown, run_id}}
-
-      terminal_result ->
+      {:ok, ^run_id, _output} = terminal_result ->
         :ok = notify(Keyword.get(opts, :on_terminal), run_id)
         terminal_result
+
+      {:error, {:run_failed, ^run_id, _reason}} = terminal_result ->
+        :ok = notify(Keyword.get(opts, :on_terminal), run_id)
+        terminal_result
+
+      _unconfirmed_result ->
+        {:error, {:submission_outcome_unknown, run_id}}
     end
   rescue
     _error -> {:error, {:submission_outcome_unknown, run_id}}

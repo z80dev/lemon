@@ -21,6 +21,7 @@ defmodule LemonControlPlane.A2A.RunnerTest do
       send(:persistent_term.get(@owner_key), {:a2a_submit_blocked, request, self()})
 
       receive do
+        {:release_a2a_submit, {:raise, message}} -> raise message
         {:release_a2a_submit, result} -> result
       after
         5_000 -> {:error, :test_submit_timeout}
@@ -250,12 +251,49 @@ defmodule LemonControlPlane.A2A.RunnerTest do
     assert {:stream, ^task_id} = start_message(context_id, message_id)
     assert_receive {:a2a_submit_blocked, %{run_id: ^run_id} = request, runner_pid}, 1_000
 
-    assert request.meta.router_replay_identity ==
-             "a2a:local:#{context_id}:#{task_id}"
+    assert String.starts_with?(request.meta.router_replay_identity, "a2a:v1:")
+    refute request.meta.router_replay_identity =~ context_id
+    refute request.meta.router_replay_identity =~ task_id
 
     send(runner_pid, {:release_a2a_submit, {:error, :definite_rejection}})
 
     cleanup_task(task_id, context_id, message_id, run_id)
+  end
+
+  test "a stale runner cannot overwrite a task after a newer lease accepts it" do
+    config = Application.fetch_env!(:lemon_control_plane, :a2a_config)
+    Application.put_env(:lemon_control_plane, :a2a_config, Map.put(config, :reply_timeout_ms, 25))
+
+    for stale_result <- [
+          {:error, :definite_rejection},
+          {:error, :test_submit_timeout},
+          {:raise, "stale submit crashed"}
+        ] do
+      context_id = unique_id("stale-owner-context")
+      message_id = unique_id("stale-owner-message")
+
+      assert {:stream, task_id} = start_message(context_id, message_id)
+      assert_receive {:a2a_submit_blocked, %{run_id: run_id}, first_runner}, 1_000
+
+      assert {:ok, _expired} =
+               A2AStore.update_task(task_id, &Map.put(&1, :runner_lease_expires_at_ms, 0))
+
+      assert {:stream, ^task_id} = start_message(context_id, message_id)
+      assert_receive {:a2a_submit_blocked, %{run_id: ^run_id}, second_runner}, 1_000
+
+      send(second_runner, {:release_a2a_submit, {:ok, run_id}})
+
+      assert eventually(fn ->
+               match?(%{state: "TASK_STATE_WORKING"}, A2AStore.get_task(task_id))
+             end)
+
+      send(first_runner, {:release_a2a_submit, stale_result})
+      first_ref = Process.monitor(first_runner)
+      assert_receive {:DOWN, ^first_ref, :process, ^first_runner, _reason}, 1_000
+
+      assert %{state: "TASK_STATE_WORKING"} = A2AStore.get_task(task_id)
+      cleanup_task(task_id, context_id, message_id, run_id)
+    end
   end
 
   test "an unresolved outcome-unknown submit stays reattachable and later reconciles" do
@@ -459,4 +497,16 @@ defmodule LemonControlPlane.A2A.RunnerTest do
 
   defp unique_id(prefix),
     do: "#{prefix}-#{System.unique_integer([:positive, :monotonic])}"
+
+  defp eventually(fun, attempts \\ 50)
+  defp eventually(fun, 0), do: fun.()
+
+  defp eventually(fun, attempts) do
+    if fun.() do
+      true
+    else
+      Process.sleep(10)
+      eventually(fun, attempts - 1)
+    end
+  end
 end

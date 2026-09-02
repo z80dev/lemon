@@ -496,6 +496,54 @@ defmodule LemonCore.StoreTest do
       assert generation in 2..13
     end
 
+    test "generic compare_and_delete preserves a value changed after a cleanup snapshot" do
+      key = "compare_delete_#{unique_token()}"
+      claimed = %{state: "claimed", expires_at_ms: 0}
+      submitting = %{state: "submitting"}
+
+      assert :ok = Store.put(:session_token_heads, key, claimed)
+      snapshot = Store.get(:session_token_heads, key)
+
+      assert :ok = Store.compare_and_swap(:session_token_heads, key, claimed, submitting)
+
+      assert {:error, :mismatch} =
+               Store.compare_and_delete(:session_token_heads, key, snapshot)
+
+      assert Store.get(:session_token_heads, key) == submitting
+      assert :ok = Store.compare_and_delete(:session_token_heads, key, submitting)
+      assert Store.get(:session_token_heads, key) == nil
+    end
+
+    test "generic compare_and_delete_many validates every snapshot before deleting any" do
+      suffix = unique_token()
+      first_key = "compare_delete_many_first_#{suffix}"
+      second_key = "compare_delete_many_second_#{suffix}"
+      original = %{generation: 1}
+      renewed = %{generation: 2}
+
+      assert :ok = Store.put(:session_token_heads, first_key, original)
+      assert :ok = Store.put(:session_token_heads, second_key, original)
+      assert :ok = Store.compare_and_swap(:session_token_heads, second_key, original, renewed)
+
+      assert {:error, :mismatch} =
+               Store.compare_and_delete_many([
+                 {:session_token_heads, first_key, original},
+                 {:session_token_heads, second_key, original}
+               ])
+
+      assert Store.get(:session_token_heads, first_key) == original
+      assert Store.get(:session_token_heads, second_key) == renewed
+
+      assert :ok =
+               Store.compare_and_delete_many([
+                 {:session_token_heads, first_key, original},
+                 {:session_token_heads, second_key, renewed}
+               ])
+
+      assert Store.get(:session_token_heads, first_key) == nil
+      assert Store.get(:session_token_heads, second_key) == nil
+    end
+
     test "finalize_run writes history to RunHistoryStore" do
       token = unique_token()
       key = session_key(token)

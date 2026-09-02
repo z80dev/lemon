@@ -468,6 +468,91 @@ defmodule LemonChannels.Adapters.Email.WebhookTest do
                second_request.meta.router_replay_content_identity
     end
 
+    test "provider retry metadata is ignored while semantic email fields remain bound" do
+      configure(webhook_token: "s3cret")
+      route_to(AcceptingRouter)
+      message_id = "provider-retry-drift@example.com"
+      digest = Base.encode16(:crypto.hash(:sha256, message_id), case: :lower)
+      table = :email_inbound_idempotency
+
+      payload = fn attempt, overrides ->
+        authorized_payload(message_id)
+        |> Map.update!(:body_params, fn body ->
+          body
+          |> Map.put("provider_delivery_attempt", attempt)
+          |> Map.put("provider_signature", "signature-#{attempt}")
+          |> Map.merge(overrides)
+        end)
+      end
+
+      assert %{status: 202} = payload.(1, %{}) |> Webhook.handle_inbound()
+      assert_received {:routed, %RunRequest{} = first}
+
+      receipt = LemonCore.Store.get(table, digest)
+      assert :ok = LemonCore.Store.put(table, digest, %{receipt | "state" => "rejected"})
+
+      assert %{status: 202} = payload.(2, %{}) |> Webhook.handle_inbound()
+      assert_received {:routed, %RunRequest{} = retry}
+
+      assert first.meta.router_replay_content_identity ==
+               retry.meta.router_replay_content_identity
+
+      for {field, value} <- [
+            {"subject", "changed subject"},
+            {"from", "other@example.com"},
+            {"text", "changed body"}
+          ] do
+        receipt = LemonCore.Store.get(table, digest)
+        assert :ok = LemonCore.Store.put(table, digest, %{receipt | "state" => "rejected"})
+        assert %{status: 202} = payload.(3, %{field => value}) |> Webhook.handle_inbound()
+        assert_received {:routed, %RunRequest{} = changed}
+
+        refute first.meta.router_replay_content_identity ==
+                 changed.meta.router_replay_content_identity
+      end
+    end
+
+    test "attachment content, name, and type are bound into replay identity" do
+      configure(webhook_token: "s3cret")
+      route_to(AcceptingRouter)
+      message_id = "attachment-semantics@example.com"
+      digest = Base.encode16(:crypto.hash(:sha256, message_id), case: :lower)
+      table = :email_inbound_idempotency
+      suffix = System.unique_integer([:positive])
+      original_path = Path.join(System.tmp_dir!(), "email-original-#{suffix}")
+      changed_path = Path.join(System.tmp_dir!(), "email-changed-#{suffix}")
+      File.write!(original_path, "original bytes")
+      File.write!(changed_path, "changed bytes")
+      on_exit(fn -> Enum.each([original_path, changed_path], &File.rm/1) end)
+
+      submit = fn path, filename, content_type ->
+        authorized_payload(message_id)
+        |> Map.update!(:body_params, fn body ->
+          Map.put(body, "attachments", [
+            %Plug.Upload{path: path, filename: filename, content_type: content_type}
+          ])
+        end)
+        |> Webhook.handle_inbound()
+      end
+
+      assert %{status: 202} = submit.(original_path, "notes.txt", "text/plain")
+      assert_received {:routed, %RunRequest{} = original}
+
+      for {path, filename, content_type} <- [
+            {changed_path, "notes.txt", "text/plain"},
+            {original_path, "other.txt", "text/plain"},
+            {original_path, "notes.txt", "application/octet-stream"}
+          ] do
+        receipt = LemonCore.Store.get(table, digest)
+        assert :ok = LemonCore.Store.put(table, digest, %{receipt | "state" => "rejected"})
+        assert %{status: 202} = submit.(path, filename, content_type)
+        assert_received {:routed, %RunRequest{} = changed}
+
+        refute original.meta.router_replay_content_identity ==
+                 changed.meta.router_replay_content_identity
+      end
+    end
+
     test "answers 400 for an authorized payload it cannot make sense of" do
       configure(webhook_token: "s3cret")
 

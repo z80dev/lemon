@@ -80,6 +80,11 @@ defmodule LemonAutomation.RunCompletionWaiterTest do
     end
   end
 
+  defmodule MalformedWaiter do
+    @moduledoc false
+    def wait_already_subscribed(_run_id, _timeout_ms, _opts), do: :not_a_terminal_result
+  end
+
   defmodule MutateThenRaiseRouter do
     @moduledoc false
 
@@ -153,6 +158,24 @@ defmodule LemonAutomation.RunCompletionWaiterTest do
     assert_received {:ambiguous_submit, "run_ambiguous"}
     assert_received {:bus_subscribed, "run:run_ambiguous"}
     assert_received {:bus_unsubscribed, "run:run_ambiguous"}
+  end
+
+  test "a malformed ambiguous-submission wait result retains ownership" do
+    test_pid = self()
+
+    assert {:error, {:submission_outcome_unknown, "run_malformed_wait"}} =
+             RunCompletionWaiter.submit_and_wait(
+               %{
+                 run_id: "run_malformed_wait",
+                 prompt: "maybe accepted",
+                 test_pid: test_pid
+               },
+               router_mod: WaiterAmbiguousRouter,
+               waiter_mod: MalformedWaiter,
+               on_terminal: fn run_id -> send(test_pid, {:terminal, run_id}) end
+             )
+
+    refute_received {:terminal, "run_malformed_wait"}
   end
 
   test "a submit exception is ambiguous and retains the fixed run ownership" do

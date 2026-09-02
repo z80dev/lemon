@@ -241,7 +241,7 @@ defmodule LemonControlPlane.A2A.Runner do
           task
 
         completion ->
-          finalize(task, completion)
+          finalize(task, completion, task[:runner_lease_id])
           A2AStore.get_task(task.id) || task
       end
     end
@@ -282,8 +282,6 @@ defmodule LemonControlPlane.A2A.Runner do
            if current.state == "TASK_STATE_SUBMITTED" and current[:runner_lease_id] == lease_id do
              current
              |> Map.put(:state, "TASK_STATE_WORKING")
-             |> Map.put(:runner_lease_id, nil)
-             |> Map.put(:runner_lease_expires_at_ms, nil)
              |> Map.put(:transition_id, transition_id)
            else
              current
@@ -317,19 +315,38 @@ defmodule LemonControlPlane.A2A.Runner do
           a2a: true,
           a2a_peer_id: task.peer_id,
           a2a_context_id: task.context_id,
-          router_replay_identity: "a2a:#{task.peer_id}:#{task.context_id}:#{task.id}"
+          router_replay_identity: a2a_replay_identity(task)
         }
       })
 
     case safe_submit(request) do
       {:ok, _run_id} -> continue_accepted_run(task, config.reply_timeout_ms, lease_id)
       {:error, :outcome_unknown} -> continue_accepted_run(task, config.reply_timeout_ms, lease_id)
-      error -> finalize(task, error)
+      error -> finalize(task, error, lease_id)
     end
   rescue
     error ->
       Logger.warning("A2A runner failed class=#{failure_class(error)}")
-      finalize(task, {:error, :runner_failed})
+      finalize(task, {:error, :runner_failed}, lease_id)
+  end
+
+  defp a2a_replay_identity(task) do
+    digest =
+      :crypto.hash(
+        :sha256,
+        [
+          "lemon:a2a-router-replay:v1",
+          <<0>>,
+          task.peer_id,
+          <<0>>,
+          task.context_id,
+          <<0>>,
+          task.id
+        ]
+      )
+      |> Base.encode16(case: :lower)
+
+    "a2a:v1:" <> digest
   end
 
   defp safe_submit(request) do
@@ -349,7 +366,7 @@ defmodule LemonControlPlane.A2A.Runner do
             completion -> completion
           end
 
-        finalize(task, result)
+        finalize(task, result, lease_id)
 
       # Cancellation or a newer recovery owner can win while submission is in
       # flight. This runner must not revive or overwrite that durable state.
@@ -361,17 +378,23 @@ defmodule LemonControlPlane.A2A.Runner do
           "A2A accepted-run ownership persistence failed class=#{failure_class(reason)}"
         )
 
-        finalize(task, {:error, :outcome_unknown})
+        finalize(task, {:error, :outcome_unknown}, lease_id)
     end
   end
 
-  defp finalize(task, {:ok, answer}) when is_binary(answer) do
+  defp finalize(task, {:ok, answer}, lease_id) when is_binary(answer) do
     state =
       if String.starts_with?(answer, "[INPUT_REQUIRED]"),
         do: "TASK_STATE_INPUT_REQUIRED",
         else: "TASK_STATE_COMPLETED"
 
-    case transition_nonterminal(task.id, %{state: state, answer: answer, error: nil}) do
+    case transition_owned_nonterminal(task.id, lease_id, %{
+           state: state,
+           answer: answer,
+           error: nil,
+           runner_lease_id: nil,
+           runner_lease_expires_at_ms: nil
+         }) do
       {:ok, :changed, %{state: ^state, answer: ^answer}} ->
         {:ok, _} = A2AStore.increment_turn(:inbound, task.peer_id, task.context_id)
 
@@ -395,13 +418,21 @@ defmodule LemonControlPlane.A2A.Runner do
     end
   end
 
-  defp finalize(task, {:error, :canceled}) do
-    _ = mark_canceled(task.id)
+  defp finalize(task, {:error, :canceled}, lease_id) do
+    _ =
+      transition_owned_nonterminal(task.id, lease_id, %{
+        state: "TASK_STATE_CANCELED",
+        answer: nil,
+        error: "canceled",
+        runner_lease_id: nil,
+        runner_lease_expires_at_ms: nil
+      })
+
     :ok
   end
 
-  defp finalize(task, {:error, :outcome_unknown}) do
-    case transition_nonterminal(task.id, %{
+  defp finalize(task, {:error, :outcome_unknown}, lease_id) do
+    case transition_owned_nonterminal(task.id, lease_id, %{
            state: "TASK_STATE_WORKING",
            answer: nil,
            error: @submission_reconciling
@@ -416,13 +447,15 @@ defmodule LemonControlPlane.A2A.Runner do
     end
   end
 
-  defp finalize(task, {:error, reason}) do
+  defp finalize(task, {:error, reason}, lease_id) do
     error = if reason == :timeout, do: "peer run timed out", else: "peer run failed"
 
-    case transition_nonterminal(task.id, %{
+    case transition_owned_nonterminal(task.id, lease_id, %{
            state: "TASK_STATE_FAILED",
            answer: nil,
-           error: error
+           error: error,
+           runner_lease_id: nil,
+           runner_lease_expires_at_ms: nil
          }) do
       {:ok, :changed, %{state: "TASK_STATE_FAILED"}} ->
         notify(task.id)
@@ -432,6 +465,24 @@ defmodule LemonControlPlane.A2A.Runner do
 
       {:error, update_reason} ->
         Logger.warning("A2A task finalization failed class=#{failure_class(update_reason)}")
+    end
+  end
+
+  defp transition_owned_nonterminal(task_id, lease_id, attrs) when is_map(attrs) do
+    transition_id = Id.uuid7()
+
+    case A2AStore.update_task(task_id, fn current ->
+           if not terminal_task?(current) and current[:runner_lease_id] == lease_id do
+             current
+             |> Map.merge(attrs)
+             |> Map.put(:transition_id, transition_id)
+           else
+             current
+           end
+         end) do
+      {:ok, %{transition_id: ^transition_id} = task} -> {:ok, :changed, task}
+      {:ok, task} -> {:ok, :unchanged, task}
+      {:error, _reason} = error -> error
     end
   end
 
