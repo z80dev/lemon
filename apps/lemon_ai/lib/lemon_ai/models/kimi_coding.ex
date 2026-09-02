@@ -2,38 +2,17 @@ defmodule LemonAi.Models.KimiCoding do
   @moduledoc """
   Model definitions for the KimiCoding provider.
 
-  This module is auto-extracted from `LemonAi.Models` as part of the
-  per-provider decomposition (Debt Phase 5, M2).
+  The catalog is data: `priv/models/kimi_coding.json`, loaded at compile time by
+  `LemonAi.Models.Catalog`, one entry per model with its capabilities and
+  per-million-token pricing. Edit the JSON to add a model or change a price;
+  `mix lemon.models` lists what is currently defined.
   """
 
-  alias LemonAi.Types.{Model, ModelCost}
+  alias LemonAi.Models.Catalog
+  alias LemonAi.Types.Model
 
-  @models %{
-    "kimi-k2-coding" => %Model{
-      id: "kimi-k2-coding",
-      name: "Kimi K2 Coding",
-      api: :anthropic_messages,
-      provider: :kimi_coding,
-      base_url: "https://api.kimi.com/coding",
-      reasoning: true,
-      input: [:text],
-      cost: %ModelCost{input: 0.0, output: 0.0, cache_read: 0.0, cache_write: 0.0},
-      context_window: 262_144,
-      max_tokens: 32_768
-    },
-    "kimi-k2.5-coding" => %Model{
-      id: "kimi-k2.5-coding",
-      name: "Kimi K2.5 Coding",
-      api: :anthropic_messages,
-      provider: :kimi_coding,
-      base_url: "https://api.kimi.com/coding",
-      reasoning: true,
-      input: [:text],
-      cost: %ModelCost{input: 0.0, output: 0.0, cache_read: 0.0, cache_write: 0.0},
-      context_window: 262_144,
-      max_tokens: 32_768
-    }
-  }
+  @external_resource Catalog.path("kimi_coding.json")
+  @models Catalog.load!("kimi_coding.json")
 
   @doc "Returns all KimiCoding model definitions as a map."
   @spec models() :: %{String.t() => Model.t()}

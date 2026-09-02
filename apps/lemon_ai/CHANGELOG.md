@@ -35,6 +35,15 @@ what in-repo code has been using.
   is picked up automatically by `LemonCore.Env` when both packages are present.
 - `mix lemon.models` lists the catalogue from the command line.
 
+### Changed
+
+- The 25 provider model catalogs moved from Elixir struct literals to
+  `priv/models/<provider>.json`, loaded and embedded at compile time by
+  `LemonAi.Models.Catalog`. Existing provider module names and `models/0`
+  return values are unchanged. Catalog files are external compiler resources;
+  malformed top-level data and entries fail with source/model context, while
+  API, provider, and input strings normalize through fixed atom allowlists.
+
 ### Notes
 
 - `lemon_ai` depends on no other Lemon package. It is usable on its own in any

@@ -21,8 +21,9 @@ defmodule LemonAi.Models do
       LemonAi.Models.supports_vision?(model)
       LemonAi.Models.supports_reasoning?(model)
 
-  Model data is defined in per-provider submodules under `LemonAi.Models.*` and
-  merged into a single compile-time registry here.
+  Model data is JSON under `priv/models/`, one file per provider, loaded at
+  compile time by `LemonAi.Models.Catalog` into the per-provider submodules
+  under `LemonAi.Models.*` and merged into a single compile-time registry here.
   """
 
   alias LemonAi.Types.{Model, ModelCost}

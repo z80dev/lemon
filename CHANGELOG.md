@@ -230,6 +230,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Changed
 
+- Lemon AI provider model catalogs now live as JSON under
+  `apps/lemon_ai/priv/models/` and are embedded at compile time by
+  `LemonAi.Models.Catalog`. Provider modules retain their existing names and
+  `models/0` APIs, catalog files are registered as external resources for
+  recompilation, malformed entries fail compilation with their model key, and
+  atom-valued fields accept only explicit API/provider/input allowlists.
 - `execute_code` gained an explicit result channel: `text()` blocks are the tool
   result (write-through flushed per call, so they survive a timeout/abort kill),
   while stdout/stderr is demoted to a clearly labeled diagnostics tail. Scripts
