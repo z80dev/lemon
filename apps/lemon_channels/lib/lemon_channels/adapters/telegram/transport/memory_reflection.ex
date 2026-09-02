@@ -1,6 +1,9 @@
 defmodule LemonChannels.Adapters.Telegram.Transport.MemoryReflection do
   @moduledoc false
 
+  require Logger
+
+  alias LemonChannels.SubmissionOutcome
   alias LemonChannels.Adapters.Telegram.ModelPolicyAdapter
   alias LemonCore.{ChatScope, RouterBridge, RunRequest, RunStore}
 
@@ -21,7 +24,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.MemoryReflection do
           integer() | nil,
           callbacks
         ) ::
-          :ok | :skip
+          :ok | :skip | {:error, term()}
   def submit_before_new(
         state,
         inbound,
@@ -82,12 +85,15 @@ defmodule LemonChannels.Adapters.Telegram.Transport.MemoryReflection do
           callbacks.maybe_subscribe_to_run.(run_id)
           :ok
 
-        _ ->
-          :skip
+        {:error, _} = error ->
+          log_submission_failure(error)
+          error
       end
     end
   rescue
-    _ -> :skip
+    _ -> unknown_submission_failure()
+  catch
+    _, _ -> unknown_submission_failure()
   end
 
   def submit_before_new(
@@ -164,4 +170,16 @@ defmodule LemonChannels.Adapters.Telegram.Transport.MemoryReflection do
   end
 
   defp format_run_history_entry(_), do: ""
+
+  defp unknown_submission_failure do
+    error = {:error, :outcome_unknown}
+    log_submission_failure(error)
+    error
+  end
+
+  defp log_submission_failure(error) do
+    Logger.warning(
+      "telegram memory reflection submission failed: reason=#{SubmissionOutcome.log_label(error)}"
+    )
+  end
 end

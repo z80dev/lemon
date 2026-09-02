@@ -102,7 +102,7 @@ share a group and are never delivered concurrently to prevent reordering.
 | `adapters/telegram/transport/pipeline.ex` | Telegram-local ingress coordinator for normalized events, authorization, dedupe, known-target refresh, buffer/media-group flush decisions, and action selection before transport-side execution. |
 | `adapters/telegram/transport/action_runner.ex` | Telegram-local executor for the small action vocabulary currently emitted by the pipeline; deeper Telegram UX logic still lives in transport helpers and command-specific modules. |
 | `adapters/telegram/transport/approval_request.ex` | Telegram approval-request message rendering and callback payload plumbing for exec approvals. |
-| `adapters/telegram/transport/callback_handler.ex` | Inline keyboard callback handling for approvals and model-picker flows. |
+| `adapters/telegram/transport/callback_handler.ex` | Inline keyboard callback handling for approvals, model-picker flows, cancellation, and keepalive. Ambiguous mutations use check-status wording and retain the original controls; logs contain only bounded failure classes. |
 | `adapters/telegram/transport/chat_preferences.ex` | Trigger gating plus `/trigger`, `/thinking`, and `/cwd` command handling extracted from the transport shell. |
 | `adapters/telegram/transport/runtime_state.ex` | Transport-local state helper for adapter-owned runtime data. |
 | `adapters/telegram/transport/poller.ex` | Poll loop + update dispatch extracted from `Transport`. Owns getUpdates cadence, webhook-conflict recovery, and callback/inbound fanout. |
@@ -112,10 +112,10 @@ share a group and are never delivered concurrently to prevent reordering.
 | `adapters/telegram/transport/inbound_actions.ex` | Router submission path for normal inbound messages. Progress reactions are acceptance-only; definite rejection releases provisional dedupe for redelivery and ambiguous outcomes stay deduped with honest feedback. |
 | `adapters/telegram/transport/inbound_context.ex` | Typed normalized context shared across normalize/pipeline/action-runner stages. |
 | `adapters/telegram/transport/media_groups.ex` | Coalescence of media group messages with debounce timer. |
-| `adapters/telegram/transport/memory_reflection.ex` | Pure helpers for `/new` memory-reflection transcript assembly and prompt generation. |
+| `adapters/telegram/transport/memory_reflection.ex` | `/new` memory-reflection transcript assembly and submission. Submission errors remain explicit, ambiguous results are never retried, and logs contain only bounded failure classes. |
 | `adapters/telegram/transport/message_buffer.ex` | Debounce buffering for rapid-fire user messages before routing, including timer replacement and merge semantics. |
 | `adapters/telegram/transport/model_picker.ex` | `/model` picker flow, provider/model pagination, and selection-state transitions. |
-| `adapters/telegram/transport/per_chat_state.ex` | Telegram per-thread chat state, native resume index, and generation bookkeeping helpers. Historical vendor entries remain readable but are quarantined from top-level selection. |
+| `adapters/telegram/transport/per_chat_state.ex` | Telegram per-thread chat state, native resume index, and generation bookkeeping helpers. Its safe abort wrapper preserves definite and ambiguous mutation failures instead of turning them into `:ok`. Historical vendor entries remain readable but are quarantined from top-level selection. |
 | `adapters/telegram/transport/resume_selection.ex` | Native-only explicit resume parsing, recent native-session lookup, and resume formatting helpers. |
 | `adapters/telegram/transport/session_routing.ex` | Session-key derivation, message-id reply routing, and parallel-session bookkeeping. |
 | `adapters/telegram/transport/topic_command.ex` | `/topic` command handling extracted from the transport shell. |
@@ -311,6 +311,7 @@ Defined in `LemonChannels.Capabilities`:
 - Session abort, cleanup, and optional memory reflection run in background tasks
 - Generation counter (`telegram_thread_generation`) is incremented to invalidate stale reply mappings
 - Memory reflection uses dedicated session key suffix (`:new_reflection`) with `queue_mode: :collect`
+- Memory-reflection submission is best-effort for the session transition, but its bridge result is preserved and safely logged; an ambiguous result must not be retried automatically
 
 ## Outbox System Details
 

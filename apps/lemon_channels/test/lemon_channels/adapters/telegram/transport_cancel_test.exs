@@ -2,6 +2,8 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
   alias Elixir.LemonChannels, as: LemonChannels
   use ExUnit.Case, async: false
 
+  import ExUnit.CaptureLog
+
   alias LemonChannels.Adapters.Telegram.ModelPolicyAdapter
   alias LemonChannels.Telegram.{ResumeIndexStore, StateStore}
   alias LemonChannels.ModelPolicy
@@ -455,6 +457,69 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
                    500
 
     refute_receive {:edit_message_text, ^chat_id, ^message_id, _, _}, 100
+  end
+
+  test "ambiguous keepalive preserves controls and asks the user to check run status" do
+    chat_id = 333_004_105
+    message_id = 905
+    callback_id = "keepalive-ambiguous"
+    run_id = "run-keepalive-ambiguous"
+    :persistent_term.put({CancelTestRouter, :keepalive_result}, {:error, :outcome_unknown})
+
+    CancelMockAPI.set_updates([
+      cancel_callback_update(
+        chat_id,
+        callback_id,
+        message_id,
+        "lemon:idle:c:" <> run_id
+      )
+    ])
+
+    assert {:ok, _pid} =
+             start_transport(%{
+               allowed_chat_ids: [chat_id],
+               deny_unbound_chats: false
+             })
+
+    assert_receive {:keep_run_alive, ^run_id, :continue}, 400
+
+    assert_receive {:answer_callback, ^callback_id, %{"text" => answer}}, 500
+    assert answer =~ "couldn't confirm run control"
+    assert answer =~ "check run status before retrying"
+    refute answer =~ "unavailable"
+    refute_receive {:edit_message_text, ^chat_id, ^message_id, _, _}, 100
+  end
+
+  test "ambiguous cancel uses honest wording and never logs raw router terms" do
+    chat_id = 333_004_106
+    message_id = 906
+    callback_id = "cancel-ambiguous"
+    run_id = "run-cancel-secret-that-must-not-leak"
+
+    :persistent_term.put({CancelTestRouter, :abort_run_result}, {:error, :outcome_unknown})
+
+    CancelMockAPI.set_updates([
+      cancel_callback_update(chat_id, callback_id, message_id, "lemon:cancel:" <> run_id)
+    ])
+
+    log =
+      capture_log([level: :warning], fn ->
+        assert {:ok, _pid} =
+                 start_transport(%{
+                   allowed_chat_ids: [chat_id],
+                   deny_unbound_chats: false
+                 })
+
+        assert_receive {:abort_run, ^run_id, :user_requested}, 400
+        assert_receive {:answer_callback, ^callback_id, %{"text" => answer}}, 500
+        assert answer =~ "couldn't confirm cancellation"
+        assert answer =~ "check run status before retrying"
+        refute answer =~ "unavailable"
+        refute_receive {:edit_message_text, ^chat_id, ^message_id, _, _}, 100
+      end)
+
+    assert log =~ "reason=outcome_unknown"
+    refute log =~ run_id
   end
 
   test "/model opens provider picker and does not route inbound" do

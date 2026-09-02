@@ -53,6 +53,13 @@ classifications rather than arbitrary router terms. Email applies the same
 boundary at HTTP level: only `:ok` returns 202, and every explicit or ambiguous
 handoff error returns 503 for provider redelivery.
 
+Telegram run-control callbacks distinguish definite rejection from an
+unacknowledged mutation. An unknown cancel or keepalive outcome tells the user
+to check run status before retrying, and failed keepalive callbacks leave the
+original inline controls intact. The optional `/new` memory-reflection submit
+also preserves and safely classifies bridge failures; it logs no request,
+session, run, or raw error data and never retries an ambiguous submit.
+
 **Semantic outbound**: Router emits `LemonCore.DeliveryIntent` values into `LemonChannels.Dispatcher`. Channel renderers decide truncation, send-vs-edit, buttons, media batching, and other platform UX details, while `LemonChannels.PresentationState` tracks message ids, pending creates/edits, deferred chunk sets, and post-edit follow-up chunks per `{route, run, surface}` so coalesced Telegram and Discord updates do not lose overflow chunks, leak superseded tails, detach long-answer follow-up chunks from the original prompt thread, enqueue long-answer tails before the final edit ack, or strand those tails or deferred final edits if the ack arrives before they finish staging. Discord streaming snapshots are truncated to one editable message; finalized Discord text is split at the safe 1,900-character outbound size and delivered as an edit plus ordered follow-ups, and repeated identical finals are suppressed when a newer sequence replays the same answer. Final idempotency includes auto-send file metadata so a later final with the same text but newly attached files still delivers those attachments.
 
 **Direct outbound**: Adapter helpers and other low-level callers may still enqueue `OutboundPayload` structs into the Outbox. The Outbox applies chunking (splitting long messages at sentence/word boundaries), deduplication (idempotency keys with a 1-hour TTL), and rate limiting (token bucket per channel/account). Messages are then delivered via the adapter's `deliver/1` callback with exponential-backoff retry on transient failures.

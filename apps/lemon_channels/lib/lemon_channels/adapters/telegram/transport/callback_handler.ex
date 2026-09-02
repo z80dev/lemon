@@ -582,8 +582,16 @@ defmodule LemonChannels.Adapters.Telegram.Transport.CallbackHandler do
 
     # Do not edit the source message on failure. Its inline keyboard is the
     # user's retry control and must remain available.
-    _ = answer_callback_query(state, cb_id, "run control unavailable; try again")
+    _ = answer_callback_query(state, cb_id, keepalive_failure_answer(error))
     :ok
+  end
+
+  defp keepalive_failure_answer(error) do
+    if SubmissionOutcome.uncertain?(error) do
+      "couldn't confirm run control; check run status before retrying"
+    else
+      "run control unavailable; try again"
+    end
   end
 
   defp parse_int(nil), do: nil
@@ -603,10 +611,14 @@ defmodule LemonChannels.Adapters.Telegram.Transport.CallbackHandler do
   defp control_answer(:ok, text), do: text
 
   defp control_answer({:error, reason}, _text) do
-    Logger.warning(
-      "telegram run control failed: reason=#{SubmissionOutcome.log_label({:error, reason})}"
-    )
+    error = {:error, reason}
 
-    "run control unavailable"
+    Logger.warning("telegram run control failed: reason=#{SubmissionOutcome.log_label(error)}")
+
+    if SubmissionOutcome.uncertain?(error) do
+      "couldn't confirm cancellation; check run status before retrying"
+    else
+      "run control unavailable"
+    end
   end
 end

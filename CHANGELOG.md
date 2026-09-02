@@ -10,6 +10,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Telegram memory-reflection and per-chat abort helpers no longer collapse
+  router mutation failures into success-like results. Ambiguous cancel and
+  keepalive callbacks now direct users to check run status before retrying,
+  retain their inline controls, and log only bounded failure classes.
 - MCP configuration validation now rejects non-boolean OAuth token-persistence
   flags and empty token secret names consistently before HTTP or SSE sources
   reach runtime startup.

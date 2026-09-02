@@ -5,10 +5,11 @@ defmodule LemonChannels.Runtime do
 
   Everything goes through `LemonCore.RouterBridge` and returns the bridge's
   answer unchanged, so an adapter can tell its user whether a cancel was
-  delivered (`:ok`), could not be delivered because no router is running
-  (`{:error, :unavailable}`), or hit a bug (`{:error, exception}`). Nothing
-  here swallows an error, invents a soft answer, or falls back to another
-  path: the bridge is the one seam, and it already distinguishes those cases.
+  delivered (`:ok`), definitely could not be delivered (`{:error, reason}`),
+  or may have applied without a valid acknowledgement
+  (`{:error, :outcome_unknown}`). Nothing here swallows an error, invents a
+  soft answer, or falls back to another path: the bridge is the one seam, and
+  it already distinguishes those cases.
   """
 
   alias LemonCore.InboundMessage

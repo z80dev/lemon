@@ -1,6 +1,7 @@
 defmodule LemonChannels.Adapters.Telegram.Transport.PerChatState do
   @moduledoc false
 
+  alias LemonChannels.Runtime
   alias LemonChannels.Telegram.{ResumeIndexStore, StateStore}
   alias LemonCore.{ChatScope, ChatState, ChatStateStore, ResumeToken, SessionKey}
 
@@ -29,16 +30,17 @@ defmodule LemonChannels.Adapters.Telegram.Transport.PerChatState do
 
   def safe_delete_session_model(_session_key), do: :ok
 
-  @spec safe_abort_session(term(), term()) :: :ok
+  @spec safe_abort_session(term(), term()) :: :ok | {:error, term()}
   def safe_abort_session(session_key, reason)
       when is_binary(session_key) and byte_size(session_key) > 0 do
-    _ = LemonCore.RouterBridge.abort_session(session_key, reason)
-    :ok
+    Runtime.cancel_session(session_key, reason)
   rescue
-    _ -> :ok
+    _ -> {:error, :outcome_unknown}
+  catch
+    _, _ -> {:error, :outcome_unknown}
   end
 
-  def safe_abort_session(_, _), do: :ok
+  def safe_abort_session(_, _), do: {:error, :invalid_session_key}
 
   @spec safe_delete_selected_resume(binary() | nil, integer(), integer() | nil) :: :ok
   def safe_delete_selected_resume(account_id, chat_id, thread_id) when is_integer(chat_id) do
