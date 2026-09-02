@@ -4,6 +4,7 @@ defmodule CodingAgent.Session.StateTest do
   alias LemonAgent.Types.AgentTool
   alias LemonAi.Types.{TextContent, ToolResultMessage}
   alias CodingAgent.Session.State
+  alias CodingAgent.Session.OverflowRecovery
 
   test "normalize_extra_tools keeps only AgentTool structs" do
     tool = %AgentTool{
@@ -79,12 +80,14 @@ defmodule CodingAgent.Session.StateTest do
       is_streaming: false,
       pending_prompt_timer_ref: nil,
       turn_index: 4,
-      overflow_recovery_in_progress: true,
-      overflow_recovery_attempted: true,
-      overflow_recovery_signature: :sig,
-      overflow_recovery_started_at_ms: 12,
-      overflow_recovery_error_reason: :boom,
-      overflow_recovery_partial_state: %{foo: :bar}
+      overflow_recovery: %OverflowRecovery.State{
+        in_progress: true,
+        attempted: true,
+        signature: :sig,
+        started_at_ms: 12,
+        error_reason: :boom,
+        partial_state: %{foo: :bar}
+      }
     }
 
     next_state = State.begin_prompt(state, timer_ref)
@@ -92,12 +95,7 @@ defmodule CodingAgent.Session.StateTest do
     assert next_state.is_streaming
     assert next_state.pending_prompt_timer_ref == timer_ref
     assert next_state.turn_index == 5
-    refute next_state.overflow_recovery_in_progress
-    refute next_state.overflow_recovery_attempted
-    assert next_state.overflow_recovery_signature == nil
-    assert next_state.overflow_recovery_started_at_ms == nil
-    assert next_state.overflow_recovery_error_reason == nil
-    assert next_state.overflow_recovery_partial_state == nil
+    assert next_state.overflow_recovery == %OverflowRecovery.State{}
   end
 
   defp marker_count(text, marker) do

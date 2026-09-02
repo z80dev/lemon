@@ -8,6 +8,13 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
+### Changed
+
+- `CodingAgent.Session` now keeps heartbeat, automatic-compaction, and
+  overflow-recovery bookkeeping in state structs owned by those subsystems
+  instead of twenty loose session fields. Public APIs, emitted events, and
+  the persisted session format are unchanged.
+
 ### Fixed
 
 - The LemonSim UI test-only `lazy_html` dependency now uses a bounded
