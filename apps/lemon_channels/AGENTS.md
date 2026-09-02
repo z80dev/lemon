@@ -1,6 +1,6 @@
 # LemonChannels AGENTS.md
 
-Channel adapter application for external messaging platforms (Telegram, Discord, X/Twitter, XMTP, WhatsApp).
+Channel adapter application for external messaging platforms (Telegram, Discord, XMTP, WhatsApp, email).
 
 ## Quick Orientation
 
@@ -160,13 +160,6 @@ Provider availability in the Telegram `/model` picker should match the real prov
 | `adapters/discord/status_renderer.ex` | Builds Discord button rows for cancel/keep-waiting UX. |
 | `adapters/discord/outbound.ex` | Delivers via `Nostrum.Api.Message` (create, edit, delete, reaction, multipart file upload). |
 
-### X API Adapter
-
-| File | What It Does |
-|------|-------------|
-| `adapters/x_api.ex` | Plugin impl. id: `"x_api"`, chunk_limit: 280, rate_limit: 2400/day. Delegates config, auth, token refresh, and HTTP calls to `XApi`. |
-| `adapters/x_api/gateway_methods.ex` | Control plane methods: `x_api.post_tweet`, `x_api.get_mentions`, `x_api.reply_to_tweet` (scoped `:agent`) backed by `XApi.Client`. |
-
 ### XMTP Adapter
 
 | File | What It Does |
@@ -284,7 +277,7 @@ Defined in `LemonChannels.Capabilities`:
 ### Adding a gateway method to an adapter
 
 1. Define the method in the adapter's `gateway_methods/0` return list
-2. Create or update the handler module (e.g., `XAPI.GatewayMethods`)
+2. Create or update the handler module (e.g., `Email.GatewayMethods`)
 3. Methods have a name, scope list (e.g., `[:agent]`), and handler module
 
 ### Changing bindings and native resume handling
@@ -446,27 +439,6 @@ LemonChannels.Telegram.TriggerMode.set(scope, account_id, :mentions)
 
 %{mode: :mentions, source: :topic} = LemonChannels.Telegram.TriggerMode.resolve(account_id, chat_id, topic_id)
 ```
-
-## X API Integration
-
-### Configuration
-
-OAuth 2.0: `X_API_CLIENT_ID`, `X_API_CLIENT_SECRET`, `X_API_ACCESS_TOKEN`, `X_API_REFRESH_TOKEN`, `X_API_BEARER_TOKEN`
-
-OAuth 1.0a: `X_API_CONSUMER_KEY`, `X_API_CONSUMER_SECRET`, `X_API_ACCESS_TOKEN`, `X_API_ACCESS_TOKEN_SECRET`
-
-Common: `X_DEFAULT_ACCOUNT_ID`, `X_DEFAULT_ACCOUNT_USERNAME`
-
-Auto-detects auth method through `XApi.configured?/0`. Secrets resolve through `XApi` using `LemonCore.Secrets` by default.
-`XApi.search_configured?/0` also accepts bearer-token-only credentials for read-only recent public search.
-
-### Gateway Methods
-
-`x_api.post_tweet`, `x_api.get_mentions`, `x_api.reply_to_tweet` (all scoped `:agent`).
-
-### Token Management
-
-Auto-refresh is owned by the `XApi.TokenManager` GenServer in `apps/x_api`; the channel adapter starts the same child when registered.
 
 ## XMTP Integration
 
@@ -706,7 +678,7 @@ end
 | `lemon_router` | Inbound messages are routed via `LemonCore.RouterBridge`. `LemonChannels.Runtime` bridges cancel/busy operations at runtime (no compile dep). |
 | `agent_core` | Provides task infrastructure used by native in-process subagents; channels never hand it `OutboundPayload` structs directly. |
 | `coding_agent` | Provides the native top-level executor through the router; channels deliver its output. |
-| `lemon_control_plane` | Gateway methods from adapters (e.g., `x_api.post_tweet`) are exposed through the control plane. |
+| `lemon_control_plane` | Gateway methods contributed by adapters are exposed through the control plane. |
 
 ## Dependencies
 

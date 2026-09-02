@@ -702,7 +702,7 @@ Supported for stable 1.0:
 - Provider configuration through documented secrets and setup paths.
 - TUI, web, Telegram, Discord, and control-plane issues that can be reproduced on a
   supported source install or Linux release artifact.
-- X/Twitter, XMTP, SMS, voice, and other channel adapters only as
+- XMTP, SMS, voice, and other channel adapters only as
   preview surfaces unless promoted by release notes.
 - First-party text web search/fetch issues that can be reproduced in a
   supported agent run.

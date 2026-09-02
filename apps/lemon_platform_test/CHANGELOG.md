@@ -70,5 +70,5 @@ compliance suite runs against your module.
   be worse than no suite at all.
 - The suites were validated against deliberately broken implementations to
   confirm they fail rather than passing vacuously, and against real
-  implementations such as `XApi.ChannelAdapter` from their owning applications,
-  which is the dependency direction a third party has.
+  implementations from their owning applications, which is the dependency
+  direction a third party has.

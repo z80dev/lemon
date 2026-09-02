@@ -82,8 +82,7 @@ defmodule CodingAgent.ToolPolicy do
     "kanban",
     "task",
     "agent",
-    "extensions_status",
-    "x_search"
+    "extensions_status"
   ]
 
   @external_tools [
@@ -111,7 +110,6 @@ defmodule CodingAgent.ToolPolicy do
     "browser_analyze",
     "browser_exec",
     "computer_use",
-    "x_search",
     "media_status",
     "media_generate_image",
     "media_generate_speech",

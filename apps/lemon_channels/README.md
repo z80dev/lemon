@@ -1,6 +1,6 @@
 # LemonChannels
 
-Channel adapter layer for the Lemon AI assistant platform. Provides a pluggable adapter system for external messaging platforms (Telegram, Discord, X/Twitter, XMTP, WhatsApp), a router-facing semantic delivery dispatcher, channel-owned presentation state, a reliable outbox delivery queue with retry, chunking, deduplication, and rate limiting, and inbound message normalization that submits canonical `LemonCore.RunRequest` structs to the router.
+Channel adapter layer for the Lemon AI assistant platform. Provides a pluggable adapter system for external messaging platforms (Telegram, Discord, XMTP, WhatsApp, and email), a router-facing semantic delivery dispatcher, channel-owned presentation state, a reliable outbox delivery queue with retry, chunking, deduplication, and rate limiting, and inbound message normalization that submits canonical `LemonCore.RunRequest` structs to the router.
 
 This app depends only on `lemon_core` (in-umbrella), plus `jason`, `earmark_parser`, `req`, and `nostrum` (runtime: false).
 
@@ -103,7 +103,6 @@ LemonChannels.Application
     |   +-- Telegram.Transport            (GenServer - long-polling)
     +-- Discord.Supervisor                (if configured)
     |   +-- Discord.Transport             (Nostrum consumer)
-    +-- XApi.TokenManager                 (if configured, GenServer from apps/x_api)
     +-- XMTP.Transport                    (if configured, GenServer + Port)
     +-- WhatsApp.Supervisor               (if configured)
         +-- WhatsApp.AsyncSupervisor      (Task.Supervisor)
@@ -537,34 +536,6 @@ generated command-schema regression without inspecting Discord credentials.
 
 Add `LemonChannels.Adapters.Discord` to `config :lemon_channels, :adapters`. Required: Discord bot token. Uses the `nostrum` library (declared as `runtime: false` dep; runtime availability is expected from the deployment environment).
 
-### X (Twitter) API
-
-**Plugin ID**: `"x_api"` | **Chunk limit**: 280 | **Rate limit**: 2400/day
-
-Supports edit, delete, images, threads, mentions, and read-only recent public search. Primarily outbound (posting tweets). Uses X API v2.
-
-#### Module Layout
-
-| Module | Purpose |
-|--------|---------|
-| `LemonChannels.Adapters.XAPI` | Plugin behaviour and outbound payload delivery |
-| `LemonChannels.Adapters.XAPI.GatewayMethods` | Control plane methods: `x_api.post_tweet`, `x_api.get_mentions`, `x_api.reply_to_tweet` |
-| `XApi` | Reusable X API config, auth detection, HTTP client, OAuth helpers, and token manager in `apps/x_api` |
-
-#### Authentication
-
-The adapter supports two auth methods and auto-detects which to use:
-
-**Read-only search**: `X_API_BEARER_TOKEN` is enough for `x_search`.
-
-**OAuth 2.0**: `X_API_CLIENT_ID`, `X_API_CLIENT_SECRET`, `X_API_ACCESS_TOKEN`, `X_API_REFRESH_TOKEN`, `X_API_BEARER_TOKEN`
-
-**OAuth 1.0a**: `X_API_CONSUMER_KEY`, `X_API_CONSUMER_SECRET`, `X_API_ACCESS_TOKEN`, `X_API_ACCESS_TOKEN_SECRET`
-
-**Common**: `X_DEFAULT_ACCOUNT_ID`, `X_DEFAULT_ACCOUNT_USERNAME`
-
-Config can be set via `config :x_api, XApi`. Existing `config :lemon_channels, LemonChannels.Adapters.XAPI` settings remain supported as a compatibility fallback. Secrets are resolved through `LemonCore.Secrets` by default.
-
 ### XMTP
 
 **Plugin ID**: `"xmtp"` | **Chunk limit**: 2000
@@ -766,14 +737,6 @@ Adapters run under `LemonChannels.AdapterSupervisor` (DynamicSupervisor).
 | `Adapters.Discord.StatusRenderer` | Button/control rendering helpers |
 | `Adapters.Discord.Outbound` | Deliver via Nostrum API, including multipart file upload |
 
-### X API
-
-| Module | Purpose |
-|--------|---------|
-| `Adapters.XAPI` | Plugin behaviour and outbound payload delivery |
-| `Adapters.XAPI.GatewayMethods` | Control plane methods |
-| `XApi.*` | Reusable X API client, OAuth helpers, and token manager in `apps/x_api` |
-
 ### XMTP
 
 | Module | Purpose |
@@ -848,7 +811,7 @@ end
 | `lemon_core` | in_umbrella | Shared primitives: `InboundMessage`, `Store`, `Secrets`, `RouterBridge`, `Dedupe.Ets`, `Telemetry` |
 | `jason` | ~> 1.4 | JSON encoding/decoding |
 | `earmark_parser` | ~> 1.4 | Markdown parsing (used by `Telegram.Markdown` for rendering to Telegram entities) |
-| `req` | ~> 0.5.0 | HTTP client (used by Telegram API, X API, voice transcription) |
+| `req` | ~> 0.5.0 | HTTP client (used by Telegram API and voice transcription) |
 | `nostrum` | ~> 0.9 | Discord library (`runtime: false` -- expected from deployment environment) |
 
 ## Important Notes

@@ -10,7 +10,7 @@ defmodule LemonEvals.Evals.Foundational do
   alias CodingAgent.ToolRegistry
   alias LemonEvals.Types
 
-  @required_builtin_tools ~w(read read_skill skill_manage memory_topic memory search_memory session_search checkpoint write edit patch bash grep find ls webfetch websearch browser_navigate browser_snapshot browser_get_content browser_click browser_type browser_hover browser_select_option browser_upload_file browser_download browser_press browser_scroll browser_back browser_wait_for_selector browser_evaluate browser_events browser_get_cookies browser_set_cookies browser_clear_state browser_screenshot todo task extensions_status x_search)
+  @required_builtin_tools ~w(read read_skill skill_manage memory_topic memory search_memory session_search checkpoint write edit patch bash grep find ls webfetch websearch browser_navigate browser_snapshot browser_get_content browser_click browser_type browser_hover browser_select_option browser_upload_file browser_download browser_press browser_scroll browser_back browser_wait_for_selector browser_evaluate browser_events browser_get_cookies browser_set_cookies browser_clear_state browser_screenshot todo task extensions_status)
 
   @spec deterministic_contract_eval(String.t()) :: Types.eval_result()
   def deterministic_contract_eval(cwd) do

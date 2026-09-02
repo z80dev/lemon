@@ -95,8 +95,8 @@ change what its answer means.
 
 **It boots its own Lemon.** Every subcommand starts the umbrella in the mix task's own
 node before it does anything else. That means the HTTP listeners try to bind, a
-configured Discord bot connects a second shard, and start-up work like the X API token
-refresh runs — as a side effect of asking for status. On a machine where Lemon is
+configured Discord bot connects a second shard, and other application start-up work
+runs — as a side effect of asking for status. On a machine where Lemon is
 already running, the ports are taken and the command dies with `:eaddrinuse` before
 printing a line, which is exactly the machine you are on when you most want to check.
 Stop the running Lemon and run it, or run it from the same shell environment on a host
@@ -393,7 +393,7 @@ starts the umbrella in the node `mix` is running, and that node is never the Lem
 serving your conversations. Two consequences, and the second is the one that misleads.
 
 *It has to boot a whole Lemon to answer.* Listeners bind, a configured Discord bot
-connects a second shard, start-up work such as the X API token refresh runs. If Lemon
+connects a second shard, and other application start-up work runs. If Lemon
 is already running on the machine, the ports are taken, and the command exits with
 `:eaddrinuse` without printing anything. There is no flag that skips this. Stop the
 running Lemon first, or run the command from a host that is not serving with the same

@@ -1,6 +1,6 @@
 # Phase 5 — Product-Repo Extraction Readiness
 
-Status: **investigation (2026-08-10).** Dep facts read from `apps/*/mix.exs` and grepped call
+Status: **historical investigation (2026-08-10; refreshed 2026-09-01).** Dependency facts read from `apps/*/mix.exs` and grepped call
 sites against the tree at the time of writing. The coding_agent-blocker resolution below is a
 **proposed decision (needs user sign-off)** — actually extracting a repo is a larger commitment
 than the boundary work of Phases 1–4, so this document names and prices the blocker rather than
@@ -22,8 +22,9 @@ The nine published packages (post-D13) are:
 Everything else in `apps/` is either a **reference-runtime** app (stays in the platform repo,
 unpublished: `lemon_control_plane`, `lemon_cli`, `lemon_web`, `lemon_automation`, `lemon_skills`,
 `lemon_browser`, `lemon_lsp`) or a **product** app slated to leave (`coding_agent`,
-`coding_agent_ui`, `lemon_mcp`, `lemon_evals`, `lemon_sim`, `lemon_sim_ui`, `lemon_tcg`), plus the
-`x_api` satellite (D7).
+`coding_agent_ui`, `lemon_mcp`, `lemon_evals`, `lemon_sim`, `lemon_sim_ui`, `lemon_tcg`).
+The former X/Twitter satellite was deleted from the Lemon harness under D17 and
+is no longer an extraction target.
 
 An app is **extraction-ready** iff every one of its `in_umbrella` deps is either (a) a published
 package, or (b) another app in the *same product group* (which leaves in the same `git filter-repo`

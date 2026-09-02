@@ -36,11 +36,10 @@ defmodule LemonAgent.ToolRegistry do
 
   ## The satellite pattern
 
-  `apps/x_api` is the worked example. It is an ordinary umbrella app that the
-  platform has no compile-time knowledge of: nothing in `coding_agent` or
-  `lemon_mcp` names it. Its application callback registers its three tools at
-  boot, guarded so the app still starts in a build where the agent runtime is
-  absent:
+  An external integration can register its tools from its application callback
+  without requiring the platform to name the integration at compile time. Guard
+  registration so the package still starts in a build where the agent runtime
+  is absent:
 
       defp register_tools do
         if Code.ensure_loaded?(LemonAgent.ToolRegistry) do
@@ -52,11 +51,10 @@ defmodule LemonAgent.ToolRegistry do
         :ok
       end
 
-  `XApi.Tools.PostToX` is then a plain tool module — `tool/1`, `tool/2`,
+  `MyIntegration.Tools.MyTool` is then a plain tool module — `tool/1`, `tool/2`,
   `execute/4` — that returns a "not configured" result rather than raising when
-  its credentials are missing, so the tool is safe to register unconditionally.
-  A package outside this repo plugs in exactly the same way; registering from
-  the application callback is what makes ordering irrelevant.
+  its credentials are missing, so it is safe to register unconditionally.
+  Registering from the application callback is what makes ordering irrelevant.
   """
 
   require Logger

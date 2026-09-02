@@ -25,9 +25,6 @@ config :lemon_core, config_test_mode: true
 # Tests opt into channel adapters explicitly.
 config :lemon_channels, adapters: []
 
-# Tests start X API token managers explicitly when required.
-config :x_api, start_token_manager: false
-
 # The Honcho satellite reads the vendor's own `HONCHO_API_KEY` when no Lemon-side
 # key is configured, which is a deliberate convenience in dev and prod — and a
 # hazard here: a developer who exported that variable for some other Honcho

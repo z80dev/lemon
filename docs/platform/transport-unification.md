@@ -1,10 +1,15 @@
 # Phase 2.4 — Transport Unification: Inventory and Port Design
 
-Status: **design (Phase A).** Written 2026-08-10 against `463db837..8f76026d`.
+Status: **historical design (Phase A).** Written 2026-08-10 against `463db837..8f76026d`.
 
 > **Update 2026-08-10:** the Farcaster transport has been **deleted** (D12; ~1.4k LOC incl.
 > tests). The inventory below has been updated to the post-deletion tree; the analysis of why
 > it did not fit `Plugin` is retained because it is the reasoning behind the decision.
+>
+> **Update 2026-09-01:** the former in-tree X/Twitter satellite used as an
+> extension-boundary example was subsequently removed from the Lemon harness.
+> The generic registry and capability lessons below remain applicable; no
+> current `apps/x_api` paths or built-in X integration exist.
 
 This document records the verified inventory, control-plane coupling, environment
 variables, chat-state dependency, Telegram surfaces, and the recommended amendment
@@ -207,9 +212,9 @@ naming two of them in core — the same inversion as `EngineInfoBridge` (2.5) an
 the data exists; what is missing is a core-side bridge so `lemon_core` can ask without depending
 on `lemon_channels`.
 
-This is genuinely blocked on **2.3** (x_api is proving the runtime self-registration path) and
-overlaps **2.5** (bridge pattern). It is not blocked on transport unification. Move it out of
-2.4 and attach it to 2.5, where the identical bridge is already being built.
+At the time this was blocked on **2.3**, which was proving the runtime
+self-registration path, and overlapped **2.5** (bridge pattern). It was moved
+out of 2.4 and attached to 2.5, where the identical bridge was already being built.
 
 ## 7. What 2.4 should actually deliver
 
@@ -259,33 +264,20 @@ by attrition, then remove it, rather than forcing four bad ports to justify a de
 
 ## 7a. Capability delegation — `LemonChannels.Capabilities` (addendum from 2.3 close-out)
 
-### What exists today: three sources, two vocabularies
+### What existed at the time: three sources, two vocabularies
 
 | Source | Shape | Owner | Used by |
 |---|---|---|---|
-| `Plugin.meta/0`'s `capabilities` map | snake_case flags + numbers: `edit_support`, `delete_support`, `thread_support`, `reaction_support`, `voice_support`, `image_support`, `file_support`, `chunk_limit`, `rate_limit` | each adapter (incl. the x_api satellite) | `Registry.get_capabilities/1` |
+| `Plugin.meta/0`'s `capabilities` map | snake_case flags + numbers: `edit_support`, `delete_support`, `thread_support`, `reaction_support`, `voice_support`, `image_support`, `file_support`, `chunk_limit`, `rate_limit` | each adapter | `Registry.get_capabilities/1` |
 | `Capabilities.from_legacy/1` (`capabilities.ex:636`) | converts the above into the typed form | lemon_channels | `Registry.get_capabilities_new/1` → `supports?/3`, `supports_feature?/3`, `validate/3` |
-| `Capabilities.Registry.lookup/1` (`capabilities.ex:282-346`) | **static, string-keyed table** hard-coding `"telegram"`, `"discord"`, `"x_api"`, `"xmtp"`, `"whatsapp"`; richer typed vocabulary: `:threads`, `:reactions`, `{:attachments, max_size:, features:}`, `{:rich_blocks, features:}`, `{:chunk_limit, value:}`, `{:rate_limit, value:}` | lemon_channels | `capability_query.ex:102`, `capabilities_test.exs` |
+| `Capabilities.Registry.lookup/1` (`capabilities.ex:282-346`) | **static, string-keyed table** hard-coding adapter ids; richer typed vocabulary: `:threads`, `:reactions`, `{:attachments, max_size:, features:}`, `{:rich_blocks, features:}`, `{:chunk_limit, value:}`, `{:rate_limit, value:}` | lemon_channels | `capability_query.ex:102`, `capabilities_test.exs` |
 
 So capability data lives in **two independent places** with **two different vocabularies**, and
 there is no mechanism keeping them in sync. `Registry.supports?/validate` read the *registered
 adapter's* meta (via `from_legacy`); `Registry.lookup/1` reads the *static table*. Nothing
 reconciles them.
 
-### The concrete case: x_api's 280-char chunk limit
-
-`chunk_limit: 280` is declared **twice**: `apps/x_api/lib/x_api/channel_adapter.ex:24` (the
-satellite's own `meta/0`) and `apps/lemon_channels/lib/lemon_channels/capabilities.ex:320` (the
-static table). `capabilities_test.exs:386-395` asserts against the *static* one, so the satellite
-could change its real limit and the test would keep passing.
-
-This is now a **D7 violation in substance**. D7 says the platform "loses all compile-time
-knowledge of X", and 2.3 just moved the X adapter out to a satellite — but `lemon_channels` still
-carries a hard-coded `lookup("x_api")` clause describing it. The satellite is no longer able to
-be the source of truth about itself. The same will be true of any future satellite, and of email
-once it ports.
-
-Note also the vocabularies are not equivalent, so this is not a pure duplication: `from_legacy`
+The vocabularies were not equivalent, so this was not a pure duplication: `from_legacy`
 can express neither `max_size` for attachments (it only ever sets `features: [:images]`) nor
 `rich_blocks` features nor `rate_limit`. The static table is strictly richer. Any delegation
 must therefore *widen the meta contract*, not just redirect lookups — otherwise telegram/discord
@@ -300,8 +292,7 @@ resolved through registered-adapter meta and already returned nil/false for unkn
 referenced it. The unconfigured-channel contract question was therefore moot: no caller could
 observe either answer.
 
-So `lookup/1` was deleted outright rather than repointed, `get_set/1` kept, the x_api assertions
-moved to `apps/x_api/test/x_api/channel_adapter_test.exs` against the satellite's own `meta/0`,
+So `lookup/1` was deleted outright rather than repointed, `get_set/1` kept,
 and the `Plugin.meta/0` widening was **deferred** — see the Deferred section of
 `platform-split.md`, which records the richer vocabulary the table carried so it isn't lost with
 the code. Growing the platform's most third-party-facing extension point for data nobody reads
@@ -320,12 +311,11 @@ Capability lookup delegates to the registered adapter; the static table is delet
 2. **Make `Capabilities.Registry.lookup/1` resolve through the channels registry**: look up the
    registered plugin module for the id, call its `meta/0`, and build capabilities from that.
    Fall back to `Capabilities.empty()` for unknown ids exactly as today (`capabilities.ex:345`).
-3. **Delete the five hard-coded clauses.** Each adapter's own `meta/0` becomes the single source
-   of truth, and satellites self-describe — which is what D7 requires and what 2.3 assumed.
+3. **Delete the hard-coded clauses.** Each adapter's own `meta/0` becomes the single source
+   of truth and external integrations self-describe.
 4. **Move the assertions.** `capabilities_test.exs`'s per-channel tests currently pin platform-side
    constants; they should either move next to each adapter (asserting *that adapter's* meta) or
-   assert the delegation mechanism against a test double, not real channel constants. The x_api
-   280 assertion in particular belongs in `apps/x_api`, not in `lemon_channels`.
+   assert the delegation mechanism against a test double, not real channel constants.
 
 ### Why this belongs to 2.4 rather than 2.5
 
@@ -336,8 +326,7 @@ about the platform reading *gateway* state across an app boundary — related in
 data and different direction.
 
 Sizing: step 1 **S**, step 2 **S**, steps 3–4 **M** (the test churn is the bulk). No collision
-with 2.2. It does touch `lemon_channels/capabilities.ex` and the x_api adapter, so it should land
-after 2.3 — which is now complete, so this is unblocked.
+with 2.2.
 
 **Caveat worth deciding explicitly:** delegation makes capability lookup depend on a plugin being
 *registered at runtime*. Today `lookup("telegram")` answers correctly even if Telegram was never

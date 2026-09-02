@@ -119,9 +119,8 @@ defmodule LemonHoncho.Application do
   end
 
   # The tools register unconditionally. Each one reports "Honcho is not
-  # configured" as a normal tool result rather than raising, which is the
-  # convention `XApi.Tools.XSearch` set: a model that asks for memory on an
-  # unconfigured host should be told so, not handed an error.
+  # configured" as a normal tool result rather than raising: a model that asks
+  # for memory on an unconfigured host should be told so, not handed an error.
   defp register_tools do
     if Code.ensure_loaded?(LemonAgent.ToolRegistry) do
       Enum.each(@tools, fn {name, module} ->

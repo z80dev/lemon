@@ -46,8 +46,7 @@ boot, from `LemonHoncho.Application`:
 Provider and contributor registration are gated because an unregistered provider
 costs nothing while a registered one that cannot answer adds its timeout to every
 memory search. Tools register unconditionally because a model that asks for memory on
-an unconfigured host should be told so as a normal tool result — the convention
-`XApi.Tools.XSearch` set.
+an unconfigured host should be told so as a normal tool result.
 
 Every registration is individually guarded and every failure is swallowed at debug: a
 partially-started runtime (a release without `lemon_memory`, a test that starts this

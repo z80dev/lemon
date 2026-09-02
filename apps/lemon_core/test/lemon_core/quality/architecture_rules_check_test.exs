@@ -1118,7 +1118,7 @@ defmodule LemonCore.Quality.ArchitectureRulesCheckTest do
         ~S'''
         defmodule LemonWeb.DocsOnly do
           @moduledoc """
-          Sessions are persisted by CodingAgent.SessionManager and posted via XApi.Client.
+          Sessions are persisted by CodingAgent.SessionManager.
           """
 
           # CodingAgent.Session is the in-process engine.
@@ -1129,33 +1129,6 @@ defmodule LemonCore.Quality.ArchitectureRulesCheckTest do
 
       assert {:ok, report} = ArchitectureRulesCheck.run(root: tmp_dir)
       assert report.issue_count == 0
-    after
-      File.rm_rf!(tmp_dir)
-    end
-  end
-
-  test "flags XApi references outside the x_api satellite" do
-    tmp_dir = tmp_repo!()
-
-    try do
-      write_file!(
-        tmp_dir,
-        "apps/lemon_skills/lib/lemon_skills/tools/bad_x_tool.ex",
-        """
-        defmodule LemonSkills.Tools.BadXTool do
-          alias XApi.Client
-
-          def bad(query), do: Client.search(query)
-        end
-        """
-      )
-
-      assert {:error, report} = ArchitectureRulesCheck.run(root: tmp_dir)
-
-      assert Enum.any?(report.issues, fn issue ->
-               issue.code == :x_api_boundary and
-                 issue.path == "apps/lemon_skills/lib/lemon_skills/tools/bad_x_tool.ex"
-             end)
     after
       File.rm_rf!(tmp_dir)
     end

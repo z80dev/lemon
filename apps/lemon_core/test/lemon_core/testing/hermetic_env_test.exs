@@ -24,9 +24,7 @@ defmodule LemonCore.Testing.HermeticEnvTest do
     "MOONSHOT_API_KEY",
     "ZAI_API_KEY",
     "MINIMAX_API_KEY",
-    "FIREWORKS_API_KEY",
-    "X_API_BEARER_TOKEN",
-    "X_API_ACCESS_TOKEN_SECRET"
+    "FIREWORKS_API_KEY"
   ]
 
   setup do

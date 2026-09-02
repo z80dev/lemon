@@ -81,7 +81,6 @@ Tools are divided into two sets. `coding_tools/2` is the default set passed to s
 | **Execution** | `bash` (`execute_code` is a config-gated builtin appended last in `@builtin_tools`: default-off via `[runtime.tools.execute_code] enabled`, bash-equivalent, and filtered out of the disclosed set unless enabled) |
 | **Web / Browser / Media** | `websearch`, `webfetch`, `browser_tabs`, `browser_tab_open`, `browser_tab_activate`, `browser_tab_close`, `browser_navigate`, `browser_snapshot`, `browser_get_content`, `browser_click`, `browser_type`, `browser_hover`, `browser_select_option`, `browser_upload_file`, `browser_download`, `browser_press`, `browser_scroll`, `browser_back`, `browser_wait_for_selector`, `browser_evaluate`, `browser_events`, `browser_get_cookies`, `browser_set_cookies`, `browser_clear_state`, `browser_screenshot`, `browser_analyze`, `browser_exec`, `computer_use`, `media_status`, `media_generate_image`, `media_generate_speech`, `media_transcribe_audio`, `media_analyze_image`, `media_generate_video` |
 | **Task/Agent** | `task`, `agent`, `parent_question`, `todo`, `kanban` |
-| **Social** | `x_search`, `post_to_x`, `get_x_mentions` |
 | **System** | `tool_auth`, `extensions_status` |
 
 `execute_code` is programmatic tool calling: the model submits a python3 script that
@@ -978,7 +977,6 @@ apps/coding_agent/
 |   |   |   +-- task.ex, agent.ex
 |   |   |   +-- tool_auth.ex, extensions_status.ex
 |   |   |   +-- read_skill.ex, skill_manage.ex, memory_topic.ex, truncate.ex
-|   |   |   +-- x_search.ex, post_to_x.ex, get_x_mentions.ex
 |   |   |   +-- lsp_formatter.ex, lsp_diagnostics.ex, restart.ex
 |   |   |   +-- feature_requirements.ex
 |   |   +-- budget_tracker.ex, budget_enforcer.ex

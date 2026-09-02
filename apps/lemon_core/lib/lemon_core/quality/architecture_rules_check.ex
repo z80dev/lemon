@@ -551,14 +551,6 @@ defmodule LemonCore.Quality.ArchitectureRulesCheck do
       ]
     },
     %{
-      code: :x_api_boundary,
-      message:
-        "Only apps/x_api may reference XApi.*; the platform must not know about X at compile time",
-      prefixes: ["XApi"],
-      files: ["apps/*/lib/**/*.ex"],
-      exclude: ["apps/x_api/**"]
-    },
-    %{
       code: :router_gateway_boundary,
       message:
         "Router must reach the gateway only through LemonCore.EngineRuntime, never LemonGateway.*",

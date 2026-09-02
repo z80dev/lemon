@@ -67,11 +67,11 @@ defmodule Lemon.MixProject do
   # prod configures the SQLite store backend, and the error sink is part of
   # what "reference runtime" means here.
   #
-  # Satellites (:x_api, :lemon_honcho) must be named here too, for the opposite
-  # reason: they depend on the platform and nothing in the platform depends on
-  # them, so a release that does not list one simply never starts it — and every
+  # The :lemon_honcho satellite must be named here too, for the opposite
+  # reason: it depends on the platform and nothing in the platform depends on
+  # it, so a release that does not list it simply never starts it — and every
   # registration a satellite performs happens in its `start/2`. The omission is
-  # silent, which is why both are listed in both runtimes rather than only in
+  # silent, which is why it is listed in both runtimes rather than only in
   # the full one; an unconfigured satellite registers nothing and costs nothing.
   #
   # lemon_mcp is different again: it is a library with no application callback.
@@ -94,7 +94,6 @@ defmodule Lemon.MixProject do
           lemon_gateway: :permanent,
           lemon_cli: :permanent,
           lemon_router: :permanent,
-          x_api: :permanent,
           lemon_honcho: :permanent,
           lemon_channels: :permanent,
           lemon_control_plane: :permanent
@@ -116,7 +115,6 @@ defmodule Lemon.MixProject do
           lemon_gateway: :permanent,
           lemon_cli: :permanent,
           lemon_router: :permanent,
-          x_api: :permanent,
           lemon_honcho: :permanent,
           lemon_channels: :permanent,
           lemon_control_plane: :permanent,

@@ -8,6 +8,14 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
+### Removed
+
+- The built-in `x_api` satellite, its X/Twitter tools and channel adapter,
+  OAuth helpers, credential registry entries, release wiring, and developer
+  authentication script. Vendor-specific social integration now belongs in an
+  external package that registers through Lemon's existing channel and tool
+  extension points.
+
 ### Fixed
 
 - Hermes skill install/update requests no longer block their own control-plane

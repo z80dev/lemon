@@ -2,7 +2,7 @@ defmodule CodingAgentTest do
   use ExUnit.Case, async: true
 
   describe "coding_tools/2" do
-    # Pins the platform's own 59 builtins. Satellite tools (x_api, lemon_honcho)
+    # Pins the platform's own 59 builtins. Satellite tools (for example, lemon_honcho)
     # register through LemonAgent.ToolRegistry when their app happens to be
     # running in the test VM — umbrella-root runs boot them, per-app CI lanes
     # may not — so they are subtracted rather than counted. Satellite
