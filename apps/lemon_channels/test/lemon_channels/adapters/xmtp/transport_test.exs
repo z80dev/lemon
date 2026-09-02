@@ -23,7 +23,10 @@ defmodule LemonChannels.Adapters.Xmtp.TransportTest do
         send(pid, {:inbound, inbound_from_request(request)})
       end
 
-      {:ok, "run_#{System.unique_integer([:positive])}"}
+      :persistent_term.get(
+        {__MODULE__, :submit_result},
+        {:ok, "run_#{System.unique_integer([:positive])}"}
+      )
     end
 
     defp inbound_from_request(%LemonCore.RunRequest{} = request) do
@@ -71,6 +74,7 @@ defmodule LemonChannels.Adapters.Xmtp.TransportTest do
     on_exit(fn ->
       stop_transport()
       :persistent_term.erase({XmtpTestRouter, :pid})
+      :persistent_term.erase({XmtpTestRouter, :submit_result})
       restore_env(:lemon_core, :router_bridge, old_router_bridge)
       restore_env(:lemon_gateway, @gateway_config_key, old_gateway_env)
     end)
@@ -114,6 +118,92 @@ defmodule LemonChannels.Adapters.Xmtp.TransportTest do
     assert inbound.message.text == "/codex do the thing"
     refute Map.has_key?(inbound.meta, :engine_id)
     assert LemonCore.SessionKey.valid?(fetch(inbound.meta, :session_key))
+  end
+
+  test "definite submission rejection is not acknowledged or deduped and can redeliver" do
+    :persistent_term.put({XmtpTestRouter, :submit_result}, {:error, :unavailable})
+    missing_script = missing_bridge_script()
+
+    {:ok, pid} =
+      Transport.start_link(
+        config: %{bridge_script: missing_script, require_live: false, connect_timeout_ms: 5_000}
+      )
+
+    send(pid, {:xmtp_bridge_event, %{"type" => "connected", "mode" => "live"}})
+    port_server = :sys.get_state(pid).port_server
+    :erlang.trace(port_server, true, [:receive])
+    event = xmtp_submission_event("msg-retryable", "bridge-key-retryable", "retry me")
+    dedupe_key = Transport.inbound_dedupe_key_for_test(event)
+
+    send(pid, {:xmtp_bridge_event, event})
+    assert_receive {:inbound, %InboundMessage{message: %{text: "retry me"}}}, 800
+
+    assert_receive {:trace, ^port_server, :receive,
+                    {:"$gen_cast", {:command, %{"op" => "send", "content" => failure_text}}}},
+                   800
+
+    assert failure_text =~ "couldn't queue"
+    refute failure_text =~ "unavailable"
+
+    refute_receive {:trace, ^port_server, :receive,
+                    {:"$gen_cast", {:command, %{"op" => "ack_inbound"}}}},
+                   100
+
+    refute MapSet.member?(:sys.get_state(pid).seen_inbound_keys, dedupe_key)
+
+    :persistent_term.put({XmtpTestRouter, :submit_result}, {:ok, "run-after-redelivery"})
+    send(pid, {:xmtp_bridge_event, %{"type" => "connected", "mode" => "live"}})
+    send(pid, {:xmtp_bridge_event, event})
+
+    assert_receive {:inbound, %InboundMessage{message: %{text: "retry me"}}}, 800
+
+    assert_receive {:trace, ^port_server, :receive,
+                    {:"$gen_cast",
+                     {:command,
+                      %{
+                        "op" => "ack_inbound",
+                        "dedupe_key" => "bridge-key-retryable"
+                      }}}},
+                   800
+
+    assert MapSet.member?(:sys.get_state(pid).seen_inbound_keys, dedupe_key)
+  end
+
+  test "ambiguous submission is acknowledged for dedupe but never reported as success" do
+    :persistent_term.put({XmtpTestRouter, :submit_result}, {:error, :outcome_unknown})
+    missing_script = missing_bridge_script()
+
+    {:ok, pid} =
+      Transport.start_link(
+        config: %{bridge_script: missing_script, require_live: false, connect_timeout_ms: 5_000}
+      )
+
+    send(pid, {:xmtp_bridge_event, %{"type" => "connected", "mode" => "live"}})
+    port_server = :sys.get_state(pid).port_server
+    :erlang.trace(port_server, true, [:receive])
+    event = xmtp_submission_event("msg-ambiguous", "bridge-key-ambiguous", "maybe accepted")
+
+    send(pid, {:xmtp_bridge_event, event})
+    assert_receive {:inbound, %InboundMessage{message: %{text: "maybe accepted"}}}, 800
+
+    assert_receive {:trace, ^port_server, :receive,
+                    {:"$gen_cast",
+                     {:command,
+                      %{
+                        "op" => "ack_inbound",
+                        "dedupe_key" => "bridge-key-ambiguous"
+                      }}}},
+                   800
+
+    assert_receive {:trace, ^port_server, :receive,
+                    {:"$gen_cast", {:command, %{"op" => "send", "content" => uncertainty_text}}}},
+                   800
+
+    assert uncertainty_text =~ "couldn't confirm"
+
+    send(pid, {:xmtp_bridge_event, %{"type" => "connected", "mode" => "live"}})
+    send(pid, {:xmtp_bridge_event, event})
+    refute_receive {:inbound, %InboundMessage{message: %{text: "maybe accepted"}}}, 150
   end
 
   test "deliver returns error when outbound payload is missing conversation id" do
@@ -342,6 +432,25 @@ defmodule LemonChannels.Adapters.Xmtp.TransportTest do
     end
   catch
     :exit, _ -> :ok
+  end
+
+  defp missing_bridge_script do
+    Path.join(
+      System.tmp_dir!(),
+      "xmtp_missing_bridge_#{System.unique_integer([:positive])}.mjs"
+    )
+  end
+
+  defp xmtp_submission_event(message_id, bridge_dedupe_key, text) do
+    %{
+      "type" => "message",
+      "bridge_dedupe_key" => bridge_dedupe_key,
+      "conversation_id" => "conv-submission-outcome",
+      "sender_inbox_id" => "inbox-submission-outcome",
+      "sender_address" => "0x1111111111111111111111111111111111111111",
+      "message_id" => message_id,
+      "content" => %{"text" => text}
+    }
   end
 
   defp restore_env(app, key, nil), do: Application.delete_env(app, key)

@@ -15,7 +15,12 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
 
     def submit(run_request) do
       send(test_pid(), {:submit_run, run_request})
-      {:ok, "run_discord_dedupe_proof"}
+      :persistent_term.get({__MODULE__, :submit_result}, {:ok, "run_discord_dedupe_proof"})
+    end
+
+    def active_run(session_key) do
+      send(test_pid(), {:active_run, session_key})
+      :persistent_term.get({__MODULE__, :active_run_result}, :none)
     end
 
     def abort_run(run_id, reason) do
@@ -32,7 +37,11 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
   end
 
   defmodule FakeDiscordApi do
-    def create(_channel_id, _params), do: {:ok, %{id: 4444}}
+    def create(channel_id, params) do
+      send(self(), {:discord_create, channel_id, params})
+      {:ok, %{id: 4444}}
+    end
+
     def edit(_channel_id, message_id, _params), do: {:ok, %{id: message_id}}
     def delete(_channel_id, _message_id), do: {:ok, %{}}
 
@@ -782,6 +791,167 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
     end)
   end
 
+  test "/cancel and /stop keep transport state when the response API returns another value" do
+    :ok = LemonCore.Dedupe.Ets.init(:lemon_channels_discord_dedupe)
+    _ = :ets.delete_all_objects(:lemon_channels_discord_dedupe)
+    previous_responder = Application.get_env(:lemon_channels, :discord_interaction_responder)
+
+    Application.put_env(:lemon_channels, :discord_interaction_responder, fn _interaction,
+                                                                            _payload ->
+      %{not: :transport_state}
+    end)
+
+    on_exit(fn ->
+      restore_env(:lemon_channels, :discord_interaction_responder, previous_responder)
+    end)
+
+    with_router_bridge(fn ->
+      Enum.each(["cancel", "stop"], fn command ->
+        state = discord_message_state()
+        cancel_interaction = interaction(command, [])
+
+        assert {:noreply, ^state} =
+                 Transport.handle_info(
+                   {:discord_event, {:INTERACTION_CREATE, cancel_interaction, nil}},
+                   state
+                 )
+
+        next_message =
+          discord_message(
+            Integer.to_string(1_503_803_470_493_280_000 + System.unique_integer([:positive])),
+            "<@#{@bot_user_id}> still stateful"
+          )
+
+        assert {:noreply, next_state} =
+                 Transport.handle_info(
+                   {:discord_event, {:MESSAGE_CREATE, next_message, nil}},
+                   state
+                 )
+
+        assert map_size(next_state.buffers) == 1
+      end)
+    end)
+  end
+
+  test "definite submission failure has no success reaction and permits redelivery" do
+    :ok = LemonCore.Dedupe.Ets.init(:lemon_channels_discord_dedupe)
+    _ = :ets.delete_all_objects(:lemon_channels_discord_dedupe)
+
+    with_discord_api(fn ->
+      with_router_bridge(fn ->
+        :persistent_term.put({FakeRouter, :submit_result}, {:error, :unavailable})
+        state = discord_message_state()
+        message_id = 1_503_803_470_493_290_000 + System.unique_integer([:positive])
+        message = discord_message(Integer.to_string(message_id), "<@#{@bot_user_id}> retry me")
+
+        assert {:noreply, buffered} =
+                 Transport.handle_info({:discord_event, {:MESSAGE_CREATE, message, nil}}, state)
+
+        assert [{scope_key, buffer}] = Map.to_list(buffered.buffers)
+
+        assert {:noreply, failed_state} =
+                 Transport.handle_info(
+                   {:debounce_flush, scope_key, buffer.debounce_ref},
+                   buffered
+                 )
+
+        assert_receive {:submit_run, %{prompt: first_prompt}}
+        assert first_prompt == "<@#{@bot_user_id}> retry me"
+        refute_receive {:discord_react, _, ^message_id, _}, 50
+
+        assert_receive {:discord_create, _, %{content: failure_text}}
+        assert failure_text =~ "couldn't queue"
+        refute failure_text =~ "unavailable"
+
+        :persistent_term.put({FakeRouter, :submit_result}, {:ok, "run-after-redelivery"})
+
+        assert {:noreply, redelivered} =
+                 Transport.handle_info(
+                   {:discord_event, {:MESSAGE_CREATE, message, nil}},
+                   failed_state
+                 )
+
+        assert [{scope_key, buffer}] = Map.to_list(redelivered.buffers)
+
+        assert {:noreply, _accepted_state} =
+                 Transport.handle_info(
+                   {:debounce_flush, scope_key, buffer.debounce_ref},
+                   redelivered
+                 )
+
+        assert_receive {:submit_run, %{prompt: redelivered_prompt}}
+        assert redelivered_prompt == "<@#{@bot_user_id}> retry me"
+        assert_receive {:discord_react, _, ^message_id, _}
+      end)
+    end)
+  end
+
+  test "ambiguous submission keeps dedupe and suppresses a potentially duplicate run" do
+    :ok = LemonCore.Dedupe.Ets.init(:lemon_channels_discord_dedupe)
+    _ = :ets.delete_all_objects(:lemon_channels_discord_dedupe)
+
+    with_discord_api(fn ->
+      with_router_bridge(fn ->
+        :persistent_term.put({FakeRouter, :submit_result}, {:error, :outcome_unknown})
+        state = discord_message_state()
+        message_id = 1_503_803_470_493_291_000 + System.unique_integer([:positive])
+        prompt = "<@#{@bot_user_id}> once only"
+        message = discord_message(Integer.to_string(message_id), prompt)
+
+        assert {:noreply, buffered} =
+                 Transport.handle_info({:discord_event, {:MESSAGE_CREATE, message, nil}}, state)
+
+        assert [{scope_key, buffer}] = Map.to_list(buffered.buffers)
+
+        assert {:noreply, failed_state} =
+                 Transport.handle_info(
+                   {:debounce_flush, scope_key, buffer.debounce_ref},
+                   buffered
+                 )
+
+        assert_receive {:submit_run, %{prompt: ^prompt}}
+        refute_receive {:discord_react, _, ^message_id, _}, 50
+
+        assert_receive {:discord_create, _, %{content: failure_text}}
+        assert failure_text =~ "couldn't confirm"
+
+        :persistent_term.put({FakeRouter, :submit_result}, {:ok, "would-duplicate"})
+
+        assert {:noreply, ^failed_state} =
+                 Transport.handle_info(
+                   {:discord_event, {:MESSAGE_CREATE, message, nil}},
+                   failed_state
+                 )
+
+        refute_receive {:submit_run, _}, 100
+      end)
+    end)
+  end
+
+  test "failed slash submission reports failure instead of queued" do
+    with_interaction_responder(fn ->
+      with_router_bridge(fn ->
+        :persistent_term.put({FakeRouter, :submit_result}, {:error, :rejected})
+        slash = interaction("lemon", option("prompt", "do not lose this"))
+        state = discord_message_state()
+
+        assert {:noreply, ^state} =
+                 Transport.handle_info(
+                   {:discord_event, {:INTERACTION_CREATE, slash, nil}},
+                   state
+                 )
+
+        assert_receive {:submit_run, %{prompt: "do not lose this"}}
+
+        assert_receive {:interaction_response, ^slash,
+                        %{type: 4, data: %{content: failure_text, flags: 64}}}
+
+        assert failure_text =~ "couldn't queue"
+        refute failure_text =~ "Queued"
+      end)
+    end)
+  end
+
   test "duplicate message create events submit only one run through the runtime path" do
     :ok = LemonCore.Dedupe.Ets.init(:lemon_channels_discord_dedupe)
     _ = :ets.delete_all_objects(:lemon_channels_discord_dedupe)
@@ -1232,6 +1402,8 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
       fun.()
     after
       :persistent_term.erase({FakeRouter, :test_pid})
+      :persistent_term.erase({FakeRouter, :submit_result})
+      :persistent_term.erase({FakeRouter, :active_run_result})
 
       if previous == nil do
         Application.delete_env(:lemon_core, :router_bridge)

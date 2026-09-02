@@ -42,6 +42,14 @@ defmodule LemonChannels.Adapters.WhatsApp.Dedupe do
     :ok
   end
 
+  @doc "Forgets a provisional marker after the router definitely rejects a message."
+  def forget(jid, message_id) do
+    _ = :ets.delete(@table, {jid, message_id})
+    :ok
+  rescue
+    _ -> :ok
+  end
+
   @doc "Prunes expired entries if the table exceeds max_entries."
   def maybe_prune do
     if :ets.info(@table, :size) > @max_entries do

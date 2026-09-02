@@ -13,6 +13,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.CallbackHandler do
   alias LemonChannels.Adapters.Telegram.ModelPolicyAdapter
   alias LemonChannels.Adapters.Telegram.Transport.PerChatState
   alias LemonChannels.Adapters.Telegram.Transport.SessionRouting
+  alias LemonChannels.SubmissionOutcome
   alias LemonCore.ChatScope
   alias LemonCore.SessionKey
 
@@ -42,16 +43,14 @@ defmodule LemonChannels.Adapters.Telegram.Transport.CallbackHandler do
         run_id = String.trim_leading(data, @idle_keepalive_continue_callback_prefix)
 
         outcome = LemonChannels.Runtime.keep_run_alive(run_id, :continue)
-        _ = answer_callback_query(state, cb_id, control_answer(outcome, "continuing..."))
-        maybe_close_callback_buttons(state, cb, control_notice(outcome, "Continuing run."))
+        handle_keepalive_outcome(state, cb, cb_id, outcome, "continuing...", "Continuing run.")
         :ok
 
       String.starts_with?(data, @idle_keepalive_stop_callback_prefix) ->
         run_id = String.trim_leading(data, @idle_keepalive_stop_callback_prefix)
 
         outcome = LemonChannels.Runtime.keep_run_alive(run_id, :cancel)
-        _ = answer_callback_query(state, cb_id, control_answer(outcome, "stopping..."))
-        maybe_close_callback_buttons(state, cb, control_notice(outcome, "Stopping run."))
+        handle_keepalive_outcome(state, cb, cb_id, outcome, "stopping...", "Stopping run.")
         :ok
 
       String.starts_with?(data, @model_callback_prefix <> ":") ->
@@ -571,6 +570,22 @@ defmodule LemonChannels.Adapters.Telegram.Transport.CallbackHandler do
     _ -> :ok
   end
 
+  defp handle_keepalive_outcome(state, cb, cb_id, :ok, answer, notice) do
+    _ = answer_callback_query(state, cb_id, answer)
+    maybe_close_callback_buttons(state, cb, notice)
+  end
+
+  defp handle_keepalive_outcome(state, _cb, cb_id, {:error, _} = error, _answer, _notice) do
+    Logger.warning(
+      "telegram keepalive control failed: reason=#{SubmissionOutcome.log_label(error)}"
+    )
+
+    # Do not edit the source message on failure. Its inline keyboard is the
+    # user's retry control and must remain available.
+    _ = answer_callback_query(state, cb_id, "run control unavailable; try again")
+    :ok
+  end
+
   defp parse_int(nil), do: nil
   defp parse_int(i) when is_integer(i), do: i
 
@@ -588,10 +603,10 @@ defmodule LemonChannels.Adapters.Telegram.Transport.CallbackHandler do
   defp control_answer(:ok, text), do: text
 
   defp control_answer({:error, reason}, _text) do
-    Logger.warning("telegram run control failed: #{inspect(reason)}")
+    Logger.warning(
+      "telegram run control failed: reason=#{SubmissionOutcome.log_label({:error, reason})}"
+    )
+
     "run control unavailable"
   end
-
-  defp control_notice(:ok, text), do: text
-  defp control_notice({:error, _reason}, _text), do: "Could not reach the run. Try again."
 end

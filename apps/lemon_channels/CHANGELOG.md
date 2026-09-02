@@ -95,6 +95,20 @@ keeping it small and honest.
 
 ### Changed
 
+- Telegram, Discord, WhatsApp, XMTP, and email now treat router submission as
+  the acceptance boundary. Definite rejections do not emit queued/progress
+  success signals and release provisional inbound dedupe markers for safe
+  redelivery; ambiguous outcomes retain dedupe protection while showing an
+  explicit, sanitized uncertainty message. XMTP's Node bridge now commits its
+  receive-side marker only after an Elixir acknowledgement, and email returns
+  503 rather than a false 202 for every non-accepted handoff.
+- Telegram cancel/new and WhatsApp cancel now preserve local state and report
+  a sanitized failure when cancellation is rejected. Telegram idle keepalive
+  failures leave the original inline buttons available for retry.
+- Discord cancel/stop now always return the unchanged transport state after
+  responding, preventing the response API result from corrupting the next
+  event's state.
+
 - `LemonChannels.Runtime` now returns `LemonCore.RouterBridge` results without
   rewriting failures as success. Cancel and keep-alive calls return
   `:ok | {:error, term()}` and `session_busy?/1` returns

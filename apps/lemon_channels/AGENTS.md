@@ -65,6 +65,7 @@ share a group and are never delivered concurrently to prevent reordering.
 | `lib/lemon_channels/plugin.ex` | `LemonChannels.Plugin` | Behaviour definition: `id/0`, `meta/0`, `child_spec/1`, `normalize_inbound/1`, `deliver/1`, `gateway_methods/0` |
 | `lib/lemon_channels/registry.ex` | `LemonChannels.Registry` | GenServer plugin registry, status tracking (running/stopped/connected) from DynamicSupervisor children |
 | `lib/lemon_channels/run_request_builder.ex` | `LemonChannels.RunRequestBuilder` | Converts adapter-normalized `InboundMessage` values into router-facing `LemonCore.RunRequest` structs. |
+| `lib/lemon_channels/submission_outcome.ex` | `LemonChannels.SubmissionOutcome` | Bounded classification of definite versus ambiguous router submission failures. Definite rejection permits transport redelivery; `:outcome_unknown` retains dedupe protection. |
 | `lib/lemon_channels/capabilities.ex` | `LemonChannels.Capabilities` | Type definition for per-channel capability flags |
 | `lib/lemon_channels/outbound_payload.ex` | `LemonChannels.OutboundPayload` | Core delivery struct. Kinds: `:text`, `:edit`, `:delete`, `:reaction`, `:file`, `:voice`. Has `notify_pid`/`notify_ref` for ack. |
 | `lib/lemon_channels/script_send.ex` | `LemonChannels.ScriptSend` | Hermes-style script notification helper for Telegram/Discord. Parses `--to`, `--file`, `--attach`, `--subject`, stdin, default target env vars, known-target list output, and builds direct text or file `OutboundPayload` structs. |
@@ -77,7 +78,7 @@ share a group and are never delivered concurrently to prevent reordering.
 | `lib/lemon_channels/gateway_config.ex` | `LemonChannels.GatewayConfig` | Channels-local config facade. Prefers `:lemon_gateway` full-replacement runtime config when present, then delegates to `LemonCore.GatewayConfig`. |
 | `lib/lemon_channels/checkpoint_status_message.ex` | `LemonChannels.CheckpointStatusMessage` | Shared redacted `/checkpoint` and `/rollback` formatter/action handler for Telegram and Discord. Calls `LemonCore.Checkpoint` for diff/restore and projects redacted lifecycle event counts and browsable event history while keeping ordinary chat free of unsolicited checkpoint notices, raw paths, file contents, and session ids. |
 | `lib/lemon_channels/kanban_status_message.ex` | `LemonChannels.KanbanStatusMessage` | Shared redacted `/kanban` command formatter for Telegram and Discord. Uses `LemonAgent.Workspace.KanbanStore` directly for board/task state and calls the automation dispatcher by configured module atom at runtime to keep compile-time boundaries clean. |
-| `lib/lemon_channels/runtime.ex` | `LemonChannels.Runtime` | Channel side of `LemonCore.RouterBridge`; cancel/keepalive return `:ok | {:error, term()}` and busy checks return `{:ok, boolean()} | {:error, term()}` without soft-success fallbacks |
+| `lib/lemon_channels/runtime.ex` | `LemonChannels.Runtime` | Channel side of `LemonCore.RouterBridge`; submission, cancel, and keepalive preserve explicit errors, while busy checks return `{:ok, boolean()} | {:error, term()}` without soft-success fallbacks |
 
 ### Outbox Pipeline
 
@@ -108,7 +109,7 @@ share a group and are never delivered concurrently to prevent reordering.
 | `adapters/telegram/transport/command_router.ex` | Command/message decision tree extracted from `Transport`. Keeps command routing out of the GenServer shell. |
 | `adapters/telegram/transport/commands.ex` | Pure command detection functions. `scope_key/1`, `join_messages/1`. No side effects. |
 | `adapters/telegram/transport/file_operations.ex` | `/file put`/`get`, auto-put for document uploads, media group file handling. |
-| `adapters/telegram/transport/inbound_actions.ex` | Router submission path for normal inbound messages, including progress reactions and session metadata shaping. |
+| `adapters/telegram/transport/inbound_actions.ex` | Router submission path for normal inbound messages. Progress reactions are acceptance-only; definite rejection releases provisional dedupe for redelivery and ambiguous outcomes stay deduped with honest feedback. |
 | `adapters/telegram/transport/inbound_context.ex` | Typed normalized context shared across normalize/pipeline/action-runner stages. |
 | `adapters/telegram/transport/media_groups.ex` | Coalescence of media group messages with debounce timer. |
 | `adapters/telegram/transport/memory_reflection.ex` | Pure helpers for `/new` memory-reflection transcript assembly and prompt generation. |
@@ -153,7 +154,7 @@ Provider availability in the Telegram `/model` picker should match the real prov
 |------|-------------|
 | `adapters/discord.ex` | Plugin impl. id: `"discord"`, chunk_limit: 2000, rate_limit: 5. |
 | `adapters/discord/supervisor.ex` | Starts Transport if bot_token configured. |
-| `adapters/discord/transport.ex` | Nostrum consumer. Slash commands, button interactions, inbound routing, persisted inbound dedupe, and debounce buffering keyed by channel/thread/session so shared-channel users do not get merged into one run. |
+| `adapters/discord/transport.ex` | Nostrum consumer. Slash commands, button interactions, acceptance-only progress reactions, provisional persisted inbound dedupe, and debounce buffering keyed by channel/thread/session so shared-channel users do not get merged into one run. Slash handlers must always return transport state, never an API response result. |
 | `adapters/discord/inbound.ex` | Normalizes Discord message events to InboundMessage. Handles attachments. |
 | `adapters/discord/trigger_mode.ex` | Per-channel/thread `:all` vs `:mentions` trigger mode for free-response Discord routing. Thread-message events may arrive with only the thread id as `channel_id`; transport fallback must keep the stored `{thread, thread}` trigger key working for live free-response proof. |
 | `adapters/discord/renderer.ex` | Discord semantic renderer. Owns send-vs-edit behavior, status controls, thread-aware replies, long finalized text splitting at the safe 1,900-character Discord outbound size, final-answer duplicate suppression, and finalize-time auto-send files. Streaming snapshots stay single-message edits, while finalized overflow edits use `PresentationState` to edit the first chunk and enqueue ordered follow-ups. Final idempotency includes auto-send file metadata so newly attached files are not skipped by same-text replays. Generated-file auto-send must stay behind `[gateway.discord.files] enabled` plus `auto_send_generated_files` (or legacy `auto_send_generated_images`) and enforce configured count/size limits. |
@@ -172,8 +173,8 @@ Provider availability in the Telegram `/model` picker should match the real prov
 | File | What It Does |
 |------|-------------|
 | `adapters/xmtp.ex` | Plugin impl. id: `"xmtp"`, chunk_limit: 2000, thread support only. |
-| `adapters/xmtp/transport.ex` | GenServer. Message send/receive, `normalize_inbound_message/1`, `deliver/1`. |
-| `adapters/xmtp/bridge.ex` | Communication with Node.js bridge (connect, poll, send_message). |
+| `adapters/xmtp/transport.ex` | GenServer. Message send/receive, `normalize_inbound_message/1`, `deliver/1`. It commits both Elixir and bridge dedupe only after router acceptance; definite rejection remains eligible for bridge redelivery, while an ambiguous outcome stays deduped. |
+| `adapters/xmtp/bridge.ex` | Communication with Node.js bridge (connect, poll, send_message, explicit inbound acknowledgement). |
 | `adapters/xmtp/port_server.ex` | Thin public GenServer wrapper that remains the XMTP process/logging identity and supplies its script name, event tag, and log label to `LemonChannels.PortBridge`. |
 
 ### WhatsApp Adapter
@@ -182,7 +183,7 @@ Provider availability in the Telegram `/model` picker should match the real prov
 |------|-------------|
 | `adapters/whatsapp.ex` | Plugin impl. id: `"whatsapp"`, chunk_limit: 4096, with voice, image, file, reaction, and thread support. |
 | `adapters/whatsapp/supervisor.ex` | Starts the async supervisor and transport when a credentials path is configured. |
-| `adapters/whatsapp/transport.ex` | GenServer for message send/receive and bridge event handling. |
+| `adapters/whatsapp/transport.ex` | GenServer for message send/receive and bridge event handling. Inbound dedupe is provisional, typing starts only after router acceptance, and cancellation failure preserves buffered/session state while returning bounded feedback. |
 | `adapters/whatsapp/bridge.ex` | Communication with the Node.js bridge. |
 | `adapters/whatsapp/port_server.ex` | Thin public GenServer wrapper that remains the WhatsApp process/logging identity and supplies its script name, event tag, and log label to `LemonChannels.PortBridge`. |
 

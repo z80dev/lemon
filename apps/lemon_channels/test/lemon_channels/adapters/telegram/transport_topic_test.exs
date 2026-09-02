@@ -29,6 +29,8 @@ defmodule LemonChannels.Adapters.Telegram.TransportTopicTest do
       {:ok, "run_#{System.unique_integer([:positive])}"}
     end
 
+    def abort(_session_key, _reason), do: :ok
+
     defp inbound_from_request(%LemonCore.RunRequest{} = request) do
       meta = request.meta || %{}
 

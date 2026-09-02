@@ -31,6 +31,16 @@ defmodule LemonChannels.Adapters.Email.WebhookTest do
     def handle_inbound(_message), do: exit({:noproc, {GenServer, :call, []}})
   end
 
+  defmodule RejectingRouter do
+    @moduledoc false
+    def handle_inbound(_message), do: {:error, :rejected}
+  end
+
+  defmodule AmbiguousRouter do
+    @moduledoc false
+    def handle_inbound(_message), do: {:error, :outcome_unknown}
+  end
+
   setup do
     previous_email = Application.get_env(:lemon_channels, Email)
     previous_bridge = Application.get_env(:lemon_core, :router_bridge)
@@ -200,6 +210,26 @@ defmodule LemonChannels.Adapters.Email.WebhookTest do
       conn = Webhook.handle_inbound(authorized_payload())
 
       assert conn.status == 503
+    end
+
+    test "asks for redelivery when the router explicitly rejects submission" do
+      configure(webhook_token: "s3cret")
+      route_to(RejectingRouter)
+
+      conn = Webhook.handle_inbound(authorized_payload())
+
+      assert conn.status == 503
+      assert conn.resp_body == "unavailable"
+    end
+
+    test "does not claim acceptance when the handoff outcome is ambiguous" do
+      configure(webhook_token: "s3cret")
+      route_to(AmbiguousRouter)
+
+      conn = Webhook.handle_inbound(authorized_payload())
+
+      assert conn.status == 503
+      assert conn.resp_body == "unavailable"
     end
 
     test "answers 400 for an authorized payload it cannot make sense of" do

@@ -11,7 +11,16 @@ defmodule LemonChannels.Adapters.WhatsApp.TransportTest do
 
     def submit(%RunRequest{} = request) do
       send(:persistent_term.get({__MODULE__, :pid}), {:submitted, request})
-      {:ok, "run-#{System.unique_integer([:positive])}"}
+
+      :persistent_term.get(
+        {__MODULE__, :submit_result},
+        {:ok, "run-#{System.unique_integer([:positive])}"}
+      )
+    end
+
+    def abort(session_key, reason) do
+      send(:persistent_term.get({__MODULE__, :pid}), {:aborted, session_key, reason})
+      :persistent_term.get({__MODULE__, :abort_result}, :ok)
     end
   end
 
@@ -46,6 +55,8 @@ defmodule LemonChannels.Adapters.WhatsApp.TransportTest do
     on_exit(fn ->
       stop_transport()
       :persistent_term.erase({WhatsAppTestRouter, :pid})
+      :persistent_term.erase({WhatsAppTestRouter, :submit_result})
+      :persistent_term.erase({WhatsAppTestRouter, :abort_result})
       ModelPolicy.clear(ModelPolicyAdapter.build_route("default", @jid, nil))
       restore_env(:lemon_core, :router_bridge, old_router_bridge)
       restore_env(:lemon_gateway, @gateway_config_key, old_gateway_config)
@@ -104,6 +115,111 @@ defmodule LemonChannels.Adapters.WhatsApp.TransportTest do
     assert request.agent_id == "whatsapp-agent"
     assert request.queue_mode == :steer
     assert request.cwd == Path.expand("/tmp/whatsapp-project")
+  end
+
+  test "definite submission failure sends no typing signal and permits redelivery" do
+    :persistent_term.put({WhatsAppTestRouter, :submit_result}, {:error, :unavailable})
+    {:ok, pid} = Transport.start_link()
+    send(pid, {:whatsapp_bridge_event, %{"type" => "connected", "jid" => "bot@s.whatsapp.net"}})
+    port_server = :sys.get_state(pid).port_server
+    :erlang.trace(port_server, true, [:receive])
+
+    event =
+      {:whatsapp_bridge_event,
+       %{
+         "type" => "message",
+         "jid" => @jid,
+         "sender_jid" => @jid,
+         "message_id" => "whatsapp-retryable-rejection",
+         "text" => "/ask retry this"
+       }}
+
+    send(pid, event)
+    assert_receive {:submitted, %RunRequest{prompt: "/ask retry this"}}, 1_000
+
+    assert_receive {:trace, ^port_server, :receive,
+                    {:"$gen_cast", {:command, %{"op" => "send_text", "text" => failure_text}}}},
+                   1_000
+
+    assert failure_text =~ "couldn't queue"
+    refute failure_text =~ "unavailable"
+
+    refute_receive {:trace, ^port_server, :receive,
+                    {:"$gen_cast", {:command, %{"op" => "typing"}}}},
+                   100
+
+    :persistent_term.put({WhatsAppTestRouter, :submit_result}, {:ok, "run-redelivered"})
+    send(pid, {:whatsapp_bridge_event, %{"type" => "connected", "jid" => "bot@s.whatsapp.net"}})
+    send(pid, event)
+
+    assert_receive {:submitted, %RunRequest{prompt: "/ask retry this"}}, 1_000
+
+    assert_receive {:trace, ^port_server, :receive,
+                    {:"$gen_cast", {:command, %{"op" => "typing", "jid" => @jid}}}},
+                   1_000
+  end
+
+  test "ambiguous submission keeps dedupe while reporting uncertainty" do
+    :persistent_term.put({WhatsAppTestRouter, :submit_result}, {:error, :outcome_unknown})
+    {:ok, pid} = Transport.start_link()
+    send(pid, {:whatsapp_bridge_event, %{"type" => "connected", "jid" => "bot@s.whatsapp.net"}})
+    port_server = :sys.get_state(pid).port_server
+    :erlang.trace(port_server, true, [:receive])
+
+    event =
+      {:whatsapp_bridge_event,
+       %{
+         "type" => "message",
+         "jid" => @jid,
+         "sender_jid" => @jid,
+         "message_id" => "whatsapp-ambiguous",
+         "text" => "/ask maybe accepted"
+       }}
+
+    send(pid, event)
+    assert_receive {:submitted, %RunRequest{prompt: "/ask maybe accepted"}}, 1_000
+
+    assert_receive {:trace, ^port_server, :receive,
+                    {:"$gen_cast", {:command, %{"op" => "send_text", "text" => uncertainty_text}}}},
+                   1_000
+
+    assert uncertainty_text =~ "couldn't confirm"
+
+    send(pid, {:whatsapp_bridge_event, %{"type" => "connected", "jid" => "bot@s.whatsapp.net"}})
+    send(pid, event)
+    refute_receive {:submitted, %RunRequest{prompt: "/ask maybe accepted"}}, 200
+  end
+
+  test "failed /cancel preserves transport state and never claims cancellation" do
+    :persistent_term.put({WhatsAppTestRouter, :abort_result}, {:error, :unavailable})
+    {:ok, pid} = Transport.start_link()
+    send(pid, {:whatsapp_bridge_event, %{"type" => "connected", "jid" => "bot@s.whatsapp.net"}})
+    port_server = :sys.get_state(pid).port_server
+    :erlang.trace(port_server, true, [:receive])
+
+    send(pid, {
+      :whatsapp_bridge_event,
+      %{
+        "type" => "message",
+        "jid" => @jid,
+        "sender_jid" => @jid,
+        "message_id" => "whatsapp-cancel-rejection",
+        "text" => "/cancel"
+      }
+    })
+
+    assert_receive {:aborted, _session_key, :user_requested}, 1_000
+
+    assert_receive {:trace, ^port_server, :receive,
+                    {:"$gen_cast", {:command, %{"op" => "send_text", "text" => failure_text}}}},
+                   1_000
+
+    assert failure_text =~ "couldn't cancel"
+    refute failure_text =~ "Cancelling current run"
+
+    state = :sys.get_state(pid)
+    assert state.pending_new == %{}
+    assert state.buffers == %{}
   end
 
   defp stop_transport do

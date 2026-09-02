@@ -35,6 +35,7 @@ defmodule LemonChannels.Adapters.Email.Webhook do
   require Logger
 
   alias LemonChannels.Adapters.Email
+  alias LemonChannels.SubmissionOutcome
 
   @impl true
   def authorized?(conn) do
@@ -75,30 +76,37 @@ defmodule LemonChannels.Adapters.Email.Webhook do
 
   defp handoff(conn, message) do
     case deliver_to_router(message) do
-      {:error, :unavailable} ->
-        # The message is definitively lost, so saying "accepted" would be a lie
-        # that costs someone their mail. 503 asks the provider to redeliver,
-        # which is what every mail provider does with a 5xx.
-        Logger.error("email webhook could not reach the router; asking for redelivery")
+      :ok ->
+        # The provider's job is done only after the router takes responsibility
+        # for the message. The run itself remains asynchronous.
+        Plug.Conn.send_resp(conn, 202, "accepted")
+
+      {:error, _} = error ->
+        # A submission rejection must not become a false 202. This also covers
+        # an ambiguous outcome: returning 503 cannot claim acceptance, while
+        # the provider message ID keeps redelivery idempotent at the router.
+        Logger.error(
+          "email webhook handoff failed; asking for redelivery: reason=#{SubmissionOutcome.log_label(error)}"
+        )
+
         Plug.Conn.send_resp(conn, 503, "unavailable")
 
-      _ ->
-        # 202 otherwise: the provider's job is done once we have the message.
-        # Whether a run results is not something it should wait on, and it is
-        # not something redelivery would fix either.
-        Plug.Conn.send_resp(conn, 202, "accepted")
+      _unexpected ->
+        Logger.error(
+          "email webhook handoff failed; asking for redelivery: reason=unexpected_result"
+        )
+
+        Plug.Conn.send_resp(conn, 503, "unavailable")
     end
   end
 
   # Routed through LemonCore.RouterBridge so channels keeps no compile-time
   # dependency on lemon_router (see the §2 dependency rules).
   #
-  # The bridge answers `{:error, :unavailable}` for every way a router can fail
-  # to take the message — unconfigured, process dead, call timed out — so there
-  # is nothing to catch here. It did not always: it rescued exceptions but not
-  # exits, and this webhook carried its own `catch :exit` until that was fixed
-  # centrally. Deciding what an unavailable router *means to a mail provider*
-  # is still this module's job, and that decision is `handoff/2`.
+  # The bridge preserves explicit routing rejections and distinguishes an
+  # ambiguous mutation outcome from a definite failure. Deciding what any
+  # non-acceptance means to a mail provider is this module's job, and that
+  # decision is `handoff/2`.
   defp deliver_to_router(message), do: LemonCore.RouterBridge.handle_inbound(message)
 
   defp secure_equal?(nil, _token), do: false

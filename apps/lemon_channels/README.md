@@ -40,6 +40,17 @@ This app depends only on `lemon_core` (in-umbrella), plus `jason`, `earmark_pars
 
 Channel adapters also use `LemonCore.RouterBridge` for busy-session and active-run queries. They must not read router-internal session registries or read models directly.
 
+Router acceptance is the inbound delivery boundary. Telegram, Discord,
+WhatsApp, and XMTP hold provisional transport dedupe markers until submission
+finishes and emit progress reactions or typing signals only after `:ok`.
+Definite rejections release those markers so a repeated platform event can be
+submitted again; `{:error, :outcome_unknown}` retains the marker because a
+second submission could duplicate a run, while the channel tells the user that
+acceptance could not be confirmed. Error logs and user feedback use bounded
+classifications rather than arbitrary router terms. Email applies the same
+boundary at HTTP level: only `:ok` returns 202, and every explicit or ambiguous
+handoff error returns 503 for provider redelivery.
+
 **Semantic outbound**: Router emits `LemonCore.DeliveryIntent` values into `LemonChannels.Dispatcher`. Channel renderers decide truncation, send-vs-edit, buttons, media batching, and other platform UX details, while `LemonChannels.PresentationState` tracks message ids, pending creates/edits, deferred chunk sets, and post-edit follow-up chunks per `{route, run, surface}` so coalesced Telegram and Discord updates do not lose overflow chunks, leak superseded tails, detach long-answer follow-up chunks from the original prompt thread, enqueue long-answer tails before the final edit ack, or strand those tails or deferred final edits if the ack arrives before they finish staging. Discord streaming snapshots are truncated to one editable message; finalized Discord text is split at the safe 1,900-character outbound size and delivered as an edit plus ordered follow-ups, and repeated identical finals are suppressed when a newer sequence replays the same answer. Final idempotency includes auto-send file metadata so a later final with the same text but newly attached files still delivers those attachments.
 
 **Direct outbound**: Adapter helpers and other low-level callers may still enqueue `OutboundPayload` structs into the Outbox. The Outbox applies chunking (splitting long messages at sentence/word boundaries), deduplication (idempotency keys with a 1-hour TTL), and rate limiting (token bucket per channel/account). Messages are then delivered via the adapter's `deliver/1` callback with exponential-backoff retry on transient failures.
@@ -576,11 +587,18 @@ Web3 messaging adapter. Supports threads only (no edit, delete, voice, images, f
 | Module | Purpose |
 |--------|---------|
 | `XMTP` (plugin) | Plugin behaviour implementation |
-| `XMTP.Transport` | GenServer for message send/receive, `normalize_inbound_message/1`, `deliver/1` |
-| `XMTP.Bridge` | Communication with the Node.js bridge (connect, poll, send_message) |
+| `XMTP.Transport` | GenServer for message send/receive, `normalize_inbound_message/1`, `deliver/1`, and acceptance-aware inbound acknowledgement |
+| `XMTP.Bridge` | Communication with the Node.js bridge (connect, poll, send_message, ack_inbound) |
 | `XMTP.PortServer` | XMTP-specific public GenServer identity around the shared Node.js port lifecycle |
 
-XMTP uses a Node.js bridge process managed via an Erlang Port. The bridge handles the XMTP protocol specifics while the Elixir side manages lifecycle, message normalization, and delivery through the standard plugin interface. `XMTP.PortServer` remains the public GenServer callback/process and warning-log module while supplying the XMTP script name, event tag, and log label to the shared `LemonChannels.PortBridge` callback implementation.
+XMTP uses a Node.js bridge process managed via an Erlang Port. The bridge
+emits an inbound dedupe key without committing it. Elixir acknowledges that key
+after router acceptance, or after an ambiguous outcome where retrying could
+duplicate a run. A definite router rejection is left unacknowledged so polling
+can redeliver it. `XMTP.PortServer` remains the public GenServer
+callback/process and warning-log module while supplying the XMTP script name,
+event tag, and log label to the shared `LemonChannels.PortBridge` callback
+implementation.
 
 #### Configuration
 
@@ -598,9 +616,14 @@ The WhatsApp adapter uses its own Node.js bridge script and event tag behind the
 |--------|---------|
 | `WhatsApp` (plugin) | Plugin behaviour implementation |
 | `WhatsApp.Supervisor` | Starts the async supervisor and transport when credentials are configured |
-| `WhatsApp.Transport` | GenServer for message send/receive and bridge event handling |
+| `WhatsApp.Transport` | GenServer for message send/receive and bridge event handling with provisional dedupe and acceptance-only typing |
 | `WhatsApp.Bridge` | Communication with the Node.js bridge |
 | `WhatsApp.PortServer` | WhatsApp-specific public GenServer identity around `LemonChannels.PortBridge` |
+
+WhatsApp rolls back provisional message dedupe after a definite router
+rejection so the platform event can be retried. Ambiguous submission outcomes
+remain deduped, and the user is told acceptance could not be confirmed.
+`/cancel` preserves pending session state when cancellation is rejected.
 
 ## Adding a New Channel Adapter
 
@@ -660,9 +683,10 @@ Delegated tasks run exclusively as native in-process subagents. A subagent's ide
 
 `LemonChannels.Runtime` is the channel side of `LemonCore.RouterBridge`. It
 returns the bridge outcome without a fallback or soft success, so adapters can
-tell users whether a control request was accepted:
+tell users whether a submission or control request was accepted:
 
 ```elixir
+LemonChannels.Runtime.submit_inbound(inbound_message)
 LemonChannels.Runtime.cancel_session(session_key)
 LemonChannels.Runtime.cancel_by_run_id(run_id)
 LemonChannels.Runtime.cancel_by_progress_msg(session_key, progress_msg_id)
@@ -670,10 +694,13 @@ LemonChannels.Runtime.keep_run_alive(run_id, :continue | :cancel)
 LemonChannels.Runtime.session_busy?(session_key)
 ```
 
-Cancel and keep-alive calls return `:ok | {:error, term()}`. Busy checks return
-`{:ok, boolean()} | {:error, term()}`; an unreachable router is not equivalent
-to an idle session. Telegram, Discord, and WhatsApp render or log the local
-policy for that unavailable case.
+Submission, cancel, and keep-alive calls return `:ok | {:error, term()}`. Busy
+checks return `{:ok, boolean()} | {:error, term()}`; an unreachable router is
+not equivalent to an idle session. Telegram, Discord, WhatsApp, and XMTP do not
+present a rejected submission as queued. Telegram and WhatsApp cancellation
+handlers likewise mutate local session state only after the router accepts
+cancellation. Telegram keepalive buttons remain intact when run control fails,
+so the user can retry.
 
 ## Application Lifecycle
 
@@ -865,6 +892,9 @@ end
 - `BindingResolver` delegates to `LemonCore.BindingResolver` after struct conversion
 - `Runtime` uses `LemonCore.RouterBridge` for router interaction and returns
   explicit `{:error, reason}` values when the router is unavailable
+- Inbound transport dedupe is provisional until router acceptance. Definite
+  rejection is retryable; `:outcome_unknown` remains deduped to avoid a second
+  run and is reported as uncertain rather than successful.
 - Adapter status is derived from live `DynamicSupervisor` children, not stored state
 - The Telegram formatter avoids MarkdownV2 entirely, rendering to plain text + entity arrays instead
 - Transport-level known-target indexing throttles writes to 30s per target to avoid Store overload
