@@ -239,6 +239,20 @@ defmodule LemonAutomation.GoalLoopTest do
     end
   end
 
+  defmodule CrashAfterAcceptedLoop do
+    @moduledoc false
+
+    def run_once(_session_key, _opts), do: {:error, :unused}
+
+    def run_autonomous(_session_key, opts) do
+      run_id = Keyword.fetch!(opts, :run_id)
+      :ok = Keyword.fetch!(opts, :on_submitting).(run_id)
+      _ = Keyword.fetch!(opts, :on_submitted).(run_id)
+      send(Keyword.fetch!(opts, :test_pid), {:loop_crashing_after_acceptance, run_id})
+      exit(:crash_after_acceptance)
+    end
+  end
+
   setup do
     session_key = "goal-loop-test-#{System.unique_integer([:positive])}"
     Process.put(:goal_loop_test_pid, self())
@@ -580,6 +594,42 @@ defmodule LemonAutomation.GoalLoopTest do
     auto = GoalStore.get(session_key).meta["goalLoop"]["auto"]
     assert auto["enabled"] == true
     assert auto["options"]["maxTicks"] == 2
+  end
+
+  test "manager retains ownership when its worker crashes after an accepted submission", %{
+    session_key: session_key
+  } do
+    assert {:ok, _goal} = GoalStore.set(session_key, "Retain accepted run after worker crash")
+
+    manager =
+      start_supervised!(
+        {GoalLoopManager,
+         name: :"goal_loop_manager_crash_#{System.unique_integer([:positive])}",
+         loop_mod: CrashAfterAcceptedLoop,
+         scheduler_interval_ms: 0}
+      )
+
+    run_id = "goal_worker_crash_#{System.unique_integer([:positive])}"
+
+    assert {:ok, %{status: "running"}} =
+             GenServer.call(
+               manager,
+               {:start_loop, session_key, [run_id: run_id, test_pid: self()]}
+             )
+
+    assert_receive {:loop_crashing_after_acceptance, ^run_id}, 1_000
+
+    assert eventually(fn ->
+             match?(
+               {:ok, %{running: true, loop: %{status: "reconciling", active_run_id: ^run_id}}},
+               GenServer.call(manager, {:status, session_key})
+             )
+           end)
+
+    assert {:error, :already_running} =
+             GenServer.call(manager, {:start_loop, session_key, [max_ticks: 1]})
+
+    assert get_in(GoalStore.get(session_key).meta, ["goalLoop", "status"]) == "reconciling"
   end
 
   test "manager scheduler starts persisted auto loops and stop disables auto", %{
@@ -1029,8 +1079,7 @@ defmodule LemonAutomation.GoalLoopTest do
         id: {:goal_claim_restore, session_key}
       )
 
-    assert {:ok,
-            %{running: true, loop: %{status: "reconciling", active_run_id: ^run_id}}} =
+    assert {:ok, %{running: true, loop: %{status: "reconciling", active_run_id: ^run_id}}} =
              GenServer.call(manager, {:status, session_key})
 
     assert {:error, :already_running} =

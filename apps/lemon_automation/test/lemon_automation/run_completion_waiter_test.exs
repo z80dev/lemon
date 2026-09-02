@@ -69,6 +69,17 @@ defmodule LemonAutomation.RunCompletionWaiterTest do
     def submit(params), do: {:ok, params.run_id}
   end
 
+  defmodule CrashingWaiter do
+    @moduledoc false
+
+    def wait_already_subscribed(_run_id, _timeout_ms, opts) do
+      case opts[:failure] do
+        :raise -> raise "waiter crashed"
+        :exit -> exit(:waiter_crashed)
+      end
+    end
+  end
+
   defmodule MutateThenRaiseRouter do
     @moduledoc false
 
@@ -165,6 +176,27 @@ defmodule LemonAutomation.RunCompletionWaiterTest do
              )
 
     refute_received {:terminal, "run_still_live"}
+  end
+
+  test "a waiter exception after acceptance retains ownership and does not announce terminal" do
+    test_pid = self()
+
+    for failure <- [:raise, :exit] do
+      run_id = "run_waiter_#{failure}"
+
+      assert {:error, {:completion_outcome_unknown, ^run_id}} =
+               RunCompletionWaiter.submit_and_wait(
+                 %{run_id: run_id, prompt: "accepted before waiter crash"},
+                 router_mod: AcceptedWithoutCompletionRouter,
+                 waiter_mod: CrashingWaiter,
+                 wait_opts: [failure: failure],
+                 on_terminal: fn terminal_run_id ->
+                   send(test_pid, {:terminal, terminal_run_id})
+                 end
+               )
+
+      refute_received {:terminal, ^run_id}
+    end
   end
 
   test "wait/3 subscribes, extracts completion output, and unsubscribes" do

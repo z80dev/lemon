@@ -45,14 +45,19 @@ defmodule LemonGateway.Transports.Webhook.InvocationDispatch do
   defp perform_submit(run_request, run_ctx, wait_setup, idempotency_ctx) do
     case RouterBridge.submit_run(run_request) do
       {:ok, submitted_run_id} when is_binary(submitted_run_id) ->
-        Idempotency.store_submission(
-          idempotency_ctx,
-          submitted_run_id,
-          run_ctx.session_key,
-          run_ctx.mode
-        )
+        case Idempotency.store_submission(
+               idempotency_ctx,
+               submitted_run_id,
+               run_ctx.session_key,
+               run_ctx.mode
+             ) do
+          :ok ->
+            {:ok, run_ctx |> Map.merge(wait_setup) |> Map.put(:run_id, submitted_run_id)}
 
-        {:ok, run_ctx |> Map.merge(wait_setup) |> Map.put(:run_id, submitted_run_id)}
+          {:error, :idempotency_unavailable} ->
+            ResponseBuilder.cleanup_wait_setup(wait_setup)
+            {:error, :idempotency_unavailable}
+        end
 
       {:error, :outcome_unknown} ->
         outcome_unknown_result(run_ctx, wait_setup, idempotency_ctx)
@@ -70,23 +75,29 @@ defmodule LemonGateway.Transports.Webhook.InvocationDispatch do
   end
 
   defp outcome_unknown_result(run_ctx, wait_setup, idempotency_ctx) do
-    _ =
-      try do
-        Idempotency.store_outcome_unknown(
-          idempotency_ctx,
-          run_ctx.run_id,
-          run_ctx.session_key,
-          run_ctx.mode
-        )
-      rescue
-        _error -> :ok
-      catch
-        _kind, _reason -> :ok
-      end
+    case Idempotency.store_outcome_unknown(
+           idempotency_ctx,
+           run_ctx.run_id,
+           run_ctx.session_key,
+           run_ctx.mode
+         ) do
+      :ok ->
+        {:ok,
+         run_ctx
+         |> Map.merge(wait_setup)
+         |> Map.put(:submission_status, :outcome_unknown)}
 
-    {:ok,
-     run_ctx
-     |> Map.merge(wait_setup)
-     |> Map.put(:submission_status, :outcome_unknown)}
+      {:error, :idempotency_unavailable} ->
+        ResponseBuilder.cleanup_wait_setup(wait_setup)
+        {:error, :idempotency_unavailable}
+    end
+  rescue
+    _error ->
+      ResponseBuilder.cleanup_wait_setup(wait_setup)
+      {:error, :idempotency_unavailable}
+  catch
+    _kind, _reason ->
+      ResponseBuilder.cleanup_wait_setup(wait_setup)
+      {:error, :idempotency_unavailable}
   end
 end

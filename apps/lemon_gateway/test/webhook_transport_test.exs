@@ -223,6 +223,29 @@ defmodule LemonGateway.WebhookTransportTest do
              Idempotency.store_response(ctx, 202, %{run_id: ctx.run_id})
   end
 
+  test "accepted submission fails closed when its durable reservation disappears" do
+    integration_id = "demo-submission-store-#{System.unique_integer([:positive])}"
+
+    conn =
+      Test.conn(:post, "/webhooks/#{integration_id}", "")
+      |> Conn.put_req_header("idempotency-key", "submission-store")
+
+    assert {:ok, ctx} = Webhook.idempotency_context_for_test(conn, %{}, integration_id, %{})
+    assert :ok = Store.delete(Webhook.idempotency_table_for_test(), ctx.store_key)
+
+    Application.put_env(
+      :lemon_gateway,
+      :webhook_transport_submit_result,
+      {:ok, ctx.run_id}
+    )
+
+    assert {:error, :idempotency_unavailable} =
+             dispatch_webhook(ctx.run_id, ctx, integration_id)
+
+    assert_receive {:webhook_submit, %{run_id: run_id}}
+    assert run_id == ctx.run_id
+  end
+
   test "an unreadable existing idempotency claim fails closed without submission" do
     integration_id = "demo-corrupt-#{System.unique_integer([:positive])}"
     idempotency_key = "idem-corrupt-#{System.unique_integer([:positive])}"

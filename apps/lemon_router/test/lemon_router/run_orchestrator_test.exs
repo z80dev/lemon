@@ -134,6 +134,17 @@ defmodule LemonRouter.RunOrchestratorTest do
     end
   end
 
+  defmodule AbortCaptureCoordinator do
+    def abort_run(run_id, reason) do
+      send(
+        Application.fetch_env!(:lemon_router, :abort_capture_pid),
+        {:abort_dispatched, run_id, reason}
+      )
+
+      :ok
+    end
+  end
+
   setup do
     ensure_pubsub()
 
@@ -191,6 +202,173 @@ defmodule LemonRouter.RunOrchestratorTest do
   end
 
   describe "submit/1" do
+    test "fixed run ids are idempotent across concurrent and sequential replay" do
+      run_supervisor = start_supervised!({DynamicSupervisor, strategy: :one_for_one})
+      run_id = "run_idempotent_#{System.unique_integer([:positive])}"
+      session_key = "agent:idempotent:test:#{System.unique_integer([:positive])}"
+      on_exit(fn -> LemonCore.Store.delete(RunOrchestrator.admission_table(), run_id) end)
+
+      {:ok, orchestrator_pid} =
+        GenServer.start_link(
+          RunOrchestrator,
+          run_supervisor: run_supervisor,
+          run_process_module: PersistentCapturingRunProcess,
+          run_process_opts: %{notify_pid: self()}
+        )
+
+      replay =
+        request(%{
+          run_id: run_id,
+          origin: :control_plane,
+          session_key: session_key,
+          agent_id: "test",
+          prompt: "stable payload",
+          queue_mode: :collect
+        })
+
+      results =
+        1..8
+        |> Task.async_stream(fn _ -> RunOrchestrator.submit(orchestrator_pid, replay) end,
+          ordered: false,
+          max_concurrency: 8
+        )
+        |> Enum.map(fn {:ok, result} -> result end)
+
+      assert Enum.uniq(results) == [{:ok, run_id}]
+      assert_receive {:captured_run_opts, %{run_id: ^run_id}}, 500
+      refute_receive {:captured_run_opts, %{run_id: ^run_id}}, 100
+      assert {:ok, ^run_id} = RunOrchestrator.submit(orchestrator_pid, replay)
+      refute_receive {:captured_run_opts, %{run_id: ^run_id}}, 100
+    end
+
+    test "an accepted receipt survives completion and rejects conflicting run-id reuse" do
+      run_supervisor = start_supervised!({DynamicSupervisor, strategy: :one_for_one})
+      run_id = "run_completed_replay_#{System.unique_integer([:positive])}"
+      session_key = "agent:completed-replay:test:#{System.unique_integer([:positive])}"
+      on_exit(fn -> LemonCore.Store.delete(RunOrchestrator.admission_table(), run_id) end)
+
+      {:ok, orchestrator_pid} =
+        GenServer.start_link(
+          RunOrchestrator,
+          run_supervisor: run_supervisor,
+          run_process_module: CapturingRunProcess,
+          run_process_opts: %{notify_pid: self()}
+        )
+
+      replay =
+        request(%{
+          run_id: run_id,
+          origin: :control_plane,
+          session_key: session_key,
+          agent_id: "test",
+          prompt: "stable payload",
+          queue_mode: :collect
+        })
+
+      assert {:ok, ^run_id} = RunOrchestrator.submit(orchestrator_pid, replay)
+      assert_receive {:captured_job, _command}, 500
+      assert {:ok, ^run_id} = RunOrchestrator.submit(orchestrator_pid, replay)
+      refute_receive {:captured_job, _command}, 100
+
+      conflicting = %{replay | prompt: "different payload"}
+      assert {:error, :run_id_conflict} = RunOrchestrator.submit(orchestrator_pid, conflicting)
+      refute_receive {:captured_job, _command}, 100
+    end
+
+    test "a pending receipt after orchestrator loss safely replays an already enqueued run" do
+      run_supervisor = start_supervised!({DynamicSupervisor, strategy: :one_for_one})
+      run_id = "run_pending_replay_#{System.unique_integer([:positive])}"
+      session_key = "agent:pending-replay:test:#{System.unique_integer([:positive])}"
+      on_exit(fn -> LemonCore.Store.delete(RunOrchestrator.admission_table(), run_id) end)
+
+      opts = [
+        run_supervisor: run_supervisor,
+        run_process_module: PersistentCapturingRunProcess,
+        run_process_opts: %{notify_pid: self()}
+      ]
+
+      {:ok, first_orchestrator} = GenServer.start_link(RunOrchestrator, opts)
+
+      replay =
+        request(%{
+          run_id: run_id,
+          origin: :control_plane,
+          session_key: session_key,
+          agent_id: "test",
+          prompt: "stable payload",
+          queue_mode: :collect
+        })
+
+      assert {:ok, ^run_id} = RunOrchestrator.submit(first_orchestrator, replay)
+      assert_receive {:captured_run_opts, %{run_id: ^run_id}}, 500
+
+      entry = LemonCore.Store.get(RunOrchestrator.admission_table(), run_id)
+
+      assert :ok =
+               LemonCore.Store.put(RunOrchestrator.admission_table(), run_id, %{
+                 entry
+                 | state: "pending"
+               })
+
+      :ok = GenServer.stop(first_orchestrator)
+
+      {:ok, recovered_orchestrator} = GenServer.start_link(RunOrchestrator, opts)
+      assert {:ok, ^run_id} = RunOrchestrator.submit(recovered_orchestrator, replay)
+      refute_receive {:captured_run_opts, %{run_id: ^run_id}}, 100
+      assert %{state: "accepted"} = LemonCore.Store.get(RunOrchestrator.admission_table(), run_id)
+    end
+
+    test "a pending receipt does not re-enqueue after the original run completed" do
+      run_supervisor = start_supervised!({DynamicSupervisor, strategy: :one_for_one})
+      run_id = "run_pending_completed_#{System.unique_integer([:positive])}"
+      session_key = "agent:pending-completed:test:#{System.unique_integer([:positive])}"
+      on_exit(fn -> LemonCore.Store.delete(RunOrchestrator.admission_table(), run_id) end)
+
+      opts = [
+        run_supervisor: run_supervisor,
+        run_process_module: CapturingRunProcess,
+        run_process_opts: %{notify_pid: self()}
+      ]
+
+      {:ok, first_orchestrator} = GenServer.start_link(RunOrchestrator, opts)
+
+      replay =
+        request(%{
+          run_id: run_id,
+          origin: :control_plane,
+          session_key: session_key,
+          agent_id: "test",
+          prompt: "stable completed payload",
+          queue_mode: :collect
+        })
+
+      assert {:ok, ^run_id} = RunOrchestrator.submit(first_orchestrator, replay)
+      assert_receive {:captured_job, _command}, 500
+
+      entry = LemonCore.Store.get(RunOrchestrator.admission_table(), run_id)
+
+      assert :ok =
+               LemonCore.Store.put(RunOrchestrator.admission_table(), run_id, %{
+                 entry
+                 | state: "pending"
+               })
+
+      assert :ok =
+               LemonCore.RunStore.finalize(run_id, %{
+                 session_key: session_key,
+                 completed_at_ms: System.system_time(:millisecond),
+                 ok: true
+               })
+
+      assert eventually(fn -> match?(%{summary: %{}}, LemonCore.RunStore.get(run_id)) end)
+      :ok = GenServer.stop(first_orchestrator)
+
+      {:ok, recovered_orchestrator} = GenServer.start_link(RunOrchestrator, opts)
+      assert {:ok, ^run_id} = RunOrchestrator.submit(recovered_orchestrator, replay)
+      refute_receive {:captured_job, _command}, 100
+      assert %{state: "accepted"} = LemonCore.Store.get(RunOrchestrator.admission_table(), run_id)
+    end
+
     test "generates run_id" do
       # Note: This will fail to start the actual run since we don't have
       # the full infrastructure running, but we can test the orchestrator logic
@@ -315,13 +493,60 @@ defmodule LemonRouter.RunOrchestratorTest do
 
       task =
         Task.async(fn ->
-          RunOrchestrator.register_abort(orchestrator_pid, "run_slow_serialized_abort", :hard_stop)
+          RunOrchestrator.register_abort(
+            orchestrator_pid,
+            "run_slow_serialized_abort",
+            :hard_stop
+          )
         end)
 
       Process.sleep(5_100)
       refute Task.yield(task, 0)
       :ok = :sys.resume(orchestrator_pid)
       assert Task.await(task, 2_000) == :ok
+    end
+
+    test "a timed-out abort call still dispatches cancellation with its queued tombstone" do
+      previous_coordinator = Application.get_env(:lemon_router, :session_coordinator)
+      Application.put_env(:lemon_router, :session_coordinator, AbortCaptureCoordinator)
+      Application.put_env(:lemon_router, :abort_capture_pid, self())
+
+      on_exit(fn ->
+        if previous_coordinator,
+          do: Application.put_env(:lemon_router, :session_coordinator, previous_coordinator),
+          else: Application.delete_env(:lemon_router, :session_coordinator)
+
+        Application.delete_env(:lemon_router, :abort_capture_pid)
+      end)
+
+      {:ok, orchestrator_pid} = GenServer.start_link(RunOrchestrator, [])
+      run_id = "run_abort_after_timeout_#{System.unique_integer([:positive])}"
+      :ok = :sys.suspend(orchestrator_pid)
+
+      task =
+        Task.async(fn ->
+          try do
+            RunOrchestrator.register_abort(orchestrator_pid, run_id, :hard_stop, 10)
+          catch
+            :exit, _reason -> :caller_timed_out
+          end
+        end)
+
+      assert Task.await(task, 1_000) == :caller_timed_out
+      :ok = :sys.resume(orchestrator_pid)
+      assert_receive {:abort_dispatched, ^run_id, :hard_stop}, 500
+
+      assert {:error, {:run_aborted, :hard_stop}} =
+               RunOrchestrator.submit(
+                 orchestrator_pid,
+                 request(%{
+                   run_id: run_id,
+                   origin: :goal,
+                   session_key: "agent:abort-timeout:test",
+                   agent_id: "test",
+                   prompt: "must not start"
+                 })
+               )
     end
 
     test "concurrent abort and submission leave no accepted run alive across repetitions" do

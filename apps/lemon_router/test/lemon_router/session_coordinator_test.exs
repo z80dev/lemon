@@ -414,6 +414,47 @@ defmodule LemonRouter.SessionCoordinatorTest do
     assert {:ok, "run-registry-repair"} = SessionCoordinator.active_run_for_session(session_key)
   end
 
+  test "submission adopts a surviving run after SessionRegistry restart before starting the next",
+       %{run_supervisor: run_supervisor} do
+    session_key = unique_session_key()
+    key = {:session, session_key}
+    run1 = "run-registry-single-flight-1-#{System.unique_integer([:positive])}"
+    run2 = "run-registry-single-flight-2-#{System.unique_integer([:positive])}"
+
+    assert :ok =
+             SessionCoordinator.submit(
+               key,
+               submission(key, run1, "one", :collect, run_supervisor,
+                 run_process_module: SessionCoordinatorRuntimeRunStub
+               )
+             )
+
+    assert eventually(fn -> Registry.lookup(LemonRouter.RunRegistry, run1) != [] end)
+    assert [{old_coordinator, _meta}] = Registry.lookup(LemonRouter.ConversationRegistry, key)
+
+    assert :ok = Supervisor.terminate_child(LemonRouter.Supervisor, LemonRouter.SessionRegistry)
+
+    assert {:ok, _pid} =
+             Supervisor.restart_child(LemonRouter.Supervisor, LemonRouter.SessionRegistry)
+
+    refute Process.alive?(old_coordinator)
+    assert [{run1_pid, _}] = Registry.lookup(LemonRouter.RunRegistry, run1)
+
+    assert :ok =
+             SessionCoordinator.submit(
+               key,
+               submission(key, run2, "two", :collect, run_supervisor,
+                 run_process_module: SessionCoordinatorRuntimeRunStub
+               )
+             )
+
+    refute eventually(fn -> Registry.lookup(LemonRouter.RunRegistry, run2) != [] end, 100)
+    assert Process.alive?(run1_pid)
+
+    GenServer.stop(run1_pid)
+    assert eventually(fn -> Registry.lookup(LemonRouter.RunRegistry, run2) != [] end)
+  end
+
   test "merged queued followups unsubscribe the superseded run", %{run_supervisor: run_supervisor} do
     key = {:session, unique_session_key()}
 

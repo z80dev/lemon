@@ -125,7 +125,12 @@ with `status: "outcome_unknown"` and `retry_safe: false`; this acknowledges the
 webhook delivery without claiming that Lemon accepted the run. Callers must
 reconcile the returned run ID instead of automatically redelivering. When an
 idempotency key is present, Lemon persists that ambiguous receipt and replays it
-without submitting another run.
+without submitting another run. Reservations carry a stable run ID and a
+lease-owner token. Submission and response receipts are compare-and-swap
+updates owned by that token, and an HTTP success is not returned when the
+corresponding durable receipt cannot be stored. An expired pending lease may be
+reclaimed without duplicating an already accepted run because the router treats
+the fixed run ID as a durable idempotency key.
 
 ## Module Inventory
 

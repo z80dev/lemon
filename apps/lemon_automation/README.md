@@ -112,6 +112,11 @@ Hard-stop results include a sanitized `router_abort` status. An
 `:outcome_unknown` result is reported without retrying the abort, because the
 first request may already have taken effect; definite callback errors are
 reported only as `:rejected`, without their raw terms.
+An accepted continuation timeout, waiter crash, or abrupt loop-worker exit is
+also an unknown completion outcome, not a failed submission. The manager keeps
+the fixed run ownership in `reconciling`, blocks overlapping restarts, and
+releases it only after a durable terminal run record is observed or an explicit
+hard-stop result proves cancellation.
 
 `GoalJudge` supports explicit verdicts for tests/manual control, a pluggable
 `judge_runner` route with `judge_model` metadata, and deterministic fallback

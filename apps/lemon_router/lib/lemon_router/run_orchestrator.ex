@@ -17,7 +17,7 @@ defmodule LemonRouter.RunOrchestrator do
 
   require Logger
 
-  alias LemonCore.{Introspection, MapHelpers, RunRequest, SessionKey}
+  alias LemonCore.{Introspection, MapHelpers, RunRequest, RunStore, SessionKey, Store}
 
   alias LemonRouter.{
     PendingCompaction,
@@ -30,11 +30,15 @@ defmodule LemonRouter.RunOrchestrator do
 
   @abort_tombstone_ttl_ms 300_000
   @serialized_mutation_timeout_ms 20_000
+  @run_admission_table :router_run_admissions
 
   def start_link(opts \\ []) do
     name = Keyword.get(opts, :name, __MODULE__)
     GenServer.start_link(__MODULE__, opts, name: name)
   end
+
+  @doc false
+  def admission_table, do: @run_admission_table
 
   @doc """
   Submit a run request.
@@ -91,7 +95,14 @@ defmodule LemonRouter.RunOrchestrator do
     # This call must wait past that serialized window: timing out earlier does
     # not dequeue a GenServer call and would let a tombstone commit after its
     # caller had already reported failure without dispatching cancellation.
-    GenServer.call(server, {:register_abort, run_id, reason}, @serialized_mutation_timeout_ms)
+    register_abort(server, run_id, reason, @serialized_mutation_timeout_ms)
+  end
+
+  @doc false
+  @spec register_abort(GenServer.server(), binary(), term(), timeout()) :: :ok
+  def register_abort(server, run_id, reason, timeout_ms)
+      when is_binary(run_id) and is_integer(timeout_ms) and timeout_ms > 0 do
+    GenServer.call(server, {:register_abort, run_id, reason}, timeout_ms)
   end
 
   @doc """
@@ -162,7 +173,8 @@ defmodule LemonRouter.RunOrchestrator do
       run_supervisor: Keyword.get(opts, :run_supervisor, LemonRouter.RunSupervisor),
       run_process_module: Keyword.get(opts, :run_process_module, RunProcess),
       run_process_opts: run_process_opts,
-      abort_tombstones: %{}
+      abort_tombstones: %{},
+      accepted_run_ids: %{}
     }
 
     {:ok, state}
@@ -173,10 +185,13 @@ defmodule LemonRouter.RunOrchestrator do
     state = prune_abort_tombstones(state)
     params = ensure_run_id(params)
 
-    result =
+    {result, state} =
       case Map.get(state.abort_tombstones, params.run_id) do
-        %{reason: reason} -> reject_tombstoned_submission(params, reason)
-        nil -> do_submit(params, state)
+        %{reason: reason} ->
+          {reject_tombstoned_submission(params, reason), state}
+
+        nil ->
+          submit_idempotently(params, state)
       end
 
     {:reply, result, state}
@@ -192,7 +207,10 @@ defmodule LemonRouter.RunOrchestrator do
 
     emit_abort_tombstone_telemetry(:registered, reason)
 
-    {:reply, :ok, %{state | abort_tombstones: Map.put(state.abort_tombstones, run_id, tombstone)}}
+    result = dispatch_registered_abort(run_id, reason)
+    state = %{state | abort_tombstones: Map.put(state.abort_tombstones, run_id, tombstone)}
+
+    {:reply, result, state}
   end
 
   def handle_call(
@@ -302,6 +320,183 @@ defmodule LemonRouter.RunOrchestrator do
 
         {:error, reason}
     end
+  end
+
+  defp submit_idempotently(%RunRequest{} = params, state) do
+    identity = request_identity(params)
+
+    case Map.get(state.accepted_run_ids, params.run_id) do
+      %{identity: ^identity} ->
+        {{:ok, params.run_id}, state}
+
+      %{} ->
+        {{:error, :run_id_conflict}, state}
+
+      nil ->
+        case claim_admission(params, identity) do
+          {:ok, admission} -> continue_admission(params, identity, admission, state)
+          {:error, :run_id_conflict} -> {{:error, :run_id_conflict}, state}
+          {:error, _reason} -> {{:error, :outcome_unknown}, state}
+        end
+    end
+  end
+
+  defp claim_admission(params, identity) do
+    entry = %{
+      run_id: params.run_id,
+      session_key: params.session_key,
+      identity: identity,
+      state: "pending",
+      claimed_at_ms: System.system_time(:millisecond)
+    }
+
+    case Store.put_new(@run_admission_table, params.run_id, entry) do
+      :ok -> {:ok, entry}
+      {:error, :exists} -> existing_admission(params.run_id, identity)
+      {:error, _reason} -> {:error, :admission_store_unavailable}
+      _ -> {:error, :admission_store_unavailable}
+    end
+  rescue
+    _ -> {:error, :admission_store_unavailable}
+  catch
+    _, _ -> {:error, :admission_store_unavailable}
+  end
+
+  defp existing_admission(run_id, identity) do
+    case Store.get(@run_admission_table, run_id) do
+      %{} = entry ->
+        if MapHelpers.get_key(entry, :identity) == identity,
+          do: {:ok, entry},
+          else: {:error, :run_id_conflict}
+
+      _ ->
+        {:error, :admission_store_unavailable}
+    end
+  rescue
+    _ -> {:error, :admission_store_unavailable}
+  catch
+    _, _ -> {:error, :admission_store_unavailable}
+  end
+
+  defp continue_admission(params, identity, admission, state) do
+    case MapHelpers.get_key(admission, :state) do
+      "accepted" ->
+        {{:ok, params.run_id}, cache_accepted_admission(state, params.run_id, identity)}
+
+      _pending_or_legacy ->
+        continue_pending_admission(params, identity, admission, state)
+    end
+  end
+
+  # A durable terminal run is authoritative evidence that an earlier owner
+  # crossed the external enqueue boundary, even if it crashed before changing
+  # the admission receipt from pending to accepted. Re-enqueuing at that point
+  # would duplicate a completed run after all in-memory coordinator state has
+  # disappeared.
+  defp continue_pending_admission(params, identity, admission, state) do
+    if terminal_run?(params.run_id) do
+      case persist_accepted_admission(params.run_id, identity, admission) do
+        :ok ->
+          {{:ok, params.run_id}, cache_accepted_admission(state, params.run_id, identity)}
+
+        {:error, _reason} ->
+          {{:error, :outcome_unknown}, state}
+      end
+    else
+      case do_submit(params, state) do
+        {:ok, run_id} ->
+          case persist_accepted_admission(run_id, identity, admission) do
+            :ok ->
+              {{:ok, run_id}, cache_accepted_admission(state, run_id, identity)}
+
+            {:error, _reason} ->
+              {{:error, :outcome_unknown}, state}
+          end
+
+        error ->
+          {error, state}
+      end
+    end
+  end
+
+  defp terminal_run?(run_id) do
+    case RunStore.get(run_id) do
+      %{summary: summary} when not is_nil(summary) -> true
+      %{"summary" => summary} when not is_nil(summary) -> true
+      _ -> false
+    end
+  rescue
+    _ -> false
+  catch
+    _, _ -> false
+  end
+
+  defp persist_accepted_admission(run_id, identity, expected, attempts_left \\ 3) do
+    replacement =
+      expected
+      |> Map.put(:state, "accepted")
+      |> Map.put(:accepted_at_ms, System.system_time(:millisecond))
+
+    case Store.compare_and_swap(@run_admission_table, run_id, expected, replacement) do
+      :ok ->
+        :ok
+
+      {:error, :mismatch} when attempts_left > 0 ->
+        case existing_admission(run_id, identity) do
+          {:ok, current} ->
+            if MapHelpers.get_key(current, :state) == "accepted",
+              do: :ok,
+              else: persist_accepted_admission(run_id, identity, current, attempts_left - 1)
+
+          error ->
+            error
+        end
+
+      {:error, _reason} ->
+        {:error, :admission_store_unavailable}
+
+      _ ->
+        {:error, :admission_store_unavailable}
+    end
+  rescue
+    _ -> {:error, :admission_store_unavailable}
+  catch
+    _, _ -> {:error, :admission_store_unavailable}
+  end
+
+  defp cache_accepted_admission(state, run_id, identity) do
+    put_in(state.accepted_run_ids[run_id], %{identity: identity})
+  end
+
+  defp request_identity(%RunRequest{} = params) do
+    params
+    |> Map.from_struct()
+    |> Map.delete(:run_id)
+    |> :erlang.term_to_binary([:deterministic])
+    |> then(&:crypto.hash(:sha256, &1))
+    |> Base.encode16(case: :lower)
+  end
+
+  defp dispatch_registered_abort(run_id, reason) do
+    coordinator_result = session_coordinator_mod().abort_run(run_id, reason)
+
+    run_result =
+      case Registry.lookup(LemonRouter.RunRegistry, run_id) do
+        [{pid, _} | _] when is_pid(pid) -> RunProcess.abort(pid, reason)
+        _ -> :ok
+      end
+
+    if coordinator_result == :ok and run_result == :ok,
+      do: :ok,
+      else: {:error, :outcome_unknown}
+  rescue
+    _ -> {:error, :outcome_unknown}
+  catch
+    _, _ -> {:error, :outcome_unknown}
+  end
+
+  defp session_coordinator_mod do
+    Application.get_env(:lemon_router, :session_coordinator, SessionCoordinator)
   end
 
   defp do_start_run_process(submission, coordinator_pid, conversation_key, state)

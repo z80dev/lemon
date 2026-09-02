@@ -319,7 +319,8 @@ defmodule LemonAutomation.GoalLoopManager do
     session_key = get_in(state, [:loop_refs, ref])
 
     if session_key do
-      case ambiguous_submission_run_id(result) do
+      case retained_run_after_worker_down(result, session_key, state) ||
+             ambiguous_submission_run_id(result) do
         run_id when is_binary(run_id) ->
           retain_reconciliation(session_key, ref, run_id, state)
 
@@ -336,6 +337,11 @@ defmodule LemonAutomation.GoalLoopManager do
       state
     end
   end
+
+  defp retained_run_after_worker_down({:error, :loop_task_down}, session_key, state),
+    do: get_in(state, [:loops, session_key, :active_run, :id])
+
+  defp retained_run_after_worker_down(_result, _session_key, _state), do: nil
 
   defp retain_reconciliation(session_key, ref, run_id, state) do
     case get_in(state, [:loops, session_key]) do

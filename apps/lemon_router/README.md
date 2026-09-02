@@ -40,7 +40,7 @@ Channel transport or gateway-native ingress
 | Module | Responsibility |
 | --- | --- |
 | `LemonRouter.Router` | Main inbound entrypoint, session-key resolution, pending-compaction preparation, control-plane abort/keepalive hooks |
-| LemonRouter.RunOrchestrator (internal) | Builds router-owned submissions, serializes fixed-ID abort tombstones with acceptance, and hands accepted work to `SessionCoordinator` |
+| LemonRouter.RunOrchestrator (internal) | Durably claims fixed run IDs, rejects conflicting reuse, serializes abort registration with cancellation dispatch, and hands accepted work to `SessionCoordinator` |
 | `LemonRouter.SessionCoordinator` | Single owner of per-conversation queue semantics and active-run handoff |
 | Router internal session read model | Internal read model over coordinator-owned active session state |
 | `LemonRouter.ConversationKey` | Canonical conversation-key selection from structured resume or session key |
@@ -132,6 +132,16 @@ cannot start later, `SessionCoordinator` emits the corresponding structured
 start-failure completion before cleaning up its event-bridge subscription and
 continues with the next queued submission. A child already registered after an
 ambiguous supervisor error is adopted to avoid double completion.
+
+Fixed run IDs are router idempotency keys, not merely correlation labels. The
+orchestrator writes a durable request-identity claim before queue mutation;
+concurrent or crash-replayed copies of the same request resolve to the original
+active, queued, or completed run, while reuse for another session or payload is
+rejected. A pending claim is reconciled against surviving `RunRegistry` state
+and the durable terminal `RunStore` record before any retry can enqueue work.
+`SessionRegistry` remains an ephemeral read model: submission reconstructs an
+idle coordinator from surviving authoritative run processes after a registry
+restart so the one-run-per-session rule still holds.
 
 ## Output Semantics
 

@@ -148,10 +148,13 @@ input. The limit is resolved per request, not frozen into the pipeline.
 
 **Honest delivery status.** Email requires a provider Message-ID and a durable
 idempotency reservation before router submission. Definite rejection returns
-`503`, with a lease-gated reservation that becomes safely eligible for retry;
-an ambiguous mutation retains the fixed run identity and returns a successful
-`outcome unknown` receipt to suppress a duplicate. Missing IDs and unavailable
-idempotency storage never proceed untracked.
+`503` only after a token-fenced reservation transition makes the Message-ID
+safely eligible for retry. Accepted and ambiguous responses are reported as
+successful only after their durable receipt is stored. Every transition is
+compare-and-swap fenced by the current lease-owner token, so an expired handler
+cannot overwrite a reclaimed delivery. Missing IDs and unavailable idempotency
+storage never proceed untracked; router-level fixed-run-ID admission makes a
+post-submit lease recovery safe even across a lost acknowledgement.
 
 ## 4. Tool execution approvals
 

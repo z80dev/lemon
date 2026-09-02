@@ -48,12 +48,46 @@ defmodule LemonChannels.Adapters.Email.WebhookTest do
     end
   end
 
+  defmodule EmailWebhookBlockingRouter do
+    @owner_key {__MODULE__, :owner}
+
+    def set_owner(pid), do: :persistent_term.put(@owner_key, pid)
+    def clear_owner, do: :persistent_term.erase(@owner_key)
+
+    def submit(request) do
+      send(:persistent_term.get(@owner_key), {:email_submit_blocked, request, self()})
+
+      receive do
+        {:release_email_submit, result} -> result
+      end
+    end
+  end
+
+  defmodule AcceptedStateWriteFailureStore do
+    @moduledoc false
+    alias LemonCore.Store
+
+    def put_new(table, key, value), do: Store.put_new(table, key, value)
+    def get(table, key), do: Store.get(table, key)
+
+    def compare_and_swap(_table, _key, _expected, %{"state" => state})
+        when state in ["accepted", "outcome_unknown"],
+        do: {:error, :injected_write_failure}
+
+    def compare_and_swap(table, key, expected, value),
+      do: Store.compare_and_swap(table, key, expected, value)
+  end
+
   defmodule RejectStateWriteFailureStore do
     @moduledoc false
     alias LemonCore.Store
 
     def put_new(table, key, value), do: Store.put_new(table, key, value)
     def get(table, key), do: Store.get(table, key)
+
+    def compare_and_swap(_table, _key, _expected, %{"state" => "rejected"}),
+      do: {:error, :injected_write_failure}
+
     def compare_and_swap(table, key, expected, value),
       do: Store.compare_and_swap(table, key, expected, value)
 
@@ -70,6 +104,7 @@ defmodule LemonChannels.Adapters.Email.WebhookTest do
       restore(:lemon_channels, Email, previous_email)
       restore(:lemon_core, :router_bridge, previous_bridge)
       restore(:lemon_channels, :email_webhook_store, previous_store)
+      EmailWebhookBlockingRouter.clear_owner()
     end)
 
     :ok
@@ -286,6 +321,59 @@ defmodule LemonChannels.Adapters.Email.WebhookTest do
       retry_conn = Webhook.handle_inbound(authorized_payload(message_id))
       assert retry_conn.status == 202
       assert_received {:routed, %RunRequest{run_id: ^run_id}}
+    end
+
+    test "accepted handoff fails closed when its durable receipt cannot be written" do
+      configure(webhook_token: "s3cret")
+      route_to(AcceptingRouter)
+      Application.put_env(:lemon_channels, :email_webhook_store, AcceptedStateWriteFailureStore)
+      message_id = "accepted-write-failure@example.com"
+
+      first = Webhook.handle_inbound(authorized_payload(message_id))
+      assert first.status == 503
+      assert_received {:routed, %RunRequest{run_id: run_id}}
+
+      digest = Base.encode16(:crypto.hash(:sha256, message_id), case: :lower)
+
+      assert %{"state" => "pending", "run_id" => ^run_id} =
+               LemonCore.Store.get(:email_inbound_idempotency, digest)
+
+      pending = Webhook.handle_inbound(authorized_payload(message_id))
+      assert pending.status == 503
+      refute_received {:routed, _request}
+    end
+
+    test "a stale reservation owner cannot overwrite a reclaimed accepted receipt" do
+      configure(webhook_token: "s3cret")
+      route_to(EmailWebhookBlockingRouter)
+      EmailWebhookBlockingRouter.set_owner(self())
+      message_id = "stale-owner@example.com"
+
+      first_task = Task.async(fn -> Webhook.handle_inbound(authorized_payload(message_id)) end)
+      assert_receive {:email_submit_blocked, %RunRequest{run_id: run_id}, first_runner}, 500
+
+      digest = Base.encode16(:crypto.hash(:sha256, message_id), case: :lower)
+      first_entry = LemonCore.Store.get(:email_inbound_idempotency, digest)
+
+      assert :ok =
+               LemonCore.Store.put(
+                 :email_inbound_idempotency,
+                 digest,
+                 Map.put(first_entry, "lease_expires_at_ms", 0)
+               )
+
+      second_task = Task.async(fn -> Webhook.handle_inbound(authorized_payload(message_id)) end)
+      assert_receive {:email_submit_blocked, %RunRequest{run_id: ^run_id}, second_runner}, 500
+
+      send(second_runner, {:release_email_submit, {:ok, run_id}})
+      assert Task.await(second_task, 1_000).status == 202
+      accepted_entry = LemonCore.Store.get(:email_inbound_idempotency, digest)
+      assert accepted_entry["state"] == "accepted"
+      refute accepted_entry["reservation_id"] == first_entry["reservation_id"]
+
+      send(first_runner, {:release_email_submit, {:ok, run_id}})
+      assert Task.await(first_task, 1_000).status == 503
+      assert LemonCore.Store.get(:email_inbound_idempotency, digest) == accepted_entry
     end
 
     test "rejects a routable payload without a Message-ID before submission" do

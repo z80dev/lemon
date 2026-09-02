@@ -74,22 +74,7 @@ defmodule LemonAutomation.RunCompletionWaiter do
         :ok ->
           case safe_submit(router_mod, params) do
             {:ok, ^run_id} ->
-              :ok = notify(Keyword.get(opts, :on_submitted), run_id)
-
-              result =
-                normalize_wait_result(
-                  run_id,
-                  waiter_mod.wait_already_subscribed(run_id, timeout_ms, wait_opts)
-                )
-
-              case result do
-                {:error, {:timeout, ^run_id}} ->
-                  {:error, {:completion_outcome_unknown, run_id}}
-
-                terminal_result ->
-                  :ok = notify(Keyword.get(opts, :on_terminal), run_id)
-                  terminal_result
-              end
+              wait_after_acceptance(run_id, timeout_ms, wait_opts, waiter_mod, opts)
 
             {:ok, other_run_id} ->
               {:error, {:unexpected_run_id, run_id, other_run_id}}
@@ -167,6 +152,36 @@ defmodule LemonAutomation.RunCompletionWaiter do
         :ok = notify(Keyword.get(opts, :on_terminal), run_id)
         terminal_result
     end
+  rescue
+    _error -> {:error, {:submission_outcome_unknown, run_id}}
+  catch
+    _kind, _reason -> {:error, {:submission_outcome_unknown, run_id}}
+  end
+
+  defp wait_after_acceptance(run_id, timeout_ms, wait_opts, waiter_mod, opts) do
+    :ok = notify(Keyword.get(opts, :on_submitted), run_id)
+
+    result =
+      normalize_wait_result(
+        run_id,
+        waiter_mod.wait_already_subscribed(run_id, timeout_ms, wait_opts)
+      )
+
+    case result do
+      {:error, {:timeout, ^run_id}} ->
+        {:error, {:completion_outcome_unknown, run_id}}
+
+      {:error, {:unexpected_wait_result, ^run_id, _other}} ->
+        {:error, {:completion_outcome_unknown, run_id}}
+
+      terminal_result ->
+        :ok = notify(Keyword.get(opts, :on_terminal), run_id)
+        terminal_result
+    end
+  rescue
+    _error -> {:error, {:completion_outcome_unknown, run_id}}
+  catch
+    _kind, _reason -> {:error, {:completion_outcome_unknown, run_id}}
   end
 
   defp notify(nil, _run_id), do: :ok

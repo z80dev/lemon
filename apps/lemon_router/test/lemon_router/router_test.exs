@@ -21,12 +21,12 @@ defmodule LemonRouter.RouterTest do
   defmodule SessionCoordinatorStubRouter do
     def abort_session(session_key, reason) do
       send(test_pid(), {:abort_session, session_key, reason})
-      Process.get(:router_abort_session_result, :ok)
+      Application.get_env(:lemon_router, :router_abort_session_result, :ok)
     end
 
     def abort_run(run_id, reason) do
       send(test_pid(), {:abort_run, run_id, reason})
-      Process.get(:router_abort_run_result, :ok)
+      Application.get_env(:lemon_router, :router_abort_run_result, :ok)
     end
 
     def busy?(session_key) do
@@ -48,7 +48,7 @@ defmodule LemonRouter.RouterTest do
       Process.get(:router_active_sessions, [])
     end
 
-    defp test_pid, do: Process.get(:router_test_pid)
+    defp test_pid, do: Application.fetch_env!(:lemon_router, :router_test_pid)
   end
 
   setup do
@@ -65,6 +65,7 @@ defmodule LemonRouter.RouterTest do
     previous_bridge = Application.get_env(:lemon_core, :router_bridge)
     Application.put_env(:lemon_router, :run_orchestrator, RunOrchestratorStubRouter)
     Application.put_env(:lemon_router, :session_coordinator, SessionCoordinatorStubRouter)
+    Application.put_env(:lemon_router, :router_test_pid, self())
 
     Process.put(:router_test_pid, self())
     Process.delete(:router_submit_result)
@@ -97,6 +98,9 @@ defmodule LemonRouter.RouterTest do
       Process.delete(:router_active_sessions)
       Process.delete(:router_abort_session_result)
       Process.delete(:router_abort_run_result)
+      Application.delete_env(:lemon_router, :router_test_pid)
+      Application.delete_env(:lemon_router, :router_abort_session_result)
+      Application.delete_env(:lemon_router, :router_abort_run_result)
     end)
 
     :ok
@@ -122,7 +126,11 @@ defmodule LemonRouter.RouterTest do
   end
 
   test "abort/2 propagates a coordinator rejection" do
-    Process.put(:router_abort_session_result, {:error, :coordinator_unavailable})
+    Application.put_env(
+      :lemon_router,
+      :router_abort_session_result,
+      {:error, :coordinator_unavailable}
+    )
 
     assert {:error, :coordinator_unavailable} =
              Router.abort("agent:test:main", :test_abort)
@@ -152,7 +160,11 @@ defmodule LemonRouter.RouterTest do
   end
 
   test "abort_run/2 reports unknown after a coordinator rejection follows a tombstone" do
-    Process.put(:router_abort_run_result, {:error, :coordinator_unavailable})
+    Application.put_env(
+      :lemon_router,
+      :router_abort_run_result,
+      {:error, :coordinator_unavailable}
+    )
 
     assert {:error, :outcome_unknown} =
              Router.abort_run("run-coordinator-rejected", :test_abort)

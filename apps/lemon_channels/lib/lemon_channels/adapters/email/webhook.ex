@@ -100,21 +100,29 @@ defmodule LemonChannels.Adapters.Email.Webhook do
   defp handoff(conn, message, reservation) do
     case deliver_to_router(message, reservation.run_id) do
       :ok ->
-        remember(reservation, "accepted")
+        case remember(reservation, "accepted") do
+          :ok ->
+            # The provider's job is done only after both the router and the
+            # durable replay receipt take responsibility for the message.
+            Plug.Conn.send_resp(conn, 202, "accepted")
 
-        # The provider's job is done only after the router takes responsibility
-        # for the message. The run itself remains asynchronous.
-        Plug.Conn.send_resp(conn, 202, "accepted")
+          {:error, :idempotency_unavailable} ->
+            Plug.Conn.send_resp(conn, 503, "unavailable")
+        end
 
       {:error, _} = error ->
         if SubmissionOutcome.uncertain?(error) do
-          remember(reservation, "outcome_unknown")
+          case remember(reservation, "outcome_unknown") do
+            :ok ->
+              Logger.error(
+                "email webhook handoff outcome unknown; suppressing redelivery: reason=#{SubmissionOutcome.log_label(error)}"
+              )
 
-          Logger.error(
-            "email webhook handoff outcome unknown; suppressing redelivery: reason=#{SubmissionOutcome.log_label(error)}"
-          )
+              Plug.Conn.send_resp(conn, 200, "outcome unknown")
 
-          Plug.Conn.send_resp(conn, 200, "outcome unknown")
+            {:error, :idempotency_unavailable} ->
+              Plug.Conn.send_resp(conn, 503, "unavailable")
+          end
         else
           case release(reservation) do
             :ok ->
@@ -134,23 +142,33 @@ defmodule LemonChannels.Adapters.Email.Webhook do
         end
 
       _unexpected ->
-        remember(reservation, "outcome_unknown")
+        case remember(reservation, "outcome_unknown") do
+          :ok ->
+            Logger.error(
+              "email webhook handoff outcome unknown; suppressing redelivery: reason=unexpected_result"
+            )
 
-        Logger.error(
-          "email webhook handoff outcome unknown; suppressing redelivery: reason=unexpected_result"
-        )
+            Plug.Conn.send_resp(conn, 200, "outcome unknown")
 
-        Plug.Conn.send_resp(conn, 200, "outcome unknown")
+          {:error, :idempotency_unavailable} ->
+            Plug.Conn.send_resp(conn, 503, "unavailable")
+        end
     end
   end
 
   defp reserve(%{message: %{id: message_id}}) when is_binary(message_id) and message_id != "" do
     store = store_module()
     digest = Base.encode16(:crypto.hash(:sha256, message_id), case: :lower)
-    reservation = %{key: digest, run_id: "run_email_#{digest}"}
+
+    reservation = %{
+      key: digest,
+      run_id: "run_email_#{digest}",
+      reservation_id: LemonCore.Id.uuid7()
+    }
 
     entry = %{
       "run_id" => reservation.run_id,
+      "reservation_id" => reservation.reservation_id,
       "state" => "pending",
       "updated_at_ms" => System.system_time(:millisecond),
       "lease_expires_at_ms" => System.system_time(:millisecond) + @reservation_lease_ms
@@ -188,41 +206,59 @@ defmodule LemonChannels.Adapters.Email.Webhook do
   defp duplicate_receipt(conn, _receipt),
     do: Plug.Conn.send_resp(conn, 200, "outcome unknown")
 
-  defp remember(%{key: key, run_id: run_id}, state) do
+  defp remember(reservation, state),
+    do: update_owned_reservation(reservation, %{"state" => state})
+
+  defp release(reservation),
+    do:
+      update_owned_reservation(reservation, %{
+        "state" => "rejected",
+        "lease_expires_at_ms" => 0
+      })
+
+  defp update_owned_reservation(reservation, updates),
+    do: update_owned_reservation(reservation, updates, 3)
+
+  defp update_owned_reservation(_reservation, _updates, attempts_left)
+       when attempts_left < 1,
+       do: {:error, :idempotency_unavailable}
+
+  defp update_owned_reservation(
+         %{key: key, reservation_id: reservation_id} = reservation,
+         updates,
+         attempts_left
+       ) do
     store = store_module()
 
-    case store.put(@idempotency_table, key, %{
-           "run_id" => run_id,
-           "state" => state,
-           "updated_at_ms" => System.system_time(:millisecond)
-         }) do
-      :ok -> :ok
-      _ -> Logger.warning("email webhook idempotency update failed failure_class=store_error")
-    end
-  rescue
-    _ -> Logger.warning("email webhook idempotency update failed failure_class=exception")
-  end
+    case store.get(@idempotency_table, key) do
+      %{} = existing ->
+        if (existing["reservation_id"] || existing[:reservation_id]) == reservation_id do
+          replacement =
+            existing
+            |> Map.merge(updates)
+            |> Map.put("updated_at_ms", System.system_time(:millisecond))
 
-  defp release(%{key: key, run_id: run_id}) do
-    store = store_module()
+          case store.compare_and_swap(@idempotency_table, key, existing, replacement) do
+            :ok ->
+              :ok
 
-    case store.put(@idempotency_table, key, %{
-           "run_id" => run_id,
-           "state" => "rejected",
-           "updated_at_ms" => System.system_time(:millisecond),
-           "lease_expires_at_ms" => 0
-         }) do
-      :ok ->
-        :ok
+            {:error, :mismatch} ->
+              update_owned_reservation(reservation, updates, attempts_left - 1)
+
+            _ ->
+              {:error, :idempotency_unavailable}
+          end
+        else
+          {:error, :idempotency_unavailable}
+        end
 
       _ ->
-        Logger.warning("email webhook idempotency release failed failure_class=store_error")
         {:error, :idempotency_unavailable}
     end
   rescue
-    _ ->
-      Logger.warning("email webhook idempotency release failed failure_class=exception")
-      {:error, :idempotency_unavailable}
+    _ -> {:error, :idempotency_unavailable}
+  catch
+    _, _ -> {:error, :idempotency_unavailable}
   end
 
   defp reclaim_or_duplicate(reservation, pending_entry) do

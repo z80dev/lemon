@@ -165,33 +165,10 @@ defmodule LemonRouter.Router do
   """
   @spec abort_run(run_id :: binary(), reason :: term()) :: :ok | {:error, term()}
   def abort_run(run_id, reason \\ :user_requested) do
-    case register_abort_tombstone(run_id, reason) do
-      :ok ->
-        case session_coordinator().abort_run(run_id, reason) do
-          :ok ->
-            case Registry.lookup(LemonRouter.RunRegistry, run_id) do
-              [{pid, _}] ->
-                LemonRouter.RunProcess.abort(pid, reason)
-
-              _ ->
-                # Run not found: it either completed or the registered tombstone will
-                # reject a submission that has not reached the orchestrator yet.
-                :ok
-            end
-
-          _coordinator_failure ->
-            # The tombstone mutation already committed. Cancellation may still
-            # win admission, but dispatch to an accepted coordinator could not
-            # be proved, so a definite rejection would be false.
-            {:error, :outcome_unknown}
-        end
-
-      {:error, _reason} ->
-        {:error, :outcome_unknown}
-
-      _unexpected ->
-        {:error, :outcome_unknown}
-    end
+    # Registration and dispatch are one queued orchestrator operation. If this
+    # caller times out, that operation may still complete, but it cannot leave
+    # behind a tombstone without also attempting cancellation.
+    register_abort_tombstone(run_id, reason)
   end
 
   defp register_abort_tombstone(run_id, reason) do
