@@ -80,10 +80,10 @@ repo or in your own. Here is the whole on-ramp:
    `LemonPlatformTest.PluginCase` is a channel adapter we can review quickly and
    merge with confidence.
 
-You do not have to contribute the adapter back — the X integration lives in its
-own package and registers itself at boot, and yours can too. But if it is
-general-purpose, open a PR; it is exactly the contribution this project is shaped
-to receive.
+You do not have to contribute the adapter back — external integrations can
+register themselves at boot without becoming part of the Lemon harness. But if
+it is general-purpose, open a PR; it is exactly the contribution this project is
+shaped to receive.
 
 ## Extension points
 

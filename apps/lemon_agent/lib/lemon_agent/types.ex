@@ -134,8 +134,7 @@ defmodule LemonAgent.Types do
     The loop wraps execution in `try`, so a raise or throw becomes an error
     result rather than killing the run — but the model then gets an exception
     message instead of an explanation. Handle your own failures: a tool that is
-    not configured should say so in its result (as
-    `XApi.Tools.PostToX` does when its credentials are missing), not raise.
+    not configured should say so in its result, not raise.
 
     ## The module convention
 

@@ -317,7 +317,7 @@ a thread-shape bug: Discord can deliver thread `MESSAGE_CREATE` events with the
 thread id as `channel_id` and no parent-channel context, so the transport now
 falls back to the stored `{thread, thread}` trigger-mode key. `mix lemon.doctor`
 now reports `channels.discord.free_response` as passing when this proof is
-current. X/Twitter, XMTP,
+current. XMTP,
 SMS, voice, and other channel
 adapters are preview or experimental unless a release note explicitly promotes a
 narrower path. Bugs in preview channels can be filed with reproduction steps and
@@ -537,7 +537,7 @@ These are outside the initial stable support boundary:
 - hosted Lemon service operation
 - Discord behavior outside the text-first and file-delivery boundary, including
   voice, broad slash-command parity, and unproven DM workflows
-- stable support guarantees for X/Twitter, XMTP, SMS, voice, or other preview
+- stable support guarantees for XMTP, SMS, voice, or other preview
   channel adapters unless explicitly promoted in release notes
 - production-grade scheduling guarantees for cron or scheduled automation
 - first-class browser automation as a stable support guarantee, generated media,

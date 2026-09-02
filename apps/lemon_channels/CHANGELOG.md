@@ -42,7 +42,7 @@ keeping it small and honest.
   Telegram owns its message-id tables. It is inert unless explicitly
   configured.
 - `LemonChannels.Application.register_and_start_adapter/2` — adapters in other
-  packages register themselves at boot. `x_api` is the worked example.
+  packages can register themselves at boot.
 - The `Plugin` contract is now documented in prose in the behaviour's moduledoc
   and enforced by `LemonPlatformTest.PluginCase`: id format and purity,
   `normalize_inbound/1` must not raise, `deliver/1` must not crash the caller,
@@ -143,11 +143,10 @@ keeping it small and honest.
 - **LemonChannels.Capabilities.Registry.lookup/1 and the static capability
   table behind it.** It had zero production callers — capability queries
   already resolved through the plugin registry — and it hardcoded facts about
-  channels this package does not own, including the X/Twitter adapter that now
-  lives in its own repository. If you called it, register your adapter and
-  publish capabilities from `meta/0`.
-- The X/Twitter adapter, which moved to the `x_api` satellite package and
-  registers itself. Nothing in this package mentions X any more.
+  channels this package does not own. If you called it, register your adapter
+  and publish capabilities from `meta/0`.
+- Vendor-specific X/Twitter integration. It is not part of the Lemon harness;
+  an external package can implement and register a channel adapter instead.
 
 ### Known gaps
 

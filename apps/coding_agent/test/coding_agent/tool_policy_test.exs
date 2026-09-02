@@ -78,7 +78,6 @@ defmodule CodingAgent.ToolPolicyTest do
       assert ToolPolicy.allowed?(policy, "media_analyze_image")
       assert ToolPolicy.allowed?(policy, "media_generate_video")
       assert ToolPolicy.allowed?(policy, "extensions_status")
-      assert ToolPolicy.allowed?(policy, "x_search")
 
       refute ToolPolicy.allowed?(policy, "restart")
       refute ToolPolicy.allowed?(policy, "multiedit")
@@ -100,7 +99,6 @@ defmodule CodingAgent.ToolPolicyTest do
       refute ToolPolicy.allowed?(policy, "browser_evaluate")
       assert ToolPolicy.allowed?(policy, "browser_events")
       refute ToolPolicy.allowed?(policy, "browser_analyze")
-      assert ToolPolicy.allowed?(policy, "x_search")
       refute ToolPolicy.allowed?(policy, "write")
       refute ToolPolicy.allowed?(policy, "edit")
       refute ToolPolicy.allowed?(policy, "checkpoint")
@@ -144,7 +142,6 @@ defmodule CodingAgent.ToolPolicyTest do
       refute ToolPolicy.allowed?(policy, "browser_evaluate")
       refute ToolPolicy.allowed?(policy, "browser_events")
       refute ToolPolicy.allowed?(policy, "browser_analyze")
-      refute ToolPolicy.allowed?(policy, "x_search")
       refute ToolPolicy.allowed?(policy, "media_generate_image")
       refute ToolPolicy.allowed?(policy, "media_generate_speech")
       refute ToolPolicy.allowed?(policy, "media_transcribe_audio")

@@ -65,7 +65,7 @@ For system diagrams see `docs/diagrams/`. For per-app details see each `apps/*/R
 ┌────────▼───────┐   ┌──────────▼──────────┐
 │ LemonGateway   │   │ LemonChannels        │
 │ native executor│   │  Telegram, Discord, │
-└────────┬───────┘   │  X/Twitter           │
+└────────┬───────┘   │  XMTP, WhatsApp      │
          │           └─────────────────────-┘
 ┌────────▼───────────────────────────────────┐
 │ CodingAgent.Session                         │
@@ -101,7 +101,7 @@ destination `CodingAgent.Executor`.
 
 ## Application Map
 
-The project is an Elixir umbrella with 25 applications:
+The project is an Elixir umbrella with 24 applications:
 
 **Stack (bottom-up):**
 
@@ -121,14 +121,13 @@ The project is an Elixir umbrella with 25 applications:
 | `coding_agent_ui` | Debug RPC interface, TUI/Web bridge |
 | `lemon_router` | RunOrchestrator, ModelSelection, RoutingFeedbackStore, lane queues, policy engine |
 | `lemon_gateway` | Native execution lifecycle, slots, and request adaptation |
-| `lemon_channels` | Transport adapters (Telegram, Discord, X/Twitter, WhatsApp), model policy |
+| `lemon_channels` | Transport adapters (Telegram, Discord, XMTP, WhatsApp), model policy |
 | `lemon_automation` | CronManager, HeartbeatManager, scheduled jobs |
 | `lemon_control_plane` | HTTP/WebSocket server, 112+ RPC methods |
 | `lemon_skills` | Skill catalog, manifest v2 parser, installer, audit, synthesis |
 | `lemon_mcp` | MCP protocol server |
 | `lemon_cli` | Onboarding/setup/migration mix tasks and CLI glue |
 | `lemon_web` | React web frontend bridge |
-| `x_api` | X/Twitter HTTP client (leaf) |
 | `lemon_evals` | Eval harness for assistant behavior |
 | `lemon_honcho` | Honcho-backed long-term memory: registers a `LemonMemory` provider and agent tools |
 
@@ -199,10 +198,6 @@ graph TD
         tcg["lemon_tcg"]
     end
 
-    subgraph satellite["Satellite · self-registering vendor integration"]
-        xapi["x_api"]
-    end
-
     %% Published-tier compile edges (full fidelity from mix.exs)
     agent --> ai
     agent --> core
@@ -235,7 +230,6 @@ graph TD
     %% One-way consumption into the platform (representative real edges)
     cp --> router
     ca --> gw
-    xapi -.->|"self-registers at boot · zero compile-time coupling"| chan
 ```
 
 Consumption is one-directional: reference-runtime, product, and satellite apps
@@ -445,7 +439,6 @@ silent permissions.
 | `lemon_skills` | `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_media`, `lemon_memory` | `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_media`, `lemon_memory` | *(none)* |
 | `lemon_tcg` | `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_sim` | `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_sim` | *(none)* |
 | `lemon_web` | `lemon_agent`, `lemon_automation`, `lemon_core`, `lemon_memory`, `lemon_router` | `lemon_agent`, `lemon_automation`, `lemon_core`, `lemon_memory`, `lemon_router` | *(none)* |
-| `x_api` | `lemon_agent`, `lemon_ai`, `lemon_channels`, `lemon_core`, `lemon_platform_test` | `lemon_agent`, `lemon_ai`, `lemon_channels`, `lemon_core`, `lemon_platform_test` | *(none)* |
 <!-- architecture_policy:end -->
 
 ## Enforcement
@@ -2567,15 +2560,6 @@ When a session's resolved tool catalog costs more than `LEMON_TOOL_DISCLOSURE_BU
 | `OPENCODE_API_KEY` | string | _(none)_ | yes | `ai` | OpenCode provider API key. |
 | `OPENSEA_API_KEY` | string | _(none)_ | yes | `lemon_tcg` | OpenSea marketplace API key. |
 | `PRICECHARTING_API_TOKEN` | string | _(none)_ | yes | `lemon_tcg` | PriceCharting API token. |
-
-### X (Twitter) API
-
-| Env Var | Type | Default | Secret | Apps | Description |
-|---|---|---|---|---|---|
-| `X_API_ACCESS_TOKEN` | string | _(none)_ | yes | `x_api` | X (Twitter) API OAuth1 access token. |
-| `X_API_ACCESS_TOKEN_SECRET` | string | _(none)_ | yes | `x_api` | X (Twitter) API OAuth1 access token secret. |
-| `X_API_CONSUMER_KEY` | string | _(none)_ | yes | `x_api` | X (Twitter) API OAuth1 consumer key. |
-| `X_API_CONSUMER_SECRET` | string | _(none)_ | yes | `x_api` | X (Twitter) API OAuth1 consumer secret. |
 
 ### lemon_tcg wallets
 
@@ -6006,7 +5990,7 @@ Source: https://z80dev.github.io/lemon/for-dummies/03-the-front-door
 ---
 
 `lemon_channels` is the part of Lemon that talks to the outside world. It
-handles Telegram, Discord, X/Twitter, XMTP, and WhatsApp. For this guide,
+handles Telegram, Discord, XMTP, WhatsApp, and email. For this guide,
 we'll focus on Telegram since that's the primary way to use Lemon day-to-day.
 
 ## What lemon_channels Does
@@ -6036,7 +6020,6 @@ service independently.
 Current plugins:
 - **Telegram** — the primary one, fully featured
 - **Discord** — via the Nostrum library
-- **X/Twitter** — posting and mention monitoring
 - **XMTP** — decentralized messaging (via an external JS bridge)
 - **WhatsApp** — messaging via a Node.js bridge; coexists alongside XMTP as a
   separate adapter for a different service (they do not replace each other)
@@ -6995,14 +6978,6 @@ coding_agent gives the AI a rich toolkit. Here are the main categories:
 | Tool | What It Does |
 |------|-------------|
 | `todo` | Manage a session todo list (add, check off, view) |
-
-### Social
-
-| Tool | What It Does |
-|------|-------------|
-| `x_search` | Search recent public X/Twitter posts |
-| `post_to_x` | Post a tweet to X/Twitter |
-| `get_x_mentions` | Fetch X/Twitter mentions |
 
 ### Tool Precedence
 
@@ -11107,7 +11082,7 @@ Source: https://z80dev.github.io/lemon/platform/phase-5-extraction
 
 # Phase 5 — Product-Repo Extraction Readiness
 
-Status: **investigation (2026-08-10).** Dep facts read from `apps/*/mix.exs` and grepped call
+Status: **historical investigation (2026-08-10; refreshed 2026-09-01).** Dependency facts read from `apps/*/mix.exs` and grepped call
 sites against the tree at the time of writing. The coding_agent-blocker resolution below is a
 **proposed decision (needs user sign-off)** — actually extracting a repo is a larger commitment
 than the boundary work of Phases 1–4, so this document names and prices the blocker rather than
@@ -11129,8 +11104,9 @@ The nine published packages (post-D13) are:
 Everything else in `apps/` is either a **reference-runtime** app (stays in the platform repo,
 unpublished: `lemon_control_plane`, `lemon_cli`, `lemon_web`, `lemon_automation`, `lemon_skills`,
 `lemon_browser`, `lemon_lsp`) or a **product** app slated to leave (`coding_agent`,
-`coding_agent_ui`, `lemon_mcp`, `lemon_evals`, `lemon_sim`, `lemon_sim_ui`, `lemon_tcg`), plus the
-`x_api` satellite (D7).
+`coding_agent_ui`, `lemon_mcp`, `lemon_evals`, `lemon_sim`, `lemon_sim_ui`, `lemon_tcg`).
+The former X/Twitter satellite was deleted from the Lemon harness under D17 and
+is no longer an extraction target.
 
 An app is **extraction-ready** iff every one of its `in_umbrella` deps is either (a) a published
 package, or (b) another app in the *same product group* (which leaves in the same `git filter-repo`
@@ -11269,11 +11245,16 @@ Source: https://z80dev.github.io/lemon/platform/transport-unification
 
 # Phase 2.4 — Transport Unification: Inventory and Port Design
 
-Status: **design (Phase A).** Written 2026-08-10 against `463db837..8f76026d`.
+Status: **historical design (Phase A).** Written 2026-08-10 against `463db837..8f76026d`.
 
 > **Update 2026-08-10:** the Farcaster transport has been **deleted** (D12; ~1.4k LOC incl.
 > tests). The inventory below has been updated to the post-deletion tree; the analysis of why
 > it did not fit `Plugin` is retained because it is the reasoning behind the decision.
+>
+> **Update 2026-09-01:** the former in-tree X/Twitter satellite used as an
+> extension-boundary example was subsequently removed from the Lemon harness.
+> The generic registry and capability lessons below remain applicable; no
+> current `apps/x_api` paths or built-in X integration exist.
 
 This document records the verified inventory, control-plane coupling, environment
 variables, chat-state dependency, Telegram surfaces, and the recommended amendment
@@ -11476,9 +11457,9 @@ naming two of them in core — the same inversion as `EngineInfoBridge` (2.5) an
 the data exists; what is missing is a core-side bridge so `lemon_core` can ask without depending
 on `lemon_channels`.
 
-This is genuinely blocked on **2.3** (x_api is proving the runtime self-registration path) and
-overlaps **2.5** (bridge pattern). It is not blocked on transport unification. Move it out of
-2.4 and attach it to 2.5, where the identical bridge is already being built.
+At the time this was blocked on **2.3**, which was proving the runtime
+self-registration path, and overlapped **2.5** (bridge pattern). It was moved
+out of 2.4 and attached to 2.5, where the identical bridge was already being built.
 
 ## 7. What 2.4 should actually deliver
 
@@ -11528,33 +11509,20 @@ by attrition, then remove it, rather than forcing four bad ports to justify a de
 
 ## 7a. Capability delegation — `LemonChannels.Capabilities` (addendum from 2.3 close-out)
 
-### What exists today: three sources, two vocabularies
+### What existed at the time: three sources, two vocabularies
 
 | Source | Shape | Owner | Used by |
 |---|---|---|---|
-| `Plugin.meta/0`'s `capabilities` map | snake_case flags + numbers: `edit_support`, `delete_support`, `thread_support`, `reaction_support`, `voice_support`, `image_support`, `file_support`, `chunk_limit`, `rate_limit` | each adapter (incl. the x_api satellite) | `Registry.get_capabilities/1` |
+| `Plugin.meta/0`'s `capabilities` map | snake_case flags + numbers: `edit_support`, `delete_support`, `thread_support`, `reaction_support`, `voice_support`, `image_support`, `file_support`, `chunk_limit`, `rate_limit` | each adapter | `Registry.get_capabilities/1` |
 | `Capabilities.from_legacy/1` (`capabilities.ex:636`) | converts the above into the typed form | lemon_channels | `Registry.get_capabilities_new/1` → `supports?/3`, `supports_feature?/3`, `validate/3` |
-| `Capabilities.Registry.lookup/1` (`capabilities.ex:282-346`) | **static, string-keyed table** hard-coding `"telegram"`, `"discord"`, `"x_api"`, `"xmtp"`, `"whatsapp"`; richer typed vocabulary: `:threads`, `:reactions`, `{:attachments, max_size:, features:}`, `{:rich_blocks, features:}`, `{:chunk_limit, value:}`, `{:rate_limit, value:}` | lemon_channels | `capability_query.ex:102`, `capabilities_test.exs` |
+| `Capabilities.Registry.lookup/1` (`capabilities.ex:282-346`) | **static, string-keyed table** hard-coding adapter ids; richer typed vocabulary: `:threads`, `:reactions`, `{:attachments, max_size:, features:}`, `{:rich_blocks, features:}`, `{:chunk_limit, value:}`, `{:rate_limit, value:}` | lemon_channels | `capability_query.ex:102`, `capabilities_test.exs` |
 
 So capability data lives in **two independent places** with **two different vocabularies**, and
 there is no mechanism keeping them in sync. `Registry.supports?/validate` read the *registered
 adapter's* meta (via `from_legacy`); `Registry.lookup/1` reads the *static table*. Nothing
 reconciles them.
 
-### The concrete case: x_api's 280-char chunk limit
-
-`chunk_limit: 280` is declared **twice**: `apps/x_api/lib/x_api/channel_adapter.ex:24` (the
-satellite's own `meta/0`) and `apps/lemon_channels/lib/lemon_channels/capabilities.ex:320` (the
-static table). `capabilities_test.exs:386-395` asserts against the *static* one, so the satellite
-could change its real limit and the test would keep passing.
-
-This is now a **D7 violation in substance**. D7 says the platform "loses all compile-time
-knowledge of X", and 2.3 just moved the X adapter out to a satellite — but `lemon_channels` still
-carries a hard-coded `lookup("x_api")` clause describing it. The satellite is no longer able to
-be the source of truth about itself. The same will be true of any future satellite, and of email
-once it ports.
-
-Note also the vocabularies are not equivalent, so this is not a pure duplication: `from_legacy`
+The vocabularies were not equivalent, so this was not a pure duplication: `from_legacy`
 can express neither `max_size` for attachments (it only ever sets `features: [:images]`) nor
 `rich_blocks` features nor `rate_limit`. The static table is strictly richer. Any delegation
 must therefore *widen the meta contract*, not just redirect lookups — otherwise telegram/discord
@@ -11569,8 +11537,7 @@ resolved through registered-adapter meta and already returned nil/false for unkn
 referenced it. The unconfigured-channel contract question was therefore moot: no caller could
 observe either answer.
 
-So `lookup/1` was deleted outright rather than repointed, `get_set/1` kept, the x_api assertions
-moved to `apps/x_api/test/x_api/channel_adapter_test.exs` against the satellite's own `meta/0`,
+So `lookup/1` was deleted outright rather than repointed, `get_set/1` kept,
 and the `Plugin.meta/0` widening was **deferred** — see the Deferred section of
 `platform-split.md`, which records the richer vocabulary the table carried so it isn't lost with
 the code. Growing the platform's most third-party-facing extension point for data nobody reads
@@ -11589,12 +11556,11 @@ Capability lookup delegates to the registered adapter; the static table is delet
 2. **Make `Capabilities.Registry.lookup/1` resolve through the channels registry**: look up the
    registered plugin module for the id, call its `meta/0`, and build capabilities from that.
    Fall back to `Capabilities.empty()` for unknown ids exactly as today (`capabilities.ex:345`).
-3. **Delete the five hard-coded clauses.** Each adapter's own `meta/0` becomes the single source
-   of truth, and satellites self-describe — which is what D7 requires and what 2.3 assumed.
+3. **Delete the hard-coded clauses.** Each adapter's own `meta/0` becomes the single source
+   of truth and external integrations self-describe.
 4. **Move the assertions.** `capabilities_test.exs`'s per-channel tests currently pin platform-side
    constants; they should either move next to each adapter (asserting *that adapter's* meta) or
-   assert the delegation mechanism against a test double, not real channel constants. The x_api
-   280 assertion in particular belongs in `apps/x_api`, not in `lemon_channels`.
+   assert the delegation mechanism against a test double, not real channel constants.
 
 ### Why this belongs to 2.4 rather than 2.5
 
@@ -11605,8 +11571,7 @@ about the platform reading *gateway* state across an app boundary — related in
 data and different direction.
 
 Sizing: step 1 **S**, step 2 **S**, steps 3–4 **M** (the test churn is the bulk). No collision
-with 2.2. It does touch `lemon_channels/capabilities.ex` and the x_api adapter, so it should land
-after 2.3 — which is now complete, so this is unblocked.
+with 2.2.
 
 **Caveat worth deciding explicitly:** delegation makes capability lookup depend on a plugin being
 *registered at runtime*. Today `lookup("telegram")` answers correctly even if Telegram was never
@@ -13259,7 +13224,7 @@ Supported for stable 1.0:
 - Provider configuration through documented secrets and setup paths.
 - TUI, web, Telegram, Discord, and control-plane issues that can be reproduced on a
   supported source install or Linux release artifact.
-- X/Twitter, XMTP, SMS, voice, and other channel adapters only as
+- XMTP, SMS, voice, and other channel adapters only as
   preview surfaces unless promoted by release notes.
 - First-party text web search/fetch issues that can be reproduced in a
   supported agent run.
@@ -14076,13 +14041,6 @@ The following secrets are recognized by the migration tooling:
 - `FIRECRAWL_API_KEY` - Firecrawl web scraping
 - `BRAVE_API_KEY` - Brave Search API
 - `GITHUB_TOKEN` - GitHub API access
-
-### X/Twitter API
-- `X_API_CLIENT_ID`, `X_API_CLIENT_SECRET` - OAuth 2.0
-- `X_API_BEARER_TOKEN` - App auth
-- `X_API_ACCESS_TOKEN`, `X_API_REFRESH_TOKEN` - User auth
-- `X_API_CONSUMER_KEY`, `X_API_CONSUMER_SECRET` - OAuth 1.0a
-- `X_API_ACCESS_TOKEN_SECRET` - OAuth 1.0a
 
 ## Troubleshooting
 
@@ -16116,7 +16074,7 @@ a thread-shape bug: Discord can deliver thread `MESSAGE_CREATE` events with the
 thread id as `channel_id` and no parent-channel context, so the transport now
 falls back to the stored `{thread, thread}` trigger-mode key. `mix lemon.doctor`
 now reports `channels.discord.free_response` as passing when this proof is
-current. X/Twitter, XMTP,
+current. XMTP,
 SMS, voice, and other channel
 adapters are preview or experimental unless a release note explicitly promotes a
 narrower path. Bugs in preview channels can be filed with reproduction steps and
@@ -16336,7 +16294,7 @@ These are outside the initial stable support boundary:
 - hosted Lemon service operation
 - Discord behavior outside the text-first and file-delivery boundary, including
   voice, broad slash-command parity, and unproven DM workflows
-- stable support guarantees for X/Twitter, XMTP, SMS, voice, or other preview
+- stable support guarantees for XMTP, SMS, voice, or other preview
   channel adapters unless explicitly promoted in release notes
 - production-grade scheduling guarantees for cron or scheduled automation
 - first-class browser automation as a stable support guarantee, generated media,
@@ -17376,7 +17334,7 @@ Representative scrubbed variables include:
 
 - LLM/provider secrets: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENAI_CODEX_API_KEY`, `CHATGPT_TOKEN`, `OPENCODE_API_KEY`, `OPENROUTER_API_KEY`, `GEMINI_API_KEY`, `GOOGLE_GENERATIVE_AI_API_KEY`, `GOOGLE_GEMINI_CLI_API_KEY`, `GOOGLE_API_KEY`, `GROQ_API_KEY`, `NOUS_API_KEY`, `KIMI_API_KEY`, `MOONSHOT_API_KEY`, `ZAI_API_KEY`, `MINIMAX_API_KEY`, `FIREWORKS_API_KEY`, `XAI_API_KEY`, `LEMON_EVAL_API_KEY`, `LEMON_EVAL_API_KEY_SECRET`, `INTEGRATION_API_KEY`, `INTEGRATION_API_KEY_SECRET`.
 - OAuth/CLI and secret-store material: `ANTHROPIC_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN`, `LEMON_SECRETS_MASTER_KEY`, `GOOGLE_APPLICATION_CREDENTIALS`, `GOOGLE_APPLICATION_CREDENTIALS_JSON`.
-- Platform/cloud credentials: `TELEGRAM_BOT_TOKEN`, `DISCORD_BOT_TOKEN`, `SLACK_BOT_TOKEN`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `TWILIO_AUTH_TOKEN`, X API credentials, XMTP wallet keys, Feishu/DingTalk tokens.
+- Platform/cloud credentials: `TELEGRAM_BOT_TOKEN`, `DISCORD_BOT_TOKEN`, `SLACK_BOT_TOKEN`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, `TWILIO_AUTH_TOKEN`, XMTP wallet keys, Feishu/DingTalk tokens.
 
 Live/integration runs that intentionally need real credentials must opt in explicitly:
 
@@ -22415,8 +22373,8 @@ change what its answer means.
 
 **It boots its own Lemon.** Every subcommand starts the umbrella in the mix task's own
 node before it does anything else. That means the HTTP listeners try to bind, a
-configured Discord bot connects a second shard, and start-up work like the X API token
-refresh runs — as a side effect of asking for status. On a machine where Lemon is
+configured Discord bot connects a second shard, and other application start-up work
+runs — as a side effect of asking for status. On a machine where Lemon is
 already running, the ports are taken and the command dies with `:eaddrinuse` before
 printing a line, which is exactly the machine you are on when you most want to check.
 Stop the running Lemon and run it, or run it from the same shell environment on a host
@@ -22713,7 +22671,7 @@ starts the umbrella in the node `mix` is running, and that node is never the Lem
 serving your conversations. Two consequences, and the second is the one that misleads.
 
 *It has to boot a whole Lemon to answer.* Listeners bind, a configured Discord bot
-connects a second shard, start-up work such as the X API token refresh runs. If Lemon
+connects a second shard, and other application start-up work runs. If Lemon
 is already running on the machine, the ports are taken, and the command exits with
 `:eaddrinuse` without printing anything. There is no flag that skips this. Stop the
 running Lemon first, or run the command from a host that is not serving with the same

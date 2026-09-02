@@ -39,15 +39,6 @@ defmodule LemonCore.Secrets.EnvCatalog do
     "BROWSER_USE_API_KEY",
     "CAMOFOX_API_KEY",
     "GITHUB_TOKEN",
-    # X/Twitter API
-    "X_API_CLIENT_ID",
-    "X_API_CLIENT_SECRET",
-    "X_API_BEARER_TOKEN",
-    "X_API_ACCESS_TOKEN",
-    "X_API_REFRESH_TOKEN",
-    "X_API_CONSUMER_KEY",
-    "X_API_CONSUMER_SECRET",
-    "X_API_ACCESS_TOKEN_SECRET",
     # Market intel
     "MARKET_INTEL_BASESCAN_KEY",
     "MARKET_INTEL_DEXSCREENER_KEY",

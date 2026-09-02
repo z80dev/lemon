@@ -252,9 +252,8 @@ mix test apps/lemon_skills/test/lemon_skills/manifest_test.exs:7
 
 The test helper (`test/test_helper.exs`):
 1. Isolates HOME to a temp directory so tests never touch real user skills/config.
-2. Disables X API secrets resolution.
-3. Loads `test/support/http_mock.ex` and wires it as the HTTP client.
-4. Starts the `:lemon_skills` application.
+2. Loads `test/support/http_mock.ex` and wires it as the HTTP client.
+3. Starts the `:lemon_skills` application.
 
 Integration tests (tagged `@tag :integration`) are excluded by default. They make real HTTP requests.
 

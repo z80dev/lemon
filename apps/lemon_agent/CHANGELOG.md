@@ -34,10 +34,9 @@ application from the Lemon umbrella; the OTP application name and every
   moving to `lemon_core` because it is defined in terms of
   `LemonAgent.Types.AgentToolResult` and `LemonAi.Types.TextContent`; a package that
   knows nothing about agents or models cannot host it.
-- The X/Twitter tools (`x_search`, `post_to_x`, `get_x_mentions`) are no longer
-  named by this package's built-in tool list. They ship with the `x_api`
-  satellite and register themselves through `LemonAgent.ToolRegistry`. If you
-  want them, depend on `x_api`; nothing in the platform mentions X any more.
+- Vendor-specific social tools are not shipped by the Lemon harness. External
+  packages can contribute their own tools through `LemonAgent.ToolRegistry`
+  without adding compile-time knowledge to this package.
 
 ### Notes
 

@@ -44,7 +44,6 @@ GATED_APPS=(
   lemon_honcho
   lemon_tcg
   lemon_mcp
-  x_api
 )
 
 out_file="${1:-}"

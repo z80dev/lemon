@@ -271,7 +271,7 @@ Lemon is organized as an Elixir umbrella split into 9 modular core packages, a r
 
 - **Reference Runtime** (in-repo): [`lemon_control_plane`](apps/lemon_control_plane/README.md) (JSON-RPC API), [`lemon_cli`](apps/lemon_cli/README.md), [`lemon_web`](apps/lemon_web/README.md), [`lemon_automation`](apps/lemon_automation/README.md), [`lemon_skills`](apps/lemon_skills/README.md), [`lemon_browser`](apps/lemon_browser/README.md), [`lemon_lsp`](apps/lemon_lsp/README.md).
 - **Products**: [`coding_agent`](apps/coding_agent/README.md), [`coding_agent_ui`](apps/coding_agent_ui/README.md), [`lemon_mcp`](apps/lemon_mcp/README.md), [`lemon_sim`](apps/lemon_sim/README.md), [`lemon_sim_ui`](apps/lemon_sim_ui/README.md), [`lemon_tcg`](apps/lemon_tcg/README.md), [`lemon_evals`](apps/lemon_evals/README.md).
-- **Satellites**: [`x_api`](apps/x_api/README.md) (self-registering X / Twitter integration).
+- **Satellite**: [`lemon_honcho`](apps/lemon_honcho/README.md) (self-registering long-term memory integration).
 
 ### Dependency Graph
 
@@ -313,10 +313,6 @@ graph TD
         tcg["lemon_tcg"]
     end
 
-    subgraph satellite["Satellite · self-registering vendor integration"]
-        xapi["x_api"]
-    end
-
     %% Published-tier compile edges
     agent --> ai
     agent --> core
@@ -349,7 +345,6 @@ graph TD
     %% Representative one-way consumption into the platform
     cp --> router
     ca --> gw
-    xapi -.->|"self-registers at boot"| chan
 ```
 
 ---

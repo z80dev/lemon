@@ -89,8 +89,8 @@ error. See the `LemonPlatformTest.FakeLLM` moduledoc for the full worked example
 
 `test/compliance/` runs the kit against the platform's own implementations — three
 store backends, two channel adapters, and the local memory provider. Additional
-compliance suites live with their implementations where dependency direction requires
-it, including `XApi.ChannelAdapter` in `apps/x_api`.
+compliance suites should live with their implementations where dependency direction
+requires it.
 
 ```bash
 mix test apps/lemon_platform_test

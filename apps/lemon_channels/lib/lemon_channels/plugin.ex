@@ -81,8 +81,7 @@ defmodule LemonChannels.Plugin do
   Returns the unique identifier for this channel.
 
   A short, stable, lowercase slug matching `~r/^[a-z][a-z0-9_-]*$/` — the
-  built-ins are `"telegram"`, `"discord"`, `"whatsapp"`, `"xmtp"`, `"email"`,
-  `"x_api"`.
+  built-ins are `"telegram"`, `"discord"`, `"whatsapp"`, `"xmtp"`, and `"email"`.
 
   This is an identity, not a label. It is the registry key, it travels in
   `LemonCore.InboundMessage.channel_id` and
