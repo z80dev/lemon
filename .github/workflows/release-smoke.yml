@@ -51,6 +51,9 @@ env:
   LEMON_WEB_SECRET_KEY_BASE: "runtime_smoke_web_secret_key_base_runtime_smoke_web_secret_key_base_runtime"
   LEMON_SIM_UI_PORT: "14090"
   LEMON_GATEWAY_NODE_COOKIE: "release-smoke-cookie"
+  # Phoenix endpoints are opt-in in releases so eval/rpc commands do not bind
+  # sockets. The full-runtime smoke explicitly exercises those endpoints.
+  PHX_SERVER: "1"
 
 jobs:
   smoke-test:
@@ -75,6 +78,14 @@ jobs:
           otp-version: "28.5"
           elixir-version: "1.19.5"
 
+      - name: Setup Node
+        if: matrix.profile != 'lemon_runtime_min'
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/lemon_sim_ui/assets/package-lock.json
+
       - name: Cache Mix deps and build
         uses: actions/cache@v4
         with:
@@ -88,6 +99,20 @@ jobs:
 
       - name: Install deps
         run: mix deps.get --only prod
+
+      - name: Build Sim UI assets
+        if: matrix.profile != 'lemon_runtime_min'
+        run: mix sim_ui.assets.deploy
+
+      - name: Digest lemon_web assets
+        if: matrix.profile == 'lemon_runtime_full'
+        run: |
+          mix 'do' --app lemon_web phx.digest
+          test -f apps/lemon_web/priv/static/cache_manifest.json
+
+      - name: Assert Sim UI digest manifest
+        if: matrix.profile != 'lemon_runtime_min'
+        run: test -f apps/lemon_sim_ui/priv/static/cache_manifest.json
 
       - name: Compile (prod)
         run: mix compile
@@ -235,6 +260,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Shellcheck overlay shim
+        if: runner.os == 'Linux'
         run: shellcheck rel/overlays/bin/lemon
 
       # erlef/setup-beam publishes precompiled OTP/Elixir for macOS runners
@@ -388,7 +414,11 @@ jobs:
           test "$(docker exec lemon-sim-smoke awk '/^Uid:/{print $2}' /proc/1/status)" = "10001"
 
           curl --fail --silent --show-error http://127.0.0.1:14090/ > /tmp/lobby.html
-          test "$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:14090/admin)" = "401"
+          curl --silent --show-error --dump-header /tmp/admin-headers.txt \
+            --output /dev/null http://127.0.0.1:14090/admin
+          grep -Eiq '^HTTP/[0-9.]+ 303' /tmp/admin-headers.txt
+          grep -Eiq '^location: /admin/login' /tmp/admin-headers.txt
+          test "$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:14090/api/admin/metrics)" = "401"
 
           asset_path=$(grep -oE '/assets/app-[a-f0-9]+\.css' /tmp/lobby.html | head -1)
           test -n "$asset_path"

@@ -157,13 +157,17 @@ defmodule CodingAgent.Tools.LspDiagnosticsTest do
     test "reports C diagnostics when a C compiler is available", %{tmp_dir: tmp_dir} do
       if c_compiler_available?() do
         path = Path.join(tmp_dir, "bad.c")
-        File.write!(path, "int main(void) { return \"bad\" }\n")
+        File.write!(path, "int main(void) { return does_not_exist; }\n")
 
         assert {:ok, result} = LspDiagnostics.diagnose_file(path, tmp_dir)
         assert result.status == :diagnostics
         assert result.language == :c_cpp
 
-        assert [%{line: 1, severity: "error"} = diagnostic | _] = result.diagnostics
+        assert diagnostic =
+                 Enum.find(result.diagnostics, fn diagnostic ->
+                   diagnostic.line == 1 and diagnostic.severity == "error"
+                 end)
+
         assert diagnostic.source =~ "-fsyntax-only"
         assert diagnostic.message != ""
       end

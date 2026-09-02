@@ -612,7 +612,6 @@ defmodule LemonWeb.ProfileManagementLive do
       true -> {:error, "The default profile is reserved."}
       false -> {:error, "Enter a valid execution node name."}
       {:error, _} = error -> error
-      _ -> {:error, "Enter a valid profile."}
     end
   end
 

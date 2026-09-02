@@ -125,20 +125,33 @@ export async function runShellCommand(
 	const timeoutMs = options.timeoutMs ?? DEFAULT_SHELL_TIMEOUT_MS;
 	const base: ShellResult = { command, code: 0, stdout: "", stderr: "" };
 	try {
+		// Interactive commands must remain in the terminal's process group so
+		// full-screen programs and job control keep working.
+		const detached = process.platform !== "win32" && options.interactive !== true;
 		const proc = Bun.spawn([shellBinary(), "-c", command], {
 			cwd: options.cwd ?? process.cwd(),
 			env: { ...process.env, ...options.env } as Record<string, string>,
 			stdin: options.interactive ? "inherit" : "ignore",
 			stdout: options.interactive ? "inherit" : "pipe",
 			stderr: options.interactive ? "inherit" : "pipe",
+			// A shell can leave grandchildren holding the capture pipes open after
+			// the shell itself is killed. A private POSIX process group lets the
+			// deadline terminate the complete command tree.
+			detached,
 		});
 
 		let timedOut = false;
+		let forceKillTimer: ReturnType<typeof setTimeout> | undefined;
 		const timer =
 			timeoutMs > 0
 				? setTimeout(() => {
 						timedOut = true;
-						proc.kill();
+						killShellProcess(proc.pid, proc, detached, "SIGTERM");
+						forceKillTimer = setTimeout(
+							() => killShellProcess(proc.pid, proc, detached, "SIGKILL"),
+							250,
+						);
+						forceKillTimer.unref?.();
 					}, timeoutMs)
 				: undefined;
 		timer?.unref?.();
@@ -148,6 +161,7 @@ export async function runShellCommand(
 			: await Promise.all([readStream(proc.stdout), readStream(proc.stderr)]);
 		const code = await proc.exited;
 		if (timer) clearTimeout(timer);
+		if (forceKillTimer) clearTimeout(forceKillTimer);
 
 		return {
 			...base,
@@ -162,6 +176,20 @@ export async function runShellCommand(
 			code: 127,
 			failure: error instanceof Error ? error.message : String(error),
 		};
+	}
+}
+
+function killShellProcess(
+	pid: number,
+	proc: Bun.Subprocess,
+	detached: boolean,
+	signal: NodeJS.Signals,
+): void {
+	try {
+		if (detached) process.kill(-pid, signal);
+		else proc.kill(signal);
+	} catch {
+		// The command may have exited between the deadline and signal delivery.
 	}
 }
 

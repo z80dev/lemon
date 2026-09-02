@@ -18,9 +18,6 @@ defmodule LemonWeb.SessionExportController do
 
       {:error, :unsupported_format} ->
         conn |> put_status(:bad_request) |> text("Unsupported export format")
-
-      {:error, _reason} ->
-        conn |> put_status(:unprocessable_entity) |> text("Export could not be created")
     end
   end
 
