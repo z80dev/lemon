@@ -12,6 +12,7 @@ defmodule LemonCli.ProfileCommand do
   @exit_ok 0
   @exit_error 1
   @exit_usage 2
+  @max_control_plane_run_id_bytes 256
 
   @common [json: :boolean, config_path: :string, home_state_dir: :string]
   @profile_fields [
@@ -246,28 +247,45 @@ defmodule LemonCli.ProfileCommand do
     do: :submission_unavailable
 
   defp classify_control_plane_submit_error({:control_plane, error}) when is_map(error) do
-    cond do
-      control_plane_outcome_unknown?(error) ->
-        {:submission_outcome_unknown, nil}
+    case control_plane_outcome_unknown(error) do
+      {:yes, run_id} ->
+        {:submission_outcome_unknown, run_id}
 
-      Map.get(error, "code") in @definite_control_plane_rejection_codes ->
-        :submission_rejected
-
-      true ->
-        {:submission_outcome_unknown, nil}
+      :no ->
+        if Map.get(error, "code") in @definite_control_plane_rejection_codes,
+          do: :submission_rejected,
+          else: {:submission_outcome_unknown, nil}
     end
   end
 
   defp classify_control_plane_submit_error(_transport_or_protocol_failure),
     do: {:submission_outcome_unknown, nil}
 
-  defp control_plane_outcome_unknown?(error) do
+  defp control_plane_outcome_unknown(error) do
     code = Map.get(error, "code")
     message = Map.get(error, "message")
+    details = Map.get(error, "details")
 
-    code == "OUTCOME_UNKNOWN" or
-      message in ["outcome_unknown", "Profile operation failed: :outcome_unknown"]
+    cond do
+      code == "UNAVAILABLE" and message == "Profile chat submission outcome is unknown" and
+        is_map(details) and Map.get(details, "code") == "SUBMISSION_OUTCOME_UNKNOWN" ->
+        {:yes, bounded_control_plane_run_id(Map.get(details, "runId"))}
+
+      code == "OUTCOME_UNKNOWN" or
+          message in ["outcome_unknown", "Profile operation failed: :outcome_unknown"] ->
+        {:yes, nil}
+
+      true ->
+        :no
+    end
   end
+
+  defp bounded_control_plane_run_id(run_id)
+       when is_binary(run_id) and byte_size(run_id) > 0 and
+              byte_size(run_id) <= @max_control_plane_run_id_bytes,
+       do: run_id
+
+  defp bounded_control_plane_run_id(_run_id), do: nil
 
   defp chat_result(run_id, request, profile) do
     %{

@@ -243,8 +243,10 @@ does not fall back to a second submission, and tells the operator to reconcile
 before retrying. On the packaged control-plane path, a recognized explicit RPC
 rejection is reported as rejected, a connection failure before the RPC is
 reported as not submitted, and a timeout, disconnect, malformed acknowledgement,
-or server-side unknown outcome remains conservatively unknown. Raw router and
-control-plane failure terms are never printed.
+or server-side unknown outcome remains conservatively unknown. The explicit
+server-side unknown-outcome envelope carries its bounded generated run ID for
+reconciliation; every other detail field is ignored. Raw router and control-plane
+failure terms are never printed.
 
 ## Context references
 

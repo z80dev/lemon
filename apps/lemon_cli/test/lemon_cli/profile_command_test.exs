@@ -386,6 +386,48 @@ defmodule LemonCli.ProfileCommandTest do
     refute_receive {:profile_control_plane_request, _method, _params}
   end
 
+  test "profile chat preserves only the bounded run id from the new unknown wire error" do
+    run_id = "run-profile-wire-unknown-#{System.unique_integer([:positive])}"
+    secret = "profile-wire-details-secret-#{System.unique_integer([:positive])}"
+    :ok = LemonCore.RouterBridge.configure(run_orchestrator: nil)
+
+    Application.put_env(
+      :lemon_cli,
+      :control_plane_client,
+      LemonCli.ProfileCommandTestControlPlane
+    )
+
+    Application.put_env(
+      :lemon_cli,
+      :profile_command_test_control_plane_result,
+      {:error,
+       {:control_plane,
+        %{
+          "code" => "UNAVAILABLE",
+          "message" => "Profile chat submission outcome is unknown",
+          "details" => %{
+            "code" => "SUBMISSION_OUTCOME_UNKNOWN",
+            "runId" => run_id,
+            "diagnostic" => secret
+          }
+        }}}
+    )
+
+    capture_io(fn -> assert CLI.run(["profile", "create", "wire-unknown"]) == 0 end)
+
+    error =
+      capture_io(:stderr, fn ->
+        assert CLI.run(["profile", "chat", "wire-unknown", "run", "once"]) == 1
+      end)
+
+    assert error =~ "could not be confirmed for run #{run_id}"
+    assert String.downcase(error) =~ "do not retry automatically"
+    refute error =~ secret
+    refute error =~ "SUBMISSION_OUTCOME_UNKNOWN"
+    assert_receive {:profile_control_plane_request, "profile.chat", _params}
+    refute_receive {:profile_control_plane_request, _method, _params}
+  end
+
   test "profile chat reports pre-request control-plane unavailability as not submitted" do
     secret = "profile-connect-secret-#{System.unique_integer([:positive])}"
     :ok = LemonCore.RouterBridge.configure(run_orchestrator: nil)
