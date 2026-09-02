@@ -70,10 +70,18 @@ defmodule LemonControlPlane.Methods.IntrospectionMethodsTest do
       :persistent_term.erase(@active_sessions_key)
     end
 
+    def set_active_sessions_result(result), do: :persistent_term.put(@active_sessions_key, result)
+
     def active_run_for_session(session_key) do
-      case Enum.find(active_sessions(), &(&1.session_key == session_key)) do
-        %{run_id: run_id} -> {:ok, run_id}
-        _ -> :none
+      case active_sessions() do
+        sessions when is_list(sessions) ->
+          case Enum.find(sessions, &(&1.session_key == session_key)) do
+            %{run_id: run_id} -> {:ok, run_id}
+            _ -> :none
+          end
+
+        error ->
+          error
       end
     end
 
@@ -368,6 +376,16 @@ defmodule LemonControlPlane.Methods.IntrospectionMethodsTest do
 
       assert session["harness"]["requirements"]["percentage"] == 50
       assert session["harness"]["requirements"]["cwd"] == requirements_cwd
+    end
+
+    test "list and detail return bounded unavailable errors when routing state is down" do
+      SessionCoordinatorStub.set_active_sessions_result({:error, :unavailable})
+
+      assert {:error, {:unavailable, "Active sessions are unavailable", nil}} =
+               SessionsActiveList.handle(%{}, %{})
+
+      assert {:error, {:unavailable, "Session directory is unavailable", nil}} =
+               SessionDetail.handle(%{"sessionKey" => "agent:offline:main"}, %{})
     end
   end
 

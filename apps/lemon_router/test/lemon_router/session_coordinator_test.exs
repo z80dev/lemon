@@ -78,7 +78,9 @@ defmodule LemonRouter.SessionCoordinatorTest do
       GenServer.start_link(
         __MODULE__,
         opts,
-        name: {:via, Registry, {LemonRouter.RunRegistry, opts[:run_id]}}
+        name:
+          {:via, Registry,
+           {LemonRouter.RunRegistry, opts[:run_id], %{session_key: opts[:session_key]}}}
       )
     end
 
@@ -97,7 +99,9 @@ defmodule LemonRouter.SessionCoordinatorTest do
       GenServer.start_link(
         __MODULE__,
         opts,
-        name: {:via, Registry, {LemonRouter.RunRegistry, opts[:run_id]}}
+        name:
+          {:via, Registry,
+           {LemonRouter.RunRegistry, opts[:run_id], %{session_key: opts[:session_key]}}}
       )
     end
 
@@ -453,6 +457,37 @@ defmodule LemonRouter.SessionCoordinatorTest do
 
     GenServer.stop(run1_pid)
     assert eventually(fn -> Registry.lookup(LemonRouter.RunRegistry, run2) != [] end)
+  end
+
+  test "an unrelated suspended run cannot block idle submission", %{run_supervisor: run_supervisor} do
+    unrelated_run = "run-unrelated-suspended-#{System.unique_integer([:positive])}"
+
+    unrelated_pid =
+      start_supervised!(
+        {SessionCoordinatorRuntimeRunStub,
+         run_id: unrelated_run, session_key: "agent:unrelated:main"},
+        id: {:unrelated_suspended_run, unrelated_run}
+      )
+
+    :ok = :sys.suspend(unrelated_pid)
+
+    on_exit(fn ->
+      if Process.alive?(unrelated_pid), do: :sys.resume(unrelated_pid)
+    end)
+
+    session_key = unique_session_key()
+    key = {:session, session_key}
+    target_run = "run-not-blocked-#{System.unique_integer([:positive])}"
+
+    assert :ok =
+             SessionCoordinator.submit(
+               key,
+               submission(key, target_run, "one", :collect, run_supervisor,
+                 run_process_module: SessionCoordinatorRuntimeRunStub
+               )
+             )
+
+    assert eventually(fn -> Registry.lookup(LemonRouter.RunRegistry, target_run) != [] end)
   end
 
   test "merged queued followups unsubscribe the superseded run", %{run_supervisor: run_supervisor} do

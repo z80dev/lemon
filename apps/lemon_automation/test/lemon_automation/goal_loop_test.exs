@@ -253,6 +253,45 @@ defmodule LemonAutomation.GoalLoopTest do
     end
   end
 
+  defmodule UnavailableManagerGoalStore do
+    @moduledoc false
+
+    def record_loop_status(_session_key, _status, _opts), do: {:error, :sqlite_busy}
+    def configure_loop_auto(_session_key, _enabled), do: {:error, :sqlite_busy}
+  end
+
+  defmodule ClaimAuthorizationLoop do
+    @moduledoc false
+
+    def run_once(_session_key, _opts), do: {:error, :unused}
+
+    def run_autonomous(_session_key, opts) do
+      test_pid = Keyword.fetch!(opts, :test_pid)
+      run_id = Keyword.fetch!(opts, :run_id)
+
+      case Keyword.fetch!(opts, :on_submitting).(run_id) do
+        :ok -> send(test_pid, {:claim_authorized_submit, run_id})
+        error -> send(test_pid, {:claim_refused, run_id, error})
+      end
+
+      {:error, :claim_refused}
+    end
+  end
+
+  defmodule BlockingManagerLoop do
+    @moduledoc false
+
+    def run_once(_session_key, _opts), do: {:error, :unused}
+
+    def run_autonomous(_session_key, opts) do
+      send(Keyword.fetch!(opts, :test_pid), {:blocking_manager_loop, self()})
+
+      receive do
+        :finish -> {:ok, %{status: :finished}}
+      end
+    end
+  end
+
   setup do
     session_key = "goal-loop-test-#{System.unique_integer([:positive])}"
     Process.put(:goal_loop_test_pid, self())
@@ -659,6 +698,66 @@ defmodule LemonAutomation.GoalLoopTest do
 
     assert {:ok, %{goal: stopped}} = GenServer.call(manager, {:stop_loop, session_key})
     assert stopped.meta["goalLoop"]["auto"]["enabled"] == false
+  end
+
+  test "manager refuses submit authorization when the durable run claim cannot be recorded", %{
+    session_key: session_key
+  } do
+    assert {:ok, _goal} = GoalStore.set(session_key, "Do not submit an unowned run")
+
+    manager =
+      start_supervised!(
+        {GoalLoopManager,
+         name: :"goal_loop_manager_claim_failure_#{System.unique_integer([:positive])}",
+         loop_mod: ClaimAuthorizationLoop,
+         goal_store: UnavailableManagerGoalStore,
+         scheduler_interval_ms: 0}
+      )
+
+    run_id = "goal_claim_failure_#{System.unique_integer([:positive])}"
+
+    assert {:ok, %{status: "running"}} =
+             GenServer.call(
+               manager,
+               {:start_loop, session_key, [run_id: run_id, test_pid: self()]}
+             )
+
+    assert_receive {:claim_refused, ^run_id, {:error, :goal_store_unavailable}}, 500
+    refute_receive {:claim_authorized_submit, ^run_id}, 100
+
+    assert eventually(fn ->
+             match?({:ok, %{running: false}}, GenServer.call(manager, {:status, session_key}))
+           end)
+  end
+
+  test "hard stop does not abort or kill work unless disabling auto is durable", %{
+    session_key: session_key
+  } do
+    assert {:ok, _goal} = GoalStore.set(session_key, "Keep ownership on storage failure")
+
+    manager =
+      start_supervised!(
+        {GoalLoopManager,
+         name: :"goal_loop_manager_stop_failure_#{System.unique_integer([:positive])}",
+         loop_mod: BlockingManagerLoop,
+         goal_store: UnavailableManagerGoalStore,
+         scheduler_interval_ms: 0}
+      )
+
+    assert {:ok, %{status: "running"}} =
+             GenServer.call(manager, {:start_loop, session_key, [test_pid: self()]})
+
+    assert_receive {:blocking_manager_loop, loop_pid}, 500
+
+    assert {:error, :goal_store_unavailable} =
+             GenServer.call(manager, {:stop_loop, session_key, :hard})
+
+    assert Process.alive?(loop_pid)
+
+    assert {:ok, %{running: true, loop: %{status: "running"}}} =
+             GenServer.call(manager, {:status, session_key})
+
+    send(loop_pid, :finish)
   end
 
   test "manager scheduler runs persisted auto goal through the router judge path", %{

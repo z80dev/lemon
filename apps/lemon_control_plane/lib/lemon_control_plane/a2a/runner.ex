@@ -313,7 +313,12 @@ defmodule LemonControlPlane.A2A.Runner do
           ),
         queue_mode: :followup,
         tool_policy: %{allow: allow_tools},
-        meta: %{a2a: true, a2a_peer_id: task.peer_id, a2a_context_id: task.context_id}
+        meta: %{
+          a2a: true,
+          a2a_peer_id: task.peer_id,
+          a2a_context_id: task.context_id,
+          router_replay_identity: "a2a:#{task.peer_id}:#{task.context_id}:#{task.id}"
+        }
       })
 
     case safe_submit(request) do

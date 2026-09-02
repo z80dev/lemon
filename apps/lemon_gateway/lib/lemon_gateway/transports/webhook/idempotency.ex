@@ -9,10 +9,14 @@ defmodule LemonGateway.Transports.Webhook.Idempotency do
   alias LemonGateway.Transports.Webhook.Request
 
   @table :webhook_idempotency
+  @response_table :webhook_idempotency_responses
   @reservation_lease_ms 60_000
 
   @spec table() :: atom()
   def table, do: @table
+
+  @doc false
+  def response_table, do: @response_table
 
   @spec context(Plug.Conn.t(), map(), binary(), map(), map()) ::
           {:ok, map() | nil} | {:duplicate, integer(), map()} | {:error, :idempotency_unavailable}
@@ -78,12 +82,14 @@ defmodule LemonGateway.Transports.Webhook.Idempotency do
 
   def store_response(%{} = idempotency_ctx, status, payload)
       when is_integer(status) and is_map(payload) do
-    merge_store_entry(idempotency_ctx, %{
-      response_status: status,
-      response_payload: payload,
-      state: "completed",
-      updated_at_ms: System.system_time(:millisecond)
-    })
+    with :ok <- persist_response_receipt(idempotency_ctx, status, payload) do
+      merge_store_entry(idempotency_ctx, %{
+        response_status: status,
+        response_payload: payload,
+        state: "completed",
+        updated_at_ms: System.system_time(:millisecond)
+      })
+    end
   end
 
   def store_response(_ctx, _status, _payload), do: :ok
@@ -120,7 +126,7 @@ defmodule LemonGateway.Transports.Webhook.Idempotency do
   defp body_params(%Plug.Conn{body_params: params}) when is_map(params), do: params
   defp body_params(_), do: %{}
 
-  defp response(%{} = entry) do
+  defp response(%{} = entry, store_key) do
     response_status = Request.int_value(Request.fetch(entry, :response_status), nil)
     response_payload = Request.fetch(entry, :response_payload)
     state = Request.normalize_blank(Request.fetch(entry, :state))
@@ -129,18 +135,105 @@ defmodule LemonGateway.Transports.Webhook.Idempotency do
       is_integer(response_status) and is_map(response_payload) ->
         {:duplicate, response_status, response_payload}
 
-      state == "pending" ->
+      true ->
+        response_without_inline_receipt(entry, store_key, state)
+    end
+  end
+
+  defp response_without_inline_receipt(entry, store_key, state) do
+    mode = Request.normalize_blank(Request.fetch(entry, :mode))
+
+    case fetch_response_receipt(entry, store_key) do
+      {:ok, %{status: status, payload: payload}} ->
+        {:duplicate, status, payload}
+
+      {:error, :idempotency_unavailable} ->
+        {:error, :idempotency_unavailable}
+
+      {:ok, nil} when state == "pending" ->
         {:duplicate, 503,
          (fallback_payload(entry) || %{})
          |> Map.put(:status, "reservation_pending")
          |> Map.put(:retry_safe, true)}
 
-      true ->
+      {:ok, nil} when state == "submitted" and mode == "sync" ->
+        {:duplicate, 503,
+         (fallback_payload(entry) || %{})
+         |> Map.put(:status, "response_persistence_unknown")
+         |> Map.put(:retry_safe, false)}
+
+      {:ok, nil} ->
         case fallback_payload(entry) do
           %{} = payload -> {:duplicate, 202, payload}
           _ -> nil
         end
     end
+  end
+
+  defp persist_response_receipt(
+         %{store_key: store_key, reservation_id: reservation_id},
+         status,
+         payload
+       )
+       when is_tuple(store_key) and is_binary(reservation_id) do
+    with {:ok, %{} = existing} <- Store.fetch(@table, store_key),
+         true <- Request.fetch(existing, :reservation_id) == reservation_id do
+      receipt = %{
+        status: status,
+        payload: payload,
+        stored_at_ms: System.system_time(:millisecond)
+      }
+
+      receipt_key = {store_key, reservation_id}
+
+      case Store.put_new(@response_table, receipt_key, receipt) do
+        :ok ->
+          :ok
+
+        {:error, :exists} ->
+          case Store.fetch(@response_table, receipt_key) do
+            {:ok, %{status: ^status, payload: ^payload}} -> :ok
+            {:ok, _different} -> {:error, :idempotency_unavailable}
+            {:error, _reason} -> {:error, :idempotency_unavailable}
+          end
+
+        {:error, _reason} ->
+          {:error, :idempotency_unavailable}
+      end
+    else
+      _ -> {:error, :idempotency_unavailable}
+    end
+  rescue
+    _error -> {:error, :idempotency_unavailable}
+  catch
+    _kind, _reason -> {:error, :idempotency_unavailable}
+  end
+
+  defp persist_response_receipt(_ctx, _status, _payload),
+    do: {:error, :idempotency_unavailable}
+
+  defp fetch_response_receipt(entry, store_key) do
+    case Request.normalize_blank(Request.fetch(entry, :reservation_id)) do
+      reservation_id when is_binary(reservation_id) ->
+        case Store.fetch(@response_table, {store_key, reservation_id}) do
+          {:ok, %{status: status, payload: payload}}
+          when is_integer(status) and is_map(payload) ->
+            {:ok, %{status: status, payload: payload}}
+
+          {:ok, nil} ->
+            {:ok, nil}
+
+          _ ->
+            {:error, :idempotency_unavailable}
+        end
+
+      _ ->
+        {:ok, nil}
+    end
+  rescue
+    _error -> {:error, :idempotency_unavailable}
+  catch
+    _kind, _reason -> {:error, :idempotency_unavailable}
   end
 
   defp fallback_payload(entry) when is_map(entry) do
@@ -248,7 +341,7 @@ defmodule LemonGateway.Transports.Webhook.Idempotency do
         if reclaimable_pending?(existing, now_ms) do
           reclaim_pending(store_key, existing, integration_id, idempotency_key, now_ms)
         else
-          case response(existing) do
+          case response(existing, store_key) do
             {:duplicate, _status, _payload} = duplicate -> duplicate
             _ -> {:error, :idempotency_unavailable}
           end

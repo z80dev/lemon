@@ -11,9 +11,16 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 ### Fixed
 
 - A2A message replays now return the original task without duplicate router
-  submission, webhook idempotency storage failures fail closed with truthful
-  non-retry-safe receipts, and ambiguous goal-loop submissions retain their
-  fixed run ownership until reconciliation or an explicit hard stop.
+  submission, webhook idempotency storage failures fail closed with retryable
+  503 responses instead of reporting acceptance, and exact synchronous webhook
+  responses have an independent durable replay receipt. Ambiguous goal-loop
+  submissions retain their fixed run ownership until reconciliation or an
+  explicit hard stop.
+- Fixed run IDs now have durable semantic admission claims, bounded accepted
+  receipt retention, and persistent abort tombstones. Replays cannot cross
+  session or content identity, volatile delivery metadata does not create false
+  conflicts, and surviving run ownership is indexed without probing unrelated
+  run processes.
 - Telegram memory-reflection and per-chat abort helpers no longer collapse
   router mutation failures into success-like results. Ambiguous cancel and
   keepalive callbacks now direct users to check run status before retrying,

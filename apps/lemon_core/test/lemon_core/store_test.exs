@@ -389,6 +389,18 @@ defmodule LemonCore.StoreTest do
   end
 
   describe "backend error handling" do
+    test "fetch distinguishes confirmed absence from backend failure" do
+      key = "fetch_#{unique_token()}"
+      assert {:ok, nil} = Store.fetch(:router_run_admissions, key)
+      assert {:ok, nil} = Store.fetch_run(key)
+
+      original_state = swap_store_backend(BusyBackend, %{})
+      on_exit(fn -> :sys.replace_state(Store, fn _ -> original_state end) end)
+
+      assert {:error, :store_unavailable} = Store.fetch(:router_run_admissions, key)
+      assert {:error, :store_unavailable} = Store.fetch_run(key)
+    end
+
     test "sessions index reads are served from read cache even when backend becomes busy" do
       token = unique_token()
       key = session_key(token)

@@ -316,6 +316,32 @@ defmodule LemonCore.Store do
   end
 
   @doc """
+  Fetch a value without collapsing backend or process failure into absence.
+
+  Unlike `get/3`, this returns `{:ok, nil}` only when the backend confirms that
+  the key is absent. Correctness-sensitive admission paths should use this
+  function when an unavailable read must fail closed.
+  """
+  @spec fetch(server(), table :: atom(), key :: term()) ::
+          {:ok, term() | nil} | {:error, :store_unavailable}
+  def fetch(server \\ __MODULE__, table, key) do
+    with true <- cached_table?(server, table),
+         {:ok, value} <- ReadCache.fetch(server, table, key) do
+      {:ok, value}
+    else
+      _uncached_or_miss ->
+        safe_store_call(
+          server,
+          {:generic_fetch, table, key},
+          {:error, :store_unavailable},
+          op: :fetch,
+          table: table,
+          key: key
+        )
+    end
+  end
+
+  @doc """
   Delete a key from a named table.
   """
   @spec delete(server(), table :: atom(), key :: term()) :: :ok | {:error, term()}
@@ -569,6 +595,31 @@ defmodule LemonCore.Store do
 
       value ->
         value
+    end
+  end
+
+  @doc """
+  Fetch a specific run by ID without collapsing storage failures into absence.
+
+  Use this at correctness boundaries where a missing run permits a mutation:
+  `{:ok, nil}` proves absence, while `{:error, :store_unavailable}` preserves
+  an unknown outcome when the backend cannot answer.
+  """
+  @spec fetch_run(server(), term()) :: {:ok, map() | nil} | {:error, :store_unavailable}
+  def fetch_run(server \\ __MODULE__, run_id) do
+    case ReadCache.fetch(server, :runs, run_id) do
+      {:ok, value} ->
+        {:ok, value}
+
+      _miss_or_uncached ->
+        safe_store_call(
+          server,
+          {:fetch_run, run_id},
+          {:error, :store_unavailable},
+          op: :fetch_run,
+          table: :runs,
+          key: run_id
+        )
     end
   end
 
@@ -1004,6 +1055,25 @@ defmodule LemonCore.Store do
     end
   end
 
+  def handle_call({:fetch_run, run_id}, _from, state) do
+    case state.backend.get(state.backend_state, :runs, run_id) do
+      {:ok, value, backend_state} ->
+        if not is_nil(value) do
+          ReadCache.put(state.read_cache, :runs, run_id, value)
+        end
+
+        {:reply, {:ok, value}, %{state | backend_state: backend_state}}
+
+      {:error, reason} ->
+        log_backend_error(:fetch, :runs, run_id, reason)
+        {:reply, {:error, :store_unavailable}, state}
+
+      other ->
+        log_backend_unexpected(:fetch, :runs, run_id, other)
+        {:reply, {:error, :store_unavailable}, state}
+    end
+  end
+
   def handle_call({:get_run_history, session_key, opts}, _from, state) do
     # Forwarded to the configured provider, which owns run history and keeps
     # potentially large history I/O off this process.
@@ -1152,6 +1222,25 @@ defmodule LemonCore.Store do
       other ->
         log_backend_unexpected(:get, table, key, other)
         {:reply, nil, state}
+    end
+  end
+
+  def handle_call({:generic_fetch, table, key}, _from, state) do
+    case state.backend.get(state.backend_state, table, key) do
+      {:ok, value, backend_state} ->
+        if not is_nil(value) and table in state.cached_tables do
+          ReadCache.put(state.read_cache, table, key, value)
+        end
+
+        {:reply, {:ok, value}, %{state | backend_state: backend_state}}
+
+      {:error, reason} ->
+        log_backend_error(:fetch, table, key, reason)
+        {:reply, {:error, :store_unavailable}, state}
+
+      other ->
+        log_backend_unexpected(:fetch, table, key, other)
+        {:reply, {:error, :store_unavailable}, state}
     end
   end
 

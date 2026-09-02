@@ -98,7 +98,7 @@ defmodule LemonChannels.Adapters.Email.Webhook do
   end
 
   defp handoff(conn, message, reservation) do
-    case deliver_to_router(message, reservation.run_id) do
+    case deliver_to_router(message, reservation) do
       :ok ->
         case remember(reservation, "accepted") do
           :ok ->
@@ -301,8 +301,12 @@ defmodule LemonChannels.Adapters.Email.Webhook do
   # RouterBridge.submit_run/1. A provider Message-ID supplies a stable run
   # reference so ambiguous submissions can be reconciled without inventing a
   # second identity.
-  defp deliver_to_router(message, run_id),
-    do: Runtime.submit_inbound(message, run_id: run_id)
+  defp deliver_to_router(message, reservation),
+    do:
+      Runtime.submit_inbound(message,
+        run_id: reservation.run_id,
+        replay_identity: "email:" <> reservation.key
+      )
 
   defp secure_equal?(nil, _token), do: false
 

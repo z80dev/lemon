@@ -24,7 +24,13 @@ defmodule LemonControlPlane.Methods.AgentRoutingMethodsTest do
     end
   end
 
+  defmodule UnavailableSessionCoordinator do
+    @moduledoc false
+    def list_active_sessions, do: {:error, :unavailable}
+  end
+
   setup do
+    {:ok, _apps} = Application.ensure_all_started(:lemon_router)
     previous_submitter = Application.get_env(:lemon_router, :agent_inbox_submitter)
     Application.put_env(:lemon_router, :agent_inbox_submitter, InboxSubmitterStub)
     Process.put(:agent_routing_methods_test_pid, self())
@@ -305,5 +311,23 @@ defmodule LemonControlPlane.Methods.AgentRoutingMethodsTest do
     assert result["includesMessageBodies"] == false
     assert result["includesSecretValues"] == false
     assert result["includesCredentials"] == false
+  end
+
+  test "directory and target methods return bounded unavailable errors when routing state is down" do
+    previous = Application.get_env(:lemon_router, :session_coordinator)
+    Application.put_env(:lemon_router, :session_coordinator, UnavailableSessionCoordinator)
+
+    try do
+      assert {:error, {:unavailable, "Agent directory is unavailable", nil}} =
+               AgentDirectoryList.handle(%{}, %{})
+
+      assert {:error, {:unavailable, "Agent targets are unavailable", nil}} =
+               AgentTargetsList.handle(%{}, %{})
+    after
+      case previous do
+        nil -> Application.delete_env(:lemon_router, :session_coordinator)
+        module -> Application.put_env(:lemon_router, :session_coordinator, module)
+      end
+    end
   end
 end

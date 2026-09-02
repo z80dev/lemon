@@ -209,6 +209,48 @@ defmodule LemonGateway.WebhookTransportTest do
     refute reclaimed_ctx.reservation_id == first_ctx.reservation_id
   end
 
+  test "gateway retries keep one semantic replay identity across request-local ids" do
+    integration_id = "demo-stable-replay-#{System.unique_integer([:positive])}"
+    idempotency_key = "stable-replay-#{System.unique_integer([:positive])}"
+
+    base_conn =
+      Test.conn(:post, "/webhooks/#{integration_id}", "")
+      |> Conn.put_req_header("idempotency-key", idempotency_key)
+
+    assert {:ok, ctx} =
+             Webhook.idempotency_context_for_test(base_conn, %{}, integration_id, %{})
+
+    Application.put_env(:lemon_gateway, :webhook_transport_submit_result, {:ok, ctx.run_id})
+
+    assert {:ok, _run_ctx} =
+             dispatch_webhook(
+               Conn.put_req_header(base_conn, "x-request-id", "delivery-attempt-one"),
+               ctx.run_id,
+               ctx,
+               integration_id
+             )
+
+    assert_receive {:webhook_submit, first_request}
+
+    assert {:ok, _run_ctx} =
+             dispatch_webhook(
+               Conn.put_req_header(base_conn, "x-request-id", "delivery-attempt-two"),
+               ctx.run_id,
+               ctx,
+               integration_id
+             )
+
+    assert_receive {:webhook_submit, second_request}
+    assert first_request.meta.webhook.request.request_id == "delivery-attempt-one"
+    assert second_request.meta.webhook.request.request_id == "delivery-attempt-two"
+
+    assert first_request.meta.router_replay_identity ==
+             second_request.meta.router_replay_identity
+
+    assert first_request.meta.router_replay_identity ==
+             "webhook:#{integration_id}:#{idempotency_key}"
+  end
+
   test "response persistence fails closed when its durable reservation disappears" do
     integration_id = "demo-response-store-#{System.unique_integer([:positive])}"
 
@@ -221,6 +263,62 @@ defmodule LemonGateway.WebhookTransportTest do
 
     assert {:error, :idempotency_unavailable} =
              Idempotency.store_response(ctx, 202, %{run_id: ctx.run_id})
+  end
+
+  test "a sync response receipt replays the exact response if the primary completion update is lost" do
+    integration_id = "demo-sync-response-#{System.unique_integer([:positive])}"
+    idempotency_key = "sync-response-#{System.unique_integer([:positive])}"
+
+    conn =
+      Test.conn(:post, "/webhooks/#{integration_id}", "")
+      |> Conn.put_req_header("idempotency-key", idempotency_key)
+
+    assert {:ok, ctx} = Webhook.idempotency_context_for_test(conn, %{}, integration_id, %{})
+    assert :ok = Idempotency.store_submission(ctx, ctx.run_id, "agent:sync:main", :sync)
+
+    exact_payload = %{
+      run_id: ctx.run_id,
+      session_key: "agent:sync:main",
+      mode: "sync",
+      completed: %{ok: true, answer: "exact answer"},
+      duration_ms: 17
+    }
+
+    assert :ok = Idempotency.store_response(ctx, 200, exact_payload)
+
+    # This is the durable shape left when the independent response receipt commits
+    # but the primary idempotency-row completion update does not.
+    primary = Store.get(Webhook.idempotency_table_for_test(), ctx.store_key)
+
+    assert :ok =
+             Store.put(
+               Webhook.idempotency_table_for_test(),
+               ctx.store_key,
+               primary
+               |> Map.drop([:response_status, :response_payload])
+               |> Map.put(:state, "submitted")
+             )
+
+    assert {:duplicate, 200, ^exact_payload} =
+             Webhook.idempotency_context_for_test(conn, %{}, integration_id, %{})
+  end
+
+  test "a sync submission without a durable response never replays generic accepted" do
+    integration_id = "demo-sync-unavailable-#{System.unique_integer([:positive])}"
+
+    conn =
+      Test.conn(:post, "/webhooks/#{integration_id}", "")
+      |> Conn.put_req_header("idempotency-key", "sync-unavailable")
+
+    assert {:ok, ctx} = Webhook.idempotency_context_for_test(conn, %{}, integration_id, %{})
+    assert :ok = Idempotency.store_submission(ctx, ctx.run_id, "agent:sync:main", :sync)
+
+    assert {:duplicate, 503, payload} =
+             Webhook.idempotency_context_for_test(conn, %{}, integration_id, %{})
+
+    assert payload.run_id == ctx.run_id
+    assert payload.status == "response_persistence_unknown"
+    assert payload.retry_safe == false
   end
 
   test "accepted submission fails closed when its durable reservation disappears" do
@@ -493,10 +591,18 @@ defmodule LemonGateway.WebhookTransportTest do
     |> Enum.each(fn {key, _value} ->
       Store.delete(Webhook.idempotency_table_for_test(), key)
     end)
+
+    Idempotency.response_table()
+    |> Store.list()
+    |> Enum.each(fn {key, _value} -> Store.delete(Idempotency.response_table(), key) end)
   end
 
   defp dispatch_webhook(run_id, idempotency_ctx, integration_id \\ "demo") do
     conn = Test.conn(:post, "/webhooks/#{integration_id}", "")
+    dispatch_webhook(conn, run_id, idempotency_ctx, integration_id)
+  end
+
+  defp dispatch_webhook(conn, run_id, idempotency_ctx, integration_id) do
     integration = %{"agent_id" => "webhook-test", "mode" => "async"}
     normalized = %{prompt: "safe prompt", attachments: [], metadata: %{}}
 
@@ -513,7 +619,7 @@ defmodule LemonGateway.WebhookTransportTest do
       callback_waiter_ready_timeout_ms: 100,
       run_id: run_id,
       validate_callback_url: fn _url, _allow_private, _opts -> {:ok, nil} end,
-      request_metadata_fun: fn _conn -> %{} end
+      request_metadata_fun: &Webhook.request_metadata_for_test/1
     )
   end
 

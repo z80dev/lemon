@@ -188,25 +188,12 @@ defmodule LemonRouter.SessionCoordinator do
   end
 
   defp runtime_active_sessions do
-    sessions =
-      Registry.select(LemonRouter.RunRegistry, [
-        {{:"$1", :"$2", :"$3"}, [], [{{:"$1", :"$2"}}]}
-      ])
-      |> Enum.reduce([], fn {run_id, pid}, sessions ->
-        case :sys.get_state(pid, 250) do
-          %{session_key: session_key} when is_binary(session_key) and is_binary(run_id) ->
-            [%{session_key: session_key, run_id: run_id} | sessions]
-
-          %{execution_request: %{session_key: session_key}}
-          when is_binary(session_key) and is_binary(run_id) ->
-            [%{session_key: session_key, run_id: run_id} | sessions]
-
-          _ ->
-            sessions
-        end
-      end)
-
-    {:ok, sessions}
+    {:ok,
+     Registry.select(LemonRouter.RunRegistry, [
+       {{:"$1", :"$2", %{session_key: :"$3"}},
+        [{:andalso, {:is_binary, :"$1"}, {:is_binary, :"$3"}}],
+        [%{run_id: :"$1", session_key: :"$3"}]}
+     ])}
   rescue
     _ -> {:error, :unavailable}
   catch
@@ -683,20 +670,10 @@ defmodule LemonRouter.SessionCoordinator do
 
   defp surviving_session_runs(session_key) do
     Registry.select(LemonRouter.RunRegistry, [
-      {{:"$1", :"$2", :"$3"}, [], [{{:"$1", :"$2"}}]}
+      {{:"$1", :"$2", %{session_key: session_key}},
+       [{:andalso, {:is_binary, :"$1"}, {:is_pid, :"$2"}}], [{{:"$1", :"$2"}}]}
     ])
-    |> Enum.filter(fn {run_id, pid} ->
-      is_binary(run_id) and is_pid(pid) and Process.alive?(pid) and
-        run_process_session_key(pid) == session_key
-    end)
-  end
-
-  defp run_process_session_key(pid) do
-    case :sys.get_state(pid, 250) do
-      %{session_key: session_key} when is_binary(session_key) -> session_key
-      %{execution_request: %{session_key: session_key}} when is_binary(session_key) -> session_key
-      _ -> nil
-    end
+    |> Enum.filter(fn {_run_id, pid} -> Process.alive?(pid) end)
   end
 
   defp activate_submission(%SessionState{} = state, next, rest, pid, opts) do

@@ -33,6 +33,7 @@ defmodule LemonChannels.Runtime do
     inbound
     |> LemonChannels.RunRequestBuilder.from_inbound()
     |> maybe_put_run_id(Keyword.get(opts, :run_id))
+    |> maybe_put_replay_identity(Keyword.get(opts, :replay_identity))
     |> RouterBridge.submit_run()
     |> case do
       {:ok, _run_id} -> :ok
@@ -115,6 +116,13 @@ defmodule LemonChannels.Runtime do
     do: %{request | run_id: run_id}
 
   defp maybe_put_run_id(request, _run_id), do: request
+
+  defp maybe_put_replay_identity(request, replay_identity)
+       when is_binary(replay_identity) and replay_identity != "" do
+    %{request | meta: Map.put(request.meta || %{}, :router_replay_identity, replay_identity)}
+  end
+
+  defp maybe_put_replay_identity(request, _replay_identity), do: request
 
   defp emit_inbound_telemetry(%InboundMessage{} = inbound) do
     meta = if is_map(inbound.meta), do: inbound.meta, else: %{}

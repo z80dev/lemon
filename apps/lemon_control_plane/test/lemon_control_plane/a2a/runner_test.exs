@@ -248,7 +248,11 @@ defmodule LemonControlPlane.A2A.RunnerTest do
              })
 
     assert {:stream, ^task_id} = start_message(context_id, message_id)
-    assert_receive {:a2a_submit_blocked, %{run_id: ^run_id}, runner_pid}, 1_000
+    assert_receive {:a2a_submit_blocked, %{run_id: ^run_id} = request, runner_pid}, 1_000
+
+    assert request.meta.router_replay_identity ==
+             "a2a:local:#{context_id}:#{task_id}"
+
     send(runner_pid, {:release_a2a_submit, {:error, :definite_rejection}})
 
     cleanup_task(task_id, context_id, message_id, run_id)

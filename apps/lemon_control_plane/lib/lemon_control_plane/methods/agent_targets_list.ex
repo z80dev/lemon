@@ -22,29 +22,37 @@ defmodule LemonControlPlane.Methods.AgentTargetsList do
     query = get_param(params, "query")
     limit = normalize_limit(get_param(params, "limit"))
 
-    targets =
-      LemonRouter.list_agent_targets(
-        channel_id: channel_id,
-        account_id: account_id,
-        agent_id: agent_id,
-        query: query,
-        limit: limit
-      )
-      |> Enum.map(&format_target/1)
+    case LemonRouter.list_agent_targets(
+           channel_id: channel_id,
+           account_id: account_id,
+           agent_id: agent_id,
+           query: query,
+           limit: limit
+         ) do
+      targets when is_list(targets) ->
+        targets = Enum.map(targets, &format_target/1)
 
-    {:ok,
-     %{
-       "targets" => targets,
-       "total" => length(targets),
-       "channelId" => channel_id,
-       "summary" => target_summary(targets, channel_id),
-       "includesMessageBodies" => false,
-       "includesSecretValues" => false,
-       "includesCredentials" => false
-     }}
+        {:ok,
+         %{
+           "targets" => targets,
+           "total" => length(targets),
+           "channelId" => channel_id,
+           "summary" => target_summary(targets, channel_id),
+           "includesMessageBodies" => false,
+           "includesSecretValues" => false,
+           "includesCredentials" => false
+         }}
+
+      {:error, _reason} ->
+        {:error, {:unavailable, "Agent targets are unavailable", nil}}
+
+      _unexpected ->
+        {:error, {:unavailable, "Agent targets are unavailable", nil}}
+    end
   rescue
-    e ->
-      {:error, {:internal_error, "Failed to list known targets", Exception.message(e)}}
+    _e -> {:error, {:unavailable, "Agent targets are unavailable", nil}}
+  catch
+    :exit, _reason -> {:error, {:unavailable, "Agent targets are unavailable", nil}}
   end
 
   defp format_target(target) do

@@ -23,6 +23,7 @@ defmodule LemonGateway.Transports.Webhook.InvocationDispatch do
              default_callback_wait_timeout_ms:
                Keyword.fetch!(opts, :default_callback_wait_timeout_ms),
              run_id: run_id,
+             replay_identity: replay_identity(idempotency_ctx),
              validate_callback_url: Keyword.fetch!(opts, :validate_callback_url),
              request_metadata_fun: Keyword.fetch!(opts, :request_metadata_fun)
            ),
@@ -41,6 +42,13 @@ defmodule LemonGateway.Transports.Webhook.InvocationDispatch do
       )
     end
   end
+
+  defp replay_identity(%{integration_id: integration_id, idempotency_key: idempotency_key})
+       when is_binary(integration_id) and is_binary(idempotency_key) do
+    "webhook:" <> integration_id <> ":" <> idempotency_key
+  end
+
+  defp replay_identity(_), do: nil
 
   defp perform_submit(run_request, run_ctx, wait_setup, idempotency_ctx) do
     case RouterBridge.submit_run(run_request) do

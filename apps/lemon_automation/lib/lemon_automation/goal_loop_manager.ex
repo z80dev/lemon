@@ -83,6 +83,7 @@ defmodule LemonAutomation.GoalLoopManager do
         calls: %{},
         loops: %{},
         loop_refs: %{},
+        goal_store: Keyword.get(opts, :goal_store, GoalStore),
         loop_mod: Keyword.get(opts, :loop_mod, app_env(:goal_loop_module, GoalLoop)),
         auto_scan_limit: Keyword.get(opts, :auto_scan_limit, app_env(:goal_loop_scan_limit, 50)),
         scheduler_interval_ms:
@@ -155,29 +156,37 @@ defmodule LemonAutomation.GoalLoopManager do
         end
 
       loop when mode == :graceful and loop.status != "reconciling" ->
-        _ = GoalStore.configure_loop_auto(session_key, false)
-        loop = %{loop | status: "stopping"}
-        state = put_in(state.loops[session_key], loop)
+        case safe_configure_loop_auto(state.goal_store, session_key, false) do
+          {:ok, goal} ->
+            loop = %{loop | status: "stopping"}
+            state = put_in(state.loops[session_key], loop)
 
-        {:reply,
-         {:ok, %{loop: public_loop(loop), goal: GoalStore.get(session_key), mode: :graceful}},
-         state}
+            {:reply, {:ok, %{loop: public_loop(loop), goal: goal, mode: :graceful}}, state}
+
+          {:error, _reason} ->
+            {:reply, {:error, :goal_store_unavailable}, state}
+        end
 
       loop ->
-        _ = GoalStore.configure_loop_auto(session_key, false)
-        router_abort = abort_active_run(loop)
-        stop_loop_task(loop)
+        case safe_configure_loop_auto(state.goal_store, session_key, false) do
+          {:ok, _goal} ->
+            router_abort = abort_active_run(loop)
+            stop_loop_task(loop)
 
-        {loop, goal, state} = finish_hard_stop(session_key, loop, router_abort, state)
+            {loop, goal, state} = finish_hard_stop(session_key, loop, router_abort, state)
 
-        {:reply,
-         {:ok,
-          %{
-            loop: public_loop(loop),
-            goal: goal,
-            mode: :hard,
-            router_abort: router_abort
-          }}, state}
+            {:reply,
+             {:ok,
+              %{
+                loop: public_loop(loop),
+                goal: goal,
+                mode: :hard,
+                router_abort: router_abort
+              }}, state}
+
+          {:error, _reason} ->
+            {:reply, {:error, :goal_store_unavailable}, state}
+        end
     end
   end
 
@@ -212,9 +221,13 @@ defmodule LemonAutomation.GoalLoopManager do
           aborted: false
         }
 
-        _ = GoalStore.record_loop_status(session_key, :running, run_id: run_id)
+        case safe_record_loop_status(state.goal_store, session_key, :running, run_id: run_id) do
+          {:ok, _goal} ->
+            {:reply, :ok, put_in(state.loops[session_key], %{loop | active_run: active_run})}
 
-        {:reply, :ok, put_in(state.loops[session_key], %{loop | active_run: active_run})}
+          {:error, _reason} ->
+            {:reply, {:error, :goal_store_unavailable}, state}
+        end
 
       _ ->
         {:reply, {:error, :goal_loop_stopped}, state}
@@ -237,6 +250,22 @@ defmodule LemonAutomation.GoalLoopManager do
           {:error, reason} -> {:reply, {:error, reason}, state}
         end
     end
+  end
+
+  defp safe_configure_loop_auto(goal_store, session_key, enabled) do
+    goal_store.configure_loop_auto(session_key, enabled)
+  rescue
+    _error -> {:error, :goal_store_unavailable}
+  catch
+    _kind, _reason -> {:error, :goal_store_unavailable}
+  end
+
+  defp safe_record_loop_status(goal_store, session_key, status, opts) do
+    goal_store.record_loop_status(session_key, status, opts)
+  rescue
+    _error -> {:error, :goal_store_unavailable}
+  catch
+    _kind, _reason -> {:error, :goal_store_unavailable}
   end
 
   @impl true

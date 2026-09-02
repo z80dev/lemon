@@ -31,6 +31,11 @@ defmodule LemonRouter.RunOrchestrator do
   @abort_tombstone_ttl_ms 300_000
   @serialized_mutation_timeout_ms 20_000
   @run_admission_table :router_run_admissions
+  @abort_tombstone_table :router_abort_tombstones
+  @request_identity_meta_key :router_request_identity
+  @replay_identity_meta_key :router_replay_identity
+  @run_admission_retention_ms 86_400_000
+  @receipt_cleanup_interval_ms 60_000
 
   def start_link(opts \\ []) do
     name = Keyword.get(opts, :name, __MODULE__)
@@ -39,6 +44,9 @@ defmodule LemonRouter.RunOrchestrator do
 
   @doc false
   def admission_table, do: @run_admission_table
+
+  @doc false
+  def abort_tombstone_table, do: @abort_tombstone_table
 
   @doc """
   Submit a run request.
@@ -173,6 +181,12 @@ defmodule LemonRouter.RunOrchestrator do
       run_supervisor: Keyword.get(opts, :run_supervisor, LemonRouter.RunSupervisor),
       run_process_module: Keyword.get(opts, :run_process_module, RunProcess),
       run_process_opts: run_process_opts,
+      abort_tombstone_ttl_ms: Keyword.get(opts, :abort_tombstone_ttl_ms, @abort_tombstone_ttl_ms),
+      run_admission_retention_ms:
+        Keyword.get(opts, :run_admission_retention_ms, @run_admission_retention_ms),
+      receipt_cleanup_interval_ms:
+        Keyword.get(opts, :receipt_cleanup_interval_ms, @receipt_cleanup_interval_ms),
+      last_receipt_cleanup_ms: 0,
       abort_tombstones: %{},
       accepted_run_ids: %{}
     }
@@ -182,35 +196,42 @@ defmodule LemonRouter.RunOrchestrator do
 
   @impl true
   def handle_call({:submit, %RunRequest{} = params}, _from, state) do
-    state = prune_abort_tombstones(state)
+    state = maybe_cleanup_durable_receipts(state)
     params = ensure_run_id(params)
 
     {result, state} =
-      case Map.get(state.abort_tombstones, params.run_id) do
-        %{reason: reason} ->
+      case fetch_abort_tombstone(params.run_id, state) do
+        {:active, %{reason: reason}, state} ->
           {reject_tombstoned_submission(params, reason), state}
 
-        nil ->
+        {:none, state} ->
           submit_idempotently(params, state)
+
+        {:error, state} ->
+          {{:error, :outcome_unknown}, state}
       end
 
     {:reply, result, state}
   end
 
   def handle_call({:register_abort, run_id, reason}, _from, state) do
-    state = prune_abort_tombstones(state)
+    state = maybe_cleanup_durable_receipts(state)
 
     tombstone = %{
       reason: reason,
-      inserted_at_ms: System.monotonic_time(:millisecond)
+      expires_at_ms: System.system_time(:millisecond) + state.abort_tombstone_ttl_ms
     }
 
-    emit_abort_tombstone_telemetry(:registered, reason)
+    case persist_abort_tombstone(run_id, tombstone) do
+      :ok ->
+        emit_abort_tombstone_telemetry(:registered, reason)
+        result = dispatch_registered_abort(run_id, reason)
+        state = %{state | abort_tombstones: Map.put(state.abort_tombstones, run_id, tombstone)}
+        {:reply, result, state}
 
-    result = dispatch_registered_abort(run_id, reason)
-    state = %{state | abort_tombstones: Map.put(state.abort_tombstones, run_id, tombstone)}
-
-    {:reply, result, state}
+      {:error, _reason} ->
+        {:reply, {:error, :outcome_unknown}, state}
+    end
   end
 
   def handle_call(
@@ -323,6 +344,7 @@ defmodule LemonRouter.RunOrchestrator do
   end
 
   defp submit_idempotently(%RunRequest{} = params, state) do
+    state = prune_accepted_run_ids(state)
     identity = request_identity(params)
 
     case Map.get(state.accepted_run_ids, params.run_id) do
@@ -333,25 +355,31 @@ defmodule LemonRouter.RunOrchestrator do
         {{:error, :run_id_conflict}, state}
 
       nil ->
-        case claim_admission(params, identity) do
-          {:ok, admission} -> continue_admission(params, identity, admission, state)
-          {:error, :run_id_conflict} -> {{:error, :run_id_conflict}, state}
-          {:error, _reason} -> {{:error, :outcome_unknown}, state}
+        case claim_admission(params, identity, state.run_admission_retention_ms) do
+          {:ok, admission, ownership} ->
+            continue_admission(params, identity, admission, ownership, state)
+
+          {:error, :run_id_conflict} ->
+            {{:error, :run_id_conflict}, state}
+
+          {:error, _reason} ->
+            {{:error, :outcome_unknown}, state}
         end
     end
   end
 
-  defp claim_admission(params, identity) do
+  defp claim_admission(params, identity, retention_ms) do
     entry = %{
       run_id: params.run_id,
       session_key: params.session_key,
       identity: identity,
-      state: "pending",
-      claimed_at_ms: System.system_time(:millisecond)
+      state: "claimed",
+      claimed_at_ms: System.system_time(:millisecond),
+      retention_ms: retention_ms
     }
 
     case Store.put_new(@run_admission_table, params.run_id, entry) do
-      :ok -> {:ok, entry}
+      :ok -> {:ok, entry, :new}
       {:error, :exists} -> existing_admission(params.run_id, identity)
       {:error, _reason} -> {:error, :admission_store_unavailable}
       _ -> {:error, :admission_store_unavailable}
@@ -363,13 +391,19 @@ defmodule LemonRouter.RunOrchestrator do
   end
 
   defp existing_admission(run_id, identity) do
-    case Store.get(@run_admission_table, run_id) do
-      %{} = entry ->
+    case Store.fetch(@run_admission_table, run_id) do
+      {:ok, %{} = entry} ->
         if MapHelpers.get_key(entry, :identity) == identity,
-          do: {:ok, entry},
+          do: {:ok, entry, :existing},
           else: {:error, :run_id_conflict}
 
-      _ ->
+      {:ok, nil} ->
+        {:error, :admission_store_unavailable}
+
+      {:error, _reason} ->
+        {:error, :admission_store_unavailable}
+
+      _unexpected ->
         {:error, :admission_store_unavailable}
     end
   rescue
@@ -378,75 +412,198 @@ defmodule LemonRouter.RunOrchestrator do
     _, _ -> {:error, :admission_store_unavailable}
   end
 
-  defp continue_admission(params, identity, admission, state) do
+  defp continue_admission(params, identity, admission, ownership, state) do
     case MapHelpers.get_key(admission, :state) do
       "accepted" ->
-        {{:ok, params.run_id}, cache_accepted_admission(state, params.run_id, identity)}
+        continue_accepted_admission(params, identity, admission, state)
 
       _pending_or_legacy ->
-        continue_pending_admission(params, identity, admission, state)
+        continue_pending_admission(params, identity, admission, ownership, state)
     end
   end
 
-  # A durable terminal run is authoritative evidence that an earlier owner
-  # crossed the external enqueue boundary, even if it crashed before changing
-  # the admission receipt from pending to accepted. Re-enqueuing at that point
-  # would duplicate a completed run after all in-memory coordinator state has
-  # disappeared.
-  defp continue_pending_admission(params, identity, admission, state) do
-    if terminal_run?(params.run_id) do
-      case persist_accepted_admission(params.run_id, identity, admission) do
-        :ok ->
-          {{:ok, params.run_id}, cache_accepted_admission(state, params.run_id, identity)}
+  defp continue_accepted_admission(params, identity, admission, state) do
+    expires_at_ms = admission_expires_at_ms(admission, state.run_admission_retention_ms)
 
-        {:error, _reason} ->
+    if expires_at_ms > System.system_time(:millisecond) do
+      {{:ok, params.run_id},
+       cache_accepted_admission(state, params.run_id, identity, expires_at_ms)}
+    else
+      case Store.delete(@run_admission_table, params.run_id) do
+        :ok ->
+          state = %{state | accepted_run_ids: Map.delete(state.accepted_run_ids, params.run_id)}
+          submit_idempotently(params, state)
+
+        _failure ->
           {{:error, :outcome_unknown}, state}
       end
-    else
-      case do_submit(params, state) do
-        {:ok, run_id} ->
-          case persist_accepted_admission(run_id, identity, admission) do
-            :ok ->
-              {{:ok, run_id}, cache_accepted_admission(state, run_id, identity)}
-
-            {:error, _reason} ->
-              {{:error, :outcome_unknown}, state}
-          end
-
-        error ->
-          {error, state}
-      end
     end
   end
 
-  defp terminal_run?(run_id) do
-    case RunStore.get(run_id) do
-      %{summary: summary} when not is_nil(summary) -> true
-      %{"summary" => summary} when not is_nil(summary) -> true
-      _ -> false
+  # A durable terminal run is evidence that an earlier owner crossed the
+  # external enqueue boundary only when the terminal summary carries this exact
+  # request identity. A bare run ID cannot acknowledge a different session or
+  # payload, and an unavailable read cannot prove that no terminal run exists.
+  defp continue_pending_admission(params, identity, admission, ownership, state) do
+    admission_state = MapHelpers.get_key(admission, :state)
+
+    case terminal_run_status(params, identity) do
+      :matching_terminal ->
+        accept_terminal_replay(params.run_id, identity, admission, state)
+
+      :not_terminal
+      when ownership == :new or
+             (ownership == :existing and admission_state == "claimed") ->
+        submit_new_admission(params, identity, admission, state)
+
+      :not_terminal ->
+        # An existing nonterminal claim may already have crossed the volatile
+        # enqueue boundary. Re-executing it merely because processes or the run
+        # summary disappeared would turn a crash into duplicate side effects.
+        {{:error, :outcome_unknown}, state}
+
+      :conflicting_terminal ->
+        {{:error, :run_id_conflict}, state}
+
+      :terminal_outcome_unknown ->
+        {{:error, :outcome_unknown}, state}
+    end
+  end
+
+  defp submit_new_admission(params, identity, admission, state) do
+    submitting =
+      admission
+      |> Map.put(:state, "submitting")
+      |> Map.put(:submitting_at_ms, System.system_time(:millisecond))
+
+    case Store.compare_and_swap(@run_admission_table, params.run_id, admission, submitting) do
+      :ok ->
+        case do_submit(attach_request_identity(params, identity), state) do
+          {:ok, run_id} ->
+            case persist_accepted_admission(
+                   run_id,
+                   identity,
+                   submitting,
+                   state.run_admission_retention_ms
+                 ) do
+              {:ok, expires_at_ms} ->
+                {{:ok, run_id}, cache_accepted_admission(state, run_id, identity, expires_at_ms)}
+
+              {:error, _reason} ->
+                {{:error, :outcome_unknown}, state}
+            end
+
+          error ->
+            {error, state}
+        end
+
+      _failure ->
+        {{:error, :outcome_unknown}, state}
     end
   rescue
-    _ -> false
+    _ -> {{:error, :outcome_unknown}, state}
   catch
-    _, _ -> false
+    _, _ -> {{:error, :outcome_unknown}, state}
   end
 
-  defp persist_accepted_admission(run_id, identity, expected, attempts_left \\ 3) do
+  defp accept_terminal_replay(run_id, identity, admission, state) do
+    case persist_accepted_admission(
+           run_id,
+           identity,
+           admission,
+           state.run_admission_retention_ms
+         ) do
+      {:ok, expires_at_ms} ->
+        {{:ok, run_id}, cache_accepted_admission(state, run_id, identity, expires_at_ms)}
+
+      {:error, _reason} ->
+        {{:error, :outcome_unknown}, state}
+    end
+  end
+
+  defp terminal_run_status(params, identity) do
+    case run_store_module().fetch(params.run_id) do
+      {:ok, nil} ->
+        :not_terminal
+
+      {:ok, record} when is_map(record) ->
+        classify_terminal_record(record, params.session_key, identity)
+
+      {:error, _reason} ->
+        :terminal_outcome_unknown
+
+      _unexpected ->
+        :terminal_outcome_unknown
+    end
+  rescue
+    _ -> :terminal_outcome_unknown
+  catch
+    _, _ -> :terminal_outcome_unknown
+  end
+
+  defp classify_terminal_record(record, session_key, identity) do
+    case MapHelpers.get_key(record, :summary) do
+      nil ->
+        # A durable run record without a terminal summary proves that this ID
+        # has already crossed into execution, but cannot prove its outcome.
+        :terminal_outcome_unknown
+
+      summary when is_map(summary) ->
+        terminal_session_key = MapHelpers.get_key(summary, :session_key)
+
+        terminal_identity =
+          case MapHelpers.get_key(summary, :meta) do
+            meta when is_map(meta) -> MapHelpers.get_key(meta, @request_identity_meta_key)
+            _ -> nil
+          end
+
+        cond do
+          terminal_session_key != session_key -> :conflicting_terminal
+          is_binary(terminal_identity) and terminal_identity != identity -> :conflicting_terminal
+          terminal_identity == identity -> :matching_terminal
+          true -> :terminal_outcome_unknown
+        end
+
+      _unexpected_summary ->
+        :terminal_outcome_unknown
+    end
+  end
+
+  defp attach_request_identity(%RunRequest{} = params, identity) do
+    meta = Map.put(params.meta || %{}, @request_identity_meta_key, identity)
+    %RunRequest{params | meta: meta}
+  end
+
+  defp run_store_module do
+    Application.get_env(:lemon_router, :run_store, RunStore)
+  end
+
+  defp persist_accepted_admission(run_id, identity, expected, retention_ms, attempts_left \\ 3) do
+    expires_at_ms = System.system_time(:millisecond) + retention_ms
+
     replacement =
       expected
       |> Map.put(:state, "accepted")
       |> Map.put(:accepted_at_ms, System.system_time(:millisecond))
+      |> Map.put(:expires_at_ms, expires_at_ms)
 
     case Store.compare_and_swap(@run_admission_table, run_id, expected, replacement) do
       :ok ->
-        :ok
+        {:ok, expires_at_ms}
 
       {:error, :mismatch} when attempts_left > 0 ->
         case existing_admission(run_id, identity) do
-          {:ok, current} ->
+          {:ok, current, :existing} ->
             if MapHelpers.get_key(current, :state) == "accepted",
-              do: :ok,
-              else: persist_accepted_admission(run_id, identity, current, attempts_left - 1)
+              do: {:ok, admission_expires_at_ms(current, retention_ms)},
+              else:
+                persist_accepted_admission(
+                  run_id,
+                  identity,
+                  current,
+                  retention_ms,
+                  attempts_left - 1
+                )
 
           error ->
             error
@@ -464,14 +621,59 @@ defmodule LemonRouter.RunOrchestrator do
     _, _ -> {:error, :admission_store_unavailable}
   end
 
-  defp cache_accepted_admission(state, run_id, identity) do
-    put_in(state.accepted_run_ids[run_id], %{identity: identity})
+  defp cache_accepted_admission(state, run_id, identity, expires_at_ms) do
+    put_in(state.accepted_run_ids[run_id], %{identity: identity, expires_at_ms: expires_at_ms})
+  end
+
+  defp prune_accepted_run_ids(state) do
+    now_ms = System.system_time(:millisecond)
+
+    accepted_run_ids =
+      Enum.reduce(state.accepted_run_ids, %{}, fn
+        {run_id, %{expires_at_ms: expires_at_ms} = entry}, acc when expires_at_ms > now_ms ->
+          Map.put(acc, run_id, entry)
+
+        _expired, acc ->
+          acc
+      end)
+
+    %{state | accepted_run_ids: accepted_run_ids}
+  end
+
+  defp admission_expires_at_ms(admission, retention_ms) do
+    case MapHelpers.get_key(admission, :expires_at_ms) do
+      expires_at_ms when is_integer(expires_at_ms) ->
+        expires_at_ms
+
+      _ ->
+        base_ms =
+          MapHelpers.get_key(admission, :accepted_at_ms) ||
+            MapHelpers.get_key(admission, :claimed_at_ms) || 0
+
+        base_ms + retention_ms
+    end
   end
 
   defp request_identity(%RunRequest{} = params) do
-    params
-    |> Map.from_struct()
-    |> Map.delete(:run_id)
+    replay_identity = MapHelpers.get_key(params.meta || %{}, @replay_identity_meta_key)
+
+    semantic_request =
+      if is_binary(replay_identity) and replay_identity != "" do
+        %{
+          session_key: params.session_key,
+          replay_identity: replay_identity,
+          prompt: params.prompt
+        }
+      else
+        %{
+          session_key: params.session_key,
+          prompt: params.prompt,
+          images: params.images,
+          resume: params.resume
+        }
+      end
+
+    semantic_request
     |> :erlang.term_to_binary([:deterministic])
     |> then(&:crypto.hash(:sha256, &1))
     |> Base.encode16(case: :lower)
@@ -534,20 +736,100 @@ defmodule LemonRouter.RunOrchestrator do
     {:error, {:run_aborted, reason}}
   end
 
-  defp prune_abort_tombstones(state) do
-    cutoff = System.monotonic_time(:millisecond) - @abort_tombstone_ttl_ms
+  defp fetch_abort_tombstone(run_id, state) do
+    case Store.fetch(@abort_tombstone_table, run_id) do
+      {:ok, nil} ->
+        {:none, %{state | abort_tombstones: Map.delete(state.abort_tombstones, run_id)}}
 
-    tombstones =
-      Enum.reduce(state.abort_tombstones, %{}, fn
-        {run_id, %{inserted_at_ms: inserted_at_ms} = tombstone}, acc
-        when is_integer(inserted_at_ms) and inserted_at_ms >= cutoff ->
-          Map.put(acc, run_id, tombstone)
+      {:ok, tombstone} when is_map(tombstone) ->
+        expires_at_ms = MapHelpers.get_key(tombstone, :expires_at_ms)
 
-        _expired, acc ->
-          acc
+        if is_integer(expires_at_ms) and expires_at_ms > System.system_time(:millisecond) do
+          normalized = %{
+            reason: MapHelpers.get_key(tombstone, :reason),
+            expires_at_ms: expires_at_ms
+          }
+
+          {:active, normalized,
+           %{state | abort_tombstones: Map.put(state.abort_tombstones, run_id, normalized)}}
+        else
+          _ = Store.delete(@abort_tombstone_table, run_id)
+          {:none, %{state | abort_tombstones: Map.delete(state.abort_tombstones, run_id)}}
+        end
+
+      {:error, _reason} ->
+        {:error, state}
+
+      _unexpected ->
+        {:error, state}
+    end
+  rescue
+    _ -> {:error, state}
+  catch
+    _, _ -> {:error, state}
+  end
+
+  defp persist_abort_tombstone(run_id, tombstone) do
+    case Store.put(@abort_tombstone_table, run_id, tombstone) do
+      :ok -> :ok
+      {:error, _reason} = error -> error
+      _unexpected -> {:error, :store_unavailable}
+    end
+  rescue
+    _ -> {:error, :store_unavailable}
+  catch
+    _, _ -> {:error, :store_unavailable}
+  end
+
+  defp maybe_cleanup_durable_receipts(state) do
+    now_ms = System.system_time(:millisecond)
+
+    if now_ms - state.last_receipt_cleanup_ms >= state.receipt_cleanup_interval_ms do
+      cleanup_expired_rows(@run_admission_table, now_ms, fn entry ->
+        MapHelpers.get_key(entry, :state) == "accepted" and
+          expired_at?(MapHelpers.get_key(entry, :expires_at_ms), now_ms)
       end)
 
-    %{state | abort_tombstones: tombstones}
+      cleanup_expired_rows(@abort_tombstone_table, now_ms, fn entry ->
+        expired_at?(MapHelpers.get_key(entry, :expires_at_ms), now_ms)
+      end)
+
+      %{
+        state
+        | last_receipt_cleanup_ms: now_ms,
+          accepted_run_ids: prune_expired_cache(state.accepted_run_ids, now_ms),
+          abort_tombstones: prune_expired_cache(state.abort_tombstones, now_ms)
+      }
+    else
+      state
+    end
+  rescue
+    _ -> %{state | last_receipt_cleanup_ms: System.system_time(:millisecond)}
+  catch
+    _, _ -> %{state | last_receipt_cleanup_ms: System.system_time(:millisecond)}
+  end
+
+  defp cleanup_expired_rows(table, now_ms, expired?) do
+    table
+    |> Store.list()
+    |> Enum.each(fn
+      {key, entry} when is_map(entry) ->
+        if expired?.(entry), do: Store.delete(table, key)
+
+      _invalid ->
+        :ok
+    end)
+
+    now_ms
+  end
+
+  defp expired_at?(expires_at_ms, now_ms),
+    do: is_integer(expires_at_ms) and expires_at_ms <= now_ms
+
+  defp prune_expired_cache(cache, now_ms) do
+    Map.reject(cache, fn {_key, entry} ->
+      expired_at?(MapHelpers.get_key(entry, :expires_at_ms), now_ms)
+    end)
   end
 
   defp emit_abort_tombstone_telemetry(event, reason) do

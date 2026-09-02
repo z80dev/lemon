@@ -41,7 +41,14 @@ defmodule LemonRouter.RunProcess do
 
   def start_link(opts) do
     run_id = opts[:run_id]
-    GenServer.start_link(__MODULE__, opts, name: via_tuple(run_id))
+
+    session_key =
+      case opts[:execution_request] do
+        %ExecutionCommand{session_key: request_session_key} -> request_session_key
+        _ -> opts[:session_key]
+      end
+
+    GenServer.start_link(__MODULE__, opts, name: via_tuple(run_id, session_key))
   end
 
   def child_spec(opts) do
@@ -55,8 +62,11 @@ defmodule LemonRouter.RunProcess do
     }
   end
 
-  defp via_tuple(run_id) do
-    {:via, Registry, {LemonRouter.RunRegistry, run_id}}
+  defp via_tuple(run_id, session_key) do
+    # The registry value is a lifecycle-owned, non-blocking session index.
+    # Coordinators can recover after SessionRegistry loss without synchronously
+    # interrogating every unrelated RunProcess.
+    {:via, Registry, {LemonRouter.RunRegistry, run_id, %{session_key: session_key}}}
   end
 
   @doc """

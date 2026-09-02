@@ -149,9 +149,13 @@ for a non-channel surface that needs the Gateway runtime.
   `status: "outcome_unknown"` receipt and `retry_safe: false`, keeps the fixed
   run ID for reconciliation, and never turns that result into a retryable 5xx.
   Reserve idempotency keys atomically before submission. Reservation, replay
-  read, or receipt-write failures fail closed without another submission; an
-  unresolved reservation returns `status: "reservation_pending"` with
-  `retry_safe: false` instead of claiming that a run is processing.
+  read, or receipt-write failures fail closed with a retryable 503 without
+  reporting acceptance. An unresolved reservation returns
+  `status: "reservation_pending"` with `retry_safe: true`; a submitted sync run
+  whose exact response has no durable receipt returns
+  `status: "response_persistence_unknown"` with `retry_safe: false` rather than
+  replaying a generic accepted response. Mutation exceptions and exits are
+  outcome-unknown, never definite rejection.
 - Build stable, unique session keys.
 - Return `:ignore` from `start_link/1` when disabled.
 - Resolve binding cwd and agent metadata through `BindingResolver`.

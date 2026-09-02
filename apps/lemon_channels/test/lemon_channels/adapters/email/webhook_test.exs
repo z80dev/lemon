@@ -418,7 +418,10 @@ defmodule LemonChannels.Adapters.Email.WebhookTest do
       first_conn = Webhook.handle_inbound(authorized_payload(message_id))
 
       assert first_conn.status == 202
-      assert_received {:routed, %RunRequest{run_id: run_id}}
+      assert_received {:routed, %RunRequest{run_id: run_id} = request}
+
+      digest = Base.encode16(:crypto.hash(:sha256, message_id), case: :lower)
+      assert request.meta.router_replay_identity == "email:#{digest}"
 
       duplicate_conn = Webhook.handle_inbound(authorized_payload(message_id))
 
