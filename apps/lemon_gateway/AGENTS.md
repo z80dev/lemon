@@ -157,9 +157,14 @@ for a non-channel surface that needs the Gateway runtime.
   replaying a generic accepted response. Mutation exceptions and exits are
   outcome-unknown, never definite rejection. Hash the caller's idempotency key
   with its integration identity before building any durable key, receipt, or
-  router request. Expiry removes the response snapshot before the primary
-  execution fence on ordered backends; SQLite performs the pair in a single
-  transaction, and any cleanup failure is surfaced without authorizing replay.
+  router request, and reject non-binary or blank payload keys before hashing.
+  On upgrade, migrate legacy raw-key reservations into the hashed namespace by
+  durably creating the hashed fence and exact response first, then conditionally
+  deleting the raw records; concurrent migration and any partial failure remain
+  fail closed. Expiry uses strict backend listing and removes the response
+  snapshot before the primary execution fence on ordered backends; SQLite
+  performs durable pairs in one transaction, and cleanup failures neither
+  authorize replay nor advance the sweep watermark.
 - Build stable, unique session keys.
 - Return `:ignore` from `start_link/1` when disabled.
 - Resolve binding cwd and agent metadata through `BindingResolver`.

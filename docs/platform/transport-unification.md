@@ -459,7 +459,9 @@ anything.
   with their completed primary reservations after the fixed 24-hour replay horizon. Caller webhook
   idempotency keys are domain-separated and hashed before they enter any durable key, receipt, or
   run metadata; cleanup commits atomically on SQLite and preserves the primary execution fence on
-  any ordered-backend failure.
+  any ordered-backend failure. Upgrade migration creates the hashed fence and exact response before
+  conditionally removing legacy raw-key records, accepts only non-empty binary keys, and treats
+  incomplete cleanup scans as unavailable without advancing their schedule.
 
 **Contract kit.** `apps/lemon_platform_test/test/compliance/email_plugin_test.exs` relied on
 `deliver/1` being inert. Its probe is now a `:reaction` payload — a kind email has no concept of,

@@ -110,6 +110,9 @@ defmodule LemonGateway.Transports.Webhook do
       {:error, :idempotency_unavailable} ->
         json(conn, 503, %{error: "idempotency unavailable", retry_safe: true})
 
+      {:error, :invalid_idempotency_key} ->
+        json_error(conn, 422, "invalid idempotency key")
+
       {:duplicate, status, response_payload} ->
         json(conn, status, response_payload)
 

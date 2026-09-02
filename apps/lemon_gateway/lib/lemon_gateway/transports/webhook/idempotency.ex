@@ -40,26 +40,32 @@ defmodule LemonGateway.Transports.Webhook.Idempotency do
   end
 
   @spec context(Plug.Conn.t(), map(), binary(), map(), map()) ::
-          {:ok, map() | nil} | {:duplicate, integer(), map()} | {:error, :idempotency_unavailable}
+          {:ok, map() | nil}
+          | {:duplicate, integer(), map()}
+          | {:error, :idempotency_unavailable | :invalid_idempotency_key}
   def context(conn, _payload, integration_id, integration, webhook_config)
       when is_binary(integration_id) and is_map(integration) and is_map(webhook_config) do
     _ = maybe_sweep_expired()
 
     case resolve_idempotency_key(conn, integration, webhook_config) do
-      nil ->
+      {:ok, nil} ->
         {:ok, nil}
 
-      idempotency_key ->
+      {:ok, idempotency_key} ->
         idempotency_digest = idempotency_digest(integration_id, idempotency_key)
         store_key = store_key(idempotency_digest)
+        legacy_key = legacy_store_key(integration_id, idempotency_key)
 
         case :global.trans({{__MODULE__, store_key}, self()}, fn ->
-               reserve(store_key, integration_id, idempotency_digest)
+               reserve(store_key, legacy_key, integration_id, idempotency_digest)
              end) do
           :aborted -> {:error, :idempotency_unavailable}
           {:aborted, _reason} -> {:error, :idempotency_unavailable}
           result -> result
         end
+
+      {:error, :invalid_idempotency_key} = error ->
+        error
     end
   end
 
@@ -119,27 +125,27 @@ defmodule LemonGateway.Transports.Webhook.Idempotency do
   def store_response(_ctx, _status, _payload), do: :ok
 
   defp resolve_idempotency_key(conn, integration, webhook_config) do
-    values = [idempotency_header(conn)]
+    values = [idempotency_header_value(conn)]
 
     values =
       if allow_payload_idempotency_key?(integration, webhook_config) do
-        values ++ [payload_idempotency_key(conn)]
+        values ++ [payload_idempotency_key_value(conn)]
       else
         values
       end
 
-    first_non_blank(values)
+    first_idempotency_key(values)
   end
 
-  defp idempotency_header(conn) do
-    conn
-    |> Plug.Conn.get_req_header("idempotency-key")
-    |> List.first()
-    |> Request.normalize_blank()
+  defp idempotency_header_value(conn) do
+    case Plug.Conn.get_req_header(conn, "idempotency-key") do
+      [] -> :absent
+      [value | _] -> {:present, value}
+    end
   end
 
-  defp payload_idempotency_key(conn) do
-    fetch_any(body_params(conn), [
+  defp payload_idempotency_key_value(conn) do
+    fetch_any_present(body_params(conn), [
       ["idempotency_key"],
       ["idempotencyKey"],
       ["idempotency", "key"]
@@ -287,42 +293,209 @@ defmodule LemonGateway.Transports.Webhook.Idempotency do
   end
 
   defp sweep_response_receipts(cutoff_ms, now_ms) do
-    @response_table
-    |> Store.list()
-    |> Enum.reduce_while(:ok, fn
-      {{store_key, reservation_id} = receipt_key, receipt}, :ok when is_map(receipt) ->
-        if Request.int_value(Request.fetch(receipt, :stored_at_ms), now_ms) <= cutoff_ms do
-          case sweep_response_receipt(store_key, reservation_id, receipt_key, receipt) do
-            :ok -> {:cont, :ok}
-            {:error, _reason} = error -> {:halt, error}
-          end
-        else
-          {:cont, :ok}
-        end
+    case Store.fetch_all(@response_table) do
+      {:ok, entries} ->
+        Enum.reduce_while(entries, :ok, fn
+          {{store_key, reservation_id} = receipt_key, receipt}, :ok when is_map(receipt) ->
+            if Request.int_value(Request.fetch(receipt, :stored_at_ms), now_ms) <= cutoff_ms do
+              case sweep_response_receipt(store_key, reservation_id, receipt_key, receipt) do
+                :ok -> {:cont, :ok}
+                {:error, _reason} = error -> {:halt, error}
+              end
+            else
+              {:cont, :ok}
+            end
 
-      _, :ok ->
-        {:cont, :ok}
-    end)
+          _, :ok ->
+            {:cont, :ok}
+        end)
+
+      {:error, _reason} ->
+        {:error, :idempotency_unavailable}
+    end
   end
 
   defp sweep_primary_receipts(cutoff_ms, now_ms) do
-    @table
-    |> Store.list()
-    |> Enum.reduce_while(:ok, fn
-      {store_key, entry}, :ok when is_map(entry) ->
-        if Request.normalize_blank(Request.fetch(entry, :state)) == "completed" and
-             Request.int_value(Request.fetch(entry, :updated_at_ms), now_ms) <= cutoff_ms do
-          case sweep_unpaired_primary(store_key, entry) do
-            :ok -> {:cont, :ok}
-            {:error, _reason} = error -> {:halt, error}
-          end
-        else
-          {:cont, :ok}
+    case Store.fetch_all(@table) do
+      {:ok, entries} ->
+        Enum.reduce_while(entries, :ok, fn
+          {{integration_id, idempotency_key} = legacy_key, entry}, :ok
+          when is_binary(integration_id) and is_binary(idempotency_key) and is_map(entry) ->
+            digest = idempotency_digest(integration_id, idempotency_key)
+            hashed_key = store_key(digest)
+
+            result =
+              :global.trans({{__MODULE__, hashed_key}, self()}, fn ->
+                migrate_legacy_key(hashed_key, legacy_key, integration_id, digest)
+              end)
+
+            case result do
+              :ok -> {:cont, :ok}
+              :none -> {:cont, :ok}
+              {:error, _reason} = error -> {:halt, error}
+              _ -> {:halt, {:error, :idempotency_unavailable}}
+            end
+
+          {store_key, entry}, :ok when is_map(entry) ->
+            if Request.normalize_blank(Request.fetch(entry, :state)) == "completed" and
+                 Request.int_value(Request.fetch(entry, :updated_at_ms), now_ms) <= cutoff_ms do
+              case sweep_unpaired_primary(store_key, entry) do
+                :ok -> {:cont, :ok}
+                {:error, _reason} = error -> {:halt, error}
+              end
+            else
+              {:cont, :ok}
+            end
+
+          _, :ok ->
+            {:cont, :ok}
+        end)
+
+      {:error, _reason} ->
+        {:error, :idempotency_unavailable}
+    end
+  end
+
+  defp migrate_legacy_key(hashed_key, legacy_key, integration_id, digest) do
+    case Store.fetch(@table, legacy_key) do
+      {:ok, %{} = legacy_entry} ->
+        migrate_legacy_entry(hashed_key, legacy_key, integration_id, digest, legacy_entry)
+
+      {:ok, nil} ->
+        :none
+
+      {:error, _reason} ->
+        {:error, :idempotency_unavailable}
+    end
+  end
+
+  defp migrate_legacy_entry(hashed_key, legacy_key, integration_id, digest, legacy_entry) do
+    migrated = sanitize_legacy_entry(legacy_entry, integration_id, digest)
+
+    with :ok <- ensure_hashed_primary(hashed_key, migrated, legacy_entry, integration_id, digest),
+         :ok <- migrate_legacy_response(hashed_key, legacy_key, migrated, legacy_entry),
+         :ok <-
+           normalize_migration_delete(Store.compare_and_delete(@table, legacy_key, legacy_entry)) do
+      :ok
+    end
+  end
+
+  defp ensure_hashed_primary(hashed_key, migrated, legacy_entry, integration_id, digest) do
+    case Store.put_new(@table, hashed_key, migrated) do
+      :ok ->
+        :ok
+
+      {:error, :exists} ->
+        case Store.fetch(@table, hashed_key) do
+          {:ok, %{} = existing} ->
+            if compatible_migration?(existing, legacy_entry, integration_id, digest),
+              do: :ok,
+              else: {:error, :idempotency_unavailable}
+
+          _ ->
+            {:error, :idempotency_unavailable}
         end
 
-      _, :ok ->
-        {:cont, :ok}
-    end)
+      {:error, _reason} ->
+        {:error, :idempotency_unavailable}
+
+      _other ->
+        {:error, :idempotency_unavailable}
+    end
+  end
+
+  defp migrate_legacy_response(hashed_key, legacy_key, migrated, legacy_entry) do
+    case Request.normalize_blank(Request.fetch(legacy_entry, :reservation_id)) do
+      reservation_id when is_binary(reservation_id) ->
+        legacy_receipt_key = {legacy_key, reservation_id}
+        hashed_receipt_key = {hashed_key, Request.fetch(migrated, :reservation_id)}
+
+        case Store.fetch(@response_table, legacy_receipt_key) do
+          {:ok, %{} = receipt} ->
+            with :ok <- ensure_hashed_response(hashed_receipt_key, receipt),
+                 :ok <-
+                   normalize_migration_delete(
+                     Store.compare_and_delete(@response_table, legacy_receipt_key, receipt)
+                   ) do
+              :ok
+            end
+
+          {:ok, nil} ->
+            :ok
+
+          {:error, _reason} ->
+            {:error, :idempotency_unavailable}
+        end
+
+      _no_reservation ->
+        :ok
+    end
+  end
+
+  defp ensure_hashed_response(hashed_receipt_key, receipt) do
+    case Store.put_new(@response_table, hashed_receipt_key, receipt) do
+      :ok ->
+        :ok
+
+      {:error, :exists} ->
+        case Store.fetch(@response_table, hashed_receipt_key) do
+          {:ok, ^receipt} -> :ok
+          _ -> {:error, :idempotency_unavailable}
+        end
+
+      _ ->
+        {:error, :idempotency_unavailable}
+    end
+  end
+
+  defp normalize_migration_delete(:ok), do: :ok
+  defp normalize_migration_delete(_), do: {:error, :idempotency_unavailable}
+
+  defp sanitize_legacy_entry(legacy_entry, integration_id, digest) do
+    state = Request.normalize_blank(Request.fetch(legacy_entry, :state)) || "pending"
+
+    legacy_entry
+    |> Map.delete(:idempotency_key)
+    |> Map.delete("idempotency_key")
+    |> Map.put(:idempotency_digest, digest)
+    |> Map.put(:integration_id, integration_id)
+    |> Map.put_new(:state, state)
+    |> maybe_put_generated(:run_id, fn -> Id.run_id() end)
+    |> maybe_put_generated(:reservation_id, fn -> Id.uuid7() end)
+    |> maybe_put_legacy_lease(state)
+  end
+
+  defp maybe_put_generated(entry, key, generator) do
+    if Request.normalize_blank(Request.fetch(entry, key)),
+      do: entry,
+      else: Map.put(entry, key, generator.())
+  end
+
+  defp maybe_put_legacy_lease(entry, state) when state in ["pending", "rejected"] do
+    if is_integer(Request.fetch(entry, :lease_expires_at_ms)),
+      do: entry,
+      else: Map.put(entry, :lease_expires_at_ms, 0)
+  end
+
+  defp maybe_put_legacy_lease(entry, _state), do: entry
+
+  defp compatible_migration?(existing, legacy, integration_id, digest) do
+    Request.fetch(existing, :idempotency_digest) == digest and
+      Request.fetch(existing, :integration_id) == integration_id and
+      compatible_legacy_field?(existing, legacy, :state) and
+      compatible_legacy_field?(existing, legacy, :run_id) and
+      compatible_legacy_field?(existing, legacy, :reservation_id) and
+      compatible_legacy_field?(existing, legacy, :session_key) and
+      compatible_legacy_field?(existing, legacy, :mode) and
+      compatible_legacy_field?(existing, legacy, :response_status) and
+      compatible_legacy_field?(existing, legacy, :response_payload)
+  end
+
+  defp compatible_legacy_field?(existing, legacy, key) do
+    case Request.fetch(legacy, key) do
+      nil -> true
+      legacy_value -> Request.fetch(existing, key) == legacy_value
+    end
   end
 
   defp sweep_unpaired_primary(store_key, entry) do
@@ -362,7 +535,7 @@ defmodule LemonGateway.Transports.Webhook.Idempotency do
 
              if now_ms - current >= @sweep_interval_ms do
                result = sweep_expired(now_ms, @response_retention_ms)
-               :persistent_term.put(@last_sweep_key, now_ms)
+               if result == :ok, do: :persistent_term.put(@last_sweep_key, now_ms)
                result
              else
                :ok
@@ -445,7 +618,25 @@ defmodule LemonGateway.Transports.Webhook.Idempotency do
     end
   end
 
-  defp reserve(store_key, integration_id, idempotency_digest) do
+  defp reserve(store_key, legacy_key, integration_id, idempotency_digest) do
+    case migrate_legacy_key(store_key, legacy_key, integration_id, idempotency_digest) do
+      :ok ->
+        resolve_existing_reservation(
+          store_key,
+          integration_id,
+          idempotency_digest,
+          System.system_time(:millisecond)
+        )
+
+      :none ->
+        reserve_hashed(store_key, integration_id, idempotency_digest)
+
+      {:error, _reason} ->
+        {:error, :idempotency_unavailable}
+    end
+  end
+
+  defp reserve_hashed(store_key, integration_id, idempotency_digest) do
     now_ms = System.system_time(:millisecond)
     reservation_id = Id.uuid7()
 
@@ -481,8 +672,8 @@ defmodule LemonGateway.Transports.Webhook.Idempotency do
   end
 
   defp resolve_existing_reservation(store_key, integration_id, idempotency_digest, now_ms) do
-    case Store.get(@table, store_key) do
-      %{} = existing ->
+    case Store.fetch(@table, store_key) do
+      {:ok, %{} = existing} ->
         if reclaimable_pending?(existing, now_ms) do
           reclaim_pending(store_key, existing, integration_id, idempotency_digest, now_ms)
         else
@@ -492,7 +683,10 @@ defmodule LemonGateway.Transports.Webhook.Idempotency do
           end
         end
 
-      _ ->
+      {:ok, nil} ->
+        {:error, :idempotency_unavailable}
+
+      {:error, _reason} ->
         {:error, :idempotency_unavailable}
     end
   end
@@ -502,10 +696,15 @@ defmodule LemonGateway.Transports.Webhook.Idempotency do
 
     replacement =
       existing
+      |> Map.delete(:response_status)
+      |> Map.delete("response_status")
+      |> Map.delete(:response_payload)
+      |> Map.delete("response_payload")
       |> Map.put(
         :run_id,
         Request.normalize_blank(Request.fetch(existing, :run_id)) || Id.run_id()
       )
+      |> Map.put(:state, "pending")
       |> Map.put(:reservation_id, reservation_id)
       |> Map.put(:lease_expires_at_ms, now_ms + @reservation_lease_ms)
       |> Map.put(:updated_at_ms, now_ms)
@@ -532,8 +731,11 @@ defmodule LemonGateway.Transports.Webhook.Idempotency do
   end
 
   defp reclaimable_pending?(entry, now_ms) do
-    Request.normalize_blank(Request.fetch(entry, :state)) == "pending" and
-      Request.int_value(Request.fetch(entry, :lease_expires_at_ms), 0) <= now_ms
+    state = Request.normalize_blank(Request.fetch(entry, :state))
+
+    state == "rejected" or
+      (state == "pending" and
+         Request.int_value(Request.fetch(entry, :lease_expires_at_ms), 0) <= now_ms)
   end
 
   defp reservation_context(entry, store_key, overrides \\ []) do
@@ -561,6 +763,7 @@ defmodule LemonGateway.Transports.Webhook.Idempotency do
   end
 
   defp store_key(idempotency_digest), do: {:v1, idempotency_digest}
+  defp legacy_store_key(integration_id, idempotency_key), do: {integration_id, idempotency_key}
 
   defp allow_payload_idempotency_key?(integration, webhook_config) do
     [
@@ -584,27 +787,48 @@ defmodule LemonGateway.Transports.Webhook.Idempotency do
 
   defp fallback_status(_state), do: %{status: "accepted"}
 
-  defp fetch_any(map, paths) when is_map(map) and is_list(paths) do
-    Enum.find_value(paths, fn path -> fetch_path(map, path) end)
+  defp fetch_any_present(map, paths) when is_map(map) and is_list(paths) do
+    Enum.find_value(paths, :absent, fn path ->
+      case fetch_path_present(map, path) do
+        :absent -> nil
+        {:present, _value} = present -> present
+      end
+    end)
   end
 
-  defp fetch_any(_, _), do: nil
+  defp fetch_any_present(_, _), do: :absent
 
-  defp fetch_path(value, []), do: value
+  defp fetch_path_present(value, []), do: {:present, value}
 
-  defp fetch_path(value, [segment | rest]) do
-    case Request.fetch(value, segment) do
-      nil -> nil
-      next -> fetch_path(next, rest)
+  defp fetch_path_present(value, [segment | rest]) when is_map(value) do
+    case fetch_map_key(value, segment) do
+      {:ok, next} -> fetch_path_present(next, rest)
+      :error -> :absent
     end
   end
 
-  defp first_non_blank(values) do
-    Enum.find_value(values, fn value ->
-      case Request.normalize_blank(value) do
-        nil -> nil
-        normalized -> normalized
-      end
+  defp fetch_path_present(_value, _path), do: :absent
+
+  defp fetch_map_key(map, key) do
+    case Map.fetch(map, key) do
+      {:ok, value} -> {:ok, value}
+      :error -> Map.fetch(map, to_string(key))
+    end
+  end
+
+  defp first_idempotency_key(values) do
+    Enum.reduce_while(values, {:ok, nil}, fn
+      :absent, result ->
+        {:cont, result}
+
+      {:present, value}, _result when is_binary(value) ->
+        case Request.normalize_blank(value) do
+          nil -> {:halt, {:error, :invalid_idempotency_key}}
+          normalized -> {:halt, {:ok, normalized}}
+        end
+
+      {:present, _invalid}, _result ->
+        {:halt, {:error, :invalid_idempotency_key}}
     end)
   end
 

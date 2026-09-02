@@ -425,6 +425,27 @@ defmodule LemonCore.Store do
     end
   end
 
+  @doc """
+  List all key-value pairs without collapsing backend or process failure.
+
+  Unlike `list/2`, this always consults the owning Store process and returns an
+  error when the backend cannot confirm the complete table contents.
+  Correctness-sensitive cleanup and migration paths should use this function
+  before advancing durable sweep watermarks.
+  """
+  @spec fetch_all(server(), table :: atom()) ::
+          {:ok, [{term(), term()}]} | {:error, :store_unavailable}
+  def fetch_all(server \\ __MODULE__, table) do
+    safe_store_call(
+      server,
+      {:generic_fetch_all, table},
+      {:error, :store_unavailable},
+      op: :fetch_all,
+      table: table,
+      key: :all
+    )
+  end
+
   # Whether this store mirrors `table` into the read cache. Read from the
   # store's published configuration so caller processes stay off the GenServer.
   defp cached_table?(server, table) when is_atom(server) and not is_nil(server) do
@@ -736,7 +757,8 @@ defmodule LemonCore.Store do
     :exit, reason ->
       Logger.warning(
         "Store client call failed store=#{inspect(server)} op=#{inspect(context[:op])} " <>
-          "table=#{inspect(context[:table])} key=#{inspect(context[:key])} " <>
+          "table=#{inspect(context[:table])} " <>
+          "key=#{inspect(safe_log_key(context[:table], context[:key]))} " <>
           "reason=#{inspect(store_call_exit_reason(reason))}"
       )
 
@@ -1419,6 +1441,21 @@ defmodule LemonCore.Store do
     end
   end
 
+  def handle_call({:generic_fetch_all, table}, _from, state) do
+    case state.backend.list(state.backend_state, table) do
+      {:ok, entries, backend_state} ->
+        {:reply, {:ok, entries}, %{state | backend_state: backend_state}}
+
+      {:error, reason} ->
+        log_backend_error(:fetch_all, table, :all, reason)
+        {:reply, {:error, :store_unavailable}, state}
+
+      other ->
+        log_backend_unexpected(:fetch_all, table, :all, other)
+        {:reply, {:error, :store_unavailable}, state}
+    end
+  end
+
   @impl true
   def handle_cast({:append_introspection_event, event}, state) do
     case normalize_introspection_event(event) do
@@ -1963,7 +2000,7 @@ defmodule LemonCore.Store do
 
   defp compare_delete_snapshots(backend, backend_state, entries) do
     Enum.reduce_while(entries, {:ok, backend_state}, fn {table, key, expected},
-                                                       {:ok, current_state} ->
+                                                        {:ok, current_state} ->
       case backend.get(current_state, table, key) do
         {:ok, current, next_state} when current === expected ->
           {:cont, {:ok, next_state}}
@@ -1995,8 +2032,7 @@ defmodule LemonCore.Store do
         other ->
           log_backend_unexpected(:compare_and_delete_many, table, key, other)
 
-          {:halt,
-           {:error, {:unexpected_backend_response, other}, current_state}}
+          {:halt, {:error, {:unexpected_backend_response, other}, current_state}}
       end
     end)
   end
@@ -2011,7 +2047,8 @@ defmodule LemonCore.Store do
 
   defp log_backend_error(op, table, key, reason) do
     Logger.warning(
-      "[LemonCore.Store] backend #{op} failed table=#{inspect(table)} key=#{inspect(key)} " <>
+      "[LemonCore.Store] backend #{op} failed table=#{inspect(table)} " <>
+        "key=#{inspect(safe_log_key(table, key))} " <>
         "reason=#{inspect(reason)}"
     )
   end
@@ -2019,7 +2056,18 @@ defmodule LemonCore.Store do
   defp log_backend_unexpected(op, table, key, response) do
     Logger.warning(
       "[LemonCore.Store] backend #{op} returned unexpected response table=#{inspect(table)} " <>
-        "key=#{inspect(key)} response=#{inspect(response)}"
+        "key=#{inspect(safe_log_key(table, key))} response=#{inspect(response)}"
     )
   end
+
+  defp safe_log_key(table, key) when is_atom(table) do
+    if String.contains?(Atom.to_string(table), "idempotency") do
+      digest = :crypto.hash(:sha256, :erlang.term_to_binary(key)) |> Base.encode16(case: :lower)
+      {:sha256, binary_part(digest, 0, 16)}
+    else
+      key
+    end
+  end
+
+  defp safe_log_key(_table, key), do: key
 end

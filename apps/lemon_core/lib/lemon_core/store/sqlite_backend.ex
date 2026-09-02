@@ -242,7 +242,9 @@ defmodule LemonCore.Store.SqliteBackend do
 
   @impl true
   def compare_and_delete_many(state, entries) do
-    case entries |> Enum.map(fn {table, _key, _expected} -> ephemeral_table?(state, table) end) |> Enum.uniq() do
+    case entries
+         |> Enum.map(fn {table, _key, _expected} -> ephemeral_table?(state, table) end)
+         |> Enum.uniq() do
       [] ->
         {:ok, state}
 
@@ -253,8 +255,37 @@ defmodule LemonCore.Store.SqliteBackend do
         compare_and_delete_persistent(state, entries)
 
       _mixed ->
-        {:error, :mixed_atomic_storage, state}
+        compare_and_delete_mixed(state, entries)
     end
+  end
+
+  # SQLite cannot transact across its durable rows and the ETS tables used for
+  # ephemeral data. Preserve the backend contract by validating the complete
+  # snapshot first, then deleting in caller order. Callers place the durable
+  # execution fence last, so a partial failure remains fail-closed.
+  defp compare_and_delete_mixed(state, entries) do
+    with {:ok, state} <- validate_mixed_snapshots(state, entries) do
+      delete_mixed_snapshots(state, entries)
+    end
+  end
+
+  defp validate_mixed_snapshots(state, entries) do
+    Enum.reduce_while(entries, {:ok, state}, fn {table, key, expected}, {:ok, current_state} ->
+      case get(current_state, table, key) do
+        {:ok, ^expected, next_state} -> {:cont, {:ok, next_state}}
+        {:ok, _other, next_state} -> {:halt, {:error, :mismatch, next_state}}
+        {:error, reason} -> {:halt, {:error, reason, current_state}}
+      end
+    end)
+  end
+
+  defp delete_mixed_snapshots(state, entries) do
+    Enum.reduce_while(entries, {:ok, state}, fn {table, key, _expected}, {:ok, current_state} ->
+      case delete(current_state, table, key) do
+        {:ok, next_state} -> {:cont, {:ok, next_state}}
+        {:error, reason} -> {:halt, {:error, reason, current_state}}
+      end
+    end)
   end
 
   @impl true

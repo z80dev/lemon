@@ -607,6 +607,21 @@ defmodule LemonCore.StoreTest do
       assert Store.get(:primary, :fence) == primary_fence
     end
 
+    test "fetch_all distinguishes a backend list failure from an empty table" do
+      original_state = swap_store_backend(BusyBackend, %{})
+      on_exit(fn -> :sys.replace_state(Store, fn _ -> original_state end) end)
+
+      assert Store.list(:webhook_idempotency) == []
+      assert Store.fetch_all(:webhook_idempotency) == {:error, :store_unavailable}
+    end
+
+    test "fetch_all distinguishes a stopped store from an empty table" do
+      missing_store = :missing_store_for_fetch_all
+
+      assert Store.list(missing_store, :webhook_idempotency) == []
+      assert Store.fetch_all(missing_store, :webhook_idempotency) == {:error, :store_unavailable}
+    end
+
     test "finalize_run writes history to RunHistoryStore" do
       token = unique_token()
       key = session_key(token)

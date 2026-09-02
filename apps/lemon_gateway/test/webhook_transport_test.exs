@@ -48,6 +48,37 @@ defmodule LemonGateway.WebhookSecondDeleteFailureBackend do
   end
 end
 
+defmodule LemonGateway.WebhookListFailureBackend do
+  @behaviour LemonCore.Store.Backend
+
+  @impl true
+  def init(_opts), do: {:ok, %{data: %{}, fail_table: nil}}
+
+  @impl true
+  def put(state, table, key, value), do: {:ok, put_in(state, [:data, {table, key}], value)}
+
+  @impl true
+  def put_new(state, table, key, value) do
+    if Map.has_key?(state.data, {table, key}),
+      do: {:exists, state},
+      else: put(state, table, key, value)
+  end
+
+  @impl true
+  def get(state, table, key), do: {:ok, Map.get(state.data, {table, key}), state}
+
+  @impl true
+  def delete(state, table, key), do: {:ok, %{state | data: Map.delete(state.data, {table, key})}}
+
+  @impl true
+  def list(%{fail_table: table}, table), do: {:error, :injected_list_failure}
+
+  def list(state, table) do
+    entries = for {{^table, key}, value} <- state.data, do: {key, value}
+    {:ok, entries, state}
+  end
+end
+
 defmodule LemonGateway.WebhookTransportTest do
   use ExUnit.Case, async: false
 
@@ -219,6 +250,294 @@ defmodule LemonGateway.WebhookTransportTest do
 
     assert response_payload.status == "reservation_pending"
     assert response_payload.retry_safe == true
+  end
+
+  test "legacy raw-key receipts migrate without creating a second run" do
+    cases = [
+      {"pending", :retry},
+      {"rejected", :retry},
+      {"submitted", {:duplicate, 202, "accepted"}},
+      {"outcome_unknown", {:duplicate, 202, "outcome_unknown"}},
+      {"completed", {:duplicate, 207, "complete"}}
+    ]
+
+    Enum.each(cases, fn {state, expectation} ->
+      suffix = System.unique_integer([:positive])
+      integration_id = "legacy-#{state}-#{suffix}"
+      idempotency_key = "raw-secret-#{state}-#{suffix}"
+      run_id = "legacy-run-#{state}-#{suffix}"
+      reservation_id = "legacy-reservation-#{state}-#{suffix}"
+      raw_key = {integration_id, idempotency_key}
+
+      legacy = %{
+        idempotency_key: idempotency_key,
+        integration_id: integration_id,
+        run_id: run_id,
+        reservation_id: reservation_id,
+        session_key: "agent:legacy:#{state}",
+        mode: "async",
+        state: state,
+        lease_expires_at_ms: 0,
+        updated_at_ms: 1,
+        response_status: if(state == "completed", do: 207),
+        response_payload: if(state == "completed", do: %{run_id: run_id, status: "complete"})
+      }
+
+      assert :ok = Store.put(Webhook.idempotency_table_for_test(), raw_key, legacy)
+
+      conn =
+        Test.conn(:post, "/webhooks/#{integration_id}", "")
+        |> Conn.put_req_header("idempotency-key", idempotency_key)
+
+      result = Webhook.idempotency_context_for_test(conn, %{}, integration_id, %{})
+
+      case expectation do
+        :retry ->
+          assert {:ok, %{run_id: ^run_id}} = result
+
+        {:duplicate, status, receipt_state} ->
+          assert {:duplicate, ^status, payload} = result
+          assert payload.run_id == run_id
+          assert payload.status == receipt_state
+      end
+
+      assert Store.get(Webhook.idempotency_table_for_test(), raw_key) == nil
+
+      assert [{hashed_key, migrated}] =
+               Webhook.idempotency_table_for_test()
+               |> Store.list()
+               |> Enum.filter(fn {_key, entry} -> entry[:run_id] == run_id end)
+
+      assert {:v1, _digest} = hashed_key
+      refute Map.has_key?(migrated, :idempotency_key)
+      refute Map.has_key?(migrated, "idempotency_key")
+      refute inspect({hashed_key, migrated}) =~ idempotency_key
+    end)
+  end
+
+  test "legacy exact response receipt migrates before the raw primary is deleted" do
+    suffix = System.unique_integer([:positive])
+    integration_id = "legacy-response-#{suffix}"
+    idempotency_key = "legacy-response-secret-#{suffix}"
+    raw_key = {integration_id, idempotency_key}
+    reservation_id = "legacy-response-reservation-#{suffix}"
+    run_id = "legacy-response-run-#{suffix}"
+
+    legacy = %{
+      idempotency_key: idempotency_key,
+      integration_id: integration_id,
+      run_id: run_id,
+      reservation_id: reservation_id,
+      session_key: "agent:legacy-response:main",
+      mode: "sync",
+      state: "submitted",
+      updated_at_ms: 1
+    }
+
+    receipt = %{status: 200, payload: %{run_id: run_id, exact: true}, stored_at_ms: 1}
+
+    assert :ok = Store.put(Webhook.idempotency_table_for_test(), raw_key, legacy)
+    assert :ok = Store.put(Idempotency.response_table(), {raw_key, reservation_id}, receipt)
+
+    conn =
+      Test.conn(:post, "/webhooks/#{integration_id}", "")
+      |> Conn.put_req_header("idempotency-key", idempotency_key)
+
+    assert {:duplicate, 200, %{run_id: ^run_id, exact: true}} =
+             Webhook.idempotency_context_for_test(conn, %{}, integration_id, %{})
+
+    assert Store.get(Webhook.idempotency_table_for_test(), raw_key) == nil
+    assert Store.get(Idempotency.response_table(), {raw_key, reservation_id}) == nil
+
+    assert [{{{:v1, _digest}, ^reservation_id}, ^receipt}] =
+             Store.list(Idempotency.response_table())
+  end
+
+  test "legacy migration is serialized across concurrent redeliveries" do
+    suffix = System.unique_integer([:positive])
+    integration_id = "legacy-concurrent-#{suffix}"
+    idempotency_key = "legacy-concurrent-secret-#{suffix}"
+    run_id = "legacy-concurrent-run-#{suffix}"
+    raw_key = {integration_id, idempotency_key}
+
+    assert :ok =
+             Store.put(Webhook.idempotency_table_for_test(), raw_key, %{
+               idempotency_key: idempotency_key,
+               integration_id: integration_id,
+               run_id: run_id,
+               reservation_id: "legacy-concurrent-reservation-#{suffix}",
+               session_key: "agent:legacy-concurrent:main",
+               mode: "async",
+               state: "submitted",
+               updated_at_ms: 1
+             })
+
+    conn =
+      Test.conn(:post, "/webhooks/#{integration_id}", "")
+      |> Conn.put_req_header("idempotency-key", idempotency_key)
+
+    results =
+      1..12
+      |> Enum.map(fn _ ->
+        Task.async(fn ->
+          Webhook.idempotency_context_for_test(conn, %{}, integration_id, %{})
+        end)
+      end)
+      |> Enum.map(&Task.await(&1, 2_000))
+
+    assert Enum.all?(results, &match?({:duplicate, 202, %{run_id: ^run_id}}, &1))
+    assert Store.get(Webhook.idempotency_table_for_test(), raw_key) == nil
+
+    assert 1 ==
+             Webhook.idempotency_table_for_test()
+             |> Store.list()
+             |> Enum.count(fn {_key, entry} -> entry[:run_id] == run_id end)
+  end
+
+  test "legacy migration fails closed when raw deletion fails after hashing" do
+    suffix = System.unique_integer([:positive])
+    integration_id = "legacy-delete-fault-#{suffix}"
+    idempotency_key = "legacy-delete-secret-#{suffix}"
+    raw_key = {integration_id, idempotency_key}
+
+    legacy = %{
+      idempotency_key: idempotency_key,
+      integration_id: integration_id,
+      run_id: "legacy-delete-run-#{suffix}",
+      reservation_id: "legacy-delete-reservation-#{suffix}",
+      session_key: "agent:legacy-delete:main",
+      mode: "async",
+      state: "submitted",
+      updated_at_ms: 1
+    }
+
+    backend_state = %{
+      data: %{{Webhook.idempotency_table_for_test(), raw_key} => legacy},
+      delete_count: 1
+    }
+
+    original_store_state = :sys.get_state(Store)
+
+    :sys.replace_state(Store, fn state ->
+      %{
+        state
+        | backend: LemonGateway.WebhookSecondDeleteFailureBackend,
+          backend_state: backend_state
+      }
+    end)
+
+    on_exit(fn -> :sys.replace_state(Store, fn _state -> original_store_state end) end)
+
+    conn =
+      Test.conn(:post, "/webhooks/#{integration_id}", "")
+      |> Conn.put_req_header("idempotency-key", idempotency_key)
+
+    log =
+      capture_log(fn ->
+        assert {:error, :idempotency_unavailable} =
+                 Webhook.idempotency_context_for_test(conn, %{}, integration_id, %{})
+      end)
+
+    refute log =~ idempotency_key
+
+    assert Store.get(Webhook.idempotency_table_for_test(), raw_key) == legacy
+
+    assert [{{:v1, _digest}, hashed}] =
+             Webhook.idempotency_table_for_test()
+             |> Store.list()
+             |> Enum.reject(fn {key, _entry} -> key == raw_key end)
+
+    assert hashed.run_id == legacy.run_id
+    refute Map.has_key?(hashed, :idempotency_key)
+  end
+
+  test "sweeper migrates every legacy receipt state even before expiry" do
+    suffix = System.unique_integer([:positive])
+
+    raw_keys =
+      Enum.map(["pending", "submitted", "completed", "outcome_unknown", "rejected"], fn state ->
+        integration_id = "legacy-sweep-#{state}-#{suffix}"
+        idempotency_key = "legacy-sweep-secret-#{state}-#{suffix}"
+        raw_key = {integration_id, idempotency_key}
+
+        assert :ok =
+                 Store.put(Webhook.idempotency_table_for_test(), raw_key, %{
+                   idempotency_key: idempotency_key,
+                   integration_id: integration_id,
+                   run_id: "legacy-sweep-run-#{state}-#{suffix}",
+                   reservation_id: "legacy-sweep-reservation-#{state}-#{suffix}",
+                   state: state,
+                   lease_expires_at_ms: 0,
+                   updated_at_ms: 100
+                 })
+
+        raw_key
+      end)
+
+    assert :ok = Idempotency.sweep_expired(1_000, 10_000)
+    assert Enum.all?(raw_keys, &(Store.get(Webhook.idempotency_table_for_test(), &1) == nil))
+
+    assert 5 ==
+             Webhook.idempotency_table_for_test()
+             |> Store.list()
+             |> Enum.count(fn {key, _entry} -> match?({:v1, _digest}, key) end)
+  end
+
+  test "invalid payload idempotency values are rejected without collisions" do
+    integration_id = "invalid-idempotency-#{System.unique_integer([:positive])}"
+    integration = %{"allow_payload_idempotency_key" => true}
+
+    for invalid <- [123, 999, [123], %{"nested" => "value"}, "", "   "] do
+      conn = %{
+        Test.conn(:post, "/webhooks/#{integration_id}", "")
+        | body_params: %{"idempotency_key" => invalid}
+      }
+
+      assert {:error, :invalid_idempotency_key} =
+               Webhook.idempotency_context_for_test(conn, %{}, integration_id, integration)
+    end
+
+    valid_conn = %{
+      Test.conn(:post, "/webhooks/#{integration_id}", "")
+      | body_params: %{"idempotency_key" => "{"}
+    }
+
+    assert {:ok, %{run_id: run_id}} =
+             Webhook.idempotency_context_for_test(valid_conn, %{}, integration_id, integration)
+
+    assert is_binary(run_id)
+  end
+
+  test "sweep list failure propagates and does not advance its schedule" do
+    sweep_key = {Idempotency, :last_response_sweep_ms}
+    original_sweep_ms = :persistent_term.get(sweep_key, 0)
+    original_store_state = :sys.get_state(Store)
+
+    :persistent_term.put(sweep_key, 0)
+
+    on_exit(fn ->
+      :sys.replace_state(Store, fn _state -> original_store_state end)
+      :persistent_term.put(sweep_key, original_sweep_ms)
+    end)
+
+    Enum.each(
+      [Idempotency.response_table(), Webhook.idempotency_table_for_test()],
+      fn fail_table ->
+        :sys.replace_state(Store, fn state ->
+          %{
+            state
+            | backend: LemonGateway.WebhookListFailureBackend,
+              backend_state: %{data: %{}, fail_table: fail_table}
+          }
+        end)
+
+        assert {:error, :idempotency_unavailable} = Idempotency.sweep_expired(1_000, 1)
+      end
+    )
+
+    conn = Test.conn(:post, "/webhooks/no-idempotency", "")
+    assert {:ok, nil} = Webhook.idempotency_context_for_test(conn, %{}, "no-idempotency", %{})
+    assert :persistent_term.get(sweep_key) == 0
   end
 
   test "an expired pending lease is reclaimed with the same durable run id" do

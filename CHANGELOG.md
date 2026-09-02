@@ -25,7 +25,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   reservation after the replay horizon using transactional or fence-last
   exact-snapshot deletion, and raw webhook idempotency keys are hashed before
   any durable key, receipt, router request, or run metadata is built. Legacy
-  router receipts are compacted and abort reasons sanitized during replay and
+  raw webhook receipts migrate behind the hashed fence without reopening
+  execution, invalid payload idempotency values are rejected before hashing,
+  and failed cleanup scans do not advance their watermark. Legacy router
+  receipts are compacted and abort reasons sanitized during replay and
   background cleanup; goal hard stops persist abort intent before dispatch.
 - Telegram memory-reflection and per-chat abort helpers no longer collapse
   router mutation failures into success-like results. Ambiguous cancel and

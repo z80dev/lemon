@@ -388,6 +388,33 @@ defmodule LemonCore.Store.SqliteBackendTest do
       assert {:ok, nil, _} = SqliteBackend.get(state, :atomic_first, "key")
       assert {:ok, nil, _} = SqliteBackend.get(state, :atomic_second, "key")
     end
+
+    test "validates mixed ephemeral and persistent snapshots before ordered deletion", %{
+      state: state
+    } do
+      assert {:ok, state} = SqliteBackend.put(state, :runs, "ephemeral", "run")
+      assert {:ok, state} = SqliteBackend.put(state, :durable_fences, "persistent", "fence")
+
+      assert {:error, :mismatch, state} =
+               SqliteBackend.compare_and_delete_many(state, [
+                 {:runs, "ephemeral", "wrong"},
+                 {:durable_fences, "persistent", "fence"}
+               ])
+
+      assert {:ok, "run", state} = SqliteBackend.get(state, :runs, "ephemeral")
+
+      assert {:ok, "fence", state} =
+               SqliteBackend.get(state, :durable_fences, "persistent")
+
+      assert {:ok, state} =
+               SqliteBackend.compare_and_delete_many(state, [
+                 {:runs, "ephemeral", "run"},
+                 {:durable_fences, "persistent", "fence"}
+               ])
+
+      assert {:ok, nil, state} = SqliteBackend.get(state, :runs, "ephemeral")
+      assert {:ok, nil, _state} = SqliteBackend.get(state, :durable_fences, "persistent")
+    end
   end
 
   describe "list/2" do
