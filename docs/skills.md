@@ -689,6 +689,11 @@ case LemonSkills.Config.validate_mcp_servers(configs) do
 end
 ```
 
+The shared configuration validator applies the same rules as
+`LemonSkills.McpSource.validate_config/1`, including requiring
+`persist_oauth_tokens` to be a boolean and `oauth_token_secret` to be a
+non-empty string when either option is present on an HTTP or SSE source.
+
 ### Supported MCP Servers
 
 Popular MCP servers you can integrate:
