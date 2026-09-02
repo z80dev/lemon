@@ -639,19 +639,23 @@ an earlier side effect inside a multi-step callback. Callers must not retry
 automatically without independent idempotency or reconciliation. Read-only
 query exits and throws remain unavailable because they cannot duplicate a side
 effect. Query calls do not substitute `false`, `:none`, or `[]`; callers must
-handle unknown router state explicitly.
+handle unknown router state explicitly. Query exceptions return the sanitized
+`{:error, :query_failed}` rather than carrying exception messages across the
+bridge.
 
 Configured implementations are validated against the bridge behaviours before
 use. `submit_run/1` accepts only `{:ok, nonempty_binary_run_id}` as success, and
 an explicit `{:error, reason}` other than `{:error, :outcome_unknown}` means
 the implementation guarantees the mutation did not take effect. Malformed
 mutation answers are outcome-unknown; malformed query answers remain
-`{:error, {:unexpected_answer, value}}`.
+`{:error, {:unexpected_answer, value}}`. Active-session lists are accepted only
+when every entry has non-empty binary `session_key` and `run_id` fields.
 For abort and keep-alive commands, `:ok` acknowledges that the router accepted
 or dispatched the decision; it does not wait for synchronous application by
 the target run process.
 Failure logs contain only a sanitized callback MFA and failure class; raw
-exceptions, exit reasons, stacktraces, and callback arguments are not logged.
+exceptions, exit reasons, stacktraces, and callback arguments are neither
+logged nor returned for query exceptions.
 
 ## Telemetry Events
 

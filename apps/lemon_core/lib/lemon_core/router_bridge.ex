@@ -31,11 +31,12 @@ defmodule LemonCore.RouterBridge do
       implementations must return an error only when they can guarantee that
       the mutation did not take effect; this is the definite-rejection path.
     * **Reached and raised** — the callback ran in the caller's process and
-      raised. A read-only query returns `{:error, exception}`, while a mutation
-      returns `{:error, :outcome_unknown}` because the exception may have been
-      raised after the side effect. The bridge logs only the callback MFA and
-      the safe failure class `exception`; exception messages and stacktraces
-      may contain request data or credentials and are never rendered here.
+      raised. A read-only query returns the sanitized
+      `{:error, :query_failed}`, while a mutation returns
+      `{:error, :outcome_unknown}` because the exception may have been raised
+      after the side effect. The bridge logs only the callback MFA and the safe
+      failure class `exception`; exception messages and stacktraces may contain
+      request data or credentials and never cross this boundary.
     * **Unacknowledged mutation** — a submission, inbound route, abort, or
       keep-alive callback that raises, throws, returns a malformed
       acknowledgement, times out, or exits returns
@@ -80,6 +81,7 @@ defmodule LemonCore.RouterBridge do
   @type configure_mode :: :replace | :merge | :safe_merge
   @type unavailable :: {:error, :unavailable}
   @type outcome_unknown :: {:error, :outcome_unknown}
+  @type query_failed :: {:error, :query_failed}
 
   @doc "The behaviour each configurable role must implement."
   @spec roles() :: keyword(module())
@@ -195,7 +197,8 @@ defmodule LemonCore.RouterBridge do
   would be the wrong answer, since a caller may then start work it would
   otherwise have queued.
   """
-  @spec session_busy?(binary()) :: {:ok, boolean()} | unavailable() | {:error, term()}
+  @spec session_busy?(binary()) ::
+          {:ok, boolean()} | unavailable() | query_failed() | {:error, term()}
   def session_busy?(session_key) when is_binary(session_key) and session_key != "" do
     case call(:router, :session_busy?, [session_key], :query) do
       busy? when is_boolean(busy?) -> {:ok, busy?}
@@ -206,7 +209,8 @@ defmodule LemonCore.RouterBridge do
 
   def session_busy?(session_key), do: {:error, {:invalid_session_key, session_key}}
 
-  @spec active_run(binary()) :: {:ok, binary()} | :none | unavailable() | {:error, term()}
+  @spec active_run(binary()) ::
+          {:ok, binary()} | :none | unavailable() | query_failed() | {:error, term()}
   def active_run(session_key) when is_binary(session_key) and session_key != "" do
     case call(:router, :active_run, [session_key], :query) do
       {:ok, run_id} when is_binary(run_id) and run_id != "" -> {:ok, run_id}
@@ -219,10 +223,13 @@ defmodule LemonCore.RouterBridge do
   def active_run(session_key), do: {:error, {:invalid_session_key, session_key}}
 
   @spec list_active_sessions() ::
-          {:ok, [%{session_key: binary(), run_id: binary()}]} | unavailable() | {:error, term()}
+          {:ok, [%{session_key: binary(), run_id: binary()}]}
+          | unavailable()
+          | query_failed()
+          | {:error, term()}
   def list_active_sessions do
     case call(:router, :list_active_sessions, [], :query) do
-      sessions when is_list(sessions) -> {:ok, sessions}
+      sessions when is_list(sessions) -> validate_active_sessions(sessions)
       {:error, _} = error -> error
       other -> {:error, {:unexpected_answer, other}}
     end
@@ -285,7 +292,7 @@ defmodule LemonCore.RouterBridge do
   defp exit_result(:query, _failure_class), do: {:error, :unavailable}
   defp exit_result(:mutation, _failure_class), do: {:error, :outcome_unknown}
 
-  defp exception_result(:query, exception), do: {:error, exception}
+  defp exception_result(:query, _exception), do: {:error, :query_failed}
   defp exception_result(:mutation, _exception), do: {:error, :outcome_unknown}
 
   defp throw_result(:query), do: {:error, :unavailable}
@@ -300,6 +307,20 @@ defmodule LemonCore.RouterBridge do
   defp expect_ok(:ok), do: :ok
   defp expect_ok({:error, _reason} = error), do: error
   defp expect_ok(_malformed_acknowledgement), do: {:error, :outcome_unknown}
+
+  defp validate_active_sessions(sessions) do
+    if Enum.all?(sessions, &valid_active_session?/1) do
+      {:ok, sessions}
+    else
+      {:error, {:unexpected_answer, :malformed_active_sessions}}
+    end
+  end
+
+  defp valid_active_session?(%{session_key: session_key, run_id: run_id})
+       when is_binary(session_key) and session_key != "" and is_binary(run_id) and run_id != "",
+       do: true
+
+  defp valid_active_session?(_session), do: false
 
   defp impl(key) do
     Map.get(current_config(), key)

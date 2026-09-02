@@ -3,8 +3,8 @@ defmodule LemonCore.RouterBridge.NotImplementedError do
   Raised by the default callbacks that `use LemonCore.RouterBridge.Router` and
   `use LemonCore.RouterBridge.RunOrchestrator` inject, so a router that does
   not really handle a call fails visibly through the bridge (as
-  `{:error, %LemonCore.RouterBridge.NotImplementedError{}}`) instead of
-  answering a made-up value.
+  `{:error, :query_failed}` for a query or `{:error, :outcome_unknown}` for a
+  mutation) instead of answering a made-up value.
   """
 
   defexception [:module, :function, :arity]

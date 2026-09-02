@@ -78,8 +78,10 @@ Telegram, run history, durable memory, kanban boards, or `~/.lemon`.
   idempotency or reconciliation; even a `:noproc` exit may follow an earlier
   side effect inside the callback.
   Successful run submission is normalized to a non-empty binary run id, empty
-  session/run keys return structured validation errors, and bridge failure
-  logs contain only a safe callback MFA and failure class.
+  session/run keys return structured validation errors, active-session lists
+  require non-empty binary ids in every entry, and bridge failure logs contain
+  only a safe callback MFA and failure class. Query exceptions return the fixed
+  `{:error, :query_failed}` rather than exposing exception contents.
 - `LemonCore.RouterBridge.session_busy?/1` now returns
   `{:ok, boolean()} | {:error, term()}`. `active_run/1` and
   `list_active_sessions/0` likewise report `{:error, :unavailable}` instead of

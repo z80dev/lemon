@@ -863,10 +863,12 @@ non-acceptance: a multi-step callback may have mutated before reaching a
 missing downstream process. Do not automatically retry an unknown outcome
 without independent idempotency or reconciliation. A normally returned
 `{:error, reason}` other than `:outcome_unknown` is an implementation guarantee
-that the mutation did not take effect. Query exits remain unavailable because
-queries cannot duplicate a side effect. Bridge logs must contain only the
-sanitized callback MFA and failure class, never exception messages,
-stacktraces, exit reasons, or callback arguments.
+  that the mutation did not take effect. Query exits remain unavailable because
+  queries cannot duplicate a side effect, while query exceptions return the
+  sanitized `{:error, :query_failed}`. Active-session list results are valid
+  only when every entry has non-empty binary session and run ids. Bridge logs
+  and query errors must never expose exception messages, stacktraces, exit
+  reasons, or callback arguments.
 Abort and keep-alive `:ok` results acknowledge router acceptance or dispatch;
 they are not synchronous proof that the target run process applied the
 decision.
@@ -1008,8 +1010,9 @@ Durable memory is supervised by the `lemon_memory` app, not here.
   raises, throws, returns a malformed acknowledgement, or exits without a
   definite acknowledgement. The latter is duplicate-risk, not a retry-safe
   availability failure; this includes `:noproc` exits from configured
-  callbacks. Query callers must not reinterpret unavailable as `false`,
-  `:none`, or `[]` without an explicit local policy.
+  callbacks. Query exceptions are sanitized to `{:error, :query_failed}` and
+  query callers must not reinterpret unavailable as `false`, `:none`, or `[]`
+  without an explicit local policy.
 - `LemonCore.Dedupe.Ets` uses monotonic time for TTL; `LemonCore.Idempotency` uses wall-clock time
 - `LemonCore.Config.Modular` is the canonical config implementation; `LemonCore.Config` is a facade that delegates to modular
 - Provider config resolution is centralized in `LemonAgent.ProviderConfigResolver` (agent_core); provider modules must not read env vars directly for normal request paths

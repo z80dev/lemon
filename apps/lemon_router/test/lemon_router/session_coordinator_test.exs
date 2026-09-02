@@ -367,6 +367,22 @@ defmodule LemonRouter.SessionCoordinatorTest do
     assert eventually(fn -> SessionCoordinator.active_run_for_session(session_key) == :none end)
   end
 
+  test "query helpers report unavailable while the session registry cannot be consulted" do
+    assert :ok =
+             Supervisor.terminate_child(LemonRouter.Supervisor, LemonRouter.SessionRegistry)
+
+    try do
+      assert {:error, :unavailable} =
+               SessionCoordinator.active_run_for_session("agent:test:main")
+
+      assert {:error, :unavailable} = SessionCoordinator.busy?("agent:test:main")
+      assert {:error, :unavailable} = SessionCoordinator.list_active_sessions()
+    after
+      assert {:ok, _pid} =
+               Supervisor.restart_child(LemonRouter.Supervisor, LemonRouter.SessionRegistry)
+    end
+  end
+
   test "merged queued followups unsubscribe the superseded run", %{run_supervisor: run_supervisor} do
     key = {:session, unique_session_key()}
 

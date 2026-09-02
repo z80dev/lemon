@@ -84,8 +84,10 @@ attachment policy.
   `{:error, :outcome_unknown}` because submission may already have happened
   without returning a usable run id; it is not automatically retry-safe.
 - Abort and keep-alive `:ok` results mean the router accepted or dispatched the
-  decision. These best-effort commands do not wait for synchronous application
-  by every target run process.
+  decision. A run-specific abort is not acknowledged unless its serialization
+  tombstone was registered; an unknown registration outcome is propagated to
+  the bridge. These commands do not wait for synchronous application by every
+  target run process.
 - Top-level runs always use the native executor; model validation belongs to `LemonAi`, and default cwd resolution should use `LemonCore.Cwd`.
 - Router emits `LemonCore.DeliveryIntent`, not `LemonChannels.OutboundPayload`.
 - Tool-status failure summaries preserve safe structured fields from
@@ -97,7 +99,7 @@ attachment policy.
 - Telegram-specific state is owned by `lemon_channels` wrappers:
   - `LemonChannels.Telegram.StateStore`
   - `LemonChannels.Telegram.ResumeIndexStore`
-- External apps must query busy/active session state through `LemonRouter.Router` or `LemonCore.RouterBridge`, not router-internal read-model or registry details.
+- External apps must query busy/active session state through `LemonRouter.Router` or `LemonCore.RouterBridge`, not router-internal read-model or registry details. Registry/read-model failures propagate as errors rather than false idle/empty answers.
 
 ## Session And Queue Semantics
 

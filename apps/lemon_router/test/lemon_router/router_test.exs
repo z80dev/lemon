@@ -21,12 +21,21 @@ defmodule LemonRouter.RouterTest do
   defmodule SessionCoordinatorStubRouter do
     def abort_session(session_key, reason) do
       send(test_pid(), {:abort_session, session_key, reason})
-      :ok
+      Process.get(:router_abort_session_result, :ok)
+    end
+
+    def abort_run(run_id, reason) do
+      send(test_pid(), {:abort_run, run_id, reason})
+      Process.get(:router_abort_run_result, :ok)
     end
 
     def busy?(session_key) do
       send(test_pid(), {:busy_query, session_key})
-      session_key == Process.get(:router_busy_session_key)
+
+      case Process.get(:router_busy_result) do
+        nil -> session_key == Process.get(:router_busy_session_key)
+        result -> result
+      end
     end
 
     def active_run_for_session(session_key) do
@@ -60,7 +69,10 @@ defmodule LemonRouter.RouterTest do
     Process.put(:router_test_pid, self())
     Process.delete(:router_submit_result)
     Process.delete(:router_busy_session_key)
+    Process.delete(:router_busy_result)
     Process.delete(:router_active_sessions)
+    Process.delete(:router_abort_session_result)
+    Process.delete(:router_abort_run_result)
 
     on_exit(fn ->
       case previous_orchestrator do
@@ -81,7 +93,10 @@ defmodule LemonRouter.RouterTest do
       Process.delete(:router_test_pid)
       Process.delete(:router_submit_result)
       Process.delete(:router_busy_session_key)
+      Process.delete(:router_busy_result)
       Process.delete(:router_active_sessions)
+      Process.delete(:router_abort_session_result)
+      Process.delete(:router_abort_run_result)
     end)
 
     :ok
@@ -104,6 +119,55 @@ defmodule LemonRouter.RouterTest do
   test "abort/2 is a no-op when session has no runs" do
     assert :ok = Router.abort("missing:session", :test_abort)
     assert_receive {:abort_session, "missing:session", :test_abort}, 500
+  end
+
+  test "abort/2 propagates a coordinator rejection" do
+    Process.put(:router_abort_session_result, {:error, :coordinator_unavailable})
+
+    assert {:error, :coordinator_unavailable} =
+             Router.abort("agent:test:main", :test_abort)
+
+    assert_receive {:abort_session, "agent:test:main", :test_abort}, 500
+  end
+
+  test "RouterBridge reports an unknown abort outcome when tombstone registration exits" do
+    orchestrator = Process.whereis(LemonRouter.RunOrchestrator)
+    assert is_pid(orchestrator)
+    assert true = Process.unregister(LemonRouter.RunOrchestrator)
+
+    try do
+      :ok = RouterBridge.configure(router: Router)
+
+      assert {:error, :outcome_unknown} =
+               Router.abort_run("run-tombstone-unavailable-direct", :test_abort)
+
+      assert {:error, :outcome_unknown} =
+               RouterBridge.abort_run("run-tombstone-unavailable", :test_abort)
+
+      refute_receive {:abort_run, "run-tombstone-unavailable-direct", :test_abort}, 100
+      refute_receive {:abort_run, "run-tombstone-unavailable", :test_abort}, 100
+    after
+      assert true = Process.register(orchestrator, LemonRouter.RunOrchestrator)
+    end
+  end
+
+  test "abort_run/2 propagates a coordinator rejection after registering the tombstone" do
+    Process.put(:router_abort_run_result, {:error, :coordinator_unavailable})
+
+    assert {:error, :coordinator_unavailable} =
+             Router.abort_run("run-coordinator-rejected", :test_abort)
+
+    assert_receive {:abort_run, "run-coordinator-rejected", :test_abort}, 500
+  end
+
+  test "query callbacks propagate coordinator read failures" do
+    Process.put(:router_busy_result, {:error, :unavailable})
+    Process.put({:active_run, "agent:test:main"}, {:error, :unavailable})
+    Process.put(:router_active_sessions, {:error, :unavailable})
+
+    assert {:error, :unavailable} = Router.session_busy?("agent:test:main")
+    assert {:error, :unavailable} = Router.active_run("agent:test:main")
+    assert {:error, :unavailable} = Router.list_active_sessions()
   end
 
   test "session_busy?/1 delegates to the session coordinator" do

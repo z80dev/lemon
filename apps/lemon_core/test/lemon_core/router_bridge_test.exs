@@ -157,6 +157,10 @@ defmodule LemonCore.RouterBridgeTest do
     end
 
     def session_busy?(_session_key), do: :maybe
+
+    def list_active_sessions do
+      Process.get(:bridge_active_sessions_result, [])
+    end
   end
 
   defmodule BridgeAdversarialRouter do
@@ -201,6 +205,7 @@ defmodule LemonCore.RouterBridgeTest do
       end
 
       Process.delete(:bridge_submit_result)
+      Process.delete(:bridge_active_sessions_result)
     end)
 
     :ok
@@ -509,11 +514,10 @@ defmodule LemonCore.RouterBridgeTest do
       refute log =~ "router blew up"
     end
 
-    test "a query exception remains diagnostic because there is no side effect to duplicate" do
+    test "a query exception is sanitized because its message may contain request data" do
       :ok = RouterBridge.configure(router: BridgeRaisingRouter)
 
-      assert {:error, %RuntimeError{message: "query blew up"}} =
-               RouterBridge.session_busy?("agent:query:main")
+      assert {:error, :query_failed} = RouterBridge.session_busy?("agent:query:main")
     end
 
     test "a default mutation callback is also conservatively outcome unknown" do
@@ -556,6 +560,23 @@ defmodule LemonCore.RouterBridgeTest do
       assert {:error, {:unexpected_answer, :maybe}} =
                RouterBridge.session_busy?("agent:malformed:main")
     end
+
+    test "list_active_sessions/0 rejects every malformed or empty entry" do
+      malformed_lists = [
+        [%{session_key: "", run_id: "run-1"}],
+        [%{session_key: "agent:test:main", run_id: ""}],
+        [%{session_key: "agent:test:main", run_id: 123}],
+        [%{session_key: "agent:test:main"}],
+        [%{"session_key" => "agent:test:main", "run_id" => "run-1"}]
+      ]
+
+      for malformed <- malformed_lists do
+        Process.put(:bridge_active_sessions_result, malformed)
+
+        assert {:error, {:unexpected_answer, :malformed_active_sessions}} =
+                 RouterBridge.list_active_sessions()
+      end
+    end
   end
 
   describe "secret-safe failure logging and ambiguous mutation outcomes" do
@@ -591,10 +612,7 @@ defmodule LemonCore.RouterBridgeTest do
 
           assert {:error, :unavailable} = RouterBridge.active_run("throw:#{secret}")
 
-          assert {:error, %RuntimeError{message: query_message}} =
-                   RouterBridge.active_run(secret)
-
-          assert query_message =~ secret
+          assert {:error, :query_failed} = RouterBridge.active_run(secret)
         end)
 
       assert log =~ "failure_class=exception"

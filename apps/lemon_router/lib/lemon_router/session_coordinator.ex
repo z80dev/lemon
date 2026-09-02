@@ -107,32 +107,41 @@ defmodule LemonRouter.SessionCoordinator do
     end
   end
 
-  @spec active_run_for_session(binary()) :: {:ok, binary()} | :none
+  @spec active_run_for_session(binary()) :: {:ok, binary()} | :none | {:error, :unavailable}
   def active_run_for_session(session_key) when is_binary(session_key) and session_key != "" do
     case Registry.lookup(LemonRouter.SessionRegistry, session_key) do
       [{_pid, %{run_id: run_id}} | _] when is_binary(run_id) and run_id != "" -> {:ok, run_id}
       _ -> :none
     end
   rescue
-    _ -> :none
+    _ -> {:error, :unavailable}
+  catch
+    _, _ -> {:error, :unavailable}
   end
 
   def active_run_for_session(_), do: :none
 
-  @spec busy?(binary()) :: boolean()
+  @spec busy?(binary()) :: boolean() | {:error, :unavailable}
   def busy?(session_key) when is_binary(session_key) and session_key != "" do
-    active_run_for_session(session_key) != :none
+    case active_run_for_session(session_key) do
+      {:ok, _run_id} -> true
+      :none -> false
+      {:error, _reason} = error -> error
+    end
   end
 
   def busy?(_), do: false
 
-  @spec list_active_sessions() :: [%{session_key: binary(), run_id: binary()}]
+  @spec list_active_sessions() ::
+          [%{session_key: binary(), run_id: binary()}] | {:error, :unavailable}
   def list_active_sessions do
     Registry.select(LemonRouter.SessionRegistry, [
       {{:"$1", :"$2", %{run_id: :"$3"}}, [], [%{session_key: :"$1", run_id: :"$3"}]}
     ])
   rescue
-    _ -> []
+    _ -> {:error, :unavailable}
+  catch
+    _, _ -> {:error, :unavailable}
   end
 
   def start_link(opts) do

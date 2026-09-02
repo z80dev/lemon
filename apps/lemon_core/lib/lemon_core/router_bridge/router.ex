@@ -15,7 +15,8 @@ defmodule LemonCore.RouterBridge.Router do
   while any call it does not handle fails visibly rather than answering with
   an invented value. Because a raised mutation cannot prove that no side
   effect occurred, the bridge conservatively reports a default mutation as
-  `{:error, :outcome_unknown}`; query defaults retain the exception error.
+  `{:error, :outcome_unknown}`; query defaults become the sanitized
+  `{:error, :query_failed}`.
 
   ## Mutation error contract
 
@@ -62,7 +63,7 @@ defmodule LemonCore.RouterBridge.Router do
   @callback active_run(session_key :: binary()) ::
               {:ok, binary()} | :none | {:error, term()}
 
-  @doc "Every session with an active run."
+  @doc "Every session with an active run. Session and run ids must be non-empty binaries."
   @callback list_active_sessions() ::
               [%{session_key: binary(), run_id: binary()}] | {:error, term()}
 
