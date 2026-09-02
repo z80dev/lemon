@@ -64,12 +64,25 @@ defmodule LemonCore.Contract do
     callbacks = behaviour.behaviour_info(:callbacks)
     optional_callbacks = behaviour.behaviour_info(:optional_callbacks)
 
-    if is_list(callbacks) and is_list(optional_callbacks) do
+    if valid_callbacks?(callbacks) and valid_callbacks?(optional_callbacks) do
       {:ok, callbacks, optional_callbacks}
     else
       :error
     end
   end
+
+  defp valid_callbacks?(callbacks) when is_list(callbacks) do
+    Enum.all?(callbacks, fn
+      {function, arity}
+      when is_atom(function) and is_integer(arity) and arity >= 0 and arity <= 255 ->
+        true
+
+      _other ->
+        false
+    end)
+  end
+
+  defp valid_callbacks?(_callbacks), do: false
 
   defp loadable(module) do
     case Code.ensure_loaded(module) do

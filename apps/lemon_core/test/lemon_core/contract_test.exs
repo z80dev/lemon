@@ -28,6 +28,36 @@ defmodule LemonCore.ContractTest do
     def behaviour_info(_kind), do: exit(:broken_behaviour_metadata)
   end
 
+  defmodule NonTupleCallbackBehaviourInfo do
+    def behaviour_info(:callbacks), do: [:hello]
+    def behaviour_info(:optional_callbacks), do: []
+  end
+
+  defmodule InvalidFunctionBehaviourInfo do
+    def behaviour_info(:callbacks), do: [{"hello", 0}]
+    def behaviour_info(:optional_callbacks), do: []
+  end
+
+  defmodule NonIntegerArityBehaviourInfo do
+    def behaviour_info(:callbacks), do: [{:hello, "0"}]
+    def behaviour_info(:optional_callbacks), do: []
+  end
+
+  defmodule NegativeArityBehaviourInfo do
+    def behaviour_info(:callbacks), do: [{:hello, -1}]
+    def behaviour_info(:optional_callbacks), do: []
+  end
+
+  defmodule OutOfRangeArityBehaviourInfo do
+    def behaviour_info(:callbacks), do: [{:hello, 256}]
+    def behaviour_info(:optional_callbacks), do: []
+  end
+
+  defmodule MalformedOptionalCallbacksBehaviourInfo do
+    def behaviour_info(:callbacks), do: [hello: 0]
+    def behaviour_info(:optional_callbacks), do: [{:goodbye, nil}]
+  end
+
   test "accepts a loadable module with all required callbacks" do
     assert Contract.validate(GreeterImplementation, Greeter) == :ok
   end
@@ -68,6 +98,20 @@ defmodule LemonCore.ContractTest do
 
     assert Contract.validate(GreeterImplementation, ExitingBehaviourInfo) ==
              {:error, {:not_a_behaviour, ExitingBehaviourInfo}}
+  end
+
+  test "rejects malformed callback metadata without raising" do
+    for behaviour <- [
+          NonTupleCallbackBehaviourInfo,
+          InvalidFunctionBehaviourInfo,
+          NonIntegerArityBehaviourInfo,
+          NegativeArityBehaviourInfo,
+          OutOfRangeArityBehaviourInfo,
+          MalformedOptionalCallbacksBehaviourInfo
+        ] do
+      assert Contract.validate(GreeterImplementation, behaviour) ==
+               {:error, {:not_a_behaviour, behaviour}}
+    end
   end
 
   test "EngineRuntime.validate/1 reports its complete required surface" do

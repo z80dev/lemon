@@ -79,4 +79,23 @@ defmodule LemonRouter.EngineRuntimeConfigurationTest do
     assert log =~ "disabling the invalid binding"
     assert Application.fetch_env(:lemon_router, :engine_runtime) == :error
   end
+
+  test "the router application startup validates and removes an invalid runtime binding" do
+    on_exit(fn ->
+      {:ok, _started} = Application.ensure_all_started(:lemon_router)
+    end)
+
+    assert :ok = Application.stop(:lemon_router)
+    Application.put_env(:lemon_router, :engine_runtime, IncompleteRuntime)
+
+    log =
+      capture_log(fn ->
+        assert {:ok, started} = Application.ensure_all_started(:lemon_router)
+        assert :lemon_router in started
+      end)
+
+    assert log =~ "configured :engine_runtime #{inspect(IncompleteRuntime)}"
+    assert log =~ "disabling the invalid binding"
+    assert Application.fetch_env(:lemon_router, :engine_runtime) == :error
+  end
 end
