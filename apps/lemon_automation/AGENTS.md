@@ -56,7 +56,10 @@ CronManager (GenServer, ticks every 60s)
                                               `:run_completed` summary into the base main session topic/history
 ```
 
-**Wake** is a separate module (not intermediary in the above flow). It creates runs with `triggered_by: :wake`, submits directly to `LemonRouter`, and sends `{:run_complete, ...}` back to `CronManager`.
+**Wake** is a separate module (not intermediary in the above flow). It creates
+runs with `triggered_by: :wake`, submits through the same configured
+`:cron_run_submitter` used by `CronManager` (normally `RunSubmitter` ->
+`LemonRouter`), and sends `{:run_complete, ...}` back to `CronManager`.
 
 **CronCommandRunner** is the operator-owned no-agent cron path. Jobs with
 `command` instead of `prompt` run as supervised local shell commands under
@@ -85,6 +88,27 @@ tombstone with submission acceptance, so a stop cannot miss a run between
 acceptance and the later submitted callback. `mode: :graceful` disables auto
 restart but lets the already bounded loop finish. The outer `run_once/2` call
 timeout encloses the configured judge/continuation wait deadlines.
+
+Before crossing the external abort boundary, hard stop durably records the
+fixed run's abort intent and marks the attempt outcome unknown. A manager crash
+after dispatch therefore restores reconciliation ownership and never repeats
+the abort; a normal acknowledgement updates that prewritten intent.
+
+The hard-stop result reports a sanitized `router_abort` status. It sends the
+abort exactly once: `:outcome_unknown` means the abort may already have taken
+effect, so the manager does not retry it; arbitrary callback errors and
+exceptions never enter stored goal metadata or returned diagnostics.
+
+An ambiguous judge or continuation submission remains owned by its
+caller-generated run ID while the waiter reconciles terminal events. If that
+bounded wait expires, crashes, or returns anything other than a confirmed
+terminal result, the manager retains the loop in `reconciling` state
+so another tick cannot overlap it. A durable terminal record releases that
+guard into an error state requiring an explicit restart. A hard stop aborts
+that exact run once; only a definite abort acceptance releases the guard, while
+an ambiguous or unavailable abort keeps reconciliation ownership. Persisted
+reconciliation and abort-attempt metadata restore that guard after a manager
+restart without retrying the abort.
 
 `GoalJudge` supports explicit verdicts, a pluggable `judge_runner` with
 `judge_model` metadata, and deterministic fallback. `GoalJudge.RouterRunner`
@@ -529,7 +553,10 @@ results = LemonAutomation.Wake.trigger_matching("heartbeat")
 results = LemonAutomation.Wake.trigger_for_agent("agent_abc")
 ```
 
-Wake runs use `triggered_by: :wake` and fire-and-forget: they return the `CronRun` immediately and completion is handled asynchronously by `CronManager`. Wake failures do not enter the scheduled retry path.
+Wake runs use `triggered_by: :wake` and fire-and-forget: they return the
+`CronRun` immediately, use the same configured `:cron_run_submitter` as
+`CronManager`, and have completion handled asynchronously by `CronManager`.
+Wake failures do not enter the scheduled retry path.
 
 ## Events
 

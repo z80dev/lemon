@@ -10,9 +10,55 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- A2A message replays now return the original task without duplicate router
+  submission, webhook idempotency storage failures fail closed with retryable
+  503 responses instead of reporting acceptance, and exact synchronous webhook
+  responses have an independent durable replay receipt. Ambiguous goal-loop
+  submissions retain their fixed run ownership until reconciliation or an
+  explicit hard stop.
+- Fixed run IDs now have durable semantic admission claims and compact permanent
+  accepted/aborted outcome fences; only safe never-enqueued claims and volatile
+  caches expire. Replays cannot cross session, content, or execution identity,
+  transport-local attachment paths do not create false conflicts, and surviving
+  run ownership is indexed without probing unrelated run processes. Exact
+  webhook response receipts are swept together with their completed primary
+  reservation after the replay horizon using transactional or fence-last
+  exact-snapshot deletion, and raw webhook idempotency keys are hashed before
+  any durable key, receipt, router request, or run metadata is built. Legacy
+  raw webhook receipts migrate behind the hashed fence without reopening
+  execution, invalid payload idempotency values are rejected before hashing,
+  released pending receipts without run identity return a permanent,
+  non-retryable duplicate ambiguity receipt, and
+  failed cleanup scans do not advance their watermark. Store diagnostics also
+  sanitize nested idempotency-key context, and sensitive multi-delete failures
+  return bounded error categories instead of backend payloads. Legacy router
+  receipts are compacted and abort reasons sanitized during replay and
+  background cleanup; goal hard stops persist abort intent before dispatch.
+- Telegram memory-reflection and per-chat abort helpers no longer collapse
+  router mutation failures into success-like results. Ambiguous cancel and
+  keepalive callbacks now direct users to check run status before retrying,
+  retain their inline controls, and log only bounded failure classes.
+- Gateway webhooks now acknowledge ambiguous router submissions with an
+  explicit non-retry-safe receipt instead of a redelivery-triggering 5xx,
+  profile chat preserves a reconciliation run ID without retrying or exposing
+  raw failures, and goal-loop hard stops report sanitized one-shot abort
+  outcomes.
+- Email webhooks now reserve a hashed provider Message-ID and stable run
+  reference before router submission. Definite rejection remains safely
+  retryable, while an ambiguous handoff returns a truthful non-retrying receipt
+  and retains dedupe state so provider redelivery cannot create a second run.
+  Telegram and WhatsApp busy-query fallbacks no longer log raw session keys or
+  exception terms.
 - MCP configuration validation now rejects non-boolean OAuth token-persistence
   flags and empty token secret names consistently before HTTP or SSE sources
   reach runtime startup.
+- `LemonCore.RouterBridge` query calls now distinguish an idle router from an
+  unavailable one: `session_busy?/1`, `active_run/1`, and
+  `list_active_sessions/0` return explicit result tuples/errors, and command
+  callbacks accept only `:ok` or `{:error, reason}`. All channel, web, A2A,
+  control-plane, and portable-command callers were migrated atomically;
+  user-facing run controls no longer report success for a request the router
+  did not accept.
 - Hermes skill install/update requests no longer block their own control-plane
   WebSocket while waiting for approval or Git work. Approval events and
   liveness probes remain deliverable, and the TUI keeps the correlated skill

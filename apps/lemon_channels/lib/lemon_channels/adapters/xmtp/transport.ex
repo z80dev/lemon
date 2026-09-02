@@ -6,7 +6,7 @@ defmodule LemonChannels.Adapters.Xmtp.Transport do
   require Logger
 
   alias LemonChannels.Adapters.Xmtp.{Bridge, PortServer}
-  alias LemonChannels.{BindingResolver, GatewayConfig}
+  alias LemonChannels.{BindingResolver, GatewayConfig, SubmissionOutcome}
   alias LemonChannels.OutboundPayload
   alias LemonCore.ChatScope
   alias LemonCore.{InboundMessage, SessionKey}
@@ -295,17 +295,30 @@ defmodule LemonChannels.Adapters.Xmtp.Transport do
     if receive_available?(state) do
       normalized = normalize_inbound(event)
       dedupe_key = inbound_dedupe_key(normalized, event)
+      bridge_dedupe_key = normalize_blank(event["bridge_dedupe_key"])
 
-      case remember_inbound_key(state, dedupe_key) do
-        {:duplicate, state} ->
-          Logger.debug(
-            "xmtp duplicate inbound ignored: conversation_id=#{normalized.conversation_id} message_id=#{normalized.message_id || "missing"}"
-          )
+      if MapSet.member?(state.seen_inbound_keys, dedupe_key) do
+        _ = Bridge.acknowledge_inbound(state.port_server, bridge_dedupe_key)
+        Logger.debug("xmtp duplicate inbound ignored")
+        state
+      else
+        case handle_inbound(normalized, state) do
+          {:ok, state} ->
+            _ = Bridge.acknowledge_inbound(state.port_server, bridge_dedupe_key)
+            remember_new_inbound_key(state, dedupe_key)
 
-          state
+          {{:error, _} = error, state} ->
+            state =
+              if SubmissionOutcome.uncertain?(error) do
+                _ = Bridge.acknowledge_inbound(state.port_server, bridge_dedupe_key)
+                remember_new_inbound_key(state, dedupe_key)
+              else
+                state
+              end
 
-        {:ok, state} ->
-          handle_inbound(normalized, state)
+            send_submission_failure(normalized, state.port_server, error)
+            state
+        end
       end
     else
       Logger.warning("xmtp inbound ignored because transport is unavailable")
@@ -339,20 +352,19 @@ defmodule LemonChannels.Adapters.Xmtp.Transport do
   defp handle_inbound(normalized, state) do
     case inbound_action(normalized) do
       :ignore ->
-        :ok
+        {:ok, state}
 
       :placeholder_reply ->
-        send_placeholder_reply(normalized, state.port_server)
+        _ = send_placeholder_reply(normalized, state.port_server)
+        {:ok, state}
 
       :runtime_submit ->
-        submit_inbound(normalized, state.account_id)
+        {submit_inbound(normalized, state.account_id), state}
     end
-
-    state
   rescue
-    error ->
-      Logger.warning("xmtp inbound message rejected: #{inspect(error)}")
-      state
+    _ ->
+      Logger.warning("xmtp inbound message rejected: reason=unavailable")
+      {{:error, :unavailable}, state}
   end
 
   defp submit_inbound(normalized, account_id) when is_map(normalized) do
@@ -399,6 +411,31 @@ defmodule LemonChannels.Adapters.Xmtp.Transport do
       |> Map.new()
 
     Bridge.send_message(port_server, payload)
+  end
+
+  defp send_submission_failure(normalized, port_server, error) do
+    content =
+      if SubmissionOutcome.uncertain?(error) do
+        "I couldn't confirm whether that request was accepted. Check the run status before retrying."
+      else
+        "I couldn't queue that request. Please try again."
+      end
+
+    payload =
+      %{
+        "conversation_id" => normalized.conversation_id,
+        "wallet_address" => normalized.wallet_address,
+        "is_group" => normalized.is_group,
+        "group_id" => normalized.group_id,
+        "reply_to_message_id" => normalized.message_id,
+        "content" => content
+      }
+      |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+      |> Map.new()
+
+    Bridge.send_message(port_server, payload)
+  rescue
+    _ -> :ok
   end
 
   defp placeholder_response_text(normalized) do
@@ -518,6 +555,13 @@ defmodule LemonChannels.Adapters.Xmtp.Transport do
 
       {:ok,
        %{state | seen_inbound_keys: seen_inbound_keys, seen_inbound_order: seen_inbound_order}}
+    end
+  end
+
+  defp remember_new_inbound_key(state, dedupe_key) do
+    case remember_inbound_key(state, dedupe_key) do
+      {:ok, state} -> state
+      {:duplicate, state} -> state
     end
   end
 
@@ -1224,18 +1268,17 @@ defmodule LemonChannels.Adapters.Xmtp.Transport do
       :ok ->
         :ok
 
-      other ->
+      {:error, _} = error ->
         Logger.warning(
-          "RouterBridge.submit_run failed for xmtp inbound (wallet=#{inspect(inbound.peer.id)} conversation=#{inspect(inbound.peer.thread_id)}): " <>
-            inspect(other)
+          "xmtp inbound routing failed: reason=#{SubmissionOutcome.log_label(error)}"
         )
 
-        :ok
+        error
     end
   rescue
-    error ->
-      Logger.warning("Failed to route xmtp inbound message: #{inspect(error)}")
-      :ok
+    _ ->
+      Logger.warning("xmtp inbound routing failed: reason=unavailable")
+      {:error, :unavailable}
   end
 
   defp outbound_payload(%OutboundPayload{kind: :text} = payload) do

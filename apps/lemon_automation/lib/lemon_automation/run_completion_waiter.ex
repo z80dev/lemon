@@ -30,6 +30,8 @@ defmodule LemonAutomation.RunCompletionWaiter do
           {:ok, binary(), binary()}
           | {:error, {:run_failed, binary(), term()}}
           | {:error, {:timeout, binary()}}
+          | {:error, {:completion_outcome_unknown, binary()}}
+          | {:error, {:submission_outcome_unknown, binary()}}
           | {:error, {:submit_failed, term()}}
           | {:error, {:unexpected_run_id, binary(), term()}}
           | {:error, {:unexpected_wait_result, binary(), term()}}
@@ -47,7 +49,8 @@ defmodule LemonAutomation.RunCompletionWaiter do
     * `:on_submitting` - ownership claim invoked before router submission; it
       must return `:ok` or `{:error, reason}`
     * `:on_submitted` - callback invoked with the authoritative router run ID
-    * `:on_terminal` - callback invoked with the same run ID after waiting
+    * `:on_terminal` - callback invoked with the same run ID only after a
+      terminal completion or failure is observed; wait timeout retains ownership
 
   Returns the fixed run id with successful output. Submission, timeout, run
   failure, mismatched-run-id, and unexpected waiter results remain distinct so
@@ -71,19 +74,13 @@ defmodule LemonAutomation.RunCompletionWaiter do
         :ok ->
           case safe_submit(router_mod, params) do
             {:ok, ^run_id} ->
-              :ok = notify(Keyword.get(opts, :on_submitted), run_id)
-
-              result =
-                normalize_wait_result(
-                  run_id,
-                  waiter_mod.wait_already_subscribed(run_id, timeout_ms, wait_opts)
-                )
-
-              :ok = notify(Keyword.get(opts, :on_terminal), run_id)
-              result
+              wait_after_acceptance(run_id, timeout_ms, wait_opts, waiter_mod, opts)
 
             {:ok, other_run_id} ->
               {:error, {:unexpected_run_id, run_id, other_run_id}}
+
+            {:error, :outcome_unknown} ->
+              reconcile_ambiguous_submission(run_id, timeout_ms, wait_opts, waiter_mod, opts)
 
             {:error, reason} ->
               {:error, {:submit_failed, reason}}
@@ -134,9 +131,61 @@ defmodule LemonAutomation.RunCompletionWaiter do
   defp safe_submit(router_mod, params) do
     router_mod.submit(params)
   rescue
-    error -> {:error, {:exception, error}}
+    _error -> {:error, :outcome_unknown}
   catch
-    :exit, reason -> {:error, {:exit, reason}}
+    :exit, _reason -> {:error, :outcome_unknown}
+    _kind, _reason -> {:error, :outcome_unknown}
+  end
+
+  defp reconcile_ambiguous_submission(run_id, timeout_ms, wait_opts, waiter_mod, opts) do
+    result =
+      normalize_wait_result(
+        run_id,
+        waiter_mod.wait_already_subscribed(run_id, timeout_ms, wait_opts)
+      )
+
+    case result do
+      {:ok, ^run_id, _output} = terminal_result ->
+        :ok = notify(Keyword.get(opts, :on_terminal), run_id)
+        terminal_result
+
+      {:error, {:run_failed, ^run_id, _reason}} = terminal_result ->
+        :ok = notify(Keyword.get(opts, :on_terminal), run_id)
+        terminal_result
+
+      _unconfirmed_result ->
+        {:error, {:submission_outcome_unknown, run_id}}
+    end
+  rescue
+    _error -> {:error, {:submission_outcome_unknown, run_id}}
+  catch
+    _kind, _reason -> {:error, {:submission_outcome_unknown, run_id}}
+  end
+
+  defp wait_after_acceptance(run_id, timeout_ms, wait_opts, waiter_mod, opts) do
+    :ok = notify(Keyword.get(opts, :on_submitted), run_id)
+
+    result =
+      normalize_wait_result(
+        run_id,
+        waiter_mod.wait_already_subscribed(run_id, timeout_ms, wait_opts)
+      )
+
+    case result do
+      {:error, {:timeout, ^run_id}} ->
+        {:error, {:completion_outcome_unknown, run_id}}
+
+      {:error, {:unexpected_wait_result, ^run_id, _other}} ->
+        {:error, {:completion_outcome_unknown, run_id}}
+
+      terminal_result ->
+        :ok = notify(Keyword.get(opts, :on_terminal), run_id)
+        terminal_result
+    end
+  rescue
+    _error -> {:error, {:completion_outcome_unknown, run_id}}
+  catch
+    _kind, _reason -> {:error, {:completion_outcome_unknown, run_id}}
   end
 
   defp notify(nil, _run_id), do: :ok

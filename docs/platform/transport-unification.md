@@ -449,12 +449,19 @@ anything.
   pipeline at compile time), and the email attachment cap now *derives* from it — three quarters,
   since attachments arrive base64-encoded and inflate by about a third. A cap larger than the
   body limit was unreachable, and the two can no longer be configured into contradiction.
-- **An unreachable router asks for redelivery instead of lying.** `RouterBridge.handle_inbound/1`
-  rescues exceptions but not exits, so a router that is *configured but not running* exits out of
-  `GenServer.call` — which the webhook was turning into a 202 or, worse, an opaque 500 from the
-  listener's catch-all. It now answers 503 and logs, so the provider redelivers. **The bridge's
-  own `@spec` promises `{:error, :unavailable}` it cannot deliver in that state; worth fixing in
-  `lemon_core` for every other caller.**
+- **An unreachable router produces a truthful ambiguous receipt.** A mutation exception or exit
+  may occur after the router accepted the run, so `RouterBridge` classifies it as
+  `{:error, :outcome_unknown}` rather than definite unavailability. The email webhook durably
+  retains the fixed Message-ID/run reservation and answers 200 `outcome unknown`, preventing a
+  provider retry from duplicating work. Failures before a durable idempotency reservation exists
+  still return 503 and ask the provider to redeliver. Email replay content hashes upload bytes
+  rather than provider-generated temporary paths, and exact webhook response receipts are removed
+  with their completed primary reservations after the fixed 24-hour replay horizon. Caller webhook
+  idempotency keys are domain-separated and hashed before they enter any durable key, receipt, or
+  run metadata; cleanup commits atomically on SQLite and preserves the primary execution fence on
+  any ordered-backend failure. Upgrade migration creates the hashed fence and exact response before
+  conditionally removing legacy raw-key records, accepts only non-empty binary keys, and treats
+  incomplete cleanup scans as unavailable without advancing their schedule.
 
 **Contract kit.** `apps/lemon_platform_test/test/compliance/email_plugin_test.exs` relied on
 `deliver/1` being inert. Its probe is now a `:reaction` payload — a kind email has no concept of,

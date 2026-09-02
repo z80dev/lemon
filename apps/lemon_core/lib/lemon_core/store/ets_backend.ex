@@ -59,6 +59,20 @@ defmodule LemonCore.Store.EtsBackend do
   end
 
   @impl true
+  def compare_and_delete_many(state, entries) do
+    state = Enum.reduce(entries, state, fn {table, _key, _expected}, acc -> ensure_table(acc, table) end)
+
+    if Enum.all?(entries, fn {table, key, expected} ->
+         :ets.lookup(state[table], key) == [{key, expected}]
+       end) do
+      Enum.each(entries, fn {table, key, _expected} -> :ets.delete(state[table], key) end)
+      {:ok, state}
+    else
+      {:error, :mismatch, state}
+    end
+  end
+
+  @impl true
   def list(state, table) do
     state = ensure_table(state, table)
     items = :ets.tab2list(state[table])

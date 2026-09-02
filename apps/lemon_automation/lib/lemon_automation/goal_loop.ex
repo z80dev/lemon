@@ -143,6 +143,15 @@ defmodule LemonAutomation.GoalLoop do
 
   defp apply_verdict(_session_key, verdict, _opts), do: {:error, {:unsupported_verdict, verdict}}
 
+  defp handle_judge_failure(
+         _session_key,
+         _goal,
+         {ownership_state, _run_id} = reason,
+         _opts
+       )
+       when ownership_state in [:submission_outcome_unknown, :completion_outcome_unknown],
+       do: {:error, reason}
+
   defp handle_judge_failure(session_key, _goal, reason, opts) do
     case Keyword.get(opts, :judge_failure_policy, :pause) do
       :continue_once ->

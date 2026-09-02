@@ -395,15 +395,32 @@ defmodule LemonControlPlane.Methods.ControlPlaneMethodsTest do
   describe "ChatAbort" do
     alias LemonControlPlane.Methods.ChatAbort
 
+    defmodule AbortResultRouter do
+      def abort_run(_run_id, _reason), do: {:error, {:private, "/secret/path"}}
+      def abort(_session_key, _reason), do: {:error, :unavailable}
+    end
+
+    defmodule AbortRaiseRouter do
+      def abort_run(_run_id, _reason), do: raise("private abort failure")
+      def abort(_session_key, _reason), do: exit(:private_abort_failure)
+    end
+
     test "summarizes run-scoped abort without message payloads" do
       {:ok, result} = ChatAbort.handle(%{"runId" => "run-abort-summary"}, %{})
 
-      assert result["aborted"] == true
       assert result["runId"] == "run-abort-summary"
       assert result["summary"]["targetType"] == "run"
       assert result["summary"]["targetId"] == "run-abort-summary"
       assert result["summary"]["reason"] == "user_requested"
-      assert result["summary"]["dispatchStatus"] in ["sent", "router_unavailable"]
+
+      assert result["summary"]["dispatchStatus"] in [
+               "sent",
+               "router_unavailable",
+               "outcome_unknown",
+               "rejected"
+             ]
+
+      assert result["aborted"] == (result["summary"]["dispatchStatus"] == "sent")
       assert result["summary"]["cleanup"]["includesPrompt"] == false
       assert result["summary"]["cleanup"]["includesMessages"] == false
       assert result["summary"]["cleanup"]["includesSecretValues"] == false
@@ -412,12 +429,53 @@ defmodule LemonControlPlane.Methods.ControlPlaneMethodsTest do
     test "summarizes session-scoped abort without message payloads" do
       {:ok, result} = ChatAbort.handle(%{"sessionKey" => "session-abort-summary"}, %{})
 
-      assert result["aborted"] == true
       assert result["sessionKey"] == "session-abort-summary"
       assert result["summary"]["targetType"] == "session"
       assert result["summary"]["targetId"] == "session-abort-summary"
-      assert result["summary"]["dispatchStatus"] in ["sent", "router_unavailable"]
+
+      assert result["summary"]["dispatchStatus"] in [
+               "sent",
+               "router_unavailable",
+               "outcome_unknown",
+               "rejected"
+             ]
+
+      assert result["aborted"] == (result["summary"]["dispatchStatus"] == "sent")
       assert result["summary"]["cleanup"]["includesMessages"] == false
+    end
+
+    test "reports bounded failure statuses without leaking router terms" do
+      {:ok, rejected} =
+        ChatAbort.handle(%{"runId" => "run-rejected"}, %{router_mod: AbortResultRouter})
+
+      assert rejected["aborted"] == false
+      assert rejected["summary"]["dispatchStatus"] == "rejected"
+      refute inspect(rejected) =~ "/secret/path"
+      refute inspect(rejected) =~ "private"
+
+      {:ok, unavailable} =
+        ChatAbort.handle(%{"sessionKey" => "session-unavailable"}, %{
+          router_mod: AbortResultRouter
+        })
+
+      assert unavailable["aborted"] == false
+      assert unavailable["summary"]["dispatchStatus"] == "router_unavailable"
+    end
+
+    test "reports router raises and exits as outcome unknown for both target types" do
+      {:ok, run_result} =
+        ChatAbort.handle(%{"runId" => "run-unknown"}, %{router_mod: AbortRaiseRouter})
+
+      {:ok, session_result} =
+        ChatAbort.handle(%{"sessionKey" => "session-unknown"}, %{
+          router_mod: AbortRaiseRouter
+        })
+
+      for result <- [run_result, session_result] do
+        assert result["aborted"] == false
+        assert result["summary"]["dispatchStatus"] == "outcome_unknown"
+        refute inspect(result) =~ "private"
+      end
     end
   end
 

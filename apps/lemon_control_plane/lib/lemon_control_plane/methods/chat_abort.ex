@@ -14,9 +14,10 @@ defmodule LemonControlPlane.Methods.ChatAbort do
   def scopes, do: [:write]
 
   @impl true
-  def handle(params, _ctx) do
+  def handle(params, ctx) do
     session_key = params["sessionKey"]
     run_id = params["runId"]
+    router_mod = Map.get(ctx, :router_mod, LemonRouter)
 
     cond do
       is_nil(session_key) and is_nil(run_id) ->
@@ -24,51 +25,55 @@ defmodule LemonControlPlane.Methods.ChatAbort do
 
       run_id ->
         # Abort by run_id
-        dispatch_status = safe_abort_run(run_id)
+        dispatch_status = safe_abort_run(router_mod, run_id)
+        aborted = dispatch_status == "sent"
 
         {:ok,
          %{
-           "aborted" => true,
+           "aborted" => aborted,
            "runId" => run_id,
-           "summary" => summary("run", run_id, dispatch_status)
+           "summary" => summary("run", run_id, dispatch_status, aborted)
          }}
 
       session_key ->
         # Abort by session_key
-        dispatch_status = safe_abort_session(session_key)
+        dispatch_status = safe_abort_session(router_mod, session_key)
+        aborted = dispatch_status == "sent"
 
         {:ok,
          %{
-           "aborted" => true,
+           "aborted" => aborted,
            "sessionKey" => session_key,
-           "summary" => summary("session", session_key, dispatch_status)
+           "summary" => summary("session", session_key, dispatch_status, aborted)
          }}
     end
   end
 
-  defp safe_abort_run(run_id) do
-    LemonRouter.abort_run(run_id, :user_requested)
-    "sent"
+  defp safe_abort_run(router_mod, run_id) do
+    normalize_abort_result(router_mod.abort_run(run_id, :user_requested))
   rescue
-    ArgumentError -> "router_unavailable"
-    UndefinedFunctionError -> "router_unavailable"
+    _error -> "outcome_unknown"
   catch
-    :exit, _ -> "router_unavailable"
+    _kind, _reason -> "outcome_unknown"
   end
 
-  defp safe_abort_session(session_key) do
-    LemonRouter.abort(session_key, :user_requested)
-    "sent"
+  defp safe_abort_session(router_mod, session_key) do
+    normalize_abort_result(router_mod.abort(session_key, :user_requested))
   rescue
-    ArgumentError -> "router_unavailable"
-    UndefinedFunctionError -> "router_unavailable"
+    _error -> "outcome_unknown"
   catch
-    :exit, _ -> "router_unavailable"
+    _kind, _reason -> "outcome_unknown"
   end
 
-  defp summary(target_type, target_id, dispatch_status) do
+  defp normalize_abort_result(:ok), do: "sent"
+  defp normalize_abort_result({:error, :unavailable}), do: "router_unavailable"
+  defp normalize_abort_result({:error, :outcome_unknown}), do: "outcome_unknown"
+  defp normalize_abort_result({:error, _reason}), do: "rejected"
+  defp normalize_abort_result(_unexpected), do: "outcome_unknown"
+
+  defp summary(target_type, target_id, dispatch_status, aborted) do
     %{
-      "aborted" => true,
+      "aborted" => aborted,
       "targetType" => target_type,
       "targetId" => target_id,
       "reason" => "user_requested",

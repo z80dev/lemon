@@ -62,6 +62,32 @@ Telegram, run history, durable memory, kanban boards, or `~/.lemon`.
   application can register its own diagnostics instead of `lemon_core` naming
   foreign modules.
 - `LemonCore.UUID` — a vendored UUIDv7 generator.
+
+### Changed
+
+- `LemonCore.RouterBridge.configure/1` validates the router and run
+  orchestrator against explicit behaviours before registration. Command
+  functions return `:ok` only for an exact `:ok` callback result. A malformed
+  mutation acknowledgement is now `{:error, :outcome_unknown}` because the
+  callback may already have applied the side effect; malformed query results
+  remain `{:error, {:unexpected_answer, value}}`.
+- `LemonCore.RouterBridge` now distinguishes an unregistered router from a
+  configured mutation that lost its acknowledgement. Raised, thrown,
+  malformed, timed-out, or exited mutations return
+  `{:error, :outcome_unknown}` and must not be retried without independent
+  idempotency or reconciliation; even a `:noproc` exit may follow an earlier
+  side effect inside the callback.
+  Successful run submission is normalized to a non-empty binary run id, empty
+  session/run keys return structured validation errors, active-session lists
+  require non-empty binary ids in every entry, and bridge failure logs contain
+  only a safe callback MFA and failure class. Query exceptions return the fixed
+  `{:error, :query_failed}` rather than exposing exception contents.
+- `LemonCore.RouterBridge.session_busy?/1` now returns
+  `{:ok, boolean()} | {:error, term()}`. `active_run/1` and
+  `list_active_sessions/0` likewise report `{:error, :unavailable}` instead of
+  inventing `:none` or `[]` when the router cannot be consulted. These are
+  intentional public return-shape changes; callers must decide how unknown
+  router state maps to their own interface.
 - `LemonCore.Config.Gateway.Channel` and the `:gateway_channels` config key —
   the extension point behind the `[gateway.<id>]` config sections. A module
   registers one section id and owns everything named after it: the sub-table's
@@ -75,8 +101,6 @@ Telegram, run history, durable memory, kanban boards, or `~/.lemon`.
   evidence fields are defined by whoever owns the channels, so it asks for that
   vocabulary instead of hardcoding it. Unregistered, the proof diagnostics,
   media check, cron check and launch gates degrade to their generic answers.
-
-### Changed
 
 - `LemonCore.ResumeToken` is now a struct plus generic parse/format over the
   registered resume formats. The per-vendor regex families it used to hold

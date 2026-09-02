@@ -28,6 +28,14 @@ defmodule LemonChannels.Adapters.Xmtp.Bridge do
     PortServer.command(port_server, %{"op" => "poll"})
   end
 
+  @spec acknowledge_inbound(pid(), binary()) :: :ok
+  def acknowledge_inbound(port_server, dedupe_key)
+      when is_pid(port_server) and is_binary(dedupe_key) do
+    PortServer.command(port_server, %{"op" => "ack_inbound", "dedupe_key" => dedupe_key})
+  end
+
+  def acknowledge_inbound(_port_server, _dedupe_key), do: :ok
+
   @spec send_message(pid(), map()) :: :ok
   def send_message(port_server, payload) when is_pid(port_server) and is_map(payload) do
     command =

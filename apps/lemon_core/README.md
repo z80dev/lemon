@@ -458,9 +458,10 @@ MyApp.WidgetStore.put(id, widget)
 widget = MyApp.WidgetStore.get(id)
 ```
 
-`put_new/3` is the insert-if-absent primitive for durable claims. It returns `:ok` for the first writer and `{:error, :exists}` for later writers without overwriting the original value. `take/2` atomically consumes a key, and `compare_and_swap/4` replaces a value only when its exact expected value is still current; both are serialized inside the Store process.
+`put_new/3` is the insert-if-absent primitive for durable claims. It returns `:ok` for the first writer and `{:error, :exists}` for later writers without overwriting the original value. `take/2` atomically consumes a key, `compare_and_swap/4` replaces a value only when its exact expected value is still current, and `compare_and_delete/3` conditionally removes an exact snapshot so a sweeper cannot erase a renewed lease or receipt. `compare_and_delete_many/1` first validates a set of exact snapshots in one serialized Store call. SQLite commits the set transactionally, ETS applies it under the Store owner, and ordered backends report the first failure so callers can place a safety-critical durable fence last.
 
-Store calls are fail-soft: if the GenServer is overloaded/unavailable, write APIs return `{:error, :store_unavailable}` and read/list APIs return `nil`/`[]`.
+Store calls are fail-soft: if the GenServer is overloaded/unavailable, write APIs return `{:error, :store_unavailable}` and ordinary read/list APIs return `nil`/`[]`. Correctness-sensitive callers use `fetch/3` and `fetch_all/2` to distinguish confirmed absence or an empty table from an unavailable backend.
+Store diagnostics hash keys for idempotency tables so caller replay secrets do not enter logs.
 
 Use the generic table API only inside wrapper modules, backend internals, or explicitly app-local legacy tables. Shared-domain runtime code should go through typed wrappers so table ownership stays localized.
 
@@ -627,9 +628,35 @@ Channel adapters forward runs to `:lemon_router` without compile-time coupling. 
 {:ok, run_id} = LemonCore.RouterBridge.submit_run(run_request)
 :ok = LemonCore.RouterBridge.handle_inbound(inbound_message)
 :ok = LemonCore.RouterBridge.abort_session(session_key, :user_requested)
+{:ok, busy?} = LemonCore.RouterBridge.session_busy?(session_key)
+{:ok, active_run_id} = LemonCore.RouterBridge.active_run(session_key)
+{:ok, sessions} = LemonCore.RouterBridge.list_active_sessions()
 ```
 
-Returns `{:error, :unavailable}` when `:lemon_router` has not registered; callers must handle this gracefully.
+An unregistered router returns `{:error, :unavailable}`. A configured mutating
+callback that raises, throws, returns a malformed acknowledgement, times out,
+or exits returns `{:error, :outcome_unknown}`: even a `:noproc` exit may follow
+an earlier side effect inside a multi-step callback. Callers must not retry
+automatically without independent idempotency or reconciliation. Read-only
+query exits and throws remain unavailable because they cannot duplicate a side
+effect. Query calls do not substitute `false`, `:none`, or `[]`; callers must
+handle unknown router state explicitly. Query exceptions return the sanitized
+`{:error, :query_failed}` rather than carrying exception messages across the
+bridge.
+
+Configured implementations are validated against the bridge behaviours before
+use. `submit_run/1` accepts only `{:ok, nonempty_binary_run_id}` as success, and
+an explicit `{:error, reason}` other than `{:error, :outcome_unknown}` means
+the implementation guarantees the mutation did not take effect. Malformed
+mutation answers are outcome-unknown; malformed query answers remain
+`{:error, {:unexpected_answer, value}}`. Active-session lists are accepted only
+when every entry has non-empty binary `session_key` and `run_id` fields.
+For abort and keep-alive commands, `:ok` acknowledges that the router accepted
+or dispatched the decision; it does not wait for synchronous application by
+the target run process.
+Failure logs contain only a sanitized callback MFA and failure class; raw
+exceptions, exit reasons, stacktraces, and callback arguments are neither
+logged nor returned for query exceptions.
 
 ## Telemetry Events
 
@@ -739,6 +766,8 @@ Available helpers: `unique_token/0`, `unique_scope/0`, `unique_session_key/0`, `
 - SQLite store values serialize with `:erlang.term_to_binary/1`; JSONL uses a
   JSON codec with Elixir-term markers for portable persistence
 - Events use millisecond timestamps from `System.system_time(:millisecond)`
-- `RouterBridge` returns `{:error, :unavailable}` when `:lemon_router` has not registered
+- `RouterBridge` returns `{:error, :unavailable}` when `:lemon_router` has not
+  registered, and `{:error, :outcome_unknown}` when a configured mutation
+  loses its acknowledgement; never automatically retry the latter
 - `Dedupe.Ets` uses monotonic time for TTL; `Idempotency` uses wall-clock time
 - `Config.Modular` is the newer typed approach; `Config` is still the primary interface

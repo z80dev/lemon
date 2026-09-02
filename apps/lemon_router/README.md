@@ -40,7 +40,7 @@ Channel transport or gateway-native ingress
 | Module | Responsibility |
 | --- | --- |
 | `LemonRouter.Router` | Main inbound entrypoint, session-key resolution, pending-compaction preparation, control-plane abort/keepalive hooks |
-| LemonRouter.RunOrchestrator (internal) | Builds router-owned submissions, serializes fixed-ID abort tombstones with acceptance, and hands accepted work to `SessionCoordinator` |
+| LemonRouter.RunOrchestrator (internal) | Durably claims fixed run IDs, rejects conflicting reuse, serializes abort registration with cancellation dispatch, and hands accepted work to `SessionCoordinator` |
 | `LemonRouter.SessionCoordinator` | Single owner of per-conversation queue semantics and active-run handoff |
 | Router internal session read model | Internal read model over coordinator-owned active session state |
 | `LemonRouter.ConversationKey` | Canonical conversation-key selection from structured resume or session key |
@@ -77,6 +77,17 @@ attachment policy.
   router still boots and runtime operations retain their existing
   unavailable-runtime handling.
 - Inbound callers should provide structured resume data through `LemonCore.RunRequest.resume` when they already know it.
+- `Router.handle_inbound/1` returns the exact `RunOrchestrator.submit/1` error
+  when submission is rejected. Inbound transports must not acknowledge a
+  message as accepted after that error, and pending-compaction markers remain
+  available for a later valid submission. A malformed acknowledgement is
+  `{:error, :outcome_unknown}` because submission may already have happened
+  without returning a usable run id; it is not automatically retry-safe.
+- Abort and keep-alive `:ok` results mean the router accepted or dispatched the
+  decision. A run-specific abort is not acknowledged unless its serialization
+  tombstone was registered; an unknown registration outcome is propagated to
+  the bridge. These commands do not wait for synchronous application by every
+  target run process.
 - Top-level runs always use the native executor; model validation belongs to `LemonAi`, and default cwd resolution should use `LemonCore.Cwd`.
 - Router emits `LemonCore.DeliveryIntent`, not `LemonChannels.OutboundPayload`.
 - Tool-status failure summaries preserve safe structured fields from
@@ -88,7 +99,7 @@ attachment policy.
 - Telegram-specific state is owned by `lemon_channels` wrappers:
   - `LemonChannels.Telegram.StateStore`
   - `LemonChannels.Telegram.ResumeIndexStore`
-- External apps must query busy/active session state through `LemonRouter.Router` or `LemonCore.RouterBridge`, not router-internal read-model or registry details.
+- External apps must query busy/active session state through `LemonRouter.Router` or `LemonCore.RouterBridge`, not router-internal read-model or registry details. Registry/read-model failures propagate as errors rather than false idle/empty answers.
 
 ## Session And Queue Semantics
 
@@ -121,6 +132,16 @@ cannot start later, `SessionCoordinator` emits the corresponding structured
 start-failure completion before cleaning up its event-bridge subscription and
 continues with the next queued submission. A child already registered after an
 ambiguous supervisor error is adopted to avoid double completion.
+
+Fixed run IDs are router idempotency keys, not merely correlation labels. The
+orchestrator writes a durable request-identity claim before queue mutation;
+concurrent or crash-replayed copies of the same request resolve to the original
+active, queued, or completed run, while reuse for another session or payload is
+rejected. A pending claim is reconciled against surviving `RunRegistry` state
+and the durable terminal `RunStore` record before any retry can enqueue work.
+`SessionRegistry` remains an ephemeral read model: submission reconstructs an
+idle coordinator from surviving authoritative run processes after a registry
+restart so the one-run-per-session rule still holds.
 
 ## Output Semantics
 

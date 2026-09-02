@@ -148,13 +148,19 @@ defmodule LemonAutomation.Wake do
     CronStore.put_run(run)
     Events.emit_run_started(run, job)
 
-    # Use CronManager for actual execution to avoid code duplication
-    # This is a fire-and-forget - the run completion will be handled by CronManager
+    # Use the same submitter configured for CronManager. This is fire-and-forget;
+    # the run completion is handled by CronManager.
+    submitter = run_submitter()
+
     Task.start(fn ->
-      result = RunSubmitter.submit(job, run)
+      result = submitter.submit(job, run, [])
       send(CronManager, {:run_complete, run.id, result})
     end)
 
     run
+  end
+
+  defp run_submitter do
+    Application.get_env(:lemon_automation, :cron_run_submitter, RunSubmitter)
   end
 end

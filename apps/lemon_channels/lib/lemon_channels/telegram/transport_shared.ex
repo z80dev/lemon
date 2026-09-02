@@ -15,6 +15,13 @@ defmodule LemonChannels.Telegram.TransportShared do
     LemonCore.Dedupe.Ets.check_and_mark(@channels_dedupe_table, key, ttl_ms)
   end
 
+  def forget_dedupe(:channels, key) do
+    _ = :ets.delete(@channels_dedupe_table, key)
+    :ok
+  rescue
+    _ -> :ok
+  end
+
   def inbound_message_dedupe_key(inbound) when is_map(inbound) do
     peer = Map.get(inbound, :peer) || %{}
     message = Map.get(inbound, :message) || %{}

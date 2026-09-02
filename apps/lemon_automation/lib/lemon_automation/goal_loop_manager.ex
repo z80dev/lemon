@@ -6,7 +6,9 @@ defmodule LemonAutomation.GoalLoopManager do
 
   * `:hard` (default) disables auto restart, aborts the currently authoritative
     judge or continuation router run once, kills the loop task, and prevents a
-    later tick.
+    later tick. Its result includes a sanitized `router_abort` status; an
+    `:outcome_unknown` status means the abort may have taken effect, is not
+    retried automatically, and retains ownership until durable reconciliation.
   * `:graceful` disables auto restart but lets the already bounded loop finish;
     status remains `stopping` until its task returns.
 
@@ -23,6 +25,7 @@ defmodule LemonAutomation.GoalLoopManager do
 
   alias LemonAutomation.GoalLoop
   alias LemonAgent.Workspace.GoalStore
+  alias LemonCore.RunStore
 
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, opts, name: Keyword.get(opts, :name, __MODULE__))
@@ -80,6 +83,7 @@ defmodule LemonAutomation.GoalLoopManager do
         calls: %{},
         loops: %{},
         loop_refs: %{},
+        goal_store: Keyword.get(opts, :goal_store, GoalStore),
         loop_mod: Keyword.get(opts, :loop_mod, app_env(:goal_loop_module, GoalLoop)),
         auto_scan_limit: Keyword.get(opts, :auto_scan_limit, app_env(:goal_loop_scan_limit, 50)),
         scheduler_interval_ms:
@@ -129,6 +133,8 @@ defmodule LemonAutomation.GoalLoopManager do
 
   def handle_call({:stop_loop, session_key, mode}, _from, state)
       when mode in [:hard, :graceful] do
+    state = restore_persisted_reconciliation(state, session_key)
+
     case Map.get(state.loops, session_key) do
       nil ->
         case disable_auto(session_key) do
@@ -149,35 +155,50 @@ defmodule LemonAutomation.GoalLoopManager do
             {:reply, error, state}
         end
 
-      loop when mode == :graceful ->
-        _ = GoalStore.configure_loop_auto(session_key, false)
-        loop = %{loop | status: "stopping"}
-        state = put_in(state.loops[session_key], loop)
+      loop when mode == :graceful and loop.status != "reconciling" ->
+        case safe_configure_loop_auto(state.goal_store, session_key, false) do
+          {:ok, goal} ->
+            loop = %{loop | status: "stopping"}
+            state = put_in(state.loops[session_key], loop)
 
-        {:reply,
-         {:ok, %{loop: public_loop(loop), goal: GoalStore.get(session_key), mode: :graceful}},
-         state}
+            {:reply, {:ok, %{loop: public_loop(loop), goal: goal, mode: :graceful}}, state}
+
+          {:error, _reason} ->
+            {:reply, {:error, :goal_store_unavailable}, state}
+        end
 
       loop ->
-        _ = GoalStore.configure_loop_auto(session_key, false)
-        abort_active_run(loop)
-        Process.demonitor(loop.ref, [:flush])
-        Process.exit(loop.pid, :kill)
+        case safe_configure_loop_auto(state.goal_store, session_key, false) do
+          {:ok, _goal} ->
+            case persist_hard_stop_intent(session_key, loop, state) do
+              {:ok, _goal} ->
+                router_abort = abort_active_run(loop)
+                stop_loop_task(loop)
 
-        {:ok, goal} =
-          GoalStore.record_loop_status(session_key, :stopped, run_id: active_run_id(loop))
+                {loop, goal, state} = finish_hard_stop(session_key, loop, router_abort, state)
 
-        state =
-          state
-          |> update_in([:loops], &Map.delete(&1, session_key))
-          |> update_in([:loop_refs], &Map.delete(&1 || %{}, loop.ref))
+                {:reply,
+                 {:ok,
+                  %{
+                    loop: public_loop(loop),
+                    goal: goal,
+                    mode: :hard,
+                    router_abort: router_abort
+                  }}, state}
 
-        {:reply,
-         {:ok, %{loop: public_loop(%{loop | status: "stopped"}), goal: goal, mode: :hard}}, state}
+              {:error, _reason} ->
+                {:reply, {:error, :goal_store_unavailable}, state}
+            end
+
+          {:error, _reason} ->
+            {:reply, {:error, :goal_store_unavailable}, state}
+        end
     end
   end
 
   def handle_call({:status, session_key}, _from, state) do
+    state = restore_persisted_reconciliation(state, session_key)
+    state = reconcile_ambiguous_loop(session_key, state)
     loop = Map.get(state.loops, session_key)
 
     {:reply,
@@ -206,9 +227,13 @@ defmodule LemonAutomation.GoalLoopManager do
           aborted: false
         }
 
-        _ = GoalStore.record_loop_status(session_key, :running, run_id: run_id)
+        case safe_record_loop_status(state.goal_store, session_key, :running, run_id: run_id) do
+          {:ok, _goal} ->
+            {:reply, :ok, put_in(state.loops[session_key], %{loop | active_run: active_run})}
 
-        {:reply, :ok, put_in(state.loops[session_key], %{loop | active_run: active_run})}
+          {:error, _reason} ->
+            {:reply, {:error, :goal_store_unavailable}, state}
+        end
 
       _ ->
         {:reply, {:error, :goal_loop_stopped}, state}
@@ -216,6 +241,9 @@ defmodule LemonAutomation.GoalLoopManager do
   end
 
   defp start_loop_reply(session_key, opts, auto?, state) do
+    state = restore_persisted_reconciliation(state, session_key)
+    state = reconcile_ambiguous_loop(session_key, state)
+
     cond do
       Map.has_key?(state.loops, session_key) ->
         loop = Map.fetch!(state.loops, session_key)
@@ -230,10 +258,27 @@ defmodule LemonAutomation.GoalLoopManager do
     end
   end
 
+  defp safe_configure_loop_auto(goal_store, session_key, enabled) do
+    goal_store.configure_loop_auto(session_key, enabled)
+  rescue
+    _error -> {:error, :goal_store_unavailable}
+  catch
+    _kind, _reason -> {:error, :goal_store_unavailable}
+  end
+
+  defp safe_record_loop_status(goal_store, session_key, status, opts) do
+    goal_store.record_loop_status(session_key, status, opts)
+  rescue
+    _error -> {:error, :goal_store_unavailable}
+  catch
+    _kind, _reason -> {:error, :goal_store_unavailable}
+  end
+
   @impl true
   def handle_info(:auto_tick, state) do
     state =
       state
+      |> reconcile_ambiguous_loops()
       |> start_due_auto_loops()
       |> schedule_auto_tick()
 
@@ -309,17 +354,216 @@ defmodule LemonAutomation.GoalLoopManager do
     session_key = get_in(state, [:loop_refs, ref])
 
     if session_key do
-      status = loop_result_status(result)
-      opts = if status == :error, do: [error: inspect(result, limit: 120)], else: []
-      GoalStore.record_loop_status(session_key, status, opts)
+      case retained_run_after_worker_down(result, session_key, state) ||
+             ambiguous_submission_run_id(result) do
+        run_id when is_binary(run_id) ->
+          retain_reconciliation(session_key, ref, run_id, state)
 
-      state
-      |> update_in([:loops], &Map.delete(&1, session_key))
-      |> update_in([:loop_refs], &Map.delete(&1 || %{}, ref))
+        nil ->
+          status = loop_result_status(result)
+          opts = if status == :error, do: [error: inspect(result, limit: 120)], else: []
+          GoalStore.record_loop_status(session_key, status, opts)
+
+          state
+          |> update_in([:loops], &Map.delete(&1, session_key))
+          |> update_in([:loop_refs], &Map.delete(&1 || %{}, ref))
+      end
     else
       state
     end
   end
+
+  defp retained_run_after_worker_down({:error, :loop_task_down}, session_key, state),
+    do: get_in(state, [:loops, session_key, :active_run, :id])
+
+  defp retained_run_after_worker_down(_result, _session_key, _state), do: nil
+
+  defp retain_reconciliation(session_key, ref, run_id, state) do
+    case get_in(state, [:loops, session_key]) do
+      %{active_run: %{id: ^run_id}} = loop ->
+        _ =
+          GoalStore.record_loop_status(session_key, :reconciling,
+            run_id: run_id,
+            error: "submission outcome unknown"
+          )
+
+        loop = %{loop | status: "reconciling", ref: nil, pid: nil}
+
+        state
+        |> put_in([:loops, session_key], loop)
+        |> update_in([:loop_refs], &Map.delete(&1 || %{}, ref))
+
+      _ ->
+        state
+        |> update_in([:loops], &Map.delete(&1, session_key))
+        |> update_in([:loop_refs], &Map.delete(&1 || %{}, ref))
+    end
+  end
+
+  defp finish_hard_stop(session_key, loop, router_abort, state)
+       when router_abort in [:accepted, :not_needed] do
+    {:ok, goal} =
+      GoalStore.record_loop_status(session_key, :stopped, run_id: active_run_id(loop))
+
+    state =
+      state
+      |> update_in([:loops], &Map.delete(&1, session_key))
+      |> update_in([:loop_refs], &Map.delete(&1 || %{}, loop.ref))
+
+    {%{loop | status: "stopped"}, goal, state}
+  end
+
+  defp finish_hard_stop(session_key, loop, router_abort, state) do
+    loop_ref = loop.ref
+
+    {:ok, goal} =
+      GoalStore.record_loop_status(session_key, :reconciling,
+        run_id: active_run_id(loop),
+        error: "router abort outcome unknown",
+        abort_attempted: true,
+        abort_result: router_abort
+      )
+
+    active_run =
+      case loop.active_run do
+        %{} = active_run -> Map.merge(active_run, %{aborted: true, abort_result: router_abort})
+        nil -> nil
+      end
+
+    loop = %{loop | status: "reconciling", pid: nil, ref: nil, active_run: active_run}
+
+    state =
+      state
+      |> put_in([:loops, session_key], loop)
+      |> update_in([:loop_refs], &Map.delete(&1 || %{}, loop_ref))
+
+    {loop, goal, state}
+  end
+
+  defp persist_hard_stop_intent(session_key, loop, state) do
+    case active_run_id(loop) do
+      run_id when is_binary(run_id) ->
+        safe_record_loop_status(state.goal_store, session_key, :reconciling,
+          run_id: run_id,
+          error: "router abort in progress",
+          abort_attempted: true,
+          abort_result: :outcome_unknown
+        )
+
+      _no_active_run ->
+        {:ok, nil}
+    end
+  end
+
+  defp reconcile_ambiguous_loops(state) do
+    state =
+      GoalStore.list(status: "active", limit: state.auto_scan_limit)
+      |> Enum.reduce(state, fn goal, state ->
+        restore_persisted_reconciliation(state, goal.session_key)
+      end)
+
+    Enum.reduce(Map.keys(state.loops), state, &reconcile_ambiguous_loop/2)
+  rescue
+    _error -> state
+  end
+
+  defp restore_persisted_reconciliation(state, session_key)
+       when is_map(state) and is_binary(session_key) do
+    if Map.has_key?(state.loops, session_key) do
+      state
+    else
+      goal = GoalStore.get(session_key)
+      persisted = get_in(goal, [:meta, "goalLoop"]) || %{}
+      run_id = persisted["lastRunId"]
+
+      if persisted["status"] in ["reconciling", "running"] and is_binary(run_id) do
+        _ =
+          GoalStore.record_loop_status(session_key, :reconciling,
+            run_id: run_id,
+            error: "run ownership restored after manager restart"
+          )
+
+        abort_result = persisted_abort_result(persisted)
+
+        loop = %{
+          session_key: session_key,
+          ref: nil,
+          pid: nil,
+          status: "reconciling",
+          active_run: %{
+            id: run_id,
+            kind: nil,
+            router_mod: LemonCore.RouterBridge,
+            phase: :reconciling,
+            aborted: persisted["abortAttempted"] == true,
+            abort_result: abort_result
+          },
+          started_at_ms: persisted["startedAtMs"],
+          max_ticks: nil
+        }
+
+        put_in(state.loops[session_key], loop)
+      else
+        state
+      end
+    end
+  rescue
+    _error -> state
+  end
+
+  defp persisted_abort_result(%{"abortResult" => result}) when is_binary(result) do
+    case result do
+      "accepted" -> :accepted
+      "unavailable" -> :unavailable
+      "rejected" -> :rejected
+      _ -> :outcome_unknown
+    end
+  end
+
+  defp persisted_abort_result(_persisted), do: :outcome_unknown
+
+  defp reconcile_ambiguous_loop(session_key, state) do
+    case get_in(state, [:loops, session_key]) do
+      %{status: "reconciling", active_run: %{id: run_id}} when is_binary(run_id) ->
+        case RunStore.get(run_id) do
+          %{summary: summary} when not is_nil(summary) ->
+            _ = GoalStore.configure_loop_auto(session_key, false)
+
+            _ =
+              GoalStore.record_loop_status(session_key, :error,
+                run_id: run_id,
+                error: "ambiguous submission reached terminal state; restart required"
+              )
+
+            update_in(state.loops, &Map.delete(&1, session_key))
+
+          _ ->
+            state
+        end
+
+      _ ->
+        state
+    end
+  rescue
+    _error -> state
+  catch
+    _kind, _reason -> state
+  end
+
+  defp ambiguous_submission_run_id({:error, reason}), do: ambiguous_submission_run_id(reason)
+
+  defp ambiguous_submission_run_id({:submission_outcome_unknown, run_id})
+       when is_binary(run_id),
+       do: run_id
+
+  defp ambiguous_submission_run_id({:completion_outcome_unknown, run_id})
+       when is_binary(run_id),
+       do: run_id
+
+  defp ambiguous_submission_run_id({:judge_failed, reason}),
+    do: ambiguous_submission_run_id(reason)
+
+  defp ambiguous_submission_run_id(_result), do: nil
 
   defp loop_result_status({:ok, %{status: :limit_reached}}), do: :limit_reached
   defp loop_result_status({:ok, _result}), do: :finished
@@ -510,25 +754,43 @@ defmodule LemonAutomation.GoalLoopManager do
     }
   end
 
+  defp abort_active_run(%{active_run: %{aborted: true, abort_result: abort_result}}),
+    do: abort_result
+
   defp abort_active_run(%{active_run: %{id: run_id, router_mod: router_mod}})
        when is_binary(run_id) do
-    cond do
-      function_exported?(router_mod, :abort_run, 2) ->
-        router_mod.abort_run(run_id, :goal_loop_hard_stop)
+    result =
+      cond do
+        function_exported?(router_mod, :abort_run, 2) ->
+          router_mod.abort_run(run_id, :goal_loop_hard_stop)
 
-      function_exported?(router_mod, :abort_run, 1) ->
-        router_mod.abort_run(run_id)
+        function_exported?(router_mod, :abort_run, 1) ->
+          router_mod.abort_run(run_id)
 
-      true ->
-        LemonCore.RouterBridge.abort_run(run_id, :goal_loop_hard_stop)
-    end
+        true ->
+          LemonCore.RouterBridge.abort_run(run_id, :goal_loop_hard_stop)
+      end
+
+    normalize_abort_result(result)
   rescue
-    _error -> :ok
+    _error -> :outcome_unknown
   catch
-    :exit, _reason -> :ok
+    _kind, _reason -> :outcome_unknown
   end
 
-  defp abort_active_run(_loop), do: :ok
+  defp abort_active_run(_loop), do: :not_needed
+
+  defp stop_loop_task(loop) do
+    if is_reference(loop.ref), do: Process.demonitor(loop.ref, [:flush])
+    if is_pid(loop.pid) and Process.alive?(loop.pid), do: Process.exit(loop.pid, :kill)
+    :ok
+  end
+
+  defp normalize_abort_result(:ok), do: :accepted
+  defp normalize_abort_result({:error, :outcome_unknown}), do: :outcome_unknown
+  defp normalize_abort_result({:error, :unavailable}), do: :unavailable
+  defp normalize_abort_result({:error, _reason}), do: :rejected
+  defp normalize_abort_result(_malformed_acknowledgement), do: :outcome_unknown
 
   defp active_run_id(%{active_run: %{id: run_id}}), do: run_id
   defp active_run_id(_loop), do: nil

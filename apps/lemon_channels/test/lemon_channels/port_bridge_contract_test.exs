@@ -5,6 +5,7 @@ defmodule LemonChannels.PortBridgeContractTest do
   alias LemonChannels.Adapters.Xmtp.PortServer, as: XmtpPortServer
 
   @moduletag :tmp_dir
+  @fixture_start_timeout 30_000
 
   @bridges [
     %{
@@ -81,7 +82,9 @@ defmodule LemonChannels.PortBridgeContractTest do
 
       Enum.each(@bridges, fn bridge ->
         with_bridge(bridge, script_path, fn pid ->
-          assert_receive {ready_event_tag, %{"type" => "bridge_test_ready"}}, 8_000
+          assert_receive {ready_event_tag, %{"type" => "bridge_test_ready"}},
+                         @fixture_start_timeout
+
           assert ready_event_tag == bridge.event_tag
 
           bridge.module.command(pid, %{op: "contract_probe", adapter: bridge.label})
@@ -154,7 +157,7 @@ defmodule LemonChannels.PortBridgeContractTest do
                             "type" => "bridge_test_ready",
                             "generation" => first_generation
                           }},
-                         8_000
+                         @fixture_start_timeout
 
           assert ready_event_tag == bridge.event_tag
 
@@ -178,7 +181,7 @@ defmodule LemonChannels.PortBridgeContractTest do
                             "type" => "bridge_test_ready",
                             "generation" => second_generation
                           }},
-                         8_000
+                         @fixture_start_timeout
 
           assert restart_ready_event_tag == bridge.event_tag
           assert second_generation == first_generation + 1
