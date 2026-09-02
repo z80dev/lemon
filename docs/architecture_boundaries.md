@@ -74,6 +74,21 @@ The refactor quality rules also enforce a few concrete ownership boundaries:
 
 Run `mix lemon.quality` after boundary changes. It now checks both dependency policy and these architecture guardrails.
 
+## Architecture-debt ratchets
+
+`mix lemon.quality` also compares a deliberately small set of repository-wide
+counts with `.ratchets.exs`. These ratchets cover parsed uses of dynamic module
+atoms, runtime reflection, broad exception clauses, and sleeps in tests, plus
+oversized library files and `*_store.ex` wrapper files. They do not ratchet
+total source lines, documentation size, synchronous tests, generic Store calls,
+or the number of architecture rules: those figures do not reliably distinguish
+healthy changes from architecture debt.
+
+Run `mix lemon.ratchet` to inspect the current values. After reducing a count,
+`mix lemon.ratchet --update` lowers its baseline. The update command never
+raises a baseline; an increase requires an explicit edit and justification in
+code review. `LemonCore.Quality.RatchetCheck` defines each count exactly.
+
 ## Skill Source Taxonomy
 
 Skills are classified by source kind. New source kinds must be added here before being used in code. Trust levels are frozen; the set may only be extended via a documented invariant update.

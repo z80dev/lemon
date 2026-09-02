@@ -18,6 +18,10 @@ Telegram, run history, durable memory, kanban boards, or `~/.lemon`.
 
 ### Added
 
+- `LemonCore.Quality.RatchetCheck` and `mix lemon.ratchet` provide a
+  data-only baseline for a narrow set of parsed architecture-debt metrics.
+  `mix lemon.quality` now fails when those counts increase.
+
 - `LemonCore.A2A.Protocol`, `LemonCore.A2A.Client`, and `LemonCore.A2AStore`
   provide the generic A2A v1.0 wire helpers, credential-scrubbing HTTP client,
   and typed durable context/task/message storage shared by peer transports and

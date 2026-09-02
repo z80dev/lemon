@@ -8,9 +8,8 @@
   # violation" when that value flows into MapSet.member?/2, MapSet.put/2, or
   # a callee whose @spec declares the properly-opaque %MapSet{} type. The
   # value is correct at runtime; this is a well-known Elixir+Dialyzer PLT
-  # limitation with MapSet's opaque-map representation, not a real bug. See
-  # docs/plans/dialyzer-burndown.md ("opaque_term_violation") for the full
-  # writeup and how this was confirmed per-file.
+  # limitation with MapSet's opaque-map representation, not a real bug. Each
+  # entry below was confirmed per file when it was added.
   {"lib/coding_agent/tools/web_guard.ex", :call_without_opaque},
   {"lib/coding_agent/tools/web_guard.ex", :call_with_opaque},
   {"lib/coding_agent/workspace.ex", :call_without_opaque},
@@ -36,8 +35,7 @@
   # can never be in the PLT's app set — this is permanent, not a PLT
   # configuration gap (contrast with the Nostrum `unknown_function` warnings
   # in the same files, which ARE fixable by adding :nostrum to
-  # plt_add_apps and are intentionally NOT ignored here; see the burndown
-  # plan).
+  # plt_add_apps and are intentionally NOT ignored here).
   #
   # Matched by a regex over the warning's short description rather than the
   # exact `file:line:col:...` text: an exact-text entry is pinned to a line
