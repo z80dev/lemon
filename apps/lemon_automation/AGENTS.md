@@ -91,6 +91,16 @@ abort exactly once: `:outcome_unknown` means the abort may already have taken
 effect, so the manager does not retry it; arbitrary callback errors and
 exceptions never enter stored goal metadata or returned diagnostics.
 
+An ambiguous judge or continuation submission remains owned by its
+caller-generated run ID while the waiter reconciles terminal events. If that
+bounded wait also expires, the manager retains the loop in `reconciling` state
+so another tick cannot overlap it. A durable terminal record releases that
+guard into an error state requiring an explicit restart. A hard stop aborts
+that exact run once; only a definite abort acceptance releases the guard, while
+an ambiguous or unavailable abort keeps reconciliation ownership. Persisted
+reconciliation and abort-attempt metadata restore that guard after a manager
+restart without retrying the abort.
+
 `GoalJudge` supports explicit verdicts, a pluggable `judge_runner` with
 `judge_model` metadata, and deterministic fallback. `GoalJudge.RouterRunner`
 is the dev/prod default runner; it submits isolated `:goal_judge` runs through

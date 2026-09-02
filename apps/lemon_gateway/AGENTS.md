@@ -148,8 +148,10 @@ for a non-channel surface that needs the Gateway runtime.
   rejection. Webhook ingress acknowledges the HTTP delivery with a `200`
   `status: "outcome_unknown"` receipt and `retry_safe: false`, keeps the fixed
   run ID for reconciliation, and never turns that result into a retryable 5xx.
-  An idempotency-key reservation stores the same receipt so redelivery cannot
-  submit a second run.
+  Reserve idempotency keys atomically before submission. Reservation, replay
+  read, or receipt-write failures fail closed without another submission; an
+  unresolved reservation returns `status: "reservation_pending"` with
+  `retry_safe: false` instead of claiming that a run is processing.
 - Build stable, unique session keys.
 - Return `:ignore` from `start_link/1` when disabled.
 - Resolve binding cwd and agent metadata through `BindingResolver`.

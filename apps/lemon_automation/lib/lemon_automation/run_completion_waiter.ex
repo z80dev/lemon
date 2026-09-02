@@ -30,6 +30,7 @@ defmodule LemonAutomation.RunCompletionWaiter do
           {:ok, binary(), binary()}
           | {:error, {:run_failed, binary(), term()}}
           | {:error, {:timeout, binary()}}
+          | {:error, {:submission_outcome_unknown, binary()}}
           | {:error, {:submit_failed, term()}}
           | {:error, {:unexpected_run_id, binary(), term()}}
           | {:error, {:unexpected_wait_result, binary(), term()}}
@@ -85,6 +86,9 @@ defmodule LemonAutomation.RunCompletionWaiter do
             {:ok, other_run_id} ->
               {:error, {:unexpected_run_id, run_id, other_run_id}}
 
+            {:error, :outcome_unknown} ->
+              reconcile_ambiguous_submission(run_id, timeout_ms, wait_opts, waiter_mod, opts)
+
             {:error, reason} ->
               {:error, {:submit_failed, reason}}
 
@@ -137,6 +141,23 @@ defmodule LemonAutomation.RunCompletionWaiter do
     error -> {:error, {:exception, error}}
   catch
     :exit, reason -> {:error, {:exit, reason}}
+  end
+
+  defp reconcile_ambiguous_submission(run_id, timeout_ms, wait_opts, waiter_mod, opts) do
+    result =
+      normalize_wait_result(
+        run_id,
+        waiter_mod.wait_already_subscribed(run_id, timeout_ms, wait_opts)
+      )
+
+    case result do
+      {:error, {:timeout, ^run_id}} ->
+        {:error, {:submission_outcome_unknown, run_id}}
+
+      terminal_result ->
+        :ok = notify(Keyword.get(opts, :on_terminal), run_id)
+        terminal_result
+    end
   end
 
   defp notify(nil, _run_id), do: :ok

@@ -149,10 +149,23 @@ defmodule LemonCore.A2AStore do
     }
 
     case Store.put_new(store(opts), @messages, id, message) do
-      :ok -> {:ok, message}
-      {:error, :exists} -> {:ok, message}
-      {:error, reason} -> {:error, reason}
+      :ok ->
+        {:ok, message}
+
+      {:error, :exists} ->
+        case get_message(id, opts) do
+          %{} = existing -> {:ok, existing}
+          _ -> {:error, :message_unavailable}
+        end
+
+      {:error, reason} ->
+        {:error, reason}
     end
+  end
+
+  @spec get_message(binary(), keyword()) :: map() | nil
+  def get_message(message_id, opts \\ []) when is_binary(message_id) do
+    Store.get(store(opts), @messages, message_id)
   end
 
   @spec history(binary(), binary(), keyword()) :: [map()]

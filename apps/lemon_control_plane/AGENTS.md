@@ -31,6 +31,9 @@ acknowledgements do not prove cancellation. Profile chat follows the same
 no-retry rule and returns a bounded uncertain receipt with its pre-generated
 run ID and `retrySafe: false`; profile errors never inspect raw reasons into a
 client response or log.
+An inbound A2A `messageId` is a durable replay key. Repeating it for the same
+authenticated peer returns the original task and never submits a second router
+run; reusing it across peers is a conflict and fails closed.
 
 The control plane provides the external interface for clients (TUI, web, mobile, browser extensions) to:
 

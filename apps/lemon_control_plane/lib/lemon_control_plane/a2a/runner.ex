@@ -12,6 +12,32 @@ defmodule LemonControlPlane.A2A.Runner do
 
   @spec start(binary(), binary(), binary(), binary()) :: {:ok, map()} | {:error, term()}
   def start(peer_id, context_id, text, message_id) do
+    case :global.trans({{__MODULE__, {:inbound_message, message_id}}, self()}, fn ->
+           start_once(peer_id, context_id, text, message_id)
+         end) do
+      :aborted -> {:error, :replay_lock_unavailable}
+      {:aborted, _reason} -> {:error, :replay_lock_unavailable}
+      result -> result
+    end
+  end
+
+  defp start_once(peer_id, context_id, text, message_id) do
+    case A2AStore.get_message(message_id) do
+      %{direction: :inbound, peer_id: ^peer_id, task_id: task_id} when is_binary(task_id) ->
+        case A2AStore.get_task(task_id) do
+          %{} = task -> {:ok, task}
+          _ -> {:error, :replay_task_unavailable}
+        end
+
+      %{} ->
+        {:error, :message_id_conflict}
+
+      nil ->
+        create_and_start(peer_id, context_id, text, message_id)
+    end
+  end
+
+  defp create_and_start(peer_id, context_id, text, message_id) do
     config = Config.current()
     peer = Map.get(config.peers, peer_id, %{agent_id: config.agent_id, allow_tools: []})
     agent_id = peer.agent_id || config.agent_id
@@ -30,34 +56,38 @@ defmodule LemonControlPlane.A2A.Runner do
         state: "TASK_STATE_SUBMITTED"
       }
 
-      :ok = A2AStore.put_task(task)
+      message = %{
+        id: message_id,
+        direction: :inbound,
+        peer_id: peer_id,
+        context_id: context_id,
+        task_id: task_id,
+        role: "ROLE_USER",
+        text: text
+      }
 
-      {:ok, _} =
-        A2AStore.append_message(%{
-          id: message_id,
-          direction: :inbound,
-          peer_id: peer_id,
-          context_id: context_id,
-          task_id: task_id,
-          role: "ROLE_USER",
-          text: text
-        })
+      with :ok <- A2AStore.put_task(task),
+           {:ok, %{task_id: ^task_id}} <- A2AStore.append_message(message) do
+        case Task.Supervisor.start_child(LemonControlPlane.A2A.TaskSupervisor, fn ->
+               execute(task, context, peer, config, text)
+             end) do
+          {:ok, _pid} ->
+            {:ok, A2AStore.get_task(task_id)}
 
-      case Task.Supervisor.start_child(LemonControlPlane.A2A.TaskSupervisor, fn ->
-             execute(task, context, peer, config, text)
-           end) do
-        {:ok, _pid} ->
-          {:ok, A2AStore.get_task(task_id)}
+          {:error, reason} ->
+            _ =
+              transition_nonterminal(task_id, %{
+                state: "TASK_STATE_FAILED",
+                answer: nil,
+                error: "runner unavailable"
+              })
 
-        {:error, reason} ->
-          _ =
-            transition_nonterminal(task_id, %{
-              state: "TASK_STATE_FAILED",
-              answer: nil,
-              error: "runner unavailable"
-            })
-
-          {:error, reason}
+            {:error, reason}
+        end
+      else
+        {:ok, _other_message} -> {:error, :message_id_conflict}
+        {:error, _reason} -> {:error, :a2a_store_unavailable}
+        _other -> {:error, :a2a_store_unavailable}
       end
     end
   end

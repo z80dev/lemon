@@ -107,6 +107,9 @@ defmodule LemonGateway.Transports.Webhook do
       {:error, :run_timeout} ->
         json_error(conn, 500, "run timed out")
 
+      {:error, :idempotency_unavailable} ->
+        json(conn, 503, %{error: "idempotency unavailable", retry_safe: false})
+
       {:duplicate, status, response_payload} ->
         json(conn, status, response_payload)
 

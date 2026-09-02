@@ -10,6 +10,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- A2A message replays now return the original task without duplicate router
+  submission, webhook idempotency storage failures fail closed with truthful
+  non-retry-safe receipts, and ambiguous goal-loop submissions retain their
+  fixed run ownership until reconciliation or an explicit hard stop.
 - Telegram memory-reflection and per-chat abort helpers no longer collapse
   router mutation failures into success-like results. Ambiguous cancel and
   keepalive callbacks now direct users to check run status before retrying,

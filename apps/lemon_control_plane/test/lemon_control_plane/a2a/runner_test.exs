@@ -193,6 +193,25 @@ defmodule LemonControlPlane.A2A.RunnerTest do
     cleanup_task(task_id, context_id, message_id, run_id)
   end
 
+  test "replaying the same inbound message id returns its original task without resubmission" do
+    context_id = unique_id("replay-context")
+    message_id = unique_id("replay-message")
+
+    assert {:stream, task_id} = start_message(context_id, message_id)
+    assert_receive {:a2a_submit_blocked, request, runner_pid}
+    run_id = request.run_id
+
+    assert {:stream, ^task_id} = start_message(context_id, message_id)
+    refute_receive {:a2a_submit_blocked, _duplicate_request, _duplicate_runner}, 100
+
+    send(runner_pid, {:release_a2a_submit, {:error, :definite_rejection}})
+    runner_ref = Process.monitor(runner_pid)
+    assert_receive {:DOWN, ^runner_ref, :process, ^runner_pid, :normal}, 1_000
+
+    assert [%{id: ^message_id, task_id: ^task_id}] = A2AStore.history("local", context_id)
+    cleanup_task(task_id, context_id, message_id, run_id)
+  end
+
   test "an unresolved outcome-unknown submit stays reattachable and later reconciles" do
     config = Application.fetch_env!(:lemon_control_plane, :a2a_config)
     Application.put_env(:lemon_control_plane, :a2a_config, Map.put(config, :reply_timeout_ms, 25))

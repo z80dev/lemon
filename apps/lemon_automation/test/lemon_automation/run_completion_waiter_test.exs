@@ -55,6 +55,15 @@ defmodule LemonAutomation.RunCompletionWaiterTest do
     end
   end
 
+  defmodule WaiterAmbiguousRouter do
+    @moduledoc false
+
+    def submit(params) do
+      send(params.test_pid, {:ambiguous_submit, params.run_id})
+      {:error, :outcome_unknown}
+    end
+  end
+
   test "submit_and_wait/2 observes synchronous completion and removes its subscription" do
     Process.put(:run_completion_waiter_test_pid, self())
 
@@ -103,6 +112,22 @@ defmodule LemonAutomation.RunCompletionWaiterTest do
 
     refute_received {:router_submit_started, "run_rejected_claim"}
     assert_received {:bus_unsubscribed, "run:run_rejected_claim"}
+  end
+
+  test "an ambiguous submission waits on the fixed id and retains an unknown outcome on timeout" do
+    Process.put(:run_completion_waiter_test_pid, self())
+
+    assert {:error, {:submission_outcome_unknown, "run_ambiguous"}} =
+             RunCompletionWaiter.submit_and_wait(
+               %{run_id: "run_ambiguous", prompt: "maybe accepted", test_pid: self()},
+               router_mod: WaiterAmbiguousRouter,
+               bus_mod: TestBus,
+               timeout_ms: 10
+             )
+
+    assert_received {:ambiguous_submit, "run_ambiguous"}
+    assert_received {:bus_subscribed, "run:run_ambiguous"}
+    assert_received {:bus_unsubscribed, "run:run_ambiguous"}
   end
 
   test "wait/3 subscribes, extracts completion output, and unsubscribes" do

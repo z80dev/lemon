@@ -56,6 +56,20 @@ defmodule LemonAutomation.GoalLoopTest do
     end
   end
 
+  defmodule AmbiguousLoopRouter do
+    @moduledoc false
+
+    def submit(params) do
+      send(:persistent_term.get({__MODULE__, :test_pid}), {:ambiguous_loop_submit, params})
+      {:error, :outcome_unknown}
+    end
+
+    def abort_run(run_id, reason) do
+      send(:persistent_term.get({__MODULE__, :test_pid}), {:ambiguous_loop_abort, run_id, reason})
+      :persistent_term.get({__MODULE__, :abort_result}, :ok)
+    end
+  end
+
   defmodule BlockingGoalRuntime do
     @moduledoc false
 
@@ -230,12 +244,16 @@ defmodule LemonAutomation.GoalLoopTest do
     Process.put(:goal_loop_test_pid, self())
     :persistent_term.put({AbortableLoopRouter, :test_pid}, self())
     :persistent_term.put({AcceptedWindowLoopRouter, :test_pid}, self())
+    :persistent_term.put({AmbiguousLoopRouter, :test_pid}, self())
+    :persistent_term.put({AmbiguousLoopRouter, :abort_result}, :ok)
     :persistent_term.put({BlockingGoalRuntime, :test_pid}, self())
 
     on_exit(fn ->
       GoalStore.clear(session_key)
       :persistent_term.erase({AbortableLoopRouter, :test_pid})
       :persistent_term.erase({AcceptedWindowLoopRouter, :test_pid})
+      :persistent_term.erase({AmbiguousLoopRouter, :test_pid})
+      :persistent_term.erase({AmbiguousLoopRouter, :abort_result})
       :persistent_term.erase({BlockingGoalRuntime, :test_pid})
     end)
 
@@ -764,10 +782,13 @@ defmodule LemonAutomation.GoalLoopTest do
 
     assert {:ok, result} = GenServer.call(manager, {:stop_loop, session_key, :hard})
     assert result.router_abort == :outcome_unknown
+    assert result.loop.status == "reconciling"
     refute inspect(result) =~ secret
     assert_receive {:abortable_abort, ^run_id, :goal_loop_hard_stop}, 1_000
 
-    assert {:error, :not_running} = GenServer.call(manager, {:stop_loop, session_key, :hard})
+    assert {:ok, repeated_stop} = GenServer.call(manager, {:stop_loop, session_key, :hard})
+    assert repeated_stop.router_abort == :outcome_unknown
+    assert repeated_stop.loop.status == "reconciling"
     refute_receive {:abortable_abort, ^run_id, _reason}, 200
   end
 
@@ -851,6 +872,145 @@ defmodule LemonAutomation.GoalLoopTest do
     goal = GoalStore.get(session_key)
     assert get_in(goal.meta, ["goalLoop", "status"]) == "stopped"
     assert get_in(goal.meta, ["goalLoop", "lastRunId"]) == run_id
+  end
+
+  test "ambiguous submission retains ownership until a hard stop aborts the fixed run", %{
+    session_key: session_key
+  } do
+    assert {:ok, _goal} =
+             GoalStore.set(session_key, "Retain uncertain work",
+               agent_id: "agent_1",
+               meta: %{"testPid" => self()}
+             )
+
+    manager =
+      start_supervised!(
+        {GoalLoopManager,
+         name: :"goal_loop_manager_test_#{System.unique_integer([:positive])}",
+         scheduler_interval_ms: 0}
+      )
+
+    run_id = "goal_ambiguous_#{System.unique_integer([:positive])}"
+
+    assert {:ok, %{status: "running"}} =
+             GenServer.call(
+               manager,
+               {:start_loop, session_key,
+                [
+                  judge_mod: ContinueJudge,
+                  router_mod: AmbiguousLoopRouter,
+                  waiter_mod: WaiterTimeout,
+                  run_id: run_id,
+                  max_ticks: 2,
+                  wait_timeout_ms: 10,
+                  meta: %{test_pid: self()}
+                ]}
+             )
+
+    assert_receive {:ambiguous_loop_submit, %{run_id: ^run_id}}, 1_000
+
+    assert eventually(fn ->
+             match?(
+               {:ok, %{running: true, loop: %{status: "reconciling", active_run_id: ^run_id}}},
+               GenServer.call(manager, {:status, session_key})
+             )
+           end)
+
+    assert {:error, :already_running} =
+             GenServer.call(manager, {:start_loop, session_key, [max_ticks: 1]})
+
+    assert {:ok, %{router_abort: :accepted, loop: %{status: "stopped"}}} =
+             GenServer.call(manager, {:stop_loop, session_key, :hard})
+
+    assert_receive {:ambiguous_loop_abort, ^run_id, :goal_loop_hard_stop}, 1_000
+    refute_receive {:ambiguous_loop_abort, ^run_id, _reason}, 100
+    assert get_in(GoalStore.get(session_key).meta, ["goalLoop", "status"]) == "stopped"
+  end
+
+  test "an ambiguous hard-stop abort keeps ownership and blocks restart", %{
+    session_key: session_key
+  } do
+    :persistent_term.put({AmbiguousLoopRouter, :abort_result}, {:error, :outcome_unknown})
+
+    assert {:ok, _goal} =
+             GoalStore.set(session_key, "Keep uncertain abort ownership",
+               meta: %{"testPid" => self()}
+             )
+
+    manager =
+      start_supervised!(
+        {GoalLoopManager,
+         name: :"goal_loop_manager_test_#{System.unique_integer([:positive])}",
+         scheduler_interval_ms: 0}
+      )
+
+    run_id = "goal_abort_ambiguous_#{System.unique_integer([:positive])}"
+
+    assert {:ok, %{status: "running"}} =
+             GenServer.call(
+               manager,
+               {:start_loop, session_key,
+                [
+                  judge_mod: ContinueJudge,
+                  router_mod: AmbiguousLoopRouter,
+                  waiter_mod: WaiterTimeout,
+                  run_id: run_id,
+                  wait_timeout_ms: 10
+                ]}
+             )
+
+    assert_receive {:ambiguous_loop_submit, %{run_id: ^run_id}}, 1_000
+
+    assert eventually(fn ->
+             match?(
+               {:ok, %{loop: %{status: "reconciling"}}},
+               GenServer.call(manager, {:status, session_key})
+             )
+           end)
+
+    assert {:ok, %{router_abort: :outcome_unknown, loop: %{status: "reconciling"}}} =
+             GenServer.call(manager, {:stop_loop, session_key, :hard})
+
+    assert_receive {:ambiguous_loop_abort, ^run_id, :goal_loop_hard_stop}, 1_000
+
+    assert {:error, :already_running} =
+             GenServer.call(manager, {:start_loop, session_key, [max_ticks: 1]})
+
+    assert get_in(GoalStore.get(session_key).meta, ["goalLoop", "status"]) == "reconciling"
+
+    restored_manager =
+      start_supervised!(
+        {GoalLoopManager,
+         name: :"goal_loop_manager_restored_#{System.unique_integer([:positive])}",
+         scheduler_interval_ms: 0},
+        id: {:restored_goal_loop_manager, session_key}
+      )
+
+    assert {:ok, %{running: true, loop: %{status: "reconciling"}}} =
+             GenServer.call(restored_manager, {:status, session_key})
+
+    assert {:error, :already_running} =
+             GenServer.call(restored_manager, {:start_loop, session_key, [max_ticks: 1]})
+
+    assert {:ok, %{router_abort: :outcome_unknown}} =
+             GenServer.call(restored_manager, {:stop_loop, session_key, :hard})
+
+    refute_receive {:ambiguous_loop_abort, ^run_id, _reason}, 100
+
+    :ok =
+      LemonCore.RunStore.finalize(run_id, %{
+        completed: %{ok: false, error: :aborted},
+        session_key: session_key
+      })
+
+    assert eventually(fn ->
+             match?(
+               {:ok, %{running: false}},
+               GenServer.call(manager, {:status, session_key})
+             )
+           end)
+
+    assert get_in(GoalStore.get(session_key).meta, ["goalLoop", "status"]) == "error"
   end
 
   test "run_once call timeout encloses judge and continuation wait deadlines" do

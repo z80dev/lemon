@@ -162,7 +162,7 @@ defmodule LemonGateway.WebhookTransportTest do
     refute_receive {:webhook_submit, _request}
   end
 
-  test "idempotency helper reserves key and returns processing duplicate while pending" do
+  test "idempotency helper reserves key and returns a non-retryable pending receipt" do
     integration_id = "demo-pending-#{System.unique_integer([:positive])}"
     idempotency_key = "idem-pending-#{System.unique_integer([:positive])}"
 
@@ -178,7 +178,30 @@ defmodule LemonGateway.WebhookTransportTest do
     assert {:duplicate, 202, response_payload} =
              Webhook.idempotency_context_for_test(conn, %{}, integration_id, %{})
 
-    assert response_payload.status == "processing"
+    assert response_payload.status == "reservation_pending"
+    assert response_payload.retry_safe == false
+  end
+
+  test "an unreadable existing idempotency claim fails closed without submission" do
+    integration_id = "demo-corrupt-#{System.unique_integer([:positive])}"
+    idempotency_key = "idem-corrupt-#{System.unique_integer([:positive])}"
+    store_key = {integration_id, idempotency_key}
+
+    conn =
+      Test.conn(:post, "/webhooks/#{integration_id}", "")
+      |> Conn.put_req_header("idempotency-key", idempotency_key)
+
+    assert :ok =
+             Store.put(Webhook.idempotency_table_for_test(), store_key, %{
+               integration_id: integration_id,
+               idempotency_key: idempotency_key,
+               state: "completed"
+             })
+
+    assert {:error, :idempotency_unavailable} =
+             Webhook.idempotency_context_for_test(conn, %{}, integration_id, %{})
+
+    refute_receive {:webhook_submit, _request}
   end
 
   test "normalizes prompt, attachments, and metadata from webhook payloads" do

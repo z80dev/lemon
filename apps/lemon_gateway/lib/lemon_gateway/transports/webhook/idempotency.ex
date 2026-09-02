@@ -14,7 +14,7 @@ defmodule LemonGateway.Transports.Webhook.Idempotency do
   def table, do: @table
 
   @spec context(Plug.Conn.t(), map(), binary(), map(), map()) ::
-          {:ok, map() | nil} | {:duplicate, integer(), map()}
+          {:ok, map() | nil} | {:duplicate, integer(), map()} | {:error, :idempotency_unavailable}
   def context(conn, _payload, integration_id, integration, webhook_config)
       when is_binary(integration_id) and is_map(integration) and is_map(webhook_config) do
     case resolve_idempotency_key(conn, integration, webhook_config) do
@@ -24,32 +24,18 @@ defmodule LemonGateway.Transports.Webhook.Idempotency do
       idempotency_key ->
         store_key = store_key(integration_id, idempotency_key)
 
-        :global.trans({{__MODULE__, store_key}, self()}, fn ->
-          case response(integration_id, idempotency_key) do
-            {:duplicate, _status, _payload} = duplicate ->
-              duplicate
-
-            nil ->
-              _ =
-                Store.put(@table, store_key, %{
-                  idempotency_key: idempotency_key,
-                  integration_id: integration_id,
-                  state: "pending",
-                  updated_at_ms: System.system_time(:millisecond)
-                })
-
-              {:ok,
-               %{
-                 integration_id: integration_id,
-                 idempotency_key: idempotency_key,
-                 store_key: store_key
-               }}
-          end
-        end)
+        case :global.trans({{__MODULE__, store_key}, self()}, fn ->
+               reserve(store_key, integration_id, idempotency_key)
+             end) do
+          :aborted -> {:error, :idempotency_unavailable}
+          {:aborted, _reason} -> {:error, :idempotency_unavailable}
+          result -> result
+        end
     end
   end
 
-  @spec store_submission(map() | nil, binary(), binary(), atom() | binary()) :: :ok
+  @spec store_submission(map() | nil, binary(), binary(), atom() | binary()) ::
+          :ok | {:error, :idempotency_unavailable}
   def store_submission(nil, _run_id, _session_key, _mode), do: :ok
 
   def store_submission(%{} = idempotency_ctx, run_id, session_key, mode) do
@@ -67,7 +53,8 @@ defmodule LemonGateway.Transports.Webhook.Idempotency do
   def store_submission(_ctx, _run_id, _session_key, _mode), do: :ok
 
   @doc "Persist an ambiguous submission without treating it as accepted."
-  @spec store_outcome_unknown(map() | nil, binary(), binary(), atom() | binary()) :: :ok
+  @spec store_outcome_unknown(map() | nil, binary(), binary(), atom() | binary()) ::
+          :ok | {:error, :idempotency_unavailable}
   def store_outcome_unknown(nil, _run_id, _session_key, _mode), do: :ok
 
   def store_outcome_unknown(%{} = idempotency_ctx, run_id, session_key, mode) do
@@ -84,7 +71,8 @@ defmodule LemonGateway.Transports.Webhook.Idempotency do
 
   def store_outcome_unknown(_ctx, _run_id, _session_key, _mode), do: :ok
 
-  @spec store_response(map() | nil, integer(), map()) :: :ok
+  @spec store_response(map() | nil, integer(), map()) ::
+          :ok | {:error, :idempotency_unavailable}
   def store_response(nil, _status, _payload), do: :ok
 
   def store_response(%{} = idempotency_ctx, status, payload)
@@ -144,7 +132,10 @@ defmodule LemonGateway.Transports.Webhook.Idempotency do
             {:duplicate, response_status, response_payload}
 
           state == "pending" ->
-            {:duplicate, 202, Map.put_new(fallback_payload(entry) || %{}, :status, "processing")}
+            {:duplicate, 202,
+             (fallback_payload(entry) || %{})
+             |> Map.put_new(:status, "reservation_pending")
+             |> Map.put_new(:retry_safe, false)}
 
           true ->
             case fallback_payload(entry) do
@@ -193,19 +184,56 @@ defmodule LemonGateway.Transports.Webhook.Idempotency do
 
       {:error, _reason} ->
         Logger.warning("webhook idempotency store write failed failure_class=write_error")
-        :ok
+        {:error, :idempotency_unavailable}
 
       _other ->
         Logger.warning("webhook idempotency store write failed failure_class=unexpected_result")
-        :ok
+        {:error, :idempotency_unavailable}
     end
   rescue
     _error ->
       Logger.warning("webhook idempotency store write failed failure_class=exception")
-      :ok
+      {:error, :idempotency_unavailable}
   end
 
   defp merge_store_entry(_ctx, _entry), do: :ok
+
+  defp reserve(store_key, integration_id, idempotency_key) do
+    entry = %{
+      idempotency_key: idempotency_key,
+      integration_id: integration_id,
+      state: "pending",
+      updated_at_ms: System.system_time(:millisecond)
+    }
+
+    case Store.put_new(@table, store_key, entry) do
+      :ok ->
+        {:ok,
+         %{
+           integration_id: integration_id,
+           idempotency_key: idempotency_key,
+           store_key: store_key
+         }}
+
+      {:error, :exists} ->
+        case response(integration_id, idempotency_key) do
+          {:duplicate, _status, _payload} = duplicate -> duplicate
+          _ -> {:error, :idempotency_unavailable}
+        end
+
+      {:error, _reason} ->
+        Logger.warning("webhook idempotency reservation failed failure_class=write_error")
+        {:error, :idempotency_unavailable}
+
+      _other ->
+        Logger.warning("webhook idempotency reservation failed failure_class=unexpected_result")
+        {:error, :idempotency_unavailable}
+    end
+  rescue
+    _error ->
+      Logger.warning("webhook idempotency reservation failed failure_class=exception")
+      {:error, :idempotency_unavailable}
+  end
 
   defp store_key(integration_id, idempotency_key) do
     {to_string(integration_id), to_string(idempotency_key)}
