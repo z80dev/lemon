@@ -556,7 +556,7 @@ review plans or add a second learning store.
 | `goal.loop.once` | write | Run one preview judge tick for an active goal with cleanup summaries |
 | `goal.loop.start` | write | Start a bounded supervised autonomous goal loop with cleanup summaries; pass `auto: true` to persist opt-in scheduling |
 | `goal.loop.status` | read | Inspect the bounded goal loop and persisted auto state for a session with cleanup summaries |
-| `goal.loop.stop` | write | Stop a bounded supervised autonomous goal loop with cleanup summaries and disable persisted auto scheduling |
+| `goal.loop.stop` | write | Stop a bounded supervised autonomous goal loop, disable persisted auto scheduling, and expose only the bounded router-abort statuses `accepted`, `outcome_unknown`, `unavailable`, `rejected`, or `not_needed` |
 | `goal.clear` | write | Clear the durable goal for a session with cleanup summaries |
 
 ### Wizard (capability-gated)
