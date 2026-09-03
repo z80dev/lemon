@@ -1,7 +1,20 @@
 defmodule LemonCore.ChatStateStoreTest do
   use ExUnit.Case, async: false
 
-  alias LemonCore.ChatStateStore
+  alias LemonCore.{ChatStateStore, Store}
+
+  test "declares the specialized chat table's existing cache and retention policy" do
+    assert [
+             %Store.Table{
+               name: :chat,
+               owner: ChatStateStore,
+               cached: true,
+               retention: [expires_at: :expires_at],
+               persistence: :durable,
+               version: 1
+             }
+           ] = ChatStateStore.__store_tables__()
+  end
 
   test "round-trips chat state through the typed wrapper" do
     key = "agent:test:main:#{System.unique_integer([:positive])}"

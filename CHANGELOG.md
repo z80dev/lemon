@@ -91,6 +91,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   table in multi-entry operations while rejecting dynamic or cross-table access
   from an owner module. The metadata is non-operational in this change; backend
   registration, retention, and domain migrations remain separate.
+- `LemonCore.ChatStateStore` now adopts that ownership contract for the cached
+  `:chat` table and its existing `:expires_at` retention policy without moving
+  TTL, expiry, sweep, or cache behavior out of the specialized Store runtime.
 
 - Configured engine runtimes are now checked against
   `LemonCore.EngineRuntime` when the router starts. Invalid wiring is reported

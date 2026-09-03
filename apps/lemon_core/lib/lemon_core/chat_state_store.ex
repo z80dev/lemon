@@ -1,7 +1,14 @@
 defmodule LemonCore.ChatStateStore do
   @moduledoc """
-  Typed wrapper for chat-state persistence.
+  Typed wrapper for per-scope chat-state persistence.
+
+  Owns the cached `:chat` table and declares its `:expires_at` retention
+  policy. Runtime TTL stamping, lazy expiry, periodic sweeping, and cache
+  coherence remain in `LemonCore.Store`'s specialized chat-state API.
   """
+
+  use LemonCore.Store.Table,
+    tables: [chat: [cached: true, retention: [expires_at: :expires_at]]]
 
   alias LemonCore.ChatState
   alias LemonCore.Store

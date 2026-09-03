@@ -25,6 +25,10 @@ Telegram, run history, durable memory, kanban boards, or `~/.lemon`.
   default and explicit server arities, including direct calls, `apply/3`, and
   multi-entry operations, and permits owner calls only when every resolved
   table matches the declaration.
+- `LemonCore.ChatStateStore` now declares ownership of the cached `:chat` table
+  and its `:expires_at` retention policy. Its public API and the specialized
+  Store runtime that applies TTL, expiry, sweeping, and cache behavior are
+  unchanged.
 
 - `LemonCore.Contract` centralizes loadability and required-callback checks for
   configuration-injected implementations. `LemonCore.EngineRuntime.validate/1`
