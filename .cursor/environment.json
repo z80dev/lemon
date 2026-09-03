@@ -1,0 +1,16 @@
+{
+  "name": "Lemon (Elixir umbrella)",
+  "install": "./.cursor/install.sh",
+  "terminals": [
+    {
+      "name": "lemon-runtime",
+      "command": "export ASDF_DATA_DIR=\"$HOME/.asdf\"; export BUN_INSTALL=\"$HOME/.bun\"; export PATH=\"$ASDF_DATA_DIR/shims:/usr/local/bin:$BUN_INSTALL/bin:$PATH\"; ./bin/lemon --no-distribution",
+      "description": "Unified Lemon runtime (gateway + control plane + router + channels + web). Control plane http://localhost:4040, Web UI http://localhost:4080, Sim UI http://localhost:4090."
+    }
+  ],
+  "ports": [
+    { "name": "control-plane", "port": 4040 },
+    { "name": "web-ui", "port": 4080 },
+    { "name": "sim-ui", "port": 4090 }
+  ]
+}
