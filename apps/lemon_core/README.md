@@ -171,6 +171,7 @@ ids, message bodies, proof details, credentials, or secret names.
 | `LemonCore.Store.SqliteBackend` | SQLite backend with WAL mode and optional ephemeral tables |
 | `LemonCore.Store.JsonlBackend` | Append-only JSONL backend (human-readable, portable) |
 | `LemonCore.Store.ReadCache` | Public ETS read-through cache for hot domains |
+| `LemonCore.PolicyStore` | Typed policy API and metadata owner for the existing agent, channel, session, and runtime policy tables |
 
 ### Memory
 
@@ -493,6 +494,11 @@ Shared-domain callers should prefer typed wrappers:
 - **Exec approvals**: `LemonCore.ExecApprovalStore.get_pending/1`, `put_pending/2`, policy getters/setters by scope
 
 Agent workspace coordination — goals, kanban boards, and heartbeats — is built on this Store but lives in `agent_core` as `LemonAgent.Workspace.{GoalStore, KanbanStore, HeartbeatStore}`.
+
+`LemonCore.PolicyStore` declares `:agent_policies`, `:channel_policies`,
+`:session_policies`, and `:runtime_policy` as durable version-1 tables. The
+declaration is ownership metadata only: its public functions continue to use
+the specialized policy operations provided by `LemonCore.Store`.
 
 ### ReadCache
 

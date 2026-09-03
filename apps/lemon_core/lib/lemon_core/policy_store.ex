@@ -1,10 +1,20 @@
 defmodule LemonCore.PolicyStore do
   @moduledoc """
-  Typed wrapper for policy domain storage.
+  Typed wrapper and table owner for policy domain storage.
 
   Provides scoped access to agent, channel, session, and runtime policies
-  stored in `LemonCore.Store`.
+  stored through the existing specialized `LemonCore.Store` API. Its
+  `LemonCore.Store.Table` declaration records ownership of the four backing
+  tables without generating accessors or changing backend behavior.
   """
+
+  use LemonCore.Store.Table,
+    tables: [
+      agent_policies: [],
+      channel_policies: [],
+      session_policies: [],
+      runtime_policy: []
+    ]
 
   alias LemonCore.Store
 

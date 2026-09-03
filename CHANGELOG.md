@@ -91,6 +91,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   table in multi-entry operations while rejecting dynamic or cross-table access
   from an owner module. The metadata is non-operational in this change; backend
   registration, retention, and domain migrations remain separate.
+- `LemonCore.PolicyStore` now declares the four existing policy tables it owns.
+  This is metadata-only; policy access still uses the specialized Store API and
+  its public functions are unchanged.
+
 - `LemonCore.ChatStateStore` now adopts that ownership contract for the cached
   `:chat` table and its existing `:expires_at` retention policy without moving
   TTL, expiry, sweep, or cache behavior out of the specialized Store runtime.
