@@ -10,6 +10,8 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- The LemonSim UI test-only `lazy_html` dependency now uses a bounded
+  compatible-version requirement instead of accepting every future release.
 - A2A message replays now return the original task without duplicate router
   submission, webhook idempotency storage failures fail closed with retryable
   503 responses instead of reporting acceptance, and exact synchronous webhook
