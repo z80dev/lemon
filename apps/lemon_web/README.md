@@ -93,6 +93,9 @@ The primary dashboard page. Provides a chat-style interface for sending prompts 
 - Tool call visualization in collapsible detail panels
 - System notifications for run lifecycle events (started, completed, failed)
 - Active-run stop control through `LemonRouter.abort_run/2`
+- Honest active-run reconciliation: only an exact router `:none` becomes idle;
+  an initial lookup failure renders a disabled "Run status unavailable" state,
+  while a later failure preserves the last known running/stopping state and draft
 - Message history capped at 250 messages
 - Durable history reconstruction on `/sessions/:session_key`, including ordered prompt, tool, and answer messages for resume
 
@@ -114,6 +117,11 @@ The primary dashboard page. Provides a chat-style interface for sending prompts 
 3. Files are persisted to the uploads directory with timestamped names
 4. Prompt is enriched with file paths and submitted via `LemonRouter.submit/1`
 5. Response streams back through PubSub events; **Stop** calls `LemonRouter.abort_run/2`
+
+Before new-message or active-run guidance submission, SessionLive rechecks the
+router's active-run state. An unavailable, exceptional, exiting, or malformed
+lookup is never treated as idle or already finished, and raw failure details do
+not enter rendered UI state.
 
 ### ManagementLive (`/manage`)
 

@@ -4,14 +4,16 @@ defmodule LemonCore.PolicyStoreTest do
   alias LemonCore.PolicyStore
 
   test "declares exact ownership of the existing policy tables" do
-    assert Enum.map(PolicyStore.__store_tables__(), & &1.name) == [
+    tables = PolicyStore.__store_tables__()
+
+    assert Enum.map(tables, & &1.name) == [
              :agent_policies,
              :channel_policies,
              :session_policies,
              :runtime_policy
            ]
 
-    assert Enum.all?(PolicyStore.__store_tables__(), fn table ->
+    assert Enum.all?(tables, fn table ->
              table.owner == PolicyStore and table.persistence == :durable and
                table.cached == false and table.retention == nil and table.version == 1
            end)

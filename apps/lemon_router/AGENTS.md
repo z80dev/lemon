@@ -59,11 +59,22 @@ Inbound transport
 - Router may reference `LemonChannels.Dispatcher`, but not `LemonChannels.OutboundPayload`.
 - Router may emit `LemonCore.DeliveryIntent`, but channel renderers decide payload shape.
 - Router builds `%LemonCore.ExecutionCommand{}` and calls the configured `LemonCore.EngineRuntime`; it must not construct `%LemonGateway.ExecutionRequest{}` or call `LemonGateway.Runtime` directly.
-- Run-specific aborts are serialized through `RunOrchestrator` before coordinator/process cancellation. Its bounded tombstone map rejects a fixed run ID when abort wins the submission race; when submission wins, the same serialization guarantees normal cancellation sees the accepted run.
+- Run-specific aborts are serialized through `RunOrchestrator` before coordinator/process cancellation. Its bounded in-memory tombstone map is backed by a compact durable run-ID fence: expiry may stop active cancellation/cache behavior, but must never make an aborted fixed ID executable. When submission wins, the same serialization guarantees normal cancellation sees the accepted run. Tombstone registration failure must propagate so the bridge can report an unknown mutation outcome; it must never be swallowed into `:ok`.
+- Durable accepted/submitting admission rows retain only state plus semantic identity. Replay reads and periodic cleanup CAS-compact legacy rows and sanitize legacy abort reasons, so session identifiers, timestamps, and arbitrary caller terms do not remain in permanent fences.
 - Router owns pending-compaction prompt mutation.
 - Fresh pending-compaction markers are prepared before submission but consumed
   only after `SessionCoordinator.submit/2` accepts the run; submission errors
   preserve the marker for retry, while stale/empty markers may clear eagerly.
+- `Router.handle_inbound/1` must propagate `RunOrchestrator.submit/1` errors to
+  the transport boundary. Logging a rejection and returning `:ok` falsely
+  acknowledges work the router did not accept. Only a non-empty binary run id
+  is a valid success acknowledgement; malformed acknowledgements are
+  outcome-unknown and must not invite an automatic retry.
+- Abort and keep-alive `:ok` results acknowledge router dispatch rather than
+  synchronous application by the target run process.
+- Router session queries must propagate registry/read-model failures as errors;
+  never turn an unavailable production read model into `false`, `:none`, or
+  `[]` before the bridge can classify it.
 - Router uses `PendingCompactionStore`; it must not touch Telegram message-index tables directly.
 - Router uses `LemonChannels.TargetDirectory` for human-friendly channel target discovery; it must not read Telegram or Discord known-target stores directly.
 - Queue semantics belong in `SessionCoordinator`, not in gateway workers.
@@ -118,6 +129,10 @@ class/name, status, reason, message, and validation errors.
 
 ## Config Contract
 
+- `LemonRouter.Application` validates a configured `:engine_runtime` through
+  `LemonCore.EngineRuntime.validate/1` at startup. Invalid wiring is logged and
+  disabled, while router-only boot and existing unavailable-runtime handling
+  remain supported.
 - Default model and thinking level live in config (`[defaults]`) as defaults only.
 - Current per-session/per-route/per-chat values are runtime policy/state managed by `LemonCore.PolicyStore`, not config.
 - Direct `Application.get_env(:lemon_router, :default_model)`, `Application.get_env(:lemon_router, :agent_policies)`, and `Application.get_env(:lemon_router, :runtime_policy)` reads are forbidden in runtime modules. These values must come from config defaults or `PolicyStore`.

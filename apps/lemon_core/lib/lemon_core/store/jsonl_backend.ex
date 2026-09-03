@@ -121,6 +121,31 @@ defmodule LemonCore.Store.JsonlBackend do
   end
 
   @impl true
+  def compare_and_delete_many(state, entries) do
+    state =
+      Enum.reduce(entries, state, fn {table, _key, _expected}, acc ->
+        ensure_table_loaded(acc, table)
+      end)
+
+    if Enum.all?(entries, fn {table, key, expected} ->
+         Map.fetch(Map.get(state.data, table, %{}), key) == {:ok, expected}
+       end) do
+      Enum.reduce_while(entries, {:ok, state}, fn {table, key, _expected}, {:ok, acc} ->
+        try do
+          {:ok, next_state} = delete(acc, table, key)
+          {:cont, {:ok, next_state}}
+        rescue
+          error -> {:halt, {:error, {:jsonl_delete_failed, Exception.message(error)}, acc}}
+        catch
+          kind, reason -> {:halt, {:error, {:jsonl_delete_failed, kind, reason}, acc}}
+        end
+      end)
+    else
+      {:error, :mismatch, state}
+    end
+  end
+
+  @impl true
   def list(state, table) do
     # Ensure table is loaded (for dynamic tables)
     state = ensure_table_loaded(state, table)

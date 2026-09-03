@@ -14,30 +14,97 @@ defmodule LemonChannels.Adapters.Email.WebhookTest do
   alias LemonChannels.Adapters.Email
   alias LemonChannels.Adapters.Email.Webhook
   alias LemonChannels.InboundHttp.Router
+  alias LemonCore.RunRequest
 
   defmodule AcceptingRouter do
     @moduledoc false
-    def handle_inbound(message) do
-      send(self(), {:routed, message})
-      :ok
+    def submit(request) do
+      send(self(), {:routed, request})
+      {:ok, request.run_id}
     end
   end
 
   defmodule DeadRouter do
     @moduledoc false
-    # Stands in for a router that is configured but whose process is not
-    # running: `GenServer.call` to a dead named process exits, and an exit is
-    # not an exception, so `RouterBridge` does not convert it.
-    def handle_inbound(_message), do: exit({:noproc, {GenServer, :call, []}})
+    # Stands in for an orchestrator whose process is not running. RouterBridge
+    # catches the exit and reports the mutation as outcome-unknown because the
+    # callback may have applied a side effect before reaching the dead process.
+    def submit(_request), do: exit({:noproc, {GenServer, :call, []}})
+  end
+
+  defmodule RejectingRouter do
+    @moduledoc false
+    def submit(request) do
+      send(self(), {:routed, request})
+      {:error, :rejected}
+    end
+  end
+
+  defmodule AmbiguousRouter do
+    @moduledoc false
+    def submit(request) do
+      send(self(), {:routed, request})
+      {:error, :outcome_unknown}
+    end
+  end
+
+  defmodule EmailWebhookBlockingRouter do
+    @owner_key {__MODULE__, :owner}
+
+    def set_owner(pid), do: :persistent_term.put(@owner_key, pid)
+    def clear_owner, do: :persistent_term.erase(@owner_key)
+
+    def submit(request) do
+      send(:persistent_term.get(@owner_key), {:email_submit_blocked, request, self()})
+
+      receive do
+        {:release_email_submit, result} -> result
+      end
+    end
+  end
+
+  defmodule AcceptedStateWriteFailureStore do
+    @moduledoc false
+    alias LemonCore.Store
+
+    def put_new(table, key, value), do: Store.put_new(table, key, value)
+    def get(table, key), do: Store.get(table, key)
+
+    def compare_and_swap(_table, _key, _expected, %{"state" => state})
+        when state in ["accepted", "outcome_unknown"],
+        do: {:error, :injected_write_failure}
+
+    def compare_and_swap(table, key, expected, value),
+      do: Store.compare_and_swap(table, key, expected, value)
+  end
+
+  defmodule RejectStateWriteFailureStore do
+    @moduledoc false
+    alias LemonCore.Store
+
+    def put_new(table, key, value), do: Store.put_new(table, key, value)
+    def get(table, key), do: Store.get(table, key)
+
+    def compare_and_swap(_table, _key, _expected, %{"state" => "rejected"}),
+      do: {:error, :injected_write_failure}
+
+    def compare_and_swap(table, key, expected, value),
+      do: Store.compare_and_swap(table, key, expected, value)
+
+    def put(_table, _key, %{"state" => "rejected"}), do: {:error, :injected_write_failure}
+    def put(table, key, value), do: Store.put(table, key, value)
   end
 
   setup do
     previous_email = Application.get_env(:lemon_channels, Email)
     previous_bridge = Application.get_env(:lemon_core, :router_bridge)
+    previous_store = Application.get_env(:lemon_channels, :email_webhook_store)
 
     on_exit(fn ->
       restore(:lemon_channels, Email, previous_email)
       restore(:lemon_core, :router_bridge, previous_bridge)
+      restore(:lemon_channels, :email_webhook_store, previous_store)
+      EmailWebhookBlockingRouter.clear_owner()
     end)
 
     :ok
@@ -48,7 +115,12 @@ defmodule LemonChannels.Adapters.Email.WebhookTest do
 
   defp route_to(module) do
     previous = Application.get_env(:lemon_core, :router_bridge, %{})
-    Application.put_env(:lemon_core, :router_bridge, Map.put(previous, :router, module))
+
+    Application.put_env(
+      :lemon_core,
+      :router_bridge,
+      previous |> Map.put(:router, module) |> Map.put(:run_orchestrator, module)
+    )
   end
 
   defp configure(opts), do: Application.put_env(:lemon_channels, Email, opts)
@@ -59,7 +131,9 @@ defmodule LemonChannels.Adapters.Email.WebhookTest do
     end)
   end
 
-  defp authorized_payload do
+  defp authorized_payload(message_id \\ nil) do
+    message_id = message_id || "webhook-#{System.unique_integer([:positive])}@example.com"
+
     :post
     |> conn("/email", "")
     |> put_req_header("x-webhook-token", "s3cret")
@@ -68,7 +142,7 @@ defmodule LemonChannels.Adapters.Email.WebhookTest do
       "to" => "agent@lemon.test",
       "subject" => "hello",
       "text" => "anyone home?",
-      "message_id" => "<webhook-#{System.unique_integer([:positive])}@example.com>"
+      "message_id" => "<#{message_id}>"
     })
   end
 
@@ -175,7 +249,8 @@ defmodule LemonChannels.Adapters.Email.WebhookTest do
       # 202 rather than 200: the provider's job is done once the message is
       # taken; whether a run results is not something it should wait on.
       assert conn.status == 202
-      assert_received {:routed, %LemonCore.InboundMessage{channel_id: "email"}}
+      assert_received {:routed, %RunRequest{origin: :channel, run_id: run_id}}
+      assert String.starts_with?(run_id, "run_email_")
     end
 
     test "asks for redelivery when the router is not wired at all" do
@@ -190,16 +265,292 @@ defmodule LemonChannels.Adapters.Email.WebhookTest do
       assert conn.resp_body == "unavailable"
     end
 
-    test "asks for redelivery when the router is wired but its process is dead" do
-      # The case `RouterBridge` cannot report on its own: it rescues exceptions,
-      # and this is an exit. Left unhandled it reaches the listener's catch-all
-      # and the provider gets an opaque 500.
+    test "suppresses redelivery when the router process dies after dispatch begins" do
       configure(webhook_token: "s3cret")
       route_to(DeadRouter)
 
       conn = Webhook.handle_inbound(authorized_payload())
 
+      assert conn.status == 200
+      assert conn.resp_body == "outcome unknown"
+    end
+
+    test "asks for redelivery when the router explicitly rejects submission" do
+      configure(webhook_token: "s3cret")
+      route_to(RejectingRouter)
+      message_id = "retryable@example.com"
+
+      conn = Webhook.handle_inbound(authorized_payload(message_id))
+
       assert conn.status == 503
+      assert conn.resp_body == "unavailable"
+      assert_received {:routed, %RunRequest{run_id: run_id}}
+
+      route_to(AcceptingRouter)
+      retry_conn = Webhook.handle_inbound(authorized_payload(message_id))
+
+      assert retry_conn.status == 202
+      assert_received {:routed, %RunRequest{run_id: ^run_id}}
+    end
+
+    test "failed rejection persistence remains retryable through the reservation lease" do
+      configure(webhook_token: "s3cret")
+      route_to(RejectingRouter)
+      Application.put_env(:lemon_channels, :email_webhook_store, RejectStateWriteFailureStore)
+      message_id = "lease-retry@example.com"
+
+      first = Webhook.handle_inbound(authorized_payload(message_id))
+      assert first.status == 503
+      assert_received {:routed, %RunRequest{run_id: run_id}}
+
+      pending = Webhook.handle_inbound(authorized_payload(message_id))
+      assert pending.status == 503
+      refute_received {:routed, _request}
+
+      digest = Base.encode16(:crypto.hash(:sha256, message_id), case: :lower)
+      entry = LemonCore.Store.get(:email_inbound_idempotency, digest)
+
+      assert :ok =
+               LemonCore.Store.put(
+                 :email_inbound_idempotency,
+                 digest,
+                 Map.put(entry, "lease_expires_at_ms", 0)
+               )
+
+      route_to(AcceptingRouter)
+      retry_conn = Webhook.handle_inbound(authorized_payload(message_id))
+      assert retry_conn.status == 202
+      assert_received {:routed, %RunRequest{run_id: ^run_id}}
+    end
+
+    test "accepted handoff fails closed when its durable receipt cannot be written" do
+      configure(webhook_token: "s3cret")
+      route_to(AcceptingRouter)
+      Application.put_env(:lemon_channels, :email_webhook_store, AcceptedStateWriteFailureStore)
+      message_id = "accepted-write-failure@example.com"
+
+      first = Webhook.handle_inbound(authorized_payload(message_id))
+      assert first.status == 503
+      assert_received {:routed, %RunRequest{run_id: run_id}}
+
+      digest = Base.encode16(:crypto.hash(:sha256, message_id), case: :lower)
+
+      assert %{"state" => "pending", "run_id" => ^run_id} =
+               LemonCore.Store.get(:email_inbound_idempotency, digest)
+
+      pending = Webhook.handle_inbound(authorized_payload(message_id))
+      assert pending.status == 503
+      refute_received {:routed, _request}
+    end
+
+    test "a stale reservation owner cannot overwrite a reclaimed accepted receipt" do
+      configure(webhook_token: "s3cret")
+      route_to(EmailWebhookBlockingRouter)
+      EmailWebhookBlockingRouter.set_owner(self())
+      message_id = "stale-owner@example.com"
+
+      first_task = Task.async(fn -> Webhook.handle_inbound(authorized_payload(message_id)) end)
+      assert_receive {:email_submit_blocked, %RunRequest{run_id: run_id}, first_runner}, 500
+
+      digest = Base.encode16(:crypto.hash(:sha256, message_id), case: :lower)
+      first_entry = LemonCore.Store.get(:email_inbound_idempotency, digest)
+
+      assert :ok =
+               LemonCore.Store.put(
+                 :email_inbound_idempotency,
+                 digest,
+                 Map.put(first_entry, "lease_expires_at_ms", 0)
+               )
+
+      second_task = Task.async(fn -> Webhook.handle_inbound(authorized_payload(message_id)) end)
+      assert_receive {:email_submit_blocked, %RunRequest{run_id: ^run_id}, second_runner}, 500
+
+      send(second_runner, {:release_email_submit, {:ok, run_id}})
+      assert Task.await(second_task, 1_000).status == 202
+      accepted_entry = LemonCore.Store.get(:email_inbound_idempotency, digest)
+      assert accepted_entry["state"] == "accepted"
+      refute accepted_entry["reservation_id"] == first_entry["reservation_id"]
+
+      send(first_runner, {:release_email_submit, {:ok, run_id}})
+      assert Task.await(first_task, 1_000).status == 503
+      assert LemonCore.Store.get(:email_inbound_idempotency, digest) == accepted_entry
+    end
+
+    test "rejects a routable payload without a Message-ID before submission" do
+      configure(webhook_token: "s3cret")
+      route_to(AcceptingRouter)
+
+      conn =
+        authorized_payload("temporary@example.com")
+        |> Map.update!(:body_params, &Map.delete(&1, "message_id"))
+        |> Webhook.handle_inbound()
+
+      assert conn.status == 400
+      assert conn.resp_body == "missing message id"
+      refute_received {:routed, _request}
+    end
+
+    test "returns a truthful non-retry receipt and deduplicates an ambiguous handoff" do
+      configure(webhook_token: "s3cret")
+      route_to(AmbiguousRouter)
+      message_id = "ambiguous@example.com"
+
+      conn = Webhook.handle_inbound(authorized_payload(message_id))
+
+      assert conn.status == 200
+      assert conn.resp_body == "outcome unknown"
+      assert_received {:routed, %RunRequest{run_id: run_id}}
+      assert String.starts_with?(run_id, "run_email_")
+
+      route_to(AcceptingRouter)
+      duplicate_conn = Webhook.handle_inbound(authorized_payload(message_id))
+
+      assert duplicate_conn.status == 200
+      assert duplicate_conn.resp_body == "outcome unknown"
+      refute_received {:routed, _request}
+    end
+
+    test "replays the accepted receipt without submitting the same Message-ID twice" do
+      configure(webhook_token: "s3cret")
+      route_to(AcceptingRouter)
+      message_id = "accepted-duplicate@example.com"
+
+      first_conn = Webhook.handle_inbound(authorized_payload(message_id))
+
+      assert first_conn.status == 202
+      assert_received {:routed, %RunRequest{run_id: run_id} = request}
+
+      digest = Base.encode16(:crypto.hash(:sha256, message_id), case: :lower)
+      assert request.meta.router_replay_identity == "email:#{digest}"
+
+      duplicate_conn = Webhook.handle_inbound(authorized_payload(message_id))
+
+      assert duplicate_conn.status == 202
+      assert duplicate_conn.resp_body == "accepted"
+      refute_received {:routed, _request}
+      assert String.starts_with?(run_id, "run_email_")
+    end
+
+    test "attachment retries keep a stable content identity across temporary upload paths" do
+      configure(webhook_token: "s3cret")
+      route_to(AcceptingRouter)
+      message_id = "attachment-replay@example.com"
+      suffix = System.unique_integer([:positive])
+      first_path = Path.join(System.tmp_dir!(), "email-upload-first-#{suffix}")
+      second_path = Path.join(System.tmp_dir!(), "email-upload-second-#{suffix}")
+      File.write!(first_path, "identical attachment bytes")
+      File.write!(second_path, "identical attachment bytes")
+      on_exit(fn -> Enum.each([first_path, second_path], &File.rm/1) end)
+
+      payload = fn path ->
+        authorized_payload(message_id)
+        |> Map.update!(:body_params, fn body ->
+          Map.put(body, "attachments", [
+            %Plug.Upload{path: path, filename: "notes.txt", content_type: "text/plain"}
+          ])
+        end)
+      end
+
+      assert %{status: 202} = payload.(first_path) |> Webhook.handle_inbound()
+      assert_received {:routed, %RunRequest{} = first_request}
+
+      digest = Base.encode16(:crypto.hash(:sha256, message_id), case: :lower)
+      table = :email_inbound_idempotency
+      receipt = LemonCore.Store.get(table, digest)
+      assert :ok = LemonCore.Store.put(table, digest, %{receipt | "state" => "rejected"})
+
+      assert %{status: 202} = payload.(second_path) |> Webhook.handle_inbound()
+      assert_received {:routed, %RunRequest{} = second_request}
+
+      refute first_request.prompt == second_request.prompt
+
+      assert first_request.meta.router_replay_content_identity ==
+               second_request.meta.router_replay_content_identity
+    end
+
+    test "provider retry metadata is ignored while semantic email fields remain bound" do
+      configure(webhook_token: "s3cret")
+      route_to(AcceptingRouter)
+      message_id = "provider-retry-drift@example.com"
+      digest = Base.encode16(:crypto.hash(:sha256, message_id), case: :lower)
+      table = :email_inbound_idempotency
+
+      payload = fn attempt, overrides ->
+        authorized_payload(message_id)
+        |> Map.update!(:body_params, fn body ->
+          body
+          |> Map.put("provider_delivery_attempt", attempt)
+          |> Map.put("provider_signature", "signature-#{attempt}")
+          |> Map.merge(overrides)
+        end)
+      end
+
+      assert %{status: 202} = payload.(1, %{}) |> Webhook.handle_inbound()
+      assert_received {:routed, %RunRequest{} = first}
+
+      receipt = LemonCore.Store.get(table, digest)
+      assert :ok = LemonCore.Store.put(table, digest, %{receipt | "state" => "rejected"})
+
+      assert %{status: 202} = payload.(2, %{}) |> Webhook.handle_inbound()
+      assert_received {:routed, %RunRequest{} = retry}
+
+      assert first.meta.router_replay_content_identity ==
+               retry.meta.router_replay_content_identity
+
+      for {field, value} <- [
+            {"subject", "changed subject"},
+            {"from", "other@example.com"},
+            {"text", "changed body"}
+          ] do
+        receipt = LemonCore.Store.get(table, digest)
+        assert :ok = LemonCore.Store.put(table, digest, %{receipt | "state" => "rejected"})
+        assert %{status: 202} = payload.(3, %{field => value}) |> Webhook.handle_inbound()
+        assert_received {:routed, %RunRequest{} = changed}
+
+        refute first.meta.router_replay_content_identity ==
+                 changed.meta.router_replay_content_identity
+      end
+    end
+
+    test "attachment content, name, and type are bound into replay identity" do
+      configure(webhook_token: "s3cret")
+      route_to(AcceptingRouter)
+      message_id = "attachment-semantics@example.com"
+      digest = Base.encode16(:crypto.hash(:sha256, message_id), case: :lower)
+      table = :email_inbound_idempotency
+      suffix = System.unique_integer([:positive])
+      original_path = Path.join(System.tmp_dir!(), "email-original-#{suffix}")
+      changed_path = Path.join(System.tmp_dir!(), "email-changed-#{suffix}")
+      File.write!(original_path, "original bytes")
+      File.write!(changed_path, "changed bytes")
+      on_exit(fn -> Enum.each([original_path, changed_path], &File.rm/1) end)
+
+      submit = fn path, filename, content_type ->
+        authorized_payload(message_id)
+        |> Map.update!(:body_params, fn body ->
+          Map.put(body, "attachments", [
+            %Plug.Upload{path: path, filename: filename, content_type: content_type}
+          ])
+        end)
+        |> Webhook.handle_inbound()
+      end
+
+      assert %{status: 202} = submit.(original_path, "notes.txt", "text/plain")
+      assert_received {:routed, %RunRequest{} = original}
+
+      for {path, filename, content_type} <- [
+            {changed_path, "notes.txt", "text/plain"},
+            {original_path, "other.txt", "text/plain"},
+            {original_path, "notes.txt", "application/octet-stream"}
+          ] do
+        receipt = LemonCore.Store.get(table, digest)
+        assert :ok = LemonCore.Store.put(table, digest, %{receipt | "state" => "rejected"})
+        assert %{status: 202} = submit.(path, filename, content_type)
+        assert_received {:routed, %RunRequest{} = changed}
+
+        refute original.meta.router_replay_content_identity ==
+                 changed.meta.router_replay_content_identity
+      end
     end
 
     test "answers 400 for an authorized payload it cannot make sense of" do

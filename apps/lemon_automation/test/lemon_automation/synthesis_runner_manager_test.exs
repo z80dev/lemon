@@ -65,6 +65,7 @@ defmodule LemonAutomation.SynthesisRunnerManagerTest do
       enabled: true,
       agent_id: agent_id,
       pipeline_mod: BlockingPipeline,
+      active_sessions_fun: fn -> [] end,
       tick_interval_ms: 3_600_000
     ]
   end
@@ -122,6 +123,22 @@ defmodule LemonAutomation.SynthesisRunnerManagerTest do
     tick_and_sync()
     refute_receive {:pipeline_run, _, _}, 200
     assert is_nil(:sys.get_state(SynthesisRunnerManager).in_flight_ref)
+  end
+
+  test "active-session query failures fail closed without launching work", %{agent_id: agent_id} do
+    failing_queries = [
+      fn -> {:error, :unavailable} end,
+      fn -> raise "registry unavailable" end,
+      fn -> exit(:registry_unavailable) end
+    ]
+
+    Enum.each(failing_queries, fn active_sessions_fun ->
+      set_opts(Keyword.put(runner_opts(agent_id), :active_sessions_fun, active_sessions_fun))
+
+      tick_and_sync()
+      refute_receive {:pipeline_run, _, _}, 100
+      assert is_nil(:sys.get_state(SynthesisRunnerManager).in_flight_ref)
+    end)
   end
 
   test "a disabled runner never spawns a pass", %{agent_id: agent_id} do

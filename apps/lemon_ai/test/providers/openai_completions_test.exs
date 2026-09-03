@@ -2,6 +2,7 @@ defmodule LemonAi.Providers.OpenAICompletionsTest do
   use ExUnit.Case, async: false
 
   alias LemonAi.EventStream
+  alias LemonAi.Models.Catalog
   alias LemonAi.Providers.OpenAICompletions
 
   alias LemonAi.Types.{
@@ -539,6 +540,87 @@ defmodule LemonAi.Providers.OpenAICompletionsTest do
 
     assert body == expected
     assert {:error, _} = EventStream.result(stream, 1000)
+  end
+
+  test "honors max_tokens_field loaded from a JSON catalog" do
+    test_pid = self()
+
+    Req.Test.stub(__MODULE__, fn conn ->
+      {:ok, raw, conn} = Plug.Conn.read_body(conn)
+      send(test_pid, {:request_body, Jason.decode!(raw)})
+      Plug.Conn.send_resp(conn, 200, sse_body([:done]))
+    end)
+
+    entry = %{
+      "id" => "catalog-chat-model",
+      "name" => "Catalog Chat Model",
+      "api" => "openai_completions",
+      "provider" => "openai",
+      "base_url" => "https://example.test",
+      "reasoning" => false,
+      "input" => ["text"],
+      "cost" => %{
+        "input" => 0.0,
+        "output" => 0.0,
+        "cache_read" => 0.0,
+        "cache_write" => 0.0
+      },
+      "context_window" => 8_192,
+      "max_tokens" => 2_048,
+      "compat" => %{"max_tokens_field" => "max_tokens"}
+    }
+
+    model = Catalog.decode!(Jason.encode!(%{"catalog-chat-model" => entry}), "request.json")
+    context = Context.new(messages: [%UserMessage{content: "Hi"}])
+    opts = %StreamOptions{api_key: "test-key", max_tokens: 111}
+
+    {:ok, stream} = OpenAICompletions.stream(model["catalog-chat-model"], context, opts)
+
+    assert_receive {:request_body, body}, 1000
+    assert body["max_tokens"] == 111
+    refute Map.has_key?(body, "max_completion_tokens")
+    assert {:ok, _result} = EventStream.result(stream, 1000)
+  end
+
+  test "catalog null routing explicitly omits the OpenRouter provider parameter" do
+    test_pid = self()
+
+    Req.Test.stub(__MODULE__, fn conn ->
+      {:ok, raw, conn} = Plug.Conn.read_body(conn)
+      send(test_pid, {:request_body, Jason.decode!(raw)})
+      Plug.Conn.send_resp(conn, 200, sse_body([:done]))
+    end)
+
+    entry = %{
+      "id" => "catalog-openrouter-model",
+      "name" => "Catalog OpenRouter Model",
+      "api" => "openai_completions",
+      "provider" => "openrouter",
+      "base_url" => "https://openrouter.ai/api/v1",
+      "reasoning" => false,
+      "input" => ["text"],
+      "cost" => %{
+        "input" => 0.0,
+        "output" => 0.0,
+        "cache_read" => 0.0,
+        "cache_write" => 0.0
+      },
+      "context_window" => 8_192,
+      "max_tokens" => 2_048,
+      "compat" => %{"open_router_routing" => nil}
+    }
+
+    model =
+      Catalog.decode!(Jason.encode!(%{"catalog-openrouter-model" => entry}), "request.json")
+
+    context = Context.new(messages: [%UserMessage{content: "Hi"}])
+    opts = %StreamOptions{api_key: "test-key"}
+
+    {:ok, stream} = OpenAICompletions.stream(model["catalog-openrouter-model"], context, opts)
+
+    assert_receive {:request_body, body}, 1000
+    refute Map.has_key?(body, "provider")
+    assert {:ok, _result} = EventStream.result(stream, 1000)
   end
 
   test "ZAI requests can disable reasoning and require a tool call" do

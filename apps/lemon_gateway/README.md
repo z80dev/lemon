@@ -119,6 +119,25 @@ Gateway transports implement the `LemonGateway.Transport` behaviour (`id/0`, `st
 
 Webhook, SMS, and voice are gateway-owned by design, not pending migration: `LemonChannels.Plugin.deliver/1` is fire-and-forget, so it cannot serve webhook's synchronous response, SMS has no reply path at all, and voice needs a live bidirectional session. Email was the one surface that genuinely was a channel, and it moved to `lemon_channels` in phase 2.4 — `LemonChannels.Adapters.Email`. See `docs/platform/transport-unification.md`.
 
+Webhook submissions use a caller-fixed run ID. If the router cannot confirm
+whether a submission took effect, the HTTP request receives a `200` receipt
+with `status: "outcome_unknown"` and `retry_safe: false`; this acknowledges the
+webhook delivery without claiming that Lemon accepted the run. Callers must
+reconcile the returned run ID instead of automatically redelivering. When an
+idempotency key is present, Lemon persists that ambiguous receipt and replays it
+without submitting another run. Reservations carry a stable run ID and a
+lease-owner token. Submission and response receipts are compare-and-swap
+updates owned by that token, and an HTTP success is not returned when the
+corresponding durable receipt cannot be stored. An expired pending lease may be
+reclaimed without duplicating an already accepted run because the router treats
+the fixed run ID as a durable idempotency key. Payload-provided idempotency keys
+are opt-in and must be non-empty JSON strings; blank, numeric, list, or object
+values receive a bounded `422 invalid idempotency key` response before hashing
+or reservation. A legacy pending receipt without a run ID remains a permanent
+ambiguous fence after upgrade because its original acceptance outcome cannot be
+proven safely; retries receive a duplicate `200 legacy_outcome_unknown` receipt
+with `retry_safe: false` and never submit another run.
+
 ## Module Inventory
 
 ### Core

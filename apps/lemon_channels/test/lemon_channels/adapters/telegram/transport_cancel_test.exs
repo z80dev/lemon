@@ -2,9 +2,12 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
   alias Elixir.LemonChannels, as: LemonChannels
   use ExUnit.Case, async: false
 
+  import ExUnit.CaptureLog
+
   alias LemonChannels.Adapters.Telegram.ModelPolicyAdapter
   alias LemonChannels.Telegram.{ResumeIndexStore, StateStore}
   alias LemonChannels.ModelPolicy
+  alias LemonCore.{ChatScope, ProjectBindingStore}
 
   @provider_env_vars [
     "ANTHROPIC_API_KEY",
@@ -25,6 +28,9 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
   ]
 
   defmodule CancelTestRouter do
+    use LemonCore.RouterBridge.Router
+    use LemonCore.RouterBridge.RunOrchestrator
+
     def handle_inbound(msg) do
       if pid = :persistent_term.get({__MODULE__, :pid}, nil) do
         send(pid, {:inbound, msg})
@@ -38,7 +44,10 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
         send(pid, {:inbound, inbound_from_request(request)})
       end
 
-      {:ok, "run_#{System.unique_integer([:positive])}"}
+      :persistent_term.get(
+        {__MODULE__, :submit_result},
+        {:ok, "run_#{System.unique_integer([:positive])}"}
+      )
     end
 
     defp inbound_from_request(%LemonCore.RunRequest{} = request) do
@@ -65,7 +74,7 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
         send(pid, {:abort_session, session_key, reason})
       end
 
-      :ok
+      :persistent_term.get({__MODULE__, :abort_result}, :ok)
     end
 
     def abort_run(run_id, reason) do
@@ -73,7 +82,15 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
         send(pid, {:abort_run, run_id, reason})
       end
 
-      :ok
+      :persistent_term.get({__MODULE__, :abort_run_result}, :ok)
+    end
+
+    def keep_run_alive(run_id, decision) do
+      if pid = :persistent_term.get({__MODULE__, :pid}, nil) do
+        send(pid, {:keep_run_alive, run_id, decision})
+      end
+
+      :persistent_term.get({__MODULE__, :keepalive_result}, :ok)
     end
   end
 
@@ -162,7 +179,13 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
 
     :persistent_term.put({CancelTestRouter, :pid}, self())
     CancelMockAPI.register_test(self())
-    LemonCore.RouterBridge.configure(router: CancelTestRouter, run_orchestrator: CancelTestRouter)
+
+    :ok =
+      LemonCore.RouterBridge.configure(
+        router: CancelTestRouter,
+        run_orchestrator: CancelTestRouter
+      )
+
     set_bindings([])
     clear_env(@provider_env_vars)
     System.put_env("OPENAI_API_KEY", "test-openai-key")
@@ -174,6 +197,10 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
       :persistent_term.erase({CancelMockAPI, :updates})
       :persistent_term.erase({CancelMockAPI, :pid})
       :persistent_term.erase({CancelTestRouter, :pid})
+      :persistent_term.erase({CancelTestRouter, :submit_result})
+      :persistent_term.erase({CancelTestRouter, :abort_result})
+      :persistent_term.erase({CancelTestRouter, :abort_run_result})
+      :persistent_term.erase({CancelTestRouter, :keepalive_result})
       restore_router_bridge(old_router_bridge)
       restore_gateway_config_env(old_gateway_config_env)
       restore_env(old_provider_env)
@@ -199,6 +226,59 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
 
     # Should set 👀 reaction on the user's message
     assert_receive {:set_message_reaction, ^chat_id, ^user_msg_id, "👀"}, 400
+  end
+
+  test "definite submission failure has no progress reaction and permits redelivery" do
+    chat_id = 333_000_101
+    user_msg_id = 12_341
+    update = message_update(chat_id, user_msg_id, "retry this request")
+    :persistent_term.put({CancelTestRouter, :submit_result}, {:error, :unavailable})
+    CancelMockAPI.set_updates([update])
+
+    assert {:ok, _pid} =
+             start_transport(%{
+               allowed_chat_ids: [chat_id],
+               deny_unbound_chats: false
+             })
+
+    assert_receive {:inbound, %{message: %{text: "retry this request"}}}, 500
+    refute_receive {:set_message_reaction, ^chat_id, ^user_msg_id, "👀"}, 50
+
+    assert_receive {:send_message, ^chat_id, failure_text, _opts, _parse_mode}, 500
+    assert failure_text =~ "couldn't queue"
+    refute failure_text =~ "unavailable"
+
+    :persistent_term.put({CancelTestRouter, :submit_result}, {:ok, "run-redelivered"})
+    CancelMockAPI.set_updates([update])
+
+    assert_receive {:inbound, %{message: %{text: "retry this request"}}}, 500
+    assert_receive {:set_message_reaction, ^chat_id, ^user_msg_id, "👀"}, 500
+  end
+
+  test "ambiguous submission keeps dedupe and suppresses a potentially duplicate run" do
+    chat_id = 333_000_102
+    user_msg_id = 12_342
+    update = message_update(chat_id, user_msg_id, "submit only once")
+    :persistent_term.put({CancelTestRouter, :submit_result}, {:error, :outcome_unknown})
+    CancelMockAPI.set_updates([update])
+
+    assert {:ok, _pid} =
+             start_transport(%{
+               allowed_chat_ids: [chat_id],
+               deny_unbound_chats: false
+             })
+
+    assert_receive {:inbound, %{message: %{text: "submit only once"}}}, 500
+    refute_receive {:set_message_reaction, ^chat_id, ^user_msg_id, "👀"}, 50
+
+    assert_receive {:send_message, ^chat_id, failure_text, _opts, _parse_mode}, 500
+    assert failure_text =~ "couldn't confirm"
+
+    :persistent_term.put({CancelTestRouter, :submit_result}, {:ok, "would-duplicate"})
+    CancelMockAPI.set_updates([update])
+
+    refute_receive {:inbound, %{message: %{text: "submit only once"}}}, 150
+    refute_receive {:set_message_reaction, ^chat_id, ^user_msg_id, "👀"}, 50
   end
 
   test "cancel callback cancels the run mapped to the progress message id" do
@@ -273,6 +353,173 @@ defmodule LemonChannels.Adapters.Telegram.TransportCancelTest do
              })
 
     assert_receive {:abort_session, ^session_key, :user_requested}, 400
+  end
+
+  test "failed /cancel gives honest feedback instead of claiming cancellation" do
+    chat_id = 333_004_101
+    msg_id = 901
+    :persistent_term.put({CancelTestRouter, :abort_result}, {:error, :unavailable})
+    CancelMockAPI.set_updates([message_update(chat_id, msg_id, "/cancel")])
+
+    assert {:ok, _pid} =
+             start_transport(%{
+               allowed_chat_ids: [chat_id],
+               deny_unbound_chats: false
+             })
+
+    assert_receive {:abort_session, _session_key, :user_requested}, 400
+    assert_receive {:send_message, ^chat_id, text, _opts, _parse_mode}, 500
+    assert text =~ "couldn't cancel"
+    refute text =~ "Cancelling current run"
+  end
+
+  test "failed /new preserves generation and selected resume state" do
+    chat_id = 333_004_102
+    msg_id = 902
+    key = {"default", chat_id, nil}
+    selected_resume = %{engine: "lemon", value: "resume-stays"}
+    :ok = StateStore.put_thread_generation(key, 7)
+    :ok = StateStore.put_selected_resume(key, selected_resume)
+    :persistent_term.put({CancelTestRouter, :abort_result}, {:error, :unavailable})
+    CancelMockAPI.set_updates([message_update(chat_id, msg_id, "/new")])
+
+    assert {:ok, _pid} =
+             start_transport(%{
+               allowed_chat_ids: [chat_id],
+               deny_unbound_chats: false
+             })
+
+    assert_receive {:abort_session, _session_key, :new_session}, 400
+    assert_receive {:send_message, ^chat_id, text, _opts, _parse_mode}, 500
+    assert text =~ "existing session was left unchanged"
+    refute text =~ "Started a new session"
+    assert StateStore.get_thread_generation(key) == 7
+    assert StateStore.get_selected_resume(key) == selected_resume
+  end
+
+  test "failed /new with a project selector preserves the existing project binding" do
+    chat_id = 333_004_104
+    msg_id = 904
+    project_root = Path.join(System.tmp_dir!(), "new-session-project-#{System.unique_integer()}")
+    project_id = Path.basename(project_root)
+    scope = %ChatScope{transport: :telegram, chat_id: chat_id, topic_id: nil}
+
+    File.mkdir_p!(project_root)
+    :ok = ProjectBindingStore.put_override(scope, "existing-project")
+    :persistent_term.put({CancelTestRouter, :abort_result}, {:error, :unavailable})
+    CancelMockAPI.set_updates([message_update(chat_id, msg_id, "/new #{project_root}")])
+
+    on_exit(fn ->
+      ProjectBindingStore.delete_override(scope)
+      ProjectBindingStore.delete_dynamic(project_id)
+      File.rm_rf(project_root)
+    end)
+
+    assert {:ok, _pid} =
+             start_transport(%{
+               allowed_chat_ids: [chat_id],
+               deny_unbound_chats: false
+             })
+
+    assert_receive {:abort_session, _session_key, :new_session}, 400
+    assert_receive {:send_message, ^chat_id, text, _opts, _parse_mode}, 500
+    assert text =~ "existing session was left unchanged"
+    assert ProjectBindingStore.get_override(scope) == "existing-project"
+    assert ProjectBindingStore.get_dynamic(project_id) == nil
+  end
+
+  test "failed keepalive leaves inline retry controls in place" do
+    chat_id = 333_004_103
+    message_id = 903
+    callback_id = "keepalive-failure"
+    run_id = "run-keepalive-failure"
+    :persistent_term.put({CancelTestRouter, :keepalive_result}, {:error, :unavailable})
+
+    CancelMockAPI.set_updates([
+      cancel_callback_update(
+        chat_id,
+        callback_id,
+        message_id,
+        "lemon:idle:c:" <> run_id
+      )
+    ])
+
+    assert {:ok, _pid} =
+             start_transport(%{
+               allowed_chat_ids: [chat_id],
+               deny_unbound_chats: false
+             })
+
+    assert_receive {:keep_run_alive, ^run_id, :continue}, 400
+
+    assert_receive {:answer_callback, ^callback_id,
+                    %{"text" => "run control unavailable; try again"}},
+                   500
+
+    refute_receive {:edit_message_text, ^chat_id, ^message_id, _, _}, 100
+  end
+
+  test "ambiguous keepalive preserves controls and asks the user to check run status" do
+    chat_id = 333_004_105
+    message_id = 905
+    callback_id = "keepalive-ambiguous"
+    run_id = "run-keepalive-ambiguous"
+    :persistent_term.put({CancelTestRouter, :keepalive_result}, {:error, :outcome_unknown})
+
+    CancelMockAPI.set_updates([
+      cancel_callback_update(
+        chat_id,
+        callback_id,
+        message_id,
+        "lemon:idle:c:" <> run_id
+      )
+    ])
+
+    assert {:ok, _pid} =
+             start_transport(%{
+               allowed_chat_ids: [chat_id],
+               deny_unbound_chats: false
+             })
+
+    assert_receive {:keep_run_alive, ^run_id, :continue}, 400
+
+    assert_receive {:answer_callback, ^callback_id, %{"text" => answer}}, 500
+    assert answer =~ "couldn't confirm run control"
+    assert answer =~ "check run status before retrying"
+    refute answer =~ "unavailable"
+    refute_receive {:edit_message_text, ^chat_id, ^message_id, _, _}, 100
+  end
+
+  test "ambiguous cancel uses honest wording and never logs raw router terms" do
+    chat_id = 333_004_106
+    message_id = 906
+    callback_id = "cancel-ambiguous"
+    run_id = "run-cancel-secret-that-must-not-leak"
+
+    :persistent_term.put({CancelTestRouter, :abort_run_result}, {:error, :outcome_unknown})
+
+    CancelMockAPI.set_updates([
+      cancel_callback_update(chat_id, callback_id, message_id, "lemon:cancel:" <> run_id)
+    ])
+
+    log =
+      capture_log([level: :warning], fn ->
+        assert {:ok, _pid} =
+                 start_transport(%{
+                   allowed_chat_ids: [chat_id],
+                   deny_unbound_chats: false
+                 })
+
+        assert_receive {:abort_run, ^run_id, :user_requested}, 400
+        assert_receive {:answer_callback, ^callback_id, %{"text" => answer}}, 500
+        assert answer =~ "couldn't confirm cancellation"
+        assert answer =~ "check run status before retrying"
+        refute answer =~ "unavailable"
+        refute_receive {:edit_message_text, ^chat_id, ^message_id, _, _}, 100
+      end)
+
+    assert log =~ "reason=outcome_unknown"
+    refute log =~ run_id
   end
 
   test "/model opens provider picker and does not route inbound" do

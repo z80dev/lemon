@@ -237,6 +237,17 @@ the profile ID, prompt, queue mode, and optional model override—working
 directory and execution node are resolved again from the profile by the
 long-running runtime.
 
+The direct in-VM submission path assigns a run ID before calling the router. If
+acceptance cannot be confirmed, `profile chat` prints that safe run reference,
+does not fall back to a second submission, and tells the operator to reconcile
+before retrying. On the packaged control-plane path, a recognized explicit RPC
+rejection is reported as rejected, a connection failure before the RPC is
+reported as not submitted, and a timeout, disconnect, malformed acknowledgement,
+or server-side unknown outcome remains conservatively unknown. The explicit
+server-side unknown-outcome envelope carries its bounded generated run ID for
+reconciliation; every other detail field is ignored. Raw router and control-plane
+failure terms are never printed.
+
 ## Context references
 
 `lemon context preview` and `lemon context resolve` are packaged adapters over

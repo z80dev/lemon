@@ -86,7 +86,10 @@ scheduled-run claim/suppression decisions. Operator APIs can read raw IDs from
 `CronStore.list_audit_events/1`; support diagnostics redact audit IDs, job/run
 IDs, and reasons.
 
-**Wake** provides immediate out-of-schedule triggering. It creates runs with `triggered_by: :wake`, submits directly to LemonRouter, and routes completion back through CronManager.
+**Wake** provides immediate out-of-schedule triggering. It creates runs with
+`triggered_by: :wake`, submits through the same configured
+`:cron_run_submitter` used by CronManager (normally RunSubmitter ->
+LemonRouter), and routes completion back through CronManager.
 
 **GoalContinuationManager** is the preview persistent-goal runner. It accepts one
 active session goal at a time, starts the work through `TaskSupervisor`, submits
@@ -108,6 +111,15 @@ tick. Router abort tombstones are serialized with submission acceptance, so a
 hard stop cannot miss a run accepted before the submit callback returns. A
 graceful stop disables auto restart and lets the bounded loop finish. Manager
 call deadlines are computed above configured judge/continuation wait deadlines.
+Hard-stop results include a sanitized `router_abort` status. An
+`:outcome_unknown` result is reported without retrying the abort, because the
+first request may already have taken effect; definite callback errors are
+reported only as `:rejected`, without their raw terms.
+An accepted continuation timeout, waiter crash, or abrupt loop-worker exit is
+also an unknown completion outcome, not a failed submission. The manager keeps
+the fixed run ownership in `reconciling`, blocks overlapping restarts, and
+releases it only after a durable terminal run record is observed or an explicit
+hard-stop result proves cancellation.
 
 `GoalJudge` supports explicit verdicts for tests/manual control, a pluggable
 `judge_runner` route with `judge_model` metadata, and deterministic fallback

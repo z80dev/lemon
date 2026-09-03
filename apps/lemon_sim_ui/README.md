@@ -163,7 +163,7 @@ For Tic Tac Toe and Skirmish, the user can select a team at launch. On human tur
 | `gettext` | Hex (~> 0.26) | Internationalisation support |
 | `jason` | Hex (~> 1.4) | JSON encoding/decoding |
 | `bandit` | Hex (~> 1.5) | HTTP server (replaces Cowboy) |
-| `lazy_html` | Hex (>= 0.1.0, test only) | HTML parsing in LiveView tests |
+| `lazy_html` | Hex (~> 0.1, test only) | HTML parsing in LiveView tests |
 
 ## Usage
 

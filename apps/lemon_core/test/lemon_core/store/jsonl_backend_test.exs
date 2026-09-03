@@ -250,6 +250,29 @@ defmodule LemonCore.Store.JsonlBackendTest do
     end
   end
 
+  describe "compare_and_delete_many/2" do
+    test "validates all snapshots before writing ordered delete records", %{tmp_dir: tmp_dir} do
+      {:ok, state} = JsonlBackend.init(path: tmp_dir)
+      assert {:ok, state} = JsonlBackend.put(state, :responses, "response", "old")
+      assert {:ok, state} = JsonlBackend.put(state, :primary, "fence", "keep")
+
+      assert {:error, :mismatch, ^state} =
+               JsonlBackend.compare_and_delete_many(state, [
+                 {:responses, "response", "old"},
+                 {:primary, "fence", "wrong"}
+               ])
+
+      assert {:ok, state} =
+               JsonlBackend.compare_and_delete_many(state, [
+                 {:responses, "response", "old"},
+                 {:primary, "fence", "keep"}
+               ])
+
+      assert {:ok, nil, _} = JsonlBackend.get(state, :responses, "response")
+      assert {:ok, nil, _} = JsonlBackend.get(state, :primary, "fence")
+    end
+  end
+
   describe "list/2" do
     test "returns empty list for empty table", %{tmp_dir: tmp_dir} do
       {:ok, state} = JsonlBackend.init(path: tmp_dir)

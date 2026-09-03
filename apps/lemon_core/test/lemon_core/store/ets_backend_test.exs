@@ -156,6 +156,30 @@ defmodule LemonCore.Store.EtsBackendTest do
     end
   end
 
+  describe "compare_and_delete_many/2" do
+    test "validates all snapshots before deleting the set", %{state: state} do
+      {:ok, state} = EtsBackend.put(state, :chat, "first", %{generation: 1})
+      {:ok, state} = EtsBackend.put(state, :progress, "second", %{generation: 2})
+
+      assert {:error, :mismatch, ^state} =
+               EtsBackend.compare_and_delete_many(state, [
+                 {:chat, "first", %{generation: 1}},
+                 {:progress, "second", %{generation: 1}}
+               ])
+
+      assert {:ok, %{generation: 1}, _} = EtsBackend.get(state, :chat, "first")
+
+      assert {:ok, state} =
+               EtsBackend.compare_and_delete_many(state, [
+                 {:chat, "first", %{generation: 1}},
+                 {:progress, "second", %{generation: 2}}
+               ])
+
+      assert {:ok, nil, _} = EtsBackend.get(state, :chat, "first")
+      assert {:ok, nil, _} = EtsBackend.get(state, :progress, "second")
+    end
+  end
+
   describe "list/2" do
     test "returns all key-value pairs", %{state: state} do
       :ets.insert(state.chat, {"key1", "value1"})

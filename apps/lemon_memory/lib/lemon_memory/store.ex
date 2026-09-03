@@ -1131,7 +1131,6 @@ defmodule LemonMemory.Store do
       end
     else
       {:error, reason} -> {:error, reason}
-      other -> {:error, {:query_failed, other}}
     end
   end
 

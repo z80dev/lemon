@@ -12,6 +12,9 @@ defmodule LemonChannels.Adapters.Telegram.TransportFakeApiTest do
   alias LemonChannels.Adapters.Telegram
 
   defmodule FakeApiTestRouter do
+    use LemonCore.RouterBridge.Router
+    use LemonCore.RouterBridge.RunOrchestrator
+
     def handle_inbound(msg) do
       if pid = :persistent_term.get({__MODULE__, :pid}, nil) do
         send(pid, {:inbound, msg})
@@ -97,10 +100,11 @@ defmodule LemonChannels.Adapters.Telegram.TransportFakeApiTest do
     old_router_bridge = Application.get_env(:lemon_core, :router_bridge)
     :persistent_term.put({FakeApiTestRouter, :pid}, self())
 
-    LemonCore.RouterBridge.configure(
-      router: FakeApiTestRouter,
-      run_orchestrator: FakeApiTestRouter
-    )
+    :ok =
+      LemonCore.RouterBridge.configure(
+        router: FakeApiTestRouter,
+        run_orchestrator: FakeApiTestRouter
+      )
 
     on_exit(fn ->
       stop_transport()

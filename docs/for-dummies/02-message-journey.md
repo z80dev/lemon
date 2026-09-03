@@ -66,60 +66,73 @@ If either check fails, the message is silently dropped. Yours passes.
 
 ---
 
-## Step 4: The Bouncing Ball Reaction
+## Step 4: Hand-off to the Channel Runtime
 
-The adapter sends a reaction on your message in Telegram. You'll see a little
-eyes emoji (👀) appear on your message — this is Lemon's way of saying "got it,
-working on it."
+After normalization and platform-specific checks, the adapter calls
+`LemonChannels.Runtime.submit_inbound(inbound_message)`. This is the one shared
+entry point used by channel transports to turn an accepted inbound message into
+native Lemon work.
+
+```
+Telegram adapter  ----InboundMessage---->  LemonChannels.Runtime.submit_inbound/1
+```
+
+**Where we are:** `lemon_channels`, crossing from the Telegram adapter into the
+shared channel runtime.
 
 ---
 
-## Step 5: Session Key Resolution
+## Step 5: Build the Canonical Run Request
 
-The adapter figures out which conversation this message belongs to by building
-a **session key** — a string that uniquely identifies this conversation thread.
-For a DM with the default agent, it looks something like:
+`LemonChannels.Runtime` passes the message to
+`LemonChannels.RunRequestBuilder.from_inbound/1`. The builder resolves the
+conversation's **session key** — a string that uniquely identifies the thread —
+and creates the canonical `LemonCore.RunRequest` that the router accepts. For a
+DM with the default agent, the session key looks something like:
 
 ```
 agent:default:telegram:default:dm:123456789
 ```
 
-This key stays the same across all your messages in this chat, so the AI can
-maintain a continuous conversation with you.
+The key stays the same across messages in this chat, so the AI can maintain a
+continuous conversation. The run request also carries the agent ID (`"default"`),
+your prompt, the `:channel` origin, queue mode, and safe channel metadata.
 
-**Where we are:** Still in `lemon_channels`, `Telegram.Transport.submit_inbound_now/2`.
+**Where we are:** `lemon_channels`, `RunRequestBuilder.from_inbound/1`.
 
 ---
 
-## Step 6: Hand-off to the Router
+## Step 6: Submit the Run to the Router
 
-The adapter calls `RouterBridge.handle_inbound(inbound_message)`. This is the
-boundary between `lemon_channels` and `lemon_router`.
+The channel runtime sends that completed `RunRequest` through
+`RouterBridge.submit_run/1`. This is the boundary between `lemon_channels` and
+`lemon_router`; the router does not receive or normalize the original
+`InboundMessage`.
 
 The RouterBridge is a clever indirection — it lets channels talk to the router
-without being directly wired to it. If the router isn't running for some reason,
-the bridge returns `{:error, :unavailable}` instead of crashing.
+without being directly wired to it. A request the router definitely refuses
+returns its bounded rejection, an unconfigured router returns
+`{:error, :unavailable}`, and a timeout, exit, exception, or malformed
+acknowledgement returns `{:error, :outcome_unknown}` because the fixed run ID
+may already have crossed the mutation boundary.
 
 ```
-lemon_channels  ----RouterBridge---->  lemon_router
+LemonChannels.Runtime
+  → RunRequestBuilder.from_inbound/1
+  → RouterBridge.submit_run/1
+  → lemon_router (RunOrchestrator)
 ```
 
 **Where we are:** Crossing into `lemon_router`.
 
 ---
 
-## Step 7: The Router Builds a Run Request
+## Step 7: The Bouncing Ball Reaction
 
-The router receives your `InboundMessage` and converts it into a `RunRequest` —
-the formal "please run the AI" request. It attaches:
-
-- The session key
-- The agent ID ("default")
-- Your prompt text
-- The origin (`:channel`)
-- Queue mode (how to handle this if the AI is already busy)
-
-**Where we are:** `lemon_router`, `Router.handle_inbound/1`.
+Only after the router confirms that it accepted the run does the adapter send a
+reaction on your Telegram message. You'll see a little eyes emoji (👀) appear —
+this is Lemon's way of saying "got it, working on it." A rejected or ambiguous
+submission does not get this success signal.
 
 ---
 

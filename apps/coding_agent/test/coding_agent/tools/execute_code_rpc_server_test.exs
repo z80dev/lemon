@@ -1110,7 +1110,12 @@ defmodule CodingAgent.Tools.ExecuteCodeRpcServerTest do
       # Containment still means survival: the server reschedules and serves.
       write_request(rpc_dir, 2, "echo", %{"value" => "resumed"})
       assert %{"id" => 2, "ok" => true, "content" => "resumed"} = await_response(rpc_dir, 2)
-      assert RpcServer.stats(server).calls == 2
+
+      # The response is published inside the sweep before its updated counters
+      # are returned to the server. Synchronize on that state transition rather
+      # than racing the task result message.
+      stats = await_stats(server, &(&1.calls == 2))
+      assert stats.calls == 2
 
       assert :ok = RpcServer.stop(server)
     end
@@ -1162,7 +1167,10 @@ defmodule CodingAgent.Tools.ExecuteCodeRpcServerTest do
              } =
                await_response(rpc_dir, 3)
 
-      stats = RpcServer.stats(server)
+      # The response is published inside the sweep just before the task
+      # returns its updated counters to the server. Wait for that asynchronous
+      # settlement instead of racing the task result message.
+      stats = await_stats(server, &(&1.calls == 2 and &1.denied == 1 and &1.errors == 1))
       assert stats.calls == 2
       assert stats.denied == 1
       assert stats.errors == 1
@@ -1335,13 +1343,17 @@ defmodule CodingAgent.Tools.ExecuteCodeRpcServerTest do
   # Polls until the server's stats carry the accounting-loss flag, so a test
   # never races the :DOWN handling.
   defp await_flagged_stats(server, attempts \\ 400) do
+    await_stats(server, &(Map.get(&1, :accounting_loss) == true), attempts)
+  end
+
+  defp await_stats(server, predicate, attempts \\ 400) do
     stats = RpcServer.stats(server)
 
-    if Map.get(stats, :accounting_loss) == true or attempts <= 0 do
+    if predicate.(stats) or attempts <= 0 do
       stats
     else
       Process.sleep(5)
-      await_flagged_stats(server, attempts - 1)
+      await_stats(server, predicate, attempts - 1)
     end
   end
 end

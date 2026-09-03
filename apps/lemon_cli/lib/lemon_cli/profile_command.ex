@@ -7,11 +7,12 @@ defmodule LemonCli.ProfileCommand do
   application while still working in the assembled Lemon runtime release.
   """
 
-  alias LemonCore.{NodeRegistry, ProfileStore, RouterBridge}
+  alias LemonCore.{Id, NodeRegistry, ProfileStore, RouterBridge}
 
   @exit_ok 0
   @exit_error 1
   @exit_usage 2
+  @max_control_plane_run_id_bytes 256
 
   @common [json: :boolean, config_path: :string, home_state_dir: :string]
   @profile_fields [
@@ -22,6 +23,21 @@ defmodule LemonCli.ProfileCommand do
     system_prompt: :string,
     node: :string
   ]
+
+  @definite_control_plane_rejection_codes ~w(
+    ALREADY_CONNECTED
+    CONFLICT
+    FORBIDDEN
+    HANDSHAKE_REQUIRED
+    INVALID_PARAMS
+    INVALID_REQUEST
+    METHOD_NOT_FOUND
+    NOT_FOUND
+    NOT_IMPLEMENTED
+    PERMISSION_DENIED
+    RATE_LIMITED
+    UNAUTHORIZED
+  )
 
   @spec run([String.t()]) :: 0 | 1 | 2
   def run(args) do
@@ -174,11 +190,13 @@ defmodule LemonCli.ProfileCommand do
       @exit_ok
     else
       {:ok, _opts, _rest} -> usage_error("Usage: lemon profile chat <id> <message> [options]")
-      {:error, reason} -> operation_error(reason)
+      {:error, reason} -> chat_operation_error(reason)
     end
   end
 
   defp submit_chat(request, profile, opts) do
+    request = ensure_submission_run_id(request)
+
     case RouterBridge.submit_run(request) do
       {:ok, run_id} ->
         {:ok, chat_result(run_id, request, profile)}
@@ -193,24 +211,81 @@ defmodule LemonCli.ProfileCommand do
         params = if opts[:model], do: Map.put(params, "model", opts[:model]), else: params
 
         case control_plane_client().request("profile.chat", params) do
-          {:ok, %{"runId" => run_id} = result} ->
+          {:ok, %{"runId" => run_id} = result} when is_binary(run_id) and run_id != "" ->
             {:ok,
              Map.merge(chat_result(run_id, request, profile), %{
                "sessionKey" => result["sessionKey"] || request.session_key,
                "node" => result["node"] || profile["node"]
              })}
 
-          {:ok, other} ->
-            {:error, {:invalid_control_plane_response, other}}
+          {:ok, _malformed_acknowledgement} ->
+            {:error, {:submission_outcome_unknown, nil}}
 
           {:error, reason} ->
-            {:error, reason}
+            {:error, classify_control_plane_submit_error(reason)}
         end
 
-      {:error, reason} ->
-        {:error, reason}
+      {:error, :outcome_unknown} ->
+        {:error, {:submission_outcome_unknown, request.run_id}}
+
+      {:error, _reason} ->
+        {:error, :submission_rejected}
     end
   end
+
+  defp ensure_submission_run_id(%LemonCore.RunRequest{run_id: run_id} = request)
+       when is_binary(run_id) and run_id != "",
+       do: request
+
+  defp ensure_submission_run_id(%LemonCore.RunRequest{} = request),
+    do: %{request | run_id: Id.run_id()}
+
+  defp classify_control_plane_submit_error({:control_plane_unavailable, _reason}),
+    do: :submission_unavailable
+
+  defp classify_control_plane_submit_error({:unexpected_handshake, _frame}),
+    do: :submission_unavailable
+
+  defp classify_control_plane_submit_error({:control_plane, error}) when is_map(error) do
+    case control_plane_outcome_unknown(error) do
+      {:yes, run_id} ->
+        {:submission_outcome_unknown, run_id}
+
+      :no ->
+        if Map.get(error, "code") in @definite_control_plane_rejection_codes,
+          do: :submission_rejected,
+          else: {:submission_outcome_unknown, nil}
+    end
+  end
+
+  defp classify_control_plane_submit_error(_transport_or_protocol_failure),
+    do: {:submission_outcome_unknown, nil}
+
+  defp control_plane_outcome_unknown(error) do
+    code = Map.get(error, "code")
+    message = Map.get(error, "message")
+    details = Map.get(error, "details")
+
+    cond do
+      code == "UNAVAILABLE" and message == "Profile chat submission outcome is unknown" and
+        is_map(details) and Map.get(details, "code") == "SUBMISSION_OUTCOME_UNKNOWN" ->
+        {:yes, bounded_control_plane_run_id(Map.get(details, "runId"))}
+
+      code == "OUTCOME_UNKNOWN" or
+          message in ["outcome_unknown", "Profile operation failed: :outcome_unknown"] ->
+        {:yes, nil}
+
+      true ->
+        :no
+    end
+  end
+
+  defp bounded_control_plane_run_id(run_id)
+       when is_binary(run_id) and byte_size(run_id) > 0 and
+              byte_size(run_id) <= @max_control_plane_run_id_bytes,
+       do: run_id
+
+  defp bounded_control_plane_run_id(_run_id), do: nil
 
   defp chat_result(run_id, request, profile) do
     %{
@@ -342,6 +417,46 @@ defmodule LemonCli.ProfileCommand do
 
   defp operation_error(reason) do
     IO.puts(:stderr, "Profile operation failed: #{format_reason(reason)}")
+    @exit_error
+  end
+
+  defp chat_operation_error({:submission_outcome_unknown, nil}) do
+    IO.puts(
+      :stderr,
+      "Profile chat submission could not be confirmed and may already be running. " <>
+        "Do not retry automatically; reconcile the profile session first."
+    )
+
+    @exit_error
+  end
+
+  defp chat_operation_error({:submission_outcome_unknown, run_id})
+       when is_binary(run_id) and run_id != "" do
+    IO.puts(
+      :stderr,
+      "Profile chat submission could not be confirmed for run #{run_id}. " <>
+        "It may already be running; do not retry automatically. Reconcile that run first."
+    )
+
+    @exit_error
+  end
+
+  defp chat_operation_error(:submission_rejected) do
+    IO.puts(:stderr, "Profile chat submission was rejected before acceptance.")
+    @exit_error
+  end
+
+  defp chat_operation_error(:submission_unavailable) do
+    IO.puts(
+      :stderr,
+      "Profile chat could not reach the running control plane; nothing was submitted."
+    )
+
+    @exit_error
+  end
+
+  defp chat_operation_error(_reason) do
+    IO.puts(:stderr, "Profile chat submission failed.")
     @exit_error
   end
 

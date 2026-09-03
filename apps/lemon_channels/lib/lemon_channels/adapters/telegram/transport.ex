@@ -13,6 +13,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
 
   alias LemonChannels.BindingResolver
   alias LemonChannels.Cwd
+  alias LemonChannels.SubmissionOutcome
   alias LemonChannels.Telegram.{OffsetStore, PollerLock}
   alias LemonChannels.Telegram.Delivery
   alias LemonChannels.Telegram.TransportShared
@@ -369,6 +370,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
       resolve_model_hint: &resolve_model_hint/4,
       resolve_session_key: &resolve_session_key/4,
       resolve_thinking_hint: &resolve_thinking_hint/3,
+      send_submission_failure: &send_critical_feedback/5,
       send_system_message: &send_system_message/5
     }
   end
@@ -406,13 +408,35 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
             build_session_key(state, inbound, scope)
         end
 
-      if Code.ensure_loaded?(LemonChannels.Runtime) and
-           function_exported?(LemonChannels.Runtime, :cancel_session, 2) do
-        LemonChannels.Runtime.cancel_session(session_key, :user_requested)
-      end
-
       user_msg_id = inbound.meta[:user_msg_id] || parse_int(inbound.message.id)
-      _ = send_system_message(state, chat_id, thread_id, user_msg_id, "Cancelling current run...")
+
+      case LemonChannels.Runtime.cancel_session(session_key, :user_requested) do
+        :ok ->
+          _ =
+            send_system_message(
+              state,
+              chat_id,
+              thread_id,
+              user_msg_id,
+              "Cancelling current run..."
+            )
+
+        {:error, _} = error ->
+          maybe_forget_inbound_dedupe(inbound, error)
+
+          Logger.warning(
+            "telegram cancel unavailable: reason=#{SubmissionOutcome.log_label(error)}"
+          )
+
+          _ =
+            send_critical_feedback(
+              state,
+              chat_id,
+              thread_id,
+              user_msg_id,
+              cancel_failure_message(error)
+            )
+      end
     end
 
     state
@@ -502,6 +526,12 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   end
 
   defp maybe_select_project_for_scope(%ChatScope{} = scope, selector) when is_binary(selector) do
+    with {:ok, project} <- resolve_project_for_scope(scope, selector) do
+      persist_project_for_scope(scope, project)
+    end
+  end
+
+  defp resolve_project_for_scope(%ChatScope{} = scope, selector) when is_binary(selector) do
     sel = String.trim(selector || "")
 
     cond do
@@ -524,12 +554,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
 
         if File.dir?(expanded) do
           id = Path.basename(expanded)
-          root = expanded
-
-          ProjectBindingStore.put_dynamic(id, %{root: root})
-          ProjectBindingStore.put_override(scope, id)
-
-          {:ok, %{id: id, root: root}}
+          {:ok, %{id: id, root: expanded, dynamic?: true}}
         else
           {:error, "Project path does not exist: #{expanded}"}
         end
@@ -542,9 +567,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
             root = Path.expand(root)
 
             if File.dir?(root) do
-              ProjectBindingStore.put_override(scope, id)
-
-              {:ok, %{id: id, root: root}}
+              {:ok, %{id: id, root: root, dynamic?: false}}
             else
               {:error, "Configured project root does not exist: #{root}"}
             end
@@ -553,6 +576,20 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
             {:error, "Unknown project: #{id}"}
         end
     end
+  rescue
+    _ -> {:error, "Failed to select project."}
+  end
+
+  defp persist_project_for_scope(%ChatScope{} = scope, project) when is_map(project) do
+    id = project.id
+    root = project.root
+
+    if project.dynamic? do
+      ProjectBindingStore.put_dynamic(id, %{root: root})
+    end
+
+    ProjectBindingStore.put_override(scope, id)
+    {:ok, %{id: id, root: root}}
   rescue
     _ -> {:error, "Failed to select project."}
   end
@@ -589,8 +626,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   defp handle_new_session(state, inbound, raw_selector) do
     {chat_id, thread_id, user_msg_id} = extract_message_ids(inbound)
 
-    state = MessageBuffer.drop_buffer_for(state, inbound)
-
     if not is_integer(chat_id) do
       state
     else
@@ -601,7 +636,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
       project_result =
         case selector do
           nil -> :noop
-          sel -> maybe_select_project_for_scope(scope, sel)
+          sel -> resolve_project_for_scope(scope, sel)
         end
 
       case project_result do
@@ -634,41 +669,73 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
     chat_id = ids[:chat_id]
     thread_id = ids[:thread_id]
     user_msg_id = ids[:user_msg_id]
-    project = extract_project_info(project_result)
 
-    {previous_generation, _new_generation} = bump_thread_generation(state, chat_id, thread_id)
+    case LemonChannels.Runtime.cancel_session(session_key, :new_session) do
+      :ok ->
+        state = MessageBuffer.drop_buffer_for(state, inbound)
+        project_result = persist_new_session_project(scope, project_result)
+        project = extract_project_info(project_result)
 
-    # Clear selected resume immediately so the next inbound after /new cannot
-    # inherit stale auto-resume state while cleanup runs in the background.
-    _ = safe_delete_selected_resume(state, chat_id, thread_id)
+        {previous_generation, _new_generation} = bump_thread_generation(state, chat_id, thread_id)
 
-    msg =
-      started_new_session_message(
-        state,
-        scope,
-        session_key,
-        project,
-        "Started a new session."
-      )
+        # Clear selected resume only after the router accepts cancellation, so
+        # a failed /new leaves the current local session state intact.
+        _ = safe_delete_selected_resume(state, chat_id, thread_id)
 
-    _ = send_system_message(state, chat_id, thread_id, user_msg_id, msg)
+        msg =
+          started_new_session_message(
+            state,
+            scope,
+            session_key,
+            project,
+            "Started a new session."
+          )
 
-    _ =
-      start_async_task(state, fn ->
-        run_new_session_background_work(
-          state,
-          inbound,
-          scope,
-          session_key,
-          chat_id,
-          thread_id,
-          user_msg_id,
-          previous_generation
+        _ = send_system_message(state, chat_id, thread_id, user_msg_id, msg)
+
+        _ =
+          start_async_task(state, fn ->
+            run_new_session_background_work(
+              state,
+              inbound,
+              scope,
+              session_key,
+              chat_id,
+              thread_id,
+              user_msg_id,
+              previous_generation
+            )
+          end)
+
+        state
+
+      {:error, _} = error ->
+        maybe_forget_inbound_dedupe(inbound, error)
+
+        Logger.warning(
+          "telegram new-session cancellation failed: reason=#{SubmissionOutcome.log_label(error)}"
         )
-      end)
 
-    state
+        _ =
+          send_critical_feedback(
+            state,
+            chat_id,
+            thread_id,
+            user_msg_id,
+            new_session_failure_message(error)
+          )
+
+        state
+    end
   end
+
+  defp persist_new_session_project(_scope, :noop), do: :noop
+
+  defp persist_new_session_project(%ChatScope{} = scope, {:ok, project}) when is_map(project) do
+    persist_project_for_scope(scope, project)
+  end
+
+  defp persist_new_session_project(_scope, result), do: result
 
   defp run_new_session_background_work(
          state,
@@ -680,7 +747,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
          user_msg_id,
          previous_generation
        ) do
-    _ = safe_abort_session(session_key, :new_session)
     _ = safe_delete_session_model(session_key)
     _ = safe_delete_chat_state(session_key)
     _ = safe_delete_selected_resume(state, chat_id, thread_id)
@@ -874,9 +940,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
   defp safe_delete_session_model(session_key),
     do: PerChatState.safe_delete_session_model(session_key)
 
-  defp safe_abort_session(session_key, reason),
-    do: PerChatState.safe_abort_session(session_key, reason)
-
   defp safe_delete_selected_resume(state, chat_id, thread_id),
     do:
       PerChatState.safe_delete_selected_resume(state.account_id || "default", chat_id, thread_id)
@@ -888,6 +951,35 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
         chat_id,
         thread_id
       )
+
+  defp maybe_forget_inbound_dedupe(inbound, error) do
+    if SubmissionOutcome.retry_safe?(error) do
+      (inbound.meta || %{})
+      |> Map.get(:transport_dedupe_refs, [])
+      |> List.wrap()
+      |> Enum.each(&TransportShared.forget_dedupe(:channels, &1))
+    end
+
+    :ok
+  rescue
+    _ -> :ok
+  end
+
+  defp cancel_failure_message(error) do
+    if SubmissionOutcome.uncertain?(error) do
+      "I couldn't confirm whether the cancellation reached the router. Check the run status before trying again."
+    else
+      "I couldn't cancel the current run. Please try again."
+    end
+  end
+
+  defp new_session_failure_message(error) do
+    if SubmissionOutcome.uncertain?(error) do
+      "I couldn't confirm cancellation, so I did not reset the local session. Check the run status before trying /new again."
+    else
+      "I couldn't cancel the current run, so the existing session was left unchanged. Please try /new again."
+    end
+  end
 
   defp safe_sweep_thread_message_indices(state, chat_id, thread_id, max_generation),
     do:
@@ -1010,6 +1102,19 @@ defmodule LemonChannels.Adapters.Telegram.Transport do
         _ = state.api_mod.send_message(state.token, chat_id, text, opts, nil)
         :ok
     end
+  rescue
+    _ -> :ok
+  end
+
+  defp send_critical_feedback(state, chat_id, thread_id, reply_to_message_id, text)
+       when is_integer(chat_id) and is_binary(text) do
+    opts =
+      %{}
+      |> maybe_put("reply_to_message_id", reply_to_message_id)
+      |> maybe_put("message_thread_id", thread_id)
+
+    _ = state.api_mod.send_message(state.token, chat_id, text, opts, nil)
+    :ok
   rescue
     _ -> :ok
   end

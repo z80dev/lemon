@@ -18,6 +18,24 @@ task reattachment in `LemonControlPlane.A2A.*`. Conversation persistence and
 generic wire/client helpers belong to `lemon_core`; agent-facing outbound peer
 actions belong to `lemon_skills`. A2A peers are independent principals and
 must never be treated as named execution nodes or operator WebSocket clients.
+Task terminal transitions are first-writer-wins: accepted cancellation cannot
+be overwritten by a delayed submit/finalize path, and no post-cancel agent
+message or context turn may be recorded. A runner lease remains the terminal
+write owner after submission becomes working; a stale reclaimed runner must
+not publish failure, timeout, or completion over the newer owner. External A2A and `sessions.active`
+errors must use fixed bounded messages; classify failures for logs without
+interpolating raw reasons, paths, credentials, or exception messages.
+A2A submission `:outcome_unknown` must never trigger a retry or a false failed
+task: reconcile the original caller-generated run ID for a bounded interval,
+retain a fixed nonterminal reconciliation status if it remains unknown, and
+reconcile later task reads from durable run state. Ambiguous abort
+acknowledgements do not prove cancellation. Profile chat follows the same
+no-retry rule and returns a bounded uncertain receipt with its pre-generated
+run ID and `retrySafe: false`; profile errors never inspect raw reasons into a
+client response or log.
+An inbound A2A `messageId` is a durable replay key. Repeating it for the same
+authenticated peer returns the original task and never submits a second router
+run; reusing it across peers is a conflict and fails closed.
 
 The control plane provides the external interface for clients (TUI, web, mobile, browser extensions) to:
 
@@ -218,7 +236,7 @@ Supported types: `:string`, `:integer`, `:boolean`, `:map`, `:list`, `:any`.
 | Method | Scope | Description |
 |--------|-------|-------------|
 | `sessions.list` | read | List/search sessions with pagination, agent/title/content query, pin/archive filters, lifecycle metadata, and query-redaction summary |
-| `sessions.active` | read | Get currently active session plus active-run cleanup summary |
+| `sessions.active` | read | Get currently active session plus active-run cleanup summary; returns fixed, reason-free errors when router state cannot be read |
 | `sessions.active.list` | read | List all active sessions plus summary/cleanup flags; includes best-effort `harness` progress (todos/checkpoints/requirements) when coding-agent telemetry is available |
 | `sessions.stats` | read | Exact aggregate durable-session totals with list/search-compatible filters and bounded redacted agent/origin dimensions; never includes keys, titles, prompts, paths, URLs, or credentials |
 | `sessions.preview` | read | Preview truncated session messages plus sensitive-preview redaction, truncation summary, and cleanup flags |
@@ -283,8 +301,11 @@ Profile RPCs are `profiles.list`, `profiles.get`, `profiles.create`,
 `write`, and lifecycle mutations/exports require `admin`. `profile.chat`
 refreshes the router profile cache, submits the stable `agent:<id>:main`
 session through `LemonCore.RouterBridge`, and never echoes prompt text in its
-summary. Export summaries report selected/omitted/redacted counts and never
-claim to include sessions, memory, credentials, or secret values.
+summary. It assigns the run ID before submission so an `:outcome_unknown`
+response can return a bounded, non-retryable reconciliation receipt instead of
+inviting duplicate execution. Export summaries report selected/omitted/redacted
+counts and never claim to include sessions, memory, credentials, or secret
+values.
 
 | Method | Scope | Description |
 |--------|-------|-------------|
@@ -540,7 +561,7 @@ review plans or add a second learning store.
 | `goal.loop.once` | write | Run one preview judge tick for an active goal with cleanup summaries |
 | `goal.loop.start` | write | Start a bounded supervised autonomous goal loop with cleanup summaries; pass `auto: true` to persist opt-in scheduling |
 | `goal.loop.status` | read | Inspect the bounded goal loop and persisted auto state for a session with cleanup summaries |
-| `goal.loop.stop` | write | Stop a bounded supervised autonomous goal loop with cleanup summaries and disable persisted auto scheduling |
+| `goal.loop.stop` | write | Stop a bounded supervised autonomous goal loop, disable persisted auto scheduling, and expose only the bounded router-abort statuses `accepted`, `outcome_unknown`, `unavailable`, `rejected`, or `not_needed` |
 | `goal.clear` | write | Clear the durable goal for a session with cleanup summaries |
 
 ### Wizard (capability-gated)

@@ -20,7 +20,7 @@ defmodule LemonChannels.Adapters.WhatsApp.Transport do
     SessionRouting
   }
 
-  alias LemonChannels.{BindingResolver, GatewayConfig}
+  alias LemonChannels.{BindingResolver, GatewayConfig, SubmissionOutcome}
   alias LemonCore.ChatScope
   alias LemonCore.{InboundMessage, RouterBridge}
 
@@ -310,6 +310,9 @@ defmodule LemonChannels.Adapters.WhatsApp.Transport do
 
         case Inbound.normalize(event) do
           {:ok, inbound} ->
+            meta = inbound.meta || %{}
+            refs = [{jid, message_id} | List.wrap(meta[:transport_dedupe_refs])]
+            inbound = %{inbound | meta: Map.put(meta, :transport_dedupe_refs, refs)}
             callbacks = build_callbacks(state)
             CommandRouter.handle_inbound_message(state, inbound, callbacks)
 
@@ -333,7 +336,6 @@ defmodule LemonChannels.Adapters.WhatsApp.Transport do
   defp build_callbacks(_state) do
     %{
       handle_new_session: fn state, inbound, _args ->
-        state = MessageBuffer.drop_buffer_for(state, inbound)
         peer_id = inbound.peer.id
         thread_id = inbound.peer.thread_id
         scope_key = {peer_id, thread_id}
@@ -352,9 +354,15 @@ defmodule LemonChannels.Adapters.WhatsApp.Transport do
             inbound
           )
 
-        state = %{state | pending_new: pending_new}
-        do_submit_inbound(inbound, state)
-        state
+        candidate_state = %{state | pending_new: pending_new}
+
+        case do_submit_inbound(inbound, candidate_state) do
+          :ok ->
+            MessageBuffer.drop_buffer_for(candidate_state, inbound)
+
+          {:error, _} ->
+            state
+        end
       end,
       handle_model_command: fn state, inbound ->
         text = inbound.message.text || ""
@@ -399,9 +407,22 @@ defmodule LemonChannels.Adapters.WhatsApp.Transport do
         scope = %ChatScope{transport: :whatsapp, chat_id: peer_id, topic_id: nil}
         session_key = SessionRouting.build_session_key(cb_state.account_id, inbound, scope)
 
-        if is_binary(session_key) and session_key != "" do
-          RouterBridge.abort_session(session_key, :user_requested)
+        outcome =
+          if is_binary(session_key) and session_key != "" do
+            RouterBridge.abort_session(session_key, :user_requested)
+          else
+            {:error, :unavailable}
+          end
+
+        case outcome do
+          :ok ->
+            send_transport_notice(cb_state, inbound, "Cancelling current run...")
+
+          {:error, _} = error ->
+            handle_submission_failure(inbound, cb_state, error, :cancel)
         end
+
+        cb_state
       end,
       maybe_mark_new_session_pending: fn state, inbound ->
         peer_id = inbound.peer.id
@@ -436,6 +457,7 @@ defmodule LemonChannels.Adapters.WhatsApp.Transport do
   end
 
   defp do_submit_inbound(%InboundMessage{} = inbound, state) do
+    {dedupe_refs, inbound} = pop_submission_dedupe_refs(inbound)
     peer_id = inbound.peer.id
     thread_id = inbound.peer.thread_id
 
@@ -473,20 +495,75 @@ defmodule LemonChannels.Adapters.WhatsApp.Transport do
         })
       )
 
-    Logger.info(
-      "whatsapp inbound routing: peer=#{peer_id} session_key=#{inspect(session_key)} " <>
-        "agent=#{agent_id}"
-    )
+    case LemonChannels.Runtime.submit_inbound(inbound) do
+      :ok ->
+        # Typing is an acceptance signal, so emit it only after the router has
+        # taken responsibility for the run.
+        Bridge.typing(state.port_server, peer_id, true)
+        :ok
 
-    # Send typing indicator
-    Bridge.typing(state.port_server, peer_id, true)
-
-    LemonChannels.Runtime.submit_inbound(inbound)
+      {:error, _} = error ->
+        handle_submission_failure(dedupe_refs, inbound, state, error, :submit)
+        error
+    end
   rescue
-    e ->
-      Logger.warning(
-        "whatsapp submit_inbound failed: #{Exception.format(:error, e, __STACKTRACE__)}"
-      )
+    _ ->
+      error = {:error, :unavailable}
+      handle_submission_failure(inbound, state, error, :submit)
+      error
+  end
+
+  defp handle_submission_failure(inbound, state, error, context) do
+    {dedupe_refs, inbound} = pop_submission_dedupe_refs(inbound)
+    handle_submission_failure(dedupe_refs, inbound, state, error, context)
+  end
+
+  defp handle_submission_failure(dedupe_refs, inbound, state, error, context) do
+    if SubmissionOutcome.retry_safe?(error) do
+      Enum.each(dedupe_refs, fn
+        {jid, message_id} -> Dedupe.forget(jid, message_id)
+        _ -> :ok
+      end)
+    end
+
+    Logger.warning("whatsapp #{context} failed: reason=#{SubmissionOutcome.log_label(error)}")
+
+    message =
+      case {context, SubmissionOutcome.uncertain?(error)} do
+        {:cancel, true} ->
+          "I couldn't confirm whether cancellation reached the router. Check the run status before trying again."
+
+        {:cancel, false} ->
+          "I couldn't cancel the current run. Please try again."
+
+        {:submit, true} ->
+          "I couldn't confirm whether that request was accepted. Check the run status before retrying."
+
+        {:submit, false} ->
+          "I couldn't queue that request. Please try again."
+      end
+
+    send_transport_notice(state, inbound, message)
+  end
+
+  defp send_transport_notice(state, inbound, text) do
+    Bridge.send_text(state.port_server, %{
+      id: "channel-feedback-#{System.unique_integer([:positive, :monotonic])}",
+      jid: inbound.peer.id,
+      text: text,
+      reply_to: inbound.message.id
+    })
+
+    :ok
+  rescue
+    _ -> :ok
+  end
+
+  defp pop_submission_dedupe_refs(inbound) do
+    meta = inbound.meta || %{}
+
+    {List.wrap(meta[:transport_dedupe_refs]),
+     %{inbound | meta: Map.delete(meta, :transport_dedupe_refs)}}
   end
 
   # ============================================================================

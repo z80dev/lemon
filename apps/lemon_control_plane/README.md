@@ -115,6 +115,21 @@ Agent Card, JSON-RPC, and SSE task surface on port 9901 by default. It is kept
 off the operator control-plane port so peer credentials and exposure policy do
 not become control-plane authorization. See
 [`docs/user-guide/a2a-peers.md`](../../docs/user-guide/a2a-peers.md).
+Accepted cancellation is a terminal, first-writer-wins task transition: a
+delayed submission or run completion cannot revive a canceled task, add an
+agent reply, or increment its context turn count. Router/store failures are
+mapped to fixed bounded A2A error messages; internal reasons, paths, and secret
+values never cross the peer wire. If submission acknowledgement is lost, the
+runner never retries: it reconciles the caller-generated run ID for one bounded
+wait and otherwise leaves the task working with a fixed reconciliation status.
+Later task reads reconcile durable completion through that same run ID. An
+ambiguous cancellation acknowledgement likewise never invents a canceled task.
+
+`profile.chat` also generates its run ID before router submission. A definite
+acknowledgement returns the ordinary success projection; an ambiguous
+acknowledgement returns a bounded `UNAVAILABLE` error containing that run ID,
+the stable profile/session identifiers, and `retrySafe: false`. Raw router
+reasons are neither logged nor returned by the profile methods.
 
 The `/v1` generation endpoints are compatibility adapters, not a separate
 runtime path. They submit through the Lemon router and return `lemon.runId` by
@@ -435,7 +450,7 @@ Each method declares required scopes. A connection must have at least one matchi
 | Method | Scope | Description |
 |--------|-------|-------------|
 | `sessions.list` | read | List/search sessions with lifecycle metadata and pin/archive filters; raw search text is not echoed |
-| `sessions.active` | read | Get currently active session plus active-run cleanup summary |
+| `sessions.active` | read | Get currently active session plus active-run cleanup summary; router unavailability and internal failures use distinct bounded errors without raw reasons |
 | `sessions.active.list` | read | List all active sessions with harness progress plus summary and cleanup flags |
 | `sessions.preview` | read | Preview truncated session messages plus sensitive-preview redaction, truncation summary, and cleanup flags |
 | `session.detail` | read | Deep session/run internals with summary, sensitive preview/run-internal redaction, and explicit opt-ins for full text, raw run events, and run records |
@@ -729,7 +744,7 @@ preserves the profile draft when a plan is refused or stale.
 | `goal.loop.once` | write | Run one preview judge tick for an active goal with cleanup summaries |
 | `goal.loop.start` | write | Start a bounded supervised autonomous goal loop with cleanup summaries; pass `auto: true` to persist opt-in scheduling |
 | `goal.loop.status` | read | Inspect the bounded goal loop and persisted auto state for a session with cleanup summaries |
-| `goal.loop.stop` | write | Stop a bounded supervised autonomous goal loop with cleanup summaries and disable persisted auto scheduling |
+| `goal.loop.stop` | write | Stop a bounded supervised autonomous goal loop, disable persisted auto scheduling, and return only a bounded router-abort status (`accepted`, `outcome_unknown`, `unavailable`, `rejected`, or `not_needed`) |
 | `goal.clear` | write | Clear the durable goal for a session with cleanup summaries |
 
 ## Event System

@@ -18,6 +18,7 @@ defmodule LemonCore do
   - `LemonCore.Telemetry` - Telemetry event helpers
   - `LemonCore.Clock` - Time utilities
   - `LemonCore.Config` - Configuration access
+  - `LemonCore.Contract` - Configured implementation validation
   - `LemonCore.Setup.Readiness` - Shared first-run config/secrets/provider readiness
   """
 end
