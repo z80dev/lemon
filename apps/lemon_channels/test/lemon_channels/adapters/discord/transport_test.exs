@@ -10,26 +10,38 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
   @bot_user_id 1_476_753_643_834_183_690
 
   defmodule FakeRouter do
+    use LemonCore.RouterBridge.Router
+    use LemonCore.RouterBridge.RunOrchestrator
+
     def submit(run_request) do
       send(test_pid(), {:submit_run, run_request})
-      {:ok, "run_discord_dedupe_proof"}
+      :persistent_term.get({__MODULE__, :submit_result}, {:ok, "run_discord_dedupe_proof"})
+    end
+
+    def active_run(session_key) do
+      send(test_pid(), {:active_run, session_key})
+      :persistent_term.get({__MODULE__, :active_run_result}, :none)
     end
 
     def abort_run(run_id, reason) do
       send(test_pid(), {:abort_run, run_id, reason})
-      :ok
+      :persistent_term.get({__MODULE__, :abort_run_result}, :ok)
     end
 
     def keep_run_alive(run_id, decision) do
       send(test_pid(), {:keep_run_alive, run_id, decision})
-      :ok
+      :persistent_term.get({__MODULE__, :keepalive_result}, :ok)
     end
 
     defp test_pid, do: :persistent_term.get({__MODULE__, :test_pid})
   end
 
   defmodule FakeDiscordApi do
-    def create(_channel_id, _params), do: {:ok, %{id: 4444}}
+    def create(channel_id, params) do
+      send(self(), {:discord_create, channel_id, params})
+      {:ok, %{id: 4444}}
+    end
+
     def edit(_channel_id, message_id, _params), do: {:ok, %{id: message_id}}
     def delete(_channel_id, _message_id), do: {:ok, %{}}
 
@@ -747,6 +759,37 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
     end)
   end
 
+  test "uncertain cancel component keeps controls and reports uncertainty" do
+    with_interaction_responder(fn ->
+      with_router_bridge(fn ->
+        :persistent_term.put({FakeRouter, :abort_run_result}, {:error, :outcome_unknown})
+        interaction = component_interaction("lemon:cancel:run_cancel_uncertain")
+        state = %{}
+
+        log =
+          capture_warning_log(fn ->
+            assert {:noreply, ^state} =
+                     Transport.handle_info(
+                       {:discord_event, {:INTERACTION_CREATE, interaction, nil}},
+                       state
+                     )
+          end)
+
+        assert_receive {:abort_run, "run_cancel_uncertain", :user_requested}
+
+        assert_receive {:interaction_response, ^interaction,
+                        %{type: 4, data: %{content: content, flags: 64} = data}}
+
+        assert content =~ "couldn't confirm"
+        assert content =~ "cancellation"
+        refute content =~ "unavailable"
+        refute Map.has_key?(data, :components)
+        assert log =~ "reason=outcome_unknown"
+        refute log =~ "run_cancel_uncertain"
+      end)
+    end)
+  end
+
   test "keepalive components route continue and stop decisions" do
     with_interaction_responder(fn ->
       with_router_bridge(fn ->
@@ -775,6 +818,209 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
 
         assert_receive {:interaction_response, ^cancel_interaction,
                         %{type: 7, data: %{content: "Stopping run."}}}
+      end)
+    end)
+  end
+
+  test "malformed keepalive acknowledgement keeps controls and never logs its payload" do
+    with_interaction_responder(fn ->
+      with_router_bridge(fn ->
+        secret = "router-secret-#{System.unique_integer([:positive])}"
+
+        :persistent_term.put(
+          {FakeRouter, :keepalive_result},
+          {:error, {:unexpected_answer, {:ok, secret}}}
+        )
+
+        interaction = component_interaction("lemon:idle:c:run_keepalive_secret")
+        state = %{}
+
+        log =
+          capture_warning_log(fn ->
+            assert {:noreply, ^state} =
+                     Transport.handle_info(
+                       {:discord_event, {:INTERACTION_CREATE, interaction, nil}},
+                       state
+                     )
+          end)
+
+        assert_receive {:keep_run_alive, "run_keepalive_secret", :continue}
+
+        assert_receive {:interaction_response, ^interaction,
+                        %{type: 4, data: %{content: content, flags: 64} = data}}
+
+        assert content =~ "couldn't confirm"
+        assert content =~ "continuing the run"
+        refute content =~ secret
+        refute Map.has_key?(data, :components)
+        assert log =~ "reason=unexpected_answer"
+        refute log =~ secret
+        refute log =~ "run_keepalive_secret"
+      end)
+    end)
+  end
+
+  test "/cancel and /stop keep transport state when the response API returns another value" do
+    :ok = LemonCore.Dedupe.Ets.init(:lemon_channels_discord_dedupe)
+    _ = :ets.delete_all_objects(:lemon_channels_discord_dedupe)
+    previous_responder = Application.get_env(:lemon_channels, :discord_interaction_responder)
+
+    Application.put_env(:lemon_channels, :discord_interaction_responder, fn _interaction,
+                                                                            _payload ->
+      %{not: :transport_state}
+    end)
+
+    on_exit(fn ->
+      restore_env(:lemon_channels, :discord_interaction_responder, previous_responder)
+    end)
+
+    with_router_bridge(fn ->
+      Enum.each(["cancel", "stop"], fn command ->
+        state = discord_message_state()
+        cancel_interaction = interaction(command, [])
+
+        assert {:noreply, ^state} =
+                 Transport.handle_info(
+                   {:discord_event, {:INTERACTION_CREATE, cancel_interaction, nil}},
+                   state
+                 )
+
+        next_message =
+          discord_message(
+            Integer.to_string(1_503_803_470_493_280_000 + System.unique_integer([:positive])),
+            "<@#{@bot_user_id}> still stateful"
+          )
+
+        assert {:noreply, next_state} =
+                 Transport.handle_info(
+                   {:discord_event, {:MESSAGE_CREATE, next_message, nil}},
+                   state
+                 )
+
+        assert map_size(next_state.buffers) == 1
+      end)
+    end)
+  end
+
+  test "definite submission failure has no success reaction and permits redelivery" do
+    :ok = LemonCore.Dedupe.Ets.init(:lemon_channels_discord_dedupe)
+    _ = :ets.delete_all_objects(:lemon_channels_discord_dedupe)
+
+    with_discord_api(fn ->
+      with_router_bridge(fn ->
+        :persistent_term.put({FakeRouter, :submit_result}, {:error, :unavailable})
+        state = discord_message_state()
+        message_id = 1_503_803_470_493_290_000 + System.unique_integer([:positive])
+        message = discord_message(Integer.to_string(message_id), "<@#{@bot_user_id}> retry me")
+
+        assert {:noreply, buffered} =
+                 Transport.handle_info({:discord_event, {:MESSAGE_CREATE, message, nil}}, state)
+
+        assert [{scope_key, buffer}] = Map.to_list(buffered.buffers)
+
+        assert {:noreply, failed_state} =
+                 Transport.handle_info(
+                   {:debounce_flush, scope_key, buffer.debounce_ref},
+                   buffered
+                 )
+
+        assert_receive {:submit_run, %{prompt: first_prompt}}
+        assert first_prompt == "<@#{@bot_user_id}> retry me"
+        refute_receive {:discord_react, _, ^message_id, _}, 50
+
+        assert_receive {:discord_create, _, %{content: failure_text}}
+        assert failure_text =~ "couldn't queue"
+        refute failure_text =~ "unavailable"
+
+        :persistent_term.put({FakeRouter, :submit_result}, {:ok, "run-after-redelivery"})
+
+        assert {:noreply, redelivered} =
+                 Transport.handle_info(
+                   {:discord_event, {:MESSAGE_CREATE, message, nil}},
+                   failed_state
+                 )
+
+        assert [{scope_key, buffer}] = Map.to_list(redelivered.buffers)
+
+        assert {:noreply, _accepted_state} =
+                 Transport.handle_info(
+                   {:debounce_flush, scope_key, buffer.debounce_ref},
+                   redelivered
+                 )
+
+        assert_receive {:submit_run, %{prompt: redelivered_prompt}}
+        assert redelivered_prompt == "<@#{@bot_user_id}> retry me"
+        assert_receive {:discord_react, _, ^message_id, _}
+      end)
+    end)
+  end
+
+  test "malformed mutation acknowledgement keeps dedupe and suppresses a duplicate run" do
+    :ok = LemonCore.Dedupe.Ets.init(:lemon_channels_discord_dedupe)
+    _ = :ets.delete_all_objects(:lemon_channels_discord_dedupe)
+
+    with_discord_api(fn ->
+      with_router_bridge(fn ->
+        :persistent_term.put(
+          {FakeRouter, :submit_result},
+          {:error, {:unexpected_answer, {:ok, 123}}}
+        )
+
+        state = discord_message_state()
+        message_id = 1_503_803_470_493_291_000 + System.unique_integer([:positive])
+        prompt = "<@#{@bot_user_id}> once only"
+        message = discord_message(Integer.to_string(message_id), prompt)
+
+        assert {:noreply, buffered} =
+                 Transport.handle_info({:discord_event, {:MESSAGE_CREATE, message, nil}}, state)
+
+        assert [{scope_key, buffer}] = Map.to_list(buffered.buffers)
+
+        assert {:noreply, failed_state} =
+                 Transport.handle_info(
+                   {:debounce_flush, scope_key, buffer.debounce_ref},
+                   buffered
+                 )
+
+        assert_receive {:submit_run, %{prompt: ^prompt}}
+        refute_receive {:discord_react, _, ^message_id, _}, 50
+
+        assert_receive {:discord_create, _, %{content: failure_text}}
+        assert failure_text =~ "couldn't confirm"
+
+        :persistent_term.put({FakeRouter, :submit_result}, {:ok, "would-duplicate"})
+
+        assert {:noreply, ^failed_state} =
+                 Transport.handle_info(
+                   {:discord_event, {:MESSAGE_CREATE, message, nil}},
+                   failed_state
+                 )
+
+        refute_receive {:submit_run, _}, 100
+      end)
+    end)
+  end
+
+  test "failed slash submission reports failure instead of queued" do
+    with_interaction_responder(fn ->
+      with_router_bridge(fn ->
+        :persistent_term.put({FakeRouter, :submit_result}, {:error, :rejected})
+        slash = interaction("lemon", option("prompt", "do not lose this"))
+        state = discord_message_state()
+
+        assert {:noreply, ^state} =
+                 Transport.handle_info(
+                   {:discord_event, {:INTERACTION_CREATE, slash, nil}},
+                   state
+                 )
+
+        assert_receive {:submit_run, %{prompt: "do not lose this"}}
+
+        assert_receive {:interaction_response, ^slash,
+                        %{type: 4, data: %{content: failure_text, flags: 64}}}
+
+        assert failure_text =~ "couldn't queue"
+        refute failure_text =~ "Queued"
       end)
     end)
   end
@@ -1229,6 +1475,10 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
       fun.()
     after
       :persistent_term.erase({FakeRouter, :test_pid})
+      :persistent_term.erase({FakeRouter, :submit_result})
+      :persistent_term.erase({FakeRouter, :active_run_result})
+      :persistent_term.erase({FakeRouter, :abort_run_result})
+      :persistent_term.erase({FakeRouter, :keepalive_result})
 
       if previous == nil do
         Application.delete_env(:lemon_core, :router_bridge)
@@ -1266,6 +1516,17 @@ defmodule LemonChannels.Adapters.Discord.TransportTest do
 
   defp restore_env(app, key, nil), do: Application.delete_env(app, key)
   defp restore_env(app, key, value), do: Application.put_env(app, key, value)
+
+  defp capture_warning_log(fun) when is_function(fun, 0) do
+    previous_level = Logger.level()
+    Logger.configure(level: :warning)
+
+    try do
+      capture_log([level: :warning], fun)
+    after
+      Logger.configure(level: previous_level)
+    end
+  end
 
   defp eventually(fun, attempts \\ 20)
 

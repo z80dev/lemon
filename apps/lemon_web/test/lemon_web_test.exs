@@ -262,6 +262,108 @@ defmodule LemonWebTest do
     assert has_element?(view, ~s|input[name="chat[mode]"][value="collect"]|)
   end
 
+  test "initial router uncertainty, errors, and exits render an unavailable state" do
+    parent = self()
+    secret = "WEB_INITIAL_ROUTER_SECRET_#{System.unique_integer([:positive])}"
+    private_path = "/private/web/#{secret}"
+
+    Application.put_env(:lemon_web, :setup_readiness_fun, fn -> readiness_state(true) end)
+
+    Application.put_env(:lemon_web, :submit_run_fun, fn request ->
+      send(parent, {:unexpected_unavailable_submit, request})
+      {:ok, "must-not-submit"}
+    end)
+
+    faults = [
+      fn _session_key -> {:error, {:router_bug, %{secret: secret, path: private_path}}} end,
+      fn _session_key -> {:unexpected_router_answer, %{secret: secret, path: private_path}} end,
+      fn _session_key -> exit({:router_exit, %{secret: secret, path: private_path}}) end
+    ]
+
+    for {fault, index} <- Enum.with_index(faults) do
+      Application.put_env(:lemon_web, :active_run_fun, fault)
+
+      {:ok, view, html} =
+        live(build_conn(), "/sessions/agent:web_unavailable_#{index}:main")
+
+      assert html =~ "Run status unavailable"
+      assert html =~ "Check status before sending another message"
+      assert has_element?(view, "#run-status-unavailable")
+      assert has_element?(view, "#chat_prompt[disabled]")
+      assert has_element?(view, "#chat-form button[type=submit][disabled]", "Check status first")
+      assert has_element?(view, ~s|input[name="chat[mode]"][value="collect"]|)
+      refute has_element?(view, ~s|input[type="file"]|)
+      refute html =~ secret
+      refute html =~ private_path
+
+      rendered =
+        render_submit(view, "submit", %{
+          "chat" => %{"prompt" => "must stay blocked", "mode" => "collect"}
+        })
+
+      assert rendered =~ "must confirm this session&#39;s run status"
+      refute rendered =~ secret
+      refute rendered =~ private_path
+      refute_receive {:unexpected_unavailable_submit, _request}
+    end
+  end
+
+  test "active controls preserve last known state and draft when recheck fails or exits" do
+    parent = self()
+    secret = "WEB_ACTIVE_ROUTER_SECRET_#{System.unique_integer([:positive])}"
+    private_path = "/private/web-active/#{secret}"
+    {:ok, lookup} = Agent.start_link(fn -> {:ok, "run-last-known"} end)
+
+    Application.put_env(:lemon_web, :setup_readiness_fun, fn -> readiness_state(true) end)
+    Application.put_env(:lemon_web, :active_run_fun, fn _ -> Agent.get(lookup, & &1) end)
+
+    Application.put_env(:lemon_web, :submit_run_fun, fn request ->
+      send(parent, {:unexpected_active_submit, request})
+      {:ok, "must-not-submit"}
+    end)
+
+    {:ok, view, _html} = live(build_conn(), "/sessions/agent:web_last_known:main")
+    assert has_element?(view, "#active-run-controls")
+    assert has_element?(view, "#active-run-status", "Run active")
+
+    Agent.update(lookup, fn _ ->
+      {:error, {:router_bug, %{secret: secret, path: private_path}}}
+    end)
+
+    rendered =
+      render_submit(view, "submit", %{
+        "chat" => %{"prompt" => "preserve this draft", "mode" => "redirect"}
+      })
+
+    assert rendered =~ "could not confirm whether that run is still active"
+    assert rendered =~ "preserve this draft"
+    refute rendered =~ "already finished"
+    assert has_element?(view, "#active-run-controls")
+    assert has_element?(view, "#active-run-status", "Run active")
+    refute rendered =~ secret
+    refute rendered =~ private_path
+    refute_receive {:unexpected_active_submit, _request}
+
+    Agent.update(lookup, fn _ ->
+      {:exit, {:router_exit, %{secret: secret, path: private_path}}}
+    end)
+
+    Application.put_env(:lemon_web, :active_run_fun, fn _session_key ->
+      case Agent.get(lookup, & &1) do
+        {:exit, reason} -> exit(reason)
+        result -> result
+      end
+    end)
+
+    refreshed = render_click(view, "refresh-run-status")
+
+    assert refreshed =~ "last known state is unchanged"
+    assert has_element?(view, "#active-run-controls")
+    assert has_element?(view, "#active-run-status", "Run active")
+    refute refreshed =~ secret
+    refute refreshed =~ private_path
+  end
+
   test "active control refusal never renders internal error details" do
     secret = "internal-node-token-#{System.unique_integer([:positive])}"
 

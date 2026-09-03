@@ -7,6 +7,8 @@ defmodule LemonChannels.Adapters.Telegram.TransportParallelSessionsTest do
   alias LemonChannels.Telegram.{ResumeIndexStore, StateStore}
 
   defmodule ParallelTestRouter do
+    use LemonCore.RouterBridge.Router
+    use LemonCore.RouterBridge.RunOrchestrator
     @busy_sessions_key {__MODULE__, :busy_sessions}
 
     def handle_inbound(msg) do
@@ -25,6 +27,8 @@ defmodule LemonChannels.Adapters.Telegram.TransportParallelSessionsTest do
 
       {:ok, "run_#{System.unique_integer([:positive])}"}
     end
+
+    def abort(_session_key, _reason), do: :ok
 
     def session_busy?(session_key) do
       :persistent_term.get(@busy_sessions_key, MapSet.new())
@@ -122,10 +126,11 @@ defmodule LemonChannels.Adapters.Telegram.TransportParallelSessionsTest do
     :persistent_term.put({ParallelTestRouter, :pid}, self())
     ParallelMockAPI.register_test(self())
 
-    LemonCore.RouterBridge.configure(
-      router: ParallelTestRouter,
-      run_orchestrator: ParallelTestRouter
-    )
+    :ok =
+      LemonCore.RouterBridge.configure(
+        router: ParallelTestRouter,
+        run_orchestrator: ParallelTestRouter
+      )
 
     ParallelTestRouter.clear_busy_sessions()
 
@@ -233,10 +238,10 @@ defmodule LemonChannels.Adapters.Telegram.TransportParallelSessionsTest do
 
     # The user's message ID should be stored in telegram_msg_session for reply routing
     # (reactions are set on the user's message, not on a separate progress message)
-    stored_session =
-      ResumeIndexStore.get_session("default", chat_id, nil, user_msg_id1, generation: 0)
-
-    assert stored_session == fork_session_key
+    assert eventually(fn ->
+             ResumeIndexStore.get_session("default", chat_id, nil, user_msg_id1, generation: 0) ==
+               fork_session_key
+           end)
 
     # Reply to the original user message should route to the forked session
     ParallelMockAPI.set_updates([reply_update(chat_id, user_msg_id2, "followup", user_msg_id1)])

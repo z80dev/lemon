@@ -81,7 +81,7 @@ live "/sessions/:session_key", SessionLive, :show  # Uses the provided session k
 - `:prompt` - Current textarea value
 - `:messages` - List of message maps (max 250, newest kept on overflow)
 - `:last_run_id` - Tracks current run for delta aggregation
-- `:run_status` - `:idle`, `:running`, or `:stopping` for active-run controls
+- `:run_status` - `:idle`, `:running`, `:stopping`, or `:unavailable` for active-run controls
 - `:control_mode` - `:followup`, `:steer`, or `:redirect` while a run is active
 - `:control_notice` - Bounded success/refusal feedback; never copy raw runtime
   error terms into this assign
@@ -108,6 +108,9 @@ downloads, and operator JSON-RPC must remain redacted.
 Every mount also reconciles its active run through
 `LemonCore.RouterBridge.active_run/1`. Follow-up, steer, and redirect are shown
 only for an eligible active run and recheck that read model at submit time.
+Only an exact `:none` response means idle. An initial error, unexpected answer,
+exception, or exit renders an explicit disabled unavailable state; a later
+lookup failure preserves the last known running/stopping state and draft.
 Active guidance is text-only and bounded by the shared named-node control-text
 limit. A successful router submission keeps `:last_run_id` pointed at the
 original active run (the returned submission ID is not a stop target); a stale

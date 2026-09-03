@@ -9,6 +9,12 @@ defmodule LemonCore.RunStore do
   @spec get(binary()) :: term()
   def get(run_id), do: Store.get_run(run_id)
 
+  @doc """
+  Fetch a run without treating an unavailable store as a missing record.
+  """
+  @spec fetch(binary()) :: {:ok, map() | nil} | {:error, :store_unavailable}
+  def fetch(run_id), do: Store.fetch_run(run_id)
+
   @spec append_event(term(), term()) :: :ok | {:error, term()}
   def append_event(run_id, event), do: Store.append_run_event(run_id, event)
 

@@ -134,6 +134,17 @@ defmodule LemonCore.Store.Backend do
   @callback delete(state(), table(), key()) :: {:ok, state()}
 
   @doc """
+  Conditionally deletes several exact snapshots as one backend operation.
+
+  Implementations that cannot provide an all-or-nothing transaction must
+  validate every snapshot first, delete in caller-provided order, and return
+  the first failure. Callers can then place their durable execution fence last
+  so a partial failure cannot authorize duplicate work.
+  """
+  @callback compare_and_delete_many(state(), [{table(), key(), value()}]) ::
+              {:ok, state()} | {:error, :mismatch | error_reason(), state()}
+
+  @doc """
   List all key-value pairs in a table.
 
   Returns `{:ok, [{key, value}], state}`, or `{:ok, [], state}` for a table that
@@ -170,5 +181,5 @@ defmodule LemonCore.Store.Backend do
   """
   @callback ping(state()) :: {:ok, state()} | {:error, error_reason()}
 
-  @optional_callbacks list_recent: 3, ping: 1
+  @optional_callbacks list_recent: 3, ping: 1, compare_and_delete_many: 2
 end

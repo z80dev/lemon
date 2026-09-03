@@ -68,6 +68,7 @@ defmodule LemonChannels.PortableCommand do
   end
 
   defp active_line({:ok, run_id}), do: "Run: active (#{short_id(run_id)})"
+  defp active_line({:error, _reason}), do: "Run: unknown (router unavailable)"
   defp active_line(_), do: "Run: idle"
 
   defp recent_line({run_id, run}) when is_map(run) do

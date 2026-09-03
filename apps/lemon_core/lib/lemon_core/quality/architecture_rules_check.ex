@@ -719,7 +719,10 @@ defmodule LemonCore.Quality.ArchitectureRulesCheck do
     files =
       root
       |> source_files(["apps/*/lib/**/*.ex"])
-      |> Enum.reject(&(Path.basename(&1) == "architecture_rules_check.ex"))
+      |> Enum.reject(
+        &(Path.relative_to(&1, root) ==
+            "apps/lemon_core/lib/lemon_core/quality/architecture_rules_check.ex")
+      )
 
     StoreTableOwnershipCheck.issues(root, files)
   end

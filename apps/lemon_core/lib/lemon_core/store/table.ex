@@ -72,7 +72,16 @@ defmodule LemonCore.Store.Table do
 
   @doc "Builds and validates the table declarations for `owner`."
   @spec declare!(module(), keyword()) :: [t()]
-  def declare!(owner, tables) when is_atom(owner) and is_list(tables) do
+  def declare!(owner, _tables) when not is_atom(owner) or is_nil(owner) do
+    raise ArgumentError, "table owner must be a module, got #{inspect(owner)}"
+  end
+
+  def declare!(owner, tables) when not is_list(tables) do
+    raise ArgumentError,
+          "#{inspect(owner)}: tables must be a keyword list, got #{inspect(tables)}"
+  end
+
+  def declare!(owner, tables) do
     if tables == [] do
       raise ArgumentError, "#{inspect(owner)} declares no tables"
     end
@@ -101,7 +110,18 @@ defmodule LemonCore.Store.Table do
   end
 
   defp build!(owner, name, opts) do
-    case Keyword.keys(opts) -- @options do
+    keys = Keyword.keys(opts)
+
+    case keys -- Enum.uniq(keys) do
+      [] ->
+        :ok
+
+      duplicates ->
+        raise ArgumentError,
+              "#{inspect(owner)}.#{name}: duplicate options #{inspect(Enum.uniq(duplicates))}"
+    end
+
+    case Enum.uniq(keys) -- @options do
       [] ->
         :ok
 
@@ -133,6 +153,28 @@ defmodule LemonCore.Store.Table do
        do: [expires_at: field]
 
   defp retention!(owner, name, retention) when is_list(retention) do
+    keys = Keyword.keys(retention)
+
+    case keys -- Enum.uniq(keys) do
+      [] ->
+        :ok
+
+      duplicates ->
+        raise ArgumentError,
+              "#{inspect(owner)}.#{name}: retention has duplicate options " <>
+                inspect(Enum.uniq(duplicates))
+    end
+
+    case Enum.uniq(keys) -- [:max_age_ms, :timestamp] do
+      [] ->
+        :ok
+
+      unsupported ->
+        raise ArgumentError,
+              "#{inspect(owner)}.#{name}: retention has unsupported options " <>
+                inspect(unsupported)
+    end
+
     max_age_ms = Keyword.get(retention, :max_age_ms)
     timestamp = Keyword.get(retention, :timestamp)
 
@@ -143,7 +185,12 @@ defmodule LemonCore.Store.Table do
     end
 
     unless (is_atom(timestamp) and not is_nil(timestamp)) or
-             match?({module, function} when is_atom(module) and is_atom(function), timestamp) do
+             match?(
+               {module, function}
+               when is_atom(module) and not is_nil(module) and is_atom(function) and
+                      not is_nil(function),
+               timestamp
+             ) do
       raise ArgumentError,
             "#{inspect(owner)}.#{name}: retention :timestamp must be an atom field or " <>
               "{module, function}, got #{inspect(timestamp)}"

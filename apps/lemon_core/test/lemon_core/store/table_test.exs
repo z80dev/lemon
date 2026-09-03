@@ -44,6 +44,14 @@ defmodule LemonCore.Store.TableTest do
   end
 
   test "declarations reject ambiguous or unsupported metadata" do
+    assert_raise ArgumentError, ~r/table owner must be a module/, fn ->
+      Table.declare!(nil, plain: [])
+    end
+
+    assert_raise ArgumentError, ~r/tables must be a keyword list/, fn ->
+      Table.declare!(DeclaredStore, :plain)
+    end
+
     assert_raise ArgumentError, ~r/declares no tables/, fn ->
       Table.declare!(DeclaredStore, [])
     end
@@ -54,6 +62,10 @@ defmodule LemonCore.Store.TableTest do
 
     assert_raise ArgumentError, ~r/unknown options \[:ttl\]/, fn ->
       Table.declare!(DeclaredStore, bad: [ttl: 1])
+    end
+
+    assert_raise ArgumentError, ~r/duplicate options \[:cached\]/, fn ->
+      Table.declare!(DeclaredStore, bad: [cached: true, cached: false])
     end
 
     assert_raise ArgumentError, ~r/cached must be a boolean/, fn ->
@@ -69,6 +81,26 @@ defmodule LemonCore.Store.TableTest do
                  fn ->
                    Table.declare!(DeclaredStore,
                      bad: [retention: [max_age_ms: 1, timestamp: "created"]]
+                   )
+                 end
+
+    assert_raise ArgumentError, ~r/retention has unsupported options \[:expires_at\]/, fn ->
+      Table.declare!(DeclaredStore,
+        bad: [retention: [max_age_ms: 1, timestamp: :created, expires_at: :expires_at]]
+      )
+    end
+
+    assert_raise ArgumentError, ~r/retention has duplicate options \[:timestamp\]/, fn ->
+      Table.declare!(DeclaredStore,
+        bad: [retention: [max_age_ms: 1, timestamp: :created, timestamp: :updated]]
+      )
+    end
+
+    assert_raise ArgumentError,
+                 ~r/:timestamp must be an atom field or \{module, function\}/,
+                 fn ->
+                   Table.declare!(DeclaredStore,
+                     bad: [retention: [max_age_ms: 1, timestamp: {nil, nil}]]
                    )
                  end
 

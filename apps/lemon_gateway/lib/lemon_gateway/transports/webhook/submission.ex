@@ -31,6 +31,7 @@ defmodule LemonGateway.Transports.Webhook.Submission do
     request_metadata_fun = Keyword.fetch!(opts, :request_metadata_fun)
     default_callback_wait_timeout_ms = Keyword.fetch!(opts, :default_callback_wait_timeout_ms)
     run_id = Keyword.fetch!(opts, :run_id)
+    replay_identity = Keyword.get(opts, :replay_identity)
 
     session_key = resolve_session_key(integration)
     mode = resolve_mode(integration, webhook_config)
@@ -75,6 +76,7 @@ defmodule LemonGateway.Transports.Webhook.Submission do
           queue_mode: resolve_queue_mode(integration),
           cwd: Request.normalize_blank(Request.fetch(integration, :cwd)),
           meta: %{
+            router_replay_identity: replay_identity,
             webhook: %{
               integration_id: integration_id,
               metadata: normalized.metadata,

@@ -9,6 +9,20 @@ defmodule LemonGateway.Transports.Webhook.Response do
 
   @spec response_for_run(map(), keyword()) ::
           {:ok, integer(), map()} | {:error, :run_timeout | term()}
+  def response_for_run(%{submission_status: :outcome_unknown} = run_ctx, _opts) do
+    cleanup_unknown_sync_subscription(run_ctx)
+
+    payload = %{
+      run_id: run_ctx.run_id,
+      session_key: run_ctx.session_key,
+      mode: Atom.to_string(run_ctx.mode),
+      status: "outcome_unknown",
+      retry_safe: false
+    }
+
+    {:ok, 200, maybe_put(payload, :callback, run_ctx.callback_status)}
+  end
+
   def response_for_run(%{mode: :sync} = run_ctx, _opts) do
     with_sync_subscription(run_ctx, fn ->
       case wait_for_run_completion(run_ctx.run_id, run_ctx.timeout_ms, subscribe?: false) do
@@ -194,6 +208,14 @@ defmodule LemonGateway.Transports.Webhook.Response do
   end
 
   defp with_sync_subscription(_run_ctx, callback), do: callback.()
+
+  defp cleanup_unknown_sync_subscription(%{mode: :sync, sync_topic: topic})
+       when is_binary(topic) do
+    _ = LemonCore.Bus.unsubscribe(topic)
+    :ok
+  end
+
+  defp cleanup_unknown_sync_subscription(_run_ctx), do: :ok
 
   defp maybe_send_callback(nil, _payload, _timeout_ms), do: nil
   defp maybe_send_callback("", _payload, _timeout_ms), do: nil

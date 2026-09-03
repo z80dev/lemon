@@ -242,7 +242,7 @@ defmodule LemonBrowser.CloudSession do
   end
 
   defp reset_idle_timer(state) do
-    if is_reference(state.idle_timer), do: Process.cancel_timer(state.idle_timer)
+    _ = Process.cancel_timer(state.idle_timer)
     %{state | idle_timer: schedule_idle(state.idle_timeout_ms)}
   end
 

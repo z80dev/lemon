@@ -18,6 +18,12 @@ running that code on a self-hosted machine would be an avoidable host-security
 risk. Other workflows that need macOS/Windows, publishing credentials, GitHub
 Pages deployment, or live-model secrets remain on their existing hosted paths.
 
+The reusable workflow pins `LANG` and `LC_ALL` to `C.UTF-8` because the runner's
+inherited locale is not part of its contract and Lemon deliberately tests
+Unicode paths. It also installs Bun in the umbrella test job: the control-plane
+wire tests compile and execute the real TUI client rather than using a protocol
+stub.
+
 ## Manual run
 
 From an authenticated checkout:

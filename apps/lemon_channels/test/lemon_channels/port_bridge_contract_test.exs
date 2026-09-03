@@ -5,6 +5,7 @@ defmodule LemonChannels.PortBridgeContractTest do
   alias LemonChannels.Adapters.Xmtp.PortServer, as: XmtpPortServer
 
   @moduletag :tmp_dir
+  @fixture_start_timeout 30_000
 
   @bridges [
     %{
@@ -75,11 +76,17 @@ defmodule LemonChannels.PortBridgeContractTest do
 
   test "shared parser keeps adapter-specific event and error envelopes", %{tmp_dir: tmp_dir} do
     if System.find_executable("node") do
+      startup_marker_path = Path.join(tmp_dir, "bridge_parser_started.txt")
       script_path = Path.join(tmp_dir, "bridge_parser_fixture.mjs")
-      :ok = File.write(script_path, parser_fixture_script())
+      :ok = File.write(script_path, parser_fixture_script(startup_marker_path))
 
       Enum.each(@bridges, fn bridge ->
         with_bridge(bridge, script_path, fn pid ->
+          assert_receive {ready_event_tag, %{"type" => "bridge_test_ready"}},
+                         @fixture_start_timeout
+
+          assert ready_event_tag == bridge.event_tag
+
           bridge.module.command(pid, %{op: "contract_probe", adapter: bridge.label})
 
           assert_receive {event_tag,
@@ -131,7 +138,13 @@ defmodule LemonChannels.PortBridgeContractTest do
 
         counter_path = Path.join(bridge_dir, "bridge_start_count.txt")
         script_path = Path.join(bridge_dir, "bridge_restart_fixture.mjs")
-        :ok = File.write(script_path, restart_fixture_script(counter_path))
+
+        # One deliberately slow first boot proves that response deadlines begin
+        # at fixture readiness while the immediately queued command is preserved.
+        startup_delay_ms = if bridge.label == "xmtp", do: 2_500, else: 0
+
+        :ok =
+          File.write(script_path, restart_fixture_script(counter_path, startup_delay_ms))
 
         with_bridge(bridge, script_path, fn pid ->
           bridge.module.command(pid, %{
@@ -139,27 +152,48 @@ defmodule LemonChannels.PortBridgeContractTest do
             "identity" => "test-#{bridge.label}"
           })
 
-          assert_receive {event_tag,
-                          %{"type" => "bridge_test_connect", "generation" => first_generation}},
-                         2_000
+          assert_receive {ready_event_tag,
+                          %{
+                            "type" => "bridge_test_ready",
+                            "generation" => first_generation
+                          }},
+                         @fixture_start_timeout
 
-          assert event_tag == bridge.event_tag
+          assert ready_event_tag == bridge.event_tag
 
-          assert_receive {event_tag, %{"type" => "error", "message" => exit_message}},
-                         4_000
-
-          assert event_tag == bridge.event_tag
-          assert exit_message == "#{bridge.label} bridge exited"
-
-          assert_receive {event_tag,
+          assert_receive {connect_event_tag,
                           %{
                             "type" => "bridge_test_connect",
+                            "generation" => ^first_generation
+                          }},
+                         2_000
+
+          assert connect_event_tag == bridge.event_tag
+
+          assert_receive {exit_event_tag, %{"type" => "error", "message" => exit_message}},
+                         4_000
+
+          assert exit_event_tag == bridge.event_tag
+          assert exit_message == "#{bridge.label} bridge exited"
+
+          assert_receive {restart_ready_event_tag,
+                          %{
+                            "type" => "bridge_test_ready",
                             "generation" => second_generation
                           }},
-                         8_000
+                         @fixture_start_timeout
 
-          assert event_tag == bridge.event_tag
+          assert restart_ready_event_tag == bridge.event_tag
           assert second_generation == first_generation + 1
+
+          assert_receive {replay_event_tag,
+                          %{
+                            "type" => "bridge_test_connect",
+                            "generation" => ^second_generation
+                          }},
+                         2_000
+
+          assert replay_event_tag == bridge.event_tag
         end)
       end)
     else
@@ -178,12 +212,22 @@ defmodule LemonChannels.PortBridgeContractTest do
     end
   end
 
-  defp parser_fixture_script do
+  defp parser_fixture_script(startup_marker_path) do
     """
     #!/usr/bin/env node
+    import fs from "node:fs";
     import readline from "node:readline";
 
+    const startupMarkerPath = #{inspect(startup_marker_path)};
     const emit = (payload) => process.stdout.write(JSON.stringify(payload) + "\\n");
+
+    // Make one fixture boot exceed the former response timeout. Port.open/2
+    // confirms the OS process exists, not that Node has installed its reader.
+    if (!fs.existsSync(startupMarkerPath)) {
+      fs.writeFileSync(startupMarkerPath, "started");
+      await new Promise((resolve) => setTimeout(resolve, 2500));
+    }
+
     const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
 
     rl.on("line", (line) => {
@@ -192,10 +236,12 @@ defmodule LemonChannels.PortBridgeContractTest do
       process.stdout.write("[]\\n");
       emit({ type: "bridge_contract", op: command.op, adapter: command.adapter });
     });
+
+    emit({ type: "bridge_test_ready" });
     """
   end
 
-  defp restart_fixture_script(counter_path) do
+  defp restart_fixture_script(counter_path, startup_delay_ms) do
     """
     #!/usr/bin/env node
     import fs from "node:fs";
@@ -212,6 +258,14 @@ defmodule LemonChannels.PortBridgeContractTest do
     fs.writeFileSync(counterPath, String(generation));
 
     const emit = (payload) => process.stdout.write(JSON.stringify(payload) + "\\n");
+    const startupDelayMs = #{startup_delay_ms};
+
+    // Model a cold Node startup that is slower than the command-response timeout.
+    // The bridge pipe may accept a command before the fixture installs its reader.
+    if (generation === 1 && startupDelayMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, startupDelayMs));
+    }
+
     const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
 
     rl.on("line", (line) => {
@@ -224,10 +278,12 @@ defmodule LemonChannels.PortBridgeContractTest do
       }
 
       if (command?.op === "connect") {
-        emit({ type: "bridge_test_connect", generation });
-        process.exit(0);
+        const event = JSON.stringify({ type: "bridge_test_connect", generation }) + "\\n";
+        process.stdout.write(event, () => process.exit(0));
       }
     });
+
+    emit({ type: "bridge_test_ready", generation });
     """
   end
 end

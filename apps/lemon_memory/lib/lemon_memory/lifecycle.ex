@@ -200,7 +200,7 @@ defmodule LemonMemory.Lifecycle do
 
   defp provenance(%Document{} = doc) do
     if kind(doc) == "learned_source" do
-      meta = if is_map(doc.meta), do: doc.meta, else: %{}
+      meta = doc.meta
       source_digest = valid_digest_or_nil(map_value(meta, "source_digest"))
       entries = map_value(meta, "source_provenance")
 

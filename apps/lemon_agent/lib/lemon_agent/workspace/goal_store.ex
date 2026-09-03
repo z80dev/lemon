@@ -11,7 +11,7 @@ defmodule LemonAgent.Workspace.GoalStore do
   @table :goals
   @statuses ~w(active paused completed)
   @loop_actions ~w(continue done blocked needs_input)
-  @loop_statuses ~w(running stopped finished limit_reached error)
+  @loop_statuses ~w(running reconciling stopped finished limit_reached error)
   @loop_auto_policies ~w(pause continue_once needs_input)
 
   @spec set(binary(), binary(), keyword()) :: {:ok, map()} | {:error, term()}
@@ -186,6 +186,8 @@ defmodule LemonAgent.Workspace.GoalStore do
               |> Map.put("updatedAtMs", now)
               |> maybe_put("lastError", string_opt(opts[:error]))
               |> maybe_put("lastRunId", string_opt(opts[:run_id]) || goal.last_run_id)
+              |> maybe_put("abortAttempted", opts[:abort_attempted])
+              |> maybe_put("abortResult", string_opt(opts[:abort_result]))
               |> maybe_started_at(status, now)
               |> maybe_stopped_at(status, now)
 

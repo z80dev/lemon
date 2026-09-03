@@ -5,6 +5,7 @@ This is the **base app** of the Lemon umbrella. All other apps depend on it. It 
 ## Purpose and Responsibilities
 
 - **Configuration management** - TOML-based config loading, caching, validation, and hot reloading
+- **Configured implementation validation** - Shared loadability and required-callback checks for behaviour-injected modules
 - **First-run readiness** - Shared read-only config/secrets/provider/model readiness for all clients
 - **Secrets management** - Encrypted storage with AES-256-GCM, keychain integration, and bounded read-only external sources
 - **Storage backends** - Pluggable storage (ETS, SQLite, JSONL) for state persistence
@@ -31,6 +32,7 @@ This is the **base app** of the Lemon umbrella. All other apps depend on it. It 
 |--------|---------|
 | `LemonCore` | Main module with module list |
 | `LemonCore.Config` | TOML config facade; delegates to `LemonCore.Config.Modular` for parsing/resolution and converts output into the legacy struct shape |
+| `LemonCore.Contract` | Shared loadability and required-callback validation for behaviour-injected modules |
 | `LemonCore.Config.Modular` | Canonical modular config loader with typed sub-structs per section (sole parser/resolver for runtime config semantics); `validate_settings/1` validates an already-decoded merged candidate before comment-preserving editors replace a live file |
 | `LemonCore.ConfigCache` | ETS-backed config cache with mtime-based invalidation |
 | `LemonCore.ConfigReloader` | Hot reload orchestrator with diff computation and Bus broadcast |
@@ -47,7 +49,7 @@ This is the **base app** of the Lemon umbrella. All other apps depend on it. It 
 | `LemonCore.Secrets.Keychain` | macOS keychain integration for master key storage |
 | `LemonCore.Secrets.MasterKey` | Master key resolution (keychain first, then env var) |
 | `LemonCore.OAuth.LocalCallbackListener` | Caller-owned one-shot localhost OAuth callback listener; monitors its listener manager so early failure returns immediately instead of consuming the authorization timeout |
-| `LemonCore.Store` | Storage GenServer with pluggable backends, `put_new/3` claims, serialized `take/2`, and exact-value `compare_and_swap/4` |
+| `LemonCore.Store` | Storage GenServer with pluggable backends, `put_new/3` claims, strict `fetch/3` and `fetch_all/2` reads, serialized `take/2`, and exact-value `compare_and_swap/4`, `compare_and_delete/3`, and multi-snapshot `compare_and_delete_many/1` transitions |
 | `LemonCore.Store.Table` | Declarative table owner and policy metadata; the architecture gate checks owner calls against exact declared tables |
 | `LemonCore.Store.ReadCache` | ETS read cache for hot domains (`:chat`, `:runs`, `:progress`, `:sessions_index`, plus tables collaborators add with `register_cached_table/1`) |
 | `LemonCore.Store.EtsBackend` | In-memory ETS (ephemeral, default) with `:ets.insert_new/2` claims |
@@ -401,7 +403,8 @@ stamping, lazy expiry, periodic sweeping, and cache coherence.
 New generic-table wrappers must declare ownership with `use LemonCore.Store.Table`.
 The declaration generates no CRUD API and does not yet change backend runtime
 policy. `mix lemon.quality` resolves generic Store calls from the source AST,
-including aliases, module attributes, and default/explicit server arities. An
+including aliases, module attributes, direct calls, `apply/3`, and
+default/explicit server arities. Multi-entry operations verify every table. An
 owner may access only its declared table names; dynamic table selection and
 cross-table calls fail the architecture gate.
 
@@ -850,7 +853,7 @@ req = LemonCore.RunRequest.new(%{
 Channel adapters and other producers forward runs to `:lemon_router` without a compile-time dependency. `:lemon_router` registers itself at startup.
 
 ```elixir
-# Submit a run (returns {:ok, run_id} or {:error, :unavailable})
+# Submit a run (success always contains a non-empty binary run id)
 {:ok, run_id} = LemonCore.RouterBridge.submit_run(run_request)
 
 # Forward inbound message to router
@@ -862,7 +865,29 @@ Channel adapters and other producers forward runs to `:lemon_router` without a c
 
 # Watchdog keepalive decision for an active run
 :ok = LemonCore.RouterBridge.keep_run_alive(run_id, :continue)
+
+# Queries use explicit results; unavailable is never rewritten as idle/empty.
+{:ok, busy?} = LemonCore.RouterBridge.session_busy?(session_key)
+{:ok, active_run_id} = LemonCore.RouterBridge.active_run(session_key)
+{:ok, sessions} = LemonCore.RouterBridge.list_active_sessions()
 ```
+
+An unregistered router returns `{:error, :unavailable}`. A configured mutating
+callback that raises, throws, returns a malformed acknowledgement, times out,
+or exits returns `{:error, :outcome_unknown}`. Even `:noproc` does not prove
+non-acceptance: a multi-step callback may have mutated before reaching a
+missing downstream process. Do not automatically retry an unknown outcome
+without independent idempotency or reconciliation. A normally returned
+`{:error, reason}` other than `:outcome_unknown` is an implementation guarantee
+  that the mutation did not take effect. Query exits remain unavailable because
+  queries cannot duplicate a side effect, while query exceptions return the
+  sanitized `{:error, :query_failed}`. Active-session list results are valid
+  only when every entry has non-empty binary session and run ids. Bridge logs
+  and query errors must never expose exception messages, stacktraces, exit
+  reasons, or callback arguments.
+Abort and keep-alive `:ok` results acknowledge router acceptance or dispatch;
+they are not synchronous proof that the target run process applied the
+decision.
 
 ### Dotenv
 
@@ -996,7 +1021,14 @@ Durable memory is supervised by the `lemon_memory` app, not here.
 - SQLite serializes keys and values with `:erlang.term_to_binary/1`; JSONL uses
   a JSON codec that preserves atoms, tuples, structs, and nested map keys
 - Events use millisecond timestamps from `System.system_time(:millisecond)`
-- `LemonCore.RouterBridge` returns `{:error, :unavailable}` when `:lemon_router` has not registered itself; callers must handle this gracefully
+- `LemonCore.RouterBridge` returns `{:error, :unavailable}` when the router is
+  unregistered, and `{:error, :outcome_unknown}` when a configured mutation
+  raises, throws, returns a malformed acknowledgement, or exits without a
+  definite acknowledgement. The latter is duplicate-risk, not a retry-safe
+  availability failure; this includes `:noproc` exits from configured
+  callbacks. Query exceptions are sanitized to `{:error, :query_failed}` and
+  query callers must not reinterpret unavailable as `false`, `:none`, or `[]`
+  without an explicit local policy.
 - `LemonCore.Dedupe.Ets` uses monotonic time for TTL; `LemonCore.Idempotency` uses wall-clock time
 - `LemonCore.Config.Modular` is the canonical config implementation; `LemonCore.Config` is a facade that delegates to modular
 - Provider config resolution is centralized in `LemonAgent.ProviderConfigResolver` (agent_core); provider modules must not read env vars directly for normal request paths

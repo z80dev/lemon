@@ -2,74 +2,17 @@ defmodule LemonAi.Models.GoogleGeminiCLI do
   @moduledoc """
   Model definitions for the GoogleGeminiCLI provider.
 
-  This module is auto-extracted from `LemonAi.Models` as part of the
-  per-provider decomposition (Debt Phase 5, M2).
+  The catalog is data: `priv/models/google_gemini_cli.json`, loaded at compile time by
+  `LemonAi.Models.Catalog`, one entry per model with its capabilities and
+  per-million-token pricing. Edit the JSON to add a model or change a price;
+  `mix lemon.models` lists what is currently defined.
   """
 
-  alias LemonAi.Types.{Model, ModelCost}
+  alias LemonAi.Models.Catalog
+  alias LemonAi.Types.Model
 
-  @models %{
-    "gemini-2.0-flash" => %Model{
-      id: "gemini-2.0-flash",
-      name: "Gemini 2.0 Flash (Cloud Code Assist)",
-      api: :google_gemini_cli,
-      provider: :google_gemini_cli,
-      base_url: "https://cloudcode-pa.googleapis.com",
-      reasoning: false,
-      input: [:text, :image],
-      cost: %ModelCost{input: 0.0, output: 0.0, cache_read: 0.0, cache_write: 0.0},
-      context_window: 1_048_576,
-      max_tokens: 8_192
-    },
-    "gemini-2.5-flash" => %Model{
-      id: "gemini-2.5-flash",
-      name: "Gemini 2.5 Flash (Cloud Code Assist)",
-      api: :google_gemini_cli,
-      provider: :google_gemini_cli,
-      base_url: "https://cloudcode-pa.googleapis.com",
-      reasoning: true,
-      input: [:text, :image],
-      cost: %ModelCost{input: 0.0, output: 0.0, cache_read: 0.0, cache_write: 0.0},
-      context_window: 1_048_576,
-      max_tokens: 65_535
-    },
-    "gemini-2.5-pro" => %Model{
-      id: "gemini-2.5-pro",
-      name: "Gemini 2.5 Pro (Cloud Code Assist)",
-      api: :google_gemini_cli,
-      provider: :google_gemini_cli,
-      base_url: "https://cloudcode-pa.googleapis.com",
-      reasoning: true,
-      input: [:text, :image],
-      cost: %ModelCost{input: 0.0, output: 0.0, cache_read: 0.0, cache_write: 0.0},
-      context_window: 1_048_576,
-      max_tokens: 65_535
-    },
-    "gemini-3-flash-preview" => %Model{
-      id: "gemini-3-flash-preview",
-      name: "Gemini 3 Flash Preview (Cloud Code Assist)",
-      api: :google_gemini_cli,
-      provider: :google_gemini_cli,
-      base_url: "https://cloudcode-pa.googleapis.com",
-      reasoning: true,
-      input: [:text, :image],
-      cost: %ModelCost{input: 0.0, output: 0.0, cache_read: 0.0, cache_write: 0.0},
-      context_window: 1_048_576,
-      max_tokens: 65_535
-    },
-    "gemini-3-pro-preview" => %Model{
-      id: "gemini-3-pro-preview",
-      name: "Gemini 3 Pro Preview (Cloud Code Assist)",
-      api: :google_gemini_cli,
-      provider: :google_gemini_cli,
-      base_url: "https://cloudcode-pa.googleapis.com",
-      reasoning: true,
-      input: [:text, :image],
-      cost: %ModelCost{input: 0.0, output: 0.0, cache_read: 0.0, cache_write: 0.0},
-      context_window: 1_048_576,
-      max_tokens: 65_535
-    }
-  }
+  @external_resource Catalog.path("google_gemini_cli.json")
+  @models Catalog.load!("google_gemini_cli.json")
 
   @doc "Returns all GoogleGeminiCLI model definitions as a map."
   @spec models() :: %{String.t() => Model.t()}

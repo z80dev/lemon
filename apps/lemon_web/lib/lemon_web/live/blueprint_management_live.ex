@@ -622,8 +622,6 @@ defmodule LemonWeb.BlueprintManagementLive do
     end
   end
 
-  defp sanitize_preview(_, _, _), do: :error
-
   defp sanitize_activation(payload, bundle_id, profile_id) when is_map(payload) do
     with ^bundle_id <- payload["bundleId"],
          ^profile_id <- payload["profileId"],
@@ -641,8 +639,6 @@ defmodule LemonWeb.BlueprintManagementLive do
       _ -> :error
     end
   end
-
-  defp sanitize_activation(_, _, _), do: :error
 
   defp sanitize_skills(skills) when is_list(skills) do
     skills
@@ -803,7 +799,6 @@ defmodule LemonWeb.BlueprintManagementLive do
   defp operation_error(:validate), do: "Bundle validation is temporarily unavailable."
   defp operation_error(:preview), do: "Activation preview is temporarily unavailable."
   defp operation_error(:activate), do: "Blueprint activation was refused. Nothing changed."
-  defp operation_error(_), do: "Blueprint operation is temporarily unavailable."
 
   defp operation_failed(socket, operation) do
     socket

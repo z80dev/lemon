@@ -296,6 +296,46 @@ defmodule LemonCore.Store do
   end
 
   @doc """
+  Deletes a value only when its current value exactly matches `expected`.
+
+  The comparison and delete are serialized inside the Store process. This is
+  intended for sweepers and lease cleanup paths that must not erase a value
+  changed after their earlier list or fetch snapshot.
+  """
+  @spec compare_and_delete(server(), atom(), term(), term()) ::
+          :ok | {:error, :mismatch | term()}
+  def compare_and_delete(server \\ __MODULE__, table, key, expected) do
+    safe_store_call(
+      server,
+      {:generic_compare_and_delete, table, key, expected},
+      {:error, :store_unavailable},
+      op: :compare_and_delete,
+      table: table,
+      key: key
+    )
+  end
+
+  @doc """
+  Deletes several values only when every current value matches its snapshot.
+
+  All comparisons and deletes run in one Store call, so another Store caller
+  cannot renew one member between validation and deletion. Entries are
+  `{table, key, expected}` tuples.
+  """
+  @spec compare_and_delete_many(server(), [{atom(), term(), term()}]) ::
+          :ok | {:error, :mismatch | term()}
+  def compare_and_delete_many(server \\ __MODULE__, entries) when is_list(entries) do
+    safe_store_call(
+      server,
+      {:generic_compare_and_delete_many, entries},
+      {:error, :store_unavailable},
+      op: :compare_and_delete_many,
+      table: :multiple,
+      key: length(entries)
+    )
+  end
+
+  @doc """
   Get a value from a named table.
 
   Returns `nil` if the key doesn't exist.
@@ -312,6 +352,32 @@ defmodule LemonCore.Store do
       # backend has not confirmed.
       _uncached_or_miss ->
         safe_store_call(server, {:generic_get, table, key}, nil, op: :get, table: table, key: key)
+    end
+  end
+
+  @doc """
+  Fetch a value without collapsing backend or process failure into absence.
+
+  Unlike `get/3`, this returns `{:ok, nil}` only when the backend confirms that
+  the key is absent. Correctness-sensitive admission paths should use this
+  function when an unavailable read must fail closed.
+  """
+  @spec fetch(server(), table :: atom(), key :: term()) ::
+          {:ok, term() | nil} | {:error, :store_unavailable}
+  def fetch(server \\ __MODULE__, table, key) do
+    with true <- cached_table?(server, table),
+         {:ok, value} <- ReadCache.fetch(server, table, key) do
+      {:ok, value}
+    else
+      _uncached_or_miss ->
+        safe_store_call(
+          server,
+          {:generic_fetch, table, key},
+          {:error, :store_unavailable},
+          op: :fetch,
+          table: table,
+          key: key
+        )
     end
   end
 
@@ -357,6 +423,27 @@ defmodule LemonCore.Store do
     else
       safe_store_call(server, {:generic_list, table}, [], op: :list, table: table, key: :all)
     end
+  end
+
+  @doc """
+  List all key-value pairs without collapsing backend or process failure.
+
+  Unlike `list/2`, this always consults the owning Store process and returns an
+  error when the backend cannot confirm the complete table contents.
+  Correctness-sensitive cleanup and migration paths should use this function
+  before advancing durable sweep watermarks.
+  """
+  @spec fetch_all(server(), table :: atom()) ::
+          {:ok, [{term(), term()}]} | {:error, :store_unavailable}
+  def fetch_all(server \\ __MODULE__, table) do
+    safe_store_call(
+      server,
+      {:generic_fetch_all, table},
+      {:error, :store_unavailable},
+      op: :fetch_all,
+      table: table,
+      key: :all
+    )
   end
 
   # Whether this store mirrors `table` into the read cache. Read from the
@@ -572,6 +659,31 @@ defmodule LemonCore.Store do
     end
   end
 
+  @doc """
+  Fetch a specific run by ID without collapsing storage failures into absence.
+
+  Use this at correctness boundaries where a missing run permits a mutation:
+  `{:ok, nil}` proves absence, while `{:error, :store_unavailable}` preserves
+  an unknown outcome when the backend cannot answer.
+  """
+  @spec fetch_run(server(), term()) :: {:ok, map() | nil} | {:error, :store_unavailable}
+  def fetch_run(server \\ __MODULE__, run_id) do
+    case ReadCache.fetch(server, :runs, run_id) do
+      {:ok, value} ->
+        {:ok, value}
+
+      _miss_or_uncached ->
+        safe_store_call(
+          server,
+          {:fetch_run, run_id},
+          {:error, :store_unavailable},
+          op: :fetch_run,
+          table: :runs,
+          key: run_id
+        )
+    end
+  end
+
   # Introspection Event API
 
   @doc """
@@ -645,7 +757,8 @@ defmodule LemonCore.Store do
     :exit, reason ->
       Logger.warning(
         "Store client call failed store=#{inspect(server)} op=#{inspect(context[:op])} " <>
-          "table=#{inspect(context[:table])} key=#{inspect(context[:key])} " <>
+          "table=#{inspect(context[:table])} " <>
+          "key=#{inspect(safe_log_key(context[:table], context[:key]))} " <>
           "reason=#{inspect(store_call_exit_reason(reason))}"
       )
 
@@ -1004,6 +1117,25 @@ defmodule LemonCore.Store do
     end
   end
 
+  def handle_call({:fetch_run, run_id}, _from, state) do
+    case state.backend.get(state.backend_state, :runs, run_id) do
+      {:ok, value, backend_state} ->
+        if not is_nil(value) do
+          ReadCache.put(state.read_cache, :runs, run_id, value)
+        end
+
+        {:reply, {:ok, value}, %{state | backend_state: backend_state}}
+
+      {:error, reason} ->
+        log_backend_error(:fetch, :runs, run_id, reason)
+        {:reply, {:error, :store_unavailable}, state}
+
+      other ->
+        log_backend_unexpected(:fetch, :runs, run_id, other)
+        {:reply, {:error, :store_unavailable}, state}
+    end
+  end
+
   def handle_call({:get_run_history, session_key, opts}, _from, state) do
     # Forwarded to the configured provider, which owns run history and keeps
     # potentially large history I/O off this process.
@@ -1135,6 +1267,68 @@ defmodule LemonCore.Store do
     end
   end
 
+  def handle_call({:generic_compare_and_delete, table, key, expected}, _from, state) do
+    case state.backend.get(state.backend_state, table, key) do
+      {:ok, current, backend_state} when current === expected ->
+        case state.backend.delete(backend_state, table, key) do
+          {:ok, backend_state} ->
+            if table in state.cached_tables do
+              ReadCache.delete(state.read_cache, table, key)
+            end
+
+            {:reply, :ok, %{state | backend_state: backend_state}}
+
+          {:error, reason} ->
+            log_backend_error(:compare_and_delete, table, key, reason)
+            {:reply, {:error, reason}, %{state | backend_state: backend_state}}
+
+          other ->
+            log_backend_unexpected(:compare_and_delete, table, key, other)
+
+            {:reply, {:error, {:unexpected_backend_response, other}},
+             %{state | backend_state: backend_state}}
+        end
+
+      {:ok, _current, backend_state} ->
+        {:reply, {:error, :mismatch}, %{state | backend_state: backend_state}}
+
+      {:error, reason} ->
+        log_backend_error(:compare_and_delete, table, key, reason)
+        {:reply, {:error, reason}, state}
+
+      other ->
+        log_backend_unexpected(:compare_and_delete, table, key, other)
+        {:reply, {:error, {:unexpected_backend_response, other}}, state}
+    end
+  end
+
+  def handle_call({:generic_compare_and_delete_many, entries}, _from, state) do
+    result =
+      if function_exported?(state.backend, :compare_and_delete_many, 2) do
+        state.backend.compare_and_delete_many(state.backend_state, entries)
+      else
+        compare_and_delete_many_fallback(state.backend, state.backend_state, entries)
+      end
+
+    case result do
+      {:ok, backend_state} ->
+        invalidate_snapshot_cache(state, entries)
+        {:reply, :ok, %{state | backend_state: backend_state}}
+
+      {:error, reason, backend_state} ->
+        # A non-transactional backend may have applied a safe prefix before
+        # reporting failure. Invalidate every involved cache key so reads
+        # reflect the backend's durable result.
+        invalidate_snapshot_cache(state, entries)
+        bounded_reason = bound_compare_and_delete_many_error(entries, reason)
+        {:reply, {:error, bounded_reason}, %{state | backend_state: backend_state}}
+
+      other ->
+        log_compare_and_delete_many_unexpected(entries, other)
+        {:reply, {:error, :unexpected_backend_response}, state}
+    end
+  end
+
   def handle_call({:generic_get, table, key}, _from, state) do
     case state.backend.get(state.backend_state, table, key) do
       {:ok, value, backend_state} ->
@@ -1152,6 +1346,25 @@ defmodule LemonCore.Store do
       other ->
         log_backend_unexpected(:get, table, key, other)
         {:reply, nil, state}
+    end
+  end
+
+  def handle_call({:generic_fetch, table, key}, _from, state) do
+    case state.backend.get(state.backend_state, table, key) do
+      {:ok, value, backend_state} ->
+        if not is_nil(value) and table in state.cached_tables do
+          ReadCache.put(state.read_cache, table, key, value)
+        end
+
+        {:reply, {:ok, value}, %{state | backend_state: backend_state}}
+
+      {:error, reason} ->
+        log_backend_error(:fetch, table, key, reason)
+        {:reply, {:error, :store_unavailable}, state}
+
+      other ->
+        log_backend_unexpected(:fetch, table, key, other)
+        {:reply, {:error, :store_unavailable}, state}
     end
   end
 
@@ -1226,6 +1439,21 @@ defmodule LemonCore.Store do
       other ->
         log_backend_unexpected(:list, table, :all, other)
         {:reply, [], state}
+    end
+  end
+
+  def handle_call({:generic_fetch_all, table}, _from, state) do
+    case state.backend.list(state.backend_state, table) do
+      {:ok, entries, backend_state} ->
+        {:reply, {:ok, entries}, %{state | backend_state: backend_state}}
+
+      {:error, reason} ->
+        log_backend_error(:fetch_all, table, :all, reason)
+        {:reply, {:error, :store_unavailable}, state}
+
+      other ->
+        log_backend_unexpected(:fetch_all, table, :all, other)
+        {:reply, {:error, :store_unavailable}, state}
     end
   end
 
@@ -1765,17 +1993,140 @@ defmodule LemonCore.Store do
     end
   end
 
+  defp compare_and_delete_many_fallback(backend, backend_state, entries) do
+    with {:ok, backend_state} <- compare_delete_snapshots(backend, backend_state, entries) do
+      delete_snapshots(backend, backend_state, entries)
+    end
+  end
+
+  defp compare_delete_snapshots(backend, backend_state, entries) do
+    Enum.reduce_while(entries, {:ok, backend_state}, fn {table, key, expected},
+                                                        {:ok, current_state} ->
+      case backend.get(current_state, table, key) do
+        {:ok, current, next_state} when current === expected ->
+          {:cont, {:ok, next_state}}
+
+        {:ok, _current, next_state} ->
+          {:halt, {:error, :mismatch, next_state}}
+
+        {:error, reason} ->
+          log_backend_error(:compare_and_delete_many, table, key, reason)
+          {:halt, {:error, reason, current_state}}
+
+        other ->
+          log_backend_unexpected(:compare_and_delete_many, table, key, other)
+          {:halt, {:error, :unexpected_backend_response, current_state}}
+      end
+    end)
+  end
+
+  defp delete_snapshots(backend, backend_state, entries) do
+    Enum.reduce_while(entries, {:ok, backend_state}, fn {table, key, _}, {:ok, current_state} ->
+      case backend.delete(current_state, table, key) do
+        {:ok, next_state} ->
+          {:cont, {:ok, next_state}}
+
+        {:error, reason} ->
+          log_backend_error(:compare_and_delete_many, table, key, reason)
+          {:halt, {:error, reason, current_state}}
+
+        other ->
+          log_backend_unexpected(:compare_and_delete_many, table, key, other)
+
+          {:halt, {:error, :unexpected_backend_response, current_state}}
+      end
+    end)
+  end
+
+  defp invalidate_snapshot_cache(state, entries) do
+    Enum.each(entries, fn {table, key, _expected} ->
+      if table in state.cached_tables do
+        ReadCache.delete(state.read_cache, table, key)
+      end
+    end)
+  end
+
   defp log_backend_error(op, table, key, reason) do
     Logger.warning(
-      "[LemonCore.Store] backend #{op} failed table=#{inspect(table)} key=#{inspect(key)} " <>
-        "reason=#{inspect(reason)}"
+      "[LemonCore.Store] backend #{op} failed table=#{inspect(table)} " <>
+        "key=#{inspect(safe_log_key(table, key))} " <>
+        "reason=#{inspect(safe_log_diagnostic(table, reason))}"
     )
   end
 
   defp log_backend_unexpected(op, table, key, response) do
     Logger.warning(
       "[LemonCore.Store] backend #{op} returned unexpected response table=#{inspect(table)} " <>
-        "key=#{inspect(key)} response=#{inspect(response)}"
+        "key=#{inspect(safe_log_key(table, key))} " <>
+        "response=#{inspect(safe_log_diagnostic(table, response))}"
     )
   end
+
+  defp log_compare_and_delete_many_unexpected(entries, response) do
+    table = sensitive_entry_table(entries) || :multiple
+
+    Logger.warning(
+      "[LemonCore.Store] backend compare_and_delete_many returned unexpected response " <>
+        "table=#{inspect(table)} entries=:redacted " <>
+        "response=#{inspect(safe_log_diagnostic(table, response))}"
+    )
+  end
+
+  defp bound_compare_and_delete_many_error(_entries, :mismatch), do: :mismatch
+
+  defp bound_compare_and_delete_many_error(_entries, :unexpected_backend_response),
+    do: :unexpected_backend_response
+
+  defp bound_compare_and_delete_many_error(entries, reason) do
+    case sensitive_entry_table(entries) do
+      nil ->
+        reason
+
+      table ->
+        log_backend_error(:compare_and_delete_many, table, :multiple, reason)
+        :store_unavailable
+    end
+  end
+
+  defp sensitive_entry_table(entries) do
+    Enum.find_value(entries, fn
+      {table, _key, _expected} -> if sensitive_log_table?(table), do: table
+      _malformed -> nil
+    end)
+  end
+
+  defp safe_log_key(table, key), do: safe_log_diagnostic(table, key)
+
+  defp safe_log_diagnostic(table, term) when is_atom(table) do
+    if sensitive_log_table?(table),
+      do: sanitize_sensitive_diagnostic(term),
+      else: term
+  end
+
+  defp safe_log_diagnostic(_table, term), do: term
+
+  defp sensitive_log_table?(table) when is_atom(table),
+    do: String.contains?(Atom.to_string(table), "idempotency")
+
+  defp sensitive_log_table?(_table), do: false
+
+  # Sensitive diagnostics are deliberately summarized without traversal. This
+  # keeps the logger total and bounded even when a broken backend returns an
+  # improper list, an enormous collection, or an extremely deep term.
+  defp sanitize_sensitive_diagnostic(term), do: {:redacted, diagnostic_category(term)}
+
+  defp diagnostic_category(term) when is_binary(term), do: {:binary, byte_size(term)}
+  defp diagnostic_category(term) when is_bitstring(term), do: {:bitstring, bit_size(term)}
+  defp diagnostic_category(term) when is_map(term), do: {:map, map_size(term)}
+  defp diagnostic_category(term) when is_tuple(term), do: {:tuple, tuple_size(term)}
+  defp diagnostic_category([]), do: :empty_list
+  defp diagnostic_category([_head | _tail]), do: :list
+  defp diagnostic_category(term) when is_atom(term), do: :atom
+  defp diagnostic_category(term) when is_integer(term), do: :integer
+  defp diagnostic_category(term) when is_float(term), do: :float
+  defp diagnostic_category(term) when is_pid(term), do: :pid
+  defp diagnostic_category(term) when is_reference(term), do: :reference
+  defp diagnostic_category(term) when is_function(term), do: :function
+  defp diagnostic_category(term) when is_port(term), do: :port
+  defp diagnostic_category(_term), do: :term
 end

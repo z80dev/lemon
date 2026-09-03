@@ -25,6 +25,12 @@ on:
 permissions:
   contents: read
 
+# The self-hosted Linux runner does not guarantee an inherited UTF-8 locale.
+# ExUnit fixture names and Lemon's Unicode path contracts require one.
+env:
+  LANG: C.UTF-8
+  LC_ALL: C.UTF-8
+
 jobs:
   detect-changes:
     runs-on: ${{ inputs.runner || 'ubuntu-latest' }}
@@ -216,7 +222,6 @@ jobs:
             echo "Deterministic regression pass #$i"
             mix test \
               apps/coding_agent/test/coding_agent/session_overflow_recovery_test.exs \
-              apps/coding_agent/test/coding_agent/tools/fuzzy_test.exs \
               apps/lemon_skills/test/lemon_skills/discovery_readme_test.exs \
               apps/lemon_skills/test/mix/tasks/lemon.skill_test.exs \
               apps/lemon_skills/test/lemon_skills/prompt_regression_test.exs
@@ -238,6 +243,16 @@ jobs:
         with:
           otp-version: "28.5"
           elixir-version: "1.19.5"
+
+      # Four control-plane wire tests execute the real compiled TUI client.
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: clients/tui/.bun-version
+
+      - name: Install TUI dependencies
+        working-directory: clients/tui
+        run: bun install --frozen-lockfile
 
       - name: Cache Mix deps and build
         uses: actions/cache@v4

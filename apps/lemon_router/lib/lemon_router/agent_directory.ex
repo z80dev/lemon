@@ -60,23 +60,26 @@ defmodule LemonRouter.AgentDirectory do
   - `:route` - optional route filter map (`channel_id`, `account_id`, `peer_kind`, `peer_id`, `thread_id`)
   - `:limit` - optional max rows
   """
-  @spec list_sessions(keyword()) :: [session_entry()]
+  @spec list_sessions(keyword()) :: [session_entry()] | {:error, :unavailable}
   def list_sessions(opts \\ []) do
     agent_id_filter = normalize_optional_binary(opts[:agent_id])
     route_filter = normalize_route_filter(opts[:route])
     limit = normalize_limit(opts[:limit])
 
-    indexed_sessions()
-    |> merge_sessions(active_sessions())
-    |> Enum.filter(&(matches_agent?(&1, agent_id_filter) and matches_route?(&1, route_filter)))
-    |> sort_sessions()
-    |> maybe_take(limit)
+    with {:ok, active} <- active_sessions() do
+      indexed_sessions()
+      |> merge_sessions(active)
+      |> Enum.filter(&(matches_agent?(&1, agent_id_filter) and matches_route?(&1, route_filter)))
+      |> sort_sessions()
+      |> maybe_take(limit)
+    end
   end
 
   @doc """
   Returns the latest known session for an agent.
   """
-  @spec latest_session(binary(), keyword()) :: {:ok, session_entry()} | {:error, :not_found}
+  @spec latest_session(binary(), keyword()) ::
+          {:ok, session_entry()} | {:error, :not_found | :unavailable}
   def latest_session(agent_id, opts \\ []) when is_binary(agent_id) and agent_id != "" do
     opts
     |> Keyword.put(:agent_id, agent_id)
@@ -84,30 +87,40 @@ defmodule LemonRouter.AgentDirectory do
     |> case do
       [session | _] -> {:ok, session}
       [] -> {:error, :not_found}
+      {:error, :unavailable} = error -> error
     end
   end
 
   @doc """
   Returns the latest route-backed session (`kind == :channel_peer`) for an agent.
   """
-  @spec latest_route_session(binary(), keyword()) :: {:ok, session_entry()} | {:error, :not_found}
+  @spec latest_route_session(binary(), keyword()) ::
+          {:ok, session_entry()} | {:error, :not_found | :unavailable}
   def latest_route_session(agent_id, opts \\ []) when is_binary(agent_id) and agent_id != "" do
-    opts
-    |> Keyword.put(:agent_id, agent_id)
-    |> list_sessions()
-    |> Enum.find(&(&1.kind == :channel_peer))
-    |> case do
-      nil -> {:error, :not_found}
-      session -> {:ok, session}
+    case list_sessions(Keyword.put(opts, :agent_id, agent_id)) do
+      sessions when is_list(sessions) ->
+        case Enum.find(sessions, &(&1.kind == :channel_peer)) do
+          nil -> {:error, :not_found}
+          session -> {:ok, session}
+        end
+
+      {:error, :unavailable} = error ->
+        error
     end
   end
 
   @doc """
   List agent directory entries with lightweight session/activity stats.
   """
-  @spec list_agents(keyword()) :: [map()]
+  @spec list_agents(keyword()) :: [map()] | {:error, :unavailable}
   def list_agents(_opts \\ []) do
-    sessions = list_sessions()
+    case list_sessions() do
+      sessions when is_list(sessions) -> build_agent_entries(sessions)
+      {:error, :unavailable} = error -> error
+    end
+  end
+
+  defp build_agent_entries(sessions) do
     sessions_by_agent = Enum.group_by(sessions, & &1.agent_id)
     profiles = profile_index()
 
@@ -145,7 +158,7 @@ defmodule LemonRouter.AgentDirectory do
 
   This is intended for CLI/UI discovery before creating endpoint aliases.
   """
-  @spec list_targets(keyword()) :: [map()]
+  @spec list_targets(keyword()) :: [map()] | {:error, :unavailable}
   def list_targets(opts \\ []) do
     route_filter =
       normalize_route_filter(%{
@@ -156,11 +169,21 @@ defmodule LemonRouter.AgentDirectory do
         thread_id: opts[:thread_id]
       })
 
-    session_stats =
+    sessions =
       list_sessions(
         agent_id: normalize_optional_binary(opts[:agent_id]),
         route: route_filter
       )
+
+    case sessions do
+      sessions when is_list(sessions) -> build_target_entries(sessions, route_filter, opts)
+      {:error, :unavailable} = error -> error
+    end
+  end
+
+  defp build_target_entries(sessions, route_filter, opts) do
+    session_stats =
+      sessions
       |> Enum.filter(&(&1.kind == :channel_peer))
       |> Enum.group_by(&route_signature/1)
       |> Enum.map(fn {signature, sessions} ->
@@ -294,11 +317,23 @@ defmodule LemonRouter.AgentDirectory do
   defp indexed_session_entry(_), do: nil
 
   defp active_sessions do
-    LemonRouter.Router.list_active_sessions()
-    |> Enum.map(&active_session_entry/1)
-    |> Enum.reject(&is_nil/1)
+    case LemonRouter.Router.list_active_sessions() do
+      sessions when is_list(sessions) ->
+        {:ok,
+         sessions
+         |> Enum.map(&active_session_entry/1)
+         |> Enum.reject(&is_nil/1)}
+
+      {:error, _reason} ->
+        {:error, :unavailable}
+
+      _unexpected ->
+        {:error, :unavailable}
+    end
   rescue
-    _ -> []
+    _ -> {:error, :unavailable}
+  catch
+    _, _ -> {:error, :unavailable}
   end
 
   defp active_session_entry(%{session_key: session_key, run_id: run_id})

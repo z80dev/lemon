@@ -68,20 +68,24 @@ defmodule LemonControlPlane.Methods.SessionDetail do
       fetch_run_history(session_key, opts.history_limit)
       |> Enum.sort_by(&run_started_at/1, :desc)
 
-    session_meta = fetch_session_meta(session_key)
-    total_run_count = session_meta["runCount"] || length(all_runs)
+    case fetch_session_meta(session_key) do
+      {:ok, session_meta} ->
+        total_run_count = session_meta["runCount"] || length(all_runs)
 
-    runs =
-      all_runs
-      |> Enum.take(opts.limit)
-      |> Enum.map(&format_run(&1, opts))
+        runs =
+          all_runs
+          |> Enum.take(opts.limit)
+          |> Enum.map(&format_run(&1, opts))
 
-    {:ok, response(session_key, session_meta, runs, total_run_count, opts)}
+        {:ok, response(session_key, session_meta, runs, total_run_count, opts)}
+
+      {:error, _reason} ->
+        {:error, {:unavailable, "Session directory is unavailable", nil}}
+    end
   rescue
-    _ -> {:ok, response(session_key, %{}, [], 0, opts)}
+    _ -> {:error, {:unavailable, "Session directory is unavailable", nil}}
   catch
-    :exit, _ ->
-      {:ok, response(session_key, %{}, [], 0, opts)}
+    :exit, _ -> {:error, {:unavailable, "Session directory is unavailable", nil}}
   end
 
   defp response(session_key, session_meta, runs, total_run_count, opts) do
@@ -165,32 +169,42 @@ defmodule LemonControlPlane.Methods.SessionDetail do
   end
 
   defp fetch_session_meta(session_key) do
-    sess =
-      LemonRouter.list_agent_sessions([])
-      |> Enum.find(&(&1[:session_key] == session_key))
+    case LemonRouter.list_agent_sessions([]) do
+      sessions when is_list(sessions) ->
+        sess = Enum.find(sessions, &(&1[:session_key] == session_key))
 
-    if sess do
-      %{
-        "sessionKey" => session_key,
-        "agentId" => sess[:agent_id],
-        "channelId" => sess[:channel_id],
-        "peerId" => sess[:peer_id],
-        "peerLabel" => sess[:peer_label],
-        "runCount" => sess[:run_count],
-        "active" => sess[:active?] == true,
-        "createdAtMs" => sess[:created_at_ms],
-        "updatedAtMs" => sess[:updated_at_ms],
-        "origin" => to_string_safe(sess[:origin] || :unknown)
-      }
-      |> Map.merge(routing_meta(session_key, sess[:agent_id]))
-    else
-      %{"sessionKey" => session_key}
-      |> Map.merge(routing_meta(session_key, nil))
+        meta =
+          if sess do
+            %{
+              "sessionKey" => session_key,
+              "agentId" => sess[:agent_id],
+              "channelId" => sess[:channel_id],
+              "peerId" => sess[:peer_id],
+              "peerLabel" => sess[:peer_label],
+              "runCount" => sess[:run_count],
+              "active" => sess[:active?] == true,
+              "createdAtMs" => sess[:created_at_ms],
+              "updatedAtMs" => sess[:updated_at_ms],
+              "origin" => to_string_safe(sess[:origin] || :unknown)
+            }
+            |> Map.merge(routing_meta(session_key, sess[:agent_id]))
+          else
+            %{"sessionKey" => session_key}
+            |> Map.merge(routing_meta(session_key, nil))
+          end
+
+        {:ok, meta}
+
+      {:error, _reason} ->
+        {:error, :unavailable}
+
+      _unexpected ->
+        {:error, :unavailable}
     end
   rescue
-    _ -> %{}
+    _ -> {:error, :unavailable}
   catch
-    :exit, _ -> %{}
+    :exit, _ -> {:error, :unavailable}
   end
 
   # `model`/`provider`/`contextWindow`/`thinkingLevel` — what this session's next run resolves

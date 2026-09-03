@@ -2,7 +2,7 @@ defmodule LemonRouter.RouterTest do
   use ExUnit.Case, async: false
 
   alias LemonRouter.Router
-  alias LemonCore.InboundMessage
+  alias LemonCore.{InboundMessage, RouterBridge, RunRequest}
 
   defmodule RunOrchestratorStubRouter do
     def submit(request) do
@@ -14,15 +14,28 @@ defmodule LemonRouter.RouterTest do
     end
   end
 
+  defmodule RejectingRunOrchestrator do
+    def submit(%RunRequest{}), do: {:error, :capacity_rejected}
+  end
+
   defmodule SessionCoordinatorStubRouter do
     def abort_session(session_key, reason) do
       send(test_pid(), {:abort_session, session_key, reason})
-      :ok
+      Application.get_env(:lemon_router, :router_abort_session_result, :ok)
+    end
+
+    def abort_run(run_id, reason) do
+      send(test_pid(), {:abort_run, run_id, reason})
+      Application.get_env(:lemon_router, :router_abort_run_result, :ok)
     end
 
     def busy?(session_key) do
       send(test_pid(), {:busy_query, session_key})
-      session_key == Process.get(:router_busy_session_key)
+
+      case Process.get(:router_busy_result) do
+        nil -> session_key == Process.get(:router_busy_session_key)
+        result -> result
+      end
     end
 
     def active_run_for_session(session_key) do
@@ -35,7 +48,7 @@ defmodule LemonRouter.RouterTest do
       Process.get(:router_active_sessions, [])
     end
 
-    defp test_pid, do: Process.get(:router_test_pid)
+    defp test_pid, do: Application.fetch_env!(:lemon_router, :router_test_pid)
   end
 
   setup do
@@ -49,13 +62,18 @@ defmodule LemonRouter.RouterTest do
 
     previous_orchestrator = Application.get_env(:lemon_router, :run_orchestrator)
     previous_session_coordinator = Application.get_env(:lemon_router, :session_coordinator)
+    previous_bridge = Application.get_env(:lemon_core, :router_bridge)
     Application.put_env(:lemon_router, :run_orchestrator, RunOrchestratorStubRouter)
     Application.put_env(:lemon_router, :session_coordinator, SessionCoordinatorStubRouter)
+    Application.put_env(:lemon_router, :router_test_pid, self())
 
     Process.put(:router_test_pid, self())
     Process.delete(:router_submit_result)
     Process.delete(:router_busy_session_key)
+    Process.delete(:router_busy_result)
     Process.delete(:router_active_sessions)
+    Process.delete(:router_abort_session_result)
+    Process.delete(:router_abort_run_result)
 
     on_exit(fn ->
       case previous_orchestrator do
@@ -68,10 +86,21 @@ defmodule LemonRouter.RouterTest do
         mod -> Application.put_env(:lemon_router, :session_coordinator, mod)
       end
 
+      case previous_bridge do
+        nil -> Application.delete_env(:lemon_core, :router_bridge)
+        config -> Application.put_env(:lemon_core, :router_bridge, config)
+      end
+
       Process.delete(:router_test_pid)
       Process.delete(:router_submit_result)
       Process.delete(:router_busy_session_key)
+      Process.delete(:router_busy_result)
       Process.delete(:router_active_sessions)
+      Process.delete(:router_abort_session_result)
+      Process.delete(:router_abort_run_result)
+      Application.delete_env(:lemon_router, :router_test_pid)
+      Application.delete_env(:lemon_router, :router_abort_session_result)
+      Application.delete_env(:lemon_router, :router_abort_run_result)
     end)
 
     :ok
@@ -94,6 +123,63 @@ defmodule LemonRouter.RouterTest do
   test "abort/2 is a no-op when session has no runs" do
     assert :ok = Router.abort("missing:session", :test_abort)
     assert_receive {:abort_session, "missing:session", :test_abort}, 500
+  end
+
+  test "abort/2 propagates a coordinator rejection" do
+    Application.put_env(
+      :lemon_router,
+      :router_abort_session_result,
+      {:error, :coordinator_unavailable}
+    )
+
+    assert {:error, :coordinator_unavailable} =
+             Router.abort("agent:test:main", :test_abort)
+
+    assert_receive {:abort_session, "agent:test:main", :test_abort}, 500
+  end
+
+  test "RouterBridge reports an unknown abort outcome when tombstone registration exits" do
+    orchestrator = Process.whereis(LemonRouter.RunOrchestrator)
+    assert is_pid(orchestrator)
+    assert true = Process.unregister(LemonRouter.RunOrchestrator)
+
+    try do
+      :ok = RouterBridge.configure(router: Router)
+
+      assert {:error, :outcome_unknown} =
+               Router.abort_run("run-tombstone-unavailable-direct", :test_abort)
+
+      assert {:error, :outcome_unknown} =
+               RouterBridge.abort_run("run-tombstone-unavailable", :test_abort)
+
+      refute_receive {:abort_run, "run-tombstone-unavailable-direct", :test_abort}, 100
+      refute_receive {:abort_run, "run-tombstone-unavailable", :test_abort}, 100
+    after
+      assert true = Process.register(orchestrator, LemonRouter.RunOrchestrator)
+    end
+  end
+
+  test "abort_run/2 reports unknown after a coordinator rejection follows a tombstone" do
+    Application.put_env(
+      :lemon_router,
+      :router_abort_run_result,
+      {:error, :coordinator_unavailable}
+    )
+
+    assert {:error, :outcome_unknown} =
+             Router.abort_run("run-coordinator-rejected", :test_abort)
+
+    assert_receive {:abort_run, "run-coordinator-rejected", :test_abort}, 500
+  end
+
+  test "query callbacks propagate coordinator read failures" do
+    Process.put(:router_busy_result, {:error, :unavailable})
+    Process.put({:active_run, "agent:test:main"}, {:error, :unavailable})
+    Process.put(:router_active_sessions, {:error, :unavailable})
+
+    assert {:error, :unavailable} = Router.session_busy?("agent:test:main")
+    assert {:error, :unavailable} = Router.active_run("agent:test:main")
+    assert {:error, :unavailable} = Router.list_active_sessions()
   end
 
   test "session_busy?/1 delegates to the session coordinator" do
@@ -185,7 +271,7 @@ defmodule LemonRouter.RouterTest do
     assert request.meta[:account_id] == "default"
   end
 
-  test "handle_inbound/1 returns :ok when orchestrator submit fails" do
+  test "handle_inbound/1 propagates orchestrator submit failures" do
     Process.put(:router_submit_result, {:error, :submit_failed})
 
     msg = %InboundMessage{
@@ -198,8 +284,43 @@ defmodule LemonRouter.RouterTest do
       meta: %{"agent_id" => "agent-y"}
     }
 
-    assert :ok = Router.handle_inbound(msg)
+    assert {:error, :submit_failed} = Router.handle_inbound(msg)
     assert_receive {:orchestrator_submit, _request}, 500
+  end
+
+  test "handle_inbound/1 treats malformed orchestrator acknowledgements as outcome unknown" do
+    msg = %InboundMessage{
+      channel_id: "email",
+      account_id: "default",
+      peer: %{kind: :dm, id: "sender@example.test", thread_id: nil},
+      sender: %{id: "sender@example.test"},
+      message: %{id: "mail-malformed", text: "run", timestamp: nil, reply_to_id: nil},
+      raw: %{},
+      meta: %{"agent_id" => "email-agent"}
+    }
+
+    for malformed <- [false, {:ok, 123}, {:ok, ""}] do
+      Process.put(:router_submit_result, malformed)
+      assert {:error, :outcome_unknown} = Router.handle_inbound(msg)
+      assert_receive {:orchestrator_submit, _request}, 500
+    end
+  end
+
+  test "RouterBridge propagates a real Router rejection to the inbound application boundary" do
+    Application.put_env(:lemon_router, :run_orchestrator, RejectingRunOrchestrator)
+    :ok = RouterBridge.configure(router: Router)
+
+    msg = %InboundMessage{
+      channel_id: "email",
+      account_id: "default",
+      peer: %{kind: :dm, id: "sender@example.test", thread_id: nil},
+      sender: %{id: "sender@example.test"},
+      message: %{id: "mail-1", text: "run", timestamp: nil, reply_to_id: nil},
+      raw: %{},
+      meta: %{"agent_id" => "email-agent"}
+    }
+
+    assert {:error, :capacity_rejected} = RouterBridge.handle_inbound(msg)
   end
 
   test "handle_control_agent/2 builds control-plane request and default main session key" do

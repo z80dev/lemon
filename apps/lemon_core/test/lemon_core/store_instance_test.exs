@@ -8,9 +8,11 @@ defmodule LemonCore.StoreInstanceTest do
 
   import ExUnit.CaptureLog
 
+  alias Exqlite.Sqlite3
   alias LemonCore.Store
   alias LemonCore.Store.EtsBackend
   alias LemonCore.Store.ReadCache
+  alias LemonCore.Store.SqliteBackend
 
   defmodule TaggingBackend do
     @moduledoc false
@@ -187,6 +189,50 @@ defmodule LemonCore.StoreInstanceTest do
       # its cache tables and app-env key must not have moved.
       assert is_pid(Process.whereis(LemonCore.Store))
       assert Store.ping() == :ok
+    end
+
+    @tag :tmp_dir
+    test "sensitive SQLite multi-delete errors are bounded at the Store boundary", %{
+      tmp_dir: tmp_dir
+    } do
+      store =
+        start_store(:store_instance_sensitive_sqlite,
+          backend: SqliteBackend,
+          backend_opts: [
+            path: Path.join(tmp_dir, "sensitive.sqlite3"),
+            ephemeral_tables: []
+          ]
+        )
+
+      secret = "sqlite-sensitive-key-#{System.unique_integer([:positive])}"
+      key = {"integration", secret}
+      fence = %{state: "accepted"}
+
+      assert :ok = Store.put(store, :webhook_idempotency, key, fence)
+
+      %{backend_state: %{conn: conn}} = :sys.get_state(store)
+
+      assert :ok =
+               Sqlite3.execute(
+                 conn,
+                 "UPDATE lemon_store_kv SET value_blob = X'00' " <>
+                   "WHERE table_name = 'webhook_idempotency'"
+               )
+
+      {result, log} =
+        with_log(fn ->
+          Store.compare_and_delete_many(store, [
+            {:webhook_idempotency, key, fence}
+          ])
+        end)
+
+      assert result == {:error, :store_unavailable}
+      refute inspect(result) =~ secret
+      refute log =~ secret
+      assert Process.alive?(Process.whereis(store))
+
+      # The corrupt execution fence was unreadable and therefore never deleted.
+      assert Store.fetch(store, :webhook_idempotency, key) == {:error, :store_unavailable}
     end
   end
 
