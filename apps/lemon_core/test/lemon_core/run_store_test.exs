@@ -2,13 +2,43 @@ defmodule LemonCore.RunStoreTest do
   use ExUnit.Case, async: false
 
   alias LemonCore.RunStore
+  alias LemonCore.Store.Table
+
+  test "declares the run-domain tables without changing their runtime path" do
+    assert [runs, sessions_index] = RunStore.__store_tables__()
+
+    assert %Table{
+             name: :runs,
+             owner: RunStore,
+             cached: true,
+             persistence: :ephemeral,
+             retention: nil,
+             version: 1
+           } = runs
+
+    assert %Table{
+             name: :sessions_index,
+             owner: RunStore,
+             cached: true,
+             persistence: :durable,
+             retention: nil,
+             version: 1
+           } = sessions_index
+  end
 
   test "appends, fetches, finalizes, and lists run history through the typed wrapper" do
     session_key = "agent:test:main:#{System.unique_integer([:positive])}"
     run_id = "run_#{System.unique_integer([:positive])}"
 
-    assert :ok = RunStore.append_event(run_id, %{type: :prompt, text: "hello", session_key: session_key})
+    assert :ok =
+             RunStore.append_event(run_id, %{
+               type: :prompt,
+               text: "hello",
+               session_key: session_key
+             })
+
     assert is_map(RunStore.get(run_id))
+
     assert :ok =
              RunStore.finalize(run_id, %{
                completed: %{ok: true, answer: "world"},

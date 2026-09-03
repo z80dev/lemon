@@ -1,7 +1,18 @@
 defmodule LemonCore.RunStore do
   @moduledoc """
   Typed wrapper for run lifecycle and history persistence.
+
+  This module owns the `:runs` and `:sessions_index` table contracts. The
+  declaration is architecture metadata only: the existing specialized
+  `LemonCore.Store` lifecycle operations continue to provide the runtime
+  behavior while run storage is migrated incrementally.
   """
+
+  use LemonCore.Store.Table,
+    tables: [
+      runs: [cached: true, persistence: :ephemeral],
+      sessions_index: [cached: true, persistence: :durable]
+    ]
 
   alias LemonCore.Store
   alias LemonCore.RunHistoryStore

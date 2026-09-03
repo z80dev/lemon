@@ -98,6 +98,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - `LemonCore.ChatStateStore` now adopts that ownership contract for the cached
   `:chat` table and its existing `:expires_at` retention policy without moving
   TTL, expiry, sweep, or cache behavior out of the specialized Store runtime.
+- `LemonCore.RunStore` now declares ownership of the `:runs` and
+  `:sessions_index` tables through `LemonCore.Store.Table`, with cache and
+  persistence policy recorded explicitly. The existing run lifecycle and
+  finalization behavior is unchanged.
 
 - Configured engine runtimes are now checked against
   `LemonCore.EngineRuntime` when the router starts. Invalid wiring is reported
