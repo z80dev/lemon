@@ -84,6 +84,14 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- `LemonCore.Store.Table` ownership metadata for incremental generic-store
+  migrations. The architecture gate now analyzes generic Store calls from the
+  AST across every supported operation and default/explicit server arity,
+  resolving aliases, module attributes, direct and `apply/3` forms, and every
+  table in multi-entry operations while rejecting dynamic or cross-table access
+  from an owner module. The metadata is non-operational in this change; backend
+  registration, retention, and domain migrations remain separate.
+
 - Configured engine runtimes are now checked against
   `LemonCore.EngineRuntime` when the router starts. Invalid wiring is reported
   once and disabled while preserving router-only boot and the existing

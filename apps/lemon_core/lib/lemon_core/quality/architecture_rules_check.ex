@@ -3,13 +3,15 @@ defmodule LemonCore.Quality.ArchitectureRulesCheck do
   Enforces explicit architecture guardrails that are easier to express as
   stable source-pattern checks than dependency graph rules.
 
-  Two rule families run here:
+  Three rule families run here:
 
     * source-pattern rules (`@rules`) — substring matches against source files;
     * module-reference rules (`@module_reference_rules`) — the package
       dependency rules from `docs/platform-split.md` §2, resolved from each
       file's AST so that aliases, calls and dynamic `:"Elixir.Foo"` atoms all
       count while mentions in docs and comments do not.
+    * Store-table ownership — AST-resolved generic `LemonCore.Store` calls in a
+      module using `LemonCore.Store.Table` may name only its declared tables.
 
   Module-reference rules cover `lib/` only: test support is allowed to reach
   across apps. Existing violations are listed in `@grandfathered`.
@@ -26,6 +28,8 @@ defmodule LemonCore.Quality.ArchitectureRulesCheck do
           issue_count: non_neg_integer(),
           issues: [issue()]
         }
+
+  alias LemonCore.Quality.StoreTableOwnershipCheck
 
   @router_session_registry "LemonRouter." <> "SessionRegistry"
   @router_session_read_model "LemonRouter." <> "SessionReadModel"
@@ -623,7 +627,8 @@ defmodule LemonCore.Quality.ArchitectureRulesCheck do
 
     issues =
       (Enum.flat_map(@rules, &rule_issues(root, &1)) ++
-         Enum.flat_map(@module_reference_rules, &module_reference_issues(root, &1)))
+         Enum.flat_map(@module_reference_rules, &module_reference_issues(root, &1)) ++
+         store_table_owner_issues(root))
       |> Enum.sort_by(& &1.path)
 
     report = %{root: root, issue_count: length(issues), issues: issues}
@@ -709,6 +714,18 @@ defmodule LemonCore.Quality.ArchitectureRulesCheck do
   end
 
   defp collect_module(node, acc), do: {node, acc}
+
+  defp store_table_owner_issues(root) do
+    files =
+      root
+      |> source_files(["apps/*/lib/**/*.ex"])
+      |> Enum.reject(
+        &(Path.relative_to(&1, root) ==
+            "apps/lemon_core/lib/lemon_core/quality/architecture_rules_check.ex")
+      )
+
+    StoreTableOwnershipCheck.issues(root, files)
+  end
 
   defp source_files(root, globs) do
     globs

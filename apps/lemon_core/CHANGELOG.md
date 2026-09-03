@@ -18,6 +18,14 @@ Telegram, run history, durable memory, kanban boards, or `~/.lemon`.
 
 ### Added
 
+- `LemonCore.Store.Table` lets a domain wrapper declare table ownership plus
+  future cache, retention, persistence, and schema-version metadata without
+  generating CRUD functions or changing backend behavior. The existing
+  architecture quality gate parses all supported generic Store operations at
+  default and explicit server arities, including direct calls, `apply/3`, and
+  multi-entry operations, and permits owner calls only when every resolved
+  table matches the declaration.
+
 - `LemonCore.Contract` centralizes loadability and required-callback checks for
   configuration-injected implementations. `LemonCore.EngineRuntime.validate/1`
   exposes the check used by router startup; optional callbacks remain optional,
