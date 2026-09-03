@@ -241,7 +241,7 @@ defmodule LemonRouter.RouterPendingCompactionTest do
       PendingCompactionStore.put(session_key, marker)
       Process.put(:router_submit_result, {:error, :submit_failed})
 
-      assert :ok = Router.handle_inbound(msg)
+      assert {:error, :submit_failed} = Router.handle_inbound(msg)
       assert_receive {:orchestrator_submit, request}, 500
       assert request.prompt =~ "previous conversation"
       assert PendingCompactionStore.get(session_key) == marker

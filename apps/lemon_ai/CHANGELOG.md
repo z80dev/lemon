@@ -35,6 +35,19 @@ what in-repo code has been using.
   is picked up automatically by `LemonCore.Env` when both packages are present.
 - `mix lemon.models` lists the catalogue from the command line.
 
+### Changed
+
+- The 25 provider-module model catalogs moved from Elixir struct literals to 26
+  JSON resources under `priv/models/`, loaded and embedded at compile time by
+  `LemonAi.Models.Catalog`. Google uses a base file plus Antigravity extras;
+  the `:google_antigravity` registry is derived from both, while
+  `:"openai-codex"` derives from the direct OpenAI catalog plus OAuth-only IDs.
+  Existing provider module names and `models/0` return values are unchanged.
+  Catalog files are external compiler resources; malformed top-level data and
+  entries fail with source/model context, while field types, token-size ranges,
+  costs, and compatibility overrides are validated. API, provider, input, and
+  compatibility keys normalize through fixed atom allowlists.
+
 ### Notes
 
 - `lemon_ai` depends on no other Lemon package. It is usable on its own in any

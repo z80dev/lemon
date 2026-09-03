@@ -55,6 +55,45 @@ defmodule LemonAutomation.RunCompletionWaiterTest do
     end
   end
 
+  defmodule WaiterAmbiguousRouter do
+    @moduledoc false
+
+    def submit(params) do
+      send(params.test_pid, {:ambiguous_submit, params.run_id})
+      {:error, :outcome_unknown}
+    end
+  end
+
+  defmodule AcceptedWithoutCompletionRouter do
+    @moduledoc false
+    def submit(params), do: {:ok, params.run_id}
+  end
+
+  defmodule CrashingWaiter do
+    @moduledoc false
+
+    def wait_already_subscribed(_run_id, _timeout_ms, opts) do
+      case opts[:failure] do
+        :raise -> raise "waiter crashed"
+        :exit -> exit(:waiter_crashed)
+      end
+    end
+  end
+
+  defmodule MalformedWaiter do
+    @moduledoc false
+    def wait_already_subscribed(_run_id, _timeout_ms, _opts), do: :not_a_terminal_result
+  end
+
+  defmodule MutateThenRaiseRouter do
+    @moduledoc false
+
+    def submit(params) do
+      send(params.test_pid, {:submit_side_effect, params.run_id})
+      raise "ack lost"
+    end
+  end
+
   test "submit_and_wait/2 observes synchronous completion and removes its subscription" do
     Process.put(:run_completion_waiter_test_pid, self())
 
@@ -103,6 +142,84 @@ defmodule LemonAutomation.RunCompletionWaiterTest do
 
     refute_received {:router_submit_started, "run_rejected_claim"}
     assert_received {:bus_unsubscribed, "run:run_rejected_claim"}
+  end
+
+  test "an ambiguous submission waits on the fixed id and retains an unknown outcome on timeout" do
+    Process.put(:run_completion_waiter_test_pid, self())
+
+    assert {:error, {:submission_outcome_unknown, "run_ambiguous"}} =
+             RunCompletionWaiter.submit_and_wait(
+               %{run_id: "run_ambiguous", prompt: "maybe accepted", test_pid: self()},
+               router_mod: WaiterAmbiguousRouter,
+               bus_mod: TestBus,
+               timeout_ms: 10
+             )
+
+    assert_received {:ambiguous_submit, "run_ambiguous"}
+    assert_received {:bus_subscribed, "run:run_ambiguous"}
+    assert_received {:bus_unsubscribed, "run:run_ambiguous"}
+  end
+
+  test "a malformed ambiguous-submission wait result retains ownership" do
+    test_pid = self()
+
+    assert {:error, {:submission_outcome_unknown, "run_malformed_wait"}} =
+             RunCompletionWaiter.submit_and_wait(
+               %{
+                 run_id: "run_malformed_wait",
+                 prompt: "maybe accepted",
+                 test_pid: test_pid
+               },
+               router_mod: WaiterAmbiguousRouter,
+               waiter_mod: MalformedWaiter,
+               on_terminal: fn run_id -> send(test_pid, {:terminal, run_id}) end
+             )
+
+    refute_received {:terminal, "run_malformed_wait"}
+  end
+
+  test "a submit exception is ambiguous and retains the fixed run ownership" do
+    assert {:error, {:submission_outcome_unknown, "run_raise"}} =
+             RunCompletionWaiter.submit_and_wait(
+               %{run_id: "run_raise", prompt: "maybe accepted", test_pid: self()},
+               router_mod: MutateThenRaiseRouter,
+               timeout_ms: 1
+             )
+
+    assert_received {:submit_side_effect, "run_raise"}
+  end
+
+  test "an accepted run timeout retains ownership and does not announce terminal" do
+    assert {:error, {:completion_outcome_unknown, "run_still_live"}} =
+             RunCompletionWaiter.submit_and_wait(
+               %{run_id: "run_still_live", prompt: "still running"},
+               router_mod: AcceptedWithoutCompletionRouter,
+               timeout_ms: 1,
+               on_terminal: fn run_id -> send(self(), {:terminal, run_id}) end
+             )
+
+    refute_received {:terminal, "run_still_live"}
+  end
+
+  test "a waiter exception after acceptance retains ownership and does not announce terminal" do
+    test_pid = self()
+
+    for failure <- [:raise, :exit] do
+      run_id = "run_waiter_#{failure}"
+
+      assert {:error, {:completion_outcome_unknown, ^run_id}} =
+               RunCompletionWaiter.submit_and_wait(
+                 %{run_id: run_id, prompt: "accepted before waiter crash"},
+                 router_mod: AcceptedWithoutCompletionRouter,
+                 waiter_mod: CrashingWaiter,
+                 wait_opts: [failure: failure],
+                 on_terminal: fn terminal_run_id ->
+                   send(test_pid, {:terminal, terminal_run_id})
+                 end
+               )
+
+      refute_received {:terminal, ^run_id}
+    end
   end
 
   test "wait/3 subscribes, extracts completion output, and unsubscribes" do

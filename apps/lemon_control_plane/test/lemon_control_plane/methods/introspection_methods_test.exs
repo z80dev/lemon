@@ -14,10 +14,14 @@ defmodule LemonControlPlane.Methods.IntrospectionMethodsTest do
     TransportsStatus
   }
 
+  alias LemonControlPlane.Protocol.Frames
   alias LemonCore.SessionKey
 
   defmodule RouterBridgeStub do
+    use LemonCore.RouterBridge.Router
+
     @active_sessions_key {__MODULE__, :active_sessions}
+    @active_run_result_key {__MODULE__, :active_run_result}
 
     def set_active_sessions(entries) when is_list(entries) do
       :persistent_term.put(@active_sessions_key, entries)
@@ -25,12 +29,24 @@ defmodule LemonControlPlane.Methods.IntrospectionMethodsTest do
 
     def clear_active_sessions do
       :persistent_term.erase(@active_sessions_key)
+      :persistent_term.erase(@active_run_result_key)
     end
 
+    def set_active_run_result(result), do: :persistent_term.put(@active_run_result_key, result)
+
     def active_run(session_key) do
-      case Enum.find(active_sessions(), &(&1.session_key == session_key)) do
-        %{run_id: run_id} -> {:ok, run_id}
-        _ -> :none
+      case :persistent_term.get(@active_run_result_key, :from_active_sessions) do
+        :from_active_sessions ->
+          case Enum.find(active_sessions(), &(&1.session_key == session_key)) do
+            %{run_id: run_id} -> {:ok, run_id}
+            _ -> :none
+          end
+
+        {:raise, message} ->
+          raise message
+
+        result ->
+          result
       end
     end
 
@@ -54,10 +70,18 @@ defmodule LemonControlPlane.Methods.IntrospectionMethodsTest do
       :persistent_term.erase(@active_sessions_key)
     end
 
+    def set_active_sessions_result(result), do: :persistent_term.put(@active_sessions_key, result)
+
     def active_run_for_session(session_key) do
-      case Enum.find(active_sessions(), &(&1.session_key == session_key)) do
-        %{run_id: run_id} -> {:ok, run_id}
-        _ -> :none
+      case active_sessions() do
+        sessions when is_list(sessions) ->
+          case Enum.find(sessions, &(&1.session_key == session_key)) do
+            %{run_id: run_id} -> {:ok, run_id}
+            _ -> :none
+          end
+
+        error ->
+          error
       end
     end
 
@@ -192,7 +216,7 @@ defmodule LemonControlPlane.Methods.IntrospectionMethodsTest do
         requirements_cwd
       )
 
-    LemonCore.RouterBridge.configure(router: RouterBridgeStub)
+    :ok = LemonCore.RouterBridge.configure(router: RouterBridgeStub)
     RouterBridgeStub.set_active_sessions([%{session_key: session_key, run_id: run_id}])
     Application.put_env(:lemon_router, :session_coordinator, SessionCoordinatorStub)
     SessionCoordinatorStub.set_active_sessions([%{session_key: session_key, run_id: run_id}])
@@ -274,6 +298,39 @@ defmodule LemonControlPlane.Methods.IntrospectionMethodsTest do
       assert result["summary"]["runIdReturned"] == false
     end
 
+    test "returns bounded errors without exposing router exceptions, paths, or secrets" do
+      secret = "SESSIONS_ACTIVE_SECRET_#{System.unique_integer([:positive])}"
+      private_path = "/private/control-plane/#{secret}"
+
+      for router_result <- [
+            {:error, {:router_bug, %{credential: secret, path: private_path}}},
+            {:raise, "router exception #{secret} at #{private_path}"}
+          ] do
+        RouterBridgeStub.set_active_run_result(router_result)
+
+        result = SessionsActive.handle(%{"sessionKey" => "agent:secret:main"}, %{})
+        assert {:error, {:internal_error, "Unable to read active session state", nil}} = result
+
+        wire = Frames.encode_response("sessions-active-secret", result)
+        assert Jason.decode!(wire)["error"]["code"] == "INTERNAL_ERROR"
+        refute wire =~ secret
+        refute wire =~ private_path
+        refute wire =~ "router_bug"
+      end
+
+      RouterBridgeStub.set_active_run_result({:error, :unavailable})
+
+      unavailable = SessionsActive.handle(%{"sessionKey" => "agent:offline:main"}, %{})
+
+      assert {:error, {:unavailable, "Run activity is temporarily unavailable", nil}} =
+               unavailable
+
+      unavailable_wire = Frames.encode_response("sessions-active-offline", unavailable)
+      assert Jason.decode!(unavailable_wire)["error"]["code"] == "UNAVAILABLE"
+      refute unavailable_wire =~ secret
+      refute unavailable_wire =~ private_path
+    end
+
     test "lists active sessions with filters", %{
       agent_id: agent_id,
       session_key: session_key,
@@ -319,6 +376,16 @@ defmodule LemonControlPlane.Methods.IntrospectionMethodsTest do
 
       assert session["harness"]["requirements"]["percentage"] == 50
       assert session["harness"]["requirements"]["cwd"] == requirements_cwd
+    end
+
+    test "list and detail return bounded unavailable errors when routing state is down" do
+      SessionCoordinatorStub.set_active_sessions_result({:error, :unavailable})
+
+      assert {:error, {:unavailable, "Active sessions are unavailable", nil}} =
+               SessionsActiveList.handle(%{}, %{})
+
+      assert {:error, {:unavailable, "Session directory is unavailable", nil}} =
+               SessionDetail.handle(%{"sessionKey" => "agent:offline:main"}, %{})
     end
   end
 

@@ -14,15 +14,13 @@ defmodule LemonRouter.Router do
   alias LemonCore.SessionKey
   alias LemonRouter.{PendingCompaction, RunOrchestrator}
 
-  require Logger
-
   @doc """
   Handle an inbound message from a channel.
 
   Normalizes the message and submits it to the orchestrator.
   Before submission, applies any pending compaction marker for the session.
   """
-  @spec handle_inbound(LemonCore.InboundMessage.t()) :: :ok
+  @spec handle_inbound(LemonCore.InboundMessage.t()) :: :ok | {:error, term()}
   def handle_inbound(%LemonCore.InboundMessage{} = msg) do
     # Emit inbound telemetry
     emit_inbound_telemetry(msg)
@@ -39,20 +37,18 @@ defmodule LemonRouter.Router do
 
     # Submit to orchestrator
     case run_orchestrator().submit(request) do
-      {:ok, _run_id} ->
+      {:ok, run_id} when is_binary(run_id) and run_id != "" ->
         PendingCompaction.consume(session_key, PendingCompaction.prepared_marker(meta))
         :ok
 
-      {:error, reason} ->
-        Logger.error(
-          "RunOrchestrator.submit failed for inbound (channel_id=#{inspect(msg.channel_id)} account_id=#{inspect(msg.account_id)} peer_id=#{inspect(msg.peer && msg.peer.id)}): " <>
-            inspect(reason)
-        )
+      {:error, _reason} = error ->
+        error
 
-        :ok
+      _malformed_acknowledgement ->
+        # Submission may already have reached the coordinator. Without a
+        # usable run id, neither acceptance nor safe redelivery can be proved.
+        {:error, :outcome_unknown}
     end
-
-    :ok
   end
 
   @doc false
@@ -138,23 +134,23 @@ defmodule LemonRouter.Router do
   @doc """
   Abort all runs for a session.
   """
-  @spec abort(session_key :: binary(), reason :: term()) :: :ok
+  @spec abort(session_key :: binary(), reason :: term()) :: :ok | {:error, term()}
   def abort(session_key, reason \\ :user_requested) do
     session_coordinator().abort_session(session_key, reason)
-    :ok
   end
 
-  @spec session_busy?(binary()) :: boolean()
+  @spec session_busy?(binary()) :: boolean() | {:error, term()}
   def session_busy?(session_key) when is_binary(session_key) do
     session_coordinator().busy?(session_key)
   end
 
-  @spec active_run(binary()) :: {:ok, binary()} | :none
+  @spec active_run(binary()) :: {:ok, binary()} | :none | {:error, term()}
   def active_run(session_key) when is_binary(session_key) do
     session_coordinator().active_run_for_session(session_key)
   end
 
-  @spec list_active_sessions() :: [%{session_key: binary(), run_id: binary()}]
+  @spec list_active_sessions() ::
+          [%{session_key: binary(), run_id: binary()}] | {:error, term()}
   def list_active_sessions do
     session_coordinator().list_active_sessions()
   end
@@ -167,28 +163,20 @@ defmodule LemonRouter.Router do
   submission; if it was already accepted, the normal coordinator and process
   cancellation paths apply.
   """
-  @spec abort_run(run_id :: binary(), reason :: term()) :: :ok
+  @spec abort_run(run_id :: binary(), reason :: term()) :: :ok | {:error, term()}
   def abort_run(run_id, reason \\ :user_requested) do
+    # Registration and dispatch are one queued orchestrator operation. If this
+    # caller times out, that operation may still complete, but it cannot leave
+    # behind a tombstone without also attempting cancellation.
     register_abort_tombstone(run_id, reason)
-    session_coordinator().abort_run(run_id, reason)
-
-    case Registry.lookup(LemonRouter.RunRegistry, run_id) do
-      [{pid, _}] ->
-        LemonRouter.RunProcess.abort(pid, reason)
-
-      _ ->
-        # Run not found: it either completed or the tombstone will reject a
-        # submission that has not reached the serialized orchestrator yet.
-        :ok
-    end
   end
 
   defp register_abort_tombstone(run_id, reason) do
     RunOrchestrator.register_abort(run_id, reason)
   rescue
-    _ -> :ok
+    _exception -> {:error, :outcome_unknown}
   catch
-    :exit, _ -> :ok
+    _kind, _reason -> {:error, :outcome_unknown}
   end
 
   @doc """

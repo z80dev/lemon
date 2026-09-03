@@ -146,9 +146,15 @@ fail open.
 over the limit the caller gets `413` instead of the server buffering unbounded
 input. The limit is resolved per request, not frozen into the pipeline.
 
-**Honest delivery status.** If the message cannot reach the router, the webhook
-returns `503` (asking a mail provider to redeliver) rather than falsely
-acknowledging — losing someone's mail silently is worse than a retry.
+**Honest delivery status.** Email requires a provider Message-ID and a durable
+idempotency reservation before router submission. Definite rejection returns
+`503` only after a token-fenced reservation transition makes the Message-ID
+safely eligible for retry. Accepted and ambiguous responses are reported as
+successful only after their durable receipt is stored. Every transition is
+compare-and-swap fenced by the current lease-owner token, so an expired handler
+cannot overwrite a reclaimed delivery. Missing IDs and unavailable idempotency
+storage never proceed untracked; router-level fixed-run-ID admission makes a
+post-submit lease recovery safe even across a lost acknowledgement.
 
 ## 4. Tool execution approvals
 

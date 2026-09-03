@@ -21,8 +21,12 @@ defmodule LemonAi.Models do
       LemonAi.Models.supports_vision?(model)
       LemonAi.Models.supports_reasoning?(model)
 
-  Model data is defined in per-provider submodules under `LemonAi.Models.*` and
-  merged into a single compile-time registry here.
+  Model data is loaded from JSON under `priv/models/` at compile time by
+  `LemonAi.Models.Catalog` into per-provider submodules under
+  `LemonAi.Models.*`, then merged into a single registry here. Most providers
+  map to one resource; Google Antigravity is assembled from tagged Google
+  entries plus an extras file, and OpenAI Codex derives from OpenAI plus
+  OAuth-only model IDs.
   """
 
   alias LemonAi.Types.{Model, ModelCost}

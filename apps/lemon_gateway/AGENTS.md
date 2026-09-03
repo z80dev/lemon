@@ -144,6 +144,30 @@ Prefer `lemon_channels` for a new messaging channel. Use gateway-native ingress 
 for a non-channel surface that needs the Gateway runtime.
 
 - Submit `%LemonCore.RunRequest{}` through `LemonCore.RouterBridge.submit_run/1`.
+- Treat `{:error, :outcome_unknown}` as an ambiguous side effect, not a
+  rejection. Webhook ingress acknowledges the HTTP delivery with a `200`
+  `status: "outcome_unknown"` receipt and `retry_safe: false`, keeps the fixed
+  run ID for reconciliation, and never turns that result into a retryable 5xx.
+  Reserve idempotency keys atomically before submission. Reservation, replay
+  read, or receipt-write failures fail closed with a retryable 503 without
+  reporting acceptance. An unresolved reservation returns
+  `status: "reservation_pending"` with `retry_safe: true`; a submitted sync run
+  whose exact response has no durable receipt returns
+  `status: "response_persistence_unknown"` with `retry_safe: false` rather than
+  replaying a generic accepted response. Mutation exceptions and exits are
+  outcome-unknown, never definite rejection. Hash the caller's idempotency key
+  with its integration identity before building any durable key, receipt, or
+  router request, and reject non-binary or blank payload keys before hashing.
+  On upgrade, migrate legacy raw-key reservations into the hashed namespace by
+  durably creating the hashed fence and exact response first, then conditionally
+  deleting the raw records; concurrent migration and any partial failure remain
+  fail closed. A released-format `pending` row without a run ID remains a
+  permanent ambiguous fence rather than manufacturing a replay identity; its
+  bounded duplicate receipt is non-retryable and never claims acceptance.
+  Expiry uses strict backend listing and removes the response
+  snapshot before the primary execution fence on ordered backends; SQLite
+  performs durable pairs in one transaction, and cleanup failures neither
+  authorize replay nor advance the sweep watermark.
 - Build stable, unique session keys.
 - Return `:ignore` from `start_link/1` when disabled.
 - Resolve binding cwd and agent metadata through `BindingResolver`.

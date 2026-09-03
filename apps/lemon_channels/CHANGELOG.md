@@ -95,6 +95,32 @@ keeping it small and honest.
 
 ### Changed
 
+- Telegram, Discord, WhatsApp, XMTP, and email now treat router submission as
+  the acceptance boundary. Definite rejections do not emit queued/progress
+  success signals and release provisional inbound dedupe markers for safe
+  redelivery; ambiguous outcomes, including malformed mutation
+  acknowledgements, retain dedupe protection while showing an explicit,
+  sanitized uncertainty message. XMTP's Node bridge now commits its
+  receive-side marker only after an Elixir acknowledgement. Email reserves a
+  hashed provider Message-ID and stable run reference, returns 503 only for a
+  definite rejection, and answers ambiguity with a truthful non-retrying 200
+  receipt while retaining its dedupe reservation.
+- Telegram cancel/new and WhatsApp cancel now preserve local state and report
+  a sanitized failure when cancellation is rejected. Telegram idle keepalive
+  failures leave the original inline buttons available for retry.
+- Discord cancel/stop now always return the unchanged transport state after
+  responding, preventing the response API result from corrupting the next
+  event's state. Failed Discord cancel/keepalive component mutations use a
+  non-destructive ephemeral acknowledgement, retain the source controls, and
+  log only a bounded failure class without run IDs or arbitrary router terms.
+
+- `LemonChannels.Runtime` now returns `LemonCore.RouterBridge` results without
+  rewriting failures as success. Cancel and keep-alive calls return
+  `:ok | {:error, term()}` and `session_busy?/1` returns
+  `{:ok, boolean()} | {:error, term()}`; Telegram, Discord, and WhatsApp render
+  or log the unavailable case explicitly. Telegram and WhatsApp busy-query
+  fallbacks log only bounded failure classes, never session keys or raw
+  exception terms.
 - Channels query gateway configuration through `LemonCore.EngineInfoBridge`
   instead of constructing `LemonGateway.*` atoms at runtime.
 - Capabilities are resolved through the plugin registry. An unregistered

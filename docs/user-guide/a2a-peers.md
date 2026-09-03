@@ -129,6 +129,11 @@ Outbound responses are returned to the Lemon model with `trust: :untrusted`.
 Inbound runs use a conservative read/coordination tool allowlist by default;
 `allow_tools` can broaden it for one explicitly trusted peer.
 
+The inbound A2A `messageId` is also the durable replay key. Resending the same
+message for the same authenticated peer returns the original task, including
+its current state, without starting a second Lemon run. A message ID already
+owned by another peer is rejected rather than reassigned.
+
 Push notification callbacks are not advertised in v1 because Lemon does not
 currently accept callback URLs. Peers should use synchronous send, streaming,
 or `SubscribeToTask`/`GetTask` reattachment.

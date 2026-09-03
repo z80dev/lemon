@@ -177,19 +177,19 @@ defmodule LemonAutomation.RunSubmitterTest do
     assert msg =~ "Unexpected submit result"
   end
 
-  test "submit/3 rescues exceptions from router" do
+  test "submit/3 reconciles an exception from the router as outcome unknown" do
     job = sample_job()
     run = sample_run()
 
-    assert {:error, "boom"} =
+    assert {:ok, "done"} =
              RunSubmitter.submit(job, run, router_mod: RouterRaise, waiter_mod: Waiter)
   end
 
-  test "submit/3 catches exits from router" do
+  test "submit/3 reconciles an exit from the router as outcome unknown" do
     job = sample_job()
     run = sample_run()
 
-    assert {:error, "Exit: :nope"} =
+    assert {:ok, "done"} =
              RunSubmitter.submit(job, run, router_mod: RouterExit, waiter_mod: Waiter)
   end
 

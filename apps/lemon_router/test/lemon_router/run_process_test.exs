@@ -119,6 +119,27 @@ defmodule LemonRouter.RunProcessTest do
     end
   end
 
+  defmodule TupleAcceptingRuntime do
+    @moduledoc false
+    @behaviour LemonCore.EngineRuntime
+
+    @impl true
+    def available?, do: true
+
+    @impl true
+    def submit_execution(%LemonCore.ExecutionCommand{} = request) do
+      pid = :persistent_term.get({__MODULE__, :notify_pid}, nil)
+      if is_pid(pid), do: send(pid, {:tuple_accepting_runtime_submit, request})
+      {:ok, %{accepted: true}}
+    end
+
+    @impl true
+    def cancel_by_run_id(_run_id, _reason), do: :ok
+
+    @impl true
+    def run_pid(_run_id), do: nil
+  end
+
   defmodule TestRunOrchestrator do
     @moduledoc false
     use GenServer
@@ -530,6 +551,41 @@ defmodule LemonRouter.RunProcessTest do
   end
 
   describe ":submit_to_gateway retry/backoff" do
+    test "treats an {:ok, term} runtime response as an accepted submission" do
+      run_id = "run_#{System.unique_integer([:positive])}"
+      session_key = SessionKey.main("test-agent")
+      job = make_test_request(run_id)
+
+      :persistent_term.put({TupleAcceptingRuntime, :notify_pid}, self())
+
+      on_exit(fn ->
+        :persistent_term.erase({TupleAcceptingRuntime, :notify_pid})
+      end)
+
+      assert {:ok, pid} =
+               RunProcess.start_link(%{
+                 run_id: run_id,
+                 session_key: session_key,
+                 execution_request: job,
+                 engine_runtime: TupleAcceptingRuntime
+               })
+
+      assert_receive {:tuple_accepting_runtime_submit,
+                      %LemonCore.ExecutionCommand{
+                        run_id: ^run_id,
+                        session_key: ^session_key
+                      }},
+                     500
+
+      assert eventually(fn ->
+               state = :sys.get_state(pid)
+               state.gateway_submitted? and state.gateway_submit_attempt == 0
+             end)
+
+      refute_receive {:tuple_accepting_runtime_submit, _request}, 150
+      GenServer.stop(pid)
+    end
+
     test "terminalizes exactly once when runtime submission never succeeds" do
       run_id = "run_#{System.unique_integer([:positive])}"
       session_key = SessionKey.main("test-agent")

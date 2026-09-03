@@ -25,31 +25,37 @@ defmodule LemonControlPlane.Methods.SessionsActiveList do
     limit = normalize_limit(get_param(params, "limit"))
     route = normalize_route_filter(get_param(params, "route"))
 
-    sessions =
-      LemonRouter.list_agent_sessions(
-        agent_id: agent_id,
-        route: route,
-        limit: limit
-      )
-      |> Enum.filter(&(&1[:active?] == true))
-      |> Enum.map(&format_session/1)
+    case LemonRouter.list_agent_sessions(agent_id: agent_id, route: route, limit: limit) do
+      sessions when is_list(sessions) ->
+        sessions =
+          sessions
+          |> Enum.filter(&(&1[:active?] == true))
+          |> Enum.map(&format_session/1)
 
-    filters = %{
-      "agentId" => agent_id,
-      "limit" => limit,
-      "route" => format_route_filter(route)
-    }
+        filters = %{
+          "agentId" => agent_id,
+          "limit" => limit,
+          "route" => format_route_filter(route)
+        }
 
-    {:ok,
-     %{
-       "sessions" => sessions,
-       "total" => length(sessions),
-       "filters" => filters,
-       "summary" => summary(sessions, filters)
-     }}
+        {:ok,
+         %{
+           "sessions" => sessions,
+           "total" => length(sessions),
+           "filters" => filters,
+           "summary" => summary(sessions, filters)
+         }}
+
+      {:error, _reason} ->
+        {:error, {:unavailable, "Active sessions are unavailable", nil}}
+
+      _unexpected ->
+        {:error, {:unavailable, "Active sessions are unavailable", nil}}
+    end
   rescue
-    e ->
-      {:error, {:internal_error, "Failed to list active sessions", Exception.message(e)}}
+    _e -> {:error, {:unavailable, "Active sessions are unavailable", nil}}
+  catch
+    :exit, _reason -> {:error, {:unavailable, "Active sessions are unavailable", nil}}
   end
 
   defp summary(sessions, filters) do

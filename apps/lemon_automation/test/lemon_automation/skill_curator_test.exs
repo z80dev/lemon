@@ -184,5 +184,8 @@ defmodule LemonAutomation.SkillCuratorTest do
   test "reports active sessions through the configured checker" do
     assert SkillCurator.active_sessions?(active_sessions_fun: fn -> [%{session_key: "a"}] end)
     refute SkillCurator.active_sessions?(active_sessions_fun: fn -> [] end)
+    assert SkillCurator.active_sessions?(active_sessions_fun: fn -> {:error, :unavailable} end)
+    assert SkillCurator.active_sessions?(active_sessions_fun: fn -> raise "boom" end)
+    assert SkillCurator.active_sessions?(active_sessions_fun: fn -> exit(:boom) end)
   end
 end

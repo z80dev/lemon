@@ -84,12 +84,12 @@ defmodule LemonGateway.Transports.Webhook do
              default_timeout_ms: @default_timeout_ms,
              default_callback_wait_timeout_ms: @default_callback_wait_timeout_ms,
              callback_waiter_ready_timeout_ms: @callback_waiter_ready_timeout_ms,
-             run_id: Id.run_id(),
+             run_id: idempotency_run_id(idempotency_ctx),
              validate_callback_url: &RequestNormalization.validate_callback_url/3,
              request_metadata_fun: &RequestNormalization.request_metadata/1
            ),
-         {:ok, status, response_payload} <- ResponseBuilder.response_for_run(run_ctx, []) do
-      Idempotency.store_response(idempotency_ctx, status, response_payload)
+         {:ok, status, response_payload} <- ResponseBuilder.response_for_run(run_ctx, []),
+         :ok <- Idempotency.store_response(idempotency_ctx, status, response_payload) do
       json(conn, status, response_payload)
     else
       nil ->
@@ -106,6 +106,12 @@ defmodule LemonGateway.Transports.Webhook do
 
       {:error, :run_timeout} ->
         json_error(conn, 500, "run timed out")
+
+      {:error, :idempotency_unavailable} ->
+        json(conn, 503, %{error: "idempotency unavailable", retry_safe: true})
+
+      {:error, :invalid_idempotency_key} ->
+        json_error(conn, 422, "invalid idempotency key")
 
       {:duplicate, status, response_payload} ->
         json(conn, status, response_payload)
@@ -171,6 +177,9 @@ defmodule LemonGateway.Transports.Webhook do
 
   @doc false
   def idempotency_table_for_test, do: Idempotency.table()
+
+  defp idempotency_run_id(%{run_id: run_id}) when is_binary(run_id), do: run_id
+  defp idempotency_run_id(_idempotency_ctx), do: Id.run_id()
 
   defp json(conn, status, payload) do
     conn

@@ -149,6 +149,9 @@ defmodule LemonRouter.AgentInbox do
                target: primary_target
              }}
         end
+
+      {:error, :unavailable} ->
+        {:error, :unavailable}
     end
   end
 
@@ -168,6 +171,21 @@ defmodule LemonRouter.AgentInbox do
           latest_base_session_for_new(agent_id, opts)
       end
 
+    case base_session do
+      {:error, :unavailable} ->
+        {:error, :unavailable}
+
+      base_session ->
+        resolve_new_base_session(agent_id, base_session, primary_target)
+    end
+  rescue
+    _ -> {:error, :unavailable}
+  end
+
+  def resolve_session(_agent_id, selector, _opts),
+    do: {:error, {:invalid_session_selector, selector}}
+
+  defp resolve_new_base_session(agent_id, base_session, primary_target) do
     case SessionKey.parse(base_session) do
       %{
         kind: :channel_peer,
@@ -212,23 +230,7 @@ defmodule LemonRouter.AgentInbox do
            target: primary_target
          }}
     end
-  rescue
-    _ ->
-      main = SessionKey.main(agent_id)
-
-      {:ok,
-       %{
-         session_key: main,
-         route_session_key: nil,
-         selector: :new,
-         resolved_from: :fallback_main,
-         route: nil,
-         target: nil
-       }}
   end
-
-  def resolve_session(_agent_id, selector, _opts),
-    do: {:error, {:invalid_session_selector, selector}}
 
   defp latest_base_session_for_new(agent_id, opts) do
     route_filter = route_filter_from_opts(opts)
@@ -245,7 +247,11 @@ defmodule LemonRouter.AgentInbox do
         case AgentDirectory.latest_session(agent_id, route: route_filter) do
           {:ok, session} -> session.session_key
           {:error, :not_found} -> SessionKey.main(agent_id)
+          {:error, :unavailable} = error -> error
         end
+
+      {:error, :unavailable} = error ->
+        error
     end
   end
 

@@ -12,6 +12,10 @@ internals other applications reached into.
 
 ### Added
 
+- Startup validates a configured engine-runtime module through
+  `LemonCore.EngineRuntime.validate/1`, logs invalid wiring once, and disables
+  the invalid binding. A missing or invalid runtime still leaves the router
+  available and follows its existing unavailable-runtime behavior.
 - `LemonRouter` is the supported API surface: `submit/1`, `abort/2`,
   `abort_run/2`, plus the new `available?/0`, `active_runs/0`, `run_active?/1`,
   `active_run_count/0` and `counts/0`. These were designed from the thirteen
@@ -26,6 +30,13 @@ internals other applications reached into.
 
 ### Changed
 
+- `Router.handle_inbound/1` now propagates run-submission rejection instead of
+  logging it and returning `:ok`, so inbound transports can avoid false
+  accepted acknowledgements. It also requires a non-empty binary run id for
+  success and reports malformed acknowledgements as outcome-unknown.
+- Run-specific aborts no longer acknowledge `:ok` when serialized tombstone
+  registration fails, and session activity queries surface registry failures
+  instead of reporting false idle or empty state.
 - The router is the single writer of chat state (`LemonCore.ChatState`). The
   gateway's writes were redundant — the overflow delete was already duplicated
   by the router on the same event, and the completion event carries the resume

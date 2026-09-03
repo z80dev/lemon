@@ -53,6 +53,41 @@ defmodule LemonCore.A2AStoreTest do
              A2AStore.increment_turn(:outbound, "hermes", context.id, opts)
   end
 
+  test "message replay returns the original durable record", %{store: store} do
+    opts = [store: store]
+
+    assert {:ok, original} =
+             A2AStore.append_message(
+               %{
+                 id: "m1",
+                 direction: :inbound,
+                 peer_id: "hermes",
+                 context_id: "c1",
+                 task_id: "t1",
+                 role: "ROLE_USER",
+                 text: "one"
+               },
+               opts
+             )
+
+    assert {:ok, existing} =
+             A2AStore.append_message(
+               %{
+                 id: "m1",
+                 direction: :inbound,
+                 peer_id: "hermes",
+                 context_id: "c1",
+                 task_id: "replacement-task",
+                 role: "ROLE_USER",
+                 text: "replacement"
+               },
+               opts
+             )
+
+    assert existing == original
+    assert A2AStore.get_message("m1", opts) == original
+  end
+
   test "scopes task inventory by authenticated peer", %{store: store} do
     opts = [store: store]
 

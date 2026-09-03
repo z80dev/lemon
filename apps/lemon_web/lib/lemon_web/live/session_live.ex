@@ -2,6 +2,7 @@ defmodule LemonWeb.SessionLive do
   @moduledoc false
 
   use LemonWeb, :live_view
+  require Logger
 
   alias LemonCore.{Bus, MapHelpers, NodeRegistry, RouterBridge, SessionKey, SessionLifecycle}
   alias LemonCore.Setup.Readiness
@@ -82,12 +83,20 @@ defmodule LemonWeb.SessionLive do
 
         {:noreply, assign_control_notice(socket, :info, message)}
 
-      {:error, socket} ->
+      {:none, socket} ->
         {:noreply,
          assign_control_notice(
            socket,
            :warning,
            "No active run is available. Send a new message to start one."
+         )}
+
+      {:unavailable, socket} ->
+        {:noreply,
+         assign_control_notice(
+           socket,
+           :warning,
+           "Lemon could not check the active run. Its last known state is unchanged; try again."
          )}
     end
   end
@@ -122,14 +131,24 @@ defmodule LemonWeb.SessionLive do
     mode = normalize_submit_mode(chat["mode"])
     socket = assign(socket, :prompt, chat["prompt"] || "")
 
-    if not Map.get(socket.assigns, :setup_ready?, true) do
-      {:noreply, assign(socket, :submit_error, setup_recovery_message())}
-    else
-      if mode in @active_control_modes do
+    cond do
+      not Map.get(socket.assigns, :setup_ready?, true) ->
+        {:noreply, assign(socket, :submit_error, setup_recovery_message())}
+
+      Map.get(socket.assigns, :run_status, :idle) == :unavailable ->
+        {:noreply,
+         socket
+         |> assign(:submit_error, nil)
+         |> assign_control_notice(
+           :warning,
+           "Lemon must confirm this session's run status before sending. Check status and try again."
+         )}
+
+      mode in @active_control_modes ->
         submit_active_control(socket, prompt, mode)
-      else
+
+      true ->
         submit_prompt(socket, prompt)
-      end
     end
   end
 
@@ -199,13 +218,22 @@ defmodule LemonWeb.SessionLive do
              |> assign_control_notice(:error, control_refusal_message(reason))}
         end
 
-      {:error, socket} ->
+      {:none, socket} ->
         {:noreply,
          socket
          |> assign(:submit_error, nil)
          |> assign_control_notice(
            :warning,
            "That run has already finished. Your message was not sent; send it as a new message instead."
+         )}
+
+      {:unavailable, socket} ->
+        {:noreply,
+         socket
+         |> assign(:submit_error, nil)
+         |> assign_control_notice(
+           :warning,
+           "Lemon could not confirm whether that run is still active. Your message was not sent; check status and try again."
          )}
     end
   end
@@ -458,6 +486,23 @@ defmodule LemonWeb.SessionLive do
             </div>
           <% end %>
 
+          <%= if @run_status == :unavailable do %>
+            <div
+              id="run-status-unavailable"
+              class="active-run-status border-amber-300 bg-amber-50"
+              role="status"
+              aria-live="polite"
+            >
+              <span class="active-run-status-dot bg-amber-500" aria-hidden="true"></span>
+              <div>
+                <p class="active-run-status-title text-amber-950">Run status unavailable</p>
+                <p class="active-run-status-copy text-amber-900">
+                  Lemon could not check whether this session has active work. Check status before sending another message.
+                </p>
+              </div>
+            </div>
+          <% end %>
+
           <.form
             for={
               to_form(
@@ -531,7 +576,7 @@ defmodule LemonWeb.SessionLive do
               rows="4"
               value={@prompt}
               placeholder={composer_placeholder(@run_status, @control_mode)}
-              disabled={!@setup_ready? or @run_status == :stopping}
+              disabled={!@setup_ready? or @run_status in [:stopping, :unavailable]}
               aria-describedby="composer-help"
               class="w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-slate-500 focus:ring disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-500"
             ></textarea>
@@ -544,9 +589,15 @@ defmodule LemonWeb.SessionLive do
                   Active-run guidance is text only. Attach files after the current run finishes.
                 </p>
               <% else %>
-                <p class="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-500">
-                  Attachments become available after setup is complete.
-                </p>
+                <%= if @setup_ready? and @run_status == :unavailable do %>
+                  <p class="active-run-text-note">
+                    Attachments are unavailable until Lemon can confirm the session's run status.
+                  </p>
+                <% else %>
+                  <p class="rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-500">
+                    Attachments become available after setup is complete.
+                  </p>
+                <% end %>
               <% end %>
             <% end %>
 
@@ -569,14 +620,14 @@ defmodule LemonWeb.SessionLive do
 
             <div class="flex flex-wrap items-center justify-between gap-3">
               <p id="composer-help" class="text-xs text-slate-500">
-                <%= if @run_status in [:running, :stopping] do %>
+                <%= if @run_status in [:running, :stopping, :unavailable] do %>
                   {composer_help(@run_status, @control_mode)}
                 <% else %>
                   Supports up to five files and live streaming updates.
                 <% end %>
               </p>
               <div class="composer-actions">
-                <%= if @run_status in [:running, :stopping] and is_binary(@last_run_id) do %>
+                <%= if @run_status == :unavailable or (@run_status in [:running, :stopping] and is_binary(@last_run_id)) do %>
                   <button
                     type="button"
                     phx-click="refresh-run-status"
@@ -584,6 +635,8 @@ defmodule LemonWeb.SessionLive do
                   >
                     Check status
                   </button>
+                <% end %>
+                <%= if @run_status in [:running, :stopping] and is_binary(@last_run_id) do %>
                   <button
                     type="button"
                     phx-click="stop-run"
@@ -593,7 +646,10 @@ defmodule LemonWeb.SessionLive do
                     {if @run_status == :stopping, do: "Stopping…", else: "Stop"}
                   </button>
                 <% end %>
-                <.button type="submit" disabled={!@setup_ready? or @run_status == :stopping}>
+                <.button
+                  type="submit"
+                  disabled={!@setup_ready? or @run_status in [:stopping, :unavailable]}
+                >
                   {submit_label(@run_status, @control_mode)}
                 </.button>
               </div>
@@ -629,6 +685,7 @@ defmodule LemonWeb.SessionLive do
     case active_run_for_session(session_key) do
       {:ok, run_id} -> {run_id, :running}
       :none -> {nil, :idle}
+      {:error, :unavailable} -> {nil, :unavailable}
     end
   end
 
@@ -640,14 +697,32 @@ defmodule LemonWeb.SessionLive do
       end
 
     case result do
-      {:ok, run_id} when is_binary(run_id) and run_id != "" -> {:ok, run_id}
-      run_id when is_binary(run_id) and run_id != "" -> {:ok, run_id}
-      _ -> :none
+      {:ok, run_id} when is_binary(run_id) and run_id != "" ->
+        {:ok, run_id}
+
+      run_id when is_binary(run_id) and run_id != "" ->
+        {:ok, run_id}
+
+      {:error, reason} ->
+        Logger.warning("active run lookup failed class=#{failure_class(reason)}")
+
+        {:error, :unavailable}
+
+      :none ->
+        :none
+
+      unexpected ->
+        Logger.warning("active run lookup returned unexpected class=#{failure_class(unexpected)}")
+        {:error, :unavailable}
     end
   rescue
-    _ -> :none
+    error ->
+      Logger.warning("active run lookup raised class=#{failure_class(error)}")
+      {:error, :unavailable}
   catch
-    :exit, _ -> :none
+    :exit, reason ->
+      Logger.warning("active run lookup exited class=#{failure_class(reason)}")
+      {:error, :unavailable}
   end
 
   defp reconcile_active_run(socket) do
@@ -671,7 +746,22 @@ defmodule LemonWeb.SessionLive do
           |> assign(:last_run_id, nil)
           |> assign(:run_status, :idle)
 
-        {:error, socket}
+        {:none, socket}
+
+      {:error, :unavailable} ->
+        # Keep a known running/stopping state intact. On an initial mount there
+        # is no safe state to preserve, so render an explicit unavailable UI.
+        socket =
+          if socket.assigns.run_status in [:running, :stopping] and
+               is_binary(socket.assigns.last_run_id) do
+            socket
+          else
+            socket
+            |> assign(:last_run_id, nil)
+            |> assign(:run_status, :unavailable)
+          end
+
+        {:unavailable, socket}
     end
   end
 
@@ -750,9 +840,13 @@ defmodule LemonWeb.SessionLive do
   defp composer_placeholder(:running, :steer), do: "What should Lemon adjust right now?"
   defp composer_placeholder(:running, :redirect), do: "What should Lemon do instead?"
   defp composer_placeholder(:stopping, _mode), do: "Wait for the current run to stop..."
+  defp composer_placeholder(:unavailable, _mode), do: "Check run status before sending..."
   defp composer_placeholder(_status, _mode), do: "Ask Lemon to do work..."
 
   defp composer_help(:stopping, _mode), do: "Stopping the current run..."
+
+  defp composer_help(:unavailable, _mode),
+    do: "Run status must be available before another message can be sent."
 
   defp composer_help(:running, :followup),
     do: "Follow-up starts as a separate turn after this run."
@@ -767,7 +861,17 @@ defmodule LemonWeb.SessionLive do
   defp submit_label(:running, :followup), do: "Queue follow-up"
   defp submit_label(:running, :steer), do: "Send steer"
   defp submit_label(:running, :redirect), do: "Request redirect"
+  defp submit_label(:unavailable, _mode), do: "Check status first"
   defp submit_label(_status, _mode), do: "Send"
+
+  defp failure_class(%{__exception__: true, __struct__: module}) when is_atom(module),
+    do: "exception:" <> inspect(module)
+
+  defp failure_class(reason) when is_atom(reason), do: "atom"
+  defp failure_class(reason) when is_tuple(reason), do: "tuple"
+  defp failure_class(reason) when is_map(reason), do: "map"
+  defp failure_class(reason) when is_list(reason), do: "list"
+  defp failure_class(_reason), do: "other"
 
   defp setup_recovery_message do
     "Finish setup before chatting: run `lemon setup` in a terminal, then check again."
@@ -1156,9 +1260,7 @@ defmodule LemonWeb.SessionLive do
 
   defp read(map, key), do: MapHelpers.get_key(map, key)
 
-  defp format_error(error) when is_binary(error), do: error
   defp format_error(error) when is_atom(error), do: Atom.to_string(error)
-  defp format_error(error), do: inspect(error)
 
   defp sanitize_filename(name) when is_binary(name) do
     name

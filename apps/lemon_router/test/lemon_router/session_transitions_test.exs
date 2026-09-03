@@ -32,6 +32,31 @@ defmodule LemonRouter.SessionTransitionsTest do
     assert effects == []
   end
 
+  test "replaying a retained run id is a no-op in every coordinator phase" do
+    duplicate = submission("stable", "s1", :collect, "duplicate")
+
+    states = [
+      %SessionState{
+        conversation_key: {:session, "s1"},
+        active: %{run_id: "stable", session_key: "s1"}
+      },
+      %SessionState{
+        conversation_key: {:session, "s1"},
+        queue: [submission("stable", "s1", :collect, "queued")]
+      },
+      %SessionState{
+        conversation_key: {:session, "s1"},
+        pending_steers: %{
+          "active" => [{submission("stable", "s1", :followup, "pending"), :followup}]
+        }
+      }
+    ]
+
+    for state <- states do
+      assert {:ok, ^state, [:noop]} = SessionTransitions.submit(state, duplicate, 100)
+    end
+  end
+
   test "cancel clears queue and pending steers and emits cancel effect when active exists" do
     state = %SessionState{
       conversation_key: {:session, "s1"},

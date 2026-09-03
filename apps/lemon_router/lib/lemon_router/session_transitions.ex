@@ -11,15 +11,36 @@ defmodule LemonRouter.SessionTransitions do
   @spec submit(SessionState.t(), Submission.t(), integer()) ::
           {:ok, SessionState.t(), [QueueEffect.t()]}
   def submit(%SessionState{} = state, %Submission{} = submission, now_ms) do
-    submission = normalize_queue_mode(submission)
-    requested_mode = submission.queue_mode
-    submission = maybe_promote_auto_followup(submission, state)
+    if retained_run_id?(state, submission.run_id) do
+      # A caller can lose the acknowledgement after this coordinator accepted
+      # the fixed run ID. Replaying that ID is an acknowledgement lookup, not a
+      # second queue mutation.
+      {:ok, state, [:noop]}
+    else
+      submission = normalize_queue_mode(submission)
+      requested_mode = submission.queue_mode
+      submission = maybe_promote_auto_followup(submission, state)
 
-    {state, effects} = enqueue_by_mode(state, submission, now_ms, requested_mode)
-    effects = maybe_request_start_next(state, effects)
+      {state, effects} = enqueue_by_mode(state, submission, now_ms, requested_mode)
+      effects = maybe_request_start_next(state, effects)
 
-    {:ok, state, effects}
+      {:ok, state, effects}
+    end
   end
+
+  defp retained_run_id?(%SessionState{} = state, run_id)
+       when is_binary(run_id) and run_id != "" do
+    active_run?(state.active, run_id) or
+      Enum.any?(state.queue, &(&1.run_id == run_id)) or
+      Enum.any?(state.pending_steers, fn {_active_run_id, entries} ->
+        Enum.any?(entries, fn
+          {%Submission{run_id: ^run_id}, _fallback_mode} -> true
+          _ -> false
+        end)
+      end)
+  end
+
+  defp retained_run_id?(_state, _run_id), do: false
 
   @spec cancel(SessionState.t(), term()) :: {:ok, SessionState.t(), [QueueEffect.t()]}
   def cancel(%SessionState{} = state, reason) do

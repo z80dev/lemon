@@ -815,9 +815,8 @@ async function handlePoll() {
           continue;
         }
 
-        rememberSeenMessageKey(dedupeKey);
-
         if (isSelfAuthoredMessage(message)) {
+          rememberSeenMessageKey(dedupeKey);
           continue;
         }
 
@@ -831,6 +830,7 @@ async function handlePoll() {
 
         emit({
           type: "message",
+          bridge_dedupe_key: dedupeKey,
           conversation_id: cid,
           message_id: messageId(message),
           sender_address: sender.wallet_address,
@@ -922,6 +922,11 @@ async function handleCommand(command) {
 
   if (op === "poll") {
     await handlePoll();
+    return;
+  }
+
+  if (op === "ack_inbound") {
+    rememberSeenMessageKey(normalizeText(command?.dedupe_key));
     return;
   }
 

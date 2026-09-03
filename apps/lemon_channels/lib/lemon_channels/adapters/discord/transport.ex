@@ -25,6 +25,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   alias LemonChannels.BindingResolver
   alias LemonChannels.Cwd
   alias LemonChannels.Discord.KnownTargetStore
+  alias LemonChannels.SubmissionOutcome
   alias LemonChannels.Telegram.TransportShared
   alias LemonCore.ChatScope
 
@@ -295,7 +296,8 @@ defmodule LemonChannels.Adapters.Discord.Transport do
          {:ok, inbound} <- normalize_message_inbound(message, state),
          true <- allowed_inbound?(inbound, state),
          true <- binding_allowed?(inbound, state),
-         :new <- check_dedupe(inbound, state) do
+         {:new, dedupe_ref} <- check_dedupe(inbound, state) do
+      inbound = put_submission_dedupe_ref(inbound, dedupe_ref)
       _ = maybe_index_known_target(state, inbound, message)
       handle_inbound_message(state, inbound)
     else
@@ -331,21 +333,57 @@ defmodule LemonChannels.Adapters.Discord.Transport do
           :seen
         else
           :ok = Store.put(:idempotency, store_key, %{"inserted_at_ms" => now})
-          :new
+          {:new, %{memory_key: key, persistent_key: store_key}}
         end
 
       _ ->
         :ok = Store.put(:idempotency, store_key, %{"inserted_at_ms" => now})
-        :new
+        {:new, %{memory_key: key, persistent_key: store_key}}
     end
   rescue
-    _ -> :new
+    _ -> {:new, %{memory_key: key, persistent_key: persistent_dedupe_key(inbound, key)}}
   end
 
   defp persistent_dedupe_key(inbound, key) do
     account_id = inbound.account_id || "default"
     encoded = key |> :erlang.term_to_binary() |> Base.url_encode64(padding: false)
     "#{@persistent_dedupe_scope}:#{account_id}:#{encoded}"
+  end
+
+  defp put_submission_dedupe_ref(inbound, dedupe_ref) do
+    meta = inbound.meta || %{}
+    refs = [dedupe_ref | List.wrap(meta[:transport_dedupe_refs])]
+    %{inbound | meta: Map.put(meta, :transport_dedupe_refs, refs)}
+  end
+
+  defp merge_submission_dedupe_refs(inbound, previous_inbound) do
+    previous_refs = List.wrap((previous_inbound.meta || %{})[:transport_dedupe_refs])
+
+    Enum.reduce(previous_refs, inbound, fn dedupe_ref, acc ->
+      put_submission_dedupe_ref(acc, dedupe_ref)
+    end)
+  end
+
+  defp pop_submission_dedupe_refs(inbound) do
+    meta = inbound.meta || %{}
+
+    {List.wrap(meta[:transport_dedupe_refs]),
+     %{inbound | meta: Map.delete(meta, :transport_dedupe_refs)}}
+  end
+
+  defp forget_submission_dedupe(refs) do
+    Enum.each(refs, fn
+      %{memory_key: memory_key, persistent_key: persistent_key} ->
+        _ = :ets.delete(@dedupe_table, memory_key)
+        _ = Store.delete(:idempotency, persistent_key)
+
+      _ ->
+        :ok
+    end)
+
+    :ok
+  rescue
+    _ -> :ok
   end
 
   defp handle_inbound_message(state, inbound) do
@@ -411,6 +449,8 @@ defmodule LemonChannels.Adapters.Discord.Transport do
 
     buffer =
       if existing do
+        inbound = merge_submission_dedupe_refs(inbound, existing.inbound)
+
         %{
           existing
           | messages: [msg_entry | existing.messages],
@@ -439,22 +479,23 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   end
 
   defp submit_inbound_now(state, inbound) do
+    {_outcome, state} = submit_inbound_now_with_result(state, inbound)
+    state
+  end
+
+  defp submit_inbound_now_with_result(state, inbound) do
     {queue_override, inbound} = apply_queue_prefix(inbound)
+    {dedupe_refs, inbound} = pop_submission_dedupe_refs(inbound)
 
     channel_id = inbound.meta[:channel_id]
     thread_id = inbound.meta[:thread_id]
     user_msg_id = inbound.meta[:user_msg_id]
 
-    # Set 👀 reaction on user message
+    # The message itself is the progress target. The reaction is added only
+    # after the router accepts the run, so a rejected submission never looks
+    # queued to the user.
     progress_msg_id =
-      if is_integer(channel_id) and is_integer(user_msg_id) do
-        case Outbound.create_reaction(channel_id, user_msg_id, "👀") do
-          {:ok, _} -> user_msg_id
-          _ -> nil
-        end
-      else
-        nil
-      end
+      if is_integer(channel_id) and is_integer(user_msg_id), do: user_msg_id, else: nil
 
     scope =
       if is_integer(channel_id),
@@ -478,23 +519,6 @@ defmodule LemonChannels.Adapters.Discord.Transport do
       |> maybe_put(:thinking_level, thinking_hint)
       |> maybe_put(:thinking_scope, thinking_scope)
       |> maybe_put(:queue_mode, queue_override)
-
-    # Track for reaction updates
-    state =
-      if is_integer(progress_msg_id) and is_binary(session_key) do
-        maybe_subscribe_to_session(session_key)
-
-        reaction_run = %{
-          channel_id: channel_id,
-          thread_id: thread_id,
-          user_msg_id: user_msg_id,
-          session_key: session_key
-        }
-
-        %{state | reaction_runs: Map.put(state.reaction_runs, session_key, reaction_run)}
-      else
-        state
-      end
 
     meta =
       case meta[:resume] do
@@ -523,7 +547,7 @@ defmodule LemonChannels.Adapters.Discord.Transport do
     case ResumeSelection.extract_explicit_resume_and_strip(inbound.message.text) do
       {:unsupported, engine} ->
         _ = send_channel_message(channel_id, unsupported_resume_message(engine))
-        state
+        {:handled, state}
 
       {%ResumeToken{engine: "lemon"} = explicit_resume, stripped_prompt} ->
         inbound =
@@ -534,12 +558,11 @@ defmodule LemonChannels.Adapters.Discord.Transport do
               message: Map.put(inbound.message || %{}, :text, stripped_prompt)
           }
 
-        _ = route_to_router(inbound)
-        state
+        finish_submission(state, inbound, dedupe_refs)
 
       {%ResumeToken{engine: engine}, _stripped_prompt} ->
         _ = send_channel_message(channel_id, unsupported_resume_message(engine))
-        state
+        {:handled, state}
 
       {_explicit_resume, stripped_prompt} ->
         inbound = %{
@@ -548,8 +571,75 @@ defmodule LemonChannels.Adapters.Discord.Transport do
             message: Map.put(inbound.message || %{}, :text, stripped_prompt)
         }
 
-        _ = route_to_router(inbound)
-        state
+        finish_submission(state, inbound, dedupe_refs)
+    end
+  end
+
+  defp finish_submission(state, inbound, dedupe_refs) do
+    case route_to_router(inbound) do
+      :ok ->
+        {:ok, track_accepted_submission(state, inbound)}
+
+      {:error, _} = error ->
+        if SubmissionOutcome.retry_safe?(error), do: forget_submission_dedupe(dedupe_refs)
+        maybe_report_submission_failure(inbound, error)
+        {error, state}
+    end
+  end
+
+  defp track_accepted_submission(state, inbound) do
+    meta = inbound.meta || %{}
+    channel_id = meta[:channel_id]
+    thread_id = meta[:thread_id]
+    user_msg_id = meta[:user_msg_id]
+    session_key = meta[:session_key]
+
+    reaction_added? =
+      if is_integer(channel_id) and is_integer(user_msg_id) do
+        match?({:ok, _}, Outbound.create_reaction(channel_id, user_msg_id, "👀"))
+      else
+        false
+      end
+
+    if reaction_added? and is_binary(session_key) do
+      maybe_subscribe_to_session(session_key)
+
+      reaction_run = %{
+        channel_id: channel_id,
+        thread_id: thread_id,
+        user_msg_id: user_msg_id,
+        session_key: session_key
+      }
+
+      %{state | reaction_runs: Map.put(state.reaction_runs, session_key, reaction_run)}
+    else
+      state
+    end
+  rescue
+    _ -> state
+  end
+
+  defp maybe_report_submission_failure(inbound, error) do
+    meta = inbound.meta || %{}
+
+    if meta[:source] != :slash and is_integer(meta[:channel_id]) do
+      _ =
+        Outbound.send_with_components(
+          meta[:channel_id],
+          submission_failure_message(error),
+          [],
+          []
+        )
+    end
+
+    :ok
+  end
+
+  defp submission_failure_message(error) do
+    if SubmissionOutcome.uncertain?(error) do
+      "I couldn't confirm whether that request was accepted. Check the run status before retrying."
+    else
+      "I couldn't queue that request. Please try again."
     end
   end
 
@@ -747,12 +837,14 @@ defmodule LemonChannels.Adapters.Discord.Transport do
     prompt = option_value(interaction, "prompt")
 
     if is_binary(prompt) and String.trim(prompt) != "" do
-      respond_ephemeral(interaction, "Queued")
-
       inbound = interaction_to_inbound(interaction, prompt, state)
 
       if allowed_inbound?(inbound, state) and binding_allowed?(inbound, state) do
-        submit_inbound_now(state, inbound)
+        respond_to_submission(
+          interaction,
+          submit_inbound_now_with_result(state, inbound),
+          "Queued"
+        )
       else
         state
       end
@@ -770,13 +862,15 @@ defmodule LemonChannels.Adapters.Discord.Transport do
     correction = option_value(interaction, "correction")
 
     if is_binary(correction) and String.trim(correction) != "" do
-      respond_ephemeral(interaction, "Redirecting…")
-
       inbound = interaction_to_inbound(interaction, correction, state)
       inbound = %{inbound | meta: Map.put(inbound.meta || %{}, :queue_mode, :redirect)}
 
       if allowed_inbound?(inbound, state) and binding_allowed?(inbound, state) do
-        submit_inbound_now(state, inbound)
+        respond_to_submission(
+          interaction,
+          submit_inbound_now_with_result(state, inbound),
+          "Redirecting…"
+        )
       else
         state
       end
@@ -792,13 +886,16 @@ defmodule LemonChannels.Adapters.Discord.Transport do
 
     if is_binary(prompt) and String.trim(prompt) != "" do
       response = if(queue_mode == :steer, do: "Steering…", else: "Queued as follow-up")
-      respond_ephemeral(interaction, response)
 
       inbound = interaction_to_inbound(interaction, prompt, state)
       inbound = %{inbound | meta: Map.put(inbound.meta || %{}, :queue_mode, queue_mode)}
 
       if allowed_inbound?(inbound, state) and binding_allowed?(inbound, state) do
-        submit_inbound_now(state, inbound)
+        respond_to_submission(
+          interaction,
+          submit_inbound_now_with_result(state, inbound),
+          response
+        )
       else
         state
       end
@@ -806,6 +903,12 @@ defmodule LemonChannels.Adapters.Discord.Transport do
       respond_ephemeral(interaction, "Prompt cannot be empty.")
       state
     end
+  end
+
+  defp respond_to_submission(interaction, {outcome, state}, success_message) do
+    message = if outcome == :ok, do: success_message, else: submission_failure_message(outcome)
+    _ = respond_ephemeral(interaction, message)
+    state
   end
 
   defp handle_portable_interaction(interaction, state, command) do
@@ -1327,23 +1430,27 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   defp handle_cancel_interaction(interaction, state) do
     session_key = interaction_session_key(interaction, state)
 
-    if Code.ensure_loaded?(RouterBridge) and function_exported?(RouterBridge, :active_run, 1) do
-      case RouterBridge.active_run(session_key) do
-        {:ok, run_id} ->
-          if Code.ensure_loaded?(LemonChannels.Runtime) and
-               function_exported?(LemonChannels.Runtime, :cancel_by_run_id, 2) do
-            LemonChannels.Runtime.cancel_by_run_id(run_id, :user_requested)
-          else
-            _ = RouterBridge.abort_run(run_id, :user_requested)
-          end
+    case RouterBridge.active_run(session_key) do
+      {:ok, run_id} ->
+        case LemonChannels.Runtime.cancel_by_run_id(run_id, :user_requested) do
+          :ok ->
+            _ = respond_ephemeral(interaction, "Cancelling run...")
 
-          respond_ephemeral(interaction, "Cancelling run...")
+          {:error, _} = error ->
+            Logger.warning("discord cancel failed: reason=#{SubmissionOutcome.log_label(error)}")
 
-        _ ->
-          respond_ephemeral(interaction, "No active run to cancel.")
-      end
-    else
-      respond_ephemeral(interaction, "Cancel not available.")
+            _ = respond_ephemeral(interaction, cancellation_failure_message(error))
+        end
+
+      :none ->
+        _ = respond_ephemeral(interaction, "No active run to cancel.")
+
+      {:error, reason} ->
+        Logger.warning(
+          "discord cancel unavailable: reason=#{SubmissionOutcome.log_label({:error, reason})}"
+        )
+
+        _ = respond_ephemeral(interaction, "Cancel not available: the router is unavailable.")
     end
 
     state
@@ -1635,14 +1742,19 @@ defmodule LemonChannels.Adapters.Discord.Transport do
   defp handle_cancel_component(interaction, custom_id) do
     run_id = String.trim_leading(custom_id, @cancel_callback_prefix <> ":")
 
-    if is_binary(run_id) and run_id != "" do
-      if Code.ensure_loaded?(LemonChannels.Runtime) and
-           function_exported?(LemonChannels.Runtime, :cancel_by_run_id, 2) do
-        LemonChannels.Runtime.cancel_by_run_id(run_id, :user_requested)
-      end
-    end
+    case LemonChannels.Runtime.cancel_by_run_id(run_id, :user_requested) do
+      :ok ->
+        update_interaction(interaction, "Cancelling...", [])
 
-    update_interaction(interaction, "Cancelling...", [])
+      {:error, _} = error ->
+        Logger.warning(
+          "discord cancel component failed: reason=#{SubmissionOutcome.log_label(error)}"
+        )
+
+        # An ephemeral response acknowledges the click without replacing the
+        # source message, so its cancel/retry controls remain available.
+        respond_ephemeral(interaction, cancellation_failure_message(error))
+    end
   end
 
   defp handle_keepalive_component(interaction, custom_id, decision) do
@@ -1652,15 +1764,40 @@ defmodule LemonChannels.Adapters.Discord.Transport do
         :cancel -> String.trim_leading(custom_id, @idle_keepalive_stop_prefix)
       end
 
-    if is_binary(run_id) and run_id != "" do
-      if Code.ensure_loaded?(LemonChannels.Runtime) and
-           function_exported?(LemonChannels.Runtime, :keep_run_alive, 2) do
-        LemonChannels.Runtime.keep_run_alive(run_id, decision)
-      end
-    end
+    case LemonChannels.Runtime.keep_run_alive(run_id, decision) do
+      :ok when decision == :continue ->
+        update_interaction(interaction, "Continuing run.", [])
 
-    msg = if decision == :continue, do: "Continuing run.", else: "Stopping run."
-    update_interaction(interaction, msg, [])
+      :ok ->
+        update_interaction(interaction, "Stopping run.", [])
+
+      {:error, _} = error ->
+        Logger.warning(
+          "discord keep-alive component failed: reason=#{SubmissionOutcome.log_label(error)}"
+        )
+
+        # Do not update the source message on failure. Its controls are the
+        # user's safe retry path.
+        respond_ephemeral(interaction, keepalive_failure_message(error, decision))
+    end
+  end
+
+  defp cancellation_failure_message(error) do
+    if SubmissionOutcome.uncertain?(error) do
+      "I couldn't confirm whether cancellation was accepted. Check the run status before trying again."
+    else
+      "I couldn't cancel the run. Please try again."
+    end
+  end
+
+  defp keepalive_failure_message(error, decision) do
+    action = if decision == :cancel, do: "stopping the run", else: "continuing the run"
+
+    if SubmissionOutcome.uncertain?(error) do
+      "I couldn't confirm whether #{action} was accepted. Check the run status before trying again."
+    else
+      "I couldn't apply that decision. The controls remain available; please try again."
+    end
   end
 
   # ============================================================================
@@ -2748,10 +2885,17 @@ defmodule LemonChannels.Adapters.Discord.Transport do
       :ok ->
         :ok
 
-      {:error, reason} ->
-        Logger.warning("discord inbound routing failed: #{inspect(reason)}")
-        :ok
+      {:error, _} = error ->
+        Logger.warning(
+          "discord inbound routing failed: reason=#{SubmissionOutcome.log_label(error)}"
+        )
+
+        error
     end
+  rescue
+    _ ->
+      Logger.warning("discord inbound routing failed: reason=unavailable")
+      {:error, :unavailable}
   end
 
   defp safe_delete_chat_state(key) do

@@ -1,0 +1,105 @@
+defmodule LemonCore.RouterBridge.Router do
+  @moduledoc """
+  The router half of `LemonCore.RouterBridge`: what a message router must
+  implement to be registered under the `:router` key.
+
+  `LemonCore.RouterBridge.configure/1` validates the module against this
+  behaviour with `LemonCore.Contract.validate/2`, so once a router is
+  registered the bridge calls it directly.
+
+  ## Defaults for partial routers
+
+  `use LemonCore.RouterBridge.Router` injects an overridable implementation of
+  every callback that raises `LemonCore.RouterBridge.NotImplementedError`. A
+  partial router, typically a test double, therefore satisfies the contract
+  while any call it does not handle fails visibly rather than answering with
+  an invented value. Because a raised mutation cannot prove that no side
+  effect occurred, the bridge conservatively reports a default mutation as
+  `{:error, :outcome_unknown}`; query defaults become the sanitized
+  `{:error, :query_failed}`.
+
+  ## Mutation error contract
+
+  For `handle_inbound/1`, `abort/2`, `abort_run/2`, and `keep_run_alive/2`, an
+  `{:error, reason}` other than `{:error, :outcome_unknown}` is a definite
+  rejection: implementations must return it only when they can guarantee the
+  mutation did not take effect. If the outcome cannot be proved, return
+  `{:error, :outcome_unknown}`. Raised exceptions, thrown terms, and malformed
+  acknowledgements are normalized conservatively by the bridge.
+  """
+
+  alias LemonCore.InboundMessage
+
+  @doc "Route an inbound channel message. `:ok` means the router accepted responsibility."
+  @callback handle_inbound(InboundMessage.t()) :: :ok | {:error, term()}
+
+  @doc """
+  Ask the router to abort every run of a session. `:ok` means the decision was
+  accepted or dispatched, not that each run process has synchronously applied
+  it. Unknown sessions are `:ok`; operational failures are `{:error, reason}`.
+  """
+  @callback abort(session_key :: binary(), reason :: term()) :: :ok | {:error, term()}
+
+  @doc """
+  Ask the router to abort one run by id. `:ok` means the decision was accepted
+  or dispatched, not that the run process has synchronously applied it.
+  Finished or unknown runs are `:ok`; operational failures are
+  `{:error, reason}`.
+  """
+  @callback abort_run(run_id :: binary(), reason :: term()) :: :ok | {:error, term()}
+
+  @doc """
+  Dispatch a watchdog keep-alive decision to a run. `:ok` acknowledges the
+  dispatch, not synchronous application by the run process. Unknown runs are
+  `:ok`; operational failures are `{:error, reason}`.
+  """
+  @callback keep_run_alive(run_id :: binary(), decision :: :continue | :cancel) ::
+              :ok | {:error, term()}
+
+  @doc "Whether the session currently has an active run."
+  @callback session_busy?(session_key :: binary()) :: boolean() | {:error, term()}
+
+  @doc "The active run of a session, if any."
+  @callback active_run(session_key :: binary()) ::
+              {:ok, binary()} | :none | {:error, term()}
+
+  @doc "Every session with an active run. Session and run ids must be non-empty binaries."
+  @callback list_active_sessions() ::
+              [%{session_key: binary(), run_id: binary()}] | {:error, term()}
+
+  defmacro __using__(_opts) do
+    quote do
+      @behaviour LemonCore.RouterBridge.Router
+
+      alias LemonCore.RouterBridge.NotImplementedError
+
+      def handle_inbound(_message),
+        do: raise(NotImplementedError, module: __MODULE__, function: :handle_inbound, arity: 1)
+
+      def abort(_session_key, _reason),
+        do: raise(NotImplementedError, module: __MODULE__, function: :abort, arity: 2)
+
+      def abort_run(_run_id, _reason),
+        do: raise(NotImplementedError, module: __MODULE__, function: :abort_run, arity: 2)
+
+      def keep_run_alive(_run_id, _decision),
+        do: raise(NotImplementedError, module: __MODULE__, function: :keep_run_alive, arity: 2)
+
+      def session_busy?(_session_key),
+        do: raise(NotImplementedError, module: __MODULE__, function: :session_busy?, arity: 1)
+
+      def active_run(_session_key),
+        do: raise(NotImplementedError, module: __MODULE__, function: :active_run, arity: 1)
+
+      def list_active_sessions,
+        do:
+          raise(NotImplementedError,
+            module: __MODULE__,
+            function: :list_active_sessions,
+            arity: 0
+          )
+
+      defoverridable LemonCore.RouterBridge.Router
+    end
+  end
+end

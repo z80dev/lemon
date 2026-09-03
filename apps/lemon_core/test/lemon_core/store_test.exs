@@ -1,6 +1,8 @@
 defmodule LemonCore.StoreTest do
   use ExUnit.Case, async: false
 
+  import ExUnit.CaptureLog
+
   alias LemonCore.Store
 
   setup do
@@ -28,6 +30,118 @@ defmodule LemonCore.StoreTest do
 
     @impl true
     def list(_state, _table), do: {:error, :sqlite_busy}
+  end
+
+  defmodule SecondDeleteFailureBackend do
+    @behaviour LemonCore.Store.Backend
+
+    @impl true
+    def init(_opts), do: {:ok, %{data: %{}, delete_count: 0}}
+
+    @impl true
+    def put(state, table, key, value),
+      do: {:ok, put_in(state, [:data, {table, key}], value)}
+
+    @impl true
+    def put_new(state, table, key, value) do
+      if Map.has_key?(state.data, {table, key}),
+        do: {:exists, state},
+        else: put(state, table, key, value)
+    end
+
+    @impl true
+    def get(state, table, key), do: {:ok, Map.get(state.data, {table, key}), state}
+
+    @impl true
+    def delete(%{delete_count: 1}, _table, _key), do: {:error, :injected_second_delete}
+
+    def delete(state, table, key) do
+      {:ok,
+       %{state | data: Map.delete(state.data, {table, key}), delete_count: state.delete_count + 1}}
+    end
+
+    @impl true
+    def list(state, table) do
+      entries =
+        for {{^table, key}, value} <- state.data,
+            do: {key, value}
+
+      {:ok, entries, state}
+    end
+  end
+
+  defmodule DiagnosticLeakBackend do
+    @behaviour LemonCore.Store.Backend
+
+    @impl true
+    def init(_opts), do: {:ok, %{mode: :error, secret: "unset"}}
+
+    @impl true
+    def put(_state, _table, _key, _value), do: {:error, :read_only}
+
+    @impl true
+    def put_new(_state, _table, _key, _value), do: {:error, :read_only}
+
+    @impl true
+    def get(%{mode: :error, secret: secret}, _table, key) do
+      {:error, {:decode_failed, %{context: %{key: key}, detail: secret}}}
+    end
+
+    def get(%{mode: :unexpected, secret: secret}, _table, key) do
+      {:unexpected, %{context: %{key: key}, detail: secret}}
+    end
+
+    def get(%{mode: {:error_term, reason}}, _table, _key), do: {:error, reason}
+
+    def get(%{mode: :ok} = state, table, key),
+      do: {:ok, Map.get(state.data, {table, key}), state}
+
+    @impl true
+    def delete(_state, _table, _key), do: {:error, :read_only}
+
+    @impl true
+    def list(state, _table), do: {:ok, [], state}
+
+    @impl true
+    def compare_and_delete_many(%{mode: {:compare_unexpected, response}}, _entries),
+      do: response
+  end
+
+  defmodule FallbackUnexpectedBackend do
+    @behaviour LemonCore.Store.Backend
+
+    @impl true
+    def init(_opts), do: {:ok, %{data: %{}, mode: :ok, secret: "unset"}}
+
+    @impl true
+    def put(state, table, key, value),
+      do: {:ok, put_in(state, [:data, {table, key}], value)}
+
+    @impl true
+    def put_new(state, table, key, value) do
+      if Map.has_key?(state.data, {table, key}),
+        do: {:exists, state},
+        else: put(state, table, key, value)
+    end
+
+    @impl true
+    def get(%{mode: :unexpected_get, secret: secret}, _table, key),
+      do: {:unexpected_get, %{key: key, secret: secret}}
+
+    def get(state, table, key), do: {:ok, Map.get(state.data, {table, key}), state}
+
+    @impl true
+    def delete(%{mode: :unexpected_delete, secret: secret}, _table, key),
+      do: {:unexpected_delete, %{key: key, secret: secret}}
+
+    def delete(state, table, key),
+      do: {:ok, %{state | data: Map.delete(state.data, {table, key})}}
+
+    @impl true
+    def list(state, table) do
+      entries = for {{^table, key}, value} <- state.data, do: {key, value}
+      {:ok, entries, state}
+    end
   end
 
   defp unique_token do
@@ -389,6 +503,18 @@ defmodule LemonCore.StoreTest do
   end
 
   describe "backend error handling" do
+    test "fetch distinguishes confirmed absence from backend failure" do
+      key = "fetch_#{unique_token()}"
+      assert {:ok, nil} = Store.fetch(:router_run_admissions, key)
+      assert {:ok, nil} = Store.fetch_run(key)
+
+      original_state = swap_store_backend(BusyBackend, %{})
+      on_exit(fn -> :sys.replace_state(Store, fn _ -> original_state end) end)
+
+      assert {:error, :store_unavailable} = Store.fetch(:router_run_admissions, key)
+      assert {:error, :store_unavailable} = Store.fetch_run(key)
+    end
+
     test "sessions index reads are served from read cache even when backend becomes busy" do
       token = unique_token()
       key = session_key(token)
@@ -482,6 +608,257 @@ defmodule LemonCore.StoreTest do
       assert Enum.count(results, &(&1 == {:error, :mismatch})) == 11
       assert %{generation: generation} = Store.get(:session_token_heads, key)
       assert generation in 2..13
+    end
+
+    test "generic compare_and_delete preserves a value changed after a cleanup snapshot" do
+      key = "compare_delete_#{unique_token()}"
+      claimed = %{state: "claimed", expires_at_ms: 0}
+      submitting = %{state: "submitting"}
+
+      assert :ok = Store.put(:session_token_heads, key, claimed)
+      snapshot = Store.get(:session_token_heads, key)
+
+      assert :ok = Store.compare_and_swap(:session_token_heads, key, claimed, submitting)
+
+      assert {:error, :mismatch} =
+               Store.compare_and_delete(:session_token_heads, key, snapshot)
+
+      assert Store.get(:session_token_heads, key) == submitting
+      assert :ok = Store.compare_and_delete(:session_token_heads, key, submitting)
+      assert Store.get(:session_token_heads, key) == nil
+    end
+
+    test "generic compare_and_delete_many validates every snapshot before deleting any" do
+      suffix = unique_token()
+      first_key = "compare_delete_many_first_#{suffix}"
+      second_key = "compare_delete_many_second_#{suffix}"
+      original = %{generation: 1}
+      renewed = %{generation: 2}
+
+      assert :ok = Store.put(:session_token_heads, first_key, original)
+      assert :ok = Store.put(:session_token_heads, second_key, original)
+      assert :ok = Store.compare_and_swap(:session_token_heads, second_key, original, renewed)
+
+      assert {:error, :mismatch} =
+               Store.compare_and_delete_many([
+                 {:session_token_heads, first_key, original},
+                 {:session_token_heads, second_key, original}
+               ])
+
+      assert Store.get(:session_token_heads, first_key) == original
+      assert Store.get(:session_token_heads, second_key) == renewed
+
+      assert :ok =
+               Store.compare_and_delete_many([
+                 {:session_token_heads, first_key, original},
+                 {:session_token_heads, second_key, renewed}
+               ])
+
+      assert Store.get(:session_token_heads, first_key) == nil
+      assert Store.get(:session_token_heads, second_key) == nil
+    end
+
+    test "generic compare_and_delete_many propagates a later backend delete failure" do
+      response = %{kind: :expired_response}
+      primary_fence = %{kind: :execution_fence}
+
+      backend_state = %{
+        data: %{
+          {:responses, :response} => response,
+          {:primary, :fence} => primary_fence
+        },
+        delete_count: 0
+      }
+
+      original_state = swap_store_backend(SecondDeleteFailureBackend, backend_state)
+      on_exit(fn -> :sys.replace_state(Store, fn _ -> original_state end) end)
+
+      assert {:error, :injected_second_delete} =
+               Store.compare_and_delete_many([
+                 {:responses, :response, response},
+                 {:primary, :fence, primary_fence}
+               ])
+
+      assert Store.get(:responses, :response) == nil
+      assert Store.get(:primary, :fence) == primary_fence
+    end
+
+    test "fetch_all distinguishes a backend list failure from an empty table" do
+      original_state = swap_store_backend(BusyBackend, %{})
+      on_exit(fn -> :sys.replace_state(Store, fn _ -> original_state end) end)
+
+      assert Store.list(:webhook_idempotency) == []
+      assert Store.fetch_all(:webhook_idempotency) == {:error, :store_unavailable}
+    end
+
+    test "fetch_all distinguishes a stopped store from an empty table" do
+      missing_store = :missing_store_for_fetch_all
+
+      assert Store.list(missing_store, :webhook_idempotency) == []
+      assert Store.fetch_all(missing_store, :webhook_idempotency) == {:error, :store_unavailable}
+    end
+
+    test "idempotency diagnostics sanitize embedded raw keys and backend payloads" do
+      secret = "backend-diagnostic-secret-#{unique_token()}"
+      raw_key = {"integration", secret}
+      original_state = swap_store_backend(DiagnosticLeakBackend, %{mode: :error, secret: secret})
+      on_exit(fn -> :sys.replace_state(Store, fn _ -> original_state end) end)
+
+      error_log =
+        capture_log(fn ->
+          assert Store.fetch(:webhook_idempotency, raw_key) == {:error, :store_unavailable}
+        end)
+
+      refute error_log =~ secret
+
+      :sys.replace_state(Store, fn state ->
+        %{state | backend_state: %{mode: :unexpected, secret: secret}}
+      end)
+
+      unexpected_log =
+        capture_log(fn ->
+          assert Store.fetch(:webhook_idempotency_responses, raw_key) ==
+                   {:error, :store_unavailable}
+        end)
+
+      refute unexpected_log =~ secret
+    end
+
+    test "idempotency diagnostic sanitizer is total and preserves the Store process" do
+      secret = "total-sanitizer-secret-#{unique_token()}"
+      key = {"integration", secret}
+      fence = %{state: "accepted"}
+      store_pid = Process.whereis(Store)
+
+      original_state =
+        swap_store_backend(DiagnosticLeakBackend, %{
+          mode: {:error_term, [secret | :improper_tail]},
+          data: %{{:webhook_idempotency, key} => fence}
+        })
+
+      on_exit(fn -> :sys.replace_state(Store, fn _ -> original_state end) end)
+
+      improper_log =
+        capture_log(fn ->
+          assert Store.fetch(:webhook_idempotency, key) == {:error, :store_unavailable}
+        end)
+
+      refute improper_log =~ secret
+      assert Process.whereis(Store) == store_pid
+      assert Process.alive?(store_pid)
+
+      deep_term = Enum.reduce(1..1_000, secret, fn _, nested -> {nested} end)
+
+      :sys.replace_state(Store, fn state ->
+        %{state | backend_state: %{state.backend_state | mode: {:error_term, deep_term}}}
+      end)
+
+      deep_log =
+        capture_log(fn ->
+          assert Store.fetch(:webhook_idempotency, key) == {:error, :store_unavailable}
+        end)
+
+      refute deep_log =~ secret
+      assert Process.whereis(Store) == store_pid
+
+      large_term = List.duplicate(secret, 10_000)
+
+      :sys.replace_state(Store, fn state ->
+        %{state | backend_state: %{state.backend_state | mode: {:error_term, large_term}}}
+      end)
+
+      large_log =
+        capture_log(fn ->
+          assert Store.fetch(:webhook_idempotency, key) == {:error, :store_unavailable}
+        end)
+
+      refute large_log =~ secret
+      assert Process.whereis(Store) == store_pid
+
+      :sys.replace_state(Store, fn state ->
+        %{state | backend_state: %{state.backend_state | mode: :ok}}
+      end)
+
+      assert Store.get(:webhook_idempotency, key) == fence
+    end
+
+    test "unexpected multi-delete responses cannot expose sensitive entries" do
+      secret = "multi-delete-secret-#{unique_token()}"
+      key = {"integration", secret}
+      fence = %{state: "accepted", secret: secret}
+      response = {:unexpected, %{entries: [{:webhook_idempotency, key, fence}], secret: secret}}
+
+      original_state =
+        swap_store_backend(DiagnosticLeakBackend, %{
+          mode: {:compare_unexpected, response},
+          secret: secret
+        })
+
+      on_exit(fn -> :sys.replace_state(Store, fn _ -> original_state end) end)
+
+      {result, log} =
+        with_log(fn ->
+          Store.compare_and_delete_many([
+            {:webhook_idempotency_responses, {key, "receipt"}, fence},
+            {:webhook_idempotency, key, fence}
+          ])
+        end)
+
+      assert result == {:error, :unexpected_backend_response}
+      refute log =~ secret
+      refute inspect(result) =~ secret
+      assert Process.alive?(Process.whereis(Store))
+    end
+
+    test "fallback multi-delete bounds unexpected get and delete responses" do
+      secret = "fallback-response-secret-#{unique_token()}"
+      key = {"integration", secret}
+      response_key = {key, "receipt"}
+      fence = %{state: "accepted", secret: secret}
+      receipt = %{status: 200, secret: secret}
+
+      data = %{
+        {:webhook_idempotency, key} => fence,
+        {:webhook_idempotency_responses, response_key} => receipt
+      }
+
+      original_state =
+        swap_store_backend(FallbackUnexpectedBackend, %{
+          data: data,
+          mode: :unexpected_get,
+          secret: secret
+        })
+
+      on_exit(fn -> :sys.replace_state(Store, fn _ -> original_state end) end)
+      store_pid = Process.whereis(Store)
+
+      entries = [
+        {:webhook_idempotency_responses, response_key, receipt},
+        {:webhook_idempotency, key, fence}
+      ]
+
+      {get_result, get_log} = with_log(fn -> Store.compare_and_delete_many(entries) end)
+      assert get_result == {:error, :unexpected_backend_response}
+      refute inspect(get_result) =~ secret
+      refute get_log =~ secret
+      assert Process.whereis(Store) == store_pid
+
+      :sys.replace_state(Store, fn state ->
+        %{state | backend_state: %{state.backend_state | mode: :unexpected_delete}}
+      end)
+
+      {delete_result, delete_log} = with_log(fn -> Store.compare_and_delete_many(entries) end)
+      assert delete_result == {:error, :unexpected_backend_response}
+      refute inspect(delete_result) =~ secret
+      refute delete_log =~ secret
+      assert Process.whereis(Store) == store_pid
+
+      :sys.replace_state(Store, fn state ->
+        %{state | backend_state: %{state.backend_state | mode: :ok}}
+      end)
+
+      assert Store.get(:webhook_idempotency_responses, response_key) == receipt
+      assert Store.get(:webhook_idempotency, key) == fence
     end
 
     test "finalize_run writes history to RunHistoryStore" do

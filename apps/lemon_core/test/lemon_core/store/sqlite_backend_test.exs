@@ -4,6 +4,8 @@ defmodule LemonCore.Store.SqliteBackendTest do
   """
   use ExUnit.Case, async: false
 
+  import ExUnit.CaptureLog
+
   alias Exqlite.Sqlite3
   alias LemonCore.Store.SqliteBackend
 
@@ -344,6 +346,76 @@ defmodule LemonCore.Store.SqliteBackendTest do
 
       assert {:ok, nil, _} = SqliteBackend.get(state, :table_a, "shared_key")
       assert {:ok, "value_b", _} = SqliteBackend.get(state, :table_b, "shared_key")
+    end
+  end
+
+  describe "compare_and_delete_many/2" do
+    setup %{tmp_dir: tmp_dir} do
+      {:ok, state} = SqliteBackend.init(path: tmp_dir)
+      on_exit(fn -> SqliteBackend.close(state) end)
+      {:ok, state: state}
+    end
+
+    test "rolls every persistent delete back when a later delete fails", %{state: state} do
+      assert {:ok, state} = SqliteBackend.put(state, :atomic_first, "key", "first")
+      assert {:ok, state} = SqliteBackend.put(state, :atomic_second, "key", "second")
+
+      assert :ok =
+               Sqlite3.execute(state.conn, """
+               CREATE TRIGGER fail_atomic_second
+               BEFORE DELETE ON lemon_store_kv
+               WHEN OLD.table_name = 'atomic_second'
+               BEGIN
+                 SELECT RAISE(ABORT, 'injected second delete failure');
+               END;
+               """)
+
+      assert {:error, _reason, ^state} =
+               SqliteBackend.compare_and_delete_many(state, [
+                 {:atomic_first, "key", "first"},
+                 {:atomic_second, "key", "second"}
+               ])
+
+      assert {:ok, "first", _} = SqliteBackend.get(state, :atomic_first, "key")
+      assert {:ok, "second", _} = SqliteBackend.get(state, :atomic_second, "key")
+
+      assert :ok = Sqlite3.execute(state.conn, "DROP TRIGGER fail_atomic_second")
+
+      assert {:ok, ^state} =
+               SqliteBackend.compare_and_delete_many(state, [
+                 {:atomic_first, "key", "first"},
+                 {:atomic_second, "key", "second"}
+               ])
+
+      assert {:ok, nil, _} = SqliteBackend.get(state, :atomic_first, "key")
+      assert {:ok, nil, _} = SqliteBackend.get(state, :atomic_second, "key")
+    end
+
+    test "validates mixed ephemeral and persistent snapshots before ordered deletion", %{
+      state: state
+    } do
+      assert {:ok, state} = SqliteBackend.put(state, :runs, "ephemeral", "run")
+      assert {:ok, state} = SqliteBackend.put(state, :durable_fences, "persistent", "fence")
+
+      assert {:error, :mismatch, state} =
+               SqliteBackend.compare_and_delete_many(state, [
+                 {:runs, "ephemeral", "wrong"},
+                 {:durable_fences, "persistent", "fence"}
+               ])
+
+      assert {:ok, "run", state} = SqliteBackend.get(state, :runs, "ephemeral")
+
+      assert {:ok, "fence", state} =
+               SqliteBackend.get(state, :durable_fences, "persistent")
+
+      assert {:ok, state} =
+               SqliteBackend.compare_and_delete_many(state, [
+                 {:runs, "ephemeral", "run"},
+                 {:durable_fences, "persistent", "fence"}
+               ])
+
+      assert {:ok, nil, state} = SqliteBackend.get(state, :runs, "ephemeral")
+      assert {:ok, nil, _state} = SqliteBackend.get(state, :durable_fences, "persistent")
     end
   end
 
@@ -780,6 +852,24 @@ defmodule LemonCore.Store.SqliteBackendTest do
                SqliteBackend.list(state, :mytable)
 
       assert context.table == :mytable
+    end
+
+    test "decode returns structured failure without directly logging decoded sensitive keys", %{
+      state: state
+    } do
+      secret = "sqlite-idempotency-secret"
+      raw_key = {"integration", secret}
+      insert_corrupt_row!(state, :webhook_idempotency, raw_key, <<0>>)
+
+      log =
+        capture_log(fn ->
+          assert {:error, {:sqlite_corrupt_data, context, _message}} =
+                   SqliteBackend.list(state, :webhook_idempotency)
+
+          assert context.key == raw_key
+        end)
+
+      refute log =~ secret
     end
 
     test "list_recent returns an error for corrupted rows", %{state: state} do

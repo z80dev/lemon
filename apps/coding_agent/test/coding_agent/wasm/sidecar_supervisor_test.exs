@@ -10,24 +10,22 @@ defmodule CodingAgent.Wasm.SidecarSupervisorTest do
   alias CodingAgent.Wasm.SidecarSupervisor
 
   setup do
-    # Start the supervisor if not already running
-    case SidecarSupervisor.start_link(name: :test_sidecar_sup) do
-      {:ok, pid} -> {:ok, sup: pid}
-      {:error, {:already_started, pid}} -> {:ok, sup: pid}
-    end
+    sup = start_supervised!({SidecarSupervisor, name: :test_sidecar_sup})
+
+    {:ok, sup: sup}
   end
 
   describe "start_link/1" do
-    test "starts the dynamic supervisor", %{sup: _sup} do
+    test "starts the dynamic supervisor", %{sup: sup} do
       # Supervisor is already started in setup
-      assert Process.whereis(:test_sidecar_sup) != nil
+      assert Process.whereis(:test_sidecar_sup) == sup
     end
 
     test "can start with custom name" do
       name = :"custom_sidecar_sup_#{:erlang.unique_integer([:positive])}"
       assert {:ok, pid} = SidecarSupervisor.start_link(name: name)
       assert Process.whereis(name) == pid
-      Process.exit(pid, :normal)
+      Supervisor.stop(pid)
     end
   end
 

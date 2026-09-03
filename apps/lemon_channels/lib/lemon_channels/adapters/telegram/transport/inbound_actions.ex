@@ -10,6 +10,8 @@ defmodule LemonChannels.Adapters.Telegram.Transport.InboundActions do
   require Logger
 
   alias LemonChannels.Adapters.Telegram.Transport.MessageBuffer
+  alias LemonChannels.SubmissionOutcome
+  alias LemonChannels.Telegram.TransportShared
   alias LemonCore.ChatScope
   alias LemonCore.ResumeToken
 
@@ -34,6 +36,14 @@ defmodule LemonChannels.Adapters.Telegram.Transport.InboundActions do
                                   {binary() | nil, boolean()}),
           resolve_thinking_hint: (map(), integer() | nil, integer() | nil ->
                                     {binary() | nil, atom() | nil}),
+          send_submission_failure: (map(),
+                                    integer(),
+                                    integer()
+                                    | nil,
+                                    integer()
+                                    | nil,
+                                    binary() ->
+                                      any()),
           send_system_message: (map(), integer(), integer() | nil, integer() | nil, binary() ->
                                   any())
         }
@@ -76,14 +86,13 @@ defmodule LemonChannels.Adapters.Telegram.Transport.InboundActions do
         ) :: map()
   defp execute_native_inbound_message(state, inbound, callbacks, explicit_resume, stripped_prompt)
        when is_map(inbound) and is_map(state) and is_map(callbacks) do
+    {dedupe_refs, inbound} = pop_submission_dedupe_refs(inbound)
     {chat_id, thread_id, user_msg_id} = callbacks.extract_message_ids.(inbound)
 
+    # The user message is the progress target in the run request. The visible
+    # reaction is deferred until the router confirms acceptance.
     progress_msg_id =
-      if is_integer(chat_id) and is_integer(user_msg_id) do
-        send_progress(state, chat_id, user_msg_id)
-      else
-        nil
-      end
+      if is_integer(chat_id) and is_integer(user_msg_id), do: user_msg_id, else: nil
 
     scope =
       if is_integer(chat_id) do
@@ -124,28 +133,6 @@ defmodule LemonChannels.Adapters.Telegram.Transport.InboundActions do
       |> maybe_put(:thinking_level, thinking_hint)
       |> maybe_put(:thinking_scope, thinking_scope)
 
-    _ =
-      callbacks.maybe_index_telegram_msg_session.(state, scope, session_key, [
-        progress_msg_id,
-        user_msg_id
-      ])
-
-    state =
-      if is_integer(progress_msg_id) and is_binary(session_key) do
-        callbacks.maybe_subscribe_to_session.(session_key)
-
-        reaction_run = %{
-          chat_id: chat_id,
-          thread_id: thread_id,
-          user_msg_id: user_msg_id,
-          session_key: session_key
-        }
-
-        %{state | reaction_runs: Map.put(state.reaction_runs, session_key, reaction_run)}
-      else
-        state
-      end
-
     meta =
       if is_nil(meta[:resume]) and is_nil(meta["resume"]) and
            match?(%ResumeToken{}, explicit_resume) do
@@ -160,8 +147,96 @@ defmodule LemonChannels.Adapters.Telegram.Transport.InboundActions do
         message: Map.put(inbound.message || %{}, :text, stripped_prompt)
     }
 
-    route_to_router(inbound)
-    state
+    case route_to_router(inbound) do
+      :ok ->
+        track_accepted_submission(
+          state,
+          callbacks,
+          scope,
+          session_key,
+          chat_id,
+          thread_id,
+          user_msg_id
+        )
+
+      {:error, _} = error ->
+        if SubmissionOutcome.retry_safe?(error) do
+          Enum.each(dedupe_refs, &TransportShared.forget_dedupe(:channels, &1))
+        end
+
+        report_submission_failure(
+          state,
+          callbacks,
+          error,
+          chat_id,
+          thread_id,
+          user_msg_id
+        )
+
+        state
+    end
+  end
+
+  defp track_accepted_submission(
+         state,
+         callbacks,
+         scope,
+         session_key,
+         chat_id,
+         thread_id,
+         user_msg_id
+       ) do
+    progress_msg_id =
+      if is_integer(chat_id) and is_integer(user_msg_id) do
+        send_progress(state, chat_id, user_msg_id)
+      end
+
+    _ =
+      callbacks.maybe_index_telegram_msg_session.(state, scope, session_key, [
+        progress_msg_id,
+        user_msg_id
+      ])
+
+    if is_integer(progress_msg_id) and is_binary(session_key) do
+      callbacks.maybe_subscribe_to_session.(session_key)
+
+      reaction_run = %{
+        chat_id: chat_id,
+        thread_id: thread_id,
+        user_msg_id: user_msg_id,
+        session_key: session_key
+      }
+
+      %{state | reaction_runs: Map.put(state.reaction_runs, session_key, reaction_run)}
+    else
+      state
+    end
+  rescue
+    _ -> state
+  end
+
+  defp report_submission_failure(
+         state,
+         callbacks,
+         error,
+         chat_id,
+         thread_id,
+         user_msg_id
+       ) do
+    if is_integer(chat_id) do
+      text =
+        if SubmissionOutcome.uncertain?(error) do
+          "I couldn't confirm whether that request was accepted. Check the run status before retrying."
+        else
+          "I couldn't queue that request. Please try again."
+        end
+
+      _ = callbacks.send_submission_failure.(state, chat_id, thread_id, user_msg_id, text)
+    end
+
+    :ok
+  rescue
+    _ -> :ok
   end
 
   defp reject_unsupported_resume(state, inbound, callbacks, engine) do
@@ -205,17 +280,24 @@ defmodule LemonChannels.Adapters.Telegram.Transport.InboundActions do
       :ok ->
         :ok
 
-      other ->
-        meta = inbound.meta || %{}
-
+      {:error, _} = error ->
         Logger.warning(
-          "RouterBridge.submit_run failed for telegram inbound (chat_id=#{inspect(meta[:chat_id])} update_id=#{inspect(meta[:update_id])} msg_id=#{inspect(meta[:user_msg_id])}): " <>
-            inspect(other)
+          "telegram inbound routing failed: reason=#{SubmissionOutcome.log_label(error)}"
         )
+
+        error
     end
   rescue
-    e ->
-      Logger.warning("Failed to route inbound message: #{inspect(e)}")
+    _ ->
+      Logger.warning("telegram inbound routing failed: reason=unavailable")
+      {:error, :unavailable}
+  end
+
+  defp pop_submission_dedupe_refs(inbound) do
+    meta = inbound.meta || %{}
+
+    {List.wrap(meta[:transport_dedupe_refs]),
+     %{inbound | meta: Map.delete(meta, :transport_dedupe_refs)}}
   end
 
   defp maybe_put(map, _key, nil), do: map
