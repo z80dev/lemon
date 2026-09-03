@@ -20,6 +20,11 @@ defmodule LemonCore.Quality.ArchitectureRulesCheckTest do
      "update_async(server, TABLE, :key, nil, fun)"},
     {:compare_and_swap, "compare_and_swap(TABLE, :key, :old, :new)",
      "compare_and_swap(server, TABLE, :key, :old, :new)"},
+    {:compare_and_delete, "compare_and_delete(TABLE, :key, :expected)",
+     "compare_and_delete(server, TABLE, :key, :expected)"},
+    {:compare_and_delete_many, "compare_and_delete_many([{TABLE, :key, :expected}])",
+     "compare_and_delete_many(server, [{TABLE, :key, :expected}])"},
+    {:fetch_all, "fetch_all(TABLE)", "fetch_all(server, TABLE)"},
     {:register_cached_table, "register_cached_table(TABLE)",
      "register_cached_table(server, TABLE)"},
     {:unregister_cached_table, "unregister_cached_table(TABLE)",
@@ -1535,6 +1540,81 @@ defmodule LemonCore.Quality.ArchitectureRulesCheckTest do
       end
     end
 
+    test "checks plain, Kernel, and Erlang apply calls and fails closed on dynamic apply" do
+      tmp_dir = tmp_repo!()
+
+      try do
+        write_file!(
+          tmp_dir,
+          "apps/demo/lib/demo/apply_bypass_store.ex",
+          """
+          defmodule Demo.ApplyBypassStore do
+            alias LemonCore.Store, as: CoreStore
+            use LemonCore.Store.Table, tables: [owned: []]
+
+            @store CoreStore
+            @operation :get
+            @arguments [:other, :key]
+
+            def allowed_plain, do: apply(CoreStore, :get, [:owned, :key])
+            def allowed_kernel, do: Kernel.apply(CoreStore, :delete, [:owned, :key])
+            def allowed_erlang, do: :erlang.apply(CoreStore, :list, [:owned])
+            def bad_plain, do: apply(CoreStore, :get, [:other, :key])
+            def bad_kernel, do: Kernel.apply(@store, :delete, [:other, :key])
+            def bad_erlang, do: :erlang.apply(CoreStore, :list, [:other])
+            def bad_attributes, do: apply(@store, @operation, @arguments)
+            def bad_dynamic(operation, arguments), do: apply(CoreStore, operation, arguments)
+            def bad_dynamic_arguments(arguments), do: apply(CoreStore, :get, arguments)
+          end
+          """
+        )
+
+        assert {:error, report} = ArchitectureRulesCheck.run(root: tmp_dir)
+
+        issues = Enum.filter(report.issues, &(&1.code == :store_table_owner_bypass))
+        assert length(issues) == 6
+        assert Enum.count(issues, &(&1.message =~ "accesses :other")) == 4
+        assert Enum.count(issues, &(&1.message =~ "accesses an unresolved table")) == 2
+        assert Enum.all?(issues, &(&1.message =~ "apply/3"))
+      after
+        File.rm_rf!(tmp_dir)
+      end
+    end
+
+    test "checks every table in compare_and_delete_many entries" do
+      tmp_dir = tmp_repo!()
+
+      try do
+        write_file!(
+          tmp_dir,
+          "apps/demo/lib/demo/multi_delete_store.ex",
+          """
+          defmodule Demo.MultiDeleteStore do
+            use LemonCore.Store.Table, tables: [owned: []]
+
+            def bad do
+              LemonCore.Store.compare_and_delete_many([
+                {:owned, :one, :expected},
+                {:other, :two, :expected}
+              ])
+            end
+
+            def unresolved(entries), do: LemonCore.Store.compare_and_delete_many(entries)
+          end
+          """
+        )
+
+        assert {:error, report} = ArchitectureRulesCheck.run(root: tmp_dir)
+
+        issues = Enum.filter(report.issues, &(&1.code == :store_table_owner_bypass))
+        assert length(issues) == 2
+        assert Enum.any?(issues, &(&1.message =~ "accesses :other"))
+        assert Enum.any?(issues, &(&1.message =~ "accesses an unresolved table"))
+      after
+        File.rm_rf!(tmp_dir)
+      end
+    end
+
     test "requires statically resolvable table declarations" do
       tmp_dir = tmp_repo!()
 
@@ -1706,11 +1786,9 @@ defmodule LemonCore.Quality.ArchitectureRulesCheckTest do
   end
 
   defp call_arity(call) do
-    {open, 1} = :binary.match(call, "(")
+    {:ok, {{:., _meta, [_module, _function]}, _call_meta, args}} =
+      Code.string_to_quoted("LemonCore.Store." <> call)
 
-    call
-    |> String.slice((open + 1)..-2//1)
-    |> String.split(",")
-    |> length()
+    length(args)
   end
 end

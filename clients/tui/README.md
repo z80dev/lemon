@@ -57,7 +57,9 @@ remains a legacy client-side alias; it does not configure the daemon.
   are preview-confirm workflows, and offline mutations never claim success.
 - Ctrl+O model picker (two-stage, draft-preserving), capability-aware slash commands with
   autocomplete, `!cmd` shell escape, `{!cmd}` inline interpolation,
-  Ctrl+G `$EDITOR` handoff.
+  Ctrl+G `$EDITOR` handoff. Captured shell escapes have a bounded deadline and
+  terminate their complete POSIX process group on timeout so descendants cannot
+  outlive the command or hold the TUI's capture pipes open.
 - `/skills` live official Hermes catalog browser: category drill-down, fuzzy
   filtering, descriptions, installed markers, and Space-toggle multi-select
   import through Lemon's normal audit/approval flow. A blocked bundle opens a

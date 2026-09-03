@@ -67,7 +67,7 @@ defmodule LemonAutomation.SynthesisRunnerTest do
     test "active sessions block the scheduled path" do
       assert SynthesisRunner.active_sessions?(active_sessions_fun: fn -> [:a_session] end)
       refute SynthesisRunner.active_sessions?(active_sessions_fun: fn -> [] end)
-      refute SynthesisRunner.active_sessions?(active_sessions_fun: fn -> raise "boom" end)
+      assert SynthesisRunner.active_sessions?(active_sessions_fun: fn -> raise "boom" end)
     end
   end
 

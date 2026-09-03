@@ -73,7 +73,8 @@ defmodule LemonControlPlane.Methods.GoalMethodsTest do
       {:ok,
        %{
          loop: %{session_key: session_key, status: "stopped", started_at_ms: 123, max_ticks: 2},
-         goal: goal
+         goal: goal,
+         router_abort: :accepted
        }}
     end
 
@@ -89,6 +90,33 @@ defmodule LemonControlPlane.Methods.GoalMethodsTest do
          loop: %{session_key: session_key, status: "running", started_at_ms: 123, max_ticks: 2},
          goal: goal
        }}
+    end
+  end
+
+  defmodule LoopStopResult do
+    @moduledoc false
+
+    def stop_loop(session_key) do
+      case Application.fetch_env!(:lemon_control_plane, :goal_loop_stop_test_result) do
+        {:error, reason} ->
+          {:error, reason}
+
+        {:raw, result} ->
+          {:ok, result}
+
+        :missing ->
+          {:ok, result(session_key)}
+
+        router_abort ->
+          {:ok, Map.put(result(session_key), :router_abort, router_abort)}
+      end
+    end
+
+    defp result(session_key) do
+      %{
+        loop: %{session_key: session_key, status: "stopped", started_at_ms: nil, max_ticks: nil},
+        goal: %{}
+      }
     end
   end
 
@@ -241,6 +269,8 @@ defmodule LemonControlPlane.Methods.GoalMethodsTest do
     assert {:ok, stopped} = GoalLoopStop.handle(%{"sessionKey" => session_key}, @ctx)
     assert_receive {:goal_loop_stop, ^session_key}
     assert stopped["loop"]["status"] == "stopped"
+    assert stopped["routerAbort"] == "accepted"
+    assert stopped["summary"]["routerAbort"] == "accepted"
     assert stopped["goal"]["objectiveBytes"] == byte_size("private objective")
     refute Map.has_key?(stopped["goal"], "objective")
     assert stopped["summary"]["objectiveReturned"] == false
@@ -268,6 +298,79 @@ defmodule LemonControlPlane.Methods.GoalMethodsTest do
 
     assert empty_summary["goalCount"] == 0
     assert empty_summary["objectiveReturned"] == false
+  end
+
+  test "goal loop stop exposes only bounded router abort statuses", %{session_key: session_key} do
+    previous_loop_mod = Application.get_env(:lemon_control_plane, :goal_loop_module)
+    previous_result = Application.get_env(:lemon_control_plane, :goal_loop_stop_test_result)
+    Application.put_env(:lemon_control_plane, :goal_loop_module, LoopStopResult)
+
+    on_exit(fn ->
+      restore_env(:lemon_control_plane, :goal_loop_module, previous_loop_mod)
+      restore_env(:lemon_control_plane, :goal_loop_stop_test_result, previous_result)
+    end)
+
+    for status <- [:accepted, :outcome_unknown, :unavailable, :rejected, :not_needed] do
+      Application.put_env(:lemon_control_plane, :goal_loop_stop_test_result, status)
+      assert {:ok, result} = GoalLoopStop.handle(%{"sessionKey" => session_key}, @ctx)
+      assert result["routerAbort"] == Atom.to_string(status)
+      assert result["summary"]["routerAbort"] == Atom.to_string(status)
+    end
+
+    Application.put_env(:lemon_control_plane, :goal_loop_stop_test_result, :missing)
+    assert {:ok, missing} = GoalLoopStop.handle(%{"sessionKey" => session_key}, @ctx)
+    assert missing["routerAbort"] == "not_needed"
+  end
+
+  test "goal loop stop never exposes arbitrary manager terms", %{session_key: session_key} do
+    previous_loop_mod = Application.get_env(:lemon_control_plane, :goal_loop_module)
+    previous_result = Application.get_env(:lemon_control_plane, :goal_loop_stop_test_result)
+    Application.put_env(:lemon_control_plane, :goal_loop_module, LoopStopResult)
+
+    on_exit(fn ->
+      restore_env(:lemon_control_plane, :goal_loop_module, previous_loop_mod)
+      restore_env(:lemon_control_plane, :goal_loop_stop_test_result, previous_result)
+    end)
+
+    secret = "GOAL_STOP_SECRET_#{System.unique_integer([:positive])}"
+    private_term = {:unexpected, %{credential: secret, path: "/private/#{secret}"}}
+    Application.put_env(:lemon_control_plane, :goal_loop_stop_test_result, private_term)
+
+    assert {:ok, result} = GoalLoopStop.handle(%{"sessionKey" => session_key}, @ctx)
+    assert result["routerAbort"] == "outcome_unknown"
+    refute inspect(result) =~ secret
+
+    Application.put_env(
+      :lemon_control_plane,
+      :goal_loop_stop_test_result,
+      {:error, private_term}
+    )
+
+    log =
+      ExUnit.CaptureLog.capture_log(fn ->
+        response = GoalLoopStop.handle(%{"sessionKey" => session_key}, @ctx)
+        assert response == {:error, {:internal_error, "Goal loop stop failed", nil}}
+        refute inspect(response) =~ secret
+      end)
+
+    assert log =~ "class=tuple"
+    refute log =~ secret
+
+    Application.put_env(
+      :lemon_control_plane,
+      :goal_loop_stop_test_result,
+      {:raw, %{secret: secret, path: "/private/#{secret}"}}
+    )
+
+    malformed_log =
+      ExUnit.CaptureLog.capture_log(fn ->
+        response = GoalLoopStop.handle(%{"sessionKey" => session_key}, @ctx)
+        assert response == {:error, {:internal_error, "Goal loop stop failed", nil}}
+        refute inspect(response) =~ secret
+      end)
+
+    assert malformed_log =~ "class=map"
+    refute malformed_log =~ secret
   end
 
   test "validates required fields", %{session_key: session_key} do
@@ -324,4 +427,7 @@ defmodule LemonControlPlane.Methods.GoalMethodsTest do
     assert GoalClear.name() == "goal.clear"
     assert GoalClear.scopes() == [:write]
   end
+
+  defp restore_env(app, key, nil), do: Application.delete_env(app, key)
+  defp restore_env(app, key, value), do: Application.put_env(app, key, value)
 end

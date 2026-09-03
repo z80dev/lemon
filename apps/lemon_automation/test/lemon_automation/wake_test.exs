@@ -7,12 +7,23 @@ defmodule LemonAutomation.WakeTest do
   @jobs_table :cron_jobs
   @runs_table :cron_runs
 
+  defmodule TestSubmitter do
+    @moduledoc false
+
+    def submit(_job, _run, _opts), do: {:ok, "wake completed"}
+  end
+
   setup do
+    previous_submitter = Application.get_env(:lemon_automation, :cron_run_submitter)
+    Application.put_env(:lemon_automation, :cron_run_submitter, TestSubmitter)
+
     ensure_store_started()
     ensure_cron_manager_started()
 
     clear_table(@jobs_table)
     clear_table(@runs_table)
+
+    on_exit(fn -> restore_env(:cron_run_submitter, previous_submitter) end)
 
     {:ok, token: System.unique_integer([:positive, :monotonic])}
   end
@@ -55,7 +66,7 @@ defmodule LemonAutomation.WakeTest do
       assert persisted_run.meta.wake_context == context
 
       # Wait for async wake task to complete so it doesn't leak into later suites.
-      assert %CronRun{} = await_terminal_run(run.id)
+      assert %CronRun{status: :completed, output: "wake completed"} = await_terminal_run(run.id)
     end
   end
 
@@ -192,7 +203,7 @@ defmodule LemonAutomation.WakeTest do
     }
   end
 
-  defp await_terminal_run(run_id, attempts \\ 1_500)
+  defp await_terminal_run(run_id, attempts \\ 500)
 
   defp await_terminal_run(_run_id, 0) do
     flunk("wake run did not reach terminal state before timeout")
@@ -230,4 +241,7 @@ defmodule LemonAutomation.WakeTest do
 
     :ok
   end
+
+  defp restore_env(key, nil), do: Application.delete_env(:lemon_automation, key)
+  defp restore_env(key, value), do: Application.put_env(:lemon_automation, key, value)
 end

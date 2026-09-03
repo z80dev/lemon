@@ -26,7 +26,8 @@ defmodule LemonChannels.Adapters.Telegram.TransportUpdateProcessorTest do
     assert {:ok, accepted} = UpdateProcessor.route_authorized_inbound_action(state, inbound)
     assert accepted.meta[:update_id] == 9001
     assert accepted.message.id == "10"
-    assert {:seen, ^accepted} = UpdateProcessor.route_authorized_inbound_action(state, inbound)
+    assert {:seen, seen} = UpdateProcessor.route_authorized_inbound_action(state, inbound)
+    assert seen == %{accepted | meta: Map.delete(accepted.meta, :transport_dedupe_refs)}
   end
 
   test "prepare_inbound preserves reply_to_text and update metadata" do

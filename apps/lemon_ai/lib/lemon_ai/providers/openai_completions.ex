@@ -28,11 +28,14 @@ defmodule LemonAi.Providers.OpenAICompletions do
   - `supports_store` - Whether to send `store: false`
   - `supports_developer_role` - Use "developer" vs "system" role for reasoning models
   - `supports_reasoning_effort` - Whether `reasoning_effort` parameter works
+  - `supports_usage_in_streaming` - Whether to request usage in the streamed response
   - `max_tokens_field` - "max_completion_tokens" (default) or "max_tokens"
   - `requires_tool_result_name` - Include `name` in tool results (Mistral)
   - `requires_assistant_after_tool_result` - Add synthetic assistant message after tool results
   - `requires_thinking_as_text` - Convert thinking blocks to plain text
   - `requires_mistral_tool_ids` - Normalize tool IDs to 9 alphanumeric chars
+  - `thinking_format` - "openai" (default) or "zai"
+  - `open_router_routing` - OpenRouter provider-routing object, or `nil` to omit it
   """
 
   @behaviour LemonAi.Provider

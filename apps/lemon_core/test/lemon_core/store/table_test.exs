@@ -44,6 +44,14 @@ defmodule LemonCore.Store.TableTest do
   end
 
   test "declarations reject ambiguous or unsupported metadata" do
+    assert_raise ArgumentError, ~r/table owner must be a module/, fn ->
+      Table.declare!(nil, plain: [])
+    end
+
+    assert_raise ArgumentError, ~r/tables must be a keyword list/, fn ->
+      Table.declare!(DeclaredStore, :plain)
+    end
+
     assert_raise ArgumentError, ~r/declares no tables/, fn ->
       Table.declare!(DeclaredStore, [])
     end

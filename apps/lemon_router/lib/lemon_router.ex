@@ -217,7 +217,7 @@ defmodule LemonRouter do
   @doc """
   List agent directory entries with routing/session discoverability metadata.
   """
-  @spec list_agent_directory(keyword()) :: [map()]
+  @spec list_agent_directory(keyword()) :: [map()] | {:error, :unavailable}
   def list_agent_directory(opts \\ []) do
     LemonRouter.AgentDirectory.list_agents(opts)
   end
@@ -225,7 +225,7 @@ defmodule LemonRouter do
   @doc """
   List known sessions from the agent directory/phonebook.
   """
-  @spec list_agent_sessions(keyword()) :: [map()]
+  @spec list_agent_sessions(keyword()) :: [map()] | {:error, :unavailable}
   def list_agent_sessions(opts \\ []) do
     LemonRouter.AgentDirectory.list_sessions(opts)
   end
@@ -233,7 +233,7 @@ defmodule LemonRouter do
   @doc """
   List known channel targets (for example Telegram rooms/topics) with friendly labels.
   """
-  @spec list_agent_targets(keyword()) :: [map()]
+  @spec list_agent_targets(keyword()) :: [map()] | {:error, :unavailable}
   def list_agent_targets(opts \\ []) do
     LemonRouter.AgentDirectory.list_targets(opts)
   end

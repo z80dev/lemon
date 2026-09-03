@@ -56,7 +56,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.MessageBuffer do
           Process.send_after(self(), {:debounce_flush, key, debounce_ref}, state.debounce_ms)
 
         messages = [Commands.message_entry(inbound) | buffer.messages]
-        inbound_last = inbound
+        inbound_last = merge_submission_dedupe_refs(inbound, buffer.inbound)
 
         buffer = %{
           buffer
@@ -117,6 +117,21 @@ defmodule LemonChannels.Adapters.Telegram.Transport.MessageBuffer do
       {buffer, buffers} ->
         _ = Process.cancel_timer(buffer.timer_ref)
         %{state | buffers: buffers}
+    end
+  end
+
+  defp merge_submission_dedupe_refs(inbound, previous_inbound) do
+    meta = inbound.meta || %{}
+    previous_meta = previous_inbound.meta || %{}
+
+    refs =
+      (List.wrap(meta[:transport_dedupe_refs]) ++
+         List.wrap(previous_meta[:transport_dedupe_refs]))
+      |> Enum.uniq()
+
+    case refs do
+      [] -> inbound
+      _ -> %{inbound | meta: Map.put(meta, :transport_dedupe_refs, refs)}
     end
   end
 end

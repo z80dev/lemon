@@ -532,87 +532,91 @@ defmodule LemonCore.ExecApprovalsTest do
              |> Map.get(:approval_id) == approval_id
     end
 
-    test "a concurrent timeout-vs-resolve storm has exactly one winner with no double side effects" do
-      # Each iteration races a waiter's deadline against a resolve. The
-      # timeout decides through the SAME atomic take as resolve/cancel, so
-      # per approval id exactly one side may act: resolve wins (policy
-      # installed, no timeout decision) or the timeout wins (timeout
-      # decision broadcast, resolve loses, no policy) — never both.
-      test = self()
+    test "timeout and resolve queued together have one winner with no double side effects" do
+      action = %{command: "ls"}
+      action_hash = hash_action(action)
+      approval_id = "timeout_race_#{System.unique_integer([:positive])}"
+      store = Process.whereis(Store)
 
-      collector =
-        spawn(fn ->
-          LemonCore.Bus.subscribe("exec_approvals")
-          send(test, :collector_ready)
-          collect_timeout_decisions(test, [])
-        end)
+      assert is_pid(store)
+      LemonCore.Bus.subscribe("exec_approvals")
 
-      assert_receive :collector_ready
-
-      for i <- 1..300 do
-        approval_id = "timeout_storm_#{i}"
-
-        Task.start(fn ->
+      request_task =
+        Task.async(fn ->
           ExecApprovals.request(%{
             run_id: "run_123",
             session_key: "agent:test:main",
             tool: "bash",
-            action: %{command: "ls"},
+            action: action,
             approval_id: approval_id,
-            expires_in_ms: Enum.random(0..1)
+            expires_in_ms: 1_000
           })
         end)
 
-        Process.sleep(Enum.random(0..1))
-        resolve_result = ExecApprovals.resolve(approval_id, :approve_session)
-        # Let the waiter settle its own deadline race.
-        Process.sleep(2)
+      # The request event is the registration barrier: put_pending/2 happens
+      # before this broadcast, so the race below cannot accidentally resolve
+      # an id that has not been registered yet.
+      assert_receive %LemonCore.Event{
+                       type: :approval_requested,
+                       payload: %{approval_id: ^approval_id}
+                     },
+                     1_000
 
-        assert Store.get(:exec_approvals_pending, approval_id) == nil
+      on_exit(fn -> safe_resume(store) end)
+      :ok = :sys.suspend(store)
 
-        case resolve_result do
-          :ok ->
-            :ok
+      resolve_task =
+        try do
+          # Hold the Store until the waiter's deadline transition is queued,
+          # then queue resolve's take behind it. With the old get+delete
+          # timeout path both callers could receive the same pending record;
+          # the single take path hands it only to the timeout.
+          assert :ok =
+                   LemonCore.Testing.AsyncHelpers.assert_eventually(
+                     fn -> queued_pending_transitions(store, approval_id) == 1 end,
+                     timeout: 2_000,
+                     interval: 1,
+                     message: "timeout transition was never queued"
+                   )
 
-          {:error, :not_pending} ->
-            action_hash = hash_action(%{command: "ls"})
+          task =
+            Task.async(fn ->
+              ExecApprovals.resolve(approval_id, :approve_session)
+            end)
 
-            assert Store.get(:exec_approvals_policy_session, {
-                     "agent:test:main",
-                     "bash",
-                     action_hash
-                   }) == nil,
-                   "iteration #{i}: resolve lost the take but installed policy"
-        end
+          assert :ok =
+                   LemonCore.Testing.AsyncHelpers.assert_eventually(
+                     fn -> queued_pending_transitions(store, approval_id) == 2 end,
+                     timeout: 1_000,
+                     interval: 1,
+                     message: "resolve transition was never queued"
+                   )
 
-        # Keep iterations independent.
-        Store.delete(:exec_approvals_policy_session, {
-          "agent:test:main",
-          "bash",
-          hash_action(%{command: "ls"})
-        })
-      end
-
-      send(collector, {:report, test})
-
-      decisions =
-        receive do
-          {:timeout_decisions, decisions} -> decisions
+          task
         after
-          1_000 -> flunk("collector never reported")
+          safe_resume(store)
         end
 
-      # The double-side-effect invariant: no approval id carries both a
-      # :timeout and a user-decision resolution.
-      storm_ids =
-        for {id, _decision} <- decisions, String.starts_with?(id, "timeout_storm_"), do: id
+      assert {:error, :timeout} = Task.await(request_task, 1_000)
+      assert {:error, :not_pending} = Task.await(resolve_task, 1_000)
+      assert Store.get(:exec_approvals_pending, approval_id) == nil
 
-      for id <- Enum.uniq(storm_ids) do
-        ids_decisions = for {^id, decision} <- decisions, do: decision
+      assert Store.get(:exec_approvals_policy_session, {
+               "agent:test:main",
+               "bash",
+               action_hash
+             }) == nil
 
-        refute :timeout in ids_decisions and :approve_session in ids_decisions,
-               "approval #{id} was decided by both the timeout and the resolve"
-      end
+      assert_receive %LemonCore.Event{
+                       type: :approval_resolved,
+                       payload: %{approval_id: ^approval_id, decision: :timeout}
+                     },
+                     1_000
+
+      refute_receive %LemonCore.Event{
+        type: :approval_resolved,
+        payload: %{approval_id: ^approval_id}
+      }
     end
   end
 
@@ -727,36 +731,29 @@ defmodule LemonCore.ExecApprovalsTest do
     end
   end
 
-  # Storm-test collector: records every approval_resolved decision keyed by
-  # approval id (the timeout path and resolve/cancel all broadcast here), so
-  # a test can prove no id was decided twice with different decisions. On
-  # {:report, pid} it drains anything still queued, then answers.
-  defp collect_timeout_decisions(report_to, acc) do
-    receive do
-      {:report, report_to} ->
-        acc = drain_resolution_events(acc)
-        send(report_to, {:timeout_decisions, Enum.reverse(acc)})
+  defp queued_pending_transitions(store, approval_id) do
+    {:messages, messages} = Process.info(store, :messages)
 
-      %LemonCore.Event{
-        type: :approval_resolved,
-        payload: %{approval_id: id, decision: decision}
-      } ->
-        collect_timeout_decisions(report_to, [{id, decision} | acc])
-    end
-  end
-
-  defp drain_resolution_events(acc) do
-    receive do
-      %LemonCore.Event{
-        type: :approval_resolved,
-        payload: %{approval_id: id, decision: decision}
-      } ->
-        drain_resolution_events([{id, decision} | acc])
+    Enum.count(messages, fn
+      {:"$gen_call", _from, {operation, :exec_approvals_pending, ^approval_id}}
+      when operation in [:generic_get, :generic_take] ->
+        true
 
       _other ->
-        drain_resolution_events(acc)
-    after
-      0 -> acc
+        false
+    end)
+  end
+
+  defp safe_resume(store) do
+    if Process.alive?(store) do
+      try do
+        _ = :sys.resume(store)
+        :ok
+      catch
+        :exit, _reason -> :ok
+      end
+    else
+      :ok
     end
   end
 

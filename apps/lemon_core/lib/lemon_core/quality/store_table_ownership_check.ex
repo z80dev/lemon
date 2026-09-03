@@ -5,7 +5,8 @@ defmodule LemonCore.Quality.StoreTableOwnershipCheck do
   The incremental rule leaves legacy non-owner wrappers to existing migration
   checks. Once a module declares tables, however, every recognized generic
   Store call must resolve to one of those exact names. Aliases, module
-  attributes, and both default-server and explicit-server arities count.
+  attributes, `apply/3`, and both default-server and explicit-server arities
+  count.
   """
 
   # Generic Store operations and the zero-based table argument at each public
@@ -26,8 +27,14 @@ defmodule LemonCore.Quality.StoreTableOwnershipCheck do
     update: %{4 => 0, 5 => 1},
     update_async: %{4 => 0, 5 => 1},
     compare_and_swap: %{4 => 0, 5 => 1},
+    compare_and_delete: %{3 => 0, 4 => 1},
+    fetch_all: %{1 => 0, 2 => 1},
     register_cached_table: %{1 => 0, 2 => 1},
     unregister_cached_table: %{1 => 0, 2 => 1}
+  }
+
+  @store_table_entry_arguments %{
+    compare_and_delete_many: %{1 => 0, 2 => 1}
   }
 
   @type issue :: %{code: atom(), message: String.t(), path: String.t()}
@@ -247,26 +254,158 @@ defmodule LemonCore.Quality.StoreTableOwnershipCheck do
   defp generic_store_calls(body, attributes, aliases) do
     {_ast, calls} =
       Macro.prewalk(body, [], fn
+        {:apply, call_meta, [target, function, arguments]} = node, acc ->
+          location = source_location(call_meta)
+
+          calls =
+            apply_store_calls(target, function, arguments, attributes, aliases, location)
+
+          {node, Enum.reverse(calls) ++ acc}
+
+        {{:., dot_meta, [apply_target, :apply]}, call_meta, [target, function, arguments]} =
+            node,
+            acc ->
+          location = source_location(call_meta, dot_meta)
+
+          calls =
+            if kernel_apply_module?(apply_target) do
+              apply_store_calls(target, function, arguments, attributes, aliases, location)
+            else
+              []
+            end
+
+          {node, Enum.reverse(calls) ++ acc}
+
         {{:., dot_meta, [target, function]}, call_meta, args} = node, acc
         when is_atom(function) and is_list(args) ->
           location = source_location(call_meta, dot_meta)
 
-          with true <- store_module?(target, aliases, location),
-               table_index when is_integer(table_index) <-
-                 get_in(@store_table_arguments, [function, length(args)]),
-               table_expression when not is_nil(table_expression) <- Enum.at(args, table_index) do
-            table = resolve_table(table_expression, attributes, location)
-            line = elem(location, 0)
-            {node, [%{function: function, arity: length(args), table: table, line: line} | acc]}
-          else
-            _ -> {node, acc}
-          end
+          calls =
+            if store_module_expression?(target, attributes, aliases, location) do
+              calls_for(function, args, attributes, location, false)
+            else
+              []
+            end
+
+          {node, Enum.reverse(calls) ++ acc}
 
         node, acc ->
           {node, acc}
       end)
 
     Enum.reverse(calls)
+  end
+
+  defp apply_store_calls(target, function, arguments, attributes, aliases, location) do
+    if store_module_expression?(target, attributes, aliases, location) do
+      resolved_function = resolve_attribute(function, attributes, location)
+      resolved_arguments = resolve_attribute(arguments, attributes, location)
+
+      cond do
+        is_atom(resolved_function) and is_list(resolved_arguments) ->
+          calls_for(resolved_function, resolved_arguments, attributes, location, true)
+
+        known_store_operation?(resolved_function) ->
+          [unresolved_apply_call(resolved_function, location)]
+
+        is_atom(resolved_function) ->
+          []
+
+        true ->
+          [unresolved_apply_call(:dynamic, location)]
+      end
+    else
+      []
+    end
+  end
+
+  defp calls_for(function, args, attributes, location, via_apply) do
+    arity = length(args)
+
+    case get_in(@store_table_arguments, [function, arity]) do
+      table_index when is_integer(table_index) ->
+        [
+          store_call(
+            function,
+            arity,
+            resolve_table(Enum.at(args, table_index), attributes, location),
+            location,
+            via_apply
+          )
+        ]
+
+      nil ->
+        calls_for_entry_list(function, args, attributes, location, via_apply)
+    end
+  end
+
+  defp calls_for_entry_list(function, args, attributes, location, via_apply) do
+    case get_in(@store_table_entry_arguments, [function, length(args)]) do
+      entries_index when is_integer(entries_index) ->
+        args
+        |> Enum.at(entries_index)
+        |> resolve_entry_tables(attributes, location)
+        |> Enum.map(&store_call(function, length(args), &1, location, via_apply))
+
+      nil ->
+        []
+    end
+  end
+
+  defp resolve_entry_tables(entries, attributes, location) do
+    case resolve_attribute(entries, attributes, location) do
+      entries when is_list(entries) ->
+        Enum.map(entries, fn
+          {:{}, _meta, [table, _key, _expected]} ->
+            resolve_table(table, attributes, location)
+
+          {table, _key, _expected} ->
+            resolve_table(table, attributes, location)
+
+          _other ->
+            :unresolved
+        end)
+
+      _other ->
+        [:unresolved]
+    end
+  end
+
+  defp store_call(function, arity, table, location, via_apply) do
+    %{
+      function: function,
+      arity: arity,
+      table: table,
+      line: elem(location, 0),
+      via_apply: via_apply
+    }
+  end
+
+  defp unresolved_apply_call(function, location) do
+    %{
+      function: function,
+      arity: :unknown,
+      table: :unresolved,
+      line: elem(location, 0),
+      via_apply: true
+    }
+  end
+
+  defp known_store_operation?(function) when is_atom(function) do
+    Map.has_key?(@store_table_arguments, function) or
+      Map.has_key?(@store_table_entry_arguments, function)
+  end
+
+  defp known_store_operation?(_function), do: false
+
+  defp kernel_apply_module?({:__aliases__, _meta, [:Kernel]}), do: true
+  defp kernel_apply_module?(:erlang), do: true
+  defp kernel_apply_module?(_target), do: false
+
+  defp store_module_expression?(target, attributes, aliases, location) do
+    target
+    |> resolve_attribute(attributes, location)
+    |> store_module?(aliases, location)
   end
 
   defp store_module?({:__aliases__, _meta, [:LemonCore, :Store]}, _aliases, _location), do: true
@@ -351,13 +490,26 @@ defmodule LemonCore.Quality.StoreTableOwnershipCheck do
       end
 
     location = if call.line, do: " at line #{call.line}", else: ""
+    operation = operation_label(call)
 
     %{
       code: :store_table_owner_bypass,
       message:
         "Store.Table owner declares #{inspect(declared)} but " <>
-          "LemonCore.Store.#{call.function}/#{call.arity}#{location} accesses #{table}",
+          "#{operation}#{location} accesses #{table}",
       path: relative
     }
   end
+
+  defp operation_label(%{function: :dynamic, via_apply: true}),
+    do: "dynamic LemonCore.Store apply/3"
+
+  defp operation_label(%{function: function, arity: :unknown, via_apply: true}),
+    do: "LemonCore.Store.#{function} via apply/3"
+
+  defp operation_label(%{function: function, arity: arity, via_apply: true}),
+    do: "LemonCore.Store.#{function}/#{arity} via apply/3"
+
+  defp operation_label(%{function: function, arity: arity}),
+    do: "LemonCore.Store.#{function}/#{arity}"
 end

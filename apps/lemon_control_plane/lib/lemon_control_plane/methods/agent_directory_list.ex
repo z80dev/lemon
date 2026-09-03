@@ -21,37 +21,41 @@ defmodule LemonControlPlane.Methods.AgentDirectoryList do
     limit = get_param(params, "limit")
     route = get_param(params, "route")
 
-    agents =
-      LemonRouter.list_agent_directory()
-      |> maybe_filter_agents(agent_id)
-      |> Enum.map(&format_agent/1)
+    with agents when is_list(agents) <- LemonRouter.list_agent_directory(),
+         sessions when is_list(sessions) <-
+           list_sessions(include_sessions?, agent_id, route, limit) do
+      agents = agents |> maybe_filter_agents(agent_id) |> Enum.map(&format_agent/1)
+      sessions = Enum.map(sessions, &format_session/1)
 
-    sessions =
-      if include_sessions? do
-        LemonRouter.list_agent_sessions(
-          agent_id: agent_id,
-          route: route,
-          limit: normalize_limit(limit)
-        )
-        |> Enum.map(&format_session/1)
-      else
-        []
-      end
-
-    {:ok,
-     %{
-       "agents" => agents,
-       "sessions" => sessions,
-       "totalAgents" => length(agents),
-       "totalSessions" => length(sessions),
-       "summary" => directory_summary(agents, sessions, include_sessions?),
-       "includesMessageBodies" => false,
-       "includesSecretValues" => false,
-       "includesCredentials" => false
-     }}
+      {:ok,
+       %{
+         "agents" => agents,
+         "sessions" => sessions,
+         "totalAgents" => length(agents),
+         "totalSessions" => length(sessions),
+         "summary" => directory_summary(agents, sessions, include_sessions?),
+         "includesMessageBodies" => false,
+         "includesSecretValues" => false,
+         "includesCredentials" => false
+       }}
+    else
+      {:error, _reason} -> {:error, {:unavailable, "Agent directory is unavailable", nil}}
+      _unexpected -> {:error, {:unavailable, "Agent directory is unavailable", nil}}
+    end
   rescue
-    e ->
-      {:error, {:internal_error, "Failed to list agent directory", Exception.message(e)}}
+    _e -> {:error, {:unavailable, "Agent directory is unavailable", nil}}
+  catch
+    :exit, _reason -> {:error, {:unavailable, "Agent directory is unavailable", nil}}
+  end
+
+  defp list_sessions(false, _agent_id, _route, _limit), do: []
+
+  defp list_sessions(true, agent_id, route, limit) do
+    LemonRouter.list_agent_sessions(
+      agent_id: agent_id,
+      route: route,
+      limit: normalize_limit(limit)
+    )
   end
 
   defp maybe_filter_agents(agents, nil), do: agents

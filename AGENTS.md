@@ -386,7 +386,9 @@ contexts map to private stable Lemon sessions; `LemonSkills.Tools.Peer` uses
 `LemonCore.A2A.Client` plus `LemonCore.A2AStore` to retain one default outbound
 conversation per configured peer. Keep remote data untrusted, peer credentials
 secret-referenced, and all task reads/mutations scoped to authenticated peer
-identity.
+identity. Treat each inbound A2A `messageId` as a durable replay key: a replay
+from the same peer must return the originally created task without submitting
+another router run, while a cross-peer collision fails closed.
 
 User-managed profiles reuse the canonical `[profiles.<id>]` router plane rather
 than introducing another agent engine. `LemonCore.ProfileStore` owns atomic

@@ -1,6 +1,8 @@
 defmodule LemonControlPlane.A2A.Handler do
   @moduledoc false
 
+  require Logger
+
   alias LemonControlPlane.A2A.{Config, Runner, TaskView}
   alias LemonCore.{A2AStore, Id, RouterBridge}
   alias LemonCore.A2A.Protocol
@@ -62,7 +64,12 @@ defmodule LemonControlPlane.A2A.Handler do
 
   defp list_tasks(params, peer_id) do
     limit = normalize_limit(params["pageSize"] || params["limit"])
-    tasks = A2AStore.list_tasks(peer_id, limit: limit) |> Enum.map(&TaskView.render/1)
+
+    tasks =
+      A2AStore.list_tasks(peer_id, limit: limit)
+      |> Enum.map(&Runner.reconcile/1)
+      |> Enum.map(&TaskView.render/1)
+
     {:ok, %{"tasks" => tasks, "nextPageToken" => nil}}
   end
 
@@ -71,17 +78,25 @@ defmodule LemonControlPlane.A2A.Handler do
       if Protocol.terminal_state?(task.state) do
         {:ok, TaskView.render(task)}
       else
-        :ok = RouterBridge.abort_run(task.run_id, :a2a_peer_canceled)
+        case RouterBridge.abort_run(task.run_id, :a2a_peer_canceled) do
+          :ok ->
+            case Runner.mark_canceled(task.id) do
+              {:ok, terminal} -> {:ok, TaskView.render(terminal)}
+              {:error, reason} -> cancel_store_error(reason)
+            end
 
-        {:ok, canceled} =
-          A2AStore.update_task(task.id, &Map.put(&1, :state, "TASK_STATE_CANCELED"))
+          {:error, :unavailable} ->
+            Logger.warning("A2A task cancellation unavailable")
+            {:error, -32_603, "Task cancellation is temporarily unavailable"}
 
-        LemonCore.Bus.broadcast(
-          "a2a:task:#{task.id}",
-          {:a2a_task_terminal, task.id}
-        )
+          {:error, :outcome_unknown} ->
+            Logger.warning("A2A task cancellation outcome unknown")
+            {:error, -32_603, "Task cancellation outcome is unknown"}
 
-        {:ok, TaskView.render(canceled)}
+          {:error, reason} ->
+            Logger.error("A2A task cancellation failed class=#{failure_class(reason)}")
+            {:error, -32_603, "Task cancellation failed"}
+        end
       end
     end
   end
@@ -94,7 +109,7 @@ defmodule LemonControlPlane.A2A.Handler do
 
   defp owned_task(id, peer_id) when is_binary(id) do
     case A2AStore.get_task(id) do
-      %{peer_id: ^peer_id} = task -> {:ok, task}
+      %{peer_id: ^peer_id} = task -> {:ok, Runner.reconcile(task)}
       _ -> {:error, -32_001, "Task not found"}
     end
   end
@@ -103,4 +118,18 @@ defmodule LemonControlPlane.A2A.Handler do
 
   defp normalize_limit(value) when is_integer(value), do: value |> min(100) |> max(1)
   defp normalize_limit(_), do: 50
+
+  defp cancel_store_error(reason) do
+    Logger.error("A2A task cancellation persistence failed class=#{failure_class(reason)}")
+    {:error, -32_603, "Task cancellation failed"}
+  end
+
+  defp failure_class(%{__exception__: true, __struct__: module}) when is_atom(module),
+    do: "exception:" <> inspect(module)
+
+  defp failure_class(reason) when is_atom(reason), do: "atom"
+  defp failure_class(reason) when is_tuple(reason), do: "tuple"
+  defp failure_class(reason) when is_map(reason), do: "map"
+  defp failure_class(reason) when is_list(reason), do: "list"
+  defp failure_class(_reason), do: "other"
 end

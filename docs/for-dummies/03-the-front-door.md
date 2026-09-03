@@ -220,9 +220,10 @@ Why does this matter? It means:
 - The two apps can be developed and tested independently
 
 The bridge works by having the router register itself at startup:
-`RouterBridge.configure(router: LemonRouter.Router, ...)`. Channels then call
-`RouterBridge.handle_inbound(msg)`, which dynamically looks up and calls the
-registered router module.
+`RouterBridge.configure(run_orchestrator: LemonRouter.RunOrchestrator, ...)`.
+Channels construct a canonical request with a fixed run ID and call
+`RouterBridge.submit_run(request)`, which dynamically looks up and calls the
+registered orchestrator.
 
 ---
 

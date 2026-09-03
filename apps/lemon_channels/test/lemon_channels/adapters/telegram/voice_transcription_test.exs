@@ -3,6 +3,9 @@ defmodule LemonChannels.Adapters.Telegram.VoiceTranscriptionTest do
   use ExUnit.Case, async: false
 
   defmodule VoiceTestRouter do
+    use LemonCore.RouterBridge.Router
+    use LemonCore.RouterBridge.RunOrchestrator
+
     def handle_inbound(msg) do
       if pid = :persistent_term.get({__MODULE__, :pid}, nil) do
         send(pid, {:inbound, msg})
@@ -99,7 +102,11 @@ defmodule LemonChannels.Adapters.Telegram.VoiceTranscriptionTest do
     :persistent_term.put({VoiceTestRouter, :pid}, self())
     :persistent_term.put({TestTranscriber, :pid}, self())
     VoiceMockAPI.register_sent(self())
-    LemonCore.RouterBridge.configure(router: VoiceTestRouter, run_orchestrator: VoiceTestRouter)
+    previous_router_bridge = Application.get_env(:lemon_core, :router_bridge)
+
+    :ok =
+      LemonCore.RouterBridge.configure(router: VoiceTestRouter, run_orchestrator: VoiceTestRouter)
+
     previous_gateway_env = Application.get_env(:lemon_gateway, @gateway_config_key)
 
     existing = Application.get_env(:lemon_gateway, @gateway_config_key, %{})
@@ -128,6 +135,12 @@ defmodule LemonChannels.Adapters.Telegram.VoiceTranscriptionTest do
       end
 
       _ = LemonChannels.Registry.unregister("telegram")
+
+      if previous_router_bridge == nil do
+        Application.delete_env(:lemon_core, :router_bridge)
+      else
+        Application.put_env(:lemon_core, :router_bridge, previous_router_bridge)
+      end
 
       if previous_gateway_env == nil do
         Application.delete_env(:lemon_gateway, @gateway_config_key)

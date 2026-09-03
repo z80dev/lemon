@@ -17,6 +17,19 @@ defmodule LemonChannels.Adapters.Email.Webhook do
   than running open. An inbound mail endpoint that accepts unauthenticated
   POSTs is a spam relay into someone's agent.
 
+  ## Delivery receipts
+
+  A normalized provider Message-ID is required, hashed before it is persisted,
+  and also supplies a stable run reference. A request is rejected before router
+  submission when its Message-ID is absent or the idempotency store is
+  unavailable; an untracked provider retry must never create a second run.
+  Router acceptance returns 202. A definite rejection marks that reservation
+  eligible for the next attempt and returns 503 so redelivery is safe.
+  An ambiguous mutation retains the reservation and returns 200 with
+  `outcome unknown`: this is a successful provider receipt, not a claim that
+  the router accepted the run, and prevents an automatic retry from creating a
+  duplicate.
+
   The token is in a header rather than the body on purpose: that lets the check
   run as `c:LemonChannels.InboundHttp.Handler.authorized?/1`, which
   `LemonChannels.InboundHttp.Router` calls *before* parsing, so an
@@ -35,6 +48,12 @@ defmodule LemonChannels.Adapters.Email.Webhook do
   require Logger
 
   alias LemonChannels.Adapters.Email
+  alias LemonChannels.Runtime
+  alias LemonChannels.SubmissionOutcome
+  alias LemonCore.Store
+
+  @idempotency_table :email_inbound_idempotency
+  @reservation_lease_ms 60_000
 
   @impl true
   def authorized?(conn) do
@@ -65,7 +84,14 @@ defmodule LemonChannels.Adapters.Email.Webhook do
   defp accept(conn) do
     case Email.normalize_inbound(conn.body_params) do
       {:ok, message} ->
-        handoff(conn, message)
+        replay_content_identity = replay_content_identity(conn.body_params)
+
+        case reserve(message) do
+          {:duplicate, receipt} -> duplicate_receipt(conn, receipt)
+          {:new, reservation} -> handoff(conn, message, reservation, replay_content_identity)
+          {:error, :missing_message_id} -> Plug.Conn.send_resp(conn, 400, "missing message id")
+          {:error, :idempotency_unavailable} -> Plug.Conn.send_resp(conn, 503, "unavailable")
+        end
 
       {:error, reason} ->
         Logger.warning("email webhook rejected payload: #{inspect(reason)}")
@@ -73,33 +99,308 @@ defmodule LemonChannels.Adapters.Email.Webhook do
     end
   end
 
-  defp handoff(conn, message) do
-    case deliver_to_router(message) do
-      {:error, :unavailable} ->
-        # The message is definitively lost, so saying "accepted" would be a lie
-        # that costs someone their mail. 503 asks the provider to redeliver,
-        # which is what every mail provider does with a 5xx.
-        Logger.error("email webhook could not reach the router; asking for redelivery")
-        Plug.Conn.send_resp(conn, 503, "unavailable")
+  defp handoff(conn, message, reservation, replay_content_identity) do
+    case deliver_to_router(message, reservation, replay_content_identity) do
+      :ok ->
+        case remember(reservation, "accepted") do
+          :ok ->
+            # The provider's job is done only after both the router and the
+            # durable replay receipt take responsibility for the message.
+            Plug.Conn.send_resp(conn, 202, "accepted")
 
-      _ ->
-        # 202 otherwise: the provider's job is done once we have the message.
-        # Whether a run results is not something it should wait on, and it is
-        # not something redelivery would fix either.
-        Plug.Conn.send_resp(conn, 202, "accepted")
+          {:error, :idempotency_unavailable} ->
+            Plug.Conn.send_resp(conn, 503, "unavailable")
+        end
+
+      {:error, _} = error ->
+        if SubmissionOutcome.uncertain?(error) do
+          case remember(reservation, "outcome_unknown") do
+            :ok ->
+              Logger.error(
+                "email webhook handoff outcome unknown; suppressing redelivery: reason=#{SubmissionOutcome.log_label(error)}"
+              )
+
+              Plug.Conn.send_resp(conn, 200, "outcome unknown")
+
+            {:error, :idempotency_unavailable} ->
+              Plug.Conn.send_resp(conn, 503, "unavailable")
+          end
+        else
+          case release(reservation) do
+            :ok ->
+              Logger.error(
+                "email webhook handoff rejected; asking for redelivery: reason=#{SubmissionOutcome.log_label(error)}"
+              )
+
+              Plug.Conn.send_resp(conn, 503, "unavailable")
+
+            {:error, :idempotency_unavailable} ->
+              Logger.error(
+                "email webhook handoff rejected but reservation update failed; retry remains lease-gated"
+              )
+
+              Plug.Conn.send_resp(conn, 503, "unavailable")
+          end
+        end
+
+      _unexpected ->
+        case remember(reservation, "outcome_unknown") do
+          :ok ->
+            Logger.error(
+              "email webhook handoff outcome unknown; suppressing redelivery: reason=unexpected_result"
+            )
+
+            Plug.Conn.send_resp(conn, 200, "outcome unknown")
+
+          {:error, :idempotency_unavailable} ->
+            Plug.Conn.send_resp(conn, 503, "unavailable")
+        end
     end
   end
 
-  # Routed through LemonCore.RouterBridge so channels keeps no compile-time
-  # dependency on lemon_router (see the §2 dependency rules).
-  #
-  # The bridge answers `{:error, :unavailable}` for every way a router can fail
-  # to take the message — unconfigured, process dead, call timed out — so there
-  # is nothing to catch here. It did not always: it rescued exceptions but not
-  # exits, and this webhook carried its own `catch :exit` until that was fixed
-  # centrally. Deciding what an unavailable router *means to a mail provider*
-  # is still this module's job, and that decision is `handoff/2`.
-  defp deliver_to_router(message), do: LemonCore.RouterBridge.handle_inbound(message)
+  defp reserve(%{message: %{id: message_id}}) when is_binary(message_id) and message_id != "" do
+    store = store_module()
+    digest = Base.encode16(:crypto.hash(:sha256, message_id), case: :lower)
+
+    reservation = %{
+      key: digest,
+      run_id: "run_email_#{digest}",
+      reservation_id: LemonCore.Id.uuid7()
+    }
+
+    entry = %{
+      "run_id" => reservation.run_id,
+      "reservation_id" => reservation.reservation_id,
+      "state" => "pending",
+      "updated_at_ms" => System.system_time(:millisecond),
+      "lease_expires_at_ms" => System.system_time(:millisecond) + @reservation_lease_ms
+    }
+
+    case store.put_new(@idempotency_table, reservation.key, entry) do
+      :ok ->
+        {:new, reservation}
+
+      {:error, :exists} ->
+        reclaim_or_duplicate(reservation, entry)
+
+      {:error, _reason} ->
+        Logger.warning("email webhook idempotency unavailable failure_class=store_error")
+        {:error, :idempotency_unavailable}
+
+      _unexpected ->
+        Logger.warning("email webhook idempotency unavailable failure_class=unexpected_result")
+        {:error, :idempotency_unavailable}
+    end
+  rescue
+    _error ->
+      Logger.warning("email webhook idempotency unavailable failure_class=exception")
+      {:error, :idempotency_unavailable}
+  end
+
+  defp reserve(_message), do: {:error, :missing_message_id}
+
+  defp duplicate_receipt(conn, %{"state" => "accepted"}),
+    do: Plug.Conn.send_resp(conn, 202, "accepted")
+
+  defp duplicate_receipt(conn, %{"state" => "pending"}),
+    do: Plug.Conn.send_resp(conn, 503, "delivery pending")
+
+  defp duplicate_receipt(conn, _receipt),
+    do: Plug.Conn.send_resp(conn, 200, "outcome unknown")
+
+  defp remember(reservation, state),
+    do: update_owned_reservation(reservation, %{"state" => state})
+
+  defp release(reservation),
+    do:
+      update_owned_reservation(reservation, %{
+        "state" => "rejected",
+        "lease_expires_at_ms" => 0
+      })
+
+  defp update_owned_reservation(reservation, updates),
+    do: update_owned_reservation(reservation, updates, 3)
+
+  defp update_owned_reservation(_reservation, _updates, attempts_left)
+       when attempts_left < 1,
+       do: {:error, :idempotency_unavailable}
+
+  defp update_owned_reservation(
+         %{key: key, reservation_id: reservation_id} = reservation,
+         updates,
+         attempts_left
+       ) do
+    store = store_module()
+
+    case store.get(@idempotency_table, key) do
+      %{} = existing ->
+        if (existing["reservation_id"] || existing[:reservation_id]) == reservation_id do
+          replacement =
+            existing
+            |> Map.merge(updates)
+            |> Map.put("updated_at_ms", System.system_time(:millisecond))
+
+          case store.compare_and_swap(@idempotency_table, key, existing, replacement) do
+            :ok ->
+              :ok
+
+            {:error, :mismatch} ->
+              update_owned_reservation(reservation, updates, attempts_left - 1)
+
+            _ ->
+              {:error, :idempotency_unavailable}
+          end
+        else
+          {:error, :idempotency_unavailable}
+        end
+
+      _ ->
+        {:error, :idempotency_unavailable}
+    end
+  rescue
+    _ -> {:error, :idempotency_unavailable}
+  catch
+    _, _ -> {:error, :idempotency_unavailable}
+  end
+
+  defp reclaim_or_duplicate(reservation, pending_entry) do
+    store = store_module()
+
+    case store.get(@idempotency_table, reservation.key) do
+      %{} = existing ->
+        state = existing["state"] || existing[:state]
+
+        lease_expires_at_ms =
+          existing["lease_expires_at_ms"] || existing[:lease_expires_at_ms] || 0
+
+        if state == "rejected" or
+             (state == "pending" and lease_expires_at_ms <= System.system_time(:millisecond)) do
+          case store.compare_and_swap(
+                 @idempotency_table,
+                 reservation.key,
+                 existing,
+                 pending_entry
+               ) do
+            :ok -> {:new, reservation}
+            {:error, :mismatch} -> reclaim_or_duplicate(reservation, pending_entry)
+            {:error, _reason} -> {:error, :idempotency_unavailable}
+            _unexpected -> {:error, :idempotency_unavailable}
+          end
+        else
+          {:duplicate, existing}
+        end
+
+      _ ->
+        {:error, :idempotency_unavailable}
+    end
+  rescue
+    _ -> {:error, :idempotency_unavailable}
+  catch
+    _, _ -> {:error, :idempotency_unavailable}
+  end
+
+  # The runtime converts the message to the canonical RunRequest and crosses
+  # RouterBridge.submit_run/1. A provider Message-ID supplies a stable run
+  # reference so ambiguous submissions can be reconciled without inventing a
+  # second identity.
+  defp deliver_to_router(message, reservation, replay_content_identity),
+    do:
+      Runtime.submit_inbound(message,
+        run_id: reservation.run_id,
+        replay_identity: "email:" <> reservation.key,
+        replay_content_identity: replay_content_identity
+      )
+
+  defp replay_content_identity(body_params) do
+    parsed = Email.parse(body_params)
+
+    %{
+      from: parsed.from,
+      from_name: parsed.from_name,
+      to: parsed.to,
+      subject: parsed.subject,
+      text: parsed.text,
+      html: parsed.html,
+      message_id: parsed.message_id,
+      in_reply_to: parsed.in_reply_to,
+      references: parsed.references,
+      attachments: Enum.map(parsed.attachments, &canonical_attachment/1)
+    }
+    |> :erlang.term_to_binary([:deterministic])
+    |> then(&:crypto.hash(:sha256, &1))
+    |> Base.encode16(case: :lower)
+  end
+
+  defp canonical_attachment(%Plug.Upload{} = upload) do
+    %{
+      filename: upload.filename,
+      content_type: upload.content_type,
+      content_sha256: file_digest(upload.path)
+    }
+  end
+
+  defp canonical_attachment(value) when is_map(value) do
+    upload = attachment_value(value, [:upload, :file, :attachment])
+
+    %{
+      filename:
+        attachment_value(value, [:filename, :name, :file_name]) || upload_filename(upload),
+      content_type:
+        attachment_value(value, [:content_type, :mime_type, :type]) || upload_content_type(upload),
+      url: attachment_value(value, [:url, :href]),
+      content_sha256: attachment_digest(value, upload)
+    }
+  end
+
+  defp canonical_attachment(url) when is_binary(url), do: %{url: url}
+  defp canonical_attachment(_value), do: :ignored
+
+  defp attachment_digest(_value, %Plug.Upload{path: path}), do: file_digest(path)
+
+  defp attachment_digest(value, _upload) do
+    case attachment_value(value, [:content, :data, :content_base64, :base64, :body]) do
+      bytes when is_binary(bytes) ->
+        bytes
+        |> decoded_attachment_bytes()
+        |> then(&:crypto.hash(:sha256, &1))
+        |> Base.encode16(case: :lower)
+
+      _ ->
+        nil
+    end
+  end
+
+  defp decoded_attachment_bytes(bytes) do
+    trimmed = String.trim(bytes)
+
+    if byte_size(trimmed) > 20 and Regex.match?(~r/\A[A-Za-z0-9+\/=\r\n]+\z/, trimmed) do
+      case Base.decode64(trimmed, ignore: :whitespace) do
+        {:ok, decoded} -> decoded
+        :error -> bytes
+      end
+    else
+      bytes
+    end
+  end
+
+  defp attachment_value(map, keys) do
+    Enum.find_value(keys, fn key -> Map.get(map, key) || Map.get(map, Atom.to_string(key)) end)
+  end
+
+  defp upload_filename(%Plug.Upload{filename: filename}), do: filename
+  defp upload_filename(_upload), do: nil
+
+  defp upload_content_type(%Plug.Upload{content_type: content_type}), do: content_type
+  defp upload_content_type(_upload), do: nil
+
+  defp file_digest(path) when is_binary(path) do
+    case File.read(path) do
+      {:ok, bytes} -> Base.encode16(:crypto.hash(:sha256, bytes), case: :lower)
+      {:error, _reason} -> :unreadable
+    end
+  end
+
+  defp file_digest(_path), do: :unreadable
 
   defp secure_equal?(nil, _token), do: false
 
@@ -111,4 +412,7 @@ defmodule LemonChannels.Adapters.Email.Webhook do
   defp secure_equal?(_, _), do: false
 
   defp configured_token, do: Email.Config.webhook_token()
+
+  defp store_module,
+    do: Application.get_env(:lemon_channels, :email_webhook_store, Store)
 end

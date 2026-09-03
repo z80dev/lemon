@@ -129,9 +129,11 @@ defmodule LemonAutomation.SynthesisRunner do
           router_mod.list_active_sessions()
       end
 
-    match?([_ | _], sessions)
+    match?([_ | _], sessions) or match?({:error, _reason}, sessions)
   rescue
-    _ -> false
+    _ -> true
+  catch
+    _kind, _reason -> true
   end
 
   @doc false

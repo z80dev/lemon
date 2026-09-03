@@ -1,4 +1,6 @@
 defmodule LemonChannels.Adapters.Telegram.Transport.CallbackHandler do
+  require Logger
+
   @moduledoc """
   Telegram-local callback query handler for inline keyboard actions.
 
@@ -11,6 +13,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.CallbackHandler do
   alias LemonChannels.Adapters.Telegram.ModelPolicyAdapter
   alias LemonChannels.Adapters.Telegram.Transport.PerChatState
   alias LemonChannels.Adapters.Telegram.Transport.SessionRouting
+  alias LemonChannels.SubmissionOutcome
   alias LemonCore.ChatScope
   alias LemonCore.SessionKey
 
@@ -39,27 +42,15 @@ defmodule LemonChannels.Adapters.Telegram.Transport.CallbackHandler do
       String.starts_with?(data, @idle_keepalive_continue_callback_prefix) ->
         run_id = String.trim_leading(data, @idle_keepalive_continue_callback_prefix)
 
-        if is_binary(run_id) and run_id != "" and
-             Code.ensure_loaded?(LemonChannels.Runtime) and
-             function_exported?(LemonChannels.Runtime, :keep_run_alive, 2) do
-          LemonChannels.Runtime.keep_run_alive(run_id, :continue)
-        end
-
-        _ = answer_callback_query(state, cb_id, "continuing...")
-        maybe_close_callback_buttons(state, cb, "Continuing run.")
+        outcome = LemonChannels.Runtime.keep_run_alive(run_id, :continue)
+        handle_keepalive_outcome(state, cb, cb_id, outcome, "continuing...", "Continuing run.")
         :ok
 
       String.starts_with?(data, @idle_keepalive_stop_callback_prefix) ->
         run_id = String.trim_leading(data, @idle_keepalive_stop_callback_prefix)
 
-        if is_binary(run_id) and run_id != "" and
-             Code.ensure_loaded?(LemonChannels.Runtime) and
-             function_exported?(LemonChannels.Runtime, :keep_run_alive, 2) do
-          LemonChannels.Runtime.keep_run_alive(run_id, :cancel)
-        end
-
-        _ = answer_callback_query(state, cb_id, "stopping...")
-        maybe_close_callback_buttons(state, cb, "Stopping run.")
+        outcome = LemonChannels.Runtime.keep_run_alive(run_id, :cancel)
+        handle_keepalive_outcome(state, cb, cb_id, outcome, "stopping...", "Stopping run.")
         :ok
 
       String.starts_with?(data, @model_callback_prefix <> ":") ->
@@ -88,25 +79,19 @@ defmodule LemonChannels.Adapters.Telegram.Transport.CallbackHandler do
                 thread_id: if(is_integer(topic_id), do: to_string(topic_id), else: nil)
               })
 
-          if Code.ensure_loaded?(LemonChannels.Runtime) and
-               function_exported?(LemonChannels.Runtime, :cancel_by_progress_msg, 2) do
-            LemonChannels.Runtime.cancel_by_progress_msg(session_key, message_id)
-          end
+          outcome = LemonChannels.Runtime.cancel_by_progress_msg(session_key, message_id)
+          _ = answer_callback_query(state, cb_id, control_answer(outcome, "cancelling..."))
+        else
+          _ = answer_callback_query(state, cb_id, "cancelling...")
         end
 
-        _ = answer_callback_query(state, cb_id, "cancelling...")
         :ok
 
       String.starts_with?(data, @cancel_callback_prefix <> ":") ->
         run_id = String.trim_leading(data, @cancel_callback_prefix <> ":")
 
-        if is_binary(run_id) and run_id != "" and
-             Code.ensure_loaded?(LemonChannels.Runtime) and
-             function_exported?(LemonChannels.Runtime, :cancel_by_run_id, 2) do
-          LemonChannels.Runtime.cancel_by_run_id(run_id, :user_requested)
-        end
-
-        _ = answer_callback_query(state, cb_id, "cancelling...")
+        outcome = LemonChannels.Runtime.cancel_by_run_id(run_id, :user_requested)
+        _ = answer_callback_query(state, cb_id, control_answer(outcome, "cancelling..."))
         :ok
 
       true ->
@@ -585,6 +570,30 @@ defmodule LemonChannels.Adapters.Telegram.Transport.CallbackHandler do
     _ -> :ok
   end
 
+  defp handle_keepalive_outcome(state, cb, cb_id, :ok, answer, notice) do
+    _ = answer_callback_query(state, cb_id, answer)
+    maybe_close_callback_buttons(state, cb, notice)
+  end
+
+  defp handle_keepalive_outcome(state, _cb, cb_id, {:error, _} = error, _answer, _notice) do
+    Logger.warning(
+      "telegram keepalive control failed: reason=#{SubmissionOutcome.log_label(error)}"
+    )
+
+    # Do not edit the source message on failure. Its inline keyboard is the
+    # user's retry control and must remain available.
+    _ = answer_callback_query(state, cb_id, keepalive_failure_answer(error))
+    :ok
+  end
+
+  defp keepalive_failure_answer(error) do
+    if SubmissionOutcome.uncertain?(error) do
+      "couldn't confirm run control; check run status before retrying"
+    else
+      "run control unavailable; try again"
+    end
+  end
+
   defp parse_int(nil), do: nil
   defp parse_int(i) when is_integer(i), do: i
 
@@ -596,4 +605,20 @@ defmodule LemonChannels.Adapters.Telegram.Transport.CallbackHandler do
   end
 
   defp parse_int(_), do: nil
+
+  # Run-control callbacks answer what actually happened: the router took the
+  # request, or it could not be reached and the user should know.
+  defp control_answer(:ok, text), do: text
+
+  defp control_answer({:error, reason}, _text) do
+    error = {:error, reason}
+
+    Logger.warning("telegram run control failed: reason=#{SubmissionOutcome.log_label(error)}")
+
+    if SubmissionOutcome.uncertain?(error) do
+      "couldn't confirm cancellation; check run status before retrying"
+    else
+      "run control unavailable"
+    end
+  end
 end

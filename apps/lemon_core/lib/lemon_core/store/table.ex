@@ -72,7 +72,16 @@ defmodule LemonCore.Store.Table do
 
   @doc "Builds and validates the table declarations for `owner`."
   @spec declare!(module(), keyword()) :: [t()]
-  def declare!(owner, tables) when is_atom(owner) and is_list(tables) do
+  def declare!(owner, _tables) when not is_atom(owner) or is_nil(owner) do
+    raise ArgumentError, "table owner must be a module, got #{inspect(owner)}"
+  end
+
+  def declare!(owner, tables) when not is_list(tables) do
+    raise ArgumentError,
+          "#{inspect(owner)}: tables must be a keyword list, got #{inspect(tables)}"
+  end
+
+  def declare!(owner, tables) do
     if tables == [] do
       raise ArgumentError, "#{inspect(owner)} declares no tables"
     end

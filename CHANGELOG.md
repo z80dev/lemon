@@ -10,6 +10,55 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- A2A message replays now return the original task without duplicate router
+  submission, webhook idempotency storage failures fail closed with retryable
+  503 responses instead of reporting acceptance, and exact synchronous webhook
+  responses have an independent durable replay receipt. Ambiguous goal-loop
+  submissions retain their fixed run ownership until reconciliation or an
+  explicit hard stop.
+- Fixed run IDs now have durable semantic admission claims and compact permanent
+  accepted/aborted outcome fences; only safe never-enqueued claims and volatile
+  caches expire. Replays cannot cross session, content, or execution identity,
+  transport-local attachment paths do not create false conflicts, and surviving
+  run ownership is indexed without probing unrelated run processes. Exact
+  webhook response receipts are swept together with their completed primary
+  reservation after the replay horizon using transactional or fence-last
+  exact-snapshot deletion, and raw webhook idempotency keys are hashed before
+  any durable key, receipt, router request, or run metadata is built. Legacy
+  raw webhook receipts migrate behind the hashed fence without reopening
+  execution, invalid payload idempotency values are rejected before hashing,
+  released pending receipts without run identity return a permanent,
+  non-retryable duplicate ambiguity receipt, and
+  failed cleanup scans do not advance their watermark. Store diagnostics also
+  sanitize nested idempotency-key context, and sensitive multi-delete failures
+  return bounded error categories instead of backend payloads. Legacy router
+  receipts are compacted and abort reasons sanitized during replay and
+  background cleanup; goal hard stops persist abort intent before dispatch.
+- Telegram memory-reflection and per-chat abort helpers no longer collapse
+  router mutation failures into success-like results. Ambiguous cancel and
+  keepalive callbacks now direct users to check run status before retrying,
+  retain their inline controls, and log only bounded failure classes.
+- Gateway webhooks now acknowledge ambiguous router submissions with an
+  explicit non-retry-safe receipt instead of a redelivery-triggering 5xx,
+  profile chat preserves a reconciliation run ID without retrying or exposing
+  raw failures, and goal-loop hard stops report sanitized one-shot abort
+  outcomes.
+- Email webhooks now reserve a hashed provider Message-ID and stable run
+  reference before router submission. Definite rejection remains safely
+  retryable, while an ambiguous handoff returns a truthful non-retrying receipt
+  and retains dedupe state so provider redelivery cannot create a second run.
+  Telegram and WhatsApp busy-query fallbacks no longer log raw session keys or
+  exception terms.
+- MCP configuration validation now rejects non-boolean OAuth token-persistence
+  flags and empty token secret names consistently before HTTP or SSE sources
+  reach runtime startup.
+- `LemonCore.RouterBridge` query calls now distinguish an idle router from an
+  unavailable one: `session_busy?/1`, `active_run/1`, and
+  `list_active_sessions/0` return explicit result tuples/errors, and command
+  callbacks accept only `:ok` or `{:error, reason}`. All channel, web, A2A,
+  control-plane, and portable-command callers were migrated atomically;
+  user-facing run controls no longer report success for a request the router
+  did not accept.
 - Hermes skill install/update requests no longer block their own control-plane
   WebSocket while waiting for approval or Git work. Approval events and
   liveness probes remain deliverable, and the TUI keeps the correlated skill
@@ -36,10 +85,15 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - `LemonCore.Store.Table` ownership metadata for incremental generic-store
   migrations. The architecture gate now analyzes generic Store calls from the
   AST across every supported operation and default/explicit server arity,
-  resolving aliases and module attributes and rejecting dynamic or cross-table
-  access from an owner module. The metadata is non-operational in this change;
-  backend registration, retention, and domain migrations remain separate.
+  resolving aliases, module attributes, direct and `apply/3` forms, and every
+  table in multi-entry operations while rejecting dynamic or cross-table access
+  from an owner module. The metadata is non-operational in this change; backend
+  registration, retention, and domain migrations remain separate.
 
+- Configured engine runtimes are now checked against
+  `LemonCore.EngineRuntime` when the router starts. Invalid wiring is reported
+  once and disabled while preserving router-only boot and the existing
+  unavailable-runtime handling.
 - Persistent source and packaged launchers now provision a private,
   port-scoped control-plane operator credential under `~/.lemon/run`, allowing
   later TUI processes to attach automatically without exposing the bearer in
@@ -234,6 +288,15 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Changed
 
+- Lemon AI's 25 provider-module literal catalogs now live in 26 JSON resources
+  under `apps/lemon_ai/priv/models/` and are embedded at compile time by
+  `LemonAi.Models.Catalog`. Google uses a base catalog plus Antigravity extras;
+  the Google Antigravity registry derives from both, while OpenAI Codex derives
+  from the direct OpenAI catalog plus OAuth-only IDs. Provider modules retain
+  their existing names and `models/0` APIs, catalog files are registered as
+  external resources for recompilation, malformed entries fail compilation
+  with their model key, and atom-valued API/provider/input/compatibility fields
+  accept only explicit allowlists.
 - `execute_code` gained an explicit result channel: `text()` blocks are the tool
   result (write-through flushed per call, so they survive a timeout/abort kill),
   while stdout/stderr is demoted to a clearly labeled diagnostics tail. Scripts
