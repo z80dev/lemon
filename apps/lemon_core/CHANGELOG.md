@@ -33,6 +33,10 @@ Telegram, run history, durable memory, kanban boards, or `~/.lemon`.
   and its `:expires_at` retention policy. Its public API and the specialized
   Store runtime that applies TTL, expiry, sweeping, and cache behavior are
   unchanged.
+- `LemonCore.RunStore` declares `:runs` and `:sessions_index` as its owned
+  tables. The declaration records their cache and persistence intent explicitly
+  and brings the existing wrapper under the AST ownership gate without changing
+  the specialized `LemonCore.Store` run lifecycle or finalization semantics.
 
 - `LemonCore.Contract` centralizes loadability and required-callback checks for
   configuration-injected implementations. `LemonCore.EngineRuntime.validate/1`

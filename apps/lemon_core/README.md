@@ -166,6 +166,7 @@ ids, message bodies, proof details, credentials, or secret names.
 |--------|---------|
 | `LemonCore.Store` | GenServer with pluggable backends and specialized APIs |
 | `LemonCore.Store.Table` | Declarative owner and policy metadata for generic Store tables |
+| `LemonCore.RunStore` | Typed run lifecycle/history wrapper and declared owner of `:runs` and `:sessions_index`; runtime writes still use the specialized Store lifecycle path |
 | `LemonCore.Store.Backend` | Behaviour for storage backends (init/put/put_new/get/delete/list) |
 | `LemonCore.Store.EtsBackend` | In-memory ETS backend (ephemeral, default) |
 | `LemonCore.Store.SqliteBackend` | SQLite backend with WAL mode and optional ephemeral tables |
@@ -485,7 +486,10 @@ Shared-domain callers should prefer typed wrappers:
 - **Chat state**: `LemonCore.ChatStateStore.put/2`, `get/1`, `delete/1`; owns
   the cached `:chat` table with `:expires_at` retention metadata while the
   specialized Store runtime continues to enforce TTL and expiry
-- **Run history**: `LemonCore.RunStore.append_event/2`, `finalize/2`, `history/2`, `get/1`
+- **Run history**: `LemonCore.RunStore.append_event/2`, `finalize/2`, `history/2`, `get/1`;
+  owns cached `:runs` (`persistence: :ephemeral`) and cached `:sessions_index`
+  (`persistence: :durable`) while specialized Store lifecycle/finalization
+  remains the runtime path
 - **Policies**: `LemonCore.PolicyStore.put_agent/2`, `put_channel/2`, `put_session/2`, `put_runtime/1`
 - **Idempotency**: `LemonCore.IdempotencyStore.put/3`, `get/2`, `delete/2`
 - **Progress mapping**: `LemonCore.ProgressStore.put/3`, `get_run/2`
@@ -499,6 +503,11 @@ Agent workspace coordination — goals, kanban boards, and heartbeats — is bui
 `:session_policies`, and `:runtime_policy` as durable version-1 tables. The
 declaration is ownership metadata only: its public functions continue to use
 the specialized policy operations provided by `LemonCore.Store`.
+
+`LemonCore.RunStore` declares cached `:runs` (`persistence: :ephemeral`) and
+cached `:sessions_index` (`persistence: :durable`). The declaration is
+ownership metadata only; runtime writes still use the specialized Store
+lifecycle path, and finalization behavior is unchanged.
 
 ### ReadCache
 
