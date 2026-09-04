@@ -105,13 +105,6 @@ The following secrets are recognized by the migration tooling:
 - `BRAVE_API_KEY` - Brave Search API
 - `GITHUB_TOKEN` - GitHub API access
 
-### X/Twitter API
-- `X_API_CLIENT_ID`, `X_API_CLIENT_SECRET` - OAuth 2.0
-- `X_API_BEARER_TOKEN` - App auth
-- `X_API_ACCESS_TOKEN`, `X_API_REFRESH_TOKEN` - User auth
-- `X_API_CONSUMER_KEY`, `X_API_CONSUMER_SECRET` - OAuth 1.0a
-- `X_API_ACCESS_TOKEN_SECRET` - OAuth 1.0a
-
 ## Troubleshooting
 
 ### Secret not found after migration

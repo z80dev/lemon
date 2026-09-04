@@ -42,7 +42,6 @@
 | Work on the LemonSim control room UI | `apps/lemon_sim_ui/` |
 | Work on the on-chain TCG shop arena | `apps/lemon_tcg/` |
 | Write contract tests for platform behaviours | `apps/lemon_platform_test/` |
-| Work on the X (Twitter) API client | `apps/x_api/` |
 | Browser automation via CDP/Playwright | `clients/lemon-browser-node/` |
 
 ---
@@ -180,8 +179,7 @@ apps/
 ├── lemon_sim_ui/        # Phoenix LiveView control room for observing and driving lemon_sim runs
 ├── lemon_skills/        # Skill registry, discovery, installation, assistant-platform tools
 ├── lemon_tcg/           # Live market data and execution for the agent-operated on-chain TCG shop
-├── lemon_web/           # Phoenix LiveView web interface
-└── x_api/               # Reusable X API client, OAuth helpers, and token manager
+└── lemon_web/           # Phoenix LiveView web interface
 
 clients/
 ├── lemon-browser-node/  # Browser automation node via CDP/Playwright (TypeScript)
@@ -457,7 +455,6 @@ lemon_lsp ────────────→ lemon_core
 lemon_media ──────────→ lemon_core
 lemon_platform_test ──→ lemon_core, lemon_channels, lemon_memory, lemon_ai, lemon_agent (all optional: true)
 lemon_web ────────────→ lemon_agent, lemon_automation, lemon_core, lemon_memory, lemon_router
-x_api ────────────────→ lemon_core, lemon_channels, lemon_agent, lemon_ai, lemon_platform_test*
 lemon_ai ─────────────→ (no umbrella deps - standalone LLM client library)
 lemon_core ───────────→ (no umbrella deps - foundational shared library)
 ```
@@ -684,7 +681,6 @@ Each app has its own `AGENTS.md` with detailed context:
 | lemon_skills | `apps/lemon_skills/AGENTS.md` |
 | lemon_tcg | `apps/lemon_tcg/README.md` *(no AGENTS.md yet)* |
 | lemon_web | `apps/lemon_web/AGENTS.md` |
-| x_api | `apps/x_api/README.md` *(no AGENTS.md yet)* |
 
 ---
 

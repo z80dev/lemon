@@ -58,7 +58,6 @@ defmodule LemonCore.Quality.ArchitectureCheck do
     lemon_router: ["LemonRouter"],
     lemon_skills: ["LemonSkills"],
     lemon_web: ["LemonWeb"],
-    x_api: ["XApi"],
     # lemon-sim product block — delete with the lemon-sim repo extraction
     # (docs/platform-split.md Phase 5). Namespace strings only: this table is a
     # lint inventory of the apps in *this* repo, not a dependency.

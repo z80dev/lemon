@@ -55,8 +55,8 @@ For system diagrams see `docs/diagrams/`. For per-app details see each `apps/*/R
 ┌────────▼───────┐   ┌──────────▼──────────┐
 │ LemonGateway   │   │ LemonChannels        │
 │ native executor│   │  Telegram, Discord, │
-└────────┬───────┘   │  X/Twitter           │
-         │           └─────────────────────-┘
+└────────┬───────┘   │ XMTP, WhatsApp, email│
+         │           └──────────────────────┘
 ┌────────▼───────────────────────────────────┐
 │ CodingAgent.Session                         │
 │  · 23 built-in tools                        │
@@ -91,7 +91,7 @@ destination `CodingAgent.Executor`.
 
 ## Application Map
 
-The project is an Elixir umbrella with 25 applications:
+The project is an Elixir umbrella with 24 applications:
 
 **Stack (bottom-up):**
 
@@ -111,14 +111,13 @@ The project is an Elixir umbrella with 25 applications:
 | `coding_agent_ui` | Debug RPC interface, TUI/Web bridge |
 | `lemon_router` | RunOrchestrator, ModelSelection, RoutingFeedbackStore, lane queues, policy engine |
 | `lemon_gateway` | Native execution lifecycle, slots, and request adaptation |
-| `lemon_channels` | Transport adapters (Telegram, Discord, X/Twitter, WhatsApp), model policy |
+| `lemon_channels` | Transport adapters (Telegram, Discord, XMTP, WhatsApp, email), model policy |
 | `lemon_automation` | CronManager, HeartbeatManager, scheduled jobs |
 | `lemon_control_plane` | HTTP/WebSocket server, 112+ RPC methods |
 | `lemon_skills` | Skill catalog, manifest v2 parser, installer, audit, synthesis |
 | `lemon_mcp` | MCP protocol server |
 | `lemon_cli` | Onboarding/setup/migration mix tasks and CLI glue |
 | `lemon_web` | React web frontend bridge |
-| `x_api` | X/Twitter HTTP client (leaf) |
 | `lemon_evals` | Eval harness for assistant behavior |
 | `lemon_honcho` | Honcho-backed long-term memory: registers a `LemonMemory` provider and agent tools |
 
@@ -189,10 +188,6 @@ graph TD
         tcg["lemon_tcg"]
     end
 
-    subgraph satellite["Satellite · self-registering vendor integration"]
-        xapi["x_api"]
-    end
-
     %% Published-tier compile edges (full fidelity from mix.exs)
     agent --> ai
     agent --> core
@@ -225,7 +220,6 @@ graph TD
     %% One-way consumption into the platform (representative real edges)
     cp --> router
     ca --> gw
-    xapi -.->|"self-registers at boot · zero compile-time coupling"| chan
 ```
 
 Consumption is one-directional: reference-runtime, product, and satellite apps

@@ -110,7 +110,6 @@ config :lemon_core, :env_registries, [
   LemonRouter.Env,
   LemonSkills.Env,
   LemonWeb.Env,
-  XApi.Env,
   # lemon-sim product block — moves to the lemon-sim repo (docs/platform-split.md Phase 5)
   LemonSimUi.Env,
   LemonTcg.Env
@@ -129,10 +128,6 @@ config :lemon_channels,
 # occupies no process, and inbound mail arrives only once a host enables
 # LemonChannels.InboundHttp and sets a webhook token. That mirrors the gateway
 # transport it replaced, which was also off by default.
-
-# The X adapter is not listed above on purpose: it lives in the x_api satellite
-# and registers itself at boot (see XApi.Application), so the platform's config
-# does not name it either.
 
 # Filesystem layout for the reference runtime. These are LemonCore.Paths'
 # defaults, stated explicitly so the values live with the runtime rather than

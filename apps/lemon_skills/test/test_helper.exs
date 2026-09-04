@@ -10,9 +10,6 @@ home =
 File.mkdir_p!(home)
 System.put_env("HOME", home)
 
-# Keep X adapter resolution deterministic in tests; individual tests can override.
-Application.put_env(:x_api, :use_secrets, false)
-
 # Load test support modules
 Code.require_file("support/http_mock.ex", __DIR__)
 

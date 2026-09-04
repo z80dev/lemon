@@ -174,14 +174,6 @@ coding_agent gives the AI a rich toolkit. Here are the main categories:
 |------|-------------|
 | `todo` | Manage a session todo list (add, check off, view) |
 
-### Social
-
-| Tool | What It Does |
-|------|-------------|
-| `x_search` | Search recent public X/Twitter posts |
-| `post_to_x` | Post a tweet to X/Twitter |
-| `get_x_mentions` | Fetch X/Twitter mentions |
-
 ### Tool Precedence
 
 When multiple sources provide tools with the same name, the precedence is:

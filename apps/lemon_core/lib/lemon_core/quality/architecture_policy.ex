@@ -90,9 +90,7 @@ defmodule LemonCore.Quality.ArchitecturePolicy do
     # automation-owned blueprint catalog, and memory-owned lifecycle
     # boundaries; mutation, confirmation, and redaction semantics stay
     # centralized in their domain services.
-    lemon_web: [:lemon_agent, :lemon_automation, :lemon_core, :lemon_memory, :lemon_router],
-    # test-only: runs XApi.ChannelAdapter through the Plugin contract kit
-    x_api: [:lemon_agent, :lemon_ai, :lemon_channels, :lemon_core, :lemon_platform_test]
+    lemon_web: [:lemon_agent, :lemon_automation, :lemon_core, :lemon_memory, :lemon_router]
   }
 
   # Gateway tools still use LemonAi content structs and probe the optional

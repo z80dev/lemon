@@ -5,7 +5,7 @@
 ---
 
 `lemon_channels` is the part of Lemon that talks to the outside world. It
-handles Telegram, Discord, X/Twitter, XMTP, and WhatsApp. For this guide,
+handles Telegram, Discord, XMTP, WhatsApp, and email. For this guide,
 we'll focus on Telegram since that's the primary way to use Lemon day-to-day.
 
 ## What lemon_channels Does
@@ -35,10 +35,10 @@ service independently.
 Current plugins:
 - **Telegram** — the primary one, fully featured
 - **Discord** — via the Nostrum library
-- **X/Twitter** — posting and mention monitoring
 - **XMTP** — decentralized messaging (via an external JS bridge)
 - **WhatsApp** — messaging via a Node.js bridge; coexists alongside XMTP as a
   separate adapter for a different service (they do not replace each other)
+- **Email** — inbound SMTP/webhook handling plus threaded outbound replies
 
 Each plugin provides:
 - An ID (e.g., `"telegram"`)

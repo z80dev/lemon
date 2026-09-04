@@ -15,6 +15,14 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   instead of twenty loose session fields. Public APIs, emitted events, and
   the persisted session format are unchanged.
 
+### Removed
+
+- The built-in `x_api` satellite, its X/Twitter tools and channel adapter,
+  OAuth helpers, credential registry entries, release wiring, and developer
+  authentication script. Vendor-specific social integration now belongs in an
+  external package that registers through Lemon's existing channel and tool
+  extension points.
+
 ### Fixed
 
 - Session reset and termination now cancel both automatic-compaction and

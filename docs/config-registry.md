@@ -372,15 +372,6 @@ When a session's resolved tool catalog costs more than `LEMON_TOOL_DISCLOSURE_BU
 | `OPENSEA_API_KEY` | string | _(none)_ | yes | `lemon_tcg` | OpenSea marketplace API key. |
 | `PRICECHARTING_API_TOKEN` | string | _(none)_ | yes | `lemon_tcg` | PriceCharting API token. |
 
-### X (Twitter) API
-
-| Env Var | Type | Default | Secret | Apps | Description |
-|---|---|---|---|---|---|
-| `X_API_ACCESS_TOKEN` | string | _(none)_ | yes | `x_api` | X (Twitter) API OAuth1 access token. |
-| `X_API_ACCESS_TOKEN_SECRET` | string | _(none)_ | yes | `x_api` | X (Twitter) API OAuth1 access token secret. |
-| `X_API_CONSUMER_KEY` | string | _(none)_ | yes | `x_api` | X (Twitter) API OAuth1 consumer key. |
-| `X_API_CONSUMER_SECRET` | string | _(none)_ | yes | `x_api` | X (Twitter) API OAuth1 consumer secret. |
-
 ### lemon_tcg wallets
 
 | Env Var | Type | Default | Secret | Apps | Description |
