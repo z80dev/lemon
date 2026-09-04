@@ -9,6 +9,7 @@ defmodule CodingAgent.Session.Lifecycle do
   alias CodingAgent.Session.{
     BackgroundTasks,
     CompactionLifecycle,
+    CompactionManager,
     Heartbeat,
     ModelResolver,
     Notifier,
@@ -377,6 +378,7 @@ defmodule CodingAgent.Session.Lifecycle do
 
             case clear_heartbeat_for_rotation(state) do
               {:ok, state} ->
+                state = CompactionManager.cancel_compaction_tasks(state, :session_reset)
                 :ok = LemonAgent.Agent.reset(state.agent)
 
                 previous_session_id = state.session_manager.header.id

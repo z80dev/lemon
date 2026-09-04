@@ -179,4 +179,60 @@ defmodule CodingAgent.SessionOverflowRecoveryTest do
     assert state_after.overflow_recovery.task_monitor_ref == nil
     refute state_after.is_streaming
   end
+
+  test "reset cancels overflow recovery and makes late task messages stale" do
+    session = start_session()
+    state = Session.get_state(session)
+    task_pid = spawn(fn -> Process.sleep(:infinity) end)
+    task_monitor = Process.monitor(task_pid)
+    stale_monitor_ref = make_ref()
+
+    :sys.replace_state(session, fn session_state ->
+      %{
+        session_state
+        | overflow_recovery: %OverflowRecovery.State{
+            in_progress: true,
+            attempted: true,
+            signature: current_signature(state),
+            task_pid: task_pid,
+            task_monitor_ref: stale_monitor_ref,
+            task_timeout_ref: make_ref(),
+            started_at_ms: 12,
+            error_reason: :overflow,
+            partial_state: %{from: :old_session}
+          }
+      }
+    end)
+
+    assert :ok = Session.reset(session)
+    assert_receive {:DOWN, ^task_monitor, :process, ^task_pid, {:shutdown, :session_reset}}, 1_000
+
+    assert Session.get_state(session).overflow_recovery == %OverflowRecovery.State{}
+
+    send(session, {:overflow_recovery_task_timeout, stale_monitor_ref})
+    assert Session.get_state(session).overflow_recovery == %OverflowRecovery.State{}
+  end
+
+  test "session termination cancels an active overflow recovery task" do
+    session = start_session()
+    task_pid = spawn(fn -> Process.sleep(:infinity) end)
+    task_monitor = Process.monitor(task_pid)
+
+    :sys.replace_state(session, fn state ->
+      %{
+        state
+        | overflow_recovery: %OverflowRecovery.State{
+            in_progress: true,
+            task_pid: task_pid,
+            task_monitor_ref: make_ref(),
+            task_timeout_ref: make_ref()
+          }
+      }
+    end)
+
+    assert :ok = GenServer.stop(session)
+
+    assert_receive {:DOWN, ^task_monitor, :process, ^task_pid, {:shutdown, :session_terminated}},
+                   1_000
+  end
 end

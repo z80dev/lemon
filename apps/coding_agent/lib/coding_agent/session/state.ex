@@ -7,6 +7,7 @@ defmodule CodingAgent.Session.State do
   alias CodingAgent.ContextGuardrails
   alias CodingAgent.Messages.CustomMessage
   alias CodingAgent.Security.UntrustedToolBoundary
+  alias CodingAgent.Session.{CompactionLifecycle, OverflowRecovery}
 
   @spec normalize_extra_tools(term()) :: [AgentTool.t()]
   def normalize_extra_tools(tools) when is_list(tools) do
@@ -187,16 +188,8 @@ defmodule CodingAgent.Session.State do
         session_file: nil,
         steering_queue: :queue.new(),
         follow_up_queue: :queue.new(),
-        auto_compaction: %{state.auto_compaction | in_progress: false, signature: nil},
-        overflow_recovery: %{
-          state.overflow_recovery
-          | in_progress: false,
-            attempted: false,
-            signature: nil,
-            started_at_ms: nil,
-            error_reason: nil,
-            partial_state: nil
-        }
+        auto_compaction: %CompactionLifecycle.State{},
+        overflow_recovery: %OverflowRecovery.State{}
     }
   end
 

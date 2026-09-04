@@ -1325,13 +1325,7 @@ defmodule CodingAgent.Session do
   @impl true
   def terminate(_reason, state) do
     _ = Heartbeat.clear_runtime(state)
-
-    _ =
-      CompactionManager.maybe_kill_background_task(
-        state,
-        state.auto_compaction.task_pid,
-        :session_terminated
-      )
+    _ = CompactionManager.cancel_compaction_tasks(state, :session_terminated)
 
     Lifecycle.detach_owner_on_terminate(
       state.python_repl_mod,

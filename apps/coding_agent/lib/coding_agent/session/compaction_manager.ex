@@ -110,6 +110,18 @@ defmodule CodingAgent.Session.CompactionManager do
     }
   end
 
+  @spec cancel_compaction_tasks(map(), term()) :: map()
+  def cancel_compaction_tasks(state, reason) do
+    auto_compaction_pid = state.auto_compaction.task_pid
+    overflow_recovery_pid = state.overflow_recovery.task_pid
+
+    state
+    |> maybe_kill_background_task(auto_compaction_pid, reason)
+    |> maybe_kill_background_task(overflow_recovery_pid, reason)
+    |> clear_auto_compaction_state()
+    |> clear_overflow_recovery_state()
+  end
+
   @spec clear_overflow_recovery_task_tracking(map()) :: map()
   def clear_overflow_recovery_task_tracking(state) do
     maybe_cancel_timer(state.overflow_recovery.task_timeout_ref)
