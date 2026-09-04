@@ -3,6 +3,7 @@ defmodule CodingAgent.SessionOverflowRecoveryTest do
 
   alias LemonAgent.Test.Mocks
   alias CodingAgent.Session
+  alias CodingAgent.Session.OverflowRecovery
   alias CodingAgent.SessionManager
 
   defp start_session(opts \\ []) do
@@ -46,13 +47,15 @@ defmodule CodingAgent.SessionOverflowRecoveryTest do
       %{
         state
         | is_streaming: true,
-          overflow_recovery_in_progress: true,
-          overflow_recovery_attempted: attempted,
-          overflow_recovery_signature: signature,
-          overflow_recovery_task_pid: task_pid,
-          overflow_recovery_task_monitor_ref: monitor_ref,
-          overflow_recovery_error_reason: reason,
-          overflow_recovery_partial_state: partial_state
+          overflow_recovery: %OverflowRecovery.State{
+            in_progress: true,
+            attempted: attempted,
+            signature: signature,
+            task_pid: task_pid,
+            task_monitor_ref: monitor_ref,
+            error_reason: reason,
+            partial_state: partial_state
+          }
       }
     end)
   end
@@ -66,9 +69,9 @@ defmodule CodingAgent.SessionOverflowRecoveryTest do
     send(session, {:overflow_recovery_result, :stale_signature, {:error, :cannot_compact}})
 
     state_after = Session.get_state(session)
-    assert state_after.overflow_recovery_in_progress
-    assert state_after.overflow_recovery_signature == signature
-    assert state_after.overflow_recovery_attempted
+    assert state_after.overflow_recovery.in_progress
+    assert state_after.overflow_recovery.signature == signature
+    assert state_after.overflow_recovery.attempted
   end
 
   test "failed overflow compaction finalizes session and clears recovery flags" do
@@ -80,8 +83,8 @@ defmodule CodingAgent.SessionOverflowRecoveryTest do
     send(session, {:overflow_recovery_result, signature, {:error, :cannot_compact}})
 
     state_after = Session.get_state(session)
-    refute state_after.overflow_recovery_in_progress
-    refute state_after.overflow_recovery_attempted
+    refute state_after.overflow_recovery.in_progress
+    refute state_after.overflow_recovery.attempted
     refute state_after.is_streaming
   end
 
@@ -92,7 +95,7 @@ defmodule CodingAgent.SessionOverflowRecoveryTest do
       %{
         state
         | is_streaming: true,
-          overflow_recovery_attempted: true
+          overflow_recovery: %{state.overflow_recovery | attempted: true}
       }
     end)
 
@@ -102,8 +105,8 @@ defmodule CodingAgent.SessionOverflowRecoveryTest do
     )
 
     state_after = Session.get_state(session)
-    refute state_after.overflow_recovery_in_progress
-    refute state_after.overflow_recovery_attempted
+    refute state_after.overflow_recovery.in_progress
+    refute state_after.overflow_recovery.attempted
     refute state_after.is_streaming
   end
 
@@ -114,7 +117,7 @@ defmodule CodingAgent.SessionOverflowRecoveryTest do
       %{
         state
         | is_streaming: true,
-          overflow_recovery_attempted: true
+          overflow_recovery: %{state.overflow_recovery | attempted: true}
       }
     end)
 
@@ -124,8 +127,8 @@ defmodule CodingAgent.SessionOverflowRecoveryTest do
     )
 
     state_after = Session.get_state(session)
-    refute state_after.overflow_recovery_in_progress
-    refute state_after.overflow_recovery_attempted
+    refute state_after.overflow_recovery.in_progress
+    refute state_after.overflow_recovery.attempted
     refute state_after.is_streaming
   end
 
@@ -171,9 +174,65 @@ defmodule CodingAgent.SessionOverflowRecoveryTest do
     send(session, {:overflow_recovery_task_timeout, monitor_ref})
 
     state_after = Session.get_state(session)
-    refute state_after.overflow_recovery_in_progress
-    assert state_after.overflow_recovery_task_pid == nil
-    assert state_after.overflow_recovery_task_monitor_ref == nil
+    refute state_after.overflow_recovery.in_progress
+    assert state_after.overflow_recovery.task_pid == nil
+    assert state_after.overflow_recovery.task_monitor_ref == nil
     refute state_after.is_streaming
+  end
+
+  test "reset cancels overflow recovery and makes late task messages stale" do
+    session = start_session()
+    state = Session.get_state(session)
+    task_pid = spawn(fn -> Process.sleep(:infinity) end)
+    task_monitor = Process.monitor(task_pid)
+    stale_monitor_ref = make_ref()
+
+    :sys.replace_state(session, fn session_state ->
+      %{
+        session_state
+        | overflow_recovery: %OverflowRecovery.State{
+            in_progress: true,
+            attempted: true,
+            signature: current_signature(state),
+            task_pid: task_pid,
+            task_monitor_ref: stale_monitor_ref,
+            task_timeout_ref: make_ref(),
+            started_at_ms: 12,
+            error_reason: :overflow,
+            partial_state: %{from: :old_session}
+          }
+      }
+    end)
+
+    assert :ok = Session.reset(session)
+    assert_receive {:DOWN, ^task_monitor, :process, ^task_pid, {:shutdown, :session_reset}}, 1_000
+
+    assert Session.get_state(session).overflow_recovery == %OverflowRecovery.State{}
+
+    send(session, {:overflow_recovery_task_timeout, stale_monitor_ref})
+    assert Session.get_state(session).overflow_recovery == %OverflowRecovery.State{}
+  end
+
+  test "session termination cancels an active overflow recovery task" do
+    session = start_session()
+    task_pid = spawn(fn -> Process.sleep(:infinity) end)
+    task_monitor = Process.monitor(task_pid)
+
+    :sys.replace_state(session, fn state ->
+      %{
+        state
+        | overflow_recovery: %OverflowRecovery.State{
+            in_progress: true,
+            task_pid: task_pid,
+            task_monitor_ref: make_ref(),
+            task_timeout_ref: make_ref()
+          }
+      }
+    end)
+
+    assert :ok = GenServer.stop(session)
+
+    assert_receive {:DOWN, ^task_monitor, :process, ^task_pid, {:shutdown, :session_terminated}},
+                   1_000
   end
 end

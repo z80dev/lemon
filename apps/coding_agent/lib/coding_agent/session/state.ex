@@ -7,6 +7,7 @@ defmodule CodingAgent.Session.State do
   alias CodingAgent.ContextGuardrails
   alias CodingAgent.Messages.CustomMessage
   alias CodingAgent.Security.UntrustedToolBoundary
+  alias CodingAgent.Session.{CompactionLifecycle, OverflowRecovery}
 
   @spec normalize_extra_tools(term()) :: [AgentTool.t()]
   def normalize_extra_tools(tools) when is_list(tools) do
@@ -163,12 +164,15 @@ defmodule CodingAgent.Session.State do
       | is_streaming: true,
         pending_prompt_timer_ref: timer_ref,
         turn_index: state.turn_index + 1,
-        overflow_recovery_in_progress: false,
-        overflow_recovery_attempted: false,
-        overflow_recovery_signature: nil,
-        overflow_recovery_started_at_ms: nil,
-        overflow_recovery_error_reason: nil,
-        overflow_recovery_partial_state: nil
+        overflow_recovery: %{
+          state.overflow_recovery
+          | in_progress: false,
+            attempted: false,
+            signature: nil,
+            started_at_ms: nil,
+            error_reason: nil,
+            partial_state: nil
+        }
     }
   end
 
@@ -184,14 +188,8 @@ defmodule CodingAgent.Session.State do
         session_file: nil,
         steering_queue: :queue.new(),
         follow_up_queue: :queue.new(),
-        auto_compaction_in_progress: false,
-        auto_compaction_signature: nil,
-        overflow_recovery_in_progress: false,
-        overflow_recovery_attempted: false,
-        overflow_recovery_signature: nil,
-        overflow_recovery_started_at_ms: nil,
-        overflow_recovery_error_reason: nil,
-        overflow_recovery_partial_state: nil
+        auto_compaction: %CompactionLifecycle.State{},
+        overflow_recovery: %OverflowRecovery.State{}
     }
   end
 

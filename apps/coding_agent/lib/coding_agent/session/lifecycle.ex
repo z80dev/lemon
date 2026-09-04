@@ -8,9 +8,12 @@ defmodule CodingAgent.Session.Lifecycle do
 
   alias CodingAgent.Session.{
     BackgroundTasks,
+    CompactionLifecycle,
+    CompactionManager,
     Heartbeat,
     ModelResolver,
     Notifier,
+    OverflowRecovery,
     Persistence,
     PromptComposer,
     ProviderFallback,
@@ -262,20 +265,9 @@ defmodule CodingAgent.Session.Lifecycle do
       wasm_sidecar_pid: wasm_boot.sidecar_pid,
       wasm_tool_names: wasm_boot.wasm_tool_names,
       wasm_status: wasm_boot.wasm_status,
-      auto_compaction_in_progress: false,
-      auto_compaction_signature: nil,
-      auto_compaction_task_pid: nil,
-      auto_compaction_task_monitor_ref: nil,
-      auto_compaction_task_timeout_ref: nil,
-      overflow_recovery_in_progress: false,
-      overflow_recovery_attempted: false,
-      overflow_recovery_signature: nil,
-      overflow_recovery_task_pid: nil,
-      overflow_recovery_task_monitor_ref: nil,
-      overflow_recovery_task_timeout_ref: nil,
-      overflow_recovery_started_at_ms: nil,
-      overflow_recovery_error_reason: nil,
-      overflow_recovery_partial_state: nil
+      heartbeat: %Heartbeat.State{},
+      auto_compaction: %CompactionLifecycle.State{},
+      overflow_recovery: %OverflowRecovery.State{}
     }
 
     {:ok, state, lifecycle.extension_status_report}
@@ -386,6 +378,7 @@ defmodule CodingAgent.Session.Lifecycle do
 
             case clear_heartbeat_for_rotation(state) do
               {:ok, state} ->
+                state = CompactionManager.cancel_compaction_tasks(state, :session_reset)
                 :ok = LemonAgent.Agent.reset(state.agent)
 
                 previous_session_id = state.session_manager.header.id
@@ -436,7 +429,9 @@ defmodule CodingAgent.Session.Lifecycle do
     LemonAgent.Agent.wait_for_idle(state.agent, timeout: reset_abort_wait_ms)
   end
 
-  defp clear_heartbeat_for_rotation(%{heartbeat: nil} = state), do: {:ok, state}
+  defp clear_heartbeat_for_rotation(%{heartbeat: %Heartbeat.State{config: nil}} = state),
+    do: {:ok, state}
+
   defp clear_heartbeat_for_rotation(state), do: Heartbeat.clear(state)
 
   # Persistent Python REPL owner cleanup. The module is injectable via the

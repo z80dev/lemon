@@ -67,6 +67,9 @@ When downstream store or agent processes time out, callers should log and contin
 The session's steering/follow-up queues are diagnostic mirrors of queues owned
 by `LemonAgent.Agent`; all terminal, cancel, error, abort, and agent-exit paths
 clear both mirrors so diagnostics never report already-consumed work.
+Session reset and termination cancel both automatic-compaction and
+overflow-recovery workers and invalidate their task monitors/timeouts before a
+new session identity can accept events.
 
 ### Tools
 
