@@ -54,10 +54,13 @@ defmodule LemonCore.Store do
     * `put_chat_state/3` and `put_progress_mapping/4` are synchronous. They were
       casts with a caller-side cache write, which made a failed backend write
       look like a success and let two writers on one key land out of order.
-    * `append_run_event/3` and `finalize_run/3` stay asynchronous, because runs
-      stream events far more often than anything reads them back. Their cache
-      entry lands with the backend write, so a read taken before the cast drains
-      can lag by a message. `ping/1` is the barrier when that matters.
+    * `append_run_event/3` stays asynchronous, because runs stream events far
+      more often than anything reads them back. Its cache entry lands with the
+      backend write, so a read taken before the cast drains can lag by a
+      message. `ping/1` is the barrier when that matters.
+    * `finalize_run/3` is synchronous: success means both the immutable final
+      summary and its derived session index were written. A retry repairs a
+      partial index failure without incrementing the session twice.
   """
 
   use GenServer
@@ -188,11 +191,23 @@ defmodule LemonCore.Store do
 
   Hooks run in the store process, in registration order, and failures are
   isolated. Runs without a session key do not fire hooks.
+
+  Hook delivery is **at least once**. Hooks run only after the run record and
+  session index are written, but retrying a successful finalization invokes
+  them again. Hook implementations must therefore be idempotent by `run_id`.
   """
-  @spec finalize_run(server(), term(), map()) :: :ok
-  def finalize_run(server \\ __MODULE__, run_id, summary) do
-    GenServer.cast(server, {:finalize_run, run_id, summary})
+  @spec finalize_run(server(), term(), map()) :: :ok | {:error, term()}
+  def finalize_run(server \\ __MODULE__, run_id, summary)
+
+  def finalize_run(server, run_id, summary) when is_map(summary) do
+    safe_store_call(server, {:finalize_run, run_id, summary}, {:error, :store_unavailable},
+      op: :finalize_run,
+      table: :runs,
+      key: run_id
+    )
   end
+
+  def finalize_run(_server, _run_id, _summary), do: {:error, :invalid_summary}
 
   # Progress Mapping API
 
@@ -1136,6 +1151,11 @@ defmodule LemonCore.Store do
     end
   end
 
+  def handle_call({:finalize_run, run_id, summary}, _from, state) do
+    {reply, state} = finalize_run_record(state, run_id, summary)
+    {:reply, reply, state}
+  end
+
   def handle_call({:get_run_history, session_key, opts}, _from, state) do
     # Forwarded to the configured provider, which owns run history and keeps
     # potentially large history I/O off this process.
@@ -1518,65 +1538,6 @@ defmodule LemonCore.Store do
     end
   end
 
-  def handle_cast({:finalize_run, run_id, summary}, state) do
-    case state.backend.get(state.backend_state, :runs, run_id) do
-      {:ok, existing, backend_state} ->
-        record =
-          existing || %{events: [], summary: nil, started_at: System.system_time(:millisecond)}
-
-        record = %{record | summary: summary}
-
-        case state.backend.put(backend_state, :runs, run_id, record) do
-          {:ok, backend_state} ->
-            ReadCache.put(state.read_cache, :runs, run_id, record)
-            session_key = Map.get(summary, :session_key)
-            started_at = record.started_at
-
-            # Runs that belong to a session notify their collaborators (run
-            # history, memory ingest, ...) and update the sessions index.
-            backend_state =
-              if is_binary(session_key) and session_key != "" do
-                Hooks.invoke(
-                  finalize_run_hooks(state),
-                  %{
-                    store: state.name,
-                    run_id: run_id,
-                    record: record,
-                    summary: summary,
-                    session_key: session_key,
-                    started_at: started_at
-                  },
-                  op: :finalize_run,
-                  store: state.name,
-                  run_id: run_id
-                )
-
-                update_sessions_index(state, backend_state, session_key, summary, started_at)
-              else
-                backend_state
-              end
-
-            {:noreply, %{state | backend_state: backend_state}}
-
-          {:error, reason} ->
-            log_backend_error(:put, :runs, run_id, reason)
-            {:noreply, %{state | backend_state: backend_state}}
-
-          other ->
-            log_backend_unexpected(:put, :runs, run_id, other)
-            {:noreply, %{state | backend_state: backend_state}}
-        end
-
-      {:error, reason} ->
-        log_backend_error(:get, :runs, run_id, reason)
-        {:noreply, state}
-
-      other ->
-        log_backend_unexpected(:get, :runs, run_id, other)
-        {:noreply, state}
-    end
-  end
-
   def handle_cast({:delete_progress_mapping, scope, progress_msg_id}, state) do
     key = {scope, progress_msg_id}
 
@@ -1614,57 +1575,191 @@ defmodule LemonCore.Store do
     end
   end
 
-  # Update sessions_index when a run is finalized
-  defp update_sessions_index(state, backend_state, session_key, summary, timestamp) do
-    backend = state.backend
+  defp finalize_run_record(state, run_id, summary) do
+    with {:ok, record, backend_state} <- ensure_final_record(state, run_id, summary),
+         {:ok, backend_state} <-
+           finalize_run_session(state, backend_state, run_id, record, summary) do
+      {:ok, %{state | backend_state: backend_state}}
+    else
+      {:error, reason, backend_state} ->
+        {{:error, reason}, %{state | backend_state: backend_state}}
 
-    case backend.get(backend_state, :sessions_index, session_key) do
+      {:error, reason} ->
+        {{:error, reason}, state}
+    end
+  end
+
+  defp ensure_final_record(state, run_id, summary) do
+    case state.backend.get(state.backend_state, :runs, run_id) do
       {:ok, existing, backend_state} ->
-        # Parse agent_id from session_key if not in summary
+        case final_record(existing, run_id, summary) do
+          {:persist, record} -> persist_final_record(state, backend_state, run_id, record)
+          {:existing, record} -> {:ok, record, backend_state}
+          {:error, reason} -> {:error, reason, backend_state}
+        end
+
+      {:error, reason} ->
+        log_backend_error(:get, :runs, run_id, reason)
+        {:error, reason}
+
+      other ->
+        log_backend_unexpected(:get, :runs, run_id, other)
+        {:error, {:unexpected_backend_response, other}}
+    end
+  end
+
+  defp final_record(nil, _run_id, summary) do
+    {:persist, %{events: [], summary: summary, started_at: System.system_time(:millisecond)}}
+  end
+
+  defp final_record(%{summary: nil} = record, _run_id, summary) do
+    {:persist, %{record | summary: summary}}
+  end
+
+  defp final_record(%{summary: summary} = record, _run_id, summary), do: {:existing, record}
+
+  defp final_record(%{summary: _existing_summary}, run_id, _summary) do
+    # Do not include the prior summary in the error: summaries may contain
+    # prompts, answers, credentials, or other user content.
+    {:error, {:already_finalized, run_id}}
+  end
+
+  defp final_record(_invalid_record, run_id, _summary),
+    do: {:error, {:invalid_run_record, run_id}}
+
+  defp persist_final_record(state, backend_state, run_id, record) do
+    case state.backend.put(backend_state, :runs, run_id, record) do
+      {:ok, backend_state} ->
+        ReadCache.put(state.read_cache, :runs, run_id, record)
+        {:ok, record, backend_state}
+
+      {:error, reason} ->
+        log_backend_error(:put, :runs, run_id, reason)
+        {:error, reason, backend_state}
+
+      other ->
+        log_backend_unexpected(:put, :runs, run_id, other)
+        {:error, {:unexpected_backend_response, other}, backend_state}
+    end
+  end
+
+  defp finalize_run_session(state, backend_state, run_id, record, summary) do
+    session_key = Map.get(summary, :session_key)
+
+    if is_binary(session_key) and session_key != "" do
+      with {:ok, backend_state} <-
+             update_sessions_index(
+               state,
+               backend_state,
+               session_key,
+               run_id,
+               summary,
+               record.started_at
+             ) do
+        Hooks.invoke(
+          finalize_run_hooks(state),
+          %{
+            store: state.name,
+            run_id: run_id,
+            record: record,
+            summary: summary,
+            session_key: session_key,
+            started_at: record.started_at
+          },
+          op: :finalize_run,
+          store: state.name,
+          run_id: run_id
+        )
+
+        {:ok, backend_state}
+      end
+    else
+      {:ok, backend_state}
+    end
+  end
+
+  # Update sessions_index when a run is finalized. The private run-id set is
+  # the idempotency marker for partial-failure repair; typed public listings
+  # strip it before returning session entries.
+  defp update_sessions_index(state, backend_state, session_key, run_id, summary, timestamp) do
+    case state.backend.get(backend_state, :sessions_index, session_key) do
+      {:ok, existing, backend_state} ->
         agent_id = Map.get(summary, :agent_id) || parse_agent_id(session_key)
         origin = get_in(summary, [:meta, :origin]) || Map.get(summary, :origin) || :unknown
 
-        session_entry =
-          case existing do
-            nil ->
-              %{
-                session_key: session_key,
-                agent_id: agent_id,
-                origin: origin,
-                created_at_ms: timestamp,
-                updated_at_ms: timestamp,
-                run_count: 1
-              }
-
-            entry ->
-              %{entry | updated_at_ms: timestamp, run_count: (entry[:run_count] || 0) + 1}
-          end
-
-        case backend.put(backend_state, :sessions_index, session_key, session_entry) do
-          {:ok, backend_state} ->
-            # Write through: this bypasses the generic put path, so without it a
-            # cached :sessions_index read keeps serving the previous run_count.
-            ReadCache.put(state.read_cache, :sessions_index, session_key, session_entry)
-            backend_state
+        case next_session_entry(existing, session_key, run_id, agent_id, origin, timestamp) do
+          {:ok, session_entry} ->
+            put_session_index(state, backend_state, session_key, session_entry)
 
           {:error, reason} ->
-            log_backend_error(:put, :sessions_index, session_key, reason)
-            backend_state
-
-          other ->
-            log_backend_unexpected(:put, :sessions_index, session_key, other)
-            backend_state
+            {:error, reason, backend_state}
         end
 
       {:error, reason} ->
         log_backend_error(:get, :sessions_index, session_key, reason)
-        backend_state
+        {:error, reason, backend_state}
 
       other ->
         log_backend_unexpected(:get, :sessions_index, session_key, other)
-        backend_state
+        {:error, {:unexpected_backend_response, other}, backend_state}
     end
   end
+
+  defp next_session_entry(nil, session_key, run_id, agent_id, origin, timestamp) do
+    {:ok,
+     %{
+       session_key: session_key,
+       agent_id: agent_id,
+       origin: origin,
+       created_at_ms: timestamp,
+       updated_at_ms: timestamp,
+       run_count: 1,
+       __indexed_run_ids__: MapSet.new([run_id]),
+       __legacy_run_count__: 0
+     }}
+  end
+
+  defp next_session_entry(entry, _session_key, run_id, _agent_id, _origin, timestamp)
+       when is_map(entry) do
+    indexed_run_ids =
+      entry
+      |> Map.get(:__indexed_run_ids__, MapSet.new())
+      |> normalize_indexed_run_ids()
+      |> MapSet.put(run_id)
+
+    legacy_run_count =
+      Map.get_lazy(entry, :__legacy_run_count__, fn -> entry[:run_count] || 0 end)
+
+    {:ok,
+     entry
+     |> Map.put(:updated_at_ms, max(entry[:updated_at_ms] || timestamp, timestamp))
+     |> Map.put(:run_count, legacy_run_count + MapSet.size(indexed_run_ids))
+     |> Map.put(:__indexed_run_ids__, indexed_run_ids)
+     |> Map.put(:__legacy_run_count__, legacy_run_count)}
+  end
+
+  defp next_session_entry(_invalid, session_key, _run_id, _agent_id, _origin, _timestamp),
+    do: {:error, {:invalid_session_index, session_key}}
+
+  defp put_session_index(state, backend_state, session_key, session_entry) do
+    case state.backend.put(backend_state, :sessions_index, session_key, session_entry) do
+      {:ok, backend_state} ->
+        ReadCache.put(state.read_cache, :sessions_index, session_key, session_entry)
+        {:ok, backend_state}
+
+      {:error, reason} ->
+        log_backend_error(:put, :sessions_index, session_key, reason)
+        {:error, reason, backend_state}
+
+      other ->
+        log_backend_unexpected(:put, :sessions_index, session_key, other)
+        {:error, {:unexpected_backend_response, other}, backend_state}
+    end
+  end
+
+  defp normalize_indexed_run_ids(%MapSet{} = run_ids), do: run_ids
+  defp normalize_indexed_run_ids(run_ids) when is_list(run_ids), do: MapSet.new(run_ids)
+  defp normalize_indexed_run_ids(_), do: MapSet.new()
 
   defp parse_agent_id(nil), do: "default"
 

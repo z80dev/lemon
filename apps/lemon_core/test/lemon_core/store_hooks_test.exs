@@ -30,8 +30,6 @@ defmodule LemonCore.StoreHooksTest do
 
   defp finalize(store, run_id, summary) do
     :ok = Store.finalize_run(store, run_id, summary)
-    # finalize_run is a cast; a call afterwards acts as a barrier.
-    :ok = Store.ping(store)
   end
 
   describe "finalize_run hooks" do

@@ -15,6 +15,12 @@ Telegram, run history, durable memory, kanban boards, or `~/.lemon`.
 - Vendor CLI wrapper extension points. Subagent tasks now execute natively, and
   `[runtime.cli]` is rejected.
 
+### Fixed
+
+- Run finalization is now synchronous and retry-safe. A session-index failure
+  is returned to the caller, retrying repairs the index without double-counting
+  the run, conflicting summaries fail without exposing the original summary,
+  and finalize hooks explicitly use at-least-once delivery.
 
 ### Added
 
