@@ -65,8 +65,8 @@ For system diagrams see `docs/diagrams/`. For per-app details see each `apps/*/R
 ┌────────▼───────┐   ┌──────────▼──────────┐
 │ LemonGateway   │   │ LemonChannels        │
 │ native executor│   │  Telegram, Discord, │
-└────────┬───────┘   │  XMTP, WhatsApp      │
-         │           └─────────────────────-┘
+└────────┬───────┘   │ XMTP, WhatsApp, email│
+         │           └──────────────────────┘
 ┌────────▼───────────────────────────────────┐
 │ CodingAgent.Session                         │
 │  · 23 built-in tools                        │
@@ -121,7 +121,7 @@ The project is an Elixir umbrella with 24 applications:
 | `coding_agent_ui` | Debug RPC interface, TUI/Web bridge |
 | `lemon_router` | RunOrchestrator, ModelSelection, RoutingFeedbackStore, lane queues, policy engine |
 | `lemon_gateway` | Native execution lifecycle, slots, and request adaptation |
-| `lemon_channels` | Transport adapters (Telegram, Discord, XMTP, WhatsApp), model policy |
+| `lemon_channels` | Transport adapters (Telegram, Discord, XMTP, WhatsApp, email), model policy |
 | `lemon_automation` | CronManager, HeartbeatManager, scheduled jobs |
 | `lemon_control_plane` | HTTP/WebSocket server, 112+ RPC methods |
 | `lemon_skills` | Skill catalog, manifest v2 parser, installer, audit, synthesis |
@@ -474,8 +474,26 @@ The refactor quality rules also enforce a few concrete ownership boundaries:
 - Router-owned active session state is only exposed through `LemonRouter.Router` and `LemonCore.RouterBridge`. External apps must not reference `LemonRouter.SessionRegistry` or `LemonRouter.SessionReadModel` directly.
 - Top-level requests and execution commands never validate or carry a runner identity. `engine: "lemon"` remains fixed run provenance in events and stores. `ResumeToken.engine` and historical `ChatState.last_engine` remain persisted discriminators; only native tokens may resume a top-level run, while non-native historical values are retained and quarantined from resume. Subagents execute natively in-process (`CodingAgent.Session` via `CodingAgent.Coordinator`); there is no external CLI runner registry. Router should use `LemonCore.Cwd` for default cwd resolution instead of `LemonGateway.Cwd`.
 - Shared domains in `lemon_core` / `lemon_control_plane` must use typed wrappers such as `RunStore`, `ChatStateStore`, `PolicyStore`, and `ProjectBindingStore` instead of bypassing them with raw store helpers.
+- A module that opts into `LemonCore.Store.Table` may use generic Store operations only for its own statically declared table names. The AST-based rule resolves aliases, module attributes, direct calls, `apply/3`, default/explicit server arities, and every table in multi-entry operations; declaring one table never exempts access to another.
 
 Run `mix lemon.quality` after boundary changes. It now checks both dependency policy and these architecture guardrails.
+
+## Architecture-debt ratchets
+
+`mix lemon.quality` also compares a deliberately small set of repository-wide
+counts with `.ratchets.exs`. These ratchets cover parsed uses of dynamic module
+atoms, runtime reflection, broad exception clauses, and sleeps in tests, plus
+oversized library files and `*_store.ex` wrapper files. They do not ratchet
+total source lines, documentation size, synchronous tests, generic Store calls,
+or the number of architecture rules: those figures do not reliably distinguish
+healthy changes from architecture debt.
+The library scan excludes only the ratchet check's own implementation file,
+avoiding self-referential counts without hiding sibling quality modules.
+
+Run `mix lemon.ratchet` to inspect the current values. After reducing a count,
+`mix lemon.ratchet --update` lowers its baseline. The update command never
+raises a baseline; an increase requires an explicit edit and justification in
+code review. `LemonCore.Quality.RatchetCheck` defines each count exactly.
 
 ## Skill Source Taxonomy
 
@@ -6023,6 +6041,7 @@ Current plugins:
 - **XMTP** — decentralized messaging (via an external JS bridge)
 - **WhatsApp** — messaging via a Node.js bridge; coexists alongside XMTP as a
   separate adapter for a different service (they do not replace each other)
+- **Email** — inbound SMTP/webhook handling plus threaded outbound replies
 
 Each plugin provides:
 - An ID (e.g., `"telegram"`)
@@ -9721,6 +9740,7 @@ The checks that run in `mix lemon.quality` on every push, plus adjacent guards.
 | Task | Purpose |
 | --- | --- |
 | `mix lemon.quality` | Run docs and architecture quality checks (`--root`, `--validate-config`). |
+| `mix lemon.ratchet` | Measure architecture-debt ratchets (`--update` lowers baselines, `--root`). |
 | `mix lemon.architecture.docs` | Generate architecture boundary docs from policy. |
 | `mix lemon.check_duplicate_tests` | Check for duplicate test module names. |
 | `mix lemon.extension.validate` | Validate Lemon extension package manifests. |

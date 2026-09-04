@@ -55,8 +55,8 @@ For system diagrams see `docs/diagrams/`. For per-app details see each `apps/*/R
 ┌────────▼───────┐   ┌──────────▼──────────┐
 │ LemonGateway   │   │ LemonChannels        │
 │ native executor│   │  Telegram, Discord, │
-└────────┬───────┘   │  XMTP, WhatsApp      │
-         │           └─────────────────────-┘
+└────────┬───────┘   │ XMTP, WhatsApp, email│
+         │           └──────────────────────┘
 ┌────────▼───────────────────────────────────┐
 │ CodingAgent.Session                         │
 │  · 23 built-in tools                        │
@@ -111,7 +111,7 @@ The project is an Elixir umbrella with 24 applications:
 | `coding_agent_ui` | Debug RPC interface, TUI/Web bridge |
 | `lemon_router` | RunOrchestrator, ModelSelection, RoutingFeedbackStore, lane queues, policy engine |
 | `lemon_gateway` | Native execution lifecycle, slots, and request adaptation |
-| `lemon_channels` | Transport adapters (Telegram, Discord, XMTP, WhatsApp), model policy |
+| `lemon_channels` | Transport adapters (Telegram, Discord, XMTP, WhatsApp, email), model policy |
 | `lemon_automation` | CronManager, HeartbeatManager, scheduled jobs |
 | `lemon_control_plane` | HTTP/WebSocket server, 112+ RPC methods |
 | `lemon_skills` | Skill catalog, manifest v2 parser, installer, audit, synthesis |

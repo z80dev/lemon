@@ -38,6 +38,7 @@ Current plugins:
 - **XMTP** — decentralized messaging (via an external JS bridge)
 - **WhatsApp** — messaging via a Node.js bridge; coexists alongside XMTP as a
   separate adapter for a different service (they do not replace each other)
+- **Email** — inbound SMTP/webhook handling plus threaded outbound replies
 
 Each plugin provides:
 - An ID (e.g., `"telegram"`)
