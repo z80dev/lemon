@@ -84,6 +84,8 @@ oversized library files and `*_store.ex` wrapper files. They do not ratchet
 total source lines, documentation size, synchronous tests, generic Store calls,
 or the number of architecture rules: those figures do not reliably distinguish
 healthy changes from architecture debt.
+The library scan excludes only the ratchet check's own implementation file,
+avoiding self-referential counts without hiding sibling quality modules.
 
 Run `mix lemon.ratchet` to inspect the current values. After reducing a count,
 `mix lemon.ratchet --update` lowers its baseline. The update command never

@@ -11,7 +11,11 @@
     %{path: "docs/benchmarks/quickstart.md", last_reviewed: ~D[2026-07-04]},
     %{path: "docs/benchmarks/vending-bench.md", last_reviewed: ~D[2026-07-04]},
     %{path: "docs/benchmarks/platform.md", last_reviewed: ~D[2026-07-04]},
-    %{path: "docs/benchmarks/platform-microbenchmarks.md", last_reviewed: ~D[2026-08-10], max_age_days: 180},
+    %{
+      path: "docs/benchmarks/platform-microbenchmarks.md",
+      last_reviewed: ~D[2026-08-10],
+      max_age_days: 180
+    },
     %{path: "docs/benchmarks/run-your-model.md", last_reviewed: ~D[2026-07-04]},
     %{path: "docs/index.md", last_reviewed: ~D[2026-08-30], max_age_days: 60},
     %{path: "docs/install.md", last_reviewed: ~D[2026-08-30], max_age_days: 60},
@@ -28,7 +32,7 @@
     %{path: "docs/for-dummies/07-talking-to-llms.md", last_reviewed: ~D[2026-06-17]},
     %{path: "docs/for-dummies/08-the-foundation.md", last_reviewed: ~D[2026-06-17]},
     %{path: "docs/assistant_bootstrap_contract.md", last_reviewed: ~D[2026-06-17]},
-    %{path: "docs/architecture_boundaries.md", last_reviewed: ~D[2026-09-01], max_age_days: 60},
+    %{path: "docs/architecture_boundaries.md", last_reviewed: ~D[2026-09-04], max_age_days: 60},
     %{path: "docs/beam_agents.md", last_reviewed: ~D[2026-08-10]},
     %{path: "docs/config.md", last_reviewed: ~D[2026-08-30], max_age_days: 60},
     %{path: "docs/error-reporting.md", last_reviewed: ~D[2026-08-10], max_age_days: 60},
@@ -36,12 +40,16 @@
     %{path: "docs/subagent-parent-questions.md", last_reviewed: ~D[2026-08-09], max_age_days: 60},
     %{path: "docs/extensions.md", last_reviewed: ~D[2026-09-01], max_age_days: 60},
     %{path: "docs/long-running-agent-harnesses.md", last_reviewed: ~D[2026-08-10]},
-    %{path: "docs/mix-tasks.md", last_reviewed: ~D[2026-09-01], max_age_days: 180},
+    %{path: "docs/mix-tasks.md", last_reviewed: ~D[2026-09-04], max_age_days: 180},
     %{path: "docs/model-selection-decoupling.md", last_reviewed: ~D[2026-06-17]},
     %{path: "docs/runtime-hot-reload.md", last_reviewed: ~D[2026-08-10]},
     %{path: "docs/skills.md", last_reviewed: ~D[2026-08-30]},
     %{path: "docs/testing.md", last_reviewed: ~D[2026-08-09], max_age_days: 60},
-    %{path: "docs/testing/deterministic-test-patterns.md", last_reviewed: ~D[2026-08-09], max_age_days: 45},
+    %{
+      path: "docs/testing/deterministic-test-patterns.md",
+      last_reviewed: ~D[2026-08-09],
+      max_age_days: 45
+    },
     %{path: "docs/tools/acp.md", last_reviewed: ~D[2026-08-09]},
     %{path: "docs/tools/execute-code.md", last_reviewed: ~D[2026-08-17]},
     %{path: "docs/tools/firecrawl.md", last_reviewed: ~D[2026-06-17]},
@@ -54,27 +62,92 @@
     %{path: "docs/security/secrets-and-keychain.md", last_reviewed: ~D[2026-08-30]},
     %{path: "docs/security/secrets-migration-guide.md", last_reviewed: ~D[2026-06-17]},
     %{path: "docs/security/threat-model.md", last_reviewed: ~D[2026-08-10]},
-    %{path: "docs/security/agent-safety-contract.md", last_reviewed: ~D[2026-07-06], max_age_days: 60},
+    %{
+      path: "docs/security/agent-safety-contract.md",
+      last_reviewed: ~D[2026-07-06],
+      max_age_days: 60
+    },
     %{path: "docs/security/safety.md", last_reviewed: ~D[2026-08-09], max_age_days: 60},
     %{path: "docs/contributor/ownership.md", last_reviewed: ~D[2026-06-17]},
     %{path: "docs/contributor/public_repo_basics.md", last_reviewed: ~D[2026-06-17]},
     %{path: "docs/skills_v2.md", last_reviewed: ~D[2026-08-09], max_age_days: 60},
-    %{path: "docs/reference/skill-manifest-v2.md", last_reviewed: ~D[2026-08-09], max_age_days: 60},
-    %{path: "docs/release/versioning_and_channels.md", last_reviewed: ~D[2026-08-09], max_age_days: 60},
+    %{
+      path: "docs/reference/skill-manifest-v2.md",
+      last_reviewed: ~D[2026-08-09],
+      max_age_days: 60
+    },
+    %{
+      path: "docs/release/versioning_and_channels.md",
+      last_reviewed: ~D[2026-08-09],
+      max_age_days: 60
+    },
     %{path: "docs/release/hex-packages.md", last_reviewed: ~D[2026-08-10]},
     %{path: "docs/release/deployment_flows.md", last_reviewed: ~D[2026-08-30], max_age_days: 60},
-    %{path: "docs/release/release_checklist_and_support_policy.md", last_reviewed: ~D[2026-08-30], max_age_days: 60},
+    %{
+      path: "docs/release/release_checklist_and_support_policy.md",
+      last_reviewed: ~D[2026-08-30],
+      max_age_days: 60
+    },
     %{path: "docs/user-guide/setup.md", last_reviewed: ~D[2026-08-30], max_age_days: 60},
-    %{path: "docs/user-guide/a2a-peers.md", last_reviewed: ~D[2026-09-01], max_age_days: 60, public: true},
-    %{path: "docs/user-guide/cli.md", last_reviewed: ~D[2026-08-30], max_age_days: 60, public: true},
-    %{path: "docs/user-guide/backups.md", last_reviewed: ~D[2026-08-30], max_age_days: 60, public: true},
-    %{path: "docs/user-guide/updates.md", last_reviewed: ~D[2026-08-30], max_age_days: 60, public: true},
-    %{path: "docs/user-guide/profiles.md", last_reviewed: ~D[2026-08-30], max_age_days: 60, public: true},
-    %{path: "docs/user-guide/web.md", last_reviewed: ~D[2026-08-30], max_age_days: 60, public: true},
-    %{path: "docs/user-guide/session-heartbeats.md", last_reviewed: ~D[2026-08-30], max_age_days: 60, public: true},
-    %{path: "docs/user-guide/context-references.md", last_reviewed: ~D[2026-08-30], max_age_days: 60, public: true},
-    %{path: "docs/user-guide/learn-from-sources.md", last_reviewed: ~D[2026-08-30], max_age_days: 60, public: true},
-    %{path: "docs/user-guide/migrate-from-hermes.md", last_reviewed: ~D[2026-08-09], max_age_days: 60},
+    %{
+      path: "docs/user-guide/a2a-peers.md",
+      last_reviewed: ~D[2026-09-01],
+      max_age_days: 60,
+      public: true
+    },
+    %{
+      path: "docs/user-guide/cli.md",
+      last_reviewed: ~D[2026-08-30],
+      max_age_days: 60,
+      public: true
+    },
+    %{
+      path: "docs/user-guide/backups.md",
+      last_reviewed: ~D[2026-08-30],
+      max_age_days: 60,
+      public: true
+    },
+    %{
+      path: "docs/user-guide/updates.md",
+      last_reviewed: ~D[2026-08-30],
+      max_age_days: 60,
+      public: true
+    },
+    %{
+      path: "docs/user-guide/profiles.md",
+      last_reviewed: ~D[2026-08-30],
+      max_age_days: 60,
+      public: true
+    },
+    %{
+      path: "docs/user-guide/web.md",
+      last_reviewed: ~D[2026-08-30],
+      max_age_days: 60,
+      public: true
+    },
+    %{
+      path: "docs/user-guide/session-heartbeats.md",
+      last_reviewed: ~D[2026-08-30],
+      max_age_days: 60,
+      public: true
+    },
+    %{
+      path: "docs/user-guide/context-references.md",
+      last_reviewed: ~D[2026-08-30],
+      max_age_days: 60,
+      public: true
+    },
+    %{
+      path: "docs/user-guide/learn-from-sources.md",
+      last_reviewed: ~D[2026-08-30],
+      max_age_days: 60,
+      public: true
+    },
+    %{
+      path: "docs/user-guide/migrate-from-hermes.md",
+      last_reviewed: ~D[2026-08-09],
+      max_age_days: 60
+    },
     %{path: "docs/user-guide/skills.md", last_reviewed: ~D[2026-08-30], max_age_days: 60},
     %{path: "docs/user-guide/memory.md", last_reviewed: ~D[2026-08-09], max_age_days: 60},
     %{path: "docs/user-guide/adaptive.md", last_reviewed: ~D[2026-08-09], max_age_days: 60},
@@ -95,7 +168,11 @@
     %{path: "docs/platform/bus-events.md", last_reviewed: ~D[2026-08-10]},
     %{path: "docs/platform/phase-5-extraction.md", last_reviewed: ~D[2026-08-10]},
     %{path: "docs/why-beam-for-agents.md", last_reviewed: ~D[2026-08-10], max_age_days: 180},
-    %{path: "docs/getting-started/quickstart.md", last_reviewed: ~D[2026-08-30], max_age_days: 60},
+    %{
+      path: "docs/getting-started/quickstart.md",
+      last_reviewed: ~D[2026-08-30],
+      max_age_days: 60
+    },
     %{path: "docs/getting-started/build-your-first-agent.md", last_reviewed: ~D[2026-08-10]},
     %{path: "docs/getting-started/add-a-tool.md", last_reviewed: ~D[2026-08-10]},
     %{path: "docs/getting-started/add-a-channel.md", last_reviewed: ~D[2026-08-10]},

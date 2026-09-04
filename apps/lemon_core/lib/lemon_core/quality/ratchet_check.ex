@@ -13,7 +13,7 @@ defmodule LemonCore.Quality.RatchetCheck do
   """
 
   @baseline_file ".ratchets.exs"
-  @self_dir "apps/lemon_core/lib/lemon_core/quality"
+  @self_file "apps/lemon_core/lib/lemon_core/quality/ratchet_check.ex"
   @large_file_lines 1_000
 
   @metrics [
@@ -128,16 +128,13 @@ defmodule LemonCore.Quality.RatchetCheck do
   end
 
   defp source_files(root, glob, opts \\ []) do
-    self_prefix = Path.join(root, @self_dir)
+    self_path = Path.join(root, @self_file)
 
     root
     |> Path.join(glob)
     |> Path.wildcard()
     |> Enum.reject(fn path ->
-      Keyword.get(opts, :exclude_self?, false) and path == self_prefix
-    end)
-    |> Enum.reject(fn path ->
-      Keyword.get(opts, :exclude_self?, false) and String.starts_with?(path, self_prefix <> "/")
+      Keyword.get(opts, :exclude_self?, false) and path == self_path
     end)
     |> Enum.map(&{&1, File.read!(&1)})
   end

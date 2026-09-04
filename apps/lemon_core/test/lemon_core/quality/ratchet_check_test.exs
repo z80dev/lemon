@@ -65,6 +65,24 @@ defmodule LemonCore.Quality.RatchetCheckTest do
     assert measurements.test_sleep_calls == 2
   end
 
+  test "excludes only the checker itself, not sibling quality modules", %{root: root} do
+    quality_dir = Path.join(root, "apps/lemon_core/lib/lemon_core/quality")
+    File.mkdir_p!(quality_dir)
+
+    File.write!(
+      Path.join(quality_dir, "ratchet_check.ex"),
+      "defmodule LemonCore.Quality.RatchetCheck do\n  def self, do: Code.ensure_loaded?(:self)\nend\n"
+    )
+
+    File.write!(
+      Path.join(quality_dir, "other_check.ex"),
+      "defmodule LemonCore.Quality.OtherCheck do\n  def sibling, do: Code.ensure_loaded?(:sibling)\nend\n"
+    )
+
+    measurements = RatchetCheck.measure(root)
+    assert measurements.reflection_calls == 3
+  end
+
   test "fails without a baseline and passes after recording one", %{root: root} do
     assert {:error, %{issues: [%{code: :missing_ratchet_baseline}]}} =
              RatchetCheck.run(root: root)
