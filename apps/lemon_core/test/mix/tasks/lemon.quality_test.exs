@@ -6,7 +6,7 @@ defmodule Mix.Tasks.Lemon.QualityTest do
 
   import ExUnit.CaptureIO
 
-  alias LemonCore.Quality.{ArchitectureDocs, ArchitecturePolicy}
+  alias LemonCore.Quality.{ArchitectureDocs, ArchitecturePolicy, RatchetCheck}
   alias Mix.Tasks.Lemon.Quality
 
   # Get the repo root (4 levels up from this test file)
@@ -254,6 +254,8 @@ defmodule Mix.Tasks.Lemon.QualityTest do
       File.mkdir_p!(app_dir)
       File.write!(Path.join(app_dir, "mix.exs"), mix_file_for(app, deps))
     end)
+
+    {:ok, _report} = RatchetCheck.update_baselines(tmp_dir)
 
     tmp_dir
   end

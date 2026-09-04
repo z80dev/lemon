@@ -56,6 +56,7 @@ This is the **base app** of the Lemon umbrella. All other apps depend on it. It 
 | `LemonCore.Store.EtsBackend` | In-memory ETS (ephemeral, default) with `:ets.insert_new/2` claims |
 | `LemonCore.Store.SqliteBackend` | SQLite with WAL mode (persistent) and `ON CONFLICT DO NOTHING` claims |
 | `LemonCore.Store.JsonlBackend` | Append-only JSONL (portable, human-readable) with serialized Store-process claims |
+| `LemonCore.Quality.RatchetCheck` | Repository-wide AST/file-shape architecture-debt measurements enforced against lowering-only `.ratchets.exs` baselines |
 | `LemonCore.Bus` | PubSub wrapper with topic helpers |
 | `LemonCore.Event` | Canonical event struct for Bus and persistence |
 | `LemonCore.EventBridge` | Cross-app event translation |
@@ -668,6 +669,10 @@ architecture table.
 # Run all quality checks
 mix lemon.quality
 
+# Inspect or lower architecture-debt baselines
+mix lemon.ratchet
+mix lemon.ratchet --update
+
 # Verify or refresh the generated architecture dependency table
 mix lemon.architecture.docs --check
 mix lemon.architecture.docs
@@ -686,6 +691,11 @@ of evaluating the file. `DocsCheck` treats the Git index (`git ls-files`) as
 the source of truth for repository coverage and uses a filesystem fallback only
 for synthetic non-Git test roots. Catalog `last_reviewed` is the canonical
 freshness date; do not introduce a second document-footer review date.
+
+Architecture-debt ratchets are also data-only. `mix lemon.ratchet --update`
+may lower current baselines but never raise them; increases require an explicit
+`.ratchets.exs` edit and review justification. The library scan excludes only
+the ratchet check implementation itself, not sibling quality modules.
 
 ### Store Tasks
 
