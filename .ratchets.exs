@@ -8,9 +8,10 @@
   # Code.ensure_loaded/1, Code.ensure_loaded?/1, and function_exported?/3 calls in library AST
   reflection_calls: 342,
   # rescue clauses in library AST
-  rescue_clauses: 1263,
-  # catch clauses in library AST
-  catch_clauses: 486,
+  rescue_clauses: 1262,
+  # catch clauses in library AST; ToolExecutor replaces one fail-open rescue
+  # with one fail-closed catch covering approval exceptions, exits, and throws.
+  catch_clauses: 487,
   # library files whose basename ends in _store.ex
   store_wrapper_modules: 48,
   # Process.sleep/1 and :timer.sleep/1 calls in test AST

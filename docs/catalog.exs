@@ -64,7 +64,7 @@
     %{path: "docs/security/threat-model.md", last_reviewed: ~D[2026-08-10]},
     %{
       path: "docs/security/agent-safety-contract.md",
-      last_reviewed: ~D[2026-07-06],
+      last_reviewed: ~D[2026-09-04],
       max_age_days: 60
     },
     %{path: "docs/security/safety.md", last_reviewed: ~D[2026-08-09], max_age_days: 60},
