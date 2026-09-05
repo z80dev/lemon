@@ -3,7 +3,9 @@ defmodule CodingAgent.Tools.Bash do
   Bash command execution tool for the coding agent.
 
   Provides shell command execution with streaming output support and
-  cancellation via abort signals.
+  cancellation via abort signals. Streaming replacement snapshots retain at
+  most 50,000 output bytes plus a fixed omission marker; the executor's final
+  result and full-output spill file remain authoritative.
   """
 
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
@@ -11,6 +13,7 @@ defmodule CodingAgent.Tools.Bash do
   alias LemonAgent.Security.ToolResultTrust
   alias LemonAi.Types.TextContent
   alias CodingAgent.BashExecutor
+  alias CodingAgent.Tools.Bash.StreamingPreview
 
   @default_timeout_ms 60_000
 
@@ -122,19 +125,18 @@ defmodule CodingAgent.Tools.Bash do
   defp build_streaming_callback(nil), do: {nil, nil}
 
   defp build_streaming_callback(on_update) do
-    # Use an Agent to accumulate output for streaming updates
-    {:ok, accumulator} = Agent.start_link(fn -> "" end)
+    {:ok, accumulator} = Agent.start_link(fn -> StreamingPreview.new() end)
 
     callback = fn chunk ->
-      accumulated =
-        Agent.get_and_update(accumulator, fn acc ->
-          new_acc = acc <> chunk
-          {new_acc, new_acc}
+      preview =
+        Agent.get_and_update(accumulator, fn state ->
+          next = StreamingPreview.append(state, chunk)
+          {StreamingPreview.render(next), next}
         end)
 
       on_update.(
         ToolResultTrust.untrusted(
-          %AgentToolResult{content: [%TextContent{text: accumulated}]},
+          %AgentToolResult{content: [%TextContent{text: preview}]},
           :shell
         )
       )
