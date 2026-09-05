@@ -18,7 +18,8 @@ defmodule CodingAgent.RestrictedToolPolicyTest do
 
   test "restrictions survive policy serialization" do
     for profile <- @restricted_profiles do
-      policy = profile |> ToolPolicy.from_profile() |> ToolPolicy.to_map() |> ToolPolicy.from_map()
+      policy =
+        profile |> ToolPolicy.from_profile() |> ToolPolicy.to_map() |> ToolPolicy.from_map()
 
       for name <- @restricted_tools do
         refute ToolPolicy.allowed?(policy, name)
