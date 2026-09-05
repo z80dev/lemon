@@ -12,28 +12,43 @@ tools are available, which are blocked, and which require approval.
 - `:full_access` is for trusted local coding work.
 - `:orchestrator` keeps delegation tools for parent sessions.
 - `:leaf_worker` keeps normal work tools but removes recursive delegation.
-- `:read_only`, `:safe_mode`, `:subagent_restricted`, `:no_external`, and
-  `:minimal_core` remove or gate write-capable and external tools.
+- `:read_only` exposes an allowlist of exploration tools. Other profiles have
+  distinct allow/deny lists; their names do not imply an OS sandbox.
 
 New built-in tools must be classified in the relevant policy profiles before
-they are exposed through `CodingAgent.ToolRegistry`.
+they are exposed through `LemonAgent.ToolRegistry`. Restricted tool lists and
+approval checks do not isolate arbitrary host code or automatically classify
+third-party extensions. Invalid custom-policy handling and unknown-profile
+fallbacks require their own validation; an approval gate is not a replacement
+for those checks.
 
 ## Approvals
 
 `LemonCore.ExecApprovals` is the human/admin gate for sensitive actions.
-Approvals may be one-shot, session-scoped, agent-scoped, or global. Denials are
-explicit and must be respected by callers.
+Approvals may be one-shot, session-scoped, agent-scoped, or global; existing
+node-scoped policy can also satisfy a request. Denials are explicit and must
+be respected by callers.
+
+`CodingAgent.ToolExecutor` executes a gated tool only after an explicit approved
+response with a supported scope. Approval request exceptions, exits, throws,
+malformed replies, and unsupported scopes fail closed. An unavailable approval
+service never produces automatic authorization. Raw service error terms are
+excluded from tool results and logs; callers receive bounded error categories.
+The failure boundary covers the approval request only, so exceptions raised by
+an approved tool are not reclassified as authorization failures.
 
 Use approval gates when a tool can mutate files, execute commands, install
 code, call external systems with side effects, or change local trust state. Do
 not use approval prompts as a substitute for removing a tool from a restricted
-profile.
+profile. A supported approval authorizes that invocation; it is not an
+exactly-once guarantee for external effects or a process-crash recovery policy.
 
 ## Durable Memory
 
-Durable memory stores summaries, not raw transcripts. `LemonMemory.Ingest`
-builds `MemoryDocument` records after run finalization and writes them to
-`LemonMemory.Store` only when the feature flag enables session search.
+The run-history search index stores summaries rather than complete transcripts.
+`LemonMemory.Ingest` builds `LemonMemory.Document` records after run finalization
+and writes them to the configured memory provider when session search is enabled.
+Session transcript persistence is a separate surface.
 
 Before a document is stored or mined for skill synthesis,
 `LemonMemory.Safety` screens `prompt_summary` and `answer_summary` for
@@ -87,6 +102,10 @@ When adding or changing an agent capability:
 5. Route reusable procedural knowledge through audited skills.
 6. Emit redacted telemetry with run/session provenance.
 7. Add focused deterministic tests and, when model behavior matters, an opt-in
-   live-model eval.
+   live-model eval. Approval tests must cover exceptions, exits, throws, invalid
+   responses, denied decisions, timeouts, and valid approvals.
 
-*Last reviewed: 2026-07-06*
+The September review covers dispatch and approval failure semantics; it is not
+an exhaustive security audit of every tool, skill source, or storage backend.
+
+*Last reviewed: 2026-09-04*
