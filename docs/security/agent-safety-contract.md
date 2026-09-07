@@ -6,14 +6,17 @@ failure mode.
 
 ## Tool Exposure
 
-`CodingAgent.ToolPolicy` is the first boundary. Runtime profiles decide which
+`CodingAgent.ToolPolicy` is the first boundary. Tool-policy profiles decide which
 tools are available, which are blocked, and which require approval.
 
 - `:full_access` is for trusted local coding work.
 - `:orchestrator` keeps delegation tools for parent sessions.
 - `:leaf_worker` keeps normal work tools but removes recursive delegation.
-- `:read_only`, `:safe_mode`, `:subagent_restricted`, `:no_external`, and
-  `:minimal_core` remove or gate write-capable and external tools.
+- `:read_only` allows the read-tool list; `:safe_mode` denies the dangerous-tool list.
+- `:subagent_restricted` denies dangerous tools and requires approval for
+  `write` and `edit`; `:no_external` denies the external-tool list.
+- `:minimal_core` is a curated tool allowlist, not a read-only or side-effect-free
+  profile. It includes file writes, shell execution, and browser tools.
 
 New built-in tools must be classified in the relevant policy profiles before
 they are exposed through `CodingAgent.ToolRegistry`.
@@ -31,15 +34,22 @@ profile.
 
 ## Durable Memory
 
-Durable memory stores summaries, not raw transcripts. `LemonMemory.Ingest`
-builds `MemoryDocument` records after run finalization and writes them to
+Run-derived memory stores summaries rather than raw transcripts.
+`LemonMemory.Ingest` builds `LemonMemory.Document` records after run finalization
+and writes them to
 `LemonMemory.Store` only when the feature flag enables session search.
 
 Before a document is stored or mined for skill synthesis,
 `LemonMemory.Safety` screens `prompt_summary` and `answer_summary` for
 secret-looking content such as password assignments, API keys, private-key
-headers, and JWT-like tokens. Matching documents are skipped rather than
+headers, and JWT-like tokens. Matching run-derived documents are skipped rather than
 redacted in place.
+
+Reviewed source learning follows a separate explicit-confirmation path through
+`LemonSkills.Learn`. It binds confirmation to the exact source and destination
+state, redacts confirmed content again at the durable boundary, and writes a
+memory document plus an audited skill draft. This path does not rely on the
+run-ingest feature flag.
 
 `search_memory` is read-only recall. `memory_topic` creates explicit topic files
 under `memory/topics/` for durable project context. Procedural workflows belong
@@ -51,11 +61,16 @@ Skill reads and writes have different trust boundaries:
 
 - `read_skill` is read-only and emits redacted load telemetry.
 - `skill_manage` writes project or global skills and runs audit checks.
-- Installer flows use `LemonCore.ExecApprovals` before install/update/uninstall.
+- Installer flows use `LemonCore.ExecApprovals` for install/update/uninstall
+  unless ordinary approval is pre-authorized or configured off.
 - `LemonSkills.Audit.Engine` scans auditable bundle files.
 - `LemonSkills.Audit.BundleAudit` caches results by bundle hash and audit
   fingerprint.
-- `:block` verdicts are refused; `:warn` verdicts require explicit approval.
+- `:warn` verdicts require approval unless explicitly pre-authorized through
+  the installer's `:approve` option.
+- `:block` verdicts require a separate exact-bundle security-override approval;
+  the ordinary `:approve` option cannot bypass a block. Denial, timeout, or an
+  unavailable approval service refuses the operation.
 
 Auditable bundles include `SKILL.md` plus supported files under `references/`,
 `templates/`, `scripts/`, and `assets/`. Symlinked bundle entries are rejected
@@ -88,5 +103,3 @@ When adding or changing an agent capability:
 6. Emit redacted telemetry with run/session provenance.
 7. Add focused deterministic tests and, when model behavior matters, an opt-in
    live-model eval.
-
-*Last reviewed: 2026-07-06*
