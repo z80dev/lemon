@@ -10,6 +10,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Changed
 
+- Refreshed the public website, README, and onboarding docs with a shared Lemon
+  visual identity, clearer task navigation, and current feature guidance.
+
 - `CodingAgent.Session` now keeps heartbeat, automatic-compaction, and
   overflow-recovery bookkeeping in state structs owned by those subsystems
   instead of twenty loose session fields. Public APIs, emitted events, and

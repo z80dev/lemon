@@ -7,7 +7,7 @@
     public: false
   },
   entries: [
-    %{path: "docs/README.md", last_reviewed: ~D[2026-08-30], max_age_days: 60},
+    %{path: "docs/README.md", last_reviewed: ~D[2026-09-07], max_age_days: 60},
     %{path: "docs/benchmarks/quickstart.md", last_reviewed: ~D[2026-07-04]},
     %{path: "docs/benchmarks/vending-bench.md", last_reviewed: ~D[2026-07-04]},
     %{path: "docs/benchmarks/platform.md", last_reviewed: ~D[2026-07-04]},
@@ -17,11 +17,11 @@
       max_age_days: 180
     },
     %{path: "docs/benchmarks/run-your-model.md", last_reviewed: ~D[2026-07-04]},
-    %{path: "docs/index.md", last_reviewed: ~D[2026-08-30], max_age_days: 60},
-    %{path: "docs/install.md", last_reviewed: ~D[2026-08-30], max_age_days: 60},
-    %{path: "docs/compare.md", last_reviewed: ~D[2026-08-30], max_age_days: 60},
-    %{path: "docs/demo.md", last_reviewed: ~D[2026-08-30], max_age_days: 60},
-    %{path: "docs/support.md", last_reviewed: ~D[2026-09-04], max_age_days: 60},
+    %{path: "docs/index.md", last_reviewed: ~D[2026-09-07], max_age_days: 60},
+    %{path: "docs/install.md", last_reviewed: ~D[2026-09-07], max_age_days: 60},
+    %{path: "docs/compare.md", last_reviewed: ~D[2026-09-07], max_age_days: 60},
+    %{path: "docs/demo.md", last_reviewed: ~D[2026-09-07], max_age_days: 60},
+    %{path: "docs/support.md", last_reviewed: ~D[2026-09-07], max_age_days: 60},
     %{path: "docs/for-dummies/README.md", last_reviewed: ~D[2026-06-17]},
     %{path: "docs/for-dummies/01-big-picture.md", last_reviewed: ~D[2026-06-17]},
     %{path: "docs/for-dummies/02-message-journey.md", last_reviewed: ~D[2026-06-17]},
@@ -64,7 +64,7 @@
     %{path: "docs/security/threat-model.md", last_reviewed: ~D[2026-08-10]},
     %{
       path: "docs/security/agent-safety-contract.md",
-      last_reviewed: ~D[2026-07-06],
+      last_reviewed: ~D[2026-09-07],
       max_age_days: 60
     },
     %{path: "docs/security/safety.md", last_reviewed: ~D[2026-08-09], max_age_days: 60},
@@ -82,7 +82,7 @@
       max_age_days: 60
     },
     %{path: "docs/release/hex-packages.md", last_reviewed: ~D[2026-08-10]},
-    %{path: "docs/release/deployment_flows.md", last_reviewed: ~D[2026-08-30], max_age_days: 60},
+    %{path: "docs/release/deployment_flows.md", last_reviewed: ~D[2026-09-07], max_age_days: 60},
     %{
       path: "docs/release/release_checklist_and_support_policy.md",
       last_reviewed: ~D[2026-09-04],
@@ -170,7 +170,7 @@
     %{path: "docs/why-beam-for-agents.md", last_reviewed: ~D[2026-08-10], max_age_days: 180},
     %{
       path: "docs/getting-started/quickstart.md",
-      last_reviewed: ~D[2026-08-30],
+      last_reviewed: ~D[2026-09-07],
       max_age_days: 60
     },
     %{path: "docs/getting-started/build-your-first-agent.md", last_reviewed: ~D[2026-08-10]},

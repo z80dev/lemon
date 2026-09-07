@@ -1,5 +1,7 @@
 ---
 layout: page
+sidebar: false
+aside: false
 title: Your agents. Your machine. Your move.
 description: Lemon is an open-source, local-first AI assistant platform. Work across terminal, browser, and chat with durable sessions, memory, and native multi-agent execution.
 ---
