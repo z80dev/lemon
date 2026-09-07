@@ -25,6 +25,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Bash streaming previews retain the most recent 50,000 output bytes plus an
+  omission marker, preserving UTF-8 boundaries without retaining discarded
+  source binaries. Final results and full-output files are unchanged.
+
 - Session reset and termination now cancel both automatic-compaction and
   overflow-recovery workers, clear their monitors and timeout refs, and ignore
   late task messages from the previous session identity.
