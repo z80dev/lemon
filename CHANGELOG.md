@@ -25,6 +25,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Tool approval failures now block execution on exceptions, exits, throws,
+  malformed replies, and unsupported approval scopes without exposing raw
+  service error payloads. Approval timeout results also render safely when
+  the configured wait is infinite.
 - Session reset and termination now cancel both automatic-compaction and
   overflow-recovery workers, clear their monitors and timeout refs, and ignore
   late task messages from the previous session identity.
