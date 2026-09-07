@@ -6,33 +6,31 @@
 
 ---
 
-## How to Use This Directory
+## Start with what you want to do
 
-- **Start here** if you need to understand how Lemon works at a system level.
-- **Per-app docs** live in each app's own `README.md` and `AGENTS.md` (see `apps/*/`).
-- **Every tracked Markdown file in `docs/`** must be registered in [`docs/catalog.exs`](https://github.com/z80dev/lemon/blob/main/docs/catalog.exs). Run `mix lemon.quality` to enforce coverage, metadata, freshness, and links.
+Lemon brings your models, tools, and conversations into a runtime you control.
+You can start with a terminal chat, add a browser or messaging channel, and grow
+into profiles, reusable skills, and automation as you need them.
 
-### Catalog Metadata
+| Your next step | Start here |
+| --- | --- |
+| Get your first answer | [Quickstart](getting-started/quickstart.md) — install, connect a provider, and send a message |
+| Choose an install | [Install Lemon](install.md) — prebuilt releases, source development, and updates |
+| See a useful workflow | [Try Lemon](demo.md) — explore a repository, resume a session, and open the browser |
+| Decide whether Lemon fits | [Compare Lemon](compare.md) — strengths, tradeoffs, and current boundaries |
+| Bring existing context | [Migrate from Hermes](user-guide/migrate-from-hermes.md) — preview your import first |
+| Fix a setup problem | [Get help](support.md) — diagnostics and a useful bug report |
 
-`docs/catalog.exs` is a data-only map with shared `defaults` and an `entries`
-list. Each normalized entry has:
+## Build your daily workflow
 
-- `path`, `owner`, `last_reviewed`, and `max_age_days` for ownership and freshness
-- `kind`: `guide`, `plan`, `proof`, `reference`, or `review`
-- `status`: `current`, `historical`, or `superseded`
-- `public`: whether a current document is eligible for future public navigation
+- **Make it yours:** [profiles](user-guide/profiles.md), [skills](user-guide/skills.md), and [memory](user-guide/memory.md).
+- **Choose your interface:** [terminal commands](user-guide/cli.md), [browser](user-guide/web.md), or [Telegram and Discord setup](user-guide/setup.md#optional-telegram-or-discord).
+- **Keep your work safe:** [backups](user-guide/backups.md), [updates and rollback](user-guide/updates.md), and [the safety model](security/safety.md).
+- **Build on Lemon:** [architecture](architecture/overview.md), [extensions](extensions.md), and [testing](testing.md).
+- **Explore LemonSim:** [benchmark quickstart](benchmarks/quickstart.md) and [platform guarantees](benchmarks/platform.md).
 
-The defaults are intentionally conservative: entries are current references
-but are not public unless opted in. Historical and superseded entries cannot be
-public. Override a default only on the entry that differs.
-
-The catalog's `last_reviewed` value is the sole freshness authority. Do not add
-or update a second `Last reviewed` footer in a document; dates in document prose
-should identify the snapshot or event they describe. Coverage uses `git
-ls-files`, so local drafts and other untracked Markdown do not create quality
-failures.
-
----
+The reference directory below is for deeper exploration. You do not need to read
+it before your first chat.
 
 ## User Guides
 
@@ -115,7 +113,7 @@ All diagrams are in `docs/diagrams/` as both Excalidraw source and exported SVG:
 | `data-flow.excalidraw` / `.svg` | Four data paths: direct, control plane, channel, automation |
 | `event-bus.excalidraw` / `.svg` | Event bus topology and pub/sub messaging |
 | `orchestration.excalidraw` / `.svg` | Run orchestration: scheduling, lane queues, engine dispatch |
-| `supervision-tree.excalidraw` / `.svg` | OTP supervision tree across all 17 applications |
+| `supervision-tree.excalidraw` / `.svg` | OTP supervision tree (see the current architecture guide for the app inventory) |
 | `tool-execution.excalidraw` / `.svg` | Tool execution pipeline: registry, policy, approval, execution |
 
 ---
@@ -130,6 +128,34 @@ All diagrams are in `docs/diagrams/` as both Excalidraw source and exported SVG:
 | `README.md` (root) | 5-minute orientation: what it is, quickstart, feature summary, doc links |
 | `config/` | Elixir application configuration (config.exs, runtime.exs, etc.) |
 | `examples/config.example.toml` | Annotated example TOML configuration |
+
+## How to Use This Directory
+
+- **Start here** if you need to understand how Lemon works at a system level.
+- **Per-app docs** live in each app's own `README.md` and `AGENTS.md` (see `apps/*/`).
+- **Every tracked Markdown file in `docs/`** must be registered in [`docs/catalog.exs`](https://github.com/z80dev/lemon/blob/main/docs/catalog.exs). Run `mix lemon.quality` to enforce coverage, metadata, freshness, and links.
+
+### Catalog Metadata
+
+`docs/catalog.exs` is a data-only map with shared `defaults` and an `entries`
+list. Each normalized entry has:
+
+- `path`, `owner`, `last_reviewed`, and `max_age_days` for ownership and freshness
+- `kind`: `guide`, `plan`, `proof`, `reference`, or `review`
+- `status`: `current`, `historical`, or `superseded`
+- `public`: whether a current document is eligible for future public navigation
+
+The defaults are intentionally conservative: entries are current references
+but are not public unless opted in. Historical and superseded entries cannot be
+public. Override a default only on the entry that differs.
+
+The catalog's `last_reviewed` value is the sole freshness authority. Do not add
+or update a second `Last reviewed` footer in a document; dates in document prose
+should identify the snapshot or event they describe. Coverage uses `git
+ls-files`, so local drafts and other untracked Markdown do not create quality
+failures.
+
+---
 
 ## Maintenance Rules
 

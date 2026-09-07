@@ -1,10 +1,48 @@
 # Support
 
-Last reviewed: 2026-05-17
+Let’s get you unstuck. Start with the checks below, then share a small,
+reproducible report if the problem remains.
 
-Lemon support is designed around reproducible local diagnostics. Before opening
-an issue, run doctor and include the install path, version or commit, operating
-system, interface, and redacted support bundle when relevant.
+## Start here
+
+| What happened | What to try |
+| --- | --- |
+| Installation failed | Check your platform and prerequisites in [Install Lemon](install.md) |
+| The first chat cannot start | Run `lemon config validate`, `lemon secrets status`, then `lemon setup provider` |
+| A runtime or tool behaves unexpectedly | Run `lemon doctor --verbose` and keep the relevant error |
+| You need a diagnostic bundle | Run `lemon doctor --bundle`, then review the zip before sharing |
+| You found a vulnerability | Follow [security reporting](#security-reports) privately |
+
+For a source checkout, use `./bin/lemon` in place of `lemon`. A successful
+configuration check does not guarantee a provider request will succeed; the
+[first-conversation quickstart](getting-started/quickstart.md) walks through a
+complete turn.
+
+## Report a problem
+
+[Open a bug report](https://github.com/z80dev/lemon/issues/new/choose) with:
+
+- your Lemon version or commit, operating system, and install method;
+- the interface you used and the smallest steps that reproduce the problem;
+- what you expected, what happened, and relevant redacted error output;
+- a reviewed support bundle when it helps explain the failure.
+
+Keep credentials, private prompts, memory contents, and tool output out of
+public issues. Diagnostic bundles are designed to redact sensitive data, but
+review attachments before posting them.
+
+## Find the right reference
+
+- [Channel support](#channel-support): Telegram and Discord boundaries.
+- [Web, browser, and media](#web-browser-and-media-tools): supported workflows and previews.
+- [Automation and cron](#automation-and-cron): scheduling expectations.
+- [Diagnostic bundle details](#before-opening-a-bug): what each diagnostic contains.
+- [Logs](#logs): collect a focused trace when requested.
+- [Release support policy](release/release_checklist_and_support_policy.md): detailed release criteria.
+
+The sections below distinguish supported behavior from preview implementation.
+A feature appearing in the code or diagnostics does not by itself promote it to
+a stable support guarantee.
 
 ## Supported for 1.0
 
@@ -582,7 +620,7 @@ These are outside the initial stable support boundary:
 Run:
 
 ```bash
-mix lemon.doctor
+lemon doctor
 ```
 
 For source-dev installs, generate a reviewed redacted bundle:
@@ -594,7 +632,7 @@ mix lemon.doctor --bundle
 For release-runtime installs, generate:
 
 ```bash
-bin/lemon_runtime_full eval 'LemonCore.Doctor.CLI.bundle!()'
+lemon doctor --bundle
 ```
 
 Review the zip before sharing it. The bundle is designed to exclude secrets and
@@ -636,7 +674,7 @@ fallback routing is disabled, absent, configured without any credential-ready
 fallback, or able to rescue a not-ready default provider through a
 credential-ready fallback. The check only reports provider labels and counts;
 it does not expose key material, secret names, endpoint URLs, prompts, or
-provider responses. also shows the latest redacted provider fallback proof summary from
+provider responses. It also shows the latest redacted provider fallback proof summary from
 local proof artifacts, including proof status, primary/fallback/final provider
 labels, proof object, proof hash, modified timestamp, next action, and explicit
 cleanup flags. It does not expose prompts, answers, raw API keys, secret names,
@@ -687,7 +725,7 @@ terminal backends from
 `LemonCore.Doctor.ProofLaunchGates`. JSON-RPC `readiness.status` exposes the
 same compact launch-readiness shape for operator clients, using lowerCamelCase
 cleanup keys, top-level summary proof-gate counts/statuses, and a top-level
-summary list of unresolved gate reason kinds. consumes the shared
+summary list of unresolved gate reason kinds. It consumes the shared
 `LemonCore.Doctor.ReadinessSummary` payload too, keeping browser support views,
 CLI output, JSON-RPC clients, and support bundles aligned on the same launch
 gate counts and redaction boundary.
@@ -718,7 +756,7 @@ Discord IDs, interaction tokens, or message bodies.
 Media checks report generated
 Telegram/Discord delivery separately from provider-backed
 image/TTS/STT/vision/video proof; missing or skipped provider proofs remain
-warnings until live credential proofs pass. Doctor and both show the
+warnings until live credential proofs pass. Doctor shows the
 default redacted provider proof paths for reruns. Restart seed without verify is
 still a warning if only the seed artifact exists, but the latest restart verify
 proof has passed.
@@ -766,8 +804,7 @@ nested library-file counts, and file/path hashes. It does not load extension
 code and does not include raw source paths, file contents, manifest contents,
 distribution URLs, plugin names, provider names, or load-error messages.
 
-The same redacted directory shape is visible in through the
-Extensions panel. Use read-only `extensions.status` when you need the deeper
+The same redacted directory shape is available through the control plane. Use read-only `extensions.status` when you need the deeper
 loaded-extension, tool-conflict, provider-registration, or WASM status view.
 Generic proof diagnostics and JSON-RPC `proofs.status` also preserve
 extension/WASM proof-level `redaction` maps on recent proof summaries, so
