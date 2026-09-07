@@ -370,7 +370,7 @@ defmodule CodingAgent.Tools.ExecuteCodeRpcTest do
         start_pump(
           ctx(rpc_dir,
             tool_policy: ToolPolicy.custom(require_approval: ["echo"]),
-            approval_context: %{approval_request_fun: fn _ -> {:ok, :approved, :test} end}
+            approval_context: %{approval_request_fun: fn _ -> {:ok, :approved, :approve_once} end}
           )
         )
 
@@ -419,13 +419,12 @@ defmodule CodingAgent.Tools.ExecuteCodeRpcTest do
       assert stats.denied == 1
     end
 
-    test "an approval-layer crash is contained instead of stalling the script", %{
+    test "an approval timeout with the default infinite wait does not stall the script", %{
       rpc_dir: rpc_dir
     } do
-      # `CodingAgent.ToolExecutor` builds its timeout message with
-      # `div(timeout_ms, 1000)`, which raises when the context carries the
-      # default `:infinity`. The pump must still answer the request -- an
-      # unanswered request would hang the script until its wall clock ran out.
+      # A service timeout remains a normal approval error even when the caller
+      # uses the default `:infinity` wait. The pump must answer the request and
+      # continue serving subsequent calls.
       pump =
         start_pump(
           ctx(rpc_dir,
@@ -436,7 +435,7 @@ defmodule CodingAgent.Tools.ExecuteCodeRpcTest do
 
       write_request(rpc_dir, 1, "echo", %{"value" => "waiting"})
       assert %{"ok" => false, "error" => error} = await_response(rpc_dir, 1)
-      assert is_binary(error)
+      assert error == "approval timed out for 'echo'"
 
       write_request(rpc_dir, 2, "big", %{"size" => 5})
       assert %{"ok" => true, "content" => "xxxxx"} = await_response(rpc_dir, 2)
