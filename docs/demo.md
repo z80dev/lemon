@@ -1,155 +1,103 @@
-# Demo Lemon
+# Try Lemon on real work
 
-Last reviewed: 2026-08-10
+A good first task is small enough to inspect and useful enough to keep. Explore
+a repository, ask a follow-up, then return to the conversation from your session
+list. These walkthroughs show what to look for at each step.
 
-This page gives deterministic demo paths for evaluating Lemon without relying on
-marketing claims or unreleased hosted infrastructure. The goal is to prove the
-local runtime can install, diagnose itself, boot, expose operations surfaces, and
-run a simple agent path.
+## Before you begin
 
-## Prerequisites
+Complete the [quickstart](getting-started/quickstart.md) to install Lemon and
+connect a model provider. The examples below use the installed release. Source
+contributors can use `./bin/lemon-tui` for the terminal and `./bin/lemon web` for
+the browser from their Lemon checkout.
 
-Use the source install path from [Install Lemon](install.md). Before running a
-demo, confirm:
+## 1. Get oriented in a project
 
-```bash
-mix deps.get
-mix compile
-mix lemon.doctor
-```
-
-If doctor reports missing provider credentials, either configure a provider with
-the [Setup Guide](user-guide/setup.md) or use only the runtime and support-bundle
-checks below.
-
-## Demo 1: Runtime Health
-
-Start the unified runtime:
+From a repository you want to understand, start Lemon:
 
 ```bash
-./bin/lemon
+lemon
 ```
 
-In another terminal, check the Web health endpoint:
+Try this prompt:
+
+```text
+Inspect this repository without changing files. Explain what it does, identify
+its main entry points, and find the canonical test command. Cite the files you
+used, and flag anything you could not verify.
+```
+
+Watch the tool activity and final response. You should be able to connect each
+claim to a file in the repository. Follow up with a narrower question, such as
+“Where would I add a new command?” or “Explain the startup path.”
+
+Use `/status` to inspect the session and `/usage` to see reported usage. With an empty input, press
+`Ctrl+C` to abort an active run. If you have a draft, the first press clears it.
+
+## 2. Leave and come back
+
+Run `/session info` to see the current session key. Open the session picker with
+`Ctrl+X` or `/sessions`, then return to this conversation. You can also use:
+
+```text
+/resume <session-key>
+/history 20
+```
+
+Restart Lemon and select the same session. Its stored transcript should still
+be available, so you can continue the discussion without pasting the previous
+conversation. The [CLI guide](user-guide/cli.md) covers search, titles, pinning,
+archive, and export.
+
+## 3. Open the browser
+
+The full release includes a local browser interface:
+
+```bash
+lemon web
+```
+
+The launcher reuses a healthy runtime or starts one, waits for the Web health
+check, prints the URL, and opens your browser. Use `lemon web --no-open` when you
+only need the address. The default is `http://127.0.0.1:4080/`; use the printed
+address if you changed your configuration.
+
+Open a session and send a short prompt. The browser checks provider readiness,
+streams session activity, accepts bounded file uploads, and shows **Stop** while
+a run is active. Read [Use Lemon in a Browser](user-guide/web.md) for access
+control, session management, and recovery.
+
+For a simple runtime check, use the host and port printed by the launcher:
 
 ```bash
 curl -fsS http://127.0.0.1:4080/healthz
 ```
 
-Expected result:
+A successful response checks Web health. The completed model turn from the
+quickstart separately checks provider access and the chat path.
 
-- HTTP request succeeds
-- response indicates the Web runtime is healthy
-- the runtime process remains supervised
+## 4. Make it your own
 
-## Demo 2: Web Session UI
+| Try next | Why it helps |
+| --- | --- |
+| [Create a profile](user-guide/profiles.md) | Give a distinct kind of work its own workspace and conversation |
+| [Add a skill](user-guide/skills.md) | Reuse instructions for a recurring task |
+| [Review a source for learning](user-guide/learn-from-sources.md) | Turn selected context into reviewed memory or skill drafts |
+| [Connect Telegram or Discord](user-guide/setup.md#optional-telegram-or-discord) | Reach your runtime from a messaging app |
+| [Explore LemonSim](benchmarks/quickstart.md) | Evaluate agents in replay-verifiable simulation worlds |
 
-Start the Web UI directly; the command reuses a healthy runtime or starts one,
-waits for the exact Web health response, and prints the address:
-
-```bash
-./bin/lemon web --no-open
-```
-
-Then open:
-
-- `http://127.0.0.1:4080/` — the session index (`LemonWeb.SessionLive`)
-- `http://127.0.0.1:4080/sessions/<session_key>` — a specific session
-
-Current launch proof screenshot:
-
-![Web session proof](assets/launch/web-session-proof-2026-05-11.png)
-
-The Web surface shows the shared setup-readiness state before accepting a
-prompt, streams one session's activity, accepts bounded file uploads, and
-exposes **Stop** while a run is active. The standalone `/ops` dashboard was removed
-(`refactor(lemon_web): remove ops dashboard`); operations introspection now lives
-in the control plane and the doctor, not in the web UI.
-
-To inspect runtime health, provider/secrets status, active sessions, recent runs,
-pending approvals, cron/skills/channel/memory activity, and support bundles, use:
-
-- `mix lemon.doctor` (and `mix lemon.doctor --bundle`, see Demo 4)
-- the control-plane run APIs (JSON-RPC over `bin/lemon-control-plane`)
-- the TUI (`./bin/lemon-tui`, see Demo 3)
-- runtime logs
-
-## Demo 3: TUI From a Project
-
-Start Lemon attached to a repository:
+## If something fails
 
 ```bash
-./bin/lemon-tui
+lemon doctor --verbose
+lemon doctor --bundle
 ```
 
-Use a small prompt that does not require edits:
+Doctor reports configuration and runtime diagnostics; the second command writes
+a redacted support bundle. Review it before sharing. For source installs, use
+`./bin/lemon doctor` with the same flags. The [support guide](support.md) explains
+what to include in a report.
 
-```text
-Inspect this repository and tell me the canonical test command.
-```
-
-Expected result:
-
-- Lemon starts inside the selected project context
-- the session streams progress in the interface
-- tool activity is visible instead of hidden
-- cancellation and follow-up prompts remain available
-
-## Demo 4: Support Bundle
-
-From a source checkout:
-
-```bash
-mix lemon.doctor --bundle
-```
-
-Expected result:
-
-- a redacted support bundle zip is written
-- provider keys, tokens, passwords, private prompts, memory contents, and tool
-  outputs are excluded
-- the bundle includes enough runtime shape to support setup and release triage
-
-Release-runtime support bundles are generated with:
-
-```bash
-bin/lemon_runtime_full eval 'LemonCore.Doctor.CLI.bundle!()'
-```
-
-Release artifact validation is documented in the
-[Release Checklist](release/release_checklist_and_support_policy.md).
-
-## Demo 5: Docs and Quality
-
-The public docs site should build cleanly:
-
-```bash
-cd docs
-npm ci
-npm audit --audit-level=high
-npm run build
-find . -name "*.md" ! -path "./.vitepress/*" ! -path "./node_modules/*" | \
-  xargs npx markdown-link-check --config .mlc.json --quiet
-cd ..
-rm -rf docs/node_modules docs/.vitepress/dist
-mix lemon.quality
-```
-
-Expected result:
-
-- no high or critical docs tooling advisory blocks the build
-- docs build succeeds
-- markdown links pass
-- generated docs artifacts are removed before `mix lemon.quality`
-- repo quality gates pass
-
-## What This Demo Does Not Prove Yet
-
-These demos do not prove final 1.0 readiness by themselves. The launch ledger
-still tracks:
-
-- final launch screenshots and video assets
-- broader adversarial safety-depth variants beyond the launch-focused web,
-  email, skill, and extension-style tool coverage
-
-Use the task guides and release checklist for the current supported behavior.
+These walkthroughs validate individual local paths. Consult the
+[support boundaries](support.md) and [release checklist](release/release_checklist_and_support_policy.md)
+for integration-specific guarantees and production criteria.

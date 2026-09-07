@@ -1,3 +1,5 @@
+import { repositoryLinks } from './source-links.mjs'
+
 // VitePress site configuration for Lemon documentation.
 // Repo markdown files are the source of truth — this config only defines
 // navigation structure. Do not duplicate content here.
@@ -5,18 +7,25 @@
 
 export default {
   title: "Lemon",
-  description: "Lemon AI assistant platform — documentation",
+  description: "Your agents. Your machine. Your move. Lemon is a local-first AI assistant and agent platform built on Elixir/OTP.",
   base: "/lemon/",
+  head: [
+    ["link", { rel: "icon", type: "image/svg+xml", href: "/lemon/brand/lemon-mark.svg" }],
+    ["meta", { name: "theme-color", content: "#f6f5ed" }],
+    ["meta", { property: "og:type", content: "website" }],
+    ["meta", { property: "og:site_name", content: "Lemon" }],
+  ],
   themeConfig: {
+    logo: "/brand/lemon-mark.svg",
     nav: [
-      { text: "Home", link: "/" },
-      { text: "Quickstart", link: "/getting-started/quickstart" },
-      { text: "Install", link: "/install" },
-      { text: "Compare", link: "/compare" },
-      { text: "Benchmarks", link: "/benchmarks/quickstart" },
-      { text: "Demo", link: "/demo" },
-      { text: "Support", link: "/support" },
-      { text: "Architecture", link: "/architecture/overview" },
+      { text: "Get started", link: "/getting-started/quickstart" },
+      { text: "Docs", link: "/README" },
+      { text: "Why Lemon", link: "/compare" },
+      { text: "Build", items: [
+        { text: "Your first agent", link: "/getting-started/build-your-first-agent" },
+        { text: "Architecture", link: "/architecture/overview" },
+        { text: "LemonSim & benchmarks", link: "/benchmarks/quickstart" },
+      ] },
     ],
 
     sidebar: [
@@ -35,6 +44,10 @@ export default {
         text: "User Guide",
         items: [
           { text: "Setup", link: "/user-guide/setup" },
+          { text: "Browser interface", link: "/user-guide/web" },
+          { text: "Agent profiles", link: "/user-guide/profiles" },
+          { text: "CLI & sessions", link: "/user-guide/cli" },
+          { text: "Learn from sources", link: "/user-guide/learn-from-sources" },
           { text: "Backup and Restore", link: "/user-guide/backups" },
           { text: "Skills", link: "/user-guide/skills" },
           { text: "Memory", link: "/user-guide/memory" },
@@ -46,6 +59,7 @@ export default {
       },
       {
         text: "Benchmarks",
+        collapsed: true,
         items: [
           { text: "Quickstart", link: "/benchmarks/quickstart" },
           { text: "VendingBench", link: "/benchmarks/vending-bench" },
@@ -59,6 +73,7 @@ export default {
       },
       {
         text: "Architecture",
+        collapsed: true,
         items: [
           { text: "Overview", link: "/architecture/overview" },
           { text: "BEAM Agents", link: "/beam_agents" },
@@ -72,6 +87,7 @@ export default {
       },
       {
         text: "Operations",
+        collapsed: true,
         items: [
           { text: "Configuration", link: "/config" },
           { text: "Backup and Restore", link: "/user-guide/backups" },
@@ -83,6 +99,7 @@ export default {
       },
       {
         text: "Skills",
+        collapsed: true,
         items: [
           { text: "Skills Overview", link: "/skills" },
           { text: "Skills v2", link: "/skills_v2" },
@@ -90,6 +107,7 @@ export default {
       },
       {
         text: "Tools",
+        collapsed: true,
         items: [
           { text: "Web", link: "/tools/web" },
           { text: "Firecrawl", link: "/tools/firecrawl" },
@@ -102,7 +120,8 @@ export default {
         ],
       },
       {
-        text: "For Non-Elixir Users",
+        text: "Understand the runtime",
+        collapsed: true,
         link: "/for-dummies/README",
         items: [
           { text: "Big Picture", link: "/for-dummies/01-big-picture" },
@@ -117,6 +136,7 @@ export default {
       },
       {
         text: "Contributing",
+        collapsed: true,
         items: [
           { text: "Safety", link: "/security/safety" },
           { text: "Security", link: "/security/secrets-migration-guide" },
@@ -145,16 +165,6 @@ export default {
   },
 
   markdown: {
-    // Allow mermaid diagrams if included in docs
-    // theme: { light: "github-light", dark: "github-dark" },
+    config: repositoryLinks,
   },
-
-  // Links into the umbrella source tree (e.g. ../apps/lemon_core/lib/lemon_core/env.ex)
-  // are intentional references to real files, but VitePress treats unknown
-  // extensions as HTML pages and flags them as dead links.
-  //
-  // These links are not unchecked: LemonCore.Quality.DocsCheck (run by
-  // `mix lemon.quality`) resolves every local markdown link against the
-  // filesystem, which is the correct check for a path outside the site root.
-  ignoreDeadLinks: [/(^|\/)\.\.\/(apps|clients|bin)\//],
 }

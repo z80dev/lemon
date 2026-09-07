@@ -222,6 +222,17 @@ scripts/test path apps/lemon_ai/test --seed 1
 mix format
 ```
 
+### Public Website
+
+The public website is the VitePress project in `docs/`, deployed separately from
+runtime releases through `.github/workflows/docs-site.yml`. Its custom theme
+lives in `docs/.vitepress/theme/`, with shared SVG branding in
+`docs/public/brand/`. Keep links base-aware for the `/lemon/` Pages path and a
+future custom domain. After changing curated docs, regenerate machine-readable
+indexes with `python3 scripts/generate_docs_llms.py` and run
+`scripts/verify_docs_site`. Deployment and domain steps are documented in
+`docs/release/deployment_flows.md`.
+
 ### Product Release
 
 Keep user-visible notes under `CHANGELOG.md`'s `Unreleased` section, then start

@@ -62,6 +62,10 @@ jobs:
         working-directory: docs
         run: npm audit --audit-level=high
 
+      - name: Verify source links
+        working-directory: docs
+        run: npm test
+
       - name: Build site
         working-directory: docs
         run: npm run build
