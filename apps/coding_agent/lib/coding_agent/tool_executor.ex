@@ -6,6 +6,11 @@ defmodule CodingAgent.ToolExecutor do
   based on the ToolPolicy. When a tool requires approval, execution is
   paused until approval is granted or denied.
 
+  Approval failures are fail-closed. Exceptions, exits, throws, malformed
+  replies, and unknown scopes never authorize execution. Raw approval-service
+  failures are not included in tool results or logs. The failure boundary
+  covers only the approval request, not the approved tool's execution.
+
   ## Usage
 
       # Wrap a tool with approval enforcement
@@ -31,6 +36,19 @@ defmodule CodingAgent.ToolExecutor do
 
   # Tool calls should not enforce approval timeouts by default.
   @default_timeout_ms :infinity
+
+  # ExecApprovals returns stored-policy scopes or the explicit resolution decision.
+  @approval_scopes [
+    :once,
+    :session,
+    :agent,
+    :node,
+    :global,
+    :approve_once,
+    :approve_session,
+    :approve_agent,
+    :approve_global
+  ]
 
   @doc """
   Wrap a single tool with approval checks.
@@ -60,12 +78,12 @@ defmodule CodingAgent.ToolExecutor do
   @doc """
   Execute a tool with approval check.
 
-  This function checks if approval is required and blocks until
-  approval is granted, denied, or times out.
+  This function blocks until approval is granted, denied, times out, or fails.
+  Only an explicit approval at a supported scope executes the callback.
 
   Returns:
   - The tool result on success
-  - An error result if approval is denied or times out
+  - An error result if approval is denied, times out, or is unavailable
   """
   @spec execute_with_approval(
           tool_name :: String.t(),
@@ -89,7 +107,7 @@ defmodule CodingAgent.ToolExecutor do
            timeout_ms,
            approval_request_fun
          ) do
-      {:ok, :approved, scope} ->
+      {:ok, :approved, scope} when scope in @approval_scopes ->
         Logger.debug("Tool #{tool_name} approved at scope: #{scope}")
         execute_fn.()
 
@@ -102,12 +120,13 @@ defmodule CodingAgent.ToolExecutor do
         timeout_result(tool_name, timeout_ms)
 
       {:error, reason} ->
-        Logger.warning("Tool #{tool_name} approval failed: #{inspect(reason)}")
-        approval_error_result(tool_name, reason)
+        safe_reason = safe_approval_error(reason)
+        Logger.warning("Tool #{tool_name} approval failed: #{safe_reason}")
+        approval_error_result(tool_name, safe_reason)
 
-      other ->
-        Logger.warning("Tool #{tool_name} approval returned unexpected value: #{inspect(other)}")
-        approval_error_result(tool_name, {:unexpected_result, other})
+      _other ->
+        Logger.warning("Tool #{tool_name} approval returned an invalid response")
+        approval_error_result(tool_name, :invalid_approval_response)
     end
   end
 
@@ -138,12 +157,17 @@ defmodule CodingAgent.ToolExecutor do
       rationale: "Tool execution: #{tool_name}",
       expires_in_ms: timeout_ms
     })
-  rescue
-    _ ->
-      # If approvals are unavailable, auto-approve (matches previous behavior).
-      Logger.debug("ExecApprovals unavailable, auto-approving #{tool_name}")
-      {:ok, :approved, :auto}
+  catch
+    _kind, _reason ->
+      # Authorization is never inferred from a failed request. Catch error,
+      # exit, and throw here without exposing arbitrary service error terms.
+      {:error, :approval_unavailable}
   end
+
+  defp safe_approval_error(reason) when reason in [:approval_unavailable, :service_unavailable],
+    do: reason
+
+  defp safe_approval_error(_reason), do: :approval_request_failed
 
   defp denied_result(tool_name) do
     %AgentToolResult{
@@ -162,14 +186,15 @@ defmodule CodingAgent.ToolExecutor do
   end
 
   defp timeout_result(tool_name, timeout_ms) do
-    timeout_seconds = div(timeout_ms, 1000)
+    timeout_label =
+      if is_integer(timeout_ms), do: " (#{div(timeout_ms, 1000)}s)", else: ""
 
     %AgentToolResult{
       content: [
         %TextContent{
           type: :text,
           text:
-            "Tool '#{tool_name}' execution timed out waiting for approval (#{timeout_seconds}s). " <>
+            "Tool '#{tool_name}' execution timed out waiting for approval#{timeout_label}. " <>
               "Please request approval and try again."
         }
       ],
@@ -187,7 +212,7 @@ defmodule CodingAgent.ToolExecutor do
         %TextContent{
           type: :text,
           text:
-            "Tool '#{tool_name}' could not run because approval failed: #{inspect(reason)}. " <>
+            "Tool '#{tool_name}' could not run because approval failed: #{reason}. " <>
               "Please retry or approve manually."
         }
       ],
