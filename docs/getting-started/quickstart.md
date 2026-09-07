@@ -1,9 +1,14 @@
-# Lemon quickstart
+# Your first conversation with Lemon
 
-This path takes a new installation from zero to a verified provider-backed chat,
-then proves that the session survives and shows where to go next. It uses the
-prebuilt release. For repository development, use the source path in
-[Install Lemon](../install.md#source-development).
+Install Lemon, connect your preferred model provider, and get a first answer.
+Then pick up the same conversation again to see how persistent sessions work.
+
+**You’ll need:** a supported macOS or Linux machine, an interactive terminal,
+`curl`, `tar`, `python3`, and credentials for a model provider. Model requests
+use that provider’s account and billing. The prebuilt release includes the
+runtime; you do not need Elixir to get started.
+
+Building Lemon itself? Follow [source development](../install.md#source-development).
 
 ## 1. Install the release
 
@@ -25,8 +30,8 @@ available in the current terminal:
 export PATH="$HOME/.lemon/bin:$PATH"
 ```
 
-Supported platforms, Linux compatibility, non-interactive flags, release
-channels, and uninstall behavior are in [Install Lemon](../install.md).
+Supported platforms, Linux compatibility, non-interactive flags, and release
+channels are in [Install Lemon](../install.md).
 
 ## 2. Verify setup before chatting
 
@@ -50,7 +55,7 @@ If you intentionally installed with `--skip-setup`, run `lemon setup` first.
 Setup is safe to rerun: it performs only incomplete steps and does not replace
 an existing secret key.
 
-## 3. Prove a real model turn
+## 3. Send your first message
 
 Start Lemon:
 
@@ -79,9 +84,10 @@ Inspect the live state without leaving the TUI:
 ```
 
 Use `/help` or `/commands` to browse commands supported by the connected
-runtime. `Ctrl+C` aborts an active run; press it again while idle to quit.
+runtime. With an empty input, `Ctrl+C` aborts an active run. While idle, press it twice
+to quit. If you have a draft, the first press clears that draft.
 
-## 4. Prove session continuity
+## 4. Pick up where you left off
 
 First record the key shown by `/session info`. Create a second conversation:
 
@@ -109,9 +115,10 @@ explicit key.
 Session rename, pin, archive, search, export, and guarded prune workflows are
 documented in the [CLI guide](../user-guide/cli.md).
 
-## 5. Try the next useful capability
+## 5. Make it useful
 
-Pick one path rather than configuring everything at once:
+Pick one path to try next. Advanced background and goal workflows have
+[preview support boundaries](../support.md#automation-and-cron):
 
 | Goal | First action | Guide |
 | --- | --- | --- |

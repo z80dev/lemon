@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vitepress dev .",
     "build": "vitepress build .",
+    "test": "node --test .vitepress/source-links.test.mjs",
     "preview": "vitepress preview .",
     "link-check": "markdown-link-check --config .mlc.json **/*.md --quiet"
   },

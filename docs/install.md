@@ -1,6 +1,19 @@
 # Install Lemon
 
-Last reviewed: 2026-08-18
+Choose a prebuilt release for everyday use, or a source checkout to contribute.
+Both paths use the same provider setup and keep your state under `~/.lemon`.
+
+| Path | Best for | What you need |
+| --- | --- | --- |
+| [Prebuilt release](#install-and-start-your-first-chat) | Start using Lemon | `curl`, `tar`, `python3`, and provider credentials |
+| [Source development](#source-development) | Change Lemon or build it yourself | Elixir, Erlang/OTP, and the relevant client toolchain |
+
+Release targets are **macOS Apple Silicon**, **Linux x86_64**, and **Linux
+ARM64**. Linux builds target glibc 2.39 or newer; the simulation profile is
+Linux-only. See [installer details](#installer-details) for compatibility and
+profile options.
+
+Want a guided first run? Follow the [quickstart](getting-started/quickstart.md).
 
 ## Install and start your first chat
 

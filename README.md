@@ -1,414 +1,126 @@
+<div align="center">
+
+<img src="docs/public/brand/lemon-banner.svg" alt="Lemon — Your agents. Your machine. Your move." width="100%">
+
 # Lemon
 
+### Your agents. Your machine. Your move.
+
+A self-hosted AI assistant that codes, remembers, and gets work done.<br>
+Use it from your terminal, browser, or chat. Powered by Elixir and the BEAM.
+
+[**Get started**](#get-started) · [**Documentation**](https://z80dev.github.io/lemon/) · [**Try a demo**](docs/demo.md) · [**Releases**](https://github.com/z80dev/lemon/releases)
+
 [![Quality](https://github.com/z80dev/lemon/actions/workflows/quality.yml/badge.svg?branch=main)](https://github.com/z80dev/lemon/actions/workflows/quality.yml)
-[![Dialyzer](https://github.com/z80dev/lemon/actions/workflows/dialyzer.yml/badge.svg?branch=main)](https://github.com/z80dev/lemon/actions/workflows/dialyzer.yml)
 [![Simulation Bench](https://github.com/z80dev/lemon/actions/workflows/sim-bench.yml/badge.svg?branch=main)](https://github.com/z80dev/lemon/actions/workflows/sim-bench.yml)
-[![OSV Scanner](https://github.com/z80dev/lemon/actions/workflows/osv-scanner.yml/badge.svg?branch=main)](https://github.com/z80dev/lemon/actions/workflows/osv-scanner.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-f5cf47)](LICENSE)
 
-**Lemon is a resilient, BEAM-native personal AI assistant and agent platform.** Built on Elixir/OTP, it provides supervised per-run agent processes, multi-channel messaging, a configured execution runtime, persistent memory, and deterministic simulation arenas.
+</div>
 
----
+## An assistant you can make your own
 
-## Why Lemon?
+Bring your preferred models. Give each specialist its own workspace. Keep conversations and memory on your machine, and reach your agents wherever you work. Lemon brings the tools, interfaces, and runtime together in one open-source system.
 
-- **Multi-channel and always on** — Chat with your agent across **Telegram**, **Discord**, **WhatsApp**, **XMTP**, the terminal **TUI**, or the **Web UI**.
-- **Model-agnostic** — Connect to 27 configured LLM providers, including Anthropic, OpenAI, Google Gemini, Bedrock, Azure, and OpenAI-compatible services. Lemon provides unified streaming, automatic retries, rate limiting, and cost accounting (`lemon_ai`); compatible local endpoints can be configured separately.
-- **Coding agent and MCP** — Native tool execution, MCP (Model Context Protocol) client/server bridge, native in-process subagent orchestration, browser automation, and LSP integration.
-- **Durable memory** — SQLite-backed full-text recall, document ingestion, and a provider interface for optional semantic backends, including Honcho long-term memory integration (`lemon_memory`).
-- **User-managed profiles** — Create durable specialist agents with stable chats,
-  separate bootstrap/memory/skill workspaces, optional model/node assignment,
-  node-aware roster status, safe clone/export, and guarded deletion.
-- **Durable session operations** — Search and inspect bounded redacted history,
-  title/pin/archive sessions, create redacted exports, and preview-confirm
-  verified pruning from the packaged or source CLI.
-- **Local-first credential resolution** — Keep encrypted secrets in Lemon or
-  explicitly opt in to supervised 1Password, Bitwarden Secrets Manager, and
-  argv-only command sources with fail-closed bounds and value-free diagnostics.
-- **LemonSim and benchmark arenas** — Event-sourced simulation worlds (Werewolf, Space Station, Stock Market, Survivor, Poker) and reproducible offline benchmark scoring without provider API keys.
-- **Supervised on the BEAM** — Each agent run is an isolated OTP process. Separate conversations execute concurrently, crashed workers are supervised, and durable session state survives individual requests.
+| Make it useful | Make it yours |
+| --- | --- |
+| **Work across interfaces.** Chat in the terminal or browser, then connect Telegram or Discord. [Choose an interface →](docs/user-guide/setup.md) | **Choose your models.** Use Anthropic, OpenAI, Google, or other supported providers through one runtime. [Configure providers →](docs/config.md) |
+| **Put agents to work.** Edit code, use browser and LSP tools, connect MCP servers, and delegate to native subagents. [Explore the tools →](apps/coding_agent/README.md) | **Build a team of specialists.** Give profiles stable chats, separate workspaces, skills, and optional model or execution-node assignments. [Meet profiles →](docs/user-guide/profiles.md) |
+| **Pick up where you left off.** Resume durable sessions, search local memory, and turn repeatable work into skills and automation. [Explore skills →](docs/user-guide/skills.md) | **Stay in control.** Manage local configuration and encrypted secrets, inspect runtime health, and create verified backups. [Operate Lemon →](docs/user-guide/backups.md) |
 
-> **Design:** [Agents Are a Concurrency Problem](docs/why-beam-for-agents.md) and [BEAM Agent Architecture](docs/beam_agents.md).
+Lemon is **pre-1.0 and actively evolving**. Start with the [supported platforms](docs/install.md) and [current capabilities](docs/compare.md) to see what is available today.
 
----
+## Get started
 
-## Quickstart
+### 1. Install
 
-### 1. Install Lemon
-
-Install the prebuilt binary runtime directly into `~/.lemon/bin`:
+Run this in an interactive terminal on a [supported macOS or Linux system](docs/install.md):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/z80dev/lemon/main/install.sh | sh
 ```
 
-*(Add `~/.lemon/bin` or `$HOME/.lemon/bin` to your `PATH` if prompted.)*
+The installer verifies the release checksum and opens setup to choose your provider, authentication, and default model. No Elixir installation is needed for prebuilt releases.
 
-### 2. Configure Providers & Models
-
-Run the interactive setup wizard to configure your preferred LLM provider and API keys:
+### 2. Check your setup
 
 ```bash
-lemon setup
-```
-
-Verify your setup with the diagnostic doctor:
-
-```bash
+export PATH="$HOME/.lemon/bin:$PATH"
 lemon doctor
 ```
 
-Optional external secret managers remain read-only fallbacks behind Lemon's
-encrypted store. Configure them under `[secrets.sources.<id>]`, then inspect or
-live-test readiness without printing values:
+If you skipped the setup wizard, run `lemon setup` first. For help with installation or provider configuration, follow the [quickstart](docs/getting-started/quickstart.md) or [troubleshooting guide](docs/support.md).
 
-```bash
-lemon secrets sources status
-lemon secrets sources test --json
-```
-
-See [External secret sources](docs/config.md#external-secret-sources) for the
-exact schemas, bootstrap rules, and security contract.
-
-Create a verified private backup of durable `~/.lemon` state before changing
-machines or performing maintenance:
-
-```bash
-lemon backup create
-```
-
-See [Back up and restore Lemon user state](docs/user-guide/backups.md) for the
-versioned data contract, credential exclusions, and guarded overwrite flow.
-
-### 3. Start Chatting
-
-Launch the interactive Terminal UI (TUI):
+### 3. Start a conversation
 
 ```bash
 lemon
 ```
 
-Or launch the local browser interface (the full release profile starts the
-daemon automatically and waits for the page). The launcher reuses an already
-healthy local runtime instead of starting a duplicate Erlang node:
+Send your first message. Use `/help` to explore commands and `/sessions` to return to previous conversations.
+
+Prefer a browser? The full release includes a local Web UI:
 
 ```bash
 lemon web
 ```
 
-See [Use Lemon in a Browser](docs/user-guide/web.md) for setup recovery,
-access-control, and headless launch details.
+**Next:** [Connect Telegram or Discord](docs/user-guide/setup.md) · [Create a specialist profile](docs/user-guide/profiles.md) · [Explore the CLI](docs/user-guide/cli.md)
 
-Create a specialist profile and send work to its canonical chat:
+## Built for more than one conversation
+
+Lemon runs agents as supervised Elixir/OTP processes. Conversations can execute concurrently, workers have a supervision boundary, and durable sessions preserve history across individual requests. Native subagents share the same execution stack; named execution nodes let you place work on another machine.
+
+That architecture also powers **LemonSim**: event-sourced arenas for studying how models plan, cooperate, compete, and recover. Try a deterministic offline game without provider API keys:
 
 ```bash
-lemon profile create research --name "Research" --model openai:gpt-5
-lemon profile chat research "Summarize the open questions"
-lemon profile roster
+# From a source checkout with dependencies installed
+mix lemon.sim.tic_tac_toe --offline-strategy random --seed 42 --no-persist --max-turns 10
 ```
 
-Inside the TUI, `/profiles` opens the same live roster and switches to the
-selected canonical chat. `/profile create|clone|rename|export|delete` uses the
-authenticated control plane for lifecycle actions, while normal prompts from
-an opened profile retain its derived workspace and named-node routing.
+[Why the BEAM?](docs/why-beam-for-agents.md) · [Architecture overview](docs/architecture/overview.md) · [LemonSim guide](apps/lemon_sim/README.md) · [Run benchmarks](docs/benchmarks/quickstart.md)
 
-In the browser, `/manage/profiles` provides the token-required roster plus
-preview-first create, clone, rename, and recoverable delete. It links each
-profile to its stable canonical chat while keeping profile paths and system
-prompts out of Web state.
+## Find your next step
 
-The TUI also exposes the shared durable-session lifecycle directly. Use
-`/sessions deployment --pinned --active` for a live searchable picker,
-`/session resume <key>` to hydrate exact durable history, and `/session help`
-for guarded title/pin/archive, redacted export, prune, and delete workflows.
-Session metadata stays server-owned, and destructive operations are never
-queued while disconnected.
+| I want to… | Start here |
+| --- | --- |
+| Get from installation to a working chat | [Quickstart](docs/getting-started/quickstart.md) |
+| Build an agent with the platform | [Build your first agent](docs/getting-started/build-your-first-agent.md) |
+| Configure providers, models, or secrets | [Configuration reference](docs/config.md) |
+| Use sessions, profiles, and command-line tools | [CLI reference](docs/user-guide/cli.md) · [TUI reference](clients/tui/README.md) |
+| Connect independent agents | [Persistent A2A conversations](docs/user-guide/a2a-peers.md) |
+| Send channel notifications from scripts | [Script notifications](apps/lemon_channels/README.md#script-notifications) |
+| Update or move an installation | [Safe updates](docs/user-guide/updates.md) · [Backup and restore](docs/user-guide/backups.md) |
+| Diagnose a problem | [Support](docs/support.md) · [Report an issue](https://github.com/z80dev/lemon/issues) |
+| Explore everything | [Documentation index](docs/README.md) · [Machine-readable docs](https://z80dev.github.io/lemon/llms.txt) |
 
-See [User-managed profiles](docs/user-guide/profiles.md) for lifecycle,
-filesystem isolation, named-node routing, and export safeguards.
+## Build with us
 
-Inspect or safely manage durable sessions, and install completion generated
-from the same registry as CLI help and dispatch:
+Lemon is an Elixir umbrella with reusable AI, agent, memory, and routing libraries; a personal assistant runtime; and simulation products. See the [architecture guide](docs/architecture/overview.md) for the package map and [architecture boundaries](docs/architecture_boundaries.md) for dependency rules.
 
-```bash
-lemon sessions list --limit 20
-lemon sessions search "deployment follow-up"
-lemon sessions export agent:research:main --format markdown
-lemon completion zsh > "$HOME/.zfunc/_lemon"
-```
-
-See the [Lemon command-line reference](docs/user-guide/cli.md) for the complete
-packaged-CLI session lifecycle, guarded prune, exit-code, JSON, and shell setup
-contracts, and the [TUI reference](clients/tui/README.md) for interactive
-picker and lifecycle commands.
-
-Review a local portable skill + automation bundle without revealing its skill
-body or cron prompt, then activate only the exact reviewed plan:
+For source development, use Erlang/OTP 28.5+, Elixir 1.19.5+, and Bun 1.3.14+ for the TUI. Web client development also uses Node.js 24 LTS+.
 
 ```bash
-lemon blueprints daily-note --profile operator
-lemon blueprints activate daily-note --profile operator \
-  --confirm <exact-confirmation-digest>
-```
-
-See [Portable skill and automation bundles](docs/user-guide/skills.md#portable-skill-and-automation-bundles)
-for the catalog, safety, provenance, and duplicate-safe activation contract.
-
----
-
-## Connect Messaging Channels
-
-### Connect independent agents with A2A
-
-Lemon can maintain durable A2A v1.0 conversations with Hermes and other
-independent agents. The inbound listener maps each remote context to a private
-Lemon session; the built-in `peer` tool resumes one default outbound context
-per configured peer and supports discovery, task status, cancellation, and
-history. See [Persistent A2A peer conversations](docs/user-guide/a2a-peers.md)
-for the paired Lemon/Hermes setup and security model.
-
-Connect Lemon to your favorite chat platforms:
-
-### Telegram
-```bash
-lemon gateway setup telegram
-```
-
-### Discord
-```bash
-lemon gateway setup discord
-```
-
-### Script & CI Notifications
-Send messages or upload build artifacts directly to your channels from shell scripts or CI pipelines:
-
-```bash
-# Installed runtime
-lemon send --to telegram:<chat_id> "Deployment complete"
-lemon send --to discord:#ops --attach release-notes.md --attach build.log "Build finished"
-
-# Source checkout
-./bin/lemon send --to telegram:<chat_id> "Deployment complete"
-```
-*(See [Script Notifications Reference](apps/lemon_channels/README.md#script-notifications) for delivery options and default target configuration.)*
-
----
-
-## Source Development
-
-For development or contributing to Lemon, clone the repository and build from source:
-
-### Prerequisites
-- **Erlang/OTP** 28.5+ & **Elixir** 1.19.5+
-- **Bun** 1.3.14+ (for TUI development)
-- **Node.js** 24 LTS+ (for Web UI development)
-
-### Build & Run
-
-```bash
-# Clone the repository
 git clone https://github.com/z80dev/lemon.git
 cd lemon
-
-# Fetch dependencies & compile
 mix local.hex --force
 mix deps.get
 mix compile
-
-# Run initial setup & doctor
 ./bin/lemon setup
 ./bin/lemon doctor
-
-# Launch the dev TUI client
 ./bin/lemon-tui
-
-# Or start/open the local Web UI
-./bin/lemon web
 ```
 
----
-
-## LemonSim and Simulation Arenas
-
-Lemon includes **LemonSim**, an event-sourced simulation engine and arena system for benchmarking model behavior deterministically.
-
-You can run deterministic simulations locally without any API keys:
+Run checks from the repository root:
 
 ```bash
-# Run offline Tic-Tac-Toe
-mix lemon.sim.tic_tac_toe --offline-strategy random --seed 42 --no-persist --max-turns 10
-
-# Run VendingBench benchmark preset
-mix lemon.sim.vending_bench --preset ci --offline-strategy baseline --sim-id vb_ci
-
-# Verify and score the game artifact
-mix lemon.sim.verify apps/lemon_sim/priv/game_logs/vending_bench/vb_ci
-mix lemon.sim.score  apps/lemon_sim/priv/game_logs/vending_bench/vb_ci
+scripts/test fast       # Compile with warnings as errors; run the fast suite
+scripts/test quality    # Check code quality, documentation, and architecture
 ```
 
-Learn more in the [LemonSim Guide](apps/lemon_sim/README.md) and [Benchmark Guides](docs/benchmarks/quickstart.md).
-
----
-
-## Architecture
-
-Lemon is organized as an Elixir umbrella split into 9 modular core packages, a reference runtime, and product applications.
-
-### Core Packages
-
-| Package | Role & Contents |
-| --- | --- |
-| [`lemon_ai`](apps/lemon_ai/README.md) | Provider-agnostic LLM client (27 configured providers), streaming API, rate limiting, circuit breaker, cost tracking |
-| [`lemon_core`](apps/lemon_core/README.md) | Shared bus, `Event` envelopes, `Store` (ETS/JSONL/SQLite), encrypted secrets plus bounded external sources, config management |
-| [`lemon_agent`](apps/lemon_agent/README.md) | Core agentic loop, tool registry, subagents, and model runtime |
-| [`lemon_memory`](apps/lemon_memory/README.md) | SQLite full-text search, memory provider registry, document ingestion pipeline, session search |
-| [`lemon_media`](apps/lemon_media/README.md) | Redacted-by-construction media job records, hashing, and audio/image processing |
-| [`lemon_router`](apps/lemon_router/README.md) | Message routing, run lifecycle (single-flight execution, queue/steer/coalesce), session orchestration |
-| [`lemon_gateway`](apps/lemon_gateway/README.md) | Run execution runtime, scheduler, locks, and ingress transports |
-| [`lemon_channels`](apps/lemon_channels/README.md) | Channel core, `Plugin` behaviour, Telegram/Discord/WhatsApp/XMTP adapters, outbox & presentation |
-| [`lemon_platform_test`](apps/lemon_platform_test/README.md) | Contract-test kit (`BackendCase`, `PluginCase`, `ProviderCase`) for platform extensions |
-
-### Reference Runtime & Products
-
-- **Reference Runtime** (in-repo): [`lemon_control_plane`](apps/lemon_control_plane/README.md) (JSON-RPC API), [`lemon_cli`](apps/lemon_cli/README.md), [`lemon_web`](apps/lemon_web/README.md), [`lemon_automation`](apps/lemon_automation/README.md), [`lemon_skills`](apps/lemon_skills/README.md), [`lemon_browser`](apps/lemon_browser/README.md), [`lemon_lsp`](apps/lemon_lsp/README.md).
-- **Products**: [`coding_agent`](apps/coding_agent/README.md), [`coding_agent_ui`](apps/coding_agent_ui/README.md), [`lemon_mcp`](apps/lemon_mcp/README.md), [`lemon_sim`](apps/lemon_sim/README.md), [`lemon_sim_ui`](apps/lemon_sim_ui/README.md), [`lemon_tcg`](apps/lemon_tcg/README.md), [`lemon_evals`](apps/lemon_evals/README.md).
-- **Satellite**: [`lemon_honcho`](apps/lemon_honcho/README.md) (self-registering long-term memory integration).
-
-### Dependency Graph
-
-Dependencies flow strictly downward. Core platform packages never depend on products or reference runtimes. The published-package edges below are complete; consumption edges from the reference runtime, products, and satellites are representative:
-
-```mermaid
-%% Source of truth: apps/*/mix.exs in_umbrella deps (see docs/architecture_boundaries.md).
-%% Solid = compile-time dependency. Dashed = runtime-only seam (no compile edge).
-graph TD
-    subgraph published["Published packages · Hex (the nine)"]
-        core["lemon_core"]
-        ai["lemon_ai"]
-        agent["lemon_agent"]
-        mem["lemon_memory"]
-        media["lemon_media"]
-        chan["lemon_channels"]
-        router["lemon_router"]
-        gw["lemon_gateway"]
-        kit["lemon_platform_test"]
-    end
-
-    subgraph reference["Reference runtime · in-repo, unpublished"]
-        cp["lemon_control_plane"]
-        cli["lemon_cli"]
-        web["lemon_web"]
-        auto["lemon_automation"]
-        skills["lemon_skills"]
-        browser["lemon_browser"]
-        lsp["lemon_lsp"]
-    end
-
-    subgraph products["Products · consume the packages as a third party would"]
-        ca["coding_agent"]
-        caui["coding_agent_ui"]
-        mcp["lemon_mcp"]
-        evals["lemon_evals"]
-        sim["lemon_sim"]
-        simui["lemon_sim_ui"]
-        tcg["lemon_tcg"]
-    end
-
-    %% Published-tier compile edges
-    agent --> ai
-    agent --> core
-    mem --> core
-    media --> core
-    chan --> core
-    chan --> agent
-    chan --> media
-    router --> core
-    router --> ai
-    router --> agent
-    router --> mem
-    router --> media
-    gw --> core
-    gw --> agent
-    kit --> core
-    kit --> agent
-    kit --> ai
-    kit --> chan
-    kit --> gw
-    kit --> mem
-
-    %% The one allowed router->channels compile edge
-    router -->|"facade"| chan
-
-    %% Runtime-only seams
-    chan -.->|"LemonCore.RouterBridge"| router
-    router -.->|"LemonCore.EngineRuntime behaviour"| gw
-
-    %% Representative one-way consumption into the platform
-    cp --> router
-    ca --> gw
-```
-
----
-
-## Engineering Guarantees
-
-- **Compiler-Enforced Boundaries** — AST-level architecture verification ([`architecture_rules_check.ex`](apps/lemon_core/lib/lemon_core/quality/architecture_rules_check.ex)) ensures no layer violations or circular dependencies exist.
-- **Contract Testing for Extensions** — [`lemon_platform_test`](apps/lemon_platform_test/README.md) ships compliance case templates so third-party channel adapters, memory backends, and delegated runners can verify their implementations safely.
-- **Typed, Reader-Owned Configuration** — Over 260 environment variable declarations are defined directly by their consumer modules ([`config/config.exs`](config/config.exs)).
-- **Deterministic Test Suites** — Fast, isolated ExUnit test execution with network scrubbing and temp dir sandboxing (`scripts/test`).
-- **Continuous Security Audits** — OSV-Scanner checks the listed Elixir and JavaScript lockfiles when dependency manifests change and on a weekly schedule ([`osv-scanner.yml`](.github/workflows/osv-scanner.yml)).
-
----
-
-## Documentation
-
-| Guide | Description |
-| --- | --- |
-| [Documentation Index](docs/README.md) | Complete documentation catalog |
-| [Installation Guide](docs/install.md) | Prebuilt releases, platform support, and headless setup |
-| [Configuration Reference](docs/config.md) | Runtime configuration and environment variables |
-| [Command-line Reference](docs/user-guide/cli.md) | Runtime commands, blueprint activation, durable sessions, exit codes, and shell completion |
-| [Safe Updates](docs/user-guide/updates.md) | Non-mutating plans, exact-confirm apply, private receipts, and receipt-bound rollback |
-| [Backup and Restore](docs/user-guide/backups.md) | `~/.lemon` data contract, verification, guarded restore, and rollback |
-| [Testing Guide](docs/testing.md) | Test suites, quality gates, and CI parity |
-| [Mix Tasks Reference](docs/mix-tasks.md) | Grouped reference for all `mix lemon.*` commands |
-| [Skills Documentation](docs/skills.md) | Skill registry, discovery, and custom assistant tools |
-| [Platform Split Plan](docs/platform-split.md) | Architecture evolution and package decoupling roadmap |
-| [Benchmark Guides](docs/benchmarks/quickstart.md) | Running model benchmarks in LemonSim |
-
----
-
-## Development and Quality Commands
-
-```bash
-# Fast test suite (compilation warnings as errors + ExUnit)
-scripts/test fast
-
-# Full quality suite (Credo, doc freshness, architecture boundaries)
-scripts/test quality
-
-# Test specific path
-scripts/test path apps/lemon_core/test
-```
-
----
-
-## Contributing
-
-We welcome contributions! Please see:
-- [`CONTRIBUTING.md`](CONTRIBUTING.md) — Guidelines for human contributors.
-- [`AGENTS.md`](AGENTS.md) — Working agreements for agent and automated contributors.
-- [`SECURITY.md`](SECURITY.md) — Security policy and vulnerability disclosure.
-
----
-
-## License
-
-Lemon is open source software licensed under the [MIT License](LICENSE).
-
----
+[Contributing](CONTRIBUTING.md) · [Agent guide](AGENTS.md) · [Testing](docs/testing.md) · [Security policy](SECURITY.md) · [Changelog](CHANGELOG.md)
 
 ## Acknowledgments
 
-Heavily inspired by [pi](https://github.com/badlogic/pi-mono) (Mario Zechner), with architectural ideas from [Oh-My-Pi](https://github.com/can1357/oh-my-pi), [takopi](https://github.com/banteg/takopi), OpenClaw, and Ironclaw. The skill library was bootstrapped from [Hermes Agent](https://github.com/NousResearch/hermes-agent). Built with [Elixir](https://elixir-lang.org/) on the Erlang BEAM; the TUI is powered by [@oh-my-pi/pi-tui](https://www.npmjs.com/package/@oh-my-pi/pi-tui).
+Inspired by [pi](https://github.com/badlogic/pi-mono), with architectural ideas from [Oh-My-Pi](https://github.com/can1357/oh-my-pi), [takopi](https://github.com/banteg/takopi), OpenClaw, and Ironclaw. The skill library was bootstrapped from [Hermes Agent](https://github.com/NousResearch/hermes-agent). Built with [Elixir](https://elixir-lang.org/) on the Erlang BEAM; the TUI uses [@oh-my-pi/pi-tui](https://www.npmjs.com/package/@oh-my-pi/pi-tui).
 
-*Named after a very good cat.*
+[MIT licensed](LICENSE). Named after a very good cat.
