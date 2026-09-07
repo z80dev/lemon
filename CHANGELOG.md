@@ -29,6 +29,14 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   omission marker, preserving UTF-8 boundaries without retaining discarded
   source binaries. Final results and full-output files are unchanged.
 
+- Restricted tool profiles now deny alternate hashline editing, topic-memory
+  writes, and task delegation through `hashline_edit`, `memory_topic`, and
+  `task`. Full-access and orchestrator profiles are unchanged.
+
+- Tool approval failures now block execution on exceptions, exits, throws,
+  malformed replies, and unsupported approval scopes without exposing raw
+  service error payloads. Approval timeout results also render safely when
+  the configured wait is infinite.
 - Session reset and termination now cancel both automatic-compaction and
   overflow-recovery workers, clear their monitors and timeout refs, and ignore
   late task messages from the previous session identity.
