@@ -106,6 +106,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- `mix lemon.eval --output <path> --revision <full-sha>` writes versioned,
+  redacted contract reports with check outcomes and explicit revision metadata,
+  including when completed checks fail. The manually dispatched Live Eval
+  workflow retains these reports for 14 days without uploading raw details.
 - `LemonCore.Store.Table` ownership metadata for incremental generic-store
   migrations. The architecture gate now analyzes generic Store calls from the
   AST across every supported operation and default/explicit server arity,

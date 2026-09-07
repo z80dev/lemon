@@ -71,7 +71,7 @@ defmodule LemonEvals.Report do
           File.rename(temp, path)
         end
       after
-        File.close(file)
+        _ = File.close(file)
         File.rm(temp)
       end
     end
