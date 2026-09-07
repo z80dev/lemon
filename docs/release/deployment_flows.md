@@ -418,3 +418,47 @@ reconnect, completion, export, rematch, and the supported responsive viewports.
 - `apps/lemon_core/lib/lemon_core/runtime/` — Boot, Profile, Health, Env modules
 - `lemon doctor` / `mix lemon.doctor` — diagnostics in a release / source checkout; append `--bundle` for a redacted support bundle
 - `lemon setup` / `mix lemon.setup` — first-time configuration wizard in a release / source checkout
+
+
+## Public website and documentation
+
+The public website and documentation share the VitePress project in `docs/`.
+Markdown remains the source of truth; `docs/.vitepress/theme/` supplies the
+homepage and shared visual theme. Brand SVG assets live in `docs/public/brand/`.
+Relative Markdown links into the repository source are rewritten to GitHub by
+`docs/.vitepress/source-links.mjs`; `npm test --prefix docs` checks this behavior.
+This static site deploys independently of Lemon runtime releases.
+
+### Verify and publish
+
+```bash
+python3 scripts/generate_docs_llms.py
+scripts/verify_docs_site
+```
+
+The `Docs Site` workflow builds, audits tooling, and checks links. With repository
+variable `ENABLE_PAGES_DEPLOY=true` and GitHub Pages configured to use GitHub
+Actions, docs changes pushed to `main` deploy automatically. To redeploy manually:
+
+```bash
+gh workflow run docs-site.yml --ref main -f deploy=true
+```
+
+The default production URL is `https://z80dev.github.io/lemon/`. Verify the
+homepage, quickstart, search, mobile navigation, and brand assets after deployment.
+To roll back a presentation change, revert its commit on `main` and let the same
+workflow publish the previous site. No runtime release or restart is required.
+
+### Connect a custom domain
+
+A domain is optional. Once registered, configure it in the repository's Pages
+settings and add the DNS records GitHub specifies. Verify domain ownership and
+wait for HTTPS to become available before advertising the address. Follow
+[GitHub's custom-domain guide](https://docs.github.com/en/pages/configuring-a-custom-domain-for-your-github-pages-site).
+
+For a domain served at its root, change the VitePress `base` from `/lemon/` to `/`.
+Update the favicon and social-image URLs in `docs/.vitepress/config.js`, `SITE`
+in `scripts/generate_docs_llms.py`, and public website links in the README and
+docs. Regenerate the machine-readable docs, rebuild, and verify the new HTTPS
+origin and deep links. Keep every homepage link base-aware with VitePress
+`withBase` so both project-path and custom-domain deployments work.

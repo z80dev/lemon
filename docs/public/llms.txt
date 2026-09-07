@@ -8,14 +8,14 @@
 ## Start here
 
 - [Index](https://z80dev.github.io/lemon/): Product overview and paths into the documentation.
-- [Lemon quickstart](https://z80dev.github.io/lemon/getting-started/quickstart): Install, verify a provider-backed chat, resume the session, choose a next feature, and recover from failures.
+- [Your first conversation with Lemon](https://z80dev.github.io/lemon/getting-started/quickstart): Install, verify a provider-backed chat, resume the session, choose a next feature, and recover from failures.
 - [Install Lemon](https://z80dev.github.io/lemon/install): Release installer, source install, first-run setup, and supported platforms.
-- [Demo Lemon](https://z80dev.github.io/lemon/demo): A deterministic local walkthrough for the runtime and interfaces.
+- [Try Lemon on real work](https://z80dev.github.io/lemon/demo): A deterministic local walkthrough for the runtime and interfaces.
 - [Set up Lemon](https://z80dev.github.io/lemon/user-guide/setup): Configure providers, secrets, runtime settings, and channels.
 - [Back up and restore Lemon user state](https://z80dev.github.io/lemon/user-guide/backups): Create, verify, and safely restore private user-state backups.
 - [User-managed profiles](https://z80dev.github.io/lemon/user-guide/profiles): Create, route, clone, export, and delete isolated specialist profiles.
 - [Support](https://z80dev.github.io/lemon/support): Diagnose startup, provider, runtime, and release problems.
-- [Compare Lemon](https://z80dev.github.io/lemon/compare): Current product positioning and honest support boundaries.
+- [Is Lemon right for you?](https://z80dev.github.io/lemon/compare): Current product positioning and honest support boundaries.
 
 ## Use Lemon
 
