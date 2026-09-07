@@ -10,3 +10,7 @@
   Explicit supported approvals still execute exactly once; errors raised by
   the approved tool remain outside the approval failure boundary.
 - Approval timeout results no longer raise when the configured wait is infinite.
+- Restricted tool profiles now deny `hashline_edit`, `memory_topic`, and `task`,
+  closing alternate editor, topic-memory mutation, and child-delegation gaps.
+  Full-access and orchestrator profiles are unchanged. These remain tool-name
+  restrictions, not a sandbox or classification of arbitrary extension tools.

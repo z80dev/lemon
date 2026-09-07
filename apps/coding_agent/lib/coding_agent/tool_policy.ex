@@ -4,6 +4,13 @@ defmodule CodingAgent.ToolPolicy do
 
   Provides allow/deny lists for tools, per-engine restrictions,
   approval gates for dangerous operations, and NO_REPLY support.
+
+  `:safe_mode` and `:subagent_restricted` deny all built-in file editors,
+  topic-memory mutation, and task delegation as well as the other operations
+  listed in `@dangerous_tools`. Delegation must not bypass a parent's restricted
+  surface by creating a child with a broader default toolset. These profiles
+  are tool-name policies, not operating-system sandboxes or a guarantee about
+  unclassified third-party tools.
   """
 
   @type approval_mode :: :always | :never
@@ -121,10 +128,12 @@ defmodule CodingAgent.ToolPolicy do
   @dangerous_tools [
     "write",
     "edit",
+    "hashline_edit",
     "patch",
     "checkpoint",
     "skill_manage",
     "memory",
+    "memory_topic",
     "bash",
     # Bash-equivalent: the script runs with host permissions, and the RPC
     # allowlist bounds the Lemon tool surface only, not the OS.
@@ -132,6 +141,7 @@ defmodule CodingAgent.ToolPolicy do
     "exec",
     "process",
     "agent",
+    "task",
     "browser_click",
     "browser_type",
     "browser_select_option",

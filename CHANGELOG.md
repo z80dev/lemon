@@ -28,6 +28,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Restricted tool profiles now deny alternate hashline editing, topic-memory
+  writes, and task delegation through `hashline_edit`, `memory_topic`, and
+  `task`. Full-access and orchestrator profiles are unchanged.
+
 - Tool approval failures now block execution on exceptions, exits, throws,
   malformed replies, and unsupported approval scopes without exposing raw
   service error payloads. Approval timeout results also render safely when
