@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       iterations:
-        description: "Number of live eval iterations"
+        description: "Statistical-check iterations (not repeated live-model trials)"
         required: false
         default: "3"
       live_timeout_ms:
@@ -75,4 +75,20 @@ jobs:
         run: mix compile --warnings-as-errors
 
       - name: Run live eval
-        run: scripts/test live-eval --live-timeout-ms "${{ inputs.live_timeout_ms }}"
+        env:
+          LIVE_TIMEOUT_MS: ${{ inputs.live_timeout_ms }}
+          EVAL_REVISION: ${{ github.sha }}
+        run: >-
+          scripts/test live-eval
+          --live-timeout-ms "$LIVE_TIMEOUT_MS"
+          --output eval-artifacts/contracts.json
+          --revision "$EVAL_REVISION"
+
+      - name: Retain redacted contract report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-eval-contract-report
+          path: eval-artifacts/contracts.json
+          if-no-files-found: warn
+          retention-days: 14
