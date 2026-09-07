@@ -65,15 +65,16 @@ defmodule CodingAgent.Tools.BashStreamingPreviewTest do
   end
 
   test "the real bash callback emits bounded untrusted replacement snapshots" do
-    caller = self()
-    marker = make_ref()
+    # The executor drains its mailbox while collecting shell output.
+    # Keep observations in a separate supervised process.
+    updates_pid = start_supervised!({Agent, fn -> [] end})
 
     result =
       Bash.execute(
         "bounded-preview",
         %{"command" => "printf '%60000s' ''; printf 'END'"},
         nil,
-        fn update -> send(caller, {marker, update}) end,
+        fn update -> Agent.update(updates_pid, &[update | &1]) end,
         System.tmp_dir!(),
         []
       )
@@ -83,24 +84,16 @@ defmodule CodingAgent.Tools.BashStreamingPreviewTest do
     end
 
     assert result.details.exit_code == 0
-    updates = collect_updates(marker, [])
+    updates = Agent.get(updates_pid, &Enum.reverse/1)
     assert updates != []
 
-    for %AgentToolResult{content: [%TextContent{text: text}], trust: trust} <- updates do
-      assert trust == :untrusted
+    for update <- updates do
+      assert %AgentToolResult{content: [%TextContent{text: text}], trust: :untrusted} = update
       assert byte_size(text) <= 50_000 + 100
     end
 
     assert %AgentToolResult{content: [%TextContent{text: last}]} = List.last(updates)
     assert String.ends_with?(last, "END")
     assert last =~ "Earlier output omitted"
-  end
-
-  defp collect_updates(marker, acc) do
-    receive do
-      {^marker, update} -> collect_updates(marker, [update | acc])
-    after
-      0 -> Enum.reverse(acc)
-    end
   end
 end
