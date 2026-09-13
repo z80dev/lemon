@@ -359,7 +359,11 @@ defmodule LemonCore.ExecutionContext do
   defp path_subset?(nil, _parent), do: false
 
   defp path_subset?(child, parent) do
-    child == parent or String.starts_with?(child, parent <> Path.sep())
+    relative = Path.relative_to(child, parent)
+
+    child == parent or
+      (Path.type(relative) == :relative and relative != ".." and
+         not String.starts_with?(relative, "../"))
   end
 
   defp ensure_path_in_scope(_cwd, %{root: nil}), do: :ok

@@ -356,7 +356,6 @@ defmodule CodingAgent.Coordinator do
   defp start_subagent(id, spec, state) do
     prompt = spec.prompt
     subagent_id = spec[:subagent]
-    description = spec[:description] || "Subagent #{id}"
 
     # Apply subagent prompt if specified
     final_prompt =

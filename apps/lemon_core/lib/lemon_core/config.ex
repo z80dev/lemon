@@ -407,15 +407,6 @@ defmodule LemonCore.Config do
   defp parse_thinking_level(level) when is_atom(level), do: level
   defp parse_thinking_level(_), do: :medium
 
-  defp parse_boolean(nil, default), do: default
-  defp parse_boolean(true, _default), do: true
-  defp parse_boolean(false, _default), do: false
-  defp parse_boolean("true", _default), do: true
-  defp parse_boolean("false", _default), do: false
-  defp parse_boolean("1", _default), do: true
-  defp parse_boolean("0", _default), do: false
-  defp parse_boolean(_, default), do: default
-
   defp normalize_optional_string(value) when is_binary(value) do
     trimmed = String.trim(value)
     if trimmed == "", do: nil, else: trimmed
