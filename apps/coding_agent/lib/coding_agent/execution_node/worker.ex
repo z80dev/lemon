@@ -5,7 +5,9 @@ defmodule CodingAgent.ExecutionNode.Worker do
   The worker authenticates to a controller, accepts targeted
   `coding_agent.run` invocations, and executes them through the existing
   `CodingAgent.Executor`. It never forwards the node selector into the local
-  session, preventing a remote run from recursively selecting itself.
+  session, preventing a remote run from recursively selecting itself. Incoming
+  execution capabilities are intersected with the destination-local
+  `:execution_capabilities` ceiling before a session starts.
   """
 
   use GenServer
@@ -13,9 +15,10 @@ defmodule CodingAgent.ExecutionNode.Worker do
   require Logger
 
   alias CodingAgent.ExecutionNode.{Codec, Socket, TokenStore}
+  alias LemonCore.ExecutionContext
   alias LemonGateway.ExecutionRequest
 
-  @protocol_version 1
+  @protocol_version 2
   @max_control_text_bytes 16 * 1_024
   @capabilities %{
     "coding_agent.run" => %{"version" => @protocol_version},
@@ -48,6 +51,7 @@ defmodule CodingAgent.ExecutionNode.Worker do
     :pairing_stage,
     :pairing_id,
     :max_payload_bytes,
+    execution_capabilities: :all,
     invocations: %{},
     run_refs: %{}
   ]
@@ -90,7 +94,8 @@ defmodule CodingAgent.ExecutionNode.Worker do
        notify_pid: Keyword.get(opts, :notify_pid),
        requested_node_id: Keyword.get(opts, :node_id),
        repair: Keyword.get(opts, :repair, false),
-       max_payload_bytes: LemonCore.JSONPayload.default_max_bytes()
+       max_payload_bytes: LemonCore.JSONPayload.default_max_bytes(),
+       execution_capabilities: Keyword.get(opts, :execution_capabilities, :all)
      }}
   end
 
@@ -475,24 +480,35 @@ defmodule CodingAgent.ExecutionNode.Worker do
 
     with :ok <- validate_version(version),
          {:ok, prompt} <- nonempty(prompt, :missing_prompt),
-         {:ok, cwd} <- invocation_cwd(requested_cwd, state.default_cwd) do
+         {:ok, cwd} <- invocation_cwd(requested_cwd, state.default_cwd),
+         {:ok, execution_context} <-
+           ExecutionContext.decode(value(args, "executionContext")) do
       run_id = optional_string(value(args, "runId")) || "node:#{invoke_id}"
       session_key = optional_string(value(args, "sessionKey")) || "node:#{state.name}:#{run_id}"
       meta = args |> value("meta") |> normalize_meta()
 
-      request = %ExecutionRequest{
-        run_id: run_id,
-        session_key: session_key,
-        prompt: prompt,
-        images: normalize_images(value(args, "images")),
-        cwd: cwd,
-        resume: normalize_resume(value(args, "resume")),
-        lane: value(args, "lane"),
-        tool_policy: normalize_tool_policy(value(args, "toolPolicy")),
-        meta: meta
-      }
+      with :ok <- validate_context_run_id(execution_context, run_id),
+           {:ok, execution_context} <-
+             ExecutionContext.restrict_capabilities(
+               execution_context,
+               state.execution_capabilities
+             ),
+           {:ok, execution_context} <- ExecutionContext.bind_workspace(execution_context, cwd) do
+        request = %ExecutionRequest{
+          run_id: run_id,
+          session_key: session_key,
+          prompt: prompt,
+          images: normalize_images(value(args, "images")),
+          cwd: cwd,
+          resume: normalize_resume(value(args, "resume")),
+          lane: value(args, "lane"),
+          tool_policy: execution_context.tool_policy,
+          execution_context: execution_context,
+          meta: meta
+        }
 
-      {:ok, request, %{cwd: cwd, run_id: run_id}}
+        {:ok, request, %{cwd: cwd, run_id: run_id}}
+      end
     end
   end
 
@@ -921,18 +937,10 @@ defmodule CodingAgent.ExecutionNode.Worker do
     end
   end
 
-  defp normalize_tool_policy(policy) when is_map(policy) do
-    atomize_known_keys(policy, [
-      :allow,
-      :deny,
-      :require_approval,
-      :approvals,
-      :no_reply,
-      :profile
-    ])
-  end
+  defp validate_context_run_id(%ExecutionContext{run_id: run_id}, run_id), do: :ok
 
-  defp normalize_tool_policy(_), do: nil
+  defp validate_context_run_id(_context, _run_id),
+    do: {:error, :execution_context_run_id_mismatch}
 
   defp atomize_known_keys(map, keys) do
     Enum.reduce(keys, map, fn key, acc ->
@@ -991,6 +999,7 @@ defmodule CodingAgent.ExecutionNode.Worker do
   defp key_atom("resume"), do: :resume
   defp key_atom("lane"), do: :lane
   defp key_atom("toolPolicy"), do: :tool_policy
+  defp key_atom("executionContext"), do: :execution_context
   defp key_atom("meta"), do: :meta
 
   defp notify(%{notify_pid: pid}, message) when is_pid(pid) do

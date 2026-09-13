@@ -19,6 +19,23 @@ defmodule CodingAgent.ExecutorTest do
 
   describe "start_run/3 direct session runner" do
     @tag :tmp_dir
+    test "rejects malformed supplied policy before starting a session", %{tmp_dir: tmp_dir} do
+      request =
+        request(tmp_dir,
+          prompt: "must not start",
+          run_id: "run-invalid-policy",
+          stream_fn: mock_stream_fn([assistant_message("unexpected")])
+        )
+
+      request = %{request | tool_policy: %{"allow" => 123}}
+
+      assert {:error, {:invalid_policy_field, :allow}} =
+               Executor.start_run(request, %{stream_fn: request.meta[:stream_fn]}, self())
+
+      refute_receive {:engine_event, _, _}, 50
+    end
+
+    @tag :tmp_dir
     test "emits started, delta, tool action, and completed events", %{tmp_dir: tmp_dir} do
       tool_response =
         assistant_message_with_tool_calls([

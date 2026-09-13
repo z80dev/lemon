@@ -41,7 +41,7 @@ defmodule LemonControlPlane.Methods.Agent do
   @behaviour LemonControlPlane.Method
 
   alias LemonControlPlane.Protocol.Errors
-  alias LemonCore.RunRequest
+  alias LemonCore.{RunRequest, ToolPolicy}
   @legacy_selector_fields ~w(
     engine
     engine_id
@@ -119,17 +119,19 @@ defmodule LemonControlPlane.Methods.Agent do
         {:error, Errors.invalid_params("prompt is required")}
 
       prompt when is_binary(prompt) and byte_size(prompt) > 0 ->
-        {:ok,
-         %{
-           prompt: prompt,
-           agent_id: Map.get(params, "agent_id", "default"),
-           session_key: Map.get(params, "session_key"),
-           model: Map.get(params, "model"),
-           queue_mode: parse_queue_mode(Map.get(params, "queue_mode")),
-           cwd: Map.get(params, "cwd"),
-           tool_policy: Map.get(params, "tool_policy"),
-           idempotency_key: Map.get(params, "idempotency_key")
-         }}
+        with {:ok, tool_policy} <- parse_optional_tool_policy(Map.get(params, "tool_policy")) do
+          {:ok,
+           %{
+             prompt: prompt,
+             agent_id: Map.get(params, "agent_id", "default"),
+             session_key: Map.get(params, "session_key"),
+             model: Map.get(params, "model"),
+             queue_mode: parse_queue_mode(Map.get(params, "queue_mode")),
+             cwd: Map.get(params, "cwd"),
+             tool_policy: tool_policy,
+             idempotency_key: Map.get(params, "idempotency_key")
+           }}
+        end
 
       _ ->
         {:error, Errors.invalid_params("prompt must be a non-empty string")}
@@ -138,6 +140,18 @@ defmodule LemonControlPlane.Methods.Agent do
 
   defp validate_params(_) do
     {:error, Errors.invalid_params("params must be an object")}
+  end
+
+  defp parse_optional_tool_policy(nil), do: {:ok, nil}
+
+  defp parse_optional_tool_policy(policy) do
+    case ToolPolicy.parse(policy) do
+      {:ok, policy} ->
+        {:ok, policy}
+
+      {:error, reason} ->
+        {:error, Errors.invalid_params("tool_policy is invalid", %{reason: inspect(reason)})}
+    end
   end
 
   defp parse_queue_mode("collect"), do: :collect

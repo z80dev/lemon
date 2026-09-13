@@ -1678,8 +1678,9 @@ defmodule LemonRouter.RunOrchestratorTest do
       assert_receive {:captured_job, job}, 500
       assert job.meta[:model] == "openai-codex:gpt-5.3-codex"
       assert job.meta[:system_prompt] == "You are the oracle."
-      assert "bash" in (job.tool_policy[:blocked_tools] || [])
-      assert "rm" in (job.tool_policy[:blocked_tools] || [])
+      assert "bash" in job.tool_policy.blocked_tools
+      assert "rm" in job.tool_policy.blocked_tools
+      assert %LemonCore.ExecutionContext{} = job.execution_context
     end
 
     test "keeps structured resume provenance while executing through lemon" do

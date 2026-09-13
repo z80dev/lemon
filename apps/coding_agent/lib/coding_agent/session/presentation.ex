@@ -39,6 +39,7 @@ defmodule CodingAgent.Session.Presentation do
     |> maybe_add_opt(:system_prompt, Keyword.get(opts, :system_prompt))
     |> maybe_add_opt(:stream_fn, Keyword.get(opts, :stream_fn))
     |> maybe_add_opt(:tool_policy, tool_policy)
+    |> maybe_add_opt(:execution_context, Keyword.get(opts, :execution_context))
     |> maybe_add_opt(:approval_context, approval_context)
     |> maybe_add_opt(:run_id, run_id)
     |> maybe_add_opt(:session_key, session_key)

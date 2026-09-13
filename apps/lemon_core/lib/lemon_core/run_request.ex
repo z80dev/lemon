@@ -26,7 +26,8 @@ defmodule LemonCore.RunRequest do
           resume: ResumeToken.t() | nil,
           meta: map(),
           cwd: term(),
-          tool_policy: map() | nil,
+          tool_policy: LemonCore.ToolPolicy.t() | map() | term() | nil,
+          execution_context: LemonCore.ExecutionContext.t() | map() | term() | nil,
           run_id: binary() | nil
         }
 
@@ -41,6 +42,7 @@ defmodule LemonCore.RunRequest do
             meta: %{},
             cwd: nil,
             tool_policy: nil,
+            execution_context: nil,
             run_id: nil
 
   @doc """
@@ -77,6 +79,7 @@ defmodule LemonCore.RunRequest do
       meta: normalize_meta(field(params, :meta)),
       cwd: normalize_cwd(field(params, :cwd)),
       tool_policy: normalize_tool_policy(field(params, :tool_policy)),
+      execution_context: normalize_execution_context(field(params, :execution_context)),
       run_id: normalize_run_id(field(params, :run_id))
     }
   end
@@ -129,7 +132,10 @@ defmodule LemonCore.RunRequest do
 
   @spec normalize_tool_policy(term()) :: map() | nil
   def normalize_tool_policy(tool_policy) when is_map(tool_policy), do: tool_policy
-  def normalize_tool_policy(_), do: nil
+  def normalize_tool_policy(_tool_policy), do: nil
+
+  @spec normalize_execution_context(term()) :: term()
+  def normalize_execution_context(execution_context), do: execution_context
 
   @spec normalize_run_id(term()) :: binary() | nil
   def normalize_run_id(run_id) when is_binary(run_id) and run_id != "", do: run_id

@@ -317,83 +317,12 @@ defmodule LemonCore.Config do
 
   defp parse_tool_policy(nil), do: nil
 
-  defp parse_tool_policy(map) when is_map(map) do
-    map = stringify_keys(map)
-
-    allow =
-      case map["allow"] do
-        "all" -> :all
-        :all -> :all
-        list when is_list(list) -> Enum.map(list, &to_string/1)
-        other when is_binary(other) -> [other]
-        _ -> :all
-      end
-
-    deny =
-      case map["deny"] do
-        list when is_list(list) -> Enum.map(list, &to_string/1)
-        other when is_binary(other) -> [other]
-        _ -> []
-      end
-
-    require_approval =
-      case map["require_approval"] do
-        list when is_list(list) -> Enum.map(list, &to_string/1)
-        other when is_binary(other) -> [other]
-        _ -> []
-      end
-
-    approvals =
-      case map["approvals"] do
-        approvals when is_map(approvals) ->
-          approvals
-          |> stringify_keys()
-          |> Enum.reduce(%{}, fn {tool_name, mode}, acc ->
-            mode =
-              case mode do
-                :always -> :always
-                "always" -> :always
-                true -> :always
-                :never -> :never
-                "never" -> :never
-                false -> :never
-                _ -> nil
-              end
-
-            if mode do
-              Map.put(acc, tool_name, mode)
-            else
-              acc
-            end
-          end)
-
-        _ ->
-          %{}
-      end
-
-    profile =
-      case map["profile"] do
-        "full_access" -> :full_access
-        "minimal_core" -> :minimal_core
-        "read_only" -> :read_only
-        "safe_mode" -> :safe_mode
-        "subagent_restricted" -> :subagent_restricted
-        "no_external" -> :no_external
-        "custom" -> :custom
-        _ -> nil
-      end
-
-    %{
-      allow: allow,
-      deny: deny,
-      require_approval: require_approval,
-      approvals: approvals,
-      no_reply: parse_boolean(map["no_reply"], false),
-      profile: profile
-    }
+  defp parse_tool_policy(policy) do
+    case LemonCore.ToolPolicy.parse(policy) do
+      {:ok, validated} -> validated
+      {:error, _reason} -> LemonCore.ToolPolicy.deny_all()
+    end
   end
-
-  defp parse_tool_policy(_), do: nil
 
   # ============================================================================
   # Raw settings loader (for profiles that Modular doesn't expose)
@@ -477,15 +406,6 @@ defmodule LemonCore.Config do
   defp parse_thinking_level("xhigh"), do: :xhigh
   defp parse_thinking_level(level) when is_atom(level), do: level
   defp parse_thinking_level(_), do: :medium
-
-  defp parse_boolean(nil, default), do: default
-  defp parse_boolean(true, _default), do: true
-  defp parse_boolean(false, _default), do: false
-  defp parse_boolean("true", _default), do: true
-  defp parse_boolean("false", _default), do: false
-  defp parse_boolean("1", _default), do: true
-  defp parse_boolean("0", _default), do: false
-  defp parse_boolean(_, default), do: default
 
   defp normalize_optional_string(value) when is_binary(value) do
     trimmed = String.trim(value)

@@ -5,7 +5,7 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
 
   alias CodingAgent.ExecutionNode.{TokenStore, Worker}
   alias CodingAgent.Executor.RemoteRequestCodec
-  alias LemonCore.ResumeToken
+  alias LemonCore.{ExecutionContext, ResumeToken, ToolPolicy}
   alias LemonGateway.ExecutionRequest
 
   defmodule FakeSocket do
@@ -247,11 +247,15 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
     })
 
     for resume_source <- [:auto, :explicit] do
+      {:ok, execution_context} =
+        ExecutionContext.new(run_id: "run-#{resume_source}", cwd: tmp_dir)
+
       request = %ExecutionRequest{
         run_id: "run-#{resume_source}",
         session_key: "session-#{resume_source}",
         prompt: "resume #{resume_source}",
         cwd: tmp_dir,
+        execution_context: execution_context,
         meta: %{resume_source: resume_source}
       }
 
@@ -340,7 +344,7 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
                     :pair_request, 30_000}
 
     assert pair_params["nodeName"] == "newphy"
-    assert pair_params["capabilities"]["coding_agent.run"]["version"] == 1
+    assert pair_params["capabilities"]["coding_agent.run"]["version"] == 2
 
     send(worker, {
       :execution_node_socket,
@@ -684,11 +688,17 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
     state = %Worker{name: "newphy", default_cwd: tmp_dir}
 
     assert {:error, :unsupported_protocol_version} =
+             Worker.execution_request(%{"version" => 3, "prompt" => "work"}, state, "invoke")
+
+    assert {:error, :invalid_execution_context} =
              Worker.execution_request(%{"version" => 2, "prompt" => "work"}, state, "invoke")
 
     assert {:error, {:cwd_not_found, _path}} =
              Worker.execution_request(
-               %{"version" => 1, "prompt" => "work", "cwd" => Path.join(tmp_dir, "missing")},
+               remote_args("invoke", %{
+                 "prompt" => "work",
+                 "cwd" => Path.join(tmp_dir, "missing")
+               }),
                state,
                "invoke"
              )
@@ -702,12 +712,51 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
 
     assert {:ok, request, _opts} =
              Worker.execution_request(
-               %{"version" => 1, "prompt" => "work", "cwd" => "projects/lemon"},
+               remote_args("invoke", %{"prompt" => "work", "cwd" => "projects/lemon"}),
                state,
                "invoke"
              )
 
     assert request.cwd == nested
+  end
+
+  @tag :tmp_dir
+  test "intersects remote authority with destination execution capabilities", %{
+    tmp_dir: tmp_dir
+  } do
+    assert {:ok, context} =
+             ExecutionContext.new(
+               run_id: "capability-run",
+               cwd: tmp_dir,
+               tool_policy: ToolPolicy.custom(allow: ["read", "write"]),
+               capabilities: ["read", "write"]
+             )
+
+    assert {:ok, remote_context} = ExecutionContext.for_remote(context, tmp_dir)
+    assert {:ok, encoded_context} = ExecutionContext.encode(remote_context)
+
+    state = %Worker{
+      name: "newphy",
+      default_cwd: tmp_dir,
+      execution_capabilities: ["read"]
+    }
+
+    assert {:ok, request, _opts} =
+             Worker.execution_request(
+               %{
+                 "version" => 2,
+                 "runId" => "capability-run",
+                 "prompt" => "work",
+                 "cwd" => tmp_dir,
+                 "executionContext" => encoded_context
+               },
+               state,
+               "invoke"
+             )
+
+    assert request.execution_context.capabilities == ["read"]
+    assert ToolPolicy.allowed?(request.tool_policy, "read")
+    refute ToolPolicy.allowed?(request.tool_policy, "write")
   end
 
   defp start_worker(tmp_dir, extra_opts) do
@@ -727,6 +776,8 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
   end
 
   defp invoke(worker, socket, invoke_id, node_id, args) do
+    args = remote_args(invoke_id, args)
+
     send(worker, {
       :execution_node_socket,
       socket,
@@ -739,5 +790,29 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
          "args" => args
        }}
     })
+  end
+
+  defp remote_args(invoke_id, args) do
+    if args["version"] == 2 and is_map(args["executionContext"]) do
+      args
+    else
+      run_id = args["runId"] || "node:#{invoke_id}"
+
+      {:ok, context} =
+        ExecutionContext.new(
+          run_id: run_id,
+          cwd: File.cwd!(),
+          tool_policy: args["toolPolicy"]
+        )
+
+      {:ok, context} = ExecutionContext.for_remote(context, args["cwd"])
+      {:ok, encoded_context} = ExecutionContext.encode(context)
+
+      args
+      |> Map.put("version", 2)
+      |> Map.put("runId", run_id)
+      |> Map.put("executionContext", encoded_context)
+      |> Map.delete("toolPolicy")
+    end
   end
 end

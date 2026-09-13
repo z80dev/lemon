@@ -16,7 +16,9 @@ defmodule CodingAgent.ExecutionNode.CLITest do
                "--repair",
                "--allow-insecure-controller",
                "--cwd",
-               "/tmp"
+               "/tmp",
+               "--capabilities",
+               "read,write"
              ])
 
     assert opts[:name] == "newphy"
@@ -26,6 +28,7 @@ defmodule CodingAgent.ExecutionNode.CLITest do
     assert opts[:repair] == true
     assert opts[:allow_insecure_controller] == true
     assert opts[:cwd] == "/tmp"
+    assert opts[:capabilities] == "read,write"
   end
 
   test "requires name and controller and documents environment token use" do
@@ -34,6 +37,8 @@ defmodule CodingAgent.ExecutionNode.CLITest do
     assert CLI.help() =~ "LEMON_NODE_OPERATOR_TOKEN"
     assert CLI.help() =~ "mode-0600"
     assert CLI.help() =~ "--allow-insecure-controller"
+    assert CLI.help() =~ "--capabilities"
+    assert CLI.help() =~ "LEMON_NODE_CAPABILITIES"
     assert CLI.help() =~ "verified encrypted overlay"
   end
 
@@ -59,5 +64,18 @@ defmodule CodingAgent.ExecutionNode.CLITest do
     System.put_env("LEMON_NODE_ALLOW_INSECURE_CONTROLLER", "true")
     assert CLI.allow_insecure_controller?([])
     assert CLI.allow_insecure_controller?(allow_insecure_controller: true)
+  end
+
+  test "normalizes the destination execution capability ceiling" do
+    assert {:ok, :all} = CLI.execution_capabilities([], nil)
+    assert {:ok, :all} = CLI.execution_capabilities([capabilities: "*"], "read")
+
+    assert {:ok, ["read", "write"]} =
+             CLI.execution_capabilities([capabilities: " read,write,read "], nil)
+
+    assert {:ok, ["bash"]} = CLI.execution_capabilities([], "bash")
+
+    assert {:error, "--capabilities must be 'all' or a comma-separated tool list"} =
+             CLI.execution_capabilities([capabilities: ""], nil)
   end
 end

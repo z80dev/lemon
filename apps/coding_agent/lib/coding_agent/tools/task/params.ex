@@ -10,7 +10,7 @@ defmodule CodingAgent.Tools.Task.Params do
   alias CodingAgent.Subagents
   alias CodingAgent.ToolPolicy
   alias CodingAgent.Tools.AskParent
-  alias LemonCore.SessionKey
+  alias LemonCore.{ExecutionContext, SessionKey}
 
   @valid_queue_modes ["collect", "followup", "steer", "steer_backlog", "interrupt"]
 
@@ -148,33 +148,53 @@ defmodule CodingAgent.Tools.Task.Params do
         {:error, "auto_followup must be a boolean"}
 
       true ->
-        {effective_prompt, guarded_tool_policy} =
-          apply_prompt_tool_guardrails(prompt, tool_policy)
+        with {:ok, supplied_policy} <- parse_optional_policy(tool_policy) do
+          {effective_prompt, guarded_tool_policy} =
+            apply_prompt_tool_guardrails(prompt, supplied_policy)
 
-        effective_tool_policy =
-          guarded_tool_policy || default_task_tool_policy()
+          effective_tool_policy =
+            guarded_tool_policy || default_task_tool_policy()
 
-        followup_queue_mode =
-          if is_nil(queue_mode), do: nil, else: normalize_queue_mode(queue_mode)
+          followup_queue_mode =
+            if is_nil(queue_mode), do: nil, else: normalize_queue_mode(queue_mode)
 
-        {:ok,
-         %{
-           description: description,
-           prompt: effective_prompt,
-           role_id: role_id,
-           model: model,
-           thinking_level: thinking_level,
-           async: async?,
-           auto_followup: auto_followup,
-           cwd: delegated_cwd,
-           tool_policy: effective_tool_policy,
-           meta: meta || %{},
-           session_key: session_key,
-           agent_id: agent_id,
-           queue_mode: followup_queue_mode,
-           resolved_queue_mode:
-             AsyncFollowups.resolve_async_followup_queue_mode(followup_queue_mode, :followup)
-         }}
+          {:ok,
+           %{
+             description: description,
+             prompt: effective_prompt,
+             role_id: role_id,
+             model: model,
+             thinking_level: thinking_level,
+             async: async?,
+             auto_followup: auto_followup,
+             cwd: delegated_cwd,
+             tool_policy: effective_tool_policy,
+             meta: meta || %{},
+             session_key: session_key,
+             agent_id: agent_id,
+             queue_mode: followup_queue_mode,
+             resolved_queue_mode:
+               AsyncFollowups.resolve_async_followup_queue_mode(followup_queue_mode, :followup)
+           }}
+        end
+    end
+  end
+
+  @spec restrict_to_parent(map(), String.t(), keyword()) :: {:ok, map()} | {:error, String.t()}
+  def restrict_to_parent(validated, cwd, opts) do
+    with {:ok, parent} <- parent_execution_context(cwd, opts),
+         {:ok, child} <-
+           ExecutionContext.child(parent,
+             run_id: "pending-task:" <> random_id(),
+             principal: parent.principal,
+             provenance: %{origin: "task", delegated_by: ExecutionContext.identity(parent)},
+             cwd: validated.cwd || cwd,
+             tool_policy: validated.tool_policy
+           ) do
+      {:ok,
+       validated |> Map.put(:tool_policy, child.tool_policy) |> Map.put(:execution_context, child)}
+    else
+      {:error, reason} -> {:error, "Task execution authority is invalid: #{inspect(reason)}"}
     end
   end
 
@@ -302,6 +322,7 @@ defmodule CodingAgent.Tools.Task.Params do
       |> maybe_put_kw(:tool_policy, validated[:tool_policy])
       |> maybe_put_kw(:session_key, validated[:session_key])
       |> maybe_put_kw(:agent_id, validated[:agent_id])
+      |> maybe_put_kw(:execution_context, validated[:execution_context])
       |> maybe_put_kw(:extra_tools, child_extra_tools_if_present(child_extra_tools))
 
     [{:cwd, cwd}, {:register, true} | Keyword.merge(base_opts, override_opts)]
@@ -359,6 +380,36 @@ defmodule CodingAgent.Tools.Task.Params do
   end
 
   defp default_task_tool_policy, do: ToolPolicy.from_profile(:leaf_worker)
+
+  defp parse_optional_policy(nil), do: {:ok, nil}
+
+  defp parse_optional_policy(policy) do
+    case ToolPolicy.parse(policy) do
+      {:ok, policy} -> {:ok, policy}
+      {:error, reason} -> {:error, "Invalid tool_policy: #{inspect(reason)}"}
+    end
+  end
+
+  defp parent_execution_context(cwd, opts) do
+    case Keyword.get(opts, :execution_context) do
+      %ExecutionContext{} = context ->
+        ExecutionContext.validate(context)
+
+      nil ->
+        ExecutionContext.new(
+          run_id: Keyword.get(opts, :parent_run_id) || Keyword.get(opts, :run_id),
+          agent_id: Keyword.get(opts, :agent_id),
+          origin: :direct,
+          cwd: cwd,
+          tool_policy: Keyword.get(opts, :tool_policy)
+        )
+
+      _ ->
+        {:error, :invalid_execution_context}
+    end
+  end
+
+  defp random_id, do: :crypto.strong_rand_bytes(8) |> Base.url_encode64(padding: false)
 
   defp infer_tool_only_policy(prompt) when is_binary(prompt) do
     case Regex.run(@tool_only_guardrail_regex, prompt) do

@@ -185,6 +185,12 @@ chat_id = 12345678
 agent_id = "default"
 ```
 
+Tool policies are parsed strictly by `LemonCore.ToolPolicy`. Unknown profiles,
+unknown or conflicting keys, malformed allow/deny/block/approval values, and
+unsupported approval modes fail closed rather than falling back to full
+access. Omitting `[profiles.<id>.tool_policy]` retains the explicit runtime
+default; supplying an invalid table produces a deny-all policy.
+
 `LemonCore.ProfileStore` is the lifecycle owner for user-managed profiles.
 Commands such as `lemon profile create research` patch only the selected
 `[profiles.<id>]` table, preserving unrelated global-config keys and comments.
@@ -255,6 +261,11 @@ environment variables to `--operator-token` / `--token` so credentials do not
 enter shell history. These values are runtime CLI inputs, not `config.toml`
 keys.
 
+`LEMON_NODE_CAPABILITIES` (or `--capabilities`) sets the destination-local tool
+ceiling to `all` or a comma-separated list such as `read,write,bash`. Every
+remote execution context is intersected with this ceiling before the local
+executor starts.
+
 Non-loopback controllers require `wss://` by default. Plaintext `ws://` needs
 `--allow-insecure-controller` or
 `LEMON_NODE_ALLOW_INSECURE_CONTROLLER=true`, and that override is acceptable
@@ -322,7 +333,7 @@ place the shared server token in `VITE_*` configuration.
 - `LEMON_DOCKER_TERMINAL_READ_ONLY_ROOTFS`, `LEMON_DOCKER_TERMINAL_TMPFS_SIZE`, `LEMON_DOCKER_TERMINAL_ALLOWED_IMAGES`
 - `LEMON_SSH_TERMINAL_TARGET`, `LEMON_SSH_TERMINAL_WORKDIR`, `LEMON_SSH_TERMINAL_PORT`, `LEMON_SSH_TERMINAL_CONNECT_TIMEOUT`, `LEMON_SSH_TERMINAL_STRICT_HOST_KEY_CHECKING`, `LEMON_SSH_TERMINAL_ALLOWED_TARGETS`
 - `LEMON_GATEWAY_HEALTH_PORT`, `LEMON_ROUTER_HEALTH_PORT`
-- `LEMON_NODE_OPERATOR_TOKEN`, `LEMON_NODE_TOKEN`, `LEMON_NODE_ALLOW_INSECURE_CONTROLLER`
+- `LEMON_NODE_OPERATOR_TOKEN`, `LEMON_NODE_TOKEN`, `LEMON_NODE_ALLOW_INSECURE_CONTROLLER`, `LEMON_NODE_CAPABILITIES`
 - `LEMON_LOG_FILE`, `LEMON_LOG_LEVEL`
 - `BRAVE_API_KEY`, `PERPLEXITY_API_KEY`, `OPENROUTER_API_KEY`, `FIRECRAWL_API_KEY`
 

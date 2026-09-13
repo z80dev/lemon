@@ -2,10 +2,11 @@ defmodule LemonControlPlane.Methods.SessionsPatchTest do
   use ExUnit.Case, async: true
 
   alias LemonControlPlane.Methods.{SessionsDelete, SessionsPatch, SessionsReset}
+  alias LemonCore.ToolPolicy
 
   describe "handle/2" do
     test "returns error when sessionKey is missing" do
-      params = %{"toolPolicy" => %{"bash" => "always"}}
+      params = %{"toolPolicy" => %{"approvals" => %{"bash" => "always"}}}
       ctx = %{auth: %{role: :operator}}
 
       {:error, error} = SessionsPatch.handle(params, ctx)
@@ -17,7 +18,9 @@ defmodule LemonControlPlane.Methods.SessionsPatchTest do
 
       params = %{
         "sessionKey" => session_key,
-        "toolPolicy" => %{"bash" => "always", "write" => "dangerous"}
+        "toolPolicy" => %{
+          "approvals" => %{"bash" => "always", "write" => "dangerous"}
+        }
       }
 
       ctx = %{auth: %{role: :operator}}
@@ -35,10 +38,28 @@ defmodule LemonControlPlane.Methods.SessionsPatchTest do
 
       # Verify policy is stored in the session policy store (where router reads from)
       stored = LemonCore.Store.get_session_policy(session_key)
-      assert stored[:tool_policy] == %{"bash" => "always", "write" => "dangerous"}
+      assert {:ok, policy} = ToolPolicy.parse(stored[:tool_policy])
+      assert policy.approvals == %{"bash" => :always, "write" => :dangerous}
 
       # Cleanup
       LemonCore.Store.delete_session_policy(session_key)
+    end
+
+    test "rejects conflicting atom and string policy fields before persistence" do
+      session_key = "session_#{System.unique_integer()}"
+
+      assert {:error,
+              {:invalid_params, "toolPolicy is invalid", %{field: "toolPolicy", reason: reason}}} =
+               SessionsPatch.handle(
+                 %{
+                   "sessionKey" => session_key,
+                   "toolPolicy" => %{"allow" => ["bash"], allow: ["read"]}
+                 },
+                 %{auth: %{role: :operator}}
+               )
+
+      assert reason =~ "conflicting_policy_key"
+      refute LemonCore.Store.get_session_policy(session_key)
     end
 
     test "stores model override" do
@@ -105,7 +126,7 @@ defmodule LemonControlPlane.Methods.SessionsPatchTest do
 
       params = %{
         "sessionKey" => session_key,
-        "toolPolicy" => %{"bash" => "never"}
+        "toolPolicy" => %{"approvals" => %{"bash" => "never"}}
       }
 
       ctx = %{auth: %{role: :operator}}
@@ -115,7 +136,8 @@ defmodule LemonControlPlane.Methods.SessionsPatchTest do
       stored = LemonCore.Store.get_session_policy(session_key)
       # Should have both existing and new keys
       assert stored[:existing_key] == "existing_value"
-      assert stored[:tool_policy] == %{"bash" => "never"}
+      assert {:ok, policy} = ToolPolicy.parse(stored[:tool_policy])
+      assert policy.approvals["bash"] == :never
 
       # Cleanup
       LemonCore.Store.delete_session_policy(session_key)
@@ -126,7 +148,7 @@ defmodule LemonControlPlane.Methods.SessionsPatchTest do
 
       params = %{
         "sessionKey" => session_key,
-        "toolPolicy" => %{"bash" => "always"},
+        "toolPolicy" => %{"approvals" => %{"bash" => "always"}},
         "model" => nil,
         "thinkingLevel" => nil
       }
@@ -136,7 +158,8 @@ defmodule LemonControlPlane.Methods.SessionsPatchTest do
       {:ok, _result} = SessionsPatch.handle(params, ctx)
 
       stored = LemonCore.Store.get_session_policy(session_key)
-      assert stored[:tool_policy] == %{"bash" => "always"}
+      assert {:ok, policy} = ToolPolicy.parse(stored[:tool_policy])
+      assert policy.approvals["bash"] == :always
       # nil values should not be stored
       assert not Map.has_key?(stored, :model)
       assert not Map.has_key?(stored, :thinking_level)
@@ -218,9 +241,8 @@ defmodule LemonControlPlane.Methods.SessionsPatchTest do
       if Code.ensure_loaded?(LemonRouter.Policy) do
         policy = LemonRouter.Policy.resolve_for_run(%{session_key: session_key})
 
-        # The tool_policy from session should be accessible
-        # (exact structure depends on Policy.merge behavior)
-        assert is_map(policy)
+        assert policy.approvals["bash"] == :always
+        refute ToolPolicy.allowed?(policy, "dangerous_tool")
       end
 
       # Cleanup

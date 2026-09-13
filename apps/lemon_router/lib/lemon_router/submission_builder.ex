@@ -10,6 +10,7 @@ defmodule LemonRouter.SubmissionBuilder do
   alias LemonCore.{
     Cwd,
     ExecutionCommand,
+    ExecutionContext,
     MapHelpers,
     RunRequest,
     SessionKey
@@ -53,116 +54,117 @@ defmodule LemonRouter.SubmissionBuilder do
 
     with {:ok, resolved_resume, resume_source} <-
            ResumeResolver.resolve(params.resume, session_key, meta),
-         {:ok, agent_profile} <- get_agent_profile(agent_id) do
-      base_tool_policy =
-        Policy.resolve_for_run(%{
-          agent_id: agent_id,
-          session_key: session_key,
-          origin: origin,
-          channel_context: MapHelpers.get_key(meta, :channel_context)
-        })
-
+         {:ok, agent_profile} <- get_agent_profile(agent_id),
+         {:ok, base_tool_policy} <-
+           Policy.resolve_validated_for_run(%{
+             agent_id: agent_id,
+             session_key: session_key,
+             origin: origin,
+             channel_context: MapHelpers.get_key(meta, :channel_context)
+           }) do
       profile_tool_policy = normalize_profile_tool_policy(agent_profile)
-
-      base_tool_policy =
-        if is_map(profile_tool_policy) and map_size(profile_tool_policy) > 0 do
-          Policy.merge(base_tool_policy, profile_tool_policy)
-        else
-          base_tool_policy
-        end
-
-      tool_policy =
-        if tool_policy_override && is_map(tool_policy_override) do
-          Policy.merge(base_tool_policy, tool_policy_override)
-        else
-          base_tool_policy
-        end
 
       cwd = resolve_effective_cwd(cwd_override, meta)
 
-      {prompt, pending_compaction_marker} =
-        if is_map(prepared_compaction_marker) do
-          {prompt, prepared_compaction_marker}
-        else
-          PendingCompaction.prepare(prompt, session_key, origin)
-        end
+      with {:ok, profile_policy} <-
+             Policy.merge_validated(base_tool_policy, profile_tool_policy),
+           {:ok, tool_policy} <-
+             Policy.merge_validated(profile_policy, tool_policy_override),
+           {:ok, execution_context} <-
+             resolve_execution_context(
+               params.execution_context,
+               run_id,
+               agent_id,
+               origin,
+               cwd,
+               tool_policy,
+               meta
+             ) do
+        {prompt, pending_compaction_marker} =
+          if is_map(prepared_compaction_marker) do
+            {prompt, prepared_compaction_marker}
+          else
+            PendingCompaction.prepare(prompt, session_key, origin)
+          end
 
-      prompt =
-        if MapHelpers.get_key(meta, :voice_transcribed) do
-          "(voice transcribed) " <> (prompt || "")
-        else
-          prompt
-        end
+        prompt =
+          if MapHelpers.get_key(meta, :voice_transcribed) do
+            "(voice transcribed) " <> (prompt || "")
+          else
+            prompt
+          end
 
-      session_model = MapHelpers.get_key(session_config, :model)
-      session_thinking_level = MapHelpers.get_key(session_config, :thinking_level)
-      request_thinking_level = MapHelpers.get_key(meta, :thinking_level)
-      profile_model = MapHelpers.get_key(agent_profile, :model)
-      profile_system_prompt = MapHelpers.get_key(agent_profile, :system_prompt)
-      default_model = default_model_from_config()
+        session_model = MapHelpers.get_key(session_config, :model)
+        session_thinking_level = MapHelpers.get_key(session_config, :thinking_level)
+        request_thinking_level = MapHelpers.get_key(meta, :thinking_level)
+        profile_model = MapHelpers.get_key(agent_profile, :model)
+        profile_system_prompt = MapHelpers.get_key(agent_profile, :system_prompt)
+        default_model = default_model_from_config()
 
-      explicit_model = request_model || MapHelpers.get_key(meta, :model)
-      explicit_system_prompt = MapHelpers.get_key(meta, :system_prompt)
+        explicit_model = request_model || MapHelpers.get_key(meta, :model)
+        explicit_system_prompt = MapHelpers.get_key(meta, :system_prompt)
 
-      history_model = resolve_history_model(prompt, cwd, explicit_model, meta)
+        history_model = resolve_history_model(prompt, cwd, explicit_model, meta)
 
-      selection =
-        ModelSelection.resolve(%{
-          explicit_model: explicit_model,
-          meta_model: MapHelpers.get_key(meta, :model),
-          session_model: session_model,
-          profile_model: profile_model,
-          history_model: history_model,
-          default_model: default_model
-        })
+        selection =
+          ModelSelection.resolve(%{
+            explicit_model: explicit_model,
+            meta_model: MapHelpers.get_key(meta, :model),
+            session_model: session_model,
+            profile_model: profile_model,
+            history_model: history_model,
+            default_model: default_model
+          })
 
-      resolved_model = selection.model
+        resolved_model = selection.model
 
-      resolved_thinking_level =
-        normalize_thinking_level(request_thinking_level || session_thinking_level)
+        resolved_thinking_level =
+          normalize_thinking_level(request_thinking_level || session_thinking_level)
 
-      resolved_system_prompt = explicit_system_prompt || profile_system_prompt
+        resolved_system_prompt = explicit_system_prompt || profile_system_prompt
 
-      conversation_key = ConversationKey.resolve(session_key, resolved_resume)
+        conversation_key = ConversationKey.resolve(session_key, resolved_resume)
 
-      enriched_meta =
-        meta
-        |> Map.merge(%{
-          origin: origin,
-          agent_id: agent_id,
-          thinking_level: resolved_thinking_level,
-          model: resolved_model,
-          resume_source: resume_source
-        })
-        |> maybe_put(:system_prompt, resolved_system_prompt)
-        |> maybe_put(:routing_feedback_model, history_model)
+        enriched_meta =
+          meta
+          |> Map.merge(%{
+            origin: origin,
+            agent_id: agent_id,
+            thinking_level: resolved_thinking_level,
+            model: resolved_model,
+            resume_source: resume_source
+          })
+          |> maybe_put(:system_prompt, resolved_system_prompt)
+          |> maybe_put(:routing_feedback_model, history_model)
 
-      execution_request = %ExecutionCommand{
-        run_id: run_id,
-        session_key: session_key,
-        prompt: prompt,
-        images: images,
-        cwd: cwd,
-        resume: resolved_resume,
-        lane: MapHelpers.get_key(meta, :lane) || :main,
-        tool_policy: tool_policy,
-        meta: enriched_meta,
-        conversation_key: conversation_key
-      }
+        execution_request = %ExecutionCommand{
+          run_id: run_id,
+          session_key: session_key,
+          prompt: prompt,
+          images: images,
+          cwd: cwd,
+          resume: resolved_resume,
+          lane: MapHelpers.get_key(meta, :lane) || :main,
+          tool_policy: execution_context.tool_policy,
+          execution_context: execution_context,
+          meta: enriched_meta,
+          conversation_key: conversation_key
+        }
 
-      {:ok,
-       Submission.new!(%{
-         run_id: run_id,
-         session_key: session_key,
-         conversation_key: conversation_key,
-         queue_mode: queue_mode,
-         execution_request: execution_request,
-         run_supervisor: MapHelpers.get_key(opts, :run_supervisor),
-         run_process_module: MapHelpers.get_key(opts, :run_process_module),
-         run_process_opts: MapHelpers.get_key(opts, :run_process_opts),
-         pending_compaction_marker: pending_compaction_marker,
-         meta: enriched_meta
-       })}
+        {:ok,
+         Submission.new!(%{
+           run_id: run_id,
+           session_key: session_key,
+           conversation_key: conversation_key,
+           queue_mode: queue_mode,
+           execution_request: execution_request,
+           run_supervisor: MapHelpers.get_key(opts, :run_supervisor),
+           run_process_module: MapHelpers.get_key(opts, :run_process_module),
+           run_process_opts: MapHelpers.get_key(opts, :run_process_opts),
+           pending_compaction_marker: pending_compaction_marker,
+           meta: enriched_meta
+         })}
+      end
     end
   end
 
@@ -230,12 +232,73 @@ defmodule LemonRouter.SubmissionBuilder do
 
   defp normalize_profile_tool_policy(profile) when is_map(profile) do
     case MapHelpers.get_key(profile, :tool_policy) do
-      policy when is_map(policy) -> policy
-      _ -> %{}
+      nil -> nil
+      policy -> policy
     end
   end
 
-  defp normalize_profile_tool_policy(_), do: %{}
+  defp normalize_profile_tool_policy(_), do: nil
+
+  defp resolve_execution_context(
+         nil,
+         run_id,
+         agent_id,
+         origin,
+         cwd,
+         tool_policy,
+         _meta
+       ) do
+    ExecutionContext.new(
+      run_id: run_id,
+      agent_id: agent_id,
+      origin: origin,
+      cwd: cwd,
+      tool_policy: tool_policy
+    )
+  end
+
+  defp resolve_execution_context(
+         %ExecutionContext{} = parent,
+         run_id,
+         agent_id,
+         origin,
+         cwd,
+         tool_policy,
+         meta
+       ) do
+    with {:ok, parent, child_cwd} <- context_parent_for_destination(parent, cwd, meta) do
+      ExecutionContext.child(parent,
+        run_id: run_id,
+        principal: %{type: "agent", id: agent_id},
+        provenance: %{origin: origin, delegated_by: ExecutionContext.identity(parent)},
+        cwd: child_cwd,
+        tool_policy: tool_policy
+      )
+    end
+  end
+
+  defp resolve_execution_context(
+         _context,
+         _run_id,
+         _agent_id,
+         _origin,
+         _cwd,
+         _tool_policy,
+         _meta
+       ),
+       do: {:error, :invalid_execution_context}
+
+  defp context_parent_for_destination(parent, cwd, meta) do
+    case MapHelpers.get_key(meta, :node) do
+      node when is_binary(node) and node not in ["", "local"] ->
+        with {:ok, remote_parent} <- ExecutionContext.for_remote(parent, nil) do
+          {:ok, remote_parent, nil}
+        end
+
+      _ ->
+        {:ok, parent, cwd}
+    end
+  end
 
   defp resolve_effective_cwd(cwd_override, meta) do
     normalize_cwd(cwd_override) || normalize_cwd(MapHelpers.get_key(meta, :cwd)) ||

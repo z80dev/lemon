@@ -356,7 +356,6 @@ defmodule CodingAgent.Coordinator do
   defp start_subagent(id, spec, state) do
     prompt = spec.prompt
     subagent_id = spec[:subagent]
-    description = spec[:description] || "Subagent #{id}"
 
     # Apply subagent prompt if specified
     final_prompt =
@@ -370,7 +369,7 @@ defmodule CodingAgent.Coordinator do
         {:error, reason}
 
       prompt_text ->
-        session_opts = build_session_opts(state, description)
+        session_opts = build_session_opts(state, spec)
 
         case CodingAgent.start_session(session_opts) do
           {:ok, pid} ->
@@ -413,12 +412,14 @@ defmodule CodingAgent.Coordinator do
   end
 
   @spec build_session_opts(t(), String.t()) :: keyword()
-  defp build_session_opts(state, _description) do
+  defp build_session_opts(state, spec) do
     base_opts = [
       cwd: state.cwd,
       model: state.model,
       thinking_level: state.thinking_level,
-      register: true
+      register: true,
+      tool_policy: spec[:tool_policy],
+      execution_context: spec[:execution_context]
     ]
 
     base_opts

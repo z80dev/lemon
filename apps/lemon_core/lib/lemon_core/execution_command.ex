@@ -17,6 +17,7 @@ defmodule LemonCore.ExecutionCommand do
     :resume,
     :lane,
     :tool_policy,
+    :execution_context,
     :conversation_key,
     meta: %{}
   ]
@@ -31,7 +32,8 @@ defmodule LemonCore.ExecutionCommand do
           cwd: String.t() | nil,
           resume: LemonCore.ResumeToken.t() | nil,
           lane: atom() | nil,
-          tool_policy: map() | nil,
+          tool_policy: LemonCore.ToolPolicy.t(),
+          execution_context: LemonCore.ExecutionContext.t(),
           conversation_key: conversation_key() | nil,
           meta: map()
         }

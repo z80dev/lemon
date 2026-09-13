@@ -3,41 +3,44 @@ defmodule LemonRouter.PolicyTest do
 
   alias LemonRouter.Policy
   alias CodingAgent.ToolPolicy
+  alias LemonCore.PolicyStore
 
   describe "merge/2" do
-    test "returns other policy when one is nil" do
-      policy = %{foo: "bar"}
-      assert Policy.merge(nil, policy) == policy
-      assert Policy.merge(policy, nil) == policy
+    test "validates the other policy when one is absent" do
+      policy = %{allow: ["read"], blocked_tools: ["bash"]}
+      merged = Policy.merge(nil, policy)
+
+      assert merged.allow == ["read"]
+      assert merged.blocked_tools == ["bash"]
     end
 
-    test "returns empty map when both are nil" do
-      assert Policy.merge(nil, nil) == %{}
+    test "uses explicit full access when all policy layers are absent" do
+      merged = Policy.merge(nil, nil)
+      assert merged.allow == :all
+      assert merged.blocked_tools == []
     end
 
-    test "second policy takes precedence for simple values" do
-      a = %{key: "value_a", other: "stays"}
-      b = %{key: "value_b"}
+    test "invalid policy fails closed" do
+      merged = Policy.merge(%{allow: ["read"]}, %{allow: 42})
+
+      assert merged.allow == []
+      refute ToolPolicy.allowed?(merged, "read")
+    end
+
+    test "uses the stricter approval mode" do
+      a = %{approvals: %{"bash" => :always}}
+      b = %{approvals: %{"bash" => :never}}
 
       result = Policy.merge(a, b)
-      assert result[:key] == "value_b"
-      assert result[:other] == "stays"
+      assert result.approvals == %{"bash" => :always}
     end
 
-    test "deep merges nested maps" do
-      a = %{nested: %{a: 1, b: 2}}
-      b = %{nested: %{b: 3, c: 4}}
+    test "intersects allow lists" do
+      a = %{allow: ["read", "write"]}
+      b = %{allow: ["write", "exec"]}
 
       result = Policy.merge(a, b)
-      assert result[:nested] == %{a: 1, b: 3, c: 4}
-    end
-
-    test "uses more restrictive allowed lists when both present" do
-      a = %{allowed: ["read", "write"]}
-      b = %{allowed: ["exec"]}
-
-      result = Policy.merge(a, b)
-      assert Enum.sort(result[:allowed]) == ["exec"]
+      assert result.allow == ["write"]
     end
 
     test "concatenates blocked lists with dedupe" do
@@ -45,41 +48,88 @@ defmodule LemonRouter.PolicyTest do
       b = %{blocked_tools: ["write", "exec"]}
 
       result = Policy.merge(a, b)
-      assert Enum.sort(result[:blocked_tools]) == ["exec", "read", "write"]
+      assert Enum.sort(result.blocked_tools) == ["exec", "read", "write"]
     end
   end
 
   describe "resolve_for_run/1" do
     test "returns empty map for basic params" do
-      result = Policy.resolve_for_run(%{
-        agent_id: "test",
-        session_key: "agent:test:main",
-        origin: :control_plane
-      })
+      result =
+        Policy.resolve_for_run(%{
+          agent_id: "test",
+          session_key: "agent:test:main",
+          origin: :control_plane
+        })
 
       assert is_map(result)
     end
 
     test "returns empty map when no special policies are configured" do
-      result = Policy.resolve_for_run(%{
-        agent_id: "default-agent",
-        session_key: "agent:default-agent:main",
-        origin: :control_plane
-      })
+      result =
+        Policy.resolve_for_run(%{
+          agent_id: "default-agent",
+          session_key: "agent:default-agent:main",
+          origin: :control_plane
+        })
 
-      # Should return an empty map, not nil
-      assert result == %{}
+      assert result.allow == :all
+      assert result.blocked_tools == []
     end
 
     test "returns empty map for channel origin without channel context" do
-      result = Policy.resolve_for_run(%{
-        agent_id: "channel-agent",
-        session_key: "agent:channel-agent:telegram:bot:dm:456",
-        origin: :channel,
-        channel_context: nil
-      })
+      result =
+        Policy.resolve_for_run(%{
+          agent_id: "channel-agent",
+          session_key: "agent:channel-agent:telegram:bot:dm:456",
+          origin: :channel,
+          channel_context: nil
+        })
 
       assert is_map(result)
+    end
+  end
+
+  describe "persisted session policies" do
+    test "preserves conflicting atom and string fields for canonical rejection" do
+      session_key = "agent:policy-conflict:#{System.unique_integer([:positive])}"
+      on_exit(fn -> PolicyStore.delete_session(session_key) end)
+
+      assert :ok =
+               PolicyStore.put_session(session_key, %{
+                 tool_policy: %{"allow" => ["bash"], allow: ["read"]}
+               })
+
+      params = %{
+        agent_id: "policy-conflict",
+        session_key: session_key,
+        origin: :control_plane
+      }
+
+      assert {:error, {:conflicting_policy_key, :allow}} =
+               Policy.resolve_validated_for_run(params)
+
+      refute ToolPolicy.allowed?(Policy.resolve_for_run(params), "read")
+      refute ToolPolicy.allowed?(Policy.resolve_for_run(params), "bash")
+    end
+
+    test "treats a legacy stored empty command allowlist as deny-all" do
+      session_key = "agent:empty-command-policy:#{System.unique_integer([:positive])}"
+      on_exit(fn -> PolicyStore.delete_session(session_key) end)
+
+      assert :ok =
+               PolicyStore.put_session(session_key, %{
+                 tool_policy: %{"allowed_commands" => []}
+               })
+
+      assert {:ok, policy} =
+               Policy.resolve_validated_for_run(%{
+                 agent_id: "empty-command-policy",
+                 session_key: session_key,
+                 origin: :control_plane
+               })
+
+      assert policy.allowed_commands == []
+      refute Policy.command_allowed?(policy, "git status")
     end
   end
 
@@ -98,7 +148,7 @@ defmodule LemonRouter.PolicyTest do
     end
 
     test "handles nil policy without crashing" do
-      assert ToolPolicy.requires_approval?(nil, "bash") == false
+      assert ToolPolicy.requires_approval?(nil, "bash") == true
     end
 
     test "handles policy with empty require_approval list" do
@@ -134,11 +184,12 @@ defmodule LemonRouter.PolicyTest do
 
     test "empty router policy does not wrap any tools" do
       # Simulate what happens in ToolRegistry
-      router_policy = Policy.resolve_for_run(%{
-        agent_id: "test",
-        session_key: "agent:test:main",
-        origin: :control_plane
-      })
+      router_policy =
+        Policy.resolve_for_run(%{
+          agent_id: "test",
+          session_key: "agent:test:main",
+          origin: :control_plane
+        })
 
       # Empty policy means no tools require approval
       assert ToolPolicy.requires_approval?(router_policy, "bash") == false
@@ -148,11 +199,12 @@ defmodule LemonRouter.PolicyTest do
     end
 
     test "router policy can be merged with a restrictive policy" do
-      router_policy = Policy.resolve_for_run(%{
-        agent_id: "test",
-        session_key: "agent:test:main",
-        origin: :control_plane
-      })
+      router_policy =
+        Policy.resolve_for_run(%{
+          agent_id: "test",
+          session_key: "agent:test:main",
+          origin: :control_plane
+        })
 
       restrictive_policy = %{require_approval: ["bash", "write"]}
 

@@ -5,6 +5,7 @@ defmodule LemonControlPlane.NamedNodeWireE2ETest do
   alias LemonControlPlane.Auth.TokenStore
   alias LemonControlPlane.Methods.ConnectChallenge
   alias LemonControlPlane.NodeStore
+  alias LemonCore.ExecutionContext
   alias LemonGateway.ExecutionRequest
 
   defmodule NamedNodeWireExecutor do
@@ -266,11 +267,17 @@ defmodule LemonControlPlane.NamedNodeWireE2ETest do
     assert connection_pid != worker
     connection_ref = Process.monitor(connection_pid)
 
+    run_id = "wire-run-#{suffix}"
+    assert {:ok, execution_context} = ExecutionContext.new(run_id: run_id, cwd: tmp_dir)
+    assert {:ok, execution_context} = ExecutionContext.for_remote(execution_context, tmp_dir)
+    assert {:ok, encoded_context} = ExecutionContext.encode(execution_context)
+
     invoke_args = %{
-      "version" => 1,
-      "runId" => "wire-run-#{suffix}",
+      "version" => 2,
+      "runId" => run_id,
       "prompt" => "cross the wire",
       "cwd" => tmp_dir,
+      "executionContext" => encoded_context,
       "meta" => %{}
     }
 
@@ -334,11 +341,20 @@ defmodule LemonControlPlane.NamedNodeWireE2ETest do
 
     send(context.runner_pid, :stop)
 
+    cancel_run_id = "wire-cancel-#{suffix}"
+
+    assert {:ok, cancel_context_wire} =
+             ExecutionContext.reidentify(execution_context, cancel_run_id)
+
+    assert {:ok, encoded_cancel_context} = ExecutionContext.encode(cancel_context_wire)
+
     assert {:ok, cancel_id} =
              LemonCore.NodeRegistry.invoke(
                node_name,
                "coding_agent.run",
-               Map.put(invoke_args, "runId", "wire-cancel-#{suffix}"),
+               invoke_args
+               |> Map.put("runId", cancel_run_id)
+               |> Map.put("executionContext", encoded_cancel_context),
                recipient: self(),
                timeout_ms: 3_000
              )

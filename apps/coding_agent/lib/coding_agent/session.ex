@@ -50,7 +50,7 @@ defmodule CodingAgent.Session do
 
   alias LemonAgent.ContextRegistry
   alias LemonAgent.Types.AgentTool
-  alias LemonCore.Introspection
+  alias LemonCore.{ExecutionContext, Introspection, ToolPolicy}
   alias CodingAgent.AsyncFollowups
   alias CodingAgent.Extensions
   alias CodingAgent.Session.BackgroundTasks
@@ -117,6 +117,7 @@ defmodule CodingAgent.Session do
     :convert_to_llm,
     :transform_context,
     :tool_policy,
+    :execution_context,
     :approval_context,
     :extensions,
     :hooks,
@@ -171,7 +172,8 @@ defmodule CodingAgent.Session do
           convert_to_llm: (list() -> list()),
           transform_context: (list(), reference() | nil ->
                                 list() | {:ok, list()} | {:error, term()}),
-          tool_policy: map() | nil,
+          tool_policy: ToolPolicy.t(),
+          execution_context: ExecutionContext.t(),
           approval_context: map() | nil,
           extensions: [module()],
           hooks: keyword([function()]),
@@ -198,12 +200,10 @@ defmodule CodingAgent.Session do
   @doc """
   Starts a new Session GenServer.
 
-  ## Options (required)
-
-    * `:cwd` - Working directory for the session
-
   ## Options (optional)
 
+    * `:cwd` - Working directory for the session. Defaults to the validated
+      execution-context root, then the process working directory.
     * `:model` - The AI model to use (`LemonAi.Types.Model.t()`). If not provided,
       uses `default_model` from SettingsManager.
     * `:system_prompt` - Explicit system prompt text. Takes highest precedence
@@ -272,12 +272,66 @@ defmodule CodingAgent.Session do
   """
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts) do
-    {name, opts} = Keyword.pop(opts, :name)
+    with {:ok, opts} <- validate_execution_options(opts) do
+      {name, opts} = Keyword.pop(opts, :name)
 
-    if name do
-      GenServer.start_link(__MODULE__, opts, name: name)
-    else
-      GenServer.start_link(__MODULE__, opts)
+      if name do
+        GenServer.start_link(__MODULE__, opts, name: name)
+      else
+        GenServer.start_link(__MODULE__, opts)
+      end
+    end
+  end
+
+  defp validate_execution_options(opts) when is_list(opts) do
+    context = Keyword.get(opts, :execution_context)
+    supplied_policy = Keyword.get(opts, :tool_policy)
+
+    with {:ok, context} <- resolve_session_execution_context(context, opts),
+         {:ok, cwd} <- resolve_session_cwd(Keyword.get(opts, :cwd), context),
+         {:ok, context} <- ExecutionContext.bind_workspace(context, cwd),
+         {:ok, policy} <- restrict_session_policy(context.tool_policy, supplied_policy) do
+      context = %{context | tool_policy: policy}
+
+      {:ok,
+       opts
+       |> Keyword.put(:cwd, cwd)
+       |> Keyword.put(:execution_context, context)
+       |> Keyword.put(:tool_policy, policy)}
+    end
+  end
+
+  defp validate_execution_options(_opts), do: {:error, :invalid_session_options}
+
+  defp resolve_session_execution_context(nil, opts) do
+    ExecutionContext.new(
+      run_id: Keyword.get(opts, :run_id),
+      agent_id: Keyword.get(opts, :agent_id),
+      origin: Keyword.get(opts, :execution_origin, :direct),
+      cwd: Keyword.get(opts, :cwd),
+      tool_policy: Keyword.get(opts, :tool_policy)
+    )
+  end
+
+  defp resolve_session_execution_context(%ExecutionContext{} = context, _opts),
+    do: ExecutionContext.validate(context)
+
+  defp resolve_session_execution_context(_context, _opts),
+    do: {:error, :invalid_execution_context}
+
+  defp resolve_session_cwd(cwd, _context) when is_binary(cwd), do: {:ok, cwd}
+
+  defp resolve_session_cwd(nil, %{workspace_scope: %{root: root}}) when is_binary(root),
+    do: {:ok, root}
+
+  defp resolve_session_cwd(nil, _context), do: {:ok, File.cwd!()}
+  defp resolve_session_cwd(_cwd, _context), do: {:error, :invalid_workspace_scope}
+
+  defp restrict_session_policy(context_policy, nil), do: {:ok, context_policy}
+
+  defp restrict_session_policy(context_policy, supplied_policy) do
+    with {:ok, supplied_policy} <- ToolPolicy.parse(supplied_policy) do
+      ToolPolicy.restrict(context_policy, supplied_policy)
     end
   end
 

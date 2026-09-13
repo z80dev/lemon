@@ -96,6 +96,7 @@ defmodule CodingAgent.Session.Lifecycle do
     model = ModelResolver.resolve_session_model(Keyword.get(opts, :model), settings_manager)
     thinking_level = Keyword.get(opts, :thinking_level) || settings_manager.default_thinking_level
     tool_policy = Keyword.get(opts, :tool_policy)
+    execution_context = Keyword.fetch!(opts, :execution_context)
 
     approval_context =
       resolve_approval_context(opts, session_manager.header.id, tool_policy)
@@ -123,6 +124,7 @@ defmodule CodingAgent.Session.Lifecycle do
       |> Keyword.put(:workspace_dir, workspace_dir)
       |> Keyword.put(:ui_context, ui_context)
       |> Keyword.put(:tool_policy, tool_policy)
+      |> Keyword.put(:execution_context, execution_context)
       |> Keyword.put(:approval_context, approval_context)
       |> Keyword.put(:wasm_tools, wasm_boot.wasm_tools)
       |> Keyword.put(:wasm_status, wasm_boot.wasm_status)
@@ -258,6 +260,7 @@ defmodule CodingAgent.Session.Lifecycle do
       convert_to_llm: convert_to_llm,
       transform_context: transform_context,
       tool_policy: tool_policy,
+      execution_context: execution_context,
       approval_context: approval_context,
       extensions: lifecycle.extensions,
       hooks: lifecycle.hooks,
@@ -303,6 +306,7 @@ defmodule CodingAgent.Session.Lifecycle do
       workspace_dir: state.workspace_dir,
       ui_context: state.ui_context,
       tool_policy: state.tool_policy,
+      execution_context: state.execution_context,
       approval_context: state.approval_context,
       wasm_tools: wasm_reload.wasm_tools,
       wasm_status: wasm_reload.wasm_status,

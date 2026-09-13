@@ -111,9 +111,10 @@ defmodule LemonRouter.SubmissionBuilderTest do
 
     tool_policy = submission.execution_request.tool_policy
 
-    assert get_in(tool_policy, [:approvals, "bash"]) == :never
-    assert "bash" in (tool_policy[:blocked_tools] || [])
-    assert "rm" in (tool_policy[:blocked_tools] || [])
+    assert tool_policy.approvals["bash"] == :always
+    assert "bash" in tool_policy.blocked_tools
+    assert "rm" in tool_policy.blocked_tools
+    assert %LemonCore.ExecutionContext{} = submission.execution_request.execution_context
   end
 
   test "unknown agent returns {:error, {:unknown_agent_id, ...}}" do
@@ -122,6 +123,19 @@ defmodule LemonRouter.SubmissionBuilderTest do
     assert {:error, {:unknown_agent_id, "missing-agent"}} =
              SubmissionBuilder.build(
                request(session_key, %{agent_id: "missing-agent"}),
+               orchestrator_state()
+             )
+  end
+
+  test "malformed supplied policy rejects admission instead of broadening authority" do
+    session_key = unique_session_key("invalid-tool-policy")
+
+    assert {:error, {:invalid_policy_field, :allow}} =
+             SubmissionBuilder.build(
+               request(session_key, %{
+                 agent_id: "test",
+                 tool_policy: %{"allow" => %{"unexpected" => true}}
+               }),
                orchestrator_state()
              )
   end

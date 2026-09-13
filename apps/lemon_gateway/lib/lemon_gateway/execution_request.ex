@@ -18,6 +18,7 @@ defmodule LemonGateway.ExecutionRequest do
     :resume,
     :lane,
     :tool_policy,
+    :execution_context,
     :conversation_key,
     images: [],
     meta: %{}
@@ -33,7 +34,8 @@ defmodule LemonGateway.ExecutionRequest do
           cwd: String.t() | nil,
           resume: LemonCore.ResumeToken.t() | nil,
           lane: LemonGateway.Types.lane() | nil,
-          tool_policy: map() | nil,
+          tool_policy: LemonCore.ToolPolicy.t(),
+          execution_context: LemonCore.ExecutionContext.t(),
           conversation_key: conversation_key() | nil,
           meta: map()
         }
@@ -52,6 +54,7 @@ defmodule LemonGateway.ExecutionRequest do
       resume: command.resume,
       lane: command.lane,
       tool_policy: command.tool_policy,
+      execution_context: command.execution_context,
       conversation_key: command.conversation_key,
       meta: ExecutionCommand.normalize_meta(command.meta)
     }
@@ -71,6 +74,7 @@ defmodule LemonGateway.ExecutionRequest do
       resume: request.resume,
       lane: request.lane,
       tool_policy: request.tool_policy,
+      execution_context: request.execution_context,
       conversation_key: request.conversation_key,
       meta: normalize_meta(request.meta)
     }
