@@ -16,6 +16,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   policy fails closed, child authority is intersected with its parent, and
   named-node protocol v2 intersects the bounded context with the destination's
   local capability ceiling before revalidating it.
+- Session policy patches are strictly validated and stored canonically.
+  Conflicting atom/string fields now fail closed. A stored
+  `allowed_commands: []` now intentionally means no commands; omit the field or
+  use `"all"` for unrestricted command execution.
 
 - Refreshed the public website, README, and onboarding docs with a shared Lemon
   visual identity, clearer task navigation, and current feature guidance.

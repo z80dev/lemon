@@ -7,6 +7,7 @@ defmodule CodingAgent.Tools.Task.Execution do
   alias CodingAgent.TaskProgressBindingStore
   alias CodingAgent.TaskStore
   alias CodingAgent.Tools.Task.{Async, Followup, Runner}
+  alias LemonCore.ExecutionContext
 
   @spec run(
           String.t() | nil,
@@ -50,6 +51,27 @@ defmodule CodingAgent.Tools.Task.Execution do
   end
 
   defp build_execution_context(tool_call_id, validated, cwd, opts) do
+    run_id =
+      if validated.async do
+        run_graph = Keyword.get(opts, :run_graph_module, RunGraph)
+
+        run_graph.new_run(%{
+          type: :task,
+          description: validated.description,
+          parent: Keyword.get(opts, :parent_run_id)
+        })
+      end
+
+    case reidentify_child_context(validated.execution_context, run_id) do
+      {:ok, child_context} ->
+        build_execution_context(tool_call_id, validated, cwd, opts, run_id, child_context)
+
+      {:error, reason} ->
+        {:error, "Task execution identity is invalid: #{inspect(reason)}"}
+    end
+  end
+
+  defp build_execution_context(tool_call_id, validated, cwd, opts, run_id, child_context) do
     description = validated.description
     prompt = validated.prompt
     role_id = validated.role_id
@@ -61,23 +83,6 @@ defmodule CodingAgent.Tools.Task.Execution do
     parent_run_id = Keyword.get(opts, :parent_run_id)
     root_action_id = Keyword.get(opts, :root_action_id) || tool_call_id
     surface = Keyword.get(opts, :surface) || default_surface(root_action_id)
-
-    run_id =
-      if async? do
-        RunGraph.new_run(%{type: :task, description: description, parent: parent_run_id})
-      end
-
-    child_context =
-      case run_id do
-        run_id when is_binary(run_id) ->
-          {:ok, context} =
-            LemonCore.ExecutionContext.reidentify(validated.execution_context, run_id)
-
-          context
-
-        _ ->
-          validated.execution_context
-      end
 
     validated =
       validated
@@ -170,6 +175,13 @@ defmodule CodingAgent.Tools.Task.Execution do
         {:error, budget_reservation_error(reason)}
     end
   end
+
+  defp reidentify_child_context(context, nil), do: {:ok, context}
+
+  defp reidentify_child_context(context, run_id) when is_binary(run_id) and run_id != "",
+    do: ExecutionContext.reidentify(context, run_id)
+
+  defp reidentify_child_context(_context, _run_id), do: {:error, :invalid_run_id}
 
   defp reserve_parent_budget(run_id, parent_run_id, opts)
        when is_binary(run_id) and is_binary(parent_run_id) do

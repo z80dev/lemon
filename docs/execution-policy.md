@@ -42,6 +42,18 @@ fail closed when called with malformed data.
 Router policy layers and child requests use this operation. A later policy
 layer can narrow authority but cannot undo an earlier restriction.
 
+### Stored-policy upgrade semantics
+
+Session policy envelopes retain their nested `tool_policy` payload until the
+canonical parser sees it. Conflicting atom/string keys are therefore rejected
+instead of being normalized away.
+
+The canonical meaning of `allowed_commands: []` is **allow no commands**.
+Legacy router code treated both a missing value and an empty list as
+unrestricted; after this upgrade, operators who intend unrestricted command
+execution must omit the field or set it to `"all"`. The stricter interpretation
+is intentional so an ambiguous stored restriction cannot fail open.
+
 ## Execution context
 
 `LemonCore.ExecutionContext` binds the following immutable values:
@@ -58,6 +70,14 @@ router-level agent delegation, background runs, and session forks inherit or
 derive context from the parent. `ExecutionContext.child/2` rejects workspace
 escape and intersects policy, capabilities, and limits. Use `subset?/2` to
 check the invariant.
+
+Workspace `read_only` mode is an admission guard for the maintained direct
+workspace mutation set returned by
+`ExecutionContext.direct_workspace_mutation_tools/0` (`write`, `edit`,
+`hashline_edit`, `patch`, `bash`, and `execute_code`). It is not an
+operating-system filesystem sandbox and does not claim to classify extension
+tools or indirect state effects. Those surfaces must also be excluded by the
+validated tool policy and their own capability checks.
 
 ## Named execution nodes
 

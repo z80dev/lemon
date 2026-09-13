@@ -53,6 +53,38 @@ defmodule LemonCore.ExecutionContextTest do
   end
 
   @tag :tmp_dir
+  test "read-only workspace mode rejects every classified direct mutation tool", %{
+    tmp_dir: tmp_dir
+  } do
+    assert ExecutionContext.direct_workspace_mutation_tools() == [
+             "write",
+             "edit",
+             "hashline_edit",
+             "patch",
+             "bash",
+             "execute_code"
+           ]
+
+    for tool <- ExecutionContext.direct_workspace_mutation_tools() do
+      assert {:error, :read_only_workspace_policy_mismatch} =
+               ExecutionContext.new(
+                 run_id: "read-only-#{tool}",
+                 workspace_scope: %{root: tmp_dir, mode: :read_only},
+                 tool_policy: ToolPolicy.custom(allow: [tool])
+               )
+    end
+
+    assert {:ok, context} =
+             ExecutionContext.new(
+               run_id: "read-only-reader",
+               workspace_scope: %{root: tmp_dir, mode: :read_only},
+               tool_policy: ToolPolicy.custom(allow: ["read"])
+             )
+
+    assert context.workspace_scope.mode == :read_only
+  end
+
+  @tag :tmp_dir
   test "destination capability restriction preserves identity and cannot widen authority", %{
     tmp_dir: tmp_dir
   } do

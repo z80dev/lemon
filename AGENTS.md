@@ -382,6 +382,9 @@ contexts intersect parent policy, workspace, capabilities, and limits rather
 than replacing them. Named-node protocol v2 transports one bounded versioned
 context, intersects it with the destination worker's local capability ceiling,
 and validates it again at the destination.
+Workspace `read_only` mode is an admission guard for the maintained direct
+mutation-tool set, not an operating-system filesystem sandbox; extension and
+indirect effects still require policy and capability restrictions.
 
 For named delegation, the `agent` tool's optional `node` parameter selects a
 live, uniquely named execution node. Omit it or use `"local"` for local

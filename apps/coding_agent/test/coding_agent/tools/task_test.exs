@@ -7,6 +7,10 @@ defmodule CodingAgent.Tools.TaskTest do
   alias LemonAgent.AbortSignal
   alias LemonCore.ExecutionContext
 
+  defmodule EmptyRunGraph do
+    def new_run(_attrs), do: ""
+  end
+
   setup do
     TaskStore.clear()
     RunGraph.clear()
@@ -112,6 +116,27 @@ defmodule CodingAgent.Tools.TaskTest do
                )
 
       refute Map.has_key?(validated, :engine)
+    end
+  end
+
+  describe "execute/6 identity validation" do
+    test "returns a fail-closed error when the run graph produces an empty run id" do
+      assert {:error, message} =
+               Task.execute(
+                 "invalid-run-id",
+                 %{
+                   "description" => "invalid identity",
+                   "prompt" => "Do not start this task.",
+                   "async" => true
+                 },
+                 nil,
+                 nil,
+                 "/tmp",
+                 run_graph_module: EmptyRunGraph
+               )
+
+      assert message =~ "Task execution identity is invalid"
+      assert message =~ "invalid_run_id"
     end
   end
 

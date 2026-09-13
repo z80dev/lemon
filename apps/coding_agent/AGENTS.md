@@ -253,6 +253,10 @@ work tools such as `read`, `write`, and `bash`, while recursive `task`/`agent`
 delegation remains blocked unless both the parent context and requested child
 policy authorize it. Child policy, workspace, capabilities, and limits are
 always intersected with the parent context.
+`ExecutionContext` read-only workspace mode rejects the maintained direct
+mutation-tool set (`write`, `edit`, `hashline_edit`, `patch`, `bash`, and
+`execute_code`) at admission. It is not an OS filesystem sandbox; extension and
+indirect state effects remain governed by tool policy and capability checks.
 
 The `agent` tool's optional `node` parameter selects execution placement for a
 delegated router run. Omit it or use `"local"` for the controller host. Named

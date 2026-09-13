@@ -448,24 +448,17 @@ defmodule CodingAgent.SessionTest do
       assert File.read!(spill_path) == original
     end
 
-    test "fails without cwd" do
-      # Session.start_link crashes the spawned process, so we need to catch the exit
-      Process.flag(:trap_exit, true)
-      result = Session.start_link(model: mock_model())
+    test "defaults cwd for direct session starts" do
+      assert {:ok, session} =
+               Session.start_link(
+                 model: mock_model(),
+                 stream_fn: mock_stream_fn_single(assistant_message("Hello!"))
+               )
 
-      case result do
-        {:error, {:key_not_found, :cwd}} ->
-          :ok
-
-        {:error, _reason} ->
-          :ok
-
-        {:ok, pid} ->
-          # Should receive EXIT if process crashed during init
-          assert_receive {:EXIT, ^pid, _reason}, 100
-      end
-
-      Process.flag(:trap_exit, false)
+      state = Session.get_state(session)
+      assert state.cwd == File.cwd!()
+      assert state.execution_context.workspace_scope.root == File.cwd!()
+      GenServer.stop(session)
     end
 
     test "fails without model" do

@@ -3,6 +3,7 @@ defmodule LemonRouter.PolicyTest do
 
   alias LemonRouter.Policy
   alias CodingAgent.ToolPolicy
+  alias LemonCore.PolicyStore
 
   describe "merge/2" do
     test "validates the other policy when one is absent" do
@@ -85,6 +86,50 @@ defmodule LemonRouter.PolicyTest do
         })
 
       assert is_map(result)
+    end
+  end
+
+  describe "persisted session policies" do
+    test "preserves conflicting atom and string fields for canonical rejection" do
+      session_key = "agent:policy-conflict:#{System.unique_integer([:positive])}"
+      on_exit(fn -> PolicyStore.delete_session(session_key) end)
+
+      assert :ok =
+               PolicyStore.put_session(session_key, %{
+                 tool_policy: %{"allow" => ["bash"], allow: ["read"]}
+               })
+
+      params = %{
+        agent_id: "policy-conflict",
+        session_key: session_key,
+        origin: :control_plane
+      }
+
+      assert {:error, {:conflicting_policy_key, :allow}} =
+               Policy.resolve_validated_for_run(params)
+
+      refute ToolPolicy.allowed?(Policy.resolve_for_run(params), "read")
+      refute ToolPolicy.allowed?(Policy.resolve_for_run(params), "bash")
+    end
+
+    test "treats a legacy stored empty command allowlist as deny-all" do
+      session_key = "agent:empty-command-policy:#{System.unique_integer([:positive])}"
+      on_exit(fn -> PolicyStore.delete_session(session_key) end)
+
+      assert :ok =
+               PolicyStore.put_session(session_key, %{
+                 tool_policy: %{"allowed_commands" => []}
+               })
+
+      assert {:ok, policy} =
+               Policy.resolve_validated_for_run(%{
+                 agent_id: "empty-command-policy",
+                 session_key: session_key,
+                 origin: :control_plane
+               })
+
+      assert policy.allowed_commands == []
+      refute Policy.command_allowed?(policy, "git status")
     end
   end
 

@@ -35,12 +35,11 @@ defmodule LemonRouter.Policy do
   alias LemonCore.ToolPolicy
 
   @doc """
-  Merge two tool policies.
+  Intersect two tool policies.
 
-  The second policy takes precedence, with some special handling:
-  - Lists are concatenated (e.g., allowed_commands)
-  - Maps are deep merged
-  - Booleans use the stricter value for "deny" semantics
+  The result cannot authorize more than either input. Invalid input returns a
+  deny-all policy; execution admission uses `merge_validated/2` to retain the
+  explicit validation error.
   """
   @spec merge(term(), term()) :: ToolPolicy.t()
   def merge(policy_a, policy_b) do
@@ -98,14 +97,12 @@ defmodule LemonRouter.Policy do
         %{}
       end
 
-    # Get session overrides
-    session_policy = get_session_policy(session_key)
-
     # Get runtime overrides
     runtime_policy = get_runtime_policy()
 
     # Merge in order: agent -> channel -> session -> runtime
-    with {:ok, policy} <- merge_validated(nil, agent_policy),
+    with {:ok, session_policy} <- get_session_policy(session_key),
+         {:ok, policy} <- merge_validated(nil, agent_policy),
          {:ok, policy} <- merge_validated(policy, channel_policy),
          {:ok, policy} <- merge_validated(policy, session_policy),
          {:ok, policy} <- merge_validated(policy, runtime_policy) do
@@ -211,15 +208,15 @@ defmodule LemonRouter.Policy do
   end
 
   # Load session overrides from store
-  defp get_session_policy(nil), do: nil
+  defp get_session_policy(nil), do: {:ok, nil}
 
   defp get_session_policy(session_key) do
     case LemonCore.PolicyStore.get_session(session_key) do
-      nil -> nil
+      nil -> {:ok, nil}
       policy when is_map(policy) -> session_tool_policy(policy)
     end
   rescue
-    _ -> ToolPolicy.deny_all()
+    _ -> {:error, :session_policy_unavailable}
   end
 
   # Load operator runtime overrides from store
@@ -247,20 +244,51 @@ defmodule LemonRouter.Policy do
       :sandbox
     ]
 
-    selected =
-      Enum.reduce(keys, %{}, fn key, acc ->
-        cond do
-          Map.has_key?(policy, key) ->
-            Map.put(acc, key, Map.get(policy, key))
+    with {:ok, nested_policy} <- nested_session_tool_policy(policy) do
+      source = if is_nil(nested_policy), do: policy, else: nested_policy
 
-          Map.has_key?(policy, Atom.to_string(key)) ->
-            Map.put(acc, Atom.to_string(key), Map.get(policy, Atom.to_string(key)))
-
-          true ->
+      if is_map(source) do
+        selected =
+          Enum.reduce(keys, %{}, fn key, acc ->
             acc
-        end
-      end)
+            |> copy_present_policy_key(source, key)
+            |> copy_present_policy_key(source, Atom.to_string(key))
+          end)
 
-    if map_size(selected) == 0, do: nil, else: selected
+        {:ok, if(map_size(selected) == 0, do: nil, else: selected)}
+      else
+        {:ok, source}
+      end
+    end
+  end
+
+  defp nested_session_tool_policy(policy) do
+    atom_value = Map.fetch(policy, :tool_policy)
+    string_value = Map.fetch(policy, "tool_policy")
+
+    case {atom_value, string_value} do
+      {:error, :error} ->
+        {:ok, nil}
+
+      {{:ok, value}, :error} ->
+        {:ok, value}
+
+      {:error, {:ok, value}} ->
+        {:ok, value}
+
+      {{:ok, value}, {:ok, value}} ->
+        {:ok, value}
+
+      {{:ok, _atom_value}, {:ok, _string_value}} ->
+        {:error, {:conflicting_session_policy_key, :tool_policy}}
+    end
+  end
+
+  defp copy_present_policy_key(acc, source, key) do
+    if is_map(source) and Map.has_key?(source, key) do
+      Map.put(acc, key, Map.get(source, key))
+    else
+      acc
+    end
   end
 end

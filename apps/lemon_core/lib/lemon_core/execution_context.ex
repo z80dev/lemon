@@ -16,6 +16,14 @@ defmodule LemonCore.ExecutionContext do
   @version 1
   @limit_keys [:max_steps, :max_tokens, :deadline_ms, :max_file_size]
   @modes [:read_only, :read_write]
+  @direct_workspace_mutation_tools [
+    "write",
+    "edit",
+    "hashline_edit",
+    "patch",
+    "bash",
+    "execute_code"
+  ]
 
   @enforce_keys [
     :version,
@@ -49,6 +57,17 @@ defmodule LemonCore.ExecutionContext do
 
   @doc "Current named-node representation version."
   def version, do: @version
+
+  @doc """
+  Built-in tools classified as direct workspace mutation surfaces.
+
+  Read-only workspace mode rejects policies that authorize these tools. This
+  classification is an admission guard, not an operating-system filesystem
+  sandbox; extension and indirect state effects remain governed by tool policy
+  and their own capability checks.
+  """
+  @spec direct_workspace_mutation_tools() :: [String.t()]
+  def direct_workspace_mutation_tools, do: @direct_workspace_mutation_tools
 
   @doc "Builds and validates a root execution context."
   @spec new(keyword() | map()) :: {:ok, t()} | {:error, term()}
@@ -392,9 +411,7 @@ defmodule LemonCore.ExecutionContext do
   end
 
   defp validate_workspace_policy(%{mode: :read_only}, policy) do
-    write_tools = ["write", "edit", "hashline_edit", "patch", "bash", "execute_code"]
-
-    if Enum.any?(write_tools, &ToolPolicy.allowed?(policy, &1)) do
+    if Enum.any?(@direct_workspace_mutation_tools, &ToolPolicy.allowed?(policy, &1)) do
       {:error, :read_only_workspace_policy_mismatch}
     else
       :ok

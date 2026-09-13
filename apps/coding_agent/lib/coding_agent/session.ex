@@ -200,12 +200,10 @@ defmodule CodingAgent.Session do
   @doc """
   Starts a new Session GenServer.
 
-  ## Options (required)
-
-    * `:cwd` - Working directory for the session
-
   ## Options (optional)
 
+    * `:cwd` - Working directory for the session. Defaults to the validated
+      execution-context root, then the process working directory.
     * `:model` - The AI model to use (`LemonAi.Types.Model.t()`). If not provided,
       uses `default_model` from SettingsManager.
     * `:system_prompt` - Explicit system prompt text. Takes highest precedence
@@ -286,17 +284,18 @@ defmodule CodingAgent.Session do
   end
 
   defp validate_execution_options(opts) when is_list(opts) do
-    cwd = Keyword.get(opts, :cwd)
     context = Keyword.get(opts, :execution_context)
     supplied_policy = Keyword.get(opts, :tool_policy)
 
     with {:ok, context} <- resolve_session_execution_context(context, opts),
+         {:ok, cwd} <- resolve_session_cwd(Keyword.get(opts, :cwd), context),
          {:ok, context} <- ExecutionContext.bind_workspace(context, cwd),
          {:ok, policy} <- restrict_session_policy(context.tool_policy, supplied_policy) do
       context = %{context | tool_policy: policy}
 
       {:ok,
        opts
+       |> Keyword.put(:cwd, cwd)
        |> Keyword.put(:execution_context, context)
        |> Keyword.put(:tool_policy, policy)}
     end
@@ -319,6 +318,14 @@ defmodule CodingAgent.Session do
 
   defp resolve_session_execution_context(_context, _opts),
     do: {:error, :invalid_execution_context}
+
+  defp resolve_session_cwd(cwd, _context) when is_binary(cwd), do: {:ok, cwd}
+
+  defp resolve_session_cwd(nil, %{workspace_scope: %{root: root}}) when is_binary(root),
+    do: {:ok, root}
+
+  defp resolve_session_cwd(nil, _context), do: {:ok, File.cwd!()}
+  defp resolve_session_cwd(_cwd, _context), do: {:error, :invalid_workspace_scope}
 
   defp restrict_session_policy(context_policy, nil), do: {:ok, context_policy}
 
