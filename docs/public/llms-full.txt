@@ -473,6 +473,12 @@ The refactor quality rules also enforce a few concrete ownership boundaries:
 - Gateway-owned transports submit through `LemonCore.RouterBridge` when they need router normalization. They must not take a compile-time dependency on `LemonRouter.RunOrchestrator`.
 - Router-owned active session state is only exposed through `LemonRouter.Router` and `LemonCore.RouterBridge`. External apps must not reference `LemonRouter.SessionRegistry` or `LemonRouter.SessionReadModel` directly.
 - Top-level requests and execution commands never validate or carry a runner identity. `engine: "lemon"` remains fixed run provenance in events and stores. `ResumeToken.engine` and historical `ChatState.last_engine` remain persisted discriminators; only native tokens may resume a top-level run, while non-native historical values are retained and quarantined from resume. Subagents execute natively in-process (`CodingAgent.Session` via `CodingAgent.Coordinator`); there is no external CLI runner registry. Router should use `LemonCore.Cwd` for default cwd resolution instead of `LemonGateway.Cwd`.
+- Execution authorization is shared core language:
+  `LemonCore.ToolPolicy` strictly validates supplied policy and
+  `LemonCore.ExecutionContext` binds run lineage, principal/provenance,
+  workspace, effective capabilities, and limits. Router layers and child
+  execution use authority intersection; named nodes transport and revalidate
+  only the versioned context rather than independently normalizing policy.
 - Shared domains in `lemon_core` / `lemon_control_plane` must use typed wrappers such as `RunStore`, `ChatStateStore`, `PolicyStore`, and `ProjectBindingStore` instead of bypassing them with raw store helpers.
 - A module that opts into `LemonCore.Store.Table` may use generic Store operations only for its own statically declared table names. The AST-based rule resolves aliases, module attributes, direct calls, `apply/3`, default/explicit server arities, and every table in multi-entry operations; declaring one table never exempts access to another.
 
@@ -534,6 +540,7 @@ These rules complement the dependency policy table above. They must be respected
 | LSP server driver | `lemon_lsp` | `lemon_core`, `coding_agent`, `lemon_control_plane` |
 | Skill platform logic (manifest, registry, installer, lockfile, source router, audit) | `lemon_skills` | `coding_agent`, `lemon_core`, `lemon_router` |
 | Prompt assembly and tool registration | `coding_agent` | `lemon_skills`, `lemon_core` |
+| Execution policy and authority context contracts | `lemon_core` | Any product-specific app |
 | Model/session routing | `lemon_router` | `coding_agent`, `lemon_skills` |
 | Runtime boot, profile, health, env detection | `lemon_core/runtime` | Shell scripts (only thin wrappers allowed there) |
 
@@ -2828,6 +2835,12 @@ chat_id = 12345678
 agent_id = "default"
 ```
 
+Tool policies are parsed strictly by `LemonCore.ToolPolicy`. Unknown profiles,
+unknown or conflicting keys, malformed allow/deny/block/approval values, and
+unsupported approval modes fail closed rather than falling back to full
+access. Omitting `[profiles.<id>.tool_policy]` retains the explicit runtime
+default; supplying an invalid table produces a deny-all policy.
+
 `LemonCore.ProfileStore` is the lifecycle owner for user-managed profiles.
 Commands such as `lemon profile create research` patch only the selected
 `[profiles.<id>]` table, preserving unrelated global-config keys and comments.
@@ -2898,6 +2911,11 @@ environment variables to `--operator-token` / `--token` so credentials do not
 enter shell history. These values are runtime CLI inputs, not `config.toml`
 keys.
 
+`LEMON_NODE_CAPABILITIES` (or `--capabilities`) sets the destination-local tool
+ceiling to `all` or a comma-separated list such as `read,write,bash`. Every
+remote execution context is intersected with this ceiling before the local
+executor starts.
+
 Non-loopback controllers require `wss://` by default. Plaintext `ws://` needs
 `--allow-insecure-controller` or
 `LEMON_NODE_ALLOW_INSECURE_CONTROLLER=true`, and that override is acceptable
@@ -2965,7 +2983,7 @@ place the shared server token in `VITE_*` configuration.
 - `LEMON_DOCKER_TERMINAL_READ_ONLY_ROOTFS`, `LEMON_DOCKER_TERMINAL_TMPFS_SIZE`, `LEMON_DOCKER_TERMINAL_ALLOWED_IMAGES`
 - `LEMON_SSH_TERMINAL_TARGET`, `LEMON_SSH_TERMINAL_WORKDIR`, `LEMON_SSH_TERMINAL_PORT`, `LEMON_SSH_TERMINAL_CONNECT_TIMEOUT`, `LEMON_SSH_TERMINAL_STRICT_HOST_KEY_CHECKING`, `LEMON_SSH_TERMINAL_ALLOWED_TARGETS`
 - `LEMON_GATEWAY_HEALTH_PORT`, `LEMON_ROUTER_HEALTH_PORT`
-- `LEMON_NODE_OPERATOR_TOKEN`, `LEMON_NODE_TOKEN`, `LEMON_NODE_ALLOW_INSECURE_CONTROLLER`
+- `LEMON_NODE_OPERATOR_TOKEN`, `LEMON_NODE_TOKEN`, `LEMON_NODE_ALLOW_INSECURE_CONTROLLER`, `LEMON_NODE_CAPABILITIES`
 - `LEMON_LOG_FILE`, `LEMON_LOG_LEVEL`
 - `BRAVE_API_KEY`, `PERPLEXITY_API_KEY`, `OPENROUTER_API_KEY`, `FIRECRAWL_API_KEY`
 
