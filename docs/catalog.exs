@@ -37,6 +37,7 @@
     %{path: "docs/config.md", last_reviewed: ~D[2026-08-30], max_age_days: 60},
     %{path: "docs/error-reporting.md", last_reviewed: ~D[2026-08-10], max_age_days: 60},
     %{path: "docs/context.md", last_reviewed: ~D[2026-06-17]},
+    %{path: "docs/execution-policy.md", last_reviewed: ~D[2026-09-13], max_age_days: 90},
     %{path: "docs/subagent-parent-questions.md", last_reviewed: ~D[2026-08-09], max_age_days: 60},
     %{path: "docs/extensions.md", last_reviewed: ~D[2026-09-01], max_age_days: 60},
     %{path: "docs/long-running-agent-harnesses.md", last_reviewed: ~D[2026-08-10]},
