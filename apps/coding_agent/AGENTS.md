@@ -245,9 +245,14 @@ the `kanban` tool through tool policy to avoid recursive board management.
 | `CodingAgent.Tools` | Tool factory -- `coding_tools/2`, `read_only_tools/2`, `all_tools/2`, `get_tool/3` |
 | `CodingAgent.ToolRegistry` | Dynamic tool resolution (builtin > WASM > extension); ETS extension cache |
 | `CodingAgent.ToolExecutor` | Approval-gated tool execution wrapper |
-| `CodingAgent.ToolPolicy` | Tool allow/deny/approval policies; predefined profiles (`:full_access`, `:orchestrator`, `:leaf_worker`, `:read_only`, `:safe_mode`, `:subagent_restricted`, `:no_external`, `:minimal_core`) |
+| `CodingAgent.ToolPolicy` | Compatibility facade over strict `LemonCore.ToolPolicy`; predefined profiles (`:full_access`, `:orchestrator`, `:leaf_worker`, `:read_only`, `:safe_mode`, `:subagent_restricted`, `:no_external`, `:minimal_core`) |
+| `LemonCore.ExecutionContext` | Canonical validated run/attempt/parent identity, provenance, policy, workspace, capabilities, and limits carried by sessions and named-node requests |
 
-Internal `task` children default to the `:leaf_worker` policy. They keep normal work tools such as `read`, `write`, and `bash`, but recursive `task`/`agent` delegation is blocked unless a caller passes an explicit `tool_policy` override.
+Internal `task` children request the `:leaf_worker` policy. They keep normal
+work tools such as `read`, `write`, and `bash`, while recursive `task`/`agent`
+delegation remains blocked unless both the parent context and requested child
+policy authorize it. Child policy, workspace, capabilities, and limits are
+always intersected with the parent context.
 
 The `agent` tool's optional `node` parameter selects execution placement for a
 delegated router run. Omit it or use `"local"` for the controller host. Named

@@ -9,7 +9,8 @@ It does:
 
 - normalize `LemonCore.RunRequest`
 - build router-owned `%LemonRouter.Submission{}` values that wrap `%LemonCore.ExecutionCommand{}`
-- resolve policy, model, engine, cwd, and structured resume
+- resolve validated `LemonCore.ToolPolicy`, canonical
+  `LemonCore.ExecutionContext`, model, cwd, and structured resume
 - choose conversation keys
 - enforce queue semantics in `SessionCoordinator`
 - manage active run lifecycle in `RunProcess`
@@ -59,6 +60,10 @@ Inbound transport
 - Router may reference `LemonChannels.Dispatcher`, but not `LemonChannels.OutboundPayload`.
 - Router may emit `LemonCore.DeliveryIntent`, but channel renderers decide payload shape.
 - Router builds `%LemonCore.ExecutionCommand{}` and calls the configured `LemonCore.EngineRuntime`; it must not construct `%LemonGateway.ExecutionRequest{}` or call `LemonGateway.Runtime` directly.
+- Router policy layers are strict authority intersections. Invalid supplied or
+  stored policy rejects admission, and a delegated request derives a child
+  `LemonCore.ExecutionContext` whose policy, workspace, capabilities, and
+  limits cannot exceed its parent.
 - Run-specific aborts are serialized through `RunOrchestrator` before coordinator/process cancellation. Its bounded in-memory tombstone map is backed by a compact durable run-ID fence: expiry may stop active cancellation/cache behavior, but must never make an aborted fixed ID executable. When submission wins, the same serialization guarantees normal cancellation sees the accepted run. Tombstone registration failure must propagate so the bridge can report an unknown mutation outcome; it must never be swallowed into `:ok`.
 - Durable accepted/submitting admission rows retain only state plus semantic identity. Replay reads and periodic cleanup CAS-compact legacy rows and sanitize legacy abort reasons, so session identifiers, timestamps, and arbitrary caller terms do not remain in permanent fences.
 - Router owns pending-compaction prompt mutation.

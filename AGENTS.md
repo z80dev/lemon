@@ -376,6 +376,12 @@ the router and can select the local executor or a named destination. Both paths
 reuse `coding_agent` → `lemon_agent` → `lemon_ai`; there are no vendor CLI
 subprocess runners.
 
+Every path carries a validated `LemonCore.ExecutionContext`. Its canonical
+`LemonCore.ToolPolicy` fails closed on malformed supplied input, and child
+contexts intersect parent policy, workspace, capabilities, and limits rather
+than replacing them. Named-node protocol v2 transports one bounded versioned
+context and validates it again at the destination.
+
 For named delegation, the `agent` tool's optional `node` parameter selects a
 live, uniquely named execution node. Omit it or use `"local"` for local
 execution. Only JSON-safe execution-request data crosses the WebSocket
@@ -637,6 +643,7 @@ This repository includes an optional pre-push hook that uses **kimi** to review 
 - `docs/testing.md` - Canonical repo-level test lanes and CI parity guidance
 - `docs/assistant_bootstrap_contract.md` - Bootstrap contract
 - `docs/context.md` - Context management
+- `docs/execution-policy.md` - Fail-closed tool policy and canonical execution authority context
 - `docs/long-running-agent-harnesses.md` - Long-running harness primitives that keep coding sessions structured across multi-step work
 - `docs/user-guide/web.md` - Browser chat/resume plus authenticated session management, redacted export, and guarded prune
 - `docs/user-guide/context-references.md` - Bounded context preview/resolve, document formats, budgets, and safety contract

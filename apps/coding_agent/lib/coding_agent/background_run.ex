@@ -171,27 +171,33 @@ defmodule CodingAgent.BackgroundRun do
     }
 
     id = TaskStore.new_task(attrs)
-    session_opts = build_session_opts(id, session_id, source, opts)
 
-    worker_opts = [
-      id: id,
-      prompt: prompt,
-      session_id: session_id,
-      session_opts: session_opts,
-      timeout_ms: timeout_ms(opts),
-      runner: Keyword.get(opts, :runner),
-      task_supervisor: Keyword.get(opts, :task_supervisor, CodingAgent.TaskSupervisor)
-    ]
+    case build_session_opts(id, session_id, source, opts) do
+      {:ok, session_opts} ->
+        worker_opts = [
+          id: id,
+          prompt: prompt,
+          session_id: session_id,
+          session_opts: session_opts,
+          timeout_ms: timeout_ms(opts),
+          runner: Keyword.get(opts, :runner),
+          task_supervisor: Keyword.get(opts, :task_supervisor, CodingAgent.TaskSupervisor)
+        ]
 
-    worker_opts = Enum.reject(worker_opts, fn {_key, value} -> is_nil(value) end)
+        worker_opts = Enum.reject(worker_opts, fn {_key, value} -> is_nil(value) end)
 
-    case Supervisor.start_run(worker_opts) do
-      {:ok, _pid} ->
-        {:ok, %{id: id, status: :queued}}
+        case Supervisor.start_run(worker_opts) do
+          {:ok, _pid} ->
+            {:ok, %{id: id, status: :queued}}
+
+          {:error, reason} ->
+            TaskStore.fail(id, {:start_failed, reason})
+            {:error, :start_failed}
+        end
 
       {:error, reason} ->
-        TaskStore.fail(id, {:start_failed, reason})
-        {:error, :start_failed}
+        TaskStore.fail(id, {:invalid_execution_context, reason})
+        {:error, :invalid_execution_context}
     end
   end
 
@@ -201,24 +207,53 @@ defmodule CodingAgent.BackgroundRun do
     thinking_level = Keyword.get(opts, :thinking_level) || source[:thinking_level]
     system_prompt = Keyword.get(opts, :system_prompt) || source[:explicit_system_prompt]
 
-    [
+    with {:ok, parent} <- background_parent_context(source, cwd),
+         {:ok, context} <-
+           LemonCore.ExecutionContext.child(parent,
+             run_id: id,
+             principal: parent.principal,
+             provenance: %{
+               origin: "background",
+               delegated_by: LemonCore.ExecutionContext.identity(parent)
+             },
+             cwd: cwd,
+             tool_policy: Keyword.get(opts, :tool_policy) || source[:tool_policy]
+           ) do
+      {:ok,
+       [
+         cwd: cwd,
+         model: model,
+         thinking_level: thinking_level,
+         system_prompt: system_prompt,
+         settings_manager: source[:settings_manager],
+         workspace_dir: source[:workspace_dir],
+         tool_policy: context.tool_policy,
+         execution_context: context,
+         stream_fn: Keyword.get(opts, :stream_fn),
+         get_api_key: Keyword.get(opts, :get_api_key),
+         session_id: session_id,
+         session_key: "background:#{id}",
+         agent_id: Keyword.get(opts, :agent_id) || source[:agent_id] || "default",
+         run_id: id,
+         session_scope: :main,
+         register: true
+       ]
+       |> Enum.reject(fn {_key, value} -> is_nil(value) end)}
+    end
+  end
+
+  defp background_parent_context(%{execution_context: context}, _cwd)
+       when is_struct(context, LemonCore.ExecutionContext),
+       do: LemonCore.ExecutionContext.validate(context)
+
+  defp background_parent_context(source, cwd) do
+    LemonCore.ExecutionContext.new(
+      run_id: source[:run_id] || source[:session_id],
+      agent_id: source[:agent_id],
+      origin: :direct,
       cwd: cwd,
-      model: model,
-      thinking_level: thinking_level,
-      system_prompt: system_prompt,
-      settings_manager: source[:settings_manager],
-      workspace_dir: source[:workspace_dir],
-      tool_policy: Keyword.get(opts, :tool_policy) || source[:tool_policy],
-      stream_fn: Keyword.get(opts, :stream_fn),
-      get_api_key: Keyword.get(opts, :get_api_key),
-      session_id: session_id,
-      session_key: "background:#{id}",
-      agent_id: Keyword.get(opts, :agent_id) || source[:agent_id] || "default",
-      run_id: id,
-      session_scope: :main,
-      register: true
-    ]
-    |> Enum.reject(fn {_key, value} -> is_nil(value) end)
+      tool_policy: source[:tool_policy]
+    )
   end
 
   defp resolve_parent(pid) when is_pid(pid), do: snapshot_parent(pid)
@@ -244,6 +279,8 @@ defmodule CodingAgent.BackgroundRun do
       settings_manager: state.settings_manager,
       workspace_dir: state.workspace_dir,
       tool_policy: state.tool_policy,
+      execution_context: state.execution_context,
+      run_id: state.run_id,
       agent_id: state.agent_id
     }
   rescue

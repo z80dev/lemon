@@ -9,29 +9,34 @@ defmodule CodingAgent.Executor.RemoteRequestCodec do
   cwd; omitted remote cwd is encoded as `nil` for destination-local resolution.
   """
 
-  alias LemonCore.ResumeToken
+  alias LemonCore.{ExecutionContext, ResumeToken}
   alias LemonGateway.ExecutionRequest
 
-  @version 1
+  @version 2
 
   @spec encode(ExecutionRequest.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def encode(request, opts \\ [])
 
   def encode(%ExecutionRequest{} = request, opts) do
-    payload = %{
-      "version" => @version,
-      "runId" => request.run_id,
-      "sessionKey" => request.session_key,
-      "prompt" => request.prompt,
-      "images" => request.images || [],
-      "cwd" => remote_cwd(request),
-      "resume" => encode_resume(request.resume),
-      "lane" => encode_atom(request.lane),
-      "toolPolicy" => request.tool_policy,
-      "meta" => request.meta || %{}
-    }
+    cwd = remote_cwd(request)
 
-    json_round_trip(payload, opts)
+    with {:ok, remote_context} <- ExecutionContext.for_remote(request.execution_context, cwd),
+         {:ok, encoded_context} <- ExecutionContext.encode(remote_context) do
+      payload = %{
+        "version" => @version,
+        "runId" => request.run_id,
+        "sessionKey" => request.session_key,
+        "prompt" => request.prompt,
+        "images" => request.images || [],
+        "cwd" => cwd,
+        "resume" => encode_resume(request.resume),
+        "lane" => encode_atom(request.lane),
+        "executionContext" => encoded_context,
+        "meta" => request.meta || %{}
+      }
+
+      json_round_trip(payload, opts)
+    end
   end
 
   def encode(_, _opts), do: {:error, :invalid_execution_request}

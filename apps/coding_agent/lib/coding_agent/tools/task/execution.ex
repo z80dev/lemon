@@ -67,6 +67,23 @@ defmodule CodingAgent.Tools.Task.Execution do
         RunGraph.new_run(%{type: :task, description: description, parent: parent_run_id})
       end
 
+    child_context =
+      case run_id do
+        run_id when is_binary(run_id) ->
+          {:ok, context} =
+            LemonCore.ExecutionContext.reidentify(validated.execution_context, run_id)
+
+          context
+
+        _ ->
+          validated.execution_context
+      end
+
+    validated =
+      validated
+      |> Map.put(:execution_context, child_context)
+      |> Map.put(:tool_policy, child_context.tool_policy)
+
     child_scope_id = run_id || "child_scope:" <> generate_child_scope_id()
 
     task_id =
@@ -185,7 +202,9 @@ defmodule CodingAgent.Tools.Task.Execution do
             execution.coordinator,
             execution.prompt,
             execution.description,
-            execution.role_id
+            execution.role_id,
+            tool_policy: execution.validated.tool_policy,
+            execution_context: execution.validated.execution_context
           )
 
         true ->

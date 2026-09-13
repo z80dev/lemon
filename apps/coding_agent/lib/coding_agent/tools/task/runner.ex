@@ -14,15 +14,17 @@ defmodule CodingAgent.Tools.Task.Runner do
   @await_poll_ms 200
   @default_task_session_timeout_ms nil
 
-  @spec execute_via_coordinator(term(), String.t(), String.t(), String.t() | nil) ::
+  @spec execute_via_coordinator(term(), String.t(), String.t(), String.t() | nil, keyword()) ::
           AgentToolResult.t() | {:error, String.t()}
-  def execute_via_coordinator(coordinator, prompt, description, role_id) do
+  def execute_via_coordinator(coordinator, prompt, description, role_id, opts \\ []) do
     task_run_id = generate_task_run_id()
 
     case Coordinator.run_subagent(coordinator,
            prompt: prompt,
            subagent: role_id,
-           description: description
+           description: description,
+           tool_policy: Keyword.get(opts, :tool_policy),
+           execution_context: Keyword.get(opts, :execution_context)
          ) do
       {:ok, result_text} ->
         %AgentToolResult{

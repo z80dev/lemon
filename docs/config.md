@@ -185,6 +185,12 @@ chat_id = 12345678
 agent_id = "default"
 ```
 
+Tool policies are parsed strictly by `LemonCore.ToolPolicy`. Unknown profiles,
+unknown or conflicting keys, malformed allow/deny/block/approval values, and
+unsupported approval modes fail closed rather than falling back to full
+access. Omitting `[profiles.<id>.tool_policy]` retains the explicit runtime
+default; supplying an invalid table produces a deny-all policy.
+
 `LemonCore.ProfileStore` is the lifecycle owner for user-managed profiles.
 Commands such as `lemon profile create research` patch only the selected
 `[profiles.<id>]` table, preserving unrelated global-config keys and comments.

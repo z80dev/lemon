@@ -51,6 +51,8 @@ defmodule CodingAgent.SessionFork do
         cwd: cwd,
         parent_session: original_session_id,
         model: model,
+        tool_policy: Map.get(original_state, :tool_policy),
+        execution_context: Map.get(original_state, :execution_context),
         system_prompt: build_fork_system_prompt(original_state, summary)
       ]
 

@@ -68,6 +68,8 @@ This is the **base app** of the Lemon umbrella. All other apps depend on it. It 
 | `LemonCore.InboundMessage` | Normalized inbound message from any channel; adapters build the struct directly |
 | `LemonCore.RunRequest` | Canonical run submission struct used by router-facing callers |
 | `LemonCore.ExecutionCommand` | Canonical execution command handed from router to a configured engine runtime |
+| `LemonCore.ToolPolicy` | Strict validated tool authorization and authority intersection |
+| `LemonCore.ExecutionContext` | Versioned run lineage, principal/provenance, policy, workspace, capability, and limit contract |
 | `LemonCore.EngineRuntime` | Behaviour for runtime implementations that submit/cancel runs without router depending on gateway internals |
 | `LemonCore.RunPhase` | Canonical cross-subsystem run lifecycle phase vocabulary |
 | `LemonCore.RunPhaseGraph` | Valid transition graph for canonical run lifecycle phases |

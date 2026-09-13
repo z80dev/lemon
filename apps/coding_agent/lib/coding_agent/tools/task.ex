@@ -138,6 +138,7 @@ defmodule CodingAgent.Tools.Task do
 
   defp do_execute(tool_call_id, params, signal, on_update, cwd, opts) do
     with {:ok, validated} <- Params.validate_run_params(params, cwd),
+         {:ok, validated} <- Params.restrict_to_parent(validated, cwd, opts),
          :ok <- Params.check_budget_and_policy(validated, opts) do
       Execution.run(tool_call_id, validated, signal, on_update, cwd, opts)
     end

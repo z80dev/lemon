@@ -17,7 +17,17 @@ defmodule CodingAgent.Tools.Agent do
   alias LemonAi.Types.TextContent
   alias CodingAgent.AsyncFollowups
   alias CodingAgent.{JoinAwait, RunGraph, Subagents, TaskStore}
-  alias LemonCore.{Bus, Events, RouterBridge, RunRequest, SessionKey, Store}
+
+  alias LemonCore.{
+    Bus,
+    Events,
+    ExecutionContext,
+    RouterBridge,
+    RunRequest,
+    SessionKey,
+    Store,
+    ToolPolicy
+  }
 
   @valid_actions ["run", "poll", "join"]
   @valid_queue_modes ["collect", "followup", "steer", "steer_backlog", "interrupt"]
@@ -162,6 +172,8 @@ defmodule CodingAgent.Tools.Agent do
 
   defp do_run(params, cwd, opts) do
     with {:ok, validated} <- validate_run_params(params, cwd),
+         {:ok, parent_context} <- parent_execution_context(cwd, opts),
+         validated <- Map.put(validated, :execution_context, parent_context),
          {:ok, delegated_session_key} <- resolve_delegated_session_key(validated, opts),
          {:ok, request} <- build_run_request(validated, delegated_session_key, cwd, opts),
          {:ok, run_id} <- submit_run(request, opts) do
@@ -599,6 +611,7 @@ defmodule CodingAgent.Tools.Agent do
           model: validated.model,
           cwd: validated.cwd || cwd,
           tool_policy: validated.tool_policy,
+          execution_context: validated.execution_context,
           meta: meta
         })
 
@@ -1308,33 +1321,63 @@ defmodule CodingAgent.Tools.Agent do
         {:error, "model must be a string"}
 
       true ->
-        {:ok,
-         %{
-           agent_id: agent_id,
-           prompt: prompt,
-           description: description || "Delegated run for #{agent_id}",
-           role_id: role_id,
-           async: async?,
-           auto_followup: auto_followup,
-           continue_session: continue_session,
-           explicit_session_key: explicit_session_key,
-           queue_mode: normalize_queue_mode(queue_mode),
-           followup_queue_mode:
-             if(is_nil(followup_queue_mode),
-               do: nil,
-               else: normalize_queue_mode(followup_queue_mode)
-             ),
-           timeout_ms: timeout_ms,
-           tool_policy: tool_policy,
-           meta: meta || %{},
-           cwd: delegated_cwd,
-           node: node,
-           model: normalize_optional_string(model)
-         }}
+        with {:ok, tool_policy} <- parse_optional_tool_policy(tool_policy) do
+          {:ok,
+           %{
+             agent_id: agent_id,
+             prompt: prompt,
+             description: description || "Delegated run for #{agent_id}",
+             role_id: role_id,
+             async: async?,
+             auto_followup: auto_followup,
+             continue_session: continue_session,
+             explicit_session_key: explicit_session_key,
+             queue_mode: normalize_queue_mode(queue_mode),
+             followup_queue_mode:
+               if(is_nil(followup_queue_mode),
+                 do: nil,
+                 else: normalize_queue_mode(followup_queue_mode)
+               ),
+             timeout_ms: timeout_ms,
+             tool_policy: tool_policy,
+             meta: meta || %{},
+             cwd: delegated_cwd,
+             node: node,
+             model: normalize_optional_string(model)
+           }}
+        end
     end
   end
 
   defp validate_run_params(_, _cwd), do: {:error, "params must be an object"}
+
+  defp parse_optional_tool_policy(nil), do: {:ok, nil}
+
+  defp parse_optional_tool_policy(policy) do
+    case ToolPolicy.parse(policy) do
+      {:ok, policy} -> {:ok, policy}
+      {:error, reason} -> {:error, "Invalid tool_policy: #{inspect(reason)}"}
+    end
+  end
+
+  defp parent_execution_context(cwd, opts) do
+    case Keyword.get(opts, :execution_context) do
+      %ExecutionContext{} = context ->
+        ExecutionContext.validate(context)
+
+      nil ->
+        ExecutionContext.new(
+          run_id: Keyword.get(opts, :run_id),
+          agent_id: Keyword.get(opts, :agent_id),
+          origin: :direct,
+          cwd: cwd,
+          tool_policy: Keyword.get(opts, :tool_policy)
+        )
+
+      _ ->
+        {:error, :invalid_execution_context}
+    end
+  end
 
   defp maybe_apply_role_prompt(prompt, nil, _cwd), do: {:ok, prompt}
   defp maybe_apply_role_prompt(prompt, "", _cwd), do: {:ok, prompt}

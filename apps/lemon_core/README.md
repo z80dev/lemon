@@ -173,6 +173,8 @@ ids, message bodies, proof details, credentials, or secret names.
 | `LemonCore.Store.JsonlBackend` | Append-only JSONL backend (human-readable, portable) |
 | `LemonCore.Store.ReadCache` | Public ETS read-through cache for hot domains |
 | `LemonCore.PolicyStore` | Typed policy API and metadata owner for the existing agent, channel, session, and runtime policy tables |
+| `LemonCore.ToolPolicy` | Strict validated tool authorization shared by every execution boundary |
+| `LemonCore.ExecutionContext` | Versioned identity, provenance, policy, workspace, capability, and limit authority for root and child runs |
 
 ### Memory
 
