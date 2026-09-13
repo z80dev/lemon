@@ -850,13 +850,16 @@ a verified overlay such as Tailscale.
 Node names are trimmed and durably unique per controller. `node.list` reports
 paired identities with online/offline status derived from the live registry;
 only an authenticated live connection is executable. The worker advertises
-`coding_agent.run` version 1, invocation-bound steer/redirect, and targeted
+`coding_agent.run` version 2, invocation-bound steer/redirect, and targeted
 cancellation. It accepts only that run method, strips `meta.node` before local
-execution, and validates the selected local working directory.
+execution, validates the selected local working directory, and intersects the
+transported authority with its destination-local capability ceiling. Configure
+that ceiling with `--capabilities read,write,...` or
+`LEMON_NODE_CAPABILITIES`; omitted configuration means `all`.
 
 The cross-node payload includes only JSON-safe execution request data such as
-prompt, images, session/run identity, resume token, tool policy, metadata, and
-explicit cwd intent. Source-side executor options, provider credentials,
+prompt, images, a bounded versioned execution context, resume token, metadata,
+and explicit cwd intent. Source-side executor options, provider credentials,
 callbacks, and BEAM process state are never serialized. The destination
 resolves its own provider credentials, restores `resume_source` to the
 `:auto`/`:explicit` semantics used by the native runner, and uses its own

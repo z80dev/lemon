@@ -68,9 +68,13 @@ from this object. The destination:
 1. validates the outer protocol version and payload bounds;
 2. decodes and validates the execution context;
 3. checks that the context run ID matches the request run ID;
-4. resolves the destination-local cwd;
-5. binds the context workspace to that canonical path;
-6. invokes the executor, which validates the context again.
+4. intersects the context with its destination-local capability ceiling;
+5. resolves the destination-local cwd;
+6. binds the context workspace to that canonical path;
+7. invokes the executor, which validates the context again.
 
 The wire request does not carry a second independently normalized tool policy.
 Malformed or missing contexts are rejected before a destination session starts.
+Named workers default to an `all` ceiling and can narrow it with
+`--capabilities read,write,...` or `LEMON_NODE_CAPABILITIES`; a transported
+context can never add a capability omitted by that destination.

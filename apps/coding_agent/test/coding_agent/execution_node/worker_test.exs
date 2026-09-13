@@ -5,7 +5,7 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
 
   alias CodingAgent.ExecutionNode.{TokenStore, Worker}
   alias CodingAgent.Executor.RemoteRequestCodec
-  alias LemonCore.{ExecutionContext, ResumeToken}
+  alias LemonCore.{ExecutionContext, ResumeToken, ToolPolicy}
   alias LemonGateway.ExecutionRequest
 
   defmodule FakeSocket do
@@ -718,6 +718,45 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
              )
 
     assert request.cwd == nested
+  end
+
+  @tag :tmp_dir
+  test "intersects remote authority with destination execution capabilities", %{
+    tmp_dir: tmp_dir
+  } do
+    assert {:ok, context} =
+             ExecutionContext.new(
+               run_id: "capability-run",
+               cwd: tmp_dir,
+               tool_policy: ToolPolicy.custom(allow: ["read", "write"]),
+               capabilities: ["read", "write"]
+             )
+
+    assert {:ok, remote_context} = ExecutionContext.for_remote(context, tmp_dir)
+    assert {:ok, encoded_context} = ExecutionContext.encode(remote_context)
+
+    state = %Worker{
+      name: "newphy",
+      default_cwd: tmp_dir,
+      execution_capabilities: ["read"]
+    }
+
+    assert {:ok, request, _opts} =
+             Worker.execution_request(
+               %{
+                 "version" => 2,
+                 "runId" => "capability-run",
+                 "prompt" => "work",
+                 "cwd" => tmp_dir,
+                 "executionContext" => encoded_context
+               },
+               state,
+               "invoke"
+             )
+
+    assert request.execution_context.capabilities == ["read"]
+    assert ToolPolicy.allowed?(request.tool_policy, "read")
+    refute ToolPolicy.allowed?(request.tool_policy, "write")
   end
 
   defp start_worker(tmp_dir, extra_opts) do

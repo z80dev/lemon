@@ -380,7 +380,8 @@ Every path carries a validated `LemonCore.ExecutionContext`. Its canonical
 `LemonCore.ToolPolicy` fails closed on malformed supplied input, and child
 contexts intersect parent policy, workspace, capabilities, and limits rather
 than replacing them. Named-node protocol v2 transports one bounded versioned
-context and validates it again at the destination.
+context, intersects it with the destination worker's local capability ceiling,
+and validates it again at the destination.
 
 For named delegation, the `agent` tool's optional `node` parameter selects a
 live, uniquely named execution node. Omit it or use `"local"` for local
@@ -507,6 +508,7 @@ Key env vars:
 - `LEMON_GATEWAY_HEALTH_PORT` / `LEMON_ROUTER_HEALTH_PORT` - Health server port overrides for local parallel runtimes
 - `LEMON_NODE_OPERATOR_TOKEN` / `LEMON_NODE_TOKEN` - Pairing-only operator token or existing session token for `./bin/lemon node join`; prefer these to CLI token flags
 - `LEMON_NODE_ALLOW_INSECURE_CONTROLLER` - Explicitly permit non-loopback plaintext `ws://` for development or a verified encrypted overlay only; secure `wss://` remains the default
+- `LEMON_NODE_CAPABILITIES` - Optional `all` or comma-separated destination-local tool ceiling for named-node execution contexts
 - `LEMON_TELEGRAM_DEFAULT_CHAT_ID` / `LEMON_DISCORD_DEFAULT_CHANNEL_ID` - Optional env overrides for `./bin/lemon send`; config fallbacks live in `[gateway.telegram] default_chat_id/default_thread_id/default_topic_id` and `[gateway.discord] default_channel_id/default_thread_id`
 - `DEEPGRAM_API_KEY` - Speech-to-text
 - `ELEVENLABS_API_KEY` / `ELEVENLABS_VOICE_ID` - TTS

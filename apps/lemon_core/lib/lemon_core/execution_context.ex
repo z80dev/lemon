@@ -158,6 +158,25 @@ defmodule LemonCore.ExecutionContext do
     end
   end
 
+  @doc """
+  Intersects an existing context with a destination-local capability ceiling.
+
+  This preserves execution identity and provenance while ensuring a named
+  destination cannot execute tools outside its own configured capability set.
+  """
+  @spec restrict_capabilities(t(), capability_set() | nil) :: {:ok, t()} | {:error, term()}
+  def restrict_capabilities(context, destination_capabilities) do
+    with {:ok, context} <- validate(context),
+         {:ok, destination_capabilities} <-
+           parse_capabilities(destination_capabilities, :all),
+         capabilities <-
+           intersect_capabilities(context.capabilities, destination_capabilities),
+         {:ok, tool_policy} <-
+           restrict_policy_to_capabilities(context.tool_policy, capabilities) do
+      validate(%{context | capabilities: capabilities, tool_policy: tool_policy})
+    end
+  end
+
   @doc "Binds an unbound remote workspace to the destination-selected root."
   @spec bind_workspace(t(), String.t()) :: {:ok, t()} | {:error, term()}
   def bind_workspace(context, cwd) when is_binary(cwd) do

@@ -14,7 +14,8 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   and a canonical `LemonCore.ExecutionContext` across direct, routed,
   delegated, background, gateway, and named-node execution. Invalid supplied
   policy fails closed, child authority is intersected with its parent, and
-  named-node protocol v2 revalidates the bounded context at the destination.
+  named-node protocol v2 intersects the bounded context with the destination's
+  local capability ceiling before revalidating it.
 
 - Refreshed the public website, README, and onboarding docs with a shared Lemon
   visual identity, clearer task navigation, and current feature guidance.

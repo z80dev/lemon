@@ -13,6 +13,7 @@ defmodule CodingAgent.ExecutionNode.CLI do
     repair: :boolean,
     allow_insecure_controller: :boolean,
     cwd: :string,
+    capabilities: :string,
     help: :boolean
   ]
 
@@ -36,6 +37,7 @@ defmodule CodingAgent.ExecutionNode.CLI do
 
     with {:ok, opts} <- parse(argv),
          false <- opts[:help] == true,
+         {:ok, execution_capabilities} <- execution_capabilities(opts),
          {:ok, _started} <- Application.ensure_all_started(:coding_agent),
          {:ok, worker} <-
            Worker.start_link(
@@ -48,6 +50,7 @@ defmodule CodingAgent.ExecutionNode.CLI do
              repair: opts[:repair] == true,
              allow_insecure_controller: allow_insecure_controller?(opts),
              cwd: default_cwd(opts),
+             execution_capabilities: execution_capabilities,
              notify_pid: self(),
              socket_module: Keyword.get(deps, :socket_module, CodingAgent.ExecutionNode.Socket),
              executor_module: Keyword.get(deps, :executor_module, CodingAgent.Executor),
@@ -129,6 +132,47 @@ defmodule CodingAgent.ExecutionNode.CLI do
       enabled_env?("LEMON_NODE_ALLOW_INSECURE_CONTROLLER")
   end
 
+  @doc false
+  @spec execution_capabilities(keyword(), String.t() | nil) ::
+          {:ok, :all | [String.t()]} | {:error, String.t()}
+  def execution_capabilities(
+        opts,
+        env_value \\ System.get_env("LEMON_NODE_CAPABILITIES")
+      ) do
+    case opts[:capabilities] || env_value do
+      nil ->
+        {:ok, :all}
+
+      value when is_binary(value) ->
+        value = String.trim(value)
+
+        cond do
+          value in ["all", "*"] ->
+            {:ok, :all}
+
+          value == "" ->
+            {:error, "--capabilities must be 'all' or a comma-separated tool list"}
+
+          true ->
+            capabilities =
+              value
+              |> String.split(",")
+              |> Enum.map(&String.trim/1)
+              |> Enum.reject(&(&1 == ""))
+              |> Enum.uniq()
+
+            if capabilities == [] do
+              {:error, "--capabilities must include at least one tool"}
+            else
+              {:ok, capabilities}
+            end
+        end
+
+      _ ->
+        {:error, "--capabilities must be 'all' or a comma-separated tool list"}
+    end
+  end
+
   @spec help() :: String.t()
   def help do
     """
@@ -143,6 +187,7 @@ defmodule CodingAgent.ExecutionNode.CLI do
       --allow-insecure-controller
                                 Allow non-loopback ws:// only on development or a verified encrypted overlay
       --cwd PATH                Default local working directory (default: current directory)
+      --capabilities TOOLS      Destination tool ceiling: 'all' or comma-separated names
       --help, -h                Show this help
 
     LEMON_NODE_OPERATOR_TOKEN must match the controller's
@@ -152,7 +197,8 @@ defmodule CodingAgent.ExecutionNode.CLI do
     on this machine in a mode-0600 file keyed by durable node ID. Non-loopback
     controllers require wss:// by default. The insecure override is acceptable
     only when another verified transport layer, such as Tailscale, encrypts and
-    authenticates the complete path.
+    authenticates the complete path. LEMON_NODE_CAPABILITIES provides the same
+    destination-local ceiling as --capabilities.
     """
   end
 

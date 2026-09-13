@@ -5,7 +5,9 @@ defmodule CodingAgent.ExecutionNode.Worker do
   The worker authenticates to a controller, accepts targeted
   `coding_agent.run` invocations, and executes them through the existing
   `CodingAgent.Executor`. It never forwards the node selector into the local
-  session, preventing a remote run from recursively selecting itself.
+  session, preventing a remote run from recursively selecting itself. Incoming
+  execution capabilities are intersected with the destination-local
+  `:execution_capabilities` ceiling before a session starts.
   """
 
   use GenServer
@@ -49,6 +51,7 @@ defmodule CodingAgent.ExecutionNode.Worker do
     :pairing_stage,
     :pairing_id,
     :max_payload_bytes,
+    execution_capabilities: :all,
     invocations: %{},
     run_refs: %{}
   ]
@@ -91,7 +94,8 @@ defmodule CodingAgent.ExecutionNode.Worker do
        notify_pid: Keyword.get(opts, :notify_pid),
        requested_node_id: Keyword.get(opts, :node_id),
        repair: Keyword.get(opts, :repair, false),
-       max_payload_bytes: LemonCore.JSONPayload.default_max_bytes()
+       max_payload_bytes: LemonCore.JSONPayload.default_max_bytes(),
+       execution_capabilities: Keyword.get(opts, :execution_capabilities, :all)
      }}
   end
 
@@ -484,6 +488,11 @@ defmodule CodingAgent.ExecutionNode.Worker do
       meta = args |> value("meta") |> normalize_meta()
 
       with :ok <- validate_context_run_id(execution_context, run_id),
+           {:ok, execution_context} <-
+             ExecutionContext.restrict_capabilities(
+               execution_context,
+               state.execution_capabilities
+             ),
            {:ok, execution_context} <- ExecutionContext.bind_workspace(execution_context, cwd) do
         request = %ExecutionRequest{
           run_id: run_id,

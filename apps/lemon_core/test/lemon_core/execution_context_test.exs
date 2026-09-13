@@ -53,6 +53,34 @@ defmodule LemonCore.ExecutionContextTest do
   end
 
   @tag :tmp_dir
+  test "destination capability restriction preserves identity and cannot widen authority", %{
+    tmp_dir: tmp_dir
+  } do
+    assert {:ok, context} =
+             ExecutionContext.new(
+               run_id: "remote-run",
+               attempt_id: "remote-attempt",
+               cwd: tmp_dir,
+               tool_policy: ToolPolicy.custom(allow: ["read", "write"]),
+               capabilities: ["read", "write"]
+             )
+
+    assert {:ok, restricted} =
+             ExecutionContext.restrict_capabilities(context, ["read", "bash"])
+
+    assert restricted.run_id == context.run_id
+    assert restricted.attempt_id == context.attempt_id
+    assert restricted.capabilities == ["read"]
+    assert ToolPolicy.allowed?(restricted.tool_policy, "read")
+    refute ToolPolicy.allowed?(restricted.tool_policy, "write")
+    refute ToolPolicy.allowed?(restricted.tool_policy, "bash")
+    assert ExecutionContext.subset?(restricted, context)
+
+    assert {:error, :invalid_capabilities} =
+             ExecutionContext.restrict_capabilities(context, %{"read" => true})
+  end
+
+  @tag :tmp_dir
   test "versioned named-node representation round trips and rejects tampering", %{
     tmp_dir: tmp_dir
   } do
