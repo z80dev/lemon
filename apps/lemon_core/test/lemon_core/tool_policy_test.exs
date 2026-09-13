@@ -1,5 +1,6 @@
 defmodule LemonCore.ToolPolicyTest do
   use ExUnit.Case, async: true
+  use ExUnitProperties
 
   alias LemonCore.ToolPolicy
 
@@ -92,6 +93,28 @@ defmodule LemonCore.ToolPolicyTest do
 
       assert {:error, {:invalid_policy_field, :allow}} =
                ToolPolicy.restrict(parent, %{"allow" => %{"unexpected" => true}})
+    end
+  end
+
+  property "restriction never authorizes a tool denied by either input" do
+    tools = ["read", "write", "bash", "task", "agent", "webfetch"]
+    allow_gen = one_of([constant(:all), list_of(member_of(tools), uniq: true)])
+    deny_gen = list_of(member_of(tools), uniq: true)
+
+    check all(
+            parent_allow <- allow_gen,
+            parent_deny <- deny_gen,
+            requested_allow <- allow_gen,
+            requested_deny <- deny_gen
+          ) do
+      parent = ToolPolicy.custom(allow: parent_allow, deny: parent_deny)
+      requested = ToolPolicy.custom(allow: requested_allow, deny: requested_deny)
+      assert {:ok, restricted} = ToolPolicy.restrict(parent, requested)
+
+      for tool <- tools, ToolPolicy.allowed?(restricted, tool) do
+        assert ToolPolicy.allowed?(parent, tool)
+        assert ToolPolicy.allowed?(requested, tool)
+      end
     end
   end
 end

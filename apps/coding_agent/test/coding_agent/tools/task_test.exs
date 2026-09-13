@@ -5,6 +5,7 @@ defmodule CodingAgent.Tools.TaskTest do
   alias CodingAgent.Tools.Task
   alias CodingAgent.Tools.Task.Params
   alias LemonAgent.AbortSignal
+  alias LemonCore.ExecutionContext
 
   setup do
     TaskStore.clear()
@@ -51,6 +52,52 @@ defmodule CodingAgent.Tools.TaskTest do
                  },
                  "/tmp"
                )
+    end
+
+    test "intersects an explicit child policy with parent authority" do
+      assert {:ok, parent} =
+               ExecutionContext.new(
+                 run_id: "parent-task",
+                 cwd: "/tmp",
+                 tool_policy: ToolPolicy.from_profile(:read_only)
+               )
+
+      assert {:ok, validated} =
+               Params.validate_run_params(
+                 %{
+                   "description" => "try broader access",
+                   "prompt" => "Inspect and edit.",
+                   "tool_policy" => %{"profile" => "full_access"}
+                 },
+                 "/tmp"
+               )
+
+      assert {:ok, restricted} =
+               Params.restrict_to_parent(validated, "/tmp", execution_context: parent)
+
+      assert ExecutionContext.subset?(restricted.execution_context, parent)
+      assert ToolPolicy.allowed?(restricted.tool_policy, "read")
+      refute ToolPolicy.allowed?(restricted.tool_policy, "write")
+      refute ToolPolicy.allowed?(restricted.tool_policy, "bash")
+    end
+
+    test "rejects a child cwd outside the parent workspace" do
+      assert {:ok, parent} = ExecutionContext.new(run_id: "parent-task", cwd: "/tmp")
+
+      assert {:ok, validated} =
+               Params.validate_run_params(
+                 %{
+                   "description" => "escape workspace",
+                   "prompt" => "Inspect another workspace.",
+                   "cwd" => "/outside"
+                 },
+                 "/tmp"
+               )
+
+      assert {:error, message} =
+               Params.restrict_to_parent(validated, "/tmp", execution_context: parent)
+
+      assert message =~ "workspace_scope_escalation"
     end
 
     test "still permits an explicitly null historical engine field" do

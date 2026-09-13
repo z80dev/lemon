@@ -690,6 +690,9 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
     assert {:error, :unsupported_protocol_version} =
              Worker.execution_request(%{"version" => 3, "prompt" => "work"}, state, "invoke")
 
+    assert {:error, :invalid_execution_context} =
+             Worker.execution_request(%{"version" => 2, "prompt" => "work"}, state, "invoke")
+
     assert {:error, {:cwd_not_found, _path}} =
              Worker.execution_request(
                remote_args("invoke", %{

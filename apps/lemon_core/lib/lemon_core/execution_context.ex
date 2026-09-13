@@ -299,22 +299,22 @@ defmodule LemonCore.ExecutionContext do
   defp parse_delegated_by(nil), do: {:ok, nil}
 
   defp parse_delegated_by(value) when is_map(value) do
-    safe =
-      value
-      |> Enum.reduce(%{}, fn {key, item}, acc ->
-        key = to_string(key)
-
-        if key in ["run_id", "runId", "attempt_id", "attemptId", "principal"] do
-          Map.put(acc, key, item)
-        else
-          acc
-        end
-      end)
-
-    {:ok, safe}
+    with {:ok, run_id} <- optional_identifier(field(value, :run_id), :delegated_run_id),
+         {:ok, attempt_id} <-
+           optional_identifier(field(value, :attempt_id), :delegated_attempt_id),
+         {:ok, principal} <- parse_optional_principal(field(value, :principal)) do
+      {:ok,
+       %{}
+       |> maybe_put(:run_id, run_id)
+       |> maybe_put(:attempt_id, attempt_id)
+       |> maybe_put(:principal, principal)}
+    end
   end
 
   defp parse_delegated_by(_value), do: {:error, :invalid_delegated_by}
+
+  defp parse_optional_principal(nil), do: {:ok, nil}
+  defp parse_optional_principal(principal), do: parse_principal(principal, %{})
 
   defp parse_workspace_scope(nil, cwd) do
     with {:ok, root} <- optional_expanded_path(cwd) do
@@ -464,29 +464,25 @@ defmodule LemonCore.ExecutionContext do
   end
 
   defp same_authority?(left, right) do
-    Map.take(left, [
-      :allow,
-      :deny,
-      :blocked_tools,
-      :require_approval,
-      :approvals,
-      :allowed_commands,
-      :blocked_commands,
-      :max_file_size,
-      :sandbox
-    ]) ==
-      Map.take(right, [
-        :allow,
-        :deny,
-        :blocked_tools,
-        :require_approval,
-        :approvals,
-        :allowed_commands,
-        :blocked_commands,
-        :max_file_size,
-        :sandbox
-      ])
+    canonical_policy_authority(left) == canonical_policy_authority(right)
   end
+
+  defp canonical_policy_authority(policy) do
+    %{
+      allow: canonical_allow(policy.allow),
+      deny: Enum.sort(policy.deny),
+      blocked_tools: Enum.sort(policy.blocked_tools),
+      require_approval: Enum.sort(policy.require_approval),
+      approvals: policy.approvals,
+      allowed_commands: canonical_allow(policy.allowed_commands),
+      blocked_commands: Enum.sort(policy.blocked_commands),
+      max_file_size: policy.max_file_size,
+      sandbox: policy.sandbox
+    }
+  end
+
+  defp canonical_allow(:all), do: :all
+  defp canonical_allow(values), do: Enum.sort(values)
 
   defp decode_workspace_scope(scope) when is_map(scope) do
     parse_workspace_scope(scope, field(scope, :root))
@@ -572,6 +568,9 @@ defmodule LemonCore.ExecutionContext do
   end
 
   defp field(_map, _key), do: nil
+
+  defp maybe_put(map, _key, nil), do: map
+  defp maybe_put(map, key, value), do: Map.put(map, key, value)
 
   defp generated_run_id do
     "direct:" <> (:crypto.strong_rand_bytes(12) |> Base.url_encode64(padding: false))
