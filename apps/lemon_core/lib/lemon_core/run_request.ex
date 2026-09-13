@@ -130,8 +130,9 @@ defmodule LemonCore.RunRequest do
   @spec normalize_cwd(term()) :: term()
   def normalize_cwd(cwd), do: cwd
 
-  @spec normalize_tool_policy(term()) :: term()
-  def normalize_tool_policy(tool_policy), do: tool_policy
+  @spec normalize_tool_policy(term()) :: map() | nil
+  def normalize_tool_policy(tool_policy) when is_map(tool_policy), do: tool_policy
+  def normalize_tool_policy(_tool_policy), do: nil
 
   @spec normalize_execution_context(term()) :: term()
   def normalize_execution_context(execution_context), do: execution_context
