@@ -341,11 +341,20 @@ defmodule LemonControlPlane.NamedNodeWireE2ETest do
 
     send(context.runner_pid, :stop)
 
+    cancel_run_id = "wire-cancel-#{suffix}"
+
+    assert {:ok, cancel_context_wire} =
+             ExecutionContext.reidentify(execution_context, cancel_run_id)
+
+    assert {:ok, encoded_cancel_context} = ExecutionContext.encode(cancel_context_wire)
+
     assert {:ok, cancel_id} =
              LemonCore.NodeRegistry.invoke(
                node_name,
                "coding_agent.run",
-               Map.put(invoke_args, "runId", "wire-cancel-#{suffix}"),
+               invoke_args
+               |> Map.put("runId", cancel_run_id)
+               |> Map.put("executionContext", encoded_cancel_context),
                recipient: self(),
                timeout_ms: 3_000
              )
