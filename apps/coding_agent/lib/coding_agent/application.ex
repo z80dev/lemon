@@ -26,6 +26,8 @@ defmodule CodingAgent.Application do
       {Registry, keys: :unique, name: CodingAgent.ProcessRegistry},
       {Registry, keys: :unique, name: CodingAgent.Eval.Registry},
       CodingAgent.Eval.KernelSupervisor,
+      {Registry, keys: :unique, name: CodingAgent.Tools.Lsp.Registry},
+      {DynamicSupervisor, name: CodingAgent.Tools.Lsp.Supervisor, strategy: :one_for_one},
       {Task.Supervisor, name: CodingAgent.Search.TaskSupervisor},
       CodingAgent.Search.SingleFlight,
       CodingAgent.Tools.TodoStoreOwner,

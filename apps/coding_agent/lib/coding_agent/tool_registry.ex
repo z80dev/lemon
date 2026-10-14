@@ -45,6 +45,7 @@ defmodule CodingAgent.ToolRegistry do
     {:edit, Tools.Edit},
     {:patch, Tools.Patch},
     {:lsp_diagnostics, Tools.LspDiagnostics},
+    {:lsp, Tools.Lsp},
     {:bash, Tools.Bash},
     {:bash_output, Tools.BashOutput},
     {:kill_process, Tools.KillProcess},
@@ -385,7 +386,7 @@ defmodule CodingAgent.ToolRegistry do
   # batch of tool calls concurrently, and two writers interleaving on the
   # workspace (an edit racing a `bash` rewrite of the same file) lose updates.
   # Read-only tools stay parallel. File tools additionally lock per path.
-  @mutating_builtins ~w(write edit patch ast_grep bash eval checkpoint)
+  @mutating_builtins ~w(write edit patch ast_grep bash eval checkpoint lsp)
 
   defp maybe_serialize_mutation(%AgentTool{} = tool, name, cwd, opts)
        when name in @mutating_builtins do
@@ -395,12 +396,22 @@ defmodule CodingAgent.ToolRegistry do
     %{
       tool
       | execute: fn tool_call_id, params, signal, on_update ->
-          MutationLock.with_lock(key, fn -> execute.(tool_call_id, params, signal, on_update) end)
+          if mutating_call?(name, params) do
+            MutationLock.with_lock(key, fn ->
+              execute.(tool_call_id, params, signal, on_update)
+            end)
+          else
+            execute.(tool_call_id, params, signal, on_update)
+          end
         end
     }
   end
 
   defp maybe_serialize_mutation(tool, _name, _cwd, _opts), do: tool
+
+  # `lsp` only writes files when asked to apply a rename or code action.
+  defp mutating_call?("lsp", params), do: is_map(params) and params["apply"] == true
+  defp mutating_call?(_name, _params), do: true
 
   defp mcp_tool_tuples(_cwd, _opts, false), do: []
 

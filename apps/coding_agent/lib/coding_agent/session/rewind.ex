@@ -365,8 +365,9 @@ defmodule CodingAgent.Session.Rewind do
                   {paths, [name || "unknown" | unavailable]}
               end
 
-            name == "ast_grep" and MapSet.member?(mutating_ids, field(message, :tool_call_id)) ->
-              # A failed multi-file AST replacement may already have written some paths.
+            name in ["ast_grep", "lsp"] and
+                MapSet.member?(mutating_ids, field(message, :tool_call_id)) ->
+              # A failed multi-file AST replacement or LSP edit may already have written some paths.
               {paths, [name | unavailable]}
 
             name in @mutation_tools and field(message, :is_error) != true ->
@@ -399,7 +400,8 @@ defmodule CodingAgent.Session.Rewind do
     field(call, :type) in [:tool_call, "tool_call"] and
       (field(call, :name) in @mutation_tools or
          (field(call, :name) == "ast_grep" and field(arguments, :action) == "replace" and
-            field(arguments, :dry_run) == false))
+            field(arguments, :dry_run) == false) or
+         (field(call, :name) == "lsp" and field(arguments, :apply) == true))
   end
 
   defp checkpoint_files(id, cwd) do

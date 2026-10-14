@@ -143,9 +143,11 @@ defmodule CodingAgent.ToolPolicy do
     "bash",
     # Runs arbitrary Python/JavaScript in a persistent kernel.
     "eval",
-    # Runs project compilers/checkers (`mix compile`, `cargo check`, `go test`),
-    # which execute project code.
+    # Run project compilers/checkers (`mix compile`, `cargo check`, `go test`)
+    # or language servers that build the project, which execute project code;
+    # `lsp` can also write files when applying edits.
     "lsp_diagnostics",
+    "lsp",
     "kill_process",
     "agent",
     "task",

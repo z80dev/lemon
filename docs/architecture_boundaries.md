@@ -11,7 +11,7 @@ silent permissions.
 <!-- architecture_policy:start -->
 | App | Actual direct deps from `mix.exs` | Allowed direct deps | Reference-only exceptions |
 | --- | --- | --- | --- |
-| `coding_agent` | `lemon_agent`, `lemon_ai`, `lemon_browser`, `lemon_core`, `lemon_gateway`, `lemon_memory`, `lemon_platform_test`, `lemon_skills` | `lemon_agent`, `lemon_ai`, `lemon_browser`, `lemon_core`, `lemon_gateway`, `lemon_memory`, `lemon_platform_test`, `lemon_skills` | *(none)* |
+| `coding_agent` | `lemon_agent`, `lemon_ai`, `lemon_browser`, `lemon_core`, `lemon_gateway`, `lemon_lsp`, `lemon_memory`, `lemon_platform_test`, `lemon_skills` | `lemon_agent`, `lemon_ai`, `lemon_browser`, `lemon_core`, `lemon_gateway`, `lemon_lsp`, `lemon_memory`, `lemon_platform_test`, `lemon_skills` | *(none)* |
 | `lemon_agent` | `lemon_ai`, `lemon_core` | `lemon_ai`, `lemon_core` | *(none)* |
 | `lemon_ai` | *(none)* | *(none)* | *(none)* |
 | `lemon_automation` | `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_router`, `lemon_skills` | `lemon_agent`, `lemon_ai`, `lemon_core`, `lemon_router`, `lemon_skills` | *(none)* |
