@@ -173,6 +173,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Extension result presentation hooks preserve authoritative checkpoint receipts
+  and affected paths. Content-only or custom display details cannot erase real
+  mutation provenance or fabricate receipts; omitted details retain the original.
 - OpenCode MCP discovery substitutes environment and file placeholders once in
   decoded JSONC string values. Quotes, backslashes and multiline environment
   values no longer invalidate the config and silently drop servers; inserted

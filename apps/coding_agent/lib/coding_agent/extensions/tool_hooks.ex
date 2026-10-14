@@ -34,9 +34,10 @@ defmodule CodingAgent.Extensions.ToolHooks do
   `args` are the arguments the tool actually ran with and `result` is an
   `AgentToolResult`. On success a handler may return
   `{:replace, %AgentToolResult{}}` or `{:replace, %{content: ..., details: ...}}`
-  to override the result content and/or details (last replacement wins; the
-  original trust level and error status are kept). Anything else is a no-op and
-  a failing handler keeps the original result.
+  to override presentation content and details (last replacement wins; the
+  original trust level, error status and mutation receipts are kept). Omitted
+  or nil details retain the original details. Anything else is a no-op and a
+  failing handler keeps the original result.
 
   When the tool returns an error result, `{:error, reason}`, or raises, the
   handlers observe it with `is_error: true` and the original error behavior is
@@ -51,6 +52,14 @@ defmodule CodingAgent.Extensions.ToolHooks do
   @interception_events [:on_tool_call, :on_tool_result]
   @max_reason_length 500
   @failed_reason "an extension hook failed while checking this tool call"
+
+  # These describe what actually ran, not how an extension chooses to display
+  # it. Reserve both representations because persisted/bridge results use JSON
+  # keys while native tools use atoms. Absent fields must stay absent as well.
+  @receipt_fields ~w(checkpoint_id checkpoint_ids checkpoint_kind path paths changed
+                    changed_paths changed_files affected_paths written_paths partial partial_error
+                    applied success action acp_client oldText newText perFileResults snapshot)a
+  @receipt_keys @receipt_fields ++ Enum.map(@receipt_fields, &Atom.to_string/1)
 
   @typedoc "Session facts included in every tool hook event."
   @type context :: %{
@@ -305,9 +314,24 @@ defmodule CodingAgent.Extensions.ToolHooks do
     %{
       result
       | content: Map.get(override, :content, result.content),
-        details: Map.get(override, :details, result.details)
+        details: override_details(Map.get(override, :details), result.details)
     }
   end
+
+  defp override_details(nil, original), do: original
+
+  defp override_details(replacement, original) when is_map(replacement) do
+    receipts = if is_map(original), do: Map.take(original, @receipt_keys), else: %{}
+    Map.merge(Map.drop(replacement, @receipt_keys), receipts)
+  end
+
+  defp override_details(replacement, original) when is_map(original) do
+    if Enum.any?(@receipt_keys, &Map.has_key?(original, &1)),
+      do: original,
+      else: replacement
+  end
+
+  defp override_details(replacement, _original), do: replacement
 
   defp error_result(text) do
     %AgentToolResult{content: [%TextContent{type: :text, text: text}], is_error: true}

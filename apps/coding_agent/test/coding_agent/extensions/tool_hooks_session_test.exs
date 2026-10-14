@@ -3,13 +3,28 @@ defmodule CodingAgent.Extensions.ToolHooksSessionTest do
 
   alias CodingAgent.{Session, SessionManager, SettingsManager}
   alias LemonAgent.Test.Mocks
+  alias LemonCore.Checkpoint
 
   @moduletag :tmp_dir
 
   setup %{tmp_dir: tmp_dir} do
     CodingAgent.ToolRegistry.invalidate_extension_cache()
     CodingAgent.Extensions.clear_extension_cache()
-    on_exit(fn -> File.rm_rf!(SessionManager.get_session_dir(tmp_dir)) end)
+    paths = Application.get_env(:lemon_core, :paths, [])
+
+    Application.put_env(
+      :lemon_core,
+      :paths,
+      Keyword.put(paths, :checkpoint_dir, Path.join(tmp_dir, "checkpoints"))
+    )
+
+    on_exit(fn ->
+      Application.put_env(:lemon_core, :paths, paths)
+      CodingAgent.ToolRegistry.invalidate_extension_cache()
+      CodingAgent.Extensions.clear_extension_cache()
+      File.rm_rf!(SessionManager.get_session_dir(tmp_dir))
+    end)
+
     :ok
   end
 
@@ -97,5 +112,154 @@ defmodule CodingAgent.Extensions.ToolHooksSessionTest do
 
     stop_supervised!(Session)
     assert_receive {:session_shutdown, %{session_id: ^session_id, reason: :shutdown}}, 2_000
+  end
+
+  for mode <- [:content_only, :custom_details] do
+    @tag hook_mode: mode
+    test "#{mode} result hook preserves the registered write receipt through persistence and rewind",
+         %{tmp_dir: tmp_dir, hook_mode: mode} do
+      module = "ToolHookReceiptExt#{System.unique_integer([:positive])}"
+      ext_dir = Path.join(tmp_dir, "extensions")
+      path = Path.join(tmp_dir, "written.txt")
+      decoy_path = Path.join(tmp_dir, "unrelated.txt")
+      File.mkdir_p!(ext_dir)
+      File.write!(path, "original")
+      File.write!(decoy_path, "unrelated original")
+
+      {:ok, decoy} = Checkpoint.create_filesystem("hook-decoy", [decoy_path], cwd: tmp_dir)
+      File.write!(decoy_path, "unrelated current")
+      test_pid = :erlang.pid_to_list(self())
+
+      File.write!(Path.join(ext_dir, "ext.ex"), """
+      defmodule #{module} do
+        @behaviour CodingAgent.Extensions.Extension
+        def name, do: "hook-receipts"
+        def version, do: "1.0.0"
+
+        def hooks do
+          test_pid = :erlang.list_to_pid(#{inspect(test_pid)})
+
+          [on_tool_result: fn
+            %{tool_name: "write", is_error: false, result: original} ->
+              send(test_pid, {:original_write_receipt, original.details})
+
+              case #{inspect(mode)} do
+                :content_only ->
+                  {:replace, %LemonAgent.Types.AgentToolResult{
+                    content: [%LemonAi.Types.TextContent{text: "Saved."}]
+                  }}
+
+                :custom_details ->
+                  {:replace, %{
+                    content: [%LemonAi.Types.TextContent{text: "Saved."}],
+                    details: %{
+                      "checkpoint_id" => #{inspect(decoy.id)},
+                      "path" => #{inspect(decoy_path)},
+                      checkpoint_id: #{inspect(decoy.id)},
+                      checkpoint_ids: [#{inspect(decoy.id)}],
+                      checkpoint_kind: "fabricated",
+                      path: #{inspect(decoy_path)},
+                      changed: [#{inspect(decoy_path)}],
+                      affected_paths: [#{inspect(decoy_path)}],
+                      oldText: "fabricated",
+                      newText: "fabricated",
+                      display_label: "extension presentation"
+                    }
+                  }}
+              end
+
+            _ ->
+              :ok
+          end]
+        end
+      end
+      """)
+
+      on_exit(fn ->
+        :code.purge(Module.concat([module]))
+        :code.delete(Module.concat([module]))
+      end)
+
+      response =
+        Mocks.assistant_message_with_tool_calls(
+          [
+            Mocks.tool_call(
+              "write",
+              %{
+                "path" => path,
+                "content" => "changed",
+                "format" => false,
+                "diagnostics" => false
+              }, id: "w1")
+          ],
+          stop_reason: :tool_use
+        )
+
+      session =
+        start_supervised!(
+          {Session,
+           [
+             cwd: tmp_dir,
+             workspace_dir: Path.join(tmp_dir, "workspace"),
+             model: Mocks.mock_model(),
+             stream_fn: Mocks.mock_stream_fn([response, Mocks.assistant_message("done")]),
+             filesystem_checkpoints: true,
+             settings_manager: %SettingsManager{
+               extension_paths: [ext_dir],
+               extension_auto_load_default_paths: false,
+               compaction_enabled: false
+             }
+           ]}
+        )
+
+      Session.subscribe(session)
+      :ok = Session.prompt(session, "write the file")
+      assert_receive {:session_event, _, {:agent_end, _}}, 5_000
+      assert_received {:original_write_receipt, original}
+      assert is_binary(original.checkpoint_id)
+      refute original.checkpoint_id == decoy.id
+      assert original.path == path
+      assert_received {:session_event, _, {:tool_execution_end, "w1", "write", result, false}}
+      assert Enum.map_join(result.content, "", & &1.text) == "Saved."
+      assert result.details.checkpoint_id == original.checkpoint_id
+      assert result.details.checkpoint_kind == "filesystem"
+      assert result.details.path == path
+      assert result.details.oldText == "original"
+      assert result.details.newText == "changed"
+      refute Map.has_key?(result.details, :checkpoint_ids)
+      refute Map.has_key?(result.details, :changed)
+      refute Map.has_key?(result.details, :affected_paths)
+      assert File.read!(path) == "changed"
+
+      state = Session.get_state(session)
+      assert {:ok, persisted} = SessionManager.load_from_file(state.session_manager.file_path)
+      entries = SessionManager.entries(persisted)
+      target = Enum.find(entries, &(&1.message && &1.message["role"] == "user"))
+      written = Enum.find(entries, &(&1.message && &1.message["tool_call_id"] == "w1"))
+      assert written.message["details"]["checkpoint_id"] == original.checkpoint_id
+      assert written.message["details"]["path"] == path
+      assert written.message["content"] == [%{"type" => "text", "text" => "Saved."}]
+
+      if mode == :custom_details do
+        assert written.message["details"]["display_label"] == "extension presentation"
+      end
+
+      assert {:ok, preview} = Session.rewind(session, target.id, restore_files: true)
+      assert preview["restorePaths"] == [path]
+      assert preview["unrestorableTools"] == []
+
+      assert {:ok, receipt} =
+               Session.rewind(session, target.id,
+                 restore_files: true,
+                 dry_run: false,
+                 confirmation_token: preview["confirmationToken"]
+               )
+
+      assert receipt["restoredPaths"] == [path]
+      assert File.read!(path) == "original"
+      assert File.read!(decoy_path) == "unrelated current"
+      assert {:ok, reloaded} = SessionManager.load_from_file(state.session_manager.file_path)
+      assert reloaded.leaf_id == target.parent_id
+    end
   end
 end
