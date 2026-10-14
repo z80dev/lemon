@@ -38,6 +38,8 @@ export interface AccessService {
   canRead(principal: Principal, collection: string, entity: unknown): boolean;
   revokeUser(userId: string): Promise<void>;
   session(userId: string, deviceId?: string | null): Promise<P.AuthResult>;
+  issueReauth(userId: string): { reauthToken: string; expiresAtMs: number };
+  consumeReauth(userId: string, token: string): void;
 }
 export interface MutationService {
   execute<T>(context: RequestContext, operation: () => Promise<T> | T): Promise<T>;
@@ -76,16 +78,23 @@ export interface GateService {
 export interface IntegrationServices {
   admission(principal: Principal, botId: string, routineId?: string): Promise<void>;
   effectivePolicy(principal: Principal, botId?: string): Promise<P.EffectivePolicy>;
-  connectorConfig(principal: Principal, botId: string): Promise<{ name: string; url: string; headers: Record<string, string> }[]>;
+  connectorConfig(principal: Principal, botId: string, conversationId?: string): Promise<{ name: string; url: string; headers: Record<string, string>; enabledTools?: string[] }[]>;
   sendApprovedDraft(principal: Principal, draft: P.Draft): Promise<{ providerMessageId: string | null; runId: string | null }>;
   emitProviderNotifications(notification: P.Notification): Promise<void>;
   channelIngress(input: { principal: Principal; botId: string; channelBindingId: string; externalThreadId: string; text: string; attachmentIds?: string[]; clientNonce: string }): Promise<P.MessageReceipt>;
   providerCapabilities(): Partial<P.Capabilities> & { inventory?: unknown[] };
   speech?(principal: Principal, request: P.SpeechRequest): Promise<P.SpeechResult>;
+  deprovisionUser?(userId: string): Promise<void>;
+  requireSSO?(userId: string): Promise<boolean> | boolean;
+  reconcile?(): Promise<void>;
+  defaultBotIds?(principal: Principal): Promise<string[]>;
+  authorizeConnector?(principal: Principal, input: { connectorId: string; botId: string; conversationId: string; toolName: string; operationId: string }): Promise<void>;
+  connectorProvisioning?(principal: Principal, botId: string): Promise<unknown>;
 }
 export interface BackendConfiguration {
   publicUrl: string; controlUrl: string; operatorToken: string; dataDir: string; host: string; port: number;
   trustedOverlay: boolean; operator: P.OperatorConfiguration;
+  operatorExtras?: Record<string, unknown>;
 }
 export interface BackendServices {
   config: BackendConfiguration; store: EntityStore; events: EventService; auth: AccessService; mutations: MutationService;
@@ -102,4 +111,5 @@ export interface BackendServices {
   entry(principal: Principal, conversationId: string, payload: Record<string, unknown>): P.TranscriptEntry;
   notify(principal: Principal, input: Record<string, unknown>): P.Notification;
   invoke<T = unknown>(principal: Principal, method: string, path: string, body?: unknown): Promise<T>;
+  syncBotProfile(principal: Principal, botId: string): Promise<void>;
 }
