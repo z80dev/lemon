@@ -79,6 +79,8 @@ export interface SessionRewindPreview {
 	entryId: string;
 	confirmationToken: string;
 	prompt: string;
+	/** Authoritative original journal content; `prompt` alone is not a replay payload. */
+	promptContainsNonText: boolean;
 	discardedMessages: number;
 	restorePaths: string[];
 	unrestorableTools: string[];

@@ -24,7 +24,7 @@ afterEach(() => {
 	invalidateThemeAdapters();
 });
 
-async function boot() {
+async function boot(promptContainsNonText: unknown = false) {
 	const server = await FakeControlPlane.start({
 		methods: [...DEFAULT_METHODS, "sessions.tree", "sessions.rewind"],
 	});
@@ -50,6 +50,7 @@ async function boot() {
 			sessionKey: key,
 			entryId: "u1",
 			prompt: PROMPT,
+			promptContainsNonText,
 			restoreFiles: false,
 			restoredPaths: [],
 			confirmationToken: "rewind-first-turn",
@@ -71,6 +72,26 @@ async function boot() {
 }
 
 describe("retry delivery through AppShell", () => {
+	for (const command of ["/retry", "/retry --force"]) {
+		test(`resumed multimodal ${command} preserves history, drafts and queue without confirming`, async () => {
+			const { app, server, key } = await boot(true);
+			const before = app.session.blocks.filter((block) => block.kind !== "notice");
+			app.editor.setText("keep this draft");
+			app.store.setDraft(key, "keep this draft");
+			await app.submit(command);
+			expect(server.requestsFor("sessions.rewind").map((request) => request.params)).toEqual([
+				expect.objectContaining({ dryRun: true }),
+			]);
+			expect(server.requestsFor("chat.send")).toHaveLength(0);
+			expect(server.requestsFor("chat.history")).toHaveLength(1);
+			expect(app.session.blocks.filter((block) => block.kind !== "notice")).toEqual(before);
+			expect(app.editor.getExpandedText()).toBe("keep this draft");
+			expect(app.store.drafts.get(key)).toBe("keep this draft");
+			expect(app.store.queue.items(key)).toHaveLength(0);
+			expect(app.session.busy).toBe(false);
+		});
+	}
+
 	test("clears the recovery draft only after an acknowledged run", async () => {
 		const { app, server, key } = await boot();
 		await app.submit("/retry");

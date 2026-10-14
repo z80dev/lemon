@@ -34,7 +34,7 @@ defmodule LemonControlPlane.Methods.SessionsRewind do
           fields =
             if dry_run,
               do:
-                ~w(confirmationToken prompt discardedMessages restorePaths unrestorableTools unrestorableCommands unrestorableCommandCount canAllowPartialRestore restoreFiles allowPartialRestore entryId sessionId),
+                ~w(confirmationToken prompt promptContainsNonText discardedMessages restorePaths unrestorableTools unrestorableCommands unrestorableCommandCount canAllowPartialRestore restoreFiles allowPartialRestore entryId sessionId),
               else:
                 ~w(confirmationToken prompt leafId restoredPaths unrestorableTools unrestorableCommands unrestorableCommandCount canAllowPartialRestore restoreFiles allowPartialRestore partialRestore entryId sessionId)
 

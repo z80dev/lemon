@@ -160,6 +160,7 @@ defmodule CodingAgent.Session.Rewind do
              "restoreFiles" => restore_files,
              "allowPartialRestore" => allow_partial,
              "prompt" => message_text(target.message),
+             "promptContainsNonText" => message_contains_non_text?(target.message),
              "discardedMessages" => Enum.count(suffix, &(&1.type in [:message, :custom_message])),
              "restorePaths" => restore_paths(plan),
              "unrestorableTools" => unavailable
@@ -583,11 +584,38 @@ defmodule CodingAgent.Session.Rewind do
 
       blocks when is_list(blocks) ->
         Enum.map_join(blocks, "", fn block ->
-          if field(block, :type) in [:text, "text"], do: field(block, :text) || "", else: ""
+          text = field(block, :text)
+          if field(block, :type) in [:text, "text"] and is_binary(text), do: text, else: ""
         end)
 
       _ ->
         ""
     end
   end
+
+  # `prompt` is an editing projection, not a replay payload. Inspect the original
+  # journal message without copying media into the preview or another store.
+  defp message_contains_non_text?(message) when is_map(message) do
+    contents =
+      for key <- [:content, "content"], Map.has_key?(message, key), do: Map.fetch!(message, key)
+
+    contents == [] or not Enum.all?(contents, &text_only_content?/1) or
+      Enum.any?([:images, :image, :image_url, :attachments], fn key ->
+        Enum.any?([key, Atom.to_string(key)], fn spelling ->
+          Map.get(message, spelling) not in [nil, []]
+        end)
+      end)
+  end
+
+  defp message_contains_non_text?(_), do: true
+
+  defp text_only_content?(text) when is_binary(text), do: true
+
+  defp text_only_content?(blocks) when is_list(blocks) do
+    Enum.all?(blocks, fn block ->
+      field(block, :type) in [:text, "text"] and is_binary(field(block, :text))
+    end)
+  end
+
+  defp text_only_content?(_), do: false
 end
