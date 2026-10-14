@@ -212,9 +212,16 @@ export function splitArgs(text: string): string[] {
 	return argv;
 }
 
+/** Loads file-defined commands; issues describe partial discovery. */
+export type FileCommandSource = () => Promise<{ commands: SlashCommand[]; issues: string[] }>;
+
 export class CommandRegistry {
 	readonly #byName = new Map<string, SlashCommand>();
 	readonly #commands: SlashCommand[] = [];
+	/** File-defined commands, replaced wholesale on refresh; built-ins always win. */
+	readonly #fileByName = new Map<string, SlashCommand>();
+	#fileCommands: SlashCommand[] = [];
+	#fileSource: FileCommandSource | undefined;
 
 	register(command: SlashCommand): this {
 		if (this.#byName.has(command.name)) {
@@ -234,22 +241,58 @@ export class CommandRegistry {
 		return this;
 	}
 
+	/** Install the loader {@link refreshFileCommands} uses. */
+	setFileCommandSource(source: FileCommandSource): this {
+		this.#fileSource = source;
+		return this;
+	}
+
+	/**
+	 * Replace the file-defined commands. A name that collides with a built-in
+	 * command or alias, or with an earlier file command, is skipped.
+	 */
+	setFileCommands(commands: Iterable<SlashCommand>): void {
+		this.#fileByName.clear();
+		this.#fileCommands = [];
+		for (const command of commands) {
+			const key = command.name.toLowerCase();
+			if (this.#byName.has(key) || this.#fileByName.has(key)) continue;
+			this.#fileByName.set(key, command);
+			this.#fileCommands.push(command);
+		}
+	}
+
+	/** Re-run file-command discovery. Returns its issues; never throws. */
+	async refreshFileCommands(): Promise<string[]> {
+		if (!this.#fileSource) return [];
+		try {
+			const { commands, issues } = await this.#fileSource();
+			this.setFileCommands(commands);
+			return issues;
+		} catch (error) {
+			return [`File command discovery failed (${describeError(error)})`];
+		}
+	}
+
 	get(name: string): SlashCommand | undefined {
-		return this.#byName.get(name.toLowerCase());
+		const key = name.toLowerCase();
+		return this.#byName.get(key) ?? this.#fileByName.get(key);
 	}
 
 	has(name: string): boolean {
-		return this.#byName.has(name.toLowerCase());
+		return this.get(name) !== undefined;
 	}
 
-	/** Registration order, which is the order `/help` prints. */
+	/** Registration order, which is the order `/help` prints; file commands last. */
 	list(): readonly SlashCommand[] {
-		return this.#commands;
+		return this.#fileCommands.length === 0
+			? this.#commands
+			: [...this.#commands, ...this.#fileCommands];
 	}
 
 	/** Every name and alias, sorted — the autocomplete corpus. */
 	names(): string[] {
-		return [...this.#byName.keys()].sort();
+		return [...this.#byName.keys(), ...this.#fileByName.keys()].sort();
 	}
 
 	availability(command: SlashCommand, ctx: CommandContext): Availability {
@@ -272,7 +315,12 @@ export class CommandRegistry {
 	async dispatch(line: string, ctx: Omit<CommandContext, "name" | "rest" | "registry">) {
 		const parsed = parseCommandLine(line);
 		if (!parsed) return false;
-		const command = this.get(parsed.name);
+		let command = this.get(parsed.name);
+		// A command file may have been added since the last discovery.
+		if (!command && this.#fileSource) {
+			await this.refreshFileCommands();
+			command = this.get(parsed.name);
+		}
 		const full: CommandContext = {
 			...ctx,
 			registry: this,
@@ -310,7 +358,7 @@ export class CommandRegistry {
 		}
 		const lines: string[] = ["commands"];
 		let group: string | undefined;
-		for (const command of this.#commands) {
+		for (const command of this.list()) {
 			if (command.group !== group) {
 				group = command.group;
 				if (group) lines.push(`${group}:`);

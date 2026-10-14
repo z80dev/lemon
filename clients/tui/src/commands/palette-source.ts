@@ -1,7 +1,8 @@
 /**
  * Palette data comes from the live command registry and native Lemon resources.
  * Prompt precedence/extensions mirror CodingAgent.ResourceLoader.load_prompts;
- * skill roots mirror LemonSkills.Config (including its isolation overrides).
+ * skill roots mirror LemonSkills.Config (including its isolation overrides);
+ * file command roots mirror CodingAgent.Commands.
  * Files are local to the TUI, not an assertion about a remote daemon's readiness.
  */
 import { readdir, readFile, stat } from "node:fs/promises";
@@ -129,7 +130,8 @@ export async function discoverPaletteResources(
 
 	const roots = [join(cwd, ".lemon", "skill")];
 	for (let ancestor = cwd; ; ancestor = dirname(ancestor)) {
-		for (const dir of [".agents", ".omp", ".claude"]) roots.push(join(ancestor, dir, "skills"));
+		for (const dir of [".agents", ".omp", ".claude", ".codex", ".github"])
+			roots.push(join(ancestor, dir, "skills"));
 		try {
 			await stat(join(ancestor, ".git"));
 			break;
@@ -148,6 +150,7 @@ export async function discoverPaletteResources(
 	for (const [override, fallback] of [
 		[env.LEMON_OMP_SKILLS_DIR, join(home, ".omp", "agent", "skills")],
 		[env.LEMON_CLAUDE_SKILLS_DIR, join(home, ".claude", "skills")],
+		[env.LEMON_CODEX_SKILLS_DIR, join(home, ".codex", "skills")],
 	] as const) {
 		if (override || !isolated) roots.push(override ?? fallback);
 	}
@@ -173,7 +176,155 @@ export async function discoverPaletteResources(
 	return result;
 }
 
-async function list(path: string, result: PaletteDiscovery): Promise<string[]> {
+/** A file-defined slash command; the daemon expands its template server-side. */
+export interface FileCommand {
+	name: string;
+	description: string;
+	argumentHint?: string;
+	/** Tool whose convention defined it: lemon, omp, agents, claude, codex, github, gemini. */
+	source: string;
+	scope: "project" | "global";
+	path: string;
+}
+
+export interface FileCommandDiscovery {
+	commands: FileCommand[];
+	issues: string[];
+}
+
+type CommandFormat = "markdown" | "nested" | "github" | "gemini";
+
+const MAX_COMMAND_BYTES = 64 * 1024;
+const MAX_COMMAND_DEPTH = 4;
+const MAX_COMMANDS_PER_ROOT = 500;
+
+/**
+ * Same roots, formats and precedence as CodingAgent.Commands: project roots
+ * before user-global ones, Lemon before other tools, first name wins.
+ */
+export async function discoverFileCommands(
+	options: PaletteSourceOptions,
+): Promise<FileCommandDiscovery> {
+	const cwd = resolve(options.cwd);
+	const home = options.home ?? homedir();
+	const env = options.env ?? process.env;
+	const agentDir = options.agentDir ?? env.LEMON_AGENT_DIR ?? join(home, ".lemon", "agent");
+	const roots: Array<[string, CommandFormat, string, FileCommand["scope"]]> = [
+		[join(cwd, ".lemon", "command"), "markdown", "lemon", "project"],
+		[join(cwd, ".lemon", "commands"), "markdown", "lemon", "project"],
+		[join(cwd, ".omp", "commands"), "markdown", "omp", "project"],
+		[join(cwd, ".agents", "commands"), "markdown", "agents", "project"],
+		[join(cwd, ".agent", "commands"), "markdown", "agents", "project"],
+		[join(cwd, ".claude", "commands"), "nested", "claude", "project"],
+		[join(cwd, ".codex", "prompts"), "markdown", "codex", "project"],
+		[join(cwd, ".codex", "commands"), "markdown", "codex", "project"],
+		[join(cwd, ".github", "prompts"), "github", "github", "project"],
+		[join(cwd, ".gemini", "commands"), "gemini", "gemini", "project"],
+		[join(agentDir, "command"), "markdown", "lemon", "global"],
+		[join(agentDir, "commands"), "markdown", "lemon", "global"],
+		[join(home, ".omp", "agent", "commands"), "markdown", "omp", "global"],
+		[join(home, ".agents", "commands"), "markdown", "agents", "global"],
+		[join(home, ".agent", "commands"), "markdown", "agents", "global"],
+		[join(home, ".claude", "commands"), "nested", "claude", "global"],
+		[join(home, ".codex", "prompts"), "markdown", "codex", "global"],
+		[join(home, ".codex", "commands"), "markdown", "codex", "global"],
+		[join(home, ".gemini", "commands"), "gemini", "gemini", "global"],
+	];
+	const result: FileCommandDiscovery = { commands: [], issues: [] };
+	const seen = new Set<string>();
+	for (const [root, format, source, scope] of roots) {
+		const ext = format === "gemini" ? ".toml" : ".md";
+		const suffix = format === "github" ? ".prompt.md" : ext;
+		const files: Array<{ segments: string[]; path: string; size: number }> = [];
+		const walk = async (dir: string, segments: string[], depth: number): Promise<void> => {
+			for (const entry of (await list(dir, result)).sort()) {
+				if (files.length >= MAX_COMMANDS_PER_ROOT) return;
+				if (entry.startsWith(".")) continue;
+				const path = join(dir, entry);
+				const info = await stat(path).catch(() => undefined);
+				if (info?.isFile() && entry.endsWith(ext)) {
+					files.push({ segments: [...segments, entry], path, size: info.size });
+				} else if (info?.isDirectory() && depth > 0) {
+					await walk(path, [...segments, entry], depth - 1);
+				}
+			}
+		};
+		await walk(root, [], format === "nested" || format === "gemini" ? MAX_COMMAND_DEPTH : 0);
+		for (const { segments, path, size } of files) {
+			const file = segments[segments.length - 1];
+			const base = file.endsWith(suffix) ? file.slice(0, -suffix.length) : "";
+			const name = [...segments.slice(0, -1), base].join(":");
+			if (!base || /\s/u.test(name) || seen.has(name) || size > MAX_COMMAND_BYTES) continue;
+			const content = (await readResource(path, result))?.replace(/\r\n/g, "\n");
+			if (content === undefined) continue;
+			const fields = format === "gemini" ? geminiFields(content) : frontmatterFields(content);
+			if (!fields) continue;
+			seen.add(name);
+			result.commands.push({
+				name,
+				description: fields.description ?? "",
+				argumentHint: fields["argument-hint"] ?? fields.argumentHint,
+				source,
+				scope,
+				path,
+			});
+		}
+	}
+	result.commands.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+	return result;
+}
+
+/** A registry command that sends `/name args` verbatim for the daemon to expand. */
+export function fileSlashCommand(command: FileCommand): SlashCommand {
+	return {
+		name: command.name,
+		summary: command.description || `${command.source} file command`,
+		usage: command.argumentHint,
+		group: "file commands",
+		async run(ctx) {
+			if (!ctx.ui.deliverPrompt) {
+				ctx.ui.notice(`/${command.name} needs prompt delivery, which is unavailable`, "warning");
+				return;
+			}
+			const text = ctx.rest ? `/${command.name} ${ctx.rest}` : `/${command.name}`;
+			await ctx.ui.deliverPrompt(text, ctx.store.submissionMode);
+		},
+	};
+}
+
+/** Gemini command TOML: `prompt` is required; `description` is optional. */
+function geminiFields(content: string): Record<string, string> | undefined {
+	let doc: Record<string, unknown>;
+	try {
+		doc = Bun.TOML.parse(content) as Record<string, unknown>;
+	} catch {
+		return undefined;
+	}
+	if (typeof doc.prompt !== "string") return undefined;
+	return typeof doc.description === "string" && doc.description.trim()
+		? { description: doc.description.trim() }
+		: {};
+}
+
+/** The flat `key: value` frontmatter subset CodingAgent.Commands reads. */
+function frontmatterFields(content: string): Record<string, string> {
+	const fields: Record<string, string> = {};
+	if (!content.startsWith("---\n")) return fields;
+	const end = content.slice(3).search(/\n---(?:\n|$)/);
+	if (end < 0) return fields;
+	for (const line of content.slice(4, end + 3).split("\n")) {
+		const colon = line.indexOf(":");
+		if (colon < 0) continue;
+		const value = line
+			.slice(colon + 1)
+			.trim()
+			.replace(/^(["'])(.*)\1$/, "$2");
+		if (value) fields[line.slice(0, colon).trim()] = value;
+	}
+	return fields;
+}
+
+async function list(path: string, result: { issues: string[] }): Promise<string[]> {
 	try {
 		return await readdir(path);
 	} catch (error) {
@@ -183,7 +334,10 @@ async function list(path: string, result: PaletteDiscovery): Promise<string[]> {
 	}
 }
 
-async function readResource(path: string, result: PaletteDiscovery): Promise<string | undefined> {
+async function readResource(
+	path: string,
+	result: { issues: string[] },
+): Promise<string | undefined> {
 	try {
 		if (!(await stat(path)).isFile()) return undefined;
 		return await readFile(path, "utf8");

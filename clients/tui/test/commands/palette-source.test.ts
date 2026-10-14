@@ -3,7 +3,9 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
+	discoverFileCommands,
 	discoverPaletteResources,
+	fileSlashCommand,
 	type PaletteEntry,
 	rankPaletteEntries,
 	skillPrompt,
@@ -130,4 +132,101 @@ test("TOML skill descriptions follow the native manifest convention", async () =
 	);
 	const result = await discoverPaletteResources({ cwd, home, env: {} });
 	expect(result.entries[0].description).toContain("Review TOML configuration");
+});
+
+test("codex and github skill roots follow claude, with the codex user override", async () => {
+	await fixture(join(cwd, ".github/skills/shared/SKILL.md"), "GitHub shadow");
+	await fixture(join(cwd, ".codex/skills/shared/SKILL.md"), "Codex wins");
+	await fixture(join(cwd, ".github/skills/gh-only/SKILL.md"), "GitHub skill");
+	await fixture(join(home, ".codex/skills/user-codex/SKILL.md"), "User codex");
+	const result = await discoverPaletteResources({ cwd, home, env: {} });
+	expect(result.entries.map((item) => [item.name, item.description?.split(" · ")[0]])).toEqual([
+		["shared", "Codex wins"],
+		["gh-only", "GitHub skill"],
+		["user-codex", "User codex"],
+	]);
+
+	const override = join(root, "codex-override");
+	await fixture(join(override, "pinned/SKILL.md"), "Pinned");
+	const isolated = await discoverPaletteResources({
+		cwd,
+		home,
+		env: { LEMON_AGENT_DIR: join(root, "agent"), LEMON_CODEX_SKILLS_DIR: override },
+	});
+	expect(isolated.entries.map((item) => item.name)).toEqual(["shared", "gh-only", "pinned"]);
+});
+
+describe("file commands", () => {
+	test("mirror every CodingAgent.Commands root, format and name rule", async () => {
+		await fixture(join(cwd, ".lemon/command/legacy.md"), "legacy");
+		await fixture(join(cwd, ".lemon/commands/native.md"), "native");
+		await fixture(join(cwd, ".omp/commands/omp-cmd.md"), "omp");
+		await fixture(join(cwd, ".agents/commands/agents-cmd.md"), "agents");
+		await fixture(join(cwd, ".agent/commands/agent-cmd.md"), "agent");
+		await fixture(join(cwd, ".claude/commands/git/commit.md"), "nested");
+		await fixture(join(cwd, ".codex/prompts/codex-prompt.md"), "codex");
+		await fixture(join(cwd, ".codex/commands/codex-cmd.md"), "codex");
+		await fixture(join(cwd, ".github/prompts/review.prompt.md"), "github");
+		await fixture(join(cwd, ".github/prompts/README.md"), "not a prompt file");
+		await fixture(
+			join(cwd, ".gemini/commands/team/explain.toml"),
+			'description = "Explain code"\nprompt = "Explain {{args}}"',
+		);
+		await fixture(join(cwd, ".gemini/commands/broken.toml"), 'description = "no prompt"');
+		await fixture(join(cwd, ".omp/commands/sub/flat-only.md"), "not recursive");
+		await fixture(join(cwd, ".lemon/commands/two words.md"), "unreachable");
+		await fixture(join(cwd, ".lemon/commands/huge.md"), "x".repeat(64 * 1024 + 1));
+		await fixture(join(home, ".claude/commands/user-claude.md"), "user");
+		await fixture(join(home, ".gemini/commands/user-gemini.toml"), 'prompt = "user"');
+		await fixture(join(home, ".lemon/agent/commands/user-lemon.md"), "user");
+		const result = await discoverFileCommands({ cwd, home, env: {} });
+		expect(result.issues).toEqual([]);
+		expect(result.commands.map((command) => [command.name, command.source, command.scope])).toEqual(
+			[
+				["agent-cmd", "agents", "project"],
+				["agents-cmd", "agents", "project"],
+				["codex-cmd", "codex", "project"],
+				["codex-prompt", "codex", "project"],
+				["git:commit", "claude", "project"],
+				["legacy", "lemon", "project"],
+				["native", "lemon", "project"],
+				["omp-cmd", "omp", "project"],
+				["review", "github", "project"],
+				["team:explain", "gemini", "project"],
+				["user-claude", "claude", "global"],
+				["user-gemini", "gemini", "global"],
+				["user-lemon", "lemon", "global"],
+			],
+		);
+		expect(result.commands.find((command) => command.name === "team:explain")?.description).toBe(
+			"Explain code",
+		);
+	});
+
+	test("project beats global, Lemon beats other tools, frontmatter feeds the registry", async () => {
+		await fixture(join(home, ".lemon/agent/commands/ship.md"), "global lemon");
+		await fixture(join(cwd, ".gemini/commands/ship.toml"), 'prompt = "project gemini"');
+		await fixture(
+			join(cwd, ".claude/commands/ship.md"),
+			'---\r\ndescription: "Ship it"\r\nargument-hint: [version]\r\n---\r\nShip $1',
+		);
+		const claude = await discoverFileCommands({ cwd, home, env: {} });
+		expect(claude.commands).toMatchObject([
+			{ name: "ship", source: "claude", description: "Ship it", argumentHint: "[version]" },
+		]);
+		await fixture(join(cwd, ".omp/commands/ship.md"), "---\ndescription: OMP ship\n---\nbody");
+		await fixture(join(cwd, ".lemon/commands/ship.md"), "---\ndescription: Lemon ship\n---\nbody");
+		const lemon = await discoverFileCommands({ cwd, home, env: {} });
+		expect(lemon.commands).toMatchObject([{ name: "ship", source: "lemon", scope: "project" }]);
+		const command = fileSlashCommand(lemon.commands[0]);
+		expect(command).toMatchObject({ summary: "Lemon ship", group: "file commands" });
+	});
+
+	test("the configured agent dir replaces the default Lemon user root", async () => {
+		const agentDir = join(root, "agent");
+		await fixture(join(agentDir, "command/custom.md"), "custom");
+		await fixture(join(home, ".lemon/agent/commands/default.md"), "default");
+		const result = await discoverFileCommands({ cwd, home, env: { LEMON_AGENT_DIR: agentDir } });
+		expect(result.commands.map((command) => command.name)).toEqual(["custom"]);
+	});
 });
