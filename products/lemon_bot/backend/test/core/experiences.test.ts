@@ -338,6 +338,29 @@ describe('native grant enforcement boundaries', () => {
       }
     } finally { f.close(); }
   });
+  test('measured LSP diagnostics require both file writes and local execution, with caller approval ceilings', async () => {
+    const f = fixture();
+    try {
+      const measured: P.MachineCapabilities = { machineId: 'machine', os: 'linux', measuredAtMs: f.services.now(), stale: false, items: [
+        { id: 'files', name: 'Files', category: 'files', supported: true, configuredLevel: 'read_interact', osGrant: 'not_required', tools: ['read', 'write'], reason: 'Measured roots', measuredAtMs: f.services.now(), stale: false },
+        { id: 'terminal', name: 'Terminal', category: 'shell', supported: true, configuredLevel: 'read_interact', osGrant: 'not_required', tools: ['bash', 'lsp_diagnostics'], reason: 'Measured local tooling', measuredAtMs: f.services.now(), stale: false },
+      ] };
+      for (const files of ['off', 'read_only', 'read_interact'] as const) for (const shell of ['off', 'read_only', 'read_interact'] as const) {
+        f.store.put('botGrants', { ...f.base, id: 'file-grant', botId: 'bot', machineId: 'machine', capabilityId: 'files', requestedLevel: files, effectiveLevel: files, reasons: [] } satisfies P.BotGrant);
+        f.store.put('botGrants', { ...f.base, id: 'shell-grant', botId: 'bot', machineId: 'machine', capabilityId: 'terminal', requestedLevel: shell, effectiveLevel: shell, reasons: [] } satisfies P.BotGrant);
+        const policy = await nativeBotToolPolicy(f.services, user, f.bot, measured);
+        if (files === 'read_interact' && shell === 'read_interact') { expect(policy.allow).toContain('lsp_diagnostics'); expect(policy.deny).not.toContain('lsp_diagnostics'); }
+        else { expect(policy.allow).not.toContain('lsp_diagnostics'); expect(policy.deny).toContain('lsp_diagnostics'); }
+      }
+      const floor = await f.services.integrations.effectivePolicy(user, f.bot.id);
+      f.services.integrations.effectivePolicy = async () => ({ ...floor, localExecutionCeiling: 'ask' });
+      expect((await invocationBotToolPolicy(f.services, user, f.bot, measured)).require_approval).toContain('lsp_diagnostics');
+      measured.items[1]!.tools = ['bash'];
+      expect((await nativeBotToolPolicy(f.services, user, f.bot, measured)).allow).not.toContain('lsp_diagnostics');
+      measured.items[1]!.tools = ['bash', 'lsp_diagnostics']; measured.items[0]!.osGrant = 'unknown';
+      expect((await nativeBotToolPolicy(f.services, user, f.bot, measured)).allow).not.toContain('lsp_diagnostics');
+    } finally { f.close(); }
+  });
   test('uses discovered connector aliases and read-only hints cannot waive mandatory approval', async () => {
     const f = fixture();
     try {

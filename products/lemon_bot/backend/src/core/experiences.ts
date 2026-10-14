@@ -195,6 +195,15 @@ async function projectNativeToolPolicy(s: BackendServices, user: Principal, bot:
       }
     }
   }
+  // Diagnostics can execute project-local compilers (including mix compile) and write workspace artifacts.
+  // Neither a read-only file grant nor an unrestricted baseline may authorize this local execution.
+  const diagnosticFiles = measured.items.find(value => value.category === 'files');
+  const diagnosticShell = measured.items.find(value => value.category === 'shell');
+  if (!diagnosticShell?.tools.includes('lsp_diagnostics') || grants.find(value => value.capabilityId === diagnosticFiles?.id)?.effectiveLevel !== 'read_interact' || grants.find(value => value.capabilityId === diagnosticShell.id)?.effectiveLevel !== 'read_interact') denied.add('lsp_diagnostics');
+  else {
+    allowed.add('lsp_diagnostics');
+    if (policy.localExecutionCeiling === 'ask' || policy.rules.some(rule => ['files', 'shell', 'permissions'].includes(rule.category) && rule.mode !== 'allow')) approvalTools.add('lsp_diagnostics');
+  }
   for (const connector of s.store.list<P.Connector>('connectors', value => value.botId === bot.id)) {
     const encrypted = s.store.metadata<string>(`connector:${connector.id}`);
     if (!encrypted) continue;
