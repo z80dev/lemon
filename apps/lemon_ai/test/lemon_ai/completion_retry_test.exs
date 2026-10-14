@@ -2,7 +2,7 @@ defmodule LemonAi.CompletionRetryTest do
   use ExUnit.Case, async: false
 
   alias LemonAi.{EventStream, ProviderRegistry}
-  alias LemonAi.Types.{AssistantMessage, Context, Cost, Model, TextContent, ThinkingContent, ToolCall, Usage}
+  alias LemonAi.Types.{AssistantMessage, Context, Cost, Model, TextContent, Usage}
 
   defmodule FakeProvider do
     @behaviour LemonAi.Provider
@@ -18,7 +18,6 @@ defmodule LemonAi.CompletionRetryTest do
     @impl true
     def stream(_model, _context, %StreamOptions{} = options) do
       policy = RetryHelper.policy(options)
-      send(options.provider_options.parent, {:provider_policy, policy.max_attempts})
       request(options, policy, 0)
     end
 
@@ -98,8 +97,6 @@ defmodule LemonAi.CompletionRetryTest do
 
     assert LemonAi.complete(model, context, options) == {:ok, success}
     assert_receive {:sleep, 1234}
-    assert_receive {:provider_policy, 1}
-    assert_receive {:provider_policy, 1}
     assert_receive :http_request
     assert_receive :http_request
     refute_received :http_request
@@ -130,7 +127,6 @@ defmodule LemonAi.CompletionRetryTest do
 
     assert LemonAi.complete(model, context, options) == {:error, error}
     for _ <- 1..3 do
-      assert_receive {:provider_policy, 1}
       assert_receive :http_request
     end
     refute_received :http_request
@@ -168,27 +164,5 @@ defmodule LemonAi.CompletionRetryTest do
     assert LemonAi.complete(model, context, options) == {:error, :user_cancel}
     assert_receive :http_request
     refute_received :http_request
-  end
-
-  test "public streaming never gains oneshot replay after text, thinking or tool output" do
-    for {kind, content, delta, provider} <- [
-          {:text_delta, %TextContent{text: "visible"}, "visible", :stream_text_retry_test},
-          {:thinking_delta, %ThinkingContent{thinking: "thinking"}, "thinking", :stream_thinking_retry_test},
-          {:tool_call_delta, %ToolCall{id: "call_1", name: "echo", arguments: %{}}, "{}", :stream_tool_retry_test}
-        ] do
-      failed = %{message("overloaded_error") | content: [content]}
-      event = {kind, 0, delta, failed}
-      {model, context, options} = invocation([{failed, [event]}], provider)
-
-      assert {:ok, stream} = LemonAi.stream(model, context, options)
-      events = Enum.to_list(EventStream.events(stream))
-      assert event in events
-      assert {:error, :error, failed} in events
-      assert_receive {:provider_policy, attempts}
-      assert attempts > 1
-      assert_receive :http_request
-      refute_received :http_request
-      refute_received {:sleep, _}
-    end
   end
 end

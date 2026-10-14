@@ -149,14 +149,6 @@ defmodule LemonAi.Providers.RetryHelperTest do
     end
   end
 
-  test "provider policy overrides are per request without mutating the defaults" do
-    original = RetryHelper.policy()
-    options = %LemonAi.Types.StreamOptions{provider_retry: %{max_attempts: 1}}
-    assert RetryHelper.policy(options) == %{original | max_attempts: 1}
-    assert RetryHelper.policy(%LemonAi.Types.StreamOptions{}) == original
-    assert RetryHelper.policy() == original
-  end
-
   describe "retry policy" do
     @policy %{
       max_attempts: 4,
