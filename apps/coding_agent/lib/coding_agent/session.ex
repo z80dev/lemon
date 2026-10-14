@@ -545,14 +545,28 @@ defmodule CodingAgent.Session do
   @doc """
   Navigate to a different point in the session tree.
 
+  `entry_id` is an entry id, or `:root` for the empty position before the first
+  entry (no branch summary is generated for it).
+
   ## Options
 
-    * `:direction` - `:parent`, `:child`, `:sibling`
-    * `:index` - For siblings, which sibling to select
+    * `:summarize_abandoned` - summarize the branch being left in the background
+      (default `true`)
   """
-  @spec navigate_tree(GenServer.server(), String.t(), keyword()) :: :ok | {:error, term()}
+  @spec navigate_tree(GenServer.server(), String.t() | :root, keyword()) ::
+          :ok | {:error, term()}
   def navigate_tree(session, entry_id, opts \\ []) do
     GenServer.call(session, {:navigate_tree, entry_id, opts})
+  end
+
+  @doc """
+  Bookmark an entry with a label, or clear it with `nil`. Appends a label entry
+  (see `CodingAgent.SessionManager.labels/1`); returns the new entry id.
+  """
+  @spec label_entry(GenServer.server(), String.t(), String.t() | nil) ::
+          {:ok, String.t()} | {:error, :entry_not_found}
+  def label_entry(session, entry_id, label) do
+    GenServer.call(session, {:label_entry, entry_id, label})
   end
 
   @doc "Preview or confirm rewind to immediately before an earlier user message."
@@ -979,6 +993,11 @@ defmodule CodingAgent.Session do
   def handle_call({:navigate_tree, _entry_id, _opts}, _from, %{is_streaming: true} = state),
     do: {:reply, {:error, :busy}, state}
 
+  def handle_call({:navigate_tree, :root, _opts}, _from, state) do
+    session_manager = SessionManager.set_leaf_id(state.session_manager, nil)
+    {:reply, :ok, restore_branch_state(state, session_manager)}
+  end
+
   def handle_call({:navigate_tree, entry_id, opts}, _from, state) do
     case SessionManager.get_entry(state.session_manager, entry_id) do
       nil ->
@@ -1005,6 +1024,19 @@ defmodule CodingAgent.Session do
         session_manager = SessionManager.set_leaf_id(state.session_manager, entry_id)
 
         {:reply, :ok, restore_branch_state(state, session_manager)}
+    end
+  end
+
+  def handle_call({:label_entry, entry_id, label}, _from, state) do
+    case SessionManager.get_entry(state.session_manager, entry_id) do
+      nil ->
+        {:reply, {:error, :entry_not_found}, state}
+
+      _entry ->
+        session_manager = SessionManager.append_label(state.session_manager, entry_id, label)
+
+        {:reply, {:ok, SessionManager.get_leaf_id(session_manager)},
+         %{state | session_manager: session_manager}}
     end
   end
 

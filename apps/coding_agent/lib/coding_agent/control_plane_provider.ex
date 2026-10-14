@@ -88,16 +88,117 @@ defmodule CodingAgent.ControlPlaneProvider do
     end
   end
 
+  @doc """
+  Switch the active branch to `entry_id`. Navigation keeps the abandoned branch
+  in the tree. Selecting a user message lands before it and returns its text as
+  `"prompt"`, as rewind does; any other entry becomes the leaf.
+
+  Options: `:summarize` (default `false`) asks a *live* session to summarize the
+  abandoned branch in the background. A stopped session has no model runtime to
+  do that, so it only moves the leaf (`"summarizing" => false`). A streaming
+  session answers `{:error, :busy}`.
+  """
+  def session_navigate(session_key, cwd, entry_id, opts) do
+    case live_session(session_key) do
+      nil ->
+        with {:ok, path} <- native_session_path(session_key, cwd) do
+          :global.trans({{__MODULE__, path}, self()}, fn ->
+            with {:ok, session} <- load_native_session(path),
+                 {:ok, target} <- CodingAgent.Session.Rewind.navigation_target(session, entry_id) do
+              session =
+                CodingAgent.SessionManager.set_leaf_id(%{session | file_path: path}, target.leaf)
+
+              {:ok, navigation_receipt(session, entry_id, target, false)}
+            end
+          end)
+        end
+
+      pid ->
+        summarize = Keyword.get(opts, :summarize, false)
+        manager = CodingAgent.Session.get_state(pid).session_manager
+
+        with {:ok, target} <- CodingAgent.Session.Rewind.navigation_target(manager, entry_id),
+             :ok <-
+               CodingAgent.Session.navigate_tree(pid, target.leaf || :root,
+                 summarize_abandoned: summarize
+               ) do
+          manager = CodingAgent.Session.get_state(pid).session_manager
+          {:ok, navigation_receipt(manager, entry_id, target, summarize)}
+        end
+    end
+  end
+
+  defp navigation_receipt(session, entry_id, target, summarizing) do
+    %{
+      "sessionId" => session.header.id,
+      "entryId" => entry_id,
+      "leafId" => session.leaf_id,
+      "prompt" => target.prompt,
+      "summarizing" => summarizing
+    }
+  end
+
+  @doc "Set (or clear with `nil`) the bookmark label of an entry, for a live or stopped session."
+  def session_label(session_key, cwd, entry_id, label) do
+    case live_session(session_key) do
+      nil ->
+        with {:ok, path} <- native_session_path(session_key, cwd) do
+          :global.trans({{__MODULE__, path}, self()}, fn ->
+            with {:ok, session} <- load_native_session(path),
+                 %{} <- CodingAgent.SessionManager.get_entry(session, entry_id) || :missing do
+              session =
+                CodingAgent.SessionManager.append_label(
+                  %{session | file_path: path},
+                  entry_id,
+                  label
+                )
+
+              {:ok, label_receipt(session, entry_id)}
+            else
+              :missing -> {:error, :entry_not_found}
+              {:error, _} = error -> error
+            end
+          end)
+        end
+
+      pid ->
+        with {:ok, _leaf} <- CodingAgent.Session.label_entry(pid, entry_id, label) do
+          {:ok, label_receipt(CodingAgent.Session.get_state(pid).session_manager, entry_id)}
+        end
+    end
+  end
+
+  defp label_receipt(session, entry_id) do
+    %{
+      "sessionId" => session.header.id,
+      "entryId" => entry_id,
+      "label" => Map.get(CodingAgent.SessionManager.labels(session), entry_id)
+    }
+  end
+
   @doc "Fork native history and bind the independent resume token to a new logical session."
-  def session_fork(source_key, cwd, destination_key) do
+  def session_fork(source_key, cwd, destination_key),
+    do: session_fork(source_key, cwd, destination_key, [])
+
+  @doc """
+  Like `session_fork/3`; `:entry_id` ends the child's history at that entry
+  (inclusive) instead of the source's current leaf.
+  """
+  def session_fork(source_key, cwd, destination_key, opts) do
     with :ok <- ensure_idle(source_key),
          nil <- LemonCore.ChatStateStore.get(destination_key),
          {:ok, source_path} <- native_session_path(source_key, cwd) do
       id = LemonCore.Id.uuid()
       destination_path = CodingAgent.Session.Presentation.session_file_path(id, cwd)
 
+      fork_opts =
+        case Keyword.get(opts, :entry_id) do
+          nil -> [id: id]
+          entry_id -> [id: id, leaf_id: entry_id]
+        end
+
       with {:ok, _session} <-
-             CodingAgent.SessionManager.fork_file(source_path, destination_path, id: id) do
+             CodingAgent.SessionManager.fork_file(source_path, destination_path, fork_opts) do
         LemonCore.ChatStateStore.put(destination_key, %LemonCore.ChatState{
           last_engine: "lemon",
           last_resume_token: id,

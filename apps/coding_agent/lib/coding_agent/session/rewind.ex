@@ -22,6 +22,7 @@ defmodule CodingAgent.Session.Rewind do
     entries = SessionManager.entries(session)
     active = MapSet.new(SessionManager.get_branch(session), & &1.id)
     parents = MapSet.new(entries, & &1.parent_id)
+    labels = SessionManager.labels(session)
     offset = Keyword.get(opts, :offset, 0)
     limit = Keyword.get(opts, :limit, 100)
 
@@ -47,7 +48,8 @@ defmodule CodingAgent.Session.Rewind do
           "timestamp" => entry.timestamp,
           "isActive" => on_branch,
           "isLeaf" => not MapSet.member?(parents, entry.id),
-          "rewindable" => on_branch and role in [:user, "user"]
+          "rewindable" => on_branch and role in [:user, "user"],
+          "label" => Map.get(labels, entry.id)
         }
       end)
 
@@ -60,6 +62,29 @@ defmodule CodingAgent.Session.Rewind do
       "offset" => offset,
       "hasMore" => offset + length(nodes) < length(entries)
     }
+  end
+
+  @doc """
+  Resolve where an active-branch switch to `entry_id` lands. A user message
+  lands before itself and returns its text so a client can offer it for
+  editing (the same convention as rewind); any other entry becomes the leaf.
+  `leaf: nil` means the empty root.
+  """
+  @spec navigation_target(SessionManager.Session.t(), String.t()) ::
+          {:ok, %{leaf: String.t() | nil, prompt: String.t() | nil}} | {:error, :entry_not_found}
+  def navigation_target(session, entry_id) do
+    case SessionManager.get_entry(session, entry_id) do
+      nil ->
+        {:error, :entry_not_found}
+
+      %{type: :message, message: message} = entry ->
+        if field(message, :role) in [:user, "user"],
+          do: {:ok, %{leaf: entry.parent_id, prompt: message_text(message)}},
+          else: {:ok, %{leaf: entry.id, prompt: nil}}
+
+      entry ->
+        {:ok, %{leaf: entry.id, prompt: nil}}
+    end
   end
 
   def run(session, entry_id, opts \\ []) do
