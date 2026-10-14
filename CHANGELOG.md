@@ -8,6 +8,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
+No unreleased changes yet.
+
+---
+
+## [2026.10.4]
+
 ### Added
 
 - Opt-in `runtime.tools.disclosure.profile = "coding"` keeps a coding core
