@@ -114,7 +114,7 @@ export function createIntegrationServices(s: BackendServices): Services {
   }
   const teardown = createProviderTeardownServices(s, { execute: cleanup, observe });
   const service: Services = {
-    effectivePolicy: policy.effectivePolicy,
+    effectivePolicy: policy.effectivePolicy, workspaceRestrictions: policy.workspaceRestrictions,
     async admission(actor, botId, routineId) {
       assertActiveAccount(s, actor.userId); const bot = s.auth.bot(actor, botId);
       if (bot.ownerUserId !== actor.userId) throw new ApiError('not_found', 'Bot not found.');

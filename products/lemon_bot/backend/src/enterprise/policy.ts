@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type * as P from '../../../contracts/protocol';
-import type { BackendServices, Principal, Route } from '../core/services';
+import type { BackendServices, Principal, Route, WorkspaceToolRestrictions } from '../core/services';
 import { ApiError } from '../core/errors';
 import { principal, userPrincipal } from '../integrations/common';
 
@@ -71,14 +71,25 @@ export function composeEffectivePolicy(input: PolicyCompositionInput): P.Effecti
 
 export function createPolicyServices(services: BackendServices) {
   function governance(): P.Governance { return services.store.metadata<P.Governance>('governance') ?? structuredClone(defaultGovernance); }
+  function policies(): P.Policies {
+    return services.store.metadata<P.Policies>('policies') ?? { revision: 1, publicTemplates: false, allowedMcpOrigins: null, localExecutionCeiling: 'ask', actionRecording: false, auditRetentionDays: 90, rules: [] };
+  }
+  function workspaceRestrictions(scope: { botId: string; machineId: string }): WorkspaceToolRestrictions {
+    const base = policies();
+    return {
+      localExecutionCeiling: base.localExecutionCeiling, allowedMcpOrigins: base.allowedMcpOrigins,
+      requireReview: governance().requireReview,
+      rules: services.store.list<P.PolicyRule>('policyRules', rule => rule.ownerUserId === null && (rule.botId === null || rule.botId === scope.botId) && (rule.machineId === null || rule.machineId === scope.machineId)),
+    };
+  }
   async function effectivePolicy(who: Principal, botId?: string): Promise<P.EffectivePolicy> {
     const bot = botId ? services.auth.bot(who, botId) : null;
     if (bot && bot.ownerUserId !== who.userId) throw new ApiError('policy_denied', 'Only the Bot owner can use its effective policy.');
     const workspaceId = services.store.metadata<string>('workspaceId'); const workspace = workspaceId ? services.store.get<P.Workspace>('workspaces', workspaceId) : null;
-    const base = services.store.metadata<P.Policies>('policies') ?? { revision: 1, publicTemplates: false, allowedMcpOrigins: null, localExecutionCeiling: 'ask', actionRecording: false, auditRetentionDays: 90, rules: [] };
+    const base = policies();
     return composeEffectivePolicy({ userId: who.userId, botId: bot?.id ?? null, machineId: bot?.machineId ?? null, workspaceEnabled: workspace?.enabled ?? false, memberEnabled: services.auth.member(who.userId).enabled, governance: governance(), policies: base, groups: services.store.list<P.DirectoryGroup>('directoryGroups'), groupPolicies: services.store.list<P.GroupPolicy>('groupPolicies'), rules: services.store.list<P.PolicyRule>('policyRules'), networkPolicies: services.store.list<P.NetworkPolicy>('networkPolicies') });
   }
-  return { governance, effectivePolicy, requiredNetworkPolicies: async (who: Principal, botId?: string) => (await effectivePolicy(who, botId)).networkPolicies };
+  return { governance, effectivePolicy, workspaceRestrictions, requiredNetworkPolicies: async (who: Principal, botId?: string) => (await effectivePolicy(who, botId)).networkPolicies };
 }
 
 export function createPolicyRoutes(services: BackendServices, hooks: { governanceChanged?: (previous: P.Governance, next: P.Governance) => Promise<void>; cancelContent?: () => void } = {}): Route[] {
