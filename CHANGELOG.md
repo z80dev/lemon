@@ -53,6 +53,13 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   exclusively from the encrypted secret store on the execution host. Missing or
   failing secret reads fail closed before MCP clients start; controller requests
   keep references unchanged and never substitute environment values.
+- Canonical read-only `usage.records` with millisecond range/run/session filters,
+  filter-bound pagination and native local/named-node run attribution. Actual
+  response prices preserve known zero versus unknown cost; missing historical
+  attribution and aggregate-only history are explicitly incomplete. Durable
+  run/usage-occurrence dedupe survives ledger restart. `usage.cost` now identifies
+  its known-cost subtotal and completeness, delegates recording to the core owner,
+  and propagates unavailable storage as an error.
 
 ### Fixed
 

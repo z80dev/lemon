@@ -748,6 +748,7 @@ defmodule LemonGateway.Run do
              completed: completed,
              session_key: state.session_key,
              run_id: state.run_id,
+             completed_at_ms: System.system_time(:millisecond),
              run_ref: state.run_ref,
              prompt: state.execution_request.prompt,
              duration_ms: duration_ms,
