@@ -11,13 +11,14 @@ import { createEventService } from '../../src/core/events';
 import { createMutationService } from '../../src/core/mutations';
 import { createGateService } from '../../src/core/gates';
 import { syncBotProfile, baseBotMcpTemplate, botSystemPrompt } from '../../src/core/bots';
-import { revokeConnectorInvocations } from '../../src/runtime/runs';
+import { createConversation } from '../../src/core/conversations';
+import { buildInvocationContext, revokeConnectorInvocations } from '../../src/runtime/runs';
 import { Router } from '../../src/core/router';
 import { ApiError } from '../../src/core/errors';
 import { createPolicyServices } from '../../src/enterprise/policy';
 import { createConnectorRoutes, createConnectorServices, connectorConfigurationFingerprint } from '../../src/integrations/connectors';
 import { createPushServices } from '../../src/integrations/push';
-import type { InvocationMcpServer } from '../../src/runtime/runs';
+import type { InvocationContext, InvocationMcpServer } from '../../src/runtime/runs';
 import { privateMetadata, sha256 } from '../../src/integrations/common';
 import type { OAuthState } from '../../src/integrations/oauth';
 
@@ -54,7 +55,7 @@ const productExecutionProjection = {
 /** Stateful destination records: measured presence, stored profiles and destination-only secret resolution. */
 class DestinationPeer implements LemonService {
   connected = true;
-  methods = ['node.mcp.discover', 'node.secrets.list', 'node.secrets.set', 'node.secrets.delete', 'node.capabilities.get', 'nodes.list', 'node.host.info', 'profiles.update', 'profiles.get', 'profiles.sync', 'mcp.execution_names', 'profile.followup.admission.set', 'runs.followup.lineage.get', 'chat.abort', 'agent.wait'];
+  methods = ['node.mcp.discover', 'node.secrets.list', 'node.secrets.set', 'node.secrets.delete', 'node.capabilities.get', 'node.runtime.features', 'nodes.list', 'node.host.info', 'profiles.update', 'profiles.get', 'profiles.sync', 'mcp.execution_names', 'profile.followup.admission.set', 'runs.followup.lineage.get', 'chat.abort', 'agent.wait'];
   calls: { method: string; params: Record<string, unknown> }[] = [];
   secrets = new Map<string, string>();
   profiles = new Map<string, Server[]>();
@@ -94,6 +95,10 @@ class DestinationPeer implements LemonService {
         // This peer implements connector operations, not native filesystem/shell/browser grants.
         result = { nodeId: 'node-1', os: 'linux', measuredAtMs: 1_800_000_000_000, stale: false, items: [] }; break;
       }
+      case 'node.runtime.features': {
+        const input = z.object({ nodeId: z.literal('node-1') }).strict().parse(params);
+        result = { nodeId: input.nodeId, protocol: 1, lemonVersion: 'fixture', methods: this.methods, features: { hostIO: true, filesystemCAS: true, deletePreviews: true, encryptedSecrets: true, ptyShell: true, mcpDiscovery: true, profileSync: true, liveStreaming: true, repairInvites: true, nativeExecutionPolicy: true }, botReady: true, missingFeatures: [], nativePrivacyContext: { version: 1 } }; break;
+      }
       case 'mcp.execution_names': {
         z.object({ server: z.object({ name: z.literal('lemon-bot'), url: z.literal(`${PUBLIC_URL}/mcp`) }).strict(), toolNames: z.array(z.enum(productToolNames)).refine(names => names.length === productToolNames.length && names.every((name, index) => name === productToolNames[index])) }).strict().parse(params);
         result = structuredClone(productExecutionProjection); break;
@@ -115,10 +120,10 @@ class DestinationPeer implements LemonService {
         result = { names: [...this.secrets.keys()], limit: 500, truncated: false }; break;
       }
       case 'node.secrets.set': {
-        const input = z.object({ nodeId: z.literal('node-1'), name: z.string(), value: z.string() }).strict().parse(params);
+        const input = z.object({ nodeId: z.literal('node-1'), name: z.string(), value: z.string(), operationId: z.string().min(1).optional() }).strict().parse(params);
         this.putSecret(input.name, input.value);
         if (this.failure === 'secret_write_after_apply') throw new ApiError('outcome_unknown', 'Destination acknowledgement lost.', false);
-        result = { name: input.name, set: true }; break;
+        result = { name: input.name, set: true, ...(input.operationId ? { operationId: input.operationId, currentBindingMatches: this.readSecret(input.name) === input.value } : {}) }; break;
       }
       case 'node.secrets.delete': {
         const input = z.object({ nodeId: z.literal('node-1'), name: z.string() }).strict().parse(params);
@@ -282,15 +287,13 @@ async function fixture(visibility: P.Bot['visibility'] = 'personal') {
   };
   const create = async (changes: Partial<P.ConnectorSetupRequest> = {}) => request<P.ConnectorSetupResult>('POST', `/v1/bots/${bot.id}/connectors/setup`, { clientNonce: services.id('nonce'), machineId: machine.id, name: 'Records', url: `${ORIGIN}/mcp`, accountLabel: 'Alice records', shared: false, authKind: 'secret_headers', secretBindings: [{ header: 'Authorization', secretName: 'RECORDS_TOKEN' }], requestedLevel: 'read_interact', ...changes });
   const enable = async (connector: P.Connector) => request<P.Connector>('PATCH', `/v1/connectors/${connector.id}`, { clientNonce: services.id('nonce'), revision: connector.revision, tools: connector.tools.map(tool => ({ ...tool, enabled: true })) });
-  const admit = async (userId: string, operationId: string): Promise<P.Run> => {
+  const admit = async (userId: string, operationId: string, conversationId = `room-${userId}`): Promise<P.Run> => {
     const actor = principal(userId);
-    const run: P.Run = services.resource('run', { conversationId: `room-${userId}`, botId: bot.id, initiatorUserId: userId, clientNonce: services.id('nonce'), status: 'running', error: null, startedAtMs: services.now(), completedAtMs: null, routineRunId: null });
+    const run: P.Run = services.resource('run', { conversationId, botId: bot.id, initiatorUserId: userId, clientNonce: services.id('nonce'), status: 'running', error: null, startedAtMs: services.now(), completedAtMs: null, routineRunId: null });
     store.put('runs', run);
     store.setMetadata(`nativeRunProduct:${operationId}`, run.id);
     store.setMetadata(`runPrincipal:${run.id}`, actor);
-    await connectorServices.connectorInvocationConfiguration(actor, bot.id, run.conversationId, operationId);
-    const configured = store.metadata<string[]>(`invocationConnectors:${operationId}`) ?? [];
-    store.setMetadata(`runConnectorEpochs:${run.id}`, configured.map(connectorId => ({ connectorId, epoch: store.metadata<number>(`connectorEpoch:${connectorId}`) ?? 0 })));
+    await buildInvocationContext(services, actor, services.auth.conversation(actor, conversationId), bot, operationId);
     return run;
   };
   cleanup.push(() => { gateService.close(); peer.close(); store.close(); });
@@ -402,7 +405,7 @@ describe('destination connector configuration', () => {
     expect(await f.connectors.connectorProfileConfiguration(f.principal('alice'), f.bot.id, 'room-alice', f.services.id('run'))).toEqual([]);
   });
 
-  test('direct tool authorization cannot attach an unadmitted connector or reuse a revoked invocation epoch', async () => {
+  test('direct tool authorization conceals personal Bots and rejects unadmitted or revoked invocation authority', async () => {
     const f = await fixture();
     const created = await f.create();
     const connector = (await f.enable(created.body.connector)).body;
@@ -410,7 +413,7 @@ describe('destination connector configuration', () => {
     await expect(f.connectors.authorizeConnectorTool(f.principal('alice'), input)).rejects.toMatchObject({ code: 'policy_denied' });
     await f.admit('alice', input.operationId);
     await expect(f.connectors.authorizeConnectorTool(f.principal('alice'), input)).resolves.toBeUndefined();
-    await expect(f.connectors.authorizeConnectorTool(f.principal('bob'), { ...input, conversationId: 'room-bob' })).rejects.toMatchObject({ code: 'forbidden' });
+    await expect(f.connectors.authorizeConnectorTool(f.principal('bob'), { ...input, conversationId: 'room-bob' })).rejects.toMatchObject({ code: 'not_found' });
     f.store.setMetadata(`connectorEpoch:${connector.id}`, (f.store.metadata<number>(`connectorEpoch:${connector.id}`) ?? 0) + 1);
     await expect(f.connectors.authorizeConnectorTool(f.principal('alice'), input)).rejects.toMatchObject({ code: 'policy_denied' });
     expect(f.store.metadata<string[]>(`invocationConnectors:${input.operationId}`)).toEqual([connector.id]);
@@ -532,6 +535,34 @@ describe('principal-scoped Team connector consent', () => {
     f.store.put('runs', f.services.update(run, { status: 'succeeded' as const, completedAtMs: f.services.now() }));
     f.services.config.operator!.connectorProviders = [];
     await expect(f.connectors.connectorProfileConfiguration(f.principal('bob'), f.bot.id)).rejects.toMatchObject({ code: 'policy_denied' });
+  });
+
+  test('a visible collaborative Bot does not let another participant reuse the initiating actor admission', async () => {
+    const f = await fixture('team');
+    f.services.config.operator!.connectorProviders = [{ id: 'service-records', origins: [ORIGIN], oauth: null, sharedServiceAccount: true }];
+    const created = await f.create({ shared: true });
+    expect(created.status).toBe(201);
+    const enabled = await f.enable(created.body.connector);
+    expect(enabled.status).toBe(200);
+    const connector = enabled.body;
+    const collaborator: P.Bot = { ...f.bot, id: 'bot-collaborator', profileId: 'lb-collaborator', name: 'Collaborator', mainConversationId: 'room-collaborator' };
+    f.store.put('bots', collaborator);
+    const conversation = createConversation(f.services, f.principal('alice'), { clientNonce: f.services.id('nonce'), kind: 'group', name: 'Shared records', botIds: [f.bot.id, collaborator.id], humanUserIds: ['alice', 'bob'] });
+    expect(f.services.auth.bot(f.principal('bob'), f.bot.id).id).toBe(f.bot.id);
+    expect(f.services.auth.conversation(f.principal('bob'), conversation.id).id).toBe(conversation.id);
+    const input = { connectorId: connector.id, botId: f.bot.id, conversationId: conversation.id, toolName: 'read_items', operationId: 'shared-native-operation' };
+    await expect(f.connectors.authorizeConnectorTool(f.principal('alice'), input)).rejects.toMatchObject({ code: 'policy_denied' });
+    const run = await f.admit('alice', input.operationId, conversation.id);
+    expect(run.conversationId).toBe(conversation.id);
+    const invocation = f.store.metadata<InvocationContext>(`runtimeInvocation:${input.operationId}`);
+    expect(invocation?.invocationProof.runId).toBe(input.operationId);
+    expect(f.peer.readSecret(invocation!.invocationProof.secretName)).toStartWith(`${input.operationId}.`);
+    await expect(f.connectors.authorizeConnectorTool(f.principal('alice'), input)).resolves.toBeUndefined();
+    // Both the Bot and execution audience are visible; only the retained initiating actor differs.
+    await expect(f.connectors.authorizeConnectorTool(f.principal('bob'), input)).rejects.toMatchObject({ code: 'forbidden' });
+    await expect(f.connectors.authorizeConnectorTool(f.principal('alice'), input)).resolves.toBeUndefined();
+    expect(f.store.metadata<string[]>(`invocationConnectors:${input.operationId}`)).toEqual([connector.id]);
+    f.store.put('runs', f.services.update(run, { status: 'succeeded' as const, completedAtMs: f.services.now() }));
   });
 });
 
