@@ -29,6 +29,18 @@ agent platform. Its only Lemon dependency is `lemon_core`.
 part of the reference runtime. Starting the application starts `LemonBrowser.LocalServer` under
 `LemonBrowser.Supervisor`; no other wiring is required.
 
+Attached-machine capability inspection uses the internal
+`LemonBrowser.LocalServer.inspection_config/1` seam. It obtains the configured
+driver/attach policy without starting the driver or browser. This private config
+may contain endpoint credentials and must never become an RPC result or log.
+The execution-node inspector sends it only over a bounded local helper's stdin,
+imports the installed driver's actual executable/discovery logic, and checks an
+existing CDP HTTP/WebSocket endpoint passively. It never launches Chrome, opens
+tabs, runs CDP commands or asks for browser permissions. Only bounded availability
+booleans/reason classifications leave the worker; missing inspection is unknown,
+not a fabricated permission grant.
+
+
 ## Driving a browser
 
 ```elixir

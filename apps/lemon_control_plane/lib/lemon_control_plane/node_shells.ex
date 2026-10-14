@@ -31,7 +31,7 @@ defmodule LemonControlPlane.NodeShells do
       true ->
         shell_id = LemonCore.Id.uuid()
         args = params |> Map.delete("nodeId") |> Map.put("shellId", shell_id)
-        case LemonCore.NodeRegistry.invoke(node_id, "node.shell.open", args,
+        case LemonCore.NodeRegistry.invoke_node(node_id, "node.shell.open", args,
                recipient: self(), timeout_ms: 3_600_000) do
           {:ok, invoke_id} ->
             shell = %{owner: owner, ref: Process.monitor(owner), invoke_id: invoke_id,

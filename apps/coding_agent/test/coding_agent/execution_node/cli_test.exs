@@ -92,4 +92,40 @@ defmodule CodingAgent.ExecutionNode.CLITest do
     assert CLI.help() =~ "--allowed-root"
   end
 
+  test "compatibility JSON inspection gates enrollment without starting a worker" do
+    snapshot = %{"protocol" => 1, "lemonVersion" => "2026.10.3",
+      "features" => %{"hostIO" => false}, "missingFeatures" => ["hostIO"], "botReady" => false,
+      "methods" => []}
+    deps = [runtime_features: fn -> snapshot end]
+    output = ExUnit.CaptureIO.capture_io(fn ->
+      assert :ok = CLI.run(["capabilities", "--json"], deps)
+    end)
+    assert Jason.decode!(output) == snapshot
+    ExUnit.CaptureIO.capture_io(fn ->
+      assert {:error, message} = CLI.run(["capabilities", "--json", "--require-bot"], deps)
+      assert message =~ "missing"
+    end)
+
+    previous = Process.flag(:trap_exit, true)
+    on_exit(fn -> Process.flag(:trap_exit, previous) end)
+    assert {:error, message} = CLI.run(["--name", "bot", "--controller",
+      "ws://127.0.0.1:1/ws", "--invite-code", "private-enrollment"], deps)
+    assert message =~ "matching source checkout"
+    refute message =~ "private-enrollment"
+  end
+
+  test "compatible inspection requires an exact optional version pin and redacts bad flags" do
+    snapshot = %{"protocol" => 1, "lemonVersion" => "2026.10.3", "features" => %{},
+      "missingFeatures" => [], "botReady" => true, "methods" => []}
+    deps = [runtime_features: fn -> snapshot end]
+    ExUnit.CaptureIO.capture_io(fn ->
+      assert :ok = CLI.run(["capabilities", "--json", "--require-bot",
+        "--expected-version", "2026.10.3"], deps)
+      assert {:error, _} = CLI.run(["capabilities", "--expected-version", "2026.10.4"], deps)
+      assert {:error, _} = CLI.run(["capabilities", "--expected-version", "latest"], deps)
+    end)
+    assert {:error, message} = CLI.run(["capabilities", "--bad-option=private"], deps)
+    refute message =~ "private"
+  end
+
 end

@@ -1920,7 +1920,7 @@ defmodule LemonCore.Store do
   defp safe_log_diagnostic(_table, term), do: term
 
   defp sensitive_log_table?(table) when is_atom(table),
-    do: String.contains?(Atom.to_string(table), "idempotency")
+    do: table in [:secrets_v1, :secrets_lock] or String.contains?(Atom.to_string(table), "idempotency")
 
   defp sensitive_log_table?(_table), do: false
 

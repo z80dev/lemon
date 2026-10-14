@@ -2,22 +2,41 @@ defmodule LemonControlPlane.Methods.NodePairInviteTest do
   use ExUnit.Case, async: false
 
   alias LemonControlPlane.Auth.{Authorize, TokenStore}
-  alias LemonControlPlane.Methods.{ConnectChallenge, NodePairApprove, NodePairInvite, NodePairRequest, NodesList}
+  alias LemonControlPlane.Methods.{ConnectChallenge, NodePairApprove, NodePairInvite, NodePairInviteRevoke, NodePairRequest, NodesList}
   alias LemonControlPlane.NodeStore
   alias CodingAgent.ExecutionNode.{Socket, Worker}
 
   @ctx %{auth: %{role: :operator, scopes: [:pairing, :read]}, conn_id: "invite-operator"}
+  @moduletag :tmp_dir
+  @runtime_keys [:node_source_checkout, :node_install_version, :node_install_base_url]
+  @runtime_env [
+    "LEMON_NODE_SOURCE_CHECKOUT",
+    "LEMON_NODE_INSTALL_VERSION",
+    "LEMON_NODE_INSTALL_BASE_URL",
+    "LEMON_VERSION",
+    "LEMON_INSTALL_BASE_URL"
+  ]
 
-  setup do
+  setup %{tmp_dir: tmp_dir} do
     prefix = "invite-test-#{System.unique_integer([:positive])}"
-    old = Map.new([:operator_token, :public_ws_url], &{&1, Application.get_env(:lemon_control_plane, &1)})
+    old = Map.new([:operator_token, :public_ws_url] ++ @runtime_keys,
+      &{&1, Application.get_env(:lemon_control_plane, &1)})
+    old_env = Map.new(@runtime_env, &{&1, System.get_env(&1)})
+    Enum.each(@runtime_env, &System.delete_env/1)
+    Enum.each(@runtime_keys, &Application.delete_env(:lemon_control_plane, &1))
     Application.put_env(:lemon_control_plane, :operator_token, "invite-test-operator")
     Application.put_env(:lemon_control_plane, :public_ws_url, "wss://controller.example/ws")
+    source = Path.join(tmp_dir, "source's checkout")
+    write_source_fixture(source)
+    Application.put_env(:lemon_control_plane, :node_source_checkout, source)
 
     on_exit(fn ->
       for {key, value} <- old do
         if is_nil(value), do: Application.delete_env(:lemon_control_plane, key),
           else: Application.put_env(:lemon_control_plane, key, value)
+      end
+      for {key, value} <- old_env do
+        if is_nil(value), do: System.delete_env(key), else: System.put_env(key, value)
       end
 
       for table <- [:node_pair_invites, :nodes_pairing, :node_challenges, :nodes_registry] do
@@ -38,12 +57,12 @@ defmodule LemonControlPlane.Methods.NodePairInviteTest do
       end
     end)
 
-    %{name: prefix}
+    %{name: prefix, source: source, argv_log: Path.join(tmp_dir, "argv.log")}
   end
 
   test "auto-approves the bound name and delivers real challenge/recovery credentials", %{name: name} do
     :ok = LemonCore.Bus.subscribe("nodes")
-    invite = invite(name, %{"labels" => ["office", "mac"]})
+    invite = invite(name, %{"labels" => %{"location" => "office", "platform" => "mac"}})
     auth = enrollment_auth(invite)
     assert auth.role == :enrollment
     assert auth.scopes == [:enroll]
@@ -67,7 +86,9 @@ defmodule LemonControlPlane.Methods.NodePairInviteTest do
     assert {:ok, listed} = NodesList.handle(%{}, @ctx)
     row = Enum.find(listed["nodes"], &(&1["id"] == approved["nodeId"]))
     assert row["purpose"] == "lemon_bot"
-    assert row["labels"] == ["office", "mac"]
+    assert row["labels"] == %{"location" => "office", "platform" => "mac"}
+    assert row["enrollmentInviteId"] == invite["inviteId"]
+    assert NodeStore.get_node(approved["nodeId"]).enrollment_invite_id == invite["inviteId"]
     refute inspect(row) =~ approved["token"]
     assert {:error, _} = enroll(invite, name, auth)
     assert {:error, _} = Authorize.from_params(%{"role" => "enrollment", "auth" => %{"inviteCode" => invite["inviteCode"]}}, local?: false)
@@ -84,32 +105,36 @@ defmodule LemonControlPlane.Methods.NodePairInviteTest do
   end
 
   test "wrong name and recovery parameters cannot consume or retarget an invite", %{name: name} do
-    invite = invite(name, %{"purpose" => "research", "labels" => ["private"]})
+    invite = invite(name, %{"purpose" => "research", "labels" => %{"visibility" => "private"}})
     auth = enrollment_auth(invite)
     assert {:error, _} = enroll(invite, name <> "-wrong", auth)
     assert {:error, _} = NodePairRequest.handle(%{"nodeName" => name, "inviteCode" => invite["inviteCode"], "repair" => true}, %{auth: auth})
     assert {:ok, approved} = enroll(invite, name, auth)
     node = NodeStore.get_node(approved["nodeId"])
     assert node.purpose == "research"
-    assert node.labels == ["private"]
+    assert node.labels == %{"visibility" => "private"}
   end
 
   test "expired invites fail authentication and an already connected enrollment", %{name: name} do
     invite = invite(name)
     auth = enrollment_auth(invite)
+    assert {:error, _} = enroll(invite, name <> "-wrong", auth)
     assert {:ok, stored} = NodeStore.fetch_invite(invite["inviteCode"])
     key = :crypto.hash(:sha256, invite["inviteCode"]) |> Base.encode16(case: :lower)
     :ok = LemonCore.Store.put(:node_pair_invites, key, Map.put(stored, :expires_at_ms, System.system_time(:millisecond) - 1))
     assert {:error, _} = NodeStore.fetch_invite(invite["inviteCode"])
+    assert {:error, {:not_found, _}} = NodePairInviteRevoke.handle(%{"inviteId" => invite["inviteId"]}, @ctx)
     assert {:error, _} = enroll(invite, name, auth)
     assert {:error, _} = Authorize.from_params(%{"role" => "enrollment", "auth" => %{"inviteCode" => invite["inviteCode"]}}, local?: false)
+    replacement = invite(name)
+    assert {:ok, _} = enroll(replacement, name, enrollment_auth(replacement))
   end
 
   test "restricted credentials cannot claim operator scopes or generic method access", %{name: name} do
     invite = invite(name)
     assert {:ok, auth} = Authorize.from_params(%{"role" => "operator", "scopes" => ["operator.admin", "operator.pairing"], "auth" => %{"inviteCode" => invite["inviteCode"]}}, local?: false)
     assert auth.role == :enrollment
-    for {method, scopes} <- [{"nodes.list", [:read]}, {"node.pair.invite", [:pairing]}, {"node.pair.approve", [:pairing]}, {"config.set", [:admin]}, {"node.invoke", [:write]}, {"health", []}] do
+    for {method, scopes} <- [{"nodes.list", [:read]}, {"node.pair.invite", [:pairing]}, {"node.pair.invite.revoke", [:pairing]}, {"node.pair.approve", [:pairing]}, {"config.set", [:admin]}, {"node.invoke", [:write]}, {"health", []}] do
       assert {:error, _} = Authorize.authorize(auth, method, scopes)
     end
     assert {:error, _} = NodePairInvite.handle(%{"nodeName" => name}, %{auth: auth})
@@ -130,7 +155,7 @@ defmodule LemonControlPlane.Methods.NodePairInviteTest do
   end
 
   test "operator-authorized recovery retains durable invite purpose and labels", %{name: name} do
-    invite = invite(name, %{"purpose" => "research", "labels" => ["office"]})
+    invite = invite(name, %{"purpose" => "research", "labels" => %{"location" => "office"}})
     auth = enrollment_auth(invite)
     assert {:ok, approved} = enroll(invite, name, auth)
     assert {:ok, requested} = NodePairRequest.handle(%{
@@ -143,34 +168,370 @@ defmodule LemonControlPlane.Methods.NodePairInviteTest do
     refute Map.has_key?(recovered, "token")
     node = NodeStore.get_node(recovered["nodeId"])
     assert node.purpose == "research"
-    assert node.labels == ["office"]
+    assert node.labels == %{"location" => "office"}
+    assert node.enrollment_invite_id == invite["inviteId"]
   end
 
-  @tag :tmp_dir
-  test "validates bounds and quotes a runnable installer-compatible command", %{name: name, tmp_dir: tmp_dir} do
-    invite = invite(name <> "'s machine")
-    command = invite["joinCommand"]
-    assert command =~ "install.sh"
-    assert command =~ "--skip-setup --no-modify-path"
-    assert command =~ "node join --name"
-    assert command =~ "--invite-code"
-    assert command =~ "'\\''s machine'"
+  test "repair invitation retains the durable ID and metadata and rotates credentials", %{name: name} do
+    original = invite(name, %{"purpose" => "research", "labels" => %{"site" => "office"}})
+    original_auth = enrollment_auth(original)
+    assert {:ok, approved} = enroll(original, name, original_auth)
+    node_id = approved["nodeId"]
+    assert {:ok, session} = ConnectChallenge.handle(%{"challenge" => approved["challengeToken"]}, %{auth: original_auth})
+    repair = invite(name, %{"nodeId" => node_id})
+    competing = invite(name, %{"nodeId" => node_id})
+    auth = enrollment_auth(repair)
+    competing_auth = enrollment_auth(competing)
+    refute repair["joinCommand"] =~ "--node-id"
+    refute repair["joinCommand"] =~ "--repair"
+    assert {:error, {:unauthorized, _}} = enroll(repair, name <> "-wrong", auth)
+    assert {:ok, recovered} = enroll(repair, name, auth)
+    assert recovered["nodeId"] == node_id
+    assert recovered["summary"]["recovered"]
+    assert recovered["token"] != approved["token"]
+    assert {:error, {:unauthorized, _}} = enroll(competing, name, competing_auth)
+    assert {:error, _} = Authorize.from_params(%{"auth" => %{"inviteCode" => competing["inviteCode"]}}, local?: false)
+    assert {:ok, exchanged} = ConnectChallenge.handle(%{"challenge" => recovered["challengeToken"]}, %{auth: auth})
+    assert exchanged["identity"]["nodeId"] == node_id
+    assert {:error, :invalid_token} = TokenStore.validate(session["token"])
+    assert {:ok, _} = TokenStore.validate(exchanged["token"])
+    node = NodeStore.get_node(node_id)
+    assert node.purpose == "research"
+    assert node.labels == %{"site" => "office"}
+    assert node.enrollment_invite_id == repair["inviteId"]
+    assert Enum.count(NodeStore.list_nodes(), fn {_id, row} -> NodeStore.invite_field(row, :name) == name end) == 1
+    assert {:ok, listed} = NodesList.handle(%{}, @ctx)
+    assert Enum.find(listed["nodes"], &(&1["id"] == node_id))["labels"] == %{"site" => "office"}
+    assert Enum.find(listed["nodes"], &(&1["id"] == node_id))["enrollmentInviteId"] == repair["inviteId"]
+  end
+
+  test "session rotation and revocation make already-authenticated repair invites stale", %{name: name} do
+    original = invite(name)
+    auth = enrollment_auth(original)
+    assert {:ok, approved} = enroll(original, name, auth)
+    node_id = approved["nodeId"]
+    recovery_hash = NodeStore.get_node(node_id).token_hash
+    repair = invite(name, %{"nodeId" => node_id})
+    repair_auth = enrollment_auth(repair)
+    # A session issued after invitation creation changes generation zero to one.
+    assert {:ok, _} = ConnectChallenge.handle(%{"challenge" => approved["challengeToken"]}, %{auth: auth})
+    assert {:error, {:unauthorized, _}} = enroll(repair, name, repair_auth)
+    assert {:error, _} = NodeStore.fetch_invite(repair["inviteCode"])
+    fresh = invite(name, %{"nodeId" => node_id})
+    fresh_auth = enrollment_auth(fresh)
+    assert {:ok, _} = TokenStore.revoke_identity("node", node_id)
+    assert {:error, {:unauthorized, _}} = enroll(fresh, name, fresh_auth)
+    assert {:error, _} = Authorize.from_params(%{"auth" => %{"inviteCode" => fresh["inviteCode"]}}, local?: false)
+    assert NodeStore.get_node(node_id).token_hash == recovery_hash
+  end
+
+  test "repair challenge cannot restore a generation revoked after auto-approval", %{name: name} do
+    original = invite(name)
+    original_auth = enrollment_auth(original)
+    assert {:ok, approved} = enroll(original, name, original_auth)
+    repair = invite(name, %{"nodeId" => approved["nodeId"]})
+    auth = enrollment_auth(repair)
+    assert {:ok, repaired} = enroll(repair, name, auth)
+    assert {:error, {:unauthorized, _}} =
+      ConnectChallenge.handle(%{"challenge" => approved["challengeToken"]}, %{auth: original_auth})
+    assert {:ok, _} = TokenStore.revoke_identity("node", approved["nodeId"])
+    assert {:error, {:unauthorized, _}} =
+      ConnectChallenge.handle(%{"challenge" => repaired["challengeToken"]}, %{auth: auth})
+    assert {:error, {:unauthorized, _}} =
+      NodePairApprove.handle(%{"pairingId" => repaired["pairingId"]}, @ctx)
+  end
+
+  test "revocation invalidates pending codes without unpairing their bound node", %{name: name} do
+    original = invite(name)
+    auth = enrollment_auth(original)
+    assert {:ok, approved} = enroll(original, name, auth)
+    assert {:ok, session} = ConnectChallenge.handle(%{"challenge" => approved["challengeToken"]}, %{auth: auth})
+    repair = invite(name, %{"nodeId" => approved["nodeId"]})
+    repair_auth = enrollment_auth(repair)
+    assert {:error, _} = NodePairInviteRevoke.handle(%{"inviteId" => repair["inviteId"]}, %{auth: repair_auth})
+    assert {:ok, %{"inviteId" => id, "revoked" => true}} =
+      NodePairInviteRevoke.handle(%{"inviteId" => repair["inviteId"]}, @ctx)
+    assert id == repair["inviteId"]
+    assert {:error, {:unauthorized, _}} = enroll(repair, name, repair_auth)
+    assert {:error, _} = Authorize.from_params(%{"auth" => %{"inviteCode" => repair["inviteCode"]}}, local?: false)
+    assert {:ok, _} = TokenStore.validate(session["token"])
+    assert is_map(NodeStore.get_node(approved["nodeId"]))
+    for absent <- [id, original["inviteId"], LemonCore.Id.uuid()] do
+      assert {:error, {:not_found, _}} = NodePairInviteRevoke.handle(%{"inviteId" => absent}, @ctx)
+    end
+    assert {:error, {:invalid_request, _}} = NodePairInviteRevoke.handle(%{}, @ctx)
+  end
+
+  test "repair issuance rejects a missing ID or a mismatched durable name", %{name: name} do
+    assert {:error, {:not_found, _}} =
+      NodePairInvite.handle(%{"nodeName" => name, "nodeId" => LemonCore.Id.uuid()}, @ctx)
+    original = invite(name)
+    assert {:ok, approved} = enroll(original, name, enrollment_auth(original))
+    assert {:error, {:conflict, _}} =
+      NodePairInvite.handle(%{"nodeName" => name <> "-other", "nodeId" => approved["nodeId"]}, @ctx)
+    assert {:error, {:invalid_request, _}} =
+      NodePairInvite.handle(%{"nodeName" => name, "nodeId" => 42}, @ctx)
+  end
+
+  test "label maps preserve exact strings at the byte and key-count limits", %{name: name} do
+    labels = Map.new(1..31, &{"key#{&1}", ""})
+      |> Map.put(String.duplicate("k", 64), String.duplicate("v", 256))
+    original = invite(name, %{"labels" => labels})
+    assert {:ok, approved} = enroll(original, name, enrollment_auth(original))
+    assert NodeStore.get_node(approved["nodeId"]).labels == labels
+    assert {:ok, listed} = NodesList.handle(%{}, @ctx)
+    assert Enum.find(listed["nodes"], &(&1["id"] == approved["nodeId"]))["labels"] == labels
+  end
+
+
+  test "source checkout wins over PATH and gates before precisely quoted join arguments",
+       %{name: name, tmp_dir: tmp_dir, source: source, argv_log: argv_log} do
+    controller = "wss://controller.example/owner's/ws"
+    Application.put_env(:lemon_control_plane, :public_ws_url, controller)
+    issued = invite(name <> "'s machine")
+    command = issued["joinCommand"]
+    assert command =~ shell_quote(Path.join(source, "bin/lemon"))
+    assert command =~ "\"$lemon_bin\" node capabilities --json --require-bot >/dev/null"
+    refute command =~ "install.sh"
+    refute command =~ "command -v"
     refute command =~ "invite-test-operator"
     refute command =~ "--operator-token"
-    # Execute the returned shell command against an argv-recording executable:
-    # shell syntax and quoting are exercised, not merely compared as prose.
-    executable = Path.join(tmp_dir, "lemon")
-    File.write!(executable, "#!/bin/sh\nprintf '%s\\n' \"$@\"\n")
-    assert :ok = File.chmod(executable, 0o700)
+    old_path = Path.join(tmp_dir, "lemon")
+    File.write!(old_path, "#!/bin/sh\nprintf '%s\\n' 'old PATH executable ran' >&2\nexit 99\n")
+    File.chmod!(old_path, 0o700)
+
     assert {output, 0} = System.cmd("sh", ["-c", command],
-      env: [{"PATH", tmp_dir <> ":" <> (System.get_env("PATH") || "")}])
-    assert String.split(output, "\n", trim: true) == [
-      "node", "join", "--name", name <> "'s machine", "--controller",
-      "wss://controller.example/ws", "--invite-code", invite["inviteCode"]
+      env: [{"NODE_INVITE_ARGV_LOG", argv_log}, {"PATH", tmp_dir <> ":" <> (System.get_env("PATH") || "")}],
+      stderr_to_stdout: true)
+    assert output == ""
+    assert recorded_args(argv_log) == [
+      "CALL", "node", "capabilities", "--json", "--require-bot",
+      "CALL", "node", "join", "--name", name <> "'s machine", "--controller",
+      controller, "--invite-code", issued["inviteCode"]
     ]
-    assert {:ok, stored} = NodeStore.fetch_invite(invite["inviteCode"])
-    refute inspect(stored) =~ invite["inviteCode"]
-    for params <- [%{"nodeName" => ""}, %{"nodeName" => name, "expiresInMs" => 0}, %{"nodeName" => name, "expiresInMs" => 86_400_001}, %{"nodeName" => name, "labels" => [123]}, %{"nodeName" => name, "labels" => List.duplicate("x", 17)}] do
+    assert {:ok, stored} = NodeStore.fetch_invite(issued["inviteCode"])
+    refute inspect(stored) =~ issued["inviteCode"]
+  end
+
+  test "old or missing capability commands fail closed without leaking enrollment credentials",
+       %{name: name, argv_log: argv_log} do
+    issued = invite(name)
+    for status <- [1, 64, 127] do
+      File.rm(argv_log)
+      assert {output, exit_status} = System.cmd("sh", ["-c", issued["joinCommand"]],
+        env: [{"NODE_INVITE_ARGV_LOG", argv_log}, {"NODE_INVITE_CAPABILITY_STATUS", "#{status}"}],
+        stderr_to_stdout: true)
+      assert exit_status != 0
+      assert output == "Lemon bot runtime prerequisites are not satisfied; enrollment was not attempted.\n"
+      refute output =~ issued["inviteCode"]
+      refute output =~ name
+      assert recorded_args(argv_log) == ["CALL", "node", "capabilities", "--json", "--require-bot"]
+    end
+  end
+
+  test "an unprovisioned destination checkout never falls back to PATH",
+       %{name: name, tmp_dir: tmp_dir, argv_log: argv_log} do
+    Application.put_env(:lemon_control_plane, :node_source_checkout, Path.join(tmp_dir, "missing"))
+    issued = invite(name)
+    assert {output, status} = System.cmd("sh", ["-c", issued["joinCommand"]],
+      env: [{"NODE_INVITE_ARGV_LOG", argv_log}], stderr_to_stdout: true)
+    assert status != 0
+    assert output == "The provisioned Lemon source checkout is unavailable; enrollment was not attempted.\n"
+    refute File.exists?(argv_log)
+    refute output =~ issued["inviteCode"]
+  end
+
+  test "local loopback defaults to the actual controller source checkout", %{name: name} do
+    Application.delete_env(:lemon_control_plane, :node_source_checkout)
+    root = Path.expand("../../../../..", __DIR__)
+    assert File.regular?(Path.join(root, "bin/lemon"))
+    assert File.regular?(Path.join(root, "mix.exs"))
+    for controller <- ["ws://127.0.0.1:4040/ws", "ws://localhost:4040/ws", "ws://[::1]:4040/ws"] do
+      Application.put_env(:lemon_control_plane, :public_ws_url, controller)
+      command = invite(name)["joinCommand"]
+      assert command =~ shell_quote(Path.join(root, "bin/lemon"))
+      assert command =~ "\"$lemon_bin\" node capabilities --json --require-bot"
+      refute command =~ "install.sh"
+      refute command =~ "command -v"
+    end
+  end
+
+  test "remote invites require a destination source or complete explicit release prerequisites",
+       %{name: name} do
+    Application.delete_env(:lemon_control_plane, :node_source_checkout)
+    error = "Configure a destination source checkout or an explicit node install version and HTTPS base URL"
+    assert {:error, {:invalid_request, ^error}} = NodePairInvite.handle(%{"nodeName" => name}, @ctx)
+    Application.put_env(:lemon_control_plane, :node_install_version, "2099.01.7-private")
+    assert {:error, {:invalid_request, ^error}} = NodePairInvite.handle(%{"nodeName" => name}, @ctx)
+    for base <- ["http://releases.example", "https://user:secret@releases.example",
+                 "https://releases.example?token=secret", "https://releases.example/#fragment"] do
+      Application.put_env(:lemon_control_plane, :node_install_base_url, base)
+      assert {:error, {:invalid_request, ^error}} = NodePairInvite.handle(%{"nodeName" => name}, @ctx)
+    end
+    refute Enum.any?(LemonCore.Store.list(:node_pair_invites), fn {_id, row} ->
+      NodeStore.invite_field(row, :node_name) == name
+    end)
+  end
+
+  test "source environment accepts an absolute worker-local path without probing it on the controller",
+       %{name: name} do
+    Application.delete_env(:lemon_control_plane, :node_source_checkout)
+    System.put_env("LEMON_NODE_SOURCE_CHECKOUT", "/srv/operator provisioned/lemon")
+    command = invite(name)["joinCommand"]
+    assert command =~ "'/srv/operator provisioned/lemon/bin/lemon'"
+    refute command =~ "install.sh"
+    System.put_env("LEMON_NODE_SOURCE_CHECKOUT", "relative/lemon")
+    assert {:error, {:invalid_request, "Configure an absolute destination node source checkout"}} =
+      NodePairInvite.handle(%{"nodeName" => name}, @ctx)
+  end
+
+  test "explicit release pin uses only its installed path and still requires capabilities",
+       %{name: name, tmp_dir: tmp_dir, argv_log: argv_log} do
+    Application.delete_env(:lemon_control_plane, :node_source_checkout)
+    version = "2099.01.7-private"
+    base = "https://releases.example/operator's-lemon"
+    Application.put_env(:lemon_control_plane, :node_install_version, version)
+    Application.put_env(:lemon_control_plane, :node_install_base_url, base)
+    issued = invite(name)
+    command = issued["joinCommand"]
+    assert command =~ "LEMON_VERSION=#{shell_quote(version)}"
+    assert command =~ "LEMON_INSTALL_BASE_URL=#{shell_quote(base)}"
+    assert command =~ "https://raw.githubusercontent.com/z80dev/lemon/main/install.sh"
+    assert command =~ "--proto '=https'"
+    assert command =~ "--skip-setup --no-modify-path"
+    assert command =~ "\"$HOME/.lemon/versions/\"#{shell_quote(version)}\"/bin/lemon\""
+    refute command =~ "command -v"
+    refute command =~ "versions/current"
+    write_runtime_fixture(Path.join([tmp_dir, ".lemon", "versions", version, "bin", "lemon"]))
+    old_bin = Path.join([tmp_dir, ".lemon", "bin", "lemon"])
+    File.mkdir_p!(Path.dirname(old_bin))
+    File.write!(old_bin, "#!/bin/sh\nprintf '%s\\n' 'old installed executable ran' >&2\nexit 99\n")
+    File.chmod!(old_bin, 0o700)
+    File.ln_s!(old_bin, Path.join(tmp_dir, "lemon"))
+    env = [{"HOME", tmp_dir}, {"NODE_INVITE_ARGV_LOG", argv_log}, {"NODE_INVITE_VERSION", version},
+           {"PATH", tmp_dir <> ":" <> (System.get_env("PATH") || "")}]
+    assert {"", 0} = System.cmd("sh", ["-c", command], env: env, stderr_to_stdout: true)
+    assert recorded_args(argv_log) == [
+      "CALL", "version",
+      "CALL", "node", "capabilities", "--json", "--require-bot",
+      "CALL", "node", "join", "--name", name, "--controller",
+      "wss://controller.example/ws", "--invite-code", issued["inviteCode"]
+    ]
+    File.rm!(argv_log)
+    assert {output, status} = System.cmd("sh", ["-c", command],
+      env: env ++ [{"NODE_INVITE_CAPABILITY_STATUS", "64"}], stderr_to_stdout: true)
+    assert status != 0
+    assert output == "Lemon bot runtime prerequisites are not satisfied; enrollment was not attempted.\n"
+    assert recorded_args(argv_log) == [
+      "CALL", "version", "CALL", "node", "capabilities", "--json", "--require-bot"
+    ]
+  end
+
+  test "missing pinned runtime installs with explicit inputs before version and capability checks",
+       %{name: name, tmp_dir: tmp_dir, argv_log: argv_log} do
+    Application.delete_env(:lemon_control_plane, :node_source_checkout)
+    Application.put_env(:lemon_control_plane, :node_install_version, "2099.01.7-private")
+    Application.put_env(:lemon_control_plane, :node_install_base_url, "https://releases.example/lemon")
+    issued = invite(name)
+    binary = Path.join(tmp_dir, "runtime-fixture")
+    write_runtime_fixture(binary)
+    installer = Path.join(tmp_dir, "installer-fixture")
+    File.write!(installer, """
+    #!/bin/sh
+    printf '%s\\n' "$LEMON_VERSION" "$LEMON_INSTALL_BASE_URL" "$@" > "$NODE_INVITE_INSTALL_LOG"
+    printf '%s\\n' 'private installer diagnostic' >&2
+    [ "${NODE_INVITE_INSTALL_STATUS:-0}" -eq 0 ] || exit "$NODE_INVITE_INSTALL_STATUS"
+    target="$HOME/.lemon/versions/$LEMON_VERSION/bin"
+    mkdir -p "$target" && cp "$NODE_INVITE_BINARY_FIXTURE" "$target/lemon" && chmod 700 "$target/lemon"
+    """)
+    curl = Path.join(tmp_dir, "curl")
+    File.write!(curl, """
+    #!/bin/sh
+    printf '%s\\n' "$@" > "$NODE_INVITE_CURL_LOG"
+    while [ "$#" -gt 0 ]; do
+      if [ "$1" = "-o" ]; then cp "$NODE_INVITE_INSTALLER_FIXTURE" "$2"; exit "$?"; fi
+      shift
+    done
+    exit 64
+    """)
+    File.chmod!(curl, 0o700)
+    install_log = Path.join(tmp_dir, "install.log")
+    curl_log = Path.join(tmp_dir, "curl.log")
+    env = [{"HOME", tmp_dir}, {"NODE_INVITE_ARGV_LOG", argv_log},
+           {"NODE_INVITE_BINARY_FIXTURE", binary}, {"NODE_INVITE_INSTALLER_FIXTURE", installer},
+           {"NODE_INVITE_INSTALL_LOG", install_log}, {"NODE_INVITE_CURL_LOG", curl_log},
+           {"PATH", tmp_dir <> ":" <> (System.get_env("PATH") || "")}]
+    assert {output, status} = System.cmd("sh", ["-c", issued["joinCommand"]],
+      env: env ++ [{"NODE_INVITE_INSTALL_STATUS", "1"}], stderr_to_stdout: true)
+    assert status != 0
+    assert output == "The pinned Lemon installation failed; enrollment was not attempted.\n"
+    refute output =~ issued["inviteCode"]
+    refute File.exists?(argv_log)
+    assert {"", 0} = System.cmd("sh", ["-c", issued["joinCommand"]], env: env, stderr_to_stdout: true)
+    assert recorded_args(install_log) == [
+      "2099.01.7-private", "https://releases.example/lemon", "--skip-setup", "--no-modify-path"
+    ]
+    assert ["-fsSL", "--proto", "=https", "--proto-redir", "=https",
+            "https://raw.githubusercontent.com/z80dev/lemon/main/install.sh", "-o", _temp] =
+      recorded_args(curl_log)
+    assert recorded_args(argv_log) == [
+      "CALL", "version", "CALL", "node", "capabilities", "--json", "--require-bot",
+      "CALL", "node", "join", "--name", name, "--controller",
+      "wss://controller.example/ws", "--invite-code", issued["inviteCode"]
+    ]
+  end
+
+  test "a configured version is checked against the selected binary, not advertised as compatibility",
+       %{name: name, argv_log: argv_log} do
+    version = "2099.01.7-private"
+    Application.put_env(:lemon_control_plane, :node_install_version, version)
+    issued = invite(name)
+    for {reported, version_status} <- [{"2099.01.6-private", "0"}, {version, "64"}] do
+      File.rm(argv_log)
+      assert {output, status} = System.cmd("sh", ["-c", issued["joinCommand"]],
+        env: [{"NODE_INVITE_ARGV_LOG", argv_log}, {"NODE_INVITE_VERSION", reported},
+              {"NODE_INVITE_VERSION_STATUS", version_status}], stderr_to_stdout: true)
+      assert status != 0
+      assert output == "The Lemon runtime does not match the configured version; enrollment was not attempted.\n"
+      assert recorded_args(argv_log) == ["CALL", "version"]
+      refute output =~ issued["inviteCode"]
+    end
+    Application.put_env(:lemon_control_plane, :node_install_version, "latest")
+    assert {:error, {:invalid_request, "Configure an exact node install version"}} =
+      NodePairInvite.handle(%{"nodeName" => name}, @ctx)
+  end
+
+  test "release environment aliases reuse the install.sh inputs", %{name: name} do
+    Application.delete_env(:lemon_control_plane, :node_source_checkout)
+    for {version_env, base_env} <- [
+      {"LEMON_NODE_INSTALL_VERSION", "LEMON_NODE_INSTALL_BASE_URL"},
+      {"LEMON_VERSION", "LEMON_INSTALL_BASE_URL"}
+    ] do
+      System.put_env(version_env, "2099.01.7-private")
+      System.put_env(base_env, "https://releases.example/lemon")
+      command = invite(name)["joinCommand"]
+      assert command =~ "LEMON_VERSION='2099.01.7-private'"
+      assert command =~ "LEMON_INSTALL_BASE_URL='https://releases.example/lemon'"
+      assert command =~ "\"$lemon_bin\" node capabilities --json --require-bot"
+      System.delete_env(version_env)
+      System.delete_env(base_env)
+    end
+  end
+
+  test "validates invitation bounds", %{name: name} do
+    for params <- [
+      %{"nodeName" => ""},
+      %{"nodeName" => name, "expiresInMs" => 0},
+      %{"nodeName" => name, "expiresInMs" => 86_400_001},
+      %{"nodeName" => name, "labels" => ["retired-list-label"]},
+      %{"nodeName" => name, "labels" => %{123 => "value"}},
+      %{"nodeName" => name, "labels" => %{"key" => 123}},
+      %{"nodeName" => name, "labels" => %{String.duplicate("k", 65) => "value"}},
+      %{"nodeName" => name, "labels" => %{"key" => String.duplicate("v", 257)}},
+      %{"nodeName" => name, "labels" => %{"\n" => "value"}},
+      %{"nodeName" => name, "labels" => %{"key" => "\n"}},
+      %{"nodeName" => name, "labels" => Map.new(1..33, &{"key#{&1}", "value"})}
+    ] do
       assert {:error, _} = NodePairInvite.handle(params, @ctx)
     end
   end
@@ -205,9 +566,135 @@ defmodule LemonControlPlane.Methods.NodePairInviteTest do
     assert_receive {:execution_node_socket, ^operator, {:event, "node.pair.resolved", event}}, 3_000
     assert event["nodeId"] == node_id
     refute_receive {:execution_node_socket, ^socket, {:event, "node.pair.resolved", _}}, 200
+    assert {:ok, saved} = CodingAgent.ExecutionNode.TokenStore.load_node(node_id, root: tmp_dir, controller: url)
+    assert :ok = stop_supervised({:invite_worker, name})
+    Socket.request(operator, "node.pair.invite", %{"nodeId" => node_id, "nodeName" => name}, :repair_invite)
+    assert_receive {:execution_node_socket, ^operator, {:response, :repair_invite, {:ok, repair}}}, 3_000
+    repaired_worker = start_supervised!(%{id: {:repair_worker, name}, start: {Worker, :start_link, [[node_name: name, controller: url, cwd: tmp_dir, invite_code: repair["inviteCode"], token_store_opts: [root: tmp_dir], notify_pid: self()]]}, restart: :temporary})
+    assert_receive {:execution_node_worker, ^repaired_worker, {:status, :online, ^node_id}}, 5_000
+    assert {:ok, %{id: ^node_id}} = LemonCore.NodeRegistry.resolve_id(node_id)
+    assert {:ok, repaired_saved} = CodingAgent.ExecutionNode.TokenStore.load_node(node_id, root: tmp_dir, controller: url)
+    assert repaired_saved["nodeId"] == saved["nodeId"]
+    Socket.request(operator, "nodes.list", %{"name" => name, "nodeId" => node_id}, :repaired_inventory)
+    assert_receive {:execution_node_socket, ^operator, {:response, :repaired_inventory, {:ok, inventory}}}, 3_000
+    assert [%{"id" => ^node_id, "enrollmentInviteId" => proof}] = inventory["nodes"]
+    assert proof == repair["inviteId"]
+    refute inventory["summary"]["truncated"]
+    assert repaired_saved["token"] != saved["token"]
+    assert repaired_saved["recoveryToken"] != saved["recoveryToken"]
+    assert {:error, :invalid_token} = TokenStore.validate(saved["token"])
+    assert :ok = stop_supervised({:repair_worker, name})
+    reconnected = start_supervised!(%{id: {:reconnect_worker, name}, start: {Worker, :start_link, [[node_name: name, controller: url, cwd: tmp_dir, token_store_opts: [root: tmp_dir], notify_pid: self()]]}, restart: :temporary})
+    assert_receive {:execution_node_worker, ^reconnected, {:status, :online, ^node_id}}, 5_000
+
+    pending = invite(name <> "-revoked")
+    Socket.request(operator, "node.pair.invite.revoke", %{"inviteId" => pending["inviteId"]}, :revoke_invite)
+    assert_receive {:execution_node_socket, ^operator, {:response, :revoke_invite, {:ok, revoked}}}, 3_000
+    assert revoked == %{"inviteId" => pending["inviteId"], "revoked" => true}
+    Socket.request(operator, "node.pair.invite.revoke", %{"inviteId" => pending["inviteId"]}, :revoke_again)
+    assert_receive {:execution_node_socket, ^operator, {:response, :revoke_again, {:error, %{"code" => "NOT_FOUND"}}}}, 3_000
+    assert {:ok, %{id: ^node_id}} = LemonCore.NodeRegistry.resolve_id(node_id)
     Socket.stop(socket)
     Socket.stop(operator)
   end
+
+  test "deleted bound identity cannot silently become a replacement node", %{name: name} do
+    original = invite(name)
+    assert {:ok, approved} = enroll(original, name, enrollment_auth(original))
+    node_id = approved["nodeId"]
+    repair = invite(name, %{"nodeId" => node_id})
+    auth = enrollment_auth(repair)
+    assert :ok = LemonCore.Store.delete(:nodes_registry, node_id)
+    assert :ok = NodeStore.release_node_name(name, node_id)
+    assert {:error, {:unauthorized, _}} = enroll(repair, name, auth)
+    assert {:error, _} = NodeStore.fetch_invite(repair["inviteCode"])
+    refute Enum.any?(NodeStore.list_nodes(), fn {_id, row} -> NodeStore.invite_field(row, :name) == name end)
+  end
+
+  test "repair invitation survives JSON reload and explicitly replaces map metadata", %{name: name} do
+    original = invite(name, %{"purpose" => "research", "labels" => %{"site" => "office"}})
+    assert {:ok, approved} = enroll(original, name, enrollment_auth(original))
+    node_id = approved["nodeId"]
+    reloaded_node = NodeStore.get_node(node_id) |> Jason.encode!() |> Jason.decode!()
+    assert :ok = NodeStore.put_node(node_id, reloaded_node)
+    repair = invite(name, %{"nodeId" => node_id, "purpose" => "operations", "labels" => %{"site" => "studio"}})
+    digest = :crypto.hash(:sha256, repair["inviteCode"]) |> Base.encode16(case: :lower)
+    assert {:ok, stored} = NodeStore.fetch_invite(repair["inviteCode"])
+    assert :ok = LemonCore.Store.put(:node_pair_invites, digest, stored |> Jason.encode!() |> Jason.decode!())
+    auth = enrollment_auth(repair)
+    assert {:ok, repaired} = enroll(repair, name, auth)
+    assert repaired["nodeId"] == node_id
+    node = NodeStore.get_node(node_id)
+    assert node.purpose == "operations"
+    assert node.labels == %{"site" => "studio"}
+    refute Map.has_key?(node, "purpose")
+    refute Map.has_key?(node, "labels")
+    refute Map.has_key?(node, "token_hash")
+    assert node.enrollment_invite_id == repair["inviteId"]
+    refute Map.has_key?(node, "enrollment_invite_id")
+    assert {:ok, exchanged} = ConnectChallenge.handle(%{"challenge" => repaired["challengeToken"]}, %{auth: auth})
+    assert exchanged["identity"]["nodeId"] == node_id
+  end
+
+  test "exact inventory filters precede the cap and legacy enrollment proof is null", %{name: name} do
+    for index <- 1..201 do
+      id = LemonCore.Id.uuid()
+      assert :ok = NodeStore.put_node(id, %{id: id, name: name <> "-#{index}", type: "generic", labels: %{}})
+    end
+    target_name = name <> "-zzzz"
+    target_id = LemonCore.Id.uuid()
+    assert :ok = NodeStore.put_node(target_id, %{"id" => target_id, "name" => target_name, "type" => "generic", "labels" => %{}})
+    assert {:ok, all} = NodesList.handle(%{}, @ctx)
+    assert all["summary"]["truncated"]
+    assert length(all["nodes"]) == 200
+    refute Enum.any?(all["nodes"], &(&1["id"] == target_id))
+    for filters <- [%{"name" => target_name}, %{"nodeId" => target_id}, %{"name" => target_name, "nodeId" => target_id}] do
+      assert {:ok, filtered} = NodesList.handle(filters, @ctx)
+      assert [%{"id" => ^target_id, "name" => ^target_name, "enrollmentInviteId" => nil}] = filtered["nodes"]
+      refute filtered["summary"]["truncated"]
+      assert filtered["summary"]["count"] == 1
+    end
+    assert {:ok, absent} = NodesList.handle(%{"name" => target_name <> "-absent"}, @ctx)
+    assert absent["nodes"] == []
+    refute absent["summary"]["truncated"]
+    assert {:ok, mismatched} = NodesList.handle(%{"name" => name <> "-1", "nodeId" => target_id}, @ctx)
+    assert mismatched["nodes"] == []
+    refute mismatched["summary"]["truncated"]
+    for filters <- [%{"name" => ""}, %{"name" => 123}, %{"nodeId" => ""}, %{"nodeId" => 123}] do
+      assert {:error, {:invalid_request, _}} = NodesList.handle(filters, @ctx)
+    end
+  end
+
+  defp write_source_fixture(source) do
+    File.mkdir_p!(source)
+    File.write!(Path.join(source, "mix.exs"), "# Controlled source checkout fixture\n")
+    write_runtime_fixture(Path.join(source, "bin/lemon"))
+  end
+
+  defp write_runtime_fixture(executable) do
+    File.mkdir_p!(Path.dirname(executable))
+    File.write!(executable, """
+    #!/bin/sh
+    printf '%s\\n' CALL "$@" >> "$NODE_INVITE_ARGV_LOG"
+    case "$1:${2:-}" in
+      node:capabilities)
+        printf '%s\\n' '{"protocol":1,"botReady":true}'
+        printf '%s\\n' 'private fixture diagnostic' >&2
+        exit "${NODE_INVITE_CAPABILITY_STATUS:-0}"
+        ;;
+      version:*)
+        printf '%s\\n' "${NODE_INVITE_VERSION:-2099.01.7-private}"
+        exit "${NODE_INVITE_VERSION_STATUS:-0}"
+        ;;
+      node:join) exit 0 ;;
+      *) exit 64 ;;
+    esac
+    """)
+    File.chmod!(executable, 0o700)
+  end
+
+  defp recorded_args(path), do: path |> File.read!() |> String.split("\n", trim: true)
+  defp shell_quote(value), do: "'" <> String.replace(value, "'", "'\\''") <> "'"
 
   defp invite(name, extra \\ %{}) do
     assert {:ok, result} = NodePairInvite.handle(Map.merge(%{"nodeName" => name}, extra), @ctx)

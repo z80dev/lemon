@@ -24,10 +24,47 @@ def emit(value):
 def size(fd, cols, rows):
     fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
 
+def read_exact(length):
+    # Do not mix buffered stdin reads with the event loop's os.read: buffering
+    # could consume the first input frame before the shell is marked ready.
+    data = bytearray()
+    while len(data) < length:
+        chunk = os.read(0, length - len(data))
+        if not chunk:
+            raise ValueError("missing policy")
+        data.extend(chunk)
+    return data
+
+
+def admitted_cwd(cwd):
+    # Same owning policy/resolver as filesystem operations. Pin cwd before fork;
+    # a substituted path/symlink cannot redirect chdir outside admitted roots.
+    from node_fs import Policy, DIR_FLAGS
+    header = read_exact(4)
+    length = struct.unpack("!I", header)[0]
+    if not 1 <= length <= MAX_FRAME:
+        raise ValueError("policy limit")
+    data = read_exact(length)
+    policy = Policy(json.loads(data))
+    parent = None
+    try:
+        parent, name, _ = policy.parent(cwd)
+        return os.open(name, DIR_FLAGS, dir_fd=parent)
+    finally:
+        if parent is not None:
+            os.close(parent)
+        for _, _, root_fd in policy.roots:
+            os.close(root_fd)
+
+
 
 def main():
     cwd, shell, cols, rows = sys.argv[1:]
-    os.chdir(cwd)
+    cwd_fd = admitted_cwd(cwd)
+    try:
+        os.fchdir(cwd_fd)
+    finally:
+        os.close(cwd_fd)
     pid, fd = pty.fork()
     if pid == 0:
         os.environ["TERM"] = "xterm-256color"

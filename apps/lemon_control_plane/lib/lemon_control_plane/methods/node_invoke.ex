@@ -45,8 +45,11 @@ defmodule LemonControlPlane.Methods.NodeInvoke do
 
   defp invoke_bounded(node_id, method, args, timeout_ms, ctx) do
     max_payload = LemonControlPlane.max_payload()
+    payload_opts = if method == "coding_agent.run",
+      do: LemonCore.ToolPolicy.execution_json_opts(max_bytes: max_payload),
+      else: [max_bytes: max_payload]
 
-    case LemonCore.JSONPayload.validate(args, max_bytes: max_payload) do
+    case LemonCore.JSONPayload.validate(args, payload_opts) do
       {:ok, stats} ->
         invoke_live_node(node_id, method, args, timeout_ms, ctx, max_payload, stats)
 
@@ -68,7 +71,7 @@ defmodule LemonControlPlane.Methods.NodeInvoke do
       _node ->
         recipient = ctx[:conn_pid] || self()
 
-        case LemonCore.NodeRegistry.invoke(node_id, method, args,
+        case LemonCore.NodeRegistry.invoke_node(node_id, method, args,
                recipient: recipient,
                timeout_ms: timeout_ms,
                max_payload_bytes: max_payload

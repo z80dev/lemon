@@ -26,8 +26,14 @@ defmodule CodingAgent.ExecutionNode.PTY do
         :binary, :exit_status, {:packet, 4},
         {:args, [helper, cwd, shell, Integer.to_string(cols), Integer.to_string(rows)]}
       ])
-      {:ok, %{owner: owner, ref: Process.monitor(owner), invoke_id: invoke_id,
-        port: port, seq: 0, exited: false, timer: Process.send_after(self(), :timeout, 3_600_000)}}
+      policy = CodingAgent.ExecutionNode.FileService.path_policy(opts)
+      if Port.command(port, Jason.encode!(policy), [:nosuspend]) do
+        {:ok, %{owner: owner, ref: Process.monitor(owner), invoke_id: invoke_id,
+          port: port, seq: 0, exited: false, timer: Process.send_after(self(), :timeout, 3_600_000)}}
+      else
+        Port.close(port)
+        {:stop, :pty_unavailable}
+      end
     else
       {:error, reason} -> {:stop, reason}
       _ -> {:stop, :pty_unavailable}

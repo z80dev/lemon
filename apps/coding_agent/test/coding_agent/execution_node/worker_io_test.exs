@@ -30,10 +30,11 @@ defmodule CodingAgent.ExecutionNode.WorkerIOTest do
 
     first = :binary.copy(<<0, 1, 2, 255>>, 262_144)
     tail = "last chunk"
-    assert {:ok, _} = invoke(worker, socket, "write-1", "node.fs.write", %{"path" => "upload.bin",
+    assert {:ok, written} = invoke(worker, socket, "write-1", "node.fs.write", %{"path" => "upload.bin",
       "dataBase64" => Base.encode64(first), "offset" => 0, "truncate" => false})
     assert {:ok, _} = invoke(worker, socket, "write-2", "node.fs.write", %{"path" => "upload.bin",
-      "dataBase64" => Base.encode64(tail), "offset" => byte_size(first), "truncate" => true})
+      "dataBase64" => Base.encode64(tail), "offset" => byte_size(first), "truncate" => true,
+      "expectedModifiedAtMs" => written["mtimeMs"]})
     assert {:ok, chunk} = invoke(worker, socket, "read-1", "node.fs.read", %{"path" => "upload.bin"})
     assert Base.decode64!(chunk["dataBase64"]) == first
     assert chunk["size"] == byte_size(first) + byte_size(tail)
@@ -43,6 +44,10 @@ defmodule CodingAgent.ExecutionNode.WorkerIOTest do
     assert chunk["eof"] == true
     assert File.read!(Path.join(root, "upload.bin")) == first <> tail
     assert {:error, _} = invoke(worker, socket, "escape", "node.fs.read", %{"path" => "../outside"})
+    assert {:ok, preview} = invoke(worker, socket, "preview", "node.fs.delete.preview", %{"path" => "upload.bin"})
+    assert {:ok, %{"deleted" => true}} = invoke(worker, socket, "delete", "node.fs.delete",
+      %{"path" => "upload.bin", "confirm" => "upload.bin", "confirmationToken" => preview["confirmationToken"]})
+    refute File.exists?(Path.join(root, "upload.bin"))
   end
 
   defp invoke(worker, socket, id, method, args) do

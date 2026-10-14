@@ -67,6 +67,25 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   invitations install and enroll a bot machine without sharing the operator
   credential; node listings include purpose and labels. See
   [attaching a bot machine](docs/user-guide/attaching-a-bot-machine.md).
+- Attached-machine safety: exact durable-ID routing cannot be hijacked by a node
+  named after another node's ID. Worker-owned file CAS, atomic no-overwrite moves
+  and revision/candidate-bound deletion previews use descriptor-relative root
+  admission. Revocable repair invites retain durable identity and generation
+  fences; label records and enrollment proofs support reliable reconciliation.
+  Machine inspection reports measured host resources and explicit capability/
+  OS-grant states without fabricated metrics or permissions.
+- Worker compatibility is measured by `lemon node capabilities --json --require-bot`
+  and authenticated `node.runtime.features`, not inferred from a release number.
+  Invite commands select the actual integrated source checkout or an explicitly
+  pinned operator-supported artifact, verify the installed version/features, and
+  fail before enrollment when required APIs are absent. No published build is
+  silently treated as supporting new bot APIs.
+- Fixed secret operation IDs persist an atomic private receipt with the encrypted
+  destination vault row. Admin-only `node.secrets.receipt` reconciles lost replies
+  without replay, plaintext or digest exposure; replacement, deletion, expiry
+  and rotation safely invalidate current binding while retaining historical proof.
+  Vault/lease error diagnostics are redacted. PTY opening cwd uses the filesystem
+  descriptor resolver, and browser availability inspection never launches a browser.
 - Profile MCP headers support explicit `${LEMON_SECRET:NAME}` references resolved
   exclusively from the encrypted secret store on the execution host. Missing or
   failing secret reads fail closed before MCP clients start; controller requests
