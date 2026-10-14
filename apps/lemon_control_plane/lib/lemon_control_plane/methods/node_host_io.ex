@@ -17,9 +17,12 @@ defmodule LemonControlPlane.Methods.NodeHostIOSupport do
   defp validate("node.host.info", _), do: :ok
   defp validate("node.secrets.list", _), do: :ok
   defp validate("node.secrets.set", params) do
-    with :ok <- string(params, "name", 256), do: string(params, "value", 1_048_576, true)
+    with :ok <- string(params, "name", 256),
+         :ok <- string(params, "value", 1_048_576, true),
+         do: operation_id(params, false)
   end
   defp validate("node.secrets.delete", params), do: string(params, "name", 256)
+  defp validate("node.secrets.receipt", params), do: operation_id(params, true)
   defp validate(method, params) do
     with :ok <- string(params, "path", 4096) do
       validate_file(method, params)
@@ -33,16 +36,33 @@ defmodule LemonControlPlane.Methods.NodeHostIOSupport do
   defp validate_file("node.fs.write", params) do
     with :ok <- string(params, "dataBase64", 1_398_104, true),
          :ok <- integer(params, "offset", 0, 9_007_199_254_740_991),
+         :ok <- integer(params, "expectedModifiedAtMs", 0, 9_007_199_254_740_991),
          :ok <- boolean(params, "truncate"),
          do: boolean(params, "mkdirs")
   end
-  defp validate_file("node.fs.move", params), do: string(params, "destination", 4096)
+  defp validate_file("node.fs.move", params) do
+    with :ok <- string(params, "destination", 4096),
+         :ok <- required_integer(params, "expectedModifiedAtMs"),
+         do: boolean(params, "overwrite")
+  end
+  defp validate_file("node.fs.delete.preview", params), do: boolean(params, "recursive")
   defp validate_file("node.fs.delete", params) do
     if params["confirm"] == params["path"],
-      do: :ok,
+      do: string(params, "confirmationToken", 256),
       else: {:error, Errors.invalid_request("confirm must exactly equal path")}
   end
   defp validate_file(_, _), do: :ok
+
+  defp operation_id(params, required) do
+    if not required and not Map.has_key?(params, "operationId") do
+      :ok
+    else
+      case LemonCore.Secrets.Receipts.operation_id(params["operationId"]) do
+        :ok -> :ok
+        {:error, _} -> {:error, Errors.invalid_request("operationId must be 1..128 ASCII letters, digits, _, :, or -")}
+      end
+    end
+  end
 
   defp string(params, field, max, empty \\ false) do
     value = params[field]
@@ -61,6 +81,12 @@ defmodule LemonControlPlane.Methods.NodeHostIOSupport do
     if not Map.has_key?(params, field) or (is_integer(value) and value >= min and value <= max),
       do: :ok,
       else: {:error, Errors.invalid_request(field <> " must be a bounded integer")}
+  end
+
+  defp required_integer(params, field) do
+    if Map.has_key?(params, field),
+      do: integer(params, field, 0, 9_007_199_254_740_991),
+      else: {:error, Errors.invalid_request(field <> " is required")}
   end
 end
 
@@ -155,8 +181,21 @@ defmodule LemonControlPlane.Methods.NodeFsMove do
   def handle(params, ctx), do: LemonControlPlane.Methods.NodeHostIOSupport.handle(name(), params, ctx)
 end
 
+defmodule LemonControlPlane.Methods.NodeFsDeletePreview do
+  @moduledoc "Revision-bound destination deletion preview."
+  @behaviour LemonControlPlane.Method
+  @impl true
+  def name, do: "node.fs.delete.preview"
+  @impl true
+  def scopes, do: [:admin]
+  @impl true
+  def dispatch_mode, do: :async
+  @impl true
+  def handle(params, ctx), do: LemonControlPlane.Methods.NodeHostIOSupport.handle(name(), params, ctx)
+end
+
 defmodule LemonControlPlane.Methods.NodeFsDelete do
-  @moduledoc "Exact-caller-path-confirmed destination deletion."
+  @moduledoc "Preview-token and exact-caller-path-confirmed destination deletion."
   @behaviour LemonControlPlane.Method
   @impl true
   def name, do: "node.fs.delete"
@@ -199,6 +238,19 @@ defmodule LemonControlPlane.Methods.NodeSecretsDelete do
   @behaviour LemonControlPlane.Method
   @impl true
   def name, do: "node.secrets.delete"
+  @impl true
+  def scopes, do: [:admin]
+  @impl true
+  def dispatch_mode, do: :async
+  @impl true
+  def handle(params, ctx), do: LemonControlPlane.Methods.NodeHostIOSupport.handle(name(), params, ctx)
+end
+
+defmodule LemonControlPlane.Methods.NodeSecretsReceipt do
+  @moduledoc "Read-only destination secret operation proof, never a value or replay."
+  @behaviour LemonControlPlane.Method
+  @impl true
+  def name, do: "node.secrets.receipt"
   @impl true
   def scopes, do: [:admin]
   @impl true

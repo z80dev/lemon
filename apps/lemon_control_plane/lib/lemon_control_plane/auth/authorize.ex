@@ -149,7 +149,7 @@ defmodule LemonControlPlane.Auth.Authorize do
         }}
 
       {:error, _} ->
-        {:error, {:unauthorized, "Enrollment invite is invalid or expired"}}
+        {:error, {:unauthorized, "Enrollment invite is invalid, expired, revoked or stale"}}
     end
   end
 

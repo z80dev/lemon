@@ -4,8 +4,8 @@ defmodule LemonControlPlane.Methods.NodePairRequest do
 
   Initiates an operator-authorized pairing request for a new node or rotates
   credentials for an existing durable identity. A valid enrollment invitation
-  instead atomically consumes its bound name and auto-approves the new node,
-  returning the ordinary approval challenge and recovery credentials.
+  atomically consumes its bound name and auto-approves either a new node or its
+  generation-bound durable repair, returning the ordinary challenge and recovery credentials.
   """
 
   @behaviour LemonControlPlane.Method
@@ -54,6 +54,10 @@ defmodule LemonControlPlane.Methods.NodePairRequest do
         purpose: NodeStore.invite_field(invite, :purpose),
         labels: NodeStore.invite_field(invite, :labels),
         invite_id: invite_id,
+        node_id: NodeStore.invite_field(invite, :node_id),
+        recovery_mode: if(NodeStore.invite_field(invite, :node_id), do: :invite_repair),
+        recovery_token_hash: NodeStore.invite_field(invite, :recovery_token_hash),
+        session_generation: NodeStore.invite_field(invite, :session_generation),
         status: :pending,
         expires_at_ms: NodeStore.invite_field(invite, :expires_at_ms),
         created_at_ms: System.system_time(:millisecond)
@@ -63,10 +67,11 @@ defmodule LemonControlPlane.Methods.NodePairRequest do
            {:ok, response} <- NodePairApprove.handle(%{"pairingId" => pairing_id}, ctx) do
         {:ok, Map.put(response, "pairingId", pairing_id)}
       else
+        {:error, reason} when is_tuple(reason) -> {:error, reason}
         {:error, _} -> {:error, Errors.unavailable("Enrollment could not be completed")}
       end
     else
-      _ -> {:error, Errors.unauthorized("Enrollment invite is invalid, expired or does not match")}
+      _ -> {:error, Errors.unauthorized("Enrollment invite is invalid, expired, revoked, stale or does not match")}
     end
   end
 

@@ -18,11 +18,12 @@ defmodule CodingAgent.ExecutionNode.Worker do
   @protocol_version 1
   @max_control_text_bytes 16 * 1_024
   @host_io_methods ["node.host.info", "node.fs.list", "node.fs.stat", "node.fs.read",
-    "node.fs.write", "node.fs.mkdir", "node.fs.move", "node.fs.delete",
-    "node.secrets.set", "node.secrets.list", "node.secrets.delete"]
+    "node.fs.write", "node.fs.mkdir", "node.fs.move", "node.fs.delete.preview", "node.fs.delete",
+    "node.secrets.set", "node.secrets.list", "node.secrets.delete", "node.secrets.receipt"]
   @shell_methods ["node.shell.open", "node.shell.input", "node.shell.resize", "node.shell.close"]
   @capabilities %{
     "coding_agent.run" => %{"version" => @protocol_version},
+    "node.enrollment" => %{"version" => 1, "inviteCodes" => true, "repairInvites" => true},
     "node.invoke.control" => %{
       "version" => @protocol_version,
       "operations" => ["steer", "redirect"],
@@ -30,6 +31,15 @@ defmodule CodingAgent.ExecutionNode.Worker do
     },
     "node.invoke.cancel" => true
   }
+
+  @doc "Declared protocol capabilities, shared by pairing and installed-runtime inspection."
+  def capabilities do
+    Map.merge(@capabilities, Map.new(@host_io_methods ++ @shell_methods ++
+      ["node.capabilities.get", "node.runtime.features"], &{&1, true}))
+  end
+
+  @doc "Failclosed software compatibility; it does not attest provider login or OS grants."
+  def runtime_features, do: CodingAgent.ExecutionNode.Features.snapshot(capabilities())
 
   defstruct [
     :name,
@@ -426,7 +436,7 @@ defmodule CodingAgent.ExecutionNode.Worker do
       %{
         "nodeType" => "coding_agent",
         "nodeName" => state.name,
-        "capabilities" => Map.merge(@capabilities, Map.new(@host_io_methods ++ @shell_methods, &{&1, true}))
+        "capabilities" => capabilities()
       }
       |> then(fn params ->
         if is_binary(state.invite_code), do: Map.put(params, "inviteCode", state.invite_code),
@@ -458,6 +468,13 @@ defmodule CodingAgent.ExecutionNode.Worker do
 
         method == "coding_agent.run" ->
           {:noreply, start_invocation(state, invoke_id, args)}
+
+        method == "node.runtime.features" ->
+          {:noreply, send_host_io_result(state, invoke_id, {:ok, runtime_features()})}
+
+        method == "node.capabilities.get" ->
+          result = CodingAgent.ExecutionNode.Capabilities.get(host_io_opts(state))
+          {:noreply, send_host_io_result(state, invoke_id, result)}
 
         method in @host_io_methods ->
           result = CodingAgent.ExecutionNode.HostIO.handle(method, args, host_io_opts(state))
@@ -505,7 +522,7 @@ defmodule CodingAgent.ExecutionNode.Worker do
 
   defp handle_node_event(_event, _payload, state), do: {:noreply, state}
 
-  defp host_io_opts(state), do: [default_cwd: state.default_cwd, allowed_roots: state.allowed_roots]
+  defp host_io_opts(state), do: [default_cwd: state.default_cwd, allowed_roots: state.allowed_roots, node_id: state.node_id]
 
   defp send_host_io_result(state, invoke_id, {:ok, result}) do
     request(state, "node.invoke.result", %{"invokeId" => invoke_id, "result" => result}, {:invoke_result, invoke_id})

@@ -71,6 +71,11 @@ defmodule LemonCore.NodeRegistry do
     GenServer.call(__MODULE__, {:resolve, String.trim(name_or_id)})
   end
 
+  @doc "Resolves an exact durable node ID; never falls back to node names."
+  def resolve_id(node_id) when is_binary(node_id) do
+    GenServer.call(__MODULE__, {:resolve, {:node_id, node_id}})
+  end
+
   @spec online?(String.t()) :: boolean()
   def online?(name_or_id) when is_binary(name_or_id) do
     match?({:ok, _node}, resolve(name_or_id))
@@ -98,6 +103,14 @@ defmodule LemonCore.NodeRegistry do
       __MODULE__,
       {:invoke, String.trim(name_or_id), method, args, recipient, timeout_ms, max_payload_bytes}
     )
+  end
+
+  @doc "Invokes an exact durable node ID; an identically named different node is never selected."
+  def invoke_node(node_id, method, args, opts \\ [])
+      when is_binary(node_id) and is_binary(method) and is_map(args) do
+    GenServer.call(__MODULE__, {:invoke, {:node_id, node_id}, method, args,
+      Keyword.get(opts, :recipient, self()), Keyword.get(opts, :timeout_ms, @default_timeout_ms),
+      Keyword.get(opts, :max_payload_bytes, JSONPayload.default_max_bytes())})
   end
 
   @doc """
@@ -323,8 +336,8 @@ defmodule LemonCore.NodeRegistry do
       not is_integer(max_payload_bytes) or max_payload_bytes <= 0 ->
         {:reply, {:error, :invalid_payload_limit}, state}
 
-      match?({:error, _reason}, JSONPayload.validate(args, max_bytes: max_payload_bytes)) ->
-        {:error, reason} = JSONPayload.validate(args, max_bytes: max_payload_bytes)
+      args_error = invocation_args_error(method, args, max_payload_bytes) ->
+        reason = args_error
         {:reply, {:error, {:invalid_payload, reason}}, state}
 
       true ->
@@ -357,7 +370,7 @@ defmodule LemonCore.NodeRegistry do
               "timeoutMs" => timeout_ms
             }
 
-            case JSONPayload.validate(payload, max_bytes: max_payload_bytes) do
+            case JSONPayload.validate(payload, invocation_json_opts(method, max_payload_bytes)) do
               {:ok, _stats} ->
                 send(node.pid, {:node_event, "node.invoke.request", payload})
 
@@ -370,7 +383,11 @@ defmodule LemonCore.NodeRegistry do
             end
 
           {:error, :not_found} ->
-            {:reply, {:error, {:node_offline, name_or_id}}, state}
+            target = case name_or_id do
+              {:node_id, id} -> id
+              name -> name
+            end
+            {:reply, {:error, {:node_offline, target}}, state}
         end
     end
   end
@@ -602,6 +619,13 @@ defmodule LemonCore.NodeRegistry do
     end
   end
 
+  defp resolve_node(state, {:node_id, node_id}) do
+    case Map.get(state.nodes, node_id) do
+      nil -> {:error, :not_found}
+      node -> {:ok, node}
+    end
+  end
+
   defp resolve_node(state, name_or_id) do
     node_id = Map.get(state.names, name_or_id, name_or_id)
 
@@ -659,8 +683,7 @@ defmodule LemonCore.NodeRegistry do
 
   defp complete_invocation(invocation, invoke_id, result, error, state) do
     case JSONPayload.validate(%{"result" => result, "error" => error},
-           max_bytes: invocation.max_payload_bytes
-         ) do
+           completion_json_opts(invocation.method, invocation.max_payload_bytes)) do
       {:ok, _stats} ->
         cancel_invocation_monitors(invocation)
         reply = if is_nil(error), do: {:ok, result}, else: {:error, {:remote, error}}
@@ -842,6 +865,22 @@ defmodule LemonCore.NodeRegistry do
         :ok
     end
   end
+
+  defp invocation_args_error(method, args, max_payload_bytes) do
+    case JSONPayload.validate(args, invocation_json_opts(method, max_payload_bytes)) do
+      {:ok, _} -> nil
+      {:error, reason} -> reason
+    end
+  end
+
+  defp invocation_json_opts("coding_agent.run", max_payload_bytes),
+    do: LemonCore.ToolPolicy.execution_json_opts(max_bytes: max_payload_bytes)
+  defp invocation_json_opts(_method, max_payload_bytes), do: [max_bytes: max_payload_bytes]
+
+  defp completion_json_opts("node.mcp.discover", max_payload_bytes),
+    do: LemonCore.ToolPolicy.execution_json_opts(max_bytes: min(max_payload_bytes, 1_048_576))
+  defp completion_json_opts(method, max_payload_bytes),
+    do: invocation_json_opts(method, max_payload_bytes)
 
   defp payload_error_kind({kind, _detail})
        when kind in [:max_bytes, :max_depth, :max_items, :not_json_safe],

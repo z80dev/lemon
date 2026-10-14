@@ -9,13 +9,14 @@ defmodule LemonControlPlane.NodeIO do
     result = try do
       case LemonControlPlane.NodeStore.get_node(node_id) do
         nil -> {:error, Errors.not_found("Node not found")}
-        _ ->
-          case LemonCore.NodeRegistry.invoke(node_id, method, args,
+        node when is_map(node) ->
+          case LemonCore.NodeRegistry.invoke_node(node_id, method, args,
                  recipient: self(), timeout_ms: 30_000,
                  max_payload_bytes: LemonControlPlane.max_payload()) do
             {:ok, invoke_id} -> await(invoke_id, ref, owner)
             {:error, _} -> {:error, Errors.unavailable("Node is not available")}
           end
+        _ -> {:error, Errors.unavailable("Durable node store is not available")}
       end
     after
       Process.demonitor(ref, [:flush])
@@ -32,11 +33,22 @@ defmodule LemonControlPlane.NodeIO do
     receive do
       {:lemon_node_result, ^invoke_id, {:ok, result}} -> {:ok, result}
       {:lemon_node_result, ^invoke_id, {:error, {:remote, reason}}}
+          when reason in ["revision_conflict", "stale_preview", "already_exists", "mutation_conflict", "secret_operation_conflict"] ->
+        {:error, Errors.error(:conflict, "Destination revision, candidate set or operation binding changed", %{"reason" => reason, "retrySafe" => false})}
+      {:lemon_node_result, ^invoke_id, {:error, {:remote, "permission_denied"}}} ->
+        {:error, Errors.error(:forbidden, "Destination denied access", %{"reason" => "permission_denied", "retrySafe" => false})}
+      {:lemon_node_result, ^invoke_id, {:error, {:remote, reason}}}
+          when reason in ["host_metrics_unavailable", "capability_inspection_unavailable", "secret_receipt_capacity", "filesystem_busy"] ->
+        {:error, Errors.error(:unavailable, "Destination inspection or operation admission is unavailable", %{"reason" => reason, "retrySafe" => true})}
+      {:lemon_node_result, ^invoke_id, {:error, {:remote, reason}}}
+          when reason in ["atomic_move_unavailable", "filesystem_outcome_unknown", "secret_store_failed", "directory_not_empty"] ->
+        {:error, Errors.error(:unavailable, "Destination operation failed; reconcile before another mutation", %{"reason" => reason, "retrySafe" => false})}
+      {:lemon_node_result, ^invoke_id, {:error, {:remote, reason}}}
           when reason in ["invalid_request", "invalid_path", "path_not_allowed",
-            "invalid_allowed_roots", "symlink_loop", "not_found", "permission_denied",
+            "invalid_allowed_roots", "symlink_loop", "not_found",
             "not_directory", "not_regular_file", "content_too_large", "invalid_base64",
-            "directory_not_empty", "already_exists", "confirmation_required",
-            "invalid_secret_name", "invalid_secret_value", "invalid_input", "invalid_dimensions",
+            "confirmation_required", "invalid_confirmation_token", "confirmation_expired", "preview_too_large",
+            "invalid_secret_name", "invalid_secret_value", "invalid_operation_id", "invalid_node_id", "invalid_input", "invalid_dimensions",
             "shell_not_found", "shell_closed", "pty_busy"] ->
         {:error, Errors.error(:invalid_request, "Destination rejected operation", %{"reason" => reason, "retrySafe" => true})}
       {:lemon_node_result, ^invoke_id, {:error, _}} ->

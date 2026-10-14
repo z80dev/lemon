@@ -1,11 +1,18 @@
 defmodule LemonControlPlane.Methods.NodePairInvite do
-  @moduledoc "Issues a short-lived, name-bound, single-use execution-node enrollment invite."
+  @moduledoc "Issues a short-lived, single-use invitation for a new node or generation-bound repair."
   @behaviour LemonControlPlane.Method
 
   alias LemonControlPlane.Auth.Authorize
   alias LemonControlPlane.NodeStore
   alias LemonControlPlane.Protocol.Errors
   require Logger
+
+  @checkout_root Path.expand("../../../../..", __DIR__)
+  @source_root if File.regular?(Path.join(@checkout_root, "bin/lemon")) and
+                    File.regular?(Path.join(@checkout_root, "mix.exs")),
+                 do: @checkout_root,
+                 else: nil
+  @installer_url "https://raw.githubusercontent.com/z80dev/lemon/main/install.sh"
 
   @impl true
   def name, do: "node.pair.invite"
@@ -17,32 +24,37 @@ defmodule LemonControlPlane.Methods.NodePairInvite do
     Logger.info("node_io operation=node.pair.invite attempted=true redacted=true")
     node_name = params["nodeName"]
     purpose = Map.get(params, "purpose", "lemon_bot")
-    labels = Map.get(params, "labels", [])
+    labels = Map.get(params, "labels", %{})
     ttl = Map.get(params, "expiresInMs", 900_000)
 
     with :ok <- Authorize.authorize(ctx[:auth] || %{}, name(), scopes()),
          true <- valid_text?(node_name, 64),
          true <- valid_text?(purpose, 64),
-         true <- is_list(labels) and length(labels) <= 16 and Enum.all?(labels, &valid_text?(&1, 64)),
+         true <- valid_labels?(labels),
          true <- is_integer(ttl) and ttl in 1..86_400_000,
-         {:ok, controller} <- controller_url() do
+         {:ok, controller} <- controller_url(),
+         {:ok, runtime} <- runtime_source(controller),
+         {:ok, binding, node} <- binding(params["nodeId"], String.trim(node_name)),
+         purpose = metadata(params, "purpose", node, :purpose, String.trim(purpose)),
+         labels = metadata(params, "labels", node, :labels, labels),
+         true <- valid_text?(purpose, 64) and valid_labels?(labels) do
       code = :crypto.strong_rand_bytes(32) |> Base.url_encode64(padding: false)
       id = LemonCore.Id.uuid()
       expires_at = System.system_time(:millisecond) + ttl
-      invite = %{
+      invite = Map.merge(binding, %{
         id: id,
         node_name: String.trim(node_name),
-        purpose: String.trim(purpose),
-        labels: Enum.map(labels, &String.trim/1) |> Enum.uniq(),
+        purpose: purpose,
+        labels: labels,
         expires_at_ms: expires_at
-      }
+      })
 
       case NodeStore.put_invite(code, invite) do
         :ok ->
           {:ok, %{
             "inviteId" => id,
             "inviteCode" => code,
-            "joinCommand" => join_command(controller, invite.node_name, code),
+            "joinCommand" => join_command(runtime, controller, invite.node_name, code),
             "expiresAtMs" => expires_at,
             "summary" => %{"inviteId" => id, "expiresAtMs" => expires_at, "singleUse" => true,
               "includesOperatorCredentials" => false}
@@ -55,6 +67,31 @@ defmodule LemonControlPlane.Methods.NodePairInvite do
       {:error, _} = error -> error
     end
   end
+  defp binding(nil, _name), do: {:ok, %{}, nil}
+  defp binding(node_id, name) when is_binary(node_id) and byte_size(node_id) in 1..128 do
+    case NodeStore.repair_binding(node_id, name) do
+      {:ok, binding, node} -> {:ok, binding, node}
+      {:error, :not_found} -> {:error, Errors.not_found("Node repair identity was not found")}
+      {:error, :invalid_binding} -> {:error, Errors.conflict("Node repair identity does not match its durable name or credential")}
+      {:error, _} -> {:error, Errors.unavailable("Node repair identity store is unavailable")}
+    end
+  end
+  defp binding(_id, _name), do: {:error, Errors.invalid_request("Invalid nodeId")}
+
+  defp metadata(params, param, node, field, default) do
+    if is_map(node) and not Map.has_key?(params, param),
+      do: NodeStore.invite_field(node, field) || default,
+      else: default
+  end
+
+  defp valid_labels?(labels) do
+    is_map(labels) and not is_struct(labels) and map_size(labels) <= 32 and
+      Enum.all?(labels, fn {key, value} ->
+        valid_text?(key, 64) and is_binary(value) and String.valid?(value) and
+          byte_size(value) <= 256 and not String.match?(value, ~r/[\x00-\x1f\x7f]/)
+      end)
+  end
+
 
   defp valid_text?(text, limit) do
     is_binary(text) and String.valid?(text) and byte_size(text) <= limit and
@@ -80,15 +117,94 @@ defmodule LemonControlPlane.Methods.NodePairInvite do
     end
   end
 
-  defp join_command(controller, node_name, code) do
-    "(if command -v lemon >/dev/null 2>&1; then lemon_bin=lemon; " <>
-      "elif [ -x \"$HOME/.lemon/bin/lemon\" ]; then lemon_bin=\"$HOME/.lemon/bin/lemon\"; " <>
-      "else installer=$(mktemp) && curl -fsSL --proto '=https' " <>
-      "https://raw.githubusercontent.com/z80dev/lemon/main/install.sh -o \"$installer\" && " <>
-      "sh \"$installer\" --skip-setup --no-modify-path; result=$?; rm -f \"$installer\"; " <>
-      "[ \"$result\" -eq 0 ] || exit \"$result\"; lemon_bin=\"$HOME/.lemon/bin/lemon\"; fi; " <>
+  defp runtime_source(controller) do
+    source = configured(:node_source_checkout, ["LEMON_NODE_SOURCE_CHECKOUT"])
+    version = configured(:node_install_version, ["LEMON_NODE_INSTALL_VERSION", "LEMON_VERSION"])
+    base_url =
+      configured(:node_install_base_url, ["LEMON_NODE_INSTALL_BASE_URL", "LEMON_INSTALL_BASE_URL"])
+
+    cond do
+      not is_nil(version) and not valid_version?(version) ->
+        {:error, Errors.invalid_request("Configure an exact node install version")}
+
+      not is_nil(source) ->
+        if valid_text?(source, 4096) and Path.type(source) == :absolute do
+          {:ok, {:source, source, version}}
+        else
+          {:error, Errors.invalid_request("Configure an absolute destination node source checkout")}
+        end
+
+      source_checkout_available?() and URI.parse(controller).host in ["localhost", "127.0.0.1", "::1"] ->
+        {:ok, {:source, @source_root, version}}
+
+      not is_nil(version) and valid_install_base_url?(base_url) ->
+        {:ok, {:release, version, String.trim_trailing(base_url, "/")}}
+
+      true ->
+        {:error,
+         Errors.invalid_request(
+           "Configure a destination source checkout or an explicit node install version and HTTPS base URL"
+         )}
+    end
+  end
+
+  defp source_checkout_available? do
+    not is_nil(@source_root) and File.regular?(Path.join(@source_root, "bin/lemon")) and
+      File.regular?(Path.join(@source_root, "mix.exs"))
+  end
+
+  defp configured(key, env_names) do
+    Application.get_env(:lemon_control_plane, key) ||
+      Enum.find_value(env_names, &System.get_env/1)
+  end
+
+  defp valid_version?(version) do
+    is_binary(version) and byte_size(version) <= 128 and
+      Regex.match?(~r/\A[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9][A-Za-z0-9.-]*)?\z/, version)
+  end
+
+  defp valid_install_base_url?(url) do
+    if valid_text?(url, 2048) and not String.match?(url, ~r/\s/) do
+      uri = URI.parse(url)
+      uri.scheme == "https" and is_binary(uri.host) and uri.host != "" and
+        uri.userinfo == nil and uri.query == nil and uri.fragment == nil
+    else
+      false
+    end
+  end
+
+  defp join_command(runtime, controller, node_name, code) do
+    "(" <> select_runtime(runtime) <> version_gate(runtime) <>
+      "if ! \"$lemon_bin\" node capabilities --json --require-bot >/dev/null 2>&1; then " <>
+      "printf '%s\\n' 'Lemon bot runtime prerequisites are not satisfied; enrollment was not attempted.' >&2; exit 1; fi; " <>
       "exec \"$lemon_bin\" node join --name #{quote_arg(node_name)} " <>
       "--controller #{quote_arg(controller)} --invite-code #{quote_arg(code)})"
+  end
+
+  defp select_runtime({:source, source, _version}) do
+    "lemon_bin=#{quote_arg(Path.join(source, "bin/lemon"))}; " <>
+      "if [ ! -f #{quote_arg(Path.join(source, "mix.exs"))} ] || [ ! -x \"$lemon_bin\" ]; then " <>
+      "printf '%s\\n' 'The provisioned Lemon source checkout is unavailable; enrollment was not attempted.' >&2; exit 1; fi; "
+  end
+
+  defp select_runtime({:release, version, base_url}) do
+    "lemon_bin=\"$HOME/.lemon/versions/\"#{quote_arg(version)}\"/bin/lemon\"; " <>
+      "if [ ! -x \"$lemon_bin\" ]; then " <>
+      "installer=$(mktemp 2>/dev/null) || { " <>
+      "printf '%s\\n' 'The pinned Lemon installation failed; enrollment was not attempted.' >&2; exit 1; }; " <>
+      "if curl -fsSL --proto '=https' --proto-redir '=https' #{quote_arg(@installer_url)} -o \"$installer\" >/dev/null 2>&1 && " <>
+      "LEMON_VERSION=#{quote_arg(version)} LEMON_INSTALL_BASE_URL=#{quote_arg(base_url)} " <>
+      "sh \"$installer\" --skip-setup --no-modify-path >/dev/null 2>&1; then result=0; else result=$?; fi; " <>
+      "rm -f \"$installer\"; if [ \"$result\" -ne 0 ]; then " <>
+      "printf '%s\\n' 'The pinned Lemon installation failed; enrollment was not attempted.' >&2; exit 1; fi; fi; "
+  end
+
+  defp version_gate({:source, _source, nil}), do: ""
+  defp version_gate({:source, _source, version}), do: version_gate(version)
+  defp version_gate({:release, version, _base_url}), do: version_gate(version)
+  defp version_gate(version) do
+    "if ! lemon_version=$(\"$lemon_bin\" version 2>/dev/null) || [ \"$lemon_version\" != #{quote_arg(version)} ]; then " <>
+      "printf '%s\\n' 'The Lemon runtime does not match the configured version; enrollment was not attempted.' >&2; exit 1; fi; "
   end
 
   defp quote_arg(value), do: "'" <> String.replace(value, "'", "'\\''") <> "'"

@@ -569,19 +569,24 @@ defmodule LemonControlPlane.Protocol.Schemas do
     # Node methods
     "node.pair.invite" => %{
       required: %{"nodeName" => :string},
-      optional: %{"purpose" => :string, "labels" => :list, "expiresInMs" => :integer}
+      optional: %{"purpose" => :string, "labels" => :map, "expiresInMs" => :integer, "nodeId" => :string}
     },
+    "node.pair.invite.revoke" => %{required: %{"inviteId" => :string}},
+    "node.capabilities.get" => %{required: %{"nodeId" => :string}},
+    "node.runtime.features" => %{required: %{"nodeId" => :string}},
     "node.host.info" => %{required: %{"nodeId" => :string}},
     "node.fs.list" => %{required: %{"nodeId" => :string, "path" => :string}, optional: %{"showHidden" => :boolean}},
     "node.fs.stat" => %{required: %{"nodeId" => :string, "path" => :string}},
     "node.fs.read" => %{required: %{"nodeId" => :string, "path" => :string}, optional: %{"offset" => :integer, "length" => :integer}},
-    "node.fs.write" => %{required: %{"nodeId" => :string, "path" => :string, "dataBase64" => :string}, optional: %{"offset" => :integer, "truncate" => :boolean, "mkdirs" => :boolean}},
+    "node.fs.write" => %{required: %{"nodeId" => :string, "path" => :string, "dataBase64" => :string}, optional: %{"offset" => :integer, "truncate" => :boolean, "mkdirs" => :boolean, "expectedModifiedAtMs" => :integer}},
     "node.fs.mkdir" => %{required: %{"nodeId" => :string, "path" => :string}},
-    "node.fs.move" => %{required: %{"nodeId" => :string, "path" => :string, "destination" => :string}},
-    "node.fs.delete" => %{required: %{"nodeId" => :string, "path" => :string, "confirm" => :string}},
-    "node.secrets.set" => %{required: %{"nodeId" => :string, "name" => :string, "value" => :string}},
+    "node.fs.move" => %{required: %{"nodeId" => :string, "path" => :string, "destination" => :string, "expectedModifiedAtMs" => :integer}, optional: %{"overwrite" => :boolean}},
+    "node.fs.delete.preview" => %{required: %{"nodeId" => :string, "path" => :string}, optional: %{"recursive" => :boolean}},
+    "node.fs.delete" => %{required: %{"nodeId" => :string, "path" => :string, "confirm" => :string, "confirmationToken" => :string}},
+    "node.secrets.set" => %{required: %{"nodeId" => :string, "name" => :string, "value" => :string}, optional: %{"operationId" => :string}},
     "node.secrets.list" => %{required: %{"nodeId" => :string}},
     "node.secrets.delete" => %{required: %{"nodeId" => :string, "name" => :string}},
+    "node.secrets.receipt" => %{required: %{"nodeId" => :string, "operationId" => :string}},
     "node.shell.open" => %{required: %{"nodeId" => :string}, optional: %{"cwd" => :string, "cols" => :integer, "rows" => :integer}},
     "node.shell.input" => %{required: %{"shellId" => :string, "dataBase64" => :string}},
     "node.shell.resize" => %{required: %{"shellId" => :string, "cols" => :integer, "rows" => :integer}},
@@ -606,7 +611,7 @@ defmodule LemonControlPlane.Protocol.Schemas do
         "pairingId" => :string
       }
     },
-    "nodes.list" => %{},
+    "nodes.list" => %{optional: %{"name" => :string, "nodeId" => :string}},
     "nodes.revoke" => %{
       required: %{
         "nodeId" => :string,

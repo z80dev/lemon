@@ -23,6 +23,42 @@ defmodule CodingAgent.ExecutionNode.PTYTest do
       default_cwd: System.user_home!(), allowed_roots: [System.user_home!()])
   end
 
+  test "helper pins cwd with NOFOLLOW rather than following a swapped directory" do
+    root = Path.join(System.tmp_dir!(), "lemon-pty-race-#{System.unique_integer([:positive])}")
+    outside = root <> "-outside"
+    File.mkdir_p!(Path.join(root, "inside"))
+    File.mkdir_p!(outside)
+    on_exit(fn -> File.rm_rf!(root); File.rm_rf!(outside) end)
+    script = """
+    import json,os,struct,sys
+    sys.path.insert(0,sys.argv[1])
+    import node_pty,node_fs
+    root=os.path.realpath(sys.argv[2]); outside=os.path.realpath(sys.argv[3])
+    cwd=os.path.join(root,"inside")
+    data=json.dumps({"cwd":root,"roots":[root]}).encode()
+    read_fd,write_fd=os.pipe()
+    os.write(write_fd,struct.pack("!I",len(data))+data); os.close(write_fd)
+    os.dup2(read_fd,0); os.close(read_fd)
+    original=node_fs.Policy.parent
+    def racing_parent(self,path):
+        result=original(self,path)
+        os.rename(path,path+".parked")
+        os.symlink(outside,path)
+        return result
+    node_fs.Policy.parent=racing_parent
+    try:
+        fd=node_pty.admitted_cwd(cwd)
+        os.close(fd)
+        sys.exit(9)
+    except OSError:
+        print("blocked")
+    """
+    {output, status} = System.cmd(System.find_executable("python3"),
+      ["-c", script, to_string(:code.priv_dir(:coding_agent)), root, outside], stderr_to_stdout: true)
+    assert status == 0
+    assert String.trim(output) == "blocked"
+  end
+
   defp receive_terminal(pid, acc, count) when count < 100 do
     receive do
       {:node_pty, "pty-test", "output", %{"dataBase64" => data}} ->

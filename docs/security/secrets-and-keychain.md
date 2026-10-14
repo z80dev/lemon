@@ -134,6 +134,50 @@ lemon secrets rotate-key --confirm <token>  # apply exactly that preview
   previous key; keep that key (or a `--include-credentials` backup) if you may
   restore them. See [backups](../user-guide/backups.md).
 
+## Destination secret operation receipts
+
+`Secrets.set(name, value, operation_id: id, node_id: authenticated_node_id, ...)`
+installs a value and its private durable proof in **one vault-row mutation** under
+`Secrets.Lock`, held from master-key resolution through persistence. The receipt
+binds the secret owner, node ID, normalized name and exact value with a private
+domain-separated HMAC; provider and expiry are also part of the intent. Public
+metadata and RPC projections expose no plaintext, value digest, HMAC, encryption
+fields or key material. IDs accept 1–128 ASCII letters/digits/`_`/`:`/`-`.
+
+Admission strictly scans the owner's vault records while holding the same lock,
+so an ID cannot be reused for another name on the same authenticated node.
+Unavailable or corrupt reads fail closed, never authorize a fresh write.
+The encrypted value and proof are embedded in one record, not two sequential
+Store writes or a simulated transaction. A duplicate with unchanged intent and
+current binding returns without re-encryption, persistence or usage changes;
+a conflicting intent or superseded binding returns `secret_operation_conflict`.
+
+`Secrets.receipt(operation_id, node_id: authenticated_node_id, ...)` strictly
+queries private vault metadata without resolving a master key, decrypting a value,
+replaying a mutation or touching usage. It returns only node/operation IDs,
+`status` (`applied` or `not_found`), `name` (null on absence), and
+`current_binding_matches`. The asynchronous admin-only `node.secrets.receipt`
+RPC projects these as `nodeId`, `operationId`, `status`, `name`, and
+`currentBindingMatches`. Worker-owned `:node_id`, never RPC arguments, supplies
+the authenticated identity. See [node files and secrets](../user-guide/node-files-and-secrets.md#reconciling-a-secret-installation).
+
+`applied` is historical proof of installation, not credential validity or current
+readiness. Current binding compares only the private encrypted revision (including
+rotation staging and expiry) and active state; usage counters are ignored.
+Ordinary sets preserve past receipts. Deletion removes all encrypted value fields
+but retains receipt-only metadata; normal reads, resolution and lists treat that
+row as absent. Expired values are excluded from reads/lists without deleting proof.
+Rotation skips valid receipt-only rows, preserves proof when pruning expired
+values, and re-encrypts live values without migrating their original bindings.
+Thus completed rotation invalidates current binding but never loses historical
+proof. If staging is rolled back before switching keys, the unchanged original
+binding can match again.
+
+Receipts are bounded at 128 per owner/name row. New operations at capacity fail
+with `secret_receipt_capacity` without changing the value or pruning prior proof.
+Failed queries are errors, not missing proof. Retain the fixed node/operation IDs
+after uncertain mutations and reconcile read-only before any new mutation.
+
 ## Validation References
 
 - `apps/lemon_core/test/lemon_core/secrets/keychain_test.exs`
@@ -147,3 +191,4 @@ lemon secrets rotate-key --confirm <token>  # apply exactly that preview
 - `apps/lemon_cli/test/lemon_cli/cli_test.exs` (`secrets rotate-key`)
 - `apps/lemon_core/test/lemon_core/secrets/lock_test.exs`
 - `apps/lemon_core/test/lemon_core/store/sqlite_backend_test.exs` (`compare_and_swap/5 and sync/1`)
+- `apps/lemon_core/test/lemon_core/secrets/receipts_test.exs`

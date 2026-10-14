@@ -24,28 +24,43 @@ defmodule LemonControlPlane.Methods.NodesSupport do
     :exit, _ -> :unavailable
   end
 
-  def nodes(live) do
-    List.wrap(NodeStore.list_nodes())
+  def nodes(live, filters) do
+    {:ok, rows} = NodeStore.fetch_nodes()
+    rows
     |> Enum.flat_map(fn
-      {id, node} when is_binary(id) and is_map(node) -> [project_node(id, node, live)]
+      {id, node} when is_binary(id) and is_map(node) ->
+        if matches?(filters, id, field(node, :name)),
+          do: [project_node(id, node, live)],
+          else: []
+
       _ -> []
     end)
     |> Enum.sort_by(&{&1["status"] != "online", String.downcase(&1["name"] || "")})
-    |> Enum.take(@max_nodes)
+    |> capped(@max_nodes)
   end
 
-  def pairings(now) do
-    List.wrap(NodeStore.list_pairings())
+  def pairings(now, filters) do
+    {:ok, rows} = NodeStore.fetch_pairings()
+    rows
     |> Enum.flat_map(fn
       {id, request} when is_binary(id) and is_map(request) ->
-        if pending?(request, now), do: [project_pairing(id, request)], else: []
+        if pending?(request, now) and
+             matches?(filters, field(request, :node_id), field(request, :node_name)),
+          do: [project_pairing(id, request)],
+          else: []
 
-      _ ->
-        []
+      _ -> []
     end)
     |> Enum.sort_by(& &1["createdAtMs"], :desc)
-    |> Enum.take(@max_pairings)
+    |> capped(@max_pairings)
   end
+  defp matches?(filters, id, name) do
+    (not Map.has_key?(filters, "nodeId") or filters["nodeId"] == id) and
+      (not Map.has_key?(filters, "name") or filters["name"] == name)
+  end
+
+  defp capped(rows, limit), do: {Enum.take(rows, limit), length(rows) > limit}
+
 
   defp pending?(request, now) do
     field(request, :status) in [:pending, "pending"] and
@@ -68,6 +83,7 @@ defmodule LemonControlPlane.Methods.NodesSupport do
       "type" => SkillsSupport.text(to_text(field(node, :type)), 40),
       "purpose" => SkillsSupport.text(field(node, :purpose), 64),
       "labels" => labels(field(node, :labels)),
+      "enrollmentInviteId" => SkillsSupport.text(field(node, :enrollment_invite_id), 128),
       "status" => status,
       "connectedAtMs" => live_entry && live_entry[:connected_at_ms],
       "lastSeenMs" => int(field(node, :last_seen_ms)),
@@ -107,14 +123,20 @@ defmodule LemonControlPlane.Methods.NodesSupport do
   end
 
   defp capabilities(_), do: []
-  defp labels(values) when is_list(values) do
+  defp labels(values) when is_map(values) do
     values
-    |> Enum.filter(&is_binary/1)
-    |> Enum.take(16)
-    |> Enum.map(&SkillsSupport.text(&1, 64))
+    |> Enum.filter(fn {key, value} ->
+      is_binary(key) and String.valid?(key) and byte_size(key) in 1..64 and
+        String.trim(key) != "" and not String.match?(key, ~r/[\x00-\x1f\x7f]/) and
+        is_binary(value) and String.valid?(value) and byte_size(value) <= 256 and
+        not String.match?(value, ~r/[\x00-\x1f\x7f]/)
+    end)
+    |> Enum.sort()
+    |> Enum.take(32)
+    |> Map.new()
   end
 
-  defp labels(_), do: []
+  defp labels(_), do: %{}
 
 
   defp to_text(value) when is_binary(value), do: value
@@ -145,11 +167,20 @@ defmodule LemonControlPlane.Methods.NodesList do
   def scopes, do: [:read]
 
   @impl true
-  def handle(_params, _ctx) do
+  def handle(params, _ctx) do
+    params = params || %{}
+    if valid_filters?(params) do
+      list(params)
+    else
+      {:error, Errors.invalid_request("Invalid exact node name or nodeId filter")}
+    end
+  end
+
+  defp list(params) do
     now = System.system_time(:millisecond)
     live = NodesSupport.live_nodes()
-    nodes = NodesSupport.nodes(live)
-    pairings = NodesSupport.pairings(now)
+    {nodes, nodes_truncated?} = NodesSupport.nodes(live, params)
+    {pairings, pairings_truncated?} = NodesSupport.pairings(now, params)
 
     {:ok,
      %{
@@ -159,11 +190,20 @@ defmodule LemonControlPlane.Methods.NodesList do
          "count" => length(nodes),
          "online" => Enum.count(nodes, &(&1["status"] == "online")),
          "pending" => length(pairings),
-         "presenceAvailable" => live != :unavailable
+         "presenceAvailable" => live != :unavailable,
+         "truncated" => nodes_truncated? or pairings_truncated?
        }
      }}
   rescue
     _ -> {:error, Errors.unavailable("Node store is unavailable")}
+  end
+  defp valid_filters?(params) do
+    Enum.all?([{"name", 64}, {"nodeId", 128}], fn {key, limit} ->
+      not Map.has_key?(params, key) or
+        (is_binary(params[key]) and String.valid?(params[key]) and
+           byte_size(params[key]) in 1..limit and String.trim(params[key]) != "" and
+           not String.match?(params[key], ~r/[\x00-\x1f\x7f]/))
+    end)
   end
 end
 

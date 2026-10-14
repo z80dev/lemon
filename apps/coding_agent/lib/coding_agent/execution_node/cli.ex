@@ -33,11 +33,45 @@ defmodule CodingAgent.ExecutionNode.CLI do
   end
 
   @spec run([String.t()], keyword()) :: :ok | {:error, String.t()}
-  def run(argv, deps \\ []) do
+  def run(argv, deps \\ [])
+
+  def run(["capabilities" | argv], deps) do
+    case OptionParser.parse(argv, strict: [json: :boolean, require_bot: :boolean,
+           expected_version: :string, help: :boolean], aliases: @aliases) do
+      {opts, [], []} ->
+        if opts[:help] do
+          IO.puts(help())
+          :ok
+        else
+          provider = Keyword.get(deps, :runtime_features, &Worker.runtime_features/0)
+          snapshot = provider.()
+          if opts[:json] do
+            IO.puts(Jason.encode!(snapshot))
+          else
+            IO.puts("Lemon #{snapshot["lemonVersion"]}; bot runtime compatible: #{snapshot["botReady"]}")
+            IO.puts("Missing features: #{Enum.join(snapshot["missingFeatures"], ", ")}")
+          end
+          cond do
+            opts[:expected_version] &&
+                (byte_size(opts[:expected_version]) > 64 or not LemonCore.Update.Version.valid?(opts[:expected_version])) ->
+              {:error, "--expected-version must be an exact Lemon CalVer"}
+            opts[:expected_version] && opts[:expected_version] != snapshot["lemonVersion"] ->
+              {:error, "Installed Lemon version does not match the configured worker build"}
+            opts[:require_bot] && snapshot["botReady"] != true ->
+              {:error, "Compatible bot worker APIs are missing; use the matching source checkout or an operator-supported build"}
+            true -> :ok
+          end
+        end
+      _ -> {:error, "invalid compatibility inspection options"}
+    end
+  end
+
+  def run(argv, deps) do
     Process.flag(:trap_exit, true)
 
     with {:ok, opts} <- parse(argv),
          false <- opts[:help] == true,
+         :ok <- require_invite_features(opts, deps),
          {:ok, _started} <- Application.ensure_all_started(:coding_agent),
          {:ok, worker} <-
            Worker.start_link(
@@ -80,6 +114,16 @@ defmodule CodingAgent.ExecutionNode.CLI do
       {opts, [], []} -> validate(opts)
       {_opts, _positional, []} -> {:error, "unexpected arguments"}
       {_opts, _positional, _invalid} -> {:error, "invalid options"}
+    end
+  end
+
+  defp require_invite_features(opts, deps) do
+    if opts[:invite_code] do
+      provider = Keyword.get(deps, :runtime_features, &Worker.runtime_features/0)
+      if provider.()["botReady"] == true, do: :ok,
+        else: {:error, "Invite enrollment requires the matching source checkout or a compatible host/MCP/stream/profile worker build"}
+    else
+      :ok
     end
   end
 
@@ -148,11 +192,12 @@ defmodule CodingAgent.ExecutionNode.CLI do
   def help do
     """
     Usage: lemon node join --name NAME --controller wss://HOST/ws [options]
+           lemon node capabilities [--json] [--require-bot] [--expected-version VERSION]
 
     Options:
       --pair                    Pair and store a controller-issued node token
       --operator-token TOKEN    Operator token used only during pairing
-      --invite-code CODE        Single-use enrollment invite (implies --pair; no operator token needed)
+      --invite-code CODE        Single-use enrollment or bound repair invite (implies --pair)
       --token TOKEN             Existing node session token (overrides stored token)
       --node-id ID              Load or repair a credential by durable controller node ID
       --repair                  Operator-authorized repair for a legacy record without a recovery token
@@ -162,12 +207,19 @@ defmodule CodingAgent.ExecutionNode.CLI do
       --allowed-root PATH       Allowed host file/shell root (repeatable; default: home directory)
       --help, -h                Show this help
 
+    Compatibility inspection runs locally without starting another runtime.
+    --require-bot fails closed unless the installed host, file CAS/preview,
+    secret-receipt, PTY, MCP discovery, profile sync and live-stream APIs exist.
+    A matching version alone does not establish compatibility. Provider login
+    and OS grants remain destination-local prerequisites, inspected separately.
+
     LEMON_NODE_OPERATOR_TOKEN must match the controller's
     LEMON_CONTROL_PLANE_OPERATOR_TOKEN when operator authentication is enabled.
     Prefer LEMON_NODE_OPERATOR_TOKEN and LEMON_NODE_TOKEN over command-line token
     flags so credentials do not enter shell history. Invite commands contain only
     a short-lived enrollment credential, never the controller operator token.
-    Treat the command as secret until used or expired. Stored node tokens live only
+    A repair invite's durable node ID is bound by the controller, not a CLI flag.
+    Treat the command as secret until used, revoked or expired. Stored node tokens live only
     on this machine in a mode-0600 file keyed by durable node ID. Non-loopback
     controllers require wss:// by default. The insecure override is acceptable
     only when another verified transport layer, such as Tailscale, encrypts and

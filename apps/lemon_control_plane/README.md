@@ -261,15 +261,18 @@ or general events; audit lines contain only operation and outcome classification
 
 | Method | Scope | Request | Success payload |
 | --- | --- | --- | --- |
-| `node.pair.invite` | pairing | `{nodeName,purpose?,labels?,expiresInMs?}` | `{inviteId,inviteCode,joinCommand,expiresAtMs,summary}` |
+| `node.pair.invite` | pairing | `{nodeName,nodeId?,purpose?,labels?,expiresInMs?}` | `{inviteId,inviteCode,joinCommand,expiresAtMs,summary}` |
+| `node.pair.invite.revoke` | pairing | `{inviteId}` | `{inviteId,revoked:true}` |
+| `node.capabilities.get` | read | `{nodeId}` | `{nodeId,os,measuredAtMs,stale,items}` |
 | `node.host.info` | read | `{nodeId}` | `{hostname,os,osVersion,arch,cpuCount,memTotalBytes,memFreeBytes,diskTotalBytes,diskFreeBytes,uptimeSec,lemonVersion,defaultCwd,user}` |
 | `node.fs.list` | admin | `{nodeId,path,showHidden?}` | `{path,entries,limit,truncated}` |
-| `node.fs.stat` | admin | `{nodeId,path}` | `{path,type,size,mtimeMs,mode,mime}` |
+| `node.fs.stat` | admin | `{nodeId,path}` | `{path,type,size,mtimeMs,mode,mime,readable,writable}` |
 | `node.fs.read` | admin | `{nodeId,path,offset?,length?}` | `{path,dataBase64,offset,length,size,mime,eof}` |
-| `node.fs.write` | admin | `{nodeId,path,dataBase64,offset?,truncate?,mkdirs?}` | `{path,offset,bytesWritten,size}` |
+| `node.fs.write` | admin | `{nodeId,path,dataBase64,expectedModifiedAtMs?,offset?,truncate?,mkdirs?}` | `{path,offset,bytesWritten,size,mtimeMs}` |
 | `node.fs.mkdir` | admin | `{nodeId,path}` | `{path,created:true}` |
-| `node.fs.move` | admin | `{nodeId,path,destination}` | `{path,destination,moved:true}` |
-| `node.fs.delete` | admin | `{nodeId,path,confirm}` | `{path,deleted:true}` |
+| `node.fs.move` | admin | `{nodeId,path,destination,expectedModifiedAtMs,overwrite?}` | `{path,destination,moved:true}` |
+| `node.fs.delete.preview` | admin | `{nodeId,path,recursive?}` | `{path,stat,childCount,childrenDigest,candidateCount,confirmationToken,expiresAtMs}` |
+| `node.fs.delete` | admin | `{nodeId,path,confirm,confirmationToken}` | `{path,deleted:true}` |
 | `node.secrets.set` | admin | `{nodeId,name,value}` | `{name,set:true}` |
 | `node.secrets.list` | admin | `{nodeId}` | `{names,limit,truncated}` |
 | `node.secrets.delete` | admin | `{nodeId,name}` | `{name,deleted:true}` |
@@ -278,24 +281,51 @@ or general events; audit lines contain only operation and outcome classification
 | `node.shell.resize` | admin | `{shellId,cols,rows}` | `{shellId,accepted:true}` |
 | `node.shell.close` | admin | `{shellId}` | `{shellId,accepted:true}` |
 
-Invites default to purpose `lemon_bot`, labels `[]`, expiry 15 minutes (bounded
-to 1 ms–24 hours). The command installs Lemon if missing, then enrolls with the
-one-time, exact-name-bound invite credential. No operator token is embedded.
-Set `LEMON_CONTROL_PLANE_PUBLIC_WS_URL` to the reachable `wss://.../ws` endpoint
-before creating remote invitations. `nodes.list` includes `purpose` and `labels`.
-Invite connections have enrollment-only authority and receive no general events.
+Invites default to purpose `lemon_bot`, labels `{}`, expiry 15 minutes (bounded
+to 1 ms–24 hours). Labels are a record with at most 32 nonempty keys (64 UTF-8
+bytes) and string values (256 UTF-8 bytes). The command installs Lemon if missing,
+then enrolls with the one-time, exact-name-bound credential; no operator token is
+embedded. Optional `nodeId` creates a repair invitation bound to that durable
+identity, recovery hash and current generation; it never creates a replacement
+identity. Revocation invalidates only a pending unused invite.
+Set `LEMON_CONTROL_PLANE_PUBLIC_WS_URL` to the reachable `wss://.../ws` endpoint.
+`nodes.list {name?,nodeId?}` filters exact matches before caps; rows include
+`purpose`, label records and `enrollmentInviteId` (null for legacy nodes), and
+`summary.truncated` distinguishes capped inventory. Invite connections have
+enrollment-only authority and receive no general events.
 
 Paths resolve on the worker, under the node user's home by default. Repeat
 destination CLI `--allowed-root PATH` to allow additional existing directories.
-Traversal and symlink escapes are rejected; delete requires `confirm` equal to
-the exact supplied `path`, and never recursively deletes a nonempty directory.
-Read/write/input chunks decode to at most 1 MiB; read defaults to that limit.
-Offsets are bytes; writes default to offset zero and truncation at the end of the
-written chunk. Use `truncate:false` while uploading intermediate chunks.
-Directory and secret listings cap at 500 entries and report truncation.
-Unavailable host metrics are `null`, not invented zeroes. Secret values enter
-only the destination encrypted store; missing master keys fail closed.
-See [files and secrets](../../docs/user-guide/node-files-and-secrets.md).
+Descriptor-relative file operations pin worker policy roots and use `O_NOFOLLOW`;
+caller path traversal and symlink escapes are rejected. All worker file calls
+serialize through one supervised owner. Existing-file writes require matching
+`expectedModifiedAtMs`; zero means require missing. Moves require the source
+revision and default to native atomic no-overwrite (`overwrite:true` is explicit).
+Delete previews bind revisions and exact candidate sets to a one-use, five-minute
+worker token. Execution requires that token and `confirm` equal to the exact
+caller path. Nonrecursive deletion is the default; recursion requires an explicit
+recursive preview. Stale proofs fail closed; local external writers are not
+sandboxed, and raced recursive deletion can leave a partial outcome.
+Read/write/input chunks decode to at most 1 MiB. Writes default to offset zero
+and truncation at the end of the chunk; use `truncate:false` for intermediate
+chunks and carry the returned `mtimeMs` into the next CAS. Directory and secret
+listings cap at 500. See [files and secrets](../../docs/user-guide/node-files-and-secrets.md).
+
+Supported macOS/Linux host snapshots contain real measured memory, disk, CPU,
+uptime and version data. Failed or unsupported measurement returns `UNAVAILABLE`,
+not nulls or invented zeroes. Secret values enter only the destination encrypted
+store; missing master keys fail closed.
+
+Capability items contain `{id,name,category,supported,configuredLevel,osGrant,
+tools,reason,measuredAtMs,stale}`. Categories are `files|shell|browser|connector|os_app`,
+levels `off|read_only|read_interact`, and OS grant states
+`granted|denied|not_required|unknown`. Probes read the destination's actual tool
+catalog/root permissions, executable availability and browser backend status.
+macOS Peekaboo grants and Linux X11 connection status are passive, bounded
+checks; unavailable inspection stays unknown, never fabricated denial or grant.
+Full Disk Access has no supported nonprompting macOS query and remains unknown.
+Connector authorization is session-scoped, not invented from method names.
+These measurements are not per-bot grants or an OS sandbox.
 
 Terminals use a real worker PTY (`python3` required), with the destination login
 shell and worker default cwd unless specified. Dimensions are 1–500 columns/rows.

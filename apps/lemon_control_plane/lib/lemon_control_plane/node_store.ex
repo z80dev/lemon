@@ -21,10 +21,11 @@ defmodule LemonControlPlane.NodeStore do
   def fetch_invite(code) when is_binary(code) and byte_size(code) in 32..128 do
     case Store.fetch(@invite_table, invite_digest(code)) do
       {:ok, invite} when is_map(invite) ->
-        expires_at = invite_field(invite, :expires_at_ms)
-        if is_integer(expires_at) and expires_at > System.system_time(:millisecond),
-          do: {:ok, invite},
-          else: {:error, :invalid_invite}
+        if live_invite?(invite) do
+          with {:ok, _node} <- validate_repair_binding(invite), do: {:ok, invite}
+        else
+          {:error, :invalid_invite}
+        end
 
       {:ok, _} -> {:error, :invalid_invite}
       {:error, _} -> {:error, :store_unavailable}
@@ -47,6 +48,64 @@ defmodule LemonControlPlane.NodeStore do
     end
   end
 
+  @doc "Revokes only a live, unused invite; consumption and revocation race atomically."
+  def revoke_invite(invite_id) do
+    with {:ok, invites} <- Store.fetch_all(@invite_table) do
+      case Enum.find(invites, fn {_digest, invite} ->
+             is_map(invite) and invite_field(invite, :id) == invite_id
+           end) do
+        {digest, invite} ->
+          if live_invite?(invite) do
+            case Store.compare_and_delete(@invite_table, digest, invite) do
+              :ok -> :ok
+              {:error, :mismatch} -> {:error, :not_found}
+              {:error, _} -> {:error, :store_unavailable}
+            end
+          else
+            {:error, :not_found}
+          end
+
+        nil -> {:error, :not_found}
+      end
+    end
+  end
+
+  @doc "Captures the durable recovery credential and current session generation."
+  def repair_binding(node_id, node_name) do
+    with {:ok, node} when is_map(node) <- Store.fetch(@registry_table, node_id),
+         true <- invite_field(node, :name) == node_name,
+         hash when is_binary(hash) <- invite_field(node, :token_hash),
+         {:ok, generation} <- LemonControlPlane.Auth.TokenStore.fetch_node_generation(node_id) do
+      {:ok, %{node_id: node_id, recovery_token_hash: hash, session_generation: generation}, node}
+    else
+      {:ok, nil} -> {:error, :not_found}
+      {:error, _} -> {:error, :store_unavailable}
+      _ -> {:error, :invalid_binding}
+    end
+  end
+
+  @doc "Fails closed when a repair invite's durable identity or generation has changed."
+  def validate_repair_binding(binding) do
+    case invite_field(binding, :node_id) do
+      nil -> {:ok, nil}
+      node_id when is_binary(node_id) ->
+        with {:ok, current, node} <- repair_binding(node_id, invite_field(binding, :node_name)),
+             true <- current.recovery_token_hash == invite_field(binding, :recovery_token_hash),
+             true <- current.session_generation == invite_field(binding, :session_generation) do
+          {:ok, node}
+        else
+          {:error, :store_unavailable} -> {:error, :store_unavailable}
+          _ -> {:error, :invalid_invite}
+        end
+
+      _ -> {:error, :invalid_invite}
+    end
+  end
+
+  defp live_invite?(invite) do
+    expires_at = invite_field(invite, :expires_at_ms)
+    is_integer(expires_at) and expires_at > System.system_time(:millisecond)
+  end
   def invite_field(invite, key),
     do: Map.get(invite, key, Map.get(invite, Atom.to_string(key)))
 
@@ -62,6 +121,9 @@ defmodule LemonControlPlane.NodeStore do
 
   @spec list_pairings() :: list()
   def list_pairings, do: Store.list(@pairing_table)
+  @spec fetch_pairings() :: {:ok, list()} | {:error, :store_unavailable}
+  def fetch_pairings, do: Store.fetch_all(@pairing_table)
+
 
   @spec put_pairing_code(binary(), binary()) :: :ok
   def put_pairing_code(code, pairing_id) when is_binary(code) and is_binary(pairing_id),
@@ -79,6 +141,9 @@ defmodule LemonControlPlane.NodeStore do
 
   @spec list_nodes() :: list()
   def list_nodes, do: Store.list(@registry_table)
+  @spec fetch_nodes() :: {:ok, list()} | {:error, :store_unavailable}
+  def fetch_nodes, do: Store.fetch_all(@registry_table)
+
 
   @doc "Reserves a trimmed durable node name for one node ID."
   @spec reserve_node_name(binary(), binary()) ::

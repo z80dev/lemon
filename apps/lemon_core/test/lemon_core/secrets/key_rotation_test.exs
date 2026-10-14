@@ -431,6 +431,27 @@ defmodule LemonCore.Secrets.KeyRotationTest do
     assert {:ok, "alpha-value"} = Secrets.get("ALPHA", ctx.opts)
   end
 
+  test "rotation retains proofs and tombstones while invalidating original bindings", ctx do
+    opts = Keyword.put(ctx.opts, :node_id, "receipt-node")
+    assert {:ok, _} = Secrets.set("LIVE", "live", [operation_id: "live"] ++ opts)
+    assert {:ok, _} = Secrets.set("DELETED", "deleted", [operation_id: "deleted"] ++ opts)
+    assert :ok = Secrets.delete("DELETED", opts)
+    assert {:ok, _} = Secrets.set("EXPIRED", "expired", [operation_id: "expired"] ++ opts)
+    expired = Store.get(Secrets.table(), {"default", "EXPIRED"})
+    :ok = Store.put(Secrets.table(), {"default", "EXPIRED"}, Map.put(expired, :expires_at, Clock.now_ms() - 1))
+    assert {:ok, %{count: 1, expired: 1} = preview} = KeyRotation.preview(opts)
+    assert {:ok, %{rotated: 1, pruned: 1}} = KeyRotation.rotate(preview.confirmation_token, opts)
+
+    assert {:ok, "live"} = Secrets.get("LIVE", opts)
+    assert {:ok, [%{name: "LIVE"}]} = Secrets.list(opts)
+    for id <- ["live", "deleted", "expired"] do
+      assert {:ok, %{status: "applied", current_binding_matches: false}} = Secrets.receipt(id, opts)
+      assert {:error, :secret_operation_conflict} = Secrets.set(String.upcase(id), id, [operation_id: id] ++ opts)
+    end
+    assert LemonCore.Secrets.Receipts.receipt_only?(Store.get(Secrets.table(), {"default", "DELETED"}))
+    assert LemonCore.Secrets.Receipts.receipt_only?(Store.get(Secrets.table(), {"default", "EXPIRED"}))
+  end
+
   defp read_key(path), do: path |> File.read!() |> String.trim() |> Base.decode64!()
 
   defp closed_port do

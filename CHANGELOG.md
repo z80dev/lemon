@@ -16,6 +16,13 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   invitations install and enroll a bot machine without sharing the operator
   credential; node listings include purpose and labels. See
   [attaching a bot machine](docs/user-guide/attaching-a-bot-machine.md).
+- Attached-machine safety: exact durable-ID routing cannot be hijacked by a node
+  named after another node's ID. Worker-owned file CAS, atomic no-overwrite moves
+  and revision/candidate-bound deletion previews use descriptor-relative root
+  admission. Revocable repair invites retain durable identity and generation
+  fences; label records and enrollment proofs support reliable reconciliation.
+  Machine inspection reports measured host resources and explicit capability/
+  OS-grant states without fabricated metrics or permissions.
 
 ---
 

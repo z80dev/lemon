@@ -247,16 +247,17 @@ defmodule LemonCli.CLI do
   # source umbrella load it, so resolve the node CLI at runtime.
   defp execution_node_cli, do: Module.concat(["CodingAgent", "ExecutionNode", "CLI"])
 
-  defp run_node(["join" | args]) do
+  defp run_node([command | args]) when command in ["join", "capabilities"] do
     node_cli = execution_node_cli()
 
     if Code.ensure_loaded?(node_cli) do
-      case node_cli.run(args) do
+      forwarded = if command == "capabilities", do: [command | args], else: args
+      case node_cli.run(forwarded) do
         :ok ->
           @exit_ok
 
         {:error, message} ->
-          IO.puts(:stderr, "lemon node join: #{message}")
+          IO.puts(:stderr, "lemon node #{command}: #{message}")
           @exit_usage
       end
     else

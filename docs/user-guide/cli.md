@@ -59,7 +59,7 @@ packaged releases:
 | `update` | Source and release | Release: full managed-update commands; source: `check` and `history` only, while plan/apply/rollback fail closed. Bare or unknown source update forms do not forward to Mix. Use `mix lemon.update` directly for source configuration migration and bundled-skill sync. |
 | `completion` | Source and release | Generate completion for the current launcher's available commands. |
 | `migrate` | Source and release | Hermes audit/import commands are available under `migrate hermes`. The former Hermes-specific Mix tasks are deleted. |
-| `node` | Source and release | Includes `node join`; see [attaching a bot machine](attaching-a-bot-machine.md) for invite enrollment and destination access roots. |
+| `node` | Source and release | Includes `node join`; `--invite-code` accepts new-node enrollment or controller-bound repair without an operator token. See [attaching a bot machine](attaching-a-bot-machine.md) for invite issuance/revocation and destination access roots. |
 | `version`, `--version` | Source and release | `version` prints bare CalVer for scripts; `--version` or `version --verbose` also reports source/release, commit, and build channel. |
 | `send`, `media`, `models`, `policy`, `skill`, `usage` | Source and release | Mix-free channel notifications, diagnostics, catalog, policies, and skill management; existing Mix tasks remain thin source adapters. |
 
