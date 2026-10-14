@@ -117,23 +117,34 @@ defmodule CodingAgent.ControlPlaneProvider do
   """
   def session_context_usage(session_key, cwd) do
     case live_session(session_key) do
-      nil ->
-        with {:ok, path} <- native_session_path(session_key, cwd),
-             {:ok, session} <- load_native_session(path) do
-          settings = CodingAgent.SettingsManager.load(session.header.cwd)
-          context = CodingAgent.SessionManager.build_session_context(session)
-          model = durable_model(context.model, settings)
-          messages = CodingAgent.Session.Persistence.restore_messages_from_session(session)
+      nil -> durable_context_usage(session_key, cwd)
+      pid -> live_context_usage(pid, session_key, cwd)
+    end
+  end
 
-          CodingAgent.Session.ContextUsage.measure_durable(
-            %{session_manager: session, model: model, settings_manager: settings},
-            messages,
-            CodingAgent.Session.ContextUsage.stored_overhead(session.header.id)
-          )
-        end
+  defp live_context_usage(pid, session_key, cwd) do
+    CodingAgent.Session.context_usage(pid)
+  catch
+    :exit, {reason, {GenServer, :call, [^pid, :context_usage, _timeout]}}
+    when reason in [:noproc, :normal, :shutdown, :killed] ->
+      # The read raced retirement after lookup. Use the same saved-session path
+      # as an already stopped owner; timeouts and unexpected crashes still escape.
+      durable_context_usage(session_key, cwd)
+  end
 
-      pid ->
-        CodingAgent.Session.context_usage(pid)
+  defp durable_context_usage(session_key, cwd) do
+    with {:ok, path} <- native_session_path(session_key, cwd),
+         {:ok, session} <- load_native_session(path) do
+      settings = CodingAgent.SettingsManager.load(session.header.cwd)
+      context = CodingAgent.SessionManager.build_session_context(session)
+      model = durable_model(context.model, settings)
+      messages = CodingAgent.Session.Persistence.restore_messages_from_session(session)
+
+      CodingAgent.Session.ContextUsage.measure_durable(
+        %{session_manager: session, model: model, settings_manager: settings},
+        messages,
+        CodingAgent.Session.ContextUsage.stored_overhead(session.header.id)
+      )
     end
   end
 

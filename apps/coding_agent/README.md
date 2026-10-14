@@ -719,6 +719,10 @@ overhead profile (counts and labels, no text) keyed by native session id, so
 durable history; without a profile, a measured total reports the overhead as
 unattributed and an estimate-only cold read is unavailable.
 
+If the live owner retires between registry lookup and the context read, the query
+uses the same durable-history path. Timeouts and unexpected owner crashes remain
+errors rather than being hidden behind stale accounting.
+
 ### Tool Execution
 
 Tools follow a pipeline: the LLM requests a tool call, `ToolRegistry` resolves it by name (checking builtin, then WASM, then extensions), `ToolPolicy` checks allow/deny, `ToolExecutor` gates on approval if required, and the tool module's `execute/4` closure runs with abort signal support.

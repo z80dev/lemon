@@ -47,6 +47,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Session context queries fall back to saved accounting when the live owner
+  retires during the read, instead of exiting on a stale registry PID. Timeouts
+  and unexpected owner crashes still surface.
 - JSONL storage rejects unreadable or corrupt journals rather than publishing
   empty state. Failed loads remain recoverable after repair; rejected writes
   return bounded errors before cache mutation without crashing the Store.
