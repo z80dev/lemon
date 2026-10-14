@@ -137,6 +137,7 @@ the router profile registry after mutations:
 | `profiles.sync.status` | read | `{id,nodeId,mutationId}` | `{profileId,nodeId,mutationId,status,acknowledged,revisionDigest}` |
 | `node.mcp.discover` | admin | `{nodeId,server}` | `{connected,server:{name,status},tools:[{name,executionName,description,inputSchema,readOnly}],count,truncated}` |
 | `node.profile.paths` | read | `{nodeId,profileId}` | `{profileId,nodeId,workspacePath,skillsPath}` |
+| `mcp.execution_names` | read | `{server:{name,url},toolNames:[name]}` | `{server:{name},tools:[{name,executionName}],count}` |
 
 `profiles.update` preserves omitted fields, clears optional text with `""`, and
 uses `"local"` to clear node placement. `mcpServers` is a list of
@@ -214,6 +215,15 @@ all DNS answers and pins the real transport to an approved address before
 decrypting headers. Host/TLS certificate identity remains the original origin;
 redirects are rejected. No-policy operator configurations retain intentional
 legacy behavior; product clients must not omit policy.
+
+`mcp.execution_names` is a synchronous operator-read projection for building
+closed native allowlists before a profile or HTTP session exists. It accepts
+only public server `name`/`url` and at most 256 raw selectable tool names, then
+uses the owning native alias function. No profile/node identity, headers,
+credentials, DNS lookup or HTTP initialization is required or performed.
+The result returns only server name and `{name,executionName}` mappings.
+It does not assert that a tool exists, is connected, is read-only or permitted;
+live destination discovery and native policy remain separate authorities.
 
 `node.mcp.discover` is an asynchronous operator-admin method targeting an
 execution node, never a controller-local or unauthenticated URL fetch.

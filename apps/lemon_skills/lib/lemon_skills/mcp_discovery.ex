@@ -30,6 +30,56 @@ defmodule LemonSkills.McpDiscovery do
   @max_items 131_072
   @max_schema_depth 24
 
+  @doc """
+  Pure, validated projection of raw tool names to profile-native execution names.
+
+  Accepts only the public server `name` and `url`, plus at most 256 unique raw
+  names. Uses the same canonical validation and alias identity as actual profile
+  attachment, but never starts clients, resolves DNS or reads secret references.
+  This projection is not discovery or authorization: callers must still retain
+  their closed native tool-policy floor and explicit execution approval gates.
+  """
+  @spec execution_names(map(), [String.t()]) :: {:ok, map()} | {:error, atom()}
+  def execution_names(server, raw_names) do
+    with true <- public_server?(server),
+         {:ok, [server]} <- ProfileStore.normalize_mcp_servers([server]),
+         true <- Redact.text(server["name"], drop_keys: true) == server["name"] do
+      if valid_projection_names?(raw_names) do
+        tools = Enum.map(raw_names, fn raw_name ->
+          %{"name" => raw_name,
+            "executionName" => McpSource.execution_name(server["name"], server["url"], raw_name)}
+        end)
+
+        {:ok, %{"server" => %{"name" => server["name"]}, "tools" => tools, "count" => length(tools)}}
+      else
+        {:error, :invalid_tool_names}
+      end
+    else
+      _ -> {:error, :invalid_config}
+    end
+  rescue
+    _ -> {:error, :invalid_config}
+  catch
+    _, _ -> {:error, :invalid_config}
+  end
+
+  defp public_server?(server) when is_map(server) and map_size(server) == 2 do
+    Enum.all?(server, fn {key, value} ->
+      key in ["name", "url", :name, :url] and is_binary(value) and String.valid?(value) and
+        not String.contains?(value, "${LEMON_SECRET:")
+    end)
+  end
+
+  defp public_server?(_), do: false
+
+  defp valid_projection_names?(names) when is_list(names) and length(names) <= @max_tools do
+    Enum.all?(names, fn name ->
+      McpSource.valid_remote_name?(name) and Redact.text(name, drop_keys: true) == name
+    end) and MapSet.size(MapSet.new(names)) == length(names)
+  end
+
+  defp valid_projection_names?(_), do: false
+
   @spec discover(map(), String.t()) :: {:ok, map()} | {:error, atom()}
   def discover(server, cwd) do
     with {:ok, [server]} <- ProfileStore.normalize_mcp_servers([server]) do

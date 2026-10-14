@@ -248,6 +248,15 @@ the [control-plane method documentation](../../apps/lemon_control_plane/README.m
 
 ### Discover on the bot's machine
 
+Before a profile exists, use the pure operator-read method
+`mcp.execution_names {server:{name,url},toolNames:[rawName]}` to build its
+closed tool allowlist. It returns
+`{server:{name},tools:[{name,executionName}],count}` using the same native alias
+owner as actual execution. Only public identity is accepted: no credentials,
+profile/node lookup, DNS or HTTP initialization. At most 256 names are accepted.
+This computes identity only, not tool existence, availability or permission;
+use destination discovery for the live inventory.
+
 `node.mcp.discover {nodeId,server}` (`admin`, asynchronous) accepts the same
 server shape. It connects only on the selected execution node, using temporary
 owner-bound MCP clients with no executable tools installed. Discovery returns

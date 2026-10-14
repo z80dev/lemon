@@ -40,6 +40,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - Read-only `node.profile.paths` exposes authoritative destination workspace/
   skill paths for selected profile provisioning without guessing controller
   state or granting new filesystem roots.
+- Pure operator-read `mcp.execution_names` projects exact native profile HTTP
+  tool aliases before profile creation, without HTTP/DNS initialization, secret
+  configuration or JavaScript guesses at the native identity encoding.
 
 ### Fixed
 
