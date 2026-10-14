@@ -8,7 +8,6 @@ import { z, parse, principal, id, mutation, update, confirm, queryObject } from 
 const text = (max: number, min = 1) => z.string().min(min).max(max).refine(value => !value.includes('\0') && Buffer.byteLength(value) <= max);
 const searchText = z.string().min(1).refine(value=>!value.includes('\0')&&Array.from(value).length<=512&&Buffer.byteLength(value)<=2048);
 const timestamp = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
-const scope = z.enum(['personal', 'team', 'private_note']);
 const memoryKind = z.enum(['fact', 'preference', 'instruction', 'summary']);
 const trigger = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('schedule'), cron: text(256), timezone: text(128) }).strict(),
@@ -16,11 +15,11 @@ const trigger = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('channel_event'), channelBindingId: id, event: z.enum(['mention','message','reaction','email_received']), channel: text(256).optional(), phrase: text(512).optional(), reaction: text(128).optional(), senders: z.array(text(320)).max(100).optional(), noisyListenerConsent:z.boolean().optional() }).strict(),
   z.object({ kind: z.literal('external_event'), source: z.enum(['github','linear','sentry','pagerduty']), eventNames: z.array(text(128)).min(1).max(100), filters: z.record(z.string(), z.json()) }).strict(),
 ]);
-const skillCreate = mutation.extend({ name: text(120), description: text(4096), markdown: text(262144), scope: z.enum(['personal','team']), botId: id.optional(), machineIds: z.array(id).max(100) });
+const skillCreate = mutation.extend({ name:text(120),description:text(4096),markdown:text(262144),botId:id.optional(),machineIds:z.array(id).max(100) });
 const skillUpdate = update.extend({ name: text(120).optional(), description: text(4096).optional(), markdown: text(262144).optional(), enabled: z.boolean().optional(), machineIds: z.array(id).max(100).optional() });
 const routineCreate = mutation.extend({ botId: id, name: text(120), instruction: text(32768), trigger, enabled: z.boolean() });
 const routineUpdate = update.extend({ name: text(120).optional(), instruction: text(32768).optional(), trigger: trigger.optional(), enabled: z.boolean().optional() });
-const memoryCreate = mutation.extend({ text: text(4096), kind: memoryKind, scope, sourceEntryId: id.optional() });
+const memoryCreate = mutation.extend({ text:text(4096),kind:memoryKind,sourceEntryId:id.optional() });
 const memoryUpdate = update.extend({ text: text(4096), kind: memoryKind.optional() });
 const hookSchema = z.object({ clientNonce: mutation.shape.clientNonce, payload: z.json().optional() }).strict();
 const categories = z.enum(['shell','files','external_message','calendar','publish','purchase','permissions','connector','handoff']);
@@ -31,8 +30,8 @@ const ruleUpdate = update.extend({ mode:mode.optional(), description:text(4096).
 const runtimeItem = z.object({ id:text(256), kind:z.enum(['user','memory','run','learned_source','project_learning']), source:z.enum(['workspace','durable']), text:z.string(), createdAtMs:timestamp, updatedAtMs:timestamp });
 const runtimePage = z.object({ items:z.array(runtimeItem).max(50), nextCursor:z.string().nullable() });
 /**
- * Native memory is explicitly scoped: Team projections require a backend-owned
- * shared row, while personal profiles use the runtime's stable actual-user key.
+ * Native memory always uses the runtime's stable Bot+actual-owner private key.
+ * Product resources retain acknowledged native IDs, not a separate note store.
  * Missing worker scope attestations are unavailable, never an empty index.
  * Mutating acknowledgments are validated separately and remain outcome_unknown.
  */
@@ -42,9 +41,9 @@ function memoryRead<T>(schema:z.ZodType<T>,value:unknown):T {
   return result.data;
 }
 type RuntimeItem = z.infer<typeof runtimeItem>;
-type ScopedMemoryPage = z.infer<typeof runtimePage> & {memoryScope:'shared'|'private';memoryContextKey:string|null};
+type ScopedMemoryPage = z.infer<typeof runtimePage> & {memoryScope:'private';memoryContextKey:string};
 type MemoryRow = P.Memory & { runtimeMemoryId:string|null; memoryContextKey?:string };
-type MemorySelection = {memoryScope:'shared'} | {memoryScope:'private';memoryContextKey:string};
+type MemorySelection = {memoryScope:'private';memoryContextKey:string};
 type RoutineRow = P.Routine & { conversationId: string };
 type Operation = { state: 'pending' | 'outcome_unknown'; revision: number; action: string };
 type HostPath = { machineId:string; nodeId:string; path:string; profileId?:string; mtimeMs?:number };
@@ -55,7 +54,7 @@ const emptyQuery = z.object({}).strict();
 const querySchemas:Record<string,z.ZodType> = {
   '/v1/skills':pageQuery.extend({botId:id.optional(),query:text(512).optional()}),
   '/v1/routines':pageQuery.extend({botId:id.optional(),enabled:z.enum(['true','false']).optional()}),
-  '/v1/bots/:id/memory':pageQuery.extend({query:searchText.optional(),scope:scope.optional()}),
+  '/v1/bots/:id/memory':pageQuery.extend({query:searchText.optional()}),
   '/v1/search':pageQuery.extend({q:searchText,kinds:text(128).optional(),botId:id.optional(),conversationId:id.optional()}),
   '/v1/notifications':pageQuery.extend({unread:z.enum(['true','false']).optional()}),
   '/v1/routines/:id/runs':pageQuery,
@@ -72,10 +71,12 @@ function canReadRoutine(services:BackendServices,actor:Principal,row:RoutineRow)
   const bot=services.store.get<P.Bot>('bots',row.botId);
   return row.ownerUserId===actor.userId&&bot?.ownerUserId===actor.userId&&services.auth.canRead(actor,'bots',bot);
 }
-function isMaintainer(user: Principal, bot: P.Bot): boolean { return bot.ownerUserId === user.userId || bot.managerUserIds.includes(user.userId); }
+function ownedConversation(services:BackendServices,actor:Principal,row:P.Conversation):boolean {
+  return row.ownerUserId===actor.userId&&row.botIds.every(botId=>services.store.get<P.Bot>('bots',botId)?.ownerUserId===actor.userId)&&services.auth.canRead(actor,'conversations',row);
+}
 function digest(token: string): string { return createHash('sha256').update(token).digest('hex'); }
 function publicMemory(row:MemoryRow):P.Memory {
-  return {id:row.id,revision:row.revision,createdAtMs:row.createdAtMs,updatedAtMs:row.updatedAtMs,botId:row.botId,scope:row.scope,userId:row.userId,text:row.text,kind:row.kind,sourceEntryId:row.sourceEntryId};
+  return {id:row.id,revision:row.revision,createdAtMs:row.createdAtMs,updatedAtMs:row.updatedAtMs,botId:row.botId,text:row.text,kind:row.kind,sourceEntryId:row.sourceEntryId};
 }
 export function publicRoutine(row:RoutineRow):P.Routine {
   return {id:row.id,revision:row.revision,createdAtMs:row.createdAtMs,updatedAtMs:row.updatedAtMs,botId:row.botId,ownerUserId:row.ownerUserId,name:row.name,instruction:row.instruction,trigger:row.trigger,enabled:row.enabled,nextRunAtMs:row.nextRunAtMs,scheduleDescription:row.scheduleDescription,lastRunId:row.lastRunId,webhookUrl:row.webhookUrl,cronJobId:row.cronJobId};
@@ -123,8 +124,11 @@ function markApplied(services: BackendServices, resourceId: string): void {
   if (operation) services.store.setMetadata(key, { ...operation, applied:true });
 }
 
+function validateUsageWindow(query:P.UsageQuery):void {
+  if(!Number.isSafeInteger(query.fromAtMs)||!Number.isSafeInteger(query.toAtMs)||query.fromAtMs<0||query.toAtMs<=query.fromAtMs||query.toAtMs-query.fromAtMs>366*86400000)fail('invalid_request','Usage range must be positive and at most 366 days.');
+}
 export async function measureUsage(services: BackendServices, user: Principal, query: P.UsageQuery & { userId?:string; providerAccount?:string; workspace?:boolean }): Promise<P.UsageReport> {
-  if (!Number.isSafeInteger(query.fromAtMs) || !Number.isSafeInteger(query.toAtMs) || query.fromAtMs<0 || query.toAtMs<=query.fromAtMs || query.toAtMs-query.fromAtMs>366*86400000) fail('invalid_request','Usage range must be positive and at most 366 days.');
+  validateUsageWindow(query);
   const workspace=query.workspace ?? (user.role!=='member' && !query.userId);
   if(workspace || query.userId && query.userId!==user.userId)services.auth.requireRole(user,'admin');
   const targetUser=workspace?null:query.userId??user.userId;
@@ -136,6 +140,22 @@ export async function measureUsage(services: BackendServices, user: Principal, q
     const routine=services.store.require<P.Routine>('routines',query.routineId);
     if(!workspace && routine.ownerUserId!==targetUser)fail('not_found','Routine not found.');
   }
+  return collectUsage(services,query,targetUser);
+}
+/** Internal workspace-spend admission only; never impersonates an administrator or exposes a route. */
+export async function measureWorkspaceUsageForAdmission(services:BackendServices,actualActor:Principal,query:P.UsageQuery):Promise<P.UsageReport> {
+  validateUsageWindow(query);
+  const workspaceId=services.store.metadata<string>('workspaceId');
+  if(!workspaceId||actualActor.workspaceId!==workspaceId)fail('forbidden','Spend admission belongs to another workspace.');
+  const workspace=services.store.require<P.Workspace>('workspaces',workspaceId);
+  const member=services.auth.member(actualActor.userId);
+  const account=services.auth.user(actualActor.userId);
+  if(!workspace.enabled||!member.enabled||member.userId!==actualActor.userId||account.id!==actualActor.userId||services.store.metadata(`accountDeletion:${actualActor.userId}`))fail('unauthenticated','Spend admission requires an enabled account and workspace.');
+  if(query.botId)requireOwn(actualActor,services.auth.bot(actualActor,query.botId).ownerUserId);
+  if(query.routineId){const routine=services.store.require<P.Routine>('routines',query.routineId);requireOwn(actualActor,routine.ownerUserId);requireOwn(actualActor,services.auth.bot(actualActor,routine.botId).ownerUserId);}
+  return collectUsage(services,query,null);
+}
+async function collectUsage(services:BackendServices,query:P.UsageQuery & {providerAccount?:string},targetUser:string|null):Promise<P.UsageReport> {
   const totals:P.UsageBucket={key:'total',inputTokens:0,outputTokens:0,requests:0,costUsd:0};
   if(query.providerAccount)return {fromAtMs:query.fromAtMs,toAtMs:query.toAtMs,totals:{...totals,costUsd:null},buckets:[],incomplete:true,pricingSource:null};
   assertAvailable(services,'usage.records');
@@ -211,12 +231,15 @@ export function validateSchedule(cron: string, timezone: string): void {
 
 /** Destination paths come from measured host cwd, never client-supplied paths. */
 export async function provisionSkill(services: BackendServices, user: Principal, skill: P.Skill, machineIds = skill.machineIds, preserveExisting = false, profileId?:string): Promise<void> {
+  requireOwn(user,skill.ownerUserId);
+  if(skill.botId)requireOwn(user,services.auth.bot(user,skill.botId).ownerUserId);
+  for(const bot of services.store.list<P.Bot>('bots',row=>row.skillIds.includes(skill.id)))requireOwn(user,bot.ownerUserId);
   if (!/^[A-Za-z0-9_-]+$/.test(skill.id)) fail('invalid_request', 'Skill ID cannot form a managed host path.');
   const previous = services.store.metadata<HostPath[]>(`skillHostPaths:${skill.id}`) ?? [];
   const desired: HostPath[] = [];
   function destination(machineId:string,selectedProfile?:string):P.Machine {
     const bot=selectedProfile?services.store.list<P.Bot>('bots',row=>row.profileId===selectedProfile&&row.machineId===machineId)[0]:null;
-    if(bot&&bot.id===skill.botId&&isMaintainer(user,bot)){services.auth.bot(user,bot.id,true);return services.store.require<P.Machine>('machines',machineId);}
+    if(bot&&bot.id===skill.botId&&bot.ownerUserId===user.userId){services.auth.bot(user,bot.id,true);return services.store.require<P.Machine>('machines',machineId);}
     return services.auth.machine(user,machineId,true);
   }
   for (const machineId of [...new Set(machineIds)]) {
@@ -372,8 +395,8 @@ export function createResourceRoutes(services: BackendServices): Route[] {
       } else if(path.startsWith('/v1/routines/:id'))ownRoutine(context);
       else if(path==='/v1/routines'){const input=parse(routineCreate,context.body);routineBot(services,user(context),input.botId);}
       else if(path.startsWith('/v1/routine-runs/:id'))ownRoutineRun(context);
-      else if(path==='/v1/skills/:id')ownSkill(context,true);
-      else if(path.startsWith('/v1/memory/:id')){const row=ownMemory(context);memoryAuthority(user(context),services.auth.bot(user(context),row.botId),row.scope,true);}
+      else if(path==='/v1/skills/:id')ownSkill(context);
+      else if(path.startsWith('/v1/memory/:id'))ownMemory(context,true);
       else if(path==='/v1/notifications/:id')requireOwn(user(context),services.store.require<P.Notification>('notifications',context.params.id!).userId);
       else if(path==='/v1/policies/rules/:id')ruleAuthority(context,services.store.require<P.PolicyRule>('policyRules',context.params.id!));
     },handler:context=>{
@@ -387,60 +410,46 @@ export function createResourceRoutes(services: BackendServices): Route[] {
     const row = services.store.require<RoutineRow>('routines',routineId);
     requireOwn(user(c),row.ownerUserId);routineBot(services,user(c),row.botId);return row;
   }
-  function ownSkill(c:RequestContext, manage=false):P.Skill {
-    const row = services.store.require<P.Skill>('skills',c.params.id!);
-    if (row.scope==='personal') requireOwn(user(c),row.ownerUserId);
-    else { if (!row.botId) fail('not_found','Skill not found.'); const bot = services.auth.bot(user(c),row.botId); if (manage && !isMaintainer(user(c),bot)) fail('forbidden','Team skills require a maintainer.'); }
+  function ownSkill(c:RequestContext):P.Skill {
+    const row=services.store.require<P.Skill>('skills',c.params.id!);requireOwn(user(c),row.ownerUserId);
+    if(row.botId)requireOwn(user(c),services.auth.bot(user(c),row.botId).ownerUserId);
     return row;
-  }
-  function visibleUserIds(collection:string,entity:unknown):string[] {
-    const workspaceId=services.store.metadata<string>('workspaceId')!;
-    return services.store.list<P.Member>('members',member=>member.enabled).filter(member=>{
-      const actor:Principal={kind:'user',id:member.userId,userId:member.userId,workspaceId,role:member.role,sessionId:null,botId:null,deviceId:null};
-      return services.auth.canRead(actor,collection,entity);
-    }).map(member=>member.userId);
-  }
-  function memoryAuthority(u:Principal, bot:P.Bot, selected:P.Memory['scope'], write=false):void {
-    if (selected==='personal' && (bot.visibility!=='personal' || bot.ownerUserId!==u.userId)) fail('forbidden','Personal memory belongs to the personal bot owner.');
-    if (selected==='private_note' && bot.visibility!=='team') fail('invalid_request','Private notes require a Team Bot.');
-    if (selected==='team' && (bot.visibility!=='team' || write && !isMaintainer(u,bot))) fail('forbidden','Shared Team facts require a maintainer.');
   }
   function ownMemory(c:RequestContext, write=false):MemoryRow {
     const row = services.store.require<MemoryRow>('memories',c.params.id!);
     const bot = services.auth.bot(user(c),row.botId);
     if(write && !c.route.path.endsWith('/preview'))botWritable(services,bot.id,c);
-    memoryAuthority(user(c),bot,row.scope,write);
-    if (row.userId!==null) requireOwn(user(c),row.userId);
+    requireOwn(user(c),bot.ownerUserId);
     return row;
   }
-  function emitMemory(row:MemoryRow):void { services.events.emit('memory.upserted',publicMemory(row), row.scope==='team' ? { botId:row.botId } : { userIds:[row.userId!] }); }
+  function emitMemory(row:MemoryRow):void {services.events.emit('memory.upserted',publicMemory(row),{userIds:[services.store.require<P.Bot>('bots',row.botId).ownerUserId]});}
   function saveMemory(row:MemoryRow):P.Memory { services.store.put('memories',row); emitMemory(row); return publicMemory(row); }
   function memorySelection(u:Principal,bot:P.Bot,row?:MemoryRow):MemorySelection {
-    if(bot.visibility==='team')return {memoryScope:'shared' as const};
-    return {memoryScope:'private' as const,memoryContextKey:row?.memoryContextKey??buildPrivateBotMemoryContextKey(services,u,bot)};
+    requireOwn(u,bot.ownerUserId);
+    const memoryContextKey=buildPrivateBotMemoryContextKey(services,u,bot);
+    if(row?.memoryContextKey&&row.memoryContextKey!==memoryContextKey)fail('not_found','Memory belongs to a different owner context.');
+    return {memoryScope:'private',memoryContextKey};
   }
   function memoryEcho(selection:MemorySelection) {
-    return {memoryScope:z.literal(selection.memoryScope),memoryContextKey:selection.memoryScope==='private'?z.literal(selection.memoryContextKey):z.null()};
+    return {memoryScope:z.literal('private'),memoryContextKey:z.literal(selection.memoryContextKey)};
   }
-  function projection(u:Principal,bot:P.Bot,item:RuntimeItem):MemoryRow|null {
-    const existing = services.store.list<MemoryRow>('memories', value=>value.botId===bot.id && value.runtimeMemoryId===item.id)[0];
-    if(bot.visibility==='team'&&existing?.scope!=='team')return null;
-    if (existing) {
-      if (existing.updatedAtMs!==item.updatedAtMs || existing.text!==item.text) {
-        const next = {...services.update(existing,{text:item.text}),updatedAtMs:item.updatedAtMs};
-        services.store.put('memories',next); return next;
-      }
-      return existing;
+  function projection(u:Principal,bot:P.Bot,item:RuntimeItem):MemoryRow {
+    const memoryContextKey=memorySelection(u,bot).memoryContextKey;
+    const existing=services.store.list<MemoryRow>('memories',value=>value.botId===bot.id&&value.runtimeMemoryId===item.id&&(value.memoryContextKey===undefined||value.memoryContextKey===memoryContextKey))[0];
+    if(existing){
+      const changed=existing.updatedAtMs!==item.updatedAtMs||existing.text!==item.text;
+      const canonical:MemoryRow={...publicMemory(existing),runtimeMemoryId:item.id,memoryContextKey};
+      const next=changed?{...services.update(canonical,{text:item.text}),updatedAtMs:item.updatedAtMs}:canonical;
+      services.store.put('memories',next);return next;
     }
-    const row:MemoryRow = {...services.resource('memory',{botId:bot.id,scope:'personal',userId:bot.ownerUserId,text:item.text,kind:item.kind==='user'?'preference':item.kind==='run'?'summary':'fact',sourceEntryId:null,runtimeMemoryId:item.id,memoryContextKey:buildPrivateBotMemoryContextKey(services,u,bot)} as const),createdAtMs:item.createdAtMs,updatedAtMs:item.updatedAtMs};
+    const row:MemoryRow = {...services.resource('memory',{botId:bot.id,text:item.text,kind:item.kind==='user'?'preference':item.kind==='run'?'summary':'fact',sourceEntryId:null,runtimeMemoryId:item.id,memoryContextKey:buildPrivateBotMemoryContextKey(services,u,bot)} as const),createdAtMs:item.createdAtMs,updatedAtMs:item.updatedAtMs};
     services.store.put('memories',row); return row;
   }
-  async function memories(u:Principal,bot:P.Bot,selected?:P.Memory['scope'],query?:string):Promise<P.Memory[]> {
-    if (selected) memoryAuthority(u,bot,selected);
-    const output = services.store.list<MemoryRow>('memories', item=>item.botId===bot.id && item.scope==='private_note' && item.userId===u.userId).filter(item=>!query || item.text.toLowerCase().includes(query.toLowerCase())).map(publicMemory);
-    if (selected==='private_note') return output;
+  async function memories(u:Principal,bot:P.Bot,query?:string):Promise<P.Memory[]> {
+    requireOwn(u,bot.ownerUserId);
+    const output:P.Memory[]=[];
     const selection=memorySelection(u,bot);
-    for(const row of services.store.list<MemoryRow>('memories',item=>item.botId===bot.id&&item.scope!=='private_note'))if(services.store.metadata(`resourceOperation:${row.id}`))fail('outcome_unknown','Memory mutation requires reconciliation before querying its index.',false,{resourceId:row.id});
+    for(const row of services.store.list<MemoryRow>('memories',item=>item.botId===bot.id))if(services.store.metadata(`resourceOperation:${row.id}`))fail('outcome_unknown','Memory mutation requires reconciliation before querying its index.',false,{resourceId:row.id});
     const method = query ? 'memory.search':'memory.list'; assertAvailable(services,method);
     const seen = new Set<string>(); let cursor:string|null = null;
     do {
@@ -449,7 +458,7 @@ export function createResourceRoutes(services: BackendServices): Route[] {
       cursor = result.nextCursor;
       if (cursor) { if (seen.has(cursor)) fail('upstream_unavailable','Runtime memory returned a repeated cursor.'); seen.add(cursor); }
     } while (cursor);
-    return selected ? output.filter(item=>item.scope===selected):output;
+    return output;
   }
   async function validateTrigger(u:Principal,bot:P.Bot,value:P.RoutineTrigger):Promise<void> {
     if (value.kind==='schedule') { validateSchedule(value.cron,value.timezone); assertAvailable(services,'cron.add'); }
@@ -557,32 +566,31 @@ export function createResourceRoutes(services: BackendServices): Route[] {
     });
   },{auth:'public',mutation:false});
 
-  route('GET','/v1/skills',c=>services.page(c,services.store.list<P.Skill>('skills').filter(item=>services.auth.canRead(user(c),'skills',item)).filter(item=>(!c.query.get('botId') || item.botId===c.query.get('botId')) && (!c.query.get('query') || `${item.name} ${item.description}`.toLowerCase().includes(c.query.get('query')!.toLowerCase())))));
+  route('GET','/v1/skills',c=>services.page(c,services.store.list<P.Skill>('skills').filter(item=>item.ownerUserId===user(c).userId&&(!item.botId||services.store.get<P.Bot>('bots',item.botId)?.ownerUserId===user(c).userId)&&services.auth.canRead(user(c),'skills',item)).filter(item=>(!c.query.get('botId')||item.botId===c.query.get('botId'))&&(!c.query.get('query')||`${item.name} ${item.description}`.toLowerCase().includes(c.query.get('query')!.toLowerCase())))));
   route('GET','/v1/skills/:id',c=>ownSkill(c));
   route('POST','/v1/skills',async c=>{
     const input = parse(skillCreate,c.body); const u=user(c);
-    if (input.scope==='team') { if (!input.botId) fail('invalid_request','Team skill requires a bot.'); const bot=services.auth.bot(u,input.botId); if(bot.visibility!=='team' || !isMaintainer(u,bot)) fail('forbidden','Team skills require a maintainer.'); }
-    else if(input.botId) { const bot=services.auth.bot(u,input.botId); requireOwn(u,bot.ownerUserId); }
+    if(input.botId)requireOwn(u,services.auth.bot(u,input.botId).ownerUserId);
     if(input.botId)botWritable(services,input.botId,c);
-    const skill:P.Skill=services.resource('skill',{ownerUserId:u.userId,scope:input.scope,botId:input.botId??null,name:input.name,description:input.description,markdown:input.markdown,enabled:true,machineIds:[...new Set(input.machineIds)],provenance:{sourceUrl:null,publisher:services.auth.user(u.userId).displayName,trusted:false}});
+    const skill:P.Skill=services.resource('skill',{ownerUserId:u.userId,botId:input.botId??null,name:input.name,description:input.description,markdown:input.markdown,enabled:true,machineIds:[...new Set(input.machineIds)],provenance:{sourceUrl:null,publisher:services.auth.user(u.userId).displayName,trusted:false}});
     services.store.put('skills',skill);
-    try { return await fenced(services,c,skill,'skill.create',async()=>{await provisionSkill(services,u,skill);services.events.emit('skill.upserted',skill,skill.scope==='team'?{botId:skill.botId!}:{userIds:[u.userId]});return skill;}); }
+    try {return await fenced(services,c,skill,'skill.create',async()=>{await provisionSkill(services,u,skill);services.events.emit('skill.upserted',skill,{userIds:[u.userId]});return skill;});}
     catch(error) {if(!services.store.metadata(`resourceOperation:${skill.id}`))services.store.remove('skills',skill.id);throw error;}
   },{status:201});
   route('PATCH','/v1/skills/:id',c=>locked(`skill:${c.params.id}`,async()=>{
-    const input=parse(skillUpdate,c.body); const skill=ownSkill(c,true); services.mutations.checkRevision(skill,input.revision);
+    const input=parse(skillUpdate,c.body);const skill=ownSkill(c);services.mutations.checkRevision(skill,input.revision);
     for(const bot of services.store.list<P.Bot>('bots',item=>item.skillIds.includes(skill.id)))botWritable(services,bot.id,c);
     const {clientNonce:_nonce,revision:_revision,...changes}=input; const next=services.update(skill,changes);
     return fenced(services,c,skill,'skill.update',async()=>{
       await provisionSkill(services,user(c),next);
       services.store.put('skills',next);
       for(const bot of services.store.list<P.Bot>('bots',item=>item.skillIds.includes(skill.id)))await services.syncBotProfile(user(c),bot.id);
-      services.events.emit('skill.upserted',next,next.scope==='team'?{botId:next.botId!}:{userIds:[next.ownerUserId]});
+      services.events.emit('skill.upserted',next,{userIds:[next.ownerUserId]});
       return next;
     });
   }));
   route('DELETE','/v1/skills/:id',c=>locked(`skill:${c.params.id}`,async()=>{
-    const input=parse(update,c.body);const skill=ownSkill(c,true);services.mutations.checkRevision(skill,input.revision);
+    const input=parse(update,c.body);const skill=ownSkill(c);services.mutations.checkRevision(skill,input.revision);
     for(const bot of services.store.list<P.Bot>('bots',item=>item.skillIds.includes(skill.id)))botWritable(services,bot.id,c);
     return fenced(services,c,skill,'skill.delete',async()=>{
       await provisionSkill(services,user(c),{...skill,enabled:false},[]);
@@ -591,7 +599,7 @@ export function createResourceRoutes(services: BackendServices): Route[] {
         services.store.put('bots',next);await services.syncBotProfile(user(c),next.id);
         services.events.emit('bot.upserted',next,{botId:bot.id});
       }
-      const audience=skill.scope==='team'?visibleUserIds('skills',skill):[skill.ownerUserId];
+      const audience=[skill.ownerUserId];
       services.store.remove('skills',skill.id);const result:P.Deleted={id:skill.id,deleted:true};
       services.events.emit('skill.deleted',result,{userIds:audience});return result;
     });
@@ -602,7 +610,7 @@ export function createResourceRoutes(services: BackendServices): Route[] {
     const input=parse(routineCreate,c.body);return locked(`routineBot:${input.botId}`,async()=>{
       const u=user(c);const bot=routineBot(services,u,input.botId);botWritable(services,bot.id,c);await validateTrigger(u,bot,input.trigger);
       if(services.store.list<P.Routine>('routines',item=>item.botId===bot.id).length>=50)fail('conflict','A bot may have at most 50 routines.');
-      const conversation:P.Conversation=services.resource('conversation',{kind:'task',name:input.name,botIds:[bot.id],humanUserIds:[u.userId],ownerUserId:u.userId,parentConversationId:null,leadBotId:null,channelBindingId:null,lastEntryId:null,unreadCount:0,lastReadSeq:0,activity:[]});
+      const conversation:P.Conversation=services.resource('conversation',{kind:'task',name:input.name,botIds:[bot.id],ownerUserId:u.userId,parentConversationId:null,leadBotId:null,channelBindingId:null,lastEntryId:null,unreadCount:0,lastReadSeq:0,activity:[]});
       const row:RoutineRow=services.resource('routine',{botId:bot.id,ownerUserId:u.userId,name:input.name,instruction:input.instruction,trigger:input.trigger,enabled:input.enabled,nextRunAtMs:null,scheduleDescription:input.trigger.kind==='schedule'?`${input.trigger.cron} (${input.trigger.timezone})`:input.trigger.kind,lastRunId:null,webhookUrl:null,cronJobId:null,conversationId:conversation.id});
       listenerConsent(c,row,input.trigger.kind==='channel_event'&&input.trigger.noisyListenerConsent===true);
       if(row.trigger.kind==='webhook')row.webhookUrl=`${services.config.publicUrl}/hooks/${encodeURIComponent(row.id)}`;
@@ -679,27 +687,26 @@ export function createResourceRoutes(services: BackendServices): Route[] {
     return receipt.status==='outcome_unknown'?Response.json(receipt,{status:202}):receipt;
   },{auth:'public',mutation:false});
 
-  route('GET','/v1/bots/:id/memory',async c=>{const q=c.query.get('query')??undefined;const selected=c.query.get('scope');return services.page(c,await memories(user(c),services.auth.bot(user(c),c.params.id!),selected?parse(scope,selected):undefined,q));});
+  route('GET','/v1/bots/:id/memory',async c=>services.page(c,await memories(user(c),services.auth.bot(user(c),c.params.id!),c.query.get('query')??undefined)));
   route('GET','/v1/bots/:id/memory/export',async c=>({botId:c.params.id!,items:await memories(user(c),services.auth.bot(user(c),c.params.id!)),exportedAtMs:services.now()} satisfies P.MemoryExport));
   route('POST','/v1/bots/:id/memory',async c=>{
-    const input=parse(memoryCreate,c.body);const u=user(c);const bot=services.auth.bot(u,c.params.id!);botWritable(services,bot.id,c);memoryAuthority(u,bot,input.scope,true);
+    const input=parse(memoryCreate,c.body);const u=user(c);const bot=services.auth.bot(u,c.params.id!);requireOwn(u,bot.ownerUserId);botWritable(services,bot.id,c);
     if(input.sourceEntryId){const entry=services.store.require<P.TranscriptEntry>('entries',input.sourceEntryId);services.auth.conversation(u,entry.conversationId);}
-    const row:MemoryRow=services.resource('memory',{botId:bot.id,scope:input.scope,userId:input.scope==='team'?null:u.userId,text:input.text,kind:input.kind,sourceEntryId:input.sourceEntryId??null,runtimeMemoryId:null});
-    if(input.scope==='private_note')return saveMemory(row);
     const selection=memorySelection(u,bot);
-    if(selection.memoryScope==='private')row.memoryContextKey=selection.memoryContextKey;
+    const row:MemoryRow=services.resource('memory',{botId:bot.id,text:input.text,kind:input.kind,sourceEntryId:input.sourceEntryId??null,runtimeMemoryId:null,memoryContextKey:selection.memoryContextKey});
     assertAvailable(services,'memory.add'); services.store.put('memories',row);
     try{return await fenced(services,c,row,'memory.create',async()=>{const result=ack(z.object({item:runtimeItem,...memoryEcho(selection)}),await services.lemon.call('memory.add',{profileId:bot.profileId,...selection,text:input.text,kind:input.kind==='preference'?'user':'memory'},{mutation:true,resourceIds:[row.id]}));markApplied(services,row.id);return saveMemory({...row,runtimeMemoryId:result.item.id,text:result.item.text,updatedAtMs:result.item.updatedAtMs});});}
     catch(error){if(!services.store.metadata(`resourceOperation:${row.id}`))services.store.remove('memories',row.id);throw error;}
   },{status:201});
   route('GET','/v1/memory/:id',async c=>{
     const row=ownMemory(c);if(services.store.metadata(`resourceOperation:${row.id}`))fail('outcome_unknown','Memory mutation requires reconciliation.',false,{resourceId:row.id});
-    if(row.runtimeMemoryId){assertAvailable(services,'memory.get');const bot=services.auth.bot(user(c),row.botId);const selection=memorySelection(user(c),bot,row);const result=memoryRead(z.object({item:runtimeItem.extend({id:z.literal(row.runtimeMemoryId)}),...memoryEcho(selection)}),await services.lemon.call('memory.get',{profileId:bot.profileId,...selection,id:row.runtimeMemoryId}));const projected=projection(user(c),bot,result.item);if(!projected)fail('not_found','Memory is not explicitly shared.');return publicMemory(projected);}
-    if(row.scope!=='private_note')fail('outcome_unknown','Memory runtime identity is uncertain.',false);return publicMemory(row);
+    if(!row.runtimeMemoryId)fail('outcome_unknown','Memory runtime identity is uncertain.',false);
+    assertAvailable(services,'memory.get');const bot=services.auth.bot(user(c),row.botId);const selection=memorySelection(user(c),bot,row);
+    const result=memoryRead(z.object({item:runtimeItem.extend({id:z.literal(row.runtimeMemoryId)}),...memoryEcho(selection)}),await services.lemon.call('memory.get',{profileId:bot.profileId,...selection,id:row.runtimeMemoryId}));
+    return publicMemory(projection(user(c),bot,result.item));
   });
   route('PATCH','/v1/memory/:id',c=>locked(`memory:${c.params.id}`,async()=>{
     const input=parse(memoryUpdate,c.body);const row=ownMemory(c,true);services.mutations.checkRevision(row,input.revision);const next=services.update(row,{text:input.text,kind:input.kind??row.kind});
-    if(row.scope==='private_note')return saveMemory(next);
     const bot=services.auth.bot(user(c),row.botId);if(!row.runtimeMemoryId)fail('outcome_unknown','Memory lacks an acknowledged runtime ID.',false);assertAvailable(services,'memory.delete');assertAvailable(services,'memory.add');
     const selection=memorySelection(user(c),bot,row);
     return fenced(services,c,row,'memory.update',async()=>{
@@ -716,22 +723,27 @@ export function createResourceRoutes(services: BackendServices): Route[] {
   });
   route('DELETE','/v1/memory/:id',c=>locked(`memory:${c.params.id}`,async()=>{
     const input=parse(confirm,c.body);const row=ownMemory(c,true);services.mutations.confirm(user(c),row,'forget',input);
-    const audience=row.scope==='team'?visibleUserIds('bots',services.store.require<P.Bot>('bots',row.botId)):[row.userId!];
-    return fenced(services,c,row,'memory.delete',async()=>{if(row.scope!=='private_note'){if(!row.runtimeMemoryId)fail('outcome_unknown','Memory runtime identity is uncertain.',false);assertAvailable(services,'memory.delete');const bot=services.auth.bot(user(c),row.botId);const selection=memorySelection(user(c),bot,row);ack(z.object({deleted:z.literal(true),id:z.literal(row.runtimeMemoryId),...memoryEcho(selection)}),await services.lemon.call('memory.delete',{profileId:bot.profileId,...selection,id:row.runtimeMemoryId,confirm:row.runtimeMemoryId},{mutation:true,resourceIds:[row.id]}));markApplied(services,row.id);}services.store.remove('memories',row.id);services.events.emit('memory.deleted',{id:row.id,botId:row.botId,scope:row.scope,userId:row.userId},{userIds:audience});return {id:row.id,deleted:true} satisfies P.Deleted;});
+    const audience=[services.store.require<P.Bot>('bots',row.botId).ownerUserId];
+    return fenced(services,c,row,'memory.delete',async()=>{
+      if(!row.runtimeMemoryId)fail('outcome_unknown','Memory runtime identity is uncertain.',false);
+      assertAvailable(services,'memory.delete');const bot=services.auth.bot(user(c),row.botId);const selection=memorySelection(user(c),bot,row);
+      ack(z.object({deleted:z.literal(true),id:z.literal(row.runtimeMemoryId),...memoryEcho(selection)}),await services.lemon.call('memory.delete',{profileId:bot.profileId,...selection,id:row.runtimeMemoryId,confirm:row.runtimeMemoryId},{mutation:true,resourceIds:[row.id]}));
+      markApplied(services,row.id);services.store.remove('memories',row.id);services.events.emit('memory.deleted',{id:row.id,botId:row.botId},{userIds:audience});return {id:row.id,deleted:true} satisfies P.Deleted;
+    });
   }));
 
   route('GET','/v1/search',async c=>{
-    const q=parse(searchText,c.query.get('q'));const normalized=q.toLowerCase();const u=user(c);const botId=c.query.get('botId');const conversationId=c.query.get('conversationId');if(botId)services.auth.bot(u,botId);if(conversationId)services.auth.conversation(u,conversationId);
+    const q=parse(searchText,c.query.get('q'));const normalized=q.toLowerCase();const u=user(c);const botId=c.query.get('botId');const conversationId=c.query.get('conversationId');if(botId)requireOwn(u,services.auth.bot(u,botId).ownerUserId);if(conversationId&&!ownedConversation(services,u,services.auth.conversation(u,conversationId)))fail('not_found','Conversation not found.');
     const requested=c.query.get('kinds')?.split(',')??['bot','group','message','file','routine','skill','memory'];const kinds=parse(z.array(z.enum(['bot','group','message','file','routine','skill','memory'])).min(1),requested);
     const results:{hit:P.SearchHit;id:string;score:number;at:number}[]=[];
     function add(hit:P.SearchHit,resource:P.Resource,haystack:string,nativeMatch=false){const index=haystack.toLowerCase().indexOf(normalized);if(index>=0||nativeMatch)results.push({hit,id:resource.id,score:index===0?2:1,at:resource.createdAtMs});}
-    if(kinds.includes('bot')&&!conversationId)for(const bot of services.store.list<P.Bot>('bots',item=>services.auth.canRead(u,'bots',item)&&(!botId||item.id===botId)))add({kind:'bot',bot},bot,`${bot.name} ${bot.title} ${bot.job}`);
-    if(kinds.includes('group'))for(const conversation of services.store.list<P.Conversation>('conversations',item=>item.kind==='group'&&services.auth.canRead(u,'conversations',item)&&(!conversationId||item.id===conversationId)&&(!botId||item.botIds.includes(botId))))add({kind:'group',conversation},conversation,conversation.name);
-    if(kinds.includes('message'))for(const entry of services.store.list<P.TranscriptEntry>('entries',item=>services.auth.canRead(u,'entries',item)&&(!conversationId||item.conversationId===conversationId))){const conversation=services.store.get<P.Conversation>('conversations',entry.conversationId);if(!conversation||botId&&!conversation.botIds.includes(botId))continue;const body='text' in entry && typeof entry.text==='string'?entry.text:'';const index=body.toLowerCase().indexOf(normalized);if(index>=0)add({kind:'message',entry,snippet:body.slice(Math.max(0,index-80),index+normalized.length+160)},entry,body);}
-    if(kinds.includes('file'))for(const attachment of services.store.list<P.Attachment>('attachments',item=>services.auth.canRead(u,'attachments',item)&&(!conversationId||item.conversationId===conversationId)&&(!botId||item.botId===botId)))add({kind:'file',attachment},attachment,attachment.filename);
+    if(kinds.includes('bot')&&!conversationId)for(const bot of services.store.list<P.Bot>('bots',item=>item.ownerUserId===u.userId&&services.auth.canRead(u,'bots',item)&&(!botId||item.id===botId)))add({kind:'bot',bot},bot,`${bot.name} ${bot.title} ${bot.job}`);
+    if(kinds.includes('group'))for(const conversation of services.store.list<P.Conversation>('conversations',item=>item.kind==='group'&&ownedConversation(services,u,item)&&(!conversationId||item.id===conversationId)&&(!botId||item.botIds.includes(botId))))add({kind:'group',conversation},conversation,conversation.name);
+    if(kinds.includes('message'))for(const entry of services.store.list<P.TranscriptEntry>('entries',item=>services.auth.canRead(u,'entries',item)&&(!conversationId||item.conversationId===conversationId))){const conversation=services.store.get<P.Conversation>('conversations',entry.conversationId);if(!conversation||!ownedConversation(services,u,conversation)||botId&&!conversation.botIds.includes(botId))continue;const body='text' in entry&&typeof entry.text==='string'?entry.text:'';const index=body.toLowerCase().indexOf(normalized);if(index>=0)add({kind:'message',entry,snippet:body.slice(Math.max(0,index-80),index+normalized.length+160)},entry,body);}
+    if(kinds.includes('file'))for(const attachment of services.store.list<P.Attachment>('attachments',item=>item.ownerUserId===u.userId&&services.auth.canRead(u,'attachments',item)&&(!conversationId||item.conversationId===conversationId)&&(!botId||item.botId===botId))){if(attachment.conversationId){const conversation=services.store.get<P.Conversation>('conversations',attachment.conversationId);if(!conversation||!ownedConversation(services,u,conversation))continue;}if(attachment.botId&&services.store.get<P.Bot>('bots',attachment.botId)?.ownerUserId!==u.userId)continue;add({kind:'file',attachment},attachment,attachment.filename);}
     if(kinds.includes('routine')&&!conversationId)for(const routine of services.store.list<RoutineRow>('routines',item=>canReadRoutine(services,u,item)&&(!botId||item.botId===botId)))add({kind:'routine',routine:publicRoutine(routine)},routine,`${routine.name} ${routine.instruction}`);
-    if(kinds.includes('skill')&&!conversationId)for(const skill of services.store.list<P.Skill>('skills',item=>services.auth.canRead(u,'skills',item)&&(!botId||item.botId===botId)))add({kind:'skill',skill},skill,`${skill.name} ${skill.description} ${skill.markdown}`);
-    if(kinds.includes('memory')&&!conversationId)for(const bot of services.store.list<P.Bot>('bots',item=>services.auth.canRead(u,'bots',item)&&(!botId||item.id===botId)))for(const memory of await memories(u,bot,undefined,q))add({kind:'memory',memory},memory,memory.text,memory.scope!=='private_note');
+    if(kinds.includes('skill')&&!conversationId)for(const skill of services.store.list<P.Skill>('skills',item=>item.ownerUserId===u.userId&&(!item.botId||services.store.get<P.Bot>('bots',item.botId)?.ownerUserId===u.userId)&&services.auth.canRead(u,'skills',item)&&(!botId||item.botId===botId)))add({kind:'skill',skill},skill,`${skill.name} ${skill.description} ${skill.markdown}`);
+    if(kinds.includes('memory')&&!conversationId)for(const bot of services.store.list<P.Bot>('bots',item=>item.ownerUserId===u.userId&&services.auth.canRead(u,'bots',item)&&(!botId||item.id===botId)))for(const memory of await memories(u,bot,q))add({kind:'memory',memory},memory,memory.text,true);
     const ranking=new Map(results.map(row=>[row.hit,`${row.score}:${String(row.at).padStart(16,'0')}:${row.id}`]));
     return services.page(c,results.map(item=>item.hit),{key:hit=>ranking.get(hit)!,binding:{q,kinds,botId,conversationId}});
   },{mutation:false});

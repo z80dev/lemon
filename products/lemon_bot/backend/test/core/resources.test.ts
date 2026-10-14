@@ -6,7 +6,7 @@ import { installHelpers } from '../../src/core/helpers';
 import type * as P from '../../../contracts/protocol';
 import type { BackendServices, MutationService, Principal, RequestContext } from '../../src/core/services';
 import { ApiError } from '../../src/core/errors';
-import { createResourceRoutes, validateSchedule, measureUsage, provisionSkill, submitEventRoutine } from '../../src/core/resources';
+import { createResourceRoutes,validateSchedule,measureUsage,measureWorkspaceUsageForAdmission,provisionSkill,submitEventRoutine } from '../../src/core/resources';
 
 const owner:Principal={kind:'user',id:'user_owner',userId:'user_owner',workspaceId:'workspace',role:'member',sessionId:'session',botId:null,deviceId:null};
 const other:Principal={...owner,id:'user_other',userId:'user_other'};
@@ -25,6 +25,7 @@ function fixture() {
   let policyRefreshError:ApiError|null=null;
   const files=new Map<string,{size:number;mtimeMs:number}>();
   const previews=new Map<string,{path:string;mtimeMs:number}>();
+  const nativeMemories=new Map<string,{id:string;kind:'user'|'memory';text:string;source:'workspace';createdAtMs:number;updatedAtMs:number}>();
   let dispatch:(method:string,params:Record<string,unknown>)=>Promise<unknown>=async(method,params)=>{
     if(method==='cron.admission.set')return {secretName:`cron_admission_${createHash('sha256').update(String(params.routineId)).digest('hex')}`,set:true};
     if(method==='cron.add')return {id:'cron_job',profileId:params.profileId,admissionConfigured:true,nextRunAtMs:now+300000};
@@ -39,23 +40,25 @@ function fixture() {
     if(method==='node.fs.delete.preview'){const path=String(params.path),file=files.get(`${String(params.nodeId)}:${path}`);if(!file)throw new ApiError('not_found','File is absent.');const confirmationToken=`confirmation_${++serial}`;previews.set(confirmationToken,{path,mtimeMs:file.mtimeMs});return {path,stat:{type:'regular',...file},confirmationToken,expiresAtMs:now+300000};}
     if(method==='node.fs.delete'){const path=String(params.path),key=`${String(params.nodeId)}:${path}`,preview=previews.get(String(params.confirmationToken));if(!preview||preview.path!==path||params.confirm!==path||preview.mtimeMs!==files.get(key)?.mtimeMs)throw new ApiError('revision_conflict','Delete preview changed.');previews.delete(String(params.confirmationToken));files.delete(key);return {path,deleted:true};}
     const scope={memoryScope:params.memoryScope,memoryContextKey:params.memoryContextKey??null};
-    if(method==='memory.list'||method==='memory.search')return {...scope,items:[],nextCursor:null};
-    if(method==='memory.delete')return {...scope,id:params.id,deleted:true};
-    if(method==='memory.add')return {...scope,item:{id:'runtime_memory',kind:params.kind,text:params.text,source:'workspace',createdAtMs:now,updatedAtMs:now}};
+    const memoryKey=`${String(params.profileId)}:${String(params.memoryContextKey)}`,currentMemory=nativeMemories.get(memoryKey);
+    if(method==='memory.list'||method==='memory.search')return {...scope,items:currentMemory&&(!params.query||currentMemory.text.toLowerCase().includes(String(params.query).toLowerCase()))?[currentMemory]:[],nextCursor:null};
+    if(method==='memory.get'){if(!currentMemory||currentMemory.id!==params.id)throw new ApiError('not_found','No scoped memory.');return {...scope,item:currentMemory};}
+    if(method==='memory.delete'){if(!currentMemory||currentMemory.id!==params.id)throw new ApiError('not_found','No scoped memory.');nativeMemories.delete(memoryKey);return {...scope,id:params.id,deleted:true};}
+    if(method==='memory.add'){const item={id:'runtime_memory',kind:params.kind==='user'?'user' as const:'memory' as const,text:String(params.text),source:'workspace' as const,createdAtMs:now,updatedAtMs:now};nativeMemories.set(memoryKey,item);return {...scope,item};}
     throw new Error(`Unexpected RPC ${method}`);
   };
   const auth={
-    bot(user:Principal,botId:string):P.Bot {const bot=store.require<P.Bot>('bots',botId);if(bot.visibility==='personal'&&bot.ownerUserId!==user.userId)throw new ApiError('not_found','Invisible bot');if(bot.visibility==='team'&&!bot.published&&bot.ownerUserId!==user.userId&&!bot.managerUserIds.includes(user.userId))throw new ApiError('not_found','Invisible bot');return bot;},
+    bot(user:Principal,botId:string):P.Bot {const bot=store.require<P.Bot>('bots',botId);if(bot.ownerUserId!==user.userId)throw new ApiError('not_found','Invisible bot');return bot;},
     machine(_user:Principal,machineId:string):P.Machine {return store.require<P.Machine>('machines',machineId);},
     member(userId:string):P.Member {return {id:userId,userId,displayName:userId,email:`${userId}@example.test`,role:'member',enabled:memberEnabled,revision:1,createdAtMs:now,updatedAtMs:now};},
     user(userId:string):P.User {return {id:userId,displayName:userId} as P.User;},
     requireRole(user:Principal):void {if(user.role==='member')throw new ApiError('forbidden','Requires admin');},
-    conversation(user:Principal,conversationId:string):P.Conversation {const row=store.require<P.Conversation>('conversations',conversationId);if(!row.humanUserIds.includes(user.userId))throw new ApiError('not_found','Invisible conversation');return row;},
+    conversation(user:Principal,conversationId:string):P.Conversation {const row=store.require<P.Conversation>('conversations',conversationId);if(row.ownerUserId!==user.userId||row.botIds.some(botId=>store.require<P.Bot>('bots',botId).ownerUserId!==user.userId))throw new ApiError('not_found','Invisible conversation');return row;},
     canRead(user:Principal,collection:string,entity:unknown):boolean {
       if(!entity || typeof entity!=='object')return false;
       if(collection==='bots' && 'id' in entity && typeof entity.id==='string'){try{this.bot(user,entity.id);return true;}catch{return false;}}
       if(collection==='entries' && 'conversationId' in entity && typeof entity.conversationId==='string'){try{this.conversation(user,entity.conversationId);return true;}catch{return false;}}
-      if(collection==='conversations' && 'humanUserIds' in entity && Array.isArray(entity.humanUserIds))return entity.humanUserIds.includes(user.userId);
+      if(collection==='conversations'&&'id' in entity&&typeof entity.id==='string'){try{this.conversation(user,entity.id);return true;}catch{return false;}}
       if(['skills','channelBindings','webhookKeys'].includes(collection) && 'ownerUserId' in entity)return entity.ownerUserId===user.userId;
       if(collection==='routineRuns' && 'routineId' in entity && typeof entity.routineId==='string'){
         const routine=store.get<P.Routine>('routines',entity.routineId);
@@ -81,7 +84,7 @@ function fixture() {
       async connectorConfig(user:Principal,botId:string,conversationId:string,operationId:string){calls.push({method:'connectorConfig',params:{userId:user.userId,botId,conversationId,operationId}});return [];},
       async refreshPolicy(user:Principal,botIds:string[],options:{workspace?:boolean}){calls.push({method:'refreshPolicy',params:{userId:user.userId,botIds,...options}});if(policyRefreshError)throw policyRefreshError;},
     },
-    lemon:{connected:true,methods:['cron.admission.set','cron.add','cron.update','cron.remove','nodes.list','node.capabilities.get','node.host.info','node.profile.paths','node.fs.stat','node.fs.write','node.fs.delete.preview','node.fs.delete','memory.list','memory.search','memory.add','memory.delete','usage.records'],async call<T>(method:string,params:Record<string,unknown>={}):Promise<T>{calls.push({method,params});return await dispatch(method,params) as T;}},
+    lemon:{connected:true,methods:['cron.admission.set','cron.add','cron.update','cron.remove','nodes.list','node.capabilities.get','node.host.info','node.profile.paths','node.fs.stat','node.fs.write','node.fs.delete.preview','node.fs.delete','memory.list','memory.search','memory.get','memory.add','memory.delete','usage.records'],async call<T>(method:string,params:Record<string,unknown>={}):Promise<T>{calls.push({method,params});return await dispatch(method,params) as T;}},
     events:{emit(name:string,payload:unknown,audience:unknown){emitted.push({name,payload,audience});return {};}},
     id(prefix='id'){return `${prefix}_${String(++serial).padStart(20,'0')}`;},now(){return now;},
     resource<T extends object>(prefix:string,fields:T):T & P.Resource {return {...fields,id:`${prefix}_${++serial}`,revision:1,createdAtMs:now,updatedAtMs:now};},
@@ -96,8 +99,9 @@ function fixture() {
   services.now=()=>now;
   mutations=createMutationService(services,new Uint8Array(32).fill(7));
   const routes=createResourceRoutes(services);
-  const bot:P.Bot=services.resource('bot',{ownerUserId:owner.userId,managerUserIds:[],machineId:'machine',profileId:'lb-profile',name:'Finance',title:'',job:'Budget',instructions:'',avatar:{kind:'character',shape:'circle',color:'yellow',attachmentId:null},voice:{voiceId:'default',speed:1,language:null},language:null,visibility:'personal',published:false,required:false,skillIds:[],referenceAttachmentIds:[],mainConversationId:'main',sidebar:{pinned:false,hidden:false,sectionId:null,rank:0,unread:false,notificationsEnabled:true},activity:'idle',activeRunIds:[]});
+  const bot:P.Bot=services.resource('bot',{ownerUserId:owner.userId,machineId:'machine',profileId:'lb-profile',name:'Finance',title:'',job:'Budget',instructions:'',avatar:{kind:'character',shape:'circle',color:'yellow',attachmentId:null},voice:{voiceId:'default',speed:1,language:null},language:null,skillIds:[],referenceAttachmentIds:[],mainConversationId:'main',sidebar:{pinned:false,hidden:false,sectionId:null,rank:0,unread:false,notificationsEnabled:true},activity:'idle',activeRunIds:[]});
   store.put('bots',bot);store.put('machines',{id:'machine',status:'online',nodeId:'node',revision:1});store.setMetadata('workspaceId','workspace');
+  store.put('workspaces',{id:owner.workspaceId,revision:1,createdAtMs:now,updatedAtMs:now,name:'Fixture',ownerUserId:owner.userId,enabled:true,timezone:'UTC'} satisfies P.Workspace);
   store.setMetadata(`botMcp:${bot.id}`,{secretName:'backend_fixture_bot_secret',encryptedToken:services.encrypt('fixture_only_value'),digest:'fixture_only_digest'});
   async function request<T>(method:string,path:string,body?:unknown,params:Record<string,string>={},user:Principal|null=owner,query='',headers:Record<string,string>={},internalBotLifecycle?:RequestContext['internalBotLifecycle']):Promise<T> {
     const route=routes.find(item=>item.method===method&&item.path===path);if(!route)throw new Error('Missing test route');
@@ -118,8 +122,8 @@ describe('resource authority and lifecycle boundaries',()=>{
   test('schedule creation acknowledges profile placement and future cron without submitting work',async()=>{
     const f=fixture();try{const result=await f.request<P.Routine>('POST','/v1/routines',routineInput(f.bot.id));expect(result.cronJobId).toBe('cron_job');expect(result.nextRunAtMs).toBeGreaterThan(f.services.now());expect(f.calls.filter(item=>item.method==='submit')).toHaveLength(0);expect(f.calls.find(item=>item.method==='cron.add')?.params.profileId).toBe(f.bot.profileId);expect(result).not.toHaveProperty('conversationId');}finally{f.close();}
   });
-  test('team routine history remains creator-only even to admin or bot maintainer',async()=>{
-    const f=fixture();try{f.store.put('bots',{...f.bot,visibility:'team',published:true,managerUserIds:[other.userId]});const row=await f.request<P.Routine>('POST','/v1/routines',routineInput(f.bot.id,{kind:'webhook'}));await expect(f.request('GET','/v1/routines/:id/runs',undefined,{id:row.id},admin)).rejects.toMatchObject({code:'not_found'});await expect(f.request('PATCH','/v1/routines/:id',{clientNonce:nonce,revision:row.revision,enabled:false},{id:row.id},other)).rejects.toMatchObject({code:'not_found'});}finally{f.close();}
+  test('owned routine history never grants admin or another person live Bot access',async()=>{
+    const f=fixture();try{const row=await f.request<P.Routine>('POST','/v1/routines',routineInput(f.bot.id,{kind:'webhook'}));await expect(f.request('GET','/v1/routines/:id/runs',undefined,{id:row.id},admin)).rejects.toMatchObject({code:'not_found'});await expect(f.request('PATCH','/v1/routines/:id',{clientNonce:nonce,revision:row.revision,enabled:false},{id:row.id},other)).rejects.toMatchObject({code:'not_found'});}finally{f.close();}
   });
   test('routine cap is per bot, not per creator',async()=>{
     const f=fixture();try{for(let i=0;i<50;i++)f.store.put('routines',{id:`routine_${i}`,botId:f.bot.id,ownerUserId:other.userId});await expect(f.request('POST','/v1/routines',routineInput(f.bot.id))).rejects.toMatchObject({code:'conflict'});expect(f.calls).toHaveLength(0);}finally{f.close();}
@@ -150,26 +154,33 @@ describe('resource authority and lifecycle boundaries',()=>{
   test('uncertain schedule provisioning is fenced and not recreated by a later update',async()=>{
     const f=fixture();try{f.setDispatch(async()=>{throw new ApiError('outcome_unknown','Lost acknowledgment',false);});await expect(f.request('POST','/v1/routines',routineInput(f.bot.id))).rejects.toMatchObject({code:'outcome_unknown'});const routine=f.store.list<P.Routine>('routines')[0]!;await expect(f.request('PATCH','/v1/routines/:id',{clientNonce:nonce+'new',revision:routine.revision,name:'Change'},{id:routine.id})).rejects.toMatchObject({code:'outcome_unknown'});expect(f.calls).toHaveLength(1);}finally{f.close();}
   });
-  test('private Team notes stay in SQLite bot+user scope with no admin escalation',async()=>{
-    const f=fixture();try{f.store.put('bots',{...f.bot,visibility:'team',published:true,managerUserIds:[other.userId]});const memory=await f.request<P.Memory>('POST','/v1/bots/:id/memory',{clientNonce:nonce,text:'Private note',kind:'fact',scope:'private_note'},{id:f.bot.id});expect(f.calls).toHaveLength(0);await expect(f.request('GET','/v1/memory/:id',undefined,{id:memory.id},admin)).rejects.toMatchObject({code:'not_found'});const own=await f.request<P.Page<P.Memory>>('GET','/v1/bots/:id/memory',undefined,{id:f.bot.id},owner,'scope=private_note');const hidden=await f.request<P.Page<P.Memory>>('GET','/v1/bots/:id/memory',undefined,{id:f.bot.id},admin,'scope=private_note');expect(own.items.map(item=>item.id)).toEqual([memory.id]);expect(hidden.items).toEqual([]);}finally{f.close();}
-  });
-  test('shared Team memory requires explicit maintainer, not workspace admin',async()=>{
-    const f=fixture();try{f.store.put('bots',{...f.bot,visibility:'team',published:true});await expect(f.request('POST','/v1/bots/:id/memory',{clientNonce:nonce,text:'Shared fact',kind:'fact',scope:'team'},{id:f.bot.id},admin)).rejects.toMatchObject({code:'forbidden'});expect(f.calls).toHaveLength(0);}finally{f.close();}
+  test('memory is owned native profile data; removed SQL note and scope requests are rejected',async()=>{
+    const f=fixture();try{
+      for(const removedScope of ['personal','team','private_note'])await expect(f.request('POST','/v1/bots/:id/memory',{clientNonce:nonce,text:'Fact',kind:'fact',scope:removedScope},{id:f.bot.id})).rejects.toMatchObject({code:'invalid_request'});
+      await expect(f.request('GET','/v1/bots/:id/memory',undefined,{id:f.bot.id},owner,'scope=private_note')).rejects.toMatchObject({code:'invalid_request'});
+      expect(f.calls).toHaveLength(0);expect(f.store.list('memories')).toHaveLength(0);
+      const memory=await f.request<P.Memory>('POST','/v1/bots/:id/memory',{clientNonce:nonce,text:'Owned fact',kind:'fact'},{id:f.bot.id});
+      expect(memory).not.toHaveProperty('scope');expect(memory).not.toHaveProperty('userId');
+      const read=await f.request<P.Memory>('GET','/v1/memory/:id',undefined,{id:memory.id});expect(read.text).toBe('Owned fact');
+      const exported=await f.request<P.MemoryExport>('GET','/v1/bots/:id/memory/export',undefined,{id:f.bot.id});expect(exported.items[0]?.id).toBe(memory.id);
+      const count=f.calls.length;for(const actor of [admin,other])await expect(f.request('GET','/v1/memory/:id',undefined,{id:memory.id},actor)).rejects.toMatchObject({code:'not_found'});expect(f.calls).toHaveLength(count);
+      for(const call of f.calls.filter(item=>item.method.startsWith('memory.'))){expect(call.params.profileId).toBe(f.bot.profileId);expect(call.params.memoryScope).toBe('private');expect(typeof call.params.memoryContextKey).toBe('string');}
+    }finally{f.close();}
   });
   test('remove/add correction preserves product ID and refuses stale revision and uncertain replay',async()=>{
-    const f=fixture();try{const memory=await f.request<P.Memory>('POST','/v1/bots/:id/memory',{clientNonce:nonce,text:'Old fact',kind:'fact',scope:'personal'},{id:f.bot.id});await expect(f.request('PATCH','/v1/memory/:id',{clientNonce:nonce,revision:99,text:'Stale'},{id:memory.id})).rejects.toMatchObject({code:'revision_conflict'});const next=await f.request<P.Memory>('PATCH','/v1/memory/:id',{clientNonce:nonce+'edit',revision:memory.revision,text:'Correct fact'},{id:memory.id});expect(next.id).toBe(memory.id);expect(next.revision).toBe(memory.revision+1);
+    const f=fixture();try{const memory=await f.request<P.Memory>('POST','/v1/bots/:id/memory',{clientNonce:nonce,text:'Old fact',kind:'fact'},{id:f.bot.id});await expect(f.request('PATCH','/v1/memory/:id',{clientNonce:nonce,revision:99,text:'Stale'},{id:memory.id})).rejects.toMatchObject({code:'revision_conflict'});const next=await f.request<P.Memory>('PATCH','/v1/memory/:id',{clientNonce:nonce+'edit',revision:memory.revision,text:'Correct fact'},{id:memory.id});expect(next.id).toBe(memory.id);expect(next.revision).toBe(memory.revision+1);
       f.setDispatch(async(method,params)=>{if(method==='memory.delete')return {memoryScope:params.memoryScope,memoryContextKey:params.memoryContextKey??null,id:params.id,deleted:true};throw new ApiError('upstream_unavailable','Replacement refused');});await expect(f.request('PATCH','/v1/memory/:id',{clientNonce:nonce+'uncertain',revision:next.revision,text:'Replacement'},{id:memory.id})).rejects.toMatchObject({code:'outcome_unknown',retrySafe:false});const count=f.calls.length;const persisted=f.store.require<P.Memory>('memories',memory.id);await expect(f.request('PATCH','/v1/memory/:id',{clientNonce:nonce+'retry',revision:persisted.revision,text:'Retry'},{id:memory.id})).rejects.toMatchObject({code:'outcome_unknown'});expect(f.calls).toHaveLength(count);
     }finally{f.close();}
   });
   test('search filters private ACL before creating snippets and never hides memory RPC failure',async()=>{
-    const f=fixture();try{const visible:P.Conversation=f.services.resource('conversation',{kind:'dm',name:'Own',botIds:[f.bot.id],humanUserIds:[owner.userId],ownerUserId:owner.userId,parentConversationId:null,leadBotId:null,channelBindingId:null,lastEntryId:null,unreadCount:0,lastReadSeq:0,activity:[]});f.store.put('conversations',visible);f.store.put('conversations',{...visible,id:'private',humanUserIds:[other.userId],ownerUserId:other.userId});f.store.put('entries',{id:'hidden',revision:1,createdAtMs:1,updatedAtMs:1,conversationId:'private',kind:'message',text:'Secret matching budget'});f.store.put('entries',{id:'visible',revision:1,createdAtMs:1,updatedAtMs:1,conversationId:visible.id,kind:'message',text:'Own budget'});const hits=await f.request<P.Page<P.SearchHit>>('GET','/v1/search',undefined,{},owner,'q=budget&kinds=message');expect(hits.items).toHaveLength(1);expect(hits.items[0]).toMatchObject({kind:'message',entry:{id:'visible'},snippet:'Own budget'});f.setDispatch(async()=>{throw new ApiError('upstream_unavailable','Memory unavailable');});await expect(f.request('GET','/v1/search',undefined,{},owner,'q=budget&kinds=memory')).rejects.toMatchObject({code:'upstream_unavailable'});}finally{f.close();}
+    const f=fixture();try{const visible:P.Conversation=f.services.resource('conversation',{kind:'dm',name:'Own',botIds:[f.bot.id],ownerUserId:owner.userId,parentConversationId:null,leadBotId:null,channelBindingId:null,lastEntryId:null,unreadCount:0,lastReadSeq:0,activity:[]});f.store.put('conversations',visible);f.store.put('conversations',{...visible,id:'private',ownerUserId:other.userId});f.store.put('entries',{id:'hidden',revision:1,createdAtMs:1,updatedAtMs:1,conversationId:'private',kind:'message',text:'Secret matching budget'});f.store.put('entries',{id:'visible',revision:1,createdAtMs:1,updatedAtMs:1,conversationId:visible.id,kind:'message',text:'Own budget'});const hits=await f.request<P.Page<P.SearchHit>>('GET','/v1/search',undefined,{},owner,'q=budget&kinds=message');expect(hits.items).toHaveLength(1);expect(hits.items[0]).toMatchObject({kind:'message',entry:{id:'visible'},snippet:'Own budget'});f.setDispatch(async()=>{throw new ApiError('upstream_unavailable','Memory unavailable');});await expect(f.request('GET','/v1/search',undefined,{},owner,'q=budget&kinds=memory')).rejects.toMatchObject({code:'upstream_unavailable'});}finally{f.close();}
   });
   test('managed skill uses measured destination and disable acknowledges deletion',async()=>{
-    const f=fixture();try{const skill=await f.request<P.Skill>('POST','/v1/skills',{clientNonce:nonce,name:'Report',description:'Report workflow',markdown:'Prepare the report.',scope:'personal',machineIds:['machine']});const written=f.calls.find(item=>item.method==='node.fs.write')!;expect(written.params.path).toBe(`/srv/lemon/.lemon/skill/${skill.id}/SKILL.md`);expect(written.params.nodeId).toBe('node');const disabled=await f.request<P.Skill>('PATCH','/v1/skills/:id',{clientNonce:nonce+'disable',revision:skill.revision,enabled:false},{id:skill.id});expect(disabled.enabled).toBe(false);expect(f.calls.some(item=>item.method==='node.fs.delete'&&item.params.confirm===written.params.path)).toBe(true);}finally{f.close();}
+    const f=fixture();try{const skill=await f.request<P.Skill>('POST','/v1/skills',{clientNonce:nonce,name:'Report',description:'Report workflow',markdown:'Prepare the report.',machineIds:['machine']});const written=f.calls.find(item=>item.method==='node.fs.write')!;expect(written.params.path).toBe(`/srv/lemon/.lemon/skill/${skill.id}/SKILL.md`);expect(written.params.nodeId).toBe('node');const disabled=await f.request<P.Skill>('PATCH','/v1/skills/:id',{clientNonce:nonce+'disable',revision:skill.revision,enabled:false},{id:skill.id});expect(disabled.enabled).toBe(false);expect(f.calls.some(item=>item.method==='node.fs.delete'&&item.params.confirm===written.params.path)).toBe(true);}finally{f.close();}
   });
   test('destination preprovision is additive and leaves the old skill file intact',async()=>{
     const f=fixture();try{
-      const skill=await f.request<P.Skill>('POST','/v1/skills',{clientNonce:nonce,name:'Report',description:'Report workflow',markdown:'Prepare the report.',scope:'personal',machineIds:['machine']});
+      const skill=await f.request<P.Skill>('POST','/v1/skills',{clientNonce:nonce,name:'Report',description:'Report workflow',markdown:'Prepare the report.',machineIds:['machine']});
       f.store.put('machines',{id:'destination',status:'online',nodeId:'destination_node',revision:1});
       await provisionSkill(f.services,owner,skill,['destination'],true);
       expect(f.calls.filter(item=>item.method==='node.fs.delete')).toHaveLength(0);
@@ -178,8 +189,7 @@ describe('resource authority and lifecycle boundaries',()=>{
   });
   test('memory forget confirmation is exact revision-bound and cannot survive a correction',async()=>{
     const f=fixture();try{
-      f.store.put('bots',{...f.bot,visibility:'team',published:true});
-      const memory=await f.request<P.Memory>('POST','/v1/bots/:id/memory',{clientNonce:nonce,text:'A private fact',kind:'fact',scope:'private_note'},{id:f.bot.id});
+      const memory=await f.request<P.Memory>('POST','/v1/bots/:id/memory',{clientNonce:nonce,text:'A private fact',kind:'fact'},{id:f.bot.id});
       const preview=await f.request<P.Confirmation>('POST','/v1/memory/:id/preview',{clientNonce:nonce,action:'forget'},{id:memory.id});
       expect(preview.confirmName).toBe(memory.id);
       await f.request('PATCH','/v1/memory/:id',{clientNonce:nonce+'edit',revision:memory.revision,text:'Corrected fact'},{id:memory.id});
@@ -191,7 +201,7 @@ describe('resource authority and lifecycle boundaries',()=>{
   test('unresolved bot lifecycle prevents new notes and routines before host work',async()=>{
     const f=fixture();try{
       f.store.setMetadata(`botLifecycle:${f.bot.id}`,{action:'move',status:'outcome_unknown'});
-      await expect(f.request('POST','/v1/bots/:id/memory',{clientNonce:nonce,text:'Fact',kind:'fact',scope:'personal'},{id:f.bot.id})).rejects.toMatchObject({code:'outcome_unknown',retrySafe:false});
+      await expect(f.request('POST','/v1/bots/:id/memory',{clientNonce:nonce,text:'Fact',kind:'fact'},{id:f.bot.id})).rejects.toMatchObject({code:'outcome_unknown',retrySafe:false});
       await expect(f.request('POST','/v1/routines',routineInput(f.bot.id))).rejects.toMatchObject({code:'outcome_unknown',retrySafe:false});
       expect(f.calls).toHaveLength(0);
     }finally{f.close();}
@@ -221,6 +231,8 @@ describe('resource authority and lifecycle boundaries',()=>{
       const report=await measureUsage(f.services,owner,{fromAtMs:f.services.now()-1,toAtMs:f.services.now()+1});
       expect(report.totals).toMatchObject({inputTokens:10,outputTokens:5,requests:1,costUsd:0.25});expect(report.incomplete).toBe(false);expect(report.pricingSource).toBe('lemon.usage.records');expect(report).not.toHaveProperty('sessions');
       const aggregate=await measureUsage(f.services,admin,{fromAtMs:f.services.now()-1,toAtMs:f.services.now()+1,workspace:true});expect(aggregate.totals.requests).toBe(2);
+      const originalActor={...owner};const internal=await measureWorkspaceUsageForAdmission(f.services,owner,{fromAtMs:f.services.now()-1,toAtMs:f.services.now()+1});
+      expect(internal.totals.requests).toBe(2);expect(owner).toEqual(originalActor);expect(owner.role).toBe('member');
       f.setDispatch(async()=>({records:[{...common,id:'unknown_price',runId:'native_owned',costUsd:null,priceKnown:false}],nextCursor:null,incomplete:true}));
       const unknown=await measureUsage(f.services,owner,{fromAtMs:f.services.now()-1,toAtMs:f.services.now()+1});expect(unknown.incomplete).toBe(true);expect(unknown.totals.costUsd).toBeNull();
       await expect(measureUsage(f.services,owner,{fromAtMs:0,toAtMs:1,workspace:true})).rejects.toMatchObject({code:'forbidden'});
@@ -228,7 +240,7 @@ describe('resource authority and lifecycle boundaries',()=>{
   });
   test('trusted lifecycle capability binds exact actor and action, never client body fields',async()=>{
     const f=fixture();try{
-      const input={clientNonce:nonce,text:'Fact',kind:'fact',scope:'personal'};
+      const input={clientNonce:nonce,text:'Fact',kind:'fact'};
       f.store.setMetadata(`botLifecycle:${f.bot.id}`,{action:'import',status:'pending',userId:owner.userId});
       await expect(f.request('POST','/v1/bots/:id/memory',input,{id:f.bot.id},owner,'',{}, {botId:f.bot.id,userId:other.userId,action:'import'})).rejects.toMatchObject({code:'conflict'});
       await expect(f.request('POST','/v1/bots/:id/memory',{...input,internalBotLifecycle:{botId:f.bot.id,userId:owner.userId,action:'import'}},{id:f.bot.id})).rejects.toMatchObject({code:'invalid_request'});
@@ -238,7 +250,7 @@ describe('resource authority and lifecycle boundaries',()=>{
   });
   test('scheduled admission rejects invalid identity and disabled creators before native dispatch',async()=>{
     const f=fixture();try{
-      f.store.put('bots',{...f.bot,ownerUserId:other.userId,visibility:'team',published:true});
+      f.store.put('bots',{...f.bot,ownerUserId:other.userId});
       const routine=await f.request<P.Routine>('POST','/v1/routines',routineInput(f.bot.id),{},other);
       const token=String(f.calls.find(item=>item.method==='cron.admission.set')?.params.token);
       const context={jobId:routine.cronJobId!,profileId:f.bot.profileId,routineId:routine.id,creatorId:other.userId,workspaceId:owner.workspaceId,cronRunId:'cron_run',routerRunId:'native_run',triggeredBy:'schedule',scheduledForMs:f.services.now()+300000};
@@ -288,19 +300,17 @@ describe('resource authority and lifecycle boundaries',()=>{
       expect(String(f.calls.find(item=>item.method==='submit')?.params.text)).toContain('\\u003c/untrusted_json\\u003e');
     }finally{f.close();}
   });
-  test('Team memory search projects only explicitly shared product rows, retaining full-fact native matches',async()=>{
+  test('owned native search retains full-fact matches beyond the clipped preview',async()=>{
     const f=fixture();try{
-      f.store.put('bots',{...f.bot,visibility:'team',published:true});
-      const shared=await f.request<P.Memory>('POST','/v1/bots/:id/memory',{clientNonce:nonce,text:'Preview without the match',kind:'fact',scope:'team'},{id:f.bot.id});
-      f.setDispatch(async(method,params)=>{expect(method).toBe('memory.search');expect(params.memoryScope).toBe('shared');expect(params.memoryContextKey).toBeUndefined();return {memoryScope:'shared',memoryContextKey:null,items:[{id:'unknown_private_summary',kind:'run',source:'durable',text:'Secret budget',createdAtMs:f.services.now(),updatedAtMs:f.services.now()},{id:'runtime_memory',kind:'memory',source:'workspace',text:'Preview without the match',createdAtMs:f.services.now(),updatedAtMs:f.services.now()}],nextCursor:null};});
-      const result=await f.request<P.Page<P.SearchHit>>('GET','/v1/search',undefined,{},other,'q=budget&kinds=memory');
-      expect(result.items).toHaveLength(1);expect(result.items[0]).toMatchObject({kind:'memory',memory:{id:shared.id}});
-      expect(f.store.list<P.Memory>('memories')).toHaveLength(1);
+      const memory=await f.request<P.Memory>('POST','/v1/bots/:id/memory',{clientNonce:nonce,text:'Preview without the match',kind:'fact'},{id:f.bot.id});
+      f.setDispatch(async(method,params)=>{expect(method).toBe('memory.search');expect(params.memoryScope).toBe('private');expect(typeof params.memoryContextKey).toBe('string');return {memoryScope:'private',memoryContextKey:params.memoryContextKey,items:[{id:'runtime_memory',kind:'memory',source:'workspace',text:'Preview without the match',createdAtMs:f.services.now(),updatedAtMs:f.services.now()}],nextCursor:null};});
+      const result=await f.request<P.Page<P.SearchHit>>('GET','/v1/search',undefined,{},owner,'q=budget&kinds=memory');
+      expect(result.items).toHaveLength(1);expect(result.items[0]).toMatchObject({kind:'memory',memory:{id:memory.id}});
     }finally{f.close();}
   });
   test('memory scope acknowledgment is mandatory and personal scope keys never enter wire resources',async()=>{
     const f=fixture();try{
-      const memory=await f.request<P.Memory>('POST','/v1/bots/:id/memory',{clientNonce:nonce,text:'Personal fact',kind:'fact',scope:'personal'},{id:f.bot.id});
+      const memory=await f.request<P.Memory>('POST','/v1/bots/:id/memory',{clientNonce:nonce,text:'Personal fact',kind:'fact'},{id:f.bot.id});
       const request=f.calls.find(item=>item.method==='memory.add')!;
       expect(request.params.memoryScope).toBe('private');expect(typeof request.params.memoryContextKey).toBe('string');expect(memory).not.toHaveProperty('memoryContextKey');
       f.setDispatch(async()=>({items:[],nextCursor:null}));
@@ -309,7 +319,7 @@ describe('resource authority and lifecycle boundaries',()=>{
   });
   test('selected skill profile uses its acknowledged root rather than host default cwd',async()=>{
     const f=fixture();try{
-      const skill=await f.request<P.Skill>('POST','/v1/skills',{clientNonce:nonce,name:'Selected',description:'Profile workflow',markdown:'Prepare.',scope:'personal',botId:f.bot.id,machineIds:['machine']});
+      const skill=await f.request<P.Skill>('POST','/v1/skills',{clientNonce:nonce,name:'Selected',description:'Profile workflow',markdown:'Prepare.',botId:f.bot.id,machineIds:['machine']});
       expect(f.calls.find(item=>item.method==='node.profile.paths')?.params.profileId).toBe(f.bot.profileId);
       expect(f.calls.find(item=>item.method==='node.fs.write')?.params.path).toBe(`/srv/lemon/profiles/${f.bot.profileId}/workspace/.lemon/skill/${skill.id}/SKILL.md`);
       expect(f.calls.filter(item=>item.method==='node.host.info')).toHaveLength(0);
@@ -328,35 +338,32 @@ describe('resource authority and lifecycle boundaries',()=>{
   });
   test('foreign Bot routine creation and trusted import are rejected before allocating resources or native work',async()=>{
     const f=fixture();try{
-      f.store.put('bots',{...f.bot,visibility:'team',published:true,managerUserIds:[other.userId]});
-      for(const actor of [other,admin])await expect(f.request('POST','/v1/routines',routineInput(f.bot.id),{},actor)).rejects.toMatchObject({code:'forbidden'});
+      for(const actor of [other,admin])await expect(f.request('POST','/v1/routines',routineInput(f.bot.id),{},actor)).rejects.toMatchObject({code:'not_found'});
       f.store.setMetadata(`botLifecycle:${f.bot.id}`,{action:'import',status:'pending',userId:other.userId});
-      await expect(f.request('POST','/v1/routines',routineInput(f.bot.id),{},other,'',{}, {botId:f.bot.id,userId:other.userId,action:'import'})).rejects.toMatchObject({code:'forbidden'});
+      await expect(f.request('POST','/v1/routines',routineInput(f.bot.id),{},other,'',{}, {botId:f.bot.id,userId:other.userId,action:'import'})).rejects.toMatchObject({code:'not_found'});
       expect(f.calls).toHaveLength(0);expect(f.store.list('routines')).toHaveLength(0);expect(f.store.list('conversations')).toHaveLength(0);
     }finally{f.close();}
   });
   test('legacy collaborator routines cannot edit, test, accept hooks/events, or appear in personal history/search',async()=>{
     const f=fixture();try{
-      f.store.put('bots',{...f.bot,visibility:'team',published:true,managerUserIds:[other.userId]});
       const routine=await f.request<P.Routine>('POST','/v1/routines',routineInput(f.bot.id,{kind:'webhook'}));
       const key=await f.request<P.WebhookKey>('POST','/v1/routines/:id/webhook-key',{clientNonce:nonce},{id:routine.id});
       const legacy=f.store.require<P.Routine & {conversationId:string}>('routines',routine.id);
       f.store.put('routines',{...legacy,ownerUserId:other.userId});
-      await expect(f.request('PATCH','/v1/routines/:id',{clientNonce:nonce+'edit',revision:routine.revision,enabled:false},{id:routine.id},other)).rejects.toMatchObject({code:'forbidden'});
-      await expect(f.request('POST','/v1/routines/:id/test',{clientNonce:nonce+'test'},{id:routine.id},other)).rejects.toMatchObject({code:'forbidden'});
-      await expect(f.request('GET','/v1/routines/:id/runs',undefined,{id:routine.id},other)).rejects.toMatchObject({code:'forbidden'});
-      await expect(f.request('POST','/hooks/:routineId',{clientNonce:nonce+'hook',payload:{}},{routineId:routine.id},null,'',{authorization:`Bearer ${key.key}`})).rejects.toMatchObject({code:'forbidden'});
+      await expect(f.request('PATCH','/v1/routines/:id',{clientNonce:nonce+'edit',revision:routine.revision,enabled:false},{id:routine.id},other)).rejects.toMatchObject({code:'not_found'});
+      await expect(f.request('POST','/v1/routines/:id/test',{clientNonce:nonce+'test'},{id:routine.id},other)).rejects.toMatchObject({code:'not_found'});
+      await expect(f.request('GET','/v1/routines/:id/runs',undefined,{id:routine.id},other)).rejects.toMatchObject({code:'not_found'});
+      await expect(f.request('POST','/hooks/:routineId',{clientNonce:nonce+'hook',payload:{}},{routineId:routine.id},null,'',{authorization:`Bearer ${key.key}`})).rejects.toMatchObject({code:'not_found'});
       const listed=await f.request<P.Page<P.Routine>>('GET','/v1/routines',undefined,{},other);expect(listed.items).toHaveLength(0);
       const searched=await f.request<P.Page<P.SearchHit>>('GET','/v1/search',undefined,{},other,'q=report&kinds=routine');expect(searched.items).toHaveLength(0);
       f.store.put('routines',{...legacy,ownerUserId:other.userId,trigger:{kind:'external_event',source:'github',eventNames:['issues'],filters:{}}});
       const source:Principal={...other,kind:'integration',id:'provider_ingress',sessionId:null};
-      await expect(submitEventRoutine(f.services,source,routine.id,{},nonce+'event')).rejects.toMatchObject({code:'forbidden'});
+      await expect(submitEventRoutine(f.services,source,routine.id,{},nonce+'event')).rejects.toMatchObject({code:'not_found'});
       expect(f.calls.filter(item=>item.method==='submit')).toHaveLength(0);expect(f.store.list('routineRuns')).toHaveLength(0);
     }finally{f.close();}
   });
   test('cron never grants a legacy creator the Bot owner identity, including replay of prior admission',async()=>{
     const f=fixture();try{
-      f.store.put('bots',{...f.bot,visibility:'team',published:true});
       const routine=await f.request<P.Routine>('POST','/v1/routines',routineInput(f.bot.id));
       const legacy=f.store.require<P.Routine & {conversationId:string}>('routines',routine.id);
       f.store.put('routines',{...legacy,ownerUserId:other.userId});
@@ -366,6 +373,42 @@ describe('resource authority and lifecycle boundaries',()=>{
       f.store.setMetadata(`cronAdmissionReceipt:${context.cronRunId}`,{hash:f.services.mutations.digest(context),state:'complete',receipt:f.services.encrypt({allow:true,context})});
       const replay=await f.request<{allow:boolean}>('POST','/internal/cron/admission',context,{},null,'',{authorization:`Bearer ${token}`});expect(replay.allow).toBe(false);
       expect(f.store.list('routineRuns')).toHaveLength(0);expect(f.store.metadata('nativeRunProduct:legacy_native')).toBeNull();expect(f.calls.filter(item=>item.method==='connectorConfig')).toHaveLength(0);
+    }finally{f.close();}
+  });
+  test('workspace spend admission verifies unchanged actual account, workspace, and owned selectors',async()=>{
+    const f=fixture();try{
+      const query={fromAtMs:f.services.now()-1,toAtMs:f.services.now()+1};
+      f.setDispatch(async()=>({records:[],nextCursor:null,incomplete:false}));
+      const report=await measureWorkspaceUsageForAdmission(f.services,owner,query);expect(report.totals.requests).toBe(0);expect(owner.role).toBe('member');
+      const count=f.calls.length;
+      await expect(measureWorkspaceUsageForAdmission(f.services,{...owner,workspaceId:'foreign'},query)).rejects.toMatchObject({code:'forbidden'});
+      f.store.put('bots',{...f.bot,id:'foreign_bot',ownerUserId:other.userId});
+      await expect(measureWorkspaceUsageForAdmission(f.services,owner,{...query,botId:'foreign_bot'})).rejects.toMatchObject({code:'not_found'});
+      f.setMemberEnabled(false);await expect(measureWorkspaceUsageForAdmission(f.services,owner,query)).rejects.toMatchObject({code:'unauthenticated'});f.setMemberEnabled(true);
+      f.store.setMetadata(`accountDeletion:${owner.userId}`,{status:'pending'});await expect(measureWorkspaceUsageForAdmission(f.services,owner,query)).rejects.toMatchObject({code:'unauthenticated'});f.store.setMetadata(`accountDeletion:${owner.userId}`,null);
+      f.store.put('workspaces',{...f.store.require<P.Workspace>('workspaces',owner.workspaceId),enabled:false});await expect(measureWorkspaceUsageForAdmission(f.services,owner,query)).rejects.toMatchObject({code:'unauthenticated'});
+      expect(f.calls).toHaveLength(count);
+    }finally{f.close();}
+  });
+  test('obsolete SQL-only notes and foreign native identities never become owner-readable',async()=>{
+    const f=fixture();try{
+      const legacy=f.services.resource('memory',{botId:f.bot.id,text:'Old private secret',kind:'fact' as const,sourceEntryId:null,runtimeMemoryId:null,scope:'private_note',userId:other.userId});f.store.put('memories',legacy);
+      await expect(f.request('GET','/v1/memory/:id',undefined,{id:legacy.id})).rejects.toMatchObject({code:'outcome_unknown'});
+      const exported=await f.request<P.MemoryExport>('GET','/v1/bots/:id/memory/export',undefined,{id:f.bot.id});expect(exported.items).toHaveLength(0);
+      f.store.put('memories',{...legacy,runtimeMemoryId:'foreign_native',memoryContextKey:'foreign_context'});
+      await expect(f.request('GET','/v1/memory/:id',undefined,{id:legacy.id})).rejects.toMatchObject({code:'not_found'});
+      expect(f.calls.filter(item=>item.method==='memory.get')).toHaveLength(0);
+    }finally{f.close();}
+  });
+  test('removed skill scope is invalid and bindings cannot name another person’s Bot',async()=>{
+    const f=fixture();try{
+      const input={clientNonce:nonce,name:'Own library',description:'Workflow',markdown:'Prepare.',machineIds:[]};
+      await expect(f.request('POST','/v1/skills',{...input,scope:'personal'})).rejects.toMatchObject({code:'invalid_request'});
+      f.store.put('bots',{...f.bot,id:'foreign_bot',ownerUserId:other.userId});
+      await expect(f.request('POST','/v1/skills',{...input,botId:'foreign_bot'})).rejects.toMatchObject({code:'not_found'});
+      const skill=await f.request<P.Skill>('POST','/v1/skills',input);expect(skill).not.toHaveProperty('scope');expect(skill.ownerUserId).toBe(owner.userId);
+      await expect(f.request('GET','/v1/skills/:id',undefined,{id:skill.id},admin)).rejects.toMatchObject({code:'not_found'});
+      expect(f.calls).toHaveLength(0);
     }finally{f.close();}
   });
 });
