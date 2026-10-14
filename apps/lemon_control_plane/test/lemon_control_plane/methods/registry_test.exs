@@ -69,6 +69,12 @@ defmodule LemonControlPlane.Methods.RegistryTest do
     :ok
   end
 
+  test "canonical usage records is advertised as a read-only method" do
+    assert {:ok, LemonControlPlane.Methods.UsageRecords} = Registry.lookup("usage.records")
+    assert "usage.records" in Registry.list_methods()
+    assert LemonControlPlane.Methods.UsageRecords.scopes() == [:read]
+  end
+
   test "register/1, lookup/1, unregister/1, and list_methods/0 for dynamic method names" do
     method = LifecycleHandler.name()
     refute method in Registry.list_methods()

@@ -179,7 +179,8 @@ defmodule LemonControlPlane.Methods.Registry do
     LemonControlPlane.Methods.OmpSessionsClose,
     # Usage
     LemonControlPlane.Methods.UsageStatus,
-    LemonControlPlane.Methods.UsageCost
+    LemonControlPlane.Methods.UsageCost,
+    LemonControlPlane.Methods.UsageRecords
   ]
 
   ## Client API

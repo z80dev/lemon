@@ -15,7 +15,7 @@ defmodule LemonCore.UsageLedgerTest do
         prompt: "secret prompt"
       })
 
-    assert entry == %{
+    assert %{
              run_id: "run-1",
              session_key: "agent:s",
              provider: "openai",
@@ -23,7 +23,7 @@ defmodule LemonCore.UsageLedgerTest do
              input: 40,
              output: 8,
              cost: 0.01
-           }
+           } = entry
   end
 
   test "an unprefixed model uses the provider from meta, else unknown" do

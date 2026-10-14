@@ -706,6 +706,13 @@ defmodule LemonControlPlane.Protocol.Schemas do
         "endDate" => :string
       }
     },
+    "usage.records" => %{
+      required: %{"fromMs" => :integer, "toMs" => :integer},
+      optional: %{
+        "runId" => :string, "sessionKey" => :string,
+        "cursor" => :string, "limit" => :integer
+      }
+    },
 
     # Node connect challenge
     "connect.challenge" => %{
