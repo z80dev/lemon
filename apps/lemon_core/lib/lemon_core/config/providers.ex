@@ -39,6 +39,29 @@ defmodule LemonCore.Config.Providers do
   `llm_anthropic_api_key` to avoid mixing header modes. `google_gemini_cli`
   stores its OAuth payload in `api_key_secret` because the runtime provider
   expects a JSON `{"token","projectId"}` value.
+
+  ## Custom providers
+
+  A provider id that is not a built-in provider defines a custom endpoint
+  (omp `models.yml` parity). Values stay binaries; no atoms are created from
+  config input:
+
+      [providers.my-gateway]
+      api = "openai_completions"      # openai_completions | openai_responses |
+                                      # anthropic_messages | google_generative_ai
+      base_url = "https://llm.internal/v1"
+      api_key_env = "MY_GATEWAY_KEY"  # or api_key / api_key_secret
+      auth = "none"                   # optional keyless endpoint
+      headers = { "X-Team" = "platform" }
+      discovery = "openai"            # optional: "openai" (GET {base_url}/models) or "ollama"
+
+      [[providers.my-gateway.models]]
+      id = "qwen3-coder"
+      context_window = 131072
+
+  On built-in providers, `headers` are sent with every request and `models`
+  entries add (or replace, by id) catalog models. Lemon's model runtime turns
+  these maps into models; `LemonCore.Config.Validator` reports invalid values.
   """
 
   alias LemonCore.Config.Helpers
@@ -59,7 +82,15 @@ defmodule LemonCore.Config.Providers do
           location: String.t() | nil,
           location_secret: String.t() | nil,
           service_account_json: String.t() | nil,
-          service_account_json_secret: String.t() | nil
+          service_account_json_secret: String.t() | nil,
+          api: String.t() | nil,
+          name: String.t() | nil,
+          api_key_env: String.t() | nil,
+          auth: String.t() | nil,
+          headers: %{optional(String.t()) => String.t()} | nil,
+          discovery: String.t() | nil,
+          discovery_timeout_ms: pos_integer() | nil,
+          models: [map()] | nil
         }
 
   @type t :: %__MODULE__{
@@ -78,6 +109,8 @@ defmodule LemonCore.Config.Providers do
     "zai" => %{api_key: "ZAI_API_KEY", base_url: "ZAI_BASE_URL"},
     "minimax" => %{api_key: "MINIMAX_API_KEY", base_url: "MINIMAX_BASE_URL"}
   }
+
+  @custom_apis ~w(openai_completions openai_responses anthropic_messages google_generative_ai)
 
   @doc """
   Resolves providers configuration from settings and environment variables.
@@ -128,11 +161,121 @@ defmodule LemonCore.Config.Providers do
       region: normalize_optional_string(config["region"]),
       access_key_id_secret: normalize_optional_string(config["access_key_id_secret"]),
       secret_access_key_secret: normalize_optional_string(config["secret_access_key_secret"]),
-      session_token_secret: normalize_optional_string(config["session_token_secret"])
+      session_token_secret: normalize_optional_string(config["session_token_secret"]),
+      # Custom provider / model definitions (see "Custom providers" above)
+      api: normalize_enum(config["api"], &canonical_api/1),
+      name: normalize_optional_string(config["name"]),
+      api_key_env: normalize_optional_string(config["api_key_env"]),
+      auth: normalize_enum(config["auth"], &canonical_auth/1),
+      headers: normalize_headers(config["headers"]),
+      discovery: normalize_enum(discovery_type(config["discovery"]), &canonical_discovery/1),
+      discovery_timeout_ms: discovery_timeout_ms(config["discovery"]),
+      models: normalize_models(config["models"])
     }
 
     reject_nil_values(base)
   end
+
+  @doc """
+  Canonical custom-provider wire API for a config value, or `nil` when the value
+  is not in the allowlist. omp's dashed spellings (`openai-completions`) are
+  accepted.
+  """
+  @spec canonical_api(term()) :: String.t() | nil
+  def canonical_api(value), do: canonical_member(value, @custom_apis)
+
+  @doc "Allowed values of `providers.<id>.api` (and per-model `api`)."
+  @spec custom_apis() :: [String.t()]
+  def custom_apis, do: @custom_apis
+
+  @doc "Canonical `auth` mode (`api_key` | `none`), or `nil` when unrecognized."
+  @spec canonical_auth(term()) :: String.t() | nil
+  def canonical_auth(value) when is_binary(value) do
+    case value |> String.trim() |> String.downcase() |> String.replace("-", "_") do
+      "none" -> "none"
+      key when key in ["api_key", "apikey"] -> "api_key"
+      _ -> nil
+    end
+  end
+
+  def canonical_auth(_), do: nil
+
+  @doc """
+  Canonical discovery kind (`openai` | `ollama`), or `nil` when unrecognized.
+  omp's `openai-models-list`, `lm-studio` and `llama.cpp` list `{base_url}/models`.
+  """
+  @spec canonical_discovery(term()) :: String.t() | nil
+  def canonical_discovery(value) when is_binary(value) do
+    case value |> String.trim() |> String.downcase() |> String.replace(["-", "."], "_") do
+      kind when kind in ["openai", "openai_models_list", "lm_studio", "llama_cpp"] -> "openai"
+      "ollama" -> "ollama"
+      _ -> nil
+    end
+  end
+
+  def canonical_discovery(_), do: nil
+
+  # Valid values are canonicalized; invalid values are kept verbatim so
+  # `LemonCore.Config.Validator` can report them.
+  defp normalize_enum(value, canonical) do
+    case normalize_optional_string(value) do
+      nil -> nil
+      string -> canonical.(string) || String.trim(string)
+    end
+  end
+
+  defp canonical_member(value, allowed) when is_binary(value) do
+    normalized = value |> String.trim() |> String.downcase() |> String.replace("-", "_")
+    if normalized in allowed, do: normalized
+  end
+
+  defp canonical_member(_value, _allowed), do: nil
+
+  defp discovery_type(%{} = discovery), do: discovery["type"]
+  defp discovery_type(value), do: value
+
+  defp discovery_timeout_ms(%{} = discovery),
+    do: discovery["timeout_ms"] || discovery["timeoutMs"]
+
+  defp discovery_timeout_ms(_), do: nil
+
+  defp normalize_headers(%{} = headers), do: Map.new(headers, fn {k, v} -> {to_string(k), v} end)
+  defp normalize_headers(nil), do: nil
+  defp normalize_headers(other), do: other
+
+  defp normalize_models(models) when is_list(models), do: Enum.map(models, &normalize_model/1)
+  defp normalize_models(nil), do: nil
+  defp normalize_models(other), do: other
+
+  defp normalize_model(%{} = model) do
+    %{
+      id: normalize_optional_string(model["id"]),
+      name: normalize_optional_string(model["name"]),
+      api: normalize_enum(model["api"], &canonical_api/1),
+      reasoning: model["reasoning"],
+      input: model["input"],
+      context_window: model["context_window"] || model["contextWindow"],
+      max_tokens: model["max_tokens"] || model["maxTokens"],
+      cost: normalize_cost(model["cost"]),
+      headers: normalize_headers(model["headers"])
+    }
+    |> reject_nil_values()
+  end
+
+  defp normalize_model(other), do: other
+
+  defp normalize_cost(%{} = cost) do
+    %{
+      input: cost["input"],
+      output: cost["output"],
+      cache_read: cost["cache_read"] || cost["cacheRead"],
+      cache_write: cost["cache_write"] || cost["cacheWrite"]
+    }
+    |> reject_nil_values()
+  end
+
+  defp normalize_cost(nil), do: nil
+  defp normalize_cost(other), do: other
 
   defp normalize_optional_string(nil), do: nil
   defp normalize_optional_string(""), do: nil
