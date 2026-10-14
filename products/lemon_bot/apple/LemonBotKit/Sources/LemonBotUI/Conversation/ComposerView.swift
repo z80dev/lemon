@@ -11,6 +11,7 @@ public struct ComposerView: View {
     private let store: LemonBotStore
     private let conversationID: ID
     private let compact: Bool
+    private let owningAccountID: String?
     @State private var action = UIActionState()
     @State private var files = false
     @State private var mode = "followup"
@@ -23,10 +24,15 @@ public struct ComposerView: View {
     @State private var reconciledRuns: [Run] = []
     @State private var stagedFilenames: [String] = []
     @FocusState private var focused: Bool
-    public init(store: LemonBotStore, conversationID: ID, compact: Bool = false) { self.store = store; self.conversationID = conversationID; self.compact = compact }
+    public init(store: LemonBotStore, conversationID: ID, compact: Bool = false) {
+        self.store = store
+        self.conversationID = conversationID
+        self.compact = compact
+        self.owningAccountID = store.account?.id
+    }
     private var draft: LocalComposerDraft { store.draft(for: conversationID) }
     private var text: Binding<String> { Binding(get: { draft.text }, set: { store.setLocalDraft(conversationID: conversationID, text: $0, attachmentIDs: draft.attachmentIDs, replyTo: draft.replyToEntryID) }) }
-    private var online: Bool { store.connectionState == "online" }
+    private var online: Bool { store.connectionState == "online" && store.account?.id == owningAccountID }
     private var conversation: Conversation? { store.conversations.first { $0.id == conversationID } }
     private var voiceAllowed: Bool {
         guard let conversation, ["dm", "task", "team_dm"].contains(conversation.kind), conversation.ownerUserId == store.user?.id,
@@ -163,7 +169,11 @@ public struct ComposerView: View {
             .onDisappear {
                 let captured = draft
                 guard online else { return }
-                Task { do { try await store.saveDraft(conversationID: conversationID, text: captured.text, attachmentIDs: captured.attachmentIDs, replyTo: captured.replyToEntryID) } catch { store.errorMessage = error.localizedDescription } }
+                Task {
+                    guard online else { return }
+                    do { try await store.saveDraft(conversationID: conversationID, text: captured.text, attachmentIDs: captured.attachmentIDs, replyTo: captured.replyToEntryID) }
+                    catch { if store.account?.id == owningAccountID { store.errorMessage = error.localizedDescription } }
+                }
             }
     }
     private var referenceMenu: some View {
@@ -216,8 +226,10 @@ public struct ComposerView: View {
         await action.perform {
             guard online else { throw ComposerError.message("Reconnect before explicit upload. Nothing was queued.") }
             for url in draft.fileURLs {
+                guard online else { throw ComposerError.message("The account or connection changed. Remaining selected files were not uploaded.") }
                 let mime = UTType(filenameExtension: url.pathExtension)?.preferredMIMEType ?? "application/octet-stream"
                 let attachment = try await store.upload(fileURL: url, mime: mime, metadata: ["conversationId": .string(conversationID), "purpose": .string("message")])
+                guard store.account?.id == owningAccountID else { throw ComposerError.message("The upload belongs to the previous account; its receipt was not attached to this account.") }
                 guard store.setLocalDraft(conversationID: conversationID, text: draft.text, attachmentIDs: draft.attachmentIDs + [attachment.id], replyTo: draft.replyToEntryID) else { throw ComposerError.message(store.errorMessage ?? "Local draft retention failed; upload receipt is not discarded.") }
                 try store.removeDraftFile(url, conversationID: conversationID)
             }
@@ -235,6 +247,7 @@ public struct ComposerView: View {
             guard captured.fileURLs.isEmpty else { throw ComposerError.message("Explicitly upload or remove selected local files before Send.") }
             unconfirmedDraft = captured
             let result = try await store.send(conversationID: conversationID, text: captured.text, attachmentIDs: captured.attachmentIDs, replyTo: captured.replyToEntryID, mode: mode, mentions: captured.mentions, everyone: captured.everyone, references: captured.references)
+            guard store.account?.id == owningAccountID else { return }
             receipt = result
             if result.status == "outcome_unknown" { action.uncertain = true; action.uncertainNonce = result.clientNonce }
             if result.status != "outcome_unknown" {
@@ -248,6 +261,7 @@ public struct ComposerView: View {
     }
     private func reconcile() async {
         await action.perform {
+            guard online else { throw ClientError.offline }
             var nonce = pendingMessageNonce ?? action.uncertainNonce ?? receipt?.clientNonce
             if nonce == nil, let id = action.uncertainRunID {
                 let run: Run = try await store.read(resourcePath("runs", id))
@@ -259,6 +273,7 @@ public struct ComposerView: View {
                 return
             }
             let settled = try await store.reconcileMutation(nonce)
+            guard store.account?.id == owningAccountID else { return }
             reconciledRuns = store.runs.filter { $0.conversationId == conversationID && $0.clientNonce == nonce }
             guard settled else { return }
             if let captured = unconfirmedDraft, matchesDraft(captured) {
