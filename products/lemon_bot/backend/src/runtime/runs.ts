@@ -33,8 +33,6 @@ const approvalSchema = z.object({ approvalId: id, runId: id, sessionKey: z.strin
 const cronSchema = z.object({ type: z.enum(['started', 'completed']), runId: id.nullable(), cronRunId: id, jobId: id, sessionKey: z.string().nullable(), status: z.string().optional(), startedAtMs: z.number().int().nonnegative().nullable().optional() }).passthrough();
 const terminalStatuses: P.Run['status'][] = ['succeeded', 'failed', 'cancelled'];
 interface ConnectorFence { connectorId: string; runIds: string[]; status: 'pending' | 'outcome_unknown' }
-interface RuntimeCompletion { runId?: string | null; ok: boolean; answer: string | null; error?: unknown; cancelled: boolean }
-const finalizers = new WeakMap<BackendServices, (runId: string, result: RuntimeCompletion) => Promise<void>>();
 function upstream<T>(schema: z.ZodType<T>, value: unknown): T {
   const result = schema.safeParse(value); if (!result.success) fail('upstream_unavailable', 'The runtime returned an invalid receipt.'); return result.data;
 }
@@ -255,17 +253,18 @@ export function createRuntimeService(services: BackendServices): ManagedRuntimeS
   }
   async function finalize(runId: string, result: z.infer<typeof finalSchema>) {
     const run = services.store.require<P.Run>('runs', runId); const bound = mapping(runId);
-    if (!bound || terminalStatuses.includes(run.status)) return;
+    if (!bound || terminalStatuses.includes(run.status) && services.store.metadata<boolean>(`runtimeTerminalProjectionPending:${run.id}`) !== true) return;
     const principal = actor(runId); services.auth.bot(principal, run.botId); services.auth.conversation(principal, run.conversationId);
     const status: P.Run['status'] = result.cancelled ? 'cancelled' : result.ok ? 'succeeded' : 'failed';
     services.store.transaction(() => {
-      const current = services.store.require<P.Run>('runs', runId); if (terminalStatuses.includes(current.status)) return;
+      const current = services.store.require<P.Run>('runs', runId); if (terminalStatuses.includes(current.status) && services.store.metadata<boolean>(`runtimeTerminalProjectionPending:${runId}`) !== true) return;
       if (bound.upstreamRunId === bound.executionRunId && (result.answer !== null || bound.assistantEntryId)) {
         const entry = assistant(current, bound, principal);
         const final = services.update(entry, { text: result.answer ?? entry.text, streaming: false }); services.store.put('entries', final); services.events.emit('entry.upserted', final, { conversationId: final.conversationId, botId: run.botId });
       }
       const error = status === 'failed' ? errorEnvelope(new ApiError('upstream_unavailable', 'The runtime reported that this run failed.', false), services.id('req')).error : null;
       emitRun(services.update(current, { status, completedAtMs: services.now(), error }));
+      services.store.setMetadata(`runtimeTerminalProjectionPending:${runId}`, false);
     });
     const returned = services.store.metadata<string>(`runReturnConversation:${runId}`);
     if (returned && services.integrations.returnChannelHandoff && bound.upstreamRunId === bound.executionRunId) await services.integrations.returnChannelHandoff(principal, returned, result.answer ?? '', run.id);
@@ -275,6 +274,7 @@ export function createRuntimeService(services: BackendServices): ManagedRuntimeS
   }
   async function queryFinal(run: P.Run, bound: RuntimeMapping) {
     try {
+      const principal = actor(run.id); services.auth.bot(principal, run.botId); services.auth.conversation(principal, run.conversationId);
       const response = await services.lemon.call('agent.wait', { runId: bound.executionRunId, timeoutMs: 1 }, { timeoutMs: 5_000 });
       await finalize(run.id, upstream(finalSchema, response));
     } catch (error) {
@@ -370,7 +370,7 @@ export function createRuntimeService(services: BackendServices): ManagedRuntimeS
     const data = parsed.data;
     const owned = ownMappings(data.runId, data.sessionKey);
     for (const { run, bound } of owned) {
-      if (terminalStatuses.includes(run.status)) continue;
+      if (terminalStatuses.includes(run.status) && !(event === 'agent' && data.type === 'completed' && services.store.metadata<boolean>(`runtimeTerminalProjectionPending:${run.id}`) === true)) continue;
       const principal = actor(run.id); services.auth.bot(principal, run.botId); services.auth.conversation(principal, run.conversationId);
       if (event === 'agent' && data.type === 'started') emitRun(services.update(run, { status: 'running', startedAtMs: run.startedAtMs ?? services.now() }));
       else if (event === 'agent' && data.type === 'completed') await queryFinal(run, bound);
@@ -537,7 +537,7 @@ export function createRuntimeService(services: BackendServices): ManagedRuntimeS
           const result = upstream(z.object({ runs: z.array(z.object({ id, routerRunId: id.nullable(), jobId: id, status: z.string(), sessionKey: z.string().nullable(), startedAtMs: z.number().int().nullable() }).passthrough()) }).passthrough(), await services.lemon.call('cron.runs', { id: routine.cronJobId!, limit: 20, includeOutput: true, includeMeta: false }));
           for (const record of result.runs) await projectCron({ type: record.status === 'running' ? 'started' : 'completed', runId: record.routerRunId, cronRunId: record.id, jobId: record.jobId, sessionKey: record.sessionKey, startedAtMs: record.startedAtMs, status: record.status });
         }
-        for (const run of services.store.list<P.Run>('runs', value => !terminalStatuses.includes(value.status))) {
+        for (const run of services.store.list<P.Run>('runs', value => !terminalStatuses.includes(value.status) || services.store.metadata<boolean>(`runtimeTerminalProjectionPending:${value.id}`) === true)) {
           const bound = mapping(run.id); if (!bound) continue;
           try { actor(run.id); } catch { services.store.setMetadata(`runtimeReconciliation:${run.id}`, { pending: true, code: 'forbidden', measuredAtMs: services.now() }); continue; }
           if (run.status === 'reserved') emitRun(services.update(run, { status: 'outcome_unknown', error: errorEnvelope(new ApiError('outcome_unknown', 'A reserved submission needs reconciliation after interruption.', false, { resourceIds: [run.id], runId: run.id }), services.id('req')).error }));
@@ -563,7 +563,7 @@ export function createRuntimeService(services: BackendServices): ManagedRuntimeS
       return reconciliation;
     },
     project: observe,
-    close() { stopped = true; clearInterval(timer); unlisten(); unconnected(); unlost(); finalizers.delete(services); },
+    close() { stopped = true; clearInterval(timer); unlisten(); unconnected(); unlost(); },
   };
   const unlisten = services.lemon.onEvent((event, payload) => { eventQueue = eventQueue.then(() => observe(event, payload)).catch(() => { services.store.setMetadata('runtimeProjectionFailure', { pending: true, measuredAtMs: services.now() }); }); });
   const unconnected = services.lemon.onConnected(() => { services.store.setMetadata('controllerEpoch', services.id('controller')); void service.reconcile().catch(() => { services.store.setMetadata('runtimeReconciliationFailure', { pending: true, measuredAtMs: services.now() }); }); });
@@ -574,7 +574,6 @@ export function createRuntimeService(services: BackendServices): ManagedRuntimeS
     }
   }) ?? (() => {});
   const timer = setInterval(() => { if (!stopped && services.lemon.connected) void service.reconcile().catch(() => { services.store.setMetadata('runtimeReconciliationFailure', { pending: true, measuredAtMs: services.now() }); }); }, 10_000);
-  finalizers.set(services, finalize);
   return service;
 }
 
@@ -674,28 +673,24 @@ async function stopInvocationResources(services: BackendServices, runs: P.Run[],
   for (const run of runs) {
     const bound = services.store.metadata<RuntimeMapping>(`runtimeRun:${run.id}`);
     if (!bound) { uncertain = true; continue; }
-    if (!bound.dispatched) {
+    const nativeAdmitted = services.store.metadata<{ allow: boolean }>(`nativeFollowupAdmissionReceipt:${bound.upstreamRunId}`)?.allow === true;
+    const cronId = run.routineRunId ? services.store.require<P.RoutineRun>('routineRuns', run.routineRunId).cronRunId : null;
+    const cronAdmitted = cronId ? services.store.metadata<{ allow: boolean }>(`cronAdmissionReceipt:${cronId}`)?.allow === true : false;
+    if (!bound.dispatched && !nativeAdmitted && !cronAdmitted) {
       const cancelled = services.update(run, { status: 'cancelled' as const, completedAtMs: services.now(), error: null });
       services.store.put('runs', cancelled); services.events.emit('run.upserted', cancelled, { conversationId: run.conversationId, botId: run.botId }); continue;
     }
     try {
       const receipt = upstream(z.object({ aborted: z.boolean() }).passthrough(), await services.lemon.call('chat.abort', { runId: bound.executionRunId, sessionKey: bound.sessionKey }, { mutation: true, resourceIds: [run.id, ...resourceIds] }));
       if (!receipt.aborted) { uncertain = true; continue; }
-      const result = upstream(finalSchema, await services.lemon.call('agent.wait', { runId: bound.executionRunId, timeoutMs: 1_000 }, { timeoutMs: 5_000 }));
-      const finalize = finalizers.get(services);
-      let projected = false;
-      if (finalize) {
-        try { await finalize(run.id, result); projected = true; }
-        catch (error) { if (!(error instanceof ApiError) || !['forbidden', 'not_found', 'policy_denied'].includes(error.code)) throw error; }
-      }
-      if (!projected) {
-        const status: P.Run['status'] = result.cancelled ? 'cancelled' : result.ok ? 'succeeded' : 'failed';
-
-        const closed = services.update(services.store.require<P.Run>('runs', run.id), { status, completedAtMs: services.now() });
-        services.store.put('runs', closed); services.events.emit('run.upserted', closed, { conversationId: run.conversationId, botId: run.botId });
-        for (const entry of services.store.list<P.TranscriptEntry>('entries', entry => entry.runId === run.id && entry.kind === 'message' && entry.streaming)) {
-          if (entry.kind === 'message') { const final = services.update(entry, { streaming: false }); services.store.put('entries', final); services.events.emit('entry.upserted', final, { conversationId: final.conversationId, botId: run.botId }); }
-        }
+      const result = upstream(finalSchema, await services.lemon.call('agent.wait', { runId: bound.executionRunId, timeoutMs: 1_000, includeAnswer: false }, { timeoutMs: 5_000 }));
+      // Stop authority sees status only. Normal initiating-context reconciliation owns full answer projection.
+      services.store.setMetadata(`runtimeTerminalProjectionPending:${run.id}`, true);
+      const status: P.Run['status'] = result.cancelled ? 'cancelled' : result.ok ? 'succeeded' : 'failed';
+      const closed = services.update(services.store.require<P.Run>('runs', run.id), { status, completedAtMs: services.now() });
+      services.store.put('runs', closed); services.events.emit('run.upserted', closed, { conversationId: run.conversationId, botId: run.botId });
+      for (const entry of services.store.list<P.TranscriptEntry>('entries', entry => entry.runId === run.id && entry.kind === 'message' && entry.streaming)) {
+        if (entry.kind === 'message') { const final = services.update(entry, { streaming: false }); services.store.put('entries', final); services.events.emit('entry.upserted', final, { conversationId: final.conversationId, botId: run.botId }); }
       }
     } catch { uncertain = true; }
   }

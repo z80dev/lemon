@@ -64,6 +64,8 @@ File paths remain destination-local. Worker CAS protects overwrite and move; mov
 
 `revokeConnectorInvocations` and `quiesceBotInvocations(services, actor, botId, {principalOnly?})` stop bounded owned-context IDs and require actual terminal proof before acknowledging restriction. `quiesceMachineInvocations` is the privileged host-detach boundary; it does not impersonate private run initiators. Owning connector/profile services must clear/acknowledge the corresponding pending fence only after their configuration floor is actually installed. Unknown outcomes remain fenced.
 
+Privileged stop helpers use the actual `agent.wait {includeAnswer:false}` projection: terminal status only, no private answer/usage/budget transfer to the cancellation authority. Admitted cron/native continuations are not treated as undispatched merely because their started event has not arrived. Terminal proof updates status and closes streaming without inventing a final answer; the original initiating context's separately authorized completion/reconciliation owns the full text. `runtimeTerminalProjectionPending:<runId>` retains that distinction until actual final projection.
+
 ## Verification handoff
 
 No gates are run by this slice. The injected socket/RPC tests exercise authentication failure, correlation, uncertain no-replay, private fanout, actual remote shell routing, spool/grace, session revocation, CAS/confirmation and invite identity. The integrating agent must run Bun type checking/tests after the sibling factories and required platform RPC extensions are merged, then verify a real compatible worker, placement/control, cron admission, file CAS and PTY lifecycle end to end.
