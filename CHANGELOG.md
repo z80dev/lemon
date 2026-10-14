@@ -234,6 +234,8 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - Factory-only native source profile/session identifiers, managed-context
   sentinels, connection generations and follow-up/floor callbacks no longer
   survive remote execution metadata encoding under atom or string/camel aliases.
+- Lemon Bot host management and probes require direct noninteractive native
+  destination process execution; PTY is reserved for user-facing terminals.
 
 ---
 

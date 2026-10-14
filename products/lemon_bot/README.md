@@ -108,6 +108,8 @@ OIDC additionally requires operator-only `oidcAllowedOrigins` and exact `oidcCli
 
 The strict private schema also types management-user grants, private export origins, reviewed OIDC group/subject mappings, separate public X credentials, provider-account spend sources, fixed channel application principals and managed-directory Owner override. These are operator-reviewed deployment inputs, not Owner-editable credential settings or an `operatorExtras` bag; see the [provider reference](providers.md) and API private-configuration sections for exact fields and real provider prerequisites.
 
+Automated host management, setup, network/egress application and read-only driver probes use the owning noninteractive native destination process RPC: immutable reviewed argv, destination cwd, bounded JSON stdin and verified operation/config receipts. They never use or fall back to PTY/shell-command interpolation. PTY remains only the explicit user-facing machine terminal; missing process capability is unavailable rather than a hidden alternate execution path.
+
 ## Attach and manage a machine
 
 1. Sign in as workspace owner/admin; open **Machines → Attach a machine**. Enter friendly name, durable unique nodeName, purpose/labels. Review that a trusted worker runs with its OS user's privileges and co-resident bots share files/logins.
