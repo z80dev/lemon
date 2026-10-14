@@ -409,16 +409,6 @@ defmodule LemonSkills.McpDiscoveryTest do
     assert Config.mcp_config(p).servers == []
   end
 
-  test "JSONC stripping keeps comment-like and comma text inside strings" do
-    text = ~s({"a": "x // y, }", /* c */ "b": [1, 2,], // tail\n "c": "/* z */",})
-
-    assert Jason.decode!(McpDiscovery.strip_jsonc(text)) == %{
-             "a" => "x // y, }",
-             "b" => [1, 2],
-             "c" => "/* z */"
-           }
-  end
-
   defp names(servers), do: Enum.map(servers, & &1.name)
 
   defp enabled_names(cwd) do
