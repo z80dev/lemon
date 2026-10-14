@@ -103,7 +103,7 @@ CodingAgent.Supervisor (one_for_one)
 | `CodingAgent.Session.CompactionManager` | Auto-compaction scheduling, tracked worker cleanup, overflow recovery state machine, and compaction result application |
 | `CodingAgent.Session.MessageSerialization` | Serializes/deserializes messages between session and agent core formats |
 | `CodingAgent.Session.ModelResolver` | Resolves model structs from string specs, maps, or settings; handles API key lookup via env vars and secrets with OAuth refresh |
-| `CodingAgent.Session.PromptComposer` | Composes the final system prompt by layering the stable base prompt and available-skill metadata, prompt templates, an explicit system prompt, and resource-loader instructions; turn relevance stays outside the prompt |
+| `CodingAgent.Session.PromptComposer` | Composes the final system prompt by layering the stable base prompt and available-skill metadata, prompt templates, an explicit system prompt, resource-loader instructions and rule sections; turn relevance stays outside the prompt |
 | `CodingAgent.Session.WasmBridge` | Bridges WASM sidecar tools into the session tool set |
 | `CodingAgent.SessionManager` | JSONL persistence engine with tree-structured entries (branching, compaction, labels), atomic writes, append-only incremental saves, and version migrations (v1-v3) |
 | `CodingAgent.SessionSupervisor` | DynamicSupervisor for session processes with health check and list capabilities |
@@ -369,7 +369,8 @@ Internal task runs infer a restrictive `tool_policy` and verification guardrail 
 | `CodingAgent.CompactionHooks` | Hooks for compaction lifecycle events |
 | `CodingAgent.Workspace` | Loads bootstrap files (AGENTS.md, SOUL.md, TOOLS.md, IDENTITY.md, USER.md, HEARTBEAT.md, BOOTSTRAP.md, MEMORY.md) from the assistant home at `~/.lemon/agent/workspace/` |
 | `CodingAgent.SystemPrompt` | Builds coding-first, tool-aware working rules, skills and memory guidance, and existing assistant-home context; omitted or empty bootstrap files are not injected |
-| `CodingAgent.ResourceLoader` | Loads global CLAUDE.md/AGENTS.md first, then ancestors root→cwd with directory scope and local precedence; physical-file aliases appear once. Also loads prompts, themes, and skills |
+| `CodingAgent.ResourceLoader` | Loads global then ancestor root→cwd instruction files (CLAUDE.md, AGENTS.md, GEMINI.md, CLAUDE.local.md, `.github/copilot-instructions.md` and other agents' config dirs) with directory scope, local precedence and `@path` imports; physical-file aliases appear once. Also loads prompts, themes, and skills |
+| `CodingAgent.Rules` | Discovers Cursor, Windsurf, Cline, GitHub Copilot, `.agent(s)` and `.lemon/rules` rule files; injects always-apply rules and lists the rest in a rulebook index the model reads on demand. See [instruction files and rules](../../docs/user-guide/context-files.md) |
 
 ### Extensions and WASM
 
@@ -552,7 +553,7 @@ details.
 | Module | Description |
 |--------|-------------|
 | `CodingAgent.Subagents` | Named Markdown personas from `.lemon/agents/*.md`, `~/.lemon/agents/*.md`, omp/Claude Code agent directories, and built-in `scout`, `reviewer`, `security-reviewer`, `sonic`, `task-executor` |
-| `CodingAgent.Commands` | Slash command discovery from `.lemon/command/*.md` and `~/.lemon/agent/command/*.md` with YAML frontmatter |
+| `CodingAgent.Commands` | File slash commands from Lemon, omp, `.agents`, Claude, Codex, Copilot and Gemini roots; the executor expands user-typed `/name args` (see [file slash commands](../../docs/user-guide/slash-commands.md)) |
 
 Create `.lemon/agents/architect.md` for a project persona (or use `~/.lemon/agents/architect.md` globally):
 

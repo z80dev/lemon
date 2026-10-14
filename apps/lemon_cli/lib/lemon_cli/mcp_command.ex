@@ -16,9 +16,17 @@ defmodule LemonCli.McpCommand do
   ]
 
   @spec run([String.t()]) :: 0 | 1 | 2
-  def run([action | args]) when action in ["add", "list", "remove", "test"] do
+  def run([action | args])
+      when action in ["add", "list", "remove", "test", "enable", "disable"] do
     {flags, command_args} = split_command_args(args)
-    switches = if action == "add", do: @common ++ @add, else: @common
+
+    switches =
+      case action do
+        "add" -> @common ++ @add
+        "list" -> @common ++ [all: :boolean]
+        _ -> @common
+      end
+
     {opts, positional, invalid} = OptionParser.parse(flags, strict: switches)
 
     with true <- invalid == [],
@@ -48,6 +56,10 @@ defmodule LemonCli.McpCommand do
 
   defp request(action, [name], _opts, nil) when action in ["remove", "test"] do
     if McpConfig.valid_name?(name), do: {:ok, name}, else: :error
+  end
+
+  defp request(action, [name], _opts, nil) when action in ["enable", "disable"] do
+    if McpConfig.valid_reference?(name), do: {:ok, name}, else: :error
   end
 
   defp request("add", [name], opts, command_args) do
@@ -107,8 +119,15 @@ defmodule LemonCli.McpCommand do
     with :ok <- McpConfig.remove(name, opts), do: {:ok, %{"status" => "removed"}}
   end
 
+  defp execute(action, name, opts) when action in ["enable", "disable"] do
+    with :ok <- McpConfig.set_enabled(name, action == "enable", opts),
+         do: {:ok, %{"status" => action <> "d"}}
+  end
+
   defp execute("list", _, opts) do
-    with {:ok, servers} <- McpConfig.list(opts), do: {:ok, %{"servers" => servers}}
+    with {:ok, servers} <- McpConfig.list(opts) do
+      if opts[:all], do: {:ok, %{"effective" => servers}}, else: {:ok, %{"servers" => servers}}
+    end
   end
 
   defp execute("test", name, opts) do
@@ -159,8 +178,34 @@ defmodule LemonCli.McpCommand do
     0
   end
 
+  defp render({:ok, %{"effective" => servers}}, false) do
+    if servers == [] do
+      IO.puts("No MCP servers configured or discovered for this scope.")
+    else
+      Enum.each(servers, fn server ->
+        state =
+          cond do
+            server["enabled"] -> "enabled"
+            server["override"] == "disabled" -> "disabled (override)"
+            true -> "disabled (source)"
+          end
+
+        IO.puts(
+          "#{server["name"] || "(unnamed)"}\t#{server["type"]}\tsource=#{server["provider"]}:#{server["scope"]}\t#{state}\tapproval=#{server["approval"]}\ttool overrides=#{server["tool_approval_count"]}\tenv=#{server["environment_count"]}\theaders=#{server["header_count"]}"
+        )
+      end)
+    end
+
+    0
+  end
+
   defp render({:ok, %{"status" => "connected", "tool_count" => count}}, false) do
     IO.puts("MCP connected: #{count} tool(s) discovered; no tools executed.")
+    0
+  end
+
+  defp render({:ok, %{"status" => status}}, false) when status in ["enabled", "disabled"] do
+    IO.puts("MCP server #{status} in this scope. New sessions read the updated configuration.")
     0
   end
 

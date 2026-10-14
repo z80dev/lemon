@@ -44,6 +44,83 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   `agent_models` overrides persona models.
   Child depth/allowlists survive extension reloads, resumed user forks can
   still delegate, and live `agent://` names override completed namesakes.
+- Context parity hardening: overlapping secret sources are redacted without
+  exposing credential fragments; malformed secret YAML does not echo values
+  into logs. Private plan tools restore placeholders and enforce interception
+  hooks without bypassing their directory boundary. Foreign-global MCP configs
+  still require opt-in when launched from home, enabling a server clears every
+  matching denylist entry, and hidden skills stay out of missing-key suggestions.
+  File commands preserve empty positional arguments, consume one-shot submission
+  modes, and expand on local steering/redirect without expanding internal or
+  named-destination prompts. Inline-code imports respect matching backtick runs
+  across lines.
+- Secret placeholders now protect friendly labels against every contextual
+  regex value in the current input and previously matched session values,
+  including overlap constituents, cached labels and forged token-shaped
+  prefixes. Regexes retain context across protected tokens, and self-overlapping
+  literal secrets redact their complete union without leaving a credential
+  suffix visible. Provider batches collect regex values and reserve original raw
+  tokens before emitting any message, block or nested argument, preventing
+  cross-field label leaks and accidental restoration of original token-shaped
+  text while retaining the existing system/image/metadata exclusions.
+- Skills with `hide: true` or `disable-model-invocation: true` frontmatter are
+  omitted from the model-visible skill listing and per-turn relevant-skill
+  hints, yet stay listed and loadable by name (`read_skill`, `skill://`,
+  `/skill:<name>`). See [skill manifest](docs/reference/skill-manifest-v2.md).
+- File slash commands from Claude Code (`.claude/commands`, nested `a:b`),
+  Codex (`.codex/prompts`), Copilot (`.github/prompts/*.prompt.md`), Gemini
+  (`.gemini/commands/*.toml`), omp and `.agents` roots, plus their user-global
+  dirs: `/name args` expands server-side for TUI, ACP and channel prompts, and
+  the TUI palette, `/help` and ACP command list show them. Skills also load from
+  `.codex/skills`, `.github/skills` and `~/.codex/skills`. See
+  [File slash commands](docs/user-guide/slash-commands.md).
+- **Secret obfuscation (opt-in).** With `[runtime.secret_obfuscation]
+  enabled = true`, native sessions replace secret-shaped environment values,
+  `secrets.yml` entries (global and project; plain or regex, obfuscate or
+  replace) and GitHub/GitLab/OpenAI/Anthropic-style tokens in provider-visible
+  messages with keyed `$$…$$` placeholders, and restore them in tool arguments
+  before a tool runs. Session history keeps the original text. See
+  [Secret obfuscation](docs/security/secret-obfuscation.md).
+- **MCP servers from other tools.** Lemon now also loads MCP servers declared in
+  omp, Claude Code, Codex, Gemini CLI, OpenCode, Cursor, Windsurf and VS Code
+  configs and root `mcp.json`/`.mcp.json` (project files by default; other
+  tools' `~/` files with `LEMON_MCP_EXTERNAL_USER_DISCOVERY=1`), below Lemon's
+  own files. `lemon mcp enable|disable NAME` toggles any server per project or
+  `--global`, and `lemon mcp list --all` shows the effective set with sources.
+  Turn the import off with `LEMON_MCP_EXTERNAL_DISCOVERY=0`. See
+  [Skills: Servers from other tools](docs/skills.md#servers-from-other-tools).
+- Native sessions load other agents' instruction files: `GEMINI.md`,
+  `CLAUDE.local.md`, `.gemini/`, `.agent(s)/`, `.omp/` and
+  `.github/copilot-instructions.md` per directory, plus Gemini, Codex, OpenCode,
+  `.agents` and Copilot globals, with `@path` imports expanded. Cursor,
+  Windsurf, Cline, GitHub Copilot, `.agents` and `.lemon/rules` rule files are
+  injected when always-apply and otherwise listed in a rulebook the model reads
+  on demand. See [Instruction files and rules](docs/user-guide/context-files.md).
+- Extension hooks can intercept tools: `on_tool_call` blocks a call or
+  replaces its arguments (a raising handler blocks), and `on_tool_result`
+  replaces a successful result's content/details. New `on_session_start` and
+  `on_session_shutdown` hooks observe session lifecycle. See
+  [Extensions: Intercepting tool calls](docs/extensions.md#intercepting-tool-calls).
+
+### Fixed
+
+- Extension result presentation hooks preserve authoritative checkpoint receipts
+  and affected paths. Content-only or custom display details cannot erase real
+  mutation provenance or fabricate receipts; omitted details retain the original.
+  Reserved diff aliases, resolved locations and mutation line numbers are protected
+  in both key forms; omitted snapshots and absent location lines remain absent.
+- Direct, deferred and WASM-host targets restore secrets before interception
+  under both disclosure profiles, including after reload. Private plan writes
+  retain their restricted file boundary, and repeated plan refreshes no longer
+  capture earlier wrapper generations.
+- Active plan-mode extension reload now binds private writes, edits and proposals
+  to newly loaded hooks immediately, preventing stale handlers from bypassing a
+  new mutation blocker.
+- OpenCode MCP discovery substitutes environment and file placeholders once in
+  decoded JSONC string values. Quotes, backslashes and multiline environment
+  values no longer invalidate the config and silently drop servers; inserted
+  text cannot trigger another interpolation or file import. File path resolution,
+  trimming and missing-value behavior are preserved.
 
 ---
 

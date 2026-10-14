@@ -231,6 +231,18 @@ defmodule LemonCore.Env.Declarations do
       apps: [:lemon_core]
     },
     %{
+      name: :lemon_secret_obfuscation_enabled,
+      env_var: "LEMON_SECRET_OBFUSCATION_ENABLED",
+      aliases: [],
+      type: :boolean,
+      default: false,
+      doc: "Whether secrets are replaced with placeholders in provider-visible session text.",
+      secret?: false,
+      required?: false,
+      area: :agent,
+      apps: [:lemon_core]
+    },
+    %{
       name: :lemon_shell_command_prefix,
       env_var: "LEMON_SHELL_COMMAND_PREFIX",
       aliases: [],

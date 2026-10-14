@@ -113,6 +113,92 @@ defmodule CodingAgent.ExtensionLifecycleDisclosureTest do
       assert_received {:beta_ran, "call-9", %{}}
     end
 
+    test "exposed and deferred catalog targets restore secrets before hooks across reload", %{
+      tmp_dir: tmp_dir
+    } do
+      parent = self()
+      test_pid = inspect(:erlang.pid_to_list(parent))
+
+      module =
+        create_extension_file(tmp_dir, "DisclosureSecretExt#{System.unique_integer([:positive])}",
+          hooks: """
+          [on_tool_call: fn
+            %{tool_name: "mcp_secret_writer", args: args} ->
+              send(:erlang.list_to_pid(#{test_pid}), {:target_hook, args["content"]})
+              {:replace_args, Map.update!(args, "content", &(&1 <> " /hook"))}
+            _ -> :ok
+          end]
+          """
+        )
+
+      on_exit(fn -> cleanup_module(module) end)
+      secret = "fixture-disclosure-secret"
+
+      obfuscator =
+        CodingAgent.Security.SecretObfuscator.build(
+          cwd: tmp_dir,
+          agent_dir: tmp_dir,
+          env: %{"API_KEY" => secret}
+        )
+
+      placeholder = CodingAgent.Security.SecretObfuscator.obfuscate(obfuscator, secret)
+      path = Path.join(tmp_dir, "restored.txt")
+
+      inventory = [
+        mcp_tool("mcp_secret_writer",
+          execute: fn _, args, _, _ ->
+            File.write!(path, args["content"])
+            %AgentToolResult{content: [%TextContent{text: "saved"}]}
+          end
+        )
+      ]
+
+      for disclosure <- [[enabled: false], [profile: :coding]] do
+        opts = [
+          cwd: tmp_dir,
+          settings_manager: settings(),
+          secret_obfuscator: obfuscator,
+          tool_opts: [mcp_tools: inventory, tool_disclosure: disclosure]
+        ]
+
+        initial = ExtensionLifecycle.initialize(opts)
+
+        reloaded =
+          ExtensionLifecycle.reload(
+            Keyword.put(opts, :previous_status_report, initial.extension_status_report)
+          )
+
+        for lifecycle <- [initial, reloaded] do
+          args = %{"content" => placeholder}
+          target = lifecycle.tool_catalog["mcp_secret_writer"].tool
+          assert %AgentToolResult{is_error: false} = target.execute.("host", args, nil, nil)
+          assert_receive {:target_hook, ^secret}
+          refute_received {:target_hook, _}
+          assert File.read!(path) == secret <> " /hook"
+
+          if lifecycle.tool_disclosure.active do
+            refute find(lifecycle.tools, "mcp_secret_writer")
+            invoke = find(lifecycle.tools, "tool_invoke")
+
+            assert %AgentToolResult{is_error: false} =
+                     invoke.execute.(
+                       "bridge",
+                       %{"name" => "mcp_secret_writer", "args" => args},
+                       nil,
+                       nil
+                     )
+          else
+            exposed = find(lifecycle.tools, "mcp_secret_writer")
+            assert %AgentToolResult{is_error: false} = exposed.execute.("direct", args, nil, nil)
+          end
+
+          assert_receive {:target_hook, ^secret}
+          refute_received {:target_hook, _}
+          assert File.read!(path) == secret <> " /hook"
+        end
+      end
+    end
+
     test "extension tools are hidden while builtins stay disclosed", %{tmp_dir: tmp_dir} do
       module =
         create_extension_file(tmp_dir, "DisclosureExt#{System.unique_integer([:positive])}",
@@ -538,6 +624,7 @@ defmodule CodingAgent.ExtensionLifecycleDisclosureTest do
 
   defp create_extension_file(tmp_dir, module_name, opts) do
     tools = Keyword.get(opts, :tools, "[]")
+    hooks = Keyword.get(opts, :hooks, "[]")
 
     extension_code = """
     defmodule #{module_name} do
@@ -551,6 +638,9 @@ defmodule CodingAgent.ExtensionLifecycleDisclosureTest do
 
       @impl true
       def tools(_cwd), do: #{tools}
+
+      @impl true
+      def hooks, do: #{hooks}
     end
     """
 

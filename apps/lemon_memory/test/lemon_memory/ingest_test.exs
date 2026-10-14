@@ -48,8 +48,6 @@ defmodule LemonMemory.IngestTest do
 
       # 3 ingests within the TTL → exactly 1 config load
       assert :counters.get(counter, 1) == 1
-
-      stop_if_alive(pid)
     end
 
     test "config is reloaded once the TTL has elapsed", %{tmp_dir: tmp_dir} do
@@ -66,8 +64,6 @@ defmodule LemonMemory.IngestTest do
       :sys.get_state(pid)
 
       assert :counters.get(counter, 1) == 3
-
-      stop_if_alive(pid)
     end
   end
 
@@ -89,8 +85,6 @@ defmodule LemonMemory.IngestTest do
                LemonMemory.Store.get_by_session(memory_store, summary.session_key, limit: 10)
 
       refute_receive %Event{type: :routing_feedback}, 50
-
-      stop_if_alive(pid)
     end
 
     test "session_search on: the finalized run is written to the store", %{tmp_dir: tmp_dir} do
@@ -107,8 +101,6 @@ defmodule LemonMemory.IngestTest do
                LemonMemory.Store.get_by_session(memory_store, summary.session_key, limit: 10)
 
       assert doc.run_id == run_id
-
-      stop_if_alive(pid)
     end
 
     test "routing_feedback on: feedback is broadcast and config still loads once", %{
@@ -129,8 +121,6 @@ defmodule LemonMemory.IngestTest do
       assert payload.fingerprint_key =~ "code|-|-|anthropic|claude-sonnet-4-6"
       assert payload.outcome == :success
       assert is_nil(payload.duration_ms) or is_integer(payload.duration_ms)
-
-      stop_if_alive(pid)
     end
   end
 
@@ -152,8 +142,6 @@ defmodule LemonMemory.IngestTest do
       # Feature flags were still resolved (one cached config load).
       assert :counters.get(counter, 1) == 1
       assert Process.alive?(pid)
-
-      stop_if_alive(pid)
     end
 
     test "a malformed summary still hits the isolated failure path when a feature is enabled",
@@ -169,8 +157,6 @@ defmodule LemonMemory.IngestTest do
       assert_receive {:ingest_failure, meta}
       assert meta.run_id == "run_bad_summary"
       assert Process.alive?(pid)
-
-      stop_if_alive(pid)
     end
   end
 
@@ -190,8 +176,6 @@ defmodule LemonMemory.IngestTest do
 
       assert [] =
                LemonMemory.Store.get_by_session(memory_store, summary.session_key, limit: 10)
-
-      stop_if_alive(pid)
     end
 
     test "does not store runs whose answer summary contains secret-looking content", %{
@@ -213,8 +197,6 @@ defmodule LemonMemory.IngestTest do
 
       assert [] =
                LemonMemory.Store.get_by_session(memory_store, summary.session_key, limit: 10)
-
-      stop_if_alive(pid)
     end
   end
 
@@ -222,24 +204,32 @@ defmodule LemonMemory.IngestTest do
     memory_path = Path.join(tmp_dir, "memory_#{System.unique_integer([:positive])}")
     memory_name = :"memory_store_#{System.unique_integer([:positive])}"
 
-    {:ok, memory_store} = LemonMemory.Store.start_link(path: memory_path, name: memory_name)
-
-    {:ok, pid} =
-      GenServer.start_link(
-        Ingest,
-        [
-          config_loader: fn ->
-            :counters.add(counter, 1, 1)
-            %{features: build_feature_flags(features)}
-          end,
-          memory_store: memory_store
-        ] ++ extra_opts
+    # The test supervisor stops children in reverse order: ingest before its store.
+    memory_store =
+      start_supervised!(
+        Supervisor.child_spec(
+          {LemonMemory.Store, path: memory_path, name: memory_name},
+          restart: :temporary
+        )
       )
 
-    on_exit(fn ->
-      stop_if_alive(pid)
-      stop_if_alive(memory_store)
-    end)
+    pid =
+      start_supervised!(%{
+        id: Ingest,
+        start:
+          {GenServer, :start_link,
+           [
+             Ingest,
+             [
+               config_loader: fn ->
+                 :counters.add(counter, 1, 1)
+                 %{features: build_feature_flags(features)}
+               end,
+               memory_store: memory_store
+             ] ++ extra_opts
+           ]},
+        restart: :temporary
+      })
 
     {:ok, pid, memory_store}
   end
@@ -269,8 +259,4 @@ defmodule LemonMemory.IngestTest do
 
   defp rollout_state(true), do: :"default-on"
   defp rollout_state(false), do: :off
-
-  defp stop_if_alive(pid) when is_pid(pid) do
-    if Process.alive?(pid), do: GenServer.stop(pid)
-  end
 end

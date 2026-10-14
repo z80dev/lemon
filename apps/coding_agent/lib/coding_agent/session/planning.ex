@@ -21,6 +21,8 @@ defmodule CodingAgent.Session.Planning do
   approved-plan reference, and their artifact path is the existing plan file.
   """
 
+  alias CodingAgent.Extensions.ToolHooks
+  alias CodingAgent.Security.SecretObfuscator
   alias CodingAgent.Messages.CustomMessage
   alias CodingAgent.SessionManager
   alias CodingAgent.SessionManager.SessionEntry
@@ -131,8 +133,8 @@ defmodule CodingAgent.Session.Planning do
   Effective tools for `session`; also syncs the shared gate.
 
   `context` (see `runtime_context/2`) holds `:gate`, `:cwd`, `:session_pid`,
-  `:session_id`, `:run_id`, `:session_key`, `:agent_id` and an optional
-  `:approval_request_fun`.
+  `:session_id`, `:run_id`, `:session_key`, `:agent_id`, `:hooks`,
+  `:secret_obfuscator` and an optional `:approval_request_fun`.
   """
   def tools(base_tools, session, context) do
     plan = stored(session)
@@ -201,6 +203,15 @@ defmodule CodingAgent.Session.Planning do
       run_id: state.run_id,
       session_key: state.session_key,
       agent_id: state.agent_id,
+      hooks: Map.get(state, :hooks, []),
+      secret_obfuscator: Map.get(state, :secret_obfuscator),
+      plan_write_tools:
+        for(
+          %AgentTool{name: name} = tool <- Map.get(state, :tools) || [],
+          name in @plan_write_tools,
+          into: %{},
+          do: {name, tool}
+        ),
       approval_request_fun: (state.approval_context || %{})[:approval_request_fun]
     }
   end
@@ -265,7 +276,17 @@ defmodule CodingAgent.Session.Planning do
   # ── Plan-mode tools ──────────────────────────────────────────────────────
 
   defp plan_tools(base_tools, context) do
+    # Runtime host lookup projects the current write/edit guards. Do not retain
+    # those prior-generation closures inside newly constructed private tools.
+    context = Map.delete(context, :plan_write_tools)
     names = MapSet.new(base_tools, & &1.name)
+
+    private_writes =
+      Map.new(@plan_write_tools, fn name ->
+        {name, intercept_private_tool(plan_only_tool(name, context), context)}
+      end)
+
+    context = Map.put(context, :plan_write_tools, private_writes)
 
     guarded = Enum.map(base_tools, &guard(&1, context))
 
@@ -273,10 +294,10 @@ defmodule CodingAgent.Session.Planning do
     # file tools; these instances only ever write inside the plan directory.
     plan_only =
       for name <- @plan_write_tools, not MapSet.member?(names, name) do
-        plan_only_tool(name, context)
+        Map.fetch!(private_writes, name)
       end
 
-    guarded ++ plan_only ++ [propose_tool(context)]
+    guarded ++ plan_only ++ [intercept_private_tool(propose_tool(context), context)]
   end
 
   defp guard(%AgentTool{name: name} = tool, _context) when name in @read_only_tools, do: tool
@@ -285,15 +306,24 @@ defmodule CodingAgent.Session.Planning do
   # name: a bridged read stays allowed, a bridged mutation is blocked under its
   # real name.
   defp guard(%AgentTool{name: "tool_invoke", execute: execute} = tool, context) do
+    private_writes = Map.get(context, :plan_write_tools, %{})
+
     wrapped = fn id, params, signal, on_update ->
       target = bridge_target(params)
       args = if is_map(params), do: Map.get(params, "args", %{}), else: %{}
 
       cond do
-        not planning?(context.gate) -> execute.(id, params, signal, on_update)
-        target in @read_only_tools -> execute.(id, params, signal, on_update)
-        plan_write?(target, args, context) -> plan_write(target, id, args, signal, context)
-        true -> blocked(target || "tool_invoke", context)
+        not planning?(context.gate) ->
+          execute.(id, params, signal, on_update)
+
+        target in @read_only_tools ->
+          execute.(id, params, signal, on_update)
+
+        target in @plan_write_tools and Map.has_key?(private_writes, target) ->
+          private_writes[target].execute.(id, args, signal, on_update)
+
+        true ->
+          blocked(target || "tool_invoke", context)
       end
     end
 
@@ -301,11 +331,18 @@ defmodule CodingAgent.Session.Planning do
   end
 
   defp guard(%AgentTool{name: name, execute: execute} = tool, context) do
+    private_writes = Map.get(context, :plan_write_tools, %{})
+
     wrapped = fn id, params, signal, on_update ->
       cond do
-        not planning?(context.gate) -> execute.(id, params, signal, on_update)
-        plan_write?(name, params, context) -> plan_write(name, id, params, signal, context)
-        true -> blocked(name, context)
+        not planning?(context.gate) ->
+          execute.(id, params, signal, on_update)
+
+        name in @plan_write_tools and Map.has_key?(private_writes, name) ->
+          private_writes[name].execute.(id, params, signal, on_update)
+
+        true ->
+          blocked(name, context)
       end
     end
 
@@ -326,6 +363,15 @@ defmodule CodingAgent.Session.Planning do
     end
 
     %{tool | execute: execute}
+  end
+
+  defp intercept_private_tool(tool, context) do
+    [wrapped] =
+      [tool]
+      |> ToolHooks.wrap_tools(Map.get(context, :hooks, []), context)
+      |> SecretObfuscator.wrap_tools(Map.get(context, :secret_obfuscator))
+
+    wrapped
   end
 
   defp planning?(gate), do: :atomics.get(gate, 1) == 1

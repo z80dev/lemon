@@ -7,13 +7,14 @@ defmodule LemonSkills.CompatibleDiscoveryTest do
   alias LemonSkills.Tools.ReadSkill
 
   @moduletag :tmp_dir
-  @env_keys ~w(LEMON_AGENT_DIR LEMON_HARNESS_SKILLS_DIR LEMON_OMP_SKILLS_DIR LEMON_CLAUDE_SKILLS_DIR)
+  @env_keys ~w(LEMON_AGENT_DIR LEMON_HARNESS_SKILLS_DIR LEMON_OMP_SKILLS_DIR LEMON_CLAUDE_SKILLS_DIR LEMON_CODEX_SKILLS_DIR)
   @app_keys [
     {:lemon_skills, :agent_dir},
     {:coding_agent, :agent_dir},
     {:lemon_skills, :harness_global_skills_dir},
     {:lemon_skills, :omp_global_skills_dir},
-    {:lemon_skills, :claude_global_skills_dir}
+    {:lemon_skills, :claude_global_skills_dir},
+    {:lemon_skills, :codex_global_skills_dir}
   ]
 
   setup %{tmp_dir: tmp_dir} do
@@ -29,13 +30,15 @@ defmodule LemonSkills.CompatibleDiscoveryTest do
       lemon: Path.join(tmp_dir, "agent/skill"),
       agents: Path.join(tmp_dir, "agents"),
       omp: Path.join(tmp_dir, "omp"),
-      claude: Path.join(tmp_dir, "claude")
+      claude: Path.join(tmp_dir, "claude"),
+      codex: Path.join(tmp_dir, "codex")
     }
 
     System.put_env("LEMON_AGENT_DIR", Path.dirname(roots.lemon))
     System.put_env("LEMON_HARNESS_SKILLS_DIR", roots.agents)
     System.put_env("LEMON_OMP_SKILLS_DIR", roots.omp)
     System.put_env("LEMON_CLAUDE_SKILLS_DIR", roots.claude)
+    System.put_env("LEMON_CODEX_SKILLS_DIR", roots.codex)
     repo = Path.join(tmp_dir, "repo")
     cwd = Path.join(repo, "packages/app")
     File.mkdir_p!(cwd)
@@ -60,10 +63,22 @@ defmodule LemonSkills.CompatibleDiscoveryTest do
   end
 
   test "global defaults and explicit overrides preserve isolation", %{roots: roots} do
-    assert Config.global_skills_dirs() == [roots.lemon, roots.agents, roots.omp, roots.claude]
+    assert Config.global_skills_dirs() == [
+             roots.lemon,
+             roots.agents,
+             roots.omp,
+             roots.claude,
+             roots.codex
+           ]
+
     System.delete_env("LEMON_OMP_SKILLS_DIR")
     System.delete_env("LEMON_CLAUDE_SKILLS_DIR")
+    System.delete_env("LEMON_CODEX_SKILLS_DIR")
     assert Config.global_skills_dirs() == [roots.lemon, roots.agents]
+
+    Application.put_env(:lemon_skills, :codex_global_skills_dir, roots.codex)
+    assert Config.global_skills_dirs() == [roots.lemon, roots.agents, roots.codex]
+    Application.delete_env(:lemon_skills, :codex_global_skills_dir)
 
     Application.put_env(:lemon_skills, :omp_global_skills_dir, roots.omp)
     assert Config.global_skills_dirs() == [roots.lemon, roots.agents, roots.omp]
@@ -76,17 +91,24 @@ defmodule LemonSkills.CompatibleDiscoveryTest do
 
     assert Config.global_skills_dirs() ==
              Enum.map(
-               [".lemon/agent/skill", ".agents/skills", ".omp/agent/skills", ".claude/skills"],
+               [
+                 ".lemon/agent/skill",
+                 ".agents/skills",
+                 ".omp/agent/skills",
+                 ".claude/skills",
+                 ".codex/skills"
+               ],
                &Path.join(home, &1)
              )
 
     Application.put_env(:coding_agent, :agent_dir, Path.dirname(roots.lemon))
     refute Path.join(home, ".claude/skills") in Config.global_skills_dirs()
     refute Path.join(home, ".omp/agent/skills") in Config.global_skills_dirs()
+    refute Path.join(home, ".codex/skills") in Config.global_skills_dirs()
   end
 
-  test "global collisions use Lemon, harness, OMP, then Claude", %{roots: roots} do
-    ordered = [roots.lemon, roots.agents, roots.omp, roots.claude]
+  test "global collisions use Lemon, harness, OMP, Claude, then Codex", %{roots: roots} do
+    ordered = [roots.lemon, roots.agents, roots.omp, roots.claude, roots.codex]
     Enum.each(ordered, &write_skill(&1, "shared", "Shared display name", "body"))
 
     Enum.each(ordered, fn root ->
@@ -112,9 +134,13 @@ defmodule LemonSkills.CompatibleDiscoveryTest do
       Path.join(cwd, ".agents/skills"),
       Path.join(cwd, ".omp/skills"),
       Path.join(cwd, ".claude/skills"),
+      Path.join(cwd, ".codex/skills"),
+      Path.join(cwd, ".github/skills"),
       Path.join(repo, ".agents/skills"),
       Path.join(repo, ".omp/skills"),
-      Path.join(repo, ".claude/skills")
+      Path.join(repo, ".claude/skills"),
+      Path.join(repo, ".codex/skills"),
+      Path.join(repo, ".github/skills")
     ]
 
     Enum.each(ordered, &write_skill(&1, "shared", "Shared", "project"))
