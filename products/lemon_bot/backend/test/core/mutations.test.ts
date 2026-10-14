@@ -40,6 +40,19 @@ describe('durable product mutation boundaries',()=>{
     await expect(restarted.execute(context(body),()=>{throw new Error('must not redispatch');})).rejects.toMatchObject({code:'outcome_unknown',retrySafe:false,details:{resourceIds:['run_fixed']}});
     completion.reject(new ApiError('outcome_unknown','Dispatch acknowledgment was lost.',false,{runId:'run_fixed'}));await expect(work).rejects.toMatchObject({code:'outcome_unknown'});store.close();
   });
+  test('reserves already allocated identities before entering an external operation',async()=>{
+    const {services,store,key,context}=fixture();const body={clientNonce:'preallocated_intent_nonce_001'};const call=context(body);call.nonceResourceIds=['run_reserved_before_dispatch'];
+    const completion=Promise.withResolvers<unknown>();const work=services.mutations.execute(call,()=>completion.promise);
+    await Promise.resolve();
+    const restarted=createMutationService(services,key);
+    await expect(restarted.execute(context(body),()=>{throw new Error('must not dispatch reserved work');})).rejects.toMatchObject({code:'outcome_unknown',retrySafe:false,details:{resourceIds:['run_reserved_before_dispatch']}});
+    completion.reject(new ApiError('outcome_unknown','Native dispatch outcome is unknown.',false));await expect(work).rejects.toMatchObject({code:'outcome_unknown'});store.close();
+  });
+  test('an undefined operation result is not acknowledged as successful work',async()=>{
+    const {services,store,context}=fixture();const body={clientNonce:'missing_receipt_nonce_001'};
+    await expect(services.mutations.execute(context(body),()=>undefined)).rejects.toMatchObject({code:'internal_error'});
+    store.close();
+  });
   test('confirmation binds target revision, scope, principal and is single use',()=>{
     const {services,store}=fixture();const target={id:'bot_fixed',revision:3};const binding={destination:'machine_two',memoryIds:['memory_one']};
     const preview=services.mutations.preview(user,target,'move','Finance',['Move persona'],[],binding);
