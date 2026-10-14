@@ -382,7 +382,7 @@ export interface ChannelPrincipalLink extends Resource { channelBindingId: ID; e
 export interface ChannelLinkCreate extends Mutation { channelBindingId: ID; externalUserId: string; verificationCode: string }
 export interface ChannelLinkStart extends Mutation { channelBindingId: ID }
 export interface ChannelLinkFlow extends Resource { userId: ID; channelBindingId: ID; state: 'issued' | 'awaiting_external' | 'verified' | 'completed' | 'expired' | 'cancelled'; linkCode: string | null; instructions: string; externalUserId: string | null; externalDisplayName: string | null; verificationCode: string | null; expiresAtMs: TimestampMs }
-export interface EmailAccount extends Resource { userId: ID; provider: string; address: string; immutableAddress: boolean; state: 'pending' | 'active' | 'disabled' | 'retired'; channelBindingId: ID | null }
+export interface EmailAccount extends Resource { userId: ID; provider: string; address: string; immutableAddress: boolean; state: 'pending' | 'active' | 'disabled' | 'retired'; channelBindingId: ID | null; indexingDelayed?: boolean | null; indexingMeasuredAtMs?: TimestampMs | null }
 export interface EmailAddressCheck extends Mutation { providerId: string; localPart: string }
 export interface EmailAddressAvailability { providerId: string; address: string; available: boolean; reason: string | null; immutable: boolean }
 export interface EmailAddressClaim extends Mutation { providerId: string; localPart: string; approvalId: ID }
