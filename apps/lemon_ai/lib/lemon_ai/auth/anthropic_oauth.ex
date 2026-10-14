@@ -66,6 +66,7 @@ defmodule LemonAi.Auth.AnthropicOAuth do
   @type resolve_opt ::
           {:persist_secret, (String.t(), String.t() -> any())}
           | {:reload_secret, (String.t() -> {:ok, String.t()} | term())}
+          | {:force_refresh, boolean()}
 
   @doc "OAuth scopes requested at sign-in."
   @spec scopes() :: [String.t()]
@@ -285,8 +286,9 @@ defmodule LemonAi.Auth.AnthropicOAuth do
       {:ok, secret} ->
         reload = fn -> reload_stored_secret(secret_name, secret, opts) end
         persist = fn refreshed -> persist_stored_secret(secret_name, refreshed, opts) end
+        force? = Keyword.get(opts, :force_refresh, false) == true
 
-        with {:ok, fresh} <- ensure_fresh(secret_name, secret, reload, persist) do
+        with {:ok, fresh} <- ensure_fresh(secret_name, secret, reload, persist, force?) do
           access_token(fresh)
         end
 
@@ -471,21 +473,44 @@ defmodule LemonAi.Auth.AnthropicOAuth do
   # `reload` returns the latest stored secret map (or an error), `persist`
   # stores a refreshed map. Both run under the lock so a queued caller sees
   # what the previous holder stored.
-  defp ensure_fresh(lock_name, secret, reload, persist) do
-    if refresh_due?(secret) do
+  #
+  # A forced refresh (the provider rejected the access token) refreshes only
+  # when the stored token is still the rejected one; a concurrent caller that
+  # already rotated it wins. A forced refresh never falls back to the rejected
+  # token.
+  defp ensure_fresh(lock_name, secret, reload, persist, force?) do
+    if force? or refresh_due?(secret) do
       :global.trans(
         {{__MODULE__, :refresh, lock_name}, self()},
         fn ->
           with {:ok, latest} <- reload.() do
-            if refresh_due?(latest),
-              do: refresh_and_persist(latest, persist),
-              else: usable(latest)
+            cond do
+              force? and latest["access_token"] == secret["access_token"] ->
+                force_refresh_and_persist(latest, persist)
+
+              refresh_due?(latest) ->
+                refresh_and_persist(latest, persist)
+
+              true ->
+                usable(latest)
+            end
           end
         end,
         [node()]
       )
     else
       usable(secret)
+    end
+  end
+
+  defp force_refresh_and_persist(secret, persist) do
+    if non_empty_binary(secret["refresh_token"]) do
+      with {:ok, refreshed} <- refresh_secret(secret),
+           :ok <- persist.(refreshed) do
+        {:ok, refreshed}
+      end
+    else
+      {:error, :not_refreshable}
     end
   end
 
@@ -698,7 +723,8 @@ defmodule LemonAi.Auth.AnthropicOAuth do
              @claude_code_file_lock,
              secret,
              &read_claude_code_credentials/0,
-             &persist_claude_code_credentials/1
+             &persist_claude_code_credentials/1,
+             false
            ) do
       fresh
     else
