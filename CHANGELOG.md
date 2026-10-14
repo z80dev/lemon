@@ -52,6 +52,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   `cron.admission.set`; callback credentials remain absent from public cron
   projections. Origins are explicitly allowlisted, with HTTPS except literal
   loopback HTTP for local development.
+- Authenticated cron admission receipts can project a Team routine creator's
+  current invocation context, destination-only connector secret references, and
+  restrictive native tool policy. Explicit empty connectors suppress profile
+  credentials; profile/tool floors remain enforced, without storing the private
+  projection in cron job metadata, runs, events, or audits.
 
 ### Fixed
 

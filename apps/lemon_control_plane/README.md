@@ -208,7 +208,44 @@ records `denied`; any other reply, unavailable credential, timeout/disconnect,
 or removed origin trust records `admission_unavailable`. Both are failed cron
 run outcomes (also `meta.admission_outcome`), with no router submission and no
 automatic retry. The next ordinary occurrence rechecks admission. The callback
-must only read policy; it must not grant credentials or launch work itself.
+must only read policy and project already-authorized invocation configuration;
+it must not provision credentials or launch work itself.
+
+For shared/Team profiles, an approved response can additionally contain exactly
+one `invocation` object:
+
+```text
+{allow: true, context: <exact echoed request object>,
+ invocation: {invocationContextKey, invocationMcpServers, invocationToolPolicy}}
+```
+
+All three invocation fields are required. Unknown top-level, invocation, server,
+or policy fields fail closed. `invocationContextKey` is 1–128 ASCII characters
+matching `[A-Za-z0-9][A-Za-z0-9_.:-]*` and binds the creator's current context.
+The server list uses canonical `chat.send` MCP definitions (`name`, `url`,
+`headers`, optional `enabledTools`, `allowedOrigins`, `approvedPrivateOrigins`).
+It replaces the whole profile connector list; explicit `[]` attaches none,
+never the profile owner's default credentials. Header values must be exact
+`${LEMON_SECRET:NAME}` references, or `Bearer ${LEMON_SECRET:NAME}` for
+Authorization. No literal tokens or controller-side secret resolution occur.
+URLs forbid userinfo, queries, fragments, and interpolation; HTTPS is required
+except literal-loopback HTTP with the exact origin present in both
+`allowedOrigins` and `approvedPrivateOrigins`.
+
+`invocationToolPolicy` is the canonical native policy map (`profile`, `allow`,
+`deny`, `blocked_tools`, `require_approval`, `approvals`, `no_reply`). It is
+restrictively intersected with the cron tool block and the current profile
+floor: allowlists intersect, denials/approval gates union, and an `always`
+approval cannot be replaced with `never`. Unsupported policy shapes do not
+become permissive defaults.
+
+The projection is consumed only after an authenticated allow receipt with an
+exact context echo. It remains a private worker argument, not job metadata,
+cron run history, an audit field, or a grant from prompt/client text. The
+destination request receives the context key and secret-reference-bearing
+connector definitions through the normal owning profile/node path.
+The two-field response remains valid for existing single-principal jobs.
+
 
 Admission configuration is durable only in the private owning job record.
 Job events, management projections, audit records, run history, and router
