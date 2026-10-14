@@ -82,22 +82,139 @@ defmodule CodingAgent.ProcessStore do
         attrs
       )
 
-    insert_record(process_id, record, [])
+    transaction(fn ->
+      record =
+        case :ets.lookup(@table, process_id) do
+          [{^process_id, %{launch_fingerprint: fingerprint} = launch, _}]
+          when is_binary(fingerprint) ->
+            # Attaching metadata must not erase or race the serialized claim.
+            Map.merge(
+              record,
+              Map.take(launch, [
+                :owner,
+                :launch_fingerprint,
+                :launch_classification,
+                :launch_reason,
+                :capacity_held,
+                :termination_confirmed,
+                :admission_deadline_ms,
+                :inserted_at,
+                :status
+              ])
+            )
+
+          _ ->
+            record
+        end
+
+      if is_binary(Map.get(record, :launch_fingerprint)) do
+        true = dets_open?()
+        :ok = :dets.insert(@dets_table, {process_id, record, []})
+        :ok = :dets.sync(@dets_table)
+        :ets.insert(@table, {process_id, record, []})
+      else
+        insert_record(process_id, record, [])
+      end
+    end)
+
     process_id
+  end
+
+  @doc """
+  Register a logical launch before admission. Only the first registration may
+  submit work; subsequent registrations reconcile the same identity.
+  """
+  def register_launch(id, owner, fingerprint, deadline, owner_pid) do
+    GenServer.call(
+      ProcessStoreServer,
+      {:register_launch, id, owner, fingerprint, deadline, owner_pid}
+    )
+  end
+
+  @doc false
+  def claim_launch(id, owner, fingerprint) do
+    GenServer.call(ProcessStoreServer, {:claim_launch, id, owner, fingerprint})
+  end
+
+  @doc false
+  def classify_launch(id, classification, reason \\ nil) do
+    GenServer.call(ProcessStoreServer, {:classify_launch, id, classification, reason})
+  end
+
+  @doc false
+  def cancel_launch(id, owner) do
+    GenServer.call(ProcessStoreServer, {:cancel_launch, id, owner})
+  end
+
+  @doc false
+  def yield_launch(id, owner), do: GenServer.call(ProcessStoreServer, {:yield_launch, id, owner})
+
+  @doc false
+  def yielded_launch?(id), do: GenServer.call(ProcessStoreServer, {:yielded_launch, id})
+
+  @doc false
+  def confirm_termination(id, cause \\ :workload_empty) do
+    GenServer.call(ProcessStoreServer, {:confirm_termination, id, cause})
+  end
+
+  @doc false
+  def admission_counts, do: GenServer.call(ProcessStoreServer, :background_counts)
+
+  @doc false
+  def capacity_available?, do: GenServer.call(ProcessStoreServer, :background_capacity_available)
+
+  @doc false
+  def subscribe_capacity(pid) do
+    GenServer.call(ProcessStoreServer, {:subscribe_capacity, pid})
+  end
+
+  @doc """
+  Redacted acceptance provenance. Unknown is not a confirmed rejection and must
+  never be retried with a fresh identity automatically.
+  """
+  def launch_receipt(id, owner) do
+    GenServer.call(ProcessStoreServer, {:launch_receipt, id, owner})
+  end
+
+  @doc false
+  def receipt(record) do
+    %{
+      identity: record.id,
+      classification: Map.get(record, :launch_classification, :outcome_unknown),
+      reason: Map.get(record, :launch_reason),
+      status: Map.get(record, :launch_terminal_status, Map.get(record, :status))
+    }
   end
 
   @doc """
   Mark a process as running with its OS PID.
   """
-  @spec mark_running(process_id(), integer() | nil) :: :ok
-  def mark_running(process_id, os_pid)
+  @spec mark_running(process_id(), integer() | nil, map() | nil) :: :ok
+  def mark_running(process_id, os_pid, workload_identity \\ nil)
       when is_binary(process_id) and (is_integer(os_pid) or is_nil(os_pid)) do
-    update_record(process_id, fn record ->
-      record
-      |> Map.put(:status, :running)
-      |> Map.put(:os_pid, os_pid)
-      |> Map.put(:started_at, System.system_time(:second))
-    end)
+    update_record(
+      process_id,
+      fn record ->
+        record
+        |> Map.put(:status, :running)
+        |> Map.put(:os_pid, os_pid)
+        |> Map.put(:workload_identity, workload_identity)
+        |> Map.put(:root_exited, false)
+        |> Map.put(:started_at, System.system_time(:second))
+      end,
+      true
+    )
+  end
+
+  @doc false
+  def update_workload_identity(process_id, identity, root_exited) do
+    update_record(
+      process_id,
+      fn record ->
+        Map.merge(record, %{workload_identity: identity, root_exited: root_exited})
+      end,
+      true
+    )
   end
 
   @doc """
@@ -127,6 +244,9 @@ defmodule CodingAgent.ProcessStore do
       when is_binary(process_id) and is_list(lines) and is_list(opts) do
     transaction(fn ->
       case :ets.lookup(@table, process_id) do
+        [{^process_id, %{status: :cleared}, _}] ->
+          :ok
+
         [{^process_id, record, logs}] ->
           logs = Enum.reverse(lines, logs) |> Enum.take(Keyword.get(opts, :keep, @max_log_lines))
           total = Map.get(record, :total_lines, 0) + length(lines)
@@ -218,6 +338,13 @@ defmodule CodingAgent.ProcessStore do
     end)
   end
 
+  @doc false
+  def mark_unknown(process_id) do
+    update_record(process_id, fn record ->
+      Map.merge(record, %{status: :lost, launch_classification: :outcome_unknown})
+    end)
+  end
+
   @doc """
   Mark a process as failed with an error.
   """
@@ -239,6 +366,7 @@ defmodule CodingAgent.ProcessStore do
     ensure_table()
 
     case :ets.lookup(@table, process_id) do
+      [{^process_id, %{status: :cleared}, _}] -> {:error, :not_found}
       [{^process_id, record, logs}] -> {:ok, record, Enum.reverse(logs)}
       _ -> {:error, :not_found}
     end
@@ -253,7 +381,8 @@ defmodule CodingAgent.ProcessStore do
 
     :ets.foldl(
       fn {process_id, record, _logs}, acc ->
-        if status_filter == :all or Map.get(record, :status) == status_filter do
+        if Map.get(record, :status) != :cleared and
+             (status_filter == :all or Map.get(record, :status) == status_filter) do
           [{process_id, record} | acc]
         else
           acc
@@ -286,7 +415,13 @@ defmodule CodingAgent.ProcessStore do
   @doc """
   Delete a process from the store.
   """
-  @spec delete(process_id()) :: :ok | {:error, atom()}
+  @spec delete(process_id()) ::
+          :ok
+          | {:error,
+             :process_alive
+             | :process_not_terminal
+             | :output_cleanup_failed
+             | :unmanaged_output_path}
   def delete(process_id) when is_binary(process_id) do
     transaction(fn ->
       case :ets.lookup(@table, process_id) do
@@ -295,17 +430,56 @@ defmodule CodingAgent.ProcessStore do
                get_in(record, [:output, :finalized]) != true do
             {:error, :process_alive}
           else
-            with :ok <- remove_output(record) do
-              :ets.delete(@table, process_id)
-              if dets_open?(), do: :dets.delete(@dets_table, process_id)
-              :ok
-            end
+            delete_record(process_id, record)
           end
 
-        _ ->
+        [] ->
           :ok
       end
     end)
+  end
+
+  defp delete_record(process_id, %{launch_fingerprint: fingerprint} = record)
+       when is_binary(fingerprint) do
+    held =
+      Map.get(
+        record,
+        :capacity_held,
+        Map.get(record, :status) in [:running, :starting, :killing, :lost]
+      ) and
+        not Map.get(record, :termination_confirmed, false)
+
+    if held do
+      {:error, :process_not_terminal}
+    else
+      with :ok <- remove_output(record) do
+        tombstone =
+          record
+          |> Map.take([
+            :id,
+            :owner,
+            :launch_fingerprint,
+            :launch_classification,
+            :launch_reason,
+            :inserted_at,
+            :updated_at,
+            :completed_at,
+            :termination_confirmed
+          ])
+          |> Map.put(:launch_terminal_status, Map.get(record, :status))
+          |> Map.put(:status, :cleared)
+
+        insert_record(process_id, tombstone, [])
+      end
+    end
+  end
+
+  defp delete_record(process_id, record) do
+    with :ok <- remove_output(record) do
+      :ets.delete(@table, process_id)
+      if dets_open?(), do: :dets.delete(@dets_table, process_id)
+      :ok
+    end
   end
 
   @doc """
@@ -341,7 +515,7 @@ defmodule CodingAgent.ProcessStore do
       :ets.insert(@table, {process_id, record, logs})
 
       if dets_open?() do
-        :dets.insert(@dets_table, {process_id, record, logs})
+        :ok = :dets.insert(@dets_table, {process_id, record, logs})
       end
 
       :ok
@@ -393,19 +567,36 @@ defmodule CodingAgent.ProcessStore do
   end
 
   defp ensure_table do
-    ProcessStoreServer.ensure_table(CodingAgent.ProcessStoreServer)
+    if :ets.info(@table, :owner) == self(),
+      do: :ok,
+      else: ProcessStoreServer.ensure_table(CodingAgent.ProcessStoreServer)
   end
 
-  defp update_record(process_id, fun) do
+  defp update_record(process_id, fun, durable \\ false) do
+    ensure_table()
+
     transaction(fn ->
       case :ets.lookup(@table, process_id) do
+        [{^process_id, %{status: :cleared}, _}] ->
+          :ok
+
         [{^process_id, record, logs}] ->
           updated =
             record
             |> fun.()
             |> Map.put(:updated_at, System.system_time(:second))
 
-          insert_record(process_id, updated, logs)
+          if durable and is_binary(Map.get(updated, :launch_fingerprint)) do
+            # Owned workload provenance must survive a crash before the command
+            # is unblocked; do not publish a volatile identity before syncing it.
+            :ok = :dets.insert(@dets_table, {process_id, updated, logs})
+            :ok = :dets.sync(@dets_table)
+            :ets.insert(@table, {process_id, updated, logs})
+          else
+            insert_record(process_id, updated, logs)
+          end
+
+          :ok
 
         _ ->
           :ok

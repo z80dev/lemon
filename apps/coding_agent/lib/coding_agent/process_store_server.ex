@@ -81,6 +81,13 @@ defmodule CodingAgent.ProcessStoreServer do
 
   @impl true
   def init(opts) do
+    case CodingAgent.ProcessManager.background_limits(opts) do
+      {:ok, limits} -> init_store(opts, limits)
+      {:error, reason} -> {:stop, reason}
+    end
+  end
+
+  defp init_store(opts, limits) do
     # Trap exits to ensure we can close DETS properly
     Process.flag(:trap_exit, true)
 
@@ -90,7 +97,15 @@ defmodule CodingAgent.ProcessStoreServer do
       dets_path: dets_path(opts),
       ets_initialized: false,
       dets_initialized: false,
-      loaded_from_dets: false
+      loaded_from_dets: false,
+      background_limit: limits.background_process_limit,
+      occupied: 0,
+      pending_limit: limits.background_pending_limit,
+      pending: %{},
+      pending_ref_index: %{},
+      live_ref_index: %{},
+      live_identity_index: %{},
+      capacity_subscribers: %{}
     }
 
     # Initialize tables synchronously during init
@@ -115,6 +130,288 @@ defmodule CodingAgent.ProcessStoreServer do
     {:reply, fun.(), state}
   end
 
+  def handle_call({:register_launch, id, owner, fingerprint, deadline, owner_pid}, from, state) do
+    state = ensure_tables(state)
+
+    reply =
+      case :ets.lookup(@table, id) do
+        [] ->
+          now = System.system_time(:second)
+
+          record = %{
+            id: id,
+            owner: owner,
+            launch_fingerprint: fingerprint,
+            launch_classification: :queued,
+            admission_deadline_ms: deadline,
+            status: :queued,
+            capacity_held: false,
+            termination_confirmed: false,
+            inserted_at: now,
+            updated_at: now
+          }
+
+          if map_size(state.pending) >= state.pending_limit + state.background_limit do
+            record =
+              Map.merge(record, %{
+                launch_classification: :rejected,
+                status: :rejected,
+                launch_reason: :overloaded
+              })
+
+            persist_launch(id, record, [])
+            {:existing, CodingAgent.ProcessStore.receipt(record)}
+          else
+            persist_launch(id, record, [])
+            :new
+          end
+
+        [{^id, %{owner: ^owner, launch_fingerprint: ^fingerprint} = record, logs}] ->
+          record = reconcile_launch_record(id, record, logs)
+          {:existing, CodingAgent.ProcessStore.receipt(record)}
+
+        _ ->
+          {:error, :identity_conflict}
+      end
+
+    state = if reply == :new, do: track_pending(state, id, from, owner_pid, deadline), else: state
+    {:reply, reply, state}
+  end
+
+  def handle_call({:claim_launch, id, owner, fingerprint}, {session, _tag}, state) do
+    state = ensure_tables(state)
+
+    reply =
+      case :ets.lookup(@table, id) do
+        [
+          {^id,
+           %{owner: ^owner, launch_fingerprint: ^fingerprint, launch_classification: :queued} =
+               record, logs}
+        ] ->
+          cond do
+            pending_abandoned?(state, id) ->
+              record =
+                Map.merge(record, %{
+                  launch_classification: :canceled,
+                  status: :canceled,
+                  launch_reason: :owner_abandoned
+                })
+
+              persist_launch(id, record, logs)
+              notify_capacity(state, {:background_launch_canceled, id})
+              {:error, :admission_canceled}
+
+            System.system_time(:millisecond) >= Map.get(record, :admission_deadline_ms, :infinity) ->
+              record = Map.merge(record, %{launch_classification: :expired, status: :expired})
+              persist_launch(id, record, logs)
+              notify_capacity(state, {:background_launch_classified, id, :expired})
+              {:error, :admission_expired}
+
+            state.occupied >= state.background_limit ->
+              {:error, :capacity_full}
+
+            true ->
+              # Persist both uncertainty and capacity BEFORE external execution.
+              record =
+                Map.merge(record, %{
+                  launch_classification: :outcome_unknown,
+                  status: :starting,
+                  capacity_held: true,
+                  termination_confirmed: false
+                })
+
+              persist_launch(id, record, logs)
+              :ok
+          end
+
+        [{^id, %{owner: ^owner, launch_fingerprint: ^fingerprint} = record, _}] ->
+          {:error, {:existing_launch, CodingAgent.ProcessStore.receipt(record)}}
+
+        _ ->
+          {:error, :identity_conflict}
+      end
+
+    state =
+      case reply do
+        :ok ->
+          state
+          |> Map.put(:occupied, state.occupied + 1)
+          |> forget_pending(id)
+          |> track_live(id, session)
+
+        {:error, :admission_expired} ->
+          forget_pending(state, id)
+
+        {:error, :admission_canceled} ->
+          forget_pending(state, id)
+
+        _ ->
+          state
+      end
+
+    {:reply, reply, state}
+  end
+
+  def handle_call({:classify_launch, id, classification, reason}, _from, state) do
+    state = ensure_tables(state)
+
+    state =
+      case :ets.lookup(@table, id) do
+        [{^id, record, logs}] ->
+          # A lost queue reply must not downgrade an acknowledged process, and a
+          # confirmed rejection cannot overwrite a start that crossed the boundary.
+          current = Map.get(record, :launch_classification)
+
+          if current == :queued or classification == :accepted do
+            record =
+              record
+              |> Map.put(:launch_classification, classification)
+              |> Map.put(:launch_reason, reason)
+              |> then(fn record ->
+                if classification in [:rejected, :expired, :canceled],
+                  do: Map.put(record, :status, classification),
+                  else: record
+              end)
+
+            persist_launch(id, record, logs)
+            notify_capacity(state, {:background_launch_classified, id, classification})
+            forget_pending(state, id)
+          else
+            state
+          end
+
+        _ ->
+          state
+      end
+
+    {:reply, :ok, state}
+  end
+
+  def handle_call({:subscribe_capacity, pid}, _from, state) do
+    state =
+      if Map.has_key?(state.capacity_subscribers, pid) do
+        state
+      else
+        put_in(state.capacity_subscribers[pid], Process.monitor(pid))
+      end
+
+    {:reply, :ok, state}
+  end
+
+  def handle_call({:yield_launch, id, owner}, _from, state) do
+    case {:ets.lookup(@table, id), Map.get(state.pending, id)} do
+      {[{^id, %{owner: ^owner, launch_classification: :queued}, _}], pending}
+      when is_map(pending) ->
+        if is_pid(pending.owner) and pending.owner != pending.caller and
+             Process.alive?(pending.owner) do
+          Process.demonitor(pending.caller_ref, [:flush])
+          refs = List.delete(pending.refs, pending.caller_ref)
+
+          state =
+            state
+            |> put_in([:pending, id], %{pending | refs: refs, caller: nil})
+            |> update_in([:pending_ref_index], &Map.delete(&1, pending.caller_ref))
+
+          {:reply, :ok, state}
+        else
+          {:reply, {:error, :no_owned_lifetime}, state}
+        end
+
+      _ ->
+        {:reply, {:error, :not_pending}, state}
+    end
+  end
+
+  def handle_call({:yielded_launch, id}, _from, state) do
+    yielded =
+      case Map.get(state.pending, id) do
+        %{caller: nil, owner: owner} when is_pid(owner) -> Process.alive?(owner)
+        _ -> false
+      end
+
+    {:reply, yielded, state}
+  end
+
+  def handle_call(:background_counts, _from, state) do
+    state = ensure_tables(state)
+    counts = capacity_counts() |> Map.new(fn {key, count} -> {key, min(count, 1_000_000)} end)
+    {:reply, Map.put(counts, :limit, state.background_limit), state}
+  end
+
+  def handle_call(:background_capacity_available, _from, state) do
+    state = ensure_tables(state)
+    {:reply, state.occupied < state.background_limit, state}
+  end
+
+  def handle_call({:cancel_launch, id, owner}, _from, state) do
+    state = ensure_tables(state)
+
+    reply =
+      case :ets.lookup(@table, id) do
+        [{^id, %{owner: ^owner, launch_classification: :queued} = record, logs}] ->
+          record = Map.merge(record, %{launch_classification: :canceled, status: :canceled})
+          persist_launch(id, record, logs)
+          notify_capacity(state, {:background_launch_canceled, id})
+          :ok
+
+        [{^id, %{owner: ^owner, launch_classification: :canceled}, _}] ->
+          :ok
+
+        [{^id, %{owner: ^owner}, _}] ->
+          {:error, :already_started}
+
+        _ ->
+          {:error, :not_found}
+      end
+
+    state = if reply == :ok, do: forget_pending(state, id), else: state
+    {:reply, reply, state}
+  end
+
+  def handle_call({:confirm_termination, id, cause}, _from, state) do
+    state = ensure_tables(state)
+
+    state =
+      case :ets.lookup(@table, id) do
+        [{^id, record, logs}] ->
+          terminal = Map.get(record, :launch_classification) in [:rejected, :expired, :canceled]
+
+          if Map.get(record, :termination_confirmed, false) or
+               ((cause == :startup_failed or match?({:startup_failed, _}, cause)) and terminal) do
+            state
+          else
+            held = capacity_held?(record)
+            record = confirmed_record(record, cause)
+            persist_launch(id, record, logs)
+            notify_capacity(state, :background_capacity_changed)
+            state = if held, do: %{state | occupied: state.occupied - 1}, else: state
+            state |> forget_pending(id) |> forget_live(id)
+          end
+
+        _ ->
+          state
+      end
+
+    {:reply, :ok, state}
+  end
+
+  def handle_call({:launch_receipt, id, owner}, _from, state) do
+    state = ensure_tables(state)
+
+    reply =
+      case :ets.lookup(@table, id) do
+        [{^id, %{owner: ^owner, launch_fingerprint: fingerprint} = record, logs}]
+        when is_binary(fingerprint) ->
+          record = reconcile_launch_record(id, record, logs)
+          {:ok, CodingAgent.ProcessStore.receipt(record)}
+
+        _ ->
+          {:error, :not_found}
+      end
+
+    {:reply, reply, state}
+  end
+
   def handle_call({:cleanup, ttl_seconds}, _from, state) do
     state = ensure_tables(state)
     deleted_count = do_cleanup(ttl_seconds)
@@ -124,18 +421,32 @@ defmodule CodingAgent.ProcessStoreServer do
   def handle_call(:clear, _from, state) do
     state = ensure_tables(state)
 
+    # Test reset wipes launch tombstones and held reservations too, but keeps a
+    # record (and its artifact charge) whose output file could not be removed.
     failed? =
       :ets.foldl(
-        fn {id, _record, _logs}, failed? ->
-          CodingAgent.ProcessStore.delete(id) != :ok or failed?
+        fn {id, record, _logs}, failed? ->
+          case CodingAgent.ProcessStore.remove_output(record) do
+            :ok ->
+              :ets.delete(@table, id)
+              if state.dets_initialized, do: :dets.delete(@dets_table, id)
+              failed?
+
+            _ ->
+              true
+          end
         end,
         false,
         @table
       )
 
     if state.dets_initialized, do: :dets.sync(@dets_table)
+
+    state = Enum.reduce(Map.keys(state.pending), state, &forget_pending(&2, &1))
+    state = Enum.reduce(Map.keys(state.live_identity_index), state, &forget_live(&2, &1))
     reply = if failed?, do: {:error, :output_cleanup_failed}, else: :ok
-    {:reply, reply, state}
+
+    {:reply, reply, %{state | loaded_from_dets: false, occupied: capacity_counts().occupied}}
   end
 
   def handle_call(:dets_status, _from, state) do
@@ -173,6 +484,28 @@ defmodule CodingAgent.ProcessStoreServer do
     {:noreply, state}
   end
 
+  def handle_info({:pending_launch_deadline, id}, state) do
+    {:noreply, terminalize_pending(state, id, :expired, :admission_deadline)}
+  end
+
+  def handle_info({:DOWN, ref, :process, pid, _reason}, state) do
+    cond do
+      Map.get(state.capacity_subscribers, pid) == ref ->
+        {:noreply, update_in(state.capacity_subscribers, &Map.delete(&1, pid))}
+
+      Map.has_key?(state.pending_ref_index, ref) ->
+        id = Map.fetch!(state.pending_ref_index, ref)
+        {:noreply, terminalize_pending(state, id, :canceled, :owner_abandoned)}
+
+      Map.has_key?(state.live_ref_index, ref) ->
+        id = Map.fetch!(state.live_ref_index, ref)
+        {:noreply, lose_live_owner(state, id)}
+
+      true ->
+        {:noreply, state}
+    end
+  end
+
   def handle_info({:EXIT, _pid, _reason}, state) do
     # Handle linked process exits if needed
     {:noreply, state}
@@ -188,6 +521,241 @@ defmodule CodingAgent.ProcessStoreServer do
   end
 
   # Private Functions
+  defp persist_launch(id, record, logs) do
+    # No external start may be acknowledged with only volatile provenance.
+    true = dets_open?()
+    :ok = :dets.insert(@dets_table, {id, record, logs})
+    :ok = :dets.sync(@dets_table)
+    :ets.insert(@table, {id, record, logs})
+    :ok
+  rescue
+    _ -> exit(:launch_store_unavailable)
+  catch
+    _, _ -> exit(:launch_store_unavailable)
+  end
+
+  defp reconcile_launch_record(id, record, logs) do
+    if Map.get(record, :status) in [:running, :starting, :killing] and
+         not session_alive?(id) do
+      record =
+        Map.merge(record, %{status: :lost, launch_classification: :outcome_unknown})
+
+      persist_launch(id, record, logs)
+      record
+    else
+      record
+    end
+  end
+
+  defp notify_capacity(state, message) do
+    Enum.each(state.capacity_subscribers, fn {pid, _ref} -> send(pid, message) end)
+  end
+
+  defp capacity_counts do
+    :ets.foldl(
+      fn {_id, record, _logs}, counts ->
+        classification = Map.get(record, :launch_classification)
+        status = Map.get(record, :status)
+
+        held = capacity_held?(record)
+
+        counts = if held, do: Map.update!(counts, :occupied, &(&1 + 1)), else: counts
+
+        cond do
+          classification == :outcome_unknown or (held and status in [:starting, :lost]) ->
+            Map.update!(counts, :unknown, &(&1 + 1))
+
+          held ->
+            Map.update!(counts, :active, &(&1 + 1))
+
+          classification in [:queued, :rejected, :expired, :canceled] ->
+            Map.update!(counts, classification, &(&1 + 1))
+
+          true ->
+            counts
+        end
+      end,
+      %{active: 0, queued: 0, rejected: 0, expired: 0, canceled: 0, unknown: 0, occupied: 0},
+      @table
+    )
+  end
+
+  defp capacity_held?(record) do
+    if Map.has_key?(record, :capacity_held) do
+      Map.get(record, :capacity_held) and not Map.get(record, :termination_confirmed, false)
+    else
+      Map.get(record, :status) in [:running, :starting, :killing, :lost] and
+        not Map.get(record, :termination_confirmed, false)
+    end
+  end
+
+  defp track_pending(state, id, {caller, _tag}, owner, deadline) do
+    caller_ref = Process.monitor(caller)
+    owner_ref = if is_pid(owner) and owner != caller, do: Process.monitor(owner)
+
+    timer =
+      Process.send_after(
+        self(),
+        {:pending_launch_deadline, id},
+        max(deadline - System.system_time(:millisecond), 0)
+      )
+
+    refs = Enum.reject([caller_ref, owner_ref], &is_nil/1)
+
+    state
+    |> put_in([:pending, id], %{
+      refs: refs,
+      timer: timer,
+      caller: caller,
+      caller_ref: caller_ref,
+      owner: owner
+    })
+    |> update_in([:pending_ref_index], fn index ->
+      Enum.reduce(refs, index, &Map.put(&2, &1, id))
+    end)
+  end
+
+  defp forget_pending(state, id) do
+    case Map.get(state.pending, id) do
+      nil ->
+        state
+
+      pending ->
+        Enum.each(pending.refs, &Process.demonitor(&1, [:flush]))
+        Process.cancel_timer(pending.timer)
+
+        state
+        |> update_in([:pending], &Map.delete(&1, id))
+        |> update_in([:pending_ref_index], fn index ->
+          Enum.reduce(pending.refs, index, &Map.delete(&2, &1))
+        end)
+    end
+  end
+
+  defp pending_abandoned?(state, id) do
+    case Map.get(state.pending, id) do
+      nil ->
+        true
+
+      pending ->
+        (is_pid(pending.caller) and not Process.alive?(pending.caller)) or
+          (is_pid(pending.owner) and not Process.alive?(pending.owner))
+    end
+  end
+
+  defp terminalize_pending(state, id, classification, reason) do
+    case :ets.lookup(@table, id) do
+      [{^id, %{launch_classification: :queued} = record, logs}] ->
+        record =
+          Map.merge(record, %{
+            launch_classification: classification,
+            launch_reason: reason,
+            status: classification
+          })
+
+        persist_launch(id, record, logs)
+
+        message =
+          if classification == :canceled,
+            do: {:background_launch_canceled, id},
+            else: {:background_launch_classified, id, classification}
+
+        notify_capacity(state, message)
+
+      _ ->
+        :ok
+    end
+
+    forget_pending(state, id)
+  end
+
+  defp confirmed_record(record, cause) do
+    record = Map.merge(record, %{capacity_held: false, termination_confirmed: true})
+
+    cond do
+      cause == :startup_failed or match?({:startup_failed, _}, cause) ->
+        reason = if cause == :startup_failed, do: cause, else: elem(cause, 1)
+
+        Map.merge(record, %{
+          status: :error,
+          launch_classification: :rejected,
+          launch_reason: reason,
+          completed_at: System.system_time(:second)
+        })
+
+      cause == :external_confirmed ->
+        Map.merge(record, %{status: :killed, completed_at: System.system_time(:second)})
+
+      is_binary(Map.get(record, :launch_fingerprint)) ->
+        Map.put(record, :launch_classification, :accepted)
+
+      true ->
+        record
+    end
+  end
+
+  defp track_live(state, id, pid) do
+    ref = Process.monitor(pid)
+
+    state
+    |> put_in([:live_ref_index, ref], id)
+    |> put_in([:live_identity_index, id], ref)
+  end
+
+  defp forget_live(state, id) do
+    case Map.get(state.live_identity_index, id) do
+      nil ->
+        state
+
+      ref ->
+        Process.demonitor(ref, [:flush])
+
+        state
+        |> update_in([:live_ref_index], &Map.delete(&1, ref))
+        |> update_in([:live_identity_index], &Map.delete(&1, id))
+    end
+  end
+
+  defp lose_live_owner(state, id) do
+    case :ets.lookup(@table, id) do
+      [{^id, record, logs}] ->
+        if capacity_held?(record) do
+          record = Map.merge(record, %{status: :lost, launch_classification: :outcome_unknown})
+          persist_launch(id, record, logs)
+          notify_capacity(state, {:background_launch_classified, id, :outcome_unknown})
+        end
+
+      _ ->
+        :ok
+    end
+
+    forget_live(state, id)
+  end
+
+  defp reconcile_live_owners(state) do
+    :ets.foldl(
+      fn {id, record, _logs}, state ->
+        state = forget_live(state, id)
+
+        if capacity_held?(record) do
+          case Registry.lookup(CodingAgent.ProcessRegistry, id) do
+            [{pid, _}] -> track_live(state, id, pid)
+            _ -> state
+          end
+        else
+          state
+        end
+      end,
+      state,
+      @table
+    )
+  end
+
+  defp session_alive?(id) do
+    CodingAgent.ProcessSession.alive?(id)
+  rescue
+    _ -> false
+  end
 
   defp ensure_tables(state) do
     state =
@@ -196,7 +764,14 @@ defmodule CodingAgent.ProcessStoreServer do
       |> initialize_dets()
       |> maybe_reset_loaded_from_dets()
 
-    maybe_load_from_dets(state)
+    state = maybe_load_from_dets(state)
+
+    if state.ets_initialized and state.dets_initialized and state.loaded_from_dets and
+         dets_open?() do
+      state
+    else
+      exit(:process_store_unavailable)
+    end
   end
 
   defp initialize_ets(state) do
@@ -215,7 +790,7 @@ defmodule CodingAgent.ProcessStoreServer do
   end
 
   defp initialize_dets(state) do
-    if state.dets_initialized do
+    if state.dets_initialized and dets_open?() do
       state
     else
       File.mkdir_p!(Path.dirname(state.dets_path))
@@ -224,14 +799,14 @@ defmodule CodingAgent.ProcessStoreServer do
 
       case :dets.open_file(@dets_table, file: dets_file, type: :set) do
         {:ok, _} ->
-          %{state | dets_initialized: true}
+          %{state | dets_initialized: true, loaded_from_dets: false}
 
         {:error, {:already_open, _pid}} ->
-          %{state | dets_initialized: true}
+          %{state | dets_initialized: true, loaded_from_dets: false}
 
-        {:error, reason} ->
-          Logger.warning("Failed to open DETS: #{inspect(reason)}")
-          state
+        {:error, _reason} ->
+          Logger.warning("Process launch storage unavailable")
+          %{state | dets_initialized: false, loaded_from_dets: false}
       end
     end
   end
@@ -242,31 +817,58 @@ defmodule CodingAgent.ProcessStoreServer do
     if state.dets_initialized and state.ets_initialized do
       now = System.system_time(:second)
 
-      :dets.foldl(
-        fn {process_id, record, logs}, :ok ->
-          record =
-            if Map.get(record, :status) == :running and
-                 not CodingAgent.ProcessSession.alive?(process_id) do
-              # A store-only restart must not reclassify a surviving session.
-              record
-              |> Map.put(:status, :lost)
-              |> Map.put(:error, :lost_on_restart)
-              |> Map.put(:completed_at, now)
-            else
-              record
-            end
+      :ok =
+        :dets.foldl(
+          fn {process_id, record, logs}, :ok ->
+            record =
+              cond do
+                Map.get(record, :status) == :queued and
+                  is_binary(Map.get(record, :launch_fingerprint)) and
+                    not Map.has_key?(state.pending, process_id) ->
+                  Map.merge(record, %{
+                    status: :canceled,
+                    launch_classification: :canceled,
+                    launch_reason: :admission_owner_restarted
+                  })
 
-          :ets.insert(@table, {process_id, record, logs})
-          :ok
-        end,
-        :ok,
-        @dets_table
-      )
+                Map.get(record, :status) == :queued and
+                    Map.has_key?(state.pending, process_id) ->
+                  record
 
-      %{state | loaded_from_dets: true}
+                Map.get(record, :status) in [:running, :starting, :killing, :queued] and
+                    not session_alive?(process_id) ->
+                  # Losing the BEAM owner is not proof of external termination.
+                  record = Map.merge(record, %{status: :lost, error: :lost_on_restart})
+
+                  if is_binary(Map.get(record, :launch_fingerprint)) do
+                    Map.put(record, :launch_classification, :outcome_unknown)
+                  else
+                    Map.put(record, :completed_at, now)
+                  end
+
+                true ->
+                  record
+              end
+
+            :ets.insert(@table, {process_id, record, logs})
+            :ok
+          end,
+          :ok,
+          @dets_table
+        )
+
+      # Every load, including a late open or a reopened file, restores capacity
+      # and owner monitors before the request that triggered it can admit work.
+      state
+      |> Map.merge(%{loaded_from_dets: true, occupied: capacity_counts().occupied})
+      |> reconcile_live_owners()
     else
       state
     end
+  rescue
+    _ -> exit(:process_store_unavailable)
+  catch
+    _, _ -> exit(:process_store_unavailable)
   end
 
   defp maybe_reset_loaded_from_dets(state) do
@@ -320,7 +922,9 @@ defmodule CodingAgent.ProcessStoreServer do
   defp expired_record?(record, now, ttl_seconds) do
     status = Map.get(record, :status)
 
-    if status in [:completed, :error, :killed, :lost] do
+    if status in [:completed, :error, :killed, :lost, :rejected, :expired, :canceled] and
+         Map.get(record, :launch_classification) != :outcome_unknown and
+         not capacity_held?(record) do
       completed_at =
         Map.get(record, :completed_at) || Map.get(record, :updated_at) ||
           Map.get(record, :inserted_at)

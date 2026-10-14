@@ -584,7 +584,8 @@ defmodule CodingAgent.ProcessSessionTest do
       marker =
         Path.join(System.tmp_dir!(), "lemon-limit-probe-#{System.unique_integer([:positive])}")
 
-      assert {:error, {:invalid_process_output_limit, :max_artifact_bytes}} =
+      assert {:error,
+              {:rejected, _identity, {:invalid_process_output_limit, :max_artifact_bytes}}} =
                ProcessManager.exec(command: "touch #{marker}", use_lane_queue: false)
 
       refute File.exists?(marker)
@@ -597,7 +598,7 @@ defmodule CodingAgent.ProcessSessionTest do
             :max_runtime_artifact_bytes
           ],
           invalid <- [nil, 0, -1, 1.5, :infinity] do
-        assert {:error, {:invalid_process_output_limit, ^key}} =
+        assert {:error, {:rejected, _identity, {:invalid_process_output_limit, ^key}}} =
                  ProcessManager.exec(
                    [command: "touch #{marker}", use_lane_queue: false] ++ [{key, invalid}]
                  )

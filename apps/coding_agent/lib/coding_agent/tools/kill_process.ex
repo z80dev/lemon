@@ -43,9 +43,21 @@ defmodule CodingAgent.Tools.KillProcess do
   defp kill(process_id) do
     case ProcessManager.kill(process_id, :sigkill) do
       :ok ->
+        {status, exit_code} =
+          case ProcessManager.poll(process_id, lines: 0) do
+            {:ok, result} -> {result.status, result.exit_code}
+            _ -> {:outcome_unknown, nil}
+          end
+
+        text =
+          if status == :canceled,
+            do: "Canceled queued launch #{process_id}; it will not start.",
+            else:
+              "Cancellation requested for background process #{process_id} (status: #{status})."
+
         %AgentToolResult{
-          content: [%TextContent{text: "Killed background process #{process_id}."}],
-          details: %{process_id: process_id, status: :killed, exit_code: nil}
+          content: [%TextContent{text: text}],
+          details: %{process_id: process_id, status: status, exit_code: exit_code}
         }
 
       {:error, :process_not_running} ->

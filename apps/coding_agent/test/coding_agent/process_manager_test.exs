@@ -47,14 +47,32 @@ defmodule CodingAgent.ProcessManagerTest do
   end
 
   describe "exec/1" do
-    test "falls back to direct execution when LaneQueue exits" do
-      assert {:ok, process_id} =
-               ProcessManager.exec(
-                 command: "echo lane-fallback",
-                 lane_queue: :missing_lane_queue_for_process_manager_test
-               )
+    test "fails closed when admission is absent, including sync and direct options" do
+      counter =
+        Path.join(System.tmp_dir!(), "lemon-no-start-#{System.unique_integer([:positive])}")
 
-      assert is_binary(process_id)
+      on_exit(fn -> File.rm(counter) end)
+
+      for {call, extra} <- [{:exec, []}, {:exec_sync, []}, {:exec, [use_lane_queue: false]}] do
+        identity = "absent-#{System.unique_integer([:positive])}"
+
+        assert {:error, {:rejected, ^identity, :admission_unavailable}} =
+                 apply(ProcessManager, call, [
+                   [
+                     command: "printf x >> '#{counter}'",
+                     env: %{"PRIVATE_TOKEN" => "not-for-receipts"},
+                     launch_id: identity,
+                     lane_queue: :missing_lane_queue_for_process_manager_test
+                   ] ++ extra
+                 ])
+
+        assert {:ok, receipt} = ProcessManager.receipt(identity)
+        assert receipt.classification == :rejected
+        refute inspect(receipt) =~ counter
+        refute inspect(receipt) =~ "not-for-receipts"
+      end
+
+      refute File.exists?(counter)
     end
 
     test "starts a background process and returns process_id" do
@@ -76,7 +94,7 @@ defmodule CodingAgent.ProcessManagerTest do
 
     test "rejects unknown terminal backends" do
       assert ProcessManager.exec(command: "echo hi", backend: "unknown-docker") ==
-               {:error, {:unknown_terminal_backend, "unknown-docker"}}
+               {:error, :unknown_terminal_backend}
     end
 
     test "rejects terminal backends blocked by policy" do
@@ -91,8 +109,11 @@ defmodule CodingAgent.ProcessManagerTest do
         end
       end)
 
-      assert ProcessManager.exec(command: "echo hi", backend: "local") ==
-               {:error, {:terminal_backend_denied, :local}}
+      assert {:error, {:rejected, identity, :terminal_backend_denied}} =
+               ProcessManager.exec(command: "echo hi", backend: "local")
+
+      assert {:ok, %{classification: :rejected, reason: :terminal_backend_denied}} =
+               ProcessManager.receipt(identity)
     end
 
     test "supports custom cwd" do
@@ -142,12 +163,28 @@ defmodule CodingAgent.ProcessManagerTest do
       assert result.status == :error
     end
 
-    test "supports timeout" do
-      assert {:error, :timeout} =
-               ProcessManager.exec_sync(
-                 command: "sleep 10",
-                 timeout_ms: 100
-               )
+    test "timeout retains the accepted identity instead of implying no launch" do
+      identity = "sync-timeout-#{System.unique_integer([:positive])}"
+      parent = self()
+
+      result =
+        ProcessManager.exec_sync(
+          command: "sleep 10",
+          launch_id: identity,
+          timeout_ms: 100,
+          on_exit: fn _ -> send(parent, {:sync_terminated, identity}) end
+        )
+
+      case result do
+        {:error, {:outcome_unknown, ^identity}} -> :ok
+        {:ok, %{process_id: ^identity, status: :error}} -> :ok
+        other -> flunk("timeout lost the launch receipt: #{inspect(other)}")
+      end
+
+      assert_receive {:sync_terminated, ^identity}, 5_000
+
+      assert {:ok, %{identity: ^identity, classification: :accepted, status: :error}} =
+               ProcessManager.receipt(identity)
     end
 
     test "background mode returns immediately" do
