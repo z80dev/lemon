@@ -67,6 +67,8 @@ describe('owner phone pairing', () => {
     expect(preview).toEqual({ clusterName: f.workspace.name, backendUrl: f.services.config.publicUrl, expiresAtMs: started.issued.pairing.expiresAtMs });
     expect(await success(f.fetch('POST', '/v1/pairings/preview', previewBody, null))).toEqual(preview);
     expect(await success(f.fetch('GET', `/v1/pairings/${started.issued.pairing.id}`))).toEqual(started.issued.pairing);
+    f.restart();
+    expect(await success(f.fetch('POST', '/v1/pairings', started.startBody), 201)).toEqual(started.issued);
     const claimed = await success<P.PairingClaimResult>(f.fetch('POST', '/v1/pairings/claim', claimBody(f, started), null));
     expect(claimed.clusterName).toBe(preview.clusterName); expect(claimed.backendUrl).toBe(preview.backendUrl);
     await failure(f.fetch('POST', '/v1/pairings/preview', previewBody, null), 'conflict');
@@ -238,17 +240,20 @@ describe('owner phone pairing', () => {
     expect(f.persistentCalls).toBe(0);
   });
 
-  test('original deadline expires credential receipts, revokes undelivered staged sessions, but does not expire connected phone sessions', async () => {
+  test('original deadline erases credential receipts without shortening any approved persistent session', async () => {
     const f = await fixture(); const staged = await prepare(f, 'staged-phone');
     await success(f.fetch('POST', `/v1/pairings/${staged.pending.id}/approve`, staged.approveBody));
     const connected = await prepare(f, 'connected-phone'); const auth = await connect(f, connected);
     f.advance(300000); await f.pairingService.sweep();
-    expect(f.store.list<P.AuthSession>('authSessions', session => session.expiresAtMs === null).map(session => session.id)).toEqual([auth.auth.session.id]);
+    expect(f.store.list<P.AuthSession>('authSessions', session => session.expiresAtMs === null)).toHaveLength(2);
     expect(await success(f.fetch('POST', `/v1/pairings/${staged.pending.id}/complete`, staged.completeBody, null))).toEqual({ status: 'expired', pairingId: staged.pending.id, expiresAtMs: staged.pending.expiresAtMs });
     expect(await success(f.fetch('POST', `/v1/pairings/${connected.pending.id}/complete`, connected.completeBody, null))).toEqual({ status: 'expired', pairingId: connected.pending.id, expiresAtMs: connected.pending.expiresAtMs });
     await failure(f.fetch('POST', '/v1/pairings', connected.startBody), 'expired');
     const custody = f.store.require<{ approval: { encryptedAuth: string | null }; completion: { receipt: string | null } }>('pairingSecrets', connected.pending.id);
     expect(custody.approval.encryptedAuth).toBeNull(); expect(custody.completion.receipt).toBeNull();
+    const unused = f.store.list<P.AuthSession>('authSessions', session => session.expiresAtMs === null && session.id !== auth.auth.session.id)[0]!;
+    await success(f.fetch('DELETE', `/v1/auth/sessions/${unused.id}`, { clientNonce: opaqueToken() }));
+    expect(f.store.list<P.AuthSession>('authSessions', session => session.expiresAtMs === null).map(session => session.id)).toEqual([auth.auth.session.id]);
     f.advance(31 * 86400000);
     expect((await f.services.auth.authenticate(new Request('https://desktop.example/v1/me', { headers: { Authorization: `Bearer ${auth.auth.token}` } }), 'member'))?.deviceId).toBe(auth.device.id);
     expect(f.persistentCalls).toBe(2);
@@ -341,6 +346,30 @@ describe('owner phone pairing', () => {
     await failure(f.fetch('POST', `/v1/pairings/${prepared.pending.id}/approve`, prepared.approveBody), 'conflict');
     expect(f.store.require<P.Device>('devices', foreign.id)).toEqual(foreign);
     expect(f.persistentCalls).toBe(0);
+  });
+
+  test('preview rate limits are durable, proof scoped and never consume a QR', async () => {
+    const f = await fixture(); const started = await start(f);
+    const body: P.PairingPreviewRequest = { pairCode: started.pairCode, workspaceId: f.workspace.id };
+    for (let index = 0; index < 120; index += 1) await success(f.fetch('POST', '/v1/pairings/preview', body, null));
+    f.restart();
+    const limited = await failure(f.fetch('POST', '/v1/pairings/preview', body, null), 'rate_limited');
+    expect(JSON.stringify(limited)).not.toContain(started.pairCode);
+    expect(f.store.require<P.Pairing>('pairings', started.issued.pairing.id).status).toBe('waiting');
+    f.advance(60000);
+    const claimed = await success<P.PairingClaimResult>(f.fetch('POST', '/v1/pairings/claim', claimBody(f, started), null));
+    expect(claimed.pairingId).toBe(started.issued.pairing.id); expect(f.persistentCalls).toBe(0);
+  });
+
+  test('paired bearer device registration cannot rebind the persistent session to a different installation', async () => {
+    const f = await fixture(); const prepared = await prepare(f); const connected = await connect(f, prepared);
+    const registration: P.DeviceRegister = { clientNonce: opaqueToken(), installationId: 'another-phone-installation', platform: 'ios', name: 'Another phone', appVersion: '1.0' };
+    await failure(f.fetch('POST', '/v1/devices', registration, connected.auth.token), 'conflict');
+    expect(f.store.require<P.AuthSession>('authSessions', connected.auth.session.id).deviceId).toBe(connected.device.id);
+    expect(f.store.list<P.Device>('devices', device => device.platform === 'ios')).toHaveLength(1);
+    const same = await success<P.Device>(f.fetch('POST', '/v1/devices', { ...registration, clientNonce: opaqueToken(), installationId: prepared.claimBody.installationId }, connected.auth.token), 201);
+    expect(same.id).toBe(connected.device.id);
+    expect(f.store.require<P.AuthSession>('authSessions', connected.auth.session.id).deviceId).toBe(connected.device.id);
   });
 
   test('canonical claim bounds reject malformed fields without consuming the QR', async () => {

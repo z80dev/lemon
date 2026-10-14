@@ -55,21 +55,35 @@ function currentOwner(s: BackendServices, context: RequestContext): Principal {
   return actor;
 }
 
+/** Same durable fixed-window pattern as local auth; invalid proofs cannot allocate caller-selected buckets. */
+function rateLimit(s: BackendServices, key: string, maximum: number): void {
+  s.store.transaction(() => {
+    const previous = s.store.metadata<{ startedAtMs: number; count: number }>(key);
+    const window = previous && s.now() - previous.startedAtMs < 60000 ? previous : { startedAtMs: s.now(), count: 0 };
+    if (window.count >= maximum) fail('rate_limited', 'Too many pairing requests; wait before trying again.');
+    s.store.setMetadata(key, { startedAtMs: window.startedAtMs, count: window.count + 1 });
+  });
+}
+
 function claimProof(s: BackendServices, context: RequestContext): PairingSecret {
+  rateLimit(s, 'pairingPublicRate', 200);
   const proof = z.object({ pairCode: secret }).passthrough().safeParse(context.body);
   if (!proof.success) fail('unauthenticated', 'Invalid pairing proof.');
   const digest = s.mutations.digest(proof.data.pairCode);
   const row = s.store.list<PairingSecret>('pairingSecrets', value => value.pairCodeDigest === digest)[0];
   if (!row) fail('unauthenticated', 'Invalid pairing proof.');
+  rateLimit(s, `pairingRate:${row.id}`, 120);
   return row;
 }
 
 function completionProof(s: BackendServices, context: RequestContext): PairingSecret {
+  rateLimit(s, 'pairingPublicRate', 200);
   const proof = z.object({ claimToken: secret }).passthrough().safeParse(context.body);
   if (!proof.success) fail('unauthenticated', 'Invalid pairing proof.');
   const pairingId = parse(id, context.params.id);
   const row = s.store.get<PairingSecret>('pairingSecrets', pairingId);
   if (!row?.claim || row.claim.tokenDigest !== s.mutations.digest(proof.data.claimToken)) fail('unauthenticated', 'Invalid pairing proof.');
+  rateLimit(s, `pairingRate:${row.id}`, 120);
   return row;
 }
 
@@ -117,7 +131,6 @@ function expire(s: BackendServices, pairing: P.Pairing): P.Pairing {
     if (latest.expiresAtMs > s.now()) return latest;
     const row = s.store.get<PairingSecret>('pairingSecrets', latest.id);
     if (row) {
-      revokeStagedSession(s, latest, row);
       if (row.creation.receipt || row.claim?.receipt || row.approval?.encryptedAuth || row.completion?.receipt) s.store.put('pairingSecrets', discardCredentialCustody(row));
     }
     if (latest.status === 'consumed' || latest.status === 'denied' || latest.status === 'expired') return latest;
@@ -160,8 +173,10 @@ export function deleteUserPairings(s: BackendServices, userId: string): void {
       s.store.db.query('DELETE FROM nonces WHERE scope IN (?,?)').run(`${scope}/v1/pairings/${encodeURIComponent(pairing.id)}/approve`, `${scope}/v1/pairings/${encodeURIComponent(pairing.id)}/deny`);
       s.store.remove('pairingSecrets', pairing.id);
       s.store.remove('pairings', pairing.id);
+      s.store.db.query('DELETE FROM metadata WHERE key=?').run(`pairingRate:${pairing.id}`);
     }
     for (const scope of creations) s.store.db.query('DELETE FROM nonces WHERE scope=?').run(scope);
+    s.store.db.query('DELETE FROM metadata WHERE key=?').run(`pairingIssuerRate:${userId}`);
   });
 }
 
@@ -224,6 +239,7 @@ export function createPairingRoutes(s: BackendServices): Route[] {
     { method: 'POST', path: '/v1/pairings', auth: 'owner', mutation: false, status: 201, authorizeReplay: context => { currentOwner(s, context); }, handler: async context => {
       const actor = currentOwner(s, context); noQuery(context);
       const body: P.PairingStart = parse(mutation, context.body);
+      rateLimit(s, `pairingIssuerRate:${actor.userId}`, 10);
       const prior = store.list<PairingSecret>('pairingSecrets', row => row.creation.nonce === body.clientNonce).find(row => {
         const pairing = store.get<P.Pairing>('pairings', row.id);
         return pairing?.ownerUserId === actor.userId && pairing.workspaceId === actor.workspaceId;
@@ -261,7 +277,7 @@ export function createPairingRoutes(s: BackendServices): Route[] {
     { method: 'POST', path: '/v1/pairings/preview', auth: 'public', mutation: false, status: 200, handler: context => {
       const proven = claimProof(s, context); noQuery(context);
       const body: P.PairingPreviewRequest = parse(previewSchema, context.body);
-      const pairing = expire(s, store.require<P.Pairing>('pairings', proven.id));
+      const pairing = store.require<P.Pairing>('pairings', proven.id);
       pairingAuthority(s, pairing); requireUnexpired(s, pairing);
       if (pairing.workspaceId !== body.workspaceId) fail('forbidden', 'QR cluster does not match this pairing.');
       if (pairing.status !== 'waiting' || proven.claim) fail('conflict', 'QR code was already claimed.');
@@ -287,10 +303,10 @@ export function createPairingRoutes(s: BackendServices): Route[] {
           const target = store.get<P.Pairing>('pairings', other.id);
           if (!target || target.workspaceId !== pairing.workspaceId || target.ownerUserId !== pairing.ownerUserId || other.revokedAtMs !== null) return false;
           if (other.approval && other.approval.state !== 'issued' && store.get<P.Device>('devices', other.approval.deviceId)) return true;
-          if (target.status === 'denied' || target.status === 'expired') return false;
-          if (target.status !== 'consumed' && target.expiresAtMs > s.now()) return true;
+          if (target.status === 'denied') return false;
           const session = other.approval?.sessionId ? store.get<P.AuthSession>('authSessions', other.approval.sessionId) : null;
-          return session !== null && session.deviceId === other.approval?.deviceId && store.get<SessionSecret>('sessionSecrets', session.id)?.revoked === false;
+          if (session && session.deviceId === other.approval?.deviceId && store.get<SessionSecret>('sessionSecrets', session.id)?.revoked === false) return true;
+          return target.status !== 'expired' && target.status !== 'consumed' && target.expiresAtMs > s.now();
         });
         if (claimedElsewhere) fail('conflict', 'This installation already has an active pairing.');
         const claimToken = opaqueToken();
@@ -391,8 +407,8 @@ export function createPairingRoutes(s: BackendServices): Route[] {
         const current = ownedPairing(s, actor, pairingId); requireUnexpired(s, current);
         const row = privateRow(pairingId);
         s.mutations.checkRevision(current, body.revision);
-        if (row.approval) fail('outcome_unknown', 'Session issuance was already reserved; revoke the device instead.', false, { resourceIds: [pairingId, row.approval.deviceId] });
-        if (current.status !== 'waiting' && current.status !== 'pending_approval') fail('conflict', 'Pairing is no longer awaiting a decision.');
+        if (row.approval) fail(row.approval.state === 'issued' ? 'conflict' : 'outcome_unknown', 'Session issuance was already reserved; revoke the device instead.', false, { resourceIds: [pairingId, row.approval.deviceId] });
+        if (current.status !== 'pending_approval') fail('conflict', 'Pairing is not awaiting a decision.');
         const denied = s.update(current, { status: 'denied' as const });
         store.put('pairings', denied); store.put('pairingSecrets', { ...row, denial: { nonce: body.clientNonce, hash: s.mutations.digest(body), receipt: s.encrypt(denied) } });
         s.events.emit('pairing.upserted', denied, { userIds: [actor.userId], desktopOnly: true });
