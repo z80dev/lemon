@@ -404,7 +404,8 @@ defmodule LemonControlPlane.NamedNodeWireE2ETest do
       payload: %{pending: %{id: controller_approval_id, session_id: nil, run_id: ^stream_run_id}}}, 3_000
     refute controller_approval_id == local_approval_id
     assert LemonCore.ExecApprovalStore.get_pending(controller_approval_id).tool == "bash"
-    assert :ok = LemonCore.ExecApprovals.resolve(controller_approval_id, :approve_once)
+    assert {:ok, %{decision: :approve_once, outcome: :approved}} =
+      LemonCore.ExecApprovals.resolve(controller_approval_id, :approve_once)
     assert {:ok, :approved, :approve_once} = Task.await(approval_task, 3_000)
     send(worker, {:engine_event, live_ref, LemonGateway.Event.completed(%{
       engine: "lemon", ok: true, answer: "first second"

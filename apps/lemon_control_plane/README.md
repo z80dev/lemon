@@ -77,6 +77,56 @@ legitimately arrive first. Failure and budget-stop completions remain
 Slow/approval-gated handlers run asynchronously so events and approval resolution
 can continue while their correlated request remains pending.
 
+### Verified approval resolution
+
+`exec.approval.resolve` requires the approvals scope and accepts:
+
+```json
+{"approvalId":"approval-id","decision":"approve_once","expectedSessionKey":"agent:bot:main","expectedRunId":"run-id"}
+```
+
+`approvalId` and `decision` are required. `expectedSessionKey` and `expectedRunId`
+are optional nonempty strings (at most 1024 bytes); clients approving an exact
+run should provide both. Decisions are `approve_once`, `approve_session`,
+`approve_agent`, `approve_global` or `deny`; existing camelCase decision inputs
+remain accepted, but responses always use canonical snake_case.
+
+Success is a verified owner receipt, not merely removal from the pending list:
+
+```json
+{
+  "resolved":true,"approvalId":"approval-id","sessionKey":"agent:bot:main","runId":"run-id",
+  "decision":"approve_once","outcome":"approved","approved":true,"replayed":false,
+  "resolvedAtMs":1791936000000,
+  "summary":{
+    "approvalId":"approval-id","resolved":true,"decision":"approve_once","outcome":"approved",
+    "cleanup":{"includesAction":false,"includesRationale":false,"includesSecretValues":false}
+  }
+}
+```
+
+`deny` succeeds with `decision:"deny"`, `outcome:"denied"` and `approved:false`.
+`sessionKey`/`runId` can be null for an unbound native request. Expected identities
+are checked by the owning service and the exact snapshot is replaced atomically:
+a stale preview cannot approve another invocation. A completed same-decision
+request is idempotent only with both exact expected identities and retained owner
+state; it returns `replayed:true`, the original timestamp, and no repeated grants
+or events. Without both identities, an already-completed request is rejected.
+
+Failures use normal error frames with `details:{approvalId,reason}`:
+
+| Code | `reason` |
+| --- | --- |
+| `NOT_FOUND` | `not_found` (including missing retained state) |
+| `CONFLICT` | `mismatch`, `expired`, `cancelled`, `conflict` (another decision won), `already_resolved`, `resolution_in_progress` |
+| `UNAVAILABLE` | `store_unavailable` |
+| `INVALID_REQUEST` | malformed IDs, bindings or decisions |
+
+No failure returns `resolved:true`. Terminal state retains only IDs, decision,
+outcome, timestamp and a snapshot digest; action, rationale and secrets are omitted.
+Named-node approvals use the controller ID and its controller pending identity;
+the destination still resolves only its own invocation/run/session-bound worker ID.
+
 Authenticated sockets receive an RFC WebSocket ping every 25 seconds. Browser,
 Bun and other conforming clients automatically pong, keeping long-running
 outbound streams alive without application-level requests. The listener retains

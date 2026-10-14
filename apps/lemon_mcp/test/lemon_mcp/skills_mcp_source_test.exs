@@ -653,7 +653,8 @@ defmodule LemonMCP.SkillsMcpSourceTest do
       assert pending.rationale =~ "request="
       refute inspect(pending) =~ "secret prompt"
 
-      assert :ok = LemonCore.ExecApprovals.resolve(pending.id, :approve_once)
+      assert {:ok, %{decision: :approve_once, outcome: :approved}} =
+               LemonCore.ExecApprovals.resolve(pending.id, :approve_once)
 
       tools = Task.await(task, 5_000)
       assert Enum.any?(tools, &(&1.label == "MCP echo"))
@@ -840,7 +841,8 @@ defmodule LemonMCP.SkillsMcpSourceTest do
                  body_format: :binary
                )
 
-      assert :ok = LemonCore.ExecApprovals.resolve(pending.id, :approve_once)
+      assert {:ok, %{decision: :approve_once, outcome: :approved}} =
+               LemonCore.ExecApprovals.resolve(pending.id, :approve_once)
 
       tools = Task.await(task, 5_000)
       assert Enum.any?(tools, &(&1.label == "MCP secured_echo"))

@@ -594,10 +594,23 @@ case LemonCore.ExecApprovals.request(%{
   {:error, :timeout} -> handle_timeout()
 end
 
-# Resolve (called by UI/admin). Atomic: a racing cancel/resolve on the same
-# id has exactly one winner; the loser gets {:error, :not_pending}.
-:ok = LemonCore.ExecApprovals.resolve(approval_id, :approve_session)
+# Resolve (called by UI/admin). Compare and consume the exact owner identity.
+{:ok, %{decision: :approve_session, outcome: :approved, replayed: false}} =
+  LemonCore.ExecApprovals.resolve(approval_id, :approve_session,
+    expected_session_key: session_key, expected_run_id: run_id)
 ```
+
+Resolve, cancellation and timeout atomically replace the exact pending snapshot;
+only the winner installs grants or emits resolution events. The resolution receipt
+returns the actual decision/outcome and approval/run/session identity. Wrong
+identity or changed previews (`expected_pending`) leave the live approval untouched.
+Expired, cancelled, unknown and conflicting decisions return distinct errors.
+Pending accessors exclude redacted terminal records. Retained completed state
+allows the same decision to replay only when **both** expected identities match,
+without new grants/events. An unbound repeated call is `:already_resolved`, not
+an acknowledgement. Missing retained state is `:not_found`; IDs with retained
+state cannot be reused for another invocation. A crash during policy installation
+leaves an in-progress record that fails closed, never a fabricated completion.
 
 Approval requests, resolutions, and timeouts also write redacted
 `approval_*` introspection events with approval id, tool, action type/hash, and

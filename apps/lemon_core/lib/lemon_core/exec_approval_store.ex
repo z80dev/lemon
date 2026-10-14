@@ -1,6 +1,9 @@
 defmodule LemonCore.ExecApprovalStore do
   @moduledoc """
-  Typed wrapper for execution approval policy and pending-request tables.
+  Typed wrapper for execution approval policy and lifecycle records.
+
+  Terminal records retain only identity, a snapshot digest and the verified
+  decision. Pending accessors exclude them; a completed ID cannot be reused.
   """
 
   alias LemonCore.Store
@@ -77,52 +80,44 @@ defmodule LemonCore.ExecApprovalStore do
     do: Store.put(@pending_table, approval_id, value)
 
   @spec get_pending(binary()) :: map() | nil
-  def get_pending(approval_id) when is_binary(approval_id),
-    do: Store.get(@pending_table, approval_id)
+  def get_pending(approval_id) when is_binary(approval_id) do
+    case fetch_pending(approval_id) do
+      {:ok, pending} -> pending
+      {:error, _} -> nil
+    end
+  end
 
   @spec fetch_pending(binary()) :: {:ok, map() | nil} | {:error, :store_unavailable}
-  def fetch_pending(approval_id) when is_binary(approval_id),
+  def fetch_pending(approval_id) when is_binary(approval_id) do
+    case fetch_record(approval_id) do
+      {:ok, %{resolution: _}} -> {:ok, nil}
+      result -> result
+    end
+  end
+
+  @doc "Strict owner read, including retained terminal resolution records."
+  @spec fetch_record(binary()) :: {:ok, map() | nil} | {:error, :store_unavailable}
+  def fetch_record(approval_id) when is_binary(approval_id),
     do: Store.fetch(@pending_table, approval_id)
+
+  @doc "Atomically replace the exact owner record, never an alternate invocation."
+  @spec transition(binary(), map(), map()) :: :ok | {:error, term()}
+  def transition(approval_id, expected, replacement)
+      when is_binary(approval_id) and is_map(expected) and is_map(replacement),
+      do: Store.compare_and_swap(@pending_table, approval_id, expected, replacement)
 
   @spec put_pending_new(binary(), map()) :: :ok | {:error, term()}
   def put_pending_new(approval_id, pending) when is_binary(approval_id) and is_map(pending),
     do: Store.put_new(@pending_table, approval_id, pending)
 
-  @doc "Remove only the exact pending record the operator was shown."
-  @spec take_pending(binary(), map()) :: {:ok, map()} | {:error, term()}
-  def take_pending(approval_id, expected) when is_binary(approval_id) and is_map(expected) do
-    case Store.compare_and_delete(@pending_table, approval_id, expected) do
-      :ok ->
-        {:ok, expected}
-
-      {:error, :mismatch} ->
-        case fetch_pending(approval_id) do
-          {:ok, nil} -> {:error, :not_pending}
-          {:ok, _} -> {:error, :mismatch}
-          {:error, _} -> {:error, :store_unavailable}
-        end
-
-      {:error, _} ->
-        {:error, :store_unavailable}
-    end
-  end
-
   @spec delete_pending(binary()) :: :ok
   def delete_pending(approval_id) when is_binary(approval_id),
     do: Store.delete(@pending_table, approval_id)
 
-  @doc """
-  Atomically remove and return one pending approval record.
-
-  The read and the delete share a single store call, so of any number of
-  concurrent takers exactly one receives the record; every other caller gets
-  `nil`. This is the primitive `ExecApprovals.cancel/2` and
-  `ExecApprovals.resolve/2` both use to make their transition atomic.
-  """
-  @spec take_pending(binary()) :: map() | nil
-  def take_pending(approval_id) when is_binary(approval_id),
-    do: Store.take(@pending_table, approval_id)
-
   @spec list_pending() :: list()
-  def list_pending, do: Store.list(@pending_table)
+  def list_pending do
+    @pending_table
+    |> Store.list()
+    |> Enum.reject(fn {_id, record} -> match?(%{resolution: _}, record) end)
+  end
 end

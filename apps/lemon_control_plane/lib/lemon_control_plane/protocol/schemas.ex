@@ -597,6 +597,10 @@ defmodule LemonControlPlane.Protocol.Schemas do
       required: %{
         "approvalId" => :string,
         "decision" => :string
+      },
+      optional: %{
+        "expectedSessionKey" => :string,
+        "expectedRunId" => :string
       }
     },
 

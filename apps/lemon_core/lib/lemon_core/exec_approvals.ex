@@ -52,11 +52,9 @@ defmodule LemonCore.ExecApprovals do
   ## Returns
   - `{:ok, :approved, scope}` - Approved at the given scope
   - `{:ok, :denied}` - Denied
-  - `{:error, :timeout}` - Request timed out. The timeout is decided by the
-    same atomic single-winner transition as `resolve/2`/`cancel/2`: when a
-    resolver wins the record first, the waiter reports this without emitting
-    any timeout side effects of its own (the resolver's decision — and any
-    policy it installed — stands).
+  - `{:error, :timeout}` - Request timed out. The timeout competes through
+    the same exact-record atomic transition as `resolve/3` and `cancel/2`.
+    A losing timeout emits no events and installs no policy.
   """
   @spec request(map()) ::
           {:ok, :approved, scope :: atom()}
@@ -142,7 +140,7 @@ defmodule LemonCore.ExecApprovals do
               )
             )
 
-            wait_for_resolution(approval_id, expires_in_ms)
+            wait_for_resolution(approval_id, pending, expires_in_ms)
 
           {:error, reason} ->
             LemonCore.Bus.unsubscribe("exec_approvals")
@@ -154,19 +152,10 @@ defmodule LemonCore.ExecApprovals do
   @doc """
   Cancel a pending approval that will never be decided by a user.
 
-  For owners of a blocking `request/1` that can no longer wait — for example,
-  a dispatch that was killed while an approval prompt was pending. Removes the
-  pending record (so the prompt disappears and a late
-  `resolve/2` can no longer install policy at any scope), wakes a blocked
-  waiter as denied, and records the cancellation distinctly from a user
-  decision.
-
-  The transition is atomic (`ExecApprovalStore.take_pending/1`): `cancel/2`,
-  `resolve/2`, and a waiter's own timeout are all the same single-winner
-  transition — racing callers cannot both act; exactly one takes the record,
-  the losers get `{:error, :not_pending}` (or, for a timed-out waiter,
-  `{:error, :timeout}` with no side effects) without disturbing the winner's
-  decision.
+  Atomically replaces the exact pending record with a redacted cancellation
+  receipt, wakes its waiter as denied, and installs no policy. A competing
+  resolution or timeout has exactly one winner. A losing cancellation is a
+  no-op; retained terminal records remain available to verified resolvers.
 
   ## Returns
 
@@ -176,127 +165,252 @@ defmodule LemonCore.ExecApprovals do
   """
   @spec cancel(approval_id(), binary() | nil) :: :ok | {:error, :not_pending | :store_unavailable}
   def cancel(approval_id, reason \\ nil) when is_binary(approval_id) do
-    case ExecApprovalStore.take_pending(approval_id) do
-      nil ->
-        {:error, :not_pending}
+    with {:ok, pending} when not is_nil(pending) <- ExecApprovalStore.fetch_pending(approval_id),
+         :ok <- retain_terminal(approval_id, pending, :cancelled, :cancelled) do
+      record_approval_event(:approval_cancelled, pending, %{
+        approval_id: approval_id,
+        tool: pending.tool,
+        reason: reason
+      })
 
-      {:error, _} ->
-        {:error, :store_unavailable}
+      LemonCore.Telemetry.approval_resolved(approval_id, :cancelled, %{
+        tool: pending.tool,
+        run_id: pending.run_id
+      })
 
-      pending ->
-        record_approval_event(:approval_cancelled, pending, %{
-          approval_id: approval_id,
-          tool: pending.tool,
-          reason: reason
-        })
-
-        LemonCore.Telemetry.approval_resolved(approval_id, :cancelled, %{
-          tool: pending.tool,
-          run_id: pending.run_id
-        })
-
-        LemonCore.Bus.broadcast(
-          "exec_approvals",
-          LemonCore.Event.new(
-            :approval_resolved,
-            ApprovalResolved.new(%{
-              approval_id: approval_id,
-              decision: :cancelled,
-              pending: pending
-            }),
-            %{
-              run_id: pending.run_id,
-              session_id: Map.get(pending, :session_id),
-              session_key: pending.session_key
-            }
-          )
+      LemonCore.Bus.broadcast(
+        "exec_approvals",
+        LemonCore.Event.new(
+          :approval_resolved,
+          ApprovalResolved.new(%{
+            approval_id: approval_id,
+            decision: :cancelled,
+            pending: pending
+          }),
+          %{
+            run_id: pending.run_id,
+            session_id: Map.get(pending, :session_id),
+            session_key: pending.session_key
+          }
         )
+      )
 
-        :ok
+      :ok
+    else
+      {:ok, nil} -> {:error, :not_pending}
+      {:error, :mismatch} -> {:error, :not_pending}
+      {:error, _} -> {:error, :store_unavailable}
     end
   end
 
   @doc """
-  Resolve a pending approval request.
+  Resolve an exact pending approval and return a verified resolution receipt.
 
-  Resolution validates the decision and expiry, then atomically removes the exact
-  pending snapshot. Pass `expected_pending: snapshot` when resolving a preview
-  shown earlier (ACP, TUI, or a channel); changed records fail with `:mismatch`.
-  `resolve/2` reads the current snapshot itself. Cancellation and resolution still
-  have exactly one winner. Store failures never acknowledge or grant approval.
+  `expected_session_key` and `expected_run_id` bind the request's owner identity.
+  `expected_pending` binds the entire preview snapshot. The owner compares and
+  replaces the exact validated record atomically; a replacement request is never
+  consumed. Expiry is checked after the claim and before installing any policy.
 
-  ## Parameters
+  Decisions are `:approve_once`, `:approve_session`, `:approve_agent`,
+  `:approve_global`, or `:deny`. Success is `{:ok, receipt}` with approval/run/
+  session identity, actual `decision`, `outcome` (`:approved` or `:denied`),
+  `resolved_at_ms`, and `replayed`. A replay succeeds only with both exact
+  expected identities, the same decision, and a retained completed receipt.
+  Replays never emit events or install policy again. Completed IDs are not reused.
 
-  - `approval_id` - The approval request ID
-  - `decision` - One of:
-    - `:approve_once` - Approve this specific request
-    - `:approve_session` - Approve for the session
-    - `:approve_agent` - Approve for the agent
-    - `:approve_global` - Approve globally
-    - `:deny` - Deny the request
-
-  ## Returns
-
-    * `:ok` — this call took the pending record and resolved it
-    * `{:error, reason}` — invalid decision, missing/changed/expired request, or
-      unavailable persistence. No approval is granted on failure.
+  Errors distinguish `:not_found`, `:mismatch`, `:expired`, `:cancelled`,
+  `:conflict`, `:already_resolved`, `:resolution_in_progress`,
+  `:invalid_decision`, `:invalid_binding`, and `:store_unavailable`.
+  Missing retained state is never treated as proof of an earlier resolution.
   """
-  @spec resolve(approval_id(), atom(), keyword()) :: :ok | {:error, atom()}
+  @spec resolve(approval_id(), atom(), keyword()) :: {:ok, map()} | {:error, atom()}
   def resolve(approval_id, decision, opts \\ [])
 
   def resolve(approval_id, decision, opts)
       when is_binary(approval_id) and is_list(opts) and
              decision in [:approve_once, :approve_session, :approve_agent, :approve_global, :deny] do
-    with {:ok, pending} <- resolution_snapshot(approval_id, opts),
-         {:ok, pending} <- ExecApprovalStore.take_pending(approval_id, pending) do
-      cond do
-        expired?(pending) ->
-          emit_approval_timeout(approval_id, pending)
-          {:error, :expired}
+    with :ok <- validate_bindings(opts),
+         {:ok, record} <- ExecApprovalStore.fetch_record(approval_id) do
+      case record do
+        nil ->
+          {:error, :not_found}
 
-        decision == :deny ->
-          emit_resolution(approval_id, pending, decision)
+        %{resolution: receipt} ->
+          replay_resolution(approval_id, receipt, decision, opts)
 
-        true ->
-          case store_approval(pending, decision) do
-            :ok ->
-              emit_resolution(approval_id, pending, decision)
+        %{id: ^approval_id, tool: tool, action: _, session_key: _, run_id: _, agent_id: _} =
+            pending when is_binary(tool) ->
+          with :ok <- match_pending(pending, opts) do
+            claim = %{resolution: resolution_receipt(pending, decision, :resolving)}
 
-            _ ->
-              # The exact request was consumed, but policy was not confirmed.
-              # Wake its waiter as denied rather than allowing execution.
-              emit_resolution(approval_id, pending, :cancelled)
-              {:error, :store_unavailable}
+            case ExecApprovalStore.transition(approval_id, pending, claim) do
+              :ok -> resolve_claim(approval_id, pending, decision, claim)
+              {:error, :mismatch} -> lost_resolution(approval_id, decision, opts)
+              {:error, _} -> {:error, :store_unavailable}
+            end
           end
+
+        _ ->
+          {:error, :mismatch}
       end
     end
   end
 
   def resolve(_, _, _), do: {:error, :invalid_decision}
 
-  defp resolution_snapshot(approval_id, opts) do
-    result =
-      case Keyword.fetch(opts, :expected_pending) do
-        {:ok, expected} -> {:ok, expected}
-        :error -> ExecApprovalStore.fetch_pending(approval_id)
-      end
-
-    case result do
-      {:ok,
-       %{id: ^approval_id, tool: tool, action: _, session_key: _, run_id: _, agent_id: _} =
-           pending}
-      when is_binary(tool) ->
-        {:ok, pending}
-
-      {:ok, nil} ->
-        {:error, :not_pending}
-
-      {:ok, _} ->
-        {:error, :mismatch}
-
-      {:error, _} ->
-        {:error, :store_unavailable}
+  defp validate_bindings(opts) do
+    if Enum.all?([:expected_session_key, :expected_run_id], fn key ->
+         case Keyword.fetch(opts, key) do
+           :error -> true
+           {:ok, value} -> is_binary(value) and value != ""
+         end
+       end) do
+      :ok
+    else
+      {:error, :invalid_binding}
     end
+  end
+
+  defp match_pending(pending, opts) do
+    with :ok <- match_identity(pending, opts) do
+      case Keyword.fetch(opts, :expected_pending) do
+        :error -> :ok
+        {:ok, ^pending} -> :ok
+        _ -> {:error, :mismatch}
+      end
+    end
+  end
+
+  defp match_identity(record, opts) do
+    if Enum.all?(
+         [{:expected_session_key, :session_key}, {:expected_run_id, :run_id}],
+         fn {option, field} ->
+           case Keyword.fetch(opts, option) do
+             :error -> true
+             {:ok, expected} -> Map.get(record, field) == expected
+           end
+         end
+       ) do
+      :ok
+    else
+      {:error, :mismatch}
+    end
+  end
+
+  defp resolve_claim(approval_id, pending, decision, claim) do
+    cond do
+      expired?(pending) ->
+        result = finish_resolution(approval_id, claim, :expired, :timeout)
+        emit_approval_timeout(approval_id, pending)
+        if match?({:ok, _}, result), do: {:error, :expired}, else: result
+
+      decision == :deny ->
+        result = finish_resolution(approval_id, claim, :denied, decision)
+        emit_resolution(approval_id, pending, decision)
+        result
+
+      true ->
+        case store_approval(pending, decision) do
+          :ok ->
+            result = finish_resolution(approval_id, claim, :approved, decision)
+            # Without a retained, verified completion, execution stays denied.
+            emitted_decision = if match?({:ok, _}, result), do: decision, else: :cancelled
+            emit_resolution(approval_id, pending, emitted_decision)
+            result
+
+          _ ->
+            _ = finish_resolution(approval_id, claim, :cancelled, :cancelled)
+            emit_resolution(approval_id, pending, :cancelled)
+            {:error, :store_unavailable}
+        end
+    end
+  end
+
+  defp finish_resolution(approval_id, %{resolution: receipt} = claim, outcome, decision) do
+    completed = %{
+      receipt
+      | outcome: outcome,
+        decision: decision,
+        resolved_at_ms: LemonCore.Clock.now_ms()
+    }
+
+    case ExecApprovalStore.transition(approval_id, claim, %{resolution: completed}) do
+      :ok -> {:ok, public_receipt(completed, false)}
+      {:error, _} -> {:error, :store_unavailable}
+    end
+  end
+
+  defp resolution_receipt(pending, decision, outcome) do
+    %{
+      approval_id: pending.id,
+      session_key: Map.get(pending, :session_key),
+      run_id: Map.get(pending, :run_id),
+      decision: decision,
+      outcome: outcome,
+      resolved_at_ms: LemonCore.Clock.now_ms(),
+      pending_hash: :crypto.hash(:sha256, :erlang.term_to_binary(pending))
+    }
+  end
+
+  defp retain_terminal(approval_id, pending, outcome, decision) do
+    ExecApprovalStore.transition(
+      approval_id,
+      pending,
+      %{resolution: resolution_receipt(pending, decision, outcome)}
+    )
+  end
+
+  defp lost_resolution(approval_id, decision, opts) do
+    case ExecApprovalStore.fetch_record(approval_id) do
+      {:ok, %{resolution: receipt}} -> replay_resolution(approval_id, receipt, decision, opts)
+      {:ok, nil} -> {:error, :not_found}
+      {:ok, _} -> {:error, :mismatch}
+      {:error, _} -> {:error, :store_unavailable}
+    end
+  end
+
+  defp replay_resolution(
+         approval_id,
+         %{approval_id: stored_id, session_key: _, run_id: _, outcome: _, decision: _,
+           resolved_at_ms: timestamp, pending_hash: digest} = receipt,
+         decision,
+         opts
+       ) when stored_id == approval_id and is_integer(timestamp) and is_binary(digest) do
+    with :ok <- match_identity(receipt, opts),
+         :ok <- match_receipt_snapshot(receipt, opts) do
+      cond do
+        receipt.outcome == :expired -> {:error, :expired}
+        receipt.outcome == :cancelled -> {:error, :cancelled}
+        receipt.decision != decision -> {:error, :conflict}
+        receipt.outcome == :resolving -> {:error, :resolution_in_progress}
+        not (Keyword.has_key?(opts, :expected_session_key) and
+               Keyword.has_key?(opts, :expected_run_id)) -> {:error, :already_resolved}
+        receipt.outcome == :denied and receipt.decision == :deny ->
+          {:ok, public_receipt(receipt, true)}
+        receipt.outcome == :approved and receipt.decision in
+            [:approve_once, :approve_session, :approve_agent, :approve_global] ->
+          {:ok, public_receipt(receipt, true)}
+        true -> {:error, :store_unavailable}
+      end
+    end
+  end
+
+  defp replay_resolution(_, _, _, _), do: {:error, :store_unavailable}
+
+  defp match_receipt_snapshot(receipt, opts) do
+    case Keyword.fetch(opts, :expected_pending) do
+      :error -> :ok
+      {:ok, pending} when is_map(pending) ->
+        if :crypto.hash(:sha256, :erlang.term_to_binary(pending)) == receipt.pending_hash,
+          do: :ok,
+          else: {:error, :mismatch}
+
+      _ -> {:error, :mismatch}
+    end
+  end
+
+  defp public_receipt(receipt, replayed) do
+    receipt |> Map.delete(:pending_hash) |> Map.put(:replayed, replayed)
   end
 
   defp expired?(pending) do
@@ -443,35 +557,36 @@ defmodule LemonCore.ExecApprovals do
     end
   end
 
-  defp wait_for_resolution(approval_id, :infinity) do
-    wait_for_resolution_until(approval_id, :infinity)
+  defp wait_for_resolution(approval_id, pending, :infinity) do
+    wait_for_resolution_until(approval_id, pending, :infinity)
   end
 
-  defp wait_for_resolution(approval_id, timeout_ms)
+  defp wait_for_resolution(approval_id, pending, timeout_ms)
        when is_integer(timeout_ms) and timeout_ms >= 0 do
     wait_for_resolution_until(
       approval_id,
+      pending,
       System.monotonic_time(:millisecond) + timeout_ms
     )
   end
 
-  defp wait_for_resolution(approval_id, _timeout_ms) do
-    wait_for_resolution_until(approval_id, :infinity)
+  defp wait_for_resolution(approval_id, pending, _timeout_ms) do
+    wait_for_resolution_until(approval_id, pending, :infinity)
   end
 
-  defp wait_for_resolution_until(approval_id, deadline_or_infinity) do
+  defp wait_for_resolution_until(approval_id, pending, deadline_or_infinity) do
     receive do
       %LemonCore.Event{
         type: :approval_requested,
         payload: %{approval_id: ^approval_id}
       } ->
-        wait_for_resolution_until(approval_id, deadline_or_infinity)
+        wait_for_resolution_until(approval_id, pending, deadline_or_infinity)
 
       %LemonCore.Event{
         type: :approval_requested,
         payload: %{pending: %{id: ^approval_id}}
       } ->
-        wait_for_resolution_until(approval_id, deadline_or_infinity)
+        wait_for_resolution_until(approval_id, pending, deadline_or_infinity)
 
       %LemonCore.Event{
         type: :approval_resolved,
@@ -499,25 +614,18 @@ defmodule LemonCore.ExecApprovals do
       wait_remaining(deadline_or_infinity) ->
         LemonCore.Bus.unsubscribe("exec_approvals")
 
-        # The timeout must win the record through the SAME atomic transition
-        # as `resolve/2` and `cancel/2` (`ExecApprovalStore.take_pending/1`):
-        # whoever takes the record decides its fate, exactly one winner. A
-        # nil take means a resolver or canceller already owned the record —
-        # its decision and its side effects stand, and this waiter reports
-        # `{:error, :timeout}` WITHOUT emitting timeout events or deleting
-        # anything for a record it no longer owns.
-        case ExecApprovalStore.take_pending(approval_id) do
-          nil ->
+        # Compare the waiter's original snapshot, not just its ID. Neither a
+        # winning resolver nor a replacement invocation can be timed out here.
+        case retain_terminal(approval_id, pending, :expired, :timeout) do
+          :ok ->
+            emit_approval_timeout(approval_id, pending)
+            {:error, :timeout}
+
+          {:error, :mismatch} ->
             {:error, :timeout}
 
           {:error, _} ->
             {:error, :store_unavailable}
-
-          pending ->
-            # The take removed the record; emit the timeout side effects for
-            # the record this waiter owns.
-            emit_approval_timeout(approval_id, pending)
-            {:error, :timeout}
         end
     end
   end
@@ -528,8 +636,7 @@ defmodule LemonCore.ExecApprovals do
     max(deadline - System.monotonic_time(:millisecond), 0)
   end
 
-  # Called only after `take_pending/1` handed the waiter the record, so
-  # `pending` is always the taken struct — there is no nil path.
+  # Called only by the winner of the exact-record timeout transition.
   defp record_approval_timeout(approval_id, pending) do
     record_approval_event(:approval_timed_out, pending, %{
       approval_id: approval_id,

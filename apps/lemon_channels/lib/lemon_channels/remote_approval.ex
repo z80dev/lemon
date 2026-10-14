@@ -33,7 +33,7 @@ defmodule LemonChannels.RemoteApproval do
            true <- fingerprint == fingerprint(pending),
            {:ok, target} <- target(pending, channel, account, opts),
            true <- authorize.(target),
-           :ok <-
+           {:ok, %{decision: ^decision, outcome: outcome}} when outcome in [:approved, :denied] <-
              Keyword.get(opts, :resolve, &LemonCore.ExecApprovals.resolve/3).(
                id,
                decision,
