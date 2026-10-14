@@ -120,7 +120,9 @@ class NodeProcessHelperTest(unittest.TestCase):
         self.assertIsInstance(receipt["exitCode"], int)
         time.sleep(2.1)
         self.assertFalse(os.path.exists(marker))
-        receipt = self.receive(self.launch(["overflow"], maxOutputBytes=257))["ok"]
+        response = self.receive(self.launch(["overflow"], maxOutputBytes=257))
+        self.assertIn("ok", response, "valid admitted overflow must return its actual bounded receipt: " + repr(response))
+        receipt = response["ok"]
         self.assertEqual(receipt["state"], "cancelled")
         self.assertTrue(receipt["outputTruncated"])
         self.assertEqual(sum(len(base64.b64decode(receipt[key])) for key in ("stdoutBase64", "stderrBase64")), 257)
