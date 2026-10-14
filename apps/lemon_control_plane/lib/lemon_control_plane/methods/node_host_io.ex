@@ -8,11 +8,16 @@ defmodule LemonControlPlane.Methods.NodeHostIOSupport do
   def handle(method, params, ctx) when is_map(params) do
     Logger.info("node_io operation=#{method} attempted=true redacted=true")
     with :ok <- string(params, "nodeId", 256),
-         :ok <- validate(method, params) do
-      NodeIO.invoke(params["nodeId"], method, Map.drop(params, ["nodeId"]), ctx)
+         :ok <- validate(method, params),
+         {:ok, opts} <- dispatch_opts(method, params) do
+      NodeIO.invoke(params["nodeId"], method, Map.drop(params, ["nodeId"]), ctx, opts)
     end
   end
   def handle(_, _, _), do: {:error, Errors.invalid_request("params must be an object")}
+
+  defp dispatch_opts("node.secrets.set", params),
+    do: LemonControlPlane.NodeSecretProofs.dispatch_opts(params["nodeId"], params)
+  defp dispatch_opts(_, _), do: {:ok, []}
 
   defp validate("node.host.info", _), do: :ok
   defp validate("node.secrets.list", _), do: :ok

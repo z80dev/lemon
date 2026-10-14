@@ -46,6 +46,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   server that consumes the terminal's policy frame. The filesystem helper has an
   import-safe direct-execution entrypoint; real binary terminal startup and queued
   input retain their own framing and descriptor-rooted cwd admission.
+- Private invocation proof secrets use the owning pending lineage destination
+  and atomically pin both live PID and credential generation before provisioning.
+  Only strict absence permits a fresh root; stale/mismatched/finished lineage
+  never falls back. Trim-normalized reserved names require their exact fixed
+  operation ID, and missing privacy support rejects before any proof value is sent.
 
 ---
 

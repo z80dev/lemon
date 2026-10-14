@@ -260,8 +260,9 @@ or general events; audit lines contain only operation and outcome classification
 `node.invoke` cannot bypass the admin-scoped file, secret or terminal methods.
 
 Internal callers inspecting a node before dispatch can pin that live connection
-with `NodeRegistry.invoke_node(..., expected_pid: inspected.pid)`. A reconnect
-returns the definite pre-dispatch error `{:node_connection_changed,nodeId}`.
+with `NodeRegistry.invoke_node(..., expected_pid: inspected.pid,
+expected_generation: inspected.generation)`. PID replacement or credential
+generation change returns the definite pre-dispatch error `{:node_connection_changed,nodeId}`.
 Private native requests also require `required_native_privacy_context: 1`, which
 checks the actual resolved connection's nested
 `capabilities["coding_agent.run"]["nativePrivacyContext"] == {"version":1}`
@@ -368,6 +369,19 @@ fingerprints or digests. History is bounded to 128 operations per owner/name;
 capacity fails closed without evicting proof. `secret_store_failed`, timeouts and
 transport loss can be ambiguous and must be reconciled. Vault/lease diagnostics
 are content-free, including failure logs.
+
+Reserved private invocation proof names `lemon_bot/invocations/<runId>` require
+`operationId` exactly equal to that run ID. The controller queries the owning
+`NativeLineage.pending_destination(runId,nodeId)` before provisioning: a pending
+follow-up must retain its sealed exact node/PID/generation; only strict owning
+Store absence permits a new pre-admission root and fresh live-ID inspection.
+Existing nonpending/terminal/malformed rows, target/profile/session mismatch and
+query failure never fall back to root provisioning. Both paths require privacy
+protocol v1 and pin PID/generation atomically in dispatch before sending the proof
+value. Names are inspected after the same trim normalization used by the vault,
+so decorated names cannot bypass this guard. No caller-supplied flag grants this
+authority; raw `node.invoke` remains forbidden for secret methods. Ordinary
+secret operations and read-only reconciliation retain their original behavior.
 
 Capability items contain `{id,name,category,supported,configuredLevel,osGrant,
 tools,reason,measuredAtMs,stale}`. Categories are `files|shell|browser|connector|os_app`,

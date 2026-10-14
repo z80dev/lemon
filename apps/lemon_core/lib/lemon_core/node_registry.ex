@@ -26,6 +26,7 @@ defmodule LemonCore.NodeRegistry do
           id: String.t(),
           name: String.t(),
           pid: pid(),
+          generation: non_neg_integer(),
           metadata: map(),
           connected_at_ms: integer()
         }
@@ -102,24 +103,25 @@ defmodule LemonCore.NodeRegistry do
     GenServer.call(
       __MODULE__,
       {:invoke, String.trim(name_or_id), method, args, recipient, timeout_ms, max_payload_bytes,
-       Keyword.get(opts, :expected_pid), Keyword.get(opts, :required_native_privacy_context)}
+       Keyword.get(opts, :expected_pid), Keyword.get(opts, :expected_generation), Keyword.get(opts, :required_native_privacy_context)}
     )
   end
 
   @doc """
   Invokes an exact durable ID, never another node with that ID as its name.
 
-  `:expected_pid` pins a preceding capability inspection to the current live
-  connection. `required_native_privacy_context: 1` atomically requires the native
-  run privacy descriptor on that actual connection before allocating or sending
-  an invocation. Both failures are definite pre-dispatch admission failures.
+  `:expected_pid` and `:expected_generation` pin a preceding inspection to the
+  current authenticated session. `required_native_privacy_context: 1` atomically
+  requires the native run privacy descriptor before native execution or proof
+  secret provisioning. Failures are definite pre-dispatch admission failures.
   """
   def invoke_node(node_id, method, args, opts \\ [])
       when is_binary(node_id) and is_binary(method) and is_map(args) do
     GenServer.call(__MODULE__, {:invoke, {:node_id, node_id}, method, args,
       Keyword.get(opts, :recipient, self()), Keyword.get(opts, :timeout_ms, @default_timeout_ms),
       Keyword.get(opts, :max_payload_bytes, JSONPayload.default_max_bytes()),
-      Keyword.get(opts, :expected_pid), Keyword.get(opts, :required_native_privacy_context)})
+      Keyword.get(opts, :expected_pid), Keyword.get(opts, :expected_generation),
+      Keyword.get(opts, :required_native_privacy_context)})
   end
 
   @doc """
@@ -331,7 +333,7 @@ defmodule LemonCore.NodeRegistry do
   end
 
   def handle_call(
-        {:invoke, name_or_id, method, args, recipient, timeout_ms, max_payload_bytes, expected_pid, required_privacy},
+        {:invoke, name_or_id, method, args, recipient, timeout_ms, max_payload_bytes, expected_pid, expected_generation, required_privacy},
         _from,
         state
       ) do
@@ -348,7 +350,10 @@ defmodule LemonCore.NodeRegistry do
       not is_nil(expected_pid) and not is_pid(expected_pid) ->
         {:reply, {:error, :invalid_expected_node_pid}, state}
 
-      not is_nil(required_privacy) and (required_privacy != 1 or method != "coding_agent.run") ->
+      not is_nil(expected_generation) and (not is_integer(expected_generation) or expected_generation < 0) ->
+        {:reply, {:error, :invalid_expected_node_generation}, state}
+
+      not is_nil(required_privacy) and (required_privacy != 1 or method not in ["coding_agent.run", "node.secrets.set"]) ->
         {:reply, {:error, :invalid_native_privacy_context_requirement}, state}
 
       args_error = invocation_args_error(method, args, max_payload_bytes) ->
@@ -356,7 +361,7 @@ defmodule LemonCore.NodeRegistry do
         {:reply, {:error, {:invalid_payload, reason}}, state}
 
       true ->
-        case resolve_dispatch_node(state, name_or_id, expected_pid, required_privacy) do
+        case resolve_dispatch_node(state, name_or_id, expected_pid, expected_generation, required_privacy) do
           {:ok, node} ->
             invoke_id = LemonCore.Id.uuid()
             run_id = invocation_run_id(method, args, invoke_id)
@@ -653,10 +658,11 @@ defmodule LemonCore.NodeRegistry do
     end
   end
 
-  defp resolve_dispatch_node(state, target, expected_pid, required_privacy) do
+  defp resolve_dispatch_node(state, target, expected_pid, expected_generation, required_privacy) do
     with {:ok, node} <- resolve_node(state, target) do
       cond do
-        not is_nil(expected_pid) and node.pid != expected_pid ->
+        (not is_nil(expected_pid) and node.pid != expected_pid) or
+            (not is_nil(expected_generation) and node.generation != expected_generation) ->
           {:error, {:node_connection_changed, node.id}}
         required_privacy == 1 and not native_privacy_context_supported?(node.metadata) ->
           {:error, {:native_privacy_context_unsupported, node.id}}
@@ -674,7 +680,7 @@ defmodule LemonCore.NodeRegistry do
   end
 
   defp public_node(node) do
-    Map.take(node, [:id, :name, :pid, :metadata, :connected_at_ms])
+    Map.take(node, [:id, :name, :pid, :generation, :metadata, :connected_at_ms])
   end
 
   defp authorized_generation_floor(state, node_id) do

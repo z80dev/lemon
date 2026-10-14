@@ -285,6 +285,18 @@ A new operation at capacity returns `secret_receipt_capacity` before replacing t
 secret; existing proof is never silently pruned. Sets without `operationId`
 retain their original response shape and do not supply reconciliation proof.
 
+Names under `lemon_bot/invocations/<runId>` are reserved private invocation proofs.
+Their fixed `operationId` must equal `<runId>`, even when the supplied name has
+surrounding whitespace that the vault trims. Pending follow-up provisioning uses
+the owning lineage's sealed exact destination, connection PID and credential
+generation. Only a strictly absent owning row permits initial root provisioning;
+completed/nonpending or mismatched follow-ups cannot be treated as new roots.
+Both cases atomically require the destination's native privacy protocol and the
+inspected session before any value is sent. A reconnect or same-PID credential
+generation change fails before dispatch. These are server-side admission checks,
+not client boolean flags. Other secret names keep the ordinary behavior above.
+
+
 Do not log requests, values, or file transfer bodies in client/backend tracing.
 The destination facade emits a bounded content-free audit/telemetry event
 `[:coding_agent, :execution_node, :host_io]` with measurement `count:1` and only

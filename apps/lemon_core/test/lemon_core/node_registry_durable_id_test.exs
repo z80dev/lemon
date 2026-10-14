@@ -110,6 +110,36 @@ defmodule LemonCore.NodeRegistryDurableIDTest do
     refute_receive {:attacker_received, {:node_event, "node.invoke.request", _}}
   end
 
+  test "proof secret provisioning pins generation even when the same connection PID is reused" do
+    id = "proof-generation-#{System.unique_integer([:positive])}"
+    owner = self()
+    capable = %{capabilities: %{"coding_agent.run" => %{"version" => 1,
+      "nativePrivacyContext" => %{"version" => 1}}}}
+    on_exit(fn -> NodeRegistry.unregister(id, owner) end)
+    assert :ok = NodeRegistry.register_session(id, id, owner, 1, capable)
+    assert {:ok, %{pid: ^owner, generation: 1} = inspected} = NodeRegistry.resolve_id(id)
+    assert :ok = NodeRegistry.register_session(id, id, owner, 2, capable)
+    args = %{"name" => "lemon_bot/invocations/followup", "value" => "private", "operationId" => "followup"}
+    assert {:error, {:node_connection_changed, ^id}} =
+      NodeRegistry.invoke_node(id, "node.secrets.set", args, expected_pid: inspected.pid,
+        expected_generation: inspected.generation, required_native_privacy_context: 1)
+    refute_receive {:node_event, "node.invoke.request", _}
+    assert {:error, :invalid_expected_node_generation} =
+      NodeRegistry.invoke_node(id, "node.secrets.set", args, expected_generation: -1)
+    assert {:ok, invocation} = NodeRegistry.invoke_node(id, "node.secrets.set", args,
+      expected_pid: owner, expected_generation: 2, required_native_privacy_context: 1)
+    assert_receive {:node_event, "node.invoke.request", %{"invokeId" => ^invocation}}
+    assert :ok = NodeRegistry.complete_session(id, owner, 2, invocation, %{"set" => true})
+    assert_receive {:lemon_node_result, ^invocation, {:ok, %{"set" => true}}}
+
+    assert :ok = NodeRegistry.register_session(id, id, owner, 3,
+      %{capabilities: %{"coding_agent.run" => %{"version" => 1}}})
+    assert {:error, {:native_privacy_context_unsupported, ^id}} =
+      NodeRegistry.invoke_node(id, "node.secrets.set", args, expected_pid: owner,
+        expected_generation: 3, required_native_privacy_context: 1)
+    refute_receive {:node_event, "node.invoke.request", _}
+  end
+
   defp relay(owner) do
     receive do
       event -> send(owner, {:attacker_received, event}); relay(owner)

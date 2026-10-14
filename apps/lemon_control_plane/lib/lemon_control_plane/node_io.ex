@@ -3,7 +3,8 @@ defmodule LemonControlPlane.NodeIO do
   require Logger
   alias LemonControlPlane.Protocol.Errors
 
-  def invoke(node_id, method, args, ctx) when is_binary(node_id) and is_map(args) do
+  def invoke(node_id, method, args, ctx, opts \\ [])
+  def invoke(node_id, method, args, ctx, opts) when is_binary(node_id) and is_map(args) do
     owner = ctx[:conn_pid] || self()
     ref = Process.monitor(owner)
     result = try do
@@ -12,8 +13,16 @@ defmodule LemonControlPlane.NodeIO do
         node when is_map(node) ->
           case LemonCore.NodeRegistry.invoke_node(node_id, method, args,
                  recipient: self(), timeout_ms: 30_000,
-                 max_payload_bytes: LemonControlPlane.max_payload()) do
+                 max_payload_bytes: LemonControlPlane.max_payload(),
+                 expected_pid: opts[:expected_pid], expected_generation: opts[:expected_generation],
+                 required_native_privacy_context: opts[:required_native_privacy_context]) do
             {:ok, invoke_id} -> await(invoke_id, ref, owner)
+            {:error, {:node_connection_changed, _}} ->
+              {:error, Errors.error(:conflict, "Inspected node session changed before dispatch",
+                %{"reason" => "node_connection_changed", "preDispatch" => true, "retrySafe" => false})}
+            {:error, {:native_privacy_context_unsupported, _}} ->
+              {:error, Errors.error(:unavailable, "Node does not support private native proof provisioning",
+                %{"reason" => "native_privacy_context_unsupported", "preDispatch" => true, "retrySafe" => false})}
             {:error, _} -> {:error, Errors.unavailable("Node is not available")}
           end
         _ -> {:error, Errors.unavailable("Durable node store is not available")}
@@ -26,7 +35,7 @@ defmodule LemonControlPlane.NodeIO do
     result
   end
 
-  def invoke(_node_id, _method, _args, _ctx),
+  def invoke(_node_id, _method, _args, _ctx, _opts),
     do: {:error, Errors.invalid_request("nodeId must be a string")}
 
   defp await(invoke_id, ref, owner) do
