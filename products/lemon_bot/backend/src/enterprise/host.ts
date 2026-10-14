@@ -4,7 +4,7 @@ import { StringDecoder } from 'node:string_decoder';
 import { z } from 'zod';
 import type * as P from '../../../contracts/protocol';
 import type { BackendServices, Principal, RequestContext, Route } from '../core/services';
-import { fail } from '../core/errors';
+import { ApiError, fail } from '../core/errors';
 import { integrationConfiguration } from '../integrations/config';
 
 /**
@@ -12,6 +12,8 @@ import { integrationConfiguration } from '../integrations/config';
  * Stdin is one JSON operation; stdout must contain a JSON line with type
  * lemon_bot_host_result, matching operationId/machineId/configDigest/inputDigest.
  * A successful exit without that exact verified receipt is outcome_unknown.
+ * PTY command lines are bounded by escaped UTF-8 bytes, not JS code units;
+ * argv words are assembled literally and JSON is streamed by fixed printf.
  * Probes use the SAME ID/input and never execute the action again. No raw output
  * is persisted, audited, or returned. Destination drivers own secret resolution,
  * child environment wiping, firewall installation, encrypted tunnels and safe
@@ -59,6 +61,7 @@ export interface HostSnapshot {
 }
 export interface HostServices {
   admission(p: Principal, botId: string): Promise<void>;
+  canReadResource(p: Principal, collection: string, entity: unknown): boolean | undefined;
   appliedPolicyAdmission(p: Principal, botId: string): Promise<void>;
   governanceChanged(previous: P.Governance, next: P.Governance): Promise<void>;
   reconcile(): Promise<void>;
@@ -96,6 +99,17 @@ const principal = (c: RequestContext): Principal => {
   return c.user;
 };
 const quote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;
+const shellPieces = (value: string): string[] => {
+  const pieces: string[] = [];
+  let piece = '', bytes = 0;
+  for (const character of value) {
+    const size = character === "'" ? 4 : Buffer.byteLength(character, 'utf8');
+    if (bytes + size > 512) { pieces.push(piece); piece = ''; bytes = 0; }
+    piece += character; bytes += size;
+  }
+  if (piece) pieces.push(piece);
+  return pieces;
+};
 
 /** Canonical CIDR rejects host bits, ambiguous IPv4 and noncanonical IPv6. */
 export function canonicalNetworkRule(rule: P.NetworkRule): boolean {
@@ -138,6 +152,42 @@ export function createHostServices(s: BackendServices, options: HostOptions = {}
     return value;
   };
   const machine = (p: Principal, machineId: string, manage = true) => s.auth.machine(p, machineId, manage);
+  // Replay and event visibility use the same current host authority as routes,
+  // including every bulk result and both ends of an egress route.
+  const canReadResource = (p: Principal, collection: string, entity: unknown): boolean | undefined => {
+    if (!['hostOperations', 'setupManifests', 'setupRuns', 'policyApplications', 'networkPolicies', 'egressRoutes'].includes(collection)) return undefined;
+    try {
+      if (collection === 'egressRoutes') {
+        const route = parse(z.object({ ownerUserId: id, machineId: id, throughMachineId: id }), entity);
+        const role = s.auth.member(p.userId).role;
+        if (route.ownerUserId !== p.userId && role !== 'owner' && role !== 'admin') return false;
+        machine(p, route.machineId); machine(p, route.throughMachineId);
+      } else {
+        s.auth.requireRole(p, 'admin');
+        if (collection === 'hostOperations') {
+          const operation = parse(z.object({ results: z.array(z.object({ machineId: id })).min(1) }), entity);
+          operation.results.forEach(result => machine(p, result.machineId));
+        } else if (collection === 'setupManifests') {
+          const manifest = parse(z.object({ machineIds }), entity);
+          manifest.machineIds.forEach(machineId => machine(p, machineId));
+        } else if (collection === 'setupRuns') {
+          machine(p, parse(z.object({ machineId: id }), entity).machineId);
+        } else if (collection === 'policyApplications') {
+          const application = parse(z.union([z.object({ value: z.object({ machineId: id }) }), z.object({ machineId: id })]), entity);
+          machine(p, 'value' in application ? application.value.machineId : application.machineId);
+        } else {
+          const policy = parse(z.object({ scope: z.enum(['workspace', 'directory_group']), directoryGroupId: id.nullable() }), entity);
+          if (policy.scope === 'directory_group') {
+            if (!policy.directoryGroupId || !s.store.get('directoryGroups', policy.directoryGroupId)) return false;
+          } else if (policy.directoryGroupId !== null) return false;
+        }
+      }
+      return true;
+    } catch (error) {
+      if (error instanceof ApiError) return false;
+      throw error;
+    }
+  };
   const online = (m: P.Machine) => {
     if (!s.lemon.connected || m.status !== 'online' || !m.nodeId) fail('machine_offline', 'The selected host must be online.');
     if (!['node.shell.open', 'node.shell.input', 'node.shell.close'].every(method => s.lemon.methods.includes(method))) fail('capability_unavailable', 'The destination requires node shell PTY support.');
@@ -202,16 +252,10 @@ export function createHostServices(s: BackendServices, options: HostOptions = {}
       shellId = opened.shellId;
       for (const event of early) accept(event.event, event.payload);
       const argv = probe ? j.command.probeArgv : j.command.argv;
-      // Keep each canonical PTY input line below its kernel limit. JSON is
-      // streamed through fixed printf builtins, never interpreted as shell code.
-      const pieces: string[] = [];
-      let piece = '';
-      for (const character of json) {
-        if (piece.length + character.length > 512) { pieces.push(piece); piece = ''; }
-        piece += character;
-      }
-      if (piece) pieces.push(piece);
-      const text = `PS1= PS2=; unset PROMPT_COMMAND; stty -echo\n{\n${pieces.map(value => `printf '%s' ${quote(value)}`).join('\n')}\nprintf '\\n'\n} | ${argv.map(quote).join(' ')}; exit\n`;
+      // Canonical PTY limits count bytes AFTER shell escaping. Assemble each
+      // immutable argv word on bounded lines too; no input is evaluated as code.
+      const argumentsText = argv.map(value => `lb_host_arg=''\n${shellPieces(value).map(piece => `lb_host_arg="$lb_host_arg"${quote(piece)}`).join('\n')}\nset -- "$@" "$lb_host_arg"`).join('\n');
+      const text = `PS1= PS2=; unset PROMPT_COMMAND; stty -echo\nset --\n${argumentsText}\nunset lb_host_arg\n{\n${shellPieces(json).map(value => `printf '%s' ${quote(value)}`).join('\n')}\nprintf '\\n'\n} | "$@"; exit\n`;
       const buffer = Buffer.from(text);
       try {
         for (let offset = 0; offset < buffer.length; offset += 16384) {
@@ -606,7 +650,7 @@ export function createHostServices(s: BackendServices, options: HostOptions = {}
   const connected = s.lemon.onConnected(() => { void reconcile().catch(() => { s.audit(null, 'host.reconcile', 'hosts', 'failed'); }); });
   const timer = setInterval(() => { void reconcile().catch(() => { s.audit(null, 'host.reconcile', 'hosts', 'failed'); }); }, 45000); timer.unref?.();
   const service: HostServices = {
-    admission: appliedPolicyAdmission, appliedPolicyAdmission, governanceChanged, reconcile, processInactiveHosts,
+    admission: appliedPolicyAdmission, canReadResource, appliedPolicyAdmission, governanceChanged, reconcile, processInactiveHosts,
     dispose() { disposed = true; clearInterval(timer); connected(); if (hostServices.get(s) === service) hostServices.delete(s); },
     driver, management, machine, online, reserve, runJob, applyNetwork, deleteNetwork, authorizeEgress, changeEgress, authorizeManifest, reviewSetups,
     snapshot, operationTarget, saveOperation, launchOperation, saveRun, setupStep, work, saveEgress,
@@ -678,7 +722,7 @@ export function createHostRoutes(s: BackendServices, host: HostServices = create
       if (stopped.state !== 'disabled') fail('outcome_unknown', 'Route removal awaits verified stop.', false, { resourceIds: [r.id] });
       s.store.remove('egressRoutes', r.id); s.store.remove('egressDeletes', r.id); return { id: r.id, deleted: true };
     } },
-    { method: 'GET', path: '/v1/setup-manifests', auth: 'admin', handler: c => { const p = ensureAdmin(c); return s.page(c, s.store.list<P.SetupManifest>('setupManifests', m => m.machineIds.every(value => s.auth.canRead(p, 'machines', s.store.get('machines', value))))); } },
+    { method: 'GET', path: '/v1/setup-manifests', auth: 'admin', handler: c => { const p = ensureAdmin(c); return s.page(c, s.store.list<P.SetupManifest>('setupManifests', m => host.canReadResource(p, 'setupManifests', m) === true)); } },
     { method: 'POST', path: '/v1/setup-manifests', auth: 'admin', status: 201, handler: c => {
       const body = parse(manifestCreate, c.body), p = ensureAdmin(c), fields = { name: body.name, directoryGroupId: body.directoryGroupId ?? null, machineIds: body.machineIds, entries: body.entries, enabled: body.enabled }; host.authorizeManifest(p, fields);
       const value = s.resource('setup_manifest', fields); return s.store.transaction(() => { s.store.put('setupManifests', value); s.events.emit('setup_manifest.upserted', value, { userIds: [p.userId] }); return value; });
@@ -707,7 +751,7 @@ export function createHostRoutes(s: BackendServices, host: HostServices = create
       return { items: runs, nextCursor: null };
     } },
     { method: 'GET', path: '/v1/setup-runs', auth: 'admin', handler: c => {
-      const p = ensureAdmin(c); return s.page(c, s.store.list<P.SetupRun>('setupRuns', r => (!c.query.get('manifestId') || r.manifestId === c.query.get('manifestId')) && (!c.query.get('machineId') || r.machineId === c.query.get('machineId')) && s.auth.canRead(p, 'machines', s.store.get('machines', r.machineId))));
+      const p = ensureAdmin(c); return s.page(c, s.store.list<P.SetupRun>('setupRuns', r => (!c.query.get('manifestId') || r.manifestId === c.query.get('manifestId')) && (!c.query.get('machineId') || r.machineId === c.query.get('machineId')) && host.canReadResource(p, 'setupRuns', r) === true));
     } },
     { method: 'GET', path: '/v1/machines/:id/management', auth: 'member', handler: c => host.management(principal(c), c.params.id!) },
     { method: 'POST', path: '/v1/host-operations/preview', auth: 'admin', handler: async c => {
@@ -729,7 +773,7 @@ export function createHostRoutes(s: BackendServices, host: HostServices = create
       });
       c.nonceResourceIds.push(value.id); void host.launchOperation(value); return value;
     } },
-    { method: 'GET', path: '/v1/host-operations', auth: 'admin', handler: c => { const p = ensureAdmin(c); return s.page(c, s.store.list<P.HostOperation>('hostOperations', o => o.results.every(r => s.auth.canRead(p, 'machines', s.store.get('machines', r.machineId))))); } },
+    { method: 'GET', path: '/v1/host-operations', auth: 'admin', handler: c => { const p = ensureAdmin(c); return s.page(c, s.store.list<P.HostOperation>('hostOperations', o => host.canReadResource(p, 'hostOperations', o) === true)); } },
     { method: 'GET', path: '/v1/host-operations/:id', auth: 'admin', handler: c => { const p = ensureAdmin(c), value = s.store.require<P.HostOperation>('hostOperations', c.params.id!); value.results.forEach(r => host.machine(p, r.machineId)); return value; } },
   ];
   return routes;
