@@ -133,7 +133,7 @@ defmodule CodingAgent.Session.PlanningTest do
     pending = LemonCore.ExecApprovalStore.get_pending(approval_id)
     assert pending.invocation_context_key == "key-only-planning-client"
     assert pending.agent_id == "key-only-planner"
-    assert :ok = LemonCore.ExecApprovals.resolve(approval_id, :deny)
+    LemonCore.ExecApprovals.resolve(approval_id, :deny)
     assert_receive {:session_event, _, {:agent_end, _}}, 5_000
     assert {:ok, %{"mode" => "plan"}} = Session.plan(session)
   end

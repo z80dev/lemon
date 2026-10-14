@@ -64,6 +64,7 @@ def main():
             profile = required("APPLE_NOTARY_KEYCHAIN_PROFILE")
             # Authenticate before building; profile is created externally with notarytool store-credentials.
             run("xcrun", "notarytool", "history", "--keychain-profile", profile)
+            mac_provisioning = required("APPLE_MAC_PROVISIONING_PROFILE_SPECIFIER")
         else:
             identities = subprocess.check_output(["security", "find-identity", "-v", "-p", "codesigning"], text=True)
             if not any("Apple Distribution:" in line and f"({team})" in line for line in identities.splitlines()):
@@ -107,8 +108,12 @@ def main():
         artifacts = []
         if mac:
             signing = ["CODE_SIGN_STYLE=Manual", f"CODE_SIGN_IDENTITY={'-' if preview else identity}",
-                       "CODE_SIGNING_ALLOWED=YES", "APS_ENVIRONMENT=",
-                       f"CODE_SIGN_ENTITLEMENTS={source / 'LemonBotMac/LemonBotMacDebug.entitlements'}"]
+                       "CODE_SIGNING_ALLOWED=YES"]
+            if preview:
+                signing.extend(["APS_ENVIRONMENT=",
+                                f"CODE_SIGN_ENTITLEMENTS={source / 'LemonBotMac/LemonBotMacDebug.entitlements'}"])
+            else:
+                signing.append(f"PROVISIONING_PROFILE_SPECIFIER={mac_provisioning}")
             if team:
                 signing.append(f"DEVELOPMENT_TEAM={team}")
             run(*common, "-destination", "generic/platform=macOS", "ARCHS=arm64", "ONLY_ACTIVE_ARCH=NO", *signing, "build")

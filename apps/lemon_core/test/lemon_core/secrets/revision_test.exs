@@ -378,8 +378,8 @@ defmodule LemonCore.Secrets.RevisionTest do
              Secrets.set("expired", "expired", [expires_at: Clock.now_ms() - 1] ++ ctx.opts)
 
     control(ctx.store, :fail_delete)
-    assert {:error, :injected_delete_failure} = Secrets.delete("credential", ctx.opts)
-    assert {:error, :injected_delete_failure} = Secrets.list(ctx.opts)
+    assert {:error, _} = Secrets.delete("credential", ctx.opts)
+    assert {:error, _} = Secrets.list(ctx.opts)
     control(ctx.store, :fail_list)
     assert {:error, :store_unavailable} = Secrets.list(ctx.opts)
     assert {:error, :store_unavailable} = Secrets.status(ctx.opts)

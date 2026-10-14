@@ -26,22 +26,22 @@ python3 release.py ios-upload --version 2026.10.14 --build 1 \
 
 Pass the parent release's exact CalVer/channel and a monotonically increasing
 Apple build number. Apple's three-component marketing version is the numeric
-year.month.day; the exact CalVer (including optional revision) is retained in
+year.month.patch; the exact parent CalVer is retained in
 `LemonBotReleaseVersion`, with `LemonBotReleaseChannel` in every app/extension
 Info.plist. Device registration reads the real marketing version. Backend/API
 compatibility versions remain the backend's declared contract, not this build number.
 
 Signed Mac inputs: `APPLE_TEAM_ID`, `APPLE_DEVELOPER_ID_APPLICATION` (full
 `Developer ID Application: …` identity with its private key installed in the
-builder keychain), and `APPLE_NOTARY_KEYCHAIN_PROFILE` (created externally with
-`xcrun notarytool store-credentials`). The builder authenticates before compiling,
-uses hardened runtime and the existing sandbox-only Mac entitlement set, verifies
-the signature, requires notarization **Accepted**, staples/validates the app and
-DMG, and assesses the app with Gatekeeper. This normal Developer ID distribution
-has local notifications, not APNs; it deliberately omits the unused Mac App Group
-and provisioned APNs entitlement. Direct Xcode Release remains the separate
-provisioned APNs configuration requiring a matching profile. No security setting,
-Keychain loader, iOS entitlement, bundle identifier or QR behavior is changed.
+builder keychain), `APPLE_NOTARY_KEYCHAIN_PROFILE` (created externally with
+`xcrun notarytool store-credentials`), and
+`APPLE_MAC_PROVISIONING_PROFILE_SPECIFIER` for the app's registered identifier
+and Release entitlements. The builder authenticates before compiling, preserves
+the provisioned Release APNs configuration, uses hardened runtime, verifies the
+signature, requires notarization **Accepted**, staples/validates the app and DMG,
+and assesses the app with Gatekeeper. The local-preview mode alone uses Debug
+entitlements without APNs. No security setting, Keychain loader, iOS entitlement,
+bundle identifier or QR behavior is changed.
 
 iOS inputs: `APPLE_TEAM_ID`, `APPLE_IOS_EXPORT_OPTIONS` (external export plist
 with `method=app-store-connect`, `destination=export`, matching `teamID`, signing
@@ -214,3 +214,7 @@ Release packaging now provides explicit Developer ID notarized Mac DMG/ZIP and
 device iOS App Store archive/export/upload paths, fails closed on missing signing
 inputs, and keeps local ad-hoc packaging separate. Generated release bundles use
 parent CalVer/build metadata rather than a hard-coded Mac app version.
+
+Signed Mac packaging preserves the Release APNs entitlements and requires its
+matching provisioning profile; only explicitly requested local-preview packaging
+uses the non-provisioned Debug capability set.

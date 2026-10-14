@@ -230,6 +230,11 @@ export function createRuntimeService(services: BackendServices): ManagedRuntimeS
       return [{ run, bound }];
     });
   }
+  function ownTargetMapping(upstreamRunId: string, sessionKey: string) {
+    const matches = ownMappings(upstreamRunId, sessionKey);
+    // Control aliases may execute on this run; they do not own its native identity.
+    return matches.find(({ bound }) => bound.upstreamRunId === upstreamRunId) ?? matches[0];
+  }
   function emitRun(run: P.Run) {
     services.store.put('runs', run); services.events.emit('run.upserted', run, { conversationId: run.conversationId, botId: run.botId });
     const bot = services.store.get<P.Bot>('bots', run.botId);
@@ -345,7 +350,7 @@ export function createRuntimeService(services: BackendServices): ManagedRuntimeS
     if (event === 'exec.approval.requested') {
       const parsed = approvalSchema.safeParse(payload); if (!parsed.success) return;
       const request = parsed.data;
-      const owned = ownMappings(request.runId, request.sessionKey)[0]; if (!owned || terminalStatuses.includes(owned.run.status)) return;
+      const owned = ownTargetMapping(request.runId, request.sessionKey); if (!owned || terminalStatuses.includes(owned.run.status)) return;
       if (services.store.metadata<string>(`remoteApproval:${request.approvalId}`)) return;
       const principal = actor(owned.run.id); services.auth.bot(principal, owned.run.botId); services.auth.conversation(principal, owned.run.conversationId);
       const expiresInMs = Math.min(600_000, request.expiresAtMs - services.now()); if (expiresInMs < 1_000) return;
@@ -508,7 +513,7 @@ export function createRuntimeService(services: BackendServices): ManagedRuntimeS
         Object.assign(bound, mapping(run.id));
         bound.executionRunId = receipt.effectiveMode === 'interrupt' || receipt.effectiveMode.endsWith('_pending') ? run.id : targetId; services.store.setMetadata(`runtimeRun:${run.id}`, bound);
         const effectiveMode: P.MessageReceipt['delivery'][number]['effectiveMode'] = receipt.effectiveMode === 'new_run' ? 'started' : receipt.effectiveMode === 'steer' || receipt.effectiveMode === 'redirect' || receipt.effectiveMode === 'steer_backlog' ? 'steering' : receipt.effectiveMode === 'interrupt' ? 'interrupting' : 'queued';
-        const delivery: P.MessageReceipt['delivery'][number] = { botId: bot.id, requestedMode, effectiveMode, targetRunId: targetId === run.id ? null : ownMappings(targetId, bound.sessionKey)[0]!.run.id, runId: run.id };
+        const delivery: P.MessageReceipt['delivery'][number] = { botId: bot.id, requestedMode, effectiveMode, targetRunId: targetId === run.id ? null : ownTargetMapping(targetId, bound.sessionKey)!.run.id, runId: run.id };
         services.store.setMetadata(`runDelivery:${run.id}`, delivery);
         const latest = services.store.require<P.Run>('runs', run.id);
         const next = terminalStatuses.includes(latest.status) ? latest : emitRun(services.update(latest, { status: effectiveMode === 'queued' ? 'queued' : 'running', startedAtMs: effectiveMode === 'queued' ? latest.startedAtMs : latest.startedAtMs ?? services.now() }));
@@ -559,7 +564,7 @@ export function createRuntimeService(services: BackendServices): ManagedRuntimeS
               bound.executionRunId = target; services.store.setMetadata(`runtimeRun:${run.id}`, bound);
               const effectiveMode: P.MessageReceipt['delivery'][number]['effectiveMode'] = receipt.effectiveMode === 'new_run' ? 'started' : receipt.effectiveMode === 'steer' || receipt.effectiveMode === 'redirect' || receipt.effectiveMode === 'steer_backlog' ? 'steering' : receipt.effectiveMode === 'interrupt' ? 'interrupting' : 'queued';
               const delivery = services.store.metadata<P.MessageReceipt['delivery'][number]>(`runDelivery:${run.id}`);
-              services.store.setMetadata(`runDelivery:${run.id}`, { botId: run.botId, requestedMode: delivery?.requestedMode ?? 'followup', effectiveMode, targetRunId: receipt.targetRunId === null || receipt.targetRunId === run.id ? null : ownMappings(receipt.targetRunId, bound.sessionKey)[0]?.run.id ?? null, runId: run.id } satisfies P.MessageReceipt['delivery'][number]);
+              services.store.setMetadata(`runDelivery:${run.id}`, { botId: run.botId, requestedMode: delivery?.requestedMode ?? 'followup', effectiveMode, targetRunId: receipt.targetRunId === null || receipt.targetRunId === run.id ? null : ownTargetMapping(receipt.targetRunId, bound.sessionKey)?.run.id ?? null, runId: run.id } satisfies P.MessageReceipt['delivery'][number]);
               const current = services.store.require<P.Run>('runs', run.id);
               if (current.status === 'outcome_unknown' || current.status === 'queued') emitRun(services.update(current, { status: effectiveMode === 'queued' ? 'queued' : 'running', error: null, startedAtMs: effectiveMode === 'queued' ? current.startedAtMs : current.startedAtMs ?? services.now() }));
             } catch (error) { if (!(error instanceof ApiError)) throw error; services.store.setMetadata(`runtimeReconciliation:${run.id}`, { pending: true, code: error.code, measuredAtMs: services.now() }); }

@@ -211,7 +211,6 @@ defmodule CodingAgent.Tools.Task.Params do
              worktree: worktree,
              merge: merge,
              cwd: delegated_cwd,
-             tool_policy: effective_tool_policy,
              meta: sanitize_child_metadata(meta || %{}),
              session_key: session_key,
              agent_id: agent_id,

@@ -279,6 +279,10 @@ describe('owned placed runtime', () => {
   });
   test('steer follows the acknowledged target while interrupt keeps a new replacement execution ID', async () => {
     const f = fixture(); const runtime = createRuntimeService(f.services); f.services.runtime = runtime;
+    const originalId = f.services.id;
+    const runIds = ['run_z_original', 'run_a_steer', 'run_b_interrupt'];
+    f.services.now = () => 1_000;
+    f.services.id = prefix => prefix === 'run' ? runIds.shift()! : originalId(prefix);
     try {
       const first = await runtime.submit(f.alice, f.conversation, f.bot, { clientNonce: 'control_original_nonce_1', text: 'first' });
       const original = f.rpc;
