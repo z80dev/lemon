@@ -938,6 +938,7 @@ defmodule LemonAi.Providers.Anthropic do
   # ============================================================================
 
   @copilot_providers [:github_copilot, :"github-copilot"]
+  @kimi_providers [:kimi, :kimi_coding, "kimi", "kimi_coding"]
   @common_beta_features [
     "interleaved-thinking-2025-05-14",
     "fine-grained-tool-streaming-2025-05-14"
@@ -960,8 +961,12 @@ defmodule LemonAi.Providers.Anthropic do
     is_anthropic_oauth =
       anthropic_oauth_provider?(provider) and LemonAi.Auth.AnthropicOAuth.oauth_token?(api_key)
 
+    # Kimi Code OAuth tokens authenticate as a bearer with the Kimi CLI fingerprint.
+    is_kimi_oauth =
+      provider in @kimi_providers and LemonAi.Auth.KimiCodeOAuth.oauth_token?(api_key)
+
     auth_header =
-      if is_copilot or is_anthropic_oauth do
+      if is_copilot or is_anthropic_oauth or is_kimi_oauth do
         {"authorization", "Bearer #{api_key}"}
       else
         {"x-api-key", api_key}
@@ -1008,11 +1013,11 @@ defmodule LemonAi.Providers.Anthropic do
         []
       end
 
-    anthropic_oauth_headers =
-      if is_anthropic_oauth do
-        LemonAi.Auth.AnthropicOAuth.oauth_headers()
-      else
-        []
+    oauth_headers =
+      cond do
+        is_anthropic_oauth -> LemonAi.Auth.AnthropicOAuth.oauth_headers()
+        is_kimi_oauth -> LemonAi.Auth.KimiCodeOAuth.request_headers()
+        true -> []
       end
 
     # Merge beta tokens rather than letting an extra header remove required betas.
@@ -1031,7 +1036,7 @@ defmodule LemonAi.Providers.Anthropic do
         end
       )
 
-    headers = Map.new(base_headers ++ copilot_headers ++ anthropic_oauth_headers)
+    headers = Map.new(base_headers ++ copilot_headers ++ oauth_headers)
 
     Map.merge(headers, extra_headers, fn
       "anthropic-beta", required, extra ->

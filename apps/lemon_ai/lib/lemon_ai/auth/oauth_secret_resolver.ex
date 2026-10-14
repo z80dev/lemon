@@ -11,7 +11,9 @@ defmodule LemonAi.Auth.OAuthSecretResolver do
     LemonAi.Auth.GitHubCopilotOAuth,
     LemonAi.Auth.GoogleAntigravityOAuth,
     LemonAi.Auth.GoogleGeminiCliOAuth,
-    LemonAi.Auth.OpenAICodexOAuth
+    LemonAi.Auth.KimiCodeOAuth,
+    LemonAi.Auth.OpenAICodexOAuth,
+    LemonAi.Auth.XAIOAuth
   ]
 
   @spec resolve_api_key_from_secret(String.t(), String.t()) ::
