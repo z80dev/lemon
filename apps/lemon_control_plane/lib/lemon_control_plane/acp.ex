@@ -618,7 +618,7 @@ defmodule LemonControlPlane.ACP do
         "thought_level",
         Map.get(session, :thinking, "off"),
         Enum.map(
-          ~w(off minimal low medium high xhigh),
+          ~w(off minimal low medium high xhigh auto),
           &%{"value" => &1, "name" => String.capitalize(&1)}
         )
       ),

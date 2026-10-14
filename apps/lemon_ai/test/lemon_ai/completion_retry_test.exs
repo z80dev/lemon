@@ -23,10 +23,12 @@ defmodule LemonAi.CompletionRetryTest do
 
     defp request(options, policy, attempt) do
       send(options.provider_options.parent, :http_request)
-      result = Agent.get_and_update(options.provider_options.queue, fn
-        [result] -> {result, [result]}
-        [result | rest] -> {result, rest}
-      end)
+
+      result =
+        Agent.get_and_update(options.provider_options.queue, fn
+          [result] -> {result, [result]}
+          [result | rest] -> {result, rest}
+        end)
 
       case result do
         {:request_error, error} ->
@@ -41,11 +43,13 @@ defmodule LemonAi.CompletionRetryTest do
           send(options.provider_options.parent, {:private_stream, stream})
           EventStream.push(stream, {:start, %{message | content: []}})
           Enum.each(events, &EventStream.push(stream, &1))
+
           if message.stop_reason == :error do
             EventStream.error(stream, message)
           else
             EventStream.complete(stream, message)
           end
+
           {:ok, stream}
 
         %AssistantMessage{} = message ->
@@ -83,10 +87,18 @@ defmodule LemonAi.CompletionRetryTest do
     LemonAi.CircuitBreaker.reset(provider)
     model = %Model{id: "fake", name: "Fake", api: :completion_retry_test, provider: provider}
     parent = self()
+
     options = %{
       provider_options: %{queue: queue, parent: parent},
-      retry: [base_delay_ms: 2, sleep_fun: fn ms -> send(parent, {:sleep, ms}); :ok end]
+      retry: [
+        base_delay_ms: 2,
+        sleep_fun: fn ms ->
+          send(parent, {:sleep, ms})
+          :ok
+        end
+      ]
     }
+
     {model, Context.new(), options}
   end
 
@@ -126,9 +138,11 @@ defmodule LemonAi.CompletionRetryTest do
     options = %{options | retry: Keyword.put(options.retry, :max_attempts, 3)}
 
     assert LemonAi.complete(model, context, options) == {:error, error}
+
     for _ <- 1..3 do
       assert_receive :http_request
     end
+
     refute_received :http_request
     assert_receive {:sleep, 2}
     assert_receive {:sleep, delay}

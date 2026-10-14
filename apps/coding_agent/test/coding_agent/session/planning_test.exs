@@ -9,11 +9,40 @@ defmodule CodingAgent.Session.PlanningTest do
 
   setup do
     root = Path.join(System.tmp_dir!(), "lemon-plan-#{System.unique_integer([:positive])}")
-    File.mkdir_p!(root)
+    File.mkdir_p!(Path.join(root, ".lemon"))
+    File.write!(Path.join(root, ".lemon/config.toml"), "[features]\nsession_search = \"off\"\n")
+    previous_feature = System.get_env("LEMON_FEATURE_SESSION_SEARCH")
+    System.put_env("LEMON_FEATURE_SESSION_SEARCH", "off")
+    previous_req_options = Req.default_options()
+    {:ok, http_requests} = Agent.start(fn -> [] end)
+    Req.default_options(plug: {Req.Test, __MODULE__})
+    Req.Test.set_req_test_to_shared(%{})
+
+    Req.Test.stub(__MODULE__, fn conn ->
+      Agent.update(http_requests, &[{conn.host, conn.request_path} | &1])
+
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.send_resp(400, ~s({"error":{"message":"unexpected fixture HTTP request"}}))
+    end)
 
     on_exit(fn ->
+      Req.default_options(previous_req_options)
+      Req.Test.set_req_test_to_private(%{})
+
+      if previous_feature,
+        do: System.put_env("LEMON_FEATURE_SESSION_SEARCH", previous_feature),
+        else: System.delete_env("LEMON_FEATURE_SESSION_SEARCH")
+
       File.rm_rf!(root)
       File.rm_rf!(SessionManager.get_session_dir(root))
+
+      try do
+        assert Agent.get(http_requests, & &1) == [],
+               "scripted planning must not call HTTP providers"
+      after
+        Agent.stop(http_requests)
+      end
     end)
 
     %{root: root}
@@ -276,7 +305,11 @@ defmodule CodingAgent.Session.PlanningTest do
     assert LemonAgent.Agent.get_state(Session.get_state(resumed).agent).model.id == "gpt-4"
     assert :ok = Session.save(resumed)
     assert {:ok, manager} = SessionManager.load_from_file(path)
-    assert SessionManager.build_session_context(manager).model == %{provider: "openai", model_id: "gpt-4"}
+
+    assert SessionManager.build_session_context(manager).model == %{
+             provider: "openai",
+             model_id: "gpt-4"
+           }
   end
 
   test "approval restores the execution model before the next response in the same run", %{
@@ -319,12 +352,17 @@ defmodule CodingAgent.Session.PlanningTest do
   end
 
   test "invalid configured plan model leaves mode and execution model unchanged", %{root: root} do
-    settings = %{role_settings() | model_roles: %{"plan" => "openai:not-a-model"}}
+    settings = %{role_settings() | model_roles: %{"plan" => "unknown-provider:not-a-model"}}
 
     opts =
-      session_opts(root, fn _, _, _ -> {:ok, events(stop("done"))} end, fn _ ->
-        {:ok, :denied}
-      end, [])
+      session_opts(
+        root,
+        fn _, _, _ -> {:ok, events(stop("done"))} end,
+        fn _ ->
+          {:ok, :denied}
+        end,
+        []
+      )
       |> Keyword.put(:model, "openai:gpt-4")
       |> Keyword.put(:settings_manager, settings)
       |> Keyword.put(:workspace_dir, Path.join(root, "workspace"))

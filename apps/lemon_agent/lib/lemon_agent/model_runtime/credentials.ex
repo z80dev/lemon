@@ -133,11 +133,7 @@ defmodule LemonAgent.ModelRuntime.Credentials do
             {:error, :not_refreshable}
 
           true ->
-            [
-              provider_config_value(provider_cfg, :api_key_secret),
-              ProviderNames.default_secret_name(canonical)
-            ]
-            |> first_non_empty_binary()
+            generic_secret_name(provider_cfg, canonical)
             |> refresh_target_for(:generic)
         end
 
@@ -501,27 +497,47 @@ defmodule LemonAgent.ModelRuntime.Credentials do
   defp map_value(_, _), do: nil
 
   defp resolve_generic_api_key(provider, provider_cfg) do
-    env_key =
-      provider
-      |> ProviderNames.env_vars()
-      |> env_first()
+    if normalize_auth_source(provider_cfg) == :oauth do
+      case generic_secret_name(provider_cfg, provider) do
+        secret_name when is_binary(secret_name) ->
+          resolve_secret_api_key(secret_name, env_fallback: false)
 
-    cond do
-      present_value?(env_key) ->
-        env_key
+        _ ->
+          nil
+      end
+    else
+      env_key =
+        provider
+        |> ProviderNames.env_vars()
+        |> env_first()
 
-      present_value?(plain_api_key = provider_config_value(provider_cfg, :api_key)) ->
-        plain_api_key
+      cond do
+        present_value?(env_key) ->
+          env_key
 
-      present_value?(api_key_secret = provider_config_value(provider_cfg, :api_key_secret)) ->
-        resolve_secret_api_key(api_key_secret)
+        present_value?(plain_api_key = provider_config_value(provider_cfg, :api_key)) ->
+          plain_api_key
 
-      present_value?(default_secret = ProviderNames.default_secret_name(provider)) ->
-        resolve_secret_api_key(default_secret)
+        present_value?(api_key_secret = provider_config_value(provider_cfg, :api_key_secret)) ->
+          resolve_secret_api_key(api_key_secret)
 
-      true ->
-        nil
+        present_value?(default_secret = ProviderNames.default_secret_name(provider)) ->
+          resolve_secret_api_key(default_secret)
+
+        true ->
+          nil
+      end
     end
+  end
+
+  defp generic_secret_name(provider_cfg, provider) do
+    first_non_empty_binary([
+      if(normalize_auth_source(provider_cfg) == :oauth,
+        do: provider_config_value(provider_cfg, :oauth_secret)
+      ),
+      provider_config_value(provider_cfg, :api_key_secret),
+      ProviderNames.default_secret_name(provider)
+    ])
   end
 
   defp resolve_openai_codex_api_key(provider_cfg) do
@@ -579,7 +595,7 @@ defmodule LemonAgent.ModelRuntime.Credentials do
 
           {:error, reason} ->
             Logger.warning(
-              "Failed to resolve OpenAI Codex OAuth secret #{secret_name}: #{inspect(reason)}"
+              "Failed to resolve OpenAI Codex OAuth secret #{secret_name}: #{inspect(safe_reason(reason))}"
             )
 
             nil
@@ -983,6 +999,10 @@ defmodule LemonAgent.ModelRuntime.Credentials do
   # Error terms from OAuth helpers can carry provider response bodies; log only
   # their leading tag.
   defp safe_reason(reason) when is_atom(reason), do: reason
-  defp safe_reason(reason) when is_tuple(reason) and is_atom(elem(reason, 0)), do: elem(reason, 0)
+
+  defp safe_reason(reason)
+       when is_tuple(reason) and tuple_size(reason) > 0 and is_atom(elem(reason, 0)),
+       do: elem(reason, 0)
+
   defp safe_reason(_reason), do: :unknown
 end

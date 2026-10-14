@@ -2139,7 +2139,8 @@ defmodule LemonChannels.Adapters.Discord.Transport do
 
   defp thinking_scope_label(_), do: "this channel"
 
-  defp thinking_usage, do: "Usage: `/thinking [off|minimal|low|medium|high|xhigh|clear|status]`"
+  defp thinking_usage,
+    do: "Usage: `/thinking [off|minimal|low|medium|high|xhigh|auto|clear|status]`"
 
   defp normalize_thinking_arg(arg) when is_binary(arg) do
     case String.downcase(String.trim(arg)) do

@@ -303,6 +303,7 @@ defmodule LemonAgent.ModelRuntime.ProviderConfigurationTest do
 
     auto = Map.put(thinking, "thinkingLevel", "auto")
     assert {:ok, preview} = ProviderConfiguration.configure(auto)
+
     assert {:ok, _} =
              ProviderConfiguration.configure(
                Map.merge(auto, %{
@@ -310,6 +311,7 @@ defmodule LemonAgent.ModelRuntime.ProviderConfigurationTest do
                  "expectedRevision" => preview["configRevision"]
                })
              )
+
     assert LemonCore.Config.load(ctx.project).agent.default_thinking_level == :auto
   end
 

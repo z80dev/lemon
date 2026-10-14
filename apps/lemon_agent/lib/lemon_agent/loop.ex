@@ -525,6 +525,7 @@ defmodule LemonAgent.Loop do
 
     # Process pending messages (inject before next assistant response)
     config = AutoThinking.reset_for_user_prompts(config, pending_messages)
+
     {context, new_messages, _cleared_pending} =
       process_pending_messages(context, new_messages, pending_messages, stream)
 
@@ -736,7 +737,9 @@ defmodule LemonAgent.Loop do
             config.resolve_stream_options.(model, config.model, config.stream_options)
 
           model.provider != config.model.provider ->
-            LemonAgent.ModelRuntime.StreamOptions.sanitize_for_provider_switch(config.stream_options)
+            LemonAgent.ModelRuntime.StreamOptions.sanitize_for_provider_switch(
+              config.stream_options
+            )
 
           true ->
             config.stream_options

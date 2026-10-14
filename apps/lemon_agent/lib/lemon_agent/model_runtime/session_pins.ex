@@ -58,6 +58,7 @@ defmodule LemonAgent.ModelRuntime.SessionPins do
   @spec matches?(map() | nil, atom() | String.t(), String.t()) :: boolean()
   def matches?(%{provider: pinned} = pin, provider, candidate_id) do
     model_id = Map.get(pin, :model_id)
+
     normalize_provider(pinned) == normalize_provider(provider) and
       (is_nil(model_id) or model_id == candidate_id)
   end

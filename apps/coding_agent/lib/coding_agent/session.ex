@@ -673,7 +673,6 @@ defmodule CodingAgent.Session do
     else
       case CodingAgent.Session.Planning.transition_session(state, action, opts) do
         {:ok, plan, state} ->
-
           {:reply, {:ok, plan}, state}
 
         {:error, _} = error ->

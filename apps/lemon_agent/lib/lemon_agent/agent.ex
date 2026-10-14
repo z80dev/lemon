@@ -519,7 +519,8 @@ defmodule LemonAgent.Agent do
     agent_state = %AgentState{
       system_prompt: Map.get(initial_state_opts, :system_prompt, ""),
       model: Map.get(initial_state_opts, :model),
-      thinking_level: AutoThinking.normalize_level(Map.get(initial_state_opts, :thinking_level, :off)),
+      thinking_level:
+        AutoThinking.normalize_level(Map.get(initial_state_opts, :thinking_level, :off)),
       tools: Map.get(initial_state_opts, :tools, []),
       messages: Map.get(initial_state_opts, :messages, []),
       budget_limits:
@@ -1011,6 +1012,7 @@ defmodule LemonAgent.Agent do
       else
         reasoning_from_thinking_level(state.agent_state.thinking_level)
       end
+
     stream_options = build_stream_options(state, reasoning)
     queue_call_timeout = state.queue_call_timeout
 
@@ -1084,7 +1086,6 @@ defmodule LemonAgent.Agent do
   end
 
   defp reasoning_from_thinking_level(:off), do: nil
-  defp reasoning_from_thinking_level(:auto), do: nil
   defp reasoning_from_thinking_level(level), do: level
 
   @spec run_agent_loop(

@@ -19,7 +19,7 @@ defmodule LemonWeb.SettingsLive do
 
   alias LemonWeb.ProviderConfig
 
-  @thinking_levels ~w(off minimal low medium high xhigh)
+  @thinking_levels ~w(off minimal low medium high xhigh auto)
   @identifier ~r/^[A-Za-z0-9][A-Za-z0-9._:\/@+-]{0,127}$/
 
   @impl true

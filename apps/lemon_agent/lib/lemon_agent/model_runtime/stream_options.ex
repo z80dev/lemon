@@ -11,8 +11,18 @@ defmodule LemonAgent.ModelRuntime.StreamOptions do
   alias LemonAgent.ModelRuntime.ProviderNames
   alias LemonAgent.ProviderConfigResolver
 
-  @effort_budget_keys [:minimal, :low, :medium, :high, :xhigh,
-                       "minimal", "low", "medium", "high", "xhigh"]
+  @effort_budget_keys [
+    :minimal,
+    :low,
+    :medium,
+    :high,
+    :xhigh,
+    "minimal",
+    "low",
+    "medium",
+    "high",
+    "xhigh"
+  ]
 
   @doc """
   Removes provider-bound credentials and routing inputs before a provider switch.
@@ -31,15 +41,16 @@ defmodule LemonAgent.ModelRuntime.StreamOptions do
           else: acc
       end)
 
-    %{options |
-      api_key: nil,
-      access_token: nil,
-      service_account_json: nil,
-      project: nil,
-      location: nil,
-      headers: %{},
-      provider_options: %{},
-      thinking_budgets: thinking_budgets
+    %{
+      options
+      | api_key: nil,
+        access_token: nil,
+        service_account_json: nil,
+        project: nil,
+        location: nil,
+        headers: %{},
+        provider_options: %{},
+        thinking_budgets: thinking_budgets
     }
   end
 

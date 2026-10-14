@@ -134,7 +134,11 @@ defmodule CodingAgent.Session.ProviderFallback do
 
     route_options =
       model
-      |> ModelResolver.build_stream_options(ctx.settings, clear_api_key(original_options), ctx.cwd)
+      |> ModelResolver.build_stream_options(
+        ctx.settings,
+        clear_api_key(original_options),
+        ctx.cwd
+      )
       |> apply_credential_api_key(entry, model, ctx.settings, original_options)
 
     entry = Map.put(entry, :api_key, route_options.api_key)
@@ -151,6 +155,27 @@ defmodule CodingAgent.Session.ProviderFallback do
 
       {:error, reason} when reason in [:aborted, :redirected] ->
         LemonAi.EventStream.cancel(ctx.output_stream, reason)
+
+      {:error, %LemonAi.Types.AssistantMessage{} = message} ->
+        cond do
+          message.stop_reason in [:aborted, :redirected] ->
+            LemonAi.EventStream.error(ctx.output_stream, message)
+
+          useful_event?({:error, :error, message}) ->
+            record_commit(model, entry, ctx)
+            LemonAi.EventStream.error(ctx.output_stream, %{message | stop_reason: :error})
+
+          true ->
+            handle_failure(
+              model,
+              entry,
+              more_entries,
+              rest,
+              ctx,
+              message,
+              {:error, message, model}
+            )
+        end
 
       {:error, reason} ->
         handle_failure(model, entry, more_entries, rest, ctx, reason, {:error, reason, model})
@@ -175,6 +200,7 @@ defmodule CodingAgent.Session.ProviderFallback do
   defp handle_failure(model, entry, more_entries, rest, ctx, reason, terminal) do
     details = error_details(reason)
     refresh_id = {normalize_provider_id(model.provider), entry.ref}
+
     refresh? =
       details.status == 401 and details.category == :auth and
         not MapSet.member?(ctx.refreshed, refresh_id)
@@ -195,13 +221,16 @@ defmodule CodingAgent.Session.ProviderFallback do
   end
 
   defp advance_after_failure(model, entry, more_entries, rest, ctx, reason, terminal, details) do
-    action = if reason == {:canceled, :timeout}, do: :next_provider,
-      else: LemonAi.Error.failover_action(reason)
+    action =
+      if reason == {:canceled, :timeout},
+        do: :next_provider,
+        else: LemonAi.Error.failover_action(reason)
 
     if action in [:next_credential, :next_provider] do
       CredentialHealth.record_failure(model.provider, entry.ref, details.category,
         retry_after_ms: retry_after_hint(reason)
       )
+
       maybe_clear_pin(model, entry, ctx)
     end
 
@@ -218,8 +247,10 @@ defmodule CodingAgent.Session.ProviderFallback do
   end
 
   defp error_details({:error, _reason, message}), do: error_details(message)
+
   defp error_details(%{error_details: nil, error_message: message}) when is_binary(message),
     do: LemonAi.Error.to_error_details(message)
+
   defp error_details(reason), do: LemonAi.Error.to_error_details(reason)
 
   defp retry_after_hint({:error, _reason, message}), do: retry_after_hint(message)
@@ -254,6 +285,7 @@ defmodule CodingAgent.Session.ProviderFallback do
 
   defp lead_with_pinned_model(candidates, session_scope) do
     pin = SessionPins.get(session_scope)
+
     {matches, others} =
       Enum.split_with(candidates, &SessionPins.matches?(pin, &1.provider, &1.id))
 
@@ -333,11 +365,17 @@ defmodule CodingAgent.Session.ProviderFallback do
 
         not state.committed and state.buffered_events >= @max_precommit_events ->
           LemonAi.EventStream.cancel(response_stream, :overflow)
-          LemonAi.EventStream.error(output_stream, error_message(nil, "provider_event_buffer_overflow"))
+
+          LemonAi.EventStream.error(
+            output_stream,
+            error_message(nil, "provider_event_buffer_overflow")
+          )
+
           {:halt, {:done, false}}
 
         not state.committed ->
-          {:cont, %{state | buffer: [event | state.buffer], buffered_events: state.buffered_events + 1}}
+          {:cont,
+           %{state | buffer: [event | state.buffer], buffered_events: state.buffered_events + 1}}
 
         terminal_event?(event) ->
           emit_event(output_stream, event)
@@ -370,8 +408,11 @@ defmodule CodingAgent.Session.ProviderFallback do
   # permit replay. Request errors and context overflow surface to the session.
   defp failover_action({:error, reason, _message}) when reason in [:aborted, :redirected],
     do: nil
-  defp failover_action({:error, _, %{stop_reason: reason}}) when reason in [:aborted, :redirected],
-    do: nil
+
+  defp failover_action({:error, _, %{stop_reason: reason}})
+       when reason in [:aborted, :redirected],
+       do: nil
+
   defp failover_action({:error, _reason, _message} = event) do
     case LemonAi.Error.failover_action(event) do
       :next_credential -> :next_credential
@@ -399,8 +440,10 @@ defmodule CodingAgent.Session.ProviderFallback do
   defp useful_event?({:tool_call_start, _idx, _message}), do: true
   defp useful_event?({:tool_call_end, _idx, _tool_call, _message}), do: true
   defp useful_event?({:tool_call_delta, _idx, _delta, _message}), do: true
+
   defp useful_event?({kind, _reason, %{content: content}}) when kind in [:done, :error],
     do: Enum.any?(content, &nonempty_content?/1)
+
   defp useful_event?(_), do: false
 
   defp nonempty_content?(%{type: :text, text: text}), do: text != ""
@@ -486,8 +529,10 @@ defmodule CodingAgent.Session.ProviderFallback do
 
   defp replace_resolved_api_key(%{api_key: _} = config, api_key),
     do: %{config | api_key: api_key}
+
   defp replace_resolved_api_key(%{"api_key" => _} = config, api_key),
     do: %{config | "api_key" => api_key}
+
   defp replace_resolved_api_key(config, _api_key), do: config
 
   defp ensure_api_key(

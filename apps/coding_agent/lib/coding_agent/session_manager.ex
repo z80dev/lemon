@@ -1157,6 +1157,7 @@ defmodule CodingAgent.SessionManager do
   defp encode_thinking_level(:medium), do: "medium"
   defp encode_thinking_level(:high), do: "high"
   defp encode_thinking_level(:xhigh), do: "xhigh"
+  defp encode_thinking_level(:auto), do: "auto"
 
   defp reject_nil_values(map) do
     map

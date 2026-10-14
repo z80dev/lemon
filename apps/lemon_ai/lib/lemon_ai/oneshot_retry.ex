@@ -58,9 +58,15 @@ defmodule LemonAi.OneshotRetry do
       case failure(result) do
         {:failed, error} ->
           cond do
-            cancelled?(options) -> result
-            number >= policy.max_attempts -> result
-            not Error.retryable?(error) -> result
+            cancelled?(options) ->
+              result
+
+            number >= policy.max_attempts ->
+              result
+
+            not Error.retryable?(error) ->
+              result
+
             true ->
               case RetryHelper.error_retry_after_ms(error) do
                 hint when is_integer(hint) and hint > policy.max_delay_ms ->
@@ -86,8 +92,11 @@ defmodule LemonAi.OneshotRetry do
 
   defp failure(%AssistantMessage{stop_reason: :error} = message), do: {:failed, message}
   defp failure({:ok, %AssistantMessage{stop_reason: :error} = message}), do: {:failed, message}
-  defp failure({:error, %AssistantMessage{stop_reason: reason}}) when reason in [:aborted, :redirected],
-    do: :success
+
+  defp failure({:error, %AssistantMessage{stop_reason: reason}})
+       when reason in [:aborted, :redirected],
+       do: :success
+
   defp failure({:error, reason}), do: {:failed, reason}
   defp failure(_result), do: :success
 
@@ -95,7 +104,9 @@ defmodule LemonAi.OneshotRetry do
 
   defp sleep(delay, options) do
     case Map.get(options, :sleep_fun) do
-      nil -> wait(System.monotonic_time(:millisecond) + delay, options)
+      nil ->
+        wait(System.monotonic_time(:millisecond) + delay, options)
+
       sleep_fun ->
         case sleep_fun.(delay) do
           {:error, _reason} = canceled -> canceled
@@ -108,8 +119,12 @@ defmodule LemonAi.OneshotRetry do
     remaining = deadline - System.monotonic_time(:millisecond)
 
     cond do
-      cancelled?(options) -> {:error, :aborted}
-      remaining <= 0 -> :ok
+      cancelled?(options) ->
+        {:error, :aborted}
+
+      remaining <= 0 ->
+        :ok
+
       true ->
         Process.sleep(min(remaining, 50))
         wait(deadline, options)

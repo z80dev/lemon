@@ -175,6 +175,7 @@ defmodule LemonAgent.BudgetTest do
     updates = for {:usage_budget_updated, update} <- events, do: update
     assert Enum.map(updates, & &1.run_usage.tokens) == [0, 3]
     assert List.last(updates).session_usage == %{tokens: 3, cost_usd: 0.1}
+
     assert {:error, {:assistant_error, _}, %{new_messages: [_prompt, ^failure]}} =
              List.last(events)
   end

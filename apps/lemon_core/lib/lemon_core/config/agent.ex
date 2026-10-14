@@ -329,16 +329,19 @@ defmodule LemonCore.Config.Agent do
              Regex.match?(~r/^[A-Za-z0-9_-]+:[^\s]+$/u, selector) do
           selector
         else
-          raise ArgumentError, "runtime.provider_routing.fallback_models contains an invalid selector"
+          raise ArgumentError,
+                "runtime.provider_routing.fallback_models contains an invalid selector"
         end
 
       _ ->
-        raise ArgumentError, "runtime.provider_routing.fallback_models must contain model selectors"
+        raise ArgumentError,
+              "runtime.provider_routing.fallback_models must contain model selectors"
     end)
   end
 
   defp normalize_fallback_models(_) do
-    raise ArgumentError, "runtime.provider_routing.fallback_models must be an array of at most 64 selectors"
+    raise ArgumentError,
+          "runtime.provider_routing.fallback_models must be an array of at most 64 selectors"
   end
 
   # Credential pools carry a provider list plus optional per-provider

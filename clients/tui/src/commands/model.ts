@@ -13,7 +13,7 @@ import { asArray, pickBoolean, pickNumber, pickString } from "./format.ts";
 import type { CommandContext, SlashCommand } from "./registry.ts";
 
 /** `LemonCore.Config.parse_thinking_level/1`. */
-export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;
+export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "auto"] as const;
 
 /** `LemonCore.Config.parse_tool_policy/1` profiles. */
 export const TOOL_POLICY_PROFILES = [

@@ -893,6 +893,13 @@ environment references cannot refresh. Provider retry hints are retained for
 credential cooldowns. The model/credential that commits is pinned for subsequent
 turns in that session, preserving provider caches.
 
+For generic OAuth providers, `auth_source = "oauth"` makes the selected stored
+login authoritative for both initial resolution and 401 refresh:
+`oauth_secret`, then `api_key_secret`, then the provider's default secret name.
+A missing selected login fails closed rather than using an ambient environment
+key, inline key, or another account's default login. Other auth modes keep their
+existing environment-first API-key precedence.
+
 Malformed requests (for example HTTP 400) are terminal, including failures before
 a stream starts. Context overflow reaches the existing once-per-turn compaction
 recovery instead of replaying an unchanged prompt on another provider.

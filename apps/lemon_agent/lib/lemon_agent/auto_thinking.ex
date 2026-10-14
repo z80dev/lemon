@@ -139,8 +139,13 @@ defmodule LemonAgent.AutoThinking do
               else
                 effort = clamp(config.model, effort)
                 if config.on_thinking_resolved, do: config.on_thinking_resolved.(marker, effort)
+
                 {:ok,
-                 %{put_effort(config, effort) | thinking_prompt: marker, resolved_thinking: effort}}
+                 %{
+                   put_effort(config, effort)
+                   | thinking_prompt: marker,
+                     resolved_thinking: effort
+                 }}
               end
             end
         end

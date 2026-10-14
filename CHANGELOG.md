@@ -15,6 +15,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   rotation, retry-after-aware credential cooldowns, and model-aware session
   pinning. Fatal requests and context overflow do not walk fallback chains;
   no automatic recovery replays committed text, thinking, or tool-call output.
+- Generic OAuth provider selection now keeps the same stored account through
+  initial resolution and 401 refresh, honoring `oauth_secret` without falling
+  back to ambient or inline keys when that login is missing. Codex refresh
+  failures no longer log raw provider error bodies.
 - Opt-in `thinking_level = "auto"` classifies each user prompt with an explicitly
   configured tiny/smol model and maps its effort to the active provider's
   supported levels. `@plan` and `@commit` join the built-in model role selectors.

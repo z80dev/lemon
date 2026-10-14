@@ -75,7 +75,7 @@ defmodule LemonWeb.Chat.PaneLive do
   @flush_ms 40
   @subagent_refresh_ms 2_000
   @control_modes [:followup, :steer, :redirect]
-  @thinking_levels ~w(off minimal low medium high xhigh)
+  @thinking_levels ~w(off minimal low medium high xhigh auto)
   @tool_profiles [
     {"full_access", "Full access", "All tools"},
     {"safe_mode", "Safe mode", "No dangerous tools"},

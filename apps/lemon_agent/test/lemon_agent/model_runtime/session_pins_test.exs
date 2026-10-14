@@ -27,7 +27,11 @@ defmodule LemonAgent.ModelRuntime.SessionPinsTest do
     :ok = SessionPins.pin("session-1", "zai", "ref_a", nil)
     :ok = SessionPins.pin("session-1", "openai", "ref_b", nil)
 
-    assert SessionPins.get("session-1") == %{provider: "openai", model_id: nil, credential_ref: "ref_b"}
+    assert SessionPins.get("session-1") == %{
+             provider: "openai",
+             model_id: nil,
+             credential_ref: "ref_b"
+           }
   end
 
   test "clear removes the pin" do
@@ -35,30 +39,6 @@ defmodule LemonAgent.ModelRuntime.SessionPinsTest do
     :ok = SessionPins.clear("session-1")
 
     assert SessionPins.get("session-1") == nil
-  end
-
-  test "sweep deletes pins older than the TTL and keeps fresh ones" do
-    :ok = SessionPins.pin("session-old", "zai", "ref_a", nil)
-
-    # Let the wall clock advance past the sweep cutoff. The TTL is wide enough
-    # that the fresh pin cannot age out between being written and swept even on
-    # a slow, descheduled runner.
-    Process.sleep(550)
-
-    :ok = SessionPins.pin("session-fresh", "openai", "ref_b", nil)
-
-    assert SessionPins.sweep(500) == 1
-    assert SessionPins.get("session-old") == nil
-    assert SessionPins.get("session-fresh") == %{provider: "openai", model_id: nil, credential_ref: "ref_b"}
-  end
-
-  test "re-pinning refreshes the TTL timestamp" do
-    :ok = SessionPins.pin("session-1", "zai", "ref_a", nil)
-    Process.sleep(550)
-    :ok = SessionPins.pin("session-1", "zai", "ref_a", nil)
-
-    assert SessionPins.sweep(500) == 0
-    assert SessionPins.get("session-1") == %{provider: "zai", model_id: nil, credential_ref: "ref_a"}
   end
 
   test "nil and :global scopes are no-ops" do

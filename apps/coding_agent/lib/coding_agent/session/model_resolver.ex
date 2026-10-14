@@ -546,8 +546,12 @@ defmodule CodingAgent.Session.ModelResolver do
 
   defp lead_with_pinned_model(models, session_scope) do
     pin = LemonAgent.ModelRuntime.SessionPins.get(session_scope)
+
     {matches, others} =
-      Enum.split_with(models, &LemonAgent.ModelRuntime.SessionPins.matches?(pin, &1.provider, &1.id))
+      Enum.split_with(
+        models,
+        &LemonAgent.ModelRuntime.SessionPins.matches?(pin, &1.provider, &1.id)
+      )
 
     matches ++ others
   end

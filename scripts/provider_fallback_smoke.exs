@@ -5,15 +5,23 @@ defmodule LemonScripts.ProviderFallbackSmoke do
   alias LemonAi.Types.{AssistantMessage, TextContent}
 
   def main do
-    root = Path.join(System.tmp_dir!(), "lemon-fallback-smoke-#{System.unique_integer([:positive])}")
+    root =
+      Path.join(System.tmp_dir!(), "lemon-fallback-smoke-#{System.unique_integer([:positive])}")
+
     File.mkdir!(root)
     home = Path.join(root, "home")
     cwd = Path.join(root, "project")
     File.mkdir!(home)
     File.mkdir!(cwd)
     System.put_env("HOME", home)
+    System.put_env("LEMON_AGENT_DIR", Path.join(home, ".lemon/agent"))
+    Application.put_env(:lemon_core, :paths, home_dir: home)
     System.put_env("LEMON_STORE_PATH", Path.join(root, "store"))
     System.put_env("LEMON_SECRETS_MASTER_KEY", Base.encode64(:crypto.strong_rand_bytes(32)))
+    # This smoke exercises fallback, not unrelated post-turn memory extraction.
+    System.put_env("LEMON_FEATURE_SESSION_SEARCH", "off")
+    File.mkdir!(Path.join(cwd, ".lemon"))
+    File.write!(Path.join(cwd, ".lemon/config.toml"), "[features]\nsession_search = \"off\"\n")
 
     # Remove ambient credentials without reading or logging their values.
     Enum.each(
@@ -59,7 +67,6 @@ defmodule LemonScripts.ProviderFallbackSmoke do
         Session.start_link(
           cwd: cwd,
           workspace_dir: Path.join(cwd, "workspace"),
-          session_file: Path.join(cwd, "session.jsonl"),
           settings_manager: settings,
           model: "openai:gpt-4",
           system_prompt: "Reply briefly without tools.",
@@ -70,6 +77,7 @@ defmodule LemonScripts.ProviderFallbackSmoke do
       try do
         unsubscribe = Session.subscribe(session)
         :ok = Session.prompt(session, "Prove model fallback works.")
+
         {messages, ["gpt-4", "gpt-4o-mini"] = attempts} =
           await_completion(System.monotonic_time(:millisecond) + 10_000, [])
 
@@ -77,15 +85,19 @@ defmodule LemonScripts.ProviderFallbackSmoke do
           Enum.filter(messages, &match?(%AssistantMessage{}, &1))
 
         [%TextContent{text: "Fallback endpoint answered."}] = content
-        true = File.regular?(Path.join(cwd, "session.jsonl"))
+        :ok = Session.save(session)
+        true = File.regular?(Session.get_state(session).session_file)
         unsubscribe.()
-        IO.puts(Jason.encode!(%{
-          status: "passed",
-          attempts: attempts,
-          final_model: "gpt-4o-mini",
-          fallback_fired: true,
-          session_persisted: true
-        }))
+
+        IO.puts(
+          Jason.encode!(%{
+            status: "passed",
+            attempts: attempts,
+            final_model: "gpt-4o-mini",
+            fallback_fired: true,
+            session_persisted: true
+          })
+        )
       after
         GenServer.stop(session)
       end
@@ -98,11 +110,17 @@ defmodule LemonScripts.ProviderFallbackSmoke do
     remaining = max(deadline - System.monotonic_time(:millisecond), 0)
 
     receive do
-      {:http_attempt, model} -> await_completion(deadline, attempts ++ [model])
-      {:session_event, _id, {:agent_end, messages}} -> {messages, attempts}
+      {:http_attempt, model} ->
+        await_completion(deadline, attempts ++ [model])
+
+      {:session_event, _id, {:agent_end, messages}} ->
+        {messages, attempts}
+
       {:session_event, _id, {:error, reason, _partial}} ->
         raise "fixture session failed: #{inspect(reason)}"
-      {:session_event, _id, _event} -> await_completion(deadline, attempts)
+
+      {:session_event, _id, _event} ->
+        await_completion(deadline, attempts)
     after
       remaining -> raise "fixture session did not complete"
     end
@@ -120,9 +138,14 @@ defmodule LemonScripts.ProviderFallbackSmoke do
 
         :ok =
           :gen_tcp.send(socket, [
-            "HTTP/1.1 ", status, "\r\ncontent-type: ", content_type,
-            "\r\ncontent-length: ", Integer.to_string(byte_size(response)),
-            "\r\nconnection: close\r\n\r\n", response
+            "HTTP/1.1 ",
+            status,
+            "\r\ncontent-type: ",
+            content_type,
+            "\r\ncontent-length: ",
+            Integer.to_string(byte_size(response)),
+            "\r\nconnection: close\r\n\r\n",
+            response
           ])
 
         :gen_tcp.close(socket)
@@ -135,7 +158,9 @@ defmodule LemonScripts.ProviderFallbackSmoke do
 
   defp receive_headers(socket, buffer) do
     case :binary.split(buffer, "\r\n\r\n") do
-      [headers, body] -> {headers, body}
+      [headers, body] ->
+        {headers, body}
+
       [_] ->
         {:ok, bytes} = :gen_tcp.recv(socket, 0, 5_000)
         receive_headers(socket, buffer <> bytes)
@@ -161,17 +186,76 @@ defmodule LemonScripts.ProviderFallbackSmoke do
   end
 
   defp response("gpt-4o-mini") do
+    text = "Fallback endpoint answered."
+    part = %{"type" => "output_text", "text" => text, "annotations" => []}
+
+    item = %{
+      "id" => "fixture-message",
+      "type" => "message",
+      "role" => "assistant",
+      "status" => "completed",
+      "content" => [part]
+    }
+
+    # The catalog model uses Responses, not Chat Completions. A completed
+    # response lifecycle is required; closing after choices/[DONE] is an error.
     events = [
-      %{"id" => "fixture", "model" => "gpt-4o-mini", "choices" => [
-        %{"index" => 0, "delta" => %{"role" => "assistant", "content" => "Fallback endpoint answered."}, "finish_reason" => nil}
-      ]},
-      %{"id" => "fixture", "model" => "gpt-4o-mini", "choices" => [
-        %{"index" => 0, "delta" => %{}, "finish_reason" => "stop"}
-      ], "usage" => %{"prompt_tokens" => 5, "completion_tokens" => 5, "total_tokens" => 10}}
+      %{
+        "type" => "response.created",
+        "response" => %{"id" => "fixture", "model" => "gpt-4o-mini", "status" => "in_progress"}
+      },
+      %{
+        "type" => "response.output_item.added",
+        "output_index" => 0,
+        "item" => %{item | "status" => "in_progress", "content" => []}
+      },
+      %{
+        "type" => "response.content_part.added",
+        "item_id" => item["id"],
+        "output_index" => 0,
+        "content_index" => 0,
+        "part" => %{part | "text" => ""}
+      },
+      %{
+        "type" => "response.output_text.delta",
+        "item_id" => item["id"],
+        "output_index" => 0,
+        "content_index" => 0,
+        "delta" => text
+      },
+      %{
+        "type" => "response.output_text.done",
+        "item_id" => item["id"],
+        "output_index" => 0,
+        "content_index" => 0,
+        "text" => text
+      },
+      %{
+        "type" => "response.content_part.done",
+        "item_id" => item["id"],
+        "output_index" => 0,
+        "content_index" => 0,
+        "part" => part
+      },
+      %{"type" => "response.output_item.done", "output_index" => 0, "item" => item},
+      %{
+        "type" => "response.completed",
+        "response" => %{
+          "id" => "fixture",
+          "model" => "gpt-4o-mini",
+          "status" => "completed",
+          "output" => [item],
+          "usage" => %{"input_tokens" => 5, "output_tokens" => 5, "total_tokens" => 10}
+        }
+      }
     ]
 
-    body = Enum.map_join(events, "", &("data: " <> Jason.encode!(&1) <> "\n\n"))
-    {"200 OK", "text/event-stream", body <> "data: [DONE]\n\n"}
+    body =
+      Enum.map_join(events, "", fn event ->
+        "event: " <> event["type"] <> "\ndata: " <> Jason.encode!(event) <> "\n\n"
+      end)
+
+    {"200 OK", "text/event-stream", body}
   end
 end
 

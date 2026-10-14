@@ -394,18 +394,27 @@ defmodule LemonAgent.Loop.StreamingTest do
   test "context overflow and authentication failures do not consume retry attempts" do
     for error <- ["maximum context length exceeded", "Invalid API key"] do
       parent = self()
-      response = %{Mocks.assistant_message("") | stop_reason: :error, error_message: error}
+
+      response = %{
+        Mocks.assistant_message("")
+        | stop_reason: :error,
+          error_message: error,
+          error_details: Map.put(LemonAi.Error.to_error_details(error), :output_committed, true)
+      }
 
       stream_fn = fn _, _, _ ->
         send(parent, :request_attempt)
-        Mocks.mock_stream_fn_single_direct(response).(nil, nil, nil)
+        {:ok, ai_stream} = LemonAi.EventStream.start_link()
+        LemonAi.EventStream.push(ai_stream, {:start, response})
+        LemonAi.EventStream.error(ai_stream, response)
+        {:ok, ai_stream}
       end
 
       config = simple_config(stream_fn: stream_fn)
       context = simple_context(messages: [user_message("run")])
       {:ok, stream} = EventStream.start_link(timeout: :infinity)
 
-      assert {:ok, %{stop_reason: :error}, _} =
+      assert {:ok, %{stop_reason: :error, error_details: %{output_committed: false}}, _} =
                Streaming.stream_assistant_response(context, config, nil, nil, stream)
 
       assert_receive :request_attempt
@@ -597,7 +606,14 @@ defmodule LemonAgent.Loop.StreamingTest do
   test "each output event blocks replay even when the provider reports empty content" do
     parent = self()
     empty = %{Mocks.assistant_message("") | content: []}
-    failed = %{empty | stop_reason: :error, error_message: "overloaded_error"}
+
+    failed = %{
+      empty
+      | stop_reason: :error,
+        error_message: "overloaded_error",
+        error_details:
+          Map.put(LemonAi.Error.to_error_details("overloaded_error"), :output_committed, false)
+    }
 
     for {event, terminal} <- [
           {{:text_start, 0, empty}, :error},
@@ -625,11 +641,16 @@ defmodule LemonAgent.Loop.StreamingTest do
 
       assert {:ok, message, updated_context} =
                Streaming.stream_assistant_response(
-                 context, simple_config(stream_fn: stream_fn), nil, nil, stream
+                 context,
+                 simple_config(stream_fn: stream_fn),
+                 nil,
+                 nil,
+                 stream
                )
 
       assert message.stop_reason == :error
       assert message.error_message == failed.error_message
+      assert message.error_details.output_committed == true
       assert updated_context.messages == context.messages ++ [message]
       assert_receive :committed_attempt
       refute_received :committed_attempt
@@ -676,10 +697,14 @@ defmodule LemonAgent.Loop.StreamingTest do
       assert {:ok, message, updated_context} =
                Streaming.stream_assistant_response(
                  simple_context(messages: [user_message("run")]),
-                 simple_config(stream_fn: stream_fn), nil, nil, stream
+                 simple_config(stream_fn: stream_fn),
+                 nil,
+                 nil,
+                 stream
                )
 
       assert message.stop_reason == :error
+      assert message.error_details.output_committed == true
       refute Enum.any?(message.content, &match?(%ToolCall{}, &1))
       assert LemonAgent.Loop.TranscriptValidator.validate(updated_context.messages) == :ok
       assert_receive :terminal_attempt

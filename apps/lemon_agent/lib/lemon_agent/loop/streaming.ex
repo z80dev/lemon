@@ -39,10 +39,14 @@ defmodule LemonAgent.Loop.Streaming do
 
     case result do
       {:failed, message, failed_context, added, committed} ->
+        committed = committed or committed_content?(message)
+        details = message.error_details || LemonAi.Error.to_error_details(error_text(message))
+        message = %{message | error_details: Map.put(details, :output_committed, committed)}
+
         decision =
           case Loop.budget_check(config) do
             nil ->
-              if committed or committed_content?(message),
+              if committed,
                 do: :stop,
                 else: retry_delay(message, config, retries_done)
 
@@ -491,9 +495,15 @@ defmodule LemonAgent.Loop.Streaming do
   # Once an update is emitted, later empty partials/terminals cannot uncommit it.
   defp output_event?(event) do
     elem(event, 0) in [
-      :text_start, :text_delta, :text_end,
-      :thinking_start, :thinking_delta, :thinking_end,
-      :tool_call_start, :tool_call_delta, :tool_call_end
+      :text_start,
+      :text_delta,
+      :text_end,
+      :thinking_start,
+      :thinking_delta,
+      :thinking_end,
+      :tool_call_start,
+      :tool_call_delta,
+      :tool_call_end
     ]
   end
 

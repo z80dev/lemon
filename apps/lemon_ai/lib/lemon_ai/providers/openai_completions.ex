@@ -892,7 +892,9 @@ defmodule LemonAi.Providers.OpenAICompletions do
               end
 
             case retry_delay do
-              :give_up -> output
+              :give_up ->
+                output
+
               delay_ms ->
                 RetryHelper.sleep(delay_ms)
                 retry.()
@@ -1040,7 +1042,8 @@ defmodule LemonAi.Providers.OpenAICompletions do
             | output: %{
                 state.output
                 | stop_reason: :error,
-                  error_message: "Stream ended unexpectedly: #{inspect(reason)}"
+                  error_message: "Stream ended unexpectedly: #{inspect(reason)}",
+                  error_details: LemonAi.Error.to_error_details(reason)
               }
           }
         else
@@ -1050,7 +1053,12 @@ defmodule LemonAi.Providers.OpenAICompletions do
       120_000 ->
         %{
           state
-          | output: %{state.output | stop_reason: :error, error_message: "Stream timeout"}
+          | output: %{
+              state.output
+              | stop_reason: :error,
+                error_message: "Stream timeout",
+                error_details: LemonAi.Error.to_error_details(:timeout)
+            }
         }
     end
   end

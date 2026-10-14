@@ -18,6 +18,7 @@ defmodule LemonAi.OneshotRetryTest do
 
     fn number ->
       send(parent, {:attempt, number})
+
       Agent.get_and_update(queue, fn
         [result] -> {result, [result]}
         [result | rest] -> {result, rest}
@@ -27,7 +28,17 @@ defmodule LemonAi.OneshotRetryTest do
 
   defp options(extra \\ []) do
     parent = self()
-    Keyword.merge([base_delay_ms: 2, sleep_fun: fn ms -> send(parent, {:sleep, ms}); :ok end], extra)
+
+    Keyword.merge(
+      [
+        base_delay_ms: 2,
+        sleep_fun: fn ms ->
+          send(parent, {:sleep, ms})
+          :ok
+        end
+      ],
+      extra
+    )
   end
 
   test "invalid numeric policy never starts an unbounded request loop" do
@@ -36,7 +47,11 @@ defmodule LemonAi.OneshotRetryTest do
     for key <- [:max_attempts, :base_delay_ms, :max_delay_ms],
         value <- [:infinity, "3"] do
       assert_raise ArgumentError, fn ->
-        OneshotRetry.run(fn _ -> send(parent, :unexpected_attempt); {:error, :timeout} end,
+        OneshotRetry.run(
+          fn _ ->
+            send(parent, :unexpected_attempt)
+            {:error, :timeout}
+          end,
           [{key, value}]
         )
       end
@@ -78,17 +93,23 @@ defmodule LemonAi.OneshotRetryTest do
 
   test "backoff is capped but an allowed server hint is never shortened" do
     success = %AssistantMessage{stop_reason: :stop}
-    assert OneshotRetry.run(scripted([{:error, :timeout}, success]),
+
+    assert OneshotRetry.run(
+             scripted([{:error, :timeout}, success]),
              options(base_delay_ms: 10_000, max_delay_ms: 1)
            ) == success
+
     assert_receive {:attempt, 1}
     assert_receive {:sleep, 1}
     assert_receive {:attempt, 2}
 
     failed = %{failure("Rate limit exceeded") | retry_after_ms: 17}
-    assert OneshotRetry.run(scripted([failed, success]),
+
+    assert OneshotRetry.run(
+             scripted([failed, success]),
              options(base_delay_ms: 1, max_delay_ms: 17)
            ) == success
+
     assert_receive {:attempt, 1}
     assert_receive {:sleep, 17}
     assert_receive {:attempt, 2}
@@ -109,6 +130,7 @@ defmodule LemonAi.OneshotRetryTest do
   test "cancellation before a call never invokes it" do
     assert OneshotRetry.run(scripted([{:error, :timeout}]), options(cancelled?: fn -> true end)) ==
              {:error, :aborted}
+
     refute_received {:attempt, _}
   end
 
@@ -121,13 +143,16 @@ defmodule LemonAi.OneshotRetryTest do
       original
     end
 
-    assert OneshotRetry.run(run, options(cancelled?: fn -> Agent.get(state, & &1) end)) == original
+    assert OneshotRetry.run(run, options(cancelled?: fn -> Agent.get(state, & &1) end)) ==
+             original
+
     refute_received {:sleep, _}
   end
 
   test "aborted and redirected messages never replay despite transient error metadata" do
     for reason <- [:aborted, :redirected] do
       message = %{failure(:timeout) | stop_reason: reason}
+
       for result <- [message, {:error, message}] do
         assert OneshotRetry.run(scripted([result]), options()) == result
         assert_receive {:attempt, 1}

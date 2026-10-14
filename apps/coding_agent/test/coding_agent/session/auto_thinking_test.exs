@@ -4,18 +4,44 @@ defmodule CodingAgent.Session.AutoThinkingTest do
   alias CodingAgent.{Session, SessionManager, SettingsManager}
   alias CodingAgent.Session.ModelResolver
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
-  alias LemonAi.Types.{AssistantMessage, StreamOptions, TextContent, ThinkingContent, ToolCall, Usage, UserMessage}
 
-  @env_keys ~w(HOME LEMON_DEFAULT_PROVIDER LEMON_DEFAULT_MODEL LEMON_DEFAULT_THINKING_LEVEL)
+  alias LemonAi.Types.{
+    AssistantMessage,
+    StreamOptions,
+    TextContent,
+    ThinkingContent,
+    ToolCall,
+    Usage,
+    UserMessage
+  }
+
+  @env_keys ~w(HOME LEMON_AGENT_DIR LEMON_DEFAULT_PROVIDER LEMON_DEFAULT_MODEL LEMON_DEFAULT_THINKING_LEVEL OPENAI_API_KEY ANTHROPIC_API_KEY LEMON_FEATURE_SESSION_SEARCH)
 
   setup do
-    root = Path.join(System.tmp_dir!(), "session-auto-thinking-#{System.unique_integer([:positive])}")
+    root =
+      Path.join(System.tmp_dir!(), "session-auto-thinking-#{System.unique_integer([:positive])}")
+
     File.mkdir_p!(Path.join(root, ".lemon"))
     saved_env = Map.new(@env_keys, &{&1, System.get_env(&1)})
     saved_paths = Application.get_env(:lemon_core, :paths)
+    previous_req_options = Req.default_options()
+    {:ok, http_requests} = Agent.start(fn -> [] end)
+    Req.default_options(plug: {Req.Test, __MODULE__})
+    Req.Test.set_req_test_to_shared(%{})
+
+    Req.Test.stub(__MODULE__, fn conn ->
+      Agent.update(http_requests, &[{conn.host, conn.request_path} | &1])
+
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.send_resp(400, ~s({"error":{"message":"unexpected fixture HTTP request"}}))
+    end)
+
     Enum.each(@env_keys, &System.delete_env/1)
     System.put_env("HOME", root)
+    System.put_env("LEMON_AGENT_DIR", Path.join(root, ".lemon/agent"))
     Application.put_env(:lemon_core, :paths, home_dir: root)
+    System.put_env("LEMON_FEATURE_SESSION_SEARCH", "off")
 
     File.write!(Path.join(root, ".lemon/config.toml"), """
     [defaults]
@@ -35,17 +61,32 @@ defmodule CodingAgent.Session.AutoThinkingTest do
 
     [runtime.provider_routing]
     enabled = false
+
+    [features]
+    session_search = "off"
     """)
 
     on_exit(fn ->
+      Req.default_options(previous_req_options)
+      Req.Test.set_req_test_to_private(%{})
+
       Enum.each(saved_env, fn
         {key, nil} -> System.delete_env(key)
         {key, value} -> System.put_env(key, value)
       end)
+
       if saved_paths,
         do: Application.put_env(:lemon_core, :paths, saved_paths),
         else: Application.delete_env(:lemon_core, :paths)
+
       File.rm_rf!(root)
+
+      try do
+        assert Agent.get(http_requests, & &1) == [],
+               "scripted sessions must not call HTTP providers"
+      after
+        Agent.stop(http_requests)
+      end
     end)
 
     %{cwd: root, settings: SettingsManager.load(root)}
@@ -82,13 +123,13 @@ defmodule CodingAgent.Session.AutoThinkingTest do
     opts = [
       cwd: ctx.cwd,
       workspace_dir: Path.join(ctx.cwd, "workspace"),
-      session_file: Path.join(ctx.cwd, "session.jsonl"),
       settings_manager: ctx.settings,
       tools: [],
       stream_fn: stream_fn(self()),
       complete_fn: complete_fn,
       register: false
     ]
+
     session = start_supervised!({Session, Keyword.merge(opts, extra)}, id: id)
     Session.subscribe(session)
     session
@@ -104,12 +145,18 @@ defmodule CodingAgent.Session.AutoThinkingTest do
   test "TOML auto selects per-prompt wire effort and survives save/restore", ctx do
     parent = self()
     calls = :counters.new(1, [:atomics])
+
     complete_fn = fn model, context, options ->
       :counters.add(calls, 1, 1)
       send(parent, {:classifier_request, model, context, options})
       label = if :counters.get(calls, 1) == 1, do: "low", else: "xhigh"
       message = response(model, label)
-      {:ok, %{message | content: [%ThinkingContent{thinking: "classifier-hidden-content"} | message.content]}}
+
+      {:ok,
+       %{
+         message
+         | content: [%ThinkingContent{thinking: "classifier-hidden-content"} | message.content]
+       }}
     end
 
     assert ctx.settings.default_thinking_level == :auto
@@ -123,7 +170,8 @@ defmodule CodingAgent.Session.AutoThinkingTest do
     assert classifier.id == "gpt-4o-mini"
     assert classifier.base_url == "https://classifier.invalid/v1"
     assert options.api_key == "synthetic-classifier-key"
-    assert options.provider_options.openai.base_url == "https://classifier.invalid/v1"
+    assert classifier.api == :openai_responses
+    assert options.provider_options == %{}
     assert context.tools == []
     assert [%UserMessage{content: "first prompt"}] = context.messages
     assert options.reasoning == nil
@@ -143,17 +191,25 @@ defmodule CodingAgent.Session.AutoThinkingTest do
     assert :ok = stop_supervised(:session)
 
     restored_ctx = %{ctx | settings: %{ctx.settings | default_thinking_level: :off}}
-    restored = start_session(restored_ctx, complete_fn, [], :restored)
+    restored = start_session(restored_ctx, complete_fn, [session_file: file], :restored)
     assert Session.get_state(restored).thinking_level == :auto
     assert :ok = Session.prompt(restored, "second prompt")
     await_end(restored)
-    assert_receive {:classifier_request, _, %{messages: [%UserMessage{content: "second prompt"}]}, _}
+
+    assert_receive {:classifier_request, _, %{messages: [%UserMessage{content: "second prompt"}]},
+                    _}
+
     assert_receive {:primary_request, _, %{reasoning: :high}}
     refute_receive {:classifier_request, _, _, _}
     assert Session.get_state(restored).thinking_level == :auto
     assert :ok = Session.save(restored)
     assert {:ok, journal} = SessionManager.load_from_file(file)
-    levels = for entry <- SessionManager.get_branch(journal), entry.type == :thinking_level_change, do: entry.thinking_level
+
+    levels =
+      for entry <- SessionManager.get_branch(journal),
+          entry.type == :thinking_level_change,
+          do: entry.thinking_level
+
     assert levels != []
     assert Enum.all?(levels, &(&1 == :auto))
     assert SessionManager.build_session_context(journal).thinking_level == :auto
@@ -161,10 +217,17 @@ defmodule CodingAgent.Session.AutoThinkingTest do
     assert Session.get_state(restored).thinking_level == :auto
   end
 
-  test "an unconfigured classifier uses supported medium without completing on the primary model", ctx do
+  test "an unconfigured classifier uses supported medium without completing on the primary model",
+       ctx do
     parent = self()
     ctx = %{ctx | settings: %{ctx.settings | model_roles: %{}}}
-    session = start_session(ctx, fn _, _, _ -> send(parent, :unexpected_classifier); {:error, :unexpected} end)
+
+    session =
+      start_session(ctx, fn _, _, _ ->
+        send(parent, :unexpected_classifier)
+        {:error, :unexpected}
+      end)
+
     assert :ok = Session.prompt(session, "request")
     await_end(session)
     assert_receive {:primary_request, _, %{reasoning: :medium}}
@@ -174,20 +237,32 @@ defmodule CodingAgent.Session.AutoThinkingTest do
 
   test "classifier input excludes attached recall and prior transcript content", ctx do
     parent = self()
+
     complete_fn = fn model, context, _ ->
       send(parent, {:classified_content, context.messages})
       {:ok, response(model, "high")}
     end
+
     session = start_session(ctx, complete_fn)
     agent = Session.get_state(session).agent
     original = %UserMessage{content: "actual latest user prompt", timestamp: 1}
+
     :sys.replace_state(session, fn state ->
-      sections = [%{title: "Recall", body: "ultrathink about unrelated context", placement: :user_message}]
+      sections = [
+        %{title: "Recall", body: "ultrathink about unrelated context", placement: :user_message}
+      ]
+
       send(parent, {:outgoing_prompt, Session.attach_recalled_context(original, sections)})
       state
     end)
+
     assert_receive {:outgoing_prompt, outgoing}
-    assert :ok = LemonAgent.Agent.replace_messages(agent, [%UserMessage{content: "old ultrathink", timestamp: 0}])
+
+    assert :ok =
+             LemonAgent.Agent.replace_messages(agent, [
+               %UserMessage{content: "old ultrathink", timestamp: 0}
+             ])
+
     assert :ok = LemonAgent.Agent.prompt(agent, outgoing)
     await_end(session)
     assert_receive {:classified_content, [%UserMessage{content: "actual latest user prompt"}]}
@@ -195,11 +270,13 @@ defmodule CodingAgent.Session.AutoThinkingTest do
     refute_receive {:classified_content, _}
   end
 
-  test "a tool-driven provider switch rebuilds credentials and options even when routing is disabled", ctx do
+  test "a tool-driven provider switch rebuilds credentials and options even when routing is disabled",
+       ctx do
     parent = self()
     holder = start_supervised!({Agent, fn -> nil end}, id: :agent_holder)
     calls = :counters.new(1, [:atomics])
     next_model = ModelResolver.resolve_session_model("openai:gpt-5.2", ctx.settings)
+
     tool = %AgentTool{
       name: "switch_model",
       description: "Switch model",
@@ -209,23 +286,32 @@ defmodule CodingAgent.Session.AutoThinkingTest do
         %AgentToolResult{content: [%TextContent{text: "switched"}]}
       end
     }
+
     complete_fn = fn model, _, _ ->
       send(parent, :classified_once)
       {:ok, response(model, "high")}
     end
+
     stream = fn model, _, options ->
       :counters.add(calls, 1, 1)
       call = :counters.get(calls, 1)
       send(parent, {:live_request, call, model, options})
       message = response(model, "primary answer")
+
       message =
         if call == 1 do
-          %{message | content: [%ToolCall{id: "switch", name: "switch_model", arguments: %{}}], stop_reason: :tool_use}
+          %{
+            message
+            | content: [%ToolCall{id: "switch", name: "switch_model", arguments: %{}}],
+              stop_reason: :tool_use
+          }
         else
           message
         end
+
       to_stream(message)
     end
+
     original_options = %StreamOptions{
       project: "initial-project",
       location: "initial-location",
@@ -237,11 +323,14 @@ defmodule CodingAgent.Session.AutoThinkingTest do
       temperature: 0.4,
       max_tokens: 2_048
     }
-    session = start_session(ctx, complete_fn,
-      tools: [tool],
-      stream_fn: stream,
-      stream_options: original_options
-    )
+
+    session =
+      start_session(ctx, complete_fn,
+        tools: [tool],
+        stream_fn: stream,
+        stream_options: original_options
+      )
+
     Agent.update(holder, fn _ -> Session.get_state(session).agent end)
     assert :ok = Session.prompt(session, "switch during the tool turn")
     await_end(session)
@@ -264,13 +353,17 @@ defmodule CodingAgent.Session.AutoThinkingTest do
     assert destination.max_tokens == 2_048
   end
 
-  test "Session remains responsive and abort stops classification without a primary request", ctx do
+  test "Session remains responsive and abort stops classification without a primary request",
+       ctx do
     parent = self()
     calls = :counters.new(1, [:atomics])
+
     complete_fn = fn model, _, _ ->
       :counters.add(calls, 1, 1)
+
       if :counters.get(calls, 1) == 1 do
         send(parent, {:classifier_blocked, self()})
+
         receive do
           :release -> {:ok, response(model, "high")}
         end
@@ -278,6 +371,7 @@ defmodule CodingAgent.Session.AutoThinkingTest do
         {:ok, response(model, "low")}
       end
     end
+
     session = start_session(ctx, complete_fn)
     id = Session.get_state(session).session_manager.header.id
     assert :ok = Session.prompt(session, "abort this turn")

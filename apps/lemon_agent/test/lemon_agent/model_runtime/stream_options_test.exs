@@ -59,16 +59,32 @@ defmodule LemonAgent.ModelRuntime.StreamOptionsTest do
 
   test "provider switch sanitation removes credentials and non-portable effort settings" do
     options = %LemonAi.Types.StreamOptions{
-      temperature: 0.2, max_tokens: 321, reasoning: :high,
-      session_id: "session", cwd: "/fake/workspace", stream_timeout: 123,
+      temperature: 0.2,
+      max_tokens: 321,
+      reasoning: :high,
+      session_id: "session",
+      cwd: "/fake/workspace",
+      stream_timeout: 123,
       tool_choice: :auto,
-      api_key: "fake-key", access_token: "fake-token", service_account_json: "fake-service",
-      project: "old-project", location: "old-location",
+      api_key: "fake-key",
+      access_token: "fake-token",
+      service_account_json: "fake-service",
+      project: "old-project",
+      location: "old-location",
       headers: %{"authorization" => "fake-token"},
-      provider_options: %{azure_openai_responses: %{api_key: "fake-key", base_url: "https://fake.invalid"}},
-      thinking_budgets: %{"medium" => 8_000, low: 0, high: 16_000,
-        xhigh: "not-a-budget", azure_api_version: "old-version",
-        azure_base_url: "https://fake.invalid", azure_deployment_name_map: %{}, provider_limit: 987}
+      provider_options: %{
+        azure_openai_responses: %{api_key: "fake-key", base_url: "https://fake.invalid"}
+      },
+      thinking_budgets: %{
+        "medium" => 8_000,
+        low: 0,
+        high: 16_000,
+        xhigh: "not-a-budget",
+        azure_api_version: "old-version",
+        azure_base_url: "https://fake.invalid",
+        azure_deployment_name_map: %{},
+        provider_limit: 987
+      }
     }
 
     clean = LemonAgent.ModelRuntime.StreamOptions.sanitize_for_provider_switch(options)
@@ -85,12 +101,15 @@ defmodule LemonAgent.ModelRuntime.StreamOptionsTest do
   end
 
   test "provider switch sanitation normalizes maps without retaining string credentials" do
-    clean = LemonAgent.ModelRuntime.StreamOptions.sanitize_for_provider_switch(%{
-      "api_key" => "fake-key", "access_token" => "fake-token",
-      "headers" => %{"authorization" => "fake-token"},
-      "provider_options" => %{openai: %{api_key: "fake-key"}}, "max_tokens" => 321,
-      "thinking_budgets" => %{high: 16_000, azure_base_url: "https://fake.invalid"}
-    })
+    clean =
+      LemonAgent.ModelRuntime.StreamOptions.sanitize_for_provider_switch(%{
+        "api_key" => "fake-key",
+        "access_token" => "fake-token",
+        "headers" => %{"authorization" => "fake-token"},
+        "provider_options" => %{openai: %{api_key: "fake-key"}},
+        "max_tokens" => 321,
+        "thinking_budgets" => %{high: 16_000, azure_base_url: "https://fake.invalid"}
+      })
 
     assert clean.api_key == nil
     assert clean.access_token == nil
