@@ -24,7 +24,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   including overlap constituents, cached labels and forged token-shaped
   prefixes. Regexes retain context across protected tokens, and self-overlapping
   literal secrets redact their complete union without leaving a credential
-  suffix visible.
+  suffix visible. Provider batches collect regex values and reserve original raw
+  tokens before emitting any message, block or nested argument, preventing
+  cross-field label leaks and accidental restoration of original token-shaped
+  text while retaining the existing system/image/metadata exclusions.
 
 - Skills with `hide: true` or `disable-model-invocation: true` frontmatter are
   omitted from the model-visible skill listing and per-turn relevant-skill

@@ -170,6 +170,14 @@ is obfuscated as raw content, not accepted as an alias.
 Token-shaped raw values and their bare forms are reserved before minting, so a
 new placeholder cannot turn unrelated original bytes into a live restore alias.
 
+Before emitting a provider-message batch, Lemon collects regex values and
+reserves original raw tokens across every eligible text leaf. A later message,
+content block or nested tool argument therefore protects earlier labels and
+mints. Patterns still match each original text leaf independently; separate
+fields are not concatenated into regex input. Collection and rewriting use the
+same traversal: system messages, images, metadata, argument keys and opaque
+argument structs remain excluded.
+
 ## Implementation
 
 `CodingAgent.Security.SecretObfuscator` builds the session obfuscator, runs as

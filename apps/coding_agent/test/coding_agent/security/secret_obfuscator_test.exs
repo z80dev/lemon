@@ -22,6 +22,41 @@ defmodule CodingAgent.Security.SecretObfuscatorTest do
     SecretObfuscator.build([cwd: ctx.cwd, agent_dir: ctx.agent_dir, env: env] ++ opts)
   end
 
+  defp split_batches(first, second) do
+    [
+      [%{role: :user, content: first}, %{role: :tool_result, content: second}],
+      [
+        %{
+          role: :user,
+          content: [%{type: :text, text: first}, %{"type" => "text", "text" => second}]
+        }
+      ],
+      [
+        %{
+          role: :assistant,
+          content: [%{type: :text, text: first}, %{type: :thinking, thinking: second}]
+        }
+      ],
+      [
+        %{
+          role: :assistant,
+          content: [
+            %{
+              type: :tool_call,
+              arguments: %{"steps" => [%{"command" => first}, %{"nested" => [second]}]}
+            }
+          ]
+        }
+      ],
+      [%{role: :bash_execution, command: first, output: second}],
+      [
+        %{role: :branch_summary, summary: first},
+        %{role: :compaction_summary, summary: second}
+      ],
+      [%{role: :custom, content: first}, %{role: :user, content: second}]
+    ]
+  end
+
   test "env and secrets.yml sources: precedence, modes, validation and round trip", ctx do
     File.write!(Path.join(ctx.agent_dir, "secrets.yml"), """
     - type: plain
@@ -427,6 +462,97 @@ defmodule CodingAgent.Security.SecretObfuscatorTest do
     refute out =~ @placeholder
     assert SecretObfuscator.obfuscate(obfuscator, out) == out
     assert SecretObfuscator.deobfuscate(obfuscator, out) == out
+  end
+
+  test "provider batches protect earlier labels against later contextual regex values", ctx do
+    File.write!(Path.join(ctx.agent_dir, "secret-placeholder.key"), String.duplicate("k", 43))
+
+    File.write!(Path.join(ctx.agent_dir, "secrets.yml"), """
+    - type: regex
+      content: "[A-Z]{8}(?=@)"
+      friendlyName: PASSWORD
+    """)
+
+    for messages <- split_batches("ABCDEFGH@", "PASSWORD@") do
+      obfuscator = build(ctx, %{})
+      assert {:ok, output} = SecretObfuscator.transform(messages, obfuscator)
+      bytes = Jason.encode!(output)
+      refute bytes =~ "ABCDEFGH"
+      refute bytes =~ "PASSWORD"
+      assert SecretObfuscator.restore_tool_args(obfuscator, output) == messages
+      assert SecretObfuscator.transform(output, obfuscator) == {:ok, output}
+    end
+
+    # Collect values across the batch, not regex context across separate fields.
+    reference = SecretObfuscator.obfuscate(build(ctx, %{}), "ABCDEFGH@")
+
+    messages = [
+      %{role: :user, content: "ABCDEFGH@"},
+      %{role: :user, content: "PASSWORD"},
+      %{role: :user, content: "@"}
+    ]
+
+    obfuscator = build(ctx, %{})
+    assert {:ok, output} = SecretObfuscator.transform(messages, obfuscator)
+    assert output == [Map.put(hd(messages), :content, reference) | tl(messages)]
+    assert SecretObfuscator.restore_tool_args(obfuscator, output) == messages
+  end
+
+  test "provider batches reserve later raw tokens before any earlier mint", ctx do
+    File.write!(Path.join(ctx.agent_dir, "secret-placeholder.key"), String.duplicate("k", 43))
+
+    File.write!(Path.join(ctx.agent_dir, "secrets.yml"), """
+    - type: regex
+      content: "[A-Z]{8}(?=@)"
+      friendlyName: Safe Service
+    """)
+
+    reference = build(ctx, %{})
+    prospective = SecretObfuscator.obfuscate(reference, "ABCDEFGH@") |> String.trim_trailing("@")
+    {_label, bare} = CodingAgent.Security.SecretObfuscator.Placeholder.split_friendly(prospective)
+    renamed = "$$OTHER_" <> String.trim_leading(bare, "$$")
+
+    for raw <- [prospective, renamed, bare],
+        messages <- split_batches("ABCDEFGH@", raw) do
+      obfuscator = build(ctx, %{})
+      assert SecretObfuscator.deobfuscate(obfuscator, raw) == raw
+      assert {:ok, output} = SecretObfuscator.transform(messages, obfuscator)
+      refute Jason.encode!(output) =~ "ABCDEFGH"
+      assert SecretObfuscator.deobfuscate(obfuscator, raw) == raw
+      assert SecretObfuscator.restore_tool_args(obfuscator, output) == messages
+      assert SecretObfuscator.transform(output, obfuscator) == {:ok, output}
+    end
+  end
+
+  test "batch precollection excludes system text, images, metadata and argument keys", ctx do
+    File.write!(Path.join(ctx.agent_dir, "secret-placeholder.key"), String.duplicate("k", 43))
+
+    File.write!(Path.join(ctx.agent_dir, "secrets.yml"), """
+    - type: regex
+      content: "[A-Z]{8}(?=@)"
+      friendlyName: PASSWORD
+    """)
+
+    reference = build(ctx, %{})
+    prospective = SecretObfuscator.obfuscate(reference, "ABCDEFGH@") |> String.trim_trailing("@")
+    assert CodingAgent.Security.SecretObfuscator.Placeholder.split_friendly(prospective) != nil
+    excluded = "#{prospective} PASSWORD@"
+    image = %ImageContent{data: excluded, mime_type: "image/png"}
+    system = %{role: :system, content: excluded}
+    metadata = %{"raw_token" => prospective, "value" => "PASSWORD@"}
+    user = %{role: :user, content: [%{type: :text, text: "ABCDEFGH@"}, image], metadata: metadata}
+
+    assistant = %{
+      role: :assistant,
+      content: [%{type: :tool_call, arguments: %{"PASSWORD@" => "ordinary", "opaque" => image}}]
+    }
+
+    obfuscator = build(ctx, %{})
+
+    assert {:ok, [^system, output, ^assistant]} =
+             SecretObfuscator.transform([system, user, assistant], obfuscator)
+
+    assert output == %{user | content: [%{type: :text, text: prospective <> "@"}, image]}
   end
 
   test "transform rewrites assistant replay text and drops changed thinking signatures", ctx do
