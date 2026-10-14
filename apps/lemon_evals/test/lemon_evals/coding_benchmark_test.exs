@@ -75,6 +75,18 @@ defmodule LemonEvals.CodingBenchmarkTest do
     end
   end
 
+  test "unsupported schema budgets are rejected before launching the Python benchmark" do
+    for lane <- [[], ["--paired"], ["--paired", "--live"]],
+        option <- [
+          ["--schema-budgets", "500,50000"],
+          ["--schema-budgets=500,50000"]
+        ] do
+      assert_raise Mix.Error, "Invalid coding benchmark arguments", fn ->
+        Mix.Tasks.Lemon.Eval.Coding.run(lane ++ option)
+      end
+    end
+  end
+
   test "repeated paired trials satisfy offline scheduling, isolation, accounting and approval contracts" do
     script = ~S'''
     import sys, unittest

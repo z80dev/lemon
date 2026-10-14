@@ -12,7 +12,7 @@ defmodule Mix.Tasks.Lemon.Eval.Coding do
 
   Options include --model, --lemon, --output, --timeout, --paired, --repetitions,
   --seed, --config, --run-timeout, --plan, --approve-plan-digest, --live,
-  --profile-python and --schema-budgets. Live work is excluded from fast checks.
+  --profile-python. Live work is excluded from fast checks.
   """
 
   @impl true
@@ -37,7 +37,6 @@ defmodule Mix.Tasks.Lemon.Eval.Coding do
           plan: :string,
           approve_plan_digest: :string,
           live: :boolean,
-          schema_budgets: :string,
           profile_python: :string
         ]
       )
@@ -52,7 +51,6 @@ defmodule Mix.Tasks.Lemon.Eval.Coding do
       :plan,
       :approve_plan_digest,
       :live,
-      :schema_budgets,
       :profile_python
     ]
 
@@ -98,7 +96,6 @@ defmodule Mix.Tasks.Lemon.Eval.Coding do
           {:run_timeout, "--run-timeout"},
           {:plan, "--plan"},
           {:approve_plan_digest, "--approve-plan-digest"},
-          {:schema_budgets, "--schema-budgets"},
           {:profile_python, "--profile-python"}
         ],
         argv,

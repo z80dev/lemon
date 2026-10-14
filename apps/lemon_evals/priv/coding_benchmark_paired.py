@@ -54,11 +54,10 @@ def paired_configuration(base, variant):
     parsed = tomllib.loads(base)
     if 'disclosure' in parsed.get('runtime', {}).get('tools', {}):
         raise ValueError('base config must omit runtime.tools.disclosure')
-    if variant not in ('baseline', 'coding') and not re.fullmatch(r'coding_budget_[1-9][0-9]*', variant):
+    if variant not in ('baseline', 'coding'):
         raise ValueError('unknown disclosure variant')
     profile = 'legacy' if variant == 'baseline' else 'coding'
-    budget = int(variant.removeprefix('coding_budget_')) if variant.startswith('coding_budget_') else 40000
-    return base.rstrip() + f'\n\n[runtime.tools.disclosure]\nprofile = "{profile}"\nenabled = true\nbudget_tokens = {budget}\ncatalog_tokens = 2000\nmax_results = 5\n'
+    return base.rstrip() + f'\n\n[runtime.tools.disclosure]\nprofile = "{profile}"\nenabled = true\nbudget_tokens = 40000\ncatalog_tokens = 2000\nmax_results = 5\n'
 
 
 def isolated_environment(root, config, variant, credentials, ports):
@@ -362,11 +361,6 @@ def run_paired(args, cases, run_case):
         raise ValueError('explicit provider:model identifier required')
     base = Path(args.config).read_text()
     variants = ['baseline', 'coding']
-    if args.schema_budgets:
-        budgets = [int(value) for value in args.schema_budgets.split(',')]
-        if any(value <= 0 for value in budgets) or len(set(budgets)) != len(budgets) or len(budgets) > 3:
-            raise ValueError('select at most three distinct positive schema budgets')
-        variants += [f'coding_budget_{value}' for value in budgets]
     configurations = {variant: paired_configuration(base, variant) for variant in variants}
     revision = subprocess.run(['git', 'rev-parse', 'HEAD'], cwd=root, capture_output=True, text=True, check=True).stdout.strip()
     # Bind dirty/untracked source contents too; never falsely label a dirty run as an exact commit.

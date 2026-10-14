@@ -19,9 +19,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   separately from schema-size diagnostics. Negated paired authorization cannot
   fall through to the paid legacy lane; deadline-owned process groups are cleaned
   up even after their leaders exit. Missing, unmatched, or nested usage
-  observations cannot certify parent-only cost as complete spend. Defaults remain
-  unchanged and the coding profile remains opt-in; rollout awaits authorized live
-  evidence.
+  observations cannot certify parent-only cost as complete spend. Only baseline
+  versus opt-in coding is supported: ineffective schema-budget variants were
+  removed and `--schema-budgets` is rejected before any model call, because coding
+  intentionally ignores `budget_tokens`. Defaults remain unchanged and the
+  coding profile remains opt-in; rollout awaits authorized live evidence.
   See [the paired workflow](docs/benchmarks/paired-disclosure.md).
 
 ---

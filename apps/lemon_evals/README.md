@@ -87,8 +87,11 @@ evidence. Live attempts additionally require `--live --plan PLAN.json
 --approve-plan-digest SHA256`, with an explicitly approved exact experiment and
 positive bounded spend/attempt limits backed by a hard account/provider budget.
 Do not use ordinary daemon credentials or assume local timeouts enforce billing
-limits. Optional `--schema-budgets N,N` adds explicitly selected
-`coding_budget_N` variants only when useful after the baseline/coding comparison.
+limits. `--schema-budgets` is unsupported and rejected before any model call:
+the coding profile intentionally ignores `budget_tokens`, so changing that value
+would not produce a distinct coding treatment. Only baseline versus coding is
+supported; additional thresholds are not needed while the first authorized
+comparison remains pending.
 
 The [canonical paired workflow](../../docs/benchmarks/paired-disclosure.md)
 defines approval, configuration isolation, report metadata, all-attempt cost

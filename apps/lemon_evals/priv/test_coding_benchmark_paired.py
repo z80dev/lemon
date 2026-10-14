@@ -55,10 +55,10 @@ def approved_plan():
 class SchedulingTests(unittest.TestCase):
     def test_schedule_is_reproducible_complete_and_counterbalanced(self):
         cases = [{'name': 'bug_fix'}, {'name': 'read_and_answer'}]
-        variants = ['baseline', 'coding', 'coding_budget_4096']
+        variants = ['baseline', 'coding']
         entries = paired.schedule(cases, variants, 6, 17)
         self.assertEqual(entries, paired.schedule(cases, variants, 6, 17))
-        self.assertEqual(len(entries), 36)
+        self.assertEqual(len(entries), 24)
         self.assertEqual(len({row['trial_id'] for row in entries}), len(entries))
         pairs = defaultdict(list)
         positions = defaultdict(Counter)
@@ -81,7 +81,7 @@ class SchedulingTests(unittest.TestCase):
             for position, row in enumerate(group):
                 positions[(row['task'], row['variant'])][position] += 1
         for counts in positions.values():
-            self.assertEqual(counts, Counter({0: 2, 1: 2, 2: 2}))
+            self.assertEqual(counts, Counter({0: 3, 1: 3}))
         self.assertEqual(
             {row['trial_id'] for row in entries},
             {row['trial_id'] for row in paired.schedule(cases, variants, 6, 29)},
@@ -162,17 +162,13 @@ auto_approve = true
 
     def test_only_disclosure_changes_across_variants(self):
         original = tomllib.loads(self.base)
-        for variant, profile, budget in [
-            ('baseline', 'legacy', 40000),
-            ('coding', 'coding', 40000),
-            ('coding_budget_4096', 'coding', 4096),
-        ]:
+        for variant, profile in [('baseline', 'legacy'), ('coding', 'coding')]:
             with self.subTest(variant=variant):
                 configured = tomllib.loads(paired.paired_configuration(self.base, variant))
                 disclosure = configured['runtime']['tools'].pop('disclosure')
                 self.assertEqual(configured, original)
                 self.assertEqual(disclosure['profile'], profile)
-                self.assertEqual(disclosure['budget_tokens'], budget)
+                self.assertEqual(disclosure['budget_tokens'], 40000)
 
     def test_existing_disclosure_and_unknown_variants_are_rejected(self):
         bases = [
@@ -183,7 +179,7 @@ auto_approve = true
         for base in bases:
             with self.subTest(base=base), self.assertRaises(ValueError):
                 paired.paired_configuration(base, 'coding')
-        for variant in ['unknown', 'coding_budget_0', 'coding_budget_-1']:
+        for variant in ['unknown', 'coding_budget_500', 'coding_budget_50000']:
             with self.subTest(variant=variant), self.assertRaises(ValueError):
                 paired.paired_configuration(self.base, variant)
 
@@ -545,6 +541,36 @@ class RedactionAndDryPlanTests(unittest.TestCase):
             self.assertFalse(output.exists())
             self.assertFalse(output.with_suffix('.md').exists())
 
+    def test_schema_budgets_are_rejected_before_any_paid_or_paired_runner(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / 'must-not-exist.json'
+            for lane in [[], ['--paired'], ['--paired', '--live']]:
+                for option in [
+                    ['--schema-budgets', '500,50000'],
+                    ['--schema-budgets=500,50000'],
+                ]:
+                    with self.subTest(lane=lane, option=option):
+                        result = subprocess.run(
+                            [sys.executable, '-c', textwrap.dedent('''\
+                                import sys
+                                import coding_benchmark as benchmark
+                                def forbidden(*args, **kwargs):
+                                    raise AssertionError('unsupported option reached a runner')
+                                benchmark.run_case = forbidden
+                                benchmark.run_paired = forbidden
+                                sys.exit(benchmark.main())
+                            '''), '--lemon', str(Path(directory) / 'absent-client'),
+                             '--output', str(output), *lane, *option],
+                            cwd=Path(benchmark.__file__).parent,
+                            stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=10,
+                            env={'PATH': os.environ.get('PATH', os.defpath)},
+                        )
+                        self.assertEqual(result.returncode, 2, result.stderr)
+                        self.assertIn('unrecognized arguments: --schema-budgets', result.stderr)
+                        self.assertNotIn('Traceback', result.stderr)
+                        self.assertFalse(output.exists())
+                        self.assertFalse(output.with_suffix('.md').exists())
+
     def test_default_runner_writes_only_unsigned_redacted_plan_and_never_runs_a_case(self):
         secret = 'private-config-api-key-and-fixture-prompt'
         root = Path(benchmark.__file__).resolve().parents[3]
@@ -558,7 +584,7 @@ class RedactionAndDryPlanTests(unittest.TestCase):
             args = SimpleNamespace(
                 lemon=str(root / 'bin' / 'lemon'), model='offline:model',
                 compare_omp=False, config=str(config), timeout=10, run_timeout=120,
-                schema_budgets=None, repetitions=2, seed=17,
+                repetitions=2, seed=17,
                 profile_python=sys.executable, live=False, output=str(output),
                 plan=None, approve_plan_digest=None,
             )

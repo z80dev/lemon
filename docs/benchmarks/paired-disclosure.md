@@ -40,7 +40,6 @@ source launcher, not an installed launcher from another revision.
 | `--plan FILE.json` | In live mode, the approved plan object, not the plan-template wrapper. |
 | `--approve-plan-digest SHA256` | Explicit lowercase SHA-256 of the canonical final approved plan. Required for live authorization. |
 | `--live` | Enable paid calls only after all approval checks pass. Never implied by `--paired`. |
-| `--schema-budgets N,N` | Add at most three distinct positive integer schema-budget variants, named `coding_budget_N`. Explicit diagnostic experiment selection, not an automatic sweep. |
 | `--failure-dir DIR` | Optional private failure bundles; never upload or commit them. |
 
 `--paired` and `--compare-omp` cannot be combined. The nonpaired coding command
@@ -49,16 +48,22 @@ the paired plan gate. The contract harness's `mix lemon.eval --iterations N`
 still does not repeat live coding tasks.
 
 Paired-only options (`--config`, `--repetitions`, `--seed`, `--run-timeout`,
-`--profile-python`, `--live`, `--plan`, `--approve-plan-digest`, and
-`--schema-budgets`) are rejected without `--paired`, rather than ignored and
-allowed to fall through to the nonpaired paid lane. This includes explicitly
-negated authorization (`--no-live`) in the Mix entrypoint. Use exact full option
-names; abbreviated options are not accepted. A nonpaired invocation without
-paired-only options remains unchanged.
+`--profile-python`, `--live`, `--plan`, and `--approve-plan-digest`) are rejected
+without `--paired`, rather than ignored and allowed to fall through to the
+nonpaired paid lane. This includes explicitly negated authorization (`--no-live`)
+in the Mix entrypoint. Use exact full option names; abbreviated options are not
+accepted. A nonpaired invocation without paired-only options remains unchanged.
 
-Start with `baseline` versus `coding`. Select additional schema-budget thresholds
-only if useful after that comparison; they require their own exact approved
-experiment. There is no automatic threshold selection or default change.
+Only `baseline` versus `coding` is supported. `--schema-budgets` is unsupported
+and rejected by both entrypoints before any model call, with or without
+`--paired` or `--live`. The #106 coding profile intentionally ignores
+`budget_tokens`, so those budget variants would have identical effective
+treatments; different labels/configuration digests would not measure a threshold
+effect. This is not a negative experiment result. Additional thresholds are not
+needed while the first authorized baseline/coding comparison remains pending.
+Any later threshold experiment would first need a supported exposure control
+that changes actual runtime disclosure. No production disclosure behavior or
+default is changed here.
 
 ## Plan-only preparation: no paid calls
 
@@ -96,13 +101,15 @@ trial runtimes, run benchmark fixtures, or call a model. The template digest is
 
 Offline regression fixtures exercise scheduling, configuration/environment
 isolation, exact approval binding, aggregation, failures/timeouts, missing
-counters/spend, and zero-success behavior without paid API calls. They check
-runner mechanics, not model performance. For an operator's offline-only check,
-from the umbrella root:
+counters/spend, zero-success behavior, and unsupported-option rejection before
+either runner can be reached, without paid API calls. They check runner
+mechanics, not model performance. From the umbrella root, the exact offline gates
+are:
 
 ```bash
 python3 -m unittest discover -s apps/lemon_evals/priv \
   -p test_coding_benchmark_paired.py -v
+mix test apps/lemon_evals/test/lemon_evals/coding_benchmark_test.exs --seed 1
 ```
 
 The generated `plan` object has this shape; the omitted experiment content is
@@ -248,7 +255,10 @@ The same explicit base TOML is used for every variant. The runner appends
 
 - `baseline`: `profile = "legacy"`, `budget_tokens = 40000`.
 - `coding`: `profile = "coding"`, `budget_tokens = 40000`.
-- `coding_budget_N`: `profile = "coding"`, `budget_tokens = N`.
+
+The fixed `budget_tokens = 40000` remains the legacy activation threshold for
+baseline; the coding profile ignores that field. It is not a varying treatment
+or an advertised coding-budget effect.
 
 Model/provider route, reasoning settings, requested approvals, permissions,
 fixture and deadlines are otherwise identical. Reasoning is the provider default
@@ -379,9 +389,9 @@ secrets or imply a plan-only artifact is a live result.
 ## Rollout and rollback
 
 Until that evidence is reviewed, the recorded decision remains
-`keep-current-defaults` / `keep-opt-in`; no profile or threshold is promoted.
+`keep-current-defaults` / `keep-opt-in`; no profile is promoted.
 After an authorized run, retain the defaults for negative/inconclusive evidence,
-or name the exact proposed profile/threshold and its success/security checks,
+or name the exact proposed profile and its success/security checks,
 measured task-level benefit, uncertainty and cache/pricing caveats. Do not
 promote solely because schema-token estimates declined.
 

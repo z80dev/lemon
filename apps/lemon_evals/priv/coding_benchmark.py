@@ -199,7 +199,6 @@ def main():
     parser.add_argument('--plan', help='Operator-approved bounded JSON plan')
     parser.add_argument('--approve-plan-digest', help='Explicit SHA256 approval of exact canonical plan')
     parser.add_argument('--live', action='store_true', help='Authorize live calls only with exact approved plan')
-    parser.add_argument('--schema-budgets', help='At most three explicitly selected positive thresholds')
     parser.add_argument('--profile-python', default=sys.executable, help='Python 3.11+ environment with tiktoken installed')
     args = parser.parse_args()
     lemon = str(Path(args.lemon).resolve())
@@ -218,7 +217,7 @@ def main():
             return run_paired(args, cases, run_case)
         except (ValueError, OSError, subprocess.SubprocessError):
             parser.error('Paired configuration/authorization failed; review the dedicated config and exact bounded plan')
-    paired_flags = {'--live', '--plan', '--approve-plan-digest', '--schema-budgets',
+    paired_flags = {'--live', '--plan', '--approve-plan-digest',
                     '--repetitions', '--seed', '--config', '--run-timeout', '--profile-python'}
     if any(argument.split('=', 1)[0] in paired_flags for argument in sys.argv[1:]):
         parser.error('paired authorization/options require --paired')
