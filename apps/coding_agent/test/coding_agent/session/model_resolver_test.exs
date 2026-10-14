@@ -1,3 +1,8 @@
+Code.require_file(
+  "../../../../../scripts/support/custom_pool_discovery_probe.exs",
+  __DIR__
+)
+
 defmodule CodingAgent.Session.ModelResolverTest do
   use ExUnit.Case, async: false
 
@@ -26,6 +31,18 @@ defmodule CodingAgent.Session.ModelResolverTest do
     end)
 
     :ok
+  end
+
+  test "public catalog discovery and native resolution preserve the selected credential pool" do
+    home =
+      Path.join(System.tmp_dir!(), "catalog_pool_test_#{System.unique_integer([:positive])}")
+
+    File.mkdir_p!(home)
+    on_exit(fn -> File.rm_rf!(home) end)
+
+    report = LemonScripts.CustomPoolDiscoveryProbe.run!(home)
+    assert report.loopback_requests == 5
+    assert report.principals == [:a, :b, :c, :missing]
   end
 
   test "in-memory persisted atom providers retain their API when restoring a branch" do

@@ -99,7 +99,7 @@ defmodule LemonAgent.ModelRuntime.ModelCatalog do
   defp configured_models(cfg, enabled, routing, opts) do
     providers = Map.get(cfg, :providers) || %{}
 
-    providers
+    cfg
     |> CustomProviders.models(
       discover: Keyword.get(opts, :discover_custom, true),
       discovery_opts: Keyword.get(opts, :custom_discovery_opts, [])
@@ -344,7 +344,9 @@ defmodule LemonAgent.ModelRuntime.ModelCatalog do
   # provider availability in the picker catalog.
   defp provider_routing_config(cfg) do
     agent = Map.get(cfg, :agent) || Map.get(cfg, "agent") || %{}
-    Map.get(agent, :provider_routing) || Map.get(agent, "provider_routing") || %{}
+
+    Map.get(cfg, :provider_routing) || Map.get(cfg, "provider_routing") ||
+      Map.get(agent, :provider_routing) || Map.get(agent, "provider_routing") || %{}
   rescue
     _ -> %{}
   end

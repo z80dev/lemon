@@ -246,7 +246,7 @@ defmodule CodingAgent.Session.ModelResolver do
           # model_id may be prefixed (e.g. "zai:glm-5-turbo"); try as-is first,
           # then strip the provider prefix for a direct registry lookup.
           LemonAgent.ModelRuntime.CustomProviders.lookup(
-            settings.providers,
+            settings,
             provider_atom,
             model_id
           ) ||
@@ -415,18 +415,18 @@ defmodule CodingAgent.Session.ModelResolver do
 
   # User-defined `[providers.<id>]` models (custom providers and additions to
   # built-in providers) take precedence over the registry.
-  defp lookup_model(provider, model_id, %SettingsManager{providers: providers})
+  defp lookup_model(provider, model_id, %SettingsManager{} = settings)
        when is_binary(provider) and is_binary(model_id) do
-    LemonAgent.ModelRuntime.CustomProviders.lookup(providers, provider, model_id) ||
+    LemonAgent.ModelRuntime.CustomProviders.lookup(settings, provider, model_id) ||
       lookup_model(provider, model_id)
   end
 
   defp lookup_model(provider, model_id, _settings), do: lookup_model(provider, model_id)
 
   # Bare ids also match models listed under a custom provider.
-  defp find_custom_model(model_id, %SettingsManager{providers: providers})
+  defp find_custom_model(model_id, %SettingsManager{} = settings)
        when is_binary(model_id) do
-    providers
+    settings
     |> LemonAgent.ModelRuntime.CustomProviders.models()
     |> Enum.find(&(&1.id == model_id))
   end

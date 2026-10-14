@@ -21,6 +21,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   `lemon config validate`. On built-in providers, `headers` are sent with every
   request and `models` entries add or replace catalog models. See
   [Custom Providers and Models](docs/config.md#custom-providers-and-models).
+- Custom-provider picker discovery now honors the effective credential pool
+  and account selection used by native requests, including pool-only providers.
+  Cache-only model resolution keeps that same credential scope instead of
+  reusing the configured default account's listing.
 - **More provider sign-ins in `lemon model`.** `lemon model openai-codex
   --auth device` signs in to ChatGPT with a device code (headless, also
   `--non-interactive`). `openrouter` adds browser sign-in that mints an API key,

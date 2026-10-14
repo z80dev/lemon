@@ -16,6 +16,11 @@ defmodule LemonAgent.ModelRuntime.CustomProviders do
   in omp). `discovery = "openai" | "ollama"` additionally lists the endpoint's
   models through `LemonAi.Models.Discovery` for pickers.
 
+  Discovery and cache-only resolution use `Credentials.build_get_api_key/1`
+  with the full effective config, selecting the same healthy pool/default
+  credential as requests. Pass the full config/settings map to preserve routing;
+  a bare providers map has only the single-credential scope.
+
   On a built-in provider, `models` entries add catalog models or replace the
   catalog entry with the same id; they inherit the provider's catalog wire API
   and base URL unless they override them.
@@ -257,7 +262,7 @@ defmodule LemonAgent.ModelRuntime.CustomProviders do
 
   defp discovery_options(providers_or_cfg, id, cfg) do
     [
-      api_key: Credentials.resolve_provider_api_key(id, providers_or_cfg),
+      api_key: Credentials.build_get_api_key(providers_or_cfg).(id),
       provider: id,
       api: api_atom(value(cfg, :api)),
       headers: headers(cfg),
