@@ -258,7 +258,8 @@ defmodule LemonRouter.RunProcess do
 
           {:error, reason} ->
             # A failed pre-send fence cannot authorize a retry or a new F.
-            {:noreply, terminalize_gateway_submission(%{state | gateway_submit_last_error: reason})}
+            {:noreply,
+             terminalize_gateway_submission(%{state | gateway_submit_last_error: reason})}
         end
     end
   end

@@ -201,7 +201,8 @@ defmodule CodingAgent.Executor.SessionRunner do
         invocation_context_key: LemonCore.MapHelpers.get_key(meta, :invocation_context_key),
         memory_context_key: LemonCore.MapHelpers.get_key(meta, :memory_context_key),
         memory_context_verified:
-          Map.get(meta, :memory_context_verified, Map.get(meta, "memory_context_verified")) == true,
+          Map.get(meta, :memory_context_verified, Map.get(meta, "memory_context_verified")) ==
+            true,
         shared_memory_grant:
           Map.get(meta, :shared_memory_grant, Map.get(meta, "shared_memory_grant")) == true,
         invocation_mcp_servers: Map.get(meta, :mcp_servers),
@@ -506,7 +507,11 @@ defmodule CodingAgent.Executor.SessionRunner do
     id = request_agent_id(request)
     profile_id = meta[:profile_id] || meta["profile_id"]
     config = LemonCore.Config.load_base_from_disk(cwd)
-    ids = Enum.uniq([id, profile_id, LemonCore.SessionKey.agent_id(request.session_key || "")]) -- [nil]
+
+    ids =
+      Enum.uniq([id, profile_id, LemonCore.SessionKey.agent_id(request.session_key || "")]) --
+        [nil]
+
     destination_policy =
       Enum.reduce(ids, %{}, fn profile, policy ->
         LemonCore.ToolPolicy.intersect(policy, get_in(config.agents, [profile, :tool_policy]))
@@ -523,7 +528,9 @@ defmodule CodingAgent.Executor.SessionRunner do
 
     floor
     |> LemonCore.ToolPolicy.intersect(request.tool_policy)
-    |> LemonCore.ToolPolicy.intersect(meta[:tool_policy] || meta["tool_policy"] || meta["toolPolicy"])
+    |> LemonCore.ToolPolicy.intersect(
+      meta[:tool_policy] || meta["tool_policy"] || meta["toolPolicy"]
+    )
     |> LemonCore.ToolPolicy.intersect(get_opt(run_opts, :tool_policy))
   end
 

@@ -140,8 +140,11 @@ defmodule LemonControlPlane.Protocol.Schemas do
     "memory.list" => %{
       required: %{"profileId" => :string},
       optional: %{
-        "query" => :string, "limit" => :integer, "cursor" => :string,
-        "memoryScope" => :string, "memoryContextKey" => :string
+        "query" => :string,
+        "limit" => :integer,
+        "cursor" => :string,
+        "memoryScope" => :string,
+        "memoryContextKey" => :string
       }
     },
     "memory.search" => %{
@@ -676,21 +679,61 @@ defmodule LemonControlPlane.Protocol.Schemas do
     # Node methods
     "node.pair.invite" => %{
       required: %{"nodeName" => :string},
-      optional: %{"purpose" => :string, "labels" => :map, "expiresInMs" => :integer, "nodeId" => :string}
+      optional: %{
+        "purpose" => :string,
+        "labels" => :map,
+        "expiresInMs" => :integer,
+        "nodeId" => :string
+      }
     },
     "node.pair.invite.revoke" => %{required: %{"inviteId" => :string}},
     "node.capabilities.get" => %{required: %{"nodeId" => :string}},
     "node.runtime.features" => %{required: %{"nodeId" => :string}},
     "node.host.info" => %{required: %{"nodeId" => :string}},
-    "node.fs.list" => %{required: %{"nodeId" => :string, "path" => :string}, optional: %{"showHidden" => :boolean}},
+    "node.fs.list" => %{
+      required: %{"nodeId" => :string, "path" => :string},
+      optional: %{"showHidden" => :boolean}
+    },
     "node.fs.stat" => %{required: %{"nodeId" => :string, "path" => :string}},
-    "node.fs.read" => %{required: %{"nodeId" => :string, "path" => :string}, optional: %{"offset" => :integer, "length" => :integer}},
-    "node.fs.write" => %{required: %{"nodeId" => :string, "path" => :string, "dataBase64" => :string}, optional: %{"offset" => :integer, "truncate" => :boolean, "mkdirs" => :boolean, "expectedModifiedAtMs" => :integer}},
+    "node.fs.read" => %{
+      required: %{"nodeId" => :string, "path" => :string},
+      optional: %{"offset" => :integer, "length" => :integer}
+    },
+    "node.fs.write" => %{
+      required: %{"nodeId" => :string, "path" => :string, "dataBase64" => :string},
+      optional: %{
+        "offset" => :integer,
+        "truncate" => :boolean,
+        "mkdirs" => :boolean,
+        "expectedModifiedAtMs" => :integer
+      }
+    },
     "node.fs.mkdir" => %{required: %{"nodeId" => :string, "path" => :string}},
-    "node.fs.move" => %{required: %{"nodeId" => :string, "path" => :string, "destination" => :string, "expectedModifiedAtMs" => :integer}, optional: %{"overwrite" => :boolean}},
-    "node.fs.delete.preview" => %{required: %{"nodeId" => :string, "path" => :string}, optional: %{"recursive" => :boolean}},
-    "node.fs.delete" => %{required: %{"nodeId" => :string, "path" => :string, "confirm" => :string, "confirmationToken" => :string}},
-    "node.secrets.set" => %{required: %{"nodeId" => :string, "name" => :string, "value" => :string}, optional: %{"operationId" => :string}},
+    "node.fs.move" => %{
+      required: %{
+        "nodeId" => :string,
+        "path" => :string,
+        "destination" => :string,
+        "expectedModifiedAtMs" => :integer
+      },
+      optional: %{"overwrite" => :boolean}
+    },
+    "node.fs.delete.preview" => %{
+      required: %{"nodeId" => :string, "path" => :string},
+      optional: %{"recursive" => :boolean}
+    },
+    "node.fs.delete" => %{
+      required: %{
+        "nodeId" => :string,
+        "path" => :string,
+        "confirm" => :string,
+        "confirmationToken" => :string
+      }
+    },
+    "node.secrets.set" => %{
+      required: %{"nodeId" => :string, "name" => :string, "value" => :string},
+      optional: %{"operationId" => :string}
+    },
     "node.secrets.list" => %{required: %{"nodeId" => :string}},
     "node.secrets.delete" => %{required: %{"nodeId" => :string, "name" => :string}},
     "node.secrets.receipt" => %{required: %{"nodeId" => :string, "operationId" => :string}},
@@ -707,9 +750,14 @@ defmodule LemonControlPlane.Protocol.Schemas do
     },
     "node.process.get" => %{required: %{"nodeId" => :string, "processId" => :string}},
     "node.process.cancel" => %{required: %{"nodeId" => :string, "processId" => :string}},
-    "node.shell.open" => %{required: %{"nodeId" => :string}, optional: %{"cwd" => :string, "cols" => :integer, "rows" => :integer}},
+    "node.shell.open" => %{
+      required: %{"nodeId" => :string},
+      optional: %{"cwd" => :string, "cols" => :integer, "rows" => :integer}
+    },
     "node.shell.input" => %{required: %{"shellId" => :string, "dataBase64" => :string}},
-    "node.shell.resize" => %{required: %{"shellId" => :string, "cols" => :integer, "rows" => :integer}},
+    "node.shell.resize" => %{
+      required: %{"shellId" => :string, "cols" => :integer, "rows" => :integer}
+    },
     "node.shell.close" => %{required: %{"shellId" => :string}},
     "node.shell.event" => %{required: %{"invokeId" => :string, "payload" => :map}},
     "node.pair.request" => %{
@@ -810,8 +858,10 @@ defmodule LemonControlPlane.Protocol.Schemas do
     "usage.records" => %{
       required: %{"fromMs" => :integer, "toMs" => :integer},
       optional: %{
-        "runId" => :string, "sessionKey" => :string,
-        "cursor" => :string, "limit" => :integer
+        "runId" => :string,
+        "sessionKey" => :string,
+        "cursor" => :string,
+        "limit" => :integer
       }
     },
 

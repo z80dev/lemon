@@ -46,11 +46,21 @@ defmodule CodingAgent.Session.Presentation do
           invocation_mcp_servers: Keyword.get(opts, :invocation_mcp_servers),
           timeout_ms: approval_timeout_ms
         }
-        |> Map.merge(Map.new(Keyword.take(opts, [
-          :native_lineage_handle, :native_lineage_run_id, :native_source_profile_id,
-          :native_source_session_key, :native_followup_submit, :native_source_floor_fun,
-          :invocation_proof, :invocation_proof_verified, :native_managed_context
-        ])))
+        |> Map.merge(
+          Map.new(
+            Keyword.take(opts, [
+              :native_lineage_handle,
+              :native_lineage_run_id,
+              :native_source_profile_id,
+              :native_source_session_key,
+              :native_followup_submit,
+              :native_source_floor_fun,
+              :invocation_proof,
+              :invocation_proof_verified,
+              :native_managed_context
+            ])
+          )
+        )
       else
         nil
       end
@@ -65,14 +75,25 @@ defmodule CodingAgent.Session.Presentation do
     |> maybe_add_opt(:approval_context, approval_context)
     |> maybe_add_opt(:invocation_context_key, Keyword.get(opts, :invocation_context_key))
     |> maybe_add_opt(:memory_context_key, Keyword.get(opts, :memory_context_key))
-    |> maybe_add_opt(:memory_context_verified, Keyword.get(opts, :memory_context_verified) == true)
+    |> maybe_add_opt(
+      :memory_context_verified,
+      Keyword.get(opts, :memory_context_verified) == true
+    )
     |> maybe_add_opt(:shared_memory_grant, Keyword.get(opts, :shared_memory_grant) == true)
     |> maybe_add_opt(:invocation_mcp_servers, Keyword.get(opts, :invocation_mcp_servers))
-    |> Keyword.merge(Keyword.take(opts, [
-      :native_lineage_handle, :native_lineage_run_id, :native_source_profile_id,
-      :native_source_session_key, :native_followup_submit, :native_source_floor_fun,
-      :invocation_proof, :invocation_proof_verified, :native_managed_context
-    ]))
+    |> Keyword.merge(
+      Keyword.take(opts, [
+        :native_lineage_handle,
+        :native_lineage_run_id,
+        :native_source_profile_id,
+        :native_source_session_key,
+        :native_followup_submit,
+        :native_source_floor_fun,
+        :invocation_proof,
+        :invocation_proof_verified,
+        :native_managed_context
+      ])
+    )
     |> maybe_add_opt(:run_id, run_id)
     |> maybe_add_opt(:session_key, session_key)
     |> maybe_add_opt(:agent_id, agent_id)

@@ -384,6 +384,7 @@ defmodule LemonAgent.LoopAbortTest do
       context = simple_context(tools: [signaling_tool])
       tool_call = Mocks.tool_call("signaling_tool", %{}, id: "call_signal")
       tool_response = Mocks.assistant_message_with_tool_calls([tool_call])
+
       config =
         simple_config(
           stream_fn: fn _model, llm_context, _options ->

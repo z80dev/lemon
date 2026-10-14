@@ -90,7 +90,12 @@ defmodule LemonMCP.HTTP.OriginPolicyTest do
       url = "https://MCP.Example.:443/mcp?secret=opaque"
       test_pid = self()
 
-      opts = [resolver: fn host -> send(test_pid, {:resolved, host}); {:ok, [@public_v4]} end]
+      opts = [
+        resolver: fn host ->
+          send(test_pid, {:resolved, host})
+          {:ok, [@public_v4]}
+        end
+      ]
 
       assert {:ok,
               %{
@@ -179,7 +184,11 @@ defmodule LemonMCP.HTTP.OriginPolicyTest do
                )
 
       assert {:error, :invalid_url} =
-               OriginPolicy.pin("https://user:secret@mcp.example/mcp", approved, resolver([private]))
+               OriginPolicy.pin(
+                 "https://user:secret@mcp.example/mcp",
+                 approved,
+                 resolver([private])
+               )
 
       assert {:error, :invalid_dns_answer} =
                OriginPolicy.pin(@url, approved, resolver([{127, 0, 0, 999}]))
@@ -196,7 +205,8 @@ defmodule LemonMCP.HTTP.OriginPolicyTest do
     end
 
     test "caller-supplied policy addresses are never pin authority" do
-      untrusted = Map.merge(policy(), %{address: @public_v4, destination_pin: %{address: @public_v4}})
+      untrusted =
+        Map.merge(policy(), %{address: @public_v4, destination_pin: %{address: @public_v4}})
 
       assert {:error, :destination_not_public} =
                OriginPolicy.pin(@url, untrusted, resolver([{127, 0, 0, 1}]))
@@ -205,8 +215,13 @@ defmodule LemonMCP.HTTP.OriginPolicyTest do
 
   describe "DNS and address validation" do
     test "pins deterministically across answer order and validates both address families" do
-      for addresses <- [[@public_v4, @public_v6], [@public_v6, @public_v4], [@public_v4, @public_v4]] do
-        assert {:ok, %{address: @public_v4}} = OriginPolicy.pin(@url, policy(), resolver(addresses))
+      for addresses <- [
+            [@public_v4, @public_v6],
+            [@public_v6, @public_v4],
+            [@public_v4, @public_v4]
+          ] do
+        assert {:ok, %{address: @public_v4}} =
+                 OriginPolicy.pin(@url, policy(), resolver(addresses))
       end
 
       assert {:ok, %{address: @public_v6}} =
@@ -320,7 +335,14 @@ defmodule LemonMCP.HTTP.OriginPolicyTest do
 
       approved = %{allowed_origins: [@origin], approved_private_origins: [@origin]}
 
-      for invalid <- ["127.0.0.1", {1, 2, 3}, {1, 2, 3, -1}, {1, 2, 3, 256}, {0, 0, 0, 0, 0, 0, 0, 65_536}, nil] do
+      for invalid <- [
+            "127.0.0.1",
+            {1, 2, 3},
+            {1, 2, 3, -1},
+            {1, 2, 3, 256},
+            {0, 0, 0, 0, 0, 0, 0, 65_536},
+            nil
+          ] do
         assert {:error, :invalid_dns_answer} =
                  OriginPolicy.pin(@url, approved, resolver([@public_v4, invalid]))
       end
@@ -341,6 +363,7 @@ defmodule LemonMCP.HTTP.OriginPolicyTest do
 
     test "IP literals cannot be rebound through DNS resolver injection" do
       opts = [resolver: fn _ -> flunk("IP literals must not resolve") end]
+
       assert {:error, :destination_not_public} =
                OriginPolicy.pin("http://127.0.0.1/mcp", policy(["http://127.0.0.1"]), opts)
 

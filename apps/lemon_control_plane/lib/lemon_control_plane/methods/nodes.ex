@@ -26,6 +26,7 @@ defmodule LemonControlPlane.Methods.NodesSupport do
 
   def nodes(live, filters) do
     {:ok, rows} = NodeStore.fetch_nodes()
+
     rows
     |> Enum.flat_map(fn
       {id, node} when is_binary(id) and is_map(node) ->
@@ -33,7 +34,8 @@ defmodule LemonControlPlane.Methods.NodesSupport do
           do: [project_node(id, node, live)],
           else: []
 
-      _ -> []
+      _ ->
+        []
     end)
     |> Enum.sort_by(&{&1["status"] != "online", String.downcase(&1["name"] || "")})
     |> capped(@max_nodes)
@@ -41,26 +43,28 @@ defmodule LemonControlPlane.Methods.NodesSupport do
 
   def pairings(now, filters) do
     {:ok, rows} = NodeStore.fetch_pairings()
+
     rows
     |> Enum.flat_map(fn
       {id, request} when is_binary(id) and is_map(request) ->
         if pending?(request, now) and
              matches?(filters, field(request, :node_id), field(request, :node_name)),
-          do: [project_pairing(id, request)],
-          else: []
+           do: [project_pairing(id, request)],
+           else: []
 
-      _ -> []
+      _ ->
+        []
     end)
     |> Enum.sort_by(& &1["createdAtMs"], :desc)
     |> capped(@max_pairings)
   end
+
   defp matches?(filters, id, name) do
     (not Map.has_key?(filters, "nodeId") or filters["nodeId"] == id) and
       (not Map.has_key?(filters, "name") or filters["name"] == name)
   end
 
   defp capped(rows, limit), do: {Enum.take(rows, limit), length(rows) > limit}
-
 
   defp pending?(request, now) do
     field(request, :status) in [:pending, "pending"] and
@@ -123,6 +127,7 @@ defmodule LemonControlPlane.Methods.NodesSupport do
   end
 
   defp capabilities(_), do: []
+
   defp labels(values) when is_map(values) do
     values
     |> Enum.filter(fn {key, value} ->
@@ -137,7 +142,6 @@ defmodule LemonControlPlane.Methods.NodesSupport do
   end
 
   defp labels(_), do: %{}
-
 
   defp to_text(value) when is_binary(value), do: value
   defp to_text(value) when is_atom(value) and not is_nil(value), do: Atom.to_string(value)
@@ -169,6 +173,7 @@ defmodule LemonControlPlane.Methods.NodesList do
   @impl true
   def handle(params, _ctx) do
     params = params || %{}
+
     if valid_filters?(params) do
       list(params)
     else
@@ -197,6 +202,7 @@ defmodule LemonControlPlane.Methods.NodesList do
   rescue
     _ -> {:error, Errors.unavailable("Node store is unavailable")}
   end
+
   defp valid_filters?(params) do
     Enum.all?([{"name", 64}, {"nodeId", 128}], fn {key, limit} ->
       not Map.has_key?(params, key) or

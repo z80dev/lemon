@@ -23,11 +23,19 @@ defmodule LemonControlPlane.Methods.NodeInvokeEventTest do
       conn_pid: connection_pid
     }
 
-    params = %{"invokeId" => invoke_id, "seq" => 1, "event" => %{"type" => "delta", "text" => "live"}}
+    params = %{
+      "invokeId" => invoke_id,
+      "seq" => 1,
+      "event" => %{"type" => "delta", "text" => "live"}
+    }
+
     {:ok, node_id: node_id, invoke_id: invoke_id, ctx: ctx, params: params}
   end
 
-  test "registers an inline node-only method with required parameter schema", %{ctx: ctx, params: params} do
+  test "registers an inline node-only method with required parameter schema", %{
+    ctx: ctx,
+    params: params
+  } do
     assert {:ok, NodeInvokeEvent} = Registry.lookup("node.invoke.event")
     assert "node.invoke.event" in Registry.list_methods()
     assert Registry.dispatch_mode("node.invoke.event") == :inline
@@ -54,7 +62,9 @@ defmodule LemonControlPlane.Methods.NodeInvokeEventTest do
   end
 
   test "accepts and deduplicates events without duplicate recipient delivery", %{
-    ctx: ctx, params: params, invoke_id: invoke_id
+    ctx: ctx,
+    params: params,
+    invoke_id: invoke_id
   } do
     event = params["event"]
 
@@ -64,11 +74,11 @@ defmodule LemonControlPlane.Methods.NodeInvokeEventTest do
 
     assert_receive {:lemon_node_event, ^invoke_id, 1, ^event}
 
-    assert {:ok,
-            %{"invokeId" => ^invoke_id, "seq" => 1, "received" => true, "duplicate" => true}} =
+    assert {:ok, %{"invokeId" => ^invoke_id, "seq" => 1, "received" => true, "duplicate" => true}} =
              NodeInvokeEvent.handle(params, ctx)
 
     refute_receive {:lemon_node_event, _, _, _}
+
     assert {:ok, %{"seq" => 2, "duplicate" => false}} =
              NodeInvokeEvent.handle(%{params | "seq" => 2}, ctx)
 
@@ -77,12 +87,15 @@ defmodule LemonControlPlane.Methods.NodeInvokeEventTest do
 
   test "requires authenticated node role identity and connection", %{ctx: ctx, params: params} do
     operator = %{ctx | auth: %{role: :operator, scopes: [:admin, :invoke, :event]}}
+
     assert {:error, {:forbidden, "This method requires node role"}} =
              NodeInvokeEvent.handle(params, operator)
 
-    assert {:error, {:forbidden, _message}} = Registry.dispatch("node.invoke.event", params, operator)
+    assert {:error, {:forbidden, _message}} =
+             Registry.dispatch("node.invoke.event", params, operator)
 
     no_identity = %{ctx | auth: Map.delete(ctx.auth, :client_id)}
+
     assert {:error, {:forbidden, "Authenticated node identity is required"}} =
              NodeInvokeEvent.handle(params, no_identity)
 
@@ -90,7 +103,10 @@ defmodule LemonControlPlane.Methods.NodeInvokeEventTest do
              NodeInvokeEvent.handle(params, Map.delete(ctx, :conn_pid))
 
     assert {:error, {:forbidden, _message}} =
-             Registry.dispatch("node.invoke.event", params, %{ctx | auth: %{ctx.auth | scopes: []}})
+             Registry.dispatch("node.invoke.event", params, %{
+               ctx
+               | auth: %{ctx.auth | scopes: []}
+             })
 
     refute_receive {:lemon_node_event, _, _, _}
   end
@@ -118,15 +134,18 @@ defmodule LemonControlPlane.Methods.NodeInvokeEventTest do
   end
 
   test "wrong node and stale connection cannot deliver or deduplicate another session", %{
-    ctx: ctx, params: params
+    ctx: ctx,
+    params: params
   } do
     wrong = %{ctx | auth: %{ctx.auth | client_id: unique("wrong-node")}}
+
     assert {:error, {:forbidden, "Invocation belongs to a different node"}} =
              NodeInvokeEvent.handle(params, wrong)
 
     other = spawn(fn -> Process.sleep(:infinity) end)
     on_exit(fn -> Process.exit(other, :kill) end)
     stale = %{ctx | conn_pid: other}
+
     assert {:error, {:forbidden, "Invocation belongs to a superseded node session"}} =
              NodeInvokeEvent.handle(params, stale)
 
@@ -135,10 +154,16 @@ defmodule LemonControlPlane.Methods.NodeInvokeEventTest do
   end
 
   test "rejects a superseded token generation before forwarding", %{
-    node_id: node_id, ctx: ctx, params: params, invoke_id: invoke_id
+    node_id: node_id,
+    ctx: ctx,
+    params: params,
+    invoke_id: invoke_id
   } do
     identity = %{"type" => "node", "nodeId" => node_id}
-    assert {:ok, old} = TokenStore.replace_node_session(unique("event-token"), identity, ttl_ms: 60_000)
+
+    assert {:ok, old} =
+             TokenStore.replace_node_session(unique("event-token"), identity, ttl_ms: 60_000)
+
     generation = old.identity["sessionGeneration"]
     assert :ok = NodeRegistry.register_session(node_id, node_id, self(), generation)
     assert_receive {:lemon_node_result, ^invoke_id, {:error, {:node_disconnected, :reconnected}}}
@@ -146,41 +171,60 @@ defmodule LemonControlPlane.Methods.NodeInvokeEventTest do
     params = %{params | "invokeId" => new_id}
     old_ctx = %{ctx | auth: Map.put(ctx.auth, :identity, old.identity)}
 
-    assert {:ok, current} = TokenStore.replace_node_session(unique("event-token"), identity, ttl_ms: 60_000)
+    assert {:ok, current} =
+             TokenStore.replace_node_session(unique("event-token"), identity, ttl_ms: 60_000)
+
     assert current.identity["sessionGeneration"] == generation + 1
+
     assert {:error, {:forbidden, "Node session has been superseded"}} =
              NodeInvokeEvent.handle(params, old_ctx)
 
     assert {:error, {:forbidden, "Node session has been superseded"}} =
-             NodeInvokeEvent.handle(params, %{ctx | auth: Map.put(ctx.auth, :identity, %{"sessionGeneration" => "bad"})})
+             NodeInvokeEvent.handle(params, %{
+               ctx
+               | auth: Map.put(ctx.auth, :identity, %{"sessionGeneration" => "bad"})
+             })
 
     refute_receive {:lemon_node_event, _, _, _}
   end
 
   test "accepts a current nonzero generation using string-keyed identity", %{
-    node_id: node_id, ctx: ctx, params: params
+    node_id: node_id,
+    ctx: ctx,
+    params: params
   } do
     assert {:ok, token} =
-             TokenStore.replace_node_session(unique("event-token"), %{"type" => "node", "nodeId" => node_id}, ttl_ms: 60_000)
+             TokenStore.replace_node_session(
+               unique("event-token"),
+               %{"type" => "node", "nodeId" => node_id}, ttl_ms: 60_000)
 
     generation = token.identity["sessionGeneration"]
     assert :ok = NodeRegistry.register_session(node_id, node_id, self(), generation)
     assert {:ok, invoke_id} = NodeRegistry.invoke(node_id, "coding_agent.run", %{})
     auth = %{"role" => :node, "client_id" => node_id, "identity" => token.identity}
+
     assert {:ok, %{"duplicate" => false}} =
              NodeInvokeEvent.handle(%{params | "invokeId" => invoke_id}, %{ctx | auth: auth})
 
     assert_receive {:lemon_node_event, ^invoke_id, 1, _event}
   end
 
-  test "sequence gaps are conflicts and do not consume the missing sequence", %{ctx: ctx, params: params} do
+  test "sequence gaps are conflicts and do not consume the missing sequence", %{
+    ctx: ctx,
+    params: params
+  } do
     assert {:error, {:conflict, _message}} = NodeInvokeEvent.handle(%{params | "seq" => 2}, ctx)
     refute_receive {:lemon_node_event, _, _, _}
     assert {:ok, %{"duplicate" => false}} = NodeInvokeEvent.handle(params, ctx)
-    assert {:ok, %{"seq" => 2, "duplicate" => false}} = NodeInvokeEvent.handle(%{params | "seq" => 2}, ctx)
+
+    assert {:ok, %{"seq" => 2, "duplicate" => false}} =
+             NodeInvokeEvent.handle(%{params | "seq" => 2}, ctx)
   end
 
-  test "payload policy errors expose bounded codes, not event contents", %{ctx: ctx, params: params} do
+  test "payload policy errors expose bounded codes, not event contents", %{
+    ctx: ctx,
+    params: params
+  } do
     secret = "private-event-text"
     deep = Enum.reduce(1..33, nil, fn _, acc -> [acc] end)
     wide = List.duplicate(nil, LemonCore.JSONPayload.default_max_items())
@@ -193,7 +237,8 @@ defmodule LemonControlPlane.Methods.NodeInvokeEventTest do
     ]
 
     for {event, kind} <- cases do
-      assert {:error, {:invalid_request, "event violates JSON payload policy", ^kind}} = result =
+      assert {:error, {:invalid_request, "event violates JSON payload policy", ^kind}} =
+               result =
                NodeInvokeEvent.handle(%{params | "event" => event}, ctx)
 
       refute inspect(result) =~ secret
@@ -205,13 +250,18 @@ defmodule LemonControlPlane.Methods.NodeInvokeEventTest do
   end
 
   test "only active coding-agent runs may stream, with no durable fallback", %{
-    node_id: node_id, ctx: ctx, params: params, invoke_id: invoke_id
+    node_id: node_id,
+    ctx: ctx,
+    params: params,
+    invoke_id: invoke_id
   } do
     assert {:ok, other_id} = NodeRegistry.invoke(node_id, "work.run", %{})
+
     assert {:error, {:invalid_request, "Only coding_agent.run invocations may stream events"}} =
              NodeInvokeEvent.handle(%{params | "invokeId" => other_id}, ctx)
 
     assert :ok = NodeRegistry.complete_session(node_id, self(), 0, invoke_id, %{})
+
     assert {:error, {:conflict, "Invocation is no longer pending"}} =
              NodeInvokeEvent.handle(params, ctx)
 
@@ -222,12 +272,18 @@ defmodule LemonControlPlane.Methods.NodeInvokeEventTest do
   end
 
   test "disconnection rejects late events even after a new live connection registers", %{
-    node_id: node_id, ctx: ctx, params: params, invoke_id: invoke_id
+    node_id: node_id,
+    ctx: ctx,
+    params: params,
+    invoke_id: invoke_id
   } do
     assert :ok = NodeRegistry.unregister(node_id, self())
     assert_receive {:lemon_node_result, ^invoke_id, {:error, {:node_disconnected, :disconnected}}}
     assert :ok = NodeRegistry.register_session(node_id, node_id, self(), 0)
-    assert {:error, {:conflict, "Invocation is no longer pending"}} = NodeInvokeEvent.handle(params, ctx)
+
+    assert {:error, {:conflict, "Invocation is no longer pending"}} =
+             NodeInvokeEvent.handle(params, ctx)
+
     refute_receive {:lemon_node_event, _, _, _}
   end
 

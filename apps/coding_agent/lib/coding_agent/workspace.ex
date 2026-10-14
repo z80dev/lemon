@@ -52,8 +52,8 @@ defmodule CodingAgent.Workspace do
          name in @profile_instruction_files and is_binary(text) and String.valid?(text) and
            not String.contains?(text, <<0>>)
        end),
-      do: :ok,
-      else: {:error, :invalid_profile_instructions}
+       do: :ok,
+       else: {:error, :invalid_profile_instructions}
   end
 
   def validate_profile_instructions(_), do: {:error, :invalid_profile_instructions}
@@ -92,8 +92,10 @@ defmodule CodingAgent.Workspace do
   end
 
   defp scope_opt(opts, key) when is_list(opts), do: Keyword.get(opts, key)
+
   defp scope_opt(opts, key) when is_map(opts),
     do: Map.get(opts, key, Map.get(opts, Atom.to_string(key)))
+
   defp scope_opt(_, _), do: nil
 
   @doc """
@@ -167,24 +169,40 @@ defmodule CodingAgent.Workspace do
 
     context =
       opts
-      |> Keyword.take([:agent_id, :session_key, :invocation_context_key,
-        :memory_context_key, :memory_context_verified, :shared_memory_grant])
+      |> Keyword.take([
+        :agent_id,
+        :session_key,
+        :invocation_context_key,
+        :memory_context_key,
+        :memory_context_verified,
+        :shared_memory_grant
+      ])
       |> Map.new()
-      |> Map.merge(%{workspace_dir: dir, cwd: Keyword.get(opts, :cwd, dir),
-        session_scope: session_scope})
+      |> Map.merge(%{
+        workspace_dir: dir,
+        cwd: Keyword.get(opts, :cwd, dir),
+        session_scope: session_scope
+      })
 
     memory_scope = ContextScope.scope(context)
+
     required_names =
       cond do
-        session_scope == :subagent -> Enum.filter(@required_files, &MapSet.member?(@subagent_bootstrap_allowlist, &1))
-        memory_scope == {:ok, :legacy} -> @required_files
-        true -> List.delete(@required_files, "USER.md")
+        session_scope == :subagent ->
+          Enum.filter(@required_files, &MapSet.member?(@subagent_bootstrap_allowlist, &1))
+
+        memory_scope == {:ok, :legacy} ->
+          @required_files
+
+        true ->
+          List.delete(@required_files, "USER.md")
       end
 
     required =
       required_names
       |> Enum.reject(&(is_map(profile_instructions) and &1 in @profile_instruction_files))
       |> Enum.map(&load_required_file(dir, &1, max_chars))
+
     memory =
       cond do
         session_scope == :subagent -> []
@@ -198,7 +216,9 @@ defmodule CodingAgent.Workspace do
 
   defp legacy_memory_file(dir, max_chars) do
     case find_first_existing_exact(dir, [@memory_file]) do
-      nil -> []
+      nil ->
+        []
+
       name ->
         case load_optional_file(dir, name, max_chars) do
           nil -> []
@@ -208,20 +228,33 @@ defmodule CodingAgent.Workspace do
   end
 
   defp verified_shared_preferences(context, opts, max_chars) do
-    store_opts = if Keyword.has_key?(opts, :memory_store),
-      do: [store: Keyword.fetch!(opts, :memory_store)], else: []
+    store_opts =
+      if Keyword.has_key?(opts, :memory_store),
+        do: [store: Keyword.fetch!(opts, :memory_store)],
+        else: []
+
     case Preferences.shared_bootstrap(context, store_opts) do
       {:ok, files} ->
         Enum.flat_map(["USER.md", "MEMORY.md"], fn name ->
           case files[name] do
             text when is_binary(text) and text != "" ->
-              [%{name: name, path: Path.join(context.workspace_dir, name),
-                content: trim_content(text, name, max_chars), missing: false,
-                source: :verified_shared_memory}]
-            _ -> []
+              [
+                %{
+                  name: name,
+                  path: Path.join(context.workspace_dir, name),
+                  content: trim_content(text, name, max_chars),
+                  missing: false,
+                  source: :verified_shared_memory
+                }
+              ]
+
+            _ ->
+              []
           end
         end)
-      _ -> []
+
+      _ ->
+        []
     end
   rescue
     _ -> []

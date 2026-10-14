@@ -285,30 +285,51 @@ defmodule LemonSkills.Synthesis.PipelineTest do
     agent = "synthesis-private-#{suffix}"
     now = System.system_time(:millisecond)
     home = :crypto.hash(:sha256, Path.expand(ctx.tmp)) |> Base.encode16(case: :lower)
-    private_meta = LemonMemory.ContextScope.metadata({:private, "actor-a"})
-      |> Map.put("home_digest", home) |> Map.put("shared_memory_grant", true)
-    docs = [
-      %{doc("private-#{suffix}", now) | agent_id: agent, meta: private_meta},
-      %{doc("unproven-#{suffix}", now + 1) | agent_id: agent,
-        meta: %{"home_digest" => home, "memory_scope" => "unproven"}}
-    ] |> Enum.map(&Document.with_index/1)
+
+    private_meta =
+      LemonMemory.ContextScope.metadata({:private, "actor-a"})
+      |> Map.put("home_digest", home)
+      |> Map.put("shared_memory_grant", true)
+
+    docs =
+      [
+        %{doc("private-#{suffix}", now) | agent_id: agent, meta: private_meta},
+        %{
+          doc("unproven-#{suffix}", now + 1)
+          | agent_id: agent,
+            meta: %{"home_digest" => home, "memory_scope" => "unproven"}
+        }
+      ]
+      |> Enum.map(&Document.with_index/1)
+
     on_exit(fn -> Enum.each(docs, &LemonMemory.Store.delete_document(&1.doc_id)) end)
     Enum.each(docs, fn record -> assert :ok = LemonMemory.Store.put_sync(record) end)
-    assert {:ok, result} = Pipeline.run(:agent, agent,
-      base_opts(ctx, store_mod: LemonMemory.Store))
+
+    assert {:ok, result} =
+             Pipeline.run(:agent, agent, base_opts(ctx, store_mod: LemonMemory.Store))
+
     assert result.generated == []
     assert result.total_candidates == 0
     assert result.latest_doc_ms == now + 1
     assert {:ok, []} = DraftStore.list(global: false, cwd: ctx.tmp)
-    shareable = [
-      %{doc("shared-#{suffix}", now + 2) | agent_id: agent,
-        meta: Map.put(LemonMemory.ContextScope.metadata(:shared), "home_digest", home)},
-      %{doc("legacy-#{suffix}", now + 3) | agent_id: agent, meta: %{"home_digest" => home}}
-    ] |> Enum.map(&Document.with_index/1)
+
+    shareable =
+      [
+        %{
+          doc("shared-#{suffix}", now + 2)
+          | agent_id: agent,
+            meta: Map.put(LemonMemory.ContextScope.metadata(:shared), "home_digest", home)
+        },
+        %{doc("legacy-#{suffix}", now + 3) | agent_id: agent, meta: %{"home_digest" => home}}
+      ]
+      |> Enum.map(&Document.with_index/1)
+
     on_exit(fn -> Enum.each(shareable, &LemonMemory.Store.delete_document(&1.doc_id)) end)
     Enum.each(shareable, fn record -> assert :ok = LemonMemory.Store.put_sync(record) end)
-    assert {:ok, allowed} = Pipeline.run(:agent, agent,
-      base_opts(ctx, store_mod: LemonMemory.Store))
+
+    assert {:ok, allowed} =
+             Pipeline.run(:agent, agent, base_opts(ctx, store_mod: LemonMemory.Store))
+
     assert length(allowed.generated) == 2
     assert allowed.total_candidates == 2
     assert allowed.latest_doc_ms == now + 3

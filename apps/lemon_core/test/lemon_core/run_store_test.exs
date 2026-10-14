@@ -73,17 +73,20 @@ defmodule LemonCore.RunStoreTest do
   test "execution-only MCP credentials never persist in final summaries or event metadata" do
     run_id = "run_mcp_#{System.unique_integer([:positive])}"
     session_key = "agent:mcp:main"
+
     secret_meta = %{
       profile_id: "mcp",
       mcp_servers: [%{"name" => "bot", "headers" => %{"Authorization" => "Bearer runtime-only"}}]
     }
 
     assert :ok = RunStore.append_event(run_id, %{type: :started, meta: secret_meta})
-    assert :ok = RunStore.finalize(run_id, %{
-      session_key: session_key,
-      meta: secret_meta,
-      completed: %{ok: true, meta: %{"mcp_servers" => secret_meta.mcp_servers}}
-    })
+
+    assert :ok =
+             RunStore.finalize(run_id, %{
+               session_key: session_key,
+               meta: secret_meta,
+               completed: %{ok: true, meta: %{"mcp_servers" => secret_meta.mcp_servers}}
+             })
 
     record = RunStore.get(run_id)
     refute inspect(record) =~ "runtime-only"

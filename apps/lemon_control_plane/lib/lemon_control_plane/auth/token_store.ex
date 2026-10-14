@@ -243,7 +243,9 @@ defmodule LemonControlPlane.Auth.TokenStore do
   def fetch_node_generation(node_id) when is_binary(node_id) and node_id != "" do
     with {:ok, head} <- Store.fetch(@head_namespace, head_key("node", node_id)) do
       case head do
-        nil -> {:ok, 0}
+        nil ->
+          {:ok, 0}
+
         _ ->
           case head_generation(head) do
             generation when is_integer(generation) and generation >= 0 -> {:ok, generation}
@@ -287,6 +289,7 @@ defmodule LemonControlPlane.Auth.TokenStore do
 
   defp do_replace_node_session(token, identity, node_id, opts, attempts_left) do
     key = head_key("node", node_id)
+
     with {:ok, current} <- Store.fetch(@head_namespace, key),
          :ok <- expected_generation(current, opts) do
       replace_node_head(token, identity, node_id, opts, attempts_left, key, current)
@@ -308,6 +311,7 @@ defmodule LemonControlPlane.Auth.TokenStore do
 
         {:error, :mismatch} ->
           Store.delete(@store_namespace, token)
+
           if Keyword.has_key?(opts, :expected_generation),
             do: {:error, :stale_session_generation},
             else: do_replace_node_session(token, identity, node_id, opts, attempts_left - 1)
@@ -318,17 +322,20 @@ defmodule LemonControlPlane.Auth.TokenStore do
       end
     end
   end
+
   defp expected_generation(current, opts) do
     case Keyword.fetch(opts, :expected_generation) do
-      :error -> :ok
+      :error ->
+        :ok
+
       {:ok, expected} ->
         generation = if is_nil(current), do: 0, else: head_generation(current)
+
         if is_integer(expected) and generation == expected,
           do: :ok,
           else: {:error, :stale_session_generation}
     end
   end
-
 
   defp token_info(token, identity, opts) do
     ttl_ms = Keyword.get(opts, :ttl_ms, @default_ttl_ms)

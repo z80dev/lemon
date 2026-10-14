@@ -145,10 +145,13 @@ defmodule LemonCore.Config.TomlPatchTest do
     bot_token_secret = "t"
     """
 
-    patched = TomlPatch.upsert_raw_line(content, "gateway", "enable_telegram", "enable_telegram = true")
+    patched =
+      TomlPatch.upsert_raw_line(content, "gateway", "enable_telegram", "enable_telegram = true")
 
     assert String.starts_with?(patched, "[gateway]\nenable_telegram = true\n\n[gateway.telegram]")
-    assert {:ok, %{"gateway" => %{"enable_telegram" => true, "telegram" => _}}} = Toml.decode(patched)
+
+    assert {:ok, %{"gateway" => %{"enable_telegram" => true, "telegram" => _}}} =
+             Toml.decode(patched)
   end
 
   test "edits the right bytes after non-ASCII content" do

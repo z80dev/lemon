@@ -21,8 +21,11 @@ defmodule LemonControlPlane.Methods.RunsReceiptGet do
         _ -> {:error, Errors.error(:unavailable, "Run receipt is unavailable")}
       end
     else
-      false -> {:error, Errors.invalid_request("runId is required and includeAnswer must be a boolean")}
-      error -> error
+      false ->
+        {:error, Errors.invalid_request("runId is required and includeAnswer must be a boolean")}
+
+      error ->
+        error
     end
   end
 end

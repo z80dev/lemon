@@ -16,18 +16,22 @@ defmodule CodingAgent.ExecutionNode.FileService do
     filesystem_outcome_unknown atomic_move_unavailable filesystem_busy)a
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
 
-
   @doc false
   def path_policy(opts) do
     home = Keyword.get(opts, :home) || System.user_home!()
-    %{"cwd" => Keyword.get(opts, :default_cwd) || home,
-      "roots" => Keyword.get(opts, :allowed_roots, [home])}
+
+    %{
+      "cwd" => Keyword.get(opts, :default_cwd) || home,
+      "roots" => Keyword.get(opts, :allowed_roots, [home])
+    }
   end
 
   def handle(method, args, opts) do
     policy = path_policy(opts)
+
     with {:ok, pid} <- ensure_started() do
       deadline = System.monotonic_time(:millisecond) + 25_000
+
       try do
         GenServer.call(pid, {:request, method, args, policy, deadline}, 30_000)
       catch
@@ -51,12 +55,20 @@ defmodule CodingAgent.ExecutionNode.FileService do
 
   defp open_port do
     case System.find_executable("python3") do
-      nil -> {:error, :host_io_unavailable}
+      nil ->
+        {:error, :host_io_unavailable}
+
       python ->
         helper = Path.join(to_string(:code.priv_dir(:coding_agent)), "node_fs.py")
-        port = Port.open({:spawn_executable, python}, [
-          :binary, :exit_status, {:packet, 4}, {:args, [helper]}
-        ])
+
+        port =
+          Port.open({:spawn_executable, python}, [
+            :binary,
+            :exit_status,
+            {:packet, 4},
+            {:args, [helper]}
+          ])
+
         {:ok, port}
     end
   end
@@ -71,15 +83,20 @@ defmodule CodingAgent.ExecutionNode.FileService do
 
   def handle_call({:request, method, args, policy, deadline}, _from, port) do
     remaining = deadline - System.monotonic_time(:millisecond)
+
     if remaining <= 0 do
       {:reply, {:error, :host_io_unavailable}, port}
     else
       request = Jason.encode!(%{"method" => method, "args" => args, "policy" => policy})
+
       if Port.command(port, request, [:nosuspend]) do
         receive do
-          {^port, {:data, data}} -> {:reply, decode(data), port}
+          {^port, {:data, data}} ->
+            {:reply, decode(data), port}
+
           {^port, {:exit_status, _}} ->
             {:stop, :normal, {:error, :filesystem_outcome_unknown}, port}
+
           {:EXIT, ^port, _} ->
             {:stop, :normal, {:error, :filesystem_outcome_unknown}, port}
         after
@@ -99,6 +116,7 @@ defmodule CodingAgent.ExecutionNode.FileService do
 
   @impl true
   def terminate(_, nil), do: :ok
+
   def terminate(_, port) do
     if Port.info(port), do: Port.close(port)
     :ok
@@ -106,19 +124,27 @@ defmodule CodingAgent.ExecutionNode.FileService do
 
   defp decode(data) do
     case Jason.decode(data) do
-      {:ok, %{"ok" => result}} when is_map(result) -> {:ok, mime(result)}
+      {:ok, %{"ok" => result}} when is_map(result) ->
+        {:ok, mime(result)}
+
       {:ok, %{"error" => name}} ->
         {:error, Enum.find(@errors, :filesystem_failed, &(Atom.to_string(&1) == name))}
-      _ -> {:error, :filesystem_failed}
+
+      _ ->
+        {:error, :filesystem_failed}
     end
   end
 
   defp mime(%{"stat" => stat} = result), do: Map.put(result, "stat", mime(stat))
-  defp mime(%{"entries" => entries} = result), do: Map.put(result, "entries", Enum.map(entries, &mime/1))
+
+  defp mime(%{"entries" => entries} = result),
+    do: Map.put(result, "entries", Enum.map(entries, &mime/1))
+
   defp mime(%{"path" => path} = result) do
     if Map.has_key?(result, "type") or Map.has_key?(result, "dataBase64"),
       do: Map.put(result, "mime", MIME.from_path(path)),
       else: result
   end
+
   defp mime(result), do: result
 end

@@ -116,27 +116,29 @@ defmodule CodingAgent.Tools.Task.Execution do
       BudgetEnforcer.on_run_start(run_id, opts)
     end
 
-    followup_context = %{
-      auto_followup: validated.async and validated.auto_followup,
-      description: description,
-      cwd: cwd,
-      parent_session_key: parent_session_key,
-      parent_agent_id: parent_agent_id,
-      queue_mode: validated.resolved_queue_mode,
-      meta: validated.meta,
-      invocation_context_key: Keyword.get(opts, :invocation_context_key),
-      memory_context_key: Keyword.get(opts, :memory_context_key),
-      memory_context_verified: Keyword.get(opts, :memory_context_verified) == true,
-      shared_memory_grant: Keyword.get(opts, :shared_memory_grant) == true,
-      tool_policy: Keyword.get(opts, :tool_policy),
-      invocation_mcp_servers: Keyword.get(opts, :invocation_mcp_servers),
-      role: role_id,
-      model: validated.model,
-      session_pid: Keyword.get(opts, :session_pid),
-      session_module: Keyword.get(opts, :session_module, Session),
-      run_orchestrator: Keyword.get(opts, :run_orchestrator, Followup.default_run_orchestrator())
-    }
-    |> Map.merge(Map.new(Keyword.take(opts, Params.private_native_fields())))
+    followup_context =
+      %{
+        auto_followup: validated.async and validated.auto_followup,
+        description: description,
+        cwd: cwd,
+        parent_session_key: parent_session_key,
+        parent_agent_id: parent_agent_id,
+        queue_mode: validated.resolved_queue_mode,
+        meta: validated.meta,
+        invocation_context_key: Keyword.get(opts, :invocation_context_key),
+        memory_context_key: Keyword.get(opts, :memory_context_key),
+        memory_context_verified: Keyword.get(opts, :memory_context_verified) == true,
+        shared_memory_grant: Keyword.get(opts, :shared_memory_grant) == true,
+        tool_policy: Keyword.get(opts, :tool_policy),
+        invocation_mcp_servers: Keyword.get(opts, :invocation_mcp_servers),
+        role: role_id,
+        model: validated.model,
+        session_pid: Keyword.get(opts, :session_pid),
+        session_module: Keyword.get(opts, :session_module, Session),
+        run_orchestrator:
+          Keyword.get(opts, :run_orchestrator, Followup.default_run_orchestrator())
+      }
+      |> Map.merge(Map.new(Keyword.take(opts, Params.private_native_fields())))
 
     execution = %{
       description: description,

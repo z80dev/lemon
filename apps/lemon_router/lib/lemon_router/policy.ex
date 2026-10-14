@@ -47,12 +47,25 @@ defmodule LemonRouter.Policy do
     policy_a = LemonCore.ToolPolicy.expand(policy_a)
     policy_b = LemonCore.ToolPolicy.expand(policy_b)
 
-    merged = Map.merge(policy_a, policy_b, fn key, v1, v2 ->
-      merge_value(key, v1, v2)
-    end)
+    merged =
+      Map.merge(policy_a, policy_b, fn key, v1, v2 ->
+        merge_value(key, v1, v2)
+      end)
 
     native = LemonCore.ToolPolicy.intersect(policy_a, policy_b)
-    Map.merge(merged, Map.take(native, [:profile, :allow, :deny, :blocked_tools, :require_approval, :approvals, :no_reply]))
+
+    Map.merge(
+      merged,
+      Map.take(native, [
+        :profile,
+        :allow,
+        :deny,
+        :blocked_tools,
+        :require_approval,
+        :approvals,
+        :no_reply
+      ])
+    )
   end
 
   defp merge_value(_key, v1, v2) when is_map(v1) and is_map(v2) do

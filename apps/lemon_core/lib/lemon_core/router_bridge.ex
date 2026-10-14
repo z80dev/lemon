@@ -162,15 +162,28 @@ defmodule LemonCore.RouterBridge do
   @doc "Submit with a fixed ID and return the queue-owned admission receipt."
   def submit_run_with_receipt(%RunRequest{} = request) do
     case call(:run_orchestrator, :submit_with_receipt, [request], :mutation) do
-      {:ok, %{run_id: id, state: :accepted, effective_mode: mode, target_run_id: target} = receipt}
+      {:ok,
+       %{run_id: id, state: :accepted, effective_mode: mode, target_run_id: target} = receipt}
       when is_binary(id) and id != "" and id == request.run_id and
-             mode in [:new_run, :queued, :merged, :steer_pending, :steer,
-                      :steer_backlog_pending, :steer_backlog, :redirect_pending, :redirect,
-                      :interrupt] and is_binary(target) and target != "" ->
+             mode in [
+               :new_run,
+               :queued,
+               :merged,
+               :steer_pending,
+               :steer,
+               :steer_backlog_pending,
+               :steer_backlog,
+               :redirect_pending,
+               :redirect,
+               :interrupt
+             ] and is_binary(target) and target != "" ->
         {:ok, receipt}
 
-      {:error, _} = error -> error
-      _ -> {:error, :outcome_unknown}
+      {:error, _} = error ->
+        error
+
+      _ ->
+        {:error, :outcome_unknown}
     end
   end
 

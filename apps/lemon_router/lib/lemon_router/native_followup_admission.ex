@@ -45,10 +45,17 @@ defmodule LemonRouter.NativeFollowupAdmission do
          {:ok, _profile} <- ProfileStore.get(profile_id) do
       # Each configuration names its own encrypted credential, so a failed or
       # concurrent update cannot switch the token beneath an older callback URL.
-      name = "native_followup/" <> profile_id <> "/" <> Base.url_encode64(:crypto.strong_rand_bytes(18), padding: false)
+      name =
+        "native_followup/" <>
+          profile_id <> "/" <> Base.url_encode64(:crypto.strong_rand_bytes(18), padding: false)
 
       with {:ok, _metadata} <- Secrets.set(name, token),
-           :ok <- NativeFollowupAdmissionStore.put(%{profile_id: profile_id, url: url, token_secret: name}) do
+           :ok <-
+             NativeFollowupAdmissionStore.put(%{
+               profile_id: profile_id,
+               url: url,
+               token_secret: name
+             }) do
         {:ok, name}
       else
         _ -> {:error, :admission_unavailable}
@@ -120,7 +127,8 @@ defmodule LemonRouter.NativeFollowupAdmission do
   def check(config, lineage, opts \\ []) do
     with true <- valid_transport_opts?(opts),
          %{profile_id: profile_id} <- config,
-         %{run_id: run_id, source_profile_id: ^profile_id, target_profile_id: target_profile_id} <- lineage,
+         %{run_id: run_id, source_profile_id: ^profile_id, target_profile_id: target_profile_id} <-
+           lineage,
          :ok <- RunRequest.validate_invocation_context_key(run_id),
          {:ok, ^config} <- fetch_config(profile_id),
          {:ok, target_profile, target_version} <- capture_target(target_profile_id),
@@ -194,12 +202,14 @@ defmodule LemonRouter.NativeFollowupAdmission do
   def validate_invocation(_, _, _), do: {:error, :admission_unavailable}
 
   defp normalize_templates(templates) when is_list(templates) and length(templates) <= 32 do
-    with true <- Enum.all?(templates, fn template ->
-           is_map(template) and Enum.all?(Map.keys(template), &(&1 in @mcp_fields)) and
-             Map.get(template, "headers", %{}) == %{} and
-             valid_server_url?(template["url"]) and canonical_origins?(template["allowedOrigins"]) and
-             canonical_origins?(Map.get(template, "approvedPrivateOrigins", []))
-         end),
+    with true <-
+           Enum.all?(templates, fn template ->
+             is_map(template) and Enum.all?(Map.keys(template), &(&1 in @mcp_fields)) and
+               Map.get(template, "headers", %{}) == %{} and
+               valid_server_url?(template["url"]) and
+               canonical_origins?(template["allowedOrigins"]) and
+               canonical_origins?(Map.get(template, "approvedPrivateOrigins", []))
+           end),
          {:ok, normalized} <- ProfileStore.normalize_mcp_servers(templates),
          true <- Enum.all?(normalized, &valid_server_transport?/1) do
       {:ok, normalized}
@@ -228,7 +238,10 @@ defmodule LemonRouter.NativeFollowupAdmission do
       server["name"] == template["name"] and
         canonical_url(server["url"]) == canonical_url(template["url"]) and
         subset?(server["allowedOrigins"], template["allowedOrigins"]) and
-        subset?(Map.get(server, "approvedPrivateOrigins", []), Map.get(template, "approvedPrivateOrigins", [])) and
+        subset?(
+          Map.get(server, "approvedPrivateOrigins", []),
+          Map.get(template, "approvedPrivateOrigins", [])
+        ) and
         tools_within_template?(server, template)
     end)
   end
@@ -237,7 +250,9 @@ defmodule LemonRouter.NativeFollowupAdmission do
 
   defp tools_within_template?(server, template) do
     case Map.fetch(template, "enabledTools") do
-      :error -> true
+      :error ->
+        true
+
       {:ok, ceiling} ->
         case Map.fetch(server, "enabledTools") do
           {:ok, tools} -> subset?(tools, ceiling)
@@ -281,14 +296,22 @@ defmodule LemonRouter.NativeFollowupAdmission do
 
   defp receipt(%Req.Response{status: 200, private: private}, run_id, target_config) do
     with false <- Map.get(private, :native_admission_body_invalid, false),
-         body = private |> Map.get(:native_admission_body_chunks, []) |> Enum.reverse() |> IO.iodata_to_binary(),
+         body =
+           private
+           |> Map.get(:native_admission_body_chunks, [])
+           |> Enum.reverse()
+           |> IO.iodata_to_binary(),
          {:ok, decoded} <- Jason.decode(body, objects: :ordered_objects),
          {:ok, decoded} <- unique_json(decoded, 0) do
       case decoded do
-        %{"allow" => false} when map_size(decoded) == 1 -> {:error, :denied}
+        %{"allow" => false} when map_size(decoded) == 1 ->
+          {:error, :denied}
+
         %{"allow" => true, "invocation" => invocation} when map_size(decoded) == 2 ->
           validate_invocation(invocation, run_id, target_config)
-        _ -> {:error, :admission_unavailable}
+
+        _ ->
+          {:error, :admission_unavailable}
       end
     else
       _ -> {:error, :admission_unavailable}
@@ -332,11 +355,18 @@ defmodule LemonRouter.NativeFollowupAdmission do
   defp safe_json?(_, depth) when depth > 16, do: false
   defp safe_json?(value, _) when is_binary(value), do: String.valid?(value)
   defp safe_json?(value, _) when is_number(value) or is_boolean(value) or is_nil(value), do: true
-  defp safe_json?(values, depth) when is_list(values), do: Enum.all?(values, &safe_json?(&1, depth + 1))
+
+  defp safe_json?(values, depth) when is_list(values),
+    do: Enum.all?(values, &safe_json?(&1, depth + 1))
+
   defp safe_json?(%{__struct__: _}, _), do: false
+
   defp safe_json?(value, depth) when is_map(value) do
-    Enum.all?(value, fn {key, item} -> is_binary(key) and String.valid?(key) and safe_json?(item, depth + 1) end)
+    Enum.all?(value, fn {key, item} ->
+      is_binary(key) and String.valid?(key) and safe_json?(item, depth + 1)
+    end)
   end
+
   defp safe_json?(_, _), do: false
 
   defp valid_servers?(servers) when is_list(servers) and length(servers) <= 32 do
@@ -347,6 +377,7 @@ defmodule LemonRouter.NativeFollowupAdmission do
         canonical_origins?(Map.get(server, "approvedPrivateOrigins", []))
     end)
   end
+
   defp valid_servers?(_), do: false
 
   defp valid_server_url?(url) do
@@ -371,15 +402,18 @@ defmodule LemonRouter.NativeFollowupAdmission do
     with {:ok, origin} <- OriginPolicy.canonical_origin(server["url"]),
          true <- is_list(allowed) and allowed != [] and origin in allowed,
          true <- is_list(private) and Enum.all?(private, &(&1 in allowed)),
-         true <- uri.scheme == "https" or
-           (uri.scheme == "http" and uri.host in ["127.0.0.1", "::1"] and origin in private) do
+         true <-
+           uri.scheme == "https" or
+             (uri.scheme == "http" and uri.host in ["127.0.0.1", "::1"] and origin in private) do
       # Only literal addresses can be validated on the controller. Hostname DNS
       # pinning belongs to the actual executing destination, never this process.
       case :inet.parse_strict_address(String.to_charlist(uri.host)) do
         {:ok, _address} ->
           policy = %{"allowedOrigins" => allowed, "approvedPrivateOrigins" => private}
           match?({:ok, _pin}, OriginPolicy.pin(server["url"], policy))
-        {:error, _} -> true
+
+        {:error, _} ->
+          true
       end
     else
       _ -> false
@@ -388,10 +422,16 @@ defmodule LemonRouter.NativeFollowupAdmission do
 
   defp valid_headers?(headers) when is_map(headers) and map_size(headers) <= 64 do
     names = Map.keys(headers)
+
     Enum.all?(headers, fn {name, value} ->
       if is_binary(name) and is_binary(value) do
         downcase = String.downcase(name)
-        value = if downcase == "authorization", do: String.replace_prefix(value, "Bearer ", ""), else: value
+
+        value =
+          if downcase == "authorization",
+            do: String.replace_prefix(value, "Bearer ", ""),
+            else: value
+
         byte_size(name) in 1..128 and Regex.match?(~r/\A[!#$%&'*+\-.^_`|~0-9A-Za-z]+\z/, name) and
           downcase not in @transport_headers and secret_reference?(value)
       else
@@ -399,13 +439,17 @@ defmodule LemonRouter.NativeFollowupAdmission do
       end
     end) and MapSet.size(MapSet.new(names, &String.downcase/1)) == length(names)
   end
+
   defp valid_headers?(_), do: false
 
   defp secret_reference?(value) do
     case Regex.run(~r/\A\$\{LEMON_SECRET:([^{}]+)\}\z/, value) do
-      [_, name] -> valid_string?(name, 512) and name == String.trim(name) and
-        not Regex.match?(~r/[\x00-\x1F\x7F]/, name)
-      _ -> false
+      [_, name] ->
+        valid_string?(name, 512) and name == String.trim(name) and
+          not Regex.match?(~r/[\x00-\x1F\x7F]/, name)
+
+      _ ->
+        false
     end
   end
 
@@ -414,9 +458,11 @@ defmodule LemonRouter.NativeFollowupAdmission do
       is_binary(name) and String.starts_with?(name, "native_followup/" <> profile_id <> "/") and
       valid_string?(name, 256)
   end
+
   defp valid_config?(_, _), do: false
 
-  defp exact_fields?(map, fields), do: map_size(map) == length(fields) and Enum.all?(fields, &Map.has_key?(map, &1))
+  defp exact_fields?(map, fields),
+    do: map_size(map) == length(fields) and Enum.all?(fields, &Map.has_key?(map, &1))
 
   defp valid_transport_opts?(opts) do
     Keyword.keyword?(opts) and (opts == [] or match?([plug: _], opts))
@@ -429,18 +475,23 @@ defmodule LemonRouter.NativeFollowupAdmission do
   defp valid_string?(value, max) when is_binary(value) do
     byte_size(value) in 1..max and String.valid?(value) and String.trim(value) != ""
   end
+
   defp valid_string?(_, _), do: false
 
   defp allowed_callback(url) do
     with {:ok, uri} <- callback_uri(url),
          origins when is_list(origins) <- allowed_origins(),
-         true <- Enum.any?(origins, fn origin ->
-           case callback_uri(origin) do
-             {:ok, configured} -> is_nil(configured.path) and configured.scheme == uri.scheme and
-               configured.host == uri.host and configured.port == uri.port
-             _ -> false
-           end
-         end) do
+         true <-
+           Enum.any?(origins, fn origin ->
+             case callback_uri(origin) do
+               {:ok, configured} ->
+                 is_nil(configured.path) and configured.scheme == uri.scheme and
+                   configured.host == uri.host and configured.port == uri.port
+
+               _ ->
+                 false
+             end
+           end) do
       {:ok, uri}
     else
       _ -> {:error, :invalid_request}
@@ -473,10 +524,13 @@ defmodule LemonRouter.NativeFollowupAdmission do
     if String.contains?(host, ":") do
       match?({:ok, _}, :inet.parse_address(String.to_charlist(host)))
     else
-      byte_size(host) <= 253 and Enum.all?(String.split(host, "."), fn label ->
-        byte_size(label) in 1..63 and Regex.match?(~r/\A[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?\z/, label)
-      end)
+      byte_size(host) <= 253 and
+        Enum.all?(String.split(host, "."), fn label ->
+          byte_size(label) in 1..63 and
+            Regex.match?(~r/\A[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?\z/, label)
+        end)
     end
   end
+
   defp valid_host?(_), do: false
 end

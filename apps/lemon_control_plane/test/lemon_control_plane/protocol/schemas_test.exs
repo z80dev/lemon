@@ -33,15 +33,21 @@ defmodule LemonControlPlane.Protocol.SchemasTest do
     end
   end
 
-
   test "usage.records requires a millisecond range and typed pagination filters" do
-    assert :ok = Schemas.validate("usage.records", %{
-      "fromMs" => 0, "toMs" => 1000, "runId" => "r", "sessionKey" => "s",
-      "cursor" => "opaque", "limit" => 100
-    })
+    assert :ok =
+             Schemas.validate("usage.records", %{
+               "fromMs" => 0,
+               "toMs" => 1000,
+               "runId" => "r",
+               "sessionKey" => "s",
+               "cursor" => "opaque",
+               "limit" => 100
+             })
+
     assert {:error, _} = Schemas.validate("usage.records", %{"fromMs" => 0})
     assert {:error, _} = Schemas.validate("usage.records", %{"fromMs" => "0", "toMs" => 1000})
   end
+
   describe "validate/2" do
     test "allows any params for methods without schemas" do
       assert :ok = Schemas.validate("unknown.method", %{"foo" => "bar"})

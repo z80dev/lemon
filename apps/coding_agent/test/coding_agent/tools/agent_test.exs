@@ -762,7 +762,10 @@ defmodule CodingAgent.Tools.AgentTest do
         invocation_context_key: "agent-followup-client",
         invocation_mcp_servers: [],
         tool_policy:
-          CodingAgent.ToolPolicy.custom(allow: ["read", "write", "agent"], require_approval: ["write"])
+          CodingAgent.ToolPolicy.custom(
+            allow: ["read", "write", "agent"],
+            require_approval: ["write"]
+          )
       )
 
     assert_receive {:router_submit, %RunRequest{} = child_request, 1}

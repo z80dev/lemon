@@ -74,9 +74,17 @@ defmodule LemonRouter.RouterPendingCompactionTest do
       session_key = "legacy-compaction-#{System.unique_integer([:positive])}"
       run_id = "legacy-run-#{System.unique_integer([:positive])}"
       marker = %{reason: "near_limit", set_at_ms: System.system_time(:millisecond)}
-      assert :ok = LemonCore.RunHistoryStore.put(session_key, System.system_time(:millisecond),
-        run_id, %{summary: %{prompt: "What is 2+2?", answer: "4"}})
+
+      assert :ok =
+               LemonCore.RunHistoryStore.put(
+                 session_key,
+                 System.system_time(:millisecond),
+                 run_id,
+                 %{summary: %{prompt: "What is 2+2?", answer: "4"}}
+               )
+
       assert :ok = PendingCompactionStore.put(session_key, marker)
+
       on_exit(fn ->
         LemonCore.RunHistoryStore.delete_session(session_key)
         PendingCompactionStore.delete(session_key)
@@ -98,45 +106,91 @@ defmodule LemonRouter.RouterPendingCompactionTest do
       assert :ok = PendingCompactionStore.put(session_key, stale)
       assert {"hello", nil} = PendingCompaction.prepare("hello", session_key, :channel)
       assert PendingCompactionStore.get(session_key) == nil
-      assert :ok = PendingCompactionStore.put(session_key, %{set_at_ms: System.system_time(:millisecond)})
+
+      assert :ok =
+               PendingCompactionStore.put(session_key, %{
+                 set_at_ms: System.system_time(:millisecond)
+               })
+
       assert {"hello", nil} = PendingCompaction.prepare("hello", session_key, :channel)
       assert PendingCompactionStore.get(session_key) == nil
     end
 
     test "only exact execution context history enters compaction and other journals remain intact" do
       session_key = "scoped-compaction-#{System.unique_integer([:positive])}"
-      private = %{invocation_context_key: "owner", memory_context_key: "private-room", mcp_servers: []}
+
+      private = %{
+        invocation_context_key: "owner",
+        memory_context_key: "private-room",
+        mcp_servers: []
+      }
+
       shared = %{private | memory_context_key: "shared-room"}
       policy = %{blocked_tools: ["bash"]}
       marker = %{set_at_ms: System.system_time(:millisecond)}
-      first = %ExecutionCommand{run_id: "#{session_key}-private", session_key: session_key,
-        prompt: "private bootstrap", meta: private, tool_policy: policy}
-      second = %{first | run_id: "#{session_key}-shared", prompt: "public room work", meta: shared}
+
+      first = %ExecutionCommand{
+        run_id: "#{session_key}-private",
+        session_key: session_key,
+        prompt: "private bootstrap",
+        meta: private,
+        tool_policy: policy
+      }
+
+      second = %{
+        first
+        | run_id: "#{session_key}-shared",
+          prompt: "public room work",
+          meta: shared
+      }
+
       assert :ok = ResumeResolver.bind_run(first)
       assert :ok = ResumeResolver.bind_run(second)
+
       for request <- [first, second] do
-        assert :ok = LemonCore.RunHistoryStore.put(session_key, System.system_time(:millisecond),
-          request.run_id, %{summary: %{prompt: request.prompt, answer: "answer", meta: request.meta}})
+        assert :ok =
+                 LemonCore.RunHistoryStore.put(
+                   session_key,
+                   System.system_time(:millisecond),
+                   request.run_id,
+                   %{summary: %{prompt: request.prompt, answer: "answer", meta: request.meta}}
+                 )
       end
+
       assert :ok = PendingCompactionStore.put(session_key, marker)
+
       on_exit(fn ->
         LemonCore.RunHistoryStore.delete_session(session_key)
         PendingCompactionStore.delete(session_key)
       end)
 
-      assert {prompt, ^marker} = PendingCompaction.prepare("continue", session_key, :channel,
-        meta: shared, tool_policy: policy)
+      assert {prompt, ^marker} =
+               PendingCompaction.prepare("continue", session_key, :channel,
+                 meta: shared,
+                 tool_policy: policy
+               )
+
       assert prompt =~ "public room work"
       refute prompt =~ "private bootstrap"
       assert PendingCompactionStore.get(session_key) == marker
 
       unknown = %{shared | invocation_context_key: "unproven"}
-      assert {"own prompt", nil} = PendingCompaction.prepare("own prompt", session_key, :channel,
-        meta: unknown, tool_policy: policy)
+
+      assert {"own prompt", nil} =
+               PendingCompaction.prepare("own prompt", session_key, :channel,
+                 meta: unknown,
+                 tool_policy: policy
+               )
+
       assert PendingCompactionStore.get(session_key) == marker
       assert length(LemonCore.RunHistoryStore.get(session_key)) == 2
-      assert {private_prompt, ^marker} = PendingCompaction.prepare("continue", session_key, :channel,
-        meta: private, tool_policy: policy)
+
+      assert {private_prompt, ^marker} =
+               PendingCompaction.prepare("continue", session_key, :channel,
+                 meta: private,
+                 tool_policy: policy
+               )
+
       assert private_prompt =~ "private bootstrap"
       refute private_prompt =~ "public room work"
     end

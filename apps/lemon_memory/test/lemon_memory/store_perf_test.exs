@@ -109,24 +109,25 @@ defmodule LemonMemory.StorePerfTest do
 
     unique_word = "xk7q9zfj"
 
-    needle = %Document{
-      doc_id: "mem_needle",
-      run_id: "run_needle",
-      session_key: session,
-      agent_id: "correctness_agent",
-      workspace_key: nil,
-      scope: :session,
-      started_at_ms: System.system_time(:millisecond) - 100,
-      ingested_at_ms: System.system_time(:millisecond),
-      prompt_summary: "How to fix the #{unique_word} problem?",
-      answer_summary: "Use the standard approach.",
-      tools_used: ["bash"],
-      provider: "anthropic",
-      model: "claude-sonnet-4-6",
-      outcome: :unknown,
-      meta: %{}
-    }
-    |> Document.with_index()
+    needle =
+      %Document{
+        doc_id: "mem_needle",
+        run_id: "run_needle",
+        session_key: session,
+        agent_id: "correctness_agent",
+        workspace_key: nil,
+        scope: :session,
+        started_at_ms: System.system_time(:millisecond) - 100,
+        ingested_at_ms: System.system_time(:millisecond),
+        prompt_summary: "How to fix the #{unique_word} problem?",
+        answer_summary: "Use the standard approach.",
+        tools_used: ["bash"],
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+        outcome: :unknown,
+        meta: %{}
+      }
+      |> Document.with_index()
 
     # Insert noise documents without the unique word
     Enum.each(1..50, fn i -> Store.put(pid, make_doc(session, i)) end)

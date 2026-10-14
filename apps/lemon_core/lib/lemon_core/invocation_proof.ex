@@ -15,10 +15,13 @@ defmodule LemonCore.InvocationProof do
   @fields ~w(runId serverName serverUrl headerName secretName)
 
   def validate(descriptor, run_id, servers) when is_map(descriptor) do
-    if map_size(descriptor) == length(@fields) and Enum.all?(@fields, &Map.has_key?(descriptor, &1)) do
+    if map_size(descriptor) == length(@fields) and
+         Enum.all?(@fields, &Map.has_key?(descriptor, &1)) do
       record = %{
-        run_id: descriptor["runId"], server_name: descriptor["serverName"],
-        server_url: descriptor["serverUrl"], header_name: descriptor["headerName"],
+        run_id: descriptor["runId"],
+        server_name: descriptor["serverName"],
+        server_url: descriptor["serverUrl"],
+        header_name: descriptor["headerName"],
         secret_name: descriptor["secretName"]
       }
 
@@ -54,7 +57,9 @@ defmodule LemonCore.InvocationProof do
         if is_nil(invocation_key) do
           meta
         else
-          meta |> Map.put(:invocation_context_key, invocation_key) |> Map.put_new(:mcp_servers, [])
+          meta
+          |> Map.put(:invocation_context_key, invocation_key)
+          |> Map.put_new(:mcp_servers, [])
         end
 
       meta =
@@ -85,7 +90,9 @@ defmodule LemonCore.InvocationProof do
 
   defp optional_context_key(params, field) do
     case Map.fetch(params, field) do
-      :error -> {:ok, nil}
+      :error ->
+        {:ok, nil}
+
       {:ok, key} ->
         case RunRequest.validate_invocation_context_key(key) do
           :ok -> {:ok, key}
@@ -96,7 +103,9 @@ defmodule LemonCore.InvocationProof do
 
   defp projected_proof(params, run_id, meta, invocation_key, memory_key) do
     case Map.fetch(params, "invocationProof") do
-      :error -> {:ok, nil}
+      :error ->
+        {:ok, nil}
+
       {:ok, descriptor} ->
         if params["runId"] == run_id and not is_nil(invocation_key) and not is_nil(memory_key),
           do: validate(descriptor, run_id, Map.get(meta, :mcp_servers)),
@@ -109,10 +118,11 @@ defmodule LemonCore.InvocationProof do
     servers = Map.get(meta, :mcp_servers)
     proof = Map.get(meta, :invocation_proof)
 
-    trusted = Map.get(meta, :invocation_proof_verified) == true and
-      Map.get(meta, :memory_context_verified) == true and
-      RunRequest.validate_invocation_context_key(Map.get(meta, :invocation_context_key)) == :ok and
-      RunRequest.validate_invocation_context_key(Map.get(meta, :memory_context_key)) == :ok
+    trusted =
+      Map.get(meta, :invocation_proof_verified) == true and
+        Map.get(meta, :memory_context_verified) == true and
+        RunRequest.validate_invocation_context_key(Map.get(meta, :invocation_context_key)) == :ok and
+        RunRequest.validate_invocation_context_key(Map.get(meta, :memory_context_key)) == :ok
 
     if trusted and bound_record?(proof, run_id, servers) do
       Enum.map(servers, fn server ->
@@ -133,20 +143,35 @@ defmodule LemonCore.InvocationProof do
   def comparison_servers(%{meta: meta}) when is_map(meta), do: Map.get(meta, :mcp_servers)
   def comparison_servers(_), do: nil
 
-  defp bound_record?(%{run_id: run_id, server_name: name, server_url: url,
-                      header_name: @header, secret_name: secret} = proof, run_id, servers)
+  defp bound_record?(
+         %{
+           run_id: run_id,
+           server_name: name,
+           server_url: url,
+           header_name: @header,
+           secret_name: secret
+         } = proof,
+         run_id,
+         servers
+       )
        when is_binary(run_id) and is_binary(name) and name != "" and
               is_binary(url) and url != "" and is_binary(secret) and is_list(servers) do
     with :ok <- RunRequest.validate_invocation_context_key(run_id),
          true <- secret == @namespace <> run_id do
       matches = Enum.filter(servers, &selected_server?(&1, proof))
+
       case matches do
         [server] ->
           case MapHelpers.get_key(server, :headers) do
-            headers when is_map(headers) -> Map.get(headers, @header) == "${LEMON_SECRET:#{secret}}"
-            _ -> false
+            headers when is_map(headers) ->
+              Map.get(headers, @header) == "${LEMON_SECRET:#{secret}}"
+
+            _ ->
+              false
           end
-        _ -> false
+
+        _ ->
+          false
       end
     else
       _ -> false
@@ -157,6 +182,7 @@ defmodule LemonCore.InvocationProof do
 
   defp selected_server?(server, %{server_name: name, server_url: url}) when is_map(server),
     do: MapHelpers.get_key(server, :name) == name and MapHelpers.get_key(server, :url) == url
+
   defp selected_server?(_, _), do: false
 
   defp put_headers(server, headers) do

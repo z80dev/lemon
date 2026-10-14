@@ -218,7 +218,9 @@ defmodule LemonControlPlane.EventBridge do
     end
   end
 
-  defp general_event_client?(%{role: role}) when role in [:node, "node", :enrollment, "enrollment"], do: false
+  defp general_event_client?(%{role: role})
+       when role in [:node, "node", :enrollment, "enrollment"], do: false
+
   defp general_event_client?(_info), do: true
 
   defp dispatch_event(clients, event_name, payload, state_version) do

@@ -13,7 +13,8 @@ defmodule LemonControlPlane.Methods.NodeProcessSupport do
   def handle(method, params, ctx) when is_map(params) do
     with :ok <- validate(method, params),
          {:ok, opts} <- dispatch_opts(method, params),
-         {:ok, result} <- NodeIO.invoke(params["nodeId"], method, Map.delete(params, "nodeId"), ctx, opts) do
+         {:ok, result} <-
+           NodeIO.invoke(params["nodeId"], method, Map.delete(params, "nodeId"), ctx, opts) do
       receipt(method, params, result)
     end
   end
@@ -27,14 +28,21 @@ defmodule LemonControlPlane.Methods.NodeProcessSupport do
 
     case LemonCore.NodeRegistry.resolve_id(node_id) do
       {:ok, %{id: ^node_id, pid: pid, generation: generation}}
-          when is_pid(pid) and is_integer(generation) and generation >= 0 ->
+      when is_pid(pid) and is_integer(generation) and generation >= 0 ->
         opts = [expected_pid: pid, expected_generation: generation, required_process_execution: 1]
-        timeout_ms = if method == "node.process.run", do: params["timeoutMs"] + 5_000, else: 30_000
+
+        timeout_ms =
+          if method == "node.process.run", do: params["timeoutMs"] + 5_000, else: 30_000
+
         {:ok, Keyword.put(opts, :timeout_ms, timeout_ms)}
 
       _ ->
-        {:error, Errors.error(:unavailable, "Node is not available",
-          %{"reason" => "node_offline", "preDispatch" => true, "retrySafe" => false})}
+        {:error,
+         Errors.error(:unavailable, "Node is not available", %{
+           "reason" => "node_offline",
+           "preDispatch" => true,
+           "retrySafe" => false
+         })}
     end
   end
 
@@ -57,8 +65,8 @@ defmodule LemonControlPlane.Methods.NodeProcessSupport do
   defp process_id(value) do
     if is_binary(value) and byte_size(value) in 1..128 and
          Regex.match?(~r/\A[A-Za-z0-9_:-]+\z/, value),
-      do: :ok,
-      else: invalid("processId must be 1..128 ASCII letters, digits, _, :, or -")
+       do: :ok,
+       else: invalid("processId must be 1..128 ASCII letters, digits, _, :, or -")
   end
 
   defp validate_run(params) do
@@ -73,8 +81,8 @@ defmodule LemonControlPlane.Methods.NodeProcessSupport do
   defp string(value, field, max) do
     if is_binary(value) and byte_size(value) in 1..max and String.valid?(value) and
          String.trim(value) != "" and not String.contains?(value, <<0>>),
-      do: :ok,
-      else: invalid(field <> " must be a nonempty bounded UTF-8 string without NUL")
+       do: :ok,
+       else: invalid(field <> " must be a nonempty bounded UTF-8 string without NUL")
   end
 
   defp cwd(value) do
@@ -84,15 +92,19 @@ defmodule LemonControlPlane.Methods.NodeProcessSupport do
   end
 
   defp argv(values) when is_list(values) do
-    valid = length(values) in 1..128 and
-      Enum.all?(values, fn value ->
-        is_binary(value) and byte_size(value) <= 131_072 and String.valid?(value) and
-          not String.contains?(value, <<0>>)
-      end)
+    valid =
+      length(values) in 1..128 and
+        Enum.all?(values, fn value ->
+          is_binary(value) and byte_size(value) <= 131_072 and String.valid?(value) and
+            not String.contains?(value, <<0>>)
+        end)
 
     if valid and hd(values) != "" and Enum.reduce(values, 0, &(byte_size(&1) + &2)) <= 131_072,
       do: :ok,
-      else: invalid("argv must contain 1..128 literal UTF-8 strings without NUL, a nonempty executable, and at most 131072 total bytes")
+      else:
+        invalid(
+          "argv must contain 1..128 literal UTF-8 strings without NUL, a nonempty executable, and at most 131072 total bytes"
+        )
   end
 
   defp argv(_), do: invalid("argv must be a list of literal UTF-8 strings")
@@ -114,17 +126,21 @@ defmodule LemonControlPlane.Methods.NodeProcessSupport do
   # and transport errors never become execution receipts or receipt absence.
   defp receipt(method, params, result) when is_map(result) do
     projected = Map.take(result, @receipt_fields)
-    states = if method == "node.process.get",
-      do: ~w(running completed cancelled outcome_unknown not_found),
-      else: ~w(running completed cancelled outcome_unknown)
+
+    states =
+      if method == "node.process.get",
+        do: ~w(running completed cancelled outcome_unknown not_found),
+        else: ~w(running completed cancelled outcome_unknown)
+
     limit = if method == "node.process.run", do: params["maxOutputBytes"], else: @max_bytes
 
-    valid = map_size(projected) == length(@receipt_fields) and
-      projected["nodeId"] == params["nodeId"] and projected["processId"] == params["processId"] and
-      projected["state"] in states and
-      (is_nil(projected["exitCode"]) or is_integer(projected["exitCode"])) and
-      is_boolean(projected["outputTruncated"]) and valid_outputs?(projected, limit) and
-      valid_state?(projected)
+    valid =
+      map_size(projected) == length(@receipt_fields) and
+        projected["nodeId"] == params["nodeId"] and projected["processId"] == params["processId"] and
+        projected["state"] in states and
+        (is_nil(projected["exitCode"]) or is_integer(projected["exitCode"])) and
+        is_boolean(projected["outputTruncated"]) and valid_outputs?(projected, limit) and
+        valid_state?(projected)
 
     if valid, do: {:ok, projected}, else: invalid_receipt()
   end
@@ -163,8 +179,12 @@ defmodule LemonControlPlane.Methods.NodeProcessSupport do
   defp invalid(message), do: {:error, Errors.invalid_request(message)}
 
   defp invalid_receipt do
-    {:error, Errors.error(:unavailable, "Destination process receipt is invalid; reconcile the fixed process ID",
-      %{"reason" => "invalid_process_receipt", "preDispatch" => false, "retrySafe" => false})}
+    {:error,
+     Errors.error(
+       :unavailable,
+       "Destination process receipt is invalid; reconcile the fixed process ID",
+       %{"reason" => "invalid_process_receipt", "preDispatch" => false, "retrySafe" => false}
+     )}
   end
 end
 
@@ -178,7 +198,8 @@ defmodule LemonControlPlane.Methods.NodeProcessRun do
   @impl true
   def dispatch_mode, do: :async
   @impl true
-  def handle(params, ctx), do: LemonControlPlane.Methods.NodeProcessSupport.handle(name(), params, ctx)
+  def handle(params, ctx),
+    do: LemonControlPlane.Methods.NodeProcessSupport.handle(name(), params, ctx)
 end
 
 defmodule LemonControlPlane.Methods.NodeProcessGet do
@@ -191,7 +212,8 @@ defmodule LemonControlPlane.Methods.NodeProcessGet do
   @impl true
   def dispatch_mode, do: :async
   @impl true
-  def handle(params, ctx), do: LemonControlPlane.Methods.NodeProcessSupport.handle(name(), params, ctx)
+  def handle(params, ctx),
+    do: LemonControlPlane.Methods.NodeProcessSupport.handle(name(), params, ctx)
 end
 
 defmodule LemonControlPlane.Methods.NodeProcessCancel do
@@ -204,5 +226,6 @@ defmodule LemonControlPlane.Methods.NodeProcessCancel do
   @impl true
   def dispatch_mode, do: :async
   @impl true
-  def handle(params, ctx), do: LemonControlPlane.Methods.NodeProcessSupport.handle(name(), params, ctx)
+  def handle(params, ctx),
+    do: LemonControlPlane.Methods.NodeProcessSupport.handle(name(), params, ctx)
 end

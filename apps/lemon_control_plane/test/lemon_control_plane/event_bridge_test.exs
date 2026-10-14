@@ -95,14 +95,28 @@ defmodule LemonControlPlane.EventBridgeTest do
     assert :ok = Presence.register(conn_id, %{role: :operator, client_id: "test", pid: self()})
     flush_events()
 
-    event = LemonCore.Event.new(:node_invoke_request, %{
-      invoke_id: "inv-private", node_id: "worker", method: "coding_agent.run", timeout_ms: 30_000,
-      args: %{"request" => %{"prompt" => "private prompt", "meta" => %{
-        "mcp_servers" => [%{"headers" => %{"Authorization" => "Bearer private-header"}}],
-        "system_prompt" => "private persona",
-        "profile_instructions" => %{"SOUL.md" => "private soul"}
-      }}}
-    }, %{})
+    event =
+      LemonCore.Event.new(
+        :node_invoke_request,
+        %{
+          invoke_id: "inv-private",
+          node_id: "worker",
+          method: "coding_agent.run",
+          timeout_ms: 30_000,
+          args: %{
+            "request" => %{
+              "prompt" => "private prompt",
+              "meta" => %{
+                "mcp_servers" => [%{"headers" => %{"Authorization" => "Bearer private-header"}}],
+                "system_prompt" => "private persona",
+                "profile_instructions" => %{"SOUL.md" => "private soul"}
+              }
+            }
+          }
+        },
+        %{}
+      )
+
     LemonCore.Bus.broadcast("nodes", event)
 
     assert_receive {:event, "node.invoke.request", payload, _}, 1_000
@@ -848,20 +862,36 @@ defmodule LemonControlPlane.EventBridgeTest do
       on_exit(fn -> Presence.unregister(conn_id) end)
       flush_events()
 
-      event = LemonCore.Event.new(:approval_requested, %{pending: %{
-        id: "approval-redaction", run_id: "run-redaction", session_key: "agent:test:main",
-        agent_id: "test", tool: "bash",
-        action: %{path: "/tmp/review-target", headers: %{"Authorization" => "Bearer credential-value"},
-                  password: "password-value"},
-        rationale: "Review Authorization: Bearer rationale-secret"
-      }}, %{})
+      event =
+        LemonCore.Event.new(
+          :approval_requested,
+          %{
+            pending: %{
+              id: "approval-redaction",
+              run_id: "run-redaction",
+              session_key: "agent:test:main",
+              agent_id: "test",
+              tool: "bash",
+              action: %{
+                path: "/tmp/review-target",
+                headers: %{"Authorization" => "Bearer credential-value"},
+                password: "password-value"
+              },
+              rationale: "Review Authorization: Bearer rationale-secret"
+            }
+          },
+          %{}
+        )
+
       LemonCore.Bus.broadcast("exec_approvals", event)
 
       assert_receive {:event, "exec.approval.requested", payload, _state_version}, 1_000
       assert payload["action"]["path"] == "/tmp/review-target"
+
       for secret <- ["credential-value", "password-value", "rationale-secret"] do
         refute inspect(payload) =~ secret
       end
+
       assert :ok = Schemas.validate_event("exec.approval.requested", payload)
     end
 

@@ -86,17 +86,31 @@ defmodule LemonCore.RunStore do
   def execution_projection(value) when is_map(value) do
     value
     |> Map.drop([
-      :mcp_servers, "mcp_servers", :mcpServers, "mcpServers",
-      :mcp_servers_json, "mcp_servers_json",
-      :native_lineage_handle, "native_lineage_handle", :nativeLineageHandle, "nativeLineageHandle",
-      :native_destination_pid, "native_destination_pid", :nativeDestinationPid, "nativeDestinationPid",
-      :native_destination_generation, "native_destination_generation",
-      :nativeDestinationGeneration, "nativeDestinationGeneration"
+      :mcp_servers,
+      "mcp_servers",
+      :mcpServers,
+      "mcpServers",
+      :mcp_servers_json,
+      "mcp_servers_json",
+      :native_lineage_handle,
+      "native_lineage_handle",
+      :nativeLineageHandle,
+      "nativeLineageHandle",
+      :native_destination_pid,
+      "native_destination_pid",
+      :nativeDestinationPid,
+      "nativeDestinationPid",
+      :native_destination_generation,
+      "native_destination_generation",
+      :nativeDestinationGeneration,
+      "nativeDestinationGeneration"
     ])
     |> Map.new(fn {key, entry} -> {key, execution_projection(entry)} end)
   end
 
-  def execution_projection(value) when is_list(value), do: Enum.map(value, &execution_projection/1)
+  def execution_projection(value) when is_list(value),
+    do: Enum.map(value, &execution_projection/1)
+
   def execution_projection(value) when is_tuple(value),
     do: value |> Tuple.to_list() |> Enum.map(&execution_projection/1) |> List.to_tuple()
 

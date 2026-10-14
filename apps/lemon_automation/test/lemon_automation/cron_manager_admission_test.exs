@@ -12,6 +12,7 @@ defmodule LemonAutomation.CronManagerAdmissionTest do
 
     def check(job, run) do
       send(:persistent_term.get({__MODULE__, :test_pid}), {:admission_checked, job, run})
+
       case :persistent_term.get({__MODULE__, :result}, :ok) do
         callback when is_function(callback, 2) -> callback.(job, run)
         result -> result
@@ -126,6 +127,7 @@ defmodule LemonAutomation.CronManagerAdmissionTest do
       else
         System.put_env("LEMON_CRON_ADMISSION_ALLOWED_ORIGINS", previous_allowed_origins)
       end
+
       :persistent_term.erase({Admission, :test_pid})
       :persistent_term.erase({Admission, :result})
       :persistent_term.erase({Submitter, :mode})
@@ -157,8 +159,10 @@ defmodule LemonAutomation.CronManagerAdmissionTest do
      root: root}
   end
 
-  for outcome <- [:denied, :admission_unavailable], trigger <- [:manual, :schedule, :wake, :retry] do
-    test "#{outcome} terminalizes #{trigger} before preflight or submission and never retries", ctx do
+  for outcome <- [:denied, :admission_unavailable],
+      trigger <- [:manual, :schedule, :wake, :retry] do
+    test "#{outcome} terminalizes #{trigger} before preflight or submission and never retries",
+         ctx do
       outcome = unquote(outcome)
       trigger = unquote(trigger)
       :persistent_term.put({Admission, :result}, {:error, outcome})
@@ -200,7 +204,8 @@ defmodule LemonAutomation.CronManagerAdmissionTest do
     end
   end
 
-  test "approval submits through the real profile resolver to its current destination node", ctx do
+  test "approval submits through the real profile resolver to its current destination node",
+       ctx do
     :persistent_term.put({Submitter, :mode}, :profile)
     assert {:ok, job} = add_job(ctx)
 
@@ -252,13 +257,16 @@ defmodule LemonAutomation.CronManagerAdmissionTest do
   end
 
   for connectors <- [:caller, :core_only] do
-    test "approved #{connectors} invocation replaces owner MCP and retains every policy floor", ctx do
+    test "approved #{connectors} invocation replaces owner MCP and retains every policy floor",
+         ctx do
       connectors = unquote(connectors)
       Bus.subscribe("cron")
       on_exit(fn -> Bus.unsubscribe("cron") end)
+
       :persistent_term.put({Admission, :result}, fn _job, run ->
         {:ok, invocation_projection(ctx, connectors, run.run_id)}
       end)
+
       :persistent_term.put({Submitter, :mode}, :profile)
       assert {:ok, job} = add_job(ctx, model: "cron-team-model-pin")
       job_id = job.id
@@ -332,10 +340,12 @@ defmodule LemonAutomation.CronManagerAdmissionTest do
       assert_execution_context(second_params, second_projection, second_params.run_id)
       refute second_params.meta.invocation_proof == params.meta.invocation_proof
       assert await_terminal(second_run_id).status == :completed
+
       assert_receive %Event{type: :cron_run_started, payload: %{cron_run_id: ^run_id}} = started,
                      5_000
 
-      assert_receive %Event{type: :cron_run_completed, payload: %{cron_run_id: ^run_id}} = completed,
+      assert_receive %Event{type: :cron_run_completed, payload: %{cron_run_id: ^run_id}} =
+                       completed,
                      5_000
 
       for value <- [
@@ -358,7 +368,9 @@ defmodule LemonAutomation.CronManagerAdmissionTest do
         assert_private_free(audit, ctx.admission)
         assert_invocation_private_free(audit, projection)
         audit_id = audit.id
-        assert_receive %Event{type: :cron_lifecycle_action, payload: %{audit: %{id: ^audit_id}}} = event,
+
+        assert_receive %Event{type: :cron_lifecycle_action, payload: %{audit: %{id: ^audit_id}}} =
+                         event,
                        5_000
 
         assert_private_free(event, ctx.admission)
@@ -367,7 +379,8 @@ defmodule LemonAutomation.CronManagerAdmissionTest do
     end
   end
 
-  test "malformed private invocation opts fail before router submission or ownership claim", ctx do
+  test "malformed private invocation opts fail before router submission or ownership claim",
+       ctx do
     assert {:ok, job} = add_job(ctx, enabled: false)
     run = CronRun.new(job.id, :manual)
     router_id = LemonCore.Id.run_id()
@@ -395,7 +408,10 @@ defmodule LemonAutomation.CronManagerAdmissionTest do
       Map.take(projection, [:context_key, :mcp_servers, :tool_policy]),
       %{projection | mcp_servers: nil},
       %{projection | mcp_servers: [Map.put(server, "unknown", "value")]},
-      %{projection | mcp_servers: [Map.put(server, "headers", %{"Authorization" => "raw-token"})]},
+      %{
+        projection
+        | mcp_servers: [Map.put(server, "headers", %{"Authorization" => "raw-token"})]
+      },
       %{projection | tool_policy: nil},
       %{projection | tool_policy: %{"unknown" => true}},
       %{projection | tool_policy: %{allow: :all}},
@@ -411,7 +427,12 @@ defmodule LemonAutomation.CronManagerAdmissionTest do
                RunSubmitter.submit(job, run, submission_opts(invocation, router_id))
 
       assert {:error, :admission_unavailable} =
-               RunSubmitter.build_params(job, run, router_id, submission_opts(invocation, router_id))
+               RunSubmitter.build_params(
+                 job,
+                 run,
+                 router_id,
+                 submission_opts(invocation, router_id)
+               )
     end
 
     refute_receive {:submission_claimed, _, _}, 100
@@ -493,7 +514,8 @@ defmodule LemonAutomation.CronManagerAdmissionTest do
     assert_private_free(CronJob.to_map(cleared), ctx.admission)
   end
 
-  test "public cron projections, emitted events, durable runs and audits omit private admission", ctx do
+  test "public cron projections, emitted events, durable runs and audits omit private admission",
+       ctx do
     Bus.subscribe("cron")
     on_exit(fn -> Bus.unsubscribe("cron") end)
     :persistent_term.put({Admission, :result}, {:error, :admission_unavailable})
@@ -511,6 +533,7 @@ defmodule LemonAutomation.CronManagerAdmissionTest do
     assert_private_free(CronJob.to_map(updated), ctx.admission)
 
     assert {:ok, %CronRun{id: run_id}} = CronManager.run_now(job.id)
+
     assert_receive %Event{type: :cron_run_started, payload: %{cron_run_id: ^run_id}} = started,
                    5_000
 
@@ -530,7 +553,9 @@ defmodule LemonAutomation.CronManagerAdmissionTest do
 
     for audit <- audits do
       audit_id = audit.id
-      assert_receive %Event{type: :cron_lifecycle_action, payload: %{audit: %{id: ^audit_id}}} = event,
+
+      assert_receive %Event{type: :cron_lifecycle_action, payload: %{audit: %{id: ^audit_id}}} =
+                       event,
                      5_000
 
       assert_private_free(event, ctx.admission)
@@ -545,7 +570,8 @@ defmodule LemonAutomation.CronManagerAdmissionTest do
   end
 
   for invalid <- [:stale, :borrowed_header, :memory_nil, :shared_grant, :none, :legacy_projection] do
-    test "approved #{invalid} projection fails unavailable without router launch or owner fallback", ctx do
+    test "approved #{invalid} projection fails unavailable without router launch or owner fallback",
+         ctx do
       invalid = unquote(invalid)
       :persistent_term.put({Submitter, :mode}, :profile)
       assert {:ok, _} = ProfileStore.update(ctx.profile_id, %{mcpServers: owner_mcp_servers()})
@@ -656,6 +682,7 @@ defmodule LemonAutomation.CronManagerAdmissionTest do
       end
 
     assert {:ok, servers} = ProfileStore.normalize_mcp_servers(servers)
+
     assert {:ok, policy} =
              ToolPolicy.normalize(%{
                "profile" => "full_access",
@@ -680,17 +707,20 @@ defmodule LemonAutomation.CronManagerAdmissionTest do
     assert params.meta.shared_memory_grant == false
     assert params.meta.invocation_proof_verified == true
     assert params.meta.mcp_servers == projection.mcp_servers
+
     assert params.meta.invocation_proof == %{
-      run_id: run_id,
-      server_name: projection.proof["serverName"],
-      server_url: projection.proof["serverUrl"],
-      header_name: "X-Lemon-Bot-Invocation",
-      secret_name: "lemon_bot/invocations/" <> run_id
-    }
+             run_id: run_id,
+             server_name: projection.proof["serverName"],
+             server_url: projection.proof["serverUrl"],
+             header_name: "X-Lemon-Bot-Invocation",
+             secret_name: "lemon_bot/invocations/" <> run_id
+           }
 
     core = Enum.find(params.meta.mcp_servers, &(&1["name"] == projection.proof["serverName"]))
+
     assert core["headers"]["X-Lemon-Bot-Invocation"] ==
              "${LEMON_SECRET:lemon_bot/invocations/#{run_id}}"
+
     refute inspect(params, limit: :infinity) =~ "CRON_OWNER_MCP_KEY"
   end
 
@@ -774,7 +804,9 @@ defmodule LemonAutomation.CronManagerAdmissionTest do
     # Seed an ordinary failed source with the existing durable retry contract.
     # The callback failure being tested belongs to the retry, not its source.
     now = LemonCore.Clock.now_ms()
-    source = job.id |> CronRun.new(:schedule) |> CronRun.start() |> CronRun.fail("ordinary failure")
+
+    source =
+      job.id |> CronRun.new(:schedule) |> CronRun.start() |> CronRun.fail("ordinary failure")
 
     source = %{
       source
@@ -800,7 +832,8 @@ defmodule LemonAutomation.CronManagerAdmissionTest do
 
   defp audit_events(job_id), do: CronStore.list_audit_events(job_id: job_id, limit: 200)
 
-  defp meta(run, key), do: Map.get(run.meta || %{}, key) || Map.get(run.meta || %{}, Atom.to_string(key))
+  defp meta(run, key),
+    do: Map.get(run.meta || %{}, key) || Map.get(run.meta || %{}, Atom.to_string(key))
 
   defp assert_private_free(value, admission) do
     rendered = inspect(value, limit: :infinity, printable_limit: :infinity)
@@ -829,7 +862,9 @@ defmodule LemonAutomation.CronManagerAdmissionTest do
     end
   end
 
-  defp refute_private_keys(value) when is_list(value), do: Enum.each(value, &refute_private_keys/1)
+  defp refute_private_keys(value) when is_list(value),
+    do: Enum.each(value, &refute_private_keys/1)
+
   defp refute_private_keys(_value), do: :ok
 
   defp restore_env(app, key, :error), do: Application.delete_env(app, key)

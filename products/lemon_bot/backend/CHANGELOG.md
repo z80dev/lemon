@@ -16,7 +16,7 @@
 - Preserved sealed native tool blocks during administrator hardening; made lifecycle fixtures honor complete measured presence and captured native aliases, and restored intentional outbox faults before teardown without suppressing failed transactions.
 - Kept replay ordering on SQLite's integer source sequence while projecting decimal text, preserving streaming offsets across 9→10 and larger digit-width boundaries without precision loss.
 - Awaited integration disposal before closing runtime/PTY transport and SQLite, allowing owned host operations to settle without late writes into a closed database.
-- Cut all live Bot/chat/routine/channel/helper access over to actual ownership, removing Team publication, managers, other-human group membership, connector lending and the second SQLite memory store.
+- Cut all live Bot/chat/routine/channel/helper access over to actual ownership, removing Team publication, managers, other-human group membership, connector lending and the second SQLite memory store. Default personas describe the owner's personal assistant rather than a Team role.
 - Added five-minute one-use QR preview/claim, desktop verification approval, fixed-nonce private completion recovery and persistent installation-bound revocable phone sessions. Safe pairing state events are restricted to current owner desktop devices.
 
-No implementation-worker verification gates were run. Deployment requires the coordinated owning platform RPCs and real configured credentials for provider-dependent operations; see README.md and the canonical contracts.
+Deployment requires the coordinated platform RPCs, a supported controller default model and destination-local provider credentials with available quota; see README.md and the canonical contracts.

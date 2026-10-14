@@ -10,8 +10,8 @@ defmodule LemonControlPlane.Methods.NodePairInvite do
   @checkout_root Path.expand("../../../../..", __DIR__)
   @source_root if File.regular?(Path.join(@checkout_root, "bin/lemon")) and
                     File.regular?(Path.join(@checkout_root, "mix.exs")),
-                 do: @checkout_root,
-                 else: nil
+                  do: @checkout_root,
+                  else: nil
   @release_base_url "https://github.com/z80dev/lemon"
 
   @impl true
@@ -42,41 +42,63 @@ defmodule LemonControlPlane.Methods.NodePairInvite do
       code = :crypto.strong_rand_bytes(32) |> Base.url_encode64(padding: false)
       id = LemonCore.Id.uuid()
       expires_at = System.system_time(:millisecond) + ttl
-      invite = Map.merge(binding, %{
-        id: id,
-        node_name: String.trim(node_name),
-        purpose: purpose,
-        labels: labels,
-        expires_at_ms: expires_at
-      })
+
+      invite =
+        Map.merge(binding, %{
+          id: id,
+          node_name: String.trim(node_name),
+          purpose: purpose,
+          labels: labels,
+          expires_at_ms: expires_at
+        })
 
       case NodeStore.put_invite(code, invite) do
         :ok ->
-          {:ok, %{
-            "inviteId" => id,
-            "inviteCode" => code,
-            "joinCommand" => join_command(script_url, runtime, controller, invite.node_name),
-            "expiresAtMs" => expires_at,
-            "summary" => %{"inviteId" => id, "expiresAtMs" => expires_at, "singleUse" => true,
-              "includesOperatorCredentials" => false}
-          }}
+          {:ok,
+           %{
+             "inviteId" => id,
+             "inviteCode" => code,
+             "joinCommand" => join_command(script_url, runtime, controller, invite.node_name),
+             "expiresAtMs" => expires_at,
+             "summary" => %{
+               "inviteId" => id,
+               "expiresAtMs" => expires_at,
+               "singleUse" => true,
+               "includesOperatorCredentials" => false
+             }
+           }}
 
-        {:error, _} -> {:error, Errors.unavailable("Enrollment invite store is unavailable")}
+        {:error, _} ->
+          {:error, Errors.unavailable("Enrollment invite store is unavailable")}
       end
     else
-      false -> {:error, Errors.invalid_request("Invalid enrollment name, purpose, labels or expiry")}
-      {:error, _} = error -> error
+      false ->
+        {:error, Errors.invalid_request("Invalid enrollment name, purpose, labels or expiry")}
+
+      {:error, _} = error ->
+        error
     end
   end
+
   defp binding(nil, _name), do: {:ok, %{}, nil}
+
   defp binding(node_id, name) when is_binary(node_id) and byte_size(node_id) in 1..128 do
     case NodeStore.repair_binding(node_id, name) do
-      {:ok, binding, node} -> {:ok, binding, node}
-      {:error, :not_found} -> {:error, Errors.not_found("Node repair identity was not found")}
-      {:error, :invalid_binding} -> {:error, Errors.conflict("Node repair identity does not match its durable name or credential")}
-      {:error, _} -> {:error, Errors.unavailable("Node repair identity store is unavailable")}
+      {:ok, binding, node} ->
+        {:ok, binding, node}
+
+      {:error, :not_found} ->
+        {:error, Errors.not_found("Node repair identity was not found")}
+
+      {:error, :invalid_binding} ->
+        {:error,
+         Errors.conflict("Node repair identity does not match its durable name or credential")}
+
+      {:error, _} ->
+        {:error, Errors.unavailable("Node repair identity store is unavailable")}
     end
   end
+
   defp binding(_id, _name), do: {:error, Errors.invalid_request("Invalid nodeId")}
 
   defp metadata(params, param, node, field, default) do
@@ -93,19 +115,20 @@ defmodule LemonControlPlane.Methods.NodePairInvite do
       end)
   end
 
-
   defp valid_text?(text, limit) do
     is_binary(text) and String.valid?(text) and byte_size(text) <= limit and
       String.trim(text) != "" and not String.match?(text, ~r/[\x00-\x1f\x7f]/)
   end
 
   defp controller_url do
-    url = Application.get_env(:lemon_control_plane, :public_ws_url) ||
-      System.get_env("LEMON_CONTROL_PLANE_PUBLIC_WS_URL") ||
-      "ws://127.0.0.1:#{Application.get_env(:lemon_control_plane, :port, 4040)}/ws"
+    url =
+      Application.get_env(:lemon_control_plane, :public_ws_url) ||
+        System.get_env("LEMON_CONTROL_PLANE_PUBLIC_WS_URL") ||
+        "ws://127.0.0.1:#{Application.get_env(:lemon_control_plane, :port, 4040)}/ws"
 
     if is_binary(url) and byte_size(url) <= 2048 do
       uri = URI.parse(url)
+
       if uri.scheme in ["ws", "wss"] and is_binary(uri.host) and uri.host != "" and
            uri.userinfo == nil and uri.query == nil and uri.fragment == nil and
            (uri.scheme == "wss" or uri.host in ["localhost", "127.0.0.1", "::1"]) do
@@ -121,8 +144,11 @@ defmodule LemonControlPlane.Methods.NodePairInvite do
   defp runtime_source(controller) do
     source_root = source_root()
     source = configured(:node_source_checkout, ["LEMON_NODE_SOURCE_CHECKOUT"])
-    version = configured(:node_install_version, ["LEMON_NODE_INSTALL_VERSION", "LEMON_VERSION"]) ||
-      if(is_nil(source_root), do: LemonCore.Update.Version.current())
+
+    version =
+      configured(:node_install_version, ["LEMON_NODE_INSTALL_VERSION", "LEMON_VERSION"]) ||
+        if(is_nil(source_root), do: LemonCore.Update.Version.current())
+
     base_url =
       configured(:node_install_base_url, ["LEMON_NODE_INSTALL_BASE_URL", "LEMON_INSTALL_BASE_URL"]) ||
         if(is_nil(source_root), do: @release_base_url)
@@ -135,10 +161,12 @@ defmodule LemonControlPlane.Methods.NodePairInvite do
         if valid_text?(source, 4096) and Path.type(source) == :absolute do
           {:ok, {:source, source, version}}
         else
-          {:error, Errors.invalid_request("Configure an absolute destination node source checkout")}
+          {:error,
+           Errors.invalid_request("Configure an absolute destination node source checkout")}
         end
 
-      source_checkout_available?(source_root) and URI.parse(controller).host in ["localhost", "127.0.0.1", "::1"] ->
+      source_checkout_available?(source_root) and
+          URI.parse(controller).host in ["localhost", "127.0.0.1", "::1"] ->
         {:ok, {:source, source_root, version}}
 
       not is_nil(version) and valid_install_base_url?(base_url) ->
@@ -181,6 +209,7 @@ defmodule LemonControlPlane.Methods.NodePairInvite do
   defp valid_install_base_url?(url) do
     if valid_text?(url, 2048) and not String.match?(url, ~r/\s/) do
       uri = URI.parse(url)
+
       uri.scheme == "https" and is_binary(uri.host) and uri.host != "" and
         uri.userinfo == nil and uri.query == nil and uri.fragment == nil
     else
@@ -198,9 +227,12 @@ defmodule LemonControlPlane.Methods.NodePairInvite do
 
   defp join_command(script_url, runtime, controller, node_name) do
     args = ["--name", node_name, "--controller", controller] ++ runtime_args(runtime)
+
     prefix =
       case script_url do
-        {:local, path} -> "bash " <> quote_arg(path) <> " "
+        {:local, path} ->
+          "bash " <> quote_arg(path) <> " "
+
         {:download, url} ->
           "curl -fsSL --proto '=https' --proto-redir '=https' " <>
             quote_arg(url) <> " | bash -s -- "
@@ -210,8 +242,10 @@ defmodule LemonControlPlane.Methods.NodePairInvite do
   end
 
   defp runtime_args({:source, source, nil}), do: ["--source", source]
+
   defp runtime_args({:source, source, version}),
     do: ["--source", source, "--version", version]
+
   defp runtime_args({:release, version, base_url}),
     do: ["--version", version, "--base-url", base_url]
 

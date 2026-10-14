@@ -55,7 +55,9 @@ defmodule LemonControlPlane.Methods.ChatSend do
 
       not is_nil(context_key) and not is_nil(profile_id) and
           not Map.has_key?(params, "invocationMcpServers") ->
-        {:error, {:invalid_request, "Managed invocation requires explicit invocationMcpServers", nil}}
+        {:error,
+         {:invalid_request, "Managed invocation requires explicit invocationMcpServers", nil}}
+
       Map.has_key?(params, "cwd") and not is_nil(profile_id) ->
         {:error, {:invalid_request, "cwd cannot override a profile workspace", nil}}
 
@@ -73,7 +75,8 @@ defmodule LemonControlPlane.Methods.ChatSend do
             |> Map.merge(%{origin: :control_plane, images: images, queue_mode: queue_mode})
             |> Map.update(:meta, %{control_plane: true}, &Map.put(&1, :control_plane, true))
 
-          with {:ok, submit_params} <- ChatSubmission.attach_execution_context(submit_params, params, ctx) do
+          with {:ok, submit_params} <-
+                 ChatSubmission.attach_execution_context(submit_params, params, ctx) do
             dispatch(router_mod, submit_params, prompt, queue_mode)
           end
         end
@@ -88,7 +91,8 @@ defmodule LemonControlPlane.Methods.ChatSend do
       prompt: prompt
     }
 
-    {:ok, if(Map.has_key?(params, "cwd"), do: Map.put(request, :cwd, params["cwd"]), else: request)}
+    {:ok,
+     if(Map.has_key?(params, "cwd"), do: Map.put(request, :cwd, params["cwd"]), else: request)}
   end
 
   defp build_request(params, profile_id, session_key, prompt, run_id, images, queue_mode) do
@@ -108,7 +112,11 @@ defmodule LemonControlPlane.Methods.ChatSend do
 
         with {:ok, policy} <- invocation_tool_policy(params),
              {:ok, request} <-
-               LemonCore.ProfileStore.chat_request(profile, prompt, Keyword.put(opts, :tool_policy, policy)) do
+               LemonCore.ProfileStore.chat_request(
+                 profile,
+                 prompt,
+                 Keyword.put(opts, :tool_policy, policy)
+               ) do
           {:ok, request}
         else
           {:error, _} -> {:error, {:invalid_request, "Profile chat request is invalid", nil}}
@@ -137,10 +145,10 @@ defmodule LemonControlPlane.Methods.ChatSend do
 
     with {:ok, receipt} <-
            ChatSubmission.submit(submit_params, &router_mod.submit_with_receipt/1) do
-      {:ok, Map.put(receipt, "summary", summary(run_id, session_key, agent_id, prompt, queue_mode))}
+      {:ok,
+       Map.put(receipt, "summary", summary(run_id, session_key, agent_id, prompt, queue_mode))}
     end
   end
-
 
   defp valid_cwd?(cwd) when is_binary(cwd) and cwd != "" do
     Path.type(cwd) == :absolute and File.dir?(cwd)

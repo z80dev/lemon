@@ -260,11 +260,13 @@ defmodule LemonAutomation.RunSubmitterTest do
                node: "worker-old",
                model: "old-model",
                systemPrompt: "Old persona",
-               mcpServers: [%{
-                 "name" => "bot",
-                 "url" => "https://example.com/mcp",
-                 "headers" => %{"Authorization" => "Bearer cron-private-token"}
-               }]
+               mcpServers: [
+                 %{
+                   "name" => "bot",
+                   "url" => "https://example.com/mcp",
+                   "headers" => %{"Authorization" => "Bearer cron-private-token"}
+                 }
+               ]
              })
 
     job = sample_job(%{profile_id: "cron-profile", deliver_to: "none"})
@@ -274,15 +276,25 @@ defmodule LemonAutomation.RunSubmitterTest do
 
     assert {:ok, _} =
              LemonCore.ProfileStore.update("cron-profile", %{
-               node: "worker-current", model: "current-model", systemPrompt: "Current persona",
-               toolPolicy: %{"allow" => "all", "deny" => ["bash"],
-                 "require_approval" => ["write"], "approvals" => %{"write" => "always"}}
+               node: "worker-current",
+               model: "current-model",
+               systemPrompt: "Current persona",
+               toolPolicy: %{
+                 "allow" => "all",
+                 "deny" => ["bash"],
+                 "require_approval" => ["write"],
+                 "approvals" => %{"write" => "always"}
+               }
              })
+
     File.write!(Path.join(profile["paths"]["workspace"], "SOUL.md"), "Current instructions")
 
     assert {:ok, "done"} =
              RunSubmitter.submit(job, run,
-               router_mod: RouterOk, waiter_mod: Waiter, append_memory: false)
+               router_mod: RouterOk,
+               waiter_mod: Waiter,
+               append_memory: false
+             )
 
     assert_receive {:router_submit, params}
     assert params.run_id == "fixed_profile_run"
@@ -292,8 +304,10 @@ defmodule LemonAutomation.RunSubmitterTest do
     assert params.meta.profile_id == "cron-profile"
     assert params.meta.system_prompt == "Current persona"
     assert params.meta.profile_instructions["SOUL.md"] == "Current instructions"
+
     assert params.meta.mcp_servers |> hd() |> Map.get("headers") ==
              %{"Authorization" => "Bearer cron-private-token"}
+
     assert params.meta.cron_job_id == job.id
     assert params.meta.cron_run_id == run.id
     assert params.meta.cron_base_session_key == job.session_key
@@ -311,8 +325,12 @@ defmodule LemonAutomation.RunSubmitterTest do
 
   test "profile placement preserves explicit cron cwd and model pin" do
     assert {:ok, _} =
-             LemonCore.ProfileStore.create(%{id: "pinned-profile", node: "worker-one",
-               model: "profile-model"})
+             LemonCore.ProfileStore.create(%{
+               id: "pinned-profile",
+               node: "worker-one",
+               model: "profile-model"
+             })
+
     job = sample_job(%{profile_id: "pinned-profile", cwd: "/worker/project", model: "cron-model"})
     params = RunSubmitter.build_params(job, sample_run(), "fixed_pin")
     assert params.cwd == "/worker/project"
@@ -324,9 +342,14 @@ defmodule LemonAutomation.RunSubmitterTest do
 
   test "missing runtime profile fails before router submission" do
     job = sample_job(%{profile_id: "deleted-profile"})
+
     assert {:error, :unknown_profile} =
              RunSubmitter.submit(job, sample_run(),
-               router_mod: RouterOk, waiter_mod: Waiter, append_memory: false)
+               router_mod: RouterOk,
+               waiter_mod: Waiter,
+               append_memory: false
+             )
+
     refute_receive {:router_submit, _}
   end
 

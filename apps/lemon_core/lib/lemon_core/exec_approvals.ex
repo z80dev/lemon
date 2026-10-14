@@ -89,7 +89,12 @@ defmodule LemonCore.ExecApprovals do
       end
 
     case check_existing_approval(
-           tool, action, session_key, agent_id, node_id, invocation_context_key
+           tool,
+           action,
+           session_key,
+           agent_id,
+           node_id,
+           invocation_context_key
          ) do
       {:approved, scope} ->
         {:ok, :approved, scope}
@@ -252,7 +257,8 @@ defmodule LemonCore.ExecApprovals do
           replay_resolution(approval_id, receipt, decision, opts)
 
         %{id: ^approval_id, tool: tool, action: _, session_key: _, run_id: _, agent_id: _} =
-            pending when is_binary(tool) ->
+            pending
+        when is_binary(tool) ->
           with :ok <- match_pending(pending, opts) do
             claim = %{resolution: resolution_receipt(pending, decision, :resolving)}
 
@@ -384,26 +390,47 @@ defmodule LemonCore.ExecApprovals do
 
   defp replay_resolution(
          approval_id,
-         %{approval_id: stored_id, session_key: _, run_id: _, outcome: _, decision: _,
-           resolved_at_ms: timestamp, pending_hash: digest} = receipt,
+         %{
+           approval_id: stored_id,
+           session_key: _,
+           run_id: _,
+           outcome: _,
+           decision: _,
+           resolved_at_ms: timestamp,
+           pending_hash: digest
+         } = receipt,
          decision,
          opts
-       ) when stored_id == approval_id and is_integer(timestamp) and is_binary(digest) do
+       )
+       when stored_id == approval_id and is_integer(timestamp) and is_binary(digest) do
     with :ok <- match_identity(receipt, opts),
          :ok <- match_receipt_snapshot(receipt, opts) do
       cond do
-        receipt.outcome == :expired -> {:error, :expired}
-        receipt.outcome == :cancelled -> {:error, :cancelled}
-        receipt.decision != decision -> {:error, :conflict}
-        receipt.outcome == :resolving -> {:error, :resolution_in_progress}
+        receipt.outcome == :expired ->
+          {:error, :expired}
+
+        receipt.outcome == :cancelled ->
+          {:error, :cancelled}
+
+        receipt.decision != decision ->
+          {:error, :conflict}
+
+        receipt.outcome == :resolving ->
+          {:error, :resolution_in_progress}
+
         not (Keyword.has_key?(opts, :expected_session_key) and
-               Keyword.has_key?(opts, :expected_run_id)) -> {:error, :already_resolved}
+                 Keyword.has_key?(opts, :expected_run_id)) ->
+          {:error, :already_resolved}
+
         receipt.outcome == :denied and receipt.decision == :deny ->
           {:ok, public_receipt(receipt, true)}
-        receipt.outcome == :approved and receipt.decision in
-            [:approve_once, :approve_session, :approve_agent, :approve_global] ->
+
+        receipt.outcome == :approved and
+            receipt.decision in [:approve_once, :approve_session, :approve_agent, :approve_global] ->
           {:ok, public_receipt(receipt, true)}
-        true -> {:error, :store_unavailable}
+
+        true ->
+          {:error, :store_unavailable}
       end
     end
   end
@@ -412,13 +439,16 @@ defmodule LemonCore.ExecApprovals do
 
   defp match_receipt_snapshot(receipt, opts) do
     case Keyword.fetch(opts, :expected_pending) do
-      :error -> :ok
+      :error ->
+        :ok
+
       {:ok, pending} when is_map(pending) ->
         if :crypto.hash(:sha256, :erlang.term_to_binary(pending)) == receipt.pending_hash,
           do: :ok,
           else: {:error, :mismatch}
 
-      _ -> {:error, :mismatch}
+      _ ->
+        {:error, :mismatch}
     end
   end
 
@@ -465,7 +495,12 @@ defmodule LemonCore.ExecApprovals do
   end
 
   defp check_existing_approval(
-         tool, action, session_key, agent_id, node_id, invocation_context_key
+         tool,
+         action,
+         session_key,
+         agent_id,
+         node_id,
+         invocation_context_key
        ) do
     action_hash = hash_action(action)
     session_scope = policy_identity(session_key, invocation_context_key)

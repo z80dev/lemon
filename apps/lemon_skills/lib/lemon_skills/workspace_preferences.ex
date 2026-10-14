@@ -36,6 +36,7 @@ defmodule LemonSkills.WorkspacePreferences do
     with :ok <- safe_workspace(workspace_dir) do
       Enum.reduce_while(["USER.md", "MEMORY.md"], {:ok, %{}}, fn name, {:ok, files} ->
         path = Path.join(workspace_dir, name)
+
         with :ok <- safe_file(path) do
           case File.read(path) do
             {:ok, text} ->
@@ -43,8 +44,12 @@ defmodule LemonSkills.WorkspacePreferences do
                 :ok -> {:cont, {:ok, Map.put(files, name, text)}}
                 error -> {:halt, error}
               end
-            {:error, :enoent} -> {:cont, {:ok, Map.put(files, name, nil)}}
-            _ -> {:halt, {:error, :memory_unavailable}}
+
+            {:error, :enoent} ->
+              {:cont, {:ok, Map.put(files, name, nil)}}
+
+            _ ->
+              {:halt, {:error, :memory_unavailable}}
           end
         else
           error -> {:halt, error}
@@ -54,6 +59,7 @@ defmodule LemonSkills.WorkspacePreferences do
   end
 
   def transfer_text(nil), do: :ok
+
   def transfer_text(text) when is_binary(text) and byte_size(text) <= 65_536 do
     cond do
       not String.valid?(text) or String.contains?(text, <<0>>) -> {:error, :invalid_snapshot}
@@ -61,26 +67,34 @@ defmodule LemonSkills.WorkspacePreferences do
       true -> :ok
     end
   end
+
   def transfer_text(_), do: {:error, :snapshot_too_large}
 
   @doc "Stage exact new bytes and old bytes privately before publishing any file."
   def transfer_stage(workspace_dir, files, previous) do
     stage = Path.join(workspace_dir, ".memory-transfer-" <> LemonCore.Id.uuid())
+
     with :ok <- safe_workspace(workspace_dir),
          :ok <- File.mkdir_p(workspace_dir),
          :ok <- File.mkdir(stage),
          :ok <- File.chmod(stage, 0o700) do
-      result = Enum.reduce_while(["USER.md", "MEMORY.md"], :ok, fn name, :ok ->
-        with :ok <- stage_bytes(Path.join(stage, name <> ".new"), files[name]),
-             :ok <- stage_bytes(Path.join(stage, name <> ".old"), previous[name]) do
-          {:cont, :ok}
-        else
-          _ -> {:halt, {:error, :memory_unavailable}}
-        end
-      end)
+      result =
+        Enum.reduce_while(["USER.md", "MEMORY.md"], :ok, fn name, :ok ->
+          with :ok <- stage_bytes(Path.join(stage, name <> ".new"), files[name]),
+               :ok <- stage_bytes(Path.join(stage, name <> ".old"), previous[name]) do
+            {:cont, :ok}
+          else
+            _ -> {:halt, {:error, :memory_unavailable}}
+          end
+        end)
+
       case result do
-        :ok -> {:ok, %{dir: stage, workspace: workspace_dir, files: files, previous: previous}}
-        error -> File.rm_rf(stage); error
+        :ok ->
+          {:ok, %{dir: stage, workspace: workspace_dir, files: files, previous: previous}}
+
+        error ->
+          File.rm_rf(stage)
+          error
       end
     else
       _ -> {:error, :memory_unavailable}
@@ -92,26 +106,31 @@ defmodule LemonSkills.WorkspacePreferences do
   def transfer_cleanup(stage), do: File.rm_rf(stage.dir)
 
   defp stage_bytes(_path, nil), do: :ok
+
   defp stage_bytes(path, bytes) do
     with :ok <- File.write(path, bytes, [:binary, :exclusive, :sync]),
-         :ok <- File.chmod(path, 0o600), do: :ok
+         :ok <- File.chmod(path, 0o600),
+         do: :ok
   end
 
   defp publish_staged(stage, files, suffix) do
     Enum.reduce_while(["USER.md", "MEMORY.md"], :ok, fn name, :ok ->
       path = Path.join(stage.workspace, name)
-      result = with :ok <- safe_workspace(stage.workspace),
-                    :ok <- safe_file(path) do
-        if files[name] == nil do
-          case File.rm(path) do
-            :ok -> :ok
-            {:error, :enoent} -> :ok
-            _ -> {:error, :memory_unavailable}
+
+      result =
+        with :ok <- safe_workspace(stage.workspace),
+             :ok <- safe_file(path) do
+          if files[name] == nil do
+            case File.rm(path) do
+              :ok -> :ok
+              {:error, :enoent} -> :ok
+              _ -> {:error, :memory_unavailable}
+            end
+          else
+            File.rename(Path.join(stage.dir, name <> suffix), path)
           end
-        else
-          File.rename(Path.join(stage.dir, name <> suffix), path)
         end
-      end
+
       case result do
         :ok -> {:cont, :ok}
         _ -> {:halt, {:error, :memory_unavailable}}
@@ -138,8 +157,10 @@ defmodule LemonSkills.WorkspacePreferences do
            {:ok, user} <- read_entries(workspace_dir, "user"),
            {:ok, memory} <- read_entries(workspace_dir, "memory") do
         terms = Query.terms(query)
+
         entries =
-          if query == "", do: user ++ memory,
+          if query == "",
+            do: user ++ memory,
             else: Enum.filter(user ++ memory, &(Query.shared_term_count(terms, &1.text) > 0))
 
         {:ok, Enum.map(entries, & &1.item)}
@@ -211,8 +232,11 @@ defmodule LemonSkills.WorkspacePreferences do
         # Match the captured byte span, never a bounded/redacted display string.
         updated =
           binary_part(content, 0, entry.start) <>
-            binary_part(content, entry.start + entry.length,
-              byte_size(content) - entry.start - entry.length)
+            binary_part(
+              content,
+              entry.start + entry.length,
+              byte_size(content) - entry.start - entry.length
+            )
 
         case File.write(entry.path, updated) do
           :ok -> {:ok, %{"deleted" => true, "id" => id}}
@@ -260,23 +284,34 @@ defmodule LemonSkills.WorkspacePreferences do
       revision = digest(content)
 
       entries =
-        Regex.scan(~r/^[-*] [^\n]*(?:\n(?![-*] |\#)[^\n]*)*|^(?!\s*$|\#|[-*] )[^\n]+(?:\n(?!\s*$|\#|[-*] )[^\n]+)*/m,
+        Regex.scan(
+          ~r/^[-*] [^\n]*(?:\n(?![-*] |\#)[^\n]*)*|^(?!\s*$|\#|[-*] )[^\n]+(?:\n(?!\s*$|\#|[-*] )[^\n]+)*/m,
           body, return: :index, capture: :first)
         |> Enum.take(200)
         |> Enum.map(fn [{start, length}] ->
           raw = binary_part(body, start, length)
           text = preference_text(raw)
           {redacted, _} = Safety.redact_for_operator(text, max_bytes: 2_045)
-          id = "pref_#{kind}_" <> digest(Path.expand(workspace_dir) <> "\0" <> text) <>
-            "." <> revision
+
+          id =
+            "pref_#{kind}_" <>
+              digest(Path.expand(workspace_dir) <> "\0" <> text) <>
+              "." <> revision
 
           %{
             item: %{
-              "id" => id, "kind" => kind, "text" => redacted, "source" => "workspace",
-              "createdAtMs" => stat.ctime * 1_000, "updatedAtMs" => stat.mtime * 1_000
+              "id" => id,
+              "kind" => kind,
+              "text" => redacted,
+              "source" => "workspace",
+              "createdAtMs" => stat.ctime * 1_000,
+              "updatedAtMs" => stat.mtime * 1_000
             },
-            text: text, path: path, revision: revision,
-            start: prefix + start, length: length
+            text: text,
+            path: path,
+            revision: revision,
+            start: prefix + start,
+            length: length
           }
         end)
         |> Enum.uniq_by(& &1.item["id"])
@@ -290,6 +325,7 @@ defmodule LemonSkills.WorkspacePreferences do
 
   defp preference_text(raw) do
     trimmed = String.trim(raw)
+
     if String.starts_with?(trimmed, ["- ", "* "]) do
       trimmed |> String.replace(~r/^[-*] /, "") |> String.replace("\n  ", "\n")
     else
@@ -307,6 +343,7 @@ defmodule LemonSkills.WorkspacePreferences do
   end
 
   defp operator_text(_), do: {:error, :invalid_text}
+
   defp operator_screen(text) do
     case screen_text(text) do
       :ok -> :ok
@@ -404,15 +441,17 @@ defmodule LemonSkills.WorkspacePreferences do
     case Safety.note_refusal_reason(text) do
       :secret ->
         {:error, "Refusing to store secret-looking content in prompt-injected memory"}
+
       :invisible ->
         {:error, "Refusing to store invisible or bidirectional control characters"}
+
       :prompt_injection ->
         {:error, "Refusing to store prompt-injection-like content in prompt-injected memory"}
+
       nil ->
         :ok
     end
   end
-
 
   defp add_note(path, target, spec, content, text) do
     if String.contains?(content, text) do

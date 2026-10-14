@@ -71,9 +71,15 @@ defmodule LemonControlPlane.Methods.ConnectChallenge do
      }}
   end
 
-  defp issue_session(%{"type" => "node", "nodeId" => node_id} = identity, token, ctx, session_opts)
+  defp issue_session(
+         %{"type" => "node", "nodeId" => node_id} = identity,
+         token,
+         ctx,
+         session_opts
+       )
        when is_binary(node_id) do
     opts = Keyword.merge(session_opts, ttl_ms: @token_ttl_ms, conn_id: ctx[:conn_id])
+
     with {:ok, token_info} <- TokenStore.replace_node_session(token, identity, opts),
          {:ok, generation} <- session_generation(token_info.identity),
          :ok <- LemonCore.NodeRegistry.revoke_session(node_id, generation) do
@@ -82,7 +88,6 @@ defmodule LemonControlPlane.Methods.ConnectChallenge do
       {:error, _} = error -> issue_session_error(error)
     end
   end
-
 
   defp issue_session(identity, token, ctx, _session_opts) do
     with {:ok, _token_info} <-
@@ -93,8 +98,10 @@ defmodule LemonControlPlane.Methods.ConnectChallenge do
       verified_response(identity, token)
     end
   end
+
   defp issue_session_error({:error, :stale_session_generation}),
     do: {:error, Errors.unauthorized("Node pairing generation is stale")}
+
   defp issue_session_error({:error, _}),
     do: {:error, Errors.unavailable("Node session store is unavailable")}
 
@@ -151,21 +158,25 @@ defmodule LemonControlPlane.Methods.ConnectChallenge do
         {:error, "Invalid challenge"}
     end
   end
+
   defp generation_session_opts(node_info) do
     case NodeStore.invite_field(node_info, :generation_binding) do
-      nil -> {:ok, []}
+      nil ->
+        {:ok, []}
+
       binding when is_map(binding) ->
         case NodeStore.validate_repair_binding(binding) do
           {:ok, node} when is_map(node) ->
             {:ok, [expected_generation: NodeStore.invite_field(binding, :session_generation)]}
 
-          _ -> {:error, "Node pairing generation is stale"}
+          _ ->
+            {:error, "Node pairing generation is stale"}
         end
 
-      _ -> {:error, "Invalid node generation challenge"}
+      _ ->
+        {:error, "Invalid node generation challenge"}
     end
   end
-
 
   defp generate_session_token do
     :crypto.strong_rand_bytes(32)

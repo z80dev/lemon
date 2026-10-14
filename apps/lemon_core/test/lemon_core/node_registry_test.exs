@@ -520,8 +520,11 @@ defmodule LemonCore.NodeRegistryTest do
       assert_receive {:lemon_node_event, ^invoke_id, 1, ^event}
 
       case terminal do
-        :complete -> assert :ok = NodeRegistry.complete_session(node_id, self(), 1, invoke_id, %{})
-        :cancel -> assert :ok = NodeRegistry.cancel(invoke_id)
+        :complete ->
+          assert :ok = NodeRegistry.complete_session(node_id, self(), 1, invoke_id, %{})
+
+        :cancel ->
+          assert :ok = NodeRegistry.cancel(invoke_id)
       end
 
       assert_receive {:lemon_node_result, ^invoke_id, _}
@@ -545,8 +548,7 @@ defmodule LemonCore.NodeRegistryTest do
     assert_receive {:lemon_node_event, ^invoke_id, 1, ^event}
     assert :ok = NodeRegistry.unregister(node_id, self())
 
-    assert_receive {:lemon_node_result, ^invoke_id,
-                    {:error, {:node_disconnected, :disconnected}}}
+    assert_receive {:lemon_node_result, ^invoke_id, {:error, {:node_disconnected, :disconnected}}}
 
     assert :ok = NodeRegistry.register_session(node_id, node_id, self(), 2)
 
@@ -570,6 +572,7 @@ defmodule LemonCore.NodeRegistryTest do
     parent = self()
     recipient = spawn(fn -> approval_recipient(parent) end)
     other = spawn(fn -> relay(parent, :other_node) end)
+
     on_exit(fn ->
       Process.exit(recipient, :kill)
       Process.exit(other, :kill)
@@ -612,7 +615,8 @@ defmodule LemonCore.NodeRegistryTest do
     assert {:ok, invoke_id} = NodeRegistry.invoke(node_id, "coding_agent.run", %{})
 
     for decision <- ["allow", "approve", :approve_once, nil] do
-      assert {:error, :invalid_decision} = NodeRegistry.approval(invoke_id, "approval-1", decision)
+      assert {:error, :invalid_decision} =
+               NodeRegistry.approval(invoke_id, "approval-1", decision)
     end
 
     for approval_id <- ["", "  ", nil, 123] do
@@ -636,12 +640,16 @@ defmodule LemonCore.NodeRegistryTest do
     assert {:ok, invoke_id} = NodeRegistry.invoke(node_id, "coding_agent.run", %{})
     assert :ok = NodeRegistry.register_session(node_id, node_id, self(), 2)
 
-    assert_receive {:lemon_node_result, ^invoke_id,
-                    {:error, {:node_disconnected, :reconnected}}}
+    assert_receive {:lemon_node_result, ^invoke_id, {:error, {:node_disconnected, :reconnected}}}
 
     assert {:error, :terminal} =
              NodeRegistry.event_session(
-               node_id, self(), 2, invoke_id, 1, %{"type" => "started"}
+               node_id,
+               self(),
+               2,
+               invoke_id,
+               1,
+               %{"type" => "started"}
              )
 
     assert {:error, :terminal} = NodeRegistry.approval(invoke_id, "approval-1", "deny")

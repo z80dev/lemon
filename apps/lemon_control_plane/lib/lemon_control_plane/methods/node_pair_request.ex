@@ -26,10 +26,14 @@ defmodule LemonControlPlane.Methods.NodePairRequest do
   def handle(params, ctx) do
     with :ok <- Authorize.authorize(ctx[:auth] || %{}, name(), scopes()) do
       cond do
-        is_binary(params["inviteCode"]) -> enroll(params, ctx)
+        is_binary(params["inviteCode"]) ->
+          enroll(params, ctx)
+
         get_in(ctx, [:auth, :role]) == :enrollment ->
           {:error, Errors.unauthorized("Enrollment invite is required")}
-        true -> request_pairing(params)
+
+        true ->
+          request_pairing(params)
       end
     end
   end
@@ -38,14 +42,20 @@ defmodule LemonControlPlane.Methods.NodePairRequest do
     Logger.info("node_io operation=node.pair.request enrollment=true redacted=true")
     code = params["inviteCode"]
     node_name = normalize_name(params["nodeName"])
-    with false <- Enum.any?(["nodeId", "node_id", "recoveryToken", "recovery_token", "repair"],
-                    &Map.has_key?(params, &1)),
+
+    with false <-
+           Enum.any?(
+             ["nodeId", "node_id", "recoveryToken", "recovery_token", "repair"],
+             &Map.has_key?(params, &1)
+           ),
          {:ok, invite} <- NodeStore.fetch_invite(code),
          invite_id = NodeStore.invite_field(invite, :id),
-         true <- get_in(ctx, [:auth, :role]) != :enrollment or
-                   get_in(ctx, [:auth, :identity, "inviteId"]) == invite_id,
+         true <-
+           get_in(ctx, [:auth, :role]) != :enrollment or
+             get_in(ctx, [:auth, :identity, "inviteId"]) == invite_id,
          {:ok, invite} <- NodeStore.consume_invite(code, node_name, invite_id) do
       pairing_id = LemonCore.Id.uuid()
+
       request = %{
         id: pairing_id,
         node_type: params["nodeType"] || "coding_agent",
@@ -71,7 +81,11 @@ defmodule LemonControlPlane.Methods.NodePairRequest do
         {:error, _} -> {:error, Errors.unavailable("Enrollment could not be completed")}
       end
     else
-      _ -> {:error, Errors.unauthorized("Enrollment invite is invalid, expired, revoked, stale or does not match")}
+      _ ->
+        {:error,
+         Errors.unauthorized(
+           "Enrollment invite is invalid, expired, revoked, stale or does not match"
+         )}
     end
   end
 

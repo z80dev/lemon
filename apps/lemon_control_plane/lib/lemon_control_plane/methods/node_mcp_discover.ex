@@ -43,8 +43,8 @@ defmodule LemonControlPlane.Methods.NodeMcpDiscover do
   defp validate_node_id(node_id) when is_binary(node_id) do
     if String.valid?(node_id) and byte_size(node_id) in 1..128 and
          String.trim(node_id) == node_id and not String.contains?(node_id, <<0>>),
-      do: :ok,
-      else: {:error, :invalid_node_id}
+       do: :ok,
+       else: {:error, :invalid_node_id}
   end
 
   defp validate_node_id(_node_id), do: {:error, :invalid_node_id}

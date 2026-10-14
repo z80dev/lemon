@@ -21,6 +21,7 @@ defmodule LemonCore.Secrets.ReceiptsTest do
     def put(state, :secrets_v1 = table, key, value) do
       if state.test_pid do
         send(state.test_pid, {:vault_put, self(), key, value})
+
         if state.fault == :pause do
           receive do
             :continue -> :ok
@@ -45,7 +46,8 @@ defmodule LemonCore.Secrets.ReceiptsTest do
     def get(state, table, key), do: {:ok, Map.get(state.data, {table, key}), state}
 
     @impl true
-    def delete(state, table, key), do: {:ok, %{state | data: Map.delete(state.data, {table, key})}}
+    def delete(state, table, key),
+      do: {:ok, %{state | data: Map.delete(state.data, {table, key})}}
 
     @impl true
     def list(%{fault: :read}, :secrets_v1), do: {:error, :injected_read_failure}
@@ -67,7 +69,8 @@ defmodule LemonCore.Secrets.ReceiptsTest do
     opts = [owner: owner, node_id: "node-a", key_providers: [:file], key_file: key_file]
 
     on_exit(fn ->
-      for {{^owner, _} = ref, _} <- Store.list(Secrets.table()), do: Store.delete(Secrets.table(), ref)
+      for {{^owner, _} = ref, _} <- Store.list(Secrets.table()),
+          do: Store.delete(Secrets.table(), ref)
     end)
 
     %{opts: opts, owner: owner, dir: dir}
@@ -82,8 +85,15 @@ defmodule LemonCore.Secrets.ReceiptsTest do
     # Even a missing master key cannot turn this query into a value read.
     query_opts = Keyword.put(ctx.opts, :key_file, Path.join(ctx.dir, "missing"))
     assert {:ok, proof} = Secrets.receipt("install:token-1", query_opts)
-    assert proof == %{node_id: "node-a", operation_id: "install:token-1", status: "applied",
-      name: "token", current_binding_matches: true}
+
+    assert proof == %{
+             node_id: "node-a",
+             operation_id: "install:token-1",
+             status: "applied",
+             name: "token",
+             current_binding_matches: true
+           }
+
     assert row(ctx, "token") == before
     refute inspect(proof) =~ "private-value"
     refute Map.has_key?(proof, :intent)
@@ -103,18 +113,24 @@ defmodule LemonCore.Secrets.ReceiptsTest do
     fixed = Keyword.put(ctx.opts, :operation_id, "operation")
     assert {:ok, _} = Secrets.set("token", "original", fixed)
     before = row(ctx, "token")
+
     for {name, value} <- [{"token", "different"}, {"other-name", "original"}] do
       assert {:error, :secret_operation_conflict} = Secrets.set(name, value, fixed)
     end
+
     assert row(ctx, "token") == before
     assert {:error, :not_found} = Secrets.get("other-name", ctx.opts)
   end
 
-  test "ordinary replacement and deletion preserve historical proof but invalidate binding", ctx do
+  test "ordinary replacement and deletion preserve historical proof but invalidate binding",
+       ctx do
     fixed = Keyword.put(ctx.opts, :operation_id, "operation")
     assert {:ok, _} = Secrets.set("token", "original", fixed)
     assert {:ok, _} = Secrets.set("token", "original", ctx.opts)
-    assert {:ok, %{status: "applied", current_binding_matches: false}} = Secrets.receipt("operation", ctx.opts)
+
+    assert {:ok, %{status: "applied", current_binding_matches: false}} =
+             Secrets.receipt("operation", ctx.opts)
+
     assert {:error, :secret_operation_conflict} = Secrets.set("token", "original", fixed)
     assert :ok = Secrets.delete("token", ctx.opts)
     assert :ok = Secrets.delete("token", ctx.opts)
@@ -122,33 +138,53 @@ defmodule LemonCore.Secrets.ReceiptsTest do
     assert Receipts.receipt_only?(tombstone)
     assert {:error, :not_found} = Secrets.get("token", ctx.opts)
     assert {:ok, []} = Secrets.list(ctx.opts)
-    assert {:ok, %{status: "applied", name: "token", current_binding_matches: false}} = Secrets.receipt("operation", ctx.opts)
+
+    assert {:ok, %{status: "applied", name: "token", current_binding_matches: false}} =
+             Secrets.receipt("operation", ctx.opts)
+
     assert {:error, :secret_operation_conflict} = Secrets.set("token", "original", fixed)
     assert row(ctx, "token") == tombstone
     assert {:ok, _} = Secrets.set("token", "new", ctx.opts)
-    assert {:ok, %{status: "applied", current_binding_matches: false}} = Secrets.receipt("operation", ctx.opts)
+
+    assert {:ok, %{status: "applied", current_binding_matches: false}} =
+             Secrets.receipt("operation", ctx.opts)
   end
 
   test "owner and authenticated node identities isolate fixed operation IDs", ctx do
     fixed = Keyword.put(ctx.opts, :operation_id, "shared")
     assert {:ok, _} = Secrets.set("token", "value", fixed)
-    for opts <- [Keyword.put(ctx.opts, :owner, ctx.owner <> "-other"), Keyword.put(ctx.opts, :node_id, "node-b")] do
-      assert {:ok, %{status: "not_found", name: nil, current_binding_matches: false}} = Secrets.receipt("shared", opts)
+
+    for opts <- [
+          Keyword.put(ctx.opts, :owner, ctx.owner <> "-other"),
+          Keyword.put(ctx.opts, :node_id, "node-b")
+        ] do
+      assert {:ok, %{status: "not_found", name: nil, current_binding_matches: false}} =
+               Secrets.receipt("shared", opts)
     end
+
     node_b = fixed |> Keyword.put(:node_id, "node-b")
     assert {:ok, _} = Secrets.set("token", "value-b", node_b)
     assert {:ok, %{current_binding_matches: false}} = Secrets.receipt("shared", ctx.opts)
-    assert {:ok, %{current_binding_matches: true}} = Secrets.receipt("shared", Keyword.put(ctx.opts, :node_id, "node-b"))
+
+    assert {:ok, %{current_binding_matches: true}} =
+             Secrets.receipt("shared", Keyword.put(ctx.opts, :node_id, "node-b"))
   end
 
   test "expiry changes current binding without deleting historical proof", ctx do
-    opts = ctx.opts |> Keyword.put(:operation_id, "expires") |> Keyword.put(:expires_at, Clock.now_ms() + 60_000)
+    opts =
+      ctx.opts
+      |> Keyword.put(:operation_id, "expires")
+      |> Keyword.put(:expires_at, Clock.now_ms() + 60_000)
+
     assert {:ok, _} = Secrets.set("token", "value", opts)
     entry = row(ctx, "token") |> Map.put(:expires_at, Clock.now_ms() - 1)
     assert :ok = Store.put(Secrets.table(), {ctx.owner, "token"}, entry)
     assert {:error, :expired} = Secrets.get("token", ctx.opts)
     assert {:ok, []} = Secrets.list(ctx.opts)
-    assert {:ok, %{status: "applied", current_binding_matches: false}} = Secrets.receipt("expires", ctx.opts)
+
+    assert {:ok, %{status: "applied", current_binding_matches: false}} =
+             Secrets.receipt("expires", ctx.opts)
+
     assert row(ctx, "token") == entry
   end
 
@@ -158,9 +194,13 @@ defmodule LemonCore.Secrets.ReceiptsTest do
     entry = row(ctx, "token")
     path = Path.join(ctx.dir, "jsonl")
     assert {:ok, backend} = JsonlBackend.init(path: path)
-    assert {:ok, _backend} = JsonlBackend.put(backend, Secrets.table(), {ctx.owner, "token"}, entry)
+
+    assert {:ok, _backend} =
+             JsonlBackend.put(backend, Secrets.table(), {ctx.owner, "token"}, entry)
+
     assert {:ok, reloaded} = JsonlBackend.init(path: path)
     assert {:ok, entry, _} = JsonlBackend.get(reloaded, Secrets.table(), {ctx.owner, "token"})
+
     for representation <- [entry, entry |> Jason.encode!() |> Jason.decode!()] do
       assert :ok = Store.put(Secrets.table(), {ctx.owner, "token"}, representation)
       assert {:ok, %{current_binding_matches: true}} = Secrets.receipt("reload", ctx.opts)
@@ -171,37 +211,65 @@ defmodule LemonCore.Secrets.ReceiptsTest do
 
   test "concurrent names cannot claim the same owner and node operation ID", ctx do
     fixed = Keyword.put(ctx.opts, :operation_id, "concurrent")
+
     results =
       1..8
       |> Task.async_stream(fn index -> Secrets.set("token-#{index}", "value", fixed) end,
-        max_concurrency: 8, ordered: false)
+        max_concurrency: 8,
+        ordered: false
+      )
       |> Enum.map(fn {:ok, result} -> result end)
 
     assert Enum.count(results, &match?({:ok, _}, &1)) == 1
     assert Enum.count(results, &(&1 == {:error, :secret_operation_conflict})) == 7
     assert {:ok, [%{name: name}]} = Secrets.list(ctx.opts)
+
     assert {:ok, %{name: ^name, status: "applied", current_binding_matches: true}} =
              Secrets.receipt("concurrent", ctx.opts)
   end
 
   test "bounded capacity rejects without pruning proof or replacing a value", ctx do
     for index <- 1..128 do
-      assert {:ok, _} = Secrets.set("token", "value", Keyword.put(ctx.opts, :operation_id, "op-#{index}"))
+      assert {:ok, _} =
+               Secrets.set("token", "value", Keyword.put(ctx.opts, :operation_id, "op-#{index}"))
     end
+
     before = row(ctx, "token")
-    assert {:error, :secret_receipt_capacity} = Secrets.set("token", "new", Keyword.put(ctx.opts, :operation_id, "overflow"))
+
+    assert {:error, :secret_receipt_capacity} =
+             Secrets.set("token", "new", Keyword.put(ctx.opts, :operation_id, "overflow"))
+
     assert row(ctx, "token") == before
-    assert {:ok, %{status: "applied", current_binding_matches: false}} = Secrets.receipt("op-1", ctx.opts)
-    assert {:ok, %{status: "applied", current_binding_matches: true}} = Secrets.receipt("op-128", ctx.opts)
+
+    assert {:ok, %{status: "applied", current_binding_matches: false}} =
+             Secrets.receipt("op-1", ctx.opts)
+
+    assert {:ok, %{status: "applied", current_binding_matches: true}} =
+             Secrets.receipt("op-128", ctx.opts)
   end
 
   test "invalid IDs and corrupt receipts fail closed with content-free errors", ctx do
     for id <- [nil, "", "a b", "a/b", "é", String.duplicate("a", 129)] do
-      assert {:error, :invalid_operation_id} = Secrets.set("private-name", "private-value", Keyword.put(ctx.opts, :operation_id, id))
+      assert {:error, :invalid_operation_id} =
+               Secrets.set(
+                 "private-name",
+                 "private-value",
+                 Keyword.put(ctx.opts, :operation_id, id)
+               )
+
       assert {:error, :invalid_operation_id} = Secrets.receipt(id, ctx.opts)
     end
-    assert {:error, :invalid_node_id} = Secrets.set("token", "value", [operation_id: "ok"] ++ Keyword.delete(ctx.opts, :node_id))
-    assert :ok = Store.put(Secrets.table(), {ctx.owner, "private-name"}, %{receipts: "private-value"})
+
+    assert {:error, :invalid_node_id} =
+             Secrets.set(
+               "token",
+               "value",
+               [operation_id: "ok"] ++ Keyword.delete(ctx.opts, :node_id)
+             )
+
+    assert :ok =
+             Store.put(Secrets.table(), {ctx.owner, "private-name"}, %{receipts: "private-value"})
+
     assert {:error, :secret_store_failed} = Secrets.receipt("ok", ctx.opts)
     assert {:error, :secret_store_failed} = Secrets.set("private-name", "new", ctx.opts)
   end
@@ -209,14 +277,18 @@ defmodule LemonCore.Secrets.ReceiptsTest do
   test "strict read and failed single-row write cannot invent an applied receipt", ctx do
     for fault <- [:read, :write] do
       with_backend(%{data: %{}, fault: fault, test_pid: self()}, fn ->
-        assert {:error, :secret_store_failed} = Secrets.set("token", "value", Keyword.put(ctx.opts, :operation_id, "failure"))
+        assert {:error, :secret_store_failed} =
+                 Secrets.set("token", "value", Keyword.put(ctx.opts, :operation_id, "failure"))
+
         state = :sys.get_state(Store)
         refute Map.has_key?(state.backend_state.data, {Secrets.table(), {ctx.owner, "token"}})
+
         if fault == :read do
           assert {:error, :secret_store_failed} = Secrets.receipt("failure", ctx.opts)
         else
           assert {:ok, %{status: "not_found"}} = Secrets.receipt("failure", ctx.opts)
         end
+
         refute_receive {:vault_put, _, _, _}
       end)
     end
@@ -224,7 +296,11 @@ defmodule LemonCore.Secrets.ReceiptsTest do
 
   test "caller crash after admission leaves one indivisible vault and proof row", ctx do
     with_backend(%{data: %{}, fault: :pause, test_pid: self()}, fn ->
-      writer = spawn(fn -> Secrets.set("token", "value", Keyword.put(ctx.opts, :operation_id, "crash")) end)
+      writer =
+        spawn(fn ->
+          Secrets.set("token", "value", Keyword.put(ctx.opts, :operation_id, "crash"))
+        end)
+
       monitor = Process.monitor(writer)
       assert_receive {:vault_put, store_pid, {owner, "token"}, record}
       assert owner == ctx.owner
@@ -233,9 +309,15 @@ defmodule LemonCore.Secrets.ReceiptsTest do
       Process.exit(writer, :kill)
       assert_receive {:DOWN, ^monitor, :process, ^writer, :killed}
       send(store_pid, :continue)
-      assert {:ok, %{status: "applied", current_binding_matches: true}} = Secrets.receipt("crash", ctx.opts)
+
+      assert {:ok, %{status: "applied", current_binding_matches: true}} =
+               Secrets.receipt("crash", ctx.opts)
+
       before = row(ctx, "token")
-      assert {:ok, _} = Secrets.set("token", "value", Keyword.put(ctx.opts, :operation_id, "crash"))
+
+      assert {:ok, _} =
+               Secrets.set("token", "value", Keyword.put(ctx.opts, :operation_id, "crash"))
+
       assert row(ctx, "token") == before
       refute_receive {:vault_put, _, _, _}
     end)

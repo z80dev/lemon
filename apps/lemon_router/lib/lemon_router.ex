@@ -122,8 +122,8 @@ defmodule LemonRouter do
 
           if Process.whereis(LemonRouter.RunOrchestrator) == orchestrator and
                Process.whereis(LemonRouter.RunRegistry) == registry,
-            do: {:ok, runs},
-            else: {:error, :unavailable}
+             do: {:ok, runs},
+             else: {:error, :unavailable}
 
         _ ->
           {:error, :query_failed}
@@ -218,7 +218,14 @@ defmodule LemonRouter do
   end
 
   defp describe_active_run({run_id, _pid}) do
-    %{run_id: run_id, session_key: nil, agent_id: nil, profile_id: nil, engine: nil, started_at_ms: nil}
+    %{
+      run_id: run_id,
+      session_key: nil,
+      agent_id: nil,
+      profile_id: nil,
+      engine: nil,
+      started_at_ms: nil
+    }
   end
 
   @doc """

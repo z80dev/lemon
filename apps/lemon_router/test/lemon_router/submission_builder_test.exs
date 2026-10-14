@@ -129,14 +129,18 @@ defmodule LemonRouter.SubmissionBuilderTest do
   @tag :tmp_dir
   test "named profile placement with no explicit cwd never uses controller cwd", %{tmp_dir: root} do
     profile = managed_profile(root, "worker-one")
+
     meta = %{
       node: profile["node"],
       profile_id: profile["id"],
       remote_cwd_explicit: false,
       cwd: "/controller/workspace",
       mcp_servers: [
-        %{"name" => "bot", "url" => "https://example.com/mcp",
-          "headers" => %{"Authorization" => "Bearer private-token"}}
+        %{
+          "name" => "bot",
+          "url" => "https://example.com/mcp",
+          "headers" => %{"Authorization" => "Bearer private-token"}
+        }
       ]
     }
 
@@ -188,10 +192,15 @@ defmodule LemonRouter.SubmissionBuilderTest do
     config = Path.join(root, "profiles.toml")
     File.write!(config, "")
     previous_paths = Application.get_env(:lemon_core, :paths)
-    Application.put_env(:lemon_core, :paths,
+
+    Application.put_env(
+      :lemon_core,
+      :paths,
       (previous_paths || [])
       |> Keyword.put(:global_config, config)
-      |> Keyword.put(:home_state_dir, root))
+      |> Keyword.put(:home_state_dir, root)
+    )
+
     on_exit(fn ->
       if is_nil(previous_paths) do
         Application.delete_env(:lemon_core, :paths)
@@ -202,14 +211,18 @@ defmodule LemonRouter.SubmissionBuilderTest do
 
     assert {:ok, profile} =
              LemonCore.ProfileStore.create(%{
-               id: "new-managed-profile", node: "worker-new",
-               systemPrompt: "New managed persona", model: "new-profile-model",
+               id: "new-managed-profile",
+               node: "worker-new",
+               systemPrompt: "New managed persona",
+               model: "new-profile-model",
                toolPolicy: %{"deny" => ["bash"], "approvals" => %{"write" => "always"}}
              })
+
     assert {:ok, request} =
              LemonCore.ProfileStore.chat_request(profile, "hello",
                run_id: "run_new_managed_profile",
-               session_key: "agent:new-managed-profile:task-example")
+               session_key: "agent:new-managed-profile:task-example"
+             )
 
     refute LemonRouter.AgentProfiles.exists?("new-managed-profile")
     assert {:ok, submission} = SubmissionBuilder.build(request, orchestrator_state())
@@ -218,14 +231,32 @@ defmodule LemonRouter.SubmissionBuilderTest do
     assert submission.execution_request.meta.model == "new-profile-model"
     assert submission.execution_request.cwd == nil
     assert submission.execution_request.tool_policy.deny == ["bash"]
-    assert {:ok, _} = LemonCore.ProfileStore.update("new-managed-profile",
-      %{toolPolicy: %{"allow" => ["read"], "deny" => ["write"]}})
+
+    assert {:ok, _} =
+             LemonCore.ProfileStore.update(
+               "new-managed-profile",
+               %{toolPolicy: %{"allow" => ["read"], "deny" => ["write"]}}
+             )
+
     :sys.replace_state(LemonRouter.AgentProfiles, fn state ->
-      %{state | profiles: Map.put(state.profiles, "new-managed-profile", %{tool_policy: %{allow: :all}})}
+      %{
+        state
+        | profiles: Map.put(state.profiles, "new-managed-profile", %{tool_policy: %{allow: :all}})
+      }
     end)
-    LemonCore.PolicyStore.put_session(request.session_key, %{tool_policy: %{"allow" => "all", "deny" => []}})
+
+    LemonCore.PolicyStore.put_session(request.session_key, %{
+      tool_policy: %{"allow" => "all", "deny" => []}
+    })
+
     on_exit(fn -> LemonCore.PolicyStore.delete_session(request.session_key) end)
-    request = %{request | tool_policy: %{allow: :all}, meta: Map.put(request.meta, :tool_policy, %{allow: :all})}
+
+    request = %{
+      request
+      | tool_policy: %{allow: :all},
+        meta: Map.put(request.meta, :tool_policy, %{allow: :all})
+    }
+
     assert {:ok, narrowed} = SubmissionBuilder.build(request, orchestrator_state())
     assert narrowed.execution_request.tool_policy.allow == ["read"]
     assert narrowed.execution_request.tool_policy.deny == ["write"]
@@ -234,27 +265,47 @@ defmodule LemonRouter.SubmissionBuilderTest do
   test "resolved capabilities and memory audience bind both native resume and compaction history" do
     session_key = unique_session_key("scoped-history")
     meta = %{invocation_context_key: "same", memory_context_key: "private-room", mcp_servers: []}
-    initial = %{request(session_key, %{agent_id: "test", meta: meta}) | origin: :channel,
-      prompt: "private bootstrap"}
+
+    initial = %{
+      request(session_key, %{agent_id: "test", meta: meta})
+      | origin: :channel,
+        prompt: "private bootstrap"
+    }
+
     assert {:ok, owner} = SubmissionBuilder.build(initial, orchestrator_state())
     token = %ResumeToken{engine: "lemon", value: session_key}
     assert :ok = ResumeResolver.bind_run(owner.execution_request)
     assert :ok = ResumeResolver.bind(token, owner.execution_request)
-    assert :ok = LemonCore.ChatStateStore.put(session_key, %{
-      last_engine: "lemon", last_resume_token: token.value
-    })
-    assert :ok = LemonCore.RunHistoryStore.put(session_key, System.system_time(:millisecond),
-      initial.run_id, %{summary: %{prompt: initial.prompt, answer: "private answer", meta: meta}})
+
+    assert :ok =
+             LemonCore.ChatStateStore.put(session_key, %{
+               last_engine: "lemon",
+               last_resume_token: token.value
+             })
+
+    assert :ok =
+             LemonCore.RunHistoryStore.put(
+               session_key,
+               System.system_time(:millisecond),
+               initial.run_id,
+               %{summary: %{prompt: initial.prompt, answer: "private answer", meta: meta}}
+             )
+
     marker = %{set_at_ms: System.system_time(:millisecond)}
     assert :ok = PendingCompactionStore.put(session_key, marker)
+
     on_exit(fn ->
       LemonCore.ChatStateStore.delete(session_key)
       LemonCore.RunHistoryStore.delete_session(session_key)
       PendingCompactionStore.delete(session_key)
     end)
 
-    same = %{request(session_key, %{agent_id: "test", meta: meta}) | origin: :channel,
-      prompt: "continue private work"}
+    same = %{
+      request(session_key, %{agent_id: "test", meta: meta})
+      | origin: :channel,
+        prompt: "continue private work"
+    }
+
     assert {:ok, resumed} = SubmissionBuilder.build(same, orchestrator_state())
     assert resumed.execution_request.resume == token
     assert resumed.execution_request.prompt =~ "private bootstrap"
@@ -265,8 +316,12 @@ defmodule LemonRouter.SubmissionBuilderTest do
           %{meta | memory_context_key: "shared-room"},
           Map.delete(meta, :mcp_servers)
         ] do
-      incoming = %{request(session_key, %{agent_id: "test", meta: other_meta}) | origin: :channel,
-        prompt: "public room prompt"}
+      incoming = %{
+        request(session_key, %{agent_id: "test", meta: other_meta})
+        | origin: :channel,
+          prompt: "public room prompt"
+      }
+
       assert {:ok, fresh} = SubmissionBuilder.build(incoming, orchestrator_state())
       assert fresh.execution_request.resume == nil
       assert fresh.execution_request.prompt == "public room prompt"
@@ -275,7 +330,12 @@ defmodule LemonRouter.SubmissionBuilderTest do
       assert LemonCore.ChatStateStore.get(session_key).last_resume_token == token.value
     end
 
-    restricted = %{same | run_id: "#{same.run_id}-restricted", tool_policy: %{blocked_tools: ["read"]}}
+    restricted = %{
+      same
+      | run_id: "#{same.run_id}-restricted",
+        tool_policy: %{blocked_tools: ["read"]}
+    }
+
     assert {:ok, fresh} = SubmissionBuilder.build(restricted, orchestrator_state())
     assert fresh.execution_request.resume == nil
     assert fresh.execution_request.prompt == same.prompt
@@ -285,12 +345,21 @@ defmodule LemonRouter.SubmissionBuilderTest do
   test "legacy unknown journals retain default policy resume but explicit overrides start fresh" do
     session_key = unique_session_key("legacy-resume")
     token = %ResumeToken{engine: "lemon", value: session_key}
-    assert :ok = LemonCore.ChatStateStore.put(session_key, %{
-      last_engine: "lemon", last_resume_token: token.value
-    })
+
+    assert :ok =
+             LemonCore.ChatStateStore.put(session_key, %{
+               last_engine: "lemon",
+               last_resume_token: token.value
+             })
+
     on_exit(fn -> LemonCore.ChatStateStore.delete(session_key) end)
-    assert {:ok, legacy} = SubmissionBuilder.build(
-      request(session_key, %{agent_id: "test"}), orchestrator_state())
+
+    assert {:ok, legacy} =
+             SubmissionBuilder.build(
+               request(session_key, %{agent_id: "test"}),
+               orchestrator_state()
+             )
+
     assert is_map(legacy.execution_request.tool_policy)
     assert legacy.execution_request.resume == token
 
@@ -300,37 +369,64 @@ defmodule LemonRouter.SubmissionBuilderTest do
           %{agent_id: "test", meta: %{invocation_context_key: "scoped"}},
           %{agent_id: "test", meta: %{memory_context_key: "shared-room"}}
         ] do
-      assert {:ok, fresh} = SubmissionBuilder.build(request(session_key, attrs), orchestrator_state())
+      assert {:ok, fresh} =
+               SubmissionBuilder.build(request(session_key, attrs), orchestrator_state())
+
       assert fresh.execution_request.resume == nil
     end
+
     assert LemonCore.ChatStateStore.get(session_key).last_resume_token == token.value
   end
 
   @tag :tmp_dir
-  test "builder binds proof comparison to the actual fixed ID for resume and compaction", %{tmp_dir: root} do
+  test "builder binds proof comparison to the actual fixed ID for resume and compaction", %{
+    tmp_dir: root
+  } do
     profile = managed_profile(root, "local")
     session_key = profile["canonicalSessionKey"]
     identity = %{profile_id: profile["id"], node: profile["node"]}
-    initial = %{request(session_key, %{agent_id: profile["id"]}) | origin: :channel, prompt: "prior work"}
+
+    initial = %{
+      request(session_key, %{agent_id: profile["id"]})
+      | origin: :channel,
+        prompt: "prior work"
+    }
+
     initial = %{initial | meta: Map.merge(proof_meta(initial.run_id), identity)}
     assert {:ok, owner} = SubmissionBuilder.build(initial, orchestrator_state())
     token = %ResumeToken{engine: "lemon", value: session_key}
     assert :ok = ResumeResolver.bind_run(owner.execution_request)
     assert :ok = ResumeResolver.bind(token, owner.execution_request)
-    assert :ok = LemonCore.ChatStateStore.put(session_key, %{
-      last_engine: "lemon", last_resume_token: token.value
-    })
-    assert :ok = LemonCore.RunHistoryStore.put(session_key, System.system_time(:millisecond),
-      initial.run_id, %{summary: %{prompt: initial.prompt, answer: "done", meta: initial.meta}})
+
+    assert :ok =
+             LemonCore.ChatStateStore.put(session_key, %{
+               last_engine: "lemon",
+               last_resume_token: token.value
+             })
+
+    assert :ok =
+             LemonCore.RunHistoryStore.put(
+               session_key,
+               System.system_time(:millisecond),
+               initial.run_id,
+               %{summary: %{prompt: initial.prompt, answer: "done", meta: initial.meta}}
+             )
+
     marker = %{set_at_ms: System.system_time(:millisecond)}
     assert :ok = PendingCompactionStore.put(session_key, marker)
+
     on_exit(fn ->
       LemonCore.ChatStateStore.delete(session_key)
       LemonCore.RunHistoryStore.delete_session(session_key)
       PendingCompactionStore.delete(session_key)
     end)
 
-    next = %{request(session_key, %{agent_id: profile["id"]}) | origin: :channel, prompt: "next work"}
+    next = %{
+      request(session_key, %{agent_id: profile["id"]})
+      | origin: :channel,
+        prompt: "next work"
+    }
+
     next = %{next | meta: Map.merge(proof_meta(next.run_id), identity)}
     assert {:ok, resumed} = SubmissionBuilder.build(next, orchestrator_state())
     assert resumed.execution_request.resume == token
@@ -351,10 +447,13 @@ defmodule LemonRouter.SubmissionBuilderTest do
     File.write!(config, "")
     previous_paths = Application.get_env(:lemon_core, :paths)
 
-    Application.put_env(:lemon_core, :paths,
+    Application.put_env(
+      :lemon_core,
+      :paths,
       (previous_paths || [])
       |> Keyword.put(:global_config, config)
-      |> Keyword.put(:home_state_dir, root))
+      |> Keyword.put(:home_state_dir, root)
+    )
 
     on_exit(fn ->
       if is_nil(previous_paths) do
@@ -372,17 +471,36 @@ defmodule LemonRouter.SubmissionBuilderTest do
 
   defp proof_meta(run_id) do
     name = "lemon_bot/invocations/#{run_id}"
-    servers = [%{name: "core", url: "https://core.invalid/mcp", headers: %{
-      "X-Lemon-Bot-Invocation" => "${LEMON_SECRET:#{name}}",
-      "Authorization" => "${LEMON_SECRET:connector/same}"
-    }}]
-    descriptor = %{"runId" => run_id, "serverName" => "core",
-      "serverUrl" => "https://core.invalid/mcp", "headerName" => "X-Lemon-Bot-Invocation",
-      "secretName" => name}
+
+    servers = [
+      %{
+        name: "core",
+        url: "https://core.invalid/mcp",
+        headers: %{
+          "X-Lemon-Bot-Invocation" => "${LEMON_SECRET:#{name}}",
+          "Authorization" => "${LEMON_SECRET:connector/same}"
+        }
+      }
+    ]
+
+    descriptor = %{
+      "runId" => run_id,
+      "serverName" => "core",
+      "serverUrl" => "https://core.invalid/mcp",
+      "headerName" => "X-Lemon-Bot-Invocation",
+      "secretName" => name
+    }
+
     assert {:ok, proof} = LemonCore.InvocationProof.validate(descriptor, run_id, servers)
-    %{invocation_context_key: "same-actor", memory_context_key: "same-room",
-      memory_context_verified: true, invocation_proof_verified: true,
-      invocation_proof: proof, mcp_servers: servers}
+
+    %{
+      invocation_context_key: "same-actor",
+      memory_context_key: "same-room",
+      memory_context_verified: true,
+      invocation_proof_verified: true,
+      invocation_proof: proof,
+      mcp_servers: servers
+    }
   end
 
   defp request(session_key, attrs) do

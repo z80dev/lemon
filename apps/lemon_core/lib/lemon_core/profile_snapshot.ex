@@ -57,6 +57,7 @@ defmodule LemonCore.ProfileSnapshot do
       _ -> {:error, :invalid_profile_snapshot}
     end
   end
+
   def validate_status(_), do: {:error, :invalid_profile_snapshot}
 
   def revision_digest(payload) do
@@ -81,9 +82,10 @@ defmodule LemonCore.ProfileSnapshot do
          true <- optional_text?(payload["systemPrompt"], @max_system_prompt_bytes),
          true <- valid_mutation?(payload["mutationId"]),
          true <- is_map(instructions),
-         true <- Enum.all?(instructions, fn {name, text} ->
-           name in @filenames and text?(text, @max_persona_file_bytes)
-         end) do
+         true <-
+           Enum.all?(instructions, fn {name, text} ->
+             name in @filenames and text?(text, @max_persona_file_bytes)
+           end) do
       :ok
     else
       _ -> {:error, :invalid_profile_snapshot}
@@ -92,7 +94,9 @@ defmodule LemonCore.ProfileSnapshot do
 
   defp optional_text?(nil, _max), do: true
   defp optional_text?(value, max), do: text?(value, max)
+
   defp text?(value, max) when is_binary(value),
     do: byte_size(value) <= max and String.valid?(value) and not String.contains?(value, <<0>>)
+
   defp text?(_, _), do: false
 end

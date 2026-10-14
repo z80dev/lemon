@@ -129,7 +129,10 @@ defmodule LemonControlPlane.WS.Connection do
         when is_binary(id) and
                method in ["node.native.followup", "node.native.lineage.floor"] ->
           with {:ok, _} <-
-                 LemonCore.JSONPayload.validate(decoded, LemonCore.ToolPolicy.execution_json_opts()) do
+                 LemonCore.JSONPayload.validate(
+                   decoded,
+                   LemonCore.ToolPolicy.execution_json_opts()
+                 ) do
             {:ok, %{type: :req, id: id, method: method, params: Map.get(decoded, "params")}}
           end
 

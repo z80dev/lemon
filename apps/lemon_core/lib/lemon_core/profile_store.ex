@@ -175,7 +175,11 @@ defmodule LemonCore.ProfileStore do
             {:ok, profile}
           else
             {:error, reason} ->
-              case write_config(config_path(opts), content, Keyword.delete(opts, :atomic_write_fun)) do
+              case write_config(
+                     config_path(opts),
+                     content,
+                     Keyword.delete(opts, :atomic_write_fun)
+                   ) do
                 :ok -> {:error, reason}
                 {:error, rollback} -> {:error, {:rollback_failed, reason, rollback}}
               end
@@ -189,7 +193,9 @@ defmodule LemonCore.ProfileStore do
   @spec projection(profile()) :: profile()
   def projection(profile) do
     profile
-    |> Map.put_new_lazy("mcpConfigFingerprint", fn -> mcp_config_fingerprint(profile["mcpServers"] || []) end)
+    |> Map.put_new_lazy("mcpConfigFingerprint", fn ->
+      mcp_config_fingerprint(profile["mcpServers"] || [])
+    end)
     |> Map.update("mcpServers", [], fn servers ->
       Enum.map(servers, &Map.delete(&1, "headers"))
     end)
@@ -199,9 +205,20 @@ defmodule LemonCore.ProfileStore do
   def mcp_config_fingerprint(servers) do
     canonical =
       Enum.map(servers, fn server ->
-        headers = server |> Map.get("headers", %{}) |> Enum.sort() |> Enum.map(fn {key, value} -> [key, value] end)
-        [server["name"], server["url"], headers, server["enabledTools"],
-         server["allowedOrigins"], server["approvedPrivateOrigins"]]
+        headers =
+          server
+          |> Map.get("headers", %{})
+          |> Enum.sort()
+          |> Enum.map(fn {key, value} -> [key, value] end)
+
+        [
+          server["name"],
+          server["url"],
+          headers,
+          server["enabledTools"],
+          server["allowedOrigins"],
+          server["approvedPrivateOrigins"]
+        ]
       end)
 
     :crypto.hash(:sha256, Jason.encode!(canonical)) |> Base.encode16(case: :lower)
@@ -247,12 +264,13 @@ defmodule LemonCore.ProfileStore do
   def persona_snapshot(id, opts \\ []) do
     with {:ok, profile} <- get(id, opts),
          {:ok, instructions} <- profile_instructions(profile) do
-      {:ok, %{
-        "id" => profile["id"],
-        "model" => profile["model"],
-        "systemPrompt" => profile["systemPrompt"],
-        "instructions" => instructions
-      }}
+      {:ok,
+       %{
+         "id" => profile["id"],
+         "model" => profile["model"],
+         "systemPrompt" => profile["systemPrompt"],
+         "instructions" => instructions
+       }}
     end
   end
 
@@ -279,16 +297,32 @@ defmodule LemonCore.ProfileStore do
         opts
         |> Keyword.get(:meta, %{})
         |> Map.drop([
-          "profile_id", :profile_id, "node", :node, "system_prompt", :system_prompt,
-          "profile_instructions", :profile_instructions, "mcp_servers", :mcp_servers,
-          "remote_cwd_explicit", :remote_cwd_explicit, "remote_cwd", :remote_cwd,
-          "cwd", :cwd, "tool_policy", :tool_policy, "toolPolicy"
+          "profile_id",
+          :profile_id,
+          "node",
+          :node,
+          "system_prompt",
+          :system_prompt,
+          "profile_instructions",
+          :profile_instructions,
+          "mcp_servers",
+          :mcp_servers,
+          "remote_cwd_explicit",
+          :remote_cwd_explicit,
+          "remote_cwd",
+          :remote_cwd,
+          "cwd",
+          :cwd,
+          "tool_policy",
+          :tool_policy,
+          "toolPolicy"
         ])
         |> Map.put(:profile_id, id)
         |> Map.put(:node, node)
         |> Map.put(:system_prompt, profile["systemPrompt"])
         |> Map.put(:profile_instructions, instructions)
         |> Map.put(:mcp_servers, mcp_servers)
+
       cwd =
         case Keyword.fetch(opts, :cwd) do
           {:ok, cwd} when is_binary(cwd) and cwd != "" -> cwd
@@ -305,7 +339,9 @@ defmodule LemonCore.ProfileStore do
       {:ok,
        RunRequest.new(%{
          origin: Keyword.get(opts, :origin, :control_plane),
-         session_key: Keyword.get(opts, :session_key) || profile["canonicalSessionKey"] || SessionKey.main(id),
+         session_key:
+           Keyword.get(opts, :session_key) || profile["canonicalSessionKey"] ||
+             SessionKey.main(id),
          agent_id: id,
          prompt: prompt,
          images: Keyword.get(opts, :images, []),
@@ -314,7 +350,8 @@ defmodule LemonCore.ProfileStore do
          cwd: cwd,
          run_id: Keyword.get(opts, :run_id),
          resume: Keyword.get(opts, :resume),
-         tool_policy: LemonCore.ToolPolicy.intersect(profile_policy, Keyword.get(opts, :tool_policy)),
+         tool_policy:
+           LemonCore.ToolPolicy.intersect(profile_policy, Keyword.get(opts, :tool_policy)),
          meta: meta
        })}
     else
@@ -351,7 +388,8 @@ defmodule LemonCore.ProfileStore do
                   do: {:cont, {:ok, Map.put(files, name, text)}},
                   else: {:halt, {:error, :invalid_profile_instructions}}
 
-              _ -> {:halt, {:error, :invalid_profile_instructions}}
+              _ ->
+                {:halt, {:error, :invalid_profile_instructions}}
             end
 
           _ ->
@@ -738,7 +776,8 @@ defmodule LemonCore.ProfileStore do
   end
 
   defp portable_profile(profile) do
-    profile = profile |> projection() |> Map.drop(["paths", "managedKeys", "mcpConfigFingerprint"])
+    profile =
+      profile |> projection() |> Map.drop(["paths", "managedKeys", "mcpConfigFingerprint"])
 
     Enum.reduce(["name", "description", "systemPrompt"], {profile, 0}, fn key, {acc, count} ->
       case acc[key] do
@@ -831,8 +870,15 @@ defmodule LemonCore.ProfileStore do
            normalize_mcp_servers(value(attrs, "mcpServers") || value(attrs, "mcp_servers") || []),
          {:ok, tool_policy} <-
            LemonCore.ToolPolicy.normalize(
-             Map.get(attrs, "toolPolicy", Map.get(attrs, :toolPolicy,
-               Map.get(attrs, "tool_policy", Map.get(attrs, :tool_policy, %{}))))
+             Map.get(
+               attrs,
+               "toolPolicy",
+               Map.get(
+                 attrs,
+                 :toolPolicy,
+                 Map.get(attrs, "tool_policy", Map.get(attrs, :tool_policy, %{}))
+               )
+             )
            ) do
       {:ok,
        %{
@@ -895,10 +941,12 @@ defmodule LemonCore.ProfileStore do
            {:ok, enabled_tools} <- normalize_enabled_tools(server),
            {:ok, origin_policy} <- normalize_mcp_origins(server) do
         normalized = %{"name" => name, "url" => url, "headers" => headers}
+
         normalized =
           if is_nil(enabled_tools),
             do: normalized,
             else: Map.put(normalized, "enabledTools", enabled_tools)
+
         normalized = Map.merge(normalized, origin_policy)
         {:cont, {:ok, [normalized | acc], MapSet.put(names, name)}}
       else
@@ -913,7 +961,8 @@ defmodule LemonCore.ProfileStore do
           do: {:ok, normalized},
           else: {:error, {:field_too_large, :mcp_servers, @max_mcp_definition_bytes}}
 
-      error -> error
+      error ->
+        error
     end
   end
 
@@ -921,7 +970,10 @@ defmodule LemonCore.ProfileStore do
 
   defp normalize_mcp_origins(server) do
     allowed? = Map.has_key?(server, "allowedOrigins") or Map.has_key?(server, :allowedOrigins)
-    private? = Map.has_key?(server, "approvedPrivateOrigins") or Map.has_key?(server, :approvedPrivateOrigins)
+
+    private? =
+      Map.has_key?(server, "approvedPrivateOrigins") or
+        Map.has_key?(server, :approvedPrivateOrigins)
 
     cond do
       not allowed? and not private? ->
@@ -932,12 +984,22 @@ defmodule LemonCore.ProfileStore do
 
       true ->
         with {:ok, allowed} <-
-               normalize_origins(Map.get(server, "allowedOrigins", Map.get(server, :allowedOrigins))),
+               normalize_origins(
+                 Map.get(server, "allowedOrigins", Map.get(server, :allowedOrigins))
+               ),
              {:ok, private} <-
-               normalize_origins(Map.get(server, "approvedPrivateOrigins", Map.get(server, :approvedPrivateOrigins, []))),
+               normalize_origins(
+                 Map.get(
+                   server,
+                   "approvedPrivateOrigins",
+                   Map.get(server, :approvedPrivateOrigins, [])
+                 )
+               ),
              true <- Enum.all?(private, &(&1 in allowed)) do
           policy = %{"allowedOrigins" => allowed}
-          {:ok, if(private?, do: Map.put(policy, "approvedPrivateOrigins", private), else: policy)}
+
+          {:ok,
+           if(private?, do: Map.put(policy, "approvedPrivateOrigins", private), else: policy)}
         else
           _ -> {:error, {:invalid_field, :mcp_servers}}
         end
@@ -951,7 +1013,9 @@ defmodule LemonCore.ProfileStore do
           if normalized in acc,
             do: {:halt, {:error, {:invalid_field, :mcp_servers}}},
             else: {:cont, {:ok, [normalized | acc]}}
-        _ -> {:halt, {:error, {:invalid_field, :mcp_servers}}}
+
+        _ ->
+          {:halt, {:error, {:invalid_field, :mcp_servers}}}
       end
     end)
     |> case do
@@ -964,10 +1028,18 @@ defmodule LemonCore.ProfileStore do
 
   defp normalize_origin(origin) when is_binary(origin) and byte_size(origin) <= 2_048 do
     with true <- String.valid?(origin),
-         %URI{scheme: scheme, host: host, port: port, path: path,
-              userinfo: nil, query: nil, fragment: nil} <- URI.parse(origin),
-         true <- scheme in ["http", "https"] and is_binary(host) and host != "" and
-                   is_integer(port) and port in 1..65_535 and path in [nil, "/"],
+         %URI{
+           scheme: scheme,
+           host: host,
+           port: port,
+           path: path,
+           userinfo: nil,
+           query: nil,
+           fragment: nil
+         } <- URI.parse(origin),
+         true <-
+           scheme in ["http", "https"] and is_binary(host) and host != "" and
+             is_integer(port) and port in 1..65_535 and path in [nil, "/"],
          {:ok, host} <- canonical_origin_host(host) do
       {:ok, URI.to_string(%URI{scheme: scheme, host: host, port: port})}
     else
@@ -979,7 +1051,9 @@ defmodule LemonCore.ProfileStore do
 
   defp canonical_origin_host(host) do
     case :inet.parse_strict_address(String.to_charlist(host)) do
-      {:ok, address} -> {:ok, address |> :inet.ntoa() |> List.to_string()}
+      {:ok, address} ->
+        {:ok, address |> :inet.ntoa() |> List.to_string()}
+
       {:error, _} ->
         host = host |> String.downcase() |> String.replace_suffix(".", "")
         labels = String.split(host, ".")
@@ -1049,30 +1123,40 @@ defmodule LemonCore.ProfileStore do
   defp profile_name(value) do
     with {:ok, name} <- bounded_string(value, :name, @max_name_bytes) do
       cond do
-        String.contains?(name, <<0>>) -> {:error, {:invalid_field, :name}}
+        String.contains?(name, <<0>>) ->
+          {:error, {:invalid_field, :name}}
+
         not within_scalar_limit?(name, @max_name_scalars) ->
           {:error, {:field_too_large, :name, @max_name_scalars}}
-        true -> {:ok, name}
+
+        true ->
+          {:ok, name}
       end
     end
   end
 
   defp within_scalar_limit?(<<>>, _remaining), do: true
   defp within_scalar_limit?(_text, 0), do: false
+
   defp within_scalar_limit?(<<_scalar::utf8, rest::binary>>, remaining),
     do: within_scalar_limit?(rest, remaining - 1)
 
   defp optional_system_prompt(nil), do: {:ok, nil}
   defp optional_system_prompt(""), do: {:ok, nil}
+
   defp optional_system_prompt(value) when is_binary(value) do
     cond do
       not String.valid?(value) or String.contains?(value, <<0>>) ->
         {:error, {:invalid_field, :system_prompt}}
+
       byte_size(value) > @max_system_prompt_bytes ->
         {:error, {:field_too_large, :system_prompt, @max_system_prompt_bytes}}
-      true -> {:ok, value}
+
+      true ->
+        {:ok, value}
     end
   end
+
   defp optional_system_prompt(_value), do: {:error, {:invalid_field, :system_prompt}}
 
   defp optional_bounded(nil, _field, _max), do: {:ok, nil}
@@ -1137,7 +1221,9 @@ defmodule LemonCore.ProfileStore do
             profiles when is_map(profiles) -> {:ok, profiles}
             _ -> {:error, :invalid_profile_config}
           end
-        {:error, _} -> {:error, :invalid_profile_config}
+
+        {:error, _} ->
+          {:error, :invalid_profile_config}
       end
     else
       {:error, _} -> {:error, :profile_store_unavailable}
@@ -1224,13 +1310,21 @@ defmodule LemonCore.ProfileStore do
   defp relative_to(path, root), do: Path.relative_to(path, root) |> String.replace("\\", "/")
 
   defp canonical_patch(patch) do
-    Enum.reduce([{"system_prompt", "systemPrompt"}, {"mcp_servers", "mcpServers"}, {"tool_policy", "toolPolicy"}], patch, fn
-      {source, destination}, acc ->
-        case Map.fetch(acc, source) do
-          {:ok, value} -> acc |> Map.delete(source) |> Map.put(destination, value)
-          :error -> acc
-        end
-    end)
+    Enum.reduce(
+      [
+        {"system_prompt", "systemPrompt"},
+        {"mcp_servers", "mcpServers"},
+        {"tool_policy", "toolPolicy"}
+      ],
+      patch,
+      fn
+        {source, destination}, acc ->
+          case Map.fetch(acc, source) do
+            {:ok, value} -> acc |> Map.delete(source) |> Map.put(destination, value)
+            :error -> acc
+          end
+      end
+    )
   end
 
   defp normalize_attrs(attrs) when is_list(attrs), do: Map.new(attrs)

@@ -78,6 +78,7 @@ defmodule CodingAgent.CoordinatorTest do
       send(state.test_pid, {:session_aborted, self()})
       {:noreply, state}
     end
+
     def handle_cast({:unsubscribe, _subscriber}, state), do: {:noreply, state}
 
     @impl true
@@ -274,7 +275,10 @@ defmodule CodingAgent.CoordinatorTest do
       coordinator = start_controlled_coordinator(tmp_dir)
 
       assert {:error, {:error, "Unknown subagent: nonexistent_agent"}} =
-               Coordinator.run_subagent(coordinator, prompt: "Hello", subagent: "nonexistent_agent")
+               Coordinator.run_subagent(coordinator,
+                 prompt: "Hello",
+                 subagent: "nonexistent_agent"
+               )
 
       refute_receive {:session_starting, _, _}
       assert Coordinator.list_active(coordinator) == []
@@ -293,19 +297,26 @@ defmodule CodingAgent.CoordinatorTest do
     test "a rejected prompt cleans up its admitted session", %{tmp_dir: tmp_dir} do
       coordinator =
         start_controlled_coordinator(tmp_dir, prompt_error: :already_streaming, gate_prompt: true)
+
       call = run_async(coordinator, [%{prompt: "Rejected prompt"}])
       {pid, ref, session_id, _worker} = started_session("Rejected prompt")
       send(pid, :release_prompt)
       assert_receive {:DOWN, ^ref, :process, ^pid, :shutdown}, 1_000
+
       assert_receive {:results, ^call,
                       [%{status: :error, error: :already_streaming, session_id: ^session_id}]},
                      1_000
+
       assert Coordinator.list_active(coordinator) == []
     end
 
     test "an admission failure returns its error and leaves no active ID", %{tmp_dir: tmp_dir} do
       coordinator = start_coordinator(tmp_dir)
-      :sys.replace_state(coordinator, &%{&1 | session_starter: fn _opts -> {:error, :admission_failed} end})
+
+      :sys.replace_state(
+        coordinator,
+        &%{&1 | session_starter: fn _opts -> {:error, :admission_failed} end}
+      )
 
       assert [%{status: :error, result: nil, error: :admission_failed, session_id: nil}] =
                Coordinator.run_subagents(coordinator, [%{prompt: "Admission failure"}])
@@ -323,24 +334,28 @@ defmodule CodingAgent.CoordinatorTest do
       {pid, ref, session_id, _worker} = started_session("Linked admission")
       send(pid, {:complete, "linked answer"})
       assert_receive {:DOWN, ^ref, :process, ^pid, :shutdown}, 1_000
+
       assert_receive {:results, ^call,
                       [%{status: :completed, result: "linked answer", session_id: ^session_id}]},
                      1_000
+
       assert Coordinator.list_active(coordinator) == []
     end
   end
 
   describe "run_subagents/3" do
-    test "runs concurrently and retains spec order across out-of-order completion and failures", %{
-      tmp_dir: tmp_dir
-    } do
+    test "runs concurrently and retains spec order across out-of-order completion and failures",
+         %{
+           tmp_dir: tmp_dir
+         } do
       coordinator = start_controlled_coordinator(tmp_dir)
 
-      call = run_async(coordinator, [
-        %{prompt: "First"},
-        %{prompt: "Invalid", subagent: "nonexistent_subagent"},
-        %{prompt: "Third"}
-      ])
+      call =
+        run_async(coordinator, [
+          %{prompt: "First"},
+          %{prompt: "Invalid", subagent: "nonexistent_subagent"},
+          %{prompt: "Third"}
+        ])
 
       {first, first_ref, first_id, first_worker} = started_session("First")
       {third, third_ref, third_id, third_worker} = started_session("Third")
@@ -355,10 +370,19 @@ defmodule CodingAgent.CoordinatorTest do
       assert_receive {:DOWN, ^first_ref, :process, ^first, :shutdown}, 1_000
 
       assert_receive {:results, ^call, [first_result, invalid_result, third_result]}, 1_000
-      assert %{status: :completed, result: "first answer", error: nil, session_id: ^first_id} = first_result
-      assert %{status: :error, error: "Unknown subagent: nonexistent_subagent", session_id: nil} = invalid_result
-      assert %{status: :completed, result: "third answer", error: nil, session_id: ^third_id} = third_result
-      assert length(Enum.uniq(Enum.map([first_result, invalid_result, third_result], & &1.id))) == 3
+
+      assert %{status: :completed, result: "first answer", error: nil, session_id: ^first_id} =
+               first_result
+
+      assert %{status: :error, error: "Unknown subagent: nonexistent_subagent", session_id: nil} =
+               invalid_result
+
+      assert %{status: :completed, result: "third answer", error: nil, session_id: ^third_id} =
+               third_result
+
+      assert length(Enum.uniq(Enum.map([first_result, invalid_result, third_result], & &1.id))) ==
+               3
+
       assert Coordinator.list_active(coordinator) == []
     end
 
@@ -387,8 +411,10 @@ defmodule CodingAgent.CoordinatorTest do
   describe "timeout handling" do
     test "zero timeout does not admit a session", %{tmp_dir: tmp_dir} do
       coordinator = start_controlled_coordinator(tmp_dir)
+
       assert [%{status: :timeout, result: nil, error: :timeout, session_id: nil}] =
                Coordinator.run_subagents(coordinator, [%{prompt: "Never start"}], timeout: 0)
+
       refute_receive {:session_starting, _, _}
       assert Coordinator.list_active(coordinator) == []
     end
@@ -401,7 +427,11 @@ defmodule CodingAgent.CoordinatorTest do
       [batch_ref] = Map.keys(batches)
       send(coordinator, {:batch_timeout, batch_ref})
       assert_receive {:DOWN, ^ref, :process, ^pid, :shutdown}, 1_000
-      assert_receive {:results, ^call, [%{status: :timeout, result: nil, error: :timeout, session_id: ^session_id}]}, 1_000
+
+      assert_receive {:results, ^call,
+                      [%{status: :timeout, result: nil, error: :timeout, session_id: ^session_id}]},
+                     1_000
+
       assert Coordinator.list_active(coordinator) == []
     end
 
@@ -420,7 +450,11 @@ defmodule CodingAgent.CoordinatorTest do
       assert [^id] = Coordinator.list_active(coordinator)
       send(pid, :release_start)
       assert_receive {:DOWN, ^ref, :process, ^pid, :shutdown}, 1_000
-      assert_receive {:results, ^call, [%{id: ^id, status: :timeout, error: :timeout, session_id: nil}]}, 1_000
+
+      assert_receive {:results, ^call,
+                      [%{id: ^id, status: :timeout, error: :timeout, session_id: nil}]},
+                     1_000
+
       refute_receive {:session_prompted, ^pid, _}
       assert Coordinator.list_active(coordinator) == []
     end
@@ -439,8 +473,13 @@ defmodule CodingAgent.CoordinatorTest do
       assert_receive {:DOWN, ^first_ref, :process, ^first, :shutdown}, 1_000
       assert_receive {:DOWN, ^second_ref, :process, ^second, :shutdown}, 1_000
       assert_receive {:results, ^call, [first_result, second_result]}, 2_000
-      assert %{status: :aborted, result: nil, error: :aborted, session_id: ^first_id} = first_result
-      assert %{status: :aborted, result: nil, error: :aborted, session_id: ^second_id} = second_result
+
+      assert %{status: :aborted, result: nil, error: :aborted, session_id: ^first_id} =
+               first_result
+
+      assert %{status: :aborted, result: nil, error: :aborted, session_id: ^second_id} =
+               second_result
+
       assert Coordinator.list_active(coordinator) == []
     end
 
@@ -460,11 +499,17 @@ defmodule CodingAgent.CoordinatorTest do
       refute_receive {:session_prompted, ^pid, _}
       send(pid, :release_cleanup)
       assert_receive {:DOWN, ^ref, :process, ^pid, :shutdown}, 1_000
-      assert_receive {:results, ^call, [%{id: ^id, status: :aborted, error: :aborted, result: nil}]}, 2_000
+
+      assert_receive {:results, ^call,
+                      [%{id: ^id, status: :aborted, error: :aborted, result: nil}]},
+                     2_000
+
       assert Coordinator.list_active(coordinator) == []
     end
 
-    test "remains responsive while the synchronous prompt handshake is blocked", %{tmp_dir: tmp_dir} do
+    test "remains responsive while the synchronous prompt handshake is blocked", %{
+      tmp_dir: tmp_dir
+    } do
       coordinator = start_controlled_coordinator(tmp_dir, gate_prompt: true, gate_cleanup: true)
       call = run_async(coordinator, [%{prompt: "Blocked prompt"}])
       {pid, ref, session_id, _worker} = started_session("Blocked prompt")
@@ -477,7 +522,11 @@ defmodule CodingAgent.CoordinatorTest do
       assert [^id] = Coordinator.list_active(coordinator)
       send(pid, :release_cleanup)
       assert_receive {:DOWN, ^ref, :process, ^pid, :shutdown}, 1_000
-      assert_receive {:results, ^call, [%{id: ^id, status: :aborted, error: :aborted, session_id: ^session_id}]}, 2_000
+
+      assert_receive {:results, ^call,
+                      [%{id: ^id, status: :aborted, error: :aborted, session_id: ^session_id}]},
+                     2_000
+
       assert Coordinator.list_active(coordinator) == []
     end
 
@@ -546,9 +595,21 @@ defmodule CodingAgent.CoordinatorTest do
       {pid, ref, session_id, _worker} = started_session("Crash")
       Process.exit(pid, :kill)
       assert_receive {:DOWN, ^ref, :process, ^pid, :killed}, 1_000
-      assert_receive {:results, ^call, [%{status: :error, result: nil, error: {:crashed, :killed}, session_id: ^session_id}]}, 1_000
+
+      assert_receive {:results, ^call,
+                      [
+                        %{
+                          status: :error,
+                          result: nil,
+                          error: {:crashed, :killed},
+                          session_id: ^session_id
+                        }
+                      ]},
+                     1_000
+
       assert Process.alive?(coordinator)
       assert Coordinator.list_active(coordinator) == []
+
       assert [%{status: :error, error: "Unknown subagent: invalid"}] =
                Coordinator.run_subagents(coordinator, [%{prompt: "Retry", subagent: "invalid"}])
     end
@@ -562,7 +623,11 @@ defmodule CodingAgent.CoordinatorTest do
       assert Enum.any?(active, fn {_id, subagent} -> subagent.pid == pid end)
       Process.exit(worker, :kill)
       assert_receive {:DOWN, ^ref, :process, ^pid, :shutdown}, 1_000
-      assert_receive {:results, ^call, [%{status: :error, error: {:crashed, :killed}, session_id: ^session_id}]}, 1_000
+
+      assert_receive {:results, ^call,
+                      [%{status: :error, error: {:crashed, :killed}, session_id: ^session_id}]},
+                     1_000
+
       assert Coordinator.list_active(coordinator) == []
     end
 
@@ -623,13 +688,31 @@ defmodule CodingAgent.CoordinatorTest do
     coordinator = start_controlled_coordinator(tmp_dir)
     call = run_async(coordinator, [%{prompt: "Visible output"}])
     {pid, ref, session_id, worker} = started_session("Visible output")
+
     messages = [
       %AssistantMessage{content: [%TextContent{text: "earlier"}]},
-      %AssistantMessage{content: [%LemonAi.Types.ThinkingContent{thinking: "private"}, %TextContent{text: "visible"}]}
+      %AssistantMessage{
+        content: [
+          %LemonAi.Types.ThinkingContent{thinking: "private"},
+          %TextContent{text: "visible"}
+        ]
+      }
     ]
+
     send(worker, {:session_event, session_id, {:agent_end, messages}})
     assert_receive {:DOWN, ^ref, :process, ^pid, :shutdown}, 1_000
-    assert_receive {:results, ^call, [%{status: :completed, result: "visible", error: nil, session_id: ^session_id} = result]}, 1_000
+
+    assert_receive {:results, ^call,
+                    [
+                      %{
+                        status: :completed,
+                        result: "visible",
+                        error: nil,
+                        session_id: ^session_id
+                      } = result
+                    ]},
+                   1_000
+
     assert Map.keys(result) |> Enum.sort() == [:error, :id, :result, :session_id, :status]
     assert is_binary(result.id)
   end

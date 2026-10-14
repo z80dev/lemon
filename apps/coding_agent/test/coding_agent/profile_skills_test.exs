@@ -29,8 +29,11 @@ defmodule CodingAgent.ProfileSkillsTest do
         File.rm_rf!(Path.join([scope, ".lemon", "skill"]))
         LemonSkills.refresh(cwd: scope)
       end
-      if previous_paths, do: Application.put_env(:lemon_core, :paths, previous_paths),
+
+      if previous_paths,
+        do: Application.put_env(:lemon_core, :paths, previous_paths),
         else: Application.delete_env(:lemon_core, :paths)
+
       restore_env("HOME", previous_home)
       restore_env("LEMON_AGENT_DIR", previous_agent_dir)
       LemonSkills.refresh()
@@ -39,14 +42,41 @@ defmodule CodingAgent.ProfileSkillsTest do
     %{alpha: alpha, beta: beta, cwd: cwd}
   end
 
-  test "selected metadata loads at profile scope and full skill body loads only on demand", %{alpha: alpha, cwd: cwd} do
-    body = "PRIVATE_SELECTED_BODY_BEGIN\n" <> String.duplicate("Exact selected instruction line.\n", 8_192) <> "PRIVATE_SELECTED_BODY_END\n"
-    write_skill(alpha["workspace"], "selected-operating", "Selected Operating", "Selected metadata only", body)
-    write_skill(cwd, "project-only", "Project Only", "Unrelated project metadata", "UNRELATED_PROJECT_BODY")
+  test "selected metadata loads at profile scope and full skill body loads only on demand", %{
+    alpha: alpha,
+    cwd: cwd
+  } do
+    body =
+      "PRIVATE_SELECTED_BODY_BEGIN\n" <>
+        String.duplicate("Exact selected instruction line.\n", 8_192) <>
+        "PRIVATE_SELECTED_BODY_END\n"
+
+    write_skill(
+      alpha["workspace"],
+      "selected-operating",
+      "Selected Operating",
+      "Selected metadata only",
+      body
+    )
+
+    write_skill(
+      cwd,
+      "project-only",
+      "Project Only",
+      "Unrelated project metadata",
+      "UNRELATED_PROJECT_BODY"
+    )
+
     LemonSkills.refresh(cwd: alpha["workspace"])
     LemonSkills.refresh(cwd: cwd)
-    opts = %{agent_id: "skill-alpha", workspace_dir: alpha["workspace"],
-      contributed_sections: [], tool_names: ["read_skill"]}
+
+    opts = %{
+      agent_id: "skill-alpha",
+      workspace_dir: alpha["workspace"],
+      contributed_sections: [],
+      tool_names: ["read_skill"]
+    }
+
     prompt = SystemPrompt.build(cwd, opts)
     assert prompt =~ "<key>selected-operating</key>"
     assert prompt =~ "Selected metadata only"
@@ -66,22 +96,45 @@ defmodule CodingAgent.ProfileSkillsTest do
     refute refreshed =~ "PRIVATE_SELECTED_BODY_BEGIN"
   end
 
-  test "profile skill scopes remain isolated and generic project lookup stays unchanged", %{alpha: alpha, beta: beta, cwd: cwd} do
+  test "profile skill scopes remain isolated and generic project lookup stays unchanged", %{
+    alpha: alpha,
+    beta: beta,
+    cwd: cwd
+  } do
     write_skill(alpha["workspace"], "shared-key", "Alpha Skill", "Alpha metadata", "ALPHA_BODY")
     write_skill(beta["workspace"], "shared-key", "Beta Skill", "Beta metadata", "BETA_BODY")
     write_skill(cwd, "shared-key", "Project Skill", "Project metadata", "PROJECT_BODY")
     for scope <- [alpha["workspace"], beta["workspace"], cwd], do: LemonSkills.refresh(cwd: scope)
-    for {id, profile, own, other} <- [{"skill-alpha", alpha, "ALPHA_BODY", "BETA_BODY"}, {"skill-beta", beta, "BETA_BODY", "ALPHA_BODY"}] do
+
+    for {id, profile, own, other} <- [
+          {"skill-alpha", alpha, "ALPHA_BODY", "BETA_BODY"},
+          {"skill-beta", beta, "BETA_BODY", "ALPHA_BODY"}
+        ] do
       tool = ReadSkill.tool(cwd, agent_id: id, workspace_dir: profile["workspace"])
       result = tool.execute.("isolated-read", %{"key" => "shared-key"}, nil, nil)
       assert text(result) =~ own
       refute text(result) =~ other
       refute text(result) =~ "PROJECT_BODY"
     end
+
     generic = ReadSkill.tool(cwd, agent_id: "ordinary-agent", workspace_dir: alpha["workspace"])
-    assert text(generic.execute.("generic-read", %{"key" => "shared-key"}, nil, nil)) =~ "PROJECT_BODY"
-    assert Workspace.skill_cwd(cwd, %{agent_id: "ordinary-agent", workspace_dir: alpha["workspace"]}) == cwd
-    prompt = SystemPrompt.build(cwd, %{agent_id: "ordinary-agent", workspace_dir: alpha["workspace"], contributed_sections: [], tool_names: ["read_skill"]})
+
+    assert text(generic.execute.("generic-read", %{"key" => "shared-key"}, nil, nil)) =~
+             "PROJECT_BODY"
+
+    assert Workspace.skill_cwd(cwd, %{
+             agent_id: "ordinary-agent",
+             workspace_dir: alpha["workspace"]
+           }) == cwd
+
+    prompt =
+      SystemPrompt.build(cwd, %{
+        agent_id: "ordinary-agent",
+        workspace_dir: alpha["workspace"],
+        contributed_sections: [],
+        tool_names: ["read_skill"]
+      })
+
     assert prompt =~ "Project metadata"
     refute prompt =~ "Alpha metadata"
     refute prompt =~ "Beta metadata"
@@ -90,7 +143,11 @@ defmodule CodingAgent.ProfileSkillsTest do
   defp write_skill(scope, key, name, description, body) do
     directory = Path.join([scope, ".lemon", "skill", key])
     File.mkdir_p!(directory)
-    File.write!(Path.join(directory, "SKILL.md"), "---\nname: #{name}\ndescription: #{description}\n---\n\n" <> body)
+
+    File.write!(
+      Path.join(directory, "SKILL.md"),
+      "---\nname: #{name}\ndescription: #{description}\n---\n\n" <> body
+    )
   end
 
   defp text(result), do: Enum.map_join(result.content, "\n", & &1.text)

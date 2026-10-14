@@ -232,9 +232,8 @@ defmodule LemonAutomation.CronScheduleTest do
 
     test "does not replay the folded slot after its first occurrence has passed" do
       for from <- [~U[2026-11-01 05:45:00Z], ~U[2026-11-01 06:10:00Z]] do
-        assert CronSchedule.next_run_datetime("30 1 * * *", "America/New_York",
-                 from: from
-               ) == ~U[2026-11-02 06:30:00Z]
+        assert CronSchedule.next_run_datetime("30 1 * * *", "America/New_York", from: from) ==
+                 ~U[2026-11-02 06:30:00Z]
       end
     end
 
@@ -295,9 +294,8 @@ defmodule LemonAutomation.CronScheduleTest do
     test "starting datetime represents an instant regardless of its own zone" do
       from = DateTime.shift_zone!(~U[2026-07-15 12:30:00Z], "Asia/Tokyo")
 
-      assert CronSchedule.next_run_datetime("0 9 * * *", "America/New_York",
-               from: from
-             ) == ~U[2026-07-15 13:00:00Z]
+      assert CronSchedule.next_run_datetime("0 9 * * *", "America/New_York", from: from) ==
+               ~U[2026-07-15 13:00:00Z]
     end
   end
 

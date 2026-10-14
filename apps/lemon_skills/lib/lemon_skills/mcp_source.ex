@@ -115,8 +115,9 @@ defmodule LemonSkills.McpSource do
 
   @doc false
   def valid_remote_name?(name),
-    do: is_binary(name) and String.valid?(name) and byte_size(name) in 1..128 and
-      not Regex.match?(~r/[\x00-\x20\x7f]/, name)
+    do:
+      is_binary(name) and String.valid?(name) and byte_size(name) in 1..128 and
+        not Regex.match?(~r/[\x00-\x20\x7f]/, name)
 
   defp profile_alias(name, url, selector, prefix) do
     uri = URI.parse(url)
@@ -124,8 +125,12 @@ defmodule LemonSkills.McpSource do
     host = String.downcase(uri.host)
     default_port = if scheme == "https", do: 443, else: 80
     port = if uri.port == default_port, do: nil, else: uri.port
-    endpoint = URI.to_string(%{uri | scheme: scheme, host: host, port: port, path: uri.path || "/"})
-    digest = :crypto.hash(:sha256, :erlang.term_to_binary({name, endpoint, selector}))
+
+    endpoint =
+      URI.to_string(%{uri | scheme: scheme, host: host, port: port, path: uri.path || "/"})
+
+    digest =
+      :crypto.hash(:sha256, :erlang.term_to_binary({name, endpoint, selector}))
       |> binary_part(0, 16)
       |> Base.encode16(case: :lower)
 
@@ -380,15 +385,23 @@ defmodule LemonSkills.McpSource do
   def handle_call(:remote_tools, _from, state) do
     result =
       Enum.reduce_while(state.servers, {:ok, []}, fn
-        {_name, %{connected: true, client: client, client_module: mod, config: config,
-                  capabilities: capabilities}}, {:ok, acc} ->
+        {_name,
+         %{
+           connected: true,
+           client: client,
+           client_module: mod,
+           config: config,
+           capabilities: capabilities
+         }},
+        {:ok, acc} ->
           values = config_redact_values(config)
           public_name = Keyword.get(config_options(config), :name)
 
           # The configured label is also returned by discovery. Fail closed if
           # it would echo a known credential; never emit a secret-bearing DTO.
           with true <- scrub_inventory(public_name, values) == public_name,
-               {:ok, tools} when is_list(tools) <- list_advertised_tools(mod, client, capabilities) do
+               {:ok, tools} when is_list(tools) <-
+                 list_advertised_tools(mod, client, capabilities) do
             {:cont, {:ok, acc ++ Enum.map(tools, &scrub_remote_tool(&1, values))}}
           else
             _ -> {:halt, {:error, :discovery_failed}}
@@ -741,7 +754,12 @@ defmodule LemonSkills.McpSource do
                         execution_name(profile_name, url, raw_name)
 
                       {:utility, _, _} ->
-                        profile_alias(profile_name, url, {:utility, approval_selector(original_name)}, tool.name)
+                        profile_alias(
+                          profile_name,
+                          url,
+                          {:utility, approval_selector(original_name)},
+                          tool.name
+                        )
                     end
                   else
                     legacy_execution_name(tool.name, server_name, original_name)
@@ -1092,7 +1110,9 @@ defmodule LemonSkills.McpSource do
         oauth: oauth,
         timeout: client_start_timeout(oauth, opts),
         timeout_ms: Keyword.get(opts, :timeout_ms, @client_request_timeout_ms)
-      ] ++ Keyword.take(opts, [:origin_policy, :destination_pin]) ++ oauth_token_cache_opts(url, opts)
+      ] ++
+        Keyword.take(opts, [:origin_policy, :destination_pin]) ++
+        oauth_token_cache_opts(url, opts)
 
     with {:ok, client_mod} <- http_client_module(),
          {:ok, client} <- apply(client_mod, :start_link, [client_opts]),
@@ -1892,12 +1912,15 @@ defmodule LemonSkills.McpSource do
     %{
       "name" => if(scrub_inventory(name, values) == name, do: name, else: nil),
       "description" =>
-        scrub_inventory(map_value(tool, "description") || map_value(tool, :description) || "", values),
-      "inputSchema" =>
-        if(safe_inventory_schema?(schema, values), do: schema, else: nil),
+        scrub_inventory(
+          map_value(tool, "description") || map_value(tool, :description) || "",
+          values
+        ),
+      "inputSchema" => if(safe_inventory_schema?(schema, values), do: schema, else: nil),
       "annotations" => %{
         "readOnlyHint" =>
-          (map_value(annotations, "readOnlyHint") || map_value(annotations, :readOnlyHint)) === true
+          (map_value(annotations, "readOnlyHint") || map_value(annotations, :readOnlyHint)) ===
+            true
       }
     }
   end
@@ -1919,7 +1942,10 @@ defmodule LemonSkills.McpSource do
   end
 
   defp scrub_inventory(value, values) when is_map(value),
-    do: Map.new(value, fn {key, nested} -> {scrub_inventory(key, values), scrub_inventory(nested, values)} end)
+    do:
+      Map.new(value, fn {key, nested} ->
+        {scrub_inventory(key, values), scrub_inventory(nested, values)}
+      end)
 
   defp scrub_inventory(value, values) when is_list(value),
     do: Enum.map(value, &scrub_inventory(&1, values))

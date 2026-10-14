@@ -54,8 +54,10 @@ defmodule LemonCore.RouterBridgeTest do
 
   defmodule ReceiptOrchestrator do
     def submit(_request), do: {:error, :unavailable}
+
     def submit_with_receipt(request) do
       send(self(), {:receipt_submitted, request.run_id})
+
       case Process.get(:bridge_receipt_result) do
         :raise -> raise "receipt callback failed after dispatch"
         result -> result
@@ -225,10 +227,23 @@ defmodule LemonCore.RouterBridgeTest do
   describe "submit_run_with_receipt/1" do
     test "preserves fixed instruction ID and actual target rather than requested mode" do
       :ok = RouterBridge.configure(run_orchestrator: ReceiptOrchestrator)
-      request = RunRequest.new(%{run_id: "fixed-intent", session_key: "agent:bridge:main",
-        prompt: "instruction", queue_mode: :steer})
-      receipt = %{run_id: "fixed-intent", session_key: request.session_key, state: :accepted,
-        effective_mode: :queued, target_run_id: "fixed-intent"}
+
+      request =
+        RunRequest.new(%{
+          run_id: "fixed-intent",
+          session_key: "agent:bridge:main",
+          prompt: "instruction",
+          queue_mode: :steer
+        })
+
+      receipt = %{
+        run_id: "fixed-intent",
+        session_key: request.session_key,
+        state: :accepted,
+        effective_mode: :queued,
+        target_run_id: "fixed-intent"
+      }
+
       Process.put(:bridge_receipt_result, {:ok, receipt})
       assert {:ok, ^receipt} = RouterBridge.submit_run_with_receipt(request)
       assert_receive {:receipt_submitted, "fixed-intent"}
@@ -236,15 +251,29 @@ defmodule LemonCore.RouterBridgeTest do
 
     test "wrong identity, malformed receipt and post-dispatch exceptions remain unknown" do
       :ok = RouterBridge.configure(run_orchestrator: ReceiptOrchestrator)
-      request = RunRequest.new(%{run_id: "fixed-intent", session_key: "agent:bridge:main",
-        prompt: "instruction"})
-      receipt = %{run_id: "foreign-intent", session_key: request.session_key,
-        state: :accepted, effective_mode: :new_run, target_run_id: "foreign-intent"}
+
+      request =
+        RunRequest.new(%{
+          run_id: "fixed-intent",
+          session_key: "agent:bridge:main",
+          prompt: "instruction"
+        })
+
+      receipt = %{
+        run_id: "foreign-intent",
+        session_key: request.session_key,
+        state: :accepted,
+        effective_mode: :new_run,
+        target_run_id: "foreign-intent"
+      }
+
       for result <- [{:ok, receipt}, {:ok, %{}}, :raise] do
         Process.put(:bridge_receipt_result, result)
+
         capture_log(fn ->
           assert {:error, :outcome_unknown} = RouterBridge.submit_run_with_receipt(request)
         end)
+
         assert_receive {:receipt_submitted, "fixed-intent"}
       end
     end

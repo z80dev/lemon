@@ -62,8 +62,11 @@ defmodule LemonSkills.McpSession do
           }
 
           Enum.reduce(
-            [{"enabledTools", :enabledTools}, {"allowedOrigins", :allowedOrigins},
-             {"approvedPrivateOrigins", :approvedPrivateOrigins}],
+            [
+              {"enabledTools", :enabledTools},
+              {"allowedOrigins", :allowedOrigins},
+              {"approvedPrivateOrigins", :approvedPrivateOrigins}
+            ],
             config,
             fn {key, atom}, config ->
               if Map.has_key?(raw, key) or Map.has_key?(raw, atom),
@@ -80,9 +83,11 @@ defmodule LemonSkills.McpSession do
          {:ok, configs} <- normalize_configs(configs),
          {:ok, configs} <- pin_http_destinations(configs),
          {:ok, configs} <- resolve_http_secrets(configs) do
-      configs = Enum.map(configs, fn {:http, url, opts} ->
-        {:http, url, Keyword.put(opts, :profile_owned, true)}
-      end)
+      configs =
+        Enum.map(configs, fn {:http, url, opts} ->
+          {:http, url, Keyword.put(opts, :profile_owned, true)}
+        end)
+
       request({:open, id, Path.expand(cwd), configs, owner_pid}, {:error, :runtime_unavailable})
     end
   end
@@ -142,7 +147,9 @@ defmodule LemonSkills.McpSession do
       case resolve_header(value) do
         {:ok, resolved, secrets} ->
           {:cont, {:ok, [{name, resolved} | acc], [value, resolved | secrets] ++ values}}
-        {:error, _} = error -> {:halt, error}
+
+        {:error, _} = error ->
+          {:halt, error}
       end
     end)
     |> case do
@@ -154,8 +161,9 @@ defmodule LemonSkills.McpSession do
   defp resolve_header(value) do
     with {:ok, parts, secrets} <- resolve_header_segments(value, [], []),
          resolved <- parts |> Enum.reverse() |> IO.iodata_to_binary(),
-         true <- byte_size(resolved) <= 8_192 and String.valid?(resolved) and
-                   not String.contains?(resolved, ["\r", "\n", <<0>>]) do
+         true <-
+           byte_size(resolved) <= 8_192 and String.valid?(resolved) and
+             not String.contains?(resolved, ["\r", "\n", <<0>>]) do
       {:ok, resolved, secrets}
     else
       _ -> {:error, :secret_resolution_failed}
@@ -180,8 +188,9 @@ defmodule LemonSkills.McpSession do
             name = binary_part(rest, 0, length)
             tail = binary_part(rest, length + 1, byte_size(rest) - length - 1)
 
-            with true <- name == String.trim(name) and byte_size(name) <= 512 and
-                           not String.contains?(name, ["{", "\r", "\n", <<0>>]),
+            with true <-
+                   name == String.trim(name) and byte_size(name) <= 512 and
+                     not String.contains?(name, ["{", "\r", "\n", <<0>>]),
                  {:ok, secret} when is_binary(secret) <- LemonCore.Secrets.get(name) do
               resolve_header_segments(tail, [secret, prefix | parts], [secret, name | secrets])
             else
@@ -426,8 +435,8 @@ defmodule LemonSkills.McpSession do
          not Map.has_key?(raw, key) or
            (is_list(raw[key]) and length(raw[key]) <= 32 and Enum.all?(raw[key], &valid_string?/1))
        end),
-      do: :ok,
-      else: {:error, :invalid_config}
+       do: :ok,
+       else: {:error, :invalid_config}
   end
 
   defp valid_connection_options?(raw) do

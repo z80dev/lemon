@@ -72,7 +72,6 @@ defmodule LemonCore.UsageLedger do
   def record(server \\ __MODULE__, entry) when is_map(entry),
     do: GenServer.call(server, {:record, entry})
 
-
   @doc "Extracts actual per-call usage, falling back to explicitly incomplete historical totals."
   def entries(run_id, session_key, summary) do
     completed = field(summary, :completed) || %{}
@@ -85,8 +84,11 @@ defmodule LemonCore.UsageLedger do
         |> Enum.flat_map(fn {occurrence, index} ->
           occurrence_summary = %{
             completed: %{usage: field(occurrence, :usage)},
-            meta: %{model: field(occurrence, :model), provider: field(occurrence, :provider),
-                    agent_id: field(field(summary, :meta), :agent_id)},
+            meta: %{
+              model: field(occurrence, :model),
+              provider: field(occurrence, :provider),
+              agent_id: field(field(summary, :meta), :agent_id)
+            },
             completed_at_ms: field(occurrence, :at_ms),
             occurrence: index
           }
@@ -104,6 +106,7 @@ defmodule LemonCore.UsageLedger do
         end
     end
   end
+
   @doc """
   Builds a usage entry from a finalized run summary, or `nil` when the run
   reported no usage at all.
@@ -137,10 +140,14 @@ defmodule LemonCore.UsageLedger do
         output: output || 0,
         cost: cost,
         price_known: not is_nil(cost),
-        total_tokens: first_integer(usage, [:total_tokens]) ||
-          (input || 0) + (output || 0) + if(cache_inclusive?(usage), do: 0, else: cache),
-        agent_id: identity(field(meta, :agent_id) ||
-          LemonCore.SessionKey.agent_id(session_key || field(summary, :session_key) || "")),
+        total_tokens:
+          first_integer(usage, [:total_tokens]) ||
+            (input || 0) + (output || 0) + if(cache_inclusive?(usage), do: 0, else: cache),
+        agent_id:
+          identity(
+            field(meta, :agent_id) ||
+              LemonCore.SessionKey.agent_id(session_key || field(summary, :session_key) || "")
+          ),
         at_ms: timestamp(field(summary, :completed_at_ms)),
         occurrence: field(summary, :occurrence) || 0
       }
@@ -175,22 +182,32 @@ defmodule LemonCore.UsageLedger do
         projection = %{entry | cost: entry.cost || 0.0}
         now_ms = System.system_time(:millisecond)
         at_ms = Map.get(entry, :at_ms) || now_ms
-        today = DateTime.from_unix!(at_ms, :millisecond) |> DateTime.to_date() |> Date.to_iso8601()
+
+        today =
+          DateTime.from_unix!(at_ms, :millisecond) |> DateTime.to_date() |> Date.to_iso8601()
+
         daily = UsageStore.get_record(store, today) || %{date: today}
-        with :ok <- UsageStore.put_record(store, today, add_to_record(daily, projection, today, at_ms)) do
+
+        with :ok <-
+               UsageStore.put_record(store, today, add_to_record(daily, projection, today, at_ms)) do
           if today == Date.to_iso8601(Date.utc_today()) do
-            summary = case UsageStore.get_summary(store, :current) do
-              %{date: ^today} = summary -> summary
-              _ -> %{date: today}
-            end
+            summary =
+              case UsageStore.get_summary(store, :current) do
+                %{date: ^today} = summary -> summary
+                _ -> %{date: today}
+              end
+
             UsageStore.put_summary(store, :current, add_to_summary(summary, projection))
           else
             :ok
           end
         end
 
-      {:error, :exists} -> :ok
-      {:error, _} = error -> error
+      {:error, :exists} ->
+        :ok
+
+      {:error, _} = error ->
+        error
     end
   end
 
@@ -199,16 +216,24 @@ defmodule LemonCore.UsageLedger do
   @doc false
   def occurrence_record(entry) do
     occurrence = Map.get(entry, :occurrence, 0)
-    id = :crypto.hash(:sha256, :erlang.term_to_binary({entry.run_id, occurrence}))
-         |> Base.url_encode64(padding: false)
+
+    id =
+      :crypto.hash(:sha256, :erlang.term_to_binary({entry.run_id, occurrence}))
+      |> Base.url_encode64(padding: false)
 
     %{
-      id: id, run_id: entry.run_id, session_key: entry.session_key,
-      agent_id: Map.get(entry, :agent_id), at_ms: Map.get(entry, :at_ms),
-      provider: entry.provider, model: entry.model,
-      input_tokens: entry.input, output_tokens: entry.output,
+      id: id,
+      run_id: entry.run_id,
+      session_key: entry.session_key,
+      agent_id: Map.get(entry, :agent_id),
+      at_ms: Map.get(entry, :at_ms),
+      provider: entry.provider,
+      model: entry.model,
+      input_tokens: entry.input,
+      output_tokens: entry.output,
       total_tokens: Map.get(entry, :total_tokens, entry.input + entry.output),
-      cost_usd: entry.cost, price_known: Map.get(entry, :price_known, not is_nil(entry.cost))
+      cost_usd: entry.cost,
+      price_known: Map.get(entry, :price_known, not is_nil(entry.cost))
     }
   end
 
@@ -218,8 +243,11 @@ defmodule LemonCore.UsageLedger do
     record = Map.put(record, :date, date)
 
     record
-    |> Map.put(:unknown_cost_records, integer(record[:unknown_cost_records]) +
-      if(is_nil(Map.get(entry, :price_known)) or entry.price_known, do: 0, else: 1))
+    |> Map.put(
+      :unknown_cost_records,
+      integer(record[:unknown_cost_records]) +
+        if(is_nil(Map.get(entry, :price_known)) or entry.price_known, do: 0, else: 1)
+    )
     |> Map.put(:total_cost, number(record[:total_cost]) + entry.cost)
     |> Map.put(:breakdown, bump(record[:breakdown], provider, entry.cost))
     |> Map.put(:requests, bump(record[:requests], provider, 1))
@@ -328,10 +356,11 @@ defmodule LemonCore.UsageLedger do
   defp label(_), do: nil
 
   defp cost(usage) do
-    value = case field(usage, :cost) do
-      %{} = cost -> to_float(field(plain_map(cost), :total))
-      cost -> to_float(cost)
-    end
+    value =
+      case field(usage, :cost) do
+        %{} = cost -> to_float(field(plain_map(cost), :total))
+        cost -> to_float(cost)
+      end
 
     case field(usage, :price_known) do
       false -> nil
@@ -346,6 +375,7 @@ defmodule LemonCore.UsageLedger do
   defp identity(value) when is_binary(value) and byte_size(value) in 1..1024 do
     if String.valid?(value), do: value, else: nil
   end
+
   defp identity(_), do: nil
 
   # `:prompt_tokens` already includes cached input in the APIs that report it.

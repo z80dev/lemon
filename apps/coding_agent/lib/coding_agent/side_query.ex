@@ -159,7 +159,11 @@ defmodule CodingAgent.SideQuery do
     source_identity = {
       MapHelpers.get_key(source_context, :invocation_context_key),
       MapHelpers.get_key(source_context, :memory_context_key),
-      Map.get(source_context, :memory_context_verified, Map.get(source_context, "memory_context_verified")) == true
+      Map.get(
+        source_context,
+        :memory_context_verified,
+        Map.get(source_context, "memory_context_verified")
+      ) == true
     }
 
     requested_identity = {

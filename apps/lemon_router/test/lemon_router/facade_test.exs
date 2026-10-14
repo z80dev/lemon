@@ -116,6 +116,7 @@ defmodule LemonRouter.FacadeTest do
     test "an unresponsive controller cannot turn an empty registry into an idle snapshot" do
       pid = Process.whereis(LemonRouter.RunOrchestrator)
       :ok = :sys.suspend(pid)
+
       try do
         assert {:error, :query_failed} = LemonRouter.active_runs()
       after

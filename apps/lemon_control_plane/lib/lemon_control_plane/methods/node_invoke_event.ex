@@ -80,7 +80,8 @@ defmodule LemonControlPlane.Methods.NodeInvokeEvent do
         {:error, Errors.invalid_request("Only coding_agent.run invocations may stream events")}
 
       {:error, :sequence_gap} ->
-        {:error, Errors.conflict("Event sequence must immediately follow the latest accepted event")}
+        {:error,
+         Errors.conflict("Event sequence must immediately follow the latest accepted event")}
 
       {:error, :invalid_seq} ->
         {:error, Errors.invalid_request("seq must be a positive integer")}

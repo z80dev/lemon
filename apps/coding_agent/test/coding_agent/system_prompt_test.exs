@@ -237,9 +237,10 @@ defmodule CodingAgent.SystemPromptTest do
   end
 
   @tag :tmp_dir
-  test "JSON persona snapshots retain destination USER additions and deletions across bootstraps", %{
-    tmp_dir: tmp_dir
-  } do
+  test "JSON persona snapshots retain destination USER additions and deletions across bootstraps",
+       %{
+         tmp_dir: tmp_dir
+       } do
     workspace_dir = Path.join(tmp_dir, "destination-workspace")
     File.mkdir_p!(workspace_dir)
     File.write!(Path.join(workspace_dir, "TOOLS.md"), "destination-local-tool-instructions")
@@ -274,7 +275,10 @@ defmodule CodingAgent.SystemPromptTest do
     retained_fact = "Prefers concise weekly updates."
     removed_fact = "Prefers handmade wooden birthday gifts."
 
-    for {fact, call_id} <- [{retained_fact, "remember-retained"}, {removed_fact, "remember-removed"}] do
+    for {fact, call_id} <- [
+          {retained_fact, "remember-retained"},
+          {removed_fact, "remember-removed"}
+        ] do
       assert %{details: %{target: "user", action: "add", changed: true}} =
                remember.execute.(call_id, %{"target" => "user", "text" => fact}, nil, nil)
     end

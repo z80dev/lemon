@@ -36,7 +36,6 @@ defmodule CodingAgent.ToolPolicy do
           | :no_external
           | :custom
 
-
   # ============================================================================
   # Profile Creation
   # ============================================================================
@@ -113,6 +112,7 @@ defmodule CodingAgent.ToolPolicy do
   @spec requires_approval?(policy() | map(), String.t()) :: boolean()
   def requires_approval?(policy, tool_name) when is_map(policy) and is_binary(tool_name) do
     policy = LemonCore.ToolPolicy.expand(policy)
+
     require_approval =
       normalize_string_list(
         Map.get(policy, :require_approval) || Map.get(policy, "require_approval")
@@ -280,6 +280,7 @@ defmodule CodingAgent.ToolPolicy do
   @spec from_map(map()) :: policy()
   def from_map(map) do
     map = LemonCore.ToolPolicy.expand(map)
+
     %{
       allow: normalize_allow(Map.get(map, "allow") || Map.get(map, :allow)),
       deny: normalize_string_list(Map.get(map, "deny") || Map.get(map, :deny)),

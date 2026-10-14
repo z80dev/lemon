@@ -136,8 +136,14 @@ defmodule CodingAgent.Session.Lifecycle do
       |> Keyword.put(:invocation_context_key, (approval_context || %{})[:invocation_context_key])
       |> Keyword.put(:invocation_mcp_servers, (approval_context || %{})[:invocation_mcp_servers])
       |> Keyword.put(:memory_context_key, (approval_context || %{})[:memory_context_key])
-      |> Keyword.put(:memory_context_verified, (approval_context || %{})[:memory_context_verified] == true)
-      |> Keyword.put(:shared_memory_grant, (approval_context || %{})[:shared_memory_grant] == true)
+      |> Keyword.put(
+        :memory_context_verified,
+        (approval_context || %{})[:memory_context_verified] == true
+      )
+      |> Keyword.put(
+        :shared_memory_grant,
+        (approval_context || %{})[:shared_memory_grant] == true
+      )
       |> Keyword.merge(private_native_opts(approval_context))
       |> Keyword.put(:wasm_tools, wasm_boot.wasm_tools)
       |> Keyword.put(:wasm_status, wasm_boot.wasm_status)
@@ -209,7 +215,8 @@ defmodule CodingAgent.Session.Lifecycle do
               profile_instructions: profile_instructions,
               invocation_context_key: (approval_context || %{})[:invocation_context_key],
               memory_context_key: (approval_context || %{})[:memory_context_key],
-              memory_context_verified: (approval_context || %{})[:memory_context_verified] == true,
+              memory_context_verified:
+                (approval_context || %{})[:memory_context_verified] == true,
               shared_memory_grant: (approval_context || %{})[:shared_memory_grant] == true,
               environment: prompt_environment
             }
@@ -393,35 +400,37 @@ defmodule CodingAgent.Session.Lifecycle do
   def reload_extensions(state) do
     wasm_reload = WasmBridge.reload_wasm_tools(state)
 
-    tool_opts = [
-      model: state.model,
-      thinking_level: state.thinking_level,
-      parent_session: state.session_manager.header.id,
-      session_id: state.session_manager.header.id,
-      session_pid: self(),
-      run_id: state.run_id,
-      session_key: state.session_key,
-      agent_id: state.agent_id,
-      settings_manager: state.settings_manager,
-      workspace_dir: state.workspace_dir,
-      mcp_session_id: state.mcp_session_id,
-      acp_mcp_session_id: state.acp_mcp_session_id,
-      session_scope: state.session_scope,
-      task_child: state.task_child,
-      task_depth: state.task_depth,
-      task_allowed_agents: state.task_allowed_agents,
-      tool_policy: state.tool_policy,
-      approval_context: state.approval_context,
-      invocation_context_key: (state.approval_context || %{})[:invocation_context_key],
-      invocation_mcp_servers: (state.approval_context || %{})[:invocation_mcp_servers],
-      memory_context_key: (state.approval_context || %{})[:memory_context_key],
-      memory_context_verified: (state.approval_context || %{})[:memory_context_verified] == true,
-      shared_memory_grant: (state.approval_context || %{})[:shared_memory_grant] == true,
-      wasm_tools: wasm_reload.wasm_tools,
-      wasm_status: wasm_reload.wasm_status,
-      tool_disclosure: state.tool_disclosure
-    ]
-    |> Keyword.merge(private_native_opts(state.approval_context))
+    tool_opts =
+      [
+        model: state.model,
+        thinking_level: state.thinking_level,
+        parent_session: state.session_manager.header.id,
+        session_id: state.session_manager.header.id,
+        session_pid: self(),
+        run_id: state.run_id,
+        session_key: state.session_key,
+        agent_id: state.agent_id,
+        settings_manager: state.settings_manager,
+        workspace_dir: state.workspace_dir,
+        mcp_session_id: state.mcp_session_id,
+        acp_mcp_session_id: state.acp_mcp_session_id,
+        session_scope: state.session_scope,
+        task_child: state.task_child,
+        task_depth: state.task_depth,
+        task_allowed_agents: state.task_allowed_agents,
+        tool_policy: state.tool_policy,
+        approval_context: state.approval_context,
+        invocation_context_key: (state.approval_context || %{})[:invocation_context_key],
+        invocation_mcp_servers: (state.approval_context || %{})[:invocation_mcp_servers],
+        memory_context_key: (state.approval_context || %{})[:memory_context_key],
+        memory_context_verified:
+          (state.approval_context || %{})[:memory_context_verified] == true,
+        shared_memory_grant: (state.approval_context || %{})[:shared_memory_grant] == true,
+        wasm_tools: wasm_reload.wasm_tools,
+        wasm_status: wasm_reload.wasm_status,
+        tool_disclosure: state.tool_disclosure
+      ]
+      |> Keyword.merge(private_native_opts(state.approval_context))
 
     lifecycle =
       ExtensionLifecycle.reload(
@@ -564,18 +573,23 @@ defmodule CodingAgent.Session.Lifecycle do
 
   defp resolve_approval_context(opts, session_id, tool_policy) do
     approval_context = Keyword.get(opts, :approval_context)
-    native_managed? = CodingAgent.Tools.Task.Params.managed_context?(
-      Map.merge(Map.new(opts), approval_context || %{}))
+
+    native_managed? =
+      CodingAgent.Tools.Task.Params.managed_context?(
+        Map.merge(Map.new(opts), approval_context || %{})
+      )
 
     invocation_context_key =
       LemonCore.MapHelpers.get_key(approval_context, :invocation_context_key) ||
         Keyword.get(opts, :invocation_context_key)
+
     invocation_mcp_servers =
       Keyword.get(
         opts,
         :invocation_mcp_servers,
         (approval_context || %{})[:invocation_mcp_servers]
       )
+
     memory_context_key =
       Keyword.get(
         opts,
@@ -605,31 +619,37 @@ defmodule CodingAgent.Session.Lifecycle do
         )
       ) == true
 
-    context = if is_nil(approval_context) &&
-         (tool_policy || invocation_context_key || memory_context_key || memory_context_verified ||
-            shared_memory_grant || not is_nil(invocation_mcp_servers)) do
-      %{
-        session_key: Keyword.get(opts, :session_key, session_id),
-        session_id: session_id,
-        agent_id: Keyword.get(opts, :agent_id, "default"),
-        run_id: Keyword.get(opts, :run_id),
-        invocation_context_key: invocation_context_key,
-        memory_context_key: memory_context_key,
-        memory_context_verified: memory_context_verified,
-        shared_memory_grant: shared_memory_grant,
-        invocation_mcp_servers: invocation_mcp_servers,
-        timeout_ms: Keyword.get(opts, :approval_timeout_ms, :infinity)
-      }
-    else
-      approval_context
-      |> maybe_put_session_id(session_id)
-      |> maybe_put_execution_identity(opts, session_id)
-      |> maybe_put_invocation_context_key(invocation_context_key)
-      |> maybe_put_invocation_mcp_servers(invocation_mcp_servers)
-      |> maybe_put_memory_context(memory_context_key, memory_context_verified, shared_memory_grant)
-    end
+    context =
+      if is_nil(approval_context) &&
+           (tool_policy || invocation_context_key || memory_context_key || memory_context_verified ||
+              shared_memory_grant || not is_nil(invocation_mcp_servers)) do
+        %{
+          session_key: Keyword.get(opts, :session_key, session_id),
+          session_id: session_id,
+          agent_id: Keyword.get(opts, :agent_id, "default"),
+          run_id: Keyword.get(opts, :run_id),
+          invocation_context_key: invocation_context_key,
+          memory_context_key: memory_context_key,
+          memory_context_verified: memory_context_verified,
+          shared_memory_grant: shared_memory_grant,
+          invocation_mcp_servers: invocation_mcp_servers,
+          timeout_ms: Keyword.get(opts, :approval_timeout_ms, :infinity)
+        }
+      else
+        approval_context
+        |> maybe_put_session_id(session_id)
+        |> maybe_put_execution_identity(opts, session_id)
+        |> maybe_put_invocation_context_key(invocation_context_key)
+        |> maybe_put_invocation_mcp_servers(invocation_mcp_servers)
+        |> maybe_put_memory_context(
+          memory_context_key,
+          memory_context_verified,
+          shared_memory_grant
+        )
+      end
 
     private = Map.new(Keyword.take(opts, private_native_fields()))
+
     if is_map(context),
       do: Map.merge(private, context) |> Map.put(:native_managed_context, native_managed?),
       else: context
@@ -637,13 +657,20 @@ defmodule CodingAgent.Session.Lifecycle do
 
   defp private_native_fields do
     [
-      :native_lineage_handle, :native_lineage_run_id, :native_source_profile_id,
-      :native_source_session_key, :native_followup_submit, :native_source_floor_fun,
-      :invocation_proof, :invocation_proof_verified, :native_managed_context
+      :native_lineage_handle,
+      :native_lineage_run_id,
+      :native_source_profile_id,
+      :native_source_session_key,
+      :native_followup_submit,
+      :native_source_floor_fun,
+      :invocation_proof,
+      :invocation_proof_verified,
+      :native_managed_context
     ]
   end
 
-  defp private_native_opts(context), do: Map.to_list(Map.take(context || %{}, private_native_fields()))
+  defp private_native_opts(context),
+    do: Map.to_list(Map.take(context || %{}, private_native_fields()))
 
   defp maybe_put_session_id(approval_context, session_id) when is_map(approval_context) do
     Map.put(approval_context, :session_id, approval_context[:session_id] || session_id)

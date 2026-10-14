@@ -122,22 +122,34 @@ defmodule LemonControlPlane.Methods.NodePairApprove do
         {:error, Errors.conflict("Approved pairing node is no longer available")}
     end
   end
+
   defp approve_invite_repair(pairing_id, request, now) do
     with {:ok, node} when is_map(node) <- NodeStore.validate_repair_binding(request),
          node_id = get_field(request, :node_id),
          node_name = get_field(node, :name),
          :ok <- NodeStore.reserve_node_name(node_name, node_id) do
       {token, updated} = recovery_credential(request, node)
-      updated = put_fields(updated, %{
-        purpose: get_field(request, :purpose),
-        labels: get_field(request, :labels) || %{},
-        enrollment_invite_id: get_field(request, :invite_id)
-      })
+
+      updated =
+        put_fields(updated, %{
+          purpose: get_field(request, :purpose),
+          labels: get_field(request, :labels) || %{},
+          enrollment_invite_id: get_field(request, :invite_id)
+        })
 
       case LemonCore.Store.compare_and_swap(:nodes_registry, node_id, node, updated) do
         :ok ->
-          issue_challenge(pairing_id, request, node_id, node_name, get_field(node, :type),
-            get_field(node, :capabilities) || %{}, token, now, true)
+          issue_challenge(
+            pairing_id,
+            request,
+            node_id,
+            node_name,
+            get_field(node, :type),
+            get_field(node, :capabilities) || %{},
+            token,
+            now,
+            true
+          )
 
         {:error, :mismatch} ->
           {:error, Errors.unauthorized("Repair invitation generation is stale")}
@@ -146,11 +158,13 @@ defmodule LemonControlPlane.Methods.NodePairApprove do
           {:error, Errors.unavailable("Node repair store is unavailable")}
       end
     else
-      {:error, :store_unavailable} -> {:error, Errors.unavailable("Node repair store is unavailable")}
-      _ -> {:error, Errors.unauthorized("Repair invitation generation is stale")}
+      {:error, :store_unavailable} ->
+        {:error, Errors.unavailable("Node repair store is unavailable")}
+
+      _ ->
+        {:error, Errors.unauthorized("Repair invitation generation is stale")}
     end
   end
-
 
   defp approve_pairing(pairing_id, request, node_name, node_type, capabilities, now) do
     node_id = LemonCore.Id.uuid()
@@ -360,10 +374,11 @@ defmodule LemonControlPlane.Methods.NodePairApprove do
       {:ok, binding, _node} ->
         if invite_repair?(request) and
              binding.session_generation != get_field(request, :session_generation),
-          do: {:error, :stale_session_generation},
-          else: {:ok, Map.put(binding, :node_name, node_name)}
+           do: {:error, :stale_session_generation},
+           else: {:ok, Map.put(binding, :node_name, node_name)}
 
-      {:error, _} = error -> error
+      {:error, _} = error ->
+        error
     end
   end
 
@@ -387,12 +402,12 @@ defmodule LemonControlPlane.Methods.NodePairApprove do
       {token, put_fields(node, %{token_hash: hash_token(token)})}
     end
   end
+
   defp put_fields(record, fields) do
     record
     |> Map.drop(Enum.map(Map.keys(fields), &Atom.to_string/1))
     |> Map.merge(fields)
   end
-
 
   defp maybe_put_node_token(response, token) when is_binary(token),
     do: Map.put(response, "token", token)

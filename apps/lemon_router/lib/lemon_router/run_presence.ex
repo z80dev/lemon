@@ -28,6 +28,7 @@ defmodule LemonRouter.RunPresence do
       entries = Enum.reduce(entries, %{}, &merge_entry/2) |> Map.values()
       scoped = Enum.flat_map(entries, &scope_entry(&1, filters))
       counts = Enum.frequencies_by(scoped, & &1.status)
+
       presence = %{
         active: Map.get(counts, :active, 0),
         queued: Map.get(counts, :queued, 0),
@@ -40,8 +41,12 @@ defmodule LemonRouter.RunPresence do
         entries
         |> Enum.filter(&(&1.status == :active))
         |> Enum.flat_map(&scope_entry(&1, filters))
-        |> Enum.map(&Map.merge(%{session_key: nil, agent_id: nil, profile_id: nil,
-                                engine: nil, started_at_ms: nil}, &1))
+        |> Enum.map(
+          &Map.merge(
+            %{session_key: nil, agent_id: nil, profile_id: nil, engine: nil, started_at_ms: nil},
+            &1
+          )
+        )
         |> Enum.sort_by(&(&1.started_at_ms || 0), :desc)
 
       {:ok, %{runs: runs, presence: presence}}
@@ -106,16 +111,24 @@ defmodule LemonRouter.RunPresence do
         when mode in @absorbed_modes and target != id ->
           work_id(target, receipts, MapSet.put(visited, id))
 
-        _ -> {:ok, id}
+        _ ->
+          {:ok, id}
       end
     end
   end
 
   defp scope(admission, receipt) do
     stored = MapHelpers.get_key(admission, :scope) || %{}
-    scope = Map.new(@scope_keys, fn key -> {key, MapHelpers.get_key(receipt, key) || MapHelpers.get_key(stored, key)} end)
-    dependencies = LemonRouter.NativeLineage.dependent_profile_ids(admission) ++
-      Map.get(receipt, :dependent_profile_ids, [])
+
+    scope =
+      Map.new(@scope_keys, fn key ->
+        {key, MapHelpers.get_key(receipt, key) || MapHelpers.get_key(stored, key)}
+      end)
+
+    dependencies =
+      LemonRouter.NativeLineage.dependent_profile_ids(admission) ++
+        Map.get(receipt, :dependent_profile_ids, [])
+
     Map.put(scope, :dependent_profile_ids, Enum.uniq(dependencies))
   end
 
@@ -124,9 +137,16 @@ defmodule LemonRouter.RunPresence do
       # Live scope is authoritative, but a metadata timeout must not erase
       # content-free attribution already established by the admission owner.
       merged = Map.merge(previous, Map.reject(entry, fn {_key, value} -> is_nil(value) end))
-      dependencies = Map.get(previous, :dependent_profile_ids, []) ++ Map.get(entry, :dependent_profile_ids, [])
+
+      dependencies =
+        Map.get(previous, :dependent_profile_ids, []) ++
+          Map.get(entry, :dependent_profile_ids, [])
+
       merged = Map.put(merged, :dependent_profile_ids, Enum.uniq(dependencies))
-      status = if rank(previous.status) > rank(entry.status), do: previous.status, else: entry.status
+
+      status =
+        if rank(previous.status) > rank(entry.status), do: previous.status, else: entry.status
+
       Map.put(merged, :status, status)
     end)
   end
@@ -145,9 +165,15 @@ defmodule LemonRouter.RunPresence do
               is_nil(value) -> :unknown
               true -> :different
             end
-          {_, nil} -> :unknown
-          {_, ^filter} -> :match
-          _ -> :different
+
+          {_, nil} ->
+            :unknown
+
+          {_, ^filter} ->
+            :match
+
+          _ ->
+            :different
         end
       end
 

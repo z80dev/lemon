@@ -22,7 +22,9 @@ defmodule CodingAgent.ToolRegistryTest do
     :ok
   end
 
-  test "direct registry approval options retain private namespace and actual agent", %{tmp_dir: tmp_dir} do
+  test "direct registry approval options retain private namespace and actual agent", %{
+    tmp_dir: tmp_dir
+  } do
     owner = self()
     path = Path.join(tmp_dir, "registry-denied.txt")
 

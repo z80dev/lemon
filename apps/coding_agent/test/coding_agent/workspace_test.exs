@@ -217,22 +217,38 @@ defmodule CodingAgent.WorkspaceTest do
   end
 
   @tag :tmp_dir
-  test "context-owned bootstrap projects only canonical shared facts, never raw or private preferences", %{tmp_dir: tmp_dir} do
+  test "context-owned bootstrap projects only canonical shared facts, never raw or private preferences",
+       %{tmp_dir: tmp_dir} do
     {store, context, opts} = scoped_workspace(tmp_dir)
     user_path = Path.join(context.workspace_dir, "USER.md")
     memory_path = Path.join(context.workspace_dir, "MEMORY.md")
     File.write!(user_path, "Unknown legacy obsidian preference.\n")
     File.write!(memory_path, "Unknown legacy onyx memory.\n")
-    assert {:ok, _} = LemonMemory.Preferences.remember(context, "user",
-      "Private azure preference.", nil, store: store)
+
+    assert {:ok, _} =
+             LemonMemory.Preferences.remember(context, "user", "Private azure preference.", nil,
+               store: store
+             )
+
     shared = Map.put(context, :shared_memory_grant, true)
-    assert {:ok, _} = LemonMemory.Preferences.remember(shared, "user",
-      "Shared sunflower preference.", nil, store: store)
-    assert {:ok, _} = LemonMemory.Preferences.remember(shared, "memory",
-      "Shared marigold memory.", nil, store: store)
+
+    assert {:ok, _} =
+             LemonMemory.Preferences.remember(shared, "user", "Shared sunflower preference.", nil,
+               store: store
+             )
+
+    assert {:ok, _} =
+             LemonMemory.Preferences.remember(shared, "memory", "Shared marigold memory.", nil,
+               store: store
+             )
+
     other = %{context | memory_context_key: "actor-b"}
-    assert {:ok, _} = LemonMemory.Preferences.remember(other, "user",
-      "Private cobalt preference.", nil, store: store)
+
+    assert {:ok, _} =
+             LemonMemory.Preferences.remember(other, "user", "Private cobalt preference.", nil,
+               store: store
+             )
+
     for key <- ["actor-a", "actor-b"] do
       files = Workspace.load_bootstrap_files(Keyword.put(opts, :memory_context_key, key))
       user = Enum.find(files, &(&1.name == "USER.md"))
@@ -243,6 +259,7 @@ defmodule CodingAgent.WorkspaceTest do
       text = Enum.map_join(files, "\n", & &1.content)
       for excluded <- ["obsidian", "onyx", "azure", "cobalt"], do: refute(text =~ excluded)
     end
+
     assert File.read!(user_path) == "Unknown legacy obsidian preference.\n"
     assert File.read!(memory_path) == "Unknown legacy onyx memory.\n"
     subagent = Workspace.load_bootstrap_files(Keyword.put(opts, :session_scope, :subagent))
@@ -250,21 +267,31 @@ defmodule CodingAgent.WorkspaceTest do
   end
 
   @tag :tmp_dir
-  test "unproven contexts and unavailable shared stores cannot fall back to legacy bootstrap files", %{tmp_dir: tmp_dir} do
+  test "unproven contexts and unavailable shared stores cannot fall back to legacy bootstrap files",
+       %{tmp_dir: tmp_dir} do
     {_store, context, opts} = scoped_workspace(tmp_dir)
     File.write!(Path.join(context.workspace_dir, "USER.md"), "Private legacy moonstone")
     File.write!(Path.join(context.workspace_dir, "MEMORY.md"), "Private legacy agate")
-    for failing_opts <- [Keyword.put(opts, :memory_context_verified, false),
-      Keyword.delete(opts, :invocation_context_key),
-      Keyword.put(opts, :memory_store, :missing_bootstrap_memory_store)] do
+
+    for failing_opts <- [
+          Keyword.put(opts, :memory_context_verified, false),
+          Keyword.delete(opts, :invocation_context_key),
+          Keyword.put(opts, :memory_store, :missing_bootstrap_memory_store)
+        ] do
       files = Workspace.load_bootstrap_files(failing_opts)
       refute Enum.any?(files, &(&1.name in ["USER.md", "MEMORY.md"]))
       text = Enum.map_join(files, "\n", & &1.content)
       refute text =~ "moonstone"
       refute text =~ "agate"
     end
-    legacy = Workspace.load_bootstrap_files(workspace_dir: context.workspace_dir,
-      memory_context_verified: false, shared_memory_grant: false)
+
+    legacy =
+      Workspace.load_bootstrap_files(
+        workspace_dir: context.workspace_dir,
+        memory_context_verified: false,
+        shared_memory_grant: false
+      )
+
     assert Enum.find(legacy, &(&1.name == "USER.md")).content =~ "moonstone"
     assert Enum.find(legacy, &(&1.name == "MEMORY.md")).content =~ "agate"
   end
@@ -274,9 +301,18 @@ defmodule CodingAgent.WorkspaceTest do
     File.mkdir_p!(workspace)
     store = :"workspace_private_#{System.unique_integer([:positive])}"
     start_supervised!({LemonMemory.Store, name: store, path: Path.join(tmp_dir, "store")})
-    context = %{workspace_dir: workspace, cwd: tmp_dir, agent_id: "bootstrap", session_scope: :main,
-      session_key: "agent:bootstrap:main", invocation_context_key: "invocation-1",
-      memory_context_key: "actor-a", memory_context_verified: true}
+
+    context = %{
+      workspace_dir: workspace,
+      cwd: tmp_dir,
+      agent_id: "bootstrap",
+      session_scope: :main,
+      session_key: "agent:bootstrap:main",
+      invocation_context_key: "invocation-1",
+      memory_context_key: "actor-a",
+      memory_context_verified: true
+    }
+
     opts = context |> Map.to_list() |> Keyword.put(:memory_store, store)
     {store, context, opts}
   end

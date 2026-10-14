@@ -134,14 +134,21 @@ defmodule LemonSkills.Tools.Remember do
            {:ok, target} <- get_target(params),
            {:ok, action} <- get_action(params) do
         cond do
-          target == "project" -> remember_project(context, action, params)
+          target == "project" ->
+            remember_project(context, action, params)
+
           memory_scope == :legacy ->
             WorkspacePreferences.remember(context.workspace_dir, target, action, params)
-          true -> remember_preferences(context, target, action, params)
+
+          true ->
+            remember_preferences(context, target, action, params)
         end
       else
-        {:error, :unproven_context} -> {:error, "remember requires a verified private memory context"}
-        error -> error
+        {:error, :unproven_context} ->
+          {:error, "remember requires a verified private memory context"}
+
+        error ->
+          error
       end
     end
   end
@@ -150,15 +157,31 @@ defmodule LemonSkills.Tools.Remember do
   defp validate_session_scope(_), do: {:error, "remember requires a main session"}
 
   defp remember_preferences(context, target, action, params) do
-    with {:ok, result} <- Preferences.remember(context, target,
-           Map.get(params, "text"), Map.get(params, "replaces"), context.store_opts) do
+    with {:ok, result} <-
+           Preferences.remember(
+             context,
+             target,
+             Map.get(params, "text"),
+             Map.get(params, "replaces"),
+             context.store_opts
+           ) do
       visibility = if ContextScope.shared_grant?(context), do: "Shared", else: "Private"
+
       %AgentToolResult{
-        content: [%TextContent{text:
-          "#{visibility} preferences #{if result.changed, do: "updated", else: "unchanged"}.\n\n" <>
-            Enum.map_join(result.facts, "\n", &("- " <> &1))}],
-        details: %{target: target, action: action, changed: result.changed,
-          facts: result.facts, memory_scope: String.downcase(visibility)}
+        content: [
+          %TextContent{
+            text:
+              "#{visibility} preferences #{if result.changed, do: "updated", else: "unchanged"}.\n\n" <>
+                Enum.map_join(result.facts, "\n", &("- " <> &1))
+          }
+        ],
+        details: %{
+          target: target,
+          action: action,
+          changed: result.changed,
+          facts: result.facts,
+          memory_scope: String.downcase(visibility)
+        }
       }
     else
       {:error, reason} when is_atom(reason) -> {:error, "Scoped preferences refused: #{reason}"}
@@ -203,7 +226,6 @@ defmodule LemonSkills.Tools.Remember do
   defp optional_text(params, key) do
     if Map.get(params, key) == nil, do: {:ok, nil}, else: get_text(params, key)
   end
-
 
   defp validate_workspace_dir(workspace_dir) when is_binary(workspace_dir) do
     if String.trim(workspace_dir) == "" do
@@ -261,5 +283,4 @@ defmodule LemonSkills.Tools.Remember do
         {:ok, String.trim(value)}
     end
   end
-
 end

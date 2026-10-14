@@ -27,8 +27,11 @@ defmodule LemonControlPlane.NodeStore do
           {:error, :invalid_invite}
         end
 
-      {:ok, _} -> {:error, :invalid_invite}
-      {:error, _} -> {:error, :store_unavailable}
+      {:ok, _} ->
+        {:error, :invalid_invite}
+
+      {:error, _} ->
+        {:error, :store_unavailable}
     end
   end
 
@@ -65,7 +68,8 @@ defmodule LemonControlPlane.NodeStore do
             {:error, :not_found}
           end
 
-        nil -> {:error, :not_found}
+        nil ->
+          {:error, :not_found}
       end
     end
   end
@@ -87,7 +91,9 @@ defmodule LemonControlPlane.NodeStore do
   @doc "Fails closed when a repair invite's durable identity or generation has changed."
   def validate_repair_binding(binding) do
     case invite_field(binding, :node_id) do
-      nil -> {:ok, nil}
+      nil ->
+        {:ok, nil}
+
       node_id when is_binary(node_id) ->
         with {:ok, current, node} <- repair_binding(node_id, invite_field(binding, :node_name)),
              true <- current.recovery_token_hash == invite_field(binding, :recovery_token_hash),
@@ -98,7 +104,8 @@ defmodule LemonControlPlane.NodeStore do
           _ -> {:error, :invalid_invite}
         end
 
-      _ -> {:error, :invalid_invite}
+      _ ->
+        {:error, :invalid_invite}
     end
   end
 
@@ -106,6 +113,7 @@ defmodule LemonControlPlane.NodeStore do
     expires_at = invite_field(invite, :expires_at_ms)
     is_integer(expires_at) and expires_at > System.system_time(:millisecond)
   end
+
   def invite_field(invite, key),
     do: Map.get(invite, key, Map.get(invite, Atom.to_string(key)))
 
@@ -123,7 +131,6 @@ defmodule LemonControlPlane.NodeStore do
   def list_pairings, do: Store.list(@pairing_table)
   @spec fetch_pairings() :: {:ok, list()} | {:error, :store_unavailable}
   def fetch_pairings, do: Store.fetch_all(@pairing_table)
-
 
   @spec put_pairing_code(binary(), binary()) :: :ok
   def put_pairing_code(code, pairing_id) when is_binary(code) and is_binary(pairing_id),
@@ -143,7 +150,6 @@ defmodule LemonControlPlane.NodeStore do
   def list_nodes, do: Store.list(@registry_table)
   @spec fetch_nodes() :: {:ok, list()} | {:error, :store_unavailable}
   def fetch_nodes, do: Store.fetch_all(@registry_table)
-
 
   @doc """
   Reserves a trimmed durable node name for one node ID. A name never equals

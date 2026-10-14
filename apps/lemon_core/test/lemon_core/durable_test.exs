@@ -30,7 +30,9 @@ defmodule LemonCore.DurableTest do
     assert {:error, :enoent} = Durable.sync_file(Path.join(dir, "missing"))
   end
 
-  test "Darwin rejects wrong descriptor kinds instead of claiming a weaker barrier", %{tmp_dir: dir} do
+  test "Darwin rejects wrong descriptor kinds instead of claiming a weaker barrier", %{
+    tmp_dir: dir
+  } do
     if match?({:unix, :darwin}, :os.type()) do
       path = Path.join(dir, "regular")
       File.write!(path, "contents")

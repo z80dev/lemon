@@ -1063,7 +1063,8 @@ defmodule LemonAutomation.CronManager do
   defp check_admission(%CronJob{admission: nil}, _run), do: :ok
 
   defp check_admission(job, run) do
-    admission = Application.get_env(:lemon_automation, :cron_admission_mod, LemonAutomation.CronAdmission)
+    admission =
+      Application.get_env(:lemon_automation, :cron_admission_mod, LemonAutomation.CronAdmission)
 
     case admission.check(job, run) do
       :ok -> :ok
@@ -1670,7 +1671,12 @@ defmodule LemonAutomation.CronManager do
          {:ok, params} <-
            validate_feature_fields(params, CronJob.execution_mode(job), job.id, job.timezone),
          {:ok, params} <-
-           validate_admission_field(params, CronJob.execution_mode(job), job.profile_id, job.admission),
+           validate_admission_field(
+             params,
+             CronJob.execution_mode(job),
+             job.profile_id,
+             job.admission
+           ),
          {:ok, params} <- normalize_schedule_patch(params) do
       {:ok, params}
     end

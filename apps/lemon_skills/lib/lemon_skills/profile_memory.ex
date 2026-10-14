@@ -45,7 +45,9 @@ defmodule LemonSkills.ProfileMemory do
       }
 
       case dispatch(operation, context, params,
-             server: Keyword.get(opts, :store, Store), memory_scope: selection) do
+             server: Keyword.get(opts, :store, Store),
+             memory_scope: selection
+           ) do
         {:ok, result} when is_map(result) -> {:ok, scope_echo(result, selection)}
         {:error, reason} when is_atom(reason) -> {:error, reason}
         _ -> {:error, :memory_unavailable}
@@ -58,10 +60,13 @@ defmodule LemonSkills.ProfileMemory do
   end
 
   defp scope_echo(result, :operator), do: result
+
   defp scope_echo(result, :shared),
     do: Map.merge(result, %{"memoryScope" => "shared", "memoryContextKey" => nil})
+
   defp scope_echo(result, {:private, key}),
     do: Map.merge(result, %{"memoryScope" => "private", "memoryContextKey" => key})
+
   defp scope_binding({:private, key}), do: ["private", key]
   defp scope_binding(scope), do: Atom.to_string(scope)
 
@@ -78,7 +83,8 @@ defmodule LemonSkills.ProfileMemory do
 
   defp validate_profile_id(profile_id) when is_binary(profile_id) do
     if byte_size(profile_id) <= 64 and Regex.match?(~r/\A[a-z0-9][a-z0-9_-]{0,63}\z/, profile_id),
-      do: :ok, else: {:error, :invalid_id}
+      do: :ok,
+      else: {:error, :invalid_id}
   end
 
   defp validate_profile_id(_), do: {:error, :invalid_id}
@@ -96,19 +102,26 @@ defmodule LemonSkills.ProfileMemory do
          {:ok, limit} <- limit(params),
          {:ok, durable} <- durable_items(operation, context, query, opts),
          {:ok, preferences} <- workspace_items(context, query, opts) do
-
       items =
         (durable.items ++ preferences)
         |> Enum.sort_by(&{-&1["updatedAtMs"], &1["id"]})
 
-      binding = digest(Jason.encode!([
-        context.agent_id, Path.expand(context.workspace_dir), scope_binding(opts[:memory_scope]), query,
-        durable.revision, items
-      ]))
+      binding =
+        digest(
+          Jason.encode!([
+            context.agent_id,
+            Path.expand(context.workspace_dir),
+            scope_binding(opts[:memory_scope]),
+            query,
+            durable.revision,
+            items
+          ])
+        )
 
       with {:ok, offset} <- cursor_offset(Map.get(params, "cursor"), binding, length(items)) do
         page = Enum.slice(items, offset, limit)
         next_offset = offset + length(page)
+
         next_cursor =
           if next_offset < length(items), do: encode_cursor(binding, next_offset), else: nil
 
@@ -128,11 +141,17 @@ defmodule LemonSkills.ProfileMemory do
     result =
       case opts[:memory_scope] do
         :operator ->
-          WorkspacePreferences.add(context.workspace_dir,
-            Map.get(params, "kind", "memory"), Map.get(params, "text"))
+          WorkspacePreferences.add(
+            context.workspace_dir,
+            Map.get(params, "kind", "memory"),
+            Map.get(params, "text")
+          )
+
         selection ->
           Preferences.add(context, Map.get(params, "kind", "memory"), Map.get(params, "text"),
-            store: opts[:server], memory_scope: selection)
+            store: opts[:server],
+            memory_scope: selection
+          )
       end
 
     with {:ok, item} <- result, do: {:ok, %{"item" => item}}
@@ -171,7 +190,9 @@ defmodule LemonSkills.ProfileMemory do
   end
 
   defp durable_items("list", context, "", opts), do: Lifecycle.profile_list(context, "", opts)
-  defp durable_items(_operation, context, query, opts), do: Lifecycle.profile_search(context, query, opts)
+
+  defp durable_items(_operation, context, query, opts),
+    do: Lifecycle.profile_search(context, query, opts)
 
   defp workspace_items(context, query, opts) do
     if opts[:memory_scope] == :operator,
@@ -184,6 +205,7 @@ defmodule LemonSkills.ProfileMemory do
 
     if Lifecycle.valid_profile_query?(value) do
       value = String.trim(value)
+
       cond do
         value == "" and operation == "list" -> {:ok, ""}
         value == "" -> {:error, :invalid_query}
@@ -203,17 +225,20 @@ defmodule LemonSkills.ProfileMemory do
 
   defp id(params) do
     value = Map.get(params, "id")
+
     if is_binary(value) and byte_size(value) <= 256 and Regex.match?(@id_pattern, value),
-      do: {:ok, value}, else: {:error, :invalid_document_id}
+      do: {:ok, value},
+      else: {:error, :invalid_document_id}
   end
 
   defp confirmation(params, id) do
-    if Map.get(params, "confirm") == id,
-      do: :ok, else: {:error, :confirmation_required}
+    if Map.get(params, "confirm") == id, do: :ok, else: {:error, :confirmation_required}
   end
 
   defp cursor_offset(nil, _binding, _count), do: {:ok, 0}
-  defp cursor_offset(cursor, binding, count) when is_binary(cursor) and byte_size(cursor) <= 512 do
+
+  defp cursor_offset(cursor, binding, count)
+       when is_binary(cursor) and byte_size(cursor) <= 512 do
     with {:ok, json} <- Base.url_decode64(cursor, padding: false),
          {:ok, %{"snapshot" => ^binding, "offset" => offset} = decoded} <- Jason.decode(json),
          true <- map_size(decoded) == 2 and is_integer(offset) and offset > 0 and offset < count do
@@ -224,7 +249,11 @@ defmodule LemonSkills.ProfileMemory do
   end
 
   defp cursor_offset(_, _, _), do: {:error, :invalid_cursor}
+
   defp encode_cursor(binding, offset),
-    do: Jason.encode!(%{"snapshot" => binding, "offset" => offset}) |> Base.url_encode64(padding: false)
+    do:
+      Jason.encode!(%{"snapshot" => binding, "offset" => offset})
+      |> Base.url_encode64(padding: false)
+
   defp digest(value), do: :crypto.hash(:sha256, value) |> Base.encode16(case: :lower)
 end

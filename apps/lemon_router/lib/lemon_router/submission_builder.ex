@@ -55,13 +55,20 @@ defmodule LemonRouter.SubmissionBuilder do
              session_key: session_key,
              origin: origin,
              channel_context: MapHelpers.get_key(meta, :channel_context),
-             native_factory_authority: Map.get(meta, :invocation_proof_verified) == true or
-               is_binary(MapHelpers.get_key(meta, :profile_id))
+             native_factory_authority:
+               Map.get(meta, :invocation_proof_verified) == true or
+                 is_binary(MapHelpers.get_key(meta, :profile_id))
            }),
          meta <- Map.put(meta, :resume_policy_override, is_map(tool_policy_override)),
          {:ok, resolved_resume, resume_source} <-
-           ResumeResolver.resolve(params.resume, session_key, meta, tool_policy, LemonCore.Store, run_id) do
-
+           ResumeResolver.resolve(
+             params.resume,
+             session_key,
+             meta,
+             tool_policy,
+             LemonCore.Store,
+             run_id
+           ) do
       cwd = resolve_effective_cwd(cwd_override, meta, origin)
 
       {prompt, pending_compaction_marker} =
@@ -175,6 +182,7 @@ defmodule LemonRouter.SubmissionBuilder do
   defp resolve_tool_policy(agent_profile, override, context) do
     base = Policy.resolve_for_run(context)
     profile = normalize_profile_tool_policy(agent_profile)
+
     if context.native_factory_authority do
       base |> LemonCore.ToolPolicy.intersect(profile) |> LemonCore.ToolPolicy.intersect(override)
     else
@@ -193,7 +201,8 @@ defmodule LemonRouter.SubmissionBuilder do
   end
 
   defp get_execution_profile(agent_id, meta) do
-    case {Map.get(meta, :invocation_proof_verified) == true, MapHelpers.get_key(meta, :profile_id)} do
+    case {Map.get(meta, :invocation_proof_verified) == true,
+          MapHelpers.get_key(meta, :profile_id)} do
       {_, ^agent_id} -> get_managed_profile(agent_id)
       {true, _} -> {:error, {:unknown_agent_id, agent_id}}
       {false, profile_id} when is_binary(profile_id) -> {:error, {:unknown_agent_id, agent_id}}
@@ -205,28 +214,44 @@ defmodule LemonRouter.SubmissionBuilder do
     # Durable managed policy wins over a stale registry or project overlay.
     case LemonCore.ProfileStore.get(agent_id) do
       {:ok, profile} ->
-        {:ok, %{id: agent_id, model: profile["model"], system_prompt: profile["systemPrompt"],
-                tool_policy: profile["toolPolicy"], node: profile["node"]}}
+        {:ok,
+         %{
+           id: agent_id,
+           model: profile["model"],
+           system_prompt: profile["systemPrompt"],
+           tool_policy: profile["toolPolicy"],
+           node: profile["node"]
+         }}
+
       {:error, :not_found} ->
         if agent_profile_exists?(agent_id) do
           {:ok, AgentProfiles.get(agent_id) || %{}}
         else
           {:error, {:unknown_agent_id, agent_id}}
         end
-      {:error, reason} -> {:error, reason}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   catch
     :exit, _ ->
-      if fallback_agent_profile_exists?(agent_id), do: {:ok, %{}},
+      if fallback_agent_profile_exists?(agent_id),
+        do: {:ok, %{}},
         else: {:error, {:unknown_agent_id, agent_id}}
   end
+
   defp get_agent_profile(_), do: {:error, {:unknown_agent_id, nil}}
 
   defp get_managed_profile(agent_id) do
     case LemonCore.ProfileStore.get(agent_id) do
       {:ok, profile} ->
-        {:ok, %{id: agent_id, model: profile["model"], system_prompt: profile["systemPrompt"],
-          tool_policy: profile["toolPolicy"] || %{}}}
+        {:ok,
+         %{
+           id: agent_id,
+           model: profile["model"],
+           system_prompt: profile["systemPrompt"],
+           tool_policy: profile["toolPolicy"] || %{}
+         }}
 
       {:error, _} ->
         {:error, {:unknown_agent_id, agent_id}}

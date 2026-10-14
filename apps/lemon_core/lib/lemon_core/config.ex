@@ -311,9 +311,13 @@ defmodule LemonCore.Config do
                 {:ok, normalized} -> LemonCore.ToolPolicy.expand(normalized)
                 _ -> %{allow: []}
               end
-            _ -> %{allow: []}
+
+            _ ->
+              %{allow: []}
           end
-        _ -> parse_tool_policy(cfg["tool_policy"])
+
+        _ ->
+          parse_tool_policy(cfg["tool_policy"])
       end
 
     base

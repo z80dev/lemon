@@ -115,12 +115,21 @@ defmodule LemonControlPlane.Protocol.Frames do
   # Rich execution policy arrays are independently bounded by their owning
   # profile/tool-policy validators. Keep unrelated RPC traversal at its default.
   defp payload_item_limit(%{"type" => "req", "method" => method})
-       when method in ["profiles.create", "profiles.update", "profiles.clone",
-                       "chat.send", "agent", "node.invoke.result"],
+       when method in [
+              "profiles.create",
+              "profiles.update",
+              "profiles.clone",
+              "chat.send",
+              "agent",
+              "node.invoke.result"
+            ],
        do: LemonCore.ToolPolicy.execution_max_items()
 
-  defp payload_item_limit(%{"type" => "req", "method" => "node.invoke",
-                           "params" => %{"method" => "coding_agent.run"}}),
+  defp payload_item_limit(%{
+         "type" => "req",
+         "method" => "node.invoke",
+         "params" => %{"method" => "coding_agent.run"}
+       }),
        do: LemonCore.ToolPolicy.execution_max_items()
 
   defp payload_item_limit(_), do: LemonCore.JSONPayload.default_max_items()

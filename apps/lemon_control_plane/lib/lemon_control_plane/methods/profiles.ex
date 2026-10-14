@@ -107,8 +107,11 @@ defmodule LemonControlPlane.Methods.ProfilesSupport do
 
   def submission_outcome_unknown(details, profile) do
     {:error,
-     Errors.error(:unavailable, "Profile chat submission outcome is unknown",
-       Map.put(details, "profileId", profile["id"]))}
+     Errors.error(
+       :unavailable,
+       "Profile chat submission outcome is unknown",
+       Map.put(details, "profileId", profile["id"])
+     )}
   end
 
   def queue_mode(nil), do: :collect
@@ -206,7 +209,8 @@ defmodule LemonControlPlane.Methods.ProfilesUpdate do
 
   @impl true
   def handle(params, _ctx) do
-    attrs = Map.take(params, ~w(name description avatar model systemPrompt node mcpServers toolPolicy))
+    attrs =
+      Map.take(params, ~w(name description avatar model systemPrompt node mcpServers toolPolicy))
 
     with {:ok, profile} <- LemonCore.ProfileStore.update(params["id"], attrs),
          :ok <- ProfilesSupport.refresh(profile["id"]) do

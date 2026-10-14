@@ -263,7 +263,8 @@ defmodule CodingAgent.Tools.Task.Followup do
                 :run_id => run_id,
                 :invocation_context_key => Map.get(followup_context, :invocation_context_key),
                 :memory_context_key => Map.get(followup_context, :memory_context_key),
-                :memory_context_verified => Map.get(followup_context, :memory_context_verified) == true,
+                :memory_context_verified =>
+                  Map.get(followup_context, :memory_context_verified) == true,
                 :shared_memory_grant => Map.get(followup_context, :shared_memory_grant) == true,
                 :mcp_servers => Map.get(followup_context, :invocation_mcp_servers),
                 "async_followups" => [async_followup_entry(task_id, run_id, queue_mode)]
@@ -272,11 +273,21 @@ defmodule CodingAgent.Tools.Task.Followup do
         })
 
       managed? = CodingAgent.Tools.Task.Params.managed_context?(followup_context)
-      followup = %{followup | meta: CodingAgent.Tools.Task.Params.continuation_metadata(followup.meta, followup_context)}
+
+      followup = %{
+        followup
+        | meta:
+            CodingAgent.Tools.Task.Params.continuation_metadata(followup.meta, followup_context)
+      }
+
       result =
         if managed? do
-          request = %{followup | queue_mode: :collect,
-            meta: LemonCore.RunStore.execution_projection(followup.meta || %{})}
+          request = %{
+            followup
+            | queue_mode: :collect,
+              meta: LemonCore.RunStore.execution_projection(followup.meta || %{})
+          }
+
           CodingAgent.Tools.Task.Params.submit_native_followup(followup_context, request)
         else
           run_orchestrator.submit(followup)

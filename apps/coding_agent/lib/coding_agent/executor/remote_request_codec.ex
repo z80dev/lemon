@@ -22,13 +22,17 @@ defmodule CodingAgent.Executor.RemoteRequestCodec do
                           acp_client_fs_read_text_file acp_client_fs_write_text_file)a
 
   @private_meta_aliases [
-    {:invocation_context_key, ["invocation_context_key", "invocationContextKey", :invocationContextKey]},
+    {:invocation_context_key,
+     ["invocation_context_key", "invocationContextKey", :invocationContextKey]},
     {:memory_context_key, ["memory_context_key", "memoryContextKey", :memoryContextKey]},
-    {:memory_context_verified, ["memory_context_verified", "memoryContextVerified", :memoryContextVerified]},
+    {:memory_context_verified,
+     ["memory_context_verified", "memoryContextVerified", :memoryContextVerified]},
     {:shared_memory_grant, ["shared_memory_grant", "sharedMemoryGrant", :sharedMemoryGrant]},
-    {:invocation_proof_verified, ["invocation_proof_verified", "invocationProofVerified", :invocationProofVerified]},
+    {:invocation_proof_verified,
+     ["invocation_proof_verified", "invocationProofVerified", :invocationProofVerified]},
     {:invocation_proof, ["invocation_proof", "invocationProof", :invocationProof]},
-    {:native_lineage_handle, ["native_lineage_handle", "nativeLineageHandle", :nativeLineageHandle]},
+    {:native_lineage_handle,
+     ["native_lineage_handle", "nativeLineageHandle", :nativeLineageHandle]},
     {:native_lineage_run_id, ["native_lineage_run_id", "nativeLineageRunId", :nativeLineageRunId]}
   ]
 
@@ -164,7 +168,7 @@ defmodule CodingAgent.Executor.RemoteRequestCodec do
 
             negative ->
               # Preserve existing false/nil presence without minting proof.
-              value = if negative == :false, do: false, else: nil
+              value = if negative == false, do: false, else: nil
               remaining = acc |> Map.drop(aliases) |> Map.put(Atom.to_string(key), value)
               {:cont, {:ok, remaining}}
           end
@@ -176,8 +180,8 @@ defmodule CodingAgent.Executor.RemoteRequestCodec do
     Enum.reduce_while(aliases, :absent, fn alias_key, previous ->
       case Map.fetch(meta, alias_key) do
         :error -> {:cont, previous}
-        {:ok, false} -> {:cont, :false}
-        {:ok, nil} -> {:cont, if(previous == :false, do: :false, else: :nil)}
+        {:ok, false} -> {:cont, false}
+        {:ok, nil} -> {:cont, if(previous == false, do: false, else: nil)}
         {:ok, _meaningful_claim} -> {:halt, :untrusted}
       end
     end)

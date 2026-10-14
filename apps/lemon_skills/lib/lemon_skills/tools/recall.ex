@@ -135,7 +135,6 @@ defmodule LemonSkills.Tools.Recall do
          {:ok, search_opts} <- search_opts(scope, context, limit),
          {:ok, notes} <- memory_notes(memory_scope, scope, context, query, limit),
          {:ok, docs} <- memory_history(memory_scope, scope, context, query, limit, search_opts) do
-
       facts =
         if scope == "project",
           do: Project.search(context, query, Keyword.put(context.store_opts, :limit, limit)),
@@ -163,19 +162,28 @@ defmodule LemonSkills.Tools.Recall do
       context.search_fn.(query, Keyword.put(search_opts, :memory_scope, :legacy))
       |> Enum.filter(&Project.history_document?(&1, context, history_scope(scope)))
       |> Enum.take(limit)
+
     {:ok, docs}
   end
+
   defp memory_history({:private, _key}, scope, context, query, limit, _search_opts) do
-    Project.search_history(context, query, history_scope(scope),
-      Keyword.put(context.store_opts, :limit, limit))
+    Project.search_history(
+      context,
+      query,
+      history_scope(scope),
+      Keyword.put(context.store_opts, :limit, limit)
+    )
   end
 
   defp memory_notes(:legacy, "agent", context, query, limit),
     do: {:ok, search_notes(context.workspace_dir, Query.terms(query), limit)}
+
   defp memory_notes(:legacy, _scope, _context, _query, _limit), do: {:ok, []}
+
   defp memory_notes({:private, _key}, "agent", context, query, limit) do
     with {:ok, facts} <- Preferences.read(context, context.store_opts) do
       terms = Query.terms(query)
+
       notes =
         facts
         |> Enum.with_index(1)
@@ -187,9 +195,11 @@ defmodule LemonSkills.Tools.Recall do
         end)
         |> Enum.sort_by(fn {score, _source, index, _text} -> {-score, index} end)
         |> Enum.take(limit)
+
       {:ok, notes}
     end
   end
+
   defp memory_notes({:private, _key}, _scope, _context, _query, _limit), do: {:ok, []}
 
   defp validate_query(""), do: {:error, "query must be a non-empty string"}

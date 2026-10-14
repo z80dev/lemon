@@ -13,9 +13,18 @@ defmodule LemonControlPlane.ProfilesTestRouter do
 
   def submit_with_receipt(request) do
     case submit(request) do
-      {:ok, _} -> {:ok, %{run_id: request.run_id, session_key: request.session_key,
-                         state: :accepted, effective_mode: :new_run, target_run_id: request.run_id}}
-      error -> error
+      {:ok, _} ->
+        {:ok,
+         %{
+           run_id: request.run_id,
+           session_key: request.session_key,
+           state: :accepted,
+           effective_mode: :new_run,
+           target_run_id: request.run_id
+         }}
+
+      error ->
+        error
     end
   end
 end
@@ -84,39 +93,72 @@ defmodule LemonControlPlane.Methods.ProfilesTest do
   end
 
   test "native profile policy is validated, projected, cloned and inherited by profile chat" do
-    policy = %{"profile" => "custom", "deny" => ["bash"],
-               "approvals" => %{"write" => "always"}, "allow" => ["read", "write", "bash"]}
+    policy = %{
+      "profile" => "custom",
+      "deny" => ["bash"],
+      "approvals" => %{"write" => "always"},
+      "allow" => ["read", "write", "bash"]
+    }
+
     params = %{"id" => "policy-cp", "toolPolicy" => policy}
     assert :ok = Schemas.validate("profiles.create", params)
     assert {:ok, created} = ProfilesCreate.handle(params, %{})
     assert created["profile"]["toolPolicy"] == policy
     assert {:ok, fetched} = ProfilesGet.handle(%{"id" => "policy-cp"}, %{})
     assert fetched["profile"]["toolPolicy"] == policy
-    assert fetched["profile"]["mcpConfigFingerprint"] == fetched["summary"]["mcpConfigFingerprint"]
-    assert {:ok, cloned} = ProfilesClone.handle(%{"sourceId" => "policy-cp", "id" => "policy-copy"}, %{})
+
+    assert fetched["profile"]["mcpConfigFingerprint"] ==
+             fetched["summary"]["mcpConfigFingerprint"]
+
+    assert {:ok, cloned} =
+             ProfilesClone.handle(%{"sourceId" => "policy-cp", "id" => "policy-copy"}, %{})
+
     assert cloned["profile"]["toolPolicy"] == policy
     assert {:ok, _} = ProfileChat.handle(%{"id" => "policy-cp", "prompt" => "hello"}, %{})
     assert_receive {:profile_request, request}
     assert request.tool_policy.deny == ["bash"]
     assert request.tool_policy.approvals["write"] == "always"
+
     assert {:error, {:invalid_request, _}} =
-             ProfilesUpdate.handle(%{"id" => "policy-cp", "toolPolicy" => %{"allow" => false}}, %{})
-    assert {:ok, updated} = ProfilesUpdate.handle(%{"id" => "policy-cp", "toolPolicy" => %{"allow" => []}}, %{})
+             ProfilesUpdate.handle(
+               %{"id" => "policy-cp", "toolPolicy" => %{"allow" => false}},
+               %{}
+             )
+
+    assert {:ok, updated} =
+             ProfilesUpdate.handle(%{"id" => "policy-cp", "toolPolicy" => %{"allow" => []}}, %{})
+
     assert updated["profile"]["toolPolicy"] == %{"allow" => []}
   end
 
   test "profiles update reloads placement while every management result redacts MCP headers" do
-    server = %{"name" => "lemon-bot", "url" => "https://bot.example/mcp",
-               "headers" => %{"Authorization" => "Bearer execution-secret"}}
+    server = %{
+      "name" => "lemon-bot",
+      "url" => "https://bot.example/mcp",
+      "headers" => %{"Authorization" => "Bearer execution-secret"}
+    }
 
-    assert :ok = Schemas.validate("profiles.create", %{"id" => "placed", "mcpServers" => [server]})
-    assert {:ok, created} = ProfilesCreate.handle(%{"id" => "placed", "mcpServers" => [server]}, %{})
+    assert :ok =
+             Schemas.validate("profiles.create", %{"id" => "placed", "mcpServers" => [server]})
+
+    assert {:ok, created} =
+             ProfilesCreate.handle(%{"id" => "placed", "mcpServers" => [server]}, %{})
+
     refute inspect(created) =~ "execution-secret"
     assert :ok = Schemas.validate("profiles.update", %{"id" => "placed", "node" => "worker"})
-    assert {:ok, updated} = ProfilesUpdate.handle(%{
-      "id" => "placed", "node" => "worker", "systemPrompt" => "Be precise",
-      "model" => "openai:gpt-5", "name" => "Placed Bot"
-    }, %{})
+
+    assert {:ok, updated} =
+             ProfilesUpdate.handle(
+               %{
+                 "id" => "placed",
+                 "node" => "worker",
+                 "systemPrompt" => "Be precise",
+                 "model" => "openai:gpt-5",
+                 "name" => "Placed Bot"
+               },
+               %{}
+             )
+
     assert updated["profile"]["node"] == "worker"
     assert updated["profile"]["name"] == "Placed Bot"
     assert updated["profile"]["mcpServers"] == [Map.delete(server, "headers")]
@@ -125,7 +167,10 @@ defmodule LemonControlPlane.Methods.ProfilesTest do
     assert {:ok, listed} = ProfilesList.handle(%{}, %{})
     refute inspect(fetched) =~ "execution-secret"
     refute inspect(listed) =~ "execution-secret"
-    assert {:ok, receipt} = ProfileChat.handle(%{"id" => "placed", "prompt" => "Investigate"}, %{})
+
+    assert {:ok, receipt} =
+             ProfileChat.handle(%{"id" => "placed", "prompt" => "Investigate"}, %{})
+
     assert receipt["node"] == "worker"
     assert_receive {:profile_request, request}
     assert request.cwd == nil
@@ -133,10 +178,13 @@ defmodule LemonControlPlane.Methods.ProfilesTest do
     assert request.meta.system_prompt == "Be precise"
     assert request.meta.mcp_servers == [server]
     assert request.model == "openai:gpt-5"
+
     if Process.whereis(LemonRouter.AgentProfiles) do
       assert LemonRouter.AgentProfiles.get("placed").system_prompt == "Be precise"
     end
-    assert {:error, {:not_found, _}} = ProfilesUpdate.handle(%{"id" => "missing", "name" => "x"}, %{})
+
+    assert {:error, {:not_found, _}} =
+             ProfilesUpdate.handle(%{"id" => "missing", "name" => "x"}, %{})
   end
 
   test "profile chat returns a bounded reconciliation receipt for outcome-unknown submission" do
@@ -243,8 +291,10 @@ defmodule LemonControlPlane.Methods.ProfilesTest do
     assert Enum.any?(roster, &match?(%{"id" => "operator", "availability" => "local"}, &1))
 
     assert {:ok, chat} =
-             ProfileChat.handle(%{"id" => "operator", "prompt" => "work the queue",
-                                  "runId" => "profile-fixed"}, %{})
+             ProfileChat.handle(
+               %{"id" => "operator", "prompt" => "work the queue", "runId" => "profile-fixed"},
+               %{}
+             )
 
     assert chat["runId"] == "profile-fixed"
     assert chat["effectiveMode"] == "new_run"

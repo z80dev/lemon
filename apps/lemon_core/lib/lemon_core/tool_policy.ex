@@ -151,6 +151,7 @@ defmodule LemonCore.ToolPolicy do
     |> Keyword.put_new(:max_items, @execution_json_items)
     |> Keyword.put_new(:max_bytes, @execution_json_bytes)
   end
+
   @doc false
   def execution_max_bytes, do: @execution_json_bytes
 
@@ -180,7 +181,8 @@ defmodule LemonCore.ToolPolicy do
   defp normalize_field(key, value) when key in ["allow" | @list_keys], do: tool_names(value)
   defp normalize_field("no_reply", value) when is_boolean(value), do: {:ok, value}
 
-  defp normalize_field("approvals", value) when is_map(value) and map_size(value) <= @max_tool_entries do
+  defp normalize_field("approvals", value)
+       when is_map(value) and map_size(value) <= @max_tool_entries do
     Enum.reduce_while(value, {:ok, %{}}, fn {tool, mode}, {:ok, acc} ->
       mode = if is_atom(mode), do: Atom.to_string(mode), else: mode
 
@@ -199,6 +201,7 @@ defmodule LemonCore.ToolPolicy do
   end
 
   defp tool_names(_), do: :error
+
   defp tool_name?(name) do
     is_binary(name) and String.valid?(name) and byte_size(name) in 1..256 and
       not Regex.match?(~r/[\x00-\x20\x7f]/, name)
@@ -209,11 +212,18 @@ defmodule LemonCore.ToolPolicy do
     policy = atomize(policy)
 
     case Map.get(policy, :profile) do
-      profile when is_atom(profile) and not is_nil(profile) -> intersect_fields(from_profile(profile), policy)
+      profile when is_atom(profile) and not is_nil(profile) ->
+        intersect_fields(from_profile(profile), policy)
+
       profile when is_binary(profile) ->
         preset = Enum.find(@profiles, &(&1 == profile))
-        if preset, do: intersect_fields(from_profile(String.to_existing_atom(preset)), policy), else: policy
-      _ -> policy
+
+        if preset,
+          do: intersect_fields(from_profile(String.to_existing_atom(preset)), policy),
+          else: policy
+
+      _ ->
+        policy
     end
   end
 
@@ -224,19 +234,30 @@ defmodule LemonCore.ToolPolicy do
 
   defp intersect_fields(left, right) do
     Map.merge(left, right, fn
-      :allow, a, b -> intersect_allow(a, b)
-      key, a, b when key in [:deny, :blocked_tools, :require_approval] -> Enum.uniq(a ++ b)
+      :allow, a, b ->
+        intersect_allow(a, b)
+
+      key, a, b when key in [:deny, :blocked_tools, :require_approval] ->
+        Enum.uniq(a ++ b)
+
       :approvals, a, b ->
         Map.merge(a, b, fn _tool, first, second ->
-          if first in [:always, "always"] or second in [:always, "always"], do: :always, else: second
+          if first in [:always, "always"] or second in [:always, "always"],
+            do: :always,
+            else: second
         end)
-      :no_reply, a, b -> a or b
-      _key, _a, b -> b
+
+      :no_reply, a, b ->
+        a or b
+
+      _key, _a, b ->
+        b
     end)
   end
 
   defp intersect_allow(a, b) when a in [:all, "all"], do: b
   defp intersect_allow(a, b) when b in [:all, "all"], do: a
+
   defp intersect_allow(a, b) when is_list(a) and is_list(b) do
     if a == b do
       a
@@ -245,15 +266,22 @@ defmodule LemonCore.ToolPolicy do
       Enum.filter(a, &MapSet.member?(allowed, &1))
     end
   end
+
   defp intersect_allow(_, _), do: []
 
   @doc "Normalize only known top-level keys without creating atoms from input."
   def atomize(policy) when is_map(policy) do
     Map.new(policy, fn {key, value} ->
-      atom = Enum.find([:profile, :allow, :deny, :blocked_tools, :require_approval, :approvals, :no_reply], &(Atom.to_string(&1) == key))
+      atom =
+        Enum.find(
+          [:profile, :allow, :deny, :blocked_tools, :require_approval, :approvals, :no_reply],
+          &(Atom.to_string(&1) == key)
+        )
+
       {atom || key, value}
     end)
   end
+
   def from_profile(:full_access) do
     %{
       allow: :all,

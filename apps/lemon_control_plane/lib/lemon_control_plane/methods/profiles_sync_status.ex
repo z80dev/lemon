@@ -31,7 +31,8 @@ defmodule LemonControlPlane.Methods.ProfilesSyncStatus do
          {:ok, persona} <- ProfileStore.persona_snapshot(params["id"]),
          {:ok, snapshot} <- ProfileSnapshot.build(persona, params["mutationId"]),
          request <- Map.take(snapshot, ~w(profileId mutationId revisionDigest)),
-         {:ok, receipt} <- NodeIO.invoke(params["nodeId"], "node.profile.sync.status", request, ctx),
+         {:ok, receipt} <-
+           NodeIO.invoke(params["nodeId"], "node.profile.sync.status", request, ctx),
          :ok <- validate_receipt(receipt, request) do
       {:ok, Map.take(receipt, @fields) |> Map.put("nodeId", params["nodeId"])}
     else
@@ -54,8 +55,8 @@ defmodule LemonControlPlane.Methods.ProfilesSyncStatus do
          is_binary(id) and byte_size(id) in 1..128 and String.valid?(id) and
          String.trim(id) == id and not is_nil(params["mutationId"]) and
          ProfileSnapshot.valid_mutation?(params["mutationId"]),
-      do: :ok,
-      else: {:error, :invalid_status_request}
+       do: :ok,
+       else: {:error, :invalid_status_request}
   end
 
   defp validate_receipt(receipt, request) when is_map(receipt) do
@@ -68,14 +69,17 @@ defmodule LemonControlPlane.Methods.ProfilesSyncStatus do
          receipt["mutationId"] == request["mutationId"] and
          status in ~w(acknowledged pending unknown) and
          receipt["acknowledged"] == acknowledged and receipt["revisionDigest"] == digest,
-      do: :ok,
-      else: {:error, :invalid_status_receipt}
+       do: :ok,
+       else: {:error, :invalid_status_receipt}
   end
+
   defp validate_receipt(_, _), do: {:error, :invalid_status_receipt}
 
   defp error({:forbidden, _} = reason), do: {:error, reason}
   defp error(:not_found), do: {:error, Errors.error(:not_found, "Profile not found")}
+
   defp error(reason) when reason in [:invalid_id, :invalid_status_request],
     do: {:error, Errors.invalid_request("Profile sync status request is invalid")}
+
   defp error(_), do: {:error, Errors.unavailable("Profile sync status is unavailable")}
 end

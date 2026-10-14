@@ -10,8 +10,15 @@ defmodule LemonControlPlane.Methods.ChatSendTest do
   defmodule RouterStub do
     def submit_with_receipt(params) do
       send(self(), {:submitted, params})
-      {:ok, %{run_id: params.run_id, session_key: params.session_key, state: :accepted,
-              effective_mode: :queued, target_run_id: params.run_id}}
+
+      {:ok,
+       %{
+         run_id: params.run_id,
+         session_key: params.session_key,
+         state: :accepted,
+         effective_mode: :queued,
+         target_run_id: params.run_id
+       }}
     end
   end
 
@@ -28,15 +35,27 @@ defmodule LemonControlPlane.Methods.ChatSendTest do
 
   defmodule SteeringRouterStub do
     def submit_with_receipt(params) do
-      {:ok, %{run_id: params.run_id, session_key: params.session_key, state: :accepted,
-              effective_mode: :steer, target_run_id: "actual-active-run"}}
+      {:ok,
+       %{
+         run_id: params.run_id,
+         session_key: params.session_key,
+         state: :accepted,
+         effective_mode: :steer,
+         target_run_id: "actual-active-run"
+       }}
     end
   end
 
   defmodule WrongIdRouterStub do
     def submit_with_receipt(params) do
-      {:ok, %{run_id: "unrelated-run", session_key: params.session_key, state: :accepted,
-              effective_mode: :new_run, target_run_id: "unrelated-run"}}
+      {:ok,
+       %{
+         run_id: "unrelated-run",
+         session_key: params.session_key,
+         state: :accepted,
+         effective_mode: :new_run,
+         target_run_id: "unrelated-run"
+       }}
     end
   end
 
@@ -207,6 +226,7 @@ defmodule LemonControlPlane.Methods.ChatSendTest do
   test "caller fixed ID survives ambiguous admission without another send" do
     assert {:error, {:unavailable, _, details}} =
              ChatSend.handle(params(%{"runId" => "run_fixed"}), %{router_mod: UnknownRouterStub})
+
     assert details["runId"] == "run_fixed"
     assert details["retrySafe"] == false
     assert_receive {:submitted, %{run_id: "run_fixed"}}
@@ -218,13 +238,21 @@ defmodule LemonControlPlane.Methods.ChatSendTest do
       assert {:error, {:invalid_request, _, nil}} =
                ChatSend.handle(params(%{"runId" => id}), ctx)
     end
+
     refute_receive {:submitted, _}
   end
 
   test "profile binding passes the caller ID and actual queue disposition", %{ctx: ctx} do
     assert {:ok, receipt} =
-             ChatSend.handle(params(%{"runId" => "profile-fixed", "profileId" => "workspace",
-                                      "queueMode" => "steer"}), ctx)
+             ChatSend.handle(
+               params(%{
+                 "runId" => "profile-fixed",
+                 "profileId" => "workspace",
+                 "queueMode" => "steer"
+               }),
+               ctx
+             )
+
     assert_receive {:submitted, %{run_id: "profile-fixed"}}
     assert receipt["runId"] == "profile-fixed"
     assert receipt["effectiveMode"] == "queued"
@@ -233,8 +261,11 @@ defmodule LemonControlPlane.Methods.ChatSendTest do
 
   test "actual steering target comes from admission rather than the request" do
     assert {:ok, receipt} =
-             ChatSend.handle(params(%{"runId" => "instruction", "queueMode" => "steer"}),
-               %{router_mod: SteeringRouterStub})
+             ChatSend.handle(
+               params(%{"runId" => "instruction", "queueMode" => "steer"}),
+               %{router_mod: SteeringRouterStub}
+             )
+
     assert receipt["runId"] == "instruction"
     assert receipt["effectiveMode"] == "steer"
     assert receipt["targetRunId"] == "actual-active-run"
@@ -242,7 +273,10 @@ defmodule LemonControlPlane.Methods.ChatSendTest do
 
   test "a mismatched acknowledgement retains the original uncertain ID" do
     assert {:error, {:unavailable, _, details}} =
-             ChatSend.handle(params(%{"runId" => "original-run"}), %{router_mod: WrongIdRouterStub})
+             ChatSend.handle(params(%{"runId" => "original-run"}), %{
+               router_mod: WrongIdRouterStub
+             })
+
     assert details["runId"] == "original-run"
     assert details["retrySafe"] == false
     refute inspect(details) =~ "unrelated-run"
@@ -250,17 +284,23 @@ defmodule LemonControlPlane.Methods.ChatSendTest do
 
   test "conflicting fixed intent is an explicit nonretryable conflict" do
     assert {:error, {:conflict, _, details}} =
-             ChatSend.handle(params(%{"runId" => "conflicting-run"}), %{router_mod: ConflictRouterStub})
+             ChatSend.handle(params(%{"runId" => "conflicting-run"}), %{
+               router_mod: ConflictRouterStub
+             })
+
     assert details["code"] == "RUN_ID_CONFLICT"
     assert details["runId"] == "conflicting-run"
     assert details["retrySafe"] == false
   end
 
-  test "invocation context reaches execution privately for ordinary and profile-bound sessions", %{ctx: ctx} do
+  test "invocation context reaches execution privately for ordinary and profile-bound sessions",
+       %{ctx: ctx} do
     key = "hmac_private_principal_policy_epoch"
+
     for extra <- [%{}, %{"profileId" => "workspace", "invocationMcpServers" => []}] do
       assert {:ok, response} =
                ChatSend.handle(params(Map.put(extra, "invocationContextKey", key)), ctx)
+
       assert_receive {:submitted, request}
       assert request.meta.invocation_context_key == key
       assert response["targetRunId"] == request.run_id
@@ -268,20 +308,35 @@ defmodule LemonControlPlane.Methods.ChatSendTest do
     end
   end
 
-  test "malformed invocation contexts reject before any dispatch without echoing input", %{ctx: ctx} do
-    for key <- [nil, "", 123, %{}, " private_context", "PRIVATE_CONTEXT\n",
-                String.duplicate("PRIVATE_CONTEXT", 20)] do
+  test "malformed invocation contexts reject before any dispatch without echoing input", %{
+    ctx: ctx
+  } do
+    for key <- [
+          nil,
+          "",
+          123,
+          %{},
+          " private_context",
+          "PRIVATE_CONTEXT\n",
+          String.duplicate("PRIVATE_CONTEXT", 20)
+        ] do
       assert {:error, {:invalid_request, message, nil}} =
                ChatSend.handle(params(%{"invocationContextKey" => key}), ctx)
+
       refute message =~ "PRIVATE_CONTEXT"
     end
+
     refute_receive {:submitted, _}
   end
 
   test "validated invocation and memory keys install private owner proof", %{ctx: ctx} do
     for extra <- [%{}, %{"profileId" => "workspace", "invocationMcpServers" => []}] do
-      values = Map.merge(extra, %{"invocationContextKey" => "actor_epoch_digest",
-                                 "memoryContextKey" => "private_audience_digest"})
+      values =
+        Map.merge(extra, %{
+          "invocationContextKey" => "actor_epoch_digest",
+          "memoryContextKey" => "private_audience_digest"
+        })
+
       assert {:ok, response} = ChatSend.handle(params(values), ctx)
       assert_receive {:submitted, request}
       assert request.meta.invocation_context_key == "actor_epoch_digest"
@@ -295,9 +350,15 @@ defmodule LemonControlPlane.Methods.ChatSendTest do
 
   test "caller proof flags cannot create a memory context", %{ctx: ctx} do
     assert {:ok, _} =
-             ChatSend.handle(params(%{"invocationContextKey" => "actor_epoch",
-                                      "memoryContextVerified" => true,
-                                      "memory_context_verified" => true}), ctx)
+             ChatSend.handle(
+               params(%{
+                 "invocationContextKey" => "actor_epoch",
+                 "memoryContextVerified" => true,
+                 "memory_context_verified" => true
+               }),
+               ctx
+             )
+
     assert_receive {:submitted, request}
     refute Map.get(request.meta, :memory_context_verified, false)
     refute Map.has_key?(request.meta, :memory_context_key)
@@ -306,23 +367,40 @@ defmodule LemonControlPlane.Methods.ChatSendTest do
   test "memory identity requires a valid invocation identity before dispatch", %{ctx: ctx} do
     assert {:error, {:invalid_request, _, nil}} =
              ChatSend.handle(params(%{"memoryContextKey" => "memory_private"}), ctx)
+
     for key <- [nil, "", 12, " private_memory", String.duplicate("memory_private", 20)] do
       assert {:error, {:invalid_request, message, nil}} =
-               ChatSend.handle(params(%{"invocationContextKey" => "actor_epoch",
-                                        "memoryContextKey" => key}), ctx)
+               ChatSend.handle(
+                 params(%{"invocationContextKey" => "actor_epoch", "memoryContextKey" => key}),
+                 ctx
+               )
+
       refute message =~ "memory_private"
     end
+
     refute_receive {:submitted, _}
   end
 
-  test "shared memory intent requires real operator admin authority, not caller flags", %{ctx: ctx} do
-    values = %{"invocationContextKey" => "actor_epoch", "memoryContextKey" => "actor_room",
-               "sharedMemoryGrant" => true, "role" => "operator", "scopes" => ["admin"]}
-    for auth <- [nil, %{role: :operator, scopes: [:write]},
-                  %{role: :node, scopes: [:write, :admin]}] do
+  test "shared memory intent requires real operator admin authority, not caller flags", %{
+    ctx: ctx
+  } do
+    values = %{
+      "invocationContextKey" => "actor_epoch",
+      "memoryContextKey" => "actor_room",
+      "sharedMemoryGrant" => true,
+      "role" => "operator",
+      "scopes" => ["admin"]
+    }
+
+    for auth <- [
+          nil,
+          %{role: :operator, scopes: [:write]},
+          %{role: :node, scopes: [:write, :admin]}
+        ] do
       assert {:error, {:forbidden, _}} =
                ChatSend.handle(params(values), Map.put(ctx, :auth, auth))
     end
+
     refute_receive {:submitted, _}
 
     admin = Map.put(ctx, :auth, %{role: :operator, scopes: [:write, :admin]})
@@ -340,23 +418,32 @@ defmodule LemonControlPlane.Methods.ChatSendTest do
     assert_receive {:submitted, request}
     assert request.meta.shared_memory_grant == false
 
-    for extra <- [%{"sharedMemoryGrant" => true},
-                  %{"invocationContextKey" => "actor_epoch", "sharedMemoryGrant" => true},
-                  Map.put(keys, "sharedMemoryGrant", "true")] do
+    for extra <- [
+          %{"sharedMemoryGrant" => true},
+          %{"invocationContextKey" => "actor_epoch", "sharedMemoryGrant" => true},
+          Map.put(keys, "sharedMemoryGrant", "true")
+        ] do
       assert {:error, {:invalid_request, _, nil}} = ChatSend.handle(params(extra), ctx)
     end
+
     refute_receive {:submitted, _}
   end
 
-  test "managed profile does not inherit an owner's connector when replacement is missing", %{ctx: ctx} do
+  test "managed profile does not inherit an owner's connector when replacement is missing", %{
+    ctx: ctx
+  } do
     owner_secret = "private-owner-profile-credential"
+
     assert {:ok, _} =
              LemonCore.ProfileStore.create(%{
                id: "owner-template",
-               mcpServers: [%{
-                 "name" => "owner", "url" => "https://owner.example/mcp",
-                 "headers" => %{"Authorization" => "Bearer " <> owner_secret}
-               }]
+               mcpServers: [
+                 %{
+                   "name" => "owner",
+                   "url" => "https://owner.example/mcp",
+                   "headers" => %{"Authorization" => "Bearer " <> owner_secret}
+                 }
+               ]
              })
 
     values = %{
@@ -367,8 +454,10 @@ defmodule LemonControlPlane.Methods.ChatSendTest do
 
     assert {:error, {:invalid_request, _, nil}} = ChatSend.handle(params(values), ctx)
     refute_receive {:submitted, _}
+
     assert {:ok, _} =
              ChatSend.handle(params(Map.put(values, "invocationMcpServers", [])), ctx)
+
     assert_receive {:submitted, request}
     assert request.meta.mcp_servers == []
     refute inspect(request) =~ owner_secret
@@ -376,8 +465,10 @@ defmodule LemonControlPlane.Methods.ChatSendTest do
 
   test "operator proof attestation binds the actual admitted profile connector", %{ctx: ctx} do
     run_id = "factory-proof-root"
+
     descriptor = %{
-      "runId" => run_id, "serverName" => "core",
+      "runId" => run_id,
+      "serverName" => "core",
       "serverUrl" => "https://core.example/mcp",
       "headerName" => "X-Lemon-Bot-Invocation",
       "secretName" => "lemon_bot/invocations/" <> run_id
@@ -386,27 +477,34 @@ defmodule LemonControlPlane.Methods.ChatSendTest do
     assert {:ok, _} =
              LemonCore.ProfileStore.create(%{
                id: "proof-source",
-               mcpServers: [%{
-                 "name" => "core", "url" => "https://core.example/mcp",
-                 "headers" => %{},
-                 "allowedOrigins" => ["https://core.example"],
-                 "approvedPrivateOrigins" => []
-               }]
+               mcpServers: [
+                 %{
+                   "name" => "core",
+                   "url" => "https://core.example/mcp",
+                   "headers" => %{},
+                   "allowedOrigins" => ["https://core.example"],
+                   "approvedPrivateOrigins" => []
+                 }
+               ]
              })
 
     values = %{
-      "runId" => run_id, "profileId" => "proof-source",
+      "runId" => run_id,
+      "profileId" => "proof-source",
       "invocationContextKey" => "principal_policy_epoch",
       "memoryContextKey" => "principal_private_audience",
       "invocationProof" => descriptor,
-      "invocationMcpServers" => [%{
-        "name" => "core", "url" => "https://core.example/mcp",
-        "headers" => %{
-          "X-Lemon-Bot-Invocation" => "${LEMON_SECRET:lemon_bot/invocations/#{run_id}}"
-        },
-        "allowedOrigins" => ["https://core.example"],
-        "approvedPrivateOrigins" => []
-      }]
+      "invocationMcpServers" => [
+        %{
+          "name" => "core",
+          "url" => "https://core.example/mcp",
+          "headers" => %{
+            "X-Lemon-Bot-Invocation" => "${LEMON_SECRET:lemon_bot/invocations/#{run_id}}"
+          },
+          "allowedOrigins" => ["https://core.example"],
+          "approvedPrivateOrigins" => []
+        }
+      ]
     }
 
     admin = Map.put(ctx, :auth, %{role: :operator, scopes: [:write, :admin]})
@@ -415,12 +513,17 @@ defmodule LemonControlPlane.Methods.ChatSendTest do
     assert request.meta.invocation_proof_verified == true
     assert request.meta.invocation_proof.run_id == run_id
     assert request.meta.invocation_proof.secret_name == descriptor["secretName"]
+
     assert hd(request.meta.mcp_servers)["headers"]["X-Lemon-Bot-Invocation"] ==
              "${LEMON_SECRET:lemon_bot/invocations/#{run_id}}"
+
     refute inspect(response) =~ descriptor["secretName"]
 
-    for auth <- [nil, %{role: :operator, scopes: [:write]},
-                  %{role: :node, scopes: [:admin, :write]}] do
+    for auth <- [
+          nil,
+          %{role: :operator, scopes: [:write]},
+          %{role: :node, scopes: [:admin, :write]}
+        ] do
       assert {:error, {:forbidden, _}} =
                ChatSend.handle(params(values), Map.put(ctx, :auth, auth))
     end
@@ -440,17 +543,25 @@ defmodule LemonControlPlane.Methods.ChatSendTest do
 
     assert {:error, {:invalid_request, _, nil}} =
              ChatSend.handle(params(Map.delete(values, "memoryContextKey")), admin)
+
     assert {:error, {:invalid_request, _, nil}} =
              ChatSend.handle(params(Map.delete(values, "runId")), admin)
+
     refute_receive {:submitted, _}
   end
 
   test "raw proof markers without a validated descriptor do not attest a connector", %{ctx: ctx} do
     assert {:ok, _} =
-             ChatSend.handle(params(%{
-               "invocationContextKey" => "actor_epoch", "memoryContextKey" => "actor_private",
-               "invocationProofVerified" => true, "invocation_proof_verified" => true
-             }), ctx)
+             ChatSend.handle(
+               params(%{
+                 "invocationContextKey" => "actor_epoch",
+                 "memoryContextKey" => "actor_private",
+                 "invocationProofVerified" => true,
+                 "invocation_proof_verified" => true
+               }),
+               ctx
+             )
+
     assert_receive {:submitted, request}
     refute Map.has_key?(request.meta, :invocation_proof)
     refute Map.has_key?(request.meta, :invocation_proof_verified)
@@ -494,8 +605,10 @@ defmodule LemonControlPlane.Methods.ChatSendTest do
     assert request.meta.node == "worker-one"
     assert request.meta.system_prompt == "Be a careful teammate."
     assert request.meta.profile_instructions["SOUL.md"] == "Prefer evidence."
+
     assert request.meta.mcp_servers |> hd() |> Map.get("headers") ==
              %{"Authorization" => "Bearer private-profile-token"}
+
     assert request.meta.remote_cwd_explicit == false
     assert request.cwd == nil
     assert request.queue_mode == :followup
@@ -527,8 +640,11 @@ defmodule LemonControlPlane.Methods.ChatSendTest do
     assert request.meta.mcp_servers == [default_mcp_server()]
   end
 
-  test "caller MCP attachments replace headers and preserve destination secret references", %{ctx: ctx} do
+  test "caller MCP attachments replace headers and preserve destination secret references", %{
+    ctx: ctx
+  } do
     create_mcp_profile()
+
     server = %{
       "name" => "bot",
       "url" => "https://caller.example/mcp",
@@ -554,7 +670,9 @@ defmodule LemonControlPlane.Methods.ChatSendTest do
     refute inspect(response) =~ "Authorization"
   end
 
-  test "invocation MCP configs require an explicit valid profile and reject invalid configs", %{ctx: ctx} do
+  test "invocation MCP configs require an explicit valid profile and reject invalid configs", %{
+    ctx: ctx
+  } do
     create_mcp_profile()
 
     for servers <- [[], [default_mcp_server()]] do
@@ -563,7 +681,10 @@ defmodule LemonControlPlane.Methods.ChatSendTest do
     end
 
     for servers <- [
-          nil, %{}, "private-invalid-config", [nil],
+          nil,
+          %{},
+          "private-invalid-config",
+          [nil],
           [Map.put(default_mcp_server(), "url", "file:///private-config")],
           [Map.put(default_mcp_server(), "enabledTools", ["*"]) |> Map.put("headers", 12)],
           [Map.put(default_mcp_server(), "enabledTools", [123])],
@@ -581,10 +702,13 @@ defmodule LemonControlPlane.Methods.ChatSendTest do
 
   test "invocation MCP attachments never enter uncertain or rejected receipts" do
     create_mcp_profile()
-    request = params(%{"profileId" => "mcp-profile", "invocationMcpServers" => [default_mcp_server()]})
+
+    request =
+      params(%{"profileId" => "mcp-profile", "invocationMcpServers" => [default_mcp_server()]})
 
     assert {:error, {:unavailable, _, details}} =
              ChatSend.handle(request, %{router_mod: UnknownRouterStub})
+
     assert_received {:submitted, %{run_id: run_id}}
     assert details["runId"] == run_id
     refute inspect(details) =~ "profile-owner-token"
@@ -596,53 +720,103 @@ defmodule LemonControlPlane.Methods.ChatSendTest do
 
   test "schema advertises invocation MCP list without accepting non-list shapes" do
     assert Schemas.get("chat.send").optional["invocationMcpServers"] == :list
-    assert :ok = Schemas.validate("chat.send", params(%{"profileId" => "workspace", "invocationMcpServers" => []}))
+
+    assert :ok =
+             Schemas.validate(
+               "chat.send",
+               params(%{"profileId" => "workspace", "invocationMcpServers" => []})
+             )
+
     assert {:error, _} = Schemas.validate("chat.send", params(%{"invocationMcpServers" => %{}}))
   end
 
   test "invocationToolPolicy only narrows the durable profile policy", %{ctx: ctx} do
-    assert {:ok, _} = LemonCore.ProfileStore.update("workspace", %{
-      toolPolicy: %{"allow" => ["read", "write", "bash"], "deny" => ["bash"],
-                    "require_approval" => ["write"], "approvals" => %{"write" => "always"}}
-    })
+    assert {:ok, _} =
+             LemonCore.ProfileStore.update("workspace", %{
+               toolPolicy: %{
+                 "allow" => ["read", "write", "bash"],
+                 "deny" => ["bash"],
+                 "require_approval" => ["write"],
+                 "approvals" => %{"write" => "always"}
+               }
+             })
+
     assert {:ok, _} = ChatSend.handle(params(%{"profileId" => "workspace"}), ctx)
     assert_receive {:submitted, inherited}
-    assert {:ok, _} = ChatSend.handle(params(%{"profileId" => "workspace", "invocationToolPolicy" => %{}}), ctx)
+
+    assert {:ok, _} =
+             ChatSend.handle(
+               params(%{"profileId" => "workspace", "invocationToolPolicy" => %{}}),
+               ctx
+             )
+
     assert_receive {:submitted, empty}
     assert empty.tool_policy == inherited.tool_policy
 
-    assert {:ok, _} = ChatSend.handle(params(%{
-      "profileId" => "workspace",
-      "invocationToolPolicy" => %{"allow" => "all", "deny" => [], "approvals" => %{"write" => "never"}}
-    }), ctx)
+    assert {:ok, _} =
+             ChatSend.handle(
+               params(%{
+                 "profileId" => "workspace",
+                 "invocationToolPolicy" => %{
+                   "allow" => "all",
+                   "deny" => [],
+                   "approvals" => %{"write" => "never"}
+                 }
+               }),
+               ctx
+             )
+
     assert_receive {:submitted, cannot_widen}
     refute CodingAgent.ToolPolicy.allowed?(cannot_widen.tool_policy, "bash")
     assert CodingAgent.ToolPolicy.requires_approval?(cannot_widen.tool_policy, "write")
 
-    assert {:ok, _} = ChatSend.handle(params(%{
-      "profileId" => "workspace",
-      "invocationToolPolicy" => %{"allow" => ["read"], "deny" => ["write"]}
-    }), ctx)
+    assert {:ok, _} =
+             ChatSend.handle(
+               params(%{
+                 "profileId" => "workspace",
+                 "invocationToolPolicy" => %{"allow" => ["read"], "deny" => ["write"]}
+               }),
+               ctx
+             )
+
     assert_receive {:submitted, restricted}
     assert CodingAgent.ToolPolicy.allowed?(restricted.tool_policy, "read")
     refute CodingAgent.ToolPolicy.allowed?(restricted.tool_policy, "write")
     refute CodingAgent.ToolPolicy.allowed?(restricted.tool_policy, "bash")
-    assert {:ok, _} = ChatSend.handle(params(%{
-      "profileId" => "workspace", "invocationToolPolicy" => %{"allow" => []}
-    }), ctx)
+
+    assert {:ok, _} =
+             ChatSend.handle(
+               params(%{
+                 "profileId" => "workspace",
+                 "invocationToolPolicy" => %{"allow" => []}
+               }),
+               ctx
+             )
+
     assert_receive {:submitted, none}
     refute CodingAgent.ToolPolicy.allowed?(none.tool_policy, "read")
   end
 
   test "invocationToolPolicy requires a profile and a validated native map", %{ctx: ctx} do
     assert Schemas.get("chat.send").optional["invocationToolPolicy"] == :map
+
     assert {:error, {:invalid_request, "invocationToolPolicy requires profileId", nil}} =
              ChatSend.handle(params(%{"invocationToolPolicy" => %{}}), ctx)
-    for policy <- [nil, [], %{"allow" => false}, %{"arbitrary_policy" => true},
-                    %{"approvals" => %{"write" => "auto"}}] do
+
+    for policy <- [
+          nil,
+          [],
+          %{"allow" => false},
+          %{"arbitrary_policy" => true},
+          %{"approvals" => %{"write" => "auto"}}
+        ] do
       assert {:error, {:invalid_request, _, nil}} =
-               ChatSend.handle(params(%{"profileId" => "workspace", "invocationToolPolicy" => policy}), ctx)
+               ChatSend.handle(
+                 params(%{"profileId" => "workspace", "invocationToolPolicy" => policy}),
+                 ctx
+               )
     end
+
     refute_received {:submitted, _}
   end
 

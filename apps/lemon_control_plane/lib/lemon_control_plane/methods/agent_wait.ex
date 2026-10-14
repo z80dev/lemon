@@ -112,7 +112,8 @@ defmodule LemonControlPlane.Methods.AgentWait do
     result = %{
       "runId" => completed_value(completed, :run_id, "runId"),
       "ok" => completed_value(completed, :ok, "ok"),
-      "answer" => if(include_answer, do: format_answer(completed_value(completed, :answer, "answer"))),
+      "answer" =>
+        if(include_answer, do: format_answer(completed_value(completed, :answer, "answer"))),
       "error" => format_error(completed_value(completed, :error, "error"))
     }
 

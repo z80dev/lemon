@@ -49,10 +49,21 @@ defmodule LemonRouter.PolicyTest do
     end
 
     test "native allow and approval floors intersect string and atom keyed overrides" do
-      floor = %{"allow" => ["read", "write"], "deny" => ["bash"],
-                "require_approval" => ["write"], "approvals" => %{"write" => "always"}}
-      result = Policy.merge(floor, %{allow: :all, deny: [], require_approval: [],
-                                    approvals: %{"write" => :never}})
+      floor = %{
+        "allow" => ["read", "write"],
+        "deny" => ["bash"],
+        "require_approval" => ["write"],
+        "approvals" => %{"write" => "always"}
+      }
+
+      result =
+        Policy.merge(floor, %{
+          allow: :all,
+          deny: [],
+          require_approval: [],
+          approvals: %{"write" => :never}
+        })
+
       assert result.allow == ["read", "write"]
       assert result.deny == ["bash"]
       assert result.require_approval == ["write"]

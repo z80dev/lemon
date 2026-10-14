@@ -71,12 +71,15 @@ defmodule CodingAgent.ExecutionNode.ProfileSync do
   defp validate_committed(nil, nil, _paths), do: :ok
   defp validate_committed(%{"status" => "pending"}, nil, _paths), do: :ok
   defp validate_committed(_receipt, nil, _paths), do: {:error, :profile_sync_corrupt}
+
   defp validate_committed(%{"status" => "pending", "revisionDigest" => digest}, committed, paths) do
     if digest == committed["revisionDigest"], do: verify_files(committed, paths), else: :ok
   end
+
   defp validate_committed(_receipt, committed, paths), do: verify_files(committed, paths)
 
   defp receipt_status(args, nil, _committed), do: status_result(args, "unknown")
+
   defp receipt_status(args, receipt, committed) do
     cond do
       receipt["mutationId"] != args["mutationId"] or
@@ -101,13 +104,14 @@ defmodule CodingAgent.ExecutionNode.ProfileSync do
   end
 
   defp status_result(args, status) do
-    {:ok, %{
-      "profileId" => args["profileId"],
-      "mutationId" => args["mutationId"],
-      "status" => status,
-      "acknowledged" => status == "acknowledged",
-      "revisionDigest" => if(status == "unknown", do: nil, else: args["revisionDigest"])
-    }}
+    {:ok,
+     %{
+       "profileId" => args["profileId"],
+       "mutationId" => args["mutationId"],
+       "status" => status,
+       "acknowledged" => status == "acknowledged",
+       "revisionDigest" => if(status == "unknown", do: nil, else: args["revisionDigest"])
+     }}
   end
 
   defp persist(args, paths) do
@@ -117,7 +121,8 @@ defmodule CodingAgent.ExecutionNode.ProfileSync do
     files = Enum.map(ProfileSnapshot.filenames(), &Path.join(paths["workspace"], &1))
 
     with :ok <- each(dirs, &safe_directory/1),
-         :ok <- each([marker, receipt_path, paths["config"], paths["manifest"] | files], &safe_file/1),
+         :ok <-
+           each([marker, receipt_path, paths["config"], paths["manifest"] | files], &safe_file/1),
          {:ok, previous} <- read_record(marker),
          {:ok, receipt} <- read_receipt(receipt_path),
          :ok <- check_mutation(receipt, args),
@@ -130,7 +135,8 @@ defmodule CodingAgent.ExecutionNode.ProfileSync do
          {:ok, ^args} <- read_record(marker),
          :ok <- verify_files(args, paths) do
       with :ok <- complete_receipt(receipt_path, reserved, args) do
-        {:ok, Map.take(args, ~w(profileId mutationId revisionDigest)) |> Map.put("acknowledged", true)}
+        {:ok,
+         Map.take(args, ~w(profileId mutationId revisionDigest)) |> Map.put("acknowledged", true)}
       end
     else
       {:error, _} = error -> error
@@ -138,18 +144,23 @@ defmodule CodingAgent.ExecutionNode.ProfileSync do
     end
   end
 
-  defp persist_persona(%{"revisionDigest" => digest}, %{"revisionDigest" => digest} = args, paths),
-    do: verify_files(args, paths)
+  defp persist_persona(
+         %{"revisionDigest" => digest},
+         %{"revisionDigest" => digest} = args,
+         paths
+       ),
+       do: verify_files(args, paths)
 
   defp persist_persona(_previous, args, paths) do
-    with :ok <- each(ProfileSnapshot.filenames(), fn name ->
-           path = Path.join(paths["workspace"], name)
+    with :ok <-
+           each(ProfileSnapshot.filenames(), fn name ->
+             path = Path.join(paths["workspace"], name)
 
-           case Map.fetch(args["personaInstructions"], name) do
-             {:ok, text} -> atomic_write(path, text)
-             :error -> remove_persona(path)
-           end
-         end) do
+             case Map.fetch(args["personaInstructions"], name) do
+               {:ok, text} -> atomic_write(path, text)
+               :error -> remove_persona(path)
+             end
+           end) do
       verify_files(args, paths)
     end
   end
@@ -177,18 +188,26 @@ defmodule CodingAgent.ExecutionNode.ProfileSync do
   end
 
   defp reserve(_path, receipt, %{"mutationId" => nil}), do: {:ok, receipt}
+
   defp reserve(path, receipt, args) do
     if receipt != nil and receipt["mutationId"] == args["mutationId"] do
       {:ok, receipt}
     else
-      reserved = Map.take(args, ~w(profileId mutationId revisionDigest)) |> Map.put("status", "pending")
+      reserved =
+        Map.take(args, ~w(profileId mutationId revisionDigest)) |> Map.put("status", "pending")
+
       with :ok <- write_receipt(path, reserved), do: {:ok, reserved}
     end
   end
 
   defp complete_receipt(_path, nil, _args), do: :ok
+
   defp complete_receipt(path, receipt, args) do
-    status = if receipt["revisionDigest"] == args["revisionDigest"], do: "acknowledged", else: "superseded"
+    status =
+      if receipt["revisionDigest"] == args["revisionDigest"],
+        do: "acknowledged",
+        else: "superseded"
+
     write_receipt(path, Map.put(receipt, "status", status))
   end
 
@@ -204,37 +223,50 @@ defmodule CodingAgent.ExecutionNode.ProfileSync do
 
   defp read_receipt(path) do
     case File.lstat(path) do
-      {:error, :enoent} -> {:ok, nil}
+      {:error, :enoent} ->
+        {:ok, nil}
+
       {:ok, %File.Stat{type: :regular, size: size}} when size <= 2_048 ->
         with {:ok, bytes} <- File.read(path),
              {:ok, receipt} when is_map(receipt) <- Jason.decode(bytes),
-             true <- Enum.sort(Map.keys(receipt)) == Enum.sort(~w(profileId mutationId revisionDigest status)),
-             :ok <- ProfileSnapshot.validate_status(Map.take(receipt, ~w(profileId mutationId revisionDigest))),
+             true <-
+               Enum.sort(Map.keys(receipt)) ==
+                 Enum.sort(~w(profileId mutationId revisionDigest status)),
+             :ok <-
+               ProfileSnapshot.validate_status(
+                 Map.take(receipt, ~w(profileId mutationId revisionDigest))
+               ),
              true <- receipt["status"] in ~w(pending acknowledged superseded) do
           {:ok, receipt}
         else
           _ -> {:error, :profile_sync_corrupt}
         end
-      _ -> {:error, :profile_sync_corrupt}
+
+      _ ->
+        {:error, :profile_sync_corrupt}
     end
   end
 
   defp check_mutation(nil, _args), do: :ok
+
   defp check_mutation(previous, args) do
     if not is_nil(args["mutationId"]) and previous["mutationId"] == args["mutationId"] and
          previous["revisionDigest"] != args["revisionDigest"],
-      do: {:error, :mutation_conflict},
-      else: :ok
+       do: {:error, :mutation_conflict},
+       else: :ok
   end
 
   defp matching_profile(nil, _args), do: :ok
+
   defp matching_profile(record, args) do
     if record["profileId"] == args["profileId"], do: :ok, else: {:error, :profile_sync_corrupt}
   end
 
   defp read_record(path) do
     case File.lstat(path) do
-      {:error, :enoent} -> {:ok, nil}
+      {:error, :enoent} ->
+        {:ok, nil}
+
       {:ok, %File.Stat{type: :regular, size: size}} when size <= @record_limit ->
         with {:ok, bytes} <- File.read(path),
              {:ok, record} when is_map(record) <- Jason.decode(bytes),
@@ -243,10 +275,11 @@ defmodule CodingAgent.ExecutionNode.ProfileSync do
         else
           _ -> {:error, :profile_sync_corrupt}
         end
-      _ -> {:error, :profile_sync_corrupt}
+
+      _ ->
+        {:error, :profile_sync_corrupt}
     end
   end
-
 
   # Check every ancestor, not merely the profile leaf. Missing components are
   # allowed only until creation; symlinks and non-directory boundaries fail closed.
@@ -275,7 +308,9 @@ defmodule CodingAgent.ExecutionNode.ProfileSync do
   defp ensure_directory(path) do
     with :ok <- safe_directory(path) do
       case File.lstat(path) do
-        {:ok, %File.Stat{type: :directory}} -> :ok
+        {:ok, %File.Stat{type: :directory}} ->
+          :ok
+
         {:error, :enoent} ->
           with :ok <- ensure_directory(Path.dirname(path)),
                :ok <- File.mkdir(path),
@@ -284,7 +319,9 @@ defmodule CodingAgent.ExecutionNode.ProfileSync do
           else
             _ -> {:error, :profile_sync_failed}
           end
-        _ -> {:error, :unsafe_profile_boundary}
+
+        _ ->
+          {:error, :unsafe_profile_boundary}
       end
     end
   end

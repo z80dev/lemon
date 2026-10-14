@@ -11,6 +11,8 @@ defmodule LemonMCP.HTTP.OriginPolicy do
   already be canonical. Credentials, fragments and scoped IPv6 are rejected.
   Both lists must be unique, and approved origins must also be allowed. Pins
   retain the original URL, but `host` is the canonical ASCII DNS/IP hostname.
+  Raw authority spelling is checked from URL bytes; URI's deprecated opaque
+  authority field is neither inspected nor rewritten.
 
   Every A and AAAA answer must be public unless that exact allowed origin is
   explicitly approved for private networking. The selected address is stable
@@ -93,7 +95,7 @@ defmodule LemonMCP.HTTP.OriginPolicy do
          host
          when is_binary(host) and byte_size(host) > 0 and
                 byte_size(host) <= @max_host_bytes <- uri.host,
-         authority when is_binary(authority) <- uri.authority,
+         authority <- raw_authority(url, uri.scheme),
          true <- valid_authority?(authority),
          port when is_integer(port) and port in 1..65_535 <- uri.port || default_port(scheme),
          {:ok, dns_host} <- canonical_host(host) do
@@ -117,6 +119,16 @@ defmodule LemonMCP.HTTP.OriginPolicy do
   end
 
   defp parse_destination(_), do: {:error, :invalid_url}
+
+  defp raw_authority(url, scheme) do
+    start = byte_size(scheme) + 3
+    length = byte_size(url) - start
+
+    case :binary.match(url, ["/", "?", "#"], scope: {start, length}) do
+      :nomatch -> binary_part(url, start, length)
+      {finish, _} -> binary_part(url, start, finish - start)
+    end
+  end
 
   defp normalize_scheme(scheme) when is_binary(scheme), do: String.downcase(scheme)
   defp normalize_scheme(_), do: nil

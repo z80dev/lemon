@@ -37,14 +37,40 @@ defmodule LemonMemory.Document do
 
   @max_summary_bytes 2_000
   @runtime_config_atoms [
-    :mcp, :mcp_servers, :mcpServers, :mcp_headers, :mcpHeaders,
-    :mcp_token, :mcpToken, :mcp_tokens, :mcpTokens, :mcp_config, :mcpConfig,
-    :mcp_credentials, :mcpCredentials, :headers, :authorization,
-    :access_token, :accessToken, :refresh_token, :refreshToken,
-    :bearer_token, :bearerToken, :api_key, :apiKey, :auth_token, :authToken, :tokens, :token,
-    :invocation_proof_verified, :invocationProofVerified, :invocation_proof, :invocationProof
+    :mcp,
+    :mcp_servers,
+    :mcpServers,
+    :mcp_headers,
+    :mcpHeaders,
+    :mcp_token,
+    :mcpToken,
+    :mcp_tokens,
+    :mcpTokens,
+    :mcp_config,
+    :mcpConfig,
+    :mcp_credentials,
+    :mcpCredentials,
+    :headers,
+    :authorization,
+    :access_token,
+    :accessToken,
+    :refresh_token,
+    :refreshToken,
+    :bearer_token,
+    :bearerToken,
+    :api_key,
+    :apiKey,
+    :auth_token,
+    :authToken,
+    :tokens,
+    :token,
+    :invocation_proof_verified,
+    :invocationProofVerified,
+    :invocation_proof,
+    :invocationProof
   ]
-  @runtime_config_fields @runtime_config_atoms ++ Enum.map(@runtime_config_atoms, &Atom.to_string/1) ++ ["Authorization"]
+  @runtime_config_fields @runtime_config_atoms ++
+                           Enum.map(@runtime_config_atoms, &Atom.to_string/1) ++ ["Authorization"]
 
   @type scope :: :session | :workspace | :agent | :global
   @type outcome :: :unknown | :success | :partial | :failure | :aborted
@@ -120,8 +146,12 @@ defmodule LemonMemory.Document do
       provider: provider,
       model: model,
       outcome: LemonCore.RunOutcome.infer(summary),
-      meta: summary |> Map.get(:meta, %{}) |> LemonMemory.ContextScope.run_metadata()
-        |> LemonMemory.Project.history_metadata() |> Map.drop(@runtime_config_fields)
+      meta:
+        summary
+        |> Map.get(:meta, %{})
+        |> LemonMemory.ContextScope.run_metadata()
+        |> LemonMemory.Project.history_metadata()
+        |> Map.drop(@runtime_config_fields)
         |> Map.put("kind", "run")
     }
     |> with_index()

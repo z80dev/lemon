@@ -34,7 +34,14 @@ defmodule LemonRouter.ResumeResolver do
           Store.server(),
           binary() | nil
         ) :: resolved()
-  def resolve(explicit_resume, session_key, meta \\ %{}, tool_policy \\ nil, store \\ Store, run_id \\ nil) do
+  def resolve(
+        explicit_resume,
+        session_key,
+        meta \\ %{},
+        tool_policy \\ nil,
+        store \\ Store,
+        run_id \\ nil
+      ) do
     context = execution_context(meta, tool_policy, comparison_servers(meta, run_id))
 
     case normalize_explicit_resume(explicit_resume) do
@@ -78,14 +85,17 @@ defmodule LemonRouter.ResumeResolver do
 
   @doc false
   def execution_context(%ExecutionCommand{} = request) do
-    execution_context(request.meta || %{}, request.tool_policy, InvocationProof.comparison_servers(request))
+    execution_context(
+      request.meta || %{},
+      request.tool_policy,
+      InvocationProof.comparison_servers(request)
+    )
   end
 
   defp execution_context(meta, tool_policy, servers) do
     {MapHelpers.get_key(meta, :invocation_context_key), tool_policy, servers,
      MapHelpers.get_key(meta, :memory_context_key),
-     Map.get(meta, :memory_context_verified) == true,
-     Map.get(meta, :shared_memory_grant) == true}
+     Map.get(meta, :memory_context_verified) == true, Map.get(meta, :shared_memory_grant) == true}
   end
 
   defp comparison_servers(meta, run_id) do
@@ -230,7 +240,6 @@ defmodule LemonRouter.ResumeResolver do
   defp disable_auto_resume?(meta) when is_map(meta) do
     fetch(meta, :disable_auto_resume) == true
   end
-
 
   defp fetch(map, key) when is_map(map) and is_atom(key) do
     Map.get(map, key) || Map.get(map, Atom.to_string(key))

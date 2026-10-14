@@ -39,9 +39,12 @@ defmodule LemonControlPlane.Methods.MemorySupport do
 
   defp scoped_projection(params, payload, projection) do
     case params["memoryScope"] do
-      nil -> {:ok, projection}
+      nil ->
+        {:ok, projection}
+
       scope ->
         key = if scope == "private", do: params["memoryContextKey"], else: nil
+
         if payload["memoryScope"] == scope and Map.has_key?(payload, "memoryContextKey") and
              payload["memoryContextKey"] == key do
           {:ok, Map.merge(projection, %{"memoryScope" => scope, "memoryContextKey" => key})}
@@ -54,26 +57,38 @@ defmodule LemonControlPlane.Methods.MemorySupport do
 
   defp validate(operation, params) do
     cond do
-      not bounded_string?(params["profileId"], 64) -> {:error, :invalid_params}
+      not bounded_string?(params["profileId"], 64) ->
+        {:error, :invalid_params}
+
       Map.has_key?(params, "limit") and
           not (is_integer(params["limit"]) and params["limit"] in 1..50) ->
         {:error, :invalid_params}
+
       Map.has_key?(params, "query") and not Lifecycle.valid_profile_query?(params["query"]) ->
         {:error, :invalid_params}
+
       Map.has_key?(params, "cursor") and not bounded_string?(params["cursor"], 512) ->
         {:error, :invalid_params}
+
       operation == "search" and
-          (not Lifecycle.valid_profile_query?(params["query"]) or String.trim(params["query"]) == "") ->
+          (not Lifecycle.valid_profile_query?(params["query"]) or
+             String.trim(params["query"]) == "") ->
         {:error, :invalid_params}
+
       operation in ["get", "delete"] and not bounded_string?(params["id"], 256) ->
         {:error, :invalid_params}
+
       operation == "delete" and params["confirm"] != params["id"] ->
         {:error, :confirmation_required}
+
       operation == "add" and not bounded_string?(params["text"], 4_096) ->
         {:error, :invalid_params}
+
       operation == "add" and Map.get(params, "kind", "memory") not in ["memory", "user"] ->
         {:error, :invalid_params}
-      true -> :ok
+
+      true ->
+        :ok
     end
   end
 
@@ -90,14 +105,20 @@ defmodule LemonControlPlane.Methods.MemorySupport do
     with {:ok, _stats} <- JSONPayload.validate(args, max_bytes: 8_192),
          {:ok, resolved} <- NodeRegistry.resolve(node),
          :ok <- scoped_worker_capability(resolved, operation, args),
-         {:ok, invoke_id} <- NodeRegistry.invoke_node(resolved.id, "memory." <> operation, args,
-           expected_pid: resolved.pid, recipient: self(), timeout_ms: @timeout_ms,
-           max_payload_bytes: @max_result_bytes) do
+         {:ok, invoke_id} <-
+           NodeRegistry.invoke_node(resolved.id, "memory." <> operation, args,
+             expected_pid: resolved.pid,
+             recipient: self(),
+             timeout_ms: @timeout_ms,
+             max_payload_bytes: @max_result_bytes
+           ) do
       receive do
         {:lemon_node_result, ^invoke_id, {:ok, %{"ok" => true, "payload" => payload}}} ->
           {:ok, payload}
+
         {:lemon_node_result, ^invoke_id, {:ok, %{"ok" => false, "error" => reason}}} ->
           remote_error(reason)
+
         {:lemon_node_result, ^invoke_id, _result} ->
           remote_failure(operation, profile["id"], invoke_id)
       after
@@ -110,20 +131,28 @@ defmodule LemonControlPlane.Methods.MemorySupport do
     end
   end
 
-
   defp execute(operation, profile, args, ctx) do
-    LemonSkills.ProfileMemory.execute(operation, profile["id"], args, Map.get(ctx, :memory_opts, []))
+    LemonSkills.ProfileMemory.execute(
+      operation,
+      profile["id"],
+      args,
+      Map.get(ctx, :memory_opts, [])
+    )
   end
+
   # A post-write echo alone is insufficient: old workers would already have
   # written shared files. Check before dispatch and bind the exact checked connection.
   defp scoped_worker_capability(_node, _operation, %{"memoryScope" => nil}),
     do: {:error, :invalid_memory_scope}
+
   defp scoped_worker_capability(node, operation, args) do
     if Map.has_key?(args, "memoryScope") do
       capabilities = Map.get(node.metadata, :capabilities, Map.get(node.metadata, "capabilities"))
       descriptor = if is_map(capabilities), do: Map.get(capabilities, "memory." <> operation)
+
       if match?(%{"version" => 1, "contextVersion" => 1}, descriptor),
-        do: :ok, else: {:error, :unsupported_memory_scope}
+        do: :ok,
+        else: {:error, :unsupported_memory_scope}
     else
       :ok
     end
@@ -134,17 +163,34 @@ defmodule LemonControlPlane.Methods.MemorySupport do
   defp remote_error("confirmation_required"), do: {:error, :confirmation_required}
   defp remote_error("stale"), do: {:error, :stale}
   defp remote_error("confirmation_mismatch"), do: {:error, :stale}
-  defp remote_error(reason) when reason in ["invalid_params", "invalid_id", "invalid_cursor",
-         "invalid_query", "invalid_limit", "invalid_kind", "invalid_text", "unsafe_text",
-         "invalid_document_id", "capacity_exceeded", "empty_text", "unproven_context",
-         "invalid_memory_scope"], do: {:error, :invalid_params}
+
+  defp remote_error(reason)
+       when reason in [
+              "invalid_params",
+              "invalid_id",
+              "invalid_cursor",
+              "invalid_query",
+              "invalid_limit",
+              "invalid_kind",
+              "invalid_text",
+              "unsafe_text",
+              "invalid_document_id",
+              "capacity_exceeded",
+              "empty_text",
+              "unproven_context",
+              "invalid_memory_scope"
+            ],
+       do: {:error, :invalid_params}
+
   defp remote_error(_reason), do: {:error, :memory_unavailable}
 
   defp remote_failure(operation, profile_id, invoke_id) when operation in ["add", "delete"] do
     {:rpc_error,
      Errors.error(:unavailable, "Memory mutation outcome is unknown", %{
-       "code" => "MEMORY_OUTCOME_UNKNOWN", "profileId" => profile_id,
-       "invokeId" => invoke_id, "retrySafe" => false
+       "code" => "MEMORY_OUTCOME_UNKNOWN",
+       "profileId" => profile_id,
+       "invokeId" => invoke_id,
+       "retrySafe" => false
      })}
   end
 
@@ -207,14 +253,31 @@ defmodule LemonControlPlane.Methods.MemorySupport do
 
   defp error(:not_found), do: {:error, Errors.not_found("Profile or memory item not found")}
   defp error(:profile_mismatch), do: error(:not_found)
+
   defp error(:confirmation_required),
     do: {:error, Errors.invalid_request("confirm must equal the exact memory id")}
-  defp error(reason) when reason in [:invalid_params, :invalid_id, :invalid_cursor, :invalid_query,
-         :invalid_limit, :invalid_kind, :invalid_text, :unsafe_text, :invalid_document_id,
-         :capacity_exceeded, :empty_text, :unproven_context, :invalid_memory_scope],
-    do: {:error, Errors.invalid_request("Memory parameters or content are invalid")}
+
+  defp error(reason)
+       when reason in [
+              :invalid_params,
+              :invalid_id,
+              :invalid_cursor,
+              :invalid_query,
+              :invalid_limit,
+              :invalid_kind,
+              :invalid_text,
+              :unsafe_text,
+              :invalid_document_id,
+              :capacity_exceeded,
+              :empty_text,
+              :unproven_context,
+              :invalid_memory_scope
+            ],
+       do: {:error, Errors.invalid_request("Memory parameters or content are invalid")}
+
   defp error(reason) when reason in [:stale, :confirmation_mismatch],
     do: {:error, Errors.error(:conflict, "Memory item changed; read it again before deleting")}
+
   defp error(:node_unavailable), do: {:error, Errors.unavailable("Profile node is unavailable")}
   defp error(_reason), do: {:error, Errors.unavailable("Profile memory is unavailable")}
 end
@@ -242,7 +305,8 @@ defmodule LemonControlPlane.Methods.MemorySearch do
   @impl true
   def dispatch_mode, do: :async
   @impl true
-  def handle(params, ctx), do: LemonControlPlane.Methods.MemorySupport.handle("search", params, ctx)
+  def handle(params, ctx),
+    do: LemonControlPlane.Methods.MemorySupport.handle("search", params, ctx)
 end
 
 defmodule LemonControlPlane.Methods.MemoryGet do
@@ -281,5 +345,6 @@ defmodule LemonControlPlane.Methods.MemoryDelete do
   @impl true
   def dispatch_mode, do: :async
   @impl true
-  def handle(params, ctx), do: LemonControlPlane.Methods.MemorySupport.handle("delete", params, ctx)
+  def handle(params, ctx),
+    do: LemonControlPlane.Methods.MemorySupport.handle("delete", params, ctx)
 end

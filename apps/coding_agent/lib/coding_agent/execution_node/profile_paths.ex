@@ -11,7 +11,12 @@ defmodule CodingAgent.ExecutionNode.ProfilePaths do
   def get(%{"profileId" => id} = args) do
     with true <- map_size(args) == 1,
          {:ok, paths} <- LemonCore.ProfileStore.paths(id) do
-      {:ok, %{"profileId" => id, "workspacePath" => paths["workspace"], "skillsPath" => paths["skills"]}}
+      {:ok,
+       %{
+         "profileId" => id,
+         "workspacePath" => paths["workspace"],
+         "skillsPath" => paths["skills"]
+       }}
     else
       _ -> {:error, :invalid_profile_request}
     end

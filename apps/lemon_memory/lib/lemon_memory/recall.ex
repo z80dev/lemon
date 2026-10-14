@@ -61,6 +61,7 @@ defmodule LemonMemory.Recall do
 
     context = Keyword.get(opts, :context)
     owner = ContextScope.scope(context)
+
     if present?(agent_id) and length(terms) >= @min_terms and
          match?({:ok, _}, Project.scope(context)) and match?({:ok, _}, owner) do
       limit = opts |> Keyword.get(:limit, @default_limit) |> max(1) |> min(5)
@@ -117,9 +118,13 @@ defmodule LemonMemory.Recall do
       _ -> []
     end
   end
+
   defp history(query, _context, _owner, opts, agent) do
     Store.search(Keyword.get(opts, :store, Store), query,
-      scope: :agent, scope_key: agent, limit: 50)
+      scope: :agent,
+      scope_key: agent,
+      limit: 50
+    )
   end
 
   defp scoped_project_facts(context, {:ok, {:private, _}}, opts) do
@@ -128,16 +133,21 @@ defmodule LemonMemory.Recall do
       _ -> []
     end
   end
+
   defp scoped_project_facts(_context, _owner, opts), do: Keyword.get(opts, :project_facts, [])
 
   defp scoped_user_facts(context, {:ok, {:private, _}}, opts) do
     case Preferences.shared_bootstrap(context, opts) do
       {:ok, %{"USER.md" => text}} when text != "" ->
         "Shared USER.md: " <> snippet(text, @user_snippet_bytes)
-      _ -> nil
+
+      _ ->
+        nil
     end
   end
-  defp scoped_user_facts(_context, _owner, opts), do: user_facts(Keyword.get(opts, :workspace_dir))
+
+  defp scoped_user_facts(_context, _owner, opts),
+    do: user_facts(Keyword.get(opts, :workspace_dir))
 
   defp private_facts(context, {:ok, {:private, _}}, opts, terms) do
     case Preferences.read(context, opts) do
@@ -145,9 +155,12 @@ defmodule LemonMemory.Recall do
         facts
         |> Enum.sort_by(&(-Query.shared_term_count(terms, &1)))
         |> Enum.map(&("Preference: " <> relevant_snippet(&1, terms)))
-      _ -> []
+
+      _ ->
+        []
     end
   end
+
   defp private_facts(_context, _owner, _opts, _terms), do: []
 
   # Match full accepted bytes before choosing a bounded excerpt, including a
@@ -155,11 +168,14 @@ defmodule LemonMemory.Recall do
   defp relevant_snippet(text, terms) do
     text = text |> String.split() |> Enum.join(" ")
     pattern = Regex.compile!(Enum.map_join(terms, "|", &Regex.escape/1), "iu")
+
     case Regex.run(pattern, text, return: :index) do
       [{position, _} | _] when position > @user_snippet_bytes ->
         start = utf8_boundary(text, max(position - 80, 0))
         "… " <> snippet(binary_part(text, start, byte_size(text) - start), @user_snippet_bytes)
-      _ -> snippet(text, @user_snippet_bytes)
+
+      _ ->
+        snippet(text, @user_snippet_bytes)
     end
   end
 

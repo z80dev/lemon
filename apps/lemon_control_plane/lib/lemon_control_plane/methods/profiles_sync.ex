@@ -62,6 +62,7 @@ defmodule LemonControlPlane.Methods.ProfilesSync do
   end
 
   defp target_node(%{"nodeId" => node_id}, _profile), do: {:ok, node_id}
+
   defp target_node(_params, %{"node" => node}) when node in [nil, "local"],
     do: {:error, :target_required}
 
@@ -88,13 +89,19 @@ defmodule LemonControlPlane.Methods.ProfilesSync do
 
   defp valid_node_id?(id) when is_binary(id),
     do: byte_size(id) in 1..128 and String.valid?(id) and String.trim(id) == id
+
   defp valid_node_id?(_), do: false
 
   defp invoke(node_id, payload, ctx) do
     case NodeIO.invoke(node_id, "node.profile.sync", payload, ctx) do
-      {:ok, ack} -> {:ok, ack}
-      {:error, {_code, _message, %{"reason" => "mutation_conflict"}}} -> {:error, :mutation_conflict}
-      {:error, _} -> {:error, :destination_unavailable}
+      {:ok, ack} ->
+        {:ok, ack}
+
+      {:error, {_code, _message, %{"reason" => "mutation_conflict"}}} ->
+        {:error, :mutation_conflict}
+
+      {:error, _} ->
+        {:error, :destination_unavailable}
     end
   end
 
@@ -103,21 +110,28 @@ defmodule LemonControlPlane.Methods.ProfilesSync do
          Enum.all?(~w(profileId mutationId revisionDigest), fn key ->
            Map.has_key?(ack, key) and ack[key] == payload[key]
          end),
-      do: :ok,
-      else: {:error, :invalid_ack}
+       do: :ok,
+       else: {:error, :invalid_ack}
   end
+
   defp validate_ack(_, _), do: {:error, :invalid_ack}
 
   defp error({:forbidden, _} = reason), do: {:error, reason}
   defp error(:not_found), do: {:error, Errors.error(:not_found, "Profile not found")}
+
   defp error(:target_required),
     do: {:error, Errors.invalid_request("Profile sync requires nodeId for a local profile")}
+
   defp error(:ambiguous_target),
     do: {:error, Errors.error(:conflict, "Profile sync target is ambiguous")}
+
   defp error(:mutation_conflict),
     do: {:error, Errors.error(:conflict, "Profile sync mutation conflicts with its revision")}
-  defp error(reason) when reason in [:invalid_id, :invalid_sync_request, :invalid_profile_snapshot],
-    do: {:error, Errors.invalid_request("Profile sync request is invalid")}
+
+  defp error(reason)
+       when reason in [:invalid_id, :invalid_sync_request, :invalid_profile_snapshot],
+       do: {:error, Errors.invalid_request("Profile sync request is invalid")}
+
   defp error(reason) do
     classification =
       case reason do

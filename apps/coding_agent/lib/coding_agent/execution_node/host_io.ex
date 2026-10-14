@@ -45,9 +45,10 @@ defmodule CodingAgent.ExecutionNode.HostIO do
          {:ok, cwd} <- default_cwd(opts),
          {:ok, roots} <- allowed_roots(opts),
          expanded = Path.expand(path, cwd),
-         true <- Enum.any?(roots, fn {lexical, root} ->
-           inside?(expanded, lexical) or inside?(expanded, root)
-         end),
+         true <-
+           Enum.any?(roots, fn {lexical, root} ->
+             inside?(expanded, lexical) or inside?(expanded, root)
+           end),
          {:ok, canonical} <- canonical(expanded),
          true <- Enum.any?(roots, fn {_, root} -> inside?(canonical, root) end) do
       {:ok, canonical}
@@ -70,8 +71,13 @@ defmodule CodingAgent.ExecutionNode.HostIO do
       result = %{"name" => metadata.name, "set" => true}
 
       if Map.has_key?(args, "operationId"),
-        do: {:ok, Map.merge(result, %{"operationId" => metadata.operation_id,
-              "status" => metadata.status, "currentBindingMatches" => metadata.current_binding_matches})},
+        do:
+          {:ok,
+           Map.merge(result, %{
+             "operationId" => metadata.operation_id,
+             "status" => metadata.status,
+             "currentBindingMatches" => metadata.current_binding_matches
+           })},
         else: {:ok, result}
     else
       false -> {:error, :invalid_secret_value}
@@ -81,9 +87,14 @@ defmodule CodingAgent.ExecutionNode.HostIO do
 
   defp dispatch("node.secrets.receipt", args, opts) do
     with {:ok, receipt} <- Secrets.receipt(args["operationId"], secret_opts(opts)) do
-      {:ok, %{"nodeId" => receipt.node_id, "operationId" => receipt.operation_id,
-              "status" => receipt.status, "name" => receipt.name,
-              "currentBindingMatches" => receipt.current_binding_matches}}
+      {:ok,
+       %{
+         "nodeId" => receipt.node_id,
+         "operationId" => receipt.operation_id,
+         "status" => receipt.status,
+         "name" => receipt.name,
+         "currentBindingMatches" => receipt.current_binding_matches
+       }}
     else
       {:error, reason} -> {:error, secret_error(reason)}
     end
@@ -91,8 +102,13 @@ defmodule CodingAgent.ExecutionNode.HostIO do
 
   defp dispatch("node.secrets.list", _args, opts) do
     {:ok, entries} = Secrets.list(secret_opts(opts))
-    {:ok, %{"names" => entries |> Enum.take(@list_limit) |> Enum.map(& &1.name),
-            "limit" => @list_limit, "truncated" => length(entries) > @list_limit}}
+
+    {:ok,
+     %{
+       "names" => entries |> Enum.take(@list_limit) |> Enum.map(& &1.name),
+       "limit" => @list_limit,
+       "truncated" => length(entries) > @list_limit
+     }}
   end
 
   defp dispatch("node.secrets.delete", args, opts) do
@@ -111,6 +127,7 @@ defmodule CodingAgent.ExecutionNode.HostIO do
       true -> :ok
     end
   end
+
   defp valid_path(_), do: {:error, :invalid_path}
 
   defp default_cwd(opts) do
@@ -120,6 +137,7 @@ defmodule CodingAgent.ExecutionNode.HostIO do
 
   defp allowed_roots(opts) do
     roots = Keyword.get(opts, :allowed_roots, [home(opts)])
+
     if is_list(roots) and roots != [] and length(roots) <= 64 do
       Enum.reduce_while(roots, {:ok, []}, fn root, {:ok, acc} ->
         with :ok <- valid_path(root),
@@ -138,7 +156,8 @@ defmodule CodingAgent.ExecutionNode.HostIO do
 
   defp home(opts), do: Keyword.get(opts, :home) || System.user_home!()
 
-  defp inside?(path, root), do: path == root or String.starts_with?(path, if(root == "/", do: "/", else: root <> "/"))
+  defp inside?(path, root),
+    do: path == root or String.starts_with?(path, if(root == "/", do: "/", else: root <> "/"))
 
   # Walk before normalizing symlink targets: a missing leaf cannot hide a
   # symlinked existing parent. Looping links have a finite hop budget.
@@ -147,29 +166,50 @@ defmodule CodingAgent.ExecutionNode.HostIO do
   defp walk(["/" | rest], _current, hops), do: walk(rest, "/", hops)
   defp walk(["." | rest], current, hops), do: walk(rest, current, hops)
   defp walk([".." | rest], current, hops), do: walk(rest, Path.dirname(current), hops)
+
   defp walk([part | rest], current, hops) do
     next = Path.join(current, part)
+
     case File.lstat(next) do
       {:ok, %{type: :symlink}} when hops > 0 ->
         with {:ok, target} <- File.read_link(next) do
-          parts = if Path.type(target) == :absolute, do: Path.split(target), else: Path.split(current) ++ Path.split(target)
+          parts =
+            if Path.type(target) == :absolute,
+              do: Path.split(target),
+              else: Path.split(current) ++ Path.split(target)
+
           walk(parts ++ rest, "/", hops - 1)
         end
-      {:ok, %{type: :symlink}} -> {:error, :symlink_loop}
-      {:ok, %{type: type}} when rest != [] and type != :directory -> {:error, :not_directory}
-      {:ok, _} -> walk(rest, next, hops)
-      {:error, :enoent} -> walk(rest, next, hops)
-      {:error, reason} -> {:error, file_error(reason)}
+
+      {:ok, %{type: :symlink}} ->
+        {:error, :symlink_loop}
+
+      {:ok, %{type: type}} when rest != [] and type != :directory ->
+        {:error, :not_directory}
+
+      {:ok, _} ->
+        walk(rest, next, hops)
+
+      {:error, :enoent} ->
+        walk(rest, next, hops)
+
+      {:error, reason} ->
+        {:error, file_error(reason)}
     end
   end
+
   defp file_error(reason) when reason in [:eacces, :eperm], do: :permission_denied
   defp file_error(:enotdir), do: :not_directory
   defp file_error(_), do: :filesystem_failed
 
   defp secret_name(name) when is_binary(name) and byte_size(name) in 1..256 do
-    if String.valid?(name) and String.trim(name) != "" and not String.contains?(name, <<0>>), do: :ok, else: {:error, :invalid_secret_name}
+    if String.valid?(name) and String.trim(name) != "" and not String.contains?(name, <<0>>),
+      do: :ok,
+      else: {:error, :invalid_secret_name}
   end
+
   defp secret_name(_), do: {:error, :invalid_secret_name}
+
   defp secret_opts(opts) do
     opts
     |> Keyword.get(:secret_opts, [])
@@ -183,9 +223,20 @@ defmodule CodingAgent.ExecutionNode.HostIO do
       else: secret_opts(opts)
   end
 
-  defp secret_error(reason) when reason in [:invalid_secret_name, :invalid_secret_value,
-    :missing_master_key, :secrets_locked, :invalid_operation_id, :invalid_node_id,
-    :secret_operation_conflict, :secret_receipt_capacity, :secret_store_failed], do: reason
+  defp secret_error(reason)
+       when reason in [
+              :invalid_secret_name,
+              :invalid_secret_value,
+              :missing_master_key,
+              :secrets_locked,
+              :invalid_operation_id,
+              :invalid_node_id,
+              :secret_operation_conflict,
+              :secret_receipt_capacity,
+              :secret_store_failed
+            ],
+       do: reason
+
   defp secret_error(_), do: :secret_store_failed
 
   defp outcome({:ok, _}), do: :ok

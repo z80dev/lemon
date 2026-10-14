@@ -55,9 +55,12 @@ defmodule LemonMemory.Lifecycle do
         {:ok, %{items: items, revision: revision}}
       end
     else
-      {:error, reason} when reason in [:invalid_query, :invalid_memory_scope, :unscoped, :subagent, :unsafe_record] ->
+      {:error, reason}
+      when reason in [:invalid_query, :invalid_memory_scope, :unscoped, :subagent, :unsafe_record] ->
         {:error, reason}
-      _ -> {:error, :memory_unavailable}
+
+      _ ->
+        {:error, :memory_unavailable}
     end
   rescue
     _ -> {:error, :memory_unavailable}
@@ -73,30 +76,44 @@ defmodule LemonMemory.Lifecycle do
       else
         with {:ok, identity} <- Project.scope(context),
              {:ok, query} <- normalize_profile_query(query),
-             {:ok, indexed} <- store(opts).search_owned(server(opts), query,
-               identity.agent_id, identity.home_digest, selector,
-               limit: @max_scan, history_only: false),
-             {:ok, preferences} <- store(opts).list_owned_recent(server(opts),
-               identity.agent_id, identity.home_digest, selector,
-               preferences_only: true, limit: @max_scan + 1),
+             {:ok, indexed} <-
+               store(opts).search_owned(
+                 server(opts),
+                 query,
+                 identity.agent_id,
+                 identity.home_digest,
+                 selector, limit: @max_scan, history_only: false),
+             {:ok, preferences} <-
+               store(opts).list_owned_recent(
+                 server(opts),
+                 identity.agent_id,
+                 identity.home_digest,
+                 selector, preferences_only: true, limit: @max_scan + 1),
              true <- length(preferences) <= @max_scan do
           terms = Query.terms(query)
-          matching_preferences = Enum.filter(preferences, fn doc ->
-            Query.shared_term_count(terms, Enum.join(Preferences.facts(doc), " ")) > 0
-          end)
+
+          matching_preferences =
+            Enum.filter(preferences, fn doc ->
+              Query.shared_term_count(terms, Enum.join(Preferences.facts(doc), " ")) > 0
+            end)
+
           owned =
             (matching_preferences ++ indexed)
             |> Enum.uniq_by(& &1.doc_id)
             |> Enum.filter(&Project.profile_document?(&1, context, selector))
             |> Enum.take(@max_scan)
+
           with {:ok, items} <- profile_summaries(owned) do
             revision = sha256(Enum.map_join(owned, "\0", &Store.document_revision/1))
             {:ok, %{items: items, revision: revision}}
           end
         else
-          {:error, reason} when reason in [:invalid_query, :unscoped, :subagent, :unsafe_record] ->
+          {:error, reason}
+          when reason in [:invalid_query, :unscoped, :subagent, :unsafe_record] ->
             {:error, reason}
-          _ -> {:error, :memory_unavailable}
+
+          _ ->
+            {:error, :memory_unavailable}
         end
       end
     end
@@ -109,7 +126,8 @@ defmodule LemonMemory.Lifecycle do
   @doc "Inspect one record only within its exact profile ownership boundary."
   def profile_get(context, doc_id, opts \\ []) do
     with {:ok, doc} <- profile_document(context, doc_id, opts),
-         {:ok, item} <- profile_summary(doc), do: {:ok, item}
+         {:ok, item} <- profile_summary(doc),
+         do: {:ok, item}
   rescue
     _ -> {:error, :memory_unavailable}
   catch
@@ -138,8 +156,11 @@ defmodule LemonMemory.Lifecycle do
       :global.trans({{__MODULE__, server(opts), doc_id}, self()}, fn ->
         with {:ok, doc} <- profile_document(context, doc_id, opts),
              revision = store(opts).document_revision(doc),
-             true <- secure_equal?(confirmation_digest,
-               profile_confirmation(identity, doc_id, revision, selector)),
+             true <-
+               secure_equal?(
+                 confirmation_digest,
+                 profile_confirmation(identity, doc_id, revision, selector)
+               ),
              {:ok, status} <-
                store(opts).delete_document_if_unchanged(server(opts), doc.doc_id, revision) do
           case status do
@@ -170,10 +191,21 @@ defmodule LemonMemory.Lifecycle do
         do: {:ok, doc},
         else: {:error, :stale}
     else
-      false -> {:error, :not_found}
-      {:error, reason} when reason in [:invalid_document_id, :invalid_memory_scope, :not_found, :unscoped, :subagent] ->
+      false ->
+        {:error, :not_found}
+
+      {:error, reason}
+      when reason in [
+             :invalid_document_id,
+             :invalid_memory_scope,
+             :not_found,
+             :unscoped,
+             :subagent
+           ] ->
         {:error, reason}
-      _ -> {:error, :memory_unavailable}
+
+      _ ->
+        {:error, :memory_unavailable}
     end
   end
 
@@ -211,16 +243,25 @@ defmodule LemonMemory.Lifecycle do
 
   defp profile_fetch(_identity, id, :operator, opts),
     do: store(opts).get_document(server(opts), id)
+
   defp profile_fetch(identity, id, selector, opts),
-    do: store(opts).get_owned_document(server(opts), id, identity.agent_id,
-      identity.home_digest, selector)
+    do:
+      store(opts).get_owned_document(
+        server(opts),
+        id,
+        identity.agent_id,
+        identity.home_digest,
+        selector
+      )
 
   defp profile_documents(identity, :operator, opts) do
     store(opts).list_agent_recent(server(opts), identity.agent_id, limit: @max_scan)
   end
+
   defp profile_documents(identity, selector, opts) do
-    store(opts).list_owned_recent(server(opts), identity.agent_id, identity.home_digest,
-      selector, limit: @max_scan)
+    store(opts).list_owned_recent(server(opts), identity.agent_id, identity.home_digest, selector,
+      limit: @max_scan
+    )
   end
 
   @doc "Produce the same revision-bound projection used by profile_get and profile_list."
@@ -229,12 +270,15 @@ defmodule LemonMemory.Lifecycle do
   @doc "Managed query shape: valid UTF-8, no NUL, at most 512 codepoints/2048 bytes."
   def valid_profile_query?(query)
       when is_binary(query) and byte_size(query) <= @max_profile_query_bytes,
-    do: codepoints_within?(query, @max_profile_query_codepoints)
+      do: codepoints_within?(query, @max_profile_query_codepoints)
+
   def valid_profile_query?(_), do: false
 
   defp profile_selection(opts) do
     selector = Keyword.get(opts, :memory_scope, :operator)
-    if ContextScope.valid_selector?(selector), do: {:ok, selector},
+
+    if ContextScope.valid_selector?(selector),
+      do: {:ok, selector},
       else: {:error, :invalid_memory_scope}
   end
 
@@ -254,19 +298,30 @@ defmodule LemonMemory.Lifecycle do
 
       # Safety appends a three-byte ellipsis after its cap.
       {text, _} = Safety.redact_for_operator(text, max_bytes: 2_045)
-      {:ok, %{
-        "id" => profile_id(doc), "kind" => kind(doc), "text" => text, "source" => "durable",
-        "createdAtMs" => safe_timestamp(doc.started_at_ms),
-        "updatedAtMs" => safe_timestamp(doc.ingested_at_ms)
-      }}
+
+      {:ok,
+       %{
+         "id" => profile_id(doc),
+         "kind" => kind(doc),
+         "text" => text,
+         "source" => "durable",
+         "createdAtMs" => safe_timestamp(doc.started_at_ms),
+         "updatedAtMs" => safe_timestamp(doc.ingested_at_ms)
+       }}
     end
   end
 
   defp safe_timestamp(value) when is_integer(value) and value >= 0, do: value
   defp safe_timestamp(_), do: 0
+
   defp profile_confirmation(identity, id, revision, selector),
-    do: sha256("profile-memory-delete-v1\0" <> identity.agent_id <> "\0" <>
-      identity.home_digest <> "\0" <> id <> "\0" <> revision <> "\0" <> inspect(selector))
+    do:
+      sha256(
+        "profile-memory-delete-v1\0" <>
+          identity.agent_id <>
+          "\0" <>
+          identity.home_digest <> "\0" <> id <> "\0" <> revision <> "\0" <> inspect(selector)
+      )
 
   @doc "List or full-text search a bounded recent window using safe filters."
   @spec list(map() | keyword(), keyword()) :: result()
@@ -435,9 +490,14 @@ defmodule LemonMemory.Lifecycle do
 
   defp kind(%Document{meta: meta}) when is_map(meta) do
     case map_value(meta, "kind") do
-      kind when kind in ["learned_source", "project_learning", "user", "memory"] -> kind
-      kind when kind in [:learned_source, :project_learning, :user, :memory] -> Atom.to_string(kind)
-      _ -> "run"
+      kind when kind in ["learned_source", "project_learning", "user", "memory"] ->
+        kind
+
+      kind when kind in [:learned_source, :project_learning, :user, :memory] ->
+        Atom.to_string(kind)
+
+      _ ->
+        "run"
     end
   end
 
@@ -503,16 +563,21 @@ defmodule LemonMemory.Lifecycle do
 
   defp normalize_profile_query(query) do
     if valid_profile_query?(query),
-      do: normalize_query_text(query, @max_profile_query_bytes), else: {:error, :invalid_query}
+      do: normalize_query_text(query, @max_profile_query_bytes),
+      else: {:error, :invalid_query}
   end
 
   defp codepoints_within?(<<>>, _remaining), do: true
-  defp codepoints_within?(<<point::utf8, rest::binary>>, remaining) when remaining > 0 and point != 0,
-    do: codepoints_within?(rest, remaining - 1)
+
+  defp codepoints_within?(<<point::utf8, rest::binary>>, remaining)
+       when remaining > 0 and point != 0,
+       do: codepoints_within?(rest, remaining - 1)
+
   defp codepoints_within?(_, _remaining), do: false
 
   defp normalize_query(query) when is_binary(query) and byte_size(query) <= @max_query_bytes,
     do: normalize_query_text(query, @max_query_bytes)
+
   defp normalize_query(_), do: {:error, :invalid_query}
 
   defp normalize_query_text(query, max_bytes) do
@@ -531,7 +596,6 @@ defmodule LemonMemory.Lifecycle do
       true -> {:ok, normalized}
     end
   end
-
 
   defp enum_filter(value, allowed) when is_binary(value) do
     value = String.downcase(String.trim(value))

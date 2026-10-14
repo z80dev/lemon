@@ -23,14 +23,26 @@ defmodule LemonControlPlane.Methods.NodeProfilePaths do
   def handle(params, %{auth: %{role: :operator} = auth} = ctx) when is_map(params) do
     with :ok <- Authorize.authorize(auth, name(), scopes()),
          :ok <- validate_params(params),
-         {:ok, result} <- LemonControlPlane.NodeIO.invoke(params["nodeId"], name(),
-           %{"profileId" => params["profileId"]}, ctx),
+         {:ok, result} <-
+           LemonControlPlane.NodeIO.invoke(
+             params["nodeId"],
+             name(),
+             %{"profileId" => params["profileId"]},
+             ctx
+           ),
          :ok <- validate_result(result, params["profileId"]) do
-      {:ok, Map.take(result, ~w(profileId workspacePath skillsPath)) |> Map.put("nodeId", params["nodeId"])}
+      {:ok,
+       Map.take(result, ~w(profileId workspacePath skillsPath))
+       |> Map.put("nodeId", params["nodeId"])}
     else
-      {:error, {:forbidden, _}} = error -> error
-      {:error, :invalid_request} -> {:error, Errors.invalid_request("Invalid profile paths request")}
-      _ -> {:error, Errors.unavailable("Profile paths are unavailable")}
+      {:error, {:forbidden, _}} = error ->
+        error
+
+      {:error, :invalid_request} ->
+        {:error, Errors.invalid_request("Invalid profile paths request")}
+
+      _ ->
+        {:error, Errors.unavailable("Profile paths are unavailable")}
     end
   rescue
     _ -> {:error, Errors.unavailable("Profile paths are unavailable")}
@@ -45,8 +57,9 @@ defmodule LemonControlPlane.Methods.NodeProfilePaths do
     node = params["nodeId"]
 
     with true <- Enum.sort(Map.keys(params)) == ~w(nodeId profileId),
-         true <- is_binary(node) and byte_size(node) in 1..128 and String.valid?(node) and
-           String.trim(node) == node and not String.contains?(node, <<0>>),
+         true <-
+           is_binary(node) and byte_size(node) in 1..128 and String.valid?(node) and
+             String.trim(node) == node and not String.contains?(node, <<0>>),
          {:ok, _controller_paths_not_used} <- LemonCore.ProfileStore.paths(params["profileId"]) do
       :ok
     else
@@ -54,13 +67,17 @@ defmodule LemonControlPlane.Methods.NodeProfilePaths do
     end
   end
 
-  defp validate_result(%{"profileId" => id, "workspacePath" => workspace, "skillsPath" => skills}, id)
+  defp validate_result(
+         %{"profileId" => id, "workspacePath" => workspace, "skillsPath" => skills},
+         id
+       )
        when is_binary(workspace) and is_binary(skills) do
     if String.valid?(workspace) and String.valid?(skills) and
          not String.contains?(workspace, <<0>>) and Path.type(workspace) == :absolute and
-         Path.expand(workspace) == workspace and skills == Path.join([workspace, ".lemon", "skill"]),
-      do: :ok,
-      else: {:error, :invalid_acknowledgement}
+         Path.expand(workspace) == workspace and
+         skills == Path.join([workspace, ".lemon", "skill"]),
+       do: :ok,
+       else: {:error, :invalid_acknowledgement}
   end
 
   defp validate_result(_, _), do: {:error, :invalid_acknowledgement}

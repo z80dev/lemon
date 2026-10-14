@@ -156,7 +156,10 @@ defmodule CodingAgent.Tools.Agent do
 
   defp do_run(params, cwd, opts) do
     opts =
-      Keyword.merge(opts, Map.to_list(CodingAgent.Tools.Task.Params.inherited_execution_context(opts)))
+      Keyword.merge(
+        opts,
+        Map.to_list(CodingAgent.Tools.Task.Params.inherited_execution_context(opts))
+      )
 
     with {:ok, validated} <- validate_run_params(params, cwd),
          {:ok, delegated_session_key} <- resolve_delegated_session_key(validated, opts),
@@ -669,12 +672,22 @@ defmodule CodingAgent.Tools.Agent do
     router = run_orchestrator(opts)
 
     context = Map.new(opts)
-    request = %{request | meta: CodingAgent.Tools.Task.Params.continuation_metadata(request.meta, context)}
+
+    request = %{
+      request
+      | meta: CodingAgent.Tools.Task.Params.continuation_metadata(request.meta, context)
+    }
+
     result =
       if CodingAgent.Tools.Task.Params.managed_context?(context) do
-        CodingAgent.Tools.Task.Params.submit_native_followup(context,
-          %{request | queue_mode: :collect,
-            meta: LemonCore.RunStore.execution_projection(request.meta || %{})})
+        CodingAgent.Tools.Task.Params.submit_native_followup(
+          context,
+          %{
+            request
+            | queue_mode: :collect,
+              meta: LemonCore.RunStore.execution_projection(request.meta || %{})
+          }
+        )
       else
         submit_with_orchestrator(router, request)
       end
@@ -1001,12 +1014,22 @@ defmodule CodingAgent.Tools.Agent do
         })
 
       managed? = CodingAgent.Tools.Task.Params.managed_context?(Map.new(opts))
-      followup = %{followup | meta: CodingAgent.Tools.Task.Params.continuation_metadata(followup.meta, Map.new(opts))}
+
+      followup = %{
+        followup
+        | meta: CodingAgent.Tools.Task.Params.continuation_metadata(followup.meta, Map.new(opts))
+      }
+
       result =
         if managed? do
-          CodingAgent.Tools.Task.Params.submit_native_followup(Map.new(opts),
-            %{followup | queue_mode: :collect,
-              meta: LemonCore.RunStore.execution_projection(followup.meta || %{})})
+          CodingAgent.Tools.Task.Params.submit_native_followup(
+            Map.new(opts),
+            %{
+              followup
+              | queue_mode: :collect,
+                meta: LemonCore.RunStore.execution_projection(followup.meta || %{})
+            }
+          )
         else
           submit_with_orchestrator(router, followup)
         end

@@ -23,16 +23,36 @@ defmodule CodingAgent.ExecutionNode.Worker do
   @max_control_text_bytes 16 * 1_024
   @max_pending_events 64
   @approval_decisions %{
-    "approve_once" => :approve_once, "approve_session" => :approve_session,
-    "approve_agent" => :approve_agent, "approve_global" => :approve_global, "deny" => :deny
+    "approve_once" => :approve_once,
+    "approve_session" => :approve_session,
+    "approve_agent" => :approve_agent,
+    "approve_global" => :approve_global,
+    "deny" => :deny
   }
-  @host_io_methods ["node.host.info", "node.fs.list", "node.fs.stat", "node.fs.read",
-    "node.fs.write", "node.fs.mkdir", "node.fs.move", "node.fs.delete.preview", "node.fs.delete",
-    "node.secrets.set", "node.secrets.list", "node.secrets.delete", "node.secrets.receipt"]
+  @host_io_methods [
+    "node.host.info",
+    "node.fs.list",
+    "node.fs.stat",
+    "node.fs.read",
+    "node.fs.write",
+    "node.fs.mkdir",
+    "node.fs.move",
+    "node.fs.delete.preview",
+    "node.fs.delete",
+    "node.secrets.set",
+    "node.secrets.list",
+    "node.secrets.delete",
+    "node.secrets.receipt"
+  ]
   @shell_methods ["node.shell.open", "node.shell.input", "node.shell.resize", "node.shell.close"]
   @process_methods ["node.process.run", "node.process.get", "node.process.cancel"]
-  @process_capability %{"version" => 1, "maxStdinBytes" => 1_048_576,
-    "maxOutputBytes" => 1_048_576, "maxTimeoutMs" => 1_800_000, "maxArgvBytes" => 131_072}
+  @process_capability %{
+    "version" => 1,
+    "maxStdinBytes" => 1_048_576,
+    "maxOutputBytes" => 1_048_576,
+    "maxTimeoutMs" => 1_800_000,
+    "maxArgvBytes" => 131_072
+  }
   @capabilities %{
     "coding_agent.run" => %{
       "version" => @protocol_version,
@@ -67,17 +87,27 @@ defmodule CodingAgent.ExecutionNode.Worker do
   @doc "Declared protocol capabilities, shared by pairing and installed-runtime inspection."
   def capabilities do
     @capabilities
-    |> Map.merge(Map.new(@host_io_methods ++ @shell_methods ++
-      ["node.capabilities.get", "node.runtime.features"], &{&1, true}))
+    |> Map.merge(
+      Map.new(
+        @host_io_methods ++
+          @shell_methods ++
+          ["node.capabilities.get", "node.runtime.features"],
+        &{&1, true}
+      )
+    )
     |> Map.merge(Map.new(@process_methods, &{&1, @process_capability}))
   end
 
   @doc "Live runtime compatibility, without asserting provider login or OS grants."
   def runtime_features do
     capabilities = capabilities()
+
     CodingAgent.ExecutionNode.Features.snapshot(capabilities)
     |> Map.put("capabilities", capabilities)
-    |> Map.put("nativePrivacyContext", get_in(capabilities, ["coding_agent.run", "nativePrivacyContext"]))
+    |> Map.put(
+      "nativePrivacyContext",
+      get_in(capabilities, ["coding_agent.run", "nativePrivacyContext"])
+    )
   end
 
   defstruct [
@@ -150,7 +180,8 @@ defmodule CodingAgent.ExecutionNode.Worker do
        socket_opts: Keyword.get(opts, :socket_opts, []),
        executor_module: Keyword.get(opts, :executor_module, CodingAgent.Executor),
        mcp_discovery_module: Keyword.get(opts, :mcp_discovery_module, LemonSkills.McpDiscovery),
-       profile_sync_module: Keyword.get(opts, :profile_sync_module, CodingAgent.ExecutionNode.ProfileSync),
+       profile_sync_module:
+         Keyword.get(opts, :profile_sync_module, CodingAgent.ExecutionNode.ProfileSync),
        task_supervisor: Keyword.get(opts, :task_supervisor, CodingAgent.TaskSupervisor),
        memory_ingest_server: Keyword.get(opts, :memory_ingest_server, Ingest),
        token_store_module: Keyword.get(opts, :token_store_module, TokenStore),
@@ -164,7 +195,11 @@ defmodule CodingAgent.ExecutionNode.Worker do
 
   defp connect_initial(state, opts) do
     if Keyword.get(opts, :pair, false) or is_binary(state.invite_code) do
-      with {:ok, state} <- if(is_binary(state.invite_code), do: {:ok, state}, else: prepare_pairing_identity(state)) do
+      with {:ok, state} <-
+             if(is_binary(state.invite_code),
+               do: {:ok, state},
+               else: prepare_pairing_identity(state)
+             ) do
         connect_pairing(state, Keyword.get(opts, :operator_token))
       end
     else
@@ -177,8 +212,11 @@ defmodule CodingAgent.ExecutionNode.Worker do
   defp connect_pairing(state, operator_token) do
     connect_params =
       if is_binary(state.invite_code) do
-        %{"role" => "enrollment", "auth" => %{"inviteCode" => state.invite_code},
-          "client" => %{"id" => "lemon-execution-node-pair:#{state.name}"}}
+        %{
+          "role" => "enrollment",
+          "auth" => %{"inviteCode" => state.invite_code},
+          "client" => %{"id" => "lemon-execution-node-pair:#{state.name}"}
+        }
       else
         %{"role" => "operator", "client" => %{"id" => "lemon-execution-node-pair:#{state.name}"}}
         |> maybe_put_auth(operator_token)
@@ -217,7 +255,8 @@ defmodule CodingAgent.ExecutionNode.Worker do
   def handle_info(
         {:execution_node_socket, socket, {:connected, _hello}},
         %{socket: socket, socket_mode: :pairing, invite_code: code, pairing_stage: stage} = state
-      ) when is_binary(code) and not is_nil(stage) do
+      )
+      when is_binary(code) and not is_nil(stage) do
     {:stop, {:pairing_failed, :outcome_unknown}, state}
   end
 
@@ -269,7 +308,8 @@ defmodule CodingAgent.ExecutionNode.Worker do
   def handle_info(
         {:execution_node_socket, socket, {:disconnected, _reason}},
         %{socket: socket, socket_mode: :pairing, invite_code: code} = state
-      ) when is_binary(code) do
+      )
+      when is_binary(code) do
     {:stop, {:pairing_failed, :outcome_unknown}, state}
   end
 
@@ -303,12 +343,27 @@ defmodule CodingAgent.ExecutionNode.Worker do
 
   def handle_info({:node_pty, invoke_id, type, payload}, state) do
     case state.shells[invoke_id] do
-      nil -> {:noreply, state}
+      nil ->
+        {:noreply, state}
+
       shell ->
         frame = Map.put(payload, "type", type)
-        request(state, "node.shell.event", %{"invokeId" => invoke_id, "payload" => frame}, {:shell_event, invoke_id, type})
+
+        request(
+          state,
+          "node.shell.event",
+          %{"invokeId" => invoke_id, "payload" => frame},
+          {:shell_event, invoke_id, type}
+        )
+
         if type == "exit" do
-          request(state, "node.invoke.result", %{"invokeId" => invoke_id, "result" => %{"code" => payload["code"]}}, {:invoke_result, invoke_id})
+          request(
+            state,
+            "node.invoke.result",
+            %{"invokeId" => invoke_id, "result" => %{"code" => payload["code"]}},
+            {:invoke_result, invoke_id}
+          )
+
           {:noreply, %{state | shells: Map.delete(state.shells, invoke_id)}}
         else
           _ = shell
@@ -323,7 +378,9 @@ defmodule CodingAgent.ExecutionNode.Worker do
         Process.demonitor(ref, [:flush])
         state = %{state | process_tasks: Map.delete(state.process_tasks, invoke_id)}
         {:noreply, send_host_io_result(state, invoke_id, result)}
-      _ -> {:noreply, state}
+
+      _ ->
+        {:noreply, state}
     end
   end
 
@@ -366,7 +423,9 @@ defmodule CodingAgent.ExecutionNode.Worker do
 
   def handle_info({:engine_event, run_ref, %{__event__: :completed} = completed}, state) do
     case Map.get(state.run_refs, run_ref) do
-      nil -> {:noreply, state}
+      nil ->
+        {:noreply, state}
+
       invoke_id ->
         invocation = Map.fetch!(state.invocations, invoke_id)
         if invocation.monitor_ref, do: Process.demonitor(invocation.monitor_ref, [:flush])
@@ -378,23 +437,36 @@ defmodule CodingAgent.ExecutionNode.Worker do
 
   def handle_info({:engine_event, run_ref, event}, state) do
     case Map.get(state.run_refs, run_ref) do
-      nil -> {:noreply, state}
-      invoke_id -> {:noreply, forward_event(state, invoke_id, RemoteEventCodec.encode_engine(event))}
+      nil ->
+        {:noreply, state}
+
+      invoke_id ->
+        {:noreply, forward_event(state, invoke_id, RemoteEventCodec.encode_engine(event))}
     end
   end
 
-  def handle_info(%LemonCore.Event{type: :approval_requested,
-                                  payload: %{pending: %{session_id: session_id}} = payload}, state)
+  def handle_info(
+        %LemonCore.Event{
+          type: :approval_requested,
+          payload: %{pending: %{session_id: session_id}} = payload
+        },
+        state
+      )
       when is_binary(session_id) do
     pending = payload.pending
+
     case invocation_for_run(state, pending.run_id) do
-      nil -> {:noreply, state}
+      nil ->
+        {:noreply, state}
+
       {invoke_id, %{session_key: session_key} = invocation}
       when session_key == pending.session_key ->
         invocation = %{invocation | approvals: MapSet.put(invocation.approvals, pending.id)}
         state = put_invocation(state, invoke_id, invocation)
         {:noreply, forward_event(state, invoke_id, RemoteEventCodec.encode_approval(pending))}
-      _ -> {:noreply, state}
+
+      _ ->
+        {:noreply, state}
     end
   end
 
@@ -402,9 +474,12 @@ defmodule CodingAgent.ExecutionNode.Worker do
       when type in [:checkpoint_created, :checkpoint_restored, :checkpoint_deleted] and
              is_map(meta) and not is_map_key(meta, :remote_node) do
     case invocation_for_run(state, meta[:run_id]) do
-      nil -> {:noreply, state}
+      nil ->
+        {:noreply, state}
+
       {invoke_id, _invocation} ->
-        {:noreply, forward_event(state, invoke_id, RemoteEventCodec.encode_checkpoint(type, payload))}
+        {:noreply,
+         forward_event(state, invoke_id, RemoteEventCodec.encode_checkpoint(type, payload))}
     end
   end
 
@@ -426,6 +501,7 @@ defmodule CodingAgent.ExecutionNode.Worker do
         _ = CodingAgent.ExecutionNode.ProcessService.cancel_invocation(self(), invoke_id)
         state = %{state | process_tasks: Map.delete(state.process_tasks, invoke_id)}
         {:noreply, send_invoke_error(state, invoke_id, :process_outcome_unknown)}
+
       nil ->
         case Enum.find(state.invocations, fn {_id, invocation} ->
                invocation.monitor_ref == monitor_ref
@@ -438,7 +514,9 @@ defmodule CodingAgent.ExecutionNode.Worker do
 
             state = send_invoke_error(state, invoke_id, reason)
             {:noreply, remove_invocation(state, invoke_id)}
-          nil -> {:noreply, state}
+
+          nil ->
+            {:noreply, state}
         end
     end
   end
@@ -452,9 +530,12 @@ defmodule CodingAgent.ExecutionNode.Worker do
       {invoke_id, _} ->
         state = send_invoke_error(state, invoke_id, :pty_closed)
         {:noreply, %{state | shells: Map.delete(state.shells, invoke_id)}}
-      nil -> {:noreply, state}
+
+      nil ->
+        {:noreply, state}
     end
   end
+
   def handle_info(_message, state), do: {:noreply, state}
 
   @impl true
@@ -462,6 +543,7 @@ defmodule CodingAgent.ExecutionNode.Worker do
     _ = cancel_all_invocations(state)
     :ok
   end
+
   @impl true
   def format_status(status) do
     status
@@ -470,8 +552,11 @@ defmodule CodingAgent.ExecutionNode.Worker do
     |> Map.put(:log, [])
   end
 
-
-  defp handle_socket_response(:pair_request, {:ok, %{"challengeToken" => _} = payload}, %{invite_code: code} = state)
+  defp handle_socket_response(
+         :pair_request,
+         {:ok, %{"challengeToken" => _} = payload},
+         %{invite_code: code} = state
+       )
        when is_binary(code) do
     handle_socket_response(:pair_approve, {:ok, payload}, state)
   end
@@ -483,6 +568,7 @@ defmodule CodingAgent.ExecutionNode.Worker do
         _ -> GenServer.stop(shell.pid, :normal)
       end
     end
+
     {:noreply, state}
   end
 
@@ -532,7 +618,11 @@ defmodule CodingAgent.ExecutionNode.Worker do
       old_socket = state.socket
       :ok = state.socket_module.stop(old_socket)
 
-      case connect_authenticated(%{state | socket: nil, pairing_stage: nil, invite_code: nil}, token, node_id) do
+      case connect_authenticated(
+             %{state | socket: nil, pairing_stage: nil, invite_code: nil},
+             token,
+             node_id
+           ) do
         {:ok, new_state} ->
           notify(new_state, {:status, :paired, node_id})
           {:noreply, new_state}
@@ -568,10 +658,13 @@ defmodule CodingAgent.ExecutionNode.Worker do
           {:ok, %{"received" => true, "seq" => ^seq}} ->
             state = put_invocation(state, invoke_id, %{invocation | inflight: nil})
             {:noreply, drain_events(state, invoke_id)}
+
           _ ->
             {:noreply, fail_stream(state, invoke_id, :event_delivery_failed)}
         end
-      _ -> {:noreply, state}
+
+      _ ->
+        {:noreply, state}
     end
   end
 
@@ -604,7 +697,8 @@ defmodule CodingAgent.ExecutionNode.Worker do
         "capabilities" => capabilities()
       }
       |> then(fn params ->
-        if is_binary(state.invite_code), do: Map.put(params, "inviteCode", state.invite_code),
+        if is_binary(state.invite_code),
+          do: Map.put(params, "inviteCode", state.invite_code),
           else: maybe_put_recovery(params, state)
       end)
 
@@ -626,7 +720,6 @@ defmodule CodingAgent.ExecutionNode.Worker do
             Map.has_key?(state.process_tasks, invoke_id) ->
           {:noreply, state}
 
-
         not is_map(args) ->
           {:noreply, send_invoke_error(state, invoke_id, :invalid_arguments)}
 
@@ -645,21 +738,26 @@ defmodule CodingAgent.ExecutionNode.Worker do
         method == "node.profile.sync" ->
           sync_module = state.profile_sync_module
           cwd = state.default_cwd
-          {:noreply, start_service_task(state, invoke_id, :profile_sync_failed, fn ->
-            sync_module.apply(args, cwd)
-          end)}
+
+          {:noreply,
+           start_service_task(state, invoke_id, :profile_sync_failed, fn ->
+             sync_module.apply(args, cwd)
+           end)}
 
         method == "node.profile.sync.status" ->
           sync_module = state.profile_sync_module
           cwd = state.default_cwd
-          {:noreply, start_service_task(state, invoke_id, :profile_sync_failed, fn ->
-            sync_module.status(args, cwd)
-          end)}
+
+          {:noreply,
+           start_service_task(state, invoke_id, :profile_sync_failed, fn ->
+             sync_module.status(args, cwd)
+           end)}
 
         method == "node.profile.paths" ->
-          {:noreply, start_service_task(state, invoke_id, :profile_paths_failed, fn ->
-            CodingAgent.ExecutionNode.ProfilePaths.get(args)
-          end)}
+          {:noreply,
+           start_service_task(state, invoke_id, :profile_paths_failed, fn ->
+             CodingAgent.ExecutionNode.ProfilePaths.get(args)
+           end)}
 
         method == "coding_agent.run" ->
           {:noreply, start_invocation(state, invoke_id, args)}
@@ -669,7 +767,8 @@ defmodule CodingAgent.ExecutionNode.Worker do
           {:noreply, send_invoke_error(state, invoke_id, :node_mismatch)}
 
         method in @process_methods ->
-          {:noreply, start_process_task(state, invoke_id, method, args, payload["nodeGeneration"])}
+          {:noreply,
+           start_process_task(state, invoke_id, method, args, payload["nodeGeneration"])}
 
         method == "node.runtime.features" ->
           {:noreply, send_host_io_result(state, invoke_id, {:ok, runtime_features()})}
@@ -692,19 +791,26 @@ defmodule CodingAgent.ExecutionNode.Worker do
       {:noreply, state}
     end
   end
+
   defp handle_node_event("node.invoke.cancel", payload, state) do
     invoke_id = payload["invokeId"]
 
     if targeted?(payload, state) do
-      state = if is_binary(state.node_id) and payload["nodeId"] == state.node_id,
-        do: cancel_process_task(state, invoke_id, payload["nodeGeneration"]), else: state
+      state =
+        if is_binary(state.node_id) and payload["nodeId"] == state.node_id,
+          do: cancel_process_task(state, invoke_id, payload["nodeGeneration"]),
+          else: state
+
       case state.shells[invoke_id] do
         %{pid: pid} ->
           GenServer.stop(pid, :normal)
           {:noreply, %{state | shells: Map.delete(state.shells, invoke_id)}}
+
         nil ->
           case Map.get(state.invocations, invoke_id) do
-            nil -> {:noreply, state}
+            nil ->
+              {:noreply, state}
+
             invocation ->
               _ = cancel_invocation_execution(state, invocation)
               {:noreply, remove_invocation(state, invoke_id)}
@@ -727,12 +833,15 @@ defmodule CodingAgent.ExecutionNode.Worker do
     invoke_id = payload["invokeId"]
     approval_id = payload["approvalId"]
     decision = Map.get(@approval_decisions, payload["decision"])
+
     case Map.get(state.invocations, invoke_id) do
       %{run_id: run_id, session_key: session_key, approvals: approvals} = invocation ->
         if targeted?(payload, state) and payload["runId"] == run_id and
              MapSet.member?(approvals, approval_id) and not is_nil(decision) do
           case ExecApprovals.resolve(approval_id, decision,
-                 expected_run_id: run_id, expected_session_key: session_key) do
+                 expected_run_id: run_id,
+                 expected_session_key: session_key
+               ) do
             {:ok, %{run_id: ^run_id, session_key: ^session_key, decision: ^decision}} ->
               invocation = %{invocation | approvals: MapSet.delete(approvals, approval_id)}
               {:noreply, put_invocation(state, invoke_id, invocation)}
@@ -744,7 +853,9 @@ defmodule CodingAgent.ExecutionNode.Worker do
         else
           {:noreply, state}
         end
-      _ -> {:noreply, state}
+
+      _ ->
+        {:noreply, state}
     end
   end
 
@@ -759,9 +870,9 @@ defmodule CodingAgent.ExecutionNode.Worker do
 
   defp validate_invocation_payload(_method, args, state), do: validate_payload(args, state)
 
-
   defp invoke_memory_transfer(state, invoke_id, method, args) do
     result = CodingAgent.ExecutionNode.MemoryTransfer.execute(method, args, state.node_id)
+
     if method in ["memory.transfer.prepare", "memory.transfer.snapshot"],
       do: send_memory_result(state, invoke_id, result, :snapshot_too_large),
       else: send_memory_result(state, invoke_id, result)
@@ -799,61 +910,103 @@ defmodule CodingAgent.ExecutionNode.Worker do
   end
 
   defp host_io_opts(state),
-    do: [default_cwd: state.default_cwd, allowed_roots: state.allowed_roots, node_id: state.node_id]
+    do: [
+      default_cwd: state.default_cwd,
+      allowed_roots: state.allowed_roots,
+      node_id: state.node_id
+    ]
 
   defp start_process_task(state, invoke_id, method, args, generation) do
     cond do
       not is_integer(generation) or generation < 0 ->
         send_invoke_error(state, invoke_id, :invalid_node_generation)
+
       Map.has_key?(args, "nodeId") and args["nodeId"] != state.node_id ->
         send_invoke_error(state, invoke_id, :node_mismatch)
+
       map_size(state.process_tasks) >= 64 ->
         send_invoke_error(state, invoke_id, :process_busy)
+
       true ->
         owner = self()
-        opts = host_io_opts(state) ++ [session_generation: generation, invoke_id: invoke_id, owner: owner]
+
+        opts =
+          host_io_opts(state) ++
+            [session_generation: generation, invoke_id: invoke_id, owner: owner]
+
         args = Map.put(args, "nodeId", state.node_id)
-        {pid, ref} = spawn_monitor(fn ->
-          result = CodingAgent.ExecutionNode.ProcessService.handle(method, args, opts)
-          send(owner, {:process_service_result, invoke_id, self(), result})
-        end)
-        task = %{pid: pid, monitor_ref: ref, generation: generation, method: method,
-          process_id: args["processId"], node_id: state.node_id}
+
+        {pid, ref} =
+          spawn_monitor(fn ->
+            result = CodingAgent.ExecutionNode.ProcessService.handle(method, args, opts)
+            send(owner, {:process_service_result, invoke_id, self(), result})
+          end)
+
+        task = %{
+          pid: pid,
+          monitor_ref: ref,
+          generation: generation,
+          method: method,
+          process_id: args["processId"],
+          node_id: state.node_id
+        }
+
         %{state | process_tasks: Map.put(state.process_tasks, invoke_id, task)}
     end
   end
 
   defp cancel_process_task(state, invoke_id, generation) do
     case state.process_tasks[invoke_id] do
-      nil -> state
+      nil ->
+        state
+
       %{generation: ^generation} = task when is_integer(generation) and generation >= 0 ->
         _ = cancel_process_receipt(task, invoke_id)
         _ = CodingAgent.ExecutionNode.ProcessService.cancel_invocation(self(), invoke_id)
         Process.exit(task.pid, :kill)
         Process.demonitor(task.monitor_ref, [:flush])
         %{state | process_tasks: Map.delete(state.process_tasks, invoke_id)}
-      _ -> state
+
+      _ ->
+        state
     end
   end
 
   defp cancel_process_receipt(%{method: "node.process.run"} = task, invoke_id) do
-    CodingAgent.ExecutionNode.ProcessService.handle("node.process.cancel",
+    CodingAgent.ExecutionNode.ProcessService.handle(
+      "node.process.cancel",
       %{"nodeId" => task.node_id, "processId" => task.process_id},
-      [node_id: task.node_id, session_generation: task.generation, invoke_id: invoke_id, owner: self()])
+      node_id: task.node_id,
+      session_generation: task.generation,
+      invoke_id: invoke_id,
+      owner: self()
+    )
   end
+
   defp cancel_process_receipt(_, _), do: :ok
 
   defp send_host_io_result(state, invoke_id, {:ok, result}) do
-    request(state, "node.invoke.result", %{"invokeId" => invoke_id, "result" => result}, {:invoke_result, invoke_id})
+    request(
+      state,
+      "node.invoke.result",
+      %{"invokeId" => invoke_id, "result" => result},
+      {:invoke_result, invoke_id}
+    )
+
     state
   end
-  defp send_host_io_result(state, invoke_id, {:error, reason}), do: send_invoke_error(state, invoke_id, reason)
+
+  defp send_host_io_result(state, invoke_id, {:error, reason}),
+    do: send_invoke_error(state, invoke_id, reason)
 
   defp dispatch_shell(state, invoke_id, "node.shell.open", args) do
     if map_size(state.shells) < 64 and is_binary(args["shellId"]) do
       case CodingAgent.ExecutionNode.PTY.start_link(self(), invoke_id, args, host_io_opts(state)) do
-        {:ok, pid} -> %{state | shells: Map.put(state.shells, invoke_id, %{pid: pid, id: args["shellId"]})}
-        {:error, _} -> send_invoke_error(state, invoke_id, :pty_unavailable)
+        {:ok, pid} ->
+          %{state | shells: Map.put(state.shells, invoke_id, %{pid: pid, id: args["shellId"]})}
+
+        {:error, _} ->
+          send_invoke_error(state, invoke_id, :pty_unavailable)
       end
     else
       send_invoke_error(state, invoke_id, :shell_limit)
@@ -862,11 +1015,13 @@ defmodule CodingAgent.ExecutionNode.Worker do
 
   defp dispatch_shell(state, invoke_id, method, args) do
     shell_id = args["shellId"]
+
     result =
       case state.shells[args["openInvokeId"]] do
         %{pid: pid, id: ^shell_id} ->
           try do
             operation = String.replace_prefix(method, "node.shell.", "")
+
             case CodingAgent.ExecutionNode.PTY.command(pid, operation, args) do
               :ok -> {:ok, %{"shellId" => shell_id, "accepted" => true}}
               error -> error
@@ -874,8 +1029,11 @@ defmodule CodingAgent.ExecutionNode.Worker do
           catch
             :exit, _ -> {:error, :shell_closed}
           end
-        _ -> {:error, :shell_not_found}
+
+        _ ->
+          {:error, :shell_not_found}
       end
+
     send_host_io_result(state, invoke_id, result)
   end
 
@@ -909,6 +1067,7 @@ defmodule CodingAgent.ExecutionNode.Worker do
       failure_reason: failure_reason,
       run_ref: nil
     }
+
     %{state | invocations: Map.put(state.invocations, invoke_id, invocation)}
   rescue
     _ -> send_invoke_error(state, invoke_id, :runtime_unavailable)
@@ -920,7 +1079,10 @@ defmodule CodingAgent.ExecutionNode.Worker do
     params = %{"invokeId" => invoke_id, "result" => result}
 
     state =
-      case LemonCore.JSONPayload.validate(params, LemonCore.ToolPolicy.execution_json_opts(max_bytes: result_content_limit(state))) do
+      case LemonCore.JSONPayload.validate(
+             params,
+             LemonCore.ToolPolicy.execution_json_opts(max_bytes: result_content_limit(state))
+           ) do
         {:ok, _stats} ->
           request(state, "node.invoke.result", params, {:invoke_result, invoke_id})
           state
@@ -934,13 +1096,28 @@ defmodule CodingAgent.ExecutionNode.Worker do
 
   defp complete_service_task(state, invoke_id, {:error, reason})
        when reason in [
-              :invalid_config, :invalid_cwd, :runtime_unavailable, :mcp_disabled,
-              :secret_resolution_failed, :connection_failed, :discovery_failed,
-              :owner_unavailable, :invalid_profile_snapshot, :revision_mismatch,
-              :mutation_conflict, :unsafe_profile_boundary, :profile_sync_failed,
-              :profile_sync_corrupt, :invalid_url, :invalid_origin_policy,
-              :origin_not_allowed, :dns_resolution_failed, :invalid_dns_answer,
-              :too_many_dns_addresses, :destination_not_public, :destination_not_allowed
+              :invalid_config,
+              :invalid_cwd,
+              :runtime_unavailable,
+              :mcp_disabled,
+              :secret_resolution_failed,
+              :connection_failed,
+              :discovery_failed,
+              :owner_unavailable,
+              :invalid_profile_snapshot,
+              :revision_mismatch,
+              :mutation_conflict,
+              :unsafe_profile_boundary,
+              :profile_sync_failed,
+              :profile_sync_corrupt,
+              :invalid_url,
+              :invalid_origin_policy,
+              :origin_not_allowed,
+              :dns_resolution_failed,
+              :invalid_dns_answer,
+              :too_many_dns_addresses,
+              :destination_not_public,
+              :destination_not_allowed
             ] do
     state |> send_invoke_error(invoke_id, reason) |> remove_invocation(invoke_id)
   end
@@ -997,10 +1174,14 @@ defmodule CodingAgent.ExecutionNode.Worker do
           "sourceRunId" => source.run_id,
           "lineageHandle" => source.lineage_handle,
           "request" => %{
-            "runId" => request.run_id, "agentId" => request.agent_id,
-            "sessionKey" => request.session_key, "prompt" => request.prompt,
-            "images" => request.images || [], "model" => request.model,
-            "cwd" => request.cwd, "toolPolicy" => request.tool_policy,
+            "runId" => request.run_id,
+            "agentId" => request.agent_id,
+            "sessionKey" => request.session_key,
+            "prompt" => request.prompt,
+            "images" => request.images || [],
+            "model" => request.model,
+            "cwd" => request.cwd,
+            "toolPolicy" => request.tool_policy,
             "meta" => LemonCore.RunStore.execution_projection(request.meta || %{})
           }
         }
@@ -1013,10 +1194,12 @@ defmodule CodingAgent.ExecutionNode.Worker do
       end)
       |> Map.put(:native_source_floor_fun, fn source, policy ->
         params = %{"sourceRunId" => source.run_id, "toolPolicy" => policy}
+
         params =
           if Map.has_key?(source, :lineage_handle),
             do: Map.put(params, "lineageHandle", source.lineage_handle),
             else: params
+
         case native_controller_request(socket_module, socket, "node.native.lineage.floor", params) do
           {:ok, _} -> :ok
           _ -> {:error, :native_source_floor_unavailable}
@@ -1025,9 +1208,15 @@ defmodule CodingAgent.ExecutionNode.Worker do
 
     topic = Bus.run_topic(request.run_id)
     :ok = Bus.subscribe(topic)
+
     case state.executor_module.start_run(
-           request, Map.put(run_opts, :approval_timeout_ms, 600_000), self()) do
-      {:ok, _run_ref, _context} = result -> result
+           request,
+           Map.put(run_opts, :approval_timeout_ms, 600_000),
+           self()
+         ) do
+      {:ok, _run_ref, _context} = result ->
+        result
+
       {:error, _reason} = error ->
         Bus.unsubscribe(topic)
         error
@@ -1035,15 +1224,21 @@ defmodule CodingAgent.ExecutionNode.Worker do
   end
 
   defp native_controller_request(socket_module, socket, method, params) do
-    with {:ok, params} <- LemonCore.JSONPayload.round_trip(params, LemonCore.ToolPolicy.execution_json_opts()) do
+    with {:ok, params} <-
+           LemonCore.JSONPayload.round_trip(params, LemonCore.ToolPolicy.execution_json_opts()) do
       ref = make_ref()
       socket_module.request(socket, method, params, {:native_reply, self(), ref}, 30_000)
 
       receive do
-        {:native_controller_reply, ^ref, {:ok, payload}} -> {:ok, payload}
-        {:native_controller_reply, ^ref, {:error, reason}} when reason in [:timeout, :disconnected] ->
+        {:native_controller_reply, ^ref, {:ok, payload}} ->
+          {:ok, payload}
+
+        {:native_controller_reply, ^ref, {:error, reason}}
+        when reason in [:timeout, :disconnected] ->
           {:error, :outcome_unknown}
-        {:native_controller_reply, ^ref, {:error, _}} -> {:error, :native_admission_unavailable}
+
+        {:native_controller_reply, ^ref, {:error, _}} ->
+          {:error, :native_admission_unavailable}
       after
         31_000 -> {:error, :outcome_unknown}
       end
@@ -1069,8 +1264,8 @@ defmodule CodingAgent.ExecutionNode.Worker do
            LemonAi.ImageInputs.validate(Map.get(args, "images", Map.get(args, :images, []))),
          {:ok, prompt} <- invocation_prompt(prompt, images),
          {:ok, cwd} <- invocation_cwd(requested_cwd, state.default_cwd),
-         {:ok, meta} <- args |> value("meta") |> normalize_meta() |> normalize_invocation_proof(run_id) do
-
+         {:ok, meta} <-
+           args |> value("meta") |> normalize_meta() |> normalize_invocation_proof(run_id) do
       request = %ExecutionRequest{
         run_id: run_id,
         session_key: session_key,
@@ -1112,7 +1307,10 @@ defmodule CodingAgent.ExecutionNode.Worker do
 
     params = %{"invokeId" => invoke_id, "result" => result}
 
-    case LemonCore.JSONPayload.validate(params, LemonCore.ToolPolicy.execution_json_opts(max_bytes: result_content_limit(state))) do
+    case LemonCore.JSONPayload.validate(
+           params,
+           LemonCore.ToolPolicy.execution_json_opts(max_bytes: result_content_limit(state))
+         ) do
       {:ok, _stats} ->
         request(state, "node.invoke.result", params, {:invoke_result, invoke_id})
 
@@ -1126,8 +1324,12 @@ defmodule CodingAgent.ExecutionNode.Worker do
   # Only original admitted request ownership can stamp destination-local memory.
   # Provider/completion metadata and MCP configuration are never part of this snapshot.
   defp memory_snapshot(%ExecutionRequest{} = request) do
-    meta = Map.take(request.meta || %{},
-      [:profile_id, :invocation_context_key, :memory_context_key, :memory_context_verified])
+    meta =
+      Map.take(
+        request.meta || %{},
+        [:profile_id, :invocation_context_key, :memory_context_key, :memory_context_verified]
+      )
+
     agent =
       case Map.fetch(request.meta || %{}, :agent_id) do
         {:ok, canonical} -> canonical
@@ -1137,9 +1339,16 @@ defmodule CodingAgent.ExecutionNode.Worker do
     with {:ok, {:private, _key}} <- ContextScope.scope(meta),
          true <- is_binary(agent) and byte_size(agent) in 1..64 and String.valid?(agent),
          {:ok, meta} <- memory_home(meta) do
-      %{run_id: request.run_id, session_key: request.session_key, agent_id: agent,
-        cwd: request.cwd, workspace_key: request.cwd, prompt: Document.summary_text(request.prompt),
-        meta: meta, started_at: System.system_time(:millisecond)}
+      %{
+        run_id: request.run_id,
+        session_key: request.session_key,
+        agent_id: agent,
+        cwd: request.cwd,
+        workspace_key: request.cwd,
+        prompt: Document.summary_text(request.prompt),
+        meta: meta,
+        started_at: System.system_time(:millisecond)
+      }
     else
       _ -> nil
     end
@@ -1153,16 +1362,25 @@ defmodule CodingAgent.ExecutionNode.Worker do
   end
 
   defp record_memory_completion(_state, %{memory_snapshot: nil}, _answer, _completed), do: :ok
+
   defp record_memory_completion(state, %{memory_snapshot: snapshot}, answer, completed) do
-    outcome = LemonCore.RunOutcome.infer(%{completed:
-      %{ok: completed.ok == true, answer: answer, error: completed.error}})
+    outcome =
+      LemonCore.RunOutcome.infer(%{
+        completed: %{ok: completed.ok == true, answer: answer, error: completed.error}
+      })
+
     summary =
       snapshot
       |> Map.drop([:run_id, :started_at])
       |> Map.put(:outcome, outcome)
       |> Map.put(:completed, %{ok: completed.ok == true, answer: Document.summary_text(answer)})
-    Ingest.ingest(state.memory_ingest_server, snapshot.run_id,
-      %{events: [], started_at: snapshot.started_at}, summary)
+
+    Ingest.ingest(
+      state.memory_ingest_server,
+      snapshot.run_id,
+      %{events: [], started_at: snapshot.started_at},
+      summary
+    )
   rescue
     _ -> :ok
   catch
@@ -1192,6 +1410,7 @@ defmodule CodingAgent.ExecutionNode.Worker do
         case Map.get(state.invocations, invoke_id) do
           nil ->
             {:error, "terminal"}
+
           %{service_task: _task} ->
             {:error, "unsupported"}
 
@@ -1275,7 +1494,10 @@ defmodule CodingAgent.ExecutionNode.Worker do
   defp control_operation(_operation), do: :invalid
 
   defp validate_payload(args, state) do
-    case LemonCore.JSONPayload.validate(args, LemonCore.ToolPolicy.execution_json_opts(max_bytes: payload_limit(state))) do
+    case LemonCore.JSONPayload.validate(
+           args,
+           LemonCore.ToolPolicy.execution_json_opts(max_bytes: payload_limit(state))
+         ) do
       {:ok, _stats} -> nil
       {:error, reason} -> {:invalid_request_payload, payload_error_kind(reason)}
     end
@@ -1573,8 +1795,11 @@ defmodule CodingAgent.ExecutionNode.Worker do
   defp normalize_invocation_proof(meta, run_id) do
     if Map.get(meta, :invocation_proof_verified) == true do
       fields = [
-        run_id: "runId", server_name: "serverName", server_url: "serverUrl",
-        header_name: "headerName", secret_name: "secretName"
+        run_id: "runId",
+        server_name: "serverName",
+        server_url: "serverUrl",
+        header_name: "headerName",
+        secret_name: "secretName"
       ]
 
       proof = Map.get(meta, :invocation_proof)
@@ -1592,10 +1817,13 @@ defmodule CodingAgent.ExecutionNode.Worker do
       with true <- Map.get(meta, :memory_context_verified) == true,
            key when is_binary(key) and key != "" <- Map.get(meta, :invocation_context_key),
            :ok <- LemonCore.RunRequest.validate_invocation_context_key(key),
-           memory_key when is_binary(memory_key) and memory_key != "" <- Map.get(meta, :memory_context_key),
+           memory_key when is_binary(memory_key) and memory_key != "" <-
+             Map.get(meta, :memory_context_key),
            :ok <- LemonCore.RunRequest.validate_invocation_context_key(memory_key),
-           {:ok, record} <- LemonCore.InvocationProof.validate(descriptor, run_id, meta[:mcp_servers]) do
-        {:ok, meta |> Map.put(:invocation_proof, record) |> Map.put(:invocation_proof_verified, true)}
+           {:ok, record} <-
+             LemonCore.InvocationProof.validate(descriptor, run_id, meta[:mcp_servers]) do
+        {:ok,
+         meta |> Map.put(:invocation_proof, record) |> Map.put(:invocation_proof_verified, true)}
       else
         _ -> {:error, :invalid_invocation_proof}
       end
@@ -1646,11 +1874,15 @@ defmodule CodingAgent.ExecutionNode.Worker do
       string_key = Atom.to_string(key)
 
       cond do
-        Map.has_key?(acc, key) -> Map.delete(acc, string_key)
+        Map.has_key?(acc, key) ->
+          Map.delete(acc, string_key)
+
         Map.has_key?(acc, string_key) ->
           {value, acc} = Map.pop(acc, string_key)
           Map.put(acc, key, value)
-        true -> acc
+
+        true ->
+          acc
       end
     end)
   end
@@ -1715,11 +1947,13 @@ defmodule CodingAgent.ExecutionNode.Worker do
 
   defp cancel_all_invocations(state) do
     _ = CodingAgent.ExecutionNode.ProcessService.cancel_owner(self())
+
     Enum.each(state.process_tasks, fn {invoke_id, task} ->
       _ = cancel_process_receipt(task, invoke_id)
       Process.exit(task.pid, :kill)
       Process.demonitor(task.monitor_ref, [:flush])
     end)
+
     Enum.reduce(state.invocations, state, fn {invoke_id, invocation}, current ->
       _ = cancel_invocation_execution(state, invocation)
       remove_invocation(current, invoke_id)
@@ -1734,8 +1968,11 @@ defmodule CodingAgent.ExecutionNode.Worker do
   end
 
   defp invocation_for_run(state, run_id) when is_binary(run_id) do
-    Enum.find(state.invocations, fn {_id, invocation} -> Map.get(invocation, :run_id) == run_id end)
+    Enum.find(state.invocations, fn {_id, invocation} ->
+      Map.get(invocation, :run_id) == run_id
+    end)
   end
+
   defp invocation_for_run(_state, _run_id), do: nil
 
   defp put_invocation(state, invoke_id, invocation) do
@@ -1743,37 +1980,53 @@ defmodule CodingAgent.ExecutionNode.Worker do
   end
 
   defp forward_event(state, _invoke_id, :ignore), do: state
+
   defp forward_event(state, invoke_id, {:error, _reason}),
     do: fail_stream(state, invoke_id, :event_payload_limit_exceeded)
 
   defp forward_event(state, invoke_id, {:ok, event}) do
     invocation = Map.fetch!(state.invocations, invoke_id)
+
     if invocation.pending_events >= @max_pending_events do
       fail_stream(state, invoke_id, :event_backpressure_limit_exceeded)
     else
-      invocation = %{invocation |
-        event_queue: :queue.in(event, invocation.event_queue),
-        pending_events: invocation.pending_events + 1}
+      invocation = %{
+        invocation
+        | event_queue: :queue.in(event, invocation.event_queue),
+          pending_events: invocation.pending_events + 1
+      }
+
       state |> put_invocation(invoke_id, invocation) |> drain_events(invoke_id)
     end
   end
 
   defp drain_events(state, invoke_id) do
     invocation = Map.fetch!(state.invocations, invoke_id)
+
     if is_nil(invocation.inflight) do
       case :queue.out(invocation.event_queue) do
         {{:value, event}, queue} ->
           seq = invocation.event_seq + 1
           params = %{"invokeId" => invoke_id, "seq" => seq, "event" => event}
-          case LemonCore.JSONPayload.validate(params, max_bytes: min(result_content_limit(state), 65_536)) do
+
+          case LemonCore.JSONPayload.validate(params,
+                 max_bytes: min(result_content_limit(state), 65_536)
+               ) do
             {:ok, _stats} ->
               request(state, "node.invoke.event", params, {:invoke_event, invoke_id, seq})
-              put_invocation(state, invoke_id, %{invocation |
-                event_seq: seq, inflight: seq, event_queue: queue,
-                pending_events: invocation.pending_events - 1})
+
+              put_invocation(state, invoke_id, %{
+                invocation
+                | event_seq: seq,
+                  inflight: seq,
+                  event_queue: queue,
+                  pending_events: invocation.pending_events - 1
+              })
+
             {:error, _reason} ->
               fail_stream(state, invoke_id, :event_payload_limit_exceeded)
           end
+
         {:empty, _queue} ->
           if invocation.completed,
             do: complete_invocation(state, invoke_id, invocation.completed),

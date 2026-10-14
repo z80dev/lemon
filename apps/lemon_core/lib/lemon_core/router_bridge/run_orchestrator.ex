@@ -33,7 +33,9 @@ defmodule LemonCore.RouterBridge.RunOrchestrator do
   @doc "Seal actual executing-host native startup policy from private owner provenance."
   @callback register_native_source_floor(map(), map()) :: :ok | {:error, term()}
 
-  @optional_callbacks submit_with_receipt: 1, run_receipt: 1, submit_native_followup: 2,
+  @optional_callbacks submit_with_receipt: 1,
+                      run_receipt: 1,
+                      submit_native_followup: 2,
                       register_native_source_floor: 2
 
   defmacro __using__(_opts) do

@@ -9,9 +9,15 @@ defmodule CodingAgent.ExecutionNode.CapabilitiesTest do
     def browser_status, do: {:ok, %{available: true, running: true}}
     def mcp_available?, do: true
     def tool_names(_, _), do: {:ok, ~w(read write bash browser_tabs browser_click)}
-    def command("peekaboo", ["permissions", "status", "--json"]), do: {:ok, ~s({"data":{"permissions":[{"name":"Accessibility","isRequired":true,"isGranted":false},{"name":"Screen Recording","isRequired":true,"isGranted":true},{"name":"Event Synthesizing","isRequired":false,"isGranted":false}]}})}
+
+    def command("peekaboo", ["permissions", "status", "--json"]),
+      do:
+        {:ok,
+         ~s({"data":{"permissions":[{"name":"Accessibility","isRequired":true,"isGranted":false},{"name":"Screen Recording","isRequired":true,"isGranted":true},{"name":"Event Synthesizing","isRequired":false,"isGranted":false}]}})}
+
     def command("xdotool", ["getdisplaygeometry"]), do: {:ok, "1920 1080"}
   end
+
   defmodule UnknownProbe do
     defdelegate executable(name), to: Probe
     defdelegate shell_available?(), to: Probe
@@ -21,6 +27,7 @@ defmodule CodingAgent.ExecutionNode.CapabilitiesTest do
     defdelegate tool_names(cwd, opts), to: Probe
     def command(_, _), do: {:error, :inspection_unavailable}
   end
+
   defmodule AbsentProbe do
     def executable("peekaboo"), do: nil
     def executable("xdotool"), do: nil
@@ -32,6 +39,7 @@ defmodule CodingAgent.ExecutionNode.CapabilitiesTest do
     defdelegate tool_names(cwd, opts), to: Probe
     def command(_, _), do: raise("Absent capabilities must not launch inspection programs")
   end
+
   defmodule ContradictoryProbe do
     defdelegate executable(name), to: Probe
     defdelegate shell_available?(), to: Probe
@@ -39,8 +47,13 @@ defmodule CodingAgent.ExecutionNode.CapabilitiesTest do
     defdelegate browser_status(), to: Probe
     defdelegate mcp_available?(), to: Probe
     defdelegate tool_names(cwd, opts), to: Probe
-    def command(_, _), do: {:ok, ~s({"permissions":[{"name":"Accessibility","granted":true},{"name":"Accessibility","granted":false}]})}
+
+    def command(_, _),
+      do:
+        {:ok,
+         ~s({"permissions":[{"name":"Accessibility","granted":true},{"name":"Accessibility","granted":false}]})}
   end
+
   defmodule DiagnosticsProbe do
     defdelegate executable(name), to: Probe
     defdelegate shell_available?(), to: Probe
@@ -50,6 +63,7 @@ defmodule CodingAgent.ExecutionNode.CapabilitiesTest do
     defdelegate command(name, args), to: Probe
     defdelegate tool_names(cwd, opts), to: CodingAgent.ExecutionNode.Capabilities.Probe
   end
+
   defmodule NoShellDiagnosticsProbe do
     defdelegate executable(name), to: DiagnosticsProbe
     def shell_available?, do: false
@@ -71,17 +85,25 @@ defmodule CodingAgent.ExecutionNode.CapabilitiesTest do
     assert by_id["full_disk_access"]["osGrant"] == "unknown"
     assert by_id["connectors"]["tools"] == []
     assert by_id["connectors"]["osGrant"] == "unknown"
+
     for item <- snapshot["items"] do
       assert item["measuredAtMs"] == snapshot["measuredAtMs"]
-      assert Enum.sort(Map.keys(item)) == Enum.sort(~w(id name category supported configuredLevel osGrant tools reason measuredAtMs stale))
+
+      assert Enum.sort(Map.keys(item)) ==
+               Enum.sort(
+                 ~w(id name category supported configuredLevel osGrant tools reason measuredAtMs stale)
+               )
     end
+
     assert by_id["accessibility"]["tools"] == ["bash"]
     refute inspect(snapshot) =~ "token"
   end
 
   test "unavailable or contradictory inspection never pretends denied or granted" do
     for probe <- [UnknownProbe, ContradictoryProbe] do
-      assert {:ok, snapshot} = Capabilities.get(platform: {:unix, :darwin}, capability_probe: probe)
+      assert {:ok, snapshot} =
+               Capabilities.get(platform: {:unix, :darwin}, capability_probe: probe)
+
       item = Enum.find(snapshot["items"], &(&1["id"] == "accessibility"))
       assert item["osGrant"] == "unknown"
       assert item["configuredLevel"] == "off"
@@ -90,7 +112,9 @@ defmodule CodingAgent.ExecutionNode.CapabilitiesTest do
   end
 
   test "absent tooling is unsupported, not a denied OS grant" do
-    assert {:ok, snapshot} = Capabilities.get(platform: {:unix, :darwin}, capability_probe: AbsentProbe)
+    assert {:ok, snapshot} =
+             Capabilities.get(platform: {:unix, :darwin}, capability_probe: AbsentProbe)
+
     item = Enum.find(snapshot["items"], &(&1["id"] == "accessibility"))
     refute item["supported"]
     assert item["osGrant"] == "unknown"
@@ -102,17 +126,28 @@ defmodule CodingAgent.ExecutionNode.CapabilitiesTest do
     assert {:ok, snapshot} = Capabilities.get(platform: {:unix, :linux}, capability_probe: Probe)
     item = Enum.find(snapshot["items"], &(&1["id"] == "x11_desktop"))
     assert item["osGrant"] == "granted"
-    assert {:ok, snapshot} = Capabilities.get(platform: {:unix, :linux}, capability_probe: UnknownProbe)
+
+    assert {:ok, snapshot} =
+             Capabilities.get(platform: {:unix, :linux}, capability_probe: UnknownProbe)
+
     item = Enum.find(snapshot["items"], &(&1["id"] == "x11_desktop"))
     assert item["osGrant"] == "unknown"
     assert item["configuredLevel"] == "off"
   end
 
   test "registered diagnostics are measured as shell tooling, never baseline or unsupported machinery" do
-    assert {:ok, catalog} = CodingAgent.ExecutionNode.Capabilities.Probe.tool_names(File.cwd!(), [])
+    assert {:ok, catalog} =
+             CodingAgent.ExecutionNode.Capabilities.Probe.tool_names(File.cwd!(), [])
+
     assert "lsp_diagnostics" in catalog
-    assert {:ok, snapshot} = Capabilities.get(platform: {:unix, :linux}, default_cwd: File.cwd!(),
-      capability_probe: DiagnosticsProbe)
+
+    assert {:ok, snapshot} =
+             Capabilities.get(
+               platform: {:unix, :linux},
+               default_cwd: File.cwd!(),
+               capability_probe: DiagnosticsProbe
+             )
+
     shell = Enum.find(snapshot["items"], &(&1["id"] == "terminal"))
     files = Enum.find(snapshot["items"], &(&1["id"] == "files"))
     assert shell["configuredLevel"] == "read_interact"
@@ -120,10 +155,19 @@ defmodule CodingAgent.ExecutionNode.CapabilitiesTest do
     refute "lsp_diagnostics" in files["tools"]
 
     assert {:ok, missing} = Capabilities.get(platform: {:unix, :linux}, capability_probe: Probe)
-    refute missing["items"] |> Enum.find(&(&1["id"] == "terminal")) |> Map.fetch!("tools")
-      |> Enum.member?("lsp_diagnostics")
-    assert {:ok, unsupported} = Capabilities.get(platform: {:unix, :linux}, default_cwd: File.cwd!(),
-      capability_probe: NoShellDiagnosticsProbe)
+
+    refute missing["items"]
+           |> Enum.find(&(&1["id"] == "terminal"))
+           |> Map.fetch!("tools")
+           |> Enum.member?("lsp_diagnostics")
+
+    assert {:ok, unsupported} =
+             Capabilities.get(
+               platform: {:unix, :linux},
+               default_cwd: File.cwd!(),
+               capability_probe: NoShellDiagnosticsProbe
+             )
+
     unsupported_shell = Enum.find(unsupported["items"], &(&1["id"] == "terminal"))
     refute unsupported_shell["supported"]
     assert unsupported_shell["configuredLevel"] == "off"

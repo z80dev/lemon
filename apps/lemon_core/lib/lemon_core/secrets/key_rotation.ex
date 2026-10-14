@@ -343,7 +343,10 @@ defmodule LemonCore.Secrets.KeyRotation do
     case Store.fetch_all(Secrets.table()) do
       {:ok, rows} ->
         # Receipt-only tombstones carry historical proof, not encrypted values.
-        {:ok, rows |> Enum.reject(fn {_ref, entry} -> LemonCore.Secrets.Receipts.receipt_only?(entry) end) |> Enum.sort_by(&elem(&1, 0))}
+        {:ok,
+         rows
+         |> Enum.reject(fn {_ref, entry} -> LemonCore.Secrets.Receipts.receipt_only?(entry) end)
+         |> Enum.sort_by(&elem(&1, 0))}
 
       {:error, reason} ->
         {:error, {:store_failed, safe_reason(reason)}}
@@ -541,7 +544,9 @@ defmodule LemonCore.Secrets.KeyRotation do
   # every live record done.
   defp converge(old_key, new_key, passes) do
     with {:ok, rows} <- fetch_rows() do
-      outcomes = Enum.map(rows, fn {ref, entry} -> converge_record(ref, entry, old_key, new_key) end)
+      outcomes =
+        Enum.map(rows, fn {ref, entry} -> converge_record(ref, entry, old_key, new_key) end)
+
       pending = Enum.count(outcomes, &(&1 in [:staged, :failed]))
 
       with :ok <- sync_if(Enum.any?(outcomes, &(&1 in [:changed, :staged]))) do

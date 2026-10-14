@@ -35,6 +35,7 @@ defmodule LemonCore.Secrets.Receipts do
 
   def receipt_only?(entry) when is_map(entry) do
     receipts = entries(entry)
+
     Map.keys(entry) in [[:receipts], ["receipts"]] and is_list(receipts) and receipts != [] and
       length(receipts) <= @capacity and Enum.all?(receipts, &valid?/1)
   end
@@ -48,9 +49,11 @@ defmodule LemonCore.Secrets.Receipts do
         receipts = entries(entry)
 
         if is_list(receipts) and length(receipts) <= @capacity and Enum.all?(receipts, &valid?/1) do
-          matches = Enum.filter(receipts, fn receipt ->
-            field(receipt, :node_id) == node_id and field(receipt, :operation_id) == operation_id
-          end)
+          matches =
+            Enum.filter(receipts, fn receipt ->
+              field(receipt, :node_id) == node_id and
+                field(receipt, :operation_id) == operation_id
+            end)
 
           case {found, matches} do
             {_, []} -> {:cont, {:ok, found}}
@@ -78,8 +81,13 @@ defmodule LemonCore.Secrets.Receipts do
   end
 
   def intent(key, owner, node_id, name, value, provider, expires_at) do
-    metadata = :erlang.term_to_binary({"lemon-secret-intent-v1", owner, node_id, name, provider, expires_at})
-    :crypto.mac(:hmac, :sha256, key, [metadata, <<byte_size(value)::unsigned-big-64>>, value]) |> Base.encode64()
+    metadata =
+      :erlang.term_to_binary(
+        {"lemon-secret-intent-v1", owner, node_id, name, provider, expires_at}
+      )
+
+    :crypto.mac(:hmac, :sha256, key, [metadata, <<byte_size(value)::unsigned-big-64>>, value])
+    |> Base.encode64()
   end
 
   # Only the encrypted revision and active/expiry state, never usage counters.
@@ -105,13 +113,23 @@ defmodule LemonCore.Secrets.Receipts do
   end
 
   def proof(node_id, operation_id, nil) do
-    %{node_id: node_id, operation_id: operation_id, status: "not_found", name: nil,
-      current_binding_matches: false}
+    %{
+      node_id: node_id,
+      operation_id: operation_id,
+      status: "not_found",
+      name: nil,
+      current_binding_matches: false
+    }
   end
 
   def proof(node_id, operation_id, {name, entry, receipt}) do
-    %{node_id: node_id, operation_id: operation_id, status: "applied", name: name,
-      current_binding_matches: current?(entry, receipt)}
+    %{
+      node_id: node_id,
+      operation_id: operation_id,
+      status: "applied",
+      name: name,
+      current_binding_matches: current?(entry, receipt)
+    }
   end
 
   def field(entry, key), do: MapHelpers.get_key(entry, key)

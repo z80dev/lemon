@@ -9,8 +9,10 @@ defmodule CodingAgent.ExecutionNode.MemoryTransfer do
 
   @spec execute(String.t(), map(), String.t()) :: {:ok, map()} | {:error, atom()}
   def execute("memory.transfer." <> operation, args, node_id) when is_map(args) do
-    expected_node = if operation in ["prepare", "snapshot", "validate"],
-      do: args["sourceNodeId"], else: args["nodeId"]
+    expected_node =
+      if operation in ["prepare", "snapshot", "validate"],
+        do: args["sourceNodeId"],
+        else: args["nodeId"]
 
     if is_binary(node_id) and expected_node == node_id do
       dispatch(operation, args, node_id)
@@ -26,12 +28,22 @@ defmodule CodingAgent.ExecutionNode.MemoryTransfer do
   def execute(_, _, _), do: {:error, :invalid_params}
 
   defp dispatch("prepare", args, _node_id),
-    do: ProfileMemoryTransfer.prepare(args["profileId"], args["mutationId"],
-      args["sourceNodeId"], args["nodeId"])
+    do:
+      ProfileMemoryTransfer.prepare(
+        args["profileId"],
+        args["mutationId"],
+        args["sourceNodeId"],
+        args["nodeId"]
+      )
 
   defp dispatch("snapshot", args, _node_id),
-    do: ProfileMemoryTransfer.snapshot(args["profileId"], args["mutationId"],
-      args["sourceNodeId"], args["nodeId"])
+    do:
+      ProfileMemoryTransfer.snapshot(
+        args["profileId"],
+        args["mutationId"],
+        args["sourceNodeId"],
+        args["nodeId"]
+      )
 
   defp dispatch("validate", args, _node_id) do
     case ProfileMemoryTransfer.validate(args) do
@@ -47,12 +59,18 @@ defmodule CodingAgent.ExecutionNode.MemoryTransfer do
     do: ProfileMemoryTransfer.apply_transfer(args, node_id: node_id)
 
   defp dispatch("status", args, node_id),
-    do: ProfileMemoryTransfer.status(args["profileId"], args["mutationId"],
-      args["sourceNodeId"], args["nodeId"], node_id: node_id)
+    do:
+      ProfileMemoryTransfer.status(
+        args["profileId"],
+        args["mutationId"],
+        args["sourceNodeId"],
+        args["nodeId"], node_id: node_id)
 
   defp dispatch("inspect", args, node_id),
-    do: ProfileMemoryTransfer.inspect_status(args["profileId"], args["mutationId"],
-      args["nodeId"], node_id: node_id)
+    do:
+      ProfileMemoryTransfer.inspect_status(args["profileId"], args["mutationId"], args["nodeId"],
+        node_id: node_id
+      )
 
   defp dispatch(_, _, _), do: {:error, :invalid_operation}
 end

@@ -56,9 +56,11 @@ defmodule LemonAutomation.CronAdmissionTest do
     on_exit(fn ->
       Secrets.delete(secret_name)
       restore_env(:lemon_automation, :cron_admission_allowed_origins, previous_origins)
+
       if is_nil(previous_origin_env),
         do: System.delete_env("LEMON_CRON_ADMISSION_ALLOWED_ORIGINS"),
         else: System.put_env("LEMON_CRON_ADMISSION_ALLOWED_ORIGINS", previous_origin_env)
+
       restore_env(:lemon_core, Secrets, previous_secrets)
       System.delete_env(key_env)
     end)
@@ -71,16 +73,22 @@ defmodule LemonAutomation.CronAdmissionTest do
       assert {:ok, nil} = CronAdmission.validate(nil, nil)
     end
 
-    test "atom, string, and mixed keys canonicalize to the same private map", %{admission: admission} do
+    test "atom, string, and mixed keys canonicalize to the same private map", %{
+      admission: admission
+    } do
       string_keys = Map.new(admission, fn {key, value} -> {Atom.to_string(key), value} end)
-      mixed_keys = admission |> Map.delete(:routine_id) |> Map.put("routine_id", admission.routine_id)
+
+      mixed_keys =
+        admission |> Map.delete(:routine_id) |> Map.put("routine_id", admission.routine_id)
 
       for input <- [admission, string_keys, mixed_keys] do
         assert {:ok, ^admission} = CronAdmission.validate(input, @profile_id)
       end
     end
 
-    test "requires a bounded nonempty profile and all five private fields", %{admission: admission} do
+    test "requires a bounded nonempty profile and all five private fields", %{
+      admission: admission
+    } do
       for profile <- [nil, "", "  ", 12, String.duplicate("x", 257)] do
         assert_invalid(CronAdmission.validate(admission, profile))
       end
@@ -94,13 +102,26 @@ defmodule LemonAutomation.CronAdmissionTest do
       end
 
       for key <- [:token_secret, :routine_id, :creator_id, :workspace_id] do
-        assert_invalid(CronAdmission.validate(Map.put(admission, key, String.duplicate("x", 257)), @profile_id))
-        assert {:ok, _} = CronAdmission.validate(Map.put(admission, key, String.duplicate("x", 256)), @profile_id)
+        assert_invalid(
+          CronAdmission.validate(Map.put(admission, key, String.duplicate("x", 257)), @profile_id)
+        )
+
+        assert {:ok, _} =
+                 CronAdmission.validate(
+                   Map.put(admission, key, String.duplicate("x", 256)),
+                   @profile_id
+                 )
       end
     end
 
     test "rejects plaintext tokens, unknown fields, and ambiguous keys", %{admission: admission} do
-      for extra <- [%{token: @token}, %{"token" => @token}, %{enabled: false}, %{other: "value"}, %{"url" => admission.url}] do
+      for extra <- [
+            %{token: @token},
+            %{"token" => @token},
+            %{enabled: false},
+            %{other: "value"},
+            %{"url" => admission.url}
+          ] do
         assert_invalid(CronAdmission.validate(Map.merge(admission, extra), @profile_id))
       end
 
@@ -109,7 +130,9 @@ defmodule LemonAutomation.CronAdmissionTest do
       end
     end
 
-    test "rejects userinfo, fragments, malformed URLs and non-HTTPS remote callbacks", %{admission: admission} do
+    test "rejects userinfo, fragments, malformed URLs and non-HTTPS remote callbacks", %{
+      admission: admission
+    } do
       for url <- [
             "http://admission.example.test/check",
             "https://user:password@admission.example.test/check",
@@ -134,14 +157,18 @@ defmodule LemonAutomation.CronAdmissionTest do
       end
     end
 
-    test "accepts a permitted HTTPS callback with omitted or explicit default port", %{admission: admission} do
+    test "accepts a permitted HTTPS callback with omitted or explicit default port", %{
+      admission: admission
+    } do
       for url <- [@origin <> "/cron/check", @origin <> ":443/cron/check"] do
         configured = %{admission | url: url}
         assert {:ok, ^configured} = CronAdmission.validate(configured, @profile_id)
       end
     end
 
-    test "allows only exact origins, not subdomains, suffixes or other ports", %{admission: admission} do
+    test "allows only exact origins, not subdomains, suffixes or other ports", %{
+      admission: admission
+    } do
       for url <- [
             "https://sub.admission.example.test/check",
             "https://admission.example.test.evil.test/check",
@@ -150,22 +177,45 @@ defmodule LemonAutomation.CronAdmissionTest do
         assert_invalid(CronAdmission.validate(%{admission | url: url}, @profile_id))
       end
 
-      assert {:ok, _} = CronAdmission.validate(%{admission | url: @origin <> ":443/check"}, @profile_id)
+      assert {:ok, _} =
+               CronAdmission.validate(%{admission | url: @origin <> ":443/check"}, @profile_id)
+
       Application.put_env(:lemon_automation, :cron_admission_allowed_origins, [@origin <> ":8443"])
-      assert {:ok, _} = CronAdmission.validate(%{admission | url: @origin <> ":8443/check"}, @profile_id)
+
+      assert {:ok, _} =
+               CronAdmission.validate(%{admission | url: @origin <> ":8443/check"}, @profile_id)
+
       assert_invalid(CronAdmission.validate(admission, @profile_id))
     end
 
     test "empty, malformed and non-origin allowlists fail closed", %{admission: admission} do
-      for origins <- [[], nil, @origin, [@origin <> "/"], [@origin <> "/path"], [@origin <> "?query"], [@origin <> "#fragment"], ["https://*.example.test"]] do
+      for origins <- [
+            [],
+            nil,
+            @origin,
+            [@origin <> "/"],
+            [@origin <> "/path"],
+            [@origin <> "?query"],
+            [@origin <> "#fragment"],
+            ["https://*.example.test"]
+          ] do
         Application.put_env(:lemon_automation, :cron_admission_allowed_origins, origins)
         assert_invalid(CronAdmission.validate(admission, @profile_id))
       end
     end
 
-    test "operator environment takes precedence and explicit emptiness disables trust", %{admission: admission} do
-      Application.put_env(:lemon_automation, :cron_admission_allowed_origins, ["https://different.example.test"])
-      System.put_env("LEMON_CRON_ADMISSION_ALLOWED_ORIGINS", " https://other.example.test, " <> @origin <> " ")
+    test "operator environment takes precedence and explicit emptiness disables trust", %{
+      admission: admission
+    } do
+      Application.put_env(:lemon_automation, :cron_admission_allowed_origins, [
+        "https://different.example.test"
+      ])
+
+      System.put_env(
+        "LEMON_CRON_ADMISSION_ALLOWED_ORIGINS",
+        " https://other.example.test, " <> @origin <> " "
+      )
+
       assert {:ok, _} = CronAdmission.validate(admission, @profile_id)
 
       Application.put_env(:lemon_automation, :cron_admission_allowed_origins, [@origin])
@@ -176,20 +226,45 @@ defmodule LemonAutomation.CronAdmissionTest do
       end
     end
 
-    test "HTTP is allowed only for explicitly allowlisted literal loopback IP origins", %{admission: admission} do
+    test "HTTP is allowed only for explicitly allowlisted literal loopback IP origins", %{
+      admission: admission
+    } do
       for origin <- ["http://127.0.0.1:8123", "http://[::1]:8123"] do
         Application.put_env(:lemon_automation, :cron_admission_allowed_origins, [origin])
-        assert {:ok, _} = CronAdmission.validate(%{admission | url: origin <> "/check"}, @profile_id)
-        assert_invalid(CronAdmission.validate(%{admission | url: String.replace(origin, ":8123", ":8124") <> "/check"}, @profile_id))
+
+        assert {:ok, _} =
+                 CronAdmission.validate(%{admission | url: origin <> "/check"}, @profile_id)
+
+        assert_invalid(
+          CronAdmission.validate(
+            %{admission | url: String.replace(origin, ":8123", ":8124") <> "/check"},
+            @profile_id
+          )
+        )
       end
 
-      for origin <- ["http://localhost:8123", "http://127.0.0.2:8123", "http://127.1:8123", "http://2130706433:8123", "http://[0:0:0:0:0:0:0:1]:8123", "http://[::ffff:127.0.0.1]:8123", "http://10.0.0.1:8123", "http://admission.example.test"] do
+      for origin <- [
+            "http://localhost:8123",
+            "http://127.0.0.2:8123",
+            "http://127.1:8123",
+            "http://2130706433:8123",
+            "http://[0:0:0:0:0:0:0:1]:8123",
+            "http://[::ffff:127.0.0.1]:8123",
+            "http://10.0.0.1:8123",
+            "http://admission.example.test"
+          ] do
         Application.put_env(:lemon_automation, :cron_admission_allowed_origins, [origin])
-        assert_invalid(CronAdmission.validate(%{admission | url: origin <> "/check"}, @profile_id))
+
+        assert_invalid(
+          CronAdmission.validate(%{admission | url: origin <> "/check"}, @profile_id)
+        )
       end
 
       Application.put_env(:lemon_automation, :cron_admission_allowed_origins, [])
-      assert_invalid(CronAdmission.validate(%{admission | url: "http://127.0.0.1:8123/check"}, @profile_id))
+
+      assert_invalid(
+        CronAdmission.validate(%{admission | url: "http://127.0.0.1:8123/check"}, @profile_id)
+      )
     end
   end
 
@@ -211,7 +286,8 @@ defmodule LemonAutomation.CronAdmissionTest do
             Map.take(input, ~w(invocationContextKey invocationMcpServers invocationToolPolicy)),
             %{context_key: "context", mcp_servers: [], tool_policy: %{}}
           ] do
-        assert {:error, :admission_unavailable} = CronAdmission.validate_invocation(invalid, @run_id)
+        assert {:error, :admission_unavailable} =
+                 CronAdmission.validate_invocation(invalid, @run_id)
       end
 
       for key <- Map.keys(input), value <- [nil, 123, "wrong-type", false, true] do
@@ -238,7 +314,18 @@ defmodule LemonAutomation.CronAdmissionTest do
           assert projection[canonical_field] == key
         end
 
-        for key <- [nil, "", " space", "_start", "a/b", "a\n", "é", <<255>>, 123, String.duplicate("x", 129)] do
+        for key <- [
+              nil,
+              "",
+              " space",
+              "_start",
+              "a/b",
+              "a\n",
+              "é",
+              <<255>>,
+              123,
+              String.duplicate("x", 129)
+            ] do
           assert {:error, :admission_unavailable} =
                    CronAdmission.validate_invocation(Map.put(invocation(), field, key), @run_id)
         end
@@ -250,7 +337,10 @@ defmodule LemonAutomation.CronAdmissionTest do
       assert {:ok, %{tool_policy: %{}}} = CronAdmission.validate_invocation(input, @run_id)
 
       assert {:error, :admission_unavailable} =
-               CronAdmission.validate_invocation(Map.put(input, "invocationMcpServers", []), @run_id)
+               CronAdmission.validate_invocation(
+                 Map.put(input, "invocationMcpServers", []),
+                 @run_id
+               )
     end
 
     test "fresh proof validation rejects stale or foreign authority before any transport" do
@@ -341,7 +431,9 @@ defmodule LemonAutomation.CronAdmissionTest do
 
         assert {:error, :admission_unavailable} =
                  CronAdmission.validate_invocation(
-                   Map.put(invocation(), "invocationMcpServers", [Map.put(server, "headers", headers)]),
+                   Map.put(invocation(), "invocationMcpServers", [
+                     Map.put(server, "headers", headers)
+                   ]),
                    @run_id
                  )
       end
@@ -361,7 +453,10 @@ defmodule LemonAutomation.CronAdmissionTest do
             %{"no_reply" => "false"}
           ] do
         assert {:error, :admission_unavailable} =
-                 CronAdmission.validate_invocation(Map.put(invocation(), "invocationToolPolicy", policy), @run_id)
+                 CronAdmission.validate_invocation(
+                   Map.put(invocation(), "invocationToolPolicy", policy),
+                   @run_id
+                 )
       end
     end
 
@@ -376,7 +471,10 @@ defmodule LemonAutomation.CronAdmissionTest do
             %{"Upgrade" => "${LEMON_SECRET:missing}"},
             %{"Proxy-Authorization" => "${LEMON_SECRET:missing}"},
             %{"Mcp-Session-Id" => "${LEMON_SECRET:missing}"},
-            %{"Authorization" => "${LEMON_SECRET:missing}", "authorization" => "${LEMON_SECRET:other}"},
+            %{
+              "Authorization" => "${LEMON_SECRET:missing}",
+              "authorization" => "${LEMON_SECRET:other}"
+            },
             %{"X-Key" => "Bearer ${LEMON_SECRET:missing}"},
             %{"invalid name" => "${LEMON_SECRET:missing}"}
           ] do
@@ -394,14 +492,20 @@ defmodule LemonAutomation.CronAdmissionTest do
           "Cookie" => "${LEMON_SECRET:missing}",
           "authorization" => "${LEMON_SECRET:missing}"
         })
+
       assert {:ok, _} =
                CronAdmission.validate_invocation(
-                 Map.put(invocation(), "invocationMcpServers", [Map.put(server, "headers", headers)]),
+                 Map.put(invocation(), "invocationMcpServers", [
+                   Map.put(server, "headers", headers)
+                 ]),
                  @run_id
                )
     end
 
-    test "literal-loopback HTTP creator bridges require both exact origin approvals", %{job: job, run: run} do
+    test "literal-loopback HTTP creator bridges require both exact origin approvals", %{
+      job: job,
+      run: run
+    } do
       [core, server] = invocation(run.run_id)["invocationMcpServers"]
 
       for origin <- ["http://127.0.0.1:8123", "http://[::1]:8123"] do
@@ -412,10 +516,12 @@ defmodule LemonAutomation.CronAdmissionTest do
           |> Map.put("approvedPrivateOrigins", [origin])
 
         input = Map.put(invocation(run.run_id), "invocationMcpServers", [core, bridge])
+
         expected = %{
           canonical_invocation(run.run_id)
           | mcp_servers: [core, Map.put(bridge, "allowedOrigins", [origin])]
         }
+
         assert {:ok, ^expected} = CronAdmission.validate_invocation(input, run.run_id)
 
         Req.Test.stub(__MODULE__, fn conn ->
@@ -464,6 +570,7 @@ defmodule LemonAutomation.CronAdmissionTest do
 
     test "native policy preset and all-allow retain sparse canonical values" do
       policy = %{"profile" => "full_access", "allow" => "all"}
+
       assert {:ok, %{tool_policy: ^policy}} =
                CronAdmission.validate_invocation(
                  Map.put(invocation(), "invocationToolPolicy", policy),
@@ -473,7 +580,10 @@ defmodule LemonAutomation.CronAdmissionTest do
   end
 
   describe "check/2 and check/3" do
-    test "no admission performs no callback even with missing profile or a command", %{job: job, run: run} do
+    test "no admission performs no callback even with missing profile or a command", %{
+      job: job,
+      run: run
+    } do
       stub_no_dispatch()
       job = %{job | admission: nil, profile_id: nil, command: "echo local"}
       assert :ok = CronAdmission.check(job, run)
@@ -481,7 +591,10 @@ defmodule LemonAutomation.CronAdmissionTest do
       refute_received :unexpected_dispatch
     end
 
-    test "posts private bearer auth and exact bound context before allowing", %{job: job, run: run} do
+    test "posts private bearer auth and exact bound context before allowing", %{
+      job: job,
+      run: run
+    } do
       expected = expected_context(job, run)
 
       Req.Test.stub(__MODULE__, fn conn ->
@@ -513,12 +626,14 @@ defmodule LemonAutomation.CronAdmissionTest do
       assert {:error, :denied} = CronAdmission.check(job, run, @fixture_options)
     end
 
-    test "approved fresh slot returns canonical core proof, creator refs and native memory key", %{job: job, run: run} do
+    test "approved fresh slot returns canonical core proof, creator refs and native memory key",
+         %{job: job, run: run} do
       expected = canonical_invocation(run.run_id)
 
       Req.Test.stub(__MODULE__, fn conn ->
         {context, conn} = read_context(conn)
         assert context === expected_context(job, run)
+
         Req.Test.json(conn, %{
           "allow" => true,
           "context" => context,
@@ -531,13 +646,18 @@ defmodule LemonAutomation.CronAdmissionTest do
       assert expected.shared_memory_grant == false
       assert expected.proof["runId"] == run.run_id
       [core, creator] = expected.mcp_servers
+
       assert core["headers"]["X-Lemon-Bot-Invocation"] ==
                "${LEMON_SECRET:lemon_bot/invocations/#{run.run_id}}"
+
       assert creator["headers"]["Authorization"] ==
                "Bearer ${LEMON_SECRET:cron-projection-missing-token}"
     end
 
-    test "approved empty MCP replacement is unavailable without a bindable proof", %{job: job, run: run} do
+    test "approved empty MCP replacement is unavailable without a bindable proof", %{
+      job: job,
+      run: run
+    } do
       input = Map.put(invocation(run.run_id), "invocationMcpServers", [])
 
       Req.Test.stub(__MODULE__, fn conn ->
@@ -548,7 +668,10 @@ defmodule LemonAutomation.CronAdmissionTest do
       assert {:error, :admission_unavailable} = CronAdmission.check(job, run, @fixture_options)
     end
 
-    test "a previous slot's otherwise valid proof cannot approve the fresh slot", %{job: job, run: run} do
+    test "a previous slot's otherwise valid proof cannot approve the fresh slot", %{
+      job: job,
+      run: run
+    } do
       stale = invocation(run.run_id <> "-previous-slot")
 
       Req.Test.stub(__MODULE__, fn conn ->
@@ -560,7 +683,10 @@ defmodule LemonAutomation.CronAdmissionTest do
       assert {:error, :admission_unavailable} = CronAdmission.check(job, run, @fixture_options)
     end
 
-    test "invalid run-bound proof, memory, grants and callback attestation flags fail closed", %{job: job, run: run} do
+    test "invalid run-bound proof, memory, grants and callback attestation flags fail closed", %{
+      job: job,
+      run: run
+    } do
       for invalid <- invalid_bound_invocations(invocation(run.run_id)) do
         Req.Test.stub(__MODULE__, fn conn ->
           {context, conn} = read_context(conn)
@@ -571,8 +697,16 @@ defmodule LemonAutomation.CronAdmissionTest do
       end
     end
 
-    test "receipt-level metadata cannot attest otherwise valid execution context", %{job: job, run: run} do
-      for field <- ["meta", "memory_context_verified", "invocation_proof_verified", "shared_memory_grant"] do
+    test "receipt-level metadata cannot attest otherwise valid execution context", %{
+      job: job,
+      run: run
+    } do
+      for field <- [
+            "meta",
+            "memory_context_verified",
+            "invocation_proof_verified",
+            "shared_memory_grant"
+          ] do
         Req.Test.stub(__MODULE__, fn conn ->
           {context, conn} = read_context(conn)
 
@@ -595,21 +729,35 @@ defmodule LemonAutomation.CronAdmissionTest do
         if not allow or mismatch or extra do
           Req.Test.stub(__MODULE__, fn conn ->
             {context, conn} = read_context(conn)
-            context = if mismatch, do: Map.put(context, "creatorId", "other-creator"), else: context
-            receipt = %{"allow" => allow, "context" => context, "invocation" => invocation(run.run_id)}
+
+            context =
+              if mismatch, do: Map.put(context, "creatorId", "other-creator"), else: context
+
+            receipt = %{
+              "allow" => allow,
+              "context" => context,
+              "invocation" => invocation(run.run_id)
+            }
+
             receipt = if extra, do: Map.put(receipt, "unexpected", true), else: receipt
             Req.Test.json(conn, receipt)
           end)
 
-          assert {:error, :admission_unavailable} = CronAdmission.check(job, run, @fixture_options)
+          assert {:error, :admission_unavailable} =
+                   CronAdmission.check(job, run, @fixture_options)
         end
       end
     end
 
-    test "invalid approved projections and any denied projection are unavailable", %{job: job, run: run} do
+    test "invalid approved projections and any denied projection are unavailable", %{
+      job: job,
+      run: run
+    } do
       input = invocation(run.run_id)
       server = hd(input["invocationMcpServers"])
-      literal_server = Map.put(server, "headers", %{"Authorization" => "Bearer literal-credential"})
+
+      literal_server =
+        Map.put(server, "headers", %{"Authorization" => "Bearer literal-credential"})
 
       for input <- [
             nil,
@@ -619,7 +767,8 @@ defmodule LemonAutomation.CronAdmissionTest do
             Map.put(input, "invocationContextKey", "invalid key"),
             Map.put(input, "invocationToolPolicy", %{"unsupported" => true}),
             Map.put(input, "invocationMcpServers", [literal_server])
-          ], allow <- [true, false] do
+          ],
+          allow <- [true, false] do
         Req.Test.stub(__MODULE__, fn conn ->
           {context, conn} = read_context(conn)
           Req.Test.json(conn, %{"allow" => allow, "context" => context, "invocation" => input})
@@ -631,6 +780,7 @@ defmodule LemonAutomation.CronAdmissionTest do
 
     test "job and run metadata cannot supply a trusted projection", %{job: job, run: run} do
       stub_receipt(true)
+
       job = %{
         job
         | meta: %{
@@ -648,10 +798,14 @@ defmodule LemonAutomation.CronAdmissionTest do
             invocation_proof_verified: true
           }
       }
+
       assert :ok = CronAdmission.check(job, run, @fixture_options)
     end
 
-    test "all trigger kinds, including disabled manual jobs, bind exact invocation context", %{job: job, run: run} do
+    test "all trigger kinds, including disabled manual jobs, bind exact invocation context", %{
+      job: job,
+      run: run
+    } do
       for trigger <- [:schedule, :manual, :wake, :retry] do
         current_run = %{run | triggered_by: trigger}
         expected = expected_context(job, current_run)
@@ -681,11 +835,18 @@ defmodule LemonAutomation.CronAdmissionTest do
       end
     end
 
-    test "any mismatched context field makes true and false receipts unavailable", %{job: job, run: run} do
+    test "any mismatched context field makes true and false receipts unavailable", %{
+      job: job,
+      run: run
+    } do
       for key <- Map.keys(expected_context(job, run)), allow <- [true, false] do
         Req.Test.stub(__MODULE__, fn conn ->
           {context, conn} = read_context(conn)
-          Req.Test.json(conn, %{"allow" => allow, "context" => Map.put(context, key, "mismatched")})
+
+          Req.Test.json(conn, %{
+            "allow" => allow,
+            "context" => Map.put(context, key, "mismatched")
+          })
         end)
 
         assert {:error, :admission_unavailable} = CronAdmission.check(job, run, @fixture_options)
@@ -731,18 +892,27 @@ defmodule LemonAutomation.CronAdmissionTest do
       end
     end
 
-    test "non-200 responses remain unavailable even with an otherwise admitting receipt", %{job: job, run: run} do
+    test "non-200 responses remain unavailable even with an otherwise admitting receipt", %{
+      job: job,
+      run: run
+    } do
       for status <- [201, 204, 400, 401, 403, 429, 500, 503] do
         Req.Test.stub(__MODULE__, fn conn ->
           {context, conn} = read_context(conn)
-          conn |> Plug.Conn.put_status(status) |> Req.Test.json(%{"allow" => true, "context" => context})
+
+          conn
+          |> Plug.Conn.put_status(status)
+          |> Req.Test.json(%{"allow" => true, "context" => context})
         end)
 
         assert {:error, :admission_unavailable} = CronAdmission.check(job, run, @fixture_options)
       end
     end
 
-    test "redirect responses never follow a second request with the bearer token", %{job: job, run: run} do
+    test "redirect responses never follow a second request with the bearer token", %{
+      job: job,
+      run: run
+    } do
       for status <- [301, 302, 303, 307, 308] do
         Req.Test.stub(__MODULE__, fn conn ->
           send(self(), :redirect_request)
@@ -767,6 +937,7 @@ defmodule LemonAutomation.CronAdmissionTest do
           send(self(), :transport_request)
           Req.Test.transport_error(conn, reason)
         end)
+
         assert {:error, :admission_unavailable} = CronAdmission.check(job, run, @fixture_options)
         assert_received :transport_request
         refute_received :transport_request
@@ -775,7 +946,12 @@ defmodule LemonAutomation.CronAdmissionTest do
 
     test "oversized otherwise-valid receipts are unavailable", %{job: job, run: run} do
       body = Jason.encode!(%{"allow" => true, "context" => expected_context(job, run)})
-      Req.Test.stub(__MODULE__, &Plug.Conn.send_resp(&1, 200, body <> String.duplicate(" ", 16_384)))
+
+      Req.Test.stub(
+        __MODULE__,
+        &Plug.Conn.send_resp(&1, 200, body <> String.duplicate(" ", 16_384))
+      )
+
       assert {:error, :admission_unavailable} = CronAdmission.check(job, run, @fixture_options)
     end
 
@@ -786,7 +962,10 @@ defmodule LemonAutomation.CronAdmissionTest do
       assert :ok = CronAdmission.check(job, run, @fixture_options)
     end
 
-    test "operator environment is rechecked on dispatch and can revoke app-configured trust", %{job: job, run: run} do
+    test "operator environment is rechecked on dispatch and can revoke app-configured trust", %{
+      job: job,
+      run: run
+    } do
       stub_receipt(true)
       System.put_env("LEMON_CRON_ADMISSION_ALLOWED_ORIGINS", @origin)
       assert :ok = CronAdmission.check(job, run, @fixture_options)
@@ -808,13 +987,23 @@ defmodule LemonAutomation.CronAdmissionTest do
       refute_received :unexpected_dispatch
     end
 
-    test "plaintext HTTP off loopback cannot receive a token even when configured", %{job: job, run: run} do
+    test "plaintext HTTP off loopback cannot receive a token even when configured", %{
+      job: job,
+      run: run
+    } do
       stub_no_dispatch()
 
-      for origin <- ["http://admission.example.test", "http://localhost:8123", "http://127.0.0.2:8123", "http://10.0.0.1:8123"] do
+      for origin <- [
+            "http://admission.example.test",
+            "http://localhost:8123",
+            "http://127.0.0.2:8123",
+            "http://10.0.0.1:8123"
+          ] do
         Application.put_env(:lemon_automation, :cron_admission_allowed_origins, [origin])
         current_job = %{job | admission: %{job.admission | url: origin <> "/check"}}
-        assert {:error, :admission_unavailable} = CronAdmission.check(current_job, run, @fixture_options)
+
+        assert {:error, :admission_unavailable} =
+                 CronAdmission.check(current_job, run, @fixture_options)
       end
 
       refute_received :unexpected_dispatch
@@ -838,18 +1027,28 @@ defmodule LemonAutomation.CronAdmissionTest do
       end
     end
 
-    test "command jobs, absent profiles, and malformed admission do not dispatch", %{job: job, run: run} do
+    test "command jobs, absent profiles, and malformed admission do not dispatch", %{
+      job: job,
+      run: run
+    } do
       stub_no_dispatch()
 
-      for current_job <- [%{job | command: "echo forbidden"}, %{job | profile_id: nil}, %{job | admission: %{token: @token}}] do
-        assert {:error, :admission_unavailable} = CronAdmission.check(current_job, run, @fixture_options)
+      for current_job <- [
+            %{job | command: "echo forbidden"},
+            %{job | profile_id: nil},
+            %{job | admission: %{token: @token}}
+          ] do
+        assert {:error, :admission_unavailable} =
+                 CronAdmission.check(current_job, run, @fixture_options)
       end
 
       refute_received :unexpected_dispatch
     end
 
     test "missing encrypted token never falls back to an environment token", %{job: job, run: run} do
-      missing_name = "CRON_ADMISSION_ENV_ONLY_" <> Integer.to_string(System.unique_integer([:positive]))
+      missing_name =
+        "CRON_ADMISSION_ENV_ONLY_" <> Integer.to_string(System.unique_integer([:positive]))
+
       System.put_env(missing_name, @token)
       on_exit(fn -> System.delete_env(missing_name) end)
       stub_no_dispatch()
@@ -868,8 +1067,14 @@ defmodule LemonAutomation.CronAdmissionTest do
     test "fixture options cannot weaken request policy", %{job: job, run: run} do
       stub_no_dispatch()
 
-      for option <- [redirect: true, retry: true, receive_timeout: :infinity, connect_options: [transport_opts: [verify: :verify_none]]] do
-        assert {:error, :admission_unavailable} = CronAdmission.check(job, run, @fixture_options ++ [option])
+      for option <- [
+            redirect: true,
+            retry: true,
+            receive_timeout: :infinity,
+            connect_options: [transport_opts: [verify: :verify_none]]
+          ] do
+        assert {:error, :admission_unavailable} =
+                 CronAdmission.check(job, run, @fixture_options ++ [option])
       end
 
       refute_received :unexpected_dispatch
@@ -877,11 +1082,20 @@ defmodule LemonAutomation.CronAdmissionTest do
   end
 
   describe "set_token/2" do
-    test "returns a stable hashed name and replaces only that routine's encrypted token", %{admission: admission, secret_name: secret_name} do
-      expected = "cron_admission_" <> Base.encode16(:crypto.hash(:sha256, admission.routine_id), case: :lower)
+    test "returns a stable hashed name and replaces only that routine's encrypted token", %{
+      admission: admission,
+      secret_name: secret_name
+    } do
+      expected =
+        "cron_admission_" <>
+          Base.encode16(:crypto.hash(:sha256, admission.routine_id), case: :lower)
+
       assert secret_name == expected
       assert {:ok, @token} = Secrets.get(secret_name)
-      assert {:ok, ^secret_name} = CronAdmission.set_token(admission.routine_id, "replacement-private-token")
+
+      assert {:ok, ^secret_name} =
+               CronAdmission.set_token(admission.routine_id, "replacement-private-token")
+
       assert {:ok, "replacement-private-token"} = Secrets.get(secret_name)
 
       other_routine = admission.routine_id <> "-other"
@@ -892,12 +1106,24 @@ defmodule LemonAutomation.CronAdmissionTest do
       assert {:ok, "replacement-private-token"} = Secrets.get(secret_name)
     end
 
-    test "rejects invalid routine IDs and tokens without replacing the current secret", %{admission: admission, secret_name: secret_name} do
+    test "rejects invalid routine IDs and tokens without replacing the current secret", %{
+      admission: admission,
+      secret_name: secret_name
+    } do
       for routine <- [nil, "", "  ", 12, String.duplicate("x", 257), <<255>>] do
         assert {:error, :invalid_request} = CronAdmission.set_token(routine, @token)
       end
 
-      for token <- [nil, "", "  ", 12, String.duplicate("x", 4097), "bad\rtoken", "bad\ntoken", <<255>>] do
+      for token <- [
+            nil,
+            "",
+            "  ",
+            12,
+            String.duplicate("x", 4097),
+            "bad\rtoken",
+            "bad\ntoken",
+            <<255>>
+          ] do
         assert {:error, :invalid_request} = CronAdmission.set_token(admission.routine_id, token)
       end
 
@@ -1039,7 +1265,10 @@ defmodule LemonAutomation.CronAdmissionTest do
         Map.put(input, "memoryContextKey", "invalid memory key"),
         Map.put(input, "sharedMemoryGrant", true),
         Map.put(input, "sharedMemoryGrant", "false"),
-        Map.put(input, "meta", %{"memory_context_verified" => true, "invocation_proof_verified" => true}),
+        Map.put(input, "meta", %{
+          "memory_context_verified" => true,
+          "invocation_proof_verified" => true
+        }),
         Map.put(input, "memory_context_verified", true),
         Map.put(input, "invocation_proof_verified", true),
         Map.put(input, "shared_memory_grant", false)

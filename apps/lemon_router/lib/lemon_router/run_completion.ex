@@ -26,6 +26,7 @@ defmodule LemonRouter.RunCompletion do
     case RunStore.finalize(command.run_id, summary) do
       :ok ->
         :ok = LemonRouter.RunReceiptStore.retain_terminal_evidence(command.run_id)
+
         LemonCore.Telemetry.emit(
           [:lemon, :run, :stop],
           %{duration_ms: event.payload.duration_ms || 0, ok: completed.ok},

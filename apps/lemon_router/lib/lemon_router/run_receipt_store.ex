@@ -20,7 +20,18 @@ defmodule LemonRouter.RunReceiptStore do
   alias LemonCore.{MapHelpers, Store}
 
   @table :run_receipts
-  @keys [:run_id, :session_key, :agent_id, :profile_id, :dependent_profile_ids, :state, :effective_mode, :target_run_id, :request_identity, :terminal]
+  @keys [
+    :run_id,
+    :session_key,
+    :agent_id,
+    :profile_id,
+    :dependent_profile_ids,
+    :state,
+    :effective_mode,
+    :target_run_id,
+    :request_identity,
+    :terminal
+  ]
   @modes [
     :new_run,
     :queued,
@@ -83,28 +94,44 @@ defmodule LemonRouter.RunReceiptStore do
 
   defp mark_terminal(server, table, run_id) do
     case Store.fetch(server, table, run_id) do
-      {:ok, nil} -> :ok
-      {:ok, %{terminal: true}} -> :ok
+      {:ok, nil} ->
+        :ok
+
+      {:ok, %{terminal: true}} ->
+        :ok
+
       {:ok, current} when is_map(current) ->
-        case Store.compare_and_swap(server, table, run_id, current, Map.put(current, :terminal, true)) do
+        case Store.compare_and_swap(
+               server,
+               table,
+               run_id,
+               current,
+               Map.put(current, :terminal, true)
+             ) do
           :ok -> :ok
           {:error, :mismatch} -> mark_terminal(server, table, run_id)
           error -> error
         end
-      _ -> {:error, :invalid_terminal_evidence}
+
+      _ ->
+        {:error, :invalid_terminal_evidence}
     end
   end
 
   @spec fetch(Store.server(), binary()) :: {:ok, receipt() | nil} | {:error, term()}
   def fetch(server \\ Store, run_id) do
     case Store.fetch(server, @table, run_id) do
-      {:ok, nil} -> {:ok, nil}
+      {:ok, nil} ->
+        {:ok, nil}
+
       {:ok, receipt} ->
         with {:ok, receipt} <- normalize(receipt, run_id),
              :ok <- sync(server) do
           {:ok, receipt}
         end
-      {:error, _reason} = error -> error
+
+      {:error, _reason} = error ->
+        error
     end
   end
 
@@ -112,18 +139,25 @@ defmodule LemonRouter.RunReceiptStore do
   def put(server \\ Store, receipt)
 
   def put(server, receipt) when is_map(receipt) do
-    with {:ok, receipt} <- normalize(Map.delete(receipt, :dependent_profile_ids), Map.get(receipt, :run_id)),
-         {:ok, admission} <- Store.fetch(server, LemonRouter.RunOrchestrator.admission_table(), receipt.run_id) do
+    with {:ok, receipt} <-
+           normalize(Map.delete(receipt, :dependent_profile_ids), Map.get(receipt, :run_id)),
+         {:ok, admission} <-
+           Store.fetch(server, LemonRouter.RunOrchestrator.admission_table(), receipt.run_id) do
       receipt =
         case LemonRouter.NativeLineage.dependent_profile_ids(admission) do
           [] -> receipt
           dependencies -> Map.put(receipt, :dependent_profile_ids, dependencies)
         end
+
       case Store.put_new(server, @table, receipt.run_id, receipt) do
         :ok ->
           with :ok <- sync(server), do: retain_terminal_evidence(server, receipt.run_id)
-        {:error, :exists} -> existing_receipt(server, receipt)
-        {:error, _reason} = error -> error
+
+        {:error, :exists} ->
+          existing_receipt(server, receipt)
+
+        {:error, _reason} = error ->
+          error
       end
     end
   end
@@ -171,7 +205,12 @@ defmodule LemonRouter.RunReceiptStore do
         :ok
 
       {:ok, current} ->
-        replacement = %{current | state: :outcome_unknown, effective_mode: nil, target_run_id: nil}
+        replacement = %{
+          current
+          | state: :outcome_unknown,
+            effective_mode: nil,
+            target_run_id: nil
+        }
 
         case Store.compare_and_swap(server, @table, run_id, current, replacement) do
           :ok -> sync(server)
@@ -200,8 +239,13 @@ defmodule LemonRouter.RunReceiptStore do
   end
 
   defp normalize(
-         %{run_id: run_id, session_key: session_key, state: :accepted,
-           effective_mode: mode, target_run_id: target} = receipt,
+         %{
+           run_id: run_id,
+           session_key: session_key,
+           state: :accepted,
+           effective_mode: mode,
+           target_run_id: target
+         } = receipt,
          run_id
        )
        when is_binary(run_id) and run_id != "" and is_binary(session_key) and
@@ -210,8 +254,13 @@ defmodule LemonRouter.RunReceiptStore do
   end
 
   defp normalize(
-         %{run_id: run_id, session_key: session_key, state: :outcome_unknown,
-           effective_mode: nil, target_run_id: nil} = receipt,
+         %{
+           run_id: run_id,
+           session_key: session_key,
+           state: :outcome_unknown,
+           effective_mode: nil,
+           target_run_id: nil
+         } = receipt,
          run_id
        )
        when is_binary(run_id) and run_id != "" and is_binary(session_key) and session_key != "" do
@@ -222,6 +271,7 @@ defmodule LemonRouter.RunReceiptStore do
 
   defp normalize_identity(receipt) do
     dependencies = Map.get(receipt, :dependent_profile_ids, [])
+
     if is_list(dependencies) and Enum.all?(dependencies, &(is_binary(&1) and &1 != "")) do
       case Map.get(receipt, :request_identity) do
         nil -> {:ok, receipt |> Map.take(@keys) |> Map.delete(:request_identity)}

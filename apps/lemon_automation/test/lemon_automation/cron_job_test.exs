@@ -23,8 +23,14 @@ defmodule LemonAutomation.CronJobTest do
     assert job.profile_id == "teammate"
     assert CronJob.to_map(job).profile_id == "teammate"
     assert CronJob.from_map(CronJob.to_map(job)).profile_id == "teammate"
-    assert CronJob.from_map(%{"id" => job.id, "name" => job.name,
-             "schedule" => job.schedule, "profile_id" => "teammate"}).profile_id == "teammate"
+
+    assert CronJob.from_map(%{
+             "id" => job.id,
+             "name" => job.name,
+             "schedule" => job.schedule,
+             "profile_id" => "teammate"
+           }).profile_id == "teammate"
+
     assert CronJob.update(job, %{prompt: "next"}).profile_id == "teammate"
     assert CronJob.update(job, %{profile_id: "moved"}).profile_id == "moved"
     assert CronJob.from_map(Map.delete(CronJob.to_map(job), :profile_id)).profile_id == nil

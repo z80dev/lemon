@@ -221,9 +221,11 @@ defmodule CodingAgent.BackgroundRun do
       invocation_context_key:
         source[:invocation_context_key] ||
           inherited_context.invocation_context_key,
-      memory_context_key: Map.get(source, :memory_context_key, inherited_context.memory_context_key),
+      memory_context_key:
+        Map.get(source, :memory_context_key, inherited_context.memory_context_key),
       memory_context_verified:
-        Map.get(source, :memory_context_verified, inherited_context.memory_context_verified) == true,
+        Map.get(source, :memory_context_verified, inherited_context.memory_context_verified) ==
+          true,
       shared_memory_grant:
         Map.get(source, :shared_memory_grant, inherited_context.shared_memory_grant) == true,
       invocation_mcp_servers:
@@ -239,10 +241,14 @@ defmodule CodingAgent.BackgroundRun do
       session_scope: :main,
       register: true
     ]
-    |> Keyword.merge(Map.to_list(Map.merge(
-      Map.take(inherited_context, CodingAgent.Tools.Task.Params.private_native_fields()),
-      Map.take(source, CodingAgent.Tools.Task.Params.private_native_fields())
-    )))
+    |> Keyword.merge(
+      Map.to_list(
+        Map.merge(
+          Map.take(inherited_context, CodingAgent.Tools.Task.Params.private_native_fields()),
+          Map.take(source, CodingAgent.Tools.Task.Params.private_native_fields())
+        )
+      )
+    )
     |> Enum.reject(fn {_key, value} -> is_nil(value) end)
   end
 
@@ -279,7 +285,12 @@ defmodule CodingAgent.BackgroundRun do
       mcp_session_id: state.mcp_session_id,
       acp_mcp_session_id: state.acp_mcp_session_id
     }
-    |> Map.merge(Map.take(state.approval_context || %{}, CodingAgent.Tools.Task.Params.private_native_fields()))
+    |> Map.merge(
+      Map.take(
+        state.approval_context || %{},
+        CodingAgent.Tools.Task.Params.private_native_fields()
+      )
+    )
   rescue
     _ -> %{}
   catch

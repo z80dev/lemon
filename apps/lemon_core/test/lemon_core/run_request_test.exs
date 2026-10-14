@@ -96,8 +96,18 @@ defmodule LemonCore.RunRequestTest do
       assert :ok = RunRequest.validate_invocation_context_key(key)
     end
 
-    for key <- [nil, "", false, 42, %{}, " private", "line\nbreak", "é", "_prefix",
-                String.duplicate("x", 129)] do
+    for key <- [
+          nil,
+          "",
+          false,
+          42,
+          %{},
+          " private",
+          "line\nbreak",
+          "é",
+          "_prefix",
+          String.duplicate("x", 129)
+        ] do
       assert {:error, :invalid_invocation_context_key} =
                RunRequest.validate_invocation_context_key(key)
     end

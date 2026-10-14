@@ -11,7 +11,9 @@ defmodule LemonControlPlane.Methods.CronAdmissionSetTest do
     System.put_env(key_env, Base.encode64(:crypto.strong_rand_bytes(32)))
     Application.put_env(:lemon_core, Secrets, key_providers: [:env], env_var: key_env)
     routine_id = "admission-routine-" <> suffix
-    secret_name = "cron_admission_" <> Base.encode16(:crypto.hash(:sha256, routine_id), case: :lower)
+
+    secret_name =
+      "cron_admission_" <> Base.encode16(:crypto.hash(:sha256, routine_id), case: :lower)
 
     on_exit(fn ->
       Secrets.delete(secret_name)
@@ -37,7 +39,10 @@ defmodule LemonControlPlane.Methods.CronAdmissionSetTest do
     assert {:ok, ^token} = Secrets.get(secret_name)
 
     assert {:ok, %{"secretName" => ^secret_name, "set" => true}} =
-             CronAdmissionSet.handle(%{"routineId" => ctx.routine_id, "token" => "rotated-private-token"}, %{})
+             CronAdmissionSet.handle(
+               %{"routineId" => ctx.routine_id, "token" => "rotated-private-token"},
+               %{}
+             )
 
     assert {:ok, "rotated-private-token"} = Secrets.get(secret_name)
   end

@@ -15,7 +15,8 @@ defmodule LemonControlPlane.Env do
       aliases: [],
       type: :string,
       default: nil,
-      doc: "Reachable secure control-plane WebSocket URL embedded in node invitations; ws is allowed only for loopback.",
+      doc:
+        "Reachable secure control-plane WebSocket URL embedded in node invitations; ws is allowed only for loopback.",
       secret?: false,
       required?: false,
       area: :execution_nodes,
@@ -39,7 +40,8 @@ defmodule LemonControlPlane.Env do
       aliases: [],
       type: :string,
       default: nil,
-      doc: "Exact operator-supported node artifact CalVer; requires an HTTPS node install base URL and actual feature checks.",
+      doc:
+        "Exact operator-supported node artifact CalVer; requires an HTTPS node install base URL and actual feature checks.",
       secret?: false,
       required?: false,
       area: :execution_nodes,
@@ -51,7 +53,8 @@ defmodule LemonControlPlane.Env do
       aliases: [],
       type: :string,
       default: nil,
-      doc: "HTTPS operator-supported pinned node artifact base URL passed to the existing installer; never defaults to published artifacts.",
+      doc:
+        "HTTPS operator-supported pinned node artifact base URL passed to the existing installer; never defaults to published artifacts.",
       secret?: false,
       required?: false,
       area: :execution_nodes,

@@ -252,6 +252,7 @@ defmodule LemonCli.CLI do
 
     if Code.ensure_loaded?(node_cli) do
       forwarded = if command == "capabilities", do: [command | args], else: args
+
       case node_cli.run(forwarded) do
         :ok ->
           @exit_ok

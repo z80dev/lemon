@@ -82,9 +82,9 @@ defmodule LemonControlPlane.Auth.Authorize do
       requested_role == :unsupported ->
         {:error, {:unauthorized, "Unsupported role"}}
 
-
       requested_role == :enrollment or not is_nil(get_in(params, ["auth", "inviteCode"])) ->
         authenticate_invite(params)
+
       requested_role == :operator and
           secure_token_match?(token, configured_operator_token) ->
         operator_context(params)
@@ -137,16 +137,17 @@ defmodule LemonControlPlane.Auth.Authorize do
   defp authenticate_invite(params) do
     case LemonControlPlane.NodeStore.fetch_invite(get_in(params, ["auth", "inviteCode"])) do
       {:ok, invite} ->
-        {:ok, %{
-          role: :enrollment,
-          scopes: [:enroll],
-          token: nil,
-          client_id: LemonControlPlane.NodeStore.invite_field(invite, :id),
-          identity: %{
-            "type" => "enrollment",
-            "inviteId" => LemonControlPlane.NodeStore.invite_field(invite, :id)
-          }
-        }}
+        {:ok,
+         %{
+           role: :enrollment,
+           scopes: [:enroll],
+           token: nil,
+           client_id: LemonControlPlane.NodeStore.invite_field(invite, :id),
+           identity: %{
+             "type" => "enrollment",
+             "inviteId" => LemonControlPlane.NodeStore.invite_field(invite, :id)
+           }
+         }}
 
       {:error, _} ->
         {:error, {:unauthorized, "Enrollment invite is invalid, expired, revoked or stale"}}

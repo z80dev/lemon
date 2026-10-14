@@ -108,12 +108,19 @@ defmodule LemonBrowser.LocalServer do
       with {:ok, _node} <- find_node(),
            {:ok, driver} <- find_driver(state.driver_opts) do
         summary = driver_config_summary(state.driver_opts)
-        {:ok, %{"driverPath" => driver, "endpoint" => configured_endpoint(state.driver_opts),
-          "port" => summary[:cdp_port] || 18_800, "launchesBrowser" => summary[:launches_browser],
-          "attachOnly" => summary[:attach_only]}}
+
+        {:ok,
+         %{
+           "driverPath" => driver,
+           "endpoint" => configured_endpoint(state.driver_opts),
+           "port" => summary[:cdp_port] || 18_800,
+           "launchesBrowser" => summary[:launches_browser],
+           "attachOnly" => summary[:attach_only]
+         }}
       else
         _ -> {:error, :not_installed}
       end
+
     {:reply, result, state}
   end
 
@@ -259,7 +266,7 @@ defmodule LemonBrowser.LocalServer do
   defp find_driver(opts) do
     override =
       Keyword.get(opts, :driver_path) ||
-        (Env.get(:lemon_browser_driver_path) |> to_string_safe())
+        Env.get(:lemon_browser_driver_path) |> to_string_safe()
 
     if override != "" do
       expanded = Path.expand(override)
@@ -400,7 +407,10 @@ defmodule LemonBrowser.LocalServer do
 
     []
     |> maybe_append_arg(endpoint != "", "--cdp-endpoint", endpoint)
-    |> maybe_append_flag(Keyword.get(opts, :attach_only, false) == true or endpoint != "", "--attach-only")
+    |> maybe_append_flag(
+      Keyword.get(opts, :attach_only, false) == true or endpoint != "",
+      "--attach-only"
+    )
   end
 
   defp maybe_append_arg(args, true, flag, value), do: args ++ [flag, value]
@@ -421,6 +431,7 @@ defmodule LemonBrowser.LocalServer do
     attach_only? =
       Keyword.get(opts, :attach_only, false) == true or
         Env.get(:lemon_browser_attach_only) == true or endpoint != ""
+
     # Note: intentionally not `Env.get/2` -- LEMON_BROWSER_CDP_PORT only
     # accepts *positive* integers (0/negative fall back to the default),
     # which is stricter than the standard :integer cast's "any parseable

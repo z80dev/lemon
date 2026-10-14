@@ -7,43 +7,54 @@ defmodule LemonControlPlane.Methods.NodeHostIOSupport do
 
   def handle(method, params, ctx) when is_map(params) do
     Logger.info("node_io operation=#{method} attempted=true redacted=true")
+
     with :ok <- string(params, "nodeId", 256),
          :ok <- validate(method, params),
          {:ok, opts} <- dispatch_opts(method, params),
-         {:ok, result} <- NodeIO.invoke(params["nodeId"], method, Map.drop(params, ["nodeId"]), ctx, opts),
+         {:ok, result} <-
+           NodeIO.invoke(params["nodeId"], method, Map.drop(params, ["nodeId"]), ctx, opts),
          :ok <- verify_after_dispatch(method, params, opts) do
       {:ok, result}
     end
   end
+
   def handle(_, _, _), do: {:error, Errors.invalid_request("params must be an object")}
 
   defp dispatch_opts("node.secrets.set", params),
     do: LemonControlPlane.NodeSecretProofs.dispatch_opts(params["nodeId"], params)
+
   defp dispatch_opts(_, _), do: {:ok, []}
 
   defp verify_after_dispatch("node.secrets.set", params, opts),
     do: LemonControlPlane.NodeSecretProofs.verify_after_dispatch(params["nodeId"], params, opts)
+
   defp verify_after_dispatch(_, _, _), do: :ok
 
   defp validate("node.host.info", _), do: :ok
   defp validate("node.secrets.list", _), do: :ok
+
   defp validate("node.secrets.set", params) do
     with :ok <- string(params, "name", 256),
          :ok <- string(params, "value", 1_048_576, true),
          do: operation_id(params, false)
   end
+
   defp validate("node.secrets.delete", params), do: string(params, "name", 256)
   defp validate("node.secrets.receipt", params), do: operation_id(params, true)
+
   defp validate(method, params) do
     with :ok <- string(params, "path", 4096) do
       validate_file(method, params)
     end
   end
+
   defp validate_file("node.fs.list", params), do: boolean(params, "showHidden")
+
   defp validate_file("node.fs.read", params) do
     with :ok <- integer(params, "offset", 0, 9_007_199_254_740_991),
          do: integer(params, "length", 1, 1_048_576)
   end
+
   defp validate_file("node.fs.write", params) do
     with :ok <- string(params, "dataBase64", 1_398_104, true),
          :ok <- integer(params, "offset", 0, 9_007_199_254_740_991),
@@ -51,17 +62,21 @@ defmodule LemonControlPlane.Methods.NodeHostIOSupport do
          :ok <- boolean(params, "truncate"),
          do: boolean(params, "mkdirs")
   end
+
   defp validate_file("node.fs.move", params) do
     with :ok <- string(params, "destination", 4096),
          :ok <- required_integer(params, "expectedModifiedAtMs"),
          do: boolean(params, "overwrite")
   end
+
   defp validate_file("node.fs.delete.preview", params), do: boolean(params, "recursive")
+
   defp validate_file("node.fs.delete", params) do
     if params["confirm"] == params["path"],
       do: string(params, "confirmationToken", 256),
       else: {:error, Errors.invalid_request("confirm must exactly equal path")}
   end
+
   defp validate_file(_, _), do: :ok
 
   defp operation_id(params, required) do
@@ -69,26 +84,34 @@ defmodule LemonControlPlane.Methods.NodeHostIOSupport do
       :ok
     else
       case LemonCore.Secrets.Receipts.operation_id(params["operationId"]) do
-        :ok -> :ok
-        {:error, _} -> {:error, Errors.invalid_request("operationId must be 1..128 ASCII letters, digits, _, :, or -")}
+        :ok ->
+          :ok
+
+        {:error, _} ->
+          {:error,
+           Errors.invalid_request("operationId must be 1..128 ASCII letters, digits, _, :, or -")}
       end
     end
   end
 
   defp string(params, field, max, empty \\ false) do
     value = params[field]
+
     if is_binary(value) and String.valid?(value) and byte_size(value) <= max and
          (empty or String.trim(value) != "") and (empty or not String.contains?(value, <<0>>)),
-      do: :ok,
-      else: {:error, Errors.invalid_request(field <> " must be a bounded string")}
+       do: :ok,
+       else: {:error, Errors.invalid_request(field <> " must be a bounded string")}
   end
+
   defp boolean(params, field) do
     if not Map.has_key?(params, field) or is_boolean(params[field]),
       do: :ok,
       else: {:error, Errors.invalid_request(field <> " must be a boolean")}
   end
+
   defp integer(params, field, min, max) do
     value = params[field]
+
     if not Map.has_key?(params, field) or (is_integer(value) and value >= min and value <= max),
       do: :ok,
       else: {:error, Errors.invalid_request(field <> " must be a bounded integer")}
@@ -111,7 +134,8 @@ defmodule LemonControlPlane.Methods.NodeHostInfo do
   @impl true
   def dispatch_mode, do: :async
   @impl true
-  def handle(params, ctx), do: LemonControlPlane.Methods.NodeHostIOSupport.handle(name(), params, ctx)
+  def handle(params, ctx),
+    do: LemonControlPlane.Methods.NodeHostIOSupport.handle(name(), params, ctx)
 end
 
 defmodule LemonControlPlane.Methods.NodeFsList do
@@ -124,7 +148,8 @@ defmodule LemonControlPlane.Methods.NodeFsList do
   @impl true
   def dispatch_mode, do: :async
   @impl true
-  def handle(params, ctx), do: LemonControlPlane.Methods.NodeHostIOSupport.handle(name(), params, ctx)
+  def handle(params, ctx),
+    do: LemonControlPlane.Methods.NodeHostIOSupport.handle(name(), params, ctx)
 end
 
 defmodule LemonControlPlane.Methods.NodeFsStat do
@@ -137,7 +162,8 @@ defmodule LemonControlPlane.Methods.NodeFsStat do
   @impl true
   def dispatch_mode, do: :async
   @impl true
-  def handle(params, ctx), do: LemonControlPlane.Methods.NodeHostIOSupport.handle(name(), params, ctx)
+  def handle(params, ctx),
+    do: LemonControlPlane.Methods.NodeHostIOSupport.handle(name(), params, ctx)
 end
 
 defmodule LemonControlPlane.Methods.NodeFsRead do
@@ -150,7 +176,8 @@ defmodule LemonControlPlane.Methods.NodeFsRead do
   @impl true
   def dispatch_mode, do: :async
   @impl true
-  def handle(params, ctx), do: LemonControlPlane.Methods.NodeHostIOSupport.handle(name(), params, ctx)
+  def handle(params, ctx),
+    do: LemonControlPlane.Methods.NodeHostIOSupport.handle(name(), params, ctx)
 end
 
 defmodule LemonControlPlane.Methods.NodeFsWrite do
@@ -163,7 +190,8 @@ defmodule LemonControlPlane.Methods.NodeFsWrite do
   @impl true
   def dispatch_mode, do: :async
   @impl true
-  def handle(params, ctx), do: LemonControlPlane.Methods.NodeHostIOSupport.handle(name(), params, ctx)
+  def handle(params, ctx),
+    do: LemonControlPlane.Methods.NodeHostIOSupport.handle(name(), params, ctx)
 end
 
 defmodule LemonControlPlane.Methods.NodeFsMkdir do
@@ -176,7 +204,8 @@ defmodule LemonControlPlane.Methods.NodeFsMkdir do
   @impl true
   def dispatch_mode, do: :async
   @impl true
-  def handle(params, ctx), do: LemonControlPlane.Methods.NodeHostIOSupport.handle(name(), params, ctx)
+  def handle(params, ctx),
+    do: LemonControlPlane.Methods.NodeHostIOSupport.handle(name(), params, ctx)
 end
 
 defmodule LemonControlPlane.Methods.NodeFsMove do
@@ -189,7 +218,8 @@ defmodule LemonControlPlane.Methods.NodeFsMove do
   @impl true
   def dispatch_mode, do: :async
   @impl true
-  def handle(params, ctx), do: LemonControlPlane.Methods.NodeHostIOSupport.handle(name(), params, ctx)
+  def handle(params, ctx),
+    do: LemonControlPlane.Methods.NodeHostIOSupport.handle(name(), params, ctx)
 end
 
 defmodule LemonControlPlane.Methods.NodeFsDeletePreview do
@@ -202,7 +232,8 @@ defmodule LemonControlPlane.Methods.NodeFsDeletePreview do
   @impl true
   def dispatch_mode, do: :async
   @impl true
-  def handle(params, ctx), do: LemonControlPlane.Methods.NodeHostIOSupport.handle(name(), params, ctx)
+  def handle(params, ctx),
+    do: LemonControlPlane.Methods.NodeHostIOSupport.handle(name(), params, ctx)
 end
 
 defmodule LemonControlPlane.Methods.NodeFsDelete do
@@ -215,7 +246,8 @@ defmodule LemonControlPlane.Methods.NodeFsDelete do
   @impl true
   def dispatch_mode, do: :async
   @impl true
-  def handle(params, ctx), do: LemonControlPlane.Methods.NodeHostIOSupport.handle(name(), params, ctx)
+  def handle(params, ctx),
+    do: LemonControlPlane.Methods.NodeHostIOSupport.handle(name(), params, ctx)
 end
 
 defmodule LemonControlPlane.Methods.NodeSecretsSet do
@@ -228,7 +260,8 @@ defmodule LemonControlPlane.Methods.NodeSecretsSet do
   @impl true
   def dispatch_mode, do: :async
   @impl true
-  def handle(params, ctx), do: LemonControlPlane.Methods.NodeHostIOSupport.handle(name(), params, ctx)
+  def handle(params, ctx),
+    do: LemonControlPlane.Methods.NodeHostIOSupport.handle(name(), params, ctx)
 end
 
 defmodule LemonControlPlane.Methods.NodeSecretsList do
@@ -241,7 +274,8 @@ defmodule LemonControlPlane.Methods.NodeSecretsList do
   @impl true
   def dispatch_mode, do: :async
   @impl true
-  def handle(params, ctx), do: LemonControlPlane.Methods.NodeHostIOSupport.handle(name(), params, ctx)
+  def handle(params, ctx),
+    do: LemonControlPlane.Methods.NodeHostIOSupport.handle(name(), params, ctx)
 end
 
 defmodule LemonControlPlane.Methods.NodeSecretsDelete do
@@ -254,7 +288,8 @@ defmodule LemonControlPlane.Methods.NodeSecretsDelete do
   @impl true
   def dispatch_mode, do: :async
   @impl true
-  def handle(params, ctx), do: LemonControlPlane.Methods.NodeHostIOSupport.handle(name(), params, ctx)
+  def handle(params, ctx),
+    do: LemonControlPlane.Methods.NodeHostIOSupport.handle(name(), params, ctx)
 end
 
 defmodule LemonControlPlane.Methods.NodeSecretsReceipt do
@@ -267,5 +302,6 @@ defmodule LemonControlPlane.Methods.NodeSecretsReceipt do
   @impl true
   def dispatch_mode, do: :async
   @impl true
-  def handle(params, ctx), do: LemonControlPlane.Methods.NodeHostIOSupport.handle(name(), params, ctx)
+  def handle(params, ctx),
+    do: LemonControlPlane.Methods.NodeHostIOSupport.handle(name(), params, ctx)
 end

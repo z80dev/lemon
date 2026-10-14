@@ -34,7 +34,11 @@ defmodule LemonControlPlane.Methods.RunsActiveList do
       "limit" => limit
     }
 
-    case LemonRouter.run_presence(%{agent_id: agent_id, profile_id: profile_id, session_key: session_key}) do
+    case LemonRouter.run_presence(%{
+           agent_id: agent_id,
+           profile_id: profile_id,
+           session_key: session_key
+         }) do
       {:ok, %{runs: runs, presence: presence}} ->
         runs = runs |> Enum.take(limit) |> Enum.map(&build_run_entry/1)
         {:ok, response(runs, filters, presence)}
@@ -79,7 +83,6 @@ defmodule LemonControlPlane.Methods.RunsActiveList do
     }
   end
 
-
   defp build_run_entry(run) do
     %{
       "runId" => run.run_id,
@@ -91,7 +94,6 @@ defmodule LemonControlPlane.Methods.RunsActiveList do
       "status" => "active"
     }
   end
-
 
   defp count_by(rows, key) do
     rows

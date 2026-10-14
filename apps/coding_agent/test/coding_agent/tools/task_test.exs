@@ -12,13 +12,13 @@ defmodule CodingAgent.Tools.TaskTest do
     :ok
   end
 
-
   @tag :tmp_dir
   test "task children gate writes in inherited contexts, including coordinator parent pids", %{
     tmp_dir: tmp_dir
   } do
     owner = self()
     policy = ToolPolicy.custom(deny: ["bash"], require_approval: ["write"])
+
     parent =
       start_supervised!(
         {CodingAgent.Session,
@@ -79,7 +79,11 @@ defmodule CodingAgent.Tools.TaskTest do
         result =
           write.execute.(
             "child-write",
-            %{"path" => path, "content" => "MUST NOT WRITE", "invocation_context_key" => "forged"},
+            %{
+              "path" => path,
+              "content" => "MUST NOT WRITE",
+              "invocation_context_key" => "forged"
+            },
             nil,
             nil
           )
@@ -111,6 +115,7 @@ defmodule CodingAgent.Tools.TaskTest do
     assert {:error, :not_found} = CodingAgent.ToolRegistry.get_tool(tmp_dir, "bash", opts)
     assert {:error, :not_found} = CodingAgent.ToolRegistry.get_tool(tmp_dir, "read", opts)
   end
+
   describe "validate_run_params/2" do
     test "builds a native execution context" do
       assert {:ok, validated} =

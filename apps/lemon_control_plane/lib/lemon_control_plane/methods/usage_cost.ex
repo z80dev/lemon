@@ -73,10 +73,11 @@ defmodule LemonControlPlane.Methods.UsageCost do
         "endDate" => format_date(end_ms),
         "totalCost" => costs.total,
         "knownCostSubtotal" => costs.total,
-        "incomplete" => Enum.any?(records, fn record ->
-          not Map.has_key?(record, :unknown_cost_records) or
-            Map.get(record, :unknown_cost_records, 0) > 0
-        end),
+        "incomplete" =>
+          Enum.any?(records, fn record ->
+            not Map.has_key?(record, :unknown_cost_records) or
+              Map.get(record, :unknown_cost_records, 0) > 0
+          end),
         "breakdown" => costs.breakdown,
         "totalRequests" => costs.total_requests,
         "totalTokens" => costs.total_tokens,
@@ -98,7 +99,8 @@ defmodule LemonControlPlane.Methods.UsageCost do
       {:ok, Map.put(result, "summary", summary(result, group_by))}
     else
       {:error, _} ->
-        {:error, LemonControlPlane.Protocol.Errors.error(:unavailable, "Usage ledger unavailable")}
+        {:error,
+         LemonControlPlane.Protocol.Errors.error(:unavailable, "Usage ledger unavailable")}
     end
   end
 
@@ -125,7 +127,6 @@ defmodule LemonControlPlane.Methods.UsageCost do
   end
 
   defp total_token_count(_), do: 0
-
 
   defp parse_date_range(nil, nil) do
     # Default to last 30 days
@@ -168,9 +169,11 @@ defmodule LemonControlPlane.Methods.UsageCost do
 
     with {:ok, records} <- UsageStore.fetch_daily_records() do
       dates = MapSet.new(generate_date_range(start_date, end_date))
-      {:ok, Enum.flat_map(records, fn {date, record} ->
-        if MapSet.member?(dates, date), do: [record], else: []
-      end)}
+
+      {:ok,
+       Enum.flat_map(records, fn {date, record} ->
+         if MapSet.member?(dates, date), do: [record], else: []
+       end)}
     end
   end
 

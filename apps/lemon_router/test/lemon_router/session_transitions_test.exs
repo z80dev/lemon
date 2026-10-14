@@ -1050,14 +1050,18 @@ defmodule LemonRouter.SessionTransitionsTest do
       {%{invocation_context_key: "same", memory_context_key: "private"},
        %{invocation_context_key: "same", memory_context_key: "shared"}, nil, nil},
       {%{memory_context_key: "private"}, %{}, nil, nil},
-      {%{invocation_context_key: "same", memory_context_key: "room", memory_context_verified: true},
-       %{invocation_context_key: "same", memory_context_key: "room"}, nil, nil},
+      {%{
+         invocation_context_key: "same",
+         memory_context_key: "room",
+         memory_context_verified: true
+       }, %{invocation_context_key: "same", memory_context_key: "room"}, nil, nil},
       {%{invocation_context_key: "same", memory_context_key: "room", shared_memory_grant: true},
-       %{invocation_context_key: "same", memory_context_key: "room", shared_memory_grant: false}, nil, nil},
+       %{invocation_context_key: "same", memory_context_key: "room", shared_memory_grant: false},
+       nil, nil},
       {%{}, %{}, %{deny: ["bash"]}, %{deny: ["read"]}},
       {%{invocation_context_key: "a"}, %{invocation_context_key: "a"}, %{}, %{deny: ["bash"]}},
-      {%{mcp_servers: [%{url: "https://mcp.invalid", secret_ref: "a"}]},
-       %{mcp_servers: []}, nil, nil},
+      {%{mcp_servers: [%{url: "https://mcp.invalid", secret_ref: "a"}]}, %{mcp_servers: []}, nil,
+       nil},
       {%{}, %{mcp_servers: []}, nil, nil}
     ]
 
@@ -1085,14 +1089,18 @@ defmodule LemonRouter.SessionTransitionsTest do
 
       for {mode, fallback} <- [steer: :followup, steer_backlog: :collect, redirect: :followup] do
         input = context_submission("control", mode, meta, %{deny: ["bash"]})
+
         assert {:ok, next, [{:dispatch_steer, "active", ^mode, _, ^fallback}]} =
                  SessionTransitions.submit(state, input, 100)
+
         assert next.queue == []
       end
 
       input = context_submission("interrupt", :interrupt, meta, %{deny: ["bash"]})
+
       assert {:ok, next, [{:cancel_active, :interrupted}]} =
                SessionTransitions.submit(state, input, 100)
+
       assert [^input] = next.queue
 
       first = context_submission("first", :followup, meta, %{deny: ["bash"]})
@@ -1113,13 +1121,23 @@ defmodule LemonRouter.SessionTransitionsTest do
           {%{invocation_context_key: "same", memory_context_key: "private"},
            %{invocation_context_key: "same", memory_context_key: "shared"}, nil, nil},
           {%{memory_context_key: "private"}, %{}, nil, nil},
-          {%{invocation_context_key: "same", memory_context_key: "room", memory_context_verified: true},
-           %{invocation_context_key: "same", memory_context_key: "room"}, nil, nil},
-          {%{invocation_context_key: "same", memory_context_key: "room", shared_memory_grant: true},
-           %{invocation_context_key: "same", memory_context_key: "room", shared_memory_grant: false}, nil, nil},
+          {%{
+             invocation_context_key: "same",
+             memory_context_key: "room",
+             memory_context_verified: true
+           }, %{invocation_context_key: "same", memory_context_key: "room"}, nil, nil},
+          {%{
+             invocation_context_key: "same",
+             memory_context_key: "room",
+             shared_memory_grant: true
+           },
+           %{
+             invocation_context_key: "same",
+             memory_context_key: "room",
+             shared_memory_grant: false
+           }, nil, nil},
           {%{}, %{}, %{deny: ["bash"]}, %{}},
-          {%{mcp_servers: [%{secret_ref: "a"}]}, %{mcp_servers: [%{secret_ref: "b"}]},
-           nil, nil},
+          {%{mcp_servers: [%{secret_ref: "a"}]}, %{mcp_servers: [%{secret_ref: "b"}]}, nil, nil},
           {%{}, %{mcp_servers: []}, nil, nil}
         ] do
       previous = context_submission("first", :followup, left, left_policy)
@@ -1151,7 +1169,13 @@ defmodule LemonRouter.SessionTransitionsTest do
         ],
         flag <- [:task_auto_followup, :delegated_auto_followup] do
       input =
-        context_submission("own", :followup, %{flag => true, :invocation_context_key => "new"}, nil)
+        context_submission(
+          "own",
+          :followup,
+          %{flag => true, :invocation_context_key => "new"},
+          nil
+        )
+
       state = %SessionState{active: active}
       assert {:ok, next, []} = SessionTransitions.submit(state, input, 100)
       assert next.pending_steers == %{}

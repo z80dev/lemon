@@ -16,9 +16,13 @@ defmodule CodingAgent.Executor.RemoteEventCodec do
     "checkpoint_deleted" => :checkpoint_deleted
   }
   @checkpoint_fields [
-    {:checkpoint_id, "checkpointId"}, {:checkpoint_kind, "checkpointKind"},
-    {:tool, "tool"}, {:action, "action"}, {:path_count, "pathCount"},
-    {:paths, "paths"}, {:restored_count, "restoredCount"}
+    {:checkpoint_id, "checkpointId"},
+    {:checkpoint_kind, "checkpointKind"},
+    {:tool, "tool"},
+    {:action, "action"},
+    {:path_count, "pathCount"},
+    {:paths, "paths"},
+    {:restored_count, "restoredCount"}
   ]
 
   def max_bytes, do: @max_bytes
@@ -34,8 +38,10 @@ defmodule CodingAgent.Executor.RemoteEventCodec do
     bounded(%{
       "type" => "action",
       "action" => Map.take(action, [:id, :kind, :title, :detail]),
-      "phase" => event[:phase], "ok" => event[:ok],
-      "message" => event[:message], "level" => event[:level]
+      "phase" => event[:phase],
+      "ok" => event[:ok],
+      "message" => event[:message],
+      "level" => event[:level]
     })
   end
 
@@ -48,9 +54,12 @@ defmodule CodingAgent.Executor.RemoteEventCodec do
 
   def encode_approval(pending) do
     bounded(%{
-      "type" => "approval_requested", "approvalId" => pending.id,
-      "tool" => pending.tool, "action" => pending.action,
-      "rationale" => pending.rationale, "expiresAtMs" => pending.expires_at_ms
+      "type" => "approval_requested",
+      "approvalId" => pending.id,
+      "tool" => pending.tool,
+      "action" => pending.action,
+      "rationale" => pending.rationale,
+      "expiresAtMs" => pending.expires_at_ms
     })
   end
 
@@ -72,26 +81,48 @@ defmodule CodingAgent.Executor.RemoteEventCodec do
   defp decode_event(%{"type" => "action", "action" => action, "phase" => phase} = event)
        when is_map(action) and phase in ["started", "updated", "completed"] do
     if Enum.all?(["id", "kind", "title"], &is_binary(action[&1])) do
-      action = Event.action(%{
-        id: action["id"], kind: action["kind"], title: action["title"], detail: action["detail"]
-      })
+      action =
+        Event.action(%{
+          id: action["id"],
+          kind: action["kind"],
+          title: action["title"],
+          detail: action["detail"]
+        })
+
       phase = %{"started" => :started, "updated" => :updated, "completed" => :completed}[phase]
-      {:ok, {:engine, Event.action_event(%{
-        engine: "lemon", action: action, phase: phase, ok: event["ok"],
-        message: event["message"], level: event["level"]
-      })}}
+
+      {:ok,
+       {:engine,
+        Event.action_event(%{
+          engine: "lemon",
+          action: action,
+          phase: phase,
+          ok: event["ok"],
+          message: event["message"],
+          level: event["level"]
+        })}}
     else
       {:error, :invalid_action}
     end
   end
 
-  defp decode_event(%{"type" => "approval_requested", "approvalId" => id,
-                      "tool" => tool, "action" => action} = event)
+  defp decode_event(
+         %{"type" => "approval_requested", "approvalId" => id, "tool" => tool, "action" => action} =
+           event
+       )
        when is_binary(id) and id != "" and is_binary(tool) and tool != "" and is_map(action) do
     expires = event["expiresAtMs"]
+
     if is_nil(expires) or is_integer(expires) do
-      {:ok, {:approval, %{approval_id: id, tool: tool, action: action,
-                          rationale: event["rationale"], expires_at_ms: expires}}}
+      {:ok,
+       {:approval,
+        %{
+          approval_id: id,
+          tool: tool,
+          action: action,
+          rationale: event["rationale"],
+          expires_at_ms: expires
+        }}}
     else
       {:error, :invalid_approval}
     end
@@ -118,19 +149,25 @@ defmodule CodingAgent.Executor.RemoteEventCodec do
   # fallback, arbitrary BEAM structs, text/thinking signatures or callbacks.
   defp normalize(_value, depth, _count) when depth > 32,
     do: throw({:event_limit, {:max_depth, 32}})
+
   defp normalize(_value, _depth, count) when count >= 10_000,
     do: throw({:event_limit, {:max_items, 10_000}})
 
   defp normalize(%LemonAgent.Types.AgentToolResult{} = result, depth, count),
     do: normalize(Map.take(result, [:content, :details, :is_error, :trust]), depth, count)
+
   defp normalize(%LemonAi.Types.TextContent{} = text, depth, count),
     do: normalize(Map.take(text, [:type, :text]), depth, count)
+
   defp normalize(%LemonAi.Types.ImageContent{} = image, depth, count),
     do: normalize(Map.take(image, [:type, :data, :mime_type]), depth, count)
+
   defp normalize(%LemonAi.Types.Usage{} = usage, depth, count),
     do: normalize(Map.from_struct(usage), depth, count)
+
   defp normalize(%LemonAi.Types.Cost{} = cost, depth, count),
     do: normalize(Map.from_struct(cost), depth, count)
+
   defp normalize(%_{} = _value, _depth, count), do: {:omit, count + 1}
 
   defp normalize(value, depth, count) when is_map(value) do
@@ -141,15 +178,18 @@ defmodule CodingAgent.Executor.RemoteEventCodec do
   end
 
   defp normalize(value, depth, count) when is_list(value) do
-    {items, count} = Enum.reduce(value, {[], count + 1}, fn item, {acc, count} ->
-      {item, count} = normalize(item, depth + 1, count)
-      if item == :omit, do: {acc, count}, else: {[item | acc], count}
-    end)
+    {items, count} =
+      Enum.reduce(value, {[], count + 1}, fn item, {acc, count} ->
+        {item, count} = normalize(item, depth + 1, count)
+        if item == :omit, do: {acc, count}, else: {[item | acc], count}
+      end)
+
     {Enum.reverse(items), count}
   end
 
   defp normalize(value, _depth, count)
        when is_binary(value) or is_number(value) or is_atom(value),
        do: {value, count + 1}
+
   defp normalize(_value, _depth, count), do: {:omit, count + 1}
 end

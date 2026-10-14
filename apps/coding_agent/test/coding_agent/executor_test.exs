@@ -68,7 +68,6 @@ defmodule CodingAgent.ExecutorTest do
     assert Application.get_env(:coding_agent, :executor_stream_options_hook) == nil
   end
 
-
   @tag :tmp_dir
   test "same-context transcript resume rebuilds approval gating for each native invocation", %{
     tmp_dir: tmp_dir
@@ -107,7 +106,8 @@ defmodule CodingAgent.ExecutorTest do
     assert_receive %LemonCore.Event{
                      type: :approval_requested,
                      payload: %{pending: %{id: first_approval}}
-                   }, 5_000
+                   },
+                   5_000
 
     first_pending = LemonCore.ExecApprovalStore.get_pending(first_approval)
     assert first_pending.invocation_context_key == "native-client-A"
@@ -156,10 +156,12 @@ defmodule CodingAgent.ExecutorTest do
 
     assert_receive {:resumed_context, context}, 5_000
     assert inspect(context.messages) =~ "first invocation transcript marker"
+
     assert_receive %LemonCore.Event{
                      type: :approval_requested,
                      payload: %{pending: %{id: second_approval}}
-                   }, 5_000
+                   },
+                   5_000
 
     second_pending = LemonCore.ExecApprovalStore.get_pending(second_approval)
     assert second_pending.invocation_context_key == "native-client-A"
@@ -173,6 +175,7 @@ defmodule CodingAgent.ExecutorTest do
     assert File.read!(path) == "APPROVED"
     refute inspect(first_events ++ second_events) =~ "native-client-"
   end
+
   describe "start_run/3 direct session runner" do
     @tag :tmp_dir
     test "emits started, delta, tool action, and completed events", %{tmp_dir: tmp_dir} do

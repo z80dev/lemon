@@ -173,7 +173,10 @@ defmodule LemonAutomation.CronAdmission do
     Enum.all?(headers, fn {name, value} ->
       if is_binary(name) and is_binary(value) do
         name = String.downcase(name)
-        value = if name == "authorization", do: String.replace_prefix(value, "Bearer ", ""), else: value
+
+        value =
+          if name == "authorization", do: String.replace_prefix(value, "Bearer ", ""), else: value
+
         name not in @transport_headers and secret_reference?(value)
       else
         false
@@ -320,7 +323,11 @@ defmodule LemonAutomation.CronAdmission do
 
   defp receipt(%Req.Response{status: 200, private: private}, context) do
     with false <- Map.get(private, :admission_body_invalid, false),
-         body = private |> Map.get(:admission_body_chunks, []) |> Enum.reverse() |> IO.iodata_to_binary(),
+         body =
+           private
+           |> Map.get(:admission_body_chunks, [])
+           |> Enum.reverse()
+           |> IO.iodata_to_binary(),
          {:ok, %{"allow" => allow, "context" => echoed} = decoded} <- Jason.decode(body),
          true <- is_boolean(allow) and echoed === context,
          true <- Enum.all?(Map.keys(decoded), &(&1 in ["allow", "context", "invocation"])) do
@@ -386,8 +393,11 @@ defmodule LemonAutomation.CronAdmission do
           _ -> []
         end
 
-      value when is_binary(value) -> value |> String.split(",", trim: true) |> Enum.map(&String.trim/1)
-      _ -> []
+      value when is_binary(value) ->
+        value |> String.split(",", trim: true) |> Enum.map(&String.trim/1)
+
+      _ ->
+        []
     end
   end
 
@@ -395,7 +405,8 @@ defmodule LemonAutomation.CronAdmission do
     case callback_uri(origin) do
       {:ok, uri} ->
         is_nil(uri.path) and is_nil(uri.query) and
-          uri.scheme == callback.scheme and uri.host == callback.host and uri.port == callback.port
+          uri.scheme == callback.scheme and uri.host == callback.host and
+          uri.port == callback.port
 
       _ ->
         false

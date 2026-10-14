@@ -260,7 +260,6 @@ defmodule LemonMCP.Client.HTTP do
     {:reply, {:error, :not_connected}, state}
   end
 
-
   defp initialize(state) do
     request =
       Protocol.initialize_request(
@@ -314,6 +313,7 @@ defmodule LemonMCP.Client.HTTP do
   defp post_raw(message, state, allow_oauth_retry?) do
     with {:ok, body} <- Protocol.encode(message) do
       headers = request_headers(state)
+
       case http_request(
              :post,
              state.config.url,
@@ -364,6 +364,7 @@ defmodule LemonMCP.Client.HTTP do
             if is_nil(state.config.origin_policy),
               do: {:http_error, status, to_string(reason), to_string(response_body)},
               else: :http_error
+
           {:error, error, state}
 
         {:error, reason} ->
@@ -374,6 +375,7 @@ defmodule LemonMCP.Client.HTTP do
 
   defp auth_required_reason(%{config: %{origin_policy: nil}}, metadata),
     do: {:auth_required, metadata}
+
   defp auth_required_reason(_state, _metadata), do: :auth_required
 
   defp decode_response_body(nil, _id), do: {:error, :missing_response_body}
@@ -473,14 +475,19 @@ defmodule LemonMCP.Client.HTTP do
   defp destination_pin(_url, nil, _pin), do: {:ok, nil}
   defp destination_pin(url, policy, nil), do: OriginPolicy.pin(url, policy)
 
-  defp destination_pin(url, _policy, %{
-         url: url,
-         origin: origin,
-         scheme: scheme,
-         host: host,
-         port: port,
-         address: address
-       } = pin) when scheme in ["http", "https"] do
+  defp destination_pin(
+         url,
+         _policy,
+         %{
+           url: url,
+           origin: origin,
+           scheme: scheme,
+           host: host,
+           port: port,
+           address: address
+         } = pin
+       )
+       when scheme in ["http", "https"] do
     with {:ok, ^origin} <- OriginPolicy.canonical_origin(url),
          %URI{scheme: ^scheme, host: ^host, port: ^port} <- URI.parse(origin),
          rendered when is_list(rendered) <- :inet.ntoa(address) do
@@ -507,10 +514,17 @@ defmodule LemonMCP.Client.HTTP do
   end
 
   defp configure_pinned_profile do
-    :ok = :httpc.set_options(
-      [cookies: :disabled, max_keep_alive_length: 0, keep_alive_timeout: 0, ipfamily: :inet6fb4],
-      :lemon_mcp_pinned
-    )
+    :ok =
+      :httpc.set_options(
+        [
+          cookies: :disabled,
+          max_keep_alive_length: 0,
+          keep_alive_timeout: 0,
+          ipfamily: :inet6fb4
+        ],
+        :lemon_mcp_pinned
+      )
+
     {:ok, :lemon_mcp_pinned}
   end
 
@@ -529,7 +543,11 @@ defmodule LemonMCP.Client.HTTP do
           {content_type, data} -> {to_charlist(url), headers, content_type, data}
         end
 
-      case :httpc.request(method, request, http_opts, [body_format: :binary],
+      case :httpc.request(
+             method,
+             request,
+             http_opts,
+             [body_format: :binary],
              state.config.http_profile
            ) do
         {:ok, {{_version, status, _reason}, _headers, _body}} when status in 300..399 ->
@@ -552,16 +570,19 @@ defmodule LemonMCP.Client.HTTP do
     original = URI.parse(pin.origin)
     address = pin.address |> :inet.ntoa() |> to_string()
     uri = URI.parse(url)
-    url = URI.to_string(%{uri | scheme: pin.scheme, host: address, port: pin.port, authority: nil})
+    url = URI.to_string(%{uri | scheme: pin.scheme, host: address, port: pin.port})
     host = if String.contains?(original.host, ":"), do: "[#{original.host}]", else: original.host
     default_port = if pin.scheme == "https", do: 443, else: 80
     host = if pin.port == default_port, do: host, else: "#{host}:#{pin.port}"
 
     headers =
-      [{~c"host", to_charlist(host)}, {~c"connection", ~c"close"} |
-       Enum.reject(headers, fn {key, _value} ->
-         String.downcase(to_string(key)) in ["host", "connection"]
-       end)]
+      [
+        {~c"host", to_charlist(host)},
+        {~c"connection", ~c"close"}
+        | Enum.reject(headers, fn {key, _value} ->
+            String.downcase(to_string(key)) in ["host", "connection"]
+          end)
+      ]
 
     tls_opts =
       if pin.scheme == "https" do
@@ -573,13 +594,17 @@ defmodule LemonMCP.Client.HTTP do
 
         sni = if elem(reference, 0) == :dns_id, do: elem(reference, 1), else: :disable
 
-        [ssl: [
-          verify: :verify_peer,
-          cacerts: :public_key.cacerts_get(),
-          server_name_indication: sni,
-          customize_hostname_check: [match_fun: :public_key.pkix_verify_hostname_match_fun(:https)],
-          verify_fun: {&verify_original_peer/3, reference}
-        ]]
+        [
+          ssl: [
+            verify: :verify_peer,
+            cacerts: :public_key.cacerts_get(),
+            server_name_indication: sni,
+            customize_hostname_check: [
+              match_fun: :public_key.pkix_verify_hostname_match_fun(:https)
+            ],
+            verify_fun: {&verify_original_peer/3, reference}
+          ]
+        ]
       else
         []
       end
@@ -595,8 +620,8 @@ defmodule LemonMCP.Client.HTTP do
     if :public_key.pkix_verify_hostname(cert, [reference],
          match_fun: :public_key.pkix_verify_hostname_match_fun(:https)
        ),
-      do: {:valid, reference},
-      else: {:fail, :hostname_check_failed}
+       do: {:valid, reference},
+       else: {:fail, :hostname_check_failed}
   end
 
   defp auth_metadata(headers, state) do
@@ -634,7 +659,9 @@ defmodule LemonMCP.Client.HTTP do
     |> case do
       {:ok, results} ->
         {:ok, Map.put(metadata, "authorization_server_metadata", Enum.reverse(results))}
-      {:error, reason} -> {:error, reason}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
@@ -680,7 +707,9 @@ defmodule LemonMCP.Client.HTTP do
     case http_request(:get, url, headers, nil, state) do
       {:ok, {{_version, status, _reason}, _headers, body}} when status in 200..299 ->
         case Jason.decode(to_string(body)) do
-          {:ok, metadata} when is_map(metadata) -> {:ok, metadata}
+          {:ok, metadata} when is_map(metadata) ->
+            {:ok, metadata}
+
           _ ->
             if is_nil(state.config.origin_policy),
               do: {:error, %{"metadata_error" => "invalid_json"}},
@@ -689,8 +718,9 @@ defmodule LemonMCP.Client.HTTP do
 
       {:ok, {{_version, status, reason}, _headers, _body}} ->
         if is_nil(state.config.origin_policy),
-          do: {:error,
-            %{"metadata_error" => "http_#{status}", "metadata_error_reason" => to_string(reason)}},
+          do:
+            {:error,
+             %{"metadata_error" => "http_#{status}", "metadata_error_reason" => to_string(reason)}},
           else: {:error, :metadata_http_error}
 
       {:error, reason} ->
@@ -872,7 +902,9 @@ defmodule LemonMCP.Client.HTTP do
           _ ->
             :error
         end
-      :error -> :error
+
+      :error ->
+        :error
     end
   end
 
@@ -909,7 +941,8 @@ defmodule LemonMCP.Client.HTTP do
             )
 
           case oauth_token_request(token_endpoint, headers, body, state) do
-            {:ok, {{_version, status, _reason}, _headers, response_body}} when status in 200..299 ->
+            {:ok, {{_version, status, _reason}, _headers, response_body}}
+            when status in 200..299 ->
               decode_oauth_token(response_body)
 
             {:error, reason} ->
@@ -918,7 +951,9 @@ defmodule LemonMCP.Client.HTTP do
             _ ->
               :error
           end
-        :error -> :error
+
+        :error ->
+          :error
       end
     else
       :error -> :error
@@ -1063,19 +1098,31 @@ defmodule LemonMCP.Client.HTTP do
           _ ->
             :error
         end
-      :error -> :error
+
+      :error ->
+        :error
     end
   end
 
   defp oauth_token_request(url, headers, body, state) do
-    case http_request(:post, url, headers,
-           {~c"application/x-www-form-urlencoded", to_charlist(body)}, state
+    case http_request(
+           :post,
+           url,
+           headers,
+           {~c"application/x-www-form-urlencoded", to_charlist(body)},
+           state
          ) do
       {:error, reason} when not is_nil(state.config.origin_policy) ->
         {:error, reason}
-      {:error, :redirect_forbidden} -> {:error, :redirect_forbidden}
-      {:error, _reason} -> :error
-      response -> response
+
+      {:error, :redirect_forbidden} ->
+        {:error, :redirect_forbidden}
+
+      {:error, _reason} ->
+        :error
+
+      response ->
+        response
     end
   end
 

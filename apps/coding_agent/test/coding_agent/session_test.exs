@@ -475,7 +475,8 @@ defmodule CodingAgent.SessionTest do
     end
 
     @tag :tmp_dir
-    test "profile instruction snapshots survive prompt refresh and leave local files unchanged", %{tmp_dir: root} do
+    test "profile instruction snapshots survive prompt refresh and leave local files unchanged",
+         %{tmp_dir: root} do
       workspace = Path.join(root, "workspace")
       File.mkdir_p!(workspace)
       File.write!(Path.join(workspace, "SOUL.md"), "stale-local-persona")

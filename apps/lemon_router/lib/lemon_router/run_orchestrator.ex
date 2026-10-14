@@ -104,7 +104,11 @@ defmodule LemonRouter.RunOrchestrator do
   end
 
   def submit_native_followup(server, source, %RunRequest{} = request) do
-    GenServer.call(server, {:native_followup, source, request, :local}, @serialized_mutation_timeout_ms)
+    GenServer.call(
+      server,
+      {:native_followup, source, request, :local},
+      @serialized_mutation_timeout_ms
+    )
   end
 
   @doc false
@@ -113,9 +117,17 @@ defmodule LemonRouter.RunOrchestrator do
   end
 
   @doc false
-  def submit_native_followup_from_node(server, source, %RunRequest{} = request, authenticated_session) do
-    GenServer.call(server, {:native_followup, source, request, authenticated_session},
-      @serialized_mutation_timeout_ms)
+  def submit_native_followup_from_node(
+        server,
+        source,
+        %RunRequest{} = request,
+        authenticated_session
+      ) do
+    GenServer.call(
+      server,
+      {:native_followup, source, request, authenticated_session},
+      @serialized_mutation_timeout_ms
+    )
   end
 
   @doc "Seal immutable executing-host native startup policy before native execution begins."
@@ -148,16 +160,20 @@ defmodule LemonRouter.RunOrchestrator do
       {:ok, nil} ->
         case Store.fetch(@run_admission_table, run_id) do
           {:ok, %{}} ->
-            {:ok, %{
-              run_id: run_id,
-              session_key: nil,
-              state: :outcome_unknown,
-              effective_mode: nil,
-              target_run_id: nil
-            }}
+            {:ok,
+             %{
+               run_id: run_id,
+               session_key: nil,
+               state: :outcome_unknown,
+               effective_mode: nil,
+               target_run_id: nil
+             }}
 
-          {:ok, nil} -> {:error, :not_found}
-          _ -> {:error, :unavailable}
+          {:ok, nil} ->
+            {:error, :not_found}
+
+          _ ->
+            {:error, :unavailable}
         end
 
       _ ->
@@ -299,6 +315,7 @@ defmodule LemonRouter.RunOrchestrator do
 
     {:reply, receipt_result, next_state}
   end
+
   def handle_call({:submit, %RunRequest{} = params}, _from, state) do
     state = maybe_cleanup_durable_receipts(state)
     params = ensure_run_id(params)
@@ -312,10 +329,20 @@ defmodule LemonRouter.RunOrchestrator do
     result =
       with :ok <- RunRequest.validate_invocation_context_key(request.run_id),
            {:ok, source} <- LemonRouter.NativeLineage.authenticate(captured, transport) do
-        identity = request_identity(%{request | meta:
-          LemonRouter.NativeLineage.semantic_meta(request.meta || %{}, source.run_id)})
-        native_followup_once(Map.put(source, :authenticated_transport, transport), request, identity, state)
+        identity =
+          request_identity(%{
+            request
+            | meta: LemonRouter.NativeLineage.semantic_meta(request.meta || %{}, source.run_id)
+          })
+
+        native_followup_once(
+          Map.put(source, :authenticated_transport, transport),
+          request,
+          identity,
+          state
+        )
       end
+
     {:reply, result, state}
   end
 
@@ -464,14 +491,27 @@ defmodule LemonRouter.RunOrchestrator do
 
   defp native_followup_once(source, request, identity, state) do
     case Store.fetch(@run_admission_table, request.run_id) do
-      {:ok, nil} -> reserve_native_followup(source, request, identity, state)
-      {:ok, %{identity: ^identity, native_followup: %{status: :accepted}}} -> {:ok, request.run_id}
+      {:ok, nil} ->
+        reserve_native_followup(source, request, identity, state)
+
+      {:ok, %{identity: ^identity, native_followup: %{status: :accepted}}} ->
+        {:ok, request.run_id}
+
       {:ok, %{identity: ^identity, native_followup: %{status: status}}}
-      when status in [:denied, :admission_unavailable, :aborted] -> {:error, status}
-      {:ok, %{identity: ^identity, native_failure: status}} -> {:error, status}
-      {:ok, %{identity: ^identity}} -> {:error, :outcome_unknown}
-      {:ok, %{}} -> {:error, :run_id_conflict}
-      _ -> {:error, :outcome_unknown}
+      when status in [:denied, :admission_unavailable, :aborted] ->
+        {:error, status}
+
+      {:ok, %{identity: ^identity, native_failure: status}} ->
+        {:error, status}
+
+      {:ok, %{identity: ^identity}} ->
+        {:error, :outcome_unknown}
+
+      {:ok, %{}} ->
+        {:error, :run_id_conflict}
+
+      _ ->
+        {:error, :outcome_unknown}
     end
   end
 
@@ -479,20 +519,33 @@ defmodule LemonRouter.RunOrchestrator do
     case LemonRouter.NativeLineage.prepare_request(source, request) do
       {:ok, prepared, destination} ->
         case LemonRouter.NativeLineage.reserve(source, prepared, identity, destination) do
-          {:ok, entry, :new} -> issue_native_followup(source, prepared, identity, entry, destination, state)
-          {:ok, _, :existing} -> {:error, :outcome_unknown}
+          {:ok, entry, :new} ->
+            issue_native_followup(source, prepared, identity, entry, destination, state)
+
+          {:ok, _, :existing} ->
+            {:error, :outcome_unknown}
+
           {:error, :admission_unavailable} ->
             reject_native_preparation(request, identity, :admission_unavailable)
-          error -> error
+
+          error ->
+            error
         end
+
       {:error, reason} ->
         reject_native_preparation(request, identity, reason)
     end
   end
 
   defp reject_native_preparation(request, identity, reason) do
-    entry = %{state: "native_rejected", identity: identity, native_failure: reason, terminal: true,
-      scope: %{profile_id: nil, agent_id: request.agent_id, session_key: request.session_key}}
+    entry = %{
+      state: "native_rejected",
+      identity: identity,
+      native_failure: reason,
+      terminal: true,
+      scope: %{profile_id: nil, agent_id: request.agent_id, session_key: request.session_key}
+    }
+
     with :ok <- Store.put_new(@run_admission_table, request.run_id, entry),
          :ok <- Store.sync() do
       {:error, reason}
@@ -513,7 +566,13 @@ defmodule LemonRouter.RunOrchestrator do
              :ok <- LemonRouter.NativeLineage.record_outcome(request.run_id, :dispatch_pending),
              {:ok, run_id} <- do_submit(attach_request_identity(admitted, identity), state),
              {:ok, current} <- Store.fetch(@run_admission_table, run_id),
-             {:ok, _} <- persist_accepted_admission(run_id, identity, current, state.run_admission_retention_ms) do
+             {:ok, _} <-
+               persist_accepted_admission(
+                 run_id,
+                 identity,
+                 current,
+                 state.run_admission_retention_ms
+               ) do
           {:ok, run_id}
         end
       rescue
@@ -522,13 +581,14 @@ defmodule LemonRouter.RunOrchestrator do
         _, _ -> {:error, :outcome_unknown}
       end
 
-    status = case result do
-      {:ok, _} -> :accepted
-      {:error, :denied} -> :denied
-      {:error, :admission_unavailable} -> :admission_unavailable
-      {:error, :aborted} -> :aborted
-      _ -> :outcome_unknown
-    end
+    status =
+      case result do
+        {:ok, _} -> :accepted
+        {:error, :denied} -> :denied
+        {:error, :admission_unavailable} -> :admission_unavailable
+        {:error, :aborted} -> :aborted
+        _ -> :outcome_unknown
+      end
 
     case LemonRouter.NativeLineage.record_outcome(request.run_id, status) do
       :ok -> result
@@ -630,6 +690,7 @@ defmodule LemonRouter.RunOrchestrator do
     case sync_accepted_admission(admission, state.run_admission_retention_ms) do
       {:ok, _expires_at_ms} ->
         cache_until_ms = System.system_time(:millisecond) + state.run_admission_retention_ms
+
         {{:ok, params.run_id},
          cache_accepted_admission(state, params.run_id, identity, cache_until_ms)}
 
@@ -677,10 +738,11 @@ defmodule LemonRouter.RunOrchestrator do
       {:ok, %{request_identity: ^identity, state: :outcome_unknown}} ->
         :terminal_outcome_unknown
 
-      {:ok, %{request_identity: receipt_identity}} when is_binary(receipt_identity) and receipt_identity != identity ->
+      {:ok, %{request_identity: receipt_identity}}
+      when is_binary(receipt_identity) and receipt_identity != identity ->
         :conflicting_terminal
 
-      {:ok, %{} } ->
+      {:ok, %{}} ->
         case terminal_run_status(params, identity) do
           :not_terminal -> :terminal_outcome_unknown
           status -> status
@@ -716,53 +778,56 @@ defmodule LemonRouter.RunOrchestrator do
 
     with :ok <- Store.compare_and_swap(@run_admission_table, params.run_id, admission, submitting),
          :ok <- Store.sync() do
-        case do_submit(attach_request_identity(params, identity), state) do
-          {:ok, run_id} ->
-            case persist_accepted_admission(
-                   run_id,
-                   identity,
-                   submitting,
-                   state.run_admission_retention_ms
-                 ) do
-              {:ok, expires_at_ms} ->
-                {{:ok, run_id}, cache_accepted_admission(state, run_id, identity, expires_at_ms)}
+      case do_submit(attach_request_identity(params, identity), state) do
+        {:ok, run_id} ->
+          case persist_accepted_admission(
+                 run_id,
+                 identity,
+                 submitting,
+                 state.run_admission_retention_ms
+               ) do
+            {:ok, expires_at_ms} ->
+              {{:ok, run_id}, cache_accepted_admission(state, run_id, identity, expires_at_ms)}
 
-              {:error, _reason} ->
-                {{:error, :outcome_unknown}, state}
-            end
+            {:error, _reason} ->
+              {{:error, :outcome_unknown}, state}
+          end
 
-          {:error, :outcome_unknown} ->
-            {{:error, :outcome_unknown}, state}
+        {:error, :outcome_unknown} ->
+          {{:error, :outcome_unknown}, state}
 
-          {:error, _reason} = error ->
-            # A synchronous start rejection may already have persisted terminal
-            # evidence. Never erase that evidence or reopen its fixed-ID fence.
-            # Otherwise, only an unchanged pre-enqueue claim can roll back.
-            case Store.compare_and_swap(
-                   @run_admission_table,
-                   params.run_id,
-                   submitting,
-                   admission
-                 ) do
-              :ok ->
-                case Store.sync() do
-                  :ok -> {error, state}
-                  _ -> {{:error, :outcome_unknown}, state}
-                end
-              {:error, :mismatch} ->
-                case terminal_run_status(params, identity) do
-                  :matching_terminal ->
-                    case Store.sync() do
-                      :ok -> {error, state}
-                      _ -> {{:error, :outcome_unknown}, state}
-                    end
-                  _ ->
-                    {{:error, :outcome_unknown}, state}
-                end
-              _failure -> {{:error, :outcome_unknown}, state}
-            end
-        end
+        {:error, _reason} = error ->
+          # A synchronous start rejection may already have persisted terminal
+          # evidence. Never erase that evidence or reopen its fixed-ID fence.
+          # Otherwise, only an unchanged pre-enqueue claim can roll back.
+          case Store.compare_and_swap(
+                 @run_admission_table,
+                 params.run_id,
+                 submitting,
+                 admission
+               ) do
+            :ok ->
+              case Store.sync() do
+                :ok -> {error, state}
+                _ -> {{:error, :outcome_unknown}, state}
+              end
 
+            {:error, :mismatch} ->
+              case terminal_run_status(params, identity) do
+                :matching_terminal ->
+                  case Store.sync() do
+                    :ok -> {error, state}
+                    _ -> {{:error, :outcome_unknown}, state}
+                  end
+
+                _ ->
+                  {{:error, :outcome_unknown}, state}
+              end
+
+            _failure ->
+              {{:error, :outcome_unknown}, state}
+          end
+      end
     else
       _failure ->
         {{:error, :outcome_unknown}, state}
@@ -927,11 +992,21 @@ defmodule LemonRouter.RunOrchestrator do
 
   defp compact_admission(state, identity, entry) when state in ["submitting", "accepted"] do
     %{state: state, identity: identity}
-    |> Map.merge(Map.take(entry, [:scope, :terminal, :native_source, :native_followup, :native_root_binding, :native_failure]))
+    |> Map.merge(
+      Map.take(entry, [
+        :scope,
+        :terminal,
+        :native_source,
+        :native_followup,
+        :native_root_binding,
+        :native_failure
+      ])
+    )
   end
 
   defp admission_scope(%RunRequest{} = params) do
     agent_id = params.agent_id || SessionKey.agent_id(params.session_key) || "default"
+
     %{
       session_key: params.session_key,
       agent_id: agent_id,

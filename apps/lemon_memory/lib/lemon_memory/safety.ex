@@ -14,6 +14,7 @@ defmodule LemonMemory.Safety do
   @doc "Screen prompt-injected notes without changing their accepted bytes."
   def validate_note(text, opts \\ []) do
     max_bytes = Keyword.get(opts, :max_bytes, 4_096)
+
     cond do
       not is_binary(text) -> {:error, :invalid_text}
       not String.valid?(text) or byte_size(text) > max_bytes -> {:error, :invalid_text}
@@ -32,6 +33,7 @@ defmodule LemonMemory.Safety do
       true -> nil
     end
   end
+
   def note_refusal_reason(_), do: nil
 
   @doc """

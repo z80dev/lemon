@@ -22,8 +22,10 @@ defmodule LemonCore.InvocationProofTest do
     end
 
     wrong_header = put_in(hd(servers), ["headers", "X-Lemon-Bot-Invocation"], "a-raw-token")
+
     assert {:error, :invalid_invocation_proof} =
              InvocationProof.validate(descriptor, "fixed-A", [wrong_header])
+
     assert {:error, :invalid_invocation_proof} =
              InvocationProof.validate(descriptor, "fixed-A", servers ++ servers)
   end
@@ -34,17 +36,26 @@ defmodule LemonCore.InvocationProofTest do
 
     assert InvocationProof.comparison_servers(first) == InvocationProof.comparison_servers(second)
     refute first.meta.mcp_servers == second.meta.mcp_servers
-    assert first.meta.mcp_servers |> hd() |> Map.get("headers") |> Map.get("X-Lemon-Bot-Invocation") ==
+
+    assert first.meta.mcp_servers
+           |> hd()
+           |> Map.get("headers")
+           |> Map.get("X-Lemon-Bot-Invocation") ==
              "${LEMON_SECRET:lemon_bot/invocations/fixed-A}"
 
-    changed = update_in(second.meta.mcp_servers, fn [server] ->
-      [put_in(server, ["headers", "X-Another-Authority"], "changed-authority")]
-    end)
-    refute InvocationProof.comparison_servers(first) == InvocationProof.comparison_servers(changed)
+    changed =
+      update_in(second.meta.mcp_servers, fn [server] ->
+        [put_in(server, ["headers", "X-Another-Authority"], "changed-authority")]
+      end)
 
-    changed_url = update_in(second.meta.mcp_servers, fn [server] ->
-      [Map.put(server, "url", "https://other.example/mcp")]
-    end)
+    refute InvocationProof.comparison_servers(first) ==
+             InvocationProof.comparison_servers(changed)
+
+    changed_url =
+      update_in(second.meta.mcp_servers, fn [server] ->
+        [Map.put(server, "url", "https://other.example/mcp")]
+      end)
+
     assert InvocationProof.comparison_servers(changed_url) == changed_url.meta.mcp_servers
   end
 
@@ -58,13 +69,20 @@ defmodule LemonCore.InvocationProofTest do
       Map.put(original.meta, :memory_context_verified, false),
       Map.delete(original.meta, :invocation_context_key),
       Map.delete(original.meta, :memory_context_key),
-      original.meta |> Map.put(:invocation_context_key, nil) |> Map.put("invocation_context_key", "forged"),
-      original.meta |> Map.put(:invocation_proof_verified, false) |> Map.put("invocation_proof_verified", true),
-      original.meta |> Map.delete(:invocation_proof_verified) |> Map.put("invocation_proof_verified", true)
+      original.meta
+      |> Map.put(:invocation_context_key, nil)
+      |> Map.put("invocation_context_key", "forged"),
+      original.meta
+      |> Map.put(:invocation_proof_verified, false)
+      |> Map.put("invocation_proof_verified", true),
+      original.meta
+      |> Map.delete(:invocation_proof_verified)
+      |> Map.put("invocation_proof_verified", true)
     ]
 
     for meta <- altered_metadata do
-      assert InvocationProof.comparison_servers(%{original | meta: meta}) == original.meta.mcp_servers
+      assert InvocationProof.comparison_servers(%{original | meta: meta}) ==
+               original.meta.mcp_servers
     end
 
     borrowed = %{original | run_id: "fixed-B"}
@@ -73,7 +91,12 @@ defmodule LemonCore.InvocationProofTest do
 
   test "authenticated projection factory binds fresh execution without borrowing another run proof" do
     {descriptor, servers} = proof("fresh-F")
-    original = %{run_id: "fresh-F", meta: %{mcp_servers: servers, tool_policy: %{allow: ["read"]}}}
+
+    original = %{
+      run_id: "fresh-F",
+      meta: %{mcp_servers: servers, tool_policy: %{allow: ["read"]}}
+    }
+
     projection = %{
       "runId" => "fresh-F",
       "invocationContextKey" => "current-principal-policy-epoch",
@@ -102,8 +125,12 @@ defmodule LemonCore.InvocationProofTest do
     end
 
     {borrowed, _} = proof("previous-root")
+
     assert {:error, :invalid_invocation_proof} =
-             InvocationProof.attach_execution_context(original, Map.put(projection, "invocationProof", borrowed))
+             InvocationProof.attach_execution_context(
+               original,
+               Map.put(projection, "invocationProof", borrowed)
+             )
   end
 
   defp request(run_id) do
@@ -133,14 +160,16 @@ defmodule LemonCore.InvocationProofTest do
       "secretName" => "lemon_bot/invocations/" <> run_id
     }
 
-    servers = [%{
-      "name" => "core",
-      "url" => "https://core.example/mcp",
-      "headers" => %{
-        "X-Lemon-Bot-Invocation" => "${LEMON_SECRET:lemon_bot/invocations/#{run_id}}",
-        "X-Another-Authority" => "unchanged-authority"
+    servers = [
+      %{
+        "name" => "core",
+        "url" => "https://core.example/mcp",
+        "headers" => %{
+          "X-Lemon-Bot-Invocation" => "${LEMON_SECRET:lemon_bot/invocations/#{run_id}}",
+          "X-Another-Authority" => "unchanged-authority"
+        }
       }
-    }]
+    ]
 
     {descriptor, servers}
   end

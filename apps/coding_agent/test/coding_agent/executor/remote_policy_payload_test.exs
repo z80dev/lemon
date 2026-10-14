@@ -6,13 +6,25 @@ defmodule CodingAgent.Executor.RemotePolicyPayloadTest do
 
   test "full native policy arrays cross JSON without truncation" do
     names = Enum.map(1..16_384, &"mcp_tool_#{&1}")
-    request = %ExecutionRequest{run_id: "dense-policy", session_key: "agent:dense:main",
-      prompt: "Use only admitted tools", tool_policy: %{"require_approval" => names}}
 
-    assert {:ok, %{"toolPolicy" => %{"require_approval" => ^names}}} = RemoteRequestCodec.encode(request)
-    assert {:error, {:invalid_request_payload, _}} = RemoteRequestCodec.encode(request, max_items: 10_000)
-    assert {:error, {:invalid_request_payload, _}} = RemoteRequestCodec.encode(request, max_bytes: 128)
-    assert {:error, {:invalid_request_payload, _}} = RemoteRequestCodec.encode(%{request | meta: %{callback: fn -> :private end}})
+    request = %ExecutionRequest{
+      run_id: "dense-policy",
+      session_key: "agent:dense:main",
+      prompt: "Use only admitted tools",
+      tool_policy: %{"require_approval" => names}
+    }
+
+    assert {:ok, %{"toolPolicy" => %{"require_approval" => ^names}}} =
+             RemoteRequestCodec.encode(request)
+
+    assert {:error, {:invalid_request_payload, _}} =
+             RemoteRequestCodec.encode(request, max_items: 10_000)
+
+    assert {:error, {:invalid_request_payload, _}} =
+             RemoteRequestCodec.encode(request, max_bytes: 128)
+
+    assert {:error, {:invalid_request_payload, _}} =
+             RemoteRequestCodec.encode(%{request | meta: %{callback: fn -> :private end}})
   end
 
   test "execution budget helpers preserve explicit caller limits" do

@@ -160,7 +160,10 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
           agent_id: "main",
           invocation_context_key: "task-followup-client",
           tool_policy:
-            CodingAgent.ToolPolicy.custom(allow: ["read", "write", "task"], require_approval: ["write"]),
+            CodingAgent.ToolPolicy.custom(
+              allow: ["read", "write", "task"],
+              require_approval: ["write"]
+            ),
           invocation_mcp_servers: [],
           run_orchestrator: __MODULE__.TaskAsyncStubRunOrchestrator
         )

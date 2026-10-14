@@ -25,7 +25,6 @@ defmodule CodingAgent.BackgroundRunTest do
     %{tmp_dir: tmp_dir}
   end
 
-
   test "background writes retain parent approval namespace and remain gated", %{tmp_dir: tmp_dir} do
     parent =
       start_supervised!(
@@ -35,7 +34,8 @@ defmodule CodingAgent.BackgroundRunTest do
            model: Mocks.mock_model(),
            tools: [],
            agent_id: "background-writer",
-           tool_policy: CodingAgent.ToolPolicy.custom(deny: ["bash"], require_approval: ["write"]),
+           tool_policy:
+             CodingAgent.ToolPolicy.custom(deny: ["bash"], require_approval: ["write"]),
            invocation_mcp_servers: [],
            invocation_context_key: "background-parent-client"
          ]}
@@ -46,6 +46,7 @@ defmodule CodingAgent.BackgroundRunTest do
 
     runner = fn session_opts, _prompt, _signal, _timeout_ms ->
       send(owner, {:background_mcp_refs, Keyword.get(session_opts, :invocation_mcp_servers)})
+
       session_opts =
         Keyword.put(session_opts, :approval_context, %{
           approval_request_fun: fn request ->
@@ -59,7 +60,10 @@ defmodule CodingAgent.BackgroundRunTest do
       try do
         write = Enum.find(Session.get_state(child).tools, &(&1.name == "write"))
         refute Enum.any?(Session.get_state(child).tools, &(&1.name == "bash"))
-        result = write.execute.("background-write", %{"path" => path, "content" => "DENIED"}, nil, nil)
+
+        result =
+          write.execute.("background-write", %{"path" => path, "content" => "DENIED"}, nil, nil)
+
         send(owner, {:background_write_result, result})
         {:ok, "denied as required"}
       after
@@ -86,6 +90,7 @@ defmodule CodingAgent.BackgroundRunTest do
     refute File.exists?(path)
     assert {:ok, "denied as required"} = await_result(id)
   end
+
   test "background run uses a fresh full-tool session and leaves parent history untouched", %{
     tmp_dir: tmp_dir
   } do
@@ -345,16 +350,23 @@ defmodule CodingAgent.BackgroundRunTest do
 
   test "side-query freezes source audience proof but cannot inherit shared writes" do
     owner = self()
+
     source = %{
       messages: transcript("authorized source", "authorized answer"),
       system_prompt: "safe",
-      approval_context: %{invocation_context_key: "actor", memory_context_key: "audience",
-        memory_context_verified: true, shared_memory_grant: true}
+      approval_context: %{
+        invocation_context_key: "actor",
+        memory_context_key: "audience",
+        memory_context_verified: true,
+        shared_memory_grant: true
+      }
     }
+
     runner = fn opts, _question, _signal, _timeout ->
       send(owner, {:frozen_query_opts, opts})
       {:ok, "answer"}
     end
+
     assert {:ok, "answer"} = SideQuery.ask(source, "question", runner: runner)
     assert_receive {:frozen_query_opts, opts}
     assert opts[:invocation_context_key] == "actor"
@@ -362,30 +374,49 @@ defmodule CodingAgent.BackgroundRunTest do
     assert opts[:memory_context_verified] == true
     assert opts[:shared_memory_grant] == false
     assert opts[:tools] == []
+
     assert {:error, :session_unavailable} =
-      SideQuery.ask(source, "question", runner: runner, invocation_context_key: "other-actor",
-        memory_context_key: "audience", memory_context_verified: true)
+             SideQuery.ask(source, "question",
+               runner: runner,
+               invocation_context_key: "other-actor",
+               memory_context_key: "audience",
+               memory_context_verified: true
+             )
+
     refute_receive {:frozen_query_opts, _}
   end
 
   test "side-query canonical negative source proof wins a forged string alias" do
     owner = self()
+
     source = %{
-      messages: transcript("source", "answer"), system_prompt: "safe",
-      approval_context: %{"memory_context_verified" => true,
-        invocation_context_key: "actor", memory_context_key: "audience",
-        memory_context_verified: false}
+      messages: transcript("source", "answer"),
+      system_prompt: "safe",
+      approval_context: %{
+        "memory_context_verified" => true,
+        invocation_context_key: "actor",
+        memory_context_key: "audience",
+        memory_context_verified: false
+      }
     }
+
     runner = fn opts, _, _, _ ->
       send(owner, {:negative_query_opts, opts})
       {:ok, "answer"}
     end
+
     assert {:ok, "answer"} = SideQuery.ask(source, "question", runner: runner)
     assert_receive {:negative_query_opts, opts}
     assert opts[:memory_context_verified] == false
+
     assert {:error, :session_unavailable} =
-      SideQuery.ask(source, "question", runner: runner, invocation_context_key: "actor",
-        memory_context_key: "audience", memory_context_verified: true)
+             SideQuery.ask(source, "question",
+               runner: runner,
+               invocation_context_key: "actor",
+               memory_context_key: "audience",
+               memory_context_verified: true
+             )
+
     refute_receive {:negative_query_opts, _}
   end
 

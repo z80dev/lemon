@@ -31,6 +31,7 @@ defmodule LemonControlPlane.Methods.ExecApprovalResolveTest do
         ] do
       assert {:error, {:conflict, _, %{"reason" => "mismatch"}}} =
                ExecApprovalResolve.handle(foreign, %{})
+
       assert ExecApprovalStore.get_pending(id) == pending
     end
 
@@ -65,14 +66,21 @@ defmodule LemonControlPlane.Methods.ExecApprovalResolveTest do
 
     assert {:error, {:conflict, _, %{"reason" => "conflict"}}} =
              ExecApprovalResolve.handle(params(pending, "deny"), %{})
+
     assert {:error, {:conflict, _, %{"reason" => "already_resolved"}}} =
              ExecApprovalResolve.handle(%{"approvalId" => id, "decision" => "approve_once"}, %{})
+
     assert {:error, {:conflict, _, %{"reason" => "mismatch"}}} =
              ExecApprovalResolve.handle(Map.put(params, "expectedRunId", "another_run"), %{})
+
     assert {:error, {:conflict, _, %{"reason" => "mismatch"}}} =
-             ExecApprovalResolve.handle(Map.put(params, "expectedSessionKey", "agent:other:main"), %{})
+             ExecApprovalResolve.handle(
+               Map.put(params, "expectedSessionKey", "agent:other:main"),
+               %{}
+             )
 
     :ok = ExecApprovalStore.delete_pending(id)
+
     assert {:error, {:not_found, _, %{"reason" => "not_found"}}} =
              ExecApprovalResolve.handle(params, %{})
   end
@@ -88,6 +96,7 @@ defmodule LemonControlPlane.Methods.ExecApprovalResolveTest do
 
     assert {:error, {:conflict, _, %{"reason" => "conflict"}}} =
              ExecApprovalResolve.handle(params(pending, "approve_once"), %{})
+
     assert {:ok, replay} = ExecApprovalResolve.handle(params(pending, "deny"), %{})
     assert replay["replayed"] == true
     assert replay["approved"] == false
@@ -99,6 +108,7 @@ defmodule LemonControlPlane.Methods.ExecApprovalResolveTest do
     assert Task.await(task) == {:ok, :denied}
 
     assert {:error, error} = ExecApprovalResolve.handle(params(pending, "approve_once"), %{})
+
     assert %{"code" => "CONFLICT", "details" => %{"approvalId" => ^id, "reason" => "cancelled"}} =
              Errors.to_payload(error)
   end
@@ -106,20 +116,31 @@ defmodule LemonControlPlane.Methods.ExecApprovalResolveTest do
   test "expired owner state and unknown IDs return distinct errors", %{id: id} do
     {task, pending} = request(id, 25)
     assert Task.await(task, 1_000) == {:error, :timeout}
+
     assert {:error, {:conflict, _, %{"reason" => "expired"}}} =
              ExecApprovalResolve.handle(params(pending, "approve_global"), %{})
 
     assert {:error, error} =
-             ExecApprovalResolve.handle(%{"approvalId" => "missing_#{id}", "decision" => "deny"}, %{})
-    assert %{"code" => "NOT_FOUND", "details" => %{"reason" => "not_found"}} = Errors.to_payload(error)
+             ExecApprovalResolve.handle(
+               %{"approvalId" => "missing_#{id}", "decision" => "deny"},
+               %{}
+             )
+
+    assert %{"code" => "NOT_FOUND", "details" => %{"reason" => "not_found"}} =
+             Errors.to_payload(error)
   end
 
   test "malformed bindings and IDs cannot consume a live approval", %{id: id} do
     {task, pending} = request(id)
+
     for value <- [nil, "", 123, String.duplicate("x", 1025)],
         field <- ["approvalId", "expectedSessionKey", "expectedRunId"] do
       assert {:error, {:invalid_request, _, _}} =
-               ExecApprovalResolve.handle(Map.put(params(pending, "approve_once"), field, value), %{})
+               ExecApprovalResolve.handle(
+                 Map.put(params(pending, "approve_once"), field, value),
+                 %{}
+               )
+
       assert ExecApprovalStore.get_pending(id) == pending
     end
 
@@ -134,8 +155,10 @@ defmodule LemonControlPlane.Methods.ExecApprovalResolveTest do
     assert pending.invocation_context_key == private_context
     payload = LemonCore.Events.ApprovalRequested.new(%{approval_id: id, pending: pending})
     event = LemonCore.Event.new(:approval_requested, payload, %{})
+
     assert {"exec.approval.requested", projected} =
              LemonControlPlane.EventBridge.project(event)
+
     assert projected["approvalId"] == id
     assert projected["sessionKey"] == pending.session_key
     assert {:ok, listed} = LemonControlPlane.Methods.ExecApprovalsGet.handle(%{}, %{})
@@ -152,22 +175,26 @@ defmodule LemonControlPlane.Methods.ExecApprovalResolveTest do
   end
 
   defp request(id, expires_in_ms \\ 5_000, invocation_context_key \\ nil) do
-    task = Task.async(fn ->
-      ExecApprovals.request(%{
-        approval_id: id,
-        run_id: "run_#{id}",
-        session_key: "agent:test:#{id}",
-        invocation_context_key: invocation_context_key,
-        tool: "bash",
-        action: %{command: "private action #{id}"},
-        rationale: "private rationale",
-        expires_in_ms: expires_in_ms
-      })
-    end)
+    task =
+      Task.async(fn ->
+        ExecApprovals.request(%{
+          approval_id: id,
+          run_id: "run_#{id}",
+          session_key: "agent:test:#{id}",
+          invocation_context_key: invocation_context_key,
+          tool: "bash",
+          action: %{command: "private action #{id}"},
+          rationale: "private rationale",
+          expires_in_ms: expires_in_ms
+        })
+      end)
 
     assert_receive %LemonCore.Event{
-      type: :approval_requested, payload: %{pending: %{id: ^id} = pending}
-    }, 1_000
+                     type: :approval_requested,
+                     payload: %{pending: %{id: ^id} = pending}
+                   },
+                   1_000
+
     {task, pending}
   end
 

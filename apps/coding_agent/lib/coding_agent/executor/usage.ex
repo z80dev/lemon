@@ -12,25 +12,41 @@ defmodule CodingAgent.Executor.Usage do
 
   def occurrence(message) when is_map(message) do
     if field(message, :role) in [:assistant, "assistant"] do
-      usage = case field(message, :usage) do
-        usage when is_map(usage) -> usage
-        _ -> %{input: 0, output: 0, total_tokens: 0}
-      end
+      usage =
+        case field(message, :usage) do
+          usage when is_map(usage) -> usage
+          _ -> %{input: 0, output: 0, total_tokens: 0}
+        end
+
       cost = field(usage, :cost)
       total = if is_map(cost), do: field(cost, :total), else: cost
-      known = case field(usage, :price_known) do
-        true -> is_number(total) and total >= 0
-        false -> false
-        _ -> is_number(total) and total >= 0 and
-          (total > 0 or catalogued?(field(message, :provider), field(message, :model)))
-      end
+
+      known =
+        case field(usage, :price_known) do
+          true ->
+            is_number(total) and total >= 0
+
+          false ->
+            false
+
+          _ ->
+            is_number(total) and total >= 0 and
+              (total > 0 or catalogued?(field(message, :provider), field(message, :model)))
+        end
+
       usage = Map.take(plain(usage), @transport_token_keys)
       usage = Map.merge(usage, %{cost: if(known, do: total, else: nil), price_known: known})
       at = field(message, :timestamp)
-      %{model: field(message, :model), provider: field(message, :provider),
-        at_ms: if(is_integer(at) and at > 0, do: at, else: System.system_time(:millisecond)), usage: usage}
+
+      %{
+        model: field(message, :model),
+        provider: field(message, :provider),
+        at_ms: if(is_integer(at) and at > 0, do: at, else: System.system_time(:millisecond)),
+        usage: usage
+      }
     end
   end
+
   def occurrence(_), do: nil
 
   defp catalogued?(provider, model) when is_binary(model) do
@@ -39,6 +55,7 @@ defmodule CodingAgent.Executor.Usage do
   rescue
     ArgumentError -> false
   end
+
   defp catalogued?(_, _), do: false
   defp plain(%{__struct__: _} = value), do: Map.from_struct(value)
   defp plain(value), do: value

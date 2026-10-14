@@ -82,7 +82,8 @@ defmodule CodingAgent.Executor.RemoteSessionRunner do
        agent_id:
          meta[:agent_id] || meta["agent_id"] ||
            LemonCore.SessionKey.agent_id(request.session_key || ""),
-       invocation_context_key: Map.get(meta, :invocation_context_key, Map.get(meta, "invocation_context_key"))
+       invocation_context_key:
+         Map.get(meta, :invocation_context_key, Map.get(meta, "invocation_context_key"))
      }, {:continue, :invoke}}
   end
 
@@ -91,7 +92,8 @@ defmodule CodingAgent.Executor.RemoteSessionRunner do
     max_payload = protocol_max_payload()
 
     with {:ok, destination} <- privacy_destination(state.request, state.node),
-         {:ok, payload} <- RemoteRequestCodec.encode(canonical_request(state.request), max_bytes: max_payload),
+         {:ok, payload} <-
+           RemoteRequestCodec.encode(canonical_request(state.request), max_bytes: max_payload),
          {:ok, invoke_id} <- invoke_destination(destination, state, payload, max_payload) do
       started =
         Event.started(%{
@@ -112,25 +114,55 @@ defmodule CodingAgent.Executor.RemoteSessionRunner do
 
   defp canonical_request(request) do
     meta = request.meta || %{}
+
     meta =
       if not CodingAgent.Tools.Task.Params.managed_metadata?(meta) and
-           not Map.has_key?(meta, :invocation_context_key) and Map.has_key?(meta, "invocation_context_key"),
-        do: Map.put(meta, :invocation_context_key, meta["invocation_context_key"]) |> Map.delete("invocation_context_key"),
-        else: meta
+           not Map.has_key?(meta, :invocation_context_key) and
+           Map.has_key?(meta, "invocation_context_key"),
+         do:
+           Map.put(meta, :invocation_context_key, meta["invocation_context_key"])
+           |> Map.delete("invocation_context_key"),
+         else: meta
+
     %{request | meta: meta}
   end
 
   defp privacy_destination(request, selector) do
     meta = request.meta || %{}
+
     private_fields = [
-      :invocation_context_key, "invocation_context_key", :invocationContextKey, "invocationContextKey",
-      :memory_context_key, "memory_context_key", :memoryContextKey, "memoryContextKey",
-      :memory_context_verified, "memory_context_verified", :memoryContextVerified, "memoryContextVerified",
-      :shared_memory_grant, "shared_memory_grant", :sharedMemoryGrant, "sharedMemoryGrant",
-      :invocation_proof, "invocation_proof", :invocationProof, "invocationProof",
-      :invocation_proof_verified, "invocation_proof_verified", :invocationProofVerified, "invocationProofVerified",
-      :native_lineage_handle, "native_lineage_handle", :nativeLineageHandle, "nativeLineageHandle",
-      :native_lineage_run_id, "native_lineage_run_id", :nativeLineageRunId, "nativeLineageRunId"
+      :invocation_context_key,
+      "invocation_context_key",
+      :invocationContextKey,
+      "invocationContextKey",
+      :memory_context_key,
+      "memory_context_key",
+      :memoryContextKey,
+      "memoryContextKey",
+      :memory_context_verified,
+      "memory_context_verified",
+      :memoryContextVerified,
+      "memoryContextVerified",
+      :shared_memory_grant,
+      "shared_memory_grant",
+      :sharedMemoryGrant,
+      "sharedMemoryGrant",
+      :invocation_proof,
+      "invocation_proof",
+      :invocationProof,
+      "invocationProof",
+      :invocation_proof_verified,
+      "invocation_proof_verified",
+      :invocationProofVerified,
+      "invocationProofVerified",
+      :native_lineage_handle,
+      "native_lineage_handle",
+      :nativeLineageHandle,
+      "nativeLineageHandle",
+      :native_lineage_run_id,
+      "native_lineage_run_id",
+      :nativeLineageRunId,
+      "nativeLineageRunId"
     ]
 
     protected? =
@@ -145,9 +177,11 @@ defmodule CodingAgent.Executor.RemoteSessionRunner do
            capabilities when is_map(capabilities) <-
              Map.get(node.metadata, :capabilities, Map.get(node.metadata, "capabilities")),
            %{"coding_agent.run" => %{"nativePrivacyContext" => %{"version" => 1}}} <- capabilities,
-           true <- is_nil(meta[:native_destination_pid]) || meta[:native_destination_pid] == node.pid,
-           true <- is_nil(meta[:native_destination_generation]) ||
-                     meta[:native_destination_generation] == node.generation do
+           true <-
+             is_nil(meta[:native_destination_pid]) || meta[:native_destination_pid] == node.pid,
+           true <-
+             is_nil(meta[:native_destination_generation]) ||
+               meta[:native_destination_generation] == node.generation do
         {:ok, node}
       else
         _ -> {:error, {:native_privacy_context_unsupported, selector}}
@@ -241,21 +275,27 @@ defmodule CodingAgent.Executor.RemoteSessionRunner do
   def handle_info({:lemon_node_event, invoke_id, seq, event}, %{invoke_id: invoke_id} = state)
       when seq == state.event_seq + 1 do
     state = %{state | event_seq: seq}
+
     case RemoteEventCodec.decode(event) do
       {:ok, {:delta, text}} ->
         send(state.sink_pid, {:engine_delta, state.run_ref, text})
         {:noreply, state}
+
       {:ok, {:engine, %{__event__: :started}}} ->
         # The controller already emitted the gateway started event on dispatch.
         {:noreply, state}
+
       {:ok, {:engine, event}} ->
         send(state.sink_pid, {:engine_event, state.run_ref, event})
         {:noreply, state}
+
       {:ok, {:checkpoint, type, payload}} ->
         send(state.sink_pid, {:engine_checkpoint, state.run_ref, type, payload})
         {:noreply, state}
+
       {:ok, {:approval, approval}} ->
         {:noreply, request_approval(state, approval)}
+
       {:error, _reason} ->
         :ok = NodeRegistry.cancel(state.invoke_id, :invalid_remote_event)
         emit_error(state, :invalid_remote_event)
@@ -267,16 +307,25 @@ defmodule CodingAgent.Executor.RemoteSessionRunner do
     case Enum.find(state.approvals, fn {_id, approval} -> approval.task.ref == ref end) do
       {worker_id, _approval} ->
         Process.demonitor(ref, [:flush])
-        decision = case result do
-          {:ok, :approved, scope}
-              when scope in [:approve_once, :approve_session, :approve_agent, :approve_global] ->
-            Atom.to_string(scope)
-          {:ok, :approved, _persisted_scope} -> "approve_once"
-          _ -> "deny"
-        end
+
+        decision =
+          case result do
+            {:ok, :approved, scope}
+            when scope in [:approve_once, :approve_session, :approve_agent, :approve_global] ->
+              Atom.to_string(scope)
+
+            {:ok, :approved, _persisted_scope} ->
+              "approve_once"
+
+            _ ->
+              "deny"
+          end
+
         _ = NodeRegistry.approval(state.invoke_id, worker_id, decision)
         {:noreply, %{state | approvals: Map.delete(state.approvals, worker_id)}}
-      nil -> {:noreply, state}
+
+      nil ->
+        {:noreply, state}
     end
   end
 
@@ -286,7 +335,9 @@ defmodule CodingAgent.Executor.RemoteSessionRunner do
         _ = LemonCore.ExecApprovals.cancel(approval.controller_id, "remote approval waiter ended")
         _ = NodeRegistry.approval(state.invoke_id, worker_id, "deny")
         {:noreply, %{state | approvals: Map.delete(state.approvals, worker_id)}}
-      nil -> {:noreply, state}
+
+      nil ->
+        {:noreply, state}
     end
   end
 
@@ -298,36 +349,53 @@ defmodule CodingAgent.Executor.RemoteSessionRunner do
       _ = Task.shutdown(approval.task, :brutal_kill)
       _ = LemonCore.ExecApprovals.cancel(approval.controller_id, "remote invocation ended")
     end)
+
     :ok
   end
 
   defp request_approval(state, approval) do
     worker_id = approval.approval_id
+
     cond do
-      Map.has_key?(state.approvals, worker_id) -> state
+      Map.has_key?(state.approvals, worker_id) ->
+        state
+
       map_size(state.approvals) >= 32 ->
         _ = NodeRegistry.approval(state.invoke_id, worker_id, "deny")
         state
+
       true ->
-      controller_id = LemonCore.Id.approval_id()
-      remaining = case approval.expires_at_ms do
-        ms when is_integer(ms) -> max(ms - LemonCore.Clock.now_ms(), 0)
-        _ -> 600_000
-      end
-      params = %{
-        approval_id: controller_id, run_id: state.run_id, session_key: state.session_key,
-        agent_id: state.agent_id, tool: approval.tool, action: approval.action,
-        invocation_context_key: state.invocation_context_key,
-        rationale: approval.rationale, expires_in_ms: min(remaining, 600_000)
-      }
-      owner = self()
-      task = Task.async(fn ->
-        waiter = self()
-        spawn(fn -> guard_approval(owner, waiter, controller_id) end)
-        LemonCore.ExecApprovals.request(params)
-      end)
-      entry = %{task: task, controller_id: controller_id}
-      %{state | approvals: Map.put(state.approvals, worker_id, entry)}
+        controller_id = LemonCore.Id.approval_id()
+
+        remaining =
+          case approval.expires_at_ms do
+            ms when is_integer(ms) -> max(ms - LemonCore.Clock.now_ms(), 0)
+            _ -> 600_000
+          end
+
+        params = %{
+          approval_id: controller_id,
+          run_id: state.run_id,
+          session_key: state.session_key,
+          agent_id: state.agent_id,
+          tool: approval.tool,
+          action: approval.action,
+          invocation_context_key: state.invocation_context_key,
+          rationale: approval.rationale,
+          expires_in_ms: min(remaining, 600_000)
+        }
+
+        owner = self()
+
+        task =
+          Task.async(fn ->
+            waiter = self()
+            spawn(fn -> guard_approval(owner, waiter, controller_id) end)
+            LemonCore.ExecApprovals.request(params)
+          end)
+
+        entry = %{task: task, controller_id: controller_id}
+        %{state | approvals: Map.put(state.approvals, worker_id, entry)}
     end
   end
 
@@ -336,15 +404,19 @@ defmodule CodingAgent.Executor.RemoteSessionRunner do
   defp guard_approval(owner, waiter, approval_id) do
     owner_ref = Process.monitor(owner)
     waiter_ref = Process.monitor(waiter)
+
     receive do
       {:DOWN, ^owner_ref, :process, _pid, _reason} ->
         Process.exit(waiter, :kill)
+
         receive do
           {:DOWN, ^waiter_ref, :process, _pid, _reason} -> :ok
         end
+
       {:DOWN, ^waiter_ref, :process, _pid, _reason} ->
         Process.demonitor(owner_ref, [:flush])
     end
+
     _ = LemonCore.ExecApprovals.cancel(approval_id, "remote approval owner ended")
     :ok
   end
@@ -382,6 +454,7 @@ defmodule CodingAgent.Executor.RemoteSessionRunner do
     |> CodingAgent.Tools.Task.Params.sanitize_child_metadata()
     |> Map.put(:node, node)
   end
+
   defp merge_node_meta(_meta, node), do: %{node: node}
 
   defp get_opt(opts, key) when is_map(opts), do: Map.get(opts, key)

@@ -13,11 +13,14 @@ defmodule LemonControlPlane.Methods.UsageCostTrackingTest do
   defp record_usage(usage) do
     run_id = "usage-test-#{LemonCore.Id.uuid()}"
     provider = usage[:provider] || usage["provider"]
-    entry = LemonCore.UsageLedger.entry(run_id, "agent:test:usage", %{
-      completed: %{usage: usage},
-      completed_at_ms: System.system_time(:millisecond),
-      meta: %{provider: provider, model: "test"}
-    })
+
+    entry =
+      LemonCore.UsageLedger.entry(run_id, "agent:test:usage", %{
+        completed: %{usage: usage},
+        completed_at_ms: System.system_time(:millisecond),
+        meta: %{provider: provider, model: "test"}
+      })
+
     record = LemonCore.UsageLedger.occurrence_record(entry)
     on_exit(fn -> LemonCore.Store.delete(:usage_occurrences, record.id) end)
     LemonCore.UsageLedger.record(entry)

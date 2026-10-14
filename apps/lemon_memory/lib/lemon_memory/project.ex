@@ -76,16 +76,27 @@ defmodule LemonMemory.Project do
 
   defp history_matches?(doc, identity, owner, requested_scope) do
     with meta when is_map(meta) <- doc.meta,
-         false <- (meta["kind"] || meta[:kind]) in
-           ["project_learning", "user", "memory", :project_learning, :user, :memory],
+         false <-
+           (meta["kind"] || meta[:kind]) in [
+             "project_learning",
+             "user",
+             "memory",
+             :project_learning,
+             :user,
+             :memory
+           ],
          true <- matches_owner?(doc, owner),
          true <- doc.agent_id == identity.agent_id,
          true <- (meta["home_digest"] || meta[:home_digest]) == identity.home_digest do
       case requested_scope do
-        :agent -> true
+        :agent ->
+          true
+
         mode when mode in [:workspace, :project] ->
           is_binary(doc.workspace_key) and history_root(doc) == identity.root
-        _ -> false
+
+        _ ->
+          false
       end
     else
       _ -> false
@@ -101,13 +112,21 @@ defmodule LemonMemory.Project do
          {:ok, {:private, _} = owner} <- ContextScope.scope(context),
          true <- requested_scope in [:agent, :workspace, :project] do
       if LemonMemory.SessionSearch.enabled?() do
-        limit = case Keyword.get(opts, :limit, 5) do
-          value when is_integer(value) -> value |> max(1) |> min(50)
-          _ -> 5
-        end
+        limit =
+          case Keyword.get(opts, :limit, 5) do
+            value when is_integer(value) -> value |> max(1) |> min(50)
+            _ -> 5
+          end
+
         root = if requested_scope == :agent, do: nil, else: identity.root
-        with {:ok, docs} <- Store.search_owned(Keyword.get(opts, :store, Store), query,
-               identity.agent_id, identity.home_digest, owner, limit: limit, workspace_root: root) do
+
+        with {:ok, docs} <-
+               Store.search_owned(
+                 Keyword.get(opts, :store, Store),
+                 query,
+                 identity.agent_id,
+                 identity.home_digest,
+                 owner, limit: limit, workspace_root: root) do
           {:ok, Enum.filter(docs, &history_matches?(&1, identity, owner, requested_scope))}
         end
       else
@@ -151,7 +170,6 @@ defmodule LemonMemory.Project do
     end
   end
 
-
   @doc "Rehome an authorized project's identity without inventing native proof."
   def transfer_document_id(context, metadata) do
     with {:ok, identity} <- scope(context),
@@ -159,6 +177,7 @@ defmodule LemonMemory.Project do
       {:ok, document_id(owned(identity, owner))}
     end
   end
+
   @doc "Add, replace, or delete one exact project fact, rejecting capacity overflow."
   def remember(context, text, replaces \\ nil, opts \\ []) do
     with {:ok, identity} <- scope(context),
@@ -167,6 +186,7 @@ defmodule LemonMemory.Project do
          {:ok, replaces} <- optional_fact(replaces),
          true <- text != nil or replaces != nil do
       owner = if ContextScope.shared_grant?(context), do: :shared, else: owner
+
       mutate(context, owned(identity, owner), opts, fn facts ->
         cond do
           replaces == nil -> {:ok, Enum.uniq(facts ++ [text])}
@@ -256,26 +276,37 @@ defmodule LemonMemory.Project do
 
   defp matches_owner?(doc, selector) do
     owner = Store.document_ownership(doc)
-    indexed = case selector do
-      :operator -> true
-      :legacy -> owner in [:legacy, :shared]
-      _ -> owner == selector
-    end
+
+    indexed =
+      case selector do
+        :operator -> true
+        :legacy -> owner in [:legacy, :shared]
+        _ -> owner == selector
+      end
+
     indexed and ContextScope.matches?(doc.meta, selector)
   end
 
   defp load_document(server, %{owner: :legacy} = scope),
     do: Store.get_document(server, document_id(scope))
+
   defp load_document(server, scope) do
-    case Store.get_owned_document(server, document_id(scope), scope.agent_id,
-           scope.home_digest, scope.owner) do
+    case Store.get_owned_document(
+           server,
+           document_id(scope),
+           scope.agent_id,
+           scope.home_digest,
+           scope.owner
+         ) do
       {:error, :not_found} ->
         # A retained foreign/unproven row at this ID must not be overwritten.
         case Store.get_document(server, document_id(scope)) do
           {:ok, _} -> {:error, :invalid_document}
           error -> error
         end
-      result -> result
+
+      result ->
+        result
     end
   end
 
@@ -322,8 +353,11 @@ defmodule LemonMemory.Project do
         prompt_summary: "Project coding learnings: build commands, conventions, and gotchas",
         answer_summary: Enum.join(facts, "\n"),
         outcome: :success,
-        meta: Map.merge(ContextScope.metadata(scope.owner),
-          %{"kind" => "project_learning", "home_digest" => scope.home_digest})
+        meta:
+          Map.merge(
+            ContextScope.metadata(scope.owner),
+            %{"kind" => "project_learning", "home_digest" => scope.home_digest}
+          )
       )
 
     case Store.put_sync(server, doc) do
@@ -338,6 +372,7 @@ defmodule LemonMemory.Project do
   defp normalize_fact(fact) when is_binary(fact) do
     with :ok <- Safety.validate_note(fact, max_bytes: @max_bytes) do
       fact = fact |> String.split() |> Enum.join(" ")
+
       cond do
         fact == "" -> {:error, :empty_fact}
         byte_size(fact) > @max_fact_bytes -> {:error, :fact_too_long}
@@ -367,6 +402,7 @@ defmodule LemonMemory.Project do
     do: length(facts) <= @max_facts and byte_size(Enum.join(facts, "\n")) <= @max_bytes
 
   defp owned(identity, :legacy), do: Map.put(identity, :owner, :legacy)
+
   defp owned(identity, owner) do
     key = digest(Jason.encode!([identity.key, owner_identity(owner)]))
     identity |> Map.put(:key, key) |> Map.put(:owner, owner)
@@ -379,11 +415,18 @@ defmodule LemonMemory.Project do
     cond do
       ContextScope.matches?(meta, {:private, meta["memory_context_key"]}) ->
         {:ok, {:private, meta["memory_context_key"]}}
-      ContextScope.matches?(meta, :shared) -> {:ok, :shared}
-      ContextScope.matches?(meta, :legacy) -> {:ok, :legacy}
-      true -> {:error, :unproven_context}
+
+      ContextScope.matches?(meta, :shared) ->
+        {:ok, :shared}
+
+      ContextScope.matches?(meta, :legacy) ->
+        {:ok, :legacy}
+
+      true ->
+        {:error, :unproven_context}
     end
   end
+
   defp stored_owner(_), do: {:error, :unproven_context}
 
   defp document_id(scope), do: "mem_project_" <> scope.key
@@ -398,6 +441,7 @@ defmodule LemonMemory.Project do
       find_repository(cwd) || cwd
     end
   end
+
   def repository_root(_), do: nil
 
   defp find_repository(path) do

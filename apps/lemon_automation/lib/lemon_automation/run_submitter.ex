@@ -1,7 +1,15 @@
 defmodule LemonAutomation.RunSubmitter do
   @moduledoc false
 
-  alias LemonAutomation.{CronAdmission, CronContext, CronJob, CronMemory, CronRun, RunCompletionWaiter}
+  alias LemonAutomation.{
+    CronAdmission,
+    CronContext,
+    CronJob,
+    CronMemory,
+    CronRun,
+    RunCompletionWaiter
+  }
+
   alias LemonCore.{InvocationProof, SessionKey, ToolPolicy}
 
   @default_timeout_ms 300_000
@@ -10,8 +18,8 @@ defmodule LemonAutomation.RunSubmitter do
   @spec submit(CronJob.t(), CronRun.t(), keyword()) ::
           {:ok, binary()} | {:error, term()} | :timeout
   def submit(%CronJob{} = job, %CronRun{} = run, opts \\ []) do
-
     run_id = Keyword.get(opts, :run_id) || run.run_id || LemonCore.Id.run_id()
+
     case build_params(job, run, run_id, opts) do
       {:error, _} = error -> error
       params -> submit_params(job, run, run_id, params, opts)
@@ -116,7 +124,9 @@ defmodule LemonAutomation.RunSubmitter do
 
       params ->
         case attach_invocation(params, invocation, run_id) do
-          {:error, _} = error -> error
+          {:error, _} = error ->
+            error
+
           params ->
             params = maybe_pin_model(params, job)
             if run_id, do: Map.put(params, :run_id, run_id), else: params
@@ -129,14 +139,16 @@ defmodule LemonAutomation.RunSubmitter do
       :error ->
         {:ok, nil}
 
-      {:ok, %{
-        context_key: _,
-        memory_key: _,
-        mcp_servers: _,
-        tool_policy: _,
-        proof: _,
-        shared_memory_grant: false
-      } = projection} when map_size(projection) == 6 ->
+      {:ok,
+       %{
+         context_key: _,
+         memory_key: _,
+         mcp_servers: _,
+         tool_policy: _,
+         proof: _,
+         shared_memory_grant: false
+       } = projection}
+      when map_size(projection) == 6 ->
         with false <- is_nil(job.admission),
              true <- is_binary(job.profile_id),
              :agent <- CronJob.execution_mode(job),
@@ -160,7 +172,11 @@ defmodule LemonAutomation.RunSubmitter do
   defp apply_invocation_policy(params, nil), do: params
 
   defp apply_invocation_policy(params, invocation) do
-    Map.put(params, :tool_policy, ToolPolicy.intersect(params.tool_policy, invocation.tool_policy))
+    Map.put(
+      params,
+      :tool_policy,
+      ToolPolicy.intersect(params.tool_policy, invocation.tool_policy)
+    )
   end
 
   defp invocation_wire(invocation) do

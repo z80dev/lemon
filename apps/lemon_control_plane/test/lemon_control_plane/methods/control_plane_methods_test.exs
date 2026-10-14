@@ -115,13 +115,15 @@ defmodule LemonControlPlane.Methods.ControlPlaneMethodsTest do
     test "completed cancellation proof is projected independently of error text" do
       for {proof, expected} <- [{true, true}, {false, false}, {nil, false}] do
         run_id = "run_wait_cancelled_#{System.unique_integer([:positive, :monotonic])}"
+
         LemonCore.RunStore.finalize(run_id, %{
-          completed: %{run_id: run_id, ok: false, error: :interrupted,
-                       meta: %{cancelled: proof}},
+          completed: %{run_id: run_id, ok: false, error: :interrupted, meta: %{cancelled: proof}},
           session_key: "agent:wait:cancelled"
         })
+
         assert {:ok, result} =
                  AgentWait.handle(%{"runId" => run_id, "timeoutMs" => 1}, %{})
+
         assert result["cancelled"] == expected
       end
     end
@@ -169,7 +171,10 @@ defmodule LemonControlPlane.Methods.ControlPlaneMethodsTest do
     test "status projection rejects nonboolean includeAnswer rather than returning answer" do
       for value <- [nil, "false", 0, [], %{}] do
         assert {:error, {:invalid_request, "includeAnswer must be a boolean", nil}} =
-                 AgentWait.handle(%{"runId" => "foreign-private-run", "includeAnswer" => value}, %{})
+                 AgentWait.handle(
+                   %{"runId" => "foreign-private-run", "includeAnswer" => value},
+                   %{}
+                 )
       end
     end
 

@@ -134,16 +134,22 @@ defmodule CodingAgent.ExecutionNode.Socket do
     with {:ok, decoded} <- Codec.decode(data) do
       native? =
         case decoded do
-          {:event, "node.invoke.request", %{"method" => "coding_agent.run"}} -> true
+          {:event, "node.invoke.request", %{"method" => "coding_agent.run"}} ->
+            true
+
           {:response, id, _} ->
             case state.pending[id] do
               %{tag: {:native_reply, _, _}} -> true
               _ -> false
             end
-          _ -> false
+
+          _ ->
+            false
         end
 
-      limit = if native?, do: LemonCore.ToolPolicy.execution_max_bytes(), else: payload_limit(state)
+      limit =
+        if native?, do: LemonCore.ToolPolicy.execution_max_bytes(), else: payload_limit(state)
+
       if byte_size(data) <= limit, do: {:ok, decoded}, else: {:error, :payload_too_large}
     end
   end

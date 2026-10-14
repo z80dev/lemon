@@ -35,13 +35,22 @@ defmodule LemonMemory.Preferences do
     with {:ok, identity} <- Project.scope(context),
          {:ok, _} <- native_owner(context),
          {:ok, docs} <- load(context, identity, :shared, opts) do
-      files = for {kind, name, heading} <- [
-        {"user", "USER.md", "## Context"}, {"memory", "MEMORY.md", "## Quick Facts"}
-      ], into: %{} do
-        notes = docs |> Enum.filter(&(document_kind(&1) == kind)) |> Enum.flat_map(&facts/1)
-        text = if notes == [], do: "", else: heading <> "\n\n" <> Enum.map_join(notes, "\n", &("- " <> &1))
-        {name, text}
-      end
+      files =
+        for {kind, name, heading} <- [
+              {"user", "USER.md", "## Context"},
+              {"memory", "MEMORY.md", "## Quick Facts"}
+            ],
+            into: %{} do
+          notes = docs |> Enum.filter(&(document_kind(&1) == kind)) |> Enum.flat_map(&facts/1)
+
+          text =
+            if notes == [],
+              do: "",
+              else: heading <> "\n\n" <> Enum.map_join(notes, "\n", &("- " <> &1))
+
+          {name, text}
+        end
+
       {:ok, files}
     end
   end
@@ -54,6 +63,7 @@ defmodule LemonMemory.Preferences do
          :ok <- optional_text(replaces),
          true <- text != nil or replaces != nil do
       owner = if ContextScope.shared_grant?(context), do: :shared, else: owner
+
       case mutate(context, identity, owner, kind, text, replaces, opts) do
         {:ok, result} -> {:ok, Map.delete(result, :document)}
         error -> error
@@ -78,12 +88,16 @@ defmodule LemonMemory.Preferences do
   @doc "Full safe facts for scoped recall and lexical management search."
   def facts(%Document{meta: meta} = doc) when is_map(meta) do
     kind = document_kind(doc)
+
     case meta["preference_facts"] || meta[:preference_facts] do
       [text] when kind in ["user", "memory"] and is_binary(text) ->
         if validate_text(text) == :ok and String.length(text) <= @caps[kind], do: [text], else: []
-      _ -> []
+
+      _ ->
+        []
     end
   end
+
   def facts(_), do: []
 
   defp native_owner(context) do
@@ -95,65 +109,107 @@ defmodule LemonMemory.Preferences do
 
   defp add_owner(context, opts) do
     case Keyword.fetch(opts, :memory_scope) do
-      :error -> native_owner(context)
-      {:ok, :shared} -> {:ok, :shared}
+      :error ->
+        native_owner(context)
+
+      {:ok, :shared} ->
+        {:ok, :shared}
+
       {:ok, {:private, key}} ->
-        if ContextScope.valid_key?(key), do: {:ok, {:private, key}},
+        if ContextScope.valid_key?(key),
+          do: {:ok, {:private, key}},
           else: {:error, :invalid_memory_scope}
-      _ -> {:error, :invalid_memory_scope}
+
+      _ ->
+        {:error, :invalid_memory_scope}
     end
   end
 
   defp normalize_kind(kind) when kind in [:user, :memory], do: {:ok, Atom.to_string(kind)}
   defp normalize_kind(kind) when kind in ["user", "memory"], do: {:ok, kind}
   defp normalize_kind(_), do: {:error, :invalid_kind}
+
   defp document_kind(doc) do
     case normalize_kind(doc.meta["kind"] || doc.meta[:kind]) do
       {:ok, kind} -> kind
       _ -> nil
     end
   end
+
   defp optional_text(nil), do: :ok
   defp optional_text(text), do: validate_text(text)
 
   defp load(context, identity, owner, opts) do
     case Store.list_owned_recent(server(opts), identity.agent_id, identity.home_digest, owner,
-           preferences_only: true, limit: @max_notes + 1) do
+           preferences_only: true,
+           limit: @max_notes + 1
+         ) do
       {:ok, docs} ->
-        selected = Enum.filter(docs, fn doc ->
-          Project.profile_document?(doc, context, owner) and
-            document_kind(doc) in ["user", "memory"]
-        end)
+        selected =
+          Enum.filter(docs, fn doc ->
+            Project.profile_document?(doc, context, owner) and
+              document_kind(doc) in ["user", "memory"]
+          end)
+
         if length(selected) <= @max_notes and Enum.all?(selected, &(facts(&1) != [])) and
              Enum.all?(Map.keys(@caps), fn kind ->
-               selected |> Enum.filter(&(document_kind(&1) == kind)) |> Enum.flat_map(&facts/1)
-                 |> fits?(kind)
+               selected
+               |> Enum.filter(&(document_kind(&1) == kind))
+               |> Enum.flat_map(&facts/1)
+               |> fits?(kind)
              end), do: {:ok, selected}, else: {:error, :invalid_document}
-      _ -> {:error, :store_unavailable}
+
+      _ ->
+        {:error, :store_unavailable}
     end
   end
 
   defp mutate(context, identity, owner, kind, text, replaces, opts) do
     server = server(opts)
-    lock = {__MODULE__, GenServer.whereis(server) || server, identity.agent_id, identity.home_digest, owner}
+
+    lock =
+      {__MODULE__, GenServer.whereis(server) || server, identity.agent_id, identity.home_digest,
+       owner}
+
     :global.trans({lock, self()}, fn ->
       with {:ok, all} <- load(context, identity, owner, opts) do
         docs = Enum.filter(all, &(document_kind(&1) == kind))
         matches = Enum.filter(docs, &(facts(&1) == [replaces]))
         duplicate = Enum.find(docs, &(facts(&1) == [text]))
+
         cond do
-          replaces != nil and length(matches) != 1 -> {:error, :not_found}
-          replaces == nil and duplicate != nil -> result(false, docs, duplicate)
+          replaces != nil and length(matches) != 1 ->
+            {:error, :not_found}
+
+          replaces == nil and duplicate != nil ->
+            result(false, docs, duplicate)
+
           replaces != nil and duplicate != nil and text != replaces ->
-            save(context, identity, owner, kind, nil, List.first(matches),
-              List.delete(docs, List.first(matches)), opts)
-          text == replaces -> result(false, docs, List.first(matches))
+            save(
+              context,
+              identity,
+              owner,
+              kind,
+              nil,
+              List.first(matches),
+              List.delete(docs, List.first(matches)),
+              opts
+            )
+
+          text == replaces ->
+            result(false, docs, List.first(matches))
+
           true ->
             previous = List.first(matches)
             remaining = if previous, do: List.delete(docs, previous), else: docs
-            selected = if text, do: Enum.flat_map(remaining, &facts/1) ++ [text],
-              else: Enum.flat_map(remaining, &facts/1)
+
+            selected =
+              if text,
+                do: Enum.flat_map(remaining, &facts/1) ++ [text],
+                else: Enum.flat_map(remaining, &facts/1)
+
             count = length(all) - if(previous, do: 1, else: 0) + if(text, do: 1, else: 0)
+
             if fits?(selected, kind) and count <= @max_notes do
               save(context, identity, owner, kind, text, previous, remaining, opts)
             else
@@ -165,8 +221,11 @@ defmodule LemonMemory.Preferences do
   end
 
   defp save(_context, _identity, _key, _kind, nil, previous, remaining, opts) do
-    case Store.delete_document_if_unchanged(server(opts), previous.doc_id,
-           Store.document_revision(previous)) do
+    case Store.delete_document_if_unchanged(
+           server(opts),
+           previous.doc_id,
+           Store.document_revision(previous)
+         ) do
       {:ok, :deleted} -> result(true, remaining, nil)
       {:ok, :stale} -> {:error, :stale}
       _ -> {:error, :store_unavailable}
@@ -174,16 +233,27 @@ defmodule LemonMemory.Preferences do
   end
 
   defp save(context, identity, owner, kind, text, previous, remaining, opts) do
-    doc = Document.new(
-      doc_id: if(previous, do: previous.doc_id, else: "mem_preference_" <> LemonCore.Id.uuid()),
-      run_id: if(previous, do: previous.run_id, else: LemonCore.Id.uuid()),
-      session_key: if(previous, do: previous.session_key, else: preference_session(identity, owner)),
-      agent_id: identity.agent_id, workspace_key: Path.expand(context.workspace_dir), scope: :agent,
-      started_at_ms: if(previous, do: previous.started_at_ms, else: System.system_time(:millisecond)),
-      prompt_summary: "Durable #{kind} preference", answer_summary: text, outcome: :success,
-      meta: Map.merge(ContextScope.metadata(owner),
-        %{"kind" => kind, "home_digest" => identity.home_digest, "preference_facts" => [text]})
-    )
+    doc =
+      Document.new(
+        doc_id: if(previous, do: previous.doc_id, else: "mem_preference_" <> LemonCore.Id.uuid()),
+        run_id: if(previous, do: previous.run_id, else: LemonCore.Id.uuid()),
+        session_key:
+          if(previous, do: previous.session_key, else: preference_session(identity, owner)),
+        agent_id: identity.agent_id,
+        workspace_key: Path.expand(context.workspace_dir),
+        scope: :agent,
+        started_at_ms:
+          if(previous, do: previous.started_at_ms, else: System.system_time(:millisecond)),
+        prompt_summary: "Durable #{kind} preference",
+        answer_summary: text,
+        outcome: :success,
+        meta:
+          Map.merge(
+            ContextScope.metadata(owner),
+            %{"kind" => kind, "home_digest" => identity.home_digest, "preference_facts" => [text]}
+          )
+      )
+
     result =
       if previous do
         Store.put_document_if_unchanged(server(opts), doc, Store.document_revision(previous))
@@ -193,6 +263,7 @@ defmodule LemonMemory.Preferences do
           _ -> {:error, :store_unavailable}
         end
       end
+
     case result do
       :ok -> result(true, remaining ++ [doc], doc)
       {:error, :stale} -> {:error, :stale}
@@ -208,6 +279,7 @@ defmodule LemonMemory.Preferences do
 
   defp result(changed, docs, doc),
     do: {:ok, %{changed: changed, facts: Enum.flat_map(docs, &facts/1), document: doc}}
+
   defp fits?(facts, kind), do: String.length(Enum.join(facts, "\n")) <= @caps[kind]
   defp server(opts), do: Keyword.get(opts, :store, Store)
 end
