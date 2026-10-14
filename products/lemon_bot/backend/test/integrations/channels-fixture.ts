@@ -81,7 +81,7 @@ export function fixture(store = entityStore(), principal: Principal = { kind: 'u
       },
       cancel: async () => denied(),
       revokeConnectorInvocations: (actor, botId, connectorId) => revokeConnectorInvocations(services, actor, botId, connectorId),
-      reconcile: async () => undefined, sessionKey: () => 'test-session',
+      reconcile: async () => denied(), sessionKey: () => 'test-session',
     },
     attachments: {
       async create(who, bytes, metadata) { const attachment: P.Attachment = services.resource('attachment', { ownerUserId: who.userId, conversationId: metadata.conversationId ?? null, botId: metadata.botId ?? null, filename: metadata.filename, mime: metadata.mime ?? 'application/octet-stream', size: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex'), width: null, height: null, durationMs: null, source: 'upload', state: 'ready', preview: 'download', provenance: { botId: null, runId: null, machineId: null, sourceEntryId: null, generatedAtMs: null } }); store.put('attachments', attachment); store.setMetadata(`bytes:${attachment.id}`, Buffer.from(bytes).toString('base64')); return attachment; },
@@ -140,7 +140,7 @@ export function fixture(store = entityStore(), principal: Principal = { kind: 'u
         return entry;
       });
     },
-    notify: denied, invoke: async () => denied(), syncBotProfile: async () => undefined,
+    notify: denied, invoke: async () => denied(), syncBotProfile: async () => denied(),
   };
   const bot: P.Bot = services.resource('bot', { ownerUserId: principal.userId, managerUserIds: [], machineId: 'machine', profileId: 'profile', name: 'Finance', title: '', job: '', instructions: '', avatar: { kind: 'character', shape: 'round', color: 'yellow', attachmentId: null }, voice: { voiceId: 'default', speed: 1, language: null }, language: null, visibility: 'personal', published: false, required: false, skillIds: [], referenceAttachmentIds: [], mainConversationId: 'main', sidebar: { pinned: false, hidden: false, sectionId: null, rank: 0, unread: false, notificationsEnabled: true }, activity: 'idle', activeRunIds: [] });
   store.put('bots', bot); store.put('workspaces', { ...services.resource('workspace', { name: 'Test', ownerUserId: principal.userId, enabled: true, timezone: 'UTC' }), id: principal.workspaceId });
