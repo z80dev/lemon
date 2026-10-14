@@ -78,7 +78,7 @@ export interface GateService {
 export interface IntegrationServices {
   admission(principal: Principal, botId: string, routineId?: string): Promise<void>;
   effectivePolicy(principal: Principal, botId?: string): Promise<P.EffectivePolicy>;
-  connectorConfig(principal: Principal, botId: string, conversationId?: string): Promise<{ name: string; url: string; headers: Record<string, string>; enabledTools?: string[] }[]>;
+  connectorConfig(principal: Principal, botId: string, conversationId?: string, operationId?: string): Promise<{ name: string; url: string; headers: Record<string, string>; enabledTools?: string[] }[]>;
   sendApprovedDraft(principal: Principal, draft: P.Draft): Promise<{ providerMessageId: string | null; runId: string | null }>;
   emitProviderNotifications(notification: P.Notification): Promise<void>;
   channelIngress(input: { principal: Principal; botId: string; channelBindingId: string; externalThreadId: string; text: string; attachmentIds?: string[]; clientNonce: string }): Promise<P.MessageReceipt>;
@@ -90,6 +90,9 @@ export interface IntegrationServices {
   defaultBotIds?(principal: Principal): Promise<string[]>;
   authorizeConnector?(principal: Principal, input: { connectorId: string; botId: string; conversationId: string; toolName: string; operationId: string }): Promise<void>;
   connectorProvisioning?(principal: Principal, botId: string): Promise<unknown>;
+  authorizeExportAttachment?(principal: Principal, attachmentId: string): void;
+  assertChannelHandoff?(principal: Principal, source: P.Conversation, target: P.Bot, returnConversationId: string): void;
+  returnChannelHandoff?(principal: Principal, conversationId: string, text: string): Promise<void>;
 }
 export interface BackendConfiguration {
   publicUrl: string; controlUrl: string; operatorToken: string; dataDir: string; host: string; port: number;
