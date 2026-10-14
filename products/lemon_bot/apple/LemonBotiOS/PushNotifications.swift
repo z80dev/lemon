@@ -85,11 +85,20 @@ final class LemonBotAppDelegate: NSObject, UIApplicationDelegate, UNUserNotifica
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification, withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
         let workspaceID = notification.request.content.userInfo["workspaceId"] as? String
         let conversationID = notification.request.content.userInfo["conversationId"] as? String
+        let botID = (notification.request.content.userInfo["target"] as? [String: Any])?["botId"] as? String
         Task { @MainActor [weak self] in
-            guard let self else { completionHandler([.banner, .list, .sound]); return }
-            let sameWorkspace = workspaceID.map { $0 == self.store?.workspace?.id } ?? false
+            guard let self, let store = self.store, store.account != nil,
+                  workspaceID == store.workspace?.id,
+                  let preferences = store.user?.notifications, preferences.enabled else {
+                completionHandler([]); return
+            }
+            if let botID, let bot = store.bots.first(where: { $0.id == botID }),
+               bot.sidebar.hidden || !bot.sidebar.notificationsEnabled {
+                completionHandler([]); return
+            }
             let sameRoom = conversationID.map { $0 == self.visibleConversationID } ?? false
-            completionHandler(self.foreground && sameWorkspace && sameRoom ? [] : [.banner, .list, .sound])
+            if self.foreground && sameRoom { completionHandler([]); return }
+            completionHandler(preferences.sound ? [.banner, .list, .sound] : [.banner, .list])
         }
     }
 

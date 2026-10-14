@@ -5,6 +5,7 @@ import LemonBotKit
 import LemonBotUI
 import UniformTypeIdentifiers
 
+@MainActor
 @main
 struct LemonBotiOSApp: App {
     @UIApplicationDelegateAdaptor(LemonBotAppDelegate.self) private var delegate
