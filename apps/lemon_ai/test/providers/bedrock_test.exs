@@ -55,6 +55,18 @@ defmodule LemonAi.Providers.BedrockLegacyTest do
               error_message: "AWS_ACCESS_KEY_ID not found"
             }} =
              EventStream.result(stream, 1000)
+
+    {:ok, stream} =
+      Bedrock.stream(model, context, %StreamOptions{
+        headers: %{"aws_access_key_id" => "AKIAIOSFODNN7EXAMPLE"}
+      })
+
+    assert {:error,
+            %LemonAi.Types.AssistantMessage{
+              stop_reason: :error,
+              error_message: "AWS_SECRET_ACCESS_KEY not found"
+            }} =
+             EventStream.result(stream, 1000)
   end
 
   test "request body snapshot includes system, tools, cache points, and thinking config" do

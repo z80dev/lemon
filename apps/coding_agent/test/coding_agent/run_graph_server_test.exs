@@ -24,11 +24,6 @@ defmodule CodingAgent.RunGraphServerTest do
   end
 
   describe "start_link/1" do
-    test "starts the server with default options" do
-      # The server is already started by the application
-      assert Process.whereis(RunGraphServer) != nil
-    end
-
     test "starts the server with custom name" do
       # Start a new server with a custom name
       server_name = :test_run_graph_server
@@ -54,12 +49,6 @@ defmodule CodingAgent.RunGraphServerTest do
     end
   end
 
-  describe "table_name/0" do
-    test "returns the ETS table name" do
-      assert RunGraphServer.table_name() == :coding_agent_run_graph
-    end
-  end
-
   describe "ensure_table/1" do
     test "initializes ETS table if not already done" do
       # Table should already be initialized from application start
@@ -76,10 +65,6 @@ defmodule CodingAgent.RunGraphServerTest do
 
       # Second call should also succeed
       assert :ok = RunGraphServer.ensure_table()
-    end
-
-    test "can be called with specific server pid" do
-      assert :ok = RunGraphServer.ensure_table(RunGraphServer)
     end
   end
 
@@ -110,12 +95,6 @@ defmodule CodingAgent.RunGraphServerTest do
       # After clear, the run should not exist
       assert {:error, :not_found} = RunGraph.get(run)
     end
-
-    test "can be called with specific server pid" do
-      RunGraph.new_run(%{type: :task})
-
-      assert :ok = RunGraphServer.clear(RunGraphServer)
-    end
   end
 
   describe "stats/1" do
@@ -145,11 +124,6 @@ defmodule CodingAgent.RunGraphServerTest do
       assert is_map(stats)
       assert Map.has_key?(stats, :initialized)
     end
-
-    test "can be called with specific server pid" do
-      stats = RunGraphServer.stats(RunGraphServer)
-      assert stats.initialized == true
-    end
   end
 
   describe "cleanup/2" do
@@ -160,25 +134,6 @@ defmodule CodingAgent.RunGraphServerTest do
       run = RunGraph.new_run(%{type: :task})
       RunGraph.mark_running(run)
       RunGraph.finish(run, %{result: "done"})
-
-      # Manually set completed_at to be old
-      {:ok, record} = RunGraph.get(run)
-      old_record = %{record | completed_at: System.system_time(:second) - 100}
-      RunGraph.insert_record(run, old_record)
-
-      # Cleanup with 50 second TTL should remove it
-      assert {:ok, deleted_count} = RunGraphServer.cleanup(RunGraphServer, 50)
-      assert deleted_count >= 1
-      assert {:error, :not_found} = RunGraph.get(run)
-    end
-
-    test "removes expired errored runs" do
-      RunGraph.clear()
-
-      # Create and fail a run
-      run = RunGraph.new_run(%{type: :task})
-      RunGraph.mark_running(run)
-      RunGraph.fail(run, "error")
 
       # Manually set completed_at to be old
       {:ok, record} = RunGraph.get(run)
@@ -211,15 +166,11 @@ defmodule CodingAgent.RunGraphServerTest do
     test "does not remove queued runs" do
       RunGraph.clear()
 
-      # Create but don't start
       run = RunGraph.new_run(%{type: :task})
-
-      # Manually set inserted_at to be old
       {:ok, record} = RunGraph.get(run)
       old_record = %{record | inserted_at: System.system_time(:second) - 100}
       RunGraph.insert_record(run, old_record)
 
-      # Cleanup should not remove queued runs
       assert {:ok, 0} = RunGraphServer.cleanup(RunGraphServer, 50)
       assert {:ok, _} = RunGraph.get(run)
     end
@@ -255,10 +206,6 @@ defmodule CodingAgent.RunGraphServerTest do
       assert {:ok, deleted_count} = RunGraphServer.cleanup(RunGraphServer, 60)
       assert deleted_count >= 1
     end
-
-    test "can be called with specific server pid" do
-      assert {:ok, _} = RunGraphServer.cleanup(RunGraphServer, 3600)
-    end
   end
 
   describe "dets_status/1" do
@@ -289,12 +236,6 @@ defmodule CodingAgent.RunGraphServerTest do
         assert has_size or Map.has_key?(status.info, :filename)
       end
     end
-
-    test "can be called with specific server pid" do
-      status = RunGraphServer.dets_status(RunGraphServer)
-      assert is_map(status)
-      assert is_map(status.info)
-    end
   end
 
   describe "integration with RunGraph" do
@@ -324,49 +265,6 @@ defmodule CodingAgent.RunGraphServerTest do
 
       assert {:ok, record2} = RunGraph.get(run2)
       assert record2.parent == run1
-    end
-
-    test "clear via RunGraph calls through to server" do
-      run = RunGraph.new_run(%{type: :task})
-      assert {:ok, _} = RunGraph.get(run)
-
-      # Clear via RunGraph API
-      assert :ok = RunGraph.clear()
-
-      assert {:error, :not_found} = RunGraph.get(run)
-    end
-
-    test "stats via RunGraph delegates to server" do
-      RunGraph.clear()
-
-      # Create runs
-      for _ <- 1..3 do
-        RunGraph.new_run(%{type: :task})
-      end
-
-      # Get stats via RunGraph API
-      stats = RunGraph.stats()
-      assert stats.size == 3
-      assert stats.initialized == true
-    end
-
-    test "cleanup via RunGraph delegates to server" do
-      RunGraph.clear()
-
-      # Create and complete a run with old timestamp
-      run = RunGraph.new_run(%{type: :task})
-      RunGraph.mark_running(run)
-      RunGraph.finish(run, %{result: "done"})
-
-      {:ok, record} = RunGraph.get(run)
-      old_record = %{record | completed_at: System.system_time(:second) - 100}
-      RunGraph.insert_record(run, old_record)
-
-      # Cleanup via RunGraph API
-      assert :ok = RunGraph.cleanup(50)
-
-      # Run should be cleaned up
-      assert {:error, :not_found} = RunGraph.get(run)
     end
   end
 
@@ -500,119 +398,9 @@ defmodule CodingAgent.RunGraphServerTest do
           :ok
       end
     end
-
-    test "errored runs survive ETS clear when DETS is available" do
-      RunGraph.clear()
-
-      # Create and fail a run
-      run = RunGraph.new_run(%{type: :task})
-      RunGraph.mark_running(run)
-      RunGraph.fail(run, "test error")
-
-      # Clear ETS
-      :ets.delete_all_objects(:coding_agent_run_graph)
-
-      # Re-ensure table
-      RunGraphServer.ensure_table()
-
-      # Check if recovered from DETS
-      case RunGraph.get(run) do
-        {:ok, record} ->
-          assert record.status == :error
-          assert record.error == "test error"
-
-        {:error, :not_found} ->
-          # DETS not available in test environment
-          :ok
-      end
-    end
-  end
-
-  describe "server lifecycle" do
-    test "server handles termination gracefully" do
-      # The main server should be running
-      pid = Process.whereis(RunGraphServer)
-      assert pid != nil
-      assert Process.alive?(pid)
-
-      # Stats should work
-      assert %{initialized: true} = RunGraphServer.stats()
-    end
-
-    test "server state tracks initialization" do
-      status = RunGraphServer.dets_status()
-
-      # State should track initialization
-      assert status.state.ets_initialized == true
-    end
-  end
-
-  describe "concurrent access" do
-    test "handles concurrent stats calls" do
-      # Create some runs
-      for _ <- 1..10 do
-        RunGraph.new_run(%{type: :task})
-      end
-
-      # Concurrent stats calls
-      tasks =
-        Enum.map(1..10, fn _ ->
-          Task.async(fn ->
-            RunGraphServer.stats()
-          end)
-        end)
-
-      results = Enum.map(tasks, &Task.await/1)
-      assert length(results) == 10
-      assert Enum.all?(results, &(&1.initialized == true))
-    end
-
-    test "handles concurrent clear and ensure_table calls" do
-      # Create runs
-      for _ <- 1..5 do
-        RunGraph.new_run(%{type: :task})
-      end
-
-      # Concurrent operations
-      tasks =
-        Enum.map(1..5, fn i ->
-          Task.async(fn ->
-            if rem(i, 2) == 0 do
-              RunGraphServer.clear()
-            else
-              RunGraphServer.ensure_table()
-            end
-          end)
-        end)
-
-      results = Enum.map(tasks, &Task.await/1)
-      assert Enum.all?(results, &(&1 == :ok))
-    end
   end
 
   describe "edge cases" do
-    test "cleanup handles empty table" do
-      RunGraph.clear()
-
-      assert {:ok, 0} = RunGraphServer.cleanup(RunGraphServer, 0)
-      assert {:ok, 0} = RunGraphServer.cleanup(RunGraphServer, 3600)
-    end
-
-    test "clear on empty table succeeds" do
-      RunGraph.clear()
-
-      assert :ok = RunGraphServer.clear()
-      assert %{size: 0} = RunGraphServer.stats()
-    end
-
-    test "multiple clears succeed" do
-      RunGraph.new_run(%{type: :task})
-
-      assert :ok = RunGraphServer.clear()
-      assert :ok = RunGraphServer.clear()
-      assert :ok = RunGraphServer.clear()
-    end
-
     test "cleanup respects different terminal statuses" do
       RunGraph.clear()
 

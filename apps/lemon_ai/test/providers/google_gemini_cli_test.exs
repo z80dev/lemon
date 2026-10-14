@@ -1193,18 +1193,126 @@ defmodule LemonAi.Providers.GoogleGeminiCliTest do
       assert result.error_message =~ "404"
     end
 
-    test "handles non-JSON error responses" do
+    test "non-JSON server failures retain typed status after bounded retries" do
       Req.Test.stub(__MODULE__, fn conn ->
         conn
         |> Plug.Conn.put_resp_content_type("text/plain")
-        |> Plug.Conn.send_resp(500, "Internal Server Error")
+        |> Plug.Conn.send_resp(500, "Internal Server Error. token=private-server-credential")
       end)
 
       {:ok, stream} = GoogleGeminiCli.stream(default_model(), default_context(), default_opts())
 
       assert {:error, result} = EventStream.result(stream, 10_000)
       assert result.stop_reason == :error
-      assert result.error_message =~ "500"
+      assert %{status: 500, category: :server, retryable: true} = result.error_details
+      assert byte_size(result.error_message) in 1..512
+      refute Jason.encode!(result.error_details) =~ "private-server-credential"
+      refute result.error_message =~ "Req.Response"
+    end
+
+    test "non-JSON client errors retain typed classification without exposing upstream secrets" do
+      secret = "upstream-only-credential"
+
+      Req.Test.stub(__MODULE__, fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("text/plain")
+        |> Plug.Conn.send_resp(400, "Invalid request. Authorization: Bearer #{secret}")
+      end)
+
+      {:ok, stream} = GoogleGeminiCli.stream(default_model(), default_context(), default_opts())
+
+      assert {:error, result} = EventStream.result(stream, 5000)
+      assert result.stop_reason == :error
+      assert %{status: 400, category: :client, retryable: false} = result.error_details
+      assert byte_size(result.error_message) in 1..512
+      assert result.error_details.provider_message == nil
+      public_error = Jason.encode!(result.error_details)
+      refute public_error =~ secret
+      refute public_error =~ "test-oauth-token"
+      refute public_error =~ "Req.Response"
+    end
+
+    test "bounded async error bodies are consumed and canceled before returning a classified failure" do
+      test_pid = self()
+      secret = "upstream-only-credential"
+
+      Req.default_options(
+        plug: nil,
+        adapter: fn request ->
+          ref = make_ref()
+
+          async = %Req.Response.Async{
+            ref: ref,
+            pid: self(),
+            stream_fun: fn
+              ^ref, {^ref, {:data, data}} -> {:ok, [data: data]}
+              ^ref, {^ref, :done} -> {:ok, [:done]}
+            end,
+            cancel_fun: fn ^ref ->
+              # The oversized body must stop collection before the completion
+              # message, then close the transport and clean up that message.
+              cleaned =
+                receive do
+                  {^ref, :done} -> true
+                after
+                  0 -> false
+                end
+
+              send(test_pid, {:transport_canceled, cleaned})
+              :ok
+            end
+          }
+
+          send(self(), {ref, {:data, "Prompt is too long. Bearer #{secret}."}})
+          send(self(), {ref, {:data, String.duplicate("x", 32_768)}})
+          send(self(), {ref, :done})
+          {request, Req.Response.new(status: 400, body: async)}
+        end
+      )
+
+      {:ok, stream} = GoogleGeminiCli.stream(default_model(), default_context(), default_opts())
+
+      assert {:error, result} = EventStream.result(stream, 5000)
+      assert_receive {:transport_canceled, true}
+      refute_receive {:transport_canceled, _}
+      assert %{status: 400, category: :context_length, retryable: false} = result.error_details
+      assert LemonAi.Error.failover_action(result) == :compact
+      assert byte_size(result.error_message) in 1..512
+      assert result.error_details.provider_message == nil
+      public_error = Jason.encode!(result.error_details)
+      refute public_error =~ secret
+      refute public_error =~ "test-oauth-token"
+      refute public_error =~ "Req.Response"
+      refute public_error =~ String.duplicate("x", 100)
+    end
+
+    test "an HTTP failure after an empty stream retry retains typed actionable classification" do
+      request_key = make_ref()
+      test_pid = self()
+
+      Req.Test.stub(__MODULE__, fn conn ->
+        attempt = Process.get(request_key, 0)
+        Process.put(request_key, attempt + 1)
+        send(test_pid, {:request_attempt, attempt})
+
+        if attempt == 0 do
+          Plug.Conn.send_resp(conn, 200, "")
+        else
+          Plug.Conn.send_resp(conn, 400, "Prompt is too long. token=private-retry-credential")
+        end
+      end)
+
+      {:ok, stream} = GoogleGeminiCli.stream(default_model(), default_context(), default_opts())
+
+      assert {:error, result} = EventStream.result(stream, 5000)
+      assert_receive {:request_attempt, 0}
+      assert_receive {:request_attempt, 1}
+      refute_receive {:request_attempt, _}
+      assert %{status: 400, category: :context_length, retryable: false} = result.error_details
+      assert LemonAi.Error.failover_action(result) == :compact
+      assert byte_size(result.error_message) in 1..512
+      refute Jason.encode!(result.error_details) =~ "private-retry-credential"
+      refute result.error_message =~ "Req.Response"
     end
 
     test "handles malformed SSE data gracefully" do

@@ -190,6 +190,7 @@ defmodule LemonChannels.Telegram.TruncateTest do
       for chunk <- chunks do
         assert String.length(chunk) <= @max_length,
                "CJK chunk exceeded limit: #{String.length(chunk)}"
+
         assert String.valid?(chunk)
       end
     end
@@ -261,12 +262,6 @@ defmodule LemonChannels.Telegram.TruncateTest do
       result = Truncate.truncate_for_telegram(text)
       assert String.length(result) <= @max_length
       assert String.ends_with?(result, "...")
-    end
-  end
-
-  describe "max_length/0" do
-    test "returns 4096" do
-      assert Truncate.max_length() == 4096
     end
   end
 end

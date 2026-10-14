@@ -37,6 +37,13 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 - The Claude Code user agent uses the newer of the installed CLI version and
   2.1.296, detected once per `PATH` instead of on every request.
 
+### Fixed
+
+- Gemini CLI / Cloud Code Assist now consumes bounded non-success streaming
+  response bodies and closes their transports before classifying or retrying.
+  Failures retain typed HTTP status, retry metadata and actionable classification
+  without exposing upstream body text, credentials or Req transport structs.
+
 ## [0.2.0] - 2026-10-13
 
 First release as a standalone package. `lemon_ai` was extracted from the Lemon

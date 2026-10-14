@@ -54,7 +54,7 @@ jobs:
         run: |
           scripts/test path \
             apps/coding_agent/test/coding_agent/session_overflow_recovery_test.exs \
-            apps/lemon_skills/test/lemon_skills/discovery_readme_test.exs \
+            apps/lemon_skills/test/lemon_skills/discovery_test.exs \
             apps/lemon_skills/test/mix/tasks/lemon.skill_test.exs \
             apps/lemon_skills/test/lemon_skills/prompt_regression_test.exs \
             --repeat-until-failure 5

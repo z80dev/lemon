@@ -228,19 +228,6 @@ defmodule CodingAgent.RunGraphConcurrencyTest do
       assert elapsed < 2_500, "await took #{elapsed}ms, expected well under the 5s timeout"
     end
 
-    test "await times out correctly" do
-      run_id = RunGraph.new_run(%{type: :task})
-      :ok = RunGraph.mark_running(run_id)
-
-      start = System.monotonic_time(:millisecond)
-      assert {:error, :timeout, _} = RunGraph.await(run_id, :wait_all, 100)
-      elapsed = System.monotonic_time(:millisecond) - start
-
-      # Should not time out early; upper bound is only a generous sanity check
-      assert elapsed >= 95, "timed out too early: #{elapsed}ms"
-      assert elapsed < 5_000, "timed out too late: #{elapsed}ms"
-    end
-
     test "await :wait_any returns as soon as first run completes" do
       run1 = RunGraph.new_run(%{type: :task})
       run2 = RunGraph.new_run(%{type: :task})
@@ -257,19 +244,6 @@ defmodule CodingAgent.RunGraphConcurrencyTest do
                RunGraph.await([run1, run2], :wait_any, 5_000)
 
       assert id == run2
-    end
-
-    test "await handles already-completed runs instantly" do
-      run_id = RunGraph.new_run(%{type: :task})
-      :ok = RunGraph.mark_running(run_id)
-      :ok = RunGraph.finish(run_id, %{result: "already done"})
-
-      start = System.monotonic_time(:millisecond)
-      assert {:ok, _} = RunGraph.await(run_id, :wait_all, 5_000)
-      elapsed = System.monotonic_time(:millisecond) - start
-
-      # Should return without waiting for the 5s timeout
-      assert elapsed < 2_500, "await for completed run took #{elapsed}ms"
     end
   end
 

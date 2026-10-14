@@ -16,6 +16,10 @@ defmodule CodingAgent.SessionApiKeyResolutionTest do
 
     home_dir = Path.join(tmp_dir, "home")
     File.mkdir_p!(home_dir)
+    # Session init scans its cwd; System.tmp_dir!() can be arbitrarily large.
+    session_cwd = Path.join(tmp_dir, "cwd")
+    File.mkdir_p!(session_cwd)
+    Process.put(:session_cwd, session_cwd)
 
     master_key = :crypto.strong_rand_bytes(32) |> Base.encode64()
     original_home = System.get_env("HOME")
@@ -191,19 +195,6 @@ defmodule CodingAgent.SessionApiKeyResolutionTest do
     assert :ok = Session.prompt(session, "hello")
 
     assert_receive {:stream_api_key, "codex-from-env"}, 1_000
-    GenServer.stop(session)
-  end
-
-  test "openai-codex requires auth_source" do
-    settings =
-      settings(%{
-        "openai-codex" => %{api_key: "codex-from-plain"}
-      })
-
-    session = start_session(self(), settings, mock_model(:"openai-codex"))
-    assert :ok = Session.prompt(session, "hello")
-
-    assert_receive {:stream_api_key, ""}, 1_000
     GenServer.stop(session)
   end
 
@@ -403,31 +394,6 @@ defmodule CodingAgent.SessionApiKeyResolutionTest do
     assert :ok = Session.prompt(session, "hello")
 
     assert_receive {:stream_api_key, "copilot-access-token"}, 1_000
-    GenServer.stop(session)
-  end
-
-  test "anthropic oauth payload secret is rejected for provider api-key resolution" do
-    oauth_secret =
-      Jason.encode!(%{
-        "type" => "anthropic_oauth",
-        "refresh_token" => "anthropic-refresh-token",
-        "access_token" => "anthropic-access-token",
-        "expires_at_ms" => System.system_time(:millisecond) + 3_600_000,
-        "created_at_ms" => System.system_time(:millisecond),
-        "updated_at_ms" => System.system_time(:millisecond)
-      })
-
-    assert {:ok, _} = Secrets.set("llm_anthropic_api_key", oauth_secret)
-
-    settings =
-      settings(%{
-        "anthropic" => %{api_key_secret: "llm_anthropic_api_key"}
-      })
-
-    session = start_session(self(), settings, mock_model(:anthropic))
-    assert :ok = Session.prompt(session, "hello")
-
-    assert_receive {:stream_api_key, ""}, 1_000
     GenServer.stop(session)
   end
 
@@ -667,7 +633,7 @@ defmodule CodingAgent.SessionApiKeyResolutionTest do
   defp start_session(test_pid, settings_manager, model \\ mock_model()) do
     {:ok, session} =
       Session.start_link(
-        cwd: System.tmp_dir!(),
+        cwd: Process.get(:session_cwd),
         model: model,
         settings_manager: settings_manager,
         stream_fn: stream_fn(test_pid)

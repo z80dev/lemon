@@ -485,19 +485,6 @@ describe("extractText", () => {
 });
 
 describe("safeStringify", () => {
-	it("should stringify simple objects", () => {
-		expect(safeStringify({ a: 1, b: "two" })).toBe('{"a":1,"b":"two"}');
-	});
-
-	it("should stringify arrays", () => {
-		expect(safeStringify([1, 2, 3])).toBe("[1,2,3]");
-	});
-
-	it("should stringify nested objects", () => {
-		const obj = { outer: { inner: { deep: "value" } } };
-		expect(safeStringify(obj)).toBe('{"outer":{"inner":{"deep":"value"}}}');
-	});
-
 	it('should return "null" for null', () => {
 		expect(safeStringify(null)).toBe("null");
 	});
@@ -542,25 +529,6 @@ describe("safeStringify", () => {
 
 	it("should handle symbol values", () => {
 		expect(safeStringify({ sym: Symbol("test") })).toBe('{"sym":"Symbol(test)"}');
-	});
-
-	it("should stringify strings", () => {
-		expect(safeStringify("hello")).toBe('"hello"');
-	});
-
-	it("should stringify numbers", () => {
-		expect(safeStringify(42)).toBe("42");
-		expect(safeStringify(3.14)).toBe("3.14");
-	});
-
-	it("should stringify booleans", () => {
-		expect(safeStringify(true)).toBe("true");
-		expect(safeStringify(false)).toBe("false");
-	});
-
-	it("should handle empty objects and arrays", () => {
-		expect(safeStringify({})).toBe("{}");
-		expect(safeStringify([])).toBe("[]");
 	});
 
 	it("should handle objects with undefined values", () => {

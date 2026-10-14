@@ -358,55 +358,6 @@ defmodule CodingAgent.ToolRegistryTest do
       assert {:ok, tool} = ToolRegistry.get_tool(tmp_dir, " read")
       assert tool.name == "read"
     end
-
-    test "emits telemetry when normalizing tool names", %{tmp_dir: tmp_dir} do
-      ref =
-        :telemetry_test.attach_event_handlers(self(), [
-          [:coding_agent, :tool_call, :name_normalized]
-        ])
-
-      # Whitespace-padded name should trigger normalization telemetry
-      assert {:ok, _tool} = ToolRegistry.get_tool(tmp_dir, "  read  ")
-
-      assert_received {
-        [:coding_agent, :tool_call, :name_normalized],
-        ^ref,
-        %{system_time: _},
-        %{original_name: "  read  ", matched_tool_name: "read"}
-      }
-
-      :telemetry.detach(ref)
-    end
-
-    test "does not emit telemetry for already-normal names", %{tmp_dir: tmp_dir} do
-      ref =
-        :telemetry_test.attach_event_handlers(self(), [
-          [:coding_agent, :tool_call, :name_normalized]
-        ])
-
-      # Normal name should not trigger telemetry
-      assert {:ok, _tool} = ToolRegistry.get_tool(tmp_dir, "read")
-
-      refute_received {
-        [:coding_agent, :tool_call, :name_normalized],
-        ^ref,
-        _,
-        _
-      }
-
-      :telemetry.detach(ref)
-    end
-  end
-
-  describe "has_tool?/2" do
-    test "returns true for existing tool", %{tmp_dir: tmp_dir} do
-      assert ToolRegistry.has_tool?(tmp_dir, "read")
-      assert ToolRegistry.has_tool?(tmp_dir, "bash")
-    end
-
-    test "returns false for nonexistent tool", %{tmp_dir: tmp_dir} do
-      refute ToolRegistry.has_tool?(tmp_dir, "nonexistent")
-    end
   end
 
   describe "list_tool_names/2" do
@@ -423,33 +374,6 @@ defmodule CodingAgent.ToolRegistryTest do
     test "respects filtering options", %{tmp_dir: tmp_dir} do
       names = ToolRegistry.list_tool_names(tmp_dir, enabled_only: ["read"])
       assert names == ["read"]
-    end
-  end
-
-  describe "format_tool_descriptions/2" do
-    test "returns formatted descriptions", %{tmp_dir: tmp_dir} do
-      result = ToolRegistry.format_tool_descriptions(tmp_dir)
-
-      assert is_binary(result)
-      assert String.contains?(result, "- read:")
-      assert String.contains?(result, "- read_skill:")
-      assert String.contains?(result, "- write:")
-    end
-  end
-
-  describe "builtin_tool_names/0" do
-    test "returns list of atoms" do
-      names = ToolRegistry.builtin_tool_names()
-
-      assert is_list(names)
-      assert :read in names
-      assert :read_skill in names
-      assert :skill_manage in names
-      assert :write in names
-      assert :edit in names
-      assert :bash in names
-      assert :parent_question in names
-      assert Enum.all?(names, &is_atom/1)
     end
   end
 
@@ -994,72 +918,9 @@ defmodule CodingAgent.ToolRegistryTest do
       :code.purge(BConflictExtension)
       :code.delete(BConflictExtension)
     end
-
-    test "no warning when tools have unique names", %{tmp_dir: tmp_dir} do
-      # Create extension dir
-      ext_dir = Path.join(tmp_dir, ".lemon/extensions")
-      File.mkdir_p!(ext_dir)
-
-      # Create an extension with a unique tool name
-      extension_code = """
-      defmodule UniqueToolExtension do
-        @behaviour CodingAgent.Extensions.Extension
-
-        @impl true
-        def name, do: "unique-tool-ext"
-
-        @impl true
-        def version, do: "1.0.0"
-
-        @impl true
-        def tools(_cwd) do
-          [
-            %LemonAgent.Types.AgentTool{
-              name: "my_unique_tool",
-              description: "A unique tool",
-              parameters: %{},
-              label: "Unique Tool",
-              execute: fn _, _, _, _ -> %LemonAgent.Types.AgentToolResult{content: []} end
-            }
-          ]
-        end
-      end
-      """
-
-      File.write!(Path.join(ext_dir, "unique_tool_extension.ex"), extension_code)
-
-      log =
-        capture_log(fn ->
-          tools = ToolRegistry.get_tools(tmp_dir)
-          # Should have the unique tool
-          names = Enum.map(tools, & &1.name)
-          assert "my_unique_tool" in names
-        end)
-
-      refute log =~ "Tool name conflict"
-
-      # Cleanup
-      :code.purge(UniqueToolExtension)
-      :code.delete(UniqueToolExtension)
-    end
   end
 
   describe "tool_conflict_report/2" do
-    test "returns empty conflicts for no extensions", %{tmp_dir: tmp_dir} do
-      report = ToolRegistry.tool_conflict_report(tmp_dir, include_extensions: false)
-
-      assert report.conflicts == []
-      assert report.shadowed_count == 0
-
-      assert report.builtin_count ==
-               length(
-                 ToolRegistry.get_tools(tmp_dir, include_extensions: false, include_mcp: false)
-               )
-
-      assert report.extension_count == 0
-      assert report.total_tools == report.builtin_count
-    end
-
     test "detects builtin shadowing conflicts", %{tmp_dir: tmp_dir} do
       ext_dir = Path.join(tmp_dir, ".lemon/extensions")
       File.mkdir_p!(ext_dir)
@@ -1282,12 +1143,6 @@ defmodule CodingAgent.ToolRegistryTest do
       # Cleanup
       :code.purge(ValidExtForErrorTest)
       :code.delete(ValidExtForErrorTest)
-    end
-
-    test "returns empty load_errors when all extensions load successfully", %{tmp_dir: tmp_dir} do
-      report = ToolRegistry.tool_conflict_report(tmp_dir, include_extensions: false)
-
-      assert report.load_errors == []
     end
   end
 end

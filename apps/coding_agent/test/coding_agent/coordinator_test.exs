@@ -155,6 +155,18 @@ defmodule CodingAgent.CoordinatorTest do
     end
   end
 
+  test "stale and unknown mailbox messages leave the coordinator available" do
+    coordinator = start_coordinator()
+    send(coordinator, {:DOWN, make_ref(), :process, self(), :normal})
+    send(coordinator, {:session_event, "unknown-session-id", {:agent_end, []}})
+    send(coordinator, :unknown_atom)
+    send(coordinator, {:unknown, :tuple, 123})
+    send(coordinator, %{unknown: "map"})
+
+    assert Coordinator.list_active(coordinator) == []
+    assert Process.alive?(coordinator)
+  end
+
   # ============================================================================
   # Basic Subagent Spawning Tests
   # ============================================================================
@@ -348,6 +360,17 @@ defmodule CodingAgent.CoordinatorTest do
 
       # Should have no active subagents once cleanup completes
       assert_eventually(fn -> Coordinator.list_active(coordinator) == [] end, 5_000)
+    end
+
+    @tag :tmp_dir
+    test "zero timeout returns without starting a session", %{tmp_dir: tmp_dir} do
+      coordinator = start_coordinator(cwd: tmp_dir)
+
+      assert [result] = Coordinator.run_subagents(coordinator, [%{prompt: "Task"}], timeout: 0)
+      assert result.status == :timeout
+      assert result.session_id == nil
+      assert Coordinator.list_active(coordinator) == []
+      assert Process.alive?(coordinator)
     end
   end
 
