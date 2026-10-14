@@ -14,6 +14,8 @@ defmodule CodingAgent.Session.ProviderFallbackHttpSmokeTest do
     Application.put_env(:lemon_ai, :provider_retry, max_attempts: 1)
     CredentialHealth.reset()
     SessionPins.reset()
+    LemonAi.CircuitBreaker.reset(:openai)
+    {:ok, _} = LemonAi.CircuitBreaker.get_state(:openai)
 
     {:ok, listener} =
       :gen_tcp.listen(0, [:binary, active: false, reuseaddr: true, ip: {127, 0, 0, 1}])
@@ -27,6 +29,7 @@ defmodule CodingAgent.Session.ProviderFallbackHttpSmokeTest do
       Process.exit(server, :normal)
       CredentialHealth.reset()
       SessionPins.reset()
+      LemonAi.CircuitBreaker.reset(:openai)
 
       if previous_retry do
         Application.put_env(:lemon_ai, :provider_retry, previous_retry)
