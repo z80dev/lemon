@@ -118,6 +118,7 @@ defmodule CodingAgent.ExtensionLifecycleDisclosureTest do
     } do
       parent = self()
       test_pid = inspect(:erlang.pid_to_list(parent))
+
       module =
         create_extension_file(tmp_dir, "DisclosureSecretExt#{System.unique_integer([:positive])}",
           hooks: """
@@ -132,6 +133,7 @@ defmodule CodingAgent.ExtensionLifecycleDisclosureTest do
 
       on_exit(fn -> cleanup_module(module) end)
       secret = "fixture-disclosure-secret"
+
       obfuscator =
         CodingAgent.Security.SecretObfuscator.build(
           cwd: tmp_dir,
@@ -141,6 +143,7 @@ defmodule CodingAgent.ExtensionLifecycleDisclosureTest do
 
       placeholder = CodingAgent.Security.SecretObfuscator.obfuscate(obfuscator, secret)
       path = Path.join(tmp_dir, "restored.txt")
+
       inventory = [
         mcp_tool("mcp_secret_writer",
           execute: fn _, args, _, _ ->
@@ -159,6 +162,7 @@ defmodule CodingAgent.ExtensionLifecycleDisclosureTest do
         ]
 
         initial = ExtensionLifecycle.initialize(opts)
+
         reloaded =
           ExtensionLifecycle.reload(
             Keyword.put(opts, :previous_status_report, initial.extension_status_report)
@@ -175,6 +179,7 @@ defmodule CodingAgent.ExtensionLifecycleDisclosureTest do
           if lifecycle.tool_disclosure.active do
             refute find(lifecycle.tools, "mcp_secret_writer")
             invoke = find(lifecycle.tools, "tool_invoke")
+
             assert %AgentToolResult{is_error: false} =
                      invoke.execute.(
                        "bridge",
@@ -633,6 +638,8 @@ defmodule CodingAgent.ExtensionLifecycleDisclosureTest do
 
       @impl true
       def tools(_cwd), do: #{tools}
+
+      @impl true
       def hooks, do: #{hooks}
     end
     """

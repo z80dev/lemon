@@ -232,12 +232,13 @@ defmodule CodingAgent.Session.Presentation do
     CodingAgent.SessionManager.session_file_path(cwd, session_id)
   end
 
-  def finalize_session(state) do
+  def finalize_session(state, preserve_tool_resources \\ false) do
     session = state.session
 
     if is_pid(session) and Process.alive?(session) do
       case safe_save_session(session) do
         :ok ->
+          if preserve_tool_resources, do: CodingAgent.Session.handoff_tool_resources(session)
           :ok
 
         {:error, reason} ->
@@ -428,6 +429,8 @@ defmodule CodingAgent.Session.Presentation do
       "bash" -> :command
       "bash_output" -> :command
       "kill_process" -> :command
+      "eval" -> :command
+      "debug" -> :command
       "read" -> :tool
       "write" -> :file_change
       "edit" -> :file_change
@@ -459,6 +462,15 @@ defmodule CodingAgent.Session.Presentation do
 
       "kill_process" ->
         "kill: #{a["process_id"] || ""}"
+
+      "eval" ->
+        label = a["title"] || (a["code"] || "") |> String.split("\n") |> hd()
+        "eval #{a["language"] || ""}: `#{String.slice(label, 0, 60)}`"
+
+      "debug" ->
+        target = a["program"] || a["expression"] || a["function"] || a["command"]
+        target = target || if(a["file"], do: "#{path_label(a["file"])}:#{a["line"]}")
+        String.trim("debug: #{a["action"] || ""} #{String.slice(target || "", 0, 60)}")
 
       "read" ->
         path = a["path"] || a["file_path"] || ""

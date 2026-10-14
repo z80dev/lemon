@@ -10,6 +10,41 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- `bash` tool: per-command `cwd` and validated `env` parameters (foreground,
+  PTY, background and ACP terminals; approvals show env names only), and
+  `skill://`/`artifact://` references in commands expand to absolute file paths.
+- `eval` coding tool: persistent per-session Python (`python3`) and JavaScript
+  (Bun, or Node) kernels with streamed output, trailing-expression display,
+  top-level `await`, `reset`, and timeout/abort that kill the kernel tree.
+  Output follows the `bash` cap and spill handle. See [Eval](docs/tools/eval.md).
+- **`lsp` coding tool.** Agents can ask a real language server for diagnostics,
+  definitions, type definitions, implementations, references, hover, document
+  and workspace symbols, renames (previewed unless `apply: true`), code actions
+  (listed, or one applied including server commands) and raw requests. Servers
+  are chosen by file extension and reused per durable session and workspace
+  root; applied edits are locked, checkpointed and written atomically. Server
+  edit acknowledgements follow actual application, and
+  multi-batch actions retain all checkpoints on success, partial failure or
+  cancellation for complete rewind. `status` shows which servers are installed
+  or running. See [LSP tools](docs/tools/lsp.md).
+- `debug` coding tool: a Debug Adapter Protocol client for `lldb-dap`, `gdb`,
+  `debugpy` and `dlv` with breakpoints (source, conditional, function), launch
+  and attach, stepping, stack/scope/variable inspection, expression
+  evaluation, captured program output and raw `custom_request`. Debug sessions
+  are owned by the durable coding session. See [Debugger](docs/tools/debug.md).
+  Native eval, debugger and language-server resources survive successful saved
+  turn handoff and resume under the same identity; explicit stop, abort, reset,
+  owner loss, logical history deletion and idle expiry dispose them.
+- `read` accepts path line selectors (`file:50-80`, `file:50+20`, `file:50`,
+  `file:-30`, `:raw`) on files, archive members and internal references, and
+  opens SQLite databases read-only (`app.db`, `app.db:table`,
+  `app.db:table:key`, `app.db:table?limit=&offset=&where=&order=`,
+  `app.db?q=SELECT ...`).
+- `grep` gains `skip` paging plus `hidden`/`no_ignore`; ignored and hidden files
+  are now skipped by the Elixir fallback too, matching ripgrep.
+- `webfetch` converts PDF responses to page text and handles GitHub blob URLs
+  (raw file) and issue/pull request URLs (REST API rendering).
+- `websearch` providers: Tavily, Kagi (V1 API) and Jina.
 - **Custom providers and models.** A `[providers.<id>]` table with `api`,
   `base_url`, `api_key_env`/`api_key`/`api_key_secret`, optional
   `auth = "none"`, `headers`, `discovery = "openai" | "ollama"` and

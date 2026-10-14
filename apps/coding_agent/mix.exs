@@ -35,12 +35,14 @@ defmodule CodingAgent.MixProject do
       {:lemon_gateway, in_umbrella: true},
       {:lemon_memory, in_umbrella: true},
       {:lemon_browser, in_umbrella: true},
+      {:lemon_lsp, in_umbrella: true},
       {:lemon_platform_test, in_umbrella: true, only: :test, runtime: false},
       {:jason, "~> 1.4"},
       {:yaml_elixir, "~> 2.9"},
       {:websockex, "~> 0.4"},
       {:req, "~> 0.5"},
       {:readability, "~> 0.12"},
+      {:exqlite, "~> 0.34.0"},
       {:floki, "~> 0.38"},
       {:httpoison, "~> 3.0", override: true}
     ]

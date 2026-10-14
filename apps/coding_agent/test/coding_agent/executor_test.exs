@@ -73,7 +73,12 @@ defmodule CodingAgent.ExecutorTest do
     test "emits started, delta, tool action, and completed events", %{tmp_dir: tmp_dir} do
       tool_response =
         assistant_message_with_tool_calls([
-          tool_call("bash", %{"command" => "printf executor-tool"}, id: "call_executor")
+          tool_call(
+            "bash",
+            %{
+              "command" => "printf executor-tool",
+              "env" => %{"FOO" => "opaque-env-value-never-log"}
+            }, id: "call_executor")
         ])
 
       final_response = assistant_message("executor done")
@@ -148,9 +153,177 @@ defmodule CodingAgent.ExecutorTest do
                 resume: %ResumeToken{engine: "lemon", value: ^session_id}
               }} = List.last(messages)
 
+      refute inspect(messages) =~ "opaque-env-value-never-log"
+
+      started =
+        Enum.find(
+          messages,
+          &match?(
+            {:engine_event, ^run_ref, %{__event__: :action_event, phase: :started}},
+            &1
+          )
+        )
+
+      {:engine_event, _, action} = started
+      assert action.action.detail.args["env_keys"] == ["FOO"]
+
       assert File.regular?(
                CodingAgent.Session.Presentation.session_file_path(session_id, tmp_dir)
              )
+    end
+
+    @tag :tmp_dir
+    @tag skip: if(System.find_executable("python3") == nil, do: "python3 required", else: false)
+    test "completed native turns hand off eval and debugger state; logical reset kills descendants",
+         %{tmp_dir: tmp_dir} do
+      parent = self()
+      File.write!(Path.join(tmp_dir, "prog.fake"), "")
+      adapter = Path.expand("../support/fake_dap_adapter.py", __DIR__)
+      log = Path.join(tmp_dir, "dap.jsonl")
+
+      code = """
+      import subprocess
+      value = 41
+      child = subprocess.Popen(['sleep', '60'], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+      child.pid
+      """
+
+      native =
+        mock_stream_fn([
+          assistant_message_with_tool_calls([
+            tool_call("eval", %{"language" => "py", "code" => code}, id: "eval-init")
+          ]),
+          assistant_message("first turn")
+        ])
+
+      stream = fn model, context, options ->
+        if Enum.any?(context.messages, &(Map.get(&1, :tool_call_id) == "eval-init")) do
+          send(parent, {:finish_ready, self()})
+
+          receive do
+            :finish_turn -> :ok
+          after
+            20_000 -> raise "turn was not released"
+          end
+        end
+
+        native.(model, context, options)
+      end
+
+      first =
+        request(tmp_dir, run_id: "handoff-first", prompt: "initialize kernel", stream_fn: stream)
+
+      {:ok, first_ref, %{runner_pid: runner}} =
+        Executor.start_run(first, %{stream_fn: stream}, self())
+
+      assert_receive {:finish_ready, provider}, 20_000
+      session = :sys.get_state(runner).session
+      id = CodingAgent.Session.get_state(session).session_manager.header.id
+      resume = ResumeToken.new("lemon", id)
+
+      opts = [
+        session_id: id,
+        session_pid: session,
+        session_key: first.session_key,
+        debug_adapters: %{
+          "fake" => %{
+            command: System.find_executable("python3"),
+            args: [adapter, log],
+            launch_defaults: %{"stopOnEntry" => true}
+          }
+        }
+      ]
+
+      debugger =
+        CodingAgent.Tools.Debug.execute(
+          "launch",
+          %{"action" => "launch", "program" => "prog.fake", "adapter" => "fake"},
+          nil,
+          nil,
+          tmp_dir,
+          opts
+        )
+
+      refute debugger.is_error
+      debuggee = debugger.details.snapshot.process_id
+      debug_server = CodingAgent.Debug.SessionServer.whereis(id)
+      {:ok, kernel} = CodingAgent.Eval.KernelSupervisor.lookup({id, "py"})
+
+      eval_result =
+        Enum.find(
+          CodingAgent.Session.get_messages(session),
+          &(Map.get(&1, :tool_call_id) == "eval-init")
+        )
+
+      child = eval_result.content |> hd() |> Map.fetch!(:text) |> String.to_integer()
+      on_exit(fn -> CodingAgent.ToolResources.stop(id) end)
+      send(provider, :finish_turn)
+
+      assert {:engine_event, ^first_ref, %{__event__: :completed, ok: true}} =
+               List.last(collect_until_completed(first_ref))
+
+      refute Process.alive?(session)
+      assert Process.alive?(kernel)
+      assert Process.alive?(debug_server)
+
+      next_stream =
+        mock_stream_fn([
+          assistant_message_with_tool_calls([
+            tool_call("eval", %{"language" => "py", "code" => "value + 1"}, id: "eval-next"),
+            tool_call("debug", %{"action" => "status"}, id: "debug-next")
+          ]),
+          assistant_message("second turn")
+        ])
+
+      capture = fn model, context, options ->
+        send(parent, {:next_context, context.messages})
+        next_stream.(model, context, options)
+      end
+
+      second = %{
+        request(tmp_dir,
+          run_id: "handoff-second",
+          prompt: "reuse resources",
+          resume: resume,
+          stream_fn: capture
+        )
+        | session_key: first.session_key
+      }
+
+      {:ok, second_ref, _} = Executor.start_run(second, %{stream_fn: capture}, self())
+
+      assert {:engine_event, ^second_ref, %{__event__: :completed, ok: true}} =
+               List.last(collect_until_completed(second_ref))
+
+      assert_receive {:next_context, _initial}
+      assert_receive {:next_context, messages}
+      result = Enum.find(messages, &(Map.get(&1, :tool_call_id) == "eval-next"))
+      assert Enum.any?(result.content, &Regex.match?(~r/(?:^|\n)42(?:\n|$)/, &1.text))
+      status = Enum.find(messages, &(Map.get(&1, :tool_call_id) == "debug-next"))
+      assert status.details.snapshot.process_id == debuggee
+      assert status.details.snapshot.status == :stopped
+      assert {:ok, ^kernel} = CodingAgent.Eval.KernelSupervisor.lookup({id, "py"})
+      assert CodingAgent.Debug.SessionServer.whereis(id) == debug_server
+
+      kernel_ref = Process.monitor(kernel)
+      debug_ref = Process.monitor(debug_server)
+      :ok = LemonCore.RunStore.delete_history(first.session_key)
+      assert_receive {:DOWN, ^kernel_ref, :process, ^kernel, _}, 10_000
+      assert_receive {:DOWN, ^debug_ref, :process, ^debug_server, _}, 10_000
+
+      for pid <- [child, debuggee] do
+        CodingAgent.AsyncHelpers.assert_eventually(
+          fn ->
+            case System.cmd("ps", ["-o", "stat=", "-p", Integer.to_string(pid)],
+                   stderr_to_stdout: true
+                 ) do
+              {stat, 0} -> String.starts_with?(String.trim(stat), "Z")
+              _ -> true
+            end
+          end,
+          timeout: 5_000
+        )
+      end
     end
 
     @tag :tmp_dir

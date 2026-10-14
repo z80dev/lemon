@@ -135,7 +135,8 @@ defmodule CodingAgent.Session do
     branch_generation: 0,
     wasm_host_calls: %{},
     auto_compaction: %CompactionLifecycle.State{},
-    overflow_recovery: %OverflowRecovery.State{}
+    overflow_recovery: %OverflowRecovery.State{},
+    tool_resources_handed_off: false
   ]
 
   @type session_signature ::
@@ -397,6 +398,9 @@ defmodule CodingAgent.Session do
   def abort(session) do
     GenServer.cast(session, :abort)
   end
+
+  @doc false
+  def handoff_tool_resources(session), do: GenServer.call(session, :handoff_tool_resources)
 
   @doc """
   Subscribe to session events.
@@ -950,8 +954,12 @@ defmodule CodingAgent.Session do
     state = WasmBridge.cancel_host_calls(state, :aborted)
 
     case Lifecycle.reset(state, @reset_abort_wait_ms) do
-      {:ok, new_state} -> {:reply, :ok, new_state}
-      {:error, reason, new_state} -> {:reply, {:error, reason}, new_state}
+      {:ok, new_state} ->
+        CodingAgent.ToolResources.stop(state.session_manager.header.id)
+        {:reply, :ok, %{new_state | tool_resources_handed_off: false}}
+
+      {:error, reason, new_state} ->
+        {:reply, {:error, reason}, new_state}
     end
   end
 
@@ -1105,6 +1113,16 @@ defmodule CodingAgent.Session do
     end
   end
 
+  def handle_call(:handoff_tool_resources, _from, %{is_streaming: false} = state) do
+    case CodingAgent.ToolResources.handoff(state.session_manager.header.id, self()) do
+      :ok -> {:reply, :ok, %{state | tool_resources_handed_off: true}}
+      error -> {:reply, error, state}
+    end
+  end
+
+  def handle_call(:handoff_tool_resources, _from, state),
+    do: {:reply, {:error, :session_busy}, state}
+
   # The agent's list is the wire history and still carries each turn's attached
   # recalled context; this call is the conversation as a person reads it, and
   # `CodingAgent.Session.Presentation` renders from it. See
@@ -1212,6 +1230,8 @@ defmodule CodingAgent.Session do
   end
 
   def handle_cast(:abort, state) do
+    CodingAgent.ToolResources.stop(state.session_manager.header.id)
+    state = %{state | tool_resources_handed_off: false}
     had_pending_prompt = not is_nil(state.pending_prompt_timer_ref)
 
     state =
@@ -1476,6 +1496,9 @@ defmodule CodingAgent.Session do
       cwd: state.cwd,
       reason: reason
     })
+
+    if state.session_manager && not state.tool_resources_handed_off,
+      do: CodingAgent.ToolResources.stop(state.session_manager.header.id)
 
     # Emit introspection event for session end
     Introspection.record(

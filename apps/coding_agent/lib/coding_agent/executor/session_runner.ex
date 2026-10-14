@@ -87,7 +87,7 @@ defmodule CodingAgent.Executor.SessionRunner do
       event = Event.completed(fields)
       # A queued auto-resume may start as soon as the gateway sees completion.
       # Save and stop this session first so it loads the complete prior turn.
-      state = Presentation.finalize_session(state)
+      state = Presentation.finalize_session(state, fields.ok == true)
 
       emit_event(state, event)
       state

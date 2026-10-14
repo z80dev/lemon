@@ -168,7 +168,7 @@ defmodule CodingAgent.ToolExecutor do
       session_key: session_key,
       tool_call_id: tool_call_id,
       tool: tool_name,
-      action: args,
+      action: project_action(tool_name, args),
       rationale: "Tool execution: #{tool_name}",
       expires_in_ms: timeout_ms
     })
@@ -178,6 +178,37 @@ defmodule CodingAgent.ToolExecutor do
       # exit, and throw here without exposing arbitrary service error terms.
       {:error, :approval_unavailable}
   end
+
+  # These arguments are approval/event projections, never execution input.
+  # Env values may be secrets even under innocuous variable names.
+  @doc false
+  def project_action("bash", args)
+      when is_map(args) and (is_map_key(args, "env") or is_map_key(args, :env)) do
+    env =
+      case Map.fetch(args, "env") do
+        {:ok, env} -> env
+        :error -> Map.get(args, :env)
+      end
+
+    keys =
+      case env do
+        env when is_map(env) -> env |> Map.keys() |> Enum.filter(&is_binary/1) |> Enum.sort()
+        _ -> []
+      end
+
+    digest =
+      :crypto.hash(:sha256, :erlang.term_to_binary(env))
+      |> Base.encode16(case: :lower)
+
+    args |> Map.drop(["env", :env]) |> Map.put("env_keys", keys) |> Map.put("env_digest", digest)
+  end
+
+  def project_action("tool_invoke", %{"name" => name, "args" => args} = params) do
+    name = if is_binary(name), do: name |> String.trim() |> String.downcase(), else: name
+    Map.put(params, "args", project_action(name, args))
+  end
+
+  def project_action(_tool_name, args), do: args
 
   defp safe_approval_error(reason) when reason in [:approval_unavailable, :service_unavailable],
     do: reason

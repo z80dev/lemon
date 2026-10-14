@@ -85,4 +85,50 @@ defmodule CodingAgent.Tools.InternalUrlReadTest do
                session_id: "another-session"
              )
   end
+
+  test "bash commands expand skill and artifact references to file paths", %{tmp_dir: cwd} do
+    opts = [session_id: "uri-bash", context_guardrails: %{spill_dir: Path.join(cwd, "spill")}]
+
+    %AgentToolResult{details: %{artifact_uri: artifact, full_output_path: spill}} =
+      Bash.execute("big", %{"command" => "seq 1 30000"}, nil, nil, cwd, opts)
+
+    on_exit(fn -> File.rm(spill) end)
+
+    key = "uri-bash-#{System.unique_integer([:positive])}"
+    root = Path.join([cwd, ".claude", "skills", key])
+    File.mkdir_p!(root)
+    File.write!(Path.join(root, "SKILL.md"), "---\nname: Bash URI\ndescription: d\n---\nbody\n")
+    File.write!(Path.join(root, "data.txt"), "skill data\n")
+    LemonSkills.refresh(cwd: cwd)
+
+    command =
+      "wc -l < #{artifact}; cat \"skill://#{key}/data.txt\"; " <>
+        "echo https://example.com/artifact://x 'see #{artifact} later'"
+
+    assert %AgentToolResult{is_error: false, content: content} =
+             Bash.execute("expand", %{"command" => command}, nil, nil, cwd, opts)
+
+    text = Enum.map_join(content, "\n", & &1.text)
+    assert text =~ ~r/^\s*30000$/m
+    assert text =~ "skill data"
+    assert text =~ "https://example.com/artifact://x see #{artifact} later"
+
+    marker = Path.join(cwd, "ran")
+    unknown = "artifact://" <> String.duplicate("0", 64)
+
+    for {reference, session_opts} <- [{unknown, opts}, {artifact, session_id: "other-session"}] do
+      assert {:error, message} =
+               Bash.execute(
+                 "missing",
+                 %{"command" => "touch #{marker}; cat #{reference}"},
+                 nil,
+                 nil,
+                 cwd,
+                 session_opts
+               )
+
+      assert message =~ reference
+      refute File.exists?(marker)
+    end
+  end
 end

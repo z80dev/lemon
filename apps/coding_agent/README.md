@@ -137,7 +137,7 @@ CodingAgent.Supervisor (one_for_one)
 |----------|-------|
 | File I/O / Skills / Memory | `read`, `read_skill`, `skill_manage`, `remember`, `recall`, `checkpoint`, `write`, `edit`, `patch`, `lsp_diagnostics`, `ls` |
 | Search | `grep`, `find`, `ast_grep` (when the real ast-grep CLI is installed) |
-| Execution | `bash`, `bash_output`, `kill_process` |
+| Execution | `bash`, `bash_output`, `kill_process`, `debug` (DAP debugger; see [debugger](../../docs/tools/debug.md)) |
 | Web / Browser / Media | `websearch`, `webfetch`, `browser_tabs`, `browser_tab_open`, `browser_tab_activate`, `browser_tab_close`, `browser_navigate`, `browser_snapshot`, `browser_get_content`, `browser_click`, `browser_type`, `browser_hover`, `browser_select_option`, `browser_upload_file`, `browser_download`, `browser_press`, `browser_scroll`, `browser_back`, `browser_wait_for_selector`, `browser_evaluate`, `browser_events`, `browser_get_cookies`, `browser_set_cookies`, `browser_clear_state`, `browser_screenshot`, `browser_analyze`, `media_status`, `media_generate_image`, `media_generate_speech`, `media_transcribe_audio`, `media_analyze_image`, `media_generate_video` |
 | Task / Agent | `task`, `agent`, `parent_question`, `todo`, `kanban` |
 | System | `tool_auth`, `extensions_status` |
@@ -171,6 +171,31 @@ actionable error, not fabricated text. On macOS, `sips` supplies proportional
 image previews (maximum dimension 1568 by default) with original/preview
 dimensions and an animation first-frame notice; original bytes remain untouched.
 Input, extraction, preview, and displayed-output limits bound memory use.
+
+**SQLite reads.** `read` opens `.db`/`.sqlite`/`.sqlite3`/`.db3` files that carry
+the SQLite header read-only (`SQLITE_OPEN_READONLY` plus `PRAGMA query_only`):
+`app.db` lists tables and views with row counts, `app.db:users` shows the schema
+and five sample rows, `app.db:users?limit=20&offset=40&where=age>30&order=name`
+pages rows (limit ≤ 500), `app.db:users:42` shows one row by single-column
+primary key or rowid, and `app.db?q=SELECT ...` runs one query capped at 1000
+rows. `where`/`order`/`q` reject comments, extra statements and write/attach/
+pragma keywords; queries are interrupted after 10 seconds.
+
+**Path line selectors.** `read` also accepts a trailing selector in `path`:
+`file:50-80` (inclusive), `file:50+20` (20 lines from 50), `file:50` or
+`file:50-` (from line 50), `file:-30` (last 30 lines), and `:raw` alone or
+combined (`file:50-80:raw`) for unnumbered text without a snapshot header.
+Selectors work on archive members and internal references
+(`bundle.zip:src/a.ex:10-20`, `artifact://<id>:100+50`). They apply only when
+the literal path does not exist, so names containing colons keep their meaning,
+and they cannot be combined with `offset`/`limit`.
+
+**Search paging and ignores.** `grep` and `find` skip `.gitignore`/`.ignore`d
+and hidden files by default, with ripgrep/fd or the Elixir fallback alike
+(`git check-ignore` inside a work tree). Pass `no_ignore: true` or
+`hidden: true` to include them. `grep` reports the total match count; when
+`max_results` is exceeded, pass the advertised `skip` (also `details.next_skip`)
+to fetch the next page.
 
 **Structural search and replacement.** Install the genuine ast-grep CLI (for
 example `brew install ast-grep`) to enable `ast_grep`. It matches syntax trees,
@@ -221,6 +246,18 @@ access to the file, duplicate large output, or change its untrusted status.
 They are for `read`, not mutation tools or remote ACP filesystem operations.
 When registration is unavailable, results retain the existing absolute output
 path instead of advertising a nonexistent handle.
+
+**`bash` cwd, env and internal references.** `cwd` runs one command in another
+existing directory (relative paths resolve against the session cwd); a missing
+directory is an error. `env` adds string variables over the inherited
+environment; names must match `^[A-Za-z_][A-Za-z0-9_]*$` and values must not
+contain NUL bytes. Both apply to foreground, `pty`, `run_in_background` and ACP
+client-terminal runs. Approval requests for `bash` carry `env_keys`, never env
+values. Bare or whole-word quoted `skill://…` and `artifact://<id>` references in
+`command` are replaced with shell-quoted absolute paths (e.g.
+`wc -l artifact://<id>`); an unresolvable reference fails the call before
+anything runs. Mentions inside larger quoted strings and other schemes
+(`https://`, `git://`) are left as written.
 
 The `agent` tool accepts an optional `node` string for delegated runs. Omit it
 or pass `"local"` to use the controller host. A named value must resolve to a

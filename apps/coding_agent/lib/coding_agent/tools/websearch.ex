@@ -3,7 +3,8 @@ defmodule CodingAgent.Tools.WebSearch do
   WebSearch tool for the coding agent.
 
   Uses the capability-aware search provider registry. Bundled providers include
-  Brave Search, Exa, Perplexity Sonar, keyless DuckDuckGo, and configurable SearXNG.
+  Brave Search, Exa, Perplexity Sonar, Tavily, Kagi, Jina, keyless DuckDuckGo,
+  and configurable SearXNG.
   """
 
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
@@ -38,6 +39,11 @@ defmodule CodingAgent.Tools.WebSearch do
   @rate_limit_table :coding_agent_websearch_rate_limit
   @search_cache_table :coding_agent_websearch_cache
   @perplexity_key_prefixes ["pplx-"]
+  @keyed_providers %{
+    "tavily" => "TAVILY_API_KEY",
+    "kagi" => "KAGI_API_KEY",
+    "jina" => "JINA_API_KEY"
+  }
   @openrouter_key_prefixes ["sk-or-"]
   @brave_freshness_shortcuts MapSet.new(["pd", "pw", "pm", "py"])
 
@@ -538,6 +544,28 @@ defmodule CodingAgent.Tools.WebSearch do
        }}
     else
       {:ok, %{api_key: api_key}}
+    end
+  end
+
+  defp resolve_api_config(provider, runtime) when is_map_key(@keyed_providers, provider) do
+    config = provider_config(runtime, provider)
+    env = Map.fetch!(@keyed_providers, provider)
+
+    api_key =
+      normalize_optional_string(get_map_value(config, :api_key, nil)) ||
+        resolve_secret_ref(get_map_value(config, :api_key_secret, nil)) ||
+        env_optional(env)
+
+    if api_key do
+      {:ok, %{api_key: api_key}}
+    else
+      {:error,
+       %{
+         "error" => "missing_#{provider}_api_key",
+         "message" =>
+           "websearch (#{provider}) needs an API key. Set #{env} or configure runtime.tools.web.search.providers.#{provider}.api_key.",
+         "docs" => "docs/tools/web.md"
+       }}
     end
   end
 

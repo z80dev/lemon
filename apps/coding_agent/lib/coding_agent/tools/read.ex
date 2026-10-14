@@ -7,6 +7,8 @@ defmodule CodingAgent.Tools.Read do
   - Directories, in-memory archive members, PDF pages and notebook cells/outputs
   - Native image content with bounded proportional previews when a backend exists
   - Offset and limit parameters for partial reads, with format-specific continuation
+  - Path line selectors (`file:50-80`, `file:50+20`, `file:50`, `file:-30`, `file:raw`)
+    applied only when the literal path does not exist
   - Bounded chunked text scanning, including oversized single-line files
   - Binary/invalid UTF-8 refusal with actionable inspection guidance
   - `agent://` live family rosters and `agent://<task-id-or-name>` identities
@@ -43,9 +45,12 @@ defmodule CodingAgent.Tools.Read do
     %AgentTool{
       name: "read",
       description:
-        "Read files, directories, archives (archive.zip:member), PDFs, notebooks, and images. " <>
+        "Read files, directories, archives (archive.zip:member), PDFs, notebooks, images, and SQLite databases " <>
+          "(app.db lists tables; app.db:table, app.db:table:key, app.db:table?limit=&offset=&where=&order=, app.db?q=SELECT ...). " <>
           "Text files include a snapshot tag and 1-based lines; prefer edit with snapshot + edits " <>
-          "to change line ranges without copying old text. Use offset/limit to page text. " <>
+          "to change line ranges without copying old text. Use offset/limit or a path selector " <>
+          "(file:50-80, file:50+20, file:50 from line 50, file:-30 last 30 lines, file:raw or " <>
+          "file:50-80:raw for unnumbered text) to page. " <>
           "Text output is capped at 2000 lines / 50KB. PDF page/page_limit and notebook cell/cell_limit select source units. " <>
           "Returned skill:// and artifact:// references are readable paths.",
       label: "Read File",
@@ -56,7 +61,7 @@ defmodule CodingAgent.Tools.Read do
           "path" => %{
             "type" => "string",
             "description" =>
-              "A local path, skill://<key>[/relative-path], returned artifact://<id> handle, agent:// live roster, or agent://<task-id-or-name>[/json/path] owned task status/output"
+              "A local path, skill://<key>[/relative-path], returned artifact://<id> handle, agent:// live roster, or agent://<task-id-or-name>[/json/path] owned task status/output. May end with a line selector such as :50-80, :50+20, :50, :-30 or :raw"
           },
           "offset" => %{
             "type" => "integer",
@@ -140,9 +145,23 @@ defmodule CodingAgent.Tools.Read do
   end
 
   defp do_execute(params, signal, cwd, opts) do
+    case apply_path_selector(params, cwd, opts) do
+      {:ok, params, %{tail: tail} = view} when is_integer(tail) ->
+        read_tail(params, tail, view, signal, cwd, opts)
+
+      {:ok, params, view} ->
+        do_read(params, view, signal, cwd, opts)
+
+      {:error, _} = error ->
+        error
+    end
+  end
+
+  defp do_read(params, view, signal, cwd, opts) do
     path = Map.get(params, "path", "")
     offset = Map.get(params, "offset")
     limit = Map.get(params, "limit")
+    opts = Keyword.put(opts, :raw, Map.get(view, :raw, false))
 
     with :ok <- validate_params(path, offset, limit),
          {:ok, resolved_path} <- resolve_path(path, cwd, opts),
@@ -156,17 +175,156 @@ defmodule CodingAgent.Tools.Read do
 
       case rich_result do
         {:ok, result} -> result
-        :not_supported -> read_plain(path, resolved_path, offset, limit, signal, cwd, opts)
+        :not_supported -> read_plain(path, resolved_path, offset, limit, view, signal, cwd, opts)
         {:error, _} = error -> error
       end
     end
   end
 
-  defp read_plain(path, resolved_path, offset, limit, signal, cwd, opts) do
+  # `-N` needs the rendered line count first; a one-line probe reports it for
+  # plain text and every rich format alike.
+  defp read_tail(params, tail, view, signal, cwd, opts) do
+    case do_read(Map.merge(params, %{"offset" => 1, "limit" => 1}), view, signal, cwd, opts) do
+      %AgentToolResult{details: %{total_lines: total}} when is_integer(total) and total > 0 ->
+        offset = max(total - tail + 1, 1)
+
+        do_read(
+          Map.merge(params, %{"offset" => offset, "limit" => tail}),
+          view,
+          signal,
+          cwd,
+          opts
+        )
+
+      %AgentToolResult{} ->
+        do_read(params, view, signal, cwd, opts)
+
+      other ->
+        other
+    end
+  end
+
+  # ============================================================================
+  # Path Line Selectors
+  # ============================================================================
+
+  @selector_token ~r/\A(?:raw|\d+(?:-\d*|\+\d+)?|-\d+)\z/
+
+  # A trailing `:selector` (up to two, e.g. `:10-20:raw`) only applies when the
+  # literal path is missing and the remaining base names a real source, so
+  # files containing colons and archive members keep their existing meaning.
+  defp apply_path_selector(%{"path" => path} = params, cwd, opts) when is_binary(path) do
+    with {base, tokens} <- split_selector(path),
+         true <- selector_target?(path, base, cwd, opts) do
+      build_selector_view(params, base, tokens)
+    else
+      _ -> {:ok, params, %{}}
+    end
+  end
+
+  defp apply_path_selector(params, _cwd, _opts), do: {:ok, params, %{}}
+
+  defp split_selector(path) do
+    {base_segments, tokens} =
+      path |> String.split(":") |> Enum.reverse() |> take_selector_tokens([])
+
+    base = base_segments |> Enum.reverse() |> Enum.join(":")
+
+    if tokens == [] or String.trim(base) == "", do: nil, else: {base, tokens}
+  end
+
+  defp take_selector_tokens([token | rest], acc) when rest != [] and length(acc) < 2 do
+    if Regex.match?(@selector_token, token),
+      do: take_selector_tokens(rest, [token | acc]),
+      else: {[token | rest], acc}
+  end
+
+  defp take_selector_tokens(segments, acc), do: {segments, acc}
+
+  defp selector_target?(path, base, cwd, opts) do
+    cond do
+      InternalUrls.internal_url?(base) ->
+        true
+
+      InternalUrls.internal_url?(path) ->
+        false
+
+      File.exists?(PathHelpers.resolve_path(path, cwd, opts)) ->
+        false
+
+      true ->
+        resolved_base = PathHelpers.resolve_path(base, cwd, opts)
+
+        File.exists?(resolved_base) or
+          CodingAgent.Tools.ReadArchive.split_path(resolved_base) != nil
+    end
+  end
+
+  defp build_selector_view(params, base, tokens) do
+    {raw_tokens, range_tokens} = Enum.split_with(tokens, &(&1 == "raw"))
+
+    cond do
+      length(raw_tokens) > 1 or length(range_tokens) > 1 ->
+        {:error, "A path selector takes at most one line range and one :raw"}
+
+      range_tokens != [] and
+          (not is_nil(Map.get(params, "offset")) or not is_nil(Map.get(params, "limit"))) ->
+        {:error, "Use either a path line selector or offset/limit, not both"}
+
+      true ->
+        view = %{raw: raw_tokens != []}
+        params = Map.put(params, "path", base)
+
+        case range_tokens do
+          [] -> {:ok, params, view}
+          [range] -> apply_selector_range(params, view, range)
+        end
+    end
+  end
+
+  defp apply_selector_range(params, view, "-" <> count) do
+    case String.to_integer(count) do
+      n when n >= 1 -> {:ok, params, Map.put(view, :tail, n)}
+      _ -> {:error, "Line selector :-N needs N >= 1"}
+    end
+  end
+
+  defp apply_selector_range(params, view, range) do
+    [start | rest] = Regex.run(~r/\A(\d+)(?:(-|\+)(\d*))?\z/, range, capture: :all_but_first)
+
+    case selector_window(String.to_integer(start), rest) do
+      {:ok, window} -> {:ok, Map.merge(params, window), view}
+      {:error, _} = error -> error
+    end
+  end
+
+  defp selector_window(start, _rest) when start < 1,
+    do: {:error, "Line selectors are 1-based; use :1 or later"}
+
+  defp selector_window(start, rest) when rest in [[], ["-", ""]],
+    do: {:ok, %{"offset" => start}}
+
+  defp selector_window(start, ["-", stop]) do
+    case String.to_integer(stop) do
+      stop when stop >= start -> {:ok, %{"offset" => start, "limit" => stop - start + 1}}
+      stop -> {:error, "Line selector :#{start}-#{stop} ends before it starts"}
+    end
+  end
+
+  defp selector_window(start, ["+", count]) when count != "" do
+    case String.to_integer(count) do
+      count when count >= 1 -> {:ok, %{"offset" => start, "limit" => count}}
+      _ -> {:error, "Line selector :N+K needs K >= 1"}
+    end
+  end
+
+  defp selector_window(start, _rest), do: {:error, "Invalid line selector starting at #{start}"}
+
+  defp read_plain(path, resolved_path, offset, limit, view, signal, cwd, opts) do
     cond do
       not InternalUrls.internal_url?(path) and ACPFileBridge.read_enabled?(opts) and
           is_nil(detect_mime_type(resolved_path)) ->
-        read_text_file_from_acp(resolved_path, offset, limit, opts)
+        read_text_file_from_acp(resolved_path, offset, limit, view, opts)
 
       true ->
         case resolve_existing_read_path(path, resolved_path, cwd, opts) do
@@ -178,6 +336,7 @@ defmodule CodingAgent.Tools.Read do
                   stat,
                   offset,
                   limit,
+                  view,
                   signal,
                   opts,
                   not InternalUrls.internal_url?(path)
@@ -392,7 +551,7 @@ defmodule CodingAgent.Tools.Read do
   # Text File Reading
   # ============================================================================
 
-  defp read_text_file(path, _stat, offset, limit, signal, opts, editable?) do
+  defp read_text_file(path, _stat, offset, limit, view, signal, opts, editable?) do
     max_lines = Keyword.get(opts, :max_lines, @default_max_lines)
     max_bytes = Keyword.get(opts, :max_bytes, @default_max_bytes)
 
@@ -408,7 +567,8 @@ defmodule CodingAgent.Tools.Read do
         FileReadTracker.record_digest(opts, path, window.digest)
 
         render_window(path, window, normalize_offset(offset), max_bytes, %{
-          immutable: not editable?
+          immutable: not editable?,
+          raw: Map.get(view, :raw, false)
         })
 
       {:error, _} = error ->
@@ -416,7 +576,7 @@ defmodule CodingAgent.Tools.Read do
     end
   end
 
-  defp read_text_file_from_acp(path, offset, limit, opts) do
+  defp read_text_file_from_acp(path, offset, limit, view, opts) do
     case ACPFileBridge.read_text_file(path, offset, limit, opts) do
       {:ok, content} ->
         max_lines = Keyword.get(opts, :max_lines, @default_max_lines)
@@ -430,7 +590,10 @@ defmodule CodingAgent.Tools.Read do
               else: window
 
           # The ACP client has already applied line/limit; do not slice twice.
-          render_window(path, window, normalize_offset(offset), max_bytes, %{acp_client: true})
+          render_window(path, window, normalize_offset(offset), max_bytes, %{
+            acp_client: true,
+            raw: Map.get(view, :raw, false)
+          })
         end
 
       {:error, reason} ->
@@ -475,11 +638,17 @@ defmodule CodingAgent.Tools.Read do
             }
         end
 
-      formatted = format_line_numbers(window.lines, start_line + 1)
+      raw? = Map.get(extra_details, :raw, false)
+
+      formatted =
+        if raw?,
+          do: Enum.join(window.lines, "\n"),
+          else: format_line_numbers(window.lines, start_line + 1)
+
       text = if truncation, do: formatted <> "\n" <> truncation.message, else: formatted
 
       snapshot =
-        case {Map.get(extra_details, :immutable, false), Map.get(window, :digest)} do
+        case {raw? or Map.get(extra_details, :immutable, false), Map.get(window, :digest)} do
           {false, digest} when is_binary(digest) ->
             CodingAgent.Tools.AnchoredEdit.snapshot_for_digest(digest)
 
