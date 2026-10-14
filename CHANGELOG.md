@@ -23,6 +23,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   fences; label records and enrollment proofs support reliable reconciliation.
   Machine inspection reports measured host resources and explicit capability/
   OS-grant states without fabricated metrics or permissions.
+  Supported shell inventory includes the actual registered `lsp_diagnostics`
+  builtin for destination-local checks; diagnostics remain file-and-shell
+  read-interact operations with tool approval, never baseline permission.
 - Worker compatibility is measured by `lemon node capabilities --json --require-bot`
   and authenticated `node.runtime.features`, not inferred from a release number.
   Invite commands select the actual integrated source checkout or an explicitly

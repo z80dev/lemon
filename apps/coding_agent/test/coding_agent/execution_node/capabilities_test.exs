@@ -41,6 +41,24 @@ defmodule CodingAgent.ExecutionNode.CapabilitiesTest do
     defdelegate tool_names(cwd, opts), to: Probe
     def command(_, _), do: {:ok, ~s({"permissions":[{"name":"Accessibility","granted":true},{"name":"Accessibility","granted":false}]})}
   end
+  defmodule DiagnosticsProbe do
+    defdelegate executable(name), to: Probe
+    defdelegate shell_available?(), to: Probe
+    defdelegate root_access(opts), to: Probe
+    defdelegate browser_status(), to: Probe
+    defdelegate mcp_available?(), to: Probe
+    defdelegate command(name, args), to: Probe
+    defdelegate tool_names(cwd, opts), to: CodingAgent.ExecutionNode.Capabilities.Probe
+  end
+  defmodule NoShellDiagnosticsProbe do
+    defdelegate executable(name), to: DiagnosticsProbe
+    def shell_available?, do: false
+    defdelegate root_access(opts), to: DiagnosticsProbe
+    defdelegate browser_status(), to: DiagnosticsProbe
+    defdelegate mcp_available?(), to: DiagnosticsProbe
+    defdelegate command(name, args), to: DiagnosticsProbe
+    defdelegate tool_names(cwd, opts), to: DiagnosticsProbe
+  end
 
   test "measured denial, grant, and unqueryable permissions remain distinct" do
     assert {:ok, snapshot} = Capabilities.get(platform: {:unix, :darwin}, capability_probe: Probe)
@@ -88,5 +106,27 @@ defmodule CodingAgent.ExecutionNode.CapabilitiesTest do
     item = Enum.find(snapshot["items"], &(&1["id"] == "x11_desktop"))
     assert item["osGrant"] == "unknown"
     assert item["configuredLevel"] == "off"
+  end
+
+  test "registered diagnostics are measured as shell tooling, never baseline or unsupported machinery" do
+    assert {:ok, catalog} = CodingAgent.ExecutionNode.Capabilities.Probe.tool_names(File.cwd!(), [])
+    assert "lsp_diagnostics" in catalog
+    assert {:ok, snapshot} = Capabilities.get(platform: {:unix, :linux}, default_cwd: File.cwd!(),
+      capability_probe: DiagnosticsProbe)
+    shell = Enum.find(snapshot["items"], &(&1["id"] == "terminal"))
+    files = Enum.find(snapshot["items"], &(&1["id"] == "files"))
+    assert shell["configuredLevel"] == "read_interact"
+    assert "lsp_diagnostics" in shell["tools"]
+    refute "lsp_diagnostics" in files["tools"]
+
+    assert {:ok, missing} = Capabilities.get(platform: {:unix, :linux}, capability_probe: Probe)
+    refute missing["items"] |> Enum.find(&(&1["id"] == "terminal")) |> Map.fetch!("tools")
+      |> Enum.member?("lsp_diagnostics")
+    assert {:ok, unsupported} = Capabilities.get(platform: {:unix, :linux}, default_cwd: File.cwd!(),
+      capability_probe: NoShellDiagnosticsProbe)
+    unsupported_shell = Enum.find(unsupported["items"], &(&1["id"] == "terminal"))
+    refute unsupported_shell["supported"]
+    assert unsupported_shell["configuredLevel"] == "off"
+    assert unsupported_shell["tools"] == []
   end
 end

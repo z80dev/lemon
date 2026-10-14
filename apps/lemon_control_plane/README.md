@@ -404,6 +404,12 @@ checks; unavailable inspection stays unknown, never fabricated denial or grant.
 Full Disk Access has no supported nonprompting macOS query and remains unknown.
 Connector authorization is session-scoped, not invented from method names.
 These measurements are not per-bot grants or an OS sandbox.
+The shell tool inventory includes `lsp_diagnostics` only when that exact native
+tool is in the actual registry and destination shell machinery is supported.
+It resolves destination workspace files and can execute local language checkers;
+it is not baseline/read-only access. Product diagnostics require effective files
+**and** shell `read_interact` ceilings and normal tool approvals. Installed language
+checker availability remains the diagnostic tool's actual result, not an OS grant.
 
 Terminals use a real worker PTY (`python3` required), with the destination login
 shell and worker default cwd unless specified. Cwd is opened through the same

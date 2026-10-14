@@ -395,6 +395,11 @@ CLIs are reached through the real `bash` tool, not fictitious registered tool
 names. These are destination measurements, **not per-bot authorization**.
 Restricting a bot requires its actual runtime tool policy; broad shell access
 is not an OS sandbox and can execute installed desktop CLIs.
+The measured terminal tool list advertises the real `lsp_diagnostics` builtin only
+when registered and shell machinery is supported. Its destination-local workspace
+checks may run language tooling, so product access requires both files and shell
+effective `read_interact`, including review ceilings and native approvals. It is
+not a read-only/baseline grant or a guarantee every language checker is installed.
 
 Machine dispatch resolves only exact durable IDs. A different node whose
 display name happens to equal another node's ID cannot receive that machine's
