@@ -42,6 +42,12 @@ Global files are loaded before any directory file:
 `~` is the `HOME` environment variable; `~/.lemon/agent` follows
 `LEMON_AGENT_DIR`.
 
+Other tools' user-global files (`~/.gemini`, `~/.codex`, `~/.config/opencode`,
+`~/.agents`, `~/.agent`, `~/.copilot`) are read by default whenever they exist,
+the same way Lemon already reads `~/.claude/CLAUDE.md` and `~/.claude/skills`.
+They are passive text added to the prompt; nothing in them is executed. To keep
+one out of Lemon sessions, remove or rename the file.
+
 ### Order and scope
 
 Files are rendered global first, then from the filesystem root down to the
