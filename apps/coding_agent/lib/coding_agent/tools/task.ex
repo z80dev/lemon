@@ -69,7 +69,13 @@ defmodule CodingAgent.Tools.Task do
           },
           "worktree" => %{
             "type" => "boolean",
-            "description" => "Use a retained, isolated git worktree from HEAD"
+            "description" => "Run in an isolated git worktree from HEAD"
+          },
+          "merge" => %{
+            "type" => "string",
+            "enum" => ["none", "patch", "branch"],
+            "description" =>
+              "Worktree merge-back on success: patch applies to this checkout, branch keeps a review commit; default [runtime.task].worktree_merge"
           },
           "task_id" => %{
             "type" => "string",
@@ -210,6 +216,7 @@ defmodule CodingAgent.Tools.Task do
         "thinking_level",
         "cwd",
         "worktree",
+        "merge",
         "tool_policy"
       ])
       |> Map.put("depends_on", %{

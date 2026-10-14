@@ -529,6 +529,7 @@ defmodule CodingAgent.Tools.Task.Result do
         :cwd,
         :worktree_path,
         :branch,
+        :merge,
         :structured_output
       ])
       |> Enum.reject(fn {key, value} ->
