@@ -119,7 +119,7 @@ export function baseBotMcpConfig(s: BackendServices, bot: P.Bot): McpDefinition 
   const mcp = s.store.metadata<BotMcp>(`botMcp:${bot.id}`);
   if (!mcp) fail('conflict', 'Bot MCP provisioning has not completed.');
   const url = botEndpoint(s);
-  const approved = parse(z.array(z.string().url()).max(100), s.config.operatorExtras?.approvedPrivateMcpOrigins ?? []);
+  const approved = s.config.operator.approvedPrivateMcpOrigins ?? [];
   return { name: 'lemon-bot', url: url.href, headers: { Authorization: `Bearer \${LEMON_SECRET:${mcp.secretName}}` }, enabledTools: [...productBotTools], allowedOrigins: [url.origin], approvedPrivateOrigins: approved.includes(url.origin) ? [url.origin] : [] };
 }
 function botEndpoint(s: BackendServices): URL {

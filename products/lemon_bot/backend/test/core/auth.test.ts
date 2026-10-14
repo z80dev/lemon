@@ -22,7 +22,7 @@ export function authFixture(hooks: RevocationHooks = {}) {
   const unavailable = (): never => { throw new Error('External dependency must be explicitly supplied for this boundary test.'); };
   const services = {
     store,
-    config: { publicUrl: 'https://lemon.example', controlUrl: 'ws://127.0.0.1:4040/ws', operatorToken: 'test-only', dataDir: '', host: '127.0.0.1', port: 4080, trustedOverlay: false, operator: { version: 1, trustedFrontendOrigins: [], oauthRedirectUris: [], serverSecrets: {}, channelProviders: [], emailProviders: [], eventProviders: [], hostDrivers: [], xProvider: null, exportAllowedOrigins: [], requiredRuntimeDestinations: [], breakGlassOwnerUserId: null }, operatorExtras: {} },
+    config: { publicUrl: 'https://lemon.example', controlUrl: 'ws://127.0.0.1:4040/ws', operatorToken: 'test-only', dataDir: '', host: '127.0.0.1', port: 4080, trustedOverlay: false, operator: { version: 1, trustedFrontendOrigins: [], oauthRedirectUris: [], serverSecrets: {}, channelProviders: [], emailProviders: [], eventProviders: [], hostDrivers: [], xProvider: null, exportAllowedOrigins: [], requiredRuntimeDestinations: [], breakGlassOwnerUserId: null } },
     encrypt(value: unknown) { const nonce = randomBytes(12); const cipher = createCipheriv('aes-256-gcm', key, nonce); const encrypted = Buffer.concat([cipher.update(JSON.stringify(value), 'utf8'), cipher.final()]); return Buffer.concat([nonce, cipher.getAuthTag(), encrypted]).toString('base64url'); },
     decrypt<T>(value: string): T { const bytes = Buffer.from(value, 'base64url'); const cipher = createDecipheriv('aes-256-gcm', key, bytes.subarray(0, 12)); cipher.setAuthTag(bytes.subarray(12, 28)); return JSON.parse(Buffer.concat([cipher.update(bytes.subarray(28)), cipher.final()]).toString('utf8')) as T; },
     gates: { create: unavailable, resolve: unavailable, wait: unavailable, cancelUser: (userId: string) => { cancelled.push(userId); } },
@@ -123,7 +123,7 @@ describe('access authority boundaries', () => {
     const f = authFixture(); const machine: P.Machine = f.services.resource('machine', { nodeId: 'node', nodeName: 'node', name: 'Host', ownerUserId: 'alice', accessUserIds: ['admin'], status: 'online', lastSeenAtMs: f.services.now(), labels: {}, botIds: [] }); f.store.put('machines', machine);
     expect(f.services.auth.machine(f.admin, machine.id).id).toBe(machine.id);
     expect(() => f.services.auth.machine(f.admin, machine.id, true)).toThrow(ApiError);
-    f.services.config.operatorExtras = { machineManagementUserIds: ['admin'] };
+    f.services.config.operator.machineManagementUserIds = ['admin'];
     expect(f.services.auth.machine(f.admin, machine.id, true).id).toBe(machine.id);
     expect(f.services.auth.machine(f.owner, machine.id, true).id).toBe(machine.id);
   });

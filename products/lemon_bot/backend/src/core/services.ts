@@ -111,7 +111,6 @@ export interface IntegrationServices {
 export interface BackendConfiguration {
   publicUrl: string; controlUrl: string; operatorToken: string; dataDir: string; host: string; port: number;
   trustedOverlay: boolean; operator: P.OperatorConfiguration;
-  operatorExtras?: Record<string, unknown>;
 }
 export interface BackendServices {
   config: BackendConfiguration; store: EntityStore; events: EventService; auth: AccessService; mutations: MutationService;

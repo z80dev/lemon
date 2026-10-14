@@ -69,10 +69,10 @@ export function createMutationService(services:BackendServices,key:Uint8Array):M
         }
         fail('outcome_unknown','The original mutation may have taken effect; reconcile its resources before taking another action.',false,{resourceIds:z.array(z.string()).parse(JSON.parse(existing.resource_ids))});
       }
-      db.query('INSERT INTO nonces(scope,nonce,hash,state,created_at_ms) VALUES(?,?,?,\'reserved\',?)').run(scope,clientNonce,hash,services.now());
+      db.query('INSERT INTO nonces(scope,nonce,hash,state,created_at_ms,resource_ids) VALUES(?,?,?,\'reserved\',?,?)').run(scope,clientNonce,hash,services.now(),JSON.stringify(context.nonceResourceIds));
       context.nonceResourceIds=new Proxy(context.nonceResourceIds,{set(target,property,value){Reflect.set(target,property,value);db.query('UPDATE nonces SET resource_ids=? WHERE scope=? AND nonce=?').run(JSON.stringify(target),scope,clientNonce);return true;}});
       const promise=(async()=>{
-        try { const value=await operation(); if(value instanceof Response) fail('internal_error','Mutation handlers must return a typed resource receipt.',false); db.query('UPDATE nonces SET state=\'complete\',receipt=?,resource_ids=? WHERE scope=? AND nonce=?').run(services.encrypt({ok:true,value}),JSON.stringify(context.nonceResourceIds),scope,clientNonce); return value; }
+        try { const value=await operation(); if(value===undefined||value instanceof Response) fail('internal_error','Mutation handlers must return a typed resource receipt.',false); db.query('UPDATE nonces SET state=\'complete\',receipt=?,resource_ids=? WHERE scope=? AND nonce=?').run(services.encrypt({ok:true,value}),JSON.stringify(context.nonceResourceIds),scope,clientNonce); return value; }
         catch(error) { const known=error instanceof ApiError?error:new ApiError('internal_error','The mutation could not be confirmed.',false); db.query('UPDATE nonces SET state=?,receipt=?,resource_ids=? WHERE scope=? AND nonce=?').run(known.code==='outcome_unknown'?'unknown':'failed',services.encrypt({ok:false,error:{code:known.code,message:known.message,retrySafe:known.retrySafe,details:known.details}}),JSON.stringify(context.nonceResourceIds),scope,clientNonce); throw known; }
         finally { pending.delete(identity); }
       })();

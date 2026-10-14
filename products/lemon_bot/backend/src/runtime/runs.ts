@@ -183,7 +183,7 @@ export function createRuntimeService(services: BackendServices): ManagedRuntimeS
       emitRun(services.update(current, { status, completedAtMs: services.now(), error }));
     });
     const returned = services.store.metadata<string>(`runReturnConversation:${runId}`);
-    if (returned && services.integrations.returnChannelHandoff && bound.upstreamRunId === bound.executionRunId) await services.integrations.returnChannelHandoff(principal, returned, result.answer ?? '');
+    if (returned && services.integrations.returnChannelHandoff && bound.upstreamRunId === bound.executionRunId) await services.integrations.returnChannelHandoff(principal, returned, result.answer ?? '', run.id);
     if (bound.upstreamRunId !== bound.executionRunId) return;
     const entryId = bound.assistantEntryId ?? services.entry(principal, outputConversation(run, principal), { kind: 'notice', severity: status === 'failed' ? 'error' : 'info', text: status === 'succeeded' ? 'Run completed.' : status === 'cancelled' ? 'Run stopped. Completed effects were not rolled back.' : 'The runtime reported a failed run.', requestId: null, runId: run.id, actor: { kind: 'system', id: null, displayName: 'System' } }).id;
     services.notify(principal, { kind: status === 'succeeded' ? 'result' : 'error', botId: run.botId, conversationId: outputConversation(run, principal), entryId, title: status === 'succeeded' ? 'Bot finished' : status === 'cancelled' ? 'Bot stopped' : 'Bot run failed', body: '', userId: principal.userId });

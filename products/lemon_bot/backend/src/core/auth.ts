@@ -109,8 +109,8 @@ export function createAccessService(services: BackendServices, hooks: Revocation
   function machine(principal: Principal, machineId: string, manage = false): P.Machine {
     const current = enabled(principal);
     const result = store.get<P.Machine>('machines', machineId);
-    const configured = services.config.operatorExtras?.machineManagementUserIds;
-    const management = principal.kind === 'user' && (current.role === 'owner' || current.role === 'admin' && Array.isArray(configured) && configured.includes(principal.userId));
+    const configured = services.config.operator.machineManagementUserIds;
+    const management = principal.kind === 'user' && (current.role === 'owner' || current.role === 'admin' && configured?.includes(principal.userId) === true);
     if (!result || !(result.ownerUserId === principal.userId || management || (!manage && result.accessUserIds.includes(principal.userId)))) fail('not_found', 'Machine not found.');
     return result;
   }

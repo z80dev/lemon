@@ -34,7 +34,7 @@ export function fixture(): TestRuntimeFixture {
   const connectedListeners = new Set<() => void>();
   const lostListeners = new Set<() => void>();
   const calls: TestRuntimeFixture['calls'] = [];
-  const services = { store, config: { publicUrl: 'https://product.example', controlUrl: 'wss://controller.example/ws', operatorToken: 'fixture-controller-token', trustedOverlay: false, dataDir: '/tmp/fixture', host: '127.0.0.1', port: 4080, operator: {}, operatorExtras: { approvedPrivateMcpOrigins: [] } } } as unknown as BackendServices;
+  const services = { store, config: { publicUrl: 'https://product.example', controlUrl: 'wss://controller.example/ws', operatorToken: 'fixture-controller-token', trustedOverlay: false, dataDir: '/tmp/fixture', host: '127.0.0.1', port: 4080, operator: { approvedPrivateMcpOrigins: [] } } } as unknown as BackendServices;
   installHelpers(services);
   services.encrypt = value => Buffer.from(JSON.stringify(value)).toString('base64url');
   services.decrypt = <T>(value: string) => JSON.parse(Buffer.from(value, 'base64url').toString()) as T;

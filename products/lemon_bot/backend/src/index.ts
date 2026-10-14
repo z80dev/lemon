@@ -10,7 +10,7 @@ import { installSecretResolver } from './core/secrets';
 import { createMutationService } from './core/mutations';
 import { createEventService } from './core/events';
 import { createAccessService, type RevocationHooks } from './core/auth';
-import { createAccountRoutes } from './core/accounts';
+import { createAccountRoutes, createAccountService } from './core/accounts';
 import { Router } from './core/router';
 import { createRealtime, type RealtimeData, type RealtimeService } from './core/realtime';
 import { createSyncRoutes } from './core/sync';
@@ -18,7 +18,7 @@ import { createLemonService } from './runtime/lemon';
 import { createRuntimeService } from './runtime/runs';
 import { createMachineRoutes, refreshMachines } from './runtime/machines';
 import { getTerminalService, type TerminalService } from './runtime/terminals';
-import { createBotRoutes, syncBotProfile } from './core/bots';
+import { createBotRoutes, createBotService, syncBotProfile } from './core/bots';
 import { createConversationRoutes } from './core/conversations';
 import { createMcpRoutes } from './core/mcp';
 import { createGateRoutes, createGateService } from './core/gates';
@@ -61,17 +61,19 @@ export async function createBackend(config:BackendConfiguration,key:Uint8Array):
   services.events=createEventService(services);
   const attachments=createAttachmentService(services);services.attachments=attachments;
   const gates=createGateService(services);services.gates=gates;
-  services.runtime=createRuntimeService(services);
+  const runtime=createRuntimeService(services);services.runtime=runtime;
   services.syncBotProfile=(principal,botId)=>syncBotProfile(services,principal,botId);
   services.integrations=createIntegrationServices(services);
   const router=new Router(services);
   terminals=getTerminalService(services);voice=createVoiceService(services);
   realtime=createRealtime(services,{
-    terminalSubscribe:(principal,deviceId,terminalId,afterSeq,send)=>terminals.subscribe(principal,deviceId,terminalId,afterSeq,send),
+    terminalSubscribe:(principal,deviceId,terminalId,afterSeq,send)=>terminals.subscribe(principal,deviceId,terminalId,afterSeq??0,send),
     voiceConnect:(userId,deviceId)=>voice.connect(userId,deviceId),
     voiceDisconnect:(userId,deviceId)=>voice.disconnect(userId,deviceId)
   });
   const experiences=createExperienceService(services);
+  const bots=createBotService(services);
+  const accounts=createAccountService(services);
   router.register([
     ...createAccountRoutes(services,hooks),...createSyncRoutes(services),...createMachineRoutes(services),
     ...createBotRoutes(services),...createConversationRoutes(services),...createMcpRoutes(services),
@@ -86,10 +88,13 @@ export async function createBackend(config:BackendConfiguration,key:Uint8Array):
   experiences.start();
   let reconciling=false;
   const reconcile=async()=>{
-    if(reconciling||!lemon.connected)return;reconciling=true;
-    try{await refreshMachines(services);await services.runtime.reconcile();await services.integrations.reconcile?.();}
-    catch{services.audit(null,'runtime.reconcile','controller','failed');}
-    finally{reconciling=false;}
+    if(reconciling)return;reconciling=true;
+    try{
+      const tasks=[async()=>{if(lemon.connected){await refreshMachines(services);await runtime.reconcile();await bots.reconcile();}},async()=>{await accounts.reconcile();},async()=>{await services.integrations.reconcile?.();}];
+      const results=await Promise.allSettled(tasks.map(task=>task()));
+      for(const result of results)if(result.status==='rejected')services.audit(null,'runtime.reconcile','controller','failed');
+      experiences.reconcile();
+    }finally{reconciling=false;}
   };
   const removeConnected=lemon.onConnected(()=>{void reconcile();});
   const reconcileTimer=setInterval(()=>{void reconcile();},30000);
@@ -119,7 +124,7 @@ export async function createBackend(config:BackendConfiguration,key:Uint8Array):
         },websocket:realtime.websocket});
       lemon.start();return server;
     },
-    async stop(){if(stopped)return;stopped=true;clearInterval(reconcileTimer);clearInterval(retentionTimer);removeConnected();experiences.close();realtime.close();voice.close();gates.close();attachments.close();services.integrations.dispose?.();terminals.dispose();lemon.close();if(server)await server.stop(true);store.close();}
+    async stop(){if(stopped)return;stopped=true;clearInterval(reconcileTimer);clearInterval(retentionTimer);removeConnected();experiences.close();realtime.close();voice.close();gates.close();attachments.close();services.integrations.dispose?.();runtime.close();terminals.dispose();lemon.close();if(server)await server.stop(true);store.close();}
   };
 }
 
