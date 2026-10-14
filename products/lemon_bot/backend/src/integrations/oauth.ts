@@ -51,7 +51,7 @@ export async function exchangeOAuth(services: BackendServices, provider: P.OAuth
     const headers: Record<string, string> = { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' };
     if ((options.clientAuthentication ?? provider.clientAuthentication) === 'basic') headers.Authorization = `Basic ${Buffer.from(`${encodeURIComponent(provider.clientId)}:${encodeURIComponent(secret)}`).toString('base64')}`;
     else form.set('client_secret', secret);
-    const result = await fetchJson(provider.tokenUrl, { method: 'POST', headers, body: form }, { allowedOrigins: provider.allowedOrigins, mutation: true, beforeDispatch: () => { assertActiveAccount(services, flow.userId); dispatched = true; services.store.put('oauthExchangeOperations', { ...operation, state: 'dispatching' }); } });
+    const result = await fetchJson(provider.tokenUrl, { method: 'POST', headers, body: form }, { allowedOrigins: provider.allowedOrigins, mutation: true, beforeDispatch: () => { assertActiveAccount(services, flow.userId); dispatched = true; services.store.put('oauthExchangeOperations', { ...operation, state: 'dispatching' }); }, fetch: services.http });
     const parsed = tokens.safeParse(result);
     if (!parsed.success) throw new ApiError('upstream_unavailable', 'Provider did not return a supported bearer credential.', false);
     const completion: OAuthCompletion = { id: flow.id, userId: flow.userId, providerId: flow.providerId, resourceId: flow.resourceId, callbackPath: operation.callbackPath, encryptedTokens: services.encrypt({ ...parsed.data, providerData: result }), tokenClientDigest: operation.tokenClientDigest, createdAtMs: services.now(), state: 'issued' };

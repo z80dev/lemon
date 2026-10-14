@@ -8,12 +8,11 @@ import { createMutationService } from '../../src/core/mutations';
 import { ApiError } from '../../src/core/errors';
 import { sha256 } from '../../src/integrations/common';
 import { createExportRoutes, createExportServices } from '../../src/enterprise/exports';
-import type { BackendServices, Principal, RequestContext } from '../../src/core/services';
+import type { BackendServices, HttpClient, Principal, RequestContext, Route } from '../../src/core/services';
 import type * as P from '../../../contracts/protocol';
 
-const fetchOriginal = globalThis.fetch;
 const cleanups: (() => void)[] = [];
-afterEach(() => { globalThis.fetch = fetchOriginal; for (const close of cleanups.splice(0).reverse()) close(); });
+afterEach(() => { for (const close of cleanups.splice(0).reverse()) close(); });
 const owner: Principal = { kind: 'user', id: 'alice', userId: 'alice', workspaceId: 'workspace', role: 'owner', sessionId: null, botId: null, deviceId: null };
 const bob: Principal = { ...owner, id: 'bob', userId: 'bob', role: 'member' };
 const carol: Principal = { ...owner, id: 'carol', userId: 'carol' };
@@ -27,9 +26,26 @@ function fixture(path = ':memory:') {
     const id = `${prefix}_${++sequence}`; store.setMetadata('testSequence', sequence);
     return { ...fields, id, revision: 1, createdAtMs: now, updatedAtMs: now };
   };
-  const services = {
+  const unsupported = (): never => { throw new Error('Unexpected export fixture boundary'); };
+  for (const p of [owner, bob, carol]) {
+    if (!store.get<P.Member>('members', p.userId)) {
+      store.put<P.Member>('members', { ...resource('member', { userId: p.userId, displayName: p.userId, email: `${p.userId}@example.test`, role: p.role, enabled: true }), id: p.userId });
+    }
+  }
+  let events: BackendServices['events'] | undefined;
+  let mutations: BackendServices['mutations'] | undefined;
+  const services: BackendServices = {
     store,
-    config: { operatorToken: 'known-operator-token', operator: { exportAllowedOrigins: ['https://collector.test'], exportPrivateOrigins: ['https://collector.test'], serverSecrets: { collector: { kind: 'env', name: 'COLLECTOR_SECRET' } } } },
+    config: {
+      publicUrl: 'https://product.test', controlUrl: 'ws://127.0.0.1:4040/ws', operatorToken: 'known-operator-token', dataDir: tmpdir(), host: '127.0.0.1', port: 4080, trustedOverlay: false,
+      operator: {
+        version: 1, trustedFrontendOrigins: [], oauthRedirectUris: [], channelProviders: [], emailProviders: [], eventProviders: [], hostDrivers: [], xProvider: null, requiredRuntimeDestinations: [], breakGlassOwnerUserId: null,
+        exportAllowedOrigins: ['https://collector.test'], exportPrivateOrigins: ['https://collector.test'], serverSecrets: { collector: { kind: 'env', name: 'COLLECTOR_SECRET' } },
+      },
+    },
+    get events() { return events ??= createEventService(services); },
+    get mutations() { return mutations ??= createMutationService(services, new Uint8Array(32).fill(7)); },
+    http: unsupported,
     now: () => now,
     id: (prefix = 'id') => resource(prefix, {}).id,
     resource,
@@ -38,29 +54,68 @@ function fixture(path = ':memory:') {
     decrypt: <T>(value: string): T => JSON.parse(value),
     secret: async (ref: string) => { if (ref !== 'collector') throw new ApiError('capability_unavailable', 'Unknown secret.'); return 'known-collector-token'; },
     auth: {
-      member(userId: string) { return { userId, role: userId === 'bob' ? 'member' : 'owner', enabled: true }; },
-      requireRole(p: Principal) { if (p.role === 'member') throw new ApiError('forbidden', 'Admin required.'); },
+      authenticate: unsupported,
+      user: unsupported,
+      member(userId) { return store.require<P.Member>('members', userId); },
+      requireRole(p, role) {
+        const member = services.auth.member(p.userId);
+        if (!member.enabled || member.role !== 'owner' && (role === 'owner' || member.role !== 'admin')) throw new ApiError('forbidden', 'Admin required.');
+      },
       conversation(p: Principal, id: string) { const row = store.require<P.Conversation>('conversations', id); if (!row.humanUserIds.includes(p.userId)) throw new ApiError('not_found', 'Conversation not found.'); return row; },
+      bot: unsupported,
+      machine: unsupported,
+      attachment: unsupported,
+      canRead(p, collection, entity) {
+        const readable = createExportServices(services).canReadResource(p, collection, entity);
+        if (readable === undefined) return unsupported();
+        return readable;
+      },
+      revokeUser: unsupported,
+      session: unsupported,
+      issueReauth: unsupported,
+      consumeReauth: unsupported,
     },
-    page: <T>(_context: RequestContext, items: T[]) => ({ items, nextCursor: null }),
+    page: unsupported,
+    pageAfter: unsupported,
+    lemon: { connected: false, methods: [], call: unsupported, onEvent: unsupported, onConnected: unsupported, start: unsupported, close: unsupported },
+    runtime: { submit: unsupported, send: unsupported, cancel: unsupported, revokeConnectorInvocations: unsupported, reconcile: unsupported, sessionKey: unsupported },
+    gates: { create: unsupported, resolve: unsupported, wait: unsupported, cancelUser: unsupported },
+    integrations: { admission: unsupported, effectivePolicy: unsupported, connectorConfig: unsupported, sendApprovedDraft: unsupported, emitProviderNotifications: unsupported, channelIngress: unsupported, providerCapabilities: unsupported },
+    entry: unsupported,
+    notify: unsupported,
+    syncBotProfile: unsupported,
     audit(p: Principal | null, action: string, targetId: string, outcome: P.AuditRecord['outcome'], metadata: P.JSONObject = {}, requestId = 'test-request') {
       return store.put('auditRecords', resource('audit', { actor: { kind: 'user' as const, id: p?.userId ?? null, displayName: 'Test actor' }, action, resourceType: action.split('.')[0]!, resourceId: targetId, outcome, metadata, requestId }));
     },
     attachments: {
-      async create(p: Principal, bytes: Uint8Array, metadata: P.AttachmentUpload & { filename: string; mime?: string }) {
-        const row = resource('attachment', { ownerUserId: p.userId, conversationId: null, botId: null, filename: metadata.filename, mime: metadata.mime ?? 'application/octet-stream', size: bytes.length, sha256: sha256(bytes), width: null, height: null, durationMs: null, source: 'generated' as const, state: 'ready' as const, preview: 'download' as const, provenance: null });
+      async create(p, bytes, metadata) {
+        const row = resource<Omit<P.Attachment, keyof P.Resource>>('attachment', { ownerUserId: p.userId, conversationId: metadata.conversationId ?? null, botId: metadata.botId ?? null, filename: metadata.filename, mime: metadata.mime ?? 'application/octet-stream', size: bytes.length, sha256: sha256(bytes), width: null, height: null, durationMs: null, source: metadata.source ?? 'generated', state: 'ready', preview: 'download', provenance: metadata.provenance ?? { botId: null, runId: null, machineId: null, sourceEntryId: null, generatedAtMs: now } });
         store.put('attachments', row); store.put('testBlobs', { id: row.id, data: Buffer.from(bytes).toString('base64') }); return row;
       },
       async bytes(id: string) { return new Uint8Array(Buffer.from(store.require<{ data: string }>('testBlobs', id).data, 'base64')); },
+      copy: unsupported,
+      download: unsupported,
     },
-    invoke: async <T>(_p: Principal, method: string, path: string): Promise<T> => {
-      const url = new URL(path, 'https://product.test');
-      if (method !== 'GET' || url.pathname !== '/v1/usage') throw new Error('Unexpected invocation');
-      return { fromAtMs: Number(url.searchParams.get('fromAtMs')), toAtMs: Number(url.searchParams.get('toAtMs')), totals: { key: 'total', inputTokens: 17, outputTokens: 19, requests: 1, costUsd: null }, buckets: [], incomplete: true, pricingSource: null } as T;
+    async invoke<T>(p: Principal, method: string, path: string, body?: unknown): Promise<T> {
+      const url = new URL(path, services.config.publicUrl);
+      const route = invocationRoutes.find(row => row.method === method && row.path === url.pathname);
+      if (!route) return unsupported();
+      const context: RequestContext = { route, request: new Request(url, { method }), params: {}, query: url.searchParams, body, user: p, services, requestId: 'test-invocation', nonceResourceIds: [] };
+      // Internal invocation crosses a JSON response boundary, rather than asserting a report is an arbitrary T.
+      return Response.json(await route.handler(context)).json();
     },
-  } as unknown as BackendServices;
-  services.events = createEventService(services);
-  services.mutations = createMutationService(services, new Uint8Array(32).fill(7));
+  };
+  const invocationRoutes: Route[] = [{
+    method: 'GET', path: '/v1/usage', auth: 'admin',
+    handler(context): P.UsageReport {
+      if (!context.user) throw new ApiError('unauthenticated', 'Sign in to continue.');
+      services.auth.requireRole(context.user, 'admin');
+      const fromAtMs = Number(context.query.get('fromAtMs'));
+      const toAtMs = Number(context.query.get('toAtMs'));
+      if (!context.query.has('fromAtMs') || !context.query.has('toAtMs') || !Number.isSafeInteger(fromAtMs) || fromAtMs < 0 || !Number.isSafeInteger(toAtMs) || toAtMs <= fromAtMs || context.query.get('groupBy') !== 'bot') throw new ApiError('invalid_request', 'Unexpected usage query.');
+      return { fromAtMs, toAtMs, totals: { key: 'total', inputTokens: 17, outputTokens: 19, requests: 1, costUsd: null }, buckets: [], incomplete: true, pricingSource: null };
+    },
+  }];
   const api = createExportServices(services);
   const routes = createExportRoutes(services);
   let nonce = 0;
@@ -71,10 +126,10 @@ function fixture(path = ':memory:') {
     return await route.handler(context) as T;
   }
   function conversation(id: string, humans: string[]) {
-    store.put('conversations', { ...resource('room', {}), id, kind: 'group', name: id, humanUserIds: humans, ownerUserId: humans[0]!, botIds: [], parentConversationId: null, leadBotId: null, channelBindingId: null, lastEntryId: null, unreadCount: 0, lastReadSeq: 0, activity: [] });
+    store.put<P.Conversation>('conversations', { ...resource('room', {}), id, kind: 'group', name: id, humanUserIds: humans, ownerUserId: humans[0]!, botIds: [], parentConversationId: null, leadBotId: null, channelBindingId: null, lastEntryId: null, unreadCount: 0, lastReadSeq: 0, activity: [] });
   }
-  function message(id: string, conversationId: string, text: string, extra: Record<string, unknown> = {}) {
-    store.put('entries', { ...resource('entry', {}), id, conversationId, seq: sequence, timestampMs: now, actor: { kind: 'user', id: 'alice', displayName: 'Alice' }, clientNonce: null, batchId: null, replyToEntryId: null, runId: null, targetedUserId: null, reactions: [], kind: 'message', role: 'user', text, streaming: false, attachmentIds: [], ...extra });
+  function message(id: string, conversationId: string, text: string, extra: Partial<Extract<P.TranscriptEntry, { kind: 'message' }>> = {}) {
+    store.put<P.TranscriptEntry>('entries', { ...resource('entry', {}), id, conversationId, seq: sequence, timestampMs: now, actor: { kind: 'user', id: 'alice', displayName: 'Alice' }, clientNonce: null, batchId: null, replyToEntryId: null, runId: null, targetedUserId: null, reactions: [], kind: 'message', role: 'user', text, streaming: false, attachmentIds: [], ...extra });
   }
   async function consent(id: string, p = owner, enabled = true) {
     const old = await call<P.ContentExportConsent>('GET', '/v1/conversations/:id/export-consent', undefined, p, id);
@@ -87,9 +142,9 @@ function fixture(path = ':memory:') {
   cleanups.push(close);
   return { store, services, api, call, consent, destination, message, conversation, advance: (ms = 1000) => { now += ms; }, close };
 }
-function collector(responder: (body: string, init: RequestInit) => Response | Promise<Response> = () => new Response('{}')) {
-  const requests: { body: string; init: RequestInit }[] = [];
-  globalThis.fetch = (async (_url: unknown, init: RequestInit = {}) => { const body = String(init.body); requests.push({ body, init }); return responder(body, init); }) as typeof fetch;
+function collector(services: BackendServices, responder: (body: string, init: RequestInit) => Response | Promise<Response> = () => new Response('{}'), requests: { body: string; init: RequestInit }[] = []) {
+  const http: HttpClient = async (_input, init = {}) => { const body = String(init.body); requests.push({ body, init }); return responder(body, init); };
+  services.http = http;
   return requests;
 }
 
@@ -133,13 +188,13 @@ describe('export privacy and durable delivery', () => {
   test('revocation invalidates queued and in-flight content, and does not replay it after re-consent', async () => {
     const f = fixture(); f.conversation('room', ['alice', 'bob']); f.store.setMetadata('governance', { contentExportEnabled: true }); await f.consent('room'); await f.consent('room', bob); await f.destination(['conversation_content']);
     f.advance(); f.message('new', 'room', 'sensitive queued packet');
-    const requests = collector(async () => { await f.consent('room', bob, false); return new Response('{}'); });
+    const requests = collector(f.services, async () => { await f.consent('room', bob, false); return new Response('{}'); });
     await f.api.reconcile(); expect(requests).toHaveLength(1);
     expect(f.store.list<{ state: string }>('exportOutbox')[0]!.state).toBe('cancelled');
     await f.consent('room', bob, true); f.advance(500000); await f.api.reconcile(); expect(requests).toHaveLength(1);
   });
   test('stream enabling starts current watermark, disable cancels queued packets, re-enable never backfills', async () => {
-    const f = fixture(); f.services.audit(owner, 'bot.created', 'old', 'succeeded'); const requests = collector();
+    const f = fixture(); f.services.audit(owner, 'bot.created', 'old', 'succeeded'); const requests = collector(f.services);
     let destination = await f.destination(['audit'], false); f.services.audit(owner, 'bot.created', 'disabled-history', 'succeeded');
     destination = await f.call<P.ExportDestination>('PATCH', '/v1/export-destinations/:id', { revision: destination.revision, enabled: true }, owner, destination.id);
     await f.api.reconcile(); expect(requests.every(row => !row.body.includes('disabled-history') && !row.body.includes('"old"'))).toBe(true);
@@ -190,15 +245,15 @@ describe('export privacy and durable delivery', () => {
     const f = fixture(); await f.destination(['usage']);
     const report: P.UsageReport = { fromAtMs: 0, toAtMs: 100000, totals: { key: 'total', inputTokens: 7, outputTokens: 11, requests: 1, costUsd: null }, buckets: [], incomplete: true, pricingSource: null };
     f.api.captureUsage(owner, report); f.api.captureUsage(owner, report); f.api.captureAction(owner, { action: 'tool.completed' }, 'unselected-action');
-    const requests = collector(); await f.api.reconcile();
+    const requests = collector(f.services); await f.api.reconcile();
     expect(requests).toHaveLength(1); expect(requests[0]!.body).toContain('"stream":"usage"'); expect(requests[0]!.body).toContain('"inputTokens":7'); expect(requests[0]!.body).not.toContain('tool.completed');
   });
   test('restart retries exact durable payload/key and acknowledges once; cursor survives restart', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'lemon-export-')); cleanups.push(() => rmSync(directory, { recursive: true, force: true }));
     const path = join(directory, 'store.sqlite'); let f = fixture(path); await f.destination(['action']); f.api.captureAction(owner, { action: 'tool.completed', outcome: 'succeeded', runId: 'run' }, 'stable-action');
-    const requests = collector(() => new Response('unavailable', { status: 503 })); await f.api.reconcile(); expect(requests).toHaveLength(1);
+    const requests = collector(f.services, () => new Response('unavailable', { status: 503 })); await f.api.reconcile(); expect(requests).toHaveLength(1);
     const first = requests[0]!; f.close(); cleanups.splice(cleanups.indexOf(f.close), 1); f = fixture(path); f.advance(500000);
-    globalThis.fetch = (async (_url: unknown, init: RequestInit) => { requests.push({ body: String(init.body), init }); return new Response('{}'); }) as typeof fetch;
+    collector(f.services, () => new Response('{}'), requests);
     await f.api.reconcile(); expect(requests).toHaveLength(2); expect(requests[1]!.body).toBe(first.body); expect(new Headers(requests[1]!.init.headers).get('idempotency-key')).toBe(new Headers(first.init.headers).get('idempotency-key'));
     expect(f.store.list<P.ExportRecord>('exports')[0]!.lastDeliveredCursor).toMatch(/^\d+$/); await f.api.reconcile(); expect(requests).toHaveLength(2);
   });
@@ -215,7 +270,7 @@ describe('export privacy and durable delivery', () => {
   });
   test('real OTLP HTTP envelope is pinned, has no redirects, and partial rejection is not completion', async () => {
     const f = fixture(); await f.destination(['action'], true, 'otlp_http'); f.api.captureAction(owner, { action: 'tool.completed', outcome: 'succeeded' }, 'otlp-action');
-    const requests = collector(() => new Response(JSON.stringify({ partialSuccess: { rejectedLogRecords: '1' } }))); await f.api.reconcile();
+    const requests = collector(f.services, () => new Response(JSON.stringify({ partialSuccess: { rejectedLogRecords: '1' } }))); await f.api.reconcile();
     expect(requests[0]!.init.redirect).toBe('error'); const parsed = JSON.parse(requests[0]!.body); expect(parsed.resourceLogs[0].resource.attributes[0].value.stringValue).toBe('lemon_bot');
     expect(parsed.resourceLogs[0].scopeLogs[0].logRecords[0].timeUnixNano).toBe('100000000000'); expect(f.store.list<P.ExportRecord>('exports')[0]!.state).toBe('queued');
     await expect(f.call('POST', '/v1/export-destinations', { name: 'Unsafe', url: 'https://unapproved.test', protocol: 'ndjson_webhook', streams: ['audit'], enabled: true })).rejects.toMatchObject({ code: 'policy_denied' });

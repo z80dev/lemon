@@ -307,7 +307,7 @@ function buildServices(s: BackendServices): ExportServices {
       s.store.put(packets, { ...packet, state: 'delivering', attempts: packet.attempts + 1 });
       record = setRecord(record, { state: 'running', error: null }, packet.userId);
       const response = await providerRequest(destination.url, { method: 'POST', headers, body: packet.payload, signal: controller.signal }, {
-        ...options, mutation: true, maxBytes: 65536,
+        ...options, mutation: true, maxBytes: 65536, fetch: s.http,
         beforeDispatch() {
           const current = s.store.get<P.ExportDestination>(destinations, packet.destinationId);
           if (!current?.enabled || !current.streams.includes(packet.kind) || s.store.require<Packet>(packets, packet.id).state === 'cancelled') throw new ApiError('policy_denied', 'Export was cancelled before dispatch.');

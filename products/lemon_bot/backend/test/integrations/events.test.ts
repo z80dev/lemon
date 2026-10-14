@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import type * as P from '../../../contracts/protocol';
 import { dedupeIngress, hmac, ignored, parse, principalFor, senderMatches, verifyIngress, jsonObject } from '../../src/integrations/channel-security';
 import { createEventRoutes, createEventServices, matchesFilters } from '../../src/integrations/events';
-import { context, entityStore, fixture, route } from './channels-fixture';
+import { closeFixture, context, entityStore, fixture, route } from './channels-fixture'
 
 const filterSchema: P.JSONObject = { type: 'object', properties: { 'repository.full_name': { type: 'string', minLength: 1 }, action: { type: 'array', items: { type: 'string', enum: ['opened', 'closed'] }, maxItems: 2 } }, additionalProperties: false };
 describe('verified provider event ingress', () => {
@@ -17,7 +17,7 @@ describe('verified provider event ingress', () => {
     const old = source === 'linear' ? { webhookTimestamp: now - 300001 } : source === 'pagerduty' ? { event: { occurred_at: new Date(now - 300001).toISOString() } } : source === 'sentry' ? { data: { dateCreated: new Date(now - 300001).toISOString() } } : { created_at: new Date(now - 300001).toISOString() };
     const oldRaw = JSON.stringify(old); const oldRequest = new Request(request.url, { method: 'POST', headers: { [header]: (source === 'github' ? 'sha256=' : source === 'pagerduty' ? 'v1=' : '') + hmac('private-signing-key', oldRaw) } });
     await expect(verifyIngress(services, oldRequest, oldRaw, 'provider', source, 'signing', 300000, old)).rejects.toMatchObject({ code: 'unauthenticated' });
-    services.store.db.close();
+    closeFixture(services);
   });
   test('bridge bearer is exact registered provider-scoped, not a user session', async () => {
     const { services } = fixture();
@@ -26,7 +26,7 @@ describe('verified provider event ingress', () => {
     await expect(verifyIngress(services, request, '{}', 'unregistered', 'github', 'signing', 300000, {})).rejects.toMatchObject({ code: 'unauthenticated' });
     const user = new Request(request.url, { headers: { authorization: 'Bearer user', 'x-lemon-timestamp': String(services.now()) } });
     await expect(verifyIngress(services, user, '{}', 'github', 'github', 'signing', 300000, {})).rejects.toMatchObject({ code: 'unauthenticated' });
-    services.store.db.close();
+    closeFixture(services);
   });
   test('SQLite dedupe survives service recreation, conflicts on changed body, fences interrupted dispatch', async () => {
     const first = fixture(); let dispatched = 0;
@@ -56,7 +56,7 @@ describe('verified provider event ingress', () => {
     const { services, principal } = fixture(); const member = services.auth.member(principal.userId); services.store.put('members', { ...member, enabled: false });
     expect(() => principalFor(services, principal.userId)).toThrow();
     let value: P.JSONObject = {}; for (let index = 0; index < 34; index++) value = { nested: value };
-    expect(() => parse(jsonObject, value)).toThrow(); services.store.db.close();
+    expect(() => parse(jsonObject, value)).toThrow(); closeFixture(services);
   });
   test('configured routine uses fixed principal, exact allowlist and persisted accepted receipt', async () => {
     const { services, principal, bot, submissions } = fixture();
@@ -72,6 +72,6 @@ describe('verified provider event ingress', () => {
     expect(submissions).toHaveLength(1); expect(submissions[0]?.principal.userId).toBe(principal.userId); expect(submissions[0]?.message.text).toContain('untrusted'); expect(submissions[0]?.message.text).toStartWith(routine.instruction);
     expect(await invoke(body)).toEqual(accepted); expect(submissions).toHaveLength(1);
     expect((await invoke({ ...body, deliveryId: 'delivery_b', event: 'push' }) as P.IntegrationIngressReceipt).accepted).toBe(false);
-    expect(submissions).toHaveLength(1); services.store.db.close();
+    expect(submissions).toHaveLength(1); closeFixture(services);
   });
 });

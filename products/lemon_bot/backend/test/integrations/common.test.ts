@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { boundedBytes, isPublicAddress, pinnedUrl, providerRequest, secureEqual, scrub } from '../../src/integrations/common';
+import type { HttpClient } from '../../src/core/services';
 describe('provider security boundary', () => {
   test('origin pinning rejects redirects credentials schemes and lookalike hosts', () => {
     for (const url of ['http://api.example/x', 'https://api.example.evil/x', 'https://user:password@api.example/x', 'https://api.example/x#secret']) expect(() => pinnedUrl(url, ['https://api.example'])).toThrow();
@@ -11,14 +12,14 @@ describe('provider security boundary', () => {
   });
   test('ACL revocation at dispatch sends no request and preserves the reason', async () => {
     let calls = 0;
-    const transport: typeof fetch = Object.assign(async () => { calls++; return new Response('{}'); }, { preconnect: () => {} });
+    const transport: HttpClient = async () => { calls++; return new Response('{}'); };
     await expect(providerRequest('https://api.example/x', {}, { allowedOrigins: ['https://api.example'], allowPrivate: true, fetch: transport, beforeDispatch() { throw new Error('consent revoked'); } })).rejects.toThrow('consent revoked');
     expect(calls).toBe(0);
   });
   test('caller cancellation is combined with provider timeout and is not ignored', async () => {
     const controller = new AbortController(); controller.abort(new Error('revoked'));
     let calls = 0;
-    const transport: typeof fetch = Object.assign(async () => { calls++; return new Response('{}'); }, { preconnect: () => {} });
+    const transport: HttpClient = async () => { calls++; return new Response('{}'); };
     await expect(providerRequest('https://api.example/x', { signal: controller.signal }, { allowedOrigins: ['https://api.example'], allowPrivate: true, fetch: transport })).rejects.toThrow('revoked');
     expect(calls).toBe(0);
   });

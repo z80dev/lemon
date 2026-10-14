@@ -1,8 +1,8 @@
-import { afterEach, describe, expect, spyOn, test } from 'bun:test';
+import { afterEach, describe, expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import type * as P from '../../../contracts/protocol';
-import type { BackendServices, LemonService, Principal } from '../../src/core/services';
+import type { AccessService, BackendServices, EventService, GateService, HttpClient, IntegrationServices, LemonService, MutationService, Principal } from '../../src/core/services';
 import { Store } from '../../src/core/store';
 import { createPrivateCodec } from '../../src/core/config';
 import { installHelpers } from '../../src/core/helpers';
@@ -16,6 +16,7 @@ import { Router } from '../../src/core/router';
 import { ApiError } from '../../src/core/errors';
 import { createPolicyServices } from '../../src/enterprise/policy';
 import { createConnectorRoutes, createConnectorServices, connectorConfigurationFingerprint } from '../../src/integrations/connectors';
+import { createPushServices } from '../../src/integrations/push';
 import type { InvocationMcpServer } from '../../src/runtime/runs';
 import { privateMetadata, sha256 } from '../../src/integrations/common';
 import type { OAuthState } from '../../src/integrations/oauth';
@@ -105,6 +106,10 @@ class DestinationPeer implements LemonService {
 const cleanup: (() => void)[] = [];
 afterEach(() => { for (const close of cleanup.splice(0)) close(); });
 
+function unexpectedBoundary(boundary: string): () => never {
+  return () => { throw new Error(`Unexpected connector fixture boundary: ${boundary}`); };
+}
+
 async function fixture(visibility: P.Bot['visibility'] = 'personal') {
   const store = new Store(':memory:');
   const peer = new DestinationPeer();
@@ -114,23 +119,71 @@ async function fixture(visibility: P.Bot['visibility'] = 'personal') {
   const oauth: P.OAuthProviderConfig = { id: 'records-oauth', clientId: 'registered-client', clientSecretRef: 'records-client-secret', authorizeUrl: `${ORIGIN}/oauth/authorize`, tokenUrl: `${ORIGIN}/oauth/token`, scopes: ['records.read', 'records.write'], redirectUris: [`${PUBLIC_URL}/v1/connectors/oauth/callback`], allowedOrigins: [ORIGIN] };
   operator.connectorProviders = [{ id: 'records', origins: [ORIGIN], oauth, sharedServiceAccount: false }];
   operator.approvedPrivateMcpOrigins = [];
-  // The actual factories fill the cyclic service graph, just as backend bootstrap does.
-  const services = { config: { publicUrl: PUBLIC_URL, controlUrl: 'ws://127.0.0.1:4040/ws', operatorToken: 'test-operator-not-a-provider-token', dataDir: '/unused-test-data', host: '127.0.0.1', port: 4080, trustedOverlay: false, operator }, store, lemon: peer, ...codec } as BackendServices;
-  installHelpers(services);
   let serial = 0;
   let now = 1_800_000_000_000;
+  let auth: AccessService | undefined;
+  let events: EventService | undefined;
+  let mutations: MutationService | undefined;
+  let gates: (GateService & { close(): void }) | undefined;
+  let integrations: IntegrationServices | undefined;
+  // Lazy factories retain the real cyclic graph; helpers/router replace only their installation boundaries.
+  const services: BackendServices = {
+    config: { publicUrl: PUBLIC_URL, controlUrl: 'ws://127.0.0.1:4040/ws', operatorToken: 'test-operator-not-a-provider-token', dataDir: '/unused-test-data', host: '127.0.0.1', port: 4080, trustedOverlay: false, operator },
+    store, lemon: peer, ...codec,
+    get auth() { return auth ??= createAccessService(services); },
+    get events() { return events ??= createEventService(services); },
+    get mutations() { return mutations ??= createMutationService(services, key); },
+    get gates() { return gates ??= createGateService(services); },
+    get integrations(): IntegrationServices {
+      if (!integrations) {
+        const push = createPushServices(services, { env: {} });
+        integrations = {
+          ...createPolicyServices(services),
+          admission: unexpectedBoundary('integrations.admission'),
+          connectorConfig: connectorServices.connectorProfileConfiguration,
+          connectorTemplates: connectorServices.connectorTemplates,
+          canReadResource: (actor, collection, entity) => connectorServices.canReadResource(actor, collection, entity) ?? false,
+          sendApprovedDraft: unexpectedBoundary('integrations.sendApprovedDraft'),
+          emitProviderNotifications: push.emitProviderNotifications,
+          channelIngress: unexpectedBoundary('integrations.channelIngress'),
+          providerCapabilities: push.providerCapabilities,
+        };
+      }
+      return integrations;
+    },
+    runtime: {
+      submit: unexpectedBoundary('runtime.submit'),
+      send: unexpectedBoundary('runtime.send'),
+      cancel: unexpectedBoundary('runtime.cancel'),
+      revokeConnectorInvocations: (actor, botId, connectorId) => revokeConnectorInvocations(services, actor, botId, connectorId),
+      reconcile: unexpectedBoundary('runtime.reconcile'),
+      sessionKey: unexpectedBoundary('runtime.sessionKey'),
+    },
+    attachments: {
+      create: unexpectedBoundary('attachments.create'),
+      copy: unexpectedBoundary('attachments.copy'),
+      bytes: unexpectedBoundary('attachments.bytes'),
+      download: unexpectedBoundary('attachments.download'),
+    },
+    id: unexpectedBoundary('helpers.id before installation'),
+    now: unexpectedBoundary('helpers.now before installation'),
+    resource: unexpectedBoundary('helpers.resource before installation'),
+    update: unexpectedBoundary('helpers.update before installation'),
+    page: unexpectedBoundary('helpers.page before installation'),
+    pageAfter: unexpectedBoundary('helpers.pageAfter before installation'),
+    secret: async ref => { if (ref !== oauth.clientSecretRef) throw new Error('Backend attempted to resolve a destination secret.'); return 'configured-server-client-secret'; },
+    http: async input => { throw new Error(`Unexpected connector fixture HTTP request: ${String(input)}`); },
+    audit: unexpectedBoundary('helpers.audit before installation'),
+    entry: unexpectedBoundary('helpers.entry before installation'),
+    notify: unexpectedBoundary('helpers.notify before installation'),
+    invoke: unexpectedBoundary('router.invoke before installation'),
+    syncBotProfile: (actor, botId) => syncBotProfile(services, actor, botId),
+  };
+  installHelpers(services);
   services.id = (prefix = 'id') => `${prefix}_${String(++serial).padStart(24, '0')}`;
   services.now = () => now;
-  services.secret = async ref => { if (ref !== oauth.clientSecretRef) throw new Error('Backend attempted to resolve a destination secret.'); return 'configured-server-client-secret'; };
-  services.auth = createAccessService(services);
-  services.events = createEventService(services);
-  services.mutations = createMutationService(services, key);
-  const connectors = createConnectorServices(services);
-  services.integrations = { ...createPolicyServices(services), connectorConfig: connectors.connectorProfileConfiguration, connectorTemplates: connectors.connectorTemplates, canReadResource: (actor, collection, entity) => connectors.canReadResource(actor, collection, entity) ?? false, emitProviderNotifications: async () => undefined } as BackendServices['integrations'];
-  services.syncBotProfile = (actor, botId) => syncBotProfile(services, actor, botId);
-  services.runtime = { revokeConnectorInvocations: (actor, botId, connectorId) => revokeConnectorInvocations(services, actor, botId, connectorId) } as BackendServices['runtime'];
-  const gates = createGateService(services);
-  services.gates = gates;
+  const connectorServices = createConnectorServices(services);
+  const gateService = gates ??= createGateService(services);
   const router = new Router(services);
   router.register(createConnectorRoutes(services));
   store.setMetadata('workspaceId', 'workspace-1');
@@ -166,13 +219,13 @@ async function fixture(visibility: P.Bot['visibility'] = 'personal') {
     store.put('runs', run);
     store.setMetadata(`nativeRunProduct:${operationId}`, run.id);
     store.setMetadata(`runPrincipal:${run.id}`, actor);
-    await connectors.connectorInvocationConfiguration(actor, bot.id, run.conversationId, operationId);
+    await connectorServices.connectorInvocationConfiguration(actor, bot.id, run.conversationId, operationId);
     const configured = store.metadata<string[]>(`invocationConnectors:${operationId}`) ?? [];
     store.setMetadata(`runConnectorEpochs:${run.id}`, configured.map(connectorId => ({ connectorId, epoch: store.metadata<number>(`connectorEpoch:${connectorId}`) ?? 0 })));
     return run;
   };
-  cleanup.push(() => { gates.close(); peer.close(); store.close(); });
-  return { services, store, peer, bot, machine, oauth, connectors, request, create, enable, admit, principal, advance: (ms: number) => { now += ms; } };
+  cleanup.push(() => { gateService.close(); peer.close(); store.close(); });
+  return { services, store, peer, bot, machine, oauth, connectors: connectorServices, request, create, enable, admit, principal, advance: (ms: number) => { now += ms; } };
 }
 
 describe('destination connector configuration', () => {
@@ -422,7 +475,7 @@ describe('configured OAuth and destructive disconnect', () => {
     expect(authorize.searchParams.get('code_challenge')).toBe(sha256(flow.verifier));
     expect(JSON.stringify(auth.body)).not.toContain(flow.verifier);
     const exchanges: URLSearchParams[] = [];
-    const transport = spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+    const transport: HttpClient = async (input, init) => {
       expect(String(input)).toBe(f.oauth.tokenUrl);
       const form = new URLSearchParams(String(init?.body)); exchanges.push(form);
       expect(form.get('client_id')).toBe(f.oauth.clientId);
@@ -430,8 +483,8 @@ describe('configured OAuth and destructive disconnect', () => {
       expect(form.get('redirect_uri')).toBe(`${PUBLIC_URL}/v1/connectors/oauth/callback`);
       expect(form.get('code_verifier')).toBe(flow.verifier);
       return Response.json({ access_token: 'provider-private-access-token', token_type: 'Bearer', refresh_token: 'provider-private-refresh-token', expires_in: 3600 });
-    });
-    cleanup.push(() => transport.mockRestore());
+    };
+    f.services.http = transport;
     const callback = await f.request<P.ConnectorAuth>('GET', `/v1/connectors/oauth/callback?state=${state}&code=provider-code`, undefined, null);
     expect(callback.body.state).toBe('connected');
     const writes = f.peer.calls.filter(call => call.method === 'node.secrets.set');
@@ -463,11 +516,12 @@ describe('configured OAuth and destructive disconnect', () => {
     const auth = await f.request<P.ConnectorAuth>('POST', `/v1/connectors/${created.body.connector.id}/auth`, { clientNonce: f.services.id('nonce') });
     const state = new URL(auth.body.authorizationUrl).searchParams.get('state')!;
     f.services.config.operator!.connectorProviders = [{ id: 'records', origins: [ORIGIN], oauth: { ...f.oauth, clientId: 'other-client' }, sharedServiceAccount: false }];
-    const transport = spyOn(globalThis, 'fetch').mockImplementation(async () => { throw new Error('A changed client must not exchange this code.'); });
-    cleanup.push(() => transport.mockRestore());
+    const exchanges: (RequestInfo | URL)[] = [];
+    const transport: HttpClient = async input => { exchanges.push(input); throw new Error('A changed client must not exchange this code.'); };
+    f.services.http = transport;
     const result = await f.request<P.ErrorEnvelope>('GET', `/v1/connectors/oauth/callback?state=${state}&code=wrong-client`, undefined, null);
     expect(result.body.error.code).toBe('conflict');
-    expect(transport).not.toHaveBeenCalled();
+    expect(exchanges).toEqual([]);
     expect(f.peer.calls.filter(call => call.method === 'node.secrets.set')).toEqual([]);
   });
 
@@ -477,7 +531,7 @@ describe('configured OAuth and destructive disconnect', () => {
     const auth = await f.request<P.ConnectorAuth>('POST', `/v1/connectors/${created.body.connector.id}/auth`, { clientNonce: f.services.id('nonce') });
     const state = new URL(auth.body.authorizationUrl).searchParams.get('state')!;
     const revocations: string[] = [];
-    const transport = spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+    const transport: HttpClient = async (input, init) => {
       if (String(input) === f.oauth.tokenUrl) {
         f.store.setMetadata('accountDeletion:alice', { status: 'running' });
         return Response.json({ access_token: 'late-issued-access', token_type: 'Bearer', refresh_token: 'late-issued-refresh' });
@@ -485,8 +539,8 @@ describe('configured OAuth and destructive disconnect', () => {
       expect(String(input)).toBe(`${ORIGIN}/oauth/revoke`);
       revocations.push(new URLSearchParams(String(init?.body)).get('token')!);
       return new Response(null, { status: 200 });
-    });
-    cleanup.push(() => transport.mockRestore());
+    };
+    f.services.http = transport;
     const callback = await f.request<P.ErrorEnvelope>('GET', `/v1/connectors/oauth/callback?state=${state}&code=late`, undefined, null);
     expect(callback.body.error.code).toBe('outcome_unknown');
     expect(f.peer.calls.filter(call => call.method === 'node.secrets.set')).toEqual([]);

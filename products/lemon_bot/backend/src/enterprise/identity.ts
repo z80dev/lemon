@@ -1,4 +1,4 @@
-import { constants, createPublicKey, verify, type JsonWebKey } from 'node:crypto';
+import { constants, createPublicKey, verify } from 'node:crypto';
 import { z } from 'zod';
 import type * as P from '../../../contracts/protocol';
 import type { BackendServices, Principal, Route } from '../core/services';
@@ -59,7 +59,7 @@ async function providerFetch(url: URL, init?: RequestInit, services?: BackendSer
   if (services && provider) await oidcTransport(services, provider, url.href);
   beforeDispatch?.();
   let response: Response;
-  try { response = await fetch(url, { ...init, redirect: 'error', signal: AbortSignal.timeout(10000) }); } catch { fail('upstream_unavailable', 'Identity provider could not be reached.'); }
+  try { response = await (services?.http ?? fetch)(url, { ...init, redirect: 'error', signal: AbortSignal.timeout(10000) }); } catch { fail('upstream_unavailable', 'Identity provider could not be reached.'); }
   if (!response.ok) fail('upstream_unavailable', 'Identity provider rejected the request.');
   if (Number(response.headers.get('content-length') ?? 0) > 1048576) fail('upstream_unavailable', 'Identity provider response exceeds the allowed size.');
   const reader = response.body?.getReader(); if (!reader) fail('upstream_unavailable', 'Identity provider returned no response.');
@@ -87,14 +87,14 @@ export async function verifyOIDCToken(token: string, p: P.OIDCProvider, d: Disco
   try { header = JSON.parse(Buffer.from(parts[0]!, 'base64url').toString()) as Record<string, unknown>; claims = JSON.parse(Buffer.from(parts[1]!, 'base64url').toString()) as Record<string, unknown>; } catch { fail('unauthenticated', 'Invalid identity token.'); }
   if (!header || typeof header !== 'object' || !claims || typeof claims !== 'object' || typeof header.alg !== 'string' || !['RS256', 'PS256', 'ES256', 'EdDSA'].includes(header.alg) || header.crit !== undefined || header.jku !== undefined || header.jwk !== undefined || header.x5u !== undefined) fail('unauthenticated', 'Unsupported identity token signature.');
   if (d.id_token_signing_alg_values_supported && !d.id_token_signing_alg_values_supported.includes(header.alg)) fail('unauthenticated', 'Unexpected identity token signature.');
-  const jwks = z.object({ keys: z.array(z.record(z.string(), z.unknown())).max(100) }).safeParse(await providerFetch(pinnedUrl(d.jwks_uri, p.issuer, services, p), undefined, services, p));
+  const jwks = z.object({ keys: z.array(z.object({ kty: z.string(), kid: z.string().optional(), use: z.string().optional(), alg: z.string().optional(), key_ops: z.array(z.string()).optional(), crv: z.string().optional(), n: z.string().optional(), e: z.string().optional(), x: z.string().optional(), y: z.string().optional(), ext: z.boolean().optional() })).max(100) }).safeParse(await providerFetch(pinnedUrl(d.jwks_uri, p.issuer, services, p), undefined, services, p));
   if (!jwks.success) fail('upstream_unavailable', 'Identity signing keys are invalid.');
   const kty = header.alg === 'ES256' ? 'EC' : header.alg === 'EdDSA' ? 'OKP' : 'RSA';
   const keys = jwks.data.keys.filter(key => (header.kid === undefined || key.kid === header.kid) && key.kty === kty && (key.use === undefined || key.use === 'sig') && (key.alg === undefined || key.alg === header.alg) && (key.key_ops === undefined || Array.isArray(key.key_ops) && key.key_ops.includes('verify')) && (header.alg !== 'ES256' || key.crv === 'P-256') && (header.alg !== 'EdDSA' || key.crv === 'Ed25519'));
   if (keys.length !== 1) fail('unauthenticated', 'Identity signing key could not be selected.');
   let valid = false;
   try {
-    const key = createPublicKey({ key: keys[0] as JsonWebKey, format: 'jwk' });
+    const key = createPublicKey({ key: keys[0]!, format: 'jwk' });
     if (kty === 'RSA' && (key.asymmetricKeyDetails?.modulusLength ?? 0) < 2048) fail('unauthenticated', 'Weak identity signing key.');
     valid = verify(header.alg === 'EdDSA' ? null : 'sha256', Buffer.from(`${parts[0]}.${parts[1]}`), { key, ...(header.alg === 'PS256' ? { padding: constants.RSA_PKCS1_PSS_PADDING, saltLength: 32 } : {}), ...(header.alg === 'ES256' ? { dsaEncoding: 'ieee-p1363' as const } : {}) }, Buffer.from(parts[2]!, 'base64url'));
   } catch { fail('unauthenticated', 'Invalid identity signature.'); }
@@ -198,7 +198,7 @@ async function endProviderSessions(services: BackendServices, userId: string, pr
       try {
         const url = pinnedUrl(p.endSessionEndpoint, p.issuer, services, p); await oidcTransport(services, p, url.href); const destination = new URL(services.config.publicUrl);
         url.searchParams.set('id_token_hint', services.decrypt<string>(session.encryptedIDToken)); url.searchParams.set('client_id', p.clientId); url.searchParams.set('post_logout_redirect_uri', destination.href); url.searchParams.set('state', receipt.id);
-        const result = await fetch(url, { redirect: 'manual', signal: AbortSignal.timeout(10000) }); await result.body?.cancel();
+        const result = await (services.http ?? fetch)(url, { redirect: 'manual', signal: AbortSignal.timeout(10000) }); await result.body?.cancel();
         const location = result.headers.get('location'); let confirmed = false;
         if (location && [302, 303].includes(result.status)) { const target = new URL(location, p.endSessionEndpoint); confirmed = target.origin === destination.origin && target.pathname === destination.pathname && target.searchParams.get('state') === receipt.id && !target.searchParams.has('error'); }
         receipt.state = confirmed ? 'completed' : result.status >= 400 && result.status < 500 ? 'failed' : 'outcome_unknown'; receipt.errorCode = confirmed ? null : 'upstream_unavailable';
