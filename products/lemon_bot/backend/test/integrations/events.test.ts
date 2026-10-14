@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import type * as P from '../../../contracts/protocol';
 import { dedupeIngress, hmac, ignored, parse, principalFor, senderMatches, verifyIngress, jsonObject } from '../../src/integrations/channel-security';
 import { createEventRoutes, createEventServices, matchesFilters } from '../../src/integrations/events';
-import { closeFixture, context, entityStore, fixture, route } from './channels-fixture'
+import { additionalOwner, closeFixture, context, entityStore, fixture, route } from './channels-fixture'
 
 const filterSchema: P.JSONObject = { type: 'object', properties: { 'repository.full_name': { type: 'string', minLength: 1 }, action: { type: 'array', items: { type: 'string', enum: ['opened', 'closed'] }, maxItems: 2 } }, additionalProperties: false };
 describe('verified provider event ingress', () => {
@@ -73,5 +73,30 @@ describe('verified provider event ingress', () => {
     expect(await invoke(body)).toEqual(accepted); expect(submissions).toHaveLength(1);
     expect((await invoke({ ...body, deliveryId: 'delivery_b', event: 'push' }) as P.IntegrationIngressReceipt).accepted).toBe(false);
     expect(submissions).toHaveLength(1); closeFixture(services);
+  });
+  test('fixed event principal owns both routine and Bot; remapping a source cannot reveal a cached run', async () => {
+    const { services, principal, bot, submissions } = fixture();
+    const other = additionalOwner(services, bot, 'event_admin', 'owner');
+    const makeRoutine = (selectedBot: P.Bot, ownerUserId: string) => {
+      const routine: P.Routine = services.resource('routine', { botId: selectedBot.id, ownerUserId, name: 'Issue review', instruction: 'Review issue', trigger: { kind: 'external_event', source: 'github', eventNames: ['issues'], filters: {} }, enabled: true, nextRunAtMs: null, scheduleDescription: 'Issues', lastRunId: null, webhookUrl: null, cronJobId: null });
+      const main = services.store.require<P.Conversation>('conversations', selectedBot.mainConversationId);
+      const task: P.Conversation = { ...main, id: services.id('event_task'), kind: 'task', parentConversationId: main.id };
+      services.store.put('conversations', task); services.store.put('routines', { ...routine, conversationId: task.id }); return routine;
+    };
+    const original = makeRoutine(bot, principal.userId); const otherRoutine = makeRoutine(other.bot, other.principal.userId);
+    const provider: P.EventProviderConfig = { id: 'github', source: 'github', signingSecretRef: 'signing', eventNames: ['issues'], routineIds: [original.id], principalUserId: principal.userId, maxAgeMs: 300000 };
+    services.config.operator.eventProviders = [provider];
+    const endpoint = route(createEventRoutes(services), 'POST', '/v1/integrations/:providerId/events');
+    const invoke = (deliveryId: string) => endpoint.handler(context(services, endpoint, null, undefined, { providerId: 'github' }, '', new Request('https://product.example/v1/integrations/github/events', { method: 'POST', headers: { authorization: 'Bearer bridge', 'x-lemon-timestamp': String(services.now()) }, body: JSON.stringify({ deliveryId, event: 'issues', payload: { issue: deliveryId } }) })));
+    try {
+      expect((await invoke('original_delivery') as P.IntegrationIngressReceipt).accepted).toBe(true);
+      services.config.operator.eventProviders = [{ ...provider, principalUserId: other.principal.userId, routineIds: [original.id, otherRoutine.id] }];
+      const replay = await invoke('original_delivery') as P.IntegrationIngressReceipt;
+      expect(replay.accepted).toBe(false); expect(replay.runId).toBeNull(); expect(replay.conversationId).toBeNull(); expect(submissions).toHaveLength(1);
+      expect((await invoke('other_delivery') as P.IntegrationIngressReceipt).accepted).toBe(true);
+      expect(submissions[1]?.principal.userId).toBe(other.principal.userId); expect(submissions[1]?.conversationId).not.toBe(submissions[0]?.conversationId);
+      services.store.put('routines', { ...otherRoutine, botId: bot.id });
+      expect((await invoke('mismatched_owner') as P.IntegrationIngressReceipt).accepted).toBe(false); expect(submissions).toHaveLength(2);
+    } finally { closeFixture(services); }
   });
 });

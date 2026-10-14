@@ -4,7 +4,7 @@ import { z } from 'zod';
 import type * as P from '../../../contracts/protocol';
 import type { BackendServices, Route } from '../core/services';
 import { IntegrationError } from './common';
-import { dedupeIngress, id, ignored, jsonObject, object, parse, principalFor, rawBody, runEventRoutine, senderMatches, signedTime, verifyIngress } from './channel-security';
+import { dedupeIngress, id, ignored, jsonObject, object, ownedBot, parse, principalFor, rawBody, runEventRoutine, senderMatches, signedTime, verifyIngress } from './channel-security';
 
 export const emptyFilterSchema: P.JSONObject = { type: 'object', properties: {}, additionalProperties: false };
 export function validateEventFilters(schema: P.JSONObject, value: P.JSONValue): void {
@@ -88,14 +88,23 @@ export function createEventRoutes(services: BackendServices): Route[] {
         if (!Object.hasOwn(object(root.data), field)) throw new IntegrationError('unauthenticated', 'Sentry resource header does not match its signed payload.');
       }
       parse(id, normalized.deliveryId);
+      const configuredPrincipal = principalFor(services, provider.principalUserId);
+      const eligibleRoutineIds = provider.routineIds.filter(routineId => {
+        const routine = services.store.get<P.Routine>('routines', routineId);
+        const bot = routine ? services.store.get<P.Bot>('bots', routine.botId) : null;
+        return !!routine && routine.ownerUserId === configuredPrincipal.userId && bot?.ownerUserId === configuredPrincipal.userId;
+      });
+      if (!eligibleRoutineIds.length) return ignored('Configured event principal must own the routine and its Bot.');
+      if (!(await services.integrations.effectivePolicy(configuredPrincipal)).productAccess) return ignored('Configured event principal is blocked by product access policy.');
       return dedupeIngress(services, provider.id, normalized.deliveryId, decoded, async () => {
         if (!provider.eventNames.includes(normalized.event)) return ignored('Unsupported registered event.');
         const principal = principalFor(services, provider.principalUserId);
         let result = ignored('No enabled routine matched this event.');
-        for (const routineId of provider.routineIds) {
+        for (const routineId of eligibleRoutineIds) {
           const routine = services.store.get<P.Routine>('routines', routineId);
           const occurredAtMs = Number(context.request.headers.get('x-lemon-timestamp')) || signedTime(provider.source, decoded);
           if (!routine || routine.createdAtMs > occurredAtMs || !routine.enabled) continue;
+          ownedBot(services, principal, routine.botId);
           const trigger = routine.trigger;
           if (trigger.kind === 'external_event') {
             const definition = provider.eventDefinitions?.find(event => event.name === normalized.event);
@@ -103,7 +112,7 @@ export function createEventRoutes(services: BackendServices): Route[] {
           } else if (trigger.kind === 'channel_event') {
             if (provider.source !== 'slack' && provider.source !== 'email' || trigger.event !== normalized.event || normalized.payload.channelBindingId !== trigger.channelBindingId) continue;
             const binding = services.store.get<P.ChannelBinding>('channelBindings', trigger.channelBindingId);
-            if (!binding?.enabled || binding.state !== 'connected' || binding.botId !== routine.botId || binding.adapter !== provider.source || provider.source === 'email' && binding.ownerUserId !== principal.userId) continue;
+            if (!binding?.enabled || binding.state !== 'connected' || binding.botId !== routine.botId || binding.adapter !== provider.source || binding.ownerUserId !== principal.userId) continue;
             const governance = services.store.list<P.Governance>('governance')[0] ?? services.store.metadata<P.Governance>('governance');
             if (provider.source === 'email' ? !governance?.emailEnabled : !governance?.allowedChannelAdapters.includes('slack')) continue;
             if (trigger.channel && normalized.payload.channel !== trigger.channel || trigger.phrase && (typeof normalized.payload.text !== 'string' || !normalized.payload.text.includes(trigger.phrase)) || trigger.reaction && normalized.payload.reaction !== trigger.reaction) continue;
@@ -116,7 +125,7 @@ export function createEventRoutes(services: BackendServices): Route[] {
           result = await runEventRoutine(services, principal, routine, normalized.payload, `${provider.id}:${normalized.deliveryId}`);
         }
         return result;
-      });
+      }, configuredPrincipal);
     } },
   ];
 }

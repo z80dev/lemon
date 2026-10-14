@@ -3,11 +3,10 @@ import type * as P from '../../../contracts/protocol';
 import type { BackendServices } from '../../src/core/services';
 import { createChannelRoutes, createChannelServices } from '../../src/integrations/channels';
 import { hmac } from '../../src/integrations/channel-security';
-import { closeFixture, context, fixture, providerMocks, route, slackProvider } from './channels-fixture'
+import { additionalOwner, closeFixture, context, fixture, providerMocks, route, slackProvider } from './channels-fixture'
 
 function installed() {
   const state = fixture(); const { services, principal, bot } = state; services.config.operator.channelProviders = [slackProvider];
-  services.store.put('bots', { ...bot, visibility: 'team', published: true });
   services.store.put('channelAccounts', { id: 'slack_account', providerId: slackProvider.id, teamId: 'T1', botUserId: 'B1', appId: 'A1', token: services.encrypt('account-token'), installerUserId: 'U1', productUserId: principal.userId, botId: bot.id });
   const binding: P.ChannelBinding = services.resource('channel', { botId: bot.id, ownerUserId: principal.userId, adapter: 'slack', accountId: 'slack_account', target: 'C1', enabled: true, state: 'connected', capabilities: slackProvider.capabilities, lastError: null }); services.store.put('channelBindings', binding);
   return { ...state, binding };
@@ -18,7 +17,7 @@ function signedSlack(services: BackendServices, value: unknown): Request {
 }
 describe('Slack app installation and verified channel identities', () => {
   test('installation uses state/S256/form exchange and actual Slack admin/account verification', async () => {
-    const { services, principal, bot } = fixture(); services.config.operator.channelProviders = [slackProvider]; services.store.put('bots', { ...bot, visibility: 'team', published: true });
+    const { services, principal, bot } = fixture(); services.config.operator.channelProviders = [slackProvider];
     const calls: string[] = []; const mocked = providerMocks(services, (url, init) => {
       calls.push(url.pathname); const form = new URLSearchParams(String(init?.body));
       if (url.pathname === '/oauth/token') { expect(form.get('grant_type')).toBe('authorization_code'); expect(form.get('code_verifier')).toBeTruthy(); expect(form.get('redirect_uri')).toBe('https://product.example/v1/channels/oauth/callback'); return { ok: true, token_type: 'bot', access_token: 'installed-token', team: { id: 'T1' }, authed_user: { id: 'U1' }, bot_user_id: 'B1', app_id: 'A1' }; }
@@ -40,7 +39,7 @@ describe('Slack app installation and verified channel identities', () => {
     } finally { mocked.restore(); closeFixture(services); }
   });
   test('non-admin installation awaits actual Slack admin; no fake connected binding', async () => {
-    const { services, principal, bot } = fixture(); services.config.operator.channelProviders = [slackProvider]; services.store.put('bots', { ...bot, visibility: 'team', published: true });
+    const { services, principal, bot } = fixture(); services.config.operator.channelProviders = [slackProvider];
     const mocked = providerMocks(services, url => url.pathname === '/oauth/token' ? { ok: true, token_type: 'bot', access_token: 'installed-token', team: { id: 'T1' }, authed_user: { id: 'U1' }, bot_user_id: 'B1', app_id: 'A1' } : url.pathname.endsWith('auth.test') ? { ok: true, team_id: 'T1', user_id: 'B1' } : url.pathname.endsWith('users.info') ? { ok: true, user: { id: 'U1', is_admin: false } } : { ok: true, revoked: true });
     try {
       const routes = createChannelRoutes(services); const setup = route(routes, 'POST', '/v1/channels/setup'); const pending = await setup.handler(context(services, setup, principal, { clientNonce: 'abcdefghijklmnop', botId: bot.id, adapter: 'slack', providerId: slackProvider.id, accountLabel: 'Team', redirectUri: 'https://product.example/return' })) as P.ChannelSetupFlow;
@@ -80,8 +79,8 @@ describe('Slack app installation and verified channel identities', () => {
   test('handoff cannot change actor/return thread or expose a personal Bot in shared Slack', async () => {
     const { services, principal, binding, bot } = installed(); services.store.put('channelPrincipalLinks', services.resource('link', { channelBindingId: binding.id, externalUserId: 'U1', userId: principal.userId, verified: true }));
     const channels = createChannelServices(services); const receipt = await channels.channelIngress({ principal, botId: bot.id, channelBindingId: binding.id, externalThreadId: 'C1:1800000000.1', text: 'task', clientNonce: 'abcdefghijklmnop' });
-    const source = services.store.require<P.Conversation>('conversations', receipt.runs[0]!.conversationId); const personal = { ...bot, visibility: 'personal' as const };
-    expect(() => channels.assertChannelHandoff(principal, source, personal, source.id)).toThrow(); expect(() => channels.assertChannelHandoff(principal, source, services.auth.bot(principal, bot.id), bot.mainConversationId)).toThrow();
+    const source = services.store.require<P.Conversation>('conversations', receipt.runs[0]!.conversationId);
+    expect(() => channels.assertChannelHandoff(principal, source, bot, source.id)).toThrow(); expect(() => channels.assertChannelHandoff(principal, source, services.auth.bot(principal, bot.id), bot.mainConversationId)).toThrow();
     const privateRoom = services.store.require<P.Conversation>('conversations', bot.mainConversationId);
     expect(() => channels.assertChannelHandoff(principal, privateRoom, services.auth.bot(principal, bot.id), source.id)).toThrow();
     closeFixture(services);
@@ -90,5 +89,68 @@ describe('Slack app installation and verified channel identities', () => {
     const { services, principal, binding, bot } = installed(); const mocked = providerMocks(services, url => { expect(url.pathname).toEndWith('apps.uninstall'); throw new Error('provider timeout'); });
     try { const endpoint = route(createChannelRoutes(services), 'DELETE', '/v1/channels/:id'); await expect(endpoint.handler(context(services, endpoint, principal, { clientNonce: 'abcdefghijklmnop', revision: binding.revision }, { id: binding.id }))).rejects.toMatchObject({ code: 'outcome_unknown' }); const retained = services.store.require<P.ChannelBinding>('channelBindings', binding.id); expect(retained.enabled).toBe(false); expect(retained.lastError).toContain('cleanup'); expect(services.store.get('bots', bot.id)).toBeTruthy(); }
     finally { mocked.restore(); closeFixture(services); }
+  });
+  test('distinct owners keep separate Slack threads; admin mappings and application grants cannot invoke another Bot or replay its receipt', async () => {
+    const { services, principal, binding, bot, submissions } = installed();
+    const other = additionalOwner(services, bot);
+    const otherAccount = { ...services.store.require<Record<string, unknown> & { id: string }>('channelAccounts', binding.accountId), id: 'other_slack_account', teamId: 'T2', appId: 'A2', productUserId: other.principal.userId, botId: other.bot.id };
+    services.store.put('channelAccounts', otherAccount);
+    const otherBinding: P.ChannelBinding = { ...binding, id: 'other_binding', accountId: otherAccount.id, ownerUserId: other.principal.userId, botId: other.bot.id };
+    services.store.put('channelBindings', otherBinding);
+    services.store.put('channelPrincipalLinks', services.resource('link', { channelBindingId: binding.id, externalUserId: 'U1', userId: principal.userId, verified: true }));
+    const secondLink = services.resource('link', { channelBindingId: otherBinding.id, externalUserId: 'U2', userId: other.principal.userId, verified: true }); services.store.put('channelPrincipalLinks', secondLink);
+    let providerCalls = 0; const mocked = providerMocks(services, () => { providerCalls++; throw new Error('No provider operation is authorized here.'); });
+    try {
+      const ingress = route(createChannelRoutes(services), 'POST', '/v1/integrations/slack/events');
+      const deliver = (teamId: string, appId: string, externalUser: string, eventId: string) => {
+        const body = { type: 'event_callback', team_id: teamId, api_app_id: appId, event_id: eventId, event: { type: 'message', user: externalUser, channel: 'D1', channel_type: 'im', ts: '1800000000.1', text: 'Owned request' } };
+        return ingress.handler(context(services, ingress, null, undefined, {}, '', signedSlack(services, body)));
+      };
+      expect((await deliver('T1', 'A1', 'U1', 'owner_one') as P.IntegrationIngressReceipt).accepted).toBe(true);
+      expect((await deliver('T2', 'A2', 'U2', 'owner_two') as P.IntegrationIngressReceipt).accepted).toBe(true);
+      expect(submissions).toHaveLength(2); expect(submissions[0]!.conversationId).not.toBe(submissions[1]!.conversationId);
+      services.store.put('channelPrincipalLinks', { ...secondLink, channelBindingId: binding.id });
+      expect((await deliver('T1', 'A1', 'U2', 'foreign_admin') as P.IntegrationIngressReceipt).accepted).toBe(false);
+      const original = services.store.list<P.ChannelPrincipalLink>('channelPrincipalLinks', item => item.externalUserId === 'U1')[0]!;
+      services.store.put('channelPrincipalLinks', { ...original, userId: other.principal.userId });
+      const deniedReplay = await deliver('T1', 'A1', 'U1', 'owner_one') as P.IntegrationIngressReceipt;
+      expect(deniedReplay.accepted).toBe(false); expect(deniedReplay.runId).toBeNull(); expect(deniedReplay.conversationId).toBeNull();
+      services.config.operator.channelApplicationPrincipals = [{ providerId: slackProvider.id, channelBindingId: binding.id, externalAppId: 'external_app', userId: other.principal.userId }];
+      const appEvent = { type: 'event_callback', team_id: 'T1', api_app_id: 'A1', event_id: 'app_denied', event: { type: 'message', bot_id: 'external_bot', app_id: 'external_app', channel: 'D1', ts: '1800000000.1', text: 'Invoke foreign Bot' } };
+      expect((await ingress.handler(context(services, ingress, null, undefined, {}, '', signedSlack(services, appEvent))) as P.IntegrationIngressReceipt).accepted).toBe(false);
+      expect(submissions).toHaveLength(2); expect(providerCalls).toBe(0);
+      const remove = route(createChannelRoutes(services), 'DELETE', '/v1/channels/:id');
+      await expect(remove.handler(context(services, remove, other.principal, { clientNonce: 'abcdefghijklmnop', revision: binding.revision }, { id: binding.id }))).rejects.toBeTruthy();
+      expect(providerCalls).toBe(0); expect(services.store.require<P.ChannelBinding>('channelBindings', binding.id).enabled).toBe(true);
+    } finally { mocked.restore(); closeFixture(services); }
+  });
+  test('owner-approved fixed external Slack target still sends; foreign ownership cannot read cached delivery or reconcile', async () => {
+    const { services, principal, bot, binding } = installed(); const other = additionalOwner(services, bot);
+    const draft: P.Draft = services.resource('draft', { entryId: 'draft_entry', conversationId: bot.mainConversationId, botId: bot.id, ownerUserId: principal.userId, content: { kind: 'slack', connectorId: binding.id, workspace: 'T1', target: 'C1', thread: null, body: 'Explicitly reviewed external content', attachmentIds: [] }, state: 'sending', sendRunId: null, providerMessageId: null, error: null });
+    services.store.put('drafts', draft);
+    let posts = 0; const mocked = providerMocks(services, (url, init) => {
+      expect(url.pathname).toEndWith('/chat.postMessage'); const body = new URLSearchParams(String(init?.body)); expect(body.get('channel')).toBe('C1'); expect(body.get('text')).toBe('Explicitly reviewed external content'); posts++; return { ok: true, ts: 'provider_message_1' };
+    });
+    try {
+      const channels = createChannelServices(services);
+      expect(await channels.sendApprovedDraft(principal, draft)).toEqual({ providerMessageId: 'provider_message_1', runId: null });
+      expect(await channels.sendApprovedDraft(principal, draft)).toEqual({ providerMessageId: 'provider_message_1', runId: null }); expect(posts).toBe(1);
+      services.store.put('bots', { ...bot, ownerUserId: other.principal.userId });
+      await expect(channels.sendApprovedDraft(principal, draft)).rejects.toBeTruthy();
+      services.store.setMetadata(`channelDraftSent:${draft.id}`, null);
+      await channels.reconcile(); expect(posts).toBe(1);
+    } finally { mocked.restore(); closeFixture(services); }
+  });
+  test('explicit owner application grant invokes fixed Bot; forged scope alone does not authorize channel ingress', async () => {
+    const { services, principal, bot, binding, submissions } = installed();
+    services.config.operator.channelApplicationPrincipals = [{ providerId: slackProvider.id, channelBindingId: binding.id, externalAppId: 'owner_app', userId: principal.userId }];
+    const channels = createChannelServices(services);
+    try {
+      await expect(channels.channelIngress({ principal: { ...principal, scopes: [`channel_application:${binding.id}:unregistered_app`] }, botId: bot.id, channelBindingId: binding.id, externalThreadId: 'D1', text: 'Forged scope', clientNonce: 'abcdefghijklmnop' })).rejects.toBeTruthy();
+      const endpoint = route(createChannelRoutes(services), 'POST', '/v1/integrations/slack/events');
+      const body = { type: 'event_callback', team_id: 'T1', api_app_id: 'A1', event_id: 'owner_app_event', event: { type: 'message', bot_id: 'external_bot', app_id: 'owner_app', channel: 'D1', ts: '1800000000.1', text: 'Authenticated owner app work' } };
+      const accepted = await endpoint.handler(context(services, endpoint, null, undefined, {}, '', signedSlack(services, body))) as P.IntegrationIngressReceipt;
+      expect(accepted.accepted).toBe(true); expect(submissions).toHaveLength(1); expect(submissions[0]!.principal.userId).toBe(principal.userId);
+    } finally { closeFixture(services); }
   });
 });

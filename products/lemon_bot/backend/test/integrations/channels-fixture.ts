@@ -53,8 +53,8 @@ export function fixture(store = entityStore(), principal: Principal = { kind: 'u
       async authenticate(request) { const token = request.headers.get('authorization'); if (token === 'Bearer bridge') return { ...principal, kind: 'integration', id: 'bridge', scopes: ['event_ingress:github', 'event_ingress:slack-app', 'event_ingress:mail', 'event_ingress:x'] }; if (token === 'Bearer user') return principal; throw new IntegrationError('unauthenticated', 'Invalid test token.'); },
       user(userId) { return store.require<P.User>('users', userId); }, member(userId) { return store.require<P.Member>('members', userId); },
       requireRole(who, role) { if (who.role !== 'owner' && who.role !== role) throw new IntegrationError('forbidden', 'Role refused.'); },
-      bot(who, botId, manage) { const bot = store.require<P.Bot>('bots', botId); if (bot.ownerUserId !== who.userId && (manage ? !bot.managerUserIds.includes(who.userId) : bot.visibility !== 'team' || !bot.published)) throw new IntegrationError('not_found', 'Bot is private.'); return bot; },
-      conversation(who, conversationId) { const conversation = store.require<P.Conversation>('conversations', conversationId); if (!conversation.humanUserIds.includes(who.userId)) throw new IntegrationError('not_found', 'Conversation is private.'); return conversation; },
+      bot(who, botId) { const bot = store.require<P.Bot>('bots', botId); if (bot.ownerUserId !== who.userId) throw new IntegrationError('not_found', 'Bot is private.'); return bot; },
+      conversation(who, conversationId) { const conversation = store.require<P.Conversation>('conversations', conversationId); if (conversation.ownerUserId !== who.userId || conversation.botIds.some(botId => store.require<P.Bot>('bots', botId).ownerUserId !== who.userId)) throw new IntegrationError('not_found', 'Conversation is private.'); return conversation; },
       machine(who, machineId) { const machine = store.require<P.Machine>('machines', machineId); if (machine.ownerUserId !== who.userId) throw new IntegrationError('not_found', 'Machine is private.'); return machine; },
       attachment(who, attachmentId) { const attachment = store.require<P.Attachment>('attachments', attachmentId); if (attachment.ownerUserId !== who.userId) throw new IntegrationError('not_found', 'Attachment is private.'); return attachment; },
       canRead(who, _collection, value) { return !!value && typeof value === 'object' && ('ownerUserId' in value && value.ownerUserId === who.userId || 'userId' in value && value.userId === who.userId); },
@@ -142,15 +142,28 @@ export function fixture(store = entityStore(), principal: Principal = { kind: 'u
     },
     notify: denied, invoke: async () => denied(), syncBotProfile: async () => denied(),
   };
-  const bot: P.Bot = services.resource('bot', { ownerUserId: principal.userId, managerUserIds: [], machineId: 'machine', profileId: 'profile', name: 'Finance', title: '', job: '', instructions: '', avatar: { kind: 'character', shape: 'round', color: 'yellow', attachmentId: null }, voice: { voiceId: 'default', speed: 1, language: null }, language: null, visibility: 'personal', published: false, required: false, skillIds: [], referenceAttachmentIds: [], mainConversationId: 'main', sidebar: { pinned: false, hidden: false, sectionId: null, rank: 0, unread: false, notificationsEnabled: true }, activity: 'idle', activeRunIds: [] });
+  const bot: P.Bot = services.resource('bot', { ownerUserId: principal.userId, machineId: 'machine', profileId: 'profile', name: 'Finance', title: '', job: '', instructions: '', avatar: { kind: 'character', shape: 'round', color: 'yellow', attachmentId: null }, voice: { voiceId: 'default', speed: 1, language: null }, language: null, skillIds: [], referenceAttachmentIds: [], mainConversationId: 'main', sidebar: { pinned: false, hidden: false, sectionId: null, rank: 0, unread: false, notificationsEnabled: true }, activity: 'idle', activeRunIds: [] });
   store.put('bots', bot); store.put('workspaces', { ...services.resource('workspace', { name: 'Test', ownerUserId: principal.userId, enabled: true, timezone: 'UTC' }), id: principal.workspaceId });
   store.put('members', { ...services.resource('member', { userId: principal.userId, displayName: 'Test', email: 'a@example.org', role: 'member', enabled: true }), id: principal.userId });
   store.put('users', { ...services.resource('user', { email: 'a@example.org', displayName: 'Test', avatarAttachmentId: null, preferences: { appearance: 'system', language: null, timezone: 'UTC', botColors: true, threadsBesideChat: false, voice: bot.voice, celebrationsEnabled: false }, notifications: { enabled: true, sound: false, previews: false, completed: true, needsInput: true } }), id: principal.userId } satisfies P.User);
   store.put('machines', { ...services.resource('machine', { name: 'Test machine', nodeName: 'test', nodeId: 'node_test', ownerUserId: principal.userId, accessUserIds: [], status: 'online', lastSeenAtMs: clock, labels: {}, botIds: [bot.id] }), id: bot.machineId } satisfies P.Machine);
-  const conversation: P.Conversation = { ...services.resource('conversation', { kind: 'dm' as const, name: 'Main', botIds: [bot.id], humanUserIds: [principal.userId], ownerUserId: principal.userId, parentConversationId: null, leadBotId: bot.id, channelBindingId: null, lastEntryId: null, unreadCount: 0, lastReadSeq: 0, activity: [] }), id: bot.mainConversationId }; store.put('conversations', conversation);
+  const conversation: P.Conversation = { ...services.resource('conversation', { kind: 'dm' as const, name: 'Main', botIds: [bot.id], ownerUserId: principal.userId, parentConversationId: null, leadBotId: bot.id, channelBindingId: null, lastEntryId: null, unreadCount: 0, lastReadSeq: 0, activity: [] }), id: bot.mainConversationId }; store.put('conversations', conversation);
   store.setMetadata('governance', { revision: 1, allowedChannelAdapters: ['slack', 'email', 'discord', 'telegram', 'whatsapp'], emailEnabled: true, xMentionsEnabled: true }); store.setMetadata('workspaceId', principal.workspaceId);
   fixtureClosers.set(services, () => { gates?.close(); store.db.close(); });
   return { services, principal, bot, submissions, emitted, setClock(value: number) { clock = value; }, secrets };
+}
+export function additionalOwner(services: BackendServices, source: P.Bot, userId = 'user_b', role: P.Role = 'admin'): { principal: Principal; bot: P.Bot } {
+  const workspace = services.store.list<P.Workspace>('workspaces')[0]!;
+  const principal: Principal = { kind: 'user', id: userId, userId, workspaceId: workspace.id, role, sessionId: `session_${userId}`, botId: null, deviceId: null };
+  const member = services.store.list<P.Member>('members')[0]!;
+  const user = services.store.list<P.User>('users')[0]!;
+  services.store.put('members', { ...member, id: userId, userId, role, email: `${userId}@example.org` });
+  services.store.put('users', { ...user, id: userId, email: `${userId}@example.org` });
+  const bot: P.Bot = { ...source, id: services.id('bot'), ownerUserId: userId, profileId: services.id('profile'), mainConversationId: services.id('main') };
+  services.store.put('bots', bot);
+  const main = services.store.require<P.Conversation>('conversations', source.mainConversationId);
+  services.store.put('conversations', { ...main, id: bot.mainConversationId, ownerUserId: userId, botIds: [bot.id], leadBotId: bot.id });
+  return { principal, bot };
 }
 export function context(services: BackendServices, route: Route, principal: Principal | null, body?: unknown, params: Record<string, string> = {}, query = '', request?: Request): RequestContext {
   return { services, route, user: principal, body, params, query: new URLSearchParams(query), request: request ?? new Request('https://product.example' + route.path), requestId: 'req_test', nonceResourceIds: [] };

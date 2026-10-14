@@ -4,7 +4,7 @@ import type { BackendServices } from '../../src/core/services';
 import { createXRoutes, createXServices } from '../../src/integrations/x';
 import { IntegrationError } from '../../src/integrations/common';
 import { oauthTokenClientDigest } from '../../src/integrations/oauth';
-import { closeFixture, context, fixture, providerMocks, route } from './channels-fixture'
+import { additionalOwner, closeFixture, context, fixture, providerMocks, route } from './channels-fixture'
 
 function configured() {
   const state = fixture(); const { services, principal, bot } = state;
@@ -114,5 +114,25 @@ describe('X OAuth and own explicit public mentions', () => {
       const result = await endpoint.handler(context(services, endpoint, null, undefined, {}, 'crc_token=actual-provider-challenge')) as { response_token: string }; expect(result.response_token).toStartWith('sha256=');
       await expect(endpoint.handler(context(services, endpoint, null, undefined, {}, `crc_token=${encodeURIComponent(JSON.stringify({ tweet_create_events: [] }))}`))).rejects.toMatchObject({ code: 'invalid_request' });
     } finally { closeFixture(services); }
+  });
+  test('configured X account cannot invoke a foreign owned Bot or obtain its cached run even as workspace owner', async () => {
+    const { services, principal, bot, connection, submissions } = configured();
+    const other = additionalOwner(services, bot, 'x_admin', 'owner');
+    services.store.put('xConnections', { ...connection, userId: other.principal.userId });
+    const cachedRun: P.Run = services.resource('run', { conversationId: bot.mainConversationId, botId: bot.id, initiatorUserId: principal.userId, clientNonce: 'abcdefghijklmnop', status: 'queued', error: null, startedAtMs: null, completedAtMs: null, routineRunId: null });
+    services.store.put('runs', cachedRun);
+    services.store.put('integrationDeliveries', { id: services.mutations.digest(['x', input.deliveryId]), digest: services.mutations.digest(input), receipt: { accepted: true, status: 'accepted', reason: null, runId: cachedRun.id, conversationId: bot.mainConversationId } satisfies P.IntegrationIngressReceipt });
+    let calls = 0; const mocked = providerMocks(services, () => { calls++; throw new Error('No foreign owner provider reads or replies.'); });
+    try {
+      const endpoint = route(createXRoutes(services), 'POST', '/v1/integrations/x/mentions');
+      const replay = await endpoint.handler(context(services, endpoint, null, undefined, {}, '', eventRequest(services, input))) as P.IntegrationIngressReceipt;
+      expect(replay.accepted).toBe(false); expect(replay.runId).toBeNull(); expect(replay.conversationId).toBeNull();
+      const patch = route(createXRoutes(services), 'PATCH', '/v1/x/connections/:id');
+      await expect(patch.handler(context(services, patch, other.principal, { clientNonce: 'abcdefghijklmnop', revision: connection.revision, enabled: true }, { id: connection.id }))).rejects.toBeTruthy();
+      expect(calls).toBe(0); expect(submissions).toHaveLength(0);
+      services.store.put('xConnections', { ...connection, userId: other.principal.userId, mainBotId: other.bot.id });
+      const switched = await endpoint.handler(context(services, endpoint, null, undefined, {}, '', eventRequest(services, input))) as P.IntegrationIngressReceipt;
+      expect(switched.accepted).toBe(false); expect(switched.runId).toBeNull(); expect(calls).toBe(0);
+    } finally { mocked.restore(); closeFixture(services); }
   });
 });

@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import type * as P from '../../../contracts/protocol';
 import type { BackendServices, Principal } from '../../src/core/services';
 import { createEmailRoutes, createEmailServices, executableAttachment } from '../../src/integrations/email';
-import { closeFixture, context, emailProvider, fixture, providerMocks, route } from './channels-fixture'
+import { additionalOwner, closeFixture, context, emailProvider, fixture, providerMocks, route } from './channels-fixture'
 
 function approval(services: BackendServices, principal: Principal, bot: P.Bot, state: P.ResolutionState = 'approved'): P.Approval {
   return services.resource('approval', { gate: { id: 'gate', state, targetUserId: principal.userId, expiresAtMs: services.now() + 600000, resolvedAtMs: state === 'approved' ? services.now() : null, resolvedByUserId: state === 'approved' ? principal.userId : null, revision: 1 }, entryId: 'entry', conversationId: bot.mainConversationId, botId: bot.id, runId: null, source: 'product', category: 'permissions', title: 'Claim address', description: 'Exact address', target: 'finance@mail.example.org', inputs: { providerId: 'mail', localPart: 'finance', userId: principal.userId }, policyMode: 'ask_first', review: 'not_run', ruleId: null, scope: { kind: 'once', label: 'Once', machineId: bot.machineId, machineLabel: 'Test', botId: bot.id, runId: null, origin: null, connectorId: null, consequences: ['Claim immutable address'], expiresAtMs: services.now() + 600000 } });
@@ -105,6 +105,28 @@ describe('account-owned email provisioning and sending', () => {
       const notice = services.store.list<P.TranscriptEntry>('entries')[0]; expect(notice?.kind).toBe('notice'); expect(notice?.targetedUserId).toBe(principal.userId); expect(notice && 'text' in notice ? notice.text : '').toContain('unsubscribed@example.org: unsubscribe');
       all = true; const another = { ...frozen, id: services.id('draft') }; services.store.put('drafts', another);
       await expect(email.sendApprovedDraft(principal, another)).rejects.toMatchObject({ code: 'policy_denied', details: { skippedRecipients: [{ recipient: 'unsubscribed@example.org', reason: 'unsubscribe' }, { recipient: 'allowed@example.org', reason: 'bounce' }] } }); expect(sent).toBe(1);
+    } finally { mocked.restore(); closeFixture(services); }
+  });
+  test('foreign Bot mailbox binding blocks reads, cached send receipts and reconciliation before provider access', async () => {
+    const { services, principal, bot } = fixture(); services.config.operator.emailProviders = [emailProvider];
+    const other = additionalOwner(services, bot);
+    const account = mailbox(services, principal);
+    const binding: P.ChannelBinding = services.resource('channel', { botId: other.bot.id, ownerUserId: principal.userId, adapter: 'email', accountId: account.id, target: account.address, enabled: true, state: 'connected', capabilities: { inbound: true, outbound: true, events: ['email_received'] }, lastError: null });
+    services.store.put('channelBindings', binding); const attached = { ...account, channelBindingId: binding.id }; services.store.put('emailAccounts', attached);
+    const approved = draft(services, principal, bot, attached);
+    services.store.put('emailSendReceipts', { id: approved.id, accountId: account.id, receipt: { providerMessageId: 'private_cached_receipt', runId: null } });
+    let calls = 0; const mocked = providerMocks(services, () => { calls++; throw new Error('Foreign Bot must not access provider.'); });
+    try {
+      const read = route(createEmailRoutes(services), 'GET', '/v1/email/accounts/:id/messages');
+      await expect(read.handler(context(services, read, principal, undefined, { id: account.id }))).rejects.toBeTruthy();
+      await expect(createEmailServices(services).sendApprovedDraft(principal, approved)).rejects.toBeTruthy();
+      const claimGate = approval(services, other.principal, bot); services.store.put('approvals', claimGate);
+      const claim = route(createEmailRoutes(services), 'POST', '/v1/email/address/claim');
+      await expect(claim.handler(context(services, claim, other.principal, { clientNonce: 'abcdefghijklmnop', providerId: 'mail', localPart: 'finance', approvalId: claimGate.id }))).rejects.toBeTruthy();
+      services.store.put('emailSendReceipts', { id: approved.id, accountId: account.id, receipt: null });
+      services.store.put('drafts', { ...approved, botId: other.bot.id });
+      await createEmailServices(services).reconcile();
+      expect(calls).toBe(0); expect(services.store.require<P.Draft>('drafts', approved.id).state).toBe('sending');
     } finally { mocked.restore(); closeFixture(services); }
   });
 });

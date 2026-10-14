@@ -2,7 +2,7 @@ import { createHmac } from 'node:crypto';
 import { z } from 'zod';
 import type * as P from '../../../contracts/protocol';
 import type { BackendServices, Principal, RequestContext } from '../core/services';
-import { IntegrationError, boundedBytes, secureEqual } from './common';
+import { IntegrationError, assertActiveAccount, boundedBytes, secureEqual } from './common';
 import { submitEventRoutine } from '../core/resources';
 
 export const jsonObject = z.record(z.string(), z.json());
@@ -35,6 +35,33 @@ export function principalFor(services: BackendServices, userId: string): Princip
   const workspace = services.store.list<P.Workspace>('workspaces')[0];
   if (!workspace?.enabled) throw new IntegrationError('policy_denied', 'Workspace access is disabled.');
   return { kind: 'user', id: userId, userId, workspaceId: workspace.id, role: member.role, sessionId: null, botId: null, deviceId: null };
+}
+export function ownedBot(services: BackendServices, principal: Principal, botId: string, manage = false): P.Bot {
+  assertActiveAccount(services, principal.userId);
+  const bot = services.auth.bot(principal, botId, manage);
+  if (!principal.userId || bot.ownerUserId !== principal.userId) throw new IntegrationError('forbidden', 'Provider operations require the Bot owner.');
+  return bot;
+}
+export function ownedBinding(services: BackendServices, principal: Principal, binding: P.ChannelBinding): P.Bot {
+  const bot = ownedBot(services, principal, binding.botId);
+  if (binding.ownerUserId !== principal.userId) throw new IntegrationError('forbidden', 'Channel binding must belong to the Bot owner.');
+  if (binding.adapter === 'slack') {
+    const account = services.store.get<{ productUserId: string; botId: string }>('channelAccounts', binding.accountId);
+    if (!account || account.productUserId !== principal.userId || account.botId !== bot.id) throw new IntegrationError('forbidden', 'Slack account must belong to the fixed Bot owner.');
+  } else if (binding.adapter === 'email') {
+    const account = services.store.get<P.EmailAccount>('emailAccounts', binding.accountId);
+    if (!account || account.userId !== principal.userId || account.channelBindingId !== binding.id || account.address !== binding.target) throw new IntegrationError('forbidden', 'Mailbox must match its account-owned Bot binding.');
+  }
+  return bot;
+}
+function currentReceipt(services: BackendServices, receipt: P.IntegrationIngressReceipt, principal?: Principal): P.IntegrationIngressReceipt {
+  if (!receipt.runId) return receipt;
+  const run = services.store.get<P.Run>('runs', receipt.runId);
+  const bot = run ? services.store.get<P.Bot>('bots', run.botId) : null;
+  const conversation = run ? services.store.get<P.Conversation>('conversations', run.conversationId) : null;
+  if (!principal || !run || !bot || !conversation || bot.ownerUserId !== run.initiatorUserId || conversation.ownerUserId !== run.initiatorUserId || principal.userId !== run.initiatorUserId) return ignored('Recorded provider invocation no longer belongs to its authenticated Bot owner.');
+  principalFor(services, run.initiatorUserId);
+  return receipt;
 }
 export function hmac(secret: string, value: string, encoding: 'hex' | 'base64' = 'hex'): string {
   return createHmac('sha256', secret).update(value).digest(encoding);
@@ -92,17 +119,17 @@ export async function verifyIngress(services: BackendServices, request: Request,
   if (!Number.isSafeInteger(timestamp) || Math.abs(services.now() - timestamp) > maxAgeMs || !supplied || !supplied.split(',').some(value => secureEqual(value.trim(), expected))) throw new IntegrationError('unauthenticated', 'Invalid provider signature or delivery window.');
 }
 interface Delivery { id: string; digest: string; receipt: P.IntegrationIngressReceipt }
-export async function dedupeIngress(services: BackendServices, providerId: string, deliveryId: string, payload: unknown, operation: () => Promise<P.IntegrationIngressReceipt>): Promise<P.IntegrationIngressReceipt> {
+export async function dedupeIngress(services: BackendServices, providerId: string, deliveryId: string, payload: unknown, operation: () => Promise<P.IntegrationIngressReceipt>, principal?: Principal): Promise<P.IntegrationIngressReceipt> {
   const key = services.mutations.digest([providerId, deliveryId]); const digest = services.mutations.digest(payload);
   const existing = services.store.get<Delivery>('integrationDeliveries', key);
   if (existing) {
     if (existing.digest !== digest) throw new IntegrationError('conflict', 'Provider delivery identifier was reused with different content.');
-    return existing.receipt;
+    return currentReceipt(services, existing.receipt, principal);
   }
   // GitHub/Sentry delivery headers are not signed. A valid body cannot become new work by changing its delivery ID.
   const bodyKey = services.mutations.digest([providerId, digest]);
   const seen = services.store.get<{ id: string; deliveryKey: string }>('integrationDeliveryBodies', bodyKey);
-  if (seen) return services.store.require<Delivery>('integrationDeliveries', seen.deliveryKey).receipt;
+  if (seen) return currentReceipt(services, services.store.require<Delivery>('integrationDeliveries', seen.deliveryKey).receipt, principal);
   services.store.put('integrationDeliveries', { id: key, digest, receipt: { accepted: false, status: 'outcome_unknown', reason: 'Delivery is reserved; inspect the recorded run before retrying.', runId: null, conversationId: null } satisfies P.IntegrationIngressReceipt });
   services.store.put('integrationDeliveryBodies', { id: bodyKey, deliveryKey: key });
   const receipt = await operation();
@@ -119,6 +146,9 @@ export function senderMatches(sender: string, patterns: string[]): boolean {
 }
 export async function runEventRoutine(services: BackendServices, principal: Principal, routine: P.Routine, payload: unknown, deliveryId: string): Promise<P.IntegrationIngressReceipt> {
   if (!routine.enabled || routine.ownerUserId !== principal.userId) return ignored('Routine is paused or has a different configured principal.');
+  const bot = services.store.get<P.Bot>('bots', routine.botId);
+  if (!bot || bot.ownerUserId !== principal.userId) return ignored('Configured principal must own the routine Bot.');
+  ownedBot(services, principal, bot.id);
   const run = await submitEventRoutine(services, principal, routine.id, parse(jsonObject, payload), services.mutations.digest([routine.id, deliveryId]));
   const accepted = !!run.runId && ['queued', 'running', 'awaiting_input', 'succeeded'].includes(run.status);
   return { accepted, status: run.status === 'outcome_unknown' ? 'outcome_unknown' : accepted ? 'accepted' : 'ignored', reason: accepted ? null : run.status === 'outcome_unknown' ? 'Routine submission is awaiting reconciliation.' : 'Routine did not start an actual run.', runId: run.runId, conversationId: run.conversationId };

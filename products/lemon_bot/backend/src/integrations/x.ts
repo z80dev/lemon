@@ -5,7 +5,7 @@ import { IntegrationError, assertActiveAccount, fetchJson, privateMetadata, safe
 import { exchangeOAuth, markOAuthInstalled, oauthTokenClientDigest, startOAuth, takeOAuthState } from './oauth';
 import type { OAuthCompletion, OAuthTokens } from './oauth';
 import { providerRequest } from './channels';
-import { dedupeIngress, hmac, id, ignored, jsonObject, nonce, parse, principalFor, providerResult, rawBody, requireUser, untrusted, updateBody, verifyIngress } from './channel-security';
+import { dedupeIngress, hmac, id, ignored, jsonObject, nonce, ownedBot, parse, principalFor, providerResult, rawBody, requireUser, untrusted, updateBody, verifyIngress } from './channel-security';
 
 interface XCredential { accessToken: string; refreshToken: string | null; expiresAtMs: number | null; scopes: string[]; tokenClientDigest: string }
 interface XConfirmation { id: string; deliveryId: string; postId: string; text: string; startedAtMs: number; state: 'reserved' | 'confirmed' | 'outcome_unknown'; providerMessageId: string | null }
@@ -24,9 +24,9 @@ async function xPolicy(services: BackendServices, principal: Principal, botId?: 
   if (!governance?.xMentionsEnabled || !(await services.integrations.effectivePolicy(principal, botId)).productAccess) throw new IntegrationError('policy_denied', 'X mentions are disabled by workspace access policy.');
 }
 function ownedMainBot(services: BackendServices, principal: Principal, botId: string): P.Bot {
-  const bot = services.auth.bot(principal, botId);
-  if (bot.ownerUserId !== principal.userId || bot.visibility !== 'personal') throw new IntegrationError('forbidden', 'X main Bot must be your own personal Bot.');
-  services.auth.conversation(principal, bot.mainConversationId);
+  const bot = ownedBot(services, principal, botId);
+  const conversation = services.auth.conversation(principal, bot.mainConversationId);
+  if (conversation.ownerUserId !== principal.userId || conversation.botIds.length !== 1 || conversation.botIds[0] !== bot.id) throw new IntegrationError('forbidden', 'X main context must belong exclusively to its Bot owner.');
   return bot;
 }
 async function publicAccount(services: BackendServices): Promise<string> {
@@ -111,11 +111,20 @@ export function createXServices(services: BackendServices): XServices {
     },
     canReadResource: (principal: Principal, collection: string, value: unknown): boolean | undefined => {
       if (collection !== 'xConnections') return undefined;
-      const result = z.object({ id, userId: id }).passthrough().safeParse(value);
-      return result.success && result.data.userId === principal.userId && services.auth.member(principal.userId).enabled;
+      const result = z.object({ id, userId: id, mainBotId: id }).passthrough().safeParse(value);
+      if (!result.success || result.data.userId !== principal.userId || !services.auth.member(principal.userId).enabled) return false;
+      try { ownedMainBot(services, principal, result.data.mainBotId); return true; } catch { return false; }
     },
     reconcile: async (): Promise<void> => {
-      const pending = services.store.list<XConfirmation>('xConfirmations', item => item.state !== 'confirmed');
+      const pending = services.store.list<XConfirmation>('xConfirmations', item => {
+        if (item.state === 'confirmed') return false;
+        const receipt = services.store.metadata<P.IntegrationIngressReceipt>(`xMentionRun:${item.deliveryId}`);
+        const run = receipt?.runId ? services.store.get<P.Run>('runs', receipt.runId) : null;
+        const bot = run ? services.store.get<P.Bot>('bots', run.botId) : null;
+        if (!run || bot?.ownerUserId !== run.initiatorUserId) return false;
+        ownedMainBot(services, principalFor(services, run.initiatorUserId), bot.id);
+        return true;
+      });
       if (!pending.length) return;
       const provider = providerFor(services); const token = await publicAccount(services);
       const identity = parse(z.object({ data: z.object({ id, username: z.string() }) }), await providerRequest(services, provider.apiBaseUrl, '2/users/me', token));
@@ -146,7 +155,7 @@ export function createXServices(services: BackendServices): XServices {
   xInstances.set(services, integration); return integration;
 }
 export function createXRoutes(services: BackendServices): Route[] {
-  return [
+  const routes: Route[] = [
     { method: 'GET', path: '/v1/x/provider', auth: 'member', handler: () => createXServices(services).inventory() },
     { method: 'POST', path: '/v1/x/connections', auth: 'member', handler: async context => {
       const principal = requireUser(context); const body = parse(connectBody, context.body); await xPolicy(services, principal, body.mainBotId); ownedMainBot(services, principal, body.mainBotId); const provider = providerFor(services);
@@ -157,16 +166,17 @@ export function createXRoutes(services: BackendServices): Route[] {
       const flow = startOAuth(services, provider.oauth, { userId: principal.userId, resourceId: connection.id, callbackPath: '/v1/x/oauth/callback', clientRedirectUri: body.redirectUri });
       services.store.put('xConnections', connection); services.events.emit('x_connection.upserted', connection, { userIds: [principal.userId] }); return { connection, authorizationUrl: flow.authorizationUrl };
     } },
-    { method: 'GET', path: '/v1/x/connections', auth: 'member', handler: async context => { const principal = requireUser(context); await xPolicy(services, principal); return services.page(context, services.store.list<P.XConnection>('xConnections', item => item.userId === principal.userId)); } },
+    { method: 'GET', path: '/v1/x/connections', auth: 'member', handler: async context => { const principal = requireUser(context); await xPolicy(services, principal); return services.page(context, services.store.list<P.XConnection>('xConnections', item => createXServices(services).canReadResource(principal, 'xConnections', item) === true)); } },
     { method: 'PATCH', path: '/v1/x/connections/:id', auth: 'member', handler: async context => {
       const principal = requireUser(context); const body = parse(updateBody.extend({ mainBotId: id.optional(), enabled: z.boolean().optional() }), context.body); const connection = services.store.require<P.XConnection>('xConnections', context.params.id!);
       if (connection.userId !== principal.userId) throw new IntegrationError('not_found', 'Own X connection was not found.');
-      services.mutations.checkRevision(connection, body.revision); await xPolicy(services, principal, body.mainBotId ?? connection.mainBotId); if (body.mainBotId) ownedMainBot(services, principal, body.mainBotId);
+      services.mutations.checkRevision(connection, body.revision); await xPolicy(services, principal, body.mainBotId ?? connection.mainBotId); ownedMainBot(services, principal, body.mainBotId ?? connection.mainBotId);
       const updated = services.update(connection, { ...(body.mainBotId === undefined ? {} : { mainBotId: body.mainBotId }), ...(body.enabled === undefined ? {} : { enabled: body.enabled }) }); services.store.put('xConnections', updated); services.events.emit('x_connection.upserted', updated, { userIds: [principal.userId] }); return updated;
     } },
     { method: 'DELETE', path: '/v1/x/connections/:id', auth: 'member', handler: async context => {
       const principal = requireUser(context); const body = parse(updateBody, context.body); const connection = services.store.require<P.XConnection>('xConnections', context.params.id!);
       if (connection.userId !== principal.userId) throw new IntegrationError('not_found', 'Own X connection was not found.');
+      ownedMainBot(services, principal, connection.mainBotId);
       services.mutations.checkRevision(connection, body.revision); const disabled = services.update(connection, { enabled: false, state: 'needs_auth' as const }); services.store.put('xConnections', disabled); services.events.emit('x_connection.upserted', disabled, { userIds: [principal.userId] });
       await revokeConnection(services, connection);
       services.store.setMetadata(`xCredential:${connection.id}`, null); services.store.remove('xConnections', connection.id); return { id: connection.id, deleted: true };
@@ -207,6 +217,14 @@ export function createXRoutes(services: BackendServices): Route[] {
       const inputs: P.XIngress[] = native.success ? native.data.tweet_create_events.filter(post => post.entities.user_mentions.some(mention => mention.screen_name.toLowerCase() === provider.publicHandle.replace(/^@/, '').toLowerCase())).map(post => ({ deliveryId: post.id_str, externalAccountId: post.user.id_str, mentionPostId: post.id_str, mentionedHandle: provider.publicHandle, text: post.text })) : [parse(ingressBody, value)];
       let outcome = ignored('No explicit public Bot mention was present.');
       for (const input of inputs) {
+      const configuredConnection = services.store.list<P.XConnection>('xConnections', item => item.externalAccountId === input.externalAccountId)[0];
+      const configuredPrincipal = configuredConnection ? principalFor(services, configuredConnection.userId) : undefined;
+      if (configuredConnection && (!configuredConnection.enabled || configuredConnection.state !== 'connected')) { outcome = ignored('X connection is disabled or requires authentication.'); continue; }
+      if (configuredConnection && configuredPrincipal) {
+        if (services.store.get<P.Bot>('bots', configuredConnection.mainBotId)?.ownerUserId !== configuredPrincipal.userId) { outcome = ignored('Authenticated X account must own its fixed Bot.'); continue; }
+        ownedMainBot(services, configuredPrincipal, configuredConnection.mainBotId);
+        try { await xPolicy(services, configuredPrincipal, configuredConnection.mainBotId); } catch (error) { if (error instanceof IntegrationError && error.code === 'policy_denied') { outcome = ignored('X mentions are disabled by policy.'); continue; } throw error; }
+      }
       const dispatched = await dedupeIngress(services, 'x', input.deliveryId, input, async () => {
         const publicToken = await publicAccount(services);
         // Fetch authoritative public post and context before either setup guidance or private dispatch.
@@ -220,7 +238,7 @@ export function createXRoutes(services: BackendServices): Route[] {
         if (!connection.enabled || connection.state !== 'connected') return ignored('X connection is disabled or requires authentication.');
         const principal = principalFor(services, connection.userId);
         try { await xPolicy(services, principal, connection.mainBotId); } catch (error) { if (error instanceof IntegrationError && error.code === 'policy_denied') return ignored('X mentions are disabled by policy.'); throw error; }
-        let bot: P.Bot; try { bot = ownedMainBot(services, principal, connection.mainBotId); } catch { await postPublic(services, input.mentionPostId, `Choose your own personal main Bot in ${services.config.publicUrl}. No work was started.`, publicToken); return ignored('An owned personal main Bot is required.'); }
+        const bot = ownedMainBot(services, principal, connection.mainBotId);
         const credential = privateMetadata<XCredential>(services, `xCredential:${connection.id}`);
         if (!credential || credential.expiresAtMs !== null && credential.expiresAtMs <= services.now()) { const expired = services.update(connection, { state: 'needs_auth' as const, lastError: 'X account authorization expired.' }); services.store.put('xConnections', expired); services.events.emit('x_connection.upserted', expired, { userIds: [principal.userId] }); return ignored('X OAuth authorization expired.'); }
         const contextPosts = inspected.includes?.tweets ?? [];
@@ -256,10 +274,22 @@ export function createXRoutes(services: BackendServices): Route[] {
           catch { services.store.put('xConfirmations', { ...confirmation, state: 'outcome_unknown' }); return { ...result, status: 'outcome_unknown', reason: 'Work was accepted; public confirmation is not acknowledged. Do not redispatch.' }; }
         }
         return result;
-      });
+      }, configuredPrincipal);
         if (dispatched.accepted || !outcome.accepted) outcome = dispatched;
       }
       return outcome;
     } },
   ];
+  return routes.map((route): Route => {
+    if (!['POST', 'PATCH', 'DELETE'].includes(route.method) || route.mutation === false) return route;
+    return { ...route, authorizeReplay: async context => {
+      const principal = requireUser(context);
+      const body = parse(z.object({ mainBotId: id.optional() }).passthrough(), context.body);
+      const connection = context.params.id ? services.store.require<P.XConnection>('xConnections', context.params.id) : null;
+      if (connection && connection.userId !== principal.userId) throw new IntegrationError('forbidden', 'X replay requires its authenticated account owner.');
+      const botId = body.mainBotId ?? connection?.mainBotId;
+      if (!botId) throw new IntegrationError('forbidden', 'X replay requires its exact owned Bot.');
+      ownedMainBot(services, principal, botId); await xPolicy(services, principal, botId);
+    } };
+  });
 }

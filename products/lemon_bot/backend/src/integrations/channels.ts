@@ -5,7 +5,7 @@ import type { BackendServices, Principal, RequestContext, Route } from '../core/
 import { IntegrationError, assertActiveAccount, fetchJson, providerRequest as pinnedRequest } from './common';
 import { startOAuth, takeOAuthState, exchangeOAuth, markOAuthInstalled, oauthTokenClientDigest } from './oauth';
 import type { OAuthCompletion, OAuthTokens } from './oauth';
-import { dedupeIngress, id, ignored, nonce, parse, principalFor, providerResult, rawBody, requireUser, untrusted, updateBody, verifyIngress } from './channel-security';
+import { dedupeIngress, id, ignored, nonce, ownedBot, ownedBinding, parse, principalFor, providerResult, rawBody, requireUser, untrusted, updateBody, verifyIngress } from './channel-security';
 
 export async function providerRequest(services: BackendServices, baseUrl: string, path: string, token: string, method = 'GET', body?: unknown): Promise<unknown> {
   const base = new URL(baseUrl); const url = new URL(path.replace(/^\//, ''), base.href.endsWith('/') ? base.href : base.href + '/');
@@ -37,15 +37,17 @@ export function channelProvider(services: BackendServices, binding: P.ChannelBin
 }
 async function channelPolicy(services: BackendServices, principal: Principal, botId: string, adapter: P.ChannelBinding['adapter'], manage = false): Promise<P.Bot> {
   assertActiveAccount(services, principal.userId);
-  const bot = services.auth.bot(principal, botId, manage);
+  const bot = ownedBot(services, principal, botId, manage);
   const governance = services.store.list<P.Governance>('governance')[0] ?? services.store.metadata<P.Governance>('governance');
   if (adapter === 'email' ? !governance?.emailEnabled : !governance?.allowedChannelAdapters.includes(adapter)) throw new IntegrationError('policy_denied', 'This channel adapter is not enabled by workspace policy.');
   const policy = await services.integrations.effectivePolicy(principal, botId);
   if (!policy.productAccess) throw new IntegrationError('policy_denied', 'Product access is disabled for this principal.');
   return bot;
 }
-export async function slackCall(services: BackendServices, binding: P.ChannelBinding, method: string, body: Record<string, unknown>): Promise<Record<string, unknown>> {
+export async function slackCall(services: BackendServices, principal: Principal, binding: P.ChannelBinding, method: string, body: Record<string, unknown>): Promise<Record<string, unknown>> {
   const provider = channelProvider(services, binding); const account = services.store.get<ChannelAccount>('channelAccounts', binding.accountId);
+  ownedBinding(services, principal, binding);
+  if (account && (account.productUserId !== principal.userId || account.botId !== binding.botId)) throw new IntegrationError('forbidden', 'Slack credentials must belong to the fixed Bot owner.');
   const token = account ? services.decrypt<string>(account.token) : provider.accountSecretRef ? await services.secret(provider.accountSecretRef) : null;
   if (!token) throw new IntegrationError('capability_unavailable', 'Install the configured Slack app before using its API.');
   const form = new URLSearchParams();
@@ -61,9 +63,9 @@ export async function slackCall(services: BackendServices, binding: P.ChannelBin
   }
   return result;
 }
-async function sendLinkInstructions(services: BackendServices, binding: P.ChannelBinding, externalUserId: string): Promise<void> {
-  const opened = parse(z.object({ channel: z.object({ id }) }), await slackCall(services, binding, 'conversations.open', { users: externalUserId }));
-  await slackCall(services, binding, 'chat.postMessage', { channel: opened.channel.id, text: `Welcome. Sign in to ${services.config.publicUrl} with your own enabled account and start channel identity linking. Send the displayed link code here in this DM, then complete the verified link in the app. No work or owner budget is used before linking.`, unfurl_links: false, unfurl_media: false });
+async function sendLinkInstructions(services: BackendServices, principal: Principal, binding: P.ChannelBinding, externalUserId: string): Promise<void> {
+  const opened = parse(z.object({ channel: z.object({ id }) }), await slackCall(services, principal, binding, 'conversations.open', { users: externalUserId }));
+  await slackCall(services, principal, binding, 'chat.postMessage', { channel: opened.channel.id, text: `Welcome. Sign in to ${services.config.publicUrl} with your own enabled account and start channel identity linking. Send the displayed link code here in this DM, then complete the verified link in the app. No work is started before linking. Only this Bot's owner may use it.`, unfurl_links: false, unfurl_media: false });
 }
 async function bindingForCreate(services: BackendServices, principal: Principal, body: P.ChannelCreate): Promise<P.ChannelBinding> {
   await channelPolicy(services, principal, body.botId, body.adapter, true);
@@ -96,7 +98,7 @@ async function bindingForCreate(services: BackendServices, principal: Principal,
     await providerRequest(services, provider.apiBaseUrl, 'bindings', token, 'POST', { botId: body.botId, target: body.target, enabled: body.enabled, clientNonce: body.clientNonce });
   }
   const binding: P.ChannelBinding = services.resource('channel', { botId: body.botId, ownerUserId: principal.userId, adapter: body.adapter, accountId, target: body.target, enabled: body.enabled, state: 'connected', capabilities: provider.capabilities, lastError: null });
-  if (body.adapter === 'slack' && !body.target.startsWith('D')) await slackCall(services, binding, 'conversations.join', { channel: body.target });
+  if (body.adapter === 'slack' && !body.target.startsWith('D')) await slackCall(services, principal, binding, 'conversations.join', { channel: body.target });
   services.store.put('channelBindings', binding); services.events.emit('channel.upserted', binding, { botId: binding.botId, userIds: [principal.userId] });
   return binding;
 }
@@ -115,7 +117,7 @@ function applicationPrincipal(services: BackendServices, binding: P.ChannelBindi
   const grants = parse(z.array(z.strictObject({ providerId: id, channelBindingId: id, externalAppId: id, userId: id })).max(1000), configured ?? []);
   const provider = channelProvider(services, binding);
   const grant = grants.find(item => item.providerId === provider.id && item.channelBindingId === binding.id && item.externalAppId === externalAppId);
-  if (!grant) return null;
+  if (!grant || grant.userId !== binding.ownerUserId || services.store.get<P.Bot>('bots', binding.botId)?.ownerUserId !== grant.userId) return null;
   return { ...principalFor(services, grant.userId), scopes: [`channel_application:${binding.id}:${externalAppId}`] };
 }
 
@@ -126,6 +128,16 @@ export async function channelGatewayIngress(services: BackendServices, context: 
   try { value = JSON.parse(raw); } catch { throw new IntegrationError('invalid_request', 'Invalid channel adapter event JSON.'); }
   await verifyIngress(services, context.request, raw, provider.id, provider.adapter, provider.signingSecretRef, 300000, value);
   const input = parse(z.strictObject({ deliveryId: id, event: z.enum(['message', 'mention']), payload: z.strictObject({ channelBindingId: id, externalUserId: id.optional(), externalAppId: id.optional(), externalThreadId: z.string().min(1).max(512), text: z.string().max(65536), direct: z.boolean(), timestampMs: z.number().int().nonnegative() }) }), value);
+  const configuredBinding = services.store.require<P.ChannelBinding>('channelBindings', input.payload.channelBindingId);
+  let configuredActor = input.payload.externalAppId ? applicationPrincipal(services, configuredBinding, input.payload.externalAppId) : null;
+  if (!configuredActor && !input.payload.externalAppId && input.payload.externalUserId) {
+    const link = services.store.list<P.ChannelPrincipalLink>('channelPrincipalLinks', item => item.channelBindingId === configuredBinding.id && item.externalUserId === input.payload.externalUserId && item.verified)[0];
+    if (link) configuredActor = principalFor(services, link.userId);
+  }
+  if (!configuredActor || configuredBinding.ownerUserId !== configuredActor.userId || services.store.get<P.Bot>('bots', configuredBinding.botId)?.ownerUserId !== configuredActor.userId) return ignored('Only the authenticated fixed Bot owner may use this binding.');
+  ownedBinding(services, configuredActor, configuredBinding);
+  if (channelProvider(services, configuredBinding).id !== provider.id || !configuredBinding.enabled || configuredBinding.state !== 'connected') return ignored('Adapter binding is disabled or belongs to a different provider.');
+  await channelPolicy(services, configuredActor, configuredBinding.botId, configuredBinding.adapter);
   return dedupeIngress(services, provider.id, input.deliveryId, input, async () => {
     const binding = services.store.require<P.ChannelBinding>('channelBindings', input.payload.channelBindingId);
     if (channelProvider(services, binding).id !== provider.id || !binding.enabled || binding.state !== 'connected') return ignored('Adapter binding is disabled or belongs to a different provider.');
@@ -142,7 +154,7 @@ export async function channelGatewayIngress(services: BackendServices, context: 
     const result = await createChannelServices(services).channelIngress({ principal: actor, botId: binding.botId, channelBindingId: binding.id, externalThreadId: input.payload.externalThreadId, text: input.payload.text, clientNonce: services.mutations.digest([provider.id, input.deliveryId]) });
     const run = result.runs[0]; if (!run) throw new IntegrationError('upstream_unavailable', 'Adapter dispatch returned no actual run.');
     return { accepted: result.status !== 'outcome_unknown', status: result.status === 'outcome_unknown' ? 'outcome_unknown' : 'accepted', reason: null, runId: run.id, conversationId: run.conversationId };
-  });
+  }, configuredActor);
 }
 
 async function retireSlackGrant(services: BackendServices, provider: P.ChannelProviderConfig, userId: string, resourceId: string, accessToken: string, refreshToken: string | null, completionId: string | null): Promise<void> {
@@ -197,18 +209,18 @@ export function createChannelServices(services: BackendServices): ChannelService
       if (!['channelBindings', 'channelSetups', 'channelPrincipalLinks', 'channelLinkFlows'].includes(collection)) return undefined;
       const result = z.object({ id }).passthrough().safeParse(value);
       if (!result.success || !services.auth.member(principal.userId).enabled) return false;
-      if (collection === 'channelBindings') { const binding = z.object({ botId: id, adapter: adapters, ownerUserId: id }).passthrough().safeParse(value); if (!binding.success || binding.data.adapter === 'email' && binding.data.ownerUserId !== principal.userId) return false; try { services.auth.bot(principal, binding.data.botId); return true; } catch { return false; } }
+      if (collection === 'channelBindings') { const binding = services.store.get<P.ChannelBinding>('channelBindings', result.data.id); if (!binding || binding.ownerUserId !== principal.userId) return false; try { ownedBinding(services, principal, binding); return true; } catch { return false; } }
       if (collection === 'channelSetups') {
         const setup = z.object({ botId: id }).passthrough().safeParse(value); if (!setup.success) return false;
         const state = services.store.list<SetupState>('channelSetupStates', item => item.flowId === result.data.id)[0];
         if (state?.userId !== principal.userId) return false;
-        try { services.auth.bot(principal, setup.data.botId, true); return true; } catch { return false; }
+        try { ownedBot(services, principal, setup.data.botId, true); return true; } catch { return false; }
       }
       const owned = z.object({ userId: id, channelBindingId: id }).passthrough().safeParse(value);
       if (!owned.success || owned.data.userId !== principal.userId) return false;
       const binding = services.store.get<P.ChannelBinding>('channelBindings', owned.data.channelBindingId);
       if (!binding) return false;
-      try { services.auth.bot(principal, binding.botId); return true; } catch { return false; }
+      try { ownedBinding(services, principal, binding); return true; } catch { return false; }
     },
     retireOAuthCompletion: (completion: OAuthCompletion): Promise<void> => retireSlackCompletion(services, completion),
     retireUser: async (userId: string): Promise<void> => {
@@ -261,10 +273,20 @@ export function createChannelServices(services: BackendServices): ChannelService
         if (binding) pending.push({ operationId: reply.id, binding, target: reply.target, thread: reply.thread, startedAtMs: reply.startedAtMs, reply });
       }
       for (const item of pending) {
+        const actorId = item.draft?.ownerUserId ?? item.reply?.userId;
+        if (!actorId || item.binding.ownerUserId !== actorId || services.store.get<P.Bot>('bots', item.binding.botId)?.ownerUserId !== actorId) continue;
+        const actor = principalFor(services, actorId);
+        ownedBinding(services, actor, item.binding);
+        if (item.draft && item.draft.botId !== item.binding.botId) continue;
+        if (item.reply) {
+          const run = services.store.get<P.Run>('runs', item.reply.sourceRunId);
+          const specialist = run ? services.store.get<P.Bot>('bots', run.botId) : null;
+          if (!run || run.initiatorUserId !== actorId || specialist?.ownerUserId !== actorId || !item.reply.target.startsWith('D')) continue;
+        }
         let messageId: string | null = null;
         if (item.binding.adapter === 'slack') {
           const account = services.store.require<ChannelAccount>('channelAccounts', item.binding.accountId);
-          const result = providerResult(z.object({ messages: z.array(z.object({ ts: id, user: id.optional(), client_msg_id: z.string().optional() })).max(100) }), await slackCall(services, item.binding, item.thread ? 'conversations.replies' : 'conversations.history', { channel: item.target, ...(item.thread ? { ts: item.thread } : { oldest: String(item.startedAtMs / 1000) }), limit: 100 }));
+          const result = providerResult(z.object({ messages: z.array(z.object({ ts: id, user: id.optional(), client_msg_id: z.string().optional() })).max(100) }), await slackCall(services, actor, item.binding, item.thread ? 'conversations.replies' : 'conversations.history', { channel: item.target, ...(item.thread ? { ts: item.thread } : { oldest: String(item.startedAtMs / 1000) }), limit: 100 }));
           messageId = result.messages.find(message => message.client_msg_id === slackMessageKey(item.operationId) && message.user === account.botUserId)?.ts ?? null;
         } else if (item.draft) {
           const provider = channelProvider(services, item.binding); if (!provider.accountSecretRef) continue;
@@ -281,65 +303,74 @@ export function createChannelServices(services: BackendServices): ChannelService
       const binding = services.store.require<P.ChannelBinding>('channelBindings', input.channelBindingId);
       if (!binding.enabled || binding.state !== 'connected' || !binding.capabilities.inbound || binding.botId !== input.botId) throw new IntegrationError('policy_denied', 'Channel ingress is disabled or target does not match.');
       const bot = await channelPolicy(services, input.principal, binding.botId, binding.adapter);
+      ownedBinding(services, input.principal, binding);
       const links = services.store.list<P.ChannelPrincipalLink>('channelPrincipalLinks', link => link.channelBindingId === binding.id && link.verified && link.userId === input.principal.userId);
-      const application = input.principal.scopes?.some(scope => scope.startsWith(`channel_application:${binding.id}:`));
-      if (binding.adapter !== 'email' && !links.length && !application) throw new IntegrationError('forbidden', 'A verified own channel identity is required.');
+      const application = services.config.operator.channelApplicationPrincipals?.some(grant => grant.channelBindingId === binding.id && grant.providerId === channelProvider(services, binding).id && grant.userId === input.principal.userId && input.principal.scopes?.includes(`channel_application:${binding.id}:${grant.externalAppId}`));
+      if (binding.adapter !== 'email' && !links.length && !application) throw new IntegrationError('forbidden', 'A verified own channel identity or explicit fixed owner application mapping is required.');
       if (binding.adapter === 'email' && binding.ownerUserId !== input.principal.userId) throw new IntegrationError('forbidden', 'Mailbox principal must own the channel.');
       await services.integrations.admission(input.principal, bot.id);
       for (const attachmentId of input.attachmentIds ?? []) services.auth.attachment(input.principal, attachmentId);
       const key = services.mutations.digest([binding.id, input.externalThreadId, input.principal.userId]);
       let thread = services.store.get<ChannelThread>('channelThreads', key);
       if (!thread) {
-        // Per-principal thread rooms deliberately never import another member's private Team DM/notes.
-        const conversation: P.Conversation = services.resource('conversation', { kind: 'channel', name: `${binding.adapter} thread`, botIds: [bot.id], humanUserIds: [input.principal.userId], ownerUserId: input.principal.userId, parentConversationId: null, leadBotId: bot.id, channelBindingId: binding.id, lastEntryId: null, unreadCount: 0, lastReadSeq: 0, activity: [] });
+        const conversation: P.Conversation = services.resource('conversation', { kind: 'channel', name: `${binding.adapter} thread`, botIds: [bot.id], ownerUserId: input.principal.userId, parentConversationId: null, leadBotId: bot.id, channelBindingId: binding.id, lastEntryId: null, unreadCount: 0, lastReadSeq: 0, activity: [] });
         services.store.put('conversations', conversation);
         thread = { id: key, channelBindingId: binding.id, externalThreadId: input.externalThreadId, userId: input.principal.userId, conversationId: conversation.id, externalTarget: input.externalThreadId.split(':')[0] ?? binding.target };
         services.store.put('channelThreads', thread);
         services.events.emit('conversation.upserted', conversation, { userIds: [input.principal.userId], conversationId: conversation.id });
       }
+      const conversation = services.auth.conversation(input.principal, thread.conversationId);
+      if (thread.userId !== input.principal.userId || conversation.ownerUserId !== input.principal.userId || conversation.channelBindingId !== binding.id || conversation.botIds.length !== 1 || conversation.botIds[0] !== bot.id) throw new IntegrationError('forbidden', 'Channel context must belong exclusively to its Bot owner.');
       services.store.setMetadata(`externalSubmission:${input.principal.kind}:${input.principal.id}:${thread.conversationId}:${input.clientNonce}`, { provider: binding.adapter, ...(binding.adapter === 'slack' && !application && links.length ? { humanText: input.text } : {}) });
       return services.runtime.send(input.principal, thread.conversationId, { clientNonce: input.clientNonce, text: untrusted({ adapter: binding.adapter, externalThreadId: input.externalThreadId, text: input.text }), attachmentIds: input.attachmentIds });
     },
     assertChannelHandoff: (principal: Principal, source: P.Conversation, target: P.Bot, returnConversationId: string): void => {
-      services.auth.bot(principal, target.id); const returned = services.auth.conversation(principal, returnConversationId);
+      ownedBot(services, principal, target.id); const returned = services.auth.conversation(principal, returnConversationId);
       if (source.kind !== 'channel') { if (returned.kind === 'channel') throw new IntegrationError('forbidden', 'Private context cannot be returned through an unrelated channel thread.'); return; }
       const thread = services.store.list<ChannelThread>('channelThreads', item => item.conversationId === source.id && item.userId === principal.userId)[0];
-      if (!thread || target.visibility === 'personal' && !thread.externalTarget.startsWith('D')) throw new IntegrationError('forbidden', 'Shared channel handoff cannot expose a personal Bot’s private context.');
-      if (source.ownerUserId !== principal.userId || returnConversationId !== source.id || target.visibility === 'personal' && target.ownerUserId !== principal.userId || target.visibility === 'team' && !target.published) throw new IntegrationError('forbidden', 'Channel handoff must preserve the verified actor and originating thread.');
+      if (!thread || !thread.externalTarget.startsWith('D')) throw new IntegrationError('forbidden', 'Channel handoff cannot automatically expose private Bot context outside a DM.');
+      if (source.ownerUserId !== principal.userId || returned.ownerUserId !== principal.userId || returnConversationId !== source.id || target.ownerUserId !== principal.userId) throw new IntegrationError('forbidden', 'Channel handoff must preserve the verified owner and originating thread.');
+      const binding = services.store.require<P.ChannelBinding>('channelBindings', thread.channelBindingId);
+      ownedBinding(services, principal, binding);
     },
     returnChannelHandoff: async (principal: Principal, conversationId: string, text: string, sourceRunId?: string): Promise<void> => {
       const conversation = services.auth.conversation(principal, conversationId);
       const thread = services.store.list<ChannelThread>('channelThreads', item => item.conversationId === conversation.id && item.userId === principal.userId)[0];
-      if (!thread || conversation.ownerUserId !== principal.userId) throw new IntegrationError('forbidden', 'Only the originating actor may return this handoff.');
+      if (!thread || conversation.ownerUserId !== principal.userId || !thread.externalTarget.startsWith('D')) throw new IntegrationError('forbidden', 'Only the originating owner may return a private handoff to its DM.');
       const binding = services.store.require<P.ChannelBinding>('channelBindings', thread.channelBindingId);
       await channelPolicy(services, principal, binding.botId, binding.adapter);
+      ownedBinding(services, principal, binding);
       if (!binding.enabled || binding.state !== 'connected' || binding.adapter !== 'slack') throw new IntegrationError('policy_denied', 'Originating Slack binding is not active.');
       if (!sourceRunId) throw new IntegrationError('conflict', 'A verified specialist run is required for channel return.');
       const run = services.store.require<P.Run>('runs', sourceRunId);
       if (run.initiatorUserId !== principal.userId) throw new IntegrationError('forbidden', 'Handoff return cannot change the initiating principal.');
+      ownedBot(services, principal, run.botId);
       const key = services.mutations.digest([conversation.id, sourceRunId]); const prior = services.store.get<ChannelReturn>('channelReturns', key);
       if (prior?.state === 'sent') return;
       if (prior) throw new IntegrationError('outcome_unknown', 'Origin thread return is awaiting provider reconciliation.', false);
       const reply: ChannelReturn = { id: key, conversationId: conversation.id, userId: principal.userId, channelBindingId: binding.id, target: thread.externalTarget, thread: thread.externalThreadId.split(':')[1] ?? null, text, sourceRunId, startedAtMs: services.now(), state: 'reserved', providerMessageId: null };
       services.store.put('channelReturns', reply);
-      const result = providerResult(z.object({ ts: id }), await slackCall(services, binding, 'chat.postMessage', { channel: reply.target, thread_ts: reply.thread ?? undefined, text, client_msg_id: slackMessageKey(key), unfurl_links: false, unfurl_media: false }), true);
+      const result = providerResult(z.object({ ts: id }), await slackCall(services, principal, binding, 'chat.postMessage', { channel: reply.target, thread_ts: reply.thread ?? undefined, text, client_msg_id: slackMessageKey(key), unfurl_links: false, unfurl_media: false }), true);
       services.store.put('channelReturns', { ...reply, state: 'sent', providerMessageId: result.ts });
     },
     sendApprovedDraft: async (principal: Principal, draft: P.Draft): Promise<{ providerMessageId: string | null; runId: string | null }> => {
       if (draft.ownerUserId !== principal.userId || draft.state !== 'sending' || draft.content.kind === 'email') throw new IntegrationError('forbidden', 'Only an explicitly approved sending draft may be delivered.');
       const persisted = services.store.require<P.Draft>('drafts', draft.id);
-      if (persisted.state !== 'sending' || persisted.revision !== draft.revision || services.mutations.digest(persisted.content) !== services.mutations.digest(draft.content)) throw new IntegrationError('conflict', 'Approved channel draft content changed.');
-      const delivery = services.store.metadata<{ providerMessageId: string | null; runId: string | null }>(`channelDraftSent:${draft.id}`);
-      if (delivery) return delivery;
-      if (services.store.metadata<boolean>(`channelDraftReserved:${draft.id}`)) throw new IntegrationError('outcome_unknown', 'Channel draft delivery is already reserved; do not redispatch.', false);
-      services.auth.conversation(principal, draft.conversationId); services.auth.bot(principal, draft.botId);
+      if (persisted.state !== 'sending' || persisted.ownerUserId !== principal.userId || persisted.botId !== draft.botId || persisted.conversationId !== draft.conversationId || persisted.revision !== draft.revision || services.mutations.digest(persisted.content) !== services.mutations.digest(draft.content)) throw new IntegrationError('conflict', 'Approved channel draft content or ownership changed.');
+      const conversation = services.auth.conversation(principal, draft.conversationId); ownedBot(services, principal, draft.botId);
+      if (conversation.ownerUserId !== principal.userId) throw new IntegrationError('forbidden', 'Draft context must belong exclusively to its Bot owner.');
+      for (const botId of conversation.botIds) ownedBot(services, principal, botId);
       const content = draft.content;
       const binding = content.kind === 'message' ? services.store.require<P.ChannelBinding>('channelBindings', content.channelBindingId) : services.store.get<P.ChannelBinding>('channelBindings', content.connectorId);
       if (!binding || binding.botId !== draft.botId || !binding.enabled || binding.state !== 'connected' || !binding.capabilities.outbound) throw new IntegrationError('policy_denied', 'Approved channel identity is not available.');
       await channelPolicy(services, principal, binding.botId, binding.adapter);
+      ownedBinding(services, principal, binding);
       if (content.kind === 'slack' && binding.adapter !== 'slack') throw new IntegrationError('forbidden', 'Slack draft requires its exact installed Slack identity.');
       const thread = services.store.list<ChannelThread>('channelThreads', item => item.conversationId === draft.conversationId)[0];
       if (thread && (thread.userId !== principal.userId || content.target !== thread.externalTarget || content.thread !== (thread.externalThreadId.split(':')[1] ?? null))) throw new IntegrationError('forbidden', 'Channel return cannot change its verified actor or originating thread.');
+      const delivery = services.store.metadata<{ providerMessageId: string | null; runId: string | null }>(`channelDraftSent:${draft.id}`);
+      if (delivery) return delivery;
+      if (services.store.metadata<boolean>(`channelDraftReserved:${draft.id}`)) throw new IntegrationError('outcome_unknown', 'Channel draft delivery is already reserved; do not redispatch.', false);
       if (content.attachmentIds.length > 6) throw new IntegrationError('too_large', 'Channel messages support at most six attachments.');
       for (const attachmentId of content.attachmentIds) services.auth.attachment(principal, attachmentId);
       if (binding.adapter === 'slack') {
@@ -352,7 +383,7 @@ export function createChannelServices(services: BackendServices): ChannelService
         const uploads: { id: string; title: string }[] = [];
         for (const attachmentId of content.attachmentIds) {
           const attachment = services.auth.attachment(principal, attachmentId);
-          const upload = parse(z.object({ upload_url: z.string().url(), file_id: id }), await slackCall(services, binding, 'files.getUploadURLExternal', { filename: attachment.filename, length: attachment.size }));
+          const upload = parse(z.object({ upload_url: z.string().url(), file_id: id }), await slackCall(services, principal, binding, 'files.getUploadURLExternal', { filename: attachment.filename, length: attachment.size }));
           const destination = new URL(upload.upload_url);
           if (destination.protocol !== 'https:' || destination.hostname !== 'files.slack.com') throw new IntegrationError('upstream_unavailable', 'Slack returned an unsupported file upload origin.');
           try {
@@ -361,9 +392,9 @@ export function createChannelServices(services: BackendServices): ChannelService
           } catch { throw new IntegrationError('outcome_unknown', 'Slack file upload acknowledgment was lost.', false); }
           uploads.push({ id: upload.file_id, title: attachment.filename });
         }
-        if (uploads.length) await slackCall(services, binding, 'files.completeUploadExternal', { files: uploads, channel_id: content.target, thread_ts: content.thread ?? undefined });
+        if (uploads.length) await slackCall(services, principal, binding, 'files.completeUploadExternal', { files: uploads, channel_id: content.target, thread_ts: content.thread ?? undefined });
         let posted: { ts: string };
-        try { posted = providerResult(z.object({ ts: id }), await slackCall(services, binding, 'chat.postMessage', { channel: content.target, thread_ts: content.thread ?? undefined, text: content.body, client_msg_id: slackMessageKey(draft.id), unfurl_links: false, unfurl_media: false }), true); }
+        try { posted = providerResult(z.object({ ts: id }), await slackCall(services, principal, binding, 'chat.postMessage', { channel: content.target, thread_ts: content.thread ?? undefined, text: content.body, client_msg_id: slackMessageKey(draft.id), unfurl_links: false, unfurl_media: false }), true); }
         catch (error) { if (uploads.length) throw new IntegrationError('outcome_unknown', 'Slack attachments may already be delivered; text acknowledgment is not confirmed.', false); if (error instanceof IntegrationError && error.retrySafe) services.store.setMetadata(`channelDraftReserved:${draft.id}`, false); throw error; }
         const receipt = { providerMessageId: posted.ts, runId: null };
         services.store.setMetadata(`channelDraftSent:${draft.id}`, receipt); return receipt;
@@ -384,15 +415,16 @@ export function createChannelServices(services: BackendServices): ChannelService
   channelInstances.set(services, integration); return integration;
 }
 export function createChannelRoutes(services: BackendServices): Route[] {
-  return [
+  const routes: Route[] = [
     { method: 'GET', path: '/v1/channels/providers', auth: 'member', handler: () => createChannelServices(services).inventory() },
-    { method: 'GET', path: '/v1/channels', auth: 'member', handler: context => { const principal = requireUser(context); return services.page(context, services.store.list<P.ChannelBinding>('channelBindings', binding => (!context.query.get('botId') || binding.botId === context.query.get('botId')) && services.auth.canRead(principal, 'channelBindings', binding))); } },
+    { method: 'GET', path: '/v1/channels', auth: 'member', handler: context => { const principal = requireUser(context); return services.page(context, services.store.list<P.ChannelBinding>('channelBindings', binding => (!context.query.get('botId') || binding.botId === context.query.get('botId')) && createChannelServices(services).canReadResource(principal, 'channelBindings', binding) === true)); } },
     { method: 'POST', path: '/v1/channels', auth: 'member', handler: context => bindingForCreate(services, requireUser(context), parse(createBody, context.body)) },
     { method: 'PATCH', path: '/v1/channels/:id', auth: 'member', handler: async context => {
       const principal = requireUser(context); const body = parse(updateBody.extend({ target: z.string().min(1).max(256).optional(), enabled: z.boolean().optional() }), context.body); const binding = services.store.require<P.ChannelBinding>('channelBindings', context.params.id!);
       await channelPolicy(services, principal, binding.botId, binding.adapter, true); services.mutations.checkRevision(binding, body.revision);
+      ownedBinding(services, principal, binding);
       if (binding.adapter === 'email' && (binding.ownerUserId !== principal.userId || body.target !== undefined && body.target !== binding.target)) throw new IntegrationError('forbidden', 'Mailbox channel management is owner-only; the account-owned address cannot be renamed.');
-      if (body.target && body.target !== binding.target && binding.adapter === 'slack') { await slackCall(services, binding, 'conversations.join', { channel: body.target }); await slackCall(services, binding, 'chat.postMessage', { channel: body.target, text: 'Lemon Bot joined. Mention the app to start a thread. Each participant must link their own product account.', unfurl_links: false }); }
+      if (body.target && body.target !== binding.target && binding.adapter === 'slack') { await slackCall(services, principal, binding, 'conversations.join', { channel: body.target }); await slackCall(services, principal, binding, 'chat.postMessage', { channel: body.target, text: 'Lemon Bot joined. Only its linked owner may mention the app to start a thread.', unfurl_links: false }); }
       const updated = services.update(binding, { ...(body.target === undefined ? {} : { target: body.target }), ...(body.enabled === undefined ? {} : { enabled: body.enabled }) });
       if (binding.adapter !== 'slack' && binding.adapter !== 'email') { const provider = channelProvider(services, binding); if (!provider.accountSecretRef) throw new IntegrationError('capability_unavailable', 'Configure adapter credentials.'); await providerRequest(services, provider.apiBaseUrl, `bindings/${encodeURIComponent(binding.id)}`, await services.secret(provider.accountSecretRef), 'PATCH', { target: updated.target, enabled: updated.enabled, idempotencyKey: body.clientNonce }); }
       services.store.put('channelBindings', updated); services.events.emit('channel.upserted', updated, { botId: binding.botId, userIds: [binding.ownerUserId] }); return updated;
@@ -404,8 +436,9 @@ export function createChannelRoutes(services: BackendServices): Route[] {
         const bot = services.store.require<P.Bot>('bots', binding.botId);
         const operation = services.store.metadata<{ action: string; userId: string; revision: number; status: string }>(`botLifecycle:${bot.id}`);
         if (lifecycle.botId !== bot.id || lifecycle.userId !== principal.userId || lifecycle.action !== 'delete' || operation?.action !== 'delete' || operation.userId !== principal.userId || operation.revision !== bot.revision || operation.status !== 'running') throw new IntegrationError('forbidden', 'Confirmed Bot lifecycle authority does not match this binding.');
-        if (bot.ownerUserId !== principal.userId) { if (bot.visibility !== 'team') throw new IntegrationError('forbidden', 'Private Bot cleanup is owner-only.'); services.auth.requireRole(principal, 'admin'); }
-      } else services.auth.bot(principal, binding.botId, true);
+        if (bot.ownerUserId !== principal.userId) throw new IntegrationError('forbidden', 'Bot cleanup is owner-only.');
+      } else ownedBot(services, principal, binding.botId, true);
+      ownedBinding(services, principal, binding);
       services.mutations.checkRevision(binding, body.revision);
       if (binding.adapter === 'email' && !lifecycle && binding.ownerUserId !== principal.userId) throw new IntegrationError('not_found', 'Own mailbox channel was not found.');
       const disabled = services.update(binding, { enabled: false, state: 'disconnected' as const }); services.store.put('channelBindings', disabled);
@@ -418,8 +451,8 @@ export function createChannelRoutes(services: BackendServices): Route[] {
         const provider = channelProvider(services, binding);
         if (binding.adapter === 'slack') {
           const account = services.store.require<ChannelAccount>('channelAccounts', binding.accountId);
-          if (account.appId && provider.oauth) await slackCall(services, binding, 'apps.uninstall', { client_id: provider.oauth.clientId, client_secret: await services.secret(provider.oauth.clientSecretRef) });
-          else await slackCall(services, binding, 'auth.revoke', {});
+          if (account.appId && provider.oauth) await slackCall(services, principal, binding, 'apps.uninstall', { client_id: provider.oauth.clientId, client_secret: await services.secret(provider.oauth.clientSecretRef) });
+          else await slackCall(services, principal, binding, 'auth.revoke', {});
           services.store.remove('channelAccounts', binding.accountId);
         } else { if (!provider.accountSecretRef) throw new IntegrationError('capability_unavailable', 'Configure adapter cleanup credentials.'); await providerRequest(services, provider.apiBaseUrl, `bindings/${encodeURIComponent(binding.id)}`, await services.secret(provider.accountSecretRef), 'DELETE', { idempotencyKey: body.clientNonce }); }
         }
@@ -435,7 +468,6 @@ export function createChannelRoutes(services: BackendServices): Route[] {
       const principal = requireUser(context); const body = parse(setupBody, context.body); const bot = await channelPolicy(services, principal, body.botId, body.adapter, true);
       const provider = services.config.operator.channelProviders.find(item => item.id === body.providerId && item.adapter === body.adapter);
       if (body.adapter !== 'slack' || !provider?.oauth || !provider.supportsBotAppInstall) throw new IntegrationError('capability_unavailable', 'Configure the per-Bot Slack OAuth app installation provider.');
-      if (!bot.published || bot.visibility !== 'team') throw new IntegrationError('policy_denied', 'Publish the Team Bot before installing its app.');
       if (services.store.list<ChannelAccount>('channelAccounts', account => account.providerId === provider.id && account.botId !== bot.id).length) throw new IntegrationError('conflict', 'A per-Bot app provider cannot be shared with another Bot.');
       const flow: P.ChannelSetupFlow = services.resource('channel_setup', { botId: bot.id, adapter: body.adapter, authorizationUrl: null, state: 'pending', channelBindingId: null, error: null });
       const authorization = startOAuth(services, provider.oauth, { userId: principal.userId, resourceId: flow.id, callbackPath: '/v1/channels/oauth/callback', clientRedirectUri: body.redirectUri });
@@ -445,7 +477,7 @@ export function createChannelRoutes(services: BackendServices): Route[] {
       const record: SetupState = { id: authorization.flow.id, flowId: flow.id, providerId: provider.id, userId: principal.userId, expiresAtMs: authorization.flow.expiresAtMs };
       services.store.put('channelSetupStates', record); services.store.put('channelSetups', flow); services.events.emit('channel_setup.upserted', flow, { userIds: [principal.userId] }); return flow;
     } },
-    { method: 'GET', path: '/v1/channels/setup/:id', auth: 'member', handler: context => { const principal = requireUser(context); const flow = services.store.require<P.ChannelSetupFlow>('channelSetups', context.params.id!); services.auth.bot(principal, flow.botId, true); const state = services.store.list<SetupState>('channelSetupStates', item => item.flowId === flow.id)[0]; if (state?.userId !== principal.userId) throw new IntegrationError('not_found', 'Channel setup was not found.'); if (state.expiresAtMs <= services.now() && flow.state === 'pending') throw new IntegrationError('expired', 'Channel setup expired.'); return flow; } },
+    { method: 'GET', path: '/v1/channels/setup/:id', auth: 'member', handler: context => { const principal = requireUser(context); const flow = services.store.require<P.ChannelSetupFlow>('channelSetups', context.params.id!); ownedBot(services, principal, flow.botId, true); const state = services.store.list<SetupState>('channelSetupStates', item => item.flowId === flow.id)[0]; if (state?.userId !== principal.userId) throw new IntegrationError('not_found', 'Channel setup was not found.'); if (state.expiresAtMs <= services.now() && flow.state === 'pending') throw new IntegrationError('expired', 'Channel setup expired.'); return flow; } },
     { method: 'GET', path: '/v1/channels/oauth/callback', auth: 'public', mutation: false, handler: async context => {
       const oauth = takeOAuthState(services, context.query.get('state') ?? '');
       const state = services.store.require<SetupState>('channelSetupStates', oauth.id);
@@ -463,16 +495,16 @@ export function createChannelRoutes(services: BackendServices): Route[] {
           assertActiveAccount(services, principal.userId, true);
           services.store.put('channelAccounts', account);
           const binding: P.ChannelBinding = services.resource('channel', { botId: flow.botId, ownerUserId: principal.userId, adapter: flow.adapter, accountId: account.id, target: token.team.id, enabled: true, state: 'configured', capabilities: provider.capabilities, lastError: null });
-          const identity = parse(z.object({ team_id: id, user_id: id }), await slackCall(services, binding, 'auth.test', {}));
+          const identity = parse(z.object({ team_id: id, user_id: id }), await slackCall(services, principal, binding, 'auth.test', {}));
           if (identity.team_id !== token.team.id || identity.user_id !== token.bot_user_id) throw new IntegrationError('unauthenticated', 'Slack installation identity did not match OAuth.');
-          const installer = parse(z.object({ user: z.object({ id, is_admin: z.boolean().optional(), is_owner: z.boolean().optional(), deleted: z.boolean().optional() }) }), await slackCall(services, binding, 'users.info', { user: token.authed_user.id }));
+          const installer = parse(z.object({ user: z.object({ id, is_admin: z.boolean().optional(), is_owner: z.boolean().optional(), deleted: z.boolean().optional() }) }), await slackCall(services, principal, binding, 'users.info', { user: token.authed_user.id }));
           if (installer.user.deleted || installer.user.id !== token.authed_user.id) throw new IntegrationError('unauthenticated', 'Slack installer identity is disabled.');
-          if (!installer.user.is_admin && !installer.user.is_owner) { await slackCall(services, binding, 'auth.revoke', {}); services.store.remove('channelAccounts', account.id); markOAuthInstalled(services, oauth.id); updated = services.update(flow, { state: 'awaiting_admin', error: 'An actual Slack workspace administrator must approve installation.' }); }
+          if (!installer.user.is_admin && !installer.user.is_owner) { await slackCall(services, principal, binding, 'auth.revoke', {}); services.store.remove('channelAccounts', account.id); markOAuthInstalled(services, oauth.id); updated = services.update(flow, { state: 'awaiting_admin', error: 'An actual Slack workspace administrator must approve installation.' }); }
           else {
             assertActiveAccount(services, principal.userId, true);
             const active = services.update(binding, { state: 'connected' as const }); services.store.put('channelBindings', active);
             markOAuthInstalled(services, oauth.id);
-            await sendLinkInstructions(services, active, token.authed_user.id);
+            await sendLinkInstructions(services, principal, active, token.authed_user.id);
             updated = services.update(flow, { state: 'connected', channelBindingId: active.id, error: null }); services.events.emit('channel.upserted', active, { botId: active.botId, userIds: [principal.userId] });
           }
         } catch (error) { updated = services.update(flow, { state: 'failed', error: error instanceof IntegrationError ? error.message : 'Channel installation failed; check provider-admin installation state.' }); }
@@ -483,6 +515,7 @@ export function createChannelRoutes(services: BackendServices): Route[] {
     { method: 'POST', path: '/v1/channels/principal-links/start', auth: 'member', handler: async context => {
       const principal = requireUser(context); const body = parse(z.strictObject({ clientNonce: nonce, channelBindingId: id }), context.body);
       const binding = services.store.require<P.ChannelBinding>('channelBindings', body.channelBindingId); await channelPolicy(services, principal, binding.botId, binding.adapter);
+      ownedBinding(services, principal, binding);
       if (!binding.enabled || binding.state !== 'connected' || binding.adapter === 'email') throw new IntegrationError('policy_denied', 'Linking requires an active externally authenticated channel.');
       const linkCode = randomBytes(24).toString('base64url');
       const flow: P.ChannelLinkFlow = services.resource('channel_link_flow', { userId: principal.userId, channelBindingId: binding.id, state: 'awaiting_external', linkCode: null, instructions: 'Send the displayed link code in your own DM to this channel app, then return here to complete the verified identity link.', externalUserId: null, externalDisplayName: null, verificationCode: null, expiresAtMs: services.now() + 600000 });
@@ -496,8 +529,8 @@ export function createChannelRoutes(services: BackendServices): Route[] {
     { method: 'GET', path: '/v1/channels/principal-links/flows/:id', auth: 'member', handler: async context => {
       const principal = requireUser(context); let flow = services.store.require<P.ChannelLinkFlow>('channelLinkFlows', context.params.id!);
       if (flow.userId !== principal.userId) throw new IntegrationError('not_found', 'Own channel link flow was not found.');
+      const binding = services.store.require<P.ChannelBinding>('channelBindings', flow.channelBindingId); ownedBinding(services, principal, binding);
       if (flow.expiresAtMs <= services.now() && !['completed', 'cancelled'].includes(flow.state)) { flow = services.update(flow, { state: 'expired', linkCode: null, verificationCode: null }); services.store.put('channelLinkFlows', flow); return flow; }
-      const binding = services.store.require<P.ChannelBinding>('channelBindings', flow.channelBindingId); services.auth.bot(principal, binding.botId);
       if (binding.adapter !== 'slack' && flow.state === 'awaiting_external') {
         const provider = channelProvider(services, binding); if (!provider.accountSecretRef) throw new IntegrationError('capability_unavailable', 'Configure adapter identity proof credentials.');
         const proof = parse(z.strictObject({ verified: z.boolean(), externalUserId: id.nullable(), externalDisplayName: z.string().max(120).nullable() }), await providerRequest(services, provider.apiBaseUrl, `identity-links/${encodeURIComponent(flow.id)}`, await services.secret(provider.accountSecretRef)));
@@ -507,7 +540,7 @@ export function createChannelRoutes(services: BackendServices): Route[] {
       return { ...flow, verificationCode: flow.state === 'verified' && encrypted ? services.decrypt<string>(encrypted) : null };
     } },
     { method: 'POST', path: '/v1/channels/principal-links', auth: 'member', handler: context => {
-      const principal = requireUser(context); principalFor(services, principal.userId); const body = parse(linkBody, context.body); const binding = services.store.require<P.ChannelBinding>('channelBindings', body.channelBindingId); services.auth.bot(principal, binding.botId);
+      const principal = requireUser(context); principalFor(services, principal.userId); const body = parse(linkBody, context.body); const binding = services.store.require<P.ChannelBinding>('channelBindings', body.channelBindingId); ownedBinding(services, principal, binding);
       const proof = services.store.get<LinkProof>('channelLinkProofs', services.mutations.digest(body.verificationCode));
       const flow = proof ? services.store.get<P.ChannelLinkFlow>('channelLinkFlows', proof.flowId) : null;
       if (!proof || proof.used || !flow || flow.state !== 'verified' || flow.userId !== principal.userId || flow.channelBindingId !== binding.id || flow.externalUserId !== body.externalUserId) throw new IntegrationError('unauthenticated', 'Complete your own signed channel DM challenge before linking.');
@@ -516,8 +549,8 @@ export function createChannelRoutes(services: BackendServices): Route[] {
       if (existing && existing.userId !== principal.userId) throw new IntegrationError('conflict', 'Channel identity is already linked to a different product account.');
       return services.store.transaction(() => { services.store.put('channelLinkProofs', { ...proof, used: true }); services.store.put('channelLinkFlows', services.update(flow, { state: 'completed', verificationCode: null, linkCode: null })); services.store.setMetadata(`channelLinkVerification:${flow.id}`, null); const link: P.ChannelPrincipalLink = existing ?? services.resource('channel_link', { channelBindingId: binding.id, externalUserId: body.externalUserId, userId: principal.userId, verified: true }); services.store.put('channelPrincipalLinks', link); services.audit(principal, 'channel.link', binding.id, 'succeeded'); return link; });
     } },
-    { method: 'GET', path: '/v1/channels/principal-links', auth: 'member', handler: context => { const principal = requireUser(context); return services.page(context, services.store.list<P.ChannelPrincipalLink>('channelPrincipalLinks', item => item.userId === principal.userId)); } },
-    { method: 'DELETE', path: '/v1/channels/principal-links/:id', auth: 'member', handler: context => { const principal = requireUser(context); const body = parse(updateBody, context.body); const link = services.store.require<P.ChannelPrincipalLink>('channelPrincipalLinks', context.params.id!); if (link.userId !== principal.userId) throw new IntegrationError('not_found', 'Own channel identity link was not found.'); services.mutations.checkRevision(link, body.revision); services.store.remove('channelPrincipalLinks', link.id); return { id: link.id, deleted: true }; } },
+    { method: 'GET', path: '/v1/channels/principal-links', auth: 'member', handler: context => { const principal = requireUser(context); return services.page(context, services.store.list<P.ChannelPrincipalLink>('channelPrincipalLinks', item => item.userId === principal.userId && createChannelServices(services).canReadResource(principal, 'channelPrincipalLinks', item) === true)); } },
+    { method: 'DELETE', path: '/v1/channels/principal-links/:id', auth: 'member', handler: context => { const principal = requireUser(context); const body = parse(updateBody, context.body); const link = services.store.require<P.ChannelPrincipalLink>('channelPrincipalLinks', context.params.id!); if (link.userId !== principal.userId) throw new IntegrationError('not_found', 'Own channel identity link was not found.'); ownedBinding(services, principal, services.store.require<P.ChannelBinding>('channelBindings', link.channelBindingId)); services.mutations.checkRevision(link, body.revision); services.store.remove('channelPrincipalLinks', link.id); return { id: link.id, deleted: true }; } },
     { method: 'POST', path: '/v1/integrations/slack/events', auth: 'public', mutation: false, body: 'none', handler: async context => {
       const raw = await rawBody(context.request); let decoded: unknown; try { decoded = JSON.parse(raw); } catch { throw new IntegrationError('invalid_request', 'Invalid Slack event JSON.'); }
       const envelope = parse(z.object({ type: z.string(), team_id: id.optional(), api_app_id: id.optional(), event_id: id.optional(), challenge: z.string().optional(), event: z.object({ type: z.string(), user: id.optional(), channel: id.optional(), channel_type: z.string().optional(), text: z.string().max(65536).optional(), ts: z.string().optional(), thread_ts: z.string().optional(), subtype: z.string().optional(), bot_id: id.optional(), app_id: id.optional(), bot_profile: z.object({ app_id: id.optional() }).passthrough().optional(), event_ts: z.string().optional() }).passthrough().optional() }), decoded);
@@ -529,12 +562,24 @@ export function createChannelRoutes(services: BackendServices): Route[] {
       if (!account || !envelope.event || !envelope.event_id) return ignored('No installed app or supported Slack event.');
       const binding = services.store.list<P.ChannelBinding>('channelBindings', item => item.accountId === account.id)[0]; const event = envelope.event;
       if (!binding) return ignored('Slack app binding was removed.');
+      const owner = services.store.get<P.Bot>('bots', binding.botId)?.ownerUserId;
+      if (!owner || owner !== binding.ownerUserId || account.productUserId !== owner || account.botId !== binding.botId) return ignored('Slack installation must belong to its fixed Bot owner.');
+      const mapped = event.bot_id ? applicationPrincipal(services, binding, event.app_id ?? event.bot_profile?.app_id ?? '') : event.user ? services.store.list<P.ChannelPrincipalLink>('channelPrincipalLinks', item => item.channelBindingId === binding.id && item.externalUserId === event.user && item.verified)[0] : null;
+      if (mapped && mapped.userId !== owner) return ignored('Authenticated Slack actor does not own this Bot.');
+      const challengeFlowId = event.channel?.startsWith('D') && event.text ? services.store.metadata<string>(`channelLinkCode:${services.mutations.digest(event.text.trim())}`) : null;
+      const challengeFlow = challengeFlowId ? services.store.get<P.ChannelLinkFlow>('channelLinkFlows', challengeFlowId) : null;
+      if (challengeFlow && challengeFlow.userId !== owner) return ignored('Identity challenge does not belong to this Bot owner.');
+      if (!mapped && !challengeFlow) return ignored('An authenticated owner identity or explicit owner application grant is required.');
+      const ingressActor = principalFor(services, mapped?.userId ?? challengeFlow!.userId);
+      ownedBinding(services, ingressActor, binding);
+      if (!binding.enabled || binding.state !== 'connected') return ignored('Slack binding is disabled.');
+      await channelPolicy(services, ingressActor, binding.botId, binding.adapter);
       return dedupeIngress(services, provider.id, envelope.event_id, decoded, async () => {
         if (!binding.enabled || binding.state !== 'connected') return ignored('Slack binding is disabled.');
         if (event.type === 'member_joined_channel' && event.user === account.botUserId && event.channel) {
           const invitedAtMs = Number(event.event_ts) * 1000;
           if (!Number.isFinite(invitedAtMs) || Math.abs(services.now() - invitedAtMs) > 300000 || invitedAtMs < binding.createdAtMs) return ignored('Old app invitations are not backfilled.');
-          await slackCall(services, binding, 'chat.postMessage', { channel: event.channel, text: 'Lemon Bot joined. Mention this app to start a thread; each participant must first link their own enabled Lemon Bot account.', client_msg_id: slackMessageKey(services.mutations.digest([provider.id, envelope.event_id])), unfurl_links: false, unfurl_media: false });
+          await slackCall(services, ingressActor, binding, 'chat.postMessage', { channel: event.channel, text: 'Lemon Bot joined. Only its linked owner may mention this app to start a thread.', client_msg_id: slackMessageKey(services.mutations.digest([provider.id, envelope.event_id])), unfurl_links: false, unfurl_media: false });
           return ignored('App invitation welcome was delivered; no work was started.');
         }
         if (!event.channel || !event.ts || !['message', 'app_mention'].includes(event.type) || event.subtype && event.subtype !== 'bot_message') return ignored('Only new messages and app mentions may start work.');
@@ -554,13 +599,13 @@ export function createChannelRoutes(services: BackendServices): Route[] {
         if (linkFlowId) {
           const linkFlow = services.store.require<P.ChannelLinkFlow>('channelLinkFlows', linkFlowId);
           if (linkFlow.channelBindingId !== binding.id || linkFlow.state !== 'awaiting_external' || linkFlow.expiresAtMs <= services.now()) return ignored('Channel identity code is expired or already consumed.');
-          principalFor(services, linkFlow.userId);
+          ownedBinding(services, principalFor(services, linkFlow.userId), binding);
           recordChannelProof(services, linkFlow, event.user, null); services.store.setMetadata(`channelLinkCode:${services.mutations.digest(event.text!.trim())}`, null);
-          await slackCall(services, binding, 'chat.postMessage', { channel: event.channel, text: 'Your own channel identity was verified. Return to Lemon Bot to complete the link. No work was started.', unfurl_links: false });
+          await slackCall(services, ingressActor, binding, 'chat.postMessage', { channel: event.channel, text: 'Your own channel identity was verified. Return to Lemon Bot to complete the link. No work was started.', unfurl_links: false });
           return ignored('Own channel identity challenge verified; complete linking in the product.');
         }
         const link = services.store.list<P.ChannelPrincipalLink>('channelPrincipalLinks', item => item.channelBindingId === binding.id && item.externalUserId === event.user && item.verified)[0];
-        if (!link) { await sendLinkInstructions(services, binding, event.user); return ignored('Own product account linking is required.'); }
+        if (!link) return ignored('Own product account linking is required.');
         const principal = principalFor(services, link.userId);
         const threadId = direct ? event.channel : `${event.channel}:${event.thread_ts ?? event.ts}`;
         const prior = services.store.list<ChannelThread>('channelThreads', item => item.channelBindingId === binding.id && item.externalThreadId === threadId && item.userId === principal.userId)[0];
@@ -569,7 +614,27 @@ export function createChannelRoutes(services: BackendServices): Route[] {
         const result = await createChannelServices(services).channelIngress({ principal, botId: binding.botId, channelBindingId: binding.id, externalThreadId: threadId, text: event.text ?? '', clientNonce: services.mutations.digest([provider.id, envelope.event_id]) });
         const run = result.runs[0]; if (!run) throw new IntegrationError('upstream_unavailable', 'Slack dispatch returned no actual run.');
         return { accepted: result.status !== 'outcome_unknown', status: result.status === 'outcome_unknown' ? 'outcome_unknown' : 'accepted', reason: null, runId: run.id, conversationId: run.conversationId };
-      });
+      }, ingressActor);
     } },
   ];
+  return routes.map((route): Route => {
+    if (!['POST', 'PATCH', 'DELETE'].includes(route.method) || route.mutation === false) return route;
+    return { ...route, authorizeReplay: async context => {
+      const principal = requireUser(context); const body = parse(z.object({ botId: id.optional(), channelBindingId: id.optional() }).passthrough(), context.body);
+      let binding: P.ChannelBinding | null = null;
+      if (route.path === '/v1/channels/:id') binding = services.store.require<P.ChannelBinding>('channelBindings', context.params.id!);
+      else if (body.channelBindingId) binding = services.store.require<P.ChannelBinding>('channelBindings', body.channelBindingId);
+      else if (route.path === '/v1/channels/principal-links/:id') {
+        const link = services.store.require<P.ChannelPrincipalLink>('channelPrincipalLinks', context.params.id!);
+        if (link.userId !== principal.userId) throw new IntegrationError('forbidden', 'Channel identity link must belong to the authenticated owner.');
+        binding = services.store.require<P.ChannelBinding>('channelBindings', link.channelBindingId);
+      }
+      if (binding) { ownedBinding(services, principal, binding); await channelPolicy(services, principal, binding.botId, binding.adapter, route.path === '/v1/channels/:id'); }
+      else if (body.botId) {
+        const bot = ownedBot(services, principal, body.botId, true);
+        const adapter = parse(z.object({ adapter: adapters }).passthrough(), context.body).adapter;
+        await channelPolicy(services, principal, bot.id, adapter, true);
+      } else throw new IntegrationError('forbidden', 'Replay requires its exact owned channel target.');
+    } };
+  });
 }
