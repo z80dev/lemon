@@ -53,7 +53,7 @@ export LEMON_BOT_DATA_DIR="$HOME/.lemon/lemon_bot"
 export LEMON_BOT_HOST='127.0.0.1'
 export LEMON_BOT_PORT='4080'
 bun --cwd products/lemon_bot/backend install
-bun --cwd products/lemon_bot/backend run start
+bun run --cwd products/lemon_bot/backend start
 ```
 
 `LEMON_BOT_PUBLIC_URL` is the externally reachable product origin, **not** control-plane URL. Registered bot MCP URLs, webhook URLs, OAuth callbacks and attachment downloads derive from it. Every execution node must reach it (loopback public URL cannot serve a remote node). Production uses HTTPS and matching WSS, trusted proxy origin/header validation and private data directory ownership. Backend `start` serves production built web when present; `dev` runs backend watch mode. On an empty DB, backend prints a one-time setup code. Open product origin, create owner with that code, name workspace, then attach a machine and create first Bot. Normal accounts use local login/invite or configured OIDC; setup is never exposed anonymously beyond setupRequired/version.
@@ -62,9 +62,9 @@ bun --cwd products/lemon_bot/backend run start
 
 ```bash
 bun --cwd products/lemon_bot/web install
-bun --cwd products/lemon_bot/web run dev
+bun run --cwd products/lemon_bot/web dev
 # Production web assets consumed by backend:
-bun --cwd products/lemon_bot/web run build
+bun run --cwd products/lemon_bot/web build
 ```
 
 Web dev `/v1`, `/hooks` and `/mcp` proxy to backend origin; Vite dev socket is not product realtime. Web never connects directly to Lemon `/ws`.

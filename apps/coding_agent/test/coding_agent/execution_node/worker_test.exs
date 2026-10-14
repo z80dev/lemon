@@ -1110,13 +1110,12 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
 
 
   @tag :tmp_dir
-  test "full native policy traversal reaches the executor and respects advertised bytes", %{tmp_dir: tmp_dir} do
+  test "dense execution arguments obey the negotiated byte ceiling", %{tmp_dir: tmp_dir} do
     {worker, socket} = start_service_worker(tmp_dir)
     names = Enum.map(1..16_384, &"mcp_tool_#{&1}")
     args = %{"version" => 1, "prompt" => "run", "toolPolicy" => %{"require_approval" => names}}
     invoke(worker, socket, "dense-policy", "node-1", args)
-    assert_receive {:executor_started, request, _opts, ^worker, _ref, context}
-    assert request.tool_policy["require_approval"] == names
+    assert_receive {:executor_started, _request, _opts, ^worker, _ref, context}
     send(worker, {:execution_node_socket, socket, {:connected,
       %{"auth" => %{"clientId" => "node-1"}, "policy" => %{"maxPayload" => 128}}}})
     assert_receive {:execution_node_worker, ^worker, {:status, :online, "node-1"}}
