@@ -71,7 +71,9 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
       stream_fn = fn _model, _context, _options -> stream(owner, request.run_id) end
       case CodingAgent.Executor.start_run(request, Map.put(opts, :stream_fn, stream_fn), sink_pid) do
         {:ok, run_ref, context} ->
-          context = Map.put(context, :cancel_race, request.prompt == "cancel race")
+          context = context
+            |> Map.put(:cancel_race, request.prompt == "cancel race")
+            |> Map.put(:owner_pid, owner)
           send(owner, {:native_drain_started, request.run_id, run_ref, context})
           {:ok, run_ref, context}
         other -> other
@@ -79,7 +81,7 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
     end
 
     def cancel(context) do
-      send(Process.whereis(:execution_node_worker_test), {:native_drain_cancelled, context.runner_pid})
+      send(context.owner_pid, {:native_drain_cancelled, context.runner_pid})
       # Model a runner that exits between cancellation dispatch and GenServer.call.
       if context.cancel_race, do: GenServer.stop(context.runner_pid, :normal)
       CodingAgent.Executor.cancel(context)
@@ -851,7 +853,8 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
       case operation do
         :cancel ->
           send(worker, {:execution_node_socket, socket,
-                        {:event, "node.invoke.cancel", %{"invokeId" => finished_id}}})
+                        {:event, "node.invoke.cancel",
+                         %{"nodeId" => "node-1", "invokeId" => finished_id}}})
         :disconnect ->
           send(worker, {:execution_node_socket, socket, {:disconnected, :closed}})
         :event_failure ->
@@ -891,7 +894,8 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
     runner = context.runner_pid
     monitor = Process.monitor(runner)
     send(worker, {:execution_node_socket, socket,
-                  {:event, "node.invoke.cancel", %{"invokeId" => "cancel-race"}}})
+                  {:event, "node.invoke.cancel",
+                   %{"nodeId" => "node-1", "invokeId" => "cancel-race"}}})
     assert_receive {:DOWN, ^monitor, :process, ^runner, :normal}, 3_000
     await_invocation_removed(worker, "cancel-race")
     assert Process.alive?(worker)
