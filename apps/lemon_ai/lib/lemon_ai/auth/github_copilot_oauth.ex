@@ -103,7 +103,7 @@ defmodule LemonAi.Auth.GitHubCopilotOAuth do
   def resolve_api_key_from_secret(secret_name, secret_value, opts)
       when is_binary(secret_name) and is_binary(secret_value) do
     with {:ok, secret} <- decode_secret(secret_value),
-         {:ok, refreshed_secret, changed?} <- ensure_fresh_secret(secret),
+         {:ok, refreshed_secret, changed?} <- ensure_fresh_secret(secret, force_refresh?(opts)),
          access_token when is_binary(access_token) and access_token != "" <-
            non_empty_binary(refreshed_secret["access_token"]),
          :ok <- if(changed?, do: persist_secret(secret_name, refreshed_secret, opts), else: :ok) do
@@ -226,7 +226,11 @@ defmodule LemonAi.Auth.GitHubCopilotOAuth do
     end
   end
 
-  defp ensure_fresh_secret(secret) when is_map(secret) do
+  defp force_refresh?(opts), do: Keyword.get(opts, :force_refresh, false) == true
+
+  # A forced refresh (the provider rejected the Copilot token) never falls back
+  # to the rejected token.
+  defp ensure_fresh_secret(secret, force?) when is_map(secret) do
     access_token = non_empty_binary(secret["access_token"])
     refresh_token = non_empty_binary(secret["refresh_token"])
     expires_at_ms = parse_integer(secret["expires_at_ms"])
@@ -234,36 +238,44 @@ defmodule LemonAi.Auth.GitHubCopilotOAuth do
     should_refresh? =
       cond do
         is_nil(refresh_token) -> false
+        force? -> true
         is_nil(access_token) -> true
         is_nil(expires_at_ms) -> false
         true -> near_expiry?(expires_at_ms)
       end
 
-    if should_refresh? do
-      case fetch_copilot_token(refresh_token, non_empty_binary(secret["enterprise_domain"])) do
-        {:ok, %{token: token, expires_at_ms: refreshed_expires_at_ms}} ->
-          updated =
-            secret
-            |> Map.put("access_token", token)
-            |> Map.put("expires_at_ms", refreshed_expires_at_ms)
-            |> Map.put("base_url", copilot_base_url(token, secret["enterprise_domain"]))
-            |> Map.put("updated_at_ms", System.system_time(:millisecond))
+    cond do
+      force? and is_nil(refresh_token) ->
+        {:error, :not_refreshable}
 
-          {:ok, updated, true}
+      should_refresh? ->
+        refresh_copilot_secret(secret, refresh_token, access_token, force?)
 
-        {:error, reason} ->
-          if is_binary(access_token) and access_token != "" do
-            Logger.debug(
-              "GitHub Copilot refresh failed; using existing token: #{inspect(reason)}"
-            )
+      true ->
+        {:ok, secret, false}
+    end
+  end
 
-            {:ok, secret, false}
-          else
-            {:error, reason}
-          end
-      end
-    else
-      {:ok, secret, false}
+  defp refresh_copilot_secret(secret, refresh_token, access_token, force?) do
+    case fetch_copilot_token(refresh_token, non_empty_binary(secret["enterprise_domain"])) do
+      {:ok, %{token: token, expires_at_ms: refreshed_expires_at_ms}} ->
+        updated =
+          secret
+          |> Map.put("access_token", token)
+          |> Map.put("expires_at_ms", refreshed_expires_at_ms)
+          |> Map.put("base_url", copilot_base_url(token, secret["enterprise_domain"]))
+          |> Map.put("updated_at_ms", System.system_time(:millisecond))
+
+        {:ok, updated, true}
+
+      {:error, reason} ->
+        if not force? and is_binary(access_token) and access_token != "" do
+          Logger.debug("GitHub Copilot refresh failed; using existing token: #{inspect(reason)}")
+
+          {:ok, secret, false}
+        else
+          {:error, reason}
+        end
     end
   end
 

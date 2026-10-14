@@ -255,7 +255,8 @@ defmodule LemonAi.Auth.GoogleAntigravityOAuth do
   def resolve_api_key_from_secret(secret_name, secret_value, opts)
       when is_binary(secret_name) and is_binary(secret_value) do
     with {:ok, secret} <- decode_secret(secret_value),
-         {:ok, refreshed_secret, changed?} <- ensure_fresh_secret(secret),
+         {:ok, refreshed_secret, changed?} <-
+           ensure_fresh_secret(secret, Keyword.get(opts, :force_refresh, false) == true),
          access_token when is_binary(access_token) and access_token != "" <-
            non_empty_binary(refreshed_secret["access_token"]),
          project_id when is_binary(project_id) and project_id != "" <-
@@ -271,7 +272,9 @@ defmodule LemonAi.Auth.GoogleAntigravityOAuth do
 
   def resolve_api_key_from_secret(_, _, _), do: {:error, :invalid_secret_value}
 
-  defp ensure_fresh_secret(secret) when is_map(secret) do
+  # A forced refresh (the provider rejected the access token) never falls back
+  # to the rejected token.
+  defp ensure_fresh_secret(secret, force?) when is_map(secret) do
     access_token = non_empty_binary(secret["access_token"])
     refresh_token = non_empty_binary(secret["refresh_token"])
     expires_at_ms = parse_integer(secret["expires_at_ms"])
@@ -281,38 +284,48 @@ defmodule LemonAi.Auth.GoogleAntigravityOAuth do
       cond do
         is_nil(refresh_token) -> false
         is_nil(project_id) -> false
+        force? -> true
         is_nil(access_token) -> true
         is_nil(expires_at_ms) -> false
         true -> near_expiry?(expires_at_ms)
       end
 
-    if should_refresh? do
-      case refresh_access_token(refresh_token, project_id) do
-        {:ok, refreshed} ->
-          updated =
-            secret
-            |> Map.put("access_token", refreshed.access_token)
-            |> Map.put("refresh_token", refreshed.refresh_token)
-            |> Map.put("expires_at_ms", refreshed.expires_at_ms)
-            |> Map.put("project_id", refreshed.project_id)
-            |> Map.put("projectId", refreshed.project_id)
-            |> Map.put("updated_at_ms", System.system_time(:millisecond))
+    cond do
+      force? and not should_refresh? ->
+        {:error, :not_refreshable}
 
-          {:ok, updated, true}
+      should_refresh? ->
+        refresh_secret(secret, refresh_token, project_id, access_token, force?)
 
-        {:error, reason} ->
-          if is_binary(access_token) and access_token != "" do
-            Logger.debug(
-              "Google Antigravity OAuth refresh failed; using existing token: #{inspect(reason)}"
-            )
+      true ->
+        {:ok, secret, false}
+    end
+  end
 
-            {:ok, secret, false}
-          else
-            {:error, reason}
-          end
-      end
-    else
-      {:ok, secret, false}
+  defp refresh_secret(secret, refresh_token, project_id, access_token, force?) do
+    case refresh_access_token(refresh_token, project_id) do
+      {:ok, refreshed} ->
+        updated =
+          secret
+          |> Map.put("access_token", refreshed.access_token)
+          |> Map.put("refresh_token", refreshed.refresh_token)
+          |> Map.put("expires_at_ms", refreshed.expires_at_ms)
+          |> Map.put("project_id", refreshed.project_id)
+          |> Map.put("projectId", refreshed.project_id)
+          |> Map.put("updated_at_ms", System.system_time(:millisecond))
+
+        {:ok, updated, true}
+
+      {:error, reason} ->
+        if not force? and is_binary(access_token) and access_token != "" do
+          Logger.debug(
+            "Google Antigravity OAuth refresh failed; using existing token: #{inspect(reason)}"
+          )
+
+          {:ok, secret, false}
+        else
+          {:error, reason}
+        end
     end
   end
 
