@@ -7,6 +7,7 @@ import { z } from 'zod';
 import type * as P from '../../../contracts/protocol';
 import type { BackendServices, LemonService, Principal, RequestContext, Route } from '../../src/core/services';
 import { Store } from '../../src/core/store';
+import { ApiError } from '../../src/core/errors';
 import { installHelpers } from '../../src/core/helpers';
 import { createAccessService } from '../../src/core/auth';
 import { createEventService } from '../../src/core/events';
@@ -102,6 +103,7 @@ class ActualProcess implements LemonService {
   readonly calls: { method: string; params: Record<string, unknown> }[] = [];
   private waiters = new Set<() => void>();
   loseNextReply = false;
+  receiptLimit = 1000;
   onEvent(_listener: (event: string, payload: unknown) => void) { return () => {}; }
   onConnected(listener: () => void) { this.connections.add(listener); return () => { this.connections.delete(listener); }; }
   start() { this.connected = true; for (const listener of this.connections) listener(); }
@@ -141,6 +143,7 @@ class ActualProcess implements LemonService {
         if (record.digest !== null && record.digest !== digest) throw new Error('Conflicting native process intent.');
         response = await record.done;
       } else {
+        if (this.processes.size >= this.receiptLimit) throw new ApiError('upstream_unavailable', 'Destination process admission capacity is unavailable.', false, { reason: 'process_receipt_limit', mutationMayHaveApplied: false });
         const python = Bun.which('python3'); if (!python) throw new Error('Native node process execution requires python3.');
         const helper = join(import.meta.dir, '../../../../../apps/coding_agent/priv/node_process.py');
         // The production helper executes literal argv with pipes and enforces its
@@ -381,6 +384,31 @@ describe('trusted owned-host driver over actual noninteractive native processes'
     expect(h.lemon.calls.filter(call => call.method === 'node.process.run')).toHaveLength(2);
     expect(h.lemon.calls.filter(call => call.method === 'node.process.get').map(call => call.params.processId)).toContain(runs[1]!.params.processId);
     expect((await h.log()).map(entry => entry.mode)).toEqual(['apply', 'probe']);
+  });
+  test('confirmed native receipt-capacity rejection fails a new action without inventing a driver receipt', async () => {
+    const h = await fixture(); h.lemon.receiptLimit = 1;
+    const first = await startOperation(h); await h.host.work(`operation:${first.id}`, async () => {});
+    expect(h.store.require<P.HostOperation>('hostOperations', first.id).state).toBe('completed');
+    const second = await startOperation(h, 'recover'); await h.host.work(`operation:${second.id}`, async () => {});
+    const result = h.store.require<P.HostOperation>('hostOperations', second.id);
+    expect(result.state).toBe('failed'); expect(result.results[0]?.state).toBe('failed');
+    expect(result.results[0]?.reason).toContain('receipt capacity is exhausted');
+    expect(result.results[0]?.reason).toContain('rejected before execution');
+    expect((await h.log()).filter(entry => entry.mode === 'apply')).toHaveLength(1);
+    const failed = h.store.list<{ targetId: string; state: string; receipt: unknown }>('hostDriverJobs', job => job.targetId === second.id);
+    expect(failed[0]?.state).toBe('failed'); expect(failed[0]?.receipt).toBeNull();
+    await h.host.reconcile();
+    expect((await h.log()).filter(entry => entry.mode === 'apply')).toHaveLength(1);
+  });
+  test('confirmed probe-capacity rejection preserves uncertainty about the original measured effect', async () => {
+    const h = await fixture(); h.lemon.receiptLimit = 1; h.setBehavior('lose');
+    const operation = await startOperation(h); await h.host.work(`operation:${operation.id}`, async () => {});
+    await h.host.reconcile();
+    const result = h.store.require<P.HostOperation>('hostOperations', operation.id);
+    expect(result.state).toBe('outcome_unknown'); expect(result.results[0]?.state).toBe('outcome_unknown');
+    expect(result.results[0]?.reason).toContain('Read-only reconciliation was rejected');
+    expect(result.results[0]?.reason).toContain('original effect remains unverified');
+    expect((await h.log()).map(entry => entry.mode)).toEqual(['apply']);
   });
   test('wrong exact operation receipt and absent safe point never report completed', async () => {
     const h = await fixture(); h.setBehavior('wrong');

@@ -46,11 +46,25 @@ const receiptSchema = z.object({
 }).strict();
 type Receipt = z.infer<typeof receiptSchema>;
 type JobKind = 'host' | 'network' | 'egress' | 'setup' | 'inspect';
+const processAdmissionReason = z.enum(['process_receipt_limit', 'process_limit', 'process_busy']);
+type ProcessAdmissionReason = z.infer<typeof processAdmissionReason>;
+const confirmedProcessRejection = (error: unknown): ProcessAdmissionReason | null => {
+  if (!(error instanceof ApiError) || error.details?.mutationMayHaveApplied !== false) return null;
+  const parsed = processAdmissionReason.safeParse(error.details.reason);
+  return parsed.success ? parsed.data : null;
+};
+const processRejectionText = (reason: ProcessAdmissionReason): string => reason === 'process_receipt_limit'
+  ? 'Destination native-process receipt capacity is exhausted; operator intervention is required. Spent process IDs cannot be cleared or reused.'
+  : 'Destination native-process active admission capacity is unavailable.';
 interface DriverJob extends P.Resource {
   kind: JobKind; targetId: string; machineId: string; command: P.HostDriverCommand;
   configDigest: string; inputDigest: string; encryptedInput: string;
   state: 'reserved' | 'dispatched' | 'unknown' | 'succeeded' | 'skipped' | 'failed'; receipt: Receipt | null;
+  failureReason?: ProcessAdmissionReason | null;
 }
+const jobRejectionText = (job: DriverJob): string | null => job.failureReason
+  ? `${processRejectionText(job.failureReason)} ${job.state === 'failed' ? 'The process was rejected before execution.' : 'Read-only reconciliation was rejected; the original effect remains unverified.'}`
+  : null;
 const processResult = z.object({
   processId: z.string(), nodeId: z.string(),
   state: z.enum(['running', 'completed', 'cancelled', 'outcome_unknown', 'not_found']),
@@ -60,7 +74,8 @@ const processResult = z.object({
 type ProcessResult = z.infer<typeof processResult>;
 interface DriverProcessAttempt {
   id: string; jobId: string; nodeId: string; probe: boolean;
-  state: 'reserved' | 'dispatched' | ProcessResult['state'];
+  state: 'reserved' | 'dispatched' | 'rejected' | ProcessResult['state'];
+  failureReason?: ProcessAdmissionReason;
 }
 interface ApplicationRecord { id: string; policyId: string; jobId: string | null; configDigest: string; principal: Principal; value: P.PolicyApplication }
 interface SetupExecution { id: string; principal: Principal; manifest: P.SetupManifest; machineRevision: number; index: number; phase: 'check' | 'setup' | 'recheck'; jobId: string | null }
@@ -267,6 +282,11 @@ export function createHostServices(s: BackendServices, options: HostOptions = {}
           }, { mutation: true, resourceIds: [j.id], timeoutMs: timeoutMs + 5000 }));
         } finally { stdin.fill(0); }
       } catch (error) {
+        const rejection = confirmedProcessRejection(error);
+        if (rejection) {
+          s.store.put('hostDriverProcesses', { ...attempt, state: 'rejected', failureReason: rejection });
+          throw error;
+        }
         if (error instanceof ApiError && error.code === 'not_found') {
           s.store.put('hostDriverProcesses', { ...attempt, state: 'outcome_unknown' });
         }
@@ -289,7 +309,7 @@ export function createHostServices(s: BackendServices, options: HostOptions = {}
     }
     const previousId = s.store.metadata<string>(`hostDriverProbe:${j.id}`);
     let attempt = previousId ? s.store.get<DriverProcessAttempt>('hostDriverProcesses', previousId) : undefined;
-    if (attempt && ['completed', 'cancelled', 'outcome_unknown', 'not_found'].includes(attempt.state)) attempt = undefined;
+    if (attempt && ['completed', 'cancelled', 'outcome_unknown', 'not_found', 'rejected'].includes(attempt.state)) attempt = undefined;
     if (!attempt) {
       attempt = { id: s.resource('host_probe', {}).id, jobId: j.id, nodeId: m.nodeId!, probe: true, state: 'reserved' };
       s.store.put('hostDriverProcesses', attempt); s.store.setMetadata(`hostDriverProbe:${j.id}`, attempt.id);
@@ -311,7 +331,9 @@ export function createHostServices(s: BackendServices, options: HostOptions = {}
         if (current.configDigest !== s.mutations.digest(driver(m.id))) return putJob(s.update(current, { state: 'failed' }));
         putJob(s.update(current, { state: 'dispatched' }));
       }
-      const answer = await executeProcess(current, probe).catch(() => null);
+      let answer: Receipt | null = null, failureReason: ProcessAdmissionReason | null = null;
+      try { answer = await executeProcess(current, probe); }
+      catch (error) { failureReason = confirmedProcessRejection(error); }
       const input = s.decrypt<Record<string, unknown>>(current.encryptedInput);
       let verified = answer?.state === 'succeeded' && (current.kind === 'setup' || answer.exitCode === 0);
       if (verified && current.kind === 'host') {
@@ -327,8 +349,8 @@ export function createHostServices(s: BackendServices, options: HostOptions = {}
       if (verified && current.kind === 'setup') verified = answer?.destinationSecretsOnly === true && answer.secretsWiped === true && answer.exitCode !== null;
       const skipped = current.kind === 'host' && answer?.state === 'skipped' && answer.exitCode === 0 && answer.skipReason !== undefined;
       const next = s.update(s.store.require<DriverJob>('hostDriverJobs', job.id), {
-        state: verified ? 'succeeded' : skipped ? 'skipped' : answer?.state === 'failed' ? 'failed' : 'unknown',
-        receipt: answer,
+        state: verified ? 'succeeded' : skipped ? 'skipped' : answer?.state === 'failed' || (!probe && failureReason !== null) ? 'failed' : 'unknown',
+        receipt: answer, failureReason,
       });
       putJob(next); return next;
     })().finally(() => inFlight.delete(job.id));
@@ -357,7 +379,7 @@ export function createHostServices(s: BackendServices, options: HostOptions = {}
     const applied = j.state === 'succeeded' ? j.receipt?.appliedRevision ?? null : record.value.appliedRevision;
     const ok = applied === record.value.desiredRevision && j.state === 'succeeded' && record.configDigest === networkFingerprint(record.value.machineId);
     const m = s.store.require<P.Machine>('machines', record.value.machineId);
-    return saveApplication({ ...record, jobId: j.state === 'succeeded' && !ok ? null : record.jobId, value: { ...record.value, appliedRevision: applied, state: ok ? 'applied' : m.status !== 'online' ? 'offline' : j.state === 'failed' ? 'failed' : 'pending', error: ok ? null : j.state === 'failed' ? 'Host firewall application failed.' : 'Awaiting verified firewall revision.', measuredAtMs: s.now() } });
+    return saveApplication({ ...record, jobId: j.state === 'succeeded' && !ok ? null : record.jobId, value: { ...record.value, appliedRevision: applied, state: ok ? 'applied' : m.status !== 'online' ? 'offline' : j.state === 'failed' ? 'failed' : 'pending', error: ok ? null : jobRejectionText(j) ?? (j.state === 'failed' ? 'Host firewall application failed.' : 'Awaiting verified firewall revision.'), measuredAtMs: s.now() } });
   };
   const appliedPolicyAdmission = async (p: Principal, botId: string) => {
     const b = s.auth.bot(p, botId);
@@ -440,7 +462,7 @@ export function createHostServices(s: BackendServices, options: HostOptions = {}
     if (s.store.metadata<string>(`egressJob:${route.id}`) !== j.id) return current;
     const verified = j.state === 'succeeded' && j.receipt?.enabled === enabled && (!enabled || (j.receipt.authenticated === true && j.receipt.encrypted === true));
     const state = verified ? enabled ? 'active' : 'disabled' : j.state === 'failed' ? 'failed' : 'connecting';
-    const error = verified ? null : j.state === 'failed' ? 'Encrypted host route application failed.' : 'Awaiting verified host route acknowledgment.';
+    const error = verified ? null : jobRejectionText(j) ?? (j.state === 'failed' ? 'Encrypted host route application failed.' : 'Awaiting verified host route acknowledgment.');
     if (current.state === state && current.enabled === enabled && current.error === error) return current;
     return saveEgress(s.update(current, { state, enabled, error }));
   };
@@ -520,7 +542,11 @@ export function createHostServices(s: BackendServices, options: HostOptions = {}
       }
       saveRun(s.update(run, { state: 'running' }));
       const job = await runJob(s.store.require<DriverJob>('hostDriverJobs', execution.jobId));
-      if (!['succeeded', 'failed'].includes(job.state)) { saveRun(s.update(s.store.require<P.SetupRun>('setupRuns', run.id), { state: job.state === 'reserved' ? 'queued' : 'outcome_unknown' })); return; }
+      if (!['succeeded', 'failed'].includes(job.state)) {
+        const latest = s.store.require<P.SetupRun>('setupRuns', run.id), rejection = jobRejectionText(job);
+        saveRun(s.update(latest, { state: job.state === 'reserved' ? 'queued' : 'outcome_unknown', ...(rejection ? { entryResults: latest.entryResults.map(result => result.entryId === e.id ? { ...result, summary: rejection } : result) } : {}) }));
+        return;
+      }
       const safe = job.receipt?.destinationSecretsOnly === true && job.receipt.secretsWiped === true;
       const exitCode = job.receipt?.exitCode ?? null;
       const passed = job.state === 'succeeded' && exitCode === 0 && safe;
@@ -528,7 +554,7 @@ export function createHostServices(s: BackendServices, options: HostOptions = {}
       if (execution.phase === 'setup' && passed && e.checkScript) { execution.phase = 'recheck'; execution.jobId = null; s.store.put('setupExecutions', execution); continue; }
       const state = passed ? execution.phase === 'check' ? 'skipped' : 'succeeded' : 'failed';
       run = s.store.require<P.SetupRun>('setupRuns', run.id);
-      run = saveRun(s.update(run, { entryResults: run.entryResults.map(r => r.entryId === e.id ? { entryId: e.id, state, exitCode, summary: passed ? state === 'skipped' ? 'Existing setup verified; skipped.' : 'Setup verified.' : 'Setup/check failed; output withheld.' } : r), state: passed ? 'running' : 'failed' }));
+      run = saveRun(s.update(run, { entryResults: run.entryResults.map(r => r.entryId === e.id ? { entryId: e.id, state, exitCode, summary: passed ? state === 'skipped' ? 'Existing setup verified; skipped.' : 'Setup verified.' : jobRejectionText(job) ?? 'Setup/check failed; output withheld.' } : r), state: passed ? 'running' : 'failed' }));
       execution.index++; execution.phase = 'check'; execution.jobId = null; s.store.put('setupExecutions', execution);
       if (!passed) return;
     }
@@ -597,7 +623,7 @@ export function createHostServices(s: BackendServices, options: HostOptions = {}
           const job = await runJob(existing);
           const verified = job.state === 'succeeded' && job.receipt?.safePoint === true && job.receipt.retainedUserHome === true && job.receipt.retainedSSH === true && (!['recreate_environment', 'delete_environment'].includes(o.action) || job.receipt.environmentRoot === d?.environmentRoot);
           state = verified ? 'succeeded' : job.state === 'skipped' ? 'skipped' : job.state === 'failed' ? 'failed' : 'outcome_unknown';
-          reason = verified ? null : job.state === 'skipped' ? `Driver verified no action needed: ${job.receipt?.skipReason}.` : job.state === 'failed' ? 'Driver refused or failed action; no verified completion.' : 'Awaiting exact operation receipt; do not start another operation.';
+          reason = verified ? null : jobRejectionText(job) ?? (job.state === 'skipped' ? `Driver verified no action needed: ${job.receipt?.skipReason}.` : job.state === 'failed' ? 'Driver refused or failed action; no verified completion.' : 'Awaiting exact operation receipt; do not start another operation.');
         }
       }
       o = saveOperation(s.update(o, { results: o.results.map(r => r.machineId === m.id ? { machineId: m.id, state, reason } : r) }));
