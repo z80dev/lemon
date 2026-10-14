@@ -1,4 +1,4 @@
-import type { ServerWebSocket } from 'bun';
+import type { ServerWebSocket, WebSocketHandler } from 'bun';
 import { z } from 'zod';
 import type { BackendServices, EventAudience, Principal } from './services';
 import type * as P from '../../../contracts/protocol';
@@ -22,7 +22,14 @@ export interface RealtimeHooks {
   voiceConnect?(userId:string,deviceId:string):void;
   voiceDisconnect?(userId:string,deviceId:string):void;
 }
-export function createRealtime(services:BackendServices,hooks:RealtimeHooks={}) {
+export interface RealtimeService {
+  data(): RealtimeData;
+  websocket: WebSocketHandler<RealtimeData>;
+  revokeUser(userId: string): void;
+  revokeSession(sessionId: string): void;
+  close(): void;
+}
+export function createRealtime(services:BackendServices,hooks:RealtimeHooks={}):RealtimeService {
   const sockets=new Set<ServerWebSocket<RealtimeData>>();
   const send=(socket:ServerWebSocket<RealtimeData>,frame:P.RealtimeServerFrame)=>{if(socket.readyState===1)socket.send(JSON.stringify(frame));};
   const selected=(socket:ServerWebSocket<RealtimeData>,event:P.RealtimeEvent,audience:EventAudience)=>{

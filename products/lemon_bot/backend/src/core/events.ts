@@ -16,6 +16,10 @@ export function createEventService(services:BackendServices):EventService {
     if(audience.admin && member.role!=='owner'&&member.role!=='admin') return false;
     const [kind,action]=event.event.split('.');
     if(action==='deleted') return !!(audience.userIds?.includes(principal.userId)||audience.admin||audience.public);
+    if(event.event==='conversation.left'){
+      if(event.payload.userId===principal.userId&&audience.userIds?.includes(principal.userId))return true;
+      try{services.auth.conversation(principal,event.payload.conversationId);return true;}catch{return false;}
+    }
     try {
       if(audience.conversationId) services.auth.conversation(principal,audience.conversationId);
       if(audience.botId) services.auth.bot(principal,audience.botId);
@@ -43,7 +47,7 @@ export function createEventService(services:BackendServices):EventService {
       const receipt=db.query('INSERT INTO events(event,payload,audience,timestamp_ms) VALUES(?,?,?,?)').safeIntegers(true).run(event,JSON.stringify(payload),JSON.stringify(audience),timestampMs);
       // The generic event key and its indexed payload originate from the same typed call.
       const envelope={type:'event',seq:String(receipt.lastInsertRowid),event,payload,timestampMs} as RealtimeEvent;
-      const publish=()=>{for(const listener of listeners) listener(envelope,audience);};
+      const publish=()=>{for(const listener of listeners){try{listener(envelope,audience);}catch{services.audit(null,'realtime.publish',envelope.seq,'failed',{event:envelope.event});}}};
       if(services.store instanceof Store) services.store.afterCommit(publish);else publish();
       return envelope;
     },

@@ -68,6 +68,7 @@ export interface RuntimeService {
 }
 export interface AttachmentService {
   create(principal: Principal, bytes: Uint8Array, metadata: P.AttachmentUpload & { filename: string; mime?: string; source?: P.Attachment['source']; provenance?: P.Attachment['provenance'] }): Promise<P.Attachment>;
+  copy(principal: Principal, sourceAttachmentId: string, metadata: P.AttachmentUpload): Promise<P.Attachment>;
   bytes(attachmentId: string): Promise<Uint8Array>;
   download(principal: Principal, attachmentId: string): P.Download;
 }
@@ -94,7 +95,7 @@ export interface IntegrationServices {
   connectorProvisioning?(principal: Principal, botId: string): Promise<unknown>;
   authorizeExportAttachment?(principal: Principal, attachmentId: string): void;
   assertChannelHandoff?(principal: Principal, source: P.Conversation, target: P.Bot, returnConversationId: string): void;
-  returnChannelHandoff?(principal: Principal, conversationId: string, text: string): Promise<void>;
+  returnChannelHandoff?(principal: Principal, conversationId: string, text: string, sourceRunId?: string): Promise<void>;
   requestConnectorConsent?(principal: Principal, input: { connectorId: string; botId: string; conversationId: string; operationId: string }): Promise<P.ConnectorConsent>;
   deleteBotConnectors?(principal: Principal, botId: string, confirmedBotRevision: number, connectorIds?: string[]): Promise<void>;
   previewDeprovisionUser?(userId: string): { affected: P.ScopeEffect[]; binding: P.JSONObject };
@@ -105,6 +106,7 @@ export interface IntegrationServices {
   refreshPolicy?(principal: Principal, botIds?: string[], options?: { workspace?: boolean }): Promise<void>;
   canReadResource?(principal: Principal, collection: string, entity: unknown): boolean;
   sharedProfilePolicy?(botId: string): Promise<P.EffectivePolicy>;
+  observeAccountTeardown?(operationId: string): Promise<P.ProviderCleanupResult[]>;
 }
 export interface BackendConfiguration {
   publicUrl: string; controlUrl: string; operatorToken: string; dataDir: string; host: string; port: number;

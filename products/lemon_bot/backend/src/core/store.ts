@@ -7,11 +7,13 @@ export class Store implements EntityStore {
   readonly db: Database;
   private depth = 0;
   private callbacks: (() => void)[] = [];
+  private writes = new Set<(collection:string,id:string,value:unknown)=>void>();
   constructor(path: string) {
     this.db = new Database(path, { create:true, strict:true });
     this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;
       CREATE TABLE IF NOT EXISTS entities(collection TEXT NOT NULL,id TEXT NOT NULL,value TEXT NOT NULL,PRIMARY KEY(collection,id));
       CREATE TABLE IF NOT EXISTS metadata(key TEXT PRIMARY KEY,value TEXT NOT NULL);
+      CREATE INDEX IF NOT EXISTS entities_id ON entities(id);
       CREATE TABLE IF NOT EXISTS events(seq INTEGER PRIMARY KEY AUTOINCREMENT,event TEXT NOT NULL,payload TEXT NOT NULL,audience TEXT NOT NULL,timestamp_ms INTEGER NOT NULL);
       CREATE INDEX IF NOT EXISTS events_time ON events(timestamp_ms);
       CREATE TABLE IF NOT EXISTS nonces(scope TEXT NOT NULL,nonce TEXT NOT NULL,hash TEXT NOT NULL,state TEXT NOT NULL,receipt TEXT,resource_ids TEXT NOT NULL DEFAULT '[]',created_at_ms INTEGER NOT NULL,PRIMARY KEY(scope,nonce));
@@ -33,17 +35,21 @@ export class Store implements EntityStore {
   }
   put<T>(collection:string, value:T & {id:string}):T {
     storedObject.parse(value);
-    this.db.query('INSERT INTO entities(collection,id,value) VALUES(?,?,?) ON CONFLICT(collection,id) DO UPDATE SET value=excluded.value').run(collection,value.id,JSON.stringify(value));
-    return value;
+    return this.transaction(()=>{
+      this.db.query('INSERT INTO entities(collection,id,value) VALUES(?,?,?) ON CONFLICT(collection,id) DO UPDATE SET value=excluded.value').run(collection,value.id,JSON.stringify(value));
+      for(const listener of this.writes)listener(collection,value.id,value);
+      return value;
+    });
   }
   remove(collection:string,id:string):void { this.db.query('DELETE FROM entities WHERE collection=? AND id=?').run(collection,id); }
   transaction<T>(operation:()=>T):T {
-    if(this.depth>0) return operation();
+    if(this.depth>0){const result=operation();if(result instanceof Promise)throw new TypeError('SQLite transactions must remain synchronous.');return result;}
     this.db.exec('BEGIN IMMEDIATE'); this.depth=1;
     try { const result=operation(); if(result instanceof Promise) throw new TypeError('SQLite transactions must remain synchronous.'); this.db.exec('COMMIT'); this.depth=0; const callbacks=this.callbacks; this.callbacks=[]; for(const callback of callbacks) callback(); return result; }
     catch(error) { if(this.depth>0) this.db.exec('ROLLBACK'); this.depth=0; this.callbacks=[]; throw error; }
   }
   afterCommit(callback:()=>void):void { if(this.depth>0) this.callbacks.push(callback); else callback(); }
+  onWrite(listener:(collection:string,id:string,value:unknown)=>void):()=>void {this.writes.add(listener);return()=>{this.writes.delete(listener);};}
   metadata<T>(key:string):T|null {
     const row=this.db.query('SELECT value FROM metadata WHERE key=?').get(key) as {value:string}|null;
     if(!row) return null;

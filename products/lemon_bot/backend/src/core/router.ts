@@ -3,11 +3,17 @@ import { resolve, sep } from 'node:path';
 import { z } from 'zod';
 import type { BackendServices, InternalInvocationOptions, Principal, RequestContext, Route } from './services';
 import { ApiError, errorEnvelope, fail, statusFor } from './errors';
+import { Store } from './store';
 interface Registered {route:Route;pattern:RegExp;names:string[]}
 export class Router {
   private registered:Registered[]=[];
   private contexts=new AsyncLocalStorage<RequestContext>();
   constructor(private services:BackendServices,private webRoot=resolve(import.meta.dir,'../../../web/dist')) {
+    if(services.store instanceof Store)services.store.onWrite((collection,id,value)=>{
+      const context=this.contexts.getStore();
+      if(!context||collection==='auditRecords'||!value||typeof value!=='object'||!('revision' in value)||!('createdAtMs' in value)||!('updatedAtMs' in value))return;
+      if(!context.nonceResourceIds.includes(id))context.nonceResourceIds.push(id);
+    });
     services.invoke=async<T>(principal:Principal,method:string,path:string,body?:unknown,options?:InternalInvocationOptions):Promise<T>=>{
       const request=new Request(new URL(path,services.config.publicUrl),{method,headers:{'Content-Type':'application/json'},...(body===undefined?{}:{body:JSON.stringify(body)})});
       const match=this.match(method,new URL(request.url).pathname);if(!match)fail('not_found','Product endpoint was not found.');
@@ -56,10 +62,12 @@ export class Router {
       if(!match){if(url.pathname.startsWith('/v1')||url.pathname.startsWith('/hooks')||url.pathname.startsWith('/mcp'))fail('not_found','Product endpoint was not found.');return await this.staticFile(request,headers);}
       const user=await this.services.auth.authenticate(request,match.route.auth);
       const body=await this.body(request,match.route);
-      const context:RequestContext={request,params:match.params,query:url.searchParams,body,user,services:this.services,requestId,route:match.route,nonceResourceIds:[]};
+      const resourceIds=Object.entries(match.params).filter(([name])=>name==='id'||name.endsWith('Id')).map(([,id])=>id);
+      const context:RequestContext={request,params:match.params,query:url.searchParams,body,user,services:this.services,requestId,route:match.route,nonceResourceIds:resourceIds};
       const mutating=match.route.mutation??(!['GET','HEAD','OPTIONS'].includes(request.method)&&match.route.path!=='/v1/auth/reauth');
       const value=await this.contexts.run(context,()=>mutating?this.services.mutations.execute(context,()=>match.route.handler(context)):match.route.handler(context));
       if(value instanceof Response){for(const [name,item] of headers)value.headers.set(name,item);return value;}
+      if(value===undefined)fail('internal_error','The operation did not return its required resource receipt.',false);
       const redirect=z.object({status:z.literal(302),location:z.string().min(1)}).strict().safeParse(value);
       if(redirect.success){headers.set('Location',redirect.data.location);return new Response(null,{status:302,headers});}
       const uncertainHook=url.pathname.startsWith('/hooks/')&&z.object({status:z.literal('outcome_unknown')}).passthrough().safeParse(value).success;
