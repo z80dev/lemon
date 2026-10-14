@@ -454,6 +454,25 @@ defmodule CodingAgent.SubagentsTest do
       assert {:error, _} = StructuredOutput.decode(~s({"summary":"ok"}), persona.output_schema)
     end
 
+    test "keeps JSON Schema constraints when type is omitted", %{cwd: cwd} do
+      for root <- [".lemon/agents", ".omp/agents", ".claude/agents"] do
+        write_agent(Path.join(cwd, root), "implicit-schema", """
+        description: Constrained output
+        output:
+          properties:
+            answer: {type: integer}
+          required: [answer]
+          additionalProperties: false
+        """)
+
+        schema = Subagents.get(cwd, "implicit-schema").output_schema
+        assert {:ok, %{"answer" => 42}} = StructuredOutput.decode(~s({"answer":42}), schema)
+        assert {:error, _} = StructuredOutput.decode("{}", schema)
+        assert {:error, _} = StructuredOutput.decode(~s({"answer":"bad"}), schema)
+        File.rm!(Path.join([cwd, root, "implicit-schema.md"]))
+      end
+    end
+
     test "native definitions accept compat fields strictly", %{cwd: cwd, project: project} do
       define(project, "delegator", "description: D\ntools: 'read, Task'\nthinkingLevel: MAX")
       define(project, "aliases", "description: A\nthinking: high\nthinking_level: High")

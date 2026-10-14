@@ -617,10 +617,25 @@ defmodule CodingAgent.Subagents do
 
   defp to_json_schema(schema) when is_map(schema) do
     cond do
-      json_schema?(schema) -> {:ok, schema}
-      Enum.any?(@jtd_keys, &Map.has_key?(schema, &1)) -> jtd(schema, "$")
-      map_size(schema) == 0 -> {:ok, true}
-      true -> {:ok, schema}
+      json_schema?(schema) ->
+        {:ok, schema}
+
+      Enum.any?(@jtd_keys, &Map.has_key?(schema, &1)) ->
+        case jtd(schema, "$") do
+          {:ok, converted} ->
+            {:ok, converted}
+
+          {:error, _} = error ->
+            # JSON Schema does not require `type`; shared keys such as
+            # properties/enum must not make a valid schema disappear.
+            if StructuredOutput.validate_schema(schema) == :ok, do: {:ok, schema}, else: error
+        end
+
+      map_size(schema) == 0 ->
+        {:ok, true}
+
+      true ->
+        {:ok, schema}
     end
   end
 

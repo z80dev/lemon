@@ -94,7 +94,8 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   `.lemon` directories. Those files are read tolerantly (ID from `name`,
   unknown fields ignored, invalid files skipped). All definitions accept
   comma-separated `tools`/`model`, omp/Claude tool names, thinking-level
-  aliases, `spawns`, and an `output` schema in JSON Schema or JTD form. New
+  aliases, `spawns`, and an `output` schema in JSON Schema or JTD form (JSON
+  Schema constraints are preserved even without an explicit `type`). New
   shipped personas: read-only `security-reviewer` and the `@smol` mechanical
   worker `sonic`.
 - **Task worktrees can merge back.** `task` gains `merge` (`none`, `patch`,
