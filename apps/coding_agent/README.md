@@ -623,6 +623,15 @@ Sessions are started under `SessionSupervisor` (dynamic) and registered in
 `SessionRegistry` by their persisted UUID. Registry metadata also retains the
 logical runtime session key used by clients.
 
+Journal ownership is separate from optional public discovery. Every native
+session, including `register: false` sessions, takes file admission before
+loading or persisting and publishes its live file owner before releasing it.
+Stopped navigation, labels and rewind decide and mutate under the same admission,
+so they cannot overwrite a starting session's snapshot. A second startup for an
+owned file returns `{:error, {:already_started, owner_pid}}` before loading it,
+without an abnormal linked exit to the caller. Reset transfers ownership to the
+new journal. The owning process's exit releases its registration.
+
 Live sessions synchronously append completed messages, tool calls/results, model
 changes and compaction entries to their JSONL file. They do not depend on a
 graceful shutdown or an explicit `Session.save/1`. Resuming with `:session_file`
@@ -637,6 +646,10 @@ identities use deterministic portable journal filenames inside the session direc
 Usage checkpoints preserve response costs and cache-write durations as well as
 token counts, so reopening a session does not reset its recorded cost. Rewinding
 a live branch preserves the selected provider API, including ChatGPT/Codex models.
+A logical session's mapped native resume token must remain loadable in its
+working directory. Automatic resume refuses a missing or corrupt mapped journal
+instead of replacing that session's history with a fresh conversation. Unbound
+automatic native tokens retain their fresh-session fallback.
 
 `SessionManager.list_sessions/1` lists most recently modified sessions first.
 `Session.navigate_tree/3` persists branch selection even before another message
@@ -722,6 +735,12 @@ When conversations grow large, auto-compaction kicks in:
 3. An LLM summary of compacted messages is generated
 4. A compaction entry is appended to the session tree
 5. Overflow recovery handles cases where the context window is exhausted mid-run
+
+Recovery is admitted only for provider/assistant failures before any output was
+committed. It classifies the failed assistant's structured error details even
+when the displayed error is opaque; budget and cancellation failures do not
+trigger compaction. A post-output overflow remains a failed turn rather than
+silently repeating output or tool effects.
 
 Auto-compaction runs in a tracked background worker after a completed turn and
 before dispatching a new prompt that would exceed the reserve threshold. A new

@@ -24,7 +24,7 @@ defmodule LemonControlPlane.Methods.SessionsNavigate do
       case AgentRuntime.call(
              :session_navigate,
              [key, cwd, entry_id, [summarize: summarize]],
-             {:error, :unavailable}
+             {:error, :outcome_unknown}
            ) do
         {:ok, result} when is_map(result) ->
           {:ok,
@@ -36,7 +36,7 @@ defmodule LemonControlPlane.Methods.SessionsNavigate do
           NativeSessions.failure(reason)
 
         _ ->
-          NativeSessions.failure(:invalid_response)
+          NativeSessions.failure(:outcome_unknown)
       end
     end
   end

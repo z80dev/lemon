@@ -26,6 +26,7 @@ function makeController(
 		sink: {
 			deliver: async (text) => {
 				delivered.push(text);
+				return "accepted";
 			},
 		},
 		tui: {

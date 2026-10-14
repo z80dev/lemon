@@ -83,15 +83,13 @@ describe("session discovery and inspection", () => {
 	});
 
 	test("show/current reports safe metadata without prompt, workspace, or response extras", async () => {
-		harness.server.respondWith("sessions.list", {
-			sessions: [
-				{
-					...session,
-					prompt: "private prompt",
-					answer: "private answer",
-					workspaceDir: "/private/project",
-				},
-			],
+		harness.server.respondWith("sessions.get", {
+			session: {
+				...session,
+				prompt: "private prompt",
+				answer: "private answer",
+				workspaceDir: "/private/project",
+			},
 		});
 
 		await harness.run(`/session show ${sessionKey}`);
@@ -112,14 +110,11 @@ describe("session discovery and inspection", () => {
 		).switchSession = (key: string) => {
 			switched.push(key);
 		};
-		harness.server.respondWith("sessions.list", { sessions: [session] });
+		harness.server.respondWith("sessions.get", { session });
 
 		await harness.run(`/session open ${sessionKey}`);
 
-		expect(harness.server.requestsFor("sessions.list")[0]?.params).toEqual({
-			query: sessionKey,
-			limit: 500,
-		});
+		expect(harness.server.requestsFor("sessions.get")[0]?.params).toEqual({ sessionKey });
 		expect(switched).toEqual([sessionKey]);
 	});
 });
@@ -159,7 +154,7 @@ describe("session metadata and resume", () => {
 
 	test("resume verifies the durable key and replays only after success", async () => {
 		harness.store.setFocused(sessionKey);
-		harness.server.respondWith("sessions.list", { sessions: [session] });
+		harness.server.respondWith("sessions.get", { session });
 		harness.server.respondWith("chat.history", {
 			sessionKey,
 			messages: [{ id: "m1", role: "user", content: "explicit resume content" }],
@@ -265,7 +260,7 @@ describe("redacted export and guarded deletion", () => {
 	test("delete previews first, requires the exact key, then exports before verified deletion", async () => {
 		const content = "# Redacted session\n\napi_key=[REDACTED]\n";
 		const output = join(workdir, "before-delete.md");
-		harness.server.respondWith("sessions.list", { sessions: [session] });
+		harness.server.respondWith("sessions.get", { session });
 		harness.server.respondWith("sessions.export", exportResult(content, "markdown"));
 		harness.server.respondWith("sessions.delete", {
 			deleted: true,
@@ -293,7 +288,7 @@ describe("redacted export and guarded deletion", () => {
 
 	test("refused deletion reports only the stable error code", async () => {
 		harness.host.draft = "draft survives refused mutation";
-		harness.server.respondWith("sessions.list", { sessions: [session] });
+		harness.server.respondWith("sessions.get", { session });
 		harness.server.failWith(
 			"sessions.delete",
 			"CONFLICT",

@@ -27,7 +27,9 @@ defmodule LemonControlPlane.Methods.SessionsRewind do
         confirmation_token: token
       ]
 
-      case AgentRuntime.call(:session_rewind, [key, cwd, entry_id, opts], {:error, :unavailable}) do
+      fallback = if dry_run, do: :unavailable, else: :outcome_unknown
+
+      case AgentRuntime.call(:session_rewind, [key, cwd, entry_id, opts], {:error, fallback}) do
         {:ok, result} when is_map(result) ->
           fields =
             if dry_run,
@@ -42,7 +44,7 @@ defmodule LemonControlPlane.Methods.SessionsRewind do
           NativeSessions.failure(reason)
 
         _ ->
-          NativeSessions.failure(:invalid_response)
+          NativeSessions.failure(if dry_run, do: :invalid_response, else: :outcome_unknown)
       end
     end
   end

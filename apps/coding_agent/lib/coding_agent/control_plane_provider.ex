@@ -71,21 +71,18 @@ defmodule CodingAgent.ControlPlaneProvider do
   end
 
   def session_rewind(session_key, cwd, entry_id, opts) do
-    case live_session(session_key) do
-      nil ->
-        with {:ok, path} <- native_session_path(session_key, cwd) do
-          :global.trans({{__MODULE__, path}, self()}, fn ->
-            with {:ok, session} <- CodingAgent.SessionManager.load_from_file(path),
-                 {:ok, result, _session} <-
-                   CodingAgent.Session.Rewind.run(%{session | file_path: path}, entry_id, opts) do
-              {:ok, result}
-            end
-          end)
+    mutate_native_session(
+      session_key,
+      cwd,
+      &CodingAgent.Session.rewind(&1, entry_id, opts),
+      fn path ->
+        with {:ok, session} <- load_native_session(path),
+             {:ok, result, _session} <-
+               CodingAgent.Session.Rewind.run(%{session | file_path: path}, entry_id, opts) do
+          {:ok, result}
         end
-
-      pid ->
-        CodingAgent.Session.rewind(pid, entry_id, opts)
-    end
+      end
+    )
   end
 
   @doc """
@@ -99,89 +96,67 @@ defmodule CodingAgent.ControlPlaneProvider do
   session answers `{:error, :busy}`.
   """
   def session_navigate(session_key, cwd, entry_id, opts) do
-    case live_session(session_key) do
-      nil ->
-        with {:ok, path} <- native_session_path(session_key, cwd) do
-          :global.trans({{__MODULE__, path}, self()}, fn ->
-            with {:ok, session} <- load_native_session(path),
-                 {:ok, target} <- CodingAgent.Session.Rewind.navigation_target(session, entry_id) do
-              session =
-                CodingAgent.SessionManager.set_leaf_id(%{session | file_path: path}, target.leaf)
+    mutate_native_session(
+      session_key,
+      cwd,
+      &CodingAgent.Session.navigate_entry(&1, entry_id, opts),
+      fn path ->
+        with {:ok, session} <- load_native_session(path),
+             {:ok, target} <- CodingAgent.Session.Rewind.navigation_target(session, entry_id) do
+          session =
+            CodingAgent.SessionManager.set_leaf_id(%{session | file_path: path}, target.leaf)
 
-              {:ok, navigation_receipt(session, entry_id, target, false)}
-            end
-          end)
+          {:ok, CodingAgent.Session.Rewind.navigation_receipt(session, entry_id, target, false)}
         end
-
-      pid ->
-        manager = CodingAgent.Session.get_state(pid).session_manager
-
-        # Navigation is only accepted while idle, so this snapshot decides summary
-        # admission exactly as the session's own summarizer does.
-        with {:ok, target} <- CodingAgent.Session.Rewind.navigation_target(manager, entry_id),
-             summarizing =
-               Keyword.get(opts, :summarize, false) and
-                 CodingAgent.Session.BackgroundTasks.summarizes_switch?(manager, target.leaf),
-             :ok <-
-               CodingAgent.Session.navigate_tree(pid, target.leaf || :root,
-                 summarize_abandoned: summarizing
-               ) do
-          manager = CodingAgent.Session.get_state(pid).session_manager
-          {:ok, navigation_receipt(manager, entry_id, target, summarizing)}
-        end
-    end
-  end
-
-  defp navigation_receipt(session, entry_id, target, summarizing) do
-    %{
-      "sessionId" => session.header.id,
-      "entryId" => entry_id,
-      "leafId" => session.leaf_id,
-      "prompt" => target.prompt,
-      "summarizing" => summarizing
-    }
+      end
+    )
   end
 
   @doc "Set (or clear with `nil`) the bookmark label of an entry, for a live or stopped session."
   def session_label(session_key, cwd, entry_id, label) do
-    case live_session(session_key) do
-      nil ->
-        with {:ok, path} <- native_session_path(session_key, cwd) do
-          :global.trans({{__MODULE__, path}, self()}, fn ->
-            with {:ok, session} <- load_native_session(path),
-                 %{} <- CodingAgent.SessionManager.get_entry(session, entry_id) || :missing do
-              session =
-                CodingAgent.SessionManager.append_label(
-                  %{session | file_path: path},
-                  entry_id,
-                  label
-                )
+    mutate_native_session(
+      session_key,
+      cwd,
+      &CodingAgent.Session.label_entry_receipt(&1, entry_id, label),
+      fn path ->
+        with {:ok, session} <- load_native_session(path),
+             %{} <- CodingAgent.SessionManager.get_entry(session, entry_id) || :missing do
+          session =
+            CodingAgent.SessionManager.append_label(%{session | file_path: path}, entry_id, label)
 
-              {:ok, label_receipt(session, entry_id)}
-            else
-              :missing -> {:error, :entry_not_found}
-              {:error, _} = error -> error
-            end
-          end)
+          {:ok, CodingAgent.Session.Rewind.label_receipt(session, entry_id)}
+        else
+          :missing -> {:error, :entry_not_found}
+          {:error, _} = error -> error
         end
-
-      pid ->
-        with {:ok, _leaf} <- CodingAgent.Session.label_entry(pid, entry_id, label) do
-          {:ok, label_receipt(CodingAgent.Session.get_state(pid).session_manager, entry_id)}
-        end
-    end
+      end
+    )
   end
 
-  defp label_receipt(session, entry_id) do
-    %{
-      "sessionId" => session.header.id,
-      "entryId" => entry_id,
-      "label" =>
-        session
-        |> CodingAgent.SessionManager.labels()
-        |> Map.get(entry_id)
-        |> CodingAgent.Session.Rewind.project_label()
-    }
+  defp mutate_native_session(session_key, cwd, live_mutation, stopped_mutation) do
+    case live_session(session_key) do
+      pid when is_pid(pid) ->
+        live_mutation.(pid)
+
+      nil ->
+        with {:ok, path} <- native_session_path(session_key, cwd) do
+          decision =
+            CodingAgent.Session.Ownership.with_file(path, fn ->
+              case CodingAgent.Session.Ownership.owner(path) || live_session(session_key) do
+                nil -> {:stopped, stopped_mutation.(path)}
+                pid -> {:live, pid}
+              end
+            end)
+
+          # Do not hold file admission while calling a live process: its reset or
+          # shutdown may itself need admission. Ownership was published before
+          # startup released admission, so a stopped writer cannot race loading.
+          case decision do
+            {:stopped, result} -> result
+            {:live, pid} -> live_mutation.(pid)
+          end
+        end
+    end
   end
 
   @doc "Fork native history and bind the independent resume token to a new logical session."
@@ -302,18 +277,23 @@ defmodule CodingAgent.ControlPlaneProvider do
       nil ->
         :global.trans({{__MODULE__, :native_session, session_key}, self()}, fn ->
           case native_session_path(session_key, cwd) do
-            {:ok, path} ->
-              :global.trans({{__MODULE__, path}, self()}, fn ->
-                with {:ok, session} <- CodingAgent.SessionManager.load_from_file(path),
-                     {:ok, plan, _} <-
-                       CodingAgent.Session.Planning.transition(
-                         %{session | file_path: path},
-                         action,
-                         opts
-                       ) do
-                  {:ok, plan}
+            {:ok, _path} ->
+              mutate_native_session(
+                session_key,
+                cwd,
+                &CodingAgent.Session.plan(&1, action, opts),
+                fn path ->
+                  with {:ok, session} <- load_native_session(path),
+                       {:ok, plan, _} <-
+                         CodingAgent.Session.Planning.transition(
+                           %{session | file_path: path},
+                           action,
+                           opts
+                         ) do
+                    {:ok, plan}
+                  end
                 end
-              end)
+              )
 
             {:error, :session_not_found} when action in [:status, :exit] ->
               {:ok, CodingAgent.Session.Planning.status(nil)}
@@ -422,12 +402,12 @@ defmodule CodingAgent.ControlPlaneProvider do
     if Process.whereis(CodingAgent.SessionRegistry) do
       case Registry.lookup(CodingAgent.SessionRegistry, session_key) do
         [{pid, _}] ->
-          pid
+          if Process.alive?(pid), do: pid
 
         [] ->
           CodingAgent.SessionRegistry
           |> Registry.select([{{:_, :"$1", %{session_key: session_key}}, [], [:"$1"]}])
-          |> List.first()
+          |> Enum.find(&Process.alive?/1)
       end
     end
   end

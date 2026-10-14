@@ -87,9 +87,10 @@ beforeEach(async () => {
 			reloads.push(key);
 			order.push("reload");
 		},
-		deliverPrompt: (text: string, mode: string) => {
+		deliverPrompt: (text: string, mode: string = "queue") => {
 			h.host.deliveries.push({ text, mode: mode as "queue" });
 			order.push(`send:${text}`);
+			return "accepted" as const;
 		},
 	});
 	serveTree();

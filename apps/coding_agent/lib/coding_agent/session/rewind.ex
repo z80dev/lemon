@@ -87,6 +87,26 @@ defmodule CodingAgent.Session.Rewind do
     end
   end
 
+  @doc false
+  def navigation_receipt(session, entry_id, target, summarizing) do
+    %{
+      "sessionId" => session.header.id,
+      "entryId" => entry_id,
+      "leafId" => session.leaf_id,
+      "prompt" => target.prompt,
+      "summarizing" => summarizing
+    }
+  end
+
+  @doc false
+  def label_receipt(session, entry_id) do
+    %{
+      "sessionId" => session.header.id,
+      "entryId" => entry_id,
+      "label" => session |> SessionManager.labels() |> Map.get(entry_id) |> project_label()
+    }
+  end
+
   def run(session, entry_id, opts \\ []) do
     if Keyword.get(opts, :allow_partial_restore, false) and
          not Keyword.get(opts, :restore_files, false) do

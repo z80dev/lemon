@@ -86,9 +86,9 @@ defmodule CodingAgent.Session.Presentation do
   @doc """
   Validates an explicit resume before starting a linked session runner.
 
-  Auto-resume (`resume_source: :auto`) may fall back to a fresh session when the
-  file is missing, so this returns `:ok`. Explicit resumes must reference a
-  loadable native session file.
+  Auto-resume (`resume_source: :auto`) may fall back to a fresh session only for
+  an unbound native token. A token mapped to an existing logical session must
+  remain loadable in the supplied cwd; never replace that session's history.
   """
   @spec validate_resume_for_start(ResumeToken.t() | nil, keyword(), binary()) ::
           :ok | {:error, term()}
@@ -104,7 +104,7 @@ defmodule CodingAgent.Session.Presentation do
         :ok
 
       {:error, reason} ->
-        if resume_source(session_opts) == :auto do
+        if fresh_resume_fallback?(session_id, session_opts) do
           :ok
         else
           {:error, explicit_resume_error(session_id, reason)}
@@ -137,7 +137,7 @@ defmodule CodingAgent.Session.Presentation do
         start_existing_session(session_id, session_file, session_opts, state)
 
       {:error, reason} ->
-        if resume_source(session_opts) == :auto do
+        if fresh_resume_fallback?(session_id, session_opts) do
           Logger.warning(
             "LemonRunner auto-resume unavailable for session #{inspect(session_id)}: " <>
               "#{inspect(reason)}; starting a fresh session"
@@ -194,6 +194,20 @@ defmodule CodingAgent.Session.Presentation do
         {:error, reason}
     end
   end
+
+  defp fresh_resume_fallback?(session_id, session_opts) do
+    resume_source(session_opts) == :auto and
+      not mapped_resume?(Keyword.get(session_opts, :session_key), session_id)
+  end
+
+  defp mapped_resume?(key, session_id) when is_binary(key) do
+    case LemonCore.ChatStateStore.get(key) do
+      %{last_engine: @engine, last_resume_token: ^session_id} -> true
+      _ -> false
+    end
+  end
+
+  defp mapped_resume?(_key, _session_id), do: false
 
   defp resume_source(session_opts) do
     case Keyword.get(session_opts, :resume_source) do

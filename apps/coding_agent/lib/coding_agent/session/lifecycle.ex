@@ -460,11 +460,12 @@ defmodule CodingAgent.Session.Lifecycle do
           )
           |> CodingAgent.Session.BudgetLedger.append(state.budget_usage)
 
+        new_path = SessionManager.session_file_path(state.cwd, new_session_manager.header.id)
+
         new_session_manager =
-          SessionManager.persist(
-            new_session_manager,
-            SessionManager.session_file_path(state.cwd, new_session_manager.header.id)
-          )
+          CodingAgent.Session.Ownership.transfer(state.session_file, new_path, fn ->
+            SessionManager.persist(new_session_manager, new_path)
+          end)
 
         Persistence.maybe_unregister_session(
           previous_session_id,

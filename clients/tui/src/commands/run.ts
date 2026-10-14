@@ -162,6 +162,10 @@ export const retryCommand: SlashCommand = {
 			return;
 		}
 		const session = ctx.session;
+		if (ctx.store.queue.items(session.key).some((item) => item.submission)) {
+			ctx.ui.notice("a submission outcome is unknown — inspect the session and review the queue before retrying", "warning");
+			return;
+		}
 		if (session.busy) {
 			ctx.ui.notice("a run is in flight — /abort it first, then /retry", "warning");
 			return;
@@ -260,7 +264,7 @@ export const retryCommand: SlashCommand = {
 		}
 
 		// History is rewound; from here the prompt must not be lost. It sits in the
-		// draft until the reload succeeds and the resend has been handed off.
+		// draft until the resend is acknowledged by a concrete run receipt.
 		ctx.ui.resetSession?.(key);
 		stageDraft(ctx, key, preview.prompt);
 		try {
@@ -279,12 +283,16 @@ export const retryCommand: SlashCommand = {
 			);
 			return;
 		}
-		ctx.store.setDraft(key, "");
-		ctx.ui.setDraft("");
 		ctx.ui.notice(
 			`retrying the last prompt · the discarded turn stays in /tree${force && outcome === "done" ? " (forced retry of a completed turn)" : ""}`,
 		);
-		await ctx.ui.deliverPrompt(preview.prompt, "queue");
+		const disposition = await ctx.ui.deliverPrompt(preview.prompt, "queue");
+		if (disposition === "accepted") {
+			if (ctx.store.drafts.get(key) === preview.prompt) ctx.store.setDraft(key, "");
+			if (ctx.store.focusedKey === key && ctx.ui.getDraft() === preview.prompt) {
+				ctx.ui.setDraft("");
+			}
+		}
 	},
 };
 

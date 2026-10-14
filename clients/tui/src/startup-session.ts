@@ -6,9 +6,10 @@
  */
 
 import { pickNumber, pickString } from "./commands/format.ts";
+import { ControlPlaneError } from "./protocol/errors.ts";
 import type { ControlPlaneMethods } from "./protocol/methods.ts";
 import type { SessionSummary } from "./protocol/types.ts";
-import { cwdSessionTag } from "./session-key.ts";
+import { assertSessionDirectory, cwdSessionTag } from "./session-key.ts";
 import type { NoticeLevel } from "./store/transcript-model.ts";
 
 /** What the command line asked for at startup. */
@@ -26,7 +27,7 @@ export interface StartupResolution {
 	notice?: { text: string; level: NoticeLevel };
 }
 
-/** The server maximum page; matches the exact-key lookups in `/session`. */
+/** The server maximum browse page. Exact resume uses `sessions.get`. */
 const LIST_PAGE = 500;
 /** Rows inspected at most; a runaway daemon cannot stall startup. */
 const LIST_CAP = 5000;
@@ -91,22 +92,18 @@ export async function resolveStartup(
 	if (request.mode === "resume") {
 		const key = request.key as string;
 		try {
-			const result = await methods.sessionsList({ query: key, limit: LIST_PAGE });
-			const found = ((result.sessions ?? []) as SessionSummary[]).some(
-				(row) => pickString(row, "sessionKey", "session_key", "key") === key,
-			);
-			if (found) return { sessionKey: key };
-			return {
-				notice: {
-					text: `session ${key} was not found — started a new session (open /sessions to browse)`,
-					level: "warning",
-				},
-			};
+			const { session } = await methods.sessionsGet({ sessionKey: key });
+			if (pickString(session, "sessionKey", "session_key", "key") !== key) {
+				throw new Error("unexpected exact session receipt");
+			}
+			assertSessionDirectory(key, deps.cwd);
+			return { sessionKey: key };
 		} catch (error) {
 			return {
-				sessionKey: key,
 				notice: {
-					text: `could not verify session ${key} (${describeError(error)}) — attaching anyway`,
+					text: ControlPlaneError.is(error, "NOT_FOUND")
+						? `session ${key} was not found — started a new session (open /sessions to browse)`
+						: `could not resume session ${key} (${describeError(error)}) — started a new session`,
 					level: "warning",
 				},
 			};

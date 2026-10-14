@@ -69,6 +69,9 @@ defmodule CodingAgent.Session.OverflowRecovery do
 
   @spec maybe_start(map(), term(), term(), pid()) :: {:ok, map()} | :no_recovery
   def maybe_start(state, reason, partial_state, session_pid) do
+    failed_message = latest_failed_assistant(partial_state)
+    details = if failed_message, do: Map.get(failed_message, :error_details)
+
     cond do
       not state.is_streaming ->
         :no_recovery
@@ -79,7 +82,16 @@ defmodule CodingAgent.Session.OverflowRecovery do
       state.overflow_recovery.attempted ->
         :no_recovery
 
-      not CompactionManager.context_length_exceeded_error?(reason) ->
+      is_map(details) and
+          (Map.get(details, :output_committed) == true or
+             Map.get(details, "output_committed") == true) ->
+        :no_recovery
+
+      not provider_failure?(reason) ->
+        :no_recovery
+
+      not (CompactionManager.context_length_exceeded_error?(details) or
+               CompactionManager.context_length_exceeded_error?(reason)) ->
         :no_recovery
 
       true ->
@@ -132,6 +144,31 @@ defmodule CodingAgent.Session.OverflowRecovery do
         end
     end
   end
+
+  defp latest_failed_assistant(%{new_messages: messages}), do: latest_failed_assistant(messages)
+  defp latest_failed_assistant(%{messages: messages}), do: latest_failed_assistant(messages)
+
+  defp latest_failed_assistant(messages) when is_list(messages) do
+    Enum.reduce(messages, nil, fn
+      %{role: :assistant, stop_reason: :error} = message, _latest -> message
+      _message, latest -> latest
+    end)
+  end
+
+  defp latest_failed_assistant(_partial_state), do: nil
+
+  defp provider_failure?(reason) when reason in [:assistant_error, :context_length_exceeded],
+    do: true
+
+  defp provider_failure?({tag, _reason})
+       when tag in [:assistant_error, :provider_error, :stream_error],
+       do: true
+
+  defp provider_failure?({:http_error, _status, _body}), do: true
+  defp provider_failure?({:http_error, _status, _body, _headers}), do: true
+  defp provider_failure?(reason) when is_binary(reason), do: true
+  defp provider_failure?(%{category: _category}), do: true
+  defp provider_failure?(_reason), do: false
 
   @spec handle_result(map(), term(), {:ok, map()} | {:error, term()}, callbacks(map())) :: map()
   def handle_result(state, signature, result, callbacks) do

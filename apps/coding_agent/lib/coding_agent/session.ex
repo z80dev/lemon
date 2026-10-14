@@ -257,6 +257,10 @@ defmodule CodingAgent.Session do
   The composed prompt is refreshed before each user prompt to pick up workspace/memory file edits;
   the environment block is reused unchanged so the prompt stays cache-stable.
 
+  Starting a journal that already has a live owner returns
+  `{:error, {:already_started, owner_pid}}` without loading or rewriting it and
+  without sending an abnormal linked exit to the caller.
+
   ## Examples
 
       # With explicit system prompt only
@@ -559,6 +563,11 @@ defmodule CodingAgent.Session do
     GenServer.call(session, {:navigate_tree, entry_id, opts})
   end
 
+  @doc "Navigate to an entry and return its receipt from the same session turn."
+  def navigate_entry(session, entry_id, opts \\ []) do
+    GenServer.call(session, {:navigate_entry, entry_id, opts})
+  end
+
   @doc """
   Bookmark an entry with a label, or clear it with `nil`. Appends a label entry
   (see `CodingAgent.SessionManager.labels/1`); returns the new entry id.
@@ -567,6 +576,11 @@ defmodule CodingAgent.Session do
           {:ok, String.t()} | {:error, :entry_not_found}
   def label_entry(session, entry_id, label) do
     GenServer.call(session, {:label_entry, entry_id, label})
+  end
+
+  @doc "Label an entry and return its strictly projected receipt atomically."
+  def label_entry_receipt(session, entry_id, label) do
+    GenServer.call(session, {:label_entry_receipt, entry_id, label})
   end
 
   @doc "Preview or confirm rewind to immediately before an earlier user message."
@@ -631,10 +645,14 @@ defmodule CodingAgent.Session do
   # GenServer Callbacks
   # ============================================================================
 
-  @spec init(keyword()) :: {:ok, t()}
+  @spec init(keyword()) :: {:ok, t()} | {:error, {:already_started, pid()}}
   @impl true
   def init(opts) do
     Process.flag(:trap_exit, true)
+    CodingAgent.Session.Ownership.initialize(opts, &initialize_owned_session/1)
+  end
+
+  defp initialize_owned_session(opts) do
     {:ok, state, extension_status_report} = Lifecycle.initialize(opts, self())
 
     maybe_register_session(
@@ -1004,26 +1022,34 @@ defmodule CodingAgent.Session do
         {:reply, {:error, :entry_not_found}, state}
 
       _entry ->
-        # Check if we're navigating away from the current branch
-        current_leaf_id = SessionManager.get_leaf_id(state.session_manager)
-        current_branch = SessionManager.get_branch(state.session_manager)
-        new_branch = SessionManager.get_branch(state.session_manager, entry_id)
+        {state, _summarizing} =
+          navigate_branch(state, entry_id, Keyword.get(opts, :summarize_abandoned, true))
 
-        # Determine if this is a branch switch (not just moving within the same branch)
-        is_branch_switch =
-          BackgroundTasks.branch_switch?(current_branch, new_branch, current_leaf_id, entry_id)
+        {:reply, :ok, state}
+    end
+  end
 
-        # Summarize abandoned branch if switching branches and option not disabled
-        state =
-          if is_branch_switch and Keyword.get(opts, :summarize_abandoned, true) do
-            maybe_summarize_abandoned_branch(state, current_branch, current_leaf_id)
-          else
-            state
-          end
+  def handle_call({:navigate_entry, _entry_id, _opts}, _from, %{is_streaming: true} = state),
+    do: {:reply, {:error, :busy}, state}
 
-        session_manager = SessionManager.set_leaf_id(state.session_manager, entry_id)
+  def handle_call({:navigate_entry, entry_id, opts}, _from, state) do
+    case CodingAgent.Session.Rewind.navigation_target(state.session_manager, entry_id) do
+      {:ok, target} ->
+        {state, summarizing} =
+          navigate_branch(state, target.leaf, Keyword.get(opts, :summarize, false))
 
-        {:reply, :ok, restore_branch_state(state, session_manager)}
+        receipt =
+          CodingAgent.Session.Rewind.navigation_receipt(
+            state.session_manager,
+            entry_id,
+            target,
+            summarizing
+          )
+
+        {:reply, {:ok, receipt}, state}
+
+      {:error, _} = error ->
+        {:reply, error, state}
     end
   end
 
@@ -1037,6 +1063,18 @@ defmodule CodingAgent.Session do
 
         {:reply, {:ok, SessionManager.get_leaf_id(session_manager)},
          %{state | session_manager: session_manager}}
+    end
+  end
+
+  def handle_call({:label_entry_receipt, entry_id, label}, _from, state) do
+    case SessionManager.get_entry(state.session_manager, entry_id) do
+      nil ->
+        {:reply, {:error, :entry_not_found}, state}
+
+      _entry ->
+        manager = SessionManager.append_label(state.session_manager, entry_id, label)
+        receipt = CodingAgent.Session.Rewind.label_receipt(manager, entry_id)
+        {:reply, {:ok, receipt}, %{state | session_manager: manager}}
     end
   end
 
@@ -1267,9 +1305,15 @@ defmodule CodingAgent.Session do
     {:noreply, state}
   end
 
-  def handle_info({:store_branch_summary, from_id, summary}, state) do
+  def handle_info({:store_branch_summary, signature, from_id, summary}, state) do
     {:noreply,
-     BackgroundTasks.store_branch_summary(state, from_id, summary, branch_summary_callbacks())}
+     BackgroundTasks.complete_branch_summary(
+       state,
+       signature,
+       from_id,
+       summary,
+       branch_summary_callbacks()
+     )}
   end
 
   def handle_info({:publish_extension_status_report, report}, state) do
@@ -2006,19 +2050,34 @@ defmodule CodingAgent.Session do
   end
 
   defp branch_summary_callbacks do
-    %{broadcast_event: &broadcast_event/2}
+    %{
+      broadcast_event: &broadcast_event/2,
+      restore_messages_from_session: &restore_messages_from_session/1
+    }
   end
 
-  # ============================================================================
-  # Branch Summarization Helpers
-  # ============================================================================
+  defp navigate_branch(state, destination_id, summarize) do
+    source = state.session_manager
+    branch = SessionManager.get_branch(source)
 
-  @doc false
-  # Attempts to summarize the abandoned branch asynchronously
-  # Returns the state unchanged (summarization happens in background)
-  @spec maybe_summarize_abandoned_branch(t(), [SessionEntry.t()], String.t() | nil) :: t()
-  defp maybe_summarize_abandoned_branch(state, branch_entries, from_id),
-    do: BackgroundTasks.maybe_summarize_abandoned_branch(state, branch_entries, from_id, self())
+    should_summarize =
+      summarize and BackgroundTasks.summarizes_switch?(source, destination_id)
+
+    manager = SessionManager.set_leaf_id(source, destination_id)
+    state = restore_branch_state(state, manager)
+
+    summarizing =
+      should_summarize and
+        BackgroundTasks.maybe_summarize_abandoned_branch(
+          state,
+          branch,
+          source.leaf_id,
+          destination_id,
+          self()
+        )
+
+    {state, summarizing}
+  end
 
   @spec handle_overflow_recovery_task_down(t()) :: t()
   defp handle_overflow_recovery_task_down(state),

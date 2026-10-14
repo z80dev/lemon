@@ -18,3 +18,14 @@ export function newSessionKey(cwd?: string): string {
 		cwd === undefined ? crypto.randomUUID() : `${cwdSessionTag(cwd)}-${crypto.randomUUID()}`;
 	return `agent:default:tui:local:dm:${peer}`;
 }
+
+/**
+ * Native TUI journals are directory-scoped. A foreign tag or a legacy key
+ * without a tag cannot establish the journal's directory, so refuse attachment
+ * rather than risk replacing its native history mapping.
+ */
+export function assertSessionDirectory(key: string, cwd: string): void {
+	const peer = /^agent:[^:]+:tui:local:dm:(.+)$/.exec(key)?.[1];
+	if (peer === undefined || peer.startsWith(`${cwdSessionTag(cwd)}-`)) return;
+	throw new Error("this TUI session belongs to another or unknown directory; reopen it from its original directory");
+}

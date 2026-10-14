@@ -60,7 +60,8 @@ defmodule LemonControlPlane.Methods.SessionsList do
   # row. Full resolution (profile model, config default, provider, context window) costs an
   # `AgentProfiles` call per row and lives in `session.detail` instead; a null `model` on a row
   # means "inherits", not "no model".
-  defp format_session(session) do
+  @doc false
+  def format_session(session) do
     session_key = session.session_key
 
     %{

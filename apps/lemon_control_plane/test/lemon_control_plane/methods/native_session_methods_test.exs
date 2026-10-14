@@ -34,19 +34,35 @@ defmodule LemonControlPlane.Methods.NativeSessionMethodsTest do
     @impl true
     def session_navigate(key, cwd, entry, opts) do
       send(self(), {:navigate, key, cwd, entry, opts})
-      Process.get(:navigate_result)
+      mutation_result(:navigate_result, {:navigate, key, entry})
     end
 
     @impl true
     def session_label(key, cwd, entry, label) do
       send(self(), {:label, key, cwd, entry, label})
-      Process.get(:label_result)
+      mutation_result(:label_result, {:label, key, entry, label})
     end
 
     @impl true
     def session_rewind(key, cwd, entry, opts) do
       send(self(), {:rewind, key, cwd, entry, opts})
-      Process.get(:rewind_result)
+      mutation_result(:rewind_result, {:rewind, key, entry})
+    end
+
+    defp mutation_result(key, mutation) do
+      case Process.get(key) do
+        {:committed, failure} ->
+          Process.put(:committed_mutation, mutation)
+
+          case failure do
+            :exit -> exit(:receipt_lost)
+            :raise -> raise "receipt lost"
+            :invalid -> :invalid_receipt
+          end
+
+        result ->
+          result
+      end
     end
 
     @impl true
@@ -437,6 +453,42 @@ defmodule LemonControlPlane.Methods.NativeSessionMethodsTest do
 
     assert {:error, {:not_found, _, %{"reason" => "entry_not_found"}}} =
              SessionsLabel.handle(label_target("x"), %{})
+  end
+
+  test "lost or invalid navigate and label receipts are uncertain after a committed mutation" do
+    for failure <- [:exit, :raise, :invalid] do
+      Process.put(:navigate_result, {:committed, failure})
+
+      assert {:error, {:unavailable, _, %{"reason" => "outcome_unknown", "retrySafe" => false}}} =
+               SessionsNavigate.handle(navigate_target(), %{})
+
+      assert Process.get(:committed_mutation) ==
+               {:navigate, target()["sessionKey"], "e2"}
+
+      Process.put(:label_result, {:committed, failure})
+
+      assert {:error, {:unavailable, _, %{"reason" => "outcome_unknown", "retrySafe" => false}}} =
+               SessionsLabel.handle(label_target("accepted label"), %{})
+
+      assert Process.get(:committed_mutation) ==
+               {:label, target()["sessionKey"], "e2", "accepted label"}
+    end
+  end
+
+  test "lost confirmed rewind receipts are uncertain while preview failures remain definite" do
+    Process.put(:rewind_result, {:committed, :exit})
+    params = target() |> Map.put("entryId", "e2") |> Map.put("dryRun", false)
+    params = Map.put(params, "confirmationToken", "confirmed")
+
+    assert {:error, {:unavailable, _, %{"reason" => "outcome_unknown", "retrySafe" => false}}} =
+             SessionsRewind.handle(params, %{})
+
+    assert Process.get(:committed_mutation) == {:rewind, target()["sessionKey"], "e2"}
+
+    assert {:error, {:unavailable, _, %{"reason" => "unavailable"} = data}} =
+             SessionsRewind.handle(Map.put(params, "dryRun", true), %{})
+
+    refute Map.has_key?(data, "retrySafe")
   end
 
   test "native history is authoritative after rewind, including an empty active branch" do

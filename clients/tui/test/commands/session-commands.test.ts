@@ -108,8 +108,8 @@ describe("session commands with the switcher mounted", () => {
 	});
 
 	test("/session delete shows a safe exact-key preview without deleting", async () => {
-		harness.server.respondWith("sessions.list", {
-			sessions: [{ sessionKey: "tui-other", runCount: 2, pinned: false, archived: true }],
+		harness.server.respondWith("sessions.get", {
+			session: { sessionKey: "tui-other", runCount: 2, pinned: false, archived: true },
 		});
 		await runWired("/session delete tui-other");
 		expect(spy.closed).toEqual([]);
@@ -118,8 +118,8 @@ describe("session commands with the switcher mounted", () => {
 	});
 
 	test("/session delete with no key previews the focused one", async () => {
-		harness.server.respondWith("sessions.list", {
-			sessions: [{ sessionKey: "tui-session", runCount: 1, pinned: false, archived: false }],
+		harness.server.respondWith("sessions.get", {
+			session: { sessionKey: "tui-session", runCount: 1, pinned: false, archived: false },
 		});
 		await runWired("/session delete");
 		expect(spy.closed).toEqual([]);

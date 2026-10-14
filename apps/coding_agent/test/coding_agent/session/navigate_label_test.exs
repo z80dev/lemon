@@ -8,9 +8,42 @@ defmodule CodingAgent.Session.NavigateLabelTest do
   alias CodingAgent.{ControlPlaneProvider, Session, SessionManager, SettingsManager}
   alias LemonAi.Types.{AssistantMessage, Model, ModelCost, TextContent}
 
+  # A native lifecycle with a message barrier between initialization (which has
+  # loaded and persisted the journal) and ownership publication.
+  defmodule PausedStartup do
+    use GenServer
+
+    def init(opts) do
+      Process.flag(:trap_exit, true)
+      observer = Keyword.fetch!(opts, :observer)
+
+      CodingAgent.Session.Ownership.initialize(opts, fn opts ->
+        {:ok, state, _report} = CodingAgent.Session.Lifecycle.initialize(opts, self())
+        send(observer, {:journal_loaded, self()})
+
+        receive do
+          :publish_owner -> {:ok, state}
+        end
+      end)
+    end
+
+    def handle_call(request, from, state),
+      do: CodingAgent.Session.handle_call(request, from, state)
+
+    def handle_info(message, state), do: CodingAgent.Session.handle_info(message, state)
+    def terminate(reason, state), do: CodingAgent.Session.terminate(reason, state)
+  end
+
   setup do
     root = Path.join(System.tmp_dir!(), "lemon-navigate-#{System.unique_integer([:positive])}")
     File.mkdir_p!(root)
+    File.mkdir_p!(Path.join(root, ".lemon"))
+    # Keep recall and background fact extraction out of this journal fixture.
+    File.write!(
+      Path.join([root, ".lemon", "config.toml"]),
+      "[memory]\nauto_recall = false\n[features]\nsession_search = \"off\"\n"
+    )
+
     key = "agent:navigate-test-#{System.unique_integer([:positive])}:main"
     fork_key = "agent:navigate-fork-#{System.unique_integer([:positive])}:main"
 
@@ -50,23 +83,24 @@ defmodule CodingAgent.Session.NavigateLabelTest do
     test "unknown entries are refused, a streaming session is busy, and an unstarted summary is not claimed",
          ctx do
       parent = self()
-      gate = :atomics.new(1, [])
 
       stream = fn _model, _context, _opts ->
-        send(parent, :stream_started)
-        wait_until(fn -> :atomics.get(gate, 1) == 1 end)
-        {:ok, events("slow answer")}
+        send(parent, {:stream_started, self()})
+
+        receive do
+          :release_stream -> {:ok, events("slow answer")}
+        end
       end
 
       session = start_live(ctx, stream)
       prompt(session, "seed", wait: false)
-      assert_receive :stream_started, 5_000
+      assert_receive {:stream_started, provider}, 5_000
       target = entry_id(session, "user", "seed")
 
       assert {:error, :busy} =
                ControlPlaneProvider.session_navigate(ctx.key, ctx.root, target, [])
 
-      :atomics.put(gate, 1, 1)
+      send(provider, :release_stream)
       wait_idle(session)
 
       assert {:error, :entry_not_found} =
@@ -107,6 +141,202 @@ defmodule CodingAgent.Session.NavigateLabelTest do
       assert {:error, :entry_not_found} =
                ControlPlaneProvider.session_label(ctx.key, ctx.root, "missing", "x")
     end
+  end
+
+  describe "file ownership admission" do
+    test "mutations wait through startup persistence until live ownership is published", ctx do
+      {path, ids} = durable_tree(ctx)
+      opts = Keyword.put(resume_opts(ctx, path), :observer, self())
+
+      startup =
+        Task.async(fn ->
+          {:ok, session} = GenServer.start_link(PausedStartup, opts)
+          Process.unlink(session)
+          {:ok, session}
+        end)
+
+      assert_receive {:journal_loaded, session}, 5_000
+      on_exit(fn -> if Process.alive?(session), do: GenServer.stop(session) end)
+
+      plan =
+        Task.async(fn ->
+          ControlPlaneProvider.session_plan(ctx.key, ctx.root, :enter, [])
+        end)
+
+      await_admission(path)
+
+      label =
+        Task.async(fn ->
+          ControlPlaneProvider.session_label(ctx.key, ctx.root, ids.alpha, "during startup")
+        end)
+
+      navigation =
+        Task.async(fn ->
+          ControlPlaneProvider.session_navigate(ctx.key, ctx.root, ids.first_answer, [])
+        end)
+
+      await_admission(path, 3)
+      send(session, :publish_owner)
+      assert {:ok, ^session} = Task.await(startup)
+      assert {:ok, %{"mode" => "plan"}} = Task.await(plan)
+      assert {:ok, %{"label" => "during startup"}} = Task.await(label)
+      assert {:ok, %{"leafId" => leaf}} = Task.await(navigation)
+      assert leaf == ids.first_answer
+
+      live = Session.get_state(session).session_manager
+      assert SessionManager.labels(live)[ids.alpha] == "during startup"
+      assert Enum.any?(SessionManager.entries(live), &(&1.id == ids.alpha_answer))
+      assert {:ok, saved} = SessionManager.load_from_file(path)
+      assert saved.leaf_id == live.leaf_id
+      assert SessionManager.labels(saved) == SessionManager.labels(live)
+      assert length(SessionManager.entries(saved)) == length(SessionManager.entries(live))
+    end
+
+    test "a queued native resume sees stopped navigation and labels before loading", ctx do
+      {path, ids} = durable_tree(ctx)
+      opts = resume_opts(ctx, path)
+
+      startup =
+        CodingAgent.Session.Ownership.with_file(path, fn ->
+          startup =
+            Task.async(fn ->
+              {:ok, session} = Session.start_link(opts)
+              Process.unlink(session)
+              {:ok, session}
+            end)
+
+          await_admission(path)
+
+          assert {:ok, %{"leafId" => leaf}} =
+                   ControlPlaneProvider.session_navigate(ctx.key, ctx.root, ids.first_answer, [])
+
+          assert leaf == ids.first_answer
+
+          assert {:ok, %{"label" => "retained"}} =
+                   ControlPlaneProvider.session_label(ctx.key, ctx.root, ids.alpha, "retained")
+
+          startup
+        end)
+
+      assert {:ok, session} = Task.await(startup, 5_000)
+      on_exit(fn -> if Process.alive?(session), do: GenServer.stop(session) end)
+      Session.subscribe(session)
+
+      manager = Session.get_state(session).session_manager
+      assert SessionManager.labels(manager)[ids.alpha] == "retained"
+      assert Enum.any?(SessionManager.entries(manager), &(&1.id == ids.alpha_answer))
+      prompt(session, "after resume")
+      assert_received {:provider_texts, ["first", "answer to: first", "after resume"]}
+    end
+
+    test "an unregistered live owner receives alias mutations without losing appended history",
+         ctx do
+      {path, ids} = durable_tree(ctx)
+      session = start_resumed(ctx, path)
+      prompt(session, "new tail")
+
+      assert_received {:provider_texts,
+                       ["first", "answer to: first", "alpha", "answer to: alpha", "new tail"]}
+
+      tail = entry_id(session, "assistant", "answer to: new tail")
+
+      assert {:ok, %{"label" => "live bookmark"}} =
+               ControlPlaneProvider.session_label(ctx.key, ctx.root, tail, "live bookmark")
+
+      manager = Session.get_state(session).session_manager
+      assert SessionManager.labels(manager)[tail] == "live bookmark"
+
+      assert {:ok, %{"leafId" => leaf}} =
+               ControlPlaneProvider.session_navigate(ctx.key, ctx.root, ids.first_answer, [])
+
+      assert leaf == ids.first_answer
+      assert {:ok, saved} = SessionManager.load_from_file(path)
+      assert Enum.any?(SessionManager.entries(saved), &(&1.id == tail))
+      assert SessionManager.labels(saved)[tail] == "live bookmark"
+
+      assert Enum.map(Session.get_messages(session), &message_text/1) ==
+               ["first", "answer to: first"]
+    end
+
+    test "reset relinquishes the old journal and owns the new one", ctx do
+      {old_path, ids} = durable_tree(ctx)
+      session = start_resumed(ctx, old_path)
+      assert :ok = Session.reset(session)
+
+      assert {:ok, %{"label" => "archived"}} =
+               ControlPlaneProvider.session_label(ctx.key, ctx.root, ids.alpha, "archived")
+
+      assert SessionManager.labels(Session.get_state(session).session_manager) == %{}
+      assert {:ok, archived} = SessionManager.load_from_file(old_path)
+      assert SessionManager.labels(archived)[ids.alpha] == "archived"
+
+      new_path = bind_resume_token(ctx, session)
+      refute new_path == old_path
+      target = Session.get_state(session).session_manager.leaf_id
+
+      assert {:ok, %{"label" => "new journal"}} =
+               ControlPlaneProvider.session_label(ctx.key, ctx.root, target, "new journal")
+
+      assert SessionManager.labels(Session.get_state(session).session_manager)[target] ==
+               "new journal"
+
+      assert {:error, {:already_started, ^session}} =
+               Task.async(fn -> Session.start_link(resume_opts(ctx, new_path)) end)
+               |> Task.await(5_000)
+    end
+
+    test "a second native startup cannot rewrite a live owner's journal", ctx do
+      {path, _ids} = durable_tree(ctx)
+      session = start_resumed(ctx, path)
+      assert {:ok, before} = File.read(path)
+
+      assert {:error, {:already_started, ^session}} =
+               Task.async(fn -> Session.start_link(resume_opts(ctx, path)) end)
+               |> Task.await(5_000)
+
+      assert File.read!(path) == before
+    end
+  end
+
+  test "queued live mutations return their own receipts rather than a later state", ctx do
+    session = start_live(ctx)
+    prompt(session, "first")
+    prompt(session, "alpha")
+    first = entry_id(session, "assistant", "answer to: first")
+    alpha = entry_id(session, "assistant", "answer to: alpha")
+
+    :sys.suspend(session)
+    on_exit(fn -> if Process.alive?(session), do: :sys.resume(session) end)
+
+    first_label =
+      Task.async(fn -> ControlPlaneProvider.session_label(ctx.key, ctx.root, first, "one") end)
+
+    await_calls(session, 1)
+
+    second_label =
+      Task.async(fn -> ControlPlaneProvider.session_label(ctx.key, ctx.root, first, "two") end)
+
+    await_calls(session, 2)
+    :sys.resume(session)
+    assert {:ok, %{"label" => "one"}} = Task.await(first_label)
+    assert {:ok, %{"label" => "two"}} = Task.await(second_label)
+    assert tree_label(ctx, first) == "two"
+
+    :sys.suspend(session)
+
+    first_navigation =
+      Task.async(fn -> ControlPlaneProvider.session_navigate(ctx.key, ctx.root, first, []) end)
+
+    await_calls(session, 1)
+
+    second_navigation =
+      Task.async(fn -> ControlPlaneProvider.session_navigate(ctx.key, ctx.root, alpha, []) end)
+
+    await_calls(session, 2)
+    :sys.resume(session)
+    assert {:ok, %{"leafId" => ^first}} = Task.await(first_navigation)
+    assert {:ok, %{"leafId" => ^alpha}} = Task.await(second_navigation)
+    assert Session.get_state(session).session_manager.leaf_id == alpha
   end
 
   describe "session without a process" do
@@ -237,14 +467,6 @@ defmodule CodingAgent.Session.NavigateLabelTest do
 
     path = bind_resume_token(ctx, session)
     stop_supervised!(Session)
-    # Registry drops a dead process's key asynchronously; the provider must see
-    # no live session before the "without a process" assertions run.
-    wait_until(fn ->
-      Registry.lookup(CodingAgent.SessionRegistry, ctx.key) == [] and
-        Registry.select(CodingAgent.SessionRegistry, [
-          {{:_, :"$1", %{session_key: ctx.key}}, [], [:"$1"]}
-        ]) == []
-    end)
 
     {path, ids}
   end
@@ -265,30 +487,75 @@ defmodule CodingAgent.Session.NavigateLabelTest do
   end
 
   defp start_live(ctx, stream \\ nil) do
-    start_supervised!(
-      {Session,
-       [
-         cwd: ctx.root,
-         model: model(),
-         stream_fn: stream || echo_stream(self()),
-         session_key: ctx.key,
-         register: true,
-         settings_manager: %{SettingsManager.load(ctx.root) | compaction_enabled: false}
-       ]}
-    )
+    session =
+      start_supervised!(
+        {Session,
+         [
+           cwd: ctx.root,
+           workspace_dir: Path.join(ctx.root, "workspace"),
+           model: model(),
+           stream_fn: stream || echo_stream(self()),
+           session_key: ctx.key,
+           register: true,
+           settings_manager: %{SettingsManager.load(ctx.root) | compaction_enabled: false}
+         ]}
+      )
+
+    Session.subscribe(session)
+    session
   end
 
   defp start_resumed(ctx, path) do
-    start_supervised!(
-      {Session,
-       [
-         cwd: ctx.root,
-         model: model(),
-         stream_fn: echo_stream(self()),
-         session_file: path,
-         settings_manager: %{SettingsManager.load(ctx.root) | compaction_enabled: false}
-       ]}
-    )
+    session = start_supervised!({Session, resume_opts(ctx, path)})
+
+    Session.subscribe(session)
+    session
+  end
+
+  defp resume_opts(ctx, path) do
+    [
+      cwd: ctx.root,
+      workspace_dir: Path.join(ctx.root, "workspace"),
+      model: model(),
+      stream_fn: echo_stream(self()),
+      session_file: path,
+      settings_manager: %{SettingsManager.load(ctx.root) | compaction_enabled: false}
+    ]
+  end
+
+  # Barrier on a queued admission, not elapsed time: startup has actually reached
+  # the shared lock before the stopped mutation is allowed to proceed.
+  defp await_admission(path, count \\ 1) do
+    await_barrier(fn ->
+      locks = :sys.get_state(CodingAgent.MutationLock).locks
+
+      case locks[{:native_session, Path.expand(path)}] do
+        nil -> false
+        lock -> :queue.len(lock.waiters) >= count
+      end
+    end)
+  end
+
+  defp await_calls(session, count) do
+    await_barrier(fn ->
+      {:messages, messages} = Process.info(session, :messages)
+      Enum.count(messages, &match?({:"$gen_call", _, _}, &1)) >= count
+    end)
+  end
+
+  defp await_barrier(fun) do
+    deadline = System.monotonic_time(:millisecond) + 5_000
+    await_barrier(fun, deadline)
+  end
+
+  defp await_barrier(fun, deadline) do
+    if fun.() do
+      :ok
+    else
+      assert System.monotonic_time(:millisecond) < deadline, "barrier was not reached"
+      :erlang.yield()
+      await_barrier(fun, deadline)
+    end
   end
 
   defp prompt(session, text, opts \\ []) do
@@ -298,21 +565,8 @@ defmodule CodingAgent.Session.NavigateLabelTest do
   end
 
   defp wait_idle(session) do
-    wait_until(fn ->
-      state = Session.get_state(session)
-      leaf = SessionManager.get_entry(state.session_manager, state.session_manager.leaf_id)
-
-      not state.is_streaming and leaf != nil and leaf.type == :message and
-        message_role(leaf.message) == "assistant"
-    end)
-  end
-
-  defp wait_until(fun, attempts \\ 500) do
-    cond do
-      fun.() -> :ok
-      attempts == 0 -> flunk("timed out")
-      true -> Process.sleep(10) && wait_until(fun, attempts - 1)
-    end
+    assert_receive {:session_event, _, {:agent_end, _}}, 5_000
+    refute Session.get_state(session).is_streaming
   end
 
   defp flush_texts do
@@ -328,10 +582,10 @@ defmodule CodingAgent.Session.NavigateLabelTest do
     Enum.find(tree["entries"], &(&1["id"] == id))["label"]
   end
 
-  # The provider can be reached before the session persists the prompt.
   defp entry_id(session, role, text) do
-    wait_until(fn -> find_entry(session, role, text) != nil end)
-    find_entry(session, role, text).id
+    entry = find_entry(session, role, text)
+    assert entry != nil
+    entry.id
   end
 
   defp find_entry(session, role, text) do

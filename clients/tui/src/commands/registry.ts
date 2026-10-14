@@ -13,6 +13,7 @@
  * the host has not implemented says so in a notice instead of throwing.
  */
 
+import type { SubmissionDisposition } from "../composer/drafts.ts";
 import type { ControlPlaneClient } from "../protocol/client.ts";
 import type { ControlPlaneMethods, MethodName } from "../protocol/methods.ts";
 import type { ChatHistoryMessage, SessionsContextResult } from "../protocol/types.ts";
@@ -103,7 +104,7 @@ export interface CommandHost {
 	/** Focus the pending-queue panel (`/queue`, Ctrl+Q). */
 	focusQueue?(): boolean;
 	/** Deliver a command-supplied prompt through the normal submission state machine. */
-	deliverPrompt?(text: string, mode: SubmissionMode): void | Promise<void>;
+	deliverPrompt?(text: string, mode?: SubmissionMode): SubmissionDisposition | Promise<SubmissionDisposition>;
 	/** The client-side queue for the focused session, for `/queue` to describe. */
 	queuedPrompts?(): readonly string[];
 	/**

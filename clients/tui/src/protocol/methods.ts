@@ -106,6 +106,7 @@ export const METHOD = {
 	profilesRoster: "profiles.roster",
 	profileChat: "profile.chat",
 	sessionsList: "sessions.list",
+	sessionsGet: "sessions.get",
 	sessionsCreate: "sessions.create",
 	sessionsFork: "sessions.fork",
 	sessionsPreview: "sessions.preview",
@@ -291,6 +292,14 @@ export class ControlPlaneMethods {
 
 	sessionsList(params?: SessionsListParams, options?: RequestOptions): Promise<SessionsListResult> {
 		return this.#call<SessionsListResult>(METHOD.sessionsList, params, options);
+	}
+
+	/** Exact durable lifecycle lookup; never a substring/history search. */
+	sessionsGet(
+		params: { sessionKey: string },
+		options?: RequestOptions,
+	): Promise<{ session: SessionSummary }> {
+		return this.#call(METHOD.sessionsGet, params, { ...options, queueIfOffline: false });
 	}
 
 	sessionsFork(params: SessionsForkParams, options?: RequestOptions): Promise<SessionsForkResult> {

@@ -53,13 +53,6 @@ const MAX_EXPORT_BYTES = 750_000;
 /** How many stored sessions the merged list asks for. */
 export const SESSION_LIST_LIMIT = 100;
 
-/**
- * Exact-key lifecycle operations search the server's full bounded page before
- * mutating or switching. This is deliberately the server maximum rather than
- * the shorter browse page: an exact key must never disappear behind a busy
- * recent-session roster.
- */
-const EXACT_SESSION_LOOKUP_LIMIT = 500;
 
 export interface SessionRow {
 	key: string;
@@ -447,12 +440,17 @@ async function loadExactSession(
 	ctx: CommandContext,
 	key: string,
 ): Promise<SessionSummary | undefined> {
-	if (!requireSessionMethod(ctx, METHOD.sessionsList)) return undefined;
-	const result = await ctx.methods.sessionsList({
-		query: key,
-		limit: EXACT_SESSION_LOOKUP_LIMIT,
-	});
-	return sessionRowsFrom(result).find((entry) => pickString(entry, "sessionKey") === key);
+	if (!requireSessionMethod(ctx, METHOD.sessionsGet)) return undefined;
+	try {
+		const { session } = await ctx.methods.sessionsGet({ sessionKey: key });
+		if (pickString(session, "sessionKey", "session_key", "key") !== key) {
+			throw new Error("unexpected exact session receipt");
+		}
+		return session;
+	} catch (error) {
+		if (ControlPlaneError.is(error, "NOT_FOUND")) return undefined;
+		throw error;
+	}
 }
 
 async function showSession(ctx: CommandContext, key: string, current: boolean): Promise<void> {

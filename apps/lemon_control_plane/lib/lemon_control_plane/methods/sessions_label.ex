@@ -26,7 +26,7 @@ defmodule LemonControlPlane.Methods.SessionsLabel do
       case AgentRuntime.call(
              :session_label,
              [key, cwd, entry_id, label],
-             {:error, :unavailable}
+             {:error, :outcome_unknown}
            ) do
         {:ok, result} when is_map(result) ->
           {:ok,
@@ -38,7 +38,7 @@ defmodule LemonControlPlane.Methods.SessionsLabel do
           NativeSessions.failure(reason)
 
         _ ->
-          NativeSessions.failure(:invalid_response)
+          NativeSessions.failure(:outcome_unknown)
       end
     end
   end

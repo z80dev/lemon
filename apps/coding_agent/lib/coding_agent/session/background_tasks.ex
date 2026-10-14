@@ -6,7 +6,8 @@ defmodule CodingAgent.Session.BackgroundTasks do
   alias CodingAgent.SessionManager.SessionEntry
 
   @type callbacks(state) :: %{
-          required(:broadcast_event) => (state, LemonAgent.Types.agent_event() -> :ok)
+          required(:broadcast_event) => (state, LemonAgent.Types.agent_event() -> :ok),
+          required(:restore_messages_from_session) => (SessionManager.Session.t() -> [term()])
         }
 
   @spec flush_queued_agent_events() :: :ok
@@ -20,33 +21,52 @@ defmodule CodingAgent.Session.BackgroundTasks do
     end
   end
 
-  @spec maybe_summarize_abandoned_branch(map(), [SessionEntry.t()], String.t() | nil, pid()) ::
-          map()
-  def maybe_summarize_abandoned_branch(state, _branch_entries, nil, _session_pid), do: state
+  @spec maybe_summarize_abandoned_branch(
+          map(),
+          [SessionEntry.t()],
+          String.t() | nil,
+          String.t() | nil,
+          pid()
+        ) :: boolean()
+  def maybe_summarize_abandoned_branch(_state, _branch_entries, nil, _destination, _session_pid),
+    do: false
 
-  def maybe_summarize_abandoned_branch(state, branch_entries, from_id, session_pid) do
+  def maybe_summarize_abandoned_branch(state, branch_entries, from_id, destination, session_pid) do
     if summarizable?(branch_entries) do
       model = state.model
       opts = CompactionManager.summary_options([], state)
 
-      _ =
+      destination_state = %{
+        state
+        | session_manager: %{state.session_manager | leaf_id: destination}
+      }
+
+      signature = CompactionManager.session_signature(destination_state)
+
+      {:ok, _pid} =
         CompactionManager.start_background_task(fn ->
           case CodingAgent.Compaction.generate_branch_summary(branch_entries, model, opts) do
             {:ok, summary} ->
-              send(session_pid, {:store_branch_summary, from_id, summary})
+              send(session_pid, {:store_branch_summary, signature, from_id, summary})
 
             {:error, _reason} ->
               :ok
           end
         end)
-    end
 
-    state
+      true
+    else
+      false
+    end
+  rescue
+    _ -> false
+  catch
+    :exit, _ -> false
   end
 
   @doc """
   Whether moving the active leaf to `target_id` abandons a branch that
-  `maybe_summarize_abandoned_branch/4` summarizes: a real branch switch away
+  `maybe_summarize_abandoned_branch/5` summarizes: a real branch switch away
   from at least two messages.
   """
   @spec summarizes_switch?(SessionManager.Session.t(), String.t() | nil) :: boolean()
@@ -86,10 +106,33 @@ defmodule CodingAgent.Session.BackgroundTasks do
     end
   end
 
+  @doc "Ignore a background result once its destination revision has changed."
+  @spec complete_branch_summary(
+          map(),
+          CompactionManager.session_signature(),
+          String.t(),
+          String.t(),
+          callbacks(map())
+        ) ::
+          map()
+  def complete_branch_summary(state, signature, from_id, summary, callbacks) do
+    if not state.is_streaming and CompactionManager.session_signature(state) == signature do
+      store_branch_summary(state, from_id, summary, callbacks)
+    else
+      state
+    end
+  end
+
   @spec store_branch_summary(map(), String.t(), String.t(), callbacks(map())) :: map()
   def store_branch_summary(state, from_id, summary, callbacks) do
     entry = SessionEntry.branch_summary(from_id, summary)
     session_manager = SessionManager.append_entry(state.session_manager, entry)
+
+    :ok =
+      LemonAgent.Agent.replace_messages(
+        state.agent,
+        callbacks.restore_messages_from_session.(session_manager)
+      )
 
     callbacks.broadcast_event.(state, {:branch_summarized, %{from_id: from_id, summary: summary}})
 
@@ -98,6 +141,9 @@ defmodule CodingAgent.Session.BackgroundTasks do
 
   @spec summarize_branch(map(), keyword(), callbacks(map())) ::
           {:ok, map()} | {:error, term(), map()}
+  def summarize_branch(%{is_streaming: true} = state, _opts, _callbacks),
+    do: {:error, :busy, state}
+
   def summarize_branch(state, opts, callbacks) do
     branch_entries = SessionManager.get_branch(state.session_manager)
     opts = CompactionManager.summary_options(opts, state)

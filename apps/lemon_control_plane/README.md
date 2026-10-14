@@ -163,6 +163,10 @@ was actually started: a live session leaving a branch of at least two messages
 for a different one. A stopped session has no model runtime, so it only moves
 the leaf. The next prompt, live or after resume, sees the new branch's history,
 model and thinking state.
+A background summary is bound to the destination revision. If another prompt,
+branch switch or journal change wins the race, the stale result is discarded
+without changing the active branch. An accepted result updates both the journal
+and the live model context, so continuing and resuming see the same summary.
 
 `sessions.label` requires `operator.write`. It appends a label entry bookmarking
 `entryId` with `label`: a string of at most 120 characters (control characters
@@ -171,6 +175,14 @@ change the model-visible context and are resolved across the whole tree, so any
 entry — including one on a preserved branch — can be bookmarked. The result is
 `sessionId`, `entryId`, and the resulting `label`. Labels in this result and in
 `sessions.tree` are strictly redacted, like tree text.
+
+Native startup and stopped navigation, labeling and rewind share journal
+admission: a mutation either completes before resume loads the file or is sent
+to its published live owner. Live navigation/label receipts are captured in the
+same session turn as the mutation. A lost or invalid mutation receipt returns
+`reason: "outcome_unknown"` with `retrySafe: false`; inspect the session before
+retrying. Confirmed rewind has the same uncertain-outcome contract. Definite
+refusals such as `busy` or `entry_not_found` remain ordinary failures.
 
 `sessions.rewind` requires `operator.write`, including previews. Supply an
 `entryId` of at most 256 bytes identifying a rewindable user message.

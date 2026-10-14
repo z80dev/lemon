@@ -13,6 +13,14 @@ This behavior is identical in source checkouts and packaged installs:
 - `lemon start` starts the runtime in the foreground; `lemon run` runs a prompt.
 - `lemon -c` (`--continue`) opens the TUI on the most recently updated TUI session started from this directory (a new session when there is none); `lemon -r [key]` (`--resume [key]`) opens it on `key`, or on the session switcher without a key. `lemon tui --continue`/`--resume`/`--session KEY` are equivalent, and the three are mutually exclusive. Inside the TUI, `/retry` resends the last failed or aborted prompt after a history-only rewind. `lemon run --continue` is separate: it continues the latest *CLI* session for `--cwd`.
 
+Exact TUI resume checks the durable lifecycle key, not a truncated search page.
+Local TUI sessions are directory-bound: reopen them from their original directory;
+foreign or untagged local TUI keys are safely refused instead of starting fresh
+native history under the old key. `/retry` keeps its recovery draft until the
+resend is acknowledged. If its outcome is unknown, inspect the session and
+explicitly review the fixed request/run identity in Ctrl+Q before sending again;
+it is never automatically replayed.
+
 Use `./bin/lemon` instead of `lemon` in the examples below when running from a
 source checkout.
 

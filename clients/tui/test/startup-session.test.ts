@@ -8,8 +8,7 @@ import { cwdSessionTag } from "../src/session-key.ts";
 import { resolveStartup, selectContinueSession } from "../src/startup-session.ts";
 import { initTheme, resetTheme } from "../src/ui/theme/theme.ts";
 import { invalidateThemeAdapters } from "../src/ui/theme/tui-adapters.ts";
-import { MemoryTerminal, renderPlain } from "./helpers/memory-terminal.ts";
-import { waitFor } from "./helpers/wait.ts";
+import { MemoryTerminal } from "./helpers/memory-terminal.ts";
 
 const CWD = "/work/project";
 const OTHER = "/work/other";
@@ -55,7 +54,7 @@ describe("resolveStartup", () => {
 	let methods: ControlPlaneMethods;
 
 	beforeEach(async () => {
-		server = await FakeControlPlane.start({ methods: ["sessions.list"] });
+		server = await FakeControlPlane.start({ methods: ["sessions.list", "sessions.get"] });
 		client = new ControlPlaneClient({ url: server.url });
 		await client.connect();
 		methods = new ControlPlaneMethods(client);
@@ -67,24 +66,38 @@ describe("resolveStartup", () => {
 
 	const deps = () => ({ methods, cwd: CWD, currentKey: "fresh" });
 
-	test("--resume KEY attaches only on an exact key match", async () => {
-		server.respondWith("sessions.list", { sessions: [row("k-1", 1), row("k-10", 2)], total: 2 });
+	test("--resume KEY finds the exact target beyond the substring search page", async () => {
+		server.respondWith("sessions.list", {
+			sessions: Array.from({ length: 500 }, (_, index) => row(`k-1-match-${index}`, index)),
+			total: 501,
+		});
+		server.respondWith("sessions.get", { session: row("k-1", 1) });
 		const resolution = await resolveStartup({ mode: "resume", key: "k-1" }, deps());
-		expect(resolution).toEqual({ sessionKey: "k-1" });
+		expect(resolution.sessionKey).toBe("k-1");
 	});
 
 	test("--resume KEY falls back to a fresh session with a warning when it does not exist", async () => {
-		server.respondWith("sessions.list", { sessions: [row("k-10", 2)], total: 1 });
+		server.failWith("sessions.get", "NOT_FOUND", "missing");
 		const resolution = await resolveStartup({ mode: "resume", key: "k-1" }, deps());
 		expect(resolution.sessionKey).toBeUndefined();
 		expect(resolution.notice?.level).toBe("warning");
 	});
 
-	test("--resume KEY still attaches, with a warning, when the lookup fails", async () => {
-		server.failWith("sessions.list", "UNAVAILABLE", "down");
+	test("--resume KEY refuses to attach when the exact lookup fails", async () => {
+		server.failWith("sessions.get", "UNAVAILABLE", "down");
 		const resolution = await resolveStartup({ mode: "resume", key: "k-1" }, deps());
-		expect(resolution.sessionKey).toBe("k-1");
+		expect(resolution.sessionKey).toBeUndefined();
 		expect(resolution.notice?.level).toBe("warning");
+	});
+
+	test("explicit resume refuses foreign-directory and legacy local TUI sessions", async () => {
+		for (const key of [
+			`agent:default:tui:local:dm:${cwdSessionTag(OTHER)}-saved`,
+			"agent:default:tui:local:dm:old-untagged",
+		]) {
+			server.respondWith("sessions.get", { session: row(key, 1) });
+			expect((await resolveStartup({ mode: "resume", key }, deps())).sessionKey).toBeUndefined();
+		}
 	});
 
 	test("--continue pages the whole list and picks this directory's newest session", async () => {
@@ -151,8 +164,10 @@ describe("AppShell startup request", () => {
 
 	test("--continue focuses the saved session and loads its history", async () => {
 		const { app, server, saved } = await boot({ mode: "continue" });
-		await waitFor(() => renderPlain(app.chatContainer.render(80)).includes("welcome back"));
 		expect(app.sessionKey).toBe(saved);
+		expect(app.session.blocks.filter((block) => block.kind === "assistant")).toMatchObject([
+			{ text: "welcome back" },
+		]);
 		expect(server.requestsFor("chat.history").at(-1)?.params).toMatchObject({ sessionKey: saved });
 		// The throwaway key minted at construction never becomes a session.
 		expect([...app.store.sessions.keys()]).toEqual([saved]);
@@ -160,7 +175,6 @@ describe("AppShell startup request", () => {
 
 	test("bare --resume opens the session switcher once loaded", async () => {
 		const { app } = await boot({ mode: "resume" });
-		await waitFor(() => app.selectors.isOpen);
 		expect(app.selectors.isOpen).toBe(true);
 	});
 });
