@@ -23,6 +23,8 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   schemas, with operator-reviewed connector/private-origin/setup inputs.
 - Lemon Bot broad channel-message routine opt-in and a strictly read-only,
   metadata-only audit collector scope for workspace integration tokens.
+- Clarified Lemon Bot file chunks retain the owning node's total source-file
+  size, with actual chunk length measured from decoded bytes for progress.
 
 ---
 

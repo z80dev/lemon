@@ -57,6 +57,7 @@ export interface FileInfo { path: string; name: string; kind: 'file' | 'director
 export interface FileListQuery extends PageQuery { path: string; showHidden?: boolean }
 export interface FilePathQuery { path: string }
 export interface FileReadQuery extends FilePathQuery { offset?: number; length?: number }
+/** size is TOTAL source-file bytes; offset is chunk start, chunk length is decoded dataBase64 bytes, eof is actual source end. */
 export interface FileChunk { path: string; offset: number; dataBase64: string; size: number; mime: string; eof: boolean }
 export interface FileWrite extends Mutation { path: string; dataBase64: string; offset?: number; truncate?: boolean; mkdirs?: boolean; expectedModifiedAtMs?: TimestampMs }
 export interface FileMkdir extends Mutation { path: string }
