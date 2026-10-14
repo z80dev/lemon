@@ -93,4 +93,82 @@ final class NativeBoundaryTests: XCTestCase {
         XCTAssertNil(connection.username)
         XCTAssertNil(connection.externalAccountId)
     }
+
+    func testOwnerGroupCarriesBotsAndOneOwnerWithoutHumanMembership() throws {
+        let data = Data(#"{"id":"group_owned","revision":3,"createdAtMs":1000,"updatedAtMs":2000,"kind":"group","name":"Review","botIds":["bot_research","bot_review"],"ownerUserId":"user_owner","parentConversationId":null,"leadBotId":"bot_review","channelBindingId":null,"lastEntryId":null,"unreadCount":0,"lastReadSeq":0,"activity":[]}"#.utf8)
+        let conversation = try JSONDecoder().decode(Conversation.self, from: data)
+        XCTAssertEqual(conversation.ownerUserId, "user_owner")
+        XCTAssertEqual(conversation.botIds, ["bot_research", "bot_review"])
+        XCTAssertEqual(conversation.leadBotId, "bot_review")
+        let wire = try JSONDecoder().decode(JSONObject.self, from: JSONEncoder().encode(conversation))
+        XCTAssertNil(wire["humanUserIds"])
+        XCTAssertEqual(wire["parentConversationId"], .null)
+        XCTAssertEqual(try JSONDecoder().decode(JSONValue.self, from: data), .object(wire))
+        let update = ConversationUpdate(clientNonce: "group_fixed_nonce", revision: 3, botIds: ["bot_research", "bot_review"], leadBotId: .some(nil))
+        let request = try JSONDecoder().decode(JSONObject.self, from: JSONEncoder().encode(update))
+        XCTAssertEqual(request["leadBotId"], .null)
+        XCTAssertNil(request["humanUserIds"])
+    }
+
+    func testPairingRealtimeStateCannotSupplyPhoneSessionAuthority() throws {
+        let data = Data(#"{"type":"event","seq":"18446744073709551615","event":"pairing.upserted","timestampMs":2000,"payload":{"id":"pairing_owned","revision":2,"createdAtMs":1000,"updatedAtMs":2000,"workspaceId":"workspace_owned","ownerUserId":"user_owner","clusterName":"Owner desktop","backendUrl":"https://desktop.example.ts.net","status":"pending_approval","expiresAtMs":301000,"deviceName":"Owner iPhone","verificationCode":"123456"}}"#.utf8)
+        let event = try JSONDecoder().decode(RealtimeEvent.self, from: data)
+        guard case .pairingUpserted(let pairing) = event.payload else { return XCTFail("Expected safe pairing state") }
+        XCTAssertEqual(pairing.status, "pending_approval")
+        XCTAssertEqual(pairing.verificationCode, "123456")
+        XCTAssertEqual(event.seq, "18446744073709551615")
+        let wire = try JSONDecoder().decode(JSONObject.self, from: JSONEncoder().encode(event))
+        let payload = try XCTUnwrap(wire["payload"]?.objectValue)
+        XCTAssertNil(payload["pairCode"])
+        XCTAssertNil(payload["pairUrl"])
+        XCTAssertNil(payload["claimToken"])
+        XCTAssertNil(payload["token"])
+        XCTAssertEqual(try JSONDecoder().decode(JSONValue.self, from: data), .object(wire))
+    }
+
+    func testDeniedAndExpiredPairingCompletionHaveNoCredentialFallback() throws {
+        for status in ["pending", "denied", "expired"] {
+            let fields: JSONObject = ["status": .string(status), "pairingId": .string("pairing_owned"), "expiresAtMs": .number(301000)]
+            let completion = try JSONDecoder().decode(PairingCompletion.self, from: JSONEncoder().encode(fields))
+            guard case .pending(let result) = completion else { return XCTFail("Nonconnected status supplied authority") }
+            XCTAssertEqual(result.status, status)
+            XCTAssertEqual(result.pairingId, "pairing_owned")
+            let encoded = try JSONDecoder().decode(JSONObject.self, from: JSONEncoder().encode(completion))
+            XCTAssertEqual(encoded, fields)
+            XCTAssertNil(encoded["auth"])
+            XCTAssertNil(encoded["device"])
+        }
+        XCTAssertThrowsError(try JSONDecoder().decode(PairingCompletion.self, from: Data(#"{"status":"connected","pairingId":"pairing_owned","expiresAtMs":301000}"#.utf8)))
+    }
+
+    func testPersistentPairedSessionRequiresExplicitNullExpiryAndDeviceIdentity() throws {
+        let data = Data(#"{"id":"session_paired","revision":1,"createdAtMs":1000,"updatedAtMs":1000,"userId":"user_owner","deviceId":"device_phone","expiresAtMs":null,"lastSeenAtMs":1000,"current":true}"#.utf8)
+        let session = try JSONDecoder().decode(AuthSession.self, from: data)
+        XCTAssertEqual(session.deviceId, "device_phone")
+        XCTAssertNil(session.expiresAtMs)
+        var fields = try JSONDecoder().decode(JSONObject.self, from: JSONEncoder().encode(session))
+        XCTAssertEqual(fields["expiresAtMs"], .null)
+        fields.removeValue(forKey: "expiresAtMs")
+        XCTAssertThrowsError(try JSONDecoder().decode(AuthSession.self, from: JSONEncoder().encode(fields)))
+        fields["expiresAtMs"] = .number(301000)
+        XCTAssertEqual(try JSONDecoder().decode(AuthSession.self, from: JSONEncoder().encode(fields)).expiresAtMs, 301000)
+    }
+
+    func testPairingPreviewIsReadOnlyAndContainsNoClaimOrSessionCapability() throws {
+        let request = PairingPreviewRequest(pairCode: "fixture_one_use_code", workspaceId: "workspace_owned")
+        let input = try JSONDecoder().decode(JSONObject.self, from: JSONEncoder().encode(request))
+        XCTAssertEqual(Set(input.keys), ["pairCode", "workspaceId"])
+        XCTAssertNil(input["clientNonce"])
+        XCTAssertNil(input["installationId"])
+        let data = Data(#"{"clusterName":"Owner desktop","backendUrl":"https://desktop.example.ts.net","expiresAtMs":301000}"#.utf8)
+        let result = try JSONDecoder().decode(PairingPreviewResult.self, from: data)
+        XCTAssertEqual(result.clusterName, "Owner desktop")
+        XCTAssertEqual(result.backendUrl, "https://desktop.example.ts.net")
+        XCTAssertEqual(result.expiresAtMs, 301000)
+        let output = try JSONDecoder().decode(JSONObject.self, from: JSONEncoder().encode(result))
+        XCTAssertEqual(Set(output.keys), ["clusterName", "backendUrl", "expiresAtMs"])
+        XCTAssertNil(output["claimToken"])
+        XCTAssertNil(output["auth"])
+        XCTAssertNil(output["token"])
+    }
 }

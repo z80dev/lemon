@@ -1,4 +1,4 @@
-// Mirrors committed contracts/protocol.ts v1, including provider discovery additions.
+// Mirrors committed contracts/protocol.ts v1: owner-only live resources and device pairing.
 // Required nullable fields require a wire key and encode null; optional nullable fields use
 // nested Optional: nil omits, .some(nil) clears, .some(.some(value)) assigns.
 // FileChunk.size is total source-file bytes; decoded dataBase64 length is the chunk length.
@@ -570,10 +570,10 @@ public struct AuthSession: Codable, Hashable, Identifiable {
     public var `updatedAtMs`: TimestampMs
     public var `userId`: ID
     public var `deviceId`: ID?
-    public var `expiresAtMs`: TimestampMs
+    public var `expiresAtMs`: TimestampMs?
     public var `lastSeenAtMs`: TimestampMs
     public var `current`: Bool
-    public init(id: ID, revision: Int, createdAtMs: TimestampMs, updatedAtMs: TimestampMs, userId: ID, deviceId: ID? = nil, expiresAtMs: TimestampMs, lastSeenAtMs: TimestampMs, current: Bool) {
+    public init(id: ID, revision: Int, createdAtMs: TimestampMs, updatedAtMs: TimestampMs, userId: ID, deviceId: ID? = nil, expiresAtMs: TimestampMs?, lastSeenAtMs: TimestampMs, current: Bool) {
         self.`id` = id
         self.`revision` = revision
         self.`createdAtMs` = createdAtMs
@@ -593,7 +593,7 @@ public struct AuthSession: Codable, Hashable, Identifiable {
         self.`updatedAtMs` = try c.decode(TimestampMs.self, forKey: .`updatedAtMs`)
         self.`userId` = try c.decode(ID.self, forKey: .`userId`)
         self.`deviceId` = try c.decode(ID?.self, forKey: .`deviceId`)
-        self.`expiresAtMs` = try c.decode(TimestampMs.self, forKey: .`expiresAtMs`)
+        self.`expiresAtMs` = try c.decode(TimestampMs?.self, forKey: .`expiresAtMs`)
         self.`lastSeenAtMs` = try c.decode(TimestampMs.self, forKey: .`lastSeenAtMs`)
         self.`current` = try c.decode(Bool.self, forKey: .`current`)
     }
@@ -608,6 +608,372 @@ public struct AuthSession: Codable, Hashable, Identifiable {
         try c.encode(`expiresAtMs`, forKey: .`expiresAtMs`)
         try c.encode(`lastSeenAtMs`, forKey: .`lastSeenAtMs`)
         try c.encode(`current`, forKey: .`current`)
+    }
+}
+
+public typealias PairingStatus = String
+
+/// Safe owner-visible pairing state; QR and claim secrets are never resource fields.
+public struct Pairing: Codable, Hashable, Identifiable {
+    public var id: ID
+    public var revision: Int
+    public var createdAtMs: TimestampMs
+    public var updatedAtMs: TimestampMs
+    public var workspaceId: ID
+    public var ownerUserId: ID
+    public var clusterName: String
+    public var backendUrl: String
+    public var status: PairingStatus
+    public var expiresAtMs: TimestampMs
+    public var deviceName: String?
+    public var verificationCode: String?
+    public init(id: ID, revision: Int, createdAtMs: TimestampMs, updatedAtMs: TimestampMs, workspaceId: ID, ownerUserId: ID, clusterName: String, backendUrl: String, status: PairingStatus, expiresAtMs: TimestampMs, deviceName: String? = nil, verificationCode: String? = nil) {
+        self.id = id
+        self.revision = revision
+        self.createdAtMs = createdAtMs
+        self.updatedAtMs = updatedAtMs
+        self.workspaceId = workspaceId
+        self.ownerUserId = ownerUserId
+        self.clusterName = clusterName
+        self.backendUrl = backendUrl
+        self.status = status
+        self.expiresAtMs = expiresAtMs
+        self.deviceName = deviceName
+        self.verificationCode = verificationCode
+    }
+    enum CodingKeys: String, CodingKey { case id, revision, createdAtMs, updatedAtMs, workspaceId, ownerUserId, clusterName, backendUrl, status, expiresAtMs, deviceName, verificationCode }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(ID.self, forKey: .id)
+        revision = try c.decode(Int.self, forKey: .revision)
+        createdAtMs = try c.decode(TimestampMs.self, forKey: .createdAtMs)
+        updatedAtMs = try c.decode(TimestampMs.self, forKey: .updatedAtMs)
+        workspaceId = try c.decode(ID.self, forKey: .workspaceId)
+        ownerUserId = try c.decode(ID.self, forKey: .ownerUserId)
+        clusterName = try c.decode(String.self, forKey: .clusterName)
+        backendUrl = try c.decode(String.self, forKey: .backendUrl)
+        status = try c.decode(PairingStatus.self, forKey: .status)
+        guard ["waiting", "pending_approval", "approved", "denied", "expired", "consumed"].contains(status) else { throw DecodingError.dataCorruptedError(forKey: .status, in: c, debugDescription: "Invalid Pairing.status") }
+        expiresAtMs = try c.decode(TimestampMs.self, forKey: .expiresAtMs)
+        deviceName = try c.decode(String?.self, forKey: .deviceName)
+        verificationCode = try c.decode(String?.self, forKey: .verificationCode)
+    }
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        guard ["waiting", "pending_approval", "approved", "denied", "expired", "consumed"].contains(status) else { throw EncodingError.invalidValue(status, .init(codingPath: c.codingPath + [CodingKeys.status], debugDescription: "Invalid Pairing.status")) }
+        try c.encode(id, forKey: .id)
+        try c.encode(revision, forKey: .revision)
+        try c.encode(createdAtMs, forKey: .createdAtMs)
+        try c.encode(updatedAtMs, forKey: .updatedAtMs)
+        try c.encode(workspaceId, forKey: .workspaceId)
+        try c.encode(ownerUserId, forKey: .ownerUserId)
+        try c.encode(clusterName, forKey: .clusterName)
+        try c.encode(backendUrl, forKey: .backendUrl)
+        try c.encode(status, forKey: .status)
+        try c.encode(expiresAtMs, forKey: .expiresAtMs)
+        try c.encode(deviceName, forKey: .deviceName)
+        try c.encode(verificationCode, forKey: .verificationCode)
+    }
+}
+
+public struct PairingStart: Codable, Hashable {
+    public var clientNonce: String
+    public init(clientNonce: String) { self.clientNonce = clientNonce }
+    enum CodingKeys: String, CodingKey { case clientNonce }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        clientNonce = try c.decode(String.self, forKey: .clientNonce)
+    }
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(clientNonce, forKey: .clientNonce)
+    }
+}
+
+/// The short-lived QR secret is returned only to the issuing owner.
+public struct PairingIssued: Codable, Hashable {
+    public var pairing: Pairing
+    public var pairUrl: String
+    public init(pairing: Pairing, pairUrl: String) { self.pairing = pairing; self.pairUrl = pairUrl }
+    enum CodingKeys: String, CodingKey { case pairing, pairUrl }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        pairing = try c.decode(Pairing.self, forKey: .pairing)
+        pairUrl = try c.decode(String.self, forKey: .pairUrl)
+    }
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(pairing, forKey: .pairing)
+        try c.encode(pairUrl, forKey: .pairUrl)
+    }
+}
+
+public struct PairingLink: Codable, Hashable {
+    public var backendUrl: String
+    public var workspaceId: ID
+    public var pairCode: String
+    public init(backendUrl: String, workspaceId: ID, pairCode: String) {
+        self.backendUrl = backendUrl
+        self.workspaceId = workspaceId
+        self.pairCode = pairCode
+    }
+    enum CodingKeys: String, CodingKey { case backendUrl, workspaceId, pairCode }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        backendUrl = try c.decode(String.self, forKey: .backendUrl)
+        workspaceId = try c.decode(ID.self, forKey: .workspaceId)
+        pairCode = try c.decode(String.self, forKey: .pairCode)
+    }
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(backendUrl, forKey: .backendUrl)
+        try c.encode(workspaceId, forKey: .workspaceId)
+        try c.encode(pairCode, forKey: .pairCode)
+    }
+}
+
+/// Read-only secret-bound preview, not a nonce-bearing mutation or claim.
+public struct PairingPreviewRequest: Codable, Hashable {
+    public var pairCode: String
+    public var workspaceId: ID
+    public init(pairCode: String, workspaceId: ID) { self.pairCode = pairCode; self.workspaceId = workspaceId }
+    enum CodingKeys: String, CodingKey { case pairCode, workspaceId }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        pairCode = try c.decode(String.self, forKey: .pairCode)
+        workspaceId = try c.decode(ID.self, forKey: .workspaceId)
+    }
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(pairCode, forKey: .pairCode)
+        try c.encode(workspaceId, forKey: .workspaceId)
+    }
+}
+
+public struct PairingPreviewResult: Codable, Hashable {
+    public var clusterName: String
+    public var backendUrl: String
+    public var expiresAtMs: TimestampMs
+    public init(clusterName: String, backendUrl: String, expiresAtMs: TimestampMs) {
+        self.clusterName = clusterName
+        self.backendUrl = backendUrl
+        self.expiresAtMs = expiresAtMs
+    }
+    enum CodingKeys: String, CodingKey { case clusterName, backendUrl, expiresAtMs }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        clusterName = try c.decode(String.self, forKey: .clusterName)
+        backendUrl = try c.decode(String.self, forKey: .backendUrl)
+        expiresAtMs = try c.decode(TimestampMs.self, forKey: .expiresAtMs)
+    }
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(clusterName, forKey: .clusterName)
+        try c.encode(backendUrl, forKey: .backendUrl)
+        try c.encode(expiresAtMs, forKey: .expiresAtMs)
+    }
+}
+
+public struct PairingClaim: Codable, Hashable {
+    public var clientNonce: String
+    public var pairCode: String
+    public var workspaceId: ID
+    public var installationId: String
+    public var deviceName: String
+    public var appVersion: String
+    public init(clientNonce: String, pairCode: String, workspaceId: ID, installationId: String, deviceName: String, appVersion: String) {
+        self.clientNonce = clientNonce
+        self.pairCode = pairCode
+        self.workspaceId = workspaceId
+        self.installationId = installationId
+        self.deviceName = deviceName
+        self.appVersion = appVersion
+    }
+    enum CodingKeys: String, CodingKey { case clientNonce, pairCode, workspaceId, installationId, deviceName, appVersion }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        clientNonce = try c.decode(String.self, forKey: .clientNonce)
+        pairCode = try c.decode(String.self, forKey: .pairCode)
+        workspaceId = try c.decode(ID.self, forKey: .workspaceId)
+        installationId = try c.decode(String.self, forKey: .installationId)
+        deviceName = try c.decode(String.self, forKey: .deviceName)
+        appVersion = try c.decode(String.self, forKey: .appVersion)
+    }
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(clientNonce, forKey: .clientNonce)
+        try c.encode(pairCode, forKey: .pairCode)
+        try c.encode(workspaceId, forKey: .workspaceId)
+        try c.encode(installationId, forKey: .installationId)
+        try c.encode(deviceName, forKey: .deviceName)
+        try c.encode(appVersion, forKey: .appVersion)
+    }
+}
+
+public struct PairingClaimResult: Codable, Hashable {
+    public var pairingId: ID
+    public var claimToken: String
+    public var verificationCode: String
+    public var expiresAtMs: TimestampMs
+    public var clusterName: String
+    public var backendUrl: String
+    public init(pairingId: ID, claimToken: String, verificationCode: String, expiresAtMs: TimestampMs, clusterName: String, backendUrl: String) {
+        self.pairingId = pairingId
+        self.claimToken = claimToken
+        self.verificationCode = verificationCode
+        self.expiresAtMs = expiresAtMs
+        self.clusterName = clusterName
+        self.backendUrl = backendUrl
+    }
+    enum CodingKeys: String, CodingKey { case pairingId, claimToken, verificationCode, expiresAtMs, clusterName, backendUrl }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        pairingId = try c.decode(ID.self, forKey: .pairingId)
+        claimToken = try c.decode(String.self, forKey: .claimToken)
+        verificationCode = try c.decode(String.self, forKey: .verificationCode)
+        expiresAtMs = try c.decode(TimestampMs.self, forKey: .expiresAtMs)
+        clusterName = try c.decode(String.self, forKey: .clusterName)
+        backendUrl = try c.decode(String.self, forKey: .backendUrl)
+    }
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(pairingId, forKey: .pairingId)
+        try c.encode(claimToken, forKey: .claimToken)
+        try c.encode(verificationCode, forKey: .verificationCode)
+        try c.encode(expiresAtMs, forKey: .expiresAtMs)
+        try c.encode(clusterName, forKey: .clusterName)
+        try c.encode(backendUrl, forKey: .backendUrl)
+    }
+}
+
+public struct PairingApprove: Codable, Hashable {
+    public var clientNonce: String
+    public var revision: Int
+    public var verificationCode: String
+    public init(clientNonce: String, revision: Int, verificationCode: String) {
+        self.clientNonce = clientNonce
+        self.revision = revision
+        self.verificationCode = verificationCode
+    }
+    enum CodingKeys: String, CodingKey { case clientNonce, revision, verificationCode }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        clientNonce = try c.decode(String.self, forKey: .clientNonce)
+        revision = try c.decode(Int.self, forKey: .revision)
+        verificationCode = try c.decode(String.self, forKey: .verificationCode)
+    }
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(clientNonce, forKey: .clientNonce)
+        try c.encode(revision, forKey: .revision)
+        try c.encode(verificationCode, forKey: .verificationCode)
+    }
+}
+
+public struct PairingDeny: Codable, Hashable {
+    public var clientNonce: String
+    public var revision: Int
+    public init(clientNonce: String, revision: Int) { self.clientNonce = clientNonce; self.revision = revision }
+    enum CodingKeys: String, CodingKey { case clientNonce, revision }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        clientNonce = try c.decode(String.self, forKey: .clientNonce)
+        revision = try c.decode(Int.self, forKey: .revision)
+    }
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(clientNonce, forKey: .clientNonce)
+        try c.encode(revision, forKey: .revision)
+    }
+}
+
+public struct PairingComplete: Codable, Hashable {
+    public var clientNonce: String
+    public var claimToken: String
+    public init(clientNonce: String, claimToken: String) { self.clientNonce = clientNonce; self.claimToken = claimToken }
+    enum CodingKeys: String, CodingKey { case clientNonce, claimToken }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        clientNonce = try c.decode(String.self, forKey: .clientNonce)
+        claimToken = try c.decode(String.self, forKey: .claimToken)
+    }
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(clientNonce, forKey: .clientNonce)
+        try c.encode(claimToken, forKey: .claimToken)
+    }
+}
+
+public struct PairingCompletionPending: Codable, Hashable {
+    public var status: String
+    public var pairingId: ID
+    public var expiresAtMs: TimestampMs
+    public init(status: String, pairingId: ID, expiresAtMs: TimestampMs) {
+        self.status = status
+        self.pairingId = pairingId
+        self.expiresAtMs = expiresAtMs
+    }
+    enum CodingKeys: String, CodingKey { case status, pairingId, expiresAtMs }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        status = try c.decode(String.self, forKey: .status)
+        guard ["pending", "denied", "expired"].contains(status) else { throw DecodingError.dataCorruptedError(forKey: .status, in: c, debugDescription: "Invalid PairingCompletionPending.status") }
+        pairingId = try c.decode(ID.self, forKey: .pairingId)
+        expiresAtMs = try c.decode(TimestampMs.self, forKey: .expiresAtMs)
+    }
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        guard ["pending", "denied", "expired"].contains(status) else { throw EncodingError.invalidValue(status, .init(codingPath: c.codingPath + [CodingKeys.status], debugDescription: "Invalid PairingCompletionPending.status")) }
+        try c.encode(status, forKey: .status)
+        try c.encode(pairingId, forKey: .pairingId)
+        try c.encode(expiresAtMs, forKey: .expiresAtMs)
+    }
+}
+
+public struct PairingCompletionConnected: Codable, Hashable {
+    public var status: String { "connected" }
+    public var auth: AuthResult
+    public var device: Device
+    public init(auth: AuthResult, device: Device) { self.auth = auth; self.device = device }
+    enum CodingKeys: String, CodingKey { case status, auth, device }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        guard try c.decode(String.self, forKey: .status) == "connected" else { throw DecodingError.dataCorruptedError(forKey: .status, in: c, debugDescription: "Invalid PairingCompletionConnected.status") }
+        auth = try c.decode(AuthResult.self, forKey: .auth)
+        device = try c.decode(Device.self, forKey: .device)
+    }
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(status, forKey: .status)
+        try c.encode(auth, forKey: .auth)
+        try c.encode(device, forKey: .device)
+    }
+}
+
+public enum PairingCompletion: Codable, Hashable {
+    case pending(PairingCompletionPending)
+    case connected(PairingCompletionConnected)
+    private enum CodingKeys: String, CodingKey { case status }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let status = try c.decode(String.self, forKey: .status)
+        switch status {
+        case "pending", "denied", "expired": self = .pending(try PairingCompletionPending(from: decoder))
+        case "connected": self = .connected(try PairingCompletionConnected(from: decoder))
+        default: throw DecodingError.dataCorruptedError(forKey: .status, in: c, debugDescription: "Unsupported PairingCompletion discriminator: \(status)")
+        }
+    }
+    public func encode(to encoder: Encoder) throws {
+        switch self {
+        case .pending(let value): try value.encode(to: encoder)
+        case .connected(let value): try value.encode(to: encoder)
+        }
+    }
+    public var status: String {
+        switch self {
+        case .pending(let value): return value.status
+        case .connected(let value): return value.status
+        }
     }
 }
 
@@ -2069,7 +2435,6 @@ public struct Bot: Codable, Hashable, Identifiable {
     public var `createdAtMs`: TimestampMs
     public var `updatedAtMs`: TimestampMs
     public var `ownerUserId`: ID
-    public var `managerUserIds`: [ID]
     public var `machineId`: ID
     public var `profileId`: String
     public var `name`: String
@@ -2079,22 +2444,18 @@ public struct Bot: Codable, Hashable, Identifiable {
     public var `avatar`: Avatar
     public var `voice`: VoiceSettings
     public var `language`: String?
-    public var `visibility`: String
-    public var `published`: Bool
-    public var `required`: Bool
     public var `skillIds`: [ID]
     public var `referenceAttachmentIds`: [ID]
     public var `mainConversationId`: ID
     public var `sidebar`: SidebarState
     public var `activity`: String
     public var `activeRunIds`: [ID]
-    public init(id: ID, revision: Int, createdAtMs: TimestampMs, updatedAtMs: TimestampMs, ownerUserId: ID, managerUserIds: [ID], machineId: ID, profileId: String, name: String, title: String, job: String, instructions: String, avatar: Avatar, voice: VoiceSettings, language: String? = nil, visibility: String, published: Bool, required: Bool, skillIds: [ID], referenceAttachmentIds: [ID], mainConversationId: ID, sidebar: SidebarState, activity: String, activeRunIds: [ID]) {
+    public init(id: ID, revision: Int, createdAtMs: TimestampMs, updatedAtMs: TimestampMs, ownerUserId: ID, machineId: ID, profileId: String, name: String, title: String, job: String, instructions: String, avatar: Avatar, voice: VoiceSettings, language: String? = nil, skillIds: [ID], referenceAttachmentIds: [ID], mainConversationId: ID, sidebar: SidebarState, activity: String, activeRunIds: [ID]) {
         self.`id` = id
         self.`revision` = revision
         self.`createdAtMs` = createdAtMs
         self.`updatedAtMs` = updatedAtMs
         self.`ownerUserId` = ownerUserId
-        self.`managerUserIds` = managerUserIds
         self.`machineId` = machineId
         self.`profileId` = profileId
         self.`name` = name
@@ -2104,9 +2465,6 @@ public struct Bot: Codable, Hashable, Identifiable {
         self.`avatar` = avatar
         self.`voice` = voice
         self.`language` = language
-        self.`visibility` = visibility
-        self.`published` = published
-        self.`required` = required
         self.`skillIds` = skillIds
         self.`referenceAttachmentIds` = referenceAttachmentIds
         self.`mainConversationId` = mainConversationId
@@ -2114,7 +2472,7 @@ public struct Bot: Codable, Hashable, Identifiable {
         self.`activity` = activity
         self.`activeRunIds` = activeRunIds
     }
-    enum CodingKeys: String, CodingKey { case `id`, `revision`, `createdAtMs`, `updatedAtMs`, `ownerUserId`, `managerUserIds`, `machineId`, `profileId`, `name`, `title`, `job`, `instructions`, `avatar`, `voice`, `language`, `visibility`, `published`, `required`, `skillIds`, `referenceAttachmentIds`, `mainConversationId`, `sidebar`, `activity`, `activeRunIds` }
+    enum CodingKeys: String, CodingKey { case `id`, `revision`, `createdAtMs`, `updatedAtMs`, `ownerUserId`, `machineId`, `profileId`, `name`, `title`, `job`, `instructions`, `avatar`, `voice`, `language`, `skillIds`, `referenceAttachmentIds`, `mainConversationId`, `sidebar`, `activity`, `activeRunIds` }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.`id` = try c.decode(ID.self, forKey: .`id`)
@@ -2122,7 +2480,6 @@ public struct Bot: Codable, Hashable, Identifiable {
         self.`createdAtMs` = try c.decode(TimestampMs.self, forKey: .`createdAtMs`)
         self.`updatedAtMs` = try c.decode(TimestampMs.self, forKey: .`updatedAtMs`)
         self.`ownerUserId` = try c.decode(ID.self, forKey: .`ownerUserId`)
-        self.`managerUserIds` = try c.decode([ID].self, forKey: .`managerUserIds`)
         self.`machineId` = try c.decode(ID.self, forKey: .`machineId`)
         self.`profileId` = try c.decode(String.self, forKey: .`profileId`)
         self.`name` = try c.decode(String.self, forKey: .`name`)
@@ -2132,10 +2489,6 @@ public struct Bot: Codable, Hashable, Identifiable {
         self.`avatar` = try c.decode(Avatar.self, forKey: .`avatar`)
         self.`voice` = try c.decode(VoiceSettings.self, forKey: .`voice`)
         self.`language` = try c.decode(String?.self, forKey: .`language`)
-        self.`visibility` = try c.decode(String.self, forKey: .`visibility`)
-        guard ["personal", "team"].contains(`visibility`) else { throw DecodingError.dataCorruptedError(forKey: .`visibility`, in: c, debugDescription: "Invalid Bot.visibility") }
-        self.`published` = try c.decode(Bool.self, forKey: .`published`)
-        self.`required` = try c.decode(Bool.self, forKey: .`required`)
         self.`skillIds` = try c.decode([ID].self, forKey: .`skillIds`)
         self.`referenceAttachmentIds` = try c.decode([ID].self, forKey: .`referenceAttachmentIds`)
         self.`mainConversationId` = try c.decode(ID.self, forKey: .`mainConversationId`)
@@ -2150,7 +2503,6 @@ public struct Bot: Codable, Hashable, Identifiable {
         try c.encode(`createdAtMs`, forKey: .`createdAtMs`)
         try c.encode(`updatedAtMs`, forKey: .`updatedAtMs`)
         try c.encode(`ownerUserId`, forKey: .`ownerUserId`)
-        try c.encode(`managerUserIds`, forKey: .`managerUserIds`)
         try c.encode(`machineId`, forKey: .`machineId`)
         try c.encode(`profileId`, forKey: .`profileId`)
         try c.encode(`name`, forKey: .`name`)
@@ -2160,9 +2512,6 @@ public struct Bot: Codable, Hashable, Identifiable {
         try c.encode(`avatar`, forKey: .`avatar`)
         try c.encode(`voice`, forKey: .`voice`)
         try c.encode(`language`, forKey: .`language`)
-        try c.encode(`visibility`, forKey: .`visibility`)
-        try c.encode(`published`, forKey: .`published`)
-        try c.encode(`required`, forKey: .`required`)
         try c.encode(`skillIds`, forKey: .`skillIds`)
         try c.encode(`referenceAttachmentIds`, forKey: .`referenceAttachmentIds`)
         try c.encode(`mainConversationId`, forKey: .`mainConversationId`)
@@ -2182,10 +2531,9 @@ public struct BotCreate: Codable, Hashable {
     public var `avatar`: Avatar?
     public var `voice`: VoiceSettings?
     public var `language`: String??
-    public var `visibility`: String?
     public var `skillIds`: [ID]?
     public var `templateId`: ID?
-    public init(clientNonce: String, name: String, machineId: ID, title: String? = nil, job: String? = nil, instructions: String? = nil, avatar: Avatar? = nil, voice: VoiceSettings? = nil, language: String?? = nil, visibility: String? = nil, skillIds: [ID]? = nil, templateId: ID? = nil) {
+    public init(clientNonce: String, name: String, machineId: ID, title: String? = nil, job: String? = nil, instructions: String? = nil, avatar: Avatar? = nil, voice: VoiceSettings? = nil, language: String?? = nil, skillIds: [ID]? = nil, templateId: ID? = nil) {
         self.`clientNonce` = clientNonce
         self.`name` = name
         self.`machineId` = machineId
@@ -2195,11 +2543,10 @@ public struct BotCreate: Codable, Hashable {
         self.`avatar` = avatar
         self.`voice` = voice
         self.`language` = language
-        self.`visibility` = visibility
         self.`skillIds` = skillIds
         self.`templateId` = templateId
     }
-    enum CodingKeys: String, CodingKey { case `clientNonce`, `name`, `machineId`, `title`, `job`, `instructions`, `avatar`, `voice`, `language`, `visibility`, `skillIds`, `templateId` }
+    enum CodingKeys: String, CodingKey { case `clientNonce`, `name`, `machineId`, `title`, `job`, `instructions`, `avatar`, `voice`, `language`, `skillIds`, `templateId` }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.`clientNonce` = try c.decode(String.self, forKey: .`clientNonce`)
@@ -2211,7 +2558,6 @@ public struct BotCreate: Codable, Hashable {
         self.`avatar` = try c.decodeOptional(Avatar.self, forKey: .`avatar`)
         self.`voice` = try c.decodeOptional(VoiceSettings.self, forKey: .`voice`)
         self.`language` = c.contains(.`language`) ? .some(try c.decodeIfPresent(String.self, forKey: .`language`)) : nil
-        self.`visibility` = try c.decodeOptional(String.self, forKey: .`visibility`)
         self.`skillIds` = try c.decodeOptional([ID].self, forKey: .`skillIds`)
         self.`templateId` = try c.decodeOptional(ID.self, forKey: .`templateId`)
     }
@@ -2226,7 +2572,6 @@ public struct BotCreate: Codable, Hashable {
         try c.encodeIfPresent(`avatar`, forKey: .`avatar`)
         try c.encodeIfPresent(`voice`, forKey: .`voice`)
         if let value = `language` { try c.encode(value, forKey: .`language`) }
-        try c.encodeIfPresent(`visibility`, forKey: .`visibility`)
         try c.encodeIfPresent(`skillIds`, forKey: .`skillIds`)
         try c.encodeIfPresent(`templateId`, forKey: .`templateId`)
     }
@@ -2242,12 +2587,9 @@ public struct BotUpdate: Codable, Hashable {
     public var `avatar`: Avatar?
     public var `voice`: VoiceSettings?
     public var `language`: String??
-    public var `managerUserIds`: [ID]?
-    public var `published`: Bool?
-    public var `required`: Bool?
     public var `skillIds`: [ID]?
     public var `referenceAttachmentIds`: [ID]?
-    public init(clientNonce: String, revision: Int, name: String? = nil, title: String? = nil, job: String? = nil, instructions: String? = nil, avatar: Avatar? = nil, voice: VoiceSettings? = nil, language: String?? = nil, managerUserIds: [ID]? = nil, published: Bool? = nil, required: Bool? = nil, skillIds: [ID]? = nil, referenceAttachmentIds: [ID]? = nil) {
+    public init(clientNonce: String, revision: Int, name: String? = nil, title: String? = nil, job: String? = nil, instructions: String? = nil, avatar: Avatar? = nil, voice: VoiceSettings? = nil, language: String?? = nil, skillIds: [ID]? = nil, referenceAttachmentIds: [ID]? = nil) {
         self.`clientNonce` = clientNonce
         self.`revision` = revision
         self.`name` = name
@@ -2257,13 +2599,10 @@ public struct BotUpdate: Codable, Hashable {
         self.`avatar` = avatar
         self.`voice` = voice
         self.`language` = language
-        self.`managerUserIds` = managerUserIds
-        self.`published` = published
-        self.`required` = required
         self.`skillIds` = skillIds
         self.`referenceAttachmentIds` = referenceAttachmentIds
     }
-    enum CodingKeys: String, CodingKey { case `clientNonce`, `revision`, `name`, `title`, `job`, `instructions`, `avatar`, `voice`, `language`, `managerUserIds`, `published`, `required`, `skillIds`, `referenceAttachmentIds` }
+    enum CodingKeys: String, CodingKey { case `clientNonce`, `revision`, `name`, `title`, `job`, `instructions`, `avatar`, `voice`, `language`, `skillIds`, `referenceAttachmentIds` }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.`clientNonce` = try c.decode(String.self, forKey: .`clientNonce`)
@@ -2275,9 +2614,6 @@ public struct BotUpdate: Codable, Hashable {
         self.`avatar` = try c.decodeOptional(Avatar.self, forKey: .`avatar`)
         self.`voice` = try c.decodeOptional(VoiceSettings.self, forKey: .`voice`)
         self.`language` = c.contains(.`language`) ? .some(try c.decodeIfPresent(String.self, forKey: .`language`)) : nil
-        self.`managerUserIds` = try c.decodeOptional([ID].self, forKey: .`managerUserIds`)
-        self.`published` = try c.decodeOptional(Bool.self, forKey: .`published`)
-        self.`required` = try c.decodeOptional(Bool.self, forKey: .`required`)
         self.`skillIds` = try c.decodeOptional([ID].self, forKey: .`skillIds`)
         self.`referenceAttachmentIds` = try c.decodeOptional([ID].self, forKey: .`referenceAttachmentIds`)
     }
@@ -2292,9 +2628,6 @@ public struct BotUpdate: Codable, Hashable {
         try c.encodeIfPresent(`avatar`, forKey: .`avatar`)
         try c.encodeIfPresent(`voice`, forKey: .`voice`)
         if let value = `language` { try c.encode(value, forKey: .`language`) }
-        try c.encodeIfPresent(`managerUserIds`, forKey: .`managerUserIds`)
-        try c.encodeIfPresent(`published`, forKey: .`published`)
-        try c.encodeIfPresent(`required`, forKey: .`required`)
         try c.encodeIfPresent(`skillIds`, forKey: .`skillIds`)
         try c.encodeIfPresent(`referenceAttachmentIds`, forKey: .`referenceAttachmentIds`)
     }
@@ -2364,49 +2697,6 @@ public struct BotMove: Codable, Hashable {
     }
 }
 
-public struct BotTeamCopy: Codable, Hashable {
-    public var `clientNonce`: String
-    public var `name`: String
-    public var `machineId`: ID
-    public var `memoryIds`: [ID]
-    public var `skillIds`: [ID]
-    public var `referenceAttachmentIds`: [ID]
-    public var `routineIds`: [ID]
-    public var `connectorIds`: [ID]
-    public init(clientNonce: String, name: String, machineId: ID, memoryIds: [ID], skillIds: [ID], referenceAttachmentIds: [ID], routineIds: [ID], connectorIds: [ID]) {
-        self.`clientNonce` = clientNonce
-        self.`name` = name
-        self.`machineId` = machineId
-        self.`memoryIds` = memoryIds
-        self.`skillIds` = skillIds
-        self.`referenceAttachmentIds` = referenceAttachmentIds
-        self.`routineIds` = routineIds
-        self.`connectorIds` = connectorIds
-    }
-    enum CodingKeys: String, CodingKey { case `clientNonce`, `name`, `machineId`, `memoryIds`, `skillIds`, `referenceAttachmentIds`, `routineIds`, `connectorIds` }
-    public init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        self.`clientNonce` = try c.decode(String.self, forKey: .`clientNonce`)
-        self.`name` = try c.decode(String.self, forKey: .`name`)
-        self.`machineId` = try c.decode(ID.self, forKey: .`machineId`)
-        self.`memoryIds` = try c.decode([ID].self, forKey: .`memoryIds`)
-        self.`skillIds` = try c.decode([ID].self, forKey: .`skillIds`)
-        self.`referenceAttachmentIds` = try c.decode([ID].self, forKey: .`referenceAttachmentIds`)
-        self.`routineIds` = try c.decode([ID].self, forKey: .`routineIds`)
-        self.`connectorIds` = try c.decode([ID].self, forKey: .`connectorIds`)
-    }
-    public func encode(to encoder: Encoder) throws {
-        var c = encoder.container(keyedBy: CodingKeys.self)
-        try c.encode(`clientNonce`, forKey: .`clientNonce`)
-        try c.encode(`name`, forKey: .`name`)
-        try c.encode(`machineId`, forKey: .`machineId`)
-        try c.encode(`memoryIds`, forKey: .`memoryIds`)
-        try c.encode(`skillIds`, forKey: .`skillIds`)
-        try c.encode(`referenceAttachmentIds`, forKey: .`referenceAttachmentIds`)
-        try c.encode(`routineIds`, forKey: .`routineIds`)
-        try c.encode(`connectorIds`, forKey: .`connectorIds`)
-    }
-}
 
 public struct SidebarUpdate: Codable, Hashable {
     public var `clientNonce`: String
@@ -2771,7 +3061,6 @@ public struct Conversation: Codable, Hashable, Identifiable {
     public var `kind`: ConversationKind
     public var `name`: String
     public var `botIds`: [ID]
-    public var `humanUserIds`: [ID]
     public var `ownerUserId`: ID
     public var `parentConversationId`: ID?
     public var `leadBotId`: ID?
@@ -2780,7 +3069,7 @@ public struct Conversation: Codable, Hashable, Identifiable {
     public var `unreadCount`: Int
     public var `lastReadSeq`: Int
     public var `activity`: [ConversationActivity]
-    public init(id: ID, revision: Int, createdAtMs: TimestampMs, updatedAtMs: TimestampMs, kind: ConversationKind, name: String, botIds: [ID], humanUserIds: [ID], ownerUserId: ID, parentConversationId: ID? = nil, leadBotId: ID? = nil, channelBindingId: ID? = nil, lastEntryId: ID? = nil, unreadCount: Int, lastReadSeq: Int, activity: [ConversationActivity]) {
+    public init(id: ID, revision: Int, createdAtMs: TimestampMs, updatedAtMs: TimestampMs, kind: ConversationKind, name: String, botIds: [ID], ownerUserId: ID, parentConversationId: ID? = nil, leadBotId: ID? = nil, channelBindingId: ID? = nil, lastEntryId: ID? = nil, unreadCount: Int, lastReadSeq: Int, activity: [ConversationActivity]) {
         self.`id` = id
         self.`revision` = revision
         self.`createdAtMs` = createdAtMs
@@ -2788,7 +3077,6 @@ public struct Conversation: Codable, Hashable, Identifiable {
         self.`kind` = kind
         self.`name` = name
         self.`botIds` = botIds
-        self.`humanUserIds` = humanUserIds
         self.`ownerUserId` = ownerUserId
         self.`parentConversationId` = parentConversationId
         self.`leadBotId` = leadBotId
@@ -2798,7 +3086,7 @@ public struct Conversation: Codable, Hashable, Identifiable {
         self.`lastReadSeq` = lastReadSeq
         self.`activity` = activity
     }
-    enum CodingKeys: String, CodingKey { case `id`, `revision`, `createdAtMs`, `updatedAtMs`, `kind`, `name`, `botIds`, `humanUserIds`, `ownerUserId`, `parentConversationId`, `leadBotId`, `channelBindingId`, `lastEntryId`, `unreadCount`, `lastReadSeq`, `activity` }
+    enum CodingKeys: String, CodingKey { case `id`, `revision`, `createdAtMs`, `updatedAtMs`, `kind`, `name`, `botIds`, `ownerUserId`, `parentConversationId`, `leadBotId`, `channelBindingId`, `lastEntryId`, `unreadCount`, `lastReadSeq`, `activity` }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.`id` = try c.decode(ID.self, forKey: .`id`)
@@ -2806,9 +3094,9 @@ public struct Conversation: Codable, Hashable, Identifiable {
         self.`createdAtMs` = try c.decode(TimestampMs.self, forKey: .`createdAtMs`)
         self.`updatedAtMs` = try c.decode(TimestampMs.self, forKey: .`updatedAtMs`)
         self.`kind` = try c.decode(ConversationKind.self, forKey: .`kind`)
+        guard ["dm", "task", "group", "channel"].contains(`kind`) else { throw DecodingError.dataCorruptedError(forKey: .`kind`, in: c, debugDescription: "Invalid Conversation.kind") }
         self.`name` = try c.decode(String.self, forKey: .`name`)
         self.`botIds` = try c.decode([ID].self, forKey: .`botIds`)
-        self.`humanUserIds` = try c.decode([ID].self, forKey: .`humanUserIds`)
         self.`ownerUserId` = try c.decode(ID.self, forKey: .`ownerUserId`)
         self.`parentConversationId` = try c.decode(ID?.self, forKey: .`parentConversationId`)
         self.`leadBotId` = try c.decode(ID?.self, forKey: .`leadBotId`)
@@ -2820,6 +3108,7 @@ public struct Conversation: Codable, Hashable, Identifiable {
     }
     public func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
+        guard ["dm", "task", "group", "channel"].contains(`kind`) else { throw EncodingError.invalidValue(`kind`, .init(codingPath: c.codingPath + [CodingKeys.kind], debugDescription: "Invalid Conversation.kind")) }
         try c.encode(`id`, forKey: .`id`)
         try c.encode(`revision`, forKey: .`revision`)
         try c.encode(`createdAtMs`, forKey: .`createdAtMs`)
@@ -2827,7 +3116,6 @@ public struct Conversation: Codable, Hashable, Identifiable {
         try c.encode(`kind`, forKey: .`kind`)
         try c.encode(`name`, forKey: .`name`)
         try c.encode(`botIds`, forKey: .`botIds`)
-        try c.encode(`humanUserIds`, forKey: .`humanUserIds`)
         try c.encode(`ownerUserId`, forKey: .`ownerUserId`)
         try c.encode(`parentConversationId`, forKey: .`parentConversationId`)
         try c.encode(`leadBotId`, forKey: .`leadBotId`)
@@ -2844,36 +3132,34 @@ public struct ConversationCreate: Codable, Hashable {
     public var `kind`: ConversationKind
     public var `name`: String?
     public var `botIds`: [ID]
-    public var `humanUserIds`: [ID]?
     public var `parentConversationId`: ID?
     public var `leadBotId`: ID?
-    public init(clientNonce: String, kind: ConversationKind, name: String? = nil, botIds: [ID], humanUserIds: [ID]? = nil, parentConversationId: ID? = nil, leadBotId: ID? = nil) {
+    public init(clientNonce: String, kind: ConversationKind, name: String? = nil, botIds: [ID], parentConversationId: ID? = nil, leadBotId: ID? = nil) {
         self.`clientNonce` = clientNonce
         self.`kind` = kind
         self.`name` = name
         self.`botIds` = botIds
-        self.`humanUserIds` = humanUserIds
         self.`parentConversationId` = parentConversationId
         self.`leadBotId` = leadBotId
     }
-    enum CodingKeys: String, CodingKey { case `clientNonce`, `kind`, `name`, `botIds`, `humanUserIds`, `parentConversationId`, `leadBotId` }
+    enum CodingKeys: String, CodingKey { case `clientNonce`, `kind`, `name`, `botIds`, `parentConversationId`, `leadBotId` }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.`clientNonce` = try c.decode(String.self, forKey: .`clientNonce`)
         self.`kind` = try c.decode(ConversationKind.self, forKey: .`kind`)
+        guard ["dm", "task", "group", "channel"].contains(`kind`) else { throw DecodingError.dataCorruptedError(forKey: .`kind`, in: c, debugDescription: "Invalid ConversationCreate.kind") }
         self.`name` = try c.decodeOptional(String.self, forKey: .`name`)
         self.`botIds` = try c.decode([ID].self, forKey: .`botIds`)
-        self.`humanUserIds` = try c.decodeOptional([ID].self, forKey: .`humanUserIds`)
         self.`parentConversationId` = try c.decodeOptional(ID.self, forKey: .`parentConversationId`)
         self.`leadBotId` = try c.decodeOptional(ID.self, forKey: .`leadBotId`)
     }
     public func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
+        guard ["dm", "task", "group", "channel"].contains(`kind`) else { throw EncodingError.invalidValue(`kind`, .init(codingPath: c.codingPath + [CodingKeys.kind], debugDescription: "Invalid ConversationCreate.kind")) }
         try c.encode(`clientNonce`, forKey: .`clientNonce`)
         try c.encode(`kind`, forKey: .`kind`)
         try c.encodeIfPresent(`name`, forKey: .`name`)
         try c.encode(`botIds`, forKey: .`botIds`)
-        try c.encodeIfPresent(`humanUserIds`, forKey: .`humanUserIds`)
         try c.encodeIfPresent(`parentConversationId`, forKey: .`parentConversationId`)
         try c.encodeIfPresent(`leadBotId`, forKey: .`leadBotId`)
     }
@@ -2884,24 +3170,21 @@ public struct ConversationUpdate: Codable, Hashable {
     public var `revision`: Int
     public var `name`: String?
     public var `botIds`: [ID]?
-    public var `humanUserIds`: [ID]?
     public var `leadBotId`: ID??
-    public init(clientNonce: String, revision: Int, name: String? = nil, botIds: [ID]? = nil, humanUserIds: [ID]? = nil, leadBotId: ID?? = nil) {
+    public init(clientNonce: String, revision: Int, name: String? = nil, botIds: [ID]? = nil, leadBotId: ID?? = nil) {
         self.`clientNonce` = clientNonce
         self.`revision` = revision
         self.`name` = name
         self.`botIds` = botIds
-        self.`humanUserIds` = humanUserIds
         self.`leadBotId` = leadBotId
     }
-    enum CodingKeys: String, CodingKey { case `clientNonce`, `revision`, `name`, `botIds`, `humanUserIds`, `leadBotId` }
+    enum CodingKeys: String, CodingKey { case `clientNonce`, `revision`, `name`, `botIds`, `leadBotId` }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.`clientNonce` = try c.decode(String.self, forKey: .`clientNonce`)
         self.`revision` = try c.decode(Int.self, forKey: .`revision`)
         self.`name` = try c.decodeOptional(String.self, forKey: .`name`)
         self.`botIds` = try c.decodeOptional([ID].self, forKey: .`botIds`)
-        self.`humanUserIds` = try c.decodeOptional([ID].self, forKey: .`humanUserIds`)
         self.`leadBotId` = c.contains(.`leadBotId`) ? .some(try c.decodeIfPresent(ID.self, forKey: .`leadBotId`)) : nil
     }
     public func encode(to encoder: Encoder) throws {
@@ -2910,7 +3193,6 @@ public struct ConversationUpdate: Codable, Hashable {
         try c.encode(`revision`, forKey: .`revision`)
         try c.encodeIfPresent(`name`, forKey: .`name`)
         try c.encodeIfPresent(`botIds`, forKey: .`botIds`)
-        try c.encodeIfPresent(`humanUserIds`, forKey: .`humanUserIds`)
         if let value = `leadBotId` { try c.encode(value, forKey: .`leadBotId`) }
     }
 }
@@ -4164,7 +4446,6 @@ public struct Skill: Codable, Hashable, Identifiable {
     public var `createdAtMs`: TimestampMs
     public var `updatedAtMs`: TimestampMs
     public var `ownerUserId`: ID
-    public var `scope`: String
     public var `botId`: ID?
     public var `name`: String
     public var `description`: String
@@ -4172,13 +4453,12 @@ public struct Skill: Codable, Hashable, Identifiable {
     public var `enabled`: Bool
     public var `machineIds`: [ID]
     public var `provenance`: SkillProvenance
-    public init(id: ID, revision: Int, createdAtMs: TimestampMs, updatedAtMs: TimestampMs, ownerUserId: ID, scope: String, botId: ID? = nil, name: String, description: String, markdown: String, enabled: Bool, machineIds: [ID], provenance: SkillProvenance) {
+    public init(id: ID, revision: Int, createdAtMs: TimestampMs, updatedAtMs: TimestampMs, ownerUserId: ID, botId: ID? = nil, name: String, description: String, markdown: String, enabled: Bool, machineIds: [ID], provenance: SkillProvenance) {
         self.`id` = id
         self.`revision` = revision
         self.`createdAtMs` = createdAtMs
         self.`updatedAtMs` = updatedAtMs
         self.`ownerUserId` = ownerUserId
-        self.`scope` = scope
         self.`botId` = botId
         self.`name` = name
         self.`description` = description
@@ -4187,7 +4467,7 @@ public struct Skill: Codable, Hashable, Identifiable {
         self.`machineIds` = machineIds
         self.`provenance` = provenance
     }
-    enum CodingKeys: String, CodingKey { case `id`, `revision`, `createdAtMs`, `updatedAtMs`, `ownerUserId`, `scope`, `botId`, `name`, `description`, `markdown`, `enabled`, `machineIds`, `provenance` }
+    enum CodingKeys: String, CodingKey { case `id`, `revision`, `createdAtMs`, `updatedAtMs`, `ownerUserId`, `botId`, `name`, `description`, `markdown`, `enabled`, `machineIds`, `provenance` }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.`id` = try c.decode(ID.self, forKey: .`id`)
@@ -4195,8 +4475,6 @@ public struct Skill: Codable, Hashable, Identifiable {
         self.`createdAtMs` = try c.decode(TimestampMs.self, forKey: .`createdAtMs`)
         self.`updatedAtMs` = try c.decode(TimestampMs.self, forKey: .`updatedAtMs`)
         self.`ownerUserId` = try c.decode(ID.self, forKey: .`ownerUserId`)
-        self.`scope` = try c.decode(String.self, forKey: .`scope`)
-        guard ["personal", "team"].contains(`scope`) else { throw DecodingError.dataCorruptedError(forKey: .`scope`, in: c, debugDescription: "Invalid Skill.scope") }
         self.`botId` = try c.decode(ID?.self, forKey: .`botId`)
         self.`name` = try c.decode(String.self, forKey: .`name`)
         self.`description` = try c.decode(String.self, forKey: .`description`)
@@ -4212,7 +4490,6 @@ public struct Skill: Codable, Hashable, Identifiable {
         try c.encode(`createdAtMs`, forKey: .`createdAtMs`)
         try c.encode(`updatedAtMs`, forKey: .`updatedAtMs`)
         try c.encode(`ownerUserId`, forKey: .`ownerUserId`)
-        try c.encode(`scope`, forKey: .`scope`)
         try c.encode(`botId`, forKey: .`botId`)
         try c.encode(`name`, forKey: .`name`)
         try c.encode(`description`, forKey: .`description`)
@@ -4228,26 +4505,23 @@ public struct SkillCreate: Codable, Hashable {
     public var `name`: String
     public var `description`: String
     public var `markdown`: String
-    public var `scope`: String
     public var `botId`: ID?
     public var `machineIds`: [ID]
-    public init(clientNonce: String, name: String, description: String, markdown: String, scope: String, botId: ID? = nil, machineIds: [ID]) {
+    public init(clientNonce: String, name: String, description: String, markdown: String, botId: ID? = nil, machineIds: [ID]) {
         self.`clientNonce` = clientNonce
         self.`name` = name
         self.`description` = description
         self.`markdown` = markdown
-        self.`scope` = scope
         self.`botId` = botId
         self.`machineIds` = machineIds
     }
-    enum CodingKeys: String, CodingKey { case `clientNonce`, `name`, `description`, `markdown`, `scope`, `botId`, `machineIds` }
+    enum CodingKeys: String, CodingKey { case `clientNonce`, `name`, `description`, `markdown`, `botId`, `machineIds` }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.`clientNonce` = try c.decode(String.self, forKey: .`clientNonce`)
         self.`name` = try c.decode(String.self, forKey: .`name`)
         self.`description` = try c.decode(String.self, forKey: .`description`)
         self.`markdown` = try c.decode(String.self, forKey: .`markdown`)
-        self.`scope` = try c.decode(String.self, forKey: .`scope`)
         self.`botId` = try c.decodeOptional(ID.self, forKey: .`botId`)
         self.`machineIds` = try c.decode([ID].self, forKey: .`machineIds`)
     }
@@ -4257,7 +4531,6 @@ public struct SkillCreate: Codable, Hashable {
         try c.encode(`name`, forKey: .`name`)
         try c.encode(`description`, forKey: .`description`)
         try c.encode(`markdown`, forKey: .`markdown`)
-        try c.encode(`scope`, forKey: .`scope`)
         try c.encodeIfPresent(`botId`, forKey: .`botId`)
         try c.encode(`machineIds`, forKey: .`machineIds`)
     }
@@ -4635,24 +4908,20 @@ public struct Memory: Codable, Hashable, Identifiable {
     public var `createdAtMs`: TimestampMs
     public var `updatedAtMs`: TimestampMs
     public var `botId`: ID
-    public var `scope`: String
-    public var `userId`: ID?
     public var `text`: String
     public var `kind`: String
     public var `sourceEntryId`: ID?
-    public init(id: ID, revision: Int, createdAtMs: TimestampMs, updatedAtMs: TimestampMs, botId: ID, scope: String, userId: ID? = nil, text: String, kind: String, sourceEntryId: ID? = nil) {
+    public init(id: ID, revision: Int, createdAtMs: TimestampMs, updatedAtMs: TimestampMs, botId: ID, text: String, kind: String, sourceEntryId: ID? = nil) {
         self.`id` = id
         self.`revision` = revision
         self.`createdAtMs` = createdAtMs
         self.`updatedAtMs` = updatedAtMs
         self.`botId` = botId
-        self.`scope` = scope
-        self.`userId` = userId
         self.`text` = text
         self.`kind` = kind
         self.`sourceEntryId` = sourceEntryId
     }
-    enum CodingKeys: String, CodingKey { case `id`, `revision`, `createdAtMs`, `updatedAtMs`, `botId`, `scope`, `userId`, `text`, `kind`, `sourceEntryId` }
+    enum CodingKeys: String, CodingKey { case `id`, `revision`, `createdAtMs`, `updatedAtMs`, `botId`, `text`, `kind`, `sourceEntryId` }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.`id` = try c.decode(ID.self, forKey: .`id`)
@@ -4660,9 +4929,6 @@ public struct Memory: Codable, Hashable, Identifiable {
         self.`createdAtMs` = try c.decode(TimestampMs.self, forKey: .`createdAtMs`)
         self.`updatedAtMs` = try c.decode(TimestampMs.self, forKey: .`updatedAtMs`)
         self.`botId` = try c.decode(ID.self, forKey: .`botId`)
-        self.`scope` = try c.decode(String.self, forKey: .`scope`)
-        guard ["personal", "team", "private_note"].contains(`scope`) else { throw DecodingError.dataCorruptedError(forKey: .`scope`, in: c, debugDescription: "Invalid Memory.scope") }
-        self.`userId` = try c.decode(ID?.self, forKey: .`userId`)
         self.`text` = try c.decode(String.self, forKey: .`text`)
         self.`kind` = try c.decode(String.self, forKey: .`kind`)
         guard ["fact", "preference", "instruction", "summary"].contains(`kind`) else { throw DecodingError.dataCorruptedError(forKey: .`kind`, in: c, debugDescription: "Invalid Memory.kind") }
@@ -4675,8 +4941,6 @@ public struct Memory: Codable, Hashable, Identifiable {
         try c.encode(`createdAtMs`, forKey: .`createdAtMs`)
         try c.encode(`updatedAtMs`, forKey: .`updatedAtMs`)
         try c.encode(`botId`, forKey: .`botId`)
-        try c.encode(`scope`, forKey: .`scope`)
-        try c.encode(`userId`, forKey: .`userId`)
         try c.encode(`text`, forKey: .`text`)
         try c.encode(`kind`, forKey: .`kind`)
         try c.encode(`sourceEntryId`, forKey: .`sourceEntryId`)
@@ -4687,22 +4951,19 @@ public struct MemoryCreate: Codable, Hashable {
     public var `clientNonce`: String
     public var `text`: String
     public var `kind`: String
-    public var `scope`: String
     public var `sourceEntryId`: ID?
-    public init(clientNonce: String, text: String, kind: String, scope: String, sourceEntryId: ID? = nil) {
+    public init(clientNonce: String, text: String, kind: String, sourceEntryId: ID? = nil) {
         self.`clientNonce` = clientNonce
         self.`text` = text
         self.`kind` = kind
-        self.`scope` = scope
         self.`sourceEntryId` = sourceEntryId
     }
-    enum CodingKeys: String, CodingKey { case `clientNonce`, `text`, `kind`, `scope`, `sourceEntryId` }
+    enum CodingKeys: String, CodingKey { case `clientNonce`, `text`, `kind`, `sourceEntryId` }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.`clientNonce` = try c.decode(String.self, forKey: .`clientNonce`)
         self.`text` = try c.decode(String.self, forKey: .`text`)
         self.`kind` = try c.decode(String.self, forKey: .`kind`)
-        self.`scope` = try c.decode(String.self, forKey: .`scope`)
         self.`sourceEntryId` = try c.decodeOptional(ID.self, forKey: .`sourceEntryId`)
     }
     public func encode(to encoder: Encoder) throws {
@@ -4710,7 +4971,6 @@ public struct MemoryCreate: Codable, Hashable {
         try c.encode(`clientNonce`, forKey: .`clientNonce`)
         try c.encode(`text`, forKey: .`text`)
         try c.encode(`kind`, forKey: .`kind`)
-        try c.encode(`scope`, forKey: .`scope`)
         try c.encodeIfPresent(`sourceEntryId`, forKey: .`sourceEntryId`)
     }
 }
@@ -5357,9 +5617,8 @@ public struct Connector: Codable, Hashable, Identifiable {
     public var `state`: String
     public var `tools`: [ConnectorTools]
     public var `secretHeaderNames`: [String]
-    public var `shared`: Bool
     public var `lastError`: String?
-    public init(id: ID, revision: Int, createdAtMs: TimestampMs, updatedAtMs: TimestampMs, botId: ID, ownerUserId: ID, name: String, url: String, accountLabel: String, authKind: String, state: String, tools: [ConnectorTools], secretHeaderNames: [String], shared: Bool, lastError: String? = nil) {
+    public init(id: ID, revision: Int, createdAtMs: TimestampMs, updatedAtMs: TimestampMs, botId: ID, ownerUserId: ID, name: String, url: String, accountLabel: String, authKind: String, state: String, tools: [ConnectorTools], secretHeaderNames: [String], lastError: String? = nil) {
         self.`id` = id
         self.`revision` = revision
         self.`createdAtMs` = createdAtMs
@@ -5373,10 +5632,9 @@ public struct Connector: Codable, Hashable, Identifiable {
         self.`state` = state
         self.`tools` = tools
         self.`secretHeaderNames` = secretHeaderNames
-        self.`shared` = shared
         self.`lastError` = lastError
     }
-    enum CodingKeys: String, CodingKey { case `id`, `revision`, `createdAtMs`, `updatedAtMs`, `botId`, `ownerUserId`, `name`, `url`, `accountLabel`, `authKind`, `state`, `tools`, `secretHeaderNames`, `shared`, `lastError` }
+    enum CodingKeys: String, CodingKey { case `id`, `revision`, `createdAtMs`, `updatedAtMs`, `botId`, `ownerUserId`, `name`, `url`, `accountLabel`, `authKind`, `state`, `tools`, `secretHeaderNames`, `lastError` }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.`id` = try c.decode(ID.self, forKey: .`id`)
@@ -5394,7 +5652,6 @@ public struct Connector: Codable, Hashable, Identifiable {
         guard ["added", "connected", "needs_auth", "disconnected", "blocked", "failed"].contains(`state`) else { throw DecodingError.dataCorruptedError(forKey: .`state`, in: c, debugDescription: "Invalid Connector.state") }
         self.`tools` = try c.decode([ConnectorTools].self, forKey: .`tools`)
         self.`secretHeaderNames` = try c.decode([String].self, forKey: .`secretHeaderNames`)
-        self.`shared` = try c.decode(Bool.self, forKey: .`shared`)
         self.`lastError` = try c.decode(String?.self, forKey: .`lastError`)
     }
     public func encode(to encoder: Encoder) throws {
@@ -5412,7 +5669,6 @@ public struct Connector: Codable, Hashable, Identifiable {
         try c.encode(`state`, forKey: .`state`)
         try c.encode(`tools`, forKey: .`tools`)
         try c.encode(`secretHeaderNames`, forKey: .`secretHeaderNames`)
-        try c.encode(`shared`, forKey: .`shared`)
         try c.encode(`lastError`, forKey: .`lastError`)
     }
 }
@@ -5424,17 +5680,15 @@ public struct ConnectorCreate: Codable, Hashable {
     public var `accountLabel`: String
     public var `authKind`: String
     public var `secretBindings`: [ConnectorCreateSecretBindings]?
-    public var `shared`: Bool
-    public init(clientNonce: String, name: String, url: String, accountLabel: String, authKind: String, secretBindings: [ConnectorCreateSecretBindings]? = nil, shared: Bool) {
+    public init(clientNonce: String, name: String, url: String, accountLabel: String, authKind: String, secretBindings: [ConnectorCreateSecretBindings]? = nil) {
         self.`clientNonce` = clientNonce
         self.`name` = name
         self.`url` = url
         self.`accountLabel` = accountLabel
         self.`authKind` = authKind
         self.`secretBindings` = secretBindings
-        self.`shared` = shared
     }
-    enum CodingKeys: String, CodingKey { case `clientNonce`, `name`, `url`, `accountLabel`, `authKind`, `secretBindings`, `shared` }
+    enum CodingKeys: String, CodingKey { case `clientNonce`, `name`, `url`, `accountLabel`, `authKind`, `secretBindings` }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.`clientNonce` = try c.decode(String.self, forKey: .`clientNonce`)
@@ -5443,7 +5697,6 @@ public struct ConnectorCreate: Codable, Hashable {
         self.`accountLabel` = try c.decode(String.self, forKey: .`accountLabel`)
         self.`authKind` = try c.decode(String.self, forKey: .`authKind`)
         self.`secretBindings` = try c.decodeOptional([ConnectorCreateSecretBindings].self, forKey: .`secretBindings`)
-        self.`shared` = try c.decode(Bool.self, forKey: .`shared`)
     }
     public func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
@@ -5453,7 +5706,6 @@ public struct ConnectorCreate: Codable, Hashable {
         try c.encode(`accountLabel`, forKey: .`accountLabel`)
         try c.encode(`authKind`, forKey: .`authKind`)
         try c.encodeIfPresent(`secretBindings`, forKey: .`secretBindings`)
-        try c.encode(`shared`, forKey: .`shared`)
     }
 }
 
@@ -5538,95 +5790,6 @@ public struct ConnectorAuth: Codable, Hashable, Identifiable {
     }
 }
 
-public struct ConnectorConsent: Codable, Hashable, Identifiable {
-    public var `id`: ID
-    public var `revision`: Int
-    public var `createdAtMs`: TimestampMs
-    public var `updatedAtMs`: TimestampMs
-    public var `gate`: Gate
-    public var `connectorId`: ID
-    public var `accountOwnerUserId`: ID
-    public var `botId`: ID
-    public var `conversationId`: ID
-    public var `entryId`: ID
-    public var `scope`: String
-    public var `expiresAtMs`: TimestampMs?
-    public init(id: ID, revision: Int, createdAtMs: TimestampMs, updatedAtMs: TimestampMs, gate: Gate, connectorId: ID, accountOwnerUserId: ID, botId: ID, conversationId: ID, entryId: ID, scope: String, expiresAtMs: TimestampMs? = nil) {
-        self.`id` = id
-        self.`revision` = revision
-        self.`createdAtMs` = createdAtMs
-        self.`updatedAtMs` = updatedAtMs
-        self.`gate` = gate
-        self.`connectorId` = connectorId
-        self.`accountOwnerUserId` = accountOwnerUserId
-        self.`botId` = botId
-        self.`conversationId` = conversationId
-        self.`entryId` = entryId
-        self.`scope` = scope
-        self.`expiresAtMs` = expiresAtMs
-    }
-    enum CodingKeys: String, CodingKey { case `id`, `revision`, `createdAtMs`, `updatedAtMs`, `gate`, `connectorId`, `accountOwnerUserId`, `botId`, `conversationId`, `entryId`, `scope`, `expiresAtMs` }
-    public init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        self.`id` = try c.decode(ID.self, forKey: .`id`)
-        self.`revision` = try c.decode(Int.self, forKey: .`revision`)
-        self.`createdAtMs` = try c.decode(TimestampMs.self, forKey: .`createdAtMs`)
-        self.`updatedAtMs` = try c.decode(TimestampMs.self, forKey: .`updatedAtMs`)
-        self.`gate` = try c.decode(Gate.self, forKey: .`gate`)
-        self.`connectorId` = try c.decode(ID.self, forKey: .`connectorId`)
-        self.`accountOwnerUserId` = try c.decode(ID.self, forKey: .`accountOwnerUserId`)
-        self.`botId` = try c.decode(ID.self, forKey: .`botId`)
-        self.`conversationId` = try c.decode(ID.self, forKey: .`conversationId`)
-        self.`entryId` = try c.decode(ID.self, forKey: .`entryId`)
-        self.`scope` = try c.decode(String.self, forKey: .`scope`)
-        guard ["once", "bot"].contains(`scope`) else { throw DecodingError.dataCorruptedError(forKey: .`scope`, in: c, debugDescription: "Invalid ConnectorConsent.scope") }
-        self.`expiresAtMs` = try c.decode(TimestampMs?.self, forKey: .`expiresAtMs`)
-    }
-    public func encode(to encoder: Encoder) throws {
-        var c = encoder.container(keyedBy: CodingKeys.self)
-        try c.encode(`id`, forKey: .`id`)
-        try c.encode(`revision`, forKey: .`revision`)
-        try c.encode(`createdAtMs`, forKey: .`createdAtMs`)
-        try c.encode(`updatedAtMs`, forKey: .`updatedAtMs`)
-        try c.encode(`gate`, forKey: .`gate`)
-        try c.encode(`connectorId`, forKey: .`connectorId`)
-        try c.encode(`accountOwnerUserId`, forKey: .`accountOwnerUserId`)
-        try c.encode(`botId`, forKey: .`botId`)
-        try c.encode(`conversationId`, forKey: .`conversationId`)
-        try c.encode(`entryId`, forKey: .`entryId`)
-        try c.encode(`scope`, forKey: .`scope`)
-        try c.encode(`expiresAtMs`, forKey: .`expiresAtMs`)
-    }
-}
-
-public struct ConsentResolve: Codable, Hashable {
-    public var `clientNonce`: String
-    public var `revision`: Int
-    public var `decision`: String
-    public var `expiresAtMs`: TimestampMs?
-    public init(clientNonce: String, revision: Int, decision: String, expiresAtMs: TimestampMs? = nil) {
-        self.`clientNonce` = clientNonce
-        self.`revision` = revision
-        self.`decision` = decision
-        self.`expiresAtMs` = expiresAtMs
-    }
-    enum CodingKeys: String, CodingKey { case `clientNonce`, `revision`, `decision`, `expiresAtMs` }
-    public init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        self.`clientNonce` = try c.decode(String.self, forKey: .`clientNonce`)
-        self.`revision` = try c.decode(Int.self, forKey: .`revision`)
-        self.`decision` = try c.decode(String.self, forKey: .`decision`)
-        guard ["allow_once", "allow_bot", "decline"].contains(`decision`) else { throw DecodingError.dataCorruptedError(forKey: .`decision`, in: c, debugDescription: "Invalid ConsentResolve.decision") }
-        self.`expiresAtMs` = try c.decodeOptional(TimestampMs.self, forKey: .`expiresAtMs`)
-    }
-    public func encode(to encoder: Encoder) throws {
-        var c = encoder.container(keyedBy: CodingKeys.self)
-        try c.encode(`clientNonce`, forKey: .`clientNonce`)
-        try c.encode(`revision`, forKey: .`revision`)
-        try c.encode(`decision`, forKey: .`decision`)
-        try c.encodeIfPresent(`expiresAtMs`, forKey: .`expiresAtMs`)
-    }
-}
 
 public struct ChannelBinding: Codable, Hashable, Identifiable {
     public var `id`: ID
@@ -6849,22 +7012,19 @@ public struct BotResetResult: Codable, Hashable {
 
 public struct MemoryImportPreviewRequest: Codable, Hashable {
     public var `clientNonce`: String
-    public var `scope`: String
     public var `text`: String?
     public var `attachmentId`: ID?
     public var `format`: String
-    public init(clientNonce: String, scope: String, text: String? = nil, attachmentId: ID? = nil, format: String) {
+    public init(clientNonce: String, text: String? = nil, attachmentId: ID? = nil, format: String) {
         self.`clientNonce` = clientNonce
-        self.`scope` = scope
         self.`text` = text
         self.`attachmentId` = attachmentId
         self.`format` = format
     }
-    enum CodingKeys: String, CodingKey { case `clientNonce`, `scope`, `text`, `attachmentId`, `format` }
+    enum CodingKeys: String, CodingKey { case `clientNonce`, `text`, `attachmentId`, `format` }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.`clientNonce` = try c.decode(String.self, forKey: .`clientNonce`)
-        self.`scope` = try c.decode(String.self, forKey: .`scope`)
         self.`text` = try c.decodeOptional(String.self, forKey: .`text`)
         self.`attachmentId` = try c.decodeOptional(ID.self, forKey: .`attachmentId`)
         self.`format` = try c.decode(String.self, forKey: .`format`)
@@ -6873,7 +7033,6 @@ public struct MemoryImportPreviewRequest: Codable, Hashable {
     public func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(`clientNonce`, forKey: .`clientNonce`)
-        try c.encode(`scope`, forKey: .`scope`)
         try c.encodeIfPresent(`text`, forKey: .`text`)
         try c.encodeIfPresent(`attachmentId`, forKey: .`attachmentId`)
         try c.encode(`format`, forKey: .`format`)
@@ -6920,13 +7079,12 @@ public struct MemoryImportPreview: Codable, Hashable, Identifiable {
     public var `botId`: ID
     public var `machineId`: ID
     public var `userId`: ID
-    public var `scope`: String
     public var `sourceSha256`: String
     public var `candidates`: [MemoryImportCandidate]
     public var `exclusions`: [MemoryImportPreviewExclusions]
     public var `confirmationToken`: String
     public var `expiresAtMs`: TimestampMs
-    public init(id: ID, revision: Int, createdAtMs: TimestampMs, updatedAtMs: TimestampMs, botId: ID, machineId: ID, userId: ID, scope: String, sourceSha256: String, candidates: [MemoryImportCandidate], exclusions: [MemoryImportPreviewExclusions], confirmationToken: String, expiresAtMs: TimestampMs) {
+    public init(id: ID, revision: Int, createdAtMs: TimestampMs, updatedAtMs: TimestampMs, botId: ID, machineId: ID, userId: ID, sourceSha256: String, candidates: [MemoryImportCandidate], exclusions: [MemoryImportPreviewExclusions], confirmationToken: String, expiresAtMs: TimestampMs) {
         self.`id` = id
         self.`revision` = revision
         self.`createdAtMs` = createdAtMs
@@ -6934,14 +7092,13 @@ public struct MemoryImportPreview: Codable, Hashable, Identifiable {
         self.`botId` = botId
         self.`machineId` = machineId
         self.`userId` = userId
-        self.`scope` = scope
         self.`sourceSha256` = sourceSha256
         self.`candidates` = candidates
         self.`exclusions` = exclusions
         self.`confirmationToken` = confirmationToken
         self.`expiresAtMs` = expiresAtMs
     }
-    enum CodingKeys: String, CodingKey { case `id`, `revision`, `createdAtMs`, `updatedAtMs`, `botId`, `machineId`, `userId`, `scope`, `sourceSha256`, `candidates`, `exclusions`, `confirmationToken`, `expiresAtMs` }
+    enum CodingKeys: String, CodingKey { case `id`, `revision`, `createdAtMs`, `updatedAtMs`, `botId`, `machineId`, `userId`, `sourceSha256`, `candidates`, `exclusions`, `confirmationToken`, `expiresAtMs` }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.`id` = try c.decode(ID.self, forKey: .`id`)
@@ -6951,7 +7108,6 @@ public struct MemoryImportPreview: Codable, Hashable, Identifiable {
         self.`botId` = try c.decode(ID.self, forKey: .`botId`)
         self.`machineId` = try c.decode(ID.self, forKey: .`machineId`)
         self.`userId` = try c.decode(ID.self, forKey: .`userId`)
-        self.`scope` = try c.decode(String.self, forKey: .`scope`)
         self.`sourceSha256` = try c.decode(String.self, forKey: .`sourceSha256`)
         self.`candidates` = try c.decode([MemoryImportCandidate].self, forKey: .`candidates`)
         self.`exclusions` = try c.decode([MemoryImportPreviewExclusions].self, forKey: .`exclusions`)
@@ -6967,7 +7123,6 @@ public struct MemoryImportPreview: Codable, Hashable, Identifiable {
         try c.encode(`botId`, forKey: .`botId`)
         try c.encode(`machineId`, forKey: .`machineId`)
         try c.encode(`userId`, forKey: .`userId`)
-        try c.encode(`scope`, forKey: .`scope`)
         try c.encode(`sourceSha256`, forKey: .`sourceSha256`)
         try c.encode(`candidates`, forKey: .`candidates`)
         try c.encode(`exclusions`, forKey: .`exclusions`)
@@ -7258,22 +7413,20 @@ public struct ConnectorSetupRequest: Codable, Hashable {
     public var `name`: String
     public var `url`: String
     public var `accountLabel`: String
-    public var `shared`: Bool
     public var `authKind`: String
     public var `secretBindings`: [ConnectorSetupRequestSecretBindings]
     public var `requestedLevel`: AccessLevel
-    public init(clientNonce: String, machineId: ID, name: String, url: String, accountLabel: String, shared: Bool, authKind: String, secretBindings: [ConnectorSetupRequestSecretBindings], requestedLevel: AccessLevel) {
+    public init(clientNonce: String, machineId: ID, name: String, url: String, accountLabel: String, authKind: String, secretBindings: [ConnectorSetupRequestSecretBindings], requestedLevel: AccessLevel) {
         self.`clientNonce` = clientNonce
         self.`machineId` = machineId
         self.`name` = name
         self.`url` = url
         self.`accountLabel` = accountLabel
-        self.`shared` = shared
         self.`authKind` = authKind
         self.`secretBindings` = secretBindings
         self.`requestedLevel` = requestedLevel
     }
-    enum CodingKeys: String, CodingKey { case `clientNonce`, `machineId`, `name`, `url`, `accountLabel`, `shared`, `authKind`, `secretBindings`, `requestedLevel` }
+    enum CodingKeys: String, CodingKey { case `clientNonce`, `machineId`, `name`, `url`, `accountLabel`, `authKind`, `secretBindings`, `requestedLevel` }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.`clientNonce` = try c.decode(String.self, forKey: .`clientNonce`)
@@ -7281,7 +7434,6 @@ public struct ConnectorSetupRequest: Codable, Hashable {
         self.`name` = try c.decode(String.self, forKey: .`name`)
         self.`url` = try c.decode(String.self, forKey: .`url`)
         self.`accountLabel` = try c.decode(String.self, forKey: .`accountLabel`)
-        self.`shared` = try c.decode(Bool.self, forKey: .`shared`)
         self.`authKind` = try c.decode(String.self, forKey: .`authKind`)
         self.`secretBindings` = try c.decode([ConnectorSetupRequestSecretBindings].self, forKey: .`secretBindings`)
         self.`requestedLevel` = try c.decode(AccessLevel.self, forKey: .`requestedLevel`)
@@ -7293,7 +7445,6 @@ public struct ConnectorSetupRequest: Codable, Hashable {
         try c.encode(`name`, forKey: .`name`)
         try c.encode(`url`, forKey: .`url`)
         try c.encode(`accountLabel`, forKey: .`accountLabel`)
-        try c.encode(`shared`, forKey: .`shared`)
         try c.encode(`authKind`, forKey: .`authKind`)
         try c.encode(`secretBindings`, forKey: .`secretBindings`)
         try c.encode(`requestedLevel`, forKey: .`requestedLevel`)
@@ -7830,22 +7981,19 @@ public struct RememberInput: Codable, Hashable {
     public var `conversationId`: ID?
     public var `text`: String
     public var `kind`: String
-    public var `scope`: String
-    public init(clientNonce: String, conversationId: ID? = nil, text: String, kind: String, scope: String) {
+    public init(clientNonce: String, conversationId: ID? = nil, text: String, kind: String) {
         self.`clientNonce` = clientNonce
         self.`conversationId` = conversationId
         self.`text` = text
         self.`kind` = kind
-        self.`scope` = scope
     }
-    enum CodingKeys: String, CodingKey { case `clientNonce`, `conversationId`, `text`, `kind`, `scope` }
+    enum CodingKeys: String, CodingKey { case `clientNonce`, `conversationId`, `text`, `kind` }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.`clientNonce` = try c.decode(String.self, forKey: .`clientNonce`)
         self.`conversationId` = try c.decodeOptional(ID.self, forKey: .`conversationId`)
         self.`text` = try c.decode(String.self, forKey: .`text`)
         self.`kind` = try c.decode(String.self, forKey: .`kind`)
-        self.`scope` = try c.decode(String.self, forKey: .`scope`)
     }
     public func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
@@ -7853,7 +8001,6 @@ public struct RememberInput: Codable, Hashable {
         try c.encodeIfPresent(`conversationId`, forKey: .`conversationId`)
         try c.encode(`text`, forKey: .`text`)
         try c.encode(`kind`, forKey: .`kind`)
-        try c.encode(`scope`, forKey: .`scope`)
     }
 }
 
@@ -8553,7 +8700,6 @@ public struct GroupPolicy: Codable, Hashable, Identifiable {
     public var `updatedAtMs`: TimestampMs
     public var `directoryGroupId`: ID
     public var `productAccess`: Bool
-    public var `defaultBotIds`: [ID]
     public var `capabilityModes`: [String: String]
     public var `requiredRuleIds`: [ID]
     public var `localExecutionCeiling`: String
@@ -8561,14 +8707,13 @@ public struct GroupPolicy: Codable, Hashable, Identifiable {
     public var `allowSudo`: Bool
     public var `networkPolicyId`: ID?
     public var `reviewExempt`: Bool
-    public init(id: ID, revision: Int, createdAtMs: TimestampMs, updatedAtMs: TimestampMs, directoryGroupId: ID, productAccess: Bool, defaultBotIds: [ID], capabilityModes: [String: String], requiredRuleIds: [ID], localExecutionCeiling: String, allowEgress: Bool, allowSudo: Bool, networkPolicyId: ID? = nil, reviewExempt: Bool) {
+    public init(id: ID, revision: Int, createdAtMs: TimestampMs, updatedAtMs: TimestampMs, directoryGroupId: ID, productAccess: Bool, capabilityModes: [String: String], requiredRuleIds: [ID], localExecutionCeiling: String, allowEgress: Bool, allowSudo: Bool, networkPolicyId: ID? = nil, reviewExempt: Bool) {
         self.`id` = id
         self.`revision` = revision
         self.`createdAtMs` = createdAtMs
         self.`updatedAtMs` = updatedAtMs
         self.`directoryGroupId` = directoryGroupId
         self.`productAccess` = productAccess
-        self.`defaultBotIds` = defaultBotIds
         self.`capabilityModes` = capabilityModes
         self.`requiredRuleIds` = requiredRuleIds
         self.`localExecutionCeiling` = localExecutionCeiling
@@ -8577,7 +8722,7 @@ public struct GroupPolicy: Codable, Hashable, Identifiable {
         self.`networkPolicyId` = networkPolicyId
         self.`reviewExempt` = reviewExempt
     }
-    enum CodingKeys: String, CodingKey { case `id`, `revision`, `createdAtMs`, `updatedAtMs`, `directoryGroupId`, `productAccess`, `defaultBotIds`, `capabilityModes`, `requiredRuleIds`, `localExecutionCeiling`, `allowEgress`, `allowSudo`, `networkPolicyId`, `reviewExempt` }
+    enum CodingKeys: String, CodingKey { case `id`, `revision`, `createdAtMs`, `updatedAtMs`, `directoryGroupId`, `productAccess`, `capabilityModes`, `requiredRuleIds`, `localExecutionCeiling`, `allowEgress`, `allowSudo`, `networkPolicyId`, `reviewExempt` }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.`id` = try c.decode(ID.self, forKey: .`id`)
@@ -8586,7 +8731,6 @@ public struct GroupPolicy: Codable, Hashable, Identifiable {
         self.`updatedAtMs` = try c.decode(TimestampMs.self, forKey: .`updatedAtMs`)
         self.`directoryGroupId` = try c.decode(ID.self, forKey: .`directoryGroupId`)
         self.`productAccess` = try c.decode(Bool.self, forKey: .`productAccess`)
-        self.`defaultBotIds` = try c.decode([ID].self, forKey: .`defaultBotIds`)
         self.`capabilityModes` = try c.decode([String: String].self, forKey: .`capabilityModes`)
         self.`requiredRuleIds` = try c.decode([ID].self, forKey: .`requiredRuleIds`)
         self.`localExecutionCeiling` = try c.decode(String.self, forKey: .`localExecutionCeiling`)
@@ -8604,7 +8748,6 @@ public struct GroupPolicy: Codable, Hashable, Identifiable {
         try c.encode(`updatedAtMs`, forKey: .`updatedAtMs`)
         try c.encode(`directoryGroupId`, forKey: .`directoryGroupId`)
         try c.encode(`productAccess`, forKey: .`productAccess`)
-        try c.encode(`defaultBotIds`, forKey: .`defaultBotIds`)
         try c.encode(`capabilityModes`, forKey: .`capabilityModes`)
         try c.encode(`requiredRuleIds`, forKey: .`requiredRuleIds`)
         try c.encode(`localExecutionCeiling`, forKey: .`localExecutionCeiling`)
@@ -8619,7 +8762,6 @@ public struct GroupPolicyUpdate: Codable, Hashable {
     public var `clientNonce`: String
     public var `revision`: Int
     public var `productAccess`: Bool?
-    public var `defaultBotIds`: [ID]?
     public var `capabilityModes`: [String: String]?
     public var `requiredRuleIds`: [ID]?
     public var `localExecutionCeiling`: String?
@@ -8627,11 +8769,10 @@ public struct GroupPolicyUpdate: Codable, Hashable {
     public var `allowSudo`: Bool?
     public var `networkPolicyId`: ID??
     public var `reviewExempt`: Bool?
-    public init(clientNonce: String, revision: Int, productAccess: Bool? = nil, defaultBotIds: [ID]? = nil, capabilityModes: [String: String]? = nil, requiredRuleIds: [ID]? = nil, localExecutionCeiling: String? = nil, allowEgress: Bool? = nil, allowSudo: Bool? = nil, networkPolicyId: ID?? = nil, reviewExempt: Bool? = nil) {
+    public init(clientNonce: String, revision: Int, productAccess: Bool? = nil, capabilityModes: [String: String]? = nil, requiredRuleIds: [ID]? = nil, localExecutionCeiling: String? = nil, allowEgress: Bool? = nil, allowSudo: Bool? = nil, networkPolicyId: ID?? = nil, reviewExempt: Bool? = nil) {
         self.`clientNonce` = clientNonce
         self.`revision` = revision
         self.`productAccess` = productAccess
-        self.`defaultBotIds` = defaultBotIds
         self.`capabilityModes` = capabilityModes
         self.`requiredRuleIds` = requiredRuleIds
         self.`localExecutionCeiling` = localExecutionCeiling
@@ -8640,13 +8781,12 @@ public struct GroupPolicyUpdate: Codable, Hashable {
         self.`networkPolicyId` = networkPolicyId
         self.`reviewExempt` = reviewExempt
     }
-    enum CodingKeys: String, CodingKey { case `clientNonce`, `revision`, `productAccess`, `defaultBotIds`, `capabilityModes`, `requiredRuleIds`, `localExecutionCeiling`, `allowEgress`, `allowSudo`, `networkPolicyId`, `reviewExempt` }
+    enum CodingKeys: String, CodingKey { case `clientNonce`, `revision`, `productAccess`, `capabilityModes`, `requiredRuleIds`, `localExecutionCeiling`, `allowEgress`, `allowSudo`, `networkPolicyId`, `reviewExempt` }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.`clientNonce` = try c.decode(String.self, forKey: .`clientNonce`)
         self.`revision` = try c.decode(Int.self, forKey: .`revision`)
         self.`productAccess` = try c.decodeOptional(Bool.self, forKey: .`productAccess`)
-        self.`defaultBotIds` = try c.decodeOptional([ID].self, forKey: .`defaultBotIds`)
         self.`capabilityModes` = try c.decodeOptional([String: String].self, forKey: .`capabilityModes`)
         self.`requiredRuleIds` = try c.decodeOptional([ID].self, forKey: .`requiredRuleIds`)
         self.`localExecutionCeiling` = try c.decodeOptional(String.self, forKey: .`localExecutionCeiling`)
@@ -8660,7 +8800,6 @@ public struct GroupPolicyUpdate: Codable, Hashable {
         try c.encode(`clientNonce`, forKey: .`clientNonce`)
         try c.encode(`revision`, forKey: .`revision`)
         try c.encodeIfPresent(`productAccess`, forKey: .`productAccess`)
-        try c.encodeIfPresent(`defaultBotIds`, forKey: .`defaultBotIds`)
         try c.encodeIfPresent(`capabilityModes`, forKey: .`capabilityModes`)
         try c.encodeIfPresent(`requiredRuleIds`, forKey: .`requiredRuleIds`)
         try c.encodeIfPresent(`localExecutionCeiling`, forKey: .`localExecutionCeiling`)
@@ -11544,131 +11683,6 @@ public struct TranscriptEventTaskChanged: Codable, Hashable {
     }
 }
 
-public struct TranscriptEventTeamShared: Codable, Hashable {
-    public var `type`: String
-    public var `botId`: ID
-    public init(botId: ID) {
-        self.`type` = "team_shared"
-        self.`botId` = botId
-    }
-    enum CodingKeys: String, CodingKey { case `type`, `botId` }
-    public init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        self.`type` = try c.decode(String.self, forKey: .`type`)
-        guard ["team_shared"].contains(`type`) else { throw DecodingError.dataCorruptedError(forKey: .`type`, in: c, debugDescription: "Invalid TranscriptEventTeamShared.type") }
-        self.`botId` = try c.decode(ID.self, forKey: .`botId`)
-    }
-    public func encode(to encoder: Encoder) throws {
-        var c = encoder.container(keyedBy: CodingKeys.self)
-        try c.encode(`type`, forKey: .`type`)
-        try c.encode(`botId`, forKey: .`botId`)
-    }
-}
-
-public struct TranscriptEventTeamBotPublished: Codable, Hashable {
-    public var `type`: String
-    public var `botId`: ID
-    public init(botId: ID) {
-        self.`type` = "team_bot_published"
-        self.`botId` = botId
-    }
-    enum CodingKeys: String, CodingKey { case `type`, `botId` }
-    public init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        self.`type` = try c.decode(String.self, forKey: .`type`)
-        guard ["team_bot_published"].contains(`type`) else { throw DecodingError.dataCorruptedError(forKey: .`type`, in: c, debugDescription: "Invalid TranscriptEventTeamBotPublished.type") }
-        self.`botId` = try c.decode(ID.self, forKey: .`botId`)
-    }
-    public func encode(to encoder: Encoder) throws {
-        var c = encoder.container(keyedBy: CodingKeys.self)
-        try c.encode(`type`, forKey: .`type`)
-        try c.encode(`botId`, forKey: .`botId`)
-    }
-}
-
-public struct TranscriptEventTeamBotUnpublished: Codable, Hashable {
-    public var `type`: String
-    public var `botId`: ID
-    public init(botId: ID) {
-        self.`type` = "team_bot_unpublished"
-        self.`botId` = botId
-    }
-    enum CodingKeys: String, CodingKey { case `type`, `botId` }
-    public init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        self.`type` = try c.decode(String.self, forKey: .`type`)
-        guard ["team_bot_unpublished"].contains(`type`) else { throw DecodingError.dataCorruptedError(forKey: .`type`, in: c, debugDescription: "Invalid TranscriptEventTeamBotUnpublished.type") }
-        self.`botId` = try c.decode(ID.self, forKey: .`botId`)
-    }
-    public func encode(to encoder: Encoder) throws {
-        var c = encoder.container(keyedBy: CodingKeys.self)
-        try c.encode(`type`, forKey: .`type`)
-        try c.encode(`botId`, forKey: .`botId`)
-    }
-}
-
-public struct TranscriptEventPersonAdded: Codable, Hashable {
-    public var `type`: String
-    public var `userId`: ID
-    public init(userId: ID) {
-        self.`type` = "person_added"
-        self.`userId` = userId
-    }
-    enum CodingKeys: String, CodingKey { case `type`, `userId` }
-    public init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        self.`type` = try c.decode(String.self, forKey: .`type`)
-        guard ["person_added"].contains(`type`) else { throw DecodingError.dataCorruptedError(forKey: .`type`, in: c, debugDescription: "Invalid TranscriptEventPersonAdded.type") }
-        self.`userId` = try c.decode(ID.self, forKey: .`userId`)
-    }
-    public func encode(to encoder: Encoder) throws {
-        var c = encoder.container(keyedBy: CodingKeys.self)
-        try c.encode(`type`, forKey: .`type`)
-        try c.encode(`userId`, forKey: .`userId`)
-    }
-}
-
-public struct TranscriptEventPersonRemoved: Codable, Hashable {
-    public var `type`: String
-    public var `userId`: ID
-    public init(userId: ID) {
-        self.`type` = "person_removed"
-        self.`userId` = userId
-    }
-    enum CodingKeys: String, CodingKey { case `type`, `userId` }
-    public init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        self.`type` = try c.decode(String.self, forKey: .`type`)
-        guard ["person_removed"].contains(`type`) else { throw DecodingError.dataCorruptedError(forKey: .`type`, in: c, debugDescription: "Invalid TranscriptEventPersonRemoved.type") }
-        self.`userId` = try c.decode(ID.self, forKey: .`userId`)
-    }
-    public func encode(to encoder: Encoder) throws {
-        var c = encoder.container(keyedBy: CodingKeys.self)
-        try c.encode(`type`, forKey: .`type`)
-        try c.encode(`userId`, forKey: .`userId`)
-    }
-}
-
-public struct TranscriptEventPersonLeft: Codable, Hashable {
-    public var `type`: String
-    public var `userId`: ID
-    public init(userId: ID) {
-        self.`type` = "person_left"
-        self.`userId` = userId
-    }
-    enum CodingKeys: String, CodingKey { case `type`, `userId` }
-    public init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        self.`type` = try c.decode(String.self, forKey: .`type`)
-        guard ["person_left"].contains(`type`) else { throw DecodingError.dataCorruptedError(forKey: .`type`, in: c, debugDescription: "Invalid TranscriptEventPersonLeft.type") }
-        self.`userId` = try c.decode(ID.self, forKey: .`userId`)
-    }
-    public func encode(to encoder: Encoder) throws {
-        var c = encoder.container(keyedBy: CodingKeys.self)
-        try c.encode(`type`, forKey: .`type`)
-        try c.encode(`userId`, forKey: .`userId`)
-    }
-}
 
 public struct TranscriptEventBotAdded: Codable, Hashable {
     public var `type`: String
@@ -11780,12 +11794,6 @@ public enum TranscriptEvent: Codable, Hashable {
     case `channelDisconnected`(TranscriptEventChannelDisconnected)
     case `routineChanged`(TranscriptEventRoutineChanged)
     case `taskChanged`(TranscriptEventTaskChanged)
-    case `teamShared`(TranscriptEventTeamShared)
-    case `teamBotPublished`(TranscriptEventTeamBotPublished)
-    case `teamBotUnpublished`(TranscriptEventTeamBotUnpublished)
-    case `personAdded`(TranscriptEventPersonAdded)
-    case `personRemoved`(TranscriptEventPersonRemoved)
-    case `personLeft`(TranscriptEventPersonLeft)
     case `botAdded`(TranscriptEventBotAdded)
     case `botRemoved`(TranscriptEventBotRemoved)
     case `handoff`(TranscriptEventHandoff)
@@ -11800,12 +11808,6 @@ public enum TranscriptEvent: Codable, Hashable {
         case "channel_disconnected": self = .`channelDisconnected`(try TranscriptEventChannelDisconnected(from: decoder))
         case "routine_changed": self = .`routineChanged`(try TranscriptEventRoutineChanged(from: decoder))
         case "task_changed": self = .`taskChanged`(try TranscriptEventTaskChanged(from: decoder))
-        case "team_shared": self = .`teamShared`(try TranscriptEventTeamShared(from: decoder))
-        case "team_bot_published": self = .`teamBotPublished`(try TranscriptEventTeamBotPublished(from: decoder))
-        case "team_bot_unpublished": self = .`teamBotUnpublished`(try TranscriptEventTeamBotUnpublished(from: decoder))
-        case "person_added": self = .`personAdded`(try TranscriptEventPersonAdded(from: decoder))
-        case "person_removed": self = .`personRemoved`(try TranscriptEventPersonRemoved(from: decoder))
-        case "person_left": self = .`personLeft`(try TranscriptEventPersonLeft(from: decoder))
         case "bot_added": self = .`botAdded`(try TranscriptEventBotAdded(from: decoder))
         case "bot_removed": self = .`botRemoved`(try TranscriptEventBotRemoved(from: decoder))
         case "handoff": self = .`handoff`(try TranscriptEventHandoff(from: decoder))
@@ -11820,12 +11822,6 @@ public enum TranscriptEvent: Codable, Hashable {
         case .`channelDisconnected`(let v): try v.encode(to: encoder)
         case .`routineChanged`(let v): try v.encode(to: encoder)
         case .`taskChanged`(let v): try v.encode(to: encoder)
-        case .`teamShared`(let v): try v.encode(to: encoder)
-        case .`teamBotPublished`(let v): try v.encode(to: encoder)
-        case .`teamBotUnpublished`(let v): try v.encode(to: encoder)
-        case .`personAdded`(let v): try v.encode(to: encoder)
-        case .`personRemoved`(let v): try v.encode(to: encoder)
-        case .`personLeft`(let v): try v.encode(to: encoder)
         case .`botAdded`(let v): try v.encode(to: encoder)
         case .`botRemoved`(let v): try v.encode(to: encoder)
         case .`handoff`(let v): try v.encode(to: encoder)
@@ -11839,12 +11835,6 @@ public enum TranscriptEvent: Codable, Hashable {
         case .`channelDisconnected`: return "channel_disconnected"
         case .`routineChanged`: return "routine_changed"
         case .`taskChanged`: return "task_changed"
-        case .`teamShared`: return "team_shared"
-        case .`teamBotPublished`: return "team_bot_published"
-        case .`teamBotUnpublished`: return "team_bot_unpublished"
-        case .`personAdded`: return "person_added"
-        case .`personRemoved`: return "person_removed"
-        case .`personLeft`: return "person_left"
         case .`botAdded`: return "bot_added"
         case .`botRemoved`: return "bot_removed"
         case .`handoff`: return "handoff"
@@ -12467,39 +12457,6 @@ public struct CardScmConnect: Codable, Hashable {
     }
 }
 
-public struct CardTeamAccess: Codable, Hashable {
-    public var `type`: String
-    public var `botId`: ID
-    public var `ownerUserId`: ID
-    public var `reason`: String
-    public var `state`: String
-    public init(botId: ID, ownerUserId: ID, reason: String, state: String) {
-        self.`type` = "team_access"
-        self.`botId` = botId
-        self.`ownerUserId` = ownerUserId
-        self.`reason` = reason
-        self.`state` = state
-    }
-    enum CodingKeys: String, CodingKey { case `type`, `botId`, `ownerUserId`, `reason`, `state` }
-    public init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        self.`type` = try c.decode(String.self, forKey: .`type`)
-        guard ["team_access"].contains(`type`) else { throw DecodingError.dataCorruptedError(forKey: .`type`, in: c, debugDescription: "Invalid CardTeamAccess.type") }
-        self.`botId` = try c.decode(ID.self, forKey: .`botId`)
-        self.`ownerUserId` = try c.decode(ID.self, forKey: .`ownerUserId`)
-        self.`reason` = try c.decode(String.self, forKey: .`reason`)
-        self.`state` = try c.decode(String.self, forKey: .`state`)
-        guard ["unpublished", "published", "unavailable"].contains(`state`) else { throw DecodingError.dataCorruptedError(forKey: .`state`, in: c, debugDescription: "Invalid CardTeamAccess.state") }
-    }
-    public func encode(to encoder: Encoder) throws {
-        var c = encoder.container(keyedBy: CodingKeys.self)
-        try c.encode(`type`, forKey: .`type`)
-        try c.encode(`botId`, forKey: .`botId`)
-        try c.encode(`ownerUserId`, forKey: .`ownerUserId`)
-        try c.encode(`reason`, forKey: .`reason`)
-        try c.encode(`state`, forKey: .`state`)
-    }
-}
 
 public struct CardBotTemplateShare: Codable, Hashable {
     public var `type`: String
@@ -12535,26 +12492,6 @@ public struct CardBotTemplateShare: Codable, Hashable {
     }
 }
 
-public struct CardConnectorGrant: Codable, Hashable {
-    public var `type`: String
-    public var `consent`: ConnectorConsent
-    public init(consent: ConnectorConsent) {
-        self.`type` = "connector_grant"
-        self.`consent` = consent
-    }
-    enum CodingKeys: String, CodingKey { case `type`, `consent` }
-    public init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        self.`type` = try c.decode(String.self, forKey: .`type`)
-        guard ["connector_grant"].contains(`type`) else { throw DecodingError.dataCorruptedError(forKey: .`type`, in: c, debugDescription: "Invalid CardConnectorGrant.type") }
-        self.`consent` = try c.decode(ConnectorConsent.self, forKey: .`consent`)
-    }
-    public func encode(to encoder: Encoder) throws {
-        var c = encoder.container(keyedBy: CodingKeys.self)
-        try c.encode(`type`, forKey: .`type`)
-        try c.encode(`consent`, forKey: .`consent`)
-    }
-}
 
 public struct CardVoiceMemo: Codable, Hashable {
     public var `type`: String
@@ -12645,9 +12582,7 @@ public enum Card: Codable, Hashable {
     case `listenerConnect`(CardListenerConnect)
     case `slackConnect`(CardSlackConnect)
     case `scmConnect`(CardScmConnect)
-    case `teamAccess`(CardTeamAccess)
     case `botTemplateShare`(CardBotTemplateShare)
-    case `connectorGrant`(CardConnectorGrant)
     case `voiceMemo`(CardVoiceMemo)
     case `handoff`(CardHandoff)
     private enum CodingKeys: String, CodingKey { case type }
@@ -12675,9 +12610,7 @@ public enum Card: Codable, Hashable {
         case "listener_connect": self = .`listenerConnect`(try CardListenerConnect(from: decoder))
         case "slack_connect": self = .`slackConnect`(try CardSlackConnect(from: decoder))
         case "scm_connect": self = .`scmConnect`(try CardScmConnect(from: decoder))
-        case "team_access": self = .`teamAccess`(try CardTeamAccess(from: decoder))
         case "bot_template_share": self = .`botTemplateShare`(try CardBotTemplateShare(from: decoder))
-        case "connector_grant": self = .`connectorGrant`(try CardConnectorGrant(from: decoder))
         case "voice_memo": self = .`voiceMemo`(try CardVoiceMemo(from: decoder))
         case "handoff": self = .`handoff`(try CardHandoff(from: decoder))
         default: self = .unsupported(try UnsupportedCard(from: decoder))
@@ -12706,9 +12639,7 @@ public enum Card: Codable, Hashable {
         case .`listenerConnect`(let v): try v.encode(to: encoder)
         case .`slackConnect`(let v): try v.encode(to: encoder)
         case .`scmConnect`(let v): try v.encode(to: encoder)
-        case .`teamAccess`(let v): try v.encode(to: encoder)
         case .`botTemplateShare`(let v): try v.encode(to: encoder)
-        case .`connectorGrant`(let v): try v.encode(to: encoder)
         case .`voiceMemo`(let v): try v.encode(to: encoder)
         case .`handoff`(let v): try v.encode(to: encoder)
         }
@@ -12736,9 +12667,7 @@ public enum Card: Codable, Hashable {
         case .`listenerConnect`: return "listener_connect"
         case .`slackConnect`: return "slack_connect"
         case .`scmConnect`: return "scm_connect"
-        case .`teamAccess`: return "team_access"
         case .`botTemplateShare`: return "bot_template_share"
-        case .`connectorGrant`: return "connector_grant"
         case .`voiceMemo`: return "voice_memo"
         case .`handoff`: return "handoff"
         }
@@ -13677,30 +13606,6 @@ public struct CardActionConnectorAuthorize: Codable, Hashable {
     }
 }
 
-public struct CardActionConnectorConsent: Codable, Hashable {
-    public var `action`: String
-    public var `consentId`: ID
-    public var `request`: ConsentResolve
-    public init(consentId: ID, request: ConsentResolve) {
-        self.`action` = "connector_consent"
-        self.`consentId` = consentId
-        self.`request` = request
-    }
-    enum CodingKeys: String, CodingKey { case `action`, `consentId`, `request` }
-    public init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        self.`action` = try c.decode(String.self, forKey: .`action`)
-        guard ["connector_consent"].contains(`action`) else { throw DecodingError.dataCorruptedError(forKey: .`action`, in: c, debugDescription: "Invalid CardActionConnectorConsent.action") }
-        self.`consentId` = try c.decode(ID.self, forKey: .`consentId`)
-        self.`request` = try c.decode(ConsentResolve.self, forKey: .`request`)
-    }
-    public func encode(to encoder: Encoder) throws {
-        var c = encoder.container(keyedBy: CodingKeys.self)
-        try c.encode(`action`, forKey: .`action`)
-        try c.encode(`consentId`, forKey: .`consentId`)
-        try c.encode(`request`, forKey: .`request`)
-    }
-}
 
 public struct CardActionTemplateImport: Codable, Hashable {
     public var `action`: String
@@ -13727,30 +13632,6 @@ public struct CardActionTemplateImport: Codable, Hashable {
     }
 }
 
-public struct CardActionTeamPublish: Codable, Hashable {
-    public var `action`: String
-    public var `botId`: ID
-    public var `request`: BotUpdate
-    public init(botId: ID, request: BotUpdate) {
-        self.`action` = "team_publish"
-        self.`botId` = botId
-        self.`request` = request
-    }
-    enum CodingKeys: String, CodingKey { case `action`, `botId`, `request` }
-    public init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        self.`action` = try c.decode(String.self, forKey: .`action`)
-        guard ["team_publish"].contains(`action`) else { throw DecodingError.dataCorruptedError(forKey: .`action`, in: c, debugDescription: "Invalid CardActionTeamPublish.action") }
-        self.`botId` = try c.decode(ID.self, forKey: .`botId`)
-        self.`request` = try c.decode(BotUpdate.self, forKey: .`request`)
-    }
-    public func encode(to encoder: Encoder) throws {
-        var c = encoder.container(keyedBy: CodingKeys.self)
-        try c.encode(`action`, forKey: .`action`)
-        try c.encode(`botId`, forKey: .`botId`)
-        try c.encode(`request`, forKey: .`request`)
-    }
-}
 
 public enum CardAction: Codable, Hashable {
     case `answer`(CardActionAnswer)
@@ -13764,9 +13645,7 @@ public enum CardAction: Codable, Hashable {
     case `draftSend`(CardActionDraftSend)
     case `draftDiscard`(CardActionDraftDiscard)
     case `connectorAuthorize`(CardActionConnectorAuthorize)
-    case `connectorConsent`(CardActionConnectorConsent)
     case `templateImport`(CardActionTemplateImport)
-    case `teamPublish`(CardActionTeamPublish)
     private enum CodingKeys: String, CodingKey { case action }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -13783,9 +13662,7 @@ public enum CardAction: Codable, Hashable {
         case "draft_send": self = .`draftSend`(try CardActionDraftSend(from: decoder))
         case "draft_discard": self = .`draftDiscard`(try CardActionDraftDiscard(from: decoder))
         case "connector_authorize": self = .`connectorAuthorize`(try CardActionConnectorAuthorize(from: decoder))
-        case "connector_consent": self = .`connectorConsent`(try CardActionConnectorConsent(from: decoder))
         case "template_import": self = .`templateImport`(try CardActionTemplateImport(from: decoder))
-        case "team_publish": self = .`teamPublish`(try CardActionTeamPublish(from: decoder))
         default: throw DecodingError.dataCorruptedError(forKey: .action, in: c, debugDescription: "Unsupported CardAction discriminator: \(value)")
         }
     }
@@ -13802,9 +13679,7 @@ public enum CardAction: Codable, Hashable {
         case .`draftSend`(let v): try v.encode(to: encoder)
         case .`draftDiscard`(let v): try v.encode(to: encoder)
         case .`connectorAuthorize`(let v): try v.encode(to: encoder)
-        case .`connectorConsent`(let v): try v.encode(to: encoder)
         case .`templateImport`(let v): try v.encode(to: encoder)
-        case .`teamPublish`(let v): try v.encode(to: encoder)
         }
     }
     public var action: String {
@@ -13820,9 +13695,7 @@ public enum CardAction: Codable, Hashable {
         case .`draftSend`: return "draft_send"
         case .`draftDiscard`: return "draft_discard"
         case .`connectorAuthorize`: return "connector_authorize"
-        case .`connectorConsent`: return "connector_consent"
         case .`templateImport`: return "template_import"
-        case .`teamPublish`: return "team_publish"
         }
     }
 }
@@ -15208,7 +15081,6 @@ public enum TranscriptEntry: Codable, Hashable {
 }
 
 public enum RealtimePayload: Codable, Hashable {
-    case conversationLeft(RealtimeConversationLeft)
     case userUpdated(User)
     case workspaceUpdated(Workspace)
     case memberUpserted(Member)
@@ -15247,13 +15119,13 @@ public enum RealtimePayload: Codable, Hashable {
     case routineRunUpserted(RoutineRun)
     case memoryUpserted(Memory)
     case memoryDeleted(RealtimeMemoryDeleted)
+    case pairingUpserted(Pairing)
     case notificationUpserted(BotNotification)
     case notificationDeleted(Deleted)
     case policiesUpdated(Policies)
     case connectorUpserted(Connector)
     case connectorDeleted(Deleted)
     case connectorAuthUpserted(ConnectorAuth)
-    case consentUpserted(ConnectorConsent)
     case channelUpserted(ChannelBinding)
     case channelDeleted(Deleted)
     case voiceUpserted(VoiceSession)
@@ -15282,7 +15154,6 @@ public enum RealtimePayload: Codable, Hashable {
     case xConnectionUpserted(XConnection)
     public init(from decoder: Decoder) throws { throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "RealtimePayload requires the event envelope")) }
     public func encode(to encoder: Encoder) throws { switch self {
-    case .conversationLeft(let value): try value.encode(to: encoder)
     case .userUpdated(let value): try value.encode(to: encoder)
     case .workspaceUpdated(let value): try value.encode(to: encoder)
     case .memberUpserted(let value): try value.encode(to: encoder)
@@ -15321,13 +15192,13 @@ public enum RealtimePayload: Codable, Hashable {
     case .routineRunUpserted(let value): try value.encode(to: encoder)
     case .memoryUpserted(let value): try value.encode(to: encoder)
     case .memoryDeleted(let value): try value.encode(to: encoder)
+    case .pairingUpserted(let value): try value.encode(to: encoder)
     case .notificationUpserted(let value): try value.encode(to: encoder)
     case .notificationDeleted(let value): try value.encode(to: encoder)
     case .policiesUpdated(let value): try value.encode(to: encoder)
     case .connectorUpserted(let value): try value.encode(to: encoder)
     case .connectorDeleted(let value): try value.encode(to: encoder)
     case .connectorAuthUpserted(let value): try value.encode(to: encoder)
-    case .consentUpserted(let value): try value.encode(to: encoder)
     case .channelUpserted(let value): try value.encode(to: encoder)
     case .channelDeleted(let value): try value.encode(to: encoder)
     case .voiceUpserted(let value): try value.encode(to: encoder)
@@ -15363,7 +15234,6 @@ public struct RealtimeEvent: Codable, Hashable {
     public var timestampMs: TimestampMs
     public var type: String { "event" }
     public var event: String { switch payload {
-    case .conversationLeft: return "conversation.left"
     case .userUpdated: return "user.updated"
     case .workspaceUpdated: return "workspace.updated"
     case .memberUpserted: return "member.upserted"
@@ -15402,13 +15272,13 @@ public struct RealtimeEvent: Codable, Hashable {
     case .routineRunUpserted: return "routine_run.upserted"
     case .memoryUpserted: return "memory.upserted"
     case .memoryDeleted: return "memory.deleted"
+    case .pairingUpserted: return "pairing.upserted"
     case .notificationUpserted: return "notification.upserted"
     case .notificationDeleted: return "notification.deleted"
     case .policiesUpdated: return "policies.updated"
     case .connectorUpserted: return "connector.upserted"
     case .connectorDeleted: return "connector.deleted"
     case .connectorAuthUpserted: return "connector_auth.upserted"
-    case .consentUpserted: return "consent.upserted"
     case .channelUpserted: return "channel.upserted"
     case .channelDeleted: return "channel.deleted"
     case .voiceUpserted: return "voice.upserted"
@@ -15445,7 +15315,6 @@ public struct RealtimeEvent: Codable, Hashable {
         timestampMs = try c.decode(TimestampMs.self, forKey: .timestampMs)
         let name = try c.decode(String.self, forKey: .event)
         switch name {
-        case "conversation.left": payload = .conversationLeft(try c.decode(RealtimeConversationLeft.self, forKey: .payload))
         case "user.updated": payload = .userUpdated(try c.decode(User.self, forKey: .payload))
         case "workspace.updated": payload = .workspaceUpdated(try c.decode(Workspace.self, forKey: .payload))
         case "member.upserted": payload = .memberUpserted(try c.decode(Member.self, forKey: .payload))
@@ -15484,13 +15353,13 @@ public struct RealtimeEvent: Codable, Hashable {
         case "routine_run.upserted": payload = .routineRunUpserted(try c.decode(RoutineRun.self, forKey: .payload))
         case "memory.upserted": payload = .memoryUpserted(try c.decode(Memory.self, forKey: .payload))
         case "memory.deleted": payload = .memoryDeleted(try c.decode(RealtimeMemoryDeleted.self, forKey: .payload))
+        case "pairing.upserted": payload = .pairingUpserted(try c.decode(Pairing.self, forKey: .payload))
         case "notification.upserted": payload = .notificationUpserted(try c.decode(BotNotification.self, forKey: .payload))
         case "notification.deleted": payload = .notificationDeleted(try c.decode(Deleted.self, forKey: .payload))
         case "policies.updated": payload = .policiesUpdated(try c.decode(Policies.self, forKey: .payload))
         case "connector.upserted": payload = .connectorUpserted(try c.decode(Connector.self, forKey: .payload))
         case "connector.deleted": payload = .connectorDeleted(try c.decode(Deleted.self, forKey: .payload))
         case "connector_auth.upserted": payload = .connectorAuthUpserted(try c.decode(ConnectorAuth.self, forKey: .payload))
-        case "consent.upserted": payload = .consentUpserted(try c.decode(ConnectorConsent.self, forKey: .payload))
         case "channel.upserted": payload = .channelUpserted(try c.decode(ChannelBinding.self, forKey: .payload))
         case "channel.deleted": payload = .channelDeleted(try c.decode(Deleted.self, forKey: .payload))
         case "voice.upserted": payload = .voiceUpserted(try c.decode(VoiceSession.self, forKey: .payload))
@@ -15530,21 +15399,15 @@ public struct RealtimeEvent: Codable, Hashable {
 public struct RealtimeMemoryDeleted: Codable, Hashable, Identifiable {
     public var `id`: ID
     public var `botId`: ID
-    public var `scope`: String
-    public var `userId`: ID?
-    public init(id: ID, botId: ID, scope: String, userId: ID? = nil) {
+    public init(id: ID, botId: ID) {
         self.`id` = id
         self.`botId` = botId
-        self.`scope` = scope
-        self.`userId` = userId
     }
-    enum CodingKeys: String, CodingKey { case `id`, `botId`, `scope`, `userId` }
+    enum CodingKeys: String, CodingKey { case `id`, `botId` }
     public func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(`id`, forKey: .`id`)
         try c.encode(`botId`, forKey: .`botId`)
-        try c.encode(`scope`, forKey: .`scope`)
-        try c.encode(`userId`, forKey: .`userId`)
     }
 }
 
@@ -17516,45 +17379,6 @@ public struct ReviewedSetupManifestEntries: Codable, Hashable, Identifiable {
     }
 }
 
-public struct GroupLeave: Codable, Hashable {
-    public var `clientNonce`: String
-    public var `newOwnerUserId`: ID?
-    public init(clientNonce: String, newOwnerUserId: ID? = nil) {
-        self.`clientNonce` = clientNonce
-        self.`newOwnerUserId` = newOwnerUserId
-    }
-    enum CodingKeys: String, CodingKey { case `clientNonce`, `newOwnerUserId` }
-    public init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        self.`clientNonce` = try c.decode(String.self, forKey: .`clientNonce`)
-        self.`newOwnerUserId` = try c.decodeOptional(ID.self, forKey: .`newOwnerUserId`)
-    }
-    public func encode(to encoder: Encoder) throws {
-        var c = encoder.container(keyedBy: CodingKeys.self)
-        try c.encode(`clientNonce`, forKey: .`clientNonce`)
-        try c.encodeIfPresent(`newOwnerUserId`, forKey: .`newOwnerUserId`)
-    }
-}
-
-public struct RealtimeConversationLeft: Codable, Hashable {
-    public var `conversationId`: ID
-    public var `userId`: ID
-    public init(conversationId: ID, userId: ID) {
-        self.`conversationId` = conversationId
-        self.`userId` = userId
-    }
-    enum CodingKeys: String, CodingKey { case `conversationId`, `userId` }
-    public init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        self.`conversationId` = try c.decode(ID.self, forKey: .`conversationId`)
-        self.`userId` = try c.decode(ID.self, forKey: .`userId`)
-    }
-    public func encode(to encoder: Encoder) throws {
-        var c = encoder.container(keyedBy: CodingKeys.self)
-        try c.encode(`conversationId`, forKey: .`conversationId`)
-        try c.encode(`userId`, forKey: .`userId`)
-    }
-}
 
 public typealias AccountCleanupState = String
 

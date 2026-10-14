@@ -4,8 +4,8 @@ import XCTest
 final class ProtocolTests: XCTestCase {
     func testEveryDeclaredCardRoundTripsWithExactDiscriminator() throws {
         let cards = try JSONDecoder().decode([Card].self, from: WireFixtures.cards)
-        XCTAssertEqual(cards.count, 25)
-        XCTAssertEqual(Set(cards.map(\.type)).count, 25)
+        XCTAssertEqual(cards.count, 23)
+        XCTAssertEqual(Set(cards.map(\.type)).count, 23)
         let reencoded = try JSONEncoder().encode(cards)
         XCTAssertEqual(try JSONDecoder().decode(JSONValue.self, from: reencoded), try JSONDecoder().decode(JSONValue.self, from: WireFixtures.cards))
     }
@@ -15,10 +15,11 @@ final class ProtocolTests: XCTestCase {
         XCTAssertTrue(entries.allSatisfy { $0.id == "resource" && $0.seq == 1 })
         XCTAssertEqual(try JSONDecoder().decode([TranscriptEntry].self, from: JSONEncoder().encode(entries)), entries)
         let events = try JSONDecoder().decode([RealtimeEvent].self, from: WireFixtures.events)
-        XCTAssertEqual(events.count, 72)
-        XCTAssertEqual(Set(events.map(\.event)).count, 72)
+        XCTAssertEqual(events.count, 71)
+        XCTAssertEqual(Set(events.map(\.event)).count, 71)
         XCTAssertTrue(events.allSatisfy { $0.seq == "9007199254740993123456" })
         XCTAssertEqual(try JSONDecoder().decode([RealtimeEvent].self, from: JSONEncoder().encode(events)), events)
+        XCTAssertEqual(try JSONDecoder().decode(JSONValue.self, from: JSONEncoder().encode(events)), try JSONDecoder().decode(JSONValue.self, from: WireFixtures.events))
     }
     func testKnownCardCannotDecodeWithoutItsRequiredResource() {
         XCTAssertThrowsError(try JSONDecoder().decode(Card.self, from: Data(#"{"type":"secret_request"}"#.utf8)))
@@ -174,7 +175,170 @@ extension ProtocolTests {
     func testNullableActorIdentityDoesNotBecomeANestedIdentifiableID() throws {
         let actor = try JSONDecoder().decode(Actor.self, from: Data(#"{"kind":"system","id":null,"displayName":"System"}"#.utf8))
         XCTAssertNil(actor.id)
-        let named = try JSONDecoder().decode(Actor.self, from: Data(#"{"kind":"bot","id":"bot_owned","displayName":"Teammate"}"#.utf8))
+        let named = try JSONDecoder().decode(Actor.self, from: Data(#"{"kind":"bot","id":"bot_owned","displayName":"Research"}"#.utf8))
         XCTAssertEqual(named.id, "bot_owned")
+    }
+}
+
+extension ProtocolTests {
+    func testEveryOwnerTranscriptEventRoundTripsWithoutCrossHumanEvents() throws {
+        let events = try JSONDecoder().decode([TranscriptEvent].self, from: WireFixtures.transcriptEvents)
+        XCTAssertEqual(Set(events.map(\.type)), ["name_changed", "channel_connected", "channel_disconnected", "routine_changed", "task_changed", "bot_added", "bot_removed", "handoff", "machine_moved"])
+        XCTAssertEqual(events.count, 9)
+        XCTAssertEqual(try JSONDecoder().decode(JSONValue.self, from: JSONEncoder().encode(events)), try JSONDecoder().decode(JSONValue.self, from: WireFixtures.transcriptEvents))
+        for type in ["team_shared", "team_bot_published", "team_bot_unpublished", "person_added", "person_removed", "person_left", "future_event"] {
+            XCTAssertThrowsError(try JSONDecoder().decode(TranscriptEvent.self, from: JSONEncoder().encode(["type": type])), type)
+        }
+    }
+
+    func testPairedSessionExpiryIsRequiredNullableRatherThanOmitted() throws {
+        let auth = try JSONDecoder().decode(AuthResult.self, from: WireFixtures.pairedAuth)
+        XCTAssertNil(auth.session.expiresAtMs)
+        var session = try JSONDecoder().decode(JSONObject.self, from: JSONEncoder().encode(auth.session))
+        XCTAssertEqual(session["expiresAtMs"], .null)
+        session.removeValue(forKey: "expiresAtMs")
+        XCTAssertThrowsError(try JSONDecoder().decode(AuthSession.self, from: JSONEncoder().encode(session)))
+        session["expiresAtMs"] = .number(1790000300000)
+        XCTAssertEqual(try JSONDecoder().decode(AuthSession.self, from: JSONEncoder().encode(session)).expiresAtMs, 1790000300000)
+        session["expiresAtMs"] = .string("never")
+        XCTAssertThrowsError(try JSONDecoder().decode(AuthSession.self, from: JSONEncoder().encode(session)))
+    }
+
+    func testPairingStatesRetainSafeResourceAndRequireNullableKeys() throws {
+        var wire = try JSONDecoder().decode(JSONObject.self, from: WireFixtures.pairing)
+        for status in ["waiting", "pending_approval", "approved", "denied", "expired", "consumed"] {
+            wire["status"] = .string(status)
+            wire["deviceName"] = .null
+            wire["verificationCode"] = .null
+            let pairing = try JSONDecoder().decode(Pairing.self, from: JSONEncoder().encode(wire))
+            XCTAssertEqual(pairing.status, status)
+            XCTAssertEqual(pairing.ownerUserId, "resource")
+            XCTAssertEqual(pairing.backendUrl, "https://desktop.example.ts.net")
+            XCTAssertNil(pairing.deviceName)
+            XCTAssertNil(pairing.verificationCode)
+            XCTAssertEqual(try JSONDecoder().decode(JSONObject.self, from: JSONEncoder().encode(pairing)), wire)
+        }
+        for key in ["deviceName", "verificationCode", "ownerUserId", "workspaceId", "status", "expiresAtMs"] {
+            var missing = wire
+            missing.removeValue(forKey: key)
+            XCTAssertThrowsError(try JSONDecoder().decode(Pairing.self, from: JSONEncoder().encode(missing)), key)
+        }
+        wire["status"] = .string("connected")
+        XCTAssertThrowsError(try JSONDecoder().decode(Pairing.self, from: JSONEncoder().encode(wire)))
+        var invalid = try JSONDecoder().decode(Pairing.self, from: WireFixtures.pairing)
+        invalid.status = "future_status"
+        XCTAssertThrowsError(try JSONEncoder().encode(invalid))
+        let safe = try JSONDecoder().decode(JSONObject.self, from: WireFixtures.pairing)
+        XCTAssertNil(safe["pairCode"])
+        XCTAssertNil(safe["claimToken"])
+        XCTAssertNil(safe["token"])
+    }
+
+    func testNamedPairingRequestsAndResultsRoundTripExactWireKeys() throws {
+        func roundTrip<T: Codable & Equatable>(_ type: T.Type, _ text: String) throws {
+            let data = Data(text.utf8)
+            let value = try JSONDecoder().decode(type, from: data)
+            let encoded = try JSONEncoder().encode(value)
+            XCTAssertEqual(try JSONDecoder().decode(type, from: encoded), value)
+            XCTAssertEqual(try JSONDecoder().decode(JSONValue.self, from: encoded), try JSONDecoder().decode(JSONValue.self, from: data))
+            let fields = try JSONDecoder().decode(JSONObject.self, from: data)
+            for key in fields.keys {
+                var missing = fields
+                missing.removeValue(forKey: key)
+                XCTAssertThrowsError(try JSONDecoder().decode(type, from: JSONEncoder().encode(missing)), "\(type).\(key)")
+                var null = fields
+                null[key] = .null
+                XCTAssertThrowsError(try JSONDecoder().decode(type, from: JSONEncoder().encode(null)), "\(type).\(key)")
+            }
+        }
+        try roundTrip(PairingStart.self, #"{"clientNonce":"start_fixed"}"#)
+        try roundTrip(PairingLink.self, #"{"backendUrl":"https://desktop.example.ts.net","workspaceId":"workspace_owned","pairCode":"short_lived_fixture_code"}"#)
+        try roundTrip(PairingPreviewRequest.self, #"{"pairCode":"short_lived_fixture_code","workspaceId":"workspace_owned"}"#)
+        try roundTrip(PairingPreviewResult.self, #"{"clusterName":"Owner desktop","backendUrl":"https://desktop.example.ts.net","expiresAtMs":1790000300000}"#)
+        try roundTrip(PairingClaim.self, #"{"clientNonce":"claim_fixed","pairCode":"short_lived_fixture_code","workspaceId":"workspace_owned","installationId":"installation_phone","deviceName":"Owner iPhone","appVersion":"1.0"}"#)
+        try roundTrip(PairingClaimResult.self, #"{"pairingId":"pairing_owned","claimToken":"fixture_claim_token","verificationCode":"123456","expiresAtMs":1790000300000,"clusterName":"Owner desktop","backendUrl":"https://desktop.example.ts.net"}"#)
+        try roundTrip(PairingApprove.self, #"{"clientNonce":"approve_fixed","revision":2,"verificationCode":"123456"}"#)
+        try roundTrip(PairingDeny.self, #"{"clientNonce":"deny_fixed","revision":2}"#)
+        try roundTrip(PairingComplete.self, #"{"clientNonce":"complete_fixed","claimToken":"fixture_claim_token"}"#)
+        let pairing = try JSONDecoder().decode(Pairing.self, from: WireFixtures.pairing)
+        let issued = PairingIssued(pairing: pairing, pairUrl: "lemonbot://pair?backend=https%3A%2F%2Fdesktop.example.ts.net&cluster=workspace_owned&code=short_lived_fixture_code")
+        XCTAssertEqual(try JSONDecoder().decode(PairingIssued.self, from: JSONEncoder().encode(issued)), issued)
+        let encoded = try JSONDecoder().decode(JSONObject.self, from: JSONEncoder().encode(issued))
+        XCTAssertEqual(Set(encoded.keys), ["pairing", "pairUrl"])
+        for key in ["pairing", "pairUrl"] {
+            var missing = encoded
+            missing.removeValue(forKey: key)
+            XCTAssertThrowsError(try JSONDecoder().decode(PairingIssued.self, from: JSONEncoder().encode(missing)))
+        }
+    }
+
+    func testPairingCompletionDiscriminatesProgressFromDeviceBoundAuthority() throws {
+        let completions = try JSONDecoder().decode([PairingCompletion].self, from: WireFixtures.pairingCompletions)
+        XCTAssertEqual(completions.map(\.status), ["pending", "denied", "expired", "connected"])
+        for completion in completions.prefix(3) {
+            guard case .pending(let result) = completion else { return XCTFail("Expected credential-free state") }
+            XCTAssertEqual(result.pairingId, "pairing_owned")
+            XCTAssertEqual(result.expiresAtMs, 1790000300000)
+            let fields = try JSONDecoder().decode(JSONObject.self, from: JSONEncoder().encode(completion))
+            XCTAssertEqual(Set(fields.keys), ["status", "pairingId", "expiresAtMs"])
+        }
+        guard case .connected(let result) = completions[3] else { return XCTFail("Expected connected session and device") }
+        XCTAssertEqual(result.status, "connected")
+        XCTAssertEqual(result.device.platform, "ios")
+        XCTAssertEqual(result.auth.session.deviceId, result.device.id)
+        XCTAssertNil(result.auth.session.expiresAtMs)
+        XCTAssertEqual(try JSONDecoder().decode(JSONValue.self, from: JSONEncoder().encode(completions)), try JSONDecoder().decode(JSONValue.self, from: WireFixtures.pairingCompletions))
+        for invalid in [
+            #"{"status":"approved","pairingId":"p","expiresAtMs":1}"#,
+            #"{"status":"pending","expiresAtMs":1}"#,
+            #"{"status":"expired","pairingId":"p","expiresAtMs":null}"#,
+            #"{"status":"connected","pairingId":"p","expiresAtMs":1}"#,
+            #"{"status":"connected","auth":null,"device":null}"#,
+            #"{"pairingId":"p","expiresAtMs":1}"#
+        ] {
+            XCTAssertThrowsError(try JSONDecoder().decode(PairingCompletion.self, from: Data(invalid.utf8)), invalid)
+        }
+        let invalid = PairingCompletion.pending(PairingCompletionPending(status: "connected", pairingId: "p", expiresAtMs: 1))
+        XCTAssertThrowsError(try JSONEncoder().encode(invalid))
+    }
+
+    func testOwnerResourceFixturesDoNotReencodeEliminatedAuthorityFields() throws {
+        let events = try JSONDecoder().decode([RealtimeEvent].self, from: WireFixtures.events)
+        let wire = try JSONDecoder().decode([JSONObject].self, from: JSONEncoder().encode(events))
+        let omitted = [
+            "bot.upserted": ["managerUserIds", "visibility", "published", "required"],
+            "conversation.upserted": ["humanUserIds"],
+            "skill.upserted": ["scope"],
+            "memory.upserted": ["scope", "userId"],
+            "memory.deleted": ["scope", "userId"],
+            "connector.upserted": ["shared"],
+            "group_policy.upserted": ["defaultBotIds"]
+        ]
+        for (event, keys) in omitted {
+            let payload = try XCTUnwrap(wire.first { $0["event"]?.stringValue == event }?["payload"]?.objectValue)
+            for key in keys { XCTAssertNil(payload[key], "\(event).\(key)") }
+        }
+        let pairingEvent = try XCTUnwrap(events.first { $0.event == "pairing.upserted" })
+        guard case .pairingUpserted(let pairing) = pairingEvent.payload else { return XCTFail("Expected typed pairing resource") }
+        XCTAssertEqual(pairing.id, "pairing_owned")
+        for name in ["conversation.left", "consent.upserted", "future.event"] {
+            XCTAssertThrowsError(try JSONDecoder().decode(RealtimeEvent.self, from: JSONEncoder().encode(["type": JSONValue.string("event"), "seq": .string("42"), "event": .string(name), "payload": .object([:]), "timestampMs": .number(1)])), name)
+        }
+        for action in ["team_publish", "connector_consent", "future_action"] {
+            XCTAssertThrowsError(try JSONDecoder().decode(CardAction.self, from: JSONEncoder().encode(["action": action])), action)
+        }
+    }
+
+    func testOwnerConversationKindsRejectEliminatedTeamDirectMessages() throws {
+        for kind in ["dm", "task", "group", "channel"] {
+            let request = ConversationCreate(clientNonce: "conversation_fixed", kind: kind, botIds: ["bot_owned", "bot_second"])
+            XCTAssertEqual(try JSONDecoder().decode(ConversationCreate.self, from: JSONEncoder().encode(request)), request)
+        }
+        let invalid = ConversationCreate(clientNonce: "conversation_fixed", kind: "team_dm", botIds: ["bot_owned"])
+        XCTAssertThrowsError(try JSONEncoder().encode(invalid))
+        XCTAssertThrowsError(try JSONDecoder().decode(ConversationCreate.self, from: Data(#"{"clientNonce":"conversation_fixed","kind":"team_dm","botIds":["bot_owned"]}"#.utf8)))
+        var resource = try XCTUnwrap(try JSONDecoder().decode([JSONObject].self, from: WireFixtures.events).first { $0["event"]?.stringValue == "conversation.upserted" }?["payload"]?.objectValue)
+        resource["kind"] = .string("team_dm")
+        XCTAssertThrowsError(try JSONDecoder().decode(Conversation.self, from: JSONEncoder().encode(resource)))
     }
 }
