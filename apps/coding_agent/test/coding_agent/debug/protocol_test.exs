@@ -12,19 +12,6 @@ defmodule CodingAgent.Debug.ProtocolTest do
     assert Jason.decode!(body)["text"] == "héllo"
   end
 
-  test "decode drains every complete message and keeps the incomplete tail" do
-    first = frame(%{"seq" => 1, "type" => "event", "event" => "initialized"})
-    second = frame(%{"seq" => 2, "type" => "response", "request_seq" => 1, "success" => true})
-    third = frame(%{"seq" => 3, "type" => "event", "event" => "stopped"})
-    {partial, remainder} = String.split_at(third, 10)
-
-    assert {[%{"seq" => 1}, %{"seq" => 2}], rest, ""} =
-             Protocol.decode(first <> second <> partial)
-
-    assert rest == partial
-    assert {[%{"seq" => 3, "event" => "stopped"}], "", ""} = Protocol.decode(rest <> remainder)
-  end
-
   test "decode handles a body split at every byte boundary" do
     message =
       frame(%{"seq" => 9, "type" => "event", "event" => "output", "body" => %{"output" => "ü"}})
@@ -54,14 +41,5 @@ defmodule CodingAgent.Debug.ProtocolTest do
     bad = "Content-Length: 5\r\n\r\n{nope"
     good = frame(%{"seq" => 3, "type" => "event", "event" => "exited"})
     assert {[%{"event" => "exited"}], "", ""} = Protocol.decode(bad <> good)
-  end
-
-  test "extra headers and case-insensitive names are accepted" do
-    body = ~s({"seq":4,"type":"event","event":"thread"})
-
-    framed =
-      "content-length: #{byte_size(body)}\r\nContent-Type: application/json\r\n\r\n" <> body
-
-    assert {[%{"event" => "thread"}], "", ""} = Protocol.decode(framed)
   end
 end

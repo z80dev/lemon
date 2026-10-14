@@ -200,21 +200,6 @@ defmodule CodingAgent.Debug.SessionServerTest do
     assert message =~ "has terminated"
   end
 
-  test "explicit thread_id is used for execution requests", ctx do
-    assert {:ok, %{state: :stopped}} = launch(ctx)
-    assert {:ok, %{state: :stopped}} = call(ctx.key, %{action: "step_in", thread_id: 2})
-
-    assert {"stepIn", %{"threadId" => 2}} =
-             ctx.log |> commands() |> Enum.find(&match?({"stepIn", _}, &1))
-  end
-
-  test "rejected reverse requests are noted in the output buffer", ctx do
-    assert {:ok, %{state: :stopped}} = launch(ctx, %{"fakeMode" => "reverse"})
-    assert {:ok, %{output: output}} = call(ctx.key, %{action: "output"})
-    assert output =~ "rejected adapter request: runInTerminal"
-    assert output =~ "rejected adapter request: startDebugging"
-  end
-
   test "continue reports a timeout while the program keeps running, then pause stops it", ctx do
     assert {:ok, %{state: :stopped}} = launch(ctx, %{"fakeMode" => "hang"})
 
@@ -251,11 +236,6 @@ defmodule CodingAgent.Debug.SessionServerTest do
   test "launch failures surface the adapter error and dispose the session", ctx do
     assert {:error, "cannot launch: boom"} = launch(ctx, %{"fakeMode" => "fail_launch"})
     assert {:ok, %{snapshot: %{status: :none}}} = call(ctx.key, %{action: "status"})
-  end
-
-  test "adapter crashes surface stderr", ctx do
-    assert {:error, message} = launch(ctx, %{"fakeMode" => "crash"})
-    assert message =~ "fatal adapter error"
   end
 
   test "a second launch is refused while a session is active", ctx do

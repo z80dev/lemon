@@ -209,24 +209,8 @@ defmodule CodingAgent.Debug.SessionServer do
   defp run(%{action: "attach"} = request, ctx, state),
     do: start_session(:attach, request, ctx, state)
 
-  defp run(%{action: "set_breakpoint", file: file, line: line} = request, ctx, state) do
-    entry = %{
-      line: line,
-      condition: request[:condition],
-      hit_condition: request[:hit_condition],
-      verified: false,
-      message: nil,
-      id: nil
-    }
-
-    entries =
-      state.breakpoints
-      |> Map.get(file, [])
-      |> Enum.reject(&(&1.line == line))
-      |> Kernel.++([entry])
-      |> Enum.sort_by(& &1.line)
-
-    sync_source_breakpoints(file, entries, ctx, state)
+  defp run(%{action: "set_breakpoint", file: file} = request, ctx, state) do
+    sync_source_breakpoints(file, with_source_breakpoint(state, request), ctx, state)
   end
 
   defp run(%{action: "remove_breakpoint", file: file, line: line}, ctx, state) do
@@ -234,23 +218,8 @@ defmodule CodingAgent.Debug.SessionServer do
     sync_source_breakpoints(file, entries, ctx, state)
   end
 
-  defp run(%{action: "set_function_breakpoint", function: name} = request, ctx, state) do
-    entry = %{
-      name: name,
-      condition: request[:condition],
-      hit_condition: request[:hit_condition],
-      verified: false,
-      message: nil,
-      id: nil
-    }
-
-    entries =
-      state.function_breakpoints
-      |> Enum.reject(&(&1.name == name))
-      |> Kernel.++([entry])
-      |> Enum.sort_by(& &1.name)
-
-    sync_function_breakpoints(entries, ctx, state)
+  defp run(%{action: "set_function_breakpoint"} = request, ctx, state) do
+    sync_function_breakpoints(with_function_breakpoint(state, request), ctx, state)
   end
 
   defp run(%{action: "remove_function_breakpoint", function: name}, ctx, state) do
@@ -422,7 +391,7 @@ defmodule CodingAgent.Debug.SessionServer do
          state}
 
       _ ->
-        state = %{state | session: nil}
+        state = add_launch_breakpoints(%{state | session: nil}, request)
         adapter = request.adapter
 
         case Client.start_link(adapter: adapter, cwd: request.cwd, owner: self()) do
@@ -435,6 +404,57 @@ defmodule CodingAgent.Debug.SessionServer do
             {{:error, start_error(adapter, reason)}, state}
         end
     end
+  end
+
+  defp add_launch_breakpoints(state, request) do
+    state =
+      case request[:breakpoint] do
+        %{file: file} = bp ->
+          entries = with_source_breakpoint(state, bp)
+          pending = Enum.map(entries, &%{&1 | verified: false, id: nil, message: nil})
+          %{state | breakpoints: Map.put(state.breakpoints, file, pending)}
+
+        nil ->
+          state
+      end
+
+    case request[:function_breakpoint] do
+      %{function: _} = bp -> %{state | function_breakpoints: with_function_breakpoint(state, bp)}
+      nil -> state
+    end
+  end
+
+  defp with_source_breakpoint(state, %{file: file, line: line} = request) do
+    entry = %{
+      line: line,
+      condition: request[:condition],
+      hit_condition: request[:hit_condition],
+      verified: false,
+      message: nil,
+      id: nil
+    }
+
+    state.breakpoints
+    |> Map.get(file, [])
+    |> Enum.reject(&(&1.line == line))
+    |> Kernel.++([entry])
+    |> Enum.sort_by(& &1.line)
+  end
+
+  defp with_function_breakpoint(state, %{function: name} = request) do
+    entry = %{
+      name: name,
+      condition: request[:condition],
+      hit_condition: request[:hit_condition],
+      verified: false,
+      message: nil,
+      id: nil
+    }
+
+    state.function_breakpoints
+    |> Enum.reject(&(&1.name == name))
+    |> Kernel.++([entry])
+    |> Enum.sort_by(& &1.name)
   end
 
   defp handshake(kind, request, ctx, state) do

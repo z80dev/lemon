@@ -188,17 +188,18 @@ defmodule CodingAgent.Tools.Debug do
         end
 
       with :ok <- program_exists(kind, program, cwd),
+           {:ok, breakpoint} <- launch_breakpoint(params, cwd),
            {:ok, adapter} <-
              Adapters.select_launch(program, command_cwd, adapter_name, kind, adapter_opts(opts)) do
         {:ok,
-         %{
+         Map.merge(breakpoint, %{
            action: "launch",
            adapter: adapter,
            program: program,
            cwd: command_cwd,
            args: args,
            launch_overrides: Adapters.launch_overrides(adapter, program, kind)
-         }}
+         })}
       end
     end
   end
@@ -313,6 +314,45 @@ defmodule CodingAgent.Tools.Debug do
   defp build_request(action, _params, _cwd, _opts)
        when action in ["output", "status", "sessions", "terminate"] do
     {:ok, %{action: action}}
+  end
+
+  # `launch` may carry one initial breakpoint (file+line or function), added to
+  # the pending list before the configuration handshake.
+  defp launch_breakpoint(params, cwd) do
+    with {:ok, file} <- optional_string(params, "file"),
+         {:ok, line} <- optional_integer(params, "line"),
+         {:ok, function} <- optional_string(params, "function"),
+         {:ok, condition} <- optional_string(params, "condition"),
+         {:ok, hit_condition} <- optional_string(params, "hit_condition") do
+      cond do
+        is_binary(function) ->
+          {:ok,
+           %{
+             function_breakpoint: %{
+               function: function,
+               condition: condition,
+               hit_condition: hit_condition
+             }
+           }}
+
+        is_binary(file) and is_integer(line) and line > 0 ->
+          {:ok,
+           %{
+             breakpoint: %{
+               file: PathHelpers.resolve_path(file, cwd),
+               line: line,
+               condition: condition,
+               hit_condition: hit_condition
+             }
+           }}
+
+        is_binary(file) or not is_nil(line) ->
+          {:error, "launch breakpoints need file and a positive line"}
+
+        true ->
+          {:ok, %{}}
+      end
+    end
   end
 
   defp function_request(action, name, params) do
