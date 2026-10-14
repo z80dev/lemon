@@ -130,7 +130,7 @@ defmodule CodingAgent.Session.ProviderFallback do
     original_options =
       if same_provider?(model.provider, ctx.options_provider),
         do: ctx.options,
-        else: clear_provider_credentials(ctx.options)
+        else: LemonAgent.ModelRuntime.StreamOptions.sanitize_for_provider_switch(ctx.options)
 
     route_options =
       model
@@ -459,21 +459,6 @@ defmodule CodingAgent.Session.ProviderFallback do
   defp clear_api_key(%StreamOptions{} = options), do: %{options | api_key: nil}
   defp clear_api_key(options) when is_map(options), do: Map.put(options, :api_key, nil)
   defp clear_api_key(options), do: options
-
-  # Provider-bound options must not accompany a different provider's request.
-  # Rebuild them from the destination config, retaining request budgets.
-  defp clear_provider_credentials(options) when is_map(options) do
-    options
-    |> Map.put(:api_key, nil)
-    |> Map.put(:access_token, nil)
-    |> Map.put(:service_account_json, nil)
-    |> Map.put(:project, nil)
-    |> Map.put(:location, nil)
-    |> Map.put(:headers, %{})
-    |> Map.put(:provider_options, %{})
-  end
-
-  defp clear_provider_credentials(options), do: options
 
   # The credential entry's pre-resolved key wins when the stream options carry
   # none; entries without a key (nothing resolvable) fall through to the

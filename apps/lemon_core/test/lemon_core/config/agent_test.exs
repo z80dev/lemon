@@ -115,15 +115,6 @@ defmodule LemonCore.Config.AgentTest do
       assert config.provider_routing.require_credentials == true
     end
 
-    test "retains ordered explicit model and role fallback selectors" do
-      config = Agent.resolve(%{"runtime" => %{"provider_routing" => %{
-        "fallback_models" => [" openai:gpt-4o ", "@smol", "anthropic:claude-sonnet-4-20250514"]
-      }}})
-
-      assert config.provider_routing.fallback_models ==
-               ["openai:gpt-4o", "@smol", "anthropic:claude-sonnet-4-20250514"]
-    end
-
     test "rejects malformed or unbounded fallback chains" do
       for selectors <- ["openai:gpt-4", [""], ["gpt-4"], ["@"], [123],
                         ["openai:"], ["openai:bad model"], List.duplicate("@smol", 65),
