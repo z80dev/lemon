@@ -6,7 +6,8 @@ defmodule LemonAgent.ModelRuntime.CustomProviders do
   `LemonAi.Models` registry provider is a *custom provider* (omp `models.yml`
   parity). Its models keep the config id as a binary `provider`, use the
   allowlisted wire `api`, the configured `base_url`, and provider-level
-  `headers` as a baseline under per-model headers. `auth = "none"` marks every
+  `headers` as a case-insensitive baseline under per-model and caller headers.
+  `auth = "none"` marks every
   model `compat.allow_missing_api_key`, so OpenAI-compatible wire modules send no
   Authorization header when no key resolves.
 
@@ -23,6 +24,7 @@ defmodule LemonAgent.ModelRuntime.CustomProviders do
   through explicit allowlists.
   """
 
+  alias LemonAi.Providers.RequestHeaders
   alias LemonAi.Types.{Model, ModelCost}
   alias LemonAgent.ModelRuntime.{Credentials, ProviderNames}
   alias LemonCore.Config.Providers
@@ -73,7 +75,7 @@ defmodule LemonAgent.ModelRuntime.CustomProviders do
   def keyless?(cfg) when is_map(cfg), do: Providers.canonical_auth(value(cfg, :auth)) == "none"
   def keyless?(_), do: false
 
-  @doc "Provider-level headers with string values only."
+  @doc "Provider-level headers with lower-case names and string values only."
   @spec headers(provider_config() | nil) :: %{optional(String.t()) => String.t()}
   def headers(cfg) when is_map(cfg), do: string_headers(value(cfg, :headers))
   def headers(_), do: %{}
@@ -334,7 +336,8 @@ defmodule LemonAgent.ModelRuntime.CustomProviders do
           context_window: positive_integer(value(entry, :context_window)) || base.context_window,
           max_tokens: positive_integer(value(entry, :max_tokens)) || base.max_tokens,
           headers:
-            base.headers
+            %{}
+            |> RequestHeaders.merge(base.headers)
             |> Map.merge(headers(cfg))
             |> Map.merge(string_headers(value(entry, :headers)))
       }
@@ -413,8 +416,13 @@ defmodule LemonAgent.ModelRuntime.CustomProviders do
   defp value(map, key) when is_map(map), do: Map.get(map, key, Map.get(map, Atom.to_string(key)))
   defp value(_map, _key), do: nil
 
+  defp string_headers(headers) when headers == %{}, do: headers
+
   defp string_headers(headers) when is_map(headers) do
-    for {key, value} <- headers, is_binary(value), into: %{}, do: {to_string(key), value}
+    Enum.reduce(headers, %{}, fn
+      {key, value}, acc when is_binary(value) -> RequestHeaders.put(acc, key, value)
+      _, acc -> acc
+    end)
   end
 
   defp string_headers(_), do: %{}

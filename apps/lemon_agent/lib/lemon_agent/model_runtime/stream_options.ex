@@ -6,6 +6,7 @@ defmodule LemonAgent.ModelRuntime.StreamOptions do
   specific runtime inputs before `LemonAi.stream/3` or `LemonAi.complete/3` is invoked.
   """
 
+  alias LemonAi.Providers.RequestHeaders
   alias LemonAi.Types.StreamOptions
   alias LemonAgent.ModelRuntime.Credentials
   alias LemonAgent.ModelRuntime.CustomProviders
@@ -31,9 +32,8 @@ defmodule LemonAgent.ModelRuntime.StreamOptions do
     end
   end
 
-  # Custom `[providers.<id>]` endpoints: the model already carries base_url,
-  # headers and the keyless flag; pass the provider's own credential and the
-  # config headers (baseline under caller headers) to the wire module.
+  # Custom models already carry provider defaults beneath model overrides.
+  # Only explicit caller headers belong in the final wire override layer.
   defp custom_provider_options(base_opts, provider_id, provider_cfg, providers_map) do
     api_key =
       first_non_empty_binary([
@@ -43,7 +43,6 @@ defmodule LemonAgent.ModelRuntime.StreamOptions do
 
     base_opts
     |> maybe_put_struct(:api_key, api_key)
-    |> Map.put(:headers, Map.merge(CustomProviders.headers(provider_cfg), base_opts.headers))
     |> put_provider_options(provider_id, %{
       api_key: api_key,
       base_url: CustomProviders.base_url(provider_cfg)
@@ -55,11 +54,21 @@ defmodule LemonAgent.ModelRuntime.StreamOptions do
       ProviderNames.provider_config(providers_map, provider_config_lookup_key(model)) ||
         CustomProviders.config_for(providers_map, Map.get(model, :provider)) || %{}
 
-    # Provider-level `headers` are a baseline under caller-supplied headers.
-    base_opts = %{
-      base_opts
-      | headers: Map.merge(CustomProviders.headers(provider_cfg), base_opts.headers)
-    }
+    # Catalog-only built-in models may not carry configured provider headers.
+    # Keep model overrides above those defaults, then explicit caller headers.
+    base_opts =
+      case CustomProviders.headers(provider_cfg) do
+        defaults when map_size(defaults) == 0 ->
+          base_opts
+
+        defaults ->
+          headers =
+            defaults
+            |> RequestHeaders.merge(model.headers)
+            |> RequestHeaders.merge(base_opts.headers)
+
+          %{base_opts | headers: headers}
+      end
 
     case model do
       %{provider: :google_vertex} ->

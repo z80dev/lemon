@@ -266,15 +266,15 @@ defmodule LemonAi.Providers.OpenAIResponses do
   defp build_headers(model, context, opts, api_key) do
     base_headers =
       %{
-        "Content-Type" => "application/json",
-        "Accept" => "text/event-stream"
+        "content-type" => "application/json",
+        "accept" => "text/event-stream"
       }
       |> then(fn headers ->
-        if api_key, do: Map.put(headers, "Authorization", "Bearer #{api_key}"), else: headers
+        if api_key, do: Map.put(headers, "authorization", "Bearer #{api_key}"), else: headers
       end)
 
     # Add model-specific headers
-    headers = Map.merge(base_headers, model.headers || %{})
+    headers = LemonAi.Providers.RequestHeaders.merge(base_headers, model.headers)
 
     # Add GitHub Copilot specific headers if applicable
     headers =
@@ -311,13 +311,13 @@ defmodule LemonAi.Providers.OpenAIResponses do
             copilot_headers
           end
 
-        Map.merge(headers, copilot_headers)
+        LemonAi.Providers.RequestHeaders.merge(headers, copilot_headers)
       else
         headers
       end
 
     # Add user-provided headers last
-    Map.merge(headers, opts.headers || %{})
+    LemonAi.Providers.RequestHeaders.merge(headers, opts.headers)
   end
 
   defp add_reasoning_config(params, model, opts, _messages) do

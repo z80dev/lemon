@@ -159,6 +159,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Provider header defaults no longer override per-model headers on the wire.
+  OpenAI Completions/Responses, Anthropic and Google compatible endpoints merge
+  header names case-insensitively: provider defaults, then model overrides,
+  then explicit caller overrides, without duplicate mixed-case headers.
 - Provider CI checks use the existing OAuth decode branching convention without
   changing refresh locking, and Codex CLI import regressions check rejection
   and non-mutation rather than incidental error wording.

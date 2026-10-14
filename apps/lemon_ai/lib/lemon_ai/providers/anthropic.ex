@@ -1043,11 +1043,7 @@ defmodule LemonAi.Providers.Anthropic do
           opts.headers || %{}
         ],
         %{},
-        fn headers, acc ->
-          Enum.reduce(headers, acc, fn {k, v}, acc ->
-            Map.put(acc, String.downcase(to_string(k)), to_string(v))
-          end)
-        end
+        fn headers, acc -> LemonAi.Providers.RequestHeaders.merge(acc, headers) end
       )
 
     headers = Map.new(base_headers ++ auth_headers ++ copilot_headers ++ oauth_headers)

@@ -57,7 +57,7 @@ defmodule CodingAgent.Session.CustomProviderResolutionTest do
       assert %Model{provider: "my-gateway", id: "qwen3-coder", api: :openai_completions} = model
       assert model.base_url == "https://llm.internal/v1"
       assert model.context_window == 131_072
-      assert model.headers == %{"X-Team" => "platform"}
+      assert model.headers == %{"x-team" => "platform"}
     end
 
     assert_raise ArgumentError, ~r/unknown model/, fn ->
