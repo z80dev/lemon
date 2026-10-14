@@ -103,6 +103,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   Windsurf, Cline, GitHub Copilot, `.agents` and `.lemon/rules` rule files are
   injected when always-apply and otherwise listed in a rulebook the model reads
   on demand. See [Instruction files and rules](docs/user-guide/context-files.md).
+- Extension hooks can intercept tools: `on_tool_call` blocks a call or
+  replaces its arguments (a raising handler blocks), and `on_tool_result`
+  replaces a successful result's content/details. New `on_session_start` and
+  `on_session_shutdown` hooks observe session lifecycle. See
+  [Extensions: Intercepting tool calls](docs/extensions.md#intercepting-tool-calls).
 
 ### Changed
 
