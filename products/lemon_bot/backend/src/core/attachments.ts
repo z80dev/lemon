@@ -17,7 +17,7 @@ const MAX_VIDEO = 200 * 1024 * 1024;
 const STAGING_MS = 24 * 60 * 60 * 1000;
 const TICKET_MS = 5 * 60 * 1000;
 const upload = mutation.extend({ conversationId: id.optional(), botId: id.optional(), purpose: z.enum(['message', 'avatar', 'reference', 'audio']) });
-const createInput = upload.extend({ filename: z.string().min(1).max(1024), mime: z.string().max(256).optional(), provenance: z.object({ botId: id.nullable(), runId: id.nullable(), machineId: id.nullable(), sourceEntryId: id.nullable(), generatedAtMs: z.number().int().nonnegative().nullable() }).strict().optional() });
+const createInput = upload.extend({ filename: z.string().min(1).max(1024), mime: z.string().max(256).optional(), source: z.enum(['upload', 'node', 'tts', 'generated']).optional(), provenance: z.object({ botId: id.nullable(), runId: id.nullable(), machineId: id.nullable(), sourceEntryId: id.nullable(), generatedAtMs: z.number().int().nonnegative().nullable() }).strict().optional() });
 const previewInput = mutation.extend({ action: z.literal('delete') });
 const listQuery = z.object({ conversationId: id.optional(), botId: id.optional(), cursor: z.string().max(512).optional(), limit: z.coerce.number().int().min(1).max(200).optional() }).strict();
 interface BlobRecord { id: string; basename: string; sha256: string; size: number }
@@ -244,6 +244,8 @@ export function createAttachmentService(services: BackendServices): StoredAttach
       // Keep an owned snapshot across asynchronous sniffing and writes.
       const bytes = Uint8Array.from(inputBytes);
       const description = await inspectAttachment(bytes, filename, input.purpose);
+      if (input.source === 'tts' && description.preview !== 'audio') fail('invalid_request', 'Synthesized speech must contain actual audio.');
+      if (input.source === 'node' && provenance.machineId === null) fail('invalid_request', 'Node attachment requires its actual machine provenance.');
       await ready;
       if (input.conversationId) services.auth.conversation(user, input.conversationId);
       if (input.botId) services.auth.bot(user, input.botId, input.purpose === 'avatar' || input.purpose === 'reference');
@@ -259,7 +261,7 @@ export function createAttachmentService(services: BackendServices): StoredAttach
         const handle = await open(directory, 'r');
         try { await handle.sync(); } finally { await handle.close(); }
       }
-      const attachment: P.Attachment = services.resource('attachment', { ownerUserId: user.userId, conversationId: input.conversationId ?? null, botId: input.botId ?? null, filename, size: bytes.length, sha256, ...description, source: provenance.runId ? 'generated' as const : provenance.machineId ? 'node' as const : 'upload' as const, state: 'ready' as const, provenance });
+      const attachment: P.Attachment = services.resource('attachment', { ownerUserId: user.userId, conversationId: input.conversationId ?? null, botId: input.botId ?? null, filename, size: bytes.length, sha256, ...description, source: input.source ?? (provenance.runId ? 'generated' as const : provenance.machineId ? 'node' as const : 'upload' as const), state: 'ready' as const, provenance });
       services.store.transaction(() => {
         services.store.put('attachmentBlobs', { id: attachment.id, basename, sha256, size: bytes.length } satisfies BlobRecord);
         services.store.put('attachments', attachment);

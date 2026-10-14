@@ -79,6 +79,8 @@ describe('immutable completed attachments', () => {
       await expect(Promise.resolve(route.handler(f.context(route, duplicate)))).rejects.toMatchObject({ code: 'invalid_request' });
       const unsupported = form('extra'); unsupported.set('metadata', JSON.stringify({ clientNonce: nonce, purpose: 'message', sourceUrl: 'https://evil.example' }));
       await expect(Promise.resolve(route.handler(f.context(route, unsupported)))).rejects.toMatchObject({ code: 'invalid_request' });
+      const forgedSource = form('extra'); forgedSource.set('metadata', JSON.stringify({ clientNonce: nonce, purpose: 'message', source: 'tts' }));
+      await expect(Promise.resolve(route.handler(f.context(route, forgedSource)))).rejects.toMatchObject({ code: 'invalid_request' });
     } finally { service.close(); await f.close(); }
   });
   test('signed downloads need no bearer, handle single ranges, and invalidate on session and ACL revision', async () => {
