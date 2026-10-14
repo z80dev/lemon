@@ -2,11 +2,11 @@ import type * as P from '../../../contracts/protocol';
 import type { BackendServices, Principal } from '../core/services';
 import { ApiError } from '../core/errors';
 import { quiesceBotInvocations } from '../runtime/runs';
-import { syncBotPolicyFloor, syncBotProfile } from '../core/bots';
+import { assertWorkspaceRestrictionManagement, syncBotPolicyFloor, syncBotProfile } from '../core/bots';
 
 /** A stored desired rule is not proof that a previously running native agent lost its authority. */
 export async function refreshEffectivePolicy(services: BackendServices, actor: Principal, botIds?: string[], options: { workspace?: boolean } = {}): Promise<void> {
-  if (options.workspace) services.auth.requireRole(actor, 'admin');
+  if (options.workspace) assertWorkspaceRestrictionManagement(services, actor);
   const selected = botIds ? new Set(botIds) : null;
   const bots = services.store.list<P.Bot>('bots', bot => (!selected || selected.has(bot.id)) && (options.workspace || bot.ownerUserId === actor.userId));
   if (selected && bots.length !== selected.size) throw new ApiError('not_found', 'An affected bot is not available.');

@@ -1,8 +1,11 @@
-import { expect, test } from 'bun:test';
+import { afterEach, expect, test } from 'bun:test';
 import type * as P from '../../../contracts/protocol';
 import { directoryAffectedUsers } from '../../src/enterprise/policy';
 import { refreshEffectivePolicy } from '../../src/enterprise/enforcement';
 import type { BackendServices, Principal } from '../../src/core/services';
+import { closeFixture, fixture as ownerFixture } from '../integrations/channels-fixture';
+const serviceFixtures: BackendServices[] = [];
+afterEach(() => { for (const services of serviceFixtures.splice(0)) closeFixture(services); });
 const group = (members: string[], revision = 1): P.DirectoryGroup => ({ id: 'engineering', revision, createdAtMs: 1, updatedAtMs: revision, name: 'Engineering', source: 'oidc', externalId: 'engineering-idp', memberUserIds: members });
 const policy = (revision = 1): P.GroupPolicy => ({ id: 'engineering-policy', revision, createdAtMs: 1, updatedAtMs: revision, directoryGroupId: 'engineering', productAccess: true, capabilityModes: {}, requiredRuleIds: [], localExecutionCeiling: 'ask', allowSudo: false, allowEgress: false, networkPolicyId: null, reviewExempt: false });
 
@@ -25,30 +28,16 @@ test('managed group deletion includes removed users but never unrelated groups',
 });
 
 function enforcementFixture() {
-  const bot = { id: 'b', ownerUserId: 'alice', machineId: 'm', profileId: 'lb-b', revision: 1 } as P.Bot;
-  const rows: Record<string, unknown[]> = { bots: [bot], runs: [] };
-  const metadata = new Map<string, unknown>();
-  const calls: string[] = [];
-  const services = {
-    store: {
-      list: (collection: string, predicate?: (value: never) => boolean) => (rows[collection] ?? []).filter(value => !predicate || predicate(value as never)),
-      require: (collection: string, id: string) => (rows[collection] as { id: string }[]).find(value => value.id === id),
-      metadata: (key: string) => metadata.get(key) ?? null,
-      setMetadata: (key: string, value: unknown) => metadata.set(key, value),
-      put: (collection: string, value: { id: string }) => { const values = rows[collection] as { id: string }[]; const index = values.findIndex(item => item.id === value.id); if (index < 0) values.push(value); else values[index] = value; return value; },
-    },
-    auth: {
-      bot: () => bot, canRead: () => true,
-      member: (userId: string) => ({ userId, enabled: true, role: 'member' }),
-      user: (userId: string) => ({ id: userId }),
-    },
-    lemon: { connected: true, methods: [], call: async (method: string) => { calls.push(method); throw new Error('Native receipt unavailable'); } },
-    id: () => 'policy-operation', now: () => 100,
-    update: (value: object, changes: object) => ({ ...value, ...changes }),
-    events: { emit: () => undefined }, audit: () => undefined,
-  } as unknown as BackendServices;
   const owner: Principal = { kind: 'user', id: 'alice', userId: 'alice', workspaceId: 'w', role: 'member', sessionId: null, deviceId: null, botId: null };
-  return { services, rows, metadata, calls, owner };
+  const base = ownerFixture(undefined, owner), services = base.services;
+  serviceFixtures.push(services);
+  const bot: P.Bot = { ...base.bot, id: 'b', machineId: 'm', profileId: 'lb-b' };
+  services.store.put('bots', bot);
+  // A permissive legacy resource reader is not execution/profile authority.
+  services.auth.bot = () => bot;
+  const calls: string[] = [];
+  services.lemon.call = async method => { calls.push(method); throw new Error('Native receipt unavailable.'); };
+  return { services, calls, owner, bot };
 }
 
 test('non-owner personal policy refresh cannot dispatch or install credentials despite legacy access', async () => {
@@ -57,14 +46,33 @@ test('non-owner personal policy refresh cannot dispatch or install credentials d
     await expect(refreshEffectivePolicy(f.services, { ...f.owner, id: 'bob', userId: 'bob', role }, ['b'])).rejects.toMatchObject({ code: 'not_found' });
   }
   expect(f.calls).toEqual([]);
-  expect(f.metadata.size).toBe(0);
+  expect(f.services.store.metadata('botPolicySync:b')).toBeNull();
 });
 
 test('owner changes fence retained cross-actor invocations before installing durable policy', async () => {
   const f = enforcementFixture();
-  f.rows.runs = [{ id: 'old', botId: 'b', initiatorUserId: 'bob', status: 'running' }];
+  const run: P.Run = { ...f.services.resource('run', { conversationId: f.bot.mainConversationId, botId: f.bot.id, initiatorUserId: 'bob', clientNonce: 'retained_native_operation', status: 'running', error: null, startedAtMs: f.services.now(), completedAtMs: null, routineRunId: null }), id: 'old' };
+  f.services.store.put('runs', run);
   // No authenticated native mapping exists for this retained run, so stop cannot be proven.
   await expect(refreshEffectivePolicy(f.services, f.owner, ['b'])).rejects.toMatchObject({ code: 'outcome_unknown' });
-  expect(f.metadata.get('botPolicySync:b')).toMatchObject({ state: 'outcome_unknown', runIds: ['old'] });
+  expect(f.services.store.metadata('botPolicySync:b')).toMatchObject({ state: 'outcome_unknown', runIds: ['old'] });
   expect(f.calls).toEqual([]);
+});
+
+test('integration kind or forged scopes alone cannot authorize restriction management or write a native fence', async () => {
+  const f = enforcementFixture();
+  const member = f.services.auth.member(f.owner.userId);
+  f.services.store.put('members', { ...member, role: 'owner' });
+  for (const entry of [
+    { kind: 'event_ingress' as const, scopes: ['event_ingress:github'], expiresAtMs: null },
+    { kind: 'scim' as const, scopes: ['scim.groups'], expiresAtMs: f.services.now() - 1 },
+  ]) {
+    const token: P.IntegrationToken = { ...f.services.resource('integration', { name: 'Scoped management', ...entry }), id: 'integration-token' };
+    f.services.store.put('integrationTokens', token);
+    f.services.store.put('integrationCredentials', { id: token.id, workspaceId: f.owner.workspaceId, issuerUserId: f.owner.userId, digest: 'stored-token-digest' });
+    const actor: Principal = { ...f.owner, kind: 'integration', id: token.id, role: 'member', scopes: ['scim.groups'] };
+    await expect(refreshEffectivePolicy(f.services, actor, [f.bot.id], { workspace: true })).rejects.toMatchObject({ code: 'forbidden' });
+    expect(f.services.store.metadata(`botPolicySync:${f.bot.id}`)).toBeNull();
+    expect(f.calls).toEqual([]);
+  }
 });

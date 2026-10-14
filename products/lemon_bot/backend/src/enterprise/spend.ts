@@ -2,7 +2,7 @@ import { z } from 'zod';
 import type * as P from '../../../contracts/protocol';
 import type { BackendServices, Principal, Route } from '../core/services';
 import { ApiError } from '../core/errors';
-import { measureUsage } from '../core/resources';
+import { measureUsage, measureWorkspaceUsageForAdmission } from '../core/resources';
 import { fetchJson, principal } from '../integrations/common';
 import { providerSpendSource } from '../integrations/config';
 const nonce = z.string().regex(/^[A-Za-z0-9_-]{16,128}$/);
@@ -28,16 +28,18 @@ export function createSpendServices(services: BackendServices) {
     if (limit.scope === 'workspace') return who.role === 'admin' || who.role === 'owner';
     if (limit.scope === 'user') return limit.subjectId === who.userId;
     if (limit.scope === 'bot') { try { return services.auth.bot(who, limit.subjectId!).ownerUserId === who.userId; } catch { return false; } }
-    const routine = services.store.get<P.Routine>('routines', limit.subjectId!); return routine?.ownerUserId === who.userId;
+    const routine = services.store.get<P.Routine>('routines', limit.subjectId!);
+    if (!routine || routine.ownerUserId !== who.userId) return false;
+    try { return services.auth.bot(who, routine.botId).ownerUserId === who.userId; } catch { return false; }
   }
   function authority(who: Principal, scope: P.SpendLimit['scope'], subjectId: string | null): void {
     if (scope === 'workspace') { services.auth.requireRole(who, 'admin'); if (subjectId !== null) throw new ApiError('invalid_request', 'Workspace spend limit has no subjectId.'); return; }
     if (!subjectId) throw new ApiError('invalid_request', 'This spend scope requires subjectId.');
     if (scope === 'user') { if (subjectId !== who.userId) throw new ApiError('forbidden', 'Set only your own personal spending limit.'); services.auth.member(subjectId); }
     else if (scope === 'bot') { if (services.auth.bot(who, subjectId).ownerUserId !== who.userId) throw new ApiError('forbidden', 'Only the bot owner can set its spending limit.'); }
-    else { const routine = services.store.require<P.Routine>('routines', subjectId); if (routine.ownerUserId !== who.userId) throw new ApiError('not_found', 'Routine is not available.'); }
+    else { const routine = services.store.require<P.Routine>('routines', subjectId); if (routine.ownerUserId !== who.userId || services.auth.bot(who, routine.botId).ownerUserId !== who.userId) throw new ApiError('not_found', 'Routine is not available.'); }
   }
-  async function status(who: Principal, limit: P.SpendLimit): Promise<P.SpendStatus> {
+  async function measureStatus(who: Principal, limit: P.SpendLimit, workspaceAdmission: boolean): Promise<P.SpendStatus> {
     const window = spendWindow(limit.period, services.now());
     if (limit.providerAccount) {
       const source = providerSpendSource(services, limit.providerAccount);
@@ -52,8 +54,14 @@ export function createSpendServices(services: BackendServices) {
       if (!parsed.success || parsed.data.providerAccount !== limit.providerAccount || parsed.data.scope !== limit.scope || parsed.data.subjectId !== limit.subjectId || parsed.data.fromAtMs !== window.fromAtMs || parsed.data.toAtMs !== toAtMs) throw new ApiError('upstream_unavailable', 'Provider spend reconciliation returned a mismatched account, scope or measurement window.');
       return spendStatus(limit, { costUsd: parsed.data.costUsd, incomplete: !parsed.data.complete }, services.now());
     }
-    const report = await measureUsage(services, who, { fromAtMs: window.fromAtMs, toAtMs: Math.min(services.now() + 1, window.toAtMs), groupBy: limit.scope === 'routine' ? 'routine' : limit.scope === 'user' ? 'user' : 'bot', ...(limit.scope === 'bot' ? { botId: limit.subjectId! } : {}), ...(limit.scope === 'routine' ? { routineId: limit.subjectId! } : {}), ...(limit.scope === 'user' ? { userId: limit.subjectId! } : {}), workspace: limit.scope === 'workspace', ...(limit.providerAccount ? { providerAccount: limit.providerAccount } : {}) });
+    const query: P.UsageQuery & { userId?: string; workspace: boolean } = { fromAtMs: window.fromAtMs, toAtMs: Math.min(services.now() + 1, window.toAtMs), groupBy: limit.scope === 'routine' ? 'routine' : limit.scope === 'user' ? 'user' : 'bot', ...(limit.scope === 'bot' ? { botId: limit.subjectId! } : {}), ...(limit.scope === 'routine' ? { routineId: limit.subjectId! } : {}), ...(limit.scope === 'user' ? { userId: limit.subjectId! } : {}), workspace: limit.scope === 'workspace' };
+    const report = await (workspaceAdmission ? measureWorkspaceUsageForAdmission : measureUsage)(services, who, query);
     return spendStatus(limit, { costUsd: report.totals.costUsd, incomplete: report.incomplete }, services.now());
+  }
+  async function status(who: Principal, limit: P.SpendLimit): Promise<P.SpendStatus> {
+    if (!services.auth.member(who.userId).enabled || !canRead(who, limit)) throw new ApiError('not_found', 'Spend limit not found.');
+    if (limit.scope === 'workspace') services.auth.requireRole(who, 'admin');
+    return measureStatus(who, limit, false);
   }
   async function admission(who: Principal, botId: string, routineId?: string): Promise<void> {
     const bot = services.auth.bot(who, botId);
@@ -64,11 +72,9 @@ export function createSpendServices(services: BackendServices) {
     }
     const limits = services.store.list<P.SpendLimit>('spendLimits', limit => limit.enabled && (limit.scope === 'workspace' || limit.scope === 'user' && limit.subjectId === who.userId || limit.scope === 'bot' && limit.subjectId === botId || limit.scope === 'routine' && limit.subjectId === routineId));
     for (const limit of limits) {
-      // Workspace limits must use workspace attribution even for a member run; privileged measurement
-      // returns only admission outcome, never an admin's private usage projection to this caller.
-      let measurementPrincipal = who;
-      if (limit.scope === 'workspace' && who.role === 'member') { const ownerId = services.store.require<P.Workspace>('workspaces', who.workspaceId).ownerUserId; const owner = services.auth.member(ownerId); measurementPrincipal = { ...who, id: ownerId, userId: ownerId, role: owner.role, sessionId: null, deviceId: null, kind: 'user', botId: null }; }
-      const current = await status(measurementPrincipal, limit);
+      // Internal aggregate accounting preserves the actual admitted actor. Its
+      // privileged read returns only policy state here, never another user's data.
+      const current = limit.scope === 'workspace' ? await measureStatus(who, limit, true) : await status(who, limit);
       if (current.state === 'unknown' || current.state === 'exhausted') { services.audit(who, 'spend.admission', limit.id, 'denied', { state: current.state, botId, ...(routineId ? { routineId } : {}) }); throw new ApiError('policy_denied', current.state === 'unknown' ? 'Enforced spend limit requires complete authoritative pricing and attribution; refresh the usage ledger before new work.' : 'A matching spend limit is exhausted; new work is blocked until reset or an authorized limit change.', true, { limitId: limit.id, state: current.state, resetsAtMs: current.resetsAtMs }); }
       if (current.state === 'warning') services.audit(who, 'spend.warning', limit.id, 'succeeded', { botId, state: current.state });
     }

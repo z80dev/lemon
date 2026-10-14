@@ -1,7 +1,7 @@
 import type * as P from '../../../contracts/protocol';
 import type { BackendServices, IntegrationServices, Route } from '../core/services';
 import { ApiError } from '../core/errors';
-import { assertActiveAccount, userPrincipal } from './common';
+import { assertActiveAccount } from './common';
 import { createConnectorRoutes, createConnectorServices } from './connectors';
 import type { InvocationMcpServer } from '../runtime/runs';
 import { createChannelRoutes, createChannelServices } from './channels';
@@ -171,9 +171,15 @@ function synchronizeDirectoryRoutes(s: BackendServices, routes: Route[]): Route[
         await refreshEffectivePolicy(s, context.user, undefined, { workspace: true });
       } else if (directory) {
         const changed = directoryAffectedUsers(before, s.store.list<P.DirectoryGroup>('directoryGroups'), previousPolicies, s.store.list<P.GroupPolicy>('groupPolicies'));
-        for (const userId of changed) {
-          const member = s.store.list<P.Member>('members', value => value.userId === userId)[0];
-          if (member?.enabled) await refreshEffectivePolicy(s, userPrincipal(s, userId));
+        const affected = new Set(changed);
+        const bots = s.store.list<P.Bot>('bots', bot => affected.has(bot.ownerUserId));
+        const ownerActor = context.authenticatedCallbackPrincipal ?? (context.user?.kind === 'user' || context.user?.kind === 'bot' ? context.user : undefined);
+        const owned = ownerActor ? bots.filter(bot => bot.ownerUserId === ownerActor.userId) : [];
+        if (owned.length && ownerActor) await refreshEffectivePolicy(s, ownerActor, owned.map(bot => bot.id));
+        const remaining = bots.filter(bot => !owned.some(value => value.id === bot.id));
+        if (remaining.length) {
+          if (!context.user) throw new ApiError('outcome_unknown', 'Directory authority changed without an authenticated administrative synchronization actor.', false, { resourceIds: remaining.map(bot => bot.id) });
+          await refreshEffectivePolicy(s, context.user, remaining.map(bot => bot.id), { workspace: true });
         }
       }
       if (failed) throw handlerError;

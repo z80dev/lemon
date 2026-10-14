@@ -52,6 +52,8 @@ Governance defaults: group access `all`, no sudo/egress, network hard lock on, r
 
 Authenticated directory changes reconcile affected native authority, including desired changes committed before a later authentication/provider error. Membership changes fence added/removed users; policy revisions fence affected users, not unrelated users or label-only edits. Actual owner refresh installs the owner's full effective profile. Trusted administrative changes install only restriction intersections and cannot read the owner's persona or private credentials, substitute the owner, or authorize live work. Unknown terminal/profile acknowledgments retain admission fences.
 
+OIDC completion authenticates its internal policy-refresh actor only after real issuer/JWKS/audience/nonce/state/PKCE checks and binding the verified subject to the product account. This server-only handoff cannot come from HTTP data and does not replace the original request/nonce actor. Directory changes committed before a later product-policy or session failure still retain that verified identity for ownership-bound synchronization.
+
 ## MCP connector providers
 
 `connectorProviders` is optional canonical private configuration:
@@ -134,6 +136,8 @@ Egress driver input includes a monotonically increasing `routeRevision`; the des
 ## Usage and provider-account reconciliation
 
 UTC day, ISO Monday week and calendar month spend windows use actual priced native `usage.records` attribution. Each matching workspace/user/bot/routine limit is checked before new work. Missing/incomplete pricing or attribution is **unknown and denies new work under an enforced limit**, never a measured zero. Already-admitted work can finish over the limit. Own limits cannot bypass workspace ceilings; no owner-account billing fallback.
+
+Workspace admission uses a private read-only aggregate ledger seam with the actual authenticated actor, not an impersonated workspace owner or administrator. Enabled account/member/workspace and owned Bot/routine selectors are checked. Aggregate usage is retained only for the spend-policy decision; the ordinary usage/status API keeps its own authorization and does not expose another user's records through this internal gate.
 
 For an optional external provider account, configure a real reconciliation service under private `providerSpendSources`:
 

@@ -126,6 +126,39 @@ describe('OIDC identity security', () => {
       expect(createIdentityServices(f.services).requireSSO(principal!.userId)).toBe(true);
     } finally { f.close(); }
   });
+  test('only a genuinely verified provider binding authenticates policy refresh, without changing the HTTP nonce actor', async () => {
+    const f = identityFixture();
+    try {
+      const p = registeredProvider(f.services), routes = createIdentityRoutes(f.services), contexts: RequestContext[] = [];
+      f.services.store.put('invites', f.services.resource('invite', { email: 'callback@example.com', role: 'member' as const, expiresAtMs: f.services.now() + 86400000, status: 'pending' as const }));
+      f.services.config.operator.oidcGroupMappings = [{ providerId: p.id, externalId: 'approved', directoryGroupId: 'callback-group', name: 'Callback group' }];
+      let nonce = '';
+      f.services.http = async input => {
+        const url = String(input);
+        if (url.endsWith('openid-configuration')) return Response.json(discovery);
+        if (url.endsWith('/jwks')) return Response.json({ keys: [jwk] });
+        return Response.json({ id_token: jwt({ iss: p.issuer, sub: 'callback-subject', aud: p.clientId, nonce, email: 'callback@example.com', email_verified: true, exp: f.services.now() / 1000 + 300, iat: f.services.now() / 1000, groups: ['approved'] }) });
+      };
+      const complete = routes.find(route => route.path === '/v1/auth/oidc/complete')!, handler = complete.handler;
+      complete.handler = context => { contexts.push(context); return handler(context); };
+      const verifier = secureToken();
+      const flow = await invokeRoute(routes, f.services, 'POST', '/v1/auth/oidc/start', { clientNonce: secureToken(), providerId: p.id, redirectUri: 'lemonbot://auth/complete', purpose: 'login', codeChallenge: Buffer.from(tokenDigest(verifier), 'hex').toString('base64url') }) as P.OIDCFlow;
+      const authorization = new URL(flow.authorizationUrl); nonce = authorization.searchParams.get('nonce')!;
+      const redirected = await invokeRoute(routes, f.services, 'GET', '/v1/auth/oidc/callback/:providerId', undefined, { params: { providerId: p.id }, query: `state=${authorization.searchParams.get('state')}&code=code` }) as P.RedirectResponse;
+      const body = { clientNonce: secureToken(), flowId: flow.id, completionCode: new URL(redirected.location).searchParams.get('completionCode'), codeVerifier: verifier };
+      await expect(invokeRoute(routes, f.services, 'POST', '/v1/auth/oidc/complete', { ...body, authenticatedCallbackPrincipal: f.principal }, { principal: f.principal })).rejects.toMatchObject({ code: 'invalid_request' });
+      expect(contexts[0]!.authenticatedCallbackPrincipal).toBeUndefined();
+      const policy = f.services.integrations.effectivePolicy;
+      f.services.integrations.effectivePolicy = async actor => ({ ...await policy(actor), productAccess: false });
+      await expect(invokeRoute(routes, f.services, 'POST', '/v1/auth/oidc/complete', body, { principal: f.principal })).rejects.toMatchObject({ code: 'policy_denied' });
+      const linked = f.services.store.list<P.IdentityLink>('identityLinks', link => link.subject === 'callback-subject')[0]!;
+      expect(linked.userId).not.toBe(f.principal.userId);
+      expect(contexts[1]!.user).toBe(f.principal);
+      expect(contexts[1]!.authenticatedCallbackPrincipal).toMatchObject({ userId: linked.userId, role: 'member', sessionId: null, deviceId: null });
+      expect(f.services.store.get<P.DirectoryGroup>('directoryGroups', 'callback-group')?.memberUserIds).toEqual([linked.userId]);
+      expect(f.services.store.list('authSessions')).toHaveLength(0);
+    } finally { f.close(); }
+  });
   test('discovery and JWKS endpoints cannot escape the registered issuer origin', async () => {
     const f = identityFixture(); try {
       const p = registeredProvider(f.services); const routes = createIdentityRoutes(f.services);

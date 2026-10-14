@@ -150,7 +150,7 @@ function synchronize(services: BackendServices, userId: string, p: P.OIDCProvide
       group = { ...services.resource('directory_group', { name: mapping.name, externalId: mapping.externalId, source: 'oidc' as const, memberUserIds: [] as string[] }), id: mapping.directoryGroupId };
       services.store.put('directoryGroups', group);
       services.events.emit('directory_group.upserted', group, { admin: true });
-      const policy = services.resource('group_policy', { directoryGroupId: group.id, productAccess: true, defaultBotIds: [] as string[], capabilityModes: {}, requiredRuleIds: [] as string[], localExecutionCeiling: 'ask' as const, allowEgress: false, allowSudo: false, networkPolicyId: null, reviewExempt: false });
+      const policy = services.resource('group_policy', { directoryGroupId: group.id, productAccess: true, capabilityModes: {}, requiredRuleIds: [] as string[], localExecutionCeiling: 'ask' as const, allowEgress: false, allowSudo: false, networkPolicyId: null, reviewExempt: false });
       services.store.put('groupPolicies', policy); services.events.emit('group_policy.upserted', policy, { admin: true });
     }
     if (group.source !== 'oidc' || group.externalId !== mapping.externalId) fail('capability_unavailable', 'OIDC mapping cannot overwrite local or SCIM directory provenance.');
@@ -313,20 +313,27 @@ export function createIdentityRoutes(services: BackendServices): Route[] {
     } },
     { method: 'POST', path: '/v1/auth/oidc/complete', auth: 'optional', mutation: true, handler: async context => {
       const body = parse(completeSchema, context.body); const flow = completion(services, body, context.user); const p = provider(services, flow.providerId);
+      const workspace = services.store.list<P.Workspace>('workspaces')[0];
+      if (!workspace) fail('policy_denied', 'Workspace is not configured.');
       const link = services.store.transaction(() => {
         const existing = linked(services, flow.claims);
         if (flow.purpose === 'reauth' && (!existing || existing.userId !== flow.userId || existing.providerId !== flow.providerId)) fail('unauthenticated', 'Reauthentication must use the current linked identity.');
         const identityLink = existing ?? resolveLogin(services, p, flow.claims); const member = services.auth.member(identityLink.userId); if (!member.enabled) fail('policy_denied', 'Workspace membership is disabled.');
+        // Only this server-verified provider/subject binding can authenticate the
+        // callback actor. Keep HTTP/nonce authority untouched, including on a
+        // later session or policy failure after directory changes commit.
+        const previous = context.user?.userId === identityLink.userId ? context.user : undefined;
+        context.authenticatedCallbackPrincipal = { kind: 'user', id: identityLink.userId, userId: identityLink.userId, workspaceId: workspace.id, role: member.role, sessionId: previous?.sessionId ?? null, deviceId: previous?.deviceId ?? null, botId: null };
         synchronize(services, identityLink.userId, p, flow.claims); const updated = services.update(identityLink, { lastUsedAtMs: services.now() }); services.store.put('identityLinks', updated); return updated;
       });
-      const member = services.auth.member(link.userId); const workspace = services.store.list<P.Workspace>('workspaces')[0];
-      if (!workspace) fail('policy_denied', 'Workspace is not configured.');
-      await services.integrations.effectivePolicy({ kind: 'user', id: link.userId, userId: link.userId, workspaceId: workspace.id, role: member.role, sessionId: flow.sessionId, deviceId: flow.deviceId, botId: null }).then(policy => { if (!policy.productAccess) fail('policy_denied', 'Directory policy denies product access.'); });
+      const actor = context.authenticatedCallbackPrincipal!;
+      await services.integrations.effectivePolicy(actor).then(policy => { if (!policy.productAccess) fail('policy_denied', 'Directory policy denies product access.'); });
       if (flow.purpose === 'reauth') return services.auth.issueReauth(link.userId);
       const result = await services.auth.session(link.userId, flow.deviceId);
+      context.authenticatedCallbackPrincipal = { ...actor, sessionId: result.session.id, deviceId: result.session.deviceId };
       if (flow.encryptedIDToken) services.store.put('oidcProviderSessions', { id: result.session.id, userId: link.userId, providerId: p.id, encryptedIDToken: flow.encryptedIDToken });
       if (flow.userId) { services.store.remove('oidcProviderSessions', `oidc_pending:${flow.id}`); services.store.remove('oidcExchangeOperations', flow.id); }
-      services.audit(context.user, 'identity.login', link.userId, 'succeeded', { providerId: p.id }, context.requestId); return result;
+      services.audit(context.authenticatedCallbackPrincipal, 'identity.login', link.userId, 'succeeded', { providerId: p.id }, context.requestId); return result;
     } },
     { method: 'GET', path: '/v1/auth/identities', auth: 'member', handler: context => services.page(context, services.store.list<P.IdentityLink>('identityLinks', link => link.userId === context.user!.userId)) },
     { method: 'POST', path: '/v1/auth/oidc/link', auth: 'member', handler: context => services.store.transaction(() => {
