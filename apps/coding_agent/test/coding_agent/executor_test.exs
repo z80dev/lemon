@@ -113,7 +113,7 @@ defmodule CodingAgent.ExecutorTest do
     assert first_pending.invocation_context_key == "native-client-A"
     assert first_pending.agent_id == agent_id
     assert first_pending.session_key == session_key
-    assert :ok = LemonCore.ExecApprovals.resolve(first_approval, :approve_once)
+    assert {:ok, _receipt} = LemonCore.ExecApprovals.resolve(first_approval, :approve_once)
 
     first_events = collect_until_completed(first_ref)
     assert {:engine_event, ^first_ref, %{ok: true, resume: resume}} = List.last(first_events)
@@ -166,7 +166,7 @@ defmodule CodingAgent.ExecutorTest do
     assert second_pending.agent_id == agent_id
     assert second_pending.session_key == session_key
     assert second_pending.session_id == first_pending.session_id
-    assert :ok = LemonCore.ExecApprovals.resolve(second_approval, :deny)
+    assert {:ok, _receipt} = LemonCore.ExecApprovals.resolve(second_approval, :deny)
 
     second_events = collect_until_completed(second_ref)
     assert {:engine_event, ^second_ref, %{ok: true, resume: ^resume}} = List.last(second_events)

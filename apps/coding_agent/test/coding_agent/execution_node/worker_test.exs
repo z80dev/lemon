@@ -1181,18 +1181,38 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
 
 
   @tag :tmp_dir
-  test "dense execution arguments obey the negotiated byte ceiling", %{tmp_dir: tmp_dir} do
+  test "native execution arguments use the shared execution ceiling while service requests keep the negotiated ceiling",
+       %{tmp_dir: tmp_dir} do
     {worker, socket} = start_service_worker(tmp_dir)
-    names = Enum.map(1..16_384, &"mcp_tool_#{&1}")
-    args = %{"version" => 1, "prompt" => "run", "toolPolicy" => %{"require_approval" => names}}
-    invoke(worker, socket, "dense-policy", "node-1", args)
-    assert_receive {:executor_started, _request, _opts, ^worker, _ref, context}
     send(worker, {:execution_node_socket, socket, {:connected,
       %{"auth" => %{"clientId" => "node-1"}, "policy" => %{"maxPayload" => 128}}}})
     assert_receive {:execution_node_worker, ^worker, {:status, :online, "node-1"}}
-    invoke(worker, socket, "bounded-policy", "node-1", args)
+
+    names = Enum.map(1..16_384, &"mcp_tool_#{&1}")
+    args = %{"version" => 1, "prompt" => "run", "toolPolicy" => %{"require_approval" => names}}
+
+    service_invoke(worker, socket, "bounded-discovery", "node-1", "node.mcp.discover",
+      Map.put(args, "server", discovery_server()))
     assert_receive {:socket_request, ^socket, "node.invoke.result",
-      %{"invokeId" => "bounded-policy", "error" => _}, _, _}
+      %{"invokeId" => "bounded-discovery", "error" => _}, _, _}
+    refute_receive {:discovery_started, _, _, _}, 50
+
+    invoke(worker, socket, "dense-policy", "node-1", args)
+    assert_receive {:executor_started, request, _opts, ^worker, _ref, context}
+    assert request.run_id == "node:dense-policy"
+
+    over_ceiling =
+      Enum.map(1..LemonCore.ToolPolicy.execution_max_items(), &"t#{&1}")
+
+    over_args = %{
+      "version" => 1,
+      "prompt" => "run",
+      "toolPolicy" => %{"require_approval" => over_ceiling}
+    }
+
+    invoke(worker, socket, "over-ceiling", "node-1", over_args)
+    assert_receive {:socket_request, ^socket, "node.invoke.result",
+      %{"invokeId" => "over-ceiling", "error" => _}, _, _}
     refute_receive {:executor_started, _, _, _, _, _}, 50
     GenServer.stop(worker)
     Process.exit(context.runner_pid, :kill)

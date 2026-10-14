@@ -48,10 +48,11 @@ defmodule CodingAgent.ProfileSkillsTest do
     opts = %{agent_id: "skill-alpha", workspace_dir: alpha["workspace"],
       contributed_sections: [], tool_names: ["read_skill"]}
     prompt = SystemPrompt.build(cwd, opts)
-    assert prompt =~ "Selected Operating"
+    assert prompt =~ "<key>selected-operating</key>"
     assert prompt =~ "Selected metadata only"
     refute prompt =~ "PRIVATE_SELECTED_BODY_BEGIN"
-    refute prompt =~ "Project Only"
+    refute prompt =~ "project-only"
+    refute prompt =~ "Unrelated project metadata"
     assert Workspace.skill_cwd(cwd, opts) == alpha["workspace"]
     tool = ReadSkill.tool(cwd, agent_id: "skill-alpha", workspace_dir: alpha["workspace"])
     result = tool.execute.("selected-read", %{"key" => "selected-operating"}, nil, nil)
@@ -61,7 +62,7 @@ defmodule CodingAgent.ProfileSkillsTest do
     # Rebuilding a subsequent prompt remains metadata-only and preserves the
     # authoritative destination skill root rather than the execution cwd.
     refreshed = SystemPrompt.build(cwd, opts)
-    assert refreshed =~ "Selected Operating"
+    assert refreshed =~ "<key>selected-operating</key>"
     refute refreshed =~ "PRIVATE_SELECTED_BODY_BEGIN"
   end
 
@@ -81,8 +82,9 @@ defmodule CodingAgent.ProfileSkillsTest do
     assert text(generic.execute.("generic-read", %{"key" => "shared-key"}, nil, nil)) =~ "PROJECT_BODY"
     assert Workspace.skill_cwd(cwd, %{agent_id: "ordinary-agent", workspace_dir: alpha["workspace"]}) == cwd
     prompt = SystemPrompt.build(cwd, %{agent_id: "ordinary-agent", workspace_dir: alpha["workspace"], contributed_sections: [], tool_names: ["read_skill"]})
-    assert prompt =~ "Project Skill"
-    refute prompt =~ "Alpha Skill"
+    assert prompt =~ "Project metadata"
+    refute prompt =~ "Alpha metadata"
+    refute prompt =~ "Beta metadata"
   end
 
   defp write_skill(scope, key, name, description, body) do

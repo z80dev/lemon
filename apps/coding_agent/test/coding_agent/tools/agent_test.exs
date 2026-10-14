@@ -760,9 +760,6 @@ defmodule CodingAgent.Tools.AgentTest do
         session_id: "sess_main",
         agent_id: "main",
         invocation_context_key: "agent-followup-client",
-        memory_context_key: "agent-followup-memory",
-        memory_context_verified: true,
-        shared_memory_grant: false,
         invocation_mcp_servers: [],
         tool_policy:
           CodingAgent.ToolPolicy.custom(allow: ["read", "write", "agent"], require_approval: ["write"])
@@ -770,6 +767,9 @@ defmodule CodingAgent.Tools.AgentTest do
 
     assert_receive {:router_submit, %RunRequest{} = child_request, 1}
     assert child_request.meta[:mcp_servers] == []
+    refute Map.has_key?(child_request.meta, :memory_context_key)
+    refute Map.has_key?(child_request.meta, :memory_context_verified)
+    refute Map.has_key?(child_request.meta, :shared_memory_grant)
     refute CodingAgent.ToolPolicy.allowed?(child_request.tool_policy, "write")
     refute CodingAgent.ToolPolicy.allowed?(child_request.tool_policy, "bash")
 
@@ -786,9 +786,9 @@ defmodule CodingAgent.Tools.AgentTest do
     assert followup.cwd == "/tmp"
     assert followup.meta[:invocation_context_key] == "agent-followup-client"
     assert followup.meta[:mcp_servers] == []
-    assert followup.meta[:memory_context_key] == "agent-followup-memory"
-    assert followup.meta[:memory_context_verified] == true
-    assert followup.meta[:shared_memory_grant] == false
+    refute Map.has_key?(followup.meta, :memory_context_key)
+    refute Map.has_key?(followup.meta, :memory_context_verified)
+    refute Map.has_key?(followup.meta, :shared_memory_grant)
     assert CodingAgent.ToolPolicy.allowed?(followup.tool_policy, "write")
     refute CodingAgent.ToolPolicy.allowed?(followup.tool_policy, "bash")
     assert CodingAgent.ToolPolicy.requires_approval?(followup.tool_policy, "write")
