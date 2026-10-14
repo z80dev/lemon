@@ -559,8 +559,7 @@ defmodule LemonSkills.McpDiscovery do
   end
 
   # Strip `//` and `/* */` comments and trailing commas outside JSON strings.
-  @doc false
-  def strip_jsonc(text) do
+  defp strip_jsonc(text) do
     text
     |> strip_comments([])
     |> IO.iodata_to_binary()
