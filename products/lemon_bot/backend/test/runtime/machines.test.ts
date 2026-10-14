@@ -1,11 +1,23 @@
 import { describe, expect, test } from 'bun:test';
 import type * as P from '../../../contracts/protocol';
-import { createMachineRoutes, refreshMachines } from '../../src/runtime/machines';
+import { createMachineRoutes, ensureMachineRuntimeReady, refreshMachines } from '../../src/runtime/machines';
 import { getTerminalService } from '../../src/runtime/terminals';
 import { fixture, compatibleFeatures } from './fixture';
 const stat = { path: '/home/worker/result.txt', type: 'regular', size: 3, mtimeMs: 101, mode: 0o600, mime: 'text/plain', readable: false, writable: true };
 
 describe('privileged destination machine boundary', () => {
+  test('accepts live authenticated privacy capability descriptors without inventing grants', async () => {
+    const f = fixture();
+    f.rpc = async method => {
+      if (method !== 'node.runtime.features') throw new Error('Unexpected RPC');
+      return { ...compatibleFeatures('node_1'), capabilities: { 'coding_agent.run': { version: 1, nativePrivacyContext: { version: 1 } } }, nativePrivacyContext: { version: 1 } };
+    };
+    try {
+      expect(await ensureMachineRuntimeReady(f.services, f.machine, true)).toMatchObject({ botReady: true, nativePrivacyContext: { version: 1 }, capabilities: { 'coding_agent.run': { version: 1 } } });
+      expect(f.store.list('botGrants')).toEqual([]);
+    } finally { f.store.close(); }
+  });
+
   test('bot visibility never confers human host access; invalid chunks and truncate offset are rejected before dispatch', async () => {
     const f = fixture(); const routes = createMachineRoutes(f.services); const write = routes.find(route => route.method === 'PUT' && route.path === '/v1/machines/:id/files')!;
     try {

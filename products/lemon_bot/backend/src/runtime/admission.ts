@@ -3,7 +3,7 @@ import type { BackendServices, Principal, Route } from '../core/services';
 import { ApiError, errorEnvelope, fail } from '../core/errors';
 import { id, parse, z } from '../core/validation';
 import { invocationBotToolPolicy } from '../core/experiences';
-import { buildInvocationContext, buildMemoryContextKey, effectiveInvocationAudience, type InvocationContext, type InvocationMcpServer, type RuntimeMapping } from './runs';
+import { buildInvocationContext, buildMemoryContextKey, effectiveInvocationAudience, type InvocationContext, type RuntimeMapping } from './runs';
 
 export const nativeFollowupAdmissionPath = '/internal/runtime/followup/admission';
 interface Issuer { botId: string; profileId: string; url: string; digest: string; encryptedToken: string; state: 'pending' | 'configured' | 'rejected' | 'outcome_unknown' }
@@ -81,16 +81,6 @@ function currentAuthority(services: BackendServices, issuer: Issuer, lineage: Na
   if (services.runtime.sessionKey(conversation, targetBot) !== lineage.targetSessionKey) fail('forbidden', 'The native destination session is not the authorized source room.');
   return { root, parent, actor, sourceBot, targetBot, conversation };
 }
-function authorityServer(services: BackendServices, server: InvocationMcpServer, context: InvocationContext): string {
-  const proof = context.invocationProof;
-  const headers = { ...server.headers };
-  if (server.name === proof.serverName && server.url === proof.serverUrl && headers[proof.headerName] === `\${LEMON_SECRET:${proof.secretName}}`) headers[proof.headerName] = '<verified-invocation-proof>';
-  return services.mutations.digest({ ...server, headers });
-}
-function sourceCapabilitySubset(services: BackendServices, source: InvocationContext, target: InvocationContext) {
-  const sourceServers = new Set(source.invocationMcpServers.map(server => authorityServer(services, server, source)));
-  if (target.invocationMcpServers.some(server => !sourceServers.has(authorityServer(services, server, target)))) fail('policy_denied', 'A native continuation cannot attach capabilities outside its authenticated source.');
-}
 
 function cachedReply(services: BackendServices, issuer: Issuer, reservation: Reservation): AdmissionReply {
   if (reservation.issuerDigest !== issuer.digest) fail('forbidden', 'The fixed native reservation belongs to another issuer.');
@@ -146,7 +136,6 @@ export function createRuntimeAdmissionRoutes(services: BackendServices): Route[]
       const floors: P.JSONObject[] = [lineage.sourceRestrictiveToolPolicy];
       if (authority.sourceBot.id !== authority.targetBot.id) floors.push(await invocationBotToolPolicy(services, authority.actor, authority.sourceBot));
       const invocation = await buildInvocationContext(services, authority.actor, authority.conversation, authority.targetBot, runId, floors);
-      sourceCapabilitySubset(services, authority.parent.context, invocation);
       const current = currentAuthority(services, issuer, lineage);
       if (current.actor.role !== authority.actor.role) fail('policy_denied', 'Source membership changed during native admission.');
       const epochs = services.store.metadata<{ connectorId: string; epoch: number }[]>(`runConnectorEpochs:${resource.id}`) ?? [];
