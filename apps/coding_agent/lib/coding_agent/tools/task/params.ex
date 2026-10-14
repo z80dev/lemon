@@ -17,8 +17,6 @@ defmodule CodingAgent.Tools.Task.Params do
   @valid_queue_modes ["collect", "followup", "steer", "steer_backlog", "interrupt"]
   @schema_modes ["strict", "permissive"]
   @max_context_bytes 64 * 1024
-  # Personas that must never gain delegation, regardless of `spawns`.
-  @read_only_persona_ids ~w(scout reviewer security-reviewer)
 
   @tool_only_guardrail_known_tools [
     "bash",
@@ -371,8 +369,7 @@ defmodule CodingAgent.Tools.Task.Params do
   defp agent_model_override(_task_settings, nil), do: nil
   defp agent_model_override(task_settings, persona), do: task_settings.agent_models[persona.id]
 
-  defp read_only_persona?(persona),
-    do: Map.get(persona, :read_only) == true or persona.id in @read_only_persona_ids
+  defp read_only_persona?(persona), do: Subagents.read_only?(persona)
 
   # A non-read-only persona with `spawns` may delegate when its child depth is below the cap.
   defp child_spawns(nil, _max_depth, _child_depth), do: nil

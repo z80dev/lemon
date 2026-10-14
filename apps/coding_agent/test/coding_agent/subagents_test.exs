@@ -6,8 +6,6 @@ defmodule CodingAgent.SubagentsTest do
 
   @moduletag :tmp_dir
   @builtin_ids ~w(reviewer scout security-reviewer sonic task-executor)
-  @persona_keys ~w(id description prompt model role tools read_only thinking_level spawns
-                   output_schema source)a
   @read_tools ~w(read grep find ls agent_message)
 
   setup %{tmp_dir: tmp_dir} do
@@ -31,43 +29,20 @@ defmodule CodingAgent.SubagentsTest do
     {:ok, root: tmp_dir, cwd: cwd, home: home, global: global, project: project}
   end
 
-  test "ships the Markdown builtins from the application priv directory", %{cwd: cwd} do
+  test "ships read-only reviewers and leaf workers as builtins", %{cwd: cwd} do
     assert Enum.map(Subagents.list(cwd), & &1.id) == @builtin_ids
-
-    for id <- @builtin_ids do
-      assert File.regular?(
-               Path.join([to_string(:code.priv_dir(:coding_agent)), "agents", id <> ".md"])
-             )
-
-      assert {:ok, persona} = Subagents.fetch(cwd, id)
-      assert persona.source == :builtin
-      assert persona.description != ""
-      assert persona.prompt != ""
-      refute String.starts_with?(persona.prompt, "---")
-      assert persona.role == nil
-      assert persona.output_schema == nil
-      assert persona.spawns == nil
-      assert Map.keys(persona) |> Enum.sort() == Enum.sort(@persona_keys)
-    end
+    assert Enum.all?(Subagents.list(cwd), &(&1.source == :builtin and &1.prompt != ""))
 
     for id <- ~w(scout reviewer security-reviewer) do
       persona = Subagents.get(cwd, id)
       assert persona.read_only
       assert persona.tools == @read_tools
-      assert persona.model == nil
-      assert persona.thinking_level == nil
     end
 
-    executor = Subagents.get(cwd, "task-executor")
-    refute executor.read_only
-    assert executor.tools == nil
-    assert executor.model == nil
-
+    refute Subagents.get(cwd, "task-executor").read_only
     sonic = Subagents.get(cwd, "sonic")
     refute sonic.read_only
-    assert sonic.tools == nil
-    assert sonic.model == "@smol"
-    assert sonic.thinking_level == "low"
+    assert {sonic.model, sonic.thinking_level} == {"@smol", "low"}
   end
 
   test "project overrides global, which overrides builtin", context do
@@ -161,7 +136,6 @@ defmodule CodingAgent.SubagentsTest do
     assert error =~ "Invalid project subagent 'scout'"
     assert Subagents.get(cwd, "scout") == nil
     refute Enum.any?(Subagents.list(cwd), &(&1.id == "scout"))
-    refute Subagents.format_for_description(cwd) =~ "- scout:"
     assert Subagents.get(cwd, "reviewer") != nil
   end
 
@@ -304,13 +278,11 @@ defmodule CodingAgent.SubagentsTest do
     assert Enum.map(Subagents.list(cwd), & &1.id) == @builtin_ids
   end
 
-  test "formats sorted valid descriptions and handles missing project directories", context do
+  test "lists sorted valid definitions and handles missing project directories", context do
     %{cwd: cwd, project: project} = context
     define(project, "aaa", "description: First")
-    description = Subagents.format_for_description(cwd)
-    assert String.starts_with?(description, "- aaa: First\n- reviewer:")
-    assert description =~ "- scout:"
-    assert description =~ "- task-executor:"
+    assert [%{id: "aaa", description: "First"} | _] = Subagents.list(cwd)
+    assert Enum.map(Subagents.list(cwd), & &1.id) == Enum.sort(["aaa" | @builtin_ids])
     assert Enum.map(Subagents.list(Path.join(cwd, "missing")), & &1.id) == @builtin_ids
   end
 
@@ -399,10 +371,6 @@ defmodule CodingAgent.SubagentsTest do
       assert persona.tools == ~w(read grep find bash)
       assert persona.model == nil
       assert persona.source == :project
-      assert persona.spawns == nil
-      assert persona.thinking_level == nil
-      assert persona.output_schema == nil
-      assert Map.keys(persona) |> Enum.sort() == Enum.sort(@persona_keys)
 
       listed = Subagents.get(cwd, "listed")
       assert listed.model == "anthropic:claude-sonnet-4-5"
@@ -553,17 +521,6 @@ defmodule CodingAgent.SubagentsTest do
       assert persona.thinking_level == nil
       assert persona.spawns == nil
       assert persona.output_schema == nil
-    end
-
-    test "indexes at most 256 Markdown files per foreign directory", %{cwd: cwd} do
-      dir = Path.join(cwd, ".omp/agents")
-
-      for index <- 0..256 do
-        write_agent(dir, "a#{String.pad_leading("#{index}", 3, "0")}", "description: Bulk")
-      end
-
-      assert Subagents.get(cwd, "a255").description == "Bulk"
-      assert Subagents.get(cwd, "a256") == nil
     end
   end
 

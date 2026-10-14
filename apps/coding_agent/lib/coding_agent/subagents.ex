@@ -147,12 +147,10 @@ defmodule CodingAgent.Subagents do
     end
   end
 
-  @spec format_for_description(String.t()) :: String.t()
-  def format_for_description(cwd) do
-    cwd
-    |> list()
-    |> Enum.map_join("\n", fn agent -> "- #{agent.id}: #{agent.description}" end)
-  end
+  @doc "Whether a persona is read-only (flagged, or one of the always-read-only IDs)."
+  @spec read_only?(map() | nil) :: boolean()
+  def read_only?(nil), do: false
+  def read_only?(persona), do: persona[:read_only] == true or persona[:id] in @read_only_ids
 
   @doc """
   Intersects a persona's tools with the requested policy (default: leaf worker).
@@ -168,7 +166,7 @@ defmodule CodingAgent.Subagents do
     tools = if persona, do: Map.get(persona, :tools), else: nil
 
     tools =
-      if persona && (persona[:read_only] == true or persona[:id] in @read_only_ids) do
+      if read_only?(persona) do
         if is_list(tools),
           do: Enum.filter(tools, &(&1 in @read_only_tools)),
           else: @read_only_tools

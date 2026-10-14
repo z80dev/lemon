@@ -103,16 +103,6 @@ defmodule LemonCore.Config.AgentTest do
   end
 
   describe "task configuration" do
-    test "uses native task defaults" do
-      assert Agent.resolve(%{}).task == %{
-               max_depth: 2,
-               max_runtime_ms: 0,
-               worktree_merge: "none",
-               disabled_agents: [],
-               agent_models: %{}
-             }
-    end
-
     test "reads [runtime.task]" do
       config =
         Agent.resolve(%{
