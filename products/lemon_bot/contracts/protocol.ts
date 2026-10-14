@@ -396,7 +396,7 @@ export interface EmailAddressProposal extends EmailAddressCheck { botId: ID }
 export interface ContentExportConsent extends Resource { conversationId: ID; userId: ID; enabled: boolean }
 export interface ContentExportConsentUpdate extends Update { enabled: boolean }
 export interface EmailMessage extends Resource { accountId: ID; from: string; to: string[]; subject: string; receivedAtMs: TimestampMs; authentication: 'passed' | 'failed' | 'unknown'; scan: 'passed' | 'spam' | 'virus' | 'pending'; text: string | null; attachmentIds: ID[]; skippedAttachmentNames: string[] }
-export interface XConnection extends Resource { userId: ID; externalAccountId: string; username: string; mainBotId: ID; enabled: boolean; state: 'pending' | 'connected' | 'needs_auth' | 'blocked' | 'failed'; lastError: string | null }
+export interface XConnection extends Resource { userId: ID; externalAccountId: ID | null; username: string | null; mainBotId: ID; enabled: boolean; state: 'pending' | 'connected' | 'needs_auth' | 'blocked' | 'failed'; lastError: string | null }
 export interface XConnect extends Mutation { mainBotId: ID; redirectUri: string }
 export interface XConnectResult { connection: XConnection; authorizationUrl: string }
 export interface XConnectionUpdate extends Update { mainBotId?: ID; enabled?: boolean }
