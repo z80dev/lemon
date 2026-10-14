@@ -1,9 +1,9 @@
 import { describe, expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import type * as P from '../../../contracts/protocol';
-import type { Principal, Route } from '../../src/core/services';
+import type { BackendServices, Principal, Route } from '../../src/core/services';
 import { ApiError } from '../../src/core/errors';
-import { createBotRoutes, baseBotMcpConfig, syncBotProfile, createBotService, syncBotPolicyFloor, productBotTools } from '../../src/core/bots';
+import { createBotRoutes, baseBotMcpConfig, syncBotProfile, createBotService, syncBotPolicyFloor, productBotTools, assertWorkspaceRestrictionManagement } from '../../src/core/bots';
 import { createConversationRoutes } from '../../src/core/conversations';
 import { createResourceRoutes } from '../../src/core/resources';
 import { authFixture, routeContext } from './auth.test';
@@ -557,5 +557,50 @@ describe('trusted restriction-only management without live Bot authority', () =>
     expect(f.store.metadata(`botPolicyFloor:${bot.id}`)).toMatchObject({ state: 'acknowledged', actorUserId: 'admin' });
     await expect(f.request('GET', `/v1/bots/${bot.id}`, undefined, f.admin)).rejects.toMatchObject({ code: 'not_found' });
     expect(f.store.require<P.Bot>('bots', bot.id)).toEqual(bot);
+  });
+});
+
+describe('authenticated SCIM restriction management', () => {
+  async function scimAuthority(services: BackendServices, issuer: Principal, kind: P.IntegrationToken['kind'] = 'scim', scopes = ['scim.groups']) {
+    const raw = Buffer.alloc(32, 7).toString('base64url');
+    const token: P.IntegrationToken = services.resource('integration_token', { name: 'Directory management fixture', kind, scopes, expiresAtMs: services.now() + 60000 });
+    services.store.put('integrationTokens', token);
+    services.store.put('integrationCredentials', { id: token.id, digest: createHash('sha256').update(raw).digest('hex'), workspaceId: issuer.workspaceId, issuerUserId: issuer.userId });
+    const actor = await services.auth.authenticate(new Request(`${fixturePublicUrl}/scim/v2/Groups`, { headers: { Authorization: `Bearer ${raw}` } }), 'integration');
+    if (!actor) throw new Error('The real authentication boundary did not accept the issued fixture integration.');
+    return { actor, token };
+  }
+  test('a real scoped integration keeps its identity while applying only native restrictions', async () => {
+    const f = fixture(), bot = f.bot();
+    await syncBotProfile(f.services, f.alice, bot.id);
+    const { actor } = await scimAuthority(f.services, f.admin);
+    expect(actor.kind).toBe('integration'); expect(actor.role).toBe('member'); expect(actor.userId).toBe(f.admin.userId);
+    f.services.integrations.workspaceRestrictions = () => ({ localExecutionCeiling: 'deny', rules: [], allowedMcpOrigins: [fixturePublicUrl], requireReview: true });
+    const start = f.calls.length;
+    assertWorkspaceRestrictionManagement(f.services, actor);
+    await syncBotPolicyFloor(f.services, actor, bot.id);
+    const writes = f.calls.slice(start).filter(call => call.mutation);
+    expect(Object.keys(writes.find(call => call.method === 'profiles.update')!.params).sort()).toEqual(['id', 'toolPolicy']);
+    expect(writes.some(call => call.method === 'node.secrets.set' || call.method === 'profile.followup.admission.set')).toBe(false);
+    await expect(f.request('GET', `/v1/bots/${bot.id}`, undefined, actor)).rejects.toMatchObject({ code: 'not_found' });
+    expect(actor.kind).toBe('integration'); expect(actor.role).toBe('member');
+  });
+  test('revocation, token kind, expiry, issuer binding and current membership prevent management before RPC', async () => {
+    for (const invalid of ['revoked', 'expired', 'audit', 'event', 'scope', 'issuer', 'workspace', 'disabled', 'demoted'] as const) {
+      const f = fixture(), bot = f.bot(), { actor, token } = await scimAuthority(f.services, f.admin);
+      if (invalid === 'revoked') f.store.remove('integrationCredentials', token.id);
+      if (invalid === 'expired') f.store.put('integrationTokens', { ...token, expiresAtMs: f.services.now() });
+      if (invalid === 'audit') f.store.put('integrationTokens', { ...token, kind: 'audit_export', scopes: ['audit_export'] });
+      if (invalid === 'event') f.store.put('integrationTokens', { ...token, kind: 'event_ingress', scopes: ['event_ingress:slack'] });
+      if (invalid === 'scope') f.store.put('integrationTokens', { ...token, scopes: [] });
+      if (invalid === 'issuer') f.store.put('integrationCredentials', { id: token.id, workspaceId: actor.workspaceId, issuerUserId: f.alice.userId });
+      if (invalid === 'workspace') f.store.put('integrationCredentials', { id: token.id, workspaceId: 'other-workspace', issuerUserId: actor.userId });
+      if (invalid === 'disabled' || invalid === 'demoted') {
+        const member = f.services.auth.member(actor.userId);
+        f.store.put('members', { ...member, ...(invalid === 'disabled' ? { enabled: false } : { role: 'member' as const }) });
+      }
+      await expect(syncBotPolicyFloor(f.services, actor, bot.id)).rejects.toMatchObject({ code: 'forbidden' });
+      expect(f.calls).toHaveLength(0);
+    }
   });
 });

@@ -60,7 +60,7 @@ function pathId(context: RequestContext): string { return parse(id, context.para
 /** Live Bot access is owner-only, independently of legacy visibility, publication, managers or workspace roles. */
 function visible(s: BackendServices, p: Principal, botId: string, manage = false): P.Bot {
   const bot = s.store.get<P.Bot>('bots', botId);
-  if (!bot || bot.ownerUserId !== p.userId) fail('not_found', 'Bot not found.');
+  if (!bot || p.kind === 'integration' || p.kind === 'hook' || bot.ownerUserId !== p.userId) fail('not_found', 'Bot not found.');
   s.auth.bot(p, botId, manage);
   if (manage) ownedMachine(s, p, bot.machineId);
   return botDto(bot);
@@ -788,10 +788,21 @@ function appendLifecycleEvent(s: BackendServices, room: P.Conversation, event: P
   });
 }
 
+/** Server-only restriction-management authority; never grants Bot use, owner credentials or arbitrary workspace operations. */
+export function assertWorkspaceRestrictionManagement(s: BackendServices, actor: Principal): void {
+  const member = s.auth.member(actor.userId);
+  const currentAdmin = actor.workspaceId === s.store.metadata<string>('workspaceId') && member.enabled && (member.role === 'admin' || member.role === 'owner');
+  let authorized = actor.kind === 'user' && currentAdmin;
+  if (actor.kind === 'integration' && currentAdmin) {
+    const token = s.store.get<P.IntegrationToken>('integrationTokens', actor.id);
+    const binding = s.store.get<{ id: string; workspaceId: string; issuerUserId: string }>('integrationCredentials', actor.id);
+    authorized = Boolean(token?.kind === 'scim' && (token.expiresAtMs === null || token.expiresAtMs > s.now()) && binding?.workspaceId === actor.workspaceId && binding.issuerUserId === actor.userId && ['scim.groups', 'scim.users'].some(scope => actor.scopes?.includes(scope) && token.scopes.includes(scope)));
+  }
+  if (!authorized) fail('forbidden', 'Workspace restriction management requires a current administrator or its live directory-scoped SCIM integration.');
+}
 /** Trusted administrator enforcement is restriction-only; it never becomes live Bot access or owner credential authority. */
 export async function syncBotPolicyFloor(s: BackendServices, actor: Principal, botId: string): Promise<void> {
-  const member = s.auth.member(actor.userId);
-  if (actor.kind !== 'user' || actor.workspaceId !== s.store.metadata<string>('workspaceId') || !member.enabled || (member.role !== 'admin' && member.role !== 'owner')) fail('forbidden', 'Workspace restriction management requires an enabled administrator.');
+  assertWorkspaceRestrictionManagement(s, actor);
   const bot = s.store.require<P.Bot>('bots', botId);
   const machine = s.store.require<P.Machine>('machines', bot.machineId);
   if (machine.ownerUserId !== bot.ownerUserId) fail('conflict', 'Resolve the legacy cross-owner placement before native policy management.');
