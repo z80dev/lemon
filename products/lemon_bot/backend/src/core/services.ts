@@ -81,9 +81,11 @@ export interface GateService {
   wait<T = unknown>(collection: string, id: string): Promise<T>;
   cancelUser(userId: string): void;
 }
+export interface WorkspaceToolRestrictions { localExecutionCeiling: P.Policies['localExecutionCeiling']; rules: P.PolicyRule[]; allowedMcpOrigins: string[] | null; requireReview: boolean }
 export interface IntegrationServices {
   admission(principal: Principal, botId: string, routineId?: string): Promise<void>;
   effectivePolicy(principal: Principal, botId?: string): Promise<P.EffectivePolicy>;
+  workspaceRestrictions?(target: { botId: string; machineId: string }): WorkspaceToolRestrictions;
   connectorConfig(principal: Principal, botId: string, conversationId?: string, operationId?: string): Promise<InvocationMcpServer[]>;
   /** Public identity/origin/tool ceilings only; no credentials, consent or invocation authority. */
   connectorTemplates?(botId: string): Promise<InvocationMcpServer[]>;
