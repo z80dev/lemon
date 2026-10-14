@@ -117,13 +117,23 @@ defmodule LemonAi.Auth.KimiCodeOAuthTest do
       json(conn, %{"access_token" => "fresh", "refresh_token" => "kimi-rt-2", "expires_in" => 900})
     end)
 
-    persist = fn name, value -> send(test_pid, {:persisted, name, value}) end
+    secret = payload(60_000)
+    revision = make_ref()
+
+    persist = fn name, value, expected ->
+      assert expected == revision
+      send(test_pid, {:persisted, name, value})
+      :ok
+    end
 
     assert {:ok, "fresh"} =
              OAuthSecretResolver.resolve_api_key_from_secret(
                "llm_kimi_coding_api_key",
-               payload(60_000),
-               Keyword.put(opts, :persist_secret, persist)
+               secret,
+               Keyword.merge(opts,
+                 reload_secret: fn _ -> {:ok, secret, revision} end,
+                 persist_secret: persist
+               )
              )
 
     assert_received {:persisted, "llm_kimi_coding_api_key", stored}

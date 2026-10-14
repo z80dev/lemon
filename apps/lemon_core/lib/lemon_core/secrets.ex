@@ -24,9 +24,10 @@ defmodule LemonCore.Secrets do
   preview's confirmation token, refuses to touch anything when a stored secret
   does not decrypt with the current key, refuses while a Lemon runtime is
   running, and keeps every secret decryptable by whichever key is loaded next,
-  even if it is interrupted. `set/3` and rotation share `LemonCore.Secrets.Lock`,
-  so a write never lands under a key being retired. Only the encrypted store
-  is rotated; external sources and environment fallback are untouched.
+  even if it is interrupted. `set/3`, `set_if_revision/4`, deletion, expiry
+  cleanup and rotation share `LemonCore.Secrets.Lock`, so a write never lands
+  under a key being retired. Only the encrypted store is rotated; external
+  sources and environment fallback are untouched.
 
   Replacing the key by other means (`mix lemon.secrets.init --force`, editing
   the key file or Keychain entry) still makes every stored secret undecryptable.
@@ -44,6 +45,7 @@ defmodule LemonCore.Secrets do
   @type owner :: String.t()
   @type name :: String.t()
   @type error_reason :: atom() | tuple()
+  @opaque revision :: binary()
 
   @type secret_metadata :: %{
           required(:owner) => owner(),
@@ -78,52 +80,161 @@ defmodule LemonCore.Secrets do
 
   def set(name, value, opts) when is_binary(value) do
     with {:ok, name} <- normalize_name(name),
-         {:ok, owner} <- normalize_owner(opts) do
-      Lock.with_write_lock(fn -> store_secret(owner, name, value, opts) end)
+         {:ok, owner} <- normalize_owner(opts),
+         {:ok, server} <- storage_owner(opts) do
+      Lock.with_write_lock(fn -> store_secret(server, owner, name, value, opts) end, server)
     end
   end
 
   def set(_, _, _), do: {:error, :invalid_secret_value}
 
-  defp store_secret(owner, name, value, opts) do
-    with {:ok, master_key, _source} <- MasterKey.resolve(opts),
-         {:ok, encrypted} <- Crypto.encrypt(value, master_key) do
-      now = Clock.now_ms()
-      existing = Store.get(@table, {owner, name}) || %{}
-
-      record = %{
-        ciphertext: encrypted.ciphertext,
-        nonce: encrypted.nonce,
-        salt: encrypted.salt,
-        provider: normalize_optional_string(Keyword.get(opts, :provider)) || @default_provider,
-        expires_at: normalize_optional_integer(Keyword.get(opts, :expires_at)),
-        usage_count: 0,
-        last_used_at: nil,
-        created_at: get_field(existing, :created_at) || now,
-        updated_at: now,
-        version: encrypted.version
-      }
-
-      :ok = Store.put(@table, {owner, name}, record)
+  defp store_secret(server, owner, name, value, opts) do
+    with {:ok, existing} <- Store.fetch(server, @table, {owner, name}),
+         {:ok, record} <- encrypt_record(existing, value, opts),
+         :ok <- Store.put(server, @table, {owner, name}, record) do
       emit_secret_event(owner, name, :set)
       {:ok, metadata(owner, name, record)}
     end
   end
 
+  defp encrypt_record(existing, value, opts) do
+    with {:ok, master_key, _source} <- MasterKey.resolve(opts),
+         {:ok, encrypted} <- Crypto.encrypt(value, master_key) do
+      now = Clock.now_ms()
+
+      {:ok,
+       %{
+         ciphertext: encrypted.ciphertext,
+         nonce: encrypted.nonce,
+         salt: encrypted.salt,
+         incarnation: Base.encode64(:crypto.strong_rand_bytes(32)),
+         provider: normalize_optional_string(Keyword.get(opts, :provider)) || @default_provider,
+         expires_at: normalize_optional_integer(Keyword.get(opts, :expires_at)),
+         usage_count: 0,
+         last_used_at: nil,
+         created_at: get_field(existing || %{}, :created_at) || now,
+         updated_at: now,
+         version: encrypted.version
+       }}
+    end
+  end
+
   @spec get(name(), keyword()) :: {:ok, String.t()} | {:error, error_reason()}
   def get(name, opts \\ []) do
+    case get_with_revision(name, opts) do
+      {:ok, plaintext, _revision} -> {:ok, plaintext}
+      {:error, _reason} = error -> error
+    end
+  end
+
+  @doc """
+  Reads only the encrypted store and returns an opaque conditional-write revision.
+
+  The revision binds the storage process, owner, name and durable credential
+  incarnation. Usage reads do not invalidate it; replacement (even with the
+  same plaintext), deletion/recreation and a storage restart do. Treat it as
+  ephemeral credential-bearing data: do not inspect, log or persist it.
+
+  Reads distinguish storage failure from absence and never remove expired
+  records. Only a best-effort, exact-snapshot usage touch writes during a read.
+  `:store` selects a Store instance; it defaults to `LemonCore.Store`.
+  """
+  @spec get_with_revision(name(), keyword()) ::
+          {:ok, String.t(), revision()} | {:error, error_reason()}
+  def get_with_revision(name, opts \\ []) do
     with {:ok, name} <- normalize_name(name),
          {:ok, owner} <- normalize_owner(opts),
-         {:ok, entry} <- fetch_active_entry(owner, name),
+         {:ok, server} <- storage_owner(opts),
+         {:ok, entry} <- fetch_active_entry(server, owner, name),
          {:ok, master_key, _source} <- MasterKey.resolve(opts),
          {:ok, plaintext} <- KeyRotation.decrypt(entry, master_key) do
-      touch_entry(owner, name, entry)
-      {:ok, plaintext}
+      revision = entry_revision(server, owner, name, entry)
+      touch_entry(server, owner, name, entry)
+      {:ok, plaintext, revision}
+    end
+  end
+
+  @doc """
+  Replaces a credential only if `revision` still identifies its incarnation.
+
+  Uses the same mutation lease as `set/3`, deletion and key rotation, then an
+  atomic Store compare-and-swap. Missing, expired or replaced credentials return
+  `{:error, :stale_revision}`. Persistence failures are returned, not acknowledged
+  as saves. A successful write invalidates the supplied revision.
+  """
+  @spec set_if_revision(name(), String.t(), revision(), keyword()) ::
+          {:ok, secret_metadata()} | {:error, error_reason()}
+  def set_if_revision(name, value, revision, opts \\ [])
+
+  def set_if_revision(name, value, revision, opts) when is_binary(value) do
+    with {:ok, name} <- normalize_name(name),
+         {:ok, owner} <- normalize_owner(opts),
+         {:ok, server} <- storage_owner(opts) do
+      Lock.with_write_lock(
+        fn ->
+          with {:ok, entry} <- fetch_revision_entry(server, owner, name, revision),
+               {:ok, record} <- encrypt_record(entry, value, opts) do
+            swap_revision(server, owner, name, revision, entry, record)
+          end
+        end,
+        server
+      )
+    end
+  end
+
+  def set_if_revision(_, _, _, _), do: {:error, :invalid_secret_value}
+
+  defp swap_revision(server, owner, name, revision, entry, record) do
+    # Key resolution may have blocked since the active-entry read. Recheck
+    # immediately before every CAS, including retries after usage touches.
+    if expired_entry?(entry) do
+      {:error, :stale_revision}
     else
-      {:error, :not_found} -> {:error, :not_found}
-      {:error, :expired} -> {:error, :expired}
-      {:error, :missing_master_key} -> {:error, :missing_master_key}
-      {:error, reason} -> {:error, reason}
+      case Store.compare_and_swap(server, @table, {owner, name}, entry, record) do
+        :ok ->
+          emit_secret_event(owner, name, :set)
+          {:ok, metadata(owner, name, record)}
+
+        {:error, :mismatch} ->
+          # Usage touches can race the exact-record CAS. Re-fetch strictly and
+          # continue only while the original incarnation is still current.
+          with {:ok, current} <- fetch_revision_entry(server, owner, name, revision) do
+            swap_revision(server, owner, name, revision, current, record)
+          end
+
+        {:error, _reason} = error ->
+          error
+      end
+    end
+  end
+
+  defp fetch_revision_entry(server, owner, name, revision) do
+    with {:ok, entry} <- fetch_active_entry(server, owner, name) do
+      if is_binary(revision) and entry_revision(server, owner, name, entry) == revision,
+        do: {:ok, entry},
+        else: {:error, :stale_revision}
+    else
+      {:error, reason} when reason in [:not_found, :expired] -> {:error, :stale_revision}
+      {:error, _reason} = error -> error
+    end
+  end
+
+  defp entry_revision(server, owner, name, entry) do
+    # Legacy records need no migration write on read. Their encrypted snapshot
+    # identifies the incarnation until the next normal replacement.
+    incarnation =
+      get_field(entry, :incarnation) ||
+        Enum.map([:ciphertext, :nonce, :salt, :version, :created_at, :updated_at], fn key ->
+          get_field(entry, key)
+        end)
+
+    :crypto.hash(:sha256, :erlang.term_to_binary({server, owner, name, incarnation}))
+  end
+
+  defp storage_owner(opts) do
+    case GenServer.whereis(Keyword.get(opts, :store, Store)) do
+      server when is_pid(server) -> {:ok, server}
+      nil -> {:error, :store_unavailable}
     end
   end
 
@@ -258,57 +369,93 @@ defmodule LemonCore.Secrets do
     end
   end
 
-  @spec delete(name(), keyword()) :: :ok | {:error, atom()}
+  @spec delete(name(), keyword()) :: :ok | {:error, error_reason()}
   def delete(name, opts \\ []) do
     with {:ok, name} <- normalize_name(name),
-         {:ok, owner} <- normalize_owner(opts) do
-      :ok = Store.delete(@table, {owner, name})
-      emit_secret_event(owner, name, :delete)
-      :ok
+         {:ok, owner} <- normalize_owner(opts),
+         {:ok, server} <- storage_owner(opts),
+         {:ok, entry} <- Store.fetch(server, @table, {owner, name}) do
+      if is_nil(entry) do
+        :ok
+      else
+        Lock.with_write_lock(
+          fn ->
+            case Store.compare_and_delete_many(server, [{@table, {owner, name}, entry}]) do
+              :ok ->
+                emit_secret_event(owner, name, :delete)
+                :ok
+
+              {:error, :mismatch} ->
+                {:error, :stale_revision}
+
+              {:error, _reason} = error ->
+                error
+            end
+          end,
+          server
+        )
+      end
     end
   end
 
-  @spec list(keyword()) :: {:ok, [secret_metadata()]}
+  @spec list(keyword()) :: {:ok, [secret_metadata()]} | {:error, error_reason()}
   def list(opts \\ []) do
-    owner = owner_from_opts(opts)
-
-    records =
-      @table
-      |> Store.list()
-      |> Enum.reduce([], fn
-        {{record_owner, name}, entry}, acc when record_owner == owner ->
+    with {:ok, owner} <- normalize_owner(opts),
+         {:ok, server} <- storage_owner(opts),
+         {:ok, rows} <- Store.fetch_all(server, @table) do
+      rows
+      |> Enum.reduce_while({:ok, []}, fn
+        {{record_owner, name}, entry}, {:ok, acc} when record_owner == owner ->
           if expired_entry?(entry) do
-            :ok = Store.delete(@table, {record_owner, name})
-            acc
+            case remove_expired(server, record_owner, name, entry) do
+              :ok -> {:cont, {:ok, acc}}
+              {:error, _reason} = error -> {:halt, error}
+            end
           else
-            [metadata(record_owner, name, entry) | acc]
+            {:cont, {:ok, [metadata(record_owner, name, entry) | acc]}}
           end
 
         _, acc ->
-          acc
+          {:cont, acc}
       end)
-      |> Enum.sort_by(& &1.name)
-
-    {:ok, records}
+      |> case do
+        {:ok, records} -> {:ok, Enum.sort_by(records, & &1.name)}
+        {:error, _reason} = error -> error
+      end
+    end
   end
 
-  @spec status(keyword()) :: map()
-  def status(opts \\ []) do
-    {:ok, entries} = list(opts)
-    key_status = MasterKey.status(opts)
+  defp remove_expired(server, owner, name, entry) do
+    Lock.with_write_lock(
+      fn ->
+        case Store.compare_and_delete_many(server, [{@table, {owner, name}, entry}]) do
+          :ok -> :ok
+          {:error, :mismatch} -> :ok
+          {:error, _reason} = error -> error
+        end
+      end,
+      server
+    )
+  end
 
-    %{
-      configured: key_status.configured,
-      source: key_status.source,
-      keychain_available: key_status.keychain_available,
-      env_fallback: key_status.env_fallback,
-      file_fallback: key_status.file_fallback,
-      keychain_error: key_status.keychain_error,
-      providers: key_status.providers,
-      key_file: key_status.key_file,
-      owner: owner_from_opts(opts),
-      count: length(entries)
-    }
+  @spec status(keyword()) :: map() | {:error, error_reason()}
+  def status(opts \\ []) do
+    with {:ok, entries} <- list(opts) do
+      key_status = MasterKey.status(opts)
+
+      %{
+        configured: key_status.configured,
+        source: key_status.source,
+        keychain_available: key_status.keychain_available,
+        env_fallback: key_status.env_fallback,
+        file_fallback: key_status.file_fallback,
+        keychain_error: key_status.keychain_error,
+        providers: key_status.providers,
+        key_file: key_status.key_file,
+        owner: owner_from_opts(opts),
+        count: length(entries)
+      }
+    end
   end
 
   defp resolve_from_store(name, external_fallback, env_fallback, opts) do
@@ -352,32 +499,34 @@ defmodule LemonCore.Secrets do
   defp store_exists?(name, opts) do
     with {:ok, normalized_name} <- normalize_name(name),
          {:ok, owner} <- normalize_owner(opts),
-         {:ok, _entry} <- fetch_active_entry(owner, normalized_name) do
+         {:ok, server} <- storage_owner(opts),
+         {:ok, _entry} <- fetch_active_entry(server, owner, normalized_name) do
       true
     else
       _ -> false
     end
   end
 
-  defp fetch_active_entry(owner, name) do
-    case Store.get(@table, {owner, name}) do
-      nil ->
+  defp fetch_active_entry(server, owner, name) do
+    case Store.fetch(server, @table, {owner, name}) do
+      {:ok, nil} ->
         {:error, :not_found}
 
-      entry ->
-        if expired_entry?(entry) do
-          :ok = Store.delete(@table, {owner, name})
-          {:error, :expired}
-        else
-          {:ok, entry}
-        end
+      {:ok, entry} when is_map(entry) ->
+        if expired_entry?(entry), do: {:error, :expired}, else: {:ok, entry}
+
+      {:ok, _invalid} ->
+        {:error, :invalid_secret_record}
+
+      {:error, _reason} = error ->
+        error
     end
   end
 
   # Compare-and-swap so a read never writes back a record that changed after it
   # was fetched (a concurrent `set/3`, or a key rotation staging ciphertext).
   # Usage metadata is best effort: losing a race only skips the count.
-  defp touch_entry(owner, name, entry) do
+  defp touch_entry(server, owner, name, entry) do
     now = Clock.now_ms()
 
     updated =
@@ -385,7 +534,7 @@ defmodule LemonCore.Secrets do
       |> put_field(:usage_count, (get_field(entry, :usage_count) || 0) + 1)
       |> put_field(:last_used_at, now)
 
-    _ = Store.compare_and_swap(@table, {owner, name}, entry, updated)
+    _ = Store.compare_and_swap(server, @table, {owner, name}, entry, updated)
     :ok
   end
 

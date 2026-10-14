@@ -424,6 +424,220 @@ defmodule LemonAgent.ModelRuntime.CredentialsTest do
                Credentials.list_provider_api_keys(config, :anthropic)
     end
 
+    for {provider, type} <- [
+          {:xai, "xai_oauth"},
+          {:kimi_coding, "kimi_code_oauth"},
+          {:anthropic, "anthropic_oauth"},
+          {:openai_codex, "openai_codex_oauth"}
+        ],
+        mutation <- [:replace, :delete] do
+      test "#{provider} in-flight refresh loses to #{mutation} of only the selected pool account" do
+        alias LemonAgent.ModelRuntime.Credentials
+        provider = unquote(provider)
+        type = unquote(type)
+        selected = "cas_selected_login"
+        other = "cas_personal_login"
+        now = System.system_time(:millisecond)
+
+        login = fn access ->
+          Jason.encode!(%{
+            "type" => type,
+            "access_token" => access,
+            "refresh_token" => "fixture-refresh",
+            "token_endpoint" => "https://auth.x.ai/oauth2/token",
+            "expires_at_ms" => now + 3_600_000
+          })
+        end
+
+        assert {:ok, _} = Secrets.set(selected, login.("selected-original"))
+        assert {:ok, _} = Secrets.set(other, login.("personal-original"))
+        assert {:ok, untouched} = Secrets.get(other)
+        canonical = Atom.to_string(provider)
+
+        config = %{
+          providers: %{
+            canonical => %{auth_source: "oauth", oauth_secret: other, api_key_secret: other}
+          },
+          provider_routing: %{
+            default_pool: "work",
+            credential_pools: %{
+              "work" => %{credentials: %{canonical => ["secret:" <> selected]}}
+            }
+          }
+        }
+
+        test_pid = self()
+
+        Req.Test.stub(__MODULE__, fn conn ->
+          send(test_pid, {:cas_request, self()})
+
+          receive do
+            :finish_refresh -> :ok
+          after
+            5_000 -> flunk("refresh release not received")
+          end
+
+          Req.Test.json(conn, %{
+            "access_token" => "obsolete-refreshed",
+            "refresh_token" => "obsolete-rotation",
+            "expires_in" => 3600
+          })
+        end)
+
+        task =
+          Task.async(fn ->
+            Credentials.refresh_provider_api_key(
+              config,
+              provider,
+              "secret:" <> selected,
+              "selected-original"
+            )
+          end)
+
+        assert_receive {:cas_request, holder}, 5_000
+
+        case unquote(mutation) do
+          :replace -> assert {:ok, _} = Secrets.set(selected, login.("replacement-login"))
+          :delete -> assert :ok = Secrets.delete(selected)
+        end
+
+        send(holder, :finish_refresh)
+        assert {:error, :oauth_secret_changed} = Task.await(task, 5_000)
+        assert {:ok, ^untouched} = Secrets.get(other)
+        refute_received {:cas_request, _}
+
+        case unquote(mutation) do
+          :replace ->
+            assert {:ok, current} = Secrets.get(selected)
+            assert Jason.decode!(current)["access_token"] == "replacement-login"
+
+            assert [
+                     %{ref: "secret:cas_selected_login", api_key: "replacement-login"},
+                     %{ref: "default", api_key: "personal-original"}
+                   ] = Credentials.list_provider_api_keys(config, provider)
+
+          :delete ->
+            assert {:error, :not_found} = Secrets.get(selected)
+
+            assert [%{ref: "default", api_key: "personal-original"}] =
+                     Credentials.list_provider_api_keys(config, provider)
+        end
+      end
+    end
+
+    test "same-account forced refreshes share one persisted rotation" do
+      alias LemonAgent.ModelRuntime.Credentials
+      assert {:ok, _} = Secrets.set("serialized_cas_login", anthropic_login(3_600_000))
+      test_pid = self()
+
+      Req.Test.stub(__MODULE__, fn conn ->
+        send(test_pid, {:serialized_request, self()})
+
+        receive do
+          :finish_refresh -> :ok
+        after
+          5_000 -> flunk("refresh release not received")
+        end
+
+        Req.Test.json(conn, %{
+          "access_token" => "serialized-current",
+          "refresh_token" => "serialized-rotation",
+          "expires_in" => 3600
+        })
+      end)
+
+      resolve = fn ->
+        send(test_pid, :resolver_started)
+
+        Credentials.refresh_provider_api_key(
+          %{},
+          :anthropic,
+          "secret:serialized_cas_login",
+          "sk-ant-oat01-stored"
+        )
+      end
+
+      first = Task.async(resolve)
+      assert_receive :resolver_started
+      assert_receive {:serialized_request, holder}, 5_000
+      second = Task.async(resolve)
+      assert_receive :resolver_started
+      send(holder, :finish_refresh)
+      assert {:ok, "serialized-current"} = Task.await(first, 5_000)
+      assert {:ok, "serialized-current"} = Task.await(second, 5_000)
+      refute_received {:serialized_request, _}
+    end
+
+    for status <- [401, 403] do
+      test "Copilot terminal #{status} refuses cached near-expiry auth at the consumer boundary" do
+        alias LemonAgent.ModelRuntime.Credentials
+        name = "copilot_revoked_login"
+
+        original =
+          Jason.encode!(%{
+            "type" => "github_copilot_oauth",
+            "access_token" => "copilot-cached",
+            "refresh_token" => "copilot-revoked-grant",
+            "expires_at_ms" => System.system_time(:millisecond) + 60_000
+          })
+
+        assert {:ok, _} = Secrets.set(name, original)
+        test_pid = self()
+
+        Req.Test.stub(__MODULE__, fn conn ->
+          send(test_pid, :copilot_denied_request)
+          Plug.Conn.send_resp(conn, unquote(status), "")
+        end)
+
+        assert {:error, :reauth_required} =
+                 Credentials.refresh_provider_api_key(
+                   %{},
+                   :github_copilot,
+                   "secret:" <> name,
+                   "copilot-cached"
+                 )
+
+        assert_received :copilot_denied_request
+        refute_received :copilot_denied_request
+        assert {:ok, ^original} = Secrets.get(name)
+
+        assert [] =
+                 Credentials.list_provider_api_keys(
+                   %{"github_copilot" => %{auth_source: "oauth", api_key_secret: name}},
+                   :github_copilot
+                 )
+
+        assert_received :copilot_denied_request
+        refute_received :copilot_denied_request
+        assert {:ok, ^original} = Secrets.get(name)
+      end
+    end
+
+    test "a failed authoritative read preserves its error instead of reporting absence" do
+      alias LemonAgent.ModelRuntime.Credentials
+      previous = Application.get_env(:lemon_core, Secrets)
+      Application.put_env(:lemon_core, Secrets, key_providers: [:env])
+
+      on_exit(fn ->
+        if is_nil(previous),
+          do: Application.delete_env(:lemon_core, Secrets),
+          else: Application.put_env(:lemon_core, Secrets, previous)
+      end)
+
+      assert {:ok, _} = Secrets.set("unreadable_login", anthropic_login(3_600_000))
+      System.delete_env("LEMON_SECRETS_MASTER_KEY")
+
+      assert {:error, :missing_master_key} =
+               Credentials.refresh_provider_api_key(
+                 %{},
+                 :anthropic,
+                 "secret:unreadable_login",
+                 "sk-ant-oat01-stored"
+               )
+
+      refute_received :token_request
+    end
+
     test "environment, inline and plain API-key credentials are not refreshable" do
       assert {:error, :not_refreshable} =
                Credentials.refresh_provider_api_key(%{}, :openai, "env:OPENAI_API_KEY", "k")

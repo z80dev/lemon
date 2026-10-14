@@ -6,7 +6,10 @@ defmodule LemonAi.Auth.OAuthSecretPersistenceTest do
     AnthropicOAuth,
     GitHubCopilotOAuth,
     GoogleAntigravityOAuth,
-    GoogleGeminiCliOAuth
+    GoogleGeminiCliOAuth,
+    KimiCodeOAuth,
+    OpenAICodexOAuth,
+    XAIOAuth
   }
 
   @env ~w(GOOGLE_ANTIGRAVITY_OAUTH_CLIENT_ID GOOGLE_ANTIGRAVITY_OAUTH_CLIENT_SECRET)
@@ -47,21 +50,96 @@ defmodule LemonAi.Auth.OAuthSecretPersistenceTest do
         {AnthropicOAuth, "anthropic_oauth"},
         {GitHubCopilotOAuth, "github_copilot_oauth"},
         {GoogleAntigravityOAuth, "google_antigravity_oauth"},
-        {GoogleGeminiCliOAuth, "google_gemini_cli_oauth"}
+        {GoogleGeminiCliOAuth, "google_gemini_cli_oauth"},
+        {KimiCodeOAuth, "kimi_code_oauth"},
+        {OpenAICodexOAuth, "openai_codex_oauth"},
+        {XAIOAuth, "xai_oauth"}
       ] do
     test "#{inspect(module)} reports a refreshed secret it could not store" do
       secret = expired_secret(unquote(type))
 
-      # e.g. `LemonCore.Secrets.set/3` answering `{:error, :secrets_locked}`
-      # while a key rotation holds the secrets lock.
+      # The authoritative store can fail while a key rotation holds its lock.
       assert {:error, :oauth_secret_persistence_failed} =
                unquote(module).resolve_api_key_from_secret("llm_secret", secret,
-                 persist_secret: fn _name, _value -> {:error, :secrets_locked} end
+                 reload_secret: fn _ -> {:ok, secret, :test_revision} end,
+                 persist_secret: fn _name, _value, _revision -> {:error, :secrets_locked} end
                )
 
       assert {:ok, _api_key} =
                unquote(module).resolve_api_key_from_secret("llm_secret", secret,
-                 persist_secret: fn _name, _value -> {:ok, %{}} end
+                 reload_secret: fn _ -> {:ok, secret, :test_revision} end,
+                 persist_secret: fn _name, _value, _revision -> {:ok, %{}} end
+               )
+    end
+
+    test "#{inspect(module)} requires a meaningful persistence acknowledgement" do
+      secret = expired_secret(unquote(type))
+
+      for callback <- [
+            fn _, _, _ -> nil end,
+            fn _, _, _ -> true end,
+            fn _, _, _ -> :unexpected end,
+            fn _, _, _ -> {:error, :store_unavailable} end,
+            fn _, _, _ -> raise "storage failed" end,
+            fn _, _, _ -> throw(:storage_failed) end,
+            fn _, _, _ -> exit(:storage_failed) end
+          ] do
+        assert {:error, :oauth_secret_persistence_failed} =
+                 unquote(module).resolve_api_key_from_secret("llm_secret", secret,
+                   reload_secret: fn _ -> {:ok, secret, :test_revision} end,
+                   persist_secret: callback
+                 )
+      end
+    end
+
+    test "#{inspect(module)} passes the opaque loaded revision unchanged" do
+      secret = expired_secret(unquote(type))
+      revision = make_ref()
+      test_pid = self()
+
+      assert {:ok, _} =
+               unquote(module).resolve_api_key_from_secret("llm_secret", secret,
+                 reload_secret: fn "llm_secret" -> {:ok, secret, revision} end,
+                 persist_secret: fn "llm_secret", _encoded, expected ->
+                   send(test_pid, {:revision, expected})
+                   :ok
+                 end
+               )
+
+      assert_received {:revision, ^revision}
+    end
+
+    test "#{inspect(module)} rejects missing or value-only reload before requesting a refresh" do
+      secret = expired_secret(unquote(type))
+      test_pid = self()
+
+      Req.Test.stub(__MODULE__, fn _ ->
+        send(test_pid, :unexpected_request)
+        flunk("unversioned storage must not refresh")
+      end)
+
+      for reload_opts <- [[], [reload_secret: fn _ -> {:ok, secret} end]] do
+        opts =
+          Keyword.put(reload_opts, :persist_secret, fn _, _, _ ->
+            send(test_pid, :unexpected_persist)
+            :ok
+          end)
+
+        assert {:error, :oauth_secret_reload_failed} =
+                 unquote(module).resolve_api_key_from_secret("llm_secret", secret, opts)
+      end
+
+      refute_received :unexpected_persist
+      refute_received :unexpected_request
+    end
+
+    test "#{inspect(module)} never exposes a refreshed key after stale persistence" do
+      secret = expired_secret(unquote(type))
+
+      assert {:error, :oauth_secret_changed} =
+               unquote(module).resolve_api_key_from_secret("llm_secret", secret,
+                 reload_secret: fn _ -> {:ok, secret, :test_revision} end,
+                 persist_secret: fn _, _, _ -> {:error, :stale_revision} end
                )
     end
   end
@@ -77,6 +155,7 @@ defmodule LemonAi.Auth.OAuthSecretPersistenceTest do
       "project_id" => "proj-123",
       "managed_project_id" => "proj-123",
       "projectId" => "proj-123",
+      "token_endpoint" => "https://auth.x.ai/oauth2/token",
       "created_at_ms" => now,
       "updated_at_ms" => now
     })

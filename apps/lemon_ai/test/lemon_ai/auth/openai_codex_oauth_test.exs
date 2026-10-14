@@ -157,12 +157,17 @@ defmodule LemonAi.Auth.OpenAICodexOAuthTest do
       )
     end)
 
+    revision = make_ref()
+
     assert {:ok, refreshed_token} =
              OpenAICodexOAuth.resolve_api_key_from_secret(
                secret_name,
                original_payload,
-               persist_secret: fn name, value ->
+               reload_secret: fn _ -> {:ok, original_payload, revision} end,
+               persist_secret: fn name, value, expected ->
+                 assert expected == revision
                  send(test_pid, {:persisted_secret, name, value})
+                 :ok
                end
              )
 
@@ -333,7 +338,8 @@ defmodule LemonAi.Auth.OpenAICodexOAuthTest do
              OpenAICodexOAuth.resolve_api_key_from_secret(
                name,
                OpenAICodexOAuth.encode_secret(secret),
-               persist_secret: &Secrets.set/2
+               reload_secret: &Secrets.get_with_revision/1,
+               persist_secret: &Secrets.set_if_revision/3
              )
 
     assert_receive :refreshed
@@ -363,13 +369,16 @@ defmodule LemonAi.Auth.OpenAICodexOAuthTest do
     end)
 
     for callback <- [
-          fn _, _ -> {:error, :store_unavailable} end,
-          fn _, _ -> raise "sensitive storage error must not escape" end
+          fn _, _, _ -> {:error, :store_unavailable} end,
+          fn _, _, _ -> raise "sensitive storage error must not escape" end
         ] do
       assert {:error, :oauth_secret_persistence_failed} =
                OpenAICodexOAuth.resolve_api_key_from_secret(
                  "llm_openai_codex_api_key",
                  OpenAICodexOAuth.encode_secret(secret),
+                 reload_secret: fn _ ->
+                   {:ok, OpenAICodexOAuth.encode_secret(secret), :test_revision}
+                 end,
                  persist_secret: callback
                )
     end
@@ -389,7 +398,10 @@ defmodule LemonAi.Auth.OpenAICodexOAuthTest do
         OpenAICodexOAuth.resolve_api_key_from_secret(
           "synthetic",
           OpenAICodexOAuth.encode_secret(secret),
-          persist_secret: fn _, _ -> flunk("failed refresh must not persist") end
+          reload_secret: fn _ ->
+            {:ok, OpenAICodexOAuth.encode_secret(secret), :test_revision}
+          end,
+          persist_secret: fn _, _, _ -> flunk("failed refresh must not persist") end
         )
 
       assert elem(result, 0) == expected

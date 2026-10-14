@@ -4,7 +4,7 @@ defmodule LemonCore.Store.JsonlBackendTest do
   alias LemonCore.Store.JsonlBackend
 
   setup do
-    tmp_dir = System.tmp_dir!() |> Path.join("jsonl_test_#{:rand.uniform(10000)}")
+    tmp_dir = System.tmp_dir!() |> Path.join("jsonl_test_#{System.unique_integer([:positive])}")
     File.mkdir_p!(tmp_dir)
     on_exit(fn -> File.rm_rf!(tmp_dir) end)
     {:ok, tmp_dir: tmp_dir}
@@ -56,7 +56,7 @@ defmodule LemonCore.Store.JsonlBackendTest do
       # Try to create a directory inside the file (should fail)
       invalid_path = Path.join(file_path, "subdir")
 
-      assert {:error, {:mkdir_failed, ^invalid_path, _}} = JsonlBackend.init(path: invalid_path)
+      assert {:error, {:jsonl_unavailable, :mkdir_failed}} = JsonlBackend.init(path: invalid_path)
     end
 
     test "skips tables specified in skip_tables option", %{tmp_dir: tmp_dir} do
@@ -690,5 +690,308 @@ defmodule LemonCore.Store.JsonlBackendTest do
       # Table should be marked as loaded even though file doesn't exist
       assert :nonexistent in JsonlBackend.list_tables(new_state)
     end
+  end
+
+  describe "load failures preserve authority" do
+    test "startup rejects unreadable and corrupt discovered journals", %{tmp_dir: tmp_dir} do
+      path = Path.join(tmp_dir, "private_journal.jsonl")
+      File.mkdir!(path)
+      assert {:error, {:jsonl_unavailable, :read_failed}} = JsonlBackend.init(path: tmp_dir)
+      File.rmdir!(path)
+
+      bytes = ~s({"op":"put","key":"key","value":"private-payload"}\nnot-json-private-payload\n)
+      File.write!(path, bytes)
+      assert {:error, {:jsonl_unavailable, :corrupt_table}} = JsonlBackend.init(path: tmp_dir)
+
+      assert {:stop, {:backend_init_failed, {:jsonl_unavailable, :corrupt_table}}} =
+               LemonCore.Store.init(
+                 name: :"jsonl_startup_failure_#{System.unique_integer([:positive])}",
+                 backend: JsonlBackend,
+                 backend_opts: [path: tmp_dir],
+                 cached_tables: [:private_journal]
+               )
+
+      assert File.read!(path) == bytes
+
+      File.write!(path, ~s({"op":"put","key":"key","value":"repaired"}\n))
+      assert {:ok, state} = JsonlBackend.init(path: tmp_dir)
+      assert {:ok, "repaired", _} = JsonlBackend.get(state, :private_journal, "key")
+    end
+
+    test "every lazy operation rejects corruption without publishing a valid prefix",
+         %{tmp_dir: tmp_dir} do
+      assert {:ok, state} = JsonlBackend.init(path: tmp_dir)
+      assert {:ok, state} = JsonlBackend.put(state, :healthy, "fence", "keep")
+      healthy_path = Path.join(tmp_dir, "healthy.jsonl")
+      healthy_bytes = File.read!(healthy_path)
+      path = Path.join(tmp_dir, "unknown.jsonl")
+      bytes = ~s({"op":"put","key":"key","value":"private-payload"}\nbroken-private-payload\n)
+      File.write!(path, bytes)
+
+      assert_failed_table_operations(state, :unknown, :corrupt_table)
+
+      assert {:error, {:jsonl_unavailable, :corrupt_table}, failed_state} =
+               JsonlBackend.compare_and_delete_many(state, [
+                 {:healthy, "fence", "keep"},
+                 {:unknown, "key", "private-payload"}
+               ])
+
+      refute :unknown in JsonlBackend.list_tables(failed_state)
+      refute Map.has_key?(failed_state.data, :unknown)
+      assert File.read!(path) == bytes
+      assert File.read!(healthy_path) == healthy_bytes
+
+      File.write!(path, ~s({"op":"put","key":"key","value":"repaired"}\n))
+      assert {:ok, "repaired", repaired_state} = JsonlBackend.get(failed_state, :unknown, "key")
+      assert {:exists, _} = JsonlBackend.put_new(repaired_state, :unknown, "key", "replacement")
+      assert {:ok, repaired_state} = JsonlBackend.put(repaired_state, :unknown, "key", "new")
+      assert {:ok, "new", _} = JsonlBackend.get(repaired_state, :unknown, "key")
+    end
+
+    test "unreadable table and dangling symlink are not absent", %{tmp_dir: tmp_dir} do
+      assert {:ok, state} = JsonlBackend.init(path: tmp_dir)
+      path = Path.join(tmp_dir, "unreadable.jsonl")
+      File.mkdir!(path)
+      assert_failed_table_operations(state, :unreadable, :read_failed)
+      assert File.dir?(path)
+      File.rmdir!(path)
+      File.ln_s!(Path.join(tmp_dir, "missing-target"), path)
+      assert_failed_table_operations(state, :unreadable, :read_failed)
+      assert {:ok, %File.Stat{type: :symlink}} = File.lstat(path)
+      File.rm!(path)
+      assert {:ok, nil, _} = JsonlBackend.get(state, :unreadable, "key")
+    end
+
+    test "missing backing directory does not authorize a new table", %{tmp_dir: tmp_dir} do
+      assert {:ok, state} = JsonlBackend.init(path: tmp_dir)
+      File.rmdir!(tmp_dir)
+      assert_failed_table_operations(state, :unknown, :read_failed)
+      File.mkdir!(tmp_dir)
+      assert {:ok, nil, state} = JsonlBackend.get(state, :unknown, "key")
+      assert {:ok, state} = JsonlBackend.put(state, :unknown, "key", "new")
+      assert {:ok, "new", _} = JsonlBackend.get(state, :unknown, "key")
+    end
+
+    test "malformed operations and invalid encoded terms reject the entire journal",
+         %{tmp_dir: tmp_dir} do
+      assert {:ok, state} = JsonlBackend.init(path: tmp_dir)
+      path = Path.join(tmp_dir, "unknown.jsonl")
+
+      for bytes <- [
+            ~s({"op":"put","key":"key"}\n),
+            ~s({"op":"unknown","key":"key","value":"private-payload"}\n),
+            ~s({"op":"put","key":"key","value":{"__struct__":"PrivatePayloadMissingModule","fields":{}}}\n),
+            <<255, 10>>
+          ] do
+        File.write!(path, bytes)
+        assert_failed_table_operations(state, :unknown, :corrupt_table)
+        assert File.read!(path) == bytes
+      end
+    end
+
+    test "skipping a corrupt startup table does not make its later access empty",
+         %{tmp_dir: tmp_dir} do
+      path = Path.join(tmp_dir, "unknown.jsonl")
+      File.write!(path, "private-payload-invalid-json\n")
+      assert {:ok, state} = JsonlBackend.init(path: tmp_dir, skip_tables: [:unknown])
+      assert_failed_table_operations(state, :unknown, :corrupt_table)
+    end
+
+    test "confirmed new tables retain empty and conditional mutation behavior",
+         %{tmp_dir: tmp_dir} do
+      assert {:ok, state} = JsonlBackend.init(path: tmp_dir)
+      assert {:ok, nil, state} = JsonlBackend.get(state, :brand_new, "key")
+      assert {:ok, [], state} = JsonlBackend.list(state, :brand_new)
+      refute File.exists?(Path.join(tmp_dir, "brand_new.jsonl"))
+      assert {:ok, state} = JsonlBackend.put_new(state, :brand_new, "key", "value")
+      assert {:exists, state} = JsonlBackend.put_new(state, :brand_new, "key", "replacement")
+
+      assert {:ok, state} =
+               JsonlBackend.compare_and_delete_many(state, [{:brand_new, "key", "value"}])
+
+      assert {:ok, nil, _} = JsonlBackend.get(state, :brand_new, "key")
+    end
+  end
+
+  describe "returned append failures" do
+    test "failed writes preserve memory and prior bytes, then recover after repair",
+         %{tmp_dir: tmp_dir} do
+      assert {:ok, state} = JsonlBackend.init(path: tmp_dir)
+      assert {:ok, state} = JsonlBackend.put(state, :journal, "key", "original")
+      path = Path.join(tmp_dir, "journal.jsonl")
+      saved_path = Path.join(tmp_dir, "saved-journal")
+      bytes = File.read!(path)
+      File.rename!(path, saved_path)
+      File.mkdir!(path)
+
+      assert {:error, {:jsonl_unavailable, :write_failed}} =
+               JsonlBackend.put(state, :journal, "key", "private-new-value")
+
+      assert {:error, {:jsonl_unavailable, :write_failed}} =
+               JsonlBackend.put_new(state, :journal, "new-key", "private-new-value")
+
+      assert {:error, {:jsonl_unavailable, :write_failed}} =
+               JsonlBackend.delete(state, :journal, "key")
+
+      assert {:error, {:jsonl_unavailable, :write_failed}, ^state} =
+               JsonlBackend.compare_and_delete_many(state, [{:journal, "key", "original"}])
+
+      assert {:ok, "original", _} = JsonlBackend.get(state, :journal, "key")
+      assert File.read!(saved_path) == bytes
+
+      File.rmdir!(path)
+      File.rename!(saved_path, path)
+      assert {:ok, state} = JsonlBackend.put(state, :journal, "key", "repaired")
+      assert {:ok, "repaired", _} = JsonlBackend.get(state, :journal, "key")
+      assert {:ok, restarted} = JsonlBackend.init(path: tmp_dir)
+      assert {:ok, "repaired", _} = JsonlBackend.get(restarted, :journal, "key")
+    end
+
+    test "ordered batch write failure returns the applied prefix and retains the fence",
+         %{tmp_dir: tmp_dir} do
+      assert {:ok, state} = JsonlBackend.init(path: tmp_dir)
+      assert {:ok, state} = JsonlBackend.put(state, :responses, "response", "old")
+      assert {:ok, state} = JsonlBackend.put(state, :fence, "key", "keep")
+      path = Path.join(tmp_dir, "fence.jsonl")
+      saved_path = Path.join(tmp_dir, "saved-fence")
+      bytes = File.read!(path)
+      File.rename!(path, saved_path)
+      File.mkdir!(path)
+
+      assert {:error, {:jsonl_unavailable, :write_failed}, partial_state} =
+               JsonlBackend.compare_and_delete_many(state, [
+                 {:responses, "response", "old"},
+                 {:fence, "key", "keep"}
+               ])
+
+      assert {:ok, nil, _} = JsonlBackend.get(partial_state, :responses, "response")
+      assert {:ok, "keep", _} = JsonlBackend.get(partial_state, :fence, "key")
+      assert File.read!(saved_path) == bytes
+      File.rmdir!(path)
+      File.rename!(saved_path, path)
+      assert {:ok, restarted} = JsonlBackend.init(path: tmp_dir)
+      assert {:ok, nil, _} = JsonlBackend.get(restarted, :responses, "response")
+      assert {:ok, "keep", _} = JsonlBackend.get(restarted, :fence, "key")
+    end
+
+    test "encoding failure returns a bounded error before appending", %{tmp_dir: tmp_dir} do
+      assert {:ok, state} = JsonlBackend.init(path: tmp_dir)
+      assert {:ok, state} = JsonlBackend.put(state, :journal, "key", "original")
+      path = Path.join(tmp_dir, "journal.jsonl")
+      bytes = File.read!(path)
+
+      assert {:error, {:jsonl_unavailable, :encode_failed}} =
+               JsonlBackend.put(state, :journal, "key", fn -> "private-payload" end)
+
+      assert File.read!(path) == bytes
+      assert {:ok, "original", _} = JsonlBackend.get(state, :journal, "key")
+    end
+  end
+
+  describe "strict Store callers" do
+    test "strict reads and atomic mutations fail closed and recover without restart",
+         %{tmp_dir: tmp_dir} do
+      store = start_jsonl_store(tmp_dir)
+      path = Path.join(tmp_dir, "unknown.jsonl")
+      bytes = "invalid-private-payload\n"
+      File.write!(path, bytes)
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert {:error, :store_unavailable} = LemonCore.Store.fetch(store, :unknown, "key")
+          assert {:error, :store_unavailable} = LemonCore.Store.fetch_all(store, :unknown)
+
+          assert {:error, {:jsonl_unavailable, :corrupt_table}} =
+                   LemonCore.Store.put(store, :unknown, "key", "private-new-value")
+
+          assert {:error, {:jsonl_unavailable, :corrupt_table}} =
+                   LemonCore.Store.put_new(store, :unknown, "key", "private-new-value")
+
+          assert {:error, {:jsonl_unavailable, :corrupt_table}} =
+                   LemonCore.Store.delete(store, :unknown, "key")
+
+          assert {:error, {:jsonl_unavailable, :corrupt_table}} =
+                   LemonCore.Store.compare_and_swap(
+                     store,
+                     :unknown,
+                     "key",
+                     nil,
+                     "private-new-value"
+                   )
+
+          assert {:error, {:jsonl_unavailable, :corrupt_table}} =
+                   LemonCore.Store.compare_and_delete(store, :unknown, "key", nil)
+
+          assert {:error, {:jsonl_unavailable, :corrupt_table}} =
+                   LemonCore.Store.compare_and_delete_many(store, [{:unknown, "key", nil}])
+
+          assert {:error, {:jsonl_unavailable, :corrupt_table}} =
+                   LemonCore.Store.take(store, :unknown, "key")
+        end)
+
+      refute log =~ "private-payload"
+      refute log =~ "private-new-value"
+      refute log =~ tmp_dir
+      assert Process.alive?(store)
+      assert File.read!(path) == bytes
+      File.write!(path, ~s({"op":"put","key":"key","value":"repaired"}\n))
+      assert {:ok, "repaired"} = LemonCore.Store.fetch(store, :unknown, "key")
+      assert {:ok, [{"key", "repaired"}]} = LemonCore.Store.fetch_all(store, :unknown)
+      assert :ok = LemonCore.Store.compare_and_swap(store, :unknown, "key", "repaired", "new")
+    end
+
+    test "append failure does not kill Store or publish replacement cache values",
+         %{tmp_dir: tmp_dir} do
+      store = start_jsonl_store(tmp_dir, [:journal])
+      assert :ok = LemonCore.Store.put(store, :journal, "key", "original")
+      path = Path.join(tmp_dir, "journal.jsonl")
+      saved_path = Path.join(tmp_dir, "saved-journal")
+      bytes = File.read!(path)
+      File.rename!(path, saved_path)
+      File.mkdir!(path)
+
+      assert {:error, {:jsonl_unavailable, :write_failed}} =
+               LemonCore.Store.put(store, :journal, "key", "replacement")
+
+      assert {:error, {:jsonl_unavailable, :write_failed}} =
+               LemonCore.Store.compare_and_swap(store, :journal, "key", "original", "replacement")
+
+      assert {:error, {:jsonl_unavailable, :write_failed}} =
+               LemonCore.Store.delete(store, :journal, "key")
+
+      assert {:ok, "original"} = LemonCore.Store.fetch(store, :journal, "key")
+      {:registered_name, name} = Process.info(store, :registered_name)
+      assert {:ok, "original"} = LemonCore.Store.fetch(name, :journal, "key")
+      assert Process.alive?(store)
+      assert File.read!(saved_path) == bytes
+      File.rmdir!(path)
+      File.rename!(saved_path, path)
+      assert :ok = LemonCore.Store.delete(store, :journal, "key")
+    end
+  end
+
+  defp assert_failed_table_operations(state, table, classification) do
+    error = {:error, {:jsonl_unavailable, classification}}
+    assert JsonlBackend.ensure_table_loaded(state, table) == error
+    assert JsonlBackend.get(state, table, "key") == error
+    assert JsonlBackend.list(state, table) == error
+    assert JsonlBackend.put(state, table, "key", "private-new-value") == error
+    assert JsonlBackend.put_new(state, table, "key", "private-new-value") == error
+    assert JsonlBackend.delete(state, table, "key") == error
+
+    assert {:error, {:jsonl_unavailable, ^classification}, failed_state} =
+             JsonlBackend.compare_and_delete_many(state, [{table, "key", nil}])
+
+    refute table in JsonlBackend.list_tables(failed_state)
+    refute Map.has_key?(failed_state.data, table)
+  end
+
+  defp start_jsonl_store(path, cached_tables \\ []) do
+    name = :"jsonl_failure_store_#{System.unique_integer([:positive])}"
+
+    start_supervised!(
+      {LemonCore.Store,
+       name: name, backend: JsonlBackend, backend_opts: [path: path], cached_tables: cached_tables}
+    )
   end
 end

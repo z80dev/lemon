@@ -18,6 +18,10 @@ defmodule LemonAi.Auth.AnthropicOAuth do
   refreshed secret that `:persist_secret` fails to store is an error, as is a
   refresh the token endpoint rejects (`{:error, :reauth_required}`); a
   transient refresh failure falls back only to an unexpired access token.
+  Stored refresh persistence requires `:reload_secret` to return
+  `{:ok, encoded, revision}` and an arity-three `:persist_secret` callback
+  that atomically compares that revision. Missing or value-only durable
+  reloads fail before HTTP; a stale write never returns the refreshed token.
 
   `resolve_access_token/0` reads ambient Claude Code credentials
   (`~/.claude/.credentials.json`, `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_TOKEN`)
@@ -64,8 +68,10 @@ defmodule LemonAi.Auth.AnthropicOAuth do
           | {:listen_for_callback, boolean()}
           | {:local_callback_listener, module()}
   @type resolve_opt ::
-          {:persist_secret, (String.t(), String.t() -> any())}
-          | {:reload_secret, (String.t() -> {:ok, String.t()} | term())}
+          {:persist_secret,
+           (String.t(), String.t(), term() -> :ok | {:ok, term()} | {:error, term()})}
+          | {:reload_secret,
+             (String.t() -> {:ok, String.t(), term()} | {:ok, String.t()} | term())}
           | {:force_refresh, boolean()}
 
   @doc "OAuth scopes requested at sign-in."
@@ -284,8 +290,18 @@ defmodule LemonAi.Auth.AnthropicOAuth do
       when is_binary(secret_name) and is_binary(secret_value) do
     case decode_secret(secret_value) do
       {:ok, secret} ->
-        reload = fn -> reload_stored_secret(secret_name, secret, opts) end
-        persist = fn refreshed -> persist_stored_secret(secret_name, refreshed, opts) end
+        reload = fn ->
+          LemonAi.Auth.OAuthSecretResolver.reload_secret(__MODULE__, secret_name, secret, opts)
+        end
+
+        persist = fn refreshed, captured_opts ->
+          LemonAi.Auth.OAuthSecretResolver.persist_secret(
+            secret_name,
+            encode_secret(refreshed),
+            captured_opts
+          )
+        end
+
         force? = Keyword.get(opts, :force_refresh, false) == true
 
         with {:ok, fresh} <- ensure_fresh(secret_name, secret, reload, persist, force?) do
@@ -470,9 +486,9 @@ defmodule LemonAi.Auth.AnthropicOAuth do
 
   # ── Freshness and single-flight refresh ────────────────────────────────────
 
-  # `reload` returns the latest stored secret map (or an error), `persist`
-  # stores a refreshed map. Both run under the lock so a queued caller sees
-  # what the previous holder stored.
+  # `reload` returns the latest map and captured revision opts (or an error).
+  # `persist` receives that map's opts, not the caller's original opts. Both run
+  # under the lock so a queued caller sees what the previous holder stored.
   #
   # A forced refresh (the provider rejected the access token) refreshes only
   # when the stored token is still the rejected one; a concurrent caller that
@@ -483,13 +499,15 @@ defmodule LemonAi.Auth.AnthropicOAuth do
       :global.trans(
         {{__MODULE__, :refresh, lock_name}, self()},
         fn ->
-          with {:ok, latest} <- reload.() do
+          with {:ok, latest, captured_opts} <- reload.() do
+            persist_latest = fn refreshed -> persist.(refreshed, captured_opts) end
+
             cond do
               force? and latest["access_token"] == secret["access_token"] ->
-                force_refresh_and_persist(latest, persist)
+                force_refresh_and_persist(latest, persist_latest)
 
               refresh_due?(latest) ->
-                refresh_and_persist(latest, persist)
+                refresh_and_persist(latest, persist_latest, reload)
 
               true ->
                 usable(latest)
@@ -518,7 +536,7 @@ defmodule LemonAi.Auth.AnthropicOAuth do
     if expired?(secret), do: {:error, :expired_access_token}, else: {:ok, secret}
   end
 
-  defp refresh_and_persist(secret, persist) do
+  defp refresh_and_persist(secret, persist, reload) do
     case refresh_secret(secret) do
       {:ok, refreshed} ->
         case persist.(refreshed) do
@@ -533,8 +551,9 @@ defmodule LemonAi.Auth.AnthropicOAuth do
         if expired?(secret) or is_nil(non_empty_binary(secret["access_token"])) do
           {:error, reason}
         else
-          Logger.debug("Anthropic OAuth refresh failed; using the unexpired access token")
-          {:ok, secret}
+          Logger.debug("Anthropic OAuth refresh failed; reloading the unexpired access token")
+
+          with {:ok, latest, _opts} <- reload.(), do: usable(latest)
         end
     end
   end
@@ -587,41 +606,6 @@ defmodule LemonAi.Auth.AnthropicOAuth do
       nil -> {:error, :missing_access_token}
       token -> {:ok, token}
     end
-  end
-
-  # Without a reload callback the caller's copy is the latest one available.
-  defp reload_stored_secret(secret_name, stale, opts) do
-    case Keyword.get(opts, :reload_secret) do
-      reload when is_function(reload, 1) ->
-        with {:ok, value} when is_binary(value) <- reload.(secret_name),
-             {:ok, secret} <- decode_secret(value) do
-          {:ok, secret}
-        else
-          :not_oauth -> {:error, :oauth_secret_replaced}
-          _ -> {:error, :oauth_secret_missing}
-        end
-
-      _ ->
-        {:ok, stale}
-    end
-  end
-
-  # A refreshed secret that was not stored is a failure: the previous refresh
-  # token may already be revoked, so reporting success would strand the
-  # stored credential.
-  defp persist_stored_secret(secret_name, secret, opts) do
-    case Keyword.get(opts, :persist_secret) do
-      callback when is_function(callback, 2) ->
-        case callback.(secret_name, encode_secret(secret)) do
-          {:error, _} -> {:error, :oauth_secret_persistence_failed}
-          _ -> :ok
-        end
-
-      _ ->
-        :ok
-    end
-  rescue
-    _ -> {:error, :oauth_secret_persistence_failed}
   end
 
   # ── Token endpoint ─────────────────────────────────────────────────────────
@@ -723,8 +707,10 @@ defmodule LemonAi.Auth.AnthropicOAuth do
            ensure_fresh(
              @claude_code_file_lock,
              secret,
-             &read_claude_code_credentials/0,
-             &persist_claude_code_credentials/1,
+             fn ->
+               with {:ok, latest} <- read_claude_code_credentials(), do: {:ok, latest, []}
+             end,
+             fn refreshed, _opts -> persist_claude_code_credentials(refreshed) end,
              false
            ) do
       fresh

@@ -129,6 +129,10 @@ defmodule LemonAi.Auth.KimiCodeOAuth do
 
   @doc """
   Resolve a usable access token from a stored payload; `:ignore` for other values.
+
+  Stored refreshes use revision-aware `:reload_secret` and arity-three
+  `:persist_secret` callbacks through `OAuthFlow`. A stale write returns
+  `{:error, :oauth_secret_changed}` without exposing the refreshed token.
   """
   @spec resolve_api_key_from_secret(String.t(), String.t(), keyword()) ::
           {:ok, String.t()} | :ignore | {:error, term()}
