@@ -22,6 +22,7 @@ struct LemonBotMacApp: App {
             LemonBotRootView(store: store)
                 .frame(minWidth: 920, minHeight: 620)
                 .background(MacWindowIdentity())
+                .background(MacAudioSettingsRequestHandler())
                 .toolbar {
                     ToolbarItemGroup {
                         if let conversationID = store.selectedConversationID {
@@ -172,5 +173,16 @@ final class MacAppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationC
             if let platform = self.platform { await platform.route(url) }
             else { self.pendingURLs.append(url) }
         }
+    }
+}
+
+private struct MacAudioSettingsRequestHandler: View {
+    @Environment(\.openSettings) private var openSettings
+    var body: some View {
+        Color.clear.frame(width: 0, height: 0)
+            .onReceive(NotificationCenter.default.publisher(for: .init("LemonBot.platformAudioSettingsRequest"))) { _ in
+                openSettings()
+                NSApp.activate(ignoringOtherApps: true)
+            }
     }
 }
