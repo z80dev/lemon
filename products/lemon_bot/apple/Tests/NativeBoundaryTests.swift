@@ -43,4 +43,25 @@ final class NativeBoundaryTests: XCTestCase {
         XCTAssertEqual(roundTrip?["entryId"], "entry_result")
         XCTAssertEqual(roundTrip?["kind"], "entry")
     }
+
+    func testMissingMailboxObservationRemainsUnknown() throws {
+        let data = Data(#"{"id":"mailbox_owned","revision":1,"createdAtMs":1000,"updatedAtMs":1000,"userId":"user_owner","provider":"registered_mail","address":"owner@example.org","immutableAddress":true,"state":"active","channelBindingId":null}"#.utf8)
+        let account = try JSONDecoder().decode(EmailAccount.self, from: data)
+        XCTAssertNil(account.indexingDelayed)
+        XCTAssertNil(account.indexingMeasuredAtMs)
+    }
+
+    func testMeasuredMailboxDelayRetainsObservationTime() throws {
+        let data = Data(#"{"id":"mailbox_owned","revision":2,"createdAtMs":1000,"updatedAtMs":2000,"userId":"user_owner","provider":"registered_mail","address":"owner@example.org","immutableAddress":true,"state":"active","channelBindingId":null,"indexingDelayed":true,"indexingMeasuredAtMs":1900}"#.utf8)
+        let account = try JSONDecoder().decode(EmailAccount.self, from: data)
+        XCTAssertEqual(account.indexingDelayed ?? nil, true)
+        XCTAssertEqual(account.indexingMeasuredAtMs ?? nil, 1900)
+    }
+
+    func testExplicitNullMailboxObservationDoesNotBecomeFalse() throws {
+        let data = Data(#"{"id":"mailbox_owned","revision":1,"createdAtMs":1000,"updatedAtMs":1000,"userId":"user_owner","provider":"registered_mail","address":"owner@example.org","immutableAddress":true,"state":"active","channelBindingId":null,"indexingDelayed":null,"indexingMeasuredAtMs":null}"#.utf8)
+        let account = try JSONDecoder().decode(EmailAccount.self, from: data)
+        XCTAssertNil(account.indexingDelayed ?? nil)
+        XCTAssertNil(account.indexingMeasuredAtMs ?? nil)
+    }
 }

@@ -24,6 +24,7 @@ struct EmailSettingsView: View {
                 ForEach(accounts) { account in
                     NavigationLink("\(account.address) · \(account.state)") { MailboxMessagesView(store: store, account: account) }
                     Text("\(account.provider) · \(account.immutableAddress ? "immutable address" : "provider-defined lifecycle")")
+                    MailboxIndexingStatus(account: account)
                 }
                 Text("One claimed account-owned address. Email alone never wakes a Bot: explicitly matching authenticated/scanned sender/domain routines do. Mail read/search uses the provider's real index; this is not a guaranteed product inbox/new-mail notification service. All outbound mail, replies and routines require an editable draft and explicit Send.")
             }
@@ -99,6 +100,7 @@ struct MailboxMessagesView: View {
             Section("Actual provider mailbox search") {
                 Text(account.address).textSelection(.enabled)
                 Text("\(account.state) · \(account.immutableAddress ? "immutable address" : "provider-defined address lifecycle")")
+                MailboxIndexingStatus(account: account)
                 TextField("Provider search query", text: $query); TextField("Sender", text: $sender)
                 Button("Search real mailbox index") { Task { await control.perform { try await load() } } }
                 Text("Provider indexing may be delayed. No automatic new-mail notification or implicit routine wake is promised. Spam/virus/failed scans retain metadata without unsafe body or attachments.")
@@ -214,5 +216,23 @@ struct XConnectionSettingsRow: View {
             }
             if let error = control.error { Text(error).foregroundStyle(.red).textSelection(.enabled) }
         }.onAppear { botID = connection.mainBotId; enabled = connection.enabled }
+    }
+}
+
+private struct MailboxIndexingStatus: View {
+    let account: EmailAccount
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            if (account.indexingDelayed ?? nil) == true {
+                Label("Provider reports delayed indexing; recent mail may not appear yet.", systemImage: "clock.badge.exclamationmark")
+                    .foregroundStyle(.orange)
+            } else if (account.indexingDelayed ?? nil) == nil {
+                Text("Provider indexing status has not been measured.").foregroundStyle(.secondary)
+            }
+            if let measured = account.indexingMeasuredAtMs ?? nil {
+                Text("Index observation: \(adminDate(measured)) · \(Date(timeIntervalSince1970: measured / 1000).formatted(.relative(presentation: .named)))")
+                    .foregroundStyle(.secondary)
+            }
+        }.font(.caption)
     }
 }

@@ -49,6 +49,8 @@ Host file transfer advances by actual decoded chunk length and reports the sourc
 
 Skills, routines, reviewed memory import, templates, search, inbox, workspace and account management use the same authenticated API on both platforms. Routines expose actual test-run impact/history and one-time webhook keys. Settings include policy/effective authority, usage and spend limits, identity/directory governance, applied network revisions/egress, setup manifests/runs, audit/content exports and configured connectors/channels/email/X. Provider-dependent operations report backend prerequisites/errors; adding a connector is not authentication, and an unapplied host policy is not enforcement. External provider credentials and host drivers must be configured according to the product deployment guide.
 
+Mailbox indexing warnings appear only for a real provider-reported delay, with the observation time/age; missing observations remain unknown rather than implying an up-to-date mailbox. The address flow is availability check → exact scoped proposal → targeted approval → actual provider claim, never a synthetic local mailbox.
+
 ## Explicit platform capture and voice
 
 **macOS:** menu bar access, optional single selected-Bot compact companion, configurable global summon and hold-to-talk shortcuts. Dictation/PTT displays microphone ownership and on/off cues; release produces editable **unsent** text for review, and cancellation discards capture. The summon composer accepts explicitly selected text/files only. It does not capture screens, monitor clipboard history, listen ambiently, or create a virtual desktop per Bot.
