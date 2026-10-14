@@ -211,6 +211,14 @@ defmodule LemonAutomation.CronAdmissionTest do
       assert :ok = CronAdmission.check(job, run, @fixture_options)
     end
 
+    test "blank command fields keep agent-job admission semantics", %{job: job, run: run} do
+      stub_receipt(true)
+
+      for command <- ["", "  "] do
+        assert :ok = CronAdmission.check(%{job | command: command}, run, @fixture_options)
+      end
+    end
+
     test "matching false receipt is denied, never admitted", %{job: job, run: run} do
       stub_receipt(false)
       assert {:error, :denied} = CronAdmission.check(job, run, @fixture_options)

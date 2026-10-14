@@ -10,7 +10,7 @@ defmodule LemonAutomation.CronJob do
   - `:enabled` - Whether the job is active
   - `:agent_id` - Target agent for prompt jobs
   - `:profile_id` - Optional profile resolved at execution time for placement/persona
-  - `:admission` - Optional private HTTPS admission callback configuration.
+  - `:admission` - Optional private admission callback configuration.
     Tokens live in the encrypted controller secret store; callback configuration
     is never returned in public job projections. See `LemonAutomation.CronAdmission`.
   - `:session_key` - Session key for prompt-job routing

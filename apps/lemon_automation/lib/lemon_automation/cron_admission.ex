@@ -110,7 +110,7 @@ defmodule LemonAutomation.CronAdmission do
 
   defp check_admission(job, run, admission, opts) do
     with true <- valid_transport_opts?(opts),
-         true <- is_nil(Map.get(job, :command)),
+         true <- LemonAutomation.CronJob.execution_mode(job) == :agent,
          {:ok, canonical} <- validate(admission, Map.get(job, :profile_id)),
          {:ok, token} <- Secrets.get(canonical.token_secret),
          true <- valid_token?(token),

@@ -5,17 +5,23 @@ defmodule LemonControlPlane.Methods.CronAdmissionSetTest do
   alias LemonCore.Secrets
 
   setup do
-    previous_key = System.get_env("LEMON_SECRETS_MASTER_KEY")
-    System.put_env("LEMON_SECRETS_MASTER_KEY", Base.encode64(:crypto.strong_rand_bytes(32)))
-    routine_id = "admission-routine-#{System.unique_integer([:positive, :monotonic])}"
+    previous_secrets = Application.fetch_env(:lemon_core, Secrets)
+    suffix = Integer.to_string(System.unique_integer([:positive, :monotonic]))
+    key_env = "LEMON_CRON_ADMISSION_RPC_TEST_KEY_" <> suffix
+    System.put_env(key_env, Base.encode64(:crypto.strong_rand_bytes(32)))
+    Application.put_env(:lemon_core, Secrets, key_providers: [:env], env_var: key_env)
+    routine_id = "admission-routine-" <> suffix
     secret_name = "cron_admission_" <> Base.encode16(:crypto.hash(:sha256, routine_id), case: :lower)
 
     on_exit(fn ->
       Secrets.delete(secret_name)
 
-      if previous_key,
-        do: System.put_env("LEMON_SECRETS_MASTER_KEY", previous_key),
-        else: System.delete_env("LEMON_SECRETS_MASTER_KEY")
+      case previous_secrets do
+        {:ok, config} -> Application.put_env(:lemon_core, Secrets, config)
+        :error -> Application.delete_env(:lemon_core, Secrets)
+      end
+
+      System.delete_env(key_env)
     end)
 
     {:ok, routine_id: routine_id}
