@@ -125,7 +125,7 @@ defmodule LemonAgent.ModelRuntime.CredentialHealth do
 
   defp cooldown_ms(:rate_limit, failures, opts) do
     case Keyword.get(opts, :retry_after_ms) do
-      retry_after_ms when is_integer(retry_after_ms) and retry_after_ms > 0 ->
+      retry_after_ms when is_integer(retry_after_ms) and retry_after_ms >= 0 ->
         retry_after_ms
 
       _ ->
