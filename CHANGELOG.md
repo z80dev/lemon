@@ -96,6 +96,13 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   `--global`, and `lemon mcp list --all` shows the effective set with sources.
   Turn the import off with `LEMON_MCP_EXTERNAL_DISCOVERY=0`. See
   [Skills: Servers from other tools](docs/skills.md#servers-from-other-tools).
+- Native sessions load other agents' instruction files: `GEMINI.md`,
+  `CLAUDE.local.md`, `.gemini/`, `.agent(s)/`, `.omp/` and
+  `.github/copilot-instructions.md` per directory, plus Gemini, Codex, OpenCode,
+  `.agents` and Copilot globals, with `@path` imports expanded. Cursor,
+  Windsurf, Cline, GitHub Copilot, `.agents` and `.lemon/rules` rule files are
+  injected when always-apply and otherwise listed in a rulebook the model reads
+  on demand. See [Instruction files and rules](docs/user-guide/context-files.md).
 
 ### Changed
 
