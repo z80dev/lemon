@@ -15,7 +15,8 @@ function fixture() {
   const calls: Call[] = [];
   const profileRows = new Map<string, Record<string, unknown>>();
   let reject: ((method: string, params: Record<string, unknown>) => void) | null = null;
-  const methods = ['profiles.create', 'profiles.update', 'profiles.get', 'profiles.sync', 'profiles.sync.status', 'profiles.delete', 'memory.transfer', 'memory.transfer.status', 'memory.list', 'memory.delete', 'memory.add', 'nodes.list', 'node.capabilities.get', 'node.secrets.set', 'node.secrets.receipt', 'node.secrets.delete', 'node.host.info', 'node.fs.write', 'node.fs.delete', 'cron.pause', 'cron.resume', 'cron.add', 'cron.remove', 'sessions.delete'];
+  let nativePresence: { active: number; queued: number; unknown: number; idle: boolean; complete: boolean } | null = { active: 0, queued: 0, unknown: 0, idle: true, complete: true };
+  const methods = ['profiles.create', 'profiles.update', 'profiles.get', 'profiles.sync', 'profiles.sync.status', 'profiles.delete', 'runs.active.list', 'memory.transfer', 'memory.transfer.status', 'memory.list', 'memory.delete', 'memory.add', 'nodes.list', 'node.capabilities.get', 'node.secrets.set', 'node.secrets.receipt', 'node.secrets.delete', 'node.host.info', 'node.profile.paths', 'node.fs.write', 'node.fs.delete', 'cron.pause', 'cron.resume', 'cron.add', 'cron.remove', 'sessions.delete'];
   f.services.lemon = {
     connected: true, methods,
     async call<T>(method: string, params: Record<string, unknown> = {}): Promise<T> {
@@ -39,6 +40,8 @@ function fixture() {
       else if (method === 'profiles.sync.status') value = { profileId: params.id, nodeId: params.nodeId, mutationId: params.mutationId, status: 'acknowledged', acknowledged: true, revisionDigest: 'a'.repeat(64) };
       else if (method === 'node.secrets.set') value = { name: params.name, set: true, operationId: params.operationId, status: 'applied', currentBindingMatches: true };
       else if (method === 'node.secrets.delete') value = { name: params.name, deleted: true };
+      else if (method === 'runs.active.list') value = { runs: [], filters: { profileId: params.profileId, limit: params.limit }, ...(nativePresence ? { presence: nativePresence } : {}) };
+      else if (method === 'node.profile.paths') value = { nodeId: params.nodeId, profileId: params.profileId, workspacePath: `/worker/profiles/${params.profileId}/workspace`, skillsPath: `/worker/profiles/${params.profileId}/workspace/.lemon/skill` };
       else if (method === 'nodes.list') value = { nodes: f.store.list<P.Machine>('machines').map(machine => ({ id: machine.nodeId, status: machine.status, capabilities: [] })), summary: { presenceAvailable: true } };
       else if (method === 'node.capabilities.get') value = { nodeId: params.nodeId, os: 'linux', measuredAtMs: f.services.now(), stale: false, items: [] };
       else if (method === 'node.host.info') value = { defaultCwd: '/home/lemon' };
@@ -106,7 +109,7 @@ function fixture() {
     f.store.setMetadata(`botControllerFloor:${saved.id}`, { profile: 'custom', allow: 'all', deny: [], require_approval: [] });
     return saved;
   }
-  return { ...f, calls, request, machine, bot, fail: (value: typeof reject) => { reject = value; } };
+  return { ...f, calls, request, machine, bot, fail: (value: typeof reject) => { reject = value; }, presence: (value: typeof nativePresence) => { nativePresence = value; } };
 }
 const nonce = (suffix: string) => `bot_test_nonce_${suffix}`;
 function confirmed(confirmation: P.Confirmation, extra: Record<string, unknown> = {}) { return { clientNonce: nonce('confirm'), revision: confirmation.revision, confirmationToken: confirmation.confirmationToken, confirmName: confirmation.confirmName, ...extra }; }
@@ -319,5 +322,32 @@ describe('acknowledged recovery and shared floor ownership', () => {
     expect(f.store.require<P.Bot>('bots', bot.id)).toEqual(bot);
     expect(f.store.metadata(`botPolicyFloor:${bot.id}`)).toMatchObject({ state: 'acknowledged' });
     await expect(syncBotPolicyFloor(f.services, f.alice, bot.id)).rejects.toMatchObject({ code: 'forbidden' });
+  });
+});
+
+describe('authoritative native idle lifecycle boundary', () => {
+  test('empty legacy active-list replies never authorize memory preview or deletion', async () => {
+    const f = fixture(), bot = f.bot(); f.presence(null);
+    await expect(f.request('POST', `/v1/bots/${bot.id}/preview`, { clientNonce: nonce('legacy_empty'), action: 'delete' })).rejects.toMatchObject({ code: 'capability_unavailable' });
+    expect(f.store.require<P.Bot>('bots', bot.id)).toEqual(bot);
+    expect(f.calls.some(call => call.method === 'memory.list' || call.method === 'profiles.delete')).toBe(false);
+  });
+  test('queued and unattributed uncertain native work block even when active-page is empty', async () => {
+    for (const [queued, unknown, code] of [[1, 0, 'conflict'], [0, 1, 'outcome_unknown']] as const) {
+      const f = fixture(), bot = f.bot(); f.presence({ active: 0, queued, unknown, idle: false, complete: true });
+      await expect(f.request('POST', `/v1/bots/${bot.id}/preview`, { clientNonce: nonce(`presence_${code}`), action: 'move', targetMachineId: 'destination' })).rejects.toMatchObject({ code });
+      expect(f.calls.some(call => call.method === 'memory.transfer')).toBe(false);
+      expect(f.store.require<P.Bot>('bots', bot.id).machineId).toBe('machine');
+    }
+  });
+  test('presence is checked again after schedules pause, before transfer starts', async () => {
+    const f = fixture(), bot = f.bot();
+    const preview = await f.request<P.Confirmation>('POST', `/v1/bots/${bot.id}/preview`, { clientNonce: nonce('presence_race'), action: 'move', targetMachineId: 'destination' });
+    let reads = 0;
+    f.fail(method => { if (method === 'runs.active.list' && ++reads === 2) throw new ApiError('upstream_unavailable', 'Presence changed during snapshot.'); });
+    await expect(f.request('POST', `/v1/bots/${bot.id}/move`, confirmed(preview, { machineId: 'destination' }))).rejects.toMatchObject({ code: 'upstream_unavailable' });
+    expect(f.calls.some(call => call.method === 'memory.transfer' && call.params.action === 'apply')).toBe(false);
+    expect(f.store.require<P.Bot>('bots', bot.id).machineId).toBe('machine');
+    expect(f.store.metadata(`botLifecycle:${bot.id}`)).not.toBeNull();
   });
 });

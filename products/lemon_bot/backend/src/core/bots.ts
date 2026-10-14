@@ -79,6 +79,16 @@ function idle(s: BackendServices, bot: P.Bot): void {
   const fence = s.store.metadata<Fence>(`botLifecycle:${bot.id}`);
   if (fence) fail(fence.status === 'outcome_unknown' ? 'outcome_unknown' : 'conflict', 'A prior bot lifecycle operation requires reconciliation.', false, { resourceIds: fence.resourceIds });
 }
+/** Owning presence counts include queued/uncertain work before paging; a legacy empty list is never idle proof. */
+async function nativeIdle(s: BackendServices, bot: P.Bot): Promise<void> {
+  requireMethods(s, ['runs.active.list']);
+  const response = await s.lemon.call('runs.active.list', { profileId: bot.profileId, limit: 1 }, { mutation: false });
+  const result = z.object({ filters: z.object({ profileId: z.literal(bot.profileId) }).passthrough(), presence: z.object({ active: z.number().int().nonnegative(), queued: z.number().int().nonnegative(), unknown: z.number().int().nonnegative(), idle: z.boolean(), complete: z.literal(true) }).strict() }).passthrough().safeParse(response);
+  if (!result.success) fail('capability_unavailable', 'Authoritative complete scoped native run presence is required for this lifecycle operation.');
+  const state = result.data.presence;
+  if (state.unknown) fail('outcome_unknown', 'Native profile work remains uncertain; reconcile it before lifecycle changes.', false, { resourceIds: [bot.id] });
+  if (!state.idle || state.active || state.queued) fail('conflict', 'Native profile work is active or queued; wait for authoritative idle before lifecycle changes.');
+}
 function requireMethods(s: BackendServices, methods: string[]): void {
   if (!s.lemon.connected) fail('upstream_unavailable', 'Lemon controller is disconnected.');
   const missing = methods.filter(method => !s.lemon.methods.includes(method));
@@ -353,6 +363,7 @@ async function destroyCandidate(s: BackendServices, p: Principal, bot: P.Bot, it
 }
 async function resetBot(s: BackendServices, c: RequestContext, bot: P.Bot, input: P.BotReset, remove = false): Promise<P.BotResetResult> {
   const p = user(c); idle(s, bot);
+  await nativeIdle(s, bot);
   const scopes = remove ? allScopes : input.resetScopes;
   if (scopes.includes('memory')) {
     const previous = s.store.metadata<RuntimeMemoryCandidate[]>(`botMemoryPreview:${p.userId}:${bot.id}`);
@@ -369,6 +380,7 @@ async function resetBot(s: BackendServices, c: RequestContext, bot: P.Bot, input
   s.mutations.confirm(p, bot, remove ? 'delete' : 'reset', input, binding);
   return fenced(s, c, bot.id, remove ? 'delete' : 'reset', async () => {
     const removedIds: string[] = [];
+    await nativeIdle(s, bot);
     if (conversationIds.length) cancelConversationVoice(s, conversationIds);
     if (remove) {
       const ancillary = botAncillaryResources(s, bot.id);
@@ -537,6 +549,7 @@ export function createBotRoutes(s: BackendServices): Route[] {
     if (input.action === 'reset') { owner(bot, p); online(s, p, bot.machineId); if (!input.resetScopes || input.targetMachineId) fail('invalid_request', 'Reset requires exactly selected reset scopes.'); }
     if (input.action === 'move' && (!input.targetMachineId || input.resetScopes)) fail('invalid_request', 'Move preview requires a destination and no reset scopes.');
     if (input.action === 'delete' && (input.targetMachineId || input.resetScopes)) fail('invalid_request', 'Delete preview cannot select other operations.');
+    await nativeIdle(s, bot);
     const destination = input.action === 'move' ? online(s, p, principal(input.targetMachineId ?? null)) : undefined;
     if (destination?.id === bot.machineId) fail('conflict', 'Bot is already on this machine.');
     const scopes = input.action === 'delete' ? allScopes : input.resetScopes ?? [];
@@ -607,6 +620,7 @@ function ownSection(s: BackendServices, p: Principal, sectionId: string): P.Sect
 
 async function moveBot(s: BackendServices, c: RequestContext): Promise<P.Bot> {
   const p = user(c), input = parse(confirm.extend({ machineId: id }), c.body), bot = visible(s, p, pathId(c), true); idle(s, bot);
+  await nativeIdle(s, bot);
   const destination = online(s, p, input.machineId); if (destination.id === bot.machineId) fail('conflict', 'Bot is already on this machine.');
   if (bot.published) sharedContext(s, p, { ...bot, machineId: destination.id });
   requireMethods(s, ['profiles.sync', 'profiles.update', 'node.secrets.set', 'node.secrets.receipt', 'memory.transfer']);
@@ -627,6 +641,7 @@ async function moveBot(s: BackendServices, c: RequestContext): Promise<P.Bot> {
       s.store.put('routines', paused);
       s.events.emit('routine.upserted', publicRoutine({ ...paused, conversationId: s.store.require<P.Routine & { conversationId: string }>('routines', routine.id).conversationId }), { userIds: [routine.ownerUserId] });
     }
+    await nativeIdle(s, bot);
     const receipt = await s.lemon.call<{ profileId: string; mutationId: string; nodeId: string; snapshotDigest: string; copied: boolean }>('memory.transfer', { profileId: bot.profileId, nodeId: destination.nodeId, mutationId: plan.transfer.mutationId, action: 'apply', confirmationToken: plan.transfer.confirmationToken, destinationDigest: plan.transfer.destinationDigest }, { mutation: true, resourceIds: [bot.id] });
     if (!receipt.copied || receipt.profileId !== bot.profileId || receipt.nodeId !== destination.nodeId || receipt.mutationId !== plan.transfer.mutationId || receipt.snapshotDigest !== plan.transfer.snapshotDigest) fail('outcome_unknown', 'Scoped memory provisioning was not acknowledged.', false, { resourceIds: [bot.id] });
     await provisionBotSkills(s, p, bot, destination.id);
@@ -787,6 +802,7 @@ export async function syncBotPolicyFloor(s: BackendServices, actor: Principal, b
   const member = s.auth.member(actor.userId);
   if (actor.kind !== 'user' || actor.workspaceId !== s.store.metadata<string>('workspaceId') || !member.enabled || (member.role !== 'admin' && member.role !== 'owner')) fail('forbidden', 'Workspace policy synchronization requires an enabled administrator.');
   const bot = s.store.require<P.Bot>('bots', botId);
+  await nativeIdle(s, bot);
   if (s.store.list<P.Run>('runs', run => run.botId === bot.id && !terminal[run.status]).length) fail('conflict', 'Quiesce and reconcile bot work before changing the shared floor.');
   const capabilities = s.store.get<P.MachineCapabilities & { id: string }>('machineCapabilities', bot.machineId);
   if (!capabilities) fail('capability_unavailable', 'A measured destination capability snapshot is required for shared policy synchronization.');
@@ -844,6 +860,7 @@ export async function syncBotConnectorRevocation(s: BackendServices, actor: Prin
   const marker = s.store.metadata<{ connectorId: string; actorUserId: string; connectorRevision: number }>(`connectorProfileSync:${botId}`);
   if (actor.kind !== 'user' || actor.workspaceId !== s.store.metadata<string>('workspaceId') || connector.botId !== botId || connector.ownerUserId !== actor.userId || connector.revision !== revision || marker?.connectorId !== connectorId || marker.actorUserId !== actor.userId || marker.connectorRevision !== revision) fail('forbidden', 'Only the exact registered credential-owner revocation may change this MCP binding.');
   if (s.store.list<P.Run>('runs', run => run.botId === botId && !terminal[run.status]).length) fail('conflict', 'Revocation must terminally cancel and reconcile affected invocations first.');
+  await nativeIdle(s, bot);
   const desired = s.store.metadata<DesiredProfile>(`botDesiredProfile:${botId}`);
   if (!desired || desired.machineId !== bot.machineId || !desired.mcpServers.some(server => server.name === 'lemon-bot')) fail('capability_unavailable', 'An exact acknowledged reference-only MCP configuration is required for scoped revocation.');
   requireMethods(s, ['profiles.get', 'profiles.update', 'profiles.sync']);
