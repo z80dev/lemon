@@ -47,7 +47,7 @@ defmodule LemonRouter.NativeLineageTest do
     root = Path.join(System.tmp_dir!(), prefix)
     File.mkdir_p!(root)
     env_keys = [{:lemon_core, :paths}, {:lemon_core, Secrets},
-      {:lemon_router, :native_followup_allowed_origins}, {:lemon_router, :session_coordinator_module},
+      {:lemon_router, :native_followup_allowed_origins}, {:lemon_router, :session_coordinator},
       {:lemon_router, :native_lineage_test_pid}, {:lemon_router, :native_lineage_test_dispatch}]
     previous = Map.new(env_keys, fn {app, key} = pair -> {pair, Application.fetch_env(app, key)} end)
     origin_env = System.get_env("LEMON_NATIVE_FOLLOWUP_ALLOWED_ORIGINS")
@@ -56,7 +56,7 @@ defmodule LemonRouter.NativeLineageTest do
     System.delete_env("LEMON_NATIVE_FOLLOWUP_ALLOWED_ORIGINS")
     Application.put_env(:lemon_core, :paths, home_state_dir: root, global_config: Path.join(root, "config.toml"))
     Application.put_env(:lemon_core, Secrets, key_providers: [:env], env_var: key_env)
-    Application.put_env(:lemon_router, :session_coordinator_module, Coordinator)
+    Application.put_env(:lemon_router, :session_coordinator, Coordinator)
     Application.put_env(:lemon_router, :native_lineage_test_pid, self())
     Application.put_env(:lemon_router, :native_lineage_test_dispatch, :ok)
 
@@ -367,15 +367,15 @@ defmodule LemonRouter.NativeLineageTest do
     assert {:ok, _} = ProfileStore.create(%{"id" => target_profile, "mcpServers" => templates()})
     complete_presence_run(root.execution_request, true)
 
-    original_coordinator = Application.fetch_env!(:lemon_router, :session_coordinator_module)
-    Application.put_env(:lemon_router, :session_coordinator_module, LemonRouter.SessionCoordinator)
+    original_coordinator = Application.fetch_env!(:lemon_router, :session_coordinator)
+    Application.put_env(:lemon_router, :session_coordinator, LemonRouter.SessionCoordinator)
     :sys.replace_state(ctx.server, fn state ->
       %{state | run_process_opts: Map.put(state.run_process_opts, :submit_to_gateway?, false)}
     end)
     fresh_ids = Enum.map(["dependent-active", "dependent-queued"], &(ctx.prefix <> "-" <> &1))
     conversation = {:session, session_key}
     on_exit(fn ->
-      Application.put_env(:lemon_router, :session_coordinator_module, original_coordinator)
+      Application.put_env(:lemon_router, :session_coordinator, original_coordinator)
       for {pid, _} <- Registry.lookup(LemonRouter.ConversationRegistry, conversation),
         do: DynamicSupervisor.terminate_child(LemonRouter.SessionCoordinatorSupervisor, pid)
       for id <- fresh_ids do
@@ -671,12 +671,12 @@ defmodule LemonRouter.NativeLineageTest do
 
   test "owning queue rejects initial roots and prepared F after current template or policy changes", ctx do
     {_source, root} = admit_root(ctx)
-    original_coordinator = Application.fetch_env!(:lemon_router, :session_coordinator_module)
-    Application.put_env(:lemon_router, :session_coordinator_module, LemonRouter.SessionCoordinator)
+    original_coordinator = Application.fetch_env!(:lemon_router, :session_coordinator)
+    Application.put_env(:lemon_router, :session_coordinator, LemonRouter.SessionCoordinator)
     :sys.replace_state(ctx.server, fn state ->
       %{state | run_process_opts: Map.put(state.run_process_opts, :submit_to_gateway?, false)}
     end)
-    on_exit(fn -> Application.put_env(:lemon_router, :session_coordinator_module, original_coordinator) end)
+    on_exit(fn -> Application.put_env(:lemon_router, :session_coordinator, original_coordinator) end)
 
     for kind <- [:templates, :policy], provenance <- [:initial, :followup] do
       target_id = ctx.prefix <> "-queue-#{provenance}-#{kind}"
