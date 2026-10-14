@@ -428,12 +428,6 @@ defmodule LemonControlPlane.Methods.UsageCost do
     Map.get(map, key) || Map.get(map, Atom.to_string(key))
   end
 
-  defp get_field(map, key) when is_binary(key) do
-    Map.get(map, key) || Map.get(map, String.to_existing_atom(key))
-  rescue
-    ArgumentError -> Map.get(map, key)
-  end
-
   defp format_date(ms) when is_integer(ms) do
     DateTime.from_unix!(ms, :millisecond)
     |> DateTime.to_date()
