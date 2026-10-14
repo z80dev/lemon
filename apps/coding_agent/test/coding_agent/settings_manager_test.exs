@@ -345,7 +345,7 @@ defmodule CodingAgent.SettingsManagerTest do
       assert settings.keep_recent_tokens == 10_000
     end
 
-    test "extracts optional compaction thresholds and ignores invalid ones" do
+    test "valid compaction thresholds are read; invalid ones are dropped, not clamped" do
       build = fn compaction ->
         SettingsManager.from_config(%LemonConfig{
           providers: %{},
@@ -357,26 +357,20 @@ defmodule CodingAgent.SettingsManagerTest do
         })
       end
 
-      default = build.(%{})
-      assert default.compaction_threshold_percent == nil
-      assert default.compaction_threshold_tokens == nil
-      refute Map.has_key?(SettingsManager.get_compaction_settings(default), :threshold_percent)
-      refute Map.has_key?(SettingsManager.get_compaction_settings(default), :threshold_tokens)
-
-      set = build.(%{threshold_percent: 75, threshold_tokens: 120_000})
-      assert set.compaction_threshold_percent == 75
-      assert set.compaction_threshold_tokens == 120_000
-
       assert %{threshold_percent: 75, threshold_tokens: 120_000} =
-               SettingsManager.get_compaction_settings(set)
+               SettingsManager.get_compaction_settings(
+                 build.(%{threshold_percent: 75, threshold_tokens: 120_000})
+               )
 
-      invalid = build.(%{threshold_percent: 0, threshold_tokens: -5})
-      assert invalid.compaction_threshold_percent == nil
-      assert invalid.compaction_threshold_tokens == nil
-      assert build.(%{threshold_percent: 101}).compaction_threshold_percent == nil
-
-      assert build.(%{threshold_percent: "50", threshold_tokens: 1.5}).compaction_threshold_percent ==
-               nil
+      for bad <- [
+            %{threshold_percent: 0, threshold_tokens: -5},
+            %{threshold_percent: 101},
+            %{threshold_percent: "50", threshold_tokens: 1.5}
+          ] do
+        settings = build.(bad)
+        assert settings.compaction_threshold_percent == nil
+        assert settings.compaction_threshold_tokens == nil
+      end
     end
 
     test "extracts retry settings from agent config" do

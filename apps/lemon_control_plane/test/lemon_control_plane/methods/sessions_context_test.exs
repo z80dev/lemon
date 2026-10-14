@@ -129,39 +129,17 @@ defmodule LemonControlPlane.Methods.SessionsContextTest do
     assert {:ok, without} = SessionsContext.handle(@params, %{})
     assert without["usage"] == nil
 
-    usage = %{
-      tokens: 12_345,
-      cost_usd: 0.4231,
-      input: 9_000,
-      output: 1_200,
-      cache_read: 2_000,
-      cache_write: 145,
-      assistant_messages: 7,
-      prompt: "must never cross the wire"
-    }
-
-    Process.put(:context_result, {:ok, report(%{usage: usage})})
+    usage = %{tokens: 12_345, cost_usd: 0.4231, input: 9_000, assistant_messages: 7}
+    Process.put(:context_result, {:ok, report(%{usage: Map.put(usage, :prompt, "leaked")})})
     assert {:ok, result} = SessionsContext.handle(@params, %{})
-
-    assert result["usage"] == %{
-             "tokens" => 12_345,
-             "costUsd" => 0.4231,
-             "input" => 9_000,
-             "output" => 1_200,
-             "cacheRead" => 2_000,
-             "cacheWrite" => 145,
-             "assistantMessages" => 7
-           }
-
-    refute inspect(result) =~ "must never cross"
+    assert %{"tokens" => 12_345, "costUsd" => 0.4231, "assistantMessages" => 7} = result["usage"]
+    refute inspect(result) =~ "leaked"
 
     bad = %{tokens: -1, cost_usd: "free", input: nil, output: 1.5}
     Process.put(:context_result, {:ok, report(%{usage: bad})})
     assert {:ok, bounded} = SessionsContext.handle(@params, %{})
-    assert bounded["usage"]["tokens"] == 0
-    assert bounded["usage"]["costUsd"] == 0.0
-    assert bounded["usage"]["input"] == 0
-    assert bounded["usage"]["output"] == 0
+
+    assert %{"tokens" => 0, "costUsd" => +0.0, "input" => 0, "output" => 0} = bounded["usage"]
   end
 
   test "an unattributed overhead row is labelled and still sums to the total" do

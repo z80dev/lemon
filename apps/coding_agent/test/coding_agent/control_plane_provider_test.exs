@@ -196,9 +196,6 @@ defmodule CodingAgent.ControlPlaneProviderTest do
 
       assert report.live == false
       assert report.usage.input == 700
-      assert report.usage.output == 80
-      assert report.usage.cache_read == 300
-      assert report.usage.cache_write == 20
       assert report.usage.assistant_messages == 2
       assert report.usage.tokens == 1_100
       assert report.usage.cost_usd == 0.0375

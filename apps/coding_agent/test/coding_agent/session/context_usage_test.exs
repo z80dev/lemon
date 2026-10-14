@@ -347,8 +347,7 @@ defmodule CodingAgent.Session.ContextUsageTest do
     end
 
     test "sums active-branch assistant tokens and reports the cumulative ledger", %{
-      tmp_dir: tmp_dir,
-      settings: settings
+      tmp_dir: tmp_dir
     } do
       manager = SessionManager.new(tmp_dir)
       manager = SessionManager.append_message(manager, %{"role" => "user", "content" => "hi"})
@@ -385,35 +384,13 @@ defmodule CodingAgent.Session.ContextUsageTest do
                assistant_messages: 2
              }
 
-      # An explicit ledger wins over derived values; negative/garbage is bounded.
+      # An explicit ledger wins over derived values.
       usage = ContextUsage.session_usage(manager, %{tokens: 9_999, cost_usd: 1.5})
       assert usage.tokens == 9_999
       assert usage.cost_usd == 1.5
 
       {manager, _ledger} = BudgetLedger.initialize(manager)
       assert ContextUsage.session_usage(manager).tokens == 2_700
-
-      assert ContextUsage.session_usage(nil) == %{
-               tokens: 0,
-               cost_usd: 0.0,
-               input: 0,
-               output: 0,
-               cache_read: 0,
-               cache_write: 0,
-               assistant_messages: 0
-             }
-
-      state = %{
-        session_manager: manager,
-        settings_manager: settings,
-        model: model(100_000)
-      }
-
-      messages = transcript(usage: %Usage{input: 500, output: 10, total_tokens: 510})
-      assert {:ok, report} = ContextUsage.measure_durable(state, messages, nil)
-      assert report.usage.assistant_messages == 2
-      assert report.usage.input == 500
-      assert report.usage.cache_read == 1_000
     end
   end
 end

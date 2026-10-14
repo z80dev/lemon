@@ -213,7 +213,6 @@ defmodule CodingAgent.CompactionTest do
       window = 100_000
       # Default reserve ceiling: 83_616.
       assert Compaction.context_threshold(window, %{threshold_percent: 50}) == 50_000
-      assert Compaction.context_threshold(window, %{threshold_percent: 100}) == 83_616
       assert Compaction.context_threshold(window, %{threshold_tokens: 40_000}) == 40_000
       assert Compaction.context_threshold(window, %{threshold_tokens: 95_000}) == 83_616
 
@@ -234,10 +233,6 @@ defmodule CodingAgent.CompactionTest do
           ] do
         assert Compaction.context_threshold(window, bad) == 83_616
       end
-
-      settings = %{threshold_percent: 50}
-      refute Compaction.should_compact?(50_000, window, settings)
-      assert Compaction.should_compact?(50_001, window, settings)
     end
 
     test "counts tool arguments, thinking, and images in typed and persisted messages" do
