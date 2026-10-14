@@ -239,6 +239,106 @@ defmodule LemonSkills.McpDiscoveryTest do
     end
   end
 
+  test "OpenCode JSONC preserves exact environment bytes in decoded string values", %{
+    project: p,
+    home: h
+  } do
+    quoted = ~S({"project_id":"demo","message":"quoted \"text\""})
+    backslashes = ~S(C:\service\credentials\key.json)
+    multiline = "  first line\r\nsecond \"line\"\n// not a comment\n/* neither */\t  "
+    System.put_env("MCP_DISC_VAR", quoted)
+    System.put_env("MCP_DISC_TOKEN", backslashes)
+    System.put_env("MCP_DISC_EMPTY", multiline)
+
+    write(p, "opencode.jsonc", """
+    // Substitutions must not change the JSONC grammar.
+    {
+      "mcp": {
+        "exact-env": {
+          "type": "local",
+          "command": ["never-launch-this-mcp", "{env:MCP_DISC_VAR}"],
+          "environment": {
+            "SERVICE_ACCOUNT_JSON": "{env:MCP_DISC_VAR}",
+            "PATH_VALUE": "{env:MCP_DISC_TOKEN}",
+            "MULTILINE": "{env:MCP_DISC_EMPTY}",
+            "{env:MCP_DISC_TOKEN}": "keys stay literal",
+          }, /* trailing commas are accepted */
+        },
+      },
+    }
+    """)
+
+    assert [server] =
+             McpDiscovery.discover(p, home: h, user_sources: false, claude_config_dir: nil)
+
+    assert server.name == "exact-env"
+    assert server.enabled
+    assert server.source == %{provider: "opencode", scope: :project}
+    assert server.entry["command"] == "never-launch-this-mcp"
+    assert server.entry["args"] == [quoted]
+
+    assert server.entry["env"] == %{
+             "SERVICE_ACCOUNT_JSON" => quoted,
+             "PATH_VALUE" => backslashes,
+             "MULTILINE" => multiline,
+             "{env:MCP_DISC_TOKEN}" => "keys stay literal"
+           }
+  end
+
+  test "OpenCode substitutes once and retains file path, trimming and missing-value semantics", %{
+    project: p,
+    home: h
+  } do
+    inserted = "{file:private.txt}|{env:MCP_DISC_TOKEN}|${MCP_DISC_TOKEN}"
+    file_value = "file \"text\"\\path\n{env:MCP_DISC_TOKEN}|{file:private.txt}"
+    System.put_env("MCP_DISC_VAR", inserted)
+    System.put_env("MCP_DISC_TOKEN", "must-not-be-expanded")
+    write(p, ".opencode/private.txt", "must-not-be-imported")
+    write(p, ".opencode/value.txt", " \n" <> file_value <> "\r\n\t")
+    write(h, "home-token.txt", " home-token\n")
+    absolute = Path.join(h, "absolute-token.txt")
+    File.write!(absolute, " absolute-token\n")
+
+    json(p, ".opencode/opencode.jsonc", %{
+      "mcp" => %{
+        "single-pass" => %{
+          "type" => "local",
+          "command" => ["never-launch-this-mcp"],
+          "environment" => %{
+            "ENV" => "{env:MCP_DISC_VAR}",
+            "MIXED" => "{env:MCP_DISC_VAR}|{file:value.txt}|{env:MCP_DISC_EMPTY}",
+            "RELATIVE" => "{file:value.txt}",
+            "HOME" => "{file:~/home-token.txt}",
+            "ABSOLUTE" => "{file:#{absolute}}",
+            "MISSING_FILE" => "{file:missing.txt}",
+            "MISSING_ENV" => "{env:MCP_DISC_EMPTY}",
+            "EMBEDDED_MISSING" => "before{env:MCP_DISC_EMPTY}after"
+          }
+        }
+      }
+    })
+
+    assert [server] =
+             McpDiscovery.discover(p, home: h, user_sources: false, claude_config_dir: nil)
+
+    assert server.entry["env"] == %{
+             "ENV" => inserted,
+             "MIXED" => inserted <> "|" <> file_value <> "|",
+             "RELATIVE" => file_value,
+             "HOME" => "home-token",
+             "ABSOLUTE" => "absolute-token",
+             "MISSING_FILE" => "",
+             "MISSING_ENV" => "",
+             "EMBEDDED_MISSING" => "beforeafter"
+           }
+
+    assert [isolated] =
+             McpDiscovery.discover(p, home: nil, user_sources: false, claude_config_dir: nil)
+
+    assert isolated.entry["env"]["HOME"] == ""
+    assert isolated.entry["env"]["RELATIVE"] == file_value
+  end
+
   test "other tools' user files are opt-in; omp user files and CLAUDE_CONFIG_DIR are not", %{
     project: p,
     home: h,

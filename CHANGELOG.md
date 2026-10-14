@@ -173,6 +173,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- OpenCode MCP discovery substitutes environment and file placeholders once in
+  decoded JSONC string values. Quotes, backslashes and multiline environment
+  values no longer invalidate the config and silently drop servers; inserted
+  text cannot trigger another interpolation or file import. File path resolution,
+  trimming and missing-value behavior are preserved.
 - `sessions.patch` tool policies (web picker, TUI `/toolpolicy`) now reach runs;
   the router previously merged the whole policy row instead of its tool policy.
 - Usage is recorded: `usage.status`/`usage.cost` were always zero because
