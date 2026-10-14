@@ -48,6 +48,7 @@ Call-site migration to `LemonCore.Env.get/2` is out of scope for this pass and i
 | `LEMON_PROVIDER_ROUTING_ENABLED` | boolean | `true` |  | `lemon_core` | Whether multi-provider routing/fallback is enabled. |
 | `LEMON_PROVIDER_ROUTING_REQUIRE_CREDENTIALS` | boolean | `true` |  | `lemon_core` | Whether provider routing requires resolvable credentials before selecting a provider. |
 | `LEMON_RETRY_ENABLED` | boolean | `true` |  | `lemon_core` | Whether transient LLM call failures are retried. |
+| `LEMON_SECRET_OBFUSCATION_ENABLED` | boolean | `false` |  | `lemon_core` | Whether secrets are replaced with placeholders in provider-visible session text. |
 | `LEMON_SHELL_COMMAND_PREFIX` | string | _(none)_ |  | `lemon_core` | Command prefix prepended to every shell tool invocation. |
 | `LEMON_SHELL_PATH` | string | _(none)_ |  | `lemon_core` | Shell executable path used by the bash/shell tool. |
 | `LEMON_THEME` | string | `lemon` |  | `lemon_core` | Agent-level theme name (distinct from the TUI theme). |
