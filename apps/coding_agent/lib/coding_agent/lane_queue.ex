@@ -175,18 +175,20 @@ defmodule CodingAgent.LaneQueue do
               {:ok, result}
             rescue
               e ->
-                Logger.error(
-                  "LaneQueue job function exception job_id=#{inspect(job_id)} error=#{inspect(e)}"
-                )
+                reason =
+                  if Map.get(job.meta, :type) == :background_exec,
+                    do: :launch_failed,
+                    else: {e, __STACKTRACE__}
 
-                {:error, {e, __STACKTRACE__}}
+                {:error, reason}
             catch
               kind, err ->
-                Logger.error(
-                  "LaneQueue job function caught error job_id=#{inspect(job_id)} kind=#{inspect(kind)} error=#{inspect(err)}"
-                )
+                reason =
+                  if Map.get(job.meta, :type) == :background_exec,
+                    do: :launch_failed,
+                    else: {kind, err}
 
-                {:error, {kind, err}}
+                {:error, reason}
             end
           end)
 

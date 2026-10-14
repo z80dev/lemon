@@ -119,6 +119,23 @@ defmodule CodingAgent.ProcessSession do
 
   @impl true
   def init({process_id, opts}) do
+    case Keyword.get(opts, :launch_fingerprint) do
+      nil ->
+        init_process(process_id, opts)
+
+      fingerprint ->
+        case ProcessStore.claim_launch(process_id, Keyword.get(opts, :owner), fingerprint) do
+          :ok -> init_process(process_id, opts)
+          {:error, reason} -> {:stop, reason}
+        end
+    end
+  rescue
+    _ -> {:stop, :launch_failed}
+  catch
+    _, _ -> {:stop, :launch_failed}
+  end
+
+  defp init_process(process_id, opts) do
     command = Keyword.fetch!(opts, :command)
     cwd = Keyword.get(opts, :cwd, File.cwd!())
     env = Keyword.get(opts, :env, %{})
@@ -152,7 +169,9 @@ defmodule CodingAgent.ProcessSession do
       restarted_from: Keyword.get(opts, :restarted_from),
       restart_generation: Keyword.get(opts, :restart_generation, 0),
       owner: owner,
-      status: :queued
+      status: :starting,
+      launch_fingerprint: Keyword.get(opts, :launch_fingerprint),
+      launch_classification: :outcome_unknown
     })
 
     # Start the OS process via Port
@@ -161,6 +180,10 @@ defmodule CodingAgent.ProcessSession do
 
     # Mark as running in the store
     ProcessStore.mark_running(process_id, os_pid)
+    ProcessStore.classify_launch(process_id, :accepted)
+
+    # Internal synchronization seam; never exposed in the agent's tool schema.
+    if on_start = Keyword.get(opts, :on_start), do: on_start.(process_id)
 
     # Set up timeout if specified
     timeout_ref = if timeout_ms, do: Process.send_after(self(), :timeout, timeout_ms)

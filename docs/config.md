@@ -416,6 +416,20 @@ Docker limits, invalid Docker image/network names, invalid SSH ports, invalid
 SSH connect timeouts, and unsupported strict-host-key values fail closed at the
 policy boundary instead of reaching Docker or OpenSSH.
 
+Background `exec` launches fail closed when admission is unavailable: there is
+no direct-execution fallback, including `exec_sync` or internal callers passing
+`use_lane_queue: false`. Each logical launch has a fixed identity, bound to its
+session owner and a validated request fingerprint. Reusing that identity with
+the same request reconciles the original receipt; changing the request or owner
+is a conflict. Intentionally running the same command twice creates two identities.
+Accepted receipts track the existing process. A missing reply or lost process
+owner can produce `outcome_unknown`, which is not a rejection and must not trigger
+automatic replay. Inspect/reconcile the fixed identity; any recovery that repeats
+external effects must be explicitly requested. Receipt projections exclude
+commands, environment values, and exception details. Clearing completed output
+retains a small redacted identity tombstone so clearing logs cannot authorize a
+duplicate launch.
+
 The Bun TUI uses the runtime's model and thinking defaults from `[defaults]`.
 The `[tui]` section controls terminal presentation settings loaded at startup.
 

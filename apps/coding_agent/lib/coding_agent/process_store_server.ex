@@ -92,6 +92,109 @@ defmodule CodingAgent.ProcessStoreServer do
     {:reply, :ok, state}
   end
 
+  def handle_call({:register_launch, id, owner, fingerprint}, _from, state) do
+    state = ensure_tables(state)
+
+    reply =
+      case :ets.lookup(@table, id) do
+        [] ->
+          now = System.system_time(:second)
+
+          record = %{
+            id: id,
+            owner: owner,
+            launch_fingerprint: fingerprint,
+            launch_classification: :queued,
+            status: :queued,
+            inserted_at: now,
+            updated_at: now
+          }
+
+          persist_launch(id, record, [])
+          :new
+
+        [{^id, %{owner: ^owner, launch_fingerprint: ^fingerprint} = record, logs}] ->
+          record = reconcile_launch_record(id, record, logs)
+          {:existing, CodingAgent.ProcessStore.receipt(record)}
+
+        _ ->
+          {:error, :identity_conflict}
+      end
+
+    {:reply, reply, state}
+  end
+
+  def handle_call({:claim_launch, id, owner, fingerprint}, _from, state) do
+    state = ensure_tables(state)
+
+    reply =
+      case :ets.lookup(@table, id) do
+        [{^id,
+          %{owner: ^owner, launch_fingerprint: ^fingerprint, launch_classification: :queued} =
+            record, logs}] ->
+          # Persist uncertainty BEFORE crossing the external side-effect boundary.
+          # A crash after this point must never authorize another start.
+          record =
+            record
+            |> Map.put(:launch_classification, :outcome_unknown)
+            |> Map.put(:status, :starting)
+
+          persist_launch(id, record, logs)
+          :ok
+
+        [{^id, %{owner: ^owner, launch_fingerprint: ^fingerprint} = record, _}] ->
+          {:error, {:existing_launch, CodingAgent.ProcessStore.receipt(record)}}
+
+        _ ->
+          {:error, :identity_conflict}
+      end
+
+    {:reply, reply, state}
+  end
+
+  def handle_call({:classify_launch, id, classification, reason}, _from, state) do
+    state = ensure_tables(state)
+
+    case :ets.lookup(@table, id) do
+      [{^id, record, logs}] ->
+        # A lost queue reply must not downgrade an acknowledged process, and a
+        # confirmed rejection cannot overwrite a start that crossed the boundary.
+        current = Map.get(record, :launch_classification)
+
+        if current == :queued or classification == :accepted do
+          record =
+            record
+            |> Map.put(:launch_classification, classification)
+            |> Map.put(:launch_reason, reason)
+
+          persist_launch(id, record, logs)
+        end
+
+      _ ->
+        :ok
+    end
+
+    {:reply, :ok, state}
+  end
+
+  def handle_call({:launch_receipt, id, owner}, _from, state) do
+    state = ensure_tables(state)
+
+    reply =
+      case :ets.lookup(@table, id) do
+        [{^id, %{owner: ^owner, launch_fingerprint: fingerprint} = record, logs}]
+        when is_binary(fingerprint) ->
+          record = reconcile_launch_record(id, record, logs)
+          {:ok, CodingAgent.ProcessStore.receipt(record)}
+
+        _ ->
+          {:error, :not_found}
+      end
+
+    {:reply, reply, state}
+  end
+
+
   def handle_call({:cleanup, ttl_seconds}, _from, state) do
     state = ensure_tables(state)
     deleted_count = do_cleanup(ttl_seconds)
@@ -160,6 +263,27 @@ defmodule CodingAgent.ProcessStoreServer do
   end
 
   # Private Functions
+  defp persist_launch(id, record, logs) do
+    CodingAgent.ProcessStore.insert_record(id, record, logs)
+
+    if dets_open?() do
+      :ok = :dets.sync(@dets_table)
+    end
+  end
+
+  defp reconcile_launch_record(id, record, logs) do
+    if Map.get(record, :status) in [:running, :starting] and
+         not CodingAgent.ProcessSession.alive?(id) do
+      record =
+        Map.merge(record, %{status: :lost, launch_classification: :outcome_unknown})
+
+      persist_launch(id, record, logs)
+      record
+    else
+      record
+    end
+  end
+
 
   defp ensure_tables(state) do
     state =
@@ -217,12 +341,15 @@ defmodule CodingAgent.ProcessStoreServer do
       :dets.foldl(
         fn {process_id, record, logs}, :ok ->
           record =
-            if Map.get(record, :status) == :running do
-              # Mark running processes as :lost since we can't reconnect to OS PIDs
-              record
-              |> Map.put(:status, :lost)
-              |> Map.put(:error, :lost_on_restart)
-              |> Map.put(:completed_at, now)
+            if Map.get(record, :status) in [:running, :starting, :queued] do
+              # Losing the BEAM owner is not proof of external termination.
+              record = Map.merge(record, %{status: :lost, error: :lost_on_restart})
+
+              if is_binary(Map.get(record, :launch_fingerprint)) do
+                Map.put(record, :launch_classification, :outcome_unknown)
+              else
+                Map.put(record, :completed_at, now)
+              end
             else
               record
             end
@@ -287,7 +414,8 @@ defmodule CodingAgent.ProcessStoreServer do
   defp expired_record?(record, now, ttl_seconds) do
     status = Map.get(record, :status)
 
-    if status in [:completed, :error, :killed, :lost] do
+    if status in [:completed, :error, :killed, :lost] and
+         Map.get(record, :launch_classification) != :outcome_unknown do
       completed_at =
         Map.get(record, :completed_at) || Map.get(record, :updated_at) ||
           Map.get(record, :inserted_at)

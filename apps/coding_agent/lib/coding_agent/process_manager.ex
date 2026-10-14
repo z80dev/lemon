@@ -1,6 +1,6 @@
 defmodule CodingAgent.ProcessManager do
   @moduledoc """
-  DynamicSupervisor for managing background process sessions.
+  DynamicSupervisor for owned background process sessions.
 
   Provides:
   - Starting new background processes
@@ -14,7 +14,6 @@ defmodule CodingAgent.ProcessManager do
   """
 
   use DynamicSupervisor
-  require Logger
 
   alias CodingAgent.{ProcessSession, ProcessStore}
   alias LemonCore.{TerminalBackendPolicy, TerminalBackends}
@@ -38,26 +37,39 @@ defmodule CodingAgent.ProcessManager do
   - :timeout_ms - Timeout in milliseconds (optional, nil = no timeout)
   - :yield_ms - Auto-background after this many milliseconds (optional)
   - :max_log_lines - Maximum log lines to keep (default: 1000)
-  - :use_lane_queue - Whether to route through LaneQueue :background_exec lane (default: true)
+  - :launch_id - Optional fixed identity for reconciliation/retry; distinct logical
+    launches must use distinct identities. Generated before admission by default.
+  - :use_lane_queue - Retained for internal callers; false does not bypass admission.
 
-  Returns {:ok, process_id} on success.
+  Returns `{:ok, identity}` for an accepted launch, or a bounded
+  `{:error, {:rejected, identity, reason} | {:outcome_unknown, identity}}`.
+  `receipt/2` reconciles acceptance without rerunning external effects.
   """
   @spec exec(keyword()) :: {:ok, String.t()} | {:error, term()}
   def exec(opts) do
-    command = Keyword.fetch!(opts, :command)
-    use_lane_queue = Keyword.get(opts, :use_lane_queue, true)
+    exec_launch(Keyword.get(opts, :launch_id, generate_id()), opts)
+  end
 
-    with {:ok, backend} <- TerminalBackends.validate(Keyword.get(opts, :backend, :local)),
+  defp exec_launch(identity, opts) do
+
+    with :ok <- validate_launch(identity, opts),
+         {:ok, backend} <- TerminalBackends.validate(Keyword.get(opts, :backend, :local)),
          :ok <- ensure_backend_available(backend),
          :ok <- TerminalBackendPolicy.validate(backend) do
-      opts = Keyword.put(opts, :backend, backend)
+      opts =
+        opts
+        |> Keyword.put(:backend, backend)
+        |> Keyword.put(:process_id, identity)
+        |> Keyword.put_new(:cwd, File.cwd!())
+        |> Keyword.put_new(:env, %{})
 
-      if use_lane_queue do
-        # Route through LaneQueue for :background_exec lane
-        exec_with_lane_queue(command, opts)
-      else
-        # Direct execution without lane scheduling
-        do_exec(command, opts)
+      fingerprint = request_fingerprint(opts)
+      opts = Keyword.put(opts, :launch_fingerprint, fingerprint)
+
+      case ProcessStore.register_launch(identity, Keyword.get(opts, :owner), fingerprint) do
+        :new -> exec_with_lane_queue(opts)
+        {:existing, receipt} -> receipt_result(receipt)
+        {:error, :identity_conflict} -> {:error, {:rejected, identity, :identity_conflict}}
       end
     else
       {:error, :unknown_backend} ->
@@ -69,7 +81,58 @@ defmodule CodingAgent.ProcessManager do
       {:error, reason} ->
         {:error, reason}
     end
+  rescue
+    _ -> {:error, {:outcome_unknown, identity}}
+  catch
+    :exit, _ -> {:error, {:outcome_unknown, identity}}
   end
+
+  @doc "Return a redacted launch receipt, scoped to the exact launch owner."
+  def receipt(identity, owner \\ nil), do: ProcessStore.launch_receipt(identity, owner)
+
+  defp validate_launch(identity, opts) do
+    command = Keyword.get(opts, :command)
+    env = Keyword.get(opts, :env, %{})
+    owner = Keyword.get(opts, :owner)
+    cwd = Keyword.get(opts, :cwd, File.cwd!())
+    owner_pid = Keyword.get(opts, :owner_pid)
+
+    valid_env =
+      is_map(env) and
+        Enum.all?(env, fn {key, value} ->
+          is_binary(key) and Regex.match?(~r/\\A[A-Za-z_][A-Za-z0-9_]*\\z/, key) and
+            is_binary(value) and not String.contains?(value, <<0>>)
+        end)
+
+    if is_binary(identity) and byte_size(identity) in 1..128 and
+         Regex.match?(~r/\\A[A-Za-z0-9_-]+\\z/, identity) and
+         is_binary(command) and byte_size(command) > 0 and
+         not String.contains?(command, <<0>>) and is_binary(cwd) and
+         not String.contains?(cwd, <<0>>) and valid_env and
+         (is_nil(owner) or is_binary(owner)) and (is_nil(owner_pid) or is_pid(owner_pid)) do
+      :ok
+    else
+      {:error, :invalid_launch_request}
+    end
+  end
+
+  defp request_fingerprint(opts) do
+    request =
+      {Keyword.fetch!(opts, :command), Keyword.fetch!(opts, :cwd),
+       Enum.sort(Keyword.fetch!(opts, :env)), Keyword.fetch!(opts, :backend),
+       Keyword.get(opts, :timeout_ms), Keyword.get(opts, :max_log_lines, 1000),
+       Keyword.get(opts, :owner_pid), Keyword.get(opts, :restarted_from),
+       Keyword.get(opts, :restart_generation, 0)}
+
+    :crypto.hash(:sha256, :erlang.term_to_binary(request))
+  end
+
+  defp receipt_result(%{identity: id, classification: :accepted}), do: {:ok, id}
+
+  defp receipt_result(%{identity: id, classification: :rejected, reason: reason}),
+    do: {:error, {:rejected, id, reason}}
+
+  defp receipt_result(%{identity: id}), do: {:error, {:outcome_unknown, id}}
 
   defp ensure_backend_available(backend) do
     if TerminalBackends.available?(backend) do
@@ -79,60 +142,65 @@ defmodule CodingAgent.ProcessManager do
     end
   end
 
-  defp exec_with_lane_queue(command, opts) do
-    # Submit to LaneQueue :background_exec lane
+  defp exec_with_lane_queue(opts) do
+    identity = Keyword.fetch!(opts, :process_id)
+    owner = Keyword.get(opts, :owner)
     lane_queue = Keyword.get(opts, :lane_queue, CodingAgent.LaneQueue)
 
     result =
-      CodingAgent.LaneQueue.run(
-        lane_queue,
-        :background_exec,
-        fn -> do_exec(command, Keyword.put(opts, :use_lane_queue, false)) end,
-        %{type: :background_exec, command: command}
-      )
+      try do
+        CodingAgent.LaneQueue.run(
+          lane_queue,
+          :background_exec,
+          fn -> do_exec(opts) end,
+          %{type: :background_exec, identity: identity}
+        )
+      rescue
+        _ -> {:error, :admission_failed}
+      catch
+        :exit, {:noproc, _} -> {:error, :admission_unavailable}
+        :exit, _ -> {:error, :admission_reply_lost}
+      end
 
     case result do
-      {:ok, {:ok, process_id}} -> {:ok, process_id}
-      {:ok, {:error, reason}} -> {:error, reason}
-      {:error, reason} -> {:error, reason}
+      {:ok, {:ok, ^identity}} ->
+        {:ok, identity}
+
+      {:error, :admission_unavailable} ->
+        ProcessStore.classify_launch(identity, :rejected, :admission_unavailable)
+        reconcile_result(identity, owner)
+
+      {:error, {:task_start_failed, _}} ->
+        ProcessStore.classify_launch(identity, :rejected, :admission_unavailable)
+        reconcile_result(identity, owner)
+
+      _ ->
+        ProcessStore.classify_launch(identity, :outcome_unknown)
+        reconcile_result(identity, owner)
     end
-  rescue
-    e ->
-      Logger.warning(
-        "LaneQueue unavailable for background exec, falling back to direct: #{inspect(e)}"
-      )
-
-      do_exec(command, opts)
-  catch
-    :exit, reason ->
-      Logger.warning(
-        "LaneQueue exited during background exec, falling back to direct: #{inspect(reason)}"
-      )
-
-      do_exec(command, opts)
   end
 
-  defp do_exec(_command, opts) do
-    process_id = generate_id()
+  defp reconcile_result(identity, owner) do
+    case receipt(identity, owner) do
+      {:ok, receipt} -> receipt_result(receipt)
+      _ -> {:error, {:outcome_unknown, identity}}
+    end
+  end
+
+  defp do_exec(opts) do
+    process_id = Keyword.fetch!(opts, :process_id)
 
     child_spec = %{
       id: {ProcessSession, process_id},
-      start: {ProcessSession, :start_link, [[{:process_id, process_id} | opts]]},
+      start: {ProcessSession, :start_link, [opts]},
       restart: :temporary,
       shutdown: 10_000
     }
 
     case DynamicSupervisor.start_child(__MODULE__, child_spec) do
-      {:ok, _pid} ->
-        # If yield_ms is specified, we would normally wait and then return
-        # For now, we just return immediately
-        {:ok, process_id}
-
-      {:ok, _pid, _info} ->
-        {:ok, process_id}
-
-      {:error, reason} ->
-        {:error, reason}
+      {:ok, _pid} -> {:ok, process_id}
+      {:ok, _pid, _info} -> {:ok, process_id}
+      _ -> reconcile_result(process_id, Keyword.get(opts, :owner))
     end
   end
 
@@ -335,10 +403,10 @@ defmodule CodingAgent.ProcessManager do
         {:ok, record, _} ->
           status = Map.get(record, :status)
 
-          if status == :running do
-            # Process was running but session died - mark as lost
-            ProcessStore.mark_error(process_id, :session_died)
-            :ok
+          if status in [:running, :starting, :lost] do
+            # Killing a BEAM owner does not confirm OS/remote termination.
+            receipt(process_id, Map.get(record, :owner))
+            {:error, {:outcome_unknown, process_id}}
           else
             {:error, :process_not_running}
           end
@@ -377,6 +445,8 @@ defmodule CodingAgent.ProcessManager do
                 backend: Map.get(record, :backend, :local),
                 max_log_lines: Map.get(record, :max_log_lines, 1000),
                 timeout_ms: Keyword.get(opts, :timeout_ms, Map.get(record, :timeout_ms)),
+                owner: Map.get(record, :owner),
+                owner_pid: Keyword.get(opts, :owner_pid),
                 restarted_from: process_id,
                 restart_generation: restart_generation,
                 use_lane_queue: Keyword.get(opts, :use_lane_queue, true)
@@ -416,20 +486,17 @@ defmodule CodingAgent.ProcessManager do
   """
   @spec clear(String.t()) :: :ok | {:error, term()}
   def clear(process_id) when is_binary(process_id) do
-    # Stop the session if it's still running
-    if ProcessSession.alive?(process_id) do
-      ProcessSession.stop(process_id)
-      ProcessStore.delete(process_id)
-      :ok
-    else
-      case ProcessStore.get(process_id) do
-        {:ok, _record, _logs} ->
-          ProcessStore.delete(process_id)
-          :ok
+    case ProcessStore.get(process_id) do
+      {:ok, %{status: status}, _} when status in [:running, :starting, :queued, :lost] ->
+        {:error, :process_not_terminal}
 
-        {:error, :not_found} ->
-          {:error, :not_found}
-      end
+      {:ok, _, _} ->
+        if ProcessSession.alive?(process_id), do: ProcessSession.stop(process_id)
+        ProcessStore.delete(process_id)
+        :ok
+
+      {:error, :not_found} ->
+        {:error, :not_found}
     end
   end
 

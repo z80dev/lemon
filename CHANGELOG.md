@@ -8,7 +8,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
-No unreleased changes yet.
+### Fixed
+
+- Background process launches no longer bypass admission after queue failures.
+  Fixed, owner-bound launch identities reconcile lost acknowledgements and
+  reject conflicting retries instead of risking duplicate external effects.
 
 ---
 

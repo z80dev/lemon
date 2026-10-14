@@ -47,14 +47,30 @@ defmodule CodingAgent.ProcessManagerTest do
   end
 
   describe "exec/1" do
-    test "falls back to direct execution when LaneQueue exits" do
-      assert {:ok, process_id} =
-               ProcessManager.exec(
-                 command: "echo lane-fallback",
-                 lane_queue: :missing_lane_queue_for_process_manager_test
-               )
+    test "fails closed when admission is absent, including sync and direct options" do
+      counter = Path.join(System.tmp_dir!(), "lemon-no-start-#{System.unique_integer([:positive])}")
+      on_exit(fn -> File.rm(counter) end)
 
-      assert is_binary(process_id)
+      for {call, extra} <- [{:exec, []}, {:exec_sync, []}, {:exec, [use_lane_queue: false]}] do
+        identity = "absent-#{System.unique_integer([:positive])}"
+
+        assert {:error, {:rejected, ^identity, :admission_unavailable}} =
+                 apply(ProcessManager, call, [
+                   [
+                     command: "printf x >> '#{counter}'",
+                     env: %{"PRIVATE_TOKEN" => "not-for-receipts"},
+                     launch_id: identity,
+                     lane_queue: :missing_lane_queue_for_process_manager_test
+                   ] ++ extra
+                 ])
+
+        assert {:ok, receipt} = ProcessManager.receipt(identity)
+        assert receipt.classification == :rejected
+        refute inspect(receipt) =~ counter
+        refute inspect(receipt) =~ "not-for-receipts"
+      end
+
+      refute File.exists?(counter)
     end
 
     test "starts a background process and returns process_id" do

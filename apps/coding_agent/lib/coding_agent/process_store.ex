@@ -68,6 +68,42 @@ defmodule CodingAgent.ProcessStore do
   end
 
   @doc """
+  Register a logical launch before admission. Only the first registration may
+  submit work; subsequent registrations reconcile the same identity.
+  """
+  def register_launch(id, owner, fingerprint) do
+    GenServer.call(ProcessStoreServer, {:register_launch, id, owner, fingerprint})
+  end
+
+  @doc false
+  def claim_launch(id, owner, fingerprint) do
+    GenServer.call(ProcessStoreServer, {:claim_launch, id, owner, fingerprint})
+  end
+
+  @doc false
+  def classify_launch(id, classification, reason \\ nil) do
+    GenServer.call(ProcessStoreServer, {:classify_launch, id, classification, reason})
+  end
+
+  @doc """
+  Redacted acceptance provenance. Unknown is not a confirmed rejection and must
+  never be retried with a fresh identity automatically.
+  """
+  def launch_receipt(id, owner) do
+    GenServer.call(ProcessStoreServer, {:launch_receipt, id, owner})
+  end
+
+  @doc false
+  def receipt(record) do
+    %{
+      identity: record.id,
+      classification: Map.get(record, :launch_classification, :outcome_unknown),
+      reason: Map.get(record, :launch_reason),
+      status: Map.get(record, :launch_terminal_status, Map.get(record, :status))
+    }
+  end
+
+  @doc """
   Mark a process as running with its OS PID.
   """
   @spec mark_running(process_id(), integer() | nil) :: :ok
@@ -173,6 +209,7 @@ defmodule CodingAgent.ProcessStore do
     ensure_table()
 
     case :ets.lookup(@table, process_id) do
+      [{^process_id, %{status: :cleared}, _}] -> {:error, :not_found}
       [{^process_id, record, logs}] -> {:ok, record, Enum.reverse(logs)}
       _ -> {:error, :not_found}
     end
@@ -187,7 +224,8 @@ defmodule CodingAgent.ProcessStore do
 
     :ets.foldl(
       fn {process_id, record, _logs}, acc ->
-        if status_filter == :all or Map.get(record, :status) == status_filter do
+        if Map.get(record, :status) != :cleared and
+             (status_filter == :all or Map.get(record, :status) == status_filter) do
           [{process_id, record} | acc]
         else
           acc
@@ -223,14 +261,26 @@ defmodule CodingAgent.ProcessStore do
   @spec delete(process_id()) :: :ok
   def delete(process_id) when is_binary(process_id) do
     case :ets.lookup(@table, process_id) do
-      [{^process_id, record, _logs}] -> remove_output(record)
-      _ -> :ok
-    end
+      [{^process_id, %{launch_fingerprint: fingerprint} = record, _logs}]
+      when is_binary(fingerprint) ->
+        remove_output(record)
 
-    :ets.delete(@table, process_id)
+        tombstone =
+          record
+          |> Map.take([
+            :id, :owner, :launch_fingerprint, :launch_classification, :launch_reason,
+            :inserted_at, :updated_at, :completed_at, :termination_confirmed
+          ])
+          |> Map.put(:launch_terminal_status, Map.get(record, :status))
+          |> Map.put(:status, :cleared)
 
-    if dets_open?() do
-      :dets.delete(@dets_table, process_id)
+        insert_record(process_id, tombstone, [])
+
+      records ->
+        Enum.each(records, fn {_, record, _} -> remove_output(record) end)
+        :ets.delete(@table, process_id)
+
+        if dets_open?(), do: :dets.delete(@dets_table, process_id)
     end
 
     :ok
