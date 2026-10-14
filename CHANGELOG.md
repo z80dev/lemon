@@ -42,6 +42,8 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - Canonical Lemon Bot private configuration now types delivered host/export
   grants, OIDC mappings, separate public X credentials, actual provider spend
   sources and fixed channel app principals without an untyped extras bag.
+- Lemon Bot host management and probes require direct noninteractive native
+  destination process execution; PTY is reserved for user-facing terminals.
 
 ---
 
