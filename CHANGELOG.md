@@ -73,12 +73,15 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - Extension result presentation hooks preserve authoritative checkpoint receipts
   and affected paths. Content-only or custom display details cannot erase real
   mutation provenance or fabricate receipts; omitted details retain the original.
-  Reserved diff aliases and resolved locations are protected in both key forms;
-  snapshots intentionally omitted for size limits remain absent in ACP output.
+  Reserved diff aliases, resolved locations and mutation line numbers are protected
+  in both key forms; omitted snapshots and absent location lines remain absent.
 - Direct, deferred and WASM-host targets restore secrets before interception
   under both disclosure profiles, including after reload. Private plan writes
   retain their restricted file boundary, and repeated plan refreshes no longer
   capture earlier wrapper generations.
+- Active plan-mode extension reload now binds private writes, edits and proposals
+  to newly loaded hooks immediately, preventing stale handlers from bypassing a
+  new mutation blocker.
 - OpenCode MCP discovery substitutes environment and file placeholders once in
   decoded JSONC string values. Quotes, backslashes and multiline environment
   values no longer invalidate the config and silently drop servers; inserted

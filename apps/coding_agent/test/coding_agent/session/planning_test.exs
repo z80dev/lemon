@@ -92,6 +92,93 @@ defmodule CodingAgent.Session.PlanningTest do
     assert {:ok, %{"mode" => "code"}} = Session.plan(resumed, :exit)
   end
 
+  test "active plan reload immediately applies new mutation and proposal blockers", %{root: root} do
+    ext_dir = Path.join(root, ".lemon/extensions")
+    File.mkdir_p!(ext_dir)
+
+    names =
+      for label <- ["Allow", "Block"],
+          do: "ReloadPlan#{label}#{System.unique_integer([:positive])}"
+
+    on_exit(fn ->
+      for name <- names do
+        module = Module.concat([name])
+        :code.purge(module)
+        :code.delete(module)
+      end
+    end)
+
+    install = fn name, action ->
+      path = Path.join(ext_dir, name <> ".ex")
+
+      File.write!(path, """
+      defmodule #{name} do
+        @behaviour CodingAgent.Extensions.Extension
+        def name, do: "#{name}"
+        def version, do: "1.0.0"
+        def hooks do
+          [on_tool_call: fn %{tool_name: name} when name in ["write", "edit", "propose_plan"] ->
+            #{action}
+          _ -> :ok end]
+        end
+      end
+      """)
+
+      path
+    end
+
+    [allow, block] = names
+    old_path = install.(allow, ":ok")
+    parent = self()
+
+    session =
+      start_supervised!(
+        {Session,
+         [
+           cwd: root,
+           register: false,
+           model: model(),
+           mcp_tools: [],
+           settings_manager: %{
+             settings(root)
+             | extension_paths: [ext_dir],
+               extension_auto_load_default_paths: false
+           },
+           approval_context: %{
+             approval_request_fun: fn request ->
+               send(parent, {:unexpected_plan_approval, request})
+               {:ok, :approved, :once}
+             end
+           }
+         ]}
+      )
+
+    assert {:ok, %{"mode" => "plan"}} = Session.plan(session, :enter)
+    state = Session.get_state(session)
+    path = Path.join(Planning.plan_dir(state.session_manager), "reload-plan.md")
+    write = Enum.find(state.tools, &(&1.name == "write"))
+    refute run(write, path, "allowed").is_error
+    assert File.read!(path) == "allowed"
+
+    File.rm!(old_path)
+    install.(block, "{:block, \"reloaded extension blocks plan mutation\"}")
+    assert {:ok, _} = Session.reload_extensions(session)
+    tools = Map.new(Session.get_state(session).tools, &{&1.name, &1})
+
+    for {name, args} <- [
+          {"write", %{"path" => path, "content" => "forbidden"}},
+          {"edit", %{"path" => path, "old_text" => "allowed", "new_text" => "forbidden"}},
+          {"propose_plan", %{"path" => path}}
+        ] do
+      result = tools[name].execute.("reload-#{name}", args, nil, nil)
+      assert result.is_error
+      assert File.read!(path) == "allowed"
+    end
+
+    assert {:ok, %{"mode" => "plan"}} = Session.plan(session)
+    refute_received {:unexpected_plan_approval, _}
+  end
+
   test "repeated refresh and reload restore private host and native bridge writes", %{root: root} do
     secret = "fixture-native-plan-secret"
     agent_dir = Path.join(root, "agent")

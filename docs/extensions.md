@@ -158,6 +158,9 @@ checks, so a blocked call never asks for approval. Sessions with no
 Private plan-mode `write`/`edit` tools and `propose_plan` are intercepted too.
 Secret placeholders are restored before interception; the private file tools
 check the plan-directory boundary after any hook argument replacement.
+Reloading extensions while plan mode is active immediately replaces the hooks
+used by private writes, edits and proposals; newly loaded blockers do not wait
+for another plan transition or prompt.
 
 ```elixir
 @impl true
@@ -207,9 +210,10 @@ cwd, session_id}`, where `args` are the arguments the tool ran with:
   `checkpoint_ids`), checkpoint kind, affected/changed/written paths, mutation
   action/outcome (`applied`, `success`, partial/error flags), ACP provenance,
   and original file snapshots/per-file results. Diff aliases `oldText`,
-  `newText`, `old_text`, `new_text` and `resolvedPath` are reserved too. Both
-  atom and string keys are protected, including when the runtime omitted a
-  snapshot for size limits: hooks cannot fabricate an ACP diff or location.
+  `newText`, `old_text`, `new_text`, `resolvedPath` and `first_changed_line`
+  are reserved too. Both atom and string keys are protected, including when
+  the runtime omitted a snapshot or location line: hooks cannot fabricate an
+  ACP diff or location.
   Non-map details cannot discard an existing receipt. Trust level and error
   status are not changeable.
 - When the tool returns an error result or `{:error, reason}`, or raises,

@@ -59,7 +59,7 @@ defmodule CodingAgent.Extensions.ToolHooks do
   # ACP diff rendering also reads the `old_text`/`new_text`/`resolvedPath` aliases.
   @receipt_fields ~w(checkpoint_id checkpoint_ids checkpoint_kind path paths resolvedPath changed
                     changed_paths changed_files affected_paths written_paths partial partial_error
-                    applied success action acp_client oldText newText old_text new_text
+                    applied success action acp_client oldText newText old_text new_text first_changed_line
                     perFileResults snapshot)a
   @receipt_keys @receipt_fields ++ Enum.map(@receipt_fields, &Atom.to_string/1)
 

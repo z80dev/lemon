@@ -406,7 +406,9 @@ defmodule CodingAgent.Session.Lifecycle do
       CodingAgent.Session.Planning.tools(
         lifecycle.tools,
         state.session_manager,
-        CodingAgent.Session.Planning.runtime_context(state, self())
+        state
+        |> CodingAgent.Session.Planning.runtime_context(self())
+        |> Map.put(:hooks, lifecycle.hooks)
       )
 
     :ok = LemonAgent.Agent.set_tools(state.agent, tools)
