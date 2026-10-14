@@ -13,5 +13,6 @@
 - Preserved exact 64-bit event cursors through SQLite decimal-text projections and added an adjacent-sequence regression above JavaScript's safe-integer limit.
 - Closed the native tool inventory using the source-owned MCP alias projection; synchronized credential-free profile ceilings without owner credential lending and separated private execution results from bounded management status.
 - Completed exact gate-resource lifecycle previews/cancellation, corrected typed resource pagination/atomic cron receipts, and supplied named HTTP/connector dependency contracts for deterministic provider fixtures.
+- Preserved sealed native tool blocks during administrator hardening; made lifecycle fixtures honor complete measured presence and captured native aliases, and restored intentional outbox faults before teardown without suppressing failed transactions.
 
 No implementation-worker verification gates were run. Deployment requires the coordinated owning platform RPCs and real configured credentials for provider-dependent operations; see README.md and the canonical contracts.
