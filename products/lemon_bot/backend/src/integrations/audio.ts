@@ -16,6 +16,17 @@ const transcriptionSchema = z.strictObject({ clientNonce: nonce, attachmentId: i
 const previewSchema = z.strictObject({ clientNonce: nonce, voice: voiceSchema.optional() });
 function parse<T>(schema: z.ZodType<T>, input: unknown): T { const result = schema.safeParse(input); if (!result.success) fail('invalid_request', 'Invalid audio request.'); return result.data; }
 function parseProvider<T>(schema: z.ZodType<T>, input: unknown): T { const result = schema.safeParse(input); if (!result.success) fail('upstream_unavailable', 'Audio provider returned an invalid response.', false); return result.data; }
+function ownedBot(services: BackendServices, principal: Principal, botId: string): P.Bot {
+  const bot = services.auth.bot(principal, botId);
+  if (bot.ownerUserId !== principal.userId) fail('not_found', 'Bot not found.');
+  return bot;
+}
+function ownedConversation(services: BackendServices, principal: Principal, conversationId: string): P.Conversation {
+  const conversation = services.auth.conversation(principal, conversationId);
+  if (conversation.ownerUserId !== principal.userId) fail('not_found', 'Conversation not found.');
+  for (const botId of conversation.botIds) ownedBot(services, principal, botId);
+  return conversation;
+}
 export interface AudioOptions { env?: Record<string, string | undefined>; fetch?: HttpClient; timeoutMs?: number }
 export interface AudioInfo { mime: string; extension: string; durationMs: number }
 export interface AudioServices {
@@ -183,11 +194,11 @@ export function createAudioServices(services: BackendServices, overrides?: Audio
   }
   async function json(url: string, init: RequestInit, limit = 2 * 1024 * 1024, deadline?: number): Promise<unknown> { try { return JSON.parse(new TextDecoder().decode(await upstream(url, init, limit, deadline))); } catch (error) { if (error instanceof ApiError) throw error; fail('upstream_unavailable', 'Audio provider returned invalid JSON.', false); } }
   function scope(principal: Principal, conversationId?: string, sessionId?: string, requireActive = true): string | undefined {
-    if (conversationId) services.auth.conversation(principal, conversationId);
+    if (conversationId) ownedConversation(services, principal, conversationId);
     if (!sessionId) return conversationId;
     const session = services.store.get<P.VoiceSession>('voiceSessions', sessionId);
     if (!session || session.userId !== principal.userId) fail('not_found', 'Voice session not found.');
-    services.auth.conversation(principal, session.conversationId);
+    ownedConversation(services, principal, session.conversationId);
     if (requireActive && session.state !== 'active') fail('conflict', 'Voice session is not active.');
     if (conversationId && session.conversationId !== conversationId) fail('invalid_request', 'Voice session belongs to another conversation.');
     return session.conversationId;
@@ -195,7 +206,7 @@ export function createAudioServices(services: BackendServices, overrides?: Audio
   // Replay authorizes the original receipt; ending a call never authorizes another provider dispatch.
   async function authorizeReplay(principal: Principal, input: unknown, kind: 'speech' | 'transcription' | 'preview', botId?: string): Promise<void> {
     if (!(await services.integrations.effectivePolicy(principal, botId)).productAccess) fail('policy_denied', 'Product access is disabled for this account.');
-    if (kind === 'preview') { parse(previewSchema, input); if (!botId) fail('invalid_request', 'Bot required.'); services.auth.bot(principal, botId); return; }
+    if (kind === 'preview') { parse(previewSchema, input); if (!botId) fail('invalid_request', 'Bot required.'); ownedBot(services, principal, botId); return; }
     if (kind === 'transcription') {
       const body = parse(transcriptionSchema, input), attachment = services.auth.attachment(principal, body.attachmentId);
       if (attachment.state !== 'ready') fail('not_found', 'Audio attachment is unavailable.');
@@ -233,7 +244,7 @@ export function createAudioServices(services: BackendServices, overrides?: Audio
   async function speech(principal: Principal, input: unknown, provenance?: P.DeliverableProvenance): Promise<P.SpeechResult> {
     const body = parse(speechSchema, input), conversationId = scope(principal, body.conversationId, body.voiceSessionId);
     const botId = provenance?.botId ?? principal.botId ?? undefined;
-    const bot = botId ? services.auth.bot(principal, botId) : null;
+    const bot = botId ? ownedBot(services, principal, botId) : null;
     if (provenance?.machineId && provenance.machineId !== bot?.machineId) fail('invalid_request', 'Speech provenance does not match the Bot machine.');
     if (!(await services.integrations.effectivePolicy(principal, botId)).productAccess) fail('policy_denied', 'Product access is disabled for this account.');
     scope(principal, conversationId, body.voiceSessionId);
@@ -317,6 +328,6 @@ export function createAudioRoutes(services: BackendServices, options?: AudioOpti
   return [
     { method: 'POST', path: '/v1/audio/transcriptions', auth: 'member', status: 200, authorizeReplay: c => audio.authorizeReplay(user(c.user), c.body, 'transcription'), handler: c => audio.transcribe(user(c.user), c.body) },
     { method: 'POST', path: '/v1/audio/speech', auth: 'member', status: 200, authorizeReplay: c => audio.authorizeReplay(user(c.user), c.body, 'speech'), handler: c => audio.speech(user(c.user), c.body) },
-    { method: 'POST', path: '/v1/bots/:id/voice/preview', auth: 'member', status: 200, authorizeReplay: c => audio.authorizeReplay(user(c.user), c.body, 'preview', c.params.id!), handler: c => { const principal = user(c.user), bot = services.auth.bot(principal, c.params.id!), body = parse(previewSchema, c.body); return audio.speech(principal, { clientNonce: body.clientNonce, text: 'Hello, I’m your Lemon Bot teammate. Ready when you are.', voice: body.voice ?? bot.voice }, { botId: bot.id, machineId: null, runId: null, sourceEntryId: null, generatedAtMs: null }); } },
+    { method: 'POST', path: '/v1/bots/:id/voice/preview', auth: 'member', status: 200, authorizeReplay: c => audio.authorizeReplay(user(c.user), c.body, 'preview', c.params.id!), handler: c => { const principal = user(c.user), bot = ownedBot(services, principal, c.params.id!), body = parse(previewSchema, c.body); return audio.speech(principal, { clientNonce: body.clientNonce, text: 'Hello, I’m your Lemon Bot teammate. Ready when you are.', voice: body.voice ?? bot.voice }, { botId: bot.id, machineId: null, runId: null, sourceEntryId: null, generatedAtMs: null }); } },
   ];
 }

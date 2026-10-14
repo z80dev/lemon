@@ -56,6 +56,12 @@ export function createSpendServices(services: BackendServices) {
     return spendStatus(limit, { costUsd: report.totals.costUsd, incomplete: report.incomplete }, services.now());
   }
   async function admission(who: Principal, botId: string, routineId?: string): Promise<void> {
+    const bot = services.auth.bot(who, botId);
+    if (bot.ownerUserId !== who.userId) throw new ApiError('not_found', 'Bot not found.');
+    if (routineId) {
+      const routine = services.store.require<P.Routine>('routines', routineId);
+      if (routine.ownerUserId !== who.userId || routine.botId !== bot.id) throw new ApiError('not_found', 'Routine not found.');
+    }
     const limits = services.store.list<P.SpendLimit>('spendLimits', limit => limit.enabled && (limit.scope === 'workspace' || limit.scope === 'user' && limit.subjectId === who.userId || limit.scope === 'bot' && limit.subjectId === botId || limit.scope === 'routine' && limit.subjectId === routineId));
     for (const limit of limits) {
       // Workspace limits must use workspace attribution even for a member run; privileged measurement

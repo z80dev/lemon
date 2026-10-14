@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import type * as P from '../../../contracts/protocol';
 import type { BackendServices, HttpClient, Principal, RequestContext } from '../../src/core/services';
 import { changePcmSpeed, createAudioRoutes, createAudioServices, googleAssertion, inspectAudio, pcmWave } from '../../src/integrations/audio';
-import { closeFixture, fixture as channelFixture } from './channels-fixture';
+import { additionalOwner, closeFixture, fixture as channelFixture } from './channels-fixture';
 
 const now = 1_791_940_000_000;
 const principal: Principal = { kind: 'user', id: 'user', userId: 'user', workspaceId: 'workspace', role: 'member', sessionId: 'auth', botId: null, deviceId: 'device' };
@@ -125,6 +125,16 @@ describe('authorized provider audio', () => {
     f.session.userId='user'; f.session.state='ended'; await expect(audio.speech(principal,{clientNonce:nonce,text:'words',voice,voiceSessionId:'voice'})).rejects.toMatchObject({code:'conflict'});
     f.session.state='active'; f.session.conversationId='another'; await expect(audio.speech(principal,{clientNonce:nonce,text:'words',voice,conversationId:'conversation',voiceSessionId:'voice'})).rejects.toThrow();
     await expect(audio.speech(principal,{clientNonce:nonce,text:'words',voice,unknown:true})).rejects.toMatchObject({code:'invalid_request'}); expect(calls).toBe(0);
+  });
+  test('foreign administrators cannot synthesize or replay another owner’s Bot/context and never contact the audio provider', async () => {
+    const f = fixture(), owned = f.services.store.require<P.Bot>('bots', 'bot');
+    const foreign = additionalOwner(f.services, owned, 'foreign', 'owner');
+    let calls = 0;
+    const audio = createAudioServices(f.services, { env: { LEMON_BOT_TTS_PROVIDER: 'openai', LEMON_BOT_OPENAI_API_KEY: 'fixture' }, fetch: fakeFetch(() => { calls++; return new Response(Buffer.from(f.wave)); }) });
+    await expect(audio.speech(foreign.principal, { clientNonce: nonce, text: 'private words', voice, conversationId: 'conversation' })).rejects.toMatchObject({ code: 'not_found' });
+    await expect(audio.speech(principal, { clientNonce: nonce, text: 'private words', voice }, { botId: foreign.bot.id, runId: null, machineId: foreign.bot.machineId, sourceEntryId: null, generatedAtMs: null })).rejects.toMatchObject({ code: 'not_found' });
+    await expect(audio.authorizeReplay(foreign.principal, { clientNonce: nonce }, 'preview', owned.id)).rejects.toMatchObject({ code: 'not_found' });
+    expect(calls).toBe(0); expect(f.captured()).toBeNull();
   });
   test('selected-group product access denial blocks providers and revocation fences speech persistence', async () => {
     const f=fixture();let calls=0;const audio=createAudioServices(f.services,{env:{LEMON_BOT_TTS_PROVIDER:'openai',LEMON_BOT_STT_PROVIDER:'openai',LEMON_BOT_OPENAI_API_KEY:'fixture'},fetch:fakeFetch(()=>{calls++;f.setProductAccess(false);return new Response(Buffer.from(f.wave));})});

@@ -10,7 +10,7 @@ const journal = 'exportJournal';
 const consents = 'contentExportConsents';
 const streams: P.ExportDestination['streams'] = ['audit', 'action', 'usage', 'conversation_content'];
 const residual = 'Revocation prevents future delivery and downloads, but cannot erase copies already acknowledged by an external collector. Redaction does not guarantee removal of all personal data.';
-const privacyError = 'Content export is blocked by current policy, participant consent, or conversation access.';
+const privacyError = 'Content export is blocked by current policy, owner consent, or conversation ownership.';
 const maxBytes = 25 * 1024 * 1024;
 
 type DestinationState = { id: string; userId: string; watermarks: Partial<Record<P.AuditExportCreate['kind'], string>> };
@@ -35,7 +35,7 @@ function timestamp(value: unknown): number { if (typeof value !== 'number' || !N
 function consentId(conversationId: string, userId: string): string { return JSON.stringify([conversationId, userId]); }
 function currentConsent(s: BackendServices, p: Principal, conversationId: string): P.ContentExportConsent {
   const conversation = s.auth.conversation(p, conversationId);
-  if (!conversation.humanUserIds.includes(p.userId)) throw new ApiError('not_found', 'Conversation not found.');
+  if (conversation.ownerUserId !== p.userId) throw new ApiError('not_found', 'Conversation not found.');
   const id = consentId(conversationId, p.userId);
   return s.store.get<P.ContentExportConsent>(consents, id) ?? s.store.put(consents, { ...s.resource('export_consent', { conversationId, userId: p.userId, enabled: false }), id });
 }
@@ -43,7 +43,7 @@ function authorizeContent(s: BackendServices, p: Principal, ids: string[]): void
   if (!s.store.metadata<P.Governance>('governance')?.contentExportEnabled || !ids.length) throw new ApiError('policy_denied', privacyError);
   for (const id of ids) {
     const conversation = s.auth.conversation(p, id);
-    if (!conversation.humanUserIds.includes(p.userId) || !conversation.humanUserIds.length || conversation.humanUserIds.some(userId => !s.store.get<P.ContentExportConsent>(consents, consentId(id, userId))?.enabled)) throw new ApiError('policy_denied', privacyError);
+    if (conversation.ownerUserId !== p.userId || !s.store.get<P.ContentExportConsent>(consents, consentId(id, p.userId))?.enabled) throw new ApiError('policy_denied', privacyError);
   }
 }
 function enabledPrincipal(s: BackendServices, userId: string, admin = true): Principal {
@@ -234,7 +234,7 @@ function buildServices(s: BackendServices): ExportServices {
       if (collection === consents) {
         const consent = s.store.get<P.ContentExportConsent>(consents, entity.id);
         if (!consent || consent.userId !== currentPrincipal.userId) return false;
-        return s.auth.conversation(currentPrincipal, consent.conversationId).humanUserIds.includes(currentPrincipal.userId);
+        return s.auth.conversation(currentPrincipal, consent.conversationId).ownerUserId === currentPrincipal.userId;
       }
       const record = s.store.get<P.ExportRecord>(records, entity.id);
       if (!record || !ownRecord(currentPrincipal, record)) return false;
@@ -271,7 +271,7 @@ function buildServices(s: BackendServices): ExportServices {
               try {
                 authorizeContent(s, p, [row.conversationId!]);
                 const conversation = s.auth.conversation(p, row.conversationId!);
-                if (conversation.humanUserIds.some(userId => BigInt(row.seq) <= BigInt(s.store.metadata<string>(`exportConsentWatermark:${consentId(conversation.id, userId)}`) ?? '0'))) throw new ApiError('policy_denied', 'Content predates participant opt-in.');
+                if (BigInt(row.seq) <= BigInt(s.store.metadata<string>(`exportConsentWatermark:${consentId(conversation.id, p.userId)}`) ?? '0')) throw new ApiError('policy_denied', 'Content predates owner opt-in.');
                 const entry = s.store.get<P.TranscriptEntry>('entries', String(row.payload.entryId));
                 payload = entry && entry.revision === row.payload.revision ? content(entry, p) : null;
               } catch { payload = null; }

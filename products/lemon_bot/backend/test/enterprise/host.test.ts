@@ -268,7 +268,7 @@ async function fixture(reviewedSetups: ReviewedSetup[] = []): Promise<Fixture> {
   const outsider: Principal = { ...owner, id: 'outsider', userId: 'outsider', role: 'member' };
   const admin: Principal = { ...owner, id: 'admin', userId: 'admin', role: 'admin' };
   for (const machineId of ['machine_a', 'machine_b']) store.put('machines', { ...services.resource('machine', { name: machineId, nodeName: machineId, nodeId: `node_${machineId}`, ownerUserId: owner.userId, accessUserIds: [], status: 'online', lastSeenAtMs: services.now(), labels: {}, botIds: ['bot'] }), id: machineId } satisfies P.Machine);
-  store.put('bots', { ...services.resource('bot', { ownerUserId: owner.userId, managerUserIds: [], machineId: 'machine_a', profileId: 'lb-host-test', name: 'Bot', title: '', job: '', instructions: '', avatar: { kind: 'character', shape: 'round', color: 'yellow', attachmentId: null }, voice, language: null, visibility: 'personal', published: false, required: false, skillIds: [], referenceAttachmentIds: [], mainConversationId: 'main', sidebar: { pinned: false, hidden: false, sectionId: null, rank: 0, unread: false, notificationsEnabled: true }, activity: 'idle', activeRunIds: [] }), id: 'bot' } satisfies P.Bot);
+  store.put('bots', { ...services.resource('bot', { ownerUserId: owner.userId, machineId: 'machine_a', profileId: 'lb-host-test', name: 'Bot', title: '', job: '', instructions: '', avatar: { kind: 'character', shape: 'round', color: 'yellow', attachmentId: null }, voice, language: null, skillIds: [], referenceAttachmentIds: [], mainConversationId: 'main', sidebar: { pinned: false, hidden: false, sectionId: null, rank: 0, unread: false, notificationsEnabled: true }, activity: 'idle', activeRunIds: [] }), id: 'bot' } satisfies P.Bot);
   let behavior = 'normal';
   const cmd = (): P.HostDriverCommand => ({ argv: [process.execPath, join(directory, 'driver.ts'), directory, 'apply', behavior], probeArgv: [process.execPath, join(directory, 'driver.ts'), directory, 'probe', behavior], cwd: directory, timeoutMs: 10000 });
   const setBehavior = (value: string) => {
@@ -573,7 +573,7 @@ describe('applied network policy and encrypted egress', () => {
     for (const groupId of ['g1', 'g2']) {
       h.store.put('directoryGroups', { ...h.services.resource('directory_group', { name: groupId, externalId: null, source: 'local' as const, memberUserIds: ['owner'] }), id: groupId });
       const policy = h.services.resource('network_policy', { scope: 'directory_group' as const, directoryGroupId: groupId, mode: 'allowlist_only' as const, rules: [], requiredRuntimeDestinations: [] }); h.store.put('networkPolicies', policy);
-      h.store.put('groupPolicies', h.services.resource('group_policy', { directoryGroupId: groupId, productAccess: true, defaultBotIds: [], capabilityModes: {}, requiredRuleIds: [], localExecutionCeiling: 'allow', allowEgress: true, allowSudo: false, networkPolicyId: policy.id, reviewExempt: false }));
+      h.store.put('groupPolicies', h.services.resource('group_policy', { directoryGroupId: groupId, productAccess: true, capabilityModes: {}, requiredRuleIds: [], localExecutionCeiling: 'allow', allowEgress: true, allowSudo: false, networkPolicyId: policy.id, reviewExempt: false }));
     }
     expect((await h.services.integrations.effectivePolicy(h.owner, 'bot')).networkPolicies.map(p => p.id)).toEqual([workspace.id]);
     h.store.setMetadata('governance', { ...h.store.metadata<P.Governance>('governance')!, lockNetworkForGroups: false });
@@ -600,7 +600,7 @@ describe('applied network policy and encrypted egress', () => {
   test('egress requires authority on both hosts; central deny acknowledges stop and restores only prior authorized preference', async () => {
     const h = await fixture();
     const group = h.services.resource('directory_group', { name: 'egress', externalId: null, source: 'local' as const, memberUserIds: ['owner'] }); h.store.put('directoryGroups', group);
-    h.store.put('groupPolicies', h.services.resource('group_policy', { directoryGroupId: group.id, productAccess: true, defaultBotIds: [], capabilityModes: {}, requiredRuleIds: [], localExecutionCeiling: 'allow', allowEgress: true, allowSudo: false, networkPolicyId: null, reviewExempt: false }));
+    h.store.put('groupPolicies', h.services.resource('group_policy', { directoryGroupId: group.id, productAccess: true, capabilityModes: {}, requiredRuleIds: [], localExecutionCeiling: 'allow', allowEgress: true, allowSudo: false, networkPolicyId: null, reviewExempt: false }));
     await expect(h.host.authorizeEgress(h.admin, 'machine_a', 'machine_b', true)).rejects.toMatchObject({ code: 'not_found' });
     const route = await h.request<P.EgressRoute>('POST', '/v1/egress-routes', { clientNonce: intent('egress_create'), machineId: 'machine_a', throughMachineId: 'machine_b', enabled: true }); expect(route.state).toBe('active');
     const previous = h.store.metadata<P.Governance>('governance')!, denied = { ...previous, revision: 2, allowEgress: false }; h.store.setMetadata('governance', denied); await h.host.governanceChanged(previous, denied);

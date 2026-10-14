@@ -61,7 +61,7 @@ function fixture(path = ':memory:') {
         const member = services.auth.member(p.userId);
         if (!member.enabled || member.role !== 'owner' && (role === 'owner' || member.role !== 'admin')) throw new ApiError('forbidden', 'Admin required.');
       },
-      conversation(p: Principal, id: string) { const row = store.require<P.Conversation>('conversations', id); if (!row.humanUserIds.includes(p.userId)) throw new ApiError('not_found', 'Conversation not found.'); return row; },
+      conversation(p: Principal, id: string) { const row = store.require<P.Conversation>('conversations', id); if (row.ownerUserId !== p.userId) throw new ApiError('not_found', 'Conversation not found.'); return row; },
       bot: unsupported,
       machine: unsupported,
       attachment: unsupported,
@@ -125,8 +125,8 @@ function fixture(path = ':memory:') {
     const context: RequestContext = { route, request: new Request(`https://product.test${actualPath}`, { method }), params: id ? { id } : {}, query: new URLSearchParams(), body: body ? { clientNonce: `test_nonce_${String(++nonce).padStart(16, '0')}`, ...body } : undefined, user: p, services, requestId: 'test-request', nonceResourceIds: [] };
     return await route.handler(context) as T;
   }
-  function conversation(id: string, humans: string[]) {
-    store.put<P.Conversation>('conversations', { ...resource('room', {}), id, kind: 'group', name: id, humanUserIds: humans, ownerUserId: humans[0]!, botIds: [], parentConversationId: null, leadBotId: null, channelBindingId: null, lastEntryId: null, unreadCount: 0, lastReadSeq: 0, activity: [] });
+  function conversation(id: string, principal = owner) {
+    store.put<P.Conversation>('conversations', { ...resource('room', {}), id, kind: 'group', name: id, ownerUserId: principal.userId, botIds: [], parentConversationId: null, leadBotId: null, channelBindingId: null, lastEntryId: null, unreadCount: 0, lastReadSeq: 0, activity: [] });
   }
   function message(id: string, conversationId: string, text: string, extra: Partial<Extract<P.TranscriptEntry, { kind: 'message' }>> = {}) {
     store.put<P.TranscriptEntry>('entries', { ...resource('entry', {}), id, conversationId, seq: sequence, timestampMs: now, actor: { kind: 'user', id: 'alice', displayName: 'Alice' }, clientNonce: null, batchId: null, replyToEntryId: null, runId: null, targetedUserId: null, reactions: [], kind: 'message', role: 'user', text, streaming: false, attachmentIds: [], ...extra });
@@ -149,50 +149,52 @@ function collector(services: BackendServices, responder: (body: string, init: Re
 }
 
 describe('export privacy and durable delivery', () => {
-  test('defaults content off; consent is private own revisioned state, not admin authority', async () => {
-    const f = fixture(); f.conversation('shared', ['alice', 'bob']); f.conversation('private', ['bob']);
-    const consent = await f.call<P.ContentExportConsent>('GET', '/v1/conversations/:id/export-consent', undefined, owner, 'shared');
+  test('defaults content off; consent is private owner revisioned state, not administrative authority', async () => {
+    const f = fixture(); f.conversation('own'); f.conversation('foreign', bob);
+    const consent = await f.call<P.ContentExportConsent>('GET', '/v1/conversations/:id/export-consent', undefined, owner, 'own');
     expect(consent.enabled).toBe(false); expect(consent.revision).toBe(1);
-    await expect(f.call('PUT', '/v1/conversations/:id/export-consent', { revision: 99, enabled: true }, owner, 'shared')).rejects.toMatchObject({ code: 'revision_conflict' });
-    await expect(f.call('GET', '/v1/conversations/:id/export-consent', undefined, owner, 'private')).rejects.toMatchObject({ code: 'not_found' });
-    await expect(f.call('PUT', '/v1/conversations/:id/export-consent', { revision: 1, enabled: true, userId: 'bob' }, owner, 'shared')).rejects.toMatchObject({ code: 'invalid_request' });
-    await expect(f.call('POST', '/v1/exports', { fromAtMs: 0, toAtMs: 100000, kind: 'conversation_content', conversationIds: ['shared'] })).rejects.toMatchObject({ code: 'policy_denied' });
+    await expect(f.call('PUT', '/v1/conversations/:id/export-consent', { revision: 99, enabled: true }, owner, 'own')).rejects.toMatchObject({ code: 'revision_conflict' });
+    await expect(f.call('GET', '/v1/conversations/:id/export-consent', undefined, owner, 'foreign')).rejects.toMatchObject({ code: 'not_found' });
+    await expect(f.call('PUT', '/v1/conversations/:id/export-consent', { revision: 1, enabled: true, userId: 'bob' }, owner, 'own')).rejects.toMatchObject({ code: 'invalid_request' });
+    await expect(f.call('POST', '/v1/exports', { fromAtMs: 0, toAtMs: 100000, kind: 'conversation_content', conversationIds: ['own'] })).rejects.toMatchObject({ code: 'policy_denied' });
     expect(f.store.list('exports')).toHaveLength(0);
   });
-  test('historical content requires every current participant; current ACL and consent bind actual bytes', async () => {
-    const f = fixture(); f.conversation('shared', ['alice', 'bob']); f.conversation('private', ['bob']); f.store.setMetadata('governance', { contentExportEnabled: true });
-    await f.consent('shared'); f.message('shared-entry', 'shared', 'selected content'); f.message('private-entry', 'private', 'foreign private content');
-    await expect(f.call('POST', '/v1/exports', { fromAtMs: 0, toAtMs: 100000, kind: 'conversation_content', conversationIds: ['shared'] })).rejects.toMatchObject({ code: 'policy_denied' });
-    await f.consent('shared', bob);
-    f.advance(1); // Snapshot after the existing records; the upper bound is exclusive.
-    const row = await f.call<P.ExportRecord>('POST', '/v1/exports', { fromAtMs: 0, toAtMs: f.services.now(), kind: 'conversation_content', conversationIds: ['shared'] });
+  test('historical content requires current ownership and owner consent bound to the actual bytes', async () => {
+    const f = fixture(); f.conversation('own'); f.conversation('foreign', bob); f.store.setMetadata('governance', { contentExportEnabled: true });
+    f.message('own-entry', 'own', 'selected content'); f.message('foreign-entry', 'foreign', 'foreign private content');
+    await expect(f.call('POST', '/v1/exports', { fromAtMs: 0, toAtMs: 100000, kind: 'conversation_content', conversationIds: ['own'] })).rejects.toMatchObject({ code: 'policy_denied' });
+    await f.consent('own');
+    await expect(f.consent('own', carol)).rejects.toMatchObject({ code: 'not_found' });
+    await expect(f.call('POST', '/v1/exports', { fromAtMs: 0, toAtMs: 100000, kind: 'conversation_content', conversationIds: ['foreign'] })).rejects.toMatchObject({ code: 'not_found' });
+    f.advance(1);
+    const row = await f.call<P.ExportRecord>('POST', '/v1/exports', { fromAtMs: 0, toAtMs: f.services.now(), kind: 'conversation_content', conversationIds: ['own'] });
     expect(row.state).toBe('queued'); expect(row.attachmentId).toBeNull(); await f.api.reconcile();
     const completed = await f.call<P.ExportRecord>('GET', '/v1/exports/:id', undefined, owner, row.id);
     expect(completed.state).toBe('completed'); const bytes = await f.services.attachments.bytes(completed.attachmentId!);
     const body = new TextDecoder().decode(bytes); expect(body).toContain('selected content'); expect(body).not.toContain('foreign private content'); expect(body).toContain('cannot erase copies');
     f.api.authorizeExportAttachment(owner, completed.attachmentId!);
     expect(() => f.api.authorizeExportAttachment(carol, completed.attachmentId!)).toThrow('Attachment not found');
-    await f.consent('shared', bob, false);
+    await f.consent('own', owner, false);
     expect(() => f.api.authorizeExportAttachment(owner, completed.attachmentId!)).toThrow();
     expect(f.store.require<P.ExportRecord>('exports', row.id).state).toBe('failed');
-    await f.consent('shared', bob, true);
+    await f.consent('own', owner, true);
     expect(() => f.api.authorizeExportAttachment(owner, completed.attachmentId!)).toThrow();
   });
-  test('participant additions and global policy changes revoke attachment download without admin escalation', async () => {
-    const f = fixture(); f.conversation('room', ['alice']); f.store.setMetadata('governance', { contentExportEnabled: true }); await f.consent('room'); f.message('entry', 'room', 'private bytes');
-    const row = await f.call<P.ExportRecord>('POST', '/v1/exports', { fromAtMs: 0, toAtMs: 100000, kind: 'conversation_content', conversationIds: ['room'] }); await f.api.reconcile();
+  test('current ownership and global policy loss revoke downloads without administrative escalation', async () => {
+    const f = fixture(); f.conversation('room'); f.store.setMetadata('governance', { contentExportEnabled: true }); await f.consent('room'); f.message('entry', 'room', 'private bytes'); f.advance(1);
+    const row = await f.call<P.ExportRecord>('POST', '/v1/exports', { fromAtMs: 0, toAtMs: f.services.now(), kind: 'conversation_content', conversationIds: ['room'] }); await f.api.reconcile();
     const attachmentId = f.store.require<P.ExportRecord>('exports', row.id).attachmentId!;
-    f.conversation('room', ['alice', 'bob']); expect(() => f.api.authorizeExportAttachment(owner, attachmentId)).toThrow();
+    f.conversation('room', bob); expect(() => f.api.authorizeExportAttachment(owner, attachmentId)).toThrow();
     expect(f.store.require<P.Attachment>('attachments', attachmentId).state).toBe('deleted');
     f.store.setMetadata('governance', { contentExportEnabled: false }); expect(() => f.api.authorizeExportAttachment(owner, attachmentId)).toThrow();
   });
-  test('revocation invalidates queued and in-flight content, and does not replay it after re-consent', async () => {
-    const f = fixture(); f.conversation('room', ['alice', 'bob']); f.store.setMetadata('governance', { contentExportEnabled: true }); await f.consent('room'); await f.consent('room', bob); await f.destination(['conversation_content']);
+  test('owner revocation invalidates queued and in-flight content without replay after re-consent', async () => {
+    const f = fixture(); f.conversation('room'); f.store.setMetadata('governance', { contentExportEnabled: true }); await f.consent('room'); await f.destination(['conversation_content']);
     f.advance(); f.message('new', 'room', 'sensitive queued packet');
-    const requests = collector(f.services, async () => { await f.consent('room', bob, false); return new Response('{}'); });
+    const requests = collector(f.services, async () => { await f.consent('room', owner, false); return new Response('{}'); });
     await f.api.reconcile(); expect(requests).toHaveLength(1);
     expect(f.store.list<{ state: string }>('exportOutbox')[0]!.state).toBe('cancelled');
-    await f.consent('room', bob, true); f.advance(500000); await f.api.reconcile(); expect(requests).toHaveLength(1);
+    await f.consent('room', owner, true); f.advance(500000); await f.api.reconcile(); expect(requests).toHaveLength(1);
   });
   test('stream enabling starts current watermark, disable cancels queued packets, re-enable never backfills', async () => {
     const f = fixture(); f.services.audit(owner, 'bot.created', 'old', 'succeeded'); const requests = collector(f.services);
@@ -207,7 +209,7 @@ describe('export privacy and durable delivery', () => {
     await f.call('DELETE', '/v1/export-destinations/:id', { revision: destination.revision }, owner, destination.id); expect(f.store.list('exportDestinations')).toHaveLength(0);
   });
   test('resource receipt authorization rechecks current role, own consent and content revocation', async () => {
-    const f = fixture(); f.conversation('room', ['alice']); f.store.setMetadata('governance', { contentExportEnabled: true });
+    const f = fixture(); f.conversation('room'); f.store.setMetadata('governance', { contentExportEnabled: true });
     const consent = await f.consent('room');
     expect(f.api.canReadResource(owner, 'contentExportConsents', consent)).toBe(true);
     expect(f.api.canReadResource(carol, 'contentExportConsents', consent)).toBe(false);
@@ -227,7 +229,7 @@ describe('export privacy and durable delivery', () => {
     expect(f.api.canReadResource({ ...bob, role: 'owner' }, 'exports', metadata)).toBe(false);
   });
   test('revoke during attachment creation keeps the announced blob inaccessible and the job failed', async () => {
-    const f = fixture(); f.conversation('room', ['alice']); f.store.setMetadata('governance', { contentExportEnabled: true }); await f.consent('room'); f.message('entry', 'room', 'authorized until revoke');
+    const f = fixture(); f.conversation('room'); f.store.setMetadata('governance', { contentExportEnabled: true }); await f.consent('room'); f.message('entry', 'room', 'authorized until revoke');
     const create = f.services.attachments.create;
     let announcedId = '';
     f.services.attachments.create = async (p, bytes, metadata) => {
@@ -260,7 +262,7 @@ describe('export privacy and durable delivery', () => {
     expect(f.store.list<P.ExportRecord>('exports')[0]!.lastDeliveredCursor).toMatch(/^\d+$/); await f.api.reconcile(); expect(requests).toHaveLength(2);
   });
   test('known credential names/values/shapes are redacted while commands and shell output never enter metadata', async () => {
-    const f = fixture(); f.conversation('room', ['alice']); f.store.setMetadata('governance', { contentExportEnabled: true }); await f.consent('room');
+    const f = fixture(); f.conversation('room'); f.store.setMetadata('governance', { contentExportEnabled: true }); await f.consent('room');
     f.message('entry', 'room', 'known-collector-token known-operator-token collector sk-abcdefghijklmnop ghp_abcdefghijklmnopqrst eyJhbGciOiJIUzI1NiJ9.abc.def password=unsafe');
     f.advance(1);
     const content = await f.call<P.ExportRecord>('POST', '/v1/exports', { fromAtMs: 0, toAtMs: f.services.now(), kind: 'conversation_content', conversationIds: ['room'] }); await f.api.reconcile();

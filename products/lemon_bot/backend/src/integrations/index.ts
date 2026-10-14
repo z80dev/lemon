@@ -114,15 +114,16 @@ export function createIntegrationServices(s: BackendServices): Services {
   }
   const teardown = createProviderTeardownServices(s, { execute: cleanup, observe });
   const service: Services = {
-    effectivePolicy: policy.effectivePolicy, sharedProfilePolicy: policy.sharedProfilePolicy, defaultBotIds: policy.defaultBotIds,
+    effectivePolicy: policy.effectivePolicy,
     async admission(actor, botId, routineId) {
-      assertActiveAccount(s, actor.userId); s.auth.bot(actor, botId);
+      assertActiveAccount(s, actor.userId); const bot = s.auth.bot(actor, botId);
+      if (bot.ownerUserId !== actor.userId) throw new ApiError('not_found', 'Bot not found.');
       if (!(await policy.effectivePolicy(actor, botId)).productAccess) throw new ApiError('policy_denied', 'Directory and workspace policies do not grant product access.');
       await host.admission(actor, botId); await spend.admission(actor, botId, routineId);
     },
     connectorConfig: connectors.connectorProfileConfiguration, authorizeConnector: connectors.authorizeConnectorTool,
     connectorTemplates: connectors.connectorTemplates,
-    connectorProvisioning: connectors.connectorProvisioning, requestConnectorConsent: connectors.requestConnectorConsent, deleteBotConnectors: connectors.deleteBotConnectors,
+    connectorProvisioning: connectors.connectorProvisioning, deleteBotConnectors: connectors.deleteBotConnectors,
     sendApprovedDraft: (actor, draft) => draft.content.kind === 'email' ? email.sendApprovedDraft(actor, draft) : channels.sendApprovedDraft(actor, draft),
     emitProviderNotifications: push.emitProviderNotifications, channelIngress: channels.channelIngress,
     assertChannelHandoff: channels.assertChannelHandoff, returnChannelHandoff: channels.returnChannelHandoff,

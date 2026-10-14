@@ -137,13 +137,13 @@ export function createPushServices(services: BackendServices, overrides?: PushOp
         const target = notification.target;
         if (target.botId !== notification.botId) return false;
         if ((target.kind === 'entry' || target.kind === 'approval') && (target.conversationId !== notification.conversationId || target.entryId !== notification.entryId)) return false;
-        if (notification.conversationId) services.auth.conversation(principal, notification.conversationId);
-        if (notification.botId) { const bot = services.auth.bot(principal, notification.botId); if (bot.sidebar.hidden || !bot.sidebar.notificationsEnabled) return false; }
+        if (notification.conversationId && services.auth.conversation(principal, notification.conversationId).ownerUserId !== principal.userId) return false;
+        if (notification.botId) { const bot = services.auth.bot(principal, notification.botId); if (bot.ownerUserId !== principal.userId || bot.sidebar.hidden || !bot.sidebar.notificationsEnabled) return false; }
         if (notification.entryId) { const entry = services.store.get<P.TranscriptEntry>('entries', notification.entryId); if (!entry || entry.conversationId !== notification.conversationId || !services.auth.canRead(principal, 'entries', entry)) return false; }
-        if (target.kind === 'entry' && target.taskConversationId) services.auth.conversation(principal, target.taskConversationId);
+        if (target.kind === 'entry' && target.taskConversationId && services.auth.conversation(principal, target.taskConversationId).ownerUserId !== principal.userId) return false;
         if (target.kind === 'approval') { const approval = services.store.get<P.Approval>('approvals', target.approvalId); if (!approval || approval.botId !== target.botId || approval.entryId !== target.entryId || approval.conversationId !== target.conversationId || !services.auth.canRead(principal, 'approvals', approval)) return false; }
         if (target.kind === 'machine') services.auth.machine(principal, target.machineId);
-        if (target.kind === 'routine') { const routine = services.store.get<P.Routine>('routines', target.routineId); if (!routine || routine.botId !== target.botId || !services.auth.canRead(principal, 'routines', routine)) return false; if (target.routineRunId) { const run = services.store.get<P.RoutineRun>('routineRuns', target.routineRunId); if (!run || run.routineId !== routine.id || !services.auth.canRead(principal, 'routineRuns', run)) return false; } }
+        if (target.kind === 'routine') { const routine = services.store.get<P.Routine>('routines', target.routineId); if (!routine || routine.ownerUserId !== principal.userId || routine.botId !== target.botId || !services.auth.canRead(principal, 'routines', routine)) return false; if (target.routineRunId) { const run = services.store.get<P.RoutineRun>('routineRuns', target.routineRunId); if (!run || run.routineId !== routine.id || !services.auth.canRead(principal, 'routineRuns', run)) return false; } }
         return true;
       } catch { return false; }
     }

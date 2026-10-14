@@ -7,7 +7,7 @@ import type * as P from '../../../contracts/protocol';
 import type { BackendServices, Principal } from '../../src/core/services';
 import { apnsToken, createPushServices, encryptWebPush, isPublicPushAddress, validatePushRegistration, vapidToken } from '../../src/integrations/push';
 import { createPrivateCodec } from '../../src/core/config';
-import { closeFixture, entityStore, fixture as channelFixture } from './channels-fixture';
+import { additionalOwner, closeFixture, entityStore, fixture as channelFixture } from './channels-fixture';
 
 const now = 1_791_940_000_000;
 const scalar = (n: number) => { const b=Buffer.alloc(32);b[31]=n;return b; };
@@ -136,6 +136,27 @@ describe('push registration SSRF and delivery authorization',()=>{
       (f:PushFixture)=>{f.metadata.set('deny',true);},
       (f:PushFixture)=>{f.metadata.set('denyAccess',true);},
     ]) {const f=fixture();change(f);let sends=0;const push=createPushServices(f.services,{env:vapidEnv,resolve:publicDNS,sendWebPush:async()=>{sends++;return{status:201};}});await push.emitProviderNotifications(f.notification);expect(sends).toBe(0);}
+  });
+  test('an administrator recipient cannot receive another owner’s Bot notification or private context', async () => {
+    const f = fixture(), source = f.services.store.require<P.Bot>('bots', 'bot');
+    const foreign = additionalOwner(f.services, source, 'foreign', 'owner');
+    f.change<P.Member>('members', 'member', value => { value.role = 'owner'; });
+    const entry: P.TranscriptEntry = { ...f.services.store.require<P.TranscriptEntry>('entries', 'entry'), id: 'foreign-entry', conversationId: foreign.bot.mainConversationId };
+    f.services.store.put('entries', entry);
+    Object.assign(f.notification, { botId: foreign.bot.id, conversationId: foreign.bot.mainConversationId, entryId: entry.id, target: { kind: 'entry', botId: foreign.bot.id, conversationId: foreign.bot.mainConversationId, taskConversationId: null, entryId: entry.id } });
+    let requests = 0;
+    const push = createPushServices(f.services, { env: vapidEnv, resolve: publicDNS, sendWebPush: async () => { requests++; return { status: 201 }; } });
+    await push.emitProviderNotifications(f.notification);
+    expect(requests).toBe(0); expect(f.metadata.get('devicePush:device')).not.toBeNull();
+  });
+  test('current Bot ownership is rechecked after DNS and cannot be replaced by recipient administrator authority', async () => {
+    const f = fixture(), source = f.services.store.require<P.Bot>('bots', 'bot');
+    const foreign = additionalOwner(f.services, source, 'foreign', 'owner');
+    f.change<P.Member>('members', 'member', value => { value.role = 'owner'; });
+    let requests = 0;
+    const push = createPushServices(f.services, { env: vapidEnv, resolve: async () => { f.change<P.Bot>('bots', source.id, value => { value.ownerUserId = foreign.principal.userId; }); return publicDNS(); }, sendWebPush: async () => { requests++; return { status: 201 }; } });
+    await push.emitProviderNotifications(f.notification);
+    expect(requests).toBe(0); expect(f.metadata.get('devicePush:device')).not.toBeNull();
   });
   test('revocation during DNS resolution prevents dispatch, and replacement registration survives old invalidation',async()=>{
     const f=fixture();let sends=0;const push=createPushServices(f.services,{env:vapidEnv,resolve:async()=>{f.change<SessionSecretFixture>('sessionSecrets', 'device', value => { value.revoked = true; });return publicDNS();},sendWebPush:async()=>{sends++;return{status:201};}});await push.emitProviderNotifications(f.notification);expect(sends).toBe(0);
