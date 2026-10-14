@@ -360,6 +360,26 @@ describe('destination connector configuration', () => {
     expect(await f.connectors.connectorProfileConfiguration(f.principal('alice'), f.bot.id, 'room-alice', 'off-operation')).toEqual([]);
   });
 
+  test('pending owner grant cutover provisions desired aliases while live invocation authority remains fenced', async () => {
+    const f = await fixture();
+    const connector = (await f.enable((await f.create()).body.connector)).body;
+    const grant = f.connectors.grantFor(connector)!;
+    const requested = f.services.update(grant, { requestedLevel: 'read_only' as const });
+    f.store.put('botGrants', requested);
+    f.store.setMetadata(`botPolicySync:${f.bot.id}`, { state: 'pending', grantId: grant.id, revision: requested.revision });
+    expect(await f.connectors.connectorProfileConfiguration(f.principal('alice'), f.bot.id, 'room-alice', 'pending-operation')).toEqual([]);
+    await f.connectors.connectorProvisioning(f.principal('alice'), f.bot.id);
+    const templates = await f.connectors.connectorTemplates(f.bot.id);
+    expect(templates[0]?.enabledTools).toEqual(['read_items']);
+    expect(f.peer.profiles.get(f.bot.profileId)?.find(server => server.name === `connector-${connector.id}`)?.enabledTools).toEqual(['read_items']);
+    expect(await f.connectors.connectorProfileConfiguration(f.principal('alice'), f.bot.id, 'room-alice', 'still-pending-operation')).toEqual([]);
+    f.store.setMetadata(`botPolicySync:${f.bot.id}`, { state: 'acknowledged', grantId: grant.id, revision: requested.revision });
+    expect((await f.connectors.connectorProfileConfiguration(f.principal('alice'), f.bot.id, 'room-alice', 'acknowledged-operation'))[0]?.enabledTools).toEqual(['read_items']);
+    f.store.setMetadata('policies', { revision: 1, publicTemplates: false, allowedMcpOrigins: null, localExecutionCeiling: 'deny', actionRecording: false, auditRetentionDays: 90, rules: [] } satisfies P.Policies);
+    expect((await f.connectors.connectorTemplates(f.bot.id))[0]?.enabledTools).toEqual([]);
+    expect(await f.connectors.connectorProfileConfiguration(f.principal('alice'), f.bot.id, 'room-alice', 'policy-denied-operation')).toEqual([]);
+  });
+
   test('foreign CRUD, provisioning and mismatched account ownership dispatch nothing', async () => {
     const f = await fixture();
     const connector = (await f.create()).body.connector;

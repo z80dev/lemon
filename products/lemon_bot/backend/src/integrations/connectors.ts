@@ -8,7 +8,7 @@ import { ApiError, fail } from '../core/errors';
 import { pinnedUrl, privateMetadata, savePrivateMetadata, principal, userPrincipal, sha256, isPublicAddress, assertActiveAccount } from './common';
 import { integrationConfiguration, type ConnectorProvider } from './config';
 import { startOAuth, takeOAuthState, exchangeOAuth, markOAuthInstalled, oauthTokenClientDigest, type OAuthCompletion, type OAuthExchangeOperation } from './oauth';
-import { effectiveBotGrants } from '../core/experiences';
+import { desiredBotGrants, effectiveBotGrants } from '../core/experiences';
 import { baseBotMcpTemplate } from '../core/bots';
 import { revokeOAuthCompletion, reconcileOAuthRevocation, type OAuthRevocationReceipt } from './oauth-revocation';
 import { effectiveInvocationAudience, type InvocationMcpServer } from '../runtime/runs';
@@ -160,7 +160,8 @@ export function createConnectorServices(services: BackendServices) {
   }
   async function connectorTemplates(botId: string): Promise<InvocationMcpServer[]> {
     const bot = services.store.require<P.Bot>('bots', botId);
-    const grants = await connectorGrants(userPrincipal(services, bot.ownerUserId), bot);
+    const capabilities = services.store.get<P.MachineCapabilities>('machineCapabilities', bot.machineId) ?? undefined;
+    const grants = await desiredBotGrants(services, userPrincipal(services, bot.ownerUserId), bot, capabilities);
     const result: InvocationMcpServer[] = [];
     for (const connector of services.store.list<P.Connector>('connectors', value => value.botId === botId && value.state !== 'disconnected' && value.state !== 'blocked')) {
       assertAccountOwner(connector);
