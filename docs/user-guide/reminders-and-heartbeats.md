@@ -124,6 +124,48 @@ change the server's timezone or `TZ` environment variable to evaluate jobs.
 Telegram `/remind`, heartbeats, and the daily brief keep using server-local
 time unless their underlying job is explicitly changed.
 
+### Product routine admission
+
+An operator can attach a private admission callback to a profile-backed agent
+job. The existing cron scheduler checks it before every scheduled, manual,
+wake, or retry dispatch. This lets a product enforce the creator's current
+account status, workspace governance, bot availability, and spending policy
+without creating another scheduler or trusting browser credentials.
+
+First allow the backend's exact origin when starting Lemon:
+
+```bash
+export LEMON_CRON_ADMISSION_ALLOWED_ORIGINS=https://bot.example.com
+```
+
+Multiple origins are comma-separated. HTTPS is required outside loopback.
+For local development, an explicitly allowlisted `http://127.0.0.1:<port>` or
+`http://[::1]:<port>` is also allowed. `localhost`, other loopback addresses,
+wildcards, HTTP DNS hosts, and redirects are not accepted. The callback URL
+cannot contain userinfo, a query, or a fragment. The allowlist is checked again
+for each dispatch; removing trust prevents later launches.
+
+The trusted backend provisions a dedicated per-routine token with the
+admin-only `cron.admission.set` RPC, then sets the job's private `admission`
+configuration using `cron.add` or `cron.update`. That token is stored encrypted
+on the controller and read only from its secret store, never environment or
+external fallback. No token, secret reference, or callback configuration is
+returned by job lists/events/audits or copied into run history. Public job
+responses expose only `admissionConfigured`.
+
+The backend receives a read-only admission request bound to the actual job,
+profile, routine, creator, workspace, and fixed cron/router run IDs. It must
+authenticate the dedicated token, independently check that context, and echo
+the exact request context with its decision. A denied decision records a
+failed run with outcome `denied`. A timeout, disconnect, malformed/mismatched
+reply, missing secret, or untrusted origin records `admission_unavailable`.
+Neither outcome submits a router run or creates automatic retries. The next
+ordinary scheduled occurrence checks admission again. Jobs without a callback
+keep their existing execution behavior.
+
+See the [controller admission API](../../apps/lemon_control_plane/README.md#private-cron-admission)
+for the exact integration schema.
+
 ## Coding goals and scheduled coding jobs
 
 Goals and prompt cron jobs execute real native coding sessions, with the same

@@ -1020,37 +1020,21 @@ defmodule LemonAutomation.CronManager do
     manager = self()
 
     fun = fn ->
-      case preflight_mod().check(job) do
+      case check_admission(job, run) do
         :ok ->
-          case CronJob.execution_mode(job) do
-            :command ->
-              command_runner().submit(job, run, run_id: run.run_id)
+          submit_preflighted_run(job, run, manager)
 
-            :agent ->
-              run_submitter().submit(job, run,
-                run_id: run.run_id,
-                append_memory: false,
-                on_submitting: fn router_id, session_key ->
-                  GenServer.call(
-                    manager,
-                    {:claim_submission, run.id, router_id, session_key},
-                    @call_timeout_ms
-                  )
-                end
-              )
-          end
-
-        {:skip, failure} ->
-          CronStore.record_audit(:preflight_failed, %{
+        {:error, outcome} ->
+          CronStore.record_audit(:admission_failed, %{
             job_id: job.id,
             run_id: run.id,
             router_run_id: run.run_id,
             source: :cron_manager,
             triggered_by: run.triggered_by,
-            reason: CronPreflight.format_failure(failure)
+            reason: outcome
           })
 
-          {:preflight_skip, failure}
+          {:admission_failed, outcome}
       end
     end
 
@@ -1070,6 +1054,57 @@ defmodule LemonAutomation.CronManager do
           )
 
         state
+    end
+  end
+
+  defp check_admission(%CronJob{admission: nil}, _run), do: :ok
+
+  defp check_admission(job, run) do
+    admission = Application.get_env(:lemon_automation, :cron_admission_mod, LemonAutomation.CronAdmission)
+
+    case admission.check(job, run) do
+      :ok -> :ok
+      {:error, :denied} -> {:error, :denied}
+      _ -> {:error, :admission_unavailable}
+    end
+  rescue
+    _ -> {:error, :admission_unavailable}
+  catch
+    _, _ -> {:error, :admission_unavailable}
+  end
+
+  defp submit_preflighted_run(job, run, manager) do
+    case preflight_mod().check(job) do
+      :ok ->
+        case CronJob.execution_mode(job) do
+          :command ->
+            command_runner().submit(job, run, run_id: run.run_id)
+
+          :agent ->
+            run_submitter().submit(job, run,
+              run_id: run.run_id,
+              append_memory: false,
+              on_submitting: fn router_id, session_key ->
+                GenServer.call(
+                  manager,
+                  {:claim_submission, run.id, router_id, session_key},
+                  @call_timeout_ms
+                )
+              end
+            )
+        end
+
+      {:skip, failure} ->
+        CronStore.record_audit(:preflight_failed, %{
+          job_id: job.id,
+          run_id: run.id,
+          router_run_id: run.run_id,
+          source: :cron_manager,
+          triggered_by: run.triggered_by,
+          reason: CronPreflight.format_failure(failure)
+        })
+
+        {:preflight_skip, failure}
     end
   end
 
@@ -1275,6 +1310,13 @@ defmodule LemonAutomation.CronManager do
     |> then(&%{&1 | meta: Map.put(&1.meta || %{}, :preflight_failure, failure)})
   end
 
+  defp terminal_result(run, {:admission_failed, outcome})
+       when outcome in [:denied, :admission_unavailable] do
+    run
+    |> CronRun.fail(Atom.to_string(outcome))
+    |> then(&%{&1 | meta: Map.put(&1.meta || %{}, :admission_outcome, outcome)})
+  end
+
   defp terminal_result(run, {:error, error}), do: CronRun.fail(run, to_error(error))
 
   defp terminal_result(run, other),
@@ -1469,6 +1511,7 @@ defmodule LemonAutomation.CronManager do
   # re-checks.
   defp retryable_run?(%CronRun{status: status, triggered_by: triggered_by} = run) do
     is_nil(meta_value(run.meta, :preflight_failure)) and
+      is_nil(meta_value(run.meta, :admission_outcome)) and
       meta_value(run.meta, :abort_requested) != true and
       status in [:failed, :timeout] and triggered_by in [:schedule, :retry]
   end
@@ -1616,6 +1659,8 @@ defmodule LemonAutomation.CronManager do
     with {:ok, params} <- validate_patch_target(job, params),
          {:ok, params} <-
            validate_feature_fields(params, CronJob.execution_mode(job), job.id, job.timezone),
+         {:ok, params} <-
+           validate_admission_field(params, CronJob.execution_mode(job), job.profile_id, job.admission),
          {:ok, params} <- normalize_schedule_patch(params) do
       {:ok, params}
     end
@@ -1625,8 +1670,10 @@ defmodule LemonAutomation.CronManager do
     mode = if present?(params[:command] || params["command"]), do: :command, else: :agent
     job_id = params[:id] || params["id"]
 
-    case validate_feature_fields(params, mode, job_id) do
-      {:ok, params} -> {:ok, params}
+    with {:ok, params} <- validate_feature_fields(params, mode, job_id),
+         {:ok, params} <- validate_admission_field(params, mode, nil, nil) do
+      {:ok, params}
+    else
       {:invalid_target, reason} -> {:error, {:invalid_target, reason}}
     end
   end
@@ -1662,6 +1709,34 @@ defmodule LemonAutomation.CronManager do
 
       {:error, :timezone_unavailable} ->
         {:invalid_target, "Timezone database is unavailable"}
+    end
+  end
+
+  defp validate_admission_field(params, mode, default_profile, default_admission) do
+    profile =
+      case fetch_param(params, :profile_id) do
+        :error -> default_profile
+        {:ok, value} -> value
+      end
+
+    admission =
+      case fetch_param(params, :admission) do
+        :error -> default_admission
+        {:ok, value} -> value
+      end
+
+    if not is_nil(admission) and mode != :agent do
+      {:invalid_target, "Admission callbacks require a profile agent job"}
+    else
+      case LemonAutomation.CronAdmission.validate(admission, profile) do
+        {:ok, canonical} ->
+          if fetch_param(params, :admission) == :error,
+            do: {:ok, params},
+            else: {:ok, params |> Map.delete("admission") |> Map.put(:admission, canonical)}
+
+        {:error, reason} ->
+          {:invalid_target, reason}
+      end
     end
   end
 

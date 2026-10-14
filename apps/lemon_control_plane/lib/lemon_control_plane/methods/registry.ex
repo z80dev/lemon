@@ -121,6 +121,7 @@ defmodule LemonControlPlane.Methods.Registry do
     LemonControlPlane.Methods.CronList,
     LemonControlPlane.Methods.CronAdd,
     LemonControlPlane.Methods.CronUpdate,
+    LemonControlPlane.Methods.CronAdmissionSet,
     LemonControlPlane.Methods.CronPause,
     LemonControlPlane.Methods.CronResume,
     LemonControlPlane.Methods.CronAbort,

@@ -10,6 +10,9 @@ defmodule LemonAutomation.CronJob do
   - `:enabled` - Whether the job is active
   - `:agent_id` - Target agent for prompt jobs
   - `:profile_id` - Optional profile resolved at execution time for placement/persona
+  - `:admission` - Optional private admission callback configuration.
+    Tokens live in the encrypted controller secret store; callback configuration
+    is never returned in public job projections. See `LemonAutomation.CronAdmission`.
   - `:session_key` - Session key for prompt-job routing
   - `:prompt` - The prompt to send to the agent
   - `:command` - Optional operator-owned shell command for no-agent jobs
@@ -81,6 +84,7 @@ defmodule LemonAutomation.CronJob do
     :schedule,
     :agent_id,
     :profile_id,
+    :admission,
     :session_key,
     :prompt,
     :command,
@@ -114,6 +118,7 @@ defmodule LemonAutomation.CronJob do
           enabled: boolean(),
           agent_id: binary() | nil,
           profile_id: binary() | nil,
+          admission: map() | nil,
           session_key: binary() | nil,
           prompt: binary() | nil,
           command: binary() | nil,
@@ -153,6 +158,7 @@ defmodule LemonAutomation.CronJob do
       enabled: get_attr(attrs, :enabled, true),
       agent_id: get_attr(attrs, :agent_id),
       profile_id: get_attr(attrs, :profile_id),
+      admission: get_attr(attrs, :admission),
       session_key: get_attr(attrs, :session_key),
       prompt: get_attr(attrs, :prompt),
       command: get_attr(attrs, :command),
@@ -192,6 +198,7 @@ defmodule LemonAutomation.CronJob do
         schedule: get_attr(attrs, :schedule, job.schedule),
         enabled: get_attr(attrs, :enabled, job.enabled),
         profile_id: get_attr(attrs, :profile_id, job.profile_id),
+        admission: get_attr(attrs, :admission, job.admission),
         prompt: get_attr(attrs, :prompt, job.prompt),
         command: get_attr(attrs, :command, job.command),
         cwd: get_attr(attrs, :cwd, job.cwd),
@@ -254,6 +261,7 @@ defmodule LemonAutomation.CronJob do
       enabled: job.enabled,
       agent_id: job.agent_id,
       profile_id: job.profile_id,
+      admission_configured: not is_nil(job.admission),
       session_key: job.session_key,
       prompt: job.prompt,
       command: job.command,
@@ -280,6 +288,12 @@ defmodule LemonAutomation.CronJob do
     }
   end
 
+  @doc false
+  @spec to_storage_map(t()) :: map()
+  def to_storage_map(%__MODULE__{} = job) do
+    Map.put(to_map(job), :admission, job.admission)
+  end
+
   @doc """
   Restore a CronJob from a persisted map.
   """
@@ -293,6 +307,7 @@ defmodule LemonAutomation.CronJob do
       agent_id: get_attr(map, :agent_id),
       profile_id: get_attr(map, :profile_id),
       session_key: get_attr(map, :session_key),
+      admission: get_attr(map, :admission),
       prompt: get_attr(map, :prompt),
       command: get_attr(map, :command),
       cwd: get_attr(map, :cwd),

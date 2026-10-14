@@ -466,6 +466,9 @@ defmodule LemonControlPlane.Protocol.Schemas do
       }
     },
     "cron.status" => %{optional: %{}},
+    "cron.admission.set" => %{
+      required: %{"routineId" => :string, "token" => :string}
+    },
     "cron.add" => %{
       required: %{
         "name" => :string,
@@ -474,6 +477,7 @@ defmodule LemonControlPlane.Protocol.Schemas do
       optional: %{
         "agentId" => :string,
         "profileId" => :string,
+        "admission" => :map,
         "sessionKey" => :string,
         "prompt" => :string,
         "command" => :string,
@@ -496,6 +500,7 @@ defmodule LemonControlPlane.Protocol.Schemas do
         "name" => :string,
         "schedule" => :string,
         "enabled" => :boolean,
+        "admission" => :map,
         "prompt" => :string,
         "command" => :string,
         "cwd" => :string,
