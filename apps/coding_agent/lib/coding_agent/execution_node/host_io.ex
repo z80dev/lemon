@@ -194,12 +194,9 @@ defmodule CodingAgent.ExecutionNode.HostIO do
   end
 
   defp dispatch("node.secrets.list", _args, opts) do
-    with {:ok, entries} <- Secrets.list(secret_opts(opts)) do
-      {:ok, %{"names" => entries |> Enum.take(@list_limit) |> Enum.map(& &1.name),
-              "limit" => @list_limit, "truncated" => length(entries) > @list_limit}}
-    else
-      {:error, reason} -> {:error, secret_error(reason)}
-    end
+    {:ok, entries} = Secrets.list(secret_opts(opts))
+    {:ok, %{"names" => entries |> Enum.take(@list_limit) |> Enum.map(& &1.name),
+            "limit" => @list_limit, "truncated" => length(entries) > @list_limit}}
   end
 
   defp dispatch("node.secrets.delete", args, opts) do
@@ -221,12 +218,12 @@ defmodule CodingAgent.ExecutionNode.HostIO do
   defp valid_path(_), do: {:error, :invalid_path}
 
   defp default_cwd(opts) do
-    cwd = Keyword.get(opts, :default_cwd) || System.user_home!()
+    cwd = Keyword.get(opts, :default_cwd) || home(opts)
     with :ok <- valid_path(cwd), do: {:ok, Path.expand(cwd)}
   end
 
   defp allowed_roots(opts) do
-    roots = Keyword.get(opts, :allowed_roots, [System.user_home!()])
+    roots = Keyword.get(opts, :allowed_roots, [home(opts)])
     if is_list(roots) and roots != [] and length(roots) <= 64 do
       Enum.reduce_while(roots, {:ok, []}, fn root, {:ok, acc} ->
         with :ok <- valid_path(root),
@@ -242,6 +239,8 @@ defmodule CodingAgent.ExecutionNode.HostIO do
       {:error, :invalid_allowed_roots}
     end
   end
+
+  defp home(opts), do: Keyword.get(opts, :home) || System.user_home!()
 
   defp inside?(path, root), do: path == root or String.starts_with?(path, if(root == "/", do: "/", else: root <> "/"))
 

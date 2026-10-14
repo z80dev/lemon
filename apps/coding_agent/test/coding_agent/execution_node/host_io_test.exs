@@ -18,9 +18,9 @@ defmodule CodingAgent.ExecutionNode.HostIOTest do
     %{home: home, outside: outside, opts: opts}
   end
 
-  test "home is the default root, not the worker cwd", %{outside: outside} do
-    assert {:ok, _} = HostIO.resolve(System.user_home!(), [])
-    assert {:error, :path_not_allowed} = HostIO.resolve(outside, default_cwd: outside)
+  test "home is the default root, not the worker cwd", %{home: home, outside: outside} do
+    assert {:ok, ^home} = HostIO.resolve(home, home: home)
+    assert {:error, :path_not_allowed} = HostIO.resolve(outside, home: home, default_cwd: outside)
   end
 
   test "rejects traversal, sibling prefix collisions and caller policy overrides", ctx do

@@ -177,6 +177,7 @@ defmodule LemonControlPlane.Methods.NodePairInviteTest do
 
   @tag :tmp_dir
   test "real WebSocket enrollment rejects generic mutations and completes worker enrollment", %{name: name, tmp_dir: tmp_dir} do
+    Process.flag(:trap_exit, true)
     bandit = start_supervised!({Bandit, plug: LemonControlPlane.HTTP.Router, ip: {127, 0, 0, 1}, port: 0, startup_log: false})
     assert {:ok, {{127, 0, 0, 1}, port}} = ThousandIsland.listener_info(bandit)
     url = "ws://127.0.0.1:#{port}/ws"
@@ -192,6 +193,7 @@ defmodule LemonControlPlane.Methods.NodePairInviteTest do
     assert_receive {:execution_node_socket, ^socket, {:response, :wrong_name, {:error, _}}}, 3_000
     {:ok, unauthed} = Socket.start_link(owner: self(), url: url, connect_params: %{"role" => "enrollment"})
     assert_receive {:execution_node_socket, ^unauthed, {:authentication_error, _}}, 3_000
+    assert_receive {:EXIT, ^unauthed, {:local, 1008, "authentication failed"}}, 3_000
     {:ok, operator} = Socket.start_link(owner: self(), url: url, connect_params: %{"role" => "operator", "auth" => %{"token" => "invite-test-operator"}})
     on_exit(fn -> if Process.alive?(operator), do: Socket.stop(operator) end)
     assert_receive {:execution_node_socket, ^operator, {:connected, _}}, 3_000
