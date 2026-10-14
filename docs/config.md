@@ -52,6 +52,8 @@ thinking_level = "medium"
 enabled = true
 reserve_tokens = 16384
 keep_recent_tokens = 20000
+# threshold_percent = 80      # optional: compact above 80% of the context window
+# threshold_tokens = 150000   # optional: fixed token threshold (overrides percent)
 
 [runtime.retry]
 # Session-level retry of transient provider failures (429, 5xx, overloaded,
@@ -1061,7 +1063,11 @@ max_tool_invoke_depth = 4
 - `runtime.tools.web`: `websearch` / `webfetch` providers, guardrails, cache, and Firecrawl fallback.
 - `runtime.tools.wasm`: WASM sidecar runtime controls and discovery paths.
 - `profiles.<agent_id>`: assistant profiles (identity + defaults) used by gateway/control-plane.
-- `runtime.compaction`: context compaction settings.
+- `runtime.compaction`: context compaction settings. Automatic compaction runs when the request
+  exceeds the context window minus `reserve_tokens`. Optional `threshold_percent` (integer 1–100,
+  percent of the window) or `threshold_tokens` (positive integer; wins over the percent) lower that
+  threshold; they never raise it above the reserve limit. Invalid values fail config validation.
+  `/context` and `sessions.context` report the effective threshold.
 - `runtime.retry`: session retry of transient provider failures (backoff + retry-after).
 - `runtime.max_tool_turns`: optional per-prompt cap on tool-using turns (default unlimited).
 - `tui`: terminal UI settings.

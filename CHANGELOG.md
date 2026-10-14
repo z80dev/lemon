@@ -10,6 +10,13 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- **Session lifecycle parity.** `lemon sessions export` and `/session export`
+  gain `html` (self-contained, escaped, no scripts) and `jsonl` formats;
+  `sessions.context` returns session usage (tokens, estimated cost, input/output/
+  cache) shown by `/context` and `/session info`; `[runtime.compaction]` accepts
+  `threshold_percent` and `threshold_tokens`; context-overflow recovery now uses
+  the structured provider error classification before text matching.
+
 - **Lemon Web, rebuilt.** The browser UI is now a full workspace on the same
   control-plane methods and events as the TUI. Chat streams Markdown with
   highlighted code, thinking blocks and rich tool cards (shell output and exit

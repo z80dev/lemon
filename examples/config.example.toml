@@ -123,6 +123,10 @@ extension_paths = []
 enabled = true
 reserve_tokens = 16384
 keep_recent_tokens = 20000
+# Optional earlier trigger. threshold_tokens (fixed count) overrides threshold_percent
+# (1-100% of the model's context window); both are capped by window - reserve_tokens.
+# threshold_percent = 80
+# threshold_tokens = 150000
 
 [runtime.retry]
 enabled = true
