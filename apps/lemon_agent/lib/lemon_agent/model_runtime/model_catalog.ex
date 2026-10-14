@@ -9,7 +9,7 @@ defmodule LemonAgent.ModelRuntime.ModelCatalog do
   across Telegram transport modules in `lemon_channels`.
   """
 
-  alias LemonAgent.ModelRuntime.Credentials
+  alias LemonAgent.ModelRuntime.{Credentials, ProviderNames}
   alias LemonCore.Config
   alias LemonCore.Secrets
 
@@ -45,6 +45,14 @@ defmodule LemonAgent.ModelRuntime.ModelCatalog do
   `:config` may provide a resolved config/settings map. Codex discovery uses the
   same first healthy credential as native requests; the registry remains static
   for other providers unless `:discover_openai` is explicitly enabled.
+
+  OpenAI-compatible presets (`LemonAi.Models.Presets`) contribute the models
+  their endpoint serves: cloud presets once a credential resolves, local
+  servers (Ollama, LM Studio, llama.cpp, vLLM, LiteLLM) only when configured
+  under `[providers.<id>]` or through their base-URL environment variable.
+  Listings run concurrently, are cached for five minutes, and are bounded by
+  `:preset_discovery_timeout_ms` (default 2000); an unreachable endpoint
+  contributes no models. `:preset_req_options` passes `Req` options (tests).
   """
   @spec available_models(keyword()) :: [LemonAi.Types.Model.t()]
   def available_models(opts \\ []) do
@@ -73,9 +81,51 @@ defmodule LemonAgent.ModelRuntime.ModelCatalog do
       codex_force_refresh: Keyword.get(opts, :force_refresh, false),
       codex_req_options: Keyword.get(opts, :codex_req_options, [])
     )
+    |> Kernel.++(preset_models(cfg, enabled, opts))
     |> Enum.filter(&MapSet.member?(enabled, normalize_provider_name(&1.provider)))
     |> Enum.reject(&picker_model_blocked?(normalize_provider_name(&1.provider), &1.id))
   end
+
+  @preset_discovery_timeout_ms 2_000
+
+  defp preset_models(cfg, enabled, opts) do
+    providers = Map.get(cfg, :providers) || %{}
+    timeout = Keyword.get(opts, :preset_discovery_timeout_ms, @preset_discovery_timeout_ms)
+
+    targets =
+      LemonAi.Models.Presets.all()
+      |> Enum.filter(&MapSet.member?(enabled, normalize_provider_name(&1.id)))
+      |> Enum.flat_map(fn preset ->
+        case ProviderNames.provider_config(providers, preset.id) do
+          nil when preset.local -> []
+          provider_cfg -> [{preset.id, provider_cfg || %{}}]
+        end
+      end)
+
+    get_api_key = if targets != [], do: Credentials.build_get_api_key(cfg)
+
+    targets
+    |> Task.async_stream(
+      fn {preset, provider_cfg} ->
+        LemonAi.Models.discover_preset(preset,
+          base_url: config_value(provider_cfg, :base_url),
+          api_key: get_api_key.(preset),
+          timeout_ms: timeout,
+          force_refresh: Keyword.get(opts, :force_refresh, false),
+          req_options: Keyword.get(opts, :preset_req_options, [])
+        )
+      end,
+      max_concurrency: max(length(targets), 1),
+      timeout: timeout + 500,
+      on_timeout: :kill_task
+    )
+    |> Enum.flat_map(fn
+      {:ok, {:ok, models}} -> models
+      _ -> []
+    end)
+  end
+
+  defp config_value(cfg, key), do: Map.get(cfg, key) || Map.get(cfg, Atom.to_string(key))
 
   @doc "Provider ids present in a catalog, in display order."
   @spec providers([provider_group()]) :: [String.t()]

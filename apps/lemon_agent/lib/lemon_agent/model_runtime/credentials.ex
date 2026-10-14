@@ -332,8 +332,9 @@ defmodule LemonAgent.ModelRuntime.Credentials do
       "bedrock_converse_stream" ->
         bedrock_credentials_available?(provider_cfg, opts)
 
-      _ ->
-        present_value?(resolve_provider_api_key(provider, provider_cfg, provider_cfg: true))
+      canonical ->
+        ProviderNames.keyless?(canonical) or
+          present_value?(resolve_provider_api_key(provider, provider_cfg, provider_cfg: true))
     end
   end
 
