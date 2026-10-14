@@ -421,6 +421,39 @@ defmodule LemonAgent.ModelRuntime.CredentialsTest do
       refute_received :token_request
     end
 
+    test "configured OAuth refresh takes precedence over an ambient API key" do
+      System.put_env("GITHUB_COPILOT_API_KEY", "ambient-key")
+
+      assert {:ok, _} =
+               Secrets.set(
+                 "llm_github_copilot_api_key",
+                 Jason.encode!(%{
+                   "type" => "github_copilot_oauth",
+                   "refresh_token" => "github-token",
+                   "access_token" => "copilot-rejected",
+                   "expires_at_ms" => System.system_time(:millisecond) + 3_600_000
+                 })
+               )
+
+      Req.Test.stub(__MODULE__, fn conn ->
+        Req.Test.json(conn, %{
+          "token" => "copilot-forced",
+          "expires_at" => div(System.system_time(:millisecond), 1000) + 3600
+        })
+      end)
+
+      assert {:ok, "copilot-forced"} =
+               Credentials.refresh_provider_api_key(
+                 %{"github_copilot" => %{auth_source: "oauth"}},
+                 :github_copilot,
+                 "default",
+                 "copilot-rejected"
+               )
+
+      assert {:error, :not_refreshable} =
+               Credentials.refresh_provider_api_key(%{}, :github_copilot, "default", "ambient-key")
+    end
+
     test "a rejected refresh fails with a bare reason and never returns the old key" do
       assert {:ok, _} = Secrets.set("llm_anthropic_api_key", anthropic_login(3_600_000))
 
