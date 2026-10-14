@@ -94,34 +94,53 @@ defmodule CodingAgent.Tools.TaskRuntimeParityTest do
   end
 
   describe "persona and config defaults" do
-    test "persona thinking level and output schema apply unless explicitly overridden" do
-      persona = persona(%{role: "coding", thinking_level: "high", output_schema: @schema})
+    @tag :tmp_dir
+    test "persona thinking level and output schema apply unless explicitly overridden", %{
+      tmp_dir: cwd
+    } do
+      define(cwd, "planner", """
+      description: Planner
+      role: coding
+      thinking: high
+      output:
+        type: object
+        required: [answer]
+        properties:
+          answer:
+            type: integer
+        additionalProperties: false
+      """)
 
-      launch = Params.persona_launch(persona, %{}, settings().task, 0)
-      assert launch.thinking_level == "high"
-      assert launch.output_schema == @schema
-      assert launch.model == "@coding"
+      session_settings = %{settings() | model_roles: %{"coding" => "openai:gpt-4o-mini"}}
 
-      explicit =
-        Params.persona_launch(
-          persona,
-          %{thinking_level: "low", output_schema: false, model: "openai:gpt-4o"},
-          settings().task,
-          0
-        )
+      assert {:ok, validated} =
+               Params.validate_run_params(%{"prompt" => "Plan", "agent" => "planner"}, cwd,
+                 settings_manager: session_settings
+               )
+
+      assert validated.thinking_level == "high"
+      assert validated.output_schema == @schema
+      assert validated.model == "@coding"
+
+      assert {:ok, explicit} =
+               Params.validate_run_params(
+                 %{
+                   "prompt" => "Plan",
+                   "agent" => "planner",
+                   "thinking_level" => "low",
+                   "output_schema" => false,
+                   "model" => "openai:gpt-4o"
+                 },
+                 cwd,
+                 settings_manager: session_settings
+               )
 
       assert explicit.thinking_level == "low"
       assert explicit.output_schema == false
       assert explicit.model == "openai:gpt-4o"
 
-      validated = Map.merge(launch, %{persona: persona, name: nil})
-
-      session_settings = %SettingsManager{
-        model_roles: %{"coding" => "openai:gpt-4o-mini"}
-      }
-
       child_opts =
-        Params.build_session_opts("/tmp", [settings_manager: session_settings], validated)
+        Params.build_session_opts(cwd, [settings_manager: session_settings], validated)
 
       assert child_opts[:thinking_level] == "high"
       assert child_opts[:model].id == "gpt-4o-mini"
@@ -319,6 +338,60 @@ defmodule CodingAgent.Tools.TaskRuntimeParityTest do
       refute ToolPolicy.allowed?(restricted.tool_policy, "task")
     end
 
+    @tag :tmp_dir
+    test "a discovered spawns persona gets task in its child session with the allowlist", %{
+      tmp_dir: cwd
+    } do
+      define(cwd, "lead", """
+      description: Lead
+      tools: [read, bash]
+      spawns: [scout]
+      """)
+
+      assert {:ok, validated} =
+               Params.validate_run_params(%{"prompt" => "Lead", "agent" => "lead"}, cwd,
+                 settings_manager: settings()
+               )
+
+      assert ToolPolicy.allowed?(validated.tool_policy, "task")
+      refute ToolPolicy.allowed?(validated.tool_policy, "write")
+      assert validated.task_allowed_agents == ["scout"]
+
+      owner = self()
+      response = Mocks.mock_stream_fn_single(Mocks.assistant_message("done"))
+
+      opts =
+        base_opts(
+          model: @model,
+          stream_fn: fn model, context, options ->
+            send(owner, {:child_tools, Enum.map(context.tools, & &1.name)})
+            response.(model, context, options)
+          end
+        )
+
+      result =
+        execute(cwd, opts, %{
+          "prompt" => "Lead",
+          "agent" => "lead",
+          "async" => false,
+          "auto_followup" => false
+        })
+
+      assert result.details.status == "completed"
+      assert_receive {:child_tools, names}, 2_000
+      assert "task" in names
+      refute "write" in names
+
+      assert {:ok, capped} =
+               Params.validate_run_params(%{"prompt" => "Lead", "agent" => "lead"}, cwd,
+                 settings_manager: settings(),
+                 task_depth: 1
+               )
+
+      refute ToolPolicy.allowed?(capped.tool_policy, "task")
+      assert capped.task_allowed_agents == nil
+    end
+
     test "a child with a spawns allowlist must name an allowed agent" do
       opts =
         base_opts(
@@ -479,6 +552,12 @@ defmodule CodingAgent.Tools.TaskRuntimeParityTest do
       "async" => false,
       "auto_followup" => false
     }
+  end
+
+  defp define(cwd, id, frontmatter) do
+    dir = Path.join(cwd, ".lemon/agents")
+    File.mkdir_p!(dir)
+    File.write!(Path.join(dir, id <> ".md"), "---\n" <> frontmatter <> "---\nDo the work.\n")
   end
 
   defp persona(fields) do

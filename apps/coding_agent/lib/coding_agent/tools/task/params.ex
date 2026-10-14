@@ -93,6 +93,7 @@ defmodule CodingAgent.Tools.Task.Params do
     async? = Map.get(params, "async", true)
     auto_followup = Map.get(params, "auto_followup", true)
     worktree = Map.get(params, "worktree", false)
+    merge = Map.get(params, "merge")
     delegated_cwd = normalize_optional_string(Map.get(params, "cwd"))
     output_schema = Map.get(params, "output_schema")
     tool_policy = Map.get(params, "tool_policy")
@@ -166,6 +167,12 @@ defmodule CodingAgent.Tools.Task.Params do
       not is_boolean(worktree) ->
         {:error, "worktree must be a boolean"}
 
+      not is_nil(merge) and merge not in ["none", "patch", "branch"] ->
+        {:error, "merge must be one of: none, patch, branch"}
+
+      merge in ["patch", "branch"] and worktree != true ->
+        {:error, "merge=#{merge} requires worktree: true"}
+
       not valid_context?(context) ->
         {:error, "context must be a non-empty string of at most 64 KiB"}
 
@@ -204,6 +211,7 @@ defmodule CodingAgent.Tools.Task.Params do
              async: async?,
              auto_followup: auto_followup,
              worktree: worktree,
+             merge: merge,
              cwd: delegated_cwd,
              meta: meta || %{},
              session_key: session_key,
@@ -480,7 +488,7 @@ defmodule CodingAgent.Tools.Task.Params do
         "Top-level context is shared background prepended to every child's assignment.\n" <>
         "Workers are leaf-only unless tool_policy or persona spawns permits delegation, capped by " <>
         "[runtime.task].max_depth; scout/reviewer stay read-only. " <>
-        "Worktrees start at HEAD without uncommitted changes and are retained, not auto-merged.\n" <>
+        "Worktrees start at HEAD; merge=patch also copies uncommitted parent work and applies successful changes back (conflicts keep the patch), merge=branch commits them to a kept review branch, none retains the worktree.\n" <>
         "output_schema re-prompts invalid JSON up to twice; schema_mode=permissive then returns text " <>
         "with structured_output_error instead of failing.\n" <>
         "Message via agent_message or write agent://<name-or-id>, agent://parent, agent://all; " <>

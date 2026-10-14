@@ -44,6 +44,7 @@ defmodule CodingAgent.Tools.Task.Swarm do
       "schema_mode",
       "agent",
       "worktree",
+      "merge",
       "tool_policy",
       "context"
     ])
