@@ -3,24 +3,49 @@ import { createHash } from 'node:crypto';
 import type * as P from '../../../contracts/protocol';
 import type { Principal, Route } from '../../src/core/services';
 import { ApiError } from '../../src/core/errors';
-import { createBotRoutes, baseBotMcpConfig, syncBotProfile, createBotService, syncBotPolicyFloor } from '../../src/core/bots';
+import { createBotRoutes, baseBotMcpConfig, syncBotProfile, createBotService, syncBotPolicyFloor, productBotTools } from '../../src/core/bots';
 import { createConversationRoutes } from '../../src/core/conversations';
 import { createResourceRoutes } from '../../src/core/resources';
 import { authFixture, routeContext } from './auth.test';
 
-interface Call { method: string; params: Record<string, unknown> }
+interface Call { method: string; params: Record<string, unknown>; mutation: boolean }
+// Captured authenticated native mcp.execution_names DTO for lemon-bot at https://product.example/mcp.
+// Keep the fixture origin bound to this capture rather than synthesizing native aliases.
+const fixturePublicUrl = 'https://product.example';
+const projectedProductTools = [
+  { name: 'message_bot', executionName: 'mcp_lemon_bot_message_bot_e27f8366c893fc7d4ace784f51ce12a1' },
+  { name: 'handoff', executionName: 'mcp_lemon_bot_handoff_9f74e5f82ed019f6a9084a1daa468386' },
+  { name: 'create_draft', executionName: 'mcp_lemon_bot_create_draft_6e65809e9170b8c9b3cb0da09b714275' },
+  { name: 'ask_user', executionName: 'mcp_lemon_bot_ask_user_10d4fd7a91be9332225ab7a9f47f9f2f' },
+  { name: 'request_approval', executionName: 'mcp_lemon_bot_request_approval_ca54a9645adf9ba042f0e53146a13ee0' },
+  { name: 'request_human_step', executionName: 'mcp_lemon_bot_request_human_ste_688cee41cf6bff126499b440c3a8624c' },
+  { name: 'request_secret', executionName: 'mcp_lemon_bot_request_secret_c5d5dd62ffb1c7cd4ebdaf58ee1da740' },
+  { name: 'send_voice_memo', executionName: 'mcp_lemon_bot_send_voice_memo_94b772ea7c8f891201c61ad1c1a26482' },
+  { name: 'share_file', executionName: 'mcp_lemon_bot_share_file_768d74587235feb2e85ef683d4558c37' },
+  { name: 'create_routine', executionName: 'mcp_lemon_bot_create_routine_480cfac22f6df0d89908d166b1e80b6f' },
+  { name: 'update_routine', executionName: 'mcp_lemon_bot_update_routine_9243c6d1a2783406bed605d7ddf21a9d' },
+  { name: 'save_skill', executionName: 'mcp_lemon_bot_save_skill_ce8a3dbeea117002d1ccc85b12353fb5' },
+  { name: 'list_bots', executionName: 'mcp_lemon_bot_list_bots_151a36bf63151717e5c7dcf2f76752f2' },
+  { name: 'post_to_group', executionName: 'mcp_lemon_bot_post_to_group_f9eeb76c647b0739da6629d63799e809' },
+  { name: 'remember', executionName: 'mcp_lemon_bot_remember_88ac13cb8401ab72fbc6e5caeaedf539' },
+  { name: 'create_bot', executionName: 'mcp_lemon_bot_create_bot_4a92e9bba45de6978e230abb443d9321' },
+  { name: 'update_preferences', executionName: 'mcp_lemon_bot_update_preference_f55d35c688fc2ca9a6d77f7bb3c75d94' },
+  { name: 'create_reminder', executionName: 'mcp_lemon_bot_create_reminder_d1a7af45016ffbce56b89af97037eae8' },
+];
 function fixture() {
   const f = authFixture();
-  f.services.config.publicUrl = 'https://lemon.example';
+  f.services.config.publicUrl = fixturePublicUrl;
   const calls: Call[] = [];
   const profileRows = new Map<string, Record<string, unknown>>();
+  const hostFiles = new Map<string, { size: number; mtimeMs: number }>();
+  let hostRevision = 0;
   let reject: ((method: string, params: Record<string, unknown>) => void) | null = null;
   let nativePresence: { active: number; queued: number; unknown: number; idle: boolean; complete: boolean } | null = { active: 0, queued: 0, unknown: 0, idle: true, complete: true };
-  const methods = ['profiles.create', 'profiles.update', 'profiles.get', 'profiles.sync', 'profiles.sync.status', 'profiles.delete', 'profile.followup.admission.set', 'runs.followup.lineage.get', 'runs.active.list', 'memory.transfer', 'memory.transfer.status', 'memory.list', 'memory.delete', 'memory.add', 'nodes.list', 'node.capabilities.get', 'node.secrets.set', 'node.secrets.receipt', 'node.secrets.delete', 'node.host.info', 'node.profile.paths', 'node.fs.write', 'node.fs.delete', 'cron.pause', 'cron.resume', 'cron.add', 'cron.remove', 'sessions.delete'];
+  const methods = ['profiles.create', 'profiles.update', 'profiles.get', 'profiles.sync', 'profiles.sync.status', 'profiles.delete', 'mcp.execution_names', 'profile.followup.admission.set', 'runs.followup.lineage.get', 'runs.active.list', 'memory.transfer', 'memory.transfer.status', 'memory.list', 'memory.delete', 'memory.add', 'nodes.list', 'node.capabilities.get', 'node.secrets.set', 'node.secrets.receipt', 'node.secrets.delete', 'node.host.info', 'node.profile.paths', 'node.fs.stat', 'node.fs.write', 'node.fs.delete', 'cron.pause', 'cron.resume', 'cron.add', 'cron.remove', 'sessions.delete'];
   f.services.lemon = {
     connected: true, methods,
-    async call<T>(method: string, params: Record<string, unknown> = {}): Promise<T> {
-      calls.push({ method, params }); reject?.(method, params);
+    async call<T>(method: string, params: Record<string, unknown> = {}, options?: { mutation?: boolean }): Promise<T> {
+      calls.push({ method, params, mutation: options?.mutation === true }); reject?.(method, params);
       let value: unknown;
       if (method === 'profiles.create' || method === 'profiles.update') {
         const profileId = String(params.id);
@@ -39,15 +64,27 @@ function fixture() {
       else if (method === 'profiles.sync') value = { profileId: params.id, nodeId: params.nodeId, mutationId: params.mutationId, acknowledged: true, revisionDigest: 'a'.repeat(64) };
       else if (method === 'profiles.sync.status') value = { profileId: params.id, nodeId: params.nodeId, mutationId: params.mutationId, status: 'acknowledged', acknowledged: true, revisionDigest: 'a'.repeat(64) };
       else if (method === 'profile.followup.admission.set') value = { profileId: params.profileId, configured: true };
+      else if (method === 'mcp.execution_names') {
+        expect(params).toEqual({ server: { name: 'lemon-bot', url: `${fixturePublicUrl}/mcp` }, toolNames: [...productBotTools] });
+        value = { server: { name: 'lemon-bot' }, tools: projectedProductTools, count: projectedProductTools.length };
+      }
       else if (method === 'node.secrets.set') value = { name: params.name, set: true, operationId: params.operationId, status: 'applied', currentBindingMatches: true };
       else if (method === 'node.secrets.delete') value = { name: params.name, deleted: true };
       else if (method === 'runs.active.list') value = { runs: [], filters: { profileId: params.profileId, limit: params.limit }, ...(nativePresence ? { presence: nativePresence } : {}) };
       else if (method === 'node.profile.paths') value = { nodeId: params.nodeId, profileId: params.profileId, workspacePath: `/worker/profiles/${params.profileId}/workspace`, skillsPath: `/worker/profiles/${params.profileId}/workspace/.lemon/skill` };
-      else if (method === 'nodes.list') value = { nodes: f.store.list<P.Machine>('machines').map(machine => ({ id: machine.nodeId, status: machine.status, capabilities: [] })), summary: { presenceAvailable: true } };
+      else if (method === 'nodes.list') value = { nodes: f.store.list<P.Machine>('machines', machine => !params.nodeId || machine.nodeId === params.nodeId).map(machine => ({ id: machine.nodeId, status: machine.status, capabilities: ['node.capabilities.get'] })), summary: { presenceAvailable: true, truncated: false } };
       else if (method === 'node.capabilities.get') value = { nodeId: params.nodeId, os: 'linux', measuredAtMs: f.services.now(), stale: false, items: [] };
       else if (method === 'node.host.info') value = { defaultCwd: '/home/lemon' };
-      else if (method === 'node.fs.write') { const size = Buffer.from(String(params.dataBase64), 'base64').length; value = { path: params.path, bytesWritten: size, size }; }
-      else if (method === 'node.fs.delete') value = { path: params.path, deleted: true };
+      else if (method === 'node.fs.stat') {
+        const file = hostFiles.get(`${params.nodeId}:${params.path}`);
+        if (!file) throw new ApiError('not_found', 'Managed file does not exist.');
+        value = { path: params.path, type: 'regular', size: file.size, mtimeMs: file.mtimeMs };
+      } else if (method === 'node.fs.write') {
+        const key = `${params.nodeId}:${params.path}`, previous = hostFiles.get(key);
+        if (params.expectedModifiedAtMs !== (previous?.mtimeMs ?? 0)) throw new ApiError('revision_conflict', 'Managed file changed before write.');
+        const size = Buffer.from(String(params.dataBase64), 'base64').length, mtimeMs = f.services.now() + ++hostRevision;
+        hostFiles.set(key, { size, mtimeMs }); value = { path: params.path, bytesWritten: size, size, mtimeMs };
+      } else if (method === 'node.fs.delete') { hostFiles.delete(`${params.nodeId}:${params.path}`); value = { path: params.path, deleted: true }; }
       else if (method === 'memory.transfer') {
         const identity = { profileId: params.profileId, nodeId: params.nodeId, mutationId: params.mutationId, sourceNodeId: 'node-source', snapshotDigest: 'b'.repeat(64) };
         value = params.action === 'preview' ? { ...identity, destinationDigest: 'c'.repeat(64), confirmationToken: 'memory-confirmation-test', sourceCounts: { documents: 2, preferences: 2 }, destinationCounts: { documents: 3, preferences: 1 }, overwrite: true } : { ...identity, copied: true };
@@ -73,7 +110,7 @@ function fixture() {
   f.services.syncBotProfile = (actor, botId) => syncBotProfile(f.services, actor, botId);
   const routes: Route[] = [...createBotRoutes(f.services), ...createConversationRoutes(f.services), ...createResourceRoutes(f.services)];
   function context(method: string, path: string, body: unknown, actor: Principal | null) {
-    const requested = new URL(path, 'https://lemon.example');
+    const requested = new URL(path, fixturePublicUrl);
     const route = routes.find(route => route.method === method && new RegExp(`^${route.path.replace(/:[A-Za-z]+/g, '[^/]+')}$`).test(requested.pathname));
     if (!route) throw new Error('The requested resource operation is not registered.');
     const params: Record<string, string> = {};
@@ -108,10 +145,10 @@ function fixture() {
     f.store.setMetadata(`botMcp:${bot.id}`, { secretName: 'test_bot_ref', encryptedToken: f.services.encrypt('unit-test-bot-token'), digest: f.services.mutations.digest('unit-test-bot-token') });
     profileRows.set(saved.profileId, { id: saved.profileId, node: 'node-source', canonicalSessionKey: `agent:${saved.profileId}:main` });
     f.store.setMetadata(`profileCanonicalSession:${saved.id}`, `agent:${saved.profileId}:main`);
-    f.store.setMetadata(`botControllerFloor:${saved.id}`, { profile: 'custom', allow: 'all', deny: [], require_approval: [] });
+    f.store.setMetadata(`botControllerFloor:${saved.id}`, { profile: 'custom', allow: ['read_skill', 'webfetch', 'websearch', 'task', 'agent_message', 'wait', 'parent_question', ...projectedProductTools.map(tool => tool.executionName)], deny: ['native_prior_denied'], blocked_tools: ['native_prior_blocked'], require_approval: ['prior_requires_approval'] });
     const issuerToken = 'existing-private-native-issuer-token';
     const digest = f.services.mutations.digest(issuerToken);
-    f.store.setMetadata(`nativeFollowupIssuerConfig:${saved.id}`, { botId: saved.id, profileId: saved.profileId, url: 'https://lemon.example/internal/runtime/followup/admission', digest, encryptedToken: f.services.encrypt(issuerToken), state: 'configured' });
+    f.store.setMetadata(`nativeFollowupIssuerConfig:${saved.id}`, { botId: saved.id, profileId: saved.profileId, url: `${fixturePublicUrl}/internal/runtime/followup/admission`, digest, encryptedToken: f.services.encrypt(issuerToken), state: 'configured' });
     f.store.setMetadata(`nativeFollowupIssuer:${digest}`, saved.id);
     return saved;
   }
@@ -170,7 +207,7 @@ describe('acknowledged bot provisioning and placement', () => {
     expect(JSON.stringify(profileCall.params)).not.toContain(token);
     expect(profileCall.params.mcpServers).toEqual([{ ...baseBotMcpConfig(f.services, bot), headers: {} }]);
     expect(baseBotMcpConfig(f.services, bot).headers.Authorization).toBe(`Bearer \${LEMON_SECRET:${secretCall.params.name}}`);
-    expect(baseBotMcpConfig(f.services, bot).allowedOrigins).toEqual(['https://lemon.example']);
+    expect(baseBotMcpConfig(f.services, bot).allowedOrigins).toEqual([fixturePublicUrl]);
     expect(baseBotMcpConfig(f.services, bot).approvedPrivateOrigins).toEqual([]);
     expect(f.store.require<P.Conversation>('conversations', bot.mainConversationId)).toMatchObject({ kind: 'dm', botIds: [bot.id], ownerUserId: 'alice' });
     expect(f.store.metadata(`botLifecycle:${bot.id}`)).toBeNull();
@@ -209,9 +246,9 @@ describe('acknowledged bot provisioning and placement', () => {
     const f = fixture(), bot = f.bot();
     const plan = await f.request<P.Confirmation>('POST', `/v1/bots/${bot.id}/preview`, { clientNonce: nonce('revision_preview'), action: 'move', targetMachineId: 'destination' });
     const destination = f.store.require<P.Machine>('machines', 'destination'); f.store.put('machines', f.services.update(destination, { name: 'Renamed' }));
-    const count = f.calls.length;
+    const mutationCount = f.calls.filter(call => call.mutation).length;
     await expect(f.request('POST', `/v1/bots/${bot.id}/move`, confirmed(plan, { machineId: 'destination' }))).rejects.toMatchObject({ code: 'confirmation_required' });
-    expect(f.calls).toHaveLength(count); expect(f.store.require<P.Bot>('bots', bot.id).machineId).toBe('machine');
+    expect(f.calls.filter(call => call.mutation)).toHaveLength(mutationCount); expect(f.store.require<P.Bot>('bots', bot.id).machineId).toBe('machine');
   });
 });
 
@@ -227,7 +264,7 @@ describe('reviewed declarative copies and exact deletion scope', () => {
   test('public policy immediately blocks existing anonymous links and imports require third-party terms', async () => {
     const f = fixture(), bot = f.bot();
     const content = await f.request<P.TemplateContent>('GET', `/v1/bots/${bot.id}/export`, undefined);
-    const template: P.BotTemplate = f.services.resource('template', { ownerUserId: 'alice', audience: 'public', sourceBotId: bot.id, content, provenance: { publisher: 'External publisher', sourceUrl: 'https://publisher.example', termsUrl: 'https://publisher.example/terms', thirdParty: true }, shareUrl: 'https://lemon.example/template' }); f.store.put('templates', template);
+    const template: P.BotTemplate = f.services.resource('template', { ownerUserId: 'alice', audience: 'public', sourceBotId: bot.id, content, provenance: { publisher: 'External publisher', sourceUrl: 'https://publisher.example', termsUrl: 'https://publisher.example/terms', thirdParty: true }, shareUrl: `${fixturePublicUrl}/template` }); f.store.put('templates', template);
     f.store.setMetadata('policies', { publicTemplates: false });
     await expect(f.request('GET', `/v1/templates/${template.id}`, undefined, null)).rejects.toMatchObject({ code: 'policy_denied' });
     expect((await f.request<P.Page<P.BotTemplate>>('GET', '/v1/templates', undefined)).items).toEqual([]);
@@ -296,7 +333,7 @@ describe('section rank and provider prerequisites', () => {
     const f = fixture(), bot = f.bot();
     const skill: P.Skill = f.services.resource('skill', { ownerUserId: 'alice', scope: 'personal', botId: bot.id, name: 'Checklist', description: 'Plan work', markdown: '# Checklist\n- Review the plan', enabled: true, machineIds: ['machine'], provenance: { sourceUrl: null, publisher: 'alice', trusted: false } });
     f.store.put('skills', skill); f.store.put('bots', { ...bot, skillIds: [skill.id] });
-    const routine: P.Routine = f.services.resource('routine', { botId: bot.id, ownerUserId: 'alice', name: 'On request', instruction: 'Make a plan', trigger: { kind: 'webhook' }, enabled: true, nextRunAtMs: null, scheduleDescription: 'Webhook', lastRunId: null, webhookUrl: 'https://lemon.example/hooks/source', cronJobId: null }); f.store.put('routines', routine); f.store.setMetadata(`routineKey:${routine.id}`, { id: 'source-key', digest: 'source-only-digest' });
+    const routine: P.Routine = f.services.resource('routine', { botId: bot.id, ownerUserId: 'alice', name: 'On request', instruction: 'Make a plan', trigger: { kind: 'webhook' }, enabled: true, nextRunAtMs: null, scheduleDescription: 'Webhook', lastRunId: null, webhookUrl: `${fixturePublicUrl}/hooks/source`, cronJobId: null }); f.store.put('routines', routine); f.store.setMetadata(`routineKey:${routine.id}`, { id: 'source-key', digest: 'source-only-digest' });
     const copy = await f.request<P.Bot>('POST', `/v1/bots/${bot.id}/duplicate`, { clientNonce: nonce('selected_duplicate'), name: 'Separate', machineId: 'destination', includeSkills: true, includeRoutines: true });
     expect(copy.skillIds).toHaveLength(1); expect(copy.skillIds[0]).not.toBe(skill.id);
     expect(f.store.require<P.Skill>('skills', copy.skillIds[0]!).markdown).toBe(skill.markdown);
@@ -327,6 +364,12 @@ describe('acknowledged recovery and shared floor ownership', () => {
     const changed = f.calls.find(call => call.method === 'profiles.update')!;
     expect(Object.keys(changed.params).sort()).toEqual(['id', 'mcpServers', 'toolPolicy']);
     expect(changed.params.mcpServers).toEqual([{ ...baseBotMcpConfig(f.services, bot), headers: {} }]);
+    const floor = changed.params.toolPolicy as P.JSONObject;
+    expect(floor.allow).not.toBe('all');
+    expect(floor.allow).toEqual(expect.arrayContaining(['task', 'read_skill', ...projectedProductTools.map(tool => tool.executionName)]));
+    expect(floor.deny).toEqual(expect.arrayContaining(['native_prior_denied', 'agent', 'cron', 'remember', 'recall']));
+    expect(floor.blocked_tools).toEqual(expect.arrayContaining(['native_prior_blocked', 'agent', 'cron', 'remember', 'recall']));
+    expect(floor.require_approval).toEqual(expect.arrayContaining(['prior_requires_approval']));
     expect(f.store.require<P.Bot>('bots', bot.id)).toEqual(bot);
     expect(f.store.metadata(`botPolicyFloor:${bot.id}`)).toMatchObject({ state: 'acknowledged' });
     await expect(syncBotPolicyFloor(f.services, f.alice, bot.id)).rejects.toMatchObject({ code: 'forbidden' });
@@ -368,7 +411,7 @@ describe('fresh native follow-up readiness fence', () => {
     expect(index).toBeGreaterThan(f.calls.findIndex(call => call.method === 'profiles.sync'));
     const call = f.calls[index]!;
     expect(call.params.profileId).toBe(bot.profileId);
-    expect(call.params.url).toBe('https://lemon.example/internal/runtime/followup/admission');
+    expect(call.params.url).toBe(`${fixturePublicUrl}/internal/runtime/followup/admission`);
     const token = String(call.params.token);
     const issuer = f.store.metadata<{ state: string; digest: string; encryptedToken: string }>(`nativeFollowupIssuerConfig:${bot.id}`)!;
     expect(issuer.state).toBe('configured'); expect(issuer.digest).toBe(f.services.mutations.digest(token));
@@ -410,5 +453,30 @@ describe('credential-free public native MCP ceiling', () => {
     await expect(f.request('PATCH', `/v1/bots/${bot.id}`, { clientNonce: nonce('forbidden_header'), revision: bot.revision, job: 'Rejected configuration' })).rejects.toMatchObject({ code: 'capability_unavailable' });
     expect(f.calls.some(call => call.method === 'profiles.update')).toBe(false);
     expect(f.store.require<P.Bot>('bots', bot.id).job).toBe(bot.job);
+  });
+});
+
+describe('strict owning capability and execution-name lifecycle boundaries', () => {
+  test('incomplete presence cannot create a ready profile or native floor', async () => {
+    const f = fixture();
+    const call = f.services.lemon.call.bind(f.services.lemon);
+    f.services.lemon.call = async <T>(method: string, params: Record<string, unknown> = {}, options?: { mutation?: boolean }): Promise<T> => {
+      if (method === 'nodes.list') return { nodes: [], summary: { presenceAvailable: true, truncated: true } } as T;
+      return call<T>(method, params, options);
+    };
+    await expect(f.request('POST', '/v1/bots', { clientNonce: nonce('truncated_presence'), name: 'Incomplete', machineId: 'machine' })).rejects.toMatchObject({ code: 'upstream_unavailable' });
+    expect(f.calls.some(call => call.method === 'profiles.create')).toBe(false);
+    expect(f.store.list<P.Bot>('bots')[0]!.activity).toBe('offline');
+  });
+  test('an ambiguous MCP execution projection fails before any profile or admission is installed', async () => {
+    const f = fixture();
+    const call = f.services.lemon.call.bind(f.services.lemon);
+    f.services.lemon.call = async <T>(method: string, params: Record<string, unknown> = {}, options?: { mutation?: boolean }): Promise<T> => {
+      if (method === 'mcp.execution_names') return { server: { name: 'lemon-bot' }, count: projectedProductTools.length, tools: projectedProductTools.map(tool => ({ ...tool, executionName: 'mcp_duplicate_alias' })) } as T;
+      return call<T>(method, params, options);
+    };
+    await expect(f.request('POST', '/v1/bots', { clientNonce: nonce('ambiguous_projection'), name: 'Ambiguous', machineId: 'machine' })).rejects.toMatchObject({ code: 'upstream_unavailable' });
+    expect(f.calls.some(call => call.method === 'profiles.create' || call.method === 'profile.followup.admission.set')).toBe(false);
+    expect(f.store.list<P.Bot>('bots')[0]!.activity).toBe('offline');
   });
 });
