@@ -181,6 +181,123 @@ defmodule CodingAgent.Tools.TaskWorktreeMergeTest do
     assert record.workspace.merge.status == "skipped"
   end
 
+  for mode <- ["patch", "branch"], state <- ["staged", "committed"] do
+    test "public task retains a #{state} pointer-only gitlink in #{mode} mode", %{
+      git: git,
+      repo: repo
+    } do
+      mode = unquote(mode)
+      state = unquote(state)
+      pin = local_submodule(git, repo)
+      File.write!(Path.join(repo, "tracked.txt"), "parent staged\n")
+      git!(git, repo, ["add", "tracked.txt"])
+      File.write!(Path.join(repo, "tracked.txt"), "parent unstaged\n")
+      File.write!(Path.join(repo, "notes.txt"), "parent untracked\n")
+      parent_head = git!(git, repo, ["rev-parse", "HEAD"])
+      parent_index = git!(git, repo, ["write-tree"])
+      parent_status = git!(git, repo, ["status", "--porcelain=v1", "-z"])
+      command = "git update-index --cacheinfo 160000,#{pin},vendor"
+
+      command =
+        if state == "committed" do
+          command <>
+            " && git -c core.hooksPath=/dev/null commit -qm 'Child gitlink pin'"
+        else
+          command
+        end
+
+      # The provider scripts an actual bash tool invocation, not an echoed
+      # success or a replacement finalizer. Git and the child session run normally.
+      stream_fn = fn model, context, options ->
+        response =
+          if Enum.any?(context.messages, &(Map.get(&1, :role) == :tool_result)) do
+            Mocks.assistant_message("Finished pinning the local dependency.")
+          else
+            Mocks.assistant_message_with_tool_calls([
+              Mocks.tool_call("bash", %{"command" => command})
+            ])
+          end
+
+        Mocks.mock_stream_fn_single(response).(model, context, options)
+      end
+
+      result =
+        TaskTool.execute(
+          unique_id(),
+          %{
+            "prompt" => "Pin the local dependency",
+            "worktree" => true,
+            "merge" => mode,
+            "tool_policy" => %{"allow" => "all"},
+            "async" => false,
+            "auto_followup" => false
+          },
+          nil,
+          nil,
+          repo,
+          opts(stream_fn, settings("none"))
+        )
+
+      assert result.details.merge.status == "error"
+      assert result.details.merge.mode == mode
+      worktree = result.details.worktree_path
+      branch = result.details.branch
+      assert File.dir?(worktree)
+      assert branch_exists?(git, repo, branch)
+      assert git!(git, worktree, ["rev-parse", ":vendor"]) == pin
+      assert git!(git, worktree, ["symbolic-ref", "--short", "HEAD"]) == branch
+
+      if state == "committed" do
+        assert git!(git, repo, ["rev-parse", "#{branch}:vendor"]) == pin
+        assert git!(git, worktree, ["diff", "--cached", "--name-only"]) == ""
+      else
+        assert git!(git, worktree, [
+                 "diff",
+                 "--cached",
+                 "--name-only",
+                 "--ignore-submodules=none",
+                 "HEAD"
+               ]) == "vendor"
+      end
+
+      assert git!(git, repo, ["rev-parse", "HEAD"]) == parent_head
+      assert git!(git, repo, ["write-tree"]) == parent_index
+      assert git!(git, repo, ["status", "--porcelain=v1", "-z"]) == parent_status
+      assert File.read!(Path.join(repo, "tracked.txt")) == "parent unstaged\n"
+      assert File.read!(Path.join(repo, "notes.txt")) == "parent untracked\n"
+      assert File.read!(Path.join(repo, "vendor/version.txt")) == "original\n"
+      assert {:ok, record, _events} = TaskStore.get(result.details.task_id)
+      assert record.workspace.merge == result.details.merge
+    end
+  end
+
+  defp local_submodule(git, repo) do
+    source = Path.join(Path.dirname(repo), "vendor-source")
+    File.mkdir_p!(source)
+    git!(git, source, ["init", "-q", "-b", "main"])
+    git!(git, source, ["config", "user.name", "Worktree Test"])
+    git!(git, source, ["config", "user.email", "worktree@example.invalid"])
+    File.write!(Path.join(source, "version.txt"), "original\n")
+    git!(git, source, ["add", "."])
+    git!(git, source, ["-c", "core.hooksPath=/dev/null", "commit", "-qm", "Original vendor"])
+
+    git!(git, repo, [
+      "-c",
+      "protocol.file.allow=always",
+      "submodule",
+      "add",
+      "--",
+      source,
+      "vendor"
+    ])
+
+    git!(git, repo, ["-c", "core.hooksPath=/dev/null", "commit", "-qm", "Pin local vendor"])
+    File.write!(Path.join(source, "version.txt"), "updated\n")
+    git!(git, source, ["add", "."])
+    git!(git, source, ["-c", "core.hooksPath=/dev/null", "commit", "-qm", "Update vendor"])
+    git!(git, source, ["rev-parse", "HEAD"])
+  end
+
   defp opts(stream_fn, settings) do
     [
       parent_session: unique_id(),

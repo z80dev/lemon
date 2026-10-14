@@ -444,6 +444,216 @@ defmodule CodingAgent.Tools.Task.WorktreeTest do
     end
   end
 
+  for mode <- ["patch", "branch"],
+      state <- ["staged", "committed"],
+      change <- ["pin", "addition", "deletion", "replacement"] do
+    test "#{mode} retains #{state} gitlink #{change} and the parent's exact checkout", context do
+      %{git: git, repo: repo, tmp_dir: tmp_dir} = context
+      mode = unquote(mode)
+      state = unquote(state)
+      change = unquote(change)
+      %{new_pin: new_pin} = local_submodule(git, repo, tmp_dir)
+
+      File.write!(Path.join(repo, "tracked.txt"), "parent staged\n")
+      git!(git, repo, ["add", "tracked.txt"])
+      File.write!(Path.join(repo, "tracked.txt"), "parent unstaged\n")
+      File.write!(Path.join(repo, "private.txt"), "parent untracked\n")
+      vendor = Path.join(repo, "vendor")
+      File.write!(Path.join(vendor, "local.txt"), "parent vendor staged\n")
+      git!(git, vendor, ["add", "local.txt"])
+      File.write!(Path.join(vendor, "version.txt"), "parent vendor unstaged\n")
+      parent = checkout_snapshot(git, repo)
+      parent_vendor = checkout_snapshot(git, Path.join(repo, "vendor"))
+      id = "#{mode}-#{state}-#{change}"
+      assert {:ok, prepared} = Worktree.prepare(repo, id, mode)
+      # The child submodule is intentionally uninitialized. Only the index pin
+      # changes, so an ignore-submodules=all inventory cannot see this work.
+      refute File.exists?(Path.join(prepared.cwd, "vendor/.git"))
+      change_gitlink(git, prepared.cwd, change, new_pin)
+
+      if state == "committed" do
+        git!(git, prepared.cwd, [
+          "-c",
+          "core.hooksPath=/dev/null",
+          "commit",
+          "-qm",
+          "Child gitlink change"
+        ])
+      end
+
+      child_head = git!(git, prepared.cwd, ["rev-parse", "HEAD"])
+      child_tree = git!(git, prepared.cwd, ["write-tree"])
+      child_index = git!(git, prepared.cwd, ["ls-files", "--stage", "-z"])
+      merge = Worktree.finalize(prepared, repo, id, "Keep gitlink work")
+
+      assert %{mode: ^mode, status: "error"} = merge
+      assert File.dir?(prepared.worktree_path)
+      assert branch_exists?(git, repo, prepared.branch)
+      assert git!(git, prepared.cwd, ["symbolic-ref", "--short", "HEAD"]) == prepared.branch
+      assert git!(git, repo, ["rev-parse", prepared.branch]) == child_head
+      assert git!(git, prepared.cwd, ["write-tree"]) == child_tree
+      assert git!(git, prepared.cwd, ["ls-files", "--stage", "-z"]) == child_index
+      assert checkout_snapshot(git, repo) == parent
+      assert checkout_snapshot(git, Path.join(repo, "vendor")) == parent_vendor
+      assert File.read!(Path.join(repo, "tracked.txt")) == "parent unstaged\n"
+      assert File.read!(Path.join(repo, "private.txt")) == "parent untracked\n"
+      assert File.read!(Path.join(repo, "vendor/version.txt")) == "parent vendor unstaged\n"
+
+      if change == "pin" do
+        assert git!(git, prepared.cwd, ["rev-parse", ":vendor"]) == new_pin
+
+        if state == "committed" do
+          assert git!(git, repo, ["rev-parse", "#{prepared.branch}:vendor"]) == new_pin
+        else
+          assert git!(git, prepared.cwd, [
+                   "diff",
+                   "--cached",
+                   "--name-only",
+                   "--ignore-submodules=none",
+                   "HEAD"
+                 ]) == "vendor"
+        end
+      end
+    end
+  end
+
+  for mode <- ["patch", "branch"] do
+    test "#{mode} does not overwrite a staged pin with the initialized checkout's old pin",
+         %{git: git, repo: repo, tmp_dir: tmp_dir} do
+      mode = unquote(mode)
+      %{source: source, new_pin: new_pin, old_pin: old_pin} = local_submodule(git, repo, tmp_dir)
+      id = "#{mode}-initialized-pin"
+      assert {:ok, prepared} = Worktree.prepare(repo, id, mode)
+      child_vendor = Path.join(prepared.cwd, "vendor")
+      git!(git, prepared.cwd, ["clone", "--no-hardlinks", source, child_vendor])
+      git!(git, child_vendor, ["checkout", "--detach", old_pin])
+      git!(git, prepared.cwd, ["update-index", "--cacheinfo", "160000,#{new_pin},vendor"])
+      child_tree = git!(git, prepared.cwd, ["write-tree"])
+
+      assert %{status: "error"} = Worktree.finalize(prepared, repo, id, "Staged pin")
+      assert git!(git, prepared.cwd, ["write-tree"]) == child_tree
+      assert git!(git, prepared.cwd, ["rev-parse", ":vendor"]) == new_pin
+      assert git!(git, child_vendor, ["rev-parse", "HEAD"]) == old_pin
+      assert branch_exists?(git, repo, prepared.branch)
+    end
+
+    test "#{mode} still cleans a genuinely empty child with an unchanged submodule",
+         %{git: git, repo: repo, tmp_dir: tmp_dir} do
+      mode = unquote(mode)
+      local_submodule(git, repo, tmp_dir)
+      parent = checkout_snapshot(git, repo)
+      id = "#{mode}-idle-vendor"
+      assert {:ok, prepared} = Worktree.prepare(repo, id, mode)
+
+      assert %{mode: ^mode, status: "no_changes"} =
+               Worktree.finalize(prepared, repo, id, "Idle")
+
+      refute File.exists?(prepared.worktree_path)
+      refute branch_exists?(git, repo, prepared.branch)
+      assert checkout_snapshot(git, repo) == parent
+      assert File.read!(Path.join(repo, "vendor/version.txt")) == "original\n"
+    end
+  end
+
+  test "branch retains a committed pin and its staged reversal to the original baseline",
+       %{git: git, repo: repo, tmp_dir: tmp_dir} do
+    %{new_pin: new_pin, old_pin: old_pin} = local_submodule(git, repo, tmp_dir)
+    assert {:ok, prepared} = Worktree.prepare(repo, "reversed-pin", "branch")
+    change_gitlink(git, prepared.cwd, "pin", new_pin)
+
+    git!(git, prepared.cwd, [
+      "-c",
+      "core.hooksPath=/dev/null",
+      "commit",
+      "-qm",
+      "Committed pin"
+    ])
+
+    head = git!(git, prepared.cwd, ["rev-parse", "HEAD"])
+    change_gitlink(git, prepared.cwd, "pin", old_pin)
+    tree = git!(git, prepared.cwd, ["write-tree"])
+
+    assert %{status: "error"} = Worktree.finalize(prepared, repo, "reversed-pin", "Keep reversal")
+    assert File.dir?(prepared.worktree_path)
+    assert git!(git, repo, ["rev-parse", prepared.branch]) == head
+    assert git!(git, repo, ["rev-parse", "#{prepared.branch}:vendor"]) == new_pin
+    assert git!(git, prepared.cwd, ["write-tree"]) == tree
+    assert git!(git, prepared.cwd, ["rev-parse", ":vendor"]) == old_pin
+  end
+
+  defp local_submodule(git, repo, tmp_dir) do
+    source = Path.join(tmp_dir, "vendor-source")
+    File.mkdir_p!(source)
+    git!(git, source, ["init", "-q", "-b", "main"])
+    git!(git, source, ["config", "user.name", "Worktree Test"])
+    git!(git, source, ["config", "user.email", "worktree@example.invalid"])
+    File.write!(Path.join(source, "version.txt"), "original\n")
+    git!(git, source, ["add", "."])
+    git!(git, source, ["-c", "core.hooksPath=/dev/null", "commit", "-qm", "Original vendor"])
+    old_pin = git!(git, source, ["rev-parse", "HEAD"])
+
+    git!(git, repo, [
+      "-c",
+      "protocol.file.allow=always",
+      "submodule",
+      "add",
+      "--",
+      source,
+      "vendor"
+    ])
+
+    git!(git, repo, ["-c", "core.hooksPath=/dev/null", "commit", "-qm", "Pin local vendor"])
+    # The explicit detector must override both repository and submodule filters.
+    git!(git, repo, ["config", "diff.ignoreSubmodules", "all"])
+    git!(git, repo, ["config", "submodule.vendor.ignore", "all"])
+    File.write!(Path.join(source, "version.txt"), "updated\n")
+    git!(git, source, ["add", "."])
+    git!(git, source, ["-c", "core.hooksPath=/dev/null", "commit", "-qm", "Update vendor"])
+    %{source: source, old_pin: old_pin, new_pin: git!(git, source, ["rev-parse", "HEAD"])}
+  end
+
+  defp change_gitlink(git, cwd, "pin", pin),
+    do: git!(git, cwd, ["update-index", "--cacheinfo", "160000,#{pin},vendor"])
+
+  defp change_gitlink(git, cwd, "addition", pin) do
+    path = "new vendor\tpin"
+    File.mkdir_p!(Path.join(cwd, path))
+    git!(git, cwd, ["update-index", "--add", "--cacheinfo", "160000,#{pin},#{path}"])
+  end
+
+  defp change_gitlink(git, cwd, "deletion", _pin),
+    do: git!(git, cwd, ["rm", "-f", "--", "vendor"])
+
+  defp change_gitlink(git, cwd, "replacement", _pin) do
+    File.rm_rf!(Path.join(cwd, "vendor"))
+    File.write!(Path.join(cwd, "vendor"), "ordinary file replacing a gitlink\n")
+    git!(git, cwd, ["add", "--", "vendor"])
+  end
+
+  defp checkout_snapshot(git, cwd) do
+    %{
+      head: git!(git, cwd, ["rev-parse", "HEAD"]),
+      index: git!(git, cwd, ["write-tree"]),
+      staged:
+        git!(git, cwd, [
+          "diff",
+          "--cached",
+          "--binary",
+          "--no-ext-diff",
+          "--ignore-submodules=none",
+          "HEAD"
+        ]),
+      unstaged:
+        git!(git, cwd, [
+          "diff",
+          "--binary",
+          "--no-ext-diff",
+          "--ignore-submodules=none"
+        ]),
+      status: git!(git, cwd, ["status", "--porcelain=v1", "-z", "--ignore-submodules=none"])
+    }
+  end
+
   # useConfigOnly stops Git from inventing an identity from the host name.
   defp unset_identity(git, repo) do
     git!(git, repo, ["config", "--unset", "user.name"])
