@@ -366,6 +366,121 @@ defmodule CodingAgent.ProcessAdmissionTest do
     terminate(c)
   end
 
+  test "a root exit cannot free capacity while its TERM-ignoring child still owns the group",
+       context do
+    for mode <- [:sigterm, :natural] do
+      suffix = "surviving-child-#{mode}"
+      {id, counter, opts} = launch(context, suffix)
+      ready_fifo = Path.join(context.directory, "#{suffix}.fifo")
+      release_fifo = Path.join(context.directory, "#{suffix}.release.fifo")
+      {_, 0} = System.cmd("mkfifo", [release_fifo])
+      parent = self()
+
+      release_child = fn ->
+        # O_RDWR also makes failure cleanup finite if no child was started.
+        {:ok, unblock} = File.open(release_fifo, [:read, :write])
+
+        {_, 0} =
+          System.cmd("/bin/sh", [
+            "-c",
+            "printf 'release\\n' > \"$1\"",
+            "lemon-fixture",
+            release_fifo
+          ])
+
+        File.close(unblock)
+      end
+
+      on_exit(release_child)
+
+      command =
+        "trap 'exit 0' TERM; " <>
+          "(trap '' TERM; printf x >> '#{counter}'; " <>
+          "printf 'started\\n' > '#{ready_fifo}'; read -r release < '#{release_fifo}') " <>
+          "</dev/null >/dev/null 2>&1 & read -r release"
+
+      opts =
+        opts
+        |> Keyword.put(:command, command)
+        |> Keyword.put(:on_root_exit, fn identity -> send(parent, {:root_exited, identity}) end)
+
+      caller = Task.Supervisor.async_nolink(context.task_sup, fn -> ProcessManager.exec(opts) end)
+      session = boundary(id)
+      send(session, :release_start)
+      assert {:ok, ^id} = Task.await(caller)
+      {b, _, _, _} = start_blocking(context, "#{suffix}-other")
+      {c, queued_counter, _} = enqueue(context, "#{suffix}-queued")
+
+      case mode do
+        :sigterm -> assert :ok = ProcessManager.kill(id, :sigterm)
+        :natural -> assert :ok = ProcessManager.write(id, "release\n")
+      end
+
+      # This barrier is after the real Port exit and store reconciliation, not
+      # a timing guess or a fabricated child-termination event.
+      assert_receive {:root_exited, ^id}, 5_000
+
+      assert {:ok, %{status: :lost, root_exited: true, capacity_held: true}, _} =
+               ProcessStore.get(id)
+
+      assert {:ok, %{classification: :outcome_unknown}} =
+               ProcessManager.receipt(id, "admission-test")
+
+      assert ProcessManager.admission_counts().occupied == 2
+      refute File.exists?(queued_counter)
+      assert File.read!(counter) == "x"
+
+      {d, rejected_counter, rejected_opts} = launch(context, "#{suffix}-overflow")
+      assert {:error, {:rejected, ^d, :overloaded}} = ProcessManager.exec(rejected_opts)
+      refute File.exists?(rejected_counter)
+
+      # Both natural and signaled root exits must retain a publicly cancellable
+      # owned group. The fixture FIFO is failure cleanup only, not the repair.
+      terminate(id)
+
+      accept_queued(c)
+      assert File.read!(queued_counter) == "x"
+      assert ProcessManager.admission_counts().occupied == 2
+      assert :ok = ProcessStore.confirm_termination(id)
+      send(session, :reconcile_workload)
+      assert ProcessManager.admission_counts().occupied == 2
+      terminate(b)
+      terminate(c)
+      assert ProcessManager.admission_counts().occupied == 0
+    end
+  end
+
+  test "lost group ownership cannot signal a recycled identity or release its charge", context do
+    parent = self()
+
+    {id, counter, _, session} =
+      start_blocking(context, "lost-group-identity",
+        on_root_exit: fn identity -> send(parent, {:root_exited, identity}) end
+      )
+
+    assert {:ok, state} = ProcessSession.get_state(id)
+    original_identity = state.workload_identity
+    # Fault-inject the stale ownership evidence, not an actual reused system PID.
+    stale_identity = %{original_identity | root_birth: "another workload"}
+    :sys.replace_state(session, &%{&1 | workload_identity: stale_identity})
+    assert {:error, {:outcome_unknown, ^id}} = ProcessManager.kill(id, :sigkill)
+    assert {:alive, _} = CodingAgent.BashExecutor.workload_group_status(original_identity)
+    assert File.read!(counter) == "x"
+    assert ProcessManager.admission_counts().occupied == 1
+    assert {:ok, %{workload_identity: %{ownership_lost: true}}, _} = ProcessStore.get(id)
+
+    # Only independently retained, matching ownership evidence can clean up.
+    assert {:ok, _} = CodingAgent.BashExecutor.signal_workload_group(original_identity, :sigkill)
+    assert_receive {:root_exited, ^id}, 5_000
+    assert :terminated = CodingAgent.BashExecutor.workload_group_status(original_identity, true)
+    assert ProcessManager.admission_counts().occupied == 1
+    assert :ok = ProcessManager.confirm_external_termination(id, "admission-test")
+    assert ProcessManager.admission_counts().occupied == 0
+
+    assert {:ok, %{classification: :outcome_unknown}} =
+             ProcessManager.receipt(id, "admission-test")
+  end
+
   test "pending overflow is rejected promptly without an external start or queue growth",
        context do
     {a, _, _, _} = start_blocking(context, "overflow-a")

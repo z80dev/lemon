@@ -135,6 +135,7 @@ defmodule CodingAgent.ProcessSession do
     _ -> {:stop, :launch_failed}
   catch
     :throw, :confirmed_startup_failure -> {:stop, :startup_failed}
+    :throw, :uncertain_startup -> {:stop, :workload_unobservable}
     _, _ -> {:stop, :launch_failed}
   end
 
@@ -193,8 +194,8 @@ defmodule CodingAgent.ProcessSession do
 
     os_pid = get_os_pid(port)
 
-    # Mark as running in the store
-    ProcessStore.mark_running(process_id, os_pid)
+    # Bind the owned group durably before the stdin gate allows user execution.
+    workload_identity = activate_workload(process_id, port, os_pid, output_file)
     ProcessStore.classify_launch(process_id, :accepted)
 
     # Internal synchronization seam; never exposed in the agent's tool schema.
@@ -213,6 +214,10 @@ defmodule CodingAgent.ProcessSession do
       process_id: process_id,
       port: port,
       os_pid: os_pid,
+      workload_identity: workload_identity,
+      root_exited: false,
+      root_exit_code: nil,
+      workload_timer: nil,
       command: command,
       cwd: cwd,
       env: env,
@@ -233,6 +238,7 @@ defmodule CodingAgent.ProcessSession do
       timeout_ref: timeout_ref,
       termination_reason: nil,
       on_exit: on_exit,
+      on_root_exit: Keyword.get(opts, :on_root_exit),
       started_at: System.system_time(:second),
       completed_at: nil,
       restarted_from: Keyword.get(opts, :restarted_from),
@@ -302,11 +308,19 @@ defmodule CodingAgent.ProcessSession do
 
   def handle_call({:write_stdin, data}, _from, state) do
     if state.status == :running do
-      try do
-        Port.command(state.port, data)
-        {:reply, :ok, state}
-      rescue
-        e -> {:reply, {:error, e}, state}
+      # Stdin may make the root exit immediately. Retain any verified surviving
+      # members before forwarding bytes, while root ownership still binds them.
+      state = remember_workload_members(state)
+
+      if state.status == :running do
+        try do
+          Port.command(state.port, data)
+          {:reply, :ok, state}
+        rescue
+          e -> {:reply, {:error, e}, state}
+        end
+      else
+        {:reply, {:error, {:outcome_unknown, state.process_id}}, state}
       end
     else
       {:reply, {:error, :process_not_running}, state}
@@ -314,11 +328,9 @@ defmodule CodingAgent.ProcessSession do
   end
 
   def handle_call({:kill, signal}, _from, state) do
-    if state.status in [:running, :killing] and state.os_pid do
-      do_kill(state.os_pid, signal)
-      # Requesting a signal is not confirmation that the process has exited.
-      state = %{state | status: :killing, termination_reason: :canceled}
-      {:reply, :ok, state}
+    if state.status in [:running, :killing, :lost] and state.os_pid do
+      {reply, state} = request_workload_stop(state, signal, :canceled)
+      {:reply, reply, state}
     else
       {:reply, {:error, :process_not_running}, state}
     end
@@ -342,80 +354,47 @@ defmodule CodingAgent.ProcessSession do
     {:noreply, state |> append_lines(lines) |> Map.put(:partial_line, partial)}
   end
 
-  def handle_info({port, {:exit_status, exit_code}}, %{port: port, status: live_status} = state)
-      when live_status in [:running, :killing] do
+  def handle_info(
+        {port, {:exit_status, exit_code}},
+        %{port: port, root_exited: false} = state
+      ) do
     state = flush_partial_line(state)
+    if state.timeout_ref, do: Process.cancel_timer(state.timeout_ref)
 
-    # Cancel timeout if still pending
-    if state.timeout_ref do
-      Process.cancel_timer(state.timeout_ref)
-    end
+    state = %{state | root_exited: true, root_exit_code: exit_code, timeout_ref: nil}
+    ProcessStore.update_workload_identity(state.process_id, state.workload_identity, true)
 
-    # Update status based on exit code
-    {status, exit_code} =
-      cond do
-        external_liveness_unknown?(state, exit_code) -> {:lost, nil}
-        state.termination_reason == :canceled -> {:killed, nil}
-        state.termination_reason == :timeout -> {:error, nil}
-        exit_code == 0 -> {:completed, exit_code}
-        true -> {:error, exit_code}
+    state =
+      case owned_workload_status(state) do
+        :terminated -> finish_workload(state)
+        {_liveness, identity} -> retain_workload(state, identity)
       end
 
-    # Update store. Killed processes should remain `:killed` (not overwritten to `:error`).
-    cond do
-      status == :lost ->
-        ProcessStore.mark_unknown(state.process_id)
+    # Internal fault-test barrier, distinct from confirmed workload completion.
+    if state.on_root_exit, do: state.on_root_exit.(state.process_id)
+    {:noreply, state}
+  end
 
-      state.termination_reason == :timeout ->
-        ProcessStore.mark_error(state.process_id, :timeout)
+  def handle_info(:reconcile_workload, %{root_exited: true, status: :lost} = state) do
+    state = %{state | workload_timer: nil}
 
-      status == :completed ->
-        ProcessStore.mark_completed(state.process_id, exit_code)
-
-      status == :killed ->
-        ProcessStore.mark_killed(state.process_id)
-
-      true ->
-        ProcessStore.mark_error(state.process_id, %{exit_code: exit_code, status: status})
+    case owned_workload_status(state) do
+      :terminated -> {:noreply, finish_workload(state)}
+      {_liveness, identity} -> {:noreply, retain_workload(state, identity)}
     end
+  end
 
-    if status != :lost, do: ProcessStore.confirm_termination(state.process_id)
-
-    # Call exit callback if provided
-    if state.on_exit do
-      spawn(fn ->
-        state.on_exit.(%{
-          process_id: state.process_id,
-          status: status,
-          exit_code: exit_code
-        })
-      end)
-    end
-
-    new_state = %{
-      state
-      | status: status,
-        exit_code: exit_code,
-        completed_at: System.system_time(:second)
-    }
-
-    # Stop the GenServer after a short delay to allow final polling
-    Process.send_after(self(), :stop_after_exit, 5_000)
-
-    {:noreply, new_state}
+  def handle_info(:external_termination_confirmed, %{status: :lost} = state) do
+    if state.workload_timer, do: Process.cancel_timer(state.workload_timer)
+    {:stop, :normal, state}
   end
 
   def handle_info(:timeout, state) do
-    if state.status in [:running, :killing] do
-      do_kill(state.os_pid, :sigkill)
+    if state.status in [:running, :killing, :lost] and not state.root_exited do
+      {_reply, state} =
+        request_workload_stop(state, :sigkill, state.termination_reason || :timeout)
 
-      {:noreply,
-       %{
-         state
-         | status: :killing,
-           termination_reason: state.termination_reason || :timeout,
-           timeout_ref: nil
-       }}
+      {:noreply, %{state | timeout_ref: nil}}
     else
       {:noreply, state}
     end
@@ -423,10 +402,9 @@ defmodule CodingAgent.ProcessSession do
 
   def handle_info({:DOWN, ref, :process, _pid, _reason}, %{owner_monitor: ref} = state)
       when is_reference(ref) do
-    # The owning session is gone; nothing can read or stop this process any more.
-    if state.status in [:running, :killing] do
-      do_kill(state.os_pid, :sigkill)
-      {:noreply, %{state | status: :killing, termination_reason: :canceled, owner_monitor: nil}}
+    if state.status in [:running, :killing, :lost] do
+      {_reply, state} = request_workload_stop(state, :sigkill, :canceled)
+      {:noreply, %{state | owner_monitor: nil}}
     else
       {:noreply, %{state | owner_monitor: nil}}
     end
@@ -547,10 +525,126 @@ defmodule CodingAgent.ProcessSession do
     throw(:confirmed_startup_failure)
   end
 
-  defp external_liveness_unknown?(state, exit_code) do
-    (state.backend == :ssh and (state.status == :killing or exit_code == 255)) or
-      (state.backend == :docker and
-         (state.status == :killing or exit_code in [125, 126, 127]))
+  defp activate_workload(process_id, port, os_pid, output_file) do
+    case :os.type() do
+      {:unix, _} ->
+        case BashExecutor.capture_workload_group(os_pid) do
+          {:ok, identity} ->
+            ProcessStore.mark_running(process_id, os_pid, identity)
+            true = Port.command(port, "\n")
+            identity
+
+          {:error, _} ->
+            # The gate has not been released. Do not turn lost observation of
+            # the native wrapper into a false confirmed-termination receipt.
+            Port.close(port)
+            File.close(output_file)
+            ProcessStore.mark_unknown(process_id)
+            throw(:uncertain_startup)
+        end
+
+      _ ->
+        ProcessStore.mark_running(process_id, os_pid)
+        nil
+    end
+  end
+
+  defp owned_workload_status(%{backend: :local, workload_identity: identity} = state)
+       when is_map(identity) do
+    BashExecutor.workload_group_status(identity, state.root_exited)
+  end
+
+  defp owned_workload_status(state), do: {:unknown, state.workload_identity}
+
+  defp retain_workload(state, identity) do
+    if identity != state.workload_identity,
+      do: ProcessStore.update_workload_identity(state.process_id, identity, state.root_exited)
+
+    if state.status != :lost, do: ProcessStore.mark_unknown(state.process_id)
+
+    timer =
+      if state.backend == :local and is_map(identity) and not identity.ownership_lost do
+        Process.send_after(self(), :reconcile_workload, 100)
+      end
+
+    %{state | status: :lost, exit_code: nil, workload_identity: identity, workload_timer: timer}
+  end
+
+  defp remember_workload_members(%{workload_identity: identity} = state) when is_map(identity) do
+    case BashExecutor.workload_group_status(identity, state.root_exited) do
+      {:alive, observed} ->
+        if observed != identity,
+          do: ProcessStore.update_workload_identity(state.process_id, observed, state.root_exited)
+
+        %{state | workload_identity: observed}
+
+      {:unknown, %{ownership_lost: true} = observed} ->
+        ProcessStore.update_workload_identity(state.process_id, observed, state.root_exited)
+        ProcessStore.mark_unknown(state.process_id)
+        %{state | status: :lost, workload_identity: observed}
+
+      _ ->
+        state
+    end
+  end
+
+  defp remember_workload_members(state), do: state
+
+  defp request_workload_stop(state, signal, reason) do
+    case BashExecutor.signal_workload_group(state.workload_identity, signal, state.root_exited) do
+      {:ok, identity} ->
+        ProcessStore.update_workload_identity(state.process_id, identity, state.root_exited)
+        status = if state.root_exited, do: :lost, else: :killing
+        {:ok, %{state | status: status, termination_reason: reason, workload_identity: identity}}
+
+      {:terminated, _identity} ->
+        state = %{state | termination_reason: reason}
+        {:ok, if(state.root_exited, do: finish_workload(state), else: state)}
+
+      {:error, _reason, identity} ->
+        ProcessStore.mark_unknown(state.process_id)
+        ProcessStore.update_workload_identity(state.process_id, identity, state.root_exited)
+
+        {{:error, {:outcome_unknown, state.process_id}},
+         %{state | status: :lost, termination_reason: reason, workload_identity: identity}}
+    end
+  end
+
+  defp finish_workload(state) do
+    if state.workload_timer, do: Process.cancel_timer(state.workload_timer)
+
+    {status, exit_code} =
+      cond do
+        state.termination_reason == :canceled -> {:killed, nil}
+        state.termination_reason == :timeout -> {:error, nil}
+        state.root_exit_code == 0 -> {:completed, 0}
+        true -> {:error, state.root_exit_code}
+      end
+
+    cond do
+      state.termination_reason == :timeout -> ProcessStore.mark_error(state.process_id, :timeout)
+      status == :completed -> ProcessStore.mark_completed(state.process_id, exit_code)
+      status == :killed -> ProcessStore.mark_killed(state.process_id)
+      true -> ProcessStore.mark_error(state.process_id, %{exit_code: exit_code, status: status})
+    end
+
+    ProcessStore.confirm_termination(state.process_id)
+
+    if state.on_exit do
+      spawn(fn ->
+        state.on_exit.(%{process_id: state.process_id, status: status, exit_code: exit_code})
+      end)
+    end
+
+    Process.send_after(self(), :stop_after_exit, 5_000)
+
+    %{
+      state
+      | status: status,
+        exit_code: exit_code,
+        completed_at: System.system_time(:second),
+        workload_timer: nil
+    }
   end
 
   defp start_port(command, cwd, env, backend) do
@@ -600,7 +694,24 @@ defmodule CodingAgent.ProcessSession do
         port_opts
       end
 
-    Port.open({:spawn_executable, executable}, port_opts)
+    case :os.type() do
+      {:unix, _} ->
+        # Noninteractive POSIX sh does not source the command's BASH_ENV. The
+        # subshell consumes only our newline; exec preserves the target shell,
+        # env, cwd, argv and subsequent stdin without a new PATH lookup.
+        true = Path.type(executable) == :absolute
+
+        gated_args =
+          ["-c", "( IFS= read -r ) && exec \"$@\"", "lemon-process", executable | args]
+
+        Port.open(
+          {:spawn_executable, "/bin/sh"},
+          List.keyreplace(port_opts, :args, 0, {:args, gated_args})
+        )
+
+      _ ->
+        Port.open({:spawn_executable, executable}, port_opts)
+    end
   end
 
   defp maybe_stderr_to_stdout(port_opts, true), do: [:stderr_to_stdout | port_opts]
@@ -695,12 +806,6 @@ defmodule CodingAgent.ProcessSession do
   defp flush_partial_line(state) do
     append_lines(%{state | partial_line: ""}, [state.partial_line])
   end
-
-  defp do_kill(os_pid, signal) when is_integer(os_pid) do
-    BashExecutor.kill_process_tree(os_pid, signal)
-  end
-
-  defp do_kill(_os_pid, _signal), do: :ok
 
   defp get_shell_config do
     case :os.type() do

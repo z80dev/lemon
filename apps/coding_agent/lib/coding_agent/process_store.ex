@@ -134,7 +134,7 @@ defmodule CodingAgent.ProcessStore do
   def yielded_launch?(id), do: GenServer.call(ProcessStoreServer, {:yielded_launch, id})
 
   @doc false
-  def confirm_termination(id, cause \\ :port_exit) do
+  def confirm_termination(id, cause \\ :workload_empty) do
     GenServer.call(ProcessStoreServer, {:confirm_termination, id, cause})
   end
 
@@ -170,15 +170,32 @@ defmodule CodingAgent.ProcessStore do
   @doc """
   Mark a process as running with its OS PID.
   """
-  @spec mark_running(process_id(), integer() | nil) :: :ok
-  def mark_running(process_id, os_pid)
+  @spec mark_running(process_id(), integer() | nil, map() | nil) :: :ok
+  def mark_running(process_id, os_pid, workload_identity \\ nil)
       when is_binary(process_id) and (is_integer(os_pid) or is_nil(os_pid)) do
-    update_record(process_id, fn record ->
-      record
-      |> Map.put(:status, :running)
-      |> Map.put(:os_pid, os_pid)
-      |> Map.put(:started_at, System.system_time(:second))
-    end)
+    update_record(
+      process_id,
+      fn record ->
+        record
+        |> Map.put(:status, :running)
+        |> Map.put(:os_pid, os_pid)
+        |> Map.put(:workload_identity, workload_identity)
+        |> Map.put(:root_exited, false)
+        |> Map.put(:started_at, System.system_time(:second))
+      end,
+      true
+    )
+  end
+
+  @doc false
+  def update_workload_identity(process_id, identity, root_exited) do
+    update_record(
+      process_id,
+      fn record ->
+        Map.merge(record, %{workload_identity: identity, root_exited: root_exited})
+      end,
+      true
+    )
   end
 
   @doc """
@@ -467,7 +484,7 @@ defmodule CodingAgent.ProcessStore do
     end
   end
 
-  defp update_record(process_id, fun) do
+  defp update_record(process_id, fun, durable \\ false) do
     ensure_table()
 
     transaction(fn ->
@@ -481,7 +498,16 @@ defmodule CodingAgent.ProcessStore do
             |> fun.()
             |> Map.put(:updated_at, System.system_time(:second))
 
-          insert_record(process_id, updated, logs)
+          if durable and is_binary(Map.get(updated, :launch_fingerprint)) do
+            # Owned workload provenance must survive a crash before the command
+            # is unblocked; do not publish a volatile identity before syncing it.
+            :ok = :dets.insert(@dets_table, {process_id, updated, logs})
+            :ok = :dets.sync(@dets_table)
+            :ets.insert(@table, {process_id, updated, logs})
+          else
+            insert_record(process_id, updated, logs)
+          end
+
           :ok
 
         _ ->

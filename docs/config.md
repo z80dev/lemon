@@ -462,15 +462,33 @@ deliberately continues until completion, explicit cancellation, or its separatel
 requested execution timeout. Use foreground commands with background execution,
 not shell daemonization, for an inspectable managed lifetime.
 
-Cancellation is a request: `:killing` does not free capacity. Confirmed Port
-termination releases the slot once. A lost process owner, SSH disconnect, or
-forced Docker/SSH wrapper termination can leave external liveness unknown;
-such work conservatively holds capacity and is never automatically relaunched.
-Queue/store restart reconciles surviving registered processes before admission.
+Cancellation is a request: `:killing` does not free capacity. On local Unix
+launches, the runtime binds and persists an isolated process-group identity
+before permitting the command to execute. A root shell's Port exit is not a
+workload-termination witness: surviving descendants keep an `outcome_unknown`
+receipt and the lifetime slot. The owning session reconciles actual group
+membership and releases once only after no live members remain. It retains the
+group through root exit so later cancellation can target verified descendants,
+never a recycled positive root PID. Lost ownership or failed observation remains
+unknown and charged, not a license to signal an unverified group.
+Before forwarding stdin that may end the root, the runtime durably retains live
+members observed under the root's matching identity. After root exit, verified
+cancellation requires a surviving previously bound member with matching birth
+identity. If the root and all previously bound members disappear before another
+member can be bound, the numeric PGID alone is insufficient proof: cancellation
+remains unknown and charged, requiring independently verified recovery.
+
+A host process group cannot prove termination of remote SSH/container work,
+PTY work in a separate session, or Windows job descendants; wrapper exits in
+these cases conservatively remain unknown and charged. A lost BEAM process owner
+also retains its persisted identity and capacity. Nothing is automatically
+relaunched. Queue/store restart reconciles surviving registered processes before
+admission.
 The internal operator API `ProcessManager.confirm_external_termination(id, owner)`
-may release unknown capacity only after independently verifying external
-termination; it is an assertion, not a liveness probe or agent tool, and refuses
-a launch still starting. The original uncertain receipt remains uncertain.
+may release unknown capacity only after independently verifying termination of
+the entire owned workload, not merely the root shell; it is an assertion, not a
+liveness probe or agent tool, and refuses a launch still starting. The original
+uncertain receipt remains uncertain.
 
 `ProcessManager.admission_counts/0` exposes bounded active, queued, rejected,
 expired, canceled, unknown, and occupied counts, with no commands or secrets.

@@ -182,14 +182,14 @@ defmodule CodingAgent.ProcessManager do
         {:error, :launch_still_starting}
 
       {:ok, %{classification: :outcome_unknown}} ->
-        ProcessStore.confirm_termination(identity, :external_confirmed)
+        release_external_capacity(identity)
 
       {:error, :not_found} ->
         # Pre-cutover records have no validated request fingerprint, but their
         # lost process capacity still requires owner-scoped explicit recovery.
         case ProcessStore.get(identity) do
           {:ok, %{owner: ^owner, status: :lost}, _} ->
-            ProcessStore.confirm_termination(identity, :external_confirmed)
+            release_external_capacity(identity)
 
           _ ->
             {:error, :not_found}
@@ -200,6 +200,17 @@ defmodule CodingAgent.ProcessManager do
 
       error ->
         error
+    end
+  end
+
+  defp release_external_capacity(identity) do
+    with :ok <- ProcessStore.confirm_termination(identity, :external_confirmed) do
+      case Registry.lookup(CodingAgent.ProcessRegistry, identity) do
+        [{pid, _}] -> send(pid, :external_termination_confirmed)
+        _ -> :ok
+      end
+
+      :ok
     end
   end
 

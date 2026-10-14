@@ -18,6 +18,14 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   or expired queued commands from starting, and retains unknown capacity through
   restart. Yielded launches remain owner-scoped and inspectable; cancellation
   receipts no longer claim termination before it is confirmed.
+- Local Unix background capacity now stays held when the root shell exits but
+  descendants survive. Owned process groups are bound before command execution;
+  live members are retained before forwarding stdin that can end the root, so
+  verified cancellation still works after natural root exit. Groups reconcile
+  until confirmed empty; stale ownership and unsupported workload witnesses
+  remain unknown rather than freeing slots or signaling recycled PIDs.
+  TUI tool cards and compact shelves also preserve queued and outcome-unknown
+  receipts instead of presenting them as started or failed.
 
 ---
 
