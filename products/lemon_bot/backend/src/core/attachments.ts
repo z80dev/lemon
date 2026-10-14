@@ -228,13 +228,14 @@ export function createAttachmentService(services: BackendServices): StoredAttach
       const provenance: P.DeliverableProvenance = input.provenance ?? { botId: null, runId: null, machineId: null, sourceEntryId: null, generatedAtMs: null };
       if (provenance.botId) {
         const sourceBot = services.auth.bot(user, provenance.botId);
-        if (provenance.machineId !== sourceBot.machineId) fail('invalid_request', 'Artifact machine provenance does not match its Bot.');
+        if (provenance.machineId !== null && provenance.machineId !== sourceBot.machineId) fail('invalid_request', 'Artifact machine provenance does not match its Bot.');
         if (provenance.runId) {
+          if (provenance.machineId !== sourceBot.machineId) fail('invalid_request', 'Run artifact requires the actual execution machine.');
           const run = services.store.require<P.Run>('runs', provenance.runId);
           services.auth.conversation(user, run.conversationId);
           if (run.botId !== sourceBot.id || (input.conversationId && run.conversationId !== input.conversationId)) fail('invalid_request', 'Artifact run provenance does not match its scope.');
         }
-      } else if (provenance.runId || provenance.generatedAtMs !== null) fail('invalid_request', 'Generated artifact requires Bot provenance.');
+      } else if (provenance.runId || (provenance.generatedAtMs !== null && input.source !== 'tts' && input.source !== 'generated')) fail('invalid_request', 'Run artifact requires Bot provenance; provider-only generation requires its trusted source.');
       else if (provenance.machineId) services.auth.machine(user, provenance.machineId);
       if (provenance.sourceEntryId) {
         const entry = services.store.require<P.TranscriptEntry>('entries', provenance.sourceEntryId);

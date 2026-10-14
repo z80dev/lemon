@@ -141,6 +141,11 @@ describe('immutable completed attachments', () => {
       const wav = pcmWave(new Uint8Array(32000), 16000);
       const audio = await service.create(f.user, wav, { clientNonce: nonce, purpose: 'audio', filename: 'clip.wav', mime: 'image/png' });
       expect(audio).toMatchObject({ preview: 'audio', mime: 'audio/wav', durationMs: 1000 });
+      const providerMetadata: P.AttachmentUpload & Pick<P.Attachment, 'filename' | 'source' | 'provenance'> = { clientNonce: nonce, purpose: 'audio', filename: 'speech.wav', source: 'tts', provenance: { botId: null, machineId: null, runId: null, sourceEntryId: null, generatedAtMs: f.services.now() } };
+      const providerSpeech = await service.create(f.user, wav, providerMetadata);
+      expect(providerSpeech).toMatchObject({ source: 'tts', durationMs: 1000, provenance: providerMetadata.provenance });
+      const botPreview = await service.create(f.user, wav, { ...providerMetadata, provenance: { ...providerMetadata.provenance, botId: f.bot.id } });
+      expect(botPreview.provenance).toMatchObject({ botId: f.bot.id, machineId: null, runId: null });
       await expect(service.create(f.user, wav.subarray(0, wav.length - 1), { clientNonce: nonce, purpose: 'audio', filename: 'clip.wav' })).rejects.toMatchObject({ code: 'unsupported_media' });
       await expect(service.create(f.user, pcmWave(new Uint8Array(16000 * 2 * 601), 16000), { clientNonce: nonce, purpose: 'audio', filename: 'long.wav' })).rejects.toMatchObject({ code: 'too_large' });
       const run: P.Run = f.services.resource('run', { conversationId: f.conversation.id, botId: f.bot.id, initiatorUserId: f.user.userId, clientNonce: nonce, status: 'succeeded', error: null, startedAtMs: f.services.now(), completedAtMs: f.services.now(), routineRunId: null }); f.store.put('runs', run);
