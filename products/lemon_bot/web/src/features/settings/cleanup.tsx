@@ -6,7 +6,7 @@ import { readCleanupHandoff } from '../../cleanup-handoff';
 
 export function AccountCleanupScreen({ id }: { id?: string }) {
   const { snapshot } = useApp();
-  if (snapshot.member.role !== 'owner' || !snapshot.member.enabled) return <EmptyState title="Workspace Owner required">Only an enabled workspace Owner can inspect account cleanup metadata. This never grants access to deleted private conversations, notes, credentials or files.</EmptyState>;
+  if (snapshot.workspace.ownerUserId !== snapshot.user.id) return <EmptyState title="Workspace Owner required">Only an enabled workspace Owner can inspect account cleanup metadata. This never grants access to deleted private conversations, notes, credentials or files.</EmptyState>;
   return <OwnerCleanup id={id}/>;
 }
 function OwnerCleanup({ id }: { id?: string }) {

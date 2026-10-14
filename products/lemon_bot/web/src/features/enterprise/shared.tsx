@@ -1,9 +1,8 @@
 import { useState, type ReactNode } from 'react';
-import { LemonBotError, type Page, type PageQuery, type ActionCategory, type Machine } from '@lemon-bot/sdk';
+import { LemonBotError, type Page, type PageQuery, type Machine } from '@lemon-bot/sdk';
 import { useApp } from '../../app';
 import { ErrorNotice, Loading, useQuery } from '../../ui';
 
-export const categories: ActionCategory[] = ['shell', 'files', 'external_message', 'calendar', 'publish', 'purchase', 'permissions', 'connector', 'handoff'];
 export const words = (value: string) => value.split(/[\n,]/).map(item => item.trim()).filter(Boolean);
 export const label = (value: string) => value.replaceAll('_', ' ');
 
@@ -44,7 +43,7 @@ export function useIntent() {
   const [reviewed, setReviewed] = useState(false);
   async function perform<T>(intent: () => Promise<T>): Promise<T | undefined> {
     if (busy || uncertain) return undefined;
-    if (!online) { setError(new Error('Offline. Reconnect before changing enterprise settings. Nothing has been queued.')); return undefined; }
+    if (!online) { setError(new Error('Offline. Reconnect before changing owner settings. Nothing has been queued.')); return undefined; }
     setBusy(true); setError(undefined); setReviewed(false);
     try { return await intent(); }
     catch (cause) {
@@ -85,7 +84,7 @@ export function Toggle({ children, checked, onChange, disabled }: { children: Re
 }
 
 export function AccessNotice({ owner = false }: { owner?: boolean }) {
-  return <aside className="panel"><p>{owner ? 'Only the workspace owner can manage identity providers and integration tokens.' : 'Workspace administration is required to edit these controls.'} Your own identity links, export consent, effective permissions and spend limits remain separately scoped. Server ACLs are authoritative.</p></aside>;
+  return <aside className="panel"><p>{owner ? 'Only the workspace owner can manage identity providers.' : 'Workspace ownership is required to edit these controls.'} Your own identity links, effective permissions and spend limits remain separately scoped. Server ACLs are authoritative.</p></aside>;
 }
 
 export function machineOptions(machines: Machine[]) {

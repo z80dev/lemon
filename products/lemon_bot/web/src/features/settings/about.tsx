@@ -16,7 +16,7 @@ export function AboutSettings() {
   const newerRequired = capabilities.data?.minClientVersions.web ? compareVersions('1.0.0', capabilities.data.minClientVersions.web) < 0 : false;
   return <div className="stack">
     <section className="panel stack">
-      <h2>Lemon Bot</h2><p>Durable teammates on machines you own. Web, backend and destination workers are updated independently.</p>
+      <h2>Lemon Bot</h2><p>Your named assistants on machines you own. Web, backend and destination workers are updated independently.</p>
       <ErrorNotice error={setup.error} /><ErrorNotice error={capabilities.error} />{setup.loading && <Loading />}
       <dl className="settings-facts">
         <dt>Web client</dt><dd>1.0.0</dd>

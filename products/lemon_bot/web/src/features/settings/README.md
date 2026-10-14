@@ -1,8 +1,8 @@
-# Settings and durable inbox
+# Owner settings and durable inbox
 
-`SettingsScreen({ route })` is the entry for account, workspace, notifications,
-voice, policies, usage, about, and inbox. It consumes only the typed product SDK
-and the shared authenticated `useApp` / `useQuery` interfaces.
+`SettingsScreen({ route })` is the entry for account, your workspace, notifications,
+voice, policies, usage, about, cleanup and inbox. It consumes the canonical named
+owner DTOs through the typed product SDK and shared authenticated `useApp` / `useQuery`.
 
 ## State and permissions
 
@@ -13,11 +13,16 @@ mutation until the user explicitly reconciles through authoritative reads. Query
 failures remain errors rather than empty inventories. Shared `useQuery.reload()`
 must reject a failed read so reconciliation cannot unlock on failure.
 
-Owner-only workspace changes and ownership transfer are separate from admin member
-and invite management. Required rules are locked for ordinary members; personal
-rules require their owner. Destructive account/member operations use the server's
-scope preview and shared typed-name confirmation dialog. Narrow device, session,
-rule, grant and invitation revocations have explicit local confirmations.
+Workspace settings belong to the authenticated owner: name, timezone and enabled
+state only. There is no membership, invitation, ownership-transfer or Team directory
+UI. Required and personal action rules retain their real policy semantics.
+Destructive account operations use the server's scope preview and typed-name
+confirmation; exact device, session and rule revocations remain explicit real API calls.
+
+Paired device sessions display **Until revoked** when `AuthSession.expiresAtMs` is
+null; ordinary sessions show their bounded expiry. Removing a device revokes its
+authority, not its local files. Phone pairing itself lives in the shell-owned
+`features/pairing` screen (`settings.pairing`), not a second settings auth plane.
 
 ## Browser integrations
 
@@ -56,15 +61,21 @@ navigation uses `screen: 'routines', id: routineId, tab: 'runs', entryId: runId`
 
 Usage reads UTC `[from,to)` ranges up to 366 days and all five canonical grouping
 choices. Null prices and incomplete provider data stay explicit. There are no
-billing plans. Policy controls link to the independently owned enterprise panes
-for group policy and real configured host controls.
+billing plans. `OwnerControlsScreen({ route })`, exported by `features/enterprise`,
+retains optional advanced owner controls at `settings.identity`, `settings.network`,
+`settings.setup` and `settings.usage.limit`. These use real configured providers
+and host drivers; ordinary assistant use does not require enterprise setup.
+Directory/governance, SCIM provisioning and shared export screens and their routes
+are removed. Obsolete cross-human connector grants are not replaced with a new
+own-account consent gate; actual native tool policy and capability review remain.
 
 ## Integration checks (not executed in this slice)
 
 The integrating lead should type-check/build the combined web/SDK implementation
-and exercise server revision/ACL conflicts, failed-read reconciliation, unknown
-mutations, ownership transfer, preview expiry, password/SSO account deletion,
-real VAPID push delivery and denied OS permissions, microphone selection/release,
-real speech playback, nullable usage costs, and exact expired/revoked inbox targets.
+and exercise server revision/owner conflicts, failed-read reconciliation, unknown
+mutations, preview expiry, password/SSO account deletion, persistent phone session
+display and exact session/device revocation, real VAPID push delivery and denied OS
+permissions, microphone selection/release, real speech playback, nullable usage
+costs, optional configured host controls and exact expired/revoked inbox targets.
 Provider paths require their actual configured services; no demo result path is
 implemented here.

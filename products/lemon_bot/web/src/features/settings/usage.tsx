@@ -24,7 +24,7 @@ export function UsageSettings() {
   return <div className="stack">
     <section className="panel stack">
       <h2>Actual provider usage</h2>
-      <p className="muted">{snapshot.member.role === 'member' ? 'Your attributed runs' : 'Authorized workspace usage'} · Routines and tests, group work and Bot handoffs count toward their recorded initiating user/routine. No Lemon subscription or billing plan is sold here.</p>
+      <p className="muted">Your workspace usage · Routines and tests, group work and Bot handoffs count toward their recorded initiating user/routine. No Lemon subscription or billing plan is sold here.</p>
       <form className="stack" onSubmit={e => {
         e.preventDefault();
         const fromAtMs = Date.parse(`${from}T00:00:00Z`); const toAtMs = Date.parse(`${to}T00:00:00Z`);
