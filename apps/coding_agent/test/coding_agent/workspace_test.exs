@@ -3,6 +3,8 @@ defmodule CodingAgent.WorkspaceTest do
 
   alias CodingAgent.Workspace
 
+  @moduletag :tmp_dir
+
   @tag :tmp_dir
   test "ensure_workspace writes missing files without overwriting existing", %{tmp_dir: tmp_dir} do
     workspace_dir = Path.join(tmp_dir, "workspace")

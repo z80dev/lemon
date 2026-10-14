@@ -276,7 +276,10 @@ defmodule LemonSkills.ProfileMemoryTransferTest do
     :ok = Store.put_sync(ctx.target, foreign)
     assert {:ok, envelope} = prepare(ctx)
     assert {:ok, _} = Transfer.apply_transfer(envelope, ctx.target_opts)
-    assert {:ok, ^foreign} = Store.get_document(ctx.target, foreign.doc_id)
+    assert {:ok, untouched} = Store.get_document(ctx.target, foreign.doc_id)
+    assert untouched.agent_id == "lb-bob"
+    assert untouched.answer_summary == "Bob's saved fact."
+    assert untouched.meta == foreign.meta
     assert {:ok, [imported]} = Store.list_agent_recent(ctx.target, @profile, limit: 500)
     refute imported.doc_id == foreign.doc_id
     assert imported.answer_summary == source.answer_summary
