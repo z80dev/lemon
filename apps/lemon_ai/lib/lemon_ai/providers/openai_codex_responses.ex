@@ -130,7 +130,7 @@ defmodule LemonAi.Providers.OpenAICodexResponses do
              responses_url(model.base_url),
              body,
              headers,
-             RetryHelper.policy(),
+             RetryHelper.policy(opts),
              0
            ) do
         {:ok, event_stream} ->
