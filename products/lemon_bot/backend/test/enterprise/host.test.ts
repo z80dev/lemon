@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
+import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -22,6 +22,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileS
 import { join } from 'node:path';
 const [directory, mode, behavior] = process.argv.slice(2);
 const operation = JSON.parse(await Bun.stdin.text());
+if (mode === 'apply' && behavior === 'hold') process.kill(process.pid, 'SIGSTOP');
 const path = join(directory, operation.operationId + '.json');
 appendFileSync(join(directory, 'driver.log'), JSON.stringify({id:operation.operationId, mode, kind:operation.kind, phase:operation.phase, argv:process.argv.slice(2), input:operation}) + '\\n');
 let answer;
@@ -72,113 +73,117 @@ const receipt = {type:'lemon_bot_host_result',version:1,operationId:behavior==='
 process.stdout.write('\\n' + JSON.stringify(receipt) + '\\n');
 `;
 
-const ptyFrame = z.discriminatedUnion('type', [
-  z.object({ type: z.literal('ready') }),
-  z.object({ type: z.literal('output'), dataBase64: z.string() }),
-  z.object({ type: z.literal('exit'), code: z.number().int() }),
-]);
-interface Shell {
-  process: Bun.Subprocess<'pipe', 'pipe', 'ignore'>;
-  input: Bun.FileSink;
-  seq: number;
-  streamed: Promise<void>;
+interface NativeProcessResult {
+  processId: string; nodeId: string;
+  state: 'running' | 'completed' | 'cancelled' | 'outcome_unknown' | 'not_found';
+  exitCode: number | null; stdoutBase64: string | null; stderrBase64: string | null; outputTruncated: boolean;
 }
-class ActualPTY implements LemonService {
+interface NativeProcessRecord {
+  process: Bun.Subprocess<'pipe', 'pipe', 'ignore'> | null; digest: string | null;
+  result: NativeProcessResult; done: Promise<NativeProcessResult>;
+}
+const processRequest = z.object({
+  nodeId: z.string(), processId: z.string(), cwd: z.string(),
+  argv: z.array(z.string()).min(1).max(128), stdinBase64: z.string(),
+  timeoutMs: z.number().int().min(1000).max(1800000), maxOutputBytes: z.number().int().min(1).max(1048576),
+}).strict();
+const nativeProcessReply = z.union([
+  z.object({ ok: z.object({
+    processId: z.string(), nodeId: z.string(), state: z.enum(['running', 'completed', 'cancelled', 'outcome_unknown', 'not_found']),
+    exitCode: z.number().int().nullable(), stdoutBase64: z.string().nullable(), stderrBase64: z.string().nullable(), outputTruncated: z.boolean(),
+  }).strict() }).strict(),
+  z.object({ error: z.string() }).strict(),
+]);
+class ActualProcess implements LemonService {
   connected = true;
-  methods = ['node.shell.open', 'node.shell.input', 'node.shell.close'];
-  private listeners = new Set<(event: string, payload: unknown) => void>();
+  methods = ['node.process.run', 'node.process.get', 'node.process.cancel'];
   private connections = new Set<() => void>();
-  readonly shells = new Map<string, Shell>();
+  readonly processes = new Map<string, NativeProcessRecord>();
   readonly calls: { method: string; params: Record<string, unknown> }[] = [];
-  onEvent(listener: (event: string, payload: unknown) => void) { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; }
+  private waiters = new Set<() => void>();
+  loseNextReply = false;
+  onEvent(_listener: (event: string, payload: unknown) => void) { return () => {}; }
   onConnected(listener: () => void) { this.connections.add(listener); return () => { this.connections.delete(listener); }; }
   start() { this.connected = true; for (const listener of this.connections) listener(); }
+  running(): Promise<void> {
+    if ([...this.processes.values()].some(record => record.process && record.result.state === 'running')) return Promise.resolve();
+    const { promise, resolve } = Promise.withResolvers<void>();
+    this.waiters.add(resolve); return promise;
+  }
+  private async packet(record: NativeProcessRecord, value: unknown): Promise<void> {
+    if (!record.process) throw new Error('A cancellation tombstone has no process.');
+    const data = Buffer.from(JSON.stringify(value)), header = Buffer.alloc(4); header.writeUInt32BE(data.length);
+    try { record.process.stdin.write(header); record.process.stdin.write(data); await record.process.stdin.flush(); }
+    finally { data.fill(0); }
+  }
+  private async stop(record: NativeProcessRecord): Promise<void> {
+    if (!record.process || record.result.state !== 'running') return;
+    if (record.process.exitCode === null) await this.packet(record, { op: 'cancel' });
+    await record.done;
+  }
   async close() {
     this.connected = false;
-    const shells = [...this.shells.values()];
-    // Closing the worker-owned pipe is the native owner-disconnect path; the
-    // helper closes the PTY and reaps its child before emitting its exit frame.
-    for (const shell of shells) shell.input.end();
-    await Promise.all(shells.map(shell => shell.streamed));
+    for (const record of this.processes.values()) if (record.process && record.result.state === 'running') record.process.stdin.end();
+    await Promise.all([...this.processes.values()].map(record => record.done));
+    this.processes.clear();
   }
-  private async packet(shell: Shell, value: unknown) {
-    const data = Buffer.from(JSON.stringify(value)), header = Buffer.alloc(4);
-    header.writeUInt32BE(data.length);
-    shell.input.write(header); shell.input.write(data); await shell.input.flush();
-    data.fill(0);
+  private empty(processId: string, nodeId: string, state: NativeProcessResult['state']): NativeProcessResult {
+    return { processId, nodeId, state, exitCode: null, stdoutBase64: null, stderrBase64: null, outputTruncated: true };
   }
   async call<T = unknown>(method: string, params: Record<string, unknown> = {}): Promise<T> {
-    this.calls.push({ method, params });
-    let response: unknown;
-    if (method === 'node.shell.open') {
-      const shellId = `shell_${this.calls.length}`;
-      const python = Bun.which('python3'); if (!python) throw new Error('Native node PTY requires python3.');
-      // Use the worker's actual pty.fork helper, not script(1), whose macOS
-      // terminal setup expects its own stdin to be a terminal rather than a pipe.
-      const helper = join(import.meta.dir, '../../../../../apps/coding_agent/priv/node_pty.py');
-      const processHandle = Bun.spawn([python, helper, String(params.cwd), '/bin/bash', String(params.cols ?? 80), String(params.rows ?? 24)], {
-        stdin: 'pipe', stdout: 'pipe', stderr: 'ignore', env: { PATH: process.env.PATH, HOME: String(params.cwd), PS1: '', PS2: '', PROMPT_COMMAND: '' },
-      });
-      const shell: Shell = { process: processHandle, input: processHandle.stdin, seq: 0, streamed: Promise.resolve() };
-      let resolveReady!: () => void, rejectReady!: (error: Error) => void;
-      const ready = new Promise<void>((resolve, reject) => { resolveReady = resolve; rejectReady = reject; });
-      this.shells.set(shellId, shell);
-      shell.streamed = (async () => {
-        const reader = processHandle.stdout.getReader();
-        let incoming: Buffer = Buffer.alloc(0), exited = false;
-        try {
-          while (true) {
-            const chunk = await reader.read(); if (chunk.done) break;
-            incoming = Buffer.concat([incoming, chunk.value]);
-            while (incoming.length >= 4) {
-              const length = incoming.readUInt32BE(0);
-              if (length > 2 * 1024 * 1024) throw new Error('Native PTY frame exceeds its bound.');
-              if (incoming.length < length + 4) break;
-              const frame = ptyFrame.parse(JSON.parse(incoming.subarray(4, length + 4).toString('utf8')));
-              incoming = incoming.subarray(length + 4);
-              if (frame.type === 'ready') resolveReady();
-              else if (frame.type === 'output') {
-                const payload = { shellId, dataBase64: frame.dataBase64, seq: ++shell.seq };
-                for (const listener of this.listeners) listener('node.shell.output', payload);
-                await this.packet(shell, { type: 'ack' });
-              } else {
-                exited = true;
-                for (const listener of this.listeners) listener('node.shell.exit', { shellId, code: frame.code });
-              }
-            }
-          }
-          const code = await processHandle.exited;
-          if (!exited) for (const listener of this.listeners) listener('node.shell.exit', { shellId, code: code === 0 ? 124 : code });
-        } catch (error) {
-          rejectReady(error instanceof Error ? error : new Error('Native PTY transport failed.'));
-          processHandle.kill();
-          for (const listener of this.listeners) listener('node.shell.exit', { shellId, code: 124 });
-          throw error;
-        } finally {
-          reader.releaseLock(); rejectReady(new Error('Native PTY exited before readiness.'));
-          await processHandle.exited;
-          this.shells.delete(shellId);
-        }
-      })();
-      // The worker-owned policy packet precedes all terminal input and pins cwd
-      // under this fixture's sole admitted root.
-      await this.packet(shell, { cwd: String(params.cwd), roots: [String(params.cwd)] });
-      await ready; response = { shellId };
-    } else if (method === 'node.shell.input') {
-      const shell = this.shells.get(String(params.shellId)); if (!shell) throw new Error('Shell absent.');
-      await this.packet(shell, { type: 'input', dataBase64: String(params.dataBase64) }); response = { shellId: params.shellId, accepted: true };
-    } else if (method === 'node.shell.close') {
-      const shell = this.shells.get(String(params.shellId));
-      if (shell) { await this.packet(shell, { type: 'close' }); await shell.streamed; }
-      response = { shellId: params.shellId, accepted: true };
+    this.calls.push({ method, params: structuredClone(params) });
+    let response: NativeProcessResult;
+    const processId = String(params.processId), nodeId = String(params.nodeId);
+    let record = this.processes.get(processId);
+    if (method === 'node.process.run') {
+      const input = processRequest.parse(params), digest = createHash('sha256').update(JSON.stringify(input)).digest('hex');
+      if (record) {
+        if (record.digest !== null && record.digest !== digest) throw new Error('Conflicting native process intent.');
+        response = await record.done;
+      } else {
+        const python = Bun.which('python3'); if (!python) throw new Error('Native node process execution requires python3.');
+        const helper = join(import.meta.dir, '../../../../../apps/coding_agent/priv/node_process.py');
+        // The production helper executes literal argv with pipes and enforces its
+        // own OS deadline/cancellation; no terminal or fixture timer is involved.
+        const child = Bun.spawn([python, helper], { stdin: 'pipe', stdout: 'pipe', stderr: 'ignore', env: { PATH: process.env.PATH, HOME: input.cwd } });
+        const { promise: done, resolve, reject } = Promise.withResolvers<NativeProcessResult>();
+        record = { process: child, digest, result: this.empty(processId, nodeId, 'running'), done };
+        this.processes.set(processId, record);
+        const current = record;
+        const collect = async (): Promise<NativeProcessResult> => {
+          const bytes = Buffer.from(await new Response(child.stdout).arrayBuffer());
+          try {
+            const code = await child.exited;
+            if (code !== 0 || bytes.length < 4 || bytes.length > 4 * 1048576 + 4 || bytes.readUInt32BE(0) !== bytes.length - 4) throw new Error('The native process helper did not return its bounded final packet.');
+            const reply = nativeProcessReply.parse(JSON.parse(bytes.subarray(4).toString('utf8')));
+            if ('error' in reply) throw new Error(`Native process failed: ${reply.error}`);
+            return reply.ok;
+          } finally { bytes.fill(0); }
+        };
+        void collect().then(result => { current.result = result; resolve(result); }, reject);
+        await this.packet(current, { op: 'run', args: input, policy: { cwd: input.cwd, roots: [input.cwd] } });
+        for (const notify of this.waiters) notify(); this.waiters.clear();
+        response = await done;
+        if (this.loseNextReply) { this.loseNextReply = false; throw new Error('Native completion reply was lost.'); }
+      }
+    } else if (method === 'node.process.get') {
+      response = record?.result ?? this.empty(processId, nodeId, 'not_found');
+    } else if (method === 'node.process.cancel') {
+      if (!record) {
+        response = this.empty(processId, nodeId, 'cancelled');
+        record = { process: null, digest: null, result: response, done: Promise.resolve(response) };
+        this.processes.set(processId, record);
+      } else {
+        await this.stop(record); response = await record.done;
+      }
     } else throw new Error('Unexpected upstream method.');
-    // This generic test transport represents the real JSON RPC decoding boundary.
+    // Generic JSON RPC decoding boundary; effects and exits above are real.
     return response as T;
   }
 }
 interface Fixture {
   services: BackendServices; store: Store; host: HostServices; routes: Route[];
-  owner: Principal; outsider: Principal; admin: Principal; directory: string; lemon: ActualPTY;
+  owner: Principal; outsider: Principal; admin: Principal; directory: string; lemon: ActualProcess;
   request<T>(method: string, path: string, body?: unknown, actor?: Principal): Promise<T>;
   setBehavior(behavior: string): void;
   log(): Promise<{ id: string; mode: string; kind: string; phase?: string; argv: string[]; input: Record<string, unknown> }[]>;
@@ -191,7 +196,7 @@ async function fixture(reviewedSetups: ReviewedSetup[] = []): Promise<Fixture> {
   await writeFile(join(directory, 'driver.ts'), driverSource);
   await writeFile(join(directory, 'secrets.json'), JSON.stringify({ TEAM_SECRET: 'destination-only-private-value' }));
   const store = new Store(join(directory, 'host.sqlite'));
-  const lemon = new ActualPTY();
+  const lemon = new ActualProcess();
   const operator: P.OperatorConfiguration = { version: 1, trustedFrontendOrigins: [], oauthRedirectUris: [], serverSecrets: {}, channelProviders: [], emailProviders: [], eventProviders: [], hostDrivers: [], xProvider: null, exportAllowedOrigins: [], requiredRuntimeDestinations: [{ kind: 'domain', value: 'runtime.example', ports: [443], protocol: 'tcp' }], breakGlassOwnerUserId: null };
   operator.reviewedSetupManifests = reviewedSetups;
   operator.machineManagementUserIds = [];
@@ -310,7 +315,7 @@ async function startOperation(h: Fixture, action: P.HostAction = 'update', machi
   return h.request<P.HostOperation>('POST', '/v1/host-operations', { clientNonce: intent(`start_${action}`), machineIds, action, revision: preview.revision, confirmationToken: preview.confirmationToken, confirmName: preview.confirmName });
 }
 
-describe('trusted owned-host driver over actual node PTY', () => {
+describe('trusted owned-host driver over actual noninteractive native processes', () => {
   test('runs immutable argv with JSON stdin and records verified disk-preserving outcome', async () => {
     const h = await fixture(), operation = await startOperation(h);
     await h.host.work(`operation:${operation.id}`, async () => {});
@@ -319,38 +324,27 @@ describe('trusted owned-host driver over actual node PTY', () => {
     const effect = JSON.parse(await readFile(join(h.directory, 'host-effect.json'), 'utf8'));
     expect(effect.action).toBe('update'); expect(effect.retainSSH).toBe(true); expect(effect.requireSafePoint).toBe(true);
     expect(effect).not.toHaveProperty('operatorToken');
-    expect(h.lemon.calls.every(c => c.method.startsWith('node.shell.'))).toBe(true);
-    const inputs = h.lemon.calls.filter(c => c.method === 'node.shell.input').map(c => Buffer.from(String(c.params.dataBase64), 'base64').toString('utf8'));
-    expect(inputs.length).toBeGreaterThan(1);
-    expect(inputs.every(input => Buffer.byteLength(input, 'utf8') < 1024)).toBe(true);
+    const inputs = h.lemon.calls.filter(c => c.method === 'node.process.run');
+    expect(inputs).toHaveLength(1);
+    expect(JSON.parse(Buffer.from(String(inputs[0]!.params.stdinBase64), 'base64').toString('utf8')).operationId).toBe((await h.log())[0]!.id);
     expect((await h.log()).filter(entry => entry.mode === 'apply')).toHaveLength(1);
-    await Promise.all([...h.lemon.shells.values()].map(shell => shell.streamed));
-    expect(h.lemon.shells.size).toBe(0);
+    await Promise.all([...h.lemon.processes.values()].map(record => record.done));
+    expect([...h.lemon.processes.values()].every(record => record.process?.exitCode !== null)).toBe(true);
     const page = await h.request<P.Page<P.HostOperation>>('GET', '/v1/host-operations'); expect(page.items.map(o => o.id)).toContain(operation.id);
   });
-  test('dispose stops native shell staging and drains operation settlement before store teardown', async () => {
-    const h = await fixture();
-    let resolveConsumed!: () => void, output = '';
-    const consumed = new Promise<void>(resolve => { resolveConsumed = resolve; });
-    const unsubscribe = h.lemon.onEvent((event, payload) => {
-      if (event !== 'node.shell.output') return;
-      const parsed = z.object({ dataBase64: z.string() }).parse(payload);
-      output += Buffer.from(parsed.dataBase64, 'base64').toString('utf8');
-      if (output.includes('\x1e') && output.includes('\x1f')) resolveConsumed();
-    });
-    const operation = await startOperation(h);
-    await consumed; unsubscribe();
-    const shells = [...h.lemon.shells.values()];
-    expect(shells).toHaveLength(1);
+  test('dispose cancels real native process work and drains settlement before store teardown', async () => {
+    const h = await fixture(); h.setBehavior('hold');
+    const running = h.lemon.running(), operation = await startOperation(h);
+    await running;
     const disposal = h.host.dispose();
     expect(h.host.dispose()).toBe(disposal);
     await disposal;
     expect(h.store.require<P.HostOperation>('hostOperations', operation.id).state).toBe('outcome_unknown');
     expect(await h.log()).toHaveLength(0);
-    expect(h.lemon.calls.filter(call => call.method === 'node.shell.close')).toHaveLength(1);
-    await Promise.all(shells.map(shell => shell.streamed));
-    expect(h.lemon.shells.size).toBe(0);
-    for (const shell of shells) expect(shell.process.exitCode).toBe(0);
+    expect(h.lemon.calls.filter(call => call.method === 'node.process.cancel')).toHaveLength(1);
+    for (const record of h.lemon.processes.values()) {
+      await record.done; expect(record.result.state).toBe('cancelled'); expect(record.process?.exitCode).toBe(0);
+    }
     await expect(h.host.reconcile()).rejects.toThrow('Host services are disposed.');
   });
   test('lost acknowledgment retains operation ID across restart and probes without redispatch/reset storm', async () => {
@@ -363,6 +357,30 @@ describe('trusted owned-host driver over actual node PTY', () => {
     try { await restarted.reconcile(); } finally { await restarted.dispose(); }
     expect(h.store.require<P.HostOperation>('hostOperations', operation.id).state).toBe('completed');
     const logs = await h.log(); expect(logs.filter(l => l.mode === 'apply')).toHaveLength(1); expect(logs.filter(l => l.mode === 'probe').map(l => l.id)).toContain(logBefore[0]!.id);
+  });
+  test('lost process completion replies query the reserved ID without a second apply or probe', async () => {
+    const h = await fixture(); h.lemon.loseNextReply = true;
+    const operation = await startOperation(h); await h.host.work(`operation:${operation.id}`, async () => {});
+    expect(h.store.require<P.HostOperation>('hostOperations', operation.id).state).toBe('outcome_unknown');
+    const run = h.lemon.calls.find(call => call.method === 'node.process.run')!;
+    await h.host.reconcile();
+    expect(h.store.require<P.HostOperation>('hostOperations', operation.id).state).toBe('completed');
+    expect(h.lemon.calls.filter(call => call.method === 'node.process.run')).toHaveLength(1);
+    expect(h.lemon.calls.filter(call => call.method === 'node.process.get').map(call => call.params.processId)).toContain(run.params.processId);
+    expect((await h.log()).map(entry => entry.mode)).toEqual(['apply']);
+  });
+  test('an uncertain read-only probe is queried by its own ID, never relaunched', async () => {
+    const h = await fixture(); h.setBehavior('lose');
+    const operation = await startOperation(h); await h.host.work(`operation:${operation.id}`, async () => {});
+    h.lemon.loseNextReply = true; await h.host.reconcile();
+    expect(h.store.require<P.HostOperation>('hostOperations', operation.id).state).toBe('outcome_unknown');
+    const runs = h.lemon.calls.filter(call => call.method === 'node.process.run');
+    expect(runs).toHaveLength(2); expect(runs[1]!.params.processId).not.toBe(runs[0]!.params.processId);
+    await h.host.reconcile();
+    expect(h.store.require<P.HostOperation>('hostOperations', operation.id).state).toBe('completed');
+    expect(h.lemon.calls.filter(call => call.method === 'node.process.run')).toHaveLength(2);
+    expect(h.lemon.calls.filter(call => call.method === 'node.process.get').map(call => call.params.processId)).toContain(runs[1]!.params.processId);
+    expect((await h.log()).map(entry => entry.mode)).toEqual(['apply', 'probe']);
   });
   test('wrong exact operation receipt and absent safe point never report completed', async () => {
     const h = await fixture(); h.setBehavior('wrong');
@@ -435,9 +453,9 @@ describe('trusted owned-host driver over actual node PTY', () => {
     expect(h.store.require<P.HostOperation>('hostOperations', operation.id).state).toBe('completed');
     expect((await h.log()).find(l => l.mode === 'apply')?.argv.at(-1)).toBe(argument);
     await expect(readFile(join(h.directory, 'argv-injected'))).rejects.toMatchObject({ code: 'ENOENT' });
-    const inputs = h.lemon.calls.filter(c => c.method === 'node.shell.input').map(c => Buffer.from(String(c.params.dataBase64), 'base64'));
-    const lines = Buffer.concat(inputs).toString('utf8').split('\n');
-    expect(lines.every(line => Buffer.byteLength(line, 'utf8') < 1024)).toBe(true);
+    const runs = h.lemon.calls.filter(c => c.method === 'node.process.run');
+    expect(runs).toHaveLength(1);
+    expect(runs[0]!.params.argv).toContain(argument);
   });
   test.each(['wrong_config', 'wrong_input'])('rejects %s receipt and probes the original effect without redispatch', async behavior => {
     const h = await fixture(); h.setBehavior(behavior);
@@ -567,7 +585,7 @@ describe('applied network policy and encrypted egress', () => {
 });
 
 describe('reviewed sequential destination setup', () => {
-  test('large Unicode reviewed input survives canonical PTY limits with exact stdin framing', async () => {
+  test('large Unicode reviewed input survives bounded native stdin with exact JSON framing', async () => {
     const reviewed: ReviewedSetup = { name: 'large', directoryGroupId: null, machineIds: ['machine_a'], entries: [{ id: 'unicode', setupScript: `# ${"漢字'".repeat(5000)}\ntouch large.done`, checkScript: null, secretNames: [], timeoutMs: 10000 }] };
     const h = await fixture([reviewed]);
     const manifest = await h.request<P.SetupManifest>('POST', '/v1/setup-manifests', { clientNonce: intent('large_create'), ...reviewed, directoryGroupId: undefined, enabled: true });
@@ -616,7 +634,7 @@ describe('reviewed sequential destination setup', () => {
     expect(applied.map(l => l.phase)).toEqual(['check', 'setup', 'recheck']);
     expect(new Set(applied.map(l => l.id)).size).toBe(3);
   });
-  test('entry PTY timeout stays uncertain with the fixed job ID and never redispatches', async () => {
+  test('entry process timeout stays uncertain with the fixed job ID and never redispatches', async () => {
     const reviewed: ReviewedSetup = { name: 'bounded', directoryGroupId: null, machineIds: ['machine_a'], entries: [{ id: 'slow', setupScript: 'sleep 3', checkScript: null, secretNames: [], timeoutMs: 1000 }] };
     const h = await fixture([reviewed]);
     const manifest = await h.request<P.SetupManifest>('POST', '/v1/setup-manifests', { clientNonce: intent('timeout_create'), ...reviewed, directoryGroupId: undefined, enabled: true });

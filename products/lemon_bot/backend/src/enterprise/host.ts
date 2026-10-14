@@ -1,7 +1,5 @@
-import { randomBytes } from 'node:crypto';
 import { isIP } from 'node:net';
 import { posix } from 'node:path';
-import { StringDecoder } from 'node:string_decoder';
 import { z } from 'zod';
 import type * as P from '../../../contracts/protocol';
 import type { BackendServices, Principal, RequestContext, Route } from '../core/services';
@@ -13,9 +11,9 @@ import { integrationConfiguration } from '../integrations/config';
  * Stdin is one JSON operation; stdout must contain a JSON line with type
  * lemon_bot_host_result, matching operationId/machineId/configDigest/inputDigest.
  * A successful exit without that exact verified receipt is outcome_unknown.
- * PTY commands are bounded by escaped UTF-8 bytes and acknowledged by the
- * shell before the next command: native input acceptance is not consumption.
- * argv/JSON are assembled literally, then JSON is piped by fixed printf.
+ * Execution is a native noninteractive process with literal argv/cwd and raw
+ * bounded UTF-8 JSON stdin. Acceptance is not completion; successful exit and
+ * an exact receipt are both required. No shell/PTY or process restart fallback.
  * Probes use the SAME ID/input and never execute the action again. No raw output
  * is persisted, audited, or returned. Destination drivers own secret resolution,
  * child environment wiping, firewall installation, encrypted tunnels and safe
@@ -53,6 +51,17 @@ interface DriverJob extends P.Resource {
   configDigest: string; inputDigest: string; encryptedInput: string;
   state: 'reserved' | 'dispatched' | 'unknown' | 'succeeded' | 'skipped' | 'failed'; receipt: Receipt | null;
 }
+const processResult = z.object({
+  processId: z.string(), nodeId: z.string(),
+  state: z.enum(['running', 'completed', 'cancelled', 'outcome_unknown', 'not_found']),
+  exitCode: z.number().int().nullable(), stdoutBase64: z.string().nullable(),
+  stderrBase64: z.string().nullable(), outputTruncated: z.boolean(),
+}).strict();
+type ProcessResult = z.infer<typeof processResult>;
+interface DriverProcessAttempt {
+  id: string; jobId: string; nodeId: string; probe: boolean;
+  state: 'reserved' | 'dispatched' | ProcessResult['state'];
+}
 interface ApplicationRecord { id: string; policyId: string; jobId: string | null; configDigest: string; principal: Principal; value: P.PolicyApplication }
 interface SetupExecution { id: string; principal: Principal; manifest: P.SetupManifest; machineRevision: number; index: number; phase: 'check' | 'setup' | 'recheck'; jobId: string | null }
 interface OperationBinding { id: string; principal: Principal; snapshot: unknown; inactivePolicy?: { afterDays: number } }
@@ -68,7 +77,7 @@ export interface HostServices {
   governanceChanged(previous: P.Governance, next: P.Governance): Promise<void>;
   reconcile(): Promise<void>;
   processInactiveHosts(): Promise<void>;
-  /** Stop dispatch, close active shells, and drain all settlement before Store.close. */
+  /** Stop dispatch, cancel active processes, and drain settlement before Store.close. */
   dispose(): Promise<void>;
   driver(machineId: string): P.HostDriverConfig | null;
   management(p: Principal, machineId: string): Promise<P.HostManagement>;
@@ -100,18 +109,6 @@ const parse = <T>(schema: z.ZodType<T>, body: unknown): T => {
 const principal = (c: RequestContext): Principal => {
   if (!c.user) fail('unauthenticated', 'Sign in to manage hosts.');
   return c.user;
-};
-const quote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;
-const shellPieces = (value: string): string[] => {
-  const pieces: string[] = [];
-  let piece = '', bytes = 0;
-  for (const character of value) {
-    const size = character === "'" ? 4 : Buffer.byteLength(character, 'utf8');
-    if (bytes + size > 512) { pieces.push(piece); piece = ''; bytes = 0; }
-    piece += character; bytes += size;
-  }
-  if (piece) pieces.push(piece);
-  return pieces;
 };
 
 /** Canonical CIDR rejects host bits, ambiguous IPv4 and noncanonical IPv6. */
@@ -147,7 +144,7 @@ export function createHostServices(s: BackendServices, options: HostOptions = {}
   const inFlight = new Map<string, Promise<DriverJob>>();
   const workers = new Map<string, Promise<void>>();
   const pending = new Set<Promise<unknown>>();
-  const stopShells = new Set<() => void>();
+  const stopProcesses = new Set<() => void>();
   let disposal: Promise<void> | null = null;
   const track = <T>(fn: () => Promise<T>): Promise<T> => {
     if (disposed) return Promise.reject(new Error('Host services are disposed.'));
@@ -160,6 +157,7 @@ export function createHostServices(s: BackendServices, options: HostOptions = {}
   const validCommand = (cmd: P.HostDriverCommand): P.HostDriverCommand => {
     const value = parse(command, cmd);
     if ([...value.argv, ...value.probeArgv, value.cwd].some(v => v.includes('\0')) || !value.argv[0]?.startsWith('/') || !value.probeArgv[0]?.startsWith('/')) fail('capability_unavailable', 'Configure absolute reviewed driver executables and probe commands.');
+    if (Buffer.byteLength(value.cwd, 'utf8') > 4096 || [value.argv, value.probeArgv].some(argv => argv.reduce((total, arg) => total + Buffer.byteLength(arg, 'utf8'), 0) > 131072)) fail('capability_unavailable', 'Configure driver cwd within 4096 UTF-8 bytes and argv/probeArgv within the native 131072-byte argument budget.');
     return value;
   };
   const machine = (p: Principal, machineId: string, manage = true) => s.auth.machine(p, machineId, manage);
@@ -201,7 +199,7 @@ export function createHostServices(s: BackendServices, options: HostOptions = {}
   };
   const online = (m: P.Machine) => {
     if (!s.lemon.connected || m.status !== 'online' || !m.nodeId) fail('machine_offline', 'The selected host must be online.');
-    if (!['node.shell.open', 'node.shell.input', 'node.shell.close'].every(method => s.lemon.methods.includes(method))) fail('capability_unavailable', 'The destination requires node shell PTY support.');
+    if (!['node.process.run', 'node.process.get', 'node.process.cancel'].every(method => s.lemon.methods.includes(method))) fail('capability_unavailable', 'The destination requires native noninteractive process execution support.');
   };
   const requiredCommand = (m: P.Machine, kind: 'networkApply' | 'egressApply' | 'setupRun'): P.HostDriverCommand => {
     const cmd = driver(m.id)?.[kind];
@@ -218,89 +216,86 @@ export function createHostServices(s: BackendServices, options: HostOptions = {}
     const inputDigest = s.mutations.digest(input);
     return putJob(s.resource('host_job', { kind, targetId, machineId: m.id, command: validCommand(cmd), configDigest, inputDigest, encryptedInput: s.encrypt(input), state: 'reserved' as const, receipt: null }));
   };
-  const executePTY = async (j: DriverJob, probe: boolean): Promise<Receipt | null> => {
+  const maxProcessBytes = 1048576;
+  const processReceipt = (j: DriverJob, result: ProcessResult): Receipt | null => {
+    if (result.state !== 'completed' || result.exitCode !== 0 || result.outputTruncated || result.stdoutBase64 === null || result.stderrBase64 === null) return null;
+    const stdout = Buffer.from(result.stdoutBase64, 'base64'), stderr = Buffer.from(result.stderrBase64, 'base64');
+    try {
+      if (stdout.length + stderr.length > maxProcessBytes || stdout.toString('base64') !== result.stdoutBase64 || stderr.toString('base64') !== result.stderrBase64) return null;
+      const text = new TextDecoder('utf-8', { fatal: true }).decode(stdout);
+      for (const line of text.split('\n')) {
+        try {
+          const parsed = receiptSchema.safeParse(JSON.parse(line));
+          if (parsed.success && parsed.data.operationId === j.id && parsed.data.machineId === j.machineId && parsed.data.configDigest === j.configDigest && parsed.data.inputDigest === j.inputDigest) return parsed.data;
+        } catch { /* Non-protocol stdout is never projected or persisted. */ }
+      }
+      return null;
+    } finally { stdout.fill(0); stderr.fill(0); }
+  };
+  const executeProcess = async (j: DriverJob, probe: boolean): Promise<Receipt | null> => {
     const m = s.store.require<P.Machine>('machines', j.machineId);
     online(m);
-    const input = s.decrypt<Record<string, unknown>>(j.encryptedInput);
-    const json = JSON.stringify({ ...input, version: 1, operationId: j.id, machineId: j.machineId, configDigest: j.configDigest, inputDigest: j.inputDigest, probe });
-    let shellId: string | null = null, output = '', bytes = 0, seq = 0, receipt: Receipt | null = null, exited = false;
-    const decoder = new StringDecoder('utf8');
-    const early: { event: string; payload: unknown }[] = [];
-    let settled = false, marker: string | null = null, acknowledge: ((accepted: boolean) => void) | null = null;
-    let settle!: (result: Receipt | null) => void;
-    const done = new Promise<Receipt | null>(resolve => { settle = result => {
-      if (!settled) { settled = true; acknowledge?.(false); acknowledge = null; resolve(result); }
-    }; });
-    const stop = () => settle(null);
-    stopShells.add(stop);
-    const accept = (event: string, payload: unknown) => {
-      if (!shellId) { if (early.length < 128) early.push({ event, payload }); return; }
-      if (!payload || typeof payload !== 'object' || !('shellId' in payload) || payload.shellId !== shellId) return;
-      if (event === 'node.shell.output') {
-        const chunk = z.object({ shellId: z.string(), dataBase64: z.string(), seq: z.number().int().positive() }).safeParse(payload);
-        if (!chunk.success || chunk.data.seq !== seq + 1) { settle(null); return; }
-        seq = chunk.data.seq;
-        const data = Buffer.from(chunk.data.dataBase64, 'base64');
-        bytes += data.length;
-        if (bytes > 1048576) { settle(null); return; }
-        output += decoder.write(data);
-        let newline: number;
-        while ((newline = output.indexOf('\n')) >= 0) {
-          const line = output.slice(0, newline).trim(); output = output.slice(newline + 1);
-          if (marker && line === marker) { acknowledge?.(true); acknowledge = null; marker = null; continue; }
-          if (!line.startsWith('{')) continue;
-          try {
-            const parsed = receiptSchema.safeParse(JSON.parse(line));
-            if (parsed.success && parsed.data.operationId === j.id && parsed.data.machineId === j.machineId && parsed.data.configDigest === j.configDigest && parsed.data.inputDigest === j.inputDigest) receipt = parsed.data;
-          } catch { /* Non-protocol stdout is discarded, never exposed. */ }
-        }
-        data.fill(0);
-      } else if (event === 'node.shell.exit') {
-        exited = true;
-        const exit = z.object({ shellId: z.string(), code: z.number().int().nullable() }).safeParse(payload);
-        settle(exit.success && exit.data.code === 0 && receipt ? receipt : null);
-      }
-    };
-    const unsubscribe = s.lemon.onEvent(accept);
-    const timer = setTimeout(() => settle(null), probe ? Math.min(j.command.timeoutMs, 60000) : j.command.timeoutMs);
-    try {
-      const opened = parse(z.object({ shellId: z.string().min(1) }), await s.lemon.call('node.shell.open', { nodeId: m.nodeId, cwd: j.command.cwd, cols: 80, rows: 24 }, { mutation: true, resourceIds: [j.id], timeoutMs: Math.min(j.command.timeoutMs, 30000) }));
-      shellId = opened.shellId;
-      for (const event of early) accept(event.event, event.payload);
-      if (disposed) settle(null);
-      const argv = probe ? j.command.probeArgv : j.command.argv;
-      // Bounding individual lines does not bound the terminal's aggregate input
-      // queue. In particular, ready is emitted before the forked shell reads.
-      // Wait for execution of each literal assembly command, never replaying a
-      // command on missing acknowledgment. Echo cannot forge the control frame.
-      const token = randomBytes(16).toString('hex');
-      let step = 0;
-      const send = async (command: string, confirmed = true): Promise<boolean> => {
-        if (settled) return false;
-        marker = confirmed ? `\x1e${token}:${++step}\x1f` : null;
-        const consumed = confirmed ? new Promise<boolean>(resolve => { acknowledge = resolve; }) : Promise.resolve(true);
-        const buffer = Buffer.from(confirmed ? `${command}; printf '\\n\\036%s\\037\\n' ${quote(`${token}:${step}`)}\n` : `${command}\n`);
-        try {
-          await s.lemon.call('node.shell.input', { shellId, dataBase64: buffer.toString('base64') }, { mutation: true, resourceIds: [j.id], timeoutMs: 30000 });
-        } finally { buffer.fill(0); }
-        return consumed;
+    const inspect = async (attempt: DriverProcessAttempt, launch: boolean): Promise<ProcessResult | null> => {
+      if (attempt.nodeId !== m.nodeId) return null;
+      const validate = (value: unknown): ProcessResult => {
+        const result = parse(processResult, value);
+        if (result.processId !== attempt.id || result.nodeId !== attempt.nodeId) fail('upstream_unavailable', 'The destination process receipt did not match the reserved execution.');
+        s.store.put('hostDriverProcesses', { ...attempt, state: result.state });
+        return result;
       };
-      if (!await send('PS1= PS2=; unset PROMPT_COMMAND; stty -echo; set --')) return await done;
-      for (const value of argv) {
-        if (!await send("lb_host_arg=''")) return await done;
-        for (const piece of shellPieces(value)) if (!await send(`lb_host_arg="$lb_host_arg"${quote(piece)}`)) return await done;
-        if (!await send('set -- "$@" "$lb_host_arg"')) return await done;
-      }
-      if (!await send("unset lb_host_arg; lb_host_json=''")) return await done;
-      for (const piece of shellPieces(json)) if (!await send(`lb_host_json="$lb_host_json"${quote(piece)}`)) return await done;
-      await send(`printf '%s\\n' "$lb_host_json" | "$@"; lb_host_code=$?; unset lb_host_json; exit "$lb_host_code"`, false);
-      return await done;
-    } catch { return null; }
-    finally {
-      stopShells.delete(stop);
-      clearTimeout(timer); unsubscribe(); output = ''; early.length = 0;
-      if (shellId && !exited) await s.lemon.call('node.shell.close', { shellId }, { mutation: true, resourceIds: [j.id] }).catch(() => undefined);
+      const stop = () => {
+        const cancellation = s.lemon.call('node.process.cancel', { nodeId: attempt.nodeId, processId: attempt.id }, { mutation: true, resourceIds: [j.id] })
+          .then(value => { validate(value); }).finally(() => pending.delete(cancellation));
+        pending.add(cancellation);
+      };
+      stopProcesses.add(stop);
+      try {
+        if (!launch) return validate(await s.lemon.call('node.process.get', { nodeId: attempt.nodeId, processId: attempt.id }, { resourceIds: [j.id] }));
+        if (disposed) return null;
+        const input = s.decrypt<Record<string, unknown>>(j.encryptedInput);
+        const stdin = Buffer.from(`${JSON.stringify({ ...input, version: 1, operationId: j.id, machineId: j.machineId, configDigest: j.configDigest, inputDigest: j.inputDigest, probe: attempt.probe })}\n`, 'utf8');
+        if (stdin.length > maxProcessBytes) { stdin.fill(0); fail('capability_unavailable', 'The configured host driver input exceeds the native process stdin limit.'); }
+        const timeoutMs = attempt.probe ? Math.min(j.command.timeoutMs, 60000) : j.command.timeoutMs;
+        // Reserve dispatch before network I/O. A lost reply can only be queried,
+        // never restarted with this process ID or converted into a second apply.
+        s.store.put('hostDriverProcesses', { ...attempt, state: 'dispatched' });
+        try {
+          return validate(await s.lemon.call('node.process.run', {
+            nodeId: attempt.nodeId, processId: attempt.id, cwd: j.command.cwd,
+            argv: attempt.probe ? j.command.probeArgv : j.command.argv,
+            stdinBase64: stdin.toString('base64'), timeoutMs, maxOutputBytes: maxProcessBytes,
+          }, { mutation: true, resourceIds: [j.id], timeoutMs: timeoutMs + 5000 }));
+        } finally { stdin.fill(0); }
+      } catch (error) {
+        if (error instanceof ApiError && error.code === 'not_found') {
+          s.store.put('hostDriverProcesses', { ...attempt, state: 'outcome_unknown' });
+        }
+        return null;
+      } finally { stopProcesses.delete(stop); }
+    };
+    if (!probe) {
+      const previous = s.store.get<DriverProcessAttempt>('hostDriverProcesses', j.id);
+      const attempt = previous ?? { id: j.id, jobId: j.id, nodeId: m.nodeId!, probe: false, state: 'reserved' as const };
+      if (!previous) s.store.put('hostDriverProcesses', attempt);
+      const result = await inspect(attempt, attempt.state === 'reserved');
+      return result ? processReceipt(j, result) : null;
     }
+    const original = s.store.get<DriverProcessAttempt>('hostDriverProcesses', j.id);
+    if (original && ['reserved', 'dispatched', 'running'].includes(original.state)) {
+      const result = await inspect(original, false);
+      if (!result || result.state === 'running') return null;
+      const receipt = processReceipt(j, result);
+      if (receipt) return receipt;
+    }
+    const previousId = s.store.metadata<string>(`hostDriverProbe:${j.id}`);
+    let attempt = previousId ? s.store.get<DriverProcessAttempt>('hostDriverProcesses', previousId) : undefined;
+    if (attempt && ['completed', 'cancelled', 'outcome_unknown', 'not_found'].includes(attempt.state)) attempt = undefined;
+    if (!attempt) {
+      attempt = { id: s.resource('host_probe', {}).id, jobId: j.id, nodeId: m.nodeId!, probe: true, state: 'reserved' };
+      s.store.put('hostDriverProcesses', attempt); s.store.setMetadata(`hostDriverProbe:${j.id}`, attempt.id);
+    }
+    const result = await inspect(attempt, attempt.state === 'reserved');
+    return result ? processReceipt(j, result) : null;
   };
   const runJob = (job: DriverJob): Promise<DriverJob> => {
     const current = s.store.require<DriverJob>('hostDriverJobs', job.id);
@@ -316,7 +311,7 @@ export function createHostServices(s: BackendServices, options: HostOptions = {}
         if (current.configDigest !== s.mutations.digest(driver(m.id))) return putJob(s.update(current, { state: 'failed' }));
         putJob(s.update(current, { state: 'dispatched' }));
       }
-      const answer = await executePTY(current, probe).catch(() => null);
+      const answer = await executeProcess(current, probe).catch(() => null);
       const input = s.decrypt<Record<string, unknown>>(current.encryptedInput);
       let verified = answer?.state === 'succeeded' && (current.kind === 'setup' || answer.exitCode === 0);
       if (verified && current.kind === 'host') {
@@ -691,7 +686,7 @@ export function createHostServices(s: BackendServices, options: HostOptions = {}
     dispose() {
       if (disposal) return disposal;
       disposed = true; clearInterval(timer); connected();
-      for (const stop of stopShells) stop();
+      for (const stop of stopProcesses) stop();
       disposal = (async () => {
         const errors: unknown[] = [];
         while (pending.size || workers.size || inFlight.size) {
