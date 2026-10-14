@@ -109,13 +109,25 @@ function wire(destination: P.ExportDestination, row: P.JSONObject, key: string, 
   return JSON.stringify({ resourceLogs: [{ resource: { attributes: [{ key: 'service.name', value: { stringValue: 'lemon_bot' } }] }, scopeLogs: [{ scope: { name: 'lemon_bot.exports', version: '1' }, logRecords: [{ timeUnixNano: (BigInt(timestampMs) * 1000000n).toString(), severityNumber: 9, severityText: 'INFO', body: { stringValue: JSON.stringify(row) }, attributes: [{ key: 'lemon_bot.delivery_key', value: { stringValue: key } }, { key: 'lemon_bot.stream', value: { stringValue: String(row.stream) } }] }] }] }] });
 }
 
-const instances = new WeakMap<BackendServices, ReturnType<typeof buildServices>>();
-export function createExportServices(s: BackendServices) {
+export interface ExportServices {
+  reconcile(): Promise<void>;
+  dispose(): void;
+  authorizeExportAttachment(principal: Principal, attachmentId: string): void;
+  captureAction(principal: Principal, input: P.JSONObject, sourceId?: string): void;
+  captureUsage(principal: Principal, report: P.UsageReport, atMs?: number): void;
+  watermark(): string;
+  cancelContent(conversationId?: string): void;
+  ownRecord(principal: Principal, record: P.ExportRecord): boolean;
+  canReadResource(principal: Principal, collection: string, entity: unknown): boolean | undefined;
+}
+
+const instances = new WeakMap<BackendServices, ExportServices>();
+export function createExportServices(s: BackendServices): ExportServices {
   let existing = instances.get(s);
   if (!existing) { existing = buildServices(s); instances.set(s, existing); }
   return existing;
 }
-function buildServices(s: BackendServices) {
+function buildServices(s: BackendServices): ExportServices {
   let disposed = false;
   let active: Promise<void> | null = null;
   const controllers = new Map<string, AbortController>();

@@ -143,7 +143,7 @@ defmodule LemonControlPlane.Methods.ExecApprovalResolveTest do
     assert {:ok, receipt} = ExecApprovalResolve.handle(params(pending, "approve_once"), %{})
     assert Task.await(task) == {:ok, :approved, :approve_once}
 
-    for exposed <- [event, projected, listed, receipt] do
+    for exposed <- [payload, projected, listed, receipt] do
       encoded = Jason.encode!(exposed)
       refute encoded =~ private_context
       refute encoded =~ "invocation_context_key"

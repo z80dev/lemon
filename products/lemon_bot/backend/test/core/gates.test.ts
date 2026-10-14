@@ -257,7 +257,7 @@ describe('gate admission and transactional failures', () => {
     f.store.put('questions', { ...question, gate: { ...question.gate, revision: 2 } });
     await expect(f.gates.resolve(actor, 'questions', question.id, { clientNonce: nonce, revision: 1, decision: 'decline' })).rejects.toMatchObject({ code: 'revision_conflict' });
     f.store.put('questions', question);
-    f.db.exec(\"CREATE TRIGGER reject_gate_event BEFORE INSERT ON events WHEN NEW.name='question.upserted' BEGIN SELECT RAISE(ABORT,'outbox unavailable'); END\");
+    f.db.exec("CREATE TRIGGER reject_gate_event BEFORE INSERT ON events WHEN NEW.name='question.upserted' BEGIN SELECT RAISE(ABORT,'outbox unavailable'); END");
     await expect(f.gates.resolve(actor, 'questions', question.id, { clientNonce: nonce, revision: 1, decision: 'decline' })).rejects.toThrow();
     expect(f.store.require<P.Question>('questions', question.id)).toEqual(question);
     const entry = f.store.require<P.TranscriptEntry>('entries', question.entryId);
