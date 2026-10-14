@@ -35,6 +35,8 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - Lemon Bot Owners can observe bounded account-teardown receipts after
   session revocation, with explicit OAuth revocation/introspection settings
   and no deleted-account restoration or mutation replay.
+- Pending Lemon Bot X OAuth connections keep unverified identities null
+  rather than exposing fabricated or empty account IDs/usernames.
 
 ---
 
