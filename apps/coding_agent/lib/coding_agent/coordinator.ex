@@ -502,12 +502,14 @@ defmodule CodingAgent.Coordinator do
 
           try do
             result =
-              with :ok <- check_cancelled(owner_ref) do
-                session_id = Session.get_stats(pid).session_id
-                send(coordinator, {:subagent_ready, id, session_id})
-                run_session(pid, session_ref, session_id, owner_ref, id, validated.prompt)
-              else
-                {:cancelled, status} -> terminal_result(id, nil, status)
+              case check_cancelled(owner_ref) do
+                :ok ->
+                  session_id = Session.get_stats(pid).session_id
+                  send(coordinator, {:subagent_ready, id, session_id})
+                  run_session(pid, session_ref, session_id, owner_ref, id, validated.prompt)
+
+                {:cancelled, status} ->
+                  terminal_result(id, nil, status)
               end
 
             # Execution is terminal before cleanup begins. Later cancellation
@@ -535,22 +537,24 @@ defmodule CodingAgent.Coordinator do
   end
 
   defp run_session(pid, session_ref, session_id, owner_ref, id, prompt) do
-    with :ok <- check_cancelled(owner_ref) do
-      unsubscribe = Session.subscribe(pid)
+    case check_cancelled(owner_ref) do
+      :ok ->
+        unsubscribe = Session.subscribe(pid)
 
-      try do
-        with :ok <- check_cancelled(owner_ref),
-             :ok <- Session.prompt(pid, prompt) do
-          await_session_result(id, session_id, session_ref, owner_ref)
-        else
-          {:cancelled, status} -> terminal_result(id, session_id, status)
-          {:error, reason} -> build_error_result(id, session_id, reason)
+        try do
+          with :ok <- check_cancelled(owner_ref),
+               :ok <- Session.prompt(pid, prompt) do
+            await_session_result(id, session_id, session_ref, owner_ref)
+          else
+            {:cancelled, status} -> terminal_result(id, session_id, status)
+            {:error, reason} -> build_error_result(id, session_id, reason)
+          end
+        after
+          unsubscribe.()
         end
-      after
-        unsubscribe.()
-      end
-    else
-      {:cancelled, status} -> terminal_result(id, session_id, status)
+
+      {:cancelled, status} ->
+        terminal_result(id, session_id, status)
     end
   catch
     :exit, reason -> build_crashed_result(id, session_id, reason)

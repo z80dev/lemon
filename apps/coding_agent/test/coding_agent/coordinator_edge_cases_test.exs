@@ -396,13 +396,15 @@ defmodule CodingAgent.CoordinatorEdgeCasesTest do
   # ============================================================================
 
   describe "error recovery - invalid inputs" do
+    # Persona validation is startup work inside the batch deadline. These batches
+    # use the configured deadline so validation, not the timer, classifies them.
     @tag :tmp_dir
     test "recovers from invalid subagent type error", %{tmp_dir: tmp_dir} do
       coordinator = start_coordinator(cwd: tmp_dir)
 
       # First call with invalid subagent
       specs1 = [%{prompt: "Task", subagent: "invalid_type_123"}]
-      results1 = Coordinator.run_subagents(coordinator, specs1, timeout: 100)
+      results1 = Coordinator.run_subagents(coordinator, specs1)
       assert [%{status: :error}] = results1
 
       # Second call should still work
@@ -421,7 +423,7 @@ defmodule CodingAgent.CoordinatorEdgeCasesTest do
       # Multiple errors in a row
       for i <- 1..5 do
         specs = [%{prompt: "Task", subagent: "invalid_#{i}"}]
-        results = Coordinator.run_subagents(coordinator, specs, timeout: 50)
+        results = Coordinator.run_subagents(coordinator, specs)
         assert [%{status: :error}] = results
       end
 
@@ -442,7 +444,7 @@ defmodule CodingAgent.CoordinatorEdgeCasesTest do
         %{prompt: "Valid task 3"}
       ]
 
-      results = Coordinator.run_subagents(coordinator, specs, timeout: 150)
+      results = Coordinator.run_subagents(coordinator, specs)
 
       assert length(results) == 5
 
