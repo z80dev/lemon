@@ -197,7 +197,8 @@ defmodule CodingAgent.ProcessManager do
             started_at: Map.get(record, :started_at),
             completed_at: Map.get(record, :completed_at),
             restarted_from: Map.get(record, :restarted_from),
-            restart_generation: Map.get(record, :restart_generation, 0)
+            restart_generation: Map.get(record, :restart_generation, 0),
+            output: Map.get(record, :output)
           }
 
           {:ok, result}
@@ -258,9 +259,11 @@ defmodule CodingAgent.ProcessManager do
   `read_output/1` call, advancing the read cursor.
 
   Returns `%{process_id, status, exit_code, command, owner, lines,
-  dropped_lines, full_output_path}`; `dropped_lines` counts lines that scrolled out of the
-  bounded log before they were read. Works for running and finished
-  processes (finished ones are read from `ProcessStore`).
+  dropped_lines, full_output_path, output}`; `dropped_lines` counts lines that scrolled out of the
+  bounded log before they were read, and `output` holds capture statistics
+  (see `CodingAgent.ProcessSession`; `nil` for records stored before they
+  existed). Works for running and finished processes (finished ones are read
+  from `ProcessStore`).
   """
   @spec read_output(String.t()) :: {:ok, map()} | {:error, term()}
   def read_output(process_id) when is_binary(process_id) do
@@ -294,7 +297,8 @@ defmodule CodingAgent.ProcessManager do
            owner: Map.get(record, :owner),
            full_output_path: Map.get(record, :full_output_path),
            lines: Enum.drop(logs, start - first_buffered),
-           dropped_lines: start - cursor
+           dropped_lines: start - cursor,
+           output: Map.get(record, :output)
          }}
 
       {:error, :not_found} ->
@@ -420,12 +424,10 @@ defmodule CodingAgent.ProcessManager do
     if ProcessSession.alive?(process_id) do
       ProcessSession.stop(process_id)
       ProcessStore.delete(process_id)
-      :ok
     else
       case ProcessStore.get(process_id) do
         {:ok, _record, _logs} ->
           ProcessStore.delete(process_id)
-          :ok
 
         {:error, :not_found} ->
           {:error, :not_found}

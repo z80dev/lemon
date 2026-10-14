@@ -321,6 +321,16 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   host writes retain the restricted wrapped plan-file boundary.
 - Repeated plan prompts rebuild bounded execution guards without retaining earlier
   wrapper generations, avoiding runaway state copying during native tool handoff.
+- Background process output now enforces finite retained-memory, artifact,
+  owner and runtime storage byte quotas before capture growth. Oversized
+  chunks/partial lines retain a bounded diagnostic tail; polling and artifact
+  handles report incomplete output honestly. Write failures stop capture
+  without changing execution status, and failed cleanup keeps its storage
+  charge instead of allowing quota bypass. TTL cleanup removes expired closed
+  captures even while their completed sessions linger for final polling.
+  Capture accounting now serializes record mutations with reclamation, preserves
+  live capture state across store-only restart, and rejects unpersisted
+  reservations or unknown legacy artifact usage before process launch.
 
 ---
 

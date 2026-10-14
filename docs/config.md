@@ -516,6 +516,85 @@ completions are currently umbrella app config, not TOML. The default lives in
 `config/config.exs` as `config :coding_agent, :async_followups, default_queue_mode: :steer_backlog`.
 Per-call tool inputs still override it: `task.queue_mode` and `agent.followup_queue_mode`.
 
+### Background process output capture
+
+Background `bash` capture limits are umbrella application configuration, not
+TOML or environment overrides:
+
+```elixir
+config :coding_agent, :process_output,
+  max_retained_bytes: 1_048_576,
+  max_artifact_bytes: 16_777_216,
+  max_owner_artifact_bytes: 134_217_728,
+  max_runtime_artifact_bytes: 536_870_912
+```
+
+`ProcessManager.exec/1` and `ProcessSession.start_link/1` accept the same
+per-call options, which override application defaults. Every byte limit must
+be a positive integer; invalid limits refuse launch before opening an output
+file or running the command. `max_log_lines` remains an additional positive
+line-count bound (default 1,000).
+
+Capture is bounded, not backpressure or cancellation. The process continues
+running when capture fills; its status and external effects are unchanged.
+The private 0600 artifact keeps the **head** of output, at most the capacity
+reserved before launch. The in-memory diagnostic buffer keeps the **tail**,
+at most `max_retained_bytes` including held partial lines and consumed
+newlines. Lines longer than `min(65_536, max(max_retained_bytes - 1, 1))`
+bytes are emitted as segments. A one-byte budget charges a segment and its
+newline separately. Old lines are evicted before adding bounded copied bytes.
+The process/store's retained binary payload is at most twice the per-process
+memory budget; stored logs mirror the process tail, not an independent ring.
+Parsing scans bounded windows without concatenating or splitting an entire
+incoming chunk. Additional live binary scratch is at most two line segments.
+This is a reachable-output-payload bound, not a bound on BEAM heap/GC overhead:
+the received port message, polling result copies, transport buffers and
+subscriber/mailbox accumulation remain outside it (subscriber fanout is #88).
+
+`poll`, `read_output`, and `bash_output` expose structured `output` counters:
+`received_bytes`, `retained_bytes`, `discarded_bytes`, `artifact_bytes`,
+`artifact_capacity`, `artifact_discarded_bytes`, `artifact_truncated`,
+`artifact_error`, `artifact_size_unknown`, `artifact_reclaimed`, and
+`finalized`. Retained-byte costs include newlines even though displayed lines
+omit them. `received_bytes = retained_bytes + discarded_bytes`; for a known
+artifact size, `received_bytes = artifact_bytes + artifact_discarded_bytes`.
+Filling an artifact exactly is not truncation until another byte is received.
+An incomplete artifact is labelled **Partial output**, never full output.
+
+Reservations are serialized by the existing process store. Live captures
+charge their full reserved capacity, so concurrent sessions cannot overfill
+the owner/runtime budgets. Finalization returns unused capacity, charging
+the bytes actually saved. When admitting another capture, the store reclaims
+stopped sessions' artifacts oldest first within the owner, then runtime-wide
+if needed. Live sessions' files are not reclaimed; if their reservations
+consume a budget, the new capture receives a smaller capacity, possibly zero.
+Ownerless sessions share one owner budget, and all owners share the runtime
+budget. Reclamation preserves log/status records, clears the file reference
+and sets `artifact_reclaimed`; old artifact handles stop resolving. Owner
+authorization is unchanged. Pre-quota persisted artifacts also count.
+
+All record mutations and deletion share the reservation owner's serialization,
+so concurrent cursor/status updates cannot restore a reclaimed path or erase a
+reservation. A store-only restart preserves surviving registered captures.
+New capture reservations must be persisted and synced before launch; unavailable
+accounting storage or an unmeasurable legacy artifact fails admission instead of
+treating unknown disk usage as zero. Existing captures keep their charged
+reservation if later persistence fails.
+
+A write failure closes the output device once, preserves the bounded tail
+and real execution status, and exposes only a fixed error classification.
+The closed file is checked for a partially written prefix so counters remain
+truthful. If its size cannot be checked, `artifact_size_unknown` is true,
+`artifact_discarded_bytes` is `nil`, and the full reservation remains charged.
+Failed file removal preserves its record/reference and storage charge;
+successful explicit cleanup/TTL cleanup releases them. TTL cleanup may remove
+an expired completed capture while its finalized session still lingers for
+final polling: its output device is already closed. A live capture that is not
+finalized remains charged even if cancellation/timeout has classified its
+record as terminal. No repeated writes are attempted after failure or after
+the capture limit is reached.
+
+
 ## Memory
 
 The `[memory]` section controls per-turn automatic recall. Its `auto_recall`
