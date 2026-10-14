@@ -35,7 +35,12 @@ public final class AccountKeychain: AccountCredentialStore {
     private let service: String
     public init(service: String = "org.lemonbot.accounts.v1") { self.service = service }
     private func query(_ id: String? = nil) -> [String: Any] {
-        var q: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service]
+        var q: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrSynchronizable as String: false]
+        #if os(macOS)
+        // The local login Keychain uses code-signing ACLs, not iOS accessibility.
+        // Select it for every operation; never fall back between Keychain stores.
+        q[kSecUseDataProtectionKeychain as String] = false
+        #endif
         if let id { q[kSecAttrAccount as String] = id }
         return q
     }
@@ -55,7 +60,9 @@ public final class AccountKeychain: AccountCredentialStore {
         if status == errSecItemNotFound {
             var q = query(account.id)
             q[kSecValueData as String] = bytes
+            #if !os(macOS)
             q[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+            #endif
             let inserted = SecItemAdd(q as CFDictionary, nil)
             guard inserted == errSecSuccess else { throw ClientError.keychain(inserted) }
         } else if status != errSecSuccess { throw ClientError.keychain(status) }
@@ -65,7 +72,9 @@ public final class AccountKeychain: AccountCredentialStore {
         guard status == errSecSuccess || status == errSecItemNotFound else { throw ClientError.keychain(status) }
     }
     private var pairingQuery: [String: Any] {
-        [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service + ".pending-pairing", kSecAttrAccount as String: "current"]
+        var q = query("current")
+        q[kSecAttrService as String] = service + ".pending-pairing"
+        return q
     }
     public func loadPendingPairing() throws -> PendingDevicePairing? {
         var q = pairingQuery; q[kSecReturnData as String] = true; q[kSecMatchLimit as String] = kSecMatchLimitOne
@@ -79,7 +88,10 @@ public final class AccountKeychain: AccountCredentialStore {
         let data = try JSONEncoder().encode(pairing)
         let status = SecItemUpdate(pairingQuery as CFDictionary, [kSecValueData as String: data] as CFDictionary)
         if status == errSecItemNotFound {
-            var q = pairingQuery; q[kSecValueData as String] = data; q[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+            var q = pairingQuery; q[kSecValueData as String] = data
+            #if !os(macOS)
+            q[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+            #endif
             let inserted = SecItemAdd(q as CFDictionary, nil)
             guard inserted == errSecSuccess else { throw ClientError.keychain(inserted) }
         } else if status != errSecSuccess { throw ClientError.keychain(status) }

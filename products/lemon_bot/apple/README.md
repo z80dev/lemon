@@ -13,7 +13,7 @@ export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
 xcodegen generate --spec project.yml
 open LemonBot.xcodeproj
 
-# Signing-independent CI builds:
+# Compilation-only CI builds (do not launch these for sign-in/storage checks):
 xcodebuild -project LemonBot.xcodeproj -scheme LemonBotMac \
   -configuration Debug -destination 'platform=macOS' \
   -derivedDataPath .derivedData CODE_SIGNING_ALLOWED=NO build
@@ -21,8 +21,12 @@ xcodebuild -project LemonBot.xcodeproj -scheme LemonBotiOS \
   -configuration Debug -destination 'generic/platform=iOS Simulator' \
   -derivedDataPath .derivedData CODE_SIGNING_ALLOWED=NO build
 
-# Launch the generated macOS app:
-open '.derivedData/Build/Products/Debug/Lemon Bot.app'
+# Quit the old Lemon Bot before rebuilding the runnable macOS app.
+# Debug defaults to local ad-hoc signing; this replaces the failed unsigned app:
+xcodebuild -project LemonBot.xcodeproj -scheme LemonBotMac \
+  -configuration Debug -destination 'platform=macOS' \
+  -derivedDataPath /tmp/lemonbot-owner-mac-build CODE_SIGNING_ALLOWED=YES build
+open '/tmp/lemonbot-owner-mac-build/Build/Products/Debug/Lemon Bot.app'
 
 # Install and launch on an already booted iOS simulator:
 xcrun simctl install booted '.derivedData/Build/Products/Debug-iphonesimulator/Lemon Bot.app'
@@ -31,7 +35,9 @@ xcrun simctl launch booted org.lemonbot.ios
 
 Select **LemonBotMac** or **LemonBotiOS** in Xcode for interactive Run. `LemonBotShare` is a separate embedded iOS extension, not a second account client. Choose a concrete simulator in Xcode or boot an available simulator before `simctl install`; the generic build destination does not boot one.
 
-Unsigned builds validate compilation but do not grant App Group access. To exercise the real app/share container on a simulator, choose its concrete destination and build with `CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual`, then install that signed bundle. Physical devices still require your registered identifiers, entitlements and signing team.
+`CODE_SIGNING_ALLOWED=NO` is compilation-only, not a supported macOS login/Keychain smoke build. The macOS Debug target defaults to ad-hoc signing with the unchanged `org.lemonbot.mac` identity; no Apple Developer account is needed for local login-Keychain storage. Keep the same installed bundle for save/quit/relaunch checks. Ad-hoc signatures do not provide a persistent signer across code-changing rebuilds: macOS may require normal Keychain authorization again. For persistent signer trust across rebuilds, use the same development signing identity/team (`CODE_SIGN_STYLE=Automatic CODE_SIGN_IDENTITY='Apple Development' DEVELOPMENT_TEAM=<team>`). Do not delete credentials or relax their access controls to bypass authorization errors.
+
+Unsigned builds also do not grant App Group access. To exercise the real app/share container on a simulator, choose its concrete destination and build with `CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual`, then install that signed bundle. Physical devices still require your registered identifiers, entitlements and signing team.
 
 Both applications package the shared `Assets.xcassets/AppIcon.appiconset`, with opaque iOS artwork and all macOS icon sizes. `Brand.svg` is the editable product mark; the asset catalog's PNG files are checked-in packaging inputs, not build output.
 
@@ -39,7 +45,9 @@ The checked-in specification uses `org.lemonbot.mac`, `org.lemonbot.ios`, `org.l
 
 Enter the product origin (for local development `http://127.0.0.1:4080`, not Lemon `/ws`) in desktop onboarding. Bootstrap with the operator's one-use setup code only on an empty deployment; otherwise use local sign-in or a configured OIDC provider. OIDC native completion requires `lemonbot://auth/complete` in the backend's client-redirect allowlist. Its confidential IdP credential stays server-side; native flow uses PKCE. iPhone onboarding prioritizes connecting to your already signed-in desktop, not enterprise setup or invitations.
 
-Accounts and device-bound product credentials are stored in this-device-only Keychain, keyed by exact backend/account. The last account and selected Bot/conversation restore on launch. Account switching keeps workspace state separate; sign-out revokes the session and removes that account's local cache. Ordinary sessions keep bounded expiry; paired `AuthSession.expiresAtMs: null` means **until revoked**, not expired or a client-generated refresh token. Offline restoration retains the saved cluster, credential, drafts and last-known selection; reconnection performs reads/realtime subscriptions, never replays ordinary mutations. Authoritative revocation shows **Reconnect to your desktop** and disables old authority.
+Accounts and device-bound product credentials use native Keychain, keyed by exact backend/account. On macOS, all account and pending-pairing reads, updates, inserts and removals explicitly select the standard local login Keychain with synchronization disabled. Its encrypted, code-signing-ACL-protected items do not sync through iCloud; this is not a hardware-bound or backup-nonportable storage guarantee. On iOS, the same items retain `AfterFirstUnlockThisDeviceOnly` accessibility and synchronization is explicitly disabled. Backend device/session binding and revocation remain independent of the local storage implementation. The last account and selected Bot/conversation restore on launch. Account switching keeps workspace state separate; sign-out revokes the session and removes that account's local cache. Ordinary sessions keep bounded expiry; paired `AuthSession.expiresAtMs: null` means **until revoked**, not expired or a client-generated refresh token. Offline restoration retains the saved cluster, credential, drafts and last-known selection; reconnection performs reads/realtime subscriptions, never replays ordinary mutations. Authoritative revocation shows **Reconnect to your desktop** and disables old authority.
+
+The platform split follows Apple's [macOS Keychain implementations](https://developer.apple.com/documentation/technotes/tn3137-on-mac-keychains) and [`kSecAttrAccessible` contract](https://developer.apple.com/documentation/security/ksecattraccessible): iOS accessibility attributes require the data-protection Keychain on macOS, which has provisioned-entitlement requirements. They are not added to macOS login-Keychain items. There is no runtime fallback, credential/cache deletion, store migration or error suppression.
 
 An opaque creation timeout without returned IDs stays fenced when the server exposes no authoritative receipt. Likewise a private-resource 404 or unrelated newer revision does not prove the original deletion/edit completed. The inspector reports unresolved rather than inventing success or retrying; unknown Stop waits for an observed terminal run. Pairing has its own explicitly defined same-nonce receipt reconciliation below, not a general retry queue.
 
