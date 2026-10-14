@@ -150,6 +150,26 @@ describe('export privacy and durable delivery', () => {
     expect(requests.some(row => row.body.includes('later-disabled'))).toBe(false);
     await f.call('DELETE', '/v1/export-destinations/:id', { revision: destination.revision }, owner, destination.id); expect(f.store.list('exportDestinations')).toHaveLength(0);
   });
+  test('resource receipt authorization rechecks current role, own consent and content revocation', async () => {
+    const f = fixture(); f.conversation('room', ['alice']); f.store.setMetadata('governance', { contentExportEnabled: true });
+    const consent = await f.consent('room');
+    expect(f.api.canReadResource(owner, 'contentExportConsents', consent)).toBe(true);
+    expect(f.api.canReadResource(carol, 'contentExportConsents', consent)).toBe(false);
+    expect(f.api.canReadResource(owner, 'unownedCollection', consent)).toBeUndefined();
+    f.message('entry', 'room', 'consented content');
+    const record = await f.call<P.ExportRecord>('POST', '/v1/exports', { fromAtMs: 0, toAtMs: 100000, kind: 'conversation_content', conversationIds: ['room'] });
+    await f.api.reconcile();
+    const receipt = f.store.require<P.ExportRecord>('exports', record.id);
+    expect(f.api.canReadResource(owner, 'exports', receipt)).toBe(true);
+    expect(f.api.canReadResource(carol, 'exports', receipt)).toBe(false);
+    await f.consent('room', owner, false);
+    expect(f.api.canReadResource(owner, 'exports', receipt)).toBe(false);
+    await f.consent('room', owner, true);
+    expect(f.api.canReadResource(owner, 'exports', receipt)).toBe(false);
+    const metadata = await f.call<P.ExportRecord>('POST', '/v1/exports', { fromAtMs: 0, toAtMs: 100000, kind: 'audit' });
+    expect(f.api.canReadResource(carol, 'exports', metadata)).toBe(true);
+    expect(f.api.canReadResource({ ...bob, role: 'owner' }, 'exports', metadata)).toBe(false);
+  });
   test('revoke during attachment creation keeps the announced blob inaccessible and the job failed', async () => {
     const f = fixture(); f.conversation('room', ['alice']); f.store.setMetadata('governance', { contentExportEnabled: true }); await f.consent('room'); f.message('entry', 'room', 'authorized until revoke');
     const create = f.services.attachments.create;

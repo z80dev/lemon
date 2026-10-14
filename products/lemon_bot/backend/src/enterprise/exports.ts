@@ -202,9 +202,38 @@ function buildServices(s: BackendServices) {
     }
   }
   function ownRecord(p: Principal, record: P.ExportRecord): boolean {
+    if (record.kind !== 'conversation_content') return true;
     const job = s.store.get<Job>(jobs, record.id);
     if (job) return job.userId === p.userId;
-    return s.store.get<DestinationState>('exportDestinationState', record.destinationId ?? '')?.userId === p.userId || record.kind !== 'conversation_content';
+    return s.store.get<DestinationState>('exportDestinationState', record.destinationId ?? '')?.userId === p.userId;
+  }
+  function canReadResource(p: Principal, collection: string, entity: unknown): boolean | undefined {
+    if (![destinations, records, consents].includes(collection)) return undefined;
+    if (!entity || typeof entity !== 'object' || !('id' in entity) || typeof entity.id !== 'string') return false;
+    try {
+      const currentPrincipal = enabledPrincipal(s, p.userId, collection !== consents);
+      if (collection === destinations) return s.store.get<P.ExportDestination>(destinations, entity.id) !== null;
+      if (collection === consents) {
+        const consent = s.store.get<P.ContentExportConsent>(consents, entity.id);
+        if (!consent || consent.userId !== currentPrincipal.userId) return false;
+        return s.auth.conversation(currentPrincipal, consent.conversationId).humanUserIds.includes(currentPrincipal.userId);
+      }
+      const record = s.store.get<P.ExportRecord>(records, entity.id);
+      if (!record || !ownRecord(currentPrincipal, record)) return false;
+      if (record.kind !== 'conversation_content') return true;
+      const job = s.store.get<Job>(jobs, record.id);
+      if (job) {
+        if (job.invalidated) return false;
+        authorizeContent(s, currentPrincipal, job.conversationIds);
+      } else {
+        const packet = s.store.list<Packet>(packets, row => row.exportId === record.id)[0];
+        if (!packet || packet.userId !== currentPrincipal.userId || packet.state === 'cancelled') return false;
+        authorizeContent(s, currentPrincipal, packet.conversationIds);
+      }
+      // A saved completed receipt must not expose a replaced/deleted attachment binding.
+      if ('attachmentId' in entity && entity.attachmentId !== null && entity.attachmentId !== record.attachmentId) return false;
+      return true;
+    } catch { return false; }
   }
   async function enqueue(): Promise<void> {
     const enabled = s.store.list<P.ExportDestination>(destinations, row => row.enabled);
@@ -386,7 +415,7 @@ function buildServices(s: BackendServices) {
   const timer = setInterval(() => { void reconcile().catch(() => { /* Persisted work remains available for the next reconciliation. */ }); }, 5000);
   timer.unref?.();
   function dispose(): void { disposed = true; clearInterval(timer); unsubscribe(); for (const controller of controllers.values()) controller.abort(); instances.delete(s); }
-  return { reconcile, dispose, authorizeExportAttachment, captureAction, captureUsage, watermark, cancelContent, ownRecord };
+  return { reconcile, dispose, authorizeExportAttachment, captureAction, captureUsage, watermark, cancelContent, ownRecord, canReadResource };
 }
 
 export function createExportRoutes(s: BackendServices): Route[] {
