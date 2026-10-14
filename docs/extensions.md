@@ -206,10 +206,12 @@ cwd, session_id}`, where `args` are the arguments the tool ran with:
   replace runtime mutation receipts: checkpoint IDs (including chronological
   `checkpoint_ids`), checkpoint kind, affected/changed/written paths, mutation
   action/outcome (`applied`, `success`, partial/error flags), ACP provenance,
-  and original file snapshots/per-file results. Both atom and string keys are
-  protected, including when the runtime did not supply a field. Non-map
-  details cannot discard an existing receipt. Trust level and error status
-  are not changeable.
+  and original file snapshots/per-file results. Diff aliases `oldText`,
+  `newText`, `old_text`, `new_text` and `resolvedPath` are reserved too. Both
+  atom and string keys are protected, including when the runtime omitted a
+  snapshot for size limits: hooks cannot fabricate an ACP diff or location.
+  Non-map details cannot discard an existing receipt. Trust level and error
+  status are not changeable.
 - When the tool returns an error result or `{:error, reason}`, or raises,
   handlers observe it with `is_error: true`; the original error is kept and
   any exception is re-raised.

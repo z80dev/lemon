@@ -56,9 +56,11 @@ defmodule CodingAgent.Extensions.ToolHooks do
   # These describe what actually ran, not how an extension chooses to display
   # it. Reserve both representations because persisted/bridge results use JSON
   # keys while native tools use atoms. Absent fields must stay absent as well.
-  @receipt_fields ~w(checkpoint_id checkpoint_ids checkpoint_kind path paths changed
+  # ACP diff rendering also reads the `old_text`/`new_text`/`resolvedPath` aliases.
+  @receipt_fields ~w(checkpoint_id checkpoint_ids checkpoint_kind path paths resolvedPath changed
                     changed_paths changed_files affected_paths written_paths partial partial_error
-                    applied success action acp_client oldText newText perFileResults snapshot)a
+                    applied success action acp_client oldText newText old_text new_text
+                    perFileResults snapshot)a
   @receipt_keys @receipt_fields ++ Enum.map(@receipt_fields, &Atom.to_string/1)
 
   @typedoc "Session facts included in every tool hook event."

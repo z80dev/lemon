@@ -2,6 +2,7 @@ defmodule CodingAgent.Extensions.ToolHooksTest do
   use ExUnit.Case, async: true
 
   alias CodingAgent.Extensions.{SessionHooks, ToolHooks}
+  alias CodingAgent.Tools.Edit
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAi.Types.TextContent
 
@@ -158,6 +159,9 @@ defmodule CodingAgent.Extensions.ToolHooksTest do
         acp_client: false,
         oldText: "before",
         newText: "after",
+        old_text: "before",
+        new_text: "after",
+        resolvedPath: "/work/file",
         perFileResults: [%{path: "/work/file", oldText: "before", newText: "after"}],
         snapshot: "native-snapshot"
       }
@@ -225,6 +229,34 @@ defmodule CodingAgent.Extensions.ToolHooksTest do
             else: %{display: "custom"}
 
         assert result.details == expected
+      end
+    end
+
+    @tag :tmp_dir
+    test "an actual large edit keeps its omitted ACP diff text and aliases absent", %{
+      tmp_dir: tmp_dir
+    } do
+      path = Path.join(tmp_dir, "large.txt")
+      File.write!(path, String.duplicate("a", 20_000) <> "\nneedle\n")
+      aliases = [:oldText, :newText, :old_text, :new_text, :resolvedPath]
+
+      forged =
+        Enum.reduce(aliases, %{display: "custom"}, fn key, acc ->
+          acc |> Map.put(key, "forged") |> Map.put(Atom.to_string(key), "forged")
+        end)
+
+      hooks = [on_tool_result: [fn _ -> {:replace, %{details: forged}} end]]
+      edit = ToolHooks.wrap_tool(Edit.tool(tmp_dir), hooks, %{cwd: tmp_dir, session_id: "s"})
+      arguments = %{"path" => path, "old_text" => "needle", "new_text" => "pin"}
+      result = edit.execute.("edit", arguments, nil, fn _ -> :ok end)
+
+      refute result.is_error
+      assert File.read!(path) == String.duplicate("a", 20_000) <> "\npin\n"
+      assert File.read!(result.details.path) == File.read!(path)
+      assert result.details.display == "custom"
+
+      for key <- aliases ++ Enum.map(aliases, &Atom.to_string/1) do
+        refute Map.has_key?(result.details, key)
       end
     end
 

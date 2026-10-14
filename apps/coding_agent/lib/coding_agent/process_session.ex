@@ -3,17 +3,45 @@ defmodule CodingAgent.ProcessSession do
   GenServer that manages a single background process via a Port.
 
   Features:
-  - Rolling log buffer (bounded), split on complete lines (a partial line is
-    held until its newline arrives or the process exits)
+  - Rolling log buffer bounded by line count and retained bytes, split on
+    complete lines (a partial line is held until its newline arrives or the
+    process exits)
   - Incremental reads (`read_output/1`) with a per-process read cursor
   - Stdin writing support
   - Process kill support
   - Exit status tracking
   - Integration with ProcessStore for persistence
 
-  The session monitors the OS process via a Port and maintains
-  a bounded ring buffer of output lines. Complete output is archived in a
-  private temporary file, retrievable even after unread lines leave the ring.
+  ## Output capture
+
+  Received bytes go to two bounded destinations:
+
+  - An in-memory tail of recent lines. Its bytes (every retained line counts its
+    bytes plus its consumed newline, plus the held partial line) never exceed
+    `:max_retained_bytes`. Lines longer than the segment size (64 KiB, or less
+    for small budgets) are split into segments; the oldest lines are discarded
+    first. Retained lines are copied, so they never pin a large received chunk.
+    `ProcessStore` mirrors exactly the retained lines, so the two copies hold at
+    most twice that budget. Parsing scans bounded windows of the received chunk:
+    it never concatenates or splits the whole chunk. Additional binary scratch
+    space is at most two line segments; the incoming port message itself and
+    downstream subscriber/mailbox accumulation are outside this capture budget.
+  - A private artifact file (mode 0600) holding the head of the output. It
+    grows to at most the capacity reserved at start: `:max_artifact_bytes`,
+    reduced to what remains of the owner's `:max_owner_artifact_bytes` and
+    `:max_runtime_artifact_bytes`, after reclaiming stopped sessions' artifacts
+    (see `CodingAgent.ProcessStore.reserve_artifact/4`). Bytes beyond that capacity
+    are counted and discarded; the process keeps running.
+
+  Reaching a capture limit never changes execution status. A file write failure
+  closes the artifact, records a bounded `artifact_error` atom and keeps the
+  in-memory tail. `output` statistics in poll/read results report received,
+  retained and discarded bytes and whether the artifact is incomplete; a
+  truncated artifact is never described as complete output.
+
+  Limits come from per-call options, then `config :coding_agent,
+  :process_output`, then defaults. Each must be a positive integer; an invalid
+  value stops the session before a file is created or the command runs.
   """
 
   use GenServer
@@ -23,8 +51,14 @@ defmodule CodingAgent.ProcessSession do
 
   @default_max_log_lines 1000
   # A line longer than this (for example `\r` progress output with no
-  # newline) is flushed to the log as-is instead of growing without bound.
-  @max_partial_line_bytes 65_536
+  # newline) is split into segments of this size instead of growing without bound.
+  @max_line_bytes 65_536
+  @output_limit_defaults [
+    max_retained_bytes: 1_048_576,
+    max_artifact_bytes: 16_777_216,
+    max_owner_artifact_bytes: 134_217_728,
+    max_runtime_artifact_bytes: 536_870_912
+  ]
 
   # Client API
 
@@ -37,6 +71,10 @@ defmodule CodingAgent.ProcessSession do
   - :env - Environment variables map (default: %{})
   - :process_id - Pre-generated process ID (optional)
   - :max_log_lines - Maximum log lines to keep (default: 1000)
+  - :max_retained_bytes - In-memory output tail budget in bytes
+  - :max_artifact_bytes - Per-process artifact file cap in bytes
+  - :max_owner_artifact_bytes - Aggregate artifact budget for the owner in bytes
+  - :max_runtime_artifact_bytes - Runtime-wide aggregate artifact budget in bytes
   - :timeout_ms - Timeout in milliseconds (optional, nil = no timeout)
   - :on_exit - Callback when process exits (optional)
   - :owner - Owning session id, recorded in the store (optional)
@@ -119,44 +157,71 @@ defmodule CodingAgent.ProcessSession do
 
   @impl true
   def init({process_id, opts}) do
+    with {:ok, limits} <- output_limits(opts),
+         {:ok, output_path, output_file} <- open_output_file() do
+      start_session(process_id, opts, limits, output_path, output_file)
+    else
+      {:error, reason} -> {:stop, reason}
+    end
+  catch
+    :throw, :process_start_failed -> {:stop, :process_start_failed}
+  end
+
+  defp start_session(process_id, opts, limits, output_path, output_file) do
     command = Keyword.fetch!(opts, :command)
     cwd = Keyword.get(opts, :cwd, File.cwd!())
     env = Keyword.get(opts, :env, %{})
     backend = Keyword.get(opts, :backend, :local)
     terminal_capabilities = TerminalBackends.capabilities(backend)
-    max_log_lines = Keyword.get(opts, :max_log_lines, @default_max_log_lines)
+    max_log_lines = limits.max_log_lines
     timeout_ms = Keyword.get(opts, :timeout_ms)
     on_exit = Keyword.get(opts, :on_exit)
     owner = Keyword.get(opts, :owner)
 
-    output_path =
-      Path.join(
-        System.tmp_dir!(),
-        "lemon-process-#{:crypto.strong_rand_bytes(16) |> Base.encode16(case: :lower)}.log"
-      )
+    artifact_capacity =
+      try do
+        # Capture accounting must succeed before any external process starts.
+        ProcessStore.new_process(%{
+          id: process_id,
+          command: command,
+          cwd: cwd,
+          env: env,
+          backend: backend,
+          terminal_capabilities: terminal_capabilities,
+          max_log_lines: max_log_lines,
+          full_output_path: output_path,
+          timeout_ms: timeout_ms,
+          restarted_from: Keyword.get(opts, :restarted_from),
+          restart_generation: Keyword.get(opts, :restart_generation, 0),
+          owner: owner,
+          status: :queued
+        })
 
-    {:ok, output_file} = File.open(output_path, [:write, :binary, :exclusive])
-    File.chmod!(output_path, 0o600)
-
-    # Create the process entry in the store
-    ProcessStore.new_process(%{
-      id: process_id,
-      command: command,
-      cwd: cwd,
-      env: env,
-      backend: backend,
-      terminal_capabilities: terminal_capabilities,
-      max_log_lines: max_log_lines,
-      full_output_path: output_path,
-      timeout_ms: timeout_ms,
-      restarted_from: Keyword.get(opts, :restarted_from),
-      restart_generation: Keyword.get(opts, :restart_generation, 0),
-      owner: owner,
-      status: :queued
-    })
+        case ProcessStore.reserve_artifact(
+               process_id,
+               limits.max_artifact_bytes,
+               limits.max_owner_artifact_bytes,
+               limits.max_runtime_artifact_bytes
+             ) do
+          {:ok, capacity} -> capacity
+          {:error, _reason} -> throw(:process_start_failed)
+        end
+      rescue
+        _exception -> failed_start(process_id, output_path, output_file)
+      catch
+        _kind, _reason -> failed_start(process_id, output_path, output_file)
+      end
 
     # Start the OS process via Port
-    port = start_port(command, cwd, env, backend)
+    port =
+      try do
+        start_port(command, cwd, env, backend)
+      rescue
+        _exception -> failed_start(process_id, output_path, output_file)
+      catch
+        _kind, _reason -> failed_start(process_id, output_path, output_file)
+      end
+
     os_pid = get_os_pid(port)
 
     # Mark as running in the store
@@ -183,6 +248,16 @@ defmodule CodingAgent.ProcessSession do
       status: :running,
       exit_code: nil,
       max_log_lines: max_log_lines,
+      max_retained_bytes: limits.max_retained_bytes,
+      max_line_bytes: min(@max_line_bytes, max(limits.max_retained_bytes - 1, 1)),
+      log_bytes: 0,
+      received_bytes: 0,
+      artifact_capacity: artifact_capacity,
+      artifact_bytes: 0,
+      artifact_discarded_bytes: 0,
+      artifact_error: nil,
+      artifact_size_unknown: false,
+      output_finalized: false,
       log_buffer: :queue.new(),
       log_count: 0,
       partial_line: "",
@@ -214,6 +289,7 @@ defmodule CodingAgent.ProcessSession do
       |> :queue.to_list()
       |> Enum.reverse()
       |> Enum.take(line_count)
+      |> Enum.map(&elem(&1, 0))
 
     result = %{
       process_id: state.process_id,
@@ -230,20 +306,22 @@ defmodule CodingAgent.ProcessSession do
       started_at: state.started_at,
       completed_at: state.completed_at,
       restarted_from: state.restarted_from,
-      restart_generation: state.restart_generation
+      restart_generation: state.restart_generation,
+      output: output_stats(state)
     }
 
     {:reply, {:ok, result}, state}
   end
 
   def handle_call(:read_output, _from, state) do
-    first_buffered = state.total_lines - :queue.len(state.log_buffer)
+    first_buffered = state.total_lines - state.log_count
     start = max(state.read_cursor, first_buffered)
 
     lines =
       state.log_buffer
       |> :queue.to_list()
       |> Enum.drop(start - first_buffered)
+      |> Enum.map(&elem(&1, 0))
 
     ProcessStore.put_read_cursor(state.process_id, state.total_lines)
 
@@ -255,7 +333,8 @@ defmodule CodingAgent.ProcessSession do
       owner: state.owner,
       lines: lines,
       full_output_path: state.full_output_path,
-      dropped_lines: start - state.read_cursor
+      dropped_lines: start - state.read_cursor,
+      output: output_stats(state)
     }
 
     {:reply, {:ok, result}, %{state | read_cursor: state.total_lines}}
@@ -291,20 +370,15 @@ defmodule CodingAgent.ProcessSession do
 
   @impl true
   def handle_info({port, {:data, data}}, %{port: port} = state) do
-    :ok = IO.binwrite(state.output_file, data)
-    parts = String.split(state.partial_line <> data, "\n")
-    {lines, [partial]} = Enum.split(parts, -1)
+    state =
+      write_artifact(%{state | received_bytes: state.received_bytes + byte_size(data)}, data)
 
-    {lines, partial} =
-      if byte_size(partial) > @max_partial_line_bytes,
-        do: {lines ++ [partial], ""},
-        else: {lines, partial}
-
-    {:noreply, state |> append_lines(lines) |> Map.put(:partial_line, partial)}
+    state = consume_output(state, data, 0)
+    {:noreply, sync_output(state)}
   end
 
   def handle_info({port, {:exit_status, exit_code}}, %{port: port} = state) do
-    state = flush_partial_line(state)
+    state = finalize_output(state)
 
     # Cancel timeout if still pending
     if state.timeout_ref do
@@ -395,7 +469,15 @@ defmodule CodingAgent.ProcessSession do
 
   @impl true
   def terminate(_reason, state) do
-    File.close(state.output_file)
+    if not state.output_finalized do
+      try do
+        finalize_output(state)
+      catch
+        # The store may already be gone during shutdown; still release the file.
+        :exit, _reason -> close_output_file(state)
+      end
+    end
+
     # Ensure port is closed
     if state.port do
       try do
@@ -533,28 +615,289 @@ defmodule CodingAgent.ProcessSession do
     end
   end
 
-  defp append_lines(state, []), do: state
+  defp output_limits(opts) do
+    configured = Application.get_env(:coding_agent, :process_output, [])
 
-  defp append_lines(state, lines) do
-    ProcessStore.append_logs(state.process_id, lines)
+    limits = [
+      {:max_log_lines, Keyword.get(opts, :max_log_lines, @default_max_log_lines)}
+      | Enum.map(@output_limit_defaults, fn {key, default} ->
+          {key, Keyword.get_lazy(opts, key, fn -> configured_limit(configured, key, default) end)}
+        end)
+    ]
 
-    buffer =
-      lines
-      |> Enum.reduce(state.log_buffer, &:queue.in/2)
-      |> trim_log_buffer(state.max_log_lines)
+    case Enum.find(limits, fn {_key, value} -> not (is_integer(value) and value > 0) end) do
+      nil -> {:ok, Map.new(limits)}
+      {key, _value} -> {:error, {:invalid_process_output_limit, key}}
+    end
+  end
+
+  defp configured_limit(configured, key, default) when is_list(configured),
+    do: if(Keyword.keyword?(configured), do: Keyword.get(configured, key, default), else: nil)
+
+  defp configured_limit(configured, key, default) when is_map(configured),
+    do: Map.get(configured, key, default)
+
+  defp configured_limit(_configured, _key, _default), do: nil
+
+  defp failed_start(process_id, output_path, output_file) do
+    File.close(output_file)
+    # Retain an accounting record if removal fails, so a later reservation
+    # cannot forget an artifact still occupying disk.
+    try do
+      case File.rm(output_path) do
+        result when result in [:ok, {:error, :enoent}] ->
+          ProcessStore.put_output(process_id, %{
+            artifact_capacity: 0,
+            artifact_bytes: 0,
+            finalized: true
+          })
+
+          ProcessStore.delete(process_id)
+
+        _ ->
+          ProcessStore.mark_error(process_id, :process_start_failed)
+      end
+    catch
+      # The accounting owner may be unavailable. The pre-Port file was still
+      # closed/removed first; any persisted reservation remains conservative.
+      :exit, _reason -> :ok
+    end
+
+    throw(:process_start_failed)
+  end
+
+  defp open_output_file do
+    path =
+      Path.join(
+        System.tmp_dir!(),
+        "lemon-process-#{:crypto.strong_rand_bytes(16) |> Base.encode16(case: :lower)}.log"
+      )
+
+    case File.open(path, [:write, :binary, :exclusive]) do
+      {:ok, file} ->
+        case File.chmod(path, 0o600) do
+          :ok ->
+            {:ok, path, file}
+
+          {:error, reason} ->
+            File.close(file)
+            File.rm(path)
+            {:error, {:output_file_unavailable, reason}}
+        end
+
+      {:error, reason} ->
+        {:error, {:output_file_unavailable, reason}}
+    end
+  end
+
+  # The artifact keeps the head of the output up to the reserved capacity; the
+  # remaining bytes are only counted. A write failure closes the file for good.
+  defp write_artifact(%{output_file: nil} = state, data),
+    do: discard_artifact_bytes(state, byte_size(data))
+
+  defp write_artifact(state, data) do
+    kept = min(state.artifact_capacity - state.artifact_bytes, byte_size(data))
+
+    case write_output_file(state.output_file, binary_part(data, 0, kept)) do
+      :ok ->
+        state =
+          %{state | artifact_bytes: state.artifact_bytes + kept}
+          |> discard_artifact_bytes(byte_size(data) - kept)
+
+        if state.artifact_bytes >= state.artifact_capacity,
+          do: close_output_file(state),
+          else: state
+
+      {:error, reason} ->
+        state = close_output_file(state)
+
+        # A failed write can have written a prefix. Stat the closed artifact
+        # rather than claiming the entire attempted write was discarded.
+        {bytes, unknown?} =
+          case File.stat(state.full_output_path) do
+            {:ok, %{type: :regular, size: size}} -> {size, false}
+            {:error, :enoent} -> {0, false}
+            _ -> {state.artifact_bytes, true}
+          end
+
+        %{
+          state
+          | artifact_bytes: bytes,
+            artifact_discarded_bytes: state.received_bytes - bytes,
+            artifact_error: artifact_error(reason),
+            artifact_size_unknown: unknown?
+        }
+    end
+  end
+
+  # `IO.binwrite/2` raises on failure; `:file.write/2` returns the reason.
+  defp write_output_file(file, data) do
+    :file.write(file, data)
+  catch
+    :exit, _reason -> {:error, :terminated}
+  end
+
+  # Diagnostics expose only fixed classifications, never arbitrary error terms.
+  defp artifact_error(reason)
+       when reason in [:enospc, :edquot, :eio, :eacces, :ebadf, :terminated],
+       do: reason
+
+  defp artifact_error(_reason), do: :write_failed
+
+  defp discard_artifact_bytes(state, 0), do: state
+
+  defp discard_artifact_bytes(state, bytes),
+    do: %{state | artifact_discarded_bytes: state.artifact_discarded_bytes + bytes}
+
+  defp close_output_file(%{output_file: nil} = state), do: state
+
+  defp close_output_file(state) do
+    try do
+      File.close(state.output_file)
+    catch
+      :exit, _reason -> :ok
+    end
+
+    %{state | output_file: nil}
+  end
+
+  # Only inspect a segment-sized window. Neither a newline flood nor one huge
+  # binary creates a chunk-sized concatenation, line list or retained subbinary.
+  defp consume_output(state, data, offset) when offset == byte_size(data), do: state
+
+  defp consume_output(state, data, offset) do
+    room = state.max_line_bytes - byte_size(state.partial_line)
+
+    if room == 0 do
+      if :binary.at(data, offset) == ?\n do
+        state |> finish_line(true) |> consume_output(data, offset + 1)
+      else
+        state |> finish_line(false) |> consume_output(data, offset)
+      end
+    else
+      size = min(room, byte_size(data) - offset)
+
+      case :binary.match(data, "\n", scope: {offset, size}) do
+        {newline, 1} ->
+          state
+          |> extend_partial(data, offset, newline - offset)
+          |> finish_line(true)
+          |> consume_output(data, newline + 1)
+
+        :nomatch ->
+          state
+          |> extend_partial(data, offset, size)
+          |> consume_output(data, offset + size)
+      end
+    end
+  end
+
+  defp extend_partial(state, _data, _offset, 0), do: state
+
+  defp extend_partial(state, data, offset, size) do
+    budget = state.max_retained_bytes - byte_size(state.partial_line) - size
+
+    {queue, bytes, count} =
+      evict({state.log_buffer, state.log_bytes, state.log_count}, budget, state.max_log_lines)
+
+    # Evict before allocating the bounded concatenation. Copy even a single
+    # slice so a small partial line never pins the entire received binary.
+    slice = binary_part(data, offset, size)
+
+    partial =
+      if state.partial_line == "",
+        do: :binary.copy(slice),
+        else: :erlang.iolist_to_binary([state.partial_line, slice])
+
+    %{state | log_buffer: queue, log_bytes: bytes, log_count: count, partial_line: partial}
+  end
+
+  defp finish_line(state, newline?) do
+    line = state.partial_line
+    cost = byte_size(line) + if(newline?, do: 1, else: 0)
+    state = %{state | partial_line: ""}
+
+    # A one-byte budget cannot hold both a one-byte segment and its newline.
+    # Charge/emit them separately, preserving the newest byte without exceeding it.
+    if cost > state.max_retained_bytes do
+      state |> retain_entry(line, byte_size(line)) |> retain_entry("", 1)
+    else
+      retain_entry(state, line, cost)
+    end
+  end
+
+  defp retain_entry(state, line, cost) do
+    {queue, bytes, count} =
+      evict(
+        {state.log_buffer, state.log_bytes, state.log_count},
+        state.max_retained_bytes - cost,
+        state.max_log_lines - 1
+      )
 
     %{
       state
-      | log_buffer: buffer,
-        log_count: :queue.len(buffer),
-        total_lines: state.total_lines + length(lines)
+      | log_buffer: :queue.in({line, cost}, queue),
+        log_bytes: bytes + cost,
+        log_count: count + 1,
+        total_lines: state.total_lines + 1
     }
   end
 
+  defp sync_output(state) do
+    ProcessStore.append_logs(
+      state.process_id,
+      Enum.map(:queue.to_list(state.log_buffer), &elem(&1, 0)),
+      keep: state.log_count,
+      total_lines: state.total_lines,
+      output: output_stats(state)
+    )
+
+    state
+  end
+
+  defp evict({queue, bytes, count}, budget, max_lines) when bytes > budget or count > max_lines do
+    {{:value, {_line, cost}}, queue} = :queue.out(queue)
+    evict({queue, bytes - cost, count - 1}, budget, max_lines)
+  end
+
+  defp evict(ring, _budget, _max_lines), do: ring
+
   defp flush_partial_line(%{partial_line: ""} = state), do: state
 
-  defp flush_partial_line(state) do
-    append_lines(%{state | partial_line: ""}, [state.partial_line])
+  defp flush_partial_line(state), do: finish_line(state, false)
+
+  # Runs once, when the process exits (or the session stops first): the
+  # partial line joins the tail, the artifact is closed and its reservation
+  # shrinks to the bytes actually written, and final statistics are stored.
+  defp finalize_output(state) do
+    state = state |> flush_partial_line() |> close_output_file() |> sync_output()
+
+    capacity =
+      if state.artifact_size_unknown, do: state.artifact_capacity, else: state.artifact_bytes
+
+    state = %{state | artifact_capacity: capacity, output_finalized: true}
+    ProcessStore.put_output(state.process_id, output_stats(state))
+    state
+  end
+
+  defp output_stats(state) do
+    retained = state.log_bytes + byte_size(state.partial_line)
+
+    %{
+      received_bytes: state.received_bytes,
+      retained_bytes: retained,
+      discarded_bytes: state.received_bytes - retained,
+      max_retained_bytes: state.max_retained_bytes,
+      artifact_bytes: state.artifact_bytes,
+      artifact_capacity: state.artifact_capacity,
+      artifact_discarded_bytes:
+        if(state.artifact_size_unknown, do: nil, else: state.artifact_discarded_bytes),
+      artifact_truncated: state.artifact_discarded_bytes > 0 or state.artifact_error != nil,
+      artifact_error: state.artifact_error,
+      finalized: state.output_finalized,
+      artifact_size_unknown: state.artifact_size_unknown,
+      artifact_reclaimed: false
+    }
   end
 
   defp do_kill(os_pid, signal) when is_integer(os_pid) do
@@ -588,18 +931,6 @@ defmodule CodingAgent.ProcessSession do
   defp shell_escape(path) do
     "'" <> String.replace(path, "'", "'\"'\"'") <> "'"
   end
-
-  defp trim_log_buffer(buffer, max_log_lines)
-       when is_integer(max_log_lines) and max_log_lines >= 0 do
-    if :queue.len(buffer) > max_log_lines do
-      {{:value, _}, buffer} = :queue.out(buffer)
-      trim_log_buffer(buffer, max_log_lines)
-    else
-      buffer
-    end
-  end
-
-  defp trim_log_buffer(buffer, _max_log_lines), do: buffer
 
   defp generate_id do
     :crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower)

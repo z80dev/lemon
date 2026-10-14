@@ -1002,3 +1002,11 @@ mix test --include integration apps/coding_agent
 ```
 
 The test suite covers 90+ test files including unit tests for all tools, session management, budget tracking, extensions, WASM integration, and coordinator orchestration. Tests use temporary directories and direct `start_link` (not supervised).
+
+Project-memory capture workers intentionally outlive their submitting sessions
+and share eight VM-wide admission slots. The capacity scenarios wait for earlier
+suite captures to drain before leasing all eight slots; `async: false` alone
+does not isolate background workers. The fixture uses process monitors with a
+31-second total deadline and reports the held slot, process and registry keys
+on failure. It neither kills captures nor changes production capacity or
+admission timeouts.

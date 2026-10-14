@@ -2,6 +2,7 @@ defmodule CodingAgent.Tools.BashBackgroundTest do
   use ExUnit.Case, async: false
 
   alias CodingAgent.Tools.{Bash, BashOutput, KillProcess}
+  alias CodingAgent.{Artifacts, ProcessManager, ProcessSession, ProcessStore}
   alias LemonAgent.Types.AgentToolResult
   alias LemonAi.Types.TextContent
 
@@ -146,6 +147,109 @@ defmodule CodingAgent.Tools.BashBackgroundTest do
 
       assert message =~ "pty"
     end
+  end
+
+  describe "bounded process capture" do
+    test "a truncated artifact is labelled partial even when no displayed lines were dropped", %{
+      tmp_dir: cwd,
+      session_id: owner
+    } do
+      {id, pid, state} = start_capped(owner, max_retained_bytes: 32, max_artifact_bytes: 5)
+      send(pid, {state.port, {:data, "one\ntwo\n"}})
+      {:ok, _} = ProcessSession.poll(id)
+      opts = [session_id: owner, context_guardrails: [spill_dir: Path.join(cwd, "spill")]]
+
+      assert %AgentToolResult{details: details, content: content} =
+               BashOutput.execute("capture", %{"process_id" => id}, nil, nil, cwd, opts)
+
+      text = Enum.map_join(content, "\n", & &1.text)
+      assert text =~ "Partial output"
+      assert text =~ "Saved output is incomplete"
+      refute text =~ "Full output"
+      assert details.dropped_lines == 0
+      refute details.truncated
+      assert details.artifact_truncated
+      assert details.output.received_bytes == 8
+      assert details.output.retained_bytes == 8
+      assert details.output.discarded_bytes == 0
+      assert details.output.artifact_bytes == 5
+      assert details.output.artifact_discarded_bytes == 3
+      refute inspect(details.output) =~ "output-quota-secret"
+
+      assert {:ok, path} = Artifacts.resolve(details.artifact_uri, cwd, opts)
+      assert File.read!(path) == "one\nt"
+
+      assert {:error, _} =
+               Artifacts.resolve(details.artifact_uri, cwd, session_id: owner <> "-other")
+
+      assert {:error, _} =
+               BashOutput.execute("foreign", %{"process_id" => id}, nil, nil, cwd,
+                 session_id: owner <> "-other"
+               )
+
+      assert {:ok, %{lines: []}} = ProcessManager.read_output(id)
+    end
+
+    test "stored reads retain diagnostic tail and explain reclaimed capture without a dangling handle",
+         %{
+           tmp_dir: cwd,
+           session_id: owner
+         } do
+      {id, pid, state} =
+        start_capped(owner,
+          max_retained_bytes: 8,
+          max_artifact_bytes: 8,
+          max_owner_artifact_bytes: 8
+        )
+
+      send(pid, {state.port, {:data, "first\nlast\n"}})
+      assert {:ok, %{output: %{received_bytes: 11}}} = ProcessSession.poll(id)
+      ProcessSession.stop(id)
+
+      {_next, _pid, _state} =
+        start_capped(owner,
+          max_retained_bytes: 8,
+          max_artifact_bytes: 8,
+          max_owner_artifact_bytes: 8
+        )
+
+      assert %AgentToolResult{details: details, content: content} =
+               BashOutput.execute("reclaimed", %{"process_id" => id}, nil, nil, cwd,
+                 session_id: owner
+               )
+
+      text = Enum.map_join(content, "\n", & &1.text)
+      assert text =~ "last"
+      assert text =~ "file was reclaimed"
+      assert details.dropped_lines == 1
+      assert details.output.artifact_reclaimed
+      assert details.full_output_path == nil
+      refute Map.has_key?(details, :artifact_uri)
+      refute File.exists?(state.full_output_path)
+    end
+  end
+
+  defp start_capped(owner, opts) do
+    id = "output-quota-#{System.unique_integer([:positive])}"
+
+    {:ok, pid} =
+      ProcessSession.start_link(
+        [
+          command: "read line",
+          process_id: id,
+          owner: owner,
+          env: %{"QUOTA_SECRET" => "output-quota-secret"}
+        ] ++ opts
+      )
+
+    {:ok, state} = ProcessSession.get_state(id)
+
+    on_exit(fn ->
+      if ProcessSession.alive?(id), do: ProcessSession.stop(id)
+      ProcessStore.delete(id)
+    end)
+
+    {id, pid, state}
   end
 
   defp start_background(command, tmp_dir, opts) do

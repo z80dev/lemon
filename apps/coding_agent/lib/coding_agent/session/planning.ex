@@ -35,8 +35,9 @@ defmodule CodingAgent.Session.Planning do
   @propose_tool "propose_plan"
   @plan_write_tools ["write", "edit"]
   # Tools that cannot change the working tree or system. Everything else is
-  # blocked at execution time while plan mode is on.
-  @read_only_tools ~w(read read_skill recall grep find ls websearch webfetch ask)
+  # blocked at execution time while plan mode is on. `tool_search` only reads the
+  # session's frozen tool catalog.
+  @read_only_tools ~w(read read_skill recall grep find ls websearch webfetch ask tool_search)
   @resolve_timeout_ms 30_000
 
   def context_boundary?(%SessionEntry{type: :custom, custom_type: @entry_type}), do: true
@@ -145,6 +146,21 @@ defmodule CodingAgent.Session.Planning do
       else: base_tools
   end
 
+  @doc """
+  Apply the current plan gate to one authorized WASM host target.
+
+  Unlike `tools/3`, this does not add plan-only tools or proposal capabilities
+  to the host inventory; it only reuses the normal target's execution guard.
+  """
+  @spec host_tool(AgentTool.t(), SessionManager.Session.t(), map()) :: AgentTool.t()
+  def host_tool(%AgentTool{} = tool, session, context) do
+    plan = stored(session)
+
+    if plan["mode"] == "plan",
+      do: guard(tool, Map.merge(context, plan_paths(session, plan))),
+      else: tool
+  end
+
   @doc "Effective system prompt for `session`."
   def system_prompt(base, session) do
     case stored(session) do
@@ -189,6 +205,13 @@ defmodule CodingAgent.Session.Planning do
       agent_id: state.agent_id,
       hooks: Map.get(state, :hooks, []),
       secret_obfuscator: Map.get(state, :secret_obfuscator),
+      plan_write_tools:
+        for(
+          %AgentTool{name: name} = tool <- Map.get(state, :tools) || [],
+          name in @plan_write_tools,
+          into: %{},
+          do: {name, tool}
+        ),
       approval_request_fun: (state.approval_context || %{})[:approval_request_fun]
     }
   end
@@ -253,6 +276,9 @@ defmodule CodingAgent.Session.Planning do
   # ── Plan-mode tools ──────────────────────────────────────────────────────
 
   defp plan_tools(base_tools, context) do
+    # Runtime host lookup projects the current write/edit guards. Do not retain
+    # those prior-generation closures inside newly constructed private tools.
+    context = Map.delete(context, :plan_write_tools)
     names = MapSet.new(base_tools, & &1.name)
 
     private_writes =
@@ -276,14 +302,44 @@ defmodule CodingAgent.Session.Planning do
 
   defp guard(%AgentTool{name: name} = tool, _context) when name in @read_only_tools, do: tool
 
+  # The disclosure bridge is judged by the tool it reaches, never by its own
+  # name: a bridged read stays allowed, a bridged mutation is blocked under its
+  # real name.
+  defp guard(%AgentTool{name: "tool_invoke", execute: execute} = tool, context) do
+    private_writes = Map.get(context, :plan_write_tools, %{})
+
+    wrapped = fn id, params, signal, on_update ->
+      target = bridge_target(params)
+      args = if is_map(params), do: Map.get(params, "args", %{}), else: %{}
+
+      cond do
+        not planning?(context.gate) ->
+          execute.(id, params, signal, on_update)
+
+        target in @read_only_tools ->
+          execute.(id, params, signal, on_update)
+
+        target in @plan_write_tools and Map.has_key?(private_writes, target) ->
+          private_writes[target].execute.(id, args, signal, on_update)
+
+        true ->
+          blocked(target || "tool_invoke", context)
+      end
+    end
+
+    %{tool | execute: wrapped}
+  end
+
   defp guard(%AgentTool{name: name, execute: execute} = tool, context) do
+    private_writes = Map.get(context, :plan_write_tools, %{})
+
     wrapped = fn id, params, signal, on_update ->
       cond do
         not planning?(context.gate) ->
           execute.(id, params, signal, on_update)
 
-        name in @plan_write_tools ->
-          context.plan_write_tools[name].execute.(id, params, signal, on_update)
+        name in @plan_write_tools and Map.has_key?(private_writes, name) ->
+          private_writes[name].execute.(id, params, signal, on_update)
 
         true ->
           blocked(name, context)
@@ -319,6 +375,10 @@ defmodule CodingAgent.Session.Planning do
   end
 
   defp planning?(gate), do: :atomics.get(gate, 1) == 1
+
+  # Same normalization `CodingAgent.ToolDisclosure` applies before lookup.
+  defp bridge_target(%{"name" => name}) when is_binary(name), do: String.trim(name)
+  defp bridge_target(_params), do: nil
 
   defp plan_write?(name, %{"path" => path}, context)
        when name in @plan_write_tools and is_binary(path) and path != "" do

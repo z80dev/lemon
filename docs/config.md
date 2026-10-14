@@ -454,6 +454,85 @@ completions are currently umbrella app config, not TOML. The default lives in
 `config/config.exs` as `config :coding_agent, :async_followups, default_queue_mode: :steer_backlog`.
 Per-call tool inputs still override it: `task.queue_mode` and `agent.followup_queue_mode`.
 
+### Background process output capture
+
+Background `bash` capture limits are umbrella application configuration, not
+TOML or environment overrides:
+
+```elixir
+config :coding_agent, :process_output,
+  max_retained_bytes: 1_048_576,
+  max_artifact_bytes: 16_777_216,
+  max_owner_artifact_bytes: 134_217_728,
+  max_runtime_artifact_bytes: 536_870_912
+```
+
+`ProcessManager.exec/1` and `ProcessSession.start_link/1` accept the same
+per-call options, which override application defaults. Every byte limit must
+be a positive integer; invalid limits refuse launch before opening an output
+file or running the command. `max_log_lines` remains an additional positive
+line-count bound (default 1,000).
+
+Capture is bounded, not backpressure or cancellation. The process continues
+running when capture fills; its status and external effects are unchanged.
+The private 0600 artifact keeps the **head** of output, at most the capacity
+reserved before launch. The in-memory diagnostic buffer keeps the **tail**,
+at most `max_retained_bytes` including held partial lines and consumed
+newlines. Lines longer than `min(65_536, max(max_retained_bytes - 1, 1))`
+bytes are emitted as segments. A one-byte budget charges a segment and its
+newline separately. Old lines are evicted before adding bounded copied bytes.
+The process/store's retained binary payload is at most twice the per-process
+memory budget; stored logs mirror the process tail, not an independent ring.
+Parsing scans bounded windows without concatenating or splitting an entire
+incoming chunk. Additional live binary scratch is at most two line segments.
+This is a reachable-output-payload bound, not a bound on BEAM heap/GC overhead:
+the received port message, polling result copies, transport buffers and
+subscriber/mailbox accumulation remain outside it (subscriber fanout is #88).
+
+`poll`, `read_output`, and `bash_output` expose structured `output` counters:
+`received_bytes`, `retained_bytes`, `discarded_bytes`, `artifact_bytes`,
+`artifact_capacity`, `artifact_discarded_bytes`, `artifact_truncated`,
+`artifact_error`, `artifact_size_unknown`, `artifact_reclaimed`, and
+`finalized`. Retained-byte costs include newlines even though displayed lines
+omit them. `received_bytes = retained_bytes + discarded_bytes`; for a known
+artifact size, `received_bytes = artifact_bytes + artifact_discarded_bytes`.
+Filling an artifact exactly is not truncation until another byte is received.
+An incomplete artifact is labelled **Partial output**, never full output.
+
+Reservations are serialized by the existing process store. Live captures
+charge their full reserved capacity, so concurrent sessions cannot overfill
+the owner/runtime budgets. Finalization returns unused capacity, charging
+the bytes actually saved. When admitting another capture, the store reclaims
+stopped sessions' artifacts oldest first within the owner, then runtime-wide
+if needed. Live sessions' files are not reclaimed; if their reservations
+consume a budget, the new capture receives a smaller capacity, possibly zero.
+Ownerless sessions share one owner budget, and all owners share the runtime
+budget. Reclamation preserves log/status records, clears the file reference
+and sets `artifact_reclaimed`; old artifact handles stop resolving. Owner
+authorization is unchanged. Pre-quota persisted artifacts also count.
+
+All record mutations and deletion share the reservation owner's serialization,
+so concurrent cursor/status updates cannot restore a reclaimed path or erase a
+reservation. A store-only restart preserves surviving registered captures.
+New capture reservations must be persisted and synced before launch; unavailable
+accounting storage or an unmeasurable legacy artifact fails admission instead of
+treating unknown disk usage as zero. Existing captures keep their charged
+reservation if later persistence fails.
+
+A write failure closes the output device once, preserves the bounded tail
+and real execution status, and exposes only a fixed error classification.
+The closed file is checked for a partially written prefix so counters remain
+truthful. If its size cannot be checked, `artifact_size_unknown` is true,
+`artifact_discarded_bytes` is `nil`, and the full reservation remains charged.
+Failed file removal preserves its record/reference and storage charge;
+successful explicit cleanup/TTL cleanup releases them. TTL cleanup may remove
+an expired completed capture while its finalized session still lingers for
+final polling: its output device is already closed. A live capture that is not
+finalized remains charged even if cancellation/timeout has classified its
+record as terminal. No repeated writes are attempted after failure or after
+the capture limit is reached.
+
+
 ## Memory
 
 The `[memory]` section controls per-turn automatic recall. Its `auto_recall`
@@ -1083,6 +1162,78 @@ cache_dir = ""
 max_tool_invoke_depth = 4
 ```
 
+## Tool Disclosure
+
+Every tool a session exposes sends its name, description and JSON schema with
+each model request. `[runtime.tools.disclosure]` can move tools behind two
+bridge tools: `tool_search` (look up a deferred tool and read its schema) and
+`tool_invoke` (call it by name). A bridged call runs the same policy, approval,
+checkpoint, cancellation and per-session mutation-lock path as a direct call,
+and `tool_invoke` never runs in parallel with other calls. Plan mode judges a
+bridged call by the tool it reaches.
+
+```toml
+[runtime.tools.disclosure]
+enabled = true           # false keeps every tool directly exposed
+budget_tokens = 40000    # legacy profile: defer only above this estimate
+catalog_tokens = 2000    # size of the deferred-tool list in tool_search's description
+max_results = 5          # default tool_search result count
+profile = "legacy"       # "legacy" (default) or "coding" (opt-in experiment)
+pinned = []              # tool names that always stay directly exposed
+```
+
+- **`legacy`** (default): built-in tools stay exposed. The MCP, extension and
+  WASM tools are deferred only when the estimated schema cost of the whole
+  catalog exceeds `budget_tokens`; below it the tool list is unchanged.
+- **`coding`**: an experiment for coding sessions. Only the coding core stays
+  directly exposed — `read`, `write`, `edit`, `patch`, `ls`, `find`, `grep`,
+  `ast_grep`, `lsp_diagnostics`, `checkpoint`, `bash`, `bash_output`,
+  `kill_process`, `websearch`, `webfetch`, `read_skill`, `recall`, `todo`,
+  `ask`, `task`, `wait`, `agent_message` and `parent_question` — plus `pinned`
+  names. Every other resolved tool, including browser, media, automation and
+  other optional built-ins, is deferred whenever there is one to defer;
+  `budget_tokens` is not consulted. Whether this improves cost, latency or task
+  success is not established, so it is not the default.
+
+Tools the session policy denies are never searchable or invokable. Tools passed
+as `extra_tools` always stay exposed, and sessions started with an explicit
+`tools` list skip disclosure. Names `tool_search` and `tool_invoke` are
+reserved; a real tool using either name is dropped while disclosure is active.
+
+WASM host aliases resolve from this same frozen, policy-authorized runtime
+catalog, not only the schemas currently shown to the model. A permitted optional
+built-in such as `browser_tabs` therefore remains a host capability under either
+profile. Host calls retain the catalog's wrapped implementation and the current
+plan-mode gate; reload replaces that inventory so removed authority is not kept
+alive by an old host lookup. Neither WASM tools nor the disclosure bridge tools
+can be host targets, preventing recursive calls through the deferred catalog.
+
+The tool list is computed at session start and on extension reload, never per
+turn. `extensions_status` reports the active profile, the exposed and deferred
+tool names, estimated schema tokens before and after disclosure, and a
+`catalog_digest`: a SHA-256 over the exposed schemas, the deferred tools, their
+sources and the session's tool policy. Matching digests identify matching
+schemas, source metadata and policy; they do not attest to external tool state
+or outcome. An authority change recomputes the catalog at the next run's session
+startup/resume boundary, or when explicitly supplied to a lifecycle reload, and
+changes its identity even if the visible schemas remain identical. Denied tools
+are removed from the rebuilt bridge, not merely hidden from its search results.
+The `[:coding_agent, :tool_disclosure, :applied]` telemetry event also carries the
+profile and safe catalog digest, with before/after schema estimates and tool
+counts as measurements, so isolated trial collectors need not log raw schemas.
+Diagnostic event version `1` adds `:search` events with a matched count and
+success/error status, and `:invoke_rejected` events with a bounded rejection
+reason (`unknown_tool`, `invalid_arguments` or `invalid_request`). These events
+contain no query, tool name, arguments or error text. Pre-aborted calls do not
+count as discovery or incorrect-call failures.
+
+For a controlled trial, scope the profile to the trial instead of the user's
+global config: put the section in the benchmark project's `.lemon/config.toml`
+(applies only to sessions in that project), set
+`LEMON_TOOL_DISCLOSURE_PROFILE=coding` on a separately launched runtime (it
+overrides file config for that process only), or start sessions
+programmatically with `CodingAgent.Session.start_link(tool_disclosure: [profile: :coding])`.
+
 ## Sections
 
 - `providers.<name>`: API keys and base URLs per provider.
@@ -1090,6 +1241,7 @@ max_tool_invoke_depth = 4
 - `runtime`: runtime behavior and tool settings.
 - `runtime.tools.web`: `websearch` / `webfetch` providers, guardrails, cache, and Firecrawl fallback.
 - `runtime.tools.wasm`: WASM sidecar runtime controls and discovery paths.
+- `runtime.tools.disclosure`: deferring tool schemas behind `tool_search` / `tool_invoke` (see [Tool Disclosure](#tool-disclosure)).
 - `profiles.<agent_id>`: assistant profiles (identity + defaults) used by gateway/control-plane.
 - `runtime.compaction`: context compaction settings.
 - `runtime.retry`: session retry of transient provider failures (backoff + retry-after).

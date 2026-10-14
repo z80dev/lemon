@@ -92,6 +92,151 @@ defmodule CodingAgent.Session.PlanningTest do
     assert {:ok, %{"mode" => "code"}} = Session.plan(resumed, :exit)
   end
 
+  test "repeated refresh and reload restore private host and native bridge writes", %{root: root} do
+    secret = "fixture-native-plan-secret"
+    agent_dir = Path.join(root, "agent")
+    File.mkdir_p!(agent_dir)
+    previous_agent_dir = System.get_env("LEMON_AGENT_DIR")
+    System.put_env("LEMON_AGENT_DIR", agent_dir)
+    File.mkdir_p!(Path.join(root, ".lemon"))
+    File.write!(Path.join(root, ".lemon/secrets.yml"), "- type: plain\n  content: #{secret}\n")
+    ext_dir = Path.join(root, ".lemon/extensions")
+    File.mkdir_p!(ext_dir)
+    module_name = "NativePlanRefresh#{System.unique_integer([:positive])}"
+    module = Module.concat([module_name])
+    parent = inspect(:erlang.pid_to_list(self()))
+
+    File.write!(Path.join(ext_dir, "hooks.ex"), """
+    defmodule #{module_name} do
+      @behaviour CodingAgent.Extensions.Extension
+      @impl true
+      def name, do: "native-plan-refresh"
+      @impl true
+      def version, do: "1.0.0"
+      @impl true
+      def hooks do
+        [on_tool_call: fn
+          %{tool_name: "write", args: args} ->
+            send(:erlang.list_to_pid(#{parent}), {:native_plan_hook, args["content"]})
+            :ok
+          _ -> :ok
+        end]
+      end
+    end
+    """)
+
+    on_exit(fn ->
+      :code.purge(module)
+      :code.delete(module)
+
+      if previous_agent_dir,
+        do: System.put_env("LEMON_AGENT_DIR", previous_agent_dir),
+        else: System.delete_env("LEMON_AGENT_DIR")
+    end)
+
+    calls = :counters.new(1, [:atomics])
+
+    stream = fn _, context, _ ->
+      :counters.add(calls, 1, 1)
+      call = :counters.get(calls, 1)
+
+      message =
+        if rem(call, 2) == 1 do
+          content = context.messages |> List.last() |> Map.fetch!(:content)
+
+          placeholder =
+            case content do
+              text when is_binary(text) -> text
+              blocks when is_list(blocks) -> Enum.map_join(blocks, "", &Map.fetch!(&1, :text))
+            end
+
+          tool_use("bounded-#{call}", "tool_invoke", %{
+            "name" => "write",
+            "args" => %{
+              "path" => Path.join(plan_dir(context.system_prompt), "bounded-plan.md"),
+              "content" => placeholder <> "/bridge-#{div(call + 1, 2)}"
+            }
+          })
+        else
+          stop("Draft saved")
+        end
+
+      {:ok, events(message)}
+    end
+
+    settings = %{
+      settings(root)
+      | secret_obfuscation_enabled: true,
+        extension_paths: [ext_dir],
+        extension_auto_load_default_paths: false
+    }
+
+    session =
+      start_supervised!(
+        {Session,
+         [
+           cwd: root,
+           workspace_dir: Path.join(root, "workspace"),
+           model: model(),
+           stream_fn: stream,
+           settings_manager: settings,
+           mcp_tools: [],
+           tool_policy:
+             CodingAgent.ToolPolicy.custom(allow: ["read", "write", "edit", "browser_tabs"]),
+           tool_disclosure: [profile: :coding],
+           system_prompt: "Update the private plan draft."
+         ]}
+      )
+
+    Session.subscribe(session)
+    assert {:ok, %{"mode" => "plan"}} = Session.plan(session, :enter)
+    state = Session.get_state(session)
+
+    placeholder =
+      CodingAgent.Security.SecretObfuscator.obfuscate(state.secret_obfuscator, secret)
+
+    refute placeholder == secret
+    plan_file = Path.join(Planning.plan_dir(state.session_manager), "bounded-plan.md")
+    native_id = state.session_manager.header.id
+
+    for revision <- 1..6 do
+      if revision > 1 do
+        assert {:ok, _} = Session.reload_extensions(session)
+      end
+
+      # The same request the WASM sidecar's host-invoke callback sends.
+      host_content = secret <> "/host-#{revision}"
+      params = %{"path" => plan_file, "content" => placeholder <> "/host-#{revision}"}
+
+      assert {:ok, _} =
+               GenServer.call(
+                 session,
+                 {:wasm_host_tool_invoke, "write", Jason.encode!(params)},
+                 5_000
+               )
+
+      assert_receive {:native_plan_hook, ^host_content}
+      refute_received {:native_plan_hook, _}
+      assert File.read!(plan_file) == host_content
+
+      assert :ok = Session.prompt(session, placeholder)
+      assert_receive {:session_event, ^native_id, {:agent_end, _}}, 5_000
+      bridge_content = secret <> "/bridge-#{revision}"
+      assert_receive {:native_plan_hook, ^bridge_content}
+      refute_received {:native_plan_hook, _}
+      assert File.read!(plan_file) == bridge_content
+      call_id = "bounded-#{revision * 2 - 1}"
+
+      assert %{is_error: false} =
+               Enum.find(Session.get_messages(session), fn
+                 %{role: :tool_result, tool_call_id: ^call_id} -> true
+                 _ -> false
+               end)
+
+      assert {:ok, %{"mode" => "plan"}} = Session.plan(session)
+    end
+  end
+
   test "refinement keeps plan mode and remembers the proposed plan file", %{root: root} do
     parent = self()
 

@@ -214,7 +214,7 @@ defmodule CodingAgent.Subagents do
 
   defp parse_yaml(yaml) do
     # Preserve pairs so duplicate fields cannot silently change security settings.
-    case YamlElixir.read_from_string(yaml, maps_as_keywords: true) do
+    case read_yaml(yaml) do
       {:ok, pairs} when is_list(pairs) ->
         if Enum.all?(pairs, &match?({key, _} when is_binary(key), &1)) do
           fields = Map.new(pairs)
@@ -231,6 +231,26 @@ defmodule CodingAgent.Subagents do
     end
   rescue
     _ -> {:error, "malformed YAML frontmatter"}
+  end
+
+  @yaml_options [
+    maps_as_keywords: true,
+    detailed_constr: true,
+    str_node_as_binary: true,
+    keep_duplicate_keys: true
+  ]
+
+  # YamlElixir.read_from_string/2 calls Application.start(:yamerl) on every
+  # read, a call into the application controller. Sessions parse these
+  # definitions in init, so a session starting while an application stops
+  # deadlocked: the controller waited on the session supervisor, which waited
+  # on this init. yamerl is already running as a yaml_elixir dependency, so
+  # parse with yamerl directly.
+  defp read_yaml(yaml) do
+    document = yaml |> :yamerl_constr.string(@yaml_options) |> List.last()
+    {:ok, YamlElixir.Mapper.process(document, @yaml_options)}
+  catch
+    _, _ -> {:error, :malformed}
   end
 
   defp validate_fields(fields, id) do
