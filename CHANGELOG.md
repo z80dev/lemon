@@ -10,6 +10,14 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- Lemon Bot product architecture and dependency-free client/backend contracts:
+  authenticated local/OIDC accounts and SCIM directory provisioning, durable
+  named teammates on user-owned swarm machines, typed REST/realtime/MCP,
+  scoped cards/approvals/drafts, attachments/voice/push, skills/routines/memory,
+  provider integrations, applied host policies and self-hosted usage controls.
+  Includes web/macOS/iOS screen contracts, all 101 Grok behavioral mappings
+  and all 16 adopted Muse companion/control features, with explicit provider
+  prerequisites and no virtual-desktop or demonstration-recording claims.
 - Named execution-node runs now stream live chat deltas, tool activity and
   checkpoints through the controller's normal run/session events. Invocation-bound,
   sequenced `node.invoke.event` frames reject foreign/stale node sessions, ignore
