@@ -305,7 +305,7 @@ struct AboutSettingsView: View {
     let store: LemonBotStore
     @State private var control = AdminControl()
     @State private var setup: SetupStatus?
-    @State private var hosts: [(String, HostInfo)] = []
+    @State private var hosts: [AdminHostVersion] = []
     var body: some View {
         Form {
             AdminStatus(control: control, store: store)
@@ -320,7 +320,7 @@ struct AboutSettingsView: View {
                 }
                 Text("Update the native application separately from the backend and destination worker. The operator installs the configured package and restarts its service; updating a client never resets host files or a Bot image.")
                 Text("Self-hosted usage, no Lemon subscription or trial. External provider billing and cancellation remain with that provider.")
-                ForEach(hosts, id: \.0) { name, host in Text("\(name): Lemon \(host.lemonVersion) · \(host.os) \(host.osVersion)") }
+                ForEach(hosts) { version in Text("\(version.name): Lemon \(version.host.lemonVersion) · \(version.host.os) \(version.host.osVersion)") }
             }
             Section("Copy diagnostics — never includes credentials or transcript") {
                 Text("Account: \(store.user?.id ?? "none")\nWorkspace: \(store.workspace?.id ?? "none")\nConversation: \(store.selectedConversationID ?? "none")\nTime: \(Date().formatted())\nRead attempts: \(control.attempts)\nLast attempt: \(control.lastAttempt?.formatted() ?? "none")\nService: \(store.connectionState)\nLast error: \(store.errorMessage ?? control.error ?? "none")").textSelection(.enabled)
@@ -333,9 +333,15 @@ struct AboutSettingsView: View {
         hosts = []
         for machine in store.machines where machine.status == "online" {
             let host = try await store.read("/machines/\(adminPath(machine.id))/host", as: HostInfo.self)
-            hosts.append((machine.name, host))
+            hosts.append(AdminHostVersion(id: machine.id, name: machine.name, host: host))
         }
     }
+}
+
+private struct AdminHostVersion: Identifiable {
+    let id: String
+    let name: String
+    let host: HostInfo
 }
 
 #if os(iOS)
