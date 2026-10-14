@@ -86,6 +86,7 @@ defmodule LemonControlPlane.Methods.Registry do
     # MCP server connections
     LemonControlPlane.Methods.McpServersList,
     LemonControlPlane.Methods.McpServersRefresh,
+    LemonControlPlane.Methods.McpExecutionNames,
     # Portable skill bundles and automation blueprints
     LemonControlPlane.Methods.BlueprintsList,
     LemonControlPlane.Methods.BlueprintsInspect,

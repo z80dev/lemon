@@ -134,6 +134,59 @@ defmodule LemonSkills.McpDiscoveryTest do
     %{id: id, cwd: cwd, server: server, store: store, secret_name: secret_name, key: key}
   end
 
+  test "pure execution-name projection matches actual profile tools without starting clients", ctx do
+    public = Map.take(ctx.server, ["name", "url"])
+    before = children()
+    assert {:ok, projection} = McpDiscovery.execution_names(public, ["echo", "literal*"])
+    assert projection == %{"server" => %{"name" => "fixture"}, "count" => 2,
+      "tools" => [
+        %{"name" => "echo", "executionName" => McpSource.execution_name("fixture", ctx.server["url"], "echo")},
+        %{"name" => "literal*", "executionName" => McpSource.execution_name("fixture", ctx.server["url"], "literal*")}
+      ]}
+    assert requests(ctx) == []
+    assert children() == before
+    assert {:ok, _} = LemonCore.JSONPayload.validate(projection)
+
+    assert :ok = McpSession.open_http(ctx.id, ctx.cwd,
+      [Map.put(ctx.server, "enabledTools", ["echo", "literal*"])], self())
+    actual = McpSession.tools(ctx.id) |> Enum.map(& &1.name) |> Enum.sort()
+    assert actual == Enum.map(projection["tools"], & &1["executionName"]) |> Enum.sort()
+  end
+
+  test "pure projection does not resolve DNS or touch encrypted secrets", ctx do
+    assert {:ok, _} = Secrets.set(ctx.secret_name, "expired-private-value", expires_at: 0)
+    public = %{"name" => "offline", "url" => "https://never-resolve.invalid/mcp?tenant=one"}
+    before = children()
+    assert {:ok, result} = McpDiscovery.execution_names(public, ["echo"])
+    assert result["count"] == 1
+    assert {:ok, empty} = McpDiscovery.execution_names(public, [])
+    assert empty == %{"server" => %{"name" => "offline"}, "tools" => [], "count" => 0}
+    assert children() == before
+    assert requests(ctx) == []
+    assert Store.get(Secrets.table(), {"default", ctx.secret_name}).usage_count == 0
+    refute Jason.encode!(result) =~ "never-resolve.invalid"
+    refute Jason.encode!(result) =~ "expired-private-value"
+  end
+
+  test "pure projection rejects configuration fields, secret references and invalid raw selectors", ctx do
+    public = Map.take(ctx.server, ["name", "url"])
+    for invalid <- [
+      Map.put(public, "headers", %{"Authorization" => "${LEMON_SECRET:#{ctx.secret_name}}"}),
+      Map.put(public, "enabledTools", []), Map.put(public, "allowedOrigins", []),
+      Map.put(public, "url", "file:///private"), Map.put(public, "url", "https://example.test/${LEMON_SECRET:PRIVATE}"),
+      Map.delete(public, "name")
+    ] do
+      assert {:error, :invalid_config} = McpDiscovery.execution_names(invalid, ["echo"])
+    end
+
+    for invalid <- [nil, "echo", [""], ["bad name"], ["bad\tname"], [<<255>>],
+      ["echo", "echo"], [String.duplicate("n", 129)], Enum.map(1..257, &"tool-#{&1}"),
+      List.duplicate("echo", 257)] do
+      assert {:error, :invalid_tool_names} = McpDiscovery.execution_names(public, invalid)
+    end
+    assert requests(ctx) == []
+  end
+
   test "discovers raw native names and explicit advisory annotations, closing its temporary session", ctx do
     before = children()
     assert {:ok, result} = McpDiscovery.discover(ctx.server, ctx.cwd)

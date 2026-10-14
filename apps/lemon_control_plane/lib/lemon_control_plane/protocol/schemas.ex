@@ -280,6 +280,10 @@ defmodule LemonControlPlane.Protocol.Schemas do
     },
     "mcp.servers.list" => %{},
     "mcp.servers.refresh" => %{},
+    "mcp.execution_names" => %{
+      required: %{"server" => :map, "toolNames" => :list},
+      optional: %{}
+    },
     "blueprints.list" => %{},
     "blueprints.inspect" => %{
       required: %{

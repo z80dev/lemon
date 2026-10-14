@@ -148,6 +148,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - Read-only `node.profile.paths` exposes authoritative destination workspace/
   skill paths for selected profile provisioning without guessing controller
   state or granting new filesystem roots.
+- Pure operator-read `mcp.execution_names` projects exact native profile HTTP
+  tool aliases before profile creation, without HTTP/DNS initialization, secret
+  configuration or JavaScript guesses at the native identity encoding.
 
 ### Fixed
 
@@ -214,6 +217,14 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   memory indexes omit runtime credential configuration and ephemeral admission
   proof artifacts; canonical preferences/project facts survive ordinary history
   pruning, without promoting or rewriting legacy rows.
+- Remote execution metadata now canonicalizes atom-key proof/grant/context
+  presence before JSON encoding, so forged string/camel aliases cannot replace
+  explicit false/null values. Untrusted meaningful scope/proof claims fail
+  closed instead of downgrading to legacy context; unresolved references remain
+  execution-host owned.
+- Factory-only native source profile/session identifiers, managed-context
+  sentinels, connection generations and follow-up/floor callbacks no longer
+  survive remote execution metadata encoding under atom or string/camel aliases.
 
 ---
 
