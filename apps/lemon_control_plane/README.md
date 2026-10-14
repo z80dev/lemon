@@ -216,18 +216,22 @@ one `invocation` object:
 
 ```text
 {allow: true, context: <exact echoed request object>,
- invocation: {invocationContextKey, invocationMcpServers, invocationToolPolicy}}
+ invocation: {invocationContextKey, memoryContextKey, invocationMcpServers,
+              invocationToolPolicy, invocationProof, sharedMemoryGrant: false}}
 ```
 
-All three invocation fields are required. Unknown top-level, invocation, server,
-or policy fields fail closed. `invocationContextKey` is 1–128 ASCII characters
-matching `[A-Za-z0-9][A-Za-z0-9_.:-]*` and binds the creator's current context.
+All six invocation fields are required. Unknown top-level, invocation, server,
+or policy fields fail closed. Both context keys are 1–128 ASCII characters
+matching `[A-Za-z0-9][A-Za-z0-9_.:-]*`; they bind the creator's current execution
+and private memory scope. Scheduled callbacks cannot grant shared memory.
 The server list uses canonical `chat.send` MCP definitions (`name`, `url`,
 `headers`, optional `enabledTools`, `allowedOrigins`, `approvedPrivateOrigins`).
-It replaces the whole profile connector list; explicit `[]` attaches none,
-never the profile owner's default credentials. Header values must be exact
-`${LEMON_SECRET:NAME}` references, or `Bearer ${LEMON_SECRET:NAME}` for
-Authorization. No literal tokens or controller-side secret resolution occur.
+It replaces the whole profile connector list, never merging the profile owner's
+default credentials. An empty replacement never falls back to that list, but
+a projected invocation must include its required core proof server or admission
+fails closed. Header values must be exact `${LEMON_SECRET:NAME}` references, or
+`Bearer ${LEMON_SECRET:NAME}` for Authorization. No literal tokens or
+controller-side secret resolution occur.
 URLs forbid userinfo, queries, fragments, and interpolation; HTTPS is required
 except literal-loopback HTTP with the exact origin present in both
 `allowedOrigins` and `approvedPrivateOrigins`.
@@ -238,6 +242,24 @@ restrictively intersected with the cron tool block and the current profile
 floor: allowlists intersect, denials/approval gates union, and an `always`
 approval cannot be replaced with `never`. Unsupported policy shapes do not
 become permissive defaults.
+
+`invocationProof` uses the shared native factory's exact descriptor:
+
+```text
+{runId: <routerRunId>, serverName, serverUrl,
+ headerName: "X-Lemon-Bot-Invocation",
+ secretName: "lemon_bot/invocations/<routerRunId>"}
+```
+
+Exactly one replacement server must match the descriptor's name/URL and carry
+that exact header with value
+`${LEMON_SECRET:lemon_bot/invocations/<routerRunId>}`. The callback must use the
+actual creator's current native invocation builder for this fixed run, not copy
+a previous descriptor or proof secret. Before launch, the shared Core factory
+validates the proof again against the actual profile-built request, then stamps
+canonical private memory/proof attestations. Authentication remains at the
+owning boundary: the configured authenticated cron allow receipt, or actual
+operator authorization for direct chat. No synthetic operator context is used.
 
 The projection is consumed only after an authenticated allow receipt with an
 exact context echo. It remains a private worker argument, not job metadata,

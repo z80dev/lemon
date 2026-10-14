@@ -169,8 +169,12 @@ uses that creator's connector list for this invocation—not the profile owner's
 default credentials—and intersects tool access with the current profile floor.
 An explicit empty connector list attaches none. Only destination-side encrypted
 secret references are accepted; the controller never resolves connector tokens.
-The creator context key follows the normal native run/session isolation path.
-This projection is never accepted from job prompts or public client metadata.
+Execution and private memory keys follow the normal native isolation path.
+Every projected invocation needs a fresh core proof bound to its fixed router
+run ID; borrowed proofs, missing memory scope, and shared-memory grants fail
+closed. The shared native factory validates/stamps the actual profile-built
+request before launch. This projection is never accepted from job prompts or
+public client metadata.
 
 See the [controller admission API](../../apps/lemon_control_plane/README.md#private-cron-admission)
 for the exact integration schema.

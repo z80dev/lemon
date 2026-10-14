@@ -1324,6 +1324,9 @@ defmodule LemonAutomation.CronManager do
     |> then(&%{&1 | meta: Map.put(&1.meta || %{}, :admission_outcome, outcome)})
   end
 
+  defp terminal_result(run, {:error, :admission_unavailable}),
+    do: terminal_result(run, {:admission_failed, :admission_unavailable})
+
   defp terminal_result(run, {:error, error}), do: CronRun.fail(run, to_error(error))
 
   defp terminal_result(run, other),

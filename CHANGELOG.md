@@ -53,10 +53,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   projections. Origins are explicitly allowlisted, with HTTPS except literal
   loopback HTTP for local development.
 - Authenticated cron admission receipts can project a Team routine creator's
-  current invocation context, destination-only connector secret references, and
-  restrictive native tool policy. Explicit empty connectors suppress profile
-  credentials; profile/tool floors remain enforced, without storing the private
-  projection in cron job metadata, runs, events, or audits.
+  current execution/private-memory scopes, destination-only connector references,
+  restrictive native policy, and fresh fixed-run core proof. The shared native
+  factory checks the actual profile-built request before launch; stale proofs
+  and shared-memory grants fail closed, without storing the private projection
+  in cron job metadata, runs, events, or audits.
 
 ### Fixed
 
