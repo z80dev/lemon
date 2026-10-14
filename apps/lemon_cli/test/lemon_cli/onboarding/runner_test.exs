@@ -186,18 +186,55 @@ defmodule LemonCli.Onboarding.RunnerTest do
     assert_raise Mix.Error, ~r/does not support codex_cli/, fn ->
       Runner.run(
         base_args ++ ["--auth", "codex-cli"],
-        LemonCli.Onboarding.Providers.fetch!("openai"), io: io)
+        LemonCli.Onboarding.Providers.fetch!("openai"),
+        io: io
+      )
     end
 
     assert_raise Mix.Error, ~r/:enoent/, fn ->
       Runner.run(
         base_args ++
           ["--auth", "codex-cli", "--codex-auth-path", Path.join(tmp_dir, "missing-auth.json")],
-        spec, io: io)
+        spec,
+        io: io
+      )
     end
 
     refute File.exists?(config_path)
     assert LemonCore.Store.list(Secrets.table()) == []
+  end
+
+  test "catalog API-key providers store the pasted key and reference it from config", %{
+    tmp_dir: tmp_dir
+  } do
+    for {name, provider_id} <- [
+          {"groq", "groq"},
+          {"deep-seek", "deepseek"},
+          {"hf", "huggingface"},
+          {"vercel", "vercel_ai_gateway"},
+          {"google-ai-studio", "google"}
+        ] do
+      spec = LemonCli.Onboarding.Providers.fetch!(name)
+      assert spec.id == provider_id
+      assert spec.auth_modes == [:api_key]
+
+      config_path = Path.join(tmp_dir, "#{provider_id}.toml")
+      io = build_io(self(), ["n"], [])
+
+      Runner.run(
+        ["--config-path", config_path, "--non-interactive", "--token", "key-#{provider_id}"],
+        spec,
+        io: io
+      )
+
+      secret_name = "llm_#{provider_id}_api_key"
+
+      assert {:ok, "key-" <> ^provider_id} =
+               Secrets.get(secret_name, prefer_env: false, env_fallback: false)
+
+      {:ok, config_map} = Toml.decode_file(config_path)
+      assert get_in(config_map, ["providers", provider_id, "api_key_secret"]) == secret_name
+    end
   end
 
   defp build_io(test_pid, prompts, secrets) do

@@ -257,7 +257,8 @@ defmodule LemonAi.Auth.GoogleGeminiCliOAuth do
   def resolve_api_key_from_secret(secret_name, secret_value, opts)
       when is_binary(secret_name) and is_binary(secret_value) do
     with {:ok, secret} <- decode_secret(secret_value),
-         {:ok, refreshed_secret, changed?} <- ensure_fresh_secret(secret),
+         {:ok, refreshed_secret, changed?} <-
+           ensure_fresh_secret(secret, Keyword.get(opts, :force_refresh, false) == true),
          access_token when is_binary(access_token) and access_token != "" <-
            non_empty_binary(refreshed_secret["access_token"]),
          project_id when is_binary(project_id) and project_id != "" <-
@@ -273,7 +274,9 @@ defmodule LemonAi.Auth.GoogleGeminiCliOAuth do
 
   def resolve_api_key_from_secret(_, _, _), do: {:error, :invalid_secret_value}
 
-  defp ensure_fresh_secret(secret) when is_map(secret) do
+  # A forced refresh (the provider rejected the access token) never falls back
+  # to the rejected token.
+  defp ensure_fresh_secret(secret, force?) when is_map(secret) do
     access_token = non_empty_binary(secret["access_token"])
     refresh_token = non_empty_binary(secret["refresh_token"])
     expires_at_ms = parse_integer(secret["expires_at_ms"])
@@ -282,23 +285,28 @@ defmodule LemonAi.Auth.GoogleGeminiCliOAuth do
     should_refresh? =
       cond do
         is_nil(refresh_token) -> false
+        force? -> true
         is_nil(access_token) -> true
         is_nil(expires_at_ms) -> false
         true -> near_expiry?(expires_at_ms)
       end
 
-    with {:ok, refreshed_secret, changed?} <-
-           maybe_refresh_secret(secret, should_refresh?, refresh_token, access_token),
-         {:ok, final_secret, project_changed?} <-
-           maybe_ensure_project_context(refreshed_secret, project_id) do
-      {:ok, final_secret, changed? or project_changed?}
+    if force? and is_nil(refresh_token) do
+      {:error, :not_refreshable}
+    else
+      with {:ok, refreshed_secret, changed?} <-
+             maybe_refresh_secret(secret, should_refresh?, refresh_token, access_token, force?),
+           {:ok, final_secret, project_changed?} <-
+             maybe_ensure_project_context(refreshed_secret, project_id) do
+        {:ok, final_secret, changed? or project_changed?}
+      end
     end
   end
 
-  defp maybe_refresh_secret(secret, false, _refresh_token, _access_token),
+  defp maybe_refresh_secret(secret, false, _refresh_token, _access_token, _force?),
     do: {:ok, secret, false}
 
-  defp maybe_refresh_secret(secret, true, refresh_token, access_token) do
+  defp maybe_refresh_secret(secret, true, refresh_token, access_token, force?) do
     case refresh_access_token(secret, refresh_token) do
       {:ok, refreshed} ->
         updated =
@@ -311,7 +319,7 @@ defmodule LemonAi.Auth.GoogleGeminiCliOAuth do
         {:ok, updated, true}
 
       {:error, reason} ->
-        if is_binary(access_token) and access_token != "" do
+        if not force? and is_binary(access_token) and access_token != "" do
           Logger.debug(
             "Google Gemini CLI OAuth refresh failed; using existing token: #{inspect(reason)}"
           )

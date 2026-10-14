@@ -176,6 +176,31 @@ defmodule LemonCli.Onboarding.Providers do
       api_key_choice_label: "Paste API key",
       auth_source_by_mode: %{api_key: "api_key"}
     },
+    Provider.api_key("google", "Google Gemini API", "Gemini API key (Google AI Studio)",
+      aliases: ["google-ai-studio", "gemini-api"]
+    ),
+    Provider.api_key("groq", "Groq", "Groq API key"),
+    Provider.api_key("cerebras", "Cerebras", "Cerebras API key"),
+    Provider.api_key("deepseek", "DeepSeek", "DeepSeek API key", aliases: ["deep-seek"]),
+    Provider.api_key("mistral", "Mistral", "Mistral API key"),
+    Provider.api_key("huggingface", "Hugging Face", "Hugging Face token for Inference Providers",
+      aliases: ["hugging-face", "hf"]
+    ),
+    Provider.api_key("qwen", "Qwen (DashScope)", "Alibaba Cloud DashScope API key",
+      aliases: ["dashscope"]
+    ),
+    Provider.api_key("vercel_ai_gateway", "Vercel AI Gateway", "Vercel AI Gateway API key",
+      aliases: ["vercel-ai-gateway", "vercel"]
+    ),
+    Provider.api_key("opencode", "OpenCode Zen", "OpenCode Zen API key",
+      aliases: ["opencode-zen"]
+    ),
+    Provider.api_key("opencode_go", "OpenCode Go", "OpenCode Go API key",
+      aliases: ["opencode-go"]
+    ),
+    Provider.api_key("minimax_cn", "MiniMax (China)", "MiniMax China API key",
+      aliases: ["minimax-cn"]
+    ),
     %Provider{
       id: "google_gemini_cli",
       display_name: "Google Gemini CLI",
