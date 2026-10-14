@@ -13,6 +13,7 @@ defmodule LemonControlPlane.Methods.McpExecutionNamesTest do
   test "pure projection is registered synchronously with operator read access" do
     assert Registry.lookup("mcp.execution_names") == {:ok, McpExecutionNames}
     assert Registry.dispatch_mode("mcp.execution_names") == :sync
+    assert LemonControlPlane.Auth.Authorize.required_scopes("mcp.execution_names") == [:read]
     assert Schemas.get("mcp.execution_names").required == %{"server" => :map, "toolNames" => :list}
     for auth <- [%{role: :node, scopes: [:read]}, %{role: :operator, scopes: [:write]}, %{role: :unsupported, scopes: [:read]}] do
       assert {:error, {:forbidden, _}} = McpExecutionNames.handle(params(), %{auth: auth})
@@ -30,6 +31,39 @@ defmodule LemonControlPlane.Methods.McpExecutionNamesTest do
     refute Map.has_key?(result["server"], "url")
     refute Map.has_key?(result["server"], "headers")
   end
+  test "unusual raw names retain exact identities without sanitized-name collisions" do
+    names = ["tool.name", "tool-name", "tool_name", "tool/name", "literal*", "über"]
+    request = %{params() | "toolNames" => names}
+    assert {:ok, result} = McpExecutionNames.handle(request, ctx())
+    assert Enum.map(result["tools"], & &1["name"]) == names
+    aliases = Enum.map(result["tools"], & &1["executionName"])
+    assert MapSet.size(MapSet.new(aliases)) == length(names)
+    for tool <- result["tools"] do
+      assert tool["executionName"] == McpSource.execution_name(
+        request["server"]["name"], request["server"]["url"], tool["name"])
+      assert byte_size(tool["executionName"]) <= 64
+    end
+  end
+
+  test "canonical host and default port share identities but public endpoint changes do not collide" do
+    names = ["tool-name", "tool_name"]
+    project = fn name, url ->
+      assert {:ok, result} = McpExecutionNames.handle(
+        %{"server" => %{"name" => name, "url" => url}, "toolNames" => names}, ctx())
+      Enum.map(result["tools"], & &1["executionName"])
+    end
+    canonical = project.("public-adapter", "https://example.test/mcp?tenant=one")
+    assert canonical == project.("public-adapter", "https://EXAMPLE.TEST:443/mcp?tenant=one")
+    for {name, url} <- [
+          {"public-adapter", "https://example.test/mcp?tenant=two"},
+          {"public-adapter", "https://example.test/other?tenant=one"},
+          {"other-adapter", "https://example.test/mcp?tenant=one"}
+        ] do
+      changed = project.(name, url)
+      assert MapSet.disjoint?(MapSet.new(canonical), MapSet.new(changed))
+    end
+  end
+
 
   test "a listening endpoint receives no HTTP initialization during name projection" do
     {:ok, listener} = :gen_tcp.listen(0, [:binary, active: false, ip: {127, 0, 0, 1}])
