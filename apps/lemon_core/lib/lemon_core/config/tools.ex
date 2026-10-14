@@ -31,18 +31,21 @@ defmodule LemonCore.Config.Tools do
 
       # Hide the MCP/extension/WASM long tail behind tool_search/tool_invoke
       # once the catalog's estimated schema cost exceeds budget_tokens.
+      # profile = "coding" opts into also deferring optional built-ins.
       [runtime.tools.disclosure]
       enabled = true
       budget_tokens = 40000
       catalog_tokens = 2000
       max_results = 5
+      profile = "legacy"
+      pinned = []
 
   Environment variables override file configuration:
   - `LEMON_WEB_SEARCH_ENABLED`, `LEMON_WEB_SEARCH_PROVIDER`
   - `LEMON_WEB_FETCH_ENABLED`, `LEMON_WEB_FETCH_MAX_CHARS`
   - `LEMON_WASM_ENABLED`, `LEMON_WASM_AUTO_BUILD`
   - `LEMON_TOOL_DISCLOSURE_ENABLED`, `LEMON_TOOL_DISCLOSURE_BUDGET_TOKENS`,
-    `LEMON_TOOL_DISCLOSURE_CATALOG_TOKENS`
+    `LEMON_TOOL_DISCLOSURE_CATALOG_TOKENS`, `LEMON_TOOL_DISCLOSURE_PROFILE`
 
   `[runtime.tools.*]` is the only spelling a config file may use:
   `LemonCore.Config.Modular.normalize_tools_settings/1` maps `runtime.tools` onto the
@@ -122,7 +125,9 @@ defmodule LemonCore.Config.Tools do
           enabled: boolean(),
           budget_tokens: pos_integer(),
           catalog_tokens: pos_integer(),
-          max_results: pos_integer()
+          max_results: pos_integer(),
+          profile: String.t(),
+          pinned: [String.t()]
         }
 
   @type t :: %__MODULE__{
@@ -386,7 +391,9 @@ defmodule LemonCore.Config.Tools do
   # because the budget is the real gate: the built-in set is far under it, so a
   # setup without a large MCP catalog never activates disclosure and sees no
   # change at all. `enabled = false` is the kill switch for setups that would
-  # otherwise activate it.
+  # otherwise activate it. `profile = "coding"` is the opt-in experiment that
+  # also defers optional built-ins; `pinned` names stay disclosed in any profile.
+  # Values are carried as written; `CodingAgent.ToolDisclosure` sanitizes them.
   defp resolve_disclosure(settings) do
     disclosure = settings["disclosure"] || %{}
 
@@ -403,7 +410,10 @@ defmodule LemonCore.Config.Tools do
         Env.get(:lemon_tool_disclosure_catalog_tokens,
           default: disclosure["catalog_tokens"] || 2_000
         ),
-      max_results: disclosure["max_results"] || 5
+      max_results: disclosure["max_results"] || 5,
+      profile:
+        Env.get(:lemon_tool_disclosure_profile, default: disclosure["profile"] || "legacy"),
+      pinned: disclosure["pinned"] || []
     }
   end
 
@@ -477,7 +487,9 @@ defmodule LemonCore.Config.Tools do
         "enabled" => true,
         "budget_tokens" => 40_000,
         "catalog_tokens" => 2_000,
-        "max_results" => 5
+        "max_results" => 5,
+        "profile" => "legacy",
+        "pinned" => []
       }
     }
   end

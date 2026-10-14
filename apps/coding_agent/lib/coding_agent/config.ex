@@ -25,6 +25,22 @@ defmodule CodingAgent.Config do
   # ============================================================================
 
   @doc """
+  Get the user's home directory for discovering other tools' global files
+  (`~/.claude`, `~/.gemini`, `~/.codex`, ...).
+
+  Uses the `HOME` environment variable when it is set and non-empty, so tests
+  and isolated runtimes can redirect discovery to a fixture directory, and the
+  runtime's user home otherwise.
+  """
+  @spec home_dir() :: String.t()
+  def home_dir do
+    case System.get_env("HOME") do
+      home when is_binary(home) and home != "" -> Path.expand(home)
+      _ -> System.user_home!()
+    end
+  end
+
+  @doc """
   Get the agent configuration directory.
 
   Returns the path to `~/.lemon/agent` where global agent configuration is stored.

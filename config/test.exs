@@ -109,6 +109,10 @@ config :lemon_memory, LemonMemory.Store, path: lemon_store_test_dir
 config :lemon_skills, seed_builtin_skills: false
 config :lemon_skills, :http_client, LemonSkills.HttpClient.Mock
 
+# Never import MCP servers from the checkout's or developer's other-tool configs
+# (`.mcp.json`, `~/.claude.json`, ...); discovery tests enable it explicitly.
+config :lemon_skills, :mcp_external_discovery, false
+
 # Background skill curation is tested explicitly; keep the runtime scheduler
 # from submitting real agent runs during unrelated test suites.
 config :lemon_automation, :skill_curator, enabled: false

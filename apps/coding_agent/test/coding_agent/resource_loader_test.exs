@@ -9,19 +9,28 @@ defmodule CodingAgent.ResourceLoaderTest do
   setup %{tmp_dir: tmp_dir} do
     previous_harness_dir_env = System.get_env("LEMON_HARNESS_SKILLS_DIR")
     previous_agent_dir = System.get_env("LEMON_AGENT_DIR")
+    previous_home = System.get_env("HOME")
+    previous_copilot_home = System.get_env("COPILOT_HOME")
     System.put_env("LEMON_AGENT_DIR", Path.join(tmp_dir, "global-agent"))
     previous_harness_dir = Application.get_env(:lemon_skills, :harness_global_skills_dir)
     harness_dir = Path.join(tmp_dir, "harness-skills")
+    home = Path.join(tmp_dir, "home")
+    File.mkdir_p!(home)
 
     System.put_env("LEMON_HARNESS_SKILLS_DIR", harness_dir)
+    # Global instruction discovery reads HOME; never the real home in tests.
+    System.put_env("HOME", home)
+    System.delete_env("COPILOT_HOME")
 
     on_exit(fn ->
       restore_env("LEMON_HARNESS_SKILLS_DIR", previous_harness_dir_env)
       restore_env("LEMON_AGENT_DIR", previous_agent_dir)
+      restore_env("HOME", previous_home)
+      restore_env("COPILOT_HOME", previous_copilot_home)
       restore_app_env(:lemon_skills, :harness_global_skills_dir, previous_harness_dir)
     end)
 
-    :ok
+    {:ok, home: home}
   end
 
   describe "load_instructions/1" do
@@ -149,6 +158,150 @@ defmodule CodingAgent.ResourceLoaderTest do
              ]
     end
   end
+
+  describe "multi-tool instruction files" do
+    test "loads every root file and config subdirectory file in order", %{tmp_dir: tmp_dir} do
+      cwd = Path.join(tmp_dir, "project")
+
+      paths =
+        Enum.map(
+          ~w(CLAUDE.md AGENTS.md GEMINI.md CLAUDE.local.md .claude/CLAUDE.md .claude/AGENTS.md
+             .lemon/CLAUDE.md .lemon/AGENTS.md .gemini/GEMINI.md .agents/AGENTS.md
+             .agent/AGENTS.md .omp/AGENTS.md .github/copilot-instructions.md),
+          &Path.join(cwd, &1)
+        )
+
+      paths |> Enum.with_index() |> Enum.each(fn {path, i} -> write!(path, "directive-#{i}") end)
+
+      loaded = ResourceLoader.load_instructions_list(cwd)
+      assert Enum.map(Enum.filter(loaded, &(&1.path in paths)), & &1.path) == paths
+
+      sections = ResourceLoader.instruction_sections(cwd)
+      copilot = Enum.find(sections, &(&1.text =~ "directive-12"))
+      assert copilot.label == "copilot-instructions.md (project)"
+      assert copilot.text =~ "Scope: #{cwd} (this directory and its descendants)"
+      gemini = Enum.find(sections, &(&1.text =~ "directive-8"))
+      assert gemini.label == "GEMINI.md (project)"
+      refute Enum.any?(sections, &String.contains?(&1.label, tmp_dir))
+    end
+
+    test "config subdirectories only hold their own file names", %{tmp_dir: tmp_dir} do
+      cwd = Path.join(tmp_dir, "project")
+
+      for rel <- ~w(.gemini/AGENTS.md .github/AGENTS.md .omp/CLAUDE.md .agents/GEMINI.md
+                    copilot-instructions.md .claude/GEMINI.md) do
+        write!(Path.join(cwd, rel), "stray-#{rel}")
+      end
+
+      refute ResourceLoader.load_instructions(cwd) =~ "stray-"
+    end
+
+    test "ancestor config subdirectories scope to their parent directory", %{tmp_dir: tmp_dir} do
+      parent = Path.join(tmp_dir, "repo")
+      cwd = Path.join(parent, "pkg")
+      File.mkdir_p!(cwd)
+      write!(Path.join(parent, ".github/copilot-instructions.md"), "parent-copilot")
+      write!(Path.join(cwd, ".agents/AGENTS.md"), "child-agents")
+
+      sections = ResourceLoader.instruction_sections(cwd)
+      parent_section = Enum.find(sections, &(&1.text =~ "parent-copilot"))
+      assert parent_section.label == "copilot-instructions.md (parent)"
+      assert parent_section.text =~ "Scope: #{parent} (this directory and its descendants)"
+      assert Enum.find(sections, &(&1.text =~ "child-agents")).label == "AGENTS.md (project)"
+
+      rendered = ResourceLoader.load_instructions(cwd)
+      assert offset(rendered, "parent-copilot") < offset(rendered, "child-agents")
+    end
+
+    test "loads global files from other agent tools before project files", %{
+      tmp_dir: tmp_dir,
+      home: home
+    } do
+      cwd = Path.join(tmp_dir, "project")
+      File.mkdir_p!(cwd)
+      write!(Path.join(cwd, "AGENTS.md"), "project-directive")
+
+      globals =
+        Enum.map(
+          ~w(.claude/CLAUDE.md .gemini/GEMINI.md .codex/AGENTS.md .config/opencode/AGENTS.md
+             .agents/AGENTS.md .agent/AGENTS.md .copilot/copilot-instructions.md
+             .lemon/AGENTS.md),
+          &Path.join(home, &1)
+        )
+
+      globals |> Enum.with_index() |> Enum.each(fn {path, i} -> write!(path, "global-#{i}") end)
+
+      loaded = ResourceLoader.load_instructions_list(cwd)
+      assert Enum.map(Enum.filter(loaded, &(&1.path in globals)), & &1.path) == globals
+
+      sections = ResourceLoader.instruction_sections(cwd)
+
+      for i <- 0..(length(globals) - 1) do
+        section = Enum.find(sections, &(&1.text =~ "global-#{i}"))
+        assert section.label =~ "(global)"
+        assert section.text =~ "Scope: global"
+      end
+
+      rendered = ResourceLoader.load_instructions(cwd)
+      assert offset(rendered, "global-7") < offset(rendered, "project-directive")
+    end
+
+    test "COPILOT_HOME relocates the Copilot user instructions", %{tmp_dir: tmp_dir, home: home} do
+      cwd = Path.join(tmp_dir, "project")
+      File.mkdir_p!(cwd)
+      copilot_home = Path.join(tmp_dir, "copilot-config")
+      write!(Path.join(copilot_home, "copilot-instructions.md"), "relocated-copilot")
+      write!(Path.join(home, ".copilot/copilot-instructions.md"), "default-copilot")
+      System.put_env("COPILOT_HOME", copilot_home)
+
+      rendered = ResourceLoader.load_instructions(cwd)
+      assert rendered =~ "relocated-copilot"
+      refute rendered =~ "default-copilot"
+    end
+
+    test "expands @imports relative to each instruction file", %{tmp_dir: tmp_dir, home: home} do
+      cwd = Path.join(tmp_dir, "project")
+      write!(Path.join(cwd, ".github/copilot-instructions.md"), "Style: @style.md")
+      write!(Path.join(cwd, ".github/style.md"), "imported-style")
+      write!(Path.join(cwd, "AGENTS.md"), "Personal: @~/notes.md\n`@style.md` stays")
+      write!(Path.join(home, "notes.md"), "imported-home-note")
+      write!(Path.join(cwd, "style.md"), "inline-code-must-not-expand")
+
+      rendered = ResourceLoader.load_instructions(cwd)
+      assert rendered =~ "Style: imported-style"
+      refute rendered =~ "inline-code-must-not-expand"
+      assert rendered =~ "Personal: imported-home-note"
+      assert rendered =~ "`@style.md` stays"
+
+      [agents] =
+        Enum.filter(
+          ResourceLoader.load_instructions_list(cwd),
+          &(&1.path == Path.join(cwd, "AGENTS.md"))
+        )
+
+      assert agents.content =~ "imported-home-note"
+    end
+  end
+
+  describe "instruction_guide?/1" do
+    test "matches root names anywhere and subdirectory names only in their directory" do
+      for path <- ~w(AGENTS.md a/CLAUDE.md a/GEMINI.md a/CLAUDE.local.md a/.claude/CLAUDE.md
+                     a/.gemini/GEMINI.md a/.github/copilot-instructions.md) do
+        assert ResourceLoader.instruction_guide?(path), path
+      end
+
+      for path <- ~w(a/copilot-instructions.md a/README.md a/.gemini/settings.json) do
+        refute ResourceLoader.instruction_guide?(path), path
+      end
+    end
+  end
+
+  defp write!(path, content) do
+    File.mkdir_p!(Path.dirname(path))
+    File.write!(path, content)
+  end
+
+  defp offset(text, marker), do: elem(:binary.match(text, marker), 0)
 
   describe "load_instructions_list/1" do
     test "returns list of files with metadata", %{tmp_dir: tmp_dir} do

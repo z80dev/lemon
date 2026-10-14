@@ -228,6 +228,33 @@ defmodule CodingAgent.SettingsManagerTest do
       assert settings.default_model.model_id == "claude-3-opus"
     end
 
+    test "maps [runtime.task] and replaces invalid values with defaults" do
+      config = %LemonConfig{
+        providers: %{},
+        agent: %{
+          task: %{
+            max_depth: 1,
+            max_runtime_ms: "soon",
+            worktree_merge: "patch",
+            disabled_agents: ["reviewer", 7],
+            agent_models: %{"scout" => " @smol ", "reviewer" => ""}
+          }
+        },
+        tui: %{},
+        logging: %{},
+        gateway: %{},
+        agents: %{}
+      }
+
+      assert SettingsManager.from_config(config).task == %{
+               max_depth: 1,
+               max_runtime_ms: 0,
+               worktree_merge: "patch",
+               disabled_agents: ["reviewer"],
+               agent_models: %{"scout" => "@smol"}
+             }
+    end
+
     test "handles nil provider and model" do
       config = %LemonConfig{
         providers: %{},
@@ -433,7 +460,9 @@ defmodule CodingAgent.SettingsManagerTest do
                enabled: true,
                budget_tokens: 40_000,
                catalog_tokens: 2_000,
-               max_results: 5
+               max_results: 5,
+               profile: "legacy",
+               pinned: []
              }
     end
 

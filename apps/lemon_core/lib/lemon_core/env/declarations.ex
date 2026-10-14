@@ -231,6 +231,18 @@ defmodule LemonCore.Env.Declarations do
       apps: [:lemon_core]
     },
     %{
+      name: :lemon_secret_obfuscation_enabled,
+      env_var: "LEMON_SECRET_OBFUSCATION_ENABLED",
+      aliases: [],
+      type: :boolean,
+      default: false,
+      doc: "Whether secrets are replaced with placeholders in provider-visible session text.",
+      secret?: false,
+      required?: false,
+      area: :agent,
+      apps: [:lemon_core]
+    },
+    %{
       name: :lemon_shell_command_prefix,
       env_var: "LEMON_SHELL_COMMAND_PREFIX",
       aliases: [],
@@ -904,8 +916,20 @@ defmodule LemonCore.Env.Declarations do
       aliases: [],
       type: :boolean,
       default: true,
+      doc: "Whether tool-schema progressive disclosure may activate under the selected profile.",
+      secret?: false,
+      required?: false,
+      area: :tools_disclosure,
+      apps: [:lemon_core]
+    },
+    %{
+      name: :lemon_tool_disclosure_profile,
+      env_var: "LEMON_TOOL_DISCLOSURE_PROFILE",
+      aliases: [],
+      type: :string,
+      default: "legacy",
       doc:
-        "Whether tool-schema progressive disclosure may activate when the tool catalog exceeds the token budget.",
+        "Tool disclosure profile: legacy defers only the MCP/extension/WASM long tail over budget; coding also defers optional built-ins outside the coding core.",
       secret?: false,
       required?: false,
       area: :tools_disclosure,

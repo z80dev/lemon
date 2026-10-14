@@ -130,6 +130,9 @@ defmodule CodingAgent.Session.ProjectMemory do
          true <- enabled?(context.cwd) do
       # Do not retain the session, agent PID, transcript, or event callbacks.
       runtime = Map.take(state, [:model, :settings_manager, :cwd])
+      # The extraction call goes to a provider outside the transform chain.
+      obfuscator = Map.get(state, :secret_obfuscator)
+      input = CodingAgent.Security.SecretObfuscator.obfuscate(obfuscator, input)
       job = %{context: context, runtime: runtime, input: input, opts: opts}
       key = project_key(scope.key)
       lock = {{__MODULE__, :admission}, self()}
