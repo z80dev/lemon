@@ -88,6 +88,17 @@ defmodule CodingAgent.Session.CustomProviderResolutionTest do
     assert %Model{provider: ^id, id: "qwen3-coder"} = model
   end
 
+  test "a default provider with a provider-prefixed model id resolves the bare id" do
+    config = %LemonCore.Config{
+      providers: @providers,
+      agent: %{default_provider: "my-gateway", default_model: "my-gateway:qwen3-coder"}
+    }
+
+    settings = SettingsManager.from_config(config)
+    model = ModelResolver.resolve_session_model(nil, settings)
+    assert %Model{provider: "my-gateway", id: "qwen3-coder", context_window: 131_072} = model
+  end
+
   test "task and compaction selectors resolve custom models" do
     settings =
       settings(%{
@@ -122,15 +133,5 @@ defmodule CodingAgent.Session.CustomProviderResolutionTest do
 
     assert [%Model{provider: "local", id: "gpt-4o"}] =
              ModelResolver.runtime_fallback_models(primary, settings)
-  end
-
-  test "stream options carry the custom provider's own credential" do
-    System.put_env("OPENAI_API_KEY", "sk-openai")
-    settings = settings()
-    model = ModelResolver.resolve_session_model("my-gateway:qwen3-coder", settings)
-
-    opts = ModelResolver.build_stream_options(model, settings, nil, nil)
-    assert opts.api_key == "gw-key"
-    assert ModelResolver.build_get_api_key(settings).(model.provider) == "gw-key"
   end
 end

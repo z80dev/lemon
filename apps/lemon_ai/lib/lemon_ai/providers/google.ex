@@ -100,7 +100,7 @@ defmodule LemonAi.Providers.Google do
       api_key = get_provider_env_key(model.provider) ->
         api_key
 
-      api_key = get_env_api_key() ->
+      api_key = ambient_env_api_key(model.provider) ->
         api_key
 
       true ->
@@ -115,6 +115,13 @@ defmodule LemonAi.Providers.Google do
   defp get_provider_env_key(:opencode), do: System.get_env("OPENCODE_API_KEY")
   defp get_provider_env_key("opencode"), do: System.get_env("OPENCODE_API_KEY")
   defp get_provider_env_key(_), do: nil
+
+  # Binary providers other than "google" are user-configured custom endpoints:
+  # never send them the ambient Google key.
+  defp ambient_env_api_key(provider) when is_atom(provider) or provider == "google",
+    do: get_env_api_key()
+
+  defp ambient_env_api_key(_provider), do: nil
 
   defp provider_options(%StreamOptions{provider_options: options}, key) when is_map(options) do
     Map.get(options, key) || Map.get(options, Atom.to_string(key)) || %{}

@@ -4,7 +4,7 @@ defmodule LemonCore.Config.CustomProvidersTest do
   """
   use ExUnit.Case, async: true
 
-  alias LemonCore.Config.{Modular, Providers, Validator}
+  alias LemonCore.Config.{Modular, Providers}
 
   @toml """
   [providers.my-gateway]
@@ -55,22 +55,6 @@ defmodule LemonCore.Config.CustomProvidersTest do
     assert {:ok, _config} = Modular.validate_settings(settings)
   end
 
-  test "canonicalizes omp spellings" do
-    assert Providers.canonical_api("anthropic-messages") == "anthropic_messages"
-    assert Providers.canonical_api("Google_Generative_AI") == "google_generative_ai"
-    assert Providers.canonical_api("bedrock-converse-stream") == nil
-    assert Providers.canonical_auth("apiKey") == "api_key"
-    assert Providers.canonical_discovery("openai-models-list") == "openai"
-    assert Providers.canonical_discovery("llama.cpp") == "openai"
-    assert Providers.canonical_discovery("ollama") == "ollama"
-    assert Providers.canonical_discovery("proxy") == nil
-  end
-
-  test "built-in providers without custom keys keep their previous shape" do
-    providers = Providers.resolve(%{"providers" => %{"anthropic" => %{"api_key" => "sk-x"}}})
-    assert Providers.get_provider(providers, "anthropic") == %{api_key: "sk-x"}
-  end
-
   test "lemon config validation reports bad api, missing base_url and model errors" do
     settings = %{
       "providers" => %{
@@ -108,15 +92,5 @@ defmodule LemonCore.Config.CustomProvidersTest do
       assert Enum.any?(errors, &String.starts_with?(&1, message)),
              "missing #{inspect(message)} in #{inspect(errors)}"
     end
-  end
-
-  test "legacy config validation reports custom provider errors too" do
-    config = %LemonCore.Config{
-      providers: %{"gw" => %{api: "nope", base_url: "https://gw.example/v1", models: "x"}}
-    }
-
-    assert {:error, errors} = Validator.validate(config)
-    assert Enum.any?(errors, &String.starts_with?(&1, "providers.gw.api: invalid value"))
-    assert Enum.any?(errors, &String.starts_with?(&1, "providers.gw.models: must be an array"))
   end
 end

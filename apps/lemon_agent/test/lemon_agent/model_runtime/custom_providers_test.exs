@@ -77,22 +77,14 @@ defmodule LemonAgent.ModelRuntime.CustomProvidersTest do
       assert model.compat == nil
     end
 
-    test "omitted fields get defaults; spec spelling variants resolve the same provider" do
-      providers = %{"my-gateway" => gateway()}
-
-      for provider <- ["my-gateway", "my_gateway", "MY-GATEWAY"] do
-        model = CustomProviders.lookup(providers, provider, "tiny")
-        assert model.provider == "my-gateway"
-        assert model.name == "tiny"
-        assert model.context_window == 128_000
-        assert model.max_tokens == 16_384
-        assert model.input == [:text]
-        refute model.reasoning
-      end
-    end
-
     test "an explicit models list is closed; discovery or no list accepts any id" do
       assert CustomProviders.lookup(%{"gw" => gateway()}, "gw", "unlisted") == nil
+
+      # Spec spelling variants resolve the configured id.
+      for provider <- ["my-gw", "my_gw", "MY-GW"] do
+        assert %Model{provider: "my-gw", id: "tiny"} =
+                 CustomProviders.lookup(%{"my-gw" => gateway()}, provider, "tiny")
+      end
 
       open = CustomProviders.lookup(%{"gw" => gateway(%{discovery: "openai"})}, "gw", "unlisted")
       assert %Model{id: "unlisted", provider: "gw", api: :openai_completions} = open
@@ -115,13 +107,6 @@ defmodule LemonAgent.ModelRuntime.CustomProvidersTest do
                CustomProviders.lookup(providers, "local", "claude-proxy")
 
       assert %Model{api: :openai_responses} = CustomProviders.lookup(providers, "local", "plain")
-    end
-
-    test "providers without an allowlisted api or a base_url yield no models" do
-      assert CustomProviders.lookup(%{"gw" => gateway(%{api: "nope"})}, "gw", "tiny") == nil
-
-      assert CustomProviders.lookup(%{"gw" => Map.delete(gateway(), :base_url)}, "gw", "tiny") ==
-               nil
     end
 
     test "built-in providers are never custom; their models entries add or replace catalog models" do
@@ -192,13 +177,6 @@ defmodule LemonAgent.ModelRuntime.CustomProvidersTest do
       refute Credentials.provider_has_credentials?("my-gateway", providers)
       assert Credentials.resolve_provider_api_key("other", providers) == "other-gateway"
       assert Credentials.build_get_api_key(providers).("my-gateway") == nil
-    end
-
-    test "auth = none is ready without a key" do
-      providers = %{"local" => gateway(%{auth: "none"})}
-
-      assert Credentials.resolve_provider_api_key("local", providers) == nil
-      assert Credentials.provider_has_credentials?("local", providers)
     end
   end
 

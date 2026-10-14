@@ -260,6 +260,18 @@ defmodule CodingAgent.Session.ModelResolver do
             LemonAi.Models.find_by_id(model_id)
 
         provider_str when is_binary(provider_str) ->
+          # `[defaults] provider = "gw"` + `model = "gw:id"` names model "id".
+          model_id =
+            case String.split(model_id, ":", parts: 2) do
+              [prefix, bare_id] when bare_id != "" ->
+                if normalize_provider_id(prefix) == normalize_provider_id(provider_str),
+                  do: bare_id,
+                  else: model_id
+
+              _ ->
+                model_id
+            end
+
           lookup_model(provider_str, model_id, settings)
       end
 

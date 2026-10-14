@@ -239,24 +239,13 @@ defmodule LemonAi.Providers.Anthropic do
       api_key = get_provider_env_api_key(model.provider) ->
         api_key
 
-      api_key = get_env_api_key() ->
-        api_key
-
       true ->
         ""
     end
   end
 
   defp resolve_provider_options(model, opts) do
-    provider_options(opts, normalize_provider_id(model.provider))
-  end
-
-  defp normalize_provider_id(provider) when is_atom(provider), do: provider
-
-  defp normalize_provider_id(provider) when is_binary(provider) do
-    provider
-    |> String.replace("-", "_")
-    |> String.to_atom()
+    provider_options(opts, model.provider)
   end
 
   defp get_provider_env_api_key(provider) do
@@ -278,7 +267,11 @@ defmodule LemonAi.Providers.Anthropic do
   defp provider_env_vars("minimax_cn"),
     do: ["MINIMAX_CN_API_KEY", "MINIMAX_API_KEY", "ANTHROPIC_API_KEY"]
 
-  defp provider_env_vars(_), do: ["ANTHROPIC_API_KEY"]
+  defp provider_env_vars("anthropic"), do: ["ANTHROPIC_API_KEY"]
+  defp provider_env_vars(provider) when is_atom(provider), do: ["ANTHROPIC_API_KEY"]
+  # Other binary providers are user-configured custom endpoints: they only get
+  # their own credential, never the ambient Anthropic key.
+  defp provider_env_vars(_provider), do: []
 
   defp env_value(name) when is_binary(name) do
     case System.get_env(name) do
@@ -287,11 +280,28 @@ defmodule LemonAi.Providers.Anthropic do
     end
   end
 
-  defp provider_options(%StreamOptions{provider_options: options}, key) when is_map(options) do
+  defp provider_options(%StreamOptions{provider_options: options}, key)
+       when is_map(options) and is_atom(key) do
     Map.get(options, key) || Map.get(options, Atom.to_string(key)) || %{}
   end
 
+  # Binary providers are looked up as-is (custom providers) or by their
+  # underscored name; never converted to a new atom.
+  defp provider_options(%StreamOptions{provider_options: options}, key)
+       when is_map(options) and is_binary(key) do
+    normalized = String.replace(key, "-", "_")
+
+    Map.get(options, key) || Map.get(options, normalized) ||
+      Map.get(options, existing_atom(normalized)) || %{}
+  end
+
   defp provider_options(_, _), do: %{}
+
+  defp existing_atom(name) do
+    String.to_existing_atom(name)
+  rescue
+    ArgumentError -> nil
+  end
 
   defp missing_api_key_error(:kimi),
     do:
