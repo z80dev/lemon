@@ -30,6 +30,7 @@ defmodule LemonAgent.ModelRuntime.CustomProviders do
   """
 
   alias LemonAi.Providers.RequestHeaders
+  alias LemonAi.Models.Presets
   alias LemonAi.Types.{Model, ModelCost}
   alias LemonAgent.ModelRuntime.{Credentials, ProviderNames}
   alias LemonCore.Config.Providers
@@ -118,8 +119,10 @@ defmodule LemonAgent.ModelRuntime.CustomProviders do
 
   Custom providers return their listed model, or a synthesized one when the
   provider uses discovery or lists no models. Built-in providers return a
-  configured addition/replacement for that id; catalog-only ids return `nil`
-  so the caller's registry lookup applies.
+  configured addition/replacement for that id. Dynamic presets additionally
+  reuse discovery metadata from the effective credential/endpoint/header scope,
+  or synthesize conservative defaults when that scope has not been discovered.
+  Static catalog-only ids return `nil` so the caller's registry lookup applies.
   """
   @spec lookup(map() | nil, atom() | String.t() | nil, String.t() | nil) :: Model.t() | nil
   def lookup(_providers_or_cfg, _provider, nil), do: nil
@@ -128,6 +131,23 @@ defmodule LemonAgent.ModelRuntime.CustomProviders do
     case registry_provider(provider) do
       nil -> lookup_custom(providers_or_cfg, provider, model_id)
       registry -> lookup_builtin(providers_or_cfg, provider, registry, model_id)
+    end
+  end
+
+  @doc """
+  Like `lookup/3`, but dynamic built-in presets never synthesize unknown ids.
+
+  Use this for bare-id matching and qualified-selector disambiguation: accepting
+  any id for an explicit preset must not capture another provider's selector.
+  """
+  @spec known_model(map() | nil, atom() | String.t() | nil, String.t() | nil) ::
+          Model.t() | nil
+  def known_model(_providers_or_cfg, _provider, nil), do: nil
+
+  def known_model(providers_or_cfg, provider, model_id) when is_binary(model_id) do
+    case registry_provider(provider) do
+      nil -> lookup_custom(providers_or_cfg, provider, model_id)
+      registry -> lookup_builtin(providers_or_cfg, provider, registry, model_id, true)
     end
   end
 
@@ -293,13 +313,40 @@ defmodule LemonAgent.ModelRuntime.CustomProviders do
 
   # ---- Built-in additions ----
 
-  defp lookup_builtin(providers_or_cfg, provider, registry, model_id) do
-    with cfg when is_map(cfg) <- config_for(providers_or_cfg, provider),
-         entry when is_map(entry) <-
-           Enum.find(model_entries(cfg), &(value(&1, :id) == model_id)) do
-      build_builtin_model(registry, cfg, entry)
-    else
-      _ -> nil
+  defp lookup_builtin(providers_or_cfg, provider, registry, model_id, known_only \\ false) do
+    cfg =
+      if Presets.preset?(registry),
+        do: ProviderNames.provider_config(providers_map(providers_or_cfg), registry) || %{},
+        else: config_for(providers_or_cfg, provider) || %{}
+
+    case Enum.find(model_entries(cfg), &(value(&1, :id) == model_id)) do
+      nil -> preset_model(providers_or_cfg, registry, cfg, model_id, known_only)
+      entry -> build_builtin_model(registry, cfg, entry)
+    end
+  end
+
+  defp preset_model(providers_or_cfg, registry, cfg, model_id, known_only) do
+    if preset = Presets.get(registry) do
+      url = non_empty(value(cfg, :base_url)) || Presets.base_url(registry)
+      provider_headers = headers(cfg)
+
+      cached =
+        LemonAi.Models.Discovery.cached_model(preset.discovery, url, model_id,
+          provider: registry,
+          api: preset.api,
+          api_key: Credentials.build_get_api_key(providers_or_cfg).(registry),
+          headers: provider_headers,
+          model_defaults: Presets.model_defaults(registry)
+        )
+
+      case cached do
+        %Model{} = model ->
+          %{model | headers: RequestHeaders.merge(model.headers, provider_headers)}
+
+        nil ->
+          if not known_only,
+            do: Presets.model(registry, model_id, %{base_url: url, headers: provider_headers})
+      end
     end
   end
 
@@ -403,7 +450,12 @@ defmodule LemonAgent.ModelRuntime.CustomProviders do
 
       key ->
         normalized = normalize(key)
-        Enum.find(LemonAi.Models.get_providers(), &(normalize(Atom.to_string(&1)) == normalized))
+
+        Presets.resolve(key) ||
+          Enum.find(
+            LemonAi.Models.get_providers(),
+            &(normalize(Atom.to_string(&1)) == normalized)
+          )
     end
   end
 
