@@ -16,6 +16,11 @@ defmodule CodingAgent.Session.ProjectMemoryTest do
 
   @moduletag :tmp_dir
 
+  setup context do
+    if context[:exclusive_capture_capacity], do: await_capture_capacity()
+    :ok
+  end
+
   setup %{tmp_dir: dir} do
     cwd = Path.join(dir, "repo")
     File.mkdir_p!(Path.join(cwd, ".git"))
@@ -345,6 +350,7 @@ defmodule CodingAgent.Session.ProjectMemoryTest do
     assert {:ok, [^newest, ^old]} = Project.read(state, store: store)
   end
 
+  @tag :exclusive_capture_capacity
   test "project admission is bounded and profile/project identities never share facts", %{
     state: state,
     store: store
@@ -374,6 +380,7 @@ defmodule CodingAgent.Session.ProjectMemoryTest do
     assert {:ok, []} = Project.read(%{hd(states) | cwd: Path.dirname(state.cwd)}, store: store)
   end
 
+  @tag :exclusive_capture_capacity
   test "exited workers free their project and slot before the registry prunes them", %{
     state: state,
     store: store
@@ -439,6 +446,34 @@ defmodule CodingAgent.Session.ProjectMemoryTest do
              ProjectMemory.decode_response(response([%{"fact" => "mix test"}]))
 
     assert {:ok, []} = ProjectMemory.decode_response(response([]))
+  end
+
+  defp await_capture_capacity do
+    # Captures intentionally outlive their sessions. Earlier suite cases can
+    # still own slots after their test processes exit; wait for their actual
+    # workers to drain before asserting that all eight slots are available.
+    workers =
+      for slot <- 1..8,
+          {pid, _} <- Registry.lookup(CodingAgent.ProcessRegistry, {ProjectMemory, :slot, slot}),
+          Process.alive?(pid),
+          do: {slot, pid, Process.monitor(pid)}
+
+    deadline = System.monotonic_time(:millisecond) + 31_000
+
+    for {slot, pid, ref} <- workers do
+      remaining = max(deadline - System.monotonic_time(:millisecond), 0)
+
+      receive do
+        {:DOWN, ^ref, :process, ^pid, _} -> :ok
+      after
+        remaining ->
+          flunk(
+            "capture slot #{slot} still held by #{inspect(pid)}; " <>
+              "initial_call=#{inspect(:proc_lib.translate_initial_call(pid))}; " <>
+              "keys=#{inspect(Registry.keys(CodingAgent.ProcessRegistry, pid))}"
+          )
+      end
+    end
   end
 
   defp scoped(state, i), do: %{state | workspace_dir: state.workspace_dir <> "-#{i}"}
