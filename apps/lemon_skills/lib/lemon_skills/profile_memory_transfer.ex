@@ -17,6 +17,8 @@ defmodule LemonSkills.ProfileMemoryTransfer do
   no source filesystem path is transported. validate checks the full source
   revision, including excluded metadata, before the controller's first apply.
   """
+  import Kernel, except: [binding: 1]
+
   alias LemonCore.{JSONPayload, ProfileStore}
   alias LemonMemory.{ContextScope, Document, Project, Safety, Store}
   alias LemonSkills.WorkspacePreferences, as: Preferences

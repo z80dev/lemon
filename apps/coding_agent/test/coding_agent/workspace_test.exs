@@ -214,6 +214,7 @@ defmodule CodingAgent.WorkspaceTest do
     end
   end
 
+  @tag :tmp_dir
   test "context-owned bootstrap projects only canonical shared facts, never raw or private preferences", %{tmp_dir: tmp_dir} do
     {store, context, opts} = scoped_workspace(tmp_dir)
     user_path = Path.join(context.workspace_dir, "USER.md")
