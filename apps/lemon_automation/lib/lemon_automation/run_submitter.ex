@@ -1,8 +1,8 @@
 defmodule LemonAutomation.RunSubmitter do
   @moduledoc false
 
-  alias LemonAutomation.{CronContext, CronJob, CronMemory, CronRun, RunCompletionWaiter}
-  alias LemonCore.SessionKey
+  alias LemonAutomation.{CronAdmission, CronContext, CronJob, CronMemory, CronRun, RunCompletionWaiter}
+  alias LemonCore.{SessionKey, ToolPolicy}
 
   @default_timeout_ms 300_000
   @cron_blocked_tools ["cron"]
@@ -76,6 +76,12 @@ defmodule LemonAutomation.RunSubmitter do
   @spec build_params(CronJob.t(), CronRun.t(), binary() | nil, keyword()) ::
           map() | {:error, term()}
   def build_params(%CronJob{} = job, %CronRun{} = run, run_id \\ nil, opts \\ []) do
+    with {:ok, invocation} <- admission_invocation(job, opts) do
+      do_build_params(job, run, run_id, opts, invocation)
+    end
+  end
+
+  defp do_build_params(job, run, run_id, opts, invocation) do
     memory_mod = Keyword.get(opts, :memory_mod, CronMemory)
     context_mod = Keyword.get(opts, :context_mod, CronContext)
     session_key = fork_session_key(job.session_key, job.agent_id)
@@ -102,7 +108,9 @@ defmodule LemonAutomation.RunSubmitter do
       }
     }
 
-    case apply_profile(params, job, run_id) do
+    params = apply_invocation(params, invocation)
+
+    case apply_profile(params, job, run_id, invocation) do
       {:error, _} = error ->
         error
 
@@ -112,19 +120,64 @@ defmodule LemonAutomation.RunSubmitter do
     end
   end
 
-  defp apply_profile(params, %CronJob{profile_id: nil}, _run_id), do: params
+  defp admission_invocation(job, opts) do
+    case Keyword.fetch(opts, :admission_invocation) do
+      :error ->
+        {:ok, nil}
 
-  defp apply_profile(params, %CronJob{profile_id: profile_id, cwd: cwd}, run_id) do
+      {:ok, %{context_key: key, mcp_servers: servers, tool_policy: policy} = projection}
+      when map_size(projection) == 3 ->
+        with false <- is_nil(job.admission),
+             true <- is_binary(job.profile_id),
+             :agent <- CronJob.execution_mode(job),
+             {:ok, ^projection} <-
+               CronAdmission.validate_invocation(%{
+                 "invocationContextKey" => key,
+                 "invocationMcpServers" => servers,
+                 "invocationToolPolicy" => policy
+               }) do
+          {:ok, projection}
+        else
+          _ -> {:error, :admission_unavailable}
+        end
+
+      {:ok, _} ->
+        {:error, :admission_unavailable}
+    end
+  rescue
+    _ -> {:error, :admission_unavailable}
+  catch
+    _, _ -> {:error, :admission_unavailable}
+  end
+
+  defp apply_invocation(params, nil), do: params
+
+  defp apply_invocation(params, invocation) do
+    params
+    |> Map.put(:tool_policy, ToolPolicy.intersect(params.tool_policy, invocation.tool_policy))
+    |> Map.update!(:meta, &Map.put(&1, :invocation_context_key, invocation.context_key))
+  end
+
+  defp apply_profile(params, %CronJob{profile_id: nil}, _run_id, _invocation), do: params
+
+  defp apply_profile(params, %CronJob{profile_id: profile_id, cwd: cwd}, run_id, invocation) do
     case LemonCore.ProfileStore.get_for_execution(profile_id) do
       {:ok, profile} ->
-        case LemonCore.ProfileStore.chat_request(profile, params.prompt,
-               session_key: params.session_key,
-               run_id: run_id,
-               cwd: cwd,
-               origin: :cron,
-               tool_policy: params.tool_policy,
-               meta: params.meta
-             ) do
+        opts = [
+          session_key: params.session_key,
+          run_id: run_id,
+          cwd: cwd,
+          origin: :cron,
+          tool_policy: params.tool_policy,
+          meta: params.meta
+        ]
+
+        opts =
+          if is_nil(invocation),
+            do: opts,
+            else: Keyword.put(opts, :invocation_mcp_servers, invocation.mcp_servers)
+
+        case LemonCore.ProfileStore.chat_request(profile, params.prompt, opts) do
           {:ok, request} -> Map.from_struct(request)
           {:error, _} -> {:error, :invalid_profile_request}
         end

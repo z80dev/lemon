@@ -2,7 +2,7 @@ defmodule LemonAutomation.CronManagerAdmissionTest do
   use ExUnit.Case, async: false
 
   alias LemonAutomation.{CronJob, CronManager, CronRun, CronStore, RunSubmitter, Wake}
-  alias LemonCore.{Bus, Event, ProfileStore, SessionKey}
+  alias LemonCore.{Bus, Event, ProfileStore, SessionKey, ToolPolicy}
 
   @moduletag :tmp_dir
   @allowed_origin "https://cron-admission.example.test"
@@ -205,7 +205,8 @@ defmodule LemonAutomation.CronManagerAdmissionTest do
              ProfileStore.update(ctx.profile_id, %{
                node: "worker-canonical-destination",
                model: "profile-model-current",
-               systemPrompt: "Current cron persona"
+               systemPrompt: "Current cron persona",
+               mcpServers: owner_mcp_servers()
              })
 
     File.write!(Path.join(ctx.profile["paths"]["workspace"], "SOUL.md"), "Current instructions")
@@ -235,6 +236,9 @@ defmodule LemonAutomation.CronManagerAdmissionTest do
     assert SessionKey.valid?(params.session_key)
     assert params.session_key != job.session_key
     assert_private_free(params, ctx.admission)
+    assert params.meta.mcp_servers == owner_mcp_servers()
+    refute Map.has_key?(params.meta, :invocation_context_key)
+    assert "cron" in params.tool_policy.blocked_tools
     assert_receive {:waited_for, router_id}, 5_000
     assert router_id == params.run_id
 
@@ -244,7 +248,194 @@ defmodule LemonAutomation.CronManagerAdmissionTest do
     assert run.error == nil
   end
 
+  for connectors <- [:caller, :none] do
+    test "approved #{connectors} invocation replaces owner MCP and retains every policy floor", ctx do
+      connectors = unquote(connectors)
+      Bus.subscribe("cron")
+      on_exit(fn -> Bus.unsubscribe("cron") end)
+      projection = invocation_projection(ctx, connectors)
+      :persistent_term.put({Admission, :result}, {:ok, projection})
+      :persistent_term.put({Submitter, :mode}, :profile)
+      assert {:ok, job} = add_job(ctx, model: "cron-team-model-pin")
+      job_id = job.id
+
+      assert {:ok, _} =
+               ProfileStore.update(ctx.profile_id, %{
+                 node: "worker-team-current",
+                 model: "profile-model-current",
+                 mcpServers: owner_mcp_servers(),
+                 toolPolicy: %{
+                   "allow" => ["read", "bash", "cron"],
+                   "deny" => ["write"],
+                   "blocked_tools" => ["edit"],
+                   "require_approval" => ["bash"],
+                   "approvals" => %{"bash" => "always"}
+                 }
+               })
+
+      assert_receive %Event{type: :cron_job_created, payload: %{job_id: ^job_id}} = created,
+                     5_000
+
+      assert {:ok, %CronRun{id: run_id}} = CronManager.run_now(job.id)
+      assert_receive {:admission_checked, checked_job, checked_run}, 5_000
+      assert checked_job.id == job.id
+      assert checked_run.id == run_id
+      assert_receive {:preflight_checked, ^job_id}, 5_000
+      assert_receive {:submit_attempted, ^job_id, ^run_id}, 5_000
+      assert_receive {:router_submitted, params}, 5_000
+      assert params.run_id == checked_run.run_id
+      assert params.origin == :cron
+      assert params.agent_id == ctx.profile_id
+      assert params.meta.node == "worker-team-current"
+      assert params.meta.profile_id == ctx.profile_id
+      assert params.meta.invocation_context_key == projection.context_key
+      assert params.meta.mcp_servers == projection.mcp_servers
+      refute inspect(params, limit: :infinity) =~ "CRON_OWNER_MCP_KEY"
+      assert params.model == "cron-team-model-pin"
+      assert params.meta.cron_model_pin == "cron-team-model-pin"
+      assert params.meta.cron_base_session_key == job.session_key
+      assert params.meta.cron_session_key == params.session_key
+      assert params.meta.cron_job_id == job.id
+      assert params.meta.cron_run_id == run_id
+      assert SessionKey.valid?(params.session_key)
+      assert params.session_key != job.session_key
+      assert params.cwd == nil
+      assert params.tool_policy.allow == ["read", "bash", "cron"]
+      assert "write" in params.tool_policy.deny
+      assert "edit" in params.tool_policy.blocked_tools
+      assert "cron" in params.tool_policy.blocked_tools
+      assert "bash" in params.tool_policy.require_approval
+      assert params.tool_policy.approvals["bash"] in [:always, "always"]
+      assert_private_free(params, ctx.admission)
+      refute Map.has_key?(params, :admission_invocation)
+      refute Map.has_key?(params.meta, :admission_invocation)
+      assert_receive {:waited_for, router_id}, 5_000
+      assert router_id == params.run_id
+
+      run = await_terminal(run_id)
+      assert run.status == :completed
+      assert run.run_id == params.run_id
+      assert run.output == "profile run completed"
+      assert run.error == nil
+      assert_receive %Event{type: :cron_run_started, payload: %{cron_run_id: ^run_id}} = started,
+                     5_000
+
+      assert_receive %Event{type: :cron_run_completed, payload: %{cron_run_id: ^run_id}} = completed,
+                     5_000
+
+      for value <- [
+            CronJob.to_map(CronStore.get_job(job.id)),
+            run,
+            CronRun.to_map(run),
+            created,
+            started,
+            completed
+          ] do
+        assert_private_free(value, ctx.admission)
+        assert_invocation_private_free(value, projection)
+      end
+
+      assert_invocation_private_free(CronStore.get_job(job.id), projection)
+      audits = audit_events(job.id)
+      assert audits != []
+
+      for audit <- audits do
+        assert_private_free(audit, ctx.admission)
+        assert_invocation_private_free(audit, projection)
+        audit_id = audit.id
+        assert_receive %Event{type: :cron_lifecycle_action, payload: %{audit: %{id: ^audit_id}}} = event,
+                       5_000
+
+        assert_private_free(event, ctx.admission)
+        assert_invocation_private_free(event, projection)
+      end
+    end
+  end
+
+  test "malformed private invocation opts fail before router submission or ownership claim", ctx do
+    assert {:ok, job} = add_job(ctx, enabled: false)
+    run = CronRun.new(job.id, :manual)
+    projection = invocation_projection(ctx, :caller)
+    [server] = projection.mcp_servers
+
+    malformed = [
+      nil,
+      %{},
+      Map.delete(projection, :tool_policy),
+      Map.put(projection, :extra, true),
+      Map.new(projection, fn {key, value} -> {Atom.to_string(key), value} end),
+      %{projection | context_key: nil},
+      %{projection | context_key: "unsafe/context"},
+      %{projection | context_key: String.duplicate("a", 129)},
+      %{projection | mcp_servers: nil},
+      %{projection | mcp_servers: [Map.put(server, "unknown", "value")]},
+      %{projection | mcp_servers: [Map.put(server, "headers", %{"Authorization" => "raw-token"})]},
+      %{projection | tool_policy: nil},
+      %{projection | tool_policy: %{"unknown" => true}},
+      %{projection | tool_policy: %{allow: :all}},
+      %{
+        "invocationContextKey" => projection.context_key,
+        "invocationMcpServers" => projection.mcp_servers,
+        "invocationToolPolicy" => projection.tool_policy
+      }
+    ]
+
+    for invocation <- malformed do
+      assert {:error, :admission_unavailable} =
+               RunSubmitter.submit(job, run, submission_opts(invocation))
+    end
+
+    refute_receive {:submission_claimed, _, _}, 100
+    refute_receive {:router_submitted, _}, 100
+    refute_receive {:waited_for, _}, 100
+  end
+
+  test "private invocation opts cannot grant unconfigured, nonprofile or command jobs", ctx do
+    assert {:ok, job} = add_job(ctx, enabled: false)
+    run = CronRun.new(job.id, :manual)
+    projection = invocation_projection(ctx, :caller)
+
+    for invalid_job <- [
+          %{job | admission: nil},
+          %{job | profile_id: nil},
+          %{job | command: "echo operator-owned"}
+        ] do
+      assert {:error, :admission_unavailable} =
+               RunSubmitter.submit(invalid_job, run, submission_opts(projection))
+    end
+
+    refute_receive {:submission_claimed, _, _}, 100
+    refute_receive {:router_submitted, _}, 100
+    refute_receive {:waited_for, _}, 100
+  end
+
+  test "whitespace command retains agent execution with a canonical private invocation", ctx do
+    assert {:ok, job} = add_job(ctx, enabled: false, command: " \n\t")
+    run = CronRun.new(job.id, :manual)
+    projection = invocation_projection(ctx, :caller)
+    router_id = LemonCore.Id.run_id()
+
+    assert {:ok, "profile run completed"} =
+             RunSubmitter.submit(
+               job,
+               run,
+               Keyword.put(submission_opts(projection), :run_id, router_id)
+             )
+
+    assert_receive {:submission_claimed, ^router_id, session_key}, 5_000
+    assert_receive {:router_submitted, params}, 5_000
+    assert params.run_id == router_id
+    assert params.session_key == session_key
+    assert params.session_key != job.session_key
+    assert params.meta.invocation_context_key == projection.context_key
+    assert params.meta.mcp_servers == projection.mcp_servers
+    assert "cron" in params.tool_policy.blocked_tools
+    assert_receive {:waited_for, ^router_id}, 5_000
+  end
+
   test "job without admission keeps normal execution", ctx do
+    :persistent_term.put({Submitter, :mode}, :profile)
+    assert {:ok, _} = ProfileStore.update(ctx.profile_id, %{mcpServers: owner_mcp_servers()})
     assert {:ok, job} = add_job(ctx, admission: nil, enabled: false)
     assert job.admission == nil
     assert {:ok, %CronRun{id: run_id}} = CronManager.run_now(job.id)
@@ -252,6 +443,10 @@ defmodule LemonAutomation.CronManagerAdmissionTest do
 
     assert_receive {:preflight_checked, ^job_id}, 5_000
     assert_receive {:submit_attempted, ^job_id, ^run_id}, 5_000
+    assert_receive {:router_submitted, params}, 5_000
+    assert params.meta.mcp_servers == owner_mcp_servers()
+    refute Map.has_key?(params.meta, :invocation_context_key)
+    assert "cron" in params.tool_policy.blocked_tools
     refute_receive {:admission_checked, _, _}, 100
     assert await_terminal(run_id).status == :completed
   end
@@ -322,6 +517,79 @@ defmodule LemonAutomation.CronManagerAdmissionTest do
     admission = Map.put(ctx.admission, :token, raw_token)
     assert {:error, _reason} = add_job(ctx, admission: admission)
     refute Enum.any?(CronManager.list(), &String.starts_with?(&1.name || "", ctx.prefix))
+  end
+
+  defp owner_mcp_servers do
+    [
+      %{
+        "name" => "shared-connector",
+        "url" => "https://mcp.example.test/tools",
+        "headers" => %{"Authorization" => "Bearer ${LEMON_SECRET:CRON_OWNER_MCP_KEY}"}
+      }
+    ]
+  end
+
+  defp invocation_projection(ctx, connectors) do
+    servers =
+      case connectors do
+        :caller ->
+          [
+            %{
+              "name" => "shared-connector",
+              "url" => "https://mcp.example.test/tools",
+              "headers" => %{
+                "Authorization" => "Bearer ${LEMON_SECRET:CRON_TEAM_CALLER_MCP_KEY}",
+                "X-Team-Key" => "${LEMON_SECRET:CRON_TEAM_CONTEXT_KEY}"
+              },
+              "enabledTools" => ["lookup"],
+              "allowedOrigins" => ["https://mcp.example.test"]
+            }
+          ]
+
+        :none ->
+          []
+      end
+
+    assert {:ok, servers} = ProfileStore.normalize_mcp_servers(servers)
+    assert {:ok, policy} =
+             ToolPolicy.normalize(%{
+               "profile" => "full_access",
+               "allow" => "all",
+               "approvals" => %{"bash" => "never"}
+             })
+
+    %{
+      context_key: "team-caller:#{ctx.profile_id}:epoch-7",
+      mcp_servers: servers,
+      tool_policy: policy
+    }
+  end
+
+  defp submission_opts(invocation) do
+    test_pid = self()
+
+    [
+      admission_invocation: invocation,
+      router_mod: Router,
+      waiter_mod: Waiter,
+      append_memory: false,
+      on_submitting: fn run_id, session_key ->
+        send(test_pid, {:submission_claimed, run_id, session_key})
+        :ok
+      end
+    ]
+  end
+
+  defp assert_invocation_private_free(value, projection) do
+    rendered = inspect(value, limit: :infinity, printable_limit: :infinity)
+    refute rendered =~ projection.context_key
+    refute rendered =~ "CRON_TEAM_CALLER_MCP_KEY"
+    refute rendered =~ "CRON_TEAM_CONTEXT_KEY"
+    refute rendered =~ "admission_invocation"
+    refute rendered =~ "invocation_context_key"
+    refute rendered =~ "invocationContextKey"
+    refute rendered =~ "invocationMcpServers"
+    refute rendered =~ "invocationToolPolicy"
   end
 
   defp add_job(ctx, extra \\ []) do
