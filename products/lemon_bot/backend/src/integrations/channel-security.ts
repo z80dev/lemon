@@ -54,12 +54,13 @@ export function ownedBinding(services: BackendServices, principal: Principal, bi
   }
   return bot;
 }
-function currentReceipt(services: BackendServices, receipt: P.IntegrationIngressReceipt, principal?: Principal): P.IntegrationIngressReceipt {
+function currentReceipt(services: BackendServices, receipt: P.IntegrationIngressReceipt, principal?: Principal, botIds?: readonly string[]): P.IntegrationIngressReceipt {
   if (!receipt.runId) return receipt;
   const run = services.store.get<P.Run>('runs', receipt.runId);
   const bot = run ? services.store.get<P.Bot>('bots', run.botId) : null;
   const conversation = run ? services.store.get<P.Conversation>('conversations', run.conversationId) : null;
   if (!principal || !run || !bot || !conversation || bot.ownerUserId !== run.initiatorUserId || conversation.ownerUserId !== run.initiatorUserId || principal.userId !== run.initiatorUserId) return ignored('Recorded provider invocation no longer belongs to its authenticated Bot owner.');
+  if (!botIds?.includes(run.botId)) return ignored('Recorded provider invocation no longer matches its fixed configured Bot target.');
   principalFor(services, run.initiatorUserId);
   return receipt;
 }
@@ -119,17 +120,17 @@ export async function verifyIngress(services: BackendServices, request: Request,
   if (!Number.isSafeInteger(timestamp) || Math.abs(services.now() - timestamp) > maxAgeMs || !supplied || !supplied.split(',').some(value => secureEqual(value.trim(), expected))) throw new IntegrationError('unauthenticated', 'Invalid provider signature or delivery window.');
 }
 interface Delivery { id: string; digest: string; receipt: P.IntegrationIngressReceipt }
-export async function dedupeIngress(services: BackendServices, providerId: string, deliveryId: string, payload: unknown, operation: () => Promise<P.IntegrationIngressReceipt>, principal?: Principal): Promise<P.IntegrationIngressReceipt> {
+export async function dedupeIngress(services: BackendServices, providerId: string, deliveryId: string, payload: unknown, operation: () => Promise<P.IntegrationIngressReceipt>, principal?: Principal, botIds?: readonly string[]): Promise<P.IntegrationIngressReceipt> {
   const key = services.mutations.digest([providerId, deliveryId]); const digest = services.mutations.digest(payload);
   const existing = services.store.get<Delivery>('integrationDeliveries', key);
   if (existing) {
     if (existing.digest !== digest) throw new IntegrationError('conflict', 'Provider delivery identifier was reused with different content.');
-    return currentReceipt(services, existing.receipt, principal);
+    return currentReceipt(services, existing.receipt, principal, botIds);
   }
   // GitHub/Sentry delivery headers are not signed. A valid body cannot become new work by changing its delivery ID.
   const bodyKey = services.mutations.digest([providerId, digest]);
   const seen = services.store.get<{ id: string; deliveryKey: string }>('integrationDeliveryBodies', bodyKey);
-  if (seen) return currentReceipt(services, services.store.require<Delivery>('integrationDeliveries', seen.deliveryKey).receipt, principal);
+  if (seen) return currentReceipt(services, services.store.require<Delivery>('integrationDeliveries', seen.deliveryKey).receipt, principal, botIds);
   services.store.put('integrationDeliveries', { id: key, digest, receipt: { accepted: false, status: 'outcome_unknown', reason: 'Delivery is reserved; inspect the recorded run before retrying.', runId: null, conversationId: null } satisfies P.IntegrationIngressReceipt });
   services.store.put('integrationDeliveryBodies', { id: bodyKey, deliveryKey: key });
   const receipt = await operation();

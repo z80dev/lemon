@@ -133,6 +133,12 @@ describe('X OAuth and own explicit public mentions', () => {
       services.store.put('xConnections', { ...connection, userId: other.principal.userId, mainBotId: other.bot.id });
       const switched = await endpoint.handler(context(services, endpoint, null, undefined, {}, '', eventRequest(services, input))) as P.IntegrationIngressReceipt;
       expect(switched.accepted).toBe(false); expect(switched.runId).toBeNull(); expect(calls).toBe(0);
+      services.store.put('bots', { ...other.bot, ownerUserId: principal.userId });
+      const alternateMain = services.store.require<P.Conversation>('conversations', other.bot.mainConversationId);
+      services.store.put('conversations', { ...alternateMain, ownerUserId: principal.userId });
+      services.store.put('xConnections', { ...connection, mainBotId: other.bot.id });
+      const retargeted = await endpoint.handler(context(services, endpoint, null, undefined, {}, '', eventRequest(services, input))) as P.IntegrationIngressReceipt;
+      expect(retargeted.accepted).toBe(false); expect(retargeted.runId).toBeNull(); expect(retargeted.conversationId).toBeNull(); expect(calls).toBe(0); expect(submissions).toHaveLength(0);
     } finally { mocked.restore(); closeFixture(services); }
   });
 });

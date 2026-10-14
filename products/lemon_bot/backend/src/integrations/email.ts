@@ -344,7 +344,7 @@ export function createEmailRoutes(services: BackendServices): Route[] {
           result = await runEventRoutine(services, principal, routine, { messageId: message.id, from: message.from, subject: message.subject, text: message.text, attachmentIds: message.attachmentIds, authentication: message.authentication, scan: message.scan }, `${provider.id}:${body.deliveryId}`);
         }
         return result;
-      }, configuredPrincipal);
+      }, configuredPrincipal, configuredAccount.channelBindingId ? [services.store.require<P.ChannelBinding>('channelBindings', configuredAccount.channelBindingId).botId] : []);
     } },
   ];
   return routes.map((route): Route => {

@@ -274,7 +274,7 @@ export function createXRoutes(services: BackendServices): Route[] {
           catch { services.store.put('xConfirmations', { ...confirmation, state: 'outcome_unknown' }); return { ...result, status: 'outcome_unknown', reason: 'Work was accepted; public confirmation is not acknowledged. Do not redispatch.' }; }
         }
         return result;
-      }, configuredPrincipal);
+      }, configuredPrincipal, configuredConnection ? [configuredConnection.mainBotId] : []);
         if (dispatched.accepted || !outcome.accepted) outcome = dispatched;
       }
       return outcome;

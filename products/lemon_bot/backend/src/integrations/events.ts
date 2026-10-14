@@ -125,7 +125,7 @@ export function createEventRoutes(services: BackendServices): Route[] {
           result = await runEventRoutine(services, principal, routine, normalized.payload, `${provider.id}:${normalized.deliveryId}`);
         }
         return result;
-      }, configuredPrincipal);
+      }, configuredPrincipal, eligibleRoutineIds.map(routineId => services.store.require<P.Routine>('routines', routineId).botId));
     } },
   ];
 }

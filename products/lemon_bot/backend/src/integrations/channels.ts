@@ -154,7 +154,7 @@ export async function channelGatewayIngress(services: BackendServices, context: 
     const result = await createChannelServices(services).channelIngress({ principal: actor, botId: binding.botId, channelBindingId: binding.id, externalThreadId: input.payload.externalThreadId, text: input.payload.text, clientNonce: services.mutations.digest([provider.id, input.deliveryId]) });
     const run = result.runs[0]; if (!run) throw new IntegrationError('upstream_unavailable', 'Adapter dispatch returned no actual run.');
     return { accepted: result.status !== 'outcome_unknown', status: result.status === 'outcome_unknown' ? 'outcome_unknown' : 'accepted', reason: null, runId: run.id, conversationId: run.conversationId };
-  }, configuredActor);
+  }, configuredActor, [configuredBinding.botId]);
 }
 
 async function retireSlackGrant(services: BackendServices, provider: P.ChannelProviderConfig, userId: string, resourceId: string, accessToken: string, refreshToken: string | null, completionId: string | null): Promise<void> {
@@ -614,7 +614,7 @@ export function createChannelRoutes(services: BackendServices): Route[] {
         const result = await createChannelServices(services).channelIngress({ principal, botId: binding.botId, channelBindingId: binding.id, externalThreadId: threadId, text: event.text ?? '', clientNonce: services.mutations.digest([provider.id, envelope.event_id]) });
         const run = result.runs[0]; if (!run) throw new IntegrationError('upstream_unavailable', 'Slack dispatch returned no actual run.');
         return { accepted: result.status !== 'outcome_unknown', status: result.status === 'outcome_unknown' ? 'outcome_unknown' : 'accepted', reason: null, runId: run.id, conversationId: run.conversationId };
-      }, ingressActor);
+      }, ingressActor, [binding.botId]);
     } },
   ];
   return routes.map((route): Route => {
