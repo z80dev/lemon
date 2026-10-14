@@ -33,7 +33,7 @@ import Observation
     public internal(set) var pendingIntents: [MutationIntent] = []
     public internal(set) var typingByConversation: [ID: [ID: RealtimeTyping]] = [:]
 
-    @ObservationIgnored private let keychain: AccountKeychain
+    @ObservationIgnored private let keychain: any AccountCredentialStore
     @ObservationIgnored let persistence: ClientPersistence
     @ObservationIgnored var transport: HTTPTransport?
     @ObservationIgnored var socket: URLSessionWebSocketTask?
@@ -46,7 +46,7 @@ import Observation
     @ObservationIgnored var visibleConversationID: ID?
     @ObservationIgnored var lastServerActivity: UInt64 = 0
 
-    public init(keychain: AccountKeychain = AccountKeychain(), persistence: ClientPersistence = ClientPersistence()) {
+    public init(keychain: any AccountCredentialStore = AccountKeychain(), persistence: ClientPersistence = ClientPersistence()) {
         self.keychain = keychain; self.persistence = persistence
         do { accounts = try keychain.load() } catch { errorMessage = error.localizedDescription }
     }

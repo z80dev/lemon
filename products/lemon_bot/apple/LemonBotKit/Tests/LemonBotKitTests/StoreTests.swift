@@ -2,6 +2,29 @@ import XCTest
 import Foundation
 @testable import LemonBotKit
 
+private final class TestAccountCredentialStore: AccountCredentialStore {
+    private var accounts: [StoredAccount]
+    var loadError: Error?
+    var removeError: Error?
+
+    init(accounts: [StoredAccount] = []) { self.accounts = accounts }
+
+    func load() throws -> [StoredAccount] {
+        if let loadError { throw loadError }
+        return accounts
+    }
+
+    func save(_ account: StoredAccount) throws {
+        accounts.removeAll { $0.id == account.id }
+        accounts.append(account)
+    }
+
+    func remove(_ id: String) throws {
+        if let removeError { throw removeError }
+        accounts.removeAll { $0.id == id }
+    }
+}
+
 @MainActor final class StoreTests: XCTestCase {
     private var roots: [URL] = []
     private func persistence() -> ClientPersistence {
@@ -12,8 +35,8 @@ import Foundation
     private func saved(_ id: String = "account") -> StoredAccount {
         StoredAccount(id: id, baseURL: URL(string: "https://product.example/v1")!, email: "member@example.org", displayName: "Member", token: "session", userID: "resource", workspaceID: "resource")
     }
-    private func store(_ persistence: ClientPersistence? = nil) throws -> LemonBotStore {
-        let store = LemonBotStore(keychain: AccountKeychain(service: "LemonBotTests." + UUID().uuidString), persistence: persistence ?? self.persistence())
+    private func store(_ persistence: ClientPersistence? = nil, credentials: TestAccountCredentialStore? = nil) throws -> LemonBotStore {
+        let store = LemonBotStore(keychain: credentials ?? TestAccountCredentialStore(accounts: [saved()]), persistence: persistence ?? self.persistence())
         store.account = saved(); store.transport = try HTTPTransport(baseURL: saved().baseURL, token: "session", session: TestHTTPProtocol.session())
         addTeardownBlock { TestHTTPProtocol.handler = nil; TestHTTPProtocol.requests = [] }
         TestHTTPProtocol.requests = []; return store
@@ -102,14 +125,61 @@ import Foundation
         let store = try store()
         XCTAssertTrue(store.setLocalDraft(conversationID: "chat", text: "Retained, never automatically sent", attachmentIDs: []))
         store.entries["revokedConversation"] = [try message("No longer authorized")]
+        store.entries["resource"] = [try message("Stale cached preview")]
+        let authoritativeEntry = try message("Authorized durable result", revision: 2)
+        let events = try JSONDecoder().decode([RealtimeEvent].self, from: WireFixtures.events)
+        let bot = try XCTUnwrap(events.compactMap { event -> Bot? in
+            if case .botUpserted(let value) = event.payload { return value }
+            return nil
+        }.first)
+        let machine = try XCTUnwrap(events.compactMap { event -> Machine? in
+            if case .machineUpserted(let value) = event.payload { return value }
+            return nil
+        }.first)
+        let conversation = try XCTUnwrap(events.compactMap { event -> Conversation? in
+            if case .conversationUpserted(let value) = event.payload { return value }
+            return nil
+        }.first)
+        let notification = try XCTUnwrap(events.compactMap { event -> BotNotification? in
+            if case .notificationUpserted(let value) = event.payload { return value }
+            return nil
+        }.first)
+        func pages<T: Codable & Hashable>(_ items: [T]) throws -> (first: Data, final: Data) {
+            let encoder = JSONEncoder()
+            return (
+                try encoder.encode(Page<T>(items: [], nextCursor: "authorized-next")),
+                try encoder.encode(Page(items: items))
+            )
+        }
+        let authorizedPages = [
+            "/v1/bots": try pages([bot]),
+            "/v1/machines": try pages([machine]),
+            "/v1/conversations": try pages([conversation]),
+            "/v1/notifications": try pages([notification])
+        ]
+        let entries = try JSONEncoder().encode(Page(items: [authoritativeEntry]))
         TestHTTPProtocol.handler = { request in
-            XCTAssertEqual(request.httpMethod, "GET"); XCTAssertEqual(request.url?.path, "/v1/sync")
-            return (200, [:], WireFixtures.snapshot)
+            XCTAssertEqual(request.httpMethod, "GET")
+            if request.url?.path == "/v1/sync" { return (200, [:], WireFixtures.snapshot) }
+            if request.url?.path == "/v1/conversations/resource/entries" { return (200, [:], entries) }
+            let path = try XCTUnwrap(request.url?.path)
+            let page = try XCTUnwrap(authorizedPages[path], "Only authorized snapshot collections may be requested")
+            let cursor = request.url.flatMap { URLComponents(url: $0, resolvingAgainstBaseURL: false) }?.queryItems?.first(where: { $0.name == "cursor" })?.value
+            if let cursor {
+                XCTAssertEqual(cursor, "authorized-next")
+                return (200, [:], page.final)
+            }
+            return (200, [:], page.first)
         }
         try await store.recoverExpiredCursor()
         XCTAssertEqual(store.draft(for: "chat").text, "Retained, never automatically sent")
         XCTAssertNil(store.entries["revokedConversation"])
-        XCTAssertEqual(TestHTTPProtocol.requests.count, 1)
+        XCTAssertEqual(store.entries["resource"], [authoritativeEntry])
+        XCTAssertEqual(store.bots, [bot])
+        XCTAssertEqual(store.machines, [machine])
+        XCTAssertEqual(store.conversations, [conversation])
+        XCTAssertEqual(store.notifications, [notification])
+        XCTAssertTrue(TestHTTPProtocol.requests.allSatisfy { $0.httpMethod == "GET" })
         XCTAssertEqual(store.cursor, "9007199254740993123456")
     }
     func testOfflineConsequentialActionsAreNeverDispatched() async throws {
@@ -136,7 +206,9 @@ import Foundation
         XCTAssertFalse(store.terminalSubscriptions.contains("terminal"))
     }
     func testSignoutClearsOnlyRevokedAccountEvenWhenLogoutIsAlready401() async throws {
-        let persistence = persistence(), store = try store(persistence)
+        let persistence = persistence()
+        let credentials = TestAccountCredentialStore(accounts: [saved(), saved("other")])
+        let store = try store(persistence, credentials: credentials)
         XCTAssertTrue(store.setLocalDraft(conversationID: "chat", text: "private draft", attachmentIDs: []))
         try persistence.saveDraft(LocalComposerDraft(text: "other account"), conversationID: "chat", accountID: "other")
         store.entries["chat"] = [try message("private transcript")]; store.cursor = "99"
@@ -146,6 +218,38 @@ import Foundation
         XCTAssertEqual(store.cursor, "0"); XCTAssertEqual(store.connectionState, "disconnected")
         XCTAssertNil(try persistence.loadDraft(conversationID: "chat", accountID: "account"))
         XCTAssertEqual(try persistence.loadDraft(conversationID: "chat", accountID: "other")?.text, "other account")
+        XCTAssertEqual(try credentials.load().map(\.id), ["other"])
+        XCTAssertEqual(store.accounts.map(\.id), ["other"])
+    }
+
+    func testCredentialLoadFailureDoesNotActivateOrInventSavedAccounts() {
+        let credentials = TestAccountCredentialStore(accounts: [saved()])
+        credentials.loadError = ClientError.keychain(-50)
+        let store = LemonBotStore(keychain: credentials, persistence: persistence())
+        XCTAssertNil(store.account)
+        XCTAssertTrue(store.accounts.isEmpty)
+        XCTAssertEqual(store.errorMessage, ClientError.keychain(-50).localizedDescription)
+    }
+
+    func testSignoutReportsCredentialRemovalFailureWhileClearingRevokedLiveState() async throws {
+        let persistence = persistence()
+        let credentials = TestAccountCredentialStore(accounts: [saved(), saved("other")])
+        credentials.removeError = ClientError.keychain(-50)
+        let store = try store(persistence, credentials: credentials)
+        XCTAssertTrue(store.setLocalDraft(conversationID: "chat", text: "private draft", attachmentIDs: []))
+        store.entries["chat"] = [try message("private transcript")]
+        TestHTTPProtocol.handler = { _ in (401, [:], Data(#"{"error":{"code":"unauthenticated","message":"Session revoked","requestId":"req_logout","retrySafe":true}}"#.utf8)) }
+        do {
+            try await store.signOut()
+            XCTFail("Credential deletion errors must remain observable")
+        } catch ClientError.keychain(let status) {
+            XCTAssertEqual(status, -50)
+        }
+        XCTAssertNil(store.account)
+        XCTAssertTrue(store.entries.isEmpty)
+        XCTAssertTrue(store.drafts.isEmpty)
+        XCTAssertNil(try persistence.loadDraft(conversationID: "chat", accountID: "account"))
+        XCTAssertEqual(Set(try credentials.load().map(\.id)), ["account", "other"])
     }
     func testUnknownMutationNoncePersistsWithoutBodyAndFencesRestart() async throws {
         let persistence = persistence(), first = try store(persistence)

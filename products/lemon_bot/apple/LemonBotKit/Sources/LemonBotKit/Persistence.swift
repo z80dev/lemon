@@ -15,7 +15,15 @@ public struct StoredAccount: Codable, Hashable, Identifiable {
     }
 }
 
-public final class AccountKeychain {
+/// Session credentials have one secure production implementation. Injection keeps
+/// lifecycle tests independent of the machine's Keychain without adding a fallback.
+public protocol AccountCredentialStore: AnyObject {
+    func load() throws -> [StoredAccount]
+    func save(_ account: StoredAccount) throws
+    func remove(_ id: String) throws
+}
+
+public final class AccountKeychain: AccountCredentialStore {
     private let service: String
     public init(service: String = "org.lemonbot.accounts.v1") { self.service = service }
     private func query(_ id: String? = nil) -> [String: Any] {
