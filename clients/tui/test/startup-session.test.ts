@@ -27,14 +27,14 @@ describe("selectContinueSession", () => {
 	const there = (id: string) => `agent:default:tui:local:dm:${cwdSessionTag(OTHER)}-${id}`;
 	const legacy = "agent:default:tui:local:dm:11111111-1111-1111-1111-111111111111";
 
-	test("prefers this directory's newest session over a newer one elsewhere", () => {
+	test("picks this directory's newest session over a newer one elsewhere", () => {
 		const rows = [row(there("a"), 900), row(here("old"), 100), row(here("new"), 500)];
-		expect(selectContinueSession(rows, { cwd: CWD })).toEqual({ key: here("new"), scope: "cwd" });
+		expect(selectContinueSession(rows, { cwd: CWD })).toBe(here("new"));
 	});
 
-	test("falls back to the newest local TUI session when none belongs to this directory", () => {
+	test("never continues another directory's or an untagged session", () => {
 		const rows = [row(legacy, 300), row(there("a"), 700), row(there("b"), 200)];
-		expect(selectContinueSession(rows, { cwd: CWD })).toEqual({ key: there("a"), scope: "any" });
+		expect(selectContinueSession(rows, { cwd: CWD })).toBeUndefined();
 	});
 
 	test("ignores archived, non-TUI and excluded sessions", () => {
@@ -43,12 +43,9 @@ describe("selectContinueSession", () => {
 			row("agent:default:cli-abc-xyz", 800),
 			row("agent:default:main", 700),
 			row(here("self"), 600),
-			row(legacy, 100),
+			row(here("older"), 100),
 		];
-		expect(selectContinueSession(rows, { cwd: CWD, exclude: here("self") })).toEqual({
-			key: legacy,
-			scope: "any",
-		});
+		expect(selectContinueSession(rows, { cwd: CWD, exclude: here("self") })).toBe(here("older"));
 	});
 });
 

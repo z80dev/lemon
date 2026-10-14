@@ -13,7 +13,7 @@ import type { NoticeLevel } from "./store/transcript-model.ts";
 
 /** What the command line asked for at startup. */
 export type StartupRequest =
-	/** Attach to the most recently updated TUI session. */
+	/** Attach to this directory's most recently updated TUI session. */
 	| { mode: "continue" }
 	/** With a key: attach if it exists. Without: open the session switcher. */
 	| { mode: "resume"; key?: string };
@@ -31,41 +31,33 @@ const LIST_PAGE = 500;
 /** Rows inspected at most; a runaway daemon cannot stall startup. */
 const LIST_CAP = 5000;
 
-const TUI_LOCAL = ":tui:local:";
-
-export interface ContinueSelection {
-	key: string;
-	/** `cwd`: started from this directory; `any`: newest local TUI session. */
-	scope: "cwd" | "any";
-}
+const TUI_LOCAL_DM = ":tui:local:dm:";
 
 /**
- * Newest non-archived local TUI session, preferring this directory's.
+ * Key of the newest non-archived local TUI session started from `cwd`.
  *
  * A key belongs to `cwd` when its peer id starts with the directory tag minted
- * by `newSessionKey(cwd)`. Older keys carry no directory, so they only match
- * through the `any` fallback. `exclude` removes the key the shell minted for
- * itself, which is never a session to continue.
+ * by `newSessionKey(cwd)`. Native history is stored per directory, so a session
+ * from another directory (or an older untagged key, whose directory is unknown)
+ * is never continued: attaching it here would show its transcript while the
+ * model starts without its history. `exclude` removes the key the shell minted
+ * for itself, which is never a session to continue.
  */
 export function selectContinueSession(
 	rows: readonly SessionSummary[],
 	options: { cwd: string; exclude?: string },
-): ContinueSelection | undefined {
-	const marker = `${TUI_LOCAL}dm:${cwdSessionTag(options.cwd)}-`;
-	let best: ContinueSelection | undefined;
+): string | undefined {
+	const marker = `${TUI_LOCAL_DM}${cwdSessionTag(options.cwd)}-`;
+	let best: string | undefined;
 	let bestAt = -1;
-	let bestScope: "cwd" | "any" | undefined;
 	for (const row of rows) {
 		const key = pickString(row, "sessionKey", "session_key", "key");
 		if (!key || key === options.exclude || row.archived === true) continue;
-		if (!key.includes(TUI_LOCAL)) continue;
-		const scope = key.includes(marker) ? "cwd" : "any";
+		if (!key.includes(marker)) continue;
 		const at = pickNumber(row, "updatedAtMs") ?? 0;
-		if (bestScope === "cwd" && scope === "any") continue;
-		if (best && bestScope === scope && at <= bestAt) continue;
-		best = { key, scope };
+		if (best !== undefined && at <= bestAt) continue;
+		best = key;
 		bestAt = at;
-		bestScope = scope;
 	}
 	return best;
 }
@@ -122,22 +114,22 @@ export async function resolveStartup(
 	}
 
 	try {
-		const selection = selectContinueSession(await listAll(methods), {
+		const sessionKey = selectContinueSession(await listAll(methods), {
 			cwd: deps.cwd,
 			exclude: deps.currentKey,
 		});
-		if (!selection) {
+		if (!sessionKey) {
 			return {
-				notice: { text: "no previous session to continue — started a new one", level: "info" },
+				notice: {
+					text: "no previous session for this directory — started a new one",
+					level: "info",
+				},
 			};
 		}
 		return {
-			sessionKey: selection.key,
+			sessionKey,
 			notice: {
-				text:
-					selection.scope === "cwd"
-						? `continuing the latest session for this directory · ${selection.key}`
-						: `continuing the latest TUI session · ${selection.key}`,
+				text: `continuing the latest session for this directory · ${sessionKey}`,
 				level: "info",
 			},
 		};

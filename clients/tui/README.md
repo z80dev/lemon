@@ -358,7 +358,7 @@ and resumed legacy `tui-…` sessions remain unchanged.
 | Flag | Behavior |
 | --- | --- |
 | `--session`, `-s <key>` | Attach to exactly this key (a fresh session when it has no history). |
-| `--continue`, `-c` | Attach to the most recently updated, non-archived local TUI session, preferring one started from the current directory and otherwise the newest overall. Starts a fresh session with a notice when none exists. |
+| `--continue`, `-c` | Attach to the most recently updated, non-archived local TUI session started from the current directory (matched by the key's directory tag; sessions from other directories and older untagged keys are not continued). Starts a fresh session with a notice when none exists. |
 | `--resume`, `-r <key>` | Like `--session`, but first checks the daemon knows the key; when it does not, a warning notice is shown and a fresh session starts. |
 | `--resume`, `-r` | Open the `/sessions` switcher right after startup. |
 

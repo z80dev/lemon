@@ -21,7 +21,7 @@ const MIN_BUN_VERSION = "1.3.14";
 export interface CliOptions {
 	url: string;
 	sessionKey?: string;
-	/** `--continue`: attach to the most recently updated TUI session. */
+	/** `--continue`: attach to this directory's most recently updated TUI session. */
 	continueSession: boolean;
 	/** `--resume [key]`: attach to `resumeKey`, or open the session switcher without one. */
 	resume: boolean;
@@ -42,8 +42,8 @@ Options:
   --ws-url, --url, -u <url>   Control-plane WebSocket URL
                               (default: $LEMON_WS_URL, else ws://127.0.0.1:<port>/ws)
   --session, -s <key>         Session key to attach to (default: fresh local TUI session)
-  --continue, -c              Continue the most recently updated TUI session
-                              (this directory's first; a new session when none exists)
+  --continue, -c              Continue this directory's most recently updated TUI
+                              session (a new session when none exists)
   --resume, -r [key]          Attach to <key> if it exists, else open the session switcher
   --version, -V               Print the version and exit
   --help, -h                  Print this help and exit
