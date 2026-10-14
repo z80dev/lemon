@@ -197,7 +197,7 @@ defmodule CodingAgent.Executor.RemoteSessionRunner do
 
   def handle_info({ref, result}, state) when is_reference(ref) do
     case Enum.find(state.approvals, fn {_id, approval} -> approval.task.ref == ref end) do
-      {worker_id, approval} ->
+      {worker_id, _approval} ->
         Process.demonitor(ref, [:flush])
         decision = case result do
           {:ok, :approved, scope}

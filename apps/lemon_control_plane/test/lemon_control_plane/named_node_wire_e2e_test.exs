@@ -342,10 +342,10 @@ defmodule LemonControlPlane.NamedNodeWireE2ETest do
     session_key = "agent:default:wire-stream-#{suffix}"
     :ok = LemonCore.Bus.subscribe(LemonCore.Bus.session_topic(session_key))
     :ok = LemonCore.Bus.subscribe("exec_approvals")
-    route_request = LemonCore.RunRequest.new(%{
-      run_id: stream_run_id, session_key: session_key, agent_id: "default",
-      prompt: "live remote work", origin: :control_plane, meta: %{node: node_name}
-    })
+    route_request = %LemonCore.ExecutionCommand{
+      run_id: stream_run_id, session_key: session_key, prompt: "live remote work",
+      conversation_key: {:session, session_key}, meta: %{node: node_name}
+    }
     {:ok, route_pid} = LemonRouter.RunProcess.start_link(%{
       run_id: stream_run_id, session_key: session_key,
       execution_request: route_request, submit_to_gateway?: false
