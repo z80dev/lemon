@@ -1618,7 +1618,7 @@ defmodule CodingAgent.Session do
       context
       |> LemonSkills.find_relevant(cwd: state.cwd, max_results: 3, refresh: false)
       |> Enum.map(&LemonSkills.SkillView.from_entry(&1, cwd: state.cwd))
-      |> Enum.filter(&LemonSkills.SkillView.displayable?/1)
+      |> Enum.filter(&LemonSkills.SkillView.prompt_visible?/1)
 
     _rendered_for_telemetry =
       LemonSkills.PromptView.render_relevant_skills(views,

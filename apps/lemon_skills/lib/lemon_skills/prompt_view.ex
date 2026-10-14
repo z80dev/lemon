@@ -57,7 +57,7 @@ defmodule LemonSkills.PromptView do
 
     views =
       Registry.list_views(all_opts)
-      |> Enum.filter(&SkillView.displayable?/1)
+      |> Enum.filter(&SkillView.prompt_visible?/1)
 
     if views == [] do
       ""

@@ -76,7 +76,8 @@ defmodule LemonSkills.Entry do
           installed_at: DateTime.t() | nil,
           updated_at: DateTime.t() | nil,
           audit_status: audit_status() | nil,
-          audit_findings: [String.t()]
+          audit_findings: [String.t()],
+          hidden_from_model: boolean()
         }
 
   @enforce_keys [:key, :path]
@@ -99,7 +100,8 @@ defmodule LemonSkills.Entry do
     :audit_status,
     enabled: true,
     status: :ready,
-    audit_findings: []
+    audit_findings: [],
+    hidden_from_model: false
   ]
 
   # ---------------------------------------------------------------------------
@@ -190,7 +192,8 @@ defmodule LemonSkills.Entry do
       entry
       | name: Map.get(manifest, "name", entry.key),
         description: Map.get(manifest, "description", ""),
-        manifest: manifest
+        manifest: manifest,
+        hidden_from_model: LemonSkills.Manifest.hidden_from_model?(manifest)
     }
   end
 
