@@ -10,6 +10,7 @@ defmodule LemonAgent.ModelRuntime.ModelCatalog do
   """
 
   alias LemonAgent.ModelRuntime.Credentials
+  alias LemonAgent.ModelRuntime.CustomProviders
   alias LemonCore.Config
   alias LemonCore.Secrets
 
@@ -45,6 +46,11 @@ defmodule LemonAgent.ModelRuntime.ModelCatalog do
   `:config` may provide a resolved config/settings map. Codex discovery uses the
   same first healthy credential as native requests; the registry remains static
   for other providers unless `:discover_openai` is explicitly enabled.
+
+  Models defined under `[providers.<id>]` are included (see
+  `LemonAgent.ModelRuntime.CustomProviders`); `discover_custom: false` skips
+  custom-provider endpoint discovery, and `:custom_discovery_opts` passes extra
+  options to `LemonAi.Models.Discovery.discover/3`.
   """
   @spec available_models(keyword()) :: [LemonAi.Types.Model.t()]
   def available_models(opts \\ []) do
@@ -74,7 +80,37 @@ defmodule LemonAgent.ModelRuntime.ModelCatalog do
       codex_req_options: Keyword.get(opts, :codex_req_options, [])
     )
     |> Enum.filter(&MapSet.member?(enabled, normalize_provider_name(&1.provider)))
+    |> merge_configured_models(configured_models(cfg, enabled, routing, opts))
     |> Enum.reject(&picker_model_blocked?(normalize_provider_name(&1.provider), &1.id))
+  end
+
+  # `[providers.<id>]` models: custom providers with usable credentials (or
+  # `auth = "none"`) and additions to enabled built-in providers. Discovery
+  # providers list their endpoint through the shared model cache.
+  defp configured_models(cfg, enabled, routing, opts) do
+    providers = Map.get(cfg, :providers) || %{}
+
+    providers
+    |> CustomProviders.models(
+      discover: Keyword.get(opts, :discover_custom, true),
+      discovery_opts: Keyword.get(opts, :custom_discovery_opts, [])
+    )
+    |> Enum.filter(fn
+      %{provider: provider} when is_binary(provider) ->
+        Credentials.provider_has_credentials?(provider, providers, provider_routing: routing)
+
+      %{provider: provider} ->
+        MapSet.member?(enabled, normalize_provider_name(provider))
+    end)
+  end
+
+  # Configured entries replace catalog models with the same provider and id.
+  defp merge_configured_models(models, []), do: models
+
+  defp merge_configured_models(models, configured) do
+    key = &{normalize_provider_name(&1.provider), &1.id}
+    configured_keys = MapSet.new(configured, key)
+    Enum.reject(models, &MapSet.member?(configured_keys, key.(&1))) ++ configured
   end
 
   @doc "Provider ids present in a catalog, in display order."

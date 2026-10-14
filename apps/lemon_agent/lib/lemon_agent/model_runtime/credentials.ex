@@ -21,6 +21,7 @@ defmodule LemonAgent.ModelRuntime.Credentials do
 
   alias LemonAi.Auth.OAuthSecretResolver
   alias LemonAgent.ModelRuntime.CredentialHealth
+  alias LemonAgent.ModelRuntime.CustomProviders
   alias LemonAgent.ModelRuntime.ProviderNames
   alias LemonAgent.ProviderConfigResolver
   alias LemonCore.Secrets
@@ -90,7 +91,9 @@ defmodule LemonAgent.ModelRuntime.Credentials do
       "openai_codex" -> resolve_openai_codex_api_key(provider_cfg)
       "anthropic" -> resolve_anthropic_api_key(provider_cfg)
       canonical when is_binary(canonical) -> resolve_generic_api_key(canonical, provider_cfg)
-      _ -> nil
+      # Not a ProviderNames provider: custom `[providers.<id>]` entries resolve
+      # only their own configured credential, never another provider's env key.
+      _ -> resolve_custom_api_key(provider_cfg)
     end
   end
 
@@ -174,7 +177,9 @@ defmodule LemonAgent.ModelRuntime.Credentials do
         bedrock_credentials_available?(provider_cfg, opts)
 
       _ ->
-        present_value?(resolve_provider_api_key(provider, provider_cfg, provider_cfg: true))
+        present_value?(resolve_provider_api_key(provider, provider_cfg, provider_cfg: true)) or
+          (is_nil(ProviderNames.canonical_name(provider)) and
+             CustomProviders.keyless?(provider_cfg))
     end
   end
 
@@ -359,6 +364,32 @@ defmodule LemonAgent.ModelRuntime.Credentials do
 
       true ->
         nil
+    end
+  end
+
+  # Custom providers: `api_key_env` -> inline `api_key` -> `api_key_secret`.
+  # `auth = "none"` providers are ready without any key (see
+  # `single_provider_has_credentials?/3`).
+  defp resolve_custom_api_key(provider_cfg) do
+    cond do
+      present_value?(env_key = provider_env_value(provider_cfg, :api_key_env)) ->
+        env_key
+
+      present_value?(plain_api_key = provider_config_value(provider_cfg, :api_key)) ->
+        plain_api_key
+
+      present_value?(api_key_secret = provider_config_value(provider_cfg, :api_key_secret)) ->
+        resolve_secret_api_key(api_key_secret)
+
+      true ->
+        nil
+    end
+  end
+
+  defp provider_env_value(provider_cfg, key) do
+    case provider_config_value(provider_cfg, key) do
+      name when is_binary(name) and name != "" -> System.get_env(name)
+      _ -> nil
     end
   end
 
@@ -733,6 +764,7 @@ defmodule LemonAgent.ModelRuntime.Credentials do
     else
       providers_or_cfg
       |> ProviderNames.provider_config(provider)
+      |> Kernel.||(CustomProviders.config_for(providers_or_cfg, provider))
       |> normalize_provider_cfg()
     end
   end
