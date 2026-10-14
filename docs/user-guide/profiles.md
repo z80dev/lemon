@@ -162,7 +162,7 @@ to the controller, and `mcpServers: []` to remove its session connectors.
   "mcpServers": [{
     "name": "lemon-bot",
     "url": "https://bot.example/mcp",
-    "headers": {"Authorization": "Bearer <per-bot-token>"}
+    "headers": {"Authorization": "${LEMON_SECRET:lemon-bot/research/authorization}"}
   }]
 }
 ```
@@ -172,6 +172,17 @@ profile. Servers use Streamable HTTP; names must be unique, URLs HTTP(S), and
 headers a JSON object of string name/value pairs. Definitions are bounded to
 32 servers and 64 KiB total. Connections are owner-bound and released when the
 run ends. Connection failures fail the run rather than silently dropping tools.
+
+Header values may contain the explicit reference `${LEMON_SECRET:NAME}`.
+Write the complete header value into the encrypted secret store on the bot's
+machine (for example, using `node.secrets.set`), then configure that reference.
+Literal prefixes/suffixes are supported, such as `Bearer ${LEMON_SECRET:api-token}`.
+Only the executing host resolves references, immediately before attaching MCP
+clients; the controller forwards reference text unchanged. There is no
+environment or external-source fallback, and `${ENV_VAR}` is not expanded.
+Missing secrets, decryption failures, malformed references and invalid resolved
+headers fail attachment before any client starts. The reported failure is the
+static `secret_resolution_failed` classification, never a secret value or name.
 
 MCP headers are secrets: all management reads and lifecycle responses omit the
 `headers` field entirely. Authenticated operators set or replace headers with

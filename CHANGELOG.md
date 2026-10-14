@@ -14,6 +14,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   `profileId`, resolved at execution time for routines. `profiles.update` edits
   persona, model, node and per-profile Streamable HTTP MCP servers. MCP headers
   are write-only in management responses and excluded from run persistence.
+- Profile MCP headers support explicit `${LEMON_SECRET:NAME}` references resolved
+  exclusively from the encrypted secret store on the execution host. Missing or
+  failing secret reads fail closed before MCP clients start; controller requests
+  keep references unchanged and never substitute environment values.
 
 ### Fixed
 

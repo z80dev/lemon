@@ -142,6 +142,12 @@ Create/update/clone/get/list profile projections omit MCP `headers` completely.
 Headers are execution-only secrets: not logged, emitted in management events,
 or stored in run history. A full replacement list replaces previous headers;
 omit `mcpServers` to preserve existing connections, or send `[]` to remove them.
+Header values support `${LEMON_SECRET:NAME}` references, including literal
+prefix/suffix text. References are resolved through the executing host's
+encrypted secret store immediately before MCP attachment—not by the controller.
+No environment or external-source fallback/expansion occurs. Missing, malformed
+or failing references fail closed with `secret_resolution_failed`; resolved
+values never replace the stored/reference-bearing execution definition.
 General `node.invoke.request` events contain only
 `{invokeId,nodeId,method,timeoutMs,cleanup:{includesArgs:false}}`. Invocation
 arguments are sent only on the targeted destination node connection.
