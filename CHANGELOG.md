@@ -15,6 +15,8 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   receipts report actual new/queued/merged/steering/interrupt targets rather
   than echoing requested modes; `runs.receipt.get` reconciles lost responses
   without dispatch. Unknown outcomes retain the original nonretryable ID.
+  Stable-storage barriers precede dispatch and merge effects and protect receipt
+  acknowledgements/readback; failed barriers never authorize another send.
 - Lemon Bot product architecture and dependency-free client/backend contracts:
   authenticated local/OIDC accounts and SCIM directory provisioning, durable
   named teammates on user-owned swarm machines, typed REST/realtime/MCP,

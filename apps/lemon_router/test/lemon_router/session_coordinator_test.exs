@@ -137,10 +137,19 @@ defmodule LemonRouter.SessionCoordinatorTest do
 
     @impl true
     def init(opts) do
-      {:ok, %{data: %{}, refuse_initial: opts[:refuse_initial], allow_fence: opts[:allow_fence]}}
+      {:ok, %{
+        data: %{},
+        refuse_initial: opts[:refuse_initial],
+        allow_fence: opts[:allow_fence],
+        allow_updates: opts[:allow_updates],
+        sync_failure: opts[:sync_failure]
+      }}
     end
 
     @impl true
+    def put(%{allow_updates: true} = state, :run_receipts, key, value),
+      do: {:ok, %{state | data: Map.put(state.data, {:run_receipts, key}, value)}}
+
     def put(%{allow_fence: true} = state, :run_receipts, key, %{state: :outcome_unknown} = value),
       do: {:ok, %{state | data: Map.put(state.data, {:run_receipts, key}, value)}}
 
@@ -170,6 +179,25 @@ defmodule LemonRouter.SessionCoordinatorTest do
     @impl true
     def list(state, table),
       do: {:ok, for({{^table, key}, value} <- state.data, do: {key, value}), state}
+
+    @impl true
+    def sync(state) do
+      failure = Map.get(state.data, {:receipt_backend_failures, :sync}, state.sync_failure)
+
+      refused =
+        case failure do
+          true -> true
+          pattern when is_map(pattern) ->
+            Enum.any?(state.data, fn
+              {{:run_receipts, _key}, receipt} ->
+                Enum.all?(pattern, fn {key, value} -> Map.get(receipt, key) == value end)
+              _other -> false
+            end)
+          _other -> false
+        end
+
+      if refused, do: {:error, :sync_refused}, else: {:ok, state}
+    end
   end
 
   setup do
@@ -989,7 +1017,7 @@ defmodule LemonRouter.SessionCoordinatorTest do
              receipt_submit(key, queued, "must not replace original", :interrupt, supervisor)
     refute_receive {:aborted, ^active, _}, 50
 
-    :ok = SessionCoordinator.cancel(key)
+    :ok = abort_active_run(supervisor, :user_requested)
     assert_receive {:aborted, ^active, :user_requested}
     assert_receive {:started, ^queued, opts}
     assert opts[:execution_request].prompt == "original"
@@ -1020,7 +1048,7 @@ defmodule LemonRouter.SessionCoordinatorTest do
 
     assert {:ok, %{effective_mode: :merged, target_run_id: ^survivor}} =
              receipt_submit(key, first, "duplicate", :interrupt, supervisor)
-    :ok = SessionCoordinator.cancel(key)
+    :ok = stop_active_run(supervisor)
     assert_receive {:started, ^survivor, opts}
     assert opts[:execution_request].prompt == "first\nsecond\nthird"
     refute_receive {:started, ^first, _}, 50
@@ -1062,7 +1090,7 @@ defmodule LemonRouter.SessionCoordinatorTest do
                RunReceiptStore.fetch(steering)
 
       assert {:ok, _} = receipt_submit(key, next, "next", :collect, supervisor)
-      :ok = SessionCoordinator.cancel(key)
+      :ok = stop_active_run(supervisor)
       assert_receive {:started, ^next, _}
       assert {:ok, ^next} = SessionCoordinator.active_run(key)
       assert {:ok, %{effective_mode: ^mode, target_run_id: ^active}} =
@@ -1070,6 +1098,8 @@ defmodule LemonRouter.SessionCoordinatorTest do
       refute_receive {:run_cast, ^mode, ^steering, _, _}, 50
       refute_receive {:started, ^steering, _}, 50
       GenServer.stop(runtime_run)
+      :ok = stop_active_run(supervisor)
+      assert eventually(fn -> SessionCoordinator.active_run(key) == :none end)
     end
   end
 
@@ -1094,10 +1124,12 @@ defmodule LemonRouter.SessionCoordinatorTest do
       assert {:ok, ^active} = SessionCoordinator.active_run(key)
       assert {:ok, %{effective_mode: :queued, target_run_id: ^steering}} =
                RunReceiptStore.fetch(steering)
-      :ok = SessionCoordinator.cancel(key)
+      :ok = stop_active_run(supervisor)
       assert_receive {:started, ^steering, opts}
       assert opts[:queue_mode] == fallback
       GenServer.stop(runtime_run)
+      :ok = stop_active_run(supervisor)
+      assert eventually(fn -> SessionCoordinator.active_run(key) == :none end)
     end
   end
 
@@ -1123,7 +1155,7 @@ defmodule LemonRouter.SessionCoordinatorTest do
     assert {:ok, %{effective_mode: :steer_pending, target_run_id: ^active}} =
              receipt_submit(key, fallen_back, "down", :steer, supervisor)
     assert_receive {:run_cast, :steer, ^fallen_back, _, ^owner}
-    :ok = SessionCoordinator.cancel(key)
+    :ok = stop_active_run(supervisor)
     assert_receive {:started, ^fallen_back, opts}
     assert {:ok, ^fallen_back} = SessionCoordinator.active_run(key)
     assert opts[:execution_request].prompt == "queued\nrejected\ndown"
@@ -1153,7 +1185,7 @@ defmodule LemonRouter.SessionCoordinatorTest do
     assert {:ok, %{effective_mode: :redirect_pending, target_run_id: ^active}} =
              receipt_submit(key, steering, "correction", :redirect, supervisor)
     assert_receive {:run_cast, :redirect, ^steering, _, _owner}
-    :ok = SessionCoordinator.cancel(key)
+    :ok = stop_active_run(supervisor)
     assert_receive {:started, ^steering, _}
     assert {:ok, ^steering} = SessionCoordinator.active_run(key)
     assert {:ok, %{effective_mode: :new_run, target_run_id: ^steering}} =
@@ -1178,10 +1210,12 @@ defmodule LemonRouter.SessionCoordinatorTest do
       assert {:ok, %{effective_mode: :queued, target_run_id: ^image_run}} =
                SessionCoordinator.submit_with_receipt(key, image_submission)
       refute_receive {:run_cast, ^mode, ^image_run, _, _}, 50
-      :ok = SessionCoordinator.cancel(key)
+      :ok = stop_active_run(supervisor)
       assert_receive {:started, ^image_run, opts}
       assert opts[:execution_request].images == images
       GenServer.stop(runtime_run)
+      :ok = stop_active_run(supervisor)
+      assert eventually(fn -> SessionCoordinator.active_run(key) == :none end)
     end
   end
 
@@ -1275,7 +1309,7 @@ defmodule LemonRouter.SessionCoordinatorTest do
     changed = %{prepared | meta: %{router_request_identity: String.duplicate("e", 64)}}
     assert {:error, :run_id_conflict} = SessionCoordinator.submit_with_receipt(key, changed)
     refute_receive {:started, ^queued, _}, 50
-    :ok = SessionCoordinator.cancel(key)
+    :ok = stop_active_run(supervisor)
     assert_receive {:started, ^merged, opts}
     assert opts[:execution_request].prompt == "first\nsecond"
   end
@@ -1336,7 +1370,7 @@ defmodule LemonRouter.SessionCoordinatorTest do
     end)
     assert {:ok, %{state: :accepted, effective_mode: :queued, target_run_id: ^first}} =
              RunReceiptStore.fetch(store, first)
-    :ok = SessionCoordinator.cancel(key)
+    :ok = stop_active_run(supervisor)
     assert_receive {:started, ^first, opts}
     assert opts[:execution_request].prompt == "first"
     refute_receive {:started, ^second, _}, 50
@@ -1367,7 +1401,7 @@ defmodule LemonRouter.SessionCoordinatorTest do
     end
     assert {:error, :outcome_unknown} =
              SessionCoordinator.submit_with_receipt(key, prepared, receipt_store: store)
-    :ok = SessionCoordinator.cancel(key)
+    :ok = stop_active_run(supervisor)
     assert_receive {:started, ^second, opts}
     assert opts[:execution_request].prompt == "first\nsecond"
     refute_receive {:started, ^first, _}, 50
@@ -1427,7 +1461,7 @@ defmodule LemonRouter.SessionCoordinatorTest do
     monitor = Process.monitor(owner)
 
     ExUnit.CaptureLog.capture_log(fn ->
-      :ok = SessionCoordinator.cancel(key)
+      :ok = abort_active_run(supervisor, :user_requested)
       assert_receive {:aborted, ^active, :user_requested}
       assert_receive {:DOWN, ^monitor, :process, ^owner, _reason}
     end)
@@ -1436,6 +1470,167 @@ defmodule LemonRouter.SessionCoordinatorTest do
     assert {:ok, %{effective_mode: :steer_pending, target_run_id: ^active}} =
              RunReceiptStore.fetch(store, steering)
     refute_receive {:started, ^steering, _}, 50
+    GenServer.stop(runtime_run)
+  end
+
+  test "receipt barriers reject visible initial, CAS and uncertainty rows until sync succeeds" do
+    store = start_receipt_store(allow_updates: true, sync_failure: true)
+    run_id = receipt_run_id()
+    receipt = %{
+      run_id: run_id,
+      session_key: unique_session_key(),
+      state: :accepted,
+      effective_mode: :queued,
+      target_run_id: run_id
+    }
+    barrier_error = {:error, {:sync_failed, :sync_refused}}
+
+    assert ^barrier_error = RunReceiptStore.put(store, receipt)
+    assert {:ok, ^receipt} = LemonCore.Store.fetch(store, :run_receipts, run_id)
+    assert ^barrier_error = RunReceiptStore.fetch(store, run_id)
+    assert ^barrier_error = RunReceiptStore.put(store, receipt)
+
+    assert :ok = LemonCore.Store.put(store, :receipt_backend_failures, :sync, false)
+    assert {:ok, ^receipt} = RunReceiptStore.fetch(store, run_id)
+    assert :ok = RunReceiptStore.put(store, receipt)
+
+    changes = %{effective_mode: :merged, target_run_id: "survivor"}
+    assert :ok = LemonCore.Store.put(store, :receipt_backend_failures, :sync, changes)
+    assert ^barrier_error = RunReceiptStore.update(store, run_id, changes)
+    updated = Map.merge(receipt, changes)
+    assert {:ok, ^updated} = LemonCore.Store.fetch(store, :run_receipts, run_id)
+    assert ^barrier_error = RunReceiptStore.fetch(store, run_id)
+    assert ^barrier_error = RunReceiptStore.update(store, run_id, changes)
+
+    assert :ok = LemonCore.Store.put(store, :receipt_backend_failures, :sync, false)
+    assert :ok = RunReceiptStore.update(store, run_id, changes)
+    assert {:ok, ^updated} = RunReceiptStore.fetch(store, run_id)
+
+    assert :ok = LemonCore.Store.put(
+      store, :receipt_backend_failures, :sync, %{state: :outcome_unknown})
+    assert ^barrier_error = RunReceiptStore.mark_unknown(store, run_id)
+    unknown = %{updated | state: :outcome_unknown, effective_mode: nil, target_run_id: nil}
+    assert {:ok, ^unknown} = LemonCore.Store.fetch(store, :run_receipts, run_id)
+    assert ^barrier_error = RunReceiptStore.fetch(store, run_id)
+    assert ^barrier_error = RunReceiptStore.mark_unknown(store, run_id)
+
+    assert :ok = LemonCore.Store.put(store, :receipt_backend_failures, :sync, false)
+    assert :ok = RunReceiptStore.mark_unknown(store, run_id)
+    assert {:ok, ^unknown} = RunReceiptStore.fetch(store, run_id)
+    assert :ok = RunReceiptStore.update(store, run_id, changes)
+    assert {:ok, ^updated} = RunReceiptStore.fetch(store, run_id)
+  end
+
+  test "failed initial and replay barriers preserve the fixed ID without dispatching again", %{
+    run_supervisor: supervisor
+  } do
+    store = start_receipt_store(sync_failure: true)
+    key = {:session, unique_session_key()}
+    run_id = receipt_run_id()
+    prepared = submission(key, run_id, "accepted but unsynced", :collect, supervisor)
+
+    assert {:error, :outcome_unknown} =
+             SessionCoordinator.submit_with_receipt(key, prepared, receipt_store: store)
+    assert_receive {:started, ^run_id, _}
+    assert {:ok, %{run_id: ^run_id, state: :accepted} = receipt} =
+             LemonCore.Store.fetch(store, :run_receipts, run_id)
+    assert {:error, {:sync_failed, :sync_refused}} = RunReceiptStore.fetch(store, run_id)
+    assert {:error, :outcome_unknown} =
+             SessionCoordinator.submit_with_receipt(key, prepared, receipt_store: store)
+    [{owner, _}] = Registry.lookup(LemonRouter.ConversationRegistry, key)
+    assert {:error, :outcome_unknown} =
+             GenServer.call(owner, {:submit_with_receipt, prepared})
+    refute_receive {:started, ^run_id, _}, 50
+
+    assert :ok = LemonCore.Store.put(store, :receipt_backend_failures, :sync, false)
+    assert {:ok, ^receipt} =
+             SessionCoordinator.submit_with_receipt(key, prepared, receipt_store: store)
+    assert {:ok, ^receipt} = GenServer.call(owner, {:submit_with_receipt, prepared})
+    refute_receive {:started, ^run_id, _}, 50
+
+    assert :ok = LemonCore.Store.put(store, :receipt_backend_failures, :sync, true)
+    assert {:error, :outcome_unknown} =
+             SessionCoordinator.submit_with_receipt(
+               key, %{prepared | queue_mode: :interrupt}, receipt_store: store)
+    assert {:ok, ^run_id} = SessionCoordinator.active_run(key)
+    refute_receive {:aborted, ^run_id, _}, 50
+    refute_receive {:started, ^run_id, _}, 50
+  end
+
+  test "failed pre-merge sync preserves the original input without merge or second dispatch", %{
+    run_supervisor: supervisor
+  } do
+    store = start_receipt_store(allow_updates: true)
+    key = {:session, unique_session_key()}
+    active = receipt_run_id()
+    first = receipt_run_id()
+    second = receipt_run_id()
+    for {id, prompt, mode} <- [{active, "hold", :collect}, {first, "first", :followup}] do
+      assert {:ok, _} = SessionCoordinator.submit_with_receipt(
+        key, submission(key, id, prompt, mode, supervisor), receipt_store: store)
+    end
+    assert_receive {:started, ^active, _}
+    assert :ok = LemonCore.Bus.subscribe(LemonCore.Bus.run_topic(first))
+    assert :ok = LemonCore.Store.put(
+      store, :receipt_backend_failures, :sync, %{run_id: first, state: :outcome_unknown})
+    prepared = submission(key, second, "second", :followup, supervisor)
+
+    assert {:error, :outcome_unknown} =
+             SessionCoordinator.submit_with_receipt(key, prepared, receipt_store: store)
+    assert {:ok, %{run_id: ^first, state: :outcome_unknown}} =
+             LemonCore.Store.fetch(store, :run_receipts, first)
+    assert {:ok, nil} = LemonCore.Store.fetch(store, :run_receipts, second)
+    refute_receive %LemonCore.Event{type: :run_completed, meta: %{run_id: ^first}}, 50
+    refute_receive {:bridge_unsubscribed, ^first}, 50
+    refute_receive {:started, ^second, _}, 50
+
+    assert :ok = LemonCore.Store.put(store, :receipt_backend_failures, :sync, false)
+    assert {:error, :outcome_unknown} =
+             SessionCoordinator.submit_with_receipt(
+               key, submission(key, first, "first", :followup, supervisor), receipt_store: store)
+    assert :ok = stop_active_run(supervisor)
+    assert_receive {:started, ^first, opts}
+    assert opts[:execution_request].prompt == "first"
+    assert :ok = SessionCoordinator.cancel(key)
+    assert_receive {:aborted, ^first, :user_requested}
+    assert eventually(fn -> SessionCoordinator.active_run(key) == :none end)
+    refute_receive {:started, ^second, _}, 50
+  end
+
+  test "failed steering update sync cannot become definite through visible-row replay", %{
+    run_supervisor: supervisor
+  } do
+    store = start_receipt_store(allow_updates: true)
+    key = {:session, unique_session_key()}
+    active = receipt_run_id()
+    steering = receipt_run_id()
+    assert {:ok, _} = SessionCoordinator.submit_with_receipt(
+      key, submission(key, active, "hold", :collect, supervisor), receipt_store: store)
+    assert_receive {:started, ^active, _}
+    runtime_run = start_runtime_run(active)
+    correction = submission(key, steering, "correction", :steer, supervisor)
+    assert {:ok, %{effective_mode: :steer_pending}} =
+             SessionCoordinator.submit_with_receipt(key, correction, receipt_store: store)
+    assert_receive {:run_cast, :steer, ^steering, _, owner}
+    assert :ok = LemonCore.Store.put(
+      store, :receipt_backend_failures, :sync, %{run_id: steering, effective_mode: :steer})
+
+    ExUnit.CaptureLog.capture_log(fn ->
+      send(owner, {:steer_accepted, steering})
+      assert {:ok, ^active} = SessionCoordinator.active_run(key)
+    end)
+    assert {:ok, %{effective_mode: :steer, target_run_id: ^active}} =
+             LemonCore.Store.fetch(store, :run_receipts, steering)
+    assert {:error, {:sync_failed, :sync_refused}} = RunReceiptStore.fetch(store, steering)
+    assert {:error, :outcome_unknown} =
+             SessionCoordinator.submit_with_receipt(key, correction, receipt_store: store)
+    refute_receive {:run_cast, :steer, ^steering, _, _}, 50
+    refute_receive {:started, ^steering, _}, 50
+
+    assert :ok = LemonCore.Store.put(store, :receipt_backend_failures, :sync, false)
+    assert {:ok, %{effective_mode: :steer, target_run_id: ^active}} =
+             SessionCoordinator.submit_with_receipt(key, correction, receipt_store: store)
+    refute_receive {:run_cast, :steer, ^steering, _, _}, 50
     GenServer.stop(runtime_run)
   end
 
@@ -1466,6 +1661,11 @@ defmodule LemonRouter.SessionCoordinatorTest do
     [{_, active_pid, _, _}] = DynamicSupervisor.which_children(run_supervisor)
     GenServer.stop(active_pid, :normal)
     :ok
+  end
+
+  defp abort_active_run(run_supervisor, reason) do
+    [{_, active_pid, _, _}] = DynamicSupervisor.which_children(run_supervisor)
+    StubRunProcess.abort(active_pid, reason)
   end
 
   defp with_notice_dispatcher(fun) when is_function(fun, 0) do

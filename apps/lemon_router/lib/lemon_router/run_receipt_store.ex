@@ -10,8 +10,11 @@ defmodule LemonRouter.RunReceiptStore do
   fences existing receipts as `:outcome_unknown` until the applied disposition
   is durable. Prompts, execution metadata and error terms are never retained here.
 
-  The optional first argument selects a `LemonCore.Store` instance. Durability
-  follows that store's configured backend, just like other router domain tables.
+  The optional first argument selects a `LemonCore.Store` instance. Every receipt
+  write and existing-record read requires a successful `Store.sync/1` barrier
+  before acknowledgement. A visible row alone cannot prove a previously failed
+  write barrier reached stable storage. Barrier failures return
+  `{:error, {:sync_failed, reason}}`; storage backends without sync fail closed.
   """
 
   alias LemonCore.Store
@@ -44,7 +47,11 @@ defmodule LemonRouter.RunReceiptStore do
   def fetch(server \\ Store, run_id) do
     case Store.fetch(server, @table, run_id) do
       {:ok, nil} -> {:ok, nil}
-      {:ok, receipt} -> normalize(receipt, run_id)
+      {:ok, receipt} ->
+        with {:ok, receipt} <- normalize(receipt, run_id),
+             :ok <- sync(server) do
+          {:ok, receipt}
+        end
       {:error, _reason} = error -> error
     end
   end
@@ -55,7 +62,7 @@ defmodule LemonRouter.RunReceiptStore do
   def put(server, receipt) when is_map(receipt) do
     with {:ok, receipt} <- normalize(receipt, Map.get(receipt, :run_id)) do
       case Store.put_new(server, @table, receipt.run_id, receipt) do
-        :ok -> :ok
+        :ok -> sync(server)
         {:error, :exists} -> existing_receipt(server, receipt)
         {:error, _reason} = error -> error
       end
@@ -82,7 +89,7 @@ defmodule LemonRouter.RunReceiptStore do
             :ok
           else
             case Store.compare_and_swap(server, @table, run_id, current, replacement) do
-              :ok -> :ok
+              :ok -> sync(server)
               {:error, :mismatch} -> update(server, run_id, changes)
               {:error, _reason} = error -> error
             end
@@ -108,7 +115,7 @@ defmodule LemonRouter.RunReceiptStore do
         replacement = %{current | state: :outcome_unknown, effective_mode: nil, target_run_id: nil}
 
         case Store.compare_and_swap(server, @table, run_id, current, replacement) do
-          :ok -> :ok
+          :ok -> sync(server)
           {:error, :mismatch} -> mark_unknown(server, run_id)
           {:error, _reason} = error -> error
         end
@@ -123,6 +130,13 @@ defmodule LemonRouter.RunReceiptStore do
       {:ok, ^receipt} -> :ok
       {:ok, _other} -> {:error, :receipt_conflict}
       {:error, _reason} = error -> error
+    end
+  end
+
+  defp sync(server) do
+    case Store.sync(server) do
+      :ok -> :ok
+      {:error, reason} -> {:error, {:sync_failed, reason}}
     end
   end
 
