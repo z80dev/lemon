@@ -25,6 +25,8 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   metadata-only audit collector scope for workspace integration tokens.
 - Clarified Lemon Bot file chunks retain the owning node's total source-file
   size, with actual chunk length measured from decoded bytes for progress.
+- Lemon Bot mailbox accounts expose optional measured provider indexing
+  status/time instead of fabricated eventual-indexing warning labels.
 
 ---
 
