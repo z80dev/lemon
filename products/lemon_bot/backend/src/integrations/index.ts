@@ -147,7 +147,7 @@ export function createIntegrationServices(s: BackendServices): Services {
       const results = await Promise.allSettled([host.reconcile(), connectors.reconcile(), channels.reconcile(), email.reconcile(), x.reconcile(), identity.reconcile(), exports.reconcile()]);
       const failed = results.find(result => result.status === 'rejected'); if (failed?.status === 'rejected') throw failed.reason;
     },
-    dispose() { host.dispose(); exports.dispose(); instances.delete(s); },
+    async dispose() { exports.dispose(); await host.dispose(); instances.delete(s); },
   };
   instances.set(s, service); return service;
 }
