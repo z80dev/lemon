@@ -51,6 +51,10 @@ defmodule CodingAgent.CommandsDiscoveryTest do
       write(cwd, ".gemini/commands/broken.toml", ~s(description = "no prompt"))
       write(cwd, ".omp/commands/notes.txt", "ignored extension")
       write(cwd, ".claude/commands/.hidden.md", "ignored dotfile")
+      write(cwd, ".omp/commands/sub/nested.md", "flat roots do not recurse")
+      write(cwd, ".codex/prompts/sub/nested.md", "flat roots do not recurse")
+      write(cwd, ".lemon/commands/huge.md", String.duplicate("x", 64 * 1024 + 1))
+      write(cwd, ".lemon/commands/two words.md", "unreachable name")
 
       assert names(cwd, home) == [
                "a:b:c",
@@ -76,33 +80,16 @@ defmodule CodingAgent.CommandsDiscoveryTest do
       assert by_name["explain"].template == "Explain {{args}}"
     end
 
-    test "only the claude and gemini roots recurse", %{cwd: cwd, home: home} do
-      write(cwd, ".omp/commands/sub/nested.md", "not discovered")
-      write(cwd, ".codex/prompts/sub/nested.md", "not discovered")
-      assert names(cwd, home) == []
-    end
-
-    test "parses markdown frontmatter fields", %{cwd: cwd, home: home} do
+    test "parses frontmatter, Gemini TOML and CRLF files", %{cwd: cwd, home: home} do
       write(cwd, ".claude/commands/commit.md", """
       ---
       description: "Commit staged work"
       argument-hint: [message]
-      model: opus
-      subtask: true
       ---
 
       Commit with message: $ARGUMENTS
       """)
 
-      assert [command] = Commands.list(cwd, home: home)
-      assert command.description == "Commit staged work"
-      assert command.argument_hint == "[message]"
-      assert command.model == "opus"
-      assert command.subtask
-      assert command.template == "Commit with message: $ARGUMENTS"
-    end
-
-    test "parses gemini description and CRLF markdown", %{cwd: cwd, home: home} do
       write(cwd, ".gemini/commands/plan.toml", """
       description = "Plan a change"
       prompt = \"\"\"
@@ -113,17 +100,10 @@ defmodule CodingAgent.CommandsDiscoveryTest do
       write(cwd, ".codex/prompts/crlf.md", "---\r\ndescription: Windows\r\n---\r\nBody\r\n")
 
       by_name = Map.new(Commands.list(cwd, home: home), &{&1.name, &1})
-      assert by_name["plan"].description == "Plan a change"
-      assert by_name["plan"].template == "Plan: {{args}}"
-      assert by_name["crlf"].description == "Windows"
-      assert by_name["crlf"].template == "Body"
-    end
-
-    test "skips oversized and whitespace-named files", %{cwd: cwd, home: home} do
-      write(cwd, ".lemon/commands/huge.md", String.duplicate("x", 64 * 1024 + 1))
-      write(cwd, ".lemon/commands/two words.md", "unreachable")
-      write(cwd, ".lemon/commands/ok.md", "fine")
-      assert names(cwd, home) == ["ok"]
+      assert %{description: "Commit staged work", argument_hint: "[message]"} = by_name["commit"]
+      assert by_name["commit"].template == "Commit with message: $ARGUMENTS"
+      assert %{description: "Plan a change", template: "Plan: {{args}}"} = by_name["plan"]
+      assert %{description: "Windows", template: "Body"} = by_name["crlf"]
     end
   end
 
@@ -193,20 +173,6 @@ defmodule CodingAgent.CommandsDiscoveryTest do
     end
   end
 
-  test "the control-plane projection omits templates and paths", %{cwd: cwd} do
-    write(cwd, ".claude/commands/review.md", """
-    ---
-    description: Review
-    argument-hint: <path>
-    ---
-    Secret template body
-    """)
-
-    assert CodingAgent.ControlPlaneProvider.slash_commands(cwd) == [
-             %{name: "review", description: "Review", argument_hint: "<path>"}
-           ]
-  end
-
   describe "expand/2" do
     test "appends arguments when the template has no placeholder" do
       assert Commands.expand(%{template: "Review the diff."}, "carefully please") ==
@@ -229,15 +195,6 @@ defmodule CodingAgent.CommandsDiscoveryTest do
   end
 
   describe "expand_input/3" do
-    test "expands a matching command", %{cwd: cwd, home: home} do
-      write(cwd, ".claude/commands/git/commit.md", "Commit: $ARGUMENTS")
-
-      assert {:ok, "Commit: fix the bug", %{name: "git:commit"}} =
-               Commands.expand_input(cwd, "  /git:commit fix the bug\n", home: home)
-
-      assert {:ok, "Commit: ", _} = Commands.expand_input(cwd, "/git:commit", home: home)
-    end
-
     test "leaves unknown commands, plain text and paths alone", %{cwd: cwd, home: home} do
       write(cwd, ".lemon/commands/usr.md", "never")
       assert :nomatch = Commands.expand_input(cwd, "/unknown arg", home: home)

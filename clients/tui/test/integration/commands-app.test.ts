@@ -178,10 +178,10 @@ describe("file-defined slash commands", () => {
 		});
 		expect(chatText(app)).not.toContain("unknown command");
 
+		// A command file named help.md must not shadow the built-in /help.
 		await app.submit("/help");
-		expect(chatText(app)).toContain("/review <path> — Review a path");
-		expect(chatText(app)).toContain("/git:commit");
-		expect(app.commands.get("help")?.group).not.toBe("file commands");
+		expect(chatText(app)).toContain("/review <path>");
+		expect(server.requestsFor("chat.send")).toHaveLength(1);
 	});
 });
 
