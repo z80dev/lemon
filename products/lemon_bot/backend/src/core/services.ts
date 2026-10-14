@@ -8,7 +8,8 @@ export interface Principal { kind: 'user' | 'bot' | 'hook' | 'integration'; id: 
 export type Authentication = 'public' | 'member' | 'admin' | 'owner' | 'bot' | 'hook' | 'integration' | 'optional';
 export interface Route { method: string; path: string; auth: Authentication; mutation?: boolean; body?: 'json' | 'multipart' | 'none'; status?: number; authorizeReplay?(context: RequestContext): Promise<void> | void; handler(context: RequestContext): Promise<unknown> | unknown }
 export interface InternalInvocationOptions { botLifecycle?: { botId: string; userId: string; action: string } }
-export interface RequestContext { request: Request; params: Record<string, string>; query: URLSearchParams; body: unknown; user: Principal | null; services: BackendServices; requestId: string; route: Route; nonceResourceIds: string[]; internalBotLifecycle?: InternalInvocationOptions['botLifecycle'] }
+/** Callback authority is server-set only after verified provider-to-product identity binding; never parsed from HTTP inputs or substituted for the nonce principal. */
+export interface RequestContext { request: Request; params: Record<string, string>; query: URLSearchParams; body: unknown; user: Principal | null; services: BackendServices; requestId: string; route: Route; nonceResourceIds: string[]; internalBotLifecycle?: InternalInvocationOptions['botLifecycle']; authenticatedCallbackPrincipal?: Principal }
 export interface EntityStore {
   db: Database;
   get<T = Entity>(collection: string, id: string): T | null;

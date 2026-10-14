@@ -4,7 +4,7 @@ import type { RealtimeEvent, ResourceEventPayloads } from '../../../contracts/pr
 import { fail } from './errors';
 import { Store } from './store';
 const audienceSchema=z.object({userIds:z.array(z.string()).optional(),conversationId:z.string().optional(),botId:z.string().optional(),machineId:z.string().optional(),admin:z.boolean().optional(),public:z.boolean().optional(),desktopOnly:z.boolean().optional()}).strict();
-const collections:Record<string,string>={user:'users',workspace:'workspaces',member:'members',invite:'invites',device:'devices',machine:'machines',machine_invite:'machineInvites',bot:'bots',section:'sections',template:'templates',conversation:'conversations',composer:'composerDrafts',entry:'entries',run:'runs',attachment:'attachments',approval:'approvals',question:'questions',human_step:'humanSteps',secret_request:'secretRequests',draft:'drafts',skill:'skills',routine:'routines',routine_run:'routineRuns',memory:'memories',notification:'notifications',connector:'connectors',connector_auth:'connectorAuths',consent:'consents',channel:'channelBindings',voice:'voiceSessions',grant:'botGrants',activity:'activity',reminder:'reminders',preference_change:'preferenceChanges',milestone:'milestones',directory_group:'directoryGroups',group_policy:'groupPolicies',network_policy:'networkPolicies',policy_application:'policyApplications',egress:'egressRoutes',setup_manifest:'setupManifests',setup_run:'setupRuns',host_operation:'hostOperations',spend_limit:'spendLimits',export:'exports',channel_setup:'channelSetups',email_account:'emailAccounts',x_connection:'xConnections'};
+const collections:Record<string,string>={user:'users',workspace:'workspaces',member:'members',invite:'invites',device:'devices',pairing:'pairings',machine:'machines',machine_invite:'machineInvites',bot:'bots',section:'sections',template:'templates',conversation:'conversations',composer:'composerDrafts',entry:'entries',run:'runs',attachment:'attachments',approval:'approvals',question:'questions',human_step:'humanSteps',secret_request:'secretRequests',draft:'drafts',skill:'skills',routine:'routines',routine_run:'routineRuns',memory:'memories',notification:'notifications',connector:'connectors',connector_auth:'connectorAuths',channel:'channelBindings',voice:'voiceSessions',grant:'botGrants',activity:'activity',reminder:'reminders',preference_change:'preferenceChanges',milestone:'milestones',directory_group:'directoryGroups',group_policy:'groupPolicies',network_policy:'networkPolicies',policy_application:'policyApplications',egress:'egressRoutes',setup_manifest:'setupManifests',setup_run:'setupRuns',host_operation:'hostOperations',spend_limit:'spendLimits',export:'exports',channel_setup:'channelSetups',email_account:'emailAccounts',x_connection:'xConnections'};
 export function createEventService(services:BackendServices):EventService {
   const listeners=new Set<(event:RealtimeEvent,audience:EventAudience)=>void>();
   const db=services.store.db;
@@ -21,10 +21,6 @@ export function createEventService(services:BackendServices):EventService {
     if(audience.admin && member.role!=='owner'&&member.role!=='admin') return false;
     const [kind,action]=event.event.split('.');
     if(action==='deleted') return !!(audience.userIds?.includes(principal.userId)||audience.admin||audience.public);
-    if(event.event==='conversation.left'){
-      if(event.payload.userId===principal.userId&&audience.userIds?.includes(principal.userId))return true;
-      try{services.auth.conversation(principal,event.payload.conversationId);return true;}catch{return false;}
-    }
     try {
       if(audience.conversationId) services.auth.conversation(principal,audience.conversationId);
       if(audience.botId) services.auth.bot(principal,audience.botId);

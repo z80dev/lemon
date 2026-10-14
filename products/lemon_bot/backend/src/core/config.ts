@@ -30,7 +30,7 @@ export async function loadConfiguration(environment:Record<string,string|undefin
   }
   const configPath=environment.LEMON_BOT_CONFIG_FILE??join(dataDir,'config.json');let raw:unknown={version:1};
   try {raw=JSON.parse(await readFile(configPath,'utf8'));}catch(error){if(!(error instanceof Error&&'code' in error&&error.code==='ENOENT'))throw error;}
-  const operator=parseOperatorConfiguration(raw);
+  const operator=parseOperatorConfiguration(raw,{firstPartyOrigin:publicUrl.origin});
   const port=z.coerce.number().int().min(1).max(65535).parse(environment.LEMON_BOT_PORT??4080);
   const host=environment.LEMON_BOT_HOST??'127.0.0.1';
   return {config:{publicUrl:publicUrl.origin,controlUrl:controlUrl.href,operatorToken,dataDir,host,port,trustedOverlay,operator},key};
