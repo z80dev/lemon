@@ -3,6 +3,7 @@ import type * as P from '../../../contracts/protocol';
 import type { BackendServices, Principal, RequestContext, Route } from './services';
 import { ApiError, fail } from './errors';
 import { z, parse, principal, id, mutation, update, voice, queryObject } from './validation';
+import { productBotTools } from './bots';
 
 const level = z.enum(['off', 'read_only', 'read_interact']);
 const revision = z.number().int().positive();
@@ -147,6 +148,20 @@ const nativeToolFamilies: Record<string, string[]> = {
   shell: ['bash', 'bash_output', 'kill_process'],
   browser: ['browser_tabs', 'browser_tab_open', 'browser_tab_activate', 'browser_tab_close', 'browser_navigate', 'browser_snapshot', 'browser_get_content', 'browser_click', 'browser_type', 'browser_hover', 'browser_select_option', 'browser_upload_file', 'browser_download', 'browser_press', 'browser_scroll', 'browser_back', 'browser_wait_for_selector', 'browser_evaluate', 'browser_events', 'browser_get_cookies', 'browser_set_cookies', 'browser_clear_state', 'browser_screenshot', 'browser_analyze'],
 };
+const nativeBaselineTools = ['read_skill', 'webfetch', 'websearch', 'task', 'agent_message', 'wait', 'parent_question'];
+async function productExecutionNames(s: BackendServices): Promise<string[]> {
+  if (!s.lemon.connected || !s.lemon.methods.includes('mcp.execution_names')) fail('capability_unavailable', 'The controller does not advertise pure MCP execution-name projection.');
+  const server = { name: 'lemon-bot', url: new URL('/mcp', s.config.publicUrl).href };
+  const raw = await s.lemon.call('mcp.execution_names', { server, toolNames: [...productBotTools] }, { mutation: false });
+  const result = z.object({ server: z.object({ name: z.literal('lemon-bot') }).strict(), tools: z.array(z.object({ name: z.string(), executionName: z.string().min(1).max(64).regex(/^mcp_[a-z0-9_]+$/) }).strict()).length(productBotTools.length), count: z.literal(productBotTools.length) }).strict().safeParse(raw);
+  if (!result.success || new Set(result.data.tools.map(tool => tool.name)).size !== productBotTools.length || new Set(result.data.tools.map(tool => tool.executionName)).size !== productBotTools.length || result.data.tools.some(tool => !productBotTools.some(name => name === tool.name))) fail('upstream_error', 'The controller returned an incomplete or ambiguous product execution-name projection.');
+  return result.data.tools.map(tool => tool.executionName);
+}
+const productExcludedNativeTools: Record<string, true> = {
+  agent: true, remember: true, recall: true,
+  cron: true, goal: true, kanban: true, todo: true, peer: true,
+  skill_manage: true, tool_auth: true, extensions_status: true,
+};
 /** Native tool-name authorization, not a filesystem/network/OS sandbox. */
 export async function nativeBotToolPolicy(s: BackendServices, user: Principal, bot: P.Bot, capabilities?: P.MachineCapabilities): Promise<P.JSONObject> {
   const measured = capabilities ?? await machineCapabilities(s, user, bot.machineId, bot);
@@ -164,19 +179,20 @@ export async function invocationBotToolPolicy(s: BackendServices, user: Principa
 
 async function projectNativeToolPolicy(s: BackendServices, user: Principal, bot: P.Bot, measured: P.MachineCapabilities, policy: P.EffectivePolicy, provisioning: boolean): Promise<P.JSONObject> {
   const grants = await effectiveBotGrants(s, user, bot, measured, provisioning, policy);
-  const denied = new Set<string>(), approvalTools = new Set<string>();
-  // Delegation and explicit memory changes/search use authenticated product MCP. Task children retain this floor;
-  // automatic recall/run-memory isolation remains owned by the verified runtime memory context.
-  denied.add('agent');
-  denied.add('remember');
-  denied.add('recall');
+  const allowed = new Set([...nativeBaselineTools, ...await productExecutionNames(s)]), denied = new Set<string>(), approvalTools = new Set<string>();
+  // Product resources require their authenticated MCP lifecycle rather than daemon-wide native managers.
+  // Recall is temporarily excluded until the complete verified audience conduit is proven.
+  for (const tool of Object.keys(productExcludedNativeTools)) denied.add(tool);
   for (const [category, defaults] of Object.entries(nativeToolFamilies)) {
     const capability = measured.items.find(value => value.category === category);
     const grant = capability && grants.find(value => value.capabilityId === capability.id);
     const effective = grant?.effectiveLevel ?? 'off';
-    for (const tool of new Set([...defaults, ...(capability?.tools ?? [])])) {
-      if (effective === 'off' || effective === 'read_only' && !nativeReadTools[tool]) denied.add(tool);
-      else if (policy.localExecutionCeiling === 'ask' || policy.rules.some(rule => (rule.category === category || rule.category === 'permissions') && rule.mode !== 'allow')) approvalTools.add(tool);
+    for (const tool of defaults) {
+      if (!capability?.tools.includes(tool) || effective === 'off' || effective === 'read_only' && !nativeReadTools[tool]) denied.add(tool);
+      else {
+        allowed.add(tool);
+        if (policy.localExecutionCeiling === 'ask' || policy.rules.some(rule => (rule.category === category || rule.category === 'permissions') && rule.mode !== 'allow')) approvalTools.add(tool);
+      }
     }
   }
   for (const connector of s.store.list<P.Connector>('connectors', value => value.botId === bot.id)) {
@@ -196,11 +212,15 @@ async function projectNativeToolPolicy(s: BackendServices, user: Principal, bot:
       }
       const readOnly = details.data.readOnlyTools.includes(tool.name);
       if (!tool.enabled || !grant || grant.effectiveLevel === 'off' || grant.effectiveLevel === 'read_only' && !readOnly) denied.add(executionName);
-      else if (!readOnly || policy.localExecutionCeiling === 'ask' || policy.rules.some(rule => ['connector', 'permissions', 'external_message', 'publish', 'purchase'].includes(rule.category) && rule.mode !== 'allow')) approvalTools.add(executionName);
+      else {
+        allowed.add(executionName);
+        if (!readOnly || policy.localExecutionCeiling === 'ask' || policy.rules.some(rule => ['connector', 'permissions', 'external_message', 'publish', 'purchase'].includes(rule.category) && rule.mode !== 'allow')) approvalTools.add(executionName);
+      }
     }
   }
-  if (denied.size > 16384 || approvalTools.size > 16384) fail('capability_unavailable', 'The native policy schema cannot represent this complete tool permission set.');
-  return { profile: 'custom', allow: 'all', deny: [...denied].sort(), blocked_tools: ['agent', 'remember', 'recall'], require_approval: [...approvalTools].sort() };
+  for (const tool of denied) { allowed.delete(tool); approvalTools.delete(tool); }
+  if (allowed.size > 16384 || denied.size > 16384 || approvalTools.size > 16384) fail('capability_unavailable', 'The native policy schema cannot represent this complete tool permission set.');
+  return { profile: 'custom', allow: [...allowed].sort(), deny: [...denied].sort(), blocked_tools: Object.keys(productExcludedNativeTools), require_approval: [...approvalTools].sort() };
 }
 
 export function botPresence(s: BackendServices, user: Principal, bot: P.Bot): P.BotPresence {

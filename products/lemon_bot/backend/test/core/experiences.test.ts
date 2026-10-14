@@ -6,6 +6,10 @@ import type * as P from '../../../contracts/protocol';
 import type { BackendServices, Principal, RequestContext } from '../../src/core/services';
 import { ApiError, fail } from '../../src/core/errors';
 import { botPresence, createExperienceRoutes, createExperienceService, effectiveBotGrants, invocationBotToolPolicy, nativeBotToolPolicy, reviewedCandidates } from '../../src/core/experiences';
+import { productBotTools } from '../../src/core/bots';
+
+const projectedProductTools = productBotTools.map((name, index) => ({ name, executionName: `mcp_fixture_tool_${index}` }));
+function projectionReply() { return { server: { name: 'lemon-bot' }, tools: projectedProductTools, count: projectedProductTools.length }; }
 
 const nonce = 'test_nonce_123456789';
 const user: Principal = { kind: 'user', id: 'alice', userId: 'alice', workspaceId: 'workspace', role: 'admin', sessionId: 'session', botId: null, deviceId: null };
@@ -18,7 +22,7 @@ function fixture() {
   const machine: P.Machine = { ...base, id: 'machine', nodeId: 'node', nodeName: 'worker', name: 'Laptop', ownerUserId: 'alice', accessUserIds: [], status: 'online', lastSeenAtMs: clock, labels: {}, botIds: [bot.id] };
   const room: P.Conversation = { ...base, id: 'room', kind: 'task', name: 'Report', botIds: [bot.id], humanUserIds: ['alice'], ownerUserId: 'alice', parentConversationId: null, leadBotId: null, channelBindingId: null, lastEntryId: null, unreadCount: 0, lastReadSeq: 0, activity: [] };
   const services = {
-    store, now: () => clock, id: (prefix = 'id') => `${prefix}_${String(++serial).padStart(24, '0')}`,
+    store, config: { publicUrl: 'https://product.example.test' }, now: () => clock, id: (prefix = 'id') => `${prefix}_${String(++serial).padStart(24, '0')}`,
     resource<T extends object>(prefix: string, fields: T): T & P.Resource { return { ...fields, id: this.id(prefix), revision: 1, createdAtMs: clock, updatedAtMs: clock }; },
     update<T extends { revision: number; updatedAtMs: number }>(resource: T, changes: Partial<T>): T { return { ...resource, ...changes, revision: resource.revision + 1, updatedAtMs: clock }; },
     page<T>(context: RequestContext, values: T[], options?: { ascending?: boolean; key?: (value: T) => string }): P.Page<T> { const key = options?.key ?? ((value: T) => (value as P.Resource).id); const sorted = [...values].sort((a, b) => key(a).localeCompare(key(b)) * (options?.ascending ? 1 : -1)); return { items: sorted.slice(0, Number(context.query.get('limit') ?? 100)), nextCursor: null }; },
@@ -29,7 +33,11 @@ function fixture() {
       attachment(_principal: Principal, valueId: string) { return store.require<P.Attachment>('attachments', valueId); },
       canRead() { return true; },
     },
-    lemon: { connected: true, methods: [], async call<T>(): Promise<T> { throw new Error('Unexpected RPC'); } },
+    lemon: { connected: true, methods: ['mcp.execution_names'], async call<T>(method: string, params?: Record<string, unknown>): Promise<T> {
+      if (method !== 'mcp.execution_names') throw new Error('Unexpected RPC');
+      expect(params).toEqual({ server: { name: 'lemon-bot', url: 'https://product.example.test/mcp' }, toolNames: [...productBotTools] });
+      return projectionReply() as T;
+    } },
     runtime: { async reconcile() {} },
     integrations: {
       async effectivePolicy(): Promise<P.EffectivePolicy> { return { userId: user.userId, botId: bot.id, directoryGroupIds: [], productAccess: true, localExecutionCeiling: 'allow', allowSudo: false, allowEgress: false, rules: [], networkPolicies: [], explanations: [] }; },
@@ -241,8 +249,9 @@ describe('native grant enforcement boundaries', () => {
     const f = fixture();
     try {
       const measured: P.MachineCapabilities = { machineId: 'machine', os: 'linux', measuredAtMs: f.services.now(), stale: false, items: [{ id: 'files', name: 'Files', category: 'files', supported: true, configuredLevel: 'read_interact', osGrant: 'not_required', tools: ['read', 'write', 'edit', 'grep'], reason: 'Policy roots measured', measuredAtMs: f.services.now(), stale: false }] };
-      f.services.lemon.methods = ['nodes.list', 'node.capabilities.get', 'profiles.update'];
+      f.services.lemon.methods = ['nodes.list', 'node.capabilities.get', 'profiles.update', 'mcp.execution_names'];
       f.services.lemon.call = async <T>(method: string): Promise<T> => {
+        if (method === 'mcp.execution_names') return projectionReply() as T;
         if (method === 'nodes.list') return { nodes: [{ id: 'node', status: 'online', capabilities: ['node.capabilities.get'] }], summary: { presenceAvailable: true, truncated: false } } as T;
         if (method === 'node.capabilities.get') { const { machineId: _machineId, ...data } = measured; return { ...data, nodeId: 'node' } as T; }
         throw new Error('Unexpected RPC');
@@ -274,9 +283,46 @@ describe('native grant enforcement boundaries', () => {
       const invocation = await invocationBotToolPolicy(f.services, user, f.bot, measured);
       expect(shared.deny).not.toContain('read'); expect(invocation.deny).toContain('read');
       for (const policy of [shared, invocation]) {
-        for (const tool of ['agent', 'remember', 'recall']) expect(policy.deny).toContain(tool);
-        expect(policy.blocked_tools).toEqual(['agent', 'remember', 'recall']);
-        expect(policy.allow).toBe('all'); expect(policy.deny).not.toContain('task'); expect(policy.blocked_tools).not.toContain('task');
+        const excluded = ['agent', 'remember', 'recall', 'cron', 'goal', 'kanban', 'todo', 'peer', 'skill_manage', 'tool_auth', 'extensions_status'];
+        for (const tool of excluded) expect(policy.deny).toContain(tool);
+        expect(policy.blocked_tools).toEqual(excluded);
+        expect(policy.allow).toContain('task'); expect(policy.allow).toContain('read_skill'); expect(policy.allow).toContain('webfetch'); expect(policy.allow).toContain('websearch');
+        for (const tool of projectedProductTools) expect(policy.allow).toContain(tool.executionName);
+        for (const tool of excluded) expect(policy.allow).not.toContain(tool);
+        expect(policy.deny).not.toContain('task'); expect(policy.blocked_tools).not.toContain('task');
+      }
+    } finally { f.close(); }
+  });
+  test('closed inventory preserves exact product aliases before Bot creation and excludes unsupported native tools', async () => {
+    const f = fixture();
+    try {
+      f.store.delete('bots', f.bot.id);
+      const measured: P.MachineCapabilities = { machineId: 'machine', os: 'linux', measuredAtMs: f.services.now(), stale: false, items: [{ id: 'files', name: 'Files', category: 'files', supported: true, configuredLevel: 'read_interact', osGrant: 'not_required', tools: ['read', 'operator_extension'], reason: 'Measured', measuredAtMs: f.services.now(), stale: false }] };
+      f.store.put('botGrants', { ...f.base, id: 'file-grant', botId: 'bot', machineId: 'machine', capabilityId: 'files', requestedLevel: 'read_interact', effectiveLevel: 'read_interact', reasons: [] } satisfies P.BotGrant);
+      const policy = await nativeBotToolPolicy(f.services, user, f.bot, measured);
+      expect(policy.allow).toContain('read'); expect(policy.allow).not.toContain('write'); expect(policy.allow).not.toContain('operator_extension');
+      for (const tool of projectedProductTools) expect(policy.allow).toContain(tool.executionName);
+      expect(policy.allow).not.toBe('all'); expect(policy.allow).not.toContain('remember');
+      expect(policy.allow).toContain('webfetch'); expect(policy.allow).toContain('websearch');
+    } finally { f.close(); }
+  });
+  test('projection is fail-closed without the real RPC or with incomplete, ambiguous or extra selectors', async () => {
+    const f = fixture();
+    try {
+      const measured: P.MachineCapabilities = { machineId: 'machine', os: 'linux', measuredAtMs: f.services.now(), stale: false, items: [] };
+      f.services.lemon.methods = [];
+      await expect(nativeBotToolPolicy(f.services, user, f.bot, measured)).rejects.toMatchObject({ code: 'capability_unavailable' });
+      f.services.lemon.methods = ['mcp.execution_names'];
+      const reply = projectionReply();
+      for (const invalid of [
+        { ...reply, count: reply.count - 1 },
+        { ...reply, tools: reply.tools.slice(1) },
+        { ...reply, tools: reply.tools.map((tool, index) => index === 1 ? { ...tool, executionName: reply.tools[0]!.executionName } : tool) },
+        { ...reply, tools: reply.tools.map((tool, index) => index === 1 ? { ...tool, name: 'operator_tool' } : tool) },
+        { ...reply, server: { name: 'lemon-bot', headers: { Authorization: 'must-not-accept-secret-fields' } } },
+      ]) {
+        f.services.lemon.call = async <T>(): Promise<T> => invalid as T;
+        await expect(nativeBotToolPolicy(f.services, user, f.bot, measured)).rejects.toMatchObject({ code: 'upstream_error' });
       }
     } finally { f.close(); }
   });
