@@ -62,6 +62,61 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
     end
   end
 
+  defmodule NativeDrainExecutor do
+    alias LemonAi.Types.{AssistantMessage, Cost, Model, ModelCost, TextContent, Usage}
+
+    def start_run(request, opts, sink_pid) do
+      request = %{request | meta: Map.put(request.meta || %{}, :model, model())}
+      owner = Process.whereis(:execution_node_worker_test)
+      stream_fn = fn _model, _context, _options -> stream(owner, request.run_id) end
+      case CodingAgent.Executor.start_run(request, Map.put(opts, :stream_fn, stream_fn), sink_pid) do
+        {:ok, run_ref, context} ->
+          context = Map.put(context, :cancel_race, request.prompt == "cancel race")
+          send(owner, {:native_drain_started, request.run_id, run_ref, context})
+          {:ok, run_ref, context}
+        other -> other
+      end
+    end
+
+    def cancel(context) do
+      send(Process.whereis(:execution_node_worker_test), {:native_drain_cancelled, context.runner_pid})
+      # Model a runner that exits between cancellation dispatch and GenServer.call.
+      if context.cancel_race, do: GenServer.stop(context.runner_pid, :normal)
+      CodingAgent.Executor.cancel(context)
+    end
+
+    defp stream(owner, run_id) do
+      {:ok, stream} = LemonAi.EventStream.start_link()
+      {:ok, producer} = Task.start(fn ->
+        receive do
+          :finish ->
+            response = %AssistantMessage{
+              role: :assistant, content: [%TextContent{text: "finished"}],
+              api: :mock, provider: :mock_provider, model: "native-drain-model",
+              usage: %Usage{input: 1, output: 1, total_tokens: 2, cost: %Cost{}},
+              stop_reason: :stop, timestamp: System.system_time(:millisecond)
+            }
+            LemonAi.EventStream.push(stream, {:start, response})
+            LemonAi.EventStream.push(stream, {:text_delta, 0, "finished", response})
+            LemonAi.EventStream.push(stream, {:done, :stop, response})
+            LemonAi.EventStream.complete(stream, response)
+        end
+      end)
+      LemonAi.EventStream.attach_task(stream, producer)
+      send(owner, {:native_drain_stream, run_id, producer})
+      {:ok, stream}
+    end
+
+    defp model do
+      %Model{
+        id: "native-drain-model", name: "Native Drain Model", api: :mock,
+        provider: :mock_provider, base_url: "https://api.mock.test",
+        reasoning: false, input: [:text], cost: %ModelCost{input: 0.0, output: 0.0},
+        context_window: 128_000, max_tokens: 4_096, headers: %{}, compat: nil
+      }
+    end
+  end
+
   setup do
     Process.register(self(), :execution_node_worker_test)
 
@@ -812,6 +867,113 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
       %{"result" => %{"ok" => false, "error" => "invalid_id"}},
       {:invoke_result, "memory-invalid"}, 30_000}, 1_000
     GenServer.stop(worker)
+  end
+
+  @tag :tmp_dir
+  test "finished native runners drain safely through cancel, disconnect and event failure", %{tmp_dir: tmp_dir} do
+    for operation <- [:cancel, :disconnect, :event_failure] do
+      worker = start_supervised!({Worker, [
+        node_name: "native-drain", controller: "ws://controller:4040/ws",
+        allow_insecure_controller: true, token: "node-token", cwd: tmp_dir,
+        notify_pid: self(), socket_module: FakeSocket, socket_opts: [test_pid: self()],
+        executor_module: NativeDrainExecutor
+      ]})
+      assert_receive {:socket_started, socket, _opts}
+      send(worker, {:execution_node_socket, socket,
+                    {:connected, %{"auth" => %{"clientId" => "node-1"}}}})
+      finished_id = "finished-#{operation}"
+      active_id = "active-#{operation}"
+      invoke(worker, socket, finished_id, "node-1", %{
+        "version" => 1, "runId" => finished_id, "sessionKey" => "agent:default:#{finished_id}",
+        "prompt" => "finish", "meta" => %{}
+      })
+      assert_receive {:native_drain_started, ^finished_id, _finished_ref, finished_context}, 3_000
+      assert_receive {:native_drain_stream, ^finished_id, producer}, 3_000
+      finished_runner = finished_context.runner_pid
+      finished_monitor = Process.monitor(finished_runner)
+      assert_receive {:socket_request, ^socket, "node.invoke.event",
+                      %{"invokeId" => ^finished_id}, event_tag, 30_000}, 3_000
+      send(producer, :finish)
+      assert_receive {:DOWN, ^finished_monitor, :process, ^finished_runner, :normal}, 3_000
+      await_completed_drain(worker, finished_id)
+      invoke(worker, socket, active_id, "node-1", %{
+        "version" => 1, "runId" => active_id, "sessionKey" => "agent:default:#{active_id}",
+        "prompt" => "remain active", "meta" => %{}
+      })
+      assert_receive {:native_drain_started, ^active_id, _active_ref, active_context}, 3_000
+      assert_receive {:native_drain_stream, ^active_id, _active_producer}, 3_000
+      active_runner = active_context.runner_pid
+      assert Process.alive?(active_runner)
+
+      case operation do
+        :cancel ->
+          send(worker, {:execution_node_socket, socket,
+                        {:event, "node.invoke.cancel", %{"invokeId" => finished_id}}})
+        :disconnect ->
+          send(worker, {:execution_node_socket, socket, {:disconnected, :closed}})
+        :event_failure ->
+          send(worker, {:execution_node_socket, socket, {:response, event_tag, {:error, :timeout}}})
+      end
+
+      await_invocation_removed(worker, finished_id)
+      assert Process.alive?(worker)
+      refute_receive {:native_drain_cancelled, ^finished_runner}
+      if operation == :disconnect do
+        assert_receive {:native_drain_cancelled, ^active_runner}
+        assert :sys.get_state(worker).invocations == %{}
+      else
+        assert Process.alive?(active_runner)
+        assert Map.has_key?(:sys.get_state(worker).invocations, active_id)
+      end
+      stop_supervised(Worker)
+    end
+  end
+
+  @tag :tmp_dir
+  test "a native runner exiting concurrently with cancel does not crash the worker", %{tmp_dir: tmp_dir} do
+    worker = start_supervised!({Worker, [
+      node_name: "native-cancel-race", controller: "ws://controller:4040/ws",
+      allow_insecure_controller: true, token: "node-token", cwd: tmp_dir,
+      socket_module: FakeSocket, socket_opts: [test_pid: self()],
+      executor_module: NativeDrainExecutor
+    ]})
+    assert_receive {:socket_started, socket, _opts}
+    send(worker, {:execution_node_socket, socket,
+                  {:connected, %{"auth" => %{"clientId" => "node-1"}}}})
+    invoke(worker, socket, "cancel-race", "node-1", %{
+      "version" => 1, "runId" => "cancel-race", "prompt" => "cancel race", "meta" => %{}
+    })
+    assert_receive {:native_drain_started, "cancel-race", _run_ref, context}, 3_000
+    assert_receive {:native_drain_stream, "cancel-race", _producer}, 3_000
+    runner = context.runner_pid
+    monitor = Process.monitor(runner)
+    send(worker, {:execution_node_socket, socket,
+                  {:event, "node.invoke.cancel", %{"invokeId" => "cancel-race"}}})
+    assert_receive {:DOWN, ^monitor, :process, ^runner, :normal}, 3_000
+    await_invocation_removed(worker, "cancel-race")
+    assert Process.alive?(worker)
+    stop_supervised(Worker)
+  end
+
+  defp await_completed_drain(worker, invoke_id, attempts \\ 300) do
+    invocation = :sys.get_state(worker).invocations[invoke_id]
+    if invocation && invocation.completed do
+      :ok
+    else
+      assert attempts > 0, "native completion did not reach transport-draining state"
+      Process.sleep(10)
+      await_completed_drain(worker, invoke_id, attempts - 1)
+    end
+  end
+
+  defp await_invocation_removed(worker, invoke_id, attempts \\ 300) do
+    if Map.has_key?(:sys.get_state(worker).invocations, invoke_id) do
+      assert attempts > 0, "invocation did not release its transport state"
+      Process.sleep(10)
+      await_invocation_removed(worker, invoke_id, attempts - 1)
+    else
+      :ok
+    end
   end
 
   defp start_worker(tmp_dir, extra_opts) do

@@ -269,7 +269,7 @@ defmodule CodingAgent.ExecutionNode.Worker do
 
         if next_bytes > result_content_limit(state) or
              next_count > LemonCore.JSONPayload.default_max_items() do
-          _ = state.executor_module.cancel(invocation.context)
+          _ = cancel_invocation_execution(state, invocation)
 
           state =
             state
@@ -557,7 +557,7 @@ defmodule CodingAgent.ExecutionNode.Worker do
           case Map.get(state.invocations, invoke_id) do
             nil -> {:noreply, state}
             invocation ->
-              _ = state.executor_module.cancel(invocation.context)
+              _ = cancel_invocation_execution(state, invocation)
               {:noreply, remove_invocation(state, invoke_id)}
           end
       end
@@ -1239,7 +1239,7 @@ defmodule CodingAgent.ExecutionNode.Worker do
 
   defp cancel_all_invocations(state) do
     Enum.reduce(state.invocations, state, fn {invoke_id, invocation}, current ->
-      _ = state.executor_module.cancel(invocation.context)
+      _ = cancel_invocation_execution(state, invocation)
       remove_invocation(current, invoke_id)
     end)
     |> then(fn current ->
@@ -1304,8 +1304,21 @@ defmodule CodingAgent.ExecutionNode.Worker do
 
   defp fail_stream(state, invoke_id, reason) do
     invocation = Map.fetch!(state.invocations, invoke_id)
-    _ = state.executor_module.cancel(invocation.context)
+    _ = cancel_invocation_execution(state, invocation)
     state |> send_invoke_error(invoke_id, reason) |> remove_invocation(invoke_id)
+  end
+
+  # Completed native runners have already stopped. Their remaining invocation
+  # state owns only transport draining and approval cleanup, not live execution.
+  defp cancel_invocation_execution(_state, %{completed: completed})
+       when not is_nil(completed), do: :ok
+
+  defp cancel_invocation_execution(state, invocation) do
+    state.executor_module.cancel(invocation.context)
+  catch
+    # The runner may finish concurrently with cancellation even before its
+    # completion/monitor message reaches this worker. Cleanup must still proceed.
+    :exit, _reason -> :ok
   end
 
   defp safe_reason(reason) do
