@@ -548,7 +548,10 @@ defmodule CodingAgent.ExecutionNode.HostIOTest do
             },
             ctx.opts
           )
-        end, max_concurrency: 16, ordered: false)
+        end,
+        max_concurrency: 16,
+        ordered: false
+      )
       |> Enum.map(fn {:ok, result} -> result end)
 
     assert Enum.count(results, &match?({:ok, _}, &1)) == 1

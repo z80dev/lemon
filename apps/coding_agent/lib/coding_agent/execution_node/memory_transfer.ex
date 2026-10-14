@@ -64,7 +64,9 @@ defmodule CodingAgent.ExecutionNode.MemoryTransfer do
         args["profileId"],
         args["mutationId"],
         args["sourceNodeId"],
-        args["nodeId"], node_id: node_id)
+        args["nodeId"],
+        node_id: node_id
+      )
 
   defp dispatch("inspect", args, node_id),
     do:

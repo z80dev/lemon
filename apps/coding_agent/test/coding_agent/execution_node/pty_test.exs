@@ -101,7 +101,9 @@ defmodule CodingAgent.ExecutionNode.PTYTest do
     {output, status} =
       System.cmd(
         System.find_executable("python3"),
-        ["-c", script, to_string(:code.priv_dir(:coding_agent))], stderr_to_stdout: true)
+        ["-c", script, to_string(:code.priv_dir(:coding_agent))],
+        stderr_to_stdout: true
+      )
 
     assert status == 0
     assert String.trim(output) == "import-safe"
