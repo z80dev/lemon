@@ -88,6 +88,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   meter also use the measurement for resumed sessions before their first run.
   All surfaces read the new read-scoped `sessions.context` control-plane method;
   category splits are estimates scaled to the provider-reported total.
+- **API-key sign-in for every catalog provider.** `lemon model` now offers
+  Google Gemini API, Groq, Cerebras, DeepSeek, Mistral, Hugging Face, Qwen
+  (DashScope), Vercel AI Gateway, OpenCode Zen/Go and MiniMax China; the key is
+  stored encrypted and referenced as `api_key_secret`.
+- OAuth logins can be force-refreshed after the provider rejects an unexpired
+  token (`Credentials.refresh_provider_api_key/4`, used by 401 recovery).
 
 ### Changed
 
@@ -125,6 +131,8 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Concurrent ChatGPT (Codex) token refreshes no longer replay a rotated refresh
+  token: refresh is single-flight per stored login and re-reads the secret.
 - `sessions.patch` tool policies (web picker, TUI `/toolpolicy`) now reach runs;
   the router previously merged the whole policy row instead of its tool policy.
 - Usage is recorded: `usage.status`/`usage.cost` were always zero because

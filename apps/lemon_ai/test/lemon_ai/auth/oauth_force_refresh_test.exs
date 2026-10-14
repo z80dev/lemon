@@ -146,6 +146,32 @@ defmodule LemonAi.Auth.OAuthForceRefreshTest do
     refute_received :token_request
   end
 
+  test "a failed Copilot refresh never returns an already-expired token" do
+    Req.Test.stub(__MODULE__, fn conn ->
+      conn
+      |> Plug.Conn.put_status(401)
+      |> Req.Test.json(%{"message" => "Bad credentials"})
+    end)
+
+    now = System.system_time(:millisecond)
+
+    secret = fn expires_at_ms ->
+      Jason.encode!(%{
+        "type" => "github_copilot_oauth",
+        "refresh_token" => "github-token",
+        "access_token" => "copilot-token",
+        "expires_at_ms" => expires_at_ms
+      })
+    end
+
+    assert {:error, _} =
+             GitHubCopilotOAuth.resolve_api_key_from_secret("llm_secret", secret.(now - 1_000))
+
+    # Near expiry but unexpired: the existing token is still usable.
+    assert {:ok, "copilot-token"} =
+             GitHubCopilotOAuth.resolve_api_key_from_secret("llm_secret", secret.(now + 60_000))
+  end
+
   defp unexpired_secret(type) do
     now = System.system_time(:millisecond)
 
