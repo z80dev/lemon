@@ -281,6 +281,99 @@ No memory-content event is broadcast. Remote terminal replies use
 `result: {ok: false, error: "<bounded service classification>"}`; the existing
 authenticated node/session/invocation ownership checks still apply.
 
+### Copying scoped memory before moving a profile
+
+`memory.transfer` requires `operator.admin` and runs asynchronously. It does
+**not** change profile placement. Supply `{profileId, nodeId, mutationId}` where
+`nodeId` is the explicit durable destination node ID (not its display name).
+The source is the profile's current placement, pinned to its durable node ID or
+`"local"` for controller-local memory.
+
+Use a fresh `mutationId` for each independent move attempt, retaining that same
+ID through preview, confirmation, and reconciliation. It is at most 128 bytes,
+using letters, digits, `_`, `.`, `:`, or `-`. Reusing an ID for another profile or
+destination is a conflict. Source and destination must differ.
+
+Preview before an overwrite:
+
+```json
+{"type":"req","id":"move-preview","method":"memory.transfer","params":{"profileId":"researcher","nodeId":"destination-node-id","mutationId":"move-unique-id","action":"preview"}}
+```
+
+The payload is:
+
+```json
+{"profileId":"researcher","mutationId":"move-unique-id","sourceNodeId":"source-node-id","nodeId":"destination-node-id","snapshotDigest":"<sha256>","destinationDigest":"<sha256>","confirmationToken":"<opaque-token>","sourceCounts":{"documents":12,"preferences":2},"destinationCounts":{"documents":2,"preferences":1},"overwrite":true}
+```
+
+Only counts and digests are exposed. `documents` counts selected durable records;
+`preferences` counts complete preference files present (USER.md/MEMORY.md, 0–2),
+not individual notes. Explain that the destination's selected profile memory and
+both preference-file slots will be replaced by the incoming scope; unrelated
+profiles, persona files, and other files are retained. After explicit approval,
+send the same IDs with `action: "apply"`, `snapshotDigest`, `destinationDigest`,
+and `confirmationToken` from the preview. The token binds the exact incoming
+snapshot, current destination snapshot, profile, both nodes, and mutation.
+A changed source or destination invalidates the plan; create a new move preview
+with a fresh mutation ID instead of automatically overwriting or merging.
+
+Without a confirmation token, `action: "apply"` (the default) permits only a
+create-only copy to an empty selected destination scope. Divergent existing
+memory requires an exact confirmed preview. Success returns:
+
+```json
+{"profileId":"researcher","mutationId":"move-unique-id","sourceNodeId":"source-node-id","nodeId":"destination-node-id","snapshotDigest":"<sha256>","copied":true}
+```
+
+The destination persists a receipt bound to those identities and digest before
+acknowledging success. Same-operation replay returns that exact receipt.
+Once apply may have been dispatched, repeating the operation queries only its
+destination receipt and never replays the copy. An uncertain outcome returns
+`UNAVAILABLE` with `{code: "MEMORY_TRANSFER_OUTCOME_UNKNOWN", profileId, nodeId,
+mutationId, retrySafe: false}`. Retain the mutation ID and reconcile before
+changing placement or starting a different move attempt.
+
+For a strictly read-only receipt query, call `memory.transfer.status`
+(`operator.read`) with `{profileId, nodeId, mutationId}`. It inspects the
+destination's durable journal only—even if no controller intent exists—and
+never freezes a snapshot, starts an apply, or replays a mutation. Its payload is:
+
+```json
+{"profileId":"researcher","nodeId":"destination-node-id","mutationId":"move-unique-id","sourceNodeId":"source-node-id","snapshotDigest":"<sha256>","status":"completed","receipt":{"profileId":"researcher","mutationId":"move-unique-id","sourceNodeId":"source-node-id","nodeId":"destination-node-id","snapshotDigest":"<sha256>","copied":true}}
+```
+
+`status` is `completed`, `pending`, or `unknown`. Pending operations have a null
+receipt; an absent journal entry is `unknown` with null actual source, digest,
+and receipt, **not** proof that a mutation was never applied. Offline/query
+failures return `UNAVAILABLE`, not an empty successful result. The response and
+receipt must match the exact profile, destination, mutation and expected source
+digest before the caller switches placement. This method does not change the
+controller journal or profile placement.
+
+Transfer uses a private, frozen owning-service snapshot, not redacted list/get
+previews. Only scoped memory summary/project documents plus the complete
+assistant `USER.md`/`MEMORY.md` contents are selected. Both agent and assistant
+home identity are checked, destination identities are rebound locally, and
+source memory is retained. Source snapshots are bounded to 500 documents,
+64 KiB per preference file, and 2 MiB encoded total. The node JSON item/depth
+policy also applies, with headroom reserved for invocation wrappers; complex
+records can reach that bound before 500 documents. Excess or unsafe source data
+fails closed rather than being silently truncated or redacted.
+
+No session journals/chat transcripts, credentials, cookies, daily-note files,
+or general host files are copied. Home-scoped repository learnings rebind to the
+destination profile workspace; other repository groups retain opaque identities
+without transporting source repository paths. Their exact facts remain visible
+as profile memory, but destination repository-specific recall cannot infer a
+new repository mapping.
+
+Private worker methods are `memory.transfer.prepare`, `.snapshot`, `.validate`,
+`.preview`, `.apply`, `.status`, and `.inspect` over the authenticated invocation
+channel. Full snapshot content is never included in management responses,
+broadcast events, controller operation journals, or logs. Only after `copied`
+is durably acknowledged should the caller perform persona sync and explicitly
+change profile placement.
+
 ## Named execution nodes
 
 On the destination host, supply the controller's operator credential for pairing:

@@ -23,6 +23,60 @@ LemonSkills provides a centralized system for extending agent capabilities throu
 not a Hex package; it ships as part of the reference runtime. It depends on
 `lemon_core`, `lemon_agent`, `lemon_ai`, `lemon_memory` and `lemon_media`.
 
+## Profile memory transfer
+
+`LemonSkills.ProfileMemoryTransfer` owns private memory copying, not placement.
+`prepare(profile_id, mutation_id, source_node_id, node_id, opts \\ [])` freezes
+one envelope; `snapshot/5` retrieves it without reexecution and `validate/2`
+checks that the complete source revision is still unchanged. `preview/2` returns
+only identity/digests/counts plus a persisted opaque confirmation token.
+`apply_transfer/2` is create-only unless its envelope includes that exact
+`confirmationToken` and `destinationDigest`. Confirmed overwrite replaces only
+the selected profile/home documents and USER.md/MEMORY.md; absent source files
+remove their corresponding destination files. A changed destination invalidates
+the preview. `status/5` reconciles durable receipt/pending state without writes.
+`inspect_status(profile_id, mutation_id, node_id, opts \\ [])` is the read-only
+public status boundary: it reads only the destination journal and returns the
+exact seven fields `profileId`, `mutationId`, `nodeId`, `sourceNodeId`,
+`snapshotDigest`, `status`, and `receipt`. States are `"completed"`, `"pending"`,
+or `"unknown"`; absent journals return unknown with null source/digest/receipt,
+never an assertion that nothing was applied. Pending/complete results expose
+the actual bound source and digest; only completed operations include the exact
+copied receipt. Profile, mutation, node and destination-home bindings are checked.
+Inspection never prepares, imports, replays or changes a journal; unavailable or
+malformed state returns an error instead of an empty successful status.
+
+Options are `:profile_opts`, `:store` (an isolated LemonMemory.Store server), and
+optional destination `:node_id`. Paths are derived locally, never transported.
+Snapshots contain complete saved summaries/project facts and explicitly allowed
+scoped metadata, not chat transcripts, arbitrary run metadata, credentials,
+cookies, session journals or general files. Secret-looking memory fails closed
+with `:unsafe_snapshot`; it is not silently redacted. Snapshot capacity is 2 MiB,
+500 selected documents, and 65536 bytes per preference file. Scans over 2000
+agent rows reject overflow rather than using a partial management browse window.
+The node's `LemonCore.JSONPayload` item/depth policy is an additional full-snapshot
+bound: transfer reserves 64 items and 8 levels for transport wrappers (currently
+9936 snapshot items and depth 24). Both prepare-before-freeze and incoming apply
+reject byte/item/depth overflow with `:snapshot_too_large`. Thus 500 is an upper
+record cap, not a promise that every 500-record payload fits the node protocol.
+No partial snapshot is frozen or silently truncated to make it transportable.
+Counts describe selected documents and preference **files present** (0–2), not
+parsed note counts; empty and absent files remain distinct.
+
+Home-project identities rebind to the destination home/repository identity.
+Other repository groups retain opaque workspace digests and complete facts;
+no source machine path crosses the boundary. Import rekeys document identities
+and rejects remaining collisions with another scope rather than upserting.
+SQLite rows and the exact receipt commit atomically after staged file publication.
+The Store process owns the preference lock across publication, commit and known
+rollback, so killing the requesting worker does not release its filesystem lock.
+Snapshot callbacks follow the same Store-to-workspace lock order; callers never
+hold a workspace lock while awaiting Store. Any uncertain apply returns
+`:transfer_pending` and keeps private backups; callers must use status, never
+automatically replay. Runtime provider/model/session/tool labels retain bounded
+noncontrol UTF-8 namespaces, including slash names. Allowed learned provenance
+atom keys/type labels are normalized to JSON strings without changing summaries.
+
 ## Usage
 
 Start the application (it is an OTP application with its own supervision tree)

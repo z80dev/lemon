@@ -24,6 +24,13 @@ defmodule CodingAgent.ExecutionNode.Worker do
     "memory.get" => %{"version" => @protocol_version},
     "memory.add" => %{"version" => @protocol_version},
     "memory.delete" => %{"version" => @protocol_version},
+    "memory.transfer.prepare" => %{"version" => @protocol_version},
+    "memory.transfer.snapshot" => %{"version" => @protocol_version},
+    "memory.transfer.validate" => %{"version" => @protocol_version},
+    "memory.transfer.preview" => %{"version" => @protocol_version},
+    "memory.transfer.apply" => %{"version" => @protocol_version},
+    "memory.transfer.status" => %{"version" => @protocol_version},
+    "memory.transfer.inspect" => %{"version" => @protocol_version},
     "node.invoke.control" => %{
       "version" => @protocol_version,
       "operations" => ["steer", "redirect"],
@@ -409,6 +416,9 @@ defmodule CodingAgent.ExecutionNode.Worker do
         payload_error = validate_payload(args, state) ->
           {:noreply, send_invoke_error(state, invoke_id, payload_error)}
 
+        method in CodingAgent.ExecutionNode.MemoryTransfer.methods() ->
+          {:noreply, invoke_memory_transfer(state, invoke_id, method, args)}
+
         method in ["memory.list", "memory.search", "memory.get", "memory.add", "memory.delete"] ->
           {:noreply, invoke_memory(state, invoke_id, method, args)}
 
@@ -446,11 +456,27 @@ defmodule CodingAgent.ExecutionNode.Worker do
 
   defp handle_node_event(_event, _payload, state), do: {:noreply, state}
 
+  defp invoke_memory_transfer(state, invoke_id, method, args) do
+    result = CodingAgent.ExecutionNode.MemoryTransfer.execute(method, args, state.node_id)
+    if method in ["memory.transfer.prepare", "memory.transfer.snapshot"],
+      do: send_memory_result(state, invoke_id, result, :snapshot_too_large),
+      else: send_memory_result(state, invoke_id, result)
+  end
+
   defp invoke_memory(state, invoke_id, "memory." <> operation, args) do
+    result = LemonSkills.ProfileMemory.execute(operation, args["profileId"], args)
+    send_memory_result(state, invoke_id, result)
+  rescue
+    _ -> send_invoke_error(state, invoke_id, :memory_unavailable)
+  catch
+    _, _ -> send_invoke_error(state, invoke_id, :memory_unavailable)
+  end
+
+  defp send_memory_result(state, invoke_id, result, overflow \\ :result_payload_limit_exceeded) do
     result =
-      case LemonSkills.ProfileMemory.execute(operation, args["profileId"], args) do
+      case result do
         {:ok, payload} -> %{"ok" => true, "payload" => payload}
-        {:error, reason} when is_atom(reason) -> %{"ok" => false, "error" => Atom.to_string(reason)}
+        {:error, reason} -> %{"ok" => false, "error" => Atom.to_string(reason)}
       end
 
     params = %{"invokeId" => invoke_id, "result" => result}
@@ -460,13 +486,12 @@ defmodule CodingAgent.ExecutionNode.Worker do
         request(state, "node.invoke.result", params, {:invoke_result, invoke_id})
         state
 
+      {:error, _reason} when overflow == :snapshot_too_large ->
+        send_memory_result(state, invoke_id, {:error, :snapshot_too_large})
+
       {:error, _reason} ->
         send_invoke_error(state, invoke_id, :result_payload_limit_exceeded)
     end
-  rescue
-    _ -> send_invoke_error(state, invoke_id, :memory_unavailable)
-  catch
-    _, _ -> send_invoke_error(state, invoke_id, :memory_unavailable)
   end
 
   defp start_invocation(state, invoke_id, args) do

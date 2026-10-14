@@ -123,6 +123,18 @@ defmodule LemonControlPlane.Protocol.Schemas do
     "memory.delete" => %{
       required: %{"profileId" => :string, "id" => :string, "confirm" => :string}
     },
+    "memory.transfer.status" => %{
+      required: %{"profileId" => :string, "nodeId" => :string, "mutationId" => :string}
+    },
+    "memory.transfer" => %{
+      required: %{"profileId" => :string, "nodeId" => :string, "mutationId" => :string},
+      optional: %{
+        "action" => :string,
+        "snapshotDigest" => :string,
+        "destinationDigest" => :string,
+        "confirmationToken" => :string
+      }
+    },
 
     # Agent methods
     "agents.list" => %{optional: %{}},

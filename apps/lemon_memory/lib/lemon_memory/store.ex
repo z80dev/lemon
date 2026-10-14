@@ -487,6 +487,36 @@ defmodule LemonMemory.Store do
     :exit, reason -> {:error, {:timeout_or_down, reason}}
   end
 
+  @doc "Read an exact profile/home snapshot inside the Store serialization boundary."
+  def transfer_snapshot(server, agent_id, home_digest, fun) do
+    transfer_call(server, {:transfer_snapshot, agent_id, home_digest, fun})
+  end
+
+  @doc "Read a private transfer journal entry. Never exposes content in management events."
+  def transfer_get(server, key), do: transfer_call(server, {:transfer_get, key})
+
+  @doc "Durably create a private transfer journal entry without replacing an operation."
+  def transfer_put_new(server, key, value),
+    do: transfer_call(server, {:transfer_put_new, key, value})
+
+  @doc """
+  Replace exact selected profile rows and commit their receipt in one transaction.
+  Local `:boundary` and `:rollback` callbacks run on the Store process; the
+  boundary owns filesystem locks across publication, commit and known rollback.
+  A failed/uncertain commit leaves the prior durable intent pending, never replayed.
+  """
+  def transfer_import(server, agent, home, revisions, docs, key, receipt, publish, opts \\ []) do
+    GenServer.call(server, {:transfer_import, agent, home, revisions, docs, key, receipt, publish, opts}, :infinity)
+  catch
+    :exit, _ -> {:error, :transfer_pending}
+  end
+
+  defp transfer_call(server, message) do
+    GenServer.call(server, message, :infinity)
+  catch
+    :exit, _ -> {:error, :memory_unavailable}
+  end
+
   defp query_opts(opts) do
     since_ms =
       case Keyword.get(opts, :since_ms) do
@@ -680,7 +710,9 @@ defmodule LemonMemory.Store do
 
     with :ok <- File.mkdir_p(Path.dirname(path)),
          {:ok, conn} <- Sqlite3.open(path),
+         :ok <- File.chmod(path, 0o600),
          :ok <- init_db(conn),
+         :ok <- private_database_sidecars(path),
          {:ok, stmts} <- prepare_statements(conn) do
       schedule_sweep()
 
@@ -746,6 +778,55 @@ defmodule LemonMemory.Store do
     )
 
     {:noreply, state}
+  end
+
+  def handle_call({:transfer_get, key}, _from, state),
+    do: {:reply, transfer_journal_get(state, key), state}
+
+  def handle_call({:transfer_put_new, key, value}, _from, state) do
+    result =
+      with :ok <- transfer_statement(state, "INSERT INTO memory_transfer_journal (operation_key, payload) VALUES (?1, ?2) ON CONFLICT(operation_key) DO NOTHING", [key, Jason.encode!(value)]),
+           {:ok, current} <- transfer_journal_get(state, key), do: {:ok, current}
+    {:reply, result, state}
+  end
+
+  def handle_call({:transfer_snapshot, agent, home, fun}, _from, state) do
+    result = transfer_transaction(state, fn ->
+      with {:ok, docs} <- transfer_documents(state, agent, home), do: fun.(docs)
+    end)
+    {:reply, result, state}
+  end
+
+  def handle_call({:transfer_import, agent, home, revisions, docs, key, receipt, publish, opts}, _from, state) do
+    boundary = Keyword.get(opts, :boundary, fn run -> run.() end)
+    rollback = Keyword.get(opts, :rollback, fn -> :ok end)
+    result = boundary.(fn ->
+      result = transfer_transaction(state, fn ->
+        with :ok <- transfer_import_boundary(state, agent, home, docs, key, receipt),
+             {:ok, current} <- transfer_documents(state, agent, home),
+             true <- transfer_revisions(current) == revisions,
+             :ok <- transfer_delete_rows(state, current),
+             :ok <- transfer_insert_rows(state, docs),
+             :ok <- publish.(),
+             :ok <- transfer_statement(state, "UPDATE memory_transfer_journal SET payload = ?2 WHERE operation_key = ?1", [key, Jason.encode!(receipt)]) do
+          {:ok, receipt}
+        else
+          false -> {:error, :stale_destination}
+          {:error, _} = error -> error
+          _ -> {:error, :memory_unavailable}
+        end
+      end)
+      case result do
+        {:ok, _} -> result
+        {:error, :transfer_pending} -> result
+        _ ->
+          case rollback.() do
+            :ok -> result
+            _ -> {:error, :transfer_pending}
+          end
+      end
+    end)
+    {:reply, result, state}
   end
 
   @impl true
@@ -840,6 +921,118 @@ defmodule LemonMemory.Store do
   end
 
   # ── Private helpers ────────────────────────────────────────────────────────────
+  defp transfer_documents(state, agent, home) do
+    with {:ok, docs} <- do_query_result(state, state.stmts.get_by_agent, [agent, 2001]),
+         true <- length(docs) <= 2000 do
+      selected = Enum.filter(docs, fn doc ->
+        is_map(doc.meta) and (doc.meta["home_digest"] || doc.meta[:home_digest]) == home
+      end)
+      if length(selected) <= 500, do: {:ok, selected}, else: {:error, :snapshot_too_large}
+    else
+      false -> {:error, :snapshot_too_large}
+      error -> error
+    end
+  end
+
+  def transfer_revisions(docs),
+    do: docs |> Enum.map(&{&1.doc_id, document_revision(&1)}) |> Enum.sort()
+  defp transfer_import_boundary(state, agent, home, docs, key, completed) do
+    with {:ok, %{"binding" => binding, "state" => "pending"}} <- transfer_journal_get(state, key),
+         true <- binding == completed["binding"] and binding["profileId"] == agent,
+         true <- completed["state"] == "complete" and completed["receipt"] == Map.put(binding, "copied", true),
+         true <- length(docs) <= 500 and Enum.all?(docs, fn
+           %Document{agent_id: ^agent, meta: meta} when is_map(meta) -> meta["home_digest"] == home
+           _ -> false
+         end) do
+      :ok
+    else
+      {:error, :not_found} -> {:error, :transfer_conflict}
+      {:error, _} = error -> error
+      _ -> {:error, :transfer_conflict}
+    end
+  end
+
+
+  defp transfer_journal_get(state, key) do
+    with {:ok, stmt} <- Sqlite3.prepare(state.conn, "SELECT payload FROM memory_transfer_journal WHERE operation_key = ?1") do
+      try do
+        with :ok <- Sqlite3.bind(stmt, [key]),
+             {:ok, rows} <- Sqlite3.fetch_all(state.conn, stmt) do
+          case rows do
+            [[json]] -> Jason.decode(json)
+            [] -> {:error, :not_found}
+            _ -> {:error, :memory_unavailable}
+          end
+        end
+      after
+        Sqlite3.release(state.conn, stmt)
+      end
+    end
+  end
+
+  defp transfer_statement(state, sql, params) do
+    with {:ok, stmt} <- Sqlite3.prepare(state.conn, sql) do
+      try do
+        with :ok <- Sqlite3.bind(stmt, params),
+             :done <- Sqlite3.step(state.conn, stmt), do: :ok
+      after
+        Sqlite3.release(state.conn, stmt)
+      end
+    end
+  end
+
+  defp transfer_transaction(state, fun) do
+    with :ok <- Sqlite3.execute(state.conn, "BEGIN IMMEDIATE") do
+      result = fun.()
+      case result do
+        {:ok, _} ->
+          case Sqlite3.execute(state.conn, "COMMIT") do
+            :ok -> result
+            _ ->
+              _ = Sqlite3.execute(state.conn, "ROLLBACK")
+              {:error, :transfer_pending}
+          end
+        _ ->
+          case Sqlite3.execute(state.conn, "ROLLBACK") do
+            :ok -> result
+            _ -> {:error, :transfer_pending}
+          end
+      end
+    end
+  rescue
+    _ ->
+      case Sqlite3.execute(state.conn, "ROLLBACK") do
+        :ok -> {:error, :memory_unavailable}
+        _ -> {:error, :transfer_pending}
+      end
+  end
+
+  defp transfer_delete_rows(state, docs) do
+    Enum.reduce_while(docs, :ok, fn doc, :ok ->
+      case delete_document_in_transaction(state, doc.doc_id) do
+        {:ok, :deleted} -> {:cont, :ok}
+        _ -> {:halt, {:error, :memory_unavailable}}
+      end
+    end)
+  end
+
+  defp transfer_insert_rows(state, docs) do
+    Enum.reduce_while(docs, :ok, fn doc, :ok ->
+      with {:error, :not_found} <- fetch_document(state, doc.doc_id),
+           :ok <- Sqlite3.reset(state.stmts.put_new),
+           :ok <- Sqlite3.bind(state.stmts.put_new, document_params(doc)),
+           :done <- Sqlite3.step(state.conn, state.stmts.put_new),
+           :ok <- Sqlite3.reset(state.stmts.fts_put),
+           :ok <- Sqlite3.bind(state.stmts.fts_put, [doc.doc_id, doc.prompt_summary, doc.answer_summary]),
+           :done <- Sqlite3.step(state.conn, state.stmts.fts_put) do
+        {:cont, :ok}
+      else
+        {:ok, _} -> {:halt, {:error, :destination_conflict}}
+        _ -> {:halt, {:error, :memory_unavailable}}
+      end
+    end)
+  end
+
 
   defp do_scoped_query(state, stmt_key, scope_key, %{limit: limit, since_ms: nil}) do
     do_query(state, Map.fetch!(state.stmts, stmt_key), [scope_key, limit])
@@ -849,6 +1042,16 @@ defmodule LemonMemory.Store do
     stmt = Map.fetch!(state.stmts, :"#{stmt_key}_since")
     do_query(state, stmt, [scope_key, since_ms, limit])
   end
+  defp private_database_sidecars(path) do
+    Enum.reduce_while(["-wal", "-shm"], :ok, fn suffix, :ok ->
+      case File.chmod(path <> suffix, 0o600) do
+        :ok -> {:cont, :ok}
+        {:error, :enoent} -> {:cont, :ok}
+        error -> {:halt, error}
+      end
+    end)
+  end
+
 
   # Unconfigured, memory lands next to the main store's data so a deployment
   # that points the store at a directory gets its memory database there too.
@@ -869,6 +1072,7 @@ defmodule LemonMemory.Store do
          :ok <- Sqlite3.execute(conn, "PRAGMA temp_store=MEMORY"),
          :ok <- Sqlite3.execute(conn, "PRAGMA busy_timeout=5000"),
          :ok <- Sqlite3.execute(conn, @schema_sql),
+         :ok <- Sqlite3.execute(conn, "CREATE TABLE IF NOT EXISTS memory_transfer_journal (operation_key TEXT PRIMARY KEY, payload TEXT NOT NULL)"),
          :ok <- Sqlite3.execute(conn, @fts_schema_sql) do
       Enum.reduce_while(@index_sqls, :ok, fn sql, :ok ->
         case Sqlite3.execute(conn, sql) do

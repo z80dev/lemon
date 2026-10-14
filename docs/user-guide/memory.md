@@ -172,6 +172,37 @@ List pagination is bounded and snapshot-bound: use `nextCursor` as `cursor` in
 See the [control-plane method contract](../../apps/lemon_control_plane/README.md#profile-memory)
 for exact parameters, result shapes, limits, and node invocation behavior.
 
+### Moving memory to another attached machine
+
+The admin-only `memory.transfer` control-plane method copies full scoped memory
+before a profile's machine placement changes. Supply the managed `profileId`,
+the destination's durable `nodeId`, and a fresh `mutationId` for that move.
+The source remains untouched and placement is **not** switched by the transfer.
+
+The default apply is create-only. If the destination already has selected
+profile memory, request `action: "preview"`. The result shows source/destination
+document and preference-file counts, snapshot digests, and an opaque confirmation
+token—not sensitive text. Explain exactly which destination memory will be
+replaced and collect explicit approval. Apply the same mutation with its exact
+`snapshotDigest`, `destinationDigest`, and `confirmationToken`; changed source
+or destination memory invalidates that plan.
+
+This transfers profile-owned summary/project records and assistant `USER.md`/
+`MEMORY.md`, not session transcripts, secrets, cookies, daily notes, or arbitrary
+files. It does not rely on truncated/redacted UI previews. Oversized or unsafe
+source data is rejected rather than partially copied. Other source repository
+groups keep opaque identities: their facts remain available as profile memory,
+but a new destination repository cannot be inferred from the old filesystem.
+
+Wait for the destination's durable `copied: true` receipt before changing the
+profile's machine. Preserve the mutation ID if the outcome is unknown and query
+the read-only `memory.transfer.status` method with `{profileId, nodeId, mutationId}`.
+It never starts or replays a copy, including when the controller has no intent.
+Only `status: "completed"` with the exact durable receipt acknowledges the copy;
+`pending`, `unknown`, or an unavailable query must retain the old placement.
+See [the transfer contract](../../apps/lemon_control_plane/README.md#copying-scoped-memory-before-moving-a-profile)
+for exact preview/confirmation fields and bounds.
+
 ### Retention and pruning
 
 Memory documents older than the retention window are pruned automatically. Default retention is

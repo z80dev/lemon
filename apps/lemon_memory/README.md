@@ -81,6 +81,19 @@ rules rather than writing a second memory store.
 Workspace queries match the bounded raw preference entries before redaction
 and preview truncation, so keywords beyond the displayed excerpt remain searchable.
 
+Full profile copying uses `LemonSkills.ProfileMemoryTransfer`, not redacted
+lifecycle projections. Store's typed `transfer_snapshot/4`, `transfer_get/2`,
+`transfer_put_new/3`, and `transfer_import/8` (or `/9` with local boundary/rollback
+options) own its private durable journal and SQLite transaction. The Store process
+owns the filesystem boundary lock across publication, commit and known rollback.
+Import rechecks exact selected row revisions, rejects foreign identity collisions,
+replaces only the chosen agent/home scope, and commits the receipt together with
+the rows and FTS updates. A durable pending
+intent is never a successful import and must not be automatically replayed.
+Transfer scans reject more than 2000 agent rows or 500 selected documents rather
+than silently copying a recent window. See the
+[owning transfer API](../lemon_skills/README.md#profile-memory-transfer).
+
 `mix lemon.memory` inspects and searches the store from the command line.
 
 ## Installation

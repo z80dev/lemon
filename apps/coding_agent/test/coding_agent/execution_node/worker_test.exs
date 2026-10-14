@@ -767,6 +767,40 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
     GenServer.stop(worker)
   end
 
+  @tag :tmp_dir
+  test "oversized private source snapshot is a bounded refusal, not an unknown transfer", %{
+    tmp_dir: tmp_dir
+  } do
+    previous_paths = Application.get_env(:lemon_core, :paths)
+    state_dir = Path.join(tmp_dir, "transfer-limit-state")
+    Application.put_env(:lemon_core, :paths,
+      home_state_dir: state_dir, global_config: Path.join(state_dir, "config.toml"))
+    on_exit(fn ->
+      if previous_paths,
+        do: Application.put_env(:lemon_core, :paths, previous_paths),
+        else: Application.delete_env(:lemon_core, :paths)
+    end)
+    {:ok, paths} = LemonCore.ProfileStore.paths("worker-transfer-limit")
+    File.mkdir_p!(paths["workspace"])
+    File.write!(Path.join(paths["workspace"], "MEMORY.md"),
+      "# Memory\n\n" <> String.duplicate("Saved full fact.\n", 1_000))
+    {:ok, worker} = start_worker(tmp_dir, token: "node-token")
+    assert_receive {:socket_started, socket, _opts}
+    send(worker, {:execution_node_socket, socket,
+      {:connected, %{"auth" => %{"clientId" => "node-1"}, "policy" => %{"maxPayload" => 16_384}}}})
+    assert_receive {:execution_node_worker, ^worker, {:status, :online, "node-1"}}
+    send(worker, {:execution_node_socket, socket,
+      {:event, "node.invoke.request", %{
+        "invokeId" => "source-overflow", "nodeId" => "node-1", "method" => "memory.transfer.prepare",
+        "args" => %{"profileId" => "worker-transfer-limit", "sourceNodeId" => "node-1",
+          "nodeId" => "node-2", "mutationId" => "overflow-#{System.unique_integer([:positive])}"}
+      }}})
+    assert_receive {:socket_request, ^socket, "node.invoke.result",
+      %{"result" => %{"ok" => false, "error" => "snapshot_too_large"}},
+      {:invoke_result, "source-overflow"}, 30_000}, 1_000
+    GenServer.stop(worker)
+  end
+
   defp start_worker(tmp_dir, extra_opts) do
     Worker.start_link(
       [

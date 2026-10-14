@@ -16,6 +16,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   read/admin scopes, and return bounded redacted previews. Named-node profiles
   execute memory operations on their destination through authenticated node
   invocations, without controller paths or credentials crossing the boundary.
+- Private, admin-only `memory.transfer` for machine moves: full scoped memory
+  and assistant preferences copy through authenticated node invocations with
+  durable mutation-bound receipts, create-only defaults, exact source/target
+  digest-bound overwrite previews, and explicit read-only `memory.transfer.status`
+  reconciliation after uncertain outcomes. Placement stays unchanged until the
+  caller explicitly switches it.
 
 ---
 
