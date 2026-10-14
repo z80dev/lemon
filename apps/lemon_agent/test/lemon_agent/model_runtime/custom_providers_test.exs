@@ -280,6 +280,98 @@ defmodule LemonAgent.ModelRuntime.CustomProvidersTest do
     end
   end
 
+  describe "discovery" do
+    setup do
+      LemonAi.ModelCache.invalidate_all()
+      on_exit(&LemonAi.ModelCache.invalidate_all/0)
+      :ok
+    end
+
+    test "picker lists discovered models with the config identity; listed entries win" do
+      System.put_env("MY_GATEWAY_KEY", "gw-key")
+      test_pid = self()
+
+      Req.Test.stub(__MODULE__, fn conn ->
+        send(
+          test_pid,
+          {:discovery, conn.request_path, Plug.Conn.get_req_header(conn, "authorization"),
+           Plug.Conn.get_req_header(conn, "x-team")}
+        )
+
+        Req.Test.json(conn, %{
+          "data" => [%{"id" => "qwen3-coder"}, %{"id" => "llama-4", "context_length" => 65_536}]
+        })
+      end)
+
+      config = %{providers: %{"my-gateway" => gateway(%{discovery: "openai"})}}
+
+      models =
+        ModelCatalog.available_models(config: config, custom_discovery_opts: discovery_opts())
+        |> Enum.filter(&(&1.provider == "my-gateway"))
+
+      assert_received {:discovery, "/v1/models", ["Bearer gw-key"], ["platform"]}
+      assert models |> Enum.map(& &1.id) |> Enum.sort() == ["llama-4", "qwen3-coder", "tiny"]
+
+      listed = Enum.find(models, &(&1.id == "qwen3-coder"))
+      assert listed.name == "Qwen3 Coder"
+
+      discovered = Enum.find(models, &(&1.id == "llama-4"))
+      assert discovered.context_window == 65_536
+      assert discovered.headers == %{"X-Team" => "platform"}
+      assert discovered.api == :openai_completions
+
+      # Resolution reuses the cached listing without another request.
+      assert %Model{context_window: 65_536, provider: "my-gateway"} =
+               CustomProviders.lookup(config.providers, "my-gateway", "llama-4")
+
+      refute_received {:discovery, _, _, _}
+    end
+
+    test "ollama discovery providers use the /v1 wire base URL and stay keyless" do
+      Req.Test.stub(__MODULE__, fn conn ->
+        case conn.request_path do
+          "/api/tags" -> Req.Test.json(conn, %{"models" => [%{"name" => "qwen3:8b"}]})
+          "/api/show" -> Req.Test.json(conn, %{"capabilities" => ["completion"]})
+        end
+      end)
+
+      cfg = %{
+        api: "openai_completions",
+        base_url: "http://127.0.0.1:11434",
+        auth: "none",
+        discovery: "ollama"
+      }
+
+      assert [model] =
+               CustomProviders.models(%{"ollama-box" => cfg},
+                 discover: true,
+                 discovery_opts: discovery_opts()
+               )
+
+      assert %Model{id: "qwen3:8b", provider: "ollama-box"} = model
+      assert model.base_url == "http://127.0.0.1:11434/v1"
+      assert model.compat == %{allow_missing_api_key: true}
+
+      assert CustomProviders.lookup(%{"ollama-box" => cfg}, "ollama-box", "other").base_url ==
+               "http://127.0.0.1:11434/v1"
+    end
+
+    test "a failed listing keeps configured models" do
+      Req.Test.stub(__MODULE__, &Plug.Conn.send_resp(&1, 500, "boom"))
+
+      assert [%Model{id: "only"}] =
+               CustomProviders.models(
+                 %{
+                   "gw" => gateway(%{auth: "none", discovery: "openai", models: [%{id: "only"}]})
+                 },
+                 discover: true,
+                 discovery_opts: discovery_opts()
+               )
+    end
+  end
+
+  defp discovery_opts, do: [req_options: [plug: {Req.Test, __MODULE__}]]
+
   defp clear_secrets_table do
     Secrets.table()
     |> LemonCore.Store.list()

@@ -78,6 +78,28 @@ defmodule LemonAgent.ModelRuntime.CustomProviders do
   def headers(cfg) when is_map(cfg), do: string_headers(value(cfg, :headers))
   def headers(_), do: %{}
 
+  @doc """
+  Wire base URL for a custom provider's models: `base_url`, with `/v1`
+  appended for Ollama discovery providers configured with the server root
+  (Ollama serves its OpenAI-compatible API under `/v1`).
+  """
+  @spec base_url(provider_config() | nil) :: String.t() | nil
+  def base_url(cfg) when is_map(cfg) do
+    case non_empty(value(cfg, :base_url)) do
+      nil ->
+        nil
+
+      url ->
+        url = String.trim_trailing(url, "/")
+
+        if discovery_kind(cfg) == :ollama and not String.ends_with?(url, "/v1"),
+          do: url <> "/v1",
+          else: url
+    end
+  end
+
+  def base_url(_), do: nil
+
   @doc "True when `provider` is a `ProviderNames` or `LemonAi.Models` registry provider."
   @spec builtin?(atom() | String.t() | nil) :: boolean()
   def builtin?(provider) do
@@ -147,7 +169,10 @@ defmodule LemonAgent.ModelRuntime.CustomProviders do
     with {id, cfg} <- custom_provider(providers_or_cfg, provider) do
       case Enum.find(model_entries(cfg), &(value(&1, :id) == model_id)) do
         nil ->
-          if open_model_set?(cfg), do: build_custom_model(id, cfg, %{id: model_id})
+          if open_model_set?(cfg),
+            do:
+              cached_discovered_model(id, cfg, model_id) ||
+                build_custom_model(id, cfg, %{id: model_id})
 
         entry ->
           build_custom_model(id, cfg, entry)
@@ -174,7 +199,7 @@ defmodule LemonAgent.ModelRuntime.CustomProviders do
 
   defp build_custom_model(provider_id, cfg, entry) do
     api = api_atom(value(entry, :api) || value(cfg, :api))
-    base_url = non_empty(value(cfg, :base_url))
+    base_url = base_url(cfg)
     id = non_empty(value(entry, :id))
 
     if api && base_url && id do
@@ -233,8 +258,9 @@ defmodule LemonAgent.ModelRuntime.CustomProviders do
     }
   end
 
-  # Discovered rows keep the endpoint's metadata but always carry the config
-  # identity, base URL, headers and keyless flag.
+  # Discovered rows keep the endpoint's metadata and wire base URL (Ollama
+  # models use `{root}/v1`) but always carry the config identity, headers and
+  # keyless flag.
   defp apply_custom_identity(%Model{} = model, id, cfg) do
     compat =
       case compat(cfg) do
@@ -245,10 +271,19 @@ defmodule LemonAgent.ModelRuntime.CustomProviders do
     %{
       model
       | provider: id,
-        base_url: non_empty(value(cfg, :base_url)) || model.base_url,
-        headers: Map.merge(headers(cfg), model.headers || %{}),
+        headers: Map.merge(headers(cfg), model.headers),
         compat: compat
     }
+  end
+
+  # Metadata from the last successful listing (cache only, no network access).
+  defp cached_discovered_model(id, cfg, model_id) do
+    if discovery_kind(cfg) do
+      case LemonAi.Models.Discovery.cached_model(id, model_id) do
+        %Model{} = model -> apply_custom_identity(model, id, cfg)
+        nil -> nil
+      end
+    end
   end
 
   defp discovery_kind(cfg) do

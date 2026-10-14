@@ -46,7 +46,7 @@ defmodule LemonAgent.ModelRuntime.StreamOptions do
     |> Map.put(:headers, Map.merge(CustomProviders.headers(provider_cfg), base_opts.headers))
     |> put_provider_options(provider_id, %{
       api_key: api_key,
-      base_url: provider_config_value(provider_cfg, :base_url)
+      base_url: CustomProviders.base_url(provider_cfg)
     })
   end
 
