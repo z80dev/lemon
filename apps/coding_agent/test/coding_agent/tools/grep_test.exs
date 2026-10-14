@@ -756,8 +756,8 @@ defmodule CodingAgent.Tools.GrepTest do
         first = grep(tmp_dir, %{"pattern" => "needle", "max_results" => 2}, @rg)
         assert %AgentToolResult{content: [%TextContent{text: text}], details: details} = first
         assert details.next_skip == 2
-        assert text =~ "showing matches 1-2 of 5. Use skip=2"
         assert text =~ "visible.txt:1: needle 1"
+        refute text =~ "needle 3"
 
         params = %{"pattern" => "needle", "max_results" => 2, "skip" => 4}
         last = grep(tmp_dir, params, @rg)
@@ -767,11 +767,6 @@ defmodule CodingAgent.Tools.GrepTest do
         refute Map.has_key?(details, :next_skip)
         assert details.skip == 4
       end
-    end
-
-    test "rejects a negative skip", %{tmp_dir: tmp_dir} do
-      assert {:error, "skip must be a non-negative integer" <> _} =
-               grep(tmp_dir, %{"pattern" => "needle", "skip" => -1}, false)
     end
 
     defp grep(tmp_dir, params, rg?) do

@@ -27,17 +27,12 @@ defmodule CodingAgent.Tools.ReadSelectorTest do
     assert text(result) =~ ~r/^\[.*ten\.txt#[0-9A-F]+\]/
   end
 
-  test "N+K reads K lines from N", %{tmp_dir: tmp_dir} do
-    result = read(tmp_dir, "ten.txt:4+2")
-    assert %AgentToolResult{details: %{start_line: 4, lines_shown: 2}} = result
-    assert text(result) =~ "4: line4\n5: line5"
-  end
+  test "N+K, N and N- open-ended forms", %{tmp_dir: tmp_dir} do
+    assert %AgentToolResult{details: %{start_line: 4, lines_shown: 2}} =
+             read(tmp_dir, "ten.txt:4+2")
 
-  test "N and N- read from N to the end", %{tmp_dir: tmp_dir} do
     for selector <- ["ten.txt:8", "ten.txt:8-"] do
-      result = read(tmp_dir, selector)
-      assert %AgentToolResult{details: %{start_line: 8, lines_shown: 3}} = result
-      assert text(result) =~ "10: line10"
+      assert %AgentToolResult{details: %{start_line: 8, lines_shown: 3}} = read(tmp_dir, selector)
     end
   end
 

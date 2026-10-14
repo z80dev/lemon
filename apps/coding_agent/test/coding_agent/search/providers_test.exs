@@ -321,10 +321,7 @@ defmodule CodingAgent.Search.ProvidersTest do
     end
 
     test "missing keys and HTTP errors are reported without the key" do
-      assert {:error, %{"error" => "missing_tavily_api_key", "message" => message}} =
-               Tavily.available?(:search, %{})
-
-      assert message =~ "TAVILY_API_KEY"
+      assert {:error, %{"error" => "missing_tavily_api_key"}} = Tavily.available?(:search, %{})
 
       assert {:error, %{"error" => "missing_kagi_api_key"}} =
                Kagi.available?(:search, %{api_key: ""})

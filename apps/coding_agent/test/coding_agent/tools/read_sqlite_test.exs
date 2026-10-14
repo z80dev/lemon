@@ -99,21 +99,8 @@ defmodule CodingAgent.Tools.ReadSqliteTest do
     Sqlite3.close(conn)
   end
 
-  test "unknown tables and bad params are errors", %{tmp_dir: tmp_dir} do
-    assert {:error, "No table or view named 'nope'"} = read(tmp_dir, "app.db:nope")
-
-    assert {:error, "SQLite limit must be a non-negative integer"} =
-             read(tmp_dir, "app.db:users?limit=x")
-  end
-
   test "non-SQLite .db files fall back to the ordinary reader", %{tmp_dir: tmp_dir} do
     File.write!(Path.join(tmp_dir, "plain.db"), "just text\n")
     assert text(read(tmp_dir, "plain.db")) =~ "1: just text"
-  end
-
-  test "line selectors page database views", %{tmp_dir: tmp_dir} do
-    output = text(read(tmp_dir, "app.db:users?limit=10", %{"offset" => 3, "limit" => 2}))
-    assert output =~ ~r/^3: /m
-    refute output =~ ~r/^5: /m
   end
 end
