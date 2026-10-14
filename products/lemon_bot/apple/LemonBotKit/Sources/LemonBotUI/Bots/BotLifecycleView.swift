@@ -11,38 +11,27 @@ struct BotLifecycleView: View {
     @State private var includeSkills = true
     @State private var includeRoutines = false
     @State private var sharedHostConsent = false
-    @State private var memory: [Memory] = []
-    @State private var skills: [Skill] = []
-    @State private var routines: [Routine] = []
-    @State private var connectors: [Connector] = []
-    @State private var selectedMemory: Set<ID> = []
-    @State private var selectedSkills: Set<ID> = []
-    @State private var selectedFiles: Set<ID> = []
-    @State private var selectedRoutines: Set<ID> = []
-    @State private var selectedConnectors: Set<ID> = []
     @State private var resetScopes: Set<String> = []
     @State private var confirmation: Confirmation?
     @State private var action = UIActionState()
     init(store: LemonBotStore, bot: Bot) {
         self.store = store; self.bot = bot
-        _operation = State(initialValue: bot.ownerUserId == store.user?.id || bot.managerUserIds.contains(store.user?.id ?? "") ? "duplicate" : "delete")
+        _operation = State(initialValue: "duplicate")
     }
-    private var manages: Bool { owner || bot.managerUserIds.contains(store.user?.id ?? "") }
     private var owner: Bool { bot.ownerUserId == store.user?.id }
-    private var mayDelete: Bool { owner || (bot.visibility == "team" && ["owner", "admin"].contains(store.member?.role ?? "")) }
     var body: some View {
         NavigationStack {
             Form {
                 SwiftUI.Section("Distinct operations") {
                     Picker("Operation", selection: $operation) {
-                        if manages { Text("Duplicate").tag("duplicate"); Text("Personal → Team copy").tag("team-copy"); Text("Move machine").tag("move") }
+                        if owner { Text("Duplicate").tag("duplicate"); Text("Move machine").tag("move") }
                         if owner { Text("Reset selected scopes").tag("reset") }
-                        if mayDelete { Text("Delete Bot").tag("delete") }
+                        if owner { Text("Delete Bot").tag("delete") }
                     }
                     Text("Hide is reversible and only suppresses your own sidebar and notifications. It never stops work.")
-                    Button("Hide instead") { Task { await action.perform { let _: Bot = try await store.mutate("PATCH", resourcePath("bots", bot.id, "/sidebar"), body: ["revision": .number(Double(bot.revision)), "hidden": .bool(true)]); try await store.refresh(); dismiss() } } }.disabled(bot.required && !owner)
+                    Button("Hide instead") { Task { await action.perform { let _: Bot = try await store.mutate("PATCH", resourcePath("bots", bot.id, "/sidebar"), body: ["revision": .number(Double(bot.revision)), "hidden": .bool(true)]); try await store.refresh(); dismiss() } } }
                 }
-                if ["duplicate", "team-copy", "move"].contains(operation) {
+                if ["duplicate", "move"].contains(operation) {
                     SwiftUI.Section("Destination") {
                         if operation != "move" { TextField("New Bot name", text: $name) }
                         Picker("Online machine", selection: $machineID) { Text("Choose machine").tag(""); ForEach(store.machines.filter { $0.status == "online" && (operation != "move" || $0.id != bot.machineId) }) { machine in Text(machine.name).tag(machine.id) } }
@@ -55,21 +44,11 @@ struct BotLifecycleView: View {
                         Toggle("Include installed skills", isOn: $includeSkills)
                         Toggle("Copy routines as paused", isOn: $includeRoutines)
                         Text("Settings are copied. No memory, chat, attachments, secrets, browser logins or connector tokens are copied.")
-                        Button("Create separate duplicate") { Task { await copyBot(team: false) } }.disabled(name.isEmpty || machineID.isEmpty || !sharedHostConsent)
-                    }
-                case "team-copy":
-                    SwiftUI.Section("Select exactly what becomes shared") {
-                        Text("The personal Bot stays unchanged. New Team Bot is unpublished. Only declarative connector configuration is copied; no credentials or private transcripts.")
-                        ForEach(memory) { item in Toggle("Memory: \(item.text)", isOn: selection(item.id, set: $selectedMemory)) }
-                        ForEach(skills.filter { bot.skillIds.contains($0.id) }) { item in Toggle("Skill: \(item.name)", isOn: selection(item.id, set: $selectedSkills)) }
-                        ForEach(bot.referenceAttachmentIds, id: \.self) { id in Toggle("Reference file: \(id)", isOn: selection(id, set: $selectedFiles)); AttachmentView(store: store, attachmentID: id) }
-                        ForEach(routines) { item in Toggle("Paused routine: \(item.name)", isOn: selection(item.id, set: $selectedRoutines)) }
-                        ForEach(connectors) { item in Toggle("Declarative app: \(item.name) · \(item.accountLabel)", isOn: selection(item.id, set: $selectedConnectors)) }
-                        Button("Create reviewed unpublished Team copy") { Task { await copyBot(team: true) } }.disabled(name.isEmpty || machineID.isEmpty || !sharedHostConsent)
+                        Button("Create separate duplicate") { Task { await copyBot() } }.disabled(name.isEmpty || machineID.isEmpty || !sharedHostConsent)
                     }
                 case "move":
                     SwiftUI.Section("Placement cutover") {
-                        Text("Move requires idle work and an online destination. Persona, enabled skills and scoped memory are acknowledged before cutover. Product transcript stays; files, browser logins, credentials and terminals do not move automatically.")
+                        Text("Move requires idle work and an online destination. Persona, enabled skills and profile memory are acknowledged before cutover. Product transcript stays; files, browser logins, credentials and terminals do not move automatically.")
                         if !bot.activeRunIds.isEmpty { Text("Active or unconfirmed runs block moving this Bot.").foregroundStyle(.orange) }
                         Button("Preview exact move") { Task { await preview() } }.disabled(machineID.isEmpty || !sharedHostConsent || !bot.activeRunIds.isEmpty)
                     }
@@ -90,28 +69,16 @@ struct BotLifecycleView: View {
             }.disabled(action.busy || store.connectionState != "online")
                 .navigationTitle("\(bot.name) · lifecycle")
                 .toolbar { Button("Close") { dismiss() } }
-                .task { if manages { await loadSelectableResources() } }
                 .sheet(isPresented: Binding(get: { confirmation != nil }, set: { if !$0 { confirmation = nil } })) {
                     if let confirmation { ScopeConfirmationView(store: store, confirmation: confirmation, title: operation.capitalized + " Bot") { body in try await confirm(body) } }
                 }
         }.frame(minWidth: 340, minHeight: 520)
     }
     private func selection(_ id: ID, set: Binding<Set<ID>>) -> Binding<Bool> { Binding(get: { set.wrappedValue.contains(id) }, set: { if $0 { set.wrappedValue.insert(id) } else { set.wrappedValue.remove(id) } }) }
-    private func loadSelectableResources() async {
+    private func copyBot() async {
         await action.perform {
-            memory = try await allResources(store, resourcePath("bots", bot.id, "/memory"))
-            skills = try await allResources(store, "/skills")
-            routines = try await allResources(store, "/routines", query: ["botId": bot.id])
-            connectors = try await allResources(store, resourcePath("bots", bot.id, "/connectors"))
-        }
-    }
-    private func copyBot(team: Bool) async {
-        await action.perform {
-            var body: JSONObject = ["name": .string(name), "machineId": .string(machineID)]
-            if team {
-                body["memoryIds"] = strings(selectedMemory.sorted()); body["skillIds"] = strings(selectedSkills.sorted()); body["referenceAttachmentIds"] = strings(selectedFiles.sorted()); body["routineIds"] = strings(selectedRoutines.sorted()); body["connectorIds"] = strings(selectedConnectors.sorted())
-            } else { body["includeSkills"] = .bool(includeSkills); body["includeRoutines"] = .bool(includeRoutines) }
-            let copy: Bot = try await store.mutate("POST", resourcePath("bots", bot.id, team ? "/team-copy" : "/duplicate"), body: body)
+            let body: JSONObject = ["name": .string(name), "machineId": .string(machineID), "includeSkills": .bool(includeSkills), "includeRoutines": .bool(includeRoutines)]
+            let copy: Bot = try await store.mutate("POST", resourcePath("bots", bot.id, "/duplicate"), body: body)
             try await store.refresh(); store.selectedConversationID = copy.mainConversationId
             dismiss()
         }

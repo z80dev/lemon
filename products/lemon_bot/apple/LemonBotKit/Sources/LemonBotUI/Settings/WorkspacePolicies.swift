@@ -7,17 +7,9 @@ struct WorkspaceSettingsView: View {
     let store: LemonBotStore
     @State private var control = AdminControl()
     @State private var workspace: Workspace?
-    @State private var members: [Member] = []
-    @State private var invites: [MemberInvite] = []
     @State private var name = ""
     @State private var timezone = "UTC"
     @State private var enabled = true
-    @State private var owner = ""
-    @State private var transferConfirmed = false
-    @State private var inviteEmail = ""
-    @State private var inviteRole = "member"
-    @State private var inviteDays = 7
-    @State private var issued: InviteIssued?
     var body: some View {
         Form {
             AdminStatus(control: control, store: store)
@@ -29,92 +21,21 @@ struct WorkspaceSettingsView: View {
                     self.workspace = try await store.mutate("PATCH", "/workspace", body: ["revision": .number(Double(workspace.revision)), "name": .string(name), "timezone": .string(timezone), "enabled": .bool(enabled)], as: Workspace.self)
                     try await store.refresh()
                 }.disabled(store.member?.role != "owner" || workspace == nil)
-                Picker("Transfer ownership to enabled member", selection: $owner) {
-                    Text("Choose member").tag("")
-                    ForEach(members.filter { $0.enabled }) { Text("\($0.displayName) · \($0.email)").tag($0.userId) }
-                }
-                Toggle("I understand my owner role will be transferred", isOn: $transferConfirmed)
-                AdminAction(title: "Transfer ownership", store: store, control: control) {
-                    guard let workspace else { return }
-                    self.workspace = try await store.mutate("PATCH", "/workspace", body: ["revision": .number(Double(workspace.revision)), "ownerUserId": .string(owner)], as: Workspace.self)
-                    transferConfirmed = false; try await store.refresh(); try await load()
-                }.disabled(!transferConfirmed || owner.isEmpty || owner == workspace?.ownerUserId || store.member?.role != "owner")
-            }
-            Section("Members — identities, not private conversations") {
-                ForEach(members) { member in
-                    NavigationLink("\(member.displayName) · \(member.role) · \(member.enabled ? "enabled" : "disabled")") { MemberSettingsView(store: store, member: member) }
-                }
-                Text("Disabling or removing access revokes product sessions/devices and future work. It does not terminate a host or erase external provider sessions.")
-            }
-            if store.member?.role == "owner" || store.member?.role == "admin" {
-                Section("Invite") {
-                    TextField("Email", text: $inviteEmail)
-                    AdminChoice(label: "Role", value: $inviteRole, options: ["member", "admin"])
-                    Stepper("Expires after \(inviteDays) days", value: $inviteDays, in: 1...30)
-                    AdminAction(title: "Issue invitation", store: store, control: control) {
-                        issued = try await store.mutate("POST", "/invites", body: ["email": .string(inviteEmail), "role": .string(inviteRole), "expiresInMs": .number(Double(inviteDays) * 86_400_000)], as: InviteIssued.self)
-                        invites = try await adminReadAll(store, "/invites", as: MemberInvite.self)
-                    }
-                    if let issued { Text(issued.inviteUrl).textSelection(.enabled); Text("This one-use invitation is shown only at issuance. Treat it as access authority.").font(.caption) }
-                    ForEach(invites) { invite in
-                        Text("\(invite.email) · \(invite.role) · \(invite.status) · \(adminDate(Double(invite.expiresAtMs)))")
-                        AdminAction(title: "Revoke invitation", store: store, control: control, destructive: true) {
-                            _ = try await store.mutate("DELETE", "/invites/\(adminPath(invite.id))", body: [:], as: Deleted.self)
-                            invites = try await adminReadAll(store, "/invites", as: MemberInvite.self)
-                        }.disabled(invite.status != "pending")
-                    }
-                }
-            }
-            Section("Published Team directory") {
-                ForEach(store.bots.filter { $0.visibility == "team" && $0.published }) { bot in
-                    Text("\(bot.name) · owner \(bot.ownerUserId) · \(bot.required ? "required" : "optional") · machine \(bot.machineId)")
-                }
-                Text("Directory membership does not grant management or access to another person's private DM or notes.")
             }
             Button("Refresh") { Task { await control.perform { try await load() } } }
         }.navigationTitle("Workspace").task { await control.perform { try await load() } }
     }
     private func load() async throws {
         let value = try await store.read("/workspace", as: Workspace.self); workspace = value; name = value.name; timezone = value.timezone; enabled = value.enabled
-        members = try await adminReadAll(store, "/members", as: Member.self)
-        if store.member?.role == "admin" || store.member?.role == "owner" { invites = try await adminReadAll(store, "/invites", as: MemberInvite.self) }
     }
 }
 
-struct MemberSettingsView: View {
-    let store: LemonBotStore
-    let member: Member
-    @State private var control = AdminControl()
-    @State private var current: Member?
-    @State private var role = "member"
-    @State private var enabled = true
-    var body: some View {
-        Form {
-            AdminStatus(control: control, store: store)
-            Text(member.email).textSelection(.enabled)
-            if member.role == "owner" {
-                Text("Owner role: use workspace ownership transfer, not a membership role change.")
-            } else {
-                AdminChoice(label: "Role", value: $role, options: ["member", "admin"])
-            }
-            Toggle("Enabled", isOn: $enabled)
-            AdminAction(title: "Save membership", store: store, control: control) {
-                let value = current ?? member
-                var body: JSONObject = ["revision": .number(Double(value.revision)), "enabled": .bool(enabled)]
-                if value.role != "owner" { body["role"] = .string(role) }
-                current = try await store.mutate("PATCH", "/members/\(adminPath(member.id))", body: body, as: Member.self)
-            }.disabled(store.member?.role != "owner" && store.member?.role != "admin")
-            AdminPreviewDelete(store: store, path: "/members/\(adminPath(member.id))", completed: { try await store.refresh() })
-        }.navigationTitle(member.displayName).onAppear { role = member.role; enabled = member.enabled }
-    }
-}
 
 struct PolicySettingsView: View {
     let store: LemonBotStore
     @State private var control = AdminControl()
     @State private var policies: Policies?
     @State private var effective: EffectivePolicy?
-    @State private var consents: [ConnectorConsent] = []
     @State private var approvals: [Approval] = []
     @State private var publicTemplates = false
     @State private var origins = ""
@@ -168,9 +89,6 @@ struct PolicySettingsView: View {
                     _ = try await store.mutate("POST", "/policies/rules", body: body, as: PolicyRule.self); try await load()
                 }
             }
-            Section("Own connector grants") {
-                ForEach(consents) { consent in ConnectorConsentRow(store: store, consent: consent, refresh: load) }
-            }
             Section("Attention queue") {
                 ForEach(approvals) { approval in
                     Text("\(approval.title) · \(approval.gate.state) · \(approval.scope.machineLabel)")
@@ -185,7 +103,6 @@ struct PolicySettingsView: View {
         let value = try await store.read("/policies", as: Policies.self); policies = value
         publicTemplates = value.publicTemplates; unrestrictedOrigins = value.allowedMcpOrigins == nil; origins = (value.allowedMcpOrigins ?? []).joined(separator: "\n"); ceiling = value.localExecutionCeiling; recording = value.actionRecording; retention = value.auditRetentionDays
         effective = try await store.read("/policies/effective", as: EffectivePolicy.self)
-        consents = try await adminReadAll(store, "/consents", as: ConnectorConsent.self)
         approvals = try await adminReadAll(store, "/approvals", query: ["state": "pending"], as: Approval.self)
     }
 }
@@ -214,32 +131,3 @@ struct PolicyRuleView: View {
     }
 }
 
-struct ConnectorConsentRow: View {
-    let store: LemonBotStore
-    let consent: ConnectorConsent
-    let refresh: () async throws -> Void
-    @State private var control = AdminControl()
-    @State private var expiring = true
-    @State private var days = 30
-    var body: some View {
-        VStack(alignment: .leading) {
-            Text("Account owner \(consent.accountOwnerUserId) · connector \(consent.connectorId) · Bot \(consent.botId)")
-            Text("\(consent.scope) · \(consent.gate.state) · expires \(adminDate(Double(consent.gate.expiresAtMs)))")
-            if consent.gate.state == "pending" {
-                Toggle("Expire remembered Bot grant", isOn: $expiring)
-                if expiring { Stepper("Grant expires after \(days) days", value: $days, in: 1...365) }
-                ForEach(["allow_once", "allow_bot", "decline"], id: \.self) { decision in
-                    AdminAction(title: decision.replacingOccurrences(of: "_", with: " "), store: store, control: control) {
-                        var body: JSONObject = ["revision": .number(Double(consent.revision)), "decision": .string(decision)]
-                        if decision == "allow_bot" && expiring { body["expiresAtMs"] = .number((Date().addingTimeInterval(Double(days) * 86_400).timeIntervalSince1970 * 1000).rounded(.down)) }
-                        _ = try await store.mutate("POST", "/consents/\(adminPath(consent.id))/resolve", body: body, as: ConnectorConsent.self); try await refresh()
-                    }.disabled(consent.gate.targetUserId != store.user?.id || Double(consent.gate.expiresAtMs) <= Date().timeIntervalSince1970 * 1000)
-                }
-            }
-            AdminAction(title: "Revoke grant for future use", store: store, control: control, destructive: true) {
-                _ = try await store.mutate("DELETE", "/consents/\(adminPath(consent.id))", body: adminRevision(consent.revision), as: Deleted.self); try await refresh()
-            }
-            if let error = control.error { Text(error).foregroundStyle(.red) }
-        }
-    }
-}

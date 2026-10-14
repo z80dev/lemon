@@ -256,12 +256,6 @@ struct TranscriptEventView: View {
             case .channelDisconnected(let value): Text("Channel disconnected · \(value.channelBindingId)")
             case .routineChanged(let value): NavigationLink("Routine \(value.action) · \(value.routineId)") { RoutineDetailView(store: store, routineID: value.routineId) }
             case .taskChanged(let value): NavigationLink("Task \(value.status)") { ConversationView(store: store, conversationID: value.conversationId) }
-            case .teamShared(let value): botLink(value.botId, "Team copy shared")
-            case .teamBotPublished(let value): botLink(value.botId, "Team Bot published")
-            case .teamBotUnpublished(let value): botLink(value.botId, "Team Bot unpublished")
-            case .personAdded(let value): Text("Person added · \(value.userId). Added members can see retained group history.")
-            case .personRemoved(let value): Text("Person removed · \(value.userId)")
-            case .personLeft(let value): Text("Person left · \(value.userId)")
             case .botAdded(let value): botLink(value.botId, "Bot added")
             case .botRemoved(let value): Text("Bot removed · \(value.botId)")
             case .handoff(let value): NavigationLink("\(value.sourceBotId) → \(value.targetBotId): \(value.text)") { ConversationView(store: store, conversationID: value.targetConversationId) }

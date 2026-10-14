@@ -124,8 +124,8 @@ struct ExportSettingsView: View {
     var body: some View {
         Form {
             AdminStatus(control: control, store: store)
-            Section("Own participant content consent") {
-                Text("Content consent is off by default. You can only set your own consent, never another participant's. Workspace content export AND every current human participant's explicit consent are required. Revoking stops new and undelivered queued content; already acknowledged collector copies and operator backups cannot be erased by this switch.")
+            Section("Your content export consent") {
+                Text("Content consent is off by default. Export requires your workspace content policy and explicit owner consent. Revoking stops new and undelivered queued content; already acknowledged collector copies and operator backups cannot be erased by this switch.")
                 Picker("Conversation", selection: $consentConversation) { Text("Choose authorized conversation").tag(""); ForEach(conversations) { Text($0.name.isEmpty ? $0.id : $0.name).tag($0.id) } }
                 if !consentConversation.isEmpty { ContentConsentSettingsView(store: store, conversationID: consentConversation).id(consentConversation) }
             }

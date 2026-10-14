@@ -39,8 +39,6 @@ struct NetworkSettingsView: View {
     @State private var control = AdminControl()
     @State private var policies: [NetworkPolicy] = []
     @State private var egress: [EgressRoute] = []
-    @State private var scope = "workspace"
-    @State private var group = ""
     @State private var mode = "defaults_plus_allowlist"
     @State private var rules: [NetworkRuleDraft] = []
     @State private var source = ""
@@ -54,13 +52,10 @@ struct NetworkSettingsView: View {
                 ForEach(policies) { policy in NavigationLink("\(policy.scope) · \(policy.mode) · desired revision \(policy.revision)") { NetworkPolicySettingsView(store: store, policy: policy) } }
             }
             Section("Create network policy") {
-                AdminChoice(label: "Scope", value: $scope, options: ["workspace", "directory_group"])
-                if scope == "directory_group" { TextField("Directory group ID", text: $group) }
                 AdminChoice(label: "Mode", value: $mode, options: ["allow_all", "defaults_plus_allowlist", "allowlist_only"])
                 NetworkRuleEditor(rules: $rules)
                 AdminAction(title: "Save desired policy", store: store, control: control) {
-                    var body: JSONObject = ["scope": .string(scope), "mode": .string(mode), "rules": .array(try rules.map { try $0.body() })]
-                    if scope == "directory_group" { body["directoryGroupId"] = .string(group) }
+                    let body: JSONObject = ["scope": .string("workspace"), "mode": .string(mode), "rules": .array(try rules.map { try $0.body() })]
                     _ = try await store.mutate("POST", "/network-policies", body: body, as: NetworkPolicy.self); try await load()
                 }
             }
@@ -149,115 +144,3 @@ struct EgressRouteSettingsRow: View {
     }
 }
 
-struct SetupEntryDraft: Identifiable {
-    var id = UUID().uuidString
-    var setupScript = ""
-    var checkScript = ""
-    var secretNames = ""
-    var timeoutMs = 300_000
-    var body: JSONValue { .object(["id": .string(id), "setupScript": .string(setupScript), "checkScript": checkScript.isEmpty ? .null : .string(checkScript), "secretNames": adminArray(adminStrings(secretNames)), "timeoutMs": .number(Double(timeoutMs))]) }
-}
-struct SetupEntryEditor: View {
-    @Binding var entries: [SetupEntryDraft]
-    var body: some View {
-        ForEach($entries) { $entry in
-            VStack(alignment: .leading) {
-                Text("Stable entry: \(entry.id)").font(.caption)
-                TextField("Reviewed setup script", text: $entry.setupScript, axis: .vertical)
-                TextField("Reviewed check script (optional)", text: $entry.checkScript, axis: .vertical)
-                TextField("Destination-local secret names only", text: $entry.secretNames)
-                TextField("Timeout milliseconds (maximum 1800000)", value: $entry.timeoutMs, format: .number)
-                Button("Remove entry", role: .destructive) { entries.removeAll { $0.id == entry.id } }
-            }
-        }
-        Button("Append sequential entry") { entries.append(SetupEntryDraft()) }
-    }
-}
-
-struct SetupSettingsView: View {
-    let store: LemonBotStore
-    @State private var control = AdminControl()
-    @State private var manifests: [SetupManifest] = []
-    @State private var runs: [SetupRun] = []
-    @State private var name = ""
-    @State private var group = ""
-    @State private var machines: Set<String> = []
-    @State private var entries: [SetupEntryDraft] = []
-    @State private var enabled = true
-    @State private var reviewed = false
-    var body: some View {
-        Form {
-            AdminStatus(control: control, store: store)
-            Section("Reviewed setup") {
-                Text("Requires a configured setupRun host driver and destination shell/allowed roots. Entries run in sequence: passing check skips, otherwise setup and recheck. Only named destination secrets are injected into the approved child process; no plain credentials in scripts, arguments or product JSON. Check/setup failure and unknown outcomes remain visible, never automatically replayed.")
-                ForEach(manifests) { manifest in NavigationLink("\(manifest.name) · revision \(manifest.revision) · \(manifest.enabled ? "enabled" : "disabled")") { SetupManifestSettingsView(store: store, manifest: manifest) } }
-            }
-            Section("New manifest") {
-                TextField("Name", text: $name); TextField("Directory group ID (optional)", text: $group)
-                AdminMachineSelection(store: store, ids: $machines)
-                Toggle("Enabled", isOn: $enabled)
-                SetupEntryEditor(entries: $entries)
-                Toggle("I reviewed the scripts and exact host/secret scope", isOn: $reviewed)
-                AdminAction(title: "Save reviewed manifest (does not run)", store: store, control: control) {
-                    var body: JSONObject = ["name": .string(name), "machineIds": adminArray(machines.sorted()), "entries": .array(entries.map(\.body)), "enabled": .bool(enabled)]
-                    if !group.isEmpty { body["directoryGroupId"] = .string(group) }
-                    _ = try await store.mutate("POST", "/setup-manifests", body: body, as: SetupManifest.self); try await load()
-                }.disabled(!reviewed || entries.isEmpty || machines.isEmpty)
-            }
-            Section("Observed redacted setup runs") { ForEach(runs) { SetupRunSummary(run: $0) } }
-            Button("Refresh status (does not rerun)") { Task { await control.perform { try await load() } } }
-        }.navigationTitle("Setup").task { await control.perform { try await load() } }
-    }
-    private func load() async throws { manifests = try await adminReadAll(store, "/setup-manifests", as: SetupManifest.self); runs = try await adminReadAll(store, "/setup-runs", as: SetupRun.self) }
-}
-
-struct SetupManifestSettingsView: View {
-    let store: LemonBotStore
-    let manifest: SetupManifest
-    @State private var control = AdminControl()
-    @State private var current: SetupManifest?
-    @State private var entries: [SetupEntryDraft] = []
-    @State private var machines: Set<String> = []
-    @State private var enabled = true
-    @State private var reviewed = false
-    @State private var runs: [SetupRun] = []
-    var body: some View {
-        Form {
-            AdminStatus(control: control, store: store)
-            Text("Group: \(manifest.directoryGroupId ?? "workspace") · revision \((current ?? manifest).revision)")
-            Toggle("Enabled", isOn: $enabled); AdminMachineSelection(store: store, ids: $machines)
-            SetupEntryEditor(entries: $entries)
-            Toggle("Reviewed exact scripts, machine selection and secret names", isOn: $reviewed)
-            AdminAction(title: "Save new manifest revision", store: store, control: control) {
-                current = try await store.mutate("PATCH", "/setup-manifests/\(adminPath(manifest.id))", body: ["revision": .number(Double((current ?? manifest).revision)), "enabled": .bool(enabled), "machineIds": adminArray(machines.sorted()), "entries": .array(entries.map(\.body))], as: SetupManifest.self); reviewed = false
-            }.disabled(!reviewed)
-            AdminAction(title: "Run saved manifest on selected machines", store: store, control: control) {
-                _ = try await store.mutate("POST", "/setup-manifests/\(adminPath(manifest.id))/run", body: ["machineIds": adminArray(machines.sorted())], as: Page<SetupRun>.self)
-                try await loadRuns()
-            }.disabled(!reviewed || machines.isEmpty || !enabled)
-            Text("Run uses the saved revision, not unsaved editor text. Refresh is read-only; another run is always explicit.")
-            AdminAction(title: "Delete manifest", store: store, control: control, destructive: true) {
-                _ = try await store.mutate("DELETE", "/setup-manifests/\(adminPath(manifest.id))", body: adminRevision((current ?? manifest).revision), as: Deleted.self); control.notice = "Manifest deleted; historical run records are independent."
-            }
-            Section("Run outcomes") { ForEach(runs) { SetupRunSummary(run: $0) } }
-            Button("Refresh run status") { Task { await control.perform { try await loadRuns() } } }
-        }.navigationTitle(manifest.name).task {
-            enabled = manifest.enabled; machines = Set(manifest.machineIds)
-            entries = manifest.entries.map { SetupEntryDraft(id: $0.id, setupScript: $0.setupScript, checkScript: $0.checkScript ?? "", secretNames: $0.secretNames.joined(separator: ","), timeoutMs: Int($0.timeoutMs)) }
-            await control.perform { try await loadRuns() }
-        }
-    }
-    private func loadRuns() async throws { runs = try await adminReadAll(store, "/setup-runs", query: ["manifestId": manifest.id], as: SetupRun.self) }
-}
-struct SetupRunSummary: View {
-    let run: SetupRun
-    var body: some View {
-        VStack(alignment: .leading) {
-            Text("\(run.manifestId) · machine \(run.machineId) · \(run.state)").font(.headline)
-            ForEach(Array(run.entryResults.enumerated()), id: \.offset) { _, entry in
-                Text("\(entry.entryId) · \(entry.state) · exit \(entry.exitCode.map(String.init) ?? "unknown")")
-                Text(entry.summary).textSelection(.enabled)
-            }
-        }
-    }
-}

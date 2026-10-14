@@ -35,7 +35,7 @@ public struct ComposerView: View {
     private var online: Bool { store.connectionState == "online" && store.account?.id == owningAccountID }
     private var conversation: Conversation? { store.conversations.first { $0.id == conversationID } }
     private var voiceAllowed: Bool {
-        guard let conversation, ["dm", "task", "team_dm"].contains(conversation.kind), conversation.ownerUserId == store.user?.id,
+        guard let conversation, ["dm", "task"].contains(conversation.kind), conversation.ownerUserId == store.user?.id,
               let botID = conversation.botIds.first, let bot = store.bots.first(where: { $0.id == botID }) else { return false }
         return bot.ownerUserId == store.user?.id
     }
@@ -122,7 +122,7 @@ public struct ComposerView: View {
     }
 
     private var messageInput: some View {
-        TextField("Message your teammate…", text: text, axis: .vertical)
+        TextField("Message your assistant…", text: text, axis: .vertical)
             .lineLimit(compact ? 1...4 : 2...8)
             .textFieldStyle(.roundedBorder)
             .accessibilityLabel("Unsent message draft")
@@ -164,7 +164,7 @@ public struct ComposerView: View {
             if draft.text.isEmpty && draft.attachmentIDs.isEmpty && draft.fileURLs.isEmpty && stagedFilenames.isEmpty {
                 Button { platform("voice") } label: { Label("Voice", systemImage: "phone") }
                     .disabled(!online || !voiceAllowed)
-                    .help("Live voice requires your own private Bot conversation, not a group, channel or teammate's Team Bot.")
+                    .help("Live voice requires your own private Bot conversation, not a group or channel.")
             }
             Spacer()
             if !compact {

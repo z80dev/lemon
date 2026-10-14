@@ -9,7 +9,7 @@ public struct LibraryHubView: View {
         List {
             NavigationLink("Skills · written methods and explicit host provisioning") { SkillLibraryView(store: store) }
             NavigationLink("Routines · schedules and verified events") { RoutineLibraryView(store: store) }
-            Section("Bot-scoped memory") {
+            Section("Bot profile memory") {
                 ForEach(store.bots) { bot in NavigationLink(bot.name) { MemoryHubView(store: store, botID: bot.id) } }
             }
             NavigationLink("Reviewed templates") { TemplateHubView(store: store) }
@@ -32,7 +32,7 @@ struct SkillLibraryView: View {
             ForEach(skills) { skill in NavigationLink { SkillEditorView(store: store, initial: skill) } label: {
                 VStack(alignment: .leading) {
                     Text(skill.name).font(.headline)
-                    Text("\(skill.scope) · \(skill.enabled ? "Enabled" : "Disabled") · \(skill.machineIds.count) provisioned hosts")
+                    Text("\(skill.enabled ? "Enabled" : "Disabled") · \(skill.machineIds.count) provisioned hosts")
                     Text(skill.description)
                     Text("Publisher: \(skill.provenance.publisher) · \(skill.provenance.trusted ? "Trusted source" : "Untrusted instructions")").font(.caption)
                 }
@@ -56,7 +56,6 @@ struct SkillEditorView: View {
     @State private var description = ""
     @State private var markdown = ""
     @State private var enabled = true
-    @State private var scope = "personal"
     @State private var botID = ""
     @State private var targetBotID = ""
     @State private var machines: Set<ID> = []
@@ -73,19 +72,17 @@ struct SkillEditorView: View {
             Text("Specify inputs, steps, decisions, validation, output and required human approvals. Third-party skill text is untrusted, not authorization.")
             TextEditor(text: $markdown).frame(minHeight: 250).font(.system(.body, design: .monospaced))
             Button("Import selected text into editor") { importFile = true }
-            if saved == nil {
-                Picker("Scope", selection: $scope) { Text("Personal").tag("personal"); Text("Team (maintainer)").tag("team") }
-                if scope == "team" { HubBotPicker(store: store, selection: $botID) }
-            } else { Text("Scope: \(scope)"); Toggle("Enabled", isOn: $enabled) }
+            if saved == nil { HubBotPicker(store: store, selection: $botID) }
+            else { Toggle("Enabled", isOn: $enabled) }
             Section("Explicit installation hosts") {
                 ForEach(store.machines) { machine in Toggle("\(machine.name) · \(machine.status)", isOn: Binding(get: { machines.contains(machine.id) }, set: { if $0 { machines.insert(machine.id) } else { machines.remove(machine.id) }; acknowledged = false })) }
             }
             Button("Save and provision to selected hosts") { Task { await action.perform {
                 var body: JSONObject = ["name": .string(name), "description": .string(description), "markdown": .string(markdown), "machineIds": .array(machines.sorted().map(JSONValue.string))]
                 if let saved { body["revision"] = .number(Double(saved.revision)); body["enabled"] = .bool(enabled); self.saved = try await store.mutate("PATCH", "/skills/\(hubID(saved.id))", body: body) }
-                else { body["scope"] = .string(scope); if scope == "team" { body["botId"] = .string(botID) }; self.saved = try await store.mutate("POST", "/skills", body: body) }
+                else { if !botID.isEmpty { body["botId"] = .string(botID) }; self.saved = try await store.mutate("POST", "/skills", body: body) }
                 acknowledged = true
-            } } }.disabled(name.isEmpty || description.isEmpty || markdown.isEmpty || (scope == "team" && botID.isEmpty) || action.busy || action.uncertain || store.connectionState != "online")
+            } } }.disabled(name.isEmpty || description.isEmpty || markdown.isEmpty || action.busy || action.uncertain || store.connectionState != "online")
             if let saved {
                 Section("Provenance") {
                     Text("Publisher: \(saved.provenance.publisher)")
@@ -102,7 +99,7 @@ struct SkillEditorView: View {
                 Button("Delete skill and managed host files", role: .destructive) { deletePresented = true }
             }
         }.navigationTitle(saved?.name ?? "New skill").toolbar { Button("Close") { dismiss() } }
-            .task { if let initial { saved = initial; name = initial.name; description = initial.description; markdown = initial.markdown; enabled = initial.enabled; scope = initial.scope; botID = initial.botId ?? ""; machines = Set(initial.machineIds) } }
+            .task { if let initial { saved = initial; name = initial.name; description = initial.description; markdown = initial.markdown; enabled = initial.enabled; botID = initial.botId ?? ""; machines = Set(initial.machineIds) } }
             .fileImporter(isPresented: $importFile, allowedContentTypes: [.plainText, .text]) { result in
                 do {
                     let url = try result.get(); let scoped = url.startAccessingSecurityScopedResource(); defer { if scoped { url.stopAccessingSecurityScopedResource() } }

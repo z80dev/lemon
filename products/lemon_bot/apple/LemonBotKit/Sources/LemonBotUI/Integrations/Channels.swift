@@ -105,7 +105,7 @@ struct ChannelDetailSettingsView: View {
                 }
             }
             Section("Prove your external account — no arbitrary mapping") {
-                Text("A one-use code is bound to your product account and this published Bot binding. Follow instructions in your actual authenticated external account, then inspect the verified identity before linking. Expires after ten minutes; never paste this authority in a public thread.")
+                Text("A one-use code is bound to your product account and this owned Bot binding. Follow instructions in your actual authenticated external account, then inspect the verified identity before linking. Expires after ten minutes; never paste this authority in a public thread.")
                 AdminAction(title: "Issue own private linking instructions", store: store, control: control) {
                     linkFlow = try await store.mutate("POST", "/channels/principal-links/start", body: ["channelBindingId": .string(binding.id)], as: ChannelLinkFlow.self); identityConfirmed = false
                 }

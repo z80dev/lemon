@@ -181,19 +181,16 @@ public struct SettingsHubView: View {
                 NavigationLink("Local companion and accessibility") { LocalSettingsView(store: store) }
             }
             Section("Workspace and access") {
-                NavigationLink("Workspace, members and invitations") { WorkspaceSettingsView(store: store) }
+                NavigationLink("Workspace name and timezone") { WorkspaceSettingsView(store: store) }
                 if store.member?.role == "owner" {
                     NavigationLink("Read-only account cleanup observations") { AccountCleanupSettingsView(store: store) }
                 }
-                NavigationLink("Policies, action review and consents") { PolicySettingsView(store: store) }
-                NavigationLink("Identity, OIDC and SCIM") { IdentitySettingsView(store: store) }
-                NavigationLink("Directory groups and governance") { DirectorySettingsView(store: store) }
+                NavigationLink("Policies and action review") { PolicySettingsView(store: store) }
             }
             Section("Operations") {
                 NavigationLink("Network enforcement and egress") { NetworkSettingsView(store: store) }
-                NavigationLink("Reviewed setup manifests") { SetupSettingsView(store: store) }
                 NavigationLink("Usage and spend limits") { UsageSettingsView(store: store) }
-                NavigationLink("Exports and participant consent") { ExportSettingsView(store: store) }
+                NavigationLink("Exports and your content consent") { ExportSettingsView(store: store) }
                 NavigationLink("Provider catalog and exact setup prerequisites") { ProviderCatalogView(store: store) }
                 NavigationLink("About and diagnostics") { AboutSettingsView(store: store) }
             }

@@ -15,7 +15,7 @@ public struct BotOverviewView: View {
     @State private var voiceSample: SpeechResult?
     public init(store: LemonBotStore, botID: ID) { self.store = store; self.botID = botID }
     private var bot: Bot? { store.bots.first { $0.id == botID } ?? overview?.bot }
-    private var manages: Bool { bot.map { $0.ownerUserId == store.user?.id || $0.managerUserIds.contains(store.user?.id ?? "") } ?? false }
+    private var manages: Bool { bot.map { $0.ownerUserId == store.user?.id } ?? false }
     public var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
@@ -25,18 +25,15 @@ public struct BotOverviewView: View {
                     switch tab {
                     case "identity": identity(bot)
                     case "job": BotJobEditorView(store: store, bot: bot)
-                    case "memory": NavigationLink("Open scoped memory, private notes and guided import") { MemoryHubView(store: store, botID: bot.id) }
+                    case "memory": NavigationLink("Open profile memory and reviewed import") { MemoryHubView(store: store, botID: bot.id) }
                     case "preferences": preferenceHistory(bot)
                     default: overviewBody(bot)
                     }
                     if manages {
                         HStack {
                             Button("Edit identity / settings") { editor = true }
-                            Button("Duplicate, team copy, move, reset or delete…") { lifecycle = true }
+                            Button("Duplicate, move, reset or delete…") { lifecycle = true }
                         }
-                    }
-                    if !manages && bot.visibility == "team" && ["owner", "admin"].contains(store.member?.role ?? "") {
-                        Button("Review Team Bot deletion…") { lifecycle = true }
                     }
                     NavigationLink("Connect apps / account consent") { IntegrationsHubView(store: store) }
                     NavigationLink("Skills and routines") { LibraryHubView(store: store) }
@@ -54,8 +51,7 @@ public struct BotOverviewView: View {
     private func identity(_ bot: Bot) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(bot.title).font(.title3)
-            Text("Owner: \(bot.ownerUserId) · \(bot.visibility) · \(bot.published ? "Published" : "Unpublished")").font(.caption)
-            Text("Managers: \(bot.managerUserIds.joined(separator: ", "))").font(.caption)
+            Text("Owner: \(bot.ownerUserId)").font(.caption)
             Text("Voice: \(bot.voice.voiceId) · speed \(bot.voice.speed) · language \(bot.voice.language ?? "auto")")
             Text("Reply language: \(bot.language ?? "automatic")")
             Button("Preview real voice sample") { Task { await action.perform { voiceSample = try await store.mutate("POST", resourcePath("bots", bot.id, "/voice/preview"), body: [:]) } } }.disabled(action.busy || store.connectionState != "online")
@@ -130,16 +126,7 @@ public struct BotOverviewView: View {
     }
     private func draftIdea(_ idea: BotIdea, bot: Bot) async {
         await action.perform {
-            let roomID: ID
-            if bot.visibility == "team" {
-                if let existing = store.conversations.first(where: { $0.kind == "team_dm" && $0.ownerUserId == store.user?.id && $0.botIds == [bot.id] }) {
-                    roomID = existing.id
-                } else {
-                    guard store.connectionState == "online" else { throw ClientError.offline }
-                    let room: Conversation = try await store.mutate("POST", "/conversations", body: ["kind": .string("team_dm"), "botIds": strings([bot.id])])
-                    roomID = room.id
-                }
-            } else { roomID = bot.mainConversationId }
+            let roomID = bot.mainConversationId
             let draft = store.draft(for: roomID)
             guard store.setLocalDraft(conversationID: roomID, text: draft.text.isEmpty ? idea.prompt : draft.text + "\n\n" + idea.prompt, attachmentIDs: draft.attachmentIDs, replyTo: draft.replyToEntryID) else { throw ClientError.invalidBinary }
             var references = draft.references
@@ -207,7 +194,7 @@ struct BotJobEditorView: View {
     @State private var reason = "Manual Job edit"
     @State private var action = UIActionState()
     init(store: LemonBotStore, bot: Bot) { self.store = store; self.bot = bot; _job = State(initialValue: bot.job); _instructions = State(initialValue: bot.instructions) }
-    private var manages: Bool { bot.ownerUserId == store.user?.id || bot.managerUserIds.contains(store.user?.id ?? "") }
+    private var manages: Bool { bot.ownerUserId == store.user?.id }
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Job and standing boundaries").font(.headline)

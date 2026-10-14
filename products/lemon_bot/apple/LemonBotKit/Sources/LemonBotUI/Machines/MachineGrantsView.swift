@@ -7,7 +7,7 @@ struct MachineBotGrantsView: View {
     @State private var grants: [BotGrant] = []
     @State private var cursor: String?
     @State private var action = HubAction()
-    private var canManage: Bool { guard let user = store.user else { return false }; return bot.ownerUserId == user.id || bot.managerUserIds.contains(user.id) }
+    private var canManage: Bool { bot.ownerUserId == store.user?.id }
     var body: some View {
         DisclosureGroup("\(bot.name) · requested vs effective authorization") {
             HubError(action: action)

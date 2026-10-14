@@ -51,9 +51,7 @@ struct TranscriptCardView: View {
                 Label(value.provider, systemImage: "point.3.connected.trianglepath.dotted")
                 Text(value.reason)
                 ConnectorLookupView(store: store, connectorID: value.connectorId)
-            case .teamAccess(let value): TeamAccessCardView(store: store, botID: value.botId, ownerID: value.ownerUserId, reason: value.reason, state: value.state)
             case .botTemplateShare(let value): TemplateShareCardView(store: store, templateID: value.templateId, name: value.name, shareURL: value.shareUrl, state: value.state)
-            case .connectorGrant(let value): ConnectorConsentView(store: store, consent: value.consent)
             case .voiceMemo(let value): VoiceMemoView(store: store, attachmentID: value.attachmentId, transcript: value.transcript, durationMs: Double(value.durationMs), peaks: value.peaks)
             case .handoff(let value):
                 Label("Handoff to \(store.bots.first(where: { $0.id == value.targetBotId })?.name ?? value.targetBotId)", systemImage: "arrow.triangle.branch")
@@ -77,7 +75,6 @@ struct TranscriptCardView: View {
         case .autoReviewApproval(let value): return value.approval.gate.targetUserId
         case .localToolPermission(let value): return value.approval.gate.targetUserId
         case .publishApproval(let value): return value.approval.gate.targetUserId
-        case .connectorGrant(let value): return value.consent.accountOwnerUserId
         case .emailDraft(let value): return value.draft.ownerUserId
         case .slackDraft(let value): return value.draft.ownerUserId
         case .messageDraft(let value): return value.draft.ownerUserId
@@ -119,13 +116,13 @@ struct ConnectorCardView: View {
     @State private var confirmation: Confirmation?
     @State private var action = UIActionState()
     private var current: Connector { (refreshed?.revision ?? 0) > connector.revision ? refreshed! : connector }
-    private var mayManage: Bool { current.ownerUserId == store.user?.id || (current.shared && store.bots.contains { $0.id == current.botId && ($0.ownerUserId == store.user?.id || $0.managerUserIds.contains(store.user?.id ?? "")) }) }
+    private var mayManage: Bool { current.ownerUserId == store.user?.id }
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("\(current.name) · \(current.accountLabel)").font(.headline)
             Text("Server: \(URL(string: current.url)?.host ?? current.url)").font(.caption)
             StatusBadge(text: current.state)
-            Text(current.shared ? "Deliberately shared service account" : "Personal account · consent required for another Bot")
+            Text("Your account · requested tool access is separate from approval to act")
             ActionErrorView(message: current.lastError)
             NavigationLink("Configure apps, tools and accounts") { IntegrationsHubView(store: store) }
             if mayManage {
@@ -156,40 +153,6 @@ struct ConnectorCardView: View {
         }
     }
     private func preview() async { await action.perform { confirmation = try await store.mutate("POST", resourcePath("connectors", current.id, "/preview"), body: ["action": .string("disconnect")]) } }
-}
-struct TeamAccessCardView: View {
-    let store: LemonBotStore
-    let botID: ID
-    let ownerID: ID
-    let reason: String
-    let state: String
-    init(store: LemonBotStore, botID: ID, ownerID: ID, reason: String, state: String) {
-        self.store = store; self.botID = botID; self.ownerID = ownerID; self.reason = reason; self.state = state
-    }
-    @State private var bot: Bot?
-    @State private var action = UIActionState()
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Team Bot · owner \(ownerID)").font(.headline)
-            Text(reason)
-            StatusBadge(text: bot.map { $0.published ? "published" : "unpublished" } ?? state)
-            Text("Your new private chat does not import another member's transcript, notes or credentials.").font(.caption)
-            if let bot, state != "unavailable" {
-                if ownerID == store.user?.id && !bot.published {
-                    Button("Publish shared Bot") { Task { await action.perform {
-                        let result: Bot = try await store.mutate("PATCH", resourcePath("bots", botID), body: ["revision": .number(Double(bot.revision)), "published": .bool(true)])
-                        self.bot = result
-                    } } }.disabled(action.busy || store.connectionState != "online")
-                }
-                Button("Start my private chat") { Task { await action.perform {
-                    let room: Conversation = try await store.mutate("POST", "/conversations", body: ["kind": .string("team_dm"), "botIds": strings([botID])])
-                    try await store.openConversation(room.id)
-                    store.selectedConversationID = room.id
-                } } }.disabled(action.busy || !bot.published || store.connectionState != "online")
-            }
-            ActionErrorView(message: action.error)
-        }.task(id: botID) { await action.perform { bot = try await store.read(resourcePath("bots", botID)) } }
-    }
 }
 struct TemplateShareCardView: View {
     let store: LemonBotStore

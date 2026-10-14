@@ -53,7 +53,7 @@ struct AccountSettingsView: View {
                 ForEach(sessions) { session in
                     VStack(alignment: .leading) {
                         Text(session.current ? "Current session" : session.id)
-                        Text("Last seen \(adminDate(Double(session.lastSeenAtMs))) · expires \(adminDate(Double(session.expiresAtMs)))").font(.caption)
+                        Text("Last seen \(adminDate(Double(session.lastSeenAtMs))) · \(session.expiresAtMs.map { "expires \(adminDate(Double($0)))" } ?? "until revoked")").font(.caption)
                         AdminAction(title: "Revoke session", store: store, control: control, destructive: true) {
                             _ = try await store.mutate("DELETE", "/auth/sessions/\(adminPath(session.id))", body: [:], as: Deleted.self)
                             if session.current { try await store.signOut() } else { try await loadSessions() }
@@ -67,7 +67,7 @@ struct AccountSettingsView: View {
                 }
             }
             Section("Account-wide deletion") {
-                Text("Deletion revokes product access and removes the previewed personal resources across all devices. Transfer final workspace ownership first. Host files, browser sessions, destination credentials, external provider authorizations/subscriptions and retained operator backups are separate. Mailbox retirement is only complete when the provider acknowledges it; unknown cleanup is not success.")
+                Text("Deletion revokes product access and removes the previewed owner resources across all devices. Host files, browser sessions, destination credentials, external provider authorizations/subscriptions and retained operator backups are separate. Mailbox retirement is only complete when the provider acknowledges it; unknown cleanup is not success.")
                 Text("Sessions revoke immediately, even when external cleanup is not yet confirmed. An enabled workspace Owner can inspect the fixed operation in Settings → Read-only account cleanup observations. Safe operation/user/request diagnostics below can be handed to that Owner; they never restore your deleted login or retry deletion.")
                 SecureField("Password for one-use reauthentication", text: $reauthPassword)
                 AdminAction(title: "Reauthenticate", store: store, control: control) {

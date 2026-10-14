@@ -176,7 +176,7 @@ struct BotAvatarView: View {
 }
 struct EmptySelectionView: View {
     var body: some View {
-        ContentUnavailableView("Choose a teammate", systemImage: "person.2", description: Text("Bots keep working on their assigned machine when you close the app. Choose a Bot or group to see its work."))
+        ContentUnavailableView("Choose your assistant", systemImage: "sparkles", description: Text("Bots keep working on their assigned machine when you close the app. Choose a Bot or group of your Bots to see its work."))
     }
 }
 

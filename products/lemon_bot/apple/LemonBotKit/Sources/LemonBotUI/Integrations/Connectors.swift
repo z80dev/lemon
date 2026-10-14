@@ -30,12 +30,10 @@ struct ConnectorSettingsView: View {
     @State private var connectors: [Connector] = []
     @State private var secrets: [Secret] = []
     @State private var providers: [IntegrationProvider] = []
-    @State private var consents: [ConnectorConsent] = []
     @State private var name = ""
     @State private var url = ""
     @State private var account = ""
     @State private var auth = "none"
-    @State private var shared = false
     @State private var level = "read_only"
     @State private var bindings: [SecretBindingDraft] = []
     @State private var selectedLoadedBot = ""
@@ -63,7 +61,6 @@ struct ConnectorSettingsView: View {
             Section("Custom HTTPS MCP setup on the assigned machine") {
                 TextField("Connection name", text: $name); TextField("HTTPS streamable MCP URL", text: $url); TextField("Account label", text: $account)
                 AdminChoice(label: "Authentication", value: $auth, options: ["none", "secret_headers", "oauth"])
-                Toggle("Deliberate shared service account (not personal OAuth lending)", isOn: $shared)
                 AdminChoice(label: "Requested access", value: $level, options: ["off", "read_only", "read_interact"])
                 if auth == "secret_headers" { SecretBindingEditor(secrets: secrets, bindings: $bindings) }
                 if let bot { NavigationLink("Manage write-only named secrets on this host") { MachineDetailView(store: store, machineID: bot.machineId) } }
@@ -71,7 +68,7 @@ struct ConnectorSettingsView: View {
                 Toggle("I reviewed the Bot, assigned host, account and requested access", isOn: $acceptedSharedHost)
                 AdminAction(title: "Set up connector with effective host grants", store: store, control: control) {
                     guard let bot else { throw AdminFormError("Select a Bot first.") }
-                    setupResult = try await store.mutate("POST", "/bots/\(adminPath(bot.id))/connectors/setup", body: ["machineId": .string(bot.machineId), "name": .string(name), "url": .string(url), "accountLabel": .string(account), "shared": .bool(shared), "authKind": .string(auth), "secretBindings": .array(auth == "secret_headers" ? bindings.map(\.body) : []), "requestedLevel": .string(level)], as: ConnectorSetupResult.self)
+                    setupResult = try await store.mutate("POST", "/bots/\(adminPath(bot.id))/connectors/setup", body: ["machineId": .string(bot.machineId), "name": .string(name), "url": .string(url), "accountLabel": .string(account), "authKind": .string(auth), "secretBindings": .array(auth == "secret_headers" ? bindings.map(\.body) : []), "requestedLevel": .string(level)], as: ConnectorSetupResult.self)
                     acceptedSharedHost = false; try await loadBot()
                 }.disabled(bot == nil || botID != selectedLoadedBot || !acceptedSharedHost || (auth == "secret_headers" && bindings.contains { $0.secretName.isEmpty }))
                 if let result = setupResult {
@@ -79,13 +76,11 @@ struct ConnectorSettingsView: View {
                     ForEach(result.grants) { Text("\($0.capabilityId): requested \($0.requestedLevel), effective \($0.effectiveLevel) · \($0.reasons.joined(separator: "; "))") }
                 }
             }
-            Section("Own account grants — independent from tool approvals") { ForEach(consents) { ConnectorConsentRow(store: store, consent: $0, refresh: loadConsents) } }
-        }.navigationTitle("Connect apps").task { await control.perform { providers = try await store.read("/integration-providers", as: [IntegrationProvider].self); try await loadConsents() } }
+        }.navigationTitle("Connect apps").task { await control.perform { providers = try await store.read("/integration-providers", as: [IntegrationProvider].self) } }
             .onChange(of: botID) { _, _ in
                 connectors = []; secrets = []; selectedLoadedBot = ""; setupResult = nil; acceptedSharedHost = false; bindings = []
             }
     }
-    private func loadConsents() async throws { consents = try await adminReadAll(store, "/consents", as: ConnectorConsent.self) }
     private func loadBot() async throws {
         selectedLoadedBot = ""; bindings = []; secrets = []; connectors = []
         guard let bot else { throw AdminFormError("Select an accessible Bot.") }
@@ -114,7 +109,7 @@ struct ConnectorDetailSettingsView: View {
         Form {
             AdminStatus(control: control, store: store)
             Section("Actual account and server") {
-                Text("\(value.state) · owner \(value.ownerUserId) · \(value.shared ? "shared service account" : "personal account")")
+                Text("\(value.state) · owner \(value.ownerUserId)")
                 Text(value.url).textSelection(.enabled)
                 if let error = value.lastError { Text(error).foregroundStyle(.red).textSelection(.enabled) }
                 TextField("Connection name", text: $name); TextField("Account label", text: $label)

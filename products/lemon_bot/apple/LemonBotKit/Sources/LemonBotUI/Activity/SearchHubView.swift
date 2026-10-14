@@ -71,8 +71,8 @@ public struct SearchHubView: View {
                 Button("Authorized native preview / original download") { Task { await action.perform { previewURL = try await store.download(attachmentID: file.id) } } }
             }
         case .routine(let value): NavigationLink("Routine · \(value.routine.name) · \(value.routine.scheduleDescription)") { RoutineEditorView(store: store, initial: value.routine) }
-        case .skill(let value): NavigationLink("Skill · \(value.skill.name) · \(value.skill.scope)") { SkillEditorView(store: store, initial: value.skill) }
-        case .memory(let value): NavigationLink { MemoryHubView(store: store, botID: value.memory.botId, memoryID: value.memory.id) } label: { VStack(alignment: .leading) { Text(value.memory.text); Text("Memory · \(value.memory.scope) · Bot \(value.memory.botId)").font(.caption) } }
+        case .skill(let value): NavigationLink("Skill · \(value.skill.name)") { SkillEditorView(store: store, initial: value.skill) }
+        case .memory(let value): NavigationLink { MemoryHubView(store: store, botID: value.memory.botId, memoryID: value.memory.id) } label: { VStack(alignment: .leading) { Text(value.memory.text); Text("Memory · Bot \(value.memory.botId)").font(.caption) } }
         }
     }
     private func invalidate() { hits = []; cursor = nil; searched = false }

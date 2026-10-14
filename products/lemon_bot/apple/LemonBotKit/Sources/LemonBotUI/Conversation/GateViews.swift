@@ -243,38 +243,3 @@ struct HumanStepView: View {
     private var hostAccess: Bool { store.machines.contains { $0.id == current.machineId && ($0.ownerUserId == store.user?.id || $0.accessUserIds.contains(store.user?.id ?? "") || ["owner", "admin"].contains(store.member?.role ?? "")) } }
     private func resolve(_ decision: String) async { await action.perform { resolved = try await store.mutate("POST", resourcePath("human-steps", current.id, "/resolve"), body: ["revision": .number(Double(current.revision)), "decision": .string(decision)]) } }
 }
-struct ConnectorConsentView: View {
-    let store: LemonBotStore
-    let consent: ConnectorConsent
-    init(store: LemonBotStore, consent: ConnectorConsent) { self.store = store; self.consent = consent }
-    @State private var resolved: ConnectorConsent?
-    @State private var connector: Connector?
-    @State private var rememberedExpiry = Date().addingTimeInterval(86400 * 7)
-    @State private var action = UIActionState()
-    private var current: ConnectorConsent { (resolved?.revision ?? 0) > consent.revision ? resolved! : consent }
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Label("Allow this account for the requested Bot?", systemImage: "person.crop.circle.badge.checkmark").font(.headline)
-            if let connector { Text("\(connector.name) · \(connector.accountLabel)"); Text(connector.url).font(.caption).textSelection(.enabled) }
-            Text("Account owner: \(current.accountOwnerUserId) · Bot: \(store.bots.first(where: { $0.id == current.botId })?.name ?? current.botId)")
-            Text("This permits only this account and scope. Consequential writes still require their own review or explicit draft Send.").font(.caption)
-            DatePicker("Remember until", selection: $rememberedExpiry, in: Date()...)
-            GateStatusView(store: store, gate: current.gate)
-            TimelineView(.periodic(from: .now, by: 1)) { _ in
-                HStack {
-                    Button("Allow once") { Task { await resolve("allow_once") } }
-                    Button("Allow this Bot") { Task { await resolve("allow_bot") } }
-                    Button("Decline") { Task { await resolve("decline") } }
-                }.disabled(action.busy || !gateAllowsAction(store, current.gate) || current.accountOwnerUserId != store.user?.id)
-            }
-            ActionErrorView(message: action.error)
-        }.task(id: "\(consent.connectorId):\(store.eventVersion)") { await action.perform { connector = try await visibleConnector(store, consent.connectorId, botID: consent.botId) } }
-    }
-    private func resolve(_ decision: String) async {
-        await action.perform {
-            var body: JSONObject = ["revision": .number(Double(current.revision)), "decision": .string(decision)]
-            if decision == "allow_bot" { body["expiresAtMs"] = .number(rememberedExpiry.timeIntervalSince1970 * 1000) }
-            resolved = try await store.mutate("POST", resourcePath("consents", current.id, "/resolve"), body: body)
-        }
-    }
-}

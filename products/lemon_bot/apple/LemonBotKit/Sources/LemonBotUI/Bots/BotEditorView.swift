@@ -16,7 +16,6 @@ struct BotEditorView: View {
     @State private var job: String
     @State private var instructions: String
     @State private var machineID: ID
-    @State private var visibility: String
     @State private var shape: String
     @State private var color: String
     @State private var avatarID: ID?
@@ -25,10 +24,6 @@ struct BotEditorView: View {
     @State private var voiceLanguage: String
     @State private var language: String
     @State private var consent = false
-    @State private var members: [Member] = []
-    @State private var managerIDs: Set<ID>
-    @State private var published: Bool
-    @State private var required: Bool
     @State private var notify: Bool
     @State private var references: [ID]
     @State private var avatarPicker = false
@@ -47,7 +42,6 @@ struct BotEditorView: View {
         _job = State(initialValue: bot?.job ?? "")
         _instructions = State(initialValue: bot?.instructions ?? "")
         _machineID = State(initialValue: bot?.machineId ?? "")
-        _visibility = State(initialValue: bot?.visibility ?? "personal")
         _shape = State(initialValue: bot?.avatar.shape ?? "round")
         _color = State(initialValue: bot?.avatar.color ?? "yellow")
         _avatarID = State(initialValue: bot?.avatar.attachmentId)
@@ -55,14 +49,10 @@ struct BotEditorView: View {
         _speed = State(initialValue: bot?.voice.speed ?? 1)
         _voiceLanguage = State(initialValue: bot?.voice.language ?? "")
         _language = State(initialValue: bot?.language ?? "")
-        _managerIDs = State(initialValue: Set(bot?.managerUserIds ?? []))
-        _published = State(initialValue: bot?.published ?? false)
-        _required = State(initialValue: bot?.required ?? false)
         _notify = State(initialValue: bot?.sidebar.notificationsEnabled ?? true)
         _references = State(initialValue: bot?.referenceAttachmentIds ?? [])
         _currentRevision = State(initialValue: bot?.revision ?? 1)
     }
-    private var owner: Bool { bot?.ownerUserId == store.user?.id }
     var body: some View {
         NavigationStack {
             Form {
@@ -77,9 +67,8 @@ struct BotEditorView: View {
                         }
                         NavigationLink("Review a workspace or third-party template instead") { TemplateHubView(store: store) }
                         Picker("Machine", selection: $machineID) { Text("Choose an online machine").tag(""); ForEach(store.machines.filter { $0.status == "online" }) { machine in Text(machine.name).tag(machine.id) } }
-                        Picker("Visibility", selection: $visibility) { Text("Personal").tag("personal"); Text("Team · initially unpublished").tag("team") }
                         Toggle("I trust this host and accept shared files, browser logins and CLI credentials", isOn: $consent)
-                        Text("Bots on one OS user are not isolated. Use separate hosts/users for hard isolation. Team Bots use their assigned shared host, not each requester's machine.").font(.caption)
+                        Text("Bots on one OS user are not isolated. Use separate hosts/users for hard isolation.").font(.caption)
                     }
                 }
                 SwiftUI.Section("Avatar") {
@@ -119,28 +108,12 @@ struct BotEditorView: View {
                         Button("Choose reference files") { referencePicker = true }
                     }
                     SwiftUI.Section("Your notification preference") { Toggle("Notifications for this Bot", isOn: $notify) }
-                    if bot.visibility == "team" {
-                        SwiftUI.Section("Team setup") {
-                            if owner {
-                                Toggle("Published to collaborators", isOn: $published)
-                                Text("Only owner publishes or assigns managers. Collaborators get their own private DM; publishing never exposes another member's chat or private notes.").font(.caption)
-                                ForEach(members.filter(\.enabled)) { member in
-                                    if member.userId != bot.ownerUserId { Toggle("Manager: \(member.displayName)", isOn: Binding(get: { managerIDs.contains(member.userId) }, set: { if $0 { managerIDs.insert(member.userId) } else { managerIDs.remove(member.userId) } })) }
-                                }
-                            }
-                            if ["owner", "admin"].contains(store.member?.role ?? "") { Toggle("Required Team Bot", isOn: $required) }
-                        }
-                    }
                 }
                 ActionErrorView(message: action.error)
                 if let receipt = action.receipt { Text(receipt).font(.caption) }
-                Button(bot == nil ? "Create teammate" : "Save reviewed identity / settings") { Task { await save() } }.disabled(action.busy || name.isEmpty || store.connectionState != "online" || (bot == nil && (machineID.isEmpty || !consent)))
+                Button(bot == nil ? "Create Bot" : "Save reviewed identity / settings") { Task { await save() } }.disabled(action.busy || name.isEmpty || store.connectionState != "online" || (bot == nil && (machineID.isEmpty || !consent)))
             }.formStyle(.grouped).navigationTitle(bot == nil ? "New Bot" : "Edit \(bot!.name)")
                 .toolbar { Button("Cancel") { dismiss() } }
-                .task {
-                    guard owner else { return }
-                    await action.perform { members = try await allResources(store, "/members") }
-                }
                 .fileImporter(isPresented: $avatarPicker, allowedContentTypes: [.image]) { result in
                     switch result { case .success(let url): loadImage(url); case .failure(let error): action.error = String(describing: error) }
                 }
@@ -207,8 +180,6 @@ struct BotEditorView: View {
             let result: Bot
             if let bot {
                 body["revision"] = .number(Double(currentRevision)); body["referenceAttachmentIds"] = strings(references)
-                if owner { body["managerUserIds"] = strings(managerIDs.sorted()); body["published"] = .bool(published) }
-                if ["owner", "admin"].contains(store.member?.role ?? "") { body["required"] = .bool(required) }
                 result = try await store.mutate("PATCH", resourcePath("bots", bot.id), body: body)
                 currentRevision = result.revision
                 if bot.voice.voiceId != voiceID || bot.voice.speed != speed || (bot.voice.language ?? "") != voiceLanguage {
@@ -221,7 +192,7 @@ struct BotEditorView: View {
                 }
                 let _: Bot = try await store.mutate("PATCH", resourcePath("bots", bot.id, "/sidebar"), body: ["revision": .number(Double(currentRevision)), "notificationsEnabled": .bool(notify)])
             } else {
-                body["machineId"] = .string(machineID); body["visibility"] = .string(visibility); body["job"] = .string(job); body["instructions"] = .string(instructions); body["voice"] = .object(voice); body["language"] = language.isEmpty ? .null : .string(language)
+                body["machineId"] = .string(machineID); body["job"] = .string(job); body["instructions"] = .string(instructions); body["voice"] = .object(voice); body["language"] = language.isEmpty ? .null : .string(language)
                 result = try await store.mutate("POST", "/bots", body: body)
             }
             try await store.refresh()

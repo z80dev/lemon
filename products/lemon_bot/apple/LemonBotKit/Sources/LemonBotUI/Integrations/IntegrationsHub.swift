@@ -14,10 +14,8 @@ public struct IntegrationsHubView: View {
             }
             Section("Operator configuration") {
                 NavigationLink("Provider catalog and exact prerequisites") { ProviderCatalogView(store: store) }
-                NavigationLink("Identity and directory") { IdentitySettingsView(store: store) }
-                NavigationLink("Destination setup manifests") { SetupSettingsView(store: store) }
             }
-            Text("Connecting an account is not a tool approval or permission to send. Personal OAuth accounts are never silently lent to Team Bots. Channels are separate from MCP posting tools; provider installation and workspace-admin approval are independent states.")
+            Text("Connecting your account is not a tool approval or permission to send. Channels are separate from MCP posting tools; provider installation and external administrator approval are independent states.")
         }.navigationTitle("Integrations")
     }
 }

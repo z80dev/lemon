@@ -123,7 +123,6 @@ public struct MachineDetailView: View {
     @State private var hostError: String?
     @State private var managementError: String?
     @State private var capabilityError: String?
-    @State private var access = ""
     @State private var name = ""
     @State private var preview: HubConfirmation?
     @State private var action = HubAction()
@@ -137,9 +136,8 @@ public struct MachineDetailView: View {
                     Text("Owner: \(machine.ownerUserId) · Last seen \(hubDate(machine.lastSeenAtMs))")
                     Text("Full host access is privileged. Every Bot on this machine shares files, browser logins and CLI credentials; use separate OS users/machines for isolation.").foregroundStyle(.orange)
                     TextField("Name", text: $name)
-                    TextField("Access user IDs (comma separated)", text: $access)
-                    Button("Save host access") { Task { await action.perform {
-                        let updated: Machine = try await store.mutate("PATCH", "/machines/\(hubID(machineID))", body: ["revision": .number(Double(machine.revision)), "name": .string(name), "accessUserIds": .array(access.split(separator: ",").map { .string($0.trimmingCharacters(in: .whitespaces)) })]); self.machine = updated
+                    Button("Save host name") { Task { await action.perform {
+                        let updated: Machine = try await store.mutate("PATCH", "/machines/\(hubID(machineID))", body: ["revision": .number(Double(machine.revision)), "name": .string(name)]); self.machine = updated
                     } } }.disabled(action.busy || action.uncertain || store.connectionState != "online")
                 }
                 Section("Measured host information") {
@@ -197,7 +195,7 @@ public struct MachineDetailView: View {
             .task { await action.perform(readOnly: true) { try await load() } }
     }
     private func load() async throws {
-        let value: Machine = try await store.read("/machines/\(hubID(machineID))"); machine = value; name = value.name; access = value.accessUserIds.joined(separator: ",")
+        let value: Machine = try await store.read("/machines/\(hubID(machineID))"); machine = value; name = value.name
         do { host = try await store.read("/machines/\(hubID(machineID))/host"); hostError = nil } catch { host = nil; hostError = String(describing: error) }
         do { capabilities = try await store.read("/machines/\(hubID(machineID))/capabilities"); capabilityError = nil } catch { capabilities = nil; capabilityError = error.localizedDescription }
         do { management = try await store.read("/machines/\(hubID(machineID))/management"); managementError = nil } catch { management = nil; managementError = String(describing: error) }

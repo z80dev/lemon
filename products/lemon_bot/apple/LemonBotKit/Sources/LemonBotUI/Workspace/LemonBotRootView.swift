@@ -10,6 +10,7 @@ public struct LemonBotRootView: View {
     @State private var newGroup = false
     @State private var newAccount = false
     @State private var search = false
+    @State private var pairing = false
     @State private var unreadOnly = false
     @State private var hidden = false
     @State private var rosterQuery = ""
@@ -46,6 +47,13 @@ public struct LemonBotRootView: View {
             .sheet(isPresented: $search) { SearchPaletteView(store: store) }
             .sheet(isPresented: $sectionEditor) { SectionEditorView(store: store) }
             .sheet(isPresented: $newAccount) { OnboardingView(store: store) }
+            .sheet(isPresented: $pairing) {
+                #if os(macOS)
+                OwnerPairingView(store: store)
+                #else
+                PhonePairingView(store: store)
+                #endif
+            }
             .onChange(of: store.account?.id) { _, _ in newAccount = false; destination = "conversation"; compactColumn = .sidebar }
             .preferredColorScheme(store.user?.preferences.appearance == "dark" ? .dark : store.user?.preferences.appearance == "light" ? .light : nil)
             .onChange(of: store.selectedConversationID) { _, id in if id != nil { destination = "conversation"; compactColumn = .detail } }
@@ -86,7 +94,7 @@ public struct LemonBotRootView: View {
                     HStack { Text(section.name); Spacer(); Button(section.collapsed ? "Expand" : "Collapse") { Task { await changeSection(section, collapsed: !section.collapsed) } }.font(.caption) }
                 }
             }
-            botSection(hidden ? "Hidden / unassigned" : "Teammates", bots: visibleBots.filter { !$0.sidebar.pinned && $0.sidebar.sectionId == nil })
+            botSection(hidden ? "Hidden / unassigned" : "Your Bots", bots: visibleBots.filter { !$0.sidebar.pinned && $0.sidebar.sectionId == nil })
             SwiftUI.Section("Groups and tasks") {
                 ForEach(store.conversations.filter { ["group", "task"].contains($0.kind) && (!unreadOnly || $0.unreadCount > 0) && (rosterQuery.isEmpty || $0.name.localizedCaseInsensitiveContains(rosterQuery)) }) { room in
                     Button { openRoom(room.id) } label: {
@@ -108,13 +116,20 @@ public struct LemonBotRootView: View {
             }
             SwiftUI.Section("Account") {
                 Text(store.user?.displayName ?? store.account?.displayName ?? "")
+                #if os(macOS)
+                Button("Connect iPhone") { pairing = true }.disabled(store.connectionState != "online")
+                #else
+                if store.connectionState == "reconnect_required" {
+                    Button("Reconnect to your desktop") { pairing = true }
+                }
+                #endif
                 ForEach(store.accounts.filter { $0.id != store.account?.id }) { account in Button("Switch to \(account.displayName) · \(account.baseURL.host ?? "")") { Task { await action.perform { try await store.restoreAccount(account) } } } }
                 Button("Add another account or backend") { newAccount = true }
                 Button("Sign out") { Task { await action.perform { try await store.signOut() } } }
                 Button("Refresh authoritative state") { Task { await action.perform { try await store.refresh() } } }
                 ActionErrorView(message: action.error ?? store.errorMessage)
             }
-        }.listStyle(.sidebar).navigationTitle("Teammates")
+        }.listStyle(.sidebar).navigationTitle("Lemon Bot")
             .toolbar {
                 Button("Search", systemImage: "magnifyingglass") { search = true }.keyboardShortcut("k", modifiers: .command)
                 Button("Toggle roster", systemImage: "sidebar.left") {
@@ -153,7 +168,7 @@ public struct LemonBotRootView: View {
             }
         }.buttonStyle(.plain).contextMenu {
             Button(bot.sidebar.pinned ? "Unpin" : "Pin") { Task { await sidebar(bot, ["pinned": .bool(!bot.sidebar.pinned)]) } }
-            Button(bot.sidebar.hidden ? "Unhide" : "Hide · work continues") { Task { await sidebar(bot, ["hidden": .bool(!bot.sidebar.hidden)]) } }.disabled(bot.required && bot.ownerUserId != store.user?.id)
+            Button(bot.sidebar.hidden ? "Unhide" : "Hide · work continues") { Task { await sidebar(bot, ["hidden": .bool(!bot.sidebar.hidden)]) } }
             Button(bot.sidebar.unread ? "Mark read" : "Mark unread") { Task { await sidebar(bot, ["unread": .bool(!bot.sidebar.unread)]) } }
             Menu("Move to section") {
                 Button("Unassigned") { Task { await sidebar(bot, ["sectionId": .null]) } }
@@ -192,11 +207,7 @@ public struct LemonBotRootView: View {
         await openBot(bots[next])
     }
     private func openBot(_ bot: Bot) async {
-        if bot.visibility == "personal" { openRoom(bot.mainConversationId); return }
-        await action.perform {
-            let room: Conversation = try await store.mutate("POST", "/conversations", body: ["kind": .string("team_dm"), "botIds": strings([bot.id])])
-            try await store.refresh(); openRoom(room.id)
-        }
+        openRoom(bot.mainConversationId)
     }
     private func sidebar(_ bot: Bot, _ fields: JSONObject) async {
         guard store.connectionState == "online" else { return }
