@@ -178,7 +178,16 @@ stops before downloads, runtime inspection, or enrollment.
 **Publication prerequisite:** generated commands use
 `https://raw.githubusercontent.com/z80dev/lemon/main/scripts/join-node.sh`.
 That URL is usable only after this script is published on the repository's `main`
-branch. A local checkout can run the same script before publication:
+branch.
+
+An operator can explicitly configure `:node_join_script_url` on the control plane
+or set `LEMON_NODE_JOIN_SCRIPT_URL` to an HTTPS endpoint serving this exact
+repository script, for example an owner-controlled encrypted-overlay endpoint
+before publication. URLs with userinfo, query credentials, fragments or plaintext
+HTTP fail before invitation issuance. Only configure an endpoint you trust to
+execute code on the destination; the default remains the repository-owned URL.
+
+A local checkout can run the same script before publication:
 
 ```bash
 bash /path/to/lemon/scripts/join-node.sh --name studio-mac \

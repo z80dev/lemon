@@ -8,8 +8,9 @@ defmodule LemonControlPlane.Methods.NodePairInviteTest do
 
   @ctx %{auth: %{role: :operator, scopes: [:pairing, :read]}, conn_id: "invite-operator"}
   @moduletag :tmp_dir
-  @runtime_keys [:node_source_checkout, :node_install_version, :node_install_base_url]
+  @runtime_keys [:node_source_checkout, :node_install_version, :node_install_base_url, :node_join_script_url]
   @runtime_env [
+    "LEMON_NODE_JOIN_SCRIPT_URL",
     "LEMON_NODE_SOURCE_CHECKOUT",
     "LEMON_NODE_INSTALL_VERSION",
     "LEMON_NODE_INSTALL_BASE_URL",
@@ -286,6 +287,19 @@ defmodule LemonControlPlane.Methods.NodePairInviteTest do
     refute issued["joinCommand"] =~ "invite-test-operator"
     assert {:ok, stored} = NodeStore.fetch_invite(issued["inviteCode"])
     refute inspect(stored) =~ issued["inviteCode"]
+  end
+
+  test "join script override rejects credential-bearing or non-HTTPS downloads before issuance", %{name: name} do
+    for url <- ["http://host/join.sh", "https://user:secret@host/join.sh",
+                "https://host/join.sh?secret=value", "https://host/join.sh#fragment", "not a URL"] do
+      Application.put_env(:lemon_control_plane, :node_join_script_url, url)
+      assert {:error, {:invalid_request, _}} = NodePairInvite.handle(%{"nodeName" => name}, @ctx)
+    end
+    refute Enum.any?(LemonCore.Store.list(:node_pair_invites), fn {_id, row} ->
+      NodeStore.invite_field(row, :node_name) == name
+    end)
+    Application.put_env(:lemon_control_plane, :node_join_script_url, "https://host:57513/join.sh")
+    assert enrollment_auth(invite(name)).role == :enrollment
   end
 
   test "loopback source defaults can issue restricted invitations", %{name: name} do

@@ -34,6 +34,7 @@ defmodule LemonControlPlane.Methods.NodePairInvite do
          true <- is_integer(ttl) and ttl in 1..86_400_000,
          {:ok, controller} <- controller_url(),
          {:ok, runtime} <- runtime_source(controller),
+         {:ok, script_url} <- join_script_url(),
          {:ok, binding, node} <- binding(params["nodeId"], String.trim(node_name)),
          purpose = metadata(params, "purpose", node, :purpose, String.trim(purpose)),
          labels = metadata(params, "labels", node, :labels, labels),
@@ -54,7 +55,7 @@ defmodule LemonControlPlane.Methods.NodePairInvite do
           {:ok, %{
             "inviteId" => id,
             "inviteCode" => code,
-            "joinCommand" => join_command(runtime, controller, invite.node_name),
+            "joinCommand" => join_command(script_url, runtime, controller, invite.node_name),
             "expiresAtMs" => expires_at,
             "summary" => %{"inviteId" => id, "expiresAtMs" => expires_at, "singleUse" => true,
               "includesOperatorCredentials" => false}
@@ -171,12 +172,21 @@ defmodule LemonControlPlane.Methods.NodePairInvite do
     else
       false
     end
+  rescue
+    ArgumentError -> false
   end
 
-  defp join_command(runtime, controller, node_name) do
+  defp join_script_url do
+    url = configured(:node_join_script_url, ["LEMON_NODE_JOIN_SCRIPT_URL"]) || @join_script_url
+    if valid_install_base_url?(url),
+      do: {:ok, url},
+      else: {:error, Errors.invalid_request("Configure an HTTPS node join script URL without credentials, query or fragment")}
+  end
+
+  defp join_command(script_url, runtime, controller, node_name) do
     args = ["--name", node_name, "--controller", controller] ++ runtime_args(runtime)
     "curl -fsSL --proto '=https' --proto-redir '=https' " <>
-      quote_arg(@join_script_url) <> " | bash -s -- " <>
+      quote_arg(script_url) <> " | bash -s -- " <>
       Enum.map_join(args, " ", &quote_arg/1)
   end
 
