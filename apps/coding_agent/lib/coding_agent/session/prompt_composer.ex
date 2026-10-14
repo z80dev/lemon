@@ -3,11 +3,13 @@ defmodule CodingAgent.Session.PromptComposer do
   Composes the system prompt from multiple sources.
 
   Handles loading and combining explicit prompts, prompt templates, the Lemon
-  base prompt (skills + workspace context), and instruction files (CLAUDE.md,
-  AGENTS.md). Also resolves session scope (main vs subagent).
+  base prompt (skills + workspace context), instruction files (CLAUDE.md,
+  AGENTS.md, ...) and rule files (`CodingAgent.Rules`). Also resolves session
+  scope (main vs subagent).
   """
 
   alias CodingAgent.ResourceLoader
+  alias CodingAgent.Rules
 
   # ============================================================================
   # System Prompt Composition
@@ -19,7 +21,8 @@ defmodule CodingAgent.Session.PromptComposer do
   1. Explicit system_prompt option (highest priority)
   2. Prompt template content (if prompt_template option provided)
   3. Lemon base prompt (coding rules + skills + workspace context)
-  4. CLAUDE.md/AGENTS.md content from ResourceLoader
+  4. CLAUDE.md/AGENTS.md/... content from ResourceLoader, then always-apply
+     rules and the rulebook index from `CodingAgent.Rules`
   5. The session's environment block (`build_opts[:environment]`, captured once
      per session by `CodingAgent.SystemPrompt.Environment`)
 
@@ -125,13 +128,15 @@ defmodule CodingAgent.Session.PromptComposer do
         |> Map.merge(build_opts)
       )
 
-    # Static first, volatile last: explicit > template > base > instructions > environment
+    # Static first, volatile last: explicit > template > base > instructions > rules > environment
     [
       top_level(:system_prompt, "Custom system prompt", explicit_prompt),
       top_level(:system_prompt, "Prompt template", template_content),
       base_sections,
-      # Instructions (CLAUDE.md, AGENTS.md) from global, ancestor and cwd scopes
+      # Instructions (CLAUDE.md, AGENTS.md, ...) from global, ancestor and cwd scopes
       ResourceLoader.instruction_sections(cwd),
+      # Rule files (.cursor/rules, .windsurf/rules, .lemon/rules, ...)
+      Rules.sections(cwd),
       top_level(:system_prompt, "Environment", environment)
     ]
     |> List.flatten()
