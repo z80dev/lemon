@@ -47,7 +47,7 @@ defmodule CodingAgent.ExecutionNode.Capabilities do
   end
 
   defp shell(probe, catalog) do
-    tools = select(catalog, ~w(bash bash_output kill_process))
+    tools = select(catalog, ~w(bash bash_output kill_process lsp_diagnostics))
     supported = is_binary(probe.executable("python3")) and probe.shell_available?()
     level = if supported and "bash" in tools, do: "read_interact", else: "off"
     item("terminal", "Terminal", "shell", supported, level, "not_required", if(supported, do: tools, else: []),

@@ -13,9 +13,9 @@ defmodule LemonCore.StoreSecretRedactionTest do
     def list(state, _), do: {:ok, [], state}
   end
 
-  test "vault and key-lock write diagnostics never expose private keys or backend fingerprints" do
+  test "vault, key-lock and native process receipt diagnostics never expose private inputs or fingerprints" do
     server = start_supervised!({Store, name: __MODULE__.Store, backend: RefusingBackend})
-    for table <- [:secrets_v1, :secrets_lock] do
+    for table <- [:secrets_v1, :secrets_lock, :node_process_receipts] do
       logs = capture_log(fn ->
         assert {:error, _} = Store.put(server, table, {"private-owner", "private-secret-name"}, %{"private" => "private-value"})
         assert {:error, _} = Store.put_new(server, table, {"private-owner", "private-secret-name"}, %{"private" => "private-value"})

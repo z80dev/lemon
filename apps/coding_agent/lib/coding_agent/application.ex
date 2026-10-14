@@ -30,6 +30,7 @@ defmodule CodingAgent.Application do
       CodingAgent.MutationLock,
       CodingAgent.FileReadTracker,
       CodingAgent.ExecutionNode.FileService,
+      CodingAgent.ExecutionNode.ProcessService,
       CodingAgent.SessionSupervisor,
       CodingAgent.BackgroundRun.Supervisor,
       CodingAgent.Wasm.SidecarSupervisor,

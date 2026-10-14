@@ -89,6 +89,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   fences; label records and enrollment proofs support reliable reconciliation.
   Machine inspection reports measured host resources and explicit capability/
   OS-grant states without fabricated metrics or permissions.
+  Supported shell inventory includes the actual registered `lsp_diagnostics`
+  builtin for destination-local checks; diagnostics remain file-and-shell
+  read-interact operations with tool approval, never baseline permission.
 - Worker compatibility is measured by `lemon node capabilities --json --require-bot`
   and authenticated `node.runtime.features`, not inferred from a release number.
   Invite commands select the actual integrated source checkout or an explicitly
@@ -236,6 +239,24 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   survive remote execution metadata encoding under atom or string/camel aliases.
 - Lemon Bot host management and probes require direct noninteractive native
   destination process execution; PTY is reserved for user-facing terminals.
+- Private invocation proof secrets use the owning pending lineage destination
+  and atomically pin both live PID and credential generation before provisioning.
+  Only strict absence permits a fresh root; stale/mismatched/finished lineage
+  never falls back. Trim-normalized reserved names require their exact fixed
+  operation ID, and missing privacy support rejects before any proof value is sent.
+  Successful vault replies are revalidated against the same pre-provision session
+  and current owning pending target before acknowledgement; lost ownership or
+  configuration/policy changes report a non-retry-safe potentially applied mutation,
+  never a positive private proof authority acknowledgement.
+- Automated host-driver actions and read-only probes can use admin-only
+  `node.process.run|get|cancel`: literal executable argv, descriptor-admitted
+  destination cwd, bounded raw stdin with EOF, independent non-TTY stdout/stderr,
+  and observed exit receipts. Fixed IDs persist immutable private admission and
+  spent/cancel fences; uncertain work is queried, never redispatched. Cancellation
+  before admission durably prevents a later run, and active cancellation/timeout/
+  overflow cleans the real process group. Outputs stay private to the RPC caller,
+  missing output is null rather than invented empty data, and interactive PTYs
+  remain exclusively explicit user terminals—no automated PTY/shell/SSH fallback.
 
 ---
 

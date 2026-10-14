@@ -782,8 +782,9 @@ or general events; audit lines contain only operation and outcome classification
 `node.invoke` cannot bypass the admin-scoped file, secret or terminal methods.
 
 Internal callers inspecting a node before dispatch can pin that live connection
-with `NodeRegistry.invoke_node(..., expected_pid: inspected.pid)`. A reconnect
-returns the definite pre-dispatch error `{:node_connection_changed,nodeId}`.
+with `NodeRegistry.invoke_node(..., expected_pid: inspected.pid,
+expected_generation: inspected.generation)`. PID replacement or credential
+generation change returns the definite pre-dispatch error `{:node_connection_changed,nodeId}`.
 Private native requests also require `required_native_privacy_context: 1`, which
 checks the actual resolved connection's nested
 `capabilities["coding_agent.run"]["nativePrivacyContext"] == {"version":1}`
@@ -811,6 +812,9 @@ post-response privacy check.
 | `node.secrets.list` | admin | `{nodeId}` | `{names,limit,truncated}` |
 | `node.secrets.delete` | admin | `{nodeId,name}` | `{name,deleted:true}` |
 | `node.secrets.receipt` | admin | `{nodeId,operationId}` | `{nodeId,operationId,status,name,currentBindingMatches}` |
+| `node.process.run` | admin | `{nodeId,processId,cwd,argv,stdinBase64,timeoutMs,maxOutputBytes}` (all required) | `{processId,nodeId,state,exitCode,stdoutBase64,stderrBase64,outputTruncated}` |
+| `node.process.get` | admin (read-only) | `{nodeId,processId}` | Same receipt; additionally permits `state:"not_found"` |
+| `node.process.cancel` | admin | `{nodeId,processId}` | Same receipt; absent ID becomes a durable cancelled tombstone |
 | `node.shell.open` | admin | `{nodeId,cwd?,cols?,rows?}` | `{shellId}` |
 | `node.shell.input` | admin | `{shellId,dataBase64}` | `{shellId,accepted:true}` |
 | `node.shell.resize` | admin | `{shellId,cols,rows}` | `{shellId,accepted:true}` |
@@ -891,6 +895,30 @@ capacity fails closed without evicting proof. `secret_store_failed`, timeouts an
 transport loss can be ambiguous and must be reconciled. Vault/lease diagnostics
 are content-free, including failure logs.
 
+Reserved private invocation proof names `lemon_bot/invocations/<runId>` require
+`operationId` exactly equal to that run ID. The controller queries the owning
+`NativeLineage.pending_destination(runId,nodeId)` before provisioning: a pending
+follow-up must retain its sealed exact node/PID/generation; only strict owning
+Store absence permits a new pre-admission root and fresh live-ID inspection.
+Existing nonpending/terminal/malformed rows, target/profile/session mismatch and
+query failure never fall back to root provisioning. Both paths require privacy
+protocol v1 and pin PID/generation atomically in dispatch before sending the proof
+value. Names are inspected after the same trim normalization used by the vault,
+so decorated names cannot bypass this guard. No caller-supplied flag grants this
+authority; raw `node.invoke` remains forbidden for secret methods. Ordinary
+secret operations and read-only reconciliation retain their original behavior.
+
+After a successful awaited vault reply, the wrapper rechecks the owning lineage
+and the **same pre-provision PID/generation** plus current privacy capability
+before acknowledging success. Current pending target configuration/policy changes
+or ownership loss cannot become a positive proof acknowledgement. Pending lookup
+disappearance never becomes a fresh-root fallback; an initial root must remain
+strictly absent from admission. Failure returns `UNAVAILABLE` with
+`reason:private_proof_acknowledgement_changed`, `preDispatch:false`,
+`retrySafe:false`, and `mutationMayHaveApplied:true`: the value may already be
+durable, so do not replay. This acknowledgement is not model authority; actual
+root admission still validates placement, configuration and policy.
+
 Capability items contain `{id,name,category,supported,configuredLevel,osGrant,
 tools,reason,measuredAtMs,stale}`. Categories are `files|shell|browser|connector|os_app`,
 levels `off|read_only|read_interact`, and OS grant states
@@ -901,6 +929,78 @@ checks; unavailable inspection stays unknown, never fabricated denial or grant.
 Full Disk Access has no supported nonprompting macOS query and remains unknown.
 Connector authorization is session-scoped, not invented from method names.
 These measurements are not per-bot grants or an OS sandbox.
+The shell tool inventory includes `lsp_diagnostics` only when that exact native
+tool is in the actual registry and destination shell machinery is supported.
+It resolves destination workspace files and can execute local language checkers;
+it is not baseline/read-only access. Product diagnostics require effective files
+**and** shell `read_interact` ceilings and normal tool approvals. Installed language
+checker availability remains the diagnostic tool's actual result, not an OS grant.
+
+### Native automated processes
+
+`node.process.*` is the non-PTY destination-native execution path for automated
+HostDriver actions and probes. All three methods require operator `admin` and
+dispatch asynchronously; `run` awaits the bounded final receipt, while `get`
+only reads a fixed-ID receipt and never starts or replays work. Interactive
+`node.shell.*` terminals remain unchanged. There is no shell-string, PTY, SSH,
+or named-node fallback for native process requests.
+
+Every run field is required; no environment, shell, TTY, or client admission
+options are accepted. `processId` is 1–128 ASCII letters/digits/`_`/`:`/`-`.
+`argv` is 1–128 literal UTF-8 strings without NUL; each and their total are at
+most 131,072 bytes, with a nonempty executable in `argv[0]`. Later empty
+arguments are valid. `cwd` is a nonempty UTF-8 path of at most 4096 bytes without
+NUL or traversal, admitted and descriptor-pinned under the destination's home
+and explicit `--allowed-root` roots. `stdinBase64` is standard base64 decoding
+to at most 1 MiB (empty is allowed); stdin closes at EOF. `maxOutputBytes` is
+1–1,048,576 **combined** stdout/stderr bytes. `timeoutMs` is 1000–1,800,000
+(30 minutes). Run's broker deadline is `timeoutMs + 5000`; the local await
+allows another 1000 ms. Get/cancel use the normal 30-second broker budget.
+
+The method resolves the actual durable `nodeId` and internally pins its PID
+and generation. Registry admission requires `required_process_execution: 1`
+and actual version-1 descriptors for all three process methods before delivery;
+caller-supplied options and generic `node.invoke` cannot bypass this boundary.
+The broker supplies authenticated `nodeGeneration`, never a caller generation.
+
+The frozen seven-field receipt has state `running|completed|cancelled|outcome_unknown`
+(get additionally `not_found`). `exitCode` is an integer only for an observed
+OS exit, otherwise null. A `completed` receipt requires that observed integer
+exit, even when captured output is unavailable; null exit is not completion
+evidence. Output strings represent captured bytes; `""` means actually measured
+zero bytes, not absent output. Unavailable outputs are
+null/null with `outputTruncated:true`; running, unknown and not-found receipts
+also have null exit. Restarted receipts retain known state/exit but do not
+persist raw output. Missing receipt fields fail closed rather than being filled
+with fabricated empty output. A transport failure stays an error, not an
+execution receipt or proof of absence.
+
+Choose the fixed ID before first intent and retain it across controller timeouts.
+Never redispatch uncertain execution: reconcile with `get` on the original
+node/ID. Only a successful strict destination Store absence read can return
+`not_found`; offline/error is not absence. Cancel of an absent ID durably writes
+a tombstone before acknowledgment so a racing later run cannot start. Active
+cancellation is bound to the original authenticated owning node/generation;
+a replacement worker cannot cancel its predecessor's job, although get can
+read its receipt. Timeout/overflow/cancellation clean up the process group and
+descendants where supported, without inventing an exit code.
+
+The narrow worker owner admits at most 16 active processes and retains at most
+1,000 durable fixed-ID fences across its destination service. Spent IDs and cancel
+tombstones do **not** expire: exhaustion returns `process_receipt_limit` before
+new execution, never deletes a fence to make an old ID runnable. Automated
+inspection/probe intents consume this capacity too; operators must provision a
+destination with available admission capacity rather than clear/reuse spent IDs.
+Captured output is volatile, limited to 16 completed receipts and a 24-hour cache
+lifetime; cache loss never erases original status/exit or allows redispatch.
+
+Argv, stdin and captured output are private to the authenticated request/response
+transport and never enter general events, model context, logs, or durable process
+receipt content. Keep credential-bearing inputs and outputs in a trusted backend
+over `wss://` or a trusted encrypted overlay. See the exact request examples and
+reconciliation workflow in [node files, secrets and native processes](../../docs/user-guide/node-files-and-secrets.md#native-processes).
+
+### Interactive terminals
 
 Terminals use a real worker PTY (`python3` required), with the destination login
 shell and worker default cwd unless specified. Cwd is opened through the same
