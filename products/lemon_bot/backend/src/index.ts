@@ -16,6 +16,7 @@ import { createRealtime, type RealtimeData, type RealtimeService } from './core/
 import { createSyncRoutes } from './core/sync';
 import { createLemonService } from './runtime/lemon';
 import { createRuntimeService } from './runtime/runs';
+import { createRuntimeAdmissionRoutes } from './runtime/admission';
 import { createMachineRoutes, refreshMachines } from './runtime/machines';
 import { getTerminalService, type TerminalService } from './runtime/terminals';
 import { createBotRoutes, createBotService, syncBotProfile } from './core/bots';
@@ -78,7 +79,8 @@ export async function createBackend(config:BackendConfiguration,key:Uint8Array):
     ...createAccountRoutes(services,hooks),...createSyncRoutes(services),...createMachineRoutes(services),
     ...createBotRoutes(services),...createConversationRoutes(services),...createMcpRoutes(services),
     ...createGateRoutes(services),...createResourceRoutes(services),...createAttachmentRoutes(services),
-    ...createVoiceRoutes(services),...createExperienceRoutes(services),...createIntegrationRoutes(services)
+    ...createVoiceRoutes(services),...createExperienceRoutes(services),...createIntegrationRoutes(services),
+    ...createRuntimeAdmissionRoutes(services)
   ]);
   if(!store.metadata<string>('workspaceId')){
     let code:string;const encrypted=store.metadata<string>('setupCode');
