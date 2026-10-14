@@ -223,6 +223,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Setup verification resolves canonical credential authority and effective
+  endpoint/model settings, preventing OAuth-record disclosure and false successful
+  skips for unavailable selected logins. Offline, keyless and credential-pool
+  behavior remain supported.
+
 - Failed selected OAuth logins cannot borrow static or environment credentials
   or transmit encoded OAuth records. Successful access-token authority and
   explicit credential-pool/default fallback remain supported.

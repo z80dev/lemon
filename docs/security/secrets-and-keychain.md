@@ -38,6 +38,13 @@ Normal API-key and keyless requests keep their existing resolution behavior.
 Low-level Anthropic-protocol calls use only the target provider's environment
 variables; `ANTHROPIC_API_KEY` is not an implicit key for Kimi or another provider.
 
+Setup verification uses the same credential resolver and effective provider/model
+configuration as native requests. Its lightweight models request sends the resolved
+access credential, never the stored OAuth record or refresh token. An unavailable
+selected login fails verification before HTTP; it is not a successful skipped check.
+Explicit offline verification and legitimate keyless endpoints remain supported.
+Credential-pool/default policy and provider/model header precedence are unchanged.
+
 ## Keychain Error Semantics (Current Contract)
 
 `LemonCore.Secrets.Keychain` maps command outcomes to stable errors:

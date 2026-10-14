@@ -117,8 +117,8 @@ defmodule LemonCli.Setup.ProviderTest do
         )
 
       assert result == :ok
-      # The live verifier received the stored credential and the registry's
-      # endpoint details for the selected model.
+      # The live verifier receives the resolved credential and the effective
+      # endpoint for the selected model (the registry default in this config).
       assert_received {:live_check,
                        %{
                          provider: "openai",

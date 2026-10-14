@@ -137,16 +137,20 @@ defmodule LemonCli.Setup.Provider do
 
   defp verify_onboarded_config(args, skip_verify?, io, opts) do
     config_path = extract_config_path(args)
+    provider_state = Verification.setup_state(config_path: config_path).provider
 
-    if Verification.setup_state(config_path: config_path).provider.complete do
+    if provider_state.provider && provider_state.model do
       io.info.("")
       io.info.("Verifying provider configuration...")
 
-      case Verification.verify_provider(
-             config_path: config_path,
-             verifier: Keyword.get(opts, :verifier),
-             skip_verify: skip_verify?
-           ) do
+      verification_opts =
+        opts
+        |> Keyword.take([:verifier, :config, :verification_model, :cwd])
+        |> Keyword.put(:config_path, config_path)
+        |> Keyword.put(:skip_verify, skip_verify?)
+        |> Verification.verification_options()
+
+      case Verification.verify_provider(verification_opts) do
         {:ok, %{provider: provider, model: model, live: live} = result} ->
           io.info.(
             "Provider configuration verified: #{provider} / #{model} " <>
