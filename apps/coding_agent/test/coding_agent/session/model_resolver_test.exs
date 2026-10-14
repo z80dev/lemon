@@ -6,10 +6,15 @@ defmodule CodingAgent.Session.ModelResolverTest do
 
   setup do
     saved_env =
-      Map.new(["OPENAI_API_KEY", "AZURE_OPENAI_API_KEY"], fn key -> {key, System.get_env(key)} end)
+      Map.new(
+        ~w(OPENAI_API_KEY AZURE_OPENAI_API_KEY LEMON_DEFAULT_PROVIDER LEMON_DEFAULT_MODEL),
+        fn key -> {key, System.get_env(key)} end
+      )
 
     System.delete_env("OPENAI_API_KEY")
     System.delete_env("AZURE_OPENAI_API_KEY")
+    System.delete_env("LEMON_DEFAULT_PROVIDER")
+    System.delete_env("LEMON_DEFAULT_MODEL")
 
     # Other tests in the suite may trip the global LemonAi circuit breakers
     # for these real provider names; open breakers demote candidates in
@@ -40,6 +45,92 @@ defmodule CodingAgent.Session.ModelResolverTest do
     assert model.provider == :"openai-codex"
     assert model.api == :openai_codex_responses
     assert model.id == "gpt-6.1-sol"
+  end
+
+  test "qualified custom defaults use the same model as an explicit selector" do
+    providers = %{
+      "resolver-gateway" => %{
+        api: "openai_completions",
+        base_url: "http://127.0.0.1:1/v1",
+        auth: "none",
+        models: [%{id: "execution"}]
+      }
+    }
+
+    for selector <- ["resolver-gateway:execution", "resolver-gateway/execution"] do
+      agent =
+        LemonCore.Config.Agent.resolve(%{
+          "defaults" => %{"model" => selector},
+          "runtime" => %{"provider_routing" => %{"enabled" => false}}
+        })
+
+      settings =
+        SettingsManager.from_config(%LemonCore.Config{
+          agent: Map.from_struct(agent),
+          providers: providers
+        })
+
+      model = ModelResolver.resolve_session_model(nil, settings)
+      assert model == ModelResolver.resolve_session_model(selector, settings)
+
+      assert {model.provider, model.id, model.api} ==
+               {"resolver-gateway", "execution", :openai_completions}
+
+      assert model.base_url == "http://127.0.0.1:1/v1"
+      assert model.compat.allow_missing_api_key
+    end
+  end
+
+  test "a qualified default routes candidates for its selected provider and unqualified id" do
+    settings = %SettingsManager{
+      default_model: %{provider: :anthropic, model_id: "openai:gpt-4", base_url: nil},
+      providers: %{
+        "openai" => %{},
+        "azure_openai_responses" => %{api_key: "azure-ready-key"}
+      },
+      provider_routing: %{
+        enabled: true,
+        fallback_providers: ["azure_openai_responses"],
+        require_credentials: true
+      }
+    }
+
+    model = ModelResolver.resolve_session_model(nil, settings)
+    assert {model.provider, model.id} == {:azure_openai_responses, "gpt-4"}
+  end
+
+  test "default resolution preserves provider-native colon ids" do
+    settings = %SettingsManager{
+      default_model: %{provider: :ollama, model_id: "qwen3:32b", base_url: nil},
+      provider_routing: %{enabled: false}
+    }
+
+    model = ModelResolver.resolve_session_model(nil, settings)
+    assert {model.provider, model.id, model.api} == {:ollama, "qwen3:32b", :openai_completions}
+  end
+
+  test "a configured provider's own qualified-looking model id remains authoritative" do
+    settings = %SettingsManager{
+      default_model: %{provider: "resolver-gateway", model_id: "openai:gpt-4", base_url: nil},
+      providers: %{
+        "resolver-gateway" => %{
+          api: "openai_completions",
+          base_url: "http://127.0.0.1:1/v1",
+          auth: "none",
+          models: [%{id: "openai:gpt-4"}]
+        }
+      },
+      provider_routing: %{enabled: false}
+    }
+
+    model = ModelResolver.resolve_session_model(nil, settings)
+    assert {model.provider, model.id} == {"resolver-gateway", "openai:gpt-4"}
+
+    assert model ==
+             ModelResolver.resolve_session_model(
+               %{provider: "resolver-gateway", model_id: "openai:gpt-4"},
+               settings
+             )
   end
 
   test "default model routing falls back to a ready provider with the same model id" do
