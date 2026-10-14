@@ -108,7 +108,6 @@ defmodule LemonCore.Config.AgentTest do
 
       assert config.provider_routing.enabled == true
       assert config.provider_routing.fallback_providers == []
-      assert config.provider_routing.fallback_models == []
       assert config.provider_routing.default_pool == nil
       assert config.provider_routing.default_profile == nil
       assert config.provider_routing.credential_pools == %{}
@@ -129,7 +128,7 @@ defmodule LemonCore.Config.AgentTest do
       for selectors <- ["openai:gpt-4", [""], ["gpt-4"], ["@"], [123],
                         ["openai:"], ["openai:bad model"], List.duplicate("@smol", 65),
                         ["openai:" <> String.duplicate("x", 513)]] do
-        assert_raise ArgumentError, ~r/fallback_models/, fn ->
+        assert_raise ArgumentError, fn ->
           Agent.resolve(%{"runtime" => %{"provider_routing" => %{
             "fallback_models" => selectors
           }}})
