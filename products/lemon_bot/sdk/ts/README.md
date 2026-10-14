@@ -46,6 +46,8 @@ try {
 
 `LemonBotError` exposes `code`, `message`, `requestId`, `status`, `retrySafe`, `details`, `outcomeUnknown`, `clientNonce`, `resourceIds`, `currentRevision` and `currentResource`. `status:0` means no HTTP response. Reserved IDs and server details survive errors. A network loss or unreadable receipt after mutation dispatch is `outcome_unknown`, with `retrySafe:false`; an authoritative 2xx receipt containing an unknown outcome is also rejected as `LemonBotError`, with its receipt in `currentResource`. A signal already aborted before dispatch is not an unknown mutation. Offline/read errors reject and never become empty collections. `retrySafe` is server information, not permission for the SDK to repeat anything. Reconciliation is explicit GET only; unknown resource/run states remain unknown until verified.
 
+A mixed group receipt may contain `delivery.effectiveMode:"rejected"` while other targets are admitted. That is a successful typed receipt, not blanket uncertainty: inspect the referenced `receipt.runs` row's actual error. A proven zero-admission error remains its policy/machine refusal and may carry saved `entryIds`/`runIds` in details; `resourceIds` includes these IDs, and the original nonce remains available for GET reconciliation. Correcting a prerequisite does not automatically resend the recorded message or admitted targets.
+
 ## Real attachment bytes and voice
 
 ```ts

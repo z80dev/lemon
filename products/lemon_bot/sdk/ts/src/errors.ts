@@ -31,10 +31,14 @@ export class LemonBotError extends Error {
     this.status = context.status ?? 0;
     this.clientNonce = context.clientNonce;
     const ids = error.details?.resourceIds;
+    const entryIds = error.details?.entryIds;
+    const runIds = error.details?.runIds;
     const runId = error.details?.runId;
     const resourceId = error.details?.resourceId;
     this.resourceIds = [...new Set([
       ...(Array.isArray(ids) ? ids.filter((id): id is string => typeof id === 'string') : []),
+      ...(Array.isArray(entryIds) ? entryIds.filter((id): id is string => typeof id === 'string') : []),
+      ...(Array.isArray(runIds) ? runIds.filter((id): id is string => typeof id === 'string') : []),
       ...(typeof runId === 'string' ? [runId] : []),
       ...(typeof resourceId === 'string' ? [resourceId] : []),
       ...(context.resourceIds ?? []),

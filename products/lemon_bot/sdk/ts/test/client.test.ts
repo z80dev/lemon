@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { LemonBotClient, LemonBotError, nonce } from '../src/index.ts';
-import type { Download } from '../src/index.ts';
-import { attachment, fetchBoundary, snapshot } from './fixtures.ts';
+import type { Download, MessageReceipt, Run } from '../src/index.ts';
+import { attachment, entry, fetchBoundary, snapshot } from './fixtures.ts';
 
 const origin = 'https://bot.example';
 
@@ -184,5 +184,52 @@ describe('typed client at the fetch boundary', () => {
     expect(new URL(boundary.requests[0]!.url).pathname).toBe('/hooks/routine_1');
     expect(await client.call('GET /auth/oidc/callback/:providerId', { params: { providerId: 'oidc_1' }, query: { state: 'state', code: 'code' } })).toEqual({ status: 302, location: 'lemonbot://auth/complete?completionCode=one-use' });
     expect(await client.call('DELETE /scim/v2/Users/:id', { params: { id: 'user_1' }, ifMatch: '"revision-3"' })).toBeUndefined();
+  });
+
+  test('mixed group receipt preserves proven rejection without fencing admitted work', async () => {
+    const clientNonce = nonce();
+    const refused: Run = {
+      id: 'run_refused', revision: 1, createdAtMs: 1, updatedAtMs: 2,
+      conversationId: 'conversation_1', botId: 'bot_refused', initiatorUserId: 'user_1',
+      clientNonce, status: 'failed', startedAtMs: null, completedAtMs: 2, routineRunId: null,
+      error: { code: 'policy_denied', message: 'Spend ceiling reached.', requestId: 'admission_1', retrySafe: true },
+    };
+    const admitted: Run = { ...refused, id: 'run_admitted', botId: 'bot_admitted', status: 'running', error: null, startedAtMs: 2, completedAtMs: null };
+    const receipt: MessageReceipt = {
+      clientNonce, status: 'accepted',
+      entries: [{ ...entry, clientNonce, actor: { kind: 'user', id: 'user_1', displayName: 'Owner' }, role: 'user', text: 'Compare both reports', streaming: false, runId: null }],
+      runs: [admitted, refused],
+      delivery: [
+        { botId: admitted.botId, requestedMode: 'followup', effectiveMode: 'started', targetRunId: null, runId: admitted.id },
+        { botId: refused.botId, requestedMode: 'followup', effectiveMode: 'rejected', targetRunId: null, runId: refused.id },
+      ],
+    };
+    const boundary = fetchBoundary(() => Response.json(receipt, { status: 202 }));
+    const client = new LemonBotClient({ baseUrl: origin, fetch: boundary.clientFetch });
+    const actual = await client.call('POST /conversations/:id/messages', { params: { id: 'conversation_1' }, body: { text: 'Compare both reports', clientNonce } });
+    expect(actual).toEqual(receipt);
+    expect(actual.runs.find(run => run.id === actual.delivery[1]!.runId)?.error?.code).toBe('policy_denied');
+    expect(actual.delivery[0]?.effectiveMode).toBe('started');
+    expect(boundary.requests).toHaveLength(1);
+  });
+
+  test('zero-admission refusal retains saved entry/run IDs and reconciles by GET without replay', async () => {
+    const clientNonce = nonce();
+    const boundary = fetchBoundary(request => {
+      if (request.method === 'POST') return Response.json({ error: {
+        code: 'policy_denied', message: 'No target admitted.', requestId: 'refusal_1', retrySafe: true,
+        details: { entryIds: ['entry_refused'], runIds: ['run_refused'], clientNonce },
+      } }, { status: 403 });
+      expect(new URL(request.url).pathname).toBe('/v1/runs');
+      expect(new URL(request.url).searchParams.get('clientNonce')).toBe(clientNonce);
+      return Response.json({ items: [], nextCursor: null });
+    });
+    const client = new LemonBotClient({ baseUrl: origin, fetch: boundary.clientFetch });
+    await expect(client.call('POST /conversations/:id/messages', { params: { id: 'conversation_1' }, body: { text: 'Start if allowed', clientNonce } })).rejects.toMatchObject({
+      code: 'policy_denied', outcomeUnknown: false, retrySafe: true, clientNonce,
+      resourceIds: ['entry_refused', 'run_refused', 'conversation_1'], requestId: 'refusal_1',
+    });
+    await client.reconcileRuns(clientNonce);
+    expect(boundary.requests.map(request => request.method)).toEqual(['POST', 'GET']);
   });
 });
