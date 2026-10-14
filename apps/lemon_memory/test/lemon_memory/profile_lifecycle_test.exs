@@ -108,6 +108,26 @@ defmodule LemonMemory.ProfileLifecycleTest do
     refute Map.has_key?(Project.history_metadata(%{profile_id: "../escape"}), "home_digest")
   end
 
+  test "managed queries accept 512 Unicode codepoints without changing lexical matching", ctx do
+    :ok = Store.put_sync(ctx.store, document(ctx, "unicode-query", "Release review"))
+    query = String.duplicate("é", 504) <> " release"
+    assert length(String.codepoints(query)) == 512
+    assert byte_size(query) > 256
+    assert Lifecycle.valid_profile_query?(query)
+    assert Lifecycle.valid_profile_query?(String.duplicate("😀", 512))
+    assert Lifecycle.valid_profile_query?("")
+    refute Lifecycle.valid_profile_query?(nil)
+    assert {:ok, %{items: [item]}} = Lifecycle.profile_list(ctx.context, query, ctx.opts)
+    assert item["text"] == "Release review"
+    assert {:ok, %{items: []}} = Lifecycle.profile_list(ctx.context, String.duplicate("😀", 512), ctx.opts)
+    for query <- [String.duplicate("a", 513), String.duplicate("e\u0301", 257),
+                  String.duplicate("😀", 513), <<255>>, "query\0value"] do
+      assert {:error, :invalid_query} = Lifecycle.profile_list(ctx.context, query, ctx.opts)
+      refute Lifecycle.valid_profile_query?(query)
+    end
+    assert {:error, :invalid_query} = Lifecycle.list(%{query: String.duplicate("a", 257)}, ctx.opts)
+  end
+
   defp document(ctx, suffix, text) do
     Document.new(
       doc_id: "mem_#{suffix}", agent_id: ctx.context.agent_id,

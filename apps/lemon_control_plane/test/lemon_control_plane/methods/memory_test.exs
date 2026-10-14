@@ -134,6 +134,90 @@ defmodule LemonControlPlane.Methods.MemoryTest do
     :ok = NodeRegistry.unregister(node_id, self())
   end
 
+  test "local explicit memory scope is echoed and exact IDs do not authorize another actor", %{ctx: ctx} do
+    a = %{"profileId" => "memory-alpha", "memoryScope" => "private", "memoryContextKey" => "actor-a"}
+    b = %{a | "memoryContextKey" => "actor-b"}
+    assert {:ok, %{"item" => item, "memoryScope" => "private", "memoryContextKey" => "actor-a"}} =
+      MemoryAdd.handle(Map.put(a, "text", "Private actor preference."), ctx)
+    assert item["source"] == "durable"
+    assert {:ok, %{"items" => [^item], "memoryScope" => "private", "memoryContextKey" => "actor-a"}} =
+      MemoryList.handle(a, ctx)
+    assert {:ok, %{"items" => []}} = MemoryList.handle(b, ctx)
+    assert {:error, {:not_found, _}} = MemoryGet.handle(Map.put(b, "id", item["id"]), ctx)
+    assert {:error, {:not_found, _}} = MemoryDelete.handle(
+      Map.merge(b, %{"id" => item["id"], "confirm" => item["id"]}), ctx)
+    assert {:error, {:invalid_request, _}} = MemoryList.handle(Map.delete(a, "memoryContextKey"), ctx)
+    shared = %{"profileId" => "memory-alpha", "memoryScope" => "shared", "memoryContextKey" => nil}
+    assert :ok = Schemas.validate("memory.list", shared)
+    assert {:ok, %{"items" => [], "memoryScope" => "shared", "memoryContextKey" => nil}} =
+      MemoryList.handle(shared, ctx)
+    assert {:ok, %{"deleted" => true, "memoryScope" => "private", "memoryContextKey" => "actor-a"}} =
+      MemoryDelete.handle(Map.merge(a, %{"id" => item["id"], "confirm" => item["id"]}), ctx)
+  end
+
+  test "scoped remote methods refuse old capabilities before any private mutation is enqueued", %{ctx: ctx} do
+    suffix = System.unique_integer([:positive])
+    node_id = "memory-old-scope-#{suffix}"
+    name = "memory-old-scope-worker-#{suffix}"
+    :ok = NodeRegistry.register(node_id, name, self(), %{capabilities: %{"memory.add" => %{"version" => 1}}})
+    on_exit(fn -> NodeRegistry.unregister(node_id, self()) end)
+    {:ok, _} = ProfileStore.create(%{"id" => "memory-old-scoped", "node" => name})
+    base = %{"profileId" => "memory-old-scoped", "memoryScope" => "private", "memoryContextKey" => "actor-a"}
+    for {handler, extra} <- [{MemoryList, %{}}, {MemorySearch, %{"query" => "tea"}},
+      {MemoryGet, %{"id" => "durable_known"}}, {MemoryAdd, %{"text" => "Must remain private."}},
+      {MemoryDelete, %{"id" => "durable_known", "confirm" => "durable_known"}}] do
+      assert {:error, {:unavailable, _}} = handler.handle(Map.merge(base, extra), ctx)
+    end
+    refute_receive {:node_event, "node.invoke.request", _}
+    :ok = NodeRegistry.unregister(node_id, self())
+  end
+
+  test "scoped remote arguments and replies require the same exact context echo", %{ctx: ctx} do
+    suffix = System.unique_integer([:positive])
+    node_id = "memory-scope-#{suffix}"
+    name = "memory-scope-worker-#{suffix}"
+    capabilities = Map.new(["memory.list", "memory.search"], &{&1, %{"version" => 1, "contextVersion" => 1}})
+    :ok = NodeRegistry.register(node_id, name, self(), %{capabilities: capabilities})
+    on_exit(fn -> NodeRegistry.unregister(node_id, self()) end)
+    {:ok, _} = ProfileStore.create(%{"id" => "memory-scoped-remote", "node" => name})
+    params = %{"profileId" => "memory-scoped-remote", "memoryScope" => "private",
+      "memoryContextKey" => "actor-a", "query" => "tea", "limit" => 3}
+    for reply <- [%{"items" => [], "nextCursor" => nil},
+      %{"items" => [], "nextCursor" => nil, "memoryScope" => "private", "memoryContextKey" => "actor-b"}] do
+      task = Task.async(fn -> MemorySearch.handle(Map.put(params, "callback", self()), ctx) end)
+      assert_receive {:node_event, "node.invoke.request", payload}, 1_000
+      assert payload["nodeId"] == node_id
+      assert payload["args"] == params
+      assert Jason.decode!(Jason.encode!(payload["args"])) == params
+      :ok = NodeRegistry.complete(node_id, payload["invokeId"], %{"ok" => true, "payload" => reply})
+      assert {:error, {:unavailable, _}} = Task.await(task)
+    end
+    task = Task.async(fn -> MemorySearch.handle(params, ctx) end)
+    assert_receive {:node_event, "node.invoke.request", payload}, 1_000
+    reply = %{"items" => [], "nextCursor" => nil, "memoryScope" => "private", "memoryContextKey" => "actor-a"}
+    :ok = NodeRegistry.complete(node_id, payload["invokeId"], %{"ok" => true, "payload" => reply})
+    assert Task.await(task) == {:ok, reply}
+    shared = %{"profileId" => "memory-scoped-remote", "memoryScope" => "shared", "memoryContextKey" => nil}
+    shared_task = Task.async(fn -> MemoryList.handle(shared, ctx) end)
+    assert_receive {:node_event, "node.invoke.request", shared_payload}, 1_000
+    assert shared_payload["args"] == shared
+    shared_reply = Map.merge(shared, %{"items" => [], "nextCursor" => nil}) |> Map.delete("profileId")
+    :ok = NodeRegistry.complete(node_id, shared_payload["invokeId"], %{"ok" => true, "payload" => shared_reply})
+    assert Task.await(shared_task) == {:ok, shared_reply}
+    :ok = NodeRegistry.unregister(node_id, self())
+  end
+
+  test "managed RPC search preserves full 512-codepoint Unicode queries", %{ctx: ctx} do
+    scope = %{"profileId" => "memory-alpha", "memoryScope" => "private", "memoryContextKey" => "unicode-query"}
+    query = String.duplicate("界", 512)
+    assert {:ok, %{"item" => item}} = MemoryAdd.handle(Map.put(scope, "text", query), ctx)
+    assert {:ok, %{"items" => [^item]}} = MemorySearch.handle(Map.put(scope, "query", query), ctx)
+    for invalid <- [query <> "界", String.duplicate("e\u0301", 257), <<255>>] do
+      assert {:error, {:invalid_request, _}} =
+        MemorySearch.handle(Map.put(scope, "query", invalid), ctx)
+    end
+  end
+
   test "lost remote mutation result is not advertised as retry-safe", %{ctx: ctx} do
     suffix = System.unique_integer([:positive])
     node_id = "memory-unknown-#{suffix}"

@@ -126,6 +126,7 @@ defmodule LemonMemory.StorePerfTest do
       outcome: :unknown,
       meta: %{}
     }
+    |> Document.with_index()
 
     # Insert noise documents without the unique word
     Enum.each(1..50, fn i -> Store.put(pid, make_doc(session, i)) end)
@@ -206,6 +207,7 @@ defmodule LemonMemory.StorePerfTest do
       outcome: :unknown,
       meta: %{}
     }
+    |> Document.with_index()
   end
 
   defp eventually(fun, attempts) when attempts > 0 do

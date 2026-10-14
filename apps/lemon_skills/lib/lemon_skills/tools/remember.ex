@@ -1,14 +1,15 @@
 defmodule LemonSkills.Tools.Remember do
   @moduledoc """
-  The `remember` tool: persist, correct, or delete a durable fact in the
-  assistant-home `USER.md` (who the user is, their preferences), `MEMORY.md`
-  (curated long-term facts), or scoped project memory in `LemonMemory.Project`.
+  Persist, correct, or delete a durable fact through its owning memory service.
 
-  Both files are loaded into every main-session system prompt as workspace
-  bootstrap files, so a remembered fact is in front of the model on the next
-  turn without any further tool call. Writes are guarded against secrets,
-  invisible or bidirectional control characters, and prompt-injection text, and
-  each file is kept compact (`USER.md` 1,375 and `MEMORY.md` 2,200 characters).
+  Verified context-owned sessions keep user/memory preferences in the existing
+  scoped Store. They never write shared USER.md/MEMORY.md files. A trusted
+  runtime shared-memory grant allows only the explicit mutation to create shared
+  canonical facts; tool input cannot select or attest that grant. Unproven
+  context ownership fails closed. Legacy non-context sessions retain the
+  assistant-home file behavior. Project learnings use `LemonMemory.Project`.
+
+  All writes retain secret, invisible-control and prompt-injection screening.
 
   One call shape per intent:
 
@@ -24,7 +25,7 @@ defmodule LemonSkills.Tools.Remember do
   alias LemonAgent.AbortSignal
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAi.Types.TextContent
-  alias LemonMemory.Project
+  alias LemonMemory.{ContextScope, Preferences, Project}
   alias LemonSkills.WorkspacePreferences
 
   @max_text_bytes 4_096
@@ -32,9 +33,10 @@ defmodule LemonSkills.Tools.Remember do
   @doc """
   Returns the `remember` tool definition wired to `execute/5`.
 
-  `cwd` identifies the current repository. `opts` carries `:workspace_dir`,
-  `:agent_id`, `:session_key`, and `:session_scope`. Only explicitly main-scoped
-  sessions may write memory. `:store` can select a named memory store.
+  `cwd` identifies the repository. `opts` carries workspace/agent/session identity
+  and flat admitted invocation/memory keys, memory proof and optional trusted
+  shared-write grant. Only main sessions write; partial ownership fails closed.
+  `:store` selects the existing owner server. Tool params cannot change visibility.
   """
   @spec tool(String.t(), keyword()) :: AgentTool.t()
   def tool(cwd, opts \\ []) do
@@ -44,17 +46,20 @@ defmodule LemonSkills.Tools.Remember do
       agent_id: Keyword.get(opts, :agent_id),
       session_key: Keyword.get(opts, :session_key),
       session_scope: Keyword.get(opts, :session_scope),
+      invocation_context_key: Keyword.get(opts, :invocation_context_key),
+      memory_context_key: Keyword.get(opts, :memory_context_key),
+      memory_context_verified: Keyword.get(opts, :memory_context_verified),
+      shared_memory_grant: Keyword.get(opts, :shared_memory_grant, false),
       store_opts: Keyword.take(opts, [:store])
     }
 
     %AgentTool{
       name: "remember",
       description:
-        "Save a durable fact or preference so it is in your context in every future session: " <>
-          "target \"user\" writes USER.md (who the user is, how they like to work), " <>
-          "\"memory\" writes MEMORY.md (other personal long-term facts), " <>
-          "\"project\" saves repository build commands, conventions, and decisions " <>
-          "only for this project, profile, and agent. " <>
+        "Save a durable fact or preference for future sessions in this memory context. " <>
+          "The runtime fixes private/shared scope; tool input cannot change it. " <>
+          "Target \"user\" records human preferences, \"memory\" records other long-term facts, " <>
+          "and \"project\" saves repository build commands, conventions, and decisions. " <>
           "To add a new fact, pass text and omit replaces (or set it to null, never an empty string). " <>
           "To correct or delete a project fact, first recall it with scope \"project\", then copy " <>
           "its exact saved text into replaces. Pass text as well to correct it; omit or null text to delete.",
@@ -72,7 +77,7 @@ defmodule LemonSkills.Tools.Remember do
             "type" => "string",
             "enum" => ["user", "memory", "project"],
             "description" =>
-              "user: USER.md (profile, preferences). memory: MEMORY.md (personal facts). " <>
+              "user: human profile/preferences. memory: other personal long-term facts. " <>
                 "project: facts specific to this repository. Default memory."
           },
           "replaces" => %{
@@ -104,9 +109,10 @@ defmodule LemonSkills.Tools.Remember do
   bidirectional control characters, and prompt-injection patterns.
 
   Returns `%LemonAgent.Types.AgentToolResult{}` on success: `content` is a single
-  `TextContent` with the status message and resulting file content, and `details`
-  merges operation fields (`changed`, and `duplicate` for an add) with `target`,
-  `action` (`"add"`, `"replace"`, or `"remove"`), `path`, `bytes`, and `chars`.
+  `TextContent` with the status and scoped facts or legacy file content. `details`
+  includes `target`, `action` (`"add"`, `"replace"`, or `"remove"`), and mutation
+  status. Scoped results expose facts and visibility, never private context keys;
+  legacy file results additionally include `path`, `bytes`, and `chars`.
   Errors (invalid/missing params, refused content, size overflow, file I/O)
   surface as `{:error, String.t()}` tuples; an aborted signal returns
   `{:error, "Operation aborted"}`.
@@ -124,17 +130,41 @@ defmodule LemonSkills.Tools.Remember do
     else
       with :ok <- validate_workspace_dir(context.workspace_dir),
            :ok <- validate_session_scope(context),
+           {:ok, memory_scope} <- ContextScope.scope(context),
            {:ok, target} <- get_target(params),
            {:ok, action} <- get_action(params) do
-        if target == "project",
-          do: remember_project(context, action, params),
-          else: WorkspacePreferences.remember(context.workspace_dir, target, action, params)
+        cond do
+          target == "project" -> remember_project(context, action, params)
+          memory_scope == :legacy ->
+            WorkspacePreferences.remember(context.workspace_dir, target, action, params)
+          true -> remember_preferences(context, target, action, params)
+        end
+      else
+        {:error, :unproven_context} -> {:error, "remember requires a verified private memory context"}
+        error -> error
       end
     end
   end
 
   defp validate_session_scope(%{session_scope: :main}), do: :ok
   defp validate_session_scope(_), do: {:error, "remember requires a main session"}
+
+  defp remember_preferences(context, target, action, params) do
+    with {:ok, result} <- Preferences.remember(context, target,
+           Map.get(params, "text"), Map.get(params, "replaces"), context.store_opts) do
+      visibility = if ContextScope.shared_grant?(context), do: "Shared", else: "Private"
+      %AgentToolResult{
+        content: [%TextContent{text:
+          "#{visibility} preferences #{if result.changed, do: "updated", else: "unchanged"}.\n\n" <>
+            Enum.map_join(result.facts, "\n", &("- " <> &1))}],
+        details: %{target: target, action: action, changed: result.changed,
+          facts: result.facts, memory_scope: String.downcase(visibility)}
+      }
+    else
+      {:error, reason} when is_atom(reason) -> {:error, "Scoped preferences refused: #{reason}"}
+      error -> error
+    end
+  end
 
   defp remember_project(context, action, params) do
     with {:ok, text} <- optional_text(params, "text"),

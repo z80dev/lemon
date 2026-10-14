@@ -36,6 +36,15 @@ defmodule LemonMemory.Document do
   """
 
   @max_summary_bytes 2_000
+  @runtime_config_atoms [
+    :mcp, :mcp_servers, :mcpServers, :mcp_headers, :mcpHeaders,
+    :mcp_token, :mcpToken, :mcp_tokens, :mcpTokens, :mcp_config, :mcpConfig,
+    :mcp_credentials, :mcpCredentials, :headers, :authorization,
+    :access_token, :accessToken, :refresh_token, :refreshToken,
+    :bearer_token, :bearerToken, :api_key, :apiKey, :auth_token, :authToken, :tokens, :token,
+    :invocation_proof_verified, :invocationProofVerified, :invocation_proof, :invocationProof
+  ]
+  @runtime_config_fields @runtime_config_atoms ++ Enum.map(@runtime_config_atoms, &Atom.to_string/1) ++ ["Authorization"]
 
   @type scope :: :session | :workspace | :agent | :global
   @type outcome :: :unknown | :success | :partial | :failure | :aborted
@@ -55,7 +64,8 @@ defmodule LemonMemory.Document do
           provider: binary() | nil,
           model: binary() | nil,
           outcome: outcome(),
-          meta: map()
+          meta: map(),
+          index: tuple() | nil
         }
 
   defstruct doc_id: nil,
@@ -72,7 +82,8 @@ defmodule LemonMemory.Document do
             provider: nil,
             model: nil,
             outcome: :unknown,
-            meta: %{}
+            meta: %{},
+            index: nil
 
   @doc """
   Build a `Document` from a finalized run record and its summary.
@@ -109,8 +120,11 @@ defmodule LemonMemory.Document do
       provider: provider,
       model: model,
       outcome: LemonCore.RunOutcome.infer(summary),
-      meta: LemonMemory.Project.history_metadata(Map.get(summary, :meta) || %{})
+      meta: summary |> Map.get(:meta, %{}) |> LemonMemory.ContextScope.run_metadata()
+        |> LemonMemory.Project.history_metadata() |> Map.drop(@runtime_config_fields)
+        |> Map.put("kind", "run")
     }
+    |> with_index()
   end
 
   @doc """
@@ -173,6 +187,7 @@ defmodule LemonMemory.Document do
       outcome: Map.get(fields, :outcome, :unknown),
       meta: Map.get(fields, :meta, %{})
     }
+    |> with_index()
   end
 
   @doc """
@@ -180,6 +195,14 @@ defmodule LemonMemory.Document do
   """
   @spec max_summary_bytes() :: pos_integer()
   def max_summary_bytes, do: @max_summary_bytes
+
+  @doc "Pure bounded summary text, using the same UTF-8 cap and marker as ingest."
+  def summary_text(text), do: truncate(text)
+
+  @doc "Recompute canonical index fields for a trusted new owning write, not retained reads."
+  def with_index(%__MODULE__{} = doc) do
+    %{doc | index: LemonMemory.ContextScope.index_fields(doc.meta, doc.workspace_key)}
+  end
 
   # ── Private helpers ──────────────────────────────────────────────────────────
 

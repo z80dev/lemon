@@ -24,7 +24,7 @@ defmodule LemonMemory.Recall do
   conversation matches without changing the static system-prefix contract.
   """
 
-  alias LemonMemory.{Document, Project, Query, Store}
+  alias LemonMemory.{ContextScope, Document, Preferences, Project, Query, Store}
 
   @title "Relevant memory"
   @default_limit 3
@@ -59,24 +59,22 @@ defmodule LemonMemory.Recall do
     agent_id = Keyword.get(opts, :agent_id)
     terms = Query.terms(query) -- @instruction_terms
 
+    context = Keyword.get(opts, :context)
+    owner = ContextScope.scope(context)
     if present?(agent_id) and length(terms) >= @min_terms and
-         match?({:ok, _}, Project.scope(Keyword.get(opts, :context))) do
+         match?({:ok, _}, Project.scope(context)) and match?({:ok, _}, owner) do
       limit = opts |> Keyword.get(:limit, @default_limit) |> max(1) |> min(5)
       max_bytes = opts |> Keyword.get(:max_bytes, @default_max_bytes) |> min(@default_max_bytes)
-      user_facts = user_facts(Keyword.get(opts, :workspace_dir))
+      user_facts = scoped_user_facts(context, owner, opts)
+      project_facts = scoped_project_facts(context, owner, opts)
+      preferences = private_facts(context, owner, opts, terms)
 
-      opts
-      |> Keyword.get(:store, Store)
-      |> Store.search(query,
-        scope: :agent,
-        scope_key: agent_id,
-        limit: 50
-      )
+      history(query, context, owner, opts, agent_id)
       |> scoped_history(Keyword.get(opts, :context), terms)
       |> Enum.take(limit)
       |> render(
         user_facts,
-        Keyword.get(opts, :project_facts, []),
+        Enum.take(preferences ++ Enum.map(project_facts, &("Project learning: " <> &1)), 24),
         max_bytes - byte_size(@title) - 6
       )
     else
@@ -97,8 +95,7 @@ defmodule LemonMemory.Recall do
 
   defp render(docs, user_facts, project_facts, budget) do
     entries =
-      (Enum.map(Enum.take(project_facts, 24), &("Project learning: " <> &1)) ++
-         [user_facts | Enum.map(docs, &entry/1)])
+      (Enum.take(project_facts, 24) ++ [user_facts | Enum.map(docs, &entry/1)])
       |> Enum.reject(&is_nil/1)
       |> Enum.reduce_while({[], byte_size(@intro)}, fn entry, {kept, used} ->
         size = used + byte_size(entry) + 2
@@ -111,6 +108,58 @@ defmodule LemonMemory.Recall do
     case entries do
       [] -> :skip
       entries -> {:ok, Enum.join([@intro | entries], "\n\n")}
+    end
+  end
+
+  defp history(query, context, {:ok, {:private, _}}, opts, _agent) do
+    case Project.search_history(context, query, :workspace, Keyword.put(opts, :limit, 50)) do
+      {:ok, docs} -> docs
+      _ -> []
+    end
+  end
+  defp history(query, _context, _owner, opts, agent) do
+    Store.search(Keyword.get(opts, :store, Store), query,
+      scope: :agent, scope_key: agent, limit: 50)
+  end
+
+  defp scoped_project_facts(context, {:ok, {:private, _}}, opts) do
+    case Project.read(context, opts) do
+      {:ok, facts} -> facts
+      _ -> []
+    end
+  end
+  defp scoped_project_facts(_context, _owner, opts), do: Keyword.get(opts, :project_facts, [])
+
+  defp scoped_user_facts(context, {:ok, {:private, _}}, opts) do
+    case Preferences.shared_bootstrap(context, opts) do
+      {:ok, %{"USER.md" => text}} when text != "" ->
+        "Shared USER.md: " <> snippet(text, @user_snippet_bytes)
+      _ -> nil
+    end
+  end
+  defp scoped_user_facts(_context, _owner, opts), do: user_facts(Keyword.get(opts, :workspace_dir))
+
+  defp private_facts(context, {:ok, {:private, _}}, opts, terms) do
+    case Preferences.read(context, opts) do
+      {:ok, facts} ->
+        facts
+        |> Enum.sort_by(&(-Query.shared_term_count(terms, &1)))
+        |> Enum.map(&("Preference: " <> relevant_snippet(&1, terms)))
+      _ -> []
+    end
+  end
+  defp private_facts(_context, _owner, _opts, _terms), do: []
+
+  # Match full accepted bytes before choosing a bounded excerpt, including a
+  # query near the tail of a note whose index/management preview is truncated.
+  defp relevant_snippet(text, terms) do
+    text = text |> String.split() |> Enum.join(" ")
+    pattern = Regex.compile!(Enum.map_join(terms, "|", &Regex.escape/1), "iu")
+    case Regex.run(pattern, text, return: :index) do
+      [{position, _} | _] when position > @user_snippet_bytes ->
+        start = utf8_boundary(text, max(position - 80, 0))
+        "… " <> snippet(binary_part(text, start, byte_size(text) - start), @user_snippet_bytes)
+      _ -> snippet(text, @user_snippet_bytes)
     end
   end
 

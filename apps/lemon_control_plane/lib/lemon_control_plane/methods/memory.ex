@@ -3,18 +3,20 @@ defmodule LemonControlPlane.Methods.MemorySupport do
 
   alias LemonControlPlane.Protocol.Errors
   alias LemonCore.{JSONPayload, NodeRegistry, ProfileStore}
-  alias LemonMemory.Safety
+  alias LemonMemory.{ContextScope, Lifecycle, Safety}
 
   @timeout_ms 30_000
   @max_result_bytes 256 * 1_024
-  @fields ~w(profileId query limit cursor id text kind confirm)
+  @fields ~w(profileId query limit cursor id text kind confirm memoryScope memoryContextKey)
   @kinds ~w(user memory run learned_source project_learning)
 
   def handle(operation, params, ctx) when is_map(params) do
     with :ok <- validate(operation, params),
+         :ok <- validate_scope(params),
          {:ok, profile} <- ProfileStore.get(params["profileId"]),
          {:ok, payload} <- execute(operation, profile, Map.take(params, @fields), ctx),
-         {:ok, projection} <- project(operation, payload) do
+         {:ok, projection} <- project(operation, payload),
+         {:ok, projection} <- scoped_projection(params, payload, projection) do
       {:ok, projection}
     else
       {:rpc_error, error} -> {:error, error}
@@ -28,17 +30,40 @@ defmodule LemonControlPlane.Methods.MemorySupport do
 
   def handle(_operation, _params, _ctx), do: error(:invalid_params)
 
+  defp validate_scope(params) do
+    case ContextScope.selection(params) do
+      {:ok, _selection} -> :ok
+      _ -> {:error, :invalid_params}
+    end
+  end
+
+  defp scoped_projection(params, payload, projection) do
+    case params["memoryScope"] do
+      nil -> {:ok, projection}
+      scope ->
+        key = if scope == "private", do: params["memoryContextKey"], else: nil
+        if payload["memoryScope"] == scope and Map.has_key?(payload, "memoryContextKey") and
+             payload["memoryContextKey"] == key do
+          {:ok, Map.merge(projection, %{"memoryScope" => scope, "memoryContextKey" => key})}
+        else
+          # An older worker ignoring scope arguments cannot attest a scoped result.
+          {:error, :memory_unavailable}
+        end
+    end
+  end
+
   defp validate(operation, params) do
     cond do
       not bounded_string?(params["profileId"], 64) -> {:error, :invalid_params}
       Map.has_key?(params, "limit") and
           not (is_integer(params["limit"]) and params["limit"] in 1..50) ->
         {:error, :invalid_params}
-      Map.has_key?(params, "query") and not bounded_text?(params["query"], 256) ->
+      Map.has_key?(params, "query") and not Lifecycle.valid_profile_query?(params["query"]) ->
         {:error, :invalid_params}
       Map.has_key?(params, "cursor") and not bounded_string?(params["cursor"], 512) ->
         {:error, :invalid_params}
-      operation == "search" and not bounded_string?(params["query"], 256) ->
+      operation == "search" and
+          (not Lifecycle.valid_profile_query?(params["query"]) or String.trim(params["query"]) == "") ->
         {:error, :invalid_params}
       operation in ["get", "delete"] and not bounded_string?(params["id"], 256) ->
         {:error, :invalid_params}
@@ -63,8 +88,11 @@ defmodule LemonControlPlane.Methods.MemorySupport do
   defp execute(operation, %{"node" => node} = profile, args, _ctx)
        when is_binary(node) and node != "local" do
     with {:ok, _stats} <- JSONPayload.validate(args, max_bytes: 8_192),
-         {:ok, invoke_id} <- NodeRegistry.invoke(node, "memory." <> operation, args,
-           recipient: self(), timeout_ms: @timeout_ms, max_payload_bytes: @max_result_bytes) do
+         {:ok, resolved} <- NodeRegistry.resolve(node),
+         :ok <- scoped_worker_capability(resolved, operation, args),
+         {:ok, invoke_id} <- NodeRegistry.invoke_node(resolved.id, "memory." <> operation, args,
+           expected_pid: resolved.pid, recipient: self(), timeout_ms: @timeout_ms,
+           max_payload_bytes: @max_result_bytes) do
       receive do
         {:lemon_node_result, ^invoke_id, {:ok, %{"ok" => true, "payload" => payload}}} ->
           {:ok, payload}
@@ -82,8 +110,23 @@ defmodule LemonControlPlane.Methods.MemorySupport do
     end
   end
 
+
   defp execute(operation, profile, args, ctx) do
     LemonSkills.ProfileMemory.execute(operation, profile["id"], args, Map.get(ctx, :memory_opts, []))
+  end
+  # A post-write echo alone is insufficient: old workers would already have
+  # written shared files. Check before dispatch and bind the exact checked connection.
+  defp scoped_worker_capability(_node, _operation, %{"memoryScope" => nil}),
+    do: {:error, :invalid_memory_scope}
+  defp scoped_worker_capability(node, operation, args) do
+    if Map.has_key?(args, "memoryScope") do
+      capabilities = Map.get(node.metadata, :capabilities, Map.get(node.metadata, "capabilities"))
+      descriptor = if is_map(capabilities), do: Map.get(capabilities, "memory." <> operation)
+      if match?(%{"version" => 1, "contextVersion" => 1}, descriptor),
+        do: :ok, else: {:error, :unsupported_memory_scope}
+    else
+      :ok
+    end
   end
 
   defp remote_error("not_found"), do: {:error, :not_found}
@@ -93,7 +136,8 @@ defmodule LemonControlPlane.Methods.MemorySupport do
   defp remote_error("confirmation_mismatch"), do: {:error, :stale}
   defp remote_error(reason) when reason in ["invalid_params", "invalid_id", "invalid_cursor",
          "invalid_query", "invalid_limit", "invalid_kind", "invalid_text", "unsafe_text",
-         "invalid_document_id", "capacity_exceeded"], do: {:error, :invalid_params}
+         "invalid_document_id", "capacity_exceeded", "empty_text", "unproven_context",
+         "invalid_memory_scope"], do: {:error, :invalid_params}
   defp remote_error(_reason), do: {:error, :memory_unavailable}
 
   defp remote_failure(operation, profile_id, invoke_id) when operation in ["add", "delete"] do
@@ -167,7 +211,7 @@ defmodule LemonControlPlane.Methods.MemorySupport do
     do: {:error, Errors.invalid_request("confirm must equal the exact memory id")}
   defp error(reason) when reason in [:invalid_params, :invalid_id, :invalid_cursor, :invalid_query,
          :invalid_limit, :invalid_kind, :invalid_text, :unsafe_text, :invalid_document_id,
-         :capacity_exceeded],
+         :capacity_exceeded, :empty_text, :unproven_context, :invalid_memory_scope],
     do: {:error, Errors.invalid_request("Memory parameters or content are invalid")}
   defp error(reason) when reason in [:stale, :confirmation_mismatch],
     do: {:error, Errors.error(:conflict, "Memory item changed; read it again before deleting")}

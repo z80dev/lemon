@@ -485,7 +485,7 @@ summary may have committed even when its acknowledgement was lost.
 ## Profile memory
 
 The `memory.*` methods address a managed profile by `profileId`; they never accept
-a workspace path or an arbitrary memory scope. Reads require `operator.read`;
+a workspace path or arbitrary installation-wide scope. Reads require `operator.read`;
 add and delete require `operator.admin`. All run asynchronously so a named-node
 request does not block the connection's events or heartbeat.
 
@@ -497,11 +497,38 @@ request does not block the connection's events or heartbeat.
 | `memory.add` | `{profileId, text, kind?}` | `{item}` |
 | `memory.delete` | `{profileId, id, confirm}` | `{deleted: true, id}` |
 
-`limit` is 1–50 (default 25); `query` is bounded to 256 UTF-8 bytes.
-`nextCursor` is null at the end of the bounded recent window. Pass a returned
-cursor to `memory.list` with the same profile/query; a stale or mismatched cursor
-is rejected rather than silently skipping changed memory. This is not an
-unbounded archive export.
+All five methods also accept private operator selectors:
+
+* `{memoryScope: "private", memoryContextKey: "<verified stable actor key>"}` selects
+  **only** that actor's documents in this profile/home. A valid item ID is not proof
+  of ownership: list/search/get/delete enforce the same selector in the owning store.
+* `{memoryScope: "shared"}` selects only provenance-proven canonical shared documents.
+  `memoryContextKey` may be omitted or null here, never a non-null private key.
+* Omitting **both** fields retains the legacy unrestricted trusted-operator view,
+  including retained workspace files. Product Team UI/backend requests must never
+  omit selectors. Malformed/partial selectors fail rather than falling back.
+
+Every explicitly scoped success appends `memoryScope` and `memoryContextKey`
+(null for shared) to the table's payload. The backend validates the exact echo
+before using results and must strip internal context keys from model/client-facing
+responses. Keys are 1–128 ASCII characters matching
+`[A-Za-z0-9][A-Za-z0-9_.:-]*`; authenticated services derive them from verified Bot,
+actor and audience ownership, not client/model/tool metadata or grant epochs.
+
+For example, a private empty list is:
+
+```json
+{"items":[],"nextCursor":null,"memoryScope":"private","memoryContextKey":"private_bot_v1.actor"}
+```
+
+`limit` is 1–50 (default 25). Managed `query` accepts at most 512 Unicode codepoints
+and 2,048 UTF-8 bytes, without truncation; malformed UTF-8/NUL is rejected.
+Unfiltered list browses a recent window. Explicitly scoped queries use the owning
+index before its candidate limit, plus full accepted canonical preference text.
+A match need not appear in the redacted/2 KiB preview; callers must not re-filter
+native matches against that preview. `nextCursor` is null at the candidate set's end.
+Pass a returned cursor to `memory.list` with the same profile/query/selector;
+stale or mismatched cursors fail. This is not an unbounded archive export.
 
 Each item is exactly `{id, kind, text, source, createdAtMs, updatedAtMs}`.
 `text` is an operator-redacted preview of at most 2 KiB, not a full raw memory
@@ -509,9 +536,12 @@ record. `source` is `workspace` or `durable`; raw paths, credentials, provenance
 contents and arbitrary provider errors are excluded. Workspace preferences use
 `kind: "user"` or `"memory"`; durable records retain their supported memory kind.
 
-Adding defaults to `kind: "memory"` (assistant `MEMORY.md`); `"user"` writes
-assistant `USER.md`. It uses the same secret/prompt-injection screening and file
-size limits as `remember`, not a second store. `text` is bounded to 4,096 bytes.
+Adding defaults to `kind: "memory"`; `"user"` selects human preferences. Explicit
+private/shared selections write canonical facts through `LemonMemory.Preferences`
+in the existing `LemonMemory.Store`, never raw `USER.md`/`MEMORY.md` files.
+Only the omitted legacy operator mode writes those files. All paths reuse owning
+`remember` secret/prompt-injection screening and compact preference limits;
+`text` is bounded to 4,096 bytes. This is not a second store.
 Read/list the item before deletion and set `confirm` to its **exact item id**;
 booleans or another id are rejected. Opaque item ids bind profile and revision:
 workspace preferences bind exact text plus the whole file revision, while durable
@@ -523,16 +553,124 @@ For a named-node profile the controller sends only JSON-safe method parameters
 over the existing node invocation channel. The destination derives the profile
 workspace locally; neither the controller's workspace nor credentials cross the
 boundary. Durable records must match both the profile agent id and the assistant
-home identity; foreign and unscoped legacy memory is not exposed. There is no
-local fallback for an unavailable destination. A lost remote mutation receipt
-returns `UNAVAILABLE` with
-`{code: "MEMORY_OUTCOME_UNKNOWN", profileId, invokeId, retrySafe: false}`.
-Re-read memory before deciding whether to repeat the mutation.
+home identity. Explicit selections additionally require persisted actor/shared proof.
+No unavailable destination falls back to controller memory. A lost mutation receipt
+is `UNAVAILABLE` with
+`{code: "MEMORY_OUTCOME_UNKNOWN", profileId, invokeId, retrySafe: false}`; re-read
+memory before deciding whether to repeat the mutation.
+
+Explicitly scoped remote requests require the live authenticated connection to
+advertise that exact `memory.*` method with `{version: 1, contextVersion: 1}`.
+Persisted capabilities do not prove a current worker supports private memory.
+Dispatch is pinned to the checked durable ID and connection PID. Old, unqueryable
+or reconnected workers fail before enqueue, without private-to-legacy mutation.
+A missing/mismatched response selector echo also fails closed.
 
 No memory-content event is broadcast. Remote terminal replies use
 `node.invoke.result` with `result: {ok: true, payload: <payload above>}` or
 `result: {ok: false, error: "<bounded service classification>"}`; the existing
 authenticated node/session/invocation ownership checks still apply.
+
+### Copying scoped memory before moving a profile
+
+`memory.transfer` requires `operator.admin` and runs asynchronously. It does
+**not** change profile placement. Supply `{profileId, nodeId, mutationId}` where
+`nodeId` is the explicit durable destination node ID (not its display name).
+The source is the profile's current placement, pinned to its durable node ID or
+`"local"` for controller-local memory.
+
+Use a fresh `mutationId` for each independent move attempt, retaining that same
+ID through preview, confirmation, and reconciliation. It is at most 128 bytes,
+using letters, digits, `_`, `.`, `:`, or `-`. Reusing an ID for another profile or
+destination is a conflict. Source and destination must differ.
+
+Preview before an overwrite:
+
+```json
+{"type":"req","id":"move-preview","method":"memory.transfer","params":{"profileId":"researcher","nodeId":"destination-node-id","mutationId":"move-unique-id","action":"preview"}}
+```
+
+The payload is:
+
+```json
+{"profileId":"researcher","mutationId":"move-unique-id","sourceNodeId":"source-node-id","nodeId":"destination-node-id","snapshotDigest":"<sha256>","destinationDigest":"<sha256>","confirmationToken":"<opaque-token>","sourceCounts":{"documents":12,"preferences":2},"destinationCounts":{"documents":2,"preferences":1},"overwrite":true}
+```
+
+Only counts and digests are exposed. `documents` counts selected durable records;
+`preferences` counts complete preference files present (USER.md/MEMORY.md, 0–2),
+not individual notes. Explain that the destination's selected profile memory and
+both preference-file slots will be replaced by the incoming scope; unrelated
+profiles, persona files, and other files are retained. After explicit approval,
+send the same IDs with `action: "apply"`, `snapshotDigest`, `destinationDigest`,
+and `confirmationToken` from the preview. The token binds the exact incoming
+snapshot, current destination snapshot, profile, both nodes, and mutation.
+A changed source or destination invalidates the plan; create a new move preview
+with a fresh mutation ID instead of automatically overwriting or merging.
+
+Without a confirmation token, `action: "apply"` (the default) permits only a
+create-only copy to an empty selected destination scope. Divergent existing
+memory requires an exact confirmed preview. Success returns:
+
+```json
+{"profileId":"researcher","mutationId":"move-unique-id","sourceNodeId":"source-node-id","nodeId":"destination-node-id","snapshotDigest":"<sha256>","copied":true}
+```
+
+The destination persists a receipt bound to those identities and digest before
+acknowledging success. Same-operation replay returns that exact receipt.
+Once apply may have been dispatched, repeating the operation queries only its
+destination receipt and never replays the copy. An uncertain outcome returns
+`UNAVAILABLE` with `{code: "MEMORY_TRANSFER_OUTCOME_UNKNOWN", profileId, nodeId,
+mutationId, retrySafe: false}`. Retain the mutation ID and reconcile before
+changing placement or starting a different move attempt.
+
+For a strictly read-only receipt query, call `memory.transfer.status`
+(`operator.read`) with `{profileId, nodeId, mutationId}`. It inspects the
+destination's durable journal only—even if no controller intent exists—and
+never freezes a snapshot, starts an apply, or replays a mutation. Its payload is:
+
+```json
+{"profileId":"researcher","nodeId":"destination-node-id","mutationId":"move-unique-id","sourceNodeId":"source-node-id","snapshotDigest":"<sha256>","status":"completed","receipt":{"profileId":"researcher","mutationId":"move-unique-id","sourceNodeId":"source-node-id","nodeId":"destination-node-id","snapshotDigest":"<sha256>","copied":true}}
+```
+
+`status` is `completed`, `pending`, or `unknown`. Pending operations have a null
+receipt; an absent journal entry is `unknown` with null actual source, digest,
+and receipt, **not** proof that a mutation was never applied. Offline/query
+failures return `UNAVAILABLE`, not an empty successful result. The response and
+receipt must match the exact profile, destination, mutation and expected source
+digest before the caller switches placement. This method does not change the
+controller journal or profile placement.
+
+Transfer uses a private, frozen owning-service snapshot, not redacted list/get
+previews. Scoped run/project documents, canonical private/shared preference facts,
+and complete retained assistant `USER.md`/`MEMORY.md` bytes are selected. Both agent
+and assistant home identity are checked, destination identities rebound locally,
+and private actor keys preserved. Unknown legacy files/rows remain unproven;
+copying bytes never creates sharing authority. Retained metadata cannot attest its
+own authority: export uses persisted owning-store ownership, and import cannot
+promote pre-index private/shared claims. Source memory is retained.
+Source snapshots are bounded to 500 documents,
+64 KiB per preference file, and 2 MiB encoded total. The node JSON item/depth
+policy also applies, with headroom reserved for invocation wrappers; complex
+records can reach that bound before 500 documents. Excess or unsafe source data
+fails closed rather than being silently truncated or redacted.
+
+No session journals/chat transcripts, credentials, cookies, daily-note files,
+or general host files are copied. Home-scoped repository learnings rebind to the
+destination profile workspace; other repository groups retain opaque identities
+without transporting source repository paths. Their exact facts remain visible
+as profile memory, but destination repository-specific recall cannot infer a
+new repository mapping.
+
+Private worker methods are `memory.transfer.prepare`, `.snapshot`, `.validate`,
+`.preview`, `.apply`, `.status`, and `.inspect` over the authenticated invocation
+channel. Each method requires this connection's fresh
+`{version: 1, contextVersion: 1}` advertisement and exact ID/PID dispatch binding,
+before a source snapshot read or destination apply. Old provenance-unaware
+workers cannot strip actor ownership into a legacy copy or attest such a receipt.
+Full snapshot content is never included in management responses,
+broadcast events, controller operation journals, or logs. Only after `copied`
+is durably acknowledged should the caller perform persona sync and explicitly
+change profile placement.
 
 ## Named execution nodes
 

@@ -7,19 +7,22 @@ defmodule LemonSkills.ProfileMemory do
   owns existence/placement validation. `:profile_opts` is passed to
   `LemonCore.ProfileStore.paths/2`; `:store` selects a memory Store server.
 
-  Results contain only string-keyed JSON-safe projections. Sources are
-  `workspace` (USER.md/MEMORY.md) and `durable` (run, learned-source, and project
-  memory). Text is redacted and capped at 2048 bytes. IDs bind profile and
-  revision; clients must refresh stale IDs before an exact-ID confirmed delete.
-  Workspace timestamps describe the owning file, not individual note creation.
+  Results contain only string-keyed JSON-safe projections. Legacy omitted operator
+  scope can read `workspace` USER.md/MEMORY.md entries and `durable` documents.
+  Explicit private/shared selectors delegate canonical preferences and exact-ID
+  ownership to the existing memory lifecycle, never raw personal files.
+  Successful explicit selections echo memoryScope/memoryContextKey for the trusted
+  backend to validate and strip before model/client exposure.
 
-  List/search browse a bounded 200-record durable window and at most 200 entries
-  per workspace file. Pages default to 25, at most 50. Opaque cursors bind the
-  profile, query, and snapshot; changed snapshots invalidate them.
+  Text is redacted and capped at 2048 bytes. IDs bind profile and revision, not
+  private authority: get/delete recheck the selector. Legacy workspace timestamps
+  describe the file. Pages default to 25, at most 50; unfiltered list browses a
+  recent window, while scoped queries use bounded candidates from the owning index.
+  Opaque cursors bind profile, query, selector and snapshot; changes invalidate them.
   """
 
   alias LemonCore.ProfileStore
-  alias LemonMemory.{Lifecycle, Store}
+  alias LemonMemory.{ContextScope, Lifecycle, Preferences, Store}
   alias LemonSkills.WorkspacePreferences
 
   @operations ~w(list search get add delete)
@@ -31,16 +34,19 @@ defmodule LemonSkills.ProfileMemory do
     with :ok <- validate_request(operation, params, opts),
          :ok <- validate_profile_id(profile_id),
          {:ok, paths} <- ProfileStore.paths(profile_id, Keyword.get(opts, :profile_opts, [])),
-         :ok <- validate_profile_param(params, profile_id) do
+         :ok <- validate_profile_param(params, profile_id),
+         {:ok, selection} <- ContextScope.selection(params) do
       context = %{
         agent_id: profile_id,
         cwd: paths["workspace"],
         workspace_dir: paths["workspace"],
-        session_scope: :main
+        session_scope: :main,
+        session_key: "agent:#{profile_id}:main"
       }
 
-      case dispatch(operation, context, params, server: Keyword.get(opts, :store, Store)) do
-        {:ok, result} when is_map(result) -> {:ok, result}
+      case dispatch(operation, context, params,
+             server: Keyword.get(opts, :store, Store), memory_scope: selection) do
+        {:ok, result} when is_map(result) -> {:ok, scope_echo(result, selection)}
         {:error, reason} when is_atom(reason) -> {:error, reason}
         _ -> {:error, :memory_unavailable}
       end
@@ -50,6 +56,14 @@ defmodule LemonSkills.ProfileMemory do
   catch
     _, _ -> {:error, :memory_unavailable}
   end
+
+  defp scope_echo(result, :operator), do: result
+  defp scope_echo(result, :shared),
+    do: Map.merge(result, %{"memoryScope" => "shared", "memoryContextKey" => nil})
+  defp scope_echo(result, {:private, key}),
+    do: Map.merge(result, %{"memoryScope" => "private", "memoryContextKey" => key})
+  defp scope_binding({:private, key}), do: ["private", key]
+  defp scope_binding(scope), do: Atom.to_string(scope)
 
   defp validate_request(operation, params, opts) do
     cond do
@@ -80,15 +94,15 @@ defmodule LemonSkills.ProfileMemory do
   defp dispatch(operation, context, params, opts) when operation in ["list", "search"] do
     with {:ok, query} <- query(params, operation),
          {:ok, limit} <- limit(params),
-         {:ok, durable} <- Lifecycle.profile_list(context, query, opts),
-         {:ok, preferences} <- WorkspacePreferences.list(context.workspace_dir, query) do
+         {:ok, durable} <- durable_items(operation, context, query, opts),
+         {:ok, preferences} <- workspace_items(context, query, opts) do
 
       items =
         (durable.items ++ preferences)
         |> Enum.sort_by(&{-&1["updatedAtMs"], &1["id"]})
 
       binding = digest(Jason.encode!([
-        context.agent_id, Path.expand(context.workspace_dir), query,
+        context.agent_id, Path.expand(context.workspace_dir), scope_binding(opts[:memory_scope]), query,
         durable.revision, items
       ]))
 
@@ -110,11 +124,18 @@ defmodule LemonSkills.ProfileMemory do
     end
   end
 
-  defp dispatch("add", context, params, _opts) do
-    with {:ok, item} <- WorkspacePreferences.add(context.workspace_dir,
-           Map.get(params, "kind", "memory"), Map.get(params, "text")) do
-      {:ok, %{"item" => item}}
-    end
+  defp dispatch("add", context, params, opts) do
+    result =
+      case opts[:memory_scope] do
+        :operator ->
+          WorkspacePreferences.add(context.workspace_dir,
+            Map.get(params, "kind", "memory"), Map.get(params, "text"))
+        selection ->
+          Preferences.add(context, Map.get(params, "kind", "memory"), Map.get(params, "text"),
+            store: opts[:server], memory_scope: selection)
+      end
+
+    with {:ok, item} <- result, do: {:ok, %{"item" => item}}
   end
 
   defp dispatch("delete", context, params, opts) do
@@ -127,7 +148,11 @@ defmodule LemonSkills.ProfileMemory do
   defp get_item(context, "durable_" <> _ = id, opts),
     do: Lifecycle.profile_get(context, id, opts)
 
-  defp get_item(context, id, _opts), do: WorkspacePreferences.get(context.workspace_dir, id)
+  defp get_item(context, id, opts) do
+    if opts[:memory_scope] == :operator,
+      do: WorkspacePreferences.get(context.workspace_dir, id),
+      else: {:error, :not_found}
+  end
 
   defp delete_item(context, "durable_" <> _ = id, opts) do
     with {:ok, preview} <- Lifecycle.profile_preview_delete(context, id, opts) do
@@ -135,17 +160,29 @@ defmodule LemonSkills.ProfileMemory do
     end
   end
 
-  defp delete_item(context, id, _opts) do
-    with {:ok, preview} <- WorkspacePreferences.preview_delete(context.workspace_dir, id) do
-      WorkspacePreferences.delete(context.workspace_dir, id, preview.revision)
+  defp delete_item(context, id, opts) do
+    if opts[:memory_scope] == :operator do
+      with {:ok, preview} <- WorkspacePreferences.preview_delete(context.workspace_dir, id) do
+        WorkspacePreferences.delete(context.workspace_dir, id, preview.revision)
+      end
+    else
+      {:error, :not_found}
     end
+  end
+
+  defp durable_items("list", context, "", opts), do: Lifecycle.profile_list(context, "", opts)
+  defp durable_items(_operation, context, query, opts), do: Lifecycle.profile_search(context, query, opts)
+
+  defp workspace_items(context, query, opts) do
+    if opts[:memory_scope] == :operator,
+      do: WorkspacePreferences.list(context.workspace_dir, query),
+      else: {:ok, []}
   end
 
   defp query(params, operation) do
     value = Map.get(params, "query", "")
 
-    if is_binary(value) and byte_size(value) <= 256 and String.valid?(value) and
-         not String.contains?(value, <<0>>) do
+    if Lifecycle.valid_profile_query?(value) do
       value = String.trim(value)
       cond do
         value == "" and operation == "list" -> {:ok, ""}

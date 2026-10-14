@@ -224,7 +224,7 @@ defmodule LemonSkills.ProfileMemoryTest do
     assert {:error, :invalid_params} = run("list", %{limit: 10}, ctx)
     assert {:error, :invalid_params} = ProfileMemory.execute("list", "lb-alice", %{}, profile_opts: nil)
     for limit <- [0, 51, "25", true], do: assert({:error, :invalid_limit} = run("list", %{"limit" => limit}, ctx))
-    for query <- [nil, true, "", "***", String.duplicate("a", 257)],
+    for query <- [nil, true, "", "***", String.duplicate("a", 513)],
       do: assert({:error, :invalid_query} = run("search", %{"query" => query}, ctx))
     for id <- [nil, true, "../MEMORY.md", "durable_x\n", String.duplicate("a", 257)],
       do: assert({:error, :invalid_document_id} = run("get", %{"id" => id}, ctx))
@@ -290,6 +290,103 @@ defmodule LemonSkills.ProfileMemoryTest do
              run("search", %{"query" => "tailmarker"}, ctx)
     assert {:ok, %{"items" => [^item], "nextCursor" => nil}} =
              run("list", %{"query" => "tailmarker"}, ctx)
+  end
+
+  test "explicit operator selections isolate private actors and proven shared facts", ctx do
+    a = %{"memoryScope" => "private", "memoryContextKey" => "bot-user-a"}
+    b = %{"memoryScope" => "private", "memoryContextKey" => "bot-user-b"}
+    shared = %{"memoryScope" => "shared"}
+    File.write!(Path.join(ctx.paths["workspace"], "USER.md"), "# User\n\n- Unknown legacy preference.\n")
+    assert {:ok, %{"items" => [legacy]}} = run("list", %{}, ctx)
+    assert {:ok, %{"item" => private_a, "memoryScope" => "private", "memoryContextKey" => "bot-user-a"}} =
+      run("add", Map.merge(a, %{"kind" => "user", "text" => "Prefers personal lemon tea."}), ctx)
+    assert {:ok, %{"item" => private_b}} =
+      run("add", Map.put(b, "text", "Keeps room summaries separate."), ctx)
+    assert {:ok, %{"item" => communal, "memoryScope" => "shared", "memoryContextKey" => nil}} =
+      run("add", Map.put(shared, "text", "Builds run on Tuesdays."), ctx)
+    assert private_a["source"] == "durable"
+    for item <- [private_a, private_b, communal], do: assert_item(item)
+    assert File.read!(Path.join(ctx.paths["workspace"], "USER.md")) ==
+      "# User\n\n- Unknown legacy preference.\n"
+    refute File.exists?(Path.join(ctx.paths["workspace"], "MEMORY.md"))
+    assert {:ok, %{"items" => [^private_a], "memoryContextKey" => "bot-user-a"}} = run("list", a, ctx)
+    assert {:ok, %{"items" => [^private_b]}} = run("search", Map.put(b, "query", "room"), ctx)
+    assert {:ok, %{"items" => [^communal], "memoryScope" => "shared", "memoryContextKey" => nil}} =
+      run("list", shared, ctx)
+    assert {:ok, %{"item" => ^private_a}} = run("get", Map.put(a, "id", private_a["id"]), ctx)
+    for scope <- [b, shared] do
+      assert {:error, :not_found} = run("get", Map.put(scope, "id", private_a["id"]), ctx)
+      assert {:error, :not_found} = run("delete",
+        Map.merge(scope, %{"id" => private_a["id"], "confirm" => private_a["id"]}), ctx)
+    end
+    for scope <- [a, b, shared] do
+      assert {:error, :not_found} = run("get", Map.put(scope, "id", legacy["id"]), ctx)
+    end
+    assert {:error, :not_found} = ProfileMemory.execute("get", "lb-bob",
+      Map.put(a, "id", private_a["id"]), ctx.opts)
+    assert {:error, :confirmation_required} = run("delete", Map.put(a, "id", private_a["id"]), ctx)
+    assert {:ok, %{"items" => retained}} = run("list", %{}, ctx)
+    assert Enum.sort(Enum.map(retained, & &1["id"])) ==
+      Enum.sort(Enum.map([legacy, private_a, private_b, communal], & &1["id"]))
+    assert {:ok, %{"deleted" => true, "id" => deleted, "memoryContextKey" => "bot-user-a"}} =
+      run("delete", Map.merge(a, %{"id" => private_a["id"], "confirm" => private_a["id"]}), ctx)
+    assert deleted == private_a["id"]
+    assert {:ok, %{"items" => []}} = run("list", a, ctx)
+    assert {:ok, %{"items" => [^private_b]}} = run("list", b, ctx)
+  end
+
+  test "scope selectors and cursors cannot fall back to unrestricted operator reads", ctx do
+    a = %{"memoryScope" => "private", "memoryContextKey" => "scope-a"}
+    for i <- 1..3 do
+      assert {:ok, _} = run("add", Map.put(a, "text", "Private fact #{i}."), ctx)
+    end
+    assert {:ok, %{"nextCursor" => cursor}} = run("list", Map.put(a, "limit", 1), ctx)
+    assert is_binary(cursor)
+    assert {:error, :invalid_cursor} = run("list", %{"cursor" => cursor}, ctx)
+    assert {:error, :invalid_cursor} = run("list",
+      Map.merge(a, %{"memoryContextKey" => "scope-b", "cursor" => cursor}), ctx)
+    for bad <- [%{"memoryScope" => nil}, %{"memoryContextKey" => "scope-a"},
+      %{"memoryScope" => "private"}, %{"memoryScope" => "private", "memoryContextKey" => "bad\nkey"},
+      %{"memoryScope" => "shared", "memoryContextKey" => "scope-a"}] do
+      assert {:error, :invalid_memory_scope} = run("list", bad, ctx)
+      assert {:error, :invalid_memory_scope} = run("add", Map.put(bad, "text", "must not write"), ctx)
+    end
+  end
+
+  test "managed search accepts complete 512-codepoint Unicode queries without byte truncation", ctx do
+    scope = %{"memoryScope" => "private", "memoryContextKey" => "long-query"}
+    query = String.duplicate("界", 512)
+    assert byte_size(query) == 1_536
+    assert {:ok, %{"item" => item}} = run("add", Map.put(scope, "text", query), ctx)
+    assert {:ok, %{"items" => [^item]}} = run("search", Map.put(scope, "query", query), ctx)
+    assert {:ok, %{"items" => [^item]}} = run("list", Map.put(scope, "query", query), ctx)
+    for invalid <- [query <> "界", String.duplicate("e\u0301", 257), String.duplicate("a", 2_049)] do
+      assert {:error, :invalid_query} = run("search", Map.put(scope, "query", invalid), ctx)
+    end
+  end
+
+  test "scoped indexed search finds older matches and continues through list with the same selector", ctx do
+    scope = %{"memoryScope" => "private", "memoryContextKey" => "indexed-search"}
+    stamps = LemonMemory.ContextScope.metadata({:private, "indexed-search"})
+    for {prefix, count, time, text} <- [
+      {"old-match", 3, 1, "An ancientzephyr decision."},
+      {"new-unrelated", 200, 100, "Contemporary orchard report."}],
+        i <- 1..count do
+      base = document(ctx, "#{prefix}-#{i}", text)
+      record = %{base | ingested_at_ms: time, meta: Map.merge(base.meta, stamps)}
+      :ok = Store.put_sync(ctx.store, record)
+    end
+    query = Map.merge(scope, %{"query" => "ancientzephyr", "limit" => 1})
+    assert {:ok, %{"items" => [first], "nextCursor" => cursor}} = run("search", query, ctx)
+    assert first["text"] =~ "ancientzephyr"
+    assert is_binary(cursor)
+    assert {:ok, %{"items" => [second], "nextCursor" => next}} =
+      run("list", Map.put(query, "cursor", cursor), ctx)
+    refute second["id"] == first["id"]
+    assert is_binary(next)
+    assert {:ok, %{"items" => [third], "nextCursor" => nil}} =
+      run("list", Map.put(query, "cursor", next), ctx)
+    assert length(Enum.uniq(Enum.map([first, second, third], & &1["id"]))) == 3
   end
 
   defp run(operation, params, ctx),

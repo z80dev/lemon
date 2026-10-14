@@ -7,13 +7,19 @@ defmodule CodingAgent.Workspace do
   - SOUL.md
   - TOOLS.md
   - IDENTITY.md
-  - USER.md
+  - USER.md (raw file only for legacy unscoped sessions)
   - HEARTBEAT.md
   - BOOTSTRAP.md
-  - MEMORY.md (optional; only included for main sessions)
+  - MEMORY.md (legacy optional file, main sessions only)
+
+  Context-owned main sessions replace personal file reads with exact canonical
+  shared fact projections from the existing memory owner. Unknown legacy bytes
+  remain unchanged, never inferred shared. Private preferences belong in volatile
+  recall, not the static prefix; missing proof/store availability never falls back.
   """
 
   alias CodingAgent.Config
+  alias LemonMemory.{ContextScope, Preferences}
 
   @default_max_chars 20_000
   @head_ratio 0.7
@@ -55,6 +61,7 @@ defmodule CodingAgent.Workspace do
   @type session_scope :: :main | :subagent
 
   @type bootstrap_file :: %{
+          optional(:source) => :verified_shared_memory,
           name: String.t(),
           path: String.t(),
           content: String.t(),
@@ -142,6 +149,11 @@ defmodule CodingAgent.Workspace do
     - :session_scope (:main or :subagent; default inferred from :parent_session)
     - :profile_instructions (persona-only controller snapshot; never written to disk)
     - :parent_session (when present, inferred as :subagent)
+    - :invocation_context_key / :memory_context_key / :memory_context_verified
+      (admitted native ownership; model metadata is not proof)
+    - :shared_memory_grant (trusted runtime authority, not inferred from key presence)
+    - :cwd / :agent_id / :session_key (owning profile/repository context)
+    - :memory_store (existing owner server; defaults to LemonMemory.Store)
   """
   @spec load_bootstrap_files(keyword()) :: [bootstrap_file()]
   def load_bootstrap_files(opts \\ []) do
@@ -153,32 +165,75 @@ defmodule CodingAgent.Workspace do
     if validate_profile_instructions(profile_instructions) != :ok,
       do: raise(ArgumentError, "invalid profile instruction snapshot")
 
+    context =
+      opts
+      |> Keyword.take([:agent_id, :session_key, :invocation_context_key,
+        :memory_context_key, :memory_context_verified, :shared_memory_grant])
+      |> Map.new()
+      |> Map.merge(%{workspace_dir: dir, cwd: Keyword.get(opts, :cwd, dir),
+        session_scope: session_scope})
+
+    memory_scope = ContextScope.scope(context)
+    required_names =
+      cond do
+        session_scope == :subagent -> Enum.filter(@required_files, &MapSet.member?(@subagent_bootstrap_allowlist, &1))
+        memory_scope == {:ok, :legacy} -> @required_files
+        true -> List.delete(@required_files, "USER.md")
+      end
+
     required =
-      @required_files
+      required_names
       |> Enum.reject(&(is_map(profile_instructions) and &1 in @profile_instruction_files))
       |> Enum.map(&load_required_file(dir, &1, max_chars))
-
     memory =
-      case find_first_existing_exact(dir, [@memory_file]) do
-        nil ->
-          []
-
-        name ->
-          case load_optional_file(dir, name, max_chars) do
-            nil -> []
-            file -> [file]
-          end
+      cond do
+        session_scope == :subagent -> []
+        memory_scope == {:ok, :legacy} -> legacy_memory_file(dir, max_chars)
+        true -> verified_shared_preferences(context, opts, max_chars)
       end
 
     (overlay_profile_instructions(required, profile_instructions, dir, max_chars) ++ memory)
     |> filter_bootstrap_files_for_session(session_scope)
   end
 
+  defp legacy_memory_file(dir, max_chars) do
+    case find_first_existing_exact(dir, [@memory_file]) do
+      nil -> []
+      name ->
+        case load_optional_file(dir, name, max_chars) do
+          nil -> []
+          file -> [file]
+        end
+    end
+  end
+
+  defp verified_shared_preferences(context, opts, max_chars) do
+    store_opts = if Keyword.has_key?(opts, :memory_store),
+      do: [store: Keyword.fetch!(opts, :memory_store)], else: []
+    case Preferences.shared_bootstrap(context, store_opts) do
+      {:ok, files} ->
+        Enum.flat_map(["USER.md", "MEMORY.md"], fn name ->
+          case files[name] do
+            text when is_binary(text) and text != "" ->
+              [%{name: name, path: Path.join(context.workspace_dir, name),
+                content: trim_content(text, name, max_chars), missing: false,
+                source: :verified_shared_memory}]
+            _ -> []
+          end
+        end)
+      _ -> []
+    end
+  rescue
+    _ -> []
+  catch
+    _, _ -> []
+  end
+
   @doc """
   Filter bootstrap files for a session scope.
 
-  Main sessions receive full bootstrap context. Subagent sessions only receive
-  AGENTS.md and TOOLS.md to avoid leaking durable personal memory/context.
+  Main sessions receive the already-admitted bootstrap projections. Subagents
+  only receive AGENTS.md and TOOLS.md, never personal files or shared preference projections.
   """
   @spec filter_bootstrap_files_for_session([bootstrap_file()], session_scope() | String.t()) ::
           [bootstrap_file()]

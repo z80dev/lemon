@@ -35,8 +35,7 @@ defmodule LemonMemory.Store do
   require Logger
 
   alias Exqlite.Sqlite3
-  alias LemonMemory.Document
-  alias LemonMemory.Query
+  alias LemonMemory.{ContextScope, Document, Query}
 
   # :exqlite is an optional dependency of lemon_core; LemonCore.Application only
   # starts this store when it is present.
@@ -63,7 +62,12 @@ defmodule LemonMemory.Store do
     provider TEXT,
     model TEXT,
     outcome TEXT NOT NULL DEFAULT 'unknown',
-    meta_blob BLOB NOT NULL
+    meta_blob BLOB NOT NULL,
+    memory_scope TEXT,
+    memory_context_key TEXT,
+    home_digest TEXT,
+    memory_kind TEXT,
+    repository_root TEXT
   );
   """
 
@@ -92,6 +96,10 @@ defmodule LemonMemory.Store do
     """
     CREATE INDEX IF NOT EXISTS idx_mem_ingested
     ON memory_documents (ingested_at_ms DESC);
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_mem_owner
+    ON memory_documents (agent_id, home_digest, memory_scope, memory_context_key, repository_root, ingested_at_ms DESC);
     """
   ]
 
@@ -100,9 +108,10 @@ defmodule LemonMemory.Store do
     doc_id, run_id, session_key, agent_id, workspace_key, scope,
     started_at_ms, ingested_at_ms,
     prompt_summary, answer_summary,
-    tools_used_blob, provider, model, outcome, meta_blob
+    tools_used_blob, provider, model, outcome, meta_blob,
+    memory_scope, memory_context_key, home_digest, memory_kind, repository_root
   )
-  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
+  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)
   ON CONFLICT(doc_id) DO UPDATE SET
     ingested_at_ms = excluded.ingested_at_ms,
     prompt_summary = excluded.prompt_summary,
@@ -111,7 +120,12 @@ defmodule LemonMemory.Store do
     provider = excluded.provider,
     model = excluded.model,
     outcome = excluded.outcome,
-    meta_blob = excluded.meta_blob
+    meta_blob = excluded.meta_blob,
+    memory_scope = excluded.memory_scope,
+    memory_context_key = excluded.memory_context_key,
+    home_digest = excluded.home_digest,
+    memory_kind = excluded.memory_kind,
+    repository_root = excluded.repository_root
   """
 
   @put_new_sql """
@@ -119,9 +133,10 @@ defmodule LemonMemory.Store do
     doc_id, run_id, session_key, agent_id, workspace_key, scope,
     started_at_ms, ingested_at_ms,
     prompt_summary, answer_summary,
-    tools_used_blob, provider, model, outcome, meta_blob
+    tools_used_blob, provider, model, outcome, meta_blob,
+    memory_scope, memory_context_key, home_digest, memory_kind, repository_root
   )
-  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
+  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)
   ON CONFLICT(doc_id) DO NOTHING
   """
 
@@ -129,17 +144,29 @@ defmodule LemonMemory.Store do
   SELECT doc_id, run_id, session_key, agent_id, workspace_key, scope,
          started_at_ms, ingested_at_ms,
          prompt_summary, answer_summary,
-         tools_used_blob, provider, model, outcome, meta_blob
+         tools_used_blob, provider, model, outcome, meta_blob,
+         memory_scope, memory_context_key, home_digest, memory_kind, repository_root
   FROM memory_documents
   WHERE doc_id = ?1
   LIMIT 1
+  """
+
+  @get_owned_document_sql """
+  SELECT doc_id, run_id, session_key, agent_id, workspace_key, scope,
+         started_at_ms, ingested_at_ms, prompt_summary, answer_summary,
+         tools_used_blob, provider, model, outcome, meta_blob,
+         memory_scope, memory_context_key, home_digest, memory_kind, repository_root
+  FROM memory_documents
+  WHERE doc_id = ?1 AND agent_id = ?2 AND home_digest = ?3 AND memory_scope = ?4
+    AND (memory_context_key = ?5 OR (?5 IS NULL AND memory_context_key IS NULL))
   """
 
   @get_by_session_sql """
   SELECT doc_id, run_id, session_key, agent_id, workspace_key, scope,
          started_at_ms, ingested_at_ms,
          prompt_summary, answer_summary,
-         tools_used_blob, provider, model, outcome, meta_blob
+         tools_used_blob, provider, model, outcome, meta_blob,
+         memory_scope, memory_context_key, home_digest, memory_kind, repository_root
   FROM memory_documents
   WHERE session_key = ?1
   ORDER BY ingested_at_ms DESC, doc_id DESC
@@ -150,18 +177,34 @@ defmodule LemonMemory.Store do
   SELECT doc_id, run_id, session_key, agent_id, workspace_key, scope,
          started_at_ms, ingested_at_ms,
          prompt_summary, answer_summary,
-         tools_used_blob, provider, model, outcome, meta_blob
+         tools_used_blob, provider, model, outcome, meta_blob,
+         memory_scope, memory_context_key, home_digest, memory_kind, repository_root
   FROM memory_documents
   WHERE agent_id = ?1
   ORDER BY ingested_at_ms DESC, doc_id DESC
   LIMIT ?2
   """
 
+  @owned_recent_sql """
+  SELECT doc_id, run_id, session_key, agent_id, workspace_key, scope,
+         started_at_ms, ingested_at_ms, prompt_summary, answer_summary,
+         tools_used_blob, provider, model, outcome, meta_blob,
+         memory_scope, memory_context_key, home_digest, memory_kind, repository_root
+  FROM memory_documents
+  WHERE agent_id = ?1 AND home_digest = ?2
+    AND (memory_scope = ?3 OR (?3 = 'legacy' AND memory_scope IS NULL))
+    AND (memory_context_key = ?4 OR (?4 IS NULL AND memory_context_key IS NULL))
+    AND (?5 = 0 OR memory_kind IN ('user', 'memory'))
+  ORDER BY ingested_at_ms DESC, doc_id DESC
+  LIMIT ?6
+  """
+
   @get_by_workspace_sql """
   SELECT doc_id, run_id, session_key, agent_id, workspace_key, scope,
          started_at_ms, ingested_at_ms,
          prompt_summary, answer_summary,
-         tools_used_blob, provider, model, outcome, meta_blob
+         tools_used_blob, provider, model, outcome, meta_blob,
+         memory_scope, memory_context_key, home_digest, memory_kind, repository_root
   FROM memory_documents
   WHERE workspace_key = ?1
   ORDER BY ingested_at_ms DESC, doc_id DESC
@@ -178,7 +221,8 @@ defmodule LemonMemory.Store do
   SELECT doc_id, run_id, session_key, agent_id, workspace_key, scope,
          started_at_ms, ingested_at_ms,
          prompt_summary, answer_summary,
-         tools_used_blob, provider, model, outcome, meta_blob
+         tools_used_blob, provider, model, outcome, meta_blob,
+         memory_scope, memory_context_key, home_digest, memory_kind, repository_root
   FROM memory_documents
   WHERE session_key = ?1 AND ingested_at_ms > ?2
   ORDER BY ingested_at_ms ASC, doc_id ASC
@@ -189,7 +233,8 @@ defmodule LemonMemory.Store do
   SELECT doc_id, run_id, session_key, agent_id, workspace_key, scope,
          started_at_ms, ingested_at_ms,
          prompt_summary, answer_summary,
-         tools_used_blob, provider, model, outcome, meta_blob
+         tools_used_blob, provider, model, outcome, meta_blob,
+         memory_scope, memory_context_key, home_digest, memory_kind, repository_root
   FROM memory_documents
   WHERE agent_id = ?1 AND ingested_at_ms > ?2
   ORDER BY ingested_at_ms ASC, doc_id ASC
@@ -200,7 +245,8 @@ defmodule LemonMemory.Store do
   SELECT doc_id, run_id, session_key, agent_id, workspace_key, scope,
          started_at_ms, ingested_at_ms,
          prompt_summary, answer_summary,
-         tools_used_blob, provider, model, outcome, meta_blob
+         tools_used_blob, provider, model, outcome, meta_blob,
+         memory_scope, memory_context_key, home_digest, memory_kind, repository_root
   FROM memory_documents
   WHERE workspace_key = ?1 AND ingested_at_ms > ?2
   ORDER BY ingested_at_ms ASC, doc_id ASC
@@ -211,7 +257,8 @@ defmodule LemonMemory.Store do
   SELECT doc_id, run_id, session_key, agent_id, workspace_key, scope,
          started_at_ms, ingested_at_ms,
          prompt_summary, answer_summary,
-         tools_used_blob, provider, model, outcome, meta_blob
+         tools_used_blob, provider, model, outcome, meta_blob,
+         memory_scope, memory_context_key, home_digest, memory_kind, repository_root
   FROM memory_documents
   ORDER BY ingested_at_ms DESC, doc_id DESC
   LIMIT ?1
@@ -239,6 +286,7 @@ defmodule LemonMemory.Store do
 
   @sweep_sql """
   DELETE FROM memory_documents WHERE ingested_at_ms < ?1
+    AND COALESCE(memory_kind, 'run') NOT IN ('user', 'memory', 'project_learning')
   """
 
   @stats_sql """
@@ -278,7 +326,8 @@ defmodule LemonMemory.Store do
   SELECT md.doc_id, md.run_id, md.session_key, md.agent_id, md.workspace_key, md.scope,
          md.started_at_ms, md.ingested_at_ms,
          md.prompt_summary, md.answer_summary,
-         md.tools_used_blob, md.provider, md.model, md.outcome, md.meta_blob
+         md.tools_used_blob, md.provider, md.model, md.outcome, md.meta_blob,
+         md.memory_scope, md.memory_context_key, md.home_digest, md.memory_kind, md.repository_root
   FROM memory_fts
   JOIN memory_documents md ON md.doc_id = memory_fts.doc_id
   WHERE memory_fts MATCH ?1 AND md.session_key = ?2
@@ -290,7 +339,8 @@ defmodule LemonMemory.Store do
   SELECT md.doc_id, md.run_id, md.session_key, md.agent_id, md.workspace_key, md.scope,
          md.started_at_ms, md.ingested_at_ms,
          md.prompt_summary, md.answer_summary,
-         md.tools_used_blob, md.provider, md.model, md.outcome, md.meta_blob
+         md.tools_used_blob, md.provider, md.model, md.outcome, md.meta_blob,
+         md.memory_scope, md.memory_context_key, md.home_digest, md.memory_kind, md.repository_root
   FROM memory_fts
   JOIN memory_documents md ON md.doc_id = memory_fts.doc_id
   WHERE memory_fts MATCH ?1 AND md.agent_id = ?2
@@ -302,7 +352,8 @@ defmodule LemonMemory.Store do
   SELECT md.doc_id, md.run_id, md.session_key, md.agent_id, md.workspace_key, md.scope,
          md.started_at_ms, md.ingested_at_ms,
          md.prompt_summary, md.answer_summary,
-         md.tools_used_blob, md.provider, md.model, md.outcome, md.meta_blob
+         md.tools_used_blob, md.provider, md.model, md.outcome, md.meta_blob,
+         md.memory_scope, md.memory_context_key, md.home_digest, md.memory_kind, md.repository_root
   FROM memory_fts
   JOIN memory_documents md ON md.doc_id = memory_fts.doc_id
   WHERE memory_fts MATCH ?1 AND md.workspace_key = ?2
@@ -314,7 +365,8 @@ defmodule LemonMemory.Store do
   SELECT md.doc_id, md.run_id, md.session_key, md.agent_id, md.workspace_key, md.scope,
          md.started_at_ms, md.ingested_at_ms,
          md.prompt_summary, md.answer_summary,
-         md.tools_used_blob, md.provider, md.model, md.outcome, md.meta_blob
+         md.tools_used_blob, md.provider, md.model, md.outcome, md.meta_blob,
+         md.memory_scope, md.memory_context_key, md.home_digest, md.memory_kind, md.repository_root
   FROM memory_fts
   JOIN memory_documents md ON md.doc_id = memory_fts.doc_id
   WHERE memory_fts MATCH ?1
@@ -322,9 +374,26 @@ defmodule LemonMemory.Store do
   LIMIT ?2
   """
 
+  @owned_search_sql """
+  SELECT md.doc_id, md.run_id, md.session_key, md.agent_id, md.workspace_key, md.scope,
+         md.started_at_ms, md.ingested_at_ms, md.prompt_summary, md.answer_summary,
+         md.tools_used_blob, md.provider, md.model, md.outcome, md.meta_blob,
+         md.memory_scope, md.memory_context_key, md.home_digest, md.memory_kind, md.repository_root
+  FROM memory_fts
+  JOIN memory_documents md ON md.doc_id = memory_fts.doc_id
+  WHERE memory_fts MATCH ?1 AND md.agent_id = ?2 AND md.home_digest = ?3
+    AND (md.memory_scope = ?4 OR (?4 = 'legacy' AND md.memory_scope IS NULL))
+    AND (md.memory_context_key = ?5 OR (?5 IS NULL AND md.memory_context_key IS NULL))
+    AND (?7 = 0 OR COALESCE(md.memory_kind, 'run') NOT IN ('user', 'memory', 'project_learning'))
+    AND (?6 IS NULL OR md.repository_root = ?6)
+  ORDER BY bm25(memory_fts), md.ingested_at_ms DESC, md.doc_id DESC
+  LIMIT ?8
+  """
+
   # max_per_scope enforcement SQL (M5-03)
   @overflowing_sessions_sql """
   SELECT session_key FROM memory_documents
+  WHERE COALESCE(memory_kind, 'run') NOT IN ('user', 'memory', 'project_learning')
   GROUP BY session_key
   HAVING COUNT(*) > ?1
   """
@@ -332,9 +401,11 @@ defmodule LemonMemory.Store do
   @prune_session_sql """
   DELETE FROM memory_documents
   WHERE session_key = ?1
+    AND COALESCE(memory_kind, 'run') NOT IN ('user', 'memory', 'project_learning')
     AND doc_id NOT IN (
       SELECT doc_id FROM memory_documents
       WHERE session_key = ?1
+        AND COALESCE(memory_kind, 'run') NOT IN ('user', 'memory', 'project_learning')
       ORDER BY ingested_at_ms DESC
       LIMIT ?2
     )
@@ -372,6 +443,13 @@ defmodule LemonMemory.Store do
   @spec put_sync(GenServer.server(), Document.t()) :: :ok | {:error, term()}
   def put_sync(server, %Document{} = doc) do
     GenServer.call(server, {:put_sync, doc}, 5_000)
+  catch
+    :exit, reason -> {:error, {:timeout_or_down, reason}}
+  end
+
+  @doc "Replace a note only if the exact persisted revision still exists."
+  def put_document_if_unchanged(server, %Document{} = doc, revision) do
+    GenServer.call(server, {:put_if_unchanged, doc, revision}, 5_000)
   catch
     :exit, reason -> {:error, {:timeout_or_down, reason}}
   end
@@ -487,6 +565,83 @@ defmodule LemonMemory.Store do
     :exit, reason -> {:error, {:timeout_or_down, reason}}
   end
 
+  @doc "Apply exact persisted ownership before a bounded result limit."
+  def list_owned_recent(server, agent, home, selector, opts \\ []) do
+    with {:ok, mode, key} <- owner_query(selector) do
+      limit = opts |> Keyword.get(:limit, 200) |> clamp_limit(500)
+      preferences = if Keyword.get(opts, :preferences_only, false), do: 1, else: 0
+      GenServer.call(server, {:owned_recent, [agent, home, mode, key, preferences, limit]}, 5_000)
+    end
+  catch
+    :exit, reason -> {:error, {:timeout_or_down, reason}}
+  end
+
+  @doc "Search exact ownership before the limit; history-only by default."
+  def search_owned(server, query, agent, home, selector, opts \\ []) do
+    with {:ok, mode, key} <- owner_query(selector) do
+      case Query.fts_match(query) do
+        nil -> {:ok, []}
+        match ->
+          limit = opts |> Keyword.get(:limit, 50) |> clamp_limit(500)
+          root = Keyword.get(opts, :workspace_root)
+          history = if Keyword.get(opts, :history_only, true), do: 1, else: 0
+          GenServer.call(server, {:owned_search, [match, agent, home, mode, key, root, history, limit]}, 5_000)
+      end
+    end
+  catch
+    :exit, reason -> {:error, {:timeout_or_down, reason}}
+  end
+
+  @doc "Exact-ID read bound to indexed profile and private/shared ownership."
+  def get_owned_document(server, id, agent, home, selector) do
+    with {:ok, mode, key} <- owner_query(selector) do
+      GenServer.call(server, {:owned_document, [id, agent, home, mode, key]}, 5_000)
+    end
+  catch
+    :exit, reason -> {:error, {:timeout_or_down, reason}}
+  end
+
+  @doc "Authoritative persisted ownership for lifecycle/transfer, without Store IO."
+  def document_ownership(%Document{} = doc), do: ContextScope.indexed_owner(doc.meta, doc.index)
+
+  defp owner_query({:private, key}) do
+    if ContextScope.valid_key?(key), do: {:ok, "private", key},
+      else: {:error, :invalid_memory_scope}
+  end
+  defp owner_query(:shared), do: {:ok, "shared", nil}
+  defp owner_query(:legacy), do: {:ok, "legacy", nil}
+  defp owner_query(_), do: {:error, :invalid_memory_scope}
+
+  @doc "Read an exact profile/home snapshot inside the Store serialization boundary."
+  def transfer_snapshot(server, agent_id, home_digest, fun) do
+    transfer_call(server, {:transfer_snapshot, agent_id, home_digest, fun})
+  end
+
+  @doc "Read a private transfer journal entry. Never exposes content in management events."
+  def transfer_get(server, key), do: transfer_call(server, {:transfer_get, key})
+
+  @doc "Durably create a private transfer journal entry without replacing an operation."
+  def transfer_put_new(server, key, value),
+    do: transfer_call(server, {:transfer_put_new, key, value})
+
+  @doc """
+  Replace exact selected profile rows and commit their receipt in one transaction.
+  Local `:boundary` and `:rollback` callbacks run on the Store process; the
+  boundary owns filesystem locks across publication, commit and known rollback.
+  A failed/uncertain commit leaves the prior durable intent pending, never replayed.
+  """
+  def transfer_import(server, agent, home, revisions, docs, key, receipt, publish, opts \\ []) do
+    GenServer.call(server, {:transfer_import, agent, home, revisions, docs, key, receipt, publish, opts}, :infinity)
+  catch
+    :exit, _ -> {:error, :transfer_pending}
+  end
+
+  defp transfer_call(server, message) do
+    GenServer.call(server, message, :infinity)
+  catch
+    :exit, _ -> {:error, :memory_unavailable}
+  end
+
   defp query_opts(opts) do
     since_ms =
       case Keyword.get(opts, :since_ms) do
@@ -589,7 +744,8 @@ defmodule LemonMemory.Store do
       doc.provider,
       doc.model,
       doc.outcome,
-      doc.meta
+      doc.meta,
+      doc.index || ContextScope.index_fields(doc.meta, doc.workspace_key)
     ]
     |> :erlang.term_to_binary([:deterministic])
     |> then(&:crypto.hash(:sha256, &1))
@@ -680,7 +836,9 @@ defmodule LemonMemory.Store do
 
     with :ok <- File.mkdir_p(Path.dirname(path)),
          {:ok, conn} <- Sqlite3.open(path),
+         :ok <- File.chmod(path, 0o600),
          :ok <- init_db(conn),
+         :ok <- private_database_sidecars(path),
          {:ok, stmts} <- prepare_statements(conn) do
       schedule_sweep()
 
@@ -748,6 +906,70 @@ defmodule LemonMemory.Store do
     {:noreply, state}
   end
 
+  def handle_call({:owned_recent, params}, _from, state),
+    do: {:reply, do_query_result(state, state.stmts.owned_recent, params), state}
+
+  def handle_call({:owned_search, params}, _from, state),
+    do: {:reply, do_query_result(state, state.stmts.owned_search, params), state}
+
+  def handle_call({:owned_document, params}, _from, state) do
+    result = case do_query_result(state, state.stmts.get_owned_document, params) do
+      {:ok, [doc]} -> {:ok, doc}
+      {:ok, []} -> {:error, :not_found}
+      error -> error
+    end
+    {:reply, result, state}
+  end
+
+  def handle_call({:transfer_get, key}, _from, state),
+    do: {:reply, transfer_journal_get(state, key), state}
+
+  def handle_call({:transfer_put_new, key, value}, _from, state) do
+    result =
+      with :ok <- transfer_statement(state, "INSERT INTO memory_transfer_journal (operation_key, payload) VALUES (?1, ?2) ON CONFLICT(operation_key) DO NOTHING", [key, Jason.encode!(value)]),
+           {:ok, current} <- transfer_journal_get(state, key), do: {:ok, current}
+    {:reply, result, state}
+  end
+
+  def handle_call({:transfer_snapshot, agent, home, fun}, _from, state) do
+    result = transfer_transaction(state, fn ->
+      with {:ok, docs} <- transfer_documents(state, agent, home), do: fun.(docs)
+    end)
+    {:reply, result, state}
+  end
+
+  def handle_call({:transfer_import, agent, home, revisions, docs, key, receipt, publish, opts}, _from, state) do
+    boundary = Keyword.get(opts, :boundary, fn run -> run.() end)
+    rollback = Keyword.get(opts, :rollback, fn -> :ok end)
+    result = boundary.(fn ->
+      result = transfer_transaction(state, fn ->
+        with :ok <- transfer_import_boundary(state, agent, home, docs, key, receipt),
+             {:ok, current} <- transfer_documents(state, agent, home),
+             true <- transfer_revisions(current) == revisions,
+             :ok <- transfer_delete_rows(state, current),
+             :ok <- transfer_insert_rows(state, docs),
+             :ok <- publish.(),
+             :ok <- transfer_statement(state, "UPDATE memory_transfer_journal SET payload = ?2 WHERE operation_key = ?1", [key, Jason.encode!(receipt)]) do
+          {:ok, receipt}
+        else
+          false -> {:error, :stale_destination}
+          {:error, _} = error -> error
+          _ -> {:error, :memory_unavailable}
+        end
+      end)
+      case result do
+        {:ok, _} -> result
+        {:error, :transfer_pending} -> result
+        _ ->
+          case rollback.() do
+            :ok -> result
+            _ -> {:error, :transfer_pending}
+          end
+      end
+    end)
+    {:reply, result, state}
+  end
+
   @impl true
   def handle_call({:get_by_session, session_key, opts}, _from, state) do
     result = do_scoped_query(state, :get_by_session, session_key, opts)
@@ -756,6 +978,17 @@ defmodule LemonMemory.Store do
 
   def handle_call({:put_sync, doc}, _from, state) do
     {:reply, do_put(state, doc), state}
+  end
+
+  def handle_call({:put_if_unchanged, doc, revision}, _from, state) do
+    result = with {:ok, current} <- fetch_document(state, doc.doc_id),
+                  true <- secure_equal?(document_revision(current), revision) do
+      do_put(state, doc)
+    else
+      false -> {:error, :stale}
+      error -> error
+    end
+    {:reply, result, state}
   end
 
   def handle_call({:put_new_sync, doc}, _from, state) do
@@ -840,6 +1073,118 @@ defmodule LemonMemory.Store do
   end
 
   # ── Private helpers ────────────────────────────────────────────────────────────
+  defp transfer_documents(state, agent, home) do
+    with {:ok, docs} <- do_query_result(state, state.stmts.get_by_agent, [agent, 2001]),
+         true <- length(docs) <= 2000 do
+      selected = Enum.filter(docs, fn doc ->
+        is_map(doc.meta) and (doc.meta["home_digest"] || doc.meta[:home_digest]) == home
+      end)
+      if length(selected) <= 500, do: {:ok, selected}, else: {:error, :snapshot_too_large}
+    else
+      false -> {:error, :snapshot_too_large}
+      error -> error
+    end
+  end
+
+  def transfer_revisions(docs),
+    do: docs |> Enum.map(&{&1.doc_id, document_revision(&1)}) |> Enum.sort()
+  defp transfer_import_boundary(state, agent, home, docs, key, completed) do
+    with {:ok, %{"binding" => binding, "state" => "pending"}} <- transfer_journal_get(state, key),
+         true <- binding == completed["binding"] and binding["profileId"] == agent,
+         true <- completed["state"] == "complete" and completed["receipt"] == Map.put(binding, "copied", true),
+         true <- length(docs) <= 500 and Enum.all?(docs, fn
+           %Document{agent_id: ^agent, meta: meta} when is_map(meta) -> meta["home_digest"] == home
+           _ -> false
+         end) do
+      :ok
+    else
+      {:error, :not_found} -> {:error, :transfer_conflict}
+      {:error, _} = error -> error
+      _ -> {:error, :transfer_conflict}
+    end
+  end
+
+
+  defp transfer_journal_get(state, key) do
+    with {:ok, stmt} <- Sqlite3.prepare(state.conn, "SELECT payload FROM memory_transfer_journal WHERE operation_key = ?1") do
+      try do
+        with :ok <- Sqlite3.bind(stmt, [key]),
+             {:ok, rows} <- Sqlite3.fetch_all(state.conn, stmt) do
+          case rows do
+            [[json]] -> Jason.decode(json)
+            [] -> {:error, :not_found}
+            _ -> {:error, :memory_unavailable}
+          end
+        end
+      after
+        Sqlite3.release(state.conn, stmt)
+      end
+    end
+  end
+
+  defp transfer_statement(state, sql, params) do
+    with {:ok, stmt} <- Sqlite3.prepare(state.conn, sql) do
+      try do
+        with :ok <- Sqlite3.bind(stmt, params),
+             :done <- Sqlite3.step(state.conn, stmt), do: :ok
+      after
+        Sqlite3.release(state.conn, stmt)
+      end
+    end
+  end
+
+  defp transfer_transaction(state, fun) do
+    with :ok <- Sqlite3.execute(state.conn, "BEGIN IMMEDIATE") do
+      result = fun.()
+      case result do
+        {:ok, _} ->
+          case Sqlite3.execute(state.conn, "COMMIT") do
+            :ok -> result
+            _ ->
+              _ = Sqlite3.execute(state.conn, "ROLLBACK")
+              {:error, :transfer_pending}
+          end
+        _ ->
+          case Sqlite3.execute(state.conn, "ROLLBACK") do
+            :ok -> result
+            _ -> {:error, :transfer_pending}
+          end
+      end
+    end
+  rescue
+    _ ->
+      case Sqlite3.execute(state.conn, "ROLLBACK") do
+        :ok -> {:error, :memory_unavailable}
+        _ -> {:error, :transfer_pending}
+      end
+  end
+
+  defp transfer_delete_rows(state, docs) do
+    Enum.reduce_while(docs, :ok, fn doc, :ok ->
+      case delete_document_in_transaction(state, doc.doc_id) do
+        {:ok, :deleted} -> {:cont, :ok}
+        _ -> {:halt, {:error, :memory_unavailable}}
+      end
+    end)
+  end
+
+  defp transfer_insert_rows(state, docs) do
+    Enum.reduce_while(docs, :ok, fn doc, :ok ->
+      with {:error, :not_found} <- fetch_document(state, doc.doc_id),
+           :ok <- Sqlite3.reset(state.stmts.put_new),
+           :ok <- Sqlite3.bind(state.stmts.put_new, document_params(doc)),
+           :done <- Sqlite3.step(state.conn, state.stmts.put_new),
+           :ok <- Sqlite3.reset(state.stmts.fts_put),
+           :ok <- Sqlite3.bind(state.stmts.fts_put, [doc.doc_id, doc.prompt_summary, doc.answer_summary]),
+           :done <- Sqlite3.step(state.conn, state.stmts.fts_put) do
+        {:cont, :ok}
+      else
+        {:ok, _} -> {:halt, {:error, :destination_conflict}}
+        _ -> {:halt, {:error, :memory_unavailable}}
+      end
+    end)
+  end
+
 
   defp do_scoped_query(state, stmt_key, scope_key, %{limit: limit, since_ms: nil}) do
     do_query(state, Map.fetch!(state.stmts, stmt_key), [scope_key, limit])
@@ -849,6 +1194,16 @@ defmodule LemonMemory.Store do
     stmt = Map.fetch!(state.stmts, :"#{stmt_key}_since")
     do_query(state, stmt, [scope_key, since_ms, limit])
   end
+  defp private_database_sidecars(path) do
+    Enum.reduce_while(["-wal", "-shm"], :ok, fn suffix, :ok ->
+      case File.chmod(path <> suffix, 0o600) do
+        :ok -> {:cont, :ok}
+        {:error, :enoent} -> {:cont, :ok}
+        error -> {:halt, error}
+      end
+    end)
+  end
+
 
   # Unconfigured, memory lands next to the main store's data so a deployment
   # that points the store at a directory gets its memory database there too.
@@ -869,6 +1224,8 @@ defmodule LemonMemory.Store do
          :ok <- Sqlite3.execute(conn, "PRAGMA temp_store=MEMORY"),
          :ok <- Sqlite3.execute(conn, "PRAGMA busy_timeout=5000"),
          :ok <- Sqlite3.execute(conn, @schema_sql),
+         :ok <- migrate_ownership_columns(conn),
+         :ok <- Sqlite3.execute(conn, "CREATE TABLE IF NOT EXISTS memory_transfer_journal (operation_key TEXT PRIMARY KEY, payload TEXT NOT NULL)"),
          :ok <- Sqlite3.execute(conn, @fts_schema_sql) do
       Enum.reduce_while(@index_sqls, :ok, fn sql, :ok ->
         case Sqlite3.execute(conn, sql) do
@@ -879,12 +1236,37 @@ defmodule LemonMemory.Store do
     end
   end
 
+  # Adding nullable columns does not attest, rewrite, or reindex retained rows.
+  defp migrate_ownership_columns(conn) do
+    with {:ok, stmt} <- Sqlite3.prepare(conn, "PRAGMA table_info(memory_documents)") do
+      try do
+        with {:ok, rows} <- Sqlite3.fetch_all(conn, stmt) do
+          names = Enum.map(rows, &Enum.at(&1, 1))
+          Enum.reduce_while(~w(memory_scope memory_context_key home_digest memory_kind repository_root), :ok,
+            fn name, :ok ->
+              result = if name in names, do: :ok,
+                else: Sqlite3.execute(conn, "ALTER TABLE memory_documents ADD COLUMN #{name} TEXT")
+              case result do
+                :ok -> {:cont, :ok}
+                error -> {:halt, error}
+              end
+            end)
+        end
+      after
+        Sqlite3.release(conn, stmt)
+      end
+    end
+  end
+
   defp prepare_statements(conn) do
     with {:ok, put} <- Sqlite3.prepare(conn, @put_sql),
          {:ok, put_new} <- Sqlite3.prepare(conn, @put_new_sql),
          {:ok, get_document} <- Sqlite3.prepare(conn, @get_document_sql),
+         {:ok, get_owned_document} <- Sqlite3.prepare(conn, @get_owned_document_sql),
          {:ok, get_by_session} <- Sqlite3.prepare(conn, @get_by_session_sql),
          {:ok, get_by_agent} <- Sqlite3.prepare(conn, @get_by_agent_sql),
+         {:ok, owned_recent} <- Sqlite3.prepare(conn, @owned_recent_sql),
+         {:ok, owned_search} <- Sqlite3.prepare(conn, @owned_search_sql),
          {:ok, get_by_workspace} <- Sqlite3.prepare(conn, @get_by_workspace_sql),
          {:ok, get_by_session_since} <- Sqlite3.prepare(conn, @get_by_session_since_sql),
          {:ok, get_by_agent_since} <- Sqlite3.prepare(conn, @get_by_agent_since_sql),
@@ -913,8 +1295,11 @@ defmodule LemonMemory.Store do
          put: put,
          put_new: put_new,
          get_document: get_document,
+         get_owned_document: get_owned_document,
          get_by_session: get_by_session,
          get_by_agent: get_by_agent,
+         owned_recent: owned_recent,
+         owned_search: owned_search,
          get_by_workspace: get_by_workspace,
          get_by_session_since: get_by_session_since,
          get_by_agent_since: get_by_agent_since,
@@ -1038,7 +1423,7 @@ defmodule LemonMemory.Store do
       doc.model,
       Atom.to_string(doc.outcome),
       {:blob, encode(doc.meta)}
-    ]
+    ] ++ Tuple.to_list(ContextScope.index_fields(doc.meta, doc.workspace_key))
   end
 
   defp do_delete_document(state, doc_id) do
@@ -1181,7 +1566,12 @@ defmodule LemonMemory.Store do
          provider,
          model,
          outcome,
-         meta_blob
+         meta_blob,
+         memory_scope,
+         memory_context_key,
+         home_digest,
+         memory_kind,
+         repository_root
        ]) do
     with {:ok, tools_used} <- decode(tools_used_blob),
          {:ok, meta} <- decode(meta_blob) do
@@ -1200,7 +1590,8 @@ defmodule LemonMemory.Store do
         provider: provider,
         model: model,
         outcome: safe_atom(outcome, :unknown),
-        meta: meta
+        meta: meta,
+        index: {memory_scope, memory_context_key, home_digest, memory_kind, repository_root}
       }
 
       {:ok, doc}

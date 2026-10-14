@@ -17,6 +17,7 @@ defmodule CodingAgent.ExecutionNode.Worker do
   alias CodingAgent.Executor.RemoteEventCodec
   alias LemonCore.{Bus, ExecApprovals}
   alias LemonGateway.ExecutionRequest
+  alias LemonMemory.{ContextScope, Document, Ingest, Project}
 
   @protocol_version 1
   @max_control_text_bytes 16 * 1_024
@@ -32,16 +33,23 @@ defmodule CodingAgent.ExecutionNode.Worker do
   @capabilities %{
     "coding_agent.run" => %{"version" => @protocol_version},
     "node.invoke.event" => %{"version" => @protocol_version, "maxBytes" => 65_536},
-    "memory.list" => %{"version" => @protocol_version},
-    "memory.search" => %{"version" => @protocol_version},
-    "memory.get" => %{"version" => @protocol_version},
-    "memory.add" => %{"version" => @protocol_version},
-    "memory.delete" => %{"version" => @protocol_version},
     "node.enrollment" => %{"version" => 1, "inviteCodes" => true, "repairInvites" => true},
     "node.mcp.discover" => %{"version" => @protocol_version},
     "node.profile.sync" => %{"version" => @protocol_version},
     "node.profile.sync.status" => %{"version" => @protocol_version},
     "node.profile.paths" => %{"version" => @protocol_version},
+    "memory.list" => %{"version" => @protocol_version, "contextVersion" => 1},
+    "memory.search" => %{"version" => @protocol_version, "contextVersion" => 1},
+    "memory.get" => %{"version" => @protocol_version, "contextVersion" => 1},
+    "memory.add" => %{"version" => @protocol_version, "contextVersion" => 1},
+    "memory.delete" => %{"version" => @protocol_version, "contextVersion" => 1},
+    "memory.transfer.prepare" => %{"version" => @protocol_version, "contextVersion" => 1},
+    "memory.transfer.snapshot" => %{"version" => @protocol_version, "contextVersion" => 1},
+    "memory.transfer.validate" => %{"version" => @protocol_version, "contextVersion" => 1},
+    "memory.transfer.preview" => %{"version" => @protocol_version, "contextVersion" => 1},
+    "memory.transfer.apply" => %{"version" => @protocol_version, "contextVersion" => 1},
+    "memory.transfer.status" => %{"version" => @protocol_version, "contextVersion" => 1},
+    "memory.transfer.inspect" => %{"version" => @protocol_version, "contextVersion" => 1},
     "node.invoke.control" => %{
       "version" => @protocol_version,
       "operations" => ["steer", "redirect"],
@@ -73,6 +81,7 @@ defmodule CodingAgent.ExecutionNode.Worker do
     :mcp_discovery_module,
     :profile_sync_module,
     :task_supervisor,
+    :memory_ingest_server,
     :token_store_module,
     :token_store_opts,
     :notify_pid,
@@ -129,6 +138,7 @@ defmodule CodingAgent.ExecutionNode.Worker do
        mcp_discovery_module: Keyword.get(opts, :mcp_discovery_module, LemonSkills.McpDiscovery),
        profile_sync_module: Keyword.get(opts, :profile_sync_module, CodingAgent.ExecutionNode.ProfileSync),
        task_supervisor: Keyword.get(opts, :task_supervisor, CodingAgent.TaskSupervisor),
+       memory_ingest_server: Keyword.get(opts, :memory_ingest_server, Ingest),
        token_store_module: Keyword.get(opts, :token_store_module, TokenStore),
        token_store_opts: Keyword.get(opts, :token_store_opts, []),
        notify_pid: Keyword.get(opts, :notify_pid),
@@ -565,6 +575,9 @@ defmodule CodingAgent.ExecutionNode.Worker do
         payload_error = validate_payload(args, state) ->
           {:noreply, send_invoke_error(state, invoke_id, payload_error)}
 
+        method in CodingAgent.ExecutionNode.MemoryTransfer.methods() ->
+          {:noreply, invoke_memory_transfer(state, invoke_id, method, args)}
+
         method in ["memory.list", "memory.search", "memory.get", "memory.add", "memory.delete"] ->
           {:noreply, invoke_memory(state, invoke_id, method, args)}
 
@@ -671,11 +684,27 @@ defmodule CodingAgent.ExecutionNode.Worker do
 
   defp handle_node_event(_event, _payload, state), do: {:noreply, state}
 
+  defp invoke_memory_transfer(state, invoke_id, method, args) do
+    result = CodingAgent.ExecutionNode.MemoryTransfer.execute(method, args, state.node_id)
+    if method in ["memory.transfer.prepare", "memory.transfer.snapshot"],
+      do: send_memory_result(state, invoke_id, result, :snapshot_too_large),
+      else: send_memory_result(state, invoke_id, result)
+  end
+
   defp invoke_memory(state, invoke_id, "memory." <> operation, args) do
+    result = LemonSkills.ProfileMemory.execute(operation, args["profileId"], args)
+    send_memory_result(state, invoke_id, result)
+  rescue
+    _ -> send_invoke_error(state, invoke_id, :memory_unavailable)
+  catch
+    _, _ -> send_invoke_error(state, invoke_id, :memory_unavailable)
+  end
+
+  defp send_memory_result(state, invoke_id, result, overflow \\ :result_payload_limit_exceeded) do
     result =
-      case LemonSkills.ProfileMemory.execute(operation, args["profileId"], args) do
+      case result do
         {:ok, payload} -> %{"ok" => true, "payload" => payload}
-        {:error, reason} when is_atom(reason) -> %{"ok" => false, "error" => Atom.to_string(reason)}
+        {:error, reason} -> %{"ok" => false, "error" => Atom.to_string(reason)}
       end
 
     params = %{"invokeId" => invoke_id, "result" => result}
@@ -685,13 +714,12 @@ defmodule CodingAgent.ExecutionNode.Worker do
         request(state, "node.invoke.result", params, {:invoke_result, invoke_id})
         state
 
+      {:error, _reason} when overflow == :snapshot_too_large ->
+        send_memory_result(state, invoke_id, {:error, :snapshot_too_large})
+
       {:error, _reason} ->
         send_invoke_error(state, invoke_id, :result_payload_limit_exceeded)
     end
-  rescue
-    _ -> send_invoke_error(state, invoke_id, :memory_unavailable)
-  catch
-    _, _ -> send_invoke_error(state, invoke_id, :memory_unavailable)
   end
 
   defp host_io_opts(state),
@@ -825,7 +853,8 @@ defmodule CodingAgent.ExecutionNode.Worker do
         pending_events: 0,
         inflight: nil,
         completed: nil,
-        approvals: MapSet.new()
+        approvals: MapSet.new(),
+        memory_snapshot: memory_snapshot(request)
       }
 
       %{
@@ -894,6 +923,8 @@ defmodule CodingAgent.ExecutionNode.Worker do
         _ -> accumulated
       end
 
+    record_memory_completion(state, invocation, answer, completed)
+
     result = %{
       "completed" => %{
         "ok" => completed.ok == true,
@@ -916,6 +947,52 @@ defmodule CodingAgent.ExecutionNode.Worker do
     end
 
     remove_invocation(state, invoke_id)
+  end
+
+  # Only original admitted request ownership can stamp destination-local memory.
+  # Provider/completion metadata and MCP configuration are never part of this snapshot.
+  defp memory_snapshot(%ExecutionRequest{} = request) do
+    meta = Map.take(request.meta || %{},
+      [:profile_id, :invocation_context_key, :memory_context_key, :memory_context_verified])
+    agent =
+      case Map.fetch(request.meta || %{}, :agent_id) do
+        {:ok, canonical} -> canonical
+        :error -> LemonCore.SessionKey.agent_id(request.session_key)
+      end
+
+    with {:ok, {:private, _key}} <- ContextScope.scope(meta),
+         true <- is_binary(agent) and byte_size(agent) in 1..64 and String.valid?(agent),
+         {:ok, meta} <- memory_home(meta) do
+      %{run_id: request.run_id, session_key: request.session_key, agent_id: agent,
+        cwd: request.cwd, workspace_key: request.cwd, prompt: Document.summary_text(request.prompt),
+        meta: meta, started_at: System.system_time(:millisecond)}
+    else
+      _ -> nil
+    end
+  end
+
+  defp memory_home(meta) do
+    # Bind this destination's canonical home at admission, not later from mutable
+    # completion metadata or an application path change while ingest is queued.
+    meta = Project.history_metadata(meta)
+    if is_binary(meta["home_digest"]), do: {:ok, meta}, else: {:error, :invalid_memory_home}
+  end
+
+  defp record_memory_completion(_state, %{memory_snapshot: nil}, _answer, _completed), do: :ok
+  defp record_memory_completion(state, %{memory_snapshot: snapshot}, answer, completed) do
+    outcome = LemonCore.RunOutcome.infer(%{completed:
+      %{ok: completed.ok == true, answer: answer, error: completed.error}})
+    summary =
+      snapshot
+      |> Map.drop([:run_id, :started_at])
+      |> Map.put(:outcome, outcome)
+      |> Map.put(:completed, %{ok: completed.ok == true, answer: Document.summary_text(answer)})
+    Ingest.ingest(state.memory_ingest_server, snapshot.run_id,
+      %{events: [], started_at: snapshot.started_at}, summary)
+  rescue
+    _ -> :ok
+  catch
+    _, _ -> :ok
   end
 
   defp send_invoke_error(state, invoke_id, reason) do
@@ -1290,6 +1367,11 @@ defmodule CodingAgent.ExecutionNode.Worker do
       :thinking_level,
       :system_prompt,
       :agent_id,
+      :profile_id,
+      :invocation_context_key,
+      :memory_context_key,
+      :memory_context_verified,
+      :shared_memory_grant,
       :resume_source,
       :acp_session_id,
       :acp_client_terminal,
@@ -1344,9 +1426,13 @@ defmodule CodingAgent.ExecutionNode.Worker do
     Enum.reduce(keys, map, fn key, acc ->
       string_key = Atom.to_string(key)
 
-      case Map.pop(acc, string_key) do
-        {nil, acc} -> acc
-        {value, acc} -> Map.put(acc, key, value)
+      case Map.fetch(acc, key) do
+        {:ok, _canonical} -> Map.delete(acc, string_key)
+        :error ->
+          case Map.pop(acc, string_key) do
+            {nil, acc} -> acc
+            {value, acc} -> Map.put(acc, key, value)
+          end
       end
     end)
   end
@@ -1385,7 +1471,12 @@ defmodule CodingAgent.ExecutionNode.Worker do
   defp authentication_failure_reason(_error, :node), do: :node_authentication_failed
   defp authentication_failure_reason(_error, _mode), do: :authentication_failed
 
-  defp value(map, key) when is_map(map), do: Map.get(map, key) || Map.get(map, key_atom(key))
+  defp value(map, key) when is_map(map) do
+    case Map.fetch(map, key_atom(key)) do
+      {:ok, canonical} -> canonical
+      :error -> Map.get(map, key)
+    end
+  end
 
   defp key_atom("version"), do: :version
   defp key_atom("runId"), do: :run_id

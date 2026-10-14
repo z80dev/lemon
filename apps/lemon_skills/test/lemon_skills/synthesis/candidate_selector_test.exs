@@ -25,8 +25,21 @@ defmodule LemonSkills.Synthesis.CandidateSelectorTest do
       provider: "anthropic",
       model: "claude-sonnet",
       outcome: Keyword.get(overrides, :outcome, :success),
-      meta: %{}
+      meta: Keyword.get(overrides, :meta, %{})
     }
+    |> Document.with_index()
+  end
+
+  test "private and unproven ownership cannot become global synthesized skill drafts" do
+    private = doc(meta: Map.put(LemonMemory.ContextScope.metadata({:private, "actor-a"}),
+      "shared_memory_grant", true))
+    unproven = doc(meta: %{"memory_scope" => "unproven"})
+    claimed = %{doc(meta: LemonMemory.ContextScope.metadata(:shared)) |
+      index: {nil, nil, nil, nil, nil}}
+    legacy = doc()
+    shared = doc(meta: LemonMemory.ContextScope.metadata(:shared), prompt: @prompt <> " shared")
+    assert Enum.map(CandidateSelector.select([private, unproven, claimed, legacy, shared]), & &1.doc_id)
+      |> Enum.sort() == Enum.sort([legacy.doc_id, shared.doc_id])
   end
 
   describe "select/1 quality filters" do

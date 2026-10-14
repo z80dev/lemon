@@ -66,6 +66,16 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   read/admin scopes, and return bounded redacted previews. Named-node profiles
   execute memory operations on their destination through authenticated node
   invocations, without controller paths or credentials crossing the boundary.
+- Private, admin-only `memory.transfer` for machine moves: full scoped memory
+  and assistant preferences copy through authenticated node invocations with
+  durable mutation-bound receipts, create-only defaults, exact source/target
+  digest-bound overwrite previews, and explicit read-only `memory.transfer.status`
+  reconciliation after uncertain outcomes. Placement stays unchanged until the
+  caller explicitly switches it.
+- Explicit private/shared memory management selections, exact worker scope echoes,
+  full-fact preference search and owned indexed search with bounded 512-codepoint
+  queries. Private preferences remain in the existing memory owner rather than
+  shared workspace files; intentional shared facts have canonical provenance.
 - Attached-machine control-plane APIs: destination-local host information,
   policy-rooted chunked file transfer, connection-owned real PTY terminals and
   write-only encrypted node secrets. Single-use, expiring, name-bound node
@@ -192,6 +202,18 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   server that consumes the terminal's policy frame. The filesystem helper has an
   import-safe direct-execution entrypoint; real binary terminal startup and queued
   input retain their own framing and descriptor-rooted cwd admission.
+- Context-owned native recall/bootstrap and remember/capture now use admitted
+  stable actor partitions across local and destination-worker completed runs.
+  Other actors, unproven summaries and raw legacy USER/MEMORY bytes cannot enter
+  owned recall; retained data is not rewritten or silently promoted to shared.
+  Transfers preserve persisted ownership rather than trusting retained raw claims.
+  Scoped worker calls require fresh capabilities and exact checked connection
+  binding before enqueue, with no private-to-legacy fallback.
+- Automatic native skill synthesis excludes indexed private/unproven documents
+  instead of publishing their summaries into global/profile draft files. New
+  memory indexes omit runtime credential configuration and ephemeral admission
+  proof artifacts; canonical preferences/project facts survive ordinary history
+  pruning, without promoting or rewriting legacy rows.
 
 ---
 

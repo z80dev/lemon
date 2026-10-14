@@ -26,33 +26,98 @@ defmodule LemonSkills.WorkspacePreferences do
     }
   }
 
-  @prompt_injection_patterns [
-    ~r/ignore (all )?(previous|prior|above) instructions/i,
-    ~r/disregard (all )?(previous|prior|above) instructions/i,
-    ~r/reveal (the )?(system|developer) prompt/i,
-    ~r/system prompt/i,
-    ~r/developer message/i,
-    ~r{<\|/?(?:system|developer|assistant|user)\|>}i
-  ]
-
-  @invisible_chars [
-    "\u202A",
-    "\u202B",
-    "\u202C",
-    "\u202D",
-    "\u202E",
-    "\u2066",
-    "\u2067",
-    "\u2068",
-    "\u2069",
-    "\u200B",
-    "\u200C",
-    "\u200D",
-    "\u200E",
-    "\u200F",
-    "\uFEFF"
-  ]
   @max_text_bytes 4_096
+
+  @doc "Hold the same owning lock used by remember throughout a transfer boundary."
+  def transfer_locked(workspace_dir, fun), do: locked(workspace_dir, fun)
+
+  @doc "Read complete preference bytes, distinguishing absent files from empty files."
+  def transfer_snapshot(workspace_dir, opts \\ []) do
+    with :ok <- safe_workspace(workspace_dir) do
+      Enum.reduce_while(["USER.md", "MEMORY.md"], {:ok, %{}}, fn name, {:ok, files} ->
+        path = Path.join(workspace_dir, name)
+        with :ok <- safe_file(path) do
+          case File.read(path) do
+            {:ok, text} ->
+              case if(Keyword.get(opts, :screen, true), do: transfer_text(text), else: :ok) do
+                :ok -> {:cont, {:ok, Map.put(files, name, text)}}
+                error -> {:halt, error}
+              end
+            {:error, :enoent} -> {:cont, {:ok, Map.put(files, name, nil)}}
+            _ -> {:halt, {:error, :memory_unavailable}}
+          end
+        else
+          error -> {:halt, error}
+        end
+      end)
+    end
+  end
+
+  def transfer_text(nil), do: :ok
+  def transfer_text(text) when is_binary(text) and byte_size(text) <= 65_536 do
+    cond do
+      not String.valid?(text) or String.contains?(text, <<0>>) -> {:error, :invalid_snapshot}
+      screen_text(text) != :ok -> {:error, :unsafe_snapshot}
+      true -> :ok
+    end
+  end
+  def transfer_text(_), do: {:error, :snapshot_too_large}
+
+  @doc "Stage exact new bytes and old bytes privately before publishing any file."
+  def transfer_stage(workspace_dir, files, previous) do
+    stage = Path.join(workspace_dir, ".memory-transfer-" <> LemonCore.Id.uuid())
+    with :ok <- safe_workspace(workspace_dir),
+         :ok <- File.mkdir_p(workspace_dir),
+         :ok <- File.mkdir(stage),
+         :ok <- File.chmod(stage, 0o700) do
+      result = Enum.reduce_while(["USER.md", "MEMORY.md"], :ok, fn name, :ok ->
+        with :ok <- stage_bytes(Path.join(stage, name <> ".new"), files[name]),
+             :ok <- stage_bytes(Path.join(stage, name <> ".old"), previous[name]) do
+          {:cont, :ok}
+        else
+          _ -> {:halt, {:error, :memory_unavailable}}
+        end
+      end)
+      case result do
+        :ok -> {:ok, %{dir: stage, workspace: workspace_dir, files: files, previous: previous}}
+        error -> File.rm_rf(stage); error
+      end
+    else
+      _ -> {:error, :memory_unavailable}
+    end
+  end
+
+  def transfer_publish(stage), do: publish_staged(stage, stage.files, ".new")
+  def transfer_restore(stage), do: publish_staged(stage, stage.previous, ".old")
+  def transfer_cleanup(stage), do: File.rm_rf(stage.dir)
+
+  defp stage_bytes(_path, nil), do: :ok
+  defp stage_bytes(path, bytes) do
+    with :ok <- File.write(path, bytes, [:binary, :exclusive, :sync]),
+         :ok <- File.chmod(path, 0o600), do: :ok
+  end
+
+  defp publish_staged(stage, files, suffix) do
+    Enum.reduce_while(["USER.md", "MEMORY.md"], :ok, fn name, :ok ->
+      path = Path.join(stage.workspace, name)
+      result = with :ok <- safe_workspace(stage.workspace),
+                    :ok <- safe_file(path) do
+        if files[name] == nil do
+          case File.rm(path) do
+            :ok -> :ok
+            {:error, :enoent} -> :ok
+            _ -> {:error, :memory_unavailable}
+          end
+        else
+          File.rename(Path.join(stage.dir, name <> suffix), path)
+        end
+      end
+      case result do
+        :ok -> {:cont, :ok}
+        _ -> {:halt, {:error, :memory_unavailable}}
+      end
+    end)
+  end
 
   @doc "Apply a remember workspace mutation, preserving the tool result contract."
   def remember(workspace_dir, target, action, params) do
@@ -336,24 +401,18 @@ defmodule LemonSkills.WorkspacePreferences do
   end
 
   defp screen_text(text) do
-    cond do
-      Safety.contains_secret?(text) ->
+    case Safety.note_refusal_reason(text) do
+      :secret ->
         {:error, "Refusing to store secret-looking content in prompt-injected memory"}
-
-      contains_invisible_char?(text) ->
+      :invisible ->
         {:error, "Refusing to store invisible or bidirectional control characters"}
-
-      Enum.any?(@prompt_injection_patterns, &Regex.match?(&1, text)) ->
+      :prompt_injection ->
         {:error, "Refusing to store prompt-injection-like content in prompt-injected memory"}
-
-      true ->
+      nil ->
         :ok
     end
   end
 
-  defp contains_invisible_char?(text) do
-    Enum.any?(@invisible_chars, &String.contains?(text, &1))
-  end
 
   defp add_note(path, target, spec, content, text) do
     if String.contains?(content, text) do
