@@ -25,6 +25,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   metadata-only audit collector scope for workspace integration tokens.
 - Clarified Lemon Bot file chunks retain the owning node's total source-file
   size, with actual chunk length measured from decoded bytes for progress.
+- Lemon Bot mailbox accounts expose optional measured provider indexing
+  status/time instead of fabricated eventual-indexing warning labels.
+- Lemon Bot group receipts distinguish proven per-target rejection from
+  admitted work and genuinely uncertain dispatch without automatic replay.
 - Named execution-node runs now stream live chat deltas, tool activity and
   checkpoints through the controller's normal run/session events. Invocation-bound,
   sequenced `node.invoke.event` frames reject foreign/stale node sessions, ignore
