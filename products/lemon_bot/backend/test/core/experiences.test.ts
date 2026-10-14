@@ -3,9 +3,9 @@ import { Store } from '../../src/core/store';
 import { createMutationService } from '../../src/core/mutations';
 import { createEventService } from '../../src/core/events';
 import type * as P from '../../../contracts/protocol';
-import type { BackendServices, Principal, RequestContext } from '../../src/core/services';
+import type { BackendServices, Principal, RequestContext, WorkspaceToolRestrictions } from '../../src/core/services';
 import { ApiError, fail } from '../../src/core/errors';
-import { botPresence, createExperienceRoutes, createExperienceService, desiredBotGrants, effectiveBotGrants, nativeBotToolPolicy, reviewedCandidates } from '../../src/core/experiences';
+import { botPresence, createExperienceRoutes, createExperienceService, desiredBotGrants, effectiveBotGrants, nativeBotToolPolicy, reviewedCandidates, workspaceNativeToolRestrictions } from '../../src/core/experiences';
 import { productBotTools } from '../../src/core/bots';
 import { z } from '../../src/core/validation';
 import { buildPrivateBotMemoryContextKey } from '../../src/runtime/runs';
@@ -581,4 +581,108 @@ test('activity projects wire fields only and excludes unproven or foreign-key me
     const wire = JSON.stringify(result);
     for (const forbidden of [memory.text, tool.tool, tool.title, tool.detail!, nonce, memoryContextKey, 'runtimeMemoryId', 'memoryContextKey', 'foreign-key-memory', 'unproven-memory']) expect(wire).not.toContain(forbidden);
   } finally { f.close(); }
+});
+
+function workspaceFixture() {
+  const f = fixture();
+  const connectorAliases = ['mcp_fixture_connector_read', 'mcp_fixture_connector_write'];
+  const servers = [
+    { name: 'lemon-bot', url: 'https://product.example.test/mcp', enabledTools: [...productBotTools] },
+    { name: 'connector-reports', url: 'https://connector.example.test/mcp', enabledTools: ['read_report', 'write_report'] },
+  ];
+  const ceiling = { servers, fingerprint: 'a'.repeat(64) };
+  f.store.setMetadata(`botPublicMcpCeiling:${f.bot.id}`, ceiling);
+  const acknowledged: P.JSONObject = { profile: 'custom', allow: [...projectedProductTools.map(tool => tool.executionName), ...connectorAliases, 'read', 'write', 'bash', 'lsp_diagnostics', 'task', 'webfetch', 'websearch'], deny: ['retained_deny'], blocked_tools: ['retained_block'], require_approval: ['retained_approval'] };
+  const restrictions: WorkspaceToolRestrictions = { localExecutionCeiling: 'allow', rules: [], allowedMcpOrigins: null, requireReview: false };
+  f.services.integrations.workspaceRestrictions = scope => { expect(scope).toEqual({ botId: f.bot.id, machineId: f.bot.machineId }); return restrictions; };
+  f.services.integrations.effectivePolicy = async () => { throw new Error('Workspace hardening must not evaluate an owner policy'); };
+  f.services.integrations.connectorConfig = async () => { throw new Error('Workspace hardening must not resolve credentials'); };
+  f.services.integrations.connectorTemplates = async () => { throw new Error('Workspace hardening must not rebuild a private registry'); };
+  f.services.decrypt = <T>(): T => { throw new Error('Workspace hardening must not decrypt private metadata'); };
+  f.services.auth.bot = () => { throw new Error('Workspace hardening must not impersonate a Bot owner'); };
+  const metadata = f.store.metadata.bind(f.store);
+  f.store.metadata = <T>(key: string): T | null => {
+    if (key !== `botPublicMcpCeiling:${f.bot.id}`) throw new Error('Workspace hardening must not read persona or private metadata');
+    return metadata<T>(key);
+  };
+  const projectionCalls: { name: string; url: string; toolNames: string[] }[] = [];
+  f.services.lemon.call = async <T>(method: string, input?: Record<string, unknown>, options?: { mutation?: boolean; timeoutMs?: number; resourceIds?: string[] }): Promise<T> => {
+    expect(method).toBe('mcp.execution_names'); expect(options).toEqual({ mutation: false });
+    const params = z.object({ server: z.object({ name: z.string(), url: z.url() }).strict(), toolNames: z.array(z.string()) }).strict().parse(input);
+    const server = servers.find(value => value.name === params.server.name);
+    expect(params.server).toEqual(server && { name: server.name, url: server.url }); expect(params.toolNames).toEqual(server?.enabledTools);
+    projectionCalls.push({ ...params.server, toolNames: params.toolNames });
+    const tools = params.server.name === 'lemon-bot' ? projectedProductTools : params.toolNames.map((name, index) => ({ name, executionName: connectorAliases[index]! }));
+    return { server: { name: params.server.name }, tools, count: tools.length } as T;
+  };
+  return { ...f, restrictions, acknowledged, ceiling, connectorAliases, projectionCalls };
+}
+
+describe('bounded workspace native hardening', () => {
+  test('tightens the acknowledged closed floor without owner lookup, private metadata or MCP discovery', async () => {
+    const f = workspaceFixture();
+    try {
+      f.restrictions.localExecutionCeiling = 'deny';
+      const policy = await workspaceNativeToolRestrictions(f.services, f.bot, f.acknowledged);
+      for (const tool of ['read', 'write', 'bash', 'lsp_diagnostics', ...f.connectorAliases]) { expect(policy.allow).not.toContain(tool); expect(policy.deny).toContain(tool); }
+      for (const tool of projectedProductTools) expect(policy.allow).toContain(tool.executionName);
+      for (const tool of ['task', 'webfetch', 'websearch']) expect(policy.allow).toContain(tool);
+      expect(policy.deny).toContain('retained_deny'); expect(policy.blocked_tools).toContain('retained_block'); expect(policy.require_approval).toContain('retained_approval');
+      const previousAllowed = z.array(z.string()).parse(f.acknowledged.allow);
+      expect(z.array(z.string()).parse(policy.allow).every(tool => previousAllowed.includes(tool))).toBe(true);
+      expect(f.projectionCalls).toHaveLength(2);
+    } finally { f.close(); }
+  });
+  test('workspace-only category rules add mandatory review without weakening other categories', async () => {
+    const f = workspaceFixture();
+    try {
+      f.restrictions.rules = [{ ...f.base, id: 'workspace-files', ownerUserId: null, category: 'files', botId: f.bot.id, machineId: f.bot.machineId, mode: 'ask_first', description: 'Review local file operations', required: true }];
+      const policy = await workspaceNativeToolRestrictions(f.services, f.bot, f.acknowledged);
+      for (const tool of ['read', 'write', 'lsp_diagnostics']) expect(policy.require_approval).toContain(tool);
+      expect(policy.require_approval).not.toContain('bash'); expect(policy.allow).toContain('bash');
+      expect(policy.require_approval).toContain('retained_approval');
+    } finally { f.close(); }
+  });
+  test('workspace review and origin restrictions preserve product aliases and prior review requirements', async () => {
+    const f = workspaceFixture();
+    try {
+      f.restrictions.requireReview = true;
+      const reviewed = await workspaceNativeToolRestrictions(f.services, f.bot, f.acknowledged);
+      for (const tool of ['read', 'write', 'bash', 'lsp_diagnostics', ...f.connectorAliases]) expect(reviewed.require_approval).toContain(tool);
+      f.restrictions.allowedMcpOrigins = [];
+      const restricted = await workspaceNativeToolRestrictions(f.services, f.bot, f.acknowledged);
+      for (const tool of f.connectorAliases) { expect(restricted.allow).not.toContain(tool); expect(restricted.deny).toContain(tool); }
+      for (const tool of projectedProductTools) expect(restricted.allow).toContain(tool.executionName);
+      expect(restricted.allow).toContain('webfetch'); expect(restricted.require_approval).toContain('retained_approval');
+    } finally { f.close(); }
+  });
+  test('measured read-only or unknown machine ceilings cannot widen acknowledged native access', async () => {
+    const f = workspaceFixture();
+    try {
+      const measured: P.MachineCapabilities = { machineId: f.bot.machineId, os: 'linux', measuredAtMs: f.services.now(), stale: false, items: [
+        { id: 'files', name: 'Files', category: 'files', supported: true, configuredLevel: 'read_only', osGrant: 'not_required', tools: ['read', 'write'], reason: 'Measured roots', measuredAtMs: f.services.now(), stale: false },
+        { id: 'terminal', name: 'Terminal', category: 'shell', supported: true, configuredLevel: 'read_interact', osGrant: 'not_required', tools: ['bash', 'lsp_diagnostics'], reason: 'Measured programs', measuredAtMs: f.services.now(), stale: false },
+      ] };
+      const policy = await workspaceNativeToolRestrictions(f.services, f.bot, f.acknowledged, measured);
+      expect(policy.allow).toContain('read'); expect(policy.allow).toContain('bash'); expect(policy.allow).not.toContain('write'); expect(policy.allow).not.toContain('lsp_diagnostics');
+      measured.items[0]!.osGrant = 'unknown';
+      expect((await workspaceNativeToolRestrictions(f.services, f.bot, f.acknowledged, measured)).allow).not.toContain('read');
+    } finally { f.close(); }
+  });
+  test('rejects open floors, contaminated public ceilings, absent hooks and private rules', async () => {
+    const f = workspaceFixture();
+    try {
+      await expect(workspaceNativeToolRestrictions(f.services, f.bot, { ...f.acknowledged, allow: 'all' })).rejects.toMatchObject({ code: 'capability_unavailable' });
+      f.store.setMetadata(`botPublicMcpCeiling:${f.bot.id}`, { ...f.ceiling, servers: f.ceiling.servers.map(server => ({ ...server, headers: { Authorization: 'not-public-metadata' } })) });
+      await expect(workspaceNativeToolRestrictions(f.services, f.bot, f.acknowledged)).rejects.toMatchObject({ code: 'capability_unavailable' });
+      f.store.setMetadata(`botPublicMcpCeiling:${f.bot.id}`, f.ceiling);
+      const hook = f.services.integrations.workspaceRestrictions;
+      delete f.services.integrations.workspaceRestrictions;
+      await expect(workspaceNativeToolRestrictions(f.services, f.bot, f.acknowledged)).rejects.toMatchObject({ code: 'capability_unavailable' });
+      f.services.integrations.workspaceRestrictions = hook;
+      f.restrictions.rules = [{ ...f.base, id: 'private-rule', ownerUserId: 'bob', category: 'files', botId: null, machineId: null, mode: 'ask_first', description: 'Must not consume a personal rule', required: true }];
+      await expect(workspaceNativeToolRestrictions(f.services, f.bot, f.acknowledged)).rejects.toMatchObject({ code: 'capability_unavailable' });
+      expect(f.projectionCalls).toHaveLength(0);
+    } finally { f.close(); }
+  });
 });

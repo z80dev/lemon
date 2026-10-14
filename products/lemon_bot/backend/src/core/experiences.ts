@@ -158,19 +158,74 @@ const nativeToolFamilies: Record<string, string[]> = {
   browser: ['browser_tabs', 'browser_tab_open', 'browser_tab_activate', 'browser_tab_close', 'browser_navigate', 'browser_snapshot', 'browser_get_content', 'browser_click', 'browser_type', 'browser_hover', 'browser_select_option', 'browser_upload_file', 'browser_download', 'browser_press', 'browser_scroll', 'browser_back', 'browser_wait_for_selector', 'browser_evaluate', 'browser_events', 'browser_get_cookies', 'browser_set_cookies', 'browser_clear_state', 'browser_screenshot', 'browser_analyze'],
 };
 const nativeBaselineTools = ['read_skill', 'webfetch', 'websearch', 'task', 'agent_message', 'wait', 'parent_question'];
-async function productExecutionNames(s: BackendServices): Promise<string[]> {
+async function executionNames(s: BackendServices, server: { name: string; url: string }, toolNames: readonly string[]): Promise<string[]> {
   if (!s.lemon.connected || !s.lemon.methods.includes('mcp.execution_names')) fail('capability_unavailable', 'The controller does not advertise pure MCP execution-name projection.');
-  const server = { name: 'lemon-bot', url: new URL('/mcp', s.config.publicUrl).href };
-  const raw = await s.lemon.call('mcp.execution_names', { server, toolNames: [...productBotTools] }, { mutation: false });
-  const result = z.object({ server: z.object({ name: z.literal('lemon-bot') }).strict(), tools: z.array(z.object({ name: z.string(), executionName: z.string().min(1).max(64).regex(/^mcp_[a-z0-9_]+$/) }).strict()).length(productBotTools.length), count: z.literal(productBotTools.length) }).strict().safeParse(raw);
-  if (!result.success || new Set(result.data.tools.map(tool => tool.name)).size !== productBotTools.length || new Set(result.data.tools.map(tool => tool.executionName)).size !== productBotTools.length || result.data.tools.some(tool => !productBotTools.some(name => name === tool.name))) fail('upstream_unavailable', 'The controller returned an incomplete or ambiguous product execution-name projection.');
+  const raw = await s.lemon.call('mcp.execution_names', { server, toolNames: [...toolNames] }, { mutation: false });
+  const result = z.object({ server: z.object({ name: z.literal(server.name) }).strict(), tools: z.array(z.object({ name: z.string(), executionName: z.string().min(1).max(64).regex(/^mcp_[a-z0-9_]+$/) }).strict()).length(toolNames.length), count: z.literal(toolNames.length) }).strict().safeParse(raw);
+  if (!result.success || new Set(result.data.tools.map(tool => tool.name)).size !== toolNames.length || new Set(result.data.tools.map(tool => tool.executionName)).size !== toolNames.length || result.data.tools.some(tool => !toolNames.includes(tool.name))) fail('upstream_unavailable', 'The controller returned an incomplete or ambiguous execution-name projection.');
   return result.data.tools.map(tool => tool.executionName);
+}
+async function productExecutionNames(s: BackendServices): Promise<string[]> {
+  return executionNames(s, { name: 'lemon-bot', url: new URL('/mcp', s.config.publicUrl).href }, productBotTools);
 }
 const productExcludedNativeTools: Record<string, true> = {
   agent: true, remember: true, recall: true,
   cron: true, goal: true, kanban: true, todo: true, peer: true,
   skill_manage: true, tool_auth: true, extensions_status: true,
 };
+
+const policyTools = z.array(z.string().min(1).max(128)).max(16384);
+const acknowledgedNativePolicy = z.object({ profile: z.literal('custom'), allow: policyTools, deny: policyTools.default([]), blocked_tools: policyTools.default([]), require_approval: policyTools.default([]) }).strict();
+const publicMcpCeiling = z.object({
+  servers: z.array(z.object({ name: z.string().min(1).max(128), url: z.url(), enabledTools: z.array(z.string().min(1).max(128)).max(256).refine(names => new Set(names).size === names.length) }).strict()).max(16384),
+  fingerprint: z.string().regex(/^[a-f0-9]{64}$/),
+}).strict();
+
+/** Trusted hardening only: no owner principal, persona, private grant, credential lookup or MCP discovery. */
+export async function workspaceNativeToolRestrictions(s: BackendServices, bot: P.Bot, acknowledgedPolicy: P.JSONObject, measured?: P.MachineCapabilities): Promise<P.JSONObject> {
+  const previous = acknowledgedNativePolicy.safeParse(acknowledgedPolicy);
+  const cache = publicMcpCeiling.safeParse(s.store.metadata(`botPublicMcpCeiling:${bot.id}`));
+  if (!previous.success || !cache.success || new Set(cache.data.servers.map(server => server.name)).size !== cache.data.servers.length) fail('capability_unavailable', 'Workspace hardening requires an acknowledged closed native floor and credential-free public MCP ceiling.');
+  if (!cache.data.servers.some(server => server.name === 'lemon-bot')) fail('capability_unavailable', 'The acknowledged product MCP ceiling is missing.');
+  if (measured && measured.machineId !== bot.machineId) fail('invalid_request', 'Capability evidence belongs to a different assigned machine.');
+  if (!s.integrations.workspaceRestrictions) fail('capability_unavailable', 'The bounded workspace restriction projection is not configured.');
+  const restrictions = s.integrations.workspaceRestrictions({ botId: bot.id, machineId: bot.machineId });
+  if (restrictions.rules.some(rule => rule.ownerUserId !== null || rule.botId !== null && rule.botId !== bot.id || rule.machineId !== null && rule.machineId !== bot.machineId)) fail('capability_unavailable', 'Workspace hardening received a rule outside the requested workspace scope.');
+  const allowed = new Set(previous.data.allow), denied = new Set(previous.data.deny), blocked = new Set([...previous.data.blocked_tools, ...Object.keys(productExcludedNativeTools)]), approvals = new Set(previous.data.require_approval);
+  const review = (categories: string[]) => restrictions.requireReview || restrictions.localExecutionCeiling === 'ask' || restrictions.rules.some(rule => categories.includes(rule.category) && rule.mode !== 'allow');
+  for (const [category, names] of Object.entries(nativeToolFamilies)) {
+    const capability = measured?.items.find(item => item.category === category);
+    for (const tool of names) {
+      if (!allowed.has(tool)) continue;
+      const unavailable = measured && (!capability?.supported || capability.stale || !['granted', 'not_required'].includes(capability.osGrant) || capability.configuredLevel === 'off' || capability.configuredLevel === 'read_only' && !nativeReadTools[tool] || !capability.tools.includes(tool));
+      if (restrictions.localExecutionCeiling === 'deny' || unavailable) denied.add(tool);
+      else if (review([category, 'permissions'])) approvals.add(tool);
+    }
+  }
+  if (allowed.has('lsp_diagnostics')) {
+    const supported = !measured || ['files', 'shell'].every(category => measured.items.some(item => item.category === category && item.supported && !item.stale && ['granted', 'not_required'].includes(item.osGrant) && item.configuredLevel === 'read_interact')) && measured.items.some(item => item.category === 'shell' && item.tools.includes('lsp_diagnostics'));
+    if (restrictions.localExecutionCeiling === 'deny' || !supported) denied.add('lsp_diagnostics');
+    else if (review(['files', 'shell', 'permissions'])) approvals.add('lsp_diagnostics');
+  }
+  const mappedAliases = new Set<string>();
+  for (const server of cache.data.servers) {
+    const endpoint = new URL(server.url);
+    if (!['http:', 'https:'].includes(endpoint.protocol) || endpoint.username || endpoint.password) fail('capability_unavailable', 'The acknowledged MCP identity is not a public HTTP endpoint.');
+    const core = server.name === 'lemon-bot';
+    if (core && (server.enabledTools.length !== productBotTools.length || !productBotTools.every(name => server.enabledTools.includes(name)))) fail('capability_unavailable', 'The acknowledged product MCP ceiling is incomplete.');
+    const aliases = server.enabledTools.length ? await executionNames(s, { name: server.name, url: server.url }, server.enabledTools) : [];
+    for (const alias of aliases) {
+      if (mappedAliases.has(alias)) fail('capability_unavailable', 'The acknowledged MCP ceiling contains ambiguous aliases.');
+      mappedAliases.add(alias);
+      if (!allowed.has(alias) || core) continue;
+      if (restrictions.localExecutionCeiling === 'deny' || restrictions.allowedMcpOrigins !== null && !restrictions.allowedMcpOrigins.includes(endpoint.origin)) denied.add(alias);
+      else if (review(['connector', 'permissions', 'external_message', 'publish', 'purchase'])) approvals.add(alias);
+    }
+  }
+  for (const tool of allowed) if (denied.has(tool) || blocked.has(tool) || tool.startsWith('mcp_') && !mappedAliases.has(tool)) allowed.delete(tool);
+  if ([allowed, denied, blocked, approvals].some(values => values.size > 16384)) fail('capability_unavailable', 'The complete restricted native policy exceeds the owning schema limit.');
+  return { profile: 'custom', allow: [...allowed].sort(), deny: [...denied].sort(), blocked_tools: [...blocked].sort(), require_approval: [...approvals].sort() };
+}
 /** Desired and per-run native policy use the actual Bot owner; runtime admission fences pending cutovers. */
 export async function nativeBotToolPolicy(s: BackendServices, user: Principal, bot: P.Bot, capabilities?: P.MachineCapabilities): Promise<P.JSONObject> {
   assertBotOwner(user, bot);
