@@ -1,0 +1,30 @@
+.enterprise-page { max-width: 1120px; margin-inline: auto; }
+.enterprise-page > .stack, .enterprise-page > section { margin-block-start: 1.25rem; }
+.enterprise-tabs { flex-wrap: wrap; gap: .4rem; margin-block: 1.25rem; }
+.enterprise-page fieldset { min-width: 0; border: 1px solid color-mix(in srgb, currentColor 18%, transparent); border-radius: .75rem; padding: 1rem; }
+.enterprise-page legend { font-weight: 650; padding-inline: .35rem; }
+.enterprise-page fieldset:disabled { opacity: .75; }
+.enterprise-page .enterprise-choices { display: grid; gap: .65rem; }
+.enterprise-page .enterprise-choices label { align-items: flex-start; }
+.enterprise-page input[type="checkbox"] { flex: 0 0 auto; width: 1rem; height: 1rem; margin-block-start: .15rem; }
+.enterprise-page .enterprise-facts { display: grid; grid-template-columns: minmax(10rem, 1fr) minmax(0, 2fr); gap: .6rem 1rem; margin-block: .75rem; }
+.enterprise-page .enterprise-facts > div { display: contents; }
+.enterprise-page .enterprise-facts dt { font-size: .9rem; opacity: .75; }
+.enterprise-page .enterprise-facts dd { margin: 0; overflow-wrap: anywhere; }
+.enterprise-page .enterprise-code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .85rem; line-height: 1.6; tab-size: 2; }
+.enterprise-page .enterprise-secret { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; user-select: all; padding: .9rem; border: 1px solid color-mix(in srgb, currentColor 24%, transparent); border-radius: .5rem; }
+.enterprise-page .enterprise-steps { display: grid; gap: 1rem; padding-inline-start: 1.5rem; }
+.enterprise-page .list-row { align-items: flex-start; flex-wrap: wrap; gap: 1rem; }
+.enterprise-page code { overflow-wrap: anywhere; }
+.enterprise-page button { white-space: normal; }
+.enterprise-page :focus-visible { outline: 2px solid currentColor; outline-offset: 3px; }
+@media (max-width: 640px) {
+  .enterprise-page .enterprise-facts { grid-template-columns: 1fr; gap: .25rem; }
+  .enterprise-page .enterprise-facts dd { margin-block-end: .75rem; }
+  .enterprise-page .enterprise-steps { padding-inline-start: 1rem; }
+  .enterprise-tabs button { flex: 1 1 9rem; }
+  .enterprise-page .row > .field { flex: 1 1 100%; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .enterprise-page *, .enterprise-page *::before, .enterprise-page *::after { transition: none !important; animation: none !important; scroll-behavior: auto !important; }
+}

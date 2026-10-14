@@ -1,0 +1,49 @@
+import { useState } from 'react';
+import { nonce, type Bot, type Routine, type SpendLimit } from '@lemon-bot/sdk';
+import { useApp } from '../../app';
+import { Badge, EmptyState, Field, formatTime } from '../../ui';
+import { IntentInputError, DeleteButton, IntentNotice, label, QueryNotice, Toggle, useCollection, useIntent } from './shared'
+
+function LimitEditor({ limit, bots, routines, onSaved, onClose }: { limit?: SpendLimit; bots: Bot[]; routines: Routine[]; onSaved: () => Promise<void>; onClose: () => void }) {
+  const { client, snapshot, reportError } = useApp();
+  const admin = snapshot.member.role !== 'member';
+  const [scope, setScope] = useState<SpendLimit['scope']>(limit?.scope ?? 'user');
+  const [subjectId, setSubjectId] = useState(limit?.subjectId ?? snapshot.user.id);
+  const [period, setPeriod] = useState<SpendLimit['period']>(limit?.period ?? 'month');
+  const [limitUsd, setLimitUsd] = useState(String(limit?.limitUsd ?? ''));
+  const [warningPercent, setWarningPercent] = useState(String(limit?.warningPercent ?? 80));
+  const [providerAccount, setProviderAccount] = useState(limit?.providerAccount ?? '');
+  const [enabled, setEnabled] = useState(limit?.enabled ?? true);
+  const intent = useIntent();
+  const ownBots = bots.filter(bot => bot.ownerUserId === snapshot.user.id);
+  const ownRoutines = routines.filter(routine => routine.ownerUserId === snapshot.user.id);
+  function changeScope(value: SpendLimit['scope']) { setScope(value); setSubjectId(value === 'user' ? snapshot.user.id : ''); }
+  return <form className="panel stack" onSubmit={event => { event.preventDefault(); void intent.perform(() => { const ceiling = Number(limitUsd); const warning = Number(warningPercent); if (!Number.isFinite(ceiling) || ceiling < 0 || !Number.isFinite(warning) || warning < 1 || warning > 99) throw new IntentInputError('Ceiling must be finite nonnegative USD; warning percentage must be finite and from 1 to 99.'); return limit ? client.call('PATCH /spend-limits/:id', { params: { id: limit.id }, body: { revision: limit.revision, clientNonce: nonce(), limitUsd: ceiling, warningPercent: warning, enabled } }) : client.call('POST /spend-limits', { body: { clientNonce: nonce(), scope, ...(scope === 'workspace' ? {} : { subjectId }), period, limitUsd: ceiling, warningPercent: warning, ...(providerAccount.trim() ? { providerAccount: providerAccount.trim() } : {}) } }); }).then(result => { if (result) { onClose(); void onSaved().catch(reportError); } }); }}>
+    <h2>{limit ? 'Edit spend ceiling' : 'Create spend ceiling'}</h2><p className="muted">Own user, bot and routine limits cannot bypass the required workspace ceiling. Limits block new work only; already admitted work may finish above the ceiling. Routine tests, handoffs and each group target count toward actual attribution.</p>
+    <fieldset className="grid" disabled={Boolean(limit)}><Field label="Scope"><select value={scope} onChange={event => changeScope(event.target.value as SpendLimit['scope'])}>{admin && <option value="workspace">Workspace (administrator)</option>}<option value="user">My attributed usage</option><option value="bot">My bot</option><option value="routine">My routine</option></select></Field>{scope === 'user' && <Field label="Subject"><input readOnly value={snapshot.user.displayName} /></Field>}{scope === 'bot' && <Field label="Owned bot"><select required value={subjectId} onChange={event => setSubjectId(event.target.value)}><option value="">Choose your bot</option>{ownBots.map(bot => <option key={bot.id} value={bot.id}>{bot.name}</option>)}</select></Field>}{scope === 'routine' && <Field label="Owned routine"><select required value={subjectId} onChange={event => setSubjectId(event.target.value)}><option value="">Choose your routine</option>{ownRoutines.map(routine => <option key={routine.id} value={routine.id}>{routine.name}</option>)}</select></Field>}<Field label="UTC spend window"><select value={period} onChange={event => setPeriod(event.target.value as SpendLimit['period'])}><option value="day">Day</option><option value="week">Week</option><option value="month">Month</option></select></Field><Field label="Configured provider account (optional)" hint="Account label, not a credential. Provider invoices and cancellation remain external."><input value={providerAccount} onChange={event => setProviderAccount(event.target.value)} /></Field></fieldset>
+    <div className="grid"><Field label="USD ceiling"><input type="number" required min="0" step="any" inputMode="decimal" value={limitUsd} onChange={event => setLimitUsd(event.target.value)} /></Field><Field label="Warning threshold (%)"><input type="number" required min="1" max="99" step="any" value={warningPercent} onChange={event => setWarningPercent(event.target.value)} /></Field></div>{limit && <Toggle checked={enabled} onChange={setEnabled}>Limit enabled</Toggle>}<IntentNotice intent={intent} reconcile={onSaved} /><div className="row"><button className="primary" disabled={intent.disabled}>Save spend limit</button><button type="button" onClick={onClose}>Close</button></div>
+  </form>;
+}
+
+export function SpendScreen() {
+  const { client, snapshot, reportError } = useApp();
+  const limits = useCollection('spend-limits', query => client.call('GET /spend-limits', { query }));
+  const bots = useCollection('spend-owned-bots', query => client.call('GET /bots', { query }));
+  const routines = useCollection('spend-owned-routines', query => client.call('GET /routines', { query }));
+  const [editing, setEditing] = useState<SpendLimit | 'new' | null>(null);
+  const intent = useIntent();
+  const admin = snapshot.member.role !== 'member';
+  function mayEdit(limit: SpendLimit) {
+    if (limit.scope === 'workspace') return admin;
+    if (limit.scope === 'user') return limit.subjectId === snapshot.user.id;
+    if (limit.scope === 'bot') return Boolean(bots.data?.some(bot => bot.id === limit.subjectId && bot.ownerUserId === snapshot.user.id));
+    return Boolean(routines.data?.some(routine => routine.id === limit.subjectId && routine.ownerUserId === snapshot.user.id));
+  }
+  function subject(limit: SpendLimit) {
+    if (limit.scope === 'workspace') return snapshot.workspace.name;
+    if (limit.scope === 'user') return limit.subjectId === snapshot.user.id ? snapshot.user.displayName : limit.subjectId;
+    if (limit.scope === 'bot') return bots.data?.find(bot => bot.id === limit.subjectId)?.name ?? limit.subjectId;
+    return routines.data?.find(routine => routine.id === limit.subjectId)?.name ?? limit.subjectId;
+  }
+  return <div className="stack"><section className="panel stack"><div className="row spread"><h2>Provider spend ceilings</h2><button type="button" disabled={intent.disabled} onClick={() => setEditing('new')}>Create scoped limit</button></div><p className="muted">Self-hosted usage, not a Lemon subscription or shared entitlement. Real provider cost measurement and spend reconciliation determine admission. Unknown pricing is never zero: enforced limits fail closed for new work. Exhausted budget is separate from a machine being offline.</p>{[limits, bots, routines].map((query, index) => <QueryNotice key={index} query={query} />)}<IntentNotice intent={intent} reconcile={limits.reload} /><button type="button" disabled={limits.loading || intent.busy} onClick={() => void intent.reconcile(limits.reload)}>Read current spend and reset status</button>{limits.data?.length === 0 && <EmptyState title="No spend limits configured">Actual usage still applies; no imaginary unlimited paid allowance is inferred.</EmptyState>}{limits.data?.map(status => <article className="card stack" key={status.limit.id}><div className="row spread"><h3>{label(status.limit.scope)} · {subject(status.limit)}</h3><Badge tone={status.state === 'ok' ? 'good' : status.state === 'exhausted' ? 'danger' : 'warning'}>{status.state}</Badge></div><dl className="enterprise-facts"><dt>USD ceiling</dt><dd>${status.limit.limitUsd.toFixed(2)} per UTC {status.limit.period}</dd><dt>Measured spend</dt><dd>{status.spentUsd === null ? 'Unknown / incomplete price' : `$${status.spentUsd.toFixed(2)}`}</dd><dt>Remaining</dt><dd>{status.remainingUsd === null ? 'Unknown; not treated as zero spend' : `$${status.remainingUsd.toFixed(2)}`}</dd><dt>Warning threshold</dt><dd>{status.limit.warningPercent}%</dd><dt>Resets</dt><dd>{formatTime(status.resetsAtMs)}</dd><dt>Provider account</dt><dd>{status.limit.providerAccount ?? 'All matching configured provider accounts'}</dd><dt>Enforcement</dt><dd>{status.limit.enabled ? 'Block new runs' : 'Disabled'} · already admitted work may finish</dd></dl>{status.state === 'unknown' && <p role="alert">Cost or reconciliation is incomplete. New work under an enforced limit is refused; this is not a successful zero-dollar measurement.</p>}{status.state === 'exhausted' && <p role="status">New work is blocked until reset or an authorized ceiling change. No fallback to another owner's allowance.</p>}<div className="row">{mayEdit(status.limit) ? <><button type="button" onClick={() => setEditing(status.limit)}>Edit ceiling / enablement</button><DeleteButton name={`limit ${status.limit.id}`} disabled={intent.disabled} onDelete={() => void intent.perform(() => client.call('DELETE /spend-limits/:id', { params: { id: status.limit.id }, body: { revision: status.limit.revision, clientNonce: nonce() } })).then(result => { if (result) void limits.reload().catch(reportError); })} /></> : <span className="small muted">Read-only ceiling; only its authorized owner or workspace administrator can change it.</span>}</div></article>)}</section>{editing && bots.data && routines.data && <LimitEditor key={editing === 'new' ? 'new' : editing.id} limit={editing === 'new' ? undefined : editing} bots={bots.data} routines={routines.data} onSaved={limits.reload} onClose={() => setEditing(null)} />}</div>;
+}
