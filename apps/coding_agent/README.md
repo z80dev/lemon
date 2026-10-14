@@ -673,6 +673,19 @@ Neither a read/progress result nor a global checkpoint is legacy write evidence.
 Unsupported or malformed journal entries can be replaced by a complete new write,
 but are never silently skipped in favor of an older list.
 
+WASM host calls use the same wrapped session tools, including todo's journal
+owner; they execute in supervised, Session-linked workers rather than inside
+the Session's request handler. The host request inherits the invoking task,
+abort signal and absolute invocation deadline (at most 120 seconds for one host
+call). Caller death, timeout, abort, reset and Session shutdown cancel the worker,
+release their monitors/timer and discard late results without clearing the
+invoker-owned signal. A queued todo mutation rechecks ownership and deadline
+before journaling. Tool-error
+results stay errors over the host protocol, including plan/approval refusals;
+host routing never constructs an unwrapped tool or makes ETS authoritative.
+Cancellation is not a rollback of effects already committed before it was
+accepted; reconcile the selected journal before attempting a new write.
+
 Focused regression coverage lives in
 [`session/todo_journal_test.exs`](test/coding_agent/session/todo_journal_test.exs):
 
@@ -685,6 +698,7 @@ Focused regression coverage lives in
 | Persistence failure and stale revisions | Failed journal append and prepared writes invalidated by list changes or switch-away-and-back |
 | Spend, policy and external-effect invariants | Charged real loop, current restricted policy on resume, and externally changed file bytes retained through restoration |
 | Legacy and version behavior | Branch-scoped successful-write evidence, ignored read/error results, and fail-closed unknown/malformed entries |
+| WASM host journal ownership and cancellation | Live host read/progress/actionable/write, durable branch restart, approval-wait timeout/abort/disposal, and production sidecar callback ownership/signal propagation without compiling WASM |
 
 In plan mode every tool still appears, but a shared gate blocks execution of
 anything outside `read`, `read_skill`, `recall`, `grep`, `find`, `ls`,

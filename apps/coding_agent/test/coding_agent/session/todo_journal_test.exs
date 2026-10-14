@@ -2,7 +2,7 @@ defmodule CodingAgent.Session.TodoJournalTest do
   use ExUnit.Case, async: false
 
   alias CodingAgent.{Session, SessionManager, SettingsManager, ToolPolicy}
-  alias CodingAgent.Session.{BudgetLedger, Planning, Todos}
+  alias CodingAgent.Session.{BudgetLedger, Planning, Todos, WasmBridge}
   alias CodingAgent.SessionManager.SessionEntry
   alias CodingAgent.Tools.{Todo, TodoStore, TodoStoreOwner}
   alias LemonAgent.Types.AgentToolResult
@@ -91,6 +91,219 @@ defmodule CodingAgent.Session.TodoJournalTest do
     navigate(resumed, c)
     assert_views(resumed, alternate)
     assert File.read!(external) == "changed after the effect"
+  end
+
+  test "live WASM host todo route journals and restores every view without a model or ETS authority",
+       %{tmp_dir: root} do
+    session = start_session(root)
+    original = host(session, %{"action" => "write", "todos" => pending()})["todos"]
+    a = leaf(session)
+    assert_host_views(session, original)
+    completed = Enum.map(original, &Map.put(&1, "status", "completed"))
+    assert host(session, %{"action" => "write", "todos" => completed})["todos"] == completed
+    b = leaf(session)
+    navigate(session, a)
+    TodoStore.clear()
+    assert_host_views(session, original)
+    alternate = Enum.map(original, &Map.put(&1, "status", "in_progress"))
+    assert host(session, %{"action" => "write", "todos" => alternate})["todos"] == alternate
+    c = leaf(session)
+    path = Session.get_state(session).session_file
+    assert {:ok, saved} = SessionManager.load_from_file(path)
+    assert {{:ok, ^alternate}, _} = Todos.materialize(saved)
+    assert Enum.count(SessionManager.entries(saved), &(&1.custom_type == "lemon.todo")) == 3
+    GenServer.stop(session)
+    TodoStore.clear()
+    resumed = start_session(root, session_file: path)
+
+    for {branch, expected} <- [{a, original}, {b, completed}, {c, alternate}] do
+      navigate(resumed, branch)
+      assert_host_views(resumed, expected)
+    end
+
+    assert {:ok, %{"mode" => "plan"}} = Session.plan(resumed, :enter)
+    assert_host_views(resumed, alternate)
+    assert {:error, blocked} = host_result(resumed, %{"action" => "write", "todos" => []})
+    assert is_binary(blocked)
+    assert_host_views(resumed, alternate)
+    denied = start_session(root, tool_policy: ToolPolicy.custom(allow: ["read"]))
+    assert {:error, :tool_not_found} = host_result(denied, %{"action" => "read"})
+  end
+
+  test "host journal failure remains a failure with unchanged durable state", %{tmp_dir: root} do
+    session = start_session(root)
+    original = host(session, %{"action" => "write", "todos" => pending()})["todos"]
+    before = Session.get_state(session)
+    blocked = Path.join(root, "host-not-a-file")
+    File.mkdir_p!(blocked)
+
+    :sys.replace_state(session, fn state ->
+      %{state | session_manager: %{state.session_manager | file_path: blocked}}
+    end)
+
+    assert {:error, reason} = host_result(session, %{"action" => "write", "todos" => []})
+    assert reason =~ "could not be saved"
+    assert Session.get_state(session).session_manager.by_id == before.session_manager.by_id
+    assert_host_views(session, original)
+    assert {:ok, saved} = SessionManager.load_from_file(before.session_file)
+    assert {{:ok, ^original}, _} = Todos.materialize(saved)
+  end
+
+  test "host approval waits end on deadline, cancellation, caller death and Session disposal",
+       %{tmp_dir: root} do
+    test_pid = self()
+
+    for reason <- [:timeout, :signal, :abort, :owner_down, :stop, :kill] do
+      session =
+        start_session(root,
+          tool_policy: ToolPolicy.custom(allow: ["todo"], require_approval: ["todo"]),
+          approval_context: %{
+            approval_request_fun: fn _request ->
+              send(test_pid, {:host_approval_waiting, self()})
+
+              receive do
+                :approve -> {:ok, :approved, :once}
+              end
+            end
+          }
+        )
+
+      path = Session.get_state(session).session_file
+
+      owner =
+        spawn(fn ->
+          receive do
+            :stop -> :ok
+          end
+        end)
+
+      owner_monitor = Process.monitor(owner)
+      signal = LemonAgent.AbortSignal.new()
+      on_exit(fn -> LemonAgent.AbortSignal.clear(signal) end)
+
+      context = %{
+        owner: owner,
+        signal: signal,
+        deadline:
+          System.monotonic_time(:millisecond) + if(reason == :timeout, do: 1_000, else: 30_000)
+      }
+
+      caller =
+        Task.async(fn ->
+          WasmBridge.invoke_host_request(
+            session,
+            "todo",
+            Jason.encode!(%{"action" => "write", "todos" => pending()}),
+            context
+          )
+        end)
+
+      assert_receive {:host_approval_waiting, worker}, 5_000
+      worker_monitor = Process.monitor(worker)
+      assert map_size(Session.get_state(session).wasm_host_calls) == 1
+      [{ref, request}] = Map.to_list(Session.get_state(session).wasm_host_calls)
+      assert request.task.pid == worker
+
+      case reason do
+        :timeout ->
+          :ok
+
+        :signal ->
+          LemonAgent.AbortSignal.abort(signal)
+
+        :abort ->
+          Session.abort(session)
+
+        :owner_down ->
+          Process.exit(owner, :kill)
+
+        :stop ->
+          GenServer.stop(session)
+
+        :kill ->
+          Process.unlink(session)
+          Process.exit(session, :kill)
+      end
+
+      assert {:error, _} = Task.await(caller, 5_000)
+      assert_receive {:DOWN, ^worker_monitor, :process, ^worker, _}, 5_000
+      # Releasing a late approval cannot execute the real todo writer.
+      send(worker, :approve)
+      assert {:ok, saved} = SessionManager.load_from_file(path)
+      assert Enum.all?(SessionManager.entries(saved), &(&1.custom_type != "lemon.todo"))
+
+      if Process.alive?(session) do
+        send(session, {ref, {:ok, ~s({"todos":[]})}})
+        send(session, {:wasm_host_check, ref})
+        assert Session.get_state(session).wasm_host_calls == %{}
+        assert {:ok, [], _} = Session.todos(session)
+      end
+
+      if Process.alive?(owner), do: Process.exit(owner, :kill)
+      assert_receive {:DOWN, ^owner_monitor, :process, ^owner, _}, 5_000
+    end
+  end
+
+  test "production sidecar callback binds the real todo writer to its invoking task and signal",
+       %{tmp_dir: root} do
+    test_pid = self()
+    runtime = write_host_runtime(root)
+    settings = SettingsManager.load(root)
+    wasm = %{enabled: true, auto_build: false, runtime_path: runtime}
+    settings = %{settings | tools: Map.put(settings.tools, :wasm, wasm)}
+
+    session =
+      start_session(root,
+        settings_manager: settings,
+        tool_policy:
+          ToolPolicy.custom(allow: ["todo", "todo_host_bridge"], require_approval: ["todo"]),
+        approval_context: %{
+          approval_request_fun: fn
+            %{tool: "todo_host_bridge"} ->
+              send(test_pid, {:sidecar_invocation_approved, self()})
+              {:ok, :approved, :once}
+
+            %{tool: "todo"} ->
+              send(test_pid, {:sidecar_approval_waiting, self()})
+
+              receive do
+                :approve -> {:ok, :approved, :once}
+              end
+          end
+        }
+      )
+
+    bridge = tool(session, "todo_host_bridge")
+    signal = LemonAgent.AbortSignal.new()
+    on_exit(fn -> LemonAgent.AbortSignal.clear(signal) end)
+    params = %{"action" => "write", "todos" => pending()}
+    caller = Task.async(fn -> bridge.execute.("cancel-host", params, signal, nil) end)
+    caller_pid = caller.pid
+    assert_receive {:sidecar_invocation_approved, ^caller_pid}, 5_000
+    assert_receive {:sidecar_approval_waiting, worker}, 5_000
+    [{_ref, request}] = Map.to_list(Session.get_state(session).wasm_host_calls)
+    assert request.owner == caller.pid
+    assert request.signal == signal
+    assert request.deadline <= System.monotonic_time(:millisecond) + 120_000
+    assert request.task.pid == worker
+    monitor = Process.monitor(worker)
+    LemonAgent.AbortSignal.abort(signal)
+    assert %AgentToolResult{is_error: true} = Task.await(caller, 5_000)
+    assert_receive {:DOWN, ^monitor, :process, ^worker, _}, 5_000
+    send(worker, :approve)
+    assert {:ok, [], _} = Session.todos(session)
+
+    caller = Task.async(fn -> bridge.execute.("write-host", params, nil, nil) end)
+    caller_pid = caller.pid
+    assert_receive {:sidecar_invocation_approved, ^caller_pid}, 5_000
+    assert_receive {:sidecar_approval_waiting, worker}, 5_000
+    send(worker, :approve)
+    assert %AgentToolResult{is_error: false} = Task.await(caller, 5_000)
+    assert {:ok, todos, _} = Session.todos(session)
+    assert Enum.map(todos, & &1["content"]) == ["Inspect", "Verify"]
+    assert {:ok, saved} = SessionManager.load_from_file(Session.get_state(session).session_file)
+    assert {{:ok, ^todos}, _} = Todos.materialize(saved)
+    assert Enum.count(SessionManager.entries(saved), &(&1.custom_type == "lemon.todo")) == 1
   end
 
   test "selected-point fork inherits IDs and all spend but isolates child writes and subagents",
@@ -382,6 +595,48 @@ defmodule CodingAgent.Session.TodoJournalTest do
     end
   end
 
+  defp write_host_runtime(root) do
+    path = Path.join(root, "todo-host-runtime.py")
+
+    File.write!(path, """
+    #!/usr/bin/env python3
+    import json
+    import sys
+
+    def send(message):
+        print(json.dumps(message), flush=True)
+
+    pending = {}
+    for line in sys.stdin:
+        req = json.loads(line)
+        kind, rid = req["type"], req["id"]
+        if kind == "hello":
+            send({"type": "response", "id": rid, "ok": True, "result": {"version": 1}})
+        elif kind == "discover":
+            tool = {"name": "todo_host_bridge", "path": "/fixture/todo.wasm",
+                    "description": "Invoke the session todo tool",
+                    "schema_json": json.dumps({"type": "object"}),
+                    "capabilities": {"tool_invoke": True}, "warnings": []}
+            send({"type": "response", "id": rid, "ok": True,
+                  "result": {"tools": [tool], "warnings": [], "errors": []}})
+        elif kind == "invoke":
+            pending[rid] = rid
+            send({"type": "event", "event": "host_call", "request_id": rid,
+                  "call_id": rid, "tool": "todo", "params_json": req["params_json"]})
+        elif kind == "host_call_result":
+            invocation = pending.pop(req["call_id"])
+            result = {"output_json": req["output_json"], "error": req["error"],
+                      "logs": [], "details": {}}
+            send({"type": "response", "id": invocation, "ok": True, "result": result})
+            send({"type": "response", "id": rid, "ok": True, "result": {}})
+        elif kind == "shutdown":
+            break
+    """)
+
+    File.chmod!(path, 0o755)
+    path
+  end
+
   defp start_session(root, opts \\ []) do
     settings = %{
       SettingsManager.load(root)
@@ -389,6 +644,8 @@ defmodule CodingAgent.Session.TodoJournalTest do
         retry_enabled: false,
         provider_routing: %{enabled: false}
     }
+
+    settings = %{settings | tools: Map.put(settings.tools, :wasm, %{enabled: false})}
 
     defaults = [
       cwd: root,
@@ -443,6 +700,34 @@ defmodule CodingAgent.Session.TodoJournalTest do
              result = execute(session, %{"action" => "write", "todos" => todos})
 
     result
+  end
+
+  defp host_result(session, params),
+    do: WasmBridge.invoke_host_tool(session, "todo", Jason.encode!(params))
+
+  defp host(session, params) do
+    assert {:ok, output} = host_result(session, params)
+    Jason.decode!(output)
+  end
+
+  defp assert_host_views(session, todos) do
+    details = TodoStore.result_details(todos) |> Jason.encode!() |> Jason.decode!()
+
+    for action <- ["read", "progress", "actionable"] do
+      result = host(session, %{"action" => action})
+      assert result["todos"] == details["todos"]
+      assert result["plan"] == details["plan"]
+
+      if action == "progress" do
+        progress = TodoStore.progress(todos) |> Jason.encode!() |> Jason.decode!()
+        assert Map.take(result, Map.keys(progress)) == progress
+      end
+
+      if action == "actionable" do
+        actionable = TodoStore.result_details(TodoStore.actionable(todos))
+        assert result["actionable"] == actionable.todos
+      end
+    end
   end
 
   defp tool(session, name), do: Enum.find(Session.get_state(session).tools, &(&1.name == name))

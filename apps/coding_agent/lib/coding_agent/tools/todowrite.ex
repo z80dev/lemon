@@ -153,6 +153,9 @@ defmodule CodingAgent.Tools.TodoWrite do
       {:error, :journal_write_failed} ->
         {:error,
          "The todo update could not be saved to the session journal; the list is unchanged."}
+
+      {:error, :aborted} ->
+        {:error, "The todo update was cancelled before it was recorded; the list is unchanged."}
     end
   catch
     :exit, _ ->

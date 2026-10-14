@@ -21,6 +21,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   current branch. ACP load/resume and branch changes replace the client plan
   from the same journal, including cleared lists; progress survives cache loss.
   Restoring a branch never refunds spend, restores revoked policy or reruns tools.
+  WASM host calls now execute the same wrapped tools in supervised, Session-owned
+  workers, avoiding a todo journal self-call. Host requests retain invocation
+  ownership, abort signals and deadlines; cancellation/disposal kills pending
+  work, rejects queued late writes and preserves policy/approval failures as errors.
 
 ---
 

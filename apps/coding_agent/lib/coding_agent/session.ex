@@ -128,6 +128,7 @@ defmodule CodingAgent.Session do
     :wasm_status,
     :plan_gate,
     branch_generation: 0,
+    wasm_host_calls: %{},
     auto_compaction: %CompactionLifecycle.State{},
     overflow_recovery: %OverflowRecovery.State{}
   ]
@@ -186,6 +187,7 @@ defmodule CodingAgent.Session do
           wasm_status: map() | nil,
           plan_gate: :atomics.atomics_ref() | nil,
           branch_generation: non_neg_integer(),
+          wasm_host_calls: %{reference() => map()},
           auto_compaction: CompactionLifecycle.State.t(),
           overflow_recovery: OverflowRecovery.State.t()
         }
@@ -552,7 +554,7 @@ defmodule CodingAgent.Session do
   """
   @spec write_todos(GenServer.server(), [map()], CodingAgent.Session.Todos.revision()) ::
           {:ok, [map()], CodingAgent.Session.Todos.revision()}
-          | {:error, :stale_revision | :journal_write_failed}
+          | {:error, :stale_revision | :journal_write_failed | :aborted}
   def write_todos(session, todos, revision) when is_list(todos),
     do: GenServer.call(session, {:write_todos, todos, revision}, @todo_call_timeout_ms)
 
@@ -724,10 +726,14 @@ defmodule CodingAgent.Session do
   # Called from the todo tools; this process is the only journal writer.
   def handle_call(:todos, _from, state), do: {:reply, Todos.read(state), state}
 
-  def handle_call({:write_todos, todos, revision}, _from, state) do
-    case Todos.write(state, todos, revision) do
-      {:ok, todos, revision, state} -> {:reply, {:ok, todos, revision}, state}
-      {:error, _} = error -> {:reply, error, state}
+  def handle_call({:write_todos, todos, revision}, from, state) do
+    if WasmBridge.host_mutation_allowed?(state, from) do
+      case Todos.write(state, todos, revision) do
+        {:ok, todos, revision, state} -> {:reply, {:ok, todos, revision}, state}
+        {:error, _} = error -> {:reply, error, state}
+      end
+    else
+      {:reply, {:error, :aborted}, state}
     end
   end
 
@@ -879,41 +885,19 @@ defmodule CodingAgent.Session do
     {:reply, state.extension_status_report, state}
   end
 
-  def handle_call({:wasm_host_tool_invoke, tool_name, params_json}, _from, state) do
-    result =
-      case WasmBridge.maybe_handle_reserved_host_target(tool_name, params_json) do
-        {:ok, payload} ->
-          {:ok, payload}
+  def handle_call({:wasm_host_tool_invoke, tool_name, params_json}, from, state) do
+    context = %{
+      deadline: System.monotonic_time(:millisecond) + 120_000,
+      owner: elem(from, 0),
+      signal: nil
+    }
 
-        {:error, reason} ->
-          {:error, reason}
+    WasmBridge.start_host_call(state, from, tool_name, params_json, context)
+  end
 
-        :not_reserved ->
-          case WasmBridge.find_host_tool(state, tool_name) do
-            nil ->
-              {:error, :tool_not_found}
-
-            tool ->
-              params = WasmBridge.decode_wasm_params(params_json)
-              call_id = "wasm_host_#{System.unique_integer([:positive, :monotonic])}"
-
-              case tool.execute.(call_id, params, nil, nil) do
-                %LemonAgent.Types.AgentToolResult{} = tool_result ->
-                  {:ok, WasmBridge.encode_wasm_host_output(tool_result)}
-
-                {:ok, %LemonAgent.Types.AgentToolResult{} = tool_result} ->
-                  {:ok, WasmBridge.encode_wasm_host_output(tool_result)}
-
-                {:error, reason} ->
-                  {:error, reason}
-
-                other ->
-                  {:error, {:invalid_host_tool_result, other}}
-              end
-          end
-      end
-
-    {:reply, result, state}
+  def handle_call({:wasm_host_tool_invoke, tool_name, params_json, context}, from, state)
+      when is_map(context) do
+    WasmBridge.start_host_call(state, from, tool_name, params_json, context)
   end
 
   def handle_call(:reload_extensions, _from, state) do
@@ -926,6 +910,8 @@ defmodule CodingAgent.Session do
   end
 
   def handle_call(:reset, _from, state) do
+    state = WasmBridge.cancel_host_calls(state, :aborted)
+
     case Lifecycle.reset(state, @reset_abort_wait_ms) do
       {:ok, new_state} -> {:reply, :ok, new_state}
       {:error, reason, new_state} -> {:reply, {:error, reason}, new_state}
@@ -1154,6 +1140,7 @@ defmodule CodingAgent.Session do
 
     state =
       state
+      |> WasmBridge.cancel_host_calls(:aborted)
       |> cancel_pending_prompt()
       |> CompactionLifecycle.cancel_for_new_prompt()
       |> CompactionManager.clear_overflow_recovery_state()
@@ -1243,17 +1230,24 @@ defmodule CodingAgent.Session do
     {:noreply, CompactionManager.clear_overflow_recovery_state_on_terminal(event, new_state)}
   end
 
-  def handle_info({:DOWN, ref, :process, pid, _reason}, state) do
-    cond do
-      state.auto_compaction.task_monitor_ref == ref ->
-        {:noreply, CompactionManager.handle_auto_compaction_task_down(state)}
+  def handle_info({ref, result}, state) when is_map_key(state.wasm_host_calls, ref) do
+    {:noreply, WasmBridge.finish_host_call(state, ref, result)}
+  end
 
-      state.overflow_recovery.task_monitor_ref == ref ->
-        {:noreply, handle_overflow_recovery_task_down(state)}
+  def handle_info({:wasm_host_check, ref}, state) do
+    {:noreply, WasmBridge.check_host_call(state, ref)}
+  end
 
-      true ->
-        {:noreply, Notifier.prune_subscribers(state, pid, ref)}
+  def handle_info({:DOWN, ref, :process, pid, reason}, state)
+      when map_size(state.wasm_host_calls) > 0 do
+    case WasmBridge.host_call_down(state, ref) do
+      {:handled, state} -> {:noreply, state}
+      :unhandled -> handle_session_down(ref, pid, reason, state)
     end
+  end
+
+  def handle_info({:DOWN, ref, :process, pid, reason}, state) do
+    handle_session_down(ref, pid, reason, state)
   end
 
   def handle_info({:EXIT, pid, reason}, state) when pid == state.agent do
@@ -1382,6 +1376,7 @@ defmodule CodingAgent.Session do
   @spec terminate(term(), t()) :: :ok
   @impl true
   def terminate(_reason, state) do
+    _ = WasmBridge.cancel_host_calls(state, :session_unavailable)
     _ = CompactionManager.cancel_compaction_tasks(state, :session_terminated)
 
     # Emit introspection event for session end
@@ -1413,6 +1408,18 @@ defmodule CodingAgent.Session do
   # ============================================================================
   # Private Functions
   # ============================================================================
+  defp handle_session_down(ref, pid, _reason, state) do
+    cond do
+      state.auto_compaction.task_monitor_ref == ref ->
+        {:noreply, CompactionManager.handle_auto_compaction_task_down(state)}
+
+      state.overflow_recovery.task_monitor_ref == ref ->
+        {:noreply, handle_overflow_recovery_task_down(state)}
+
+      true ->
+        {:noreply, Notifier.prune_subscribers(state, pid, ref)}
+    end
+  end
 
   defp message_skill_context(%LemonAi.Types.UserMessage{content: content}),
     do: content_skill_context(content)
