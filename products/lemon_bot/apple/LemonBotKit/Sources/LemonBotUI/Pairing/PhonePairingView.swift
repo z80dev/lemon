@@ -47,10 +47,10 @@ public struct PhonePairingView: View {
             }
             Section("Connection status") {
                 Text(store.pairingState.replacingOccurrences(of: "_", with: " "))
-                if store.pairingState == "preview" {
+                if store.pairingState == "preview" || store.pairingState == "preview_ready" {
                     Button("Check cluster · read only") { perform { try await store.previewPairing() } }.disabled(busy)
                     Button("Request connection to this desktop") { request() }
-                        .disabled(busy || !previewReady)
+                        .disabled(busy || store.pairingState != "preview_ready" || !previewReady)
                 }
                 if ["claim_unknown", "pending_approval", "completion_unknown", "completing"].contains(store.pairingState) {
                     Text("The pending request is saved on this phone. Reopening does not claim another code or automatically repeat a mutation.").font(.caption)
@@ -75,7 +75,7 @@ public struct PhonePairingView: View {
                     switch result { case .success(let raw): prepare(raw); case .failure(let failure): error = failure.localizedDescription }
                 }
             }
-            .onChange(of: scenePhase) { _, phase in if phase != .active { scanning = false } }
+            .onChange(of: scenePhase) { _, phase in if phase == .background { scanning = false } }
             .onDisappear { scanning = false; link = "" }
             .task(id: store.pairingState) {
                 if store.pairingState == "preview", !previewReady {

@@ -23,6 +23,14 @@ public struct OwnerPairingView: View {
                         Image(nsImage: image).interpolation(.none).resizable().scaledToFit().frame(width: 256, height: 256)
                             .accessibilityLabel("One-use pairing QR code. Scan with Lemon Bot on your iPhone.")
                             .padding(24).background(.white)
+                            .privacySensitive()
+                    }
+                    if let link = store.pairingURL {
+                        Button("Copy one-use pairing link") {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(link, forType: .string)
+                        }
+                        Text("Copy only for your phone's secure paste field. The clipboard contains a temporary secret.").font(.caption)
                     }
                     Text("The QR is a temporary secret. Do not share screenshots. It is not your desktop session or password.").font(.caption)
                     Button("Refresh requests · read only") { perform { try await store.refreshPairings() } }.disabled(busy)

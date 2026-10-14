@@ -40,3 +40,4 @@ Generate the lead-owned XcodeGen project and build the LemonBotMac scheme with `
 
 - Added native workspace entry, menu-bar integration, opt-in single companion, Carbon global summon/PTT, review-only Speech dictation, backend voice-session loop and voice preview, explicit Services/file sharing, device/account lifecycle and privacy-bounded notifications/deep links.
 - Added CoreImage one-use phone QR and exact-device approval/denial with read-only reconciliation; startup restores the last saved account and foreground reconnect retains offline credentials.
+- Added explicit **Copy one-use pairing link** for the phone's secure paste fallback; copying is user-initiated and places a temporary secret on the system clipboard. QR rendering is privacy-sensitive.

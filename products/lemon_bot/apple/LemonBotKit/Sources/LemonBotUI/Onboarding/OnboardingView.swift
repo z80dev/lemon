@@ -116,7 +116,7 @@ public struct OnboardingView: View {
                 }
                 .onAppear { showPairing = store.pendingPairing != nil }
                 .onChange(of: store.pairingState) { _, state in
-                    if state == "preview" || state == "pending_approval" || state == "claim_unknown" { showPairing = true }
+                    if ["preview", "preview_ready", "pending_approval", "claim_unknown"].contains(state) { showPairing = true }
                     if state == "connected" { showPairing = false; dismiss() }
                 }
                 #endif

@@ -60,3 +60,4 @@ These hooks cross the package/app boundary without introducing an app dependency
 
 - Added explicit one-use desktop pairing, real QR scanning, secure paste/preview, saved pending reconciliation and saved-account startup with read-only foreground reconnect. Removed invitation-first onboarding and Team voice eligibility.
 - Pairing now fetches the exact cluster name and expiry through a non-consuming preview before enabling a claim, including resumed preview state.
+- A verified `preview_ready` state gates the explicit connection request. Camera authorization alerts no longer cancel the initial scan; actual background entry still stops capture, and configured capture stops on foreground loss.

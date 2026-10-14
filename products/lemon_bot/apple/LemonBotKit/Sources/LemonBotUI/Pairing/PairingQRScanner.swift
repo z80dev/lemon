@@ -32,7 +32,7 @@ final class PairingScannerController: UIViewController, AVCaptureMetadataOutputO
         cancel.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(cancel)
         NSLayoutConstraint.activate([cancel.centerXAnchor.constraint(equalTo: view.centerXAnchor), cancel.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -24)])
-        backgroundObserver = NotificationCenter.default.addObserver(forName: UIApplication.willResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
+        backgroundObserver = NotificationCenter.default.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in self?.cancelScan() }
         }
         // This controller is only created by the explicit Scan button.
@@ -65,6 +65,10 @@ final class PairingScannerController: UIViewController, AVCaptureMetadataOutputO
             layer.frame = view.bounds
             view.layer.insertSublayer(layer, at: 0)
             preview = layer
+            if let backgroundObserver { NotificationCenter.default.removeObserver(backgroundObserver) }
+            backgroundObserver = NotificationCenter.default.addObserver(forName: UIApplication.willResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
+                Task { @MainActor in self?.cancelScan() }
+            }
             let session = session
             captureQueue.async { session.startRunning() }
         } catch { finish(.failure(ScanError.unavailable)) }
