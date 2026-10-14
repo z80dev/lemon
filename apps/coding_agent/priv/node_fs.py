@@ -120,15 +120,22 @@ class Policy:
         try:
             while parts:
                 part, rest = parts[0], parts[1:]
+                # One readlinkat classifies the entry and reads any link target
+                # atomically. Separate stat/readlink calls let a link replaced by
+                # a directory in between surface as an unclassified EINVAL.
+                missing = False
                 try:
-                    observed = os.stat(part, dir_fd=fd, follow_symlinks=False)
+                    target = os.readlink(part, dir_fd=fd)
                 except FileNotFoundError:
-                    observed = None
-                if observed is not None and stat.S_ISLNK(observed.st_mode):
+                    target, missing = None, True
+                except OSError as exc:
+                    if exc.errno != errno.EINVAL:
+                        raise
+                    target = None
+                if target is not None:
                     if hops == 0:
                         fail("symlink_loop")
                     hops -= 1
-                    target = os.readlink(part, dir_fd=fd)
                     resolved = os.path.normpath(os.path.join(current, target))
                     root, anchor, target_parts = self.choose(resolved, canonical_only=True)
                     os.close(fd)
@@ -138,7 +145,7 @@ class Policy:
                     continue
                 if not rest:
                     return fd, part, os.path.join(current, part)
-                if observed is None and mkdirs:
+                if missing and mkdirs:
                     try:
                         os.mkdir(part, dir_fd=fd)
                     except FileExistsError:
@@ -509,6 +516,28 @@ def read_exact(count):
     return chunks
 
 
+def respond(body):
+    """Return the reply object for one request body. Errors are fixed classifications."""
+    try:
+        request = json.loads(body)
+        config = request["policy"]
+        key = json.dumps(config, sort_keys=True)
+        if key not in policies:
+            roots = config.get("roots")
+            if not isinstance(roots, list) or not 1 <= len(roots) <= 64:
+                fail("invalid_allowed_roots")
+            if len(policies) >= MAX_POLICIES or sum(len(policy.roots) for policy in policies.values()) + len(roots) > MAX_ROOT_DESCRIPTORS:
+                fail("filesystem_busy")
+            policies[key] = Policy(config)
+        return {"ok": operation(request["method"], request["args"], policies[key], key)}
+    except Failure as exc:
+        return {"error": str(exc)}
+    except OSError as exc:
+        return {"error": error_name(exc)}
+    except Exception:
+        return {"error": "filesystem_failed"}
+
+
 def main():
     # PTY imports Policy for descriptor-rooted cwd admission. Importing this
     # module must never read that caller's protocol or emit filesystem frames.
@@ -522,25 +551,7 @@ def main():
         body = read_exact(size)
         if body is None:
             break
-        try:
-            request = json.loads(body)
-            config = request["policy"]
-            key = json.dumps(config, sort_keys=True)
-            if key not in policies:
-                roots = config.get("roots")
-                if not isinstance(roots, list) or not 1 <= len(roots) <= 64:
-                    fail("invalid_allowed_roots")
-                if len(policies) >= MAX_POLICIES or sum(len(policy.roots) for policy in policies.values()) + len(roots) > MAX_ROOT_DESCRIPTORS:
-                    fail("filesystem_busy")
-                policies[key] = Policy(config)
-            result = {"ok": operation(request["method"], request["args"], policies[key], key)}
-        except Failure as exc:
-            result = {"error": str(exc)}
-        except OSError as exc:
-            result = {"error": error_name(exc)}
-        except Exception:
-            result = {"error": "filesystem_failed"}
-        payload = json.dumps(result, separators=(",", ":")).encode()
+        payload = json.dumps(respond(body), separators=(",", ":")).encode()
         sys.stdout.buffer.write(struct.pack(">I", len(payload)) + payload)
         sys.stdout.buffer.flush()
 

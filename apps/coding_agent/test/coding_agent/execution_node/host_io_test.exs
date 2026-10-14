@@ -792,6 +792,75 @@ defmodule CodingAgent.ExecutionNode.HostIOTest do
     assert File.read!(Path.join(ctx.outside, "sentinel")) == "untouched"
   end
 
+  test "parent replacement at every helper syscall boundary is refused or stays inside the root",
+       ctx do
+    File.write!(Path.join(ctx.outside, "sentinel"), "untouched")
+
+    # Replays the racer above before each instrumented helper syscall, so every
+    # interleaving is exercised deterministically instead of by scheduler timing.
+    script = """
+    import json,os,sys
+    sys.path.insert(0,sys.argv[1])
+    import node_fs
+    home,outside=sys.argv[2],sys.argv[3]
+    parent,saved=os.path.join(home,"parent"),os.path.join(home,"saved")
+    steps=[lambda:os.rename(parent,saved),lambda:os.symlink(outside,parent),
+           lambda:os.unlink(parent),lambda:os.rename(saved,parent)]
+    state,calls,plan=0,0,None
+    def advance():
+        global state
+        steps[state]()
+        state=(state+1)%4
+    def instrument(original):
+        def call(*args,**kwargs):
+            global calls
+            if plan is not None and calls==plan[0]:
+                for _ in range(plan[1]):
+                    advance()
+            calls+=1
+            return original(*args,**kwargs)
+        return call
+    for name in ("stat","lstat","readlink","open","mkdir"):
+        setattr(os,name,instrument(getattr(os,name)))
+    policy={"cwd":home,"roots":[home]}
+    def request(method,args):
+        return node_fs.respond(json.dumps({"method":method,"args":args,"policy":policy}))
+    os.mkdir(parent)
+    assert "ok" in request("node.fs.stat",{"path":"."})
+    outcomes=set()
+    for start in range(4):
+        for count in range(1,4):
+            for at in range(16):
+                if os.path.lexists(os.path.join(parent,"sentinel")):
+                    os.unlink(os.path.join(parent,"sentinel"))
+                for _ in range(start):
+                    advance()
+                calls,plan=0,(at,count)
+                reply=request("node.fs.write",{"path":"parent/sentinel","dataBase64":"YQ==","expectedModifiedAtMs":0})
+                plan=None
+                outcomes.add("ok" if "ok" in reply else reply["error"])
+                while state:
+                    advance()
+    print(json.dumps({"outcomes":sorted(outcomes),"outside":sorted(os.listdir(outside)),
+                      "sentinel":open(os.path.join(outside,"sentinel")).read()}))
+    """
+
+    {output, status} =
+      System.cmd(
+        System.find_executable("python3"),
+        ["-c", script, to_string(:code.priv_dir(:coding_agent)), ctx.home, ctx.outside],
+        stderr_to_stdout: true
+      )
+
+    assert status == 0, output
+    result = Jason.decode!(output)
+    assert result["outside"] == ["sentinel"]
+    assert result["sentinel"] == "untouched"
+    assert "ok" in result["outcomes"]
+    assert "path_not_allowed" in result["outcomes"]
+    assert result["outcomes"] -- ["ok", "path_not_allowed", "not_directory", "not_found"] == []
+  end
+
   test "write receipt carries the actual next CAS revision and access flags are OS derived",
        ctx do
     assert {:ok, first} =

@@ -47,6 +47,11 @@ File operations require **Python 3** on the destination. A worker-owned service
 pins allowed-root directory descriptors, explicitly resolves admitted symlinks,
 and opens components relative to those descriptors with `O_NOFOLLOW`. A symlink
 substituted after admission cannot redirect an open into an outside directory.
+Each path component is classified, and any link target read, with one
+descriptor-relative `readlinkat`. A link or directory replaced while a request
+resolves it returns `not_found`, `path_not_allowed` or `not_directory` (the last
+two differ by platform for a link opened as a directory), or the request uses
+the directory actually present inside the root.
 Roots stay bound to their opened directory identities until the service restarts.
 This is **not an OS sandbox**: another local process can modify or move an
 already-open inode, and multi-file recursive deletion is not an all-or-nothing
