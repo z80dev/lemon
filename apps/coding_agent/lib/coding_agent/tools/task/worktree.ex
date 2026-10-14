@@ -281,8 +281,12 @@ defmodule CodingAgent.Tools.Task.Worktree do
   defp replay_wip(_git, _root, _parent, _task_id, _path, "branch"), do: {:ok, %{}}
 
   defp replay_wip(git, root, parent, task_id, path, "patch") do
-    with :ok <- replay_tracked(git, root, Path.join(parent, task_id <> ".wip.patch"), path),
-         :ok <- replay_untracked(git, root, path),
+    with :ok <-
+           serialized(root, fn ->
+             with :ok <-
+                    replay_tracked(git, root, Path.join(parent, task_id <> ".wip.patch"), path),
+                  do: replay_untracked(git, root, path)
+           end),
          {:ok, _} <- run_git(git, path, ["add", "-A"]),
          {:ok, _} <-
            run_git(
