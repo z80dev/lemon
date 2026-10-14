@@ -1,6 +1,8 @@
 /**
- * Bot product destinations consume canonical SDK REST endpoints only.
- * Identity, Job and scoped Memory are separate editors. Lifecycle operations
+ * Owner-only Bot destinations consume canonical SDK REST endpoints only.
+ * Identity, Job and assigned-profile Memory are separate editors. Bot groups
+ * contain only this owner's Bots; templates create separate reviewed copies.
+ * Lifecycle operations
  * require server previews; uncertain effects retain input and offer read-only
  * reconciliation rather than replay. Templates produce reviewed owned copies,
  * and selecting an Idea only drafts an unsent prompt.

@@ -16,8 +16,17 @@ export function unknownOutcome(error: unknown): boolean {
   return error instanceof LemonBotError ? error.outcomeUnknown || error.code === 'outcome_unknown' || (!error.retrySafe && error.status >= 500) : true;
 }
 
+export interface ChatIntent {
+  run<T>(operation: () => Promise<T>): Promise<T | undefined>;
+  reconcile(read: () => Promise<void>): Promise<void>;
+  busy: boolean;
+  error: unknown;
+  uncertain: boolean;
+  lastError: { current: unknown };
+}
+
 /** A user intent is never replayed. Read reconciliation is a separate explicit action. */
-export function useIntent() {
+export function useIntent(): ChatIntent {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>();
   const [uncertain, setUncertain] = useState(false);
@@ -40,7 +49,7 @@ export function useIntent() {
   return { run, reconcile, busy, error, uncertain, lastError };
 }
 
-export function IntentNotice({ intent, reconcile }: { intent: ReturnType<typeof useIntent>; reconcile: () => Promise<void> }) {
+export function IntentNotice({ intent, reconcile }: { intent: ChatIntent; reconcile: () => Promise<void> }) {
   return <>{intent.error !== undefined && <ErrorNotice error={intent.error} />}{intent.uncertain && <p className="error-notice" role="alert">Not confirmed. The action may already have happened. Do not repeat it. <button disabled={intent.busy} onClick={() => void intent.reconcile(reconcile)}>Reconcile current state</button></p>}{intent.error !== undefined && !intent.uncertain && <button disabled={intent.busy} onClick={() => void intent.reconcile(reconcile)}>Reload current revision</button>}</>;
 }
 

@@ -50,13 +50,13 @@ export function MachineChoice({ value, onChange, consent, onConsent, exclude }: 
   const { snapshot, navigate } = useApp();
   const machines = useMachines();
   const rows = machines.data ?? snapshot.machines;
-  return <fieldset className="panel stack"><legend>Execution machine</legend><ErrorNotice error={machines.error} />{machines.loading && <Loading />}<Field label="Assigned machine"><select required value={value} onChange={event => { onChange(event.target.value); onConsent(false); }}><option value="">Choose an online machine</option>{rows.filter(machine => machine.id !== exclude).map(machine => <option key={machine.id} value={machine.id} disabled={machine.status !== 'online'}>{machine.name} · {machine.status}</option>)}</select></Field><p className="muted">All conversations execute here, even while this app is closed. Bots on this OS account share files, browser sessions and CLI credentials. Personas are not sandboxes. Team Bots need an intended shared host; private OAuth is never automatically lent.</p><Check checked={consent} onChange={onConsent}>I trust this host and explicitly accept its shared access.</Check><button type="button" onClick={() => navigate({ screen: 'machine.attach' })}>Attach another machine</button></fieldset>;
+  return <fieldset className="panel stack"><legend>Execution machine</legend><ErrorNotice error={machines.error} />{machines.loading && <Loading />}<Field label="Assigned machine"><select required value={value} onChange={event => { onChange(event.target.value); onConsent(false); }}><option value="">Choose an online machine</option>{rows.filter(machine => machine.id !== exclude).map(machine => <option key={machine.id} value={machine.id} disabled={machine.status !== 'online'}>{machine.name} · {machine.status}</option>)}</select></Field><p className="muted">All conversations execute here, even while this app is closed. Bots on this OS account share files, browser sessions and CLI credentials. Personas are not sandboxes. Private OAuth authority is never automatically lent.</p><Check checked={consent} onChange={onConsent}>I trust this host and explicitly accept its shared access.</Check><button type="button" onClick={() => navigate({ screen: 'machine.attach' })}>Attach another machine</button></fieldset>;
 }
 export function useBot(id: string) {
   const { client } = useApp();
   return useQuery(`bot:${id}`, () => client.call('GET /bots/:id', { params: { id } }));
 }
-export function canManage(bot: Bot, userId: string) { return bot.ownerUserId === userId || bot.managerUserIds.includes(userId); }
+export function canManage(bot: Bot, userId: string) { return bot.ownerUserId === userId; }
 export function machineAccess(machine: Machine | undefined, userId: string, admin: boolean) { return !!machine && (machine.ownerUserId === userId || machine.accessUserIds.includes(userId) || admin); }
 export function useObjectUrl(blob?: Blob) {
   const [url, setUrl] = useState<string>();

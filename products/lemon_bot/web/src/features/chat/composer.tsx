@@ -125,7 +125,7 @@ export function Composer({ conversation, replyId, clearReply, accepted }: { conv
     setError(new Error('The original message is present in the server run journal. Its text is retained for review, not a new send. Clear it explicitly when ready.'));
   }
   const blocked = !online || sendIntent.busy || sendIntent.uncertain || saveIntent.busy || saveIntent.uncertain || uploadIntent.busy || !!journal.current || !!conflict || !!local.acknowledged;
-  const ownsVoice = ['dm', 'task', 'team_dm'].includes(conversation.kind) && conversation.ownerUserId === snapshot.user.id && conversation.botIds.every(id => { const bot = snapshot.bots.find(value => value.id === id); return bot && (bot.visibility === 'personal' || bot.ownerUserId === snapshot.user.id); });
+  const ownsVoice = ['dm', 'task'].includes(conversation.kind) && conversation.ownerUserId === snapshot.user.id && conversation.botIds.every(id => { const bot = snapshot.bots.find(value => value.id === id); return bot && bot.ownerUserId === snapshot.user.id; });
   return <section className="panel chat-composer stack" aria-label="Message composer">
     <ErrorNotice error={query.error || error} />
     <IntentNotice intent={sendIntent} reconcile={reconcileMessage} />

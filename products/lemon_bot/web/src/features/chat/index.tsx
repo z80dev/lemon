@@ -20,8 +20,6 @@ function EventLine({ event }: { event: TranscriptEvent }) {
     case 'channel_connected': case 'channel_disconnected': return <button onClick={() => navigate({ screen: 'integrations.channels', id: event.channelBindingId })}>{event.type === 'channel_connected' ? 'Channel connected' : 'Channel disconnected'}</button>;
     case 'routine_changed': return <button onClick={() => navigate({ screen: 'routines', id: event.routineId })}>Routine {event.action}</button>;
     case 'task_changed': return <button onClick={() => navigate({ screen: 'conversation', id: event.conversationId })}>Task {event.status.replaceAll('_', ' ')}</button>;
-    case 'team_shared': case 'team_bot_published': case 'team_bot_unpublished': return <button onClick={() => navigate({ screen: 'bot.overview', id: event.botId })}>{botName(event.botId)} · {event.type.replaceAll('_', ' ')}</button>;
-    case 'person_added': case 'person_removed': case 'person_left': return <span>Person {event.userId} · {event.type.replaceAll('_', ' ')}</span>;
     case 'bot_added': case 'bot_removed': return <button onClick={() => navigate({ screen: 'bot.overview', id: event.botId })}>{botName(event.botId)} · {event.type.replaceAll('_', ' ')}</button>;
     case 'handoff': return <button onClick={() => navigate({ screen: 'conversation', id: event.targetConversationId })}>{botName(event.sourceBotId)} → {botName(event.targetBotId)}: {event.text}</button>;
     case 'machine_moved': return <button onClick={() => navigate({ screen: 'machine.detail', id: event.targetMachineId })}>{botName(event.botId)} moved from {event.sourceMachineId} to {event.targetMachineId}</button>;
@@ -45,7 +43,7 @@ function EntryView({ entry, attachments, jump, reply, changed }: { entry: Transc
     case 'message': content = <><RichText text={entry.text} />{entry.streaming && <span className="muted small" role="status">Provisional streamed answer — awaiting authoritative completion</span>}{[...new Set([...entry.attachmentIds, ...attachments])].map(id => <AttachmentLink key={id} id={id} />)}</>; break;
     case 'card': {
       const room = snapshot.conversations.find(conversation => conversation.id === entry.conversationId);
-      const privateTypes: Record<string, true> = { secret_request: true, human_step: true, email_draft: true, slack_draft: true, message_draft: true, permission_request: true, auto_review_approval: true, local_tool_permission: true, publish_approval: true, connector_grant: true };
+      const privateTypes: Record<string, true> = { secret_request: true, human_step: true, email_draft: true, slack_draft: true, message_draft: true, permission_request: true, auto_review_approval: true, local_tool_permission: true, publish_approval: true };
       content = (room?.kind === 'group' || room?.kind === 'channel') && privateTypes[entry.card.type] ? <p className="error-notice">Sensitive requests must be reviewed in your authorized private task or DM, not in this shared room.</p> : <TranscriptCard card={entry.card} />; break;
     }
     case 'user_attachment': content = <AttachmentLink id={entry.attachmentId} />; break;

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { Approval, Card, Connector, ConnectorConsent, Draft, DraftContent, Field as QuestionField, Gate, HumanStep, JSONValue, Question, SecretRequest } from '@lemon-bot/sdk';
+import type { Approval, Card, Connector, Draft, DraftContent, Field as QuestionField, Gate, HumanStep, JSONValue, Question, SecretRequest } from '@lemon-bot/sdk';
 import { nonce } from '@lemon-bot/sdk';
 import { useApp } from '../../app';
 import { ErrorNotice, Field, Loading, formatTime, safeExternal, useQuery } from '../../ui';
@@ -142,36 +142,10 @@ function DraftCard({ initial }: { initial: Draft }) {
   </form>;
 }
 
-function ConsentCard({ initial }: { initial: ConnectorConsent }) {
-  const { client, snapshot } = useApp(); const query = useQuery(`consents:${initial.id}`, async () => {
-    const items: ConnectorConsent[] = []; let cursor: string | undefined;
-    do { const page = await client.call('GET /consents', { query: { limit: 200, ...(cursor ? { cursor } : {}) } }); items.push(...page.items); cursor = page.nextCursor || undefined; } while (cursor);
-    return { items, nextCursor: null };
-  });
-  const consent = query.data?.items.find(item => item.id === initial.id) || initial;
-  const connector = useQuery(`connector-consent-account:${consent.botId}`, async () => {
-    const items: Connector[] = []; let cursor: string | undefined;
-    do { const page = await client.call('GET /bots/:id/connectors', { params: { id: consent.botId }, query: { limit: 200, ...(cursor ? { cursor } : {}) } }); items.push(...page.items); cursor = page.nextCursor || undefined; } while (cursor);
-    return { items, nextCursor: null };
-  });
-  const account = connector.data?.items.find(item => item.id === consent.connectorId);
-  const [expiry, setExpiry] = useState(''); const intent = useIntent(); const allowed = useGate(consent.gate) && consent.accountOwnerUserId === snapshot.user.id;
-  async function resolve(decision: 'allow_once' | 'allow_bot' | 'decline') {
-    if (!allowed) return;
-    await intent.run(async () => { const expiresAtMs = expiry ? new Date(expiry).getTime() : undefined; if (expiresAtMs !== undefined && (!Number.isFinite(expiresAtMs) || expiresAtMs <= Date.now())) throw new Error('Remembered consent expiry must be in the future.'); await client.call('POST /consents/:id/resolve', { params: { id: consent.id }, body: { revision: consent.revision, clientNonce: nonce(), decision, ...(decision === 'allow_bot' && expiresAtMs !== undefined ? { expiresAtMs } : {}) } }); await query.reload(); });
-  }
-  return <div className="stack"><h3>Connector account permission</h3><p>{account?.name || 'Connector'} · {account?.accountLabel || consent.connectorId}</p><p>Server: {account?.url || 'Inspect account configuration'}</p><p>Bot: {snapshot.bots.find(bot => bot.id === consent.botId)?.name || consent.botId}</p><p className="muted">Exact account-owner consent, not authorization for unrelated or consequential writes. Shared host access is separate.</p><GateState gate={consent.gate} /><Field label="Optional remembered permission expiry"><input type="datetime-local" value={expiry} disabled={!allowed || intent.busy || intent.uncertain} onChange={event => setExpiry(event.target.value)} /></Field><ErrorNotice error={query.error || connector.error} /><IntentNotice intent={intent} reconcile={query.reload} /><div className="row">{(['allow_once', 'allow_bot', 'decline'] as const).map(decision => <button key={decision} disabled={!allowed || intent.busy || intent.uncertain} onClick={() => void resolve(decision)}>{decision === 'allow_once' ? 'Allow once' : decision === 'allow_bot' ? 'Allow this Bot' : 'Decline'}</button>)}</div></div>;
-}
-
 function ConnectorRow({ connector }: { connector: Connector }) {
   const { navigate, snapshot } = useApp();
-  const bot = snapshot.bots.find(value => value.id === connector.botId); const manage = connector.ownerUserId === snapshot.user.id || (connector.shared && (bot?.ownerUserId === snapshot.user.id || bot?.managerUserIds.includes(snapshot.user.id)));
+  const manage = connector.ownerUserId === snapshot.user.id;
   return <div className="panel stack"><div className="row spread"><strong>{connector.name}</strong><span className="badge">{connector.state.replaceAll('_', ' ')}</span></div><p>{connector.accountLabel} · {connector.url}</p>{connector.lastError && <p className="error-notice">{connector.lastError}</p>}<div className="row"><button onClick={() => navigate({ screen: 'connect.apps', botId: connector.botId, id: connector.id })}>{manage ? 'Configure / authenticate / reconnect / remove' : 'Inspect connection'}</button>{connector.state === 'blocked' && <span>Blocked by product policy; installation cannot override this.</span>}</div></div>;
-}
-
-function TeamCard({ card }: { card: Extract<Card, { type: 'team_access' }> }) {
-  const { client, snapshot, navigate, online } = useApp(); const query = useQuery(`bot:${card.botId}`, () => client.call('GET /bots/:id', { params: { id: card.botId } })); const bot = query.data; const intent = useIntent();
-  return <div className="stack"><h3>{bot?.name || 'Team Bot'}</h3><p>Owner: {card.ownerUserId} · {bot ? bot.published ? 'Published' : 'Unpublished' : card.state}</p><p>{card.reason}</p><p className="muted">A private DM is yours alone. No other member’s history, notes or credentials are imported.</p><ErrorNotice error={query.error} /><IntentNotice intent={intent} reconcile={query.reload} /><div className="row">{bot?.ownerUserId === snapshot.user.id && <button disabled={!online || intent.busy || intent.uncertain} onClick={() => void intent.run(async () => query.setData(await client.call('PATCH /bots/:id', { params: { id: bot.id }, body: { revision: bot.revision, clientNonce: nonce(), published: !bot.published } })))}>{bot.published ? 'Unpublish' : 'Publish for the team'}</button>}{bot && (bot.ownerUserId === snapshot.user.id || bot.managerUserIds.includes(snapshot.user.id)) && <button onClick={() => navigate({ screen: 'bot.settings', id: bot.id })}>Maintain setup</button>}<button disabled={!online || !bot?.published || intent.busy || intent.uncertain || card.state === 'unavailable'} onClick={() => void intent.run(async () => { const conversation = await client.call('POST /conversations', { body: { clientNonce: nonce(), kind: 'team_dm', botIds: [card.botId] } }); navigate({ screen: 'conversation', id: conversation.id }); })}>Start my private DM</button></div></div>;
 }
 
 export function TranscriptCard({ card }: { card: Card }) {
@@ -179,8 +153,7 @@ export function TranscriptCard({ card }: { card: Card }) {
   if ((card.type === 'secret_request' && card.request.gate.targetUserId !== snapshot.user.id) ||
       (card.type === 'human_step' && card.step.gate.targetUserId !== snapshot.user.id) ||
       ((card.type === 'email_draft' || card.type === 'slack_draft' || card.type === 'message_draft') && card.draft.ownerUserId !== snapshot.user.id) ||
-      ((card.type === 'permission_request' || card.type === 'auto_review_approval' || card.type === 'local_tool_permission' || card.type === 'publish_approval') && card.approval.gate.targetUserId !== snapshot.user.id) ||
-      (card.type === 'connector_grant' && card.consent.accountOwnerUserId !== snapshot.user.id)) return <p className="muted">Private request for its designated account owner. Its content and actions are not available here.</p>;
+      ((card.type === 'permission_request' || card.type === 'auto_review_approval' || card.type === 'local_tool_permission' || card.type === 'publish_approval') && card.approval.gate.targetUserId !== snapshot.user.id)) return <p className="muted">Private request for its designated account owner. Its content and actions are not available here.</p>;
   switch (card.type) {
     case 'text': return <RichText text={card.text} />;
     case 'attachment': return <><RichText text={card.caption} /><AttachmentLink id={card.attachmentId} /></>;
@@ -191,12 +164,10 @@ export function TranscriptCard({ card }: { card: Card }) {
     case 'human_step': return <HumanCard initial={card.step} />;
     case 'email_draft': case 'slack_draft': case 'message_draft': return <DraftCard initial={card.draft} />;
     case 'permission_request': case 'auto_review_approval': case 'local_tool_permission': case 'publish_approval': return <ApprovalCard initial={card.approval} />;
-    case 'connector_grant': return <ConsentCard initial={card.consent} />;
     case 'connector': return <ConnectorRow connector={card.connector} />;
     case 'connectors': return <div className="stack">{card.connectors.map(connector => <ConnectorRow key={connector.id} connector={connector} />)}</div>;
     case 'scm_connect': return <div className="stack"><h3>{card.provider} source control</h3><p>{card.reason}</p><button onClick={() => navigate({ screen: 'connect.apps', id: card.connectorId })}>Configure / authenticate verified connector</button></div>;
     case 'listener_connect': case 'slack_connect': return <div className="stack"><h3>{card.channelBinding.adapter} connection</h3><p>{card.channelBinding.accountId} · {card.channelBinding.target}</p><span className="badge">{card.channelBinding.state} · {card.channelBinding.enabled ? 'Enabled' : 'Disabled'}</span><p>Inbound: {card.channelBinding.capabilities.inbound ? 'Supported' : 'Unavailable'} · Outbound: {card.channelBinding.capabilities.outbound ? 'Supported' : 'Unavailable'}</p><p>Events: {card.channelBinding.capabilities.events.join(', ') || 'None advertised'}</p>{card.channelBinding.lastError && <p className="error-notice">{card.channelBinding.lastError}</p>}<button onClick={() => navigate({ screen: 'integrations.channels', id: card.channelBinding.id, botId: card.channelBinding.botId })}>Install / authorize / check / reopen / remove</button></div>;
-    case 'team_access': return <TeamCard card={card} />;
     case 'bot_template_share': return <div className="stack"><h3>{card.name}</h3><span className="badge">{card.state.replaceAll('_', ' ')}</span><p>Import creates a separate owned Bot, not access to the sender’s credentials, history or learned memory.</p><button onClick={() => navigate({ screen: 'templates', id: card.templateId })}>Review provenance, terms and details</button><button disabled={card.state !== 'available'} onClick={() => navigate({ screen: 'templates', id: card.templateId, tab: 'import' })}>Import a reviewed copy</button>{safeExternal(card.shareUrl) && <button onClick={() => void copyText(card.shareUrl).catch(reportError)}>Copy share link</button>}</div>;
     case 'voice_memo': return <VoiceMemo attachmentId={card.attachmentId} transcript={card.transcript} durationMs={card.durationMs} peaks={card.peaks} />;
     case 'handoff': return <div className="stack"><h3>Specialist: {snapshot.bots.find(bot => bot.id === card.targetBotId)?.name || card.targetBotId}</h3><span className="badge">{card.state}</span><RichText text={card.text} /><button onClick={() => navigate({ screen: 'conversation', id: card.targetConversationId })}>Open specialist task and results</button></div>;
@@ -204,3 +175,4 @@ export function TranscriptCard({ card }: { card: Card }) {
     default: return <p className="error-notice">Unsupported card. Update this client to view it. No action has been authorized.</p>;
   }
 }
+
