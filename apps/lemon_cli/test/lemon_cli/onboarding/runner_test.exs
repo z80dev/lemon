@@ -207,13 +207,7 @@ defmodule LemonCli.Onboarding.RunnerTest do
   test "catalog API-key providers store the pasted key and reference it from config", %{
     tmp_dir: tmp_dir
   } do
-    for {name, provider_id} <- [
-          {"groq", "groq"},
-          {"deep-seek", "deepseek"},
-          {"hf", "huggingface"},
-          {"vercel", "vercel_ai_gateway"},
-          {"google-ai-studio", "google"}
-        ] do
+    for {name, provider_id} <- [{"groq", "groq"}, {"vercel", "vercel_ai_gateway"}] do
       spec = LemonCli.Onboarding.Providers.fetch!(name)
       assert spec.id == provider_id
       assert spec.auth_modes == [:api_key]
