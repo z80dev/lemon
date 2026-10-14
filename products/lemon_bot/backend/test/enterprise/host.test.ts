@@ -140,7 +140,9 @@ async function fixture(reviewedSetups: ReviewedSetup[] = []): Promise<Fixture> {
   const store = new Store(join(directory, 'host.sqlite'));
   const lemon = new ActualPTY();
   const operator: P.OperatorConfiguration = { version: 1, trustedFrontendOrigins: [], oauthRedirectUris: [], serverSecrets: {}, channelProviders: [], emailProviders: [], eventProviders: [], hostDrivers: [], xProvider: null, exportAllowedOrigins: [], requiredRuntimeDestinations: [{ kind: 'domain', value: 'runtime.example', ports: [443], protocol: 'tcp' }], breakGlassOwnerUserId: null };
-  const services = { store, lemon, config: { publicUrl: 'https://product.example', controlUrl: 'wss://controller.example/ws', operatorToken: 'never-disclosed', dataDir: directory, host: '127.0.0.1', port: 4080, trustedOverlay: false, operator, operatorExtras: { reviewedSetupManifests: reviewedSetups, machineManagementUserIds: [] } } } as BackendServices;
+  operator.reviewedSetupManifests = reviewedSetups;
+  operator.machineManagementUserIds = [];
+  const services = { store, lemon, config: { publicUrl: 'https://product.example', controlUrl: 'wss://controller.example/ws', operatorToken: 'never-disclosed', dataDir: directory, host: '127.0.0.1', port: 4080, trustedOverlay: false, operator } } as BackendServices;
   installHelpers(services);
   services.now = () => 1800000000000;
   const key = randomBytes(32);

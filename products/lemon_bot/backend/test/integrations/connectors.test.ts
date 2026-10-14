@@ -10,12 +10,12 @@ import { createAccessService } from '../../src/core/auth';
 import { createEventService } from '../../src/core/events';
 import { createMutationService } from '../../src/core/mutations';
 import { createGateService } from '../../src/core/gates';
-import { syncBotProfile, baseBotMcpConfig } from '../../src/core/bots';
+import { syncBotProfile, baseBotMcpTemplate } from '../../src/core/bots';
 import { revokeConnectorInvocations } from '../../src/runtime/runs';
 import { Router } from '../../src/core/router';
 import { ApiError } from '../../src/core/errors';
 import { createPolicyServices } from '../../src/enterprise/policy';
-import { createConnectorRoutes, createConnectorServices, connectorConfigurationFingerprint } from '../../src/integrations/connectors';
+import { createConnectorRoutes, createConnectorServices, connectorConfigurationFingerprint, type ConnectorProfileServer } from '../../src/integrations/connectors';
 import { privateMetadata, sha256 } from '../../src/integrations/common';
 import type { OAuthState } from '../../src/integrations/oauth';
 
@@ -111,8 +111,10 @@ async function fixture(visibility: P.Bot['visibility'] = 'personal') {
   const codec = createPrivateCodec(key);
   const operator: P.OperatorConfiguration = { version: 1, trustedFrontendOrigins: [], oauthRedirectUris: [], serverSecrets: {}, channelProviders: [], emailProviders: [], eventProviders: [], hostDrivers: [], xProvider: null, exportAllowedOrigins: [], requiredRuntimeDestinations: [], breakGlassOwnerUserId: null };
   const oauth: P.OAuthProviderConfig = { id: 'records-oauth', clientId: 'registered-client', clientSecretRef: 'records-client-secret', authorizeUrl: `${ORIGIN}/oauth/authorize`, tokenUrl: `${ORIGIN}/oauth/token`, scopes: ['records.read', 'records.write'], redirectUris: [`${PUBLIC_URL}/v1/connectors/oauth/callback`], allowedOrigins: [ORIGIN] };
+  operator.connectorProviders = [{ id: 'records', origins: [ORIGIN], oauth, sharedServiceAccount: false }];
+  operator.approvedPrivateMcpOrigins = [];
   // The actual factories fill the cyclic service graph, just as backend bootstrap does.
-  const services = { config: { publicUrl: PUBLIC_URL, controlUrl: 'ws://127.0.0.1:4040/ws', operatorToken: 'test-operator-not-a-provider-token', dataDir: '/unused-test-data', host: '127.0.0.1', port: 4080, trustedOverlay: false, operator, operatorExtras: { connectorProviders: [{ id: 'records', origins: [ORIGIN], oauth, sharedServiceAccount: false }], approvedPrivateMcpOrigins: [] } }, store, lemon: peer, ...codec } as BackendServices;
+  const services = { config: { publicUrl: PUBLIC_URL, controlUrl: 'ws://127.0.0.1:4040/ws', operatorToken: 'test-operator-not-a-provider-token', dataDir: '/unused-test-data', host: '127.0.0.1', port: 4080, trustedOverlay: false, operator }, store, lemon: peer, ...codec } as BackendServices;
   installHelpers(services);
   let serial = 0;
   let now = 1_800_000_000_000;
@@ -123,7 +125,7 @@ async function fixture(visibility: P.Bot['visibility'] = 'personal') {
   services.events = createEventService(services);
   services.mutations = createMutationService(services, key);
   const connectors = createConnectorServices(services);
-  services.integrations = { ...createPolicyServices(services), connectorConfig: connectors.connectorProfileConfiguration, canReadResource: (actor, collection, entity) => connectors.canReadResource(actor, collection, entity) ?? false, emitProviderNotifications: async () => undefined } as BackendServices['integrations'];
+  services.integrations = { ...createPolicyServices(services), connectorConfig: connectors.connectorProfileConfiguration, connectorTemplates: connectors.connectorTemplates, canReadResource: (actor, collection, entity) => connectors.canReadResource(actor, collection, entity) ?? false, emitProviderNotifications: async () => undefined } as BackendServices['integrations'];
   services.syncBotProfile = (actor, botId) => syncBotProfile(services, actor, botId);
   services.runtime = { revokeConnectorInvocations: (actor, botId, connectorId) => revokeConnectorInvocations(services, actor, botId, connectorId) } as BackendServices['runtime'];
   const gates = createGateService(services);
@@ -147,7 +149,7 @@ async function fixture(visibility: P.Bot['visibility'] = 'personal') {
   peer.putSecret('BOT_MCP', 'private-product-bot-token');
   peer.putSecret('RECORDS_TOKEN', 'destination-only-account-secret');
   store.setMetadata(`botMcp:${bot.id}`, { secretName: 'BOT_MCP', encryptedToken: codec.encrypt('private-product-bot-token'), digest: 'fixture-digest' });
-  peer.profiles.set(bot.profileId, [baseBotMcpConfig(services, bot)]);
+  peer.profiles.set(bot.profileId, [baseBotMcpTemplate(services)]);
   const alice = await services.auth.session('alice');
   const bob = await services.auth.session('bob');
   const principal = (userId: string): Principal => ({ kind: 'user', id: userId, userId, workspaceId: 'workspace-1', role: userId === 'alice' ? 'owner' : 'member', sessionId: null, botId: null, deviceId: null });
@@ -157,8 +159,19 @@ async function fixture(visibility: P.Bot['visibility'] = 'personal') {
   };
   const create = async (changes: Partial<P.ConnectorSetupRequest> = {}) => request<P.ConnectorSetupResult>('POST', `/v1/bots/${bot.id}/connectors/setup`, { clientNonce: services.id('nonce'), machineId: machine.id, name: 'Records', url: `${ORIGIN}/mcp`, accountLabel: 'Alice records', shared: false, authKind: 'secret_headers', secretBindings: [{ header: 'Authorization', secretName: 'RECORDS_TOKEN' }], requestedLevel: 'read_interact', ...changes });
   const enable = async (connector: P.Connector) => request<P.Connector>('PATCH', `/v1/connectors/${connector.id}`, { clientNonce: services.id('nonce'), revision: connector.revision, tools: connector.tools.map(tool => ({ ...tool, enabled: true })) });
+  const admit = async (userId: string, operationId: string): Promise<P.Run> => {
+    const actor = principal(userId);
+    const run: P.Run = services.resource('run', { conversationId: `room-${userId}`, botId: bot.id, initiatorUserId: userId, clientNonce: services.id('nonce'), status: 'running', error: null, startedAtMs: services.now(), completedAtMs: null, routineRunId: null });
+    store.put('runs', run);
+    store.setMetadata(`nativeRunProduct:${operationId}`, run.id);
+    store.setMetadata(`runPrincipal:${run.id}`, actor);
+    await connectors.connectorInvocationConfiguration(actor, bot.id, run.conversationId, operationId);
+    const configured = store.metadata<string[]>(`invocationConnectors:${operationId}`) ?? [];
+    store.setMetadata(`runConnectorEpochs:${run.id}`, configured.map(connectorId => ({ connectorId, epoch: store.metadata<number>(`connectorEpoch:${connectorId}`) ?? 0 })));
+    return run;
+  };
   cleanup.push(() => { gates.close(); peer.close(); store.close(); });
-  return { services, store, peer, bot, machine, oauth, connectors, request, create, enable, principal, advance: (ms: number) => { now += ms; } };
+  return { services, store, peer, bot, machine, oauth, connectors, request, create, enable, admit, principal, advance: (ms: number) => { now += ms; } };
 }
 
 describe('destination connector configuration', () => {
@@ -179,10 +192,32 @@ describe('destination connector configuration', () => {
     expect(config[0]?.enabledTools).toEqual(['read_items', 'write_item']);
     expect(config[0]?.allowedOrigins).toEqual([ORIGIN]);
     expect(config[0]?.approvedPrivateOrigins).toEqual([]);
+    expect(config[0]?.headers).toEqual({});
+    expect(f.peer.profiles.get(f.bot.profileId)?.every(server => Object.keys(server.headers).length === 0)).toBe(true);
     const publicData = JSON.stringify([result.body, enabled.body, config, f.store.list('auditRecords'), f.store.db.query('SELECT payload FROM events').all(), [...f.peer.profiles.values()]]);
     expect(publicData).not.toContain('destination-only-account-secret');
     expect(publicData).not.toContain('private-product-bot-token');
     expect(publicData).not.toContain(f.services.config.operatorToken);
+  });
+
+  test('all configured account templates are credential-free without private metadata, owner authority or consent consumption', async () => {
+    const f = await fixture('team');
+    const value = await f.create();
+    const connector = (await f.enable(value.body.connector)).body;
+    const consent = await f.connectors.requestConnectorConsent(f.principal('alice'), { connectorId: connector.id, botId: f.bot.id, conversationId: 'room-alice', operationId: f.services.id('run') });
+    const before = f.peer.calls.length;
+    const decrypt = f.services.decrypt;
+    f.services.decrypt = () => { throw new Error('Public template getter attempted to inspect private metadata.'); };
+    let templates: ConnectorProfileServer[];
+    try { templates = await f.connectors.connectorTemplates(f.bot.id); }
+    finally { f.services.decrypt = decrypt; }
+    expect(templates).toEqual([{ name: `connector-${connector.id}`, url: `${ORIGIN}/mcp`, headers: {}, enabledTools: ['read_items', 'write_item'], allowedOrigins: [ORIGIN], approvedPrivateOrigins: [] }]);
+    expect(f.peer.calls).toHaveLength(before);
+    expect(f.store.require<P.ConnectorConsent>('consents', consent.id).gate.state).toBe('pending');
+    expect(JSON.stringify(templates)).not.toContain('RECORDS_TOKEN');
+    expect(JSON.stringify(f.store.metadata(`connectorTemplatePolicy:${connector.id}`))).not.toContain('RECORDS_TOKEN');
+    expect(f.peer.profiles.get(f.bot.profileId)).toEqual([baseBotMcpTemplate(f.services), ...templates]);
+    expect(f.connectors.details(connector.id).desiredFingerprint).toBe(connectorConfigurationFingerprint([baseBotMcpTemplate(f.services), ...templates]));
   });
 
   test('rejects raw credentials, malformed names, missing destination names, foreign machine and unsafe origins before connection', async () => {
@@ -200,7 +235,7 @@ describe('destination connector configuration', () => {
 
   test('private origins require an operator exact allowlist and propagate that policy to the destination', async () => {
     const f = await fixture();
-    f.services.config.operatorExtras!.approvedPrivateMcpOrigins = ['https://127.0.0.1'];
+    f.services.config.operator!.approvedPrivateMcpOrigins = ['https://127.0.0.1'];
     const value = await f.create({ url: 'https://127.0.0.1/mcp' });
     expect(value.status).toBe(201);
     const server = serverSchema.parse(f.peer.calls.find(call => call.method === 'node.mcp.discover')!.params.server);
@@ -227,13 +262,30 @@ describe('destination connector configuration', () => {
     const enabled = await f.enable(created.body.connector);
     expect(enabled.status).toBe(200);
     expect((await f.connectors.connectorProfileConfiguration(f.principal('alice'), f.bot.id))[0]?.enabledTools).toEqual(['read_items']);
+    const run = await f.admit('alice', 'operation-1');
     await expect(f.connectors.authorizeConnectorTool(f.principal('alice'), { connectorId: enabled.body.id, botId: f.bot.id, conversationId: 'room-alice', toolName: 'write_item', operationId: 'operation-1' })).rejects.toMatchObject({ code: 'policy_denied' });
+    f.store.put('runs', f.services.update(run, { status: 'succeeded' as const, completedAtMs: f.services.now() }));
     const arbitrary = await f.request<P.ErrorEnvelope>('PATCH', `/v1/connectors/${enabled.body.id}`, { clientNonce: f.services.id('nonce'), revision: enabled.body.revision, tools: [{ name: 'invented_tool', enabled: true }] });
     expect(arbitrary.body.error.code).toBe('invalid_request');
     const grant = f.store.list<P.BotGrant>('botGrants', value => value.capabilityId === `connector:${enabled.body.id}`)[0]!;
     f.store.put('botGrants', f.services.update(grant, { requestedLevel: 'off', effectiveLevel: 'off' }));
     await f.connectors.connectorProvisioning(f.principal('alice'), f.bot.id);
-    expect(await f.connectors.connectorProfileConfiguration(f.principal('alice'), f.bot.id)).toEqual([]);
+    expect((await f.connectors.connectorTemplates(f.bot.id))[0]?.enabledTools).toEqual([]);
+    expect(await f.connectors.connectorProfileConfiguration(f.principal('alice'), f.bot.id, 'room-alice', f.services.id('run'))).toEqual([]);
+  });
+
+  test('direct tool authorization cannot attach an unadmitted connector or reuse a revoked invocation epoch', async () => {
+    const f = await fixture();
+    const created = await f.create();
+    const connector = (await f.enable(created.body.connector)).body;
+    const input = { connectorId: connector.id, botId: f.bot.id, conversationId: 'room-alice', toolName: 'read_items', operationId: 'fixed-native-operation' };
+    await expect(f.connectors.authorizeConnectorTool(f.principal('alice'), input)).rejects.toMatchObject({ code: 'policy_denied' });
+    await f.admit('alice', input.operationId);
+    await expect(f.connectors.authorizeConnectorTool(f.principal('alice'), input)).resolves.toBeUndefined();
+    await expect(f.connectors.authorizeConnectorTool(f.principal('bob'), { ...input, conversationId: 'room-bob' })).rejects.toMatchObject({ code: 'forbidden' });
+    f.store.setMetadata(`connectorEpoch:${connector.id}`, (f.store.metadata<number>(`connectorEpoch:${connector.id}`) ?? 0) + 1);
+    await expect(f.connectors.authorizeConnectorTool(f.principal('alice'), input)).rejects.toMatchObject({ code: 'policy_denied' });
+    expect(f.store.metadata<string[]>(`invocationConnectors:${input.operationId}`)).toEqual([connector.id]);
   });
 
   test('ambiguous profile synchronization is fenced and an exact nonce never repeats the mutation', async () => {
@@ -278,7 +330,7 @@ describe('destination connector configuration', () => {
     const connector = (await f.enable(created.body.connector)).body;
     const run: P.Run = f.services.resource('run', { conversationId: 'room-alice', botId: f.bot.id, initiatorUserId: 'alice', clientNonce: f.services.id('nonce'), status: 'running', error: null, startedAtMs: f.services.now(), completedAtMs: null, routineRunId: null });
     f.store.put('runs', run);
-    f.store.setMetadata(`runtimeRun:${run.id}`, { executionRunId: run.id, sessionKey: 'agent:lb-fixture:main', dispatched: true });
+    f.store.setMetadata(`runtimeRun:${run.id}`, { upstreamRunId: run.id, executionRunId: run.id, sessionKey: 'agent:lb-fixture:main', dispatched: true });
     f.store.setMetadata(`invocationConnectors:${run.id}`, [connector.id]);
     f.peer.failure = 'cancellation';
     const body = { clientNonce: f.services.id('nonce'), revision: connector.revision, tools: connector.tools.map(tool => ({ ...tool, enabled: false })) };
@@ -300,7 +352,8 @@ describe('principal-scoped Team connector consent', () => {
     const created = await f.create();
     const enabled = await f.enable(created.body.connector);
     const connector = enabled.body;
-    expect(await f.connectors.connectorProfileConfiguration(f.principal('alice'), f.bot.id)).toEqual([]);
+    expect((await f.connectors.connectorTemplates(f.bot.id))[0]?.headers).toEqual({});
+    expect(await f.connectors.connectorProfileConfiguration(f.principal('alice'), f.bot.id, 'room-alice', 'unconsented-operation')).toEqual([]);
     expect(await f.connectors.connectorProfileConfiguration(f.principal('bob'), f.bot.id, 'room-bob', 'different-operation')).toEqual([]);
     const operationId = f.services.id('run');
     const consent = await f.connectors.requestConnectorConsent(f.principal('alice'), { connectorId: connector.id, botId: f.bot.id, conversationId: 'room-alice', operationId });
@@ -342,12 +395,14 @@ describe('principal-scoped Team connector consent', () => {
   test('shared credentials require a deliberately operator-declared service account, not a boolean alone', async () => {
     const f = await fixture('team');
     expect((await f.create({ shared: true })).status).toBe(403);
-    f.services.config.operatorExtras!.connectorProviders = [{ id: 'service-records', origins: [ORIGIN], oauth: null, sharedServiceAccount: true }];
+    f.services.config.operator!.connectorProviders = [{ id: 'service-records', origins: [ORIGIN], oauth: null, sharedServiceAccount: true }];
     const value = await f.create({ shared: true });
     const connector = (await f.enable(value.body.connector)).body;
     expect((await f.connectors.connectorProfileConfiguration(f.principal('bob'), f.bot.id))[0]?.enabledTools).toEqual(['read_items', 'write_item']);
+    const run = await f.admit('bob', 'service-account-operation');
     await expect(f.connectors.authorizeConnectorTool(f.principal('bob'), { connectorId: connector.id, botId: f.bot.id, conversationId: 'room-bob', toolName: 'read_items', operationId: 'service-account-operation' })).resolves.toBeUndefined();
-    f.services.config.operatorExtras!.connectorProviders = [];
+    f.store.put('runs', f.services.update(run, { status: 'succeeded' as const, completedAtMs: f.services.now() }));
+    f.services.config.operator!.connectorProviders = [];
     await expect(f.connectors.connectorProfileConfiguration(f.principal('bob'), f.bot.id)).rejects.toMatchObject({ code: 'policy_denied' });
   });
 });
@@ -406,7 +461,7 @@ describe('configured OAuth and destructive disconnect', () => {
     const created = await f.create({ authKind: 'oauth', secretBindings: [] });
     const auth = await f.request<P.ConnectorAuth>('POST', `/v1/connectors/${created.body.connector.id}/auth`, { clientNonce: f.services.id('nonce') });
     const state = new URL(auth.body.authorizationUrl).searchParams.get('state')!;
-    f.services.config.operatorExtras!.connectorProviders = [{ id: 'records', origins: [ORIGIN], oauth: { ...f.oauth, clientId: 'other-client' }, sharedServiceAccount: false }];
+    f.services.config.operator!.connectorProviders = [{ id: 'records', origins: [ORIGIN], oauth: { ...f.oauth, clientId: 'other-client' }, sharedServiceAccount: false }];
     const transport = spyOn(globalThis, 'fetch').mockImplementation(async () => { throw new Error('A changed client must not exchange this code.'); });
     cleanup.push(() => transport.mockRestore());
     const result = await f.request<P.ErrorEnvelope>('GET', `/v1/connectors/oauth/callback?state=${state}&code=wrong-client`, undefined, null);
@@ -438,7 +493,7 @@ describe('configured OAuth and destructive disconnect', () => {
     await expect(f.connectors.cleanupOAuthUser('alice')).rejects.toMatchObject({ code: 'capability_unavailable' });
     expect(revocations).toEqual([]);
     expect(await f.connectors.reconcileOAuthUser('alice')).toBe(false);
-    f.services.config.operatorExtras!.connectorProviders = [{ id: 'records', origins: [ORIGIN], oauth: { ...f.oauth, revocationUrl: `${ORIGIN}/oauth/revoke` }, sharedServiceAccount: false }];
+    f.services.config.operator!.connectorProviders = [{ id: 'records', origins: [ORIGIN], oauth: { ...f.oauth, revocationUrl: `${ORIGIN}/oauth/revoke` }, sharedServiceAccount: false }];
     await f.connectors.cleanupOAuthUser('alice');
     expect(revocations).toEqual(['late-issued-access', 'late-issued-refresh']);
     expect(await f.connectors.reconcileOAuthUser('alice')).toBe(true);

@@ -2,7 +2,7 @@ import type * as P from '../../../contracts/protocol';
 import type { BackendServices, IntegrationServices, Route } from '../core/services';
 import { ApiError } from '../core/errors';
 import { assertActiveAccount, userPrincipal } from './common';
-import { createConnectorRoutes, createConnectorServices } from './connectors';
+import { createConnectorRoutes, createConnectorServices, type ConnectorProfileServer } from './connectors';
 import { createChannelRoutes, createChannelServices } from './channels';
 import { createEmailRoutes, createEmailServices } from './email';
 import { createEventRoutes } from './events';
@@ -24,7 +24,7 @@ import { previewProviderDeprovision } from '../enterprise/account-effects';
 import { createProviderTeardownServices, type CleanupKind, type ProviderTeardownReceipt } from '../enterprise/teardown';
 import type { OIDCExchangeOperation } from '../enterprise/identity';
 
-type Services = IntegrationServices & { observeAccountTeardown(operationId: string): Promise<P.ProviderCleanupResult[]> };
+type Services = IntegrationServices & { observeAccountTeardown(operationId: string): Promise<P.ProviderCleanupResult[]>; connectorTemplates(botId: string): Promise<ConnectorProfileServer[]> };
 const instances = new WeakMap<BackendServices, Services>();
 interface CleanupBinding {
   account?: P.EmailAccount; claim?: { id: string; providerId: string; accountId?: string; address?: string };
@@ -120,6 +120,7 @@ export function createIntegrationServices(s: BackendServices): Services {
       await host.admission(actor, botId); await spend.admission(actor, botId, routineId);
     },
     connectorConfig: connectors.connectorProfileConfiguration, authorizeConnector: connectors.authorizeConnectorTool,
+    connectorTemplates: connectors.connectorTemplates,
     connectorProvisioning: connectors.connectorProvisioning, requestConnectorConsent: connectors.requestConnectorConsent, deleteBotConnectors: connectors.deleteBotConnectors,
     sendApprovedDraft: (actor, draft) => draft.content.kind === 'email' ? email.sendApprovedDraft(actor, draft) : channels.sendApprovedDraft(actor, draft),
     emitProviderNotifications: push.emitProviderNotifications, channelIngress: channels.channelIngress,

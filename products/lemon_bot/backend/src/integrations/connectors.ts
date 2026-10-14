@@ -10,8 +10,9 @@ import { integrationConfiguration, type ConnectorProvider } from './config';
 import { startOAuth, takeOAuthState, exchangeOAuth, markOAuthInstalled, oauthTokenClientDigest, type OAuthCompletion, type OAuthExchangeOperation } from './oauth';
 import { effectiveBotGrants } from '../core/experiences';
 import { cancelConnectorConsents, cancelGate } from '../core/gates';
-import { baseBotMcpConfig, syncBotConnectorRevocation } from '../core/bots';
+import { baseBotMcpTemplate, syncBotConnectorRevocation } from '../core/bots';
 import { revokeOAuthCompletion, reconcileOAuthRevocation, type OAuthRevocationReceipt } from './oauth-revocation';
+import { effectiveInvocationAudience } from '../runtime/runs';
 
 const nonce = z.string().regex(/^[A-Za-z0-9_-]{16,128}$/);
 const revision = z.number().int().positive().max(Number.MAX_SAFE_INTEGER);
@@ -34,6 +35,7 @@ const discoverySchema = z.object({ connected: z.literal(true), server: z.object(
 type SecretBinding = z.infer<typeof binding>;
 interface ConnectorPrivate { machineId: string; bindings: SecretBinding[]; readOnlyTools: string[]; executionNames: Record<string, string>; providerId: string | null; oauthSecretNames: string[]; oauthExpiresAtMs: number | null; discoveredAtMs: number | null; configuredLevel: 'off' | 'read_interact'; provisionState: 'pending' | 'acknowledged' | 'outcome_unknown'; desiredState: P.Connector['state'] | null; desiredFingerprint: string | null; provisionActorUserId: string | null; }
 interface ConsentPrivate { userId: string; conversationId: string; operationId: string | null; consumedBy: string | null; }
+interface ConnectorTemplatePolicy { machineId: string; readOnlyTools: string[]; configuredLevel: 'off' | 'read_interact' }
 export interface ConnectorProfileServer { name: string; url: string; headers: Record<string, string>; enabledTools: string[]; allowedOrigins: string[]; approvedPrivateOrigins: string[] }
 export interface ConnectorToolAuthorization { connectorId: string; botId: string; conversationId: string; toolName: string; operationId: string }
 
@@ -49,9 +51,14 @@ function parseResponse<T>(schema: z.ZodType<T>, input: unknown, mutation = false
   return result.data;
 }
 
-/** Matches the platform digest of normalized reference-only MCP configuration. */
+/** Matches the platform digest for a public ceiling or exact invocation MCP configuration. */
 export function connectorConfigurationFingerprint(servers: { name: string; url: string; headers: Record<string, string>; enabledTools?: string[]; allowedOrigins?: string[]; approvedPrivateOrigins?: string[] }[]): string {
   return createHash('sha256').update(JSON.stringify(servers.map(server => [server.name, server.url, Object.entries(server.headers).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0), server.enabledTools ?? null, server.allowedOrigins ?? null, server.approvedPrivateOrigins ?? null]))).digest('hex');
+}
+
+/** Public profile ceiling only; credential authority is installed separately for a fixed invocation. */
+export function connectorTemplates(services: BackendServices, bot: P.Bot): Promise<ConnectorProfileServer[]> {
+  return createConnectorServices(services).connectorTemplates(bot.id);
 }
 
 export function createConnectorServices(services: BackendServices) {
@@ -61,7 +68,10 @@ export function createConnectorServices(services: BackendServices) {
     if (!value) fail('conflict', 'Connector destination configuration is unavailable; configure it again.');
     return value;
   };
-  const saveDetails = (id: string, value: ConnectorPrivate) => savePrivateMetadata(services, privateKey(id), value);
+  const saveDetails = (id: string, value: ConnectorPrivate) => {
+    savePrivateMetadata(services, privateKey(id), value);
+    services.store.setMetadata(`connectorTemplatePolicy:${id}`, { machineId: value.machineId, readOnlyTools: [...value.readOnlyTools], configuredLevel: value.configuredLevel } satisfies ConnectorTemplatePolicy);
+  };
   const provider = (connector: P.Connector): ConnectorProvider | null => {
     const matches = integrationConfiguration(services).connectorProviders.filter(value => value.origins.includes(new URL(connector.url).origin));
     if (matches.length > 1) fail('policy_denied', 'Connector origin has ambiguous operator provider configuration.');
@@ -149,6 +159,22 @@ export function createConnectorServices(services: BackendServices) {
     const origin = assertOrigin(connector.url).origin;
     return { name: `connector-${connector.id}`, url: connector.url, headers: headers(details(connector.id)), enabledTools: enabled(connector, effectiveLevel), allowedOrigins: [origin], approvedPrivateOrigins: integrationConfiguration(services).approvedPrivateMcpOrigins.includes(origin) ? [origin] : [] };
   }
+  async function connectorTemplates(botId: string): Promise<ConnectorProfileServer[]> {
+    const bot = services.store.require<P.Bot>('bots', botId);
+    const result: ConnectorProfileServer[] = [];
+    for (const connector of services.store.list<P.Connector>('connectors', value => value.botId === botId && value.state !== 'disconnected' && value.state !== 'blocked')) {
+      const policy = services.store.metadata<ConnectorTemplatePolicy>(`connectorTemplatePolicy:${connector.id}`);
+      if (!policy) fail('capability_unavailable', 'Connector public template policy has not been provisioned.', true, { resourceIds: [connector.id] });
+      if (policy.machineId !== bot.machineId) continue;
+      const origin = assertOrigin(connector.url).origin;
+      if (connector.shared && !provider(connector)?.sharedServiceAccount) fail('policy_denied', 'Shared service account provider is no longer approved.');
+      const grant = services.store.list<P.BotGrant>('botGrants', value => value.botId === botId && value.capabilityId === `connector:${connector.id}` && value.machineId === policy.machineId)[0];
+      const level = grant?.requestedLevel ?? 'off';
+      const enabledTools = policy.configuredLevel === 'off' || level === 'off' ? [] : connector.tools.filter(tool => tool.enabled && (level === 'read_interact' || policy.readOnlyTools.includes(tool.name))).map(tool => tool.name);
+      result.push({ name: `connector-${connector.id}`, url: connector.url, headers: {}, enabledTools, allowedOrigins: [origin], approvedPrivateOrigins: integrationConfiguration(services).approvedPrivateMcpOrigins.includes(origin) ? [origin] : [] });
+    }
+    return result;
+  }
   async function connectorGrants(actor: Principal, bot: P.Bot, provisioning = false): Promise<P.BotGrant[]> {
     const capabilities = services.store.get<P.MachineCapabilities>('machineCapabilities', bot.machineId) ?? undefined;
     if (provisioning && !services.integrations.sharedProfilePolicy) fail('capability_unavailable', 'Workspace-required profile policy composition must be configured.');
@@ -196,15 +222,14 @@ export function createConnectorServices(services: BackendServices) {
     if (connector.state !== 'disconnected' && connector.state !== 'blocked' && connector.state !== 'failed') assertActiveAccount(services, connector.ownerUserId);
     publish(connector);
     const bot = services.store.require<P.Bot>('bots', connector.botId);
-    const expected = connectorConfigurationFingerprint([baseBotMcpConfig(services, bot), ...await connectorProfileConfiguration(actor, connector.botId)]);
+    const expected = connectorConfigurationFingerprint([baseBotMcpTemplate(services), ...await connectorTemplates(bot.id)]);
     saveDetails(connector.id, { ...details(connector.id), provisionState: 'pending', desiredState: connector.state, desiredFingerprint: expected, provisionActorUserId: actor.userId });
     return expected;
   }
   async function provision(actor: Principal, connector: P.Connector): Promise<P.Connector> {
     const expected = await prepareProvision(actor, connector);
-    const bot = services.store.require<P.Bot>('bots', connector.botId);
     try {
-      if (bot.visibility !== 'team' || connector.shared) await synchronize(actor, connector.botId);
+      await synchronize(actor, connector.botId);
       const profile = parseResponse(z.object({ profile: z.object({ mcpConfigFingerprint: z.string().regex(/^[a-f0-9]{64}$/) }).passthrough() }).passthrough(), await services.lemon.call('profiles.get', { id: services.store.require<P.Bot>('bots', connector.botId).profileId }));
       if (profile.profile.mcpConfigFingerprint !== expected) fail('outcome_unknown', 'Profile connector configuration fingerprint was not acknowledged.', false, { resourceIds: [connector.id] });
       if (connector.state === 'connected') assertReady(connector, true);
@@ -252,20 +277,18 @@ export function createConnectorServices(services: BackendServices) {
   }
   async function connectorProfileConfiguration(actor: Principal, botId: string, conversationId?: string, operationId?: string): Promise<ConnectorProfileServer[]> {
     const bot = services.auth.bot(actor, botId);
-    const conversation = conversationId === undefined ? null : services.auth.conversation(actor, conversationId);
-    if (conversation && (!operationId || operationId.length > 128)) fail('invalid_request', 'Invocation connector configuration requires its reserved operation identity.');
-    if (conversation && services.store.metadata<{ dispatched: boolean }>(`runtimeRun:${operationId}`)?.dispatched) fail('outcome_unknown', 'An executing invocation cannot re-provision connector authority or replay a consumed grant.', false, { resourceIds: [operationId!] });
-    if (conversation && (!conversation.botIds.includes(botId) || actor.kind === 'bot' && actor.botId !== botId)) fail('forbidden', 'Connector invocation does not match this Bot and conversation.');
+    if (conversationId === undefined) return connectorTemplates(botId);
+    const conversation = services.auth.conversation(actor, conversationId);
+    if (!operationId || operationId.length > 128) fail('invalid_request', 'Invocation connector configuration requires its reserved operation identity.');
+    if (services.store.metadata<{ dispatched: boolean }>(`runtimeRun:${operationId}`)?.dispatched) fail('outcome_unknown', 'An executing invocation cannot re-provision connector authority or replay a consumed grant.', false, { resourceIds: [operationId] });
+    if (!conversation.botIds.includes(botId) || actor.kind === 'bot' && actor.botId !== botId) fail('forbidden', 'Connector invocation does not match this Bot and conversation.');
     reconcilePlacement(bot);
-    const grants = await connectorGrants(actor, bot, conversation === null);
+    const grants = await connectorGrants(actor, bot);
     const result: ConnectorProfileServer[] = [];
-    const configuredIds: string[] | null = conversation ? [] : null;
+    const configuredIds: string[] = [];
     for (const connector of services.store.list<P.Connector>('connectors', value => value.botId === botId && value.state === 'connected')) {
-      if (conversation && details(connector.id).provisionState !== 'acknowledged') continue;
-      if (!connector.shared) {
-        if (connector.ownerUserId !== actor.userId || conversation?.kind === 'group' || conversation?.kind === 'channel') continue;
-        if (bot.visibility === 'team' && !conversation) continue;
-      }
+      if (details(connector.id).provisionState !== 'acknowledged') continue;
+      if (!connector.shared && (connector.ownerUserId !== actor.userId || conversation.kind === 'group' || conversation.kind === 'channel')) continue;
       assertConnectorPolicy(connector);
       const expiresAtMs = details(connector.id).oauthExpiresAtMs;
       if (expiresAtMs !== null && expiresAtMs <= services.now()) {
@@ -276,11 +299,11 @@ export function createConnectorServices(services: BackendServices) {
       destination(connector);
       const level = grants.find(grant => grant.capabilityId === `connector:${connector.id}`)?.effectiveLevel ?? 'off';
       if (!enabled(connector, level).length) continue;
-      if (!connector.shared && bot.visibility === 'team' && conversation && !authorizedConsent(actor, connector, conversation.id, operationId!, true)) continue;
+      if (!connector.shared && bot.visibility === 'team' && !authorizedConsent(actor, connector, conversation.id, operationId, true)) continue;
       result.push(serverConfiguration(connector, level));
-      configuredIds?.push(connector.id);
+      configuredIds.push(connector.id);
     }
-    if (configuredIds) services.store.setMetadata(`invocationConnectors:${operationId}`, configuredIds);
+    services.store.setMetadata(`invocationConnectors:${operationId}`, configuredIds);
     return result;
   }
   function expireConsent(consent: P.ConnectorConsent): P.ConnectorConsent {
@@ -313,10 +336,17 @@ export function createConnectorServices(services: BackendServices) {
     if (!conversation.botIds.includes(bot.id) || actor.kind === 'bot' && actor.botId !== bot.id) fail('forbidden', 'Connector invocation does not match the authorized Bot and conversation.');
     const connector = services.store.require<P.Connector>('connectors', input.connectorId);
     if (connector.botId !== bot.id || connector.state !== 'connected' || details(connector.id).provisionState !== 'acknowledged') fail('policy_denied', 'Connector is not provisioned and connected for this Bot.');
+    const productRunId = services.store.metadata<string>(`nativeRunProduct:${input.operationId}`);
+    const admitted = services.store.metadata<string[]>(`invocationConnectors:${input.operationId}`);
+    const epochs = productRunId ? services.store.metadata<{ connectorId: string; epoch: number }[]>(`runConnectorEpochs:${productRunId}`) : null;
+    if (!productRunId || !admitted?.includes(connector.id) || epochs?.find(value => value.connectorId === connector.id)?.epoch !== (services.store.metadata<number>(`connectorEpoch:${connector.id}`) ?? 0)) fail('policy_denied', 'Connector authority was not admitted for this fixed invocation, or has been revoked. Start a newly authorized invocation.');
+    const run = services.store.require<P.Run>('runs', productRunId);
+    if (run.botId !== bot.id || ['succeeded', 'failed', 'cancelled'].includes(run.status) || effectiveInvocationAudience(services, actor, services.auth.conversation(actor, run.conversationId), run.id).id !== conversation.id) fail('forbidden', 'Connector access must match the initiating invocation and its actual response audience.');
     assertConnectorPolicy(connector);
     const expiresAtMs = details(connector.id).oauthExpiresAtMs;
     if (expiresAtMs !== null && expiresAtMs <= services.now()) fail('expired', 'Connector OAuth credential has expired.');
     const grants = await connectorGrants(actor, bot);
+    if (services.store.require<P.Connector>('connectors', connector.id).revision !== connector.revision || epochs?.find(value => value.connectorId === connector.id)?.epoch !== (services.store.metadata<number>(`connectorEpoch:${connector.id}`) ?? 0)) fail('policy_denied', 'Connector authority changed during invocation authorization.');
     destination(connector);
     const level = grants.find(grant => grant.capabilityId === `connector:${connector.id}`)?.effectiveLevel ?? 'off';
     if (!enabled(connector, level).includes(input.toolName)) fail('policy_denied', 'Connector tool is disabled by its explicit tool or capability grant.');
@@ -435,6 +465,7 @@ export function createConnectorServices(services: BackendServices) {
       services.store.remove('connectors', connector.id);
       for (const grant of services.store.list<P.BotGrant>('botGrants', value => value.capabilityId === `connector:${connector.id}` && value.botId === connector.botId)) services.store.remove('botGrants', grant.id);
       services.store.setMetadata(`connector:${connector.id}`, null);
+      services.store.setMetadata(`connectorTemplatePolicy:${connector.id}`, null);
       services.events.emit('connector.deleted', { id: connector.id, deleted: true }, connector.shared ? { botId: connector.botId } : { userIds: [connector.ownerUserId] });
       services.audit(actor, 'connector.disconnect', connector.id, 'succeeded');
     });
@@ -492,6 +523,7 @@ export function createConnectorServices(services: BackendServices) {
         services.store.remove('connectors', id);
         for (const grant of services.store.list<P.BotGrant>('botGrants', value => value.botId === connector.botId && value.capabilityId === `connector:${id}`)) services.store.remove('botGrants', grant.id);
         services.store.setMetadata(`connector:${id}`, null);
+        services.store.setMetadata(`connectorTemplatePolicy:${id}`, null);
         services.events.emit('connector.deleted', { id, deleted: true }, connector.shared ? { botId: connector.botId } : { userIds: [connector.ownerUserId] });
       });
       if (fence?.connectorId === id) services.store.setMetadata(`connectorRevocation:${connector.botId}`, null);
@@ -572,7 +604,7 @@ export function createConnectorServices(services: BackendServices) {
     for (const completion of services.store.list<OAuthCompletion>('oauthCompletions', value => value.userId === userId && value.callbackPath === '/v1/connectors/oauth/callback')) await reconcileOAuthRevocation(services, completionProvider(completion), completion);
     return !services.store.list<OAuthCompletion>('oauthCompletions', value => value.userId === userId && value.callbackPath === '/v1/connectors/oauth/callback').length && !services.store.list<OAuthExchangeOperation>('oauthExchangeOperations', value => value.userId === userId && value.callbackPath === '/v1/connectors/oauth/callback' && ['pending', 'dispatching', 'outcome_unknown'].includes(value.state)).length;
   }
-  return { access, details, saveDetails, provider, destination, assertOrigin, assertConnectorPolicy, headers, validateBindings, discover, publish, provision, create, enabled, grantFor, revokeConsents, synchronize, connectorProfileConfiguration, connectorInvocationConfiguration, authorizeConnectorTool, requestConnectorConsent, resolveConsent, revokeConsent, connectorProvisioning, disconnectConnector, deleteBotConnectors, connectorGrants, fenceConnectorInvocations, reconcileConnector, reconcile, reconcilePlacement, canReadResource, prepareProvision, cleanupOAuthUser, reconcileOAuthUser, retireOAuthCompletion, disconnectPlan, assertReady, canManageBot };
+  return { access, details, saveDetails, provider, destination, assertOrigin, assertConnectorPolicy, headers, validateBindings, discover, publish, provision, create, enabled, grantFor, revokeConsents, synchronize, connectorProfileConfiguration, connectorInvocationConfiguration, connectorTemplates, authorizeConnectorTool, requestConnectorConsent, resolveConsent, revokeConsent, connectorProvisioning, disconnectConnector, deleteBotConnectors, connectorGrants, fenceConnectorInvocations, reconcileConnector, reconcile, reconcilePlacement, canReadResource, prepareProvision, cleanupOAuthUser, reconcileOAuthUser, retireOAuthCompletion, disconnectPlan, assertReady, canManageBot };
 }
 
 /** Full /v1 routes; the core mutation service owns nonce reservation and exact replay. */

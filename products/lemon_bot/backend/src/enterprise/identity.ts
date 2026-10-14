@@ -131,7 +131,7 @@ function linked(services: BackendServices, claims: VerifiedClaims, externalEffec
   return result;
 }
 function reviewedSubject(services: BackendServices, providerId: string, subject: string): string | null {
-  const mappings = z.array(z.strictObject({ providerId: id, subject: id, userId: id })).safeParse(services.config.operatorExtras?.oidcSubjectMappings ?? []);
+  const mappings = z.array(z.strictObject({ providerId: id, subject: id, userId: id })).safeParse(services.config.operator?.oidcSubjectMappings ?? []);
   if (!mappings.success) fail('capability_unavailable', 'Operator OIDC subject mappings are invalid.');
   const matching = mappings.data.filter(mapping => mapping.providerId === providerId && mapping.subject === subject);
   if (matching.length > 1) fail('capability_unavailable', 'OIDC subject mapping is ambiguous.');
@@ -141,7 +141,7 @@ function reviewedSubject(services: BackendServices, providerId: string, subject:
   return userId;
 }
 function synchronize(services: BackendServices, userId: string, p: P.OIDCProvider, claims: VerifiedClaims): void {
-  const configured = z.array(z.strictObject({ providerId: id, externalId: id, directoryGroupId: id, name: z.string().min(1).max(120).optional() })).safeParse(services.config.operatorExtras?.oidcGroupMappings ?? []);
+  const configured = z.array(z.strictObject({ providerId: id, externalId: id, directoryGroupId: id, name: z.string().min(1).max(120).optional() })).safeParse(services.config.operator?.oidcGroupMappings ?? []);
   if (!configured.success) fail('capability_unavailable', 'Operator OIDC group mappings are invalid.');
   for (const mapping of configured.data.filter(value => value.providerId === p.id)) {
     let group = services.store.get<P.DirectoryGroup>('directoryGroups', mapping.directoryGroupId);

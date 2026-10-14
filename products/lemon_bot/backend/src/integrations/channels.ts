@@ -111,7 +111,7 @@ function recordChannelProof(services: BackendServices, flow: P.ChannelLinkFlow, 
 }
 
 function applicationPrincipal(services: BackendServices, binding: P.ChannelBinding, externalAppId: string): Principal | null {
-  const configured = services.config.operatorExtras?.channelApplicationPrincipals;
+  const configured = services.config.operator?.channelApplicationPrincipals;
   const grants = parse(z.array(z.strictObject({ providerId: id, channelBindingId: id, externalAppId: id, userId: id })).max(1000), configured ?? []);
   const provider = channelProvider(services, binding);
   const grant = grants.find(item => item.providerId === provider.id && item.channelBindingId === binding.id && item.externalAppId === externalAppId);
