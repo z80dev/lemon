@@ -115,7 +115,17 @@ remains a legacy client-side alias; it does not configure the daemon.
   inspect, resume, title, pin, archive, preview, privately export, prune, and
   delete through the authenticated server-owned lifecycle. Prune and delete
   are preview-confirm workflows, and offline mutations never claim success.
-- `/tree` inspects active and preserved branches; `/rewind` picks an earlier
+- `/tree` inspects active and preserved branches and is the entry point for
+  branching: selecting an entry opens its actions — inspect it, switch the
+  active branch to it (optionally summarizing the abandoned branch), set or clear
+  a bookmark label, or fork a new session from it. A switch is non-destructive
+  (the old branch stays in `/tree`), is refused while a run is active, reloads the
+  session, and recalls a selected user prompt into the editor without sending it
+  (the prompt is shown instead when the editor already has a draft). Labels show
+  as `[label]` in `/tree`; `/tree label <entryId> <text>` and
+  `/tree unlabel <entryId>` set them directly. The abandoned-branch summary is
+  generated in the background by a loaded session only; a stopped session just
+  switches. `/rewind` picks an earlier
   active user prompt, previews the change, then requires confirmation bound to
   that exact preview. History-only rewind leaves files untouched and does not
   list files as restoration targets. `--files` requests checkpoint restoration;
@@ -323,7 +333,7 @@ and control plane authoritative:
 | `/session preview\|export …` | Read a bounded redacted preview or write a digest-verified JSON/Markdown export through a private atomic file operation. Use `/session help` for exact syntax. |
 | `/session prune --older-than <cutoff> …` | Preview the complete exact candidate set and receive its confirmation token; repeat with `--confirm <token>` to prune only an unchanged set. Archived, unpinned sessions are the safe default. |
 | `/session delete [key] …` | Preview one exact durable session, then repeat its key with `--confirm`; optionally use `--export json\|markdown` to verify a redacted export before verified deletion. |
-| `/tree` | Browse the paginated native session tree, including preserved branches and bounded redacted user/assistant previews. |
+| `/tree [label <entryId> <text>\|unlabel <entryId>]` | Browse the paginated native session tree, including preserved branches, labels and bounded redacted user/assistant previews. Selecting an entry offers: inspect, switch the active branch here (optionally summarizing the abandoned branch), set/clear its label, or fork a new session from it. Switching is refused while a run is active. |
 | `/rewind [--files]` | Select an active user prompt, preview history-only or checkpointed-file rewind, then explicitly confirm the exact preview. Refused or stale confirmation preserves the local draft and transcript. |
 | `/name <title…>\|--clear` | Set or clear the current session's durable title through `sessions.metadata.patch`. |
 | `/blueprints [bundle-id filter]` | Browse bounded catalog IDs/counts, then inspect the selected entry through the shared authenticated service. |
@@ -391,7 +401,8 @@ offline.
 
 `/fork` asks the authenticated daemon's `sessions.fork` method to create an
 independent durable branch of the current native session; the original remains
-unchanged. The command is unavailable on daemons that do not advertise it and
+unchanged. The `/tree` action “Fork a new session from here” does the same with
+history ending at the selected entry (inclusive) instead of the current leaf. The command is unavailable on daemons that do not advertise it and
 is never queued while offline.
 
 Inside Tern, the child opens in a right-hand split beside the originating pane,

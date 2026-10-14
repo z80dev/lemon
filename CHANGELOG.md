@@ -88,6 +88,15 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   meter also use the measurement for resumed sessions before their first run.
   All surfaces read the new read-scoped `sessions.context` control-plane method;
   category splits are estimates scaled to the provider-reported total.
+- **Switch branches, label entries and fork from any point in `/tree`.**
+  Selecting an entry in the TUI's `/tree` now opens its actions: inspect it,
+  switch the active branch to it (optionally summarizing the abandoned branch in
+  the background), bookmark it with a label (`/tree label <entryId> <text>`,
+  `/tree unlabel <entryId>`), or fork a new session whose history ends at it.
+  New write-scoped control-plane methods `sessions.navigate` and
+  `sessions.label`, an optional `entryId` on `sessions.fork`, and a `label` on
+  `sessions.tree` entries back it. Switching never deletes the old branch and is
+  refused while a run is active.
 
 ### Changed
 

@@ -32,6 +32,10 @@ import {
 	parseOmpStatus,
 } from "./omp.ts";
 import type {
+	SessionLabelParams,
+	SessionLabelResult,
+	SessionNavigateParams,
+	SessionNavigateResult,
 	SessionRewindPreview,
 	SessionRewindResult,
 	SessionRewindTarget,
@@ -118,6 +122,8 @@ export const METHOD = {
 	sessionsContext: "sessions.context",
 	sessionsTree: "sessions.tree",
 	sessionsRewind: "sessions.rewind",
+	sessionsNavigate: "sessions.navigate",
+	sessionsLabel: "sessions.label",
 	sessionDetail: "session.detail",
 	commandsCatalog: "commands.catalog",
 	agentsList: "agents.list",
@@ -352,6 +358,23 @@ export class ControlPlaneMethods {
 				queueIfOffline: false,
 			},
 		);
+	}
+
+	sessionsNavigate(
+		params: SessionNavigateParams,
+		options?: RequestOptions,
+	): Promise<SessionNavigateResult> {
+		return this.#call<SessionNavigateResult>(METHOD.sessionsNavigate, params, {
+			...options,
+			queueIfOffline: false,
+		});
+	}
+
+	sessionsLabel(params: SessionLabelParams, options?: RequestOptions): Promise<SessionLabelResult> {
+		return this.#call<SessionLabelResult>(METHOD.sessionsLabel, params, {
+			...options,
+			queueIfOffline: false,
+		});
 	}
 
 	sessionsCreate(
