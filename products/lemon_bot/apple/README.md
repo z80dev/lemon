@@ -49,6 +49,8 @@ Accounts and device-bound product credentials use native Keychain, keyed by exac
 
 The platform split follows Apple's [macOS Keychain implementations](https://developer.apple.com/documentation/technotes/tn3137-on-mac-keychains) and [`kSecAttrAccessible` contract](https://developer.apple.com/documentation/security/ksecattraccessible): iOS accessibility attributes require the data-protection Keychain on macOS, which has provisioned-entitlement requirements. They are not added to macOS login-Keychain items. There is no runtime fallback, credential/cache deletion, store migration or error suppression.
 
+macOS account loading enumerates only this service's non-sync local Keychain item references, then reads each exact password individually. Apple's [`SecItemCopyMatching` contract](https://developer.apple.com/documentation/security/secitemcopymatching(_:_:)) forbids combining `kSecReturnData` with `kSecMatchLimitAll` for password items; that invalid bulk read must not be treated as an empty account list. Per-item reads preserve authorization errors and decoding failures rather than skipping credentials. iOS retains its existing data-protection-Keychain bulk loader.
+
 An opaque creation timeout without returned IDs stays fenced when the server exposes no authoritative receipt. Likewise a private-resource 404 or unrelated newer revision does not prove the original deletion/edit completed. The inspector reports unresolved rather than inventing success or retrying; unknown Stop waits for an observed terminal run. Pairing has its own explicitly defined same-nonce receipt reconciliation below, not a general retry queue.
 
 ## Connect iPhone to your desktop

@@ -46,13 +46,42 @@ public final class AccountKeychain: AccountCredentialStore {
     }
     public func load() throws -> [StoredAccount] {
         var q = query()
-        q[kSecReturnData as String] = true; q[kSecMatchLimit as String] = kSecMatchLimitAll
+        q[kSecMatchLimit as String] = kSecMatchLimitAll
+        #if os(macOS)
+        // The login Keychain rejects bulk password-data reads. Enumerate exact
+        // item references, then authorize/read each password separately.
+        q[kSecReturnRef as String] = true
+        #else
+        q[kSecReturnData as String] = true
+        #endif
         var result: CFTypeRef?
         let status = SecItemCopyMatching(q as CFDictionary, &result)
         if status == errSecItemNotFound { return [] }
         guard status == errSecSuccess else { throw ClientError.keychain(status) }
+        let decoder = JSONDecoder()
+        #if os(macOS)
+        guard let items = result as? [SecKeychainItem] else { throw ClientError.keychain(errSecDecode) }
+        let accounts = try items.map { item in
+            // The reference came from our service-scoped, non-sync local query.
+            // MatchItemList cannot be combined with a Synchronizable filter.
+            let itemQuery: [String: Any] = [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecUseDataProtectionKeychain as String: false,
+                kSecMatchItemList as String: [item],
+                kSecMatchLimit as String: kSecMatchLimitOne,
+                kSecReturnData as String: true
+            ]
+            var value: CFTypeRef?
+            let readStatus = SecItemCopyMatching(itemQuery as CFDictionary, &value)
+            guard readStatus == errSecSuccess else { throw ClientError.keychain(readStatus) }
+            guard let data = value as? Data else { throw ClientError.keychain(errSecDecode) }
+            return try decoder.decode(StoredAccount.self, from: data)
+        }
+        #else
         guard let values = result as? [Data] else { throw ClientError.keychain(errSecDecode) }
-        return try values.map { try JSONDecoder().decode(StoredAccount.self, from: $0) }.sorted { $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending }
+        let accounts = try values.map { try decoder.decode(StoredAccount.self, from: $0) }
+        #endif
+        return accounts.sorted { $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending }
     }
     public func save(_ account: StoredAccount) throws {
         let bytes = try JSONEncoder().encode(account)
