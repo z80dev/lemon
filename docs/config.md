@@ -314,6 +314,8 @@ uses supported `medium` effort and continues the turn. An explicit `ultrathink`
 request selects the active model's highest supported effort without a classifier
 call. The configured `auto` selector persists across turns and session resumes;
 the internal classifier response is not appended to the conversation.
+Classifier calls are separate maintenance usage, not part of the main agent-turn
+budget ledger. An already-exhausted main-response budget prevents classification.
 
 
 

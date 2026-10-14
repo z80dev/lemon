@@ -715,6 +715,10 @@ defmodule LemonAgent.Agent do
     {:reply, state.agent_state, state}
   end
 
+  def handle_call(:get_model, _from, state) do
+    {:reply, state.agent_state.model, state}
+  end
+
   def handle_call({:auto_thinking_resolved, abort_ref, marker, effort}, _from, state) do
     state =
       if state.agent_state.thinking_level == :auto and
@@ -1015,7 +1019,7 @@ defmodule LemonAgent.Agent do
       convert_to_llm: state.convert_to_llm,
       transform_context: state.transform_context,
       get_api_key: state.get_api_key,
-      get_model: fn -> GenServer.call(agent_pid, :get_state, queue_call_timeout).model end,
+      get_model: fn -> GenServer.call(agent_pid, :get_model, queue_call_timeout) end,
       resolve_stream_options: state.resolve_stream_options,
       resolve_thinking:
         if(state.agent_state.thinking_level == :auto,

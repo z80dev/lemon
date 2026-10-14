@@ -213,6 +213,8 @@ defmodule LemonAgent.Loop.Streaming do
       {abort_message, context} = finalize_message(abort_message, context, false, stream)
       {:ok, abort_message, context}
     else
+      config = Loop.refresh_model(config)
+
       # NOTE: the redirect flag is deliberately NOT cleared here. The loop
       # clears it immediately BEFORE each steering drain (see
       # LemonAgent.Loop / LemonAgent.Loop.ToolCalls): a redirect cast that
