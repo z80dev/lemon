@@ -3,7 +3,8 @@ defmodule CodingAgent.Tools.WebSearch do
   WebSearch tool for the coding agent.
 
   Uses the capability-aware search provider registry. Bundled providers include
-  Brave Search, Exa, Perplexity Sonar, keyless DuckDuckGo, and configurable SearXNG.
+  Brave Search, Exa, Perplexity Sonar, Tavily, Kagi, Jina, keyless DuckDuckGo,
+  and configurable SearXNG.
   """
 
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
