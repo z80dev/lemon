@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 import type * as P from '../../../contracts/protocol';
 import type { BackendServices, EntityStore, Principal, RequestContext } from '../../src/core/services';
 import { ApiError } from '../../src/core/errors';
+import { z, parse } from '../../src/core/validation';
 import { createDraft, createGateRoutes, createGateService, cancelConversationGates, cancelConnectorConsents, previewBotResources, cancelBotResources, acknowledgeExecutionApproval } from '../../src/core/gates';
 
 const actor: Principal = { kind: 'user', id: 'user_1', userId: 'user_1', workspaceId: 'workspace_1', role: 'member', sessionId: null, botId: null, deviceId: null };
@@ -48,7 +49,17 @@ function fixture() {
     runtime: Object.assign({ submit: unreachable, send: unreachable, cancel: unreachable, reconcile: unreachable, sessionKey: () => 'session_1' }, { revokeConnectorInvocations: unreachable }),
     integrations: { admission: unreachable, effectivePolicy: async () => policy, connectorConfig: unreachable, async sendApprovedDraft(_principal, draft) { sent.push(structuredClone(draft)); return sender(draft); }, emitProviderNotifications: unreachable, channelIngress: unreachable, providerCapabilities: unreachable },
     entry(principal, conversationId, payload) {
-      const entry = { ...services.resource('entry', {}), ...payload, id: String(payload.id ?? services.id('entry')), conversationId, seq: store.list<P.TranscriptEntry>('entries', item => item.conversationId === conversationId).length + 1, timestampMs: now, actor: payload.actor ?? { kind: 'user', id: principal.userId, displayName: 'Member' }, clientNonce: null, batchId: null, replyToEntryId: null, runId: payload.runId ?? null, targetedUserId: payload.targetedUserId ?? null, reactions: [] } as P.TranscriptEntry;
+      const entryActor = parse(z.object({ kind: z.enum(['user', 'bot', 'system']), id: z.string().nullable(), displayName: z.string() }).strict(), payload.actor ?? { kind: 'user', id: principal.userId, displayName: 'Member' });
+      const base: P.EntryBase = { ...services.resource('entry', {}), id: parse(z.string(), payload.id ?? services.id('entry')), conversationId, seq: store.list<P.TranscriptEntry>('entries', item => item.conversationId === conversationId).length + 1, timestampMs: now, actor: entryActor, clientNonce: null, batchId: null, replyToEntryId: null, runId: parse(z.string().nullable(), payload.runId ?? null), targetedUserId: parse(z.string().nullable(), payload.targetedUserId ?? null), reactions: [] };
+      let entry: P.TranscriptEntry;
+      if (payload.kind === 'card') {
+        if (!payload.card || typeof payload.card !== 'object' || !('type' in payload.card)) unreachable();
+        // Gate factories pass an already typed in-process Card through the shared Record payload seam.
+        const card = payload.card as P.Card;
+        entry = { ...base, kind: 'card', card };
+      } else if (payload.kind === 'notice') {
+        entry = { ...base, kind: 'notice', severity: parse(z.enum(['info', 'warning', 'error']), payload.severity), text: parse(z.string(), payload.text), requestId: parse(z.string().nullable(), payload.requestId ?? null) };
+      } else unreachable();
       store.put('entries', entry);
       services.events.emit('entry.upserted', entry, { conversationId });
       return entry;
