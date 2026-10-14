@@ -127,6 +127,8 @@ export class EventController {
 		);
 		on("exec.approval.resolved", (event: ApprovalResolvedEvent) => {
 			// Someone else answered: another client, or the daemon's own timeout.
+			const pending = this.#store.approvals.get(event.approvalId);
+			if (pending?.event.sessionKey && event.sessionKey !== pending.event.sessionKey) return;
 			this.#sessionFor(event.sessionKey).recoveryEventVersion += 1;
 			this.resolveApproval(event.approvalId, event.decision);
 		});
@@ -270,7 +272,8 @@ export class EventController {
 		queueMicrotask(() => {
 			this.#recoveryScheduled = false;
 			const hello = this.#client.helloOk;
-			if (hello && session === this.#store.focused) this.#client.events.emit("resync-needed", { hello });
+			if (hello && session === this.#store.focused)
+				this.#client.events.emit("resync-needed", { hello });
 		});
 	}
 
@@ -279,7 +282,10 @@ export class EventController {
 		const delta = event as ChatDeltaEvent;
 		const session = this.#sessionFor(delta.sessionKey);
 		session.recoveryEventVersion += 1;
-		if (!session.acceptsEvent(delta.runId, delta.identity) || session.snapshotRunId === delta.runId) {
+		if (
+			!session.acceptsEvent(delta.runId, delta.identity) ||
+			session.snapshotRunId === delta.runId
+		) {
 			this.#requestRecovery(session);
 			return;
 		}

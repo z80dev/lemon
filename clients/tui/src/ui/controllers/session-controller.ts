@@ -30,6 +30,7 @@ import { METHOD } from "../../protocol/methods.ts";
 import type {
 	ApprovalRequestedEvent,
 	ChatHistoryMessage,
+	ExecPendingApproval,
 	SessionSummary,
 	SessionsSnapshotResult,
 } from "../../protocol/types.ts";
@@ -63,7 +64,10 @@ export interface SessionControllerOptions {
 	refreshStatus?: () => void;
 	/** Presents a yes/no overlay. Without one, closing needs `confirmed: true`. */
 	confirm?: (spec: ConfirmSpec) => void;
-	onSnapshot?: (result: Extract<SessionsSnapshotResult, { status: "ok" }>, branchChanged: boolean) => void;
+	onSnapshot?: (
+		result: Extract<SessionsSnapshotResult, { status: "ok" }>,
+		branchChanged: boolean,
+	) => void;
 }
 
 export interface ConfirmSpec {
@@ -422,8 +426,12 @@ export class SessionController {
 						: {}),
 				});
 			} catch (error) {
-				if (generation !== this.#recoveryGeneration || selection !== this.#selectionGeneration) return;
-				if (error instanceof ControlPlaneError && ["FORBIDDEN", "UNAUTHORIZED"].includes(error.code)) {
+				if (generation !== this.#recoveryGeneration || selection !== this.#selectionGeneration)
+					return;
+				if (
+					error instanceof ControlPlaneError &&
+					["FORBIDDEN", "UNAUTHORIZED"].includes(error.code)
+				) {
 					this.#replaceApprovals(session.key, []);
 				}
 				this.#notice(`could not recover ${session.key}: ${describeError(error)}`, "warning");
@@ -435,7 +443,8 @@ export class SessionController {
 				this.#store.focusedKey !== session.key ||
 				result.sessionKey !== session.key ||
 				result.identity.sessionKey !== session.key
-			) return;
+			)
+				return;
 			if (result.status === "retry" || eventVersion !== session.recoveryEventVersion) continue;
 			const snapshot = result.snapshot;
 			if (
@@ -446,10 +455,12 @@ export class SessionController {
 				session.snapshotIdentity?.attempt === result.identity.attempt &&
 				session.isRunTerminal(result.identity.runId) &&
 				!snapshot.terminal
-			) continue;
+			)
+				continue;
 			const previousBusy = session.busy;
 			const previousRunId = session.activeRunId;
-			const branchChanged = session.snapshotIdentity?.sessionId !== result.identity.sessionId ||
+			const branchChanged =
+				session.snapshotIdentity?.sessionId !== result.identity.sessionId ||
 				session.snapshotIdentity?.revision !== result.identity.revision ||
 				session.snapshotIdentity?.branchId !== result.identity.branchId;
 			if (branchChanged) {
@@ -469,18 +480,24 @@ export class SessionController {
 			const runId = result.identity.runId;
 			synthesizeHistory(
 				session,
-				snapshot.messages.filter((message) =>
-					!(message.role === "assistant" && runId && message.runId === runId),
+				snapshot.messages.filter(
+					(message) => !(message.role === "assistant" && runId && message.runId === runId),
 				),
 			);
 			synthesizeHistory(session, snapshot.actions);
 			for (const action of snapshot.actions) {
 				const block = action.toolCallId ? session.byActionId.get(action.toolCallId) : undefined;
-				if (block && action.phase === "started" && snapshot.phase === "running") block.historical = false;
+				if (block && action.phase === "started" && snapshot.phase === "running")
+					block.historical = false;
 			}
 			if (snapshot.todos.status === "ok") {
 				session.upsertTool(
-					{ id: "snapshot:todos", kind: "tool", title: "todo", detail: { name: "todo", details: { todos: snapshot.todos.items } } },
+					{
+						id: "snapshot:todos",
+						kind: "tool",
+						title: "todo",
+						detail: { name: "todo", details: { todos: snapshot.todos.items } },
+					},
 					"completed",
 					{ historical: true },
 				);
@@ -495,10 +512,16 @@ export class SessionController {
 					if (typeof process.identity !== "string") continue;
 					const active =
 						(process.classification === "queued" || process.classification === "accepted") &&
-						(process.status === "queued" || process.status === "running" || process.status === "killing");
+						(process.status === "queued" ||
+							process.status === "running" ||
+							process.status === "killing");
 					const terminal =
-						process.status === "completed" || process.status === "error" || process.status === "killed" ||
-						process.classification === "rejected" || process.classification === "expired" || process.classification === "canceled";
+						process.status === "completed" ||
+						process.status === "error" ||
+						process.status === "killed" ||
+						process.classification === "rejected" ||
+						process.classification === "expired" ||
+						process.classification === "canceled";
 					session.upsertTool(
 						{
 							id: `snapshot:process:${process.identity}`,
@@ -522,7 +545,8 @@ export class SessionController {
 				todos: snapshot.todos,
 				plan: snapshot.plan,
 			})) {
-				if (projection.status !== "ok") session.addNotice(`${domain} state ${projection.status}`, "warning");
+				if (projection.status !== "ok")
+					session.addNotice(`${domain} state ${projection.status}`, "warning");
 				if (projection.truncated) session.addNotice(`${domain} snapshot truncated`, "warning");
 			}
 			for (const [part, truncated] of Object.entries({
@@ -546,8 +570,15 @@ export class SessionController {
 					});
 				}
 			}
-			if (snapshot.approvals.status === "ok") this.#replaceApprovals(session.key, snapshot.approvals.items);
-			else this.#replaceApprovals(session.key, []);
+			if (snapshot.approvals.status === "ok") {
+				this.#replaceApprovals(
+					session.key,
+					snapshot.approvals.items,
+					!snapshot.approvals.truncated,
+				);
+			} else if (snapshot.approvals.status === "forbidden") {
+				this.#replaceApprovals(session.key, []);
+			}
 			this.#hydrated.add(session.key);
 			this.#onSnapshot?.(result, branchChanged);
 			this.#events.rebuildFocused();
@@ -559,15 +590,39 @@ export class SessionController {
 		this.#notice(`recovery for ${session.key} raced with live state; refresh again`, "warning");
 	}
 
-	#replaceApprovals(key: string, items: readonly ApprovalRequestedEvent[]): void {
-		const pendingIds = new Set(items.map((item) => item.approvalId));
-		for (const [id, pending] of this.#store.approvals) {
-			if (pending.event.sessionKey === key && !pendingIds.has(id)) this.#events.resolveApproval(id, "unavailable");
+	#replaceApprovals(key: string, items: readonly ExecPendingApproval[], complete = true): void {
+		// Validate the whole identity set before revoking anything. An unsupported
+		// method shape is unavailable state, not confirmation that nothing is pending.
+		if (!Array.isArray(items)) {
+			this.#notice("approvals state unavailable: invalid snapshot identity", "warning");
+			return;
 		}
+		const normalized: ApprovalRequestedEvent[] = [];
+		const pendingIds = new Set<string>();
 		for (const item of items) {
-			if (item.sessionKey !== key) continue;
-			this.#store.addApproval(item);
+			if (
+				!item ||
+				typeof item.id !== "string" ||
+				item.id.trim() === "" ||
+				item.sessionKey !== key ||
+				pendingIds.has(item.id) ||
+				(this.#store.approvals.has(item.id) &&
+					this.#store.approvals.get(item.id)?.event.sessionKey !== key)
+			) {
+				this.#notice("approvals state unavailable: invalid snapshot identity", "warning");
+				return;
+			}
+			const { id, ...fields } = item;
+			normalized.push({ ...fields, approvalId: id });
+			pendingIds.add(id);
 		}
+		if (complete) {
+			for (const [id, pending] of this.#store.approvals) {
+				if (pending.event.sessionKey === key && !pendingIds.has(id))
+					this.#events.resolveApproval(id, "unavailable");
+			}
+		}
+		for (const item of normalized) this.#store.addApproval(item);
 	}
 
 	// -- internals -----------------------------------------------------------
@@ -688,7 +743,6 @@ function historyToolTitle(message: ChatHistoryMessage): string {
 	return "tool";
 }
 
-
 /** `sessions.list` entries name their key under one of three spellings. */
 export function sessionKeyOf(summary: SessionSummary | undefined): string | undefined {
 	if (!summary) return undefined;
@@ -698,7 +752,6 @@ export function sessionKeyOf(summary: SessionSummary | undefined): string | unde
 	}
 	return undefined;
 }
-
 
 function describeError(error: unknown): string {
 	if (error instanceof ControlPlaneError) return error.code;

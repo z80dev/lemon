@@ -61,7 +61,7 @@ export type SessionsSnapshotResult =
 				actions: ChatHistoryMessage[];
 				messagesTruncated?: boolean;
 				actionsTruncated?: boolean;
-				approvals: SnapshotItems<ApprovalRequestedEvent>;
+				approvals: SnapshotItems<ExecPendingApproval>;
 				children: SnapshotItems<Record<string, unknown>>;
 				processes: SnapshotItems<Record<string, unknown>>;
 				todos: SnapshotItems<Record<string, unknown>> & { revision?: unknown };
@@ -214,6 +214,12 @@ export interface ApprovalRequestedEvent {
 	expiresAtMs: Nullable<number>;
 }
 
+/** Pending method rows use `id`; live approval events use `approvalId`. */
+export interface ExecPendingApproval
+	extends Omit<ApprovalRequestedEvent, "approvalId" | "identity"> {
+	id: string;
+}
+
 /**
  * The tool a plan-mode agent calls when its plan is decision-complete. Its
  * `action` is `{ title, path, plan }` (plan = Markdown); `approve_once` executes
@@ -351,7 +357,12 @@ export interface ClientLifecycleMap {
 	/** A completed handshake. `resumed` is true for every hello-ok after the first. */
 	"hello-ok": { hello: HelloOkFrame; resumed: boolean };
 	/** Emitted after a re-handshake: cached transcript/session state is stale. */
-	"resync-needed": { hello: HelloOkFrame; reason?: "overflow"; sessionKey?: string; runId?: string };
+	"resync-needed": {
+		hello: HelloOkFrame;
+		reason?: "overflow";
+		sessionKey?: string;
+		runId?: string;
+	};
 	/** A request was parked because the client is not online. */
 	queued: { id: string; method: string; params: unknown; queueLength: number };
 	/** A parked request was sent after reconnecting. */

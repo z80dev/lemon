@@ -17,6 +17,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- TUI snapshot recovery preserves the real IDs of multiple pending approvals and
+  resolves each independently without changing the public approval-method contract.
+  Invalid, unavailable and truncated approval reads cannot revoke omitted requests;
+  foreign-session resolution events cannot clear another session's approval.
+
 - Slow session and operator-event consumers are fenced at bounded delivery
   admission, with an explicit resynchronization signal. Native execution keeps
   a reconstructable terminal path, and recovered client state cannot be revived

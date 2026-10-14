@@ -86,7 +86,23 @@ remains a legacy client-side alias; it does not configure the daemon.
   while any run. Mutations are never queued offline and report refusals or
   unknown outcomes honestly; omp text is rendered as inert plain text.
 - Exec approval panel (allow once / session / always / deny, number
-  quick-pick, wrapped command preview, expiry countdown).
+  quick-pick, wrapped command preview, expiry countdown). Recovery preserves
+  each pending request's server ID, so multiple approvals remain independently
+  actionable. Malformed or unavailable approval snapshots never confirm an empty
+  pending set; bounded partial reads retain omitted requests, while authorization
+  revocation removes only the selected session's cached requests. Recovery never
+  approves a tool automatically.
+  The offline owner/AppShell regression smoke is
+  `sh scripts/smoke_recovery_approvals.sh` from the umbrella root after dependencies
+  and central test artifacts are installed/compiled. It runs no ExUnit, compilation,
+  provider network calls or browser; it starts isolated native/approval owners and
+  authenticated loopback control-plane handlers, then exercises the real AppShell
+  through two recovered IDs, one explicit `approve_once` and one explicit denial.
+  A local scripted inference callback supplies the native tool call, not a remote
+  model. The fixture supplies initial RunStore metadata rather than router admission.
+  Its HOME, state and mode-0600 operator credential stay under a printed private
+  temporary root; the process exits after the consumer assertions. The scripts are
+  prepared regression coverage, not evidence of an executed successful smoke.
 - Four submission modes while the agent is busy: `queue` (client-side,
   editable), `steer`, `redirect`, `interrupt` — with graceful fallbacks. Redirect
   replaces pending model direction while preserving completed tool work. Interrupted
@@ -108,6 +124,12 @@ remains a legacy client-side alias; it does not configure the daemon.
   across stored sessions, new-with-prompt, close), per-session drafts, unread
   badges, history hydration. Search results are not restricted to the initially
   loaded recent sessions; failed searches never leave stale rows selectable.
+  Reconnect, overflow, selection and rewind use the shared bounded
+  [`sessions.snapshot`](../../apps/lemon_control_plane/README.md#session-snapshot-and-reconciliation)
+  authority to replace branch history, current approvals, child/process state
+  and todo/plan projection. Recovery rejects stale/raced reads and never
+  appends uncertain deltas to a recovered answer or replays an offline mutation.
+  Unknown owner state and omitted preview text are shown explicitly.
   Picker filters accept bracketed paste as text, including copied model names
   and session searches.
 - Durable session lifecycle: `/sessions` adds server-backed text, agent,
