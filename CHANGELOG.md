@@ -28,6 +28,8 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   schemas, with operator-reviewed connector/private-origin/setup inputs.
 - Lemon Bot broad channel-message routine opt-in and a strictly read-only,
   metadata-only audit collector scope for workspace integration tokens.
+- Clarified Lemon Bot file chunks retain the owning node's total source-file
+  size, with actual chunk length measured from decoded bytes for progress.
 - Named execution-node runs now stream live chat deltas, tool activity and
   checkpoints through the controller's normal run/session events. Invocation-bound,
   sequenced `node.invoke.event` frames reject foreign/stale node sessions, ignore
