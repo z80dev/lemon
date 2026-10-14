@@ -19,6 +19,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   checkpoint, cancellation and sequential execution constraints. No cost or
   latency improvement is claimed; see [Tool Disclosure](docs/config.md#tool-disclosure).
 
+### Fixed
+
+- WASM host aliases resolve permitted deferred built-ins from the same frozen,
+  wrapped disclosure catalog under both profiles, retaining plan-mode and reload
+  authority boundaries while refusing WASM and disclosure-bridge recursion.
+
 ---
 
 ## [2026.10.3]

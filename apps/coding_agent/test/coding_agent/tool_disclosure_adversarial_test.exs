@@ -1394,6 +1394,181 @@ defmodule CodingAgent.ToolDisclosureAdversarialTest do
     end
   end
 
+  describe "production session WASM host authority" do
+    setup do
+      suffix = Base.encode16(:crypto.strong_rand_bytes(8), case: :lower)
+      host_cwd = Path.join("/tmp", "l106h-#{suffix}")
+      File.mkdir_p!(host_cwd)
+      session_dir = SessionManager.get_session_dir(host_cwd)
+
+      on_exit(fn ->
+        File.rm_rf!(host_cwd)
+        File.rm_rf!(session_dir)
+      end)
+
+      %{host_cwd: host_cwd}
+    end
+
+    test "both profiles resolve permitted hosts without admitting denied or recursive targets", %{
+      host_cwd: tmp_dir
+    } do
+      parent = self()
+
+      for profile <- [:legacy, :coding] do
+        session =
+          start_host_session(tmp_dir, {profile, :hosts},
+            tool_disclosure: [profile: profile, budget_tokens: 1],
+            tool_policy: ToolPolicy.custom(deny: ["browser_click"]),
+            browser_request: fn method, _args, _timeout ->
+              send(parent, {:host_browser_request, profile, method})
+              {:ok, %{"tabs" => [%{"targetId" => "host-tab", "title" => "Host tab"}]}}
+            end
+          )
+
+        state = Session.get_state(session)
+        assert Map.has_key?(state.tool_catalog, "browser_tabs")
+        assert "browser_tabs" in names(state.tools) == (profile == :legacy)
+        refute Map.has_key?(state.tool_catalog, "browser_click")
+
+        assert {:ok, payload} = host_call(session, "browser_tabs")
+
+        assert Jason.decode!(payload)["tabs"] == [
+                 %{"targetId" => "host-tab", "title" => "Host tab"}
+               ]
+
+        assert_received {:host_browser_request, ^profile, "browser.tabs"}
+
+        assert {:error, :tool_not_found} =
+                 host_call(session, "browser_click", %{"selector" => "#go"})
+
+        for bridge <- ToolDisclosure.bridge_names() do
+          assert {:error, :tool_not_found} =
+                   host_call(session, bridge, %{"name" => "browser_tabs", "args" => %{}})
+        end
+
+        refute_received {:host_browser_request, ^profile, _}
+      end
+    end
+
+    test "host aliases retain approval wrappers in both profiles", %{host_cwd: tmp_dir} do
+      parent = self()
+
+      for profile <- [:legacy, :coding] do
+        session =
+          start_host_session(tmp_dir, {profile, :approvals},
+            tool_disclosure: [profile: profile],
+            tool_policy: ToolPolicy.custom(require_approval: ["browser_tabs"]),
+            approval_context: %{
+              approval_request_fun: fn request ->
+                send(parent, {:host_approval, profile, request.tool})
+                {:ok, :denied}
+              end
+            },
+            browser_request: fn method, _args, _timeout ->
+              send(parent, {:unapproved_browser_request, method})
+              {:ok, %{"tabs" => []}}
+            end
+          )
+
+        assert {:ok, payload} = host_call(session, "browser_tabs")
+        assert Jason.decode!(payload)["reason"] == "approval_denied"
+        assert_received {:host_approval, ^profile, "browser_tabs"}
+        refute_received {:unapproved_browser_request, _}
+      end
+    end
+
+    test "plan mode and reload apply to the full host inventory", %{host_cwd: tmp_dir} do
+      parent = self()
+
+      for profile <- [:legacy, :coding] do
+        session =
+          start_host_session(tmp_dir, {profile, :reload},
+            tool_disclosure: [profile: profile],
+            tool_policy: ToolPolicy.custom(deny: ["browser_click"]),
+            browser_request: fn method, _args, _timeout ->
+              send(parent, {:planned_browser_request, method})
+              {:ok, %{"tabs" => []}}
+            end
+          )
+
+        assert {:ok, %{"mode" => "plan"}} = Session.plan(session, :enter)
+        assert {:ok, payload} = host_call(session, "browser_tabs")
+        assert Jason.decode!(payload)["text"] =~ "Plan mode is active"
+        refute_received {:planned_browser_request, _}
+
+        # The public reload boundary must refresh catalog and plan wrappers
+        # together, not fall back to the previously disclosed schema list.
+        assert {:ok, _report} = Session.reload_extensions(session)
+        assert {:ok, payload} = host_call(session, "browser_tabs")
+        assert Jason.decode!(payload)["text"] =~ "Plan mode is active"
+        assert {:error, :tool_not_found} = host_call(session, "browser_click")
+
+        assert {:error, :tool_not_found} =
+                 host_call(session, "tool_invoke", %{"name" => "browser_tabs"})
+
+        # Supply changed authority at the existing lifecycle reload boundary.
+        # This deliberately exercises the real Session rather than rebuilding
+        # a separate test-only inventory or dispatcher.
+        :sys.replace_state(session, fn state ->
+          %{state | tool_policy: ToolPolicy.custom(deny: ["browser_tabs", "browser_click"])}
+        end)
+
+        assert {:ok, _report} = Session.reload_extensions(session)
+        refute Map.has_key?(Session.get_state(session).tool_catalog, "browser_tabs")
+        assert {:ok, %{"mode" => "code"}} = Session.plan(session, :exit)
+        assert {:error, :tool_not_found} = host_call(session, "browser_tabs")
+        refute_received {:planned_browser_request, _}
+      end
+    end
+
+    test "WASM provenance excludes recursion even if the separate name index is empty", %{
+      host_cwd: tmp_dir
+    } do
+      parent = self()
+
+      session =
+        start_host_session(tmp_dir, :recursive_source,
+          tool_disclosure: [profile: :coding],
+          browser_request: fn method, _args, _timeout ->
+            send(parent, {:recursive_handler_reached, method})
+            {:ok, %{"tabs" => []}}
+          end
+        )
+
+      :sys.replace_state(session, fn state ->
+        entry = %{state.tool_catalog["browser_tabs"] | source: {:wasm, %{}}}
+
+        %{
+          state
+          | tool_catalog: Map.put(state.tool_catalog, "browser_tabs", entry),
+            wasm_tool_names: []
+        }
+      end)
+
+      assert {:error, :tool_not_found} = host_call(session, "browser_tabs")
+      refute_received {:recursive_handler_reached, _}
+    end
+  end
+
+  defp start_host_session(tmp_dir, id, opts) do
+    defaults = [
+      cwd: tmp_dir,
+      workspace_dir: Path.join(tmp_dir, "host-workspace"),
+      model: mock_model(),
+      settings_manager: %SettingsManager{},
+      mcp_tools: [],
+      stream_fn: fn _, _, _ -> flunk("host execution must not call a model") end
+    ]
+
+    start_supervised!(
+      Supervisor.child_spec({Session, Keyword.merge(defaults, opts)}, id: {Session, id})
+    )
+  end
+
+  defp host_call(session, name, args \\ %{}) do
+    GenServer.call(session, {:wasm_host_tool_invoke, name, Jason.encode!(args)}, 5_000)
+  end
+
   # ==========================================================================
   # Production session smoke (scripted model, no network)
   # ==========================================================================

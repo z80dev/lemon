@@ -1091,6 +1091,14 @@ as `extra_tools` always stay exposed, and sessions started with an explicit
 `tools` list skip disclosure. Names `tool_search` and `tool_invoke` are
 reserved; a real tool using either name is dropped while disclosure is active.
 
+WASM host aliases resolve from this same frozen, policy-authorized runtime
+catalog, not only the schemas currently shown to the model. A permitted optional
+built-in such as `browser_tabs` therefore remains a host capability under either
+profile. Host calls retain the catalog's wrapped implementation and the current
+plan-mode gate; reload replaces that inventory so removed authority is not kept
+alive by an old host lookup. Neither WASM tools nor the disclosure bridge tools
+can be host targets, preventing recursive calls through the deferred catalog.
+
 The tool list is computed at session start and on extension reload, never per
 turn. `extensions_status` reports the active profile, the exposed and deferred
 tool names, estimated schema tokens before and after disclosure, and a

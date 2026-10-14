@@ -144,6 +144,21 @@ defmodule CodingAgent.Session.Planning do
       else: base_tools
   end
 
+  @doc """
+  Apply the current plan gate to one authorized WASM host target.
+
+  Unlike `tools/3`, this does not add plan-only tools or proposal capabilities
+  to the host inventory; it only reuses the normal target's execution guard.
+  """
+  @spec host_tool(AgentTool.t(), SessionManager.Session.t(), map()) :: AgentTool.t()
+  def host_tool(%AgentTool{} = tool, session, context) do
+    plan = stored(session)
+
+    if plan["mode"] == "plan",
+      do: guard(tool, Map.merge(context, plan_paths(session, plan))),
+      else: tool
+  end
+
   @doc "Effective system prompt for `session`."
   def system_prompt(base, session) do
     case stored(session) do

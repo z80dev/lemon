@@ -345,12 +345,15 @@ defmodule CodingAgent.ToolDisclosure do
       session may run). It is folded into `catalog_digest`, so a policy change
       yields a different catalog identity even when the visible schemas match.
 
-  Returns `%{tools: [AgentTool.t()], report: report()}`. When disclosure does
+  Returns `%{tools: [AgentTool.t()], catalog: catalog(), report: report()}`.
+  `catalog` is the frozen, wrapped runtime inventory shared by disclosure and
+  WASM host resolution; it is not a second registry lookup. When disclosure does
   not activate, `tools` is `registry tools ++ extra_tools` — the exact list the
   caller would have built without this module.
   """
   @spec apply([ToolRegistry.tool_tuple()], [AgentTool.t()], config(), keyword()) :: %{
           tools: [AgentTool.t()],
+          catalog: catalog(),
           report: report()
         }
   def apply(tool_tuples, extra_tools, cfg, opts \\ []) do
@@ -388,6 +391,7 @@ defmodule CodingAgent.ToolDisclosure do
 
     %{
       tools: tools,
+      catalog: build_catalog(tool_tuples, [], extra_tools),
       report: %{
         active: false,
         reason: reason,
@@ -446,6 +450,7 @@ defmodule CodingAgent.ToolDisclosure do
 
     %{
       tools: tools,
+      catalog: catalog,
       report: %{
         active: true,
         reason: nil,
@@ -502,6 +507,10 @@ defmodule CodingAgent.ToolDisclosure do
   defp identity_entry({name, %AgentTool{} = tool, source}) do
     {name, tool.description, tool.parameters, tool.parallel_safe, source}
   end
+
+  @doc false
+  @spec catalog_for_tools([AgentTool.t()]) :: catalog()
+  def catalog_for_tools(tools), do: build_catalog([], [], tools)
 
   defp build_catalog(pinned, hideable, extras) do
     entries =
