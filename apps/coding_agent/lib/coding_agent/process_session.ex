@@ -597,9 +597,20 @@ defmodule CodingAgent.ProcessSession do
         status = if state.root_exited, do: :lost, else: :killing
         {:ok, %{state | status: status, termination_reason: reason, workload_identity: identity}}
 
-      {:terminated, _identity} ->
-        state = %{state | termination_reason: reason}
-        {:ok, if(state.root_exited, do: finish_workload(state), else: state)}
+      {:terminated, identity} ->
+        state = %{state | termination_reason: reason, workload_identity: identity}
+
+        if state.root_exited do
+          case owned_workload_status(state) do
+            :terminated ->
+              {:ok, finish_workload(state)}
+
+            {_, observed} ->
+              {{:error, {:outcome_unknown, state.process_id}}, retain_workload(state, observed)}
+          end
+        else
+          {:ok, state}
+        end
 
       {:error, _reason, identity} ->
         ProcessStore.mark_unknown(state.process_id)

@@ -481,6 +481,45 @@ defmodule CodingAgent.ProcessAdmissionTest do
              ProcessManager.receipt(id, "admission-test")
   end
 
+  test "a stopped unsupported wrapper cannot prove workload termination on public kill",
+       context do
+    parent = self()
+    id = "unsupported-witness-#{System.unique_integer([:positive])}"
+
+    assert {:ok, ^id} =
+             ProcessManager.exec(
+               launch_id: id,
+               command: "exit 0",
+               cwd: context.directory,
+               backend: :local_pty,
+               owner: "admission-test",
+               owner_pid: parent,
+               lane_queue: context.queue,
+               admission_wait_ms: 5_000,
+               on_root_exit: fn identity -> send(parent, {:root_exited, identity}) end
+             )
+
+    assert_receive {:root_exited, ^id}, 5_000
+
+    assert {:ok, %{classification: :outcome_unknown}} =
+             ProcessManager.receipt(id, "admission-test")
+
+    assert ProcessManager.admission_counts().occupied == 1
+
+    assert {:error, {:outcome_unknown, ^id}} = ProcessManager.kill(id, :sigkill)
+    assert {:error, {:outcome_unknown, ^id}} = ProcessManager.kill(id, :sigkill)
+    assert {:ok, %{capacity_held: true, root_exited: true}, _} = ProcessStore.get(id)
+    assert ProcessManager.admission_counts().occupied == 1
+
+    assert {:error, :not_found} = ProcessManager.confirm_external_termination(id, "foreign-owner")
+    assert ProcessManager.admission_counts().occupied == 1
+    assert :ok = ProcessManager.confirm_external_termination(id, "admission-test")
+    assert ProcessManager.admission_counts().occupied == 0
+
+    assert {:ok, %{classification: :outcome_unknown}} =
+             ProcessManager.receipt(id, "admission-test")
+  end
+
   test "pending overflow is rejected promptly without an external start or queue growth",
        context do
     {a, _, _, _} = start_blocking(context, "overflow-a")

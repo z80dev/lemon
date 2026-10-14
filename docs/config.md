@@ -480,8 +480,10 @@ remains unknown and charged, requiring independently verified recovery.
 
 A host process group cannot prove termination of remote SSH/container work,
 PTY work in a separate session, or Windows job descendants; wrapper exits in
-these cases conservatively remain unknown and charged. A lost BEAM process owner
-also retains its persisted identity and capacity. Nothing is automatically
+these cases conservatively remain unknown and charged. Repeating cancellation
+after the host wrapper disappears still requires the backend-aware full-workload
+witness; an empty host group cannot confirm remote or separately contained work.
+A lost BEAM process owner also retains its persisted identity and capacity. Nothing is automatically
 relaunched. Queue/store restart reconciles surviving registered processes before
 admission.
 The internal operator API `ProcessManager.confirm_external_termination(id, owner)`

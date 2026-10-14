@@ -24,6 +24,8 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   verified cancellation still works after natural root exit. Groups reconcile
   until confirmed empty; stale ownership and unsupported workload witnesses
   remain unknown rather than freeing slots or signaling recycled PIDs.
+  Repeated cancellation also requires the backend-aware workload witness:
+  an empty host wrapper group cannot release SSH, container or PTY capacity.
   TUI tool cards and compact shelves also preserve queued and outcome-unknown
   receipts instead of presenting them as started or failed.
 
