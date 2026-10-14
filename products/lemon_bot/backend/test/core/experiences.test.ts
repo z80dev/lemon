@@ -7,6 +7,12 @@ import type { BackendServices, Principal, RequestContext } from '../../src/core/
 import { ApiError, fail } from '../../src/core/errors';
 import { botPresence, createExperienceRoutes, createExperienceService, effectiveBotGrants, invocationBotToolPolicy, nativeBotToolPolicy, reviewedCandidates } from '../../src/core/experiences';
 import { productBotTools } from '../../src/core/bots';
+import { z } from '../../src/core/validation';
+
+const noticePayload = z.object({
+  kind: z.literal('notice'), severity: z.enum(['info', 'warning', 'error']), text: z.string(), requestId: z.string().nullable(), targetedUserId: z.string(),
+  actor: z.object({ kind: z.literal('system'), id: z.null(), displayName: z.string() }).strict(),
+}).strict();
 
 const projectedProductTools = productBotTools.map((name, index) => ({ name, executionName: `mcp_fixture_tool_${index}` }));
 function projectionReply() { return { server: { name: 'lemon-bot' }, tools: projectedProductTools, count: projectedProductTools.length }; }
@@ -16,14 +22,15 @@ const user: Principal = { kind: 'user', id: 'alice', userId: 'alice', workspaceI
 function fixture() {
   const store = new Store(':memory:');
   let clock = 1700000000000, serial = 0, synced = 0, notificationCount = 0;
+  const allocateId = (prefix = 'id') => `${prefix}_${String(++serial).padStart(24, '0')}`;
   const acknowledgments: P.MemoryCreate[] = [];
   const base = { revision: 1, createdAtMs: clock, updatedAtMs: clock };
   const bot: P.Bot = { ...base, id: 'bot', ownerUserId: 'alice', managerUserIds: [], machineId: 'machine', profileId: 'lb-bot', name: 'Bot', title: 'Assistant', job: 'Draft useful reports', instructions: 'Ask before sending', avatar: { kind: 'character', shape: 'round', color: 'yellow', attachmentId: null }, voice: { voiceId: 'default', speed: 1, language: null }, language: null, visibility: 'personal', published: false, required: false, skillIds: [], referenceAttachmentIds: [], mainConversationId: 'room', sidebar: { pinned: false, hidden: false, sectionId: null, rank: 0, unread: false, notificationsEnabled: true }, activity: 'idle', activeRunIds: [] };
   const machine: P.Machine = { ...base, id: 'machine', nodeId: 'node', nodeName: 'worker', name: 'Laptop', ownerUserId: 'alice', accessUserIds: [], status: 'online', lastSeenAtMs: clock, labels: {}, botIds: [bot.id] };
   const room: P.Conversation = { ...base, id: 'room', kind: 'task', name: 'Report', botIds: [bot.id], humanUserIds: ['alice'], ownerUserId: 'alice', parentConversationId: null, leadBotId: null, channelBindingId: null, lastEntryId: null, unreadCount: 0, lastReadSeq: 0, activity: [] };
   const services = {
-    store, config: { publicUrl: 'https://product.example.test' }, now: () => clock, id: (prefix = 'id') => `${prefix}_${String(++serial).padStart(24, '0')}`,
-    resource<T extends object>(prefix: string, fields: T): T & P.Resource { return { ...fields, id: this.id(prefix), revision: 1, createdAtMs: clock, updatedAtMs: clock }; },
+    store, config: { publicUrl: 'https://product.example.test' }, now: () => clock, id: allocateId,
+    resource<T extends object>(prefix: string, fields: T): T & P.Resource { return { ...fields, id: allocateId(prefix), revision: 1, createdAtMs: clock, updatedAtMs: clock }; },
     update<T extends { revision: number; updatedAtMs: number }>(resource: T, changes: Partial<T>): T { return { ...resource, ...changes, revision: resource.revision + 1, updatedAtMs: clock }; },
     page<T>(context: RequestContext, values: T[], options?: { ascending?: boolean; key?: (value: T) => string }): P.Page<T> { const key = options?.key ?? ((value: T) => (value as P.Resource).id); const sorted = [...values].sort((a, b) => key(a).localeCompare(key(b)) * (options?.ascending ? 1 : -1)); return { items: sorted.slice(0, Number(context.query.get('limit') ?? 100)), nextCursor: null }; },
     auth: {
@@ -46,7 +53,12 @@ function fixture() {
     events: { emit() {} },
     async syncBotProfile() { synced++; },
     async invoke<T>(_principal: Principal, method: string, path: string, input?: unknown): Promise<T> { if (method !== 'POST' || path !== '/v1/bots/bot/memory') throw new Error('Unexpected invocation'); const body = input as P.MemoryCreate; acknowledgments.push(body); const memory: P.Memory = { ...base, id: `memory_${serial++}`, botId: bot.id, scope: body.scope, userId: body.scope === 'team' ? null : user.userId, text: body.text, kind: body.kind, sourceEntryId: null }; store.put('memories', memory); return memory as T; },
-    entry(_principal: Principal, conversationId: string, input: Record<string, unknown>): P.TranscriptEntry { const entry = { ...base, id: `entry_${serial++}`, conversationId, seq: serial, timestampMs: clock, actor: { kind: 'system', id: null, displayName: 'Reminder' }, clientNonce: null, batchId: null, replyToEntryId: null, runId: null, targetedUserId: user.userId, reactions: [], ...input } as P.TranscriptEntry; store.put('entries', entry); return entry; },
+    entry(_principal: Principal, conversationId: string, input: Record<string, unknown>): P.TranscriptEntry {
+      const payload = noticePayload.parse(input);
+      const entry: P.TranscriptEntry = { ...base, ...payload, id: allocateId('entry'), conversationId, seq: serial, timestampMs: clock, clientNonce: null, batchId: null, replyToEntryId: null, runId: null, reactions: [] };
+      store.put('entries', entry);
+      return entry;
+    },
     notify(_principal: Principal, input: Record<string, unknown>): P.Notification { notificationCount++; const value = { ...base, id: `notification_${serial++}`, ...input } as P.Notification; store.put('notifications', value); return value; },
     encrypt(input: unknown): string { return JSON.stringify(input); },
     decrypt<T>(input: string): T { return JSON.parse(input) as T; },
@@ -189,7 +201,7 @@ describe('guided memory import boundaries', () => {
       let content = new TextEncoder().encode('I prefer weekly reports.');
       const attachment: P.Attachment = { ...f.base, id: 'attachment', ownerUserId: 'alice', conversationId: null, botId: null, filename: 'facts.txt', mime: 'text/plain', size: content.length, sha256: 'digest', width: null, height: null, durationMs: null, source: 'upload', state: 'ready', preview: 'text', provenance: { botId: null, runId: null, machineId: null, sourceEntryId: null, generatedAtMs: null } };
       f.store.put('attachments', attachment);
-      f.services.attachments = { async bytes() { return content; }, async create() { throw new Error('Unexpected create'); }, download() { throw new Error('Unexpected download'); } };
+      f.services.attachments = { async bytes() { return content; }, async create() { throw new Error('Unexpected create'); }, async copy() { throw new Error('Unexpected copy'); }, download() { throw new Error('Unexpected download'); } };
       const preview = await f.request<P.MemoryImportPreview>('POST', '/bots/:id/memory/import/preview', { clientNonce: nonce, scope: 'personal', format: 'facts_text', attachmentId: attachment.id });
       expect(preview.expiresAtMs - f.services.now()).toBe(600000);
       const confirmation = { clientNonce: nonce, revision: 1, previewId: preview.id, confirmationToken: preview.confirmationToken, selectedCandidateIds: [preview.candidates[0]!.id] };
