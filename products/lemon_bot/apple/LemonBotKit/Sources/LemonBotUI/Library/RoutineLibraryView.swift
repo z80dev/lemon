@@ -82,47 +82,7 @@ struct RoutineEditorView: View {
                 if let saved { body["revision"] = .number(Double(saved.revision)); self.saved = try await store.mutate("PATCH", "/routines/\(hubID(saved.id))", body: body) }
                 else { body["botId"] = .string(botID); self.saved = try await store.mutate("POST", "/routines", body: body) }
             } } }.disabled(botID.isEmpty || name.isEmpty || instruction.isEmpty || action.busy || action.uncertain || store.connectionState != "online")
-            if let saved {
-                Section("Actual schedule and control") {
-                    Text(saved.scheduleDescription)
-                    Text("Next: \(hubDate(saved.nextRunAtMs)) · \(saved.enabled ? "Active" : "Paused")")
-                    Button("Edit with Bot (draft only)") { Task { await action.perform {
-                        let bot: Bot = try await store.read("/bots/\(hubID(saved.botId))")
-                        store.setLocalDraft(conversationID: bot.mainConversationId, text: "Help me edit routine \(saved.name) (\(saved.id)). Current instruction: \(saved.instruction)", attachmentIDs: [], replyTo: nil)
-                        try await store.openConversation(bot.mainConversationId)
-                    } } }
-                    Button("Test as real work") { testPresented = true }.disabled(action.busy || action.uncertain || store.connectionState != "online")
-                    Button("Preview permanent deletion", role: .destructive) { Task { await action.perform { preview = try await store.mutate("POST", "/routines/\(hubID(saved.id))/preview", body: ["action": .string("delete")]) } } }.disabled(action.busy || action.uncertain || store.connectionState != "online")
-                }
-                if let preview { HubConfirmationForm(store: store, preview: preview, action: action) { name in await action.perform {
-                    let _: HubDeleted = try await store.mutate("DELETE", "/routines/\(hubID(saved.id))", body: preview.body(name: name)); dismiss()
-                } } }
-                if saved.webhookUrl != nil {
-                    Section("Authenticated webhook") {
-                        Text(saved.webhookUrl ?? "").textSelection(.enabled)
-                        Text("POST JSON with clientNonce and optional payload. Bearer current one-time-issued key. Accepted means started, not completed. Rotation immediately revokes the old key; a paused routine cannot receive work.")
-                        Button("Issue / rotate one-time key") { rotatePresented = true }
-                        Button("Revoke webhook ingress", role: .destructive) { revokePresented = true }
-                    }
-                }
-                Section("Actual run history / usage") {
-                    ForEach(runs) { run in
-                        VStack(alignment: .leading) {
-                            Text("\(run.trigger) · \(run.status)").font(.headline)
-                            Text("\(hubDate(run.startedAtMs)) · cost \(run.costUsd.map { String(format: "$%.4f", $0) } ?? "unknown")")
-                            if let error = run.error { Text(error).foregroundStyle(.red) }
-                            Button("Open exact result conversation") { Task { await action.perform(readOnly: true) { try await store.openConversation(run.conversationId) } } }
-                            Button("Reconcile run") { Task { await action.perform(readOnly: true) { let current: RoutineRun = try await store.read("/routine-runs/\(hubID(run.id))"); if let index = runs.firstIndex(where: { $0.id == current.id }) { runs[index] = current } } } }
-                            if ["reserved", "queued", "running", "awaiting_input"].contains(run.status) {
-                                Button("Request cancellation", role: .destructive) { Task { await action.perform {
-                                    let current: RoutineRun = try await store.mutate("POST", "/routine-runs/\(hubID(run.id))/cancel", body: [:]); if let index = runs.firstIndex(where: { $0.id == current.id }) { runs[index] = current }
-                                } } }.disabled(action.busy || action.uncertain || store.connectionState != "online")
-                            }
-                        }
-                    }
-                    if runCursor != nil { Button("Older runs") { Task { await action.perform(readOnly: true) { try await loadRuns(more: true) } } } }
-                }
-            }
+            savedRoutineFields
         }.navigationTitle(saved?.name ?? "New routine").toolbar { Button("Close") { dismiss() }; Button("Refresh history") { Task { await action.perform(readOnly: true) { try await loadRuns() } } } }
             .task { apply(initial); await loadProviders() }
             .task(id: saved?.id) { guard saved != nil else { return }; while !Task.isCancelled { await action.perform(readOnly: true) { try await loadRuns() }; do { try await Task.sleep(for: .seconds(5)) } catch { break } } }
@@ -155,6 +115,56 @@ struct RoutineEditorView: View {
                 Button("Revoke key", role: .destructive) { guard let saved else { return }; Task { await action.perform { let _: HubOK = try await store.mutate("DELETE", "/routines/\(hubID(saved.id))/webhook-key", body: [:]); webhookKey = nil } } }.disabled(action.busy || action.uncertain || store.connectionState != "online")
             }
     }
+    @ViewBuilder private var savedRoutineFields: some View {
+        if let saved {
+            Section("Actual schedule and control") {
+                Text(saved.scheduleDescription)
+                Text("Next: \(hubDate(saved.nextRunAtMs)) · \(saved.enabled ? "Active" : "Paused")")
+                Button("Edit with Bot (draft only)") { Task { await action.perform {
+                    let bot: Bot = try await store.read("/bots/\(hubID(saved.botId))")
+                    store.setLocalDraft(conversationID: bot.mainConversationId, text: "Help me edit routine \(saved.name) (\(saved.id)). Current instruction: \(saved.instruction)", attachmentIDs: [], replyTo: nil)
+                    try await store.openConversation(bot.mainConversationId)
+                } } }
+                Button("Test as real work") { testPresented = true }.disabled(action.busy || action.uncertain || store.connectionState != "online")
+                Button("Preview permanent deletion", role: .destructive) { Task { await action.perform { preview = try await store.mutate("POST", "/routines/\(hubID(saved.id))/preview", body: ["action": .string("delete")]) } } }.disabled(action.busy || action.uncertain || store.connectionState != "online")
+            }
+            if let preview { HubConfirmationForm(store: store, preview: preview, action: action) { name in await action.perform {
+                let _: HubDeleted = try await store.mutate("DELETE", "/routines/\(hubID(saved.id))", body: preview.body(name: name)); dismiss()
+            } } }
+            if saved.webhookUrl != nil {
+                Section("Authenticated webhook") {
+                    Text(saved.webhookUrl ?? "").textSelection(.enabled)
+                    Text("POST JSON with clientNonce and optional payload. Bearer current one-time-issued key. Accepted means started, not completed. Rotation immediately revokes the old key; a paused routine cannot receive work.")
+                    Button("Issue / rotate one-time key") { rotatePresented = true }
+                    Button("Revoke webhook ingress", role: .destructive) { revokePresented = true }
+                }
+            }
+            runHistoryFields
+        }
+    }
+
+    private var runHistoryFields: some View {
+        Section("Actual run history / usage") {
+            ForEach(runs) { run in routineRunRow(run) }
+            if runCursor != nil { Button("Older runs") { Task { await action.perform(readOnly: true) { try await loadRuns(more: true) } } } }
+        }
+    }
+
+    private func routineRunRow(_ run: RoutineRun) -> some View {
+        VStack(alignment: .leading) {
+            Text("\(run.trigger) · \(run.status)").font(.headline)
+            Text("\(hubDate(run.startedAtMs)) · cost \(run.costUsd.map { String(format: "$%.4f", $0) } ?? "unknown")")
+            if let error = run.error { Text(error).foregroundStyle(.red) }
+            Button("Open exact result conversation") { Task { await action.perform(readOnly: true) { try await store.openConversation(run.conversationId) } } }
+            Button("Reconcile run") { Task { await action.perform(readOnly: true) { let current: RoutineRun = try await store.read("/routine-runs/\(hubID(run.id))"); if let index = runs.firstIndex(where: { $0.id == current.id }) { runs[index] = current } } } }
+            if ["reserved", "queued", "running", "awaiting_input"].contains(run.status) {
+                Button("Request cancellation", role: .destructive) { Task { await action.perform {
+                    let current: RoutineRun = try await store.mutate("POST", "/routine-runs/\(hubID(run.id))/cancel", body: [:]); if let index = runs.firstIndex(where: { $0.id == current.id }) { runs[index] = current }
+                } } }.disabled(action.busy || action.uncertain || store.connectionState != "online")
+            }
+        }
+    }
+
     @ViewBuilder private var triggerFields: some View {
         switch triggerKind {
         case "schedule":

@@ -132,7 +132,7 @@ struct VoiceMemoView: View {
         if playing { player?.pause(); playing = false; playbackState = "Paused"; return }
         await action.perform {
             if player == nil { player = AVPlayer(url: try await store.download(attachmentID: attachmentID)) }
-            if let duration, position >= duration - 0.2 { player?.seek(to: .zero) }
+            if let duration, position >= duration - 0.2 { _ = await player?.seek(to: .zero) }
             player?.playImmediately(atRate: rate)
             playing = true
             playbackState = player?.timeControlStatus == .playing ? "Playing" : "Preparing actual audio…"

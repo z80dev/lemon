@@ -158,6 +158,7 @@ public struct LemonBotRootView: View {
             Menu("Move to section") {
                 Button("Unassigned") { Task { await sidebar(bot, ["sectionId": .null]) } }
                 ForEach(store.sections) { section in Button(section.name) { Task { await sidebar(bot, ["sectionId": .string(section.id)]) } } }
+            }
             NavigationLink("Overview / identity / Job") { BotOverviewView(store: store, botID: bot.id) }
         }
     }

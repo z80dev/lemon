@@ -59,7 +59,7 @@ public struct BotOverviewView: View {
             Text("Voice: \(bot.voice.voiceId) · speed \(bot.voice.speed) · language \(bot.voice.language ?? "auto")")
             Text("Reply language: \(bot.language ?? "automatic")")
             Button("Preview real voice sample") { Task { await action.perform { voiceSample = try await store.mutate("POST", resourcePath("bots", bot.id, "/voice/preview"), body: [:]) } } }.disabled(action.busy || store.connectionState != "online")
-            if let voiceSample { VoiceMemoView(store: store, attachmentID: voiceSample.attachment.id, transcript: "Hello, I’m your Lemon Bot teammate. Ready when you are.", durationMs: voiceSample.attachment.durationMs, peaks: []) }
+            if let voiceSample { VoiceMemoView(store: store, attachmentID: voiceSample.attachment.id, transcript: "Hello, I’m your Lemon Bot teammate. Ready when you are.", durationMs: voiceSample.attachment.durationMs.map { Double($0) }, peaks: []) }
             Text("Voice preview does not start a run or conversation. Missing provider configuration is shown verbatim above; device speech is a separate platform option.").font(.caption)
             ForEach(bot.referenceAttachmentIds, id: \.self) { id in AttachmentView(store: store, attachmentID: id) }
         }

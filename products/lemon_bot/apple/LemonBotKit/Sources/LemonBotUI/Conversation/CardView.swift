@@ -54,7 +54,7 @@ struct TranscriptCardView: View {
             case .teamAccess(let value): TeamAccessCardView(store: store, botID: value.botId, ownerID: value.ownerUserId, reason: value.reason, state: value.state)
             case .botTemplateShare(let value): TemplateShareCardView(store: store, templateID: value.templateId, name: value.name, shareURL: value.shareUrl, state: value.state)
             case .connectorGrant(let value): ConnectorConsentView(store: store, consent: value.consent)
-            case .voiceMemo(let value): VoiceMemoView(store: store, attachmentID: value.attachmentId, transcript: value.transcript, durationMs: Double(value.durationMs), peaks: value.peaks.map(Double.init))
+            case .voiceMemo(let value): VoiceMemoView(store: store, attachmentID: value.attachmentId, transcript: value.transcript, durationMs: Double(value.durationMs), peaks: value.peaks)
             case .handoff(let value):
                 Label("Handoff to \(store.bots.first(where: { $0.id == value.targetBotId })?.name ?? value.targetBotId)", systemImage: "arrow.triangle.branch")
                 Text(value.text)

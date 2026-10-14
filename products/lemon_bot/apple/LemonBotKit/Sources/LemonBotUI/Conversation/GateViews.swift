@@ -14,6 +14,7 @@ struct GateStatusView: View {
         }
     }
 }
+@MainActor
 func gateAllowsAction(_ store: LemonBotStore, _ gate: Gate) -> Bool {
     store.connectionState == "online" && gate.targetUserId == store.user?.id && gate.state == "pending" && Double(gate.expiresAtMs) > Date().timeIntervalSince1970 * 1000
 }

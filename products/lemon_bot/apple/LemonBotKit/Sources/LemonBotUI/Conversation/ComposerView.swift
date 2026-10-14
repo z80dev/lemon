@@ -93,7 +93,7 @@ public struct ComposerView: View {
                 .focused($focused)
                 .submitLabel(.send)
                 .onSubmit { Task { await send() } }
-                .onKeyPress(.return) { press in
+                .onKeyPress(keys: [.return], phases: .down) { press in
                     if press.modifiers.contains(.shift) { return .ignored }
                     guard online, !action.busy, pendingMessageNonce == nil, draft.fileURLs.isEmpty,
                           !draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !draft.attachmentIDs.isEmpty else { return .handled }
