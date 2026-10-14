@@ -379,12 +379,34 @@ def get(path):
         return response.read(), response.headers.get_content_type()
 # First boot logs contain the genuine one-use setup code: never emit them.
 log_path = root / "boot.log"
+def report_image_diagnostics():
+    with log_path.open("rb") as private_log:
+        private_log.seek(max(0, log_path.stat().st_size - 4096))
+        lines = private_log.read(4096).decode("utf-8", errors="replace").splitlines()
+    diagnostics = [line.removeprefix("LEMON_BOT_IMAGE_DIAGNOSTIC ") for line in lines
+                   if line.startswith("LEMON_BOT_IMAGE_DIAGNOSTIC ")]
+    for line in diagnostics[-3:]:
+        try:
+            diagnostic = json.loads(line)
+            phase = diagnostic.get("phase")
+            reason = diagnostic.get("classification")
+            dependency = diagnostic.get("dependency")
+            if phase not in ("load", "decode") or not isinstance(reason, str) or not re.fullmatch(r"[a-z-]{1,64}", reason):
+                continue
+            if dependency is not None and (not isinstance(dependency, str) or not re.fullmatch(
+                r"(?:sharp|detect-libc|semver|@img/(?:colour|sharp-(?:libvips-)?(?:darwin|linux|linuxmusl)-(?:arm64|x64)))", dependency
+            )):
+                continue
+            print(f"lemon_bot image: phase={phase}, classification={reason}, dependency={dependency or 'unspecified'}", file=sys.stderr)
+        except (ValueError, AttributeError):
+            continue
 with log_path.open("xb") as log:
     log_path.chmod(0o600)
     process = subprocess.Popen([str(binary)], env=environment, cwd=home, stdout=log, stderr=log)
     try:
         for attempt in range(60):
             if process.poll() is not None:
+                report_image_diagnostics()
                 raise SystemExit("lemon_bot: backend exited before HTTP readiness (private logs removed on exit)")
             try:
                 body, content_type = get("/v1/setup")
@@ -462,26 +484,7 @@ with log_path.open("xb") as log:
         except (ValueError, AttributeError):
             pass
         print(f"lemon_bot: HTTP {error.code}, classification={classification}", file=sys.stderr)
-        with log_path.open("rb") as private_log:
-            private_log.seek(max(0, log_path.stat().st_size - 4096))
-            lines = private_log.read(4096).decode("utf-8", errors="replace").splitlines()
-        diagnostics = [line.removeprefix("LEMON_BOT_IMAGE_DIAGNOSTIC ") for line in lines
-                       if line.startswith("LEMON_BOT_IMAGE_DIAGNOSTIC ")]
-        for line in diagnostics[-3:]:
-            try:
-                diagnostic = json.loads(line)
-                phase = diagnostic.get("phase")
-                reason = diagnostic.get("classification")
-                dependency = diagnostic.get("dependency")
-                if phase not in ("load", "decode") or not isinstance(reason, str) or not re.fullmatch(r"[a-z-]{1,64}", reason):
-                    continue
-                if dependency is not None and (not isinstance(dependency, str) or not re.fullmatch(
-                    r"(?:sharp|detect-libc|semver|@img/(?:colour|sharp-(?:libvips-)?(?:darwin|linux|linuxmusl)-(?:arm64|x64)))", dependency
-                )):
-                    continue
-                print(f"lemon_bot image: phase={phase}, classification={reason}, dependency={dependency or 'unspecified'}", file=sys.stderr)
-            except (ValueError, AttributeError):
-                continue
+        report_image_diagnostics()
         raise SystemExit("lemon_bot: authenticated native image smoke failed; private logs removed")
     finally:
         process.terminate()

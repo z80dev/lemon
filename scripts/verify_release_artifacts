@@ -256,7 +256,6 @@ for artifact in artifacts:
                     "darwin-arm64": "darwin-arm64",
                 }[platform]
                 required_native = (
-                    "bot/node_modules/sharp/package.json",
                     f"bot/node_modules/@img/sharp-{sharp_target}/package.json",
                     f"bot/node_modules/@img/sharp-libvips-{sharp_target}/package.json",
                 )

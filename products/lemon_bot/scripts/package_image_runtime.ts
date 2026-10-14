@@ -2,8 +2,10 @@ import { cp, mkdir, readFile, realpath } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 
-const [backend, destination] = process.argv.slice(2);
-if (!backend || !destination) throw new Error('Usage: package_image_runtime.ts BACKEND DESTINATION');
+const [backend, destination, platform] = process.argv.slice(2);
+if (!backend || !destination || !platform) throw new Error('Usage: package_image_runtime.ts BACKEND DESTINATION PLATFORM');
+const addonPlatform = platform === 'linux-x86_64' ? 'linux-x64' : platform;
+if (!['linux-x64', 'linux-arm64', 'darwin-arm64'].includes(addonPlatform)) throw new Error('Unsupported native image platform.');
 const copied = new Set<string>();
 interface PackageMetadata { name: string; dependencies?: Record<string, string>; optionalDependencies?: Record<string, string> }
 async function copyPackage(name: string, from: string, optional = false): Promise<void> {
@@ -36,4 +38,7 @@ async function copyPackage(name: string, from: string, optional = false): Promis
   for (const dependency of Object.keys(metadata.dependencies ?? {})) await copyPackage(dependency, root);
   for (const dependency of Object.keys(metadata.optionalDependencies ?? {})) await copyPackage(dependency, root, true);
 }
-await copyPackage('sharp', resolve(backend));
+// Sharp JS and its transitive JS dependencies are compiled into the executable.
+// Only the real host-native addon and sibling shared library packages stay on disk.
+await copyPackage(`@img/sharp-${addonPlatform}`, resolve(backend));
+await copyPackage(`@img/sharp-libvips-${addonPlatform}`, resolve(backend));

@@ -1264,6 +1264,7 @@ native_current = os.readlink(home / ".lemon/versions/current")
 version = "9999.8.0"
 filename = f"lemon-{version}-stable-{platform}-lemon_bot.tar.gz"
 os_name, arch = platform.split("-", 1)
+native_platform = {"linux-x86_64": "linux-x64", "linux-arm64": "linux-arm64", "darwin-arm64": "darwin-arm64"}[platform]
 checks = 0
 
 def publish_case(case, mutation=None, extra=None, binary=None):
@@ -1277,8 +1278,9 @@ def publish_case(case, mutation=None, extra=None, binary=None):
             f'printf "lemon-bot {version}\\n"\n'
         ).encode(),
         "bot/web/index.html": b"<html>backend fixture</html>",
-        "bot/node_modules/sharp/package.json": b'{"name":"sharp"}',
-        "bot/node_modules/@img/sharp-fixture/sharp.node": b"native fixture",
+        f"bot/node_modules/@img/sharp-{native_platform}/package.json": json.dumps({"name": f"@img/sharp-{native_platform}"}).encode(),
+        f"bot/node_modules/@img/sharp-libvips-{native_platform}/package.json": json.dumps({"name": f"@img/sharp-libvips-{native_platform}"}).encode(),
+        f"bot/node_modules/@img/sharp-{native_platform}/lib/sharp-{native_platform}.node": b"native fixture",
     }
     with tarfile.open(archive_path, "w:gz") as archive:
         for name, data in payloads.items():

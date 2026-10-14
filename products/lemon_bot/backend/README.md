@@ -104,6 +104,9 @@ gate uses a clean HOME, verifies the web build, consumes the real one-use setup
 code privately, and uploads a valid PNG through the authenticated API to exercise
 the on-disk native image decoder. Version/help do not load native image libraries;
 their success alone is not evidence the image pipeline works.
+The executable includes Sharp's complete JavaScript dependency graph. Only the
+host-native addon and its sibling libvips shared libraries remain on disk; native
+loading uses an absolute executable-relative path, not runtime package lookup.
 On HTTP failure the gate prints only status/API classification and bounded,
 allowlisted native-image diagnostic classifications. It never prints raw backend
 errors, private logs, setup codes, session tokens or filesystem paths.

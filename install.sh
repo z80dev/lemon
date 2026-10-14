@@ -465,7 +465,7 @@ PY
 }
 
 verify_bot() {
-  python3 - "$1" "$VERSION" "$VERIFY" <<'PY'
+  python3 - "$1" "$VERSION" "$VERIFY" "$PLATFORM" <<'PY'
 import os
 from pathlib import Path
 import secrets
@@ -483,10 +483,13 @@ try:
         raise ValueError("backend has no regular executable bot/bin/lemon-bot")
     if not (root / "bot/web").is_dir() or not any((root / "bot/web").rglob("*")):
         raise ValueError("backend has no web assets")
-    if not (root / "bot/node_modules/sharp/package.json").is_file():
-        raise ValueError("backend has no sharp runtime dependency")
-    if not any((root / "bot/node_modules").rglob("*.node")):
-        raise ValueError("backend has no native runtime module")
+    native_platform = {"linux-x86_64": "linux-x64", "linux-arm64": "linux-arm64", "darwin-arm64": "darwin-arm64"}[sys.argv[4]]
+    native_root = root / f"bot/node_modules/@img/sharp-{native_platform}"
+    libvips_root = root / f"bot/node_modules/@img/sharp-libvips-{native_platform}"
+    if not (native_root / "package.json").is_file() or not (libvips_root / "package.json").is_file():
+        raise ValueError("backend has no host-native image runtime dependencies")
+    if not (native_root / f"lib/sharp-{native_platform}.node").is_file():
+        raise ValueError("backend has no host-native image addon")
     with tempfile.TemporaryDirectory() as home, tempfile.TemporaryFile() as output:
         result = subprocess.run(
             [str(binary), "--version"], cwd=home,

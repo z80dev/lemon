@@ -1,14 +1,5 @@
-import { createRequire } from 'node:module';
-import { dirname, resolve } from 'node:path';
-import type sharpModule from 'sharp';
-import type { Sharp, SharpOptions } from 'sharp';
-import { executablePath, packagedRuntime } from './layout';
+import sharpModule from 'sharp';
 
-// Bun's compiled module resolver does not search sibling node_modules for a
-// bare external package name. Load the real on-disk entrypoint explicitly;
-// sharp's own native-addon imports then resolve from its installed directory.
-const requireImage = createRequire(packagedRuntime ? executablePath : import.meta.url);
-let imageModule: typeof sharpModule | undefined;
 export function reportImageFailure(error: unknown, phase: 'load' | 'decode'): void {
   const message = error instanceof Error ? error.message : '';
   let classification = phase === 'load' ? 'image-runtime-load-failed' : 'image-decode-failed';
@@ -23,17 +14,6 @@ export function reportImageFailure(error: unknown, phase: 'load' | 'decode'): vo
   // errors: their paths, user file names and buffer content may be private.
   process.stderr.write(`LEMON_BOT_IMAGE_DIAGNOSTIC ${JSON.stringify({ phase, classification, dependency: allowedDependency })}\n`);
 }
-export default function sharp(bytes: Uint8Array, options: SharpOptions): Sharp {
-  let loaded: typeof sharpModule;
-  try {
-    loaded = imageModule ??= requireImage(packagedRuntime
-      ? resolve(dirname(executablePath), '../node_modules/sharp/lib/index.js')
-      : 'sharp');
-  } catch (error) {
-    reportImageFailure(error, 'load');
-    throw error;
-  }
-  // Native image libraries are needed only for actual image decoding, never
-  // for version/help or a backend with no image request.
-  return loaded(bytes, options);
-}
+// The release compiler bundles Sharp's complete JS dependency graph and
+// replaces only its addon loader with an absolute on-disk native path.
+export default sharpModule;
