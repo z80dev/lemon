@@ -1195,6 +1195,12 @@ are allowed. Existing `fallback_providers` routes remain useful when providers
 host the same model id. Each candidate resolves its own provider options and
 credentials; credentials from one provider are never reused for another.
 
+Idle and live model switches bind request options to their actual owning model
+before classification or completion. Selected-login refusal stays authoritative
+after a switch; switching to a keyless provider clears the previous authority.
+Fallback sanitation uses the current invocation's options owner, not the session's
+startup provider. Same-provider explicit headers and pool precedence are preserved.
+
 Before output is committed, provider failures can move to the next model and
 rate/usage limits can rotate through configured credential-pool entries.
 Authentication failures refresh the same OAuth credential once on HTTP 401, then
@@ -1225,6 +1231,11 @@ For a manual source-checkout smoke run without live credentials, run
 an isolated native session and loopback fixture endpoint, rejects the primary
 model with HTTP 503, and verifies the configured alternate model answers and
 the session is persisted. The smoke script is not part of the CI test lane.
+
+`MIX_ENV=test mix run --no-start scripts/live_provider_ownership_smoke.exs`
+exercises public native Session and Agent model switches, missing-selected-login
+refusal, successful keyless transitions, switch-then-fallback header isolation and
+a same-provider header control using fixture credentials and loopback HTTP only.
 
 Google Gemini CLI onboarding (`lemon model --provider gemini`, or
 `./bin/lemon model --provider gemini` from a checkout) resolves OAuth

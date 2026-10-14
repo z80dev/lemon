@@ -17,6 +17,9 @@ defmodule CodingAgent.Session.ProviderFallback do
   @doc """
   Wrap a stream fn with provider x credential failover.
 
+  Each invocation's primary model owns its options. Callers bind that pair before
+  invoking the wrapper; only cross-provider candidates discard owned inputs.
+
   Options:
 
     * `:session_id` - stable session identity used as the pool-rotation scope
@@ -29,14 +32,13 @@ defmodule CodingAgent.Session.ProviderFallback do
   """
   @spec maybe_wrap(
           stream_fn() | nil,
-          LemonAi.Types.Model.t(),
           SettingsManager.t(),
           String.t(),
           keyword()
         ) :: stream_fn() | nil
-  def maybe_wrap(stream_fn, model, settings, cwd, opts \\ [])
+  def maybe_wrap(stream_fn, settings, cwd, opts \\ [])
 
-  def maybe_wrap(stream_fn, model, %SettingsManager{} = settings, cwd, opts) do
+  def maybe_wrap(stream_fn, %SettingsManager{} = settings, cwd, opts) do
     session_scope = Keyword.get(opts, :session_id)
 
     # Even a single provider/credential needs the wrapper for refresh-on-401.
@@ -60,14 +62,13 @@ defmodule CodingAgent.Session.ProviderFallback do
           cwd,
           base_stream_fn,
           session_scope,
-          Keyword.get(opts, :refresh_api_key, &Credentials.refresh_provider_api_key/4),
-          model.provider
+          Keyword.get(opts, :refresh_api_key, &Credentials.refresh_provider_api_key/4)
         )
       end
     end
   end
 
-  def maybe_wrap(stream_fn, _model, _settings, _cwd, _opts), do: stream_fn
+  def maybe_wrap(stream_fn, _settings, _cwd, _opts), do: stream_fn
 
   defp stream_with_fallback(
          primary_model,
@@ -78,8 +79,7 @@ defmodule CodingAgent.Session.ProviderFallback do
          cwd,
          stream_fn,
          session_scope,
-         refresh_api_key,
-         options_provider
+         refresh_api_key
        ) do
     # The outer stream carries no wall-clock timer: serial provider x
     # credential attempts share one turn, so a fixed deadline would kill a
@@ -106,7 +106,6 @@ defmodule CodingAgent.Session.ProviderFallback do
           output_stream: output_stream,
           session_scope: session_scope,
           primary_model: primary_model,
-          options_provider: options_provider,
           refreshed: MapSet.new(),
           refresh_api_key: refresh_api_key
         }
@@ -128,7 +127,7 @@ defmodule CodingAgent.Session.ProviderFallback do
 
   defp attempt_credentials(model, [entry | more_entries], rest, ctx) do
     original_options =
-      if same_provider?(model.provider, ctx.options_provider),
+      if same_provider?(model.provider, ctx.primary_model.provider),
         do: ctx.options,
         else: LemonAgent.ModelRuntime.StreamOptions.sanitize_for_provider_switch(ctx.options)
 

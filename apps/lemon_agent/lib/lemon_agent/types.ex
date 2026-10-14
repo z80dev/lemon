@@ -364,6 +364,8 @@ defmodule LemonAgent.Types do
     - `get_api_key` - Resolves API key dynamically for each LLM call
       (useful for short-lived OAuth tokens)
     - `get_model` - Reads the active model before each response, including tool-driven switches
+    - `stream_options_model` - Owner of supplied options; nil means `model`. Rebinding
+      happens before classification or streaming, even when `model` is already selected.
     - `resolve_stream_options` - Rebuilds destination options after a live model/provider switch
     - `resolve_thinking` - Resolves auto to concrete effort in the loop task, once per user prompt
     - `thinking_prompt` - Last classified user-prompt marker, retained across continuation
@@ -439,6 +441,7 @@ defmodule LemonAgent.Types do
             budget_usage: LemonAgent.Budget.usage() | nil,
             budget: LemonAgent.Budget.t() | nil,
             stream_options: LemonAi.Types.StreamOptions.t(),
+            stream_options_model: LemonAi.Types.Model.t() | nil,
             stream_fn: stream_fn() | nil
           }
     defstruct model: nil,
@@ -466,6 +469,7 @@ defmodule LemonAgent.Types do
               budget_usage: nil,
               budget: nil,
               stream_options: %StreamOptions{},
+              stream_options_model: nil,
               stream_fn: nil
   end
 

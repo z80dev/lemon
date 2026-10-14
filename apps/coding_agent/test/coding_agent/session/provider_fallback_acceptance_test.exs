@@ -60,9 +60,7 @@ defmodule CodingAgent.Session.ProviderFallbackAcceptanceTest do
     end
 
     wrapped =
-      ProviderFallback.maybe_wrap(stream_fn, primary, pool_settings(), File.cwd!(),
-        session_id: session_id
-      )
+      ProviderFallback.maybe_wrap(stream_fn, pool_settings(), File.cwd!(), session_id: session_id)
 
     {:ok, stream} = wrapped.(primary, %Context{}, %StreamOptions{})
 
@@ -101,9 +99,7 @@ defmodule CodingAgent.Session.ProviderFallbackAcceptanceTest do
     end
 
     wrapped =
-      ProviderFallback.maybe_wrap(stream_fn, primary, pool_settings(), File.cwd!(),
-        session_id: session_id
-      )
+      ProviderFallback.maybe_wrap(stream_fn, pool_settings(), File.cwd!(), session_id: session_id)
 
     {:ok, stream} = wrapped.(primary, %Context{}, %StreamOptions{})
 

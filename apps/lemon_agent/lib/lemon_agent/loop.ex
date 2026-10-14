@@ -718,13 +718,12 @@ defmodule LemonAgent.Loop do
 
   @doc false
   @spec refresh_model(AgentLoopConfig.t()) :: AgentLoopConfig.t()
-  def refresh_model(%AgentLoopConfig{get_model: nil} = config), do: config
-
   def refresh_model(config) do
-    model = config.get_model.()
+    model = if config.get_model, do: config.get_model.(), else: config.model
+    options_model = config.stream_options_model || config.model
 
-    if model == config.model do
-      config
+    if model == options_model do
+      if model == config.model, do: config, else: %{config | model: model}
     else
       effort =
         if config.resolve_thinking,
@@ -734,9 +733,9 @@ defmodule LemonAgent.Loop do
       options =
         cond do
           config.resolve_stream_options ->
-            config.resolve_stream_options.(model, config.model, config.stream_options)
+            config.resolve_stream_options.(model, options_model, config.stream_options)
 
-          model.provider != config.model.provider ->
+          model.provider != options_model.provider ->
             LemonAgent.ModelRuntime.StreamOptions.sanitize_for_provider_switch(
               config.stream_options
             )
@@ -747,7 +746,7 @@ defmodule LemonAgent.Loop do
 
       options = %{options | reasoning: AutoThinking.clamp_effort(model, effort)}
 
-      %{config | model: model, stream_options: options}
+      %{config | model: model, stream_options_model: model, stream_options: options}
     end
   end
 

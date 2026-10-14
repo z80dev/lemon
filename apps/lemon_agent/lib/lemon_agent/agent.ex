@@ -95,6 +95,7 @@ defmodule LemonAgent.Agent do
           resolved_thinking: StreamOptions.thinking_level() | nil,
           thinking_budgets: map(),
           stream_options: StreamOptions.t(),
+          stream_options_model: LemonAi.Types.Model.t() | nil,
           max_tool_turns: pos_integer() | :infinity | nil,
           max_tool_concurrency: pos_integer() | :infinity | nil,
           max_retries: non_neg_integer(),
@@ -147,7 +148,7 @@ defmodule LemonAgent.Agent do
   - `:follow_up_mode` - How to consume follow-up queue: `:all` or `:one_at_a_time` (default)
   - `:session_id` - Optional session identifier for provider caching
   - `:get_api_key` - Function to dynamically resolve API keys
-  - `:resolve_stream_options` - Rebuilds options for live model/provider switches in the loop task
+  - `:resolve_stream_options` - Rebuilds options for idle/live model switches in the loop task
   - `:resolve_thinking` - Bounded per-user-prompt classifier callback for configured `:auto`
   - `:thinking_budgets` - Map of thinking level budgets for token-based providers
   - `:stream_options` - StreamOptions for provider requests (temperature, max_tokens, etc.)
@@ -330,6 +331,9 @@ defmodule LemonAgent.Agent do
 
   @doc """
   Sets the model to use for LLM calls.
+
+  Provider-owned options are rebound in the loop task before the next classifier
+  or model request. Selecting a model does not resolve credentials in the caller.
   """
   @spec set_model(GenServer.server(), LemonAi.Types.Model.t()) :: :ok
   def set_model(agent, model) do
@@ -562,6 +566,7 @@ defmodule LemonAgent.Agent do
       resolved_thinking: nil,
       thinking_budgets: Keyword.get(opts, :thinking_budgets, %{}),
       stream_options: stream_options,
+      stream_options_model: agent_state.model,
       max_tool_turns: Keyword.get(opts, :max_tool_turns, 25),
       max_tool_concurrency: Keyword.get(opts, :max_tool_concurrency),
       max_retries: Keyword.get(opts, :max_retries, 3),
@@ -662,7 +667,14 @@ defmodule LemonAgent.Agent do
 
   def handle_call({:set_model, model}, _from, state) do
     new_agent_state = %{state.agent_state | model: model}
-    {:reply, :ok, %{state | agent_state: new_agent_state}}
+    # With no initial model, the first selection owns the supplied options.
+    # Later selections retain that owner until the loop rebuilds its local options.
+    {:reply, :ok,
+     %{
+       state
+       | agent_state: new_agent_state,
+         stream_options_model: state.stream_options_model || model
+     }}
   end
 
   def handle_call({:set_thinking_level, level}, _from, state) do
@@ -1018,6 +1030,7 @@ defmodule LemonAgent.Agent do
 
     %AgentLoopConfig{
       model: state.agent_state.model,
+      stream_options_model: state.stream_options_model,
       convert_to_llm: state.convert_to_llm,
       transform_context: state.transform_context,
       get_api_key: state.get_api_key,

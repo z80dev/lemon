@@ -223,6 +223,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Native idle and live model switches bind provider-owned request options before
+  classification or completion. Selected-login refusal and keyless transitions
+  retain their intended authority; fallback credentials and headers use the
+  current invocation rather than the session's startup provider.
+
 - Failed selected OAuth logins cannot borrow static or environment credentials
   or transmit encoded OAuth records. Successful access-token authority and
   explicit credential-pool/default fallback remain supported.
