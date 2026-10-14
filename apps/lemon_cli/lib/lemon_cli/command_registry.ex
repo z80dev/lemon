@@ -601,7 +601,9 @@ defmodule LemonCli.CommandRegistry do
         option("--vision", ["--vision"], "Only image-capable models"),
         option("--thinking", ["--thinking"], "Only reasoning-capable models"),
         option("--limit N", ["--limit", "-l"], "Maximum rows"),
-        option("--json", ["--json"], "Emit catalog and summary JSON")
+        option("--json", ["--json"], "Emit catalog and summary JSON"),
+        option("--discover", ["--discover"], "Query a preset provider endpoint for its models"),
+        option("--base-url URL", ["--base-url"], "Endpoint for --discover")
       ]
     ),
     runtime(
