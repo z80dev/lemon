@@ -16,7 +16,6 @@ const approvalInput = common.extend({ category: categories, title: boundedText(1
 const questionInput = common.extend({ title: boundedText(1024, 1), fields: z.array(field).min(1).max(32) });
 const humanInput = common.extend({ title: boundedText(1024, 1), instructions: boundedText(32_768, 1), reason: z.enum(['login', 'mfa', 'captcha', 'payment', 'identity', 'other']), externalUrl: z.url().refine(value => new URL(value).protocol === 'https:').nullable().optional() });
 const secretInput = common.extend({ name: z.string().min(1).max(256).regex(/^[A-Za-z0-9][A-Za-z0-9_.-]*$/), description: boundedText(4096), scope: z.enum(['machine', 'bot']) });
-const consentInput = common.extend({ connectorId: id, accountOwnerUserId: id });
 const attachmentIds = z.array(id).max(6);
 export const draftContentSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('email'), connectorId: id, from: boundedText(1024, 1), to: z.array(boundedText(1024, 1)).min(1).max(100), cc: z.array(boundedText(1024, 1)).max(100), bcc: z.array(boundedText(1024, 1)).max(100), subject: boundedText(4096), body: boundedText(65_536), attachmentIds }).strict(),
@@ -32,14 +31,11 @@ const humanResolve = update.extend({ decision: z.enum(['done', 'skip']) });
 const secretResolve = update.extend({ decision: z.enum(['save', 'decline']), value: boundedText(1_048_576, 1).refine(value => new TextEncoder().encode(value).byteLength <= 1_048_576).optional() }).superRefine((value, context) => {
   if ((value.decision === 'save') !== (value.value !== undefined)) context.addIssue({ code: 'custom', message: 'Save requires value; decline must omit value.' });
 });
-const consentResolve = update.extend({ decision: z.enum(['allow_once', 'allow_bot', 'decline']), expiresAtMs: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional() }).superRefine((value, context) => {
-  if (value.decision !== 'allow_bot' && value.expiresAtMs !== undefined) context.addIssue({ code: 'custom', message: 'Only remembered grants have expiry.' });
-});
 const draftEdit = update.extend({ content: draftContentSchema });
-type GateResource = P.Approval | P.Question | P.HumanStep | P.SecretRequest | P.ConnectorConsent;
-type Collection = 'approvals' | 'questions' | 'humanSteps' | 'secretRequests' | 'consents';
-const collections: Collection[] = ['approvals', 'questions', 'humanSteps', 'secretRequests', 'consents'];
-const collectionFor = { approval: 'approvals', question: 'questions', human_step: 'humanSteps', secret_request: 'secretRequests', consent: 'consents' } as const;
+type GateResource = P.Approval | P.Question | P.HumanStep | P.SecretRequest;
+type Collection = 'approvals' | 'questions' | 'humanSteps' | 'secretRequests';
+const collections: Collection[] = ['approvals', 'questions', 'humanSteps', 'secretRequests'];
+const collectionFor = { approval: 'approvals', question: 'questions', human_step: 'humanSteps', secret_request: 'secretRequests' } as const;
 
 export interface BotGateResourceScope {
   collection: Collection | 'drafts';
@@ -66,24 +62,37 @@ function targetPrincipal(services: BackendServices, actor: Principal, userId: st
   if (!member.enabled) fail('forbidden', 'The target member is disabled.');
   return { ...actor, kind: 'user', id: userId, userId, role: member.role, botId: null, sessionId: null, deviceId: null };
 }
+function ownedBot(services: BackendServices, actor: Principal, botId: string): P.Bot {
+  const bot = services.auth.bot(actor, botId);
+  if (bot.ownerUserId !== actor.userId) fail('forbidden', 'Only the Bot owner has live execution authority.');
+  return bot;
+}
+function ownsRoom(services: BackendServices, ownerUserId: string, botId: string, room: P.Conversation | null): boolean {
+  return !!room && room.ownerUserId === ownerUserId && room.botIds.includes(botId) && room.botIds.every(id => services.store.get<P.Bot>('bots', id)?.ownerUserId === ownerUserId);
+}
+function creationOwner(services: BackendServices, actor: Principal, input: z.infer<typeof common>): P.Bot {
+  const bot = ownedBot(services, actor, input.botId);
+  if (input.targetUserId !== undefined && input.targetUserId !== bot.ownerUserId) fail('forbidden', 'Human input must target the Bot owner.');
+  const room = services.auth.conversation(actor, input.conversationId);
+  if (!ownsRoom(services, bot.ownerUserId, bot.id, room)) fail('forbidden', 'Conversation execution belongs only to its Bot owner.');
+  return bot;
+}
 function context(services: BackendServices, actor: Principal, input: z.infer<typeof common>, sensitive: boolean): { bot: P.Bot; conversation: P.Conversation; target: Principal } {
-  const bot = services.auth.bot(actor, input.botId);
+  const bot = creationOwner(services, actor, input);
   if (actor.kind === 'bot' && actor.botId !== bot.id) fail('forbidden', 'Bot authority does not match.');
   const room = services.auth.conversation(actor, input.conversationId);
   if (!room.botIds.includes(bot.id)) fail('forbidden', 'Bot is not a participant.');
-  const userId = input.targetUserId ?? actor.userId;
-  if (userId !== actor.userId && actor.kind !== 'integration') fail('forbidden', 'Cannot request input under another user authority.');
+  const userId = bot.ownerUserId;
   const target = targetPrincipal(services, actor, userId);
   services.auth.bot(target, bot.id);
-  if (!room.humanUserIds.includes(userId)) fail('forbidden', 'Target is not a conversation participant.');
   if (input.runId) {
     const run = services.store.require<P.Run>('runs', input.runId);
     if (run.botId !== bot.id || run.conversationId !== room.id || run.initiatorUserId !== actor.userId || !['running', 'awaiting_input'].includes(run.status)) fail('forbidden', 'Gate invocation is not active.');
   }
-  if (!sensitive || (room.kind !== 'group' && room.kind !== 'channel' && room.humanUserIds.length === 1)) return { bot, conversation: room, target };
-  let privateRoom = services.store.list<P.Conversation>('conversations', item => (item.kind === 'dm' || item.kind === 'team_dm') && item.botIds.length === 1 && item.botIds[0] === bot.id && item.ownerUserId === userId && item.humanUserIds.length === 1 && item.humanUserIds[0] === userId)[0];
+  if (!sensitive || (room.kind !== 'group' && room.kind !== 'channel')) return { bot, conversation: room, target };
+  let privateRoom = services.store.list<P.Conversation>('conversations', item => item.kind === 'dm' && item.botIds.length === 1 && item.botIds[0] === bot.id && item.ownerUserId === userId)[0];
   if (!privateRoom) {
-    privateRoom = services.resource('conversation', { kind: bot.visibility === 'team' ? 'team_dm' as const : 'dm' as const, name: bot.name, botIds: [bot.id], humanUserIds: [userId], ownerUserId: userId, parentConversationId: null, leadBotId: bot.id, channelBindingId: null, lastEntryId: null, unreadCount: 0, lastReadSeq: 0, activity: [] });
+    privateRoom = services.resource('conversation', { kind: 'dm' as const, name: bot.name, botIds: [bot.id], ownerUserId: userId, parentConversationId: null, leadBotId: bot.id, channelBindingId: null, lastEntryId: null, unreadCount: 0, lastReadSeq: 0, activity: [] });
     services.store.put('conversations', privateRoom);
     services.events.emit('conversation.upserted', privateRoom, { userIds: [userId], conversationId: privateRoom.id });
   }
@@ -99,7 +108,6 @@ function cardFor(collection: Collection, resource: GateResource): P.Card {
     case 'questions': return { type: 'user_form', question: resource as P.Question };
     case 'humanSteps': return { type: 'human_step', step: resource as P.HumanStep };
     case 'secretRequests': return { type: 'secret_request', request: resource as P.SecretRequest };
-    case 'consents': return { type: 'connector_grant', consent: resource as P.ConnectorConsent };
   }
 }
 function emitGate(services: BackendServices, name: Collection, resource: GateResource): void {
@@ -109,7 +117,6 @@ function emitGate(services: BackendServices, name: Collection, resource: GateRes
     case 'questions': services.events.emit('question.upserted', resource as P.Question, audience); break;
     case 'humanSteps': services.events.emit('human_step.upserted', resource as P.HumanStep, audience); break;
     case 'secretRequests': services.events.emit('secret_request.upserted', resource as P.SecretRequest, audience); break;
-    case 'consents': services.events.emit('consent.upserted', resource as P.ConnectorConsent, audience); break;
   }
 }
 function persistGate<T extends GateResource>(services: BackendServices, name: Collection, resource: T): T {
@@ -150,8 +157,14 @@ function validateAnswers(question: P.Question, answers: Record<string, P.JSONVal
     if (!valid) fail('invalid_request', 'Answer does not satisfy the field type, options or bounds.');
   }
 }
+function ownsGate(services: BackendServices, actor: Principal, resource: GateResource): boolean {
+  const bot = services.store.get<P.Bot>('bots', resource.botId);
+  const conversationId = 'conversationId' in resource ? resource.conversationId : services.store.get<P.TranscriptEntry>('entries', resource.entryId)?.conversationId;
+  const room = conversationId ? services.store.get<P.Conversation>('conversations', conversationId) : null;
+  return !!bot && actor.userId === bot.ownerUserId && resource.gate.targetUserId === bot.ownerUserId && ownsRoom(services, bot.ownerUserId, bot.id, room);
+}
 function visible(services: BackendServices, actor: Principal, name: Collection, resource: GateResource): void {
-  if (!services.auth.canRead(actor, name, resource)) fail('not_found', 'Request not found.');
+  if (!ownsGate(services, actor, resource) || !services.auth.canRead(actor, name, resource)) fail('not_found', 'Request not found.');
   services.auth.conversation(actor, conversationOf(services, resource));
 }
 function pending(services: BackendServices, actor: Principal, name: Collection, resource: GateResource, revision: number): void {
@@ -174,7 +187,7 @@ function recordCreate(services: BackendServices, actor: Principal, kind: string,
   if (input.clientNonce) services.store.setMetadata(nonceKey(actor, kind, input.clientNonce), { digest, collection: name, id: resourceId });
 }
 
-const lifecycle = new WeakMap<BackendServices, { cancelBot(botId: string, expected: BotGateResourceScope[]): void; cancelGate(name: Collection, id: string): void; cancelConsents(connectorId: string, actorUserId?: string): void; cancelConversation(id: string): void; acknowledge(event: unknown): boolean }>();
+const lifecycle = new WeakMap<BackendServices, { cancelBot(botId: string, expected: BotGateResourceScope[]): void; cancelGate(name: Collection, id: string): void; cancelConversation(id: string): void; acknowledge(event: unknown): boolean }>();
 /** Call before removing a conversation's entries; possibly-sent drafts are never discarded. */
 export function cancelConversationGates(services: BackendServices, conversationId: string): void {
   const hooks = lifecycle.get(services);
@@ -190,12 +203,6 @@ export function cancelGate(services: BackendServices, name: string, resourceId: 
   const hooks = lifecycle.get(services);
   if (!hooks) fail('internal_error', 'Gate lifecycle is not initialized.', false);
   hooks.cancelGate(collection(name), resourceId);
-}
-/** Revoke a connector's remembered and pending grants atomically, waking any blocked tool. */
-export function cancelConnectorConsents(services: BackendServices, connectorId: string, actorUserId?: string): void {
-  const hooks = lifecycle.get(services);
-  if (!hooks) fail('internal_error', 'Gate lifecycle is not initialized.', false);
-  hooks.cancelConsents(connectorId, actorUserId);
 }
 /** The caller must bind this exact opaque candidate snapshot in the confirmed Bot deletion scope. */
 export function cancelBotResources(services: BackendServices, botId: string, expected: BotGateResourceScope[]): void {
@@ -252,7 +259,7 @@ export function createGateService(services: BackendServices): GateService & { sw
             services.store.setMetadata(`draftUnsent:${item.id}`, null);
           } else {
             const resource = services.store.require<GateResource>(item.collection, item.id);
-            if (resource.gate.state === 'pending' || item.collection === 'consents' && resource.gate.state === 'approved') wake(item.collection, transition(services, item.collection, resource, 'cancelled', null));
+            if (resource.gate.state === 'pending') wake(item.collection, transition(services, item.collection, resource, 'cancelled', null));
             if (item.collection === 'approvals') {
               services.store.remove('approvalSources', item.id);
               services.store.setMetadata(`approvalDecision:${item.id}`, null);
@@ -265,16 +272,10 @@ export function createGateService(services: BackendServices): GateService & { sw
       });
       schedule();
     },
-    cancelConsents(connectorId: string, actorUserId?: string): void {
-      services.store.transaction(() => {
-        for (const resource of services.store.list<P.ConnectorConsent>('consents', consent => consent.connectorId === connectorId)) if (resource.gate.state === 'pending' || resource.gate.state === 'approved') wake('consents', transition(services, 'consents', resource, 'cancelled', actorUserId ?? null));
-      });
-      schedule();
-    },
     cancelGate(name: Collection, resourceId: string): void {
       services.store.transaction(() => {
         const resource = services.store.require<GateResource>(name, resourceId);
-        if (resource.gate.state === 'pending' || name === 'consents' && resource.gate.state === 'approved') wake(name, transition(services, name, resource, 'cancelled', null));
+        if (resource.gate.state === 'pending') wake(name, transition(services, name, resource, 'cancelled', null));
       });
       schedule();
     },
@@ -319,12 +320,15 @@ export function createGateService(services: BackendServices): GateService & { sw
     },
     async create<T>(actor: Principal, kind: keyof typeof collectionFor, raw: unknown): Promise<T> {
       if (closed) fail('upstream_unavailable', 'Gate service is closed.');
-      const input = kind === 'approval' ? parse(approvalInput, raw) : kind === 'question' ? parse(questionInput, raw) : kind === 'human_step' ? parse(humanInput, raw) : kind === 'secret_request' ? parse(secretInput, raw) : parse(consentInput, raw);
+      if (!(kind in collectionFor)) fail('invalid_request', 'Unsupported gate kind.');
+      const input = kind === 'approval' ? parse(approvalInput, raw) : kind === 'question' ? parse(questionInput, raw) : kind === 'human_step' ? parse(humanInput, raw) : parse(secretInput, raw);
+      creationOwner(services, actor, input);
       const digest = services.mutations.digest(input);
       const previous = replay<T>(services, actor, kind, input, digest);
       if (previous) return previous;
       const policy = kind === 'approval' ? await services.integrations.effectivePolicy(actor, input.botId) : null;
       return services.store.transaction(() => {
+        creationOwner(services, actor, input);
         const previous = replay<T>(services, actor, kind, input, digest);
         if (previous) return previous;
         const name = collectionFor[kind];
@@ -353,12 +357,8 @@ export function createGateService(services: BackendServices): GateService & { sw
           resource = services.resource('question', { gate, entryId, conversationId: conversation.id, botId: bot.id, title: input.title, fields: input.fields, answers: null });
         } else if ('instructions' in input) {
           resource = services.resource('human_step', { gate, entryId, conversationId: conversation.id, botId: bot.id, machineId: bot.machineId, title: input.title, instructions: input.instructions, reason: input.reason, externalUrl: input.externalUrl ?? null });
-        } else if ('name' in input) {
-          resource = services.resource('secret_request', { gate, entryId, botId: bot.id, machineId: bot.machineId, name: input.name, description: input.description, scope: input.scope });
         } else {
-          const connector = services.store.require<P.Connector>('connectors', input.connectorId);
-          if (connector.botId !== bot.id || connector.ownerUserId !== input.accountOwnerUserId || target.userId !== input.accountOwnerUserId) fail('forbidden', 'Connector consent must target its exact account owner.');
-          resource = services.resource('consent', { gate, entryId, conversationId: conversation.id, botId: bot.id, connectorId: connector.id, accountOwnerUserId: input.accountOwnerUserId, scope: 'once' as const, expiresAtMs: null });
+          resource = services.resource('secret_request', { gate, entryId, botId: bot.id, machineId: bot.machineId, name: input.name, description: input.description, scope: input.scope });
         }
         services.store.put(name, resource);
         const entry = services.entry(target, conversation.id, { id: entryId, kind: 'card', card: cardFor(name, resource), actor: { kind: 'bot', id: bot.id, displayName: bot.name }, targetedUserId: target.userId, runId: input.runId ?? null });
@@ -371,7 +371,7 @@ export function createGateService(services: BackendServices): GateService & { sw
     },
     async resolve<T>(actor: Principal, rawCollection: string, resourceId: string, raw: unknown): Promise<T> {
       const name = collection(rawCollection);
-      const input = name === 'approvals' ? parse(approvalResolve, raw) : name === 'questions' ? parse(questionResolve, raw) : name === 'humanSteps' ? parse(humanResolve, raw) : name === 'secretRequests' ? parse(secretResolve, raw) : parse(consentResolve, raw);
+      const input = name === 'approvals' ? parse(approvalResolve, raw) : name === 'questions' ? parse(questionResolve, raw) : name === 'humanSteps' ? parse(humanResolve, raw) : parse(secretResolve, raw);
       sweep();
       if (name === 'approvals' && input.decision === 'approve_once') {
         const proposal = services.store.require<P.Approval>('approvals', resourceId);
@@ -399,7 +399,7 @@ export function createGateService(services: BackendServices): GateService & { sw
           state = input.decision === 'answer' ? 'completed' : 'declined';
           if ('answers' in input && input.answers) { validateAnswers(current as P.Question, input.answers); changes = { answers: input.answers }; }
         } else if (name === 'humanSteps') state = input.decision === 'done' ? 'completed' : 'declined';
-        else if (name === 'secretRequests') {
+        else {
           state = input.decision === 'save' ? 'submitted' : 'declined';
           if (state === 'submitted') {
             const request = current as P.SecretRequest;
@@ -407,10 +407,6 @@ export function createGateService(services: BackendServices): GateService & { sw
             if (destination.status !== 'online' || !destination.nodeId) fail('machine_offline', 'Destination is offline.');
             if (!services.lemon.connected || !services.lemon.methods.includes('node.secrets.set')) fail('capability_unavailable', 'Destination secret storage is unavailable.');
           }
-        } else {
-          state = input.decision === 'decline' ? 'declined' : 'approved';
-          if ('expiresAtMs' in input && input.expiresAtMs !== undefined && input.expiresAtMs <= services.now()) fail('invalid_request', 'Remembered consent expiry must be in the future.');
-          changes = { scope: input.decision === 'allow_bot' ? 'bot' : 'once', expiresAtMs: 'expiresAtMs' in input ? input.expiresAtMs ?? null : null };
         }
         return transition(services, name, current, state, actor.userId, changes);
       });
@@ -452,7 +448,7 @@ export function createGateService(services: BackendServices): GateService & { sw
     },
     cancelUser(userId: string): void {
       services.store.transaction(() => {
-        for (const name of collections) for (const resource of services.store.list<GateResource>(name)) if (resource.gate.targetUserId === userId && (resource.gate.state === 'pending' || name === 'consents' && resource.gate.state === 'approved')) wake(name, transition(services, name, resource, 'cancelled', null));
+        for (const name of collections) for (const resource of services.store.list<GateResource>(name)) if (resource.gate.targetUserId === userId && resource.gate.state === 'pending') wake(name, transition(services, name, resource, 'cancelled', null));
       });
       schedule();
     },
@@ -472,6 +468,7 @@ function persistDraft(services: BackendServices, draft: P.Draft): P.Draft {
   return draft;
 }
 function contentAccess(services: BackendServices, actor: Principal, botId: string, content: P.DraftContent): void {
+  ownedBot(services, actor, botId);
   for (const attachmentId of content.attachmentIds) {
     const attachment = services.auth.attachment(actor, attachmentId);
     if (attachment.state !== 'ready') fail('invalid_request', 'Draft attachment is not ready.');
@@ -487,6 +484,7 @@ function contentAccess(services: BackendServices, actor: Principal, botId: strin
 /** MCP creates an editable draft only. No provider dispatch occurs until the owner explicitly sends. */
 export async function createDraft(services: BackendServices, actor: Principal, raw: unknown): Promise<P.Draft> {
   const input = parse(draftInput, raw);
+  creationOwner(services, actor, input);
   const digest = services.mutations.digest(input);
   return services.store.transaction(() => {
     const previous = replay<P.Draft>(services, actor, 'draft', input, digest);
@@ -504,8 +502,10 @@ export async function createDraft(services: BackendServices, actor: Principal, r
 }
 function ownDraft(services: BackendServices, actor: Principal, resourceId: string): P.Draft {
   const draft = services.store.require<P.Draft>('drafts', resourceId);
-  if (actor.kind !== 'user' || draft.ownerUserId !== actor.userId) fail('not_found', 'Draft not found.');
-  services.auth.conversation(actor, draft.conversationId);
+  const bot = services.store.get<P.Bot>('bots', draft.botId);
+  if (actor.kind !== 'user' || !bot || actor.userId !== bot.ownerUserId || draft.ownerUserId !== bot.ownerUserId) fail('not_found', 'Draft not found.');
+  const room = services.auth.conversation(actor, draft.conversationId);
+  if (!ownsRoom(services, bot.ownerUserId, bot.id, room)) fail('not_found', 'Draft not found.');
   return draft;
 }
 function editable(services: BackendServices, draft: P.Draft, revision: number, allowConfirmedUnsent = false): void {
@@ -528,12 +528,12 @@ export function createGateRoutes(services: BackendServices): Route[] {
     const actor = principal(context.user);
     const schema = z.object({ cursor: z.string().optional(), limit: z.coerce.number().int().min(1).max(200).optional(), state: states.optional(), ...(name === 'approvals' ? { botId: id.optional() } : {}) }).strict();
     const filter = parse(schema, queryObject(context.query));
-    return services.page(context, services.store.list<GateResource>(name, value => services.auth.canRead(actor, name, value) && (!filter.state || value.gate.state === filter.state) && (!('botId' in filter) || !filter.botId || value.botId === filter.botId)));
+    return services.page(context, services.store.list<GateResource>(name, value => ownsGate(services, actor, value) && services.auth.canRead(actor, name, value) && (!filter.state || value.gate.state === filter.state) && (!('botId' in filter) || !filter.botId || value.botId === filter.botId)));
   } });
   routes.push({ method: 'GET', path: '/v1/drafts', auth: 'member', status: 200, handler(context) {
     const actor = principal(context.user);
     const filter = parse(z.object({ cursor: z.string().optional(), limit: z.coerce.number().int().min(1).max(200).optional(), conversationId: id.optional(), state: z.enum(['editable', 'sending', 'sent', 'discarded', 'failed', 'outcome_unknown']).optional() }).strict(), queryObject(context.query));
-    return services.page(context, services.store.list<P.Draft>('drafts', draft => draft.ownerUserId === actor.userId && services.auth.canRead(actor, 'drafts', draft) && (!filter.state || draft.state === filter.state) && (!filter.conversationId || draft.conversationId === filter.conversationId)));
+    return services.page(context, services.store.list<P.Draft>('drafts', draft => draft.ownerUserId === actor.userId && services.store.get<P.Bot>('bots', draft.botId)?.ownerUserId === actor.userId && ownsRoom(services, actor.userId, draft.botId, services.store.get<P.Conversation>('conversations', draft.conversationId)) && services.auth.canRead(actor, 'drafts', draft) && (!filter.state || draft.state === filter.state) && (!filter.conversationId || draft.conversationId === filter.conversationId)));
   } });
   routes.push({ method: 'GET', path: '/v1/drafts/:id', auth: 'member', status: 200, handler(context) { return ownDraft(services, principal(context.user), context.params.id); } });
   routes.push({ method: 'PATCH', path: '/v1/drafts/:id', auth: 'member', status: 200, handler(context) {

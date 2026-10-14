@@ -5,7 +5,7 @@ import type * as P from '../../../contracts/protocol';
 import type { BackendServices, EntityStore, Principal, RequestContext } from '../../src/core/services';
 import { ApiError } from '../../src/core/errors';
 import { z, parse } from '../../src/core/validation';
-import { createDraft, createGateRoutes, createGateService, cancelConversationGates, cancelConnectorConsents, previewBotResources, cancelBotResources, acknowledgeExecutionApproval } from '../../src/core/gates';
+import { createDraft, createGateRoutes, createGateService, cancelConversationGates, previewBotResources, cancelBotResources, acknowledgeExecutionApproval } from '../../src/core/gates';
 
 const actor: Principal = { kind: 'user', id: 'user_1', userId: 'user_1', workspaceId: 'workspace_1', role: 'member', sessionId: null, botId: null, deviceId: null };
 const nonce = 'abcdefghijklmnop';
@@ -43,7 +43,7 @@ function fixture() {
     update<T extends { revision: number; updatedAtMs: number }>(resource: T, changes: Partial<T>): T { return { ...resource, ...changes, revision: resource.revision + 1, updatedAtMs: now }; },
     page: (_context, values) => ({ items: values, nextCursor: null }),
     mutations: { execute: async (_context, operation) => operation(), checkRevision(resource, revision) { if (resource.revision !== revision) throw new ApiError('revision_conflict', 'Resource changed.'); }, preview: unreachable, confirm: unreachable, digest(value) { return createHash('sha256').update(JSON.stringify(value)).digest('hex'); } },
-    auth: { authenticate: unreachable, user: unreachable, member(userId) { return { id: userId, userId, email: 'test@example.invalid', displayName: 'Member', role: 'member', enabled: true, revision: 1, createdAtMs: now, updatedAtMs: now }; }, requireRole: unreachable, bot(_principal, botId) { return store.require<P.Bot>('bots', botId); }, conversation(principal, conversationId) { const room = store.require<P.Conversation>('conversations', conversationId); if (!room.humanUserIds.includes(principal.userId)) throw new ApiError('not_found', 'Not found.'); return room; }, machine(_principal, machineId) { return store.require<P.Machine>('machines', machineId); }, attachment: unreachable, canRead(principal, _collection, resource) { if (!resource || typeof resource !== 'object') return false; if ('gate' in resource) { const gate = resource.gate; return !!gate && typeof gate === 'object' && 'targetUserId' in gate && gate.targetUserId === principal.userId; } if ('ownerUserId' in resource) return resource.ownerUserId === principal.userId; return false; }, revokeUser: unreachable, session: unreachable, issueReauth: unreachable, consumeReauth: unreachable },
+    auth: { authenticate: unreachable, user: unreachable, member(userId) { return { id: userId, userId, email: 'test@example.invalid', displayName: 'Member', role: 'member', enabled: true, revision: 1, createdAtMs: now, updatedAtMs: now }; }, requireRole: unreachable, bot(_principal, botId) { return store.require<P.Bot>('bots', botId); }, conversation(principal, conversationId) { const room = store.require<P.Conversation>('conversations', conversationId); if (room.ownerUserId !== principal.userId) throw new ApiError('not_found', 'Not found.'); return room; }, machine(_principal, machineId) { return store.require<P.Machine>('machines', machineId); }, attachment: unreachable, canRead(principal, _collection, resource) { if (!resource || typeof resource !== 'object') return false; if ('gate' in resource) { const gate = resource.gate; return !!gate && typeof gate === 'object' && 'targetUserId' in gate && gate.targetUserId === principal.userId; } if ('ownerUserId' in resource) return resource.ownerUserId === principal.userId; return false; }, revokeUser: unreachable, session: unreachable, issueReauth: unreachable, consumeReauth: unreachable },
     events: { emit(name, payload, audience) { const result = db.query('INSERT INTO events(name,payload,audience) VALUES(?,?,?)').run(name, JSON.stringify(payload), JSON.stringify(audience)); return { type: 'event', seq: String(result.lastInsertRowid), event: name, payload, timestampMs: now } as P.RealtimeEvent; }, cursor: () => String(db.query<{ seq: number }, []>('SELECT COALESCE(MAX(seq),0) AS seq FROM events').get()?.seq ?? 0), earliestCursor: () => '1', replay: unreachable, visible: unreachable, subscribe: unreachable },
     lemon: { connected: true, methods: ['node.secrets.set', 'exec.approval.resolve'], async call<T>(method: string, params: Record<string, unknown> = {}): Promise<T> { calls.push({ method, params }); return await rpc(method, params) as T; }, onEvent: () => () => {}, onConnected: unreachable, start: unreachable, close: unreachable },
     runtime: Object.assign({ submit: unreachable, send: unreachable, cancel: unreachable, reconcile: unreachable, sessionKey: () => 'session_1' }, { revokeConnectorInvocations: unreachable }),
@@ -65,11 +65,11 @@ function fixture() {
       return entry;
     },
   };
-  const bot: P.Bot = { ...services.resource('bot', {}), id: 'bot_1', ownerUserId: actor.userId, managerUserIds: [], machineId: 'machine_1', profileId: 'profile_1', name: 'Bot', title: '', job: '', instructions: '', avatar: { kind: 'character', shape: 'round', color: 'yellow', attachmentId: null }, voice: { voiceId: 'default', speed: 1, language: null }, language: null, visibility: 'personal', published: false, required: false, skillIds: [], referenceAttachmentIds: [], mainConversationId: 'room_1', sidebar: { pinned: false, hidden: false, sectionId: null, rank: 0, unread: false, notificationsEnabled: true }, activity: 'idle', activeRunIds: [] };
+  const bot: P.Bot = { ...services.resource('bot', {}), id: 'bot_1', ownerUserId: actor.userId, machineId: 'machine_1', profileId: 'profile_1', name: 'Bot', title: '', job: '', instructions: '', avatar: { kind: 'character', shape: 'round', color: 'yellow', attachmentId: null }, voice: { voiceId: 'default', speed: 1, language: null }, language: null, skillIds: [], referenceAttachmentIds: [], mainConversationId: 'room_1', sidebar: { pinned: false, hidden: false, sectionId: null, rank: 0, unread: false, notificationsEnabled: true }, activity: 'idle', activeRunIds: [] };
   store.put('bots', bot);
-  store.put<P.Conversation>('conversations', { ...services.resource('conversation', {}), id: 'room_1', kind: 'dm', name: 'Room', botIds: [bot.id], humanUserIds: [actor.userId], ownerUserId: actor.userId, parentConversationId: null, leadBotId: bot.id, channelBindingId: null, lastEntryId: null, unreadCount: 0, lastReadSeq: 0, activity: [] });
+  store.put<P.Conversation>('conversations', { ...services.resource('conversation', {}), id: 'room_1', kind: 'dm', name: 'Room', botIds: [bot.id], ownerUserId: actor.userId, parentConversationId: null, leadBotId: bot.id, channelBindingId: null, lastEntryId: null, unreadCount: 0, lastReadSeq: 0, activity: [] });
   store.put<P.Machine>('machines', { ...services.resource('machine', {}), id: 'machine_1', nodeId: 'node_1', nodeName: 'node', name: 'Machine', ownerUserId: actor.userId, accessUserIds: [], status: 'online', lastSeenAtMs: now, labels: {}, botIds: [bot.id] });
-  store.put<P.Connector>('connectors', { ...services.resource('connector', {}), id: 'connector_1', botId: bot.id, ownerUserId: actor.userId, name: 'Email', url: 'https://example.invalid/mcp', accountLabel: 'Mailbox', authKind: 'none', state: 'connected', tools: [], secretHeaderNames: [], shared: false, lastError: null });
+  store.put<P.Connector>('connectors', { ...services.resource('connector', {}), id: 'connector_1', botId: bot.id, ownerUserId: actor.userId, name: 'Email', url: 'https://example.invalid/mcp', accountLabel: 'Mailbox', authKind: 'none', state: 'connected', tools: [], secretHeaderNames: [], lastError: null });
   let gates = createGateService(services);
   services.gates = gates;
   cleanup.push(() => { gates.close(); db.close(); });
@@ -145,11 +145,13 @@ describe('durable targeted gates', () => {
   test('group sensitive cards reroute private with no sensitive data in room notice', async () => {
     const f = fixture();
     const room = f.store.require<P.Conversation>('conversations', 'room_1');
-    f.store.put('conversations', { ...room, kind: 'group', humanUserIds: [actor.userId, 'other'] });
+    const bot = f.store.require<P.Bot>('bots', 'bot_1');
+    f.store.put('bots', { ...bot, id: 'bot_2', profileId: 'profile_2' });
+    f.store.put('conversations', { ...room, kind: 'group', botIds: [bot.id, 'bot_2'] });
     const step = await f.gates.create<P.HumanStep>(actor, 'human_step', { ...common, title: 'Private login', instructions: 'Private destination instructions', reason: 'login' });
     expect(step.conversationId).not.toBe('room_1');
     const privateRoom = f.store.require<P.Conversation>('conversations', step.conversationId);
-    expect(privateRoom.humanUserIds).toEqual([actor.userId]);
+    expect(privateRoom.ownerUserId).toBe(actor.userId);
     const roomEntries = f.store.list<P.TranscriptEntry>('entries', item => item.conversationId === 'room_1');
     expect(roomEntries).toHaveLength(1);
     expect(roomEntries[0].kind).toBe('notice');
@@ -276,16 +278,6 @@ describe('gate admission and transactional failures', () => {
       expect(entry.kind === 'card' && entry.card.type === 'user_form' ? entry.card.question : null).toEqual(question);
     } finally { f.db.exec('DROP TRIGGER reject_gate_event'); }
   });
-  test('consent approval binds account owner, scope, expiry and revokes with user cancellation', async () => {
-    const f = fixture();
-    const consent = await f.gates.create<P.ConnectorConsent>(actor, 'consent', { ...common, connectorId: 'connector_1', accountOwnerUserId: actor.userId });
-    const resolved = await f.gates.resolve<P.ConnectorConsent>(actor, 'consents', consent.id, { clientNonce: nonce, revision: 1, decision: 'allow_bot', expiresAtMs: 2000 });
-    expect(resolved.gate.state).toBe('approved');
-    expect(resolved.scope).toBe('bot');
-    expect(resolved.expiresAtMs).toBe(2000);
-    f.gates.cancelUser(actor.userId);
-    expect(f.store.require<P.ConnectorConsent>('consents', consent.id).gate.state).toBe('cancelled');
-  });
   test('proven unsent failure requires explicit edit before another send; unknown cannot edit', async () => {
     const f = fixture();
     f.sender(async () => { throw new ApiError('policy_denied', 'Rejected before dispatch.', true); });
@@ -305,17 +297,6 @@ describe('gate admission and transactional failures', () => {
   });
 });
 
-test('connector revocation wakes only its exact pending consent and replaces embedded state', async () => {
-  const f = fixture();
-  const consent = await f.gates.create<P.ConnectorConsent>(actor, 'consent', { ...common, connectorId: 'connector_1', accountOwnerUserId: actor.userId });
-  const waiting = f.gates.wait<P.ConnectorConsent>('consents', consent.id);
-  cancelConnectorConsents(f.services, 'connector_1', actor.userId);
-  const cancelled = await waiting;
-  expect(cancelled.gate.state).toBe('cancelled');
-  expect(cancelled.gate.resolvedByUserId).toBe(actor.userId);
-  const entry = f.store.require<P.TranscriptEntry>('entries', consent.entryId);
-  expect(entry.kind === 'card' && entry.card.type === 'connector_grant' ? entry.card.consent : null).toEqual(cancelled);
-});
 
 describe('exact bot-owned gate deletion', () => {
   test('removes only selected bot cards in a retained group and wakes its pending waiter', async () => {
@@ -352,5 +333,99 @@ describe('exact bot-owned gate deletion', () => {
     expect(f.store.require<P.Draft>('drafts', draft.id).state).toBe('outcome_unknown');
     expect(f.store.get('entries', question.entryId)).not.toBeNull();
     expect(f.store.get('entries', draft.entryId)).not.toBeNull();
+  });
+});
+
+describe('owner-only live gates and independent Send', () => {
+  test('workspace roles and integration callers cannot borrow Bot owner authority', async () => {
+    const f = fixture();
+    // Intentionally permissive ACL adapters prove the lifecycle owns its owner equality checks.
+    f.services.auth.canRead = () => true;
+    f.services.auth.conversation = (_principal, roomId) => f.store.require<P.Conversation>('conversations', roomId);
+    const approval = await f.gates.create<P.Approval>(actor, 'approval', { ...common, category: 'permissions', title: 'Approve', description: '', target: 'tool', inputs: {}, forceHuman: true });
+    const draft = await createDraft(f.services, actor, { ...common, content });
+    const actors: Principal[] = [
+      { ...actor, id: 'foreign', userId: 'foreign', role: 'owner' },
+      { ...actor, id: 'foreign', userId: 'foreign', role: 'admin' },
+      { ...actor, id: 'integration', userId: 'foreign', kind: 'integration' },
+      { ...actor, id: 'bot_1', userId: 'foreign', kind: 'bot', botId: 'bot_1' },
+    ];
+    for (const foreign of actors) {
+      await expect(f.gates.create(foreign, 'approval', { ...common, category: 'permissions', title: 'Approve', description: '', target: 'tool', inputs: {} })).rejects.toMatchObject({ code: 'forbidden' });
+      await expect(f.gates.create(foreign, 'question', questionInput)).rejects.toMatchObject({ code: 'forbidden' });
+      await expect(f.gates.create(foreign, 'human_step', { ...common, title: 'Login', instructions: 'Use your host', reason: 'login' })).rejects.toMatchObject({ code: 'forbidden' });
+      await expect(f.gates.create(foreign, 'secret_request', { ...common, name: 'KEY', description: '', scope: 'bot' })).rejects.toMatchObject({ code: 'forbidden' });
+      await expect(createDraft(f.services, foreign, { ...common, content })).rejects.toMatchObject({ code: 'forbidden' });
+      await expect(f.gates.resolve(foreign, 'approvals', approval.id, { clientNonce: nonce, revision: 1, decision: 'approve_once' })).rejects.toMatchObject({ code: 'not_found' });
+      const route = createGateRoutes(f.services).find(route => route.method === 'POST' && route.path === '/v1/drafts/:id/send');
+      if (!route) throw new Error('Missing send route');
+      const context: RequestContext = { request: new Request('https://example.invalid'), params: { id: draft.id }, query: new URLSearchParams(), body: { clientNonce: nonce, revision: 1, content }, user: foreign, services: f.services, requestId: 'req_1', route, nonceResourceIds: [] };
+      await expect(route.handler(context)).rejects.toMatchObject({ code: 'not_found' });
+    }
+    expect(f.store.require<P.Approval>('approvals', approval.id).gate.state).toBe('pending');
+    expect(f.store.require<P.Draft>('drafts', draft.id).state).toBe('editable');
+    expect(f.sent).toHaveLength(0);
+    expect(f.calls).toHaveLength(0);
+  });
+  test('human target and retained run initiator must be the actual Bot owner', async () => {
+    const f = fixture();
+    await expect(f.gates.create(actor, 'question', { ...questionInput, targetUserId: 'foreign' })).rejects.toMatchObject({ code: 'forbidden' });
+    f.store.put<P.Run>('runs', { ...f.services.resource('run', {}), id: 'foreign_run', conversationId: 'room_1', botId: 'bot_1', initiatorUserId: 'foreign', clientNonce: nonce, status: 'running', error: null, startedAtMs: 1000, completedAtMs: null, routineRunId: null });
+    await expect(f.gates.create(actor, 'question', { ...questionInput, runId: 'foreign_run' })).rejects.toMatchObject({ code: 'forbidden' });
+    const question = await f.gates.create<P.Question>(actor, 'question', questionInput);
+    expect(question.gate.targetUserId).toBe(f.store.require<P.Bot>('bots', 'bot_1').ownerUserId);
+    expect(f.calls).toHaveLength(0);
+  });
+  test('ownership changes fence old nonce creation, old gates and old exact-content drafts', async () => {
+    const f = fixture();
+    const question = await f.gates.create<P.Question>(actor, 'question', { ...questionInput, clientNonce: nonce });
+    const draft = await createDraft(f.services, actor, { ...common, content, clientNonce: nonce });
+    const bot = f.store.require<P.Bot>('bots', 'bot_1');
+    f.store.put('bots', { ...bot, ownerUserId: 'foreign' });
+    await expect(f.gates.create(actor, 'question', { ...questionInput, clientNonce: nonce })).rejects.toMatchObject({ code: 'forbidden' });
+    await expect(createDraft(f.services, actor, { ...common, content, clientNonce: nonce })).rejects.toMatchObject({ code: 'forbidden' });
+    await expect(f.gates.resolve(actor, 'questions', question.id, { clientNonce: nonce, revision: 1, decision: 'decline' })).rejects.toMatchObject({ code: 'not_found' });
+    await expect(action(f, '/v1/drafts/:id/send', draft.id, { clientNonce: nonce, revision: 1, content })).rejects.toMatchObject({ code: 'not_found' });
+    expect(f.store.require<P.Question>('questions', question.id).gate.state).toBe('pending');
+    expect(f.store.require<P.Draft>('drafts', draft.id).state).toBe('editable');
+    expect(f.sent).toHaveLength(0);
+  });
+  test('mixed-owner rooms cannot lend gate, draft or list authority even through permissive ACLs', async () => {
+    const f = fixture();
+    const question = await f.gates.create<P.Question>(actor, 'question', questionInput);
+    const draft = await createDraft(f.services, actor, { ...common, content });
+    const bot = f.store.require<P.Bot>('bots', 'bot_1');
+    f.store.put('bots', { ...bot, id: 'foreign_bot', ownerUserId: 'foreign' });
+    const room = f.store.require<P.Conversation>('conversations', 'room_1');
+    f.store.put('conversations', { ...room, kind: 'group', botIds: ['bot_1', 'foreign_bot'] });
+    f.services.auth.canRead = () => true;
+    await expect(f.gates.create(actor, 'question', questionInput)).rejects.toMatchObject({ code: 'forbidden' });
+    await expect(createDraft(f.services, actor, { ...common, content })).rejects.toMatchObject({ code: 'forbidden' });
+    await expect(f.gates.resolve(actor, 'questions', question.id, { clientNonce: nonce, revision: 1, decision: 'decline' })).rejects.toMatchObject({ code: 'not_found' });
+    await expect(action(f, '/v1/drafts/:id/send', draft.id, { clientNonce: nonce, revision: 1, content })).rejects.toMatchObject({ code: 'not_found' });
+    for (const path of ['/v1/questions', '/v1/drafts']) {
+      const route = createGateRoutes(f.services).find(route => route.method === 'GET' && route.path === path);
+      if (!route) throw new Error('Missing list route');
+      const context: RequestContext = { request: new Request('https://example.invalid'), params: {}, query: new URLSearchParams(), body: undefined, user: actor, services: f.services, requestId: 'req_1', route, nonceResourceIds: [] };
+      expect(await route.handler(context)).toEqual({ items: [], nextCursor: null });
+    }
+    expect(f.calls).toHaveLength(0);
+    expect(f.sent).toHaveLength(0);
+    expect(f.store.list<P.Conversation>('conversations')).toHaveLength(1);
+  });
+  test('owner approval never sends an editable draft without its own explicit Send', async () => {
+    const f = fixture();
+    f.sender(async () => ({ providerMessageId: 'delivered_1', runId: null }));
+    const approval = await f.gates.create<P.Approval>(actor, 'approval', { ...common, category: 'external_message', title: 'Review action', description: 'Review only', target: 'recipient', inputs: {}, forceHuman: true });
+    const draft = await createDraft(f.services, actor, { ...common, content });
+    const granted = await f.gates.resolve<P.Approval>(actor, 'approvals', approval.id, { clientNonce: nonce, revision: 1, decision: 'approve_once' });
+    expect(granted.gate.state).toBe('approved');
+    expect(granted.gate.resolvedByUserId).toBe(actor.userId);
+    expect(f.store.require<P.Draft>('drafts', draft.id).state).toBe('editable');
+    expect(f.sent).toHaveLength(0);
+    const sent = await action(f, '/v1/drafts/:id/send', draft.id, { clientNonce: nonce, revision: 1, content });
+    expect(sent.state).toBe('sent');
+    expect(f.sent).toHaveLength(1);
+    expect(f.sent[0].content).toEqual(content);
   });
 });
