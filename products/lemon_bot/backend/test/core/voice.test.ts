@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import type * as P from '../../../contracts/protocol';
-import { createVoiceRoutes, createVoiceService } from '../../src/core/voice';
+import { cancelConversationVoice, createVoiceRoutes, createVoiceService } from '../../src/core/voice';
 import { mediaFixture } from './attachments.fixture';
 
 const nonce = 'voice_session_test_01';
@@ -115,6 +115,36 @@ describe('private voice session lifecycle', () => {
       expect(f.store.list<P.VoiceSession>('voiceSessions', session => session.state === 'active')).toHaveLength(1);
       const rejected = results.find(result => result.status === 'rejected');
       expect(rejected?.status === 'rejected' && rejected.reason.code).toBe('conflict');
+    } finally { service.close(); await f.close(); }
+  });
+  test('confirmed room teardown cancels and erases only selected private voice sessions without appending a summary', async () => {
+    const f = await mediaFixture(); const routes = createVoiceRoutes(f.services); const service = createVoiceService(f.services);
+    const start = routes.find(r => r.path === '/v1/voice/sessions')!;
+    try {
+      service.connect(f.user.userId, f.user.deviceId!);
+      const session = start.handler(f.context(start, { clientNonce: nonce, conversationId: f.conversation.id, deviceId: f.user.deviceId })) as P.VoiceSession;
+      const otherBot = { ...f.bot, id: 'bot_other', ownerUserId: f.other.userId }; f.store.put('bots', otherBot);
+      const otherRoom = { ...f.conversation, id: 'room_other', botIds: [otherBot.id], ownerUserId: f.other.userId, humanUserIds: [f.other.userId] }; f.store.put('conversations', otherRoom);
+      service.connect(f.other.userId, f.other.deviceId!);
+      const otherSession = start.handler(f.context(start, { clientNonce: 'voice_other_session_01', conversationId: otherRoom.id, deviceId: f.other.deviceId }, f.other)) as P.VoiceSession;
+      const cancellations: P.VoiceSession[] = [];
+      const unsubscribe = f.services.events.subscribe((event, audience) => {
+        if (event.event === 'voice.upserted' && event.payload.id === session.id) {
+          expect(audience.userIds).toEqual([f.user.userId]);
+          cancellations.push(event.payload);
+        }
+      });
+      f.advance(2500);
+      expect(cancelConversationVoice(f.services, [f.conversation.id])).toBeUndefined();
+      unsubscribe();
+      expect(cancellations).toHaveLength(1); expect(cancellations[0]).toMatchObject({ state: 'failed', durationMs: 2500, endedAtMs: f.services.now() });
+      expect(f.store.get('voiceSessions', session.id)).toBeNull();
+      for (const key of ['voicePrincipal', 'voiceDisconnect', 'voiceSummary']) expect(f.store.metadata(`${key}:${session.id}`)).toBeNull();
+      expect(f.store.require<P.VoiceSession>('voiceSessions', otherSession.id)).toEqual(otherSession);
+      expect(f.store.list<P.TranscriptEntry>('entries', entry => entry.kind === 'voice_call')).toHaveLength(0);
+      f.store.remove('conversations', f.conversation.id); f.advance(61000); service.sweep();
+      expect(f.store.require<P.VoiceSession>('voiceSessions', otherSession.id).state).toBe('active');
+      expect(cancelConversationVoice(f.services, [f.conversation.id])).toBeUndefined();
     } finally { service.close(); await f.close(); }
   });
 });

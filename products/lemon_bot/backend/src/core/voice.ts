@@ -114,6 +114,27 @@ export function createVoiceService(services: BackendServices): VoiceService {
   return service;
 }
 
+/** Server-only conversation lifecycle hook; the caller has confirmed the exact deletion/reset room scope. */
+export function cancelConversationVoice(services: BackendServices, conversationIds: string[]): void {
+  const selected = new Set(conversationIds);
+  if (!selected.size) return;
+  services.store.transaction(() => {
+    for (const session of services.store.list<P.VoiceSession>('voiceSessions', value => selected.has(value.conversationId))) {
+      if (session.state === 'active') {
+        const endedAtMs = services.now();
+        const cancelled = services.update(session, { state: 'failed' as const, endedAtMs, durationMs: Math.max(0, endedAtMs - session.startedAtMs) });
+        services.events.emit('voice.upserted', cancelled, { userIds: [session.userId] });
+      }
+      // The owning conversation lifecycle erases transcript entries; never append a summary into a removed room.
+      services.store.remove('voiceSessions', session.id);
+      services.store.setMetadata(`voicePrincipal:${session.id}`, null);
+      services.store.setMetadata(`voiceDisconnect:${session.id}`, null);
+      services.store.setMetadata(`voiceSummary:${session.id}`, null);
+    }
+  });
+}
+
+
 interface Actions {
   own(user: Principal, sessionId: string): P.VoiceSession;
   finish(session: P.VoiceSession, state: 'ended' | 'failed', user: Principal): P.VoiceSession;
