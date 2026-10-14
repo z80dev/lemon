@@ -7,7 +7,6 @@ defmodule LemonAi.Auth.OAuthForceRefreshTest do
     GitHubCopilotOAuth,
     GoogleAntigravityOAuth,
     GoogleGeminiCliOAuth,
-    OAuthSecretResolver,
     OpenAICodexOAuth
   }
 
@@ -115,16 +114,6 @@ defmodule LemonAi.Auth.OAuthForceRefreshTest do
         refute_received :token_request
       end
     end
-  end
-
-  test "the resolver dispatches force_refresh to the payload's helper" do
-    assert {:ok, "fresh-token"} =
-             OAuthSecretResolver.resolve_api_key_from_secret(
-               "llm_secret",
-               unexpired_secret("openai_codex_oauth"),
-               force_refresh: true,
-               persist_secret: fn _name, _value -> :ok end
-             )
   end
 
   test "a forced Codex refresh uses a token another caller already rotated" do

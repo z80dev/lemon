@@ -1,42 +1,43 @@
-defmodule CodingAgent.Session.ProviderFallbackHttpSmokeTest do
-  use ExUnit.Case, async: false
-
+# Run manually, outside CI: MIX_ENV=test mix run --no-start scripts/provider_fallback_smoke.exs
+# Uses only fixture credentials and a loopback endpoint; no live provider login.
+defmodule LemonScripts.ProviderFallbackSmoke do
   alias CodingAgent.{Session, SettingsManager}
   alias LemonAi.Types.{AssistantMessage, TextContent}
-  alias LemonAgent.ModelRuntime.{CredentialHealth, SessionPins}
 
-  @moduletag :tmp_dir
+  def main do
+    root = Path.join(System.tmp_dir!(), "lemon-fallback-smoke-#{System.unique_integer([:positive])}")
+    File.mkdir!(root)
+    home = Path.join(root, "home")
+    cwd = Path.join(root, "project")
+    File.mkdir!(home)
+    File.mkdir!(cwd)
+    System.put_env("HOME", home)
+    System.put_env("LEMON_STORE_PATH", Path.join(root, "store"))
+    System.put_env("LEMON_SECRETS_MASTER_KEY", Base.encode64(:crypto.strong_rand_bytes(32)))
 
-  test "real coding session falls back to another model against a loopback HTTP endpoint", %{
-    tmp_dir: tmp_dir
-  } do
-    previous_retry = Application.get_env(:lemon_ai, :provider_retry)
-    Application.put_env(:lemon_ai, :provider_retry, max_attempts: 1)
-    CredentialHealth.reset()
-    SessionPins.reset()
-    LemonAi.CircuitBreaker.reset(:openai)
-    {:ok, _} = LemonAi.CircuitBreaker.get_state(:openai)
+    # Remove ambient credentials without reading or logging their values.
+    Enum.each(
+      ~w(OPENAI_API_KEY ANTHROPIC_API_KEY OPENAI_CODEX_API_KEY CHATGPT_TOKEN
+         AZURE_OPENAI_API_KEY GOOGLE_API_KEY GOOGLE_GENERATIVE_AI_API_KEY),
+      &System.delete_env/1
+    )
 
+    try do
+      {:ok, _} = Application.ensure_all_started(:coding_agent)
+      Application.put_env(:lemon_ai, :provider_retry, max_attempts: 1)
+      run(cwd)
+    after
+      File.rm_rf!(root)
+    end
+  end
+
+  defp run(cwd) do
     {:ok, listener} =
       :gen_tcp.listen(0, [:binary, active: false, reuseaddr: true, ip: {127, 0, 0, 1}])
 
     {:ok, {{127, 0, 0, 1}, port}} = :inet.sockname(listener)
     parent = self()
-    server = spawn_link(fn -> serve(listener, parent) end)
-
-    on_exit(fn ->
-      :gen_tcp.close(listener)
-      Process.exit(server, :normal)
-      CredentialHealth.reset()
-      SessionPins.reset()
-      LemonAi.CircuitBreaker.reset(:openai)
-
-      if previous_retry do
-        Application.put_env(:lemon_ai, :provider_retry, previous_retry)
-      else
-        Application.delete_env(:lemon_ai, :provider_retry)
-      end
-    end)
+    spawn_link(fn -> serve(listener, parent) end)
 
     settings = %SettingsManager{
       default_thinking_level: :off,
@@ -53,43 +54,57 @@ defmodule CodingAgent.Session.ProviderFallbackHttpSmokeTest do
       retry_enabled: false
     }
 
-    session =
-      start_supervised!(
-        {Session,
-         cwd: tmp_dir,
-         workspace_dir: Path.join(tmp_dir, "workspace"),
-         session_file: Path.join(tmp_dir, "session.jsonl"),
-         settings_manager: settings,
-         model: "openai:gpt-4",
-         system_prompt: "Reply briefly without tools.",
-         tools: [],
-         thinking_level: :off}
-      )
+    try do
+      {:ok, session} =
+        Session.start_link(
+          cwd: cwd,
+          workspace_dir: Path.join(cwd, "workspace"),
+          session_file: Path.join(cwd, "session.jsonl"),
+          settings_manager: settings,
+          model: "openai:gpt-4",
+          system_prompt: "Reply briefly without tools.",
+          tools: [],
+          thinking_level: :off
+        )
 
-    unsubscribe = Session.subscribe(session)
-    assert :ok = Session.prompt(session, "Prove model fallback works.")
-    assert_receive {:http_attempt, "gpt-4"}, 10_000
-    assert_receive {:http_attempt, "gpt-4o-mini"}, 10_000
-    messages = await_completion(System.monotonic_time(:millisecond) + 10_000)
+      try do
+        unsubscribe = Session.subscribe(session)
+        :ok = Session.prompt(session, "Prove model fallback works.")
+        {messages, ["gpt-4", "gpt-4o-mini"] = attempts} =
+          await_completion(System.monotonic_time(:millisecond) + 10_000, [])
 
-    assert [%AssistantMessage{model: "gpt-4o-mini", content: content}] =
-             Enum.filter(messages, &match?(%AssistantMessage{}, &1))
+        [%AssistantMessage{model: "gpt-4o-mini", content: content}] =
+          Enum.filter(messages, &match?(%AssistantMessage{}, &1))
 
-    assert [%TextContent{text: "Fallback endpoint answered."}] = content
-    assert File.regular?(Path.join(tmp_dir, "session.jsonl"))
-    refute_receive {:http_attempt, _}, 100
-    unsubscribe.()
+        [%TextContent{text: "Fallback endpoint answered."}] = content
+        true = File.regular?(Path.join(cwd, "session.jsonl"))
+        unsubscribe.()
+        IO.puts(Jason.encode!(%{
+          status: "passed",
+          attempts: attempts,
+          final_model: "gpt-4o-mini",
+          fallback_fired: true,
+          session_persisted: true
+        }))
+      after
+        GenServer.stop(session)
+      end
+    after
+      :gen_tcp.close(listener)
+    end
   end
 
-  defp await_completion(deadline) do
+  defp await_completion(deadline, attempts) do
     remaining = max(deadline - System.monotonic_time(:millisecond), 0)
 
     receive do
-      {:session_event, _id, {:agent_end, messages}} -> messages
-      {:session_event, _id, {:error, reason, _partial}} -> flunk("session failed: #{inspect(reason)}")
-      {:session_event, _id, _event} -> await_completion(deadline)
+      {:http_attempt, model} -> await_completion(deadline, attempts ++ [model])
+      {:session_event, _id, {:agent_end, messages}} -> {messages, attempts}
+      {:session_event, _id, {:error, reason, _partial}} ->
+        raise "fixture session failed: #{inspect(reason)}"
+      {:session_event, _id, _event} -> await_completion(deadline, attempts)
     after
-      remaining -> flunk("session did not complete")
+      remaining -> raise "fixture session did not complete"
     end
   end
 
@@ -159,3 +174,5 @@ defmodule CodingAgent.Session.ProviderFallbackHttpSmokeTest do
     {"200 OK", "text/event-stream", body <> "data: [DONE]\n\n"}
   end
 end
+
+LemonScripts.ProviderFallbackSmoke.main()

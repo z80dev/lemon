@@ -55,7 +55,7 @@ keep_recent_tokens = 20000
 
 [runtime.retry]
 # Session-level retry of transient provider failures (429, 5xx, overloaded,
-# network) that happen before any output. Exponential backoff with jitter from
+# network) that happen before any output. Exponential backoff from
 # base_delay_ms; a retry-after hint from the provider replaces the backoff.
 enabled = true
 max_retries = 3
@@ -900,6 +900,12 @@ thinking, or a tool-call event is committed, including whitespace text and
 content carried only by a terminal message. The failure is surfaced with its
 partial output, without executing unfinished tool calls. Caller cancellation
 stays cancellation. This rule also applies to `[runtime.retry]` transient retries.
+
+For a manual source-checkout smoke run without live credentials, run
+`MIX_ENV=test mix run --no-start scripts/provider_fallback_smoke.exs`. It starts
+an isolated native session and loopback fixture endpoint, rejects the primary
+model with HTTP 503, and verifies the configured alternate model answers and
+the session is persisted. The smoke script is not part of the CI test lane.
 
 Google Gemini CLI onboarding (`lemon model --provider gemini`, or
 `./bin/lemon model --provider gemini` from a checkout) resolves OAuth
