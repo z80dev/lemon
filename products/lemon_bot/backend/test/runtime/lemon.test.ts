@@ -67,6 +67,44 @@ describe('long-lived operator connection', () => {
       expect(failure.message).not.toContain('secret');
     } finally { service.close(); }
   });
+  test('preserves only authenticated strict-process capacity evidence without making it retry-safe',async()=>{
+    for(const method of ['node.process.run','node.process.get','node.process.cancel']){
+      for(const reason of ['process_receipt_limit','process_limit','process_busy']){
+        const socket=new Socket();const service=createLemonService(config,{socket:()=>socket});
+        try{
+          service.start();socket.handshake([method]);
+          const result=service.call(method,{nodeId:'node',processId:'fixed_process'},{mutation:method!=='node.process.get',resourceIds:['fixed_operation']}).catch((error:unknown)=>error);
+          socket.deliver({type:'res',id:socket.sent[1]!.id,ok:false,error:{code:'UNAVAILABLE',message:'private argv and stdin',details:{reason,retrySafe:false,mutationMayHaveApplied:false,preDispatch:false,runId:'private response value',argv:['private argv'],stdin:'private stdin',unknown:'private field'}}});
+          const failure=await result;if(!(failure instanceof ApiError))throw new Error('Expected a typed admission rejection.');
+          expect(failure.code).toBe('upstream_unavailable');expect(failure.retrySafe).toBe(false);
+          expect(failure.details).toEqual({resourceIds:['fixed_operation'],reason,mutationMayHaveApplied:false,preDispatch:false});
+          expect(JSON.stringify(failure)).not.toContain('private');expect(socket.sent).toHaveLength(2);
+        }finally{service.close();}
+      }
+    }
+  });
+  test('missing, mistyped, uncertain or unrelated process evidence cannot prove no effect',async()=>{
+    const cases:{method:string;details:Record<string,unknown>;expected:Record<string,unknown>}[]=[
+      {method:'node.process.run',details:{reason:'process_limit',retrySafe:false},expected:{reason:'process_limit'}},
+      {method:'node.process.run',details:{reason:'process_limit',retrySafe:false,mutationMayHaveApplied:'false',preDispatch:'true'},expected:{reason:'process_limit'}},
+      {method:'node.process.run',details:{reason:'process_busy',retrySafe:false,mutationMayHaveApplied:true,preDispatch:false},expected:{reason:'process_busy',mutationMayHaveApplied:true,preDispatch:false}},
+      {method:'node.process.run',details:{reason:'unreviewed_reason',retrySafe:false,mutationMayHaveApplied:false},expected:{mutationMayHaveApplied:false}},
+      {method:'node.fs.write',details:{reason:'process_limit',retrySafe:false,mutationMayHaveApplied:false,preDispatch:true},expected:{}},
+      {method:'node.process.run',details:{retrySafe:false},expected:{}},
+    ];
+    for(const example of cases){
+      const socket=new Socket();const service=createLemonService(config,{socket:()=>socket});
+      try{
+        service.start();socket.handshake([example.method]);
+        // Caller parameters are not evidence of what the authenticated worker actually did.
+        const result=service.call(example.method,{mutationMayHaveApplied:false,preDispatch:true,reason:'process_limit'},{mutation:true,resourceIds:['fixed_operation']}).catch((error:unknown)=>error);
+        socket.deliver({type:'res',id:socket.sent[1]!.id,ok:false,error:{code:'UNAVAILABLE',details:example.details}});
+        const failure=await result;if(!(failure instanceof ApiError))throw new Error('Expected a typed uncertain failure.');
+        expect(failure.code).toBe('outcome_unknown');expect(failure.retrySafe).toBe(false);expect(failure.details).toEqual({resourceIds:['fixed_operation'],...example.expected});
+        expect(socket.sent).toHaveLength(2);
+      }finally{service.close();}
+    }
+  });
   test('off-loopback plaintext controller is rejected before socket construction', () => {
     expect(() => createLemonService({ ...config, controlUrl: 'ws://remote.example/ws' })).toThrow(ApiError);
   });

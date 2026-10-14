@@ -38,12 +38,21 @@ function nativeSocket(url: string): ControlSocket {
   };
 }
 const upstreamCodes: Record<string, ErrorCode> = { INVALID_REQUEST: 'invalid_request', INVALID_PARAMS: 'invalid_request', UNAUTHORIZED: 'upstream_unavailable', FORBIDDEN: 'forbidden', PERMISSION_DENIED: 'forbidden', NOT_FOUND: 'not_found', CONFLICT: 'conflict', RATE_LIMITED: 'rate_limited', METHOD_NOT_FOUND: 'capability_unavailable', NOT_IMPLEMENTED: 'capability_unavailable' };
-function upstreamFailure(code: string, details: Record<string, unknown> | undefined, mutation: boolean, ids: string[]): ApiError {
-  const unknown = details?.retrySafe === false || details?.code === 'SUBMISSION_OUTCOME_UNKNOWN' || mutation && ['INTERNAL_ERROR', 'TIMEOUT'].includes(code);
-  const safeDetails: JSONObject = { resourceIds: ids };
-  if (typeof details?.runId === 'string') safeDetails.runId = details.runId;
-  if (unknown && mutation) return new ApiError('outcome_unknown', 'The runtime may have applied this operation. Reconcile its reserved resources; do not resubmit.', false, safeDetails);
+const processAdmissionReasons = new Set(['process_receipt_limit', 'process_limit', 'process_busy']);
+function upstreamFailure(code: string, details: Record<string, unknown> | undefined, mutation: boolean, ids: string[], method: string): ApiError {
+  const processMethod = method === 'node.process.run' || method === 'node.process.get' || method === 'node.process.cancel';
   const reason = typeof details?.reason === 'string' ? details.reason : '';
+  const processReason = processMethod && processAdmissionReasons.has(reason);
+  const verifiedNoEffect = processReason && details?.mutationMayHaveApplied === false;
+  const unknown = !verifiedNoEffect && (details?.retrySafe === false || details?.code === 'SUBMISSION_OUTCOME_UNKNOWN' || mutation && (details?.mutationMayHaveApplied === true || ['INTERNAL_ERROR', 'TIMEOUT'].includes(code)));
+  const safeDetails: JSONObject = { resourceIds: ids };
+  if (processMethod) {
+    if (processReason) safeDetails.reason = reason;
+    if (typeof details?.mutationMayHaveApplied === 'boolean') safeDetails.mutationMayHaveApplied = details.mutationMayHaveApplied;
+    if (typeof details?.preDispatch === 'boolean') safeDetails.preDispatch = details.preDispatch;
+  } else if (typeof details?.runId === 'string') safeDetails.runId = details.runId;
+  if (unknown && mutation) return new ApiError('outcome_unknown', 'The runtime may have applied this operation. Reconcile its reserved resources; do not resubmit.', false, safeDetails);
+  if (verifiedNoEffect) return new ApiError('upstream_unavailable', 'Destination process admission capacity is unavailable.', false, safeDetails);
   let mapped: ErrorCode;
   if (reason === 'not_found' || reason === 'shell_not_found') mapped = 'not_found';
   else if (reason === 'permission_denied' || reason === 'path_not_allowed') mapped = 'forbidden';
@@ -55,7 +64,7 @@ function upstreamFailure(code: string, details: Record<string, unknown> | undefi
   else if (reason === 'content_too_large' || reason === 'preview_too_large') mapped = 'too_large';
   else mapped = upstreamCodes[code] ?? 'upstream_unavailable';
   // Remote messages/details can contain paths, prompts, credentials or exception terms.
-  return new ApiError(mapped, 'The runtime rejected or could not complete this operation.', mutation ? !unknown : true, safeDetails);
+  return new ApiError(mapped, 'The runtime rejected or could not complete this operation.', details?.retrySafe !== false && (mutation ? !unknown : true), safeDetails);
 }
 
 /** One authenticated connection. Nothing in pending requests is ever resent. */
@@ -65,7 +74,7 @@ export function createLemonService(config: Pick<BackendConfiguration, 'controlUr
   const events = new Set<(event: string, payload: unknown) => void>();
   const connected = new Set<() => void>();
   const disconnected = new Set<() => void>();
-  const pending = new Map<string, { resolve(value: unknown): void; reject(error: ApiError): void; timer: NodeJS.Timeout; mutation: boolean; ids: string[] }>();
+  const pending = new Map<string, { resolve(value: unknown): void; reject(error: ApiError): void; timer: NodeJS.Timeout; mutation: boolean; ids: string[]; method: string }>();
   let socket: ControlSocket | null = null;
   let reconnect: NodeJS.Timeout | undefined;
   let handshake: NodeJS.Timeout | undefined;
@@ -84,7 +93,7 @@ export function createLemonService(config: Pick<BackendConfiguration, 'controlUr
       const wire = JSON.stringify({ type: 'req', id: requestId, method, params });
       if (Buffer.byteLength(wire, 'utf8') > maxPayload) return Promise.reject(new ApiError('too_large', 'The request exceeds the controller’s negotiated payload limit.'));
       const { promise, resolve, reject } = Promise.withResolvers<unknown>();
-      const item = { resolve, reject, mutation: opts.mutation === true, ids: opts.resourceIds ?? [], timer: setTimeout(() => {
+      const item = { resolve, reject, method, mutation: opts.mutation === true, ids: opts.resourceIds ?? [], timer: setTimeout(() => {
         if (!pending.delete(requestId)) return;
         reject(uncertain(item.mutation, item.ids));
       }, opts.timeoutMs ?? options.requestTimeoutMs ?? 40_000) };
@@ -164,7 +173,7 @@ export function createLemonService(config: Pick<BackendConfiguration, 'controlUr
           if (!item) return;
           clearTimeout(item.timer); pending.delete(frame.id);
           if (frame.ok) item.resolve(frame.payload);
-          else item.reject(upstreamFailure(frame.error?.code ?? 'INTERNAL_ERROR', frame.error?.details ?? undefined, item.mutation, item.ids));
+          else item.reject(upstreamFailure(frame.error?.code ?? 'INTERNAL_ERROR', frame.error?.details ?? undefined, item.mutation, item.ids, item.method));
         } else if (service.connected && frame.seq > lastSeq) {
           lastSeq = frame.seq;
           for (const listener of events) listener(frame.event, frame.payload);
