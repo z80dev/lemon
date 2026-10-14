@@ -25,9 +25,10 @@ defmodule LemonSkills.Config do
       ├── some-skill/
       │   └── SKILL.md
 
-  OMP (`~/.omp/agent/skills`) and Claude (`~/.claude/skills`) user bundles are
-  also discovered unless existing directory overrides isolate the runtime.
-  See `global_skills_dirs/0` for explicit compatibility-root overrides.
+  OMP (`~/.omp/agent/skills`), Claude (`~/.claude/skills`) and Codex
+  (`~/.codex/skills`) user bundles are also discovered unless existing
+  directory overrides isolate the runtime. See `global_skills_dirs/0` for
+  explicit compatibility-root overrides.
 
   ### Project Skills
 
@@ -45,12 +46,14 @@ defmodule LemonSkills.Config do
 
   ### Ancestor Discovery
 
-  Skills in `.agents/skills`, `.omp/skills`, and `.claude/skills` directories
-  are discovered automatically from the current working directory up to the
-  git repository root (or filesystem root when not in a git repo).
+  Skills in `.agents/skills`, `.omp/skills`, `.claude/skills`, `.codex/skills`
+  and `.github/skills` directories are discovered automatically from the
+  current working directory up to the git repository root (or filesystem root
+  when not in a git repo).
 
   The cwd's `.lemon/skill` wins, then ancestors are searched closest-first.
-  At each ancestor, `.agents` wins over `.omp`, which wins over `.claude`.
+  At each ancestor, `.agents` wins over `.omp`, then `.claude`, `.codex` and
+  `.github`.
   Ancestor `.lemon/skill` roots are not searched.
 
   ## Overrides
@@ -133,10 +136,12 @@ defmodule LemonSkills.Config do
   2. Harness-compatible skills (`~/.agents/skills`)
   3. OMP skills (`~/.omp/agent/skills`)
   4. Claude skills (`~/.claude/skills`)
+  5. Codex skills (`~/.codex/skills`)
 
-  OMP/Claude defaults are omitted when the agent or harness directory is overridden.
-  Explicit `LEMON_OMP_SKILLS_DIR` / `LEMON_CLAUDE_SKILLS_DIR` (or the corresponding
-  `:omp_global_skills_dir` / `:claude_global_skills_dir` app settings) still apply.
+  OMP/Claude/Codex defaults are omitted when the agent or harness directory is
+  overridden. Explicit `LEMON_OMP_SKILLS_DIR` / `LEMON_CLAUDE_SKILLS_DIR` /
+  `LEMON_CODEX_SKILLS_DIR` (or the corresponding `:omp_global_skills_dir` /
+  `:claude_global_skills_dir` / `:codex_global_skills_dir` app settings) still apply.
   """
   @spec global_skills_dirs() :: [String.t()]
   def global_skills_dirs do
@@ -152,6 +157,11 @@ defmodule LemonSkills.Config do
         "LEMON_CLAUDE_SKILLS_DIR",
         :claude_global_skills_dir,
         ".claude/skills"
+      ),
+      compatible_global_skills_dir(
+        "LEMON_CODEX_SKILLS_DIR",
+        :codex_global_skills_dir,
+        ".codex/skills"
       )
     ]
     |> Enum.reject(&is_nil/1)
@@ -206,12 +216,14 @@ defmodule LemonSkills.Config do
   @doc """
   Get all project skills directories.
 
-  Discovers `.agents/skills`, `.omp/skills`, and `.claude/skills` from cwd up to
+  Discovers `.agents/skills`, `.omp/skills`, `.claude/skills`, `.codex/skills`
+  and `.github/skills` from cwd up to
   the git repo root (or filesystem root when outside a git repository).
 
   Directories are returned in precedence order (first wins on key collisions):
   1. Project `.lemon/skill` (highest precedence)
-  2. At each ancestor, closest first: `.agents/skills`, `.omp/skills`, `.claude/skills`
+  2. At each ancestor, closest first: `.agents/skills`, `.omp/skills`,
+     `.claude/skills`, `.codex/skills`, `.github/skills`
 
   ## Parameters
 
@@ -242,7 +254,10 @@ defmodule LemonSkills.Config do
       cwd
       |> collect_ancestors(git_root)
       |> Enum.flat_map(fn dir ->
-        Enum.map([".agents", ".omp", ".claude"], &Path.join([dir, &1, "skills"]))
+        Enum.map(
+          [".agents", ".omp", ".claude", ".codex", ".github"],
+          &Path.join([dir, &1, "skills"])
+        )
       end)
 
     [project_skills_dir(cwd) | ancestor_dirs]
