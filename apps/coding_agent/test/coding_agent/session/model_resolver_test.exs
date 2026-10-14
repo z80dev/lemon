@@ -3,6 +3,11 @@ Code.require_file(
   __DIR__
 )
 
+Code.require_file(
+  "../../../../../scripts/support/preset_native_scope_probe.exs",
+  __DIR__
+)
+
 defmodule CodingAgent.Session.ModelResolverTest do
   use ExUnit.Case, async: false
 
@@ -48,6 +53,76 @@ defmodule CodingAgent.Session.ModelResolverTest do
     report = LemonScripts.CustomPoolDiscoveryProbe.run!(home)
     assert report.loopback_requests == 5
     assert report.principals == [:a, :b, :c, :missing]
+  end
+
+  test "dynamic preset metadata follows the native endpoint and selected principal" do
+    home =
+      Path.join(
+        System.tmp_dir!(),
+        "preset_native_scope_test_#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(home)
+    on_exit(fn -> File.rm_rf!(home) end)
+
+    report = LemonScripts.PresetNativeScopeProbe.run!(home)
+    assert report.failures == []
+    assert report.loopback_requests == 12
+  end
+
+  test "explicit preset model structs retain caller metadata when the endpoint is overridden" do
+    model = %LemonAi.Types.Model{
+      provider: :ollama,
+      id: "caller-model",
+      api: :openai_completions,
+      base_url: "http://caller.invalid/v1",
+      context_window: 2_048,
+      max_tokens: 512,
+      reasoning: true,
+      input: [:text, :image]
+    }
+
+    settings = %SettingsManager{
+      providers: %{"ollama" => %{base_url: "http://configured.invalid/v1"}}
+    }
+
+    assert ModelResolver.resolve_session_model(model, settings) ==
+             %{model | base_url: "http://configured.invalid/v1"}
+  end
+
+  test "preset aliases synthesize with the effective provider configuration" do
+    settings = %SettingsManager{
+      providers: %{
+        "llama.cpp" => %{
+          base_url: "http://configured.invalid/v1",
+          headers: %{"X-Team" => "configured"}
+        }
+      }
+    }
+
+    for selector <- ["llama.cpp:uncached", "llama_cpp:uncached", "llama-cpp/uncached"] do
+      model = ModelResolver.resolve_session_model(selector, settings)
+
+      assert {model.provider, model.id, model.base_url} ==
+               {:llama_cpp, "uncached", "http://configured.invalid/v1"}
+
+      assert model.context_window == 128_000
+      assert model.input == [:text]
+      refute model.reasoning
+      assert model.headers == %{"x-team" => "configured"}
+    end
+
+    settings = %{
+      settings
+      | default_model: %{
+          provider: :llama_cpp,
+          model_id: "uncached",
+          base_url: "http://default.invalid/v1"
+        }
+    }
+
+    assert ModelResolver.resolve_session_model(nil, settings).base_url ==
+             "http://configured.invalid/v1"
   end
 
   test "in-memory persisted atom providers retain their API when restoring a branch" do

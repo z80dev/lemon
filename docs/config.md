@@ -1032,9 +1032,16 @@ cached for five minutes and an unreachable server contributes no models.
 Discovery caches are scoped to the endpoint, wire API, credential, headers and
 model defaults; one account's listing is not reused for another account or
 endpoint. Cache identifiers hash auth material. Registry-only preset lookup
-uses the current default endpoint and environment credential, while the picker
-uses its effective provider config. Discovery refuses redirects and URLs with
-embedded credentials, queries or fragments; use `headers` for endpoint auth.
+uses the current default endpoint and environment credential. The picker and
+native model selectors (including configured defaults, qualified selectors and
+provider-native colon IDs) instead use the full effective provider settings:
+the same endpoint, headers and first healthy selected-pool/default credential
+as requests. This also applies to dynamic presets with no explicit `models`
+list. Native lookup is cache-only; a scope without discovered metadata uses
+conservative preset context, output and capability defaults rather than another
+endpoint's or principal's cached values. Explicit model structs retain their
+caller-supplied metadata. Discovery refuses redirects and URLs with embedded
+credentials, queries or fragments; use `headers` for endpoint auth.
 
 Any other OpenAI-compatible endpoint can still use the `openai` provider with a
 custom `base_url`. Hosted provider ids with bundled catalogs (`opencode`,

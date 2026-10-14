@@ -232,6 +232,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   tokens before emitting any message, block or nested argument, preventing
   cross-field label leaks and accidental restoration of original token-shaped
   text while retaining the existing system/image/metadata exclusions.
+- Native dynamic-preset resolution binds discovered context, output limits,
+  reasoning and input capabilities to the effective endpoint, headers and
+  selected credential. Default/environment cached metadata no longer bleeds into
+  configured native sessions; qualified defaults, provider-native colon IDs and
+  existing credential fallback semantics remain supported.
+
 - Provider sign-in status and logout distinguish missing credentials from
   encrypted-store, journal and master-key failures. Failed reads refuse the
   command without deleting logins or clearing the selected OAuth authority;
