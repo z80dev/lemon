@@ -251,15 +251,16 @@ defmodule CodingAgent.Session.ModelResolverTest do
   end
 
   test "ordered model fallbacks expand roles, retain same-provider models and dedup pairs" do
-    settings = %SettingsManager{
-      model_roles: %{"smol" => "openai:gpt-4o"},
-      providers: %{"openai" => %{api_key: "fake"}, "azure_openai_responses" => %{api_key: "fake"}},
-      provider_routing: %{
-        enabled: true, require_credentials: true,
-        fallback_models: ["openai:gpt-4", "@smol", "azure_openai_responses:gpt-4o", "openai:gpt-4o"],
-        fallback_providers: ["azure_openai_responses"]
-      }
-    }
+    agent = LemonCore.Config.Agent.resolve(%{
+      "runtime" => %{"provider_routing" => %{
+        "fallback_models" => [" openai:gpt-4 ", "@smol", "azure_openai_responses:gpt-4o", "openai:gpt-4o"],
+        "fallback_providers" => ["azure_openai_responses"]
+      }}
+    })
+    settings = SettingsManager.from_config(%LemonCore.Config{
+      agent: Map.from_struct(agent), model_roles: %{"smol" => "openai:gpt-4o"},
+      providers: %{"openai" => %{api_key: "fake"}, "azure_openai_responses" => %{api_key: "fake"}}
+    })
     primary = LemonAi.Models.get_model(:openai, "gpt-4")
 
     assert Enum.map(ModelResolver.runtime_fallback_models(primary, settings), &{&1.provider, &1.id}) ==

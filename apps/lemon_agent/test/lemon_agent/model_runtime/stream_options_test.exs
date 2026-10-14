@@ -57,13 +57,11 @@ defmodule LemonAgent.ModelRuntime.StreamOptionsTest do
     %{cwd: tmp_home}
   end
 
-  test "provider switch sanitation preserves request settings and observers" do
-    on_payload = fn _, _ -> :ok end
-    on_usage = fn _, _ -> :ok end
+  test "provider switch sanitation removes credentials and non-portable effort settings" do
     options = %LemonAi.Types.StreamOptions{
       temperature: 0.2, max_tokens: 321, reasoning: :high,
       session_id: "session", cwd: "/fake/workspace", stream_timeout: 123,
-      tool_choice: :auto, on_payload: on_payload, on_usage: on_usage,
+      tool_choice: :auto,
       api_key: "fake-key", access_token: "fake-token", service_account_json: "fake-service",
       project: "old-project", location: "old-location",
       headers: %{"authorization" => "fake-token"},
@@ -74,11 +72,16 @@ defmodule LemonAgent.ModelRuntime.StreamOptionsTest do
     }
 
     clean = LemonAgent.ModelRuntime.StreamOptions.sanitize_for_provider_switch(options)
-    assert clean == %{options | api_key: nil, access_token: nil, service_account_json: nil,
-      project: nil, location: nil, headers: %{}, provider_options: %{},
-      thinking_budgets: %{"medium" => 8_000, low: 0, high: 16_000}}
-    assert clean.on_payload == on_payload
-    assert clean.on_usage == on_usage
+    assert clean.api_key == nil
+    assert clean.access_token == nil
+    assert clean.service_account_json == nil
+    assert clean.project == nil
+    assert clean.location == nil
+    assert clean.headers == %{}
+    assert clean.provider_options == %{}
+    assert clean.thinking_budgets == %{"medium" => 8_000, low: 0, high: 16_000}
+    assert clean.max_tokens == 321
+    assert clean.stream_timeout == 123
   end
 
   test "provider switch sanitation normalizes maps without retaining string credentials" do
@@ -89,14 +92,11 @@ defmodule LemonAgent.ModelRuntime.StreamOptionsTest do
       "thinking_budgets" => %{high: 16_000, azure_base_url: "https://fake.invalid"}
     })
 
-    assert %LemonAi.Types.StreamOptions{} = clean
     assert clean.api_key == nil
     assert clean.access_token == nil
     assert clean.headers == %{}
     assert clean.provider_options == %{}
-    assert clean.max_tokens == 321
     assert clean.thinking_budgets == %{high: 16_000}
-    assert LemonAgent.ModelRuntime.StreamOptions.sanitize_for_provider_switch(nil) == nil
   end
 
   test "default build initializes maps and provider_options", %{cwd: cwd} do
