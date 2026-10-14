@@ -89,6 +89,14 @@ test("result paths win over relative arguments; read offsets and file_path reach
 	);
 });
 
+test("an empty todo receipt does not revive the proposed checklist", () => {
+	const card = new ToolCardComponent(
+		block("todo", { action: "write", todos: [{ content: "Abandoned", status: "pending" }] }, { todos: [] }),
+	);
+	expect(JSON.stringify(card.describe())).not.toContain("Abandoned");
+	expect(card.render(120).join("\n")).not.toContain("Abandoned");
+});
+
 test("structured paths with fragment-like names stay literal, with controls rejected", () => {
 	expectTarget(
 		block("edit", { path: "src/name#L42" }, { first_changed_line: 7 }),

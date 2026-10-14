@@ -686,9 +686,56 @@ RPC (`status`, `enter`, `exit`) append branch-aware `"lemon.plan"` journal
 entries, so restart, branch navigation and compaction keep the mode, the current
 plan file and any approved plan. Toggling is refused while a turn runs.
 
+The `todo` tool's list is branch state too. The owning session appends a
+versioned `"lemon.todo"` entry with the complete list on each successful write
+(`CodingAgent.Session.Todos`); a write that cannot be journaled, or that was
+prepared before a branch switch, reports failure. Startup/resume (including
+forked files), rewind, tree navigation and reset all restore plan mode and todos
+through `CodingAgent.Session.BranchState.restore/1`; `Tools.TodoStore` is only an
+ETS projection, not a recovery source. Live and stopped-session progress readers
+materialize the journal rather than treating a missing cache as an empty list.
+Branches saved before the journal
+use their latest successful todo-write result; otherwise they start empty, and
+an unsupported entry version makes reads fail rather than show older state.
+
+The ACP plan projection is refreshed from this same selected-branch list on
+load/resume and branch restoration, including an empty list. Todo read, progress
+and actionable views remain read-only in plan mode; todo writes remain gated.
+Neither a read/progress result nor a global checkpoint is legacy write evidence.
+Unsupported or malformed journal entries can be replaced by a complete new write,
+but are never silently skipped in favor of an older list.
+
+WASM host calls use the same wrapped session tools, including todo's journal
+owner; they execute in supervised, Session-linked workers rather than inside
+the Session's request handler. The host request inherits the invoking task,
+abort signal and absolute invocation deadline (at most 120 seconds for one host
+call). Caller death, timeout, abort, reset and Session shutdown cancel the worker,
+release their monitors/timer and discard late results without clearing the
+invoker-owned signal. A queued todo mutation rechecks ownership and deadline
+before journaling. Tool-error
+results stay errors over the host protocol, including plan/approval refusals;
+host routing never constructs an unwrapped tool or makes ETS authoritative.
+Cancellation is not a rollback of effects already committed before it was
+accepted; reconcile the selected journal before attempting a new write.
+
+Focused regression coverage lives in
+[`session/todo_journal_test.exs`](test/coding_agent/session/todo_journal_test.exs):
+
+| Issue #102 acceptance | Production-path regression |
+| --- | --- |
+| Writes, stable IDs, rewind/navigation, save/restart | Real loop writes followed by both preserved branches and durable process restart |
+| Selected-point fork and privacy | Forked parent/child writes, unchanged cumulative spend, and an empty ordinary subagent |
+| ETS loss without abandoned-branch leakage | Poisoned/cleared cache and supervised ETS-owner restart |
+| Planning and client-visible plan agreement | Approved-plan proposal, rewind/navigation/resume/fork, and complete read/progress/actionable projections |
+| Persistence failure and stale revisions | Failed journal append and prepared writes invalidated by list changes or switch-away-and-back |
+| Spend, policy and external-effect invariants | Charged real loop, current restricted policy on resume, and externally changed file bytes retained through restoration |
+| Legacy and version behavior | Branch-scoped successful-write evidence, ignored read/error results, and fail-closed unknown/malformed entries |
+| WASM host journal ownership and cancellation | Live host read/progress/actionable/write, durable branch restart, approval-wait timeout/abort/disposal, and production sidecar callback ownership/signal propagation without compiling WASM |
+
 In plan mode every tool still appears, but a shared gate blocks execution of
 anything outside `read`, `read_skill`, `recall`, `grep`, `find`, `ls`,
-`websearch`, `webfetch` and `ask` (themselves subject to the session policy).
+`websearch`, `webfetch`, `ask` and todo getter actions (themselves subject to
+the session policy).
 `write`/`edit` are allowed only for Markdown files in the session-private plan
 directory (under native session storage, written locally even for ACP clients);
 plan-only instances are added when the policy removed the file tools. The agent

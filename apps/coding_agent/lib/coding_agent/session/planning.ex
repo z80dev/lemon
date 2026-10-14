@@ -166,23 +166,14 @@ defmodule CodingAgent.Session.Planning do
     {:ok, status(session), session}
   end
 
-  defp stored(%{by_id: entries, leaf_id: leaf}), do: stored_entry(entries, leaf)
-  defp stored(_), do: empty()
-
-  defp stored_entry(_entries, nil), do: empty()
-
-  defp stored_entry(entries, id) do
-    case Map.get(entries, id) do
-      %SessionEntry{type: :custom, custom_type: @entry_type, data: data} when is_map(data) ->
-        normalize(data)
-
-      %SessionEntry{parent_id: parent} ->
-        stored_entry(entries, parent)
-
-      _ ->
-        empty()
+  defp stored(%SessionManager.Session{} = session) do
+    case SessionManager.latest_custom_entry(session, @entry_type) do
+      %SessionEntry{data: data} when is_map(data) -> normalize(data)
+      _ -> empty()
     end
   end
+
+  defp stored(_), do: empty()
 
   defp normalize(data) do
     %{
@@ -379,6 +370,9 @@ defmodule CodingAgent.Session.Planning do
         not planning?(context.gate) ->
           execute.(id, params, signal, on_update)
 
+        todo_read?(name, params) ->
+          execute.(id, params, signal, on_update)
+
         name in @plan_write_tools ->
           context.plan_write_tools[name].execute.(id, params, signal, on_update)
 
@@ -389,6 +383,12 @@ defmodule CodingAgent.Session.Planning do
 
     %{tool | execute: wrapped}
   end
+
+  defp todo_read?("todo", %{"action" => action}),
+    do: action in ["read", "progress", "actionable"]
+
+  defp todo_read?("todoread", _params), do: true
+  defp todo_read?(_name, _params), do: false
 
   defp plan_only_tool(name, context) do
     tool =

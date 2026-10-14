@@ -4,7 +4,10 @@ defmodule CodingAgent.Checkpoint do
 
   Generic checkpoint storage and filesystem rollback live in `LemonCore.Checkpoint`.
   This module adds coding-agent todo and requirement state for resume flows while
-  preserving the existing public API.
+  preserving the existing public API. `resume/1` returns the checkpointed todos
+  as data only: a session's todo list is derived from its selected branch
+  journal (`CodingAgent.Session.Todos`), so a session-global checkpoint is never
+  copied onto a branch.
   """
 
   alias LemonCore.Checkpoint, as: CoreCheckpoint
@@ -44,8 +47,6 @@ defmodule CodingAgent.Checkpoint do
   @spec resume(String.t()) :: {:ok, map()} | {:error, term()}
   def resume(checkpoint_id) when is_binary(checkpoint_id) do
     with {:ok, checkpoint} <- CoreCheckpoint.load(checkpoint_id) do
-      CodingAgent.Tools.TodoStore.put(checkpoint.session_id, checkpoint.todos)
-
       {:ok,
        %{
          session_id: checkpoint.session_id,

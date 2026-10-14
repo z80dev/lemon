@@ -49,6 +49,13 @@ end
 # Ensure agent directories exist under the isolated HOME
 CodingAgent.Config.ensure_dirs!()
 
+# Ordinary session fixtures mock the agent stream, not project-fact extraction.
+# Keep their completed turns/compactions from starting unrelated provider jobs.
+# Memory tests opt in through their project config and control extraction themselves.
+config_path = LemonCore.Config.Modular.global_path()
+File.mkdir_p!(Path.dirname(config_path))
+File.write!(config_path, "[features]\nsession_search = \"off\"\n")
+
 # Skills are now managed by lemon_skills (registry + installer).
 Application.ensure_all_started(:lemon_skills)
 

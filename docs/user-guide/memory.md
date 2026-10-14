@@ -125,7 +125,7 @@ role, with that provider's credentials; it does not switch the active session mo
 | Save repository build commands, conventions or gotchas | `remember` target `project` | Isolated compact facts, automatically available in later sessions in the same repository/profile |
 | Find relevant previous conversations and longer workspace notes | `recall` | Searches past conversation summaries and `memory/` Markdown notes |
 | Capture a repeatable procedure, command sequence, integration, or checklist | `skill_manage` | Creates or updates an audited reusable skill |
-| Track the current run's work queue | `todo` | Keeps transient progress for this session only |
+| Track the current run's work queue | `todo` | Keeps progress in this session's history only; it follows rewind, branch switches, resume and forks, and never leaves the session |
 | Inspect user-editable notes directly | `read` / `grep` | Opens files when direct inspection or editing is needed |
 
 Use `remember` for concise facts, `recall` for finding prior work, `skill_manage` for repeatable

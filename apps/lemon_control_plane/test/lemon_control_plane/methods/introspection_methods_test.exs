@@ -12,6 +12,7 @@ defmodule LemonControlPlane.Methods.IntrospectionMethodsTest do
 
   alias LemonControlPlane.Protocol.Frames
   alias LemonCore.SessionKey
+  alias LemonAi.Types.{Model, ModelCost}
 
   defmodule RouterBridgeStub do
     use LemonCore.RouterBridge.Router
@@ -165,13 +166,35 @@ defmodule LemonControlPlane.Methods.IntrospectionMethodsTest do
         agent_id: agent_id
       )
 
-    CodingAgent.Tools.TodoStore.put(session_key, [
-      %{
-        "id" => "todo-introspection-1",
-        "content" => "verify harness projection",
-        "status" => "pending"
-      }
-    ])
+    assert {:ok, native} =
+             CodingAgent.ControlPlaneProvider.session_create(session_key, requirements_cwd)
+
+    native_path =
+      CodingAgent.SessionManager.session_file_path(requirements_cwd, native["sessionId"])
+
+    session =
+      start_supervised!(
+        {CodingAgent.Session,
+         cwd: requirements_cwd,
+         workspace_dir: Path.join(requirements_cwd, "workspace"),
+         session_file: native_path,
+         session_key: session_key,
+         model: fixture_model(),
+         tools: []}
+      )
+
+    assert %LemonAgent.Types.AgentToolResult{} =
+             CodingAgent.Tools.TodoWrite.execute(
+               "todo",
+               %{
+                 "todos" => [
+                   %{"id" => "todo-introspection-1", "content" => "verify harness projection"}
+                 ]
+               },
+               nil,
+               nil,
+               session
+             )
 
     {:ok, checkpoint} =
       CodingAgent.Checkpoint.create(session_key,
@@ -185,7 +208,10 @@ defmodule LemonControlPlane.Methods.IntrospectionMethodsTest do
       restore_router_bridge(old_router_bridge)
       restore_session_coordinator(old_session_coordinator)
       LemonCore.Store.delete(:runs, run_id)
-      CodingAgent.Tools.TodoStore.delete(session_key)
+      CodingAgent.Tools.TodoStore.delete(native["sessionId"])
+      LemonCore.ChatStateStore.delete(session_key)
+      LemonCore.RunStore.delete_session(session_key)
+      File.rm_rf!(CodingAgent.Config.sessions_dir(requirements_cwd))
       CodingAgent.Checkpoint.delete(checkpoint.id)
       File.rm_rf(requirements_cwd)
     end)
@@ -197,6 +223,21 @@ defmodule LemonControlPlane.Methods.IntrospectionMethodsTest do
        run_id: run_id,
        requirements_cwd: requirements_cwd
      }}
+  end
+
+  defp fixture_model do
+    %Model{
+      id: "introspection-projection",
+      name: "Introspection projection",
+      api: :mock,
+      provider: :mock_provider,
+      base_url: "https://example.invalid",
+      reasoning: false,
+      input: [:text],
+      cost: %ModelCost{},
+      context_window: 128_000,
+      max_tokens: 4_096
+    }
   end
 
   describe "sessions.active.list" do

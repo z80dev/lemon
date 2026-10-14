@@ -562,7 +562,7 @@ defmodule CodingAgent.Session.Lifecycle do
 
         state =
           State.reset_runtime(state, new_session_manager, System.system_time(:millisecond))
-          |> CodingAgent.Session.Planning.refresh()
+          |> CodingAgent.Session.BranchState.restore()
 
         {:ok, state}
 

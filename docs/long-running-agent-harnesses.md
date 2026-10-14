@@ -15,11 +15,15 @@ Long-running implementation tasks can drift when the agent has no durable task m
 - `CodingAgent.Tools.FeatureRequirements`
   - Generate/save/load/update feature requirement files
   - Compute requirement progress and next actionable features
+- `CodingAgent.Session.Todos`
+  - Branch-scoped todo journal: each successful `todo` write appends the complete
+    list to the session history, so rewind, navigation, resume and forks agree
 - `CodingAgent.Tools.TodoStore`
-  - Session-scoped todo storage with dependency + priority semantics
-  - Progress stats and actionable todo filtering
+  - ETS projection of each session's selected-branch list for out-of-session readers
+  - Progress stats and actionable todo filtering with dependency + priority semantics
 - `CodingAgent.Checkpoint`
   - Create/list/resume/delete checkpoint files under `System.tmp_dir()/lemon_checkpoints`
+  - Resume returns checkpointed todos as data; it does not replace a session's list
   - Store filesystem snapshots for file-tool rollback
   - Preview diff and restore all or selected paths from filesystem checkpoints
 - `CodingAgent.BackgroundRun`
@@ -56,5 +60,6 @@ paths, or credential-bearing details.
 ```bash
 mix test apps/coding_agent/test/coding_agent/tools/feature_requirements_test.exs \
   apps/coding_agent/test/coding_agent/tools/todo_store_test.exs \
+  apps/coding_agent/test/coding_agent/session/todos_test.exs \
   apps/coding_agent/test/coding_agent/checkpoint_test.exs
 ```

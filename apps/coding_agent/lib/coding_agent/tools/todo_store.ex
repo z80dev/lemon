@@ -1,36 +1,22 @@
 defmodule CodingAgent.Tools.TodoStore do
   @moduledoc """
-  ETS-based storage for todo items per session with dependency tracking.
+  ETS projection of each session's selected-branch todo list, plus pure list
+  views (progress, actionable, plan projection).
 
-  This module provides a key-value store for todo lists with enhanced features:
-  - Dependency tracking between todos
-  - Progress statistics
-  - Priority levels
-  - Status tracking (pending, in_progress, completed, blocked)
+  The authoritative list is journaled in the session history and materialized
+  by `CodingAgent.Session.Todos`; the owning session rewrites this projection
+  on every todo read, write and branch selection. It serves out-of-session
+  readers (progress snapshots, control-plane summaries, checkpoint creation).
+  Session reads never consult it, so clearing it or restarting its owner loses
+  nothing, and `put/2` cannot change what a session or its tools read.
 
   ## Usage
 
-      # Get todos for a session
       todos = CodingAgent.Tools.TodoStore.get("session-123")
+      stats = CodingAgent.Tools.TodoStore.progress(todos)
+      next = CodingAgent.Tools.TodoStore.actionable(todos)
 
-      # Update todos for a session
-      CodingAgent.Tools.TodoStore.put("session-123", [%{id: "1", content: "Task"}])
-
-      # Get actionable todos (dependencies met)
-      actionable = CodingAgent.Tools.TodoStore.get_actionable("session-123")
-
-      # Get progress statistics
-      stats = CodingAgent.Tools.TodoStore.get_progress("session-123")
-
-  ## Storage
-
-  Uses an ETS table `:coding_agent_todos` with `read_concurrency: true`
-  for efficient concurrent access.
-
-  The model-facing tools retain this session-scoped store and checkpoint
-  persistence. `put/2` is the low-level API and preserves its supplied entries;
-  model writes validate and assign IDs in `TodoWrite` before storing.
-  `result_details/1` projects a complete snapshot to string-keyed `todos` and an
+  `result_details/1` projects a complete list to string-keyed `todos` and an
   ordered `plan.entries` list of atom-keyed maps with string content/status/priority.
   The plan supports pending, in_progress and completed; an internally blocked
   todo remains blocked in `todos` but projects as pending in the plan.
@@ -175,23 +161,18 @@ defmodule CodingAgent.Tools.TodoStore do
   end
 
   @doc """
-  Get actionable todos - those whose dependencies are all completed.
-
-  Returns todos that are:
-  - Status is :pending or :in_progress
-  - All dependencies have status :completed
-
-  Results are sorted by priority (high -> medium -> low).
-
-  ## Examples
-
-      iex> TodoStore.get_actionable("session-123")
-      [%{id: "2", content: "Next task", status: :pending, priority: :high}]
+  Actionable todos from the session's projected list. See `actionable/1`.
   """
   @spec get_actionable(String.t()) :: [todo_item()]
-  def get_actionable(session_id) when is_binary(session_id) do
-    todos = get(session_id)
+  def get_actionable(session_id) when is_binary(session_id),
+    do: session_id |> get() |> actionable()
 
+  @doc """
+  Actionable todos - pending or in-progress todos whose dependencies are all
+  completed - sorted by priority (high -> medium -> low).
+  """
+  @spec actionable(list(map())) :: [todo_item()]
+  def actionable(todos) when is_list(todos) do
     completed_ids =
       todos
       |> Enum.filter(&(todo_status(&1) == :completed))
@@ -208,25 +189,22 @@ defmodule CodingAgent.Tools.TodoStore do
   end
 
   @doc """
-  Get progress statistics for todos in a session.
+  Progress statistics for the session's projected list. See `progress/1`.
+  """
+  @spec get_progress(String.t()) :: progress_stats()
+  def get_progress(session_id) when is_binary(session_id),
+    do: session_id |> get() |> progress()
 
-  Returns a map with counts and percentage completion.
+  @doc """
+  Status counts and completion percentage for a todo list.
 
   ## Examples
 
-      iex> TodoStore.get_progress("session-123")
-      %{
-        total: 10,
-        completed: 5,
-        in_progress: 2,
-        blocked: 1,
-        pending: 2,
-        percentage: 50
-      }
+      iex> TodoStore.progress([%{"status" => "completed"}, %{"status" => "pending"}])
+      %{total: 2, completed: 1, in_progress: 0, blocked: 0, pending: 1, percentage: 50}
   """
-  @spec get_progress(String.t()) :: progress_stats()
-  def get_progress(session_id) when is_binary(session_id) do
-    todos = get(session_id)
+  @spec progress(list(map())) :: progress_stats()
+  def progress(todos) when is_list(todos) do
     total = length(todos)
 
     completed = Enum.count(todos, &(todo_status(&1) == :completed))
@@ -244,54 +222,6 @@ defmodule CodingAgent.Tools.TodoStore do
       pending: pending,
       percentage: percentage
     }
-  end
-
-  @doc """
-  Update the status of a specific todo item.
-
-  Automatically sets updated_at timestamp and completed_at when appropriate.
-
-  ## Examples
-
-      iex> TodoStore.update_status("session-123", "todo-1", :completed)
-      :ok
-  """
-  @spec update_status(String.t(), String.t(), todo_status()) :: :ok
-  def update_status(session_id, todo_id, status)
-      when is_binary(session_id) and is_binary(todo_id) do
-    todos = get(session_id)
-    now = DateTime.utc_now() |> DateTime.to_iso8601()
-
-    updated_todos =
-      Enum.map(todos, fn todo ->
-        if todo_id(todo) == todo_id do
-          completed_at = if status == :completed, do: now, else: todo_completed_at(todo)
-
-          todo
-          |> put_todo_value(:status, status, Atom.to_string(status))
-          |> put_todo_value(:updated_at, now, now)
-          |> put_todo_value(:completed_at, completed_at, completed_at)
-        else
-          todo
-        end
-      end)
-
-    put(session_id, updated_todos)
-  end
-
-  @doc """
-  Mark a todo as completed.
-
-  Convenience function that wraps update_status/3.
-
-  ## Examples
-
-      iex> TodoStore.complete("session-123", "todo-1")
-      :ok
-  """
-  @spec complete(String.t(), String.t()) :: :ok
-  def complete(session_id, todo_id) when is_binary(session_id) and is_binary(todo_id) do
-    update_status(session_id, todo_id, :completed)
   end
 
   @doc """
@@ -373,18 +303,6 @@ defmodule CodingAgent.Tools.TodoStore do
       "blocked" -> :blocked
       _ -> :pending
     end
-  end
-
-  defp todo_completed_at(todo), do: Map.get(todo, :completed_at) || Map.get(todo, "completed_at")
-
-  defp put_todo_value(todo, atom_key, atom_value, string_value) do
-    todo
-    |> maybe_put(atom_key, atom_value)
-    |> maybe_put(Atom.to_string(atom_key), string_value)
-  end
-
-  defp maybe_put(todo, key, value) do
-    if Map.has_key?(todo, key), do: Map.put(todo, key, value), else: todo
   end
 
   defp ensure_table do
