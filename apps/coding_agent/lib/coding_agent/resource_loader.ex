@@ -4,16 +4,32 @@ defmodule CodingAgent.ResourceLoader do
 
   Resources are loaded from:
   - Project directory (cwd) and parent directories up to root
-  - Home directory (`~/.claude/`, `~/.lemon/`)
+  - Home directory (`~/.claude/`, `~/.lemon/`, and other agent tools' homes)
   - Extension paths
 
   ## Instruction Files
 
-  Instruction files (CLAUDE.md, AGENTS.md) provide context and guidelines
-  for the coding agent. Global instructions are rendered first, followed by
-  ancestors from filesystem root to cwd. Directory instructions apply to that
-  directory's subtree; more specific instructions override broader ones.
-  Each physical file is loaded once, including symlink or hard-link aliases.
+  Instruction files provide context and guidelines for the coding agent.
+  Each directory from the filesystem root to cwd contributes, in order:
+
+  - root files `CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, `CLAUDE.local.md`
+  - `.claude/{CLAUDE,AGENTS}.md`, `.lemon/{CLAUDE,AGENTS}.md`,
+    `.gemini/GEMINI.md`, `.agents/AGENTS.md`, `.agent/AGENTS.md`,
+    `.omp/AGENTS.md` and `.github/copilot-instructions.md`
+
+  Global files come first: `~/.claude/{CLAUDE,AGENTS}.md`,
+  `~/.gemini/GEMINI.md`, `~/.codex/AGENTS.md`,
+  `~/.config/opencode/AGENTS.md`, `~/.agents/AGENTS.md`, `~/.agent/AGENTS.md`,
+  `$COPILOT_HOME/copilot-instructions.md` (default `~/.copilot`),
+  `~/.lemon/{CLAUDE,AGENTS}.md` and the agent directory's `{CLAUDE,AGENTS}.md`.
+  The home directory comes from `CodingAgent.Config.home_dir/0`.
+
+  Global instructions are rendered first, followed by ancestors from
+  filesystem root to cwd. Directory instructions apply to that directory's
+  subtree (a config subdirectory such as `.github/` scopes to its parent);
+  more specific instructions override broader ones. Each physical file is
+  loaded once, including symlink or hard-link aliases. `@path` imports are
+  expanded by `CodingAgent.ResourceLoader.AtImports`.
 
   ## Resource Priorities
 
@@ -32,24 +48,36 @@ defmodule CodingAgent.ResourceLoader do
   """
 
   alias CodingAgent.Config
+  alias CodingAgent.ResourceLoader.AtImports
   alias LemonSkills.Config, as: SkillConfig
 
-  # Standard instruction file names
-  @instruction_files ["CLAUDE.md", "AGENTS.md"]
+  # Instruction file names read from each directory itself
+  @root_instruction_files ["CLAUDE.md", "AGENTS.md", "GEMINI.md", "CLAUDE.local.md"]
 
-  # Subdirectories to check within each directory
-  @config_subdirs [".claude", ".lemon"]
+  # Instruction files read from config subdirectories of each directory. An
+  # explicit map: each tool's directory only holds its own file names.
+  @subdir_instruction_files [
+    {".claude", ["CLAUDE.md", "AGENTS.md"]},
+    {".lemon", ["CLAUDE.md", "AGENTS.md"]},
+    {".gemini", ["GEMINI.md"]},
+    {".agents", ["AGENTS.md"]},
+    {".agent", ["AGENTS.md"]},
+    {".omp", ["AGENTS.md"]},
+    {".github", ["copilot-instructions.md"]}
+  ]
+
+  @config_subdirs Enum.map(@subdir_instruction_files, &elem(&1, 0))
 
   # ============================================================================
   # Instruction Loading
   # ============================================================================
 
   @doc """
-  Load CLAUDE.md and similar instruction files.
+  Load CLAUDE.md, AGENTS.md and the other instruction files.
 
-  Searches global home locations (`~/.claude/`, `~/.lemon/`,
-  `~/.lemon/agent/`) first, then ancestors from filesystem root to cwd.
-  Each ancestor includes its root and `.claude/` and `.lemon/` instruction files.
+  Searches global home locations first, then ancestors from filesystem root
+  to cwd. Each ancestor includes its root instruction files and those in its
+  config subdirectories (see the module documentation).
 
   Files are combined from general to specific, with source and scope headers
   and an explicit scoped-precedence rule. Duplicate physical files appear once.
@@ -108,7 +136,8 @@ defmodule CodingAgent.ResourceLoader do
   ## Returns
 
   A list of maps with `:path` and `:content` keys, in the same global-first,
-  ancestor-root-to-cwd order as `load_instructions/1`, deduplicated by file identity.
+  ancestor-root-to-cwd order as `load_instructions/1`, deduplicated by file
+  identity. Content has `@path` imports expanded.
 
   ## Examples
 
@@ -117,12 +146,30 @@ defmodule CodingAgent.ResourceLoader do
   """
   @spec load_instructions_list(String.t()) :: [%{path: String.t(), content: String.t()}]
   def load_instructions_list(cwd) do
+    home = Config.home_dir()
+
     cwd
     |> find_instruction_files()
     |> Enum.map(fn path ->
-      %{path: path, content: read_file_safe(path)}
+      %{path: path, content: read_instruction_file(path, home)}
     end)
     |> Enum.reject(fn %{content: content} -> content == "" end)
+  end
+
+  @doc """
+  Whether `path` (absolute or relative) names an instruction file this loader
+  reads from a directory: a root instruction file name, or a file name inside
+  its matching config subdirectory (for example `.github/copilot-instructions.md`).
+  Used to index descendant guides that are not loaded into the prompt.
+  """
+  @spec instruction_guide?(String.t()) :: boolean()
+  def instruction_guide?(path) do
+    name = Path.basename(path)
+
+    name in @root_instruction_files or
+      Enum.any?(@subdir_instruction_files, fn {subdir, names} ->
+        name in names and Path.basename(Path.dirname(path)) == subdir
+      end)
   end
 
   # ============================================================================
@@ -411,17 +458,43 @@ defmodule CodingAgent.ResourceLoader do
   # Find all instruction files for a cwd
   @spec find_instruction_files(String.t()) :: [String.t()]
   defp find_instruction_files(cwd) do
-    find_specific_files(cwd, @instruction_files)
+    find_files(cwd, @root_instruction_files, nil)
   end
 
-  # Find specific files in all search locations
+  # Find specific file names in all search locations
   @spec find_specific_files(String.t(), [String.t()]) :: [String.t()]
   defp find_specific_files(cwd, filenames) do
-    local_files = find_in_directory_tree(cwd, filenames)
-    home_files = find_in_home_directories(filenames)
+    find_files(cwd, filenames, filenames)
+  end
 
-    {files, _seen} = deduplicate_files(home_files ++ local_files)
+  # Global sources first, then each ancestor from root to cwd: its root files,
+  # then its config subdirectories. `only` (when given) restricts the config
+  # subdirectory and global candidates to those file names.
+  defp find_files(cwd, root_names, only) do
+    global = candidate_paths(global_instruction_sources(Config.home_dir()), only)
+
+    local =
+      cwd
+      |> Path.expand()
+      |> walk_to_root()
+      |> Enum.reverse()
+      |> Enum.flat_map(fn dir ->
+        subdirs =
+          Enum.map(@subdir_instruction_files, fn {subdir, names} ->
+            {Path.join(dir, subdir), names}
+          end)
+
+        Enum.map(root_names, &Path.join(dir, &1)) ++ candidate_paths(subdirs, only)
+      end)
+
+    {files, _seen} = deduplicate_files(Enum.filter(global ++ local, &File.regular?/1))
     files
+  end
+
+  defp candidate_paths(sources, only) do
+    for {dir, names} <- sources, name <- names, only == nil or name in only do
+      Path.join(dir, name)
+    end
   end
 
   # Keep the most specific spelling of a physical file, not an earlier global
@@ -439,60 +512,31 @@ defmodule CodingAgent.ResourceLoader do
     end
   end
 
-  # Find files in directory tree from root to cwd
-  @spec find_in_directory_tree(String.t(), [String.t()]) :: [String.t()]
-  defp find_in_directory_tree(cwd, filenames) do
-    cwd
-    |> Path.expand()
-    |> walk_to_root()
-    |> Enum.reverse()
-    |> Enum.flat_map(fn dir ->
-      find_in_directory(dir, filenames)
-    end)
-  end
-
-  # Find files in a single directory (including subdirs)
-  @spec find_in_directory(String.t(), [String.t()]) :: [String.t()]
-  defp find_in_directory(dir, filenames) do
-    # Check root of directory
-    root_files =
-      filenames
-      |> Enum.map(&Path.join(dir, &1))
-      |> Enum.filter(&File.regular?/1)
-
-    # Check subdirectories
-    subdir_files =
-      @config_subdirs
-      |> Enum.flat_map(fn subdir ->
-        subdir_path = Path.join(dir, subdir)
-
-        filenames
-        |> Enum.map(&Path.join(subdir_path, &1))
-        |> Enum.filter(&File.regular?/1)
-      end)
-
-    root_files ++ subdir_files
-  end
-
-  # Find files in home directory locations
-  @spec find_in_home_directories([String.t()]) :: [String.t()]
-  defp find_in_home_directories(filenames) do
-    global_instruction_dirs()
-    |> Enum.flat_map(fn dir ->
-      filenames
-      |> Enum.map(&Path.join(dir, &1))
-      |> Enum.filter(&File.regular?/1)
-    end)
-  end
-
-  defp global_instruction_dirs do
-    home = System.user_home!()
-
+  # Global instruction files, broad external tools first and Lemon's own last.
+  defp global_instruction_sources(home) do
     [
-      Path.join(home, ".claude"),
-      Path.join(home, ".lemon"),
-      Path.expand(Config.agent_dir())
+      {Path.join(home, ".claude"), ["CLAUDE.md", "AGENTS.md"]},
+      {Path.join(home, ".gemini"), ["GEMINI.md"]},
+      {Path.join(home, ".codex"), ["AGENTS.md"]},
+      {Path.join([home, ".config", "opencode"]), ["AGENTS.md"]},
+      {Path.join(home, ".agents"), ["AGENTS.md"]},
+      {Path.join(home, ".agent"), ["AGENTS.md"]},
+      {copilot_home(home), ["copilot-instructions.md"]},
+      {Path.join(home, ".lemon"), ["CLAUDE.md", "AGENTS.md"]},
+      {Path.expand(Config.agent_dir()), ["CLAUDE.md", "AGENTS.md"]}
     ]
+  end
+
+  # GitHub Copilot CLI relocates its user config with COPILOT_HOME.
+  defp copilot_home(home) do
+    case String.trim(System.get_env("COPILOT_HOME") || "") do
+      "" -> Path.join(home, ".copilot")
+      dir -> Path.expand(dir)
+    end
+  end
+
+  defp global_instruction_dirs(home) do
+    home |> global_instruction_sources() |> Enum.map(&elem(&1, 0))
   end
 
   defp file_identity(path) do
@@ -537,11 +581,12 @@ defmodule CodingAgent.ResourceLoader do
   # Load files and split them into the header plus one labelled section per
   # file; joining the texts with blank lines gives the combined instructions.
   defp combined_sections(paths, cwd) do
-    global_dirs = global_instruction_dirs()
+    home = Config.home_dir()
+    global_dirs = global_instruction_dirs(home)
 
     files =
       Enum.flat_map(paths, fn path ->
-        case read_file_safe(path) do
+        case read_instruction_file(path, home) do
           "" ->
             []
 
@@ -594,6 +639,14 @@ defmodule CodingAgent.ResourceLoader do
   defp read_file_safe(path) do
     case File.read(path) do
       {:ok, content} -> String.trim(content)
+      {:error, _} -> ""
+    end
+  end
+
+  # Read an instruction file with its `@path` imports expanded.
+  defp read_instruction_file(path, home) do
+    case File.read(path) do
+      {:ok, content} -> content |> AtImports.expand(path, home: home) |> String.trim()
       {:error, _} -> ""
     end
   end
