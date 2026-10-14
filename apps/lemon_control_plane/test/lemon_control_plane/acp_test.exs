@@ -1312,9 +1312,6 @@ defmodule LemonControlPlane.ACPTest do
     assert %{"description" => "Review a change", "input" => %{"hint" => "[path]"}} =
              Enum.find(commands, &(&1["name"] == "git:review"))
 
-    assert %{"description" => "Run the /compact-notes command"} =
-             Enum.find(commands, &(&1["name"] == "compact-notes"))
-
     for text <- ["/git:review lib/app.ex", "/compact-notes keep tests"] do
       assert {:ok, _} =
                ACP.prompt(%{

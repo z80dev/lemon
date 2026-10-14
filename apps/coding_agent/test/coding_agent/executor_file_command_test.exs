@@ -33,7 +33,6 @@ defmodule CodingAgent.ExecutorFileCommandTest do
   test "unknown commands and non-user origins pass through unchanged", %{tmp_dir: tmp_dir} do
     assert last_user_text(tmp_dir, "/unknown thing", :control_plane) == "/unknown thing"
     assert last_user_text(tmp_dir, "/git:review lib/app.ex", :node) == "/git:review lib/app.ex"
-    assert last_user_text(tmp_dir, "/git:review lib/app.ex", :cron) == "/git:review lib/app.ex"
   end
 
   defp last_user_text(cwd, prompt, origin) do

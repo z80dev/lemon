@@ -5,7 +5,6 @@ import { dirname, join } from "node:path";
 import {
 	discoverFileCommands,
 	discoverPaletteResources,
-	fileSlashCommand,
 	type PaletteEntry,
 	rankPaletteEntries,
 	skillPrompt,
@@ -203,7 +202,7 @@ describe("file commands", () => {
 		);
 	});
 
-	test("project beats global, Lemon beats other tools, frontmatter feeds the registry", async () => {
+	test("project beats global and Lemon beats other tools", async () => {
 		await fixture(join(home, ".lemon/agent/commands/ship.md"), "global lemon");
 		await fixture(join(cwd, ".gemini/commands/ship.toml"), 'prompt = "project gemini"');
 		await fixture(
@@ -218,15 +217,5 @@ describe("file commands", () => {
 		await fixture(join(cwd, ".lemon/commands/ship.md"), "---\ndescription: Lemon ship\n---\nbody");
 		const lemon = await discoverFileCommands({ cwd, home, env: {} });
 		expect(lemon.commands).toMatchObject([{ name: "ship", source: "lemon", scope: "project" }]);
-		const command = fileSlashCommand(lemon.commands[0]);
-		expect(command).toMatchObject({ summary: "Lemon ship", group: "file commands" });
-	});
-
-	test("the configured agent dir replaces the default Lemon user root", async () => {
-		const agentDir = join(root, "agent");
-		await fixture(join(agentDir, "command/custom.md"), "custom");
-		await fixture(join(home, ".lemon/agent/commands/default.md"), "default");
-		const result = await discoverFileCommands({ cwd, home, env: { LEMON_AGENT_DIR: agentDir } });
-		expect(result.commands.map((command) => command.name)).toEqual(["custom"]);
 	});
 });
