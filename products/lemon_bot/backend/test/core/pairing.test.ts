@@ -366,7 +366,7 @@ describe('owner phone pairing', () => {
   test('paired bearer device registration cannot rebind the persistent session to a different installation', async () => {
     const f = await fixture(); const prepared = await prepare(f); const connected = await connect(f, prepared);
     const registration: P.DeviceRegister = { clientNonce: opaqueToken(), installationId: 'another-phone-installation', platform: 'ios', name: 'Another phone', appVersion: '1.0' };
-    await failure(f.fetch('POST', '/v1/devices', registration, connected.auth.token), 'conflict');
+    await failure(f.fetch('POST', '/v1/devices', registration, connected.auth.token), 'forbidden');
     expect(f.store.require<P.AuthSession>('authSessions', connected.auth.session.id).deviceId).toBe(connected.device.id);
     expect(f.store.list<P.Device>('devices', device => device.platform === 'ios')).toHaveLength(1);
     const same = await success<P.Device>(f.fetch('POST', '/v1/devices', { ...registration, clientNonce: opaqueToken(), installationId: prepared.claimBody.installationId }, connected.auth.token), 201);
