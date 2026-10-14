@@ -415,7 +415,26 @@ defmodule CodingAgent.ToolRegistry do
         end)
 
       _ ->
-        discover_configured_mcp_tools(cwd) ++ discover_session_mcp_tools(opts)
+        configured =
+          if profile_mcp_scope?(opts),
+            do: [],
+            else: discover_configured_mcp_tools(cwd)
+
+        configured ++ discover_session_mcp_tools(opts)
+    end
+  end
+
+  # Profile connector lists are complete principal-owned definitions, including
+  # an empty list. Do not implicitly append machine-global OAuth integrations.
+  # Generic/ACP sessions retain their existing configured-MCP behavior.
+  defp profile_mcp_scope?(opts) do
+    session_id = Keyword.get(opts, :mcp_session_id)
+
+    if not is_nil(Keyword.get(opts, :invocation_mcp_servers)) or
+         (is_binary(session_id) and session_id != "") do
+      true
+    else
+      CodingAgent.Workspace.profile_owned?(opts)
     end
   end
 

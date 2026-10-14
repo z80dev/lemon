@@ -35,28 +35,32 @@ defmodule CodingAgent.Executor.RemoteRequestCodec do
   def encode(request, opts \\ [])
 
   def encode(%ExecutionRequest{} = request, opts) do
-    payload = %{
-      "version" => @version,
-      "runId" => request.run_id,
-      "sessionKey" => request.session_key,
-      "prompt" => request.prompt,
-      "images" => request.images || [],
-      "cwd" => remote_cwd(request),
-      "resume" => encode_resume(request.resume),
-      "lane" => encode_atom(request.lane),
-      "toolPolicy" => request.tool_policy,
-      # Cwd routing hints are consumed above, not execution metadata. In particular
-      # an unused controller path must not survive through a false explicit flag.
-      "meta" =>
-        Map.drop(request.meta || %{}, [
-          :remote_cwd,
-          "remote_cwd",
-          :remote_cwd_explicit,
-          "remote_cwd_explicit"
-        ])
-    }
+    native_images = if is_nil(request.images), do: [], else: request.images
 
-    json_round_trip(payload, opts)
+    with {:ok, images} <- LemonAi.ImageInputs.encode(native_images) do
+      payload = %{
+        "version" => @version,
+        "runId" => request.run_id,
+        "sessionKey" => request.session_key,
+        "prompt" => request.prompt,
+        "images" => images,
+        "cwd" => remote_cwd(request),
+        "resume" => encode_resume(request.resume),
+        "lane" => encode_atom(request.lane),
+        "toolPolicy" => request.tool_policy,
+        # Cwd routing hints are consumed above, not execution metadata. In particular
+        # an unused controller path must not survive through a false explicit flag.
+        "meta" =>
+          Map.drop(request.meta || %{}, [
+            :remote_cwd,
+            "remote_cwd",
+            :remote_cwd_explicit,
+            "remote_cwd_explicit"
+          ])
+      }
+
+      json_round_trip(payload, opts)
+    end
   end
 
   def encode(_, _opts), do: {:error, :invalid_execution_request}
@@ -132,7 +136,7 @@ defmodule CodingAgent.Executor.RemoteRequestCodec do
   end
 
   defp json_round_trip(payload, opts) do
-    case LemonCore.JSONPayload.round_trip(payload, opts) do
+    case LemonCore.JSONPayload.round_trip(payload, LemonCore.ToolPolicy.execution_json_opts(opts)) do
       {:ok, decoded} -> {:ok, decoded}
       {:error, reason} -> {:error, {:invalid_request_payload, reason}}
     end

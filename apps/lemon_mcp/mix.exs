@@ -36,6 +36,7 @@ defmodule LemonMCP.MixProject do
   defp deps do
     [
       {:jason, "~> 1.4"},
+      {:idna, "~> 7.1"},
       # Local HTTP/SSE MCP server fixtures for the client tests
       {:bandit, "~> 1.0", only: :test},
       {:plug, "~> 1.14", only: :test},

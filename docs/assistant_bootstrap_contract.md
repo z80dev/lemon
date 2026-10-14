@@ -51,7 +51,7 @@ Daily memory files are expected under `memory/YYYY-MM-DD.md` and are read/writte
 ### Placed profile sessions
 
 Profile execution supplies a JSON-safe `profile_instructions` snapshot mapping
-`AGENTS.md`, `IDENTITY.md`, `README.md`, `SOUL.md` and `USER.md` to text, alongside
+`AGENTS.md`, `IDENTITY.md`, `README.md` and `SOUL.md` to text, alongside
 the profile's explicit `system_prompt`. Native sessions overlay this snapshot
 in the existing bootstrap composition; they do not need controller-local profile
 files and do not write the snapshot into destination files. Omitted snapshot
@@ -60,13 +60,20 @@ through prompt refresh and follows the same truncation and subagent filtering
 as disk bootstrap files.
 
 The profile ID derives the assistant workspace on the execution host. Project
-cwd, session journal paths, provider credentials, `TOOLS.md`, `MEMORY.md` and
-daily memory remain destination-local. An omitted remote cwd selects the worker's
+cwd, session journal paths, provider credentials, `TOOLS.md`, `USER.md`, `MEMORY.md`
+and daily memory remain destination-local. `USER.md` is mutable preference
+memory; controller snapshots cannot override it. An omitted remote cwd selects the worker's
 default, never the controller's router cwd.
+Explicit `profiles.sync` persists only the four controller-owned persona files
+and a credential-free revision record; it acknowledges verified storage without
+changing controller placement or transferring mutable memory.
 
 Profile `mcp_servers` execution definitions contain streamable-HTTP `name`, `url`
-and `headers`. The native run owner opens them through `LemonSkills.McpSession`;
-the tool registry combines these owner-bound tools with configured and ACP tools.
+and `headers`, plus optional exact `enabledTools` and origin consent policies.
+The native run owner opens them through `LemonSkills.McpSession`. Profile
+executions expose only their owner-bound connections (plus explicitly attached
+ACP clients), never ambient machine-global MCP credentials, even when their
+connector list is empty. Generic non-profile sessions retain configured clients.
 Connections close when execution ends, initialization fails or the owner dies.
 Headers are volatile execution credentials, not session management metadata.
 `${LEMON_SECRET:NAME}` references in profile HTTP headers resolve through
@@ -75,6 +82,23 @@ Reference-bearing request metadata stays unchanged; resolved values are used
 only in volatile connection configuration. No environment expansion or external
 source fallback is performed. Missing/failing reads and malformed references
 fail attachment with a credential-free `secret_resolution_failed` classification.
+Origin-policy clients validate destination DNS and pin their real transport
+before decrypting headers, preserve Host/TLS identity and reject redirects.
+Per-invocation connector replacements never merge another principal's headers.
+
+Profile MCP aliases are stable public-identity hashes, exposed by discovery as
+`executionName`. Credential rotation and DNS pinning do not change policy names.
+Profile clients use native `ToolPolicy` as the execution/approval authority:
+deny/blocked sets and required approvals cannot be bypassed by server hints or
+invocation configuration. Persistent profile, invocation, session and
+destination floors intersect on fresh admission. Active restriction changes
+require the owning application's admission fence and settled cancellation.
+
+Selected skills use the same destination-owned profile workspace as the skill
+registry root, not a different project cwd. Metadata appears in the normal
+available-skills section; `read_skill` loads bodies lazily from
+`workspace/.lemon/skill/<key>/SKILL.md`. Bodies are not concatenated into the
+profile system prompt or silently truncated to fit its 128 KiB limit.
 
 
 ## Memory Scopes

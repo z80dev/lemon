@@ -2,10 +2,11 @@ defmodule CodingAgent.ExecutionNode.Worker do
   @moduledoc """
   Native worker for a named Lemon execution node.
 
-  The worker authenticates to a controller, accepts targeted
-  `coding_agent.run` invocations, and executes them through the existing
-  `CodingAgent.Executor`. It never forwards the node selector into the local
-  session, preventing a remote run from recursively selecting itself.
+  The worker authenticates to a controller, accepts targeted native runs and
+  destination MCP discovery/profile synchronization, and keeps slow services in
+  supervised tasks bound to their invocation and this worker. Native runs execute
+  through `CodingAgent.Executor` without forwarding the node selector into the
+  local session, preventing recursive remote routing.
   """
 
   use GenServer
@@ -37,6 +38,10 @@ defmodule CodingAgent.ExecutionNode.Worker do
     "memory.add" => %{"version" => @protocol_version},
     "memory.delete" => %{"version" => @protocol_version},
     "node.enrollment" => %{"version" => 1, "inviteCodes" => true, "repairInvites" => true},
+    "node.mcp.discover" => %{"version" => @protocol_version},
+    "node.profile.sync" => %{"version" => @protocol_version},
+    "node.profile.sync.status" => %{"version" => @protocol_version},
+    "node.profile.paths" => %{"version" => @protocol_version},
     "node.invoke.control" => %{
       "version" => @protocol_version,
       "operations" => ["steer", "redirect"],
@@ -65,6 +70,9 @@ defmodule CodingAgent.ExecutionNode.Worker do
     :socket_opts,
     :socket_mode,
     :executor_module,
+    :mcp_discovery_module,
+    :profile_sync_module,
+    :task_supervisor,
     :token_store_module,
     :token_store_opts,
     :notify_pid,
@@ -118,6 +126,9 @@ defmodule CodingAgent.ExecutionNode.Worker do
        socket_module: Keyword.get(opts, :socket_module, Socket),
        socket_opts: Keyword.get(opts, :socket_opts, []),
        executor_module: Keyword.get(opts, :executor_module, CodingAgent.Executor),
+       mcp_discovery_module: Keyword.get(opts, :mcp_discovery_module, LemonSkills.McpDiscovery),
+       profile_sync_module: Keyword.get(opts, :profile_sync_module, CodingAgent.ExecutionNode.ProfileSync),
+       task_supervisor: Keyword.get(opts, :task_supervisor, CodingAgent.TaskSupervisor),
        token_store_module: Keyword.get(opts, :token_store_module, TokenStore),
        token_store_opts: Keyword.get(opts, :token_store_opts, []),
        notify_pid: Keyword.get(opts, :notify_pid),
@@ -348,12 +359,29 @@ defmodule CodingAgent.ExecutionNode.Worker do
     end
   end
 
+  def handle_info({monitor_ref, result}, state) when is_reference(monitor_ref) do
+    case Enum.find(state.invocations, fn {_id, invocation} ->
+           Map.get(invocation, :service_task) != nil and invocation.monitor_ref == monitor_ref
+         end) do
+      {invoke_id, _invocation} ->
+        {:noreply, complete_service_task(state, invoke_id, result)}
+
+      nil ->
+        {:noreply, state}
+    end
+  end
+
   def handle_info({:DOWN, monitor_ref, :process, _pid, reason}, state) do
     case Enum.find(state.invocations, fn {_id, invocation} ->
            invocation.monitor_ref == monitor_ref
          end) do
-      {invoke_id, _invocation} ->
-        state = send_invoke_error(state, invoke_id, {:runner_down, reason})
+      {invoke_id, invocation} ->
+        reason =
+          if Map.get(invocation, :service_task),
+            do: invocation.failure_reason,
+            else: {:runner_down, reason}
+
+        state = send_invoke_error(state, invoke_id, reason)
         {:noreply, remove_invocation(state, invoke_id)}
 
       nil ->
@@ -530,6 +558,7 @@ defmodule CodingAgent.ExecutionNode.Worker do
         Map.has_key?(state.invocations, invoke_id) or Map.has_key?(state.shells, invoke_id) ->
           {:noreply, state}
 
+
         not is_map(args) ->
           {:noreply, send_invoke_error(state, invoke_id, :invalid_arguments)}
 
@@ -538,6 +567,28 @@ defmodule CodingAgent.ExecutionNode.Worker do
 
         method in ["memory.list", "memory.search", "memory.get", "memory.add", "memory.delete"] ->
           {:noreply, invoke_memory(state, invoke_id, method, args)}
+
+        method == "node.mcp.discover" ->
+          {:noreply, start_discovery(state, invoke_id, args)}
+
+        method == "node.profile.sync" ->
+          sync_module = state.profile_sync_module
+          cwd = state.default_cwd
+          {:noreply, start_service_task(state, invoke_id, :profile_sync_failed, fn ->
+            sync_module.apply(args, cwd)
+          end)}
+
+        method == "node.profile.sync.status" ->
+          sync_module = state.profile_sync_module
+          cwd = state.default_cwd
+          {:noreply, start_service_task(state, invoke_id, :profile_sync_failed, fn ->
+            sync_module.status(args, cwd)
+          end)}
+
+        method == "node.profile.paths" ->
+          {:noreply, start_service_task(state, invoke_id, :profile_paths_failed, fn ->
+            CodingAgent.ExecutionNode.ProfilePaths.get(args)
+          end)}
 
         method == "coding_agent.run" ->
           {:noreply, start_invocation(state, invoke_id, args)}
@@ -682,6 +733,77 @@ defmodule CodingAgent.ExecutionNode.Worker do
     send_host_io_result(state, invoke_id, result)
   end
 
+  defp start_discovery(state, invoke_id, %{"server" => server}) when is_map(server) do
+    discovery_module = state.mcp_discovery_module
+    cwd = state.default_cwd
+
+    start_service_task(state, invoke_id, :discovery_failed, fn ->
+      discovery_module.discover(server, cwd)
+    end)
+  end
+
+  defp start_discovery(state, invoke_id, _args),
+    do: send_invoke_error(state, invoke_id, :invalid_config)
+
+  defp start_service_task(state, invoke_id, failure_reason, run) do
+    task =
+      Task.Supervisor.async(state.task_supervisor, fn ->
+        try do
+          run.()
+        rescue
+          _ -> {:error, failure_reason}
+        catch
+          _, _ -> {:error, failure_reason}
+        end
+      end)
+
+    invocation = %{
+      service_task: task,
+      monitor_ref: task.ref,
+      failure_reason: failure_reason,
+      run_ref: nil
+    }
+    %{state | invocations: Map.put(state.invocations, invoke_id, invocation)}
+  rescue
+    _ -> send_invoke_error(state, invoke_id, :runtime_unavailable)
+  catch
+    _, _ -> send_invoke_error(state, invoke_id, :runtime_unavailable)
+  end
+
+  defp complete_service_task(state, invoke_id, {:ok, result}) when is_map(result) do
+    params = %{"invokeId" => invoke_id, "result" => result}
+
+    state =
+      case LemonCore.JSONPayload.validate(params, LemonCore.ToolPolicy.execution_json_opts(max_bytes: result_content_limit(state))) do
+        {:ok, _stats} ->
+          request(state, "node.invoke.result", params, {:invoke_result, invoke_id})
+          state
+
+        {:error, _} ->
+          send_invoke_error(state, invoke_id, :result_payload_limit_exceeded)
+      end
+
+    remove_invocation(state, invoke_id)
+  end
+
+  defp complete_service_task(state, invoke_id, {:error, reason})
+       when reason in [
+              :invalid_config, :invalid_cwd, :runtime_unavailable, :mcp_disabled,
+              :secret_resolution_failed, :connection_failed, :discovery_failed,
+              :owner_unavailable, :invalid_profile_snapshot, :revision_mismatch,
+              :mutation_conflict, :unsafe_profile_boundary, :profile_sync_failed,
+              :profile_sync_corrupt, :invalid_url, :invalid_origin_policy,
+              :origin_not_allowed, :dns_resolution_failed, :invalid_dns_answer,
+              :too_many_dns_addresses, :destination_not_public, :destination_not_allowed
+            ] do
+    state |> send_invoke_error(invoke_id, reason) |> remove_invocation(invoke_id)
+  end
+
+  defp complete_service_task(state, invoke_id, _result) do
+    failure_reason = Map.fetch!(state.invocations, invoke_id).failure_reason
+    state |> send_invoke_error(invoke_id, failure_reason) |> remove_invocation(invoke_id)
+  end
+
   defp start_invocation(state, invoke_id, args) do
     with {:ok, request, run_opts} <- execution_request(args, state, invoke_id),
          true <- is_nil(invocation_for_run(state, request.run_id)),
@@ -738,7 +860,9 @@ defmodule CodingAgent.ExecutionNode.Worker do
     requested_cwd = value(args, "cwd")
 
     with :ok <- validate_version(version),
-         {:ok, prompt} <- nonempty(prompt, :missing_prompt),
+         {:ok, images} <-
+           LemonAi.ImageInputs.validate(Map.get(args, "images", Map.get(args, :images, []))),
+         {:ok, prompt} <- invocation_prompt(prompt, images),
          {:ok, cwd} <- invocation_cwd(requested_cwd, state.default_cwd) do
       run_id = optional_string(value(args, "runId")) || "node:#{invoke_id}"
       session_key = optional_string(value(args, "sessionKey")) || "node:#{state.name}:#{run_id}"
@@ -748,7 +872,7 @@ defmodule CodingAgent.ExecutionNode.Worker do
         run_id: run_id,
         session_key: session_key,
         prompt: prompt,
-        images: normalize_images(value(args, "images")),
+        images: images,
         cwd: cwd,
         resume: normalize_resume(value(args, "resume")),
         lane: value(args, "lane"),
@@ -783,7 +907,7 @@ defmodule CodingAgent.ExecutionNode.Worker do
 
     params = %{"invokeId" => invoke_id, "result" => result}
 
-    case LemonCore.JSONPayload.validate(params, max_bytes: result_content_limit(state)) do
+    case LemonCore.JSONPayload.validate(params, LemonCore.ToolPolicy.execution_json_opts(max_bytes: result_content_limit(state))) do
       {:ok, _stats} ->
         request(state, "node.invoke.result", params, {:invoke_result, invoke_id})
 
@@ -817,6 +941,8 @@ defmodule CodingAgent.ExecutionNode.Worker do
         case Map.get(state.invocations, invoke_id) do
           nil ->
             {:error, "terminal"}
+          %{service_task: _task} ->
+            {:error, "unsupported"}
 
           %{run_id: invocation_run_id} when invocation_run_id != run_id ->
             {:error, "run_mismatch"}
@@ -898,7 +1024,7 @@ defmodule CodingAgent.ExecutionNode.Worker do
   defp control_operation(_operation), do: :invalid
 
   defp validate_payload(args, state) do
-    case LemonCore.JSONPayload.validate(args, max_bytes: payload_limit(state)) do
+    case LemonCore.JSONPayload.validate(args, LemonCore.ToolPolicy.execution_json_opts(max_bytes: payload_limit(state))) do
       {:ok, _stats} -> nil
       {:error, reason} -> {:invalid_request_payload, payload_error_kind(reason)}
     end
@@ -931,9 +1057,14 @@ defmodule CodingAgent.ExecutionNode.Worker do
         state
 
       {invocation, invocations} ->
+        if task = Map.get(invocation, :service_task) do
+          if Process.alive?(task.pid), do: Process.exit(task.pid, :kill)
+        else
+          Bus.unsubscribe(Bus.run_topic(invocation.run_id))
+          Enum.each(invocation.approvals, &ExecApprovals.cancel(&1, "remote invocation ended"))
+        end
+
         if invocation.monitor_ref, do: Process.demonitor(invocation.monitor_ref, [:flush])
-        Bus.unsubscribe(Bus.run_topic(invocation.run_id))
-        Enum.each(invocation.approvals, &ExecApprovals.cancel(&1, "remote invocation ended"))
 
         %{
           state
@@ -1133,8 +1264,16 @@ defmodule CodingAgent.ExecutionNode.Worker do
 
   defp optional_string(_), do: nil
 
-  defp normalize_images(images) when is_list(images), do: Enum.filter(images, &is_map/1)
-  defp normalize_images(_), do: []
+  defp invocation_prompt(prompt, []) do
+    nonempty(prompt, :missing_prompt)
+  end
+
+  defp invocation_prompt(nil, [_ | _]), do: {:ok, ""}
+
+  defp invocation_prompt(prompt, [_ | _]) when is_binary(prompt),
+    do: {:ok, String.trim(prompt)}
+
+  defp invocation_prompt(_prompt, _images), do: {:error, :invalid_prompt}
 
   defp normalize_resume(%{"engine" => engine, "value" => value})
        when is_binary(engine) and is_binary(value),
@@ -1265,6 +1404,13 @@ defmodule CodingAgent.ExecutionNode.Worker do
 
   defp notify(_state, _message), do: :ok
 
+  @impl true
+  def terminate(_reason, state) do
+    cancel_all_invocations(state)
+    :ok
+  end
+
+
   defp cancel_all_invocations(state) do
     Enum.reduce(state.invocations, state, fn {invoke_id, invocation}, current ->
       _ = cancel_invocation_execution(state, invocation)
@@ -1280,7 +1426,7 @@ defmodule CodingAgent.ExecutionNode.Worker do
   end
 
   defp invocation_for_run(state, run_id) when is_binary(run_id) do
-    Enum.find(state.invocations, fn {_id, invocation} -> invocation.run_id == run_id end)
+    Enum.find(state.invocations, fn {_id, invocation} -> Map.get(invocation, :run_id) == run_id end)
   end
   defp invocation_for_run(_state, _run_id), do: nil
 
@@ -1334,6 +1480,11 @@ defmodule CodingAgent.ExecutionNode.Worker do
     invocation = Map.fetch!(state.invocations, invoke_id)
     _ = cancel_invocation_execution(state, invocation)
     state |> send_invoke_error(invoke_id, reason) |> remove_invocation(invoke_id)
+  end
+
+  defp cancel_invocation_execution(_state, %{service_task: task}) do
+    if Process.alive?(task.pid), do: Process.exit(task.pid, :kill)
+    :ok
   end
 
   # Completed native runners have already stopped. Their remaining invocation

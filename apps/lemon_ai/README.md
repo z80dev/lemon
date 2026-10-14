@@ -452,6 +452,15 @@ All defined in `LemonAi.Types`:
 > `Context.messages` is stored reversed (newest first). Use
 > `LemonAi.Types.Context.get_messages_chronological/1` when passing to an API directly.
 
+`LemonAi.ImageInputs.validate/1` validates the JSON image block array
+`[{"type":"image","mime_type":"image/png","data":"<canonical Base64>"}]`
+into `ImageContent` structs. `encode/1` accepts only those known native structs
+and produces the same wire format after validation; arbitrary structs and
+executable fields are never serialized. Both enforce at most five PNG/JPEG/GIF/
+WebP images totaling 10 MiB decoded, strict standard Base64 and matching MIME
+headers. This input validation does not grant vision capability to a text-only
+model.
+
 ## Streaming event types
 
 Events emitted by `LemonAi.EventStream`:

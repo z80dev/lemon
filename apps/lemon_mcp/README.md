@@ -136,6 +136,38 @@ with an `:oauth` option:
 )
 ```
 
+For product-managed HTTP destinations, pass `origin_policy: %{allowed_origins:
+["https://example.com"], approved_private_origins: []}`. Origins are exact,
+canonical scheme/hostname/effective-port identities, not suffixes or URL paths.
+An exact origin must be in both lists to connect to local, private or reserved
+addresses. The client validates every DNS answer and connects to the selected
+address, preserving the canonical original Host header and TLS SNI/verified
+certificate hostname. System CA trust and certificate-chain verification remain
+enabled; pinning does not bypass TLS verification.
+
+Hosts that decrypt header references must call `LemonMCP.HTTP.OriginPolicy.pin/2`
+before credential resolution and pass the result through the internal
+`:destination_pin` option together with `:origin_policy`. The pin is process-local
+authority, never a JSON server-definition field. The client reuses it for every
+MCP request without resolving the original hostname again. Without an internal
+pin it independently validates and pins before its token-cache callback or
+initialize request. OAuth metadata and token URLs each undergo their own policy
+check and DNS pin; configured MCP headers and bearer tokens never accompany
+metadata requests.
+
+All Streamable HTTP requests disable redirects and return `:redirect_forbidden`
+without fetching the Location target. Policy/transport failures are classified
+atoms, including `:origin_not_allowed`, `:destination_not_public`,
+`:invalid_destination_pin`, `:http_transport_unavailable`,
+`:http_request_failed`, `:http_error`, `:auth_required`, `:invalid_metadata` and
+`:metadata_http_error`. With no policy, existing operator DNS/proxy networking
+is retained, except that redirects are still rejected. Policy requests use a
+dedicated direct HTTP profile without cookies or connection reuse, preventing
+IP-keyed pooled connections from crossing original TLS identities. Interactive
+authorization-code providers still own the browser/callback boundary; this
+library pins the HTTP requests it executes, not external browser navigation.
+
+
 When the server later rejects that bearer token with another 401 challenge,
 the client reuses the discovered OAuth metadata and retries that MCP request
 once. If the previous token response included a refresh token, Lemon first

@@ -130,6 +130,7 @@ defmodule LemonRouter.AgentProfiles do
       description: profile[:description] || profile["description"],
       avatar: profile[:avatar] || profile["avatar"],
       tool_policy: profile[:tool_policy] || profile["tool_policy"],
+      node: profile[:node] || profile["node"],
       system_prompt: profile[:system_prompt] || profile["system_prompt"],
       model: profile[:model] || profile["model"],
       rate_limit: profile[:rate_limit] || profile["rate_limit"]

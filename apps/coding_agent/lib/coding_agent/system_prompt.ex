@@ -82,6 +82,7 @@ defmodule CodingAgent.SystemPrompt do
     skill_context = Map.get(opts, :skill_context, "")
     skill_trace_opts = skill_trace_opts(opts)
     available_tools = MapSet.new(Map.get(opts, :tool_names) || @default_tool_names)
+    skill_cwd = Workspace.skill_cwd(cwd, opts)
 
     bootstrap_files =
       Workspace.load_bootstrap_files(
@@ -105,7 +106,7 @@ defmodule CodingAgent.SystemPrompt do
       section(
         :skills,
         "Available skills",
-        build_skills_section(cwd, skill_trace_opts, available_tools)
+        build_skills_section(skill_cwd, skill_trace_opts, available_tools)
       ),
       section(
         :system_prompt,

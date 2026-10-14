@@ -119,6 +119,33 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
     end
   end
 
+  defmodule FakeDiscovery do
+    def discover(server, cwd) do
+      send(Process.whereis(:execution_node_worker_test), {:discovery_started, self(), server, cwd})
+
+      receive do
+        {:finish, result} -> result
+        {:raise, secret} -> raise secret
+      end
+    end
+  end
+
+  defmodule FakeProfileSync do
+    def apply(args, cwd) do
+      send(Process.whereis(:execution_node_worker_test), {:profile_sync_started, self(), args, cwd})
+      receive do
+        {:finish, result} -> result
+      end
+    end
+
+    def status(args, cwd) do
+      send(Process.whereis(:execution_node_worker_test), {:profile_sync_status_started, self(), args, cwd})
+      receive do
+        {:finish, result} -> result
+      end
+    end
+  end
+
   setup do
     Process.register(self(), :execution_node_worker_test)
 
@@ -811,6 +838,25 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
     assert_receive {:socket_request, ^socket, "node.invoke.result",
                     %{"error" => "event_backpressure_limit_exceeded"}, _, 30_000}
     Process.exit(context.runner_pid, :kill)
+  end
+
+  @tag :tmp_dir
+  test "discovery rejects foreign and duplicate requests without exposing config", %{tmp_dir: tmp_dir} do
+    {worker, socket} = start_service_worker(tmp_dir)
+    server = discovery_server()
+    service_invoke(worker, socket, "discovery", "foreign-node", "node.mcp.discover", %{"server" => server})
+    refute_receive {:discovery_started, _, _, _}, 50
+    service_invoke(worker, socket, "discovery", "node-1", "node.mcp.discover", %{"server" => server})
+    assert_receive {:discovery_started, task_pid, _, _}
+    state = :sys.get_state(worker)
+    refute inspect(state.invocations) =~ "private-header-token"
+    service_invoke(worker, socket, "discovery", "node-1", "node.mcp.discover", %{"server" => server})
+    refute_receive {:discovery_started, _, _, _}, 50
+
+    send(task_pid, {:finish, {:ok, discovery_result()}})
+    assert_receive {:socket_request, ^socket, "node.invoke.result", params, {:invoke_result, "discovery"}, 30_000}
+    refute inspect(params) =~ "private-header-token"
+    assert :sys.get_state(worker).invocations == %{}
     GenServer.stop(worker)
   end
 
@@ -933,6 +979,35 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
   end
 
   @tag :tmp_dir
+  test "disconnect, explicit cancellation, invocation removal and worker stop kill discovery tasks", %{tmp_dir: tmp_dir} do
+    for action <- [:disconnect, :cancel, :removal, :stop] do
+      {worker, socket} = start_service_worker(tmp_dir)
+      service_invoke(worker, socket, "discovery", "node-1", "node.mcp.discover", %{"server" => discovery_server()})
+      assert_receive {:discovery_started, task_pid, _, _}
+      monitor = Process.monitor(task_pid)
+
+      case action do
+        :disconnect ->
+          send(worker, {:execution_node_socket, socket, {:disconnected, :closed}})
+        :cancel ->
+          send(worker, {:execution_node_socket, socket, {:event, "node.invoke.cancel", %{"nodeId" => "node-1", "invokeId" => "discovery"}}})
+        :removal ->
+          task = :sys.get_state(worker).invocations["discovery"].service_task
+          send(worker, {task.ref, {:error, :connection_failed}})
+        :stop ->
+          GenServer.stop(worker)
+      end
+
+      assert_receive {:DOWN, ^monitor, :process, ^task_pid, :killed}
+      if action != :removal, do: refute_receive({:socket_request, ^socket, "node.invoke.result", _, _, _}, 50)
+      if action != :stop do
+        assert :sys.get_state(worker).invocations == %{}
+        GenServer.stop(worker)
+      end
+    end
+  end
+
+  @tag :tmp_dir
   test "a native runner exiting concurrently with cancel does not crash the worker", %{tmp_dir: tmp_dir} do
     worker = start_supervised!({Worker, [
       node_name: "native-cancel-race", controller: "ws://controller:4040/ws",
@@ -978,6 +1053,120 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
     else
       :ok
     end
+  end
+
+  @tag :tmp_dir
+  test "abrupt owner death kills its supervised discovery task", %{tmp_dir: tmp_dir} do
+    {worker, socket} = start_service_worker(tmp_dir)
+    service_invoke(worker, socket, "discovery", "node-1", "node.mcp.discover", %{"server" => discovery_server()})
+    assert_receive {:discovery_started, task_pid, _, _}
+    monitor = Process.monitor(task_pid)
+    Process.unlink(worker)
+    Process.exit(worker, :kill)
+    assert_receive {:DOWN, ^monitor, :process, ^task_pid, :killed}
+  end
+
+  @tag :tmp_dir
+  test "discovery exceptions and unclassified service errors cannot expose config in replies or logs", %{tmp_dir: tmp_dir} do
+    {worker, socket} = start_service_worker(tmp_dir)
+    secret = "private-header-token"
+
+    log = capture_log(fn ->
+      service_invoke(worker, socket, "exception", "node-1", "node.mcp.discover", %{"server" => discovery_server()})
+      assert_receive {:discovery_started, task_pid, _, _}
+      send(task_pid, {:raise, secret})
+      assert_receive {:socket_request, ^socket, "node.invoke.result",
+                      %{"invokeId" => "exception", "error" => "discovery_failed"}, _, _}
+      service_invoke(worker, socket, "unclassified", "node-1", "node.mcp.discover", %{"server" => discovery_server()})
+      assert_receive {:discovery_started, task_pid, _, _}
+      send(task_pid, {:finish, {:error, {:secret, secret}}})
+      assert_receive {:socket_request, ^socket, "node.invoke.result",
+                      %{"invokeId" => "unclassified", "error" => "discovery_failed"}, _, _}
+    end)
+
+    refute log =~ secret
+    refute log =~ "Authorization"
+    refute log =~ "LEMON_SECRET"
+    GenServer.stop(worker)
+  end
+
+
+  @tag :tmp_dir
+  test "discovery rejects missing config and classifies task death without raw reasons", %{tmp_dir: tmp_dir} do
+    {worker, socket} = start_service_worker(tmp_dir)
+    service_invoke(worker, socket, "invalid", "node-1", "node.mcp.discover", %{})
+    assert_receive {:socket_request, ^socket, "node.invoke.result",
+                    %{"invokeId" => "invalid", "error" => "invalid_config"}, _, _}
+    refute_receive {:discovery_started, _, _, _}, 50
+    service_invoke(worker, socket, "down", "node-1", "node.mcp.discover", %{"server" => discovery_server()})
+    assert_receive {:discovery_started, task_pid, _, _}
+    Process.exit(task_pid, :kill)
+    assert_receive {:socket_request, ^socket, "node.invoke.result",
+                    %{"invokeId" => "down", "error" => "discovery_failed"}, _, _}
+    assert :sys.get_state(worker).invocations == %{}
+    GenServer.stop(worker)
+  end
+
+
+
+  @tag :tmp_dir
+  test "full native policy traversal reaches the executor and respects advertised bytes", %{tmp_dir: tmp_dir} do
+    {worker, socket} = start_service_worker(tmp_dir)
+    names = Enum.map(1..16_384, &"mcp_tool_#{&1}")
+    args = %{"version" => 1, "prompt" => "run", "toolPolicy" => %{"require_approval" => names}}
+    invoke(worker, socket, "dense-policy", "node-1", args)
+    assert_receive {:executor_started, request, _opts, ^worker, _ref, context}
+    assert request.tool_policy["require_approval"] == names
+    send(worker, {:execution_node_socket, socket, {:connected,
+      %{"auth" => %{"clientId" => "node-1"}, "policy" => %{"maxPayload" => 128}}}})
+    assert_receive {:execution_node_worker, ^worker, {:status, :online, "node-1"}}
+    invoke(worker, socket, "bounded-policy", "node-1", args)
+    assert_receive {:socket_request, ^socket, "node.invoke.result",
+      %{"invokeId" => "bounded-policy", "error" => _}, _, _}
+    refute_receive {:executor_started, _, _, _, _, _}, 50
+    GenServer.stop(worker)
+    Process.exit(context.runner_pid, :kill)
+  end
+
+  @tag :tmp_dir
+  test "dense bounded discovery schemas retain all JSON-safe items", %{tmp_dir: tmp_dir} do
+    {worker, socket} = start_service_worker(tmp_dir)
+    service_invoke(worker, socket, "dense-discovery", "node-1", "node.mcp.discover",
+      %{"server" => discovery_server()})
+    assert_receive {:discovery_started, task_pid, _, _}
+    tools = Enum.map(1..16, fn index ->
+      %{"name" => "tool_#{index}", "executionName" => "mcp_tool_#{index}",
+        "description" => "", "readOnly" => false,
+        "inputSchema" => %{"type" => "object", "enum" => List.duplicate(0, 1_024)}}
+    end)
+    result = Map.merge(discovery_result(), %{"tools" => tools, "count" => length(tools)})
+    send(task_pid, {:finish, {:ok, result}})
+    assert_receive {:socket_request, ^socket, "node.invoke.result",
+      %{"invokeId" => "dense-discovery", "result" => ^result}, _, _}
+    GenServer.stop(worker)
+  end
+
+
+  defp start_service_worker(tmp_dir) do
+    supervisor = start_supervised!({Task.Supervisor, []}, id: make_ref())
+    {:ok, worker} = start_worker(tmp_dir, token: "node-token", mcp_discovery_module: FakeDiscovery, profile_sync_module: FakeProfileSync, task_supervisor: supervisor)
+    assert_receive {:socket_started, socket, _opts}
+    send(worker, {:execution_node_socket, socket, {:connected, %{"auth" => %{"clientId" => "node-1"}}}})
+    assert_receive {:execution_node_worker, ^worker, {:status, :online, "node-1"}}
+    {worker, socket}
+  end
+
+  defp service_invoke(worker, socket, invoke_id, node_id, method, args) do
+    send(worker, {:execution_node_socket, socket, {:event, "node.invoke.request",
+      %{"invokeId" => invoke_id, "nodeId" => node_id, "method" => method, "args" => args}}})
+  end
+
+  defp discovery_server do
+    %{"name" => "bot", "url" => "https://example.com/mcp", "headers" => %{"Authorization" => "Bearer private-header-token"}}
+  end
+
+  defp discovery_result do
+    %{"connected" => true, "server" => %{"name" => "bot", "status" => "connected"}, "tools" => [], "count" => 0, "truncated" => false}
   end
 
   defp start_worker(tmp_dir, extra_opts) do

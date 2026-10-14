@@ -98,7 +98,8 @@ defmodule LemonControlPlane.Protocol.Frames do
     with {:ok, decoded} <- Jason.decode(data),
          {:ok, _stats} <-
            LemonCore.JSONPayload.validate(decoded,
-             max_bytes: opts[:max_payload] || LemonControlPlane.max_payload()
+             max_bytes: opts[:max_payload] || LemonControlPlane.max_payload(),
+             max_items: opts[:max_items] || payload_item_limit(decoded)
            ),
          {:ok, frame} <- validate_request(decoded) do
       {:ok, frame}
@@ -110,6 +111,19 @@ defmodule LemonControlPlane.Protocol.Frames do
         {:error, reason}
     end
   end
+
+  # Rich execution policy arrays are independently bounded by their owning
+  # profile/tool-policy validators. Keep unrelated RPC traversal at its default.
+  defp payload_item_limit(%{"type" => "req", "method" => method})
+       when method in ["profiles.create", "profiles.update", "profiles.clone",
+                       "chat.send", "agent", "node.invoke.result"],
+       do: LemonCore.ToolPolicy.execution_max_items()
+
+  defp payload_item_limit(%{"type" => "req", "method" => "node.invoke",
+                           "params" => %{"method" => "coding_agent.run"}}),
+       do: LemonCore.ToolPolicy.execution_max_items()
+
+  defp payload_item_limit(_), do: LemonCore.JSONPayload.default_max_items()
 
   defp validate_request(%{"type" => "req", "id" => id, "method" => method} = frame)
        when is_binary(id) and is_binary(method) do

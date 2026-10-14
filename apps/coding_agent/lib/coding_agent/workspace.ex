@@ -31,9 +31,14 @@ defmodule CodingAgent.Workspace do
 
   @memory_file "MEMORY.md"
   @subagent_bootstrap_allowlist MapSet.new(["AGENTS.md", "TOOLS.md"])
-  @profile_instruction_files ~w(AGENTS.md IDENTITY.md README.md SOUL.md USER.md)
+  @profile_instruction_files ~w(AGENTS.md IDENTITY.md README.md SOUL.md)
 
-  @doc "Validate a JSON-safe, content-only profile bootstrap snapshot."
+  @doc """
+  Validate a JSON-safe, content-only profile persona snapshot.
+
+  Mutable USER.md and MEMORY.md belong to the destination workspace, not the
+  controller snapshot. Snapshots containing either file are rejected.
+  """
   def validate_profile_instructions(nil), do: :ok
 
   def validate_profile_instructions(files) when is_map(files) do
@@ -61,6 +66,28 @@ defmodule CodingAgent.Workspace do
 
   @spec workspace_dir() :: String.t()
   def workspace_dir, do: Config.workspace_dir()
+
+  @doc "Whether a native session is bound to its validated profile workspace."
+  def profile_owned?(opts) do
+    case LemonCore.ProfileStore.paths(scope_opt(opts, :agent_id)) do
+      {:ok, %{"workspace" => workspace}} -> scope_opt(opts, :workspace_dir) == workspace
+      _ -> false
+    end
+  end
+
+  @doc """
+  Skill lookup root for profile sessions, independent of execution project cwd.
+  Registry metadata and lazy `read_skill` resolve the same destination-owned
+  `.lemon/skill` tree. Generic sessions retain their project cwd.
+  """
+  def skill_cwd(cwd, opts) do
+    if profile_owned?(opts), do: scope_opt(opts, :workspace_dir), else: cwd
+  end
+
+  defp scope_opt(opts, key) when is_list(opts), do: Keyword.get(opts, key)
+  defp scope_opt(opts, key) when is_map(opts),
+    do: Map.get(opts, key, Map.get(opts, Atom.to_string(key)))
+  defp scope_opt(_, _), do: nil
 
   @doc """
   Initialize the workspace directory by writing missing template files.
@@ -113,7 +140,7 @@ defmodule CodingAgent.Workspace do
     - :workspace_dir (override default workspace)
     - :max_chars (truncate long files; default #{@default_max_chars})
     - :session_scope (:main or :subagent; default inferred from :parent_session)
-    - :profile_instructions (content-only controller snapshot; never written to disk)
+    - :profile_instructions (persona-only controller snapshot; never written to disk)
     - :parent_session (when present, inferred as :subagent)
   """
   @spec load_bootstrap_files(keyword()) :: [bootstrap_file()]
@@ -173,8 +200,8 @@ defmodule CodingAgent.Workspace do
   # Internal helpers
   # ============================================================================
 
-  # Known persona files form a complete snapshot: omitted files must not pick up
-  # a stale destination persona. TOOLS.md, MEMORY.md and other local files stay local.
+  # Omitted persona files must not pick up a stale destination persona.
+  # USER.md, TOOLS.md, MEMORY.md and other local files stay destination-owned.
   defp overlay_profile_instructions(files, nil, _dir, _max_chars), do: files
 
   defp overlay_profile_instructions(files, snapshot, dir, max_chars) do

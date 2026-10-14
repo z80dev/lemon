@@ -68,9 +68,17 @@ authenticated named execution node. The roster reports `local`, `online`, or
 `offline`. Named runs omit controller working directories and use the worker's
 destination-local default cwd. Provider credentials remain destination-local.
 The execution request carries the profile system prompt and known bootstrap
-instructions (`AGENTS.md`, `IDENTITY.md`, `README.md`, `SOUL.md`, `USER.md`) as
+instructions (`AGENTS.md`, `IDENTITY.md`, `README.md`, `SOUL.md`) as
 JSON-safe text. These instructions overlay that run's destination-local
 assistant workspace; no profile files need to be pre-installed on the worker.
+`USER.md` is mutable destination-owned preference memory, not a persona
+snapshot. Its additions/deletions remain effective on subsequent sessions.
+
+Selected skills remain under that destination profile's
+`workspace/.lemon/skill/<key>/SKILL.md`. The native available-skills prompt
+loads metadata there even when the worker's project cwd differs; `read_skill`
+loads the full selected body lazily through the existing skill registry.
+Skill Markdown is not concatenated into `systemPrompt` or truncated to fit it.
 
 All lifecycle reads support `--json`. Chat also accepts `--model` and
 `--queue-mode collect|followup|steer|interrupt` overrides. Its working boundary
@@ -193,6 +201,11 @@ such as `agent:research:task-123`, `agent:research:dm-alice`, or
 `agent:research:group-team`. The profile owns placement; the session key owns
 conversation history. Omit `profileId` to retain ordinary chat routing.
 
+For per-invocation principal isolation, `chat.send` also accepts
+`invocationMcpServers` with `profileId`. Omission inherits the profile's
+connectors, `[]` attaches none, and a supplied list completely replaces them
+for that run. Neither headers nor owner connector definitions are merged.
+
 `cron.add` accepts `profileId` for agent jobs. `cron.list` includes the stored
 `profileId`; each run fetches the current profile, so moving or editing a bot
 changes its future scheduled runs without recreating its routines. Shell jobs
@@ -201,9 +214,27 @@ remain scheduler-local and do not accept profile placement.
 ### Update and attach MCP tools
 
 `profiles.update` accepts `id` and any of `name`, `description`, `avatar`,
-`model`, `systemPrompt`, `node`, or `mcpServers`. Omitted fields stay unchanged;
+`model`, `systemPrompt`, `node`, `mcpServers`, or `toolPolicy`. Omitted fields stay unchanged;
 an empty optional text field clears it. Use `node: "local"` to return a profile
 to the controller, and `mcpServers: []` to remove its session connectors.
+Names support 120 Unicode scalar values (512-byte defensive UTF-8 ceiling).
+System prompts preserve exact UTF-8, including surrounding whitespace, through
+128 KiB. Chat prompts and each persona instruction file have independent
+64 KiB limits. Oversize/invalid UTF-8/NUL input is rejected, not truncated.
+
+`toolPolicy` uses the native policy shape: optional preset `profile`, `allow`
+(`"all"` or exact registry-name array), `deny`, `blocked_tools`,
+`require_approval`, `approvals` (tool name to `"always"`/`"never"`), and
+`no_reply`. Each list/map supports up to 16,384 tool names of at most 256 bytes.
+`allow: []` denies all; `{}` clears the persisted profile floor. Fresh
+canonical, task, DM, group and cron runs inherit this floor and intersect it
+with session/destination policy. Allow sets intersect, denies and required
+approvals union, `"always"` dominates `"never"` and `no_reply` ORs.
+`chat.send.invocationToolPolicy` requires `profileId` and can only restrict
+this floor; omission or `{}` adds no restriction. Denied tools stay denied
+even if an invocation declares `"all"` or `"never"` approval. Active sessions
+retain startup policy, so grant-revoking applications must fence admission and
+settle active cancellation before reporting a restrictive change as applied.
 
 ```json
 {
@@ -213,7 +244,10 @@ to the controller, and `mcpServers: []` to remove its session connectors.
   "mcpServers": [{
     "name": "lemon-bot",
     "url": "https://bot.example/mcp",
-    "headers": {"Authorization": "${LEMON_SECRET:lemon-bot/research/authorization}"}
+    "headers": {"Authorization": "${LEMON_SECRET:lemon-bot/research/authorization}"},
+    "enabledTools": ["send_message", "create_draft"],
+    "allowedOrigins": ["https://bot.example"],
+    "approvedPrivateOrigins": []
   }]
 }
 ```
@@ -223,6 +257,22 @@ profile. Servers use Streamable HTTP; names must be unique, URLs HTTP(S), and
 headers a JSON object of string name/value pairs. Definitions are bounded to
 32 servers and 64 KiB total. Connections are owner-bound and released when the
 run ends. Connection failures fail the run rather than silently dropping tools.
+Profile executions never inherit ambient machine-global MCP connections,
+including an explicit empty per-call list. Generic non-profile/ACP behavior
+is unchanged.
+
+`enabledTools` is an exact allowlist of raw remote tool names, with at most
+256 unique names of 128 bytes each. There is no wildcard expansion. Omission
+allows all tools; `[]` disables all tools. An explicit allowlist does not grant
+resource/prompt utility tools. Restrictions apply to both model exposure and
+actual MCP invocation, including after registry refresh.
+
+Product connectors must set `allowedOrigins` to the exact approved HTTP(S)
+origin and set `approvedPrivateOrigins` only for explicit private-network
+consent. The worker validates all A/AAAA answers and pins the real HTTP/TLS
+connection before reading header secrets; redirects are rejected and the
+original origin remains the Host/TLS verification identity. Policy omission
+retains existing operator-trusted networking, not a product security guarantee.
 
 Header values may contain the explicit reference `${LEMON_SECRET:NAME}`.
 Write the complete header value into the encrypted secret store on the bot's
@@ -241,6 +291,71 @@ the full server definition; returned rows are not a credential backup. Headers
 are stored in the private profile configuration and travel to a named worker
 only in that profile's execution request, not in run history or public events.
 Do not share private config files. Credential-safe exports omit these headers.
+Management rows include `mcpConfigFingerprint`, a credential-free SHA-256
+binding of ordered complete private server definitions. This permits
+lost-update reconciliation without returning headers; optional-field omission
+differs from an explicit empty list. The exact compact-JSON algorithm is in
+the [control-plane method documentation](../../apps/lemon_control_plane/README.md).
+
+### Discover on the bot's machine
+
+`node.mcp.discover {nodeId,server}` (`admin`, asynchronous) accepts the same
+server shape. It connects only on the selected execution node, using temporary
+owner-bound MCP clients with no executable tools installed. Discovery returns
+the full raw inventory regardless of `enabledTools`, so applications can offer
+new tools without granting them.
+
+The result is `{connected:true,server:{name,status:"connected"},tools,count,truncated}`.
+Each tool has `{name,executionName,description,inputSchema,readOnly}`. Tool names, descriptions
+and complete schemas are bounded; oversized or credential-bearing schemas are
+omitted rather than modified. `readOnly` is only an advisory server annotation
+and defaults false. Failure responses never return header values or resolver
+secret names. Connections close after discovery or when its owner disconnects.
+`executionName` is the actual native tool-policy alias. Profile HTTP aliases
+derive from public server name/canonical URL/raw tool name, not credentials or
+resolved addresses, and remain stable across secret rotation and DNS pinning.
+Use the returned value, not a guessed prefix. These clients obey native policy
+denial and required approvals without an extra unconditional MCP approval
+prompt. Read-only hints are not permission grants. Legacy global/ACP aliases
+and approval behavior stay unchanged.
+
+### Provision before moving
+
+`profiles.sync {id,[nodeId,mutationId]}` (`admin`, asynchronous) provisions
+controller-owned persona files on a destination without changing controller
+placement. Supply the durable target `nodeId` before a move; otherwise the
+current remote placement is used. Local profiles require an explicit target.
+
+The destination creates safe profile boundaries, preserves local config,
+credentials, USER.md, memory and skills, and commits/rereads the persona
+revision before returning `{profileId,nodeId,mutationId,acknowledged:true,revisionDigest}`.
+Only `AGENTS.md`, `IDENTITY.md`, `README.md`, and `SOUL.md` are synchronized.
+MCP credentials are never provisioned by sync.
+
+An optional mutation ID binds its revision and is durably reserved before
+persona writes. The destination retains only the latest non-null mutation/digest
+pair, not an unlimited mutation history. Reuse with changed content conflicts;
+missing IDs return null and preserve the retained binding.
+`profiles.sync.status {id,nodeId,mutationId}` (`read`, asynchronous) queries the
+actual destination without resending persona or writing storage. It returns
+`{profileId,nodeId,mutationId,status,acknowledged,revisionDigest}`:
+`"acknowledged"` verifies the exact retained binding and files, `"pending"`
+matches a reserved unfinished write, and `"unknown"` has a null digest for
+absent, superseded or source-revision-mismatched bindings. Unavailable
+transport/corrupt storage is an RPC error, not unknown. Explicit `nodeId`
+uses durable ID-only dispatch even offline, never a same-named node.
+Ordinary configured profile placement remains name-first.
+
+Coordinate destination memory/skill transfer through their owning services,
+then switch `profiles.update.node` only after the required acknowledgements.
+For selected profile skills, use
+`node.profile.paths {nodeId,profileId}` (`read`, asynchronous) to obtain the
+destination-owned `{profileId,nodeId,workspacePath,skillsPath}`. It never
+creates a profile or guesses from controller paths/default cwd. Provision
+`skillsPath/<key>/SKILL.md` through owning filesystem stat/CAS operations.
+The lookup does not grant filesystem roots; non-home custom state requires
+the machine operator's explicit `--allowed-root` admission.
+
 
 
 ## Current boundaries

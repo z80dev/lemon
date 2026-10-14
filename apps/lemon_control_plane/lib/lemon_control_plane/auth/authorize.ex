@@ -352,6 +352,8 @@ defmodule LemonControlPlane.Auth.Authorize do
     String.starts_with?(method, "config.") or
       method in [
         "skills.install",
+        "node.mcp.discover",
+        "profiles.sync",
         "cron.add",
         "cron.update",
         "cron.pause",

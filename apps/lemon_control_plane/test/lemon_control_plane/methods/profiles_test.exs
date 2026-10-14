@@ -83,6 +83,28 @@ defmodule LemonControlPlane.Methods.ProfilesTest do
     {:ok, root: root}
   end
 
+  test "native profile policy is validated, projected, cloned and inherited by profile chat" do
+    policy = %{"profile" => "custom", "deny" => ["bash"],
+               "approvals" => %{"write" => "always"}, "allow" => ["read", "write", "bash"]}
+    params = %{"id" => "policy-cp", "toolPolicy" => policy}
+    assert :ok = Schemas.validate("profiles.create", params)
+    assert {:ok, created} = ProfilesCreate.handle(params, %{})
+    assert created["profile"]["toolPolicy"] == policy
+    assert {:ok, fetched} = ProfilesGet.handle(%{"id" => "policy-cp"}, %{})
+    assert fetched["profile"]["toolPolicy"] == policy
+    assert fetched["profile"]["mcpConfigFingerprint"] == fetched["summary"]["mcpConfigFingerprint"]
+    assert {:ok, cloned} = ProfilesClone.handle(%{"sourceId" => "policy-cp", "id" => "policy-copy"}, %{})
+    assert cloned["profile"]["toolPolicy"] == policy
+    assert {:ok, _} = ProfileChat.handle(%{"id" => "policy-cp", "prompt" => "hello"}, %{})
+    assert_receive {:profile_request, request}
+    assert request.tool_policy.deny == ["bash"]
+    assert request.tool_policy.approvals["write"] == "always"
+    assert {:error, {:invalid_request, _}} =
+             ProfilesUpdate.handle(%{"id" => "policy-cp", "toolPolicy" => %{"allow" => false}}, %{})
+    assert {:ok, updated} = ProfilesUpdate.handle(%{"id" => "policy-cp", "toolPolicy" => %{"allow" => []}}, %{})
+    assert updated["profile"]["toolPolicy"] == %{"allow" => []}
+  end
+
   test "profiles update reloads placement while every management result redacts MCP headers" do
     server = %{"name" => "lemon-bot", "url" => "https://bot.example/mcp",
                "headers" => %{"Authorization" => "Bearer execution-secret"}}

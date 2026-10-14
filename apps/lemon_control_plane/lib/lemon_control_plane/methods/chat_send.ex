@@ -6,6 +6,8 @@ defmodule LemonControlPlane.Methods.ChatSend do
   persona, model, node and workspace while retaining the caller's session key.
   An optional `cwd` must be an absolute existing directory; profile-bound and
   canonical profile sessions do not accept caller workspace overrides.
+  Profile chat may replace MCP attachments with `invocationMcpServers`; omission
+  inherits the profile defaults, while an explicit empty list attaches none.
   """
 
   @behaviour LemonControlPlane.Method
@@ -44,6 +46,12 @@ defmodule LemonControlPlane.Methods.ChatSend do
           (not is_binary(profile_id) or profile_id == "") ->
         {:error, {:invalid_request, "profileId must be a nonempty string", nil}}
 
+      Map.has_key?(params, "invocationMcpServers") and is_nil(profile_id) ->
+        {:error, {:invalid_request, "invocationMcpServers requires profileId", nil}}
+
+      Map.has_key?(params, "invocationToolPolicy") and is_nil(profile_id) ->
+        {:error, {:invalid_request, "invocationToolPolicy requires profileId", nil}}
+
       Map.has_key?(params, "cwd") and not is_nil(profile_id) ->
         {:error, {:invalid_request, "cwd cannot override a profile workspace", nil}}
 
@@ -77,16 +85,26 @@ defmodule LemonControlPlane.Methods.ChatSend do
     {:ok, if(Map.has_key?(params, "cwd"), do: Map.put(request, :cwd, params["cwd"]), else: request)}
   end
 
-  defp build_request(_params, profile_id, session_key, prompt, run_id, images, queue_mode) do
+  defp build_request(params, profile_id, session_key, prompt, run_id, images, queue_mode) do
     case LemonCore.ProfileStore.get_for_execution(profile_id) do
       {:ok, profile} ->
-        case LemonCore.ProfileStore.chat_request(profile, prompt,
-               session_key: session_key,
-               run_id: run_id,
-               images: images,
-               queue_mode: queue_mode
-             ) do
-          {:ok, request} -> {:ok, request}
+        opts = [
+          session_key: session_key,
+          run_id: run_id,
+          images: images,
+          queue_mode: queue_mode
+        ]
+
+        opts =
+          if Map.has_key?(params, "invocationMcpServers"),
+            do: Keyword.put(opts, :invocation_mcp_servers, params["invocationMcpServers"]),
+            else: opts
+
+        with {:ok, policy} <- invocation_tool_policy(params),
+             {:ok, request} <-
+               LemonCore.ProfileStore.chat_request(profile, prompt, Keyword.put(opts, :tool_policy, policy)) do
+          {:ok, request}
+        else
           {:error, _} -> {:error, {:invalid_request, "Profile chat request is invalid", nil}}
         end
 
@@ -98,6 +116,13 @@ defmodule LemonControlPlane.Methods.ChatSend do
 
       {:error, _} ->
         {:error, {:unavailable, "Profile is unavailable", nil}}
+    end
+  end
+
+  defp invocation_tool_policy(params) do
+    case Map.fetch(params, "invocationToolPolicy") do
+      :error -> {:ok, %{}}
+      {:ok, policy} -> LemonCore.ToolPolicy.normalize(policy)
     end
   end
 

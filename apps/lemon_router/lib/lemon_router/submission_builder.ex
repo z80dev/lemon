@@ -132,6 +132,7 @@ defmodule LemonRouter.SubmissionBuilder do
       enriched_meta =
         meta
         |> Map.merge(%{
+          node: MapHelpers.get_key(meta, :node) || MapHelpers.get_key(agent_profile, :node),
           origin: origin,
           agent_id: agent_id,
           thinking_level: resolved_thinking_level,
@@ -182,34 +183,26 @@ defmodule LemonRouter.SubmissionBuilder do
   end
 
   defp get_agent_profile(agent_id) when is_binary(agent_id) do
-    if agent_profile_exists?(agent_id) do
-      case AgentProfiles.get(agent_id) do
-        profile when is_map(profile) -> {:ok, profile}
-        _ -> {:ok, %{}}
-      end
-    else
-      get_managed_profile(agent_id)
+    # Durable managed policy wins over a stale registry or project overlay.
+    case LemonCore.ProfileStore.get(agent_id) do
+      {:ok, profile} ->
+        {:ok, %{id: agent_id, model: profile["model"], system_prompt: profile["systemPrompt"],
+                tool_policy: profile["toolPolicy"], node: profile["node"]}}
+      {:error, :not_found} ->
+        if agent_profile_exists?(agent_id) do
+          {:ok, AgentProfiles.get(agent_id) || %{}}
+        else
+          {:error, {:unknown_agent_id, agent_id}}
+        end
+      {:error, reason} -> {:error, reason}
     end
   catch
     :exit, _ ->
-      if fallback_agent_profile_exists?(agent_id) do
-        {:ok, %{}}
-      else
-        {:error, {:unknown_agent_id, agent_id}}
-      end
+      if fallback_agent_profile_exists?(agent_id), do: {:ok, %{}},
+        else: {:error, {:unknown_agent_id, agent_id}}
   end
-
   defp get_agent_profile(_), do: {:error, {:unknown_agent_id, nil}}
 
-  defp get_managed_profile(agent_id) do
-    case LemonCore.ProfileStore.get(agent_id) do
-      {:ok, profile} ->
-        {:ok, %{id: agent_id, model: profile["model"], system_prompt: profile["systemPrompt"]}}
-
-      {:error, _} ->
-        {:error, {:unknown_agent_id, agent_id}}
-    end
-  end
 
   defp agent_profile_exists?(agent_id) when is_binary(agent_id) and agent_id != "" do
     AgentProfiles.exists?(agent_id) == true

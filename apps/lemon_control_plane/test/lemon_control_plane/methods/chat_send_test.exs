@@ -304,6 +304,148 @@ defmodule LemonControlPlane.Methods.ChatSendTest do
     refute inspect(response) =~ "Be a careful teammate."
   end
 
+  test "explicit empty invocation MCP attachments replace profile defaults", %{ctx: ctx} do
+    create_mcp_profile()
+
+    assert {:ok, response} =
+             ChatSend.handle(
+               params(%{"profileId" => "mcp-profile", "invocationMcpServers" => []}),
+               ctx
+             )
+
+    assert_received {:submitted, request}
+    assert request.meta.mcp_servers == []
+    assert {:ok, profile} = LemonCore.ProfileStore.get_for_execution("mcp-profile")
+    assert profile["mcpServers"] == [default_mcp_server()]
+    refute inspect(response) =~ "profile-owner-token"
+  end
+
+  test "omitted invocation MCP attachments inherit profile defaults", %{ctx: ctx} do
+    create_mcp_profile()
+    assert {:ok, _} = ChatSend.handle(params(%{"profileId" => "mcp-profile"}), ctx)
+    assert_received {:submitted, request}
+    assert request.meta.mcp_servers == [default_mcp_server()]
+  end
+
+  test "caller MCP attachments replace headers and preserve destination secret references", %{ctx: ctx} do
+    create_mcp_profile()
+    server = %{
+      "name" => "bot",
+      "url" => "https://caller.example/mcp",
+      "headers" => %{"Authorization" => "Bearer ${LEMON_SECRET:CALLER_TOKEN}"},
+      "enabledTools" => ["search.raw"]
+    }
+
+    assert {:ok, response} =
+             ChatSend.handle(
+               params(%{"profileId" => "mcp-profile", "invocationMcpServers" => [server]}),
+               ctx
+             )
+
+    assert_received {:submitted, request}
+    assert request.meta.mcp_servers == [server]
+    refute inspect(request.meta.mcp_servers) =~ "profile-owner-token"
+    refute inspect(request.meta.mcp_servers) =~ "Owner-Only"
+    assert {:ok, profile} = LemonCore.ProfileStore.get_for_execution("mcp-profile")
+    assert profile["mcpServers"] == [default_mcp_server()]
+    assert Map.keys(response) |> Enum.sort() == ["runId", "sessionKey", "summary"]
+    refute inspect(response) =~ "CALLER_TOKEN"
+    refute inspect(response) =~ "caller.example"
+    refute inspect(response) =~ "Authorization"
+  end
+
+  test "invocation MCP configs require an explicit valid profile and reject invalid configs", %{ctx: ctx} do
+    create_mcp_profile()
+
+    for servers <- [[], [default_mcp_server()]] do
+      assert {:error, {:invalid_request, "invocationMcpServers requires profileId", nil}} =
+               ChatSend.handle(params(%{"invocationMcpServers" => servers}), ctx)
+    end
+
+    for servers <- [
+          nil, %{}, "private-invalid-config", [nil],
+          [Map.put(default_mcp_server(), "url", "file:///private-config")],
+          [Map.put(default_mcp_server(), "enabledTools", ["*"]) |> Map.put("headers", 12)],
+          [Map.put(default_mcp_server(), "enabledTools", [123])],
+          List.duplicate(default_mcp_server(), 2)
+        ] do
+      assert {:error, {:invalid_request, "Profile chat request is invalid", nil}} =
+               ChatSend.handle(
+                 params(%{"profileId" => "mcp-profile", "invocationMcpServers" => servers}),
+                 ctx
+               )
+    end
+
+    refute_received {:submitted, _}
+  end
+
+  test "invocation MCP attachments never enter uncertain or rejected receipts" do
+    create_mcp_profile()
+    request = params(%{"profileId" => "mcp-profile", "invocationMcpServers" => [default_mcp_server()]})
+
+    assert {:error, {:unavailable, _, details}} =
+             ChatSend.handle(request, %{router_mod: UnknownRouterStub})
+    assert_received {:submitted, %{run_id: run_id}}
+    assert details["runId"] == run_id
+    refute inspect(details) =~ "profile-owner-token"
+    refute inspect(details) =~ "Authorization"
+
+    assert {:error, {:internal_error, "Chat submission failed", nil}} =
+             ChatSend.handle(request, %{router_mod: RejectingRouterStub})
+  end
+
+  test "schema advertises invocation MCP list without accepting non-list shapes" do
+    assert Schemas.get("chat.send").optional["invocationMcpServers"] == :list
+    assert :ok = Schemas.validate("chat.send", params(%{"profileId" => "workspace", "invocationMcpServers" => []}))
+    assert {:error, _} = Schemas.validate("chat.send", params(%{"invocationMcpServers" => %{}}))
+  end
+
+  test "invocationToolPolicy only narrows the durable profile policy", %{ctx: ctx} do
+    assert {:ok, _} = LemonCore.ProfileStore.update("workspace", %{
+      toolPolicy: %{"allow" => ["read", "write", "bash"], "deny" => ["bash"],
+                    "require_approval" => ["write"], "approvals" => %{"write" => "always"}}
+    })
+    assert {:ok, _} = ChatSend.handle(params(%{"profileId" => "workspace"}), ctx)
+    assert_receive {:submitted, inherited}
+    assert {:ok, _} = ChatSend.handle(params(%{"profileId" => "workspace", "invocationToolPolicy" => %{}}), ctx)
+    assert_receive {:submitted, empty}
+    assert empty.tool_policy == inherited.tool_policy
+
+    assert {:ok, _} = ChatSend.handle(params(%{
+      "profileId" => "workspace",
+      "invocationToolPolicy" => %{"allow" => "all", "deny" => [], "approvals" => %{"write" => "never"}}
+    }), ctx)
+    assert_receive {:submitted, cannot_widen}
+    refute CodingAgent.ToolPolicy.allowed?(cannot_widen.tool_policy, "bash")
+    assert CodingAgent.ToolPolicy.requires_approval?(cannot_widen.tool_policy, "write")
+
+    assert {:ok, _} = ChatSend.handle(params(%{
+      "profileId" => "workspace",
+      "invocationToolPolicy" => %{"allow" => ["read"], "deny" => ["write"]}
+    }), ctx)
+    assert_receive {:submitted, restricted}
+    assert CodingAgent.ToolPolicy.allowed?(restricted.tool_policy, "read")
+    refute CodingAgent.ToolPolicy.allowed?(restricted.tool_policy, "write")
+    refute CodingAgent.ToolPolicy.allowed?(restricted.tool_policy, "bash")
+    assert {:ok, _} = ChatSend.handle(params(%{
+      "profileId" => "workspace", "invocationToolPolicy" => %{"allow" => []}
+    }), ctx)
+    assert_receive {:submitted, none}
+    refute CodingAgent.ToolPolicy.allowed?(none.tool_policy, "read")
+  end
+
+  test "invocationToolPolicy requires a profile and a validated native map", %{ctx: ctx} do
+    assert Schemas.get("chat.send").optional["invocationToolPolicy"] == :map
+    assert {:error, {:invalid_request, "invocationToolPolicy requires profileId", nil}} =
+             ChatSend.handle(params(%{"invocationToolPolicy" => %{}}), ctx)
+    for policy <- [nil, [], %{"allow" => false}, %{"arbitrary_policy" => true},
+                    %{"approvals" => %{"write" => "auto"}}] do
+      assert {:error, {:invalid_request, _, nil}} =
+               ChatSend.handle(params(%{"profileId" => "workspace", "invocationToolPolicy" => policy}), ctx)
+    end
+    refute_received {:submitted, _}
+  end
+
   test "profileId retains the profile workspace locally", %{ctx: ctx} do
     assert {:ok, profile} = LemonCore.ProfileStore.get("workspace")
     assert {:ok, _} = ChatSend.handle(params(%{"profileId" => "workspace"}), ctx)
@@ -343,6 +485,22 @@ defmodule LemonControlPlane.Methods.ChatSendTest do
     assert :ok = Schemas.validate("chat.send", params())
     assert :ok = Schemas.validate("chat.send", params(%{"cwd" => "/workspace"}))
     assert {:error, _} = Schemas.validate("chat.send", params(%{"cwd" => 123}))
+  end
+
+  defp create_mcp_profile do
+    assert {:ok, _} =
+             LemonCore.ProfileStore.create(%{
+               id: "mcp-profile",
+               mcpServers: [default_mcp_server()]
+             })
+  end
+
+  defp default_mcp_server do
+    %{
+      "name" => "bot",
+      "url" => "https://profile.example/mcp",
+      "headers" => %{"Authorization" => "Bearer profile-owner-token", "Owner-Only" => "private"}
+    }
   end
 
   defp image do

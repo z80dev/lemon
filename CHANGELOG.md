@@ -104,6 +104,28 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   `cron.admission.set`; callback credentials remain absent from public cron
   projections. Origins are explicitly allowlisted, with HTTPS except literal
   loopback HTTP for local development.
+- Destination-local `node.mcp.discover`, exact executable `enabledTools`
+  allowlists, and principal-specific `chat.send.invocationMcpServers` replacement
+  without inheriting owner credentials. Product MCP origins are checked and DNS
+  pinned on the worker before secret resolution; transports retain Host/TLS
+  identity, reject redirects, and separately authorize OAuth metadata origins.
+- Acknowledged `profiles.sync` persona provisioning on a selected destination
+  before placement changes, preserving destination credentials and mutable
+  memory with verified revision/mutation bindings.
+- Read-only `profiles.sync.status` reconciles lost provisioning responses with
+  durable destination mutation/digest receipts, distinguishing acknowledged,
+  pending, unknown and unavailable without replaying private persona content.
+- Persistent native profile `toolPolicy` and restrictive
+  `chat.send.invocationToolPolicy` floors apply to canonical, task, DM, group
+  and cron execution; caller overrides cannot widen native hard ceilings.
+  Profile HTTP discovery exposes stable `executionName` aliases whose actual
+  calls obey native denial and required approvals, not advisory server hints.
+- Profile names support 120 Unicode scalar values and exact 128 KiB system
+  prompts. Rich execution JSON budgets support complete 16,384-entry native
+  grants without changing unrelated JSON traversal limits.
+- Read-only `node.profile.paths` exposes authoritative destination workspace/
+  skill paths for selected profile provisioning without guessing controller
+  state or granting new filesystem roots.
 
 ### Fixed
 
@@ -138,6 +160,15 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   delivery failure occurs after a native runner has finished but its live events
   are still draining. Finished runners are not cancelled again, concurrent runner
   exits are tolerated, and invocation/approval cleanup still completes.
+- Mutable `USER.md` preference memory is destination-owned, never replaced by
+  controller persona snapshots. Subsequent session bootstrap reflects real
+  user-memory additions and deletions.
+- Profile sessions no longer inherit ambient machine-global MCP credentials;
+  selected destination-owned skills remain available with an independent
+  execution cwd and load their full bodies lazily through `read_skill`.
+- Remote image-only requests encode validated native image blocks as the
+  established wire format, preserving five-image/10 MiB aggregate admission,
+  strict MIME/Base64 validation, configured transport bounds and vision checks.
 
 ---
 

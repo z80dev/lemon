@@ -71,6 +71,8 @@ defmodule LemonControlPlane.Methods.Registry do
     LemonControlPlane.Methods.MemoryGet,
     LemonControlPlane.Methods.MemoryAdd,
     LemonControlPlane.Methods.MemoryDelete,
+    LemonControlPlane.Methods.ProfilesSync,
+    LemonControlPlane.Methods.ProfilesSyncStatus,
     # Agents
     LemonControlPlane.Methods.AgentsList,
     # Skills
@@ -164,6 +166,8 @@ defmodule LemonControlPlane.Methods.Registry do
     LemonControlPlane.Methods.NodeShellClose,
     LemonControlPlane.Methods.NodeShellEvent,
     LemonControlPlane.Methods.NodeInvoke,
+    LemonControlPlane.Methods.NodeMcpDiscover,
+    LemonControlPlane.Methods.NodeProfilePaths,
     LemonControlPlane.Methods.NodeInvokeResult,
     LemonControlPlane.Methods.NodeInvokeEvent,
     LemonControlPlane.Methods.NodeInvokeControlResult,

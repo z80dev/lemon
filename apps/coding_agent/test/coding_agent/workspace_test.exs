@@ -118,6 +118,7 @@ defmodule CodingAgent.WorkspaceTest do
     File.write!(Path.join(root, "SOUL.md"), "destination-stale-persona")
     File.write!(Path.join(root, "IDENTITY.md"), "destination-stale-identity")
     File.write!(Path.join(root, "MEMORY.md"), "destination-only-memory")
+    File.write!(Path.join(root, "USER.md"), "destination-only-user")
     File.write!(Path.join(root, "TOOLS.md"), "destination-tools")
     File.write!(Path.join(root, "credentials.json"), "destination-only-credential")
     snapshot = %{"SOUL.md" => "controller-persona", "README.md" => "profile-job"}
@@ -127,21 +128,24 @@ defmodule CodingAgent.WorkspaceTest do
     assert by_name["SOUL.md"].content == "controller-persona"
     assert by_name["README.md"].content == "profile-job"
     refute Map.has_key?(by_name, "IDENTITY.md")
+    assert by_name["USER.md"].content == "destination-only-user"
     assert by_name["MEMORY.md"].content == "destination-only-memory"
     assert by_name["TOOLS.md"].content == "destination-tools"
     assert File.read!(Path.join(root, "SOUL.md")) == "destination-stale-persona"
+    assert File.read!(Path.join(root, "USER.md")) == "destination-only-user"
     assert File.read!(Path.join(root, "credentials.json")) == "destination-only-credential"
     refute File.exists?(Path.join(root, "README.md"))
   end
 
   @tag :tmp_dir
   test "profile snapshots retain truncation and subagent isolation", %{tmp_dir: root} do
+    File.write!(Path.join(root, "USER.md"), "private-user")
+
     files =
       Workspace.load_bootstrap_files(
         workspace_dir: root,
         profile_instructions: %{
           "AGENTS.md" => String.duplicate("a", 500),
-          "USER.md" => "private-user",
           "SOUL.md" => "private-persona",
           "README.md" => "private-job"
         },
@@ -156,12 +160,63 @@ defmodule CodingAgent.WorkspaceTest do
     refute inspect(files) =~ "private-job"
   end
 
-  test "profile snapshots reject paths, credential files and non-text values" do
+  @tag :tmp_dir
+  test "empty persona snapshots preserve destination USER.md ownership", %{tmp_dir: root} do
+    user_path = Path.join(root, "USER.md")
+
+    files = Workspace.load_bootstrap_files(workspace_dir: root, profile_instructions: %{})
+    missing_user = Enum.find(files, &(&1.name == "USER.md"))
+    assert missing_user.missing
+    assert missing_user.path == user_path
+    refute File.exists?(user_path)
+
+    File.write!(user_path, "local-user-preference")
+    files = Workspace.load_bootstrap_files(workspace_dir: root, profile_instructions: %{})
+    local_user = Enum.find(files, &(&1.name == "USER.md"))
+    refute local_user.missing
+    assert local_user.content == "local-user-preference"
+  end
+
+  @tag :tmp_dir
+  test "stale USER.md snapshots fail closed without changing destination data", %{tmp_dir: root} do
+    user_path = Path.join(root, "USER.md")
+    snapshot = %{"SOUL.md" => "controller-persona", "USER.md" => "stale-controller-user"}
+
+    for local_content <- [nil, "destination-only-user"] do
+      if local_content, do: File.write!(user_path, local_content)
+
+      assert {:error, :invalid_profile_instructions} =
+               Workspace.validate_profile_instructions(snapshot)
+
+      assert_raise ArgumentError, "invalid profile instruction snapshot", fn ->
+        Workspace.load_bootstrap_files(workspace_dir: root, profile_instructions: snapshot)
+      end
+
+      if local_content do
+        assert File.read!(user_path) == local_content
+      else
+        refute File.exists?(user_path)
+      end
+    end
+  end
+
+  test "profile snapshots accept only the four authoritative persona filenames" do
+    snapshot =
+      Map.new(~w(AGENTS.md IDENTITY.md README.md SOUL.md), fn name ->
+        {name, "controller #{name}"}
+      end)
+
+    assert :ok = Workspace.validate_profile_instructions(snapshot)
+  end
+
+  test "profile snapshots reject paths, local workspace files and non-text values" do
     for files <- [
           %{"../SOUL.md" => "escape"},
           %{"credentials.json" => "secret"},
           %{"MEMORY.md" => "controller-memory"},
-          %{"USER.md" => 1},
+          %{"USER.md" => "controller-user"},
+          %{"TOOLS.md" => "controller-tools"},
+          %{"SOUL.md" => 1},
           %{"SOUL.md" => <<0>>},
           %{"SOUL.md" => <<255>>},
           []

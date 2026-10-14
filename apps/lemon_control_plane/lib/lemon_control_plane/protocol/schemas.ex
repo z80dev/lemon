@@ -65,6 +65,14 @@ defmodule LemonControlPlane.Protocol.Schemas do
     # User-managed profiles
     "profiles.list" => %{optional: %{}},
     "profiles.get" => %{required: %{"id" => :string}, optional: %{}},
+    "profiles.sync" => %{
+      required: %{"id" => :string},
+      optional: %{"nodeId" => :string, "mutationId" => :string}
+    },
+    "profiles.sync.status" => %{
+      required: %{"id" => :string, "nodeId" => :string, "mutationId" => :string},
+      optional: %{}
+    },
     "profiles.create" => %{
       required: %{"id" => :string},
       optional: %{
@@ -74,7 +82,8 @@ defmodule LemonControlPlane.Protocol.Schemas do
         "model" => :string,
         "systemPrompt" => :string,
         "node" => :string,
-        "mcpServers" => :list
+        "mcpServers" => :list,
+        "toolPolicy" => :map
       }
     },
     "profiles.update" => %{
@@ -86,7 +95,8 @@ defmodule LemonControlPlane.Protocol.Schemas do
         "model" => :string,
         "systemPrompt" => :string,
         "node" => :string,
-        "mcpServers" => :list
+        "mcpServers" => :list,
+        "toolPolicy" => :map
       }
     },
     "profiles.clone" => %{
@@ -98,7 +108,8 @@ defmodule LemonControlPlane.Protocol.Schemas do
         "model" => :string,
         "systemPrompt" => :string,
         "node" => :string,
-        "mcpServers" => :list
+        "mcpServers" => :list,
+        "toolPolicy" => :map
       }
     },
     "profiles.rename" => %{required: %{"id" => :string, "name" => :string}, optional: %{}},
@@ -582,6 +593,8 @@ defmodule LemonControlPlane.Protocol.Schemas do
         "runId" => :string,
         "agentId" => :string,
         "profileId" => :string,
+        "invocationMcpServers" => :list,
+        "invocationToolPolicy" => :map,
         "cwd" => :string,
         "images" => :list,
         "queueMode" => :string
@@ -675,6 +688,16 @@ defmodule LemonControlPlane.Protocol.Schemas do
       optional: %{
         "args" => :map,
         "timeoutMs" => :integer
+      }
+    },
+    "node.profile.paths" => %{
+      required: %{"nodeId" => :string, "profileId" => :string},
+      optional: %{}
+    },
+    "node.mcp.discover" => %{
+      required: %{
+        "nodeId" => :string,
+        "server" => :map
       }
     },
     "node.invoke.result" => %{
