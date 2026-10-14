@@ -335,7 +335,7 @@ and control plane authoritative:
 | `/session delete [key] …` | Preview one exact durable session, then repeat its key with `--confirm`; optionally use `--export json\|markdown` to verify a redacted export before verified deletion. |
 | `/tree [label <entryId> <text>\|unlabel <entryId>]` | Browse the paginated native session tree, including preserved branches, labels and bounded redacted user/assistant previews. Selecting an entry offers: inspect, switch the active branch here (optionally summarizing the abandoned branch), set/clear its label, or fork a new session from it. Switching is refused while a run is active. |
 | `/rewind [--files]` | Select an active user prompt, preview history-only or checkpointed-file rewind, then explicitly confirm the exact preview. Refused or stale confirmation preserves the local draft and transcript. |
-| `/retry [--force]` | After a failed or aborted turn, rewind history (never files) to the last user prompt and resend it, like omp's `/retry`. Refused while a run is in flight or when the last turn completed; `--force` retries a completed turn too. The discarded turn stays in `/tree`. The recovery draft clears only after an acknowledged run. Rejection retains it; an unknown outcome retains the request/run identity in Ctrl+Q for inspection and explicit review, never automatic resend. |
+| `/retry [--force]` | After a failed or aborted turn, rewind history (never files) to the last text-only user prompt and resend it, like omp's `/retry`. Original journal images or other non-text content are refused before confirmation; reattach and resend manually. Missing or invalid server replay metadata also refuses without changing history. `--force` retries a completed turn but never bypasses these safeguards. The discarded turn stays in `/tree`. The recovery draft clears only after an acknowledged run. Rejection retains it; an unknown outcome retains the request/run identity in Ctrl+Q for inspection and explicit review, never automatic resend. |
 | `/name <title…>\|--clear` | Set or clear the current session's durable title through `sessions.metadata.patch`. |
 | `/blueprints [bundle-id filter]` | Browse bounded catalog IDs/counts, then inspect the selected entry through the shared authenticated service. |
 | `/blueprint [help\|list\|inspect\|validate\|preview\|activate] …` | Inspect and validate content-free metadata, preview one profile without mutation, or activate only after a fresh exact digest match. Refused/stale plans preserve the profile draft and never queue offline. |
@@ -471,6 +471,22 @@ MIX_ENV=test mix test apps/lemon_control_plane/test/lemon_control_plane/tui_prof
 MIX_ENV=test mix test apps/lemon_control_plane/test/lemon_control_plane/tui_sessions_wire_e2e_test.exs --seed 1
 MIX_ENV=test mix test apps/lemon_control_plane/test/lemon_control_plane/tui_blueprints_wire_e2e_test.exs --seed 1
 ```
+
+The standalone retry smoke drives the actual AppShell with a memory terminal.
+Its transport adapter forwards history/tree/rewind to real source methods and a
+persisted native journal, rather than supplying a hard-coded replay flag:
+
+```sh
+# From the umbrella root, after the integration owner's source compile:
+bun scripts/multimodal_retry_app_smoke.ts
+```
+
+It uses `mix run --no-compile`, not ExUnit, and checks resumed mixed/separate/
+unknown media refusal (including `--force`), byte-for-byte unchanged history,
+real text-only rewind/resend, and revision-token invalidation. Send acknowledgments
+are scripted: this smoke does not call a provider or establish model execution,
+and its memory terminal is not a native Tern visual proof.
+
 
 Profile commands deliberately do not accept a profile home or workspace path.
 The daemon derives that boundary from the validated profile ID. The only path

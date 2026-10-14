@@ -163,7 +163,10 @@ export const retryCommand: SlashCommand = {
 		}
 		const session = ctx.session;
 		if (ctx.store.queue.items(session.key).some((item) => item.submission)) {
-			ctx.ui.notice("a submission outcome is unknown — inspect the session and review the queue before retrying", "warning");
+			ctx.ui.notice(
+				"a submission outcome is unknown — inspect the session and review the queue before retrying",
+				"warning",
+			);
 			return;
 		}
 		if (session.busy) {
@@ -212,12 +215,20 @@ export const retryCommand: SlashCommand = {
 				typeof preview.confirmationToken !== "string" ||
 				preview.confirmationToken.length === 0 ||
 				typeof preview.prompt !== "string" ||
+				typeof preview.promptContainsNonText !== "boolean" ||
 				(preview.restoreFiles !== undefined && preview.restoreFiles !== false)
 			) {
 				throw new Error("unexpected rewind preview");
 			}
 		} catch (error) {
 			retryFailure(ctx, "preview", error);
+			return;
+		}
+		if (preview.promptContainsNonText) {
+			ctx.ui.notice(
+				"the stored prompt contains images or other non-text content that /retry cannot resend — history is unchanged; resend the original prompt with its attachments manually",
+				"warning",
+			);
 			return;
 		}
 		if (preview.prompt.trim().length === 0) {

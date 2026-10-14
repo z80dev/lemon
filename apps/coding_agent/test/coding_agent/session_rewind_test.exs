@@ -59,6 +59,51 @@ defmodule CodingAgent.SessionRewindTest do
     assert Enum.any?(SessionManager.entries(restored), &(&1.id == full.leaf_id))
   end
 
+  test "persisted prompt replay metadata inspects original mixed and separate media", %{
+    session: session
+  } do
+    image = %LemonAi.Types.ImageContent{
+      data: Base.encode64("original image"),
+      mime_type: "image/png"
+    }
+
+    for {message, unsafe} <- [
+          {%{"role" => "user", "content" => "same text"}, false},
+          {%{role: :user, content: [%LemonAi.Types.TextContent{text: "same text"}]}, false},
+          {%LemonAi.Types.UserMessage{
+             content: [%LemonAi.Types.TextContent{text: "same text"}, image]
+           }, true},
+          {%{"role" => "user", "content" => [%{"type" => "image", "data" => "bytes"}]}, true},
+          {%{
+             "role" => "user",
+             "content" => [
+               %{"type" => "text", "text" => "same text"},
+               %{"type" => "future_media", "data" => "unknown"}
+             ]
+           }, true},
+          {%{"role" => "user", "content" => "same text", "images" => [image]}, true},
+          {%{role: :user, content: "same text", image: image}, true},
+          {%{"role" => "user", "content" => %{"type" => "unknown"}}, true},
+          {%{"role" => "user", "content" => [%{"type" => "text", "text" => 42}]}, true}
+        ] do
+      target = SessionManager.append_message(session, message)
+      full = assistant(target, "failed turn")
+      {:ok, resumed} = SessionManager.load_from_file(full.file_path)
+      before = File.read!(full.file_path)
+      assert {:ok, preview, ^resumed} = Rewind.run(resumed, target.leaf_id)
+      assert preview["promptContainsNonText"] == unsafe
+      assert File.read!(full.file_path) == before
+      assert SessionManager.get_entry(resumed, target.leaf_id).message != nil
+      changed = user(resumed, "later turn")
+
+      assert {:error, :stale_confirmation} =
+               Rewind.run(changed, target.leaf_id,
+                 dry_run: false,
+                 confirmation_token: preview["confirmationToken"]
+               )
+    end
+  end
+
   test "restores each path to its earliest checkpoint and removes newly created files", %{
     dir: dir,
     session: session

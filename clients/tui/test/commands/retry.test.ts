@@ -37,6 +37,7 @@ const preview = {
 	entryId: "u2",
 	confirmationToken: "token-u2",
 	prompt: "second prompt",
+	promptContainsNonText: false,
 	discardedMessages: 2,
 	restorePaths: [],
 	unrestorableTools: [],
@@ -199,5 +200,53 @@ test("a failed prompt that never reached storage returns to the draft instead of
 		{ dryRun: true },
 	]);
 	expect(resets).toEqual([]);
+	expect(h.host.deliveries).toEqual([]);
+});
+
+test.each(["/retry", "/retry --force"])(
+	"%s refuses non-text journal content before confirming, resetting or resending",
+	async (command) => {
+		h.server.respondWith("sessions.rewind", { ...preview, promptContainsNonText: true });
+		h.host.draft = "keep my correction";
+		h.store.setDraft("s", "keep my correction");
+		const before = [...h.store.focused.blocks];
+		await h.run(command);
+		expect(h.server.requestsFor("sessions.rewind").map((request) => request.params)).toEqual([
+			expect.objectContaining({ dryRun: true }),
+		]);
+		expect(h.host.deliveries).toEqual([]);
+		expect(resets).toEqual([]);
+		expect(reloads).toEqual([]);
+		expect(h.store.focused.blocks).toEqual(before);
+		expect(h.host.draft).toBe("keep my correction");
+		expect(h.store.drafts.get("s")).toBe("keep my correction");
+	},
+);
+
+test.each([undefined, null, "false", 0])(
+	"unknown replay metadata %j cannot authorize even a forced retry",
+	async (promptContainsNonText) => {
+		h.server.respondWith("sessions.rewind", { ...preview, promptContainsNonText });
+		await h.run("/retry --force");
+		expect(h.server.requestsFor("sessions.rewind")).toHaveLength(1);
+		expect(h.server.requestsFor("sessions.rewind")[0].params).toMatchObject({ dryRun: true });
+		expect(h.host.deliveries).toEqual([]);
+		expect(resets).toEqual([]);
+		expect(reloads).toEqual([]);
+	},
+);
+
+test("late focus after a text-only rewind parks recovery on its original session", async () => {
+	Object.assign(h.host, {
+		reloadSession: async () => {
+			h.store.setFocused("other");
+			h.host.draft = "other session draft";
+		},
+	});
+	await h.run("/retry");
+	expect(h.server.requestsFor("sessions.rewind")).toHaveLength(2);
+	expect(h.store.drafts.get("s")).toBe("second prompt");
+	expect(h.store.focusedKey).toBe("other");
+	expect(h.host.draft).toBe("other session draft");
 	expect(h.host.deliveries).toEqual([]);
 });

@@ -110,6 +110,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - **`/retry` in the TUI.** After a failed or aborted turn, `/retry` rewinds
   history (never files) to the last prompt, keeps the discarded turn in `/tree`,
   and resends the prompt; `/retry --force` also retries a completed turn.
+  Retry now checks authoritative original-message replay metadata and refuses
+  stored images or other non-text content before confirming any rewind; it
+  never silently resends just their text projection, including after resume or
+  with `--force`. Missing replay metadata also refuses without history mutation.
   Recovery drafts now clear only after a concrete run acknowledgment. Rejected
   sends retain the draft; uncertain sends keep their fixed request/run identity
   for explicit queue review and never automatically replay. Exact resume uses

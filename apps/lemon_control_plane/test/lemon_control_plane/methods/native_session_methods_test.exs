@@ -193,10 +193,106 @@ defmodule LemonControlPlane.Methods.NativeSessionMethodsTest do
     refute_received {:rewind, _, _, _, _}
   end
 
+  @tag :tmp_dir
+  test "real stopped journal previews preserve media safety through the method boundary", %{
+    tmp_dir: cwd
+  } do
+    alias CodingAgent.SessionManager
+    Application.put_env(:lemon_core, :agent_runtime_provider, CodingAgent.ControlPlaneProvider)
+    key = "agent:native_methods:media-#{LemonCore.Id.uuid()}"
+
+    image = %{
+      "type" => "image",
+      "data" => Base.encode64("original bytes"),
+      "mime_type" => "image/png"
+    }
+
+    on_exit(fn ->
+      LemonCore.ChatStateStore.delete(key)
+      File.rm_rf!(CodingAgent.Config.sessions_dir(cwd))
+    end)
+
+    for {content, images, contains_non_text} <- [
+          {"text-only prompt", [], false},
+          {[%{"type" => "text", "text" => "same text"}, image], [], true},
+          {"same text", [image], true},
+          {[%{"type" => "text", "text" => "same text"}, %{"type" => "future_media"}], [], true}
+        ] do
+      target =
+        SessionManager.new(cwd)
+        |> SessionManager.append_message(%{
+          "role" => "user",
+          "content" => content,
+          "images" => images
+        })
+
+      full =
+        SessionManager.append_message(target, %{"role" => "assistant", "content" => "failed"})
+
+      path = CodingAgent.Session.Presentation.session_file_path(full.header.id, cwd)
+      :ok = SessionManager.save_to_file(path, full)
+
+      :ok =
+        LemonCore.ChatStateStore.put(key, %LemonCore.ChatState{
+          last_engine: "lemon",
+          last_resume_token: full.header.id
+        })
+
+      params = %{"sessionKey" => key, "cwd" => cwd, "entryId" => target.leaf_id}
+      before = File.read!(path)
+      assert {:ok, preview} = SessionsRewind.handle(params, %{})
+      assert preview["promptContainsNonText"] == contains_non_text
+      assert File.read!(path) == before
+      assert {:ok, resumed} = SessionManager.load_from_file(path)
+      assert resumed.leaf_id == full.leaf_id
+
+      assert SessionManager.get_entry(resumed, target.leaf_id).message == %{
+               "role" => "user",
+               "content" => content,
+               "images" => images
+             }
+
+      if contains_non_text do
+        changed =
+          resumed
+          |> Map.put(:file_path, path)
+          |> SessionManager.append_message(%{"role" => "user", "content" => "later turn"})
+
+        assert {:error, {:conflict, _, %{"reason" => "stale_confirmation"}}} =
+                 SessionsRewind.handle(
+                   Map.merge(params, %{
+                     "dryRun" => false,
+                     "confirmationToken" => preview["confirmationToken"]
+                   }),
+                   %{}
+                 )
+
+        assert {:ok, still_changed} = SessionManager.load_from_file(path)
+        assert still_changed.leaf_id == changed.leaf_id
+      else
+        assert {:ok, result} =
+                 SessionsRewind.handle(
+                   Map.merge(params, %{
+                     "dryRun" => false,
+                     "confirmationToken" => preview["confirmationToken"]
+                   }),
+                   %{}
+                 )
+
+        assert result["prompt"] == content
+        assert {:ok, rewound} = SessionManager.load_from_file(path)
+        assert rewound.leaf_id == nil
+      end
+
+      LemonCore.Store.delete(:session_rewinds, full.header.id)
+    end
+  end
+
   test "rewind defaults to preview and requires a bounded confirmation for execution" do
     preview = %{
       "confirmationToken" => "preview-token",
       "prompt" => "edit this",
+      "promptContainsNonText" => true,
       "discardedMessages" => 2,
       "restorePaths" => [],
       "unrestorableTools" => [],
