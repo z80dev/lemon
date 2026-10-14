@@ -498,6 +498,47 @@ defmodule CodingAgent.CoordinatorTest do
     end
   end
 
+  for event <- [{:complete, "completed answer"}, {:fail, :provider_failed}],
+      cancellation <- [:abort, :timeout] do
+    test "#{elem(event, 0)} remains terminal when #{cancellation} arrives during cleanup", %{
+      tmp_dir: tmp_dir
+    } do
+      coordinator = start_controlled_coordinator(tmp_dir, gate_cleanup: true)
+      call = run_async(coordinator, [%{prompt: "Terminal before cleanup"}])
+      {pid, ref, session_id, _worker} = started_session("Terminal before cleanup")
+      event = unquote(Macro.escape(event))
+      send(pid, event)
+      assert_receive {:session_cleanup_started, ^pid}, 1_000
+
+      case unquote(cancellation) do
+        :abort ->
+          assert :ok = Coordinator.abort_all(coordinator)
+
+        :timeout ->
+          %{batches: batches} = :sys.get_state(coordinator)
+          [batch_ref] = Map.keys(batches)
+          send(coordinator, {:batch_timeout, batch_ref})
+      end
+
+      assert [_active_id] = Coordinator.list_active(coordinator)
+      refute_receive {:results, ^call, _}
+      send(pid, :release_cleanup)
+      assert_receive {:DOWN, ^ref, :process, ^pid, :shutdown}, 1_000
+      assert_receive {:results, ^call, [result]}, 2_000
+
+      expected =
+        case event do
+          {:complete, answer} -> %{status: :completed, result: answer, error: nil}
+          {:fail, reason} -> %{status: :error, result: nil, error: reason}
+        end
+
+      assert Map.take(result, [:status, :result, :error, :session_id]) ==
+               Map.put(expected, :session_id, session_id)
+
+      assert Coordinator.list_active(coordinator) == []
+    end
+  end
+
   describe "crash handling" do
     test "reports an actual session crash and remains usable", %{tmp_dir: tmp_dir} do
       coordinator = start_controlled_coordinator(tmp_dir)
@@ -523,6 +564,42 @@ defmodule CodingAgent.CoordinatorTest do
       assert_receive {:DOWN, ^ref, :process, ^pid, :shutdown}, 1_000
       assert_receive {:results, ^call, [%{status: :error, error: {:crashed, :killed}, session_id: ^session_id}]}, 1_000
       assert Coordinator.list_active(coordinator) == []
+    end
+
+    test "worker death during supervised admission retains ownership of the late child", %{
+      tmp_dir: tmp_dir
+    } do
+      coordinator = start_coordinator(tmp_dir)
+      supervisor = start_supervised!({DynamicSupervisor, strategy: :one_for_one})
+      test_pid = self()
+
+      starter = fn _opts ->
+        DynamicSupervisor.start_child(supervisor, %{
+          id: make_ref(),
+          start: {ControlledSession, :start_link, [[test_pid: test_pid, gate_start: true]]},
+          restart: :temporary
+        })
+      end
+
+      :sys.replace_state(coordinator, &%{&1 | session_starter: starter})
+      call = run_async(coordinator, [%{prompt: "Worker dies in admission"}])
+      assert_receive {:session_starting, pid, _session_id}, 1_000
+      ref = track_session(pid)
+      %{active_subagents: active} = :sys.get_state(coordinator)
+      [{id, %{worker_pid: worker}}] = Map.to_list(active)
+      worker_ref = Process.monitor(worker)
+      Process.exit(worker, :kill)
+      assert_receive {:DOWN, ^worker_ref, :process, ^worker, :killed}, 1_000
+      assert [^id] = Coordinator.list_active(coordinator)
+      refute_receive {:results, ^call, _}
+
+      send(pid, :release_start)
+      assert_receive {:session_aborted, ^pid}, 1_000
+      assert_receive {:DOWN, ^ref, :process, ^pid, :shutdown}, 1_000
+      assert_receive {:results, ^call, [%{status: :error, error: {:crashed, :killed}}]}, 2_000
+      refute_receive {:session_prompted, ^pid, _}
+      assert Coordinator.list_active(coordinator) == []
+      assert DynamicSupervisor.which_children(supervisor) == []
     end
 
     test "coordinator death cancels a still-starting session", %{tmp_dir: tmp_dir} do
