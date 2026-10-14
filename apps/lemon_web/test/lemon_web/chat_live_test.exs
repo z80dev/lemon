@@ -383,7 +383,7 @@ defmodule LemonWeb.ChatLiveTest do
     refute has_element?(pane, "[data-approval-id='#{mine}']")
     assert has_element?(pane, ".approval-notice", "Approved once.")
 
-    :ok = ExecApprovals.resolve(theirs, :deny)
+    {:ok, %{decision: :deny, outcome: :denied}} = ExecApprovals.resolve(theirs, :deny)
     Task.await(their_req)
   end
 
@@ -394,7 +394,7 @@ defmodule LemonWeb.ChatLiveTest do
     req = request(id, k, "bash", %{"command" => "make release"})
     eventually(fn -> has_element?(pane, "[data-approval-id='#{id}']") end)
 
-    :ok = ExecApprovals.resolve(id, :deny)
+    {:ok, %{decision: :deny, outcome: :denied}} = ExecApprovals.resolve(id, :deny)
     Task.await(req)
     eventually(fn -> not has_element?(pane, "[data-approval-id='#{id}']") end)
     assert has_element?(pane, ".approval-notice", "answered elsewhere")

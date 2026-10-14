@@ -319,10 +319,12 @@ defmodule CodingAgent.ExecutionNode.Worker do
     pending = payload.pending
     case invocation_for_run(state, pending.run_id) do
       nil -> {:noreply, state}
-      {invoke_id, invocation} ->
+      {invoke_id, %{session_key: session_key} = invocation}
+      when session_key == pending.session_key ->
         invocation = %{invocation | approvals: MapSet.put(invocation.approvals, pending.id)}
         state = put_invocation(state, invoke_id, invocation)
         {:noreply, forward_event(state, invoke_id, RemoteEventCodec.encode_approval(pending))}
+      _ -> {:noreply, state}
     end
   end
 
@@ -579,12 +581,19 @@ defmodule CodingAgent.ExecutionNode.Worker do
     approval_id = payload["approvalId"]
     decision = Map.get(@approval_decisions, payload["decision"])
     case Map.get(state.invocations, invoke_id) do
-      %{run_id: run_id, approvals: approvals} = invocation ->
+      %{run_id: run_id, session_key: session_key, approvals: approvals} = invocation ->
         if targeted?(payload, state) and payload["runId"] == run_id and
              MapSet.member?(approvals, approval_id) and not is_nil(decision) do
-          _ = ExecApprovals.resolve(approval_id, decision)
-          invocation = %{invocation | approvals: MapSet.delete(approvals, approval_id)}
-          {:noreply, put_invocation(state, invoke_id, invocation)}
+          case ExecApprovals.resolve(approval_id, decision,
+                 expected_run_id: run_id, expected_session_key: session_key) do
+            {:ok, %{run_id: ^run_id, session_key: ^session_key, decision: ^decision}} ->
+              invocation = %{invocation | approvals: MapSet.delete(approvals, approval_id)}
+              {:noreply, put_invocation(state, invoke_id, invocation)}
+
+            {:error, _} ->
+              # Keep it owned so invocation teardown still cancels its waiter.
+              {:noreply, state}
+          end
         else
           {:noreply, state}
         end
@@ -670,6 +679,7 @@ defmodule CodingAgent.ExecutionNode.Worker do
         delta_bytes: 0,
         delta_count: 0,
         run_id: request.run_id,
+        session_key: request.session_key,
         event_seq: 0,
         event_queue: :queue.new(),
         pending_events: 0,

@@ -579,7 +579,8 @@ defmodule LemonSkills.InstallerTest do
       assert pending.rationale =~ "SECURITY WARNING"
       assert pending.rationale =~ String.slice(pending.action.bundle_hash, 0, 12)
 
-      :ok = LemonCore.ExecApprovals.resolve(approval_id, :approve_once)
+      {:ok, %{decision: :approve_once, outcome: :approved}} =
+        LemonCore.ExecApprovals.resolve(approval_id, :approve_once)
 
       assert {:ok, entry} = Task.await(task, 3_000)
       assert entry.audit_status == :overridden

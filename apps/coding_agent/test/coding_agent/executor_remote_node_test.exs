@@ -261,7 +261,9 @@ defmodule CodingAgent.ExecutorRemoteNodeTest do
     assert session_key == request.session_key
     assert LemonCore.ExecApprovalStore.get_pending(controller_id).tool == "bash"
     refute controller_id == worker_id
-    assert :ok = LemonCore.ExecApprovals.resolve(controller_id, :approve_once)
+    assert {:ok, %{decision: :approve_once, outcome: :approved}} =
+      LemonCore.ExecApprovals.resolve(controller_id, :approve_once,
+        expected_session_key: session_key, expected_run_id: run_id)
     assert_receive {:node_event, "node.invoke.approval",
       %{"nodeId" => "node-approval", "invokeId" => ^invoke_id, "runId" => ^run_id,
         "approvalId" => ^worker_id, "decision" => "approve_once"}}
@@ -284,7 +286,7 @@ defmodule CodingAgent.ExecutorRemoteNodeTest do
     assert_receive %LemonCore.Event{type: :approval_resolved,
       payload: %{approval_id: ^controller_id, decision: :cancelled}}
     assert LemonCore.ExecApprovalStore.get_pending(controller_id) == nil
-    assert {:error, :not_pending} = LemonCore.ExecApprovals.resolve(controller_id, :approve_once)
+    assert {:error, :cancelled} = LemonCore.ExecApprovals.resolve(controller_id, :approve_once)
     refute_receive {:node_event, "node.invoke.approval", %{"decision" => "approve_once"}}
   end
 

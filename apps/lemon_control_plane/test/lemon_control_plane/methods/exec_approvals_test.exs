@@ -154,7 +154,7 @@ defmodule LemonControlPlane.Methods.ExecApprovalsTest do
         )
 
       # Pending approval should be removed
-      assert LemonCore.Store.get(:exec_approvals_pending, approval_id) == nil
+      assert LemonCore.ExecApprovalStore.get_pending(approval_id) == nil
     end
   end
 

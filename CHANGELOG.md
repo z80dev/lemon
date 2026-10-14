@@ -48,6 +48,13 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Execution approval resolution now returns an owner-verified outcome and actual
+  decision instead of acknowledging stale or unknown prompts. Optional exact
+  session/run bindings are atomically checked with the pending snapshot; expired,
+  cancelled and conflicting decisions fail closed. Redacted retained receipts
+  allow only exact-bound same-decision replays, without reinstalling grants.
+  Named-node workers retain failed approval resolutions for teardown and bind
+  successful decisions to their invocation's run and session.
 - Named-node profile chat no longer inherits the controller's default working
   directory. Profile persona instructions and MCP connections accompany the
   execution request, while provider credentials remain destination-local.

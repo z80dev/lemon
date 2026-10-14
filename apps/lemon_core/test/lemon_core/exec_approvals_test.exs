@@ -27,11 +27,11 @@ defmodule LemonCore.ExecApprovalsTest do
   # Waits for a request running in another process to create its pending approval.
   defp await_pending_approvals do
     LemonCore.Testing.AsyncHelpers.assert_eventually(
-      fn -> Store.list(:exec_approvals_pending) != [] end,
+      fn -> ExecApprovalStore.list_pending() != [] end,
       timeout: 5_000
     )
 
-    Store.list(:exec_approvals_pending)
+    ExecApprovalStore.list_pending()
   end
 
   defp clear_approval_tables do
@@ -199,7 +199,7 @@ defmodule LemonCore.ExecApprovalsTest do
         end)
 
       {_key, pending} = hd(await_pending_approvals())
-      :ok = ExecApprovals.resolve(pending.id, :deny)
+      {:ok, %{decision: :deny, outcome: :denied}} = ExecApprovals.resolve(pending.id, :deny)
 
       assert {:ok, :denied} = Task.await(task, 5_000)
 
@@ -313,7 +313,8 @@ defmodule LemonCore.ExecApprovalsTest do
 
       Store.put(:exec_approvals_pending, pending.id, pending)
 
-      :ok = ExecApprovals.resolve(pending.id, :approve_session)
+      {:ok, %{decision: :approve_session, outcome: :approved}} =
+        ExecApprovals.resolve(pending.id, :approve_session)
 
       # Verify the approval was stored at session scope
       action_hash = hash_action(pending.action)
@@ -337,7 +338,8 @@ defmodule LemonCore.ExecApprovalsTest do
 
       Store.put(:exec_approvals_pending, pending.id, pending)
 
-      :ok = ExecApprovals.resolve(pending.id, :approve_agent)
+      {:ok, %{decision: :approve_agent, outcome: :approved}} =
+        ExecApprovals.resolve(pending.id, :approve_agent)
 
       action_hash = hash_action(pending.action)
       stored = Store.get(:exec_approvals_policy_agent, {"test_agent", "bash", action_hash})
@@ -360,7 +362,8 @@ defmodule LemonCore.ExecApprovalsTest do
 
       Store.put(:exec_approvals_pending, pending.id, pending)
 
-      :ok = ExecApprovals.resolve(pending.id, :approve_global)
+      {:ok, %{decision: :approve_global, outcome: :approved}} =
+        ExecApprovals.resolve(pending.id, :approve_global)
 
       action_hash = hash_action(pending.action)
       stored = Store.get(:exec_approvals_policy, {"bash", action_hash})
@@ -383,7 +386,8 @@ defmodule LemonCore.ExecApprovalsTest do
 
       Store.put(:exec_approvals_pending, pending.id, pending)
 
-      :ok = ExecApprovals.resolve(pending.id, :approve_once)
+      {:ok, %{decision: :approve_once, outcome: :approved}} =
+        ExecApprovals.resolve(pending.id, :approve_once)
 
       # Verify no approval was stored
       action_hash = hash_action(pending.action)
@@ -394,7 +398,7 @@ defmodule LemonCore.ExecApprovalsTest do
                nil
     end
 
-    test "deletes pending approval after resolution" do
+    test "removes completed approval from pending accessors" do
       pending = %{
         id: "approval_123",
         run_id: "run_123",
@@ -407,13 +411,143 @@ defmodule LemonCore.ExecApprovalsTest do
 
       Store.put(:exec_approvals_pending, pending.id, pending)
 
-      :ok = ExecApprovals.resolve(pending.id, :approve_once)
+      {:ok, %{decision: :approve_once, outcome: :approved}} =
+        ExecApprovals.resolve(pending.id, :approve_once)
 
-      assert Store.get(:exec_approvals_pending, pending.id) == nil
+      assert ExecApprovalStore.get_pending(pending.id) == nil
     end
 
-    test "reports :not_pending for an approval that is not pending" do
-      assert {:error, :not_pending} = ExecApprovals.resolve("non_existent_id", :approve_once)
+    test "reports :not_found for an unknown approval" do
+      assert {:error, :not_found} = ExecApprovals.resolve("non_existent_id", :approve_once)
+    end
+  end
+
+  describe "verified bound resolutions" do
+    test "foreign session and run bindings never consume or authorize the live request" do
+      LemonCore.Bus.subscribe("exec_approvals")
+      task =
+        Task.async(fn ->
+          ExecApprovals.request(%{
+            approval_id: "approval_bound",
+            run_id: "run_bound",
+            session_key: "agent:test:bound",
+            tool: "bash",
+            action: %{command: "bound command"},
+            expires_in_ms: 5_000
+          })
+        end)
+
+      assert_receive %LemonCore.Event{
+        type: :approval_requested, payload: %{pending: pending}
+      }, 1_000
+
+      assert {:error, :mismatch} =
+               ExecApprovals.resolve(pending.id, :approve_global,
+                 expected_session_key: "agent:other:bound", expected_run_id: pending.run_id)
+
+      assert {:error, :mismatch} =
+               ExecApprovals.resolve(pending.id, :approve_session,
+                 expected_session_key: pending.session_key, expected_run_id: "run_other")
+
+      assert ExecApprovalStore.get_pending(pending.id) == pending
+      assert ExecApprovalStore.get_global_policy("bash", hash_action(pending.action)) == nil
+      assert ExecApprovalStore.get_session_policy(
+               pending.session_key, "bash", hash_action(pending.action)) == nil
+      refute_receive %LemonCore.Event{type: :approval_resolved}
+
+      assert {:ok, %{outcome: :denied, decision: :deny, replayed: false}} =
+               ExecApprovals.resolve(pending.id, :deny,
+                 expected_session_key: pending.session_key, expected_run_id: pending.run_id)
+      assert {:ok, :denied} = Task.await(task)
+    end
+
+    test "same-decision replay requires both identities and retained completed owner state" do
+      pending = %{
+        id: "approval_replay", run_id: "run_replay", session_key: "agent:test:replay",
+        agent_id: "test", tool: "bash", action: %{command: "private command"},
+        rationale: "private rationale"
+      }
+      :ok = ExecApprovalStore.put_pending_new(pending.id, pending)
+      LemonCore.Bus.subscribe("exec_approvals")
+      opts = [expected_session_key: pending.session_key, expected_run_id: pending.run_id]
+
+      assert {:ok, receipt} = ExecApprovals.resolve(pending.id, :approve_session, opts)
+      assert receipt.decision == :approve_session
+      assert receipt.outcome == :approved
+      assert receipt.replayed == false
+      assert_receive %LemonCore.Event{type: :approval_resolved}
+      policy = ExecApprovalStore.get_session_policy(
+        pending.session_key, pending.tool, hash_action(pending.action))
+
+      assert {:ok, replay} = ExecApprovals.resolve(pending.id, :approve_session, opts)
+      assert replay == %{receipt | replayed: true}
+      assert ExecApprovalStore.get_session_policy(
+               pending.session_key, pending.tool, hash_action(pending.action)) == policy
+      refute_receive %LemonCore.Event{type: :approval_resolved}
+      assert ExecApprovalStore.get_pending(pending.id) == nil
+
+      assert {:error, :already_resolved} = ExecApprovals.resolve(pending.id, :approve_session)
+      assert {:error, :already_resolved} =
+               ExecApprovals.resolve(pending.id, :approve_session,
+                 expected_session_key: pending.session_key)
+      assert {:error, :mismatch} =
+               ExecApprovals.resolve(pending.id, :approve_session,
+                 expected_session_key: pending.session_key, expected_run_id: "other_run")
+      assert {:error, :mismatch} =
+               ExecApprovals.resolve(pending.id, :approve_session,
+                 expected_session_key: "agent:other:replay", expected_run_id: pending.run_id)
+      assert {:error, :conflict} = ExecApprovals.resolve(pending.id, :deny, opts)
+      assert {:error, :exists} =
+               ExecApprovalStore.put_pending_new(pending.id, %{pending | run_id: "other_run"})
+      assert {:ok, stored} = ExecApprovalStore.fetch_record(pending.id)
+      refute inspect(stored) =~ "private command"
+      refute inspect(stored) =~ "private rationale"
+
+      :ok = ExecApprovalStore.delete_pending(pending.id)
+      assert {:error, :not_found} = ExecApprovals.resolve(pending.id, :approve_session, opts)
+    end
+
+    test "competing bound decisions report the winner without duplicate grants or events" do
+      LemonCore.Bus.subscribe("exec_approvals")
+      task =
+        Task.async(fn ->
+          ExecApprovals.request(%{
+            approval_id: "approval_winner", run_id: "run_winner",
+            session_key: "agent:test:winner", tool: "bash",
+            action: %{command: "winner"}, expires_in_ms: 5_000
+          })
+        end)
+      assert_receive %LemonCore.Event{
+        type: :approval_requested, payload: %{pending: pending}
+      }, 1_000
+      opts = [expected_session_key: pending.session_key, expected_run_id: pending.run_id]
+      callers =
+        for i <- 1..12 do
+          Task.async(fn ->
+            decision = if rem(i, 2) == 0, do: :approve_session, else: :deny
+            ExecApprovals.resolve(pending.id, decision, opts)
+          end)
+        end
+      results = Task.await_many(callers)
+      assert Enum.count(results, &match?({:ok, %{replayed: false}}, &1)) == 1
+      {:ok, winner} = Enum.find(results, &match?({:ok, %{replayed: false}}, &1))
+
+      assert Enum.all?(results, fn
+        {:ok, receipt} -> receipt.decision == winner.decision and receipt.outcome == winner.outcome
+        {:error, reason} -> reason in [:conflict, :resolution_in_progress]
+      end)
+      assert_receive %LemonCore.Event{
+        type: :approval_resolved, payload: %{decision: decision}
+      }
+      assert decision == winner.decision
+      refute_receive %LemonCore.Event{type: :approval_resolved}
+      expected = if winner.outcome == :approved,
+        do: {:ok, :approved, :approve_session}, else: {:ok, :denied}
+      assert Task.await(task) == expected
+      assert {:ok, replay} = ExecApprovals.resolve(pending.id, winner.decision, opts)
+      assert replay.replayed == true
+      loser = if winner.decision == :deny, do: :approve_session, else: :deny
+      assert {:error, :conflict} = ExecApprovals.resolve(pending.id, loser, opts)
     end
   end
 
@@ -438,9 +572,10 @@ defmodule LemonCore.ExecApprovalsTest do
 
       assert {:error, :invalid_decision} = ExecApprovals.resolve(pending.id, :yes)
       assert {:ok, ^changed} = ExecApprovalStore.fetch_pending(pending.id)
-      assert :ok = ExecApprovals.resolve(pending.id, :approve_once, expected_pending: changed)
+      assert {:ok, %{decision: :approve_once}} =
+               ExecApprovals.resolve(pending.id, :approve_once, expected_pending: changed)
 
-      assert {:error, :not_pending} =
+      assert {:error, :already_resolved} =
                ExecApprovals.resolve(pending.id, :approve_once, expected_pending: changed)
     end
 
@@ -498,17 +633,6 @@ defmodule LemonCore.ExecApprovalsTest do
   end
 
   describe "atomic cancel/resolve transition" do
-    test "take_pending hands the record to exactly one taker" do
-      pending = %{id: "approval_take", tool: "bash", run_id: "run_123"}
-      Store.put(:exec_approvals_pending, pending.id, pending)
-
-      assert {%{id: "approval_take"}, nil} =
-               {ExecApprovalStore.take_pending(pending.id),
-                ExecApprovalStore.take_pending(pending.id)}
-
-      assert Store.get(:exec_approvals_pending, pending.id) == nil
-    end
-
     test "resolve after cancel loses and installs no policy" do
       pending = %{
         id: "approval_c1",
@@ -522,7 +646,7 @@ defmodule LemonCore.ExecApprovalsTest do
       Store.put(:exec_approvals_pending, pending.id, pending)
 
       assert :ok = ExecApprovals.cancel(pending.id, "dispatch ended")
-      assert {:error, :not_pending} = ExecApprovals.resolve(pending.id, :approve_global)
+      assert {:error, :cancelled} = ExecApprovals.resolve(pending.id, :approve_global)
 
       assert Store.get(:exec_approvals_policy, {"bash", hash_action(pending.action)}) == nil
     end
@@ -539,7 +663,8 @@ defmodule LemonCore.ExecApprovalsTest do
 
       Store.put(:exec_approvals_pending, pending.id, pending)
 
-      assert :ok = ExecApprovals.resolve(pending.id, :approve_session)
+      assert {:ok, %{decision: :approve_session}} =
+               ExecApprovals.resolve(pending.id, :approve_session)
       assert {:error, :not_pending} = ExecApprovals.cancel(pending.id, "dispatch ended")
 
       assert Store.get(
@@ -572,11 +697,11 @@ defmodule LemonCore.ExecApprovalsTest do
 
       results = Task.await_many(callers, 5_000)
 
-      # Exactly one caller won the atomic transition; every loser reported
-      # :not_pending with no side effects.
-      assert Enum.count(results, &(&1 == :ok)) == 1
-      assert Enum.count(results, &(&1 == {:error, :not_pending})) == 15
-      assert Store.get(:exec_approvals_pending, pending.id) == nil
+      # Exactly one transition won. Losing resolvers report retained state;
+      # cancellations never overwrite that state or install grants.
+      assert Enum.count(results, &(match?({:ok, %{replayed: false}}, &1) or &1 == :ok)) == 1
+      assert Enum.count(results, &match?({:error, _}, &1)) == 15
+      assert ExecApprovalStore.get_pending(pending.id) == nil
 
       global = Store.get(:exec_approvals_policy, {"bash", hash_action(pending.action)})
       assert global == nil or global.approved == true
@@ -600,12 +725,11 @@ defmodule LemonCore.ExecApprovalsTest do
 
       assert {:error, :timeout} = Task.await(task, 1_000)
 
-      # The timeout won `take_pending`: the decision and its events belong
-      # to the timeout alone, and a late resolve loses without side effects.
-      assert {:error, :not_pending} = ExecApprovals.resolve(approval_id, :approve_global)
+      # The timeout's retained receipt rejects late resolution without grants.
+      assert {:error, :expired} = ExecApprovals.resolve(approval_id, :approve_global)
 
       assert Store.get(:exec_approvals_policy, {"bash", hash_action(%{command: "ls"})}) == nil
-      assert Store.get(:exec_approvals_pending, approval_id) == nil
+      assert ExecApprovalStore.get_pending(approval_id) == nil
 
       assert LemonCore.Introspection.list(
                run_id: run_id,
@@ -638,9 +762,7 @@ defmodule LemonCore.ExecApprovalsTest do
           })
         end)
 
-      # The request event is the registration barrier: put_pending/2 happens
-      # before this broadcast, so the race below cannot accidentally resolve
-      # an id that has not been registered yet.
+      # The request event is the registration barrier for the exact snapshot.
       assert_receive %LemonCore.Event{
                        type: :approval_requested,
                        payload: %{approval_id: ^approval_id}
@@ -652,10 +774,8 @@ defmodule LemonCore.ExecApprovalsTest do
 
       resolve_task =
         try do
-          # Hold the Store until the waiter's deadline transition is queued,
-          # then queue resolve's take behind it. With the old get+delete
-          # timeout path both callers could receive the same pending record;
-          # the single take path hands it only to the timeout.
+          # Hold Store until the exact-record timeout claim is queued, then
+          # queue the resolver's owner read behind it. Only timeout may win.
           assert :ok =
                    LemonCore.Testing.AsyncHelpers.assert_eventually(
                      fn -> queued_pending_transitions(store, approval_id) == 1 end,
@@ -683,8 +803,8 @@ defmodule LemonCore.ExecApprovalsTest do
         end
 
       assert {:error, :timeout} = Task.await(request_task, 1_000)
-      assert {:error, :not_pending} = Task.await(resolve_task, 1_000)
-      assert Store.get(:exec_approvals_pending, approval_id) == nil
+      assert {:error, :expired} = Task.await(resolve_task, 1_000)
+      assert ExecApprovalStore.get_pending(approval_id) == nil
 
       assert Store.get(:exec_approvals_policy_session, {
                "agent:test:main",
@@ -822,6 +942,10 @@ defmodule LemonCore.ExecApprovalsTest do
     Enum.count(messages, fn
       {:"$gen_call", _from, {operation, :exec_approvals_pending, ^approval_id}}
       when operation in [:generic_get, :generic_fetch, :generic_take] ->
+        true
+
+      {:"$gen_call", _from,
+       {:generic_compare_and_swap, :exec_approvals_pending, ^approval_id, _, _}} ->
         true
 
       _other ->
