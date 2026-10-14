@@ -226,6 +226,8 @@ defmodule CodingAgent.Session do
     * `:parent_session` - Parent session ID for fork lineage (ignored when loading from file)
     * `:thinking_level` - Extended reasoning level. If not provided, restores the
       saved level or uses `default_thinking_level` for new sessions.
+      `:auto` classifies each user prompt with an explicitly configured `@tiny` or `@smol`.
+    * `:complete_fn` - Optional completion injection `(model, context, options)` for auto classification
     * `:register` - When true, register the session under its ID in `CodingAgent.SessionRegistry`
     * `:registry` - Registry module to use when registering (default: `CodingAgent.SessionRegistry`)
     * `:transform_context` - Optional custom context transform `(messages, signal) -> messages`
@@ -911,6 +913,7 @@ defmodule CodingAgent.Session do
   end
 
   def handle_call({:set_thinking_level, level}, _from, state) do
+    level = LemonAgent.AutoThinking.normalize_level(level)
     :ok = LemonAgent.Agent.set_thinking_level(state.agent, level)
 
     # Record thinking level change in session
@@ -1572,15 +1575,25 @@ defmodule CodingAgent.Session do
   that disappear.
   """
   @spec strip_recalled_context(message) :: message when message: var
-  def strip_recalled_context(%LemonAi.Types.UserMessage{content: content} = message) do
-    %{message | content: remove_recalled(content)}
+  @spec strip_recalled_context(message, String.t()) :: message when message: var
+  def strip_recalled_context(message, marker \\ recalled_marker())
+
+  def strip_recalled_context(%LemonAi.Types.UserMessage{content: content} = message, marker) do
+    %{message | content: remove_recalled(content, marker)}
   end
 
-  def strip_recalled_context(%CustomMessage{content: content} = message) do
-    %{message | content: remove_recalled(content)}
+  def strip_recalled_context(%CustomMessage{content: content} = message, marker) do
+    %{message | content: remove_recalled(content, marker)}
   end
 
-  def strip_recalled_context(message), do: message
+  def strip_recalled_context(message, _marker), do: message
+
+  @doc false
+  @spec recalled_context_stripper() :: (map() -> map())
+  def recalled_context_stripper do
+    marker = recalled_marker()
+    fn message -> strip_recalled_context(message, marker) end
+  end
 
   # Collects this turn's contributed sections once and puts each half where it
   # belongs: the stable half into the system prompt the composer is about to
@@ -1841,9 +1854,7 @@ defmodule CodingAgent.Session do
   # with our marked opening line and ended with our marked closing one. A block
   # is only ever appended, so the last such opening in the content is the one
   # that was appended and everything before it is untouched.
-  defp remove_recalled(content) when is_binary(content) do
-    marker = recalled_marker()
-
+  defp remove_recalled(content, marker) when is_binary(content) do
     if String.ends_with?(content, "\n" <> recalled_end(marker) <> "\n" <> @recalled_close) do
       cut_recalled(
         content,
@@ -1854,12 +1865,11 @@ defmodule CodingAgent.Session do
     end
   end
 
-  defp remove_recalled(content) when is_list(content) do
-    marker = recalled_marker()
+  defp remove_recalled(content, marker) when is_list(content) do
     Enum.reject(content, &recalled_block?(&1, marker))
   end
 
-  defp remove_recalled(content), do: content
+  defp remove_recalled(content, _marker), do: content
 
   defp cut_recalled(content, opening) do
     case :binary.matches(content, opening) do

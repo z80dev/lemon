@@ -27,7 +27,8 @@ defmodule CodingAgent.SideQuery do
     "low" => :low,
     "medium" => :medium,
     "high" => :high,
-    "xhigh" => :xhigh
+    "xhigh" => :xhigh,
+    "auto" => :auto
   }
 
   @type source :: pid() | String.t() | %{required(:messages) => list()}

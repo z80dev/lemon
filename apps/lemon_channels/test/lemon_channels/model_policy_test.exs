@@ -56,6 +56,9 @@ defmodule LemonChannels.ModelPolicyTest do
 
       policy = ModelPolicy.new_policy("model", thinking_level: "HIGH")
       assert policy.thinking_level == :high
+
+      policy = ModelPolicy.new_policy("model", thinking_level: "auto")
+      assert policy.thinking_level == :auto
     end
 
     test "rejects invalid thinking levels" do

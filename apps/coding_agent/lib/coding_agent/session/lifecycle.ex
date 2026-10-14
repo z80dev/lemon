@@ -70,15 +70,17 @@ defmodule CodingAgent.Session.Lifecycle do
       )
 
     thinking_level =
-      Keyword.get(opts, :thinking_level) ||
-        if(
-          Enum.any?(
-            SessionManager.get_branch(session_manager),
-            &(&1.type == :thinking_level_change)
-          ),
-          do: restored_context.thinking_level,
-          else: settings_manager.default_thinking_level
-        )
+      LemonAgent.AutoThinking.normalize_level(
+        Keyword.get(opts, :thinking_level) ||
+          if(
+            Enum.any?(
+              SessionManager.get_branch(session_manager),
+              &(&1.type == :thinking_level_change)
+            ),
+            do: restored_context.thinking_level,
+            else: settings_manager.default_thinking_level
+          )
+      )
 
     session_file =
       session_file ||
@@ -227,6 +229,60 @@ defmodule CodingAgent.Session.Lifecycle do
         cwd
       )
 
+    resolve_stream_options = fn next_model, previous_model, options ->
+      options =
+        if next_model.provider == previous_model.provider do
+          options
+        else
+          LemonAgent.ModelRuntime.StreamOptions.sanitize_for_provider_switch(options)
+        end
+
+      options = ModelResolver.build_stream_options(next_model, settings_manager, options, cwd)
+      provider = next_model.provider
+
+      api_key =
+        get_api_key.(provider) ||
+          if(is_atom(provider), do: get_api_key.(Atom.to_string(provider))) ||
+          options.api_key
+
+      %{options | api_key: api_key}
+    end
+
+    strip_recalled_context = Session.recalled_context_stripper()
+
+    # Prepare only closures here. Model/credential resolution and completion
+    # happen inside AutoThinking's bounded task when the loop sees a user turn.
+    resolve_thinking = fn active_model, message, signal ->
+      resolve_classifier = fn ->
+        case ModelResolver.resolve_auto_thinking_model(settings_manager) do
+          nil ->
+            nil
+
+          classifier_model ->
+            options =
+              ModelResolver.build_stream_options(classifier_model, settings_manager, nil, cwd)
+
+            provider = classifier_model.provider
+
+            api_key =
+              get_api_key.(provider) ||
+                if(is_atom(provider), do: get_api_key.(Atom.to_string(provider))) ||
+                options.api_key
+
+            {classifier_model, %{options | api_key: api_key}}
+        end
+      end
+
+      LemonAgent.AutoThinking.resolve(
+        active_model,
+        strip_recalled_context.(message),
+        signal,
+        resolve_classifier: resolve_classifier,
+        complete_fn: Keyword.get(opts, :complete_fn, &LemonAi.complete/3),
+        timeout_ms: Keyword.get(opts, :auto_thinking_timeout_ms, 5_000)
+      )
+    end
+
     # The persisted session id (SessionManager.header.id) is the session
     # identity for provider failover: it is stable across turns and process
     # restarts of the same session file, unlike run_id (per run) or
@@ -257,6 +313,8 @@ defmodule CodingAgent.Session.Lifecycle do
         stream_options: stream_options,
         transform_context: transform_context,
         get_api_key: get_api_key,
+        resolve_stream_options: resolve_stream_options,
+        resolve_thinking: resolve_thinking,
         session_id: session_manager.header.id,
         budget_limits: budget_limits,
         budget_usage: budget_usage,
