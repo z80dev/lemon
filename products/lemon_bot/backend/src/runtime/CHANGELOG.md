@@ -1,6 +1,8 @@
 # Runtime changes
 
 ## 2026-10-14
+- Cut runtime fixtures and fresh native-F admission over to one actual human owner: source/parent/helper Bots and execution hosts must match that owner even under legacy ACLs or cached receipts. Preserve six-field fresh proofs, fixed-ID no-replay behavior and restrictive owner-native policy floors; reject foreign roles/proofs without replacing the actor. Use canonical owner-only resources and stable assigned-profile memory identity, not removed Team sharing, consent or per-user note fields.
+
 
 - Add the real authenticated, correlated, long-lived Lemon operator WebSocket, bounded payloads, reconnect/backoff and honest uncertain mutation failures without replay.
 - Reserve fixed product/native run identities and actual initiating authority before dispatch; reconcile durable receipts/full completion, project only owned remote events, bind control acknowledgments and preserve private handoff/routine provenance.

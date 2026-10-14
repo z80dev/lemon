@@ -2,7 +2,7 @@ import type * as P from '../../../contracts/protocol';
 import type { BackendServices, Principal, Route } from '../core/services';
 import { ApiError, errorEnvelope, fail } from '../core/errors';
 import { id, parse, z } from '../core/validation';
-import { invocationBotToolPolicy } from '../core/experiences';
+import { nativeBotToolPolicy } from '../core/experiences';
 import { buildInvocationContext, buildMemoryContextKey, effectiveInvocationAudience, type InvocationContext, type RuntimeMapping } from './runs';
 
 export const nativeFollowupAdmissionPath = '/internal/runtime/followup/admission';
@@ -64,14 +64,22 @@ function currentAuthority(services: BackendServices, issuer: Issuer, lineage: Na
   const member = services.auth.member(root.principal.userId);
   if (!member.enabled || root.principal.workspaceId !== services.store.metadata<string>('workspaceId')) fail('forbidden', 'The native source is no longer an enabled workspace member.');
   const actor: Principal = { ...root.principal, role: member.role };
-  const sourceBot = services.auth.bot(actor, root.run.botId);
+  const sourceBot = services.store.require<P.Bot>('bots', root.run.botId);
+  if (actor.kind !== 'user' || actor.id !== actor.userId || sourceBot.ownerUserId !== actor.userId || root.run.initiatorUserId !== actor.userId) fail('forbidden', 'Native continuation belongs to the actual Bot owner.');
+  services.auth.bot(actor, sourceBot.id);
+  const parentBot = services.store.require<P.Bot>('bots', parent.run.botId);
+  if (parentBot.ownerUserId !== actor.userId || parent.run.initiatorUserId !== actor.userId) fail('forbidden', 'Native parent authority cannot cross human ownership.');
+  services.auth.bot(actor, parentBot.id);
   const conversation = services.auth.conversation(actor, root.run.conversationId);
   effectiveInvocationAudience(services, actor, conversation, root.run.id);
   const targets = services.store.list<P.Bot>('bots', value => value.profileId === lineage.targetProfileId);
   if (targets.length !== 1 || lineage.targetAgentId !== lineage.targetProfileId) fail('forbidden', 'The native destination is not an unambiguous product Bot.');
-  const targetBot = services.auth.bot(actor, targets[0]!.id);
-  for (const bot of [sourceBot, targetBot]) {
+  const targetBot = targets[0]!;
+  if (targetBot.ownerUserId !== actor.userId) fail('forbidden', 'Native continuation cannot enter another owner’s Bot.');
+  services.auth.bot(actor, targetBot.id);
+  for (const bot of [sourceBot, parentBot, targetBot]) {
     const machine = services.store.require<P.Machine>('machines', bot.machineId);
+    if (machine.ownerUserId !== actor.userId) fail('forbidden', 'Native continuation cannot use another owner’s host.');
     const policy = services.store.metadata<{ state: string }>(`botPolicySync:${bot.id}`);
     if (services.store.metadata(`botLifecycle:${bot.id}`) || services.store.metadata(`connectorRevocation:${bot.id}`) || services.store.metadata(`runtimePolicyFence:${bot.id}:${actor.userId}`) || services.store.metadata(`machineRuntimeFence:${machine.id}`) || (policy && policy.state !== 'acknowledged')) fail('policy_denied', 'Native continuation authority is fenced.');
   }
@@ -134,7 +142,7 @@ export function createRuntimeAdmissionRoutes(services: BackendServices): Route[]
       if (issuer.state !== 'configured') services.store.setMetadata(`nativeFollowupIssuerConfig:${issuer.botId}`, { ...issuer, state: 'configured' } satisfies Issuer);
       await services.integrations.admission(authority.actor, authority.targetBot.id);
       const floors: P.JSONObject[] = [lineage.sourceRestrictiveToolPolicy];
-      if (authority.sourceBot.id !== authority.targetBot.id) floors.push(await invocationBotToolPolicy(services, authority.actor, authority.sourceBot));
+      if (authority.sourceBot.id !== authority.targetBot.id) floors.push(await nativeBotToolPolicy(services, authority.actor, authority.sourceBot));
       const invocation = await buildInvocationContext(services, authority.actor, authority.conversation, authority.targetBot, runId, floors);
       const current = currentAuthority(services, issuer, lineage);
       if (current.actor.role !== authority.actor.role) fail('policy_denied', 'Source membership changed during native admission.');

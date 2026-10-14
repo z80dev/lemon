@@ -25,6 +25,59 @@ async function setup() {
 }
 
 describe('authenticated fresh native follow-up admission', () => {
+  test('same-owner helper admission keeps the original human while provisioning fresh target credentials and F proof', async () => {
+    const s = await setup();
+    try {
+      const helper: P.Bot = { ...s.f.bot, id: 'owned_helper_bot', profileId: 'lb-owned-helper', mainConversationId: '' }; s.f.store.put('bots', helper);
+      s.f.store.setMetadata(`botMcp:${helper.id}`, { secretName: 'LEMON_BOT_HELPER_FIXTURE', encryptedToken: 'encrypted-helper-token', digest: 'helper-digest' });
+      const candidate: NativeFollowupLineage = { ...s.lineage, runId: 'owned_helper_F', targetProfileId: helper.profileId, targetAgentId: helper.profileId, targetSessionKey: s.runtime.sessionKey(s.f.conversation, helper) };
+      const original = s.f.rpc;
+      s.f.rpc = async (method, params) => method === 'runs.followup.lineage.get' ? candidate : original(method, params);
+      const response = await s.route.handler(s.context({ runId: candidate.runId }));
+      expect(response).toMatchObject({ allow: true, invocation: { sharedMemoryGrant: false, invocationProof: { runId: candidate.runId, secretName: `lemon_bot/invocations/${candidate.runId}` }, invocationMcpServers: [{ name: 'lemon-bot', headers: { Authorization: 'Bearer ${LEMON_SECRET:LEMON_BOT_HELPER_FIXTURE}' } }] } });
+      expect(s.f.store.require<P.Run>('runs', candidate.runId)).toMatchObject({ botId: helper.id, initiatorUserId: s.f.alice.userId });
+      expect(s.f.store.metadata(`runPrincipal:${candidate.runId}`)).toEqual(s.f.alice);
+      expect(s.f.calls.filter(call => call.method === 'node.secrets.set' && call.params.operationId === candidate.runId)).toHaveLength(1);
+      expect(s.f.calls.filter(call => call.method === 'chat.send')).toHaveLength(1);
+    } finally { s.dispose(); }
+  });
+
+  test('legacy ACLs cannot admit a foreign source, parent, helper Bot or host, or replay approval after ownership changes', async () => {
+    for (const boundary of ['source', 'parent', 'target', 'host', 'cached'] as const) {
+      const s = await setup();
+      try {
+        s.f.services.auth.bot = (_actor, botId) => s.f.store.require<P.Bot>('bots', botId);
+        let candidate = { ...s.lineage, runId: `foreign_${boundary}_F` };
+        if (boundary === 'cached') {
+          const original = s.f.rpc;
+          s.f.rpc = async (method, params) => method === 'runs.followup.lineage.get' ? candidate : original(method, params);
+          expect(await s.route.handler(s.context({ runId: candidate.runId }))).toMatchObject({ allow: true });
+        }
+        if (boundary === 'source' || boundary === 'cached') s.f.store.put('bots', { ...s.f.bot, ownerUserId: s.f.bob.userId });
+        if (boundary === 'target') {
+          const foreign: P.Bot = { ...s.f.bot, id: 'foreign_helper_bot', profileId: 'lb-foreign-helper', ownerUserId: s.f.bob.userId };
+          s.f.store.put('bots', foreign); candidate = { ...candidate, targetProfileId: foreign.profileId, targetAgentId: foreign.profileId };
+        }
+        if (boundary === 'parent') {
+          const foreign: P.Bot = { ...s.f.bot, id: 'legacy_foreign_parent_bot', profileId: 'lb-foreign-parent', ownerUserId: s.f.bob.userId }; s.f.store.put('bots', foreign);
+          const parent: P.Run = { ...s.started.run, id: 'legacy_same_actor_foreign_parent', botId: foreign.id }; s.f.store.put('runs', parent);
+          const mapped = s.f.store.metadata<RuntimeMapping>(`runtimeRun:${s.started.run.id}`)!;
+          s.f.store.setMetadata(`nativeRunProduct:${parent.id}`, parent.id); s.f.store.setMetadata(`runPrincipal:${parent.id}`, s.f.alice);
+          s.f.store.setMetadata(`runtimeRun:${parent.id}`, { ...mapped, upstreamRunId: parent.id, executionRunId: parent.id, botId: foreign.id, profileId: foreign.profileId });
+          s.f.store.setMetadata(`runtimeInvocation:${parent.id}`, s.source); s.f.store.setMetadata(`nativeRootSource:${parent.id}`, s.started.run.id);
+          candidate = { ...candidate, parentRunId: parent.id };
+        }
+        if (boundary === 'host') s.f.store.put('machines', { ...s.f.machine, ownerUserId: s.f.bob.userId, accessUserIds: [s.f.alice.userId] });
+        const before = s.f.calls.length; const original = s.f.rpc;
+        s.f.rpc = async (method, params) => method === 'runs.followup.lineage.get' ? candidate : original(method, params);
+        expect(await s.route.handler(s.context({ runId: candidate.runId }))).toEqual({ allow: false });
+        expect(s.f.calls.slice(before).every(call => call.method === 'runs.followup.lineage.get' && !call.mutation)).toBe(true);
+        if (boundary !== 'cached') expect(s.f.store.metadata(`nativeRunProduct:${candidate.runId}`)).toBeNull();
+        expect(s.f.store.metadata(`runPrincipal:${s.started.run.id}`)).toEqual(s.f.alice);
+      } finally { s.dispose(); }
+    }
+  });
+
   test('provisions a fixed destination proof before approval, retains actual principal, and never dispatches or replays native execution', async () => {
     const s = await setup();
     try {
@@ -68,14 +121,17 @@ describe('authenticated fresh native follow-up admission', () => {
     const s = await setup();
     try {
       const queries = s.f.rpc;
-      const conversation: P.Conversation = { ...s.f.conversation, id: 'native_bob_source', ownerUserId: s.f.bob.userId, humanUserIds: [s.f.bob.userId] }; s.f.store.put('conversations', conversation);
-      const other = await s.runtime.submit(s.f.bob, conversation, s.f.bot, { clientNonce: 'foreign_native_source_001', text: 'private work' });
+      // Persist a legacy foreign parent rather than executing another human's Bot to manufacture one.
+      const other: P.Run = { ...s.started.run, id: 'legacy_foreign_parent', initiatorUserId: s.f.bob.userId };
+      const mapped = s.f.store.metadata<RuntimeMapping>(`runtimeRun:${s.started.run.id}`)!;
+      s.f.store.put('runs', other); s.f.store.setMetadata(`nativeRunProduct:${other.id}`, other.id); s.f.store.setMetadata(`runPrincipal:${other.id}`, s.f.bob);
+      s.f.store.setMetadata(`runtimeRun:${other.id}`, { ...mapped, upstreamRunId: other.id, executionRunId: other.id }); s.f.store.setMetadata(`runtimeInvocation:${other.id}`, s.source); s.f.store.setMetadata(`nativeRootSource:${other.id}`, s.started.run.id);
       const existingProofs = s.f.calls.filter(call => call.method === 'node.secrets.set').length;
       const variants: NativeFollowupLineage[] = [
         { ...s.lineage, sourceInvocationContextKey: 'spoofed_other_actor_key' },
         { ...s.lineage, targetNodeId: 'local' },
         { ...s.lineage, targetSessionKey: 'agent:default:other_user' },
-        { ...s.lineage, parentRunId: other.run.id },
+        { ...s.lineage, parentRunId: other.id },
       ];
       for (let index = 0; index < variants.length; index++) {
         const candidate = { ...variants[index]!, runId: `native_denied_${index}` };

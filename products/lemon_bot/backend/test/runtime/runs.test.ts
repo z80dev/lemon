@@ -5,6 +5,37 @@ import { buildMemoryContextKey, buildPrivateBotMemoryContextKey, createRuntimeSe
 import { fixture, productExecutionProjection } from './fixture';
 
 describe('owned placed runtime', () => {
+  test('legacy sharing, manager labels and administrative roles cannot execute another owner’s Bot before any RPC', async () => {
+    const f = fixture(); const runtime = createRuntimeService(f.services); f.services.runtime = runtime;
+    const legacy = { ...f.bot, visibility: 'team', published: true, managerUserIds: [f.bob.userId] }; f.store.put('bots', legacy);
+    f.services.auth.bot = (_actor, botId) => f.store.require<P.Bot>('bots', botId);
+    f.services.auth.conversation = (_actor, conversationId) => f.store.require<P.Conversation>('conversations', conversationId);
+    try {
+      for (const role of ['member', 'admin', 'owner'] as const) {
+        const foreign = { ...f.bob, role };
+        await expect(runtime.submit(foreign, f.conversation, legacy, { clientNonce: `foreign_owner_nonce_${role}`, text: 'work' })).rejects.toMatchObject({ code: 'forbidden' });
+        expect(() => buildPrivateBotMemoryContextKey(f.services, foreign, legacy)).toThrow(ApiError);
+      }
+      expect(f.calls).toHaveLength(0);
+      expect(f.store.list('runs')).toHaveLength(0);
+    } finally { runtime.close(); f.store.close(); }
+  });
+
+  test('a retained genuine invocation proof cannot authorize a Bot owned by another human', async () => {
+    const f = fixture(); const runtime = createRuntimeService(f.services); f.services.runtime = runtime;
+    try {
+      const started = await runtime.submit(f.alice, f.conversation, f.bot, { clientNonce: 'legacy_foreign_proof_001', text: 'work' });
+      const proof = String(f.calls.find(call => call.method === 'node.secrets.set')!.params.value);
+      const before = f.calls.length;
+      f.store.put('bots', { ...f.bot, ownerUserId: f.bob.userId, visibility: 'team', published: true, managerUserIds: [f.alice.userId] });
+      f.services.auth.bot = (_actor, botId) => f.store.require<P.Bot>('bots', botId);
+      expect(() => observeInvocation(f.services, proof)).toThrow(ApiError);
+      expect(f.calls).toHaveLength(before);
+      expect(f.store.metadata(`runPrincipal:${started.run.id}`)).toEqual(f.alice);
+      expect(f.store.require<P.Run>('runs', started.run.id).initiatorUserId).toBe(f.alice.userId);
+    } finally { runtime.close(); f.store.close(); }
+  });
+
   test('incomplete, duplicate or unowned MCP projection never provisions credentials or dispatches chat', async () => {
     const reply = productExecutionProjection();
     const invalid = [
@@ -99,9 +130,9 @@ describe('owned placed runtime', () => {
     } finally { runtime.close(); f.store.close(); }
   });
 
-  test('a shared credential owner can revoke after losing Bot management, while another member cannot', async () => {
+  test('the credential owner can revoke a private connector without invoking another human’s Bot', async () => {
     const f = fixture();
-    const connector: P.Connector = f.services.resource('connector', { botId: f.bot.id, ownerUserId: f.alice.userId, name: 'Shared account', url: 'https://connector.example/mcp', accountLabel: 'Owner account', authKind: 'oauth' as const, state: 'connected' as const, tools: [], secretHeaderNames: [], shared: true, lastError: null });
+    const connector: P.Connector = f.services.resource('connector', { botId: f.bot.id, ownerUserId: f.alice.userId, name: 'Owner account', url: 'https://connector.example/mcp', accountLabel: 'Owner account', authKind: 'oauth' as const, state: 'connected' as const, tools: [], secretHeaderNames: [], lastError: null });
     f.store.put('connectors', connector); f.services.auth.bot = () => { throw new ApiError('forbidden', 'Management removed.'); };
     try {
       expect(await revokeConnectorInvocations(f.services, f.alice, f.bot.id, connector.id)).toEqual({ runIds: [], status: 'cancelled' });
@@ -119,11 +150,11 @@ describe('owned placed runtime', () => {
     } finally { f.store.close(); }
   });
 
-  test('shared-return specialist execution cannot inherit private notes or a private memory realm', async () => {
+  test('owner group-return specialist execution retains the original owner and authorized response room', async () => {
     const f = fixture(); const runtime = createRuntimeService(f.services); f.services.runtime = runtime;
     const task: P.Conversation = { ...f.conversation, id: 'specialist_private_task', kind: 'task' }; f.store.put('conversations', task);
-    const group: P.Conversation = { ...f.conversation, kind: 'group', humanUserIds: [f.alice.userId, f.bob.userId] }; f.store.put('conversations', group);
-    f.store.put('memories', f.services.resource('memory', { botId: f.bot.id, scope: 'private_note', userId: f.alice.userId, text: 'private target fact', kind: 'fact', sourceEntryId: null }));
+    const helper: P.Bot = { ...f.bot, id: 'owned_return_helper', profileId: 'lb-return-helper', mainConversationId: '' }; f.store.put('bots', helper);
+    const group: P.Conversation = { ...f.conversation, id: 'owned_return_group', kind: 'group', botIds: [f.bot.id, helper.id] }; f.store.put('conversations', group);
     const nonce = 'shared_return_nonce_0001';
     f.store.setMetadata(`submissionContext:${f.alice.kind}:${f.alice.id}:${task.id}:${nonce}`, { returnConversationId: group.id });
     const audiences: unknown[] = []; f.services.integrations.connectorConfig = async (_actor, _botId, conversationId, operationId) => { audiences.push(conversationId); if (operationId) f.store.setMetadata(`invocationConnectors:${operationId}`, []); return []; };
@@ -132,8 +163,8 @@ describe('owned placed runtime', () => {
       expect(audiences).toEqual([group.id]);
       const context = f.store.metadata<InvocationContext>(`runtimeInvocation:${result.run.id}`)!;
       expect(context.memoryContextKey).toBe(buildMemoryContextKey(f.services, f.alice, group, f.bot));
-      expect(context.memoryContextKey).not.toBe(buildPrivateBotMemoryContextKey(f.services, f.alice, f.bot));
-      expect(String(f.calls.find(call => call.method === 'chat.send')!.params.prompt)).not.toContain('private target fact');
+      expect(context.memoryContextKey).toBe(buildPrivateBotMemoryContextKey(f.services, f.alice, f.bot));
+      expect(f.store.metadata(`runPrincipal:${result.run.id}`)).toEqual(f.alice);
     } finally { runtime.close(); f.store.close(); }
   });
 
@@ -174,16 +205,17 @@ describe('owned placed runtime', () => {
     } finally { runtime.close(); f.store.close(); }
   });
 
-  test('memory authority remains stable across epochs but is isolated from shared audience context', () => {
+  test('owner profile memory authority remains stable across epochs and owner group rooms', () => {
     const f = fixture();
     try {
       const privateKey = buildMemoryContextKey(f.services, f.alice, f.conversation, f.bot);
       f.store.setMetadata(`botPlacementEpoch:${f.bot.id}`, 2); f.store.setMetadata(`connectorEpoch:connector_fixture`, 9);
       expect(buildMemoryContextKey(f.services, f.alice, f.conversation, f.bot)).toBe(privateKey);
-      const shared = { ...f.conversation, kind: 'group' as const, humanUserIds: [f.alice.userId, f.bob.userId] }; f.store.put('conversations', shared);
+      const helper: P.Bot = { ...f.bot, id: 'owned_memory_helper', profileId: 'lb-memory-helper', mainConversationId: '' }; f.store.put('bots', helper);
+      const shared: P.Conversation = { ...f.conversation, id: 'owned_memory_group', kind: 'group', botIds: [f.bot.id, helper.id] }; f.store.put('conversations', shared);
       const sharedKey = buildMemoryContextKey(f.services, f.alice, shared, f.bot);
-      expect(sharedKey).not.toBe(privateKey);
-      expect(buildMemoryContextKey(f.services, f.bob, shared, f.bot)).not.toBe(sharedKey);
+      expect(sharedKey).toBe(privateKey);
+      expect(() => buildMemoryContextKey(f.services, f.bob, shared, f.bot)).toThrow(ApiError);
     } finally { f.store.close(); }
   });
 
@@ -208,7 +240,7 @@ describe('owned placed runtime', () => {
       if (method !== 'chat.send') return original(method, params);
       const runId = String(params.runId);
       expect(f.store.require<P.Run>('runs', runId).status).toBe('reserved');
-      expect(f.store.metadata<RuntimeMapping>(`runtimeRun:${runId}`)).toMatchObject({ upstreamRunId: runId, sessionKey: `agent:${f.bot.profileId}:dm-alice`, nodeId: 'node_1', dispatched: true });
+      expect(f.store.metadata<RuntimeMapping>(`runtimeRun:${runId}`)).toMatchObject({ upstreamRunId: runId, sessionKey: `agent:${f.bot.profileId}:main`, nodeId: 'node_1', dispatched: true });
       expect(f.store.metadata(`runPrincipal:${runId}`)).toEqual(f.alice);
       throw new ApiError('outcome_unknown', 'Dispatched but no reply.', false, { resourceIds: [runId] });
     };
@@ -241,19 +273,17 @@ describe('owned placed runtime', () => {
       expect(f.store.list<P.TranscriptEntry>('entries').filter(entry => entry.kind === 'message')).toMatchObject([{ text: 'authoritative complete answer, not the truncated event preview', streaming: false }]);
     } finally { runtime.close(); f.store.close(); }
   });
-  test('initiator, connector consent operation and private notes stay scoped to the collaborator rather than Team owner', async () => {
+  test('initiator, connector operation and profile memory identity remain the actual Bot owner’s authority', async () => {
     const f = fixture(); const runtime = createRuntimeService(f.services); f.services.runtime = runtime;
-    const bobConversation: P.Conversation = { ...f.conversation, id: 'bob_private_conversation', ownerUserId: f.bob.userId, humanUserIds: [f.bob.userId] }; f.store.put('conversations', bobConversation);
-    f.store.put('memories', f.services.resource('memory', { botId: f.bot.id, scope: 'private_note', userId: 'alice', text: 'owner private fact', kind: 'fact', sourceEntryId: null }));
-    f.store.put('memories', f.services.resource('memory', { botId: f.bot.id, scope: 'private_note', userId: 'bob', text: 'collaborator private fact', kind: 'fact', sourceEntryId: null }));
+    const ownedConversation: P.Conversation = { ...f.conversation, id: 'owner_private_conversation', kind: 'task' }; f.store.put('conversations', ownedConversation);
     const configs: unknown[] = [];
     f.services.integrations.connectorConfig = async (actor, botId, conversationId, operationId) => { configs.push({ actor, botId, conversationId, operationId }); if (operationId) f.store.setMetadata(`invocationConnectors:${operationId}`, []); return []; };
     try {
-      const result = await runtime.submit(f.bob, bobConversation, f.bot, { clientNonce: 'collaborator_nonce_0001', text: 'work' });
-      expect(configs).toEqual([{ actor: f.bob, botId: f.bot.id, conversationId: bobConversation.id, operationId: result.run.id }]);
+      const result = await runtime.submit(f.alice, ownedConversation, f.bot, { clientNonce: 'owner_context_nonce_0001', text: 'work' });
+      expect(configs).toEqual([{ actor: f.alice, botId: f.bot.id, conversationId: ownedConversation.id, operationId: result.run.id }]);
       const send = f.calls.find(call => call.method === 'chat.send')!;
-      expect(String(send.params.prompt)).toContain('collaborator private fact'); expect(String(send.params.prompt)).not.toContain('owner private fact');
-      expect(send.params.sessionKey).toBe(`agent:${f.bot.profileId}:dm-bob`);
+      expect(f.store.metadata<InvocationContext>(`runtimeInvocation:${result.run.id}`)!.memoryContextKey).toBe(buildPrivateBotMemoryContextKey(f.services, f.alice, f.bot));
+      expect(send.params.sessionKey).toBe(`agent:${f.bot.profileId}:task-${ownedConversation.id}`);
       expect(send.params.invocationMcpServers).toMatchObject([{ name: 'lemon-bot', headers: { Authorization: 'Bearer ${LEMON_SECRET:LEMON_BOT_FIXTURE}' } }]);
     } finally { runtime.close(); f.store.close(); }
   });
@@ -292,7 +322,7 @@ describe('owned placed runtime', () => {
       expect((await runtime.cancel(f.alice, result.run.id)).status).toBe('cancelled');
     } finally { runtime.close(); f.store.close(); }
   });
-  test('scheduled admission reserves once under fixed native IDs, and principal-only policy quiescence never stops another collaborator', async () => {
+  test('scheduled owner admission reserves once under fixed native IDs, and principal-only quiescence leaves a legacy foreign run fenced from new execution', async () => {
     const f = fixture(); const runtime = createRuntimeService(f.services); f.services.runtime = runtime;
     try {
       const routine: P.Routine & { conversationId: string } = f.services.resource('routine', { botId: f.bot.id, ownerUserId: f.alice.userId, name: 'Schedule', instruction: 'work', trigger: { kind: 'schedule', cron: '0 * * * *', timezone: 'UTC' }, enabled: true, nextRunAtMs: null, scheduleDescription: '', lastRunId: null, webhookUrl: null, cronJobId: 'fixed_job', conversationId: f.conversation.id }); f.store.put('routines', routine);
