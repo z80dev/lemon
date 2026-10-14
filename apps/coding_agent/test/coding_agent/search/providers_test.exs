@@ -1,7 +1,16 @@
 defmodule CodingAgent.Search.ProvidersTest do
   use ExUnit.Case, async: true
 
-  alias CodingAgent.Search.Providers.{Brave, DuckDuckGo, Exa, Perplexity, Searxng}
+  alias CodingAgent.Search.Providers.{
+    Brave,
+    DuckDuckGo,
+    Exa,
+    Jina,
+    Kagi,
+    Perplexity,
+    Searxng,
+    Tavily
+  }
 
   @request %{
     query: "lemon agents",
@@ -200,5 +209,134 @@ defmodule CodingAgent.Search.ProvidersTest do
   test "Exa reports missing credentials for both capabilities" do
     assert {:error, %{"error" => "missing_exa_api_key"}} = Exa.available?(:search, %{})
     assert {:error, %{"error" => "missing_exa_api_key"}} = Exa.available?(:extract, %{})
+  end
+
+  describe "keyed providers" do
+    test "Tavily posts a bearer-authenticated query and maps results" do
+      parent = self()
+
+      http_post = fn url, opts ->
+        send(parent, {:tavily, url, opts})
+
+        {:ok,
+         %Req.Response{
+           status: 200,
+           body: %{
+             "results" => [
+               %{
+                 "title" => "Lemon",
+                 "url" => "https://lemon.example",
+                 "content" => "Agent harness",
+                 "published_date" => "2026-01-02"
+               },
+               %{"title" => "no url"}
+             ]
+           }
+         }}
+      end
+
+      context = %{api_key: "tvly-secret", timeout_ms: 100, http_post: http_post}
+      assert {:ok, payload} = Tavily.search(@request, context)
+
+      assert_received {:tavily, "https://api.tavily.com/search", opts}
+      assert {"authorization", "Bearer tvly-secret"} in opts[:headers]
+      assert opts[:json]["max_results"] == 3
+
+      assert [%{"url" => "https://lemon.example", "published" => "2026-01-02"} | _] =
+               payload["results"]
+
+      assert hd(payload["results"])["description"] =~ "Agent harness"
+      refute inspect(payload) =~ "tvly-secret"
+    end
+
+    test "Kagi reads V1 result buckets in order and caps the count" do
+      http_post = fn "https://kagi.com/api/v1/search", opts ->
+        assert {"authorization", "Bearer kagi-secret"} in opts[:headers]
+        assert opts[:json] == %{"query" => "lemon agents", "limit" => 3}
+
+        {:ok,
+         %Req.Response{
+           status: 200,
+           body: %{
+             "data" => %{
+               "news" => [%{"url" => "https://news.example", "title" => "Headline"}],
+               "search" => [
+                 %{"url" => "https://a.example", "title" => "A", "snippet" => "first"},
+                 %{"url" => "https://b.example", "title" => "B"},
+                 %{"title" => "missing url"}
+               ],
+               "video" => [%{"url" => "https://v.example", "title" => "Clip"}]
+             }
+           }
+         }}
+      end
+
+      assert {:ok, payload} =
+               Kagi.search(@request, %{
+                 api_key: "kagi-secret",
+                 timeout_ms: 100,
+                 http_post: http_post
+               })
+
+      assert Enum.map(payload["results"], & &1["url"]) ==
+               ["https://a.example", "https://b.example", "https://v.example"]
+
+      assert Enum.at(payload["results"], 2)["title"] =~ "[Video] Clip"
+    end
+
+    test "Jina encodes the query in the path and accepts data envelopes" do
+      parent = self()
+
+      http_get = fn url, opts ->
+        send(parent, {:jina, url, opts})
+
+        {:ok,
+         %Req.Response{
+           status: 200,
+           body: %{
+             "code" => 200,
+             "data" => [
+               %{
+                 "url" => "https://j.example",
+                 "title" => "J",
+                 "description" => " ",
+                 "content" => "body text"
+               }
+             ]
+           }
+         }}
+      end
+
+      assert {:ok, payload} =
+               Jina.search(@request, %{
+                 api_key: "jina-secret",
+                 timeout_ms: 100,
+                 http_get: http_get
+               })
+
+      assert_received {:jina, "https://s.jina.ai/lemon%20agents?count=3", opts}
+      assert {"x-respond-with", "no-content"} in opts[:headers]
+      assert [%{"url" => "https://j.example"} = result] = payload["results"]
+      assert result["description"] =~ "body text"
+    end
+
+    test "missing keys and HTTP errors are reported without the key" do
+      assert {:error, %{"error" => "missing_tavily_api_key", "message" => message}} =
+               Tavily.available?(:search, %{})
+
+      assert message =~ "TAVILY_API_KEY"
+
+      assert {:error, %{"error" => "missing_kagi_api_key"}} =
+               Kagi.available?(:search, %{api_key: ""})
+
+      http_get = fn _url, _opts -> {:ok, %Req.Response{status: 401, body: "bad key"}} end
+
+      assert {:error, "Jina API error (401): bad key"} =
+               Jina.search(@request, %{
+                 api_key: "jina-secret",
+                 timeout_ms: 100,
+                 http_get: http_get
+               })
+    end
   end
 end

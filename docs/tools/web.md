@@ -4,7 +4,8 @@
 external-content tools:
 
 - `websearch`: query registered providers. Bundled providers are Brave
-  (default), Exa, Perplexity Sonar, keyless DuckDuckGo, and user-hosted SearXNG.
+  (default), Exa, Perplexity Sonar, Tavily, Kagi, Jina, keyless DuckDuckGo,
+  and user-hosted SearXNG.
 - `webfetch`: extract readable content through registered providers. Guarded
   direct extraction is the default and optionally falls back to Firecrawl.
   Direct extraction converts PDF responses to `=== Page N ===` text with the
@@ -58,6 +59,9 @@ direct extraction are terminal and never fall back through a remote extractor.
 | `brave` | search | `BRAVE_API_KEY` or `runtime.tools.web.search.api_key` |
 | `exa` | search/highlights and batch extract | `EXA_API_KEY` or configured key |
 | `perplexity` | search/answer | `PERPLEXITY_API_KEY`, `OPENROUTER_API_KEY`, or configured key |
+| `tavily` | search | `TAVILY_API_KEY` or `runtime.tools.web.search.providers.tavily.api_key` |
+| `kagi` | search (V1 API: web, then video/news/infobox buckets) | `KAGI_API_KEY` or `runtime.tools.web.search.providers.kagi.api_key` |
+| `jina` | search (`s.jina.ai`) | `JINA_API_KEY` or `runtime.tools.web.search.providers.jina.api_key` |
 | `duckduckgo` | keyless search | none |
 | `searxng` | search | `runtime.tools.web.search.providers.searxng.base_url` |
 | `direct` | extract | built in; guarded HTTP plus readability |

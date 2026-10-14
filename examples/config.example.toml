@@ -243,7 +243,7 @@ queue_mode = "collect"
 
 # [runtime.tools.web.search]
 # enabled = true
-# provider = "brave"      # brave | exa | perplexity | duckduckgo | searxng | extension id
+# provider = "brave"      # brave | exa | perplexity | tavily | kagi | jina | duckduckgo | searxng | extension id
 # max_results = 5
 # timeout_seconds = 30
 # cache_ttl_minutes = 15
@@ -258,6 +258,9 @@ queue_mode = "collect"
 
 # [runtime.tools.web.search.providers.exa]
 # api_key = "<exa-api-key>" # optional if EXA_API_KEY is set
+
+# [runtime.tools.web.search.providers.tavily]   # also: kagi, jina
+# api_key = "<tavily-api-key>" # optional if TAVILY_API_KEY / KAGI_API_KEY / JINA_API_KEY is set
 
 # [runtime.tools.web.fetch]
 # enabled = true
