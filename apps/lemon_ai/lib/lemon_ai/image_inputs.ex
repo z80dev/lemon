@@ -34,7 +34,8 @@ defmodule LemonAi.ImageInputs do
          [%ImageContent{type: :image, mime_type: mime_type, data: data} | rest],
          images,
          count
-       ) when mime_type in @mime_types and is_binary(data) do
+       )
+       when mime_type in @mime_types and is_binary(data) do
     image = %{"type" => "image", "mime_type" => mime_type, "data" => data}
     encode_blocks(rest, [image | images], count + 1)
   end
@@ -128,7 +129,7 @@ defmodule LemonAi.ImageInputs do
     end
   end
 
-  defp base64_value(char) when char in ?A..?Z, do: char - ?A + 26
+  defp base64_value(char) when char in ?A..?Z, do: char - ?A
   defp base64_value(char) when char in ?a..?z, do: char - ?a + 26
   defp base64_value(char) when char in ?0..?9, do: char - ?0 + 52
   defp base64_value(?+), do: 62
@@ -142,8 +143,11 @@ defmodule LemonAi.ImageInputs do
   defp image_header_matches?(<<"GIF87a", _rest::binary>>, "image/gif"), do: true
   defp image_header_matches?(<<"GIF89a", _rest::binary>>, "image/gif"), do: true
 
-  defp image_header_matches?(<<"RIFF", _size::binary-size(4), "WEBP", _rest::binary>>, "image/webp"),
-    do: true
+  defp image_header_matches?(
+         <<"RIFF", _size::binary-size(4), "WEBP", _rest::binary>>,
+         "image/webp"
+       ),
+       do: true
 
   defp image_header_matches?(_decoded, _mime_type), do: false
 

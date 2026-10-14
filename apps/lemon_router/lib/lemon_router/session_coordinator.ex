@@ -313,10 +313,12 @@ defmodule LemonRouter.SessionCoordinator do
   def handle_call(:presence_entries, _from, state) do
     active = if state.active, do: [presence_entry(state.active, :active)], else: []
     queued = Enum.map(state.queue, &presence_entry(&1, :queued))
+
     pending =
       Enum.flat_map(state.pending_steers, fn {_target, entries} ->
         Enum.map(entries, fn {submission, _mode} -> presence_entry(submission, :queued) end)
       end)
+
     unresolved =
       Enum.map(state.unpersisted_receipts, fn {run_id, receipt} ->
         Map.merge(receipt, %{run_id: run_id, status: :unknown})
@@ -324,7 +326,6 @@ defmodule LemonRouter.SessionCoordinator do
 
     {:reply, active ++ queued ++ pending ++ unresolved, state}
   end
-
 
   def handle_call({:submit_with_receipt, submission}, _from, state) do
     case RunReceiptStore.fetch(state.receipt_store, submission.run_id) do
@@ -368,6 +369,7 @@ defmodule LemonRouter.SessionCoordinator do
 
           changes ->
             scope = presence_entry(submission, :unknown)
+
             receipt =
               changes
               |> Map.merge(%{
@@ -393,7 +395,8 @@ defmodule LemonRouter.SessionCoordinator do
 
               {:error, _reason} ->
                 %SessionState{} = next_state
-                next_state = %SessionState{
+
+                next_state = %{
                   next_state
                   | unpersisted_receipts:
                       Map.put(next_state.unpersisted_receipts, submission.run_id, receipt)
@@ -573,6 +576,7 @@ defmodule LemonRouter.SessionCoordinator do
     request = Map.get(submission, :execution_request) || %{}
     meta = Map.get(request, :meta) || %{}
     agent_id = MapHelpers.get_key(meta, :agent_id)
+
     %{
       run_id: submission.run_id,
       session_key: submission.session_key,
@@ -727,7 +731,7 @@ defmodule LemonRouter.SessionCoordinator do
     case fence_merge_receipts(original_state, transitioned_state) do
       :ok ->
         complete_dropped_submissions(original_state, transitioned_state, opts)
-        {next_state, reply} = apply_effects(transitioned_state, effects, opts)
+        {%SessionState{} = next_state, reply} = apply_effects(transitioned_state, effects, opts)
         maybe_cleanup_event_bridge_runs(original_state, next_state)
         persistence = persist_receipt_updates(original_state, next_state, opts)
         retained = retained_run_ids(next_state)

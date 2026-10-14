@@ -37,6 +37,11 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 - The Claude Code user agent uses the newer of the installed CLI version and
   2.1.296, detected once per `PATH` instead of on every request.
 
+### Fixed
+
+- Correct uppercase Base64 alphabet values when validating padded image blocks;
+  valid JPEG, GIF and WebP inputs no longer fail canonical-padding checks.
+
 ## [0.2.0] - 2026-10-13
 
 First release as a standalone package. `lemon_ai` was extracted from the Lemon
