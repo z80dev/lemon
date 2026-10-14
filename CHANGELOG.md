@@ -88,6 +88,14 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   meter also use the measurement for resumed sessions before their first run.
   All surfaces read the new read-scoped `sessions.context` control-plane method;
   category splits are estimates scaled to the provider-reported total.
+- **MCP servers from other tools.** Lemon now also loads MCP servers declared in
+  omp, Claude Code, Codex, Gemini CLI, OpenCode, Cursor, Windsurf and VS Code
+  configs and root `mcp.json`/`.mcp.json` (project files by default; other
+  tools' `~/` files with `LEMON_MCP_EXTERNAL_USER_DISCOVERY=1`), below Lemon's
+  own files. `lemon mcp enable|disable NAME` toggles any server per project or
+  `--global`, and `lemon mcp list --all` shows the effective set with sources.
+  Turn the import off with `LEMON_MCP_EXTERNAL_DISCOVERY=0`. See
+  [Skills: Servers from other tools](docs/skills.md#servers-from-other-tools).
 
 ### Changed
 

@@ -725,8 +725,11 @@ defmodule LemonSkills.Config do
   @doc """
   Get MCP configuration for a specific project.
 
-  Merges global and project-specific MCP configurations, with project
-  configuration taking precedence.
+  Server precedence for matching names (first wins, unnamed entries are
+  additive): project `.lemon/mcp.json`, global `<agent_dir>/mcp.json`,
+  `mcp_servers/0`, then servers imported from other tools by
+  `LemonSkills.McpDiscovery`. Disabled servers are omitted; see
+  `mcp_server_entries/1` for the full inventory with enable state.
 
   ## Parameters
 
@@ -734,41 +737,168 @@ defmodule LemonSkills.Config do
   """
   @spec mcp_config(String.t() | nil) :: %{servers: [mcp_server_config()], enabled: boolean()}
   def mcp_config(cwd \\ nil) do
-    global_config = load_mcp_config_from_file(global_mcp_config_file())
+    {project_config, global_config} = mcp_documents(cwd)
 
-    project_config =
-      if cwd do
-        load_mcp_config_from_file(project_mcp_config_file(cwd))
-      else
-        %{}
-      end
-
-    # Merge configs - project takes precedence
-    merged_servers =
-      Map.get(project_config, "servers", []) ++
-        Map.get(global_config, "servers", []) ++
-        mcp_servers()
-
-    # Convert JSON format to tuple format
     servers =
-      merged_servers
-      |> Enum.flat_map(&parse_mcp_server_config/1)
-      |> Enum.reduce({[], MapSet.new()}, fn config, {configs, names} ->
-        name = mcp_server_name(config)
-
-        if is_binary(name) and MapSet.member?(names, name) do
-          {configs, names}
-        else
-          {[config | configs], if(is_binary(name), do: MapSet.put(names, name), else: names)}
-        end
-      end)
-      |> elem(0)
-      |> Enum.reverse()
+      for %{enabled: true, config: config} <- mcp_entries(cwd, project_config, global_config),
+          do: config
 
     %{
       servers: servers,
       enabled: Map.get(project_config, "enabled", Map.get(global_config, "enabled", true))
     }
+  end
+
+  @typedoc "One merged MCP server with its source and enable state."
+  @type mcp_server_entry :: %{
+          config: mcp_server_config(),
+          name: String.t() | nil,
+          source: %{provider: String.t(), scope: :project | :global | :runtime},
+          source_enabled: boolean(),
+          override: :enabled | :disabled | nil,
+          enabled: boolean()
+        }
+
+  @doc """
+  Merged MCP server inventory for `cwd`, including disabled servers.
+
+  The first entry for a name wins even when it is disabled, so a disabled
+  higher-precedence entry keeps lower-precedence same-named entries out.
+  `source_enabled` is the entry's own `enabled`/`disabled` flag. `override` is
+  the per-name state from `disabled_servers` / `enabled_servers` in the project
+  Lemon file, falling back to the global Lemon file; within a file the denylist
+  wins. Imported servers carry `source: %{provider:, scope:}` in their opts.
+  """
+  @spec mcp_server_entries(String.t() | nil) :: [mcp_server_entry()]
+  def mcp_server_entries(cwd \\ nil) do
+    {project_config, global_config} = mcp_documents(cwd)
+    mcp_entries(cwd, project_config, global_config)
+  end
+
+  @doc """
+  Home directory used for user-level external MCP discovery, or `nil`.
+
+  Uses `config :lemon_skills, :mcp_discovery_home` when set. Otherwise returns
+  the user's home unless an agent-directory or harness-skills override isolates
+  the runtime, in which case user-level external files are not read.
+  """
+  @spec mcp_discovery_home() :: String.t() | nil
+  def mcp_discovery_home do
+    Application.get_env(:lemon_skills, :mcp_discovery_home) ||
+      if not isolated_skill_roots?(), do: System.user_home()
+  end
+
+  defp mcp_documents(cwd) do
+    project = if cwd, do: load_mcp_config_from_file(project_mcp_config_file(cwd)), else: %{}
+    {project, load_mcp_config_from_file(global_mcp_config_file())}
+  end
+
+  defp mcp_entries(cwd, project_config, global_config) do
+    external =
+      if LemonSkills.McpDiscovery.enabled?(),
+        do: LemonSkills.McpDiscovery.discover(cwd),
+        else: []
+
+    candidates =
+      document_candidates(project_config, :project) ++
+        document_candidates(global_config, :global) ++
+        (mcp_servers()
+         |> Enum.flat_map(&parse_mcp_server_config/1)
+         |> Enum.flat_map(&tagged_candidates(&1, true, "lemon", :runtime))) ++
+        Enum.flat_map(external, fn server ->
+          server.entry
+          |> parse_mcp_server_config()
+          |> Enum.map(&put_mcp_opt(&1, :source, server.source))
+          |> Enum.flat_map(
+            &tagged_candidates(&1, server.enabled, server.source.provider, server.source.scope)
+          )
+        end)
+
+    override = fn name ->
+      mcp_override(project_config, name) || mcp_override(global_config, name)
+    end
+
+    candidates
+    |> Enum.reduce({[], MapSet.new()}, fn entry, {entries, names} ->
+      case entry.name do
+        name when is_binary(name) ->
+          if MapSet.member?(names, name),
+            do: {entries, names},
+            else: {[entry | entries], MapSet.put(names, name)}
+
+        _ ->
+          {[entry | entries], names}
+      end
+    end)
+    |> elem(0)
+    |> Enum.reverse()
+    |> Enum.map(fn entry ->
+      state = if is_binary(entry.name), do: override.(entry.name)
+
+      enabled =
+        case state do
+          :disabled -> false
+          :enabled -> true
+          nil -> entry.source_enabled
+        end
+
+      entry |> Map.put(:override, state) |> Map.put(:enabled, enabled)
+    end)
+  end
+
+  defp document_candidates(document, scope) do
+    case Map.get(document, "servers", []) do
+      servers when is_list(servers) ->
+        Enum.flat_map(servers, fn entry ->
+          enabled =
+            not (is_map(entry) and
+                   (Map.get(entry, "enabled") == false or Map.get(entry, "disabled") == true))
+
+          entry
+          |> parse_mcp_server_config()
+          |> Enum.flat_map(&tagged_candidates(&1, enabled, "lemon", scope))
+        end)
+
+      _ ->
+        []
+    end
+  end
+
+  defp tagged_candidates(config, enabled, provider, scope) do
+    [
+      %{
+        config: config,
+        name: mcp_server_name(config),
+        source: %{provider: provider, scope: scope},
+        source_enabled: enabled
+      }
+    ]
+  end
+
+  defp put_mcp_opt({:stdio, command, args}, key, value),
+    do: {:stdio, command, args, [{key, value}]}
+
+  defp put_mcp_opt({:stdio, command, args, opts}, key, value),
+    do: {:stdio, command, args, opts ++ [{key, value}]}
+
+  defp put_mcp_opt({transport, url}, key, value), do: {transport, url, [{key, value}]}
+
+  defp put_mcp_opt({transport, url, opts}, key, value),
+    do: {transport, url, opts ++ [{key, value}]}
+
+  defp mcp_override(document, name) do
+    cond do
+      name in mcp_name_list(document, "disabled_servers") -> :disabled
+      name in mcp_name_list(document, "enabled_servers") -> :enabled
+      true -> nil
+    end
+  end
+
+  defp mcp_name_list(document, key) do
+    case Map.get(document, key) do
+      names when is_list(names) -> Enum.filter(names, &is_binary/1)
+      _ -> []
+    end
   end
 
   defp mcp_server_name({:stdio, _, _, opts}), do: Keyword.get(opts, :name)
