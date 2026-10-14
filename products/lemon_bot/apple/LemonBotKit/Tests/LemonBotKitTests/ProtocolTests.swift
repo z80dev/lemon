@@ -120,3 +120,61 @@ final class ProtocolTests: XCTestCase {
         XCTAssertEqual(encoded["externalAccountId"], .null); XCTAssertEqual(encoded["username"], .null)
     }
 }
+
+extension ProtocolTests {
+    func testFeedbackReasonArraysPreserveExactValuesAndRejectUnknownReasons() throws {
+        let reasons = ["not_requested", "inaccurate", "low_quality", "slow"]
+        let request = FeedbackCreate(clientNonce: "feedback_nonce_123456", sentiment: "bad", reasons: reasons, comment: "Reviewed")
+        let decoded = try JSONDecoder().decode(FeedbackCreate.self, from: JSONEncoder().encode(request))
+        XCTAssertEqual(decoded.reasons, reasons)
+        XCTAssertThrowsError(try JSONDecoder().decode(FeedbackCreate.self, from: Data(#"{"clientNonce":"feedback_nonce_123456","sentiment":"bad","reasons":["inaccurate","future_reason"]}"#.utf8)))
+        XCTAssertThrowsError(try JSONDecoder().decode(FeedbackCreate.self, from: Data(#"{"clientNonce":"feedback_nonce_123456","sentiment":"bad","reasons":null}"#.utf8)))
+        var invalid = request
+        invalid.reasons = ["inaccurate", "future_reason"]
+        XCTAssertThrowsError(try JSONEncoder().encode(invalid))
+        var response = Feedback(id: "feedback", revision: 1, createdAtMs: 1, updatedAtMs: 1, entryId: "entry", userId: "user", sentiment: "bad", reasons: reasons, comment: "")
+        XCTAssertEqual(try JSONDecoder().decode(Feedback.self, from: JSONEncoder().encode(response)).reasons, reasons)
+        response.reasons = ["future_reason"]
+        XCTAssertThrowsError(try JSONEncoder().encode(response))
+        let omitted = try JSONDecoder().decode(FeedbackCreate.self, from: Data(#"{"clientNonce":"feedback_nonce_123456","sentiment":"good"}"#.utf8))
+        XCTAssertNil(omitted.reasons)
+    }
+
+    func testExportStreamArraysValidateRequestsResponsesAndOptionalUpdates() throws {
+        let streams = ["audit", "action", "usage", "conversation_content"]
+        var destination = ExportDestination(id: "export", revision: 1, createdAtMs: 1, updatedAtMs: 1, name: "Collector", url: "https://collector.example", protocol: "otlp_http", streams: streams, enabled: true)
+        var create = ExportDestinationCreate(clientNonce: "export_nonce_123456", name: "Collector", url: "https://collector.example", protocol: "ndjson_webhook", streams: streams, enabled: true)
+        var update = ExportDestinationUpdate(clientNonce: "export_nonce_123456", revision: 1, streams: streams)
+        XCTAssertEqual(try JSONDecoder().decode(ExportDestination.self, from: JSONEncoder().encode(destination)).streams, streams)
+        XCTAssertEqual(try JSONDecoder().decode(ExportDestinationCreate.self, from: JSONEncoder().encode(create)).streams, streams)
+        XCTAssertEqual(try JSONDecoder().decode(ExportDestinationUpdate.self, from: JSONEncoder().encode(update)).streams, streams)
+        destination.streams = ["future_stream"]; create.streams = ["future_stream"]; update.streams = ["future_stream"]
+        XCTAssertThrowsError(try JSONEncoder().encode(destination))
+        XCTAssertThrowsError(try JSONEncoder().encode(create))
+        XCTAssertThrowsError(try JSONEncoder().encode(update))
+        XCTAssertThrowsError(try JSONDecoder().decode(ExportDestinationUpdate.self, from: Data(#"{"clientNonce":"export_nonce_123456","revision":1,"streams":["audit","future_stream"]}"#.utf8)))
+        XCTAssertThrowsError(try JSONDecoder().decode(ExportDestinationUpdate.self, from: Data(#"{"clientNonce":"export_nonce_123456","revision":1,"streams":null}"#.utf8)))
+        XCTAssertNil(try JSONDecoder().decode(ExportDestinationUpdate.self, from: Data(#"{"clientNonce":"export_nonce_123456","revision":1}"#.utf8)).streams)
+    }
+
+    func testXMediaArraysUseOnlyTheDeclaredWireKinds() throws {
+        let media = ["photo", "video", "gif"]
+        var provider = XProviderInfo(id: "x", kind: "x", label: "X", configured: false, prerequisites: [], capabilities: [], publicHandle: "bot", oauthScopes: [], allowedMedia: media, deniedCountries: [])
+        XCTAssertEqual(try JSONDecoder().decode(XProviderInfo.self, from: JSONEncoder().encode(provider)).allowedMedia, media)
+        XCTAssertThrowsError(try JSONDecoder().decode(XProviderInfo.self, from: Data(#"{"id":"x","kind":"x","label":"X","configured":false,"prerequisites":[],"capabilities":[],"publicHandle":"bot","oauthScopes":[],"allowedMedia":["photo","audio"],"deniedCountries":[]}"#.utf8)))
+        provider.allowedMedia = ["audio"]
+        XCTAssertThrowsError(try JSONEncoder().encode(provider))
+        let oauth = OAuthProviderConfig(id: "oauth", clientId: "client", clientSecretRef: "operator-reference", authorizeUrl: "https://provider.example/authorize", tokenUrl: "https://provider.example/token", scopes: [], redirectUris: [], allowedOrigins: [])
+        var configuration = OperatorConfigurationXProvider(oauth: oauth, publicHandle: "bot", signingSecretRef: "signing-reference", apiBaseUrl: "https://provider.example", deniedCountries: [], allowedMedia: media)
+        XCTAssertEqual(try JSONDecoder().decode(OperatorConfigurationXProvider.self, from: JSONEncoder().encode(configuration)).allowedMedia, media)
+        configuration.allowedMedia = ["audio"]
+        XCTAssertThrowsError(try JSONEncoder().encode(configuration))
+    }
+
+    func testNullableActorIdentityDoesNotBecomeANestedIdentifiableID() throws {
+        let actor = try JSONDecoder().decode(Actor.self, from: Data(#"{"kind":"system","id":null,"displayName":"System"}"#.utf8))
+        XCTAssertNil(actor.id)
+        let named = try JSONDecoder().decode(Actor.self, from: Data(#"{"kind":"bot","id":"bot_owned","displayName":"Teammate"}"#.utf8))
+        XCTAssertEqual(named.id, "bot_owned")
+    }
+}

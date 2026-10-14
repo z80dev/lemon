@@ -86,3 +86,5 @@ Exercise a real backend and attached host: setup/login/OIDC and account switch; 
 ## Native product changes
 
 The native product is separate from Lemon Web/TUI. It adds the shared Apple package and platform apps, complete typed transcript/action surfaces, account-bound realtime/drafts, native interactive host tools, explicit platform input/voice, notifications and privacy-bounded companion/share workflows. No screen streaming, ambient capture, operator-token client storage or automatic destructive mutation replay is introduced.
+
+Wire-array decoding and encoding preserve the exact feedback-reason, export-stream and X-media literal sets, rejecting unsupported elements without dropping fields or substituting opaque JSON. Optional array omission remains distinct from invalid null. Nullable actor IDs and public `protocol:`/`as:` argument labels use unambiguous Swift types and identifiers.
