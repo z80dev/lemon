@@ -4,6 +4,11 @@ defmodule LemonAgent.ModelRuntime.StreamOptions do
 
   This module normalizes caller-provided stream options and resolves provider-
   specific runtime inputs before `LemonAi.stream/3` or `LemonAi.complete/3` is invoked.
+
+  Selected OAuth credentials are resolved by the per-request credential callback,
+  not fetched again here. Its concrete key must be applied before calling
+  `LemonAi`; `api_key_authoritative` prevents lower layers from substituting
+  static, environment or encoded secret values when that callback refuses.
   """
 
   alias LemonAi.Providers.RequestHeaders
@@ -46,6 +51,7 @@ defmodule LemonAgent.ModelRuntime.StreamOptions do
     %{
       options
       | api_key: nil,
+        api_key_authoritative: false,
         access_token: nil,
         service_account_json: nil,
         project: nil,
@@ -121,6 +127,13 @@ defmodule LemonAgent.ModelRuntime.StreamOptions do
           %{base_opts | headers: headers}
       end
 
+    base_opts =
+      if Credentials.oauth_selected?(provider_cfg) do
+        %{base_opts | api_key: nil, api_key_authoritative: true}
+      else
+        base_opts
+      end
+
     case model do
       %{provider: :google_vertex} ->
         resolved =
@@ -155,6 +168,7 @@ defmodule LemonAgent.ModelRuntime.StreamOptions do
 
         base_opts
         |> maybe_put_struct(:api_key, resolved[:api_key])
+        |> apply_resolved_authority(resolved)
         |> Map.put(:thinking_budgets, thinking_budgets)
         |> put_provider_options(:azure_openai_responses, %{
           api_key: resolved[:api_key],
@@ -204,6 +218,7 @@ defmodule LemonAgent.ModelRuntime.StreamOptions do
           )
 
         base_opts
+        |> apply_resolved_authority(resolved)
         |> put_provider_options(provider_id, %{
           api_key: resolved[:api_key],
           base_url: resolved[:base_url]
@@ -241,15 +256,10 @@ defmodule LemonAgent.ModelRuntime.StreamOptions do
 
     stream_options_to_map(base_opts)
     |> Map.put(:thinking_budgets, thinking_budgets)
+    |> Map.put(:provider_config, provider_cfg)
     |> maybe_put(
       :api_key,
-      first_non_empty_binary([
-        base_opts.api_key,
-        Credentials.resolve_secret_api_key(provider_config_value(provider_cfg, :api_key_secret),
-          env_fallback: true
-        ),
-        provider_config_value(provider_cfg, :api_key)
-      ])
+      configured_api_key(base_opts, provider_cfg)
     )
   end
 
@@ -293,17 +303,27 @@ defmodule LemonAgent.ModelRuntime.StreamOptions do
 
   defp openai_compatible_input(base_opts, provider_cfg) do
     stream_options_to_map(base_opts)
-    |> maybe_put(
-      :api_key,
-      first_non_empty_binary([
-        base_opts.api_key,
-        Credentials.resolve_secret_api_key(provider_config_value(provider_cfg, :api_key_secret),
-          env_fallback: true
-        ),
-        provider_config_value(provider_cfg, :api_key)
-      ])
-    )
+    |> Map.put(:provider_config, provider_cfg)
+    |> Map.put(:api_key, configured_api_key(base_opts, provider_cfg))
     |> maybe_put(:base_url, provider_config_value(provider_cfg, :base_url))
+  end
+
+  defp apply_resolved_authority(opts, %{api_key_authoritative: true} = resolved),
+    do: %{opts | api_key: resolved[:api_key], api_key_authoritative: true}
+
+  defp apply_resolved_authority(opts, _resolved), do: opts
+
+  defp configured_api_key(%StreamOptions{api_key_authoritative: true} = opts, _provider_cfg),
+    do: opts.api_key
+
+  defp configured_api_key(base_opts, provider_cfg) do
+    first_non_empty_binary([
+      base_opts.api_key,
+      Credentials.resolve_secret_api_key(provider_config_value(provider_cfg, :api_key_secret),
+        env_fallback: true
+      ),
+      provider_config_value(provider_cfg, :api_key)
+    ])
   end
 
   defp put_provider_options(%StreamOptions{} = opts, provider_key, values) do

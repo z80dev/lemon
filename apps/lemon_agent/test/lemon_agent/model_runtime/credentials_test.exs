@@ -740,7 +740,7 @@ defmodule LemonAgent.ModelRuntime.CredentialsTest do
         }
       }
 
-      assert Credentials.resolve_provider_api_key(:github_copilot, config) == nil
+      assert Credentials.resolve_provider_api_key(:github_copilot, config) == ""
 
       assert {:error, :not_found} =
                Credentials.refresh_provider_api_key(

@@ -332,12 +332,17 @@ defmodule LemonAi.Types do
     `provider_retry` overrides the local HTTP retry policy for this request.
     `LemonAi.complete/3` sets one HTTP attempt because its oneshot policy owns
     the total attempt budget; ordinary streams retain the provider defaults.
+
+    `api_key_authoritative` marks caller-resolved credential authority. A missing
+    or empty key then fails before provider fallback or HTTP, even on a keyless
+    model. Leave it false for ordinary low-level environment/keyless resolution.
     """
     @type thinking_level :: :minimal | :low | :medium | :high | :xhigh
     @type t :: %__MODULE__{
             temperature: float() | nil,
             max_tokens: non_neg_integer() | nil,
             api_key: String.t() | nil,
+            api_key_authoritative: boolean(),
             session_id: String.t() | nil,
             cwd: String.t() | nil,
             headers: map(),
@@ -357,6 +362,7 @@ defmodule LemonAi.Types do
     defstruct temperature: nil,
               max_tokens: nil,
               api_key: nil,
+              api_key_authoritative: false,
               session_id: nil,
               cwd: nil,
               headers: %{},

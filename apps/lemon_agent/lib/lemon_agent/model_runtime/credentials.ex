@@ -6,6 +6,10 @@ defmodule LemonAgent.ModelRuntime.Credentials do
   centralizes provider alias handling, secret resolution, OAuth payload decoding,
   and provider availability checks before `LemonAi` receives runtime options.
 
+  A selected OAuth login that cannot resolve returns `""`, not `nil`, so a
+  request callback cannot replace the refusal with an earlier key. Pool entries
+  still exclude unusable credentials and retain the configured default policy.
+
   ## Credential pools
 
   On top of the single-credential resolution, providers may carry extra
@@ -247,6 +251,10 @@ defmodule LemonAgent.ModelRuntime.Credentials do
         entry.api_key
     end
   end
+
+  @doc "Whether the provider config explicitly selects OAuth credential authority."
+  @spec oauth_selected?(map() | nil) :: boolean()
+  def oauth_selected?(provider_cfg), do: normalize_auth_source(provider_cfg) == :oauth
 
   @spec resolve_provider_api_key(atom() | String.t(), map() | nil, keyword()) :: String.t() | nil
   def resolve_provider_api_key(provider, providers_or_cfg, opts \\ []) do
@@ -514,10 +522,10 @@ defmodule LemonAgent.ModelRuntime.Credentials do
     if normalize_auth_source(provider_cfg) == :oauth do
       case generic_secret_name(provider_cfg, provider) do
         secret_name when is_binary(secret_name) ->
-          resolve_secret_api_key(secret_name, env_fallback: false)
+          resolve_secret_api_key(secret_name, env_fallback: false) || ""
 
         _ ->
-          nil
+          ""
       end
     else
       env_key =
