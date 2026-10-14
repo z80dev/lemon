@@ -61,8 +61,10 @@ describe('long-lived operator connection', () => {
       service.start(); socket.handshake(['node.fs.write']);
       const result = service.call('node.fs.write', { nodeId: 'node', path: '/outside', dataBase64: '' }, { mutation: true }).catch(error => error as ApiError);
       socket.deliver({ type: 'res', id: socket.sent[1]!.id, ok: false, error: { code: 'INVALID_REQUEST', message: 'secret and raw path', details: { reason: 'path_not_allowed', retrySafe: true } } });
-      expect(await result).toMatchObject({ code: 'forbidden', retrySafe: true });
-      expect((await result).message).not.toContain('secret');
+      const failure = await result;
+      expect(failure).toMatchObject({ code: 'forbidden', retrySafe: true });
+      if (!(failure instanceof ApiError)) throw new Error('Expected a typed safe rejection.');
+      expect(failure.message).not.toContain('secret');
     } finally { service.close(); }
   });
   test('off-loopback plaintext controller is rejected before socket construction', () => {

@@ -154,7 +154,7 @@ async function productExecutionNames(s: BackendServices): Promise<string[]> {
   const server = { name: 'lemon-bot', url: new URL('/mcp', s.config.publicUrl).href };
   const raw = await s.lemon.call('mcp.execution_names', { server, toolNames: [...productBotTools] }, { mutation: false });
   const result = z.object({ server: z.object({ name: z.literal('lemon-bot') }).strict(), tools: z.array(z.object({ name: z.string(), executionName: z.string().min(1).max(64).regex(/^mcp_[a-z0-9_]+$/) }).strict()).length(productBotTools.length), count: z.literal(productBotTools.length) }).strict().safeParse(raw);
-  if (!result.success || new Set(result.data.tools.map(tool => tool.name)).size !== productBotTools.length || new Set(result.data.tools.map(tool => tool.executionName)).size !== productBotTools.length || result.data.tools.some(tool => !productBotTools.some(name => name === tool.name))) fail('upstream_error', 'The controller returned an incomplete or ambiguous product execution-name projection.');
+  if (!result.success || new Set(result.data.tools.map(tool => tool.name)).size !== productBotTools.length || new Set(result.data.tools.map(tool => tool.executionName)).size !== productBotTools.length || result.data.tools.some(tool => !productBotTools.some(name => name === tool.name))) fail('upstream_unavailable', 'The controller returned an incomplete or ambiguous product execution-name projection.');
   return result.data.tools.map(tool => tool.executionName);
 }
 const productExcludedNativeTools: Record<string, true> = {
@@ -194,6 +194,15 @@ async function projectNativeToolPolicy(s: BackendServices, user: Principal, bot:
         if (policy.localExecutionCeiling === 'ask' || policy.rules.some(rule => (rule.category === category || rule.category === 'permissions') && rule.mode !== 'allow')) approvalTools.add(tool);
       }
     }
+  }
+  // Diagnostics can execute project-local compilers (including mix compile) and write workspace artifacts.
+  // Neither a read-only file grant nor an unrestricted baseline may authorize this local execution.
+  const diagnosticFiles = measured.items.find(value => value.category === 'files');
+  const diagnosticShell = measured.items.find(value => value.category === 'shell');
+  if (!diagnosticShell?.tools.includes('lsp_diagnostics') || grants.find(value => value.capabilityId === diagnosticFiles?.id)?.effectiveLevel !== 'read_interact' || grants.find(value => value.capabilityId === diagnosticShell.id)?.effectiveLevel !== 'read_interact') denied.add('lsp_diagnostics');
+  else {
+    allowed.add('lsp_diagnostics');
+    if (policy.localExecutionCeiling === 'ask' || policy.rules.some(rule => ['files', 'shell', 'permissions'].includes(rule.category) && rule.mode !== 'allow')) approvalTools.add('lsp_diagnostics');
   }
   for (const connector of s.store.list<P.Connector>('connectors', value => value.botId === bot.id)) {
     const encrypted = s.store.metadata<string>(`connector:${connector.id}`);
