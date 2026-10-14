@@ -431,14 +431,15 @@ defmodule CodingAgent.ToolRegistry do
   end
 
   defp discover_session_mcp_tools(opts) do
-    case Keyword.get(opts, :acp_mcp_session_id) do
-      id when is_binary(id) and id != "" ->
-        tools = LemonSkills.McpSession.tools(id)
-        mcp_tuples_with_approval(tools, LemonSkills.McpSession.approvals(id))
-
-      _ ->
-        []
-    end
+    [Keyword.get(opts, :acp_mcp_session_id), Keyword.get(opts, :mcp_session_id)]
+    |> Enum.filter(&(is_binary(&1) and &1 != ""))
+    |> Enum.uniq()
+    |> Enum.flat_map(fn id ->
+      mcp_tuples_with_approval(
+        LemonSkills.McpSession.tools(id),
+        LemonSkills.McpSession.approvals(id)
+      )
+    end)
   end
 
   defp mcp_tuples_with_approval(tools, approvals) do

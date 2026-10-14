@@ -126,6 +126,96 @@ defmodule LemonRouter.SubmissionBuilderTest do
              )
   end
 
+  test "named profile placement with no explicit cwd never uses controller cwd" do
+    meta = %{
+      node: "worker-one",
+      profile_id: "test",
+      remote_cwd_explicit: false,
+      cwd: "/controller/workspace",
+      mcp_servers: [
+        %{"name" => "bot", "url" => "https://example.com/mcp",
+          "headers" => %{"Authorization" => "Bearer private-token"}}
+      ]
+    }
+
+    assert {:ok, submission} =
+             SubmissionBuilder.build(
+               request(unique_session_key("remote"), %{
+                 agent_id: "test",
+                 cwd: "/controller/override",
+                 meta: meta
+               }),
+               orchestrator_state()
+             )
+
+    assert submission.execution_request.cwd == nil
+    assert submission.execution_request.meta.mcp_servers == meta.mcp_servers
+    refute Map.has_key?(submission.meta, :mcp_servers)
+    refute inspect(submission.meta) =~ "private-token"
+  end
+
+  test "explicit destination cwd is retained for named profiles" do
+    assert {:ok, submission} =
+             SubmissionBuilder.build(
+               request(unique_session_key("remote-explicit"), %{
+                 agent_id: "test",
+                 cwd: "/worker/project",
+                 meta: %{node: "worker-one", remote_cwd_explicit: true}
+               }),
+               orchestrator_state()
+             )
+
+    assert submission.execution_request.cwd == "/worker/project"
+  end
+
+  test "local placement continues resolving the controller cwd default" do
+    assert {:ok, submission} =
+             SubmissionBuilder.build(
+               request(unique_session_key("local"), %{
+                 agent_id: "test",
+                 meta: %{node: "local", remote_cwd_explicit: false}
+               }),
+               orchestrator_state()
+             )
+
+    assert submission.execution_request.cwd == LemonCore.Cwd.default_cwd()
+  end
+
+  @tag :tmp_dir
+  test "new managed profiles are admitted before registry reload", %{tmp_dir: root} do
+    config = Path.join(root, "profiles.toml")
+    File.write!(config, "")
+    previous_paths = Application.get_env(:lemon_core, :paths)
+    Application.put_env(:lemon_core, :paths,
+      (previous_paths || [])
+      |> Keyword.put(:global_config, config)
+      |> Keyword.put(:home_state_dir, root))
+    on_exit(fn ->
+      if is_nil(previous_paths) do
+        Application.delete_env(:lemon_core, :paths)
+      else
+        Application.put_env(:lemon_core, :paths, previous_paths)
+      end
+    end)
+
+    assert {:ok, profile} =
+             LemonCore.ProfileStore.create(%{
+               id: "new-managed-profile", node: "worker-new",
+               systemPrompt: "New managed persona", model: "new-profile-model"
+             })
+    assert {:ok, request} =
+             LemonCore.ProfileStore.chat_request(profile, "hello",
+               run_id: "run_new_managed_profile",
+               session_key: "agent:new-managed-profile:task-example")
+
+    refute LemonRouter.AgentProfiles.exists?("new-managed-profile")
+    assert {:ok, submission} = SubmissionBuilder.build(request, orchestrator_state())
+    assert submission.execution_request.meta.node == "worker-new"
+    assert submission.execution_request.meta.system_prompt == "New managed persona"
+    assert submission.execution_request.meta.model == "new-profile-model"
+    assert submission.execution_request.cwd == nil
+  end
+
   defp request(session_key, attrs) do
     attrs
     |> Map.merge(%{

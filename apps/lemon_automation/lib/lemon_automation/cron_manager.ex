@@ -1636,10 +1636,31 @@ defmodule LemonAutomation.CronManager do
   defp validate_feature_fields(params, mode, job_id) do
     with {:ok, params} <- validate_cwd(params),
          {:ok, params} <- validate_monitor_flags(params),
+         {:ok, params} <- validate_profile_field(params, mode),
          {:ok, params} <- validate_model_field(params, mode),
          {:ok, params} <- validate_context_from(params, mode, job_id),
          {:ok, params} <- validate_deliver_to(params) do
       validate_once(params)
+    end
+  end
+
+  defp validate_profile_field(params, mode) do
+    case fetch_param(params, :profile_id) do
+      :error ->
+        {:ok, params}
+
+      {:ok, nil} ->
+        {:ok, params}
+
+      {:ok, id} when is_binary(id) and id != "" and mode == :agent ->
+        case LemonCore.ProfileStore.get(id) do
+          {:ok, _profile} -> {:ok, params}
+          {:error, :not_found} -> {:invalid_target, "Unknown profile"}
+          {:error, _} -> {:invalid_target, "Profile is unavailable"}
+        end
+
+      _ ->
+        {:invalid_target, "profile_id must name a profile for an agent job"}
     end
   end
 

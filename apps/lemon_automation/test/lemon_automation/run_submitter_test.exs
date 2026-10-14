@@ -1,8 +1,34 @@
 defmodule LemonAutomation.RunSubmitterTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias LemonAutomation.{CronJob, CronRun, RunSubmitter}
   alias LemonCore.SessionKey
+
+  @moduletag :tmp_dir
+
+  setup %{tmp_dir: root} do
+    config = Path.join(root, "config.toml")
+    File.write!(config, "")
+    previous_paths = Application.get_env(:lemon_core, :paths)
+
+    Application.put_env(
+      :lemon_core,
+      :paths,
+      (previous_paths || [])
+      |> Keyword.put(:global_config, config)
+      |> Keyword.put(:home_state_dir, root)
+    )
+
+    on_exit(fn ->
+      if is_nil(previous_paths) do
+        Application.delete_env(:lemon_core, :paths)
+      else
+        Application.put_env(:lemon_core, :paths, previous_paths)
+      end
+    end)
+
+    :ok
+  end
 
   defmodule RouterOk do
     @moduledoc false
@@ -224,6 +250,78 @@ defmodule LemonAutomation.RunSubmitterTest do
                on_submitting: fn _id, _session -> {:error, :aborted} end
              )
 
+    refute_receive {:router_submit, _}
+  end
+
+  test "profile is resolved at run time with its current node and persona" do
+    assert {:ok, profile} =
+             LemonCore.ProfileStore.create(%{
+               id: "cron-profile",
+               node: "worker-old",
+               model: "old-model",
+               systemPrompt: "Old persona",
+               mcpServers: [%{
+                 "name" => "bot",
+                 "url" => "https://example.com/mcp",
+                 "headers" => %{"Authorization" => "Bearer cron-private-token"}
+               }]
+             })
+
+    job = sample_job(%{profile_id: "cron-profile", deliver_to: "none"})
+    run = sample_run(%{run_id: "fixed_profile_run"})
+    old = RunSubmitter.build_params(job, run, run.run_id)
+    assert old.meta.node == "worker-old"
+
+    assert {:ok, _} =
+             LemonCore.ProfileStore.update("cron-profile", %{
+               node: "worker-current", model: "current-model", systemPrompt: "Current persona"
+             })
+    File.write!(Path.join(profile["paths"]["workspace"], "SOUL.md"), "Current instructions")
+
+    assert {:ok, "done"} =
+             RunSubmitter.submit(job, run,
+               router_mod: RouterOk, waiter_mod: Waiter, append_memory: false)
+
+    assert_receive {:router_submit, params}
+    assert params.run_id == "fixed_profile_run"
+    assert params.agent_id == "cron-profile"
+    assert params.model == "current-model"
+    assert params.meta.node == "worker-current"
+    assert params.meta.profile_id == "cron-profile"
+    assert params.meta.system_prompt == "Current persona"
+    assert params.meta.profile_instructions["SOUL.md"] == "Current instructions"
+    assert params.meta.mcp_servers |> hd() |> Map.get("headers") ==
+             %{"Authorization" => "Bearer cron-private-token"}
+    assert params.meta.cron_job_id == job.id
+    assert params.meta.cron_run_id == run.id
+    assert params.meta.cron_base_session_key == job.session_key
+    assert params.meta.cron_session_key == params.session_key
+    assert params.meta.remote_cwd_explicit == false
+    assert params.cwd == nil
+    assert params.tool_policy.blocked_tools == ["cron"]
+    assert SessionKey.valid?(params.session_key)
+    assert params.session_key != job.session_key
+    assert job.deliver_to == "none"
+  end
+
+  test "profile placement preserves explicit cron cwd and model pin" do
+    assert {:ok, _} =
+             LemonCore.ProfileStore.create(%{id: "pinned-profile", node: "worker-one",
+               model: "profile-model"})
+    job = sample_job(%{profile_id: "pinned-profile", cwd: "/worker/project", model: "cron-model"})
+    params = RunSubmitter.build_params(job, sample_run(), "fixed_pin")
+    assert params.cwd == "/worker/project"
+    assert params.meta.remote_cwd_explicit == true
+    assert params.meta.remote_cwd == "/worker/project"
+    assert params.model == "cron-model"
+    assert params.meta.cron_model_pin == "cron-model"
+  end
+
+  test "missing runtime profile fails before router submission" do
+    job = sample_job(%{profile_id: "deleted-profile"})
+    assert {:error, :unknown_profile} =
+             RunSubmitter.submit(job, sample_run(),
+               router_mod: RouterOk, waiter_mod: Waiter, append_memory: false)
     refute_receive {:router_submit, _}
   end
 

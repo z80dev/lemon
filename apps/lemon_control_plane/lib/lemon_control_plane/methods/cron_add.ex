@@ -2,7 +2,8 @@ defmodule LemonControlPlane.Methods.CronAdd do
   @moduledoc """
   Handler for the cron.add method.
 
-  Adds a new cron job.
+  Adds a new cron job. Optional `profileId` placement is persisted by identity
+  and resolved from the current profile when the job executes.
   """
 
   @behaviour LemonControlPlane.Method
@@ -19,6 +20,7 @@ defmodule LemonControlPlane.Methods.CronAdd do
       name: params["name"],
       schedule: params["schedule"],
       agent_id: params["agentId"],
+      profile_id: params["profileId"],
       session_key: params["sessionKey"],
       prompt: params["prompt"],
       command: params["command"],
@@ -38,6 +40,7 @@ defmodule LemonControlPlane.Methods.CronAdd do
         {:ok,
          %{
            "id" => job.id,
+           "profileId" => job.profile_id,
            "name" => job.name,
            "mode" => job |> LemonAutomation.CronJob.execution_mode() |> Atom.to_string(),
            "schedule" => job.schedule,

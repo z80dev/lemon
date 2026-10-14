@@ -8,7 +8,18 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
-No unreleased changes yet.
+### Added
+
+- Profile placement for arbitrary `chat.send` sessions and cron agent jobs via
+  `profileId`, resolved at execution time for routines. `profiles.update` edits
+  persona, model, node and per-profile Streamable HTTP MCP servers. MCP headers
+  are write-only in management responses and excluded from run persistence.
+
+### Fixed
+
+- Named-node profile chat no longer inherits the controller's default working
+  directory. Profile persona instructions and MCP connections accompany the
+  execution request, while provider credentials remain destination-local.
 
 ---
 

@@ -39,6 +39,7 @@ defmodule CodingAgent.Session.Lifecycle do
     custom_tools = Keyword.get(opts, :tools)
     extra_tools = State.normalize_extra_tools(Keyword.get(opts, :extra_tools, []))
     workspace_dir = Keyword.get(opts, :workspace_dir, CodingAgent.Config.workspace_dir())
+    profile_instructions = Keyword.get(opts, :profile_instructions)
     register_session = Keyword.get(opts, :register, false)
     session_registry = Keyword.get(opts, :registry, CodingAgent.SessionRegistry)
 
@@ -187,6 +188,7 @@ defmodule CodingAgent.Session.Lifecycle do
               session_id: session_manager.header.id,
               agent_id: agent_id,
               tool_names: tool_names,
+              profile_instructions: profile_instructions,
               environment: prompt_environment
             }
           )
@@ -308,6 +310,9 @@ defmodule CodingAgent.Session.Lifecycle do
       explicit_system_prompt: explicit_system_prompt,
       prompt_template: prompt_template,
       workspace_dir: workspace_dir,
+      profile_instructions: profile_instructions,
+      mcp_session_id: Keyword.get(opts, :mcp_session_id),
+      acp_mcp_session_id: Keyword.get(opts, :acp_mcp_session_id),
       extra_tools: extra_tools,
       # Kept so a reload recomputes disclosure with the same per-session
       # override the session started with -- `reload_extensions/1` rebuilds
@@ -371,6 +376,8 @@ defmodule CodingAgent.Session.Lifecycle do
       agent_id: state.agent_id,
       settings_manager: state.settings_manager,
       workspace_dir: state.workspace_dir,
+      mcp_session_id: state.mcp_session_id,
+      acp_mcp_session_id: state.acp_mcp_session_id,
       session_scope: state.session_scope,
       tool_policy: state.tool_policy,
       approval_context: state.approval_context,

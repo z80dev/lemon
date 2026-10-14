@@ -95,9 +95,9 @@ classification; clients must reconcile any potentially completed mutation.
 
 Ordinary `chat.send` requests may supply `cwd`: a nonempty absolute existing
 directory forwarded to the native coding session and its tools. Relative,
-missing and non-directory paths are rejected before submission. Canonical
-profile sessions reject caller workspace overrides; use `profile.chat`, whose
-workspace remains server-owned.
+missing and non-directory paths are rejected before submission. Profile-bound
+(`profileId`) and canonical profile sessions reject caller workspace overrides;
+their workspace remains server-owned.
 
 `chat.send` and `profile.chat` accept optional `images` arrays containing
 `{"type":"image","mime_type":"image/png","data":"<standard Base64>"}`.
@@ -119,6 +119,48 @@ A lost mutation acknowledgement does not prove failure. In particular,
 prune, provider edits and blueprint activation retain their owning service's
 preview/revision/exact-confirmation requirements. Public management history and
 errors are bounded and redacted, not raw run/store dumps.
+
+## Profiles, placement-aware chat, and routines
+
+Profile methods use the canonical `LemonCore.ProfileStore` lifecycle and reload
+the router profile registry after mutations:
+
+| Method | Scope | Request | Successful payload |
+| --- | --- | --- | --- |
+| `profiles.list` | read | `{}` | `{profiles,count}` |
+| `profiles.get` | read | `{id}` | `{profile,summary}` |
+| `profiles.create` | admin | `{id,[name,description,avatar,model,systemPrompt,node,mcpServers]}` | `{profile,summary}` |
+| `profiles.update` | admin | `{id,[name,description,avatar,model,systemPrompt,node,mcpServers]}` | `{profile,summary}` |
+| `profiles.clone` | admin | `{sourceId,id,[name,description,avatar,model,systemPrompt,node,mcpServers]}` | `{profile,summary}` |
+| `profile.chat` | write | `{id,prompt,[model,queueMode,images]}` | `{runId,profileId,sessionKey,node,summary}` |
+
+`profiles.update` preserves omitted fields, clears optional text with `""`, and
+uses `"local"` to clear node placement. `mcpServers` is a list of
+`{name,url,headers}` Streamable HTTP server definitions, with string-to-string
+header objects. Names must be unique; limits are 32 servers and 64 KiB total.
+Create/update/clone/get/list profile projections omit MCP `headers` completely.
+Headers are execution-only secrets: not logged, emitted in management events,
+or stored in run history. A full replacement list replaces previous headers;
+omit `mcpServers` to preserve existing connections, or send `[]` to remove them.
+General `node.invoke.request` events contain only
+`{invokeId,nodeId,method,timeoutMs,cleanup:{includesArgs:false}}`. Invocation
+arguments are sent only on the targeted destination node connection.
+
+`chat.send {sessionKey,prompt,[profileId,agentId,cwd,images,queueMode]}` can use a
+profile's persona, model and node on arbitrary task/DM/group session keys.
+Named profile requests carry JSON-safe system prompt/bootstrap instructions
+and MCP servers to the worker and omit controller-default cwd. Provider
+credentials and assistant workspace paths are resolved destination-locally.
+MCP tools attach through the existing owner-bound session client lifecycle.
+
+`cron.add {name,schedule,[profileId,agentId,sessionKey,prompt,...]}` persists
+`profileId` for agent jobs; `cron.list` job rows expose `profileId` (null when
+unset). Each agent run resolves current profile placement/persona rather than
+snapshotting the node at job creation. Shell jobs remain scheduler-local.
+Profile placement is rejected for shell jobs. Explicit routine `cwd` and model
+pins remain supported; an explicit remote cwd is interpreted on the worker.
+See [profiles](../../docs/user-guide/profiles.md) for configuration and boundaries.
+
 
 ## Durable session inspection
 

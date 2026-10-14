@@ -87,6 +87,7 @@ defmodule LemonCore.Redact do
   @doc "Whether an atom or string key identifies credentials (case-insensitive)."
   @spec sensitive_key?(term()) :: boolean()
   def sensitive_key?(key) when is_atom(key), do: sensitive_key?(Atom.to_string(key))
+  def sensitive_key?(key) when key in ["mcp_servers_json", "mcp_servers", "mcpServers"], do: true
   def sensitive_key?(key) when is_binary(key), do: Regex.match?(@sensitive_key, key)
   def sensitive_key?(_), do: false
 

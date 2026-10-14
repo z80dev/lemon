@@ -9,6 +9,7 @@ defmodule LemonAutomation.CronJob do
   - `:schedule` - Cron expression (e.g., "0 9 * * *" for 9 AM daily)
   - `:enabled` - Whether the job is active
   - `:agent_id` - Target agent for prompt jobs
+  - `:profile_id` - Optional profile resolved at execution time for placement/persona
   - `:session_key` - Session key for prompt-job routing
   - `:prompt` - The prompt to send to the agent
   - `:command` - Optional operator-owned shell command for no-agent jobs
@@ -77,6 +78,7 @@ defmodule LemonAutomation.CronJob do
     :name,
     :schedule,
     :agent_id,
+    :profile_id,
     :session_key,
     :prompt,
     :command,
@@ -109,6 +111,7 @@ defmodule LemonAutomation.CronJob do
           schedule: binary(),
           enabled: boolean(),
           agent_id: binary() | nil,
+          profile_id: binary() | nil,
           session_key: binary() | nil,
           prompt: binary() | nil,
           command: binary() | nil,
@@ -147,6 +150,7 @@ defmodule LemonAutomation.CronJob do
       schedule: get_attr(attrs, :schedule),
       enabled: get_attr(attrs, :enabled, true),
       agent_id: get_attr(attrs, :agent_id),
+      profile_id: get_attr(attrs, :profile_id),
       session_key: get_attr(attrs, :session_key),
       prompt: get_attr(attrs, :prompt),
       command: get_attr(attrs, :command),
@@ -185,6 +189,7 @@ defmodule LemonAutomation.CronJob do
       | name: get_attr(attrs, :name, job.name),
         schedule: get_attr(attrs, :schedule, job.schedule),
         enabled: get_attr(attrs, :enabled, job.enabled),
+        profile_id: get_attr(attrs, :profile_id, job.profile_id),
         prompt: get_attr(attrs, :prompt, job.prompt),
         command: get_attr(attrs, :command, job.command),
         cwd: get_attr(attrs, :cwd, job.cwd),
@@ -246,6 +251,7 @@ defmodule LemonAutomation.CronJob do
       schedule: job.schedule,
       enabled: job.enabled,
       agent_id: job.agent_id,
+      profile_id: job.profile_id,
       session_key: job.session_key,
       prompt: job.prompt,
       command: job.command,
@@ -283,6 +289,7 @@ defmodule LemonAutomation.CronJob do
       schedule: get_attr(map, :schedule),
       enabled: get_attr(map, :enabled, true),
       agent_id: get_attr(map, :agent_id),
+      profile_id: get_attr(map, :profile_id),
       session_key: get_attr(map, :session_key),
       prompt: get_attr(map, :prompt),
       command: get_attr(map, :command),

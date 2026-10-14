@@ -141,7 +141,8 @@ defmodule LemonCore.RedactTest do
       assert Redact.text(value) == value
     end
 
-    for key <- [:api_key, "X-API-Key", "oauthToken", "client_secret", "password", "cookie"] do
+    for key <- [:api_key, "X-API-Key", "oauthToken", "client_secret", "password", "cookie",
+                :mcp_servers, "mcp_servers_json", "mcpServers"] do
       assert Redact.sensitive_key?(key)
     end
 

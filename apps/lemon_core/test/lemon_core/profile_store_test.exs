@@ -250,6 +250,84 @@ defmodule LemonCore.ProfileStoreTest do
              ProfileStore.chat_request(%{profile | "node" => "../bad-node"}, "route me")
   end
 
+  @tag :tmp_dir
+  test "updates persist all placement fields and preserve MCP secrets only for execution", %{tmp_dir: root} do
+    opts = opts(root)
+    servers = [
+      %{"name" => "lemon-bot", "url" => "https://bot.example/mcp",
+        "headers" => %{"Authorization" => "Bearer private-bot-token"}}
+    ]
+
+    assert {:ok, original} =
+             ProfileStore.create(%{id: "placed", description: "keep", mcpServers: servers}, opts)
+    refute inspect(original) =~ "private-bot-token"
+    config = Keyword.fetch!(opts, :config_path)
+    File.write!(config, File.read!(config) <> "\n[custom]\nkeep = true\n")
+    File.chmod!(config, 0o644)
+    File.write!(Path.join(original["paths"]["workspace"], "SOUL.md"), "Be an evidence-first teammate.")
+
+    assert {:ok, updated} =
+             ProfileStore.update("placed", %{
+               name: "Placed Bot", avatar: "lemon", model: "openai:gpt-5",
+               systemPrompt: "Research carefully", node: "worker-1"
+             }, opts)
+
+    assert updated["description"] == "keep"
+    assert updated["createdAt"] == original["createdAt"]
+    assert updated["mcpServers"] == [%{"name" => "lemon-bot", "url" => "https://bot.example/mcp"}]
+    assert {:ok, ^updated} = ProfileStore.get("placed", opts)
+    assert [%{"mcpServers" => projected}] = ProfileStore.list(opts)
+    assert projected == updated["mcpServers"]
+    refute File.read!(updated["paths"]["manifest"]) =~ "private-bot-token"
+    assert File.read!(config) =~ "[custom]\nkeep = true"
+    assert Bitwise.band(File.stat!(config).mode, 0o777) == 0o600
+
+    assert {:ok, execution_profile} = ProfileStore.get_for_execution("placed", opts)
+    assert execution_profile["mcpServers"] == servers
+    assert {:ok, request} =
+             ProfileStore.chat_request(execution_profile, "Investigate",
+               session_key: "agent:placed:task-123", run_id: "run-placement")
+    assert request.cwd == nil
+    assert request.session_key == "agent:placed:task-123"
+    assert request.run_id == "run-placement"
+    assert request.model == "openai:gpt-5"
+    assert request.meta.node == "worker-1"
+    assert request.meta.system_prompt == "Research carefully"
+    assert request.meta.profile_instructions == %{"SOUL.md" => "Be an evidence-first teammate."}
+    assert request.meta.mcp_servers == servers
+    assert request.meta.remote_cwd_explicit == false
+    assert request.meta.remote_cwd == nil
+
+    destination = Path.join(root, "placed-export.json")
+    assert {:ok, _} = ProfileStore.export("placed", destination, opts)
+    refute File.read!(destination) =~ "private-bot-token"
+
+    assert {:ok, cleared} =
+             ProfileStore.update("placed", %{systemPrompt: "", mcpServers: [], node: "local"}, opts)
+    assert cleared["systemPrompt"] == nil
+    assert cleared["mcpServers"] == []
+  end
+
+  @tag :tmp_dir
+  test "profile update rolls back and MCP definitions are validated without exposing values", %{tmp_dir: root} do
+    opts = opts(root)
+    assert {:ok, profile} = ProfileStore.create(%{id: "updated", name: "Original"}, opts)
+    File.rm!(profile["paths"]["manifest"])
+    File.mkdir_p!(profile["paths"]["manifest"])
+    assert {:error, _} = ProfileStore.update("updated", %{name: "Changed"}, opts)
+    assert {:ok, %{"name" => "Original"}} = ProfileStore.get("updated", opts)
+
+    for servers <- [
+          [%{"name" => "x", "url" => "file:///private"}],
+          [%{"name" => "x", "url" => "https://user:secret@example.com/mcp"}],
+          [%{"name" => "x", "url" => "https://example.com", "headers" => %{"Authorization" => "secret\r\nInjected: x"}}],
+          [%{"name" => "x", "url" => "https://example.com"}, %{"name" => "x", "url" => "https://other.example"}]
+        ] do
+      assert {:error, {:invalid_field, :mcp_servers}} =
+               ProfileStore.update("updated", %{mcpServers: servers}, opts)
+    end
+  end
+
   defp opts(root) do
     state = Path.join(root, "state")
     [home_state_dir: state, config_path: Path.join(state, "config.toml")]

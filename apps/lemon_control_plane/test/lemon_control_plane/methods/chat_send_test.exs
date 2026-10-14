@@ -40,7 +40,9 @@ defmodule LemonControlPlane.Methods.ChatSendTest do
     Application.put_env(
       :lemon_core,
       :paths,
-      Keyword.put(previous_paths || [], :global_config, config)
+      (previous_paths || [])
+      |> Keyword.put(:global_config, config)
+      |> Keyword.put(:home_state_dir, root)
     )
 
     on_exit(fn ->
@@ -180,6 +182,81 @@ defmodule LemonControlPlane.Methods.ChatSendTest do
     assert details["runId"] == id
     assert details["retrySafe"] == false
     refute inspect(details) =~ @png_data
+  end
+
+  test "profileId inherits placement and persona for a noncanonical session", %{ctx: ctx} do
+    assert {:ok, profile} =
+             LemonCore.ProfileStore.create(%{
+               id: "remote",
+               node: "worker-one",
+               model: "profile-model",
+               systemPrompt: "Be a careful teammate.",
+               mcpServers: [
+                 %{
+                   "name" => "bot",
+                   "url" => "https://example.com/mcp",
+                   "headers" => %{"Authorization" => "Bearer private-profile-token"}
+                 }
+               ]
+             })
+
+    File.write!(Path.join(profile["paths"]["workspace"], "SOUL.md"), "Prefer evidence.")
+    session_key = "agent:remote:task-placement"
+
+    assert {:ok, response} =
+             ChatSend.handle(
+               params(%{
+                 "profileId" => "remote",
+                 "sessionKey" => session_key,
+                 "agentId" => "ignored",
+                 "queueMode" => "followup",
+                 "images" => [image()]
+               }),
+               ctx
+             )
+
+    assert_received {:submitted, request}
+    assert request.agent_id == "remote"
+    assert request.session_key == session_key
+    assert request.model == "profile-model"
+    assert request.meta.node == "worker-one"
+    assert request.meta.system_prompt == "Be a careful teammate."
+    assert request.meta.profile_instructions["SOUL.md"] == "Prefer evidence."
+    assert request.meta.mcp_servers |> hd() |> Map.get("headers") ==
+             %{"Authorization" => "Bearer private-profile-token"}
+    assert request.meta.remote_cwd_explicit == false
+    assert request.cwd == nil
+    assert request.queue_mode == :followup
+    assert request.images == [%ImageContent{data: @png_data, mime_type: "image/png"}]
+    refute inspect(response) =~ "private-profile-token"
+    refute inspect(response) =~ "Be a careful teammate."
+  end
+
+  test "profileId retains the profile workspace locally", %{ctx: ctx} do
+    assert {:ok, profile} = LemonCore.ProfileStore.get("workspace")
+    assert {:ok, _} = ChatSend.handle(params(%{"profileId" => "workspace"}), ctx)
+    assert_received {:submitted, request}
+    assert request.agent_id == "workspace"
+    assert request.cwd == profile["paths"]["workspace"]
+  end
+
+  test "unknown or invalid profileId never submits", %{ctx: ctx} do
+    assert {:error, {:not_found, "Unknown profile", _}} =
+             ChatSend.handle(params(%{"profileId" => "missing"}), ctx)
+
+    for id <- [nil, "", 123, %{}] do
+      assert {:error, {:invalid_request, _, nil}} =
+               ChatSend.handle(params(%{"profileId" => id}), ctx)
+    end
+
+    refute_received {:submitted, _}
+  end
+
+  test "profileId cannot override its workspace", %{root: root, ctx: ctx} do
+    assert {:error, {:invalid_request, "cwd cannot override a profile workspace", nil}} =
+             ChatSend.handle(params(%{"profileId" => "workspace", "cwd" => root}), ctx)
+
+    refute_received {:submitted, _}
   end
 
   test "JSON image arrays pass the chat request validation boundary" do

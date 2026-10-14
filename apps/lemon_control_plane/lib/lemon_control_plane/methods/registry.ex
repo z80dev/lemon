@@ -58,6 +58,7 @@ defmodule LemonControlPlane.Methods.Registry do
     LemonControlPlane.Methods.ProfilesList,
     LemonControlPlane.Methods.ProfilesGet,
     LemonControlPlane.Methods.ProfilesCreate,
+    LemonControlPlane.Methods.ProfilesUpdate,
     LemonControlPlane.Methods.ProfilesClone,
     LemonControlPlane.Methods.ProfilesRename,
     LemonControlPlane.Methods.ProfilesExport,

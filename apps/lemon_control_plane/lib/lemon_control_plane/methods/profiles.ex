@@ -14,7 +14,8 @@ defmodule LemonControlPlane.Methods.ProfilesSupport do
       "avatar" => params["avatar"],
       "model" => params["model"],
       "systemPrompt" => params["systemPrompt"],
-      "node" => params["node"]
+      "node" => params["node"],
+      "mcpServers" => params["mcpServers"]
     }
     |> Enum.reject(fn {_key, value} -> is_nil(value) end)
     |> Map.new()
@@ -58,7 +59,8 @@ defmodule LemonControlPlane.Methods.ProfilesSupport do
     end)
   end
 
-  def result(profile), do: %{"profile" => profile, "summary" => profile_summary(profile)}
+  def result(profile),
+    do: %{"profile" => ProfileStore.projection(profile), "summary" => profile_summary(profile)}
 
   def profile_summary(profile) do
     %{
@@ -186,6 +188,30 @@ defmodule LemonControlPlane.Methods.ProfilesCreate do
   @impl true
   def handle(params, _ctx) do
     with {:ok, profile} <- LemonCore.ProfileStore.create(ProfilesSupport.profile_attrs(params)),
+         :ok <- ProfilesSupport.refresh(profile["id"]) do
+      {:ok, ProfilesSupport.result(profile)}
+    else
+      {:error, reason} -> ProfilesSupport.error(reason)
+    end
+  end
+end
+
+defmodule LemonControlPlane.Methods.ProfilesUpdate do
+  @moduledoc false
+  @behaviour LemonControlPlane.Method
+  alias LemonControlPlane.Methods.ProfilesSupport
+
+  @impl true
+  def name, do: "profiles.update"
+
+  @impl true
+  def scopes, do: [:admin]
+
+  @impl true
+  def handle(params, _ctx) do
+    attrs = Map.take(params, ~w(name description avatar model systemPrompt node mcpServers))
+
+    with {:ok, profile} <- LemonCore.ProfileStore.update(params["id"], attrs),
          :ok <- ProfilesSupport.refresh(profile["id"]) do
       {:ok, ProfilesSupport.result(profile)}
     else
@@ -357,7 +383,7 @@ defmodule LemonControlPlane.Methods.ProfileChat do
     id = params["id"]
 
     with {:ok, images} <- ImageInputs.validate(Map.get(params, "images", [])),
-         {:ok, profile} <- LemonCore.ProfileStore.get(id),
+         {:ok, profile} <- LemonCore.ProfileStore.get_for_execution(id),
          :ok <- ProfilesSupport.refresh(id),
          {:ok, base_request} <-
            LemonCore.ProfileStore.chat_request(profile, params["prompt"],
