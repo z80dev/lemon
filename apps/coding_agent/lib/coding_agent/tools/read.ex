@@ -56,7 +56,7 @@ defmodule CodingAgent.Tools.Read do
           "path" => %{
             "type" => "string",
             "description" =>
-              "A local path, skill://<key>[/relative-path], returned artifact://<id> handle, or agent://[task-id-or-name] live roster"
+              "A local path, skill://<key>[/relative-path], returned artifact://<id> handle, agent:// live roster, or agent://<task-id-or-name>[/json/path] owned task status/output"
           },
           "offset" => %{
             "type" => "integer",

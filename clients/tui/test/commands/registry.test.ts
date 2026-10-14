@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { fileSlashCommand } from "../../src/commands/palette-source.ts";
 import type { SlashCommand } from "../../src/commands/registry.ts";
 import { CommandRegistry, parseCommandLine, splitArgs } from "../../src/commands/registry.ts";
 import { initTheme, resetTheme } from "../../src/ui/theme/theme.ts";
@@ -97,6 +98,59 @@ describe("CommandRegistry", () => {
 	test("duplicate names are a programming error", () => {
 		const registry = new CommandRegistry().register(echo);
 		expect(() => registry.register({ ...echo })).toThrow(/duplicate/);
+	});
+});
+
+describe("file-defined commands", () => {
+	const fileCommand = (name: string, summary = "from a file"): SlashCommand =>
+		fileSlashCommand({ name, description: summary, source: "claude", scope: "project", path: "" });
+
+	test("built-ins win, the first file command wins, and they list after built-ins", () => {
+		const registry = new CommandRegistry().register({
+			name: "help",
+			aliases: ["h"],
+			summary: "built-in",
+			run() {},
+		});
+		registry.setFileCommands([
+			fileCommand("help"),
+			fileCommand("h"),
+			fileCommand("Review", "first"),
+			fileCommand("review", "second"),
+		]);
+		expect(registry.get("help")?.summary).toBe("built-in");
+		expect(registry.get("REVIEW")?.summary).toBe("first");
+		expect(registry.list().map((command) => command.name)).toEqual(["help", "Review"]);
+		expect(registry.names()).toEqual(["h", "help", "review"]);
+		registry.setFileCommands([]);
+		expect(registry.has("review")).toBe(false);
+	});
+
+	test("an unknown name refreshes discovery once, then delivers the raw line", async () => {
+		harness = await createHarness();
+		let loads = 0;
+		harness.registry.setFileCommandSource(async () => {
+			loads += 1;
+			return { commands: [fileCommand("Review")], issues: [] };
+		});
+		expect(await harness.run("/review src/app.ts  now")).toBe(true);
+		expect(await harness.run("/review")).toBe(true);
+		expect(loads).toBe(1);
+		expect(harness.host.deliveries).toEqual([
+			{ text: "/Review src/app.ts  now", mode: harness.store.submissionMode },
+			{ text: "/Review", mode: harness.store.submissionMode },
+		]);
+		expect(await harness.run("/missing")).toBe(true);
+		expect(loads).toBe(2);
+		expect(harness.host.text).toContain("unknown command /missing");
+	});
+
+	test("a failing source reports an issue and keeps the previous set", async () => {
+		const registry = new CommandRegistry();
+		registry.setFileCommands([fileCommand("keep")]);
+		registry.setFileCommandSource(() => Promise.reject(new Error("EACCES")));
+		expect(await registry.refreshFileCommands()).toHaveLength(1);
+		expect(registry.has("keep")).toBe(true);
 	});
 });
 

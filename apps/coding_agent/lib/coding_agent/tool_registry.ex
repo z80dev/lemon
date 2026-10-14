@@ -114,7 +114,7 @@ defmodule CodingAgent.ToolRegistry do
   source kept.
 
   Callers that need to reason about *where* a tool came from (notably
-  `CodingAgent.ToolDisclosure`, which defers the MCP/extension/WASM long tail)
+  `CodingAgent.ToolDisclosure`, which defers tools behind its bridge by profile)
   use this so they sit downstream of policy and approval rather than beside
   them: a denied tool is already gone, and the closure in the tuple is the
   approval-wrapped one.

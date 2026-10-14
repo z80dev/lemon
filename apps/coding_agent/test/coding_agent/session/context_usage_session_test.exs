@@ -121,6 +121,67 @@ defmodule CodingAgent.Session.ContextUsageSessionTest do
              ControlPlaneProvider.session_context_usage("agent:unknown:main", root)
   end
 
+  test "a retiring live owner falls back to its saved context accounting", %{root: root, key: key} do
+    session =
+      start_supervised!(
+        Supervisor.child_spec(
+          {Session,
+           cwd: root,
+           workspace_dir: root,
+           model: model(),
+           tools: [],
+           session_key: key,
+           register: true},
+          restart: :temporary
+        )
+      )
+
+    header_id = Session.get_state(session).session_manager.header.id
+    assert {:ok, live} = ControlPlaneProvider.session_context_usage(key, root)
+    assert :ok = Session.save(session)
+
+    LemonCore.ChatStateStore.put(key, %LemonCore.ChatState{
+      last_engine: "lemon",
+      last_resume_token: header_id,
+      updated_at: System.system_time(:millisecond)
+    })
+
+    on_exit(fn -> LemonCore.Store.delete(:session_context_overhead, header_id) end)
+
+    # Suspend the actual owner so retirement happens after the public query has
+    # selected it, rather than relying on registry-unregistration timing.
+    :ok = :sys.suspend(session)
+    reader = Task.async(fn -> ControlPlaneProvider.session_context_usage(key, root) end)
+    await_context_read(session, System.monotonic_time(:millisecond) + 5_000)
+    Process.exit(session, :kill)
+
+    assert {:ok, durable} = Task.await(reader, 5_000)
+    refute durable.live
+    assert durable.overhead == :snapshot
+    assert durable.used_tokens == live.used_tokens
+    assert Enum.sum(Enum.map(durable.categories, & &1.tokens)) == durable.used_tokens
+  end
+
+  defp await_context_read(session, deadline) do
+    {:messages, messages} = Process.info(session, :messages)
+
+    if Enum.any?(messages, fn
+         {:"$gen_call", _from, :context_usage} -> true
+         _ -> false
+       end) do
+      :ok
+    else
+      if System.monotonic_time(:millisecond) >= deadline do
+        flunk("context query did not reach the suspended native owner")
+      end
+
+      receive do
+      after
+        10 -> await_context_read(session, deadline)
+      end
+    end
+  end
+
   defp category(report, id), do: Enum.find(report.categories, &(&1.id == id))
 
   defp model,

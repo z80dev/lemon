@@ -148,8 +148,82 @@ defmodule LemonAgent.ModelRuntime.ProviderNames do
       env_vars: ["OPENROUTER_API_KEY"],
       default_secret_name: "llm_openrouter_api_key",
       aliases: []
+    },
+    "groq" => %{
+      config_name: "groq",
+      atom_name: :groq,
+      env_vars: ["GROQ_API_KEY"],
+      default_secret_name: "llm_groq_api_key",
+      aliases: []
+    },
+    "xai" => %{
+      config_name: "xai",
+      atom_name: :xai,
+      env_vars: ["XAI_API_KEY"],
+      default_secret_name: "llm_xai_api_key",
+      aliases: ["x-ai", "grok"]
+    },
+    "cerebras" => %{
+      config_name: "cerebras",
+      atom_name: :cerebras,
+      env_vars: ["CEREBRAS_API_KEY"],
+      default_secret_name: "llm_cerebras_api_key",
+      aliases: []
+    },
+    "deepseek" => %{
+      config_name: "deepseek",
+      atom_name: :deepseek,
+      env_vars: ["DEEPSEEK_API_KEY"],
+      default_secret_name: "llm_deepseek_api_key",
+      aliases: ["deep-seek"]
+    },
+    "mistral" => %{
+      config_name: "mistral",
+      atom_name: :mistral,
+      env_vars: ["MISTRAL_API_KEY"],
+      default_secret_name: "llm_mistral_api_key",
+      aliases: []
+    },
+    "huggingface" => %{
+      config_name: "huggingface",
+      atom_name: :huggingface,
+      env_vars: ["HUGGINGFACE_HUB_TOKEN", "HF_TOKEN"],
+      default_secret_name: "llm_huggingface_api_key",
+      aliases: ["hugging-face", "hf"]
+    },
+    "qwen" => %{
+      config_name: "qwen",
+      atom_name: :qwen,
+      env_vars: ["DASHSCOPE_API_KEY"],
+      default_secret_name: "llm_qwen_api_key",
+      aliases: ["dashscope"]
+    },
+    "vercel_ai_gateway" => %{
+      config_name: "vercel_ai_gateway",
+      atom_name: :vercel_ai_gateway,
+      env_vars: ["AI_GATEWAY_API_KEY"],
+      default_secret_name: "llm_vercel_ai_gateway_api_key",
+      aliases: ["vercel-ai-gateway", "vercel"]
     }
   }
+
+  # OpenAI-compatible presets (`LemonAi.Models.Presets`): env vars and aliases
+  # follow omp; local presets are keyless (credential-ready without a key).
+  @preset_providers Map.new(LemonAi.Models.Presets.all(), fn preset ->
+                      canonical = Atom.to_string(preset.id)
+
+                      {canonical,
+                       %{
+                         config_name: canonical,
+                         atom_name: preset.id,
+                         env_vars: preset.env_vars,
+                         default_secret_name: "llm_#{canonical}_api_key",
+                         aliases: preset.aliases,
+                         keyless: preset.keyless
+                       }}
+                    end)
+
+  @providers Map.merge(@preset_providers, @providers)
 
   @spec canonical_name(atom() | String.t() | nil) :: String.t() | nil
   def canonical_name(provider) when is_atom(provider),
@@ -228,6 +302,18 @@ defmodule LemonAgent.ModelRuntime.ProviderNames do
     case canonical_name(provider) do
       nil -> nil
       canonical -> Map.get(provider_meta(canonical), :oauth_default_secret_name)
+    end
+  end
+
+  @doc """
+  Whether the provider can be used without a credential (local OpenAI-compatible
+  servers such as Ollama or LM Studio).
+  """
+  @spec keyless?(atom() | String.t() | nil) :: boolean()
+  def keyless?(provider) do
+    case canonical_name(provider) do
+      nil -> false
+      canonical -> Map.get(provider_meta(canonical), :keyless, false)
     end
   end
 

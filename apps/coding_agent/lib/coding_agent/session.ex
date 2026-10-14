@@ -102,7 +102,11 @@ defmodule CodingAgent.Session do
     :acp_mcp_session_id,
     :extra_tools,
     :tool_disclosure,
+    :tool_catalog,
     :session_scope,
+    :task_child,
+    :task_depth,
+    :task_allowed_agents,
     :context_frozen,
     :is_streaming,
     :pending_prompt_timer_ref,
@@ -120,6 +124,7 @@ defmodule CodingAgent.Session do
     :transform_context,
     :tool_policy,
     :approval_context,
+    :secret_obfuscator,
     :extensions,
     :hooks,
     :extension_status_report,
@@ -162,7 +167,11 @@ defmodule CodingAgent.Session do
           acp_mcp_session_id: String.t() | nil,
           extra_tools: [AgentTool.t()],
           tool_disclosure: keyword() | map() | nil,
+          tool_catalog: CodingAgent.ToolDisclosure.catalog(),
           session_scope: :main | :subagent,
+          task_child: boolean(),
+          task_depth: non_neg_integer() | nil,
+          task_allowed_agents: :all | [String.t()] | nil,
           context_frozen: boolean(),
           is_streaming: boolean(),
           pending_prompt_timer_ref: reference() | nil,
@@ -180,6 +189,7 @@ defmodule CodingAgent.Session do
                                 list() | {:ok, list()} | {:error, term()}),
           tool_policy: map() | nil,
           approval_context: map() | nil,
+          secret_obfuscator: CodingAgent.Security.SecretObfuscator.t() | nil,
           extensions: [module()],
           hooks: keyword([function()]),
           extension_status_report: Extensions.extension_status_report() | nil,
@@ -659,6 +669,7 @@ defmodule CodingAgent.Session do
     # Schedule the extension status report event to be published after init completes.
     # This allows subscribers to receive the event after they subscribe.
     send(self(), {:publish_extension_status_report, extension_status_report})
+    send(self(), :run_session_start_hooks)
 
     maybe_subscribe_exec_approvals(state)
 
@@ -1040,8 +1051,11 @@ defmodule CodingAgent.Session do
       source_session_id: state.session_manager.header.id,
       source_session_key: state.session_key,
       source_agent_id: state.agent_id,
-      approval_context: Map.take(state.approval_context || %{},
-        [:invocation_context_key, :memory_context_key, :memory_context_verified])
+      approval_context:
+        Map.take(
+          state.approval_context || %{},
+          [:invocation_context_key, :memory_context_key, :memory_context_verified]
+        )
     }
 
     {:reply, snapshot, state}
@@ -1257,6 +1271,16 @@ defmodule CodingAgent.Session do
     {:noreply, state}
   end
 
+  def handle_info(:run_session_start_hooks, state) do
+    CodingAgent.Extensions.SessionHooks.session_start(state.hooks, %{
+      session_id: state.session_manager.header.id,
+      cwd: state.cwd,
+      session_scope: state.session_scope
+    })
+
+    {:noreply, state}
+  end
+
   def handle_info({:auto_compaction_result, signature, result}, state) do
     {:noreply, CompactionLifecycle.handle_result(state, signature, result, session_callbacks())}
   end
@@ -1357,8 +1381,14 @@ defmodule CodingAgent.Session do
 
   @spec terminate(term(), t()) :: :ok
   @impl true
-  def terminate(_reason, state) do
+  def terminate(reason, state) do
     _ = CompactionManager.cancel_compaction_tasks(state, :session_terminated)
+
+    CodingAgent.Extensions.SessionHooks.session_shutdown(state.hooks, %{
+      session_id: state.session_manager && state.session_manager.header.id,
+      cwd: state.cwd,
+      reason: reason
+    })
 
     # Emit introspection event for session end
     Introspection.record(
@@ -1626,11 +1656,12 @@ defmodule CodingAgent.Session do
 
   defp relevant_skill_keys(state, context) when is_binary(context) do
     skill_cwd = CodingAgent.Workspace.skill_cwd(state.cwd, state)
+
     views =
       context
       |> LemonSkills.find_relevant(cwd: skill_cwd, max_results: 3, refresh: false)
       |> Enum.map(&LemonSkills.SkillView.from_entry(&1, cwd: skill_cwd))
-      |> Enum.filter(&LemonSkills.SkillView.displayable?/1)
+      |> Enum.filter(&LemonSkills.SkillView.prompt_visible?/1)
 
     _rendered_for_telemetry =
       LemonSkills.PromptView.render_relevant_skills(views,
@@ -1677,8 +1708,15 @@ defmodule CodingAgent.Session do
   end
 
   defp trusted_memory_context(state) do
-    Map.take(state.approval_context || %{},
-      [:invocation_context_key, :memory_context_key, :memory_context_verified, :shared_memory_grant])
+    Map.take(
+      state.approval_context || %{},
+      [
+        :invocation_context_key,
+        :memory_context_key,
+        :memory_context_verified,
+        :shared_memory_grant
+      ]
+    )
   end
 
   @spec refresh_system_prompt(t(), String.t(), [ContextRegistry.section()]) :: t()
@@ -1700,7 +1738,8 @@ defmodule CodingAgent.Session do
              tool_names: Enum.map(state.tools || [], & &1.name),
              profile_instructions: state.profile_instructions,
              environment: state.prompt_environment
-           } |> Map.merge(trusted_memory_context(state))
+           }
+           |> Map.merge(trusted_memory_context(state))
          ) do
       :unchanged ->
         CodingAgent.Session.Planning.refresh(state)

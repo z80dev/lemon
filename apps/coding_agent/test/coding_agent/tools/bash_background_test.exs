@@ -2,6 +2,7 @@ defmodule CodingAgent.Tools.BashBackgroundTest do
   use ExUnit.Case, async: false
 
   alias CodingAgent.Tools.{Bash, BashOutput, KillProcess}
+  alias CodingAgent.{Artifacts, ProcessManager, ProcessSession, ProcessStore}
   alias LemonAgent.Types.AgentToolResult
   alias LemonAi.Types.TextContent
 
@@ -45,6 +46,99 @@ defmodule CodingAgent.Tools.BashBackgroundTest do
   end
 
   describe "run_in_background with bash_output and kill_process" do
+    test "launch owner loss reaches the loop as an error with the retained unknown receipt", %{
+      tmp_dir: tmp_dir,
+      session_id: session_id
+    } do
+      store = CodingAgent.ProcessStoreServer
+      test = self()
+
+      # Kill the real ProcessSession at its admission call, before it can start
+      # an OS command. Do not substitute ProcessManager or manufacture a result.
+      interrupt = fn
+        state, {:in, {:"$gen_call", {caller, _}, {:claim_launch, id, ^session_id, _}}}, _server ->
+          ref = Process.monitor(caller)
+          Process.exit(caller, :kill)
+          receive do: ({:DOWN, ^ref, :process, ^caller, :killed} -> :ok)
+          send(test, {:launch_owner_lost, id})
+          state
+
+        state, _event, _server ->
+          state
+      end
+
+      :ok = :sys.install(store, {interrupt, nil})
+
+      on_exit(fn ->
+        :sys.remove(store, interrupt)
+
+        for {id, %{owner: ^session_id}} <- ProcessManager.list() do
+          # The admission barrier above proves this command never started.
+          :ok = ProcessManager.confirm_external_termination(id, session_id)
+          :ok = ProcessManager.clear(id)
+        end
+      end)
+
+      {:ok, tool} =
+        CodingAgent.ToolRegistry.get_tool(tmp_dir, "bash",
+          session_id: session_id,
+          session_pid: self(),
+          include_extensions: false,
+          include_mcp: false
+        )
+
+      args = %{"command" => "printf started > should-not-start", "run_in_background" => true}
+      call = %LemonAi.Types.ToolCall{id: "unknown-background", name: "bash", arguments: args}
+      context = LemonAgent.Types.AgentContext.new(tools: [tool])
+      {:ok, stream} = LemonAgent.EventStream.start_link(timeout: :infinity)
+
+      {[message], [], updated_context, [message]} =
+        LemonAgent.Loop.ToolCalls.execute_and_collect_tools(
+          context,
+          [],
+          [call],
+          %LemonAgent.Types.AgentLoopConfig{},
+          nil,
+          stream
+        )
+
+      assert_receive {:launch_owner_lost, process_id}
+      assert message.is_error
+      assert message.tool_call_id == call.id
+
+      assert %{
+               process_id: ^process_id,
+               status: :unknown,
+               classification: :outcome_unknown,
+               background: true,
+               exit_code: nil
+             } = message.details
+
+      assert List.last(updated_context.messages) == message
+      text = Enum.map_join(message.content, "\n", & &1.text)
+      assert text =~ "Launch outcome unknown for #{process_id}"
+      assert text =~ "do not automatically rerun"
+      refute text =~ "Started background"
+      refute File.exists?(Path.join(tmp_dir, "should-not-start"))
+
+      assert {:ok, %{identity: ^process_id, classification: :outcome_unknown}} =
+               ProcessManager.receipt(process_id, session_id)
+
+      assert {:error, :not_found} = ProcessManager.receipt(process_id, session_id <> "-foreign")
+      assert {:ok, %{capacity_held: true}, _} = ProcessStore.get(process_id)
+
+      LemonAgent.EventStream.complete(stream, [])
+      events = Enum.to_list(LemonAgent.EventStream.events(stream))
+
+      assert Enum.any?(events, fn
+               {:tool_execution_end, "unknown-background", "bash", result, true} ->
+                 result.is_error and result.details == message.details
+
+               _ ->
+                 false
+             end)
+    end
+
     test "bash_output returns only new output, then the exit status", %{
       tmp_dir: tmp_dir,
       session_id: session_id
@@ -79,8 +173,10 @@ defmodule CodingAgent.Tools.BashBackgroundTest do
       opts = [session_id: session_id]
       process_id = start_background("sleep 30", tmp_dir, opts)
 
-      assert %AgentToolResult{details: %{status: :killed, process_id: ^process_id}} =
+      assert %AgentToolResult{details: %{status: status, process_id: ^process_id}} =
                KillProcess.execute("k1", %{"process_id" => process_id}, nil, nil, tmp_dir, opts)
+
+      assert status in [:killing, :killed]
 
       output = await_output(process_id, opts, &(&1 =~ "Status: killed"))
       assert output =~ "killed"
@@ -146,6 +242,109 @@ defmodule CodingAgent.Tools.BashBackgroundTest do
 
       assert message =~ "pty"
     end
+  end
+
+  describe "bounded process capture" do
+    test "a truncated artifact is labelled partial even when no displayed lines were dropped", %{
+      tmp_dir: cwd,
+      session_id: owner
+    } do
+      {id, pid, state} = start_capped(owner, max_retained_bytes: 32, max_artifact_bytes: 5)
+      send(pid, {state.port, {:data, "one\ntwo\n"}})
+      {:ok, _} = ProcessSession.poll(id)
+      opts = [session_id: owner, context_guardrails: [spill_dir: Path.join(cwd, "spill")]]
+
+      assert %AgentToolResult{details: details, content: content} =
+               BashOutput.execute("capture", %{"process_id" => id}, nil, nil, cwd, opts)
+
+      text = Enum.map_join(content, "\n", & &1.text)
+      assert text =~ "Partial output"
+      assert text =~ "Saved output is incomplete"
+      refute text =~ "Full output"
+      assert details.dropped_lines == 0
+      refute details.truncated
+      assert details.artifact_truncated
+      assert details.output.received_bytes == 8
+      assert details.output.retained_bytes == 8
+      assert details.output.discarded_bytes == 0
+      assert details.output.artifact_bytes == 5
+      assert details.output.artifact_discarded_bytes == 3
+      refute inspect(details.output) =~ "output-quota-secret"
+
+      assert {:ok, path} = Artifacts.resolve(details.artifact_uri, cwd, opts)
+      assert File.read!(path) == "one\nt"
+
+      assert {:error, _} =
+               Artifacts.resolve(details.artifact_uri, cwd, session_id: owner <> "-other")
+
+      assert {:error, _} =
+               BashOutput.execute("foreign", %{"process_id" => id}, nil, nil, cwd,
+                 session_id: owner <> "-other"
+               )
+
+      assert {:ok, %{lines: []}} = ProcessManager.read_output(id)
+    end
+
+    test "stored reads retain diagnostic tail and explain reclaimed capture without a dangling handle",
+         %{
+           tmp_dir: cwd,
+           session_id: owner
+         } do
+      {id, pid, state} =
+        start_capped(owner,
+          max_retained_bytes: 8,
+          max_artifact_bytes: 8,
+          max_owner_artifact_bytes: 8
+        )
+
+      send(pid, {state.port, {:data, "first\nlast\n"}})
+      assert {:ok, %{output: %{received_bytes: 11}}} = ProcessSession.poll(id)
+      ProcessSession.stop(id)
+
+      {_next, _pid, _state} =
+        start_capped(owner,
+          max_retained_bytes: 8,
+          max_artifact_bytes: 8,
+          max_owner_artifact_bytes: 8
+        )
+
+      assert %AgentToolResult{details: details, content: content} =
+               BashOutput.execute("reclaimed", %{"process_id" => id}, nil, nil, cwd,
+                 session_id: owner
+               )
+
+      text = Enum.map_join(content, "\n", & &1.text)
+      assert text =~ "last"
+      assert text =~ "file was reclaimed"
+      assert details.dropped_lines == 1
+      assert details.output.artifact_reclaimed
+      assert details.full_output_path == nil
+      refute Map.has_key?(details, :artifact_uri)
+      refute File.exists?(state.full_output_path)
+    end
+  end
+
+  defp start_capped(owner, opts) do
+    id = "output-quota-#{System.unique_integer([:positive])}"
+
+    {:ok, pid} =
+      ProcessSession.start_link(
+        [
+          command: "read line",
+          process_id: id,
+          owner: owner,
+          env: %{"QUOTA_SECRET" => "output-quota-secret"}
+        ] ++ opts
+      )
+
+    {:ok, state} = ProcessSession.get_state(id)
+
+    on_exit(fn ->
+      if ProcessSession.alive?(id), do: ProcessSession.stop(id)
+      ProcessStore.delete(id)
+    end)
+
+    {id, pid, state}
   end
 
   defp start_background(command, tmp_dir, opts) do

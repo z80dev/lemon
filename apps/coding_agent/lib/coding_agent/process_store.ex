@@ -6,6 +6,11 @@ defmodule CodingAgent.ProcessStore do
   rolling logs (bounded), exit status, and supports reconnection
   to OS PIDs after restart.
 
+  `:output` holds the session's capture statistics (see
+  `CodingAgent.ProcessSession`). Artifact storage is accounted per owner:
+  `reserve_artifact/4` grants each new process a capacity within both its owner's
+  budget and the runtime budget, reclaiming stopped processes' artifacts oldest first.
+
   The actual ETS table is owned by ProcessStoreServer to ensure proper
   lifecycle management and DETS persistence.
   """
@@ -16,6 +21,19 @@ defmodule CodingAgent.ProcessStore do
   @dets_table :coding_agent_processes_dets
   @max_log_lines 1000
   @default_ttl_seconds 86_400
+  @empty_output %{
+    received_bytes: 0,
+    retained_bytes: 0,
+    discarded_bytes: 0,
+    artifact_bytes: 0,
+    artifact_capacity: 0,
+    artifact_discarded_bytes: 0,
+    artifact_truncated: false,
+    artifact_error: nil,
+    artifact_reclaimed: false,
+    artifact_size_unknown: false,
+    finalized: false
+  }
 
   @type process_id :: String.t()
   @type process_status :: :running | :completed | :error | :killed | :lost | :queued
@@ -58,27 +76,145 @@ defmodule CodingAgent.ProcessStore do
           os_pid: nil,
           exit_code: nil,
           started_at: nil,
-          completed_at: nil
+          completed_at: nil,
+          output: @empty_output
         },
         attrs
       )
 
-    insert_record(process_id, record, [])
+    transaction(fn ->
+      record =
+        case :ets.lookup(@table, process_id) do
+          [{^process_id, %{launch_fingerprint: fingerprint} = launch, _}]
+          when is_binary(fingerprint) ->
+            # Attaching metadata must not erase or race the serialized claim.
+            Map.merge(
+              record,
+              Map.take(launch, [
+                :owner,
+                :launch_fingerprint,
+                :launch_classification,
+                :launch_reason,
+                :capacity_held,
+                :termination_confirmed,
+                :admission_deadline_ms,
+                :inserted_at,
+                :status
+              ])
+            )
+
+          _ ->
+            record
+        end
+
+      if is_binary(Map.get(record, :launch_fingerprint)) do
+        true = dets_open?()
+        :ok = :dets.insert(@dets_table, {process_id, record, []})
+        :ok = :dets.sync(@dets_table)
+        :ets.insert(@table, {process_id, record, []})
+      else
+        insert_record(process_id, record, [])
+      end
+    end)
+
     process_id
+  end
+
+  @doc """
+  Register a logical launch before admission. Only the first registration may
+  submit work; subsequent registrations reconcile the same identity.
+  """
+  def register_launch(id, owner, fingerprint, deadline, owner_pid) do
+    GenServer.call(
+      ProcessStoreServer,
+      {:register_launch, id, owner, fingerprint, deadline, owner_pid}
+    )
+  end
+
+  @doc false
+  def claim_launch(id, owner, fingerprint) do
+    GenServer.call(ProcessStoreServer, {:claim_launch, id, owner, fingerprint})
+  end
+
+  @doc false
+  def classify_launch(id, classification, reason \\ nil) do
+    GenServer.call(ProcessStoreServer, {:classify_launch, id, classification, reason})
+  end
+
+  @doc false
+  def cancel_launch(id, owner) do
+    GenServer.call(ProcessStoreServer, {:cancel_launch, id, owner})
+  end
+
+  @doc false
+  def yield_launch(id, owner), do: GenServer.call(ProcessStoreServer, {:yield_launch, id, owner})
+
+  @doc false
+  def yielded_launch?(id), do: GenServer.call(ProcessStoreServer, {:yielded_launch, id})
+
+  @doc false
+  def confirm_termination(id, cause \\ :workload_empty) do
+    GenServer.call(ProcessStoreServer, {:confirm_termination, id, cause})
+  end
+
+  @doc false
+  def admission_counts, do: GenServer.call(ProcessStoreServer, :background_counts)
+
+  @doc false
+  def capacity_available?, do: GenServer.call(ProcessStoreServer, :background_capacity_available)
+
+  @doc false
+  def subscribe_capacity(pid) do
+    GenServer.call(ProcessStoreServer, {:subscribe_capacity, pid})
+  end
+
+  @doc """
+  Redacted acceptance provenance. Unknown is not a confirmed rejection and must
+  never be retried with a fresh identity automatically.
+  """
+  def launch_receipt(id, owner) do
+    GenServer.call(ProcessStoreServer, {:launch_receipt, id, owner})
+  end
+
+  @doc false
+  def receipt(record) do
+    %{
+      identity: record.id,
+      classification: Map.get(record, :launch_classification, :outcome_unknown),
+      reason: Map.get(record, :launch_reason),
+      status: Map.get(record, :launch_terminal_status, Map.get(record, :status))
+    }
   end
 
   @doc """
   Mark a process as running with its OS PID.
   """
-  @spec mark_running(process_id(), integer() | nil) :: :ok
-  def mark_running(process_id, os_pid)
+  @spec mark_running(process_id(), integer() | nil, map() | nil) :: :ok
+  def mark_running(process_id, os_pid, workload_identity \\ nil)
       when is_binary(process_id) and (is_integer(os_pid) or is_nil(os_pid)) do
-    update_record(process_id, fn record ->
-      record
-      |> Map.put(:status, :running)
-      |> Map.put(:os_pid, os_pid)
-      |> Map.put(:started_at, System.system_time(:second))
-    end)
+    update_record(
+      process_id,
+      fn record ->
+        record
+        |> Map.put(:status, :running)
+        |> Map.put(:os_pid, os_pid)
+        |> Map.put(:workload_identity, workload_identity)
+        |> Map.put(:root_exited, false)
+        |> Map.put(:started_at, System.system_time(:second))
+      end,
+      true
+    )
+  end
+
+  @doc false
+  def update_workload_identity(process_id, identity, root_exited) do
+    update_record(
+      process_id,
+      fn record ->
+        Map.merge(record, %{workload_identity: identity, root_exited: root_exited})
+      end,
+      true
+    )
   end
 
   @doc """
@@ -93,29 +229,79 @@ defmodule CodingAgent.ProcessStore do
   Append log lines (oldest first) to a process's log buffer (bounded) in one
   write. `:total_lines` counts every line ever appended, including lines that
   have since scrolled out of the buffer.
+
+  Options (used by `CodingAgent.ProcessSession` to mirror its retained tail):
+  - `:keep` - number of newest lines to retain (default: 1000)
+  - `:total_lines` - absolute line total, including lines never retained
+  - `:output` - capture statistics stored as the record's `:output`
   """
-  @spec append_logs(process_id(), [String.t()]) :: :ok
-  def append_logs(_process_id, []), do: :ok
+  @spec append_logs(process_id(), [String.t()], keyword()) :: :ok
+  def append_logs(process_id, lines, opts \\ [])
 
-  def append_logs(process_id, lines) when is_binary(process_id) and is_list(lines) do
-    ensure_table()
+  def append_logs(_process_id, [], []), do: :ok
 
-    case :ets.lookup(@table, process_id) do
-      [{^process_id, record, logs}] ->
-        logs = Enum.reverse(lines, logs) |> Enum.take(@max_log_lines)
+  def append_logs(process_id, lines, opts)
+      when is_binary(process_id) and is_list(lines) and is_list(opts) do
+    transaction(fn ->
+      case :ets.lookup(@table, process_id) do
+        [{^process_id, %{status: :cleared}, _}] ->
+          :ok
 
-        record =
-          record
-          |> Map.put(:updated_at, System.system_time(:second))
-          |> Map.put(:log_line_count, length(logs))
-          |> Map.put(:total_lines, Map.get(record, :total_lines, 0) + length(lines))
+        [{^process_id, record, logs}] ->
+          logs = Enum.reverse(lines, logs) |> Enum.take(Keyword.get(opts, :keep, @max_log_lines))
+          total = Map.get(record, :total_lines, 0) + length(lines)
 
-        insert_record(process_id, record, logs)
-        :ok
+          record =
+            record
+            |> Map.put(:updated_at, System.system_time(:second))
+            |> Map.put(:log_line_count, length(logs))
+            |> Map.put(:total_lines, Keyword.get(opts, :total_lines, total))
+            |> Map.put(:output, Keyword.get(opts, :output, Map.get(record, :output)))
 
-      _ ->
-        :ok
-    end
+          insert_record(process_id, record, logs)
+
+        _ ->
+          :ok
+      end
+    end)
+  end
+
+  @doc """
+  Replace a process's capture statistics.
+  """
+  @spec put_output(process_id(), map()) :: :ok
+  def put_output(process_id, output) when is_binary(process_id) and is_map(output) do
+    update_record(process_id, &Map.put(&1, :output, output))
+  end
+
+  @doc """
+  Reserve artifact capacity for `process_id` within both aggregate budgets and
+  return the granted bytes (at most `requested`, possibly 0).
+
+  Live sessions are charged their reserved capacity; finalized sessions shrink
+  that charge to the bytes actually written (unless size is unknown after a
+  failure). Reclaim stopped sessions' artifacts oldest first, within the owner
+  first, then runtime-wide. Failed deletions keep their charge and reference.
+  Records remain readable with `output.artifact_reclaimed: true` and no path
+  after successful reclamation. A live session's artifact is never deleted.
+  Processes without an owner share the nil-owner budget. Reservations are
+  serialized with all record mutations/deletion by `ProcessStoreServer`.
+  Returns `:artifact_accounting_unavailable` if legacy usage cannot be measured
+  or the reservation cannot be durably recorded; no writer may launch then.
+  """
+  @spec reserve_artifact(process_id(), pos_integer(), pos_integer(), pos_integer()) ::
+          {:ok, non_neg_integer()} | {:error, :not_found | :artifact_accounting_unavailable}
+  def reserve_artifact(process_id, requested, owner_budget, runtime_budget)
+      when is_binary(process_id) and is_integer(requested) and requested > 0 and
+             is_integer(owner_budget) and owner_budget > 0 and
+             is_integer(runtime_budget) and runtime_budget > 0 do
+    ProcessStoreServer.reserve_artifact(
+      CodingAgent.ProcessStoreServer,
+      process_id,
+      requested,
+      owner_budget,
+      runtime_budget
+    )
   end
 
   @doc """
@@ -152,6 +338,13 @@ defmodule CodingAgent.ProcessStore do
     end)
   end
 
+  @doc false
+  def mark_unknown(process_id) do
+    update_record(process_id, fn record ->
+      Map.merge(record, %{status: :lost, launch_classification: :outcome_unknown})
+    end)
+  end
+
   @doc """
   Mark a process as failed with an error.
   """
@@ -173,6 +366,7 @@ defmodule CodingAgent.ProcessStore do
     ensure_table()
 
     case :ets.lookup(@table, process_id) do
+      [{^process_id, %{status: :cleared}, _}] -> {:error, :not_found}
       [{^process_id, record, logs}] -> {:ok, record, Enum.reverse(logs)}
       _ -> {:error, :not_found}
     end
@@ -187,7 +381,8 @@ defmodule CodingAgent.ProcessStore do
 
     :ets.foldl(
       fn {process_id, record, _logs}, acc ->
-        if status_filter == :all or Map.get(record, :status) == status_filter do
+        if Map.get(record, :status) != :cleared and
+             (status_filter == :all or Map.get(record, :status) == status_filter) do
           [{process_id, record} | acc]
         else
           acc
@@ -220,27 +415,84 @@ defmodule CodingAgent.ProcessStore do
   @doc """
   Delete a process from the store.
   """
-  @spec delete(process_id()) :: :ok
+  @spec delete(process_id()) ::
+          :ok
+          | {:error,
+             :process_alive
+             | :process_not_terminal
+             | :output_cleanup_failed
+             | :unmanaged_output_path}
   def delete(process_id) when is_binary(process_id) do
-    case :ets.lookup(@table, process_id) do
-      [{^process_id, record, _logs}] -> remove_output(record)
-      _ -> :ok
+    transaction(fn ->
+      case :ets.lookup(@table, process_id) do
+        [{^process_id, record, _logs}] ->
+          if CodingAgent.ProcessSession.alive?(process_id) and
+               get_in(record, [:output, :finalized]) != true do
+            {:error, :process_alive}
+          else
+            delete_record(process_id, record)
+          end
+
+        [] ->
+          :ok
+      end
+    end)
+  end
+
+  defp delete_record(process_id, %{launch_fingerprint: fingerprint} = record)
+       when is_binary(fingerprint) do
+    held =
+      Map.get(
+        record,
+        :capacity_held,
+        Map.get(record, :status) in [:running, :starting, :killing, :lost]
+      ) and
+        not Map.get(record, :termination_confirmed, false)
+
+    if held do
+      {:error, :process_not_terminal}
+    else
+      with :ok <- remove_output(record) do
+        tombstone =
+          record
+          |> Map.take([
+            :id,
+            :owner,
+            :launch_fingerprint,
+            :launch_classification,
+            :launch_reason,
+            :inserted_at,
+            :updated_at,
+            :completed_at,
+            :termination_confirmed
+          ])
+          |> Map.put(:launch_terminal_status, Map.get(record, :status))
+          |> Map.put(:status, :cleared)
+
+        insert_record(process_id, tombstone, [])
+      end
     end
+  end
 
-    :ets.delete(@table, process_id)
-
-    if dets_open?() do
-      :dets.delete(@dets_table, process_id)
+  defp delete_record(process_id, record) do
+    with :ok <- remove_output(record) do
+      :ets.delete(@table, process_id)
+      if dets_open?(), do: :dets.delete(@dets_table, process_id)
+      :ok
     end
-
-    :ok
   end
 
   @doc """
   Clear all processes (tests).
   """
-  @spec clear() :: :ok
+  @spec clear() :: :ok | {:error, :output_cleanup_failed}
   def clear do
+    # Stop sessions outside the store server: their terminate callback writes
+    # final capture statistics through that server.
+    Enum.each(list(), fn {id, _record} ->
+      if CodingAgent.ProcessSession.alive?(id), do: CodingAgent.ProcessSession.stop(id)
+    end)
+
     ProcessStoreServer.clear(CodingAgent.ProcessStoreServer)
   end
 
@@ -259,13 +511,15 @@ defmodule CodingAgent.ProcessStore do
   """
   @spec insert_record(process_id(), map(), [String.t()]) :: :ok
   def insert_record(process_id, record, logs) do
-    :ets.insert(@table, {process_id, record, logs})
+    transaction(fn ->
+      :ets.insert(@table, {process_id, record, logs})
 
-    if dets_open?() do
-      :dets.insert(@dets_table, {process_id, record, logs})
-    end
+      if dets_open?() do
+        :ok = :dets.insert(@dets_table, {process_id, record, logs})
+      end
 
-    :ok
+      :ok
+    end)
   end
 
   @doc """
@@ -285,39 +539,69 @@ defmodule CodingAgent.ProcessStore do
         # Only delete artifacts allocated by ProcessSession, never arbitrary
         # persisted path metadata.
         if Path.dirname(path) == Path.expand(System.tmp_dir!()) and
-             Regex.match?(~r/^lemon-process-[0-9a-f]{32}\.log$/, Path.basename(path)) do
-          File.rm(path)
+             Regex.match?(~r/\Alemon-process-[0-9a-f]{32}\.log\z/, Path.basename(path)) do
+          case File.rm(path) do
+            result when result in [:ok, {:error, :enoent}] -> :ok
+            _ -> {:error, :output_cleanup_failed}
+          end
+        else
+          {:error, :unmanaged_output_path}
         end
 
       _ ->
         :ok
     end
-
-    :ok
   end
 
   # Private Functions
 
-  defp ensure_table do
-    ProcessStoreServer.ensure_table(CodingAgent.ProcessStoreServer)
+  # Keep record/log read-modify-writes in the reservation/cleanup owner's
+  # mailbox. Otherwise a cursor or status write can restore a reclaimed path
+  # or overwrite a concurrently granted capacity with its stale snapshot.
+  defp transaction(fun) do
+    if :ets.info(@table, :owner) == self() do
+      fun.()
+    else
+      ProcessStoreServer.transaction(CodingAgent.ProcessStoreServer, fun)
+    end
   end
 
-  defp update_record(process_id, fun) do
+  defp ensure_table do
+    if :ets.info(@table, :owner) == self(),
+      do: :ok,
+      else: ProcessStoreServer.ensure_table(CodingAgent.ProcessStoreServer)
+  end
+
+  defp update_record(process_id, fun, durable \\ false) do
     ensure_table()
 
-    case :ets.lookup(@table, process_id) do
-      [{^process_id, record, logs}] ->
-        updated =
-          record
-          |> fun.()
-          |> Map.put(:updated_at, System.system_time(:second))
+    transaction(fn ->
+      case :ets.lookup(@table, process_id) do
+        [{^process_id, %{status: :cleared}, _}] ->
+          :ok
 
-        insert_record(process_id, updated, logs)
-        :ok
+        [{^process_id, record, logs}] ->
+          updated =
+            record
+            |> fun.()
+            |> Map.put(:updated_at, System.system_time(:second))
 
-      _ ->
-        :ok
-    end
+          if durable and is_binary(Map.get(updated, :launch_fingerprint)) do
+            # Owned workload provenance must survive a crash before the command
+            # is unblocked; do not publish a volatile identity before syncing it.
+            :ok = :dets.insert(@dets_table, {process_id, updated, logs})
+            :ok = :dets.sync(@dets_table)
+            :ets.insert(@table, {process_id, updated, logs})
+          else
+            insert_record(process_id, updated, logs)
+          end
+
+          :ok
+
+        _ ->
+          :ok
+      end
+    end)
   end
 
   defp generate_id do

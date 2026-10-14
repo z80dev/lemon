@@ -18,6 +18,8 @@ defmodule CodingAgent.SystemPrompt.Environment do
   sections. The date remains the final line.
   """
 
+  alias CodingAgent.ResourceLoader
+
   @git_timeout_ms 2_000
   @max_git_bytes 262_144
   @max_status_lines 20
@@ -26,7 +28,6 @@ defmodule CodingAgent.SystemPrompt.Environment do
   @max_walk_entries 4_096
   @max_walk_depth 12
   @excluded_dirs ~w(.git node_modules deps _build vendor cache .cache)
-  @guide_names ["AGENTS.md", "CLAUDE.md"]
 
   @type capture_opt ::
           {:date, Date.t()}
@@ -166,7 +167,7 @@ defmodule CodingAgent.SystemPrompt.Environment do
 
         guides =
           Enum.filter(paths, fn path ->
-            Path.dirname(path) != "." and Path.basename(path) in @guide_names and
+            Path.dirname(path) != "." and ResourceLoader.instruction_guide?(path) and
               regular_file?(Path.join(root, path))
           end)
 
@@ -265,7 +266,7 @@ defmodule CodingAgent.SystemPrompt.Environment do
                 entries = if depth == 0, do: [name | entries], else: entries
 
                 guides =
-                  if depth > 0 and name in @guide_names,
+                  if depth > 0 and ResourceLoader.instruction_guide?(path),
                     do: [Path.relative_to(path, root) | guides],
                     else: guides
 
@@ -308,7 +309,8 @@ defmodule CodingAgent.SystemPrompt.Environment do
       truncation_lines(layout_cut, snapshot.unavailable, "workspace layout") ++
       [
         "Descendant instruction paths (bounded index, not contents):",
-        "Before editing, read applicable AGENTS.md/CLAUDE.md guides; deeper directory rules override broader ones. " <>
+        "Before editing, read applicable instruction guides (AGENTS.md, CLAUDE.md, GEMINI.md and similar); " <>
+          "deeper directory rules override broader ones. " <>
           "This bounded snapshot is not exhaustive; discover guides in omitted or newly created directories."
       ] ++
       Enum.map(guides, &("- " <> inspect(Path.join(root, &1)))) ++

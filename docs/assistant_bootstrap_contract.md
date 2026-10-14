@@ -21,7 +21,7 @@ Lemon composes a system prompt from:
 1. Explicit `:system_prompt` option (if provided)
 2. Prompt template (if provided)
 3. Lemon base prompt (skills + workspace bootstrap context)
-4. Instruction files from `ResourceLoader` (`CLAUDE.md`, `AGENTS.md`)
+4. Instruction files from `ResourceLoader` (`CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, Copilot and other agents' files), then always-apply rules and the rulebook index from `CodingAgent.Rules` — see [instruction files and rules](user-guide/context-files.md)
 
 The composed prompt is refreshed before each user prompt so file edits in workspace context are picked up without restarting the session.
 

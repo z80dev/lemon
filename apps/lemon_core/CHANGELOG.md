@@ -6,6 +6,15 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ## [Unreleased]
 
+### Added
+
+- `LemonCore.Secrets.get_with_revision/2` and `set_if_revision/4` provide
+  incarnation-bound conditional credential saves. A revision is scoped to the
+  Store process, owner and name; usage reads preserve it, while replacement
+  (including identical plaintext), deletion/recreation and storage restart
+  invalidate it. Conditional saves share the existing secrets/key-rotation
+  mutation lease and use Store's atomic compare-and-swap.
+
 ### Fixed
 
 - `LemonCore.Durable` performs real descriptor `fsync` plus Darwin `F_FULLFSYNC`
@@ -13,6 +22,17 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
   and atomic file-key durability can therefore complete on supported macOS
   filesystems instead of unconditionally refusing Darwin. Unsupported/refused
   barriers remain errors; no plain/global-sync fallback or private-path output.
+- Secret reads distinguish backend failure from missing credentials, and set,
+  conditional save, deletion and expiry cleanup return persistence failures
+  instead of acknowledging an unsuccessful mutation. Reads never remove
+  expired records; list cleanup and deletion conditionally remove their exact
+  snapshot under the shared mutation lease so a newer replacement survives.
+  Conditional saves retain durable operation receipts, deletion preserves them
+  in value-free tombstones, and list cleanup leaves receipt-bearing expired
+  records unchanged and hidden so historical proof remains available.
+- Conditional credential saves recheck the original record's expiry immediately
+  before each compare-and-swap, including after blocked key resolution, so a
+  refresh cannot revive a credential that expired while encryption was pending.
 
 ## [0.2.0] - 2026-10-13
 

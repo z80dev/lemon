@@ -208,7 +208,7 @@ function formatForegroundResult(parsed: ParsedShellResult): FormattedOutput {
 function formatBackgroundStart(parsed: ParsedShellResult): FormattedOutput {
 	const details: string[] = [];
 
-	if (parsed.toolError) {
+	if (parsed.toolError && parsed.status !== "unknown") {
 		const firstLine = getFirstLine(parsed.stderr || parsed.stdout);
 		pushOutput(details, parsed);
 		return {
@@ -227,13 +227,17 @@ function formatBackgroundStart(parsed: ParsedShellResult): FormattedOutput {
 		details.push(`status: ${parsed.status}`);
 	}
 	pushOutput(details, parsed);
+	const admission =
+		parsed.status === "queued"
+			? "queued in background"
+			: parsed.status === "unknown"
+				? "background outcome unknown"
+				: "started in background";
 
 	return {
-		summary: parsed.processId
-			? `started in background: ${parsed.processId}`
-			: "started in background",
+		summary: parsed.processId ? `${admission}: ${parsed.processId}` : admission,
 		details,
-		isError: false,
+		isError: parsed.toolError || parsed.status === "unknown",
 	};
 }
 

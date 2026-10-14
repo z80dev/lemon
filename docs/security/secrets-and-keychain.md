@@ -64,6 +64,52 @@ Additional nuance:
   output bounds, and an optional bounded process-local cache that defaults off.
 - If keychain prompts are denied (`User interaction is not allowed`), Lemon can still operate via env fallback when configured.
 
+## Conditional Credential Saves
+
+Credential refresh callers use the encrypted-store-only revision APIs:
+
+```elixir
+{:ok, encoded_credential, revision} = LemonCore.Secrets.get_with_revision(name, opts)
+# Refresh outside the secrets mutation lease.
+LemonCore.Secrets.set_if_revision(name, refreshed_credential, revision, opts)
+```
+
+- `get_with_revision/2` returns `{:ok, plaintext, opaque_revision}` or
+  `{:error, reason}`. It never resolves external sources or environment values
+  and distinguishes a confirmed missing credential from a backend/process
+  failure. `get/2` uses the same strict encrypted-store read.
+- `set_if_revision/4` returns `{:ok, metadata}`, `{:error, :stale_revision}` or
+  another storage/key/lock error. A revision binds the exact durable credential
+  incarnation and its Store process, owner and name. Every successful ordinary
+  or conditional set creates a new incarnation, even for identical plaintext.
+  Replacement, deletion, delete/recreate and a Store restart invalidate the old
+  revision; it cannot authorize a save in another Store or owner/name.
+- Revisions are opaque, ephemeral credential-bearing data. Keep them only for
+  the refresh in progress; never inspect, log or persist them. A stale save
+  must discard its refresh result, not retry it against a newly loaded login.
+- Reads only perform a best-effort exact-record usage touch. Usage counts and
+  last-used timestamps do not invalidate outstanding revisions. Reads never
+  delete expired records and never install revision metadata into legacy rows.
+  Legacy rows derive their revision from their encrypted incarnation until the
+  next replacement; re-encryption of a legacy row may invalidate that revision.
+- Conditional saves resolve the current encryption key while holding the
+  existing `Secrets.Lock`, then persist with Store's atomic compare-and-swap.
+  The original record's expiry is checked again immediately before every CAS,
+  so expiration during blocked key resolution cannot be cleared by a refresh.
+  An exact-record conflict caused only by usage metadata is re-read strictly
+  and retried only while the original incarnation remains current. Key rotation
+  preserves incarnations on new-format records, and a save after rotation uses
+  the newly resolved key.
+- Ordinary set, deletion and list expiry cleanup use that same mutation owner.
+  Delete binds its snapshot before waiting for the lease and returns
+  `:stale_revision` if that snapshot changed. Expiry cleanup conditionally
+  removes its listed snapshot; a concurrently replaced record survives.
+  `list/1` and `status/1` return errors when storage or cleanup fails instead of
+  reporting an empty successful result.
+- `:owner` selects the owner (default `"default"`); `:store` selects an existing
+  Store instance (default `LemonCore.Store`). Each operation pins its Store
+  process so a mid-operation restart cannot silently redirect a mutation.
+
 ## Master Key Rotation
 
 `lemon secrets rotate-key` (or `mix lemon.secrets.rotate_key`) generates a new
@@ -112,10 +158,12 @@ lemon secrets rotate-key --confirm <token>  # apply exactly that preview
   rotation finishes them.
 - **Exclusive.** Rotation holds `LemonCore.Secrets.Lock`, a lease in the
   Store that SQLite makes exclusive across OS processes sharing the store.
-  `Secrets.set/3` takes the same lock from resolving the key to storing the
-  record (waiting up to 30 seconds, then `{:error, :secrets_locked}`), so a
-  concurrent `lemon secrets set` never encrypts under the retiring key and two
-  rotations never interleave. A lease has no expiry; it is reclaimed only when
+  `Secrets.set/3` and `set_if_revision/4` take the same lock from resolving the
+  key to storing the record (waiting up to 30 seconds, then
+  `{:error, :secrets_locked}`). Deletion and list expiry cleanup also take it
+  around conditional removal, so concurrent writes never use the retiring key
+  and secret mutations and rotations never interleave. A lease has no expiry;
+  it is reclaimed only when
   its holder is provably gone (a dead process in this VM, or an OS pid on this
   host that no longer exists). A lease from another host is never reclaimed:
   callers get `{:error, {:secrets_lock_held, host}}` and an operator deletes
@@ -183,6 +231,7 @@ after uncertain mutations and reconcile read-only before any new mutation.
 - `apps/lemon_core/test/lemon_core/secrets/keychain_test.exs`
 - `apps/lemon_core/test/lemon_core/secrets/master_key_test.exs`
 - `apps/lemon_core/test/lemon_core/secrets_test.exs`
+- `apps/lemon_core/test/lemon_core/secrets/revision_test.exs`
 - `apps/lemon_core/test/lemon_core/secrets/external_test.exs`
 - `apps/lemon_core/test/lemon_core/secrets/source_contract_test.exs`
 - `apps/lemon_core/test/lemon_core/config/secrets_test.exs`

@@ -322,6 +322,273 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ---
 
+## [2026.10.6]
+
+### Added
+
+- **Custom providers and models.** A `[providers.<id>]` table with `api`,
+  `base_url`, `api_key_env`/`api_key`/`api_key_secret`, optional
+  `auth = "none"`, `headers`, `discovery = "openai" | "ollama"` and
+  `[[providers.<id>.models]]` defines an OpenAI-, Anthropic- or
+  Google-compatible endpoint (omp `models.yml` parity). Its models resolve as
+  `<id>:<model>` / `<id>/<model>` for the default model, `/model`, model roles,
+  task/compaction selectors and fallback providers, appear in the `/model`
+  picker and `lemon providers status`, and are checked by
+  `lemon config validate`. On built-in providers, `headers` are sent with every
+  request and `models` entries add or replace catalog models. See
+  [Custom Providers and Models](docs/config.md#custom-providers-and-models).
+- **More provider sign-ins in `lemon model`.** `lemon model openai-codex
+  --auth device` signs in to ChatGPT with a device code (headless, also
+  `--non-interactive`). `openrouter` adds browser sign-in that mints an API key,
+  `xai` adds SuperGrok / X Premium+ device sign-in, `kimi_coding` (`kimi-code`)
+  adds Kimi Code device sign-in, and `zai` adds GLM Coding Plan sign-in that
+  provisions an API key. xAI and Kimi logins refresh automatically;
+  `--status`/`--logout` cover all of them. See
+  [CLI](docs/user-guide/cli.md#other-provider-sign-ins).
+- **API-key sign-in for every catalog provider.** `lemon model` now offers
+  Google Gemini API, Groq, Cerebras, DeepSeek, Mistral, Hugging Face, Qwen
+  (DashScope), Vercel AI Gateway, OpenCode Zen/Go, MiniMax China and every
+  hosted OpenAI-compatible preset (model choice lists the endpoint's models);
+  the key is stored encrypted and referenced as `api_key_secret`.
+- OAuth logins can be force-refreshed after the provider rejects an unexpired
+  token (`Credentials.refresh_provider_api_key/4`, used by 401 recovery).
+- **Local and open-model provider presets.** Ollama, LM Studio, llama.cpp,
+  vLLM and LiteLLM work without an API key (`ollama:qwen3:32b`), with omp's
+  default endpoints and `OLLAMA_HOST`/`*_BASE_URL` overrides; hosted presets
+  cover Ollama Cloud, Together, DeepInfra, NVIDIA, Novita, Baseten, Venice,
+  Synthetic, NanoGPT, ZenMux, AIML API, SiliconFlow, GMI Cloud, Qianfan, ai&,
+  Wafer and Kilo. `lemon models --provider <id> --discover` lists an endpoint's
+  models, and the `/model` picker includes discovered models for configured
+  presets. See [OpenAI-Compatible Endpoints](docs/config.md#openai-compatible-endpoints).
+
+### Fixed
+
+- Session context queries fall back to saved accounting when the live owner
+  retires during the read, instead of exiting on a stale registry PID. Timeouts
+  and unexpected owner crashes still surface.
+- Background process launches no longer bypass admission after queue failures.
+  Fixed, owner-bound launch identities reconcile lost acknowledgements and
+  reject conflicting retries instead of risking duplicate external effects.
+- Background execution now holds a validated live-process capacity limit until
+  confirmed termination, bounds pending admission and waiting, prevents canceled
+  or expired queued commands from starting, and retains unknown capacity through
+  restart. Yielded launches remain owner-scoped and inspectable; cancellation
+  receipts no longer claim termination before it is confirmed.
+- Local Unix background capacity now stays held when the root shell exits but
+  descendants survive. Owned process groups are bound before command execution;
+  live members are retained before forwarding stdin that can end the root, so
+  verified cancellation still works after natural root exit. Groups reconcile
+  until confirmed empty; stale ownership and unsupported workload witnesses
+  remain unknown rather than freeing slots or signaling recycled PIDs.
+  Repeated cancellation also requires the backend-aware workload witness:
+  an empty host wrapper group cannot release SSH, container or PTY capacity.
+  TUI tool cards and compact shelves also preserve queued and outcome-unknown
+  receipts instead of presenting them as started or failed.
+- Unknown Bash launch outcomes now preserve their structured process identity
+  through the actual agent event and TUI render path. Late or reopened durable
+  storage restores retained capacity and owner monitors before new admission.
+  Pre-execution startup rejections retain the real failure reason.
+- Unix process admission now uses a portable POSIX stdin gate, including dash
+  on Linux, preserving subsequent command input and refusing an unreleased gate.
+  Verified group signals use fixed argv with an OS-owned kill executable.
+- JSONL storage rejects unreadable or corrupt journals rather than publishing
+  empty state. Failed loads remain recoverable after repair; rejected writes
+  return bounded errors before cache mutation without crashing the Store.
+- Stored OAuth refreshes bind persistence to the selected login's opaque
+  revision. Atomic saves cannot overwrite a concurrent login, logout, or
+  delete/recreate; stale or failed saves cannot return the rotated credential.
+  Persistence callbacks take `(name, encoded, expected_revision)` and require
+  revision-bearing reloads and explicit success acknowledgements. Transient
+  fallback reselects authoritative storage; non-persisting refresh stays ephemeral.
+- Copilot token-endpoint HTTP 401/403 requires a fresh sign-in rather than
+  returning a cached token, including near-expiry refreshes.
+- Provider header defaults no longer override per-model headers on the wire.
+  OpenAI Completions/Responses, Anthropic and Google compatible endpoints merge
+  header names case-insensitively: provider defaults, then model overrides,
+  then explicit caller overrides, without duplicate mixed-case headers.
+- Provider CI checks use the existing OAuth decode branching convention without
+  changing refresh locking, and Codex CLI import regressions check rejection
+  and non-mutation rather than incidental error wording.
+- OAuth callback parsing and xAI endpoint validation reject malformed URL
+  authorities and ports before extracting codes or exchanging credentials.
+- Provider sign-in failures no longer print credential payloads or arbitrary
+  token-endpoint response strings. Token grants and model discovery do not
+  follow redirects; Z.AI callbacks require the returned state, and device-code
+  deadlines include callback and HTTP time.
+- Copilot, Gemini CLI and Antigravity refreshes serialize by stored login,
+  reload after waiting, and fail closed on deleted/replaced logins or expired
+  access tokens. Google `invalid_grant` requires a fresh sign-in.
+- Named `lemon model --status`/`--logout --secret-name NAME` targets that account
+  without deleting another login or clearing its selected provider settings.
+- Discovery cache metadata is isolated by endpoint, protocol, credential and
+  headers, rather than the last listing for a provider id. Custom Google
+  endpoints no longer inherit Google account options; explicitly keyless
+  custom Anthropic and Google endpoints omit generated credential headers.
+- Unknown provider ids in `default_model`/`default_provider` and custom
+  provider option keys no longer create atoms from config input.
+- `lemon model github_copilot --status`/`--logout` no longer crash once a
+  Copilot login is stored.
+- With `auth_source = "oauth"`, a provider's API-key env var (for example
+  `GOOGLE_GEMINI_CLI_API_KEY`) no longer overrides the stored sign-in.
+- Concurrent ChatGPT (Codex) token refreshes no longer replay a rotated refresh
+  token: refresh is single-flight per stored login and re-reads the secret.
+- OpenAI-compatible providers no longer fall back to `OPENAI_API_KEY`: a
+  DeepSeek, Together or other non-OpenAI request without its own key fails
+  instead of sending the OpenAI key to that endpoint. Groq, xAI, Cerebras,
+  DeepSeek, Mistral, Hugging Face, Qwen and Vercel AI Gateway now resolve their
+  key environment variables and default `llm_<id>_api_key` secrets.
+
+---
+
+## [2026.10.5]
+
+### Added
+
+- **omp and Claude Code subagent definitions.** Task personas are also
+  discovered from project `.omp/agents/` and `.claude/agents/` (cwd up to the
+  Git root) and from `~/.omp/agent/agents/` and `~/.claude/agents/`, below the
+  `.lemon` directories. Those files are read tolerantly (ID from `name`,
+  unknown fields ignored, invalid files skipped). All definitions accept
+  comma-separated `tools`/`model`, omp/Claude tool names, thinking-level
+  aliases, `spawns`, and an `output` schema in JSON Schema or JTD form (JSON
+  Schema constraints are preserved even without an explicit `type`). New
+  shipped personas: read-only `security-reviewer` and the `@smol` mechanical
+  worker `sonic`.
+- **Task worktrees can merge back.** `task` gains `merge` (`none`, `patch`,
+  `branch`; default `[runtime.task].worktree_merge`) for `worktree: true`
+  children. `patch` replays the parent's uncommitted work into the worktree
+  and, when the child succeeds, applies its changes to the parent checkout,
+  failing closed on conflicts with the patch kept for review. `branch` commits
+  the child's work on its kept `lemon/task-<id>` branch without merging it.
+  Merge-back rechecks cancellation before mutation and retains detached or
+  switched-branch worktrees for manual review. Both patch and branch modes retain
+  committed or staged submodule changes, including index-only pins, and initialized
+  HEAD/content changes even under `ignore = all`, without overwriting the original
+  index or deleting recoverable work. Results report `details.merge`.
+- **Task runtime parity with omp.** `task` accepts a top-level `context`
+  shared by every child of a run, batch, or swarm. Persona thinking levels and
+  output schemas become child defaults. Invalid structured output is
+  re-prompted in the same child up to twice; `schema_mode: "permissive"`
+  returns the text with `structured_output_error` instead of failing.
+  `read agent://<id-or-name>` returns an owned child's status and output (even
+  after it finishes), and `agent://<id>/<key>/…` extracts a `structured_output`
+  field. New `[runtime.task]` settings: `max_depth` (default 2) caps nesting
+  and persona `spawns` grants allowlisted delegation below it,
+  `max_runtime_ms` limits each child, `disabled_agents` hides personas, and
+  `agent_models` overrides persona models.
+  Child depth/allowlists survive extension reloads, resumed user forks can
+  still delegate, and live `agent://` names override completed namesakes.
+- Context parity hardening: overlapping secret sources are redacted without
+  exposing credential fragments; malformed secret YAML does not echo values
+  into logs. Private plan tools restore placeholders and enforce interception
+  hooks without bypassing their directory boundary. Foreign-global MCP configs
+  still require opt-in when launched from home, enabling a server clears every
+  matching denylist entry, and hidden skills stay out of missing-key suggestions.
+  File commands preserve empty positional arguments, consume one-shot submission
+  modes, and expand on local steering/redirect without expanding internal or
+  named-destination prompts. Inline-code imports respect matching backtick runs
+  across lines.
+- Secret placeholders now protect friendly labels against every contextual
+  regex value in the current input and previously matched session values,
+  including overlap constituents, cached labels and forged token-shaped
+  prefixes. Regexes retain context across protected tokens, and self-overlapping
+  literal secrets redact their complete union without leaving a credential
+  suffix visible. Provider batches collect regex values and reserve original raw
+  tokens before emitting any message, block or nested argument, preventing
+  cross-field label leaks and accidental restoration of original token-shaped
+  text while retaining the existing system/image/metadata exclusions.
+- Skills with `hide: true` or `disable-model-invocation: true` frontmatter are
+  omitted from the model-visible skill listing and per-turn relevant-skill
+  hints, yet stay listed and loadable by name (`read_skill`, `skill://`,
+  `/skill:<name>`). See [skill manifest](docs/reference/skill-manifest-v2.md).
+- File slash commands from Claude Code (`.claude/commands`, nested `a:b`),
+  Codex (`.codex/prompts`), Copilot (`.github/prompts/*.prompt.md`), Gemini
+  (`.gemini/commands/*.toml`), omp and `.agents` roots, plus their user-global
+  dirs: `/name args` expands server-side for TUI, ACP and channel prompts, and
+  the TUI palette, `/help` and ACP command list show them. Skills also load from
+  `.codex/skills`, `.github/skills` and `~/.codex/skills`. See
+  [File slash commands](docs/user-guide/slash-commands.md).
+- **Secret obfuscation (opt-in).** With `[runtime.secret_obfuscation]
+  enabled = true`, native sessions replace secret-shaped environment values,
+  `secrets.yml` entries (global and project; plain or regex, obfuscate or
+  replace) and GitHub/GitLab/OpenAI/Anthropic-style tokens in provider-visible
+  messages with keyed `$$…$$` placeholders, and restore them in tool arguments
+  before a tool runs. Session history keeps the original text. See
+  [Secret obfuscation](docs/security/secret-obfuscation.md).
+- **MCP servers from other tools.** Lemon now also loads MCP servers declared in
+  omp, Claude Code, Codex, Gemini CLI, OpenCode, Cursor, Windsurf and VS Code
+  configs and root `mcp.json`/`.mcp.json` (project files by default; other
+  tools' `~/` files with `LEMON_MCP_EXTERNAL_USER_DISCOVERY=1`), below Lemon's
+  own files. `lemon mcp enable|disable NAME` toggles any server per project or
+  `--global`, and `lemon mcp list --all` shows the effective set with sources.
+  Turn the import off with `LEMON_MCP_EXTERNAL_DISCOVERY=0`. See
+  [Skills: Servers from other tools](docs/skills.md#servers-from-other-tools).
+- Native sessions load other agents' instruction files: `GEMINI.md`,
+  `CLAUDE.local.md`, `.gemini/`, `.agent(s)/`, `.omp/` and
+  `.github/copilot-instructions.md` per directory, plus Gemini, Codex, OpenCode,
+  `.agents` and Copilot globals, with `@path` imports expanded. Cursor,
+  Windsurf, Cline, GitHub Copilot, `.agents` and `.lemon/rules` rule files are
+  injected when always-apply and otherwise listed in a rulebook the model reads
+  on demand. See [Instruction files and rules](docs/user-guide/context-files.md).
+- Extension hooks can intercept tools: `on_tool_call` blocks a call or
+  replaces its arguments (a raising handler blocks), and `on_tool_result`
+  replaces a successful result's content/details. New `on_session_start` and
+  `on_session_shutdown` hooks observe session lifecycle. See
+  [Extensions: Intercepting tool calls](docs/extensions.md#intercepting-tool-calls).
+
+### Fixed
+
+- Extension result presentation hooks preserve authoritative checkpoint receipts
+  and affected paths. Content-only or custom display details cannot erase real
+  mutation provenance or fabricate receipts; omitted details retain the original.
+  Reserved diff aliases, resolved locations and mutation line numbers are protected
+  in both key forms; omitted snapshots and absent location lines remain absent.
+- Direct, deferred and WASM-host targets restore secrets before interception
+  under both disclosure profiles, including after reload. Private plan writes
+  retain their restricted file boundary, and repeated plan refreshes no longer
+  capture earlier wrapper generations.
+- Active plan-mode extension reload now binds private writes, edits and proposals
+  to newly loaded hooks immediately, preventing stale handlers from bypassing a
+  new mutation blocker.
+- OpenCode MCP discovery substitutes environment and file placeholders once in
+  decoded JSONC string values. Quotes, backslashes and multiline environment
+  values no longer invalidate the config and silently drop servers; inserted
+  text cannot trigger another interpolation or file import. File path resolution,
+  trimming and missing-value behavior are preserved.
+
+---
+
+## [2026.10.4]
+
+### Added
+
+- Opt-in `runtime.tools.disclosure.profile = "coding"` keeps a coding core
+  directly exposed and defers optional registry-resolved built-ins behind
+  `tool_search` / `tool_invoke`. Explicit pins and per-session overrides support
+  isolated trials; defaults and caller-supplied toolsets remain unchanged.
+  Disclosure diagnostics include resolved inventories, estimated schema size
+  and a safe catalog/policy digest. Bridged calls retain approval, plan-mode,
+  checkpoint, cancellation and sequential execution constraints. No cost or
+  latency improvement is claimed; see [Tool Disclosure](docs/config.md#tool-disclosure).
+
+### Fixed
+
+- WASM host aliases resolve permitted deferred built-ins from the same frozen,
+  wrapped disclosure catalog under both profiles, retaining plan-mode and reload
+  authority boundaries while refusing WASM and disclosure-bridge recursion.
+- Background process output now enforces finite retained-memory, artifact,
+  owner and runtime storage byte quotas before capture growth. Oversized
+  chunks/partial lines retain a bounded diagnostic tail; polling and artifact
+  handles report incomplete output honestly. Write failures stop capture
+  without changing execution status, and failed cleanup keeps its storage
+  charge instead of allowing quota bypass. TTL cleanup removes expired closed
+  captures even while their completed sessions linger for final polling.
+  Capture accounting now serializes record mutations with reclamation, preserves
+  live capture state across store-only restart, and rejects unpersisted
+  reservations or unknown legacy artifact usage before process launch.
+
+---
+
 ## [2026.10.3]
 
 ### Added

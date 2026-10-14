@@ -112,8 +112,10 @@ if it is already running. Without a configured token, management pages return
 
 - **Parallel subagents and personas:** ask, “Use two task children in parallel:
   a scout to locate the tests and a reviewer to inspect edge cases. Summarize
-  their findings; do not edit files.” Shipped `scout` and `reviewer` personas are
-  read-only. Custom personas live in project or user `.lemon/agents/` directories;
+  their findings; do not edit files.” Shipped `scout`, `reviewer`, and
+  `security-reviewer` personas are read-only. Custom personas live in project or
+  user `.lemon/agents/` directories, and existing omp (`.omp/agents/`) or Claude
+  Code (`.claude/agents/`) agent definitions are picked up too;
   see [subagents and commands](https://github.com/z80dev/lemon/blob/main/apps/coding_agent/README.md#subagents-and-commands).
 - **MCP tools:** inspect configured servers with `lemon mcp list`. Then follow
   the [MCP guide](../skills.md#manage-named-mcp-servers) to add and test a server before relying

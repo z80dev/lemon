@@ -56,6 +56,11 @@ defmodule CodingAgent.Session.Lifecycle do
         session_manager.header.parent_session
       )
 
+    # Header parentage also describes user forks; it is not proof that this
+    # invocation is a delegated worker. Keep bootstrap isolation unchanged.
+    task_child =
+      Keyword.get(opts, :task_child, Keyword.get(opts, :session_scope) in [:subagent, "subagent"])
+
     settings_manager = Keyword.get(opts, :settings_manager) || SettingsManager.load(cwd)
     budget_limits = Keyword.get(opts, :budget_limits, settings_manager.budgets)
     {session_manager, budget_usage} = CodingAgent.Session.BudgetLedger.initialize(session_manager)
@@ -100,6 +105,9 @@ defmodule CodingAgent.Session.Lifecycle do
     approval_context =
       resolve_approval_context(opts, session_manager.header.id, tool_policy)
 
+    secret_obfuscator =
+      CodingAgent.Security.SecretObfuscator.for_session(settings_manager, cwd)
+
     wasm_boot =
       WasmBridge.maybe_start_wasm_sidecar(
         cwd,
@@ -122,6 +130,7 @@ defmodule CodingAgent.Session.Lifecycle do
       |> Keyword.put(:settings_manager, settings_manager)
       |> Keyword.put(:workspace_dir, workspace_dir)
       |> Keyword.put(:session_scope, session_scope)
+      |> Keyword.put(:task_child, task_child)
       |> Keyword.put(:tool_policy, tool_policy)
       |> Keyword.put(:approval_context, approval_context)
       |> Keyword.put(:invocation_context_key, (approval_context || %{})[:invocation_context_key])
@@ -143,7 +152,8 @@ defmodule CodingAgent.Session.Lifecycle do
         wasm_tools: wasm_boot.wasm_tools,
         wasm_status: wasm_boot.wasm_status,
         tool_policy: tool_policy,
-        approval_context: approval_context
+        approval_context: approval_context,
+        secret_obfuscator: secret_obfuscator
       )
 
     plan_gate = CodingAgent.Session.Planning.new_gate()
@@ -160,6 +170,8 @@ defmodule CodingAgent.Session.Lifecycle do
             run_id: run_id,
             session_key: session_key,
             agent_id: agent_id,
+            hooks: lifecycle.hooks,
+            secret_obfuscator: secret_obfuscator,
             approval_context: approval_context
           },
           session_pid
@@ -225,7 +237,8 @@ defmodule CodingAgent.Session.Lifecycle do
     transform_context =
       State.build_transform_context(
         Keyword.get(opts, :transform_context),
-        context_guardrail_opts
+        context_guardrail_opts,
+        secret_obfuscator
       )
 
     get_api_key =
@@ -328,7 +341,11 @@ defmodule CodingAgent.Session.Lifecycle do
       # override the session started with -- `reload_extensions/1` rebuilds
       # `tool_opts` from state rather than from the original opts.
       tool_disclosure: Keyword.get(opts, :tool_disclosure),
+      tool_catalog: lifecycle.tool_catalog,
       session_scope: session_scope,
+      task_child: task_child,
+      task_depth: Keyword.get(opts, :task_depth),
+      task_allowed_agents: Keyword.get(opts, :task_allowed_agents),
       context_frozen: not is_nil(context_snapshot),
       is_streaming: false,
       pending_prompt_timer_ref: nil,
@@ -346,6 +363,7 @@ defmodule CodingAgent.Session.Lifecycle do
       transform_context: transform_context,
       tool_policy: tool_policy,
       approval_context: approval_context,
+      secret_obfuscator: secret_obfuscator,
       extensions: lifecycle.extensions,
       hooks: lifecycle.hooks,
       extension_status_report: lifecycle.extension_status_report,
@@ -389,6 +407,9 @@ defmodule CodingAgent.Session.Lifecycle do
       mcp_session_id: state.mcp_session_id,
       acp_mcp_session_id: state.acp_mcp_session_id,
       session_scope: state.session_scope,
+      task_child: state.task_child,
+      task_depth: state.task_depth,
+      task_allowed_agents: state.task_allowed_agents,
       tool_policy: state.tool_policy,
       approval_context: state.approval_context,
       invocation_context_key: (state.approval_context || %{})[:invocation_context_key],
@@ -412,6 +433,7 @@ defmodule CodingAgent.Session.Lifecycle do
         wasm_status: wasm_reload.wasm_status,
         tool_policy: state.tool_policy,
         approval_context: state.approval_context,
+        secret_obfuscator: state.secret_obfuscator,
         previous_status_report: state.extension_status_report
       )
 
@@ -419,7 +441,9 @@ defmodule CodingAgent.Session.Lifecycle do
       CodingAgent.Session.Planning.tools(
         lifecycle.tools,
         state.session_manager,
-        CodingAgent.Session.Planning.runtime_context(state, self())
+        state
+        |> CodingAgent.Session.Planning.runtime_context(self())
+        |> Map.put(:hooks, lifecycle.hooks)
       )
 
     :ok = LemonAgent.Agent.set_tools(state.agent, tools)
@@ -431,6 +455,7 @@ defmodule CodingAgent.Session.Lifecycle do
         hooks: lifecycle.hooks,
         tools: tools,
         base_tools: lifecycle.tools,
+        tool_catalog: lifecycle.tool_catalog,
         extension_status_report: lifecycle.extension_status_report,
         wasm_sidecar_pid: wasm_reload.sidecar_pid,
         wasm_tool_names: wasm_reload.wasm_tool_names,

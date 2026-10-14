@@ -89,6 +89,25 @@ base_url = "https://api.z.ai/api/coding/paas/v4"
 api_key_secret = "google_api_key"
 # api_key = "..."  # plaintext fallback — discouraged
 
+# Local OpenAI-compatible servers need no key: ollama, lm_studio, llama_cpp,
+# vllm, litellm. Set base_url only for a non-default host (include /v1).
+# [providers.ollama]
+# base_url = "http://gpu-box:11434/v1"
+#
+# Custom OpenAI-compatible (or Anthropic/Google-compatible) endpoint; select its
+# models as "my-gateway:qwen3-coder". See docs/config.md "Custom Providers and Models".
+# [providers.my-gateway]
+# api = "openai_completions"  # openai_completions | openai_responses | anthropic_messages | google_generative_ai
+# base_url = "https://llm.internal/v1"
+# api_key_env = "MY_GATEWAY_KEY"  # or api_key_secret; auth = "none" for keyless endpoints
+# headers = { "X-Team" = "platform" }
+# discovery = "openai"  # optional: list {base_url}/models ("ollama" for Ollama)
+#
+# [[providers.my-gateway.models]]
+# id = "qwen3-coder"
+# context_window = 131072
+# max_tokens = 16384
+
 [defaults]
 provider = "anthropic"
 model = "claude-sonnet-5"
@@ -128,6 +147,22 @@ keep_recent_tokens = 20000
 enabled = true
 max_retries = 3
 base_delay_ms = 1000
+
+# Opt-in: replace secret-shaped env vars, secrets.yml entries and common API
+# token shapes in provider-visible text with reversible placeholders.
+# See docs/security/secret-obfuscation.md.
+[runtime.secret_obfuscation]
+enabled = false
+
+# Native task subagents (all optional; values shown are defaults except the examples).
+# [runtime.task]
+# max_depth = 2             # -1 unlimited; 0 = the main session cannot delegate
+# max_runtime_ms = 0        # per-child wall-clock limit; 0 disables it
+# worktree_merge = "none"   # none | patch | branch for worktree = true tasks
+# disabled_agents = ["sonic"]
+#
+# [runtime.task.agent_models]
+# reviewer = "@slow"        # persona ID => model or @role
 
 # `lemon context preview|resolve` budgets are explicit per invocation rather
 # than persisted here. This prevents shared config from silently raising a

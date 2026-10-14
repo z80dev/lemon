@@ -446,9 +446,14 @@ defmodule CodingAgent.Coordinator do
             send(worker, {:admission_result, self(), result})
         end
 
-      :release_guardian -> :ok
-      {:DOWN, ^worker_ref, :process, ^worker, _reason} -> :ok
-      {:DOWN, ^owner_ref, :process, ^coordinator, _reason} -> :ok
+      :release_guardian ->
+        :ok
+
+      {:DOWN, ^worker_ref, :process, ^worker, _reason} ->
+        :ok
+
+      {:DOWN, ^owner_ref, :process, ^coordinator, _reason} ->
+        :ok
     end
 
     Process.demonitor(worker_ref, [:flush])
@@ -471,6 +476,7 @@ defmodule CodingAgent.Coordinator do
 
   defp run_subagent_worker(coordinator, id, spec, state) do
     owner_ref = Process.monitor(coordinator)
+
     guardian =
       receive do
         {:admission_guardian, guardian} -> guardian
@@ -486,7 +492,10 @@ defmodule CodingAgent.Coordinator do
           "description" => spec[:description] || "Subagent #{id}"
         }
 
-        with {:ok, validated} <- Params.validate_run_params(params, state.cwd),
+        with {:ok, validated} <-
+               Params.validate_run_params(params, state.cwd,
+                 settings_manager: state.settings_manager
+               ),
              :ok <- check_cancelled(owner_ref),
              {:ok, pid} <- admit_session(guardian, build_session_opts(state, validated)) do
           session_ref = Process.monitor(pid)
@@ -681,9 +690,11 @@ defmodule CodingAgent.Coordinator do
 
               subagent when not is_map_key(batch.results, id) ->
                 if subagent.worker_pid, do: send(subagent.worker_pid, {:cancel, status})
+
                 if subagent.pid && subagent.status != :stopping do
                   start_background_task(fn -> cleanup_session(subagent.pid) end)
                 end
+
                 result = terminal_result(id, subagent.session_id, status)
                 subagent = %{subagent | status: :stopping}
                 acc = put_result(acc, batch_ref, result)

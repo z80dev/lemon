@@ -157,12 +157,17 @@ defmodule LemonAi.Auth.OpenAICodexOAuthTest do
       )
     end)
 
+    revision = make_ref()
+
     assert {:ok, refreshed_token} =
              OpenAICodexOAuth.resolve_api_key_from_secret(
                secret_name,
                original_payload,
-               persist_secret: fn name, value ->
+               reload_secret: fn _ -> {:ok, original_payload, revision} end,
+               persist_secret: fn name, value, expected ->
+                 assert expected == revision
                  send(test_pid, {:persisted_secret, name, value})
+                 :ok
                end
              )
 
@@ -333,7 +338,8 @@ defmodule LemonAi.Auth.OpenAICodexOAuthTest do
              OpenAICodexOAuth.resolve_api_key_from_secret(
                name,
                OpenAICodexOAuth.encode_secret(secret),
-               persist_secret: &Secrets.set/2
+               reload_secret: &Secrets.get_with_revision/1,
+               persist_secret: &Secrets.set_if_revision/3
              )
 
     assert_receive :refreshed
@@ -363,13 +369,16 @@ defmodule LemonAi.Auth.OpenAICodexOAuthTest do
     end)
 
     for callback <- [
-          fn _, _ -> {:error, :store_unavailable} end,
-          fn _, _ -> raise "sensitive storage error must not escape" end
+          fn _, _, _ -> {:error, :store_unavailable} end,
+          fn _, _, _ -> raise "sensitive storage error must not escape" end
         ] do
       assert {:error, :oauth_secret_persistence_failed} =
                OpenAICodexOAuth.resolve_api_key_from_secret(
                  "llm_openai_codex_api_key",
                  OpenAICodexOAuth.encode_secret(secret),
+                 reload_secret: fn _ ->
+                   {:ok, OpenAICodexOAuth.encode_secret(secret), :test_revision}
+                 end,
                  persist_secret: callback
                )
     end
@@ -389,7 +398,10 @@ defmodule LemonAi.Auth.OpenAICodexOAuthTest do
         OpenAICodexOAuth.resolve_api_key_from_secret(
           "synthetic",
           OpenAICodexOAuth.encode_secret(secret),
-          persist_secret: fn _, _ -> flunk("failed refresh must not persist") end
+          reload_secret: fn _ ->
+            {:ok, OpenAICodexOAuth.encode_secret(secret), :test_revision}
+          end,
+          persist_secret: fn _, _, _ -> flunk("failed refresh must not persist") end
         )
 
       assert elem(result, 0) == expected
@@ -430,6 +442,170 @@ defmodule LemonAi.Auth.OpenAICodexOAuthTest do
     write_cli_login(path, login)
     assert {:ok, secret} = OpenAICodexOAuth.import_codex_cli_login(path: path)
     assert secret["account_id"] == "acc_import"
+  end
+
+  test "token HTTP and malformed success errors never expose provider payloads" do
+    for {status, body, reason} <- [
+          {400, %{"error" => "secret-code", "access_token" => "secret-token"},
+           {:http_error, 400}},
+          {200, %{"refresh_token" => "secret-refresh"}, :invalid_token_response},
+          {200, %{"access_token" => "secret-token", "expires_in" => 0}, :invalid_expiry}
+        ] do
+      Req.Test.stub(__MODULE__, fn conn ->
+        conn |> Plug.Conn.put_status(status) |> Req.Test.json(body)
+      end)
+
+      assert {:error, ^reason} = OpenAICodexOAuth.exchange_code_for_secret("code", "verifier")
+    end
+  end
+
+  test "refresh fails closed when the stored login was removed or replaced" do
+    Req.Test.stub(__MODULE__, fn _ -> flunk("must not refresh a stale login") end)
+
+    secret = %{
+      "type" => "openai_codex_oauth",
+      "access_token" => make_jwt("account", 60),
+      "refresh_token" => "secret-refresh",
+      "expires_at_ms" => 0
+    }
+
+    for {loaded, reason} <- [
+          {{:error, :not_found}, :oauth_secret_missing},
+          {{:ok, "plain-api-key"}, :oauth_secret_replaced}
+        ] do
+      assert {:error, ^reason} =
+               OpenAICodexOAuth.resolve_api_key_from_secret(
+                 "custom-codex-login",
+                 OpenAICodexOAuth.encode_secret(secret),
+                 force_refresh: true,
+                 reload_secret: fn "custom-codex-login" -> loaded end
+               )
+    end
+  end
+
+  test "invalid_grant never falls back to an unexpired Codex access token" do
+    Req.Test.stub(__MODULE__, fn conn ->
+      conn |> Plug.Conn.put_status(400) |> Req.Test.json(%{"error" => "invalid_grant"})
+    end)
+
+    secret = %{
+      "type" => "openai_codex_oauth",
+      "access_token" => make_jwt("account", 60),
+      "refresh_token" => "secret-refresh",
+      "expires_at_ms" => 0
+    }
+
+    assert {:error, :reauth_required} =
+             OpenAICodexOAuth.resolve_api_key_from_secret(
+               "custom-codex-login",
+               OpenAICodexOAuth.encode_secret(secret)
+             )
+  end
+
+  test "device sign-in passes the issued verifier and injected HTTP options to exchange" do
+    test_pid = self()
+    Req.Test.stub(__MODULE__, fn _ -> flunk("must use per-flow HTTP options") end)
+
+    plug = fn conn ->
+      {:ok, raw, conn} = Plug.Conn.read_body(conn)
+
+      case conn.request_path do
+        "/device/usercode" ->
+          Req.Test.json(conn, %{
+            "device_auth_id" => "device-id",
+            "user_code" => "USER",
+            "interval" => 1,
+            "expires_in" => 60
+          })
+
+        "/device/token" ->
+          assert Jason.decode!(raw) == %{"device_auth_id" => "device-id", "user_code" => "USER"}
+
+          Req.Test.json(conn, %{
+            "authorization_code" => "issued-code",
+            "code_verifier" => "issued-verifier"
+          })
+
+        "/device/exchange" ->
+          params = URI.decode_query(raw)
+          assert params["code"] == "issued-code"
+          assert params["code_verifier"] == "issued-verifier"
+          assert params["redirect_uri"] == "https://auth.openai.com/deviceauth/callback"
+          send(test_pid, :exchanged)
+
+          Req.Test.json(conn, %{
+            "access_token" => make_jwt("device-account", 3600),
+            "refresh_token" => "rotated-refresh",
+            "expires_in" => 3600
+          })
+      end
+    end
+
+    assert {:ok, %{"account_id" => "device-account", "refresh_token" => "rotated-refresh"}} =
+             OpenAICodexOAuth.login_device_code(
+               device_usercode_url: "https://auth.test/device/usercode",
+               device_token_url: "https://auth.test/device/token",
+               token_url: "https://auth.test/device/exchange",
+               req_options: [plug: plug],
+               on_auth: fn _, _ -> :ok end,
+               sleep: fn _ -> :ok end
+             )
+
+    assert_received :exchanged
+  end
+
+  test "device expiry includes time spent showing authorization instructions" do
+    {:ok, clock} = Agent.start_link(fn -> 0 end)
+
+    Req.Test.stub(__MODULE__, fn conn ->
+      assert conn.request_path == "/api/accounts/deviceauth/usercode"
+
+      Req.Test.json(conn, %{
+        "device_auth_id" => "device-id",
+        "user_code" => "USER",
+        "interval" => 1,
+        "expires_in" => 30
+      })
+    end)
+
+    assert {:error, :device_flow_timed_out} =
+             OpenAICodexOAuth.login_device_code(
+               now: fn -> Agent.get(clock, & &1) end,
+               on_auth: fn _, _ -> Agent.update(clock, fn _ -> 31_000 end) end,
+               sleep: fn _ -> flunk("must not wait or poll after expiry") end
+             )
+  end
+
+  test "device polling counts HTTP duration rather than only poll attempts" do
+    {:ok, clock} = Agent.start_link(fn -> 0 end)
+    test_pid = self()
+
+    Req.Test.stub(__MODULE__, fn conn ->
+      case conn.request_path do
+        "/api/accounts/deviceauth/usercode" ->
+          Req.Test.json(conn, %{
+            "device_auth_id" => "device-id",
+            "user_code" => "USER",
+            "interval" => 1,
+            "expires_in" => 30
+          })
+
+        "/api/accounts/deviceauth/token" ->
+          send(test_pid, :device_polled)
+          Agent.update(clock, &(&1 + 31_000))
+          Plug.Conn.send_resp(conn, 403, "")
+      end
+    end)
+
+    assert {:error, :device_flow_timed_out} =
+             OpenAICodexOAuth.login_device_code(
+               now: fn -> Agent.get(clock, & &1) end,
+               on_auth: fn _, _ -> :ok end,
+               sleep: fn _ -> :ok end
+             )
+
+    assert_received :device_polled
+    refute_received :device_polled
   end
 
   defp cli_login(seconds) do

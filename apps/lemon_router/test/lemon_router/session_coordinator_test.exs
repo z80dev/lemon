@@ -840,6 +840,124 @@ defmodule LemonRouter.SessionCoordinatorTest do
     GenServer.stop(runtime_run)
   end
 
+  @tag :tmp_dir
+  test "live commands expand for local users but preserve internal and destination-local prompts",
+       %{run_supervisor: run_supervisor, tmp_dir: cwd} do
+    command = Path.join(cwd, ".claude/commands/review.md")
+    File.mkdir_p!(Path.dirname(command))
+    File.write!(command, "Review [$1] carefully")
+    other_cwd = Path.join(cwd, "other-project")
+    other_command = Path.join(other_cwd, ".claude/commands/review.md")
+    File.mkdir_p!(Path.dirname(other_command))
+    File.write!(other_command, "Do not use incoming cwd")
+    original_provider = Application.get_env(:lemon_core, :agent_runtime_provider)
+    :ok = LemonCore.AgentRuntime.register(CodingAgent.ControlPlaneProvider)
+
+    on_exit(fn ->
+      if original_provider,
+        do: Application.put_env(:lemon_core, :agent_runtime_provider, original_provider),
+        else: Application.delete_env(:lemon_core, :agent_runtime_provider)
+    end)
+
+    key = {:session, unique_session_key()}
+    active_id = "command-active-#{System.unique_integer([:positive])}"
+
+    active_request = %ExecutionCommand{
+      run_id: active_id,
+      session_key: elem(key, 1),
+      conversation_key: key,
+      cwd: cwd,
+      prompt: "one",
+      meta: %{}
+    }
+
+    :ok =
+      SessionCoordinator.submit(
+        key,
+        submission(key, active_id, "one", :collect, run_supervisor,
+          execution_request: active_request
+        )
+      )
+
+    assert_receive {:started, ^active_id, _}
+    runtime_run = start_runtime_run(active_id)
+
+    cases = [
+      {:steer, %{origin: :control_plane}, "Review [lib/app.ex] carefully"},
+      {:redirect, %{origin: :channel}, "Review [lib/app.ex] carefully"},
+      {:steer, %{origin: :node}, "/review lib/app.ex"},
+      {:redirect, %{origin: :control_plane, node: "worker"}, "/review lib/app.ex"},
+      {:steer, %{origin: :channel, async_followups: [%{task_id: "task"}]}, "/review lib/app.ex"}
+    ]
+
+    for {mode, meta, expected} <- cases do
+      id = "command-submission-#{System.unique_integer([:positive])}"
+
+      request = %ExecutionCommand{
+        run_id: id,
+        session_key: elem(key, 1),
+        conversation_key: key,
+        cwd: other_cwd,
+        prompt: "/review lib/app.ex",
+        meta: meta
+      }
+
+      :ok =
+        SessionCoordinator.submit(
+          key,
+          submission(key, id, request.prompt, mode, run_supervisor, execution_request: request)
+        )
+
+      assert_receive {:run_cast, ^mode, ^id, ^expected, coordinator}
+      acknowledgement = if mode == :redirect, do: :redirect_accepted, else: :steer_accepted
+      send(coordinator, {acknowledgement, id})
+      assert {:ok, ^active_id} = SessionCoordinator.active_run(key)
+    end
+
+    GenServer.stop(runtime_run)
+
+    remote_key = {:session, unique_session_key()}
+    remote_id = "command-remote-#{System.unique_integer([:positive])}"
+
+    remote_request = %{
+      active_request
+      | run_id: remote_id,
+        session_key: elem(remote_key, 1),
+        conversation_key: remote_key,
+        meta: %{"node" => "worker"}
+    }
+
+    :ok =
+      SessionCoordinator.submit(
+        remote_key,
+        submission(remote_key, remote_id, "one", :collect, run_supervisor,
+          execution_request: remote_request
+        )
+      )
+
+    assert_receive {:started, ^remote_id, _}
+    remote_runtime = start_runtime_run(remote_id)
+    steer_id = "remote-steer-#{System.unique_integer([:positive])}"
+
+    incoming = %{
+      remote_request
+      | run_id: steer_id,
+        prompt: "/review lib/app.ex",
+        meta: %{origin: :control_plane, node: "local"}
+    }
+
+    :ok =
+      SessionCoordinator.submit(
+        remote_key,
+        submission(remote_key, steer_id, incoming.prompt, :steer, run_supervisor,
+          execution_request: incoming
+        )
+      )
+
+    assert_receive {:run_cast, :steer, ^steer_id, "/review lib/app.ex", _}
+    GenServer.stop(remote_runtime)
+  end
+
   test "accepted redirect clears the pending entry so it never re-runs", %{
     run_supervisor: run_supervisor
   } do

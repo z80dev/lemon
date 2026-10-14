@@ -6,7 +6,10 @@ defmodule CodingAgent.Tools.BashOutput do
   Each call returns only the complete output lines produced since the
   previous call for that process, followed by its status and exit code. A
   session can only read processes it started. Truncated or dropped output includes
-  a full-output file path; use `read` with line ranges to retrieve the archive.
+  the saved output file path; use `read` with line ranges to retrieve it. The
+  saved file holds the head of the output up to the capture limit; when that
+  limit was reached, the result says so and `details.output` reports received,
+  retained and discarded bytes (see `CodingAgent.ProcessSession`).
   """
 
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
@@ -95,12 +98,16 @@ defmodule CodingAgent.Tools.BashOutput do
     body = if text == "", do: "(no new output)", else: text
     status_line = "Status: #{describe_status(output.status, output.exit_code)}"
     full_output_path = Map.get(output, :full_output_path)
+    stats = Map.get(output, :output) || %{}
+    artifact_truncated? = Map.get(stats, :artifact_truncated, false)
 
     spill_note =
-      if (truncated? or output.dropped_lines > 0) and is_binary(full_output_path),
-        do:
-          "\n\n[Full output saved to: #{full_output_path}. Use read with offset/limit to retrieve it.]",
-        else: ""
+      spill_note(
+        truncated? or output.dropped_lines > 0 or artifact_truncated? or
+          Map.get(stats, :artifact_reclaimed, false),
+        full_output_path,
+        stats
+      )
 
     %AgentToolResult{
       content: [%TextContent{text: dropped_note <> body <> "\n\n" <> status_line <> spill_note}],
@@ -111,8 +118,41 @@ defmodule CodingAgent.Tools.BashOutput do
         new_lines: length(output.lines),
         dropped_lines: output.dropped_lines,
         full_output_path: full_output_path,
-        truncated: truncated?
+        truncated: truncated?,
+        artifact_truncated: artifact_truncated?,
+        output: Map.get(output, :output)
       }
     }
   end
+
+  defp spill_note(false, _path, _stats), do: ""
+
+  defp spill_note(true, path, %{artifact_reclaimed: true}) when not is_binary(path),
+    do:
+      "\n\n[Earlier output is no longer saved: its file was reclaimed to stay within " <>
+        "the background-process output storage quota.]"
+
+  defp spill_note(true, path, _stats) when not is_binary(path), do: ""
+
+  defp spill_note(true, path, %{artifact_truncated: true} = stats) do
+    stopped =
+      case stats[:artifact_error] do
+        nil -> "the capture limit was reached"
+        reason -> "saving failed (#{reason})"
+      end
+
+    saved =
+      if stats[:artifact_size_unknown],
+        do:
+          "at least #{stats[:artifact_bytes]} bytes were confirmed saved (the file size could not be checked)",
+        else:
+          "only the first #{stats[:artifact_bytes]} of #{stats[:received_bytes]} bytes were saved"
+
+    "\n\n[Saved output is incomplete: #{stopped}; #{saved} to: #{path}. " <>
+      "Later output was not saved; only the most recent lines are kept. " <>
+      "Use read with offset/limit to retrieve the saved part.]"
+  end
+
+  defp spill_note(true, path, _stats),
+    do: "\n\n[Full output saved to: #{path}. Use read with offset/limit to retrieve it.]"
 end

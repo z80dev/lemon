@@ -163,8 +163,9 @@ defmodule CodingAgent.SystemPrompt do
   @coding_rules [
     {[],
      "Follow the user's request and applicable repository instructions. More specific " <>
-       "AGENTS.md or CLAUDE.md files govern their directories. Before changing nested code, " <>
-       "read applicable directory instructions that are not already injected here. " <>
+       "directory instruction files (AGENTS.md, CLAUDE.md, GEMINI.md and similar) govern their " <>
+       "directories. Before changing nested code, read applicable directory instructions and " <>
+       "rulebook rules that are not already injected here. " <>
        "An instruction index is not the instructions themselves."},
     {~w(read),
      "Use `read` to inspect relevant source, configuration, and existing test/build entry points " <>

@@ -10,17 +10,17 @@ defmodule CodingAgent.ToolDisclosure do
   description and JSON schema sit in the tool array of each model call. A
   handful of MCP servers can easily add tens of thousands of tokens of schema
   that the model reads on every turn and almost never calls. This module keeps
-  the built-in tools fully disclosed (they are the ones a coding agent
-  actually reaches for) and replaces the MCP/extension/WASM long tail with two
-  bridge tools:
+  built-in tools fully disclosed under the default legacy profile and replaces
+  the MCP/extension/WASM long tail with two bridge tools. An opt-in coding
+  profile also defers optional built-in capabilities:
 
     * `tool_search` — query a frozen per-session catalog, get back names,
       descriptions and full schemas.
     * `tool_invoke` — call one of those tools by name with validated
       arguments.
 
-  Below the budget nothing changes: `apply/3` returns exactly the list it was
-  given, in the same order.
+  Below the budget the legacy profile changes nothing: `apply/3` returns exactly
+  the list it was given, in the same order.
 
   ## Prompt-cache discipline
 
@@ -36,11 +36,32 @@ defmodule CodingAgent.ToolDisclosure do
 
   Ordering is likewise deterministic: pinned tools keep their registry order,
   the bridge tools are appended last, and the hidden-catalog digest is sorted
-  by name. The same inputs always produce a byte-identical tool array.
+  by name. The same inputs always produce a byte-identical tool array, and the
+  report carries a `catalog_digest` (SHA-256 over the exposed and deferred
+  schemas, their sources and the session's tool policy) so two sessions can be
+  compared without logging tool content.
+
+  ## Profiles
+
+  The `profile` setting decides which tools are eligible for deferral:
+
+    * `:legacy` (default) — the behaviour described above: built-ins stay
+      disclosed, the MCP/extension/WASM long tail is deferred only once the
+      estimated schema cost exceeds `budget_tokens`.
+    * `:coding` — an opt-in experiment. Only the coding core (`coding_core/0`)
+      and explicitly `pinned` names stay disclosed; every other tool the
+      registry resolved — optional built-ins such as browser, media and
+      automation tools included — is deferred behind the bridge whenever there
+      is anything to defer. The budget is not consulted.
+
+  Both profiles honour `pinned` (names kept disclosed) and both always keep
+  caller-supplied `extra_tools` disclosed. The core is a list of names, not a
+  catalog: the inventory itself always comes from the registry, so a core name
+  the registry did not resolve (unavailable or policy-denied) is simply absent.
 
   ## Security
 
-  `apply/3` consumes `CodingAgent.ToolRegistry.get_tool_tuples/2` output, which
+  `apply/4` consumes `CodingAgent.ToolRegistry.get_tool_tuples/2` output, which
   is already policy-filtered and approval-wrapped. Two properties fall out of
   that ordering for free:
 
@@ -48,9 +69,14 @@ defmodule CodingAgent.ToolDisclosure do
       it is neither searchable nor invokable — hiding a tool is not a way to
       smuggle it back in.
     * The closure `tool_invoke` calls is the registry's post-approval-wrap
-      closure, so an approval-gated tool goes through
-      `CodingAgent.ToolExecutor.execute_with_approval/4` exactly as it would
-      on a direct call.
+      (and, for mutating built-ins, mutation-lock) closure, so a tool goes
+      through `CodingAgent.ToolExecutor.execute_with_approval/4`, its own
+      checkpoints and its own abort checks exactly as it would on a direct call.
+
+  `tool_invoke` itself is not `parallel_safe`, so the agent loop runs it as a
+  barrier: a bridged call never overlaps another call even when the tool it
+  reaches would have been allowed to. Plan mode guards `tool_invoke` by the
+  name of the tool it reaches (see `CodingAgent.Session.Planning`).
   """
 
   require Logger
@@ -63,22 +89,43 @@ defmodule CodingAgent.ToolDisclosure do
 
   @bridge_names ["tool_search", "tool_invoke"]
 
+  @profiles [:legacy, :coding]
+
   @defaults %{
     enabled: true,
     budget_tokens: 40_000,
     catalog_tokens: 2_000,
-    max_results: 5
+    max_results: 5,
+    profile: :legacy,
+    pinned: []
   }
+
+  # The coding profile's directly exposed capabilities, by the task they serve.
+  # Every read-only tool plan mode allows is here, so planning never needs the
+  # bridge for a read.
+  @coding_core %{
+    files: ~w(read write edit patch ls find grep ast_grep lsp_diagnostics checkpoint),
+    shell: ~w(bash bash_output kill_process),
+    research: ~w(websearch webfetch read_skill recall),
+    planning: ~w(todo ask),
+    delegation: ~w(task wait agent_message parent_question)
+  }
+
+  @coding_core_names @coding_core |> Map.values() |> List.flatten() |> Enum.sort()
 
   @max_limit 20
   @description_line_length 100
   @digest_name_length 80
 
+  @type profile :: :legacy | :coding
+
   @type config :: %{
           enabled: boolean(),
           budget_tokens: pos_integer(),
           catalog_tokens: pos_integer(),
-          max_results: pos_integer()
+          max_results: pos_integer(),
+          profile: profile(),
+          pinned: [String.t()]
         }
 
   @type catalog_tier :: :inactive | :inline_descriptions | :inline_names | :search_only
@@ -86,10 +133,14 @@ defmodule CodingAgent.ToolDisclosure do
   @type report :: %{
           active: boolean(),
           reason: :under_budget | :disabled | :custom_tools | :nothing_to_defer | nil,
+          profile: profile(),
+          catalog_digest: String.t() | nil,
           estimated_tokens: non_neg_integer(),
+          disclosed_tokens: non_neg_integer(),
           budget_tokens: pos_integer(),
           total_tools: non_neg_integer(),
           disclosed_count: non_neg_integer(),
+          disclosed_names: [String.t()],
           hidden_count: non_neg_integer(),
           hidden_names: [String.t()],
           catalog_tier: catalog_tier(),
@@ -119,6 +170,12 @@ defmodule CodingAgent.ToolDisclosure do
   """
   @spec bridge_names() :: [String.t()]
   def bridge_names, do: @bridge_names
+
+  @doc """
+  Tool names the `:coding` profile keeps disclosed (before `pinned`), sorted.
+  """
+  @spec coding_core() :: [String.t()]
+  def coding_core, do: @coding_core_names
 
   # ============================================================================
   # Configuration
@@ -187,6 +244,34 @@ defmodule CodingAgent.ToolDisclosure do
     |> sanitize_pos_integer(:budget_tokens)
     |> sanitize_pos_integer(:catalog_tokens)
     |> sanitize_pos_integer(:max_results)
+    |> sanitize_profile()
+    |> sanitize_pinned()
+  end
+
+  defp sanitize_profile(cfg) do
+    value = Map.get(cfg, :profile)
+
+    case Enum.find(@profiles, &(&1 == value or Atom.to_string(&1) == value)) do
+      nil ->
+        warn_sanitized(:profile, value)
+        Map.put(cfg, :profile, @defaults.profile)
+
+      profile ->
+        Map.put(cfg, :profile, profile)
+    end
+  end
+
+  # Sorted and de-duplicated so that two spellings of the same pin set produce
+  # the same config (and therefore the same catalog digest).
+  defp sanitize_pinned(cfg) do
+    value = Map.get(cfg, :pinned)
+
+    if is_list(value) and Enum.all?(value, &(is_binary(&1) or is_atom(&1))) do
+      Map.put(cfg, :pinned, value |> Enum.map(&to_string/1) |> Enum.uniq() |> Enum.sort())
+    else
+      warn_sanitized(:pinned, value)
+      Map.put(cfg, :pinned, @defaults.pinned)
+    end
   end
 
   defp sanitize_boolean(cfg, key) do
@@ -225,17 +310,21 @@ defmodule CodingAgent.ToolDisclosure do
   @doc """
   Report for a path that skipped disclosure entirely (today: sessions built
   from `custom_tools`, which are hand-assembled toolsets rather than a resolved
-  catalog).
+  catalog). `cfg` only supplies the configured profile and budget.
   """
-  @spec skipped_report(atom()) :: report()
-  def skipped_report(reason) do
+  @spec skipped_report(atom(), config()) :: report()
+  def skipped_report(reason, cfg \\ @defaults) do
     %{
       active: false,
       reason: reason,
+      profile: Map.get(cfg, :profile, @defaults.profile),
+      catalog_digest: nil,
       estimated_tokens: 0,
-      budget_tokens: @defaults.budget_tokens,
+      disclosed_tokens: 0,
+      budget_tokens: Map.get(cfg, :budget_tokens, @defaults.budget_tokens),
       total_tools: 0,
       disclosed_count: 0,
+      disclosed_names: [],
       hidden_count: 0,
       hidden_names: [],
       catalog_tier: :inactive,
@@ -250,50 +339,70 @@ defmodule CodingAgent.ToolDisclosure do
   policy-filtered and approval-wrapped) and `extra_tools` are the session's
   caller-supplied additions, which are always pinned.
 
-  Returns `%{tools: [AgentTool.t()], report: report()}`. When disclosure does
+  Options:
+
+    * `:authority` — the session's tool policy (or any term describing what the
+      session may run). It is folded into `catalog_digest`, so a policy change
+      yields a different catalog identity even when the visible schemas match.
+
+  Returns `%{tools: [AgentTool.t()], catalog: catalog(), report: report()}`.
+  `catalog` is the frozen, wrapped runtime inventory shared by disclosure and
+  WASM host resolution; it is not a second registry lookup. When disclosure does
   not activate, `tools` is `registry tools ++ extra_tools` — the exact list the
   caller would have built without this module.
   """
-  @spec apply([ToolRegistry.tool_tuple()], [AgentTool.t()], config()) :: %{
+  @spec apply([ToolRegistry.tool_tuple()], [AgentTool.t()], config(), keyword()) :: %{
           tools: [AgentTool.t()],
+          catalog: catalog(),
           report: report()
         }
-  def apply(tool_tuples, extra_tools, cfg) do
+  def apply(tool_tuples, extra_tools, cfg, opts \\ []) do
     tool_tuples = List.wrap(tool_tuples)
     extra_tools = List.wrap(extra_tools)
     cfg = sanitize(Map.merge(@defaults, Map.new(cfg)))
+    authority = Keyword.get(opts, :authority)
 
     all_tools = Enum.map(tool_tuples, fn {_name, tool, _source} -> tool end) ++ extra_tools
     estimated = Enum.reduce(all_tools, 0, fn tool, acc -> acc + estimate_tool_tokens(tool) end)
 
     cond do
       not cfg.enabled ->
-        passthrough(all_tools, :disabled, estimated, cfg)
+        passthrough(tool_tuples, extra_tools, :disabled, estimated, cfg, authority)
 
-      estimated <= cfg.budget_tokens ->
-        passthrough(all_tools, :under_budget, estimated, cfg)
+      # The coding profile is an explicit opt-in to deferral, so the budget
+      # (the legacy profile's only trigger) does not gate it.
+      cfg.profile == :legacy and estimated <= cfg.budget_tokens ->
+        passthrough(tool_tuples, extra_tools, :under_budget, estimated, cfg, authority)
 
-      not Enum.any?(tool_tuples, &hideable?/1) ->
-        # Over budget, but everything in the catalog is pinned. Appending two
-        # bridge tools over an empty hidden set would only make the prompt
-        # bigger and advertise a search that can never return anything.
-        passthrough(all_tools, :nothing_to_defer, estimated, cfg)
+      not Enum.any?(tool_tuples, &deferrable?(&1, cfg)) ->
+        # Everything in the catalog is pinned. Appending two bridge tools over
+        # an empty hidden set would only make the prompt bigger and advertise a
+        # search that can never return anything.
+        passthrough(tool_tuples, extra_tools, :nothing_to_defer, estimated, cfg, authority)
 
       true ->
-        activate(tool_tuples, extra_tools, estimated, cfg)
+        activate(tool_tuples, extra_tools, estimated, cfg, authority)
     end
   end
 
-  defp passthrough(all_tools, reason, estimated, cfg) do
+  defp passthrough(tool_tuples, extra_tools, reason, estimated, cfg, authority) do
+    exposed = tool_tuples ++ Enum.map(extra_tools, &{&1.name, &1, :extra})
+    tools = Enum.map(exposed, fn {_name, tool, _source} -> tool end)
+
     %{
-      tools: all_tools,
+      tools: tools,
+      catalog: build_catalog(tool_tuples, [], extra_tools),
       report: %{
         active: false,
         reason: reason,
+        profile: cfg.profile,
+        catalog_digest: catalog_identity(cfg.profile, exposed, [], authority),
         estimated_tokens: estimated,
+        disclosed_tokens: estimated,
         budget_tokens: cfg.budget_tokens,
-        total_tools: length(all_tools),
-        disclosed_count: length(all_tools),
+        total_tools: length(tools),
+        disclosed_count: length(tools),
+        disclosed_names: Enum.map(tools, & &1.name),
         hidden_count: 0,
         hidden_names: [],
         catalog_tier: :inactive,
@@ -302,7 +411,7 @@ defmodule CodingAgent.ToolDisclosure do
     }
   end
 
-  defp activate(tool_tuples, extra_tools, estimated, cfg) do
+  defp activate(tool_tuples, extra_tools, estimated, cfg, authority) do
     {shadowing, real_tuples} =
       Enum.split_with(tool_tuples, fn {name, _tool, _source} -> name in @bridge_names end)
 
@@ -321,7 +430,7 @@ defmodule CodingAgent.ToolDisclosure do
       )
     end)
 
-    {hideable, pinned} = Enum.split_with(real_tuples, &hideable?/1)
+    {hideable, pinned} = Enum.split_with(real_tuples, &deferrable?(&1, cfg))
 
     catalog =
       build_catalog(pinned, hideable, real_extras)
@@ -329,23 +438,31 @@ defmodule CodingAgent.ToolDisclosure do
     hidden_names = hideable |> Enum.map(fn {name, _t, _s} -> name end) |> Enum.sort()
 
     {search_tool, tier} = build_tool_search(catalog, hidden_names, cfg)
+    invoke_tool = build_tool_invoke(catalog)
 
-    tools =
-      Enum.map(pinned, fn {_name, tool, _source} -> tool end) ++
-        real_extras ++
-        [search_tool, build_tool_invoke(catalog)]
+    exposed =
+      pinned ++
+        Enum.map(real_extras, &{&1.name, &1, :extra}) ++
+        [{search_tool.name, search_tool, :bridge}, {invoke_tool.name, invoke_tool, :bridge}]
 
+    tools = Enum.map(exposed, fn {_name, tool, _source} -> tool end)
     disclosed_count = length(pinned) + length(real_extras)
 
     %{
       tools: tools,
+      catalog: catalog,
       report: %{
         active: true,
         reason: nil,
+        profile: cfg.profile,
+        catalog_digest: catalog_identity(cfg.profile, exposed, hideable, authority),
         estimated_tokens: estimated,
+        disclosed_tokens:
+          Enum.reduce(tools, 0, fn tool, acc -> acc + estimate_tool_tokens(tool) end),
         budget_tokens: cfg.budget_tokens,
         total_tools: disclosed_count + length(hideable),
         disclosed_count: disclosed_count,
+        disclosed_names: Enum.map(tools, & &1.name),
         hidden_count: length(hideable),
         hidden_names: hidden_names,
         catalog_tier: tier,
@@ -354,14 +471,46 @@ defmodule CodingAgent.ToolDisclosure do
     }
   end
 
-  # Builtins (including satellite tools merged in by the registry) are platform
-  # tools the agent reaches for constantly -- they stay disclosed. The long tail
-  # that arrives from MCP servers, extensions and WASM modules is what disclosure
-  # exists to defer.
-  defp hideable?({_name, _tool, {:mcp, _}}), do: true
-  defp hideable?({_name, _tool, {:extension, _}}), do: true
-  defp hideable?({_name, _tool, {:wasm, _}}), do: true
-  defp hideable?(_), do: false
+  # A pin always wins. Otherwise the profile decides: the legacy profile keeps
+  # every built-in (satellite tools merged in by the registry included)
+  # disclosed and defers only the long tail that arrives from MCP servers,
+  # extensions and WASM modules; the coding profile classifies by capability and
+  # defers whatever is outside the coding core, whatever its origin.
+  defp deferrable?({name, _tool, source}, %{profile: profile, pinned: pinned}) do
+    name not in pinned and profile_defers?(profile, name, source)
+  end
+
+  defp profile_defers?(:coding, name, _source), do: name not in @coding_core_names
+  defp profile_defers?(:legacy, _name, {:mcp, _}), do: true
+  defp profile_defers?(:legacy, _name, {:extension, _}), do: true
+  defp profile_defers?(:legacy, _name, {:wasm, _}), do: true
+  defp profile_defers?(:legacy, _name, _source), do: false
+
+  # Identity of what the session can see and call: every exposed tool in wire
+  # order, every deferred tool by name, their sources (which carry MCP approval
+  # modes and WASM metadata) and the session's authority. Hashed, so the digest
+  # can be logged and compared without leaking schemas, descriptions or policy.
+  defp catalog_identity(profile, exposed, hidden, authority) do
+    term = {
+      :lemon_tool_disclosure_v1,
+      profile,
+      Enum.map(exposed, &identity_entry/1),
+      hidden |> Enum.map(&identity_entry/1) |> Enum.sort(),
+      authority
+    }
+
+    :sha256
+    |> :crypto.hash(:erlang.term_to_binary(term, [:deterministic]))
+    |> Base.encode16(case: :lower)
+  end
+
+  defp identity_entry({name, %AgentTool{} = tool, source}) do
+    {name, tool.description, tool.parameters, tool.parallel_safe, source}
+  end
+
+  @doc false
+  @spec catalog_for_tools([AgentTool.t()]) :: catalog()
+  def catalog_for_tools(tools), do: build_catalog([], [], tools)
 
   defp build_catalog(pinned, hideable, extras) do
     entries =
@@ -523,14 +672,29 @@ defmodule CodingAgent.ToolDisclosure do
     if AbortSignal.aborted?(signal) do
       {:error, "Operation aborted"}
     else
-      case normalize_query(params) do
-        {:ok, query} ->
-          limit = normalize_limit(Map.get(params, "limit"), cfg.max_results)
-          run_search(query, limit, catalog, hidden_count)
+      result =
+        case normalize_query(params) do
+          {:ok, query} ->
+            limit = normalize_limit(Map.get(params, "limit"), cfg.max_results)
+            run_search(query, limit, catalog, hidden_count)
 
-        :error ->
-          {:error, "Missing required parameter: query"}
-      end
+          :error ->
+            {:error, "Missing required parameter: query"}
+        end
+
+      matched_count =
+        case result do
+          %AgentToolResult{details: %{matched: matched}} -> length(matched)
+          _ -> 0
+        end
+
+      LemonCore.Telemetry.emit(
+        [:coding_agent, :tool_disclosure, :search],
+        %{matched_count: matched_count},
+        %{status: if(match?({:error, _}, result), do: :error, else: :ok)}
+      )
+
+      result
     end
   end
 
@@ -721,16 +885,32 @@ defmodule CodingAgent.ToolDisclosure do
       with {:ok, name} <- invoke_name(params),
            {:ok, args} <- invoke_args(params),
            :ok <- reject_bridge(name),
-           {:ok, entry} <- lookup(catalog, name) do
+           {:lookup, {:ok, entry}} <- {:lookup, lookup(catalog, name)} do
         case validate_args(args, entry.tool.parameters) do
           :ok ->
             run_tool(name, entry, tool_call_id, args, signal, on_update)
 
           {:error, problems} ->
-            invalid_args_error(name, entry.tool.parameters, problems)
+            rejected_invoke(
+              :invalid_arguments,
+              invalid_args_error(name, entry.tool.parameters, problems)
+            )
         end
+      else
+        {:lookup, {:error, _} = error} -> rejected_invoke(:unknown_tool, error)
+        {:error, _} = error -> rejected_invoke(:invalid_request, error)
       end
     end
+  end
+
+  defp rejected_invoke(reason, result) do
+    LemonCore.Telemetry.emit(
+      [:coding_agent, :tool_disclosure, :invoke_rejected],
+      %{count: 1},
+      %{reason: reason}
+    )
+
+    result
   end
 
   defp invoke_name(params) when is_map(params) do
@@ -804,13 +984,42 @@ defmodule CodingAgent.ToolDisclosure do
        Enum.join(problems, "\n- ") <> "\n\nSchema:\n" <> schema_text}
   end
 
+  # The agent loop only sees `tool_invoke`; this event names the tool that
+  # actually ran so per-tool telemetry stays attributable through the bridge.
   defp run_tool(name, entry, tool_call_id, args, signal, on_update) do
+    started_at = System.monotonic_time(:microsecond)
+    result = execute_contained(name, entry, tool_call_id, args, signal, on_update)
+
+    LemonCore.Telemetry.emit(
+      [:coding_agent, :tool_disclosure, :invoke],
+      %{duration_us: System.monotonic_time(:microsecond) - started_at},
+      %{
+        tool_name: name,
+        tool_call_id: tool_call_id,
+        source: source_kind(entry.source),
+        hidden: entry.hidden,
+        status:
+          if(match?({:error, _}, result) or match?(%AgentToolResult{is_error: true}, result),
+            do: :error,
+            else: :ok
+          )
+      }
+    )
+
+    result
+  end
+
+  defp execute_contained(name, entry, tool_call_id, args, signal, on_update) do
     entry.tool.execute.(tool_call_id, args, signal, on_update)
   rescue
     error -> {:error, "Tool '#{name}' crashed: " <> Exception.message(error)}
   catch
     kind, reason -> {:error, "Tool '#{name}' crashed: " <> inspect({kind, reason})}
   end
+
+  defp source_kind({kind, _meta}) when kind in [:mcp, :extension, :wasm], do: kind
+  defp source_kind(source) when is_atom(source), do: source
+  defp source_kind(_source), do: :unknown
 
   # ============================================================================
   # Argument validation

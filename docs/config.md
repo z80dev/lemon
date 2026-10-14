@@ -61,6 +61,11 @@ enabled = true
 max_retries = 3
 base_delay_ms = 1000
 
+[runtime.secret_obfuscation]
+# Opt-in. Replaces secrets in provider-visible session text with placeholders
+# and restores them in tool arguments; see security/secret-obfuscation.md.
+enabled = false
+
 [runtime]
 # Explicitly trusted extension directories. Files here can be compiled and executed.
 extension_paths = []
@@ -292,6 +297,34 @@ provider stream options are resolved for that selected model together, including
 background compaction, without changing the main session's model. Explicit
 summary credential/stream-option overrides are retained.
 
+### Native Task Subagents (`[runtime.task]`)
+
+`[runtime.task]` tunes the native `task` tool. Like other sections it layers
+global → project; every key is optional:
+
+```toml
+[runtime.task]
+max_depth = 2              # -1 unlimited; 0 = the main session cannot delegate
+max_runtime_ms = 0         # per-child wall-clock limit; 0 disables it
+worktree_merge = "none"    # default merge for worktree: true tasks: none | patch | branch
+disabled_agents = ["sonic"]
+
+[runtime.task.agent_models]
+reviewer = "@slow"         # model or @role per persona ID
+```
+
+- `max_depth`: nesting limit. The main session is depth 0 and each child is one
+  deeper; a session may delegate only while its depth is below `max_depth`, and
+  children created at the cap never receive the `task` tool.
+- `max_runtime_ms`: wall-clock limit for each child session; the child fails
+  with a timeout error when it is exceeded.
+- `worktree_merge`: what a successful `worktree: true` child does when the call
+  omits `merge`: `none` keeps the worktree, `patch` applies the child's changes
+  to the parent checkout, `branch` commits them to a kept review branch.
+- `disabled_agents`: persona IDs hidden from the tool's agent list and refused
+  at launch.
+- `agent_models`: per-persona model or `@role` that replaces the persona's own
+  `model`/`role`; an explicit task `model` still wins.
 
 ### Named Execution Nodes
 
@@ -369,8 +402,32 @@ Remove these legacy keys and tables from global and project configuration:
 | `[runtime.cli.<vendor>]` | Remove the entire table. Vendor CLI task runners were removed; delegated tasks run as native in-process subagents. Config validation rejects `[runtime.cli]`. |
 
 There is no TOML replacement for selecting a top-level external or custom
-engine, and no TOML knob for delegated subagents beyond the native `task` tool's
-own parameters.
+engine. Delegated subagents always run natively; `[runtime.task]` (above) only
+tunes depth, runtime, merge-back and persona availability/models.
+
+## External MCP Configuration
+
+Lemon imports project MCP definitions from supported coding-tool configs;
+Lemon's own `.lemon/mcp.json` entries take precedence. Other tools' user-global
+configs require `LEMON_MCP_EXTERNAL_USER_DISCOVERY=1` (the omp user config is
+read by default, and `CLAUDE_CONFIG_DIR` opts in Claude user files).
+Disabled entries still claim their names; importing configuration does not
+launch an MCP server. See [MCP management](skills.md#manage-named-mcp-servers).
+
+OpenCode `opencode.json` and `opencode.jsonc` files accept comments and trailing
+commas. After JSONC decoding, Lemon substitutes `{env:NAME}` and `{file:path}`
+once within string **values**, including command arguments, environment
+values, URLs and headers; object keys are not interpolated. Environment
+values retain their exact bytes, including quotes, backslashes, newlines and
+leading/trailing whitespace. An unset environment variable substitutes an
+empty string.
+
+File placeholders resolve relative to the containing config file, accept
+absolute paths, and resolve `~/` against the discovery home when one is
+available. File contents are trimmed of leading/trailing whitespace; a missing
+or unreadable file (or `~/` without a discovery home) substitutes an empty
+string. Neither inserted environment values nor inserted file contents are
+interpreted again as JSON, interpolation directives or file imports.
 
 ## Environment Overrides
 
@@ -397,7 +454,8 @@ browser-session exchange needed to authenticate that client safely. Never
 place the shared server token in `VITE_*` configuration.
 - `LEMON_PROVIDER_ROUTING_ENABLED`, `LEMON_PROVIDER_FALLBACK_PROVIDERS`, `LEMON_PROVIDER_ROUTING_REQUIRE_CREDENTIALS`
 - `LEMON_THEME`, `LEMON_DEBUG`
-- `<PROVIDER>_API_KEY`, `<PROVIDER>_BASE_URL` (e.g., `ANTHROPIC_API_KEY`, `OPENAI_BASE_URL`, `OPENCODE_API_KEY`, `ZAI_API_KEY`, `MINIMAX_API_KEY`)
+- `LEMON_SECRET_OBFUSCATION_ENABLED` — overrides `[runtime.secret_obfuscation] enabled`
+- `<PROVIDER>_API_KEY`, `<PROVIDER>_BASE_URL` (e.g., `ANTHROPIC_API_KEY`, `OPENAI_BASE_URL`, `OPENCODE_API_KEY`, `ZAI_API_KEY`, `MINIMAX_API_KEY`); local servers use `OLLAMA_BASE_URL`/`OLLAMA_HOST`, `LM_STUDIO_BASE_URL`, `LLAMA_CPP_BASE_URL` and `LITELLM_BASE_URL` only when config sets no `base_url` (see [OpenAI-Compatible Endpoints](#openai-compatible-endpoints))
 - `LEMON_CODEX_EXTRA_ARGS`, `LEMON_CODEX_AUTO_APPROVE`
 - `LEMON_CLAUDE_YOLO`
 - `LEMON_WASM_ENABLED`, `LEMON_WASM_RUNTIME_PATH`, `LEMON_WASM_TOOL_PATHS`, `LEMON_WASM_AUTO_BUILD`
@@ -416,6 +474,107 @@ Docker limits, invalid Docker image/network names, invalid SSH ports, invalid
 SSH connect timeouts, and unsupported strict-host-key values fail closed at the
 policy boundary instead of reaching Docker or OpenSSH.
 
+Background `exec` launches fail closed when admission is unavailable: there is
+no direct-execution fallback, including `exec_sync` or internal callers passing
+`use_lane_queue: false`. Each logical launch has a fixed identity, bound to its
+session owner and a validated request fingerprint. Reusing that identity with
+the same request reconciles the original receipt; changing the request or owner
+is a conflict. Intentionally running the same command twice creates two identities.
+Accepted receipts track the existing process. A missing reply or lost process
+owner can produce `outcome_unknown`, which is not a rejection and must not trigger
+automatic replay. Inspect/reconcile the fixed identity; any recovery that repeats
+external effects must be explicitly requested. Receipt projections exclude
+commands, environment values, and exception details. Clearing completed output
+retains a small redacted identity tombstone so clearing logs cannot authorize a
+duplicate launch.
+
+### Background process admission
+
+Background process admission limits are umbrella application configuration,
+not TOML or agent-controlled tool inputs:
+
+```elixir
+config :coding_agent,
+  background_process_limit: 8,
+  background_pending_limit: 32,
+  background_admission_timeout_ms: 5_000,
+  background_admission_wait_ms: 1_000
+```
+
+The process limit holds capacity for the managed command's live lifetime, not
+just the launch callback. `lane_caps.background_exec` remains a separate launch
+concurrency cap; main/subagent lanes retain their existing callback semantics.
+The pending limit bounds waiting admissions per LaneQueue; the acceptance ledger
+also bounds in-flight registrations. Process/pending limits are integers up to
+1,000,000 (process minimum 1, pending minimum 0). Admission deadline/wait values
+must be integers from 1 to 86,400,000 milliseconds. Invalid settings fail
+explicitly at startup, without echoing the invalid value.
+
+The caller wait budget yields `{:queued, identity}` independently of execution
+lifetime. Queued cancellation, deadline expiry, or abandonment prevents later
+start. An explicitly supplied `owner_pid` keeps a deliberately yielded queued
+launch owned after the submitting tool task returns; losing that owner cancels
+pending work. Accepted work outlives its transient submitting caller, but is
+signaled when its supplied owner exits. Without `owner_pid`, accepted work
+deliberately continues until completion, explicit cancellation, or its separately
+requested execution timeout. Use foreground commands with background execution,
+not shell daemonization, for an inspectable managed lifetime.
+
+Cancellation is a request: `:killing` does not free capacity. On local Unix
+launches, the runtime binds and persists an isolated process-group identity
+before permitting the command to execute. A root shell's Port exit is not a
+workload-termination witness: surviving descendants keep an `outcome_unknown`
+receipt and the lifetime slot. The owning session reconciles actual group
+membership and releases once only after no live members remain. It retains the
+group through root exit so later cancellation can target verified descendants,
+never a recycled positive root PID. Lost ownership or failed observation remains
+unknown and charged, not a license to signal an unverified group.
+Before forwarding stdin that may end the root, the runtime durably retains live
+members observed under the root's matching identity. After root exit, verified
+cancellation requires a surviving previously bound member with matching birth
+identity. If the root and all previously bound members disappear before another
+member can be bound, the numeric PGID alone is insufficient proof: cancellation
+remains unknown and charged, requiring independently verified recovery.
+
+A host process group cannot prove termination of remote SSH/container work,
+PTY work in a separate session, or Windows job descendants; wrapper exits in
+these cases conservatively remain unknown and charged. Repeating cancellation
+after the host wrapper disappears still requires the backend-aware full-workload
+witness; an empty host group cannot confirm remote or separately contained work.
+A lost BEAM process owner also retains its persisted identity and capacity. Nothing is automatically
+relaunched. Queue/store restart reconciles surviving registered processes before
+admission.
+The internal operator API `ProcessManager.confirm_external_termination(id, owner)`
+may release unknown capacity only after independently verifying termination of
+the entire owned workload, not merely the root shell; it is an assertion, not a
+liveness probe or agent tool, and refuses a launch still starting. The original
+uncertain receipt remains uncertain.
+
+`ProcessManager.admission_counts/0` exposes bounded active, queued, rejected,
+expired, canceled, unknown, and occupied counts, with no commands or secrets.
+Unknown historical outcomes are distinct from currently occupied capacity.
+Receipt/count lookup failures report unavailability, never an empty/idle state.
+Synchronous completion-wait expiry retains the fixed identity as
+`{:error, {:outcome_unknown, identity}}`; reconcile instead of rerunning.
+Direct `ProcessSession.start_link` is an internal/test primitive, not an agent
+admission bypass. This contract prevents duplicate managed starts for an identity;
+it does not claim exactly-once external side effects.
+
+Unknown Bash launch receipts are tool errors with retained `process_id`,
+`status: "unknown"` and `classification: "outcome_unknown"`, not failed-start
+receipts. Startup rejections preserve their actual pre-execution failure reason.
+Every durable load, including late permission recovery or reopening, restores
+capacity and live owner monitors before permitting a new admission.
+
+Cleared identity tombstones and historical unknown receipts do not expire.
+The default finished-process TTL (86,400 seconds) and cleanup interval
+(300 seconds) do not bound ledger rows; recovery, count and artifact scans grow
+with that history. Observable retained local workloads reconcile after 100 ms
+plus scan cost using a system-wide `ps` snapshot. Ownership-lost and nonlocal
+unknown workloads do not schedule this polling. These are local containment
+contracts, not proof of remote workload termination.
+
+
 The Bun TUI uses the runtime's model and thinking defaults from `[defaults]`.
 The `[tui]` section controls terminal presentation settings loaded at startup.
 
@@ -423,6 +582,85 @@ Async followup queue defaults for background `task` completions and delegated `a
 completions are currently umbrella app config, not TOML. The default lives in
 `config/config.exs` as `config :coding_agent, :async_followups, default_queue_mode: :steer_backlog`.
 Per-call tool inputs still override it: `task.queue_mode` and `agent.followup_queue_mode`.
+
+### Background process output capture
+
+Background `bash` capture limits are umbrella application configuration, not
+TOML or environment overrides:
+
+```elixir
+config :coding_agent, :process_output,
+  max_retained_bytes: 1_048_576,
+  max_artifact_bytes: 16_777_216,
+  max_owner_artifact_bytes: 134_217_728,
+  max_runtime_artifact_bytes: 536_870_912
+```
+
+`ProcessManager.exec/1` and `ProcessSession.start_link/1` accept the same
+per-call options, which override application defaults. Every byte limit must
+be a positive integer; invalid limits refuse launch before opening an output
+file or running the command. `max_log_lines` remains an additional positive
+line-count bound (default 1,000).
+
+Capture is bounded, not backpressure or cancellation. The process continues
+running when capture fills; its status and external effects are unchanged.
+The private 0600 artifact keeps the **head** of output, at most the capacity
+reserved before launch. The in-memory diagnostic buffer keeps the **tail**,
+at most `max_retained_bytes` including held partial lines and consumed
+newlines. Lines longer than `min(65_536, max(max_retained_bytes - 1, 1))`
+bytes are emitted as segments. A one-byte budget charges a segment and its
+newline separately. Old lines are evicted before adding bounded copied bytes.
+The process/store's retained binary payload is at most twice the per-process
+memory budget; stored logs mirror the process tail, not an independent ring.
+Parsing scans bounded windows without concatenating or splitting an entire
+incoming chunk. Additional live binary scratch is at most two line segments.
+This is a reachable-output-payload bound, not a bound on BEAM heap/GC overhead:
+the received port message, polling result copies, transport buffers and
+subscriber/mailbox accumulation remain outside it (subscriber fanout is #88).
+
+`poll`, `read_output`, and `bash_output` expose structured `output` counters:
+`received_bytes`, `retained_bytes`, `discarded_bytes`, `artifact_bytes`,
+`artifact_capacity`, `artifact_discarded_bytes`, `artifact_truncated`,
+`artifact_error`, `artifact_size_unknown`, `artifact_reclaimed`, and
+`finalized`. Retained-byte costs include newlines even though displayed lines
+omit them. `received_bytes = retained_bytes + discarded_bytes`; for a known
+artifact size, `received_bytes = artifact_bytes + artifact_discarded_bytes`.
+Filling an artifact exactly is not truncation until another byte is received.
+An incomplete artifact is labelled **Partial output**, never full output.
+
+Reservations are serialized by the existing process store. Live captures
+charge their full reserved capacity, so concurrent sessions cannot overfill
+the owner/runtime budgets. Finalization returns unused capacity, charging
+the bytes actually saved. When admitting another capture, the store reclaims
+stopped sessions' artifacts oldest first within the owner, then runtime-wide
+if needed. Live sessions' files are not reclaimed; if their reservations
+consume a budget, the new capture receives a smaller capacity, possibly zero.
+Ownerless sessions share one owner budget, and all owners share the runtime
+budget. Reclamation preserves log/status records, clears the file reference
+and sets `artifact_reclaimed`; old artifact handles stop resolving. Owner
+authorization is unchanged. Pre-quota persisted artifacts also count.
+
+All record mutations and deletion share the reservation owner's serialization,
+so concurrent cursor/status updates cannot restore a reclaimed path or erase a
+reservation. A store-only restart preserves surviving registered captures.
+New capture reservations must be persisted and synced before launch; unavailable
+accounting storage or an unmeasurable legacy artifact fails admission instead of
+treating unknown disk usage as zero. Existing captures keep their charged
+reservation if later persistence fails.
+
+A write failure closes the output device once, preserves the bounded tail
+and real execution status, and exposes only a fixed error classification.
+The closed file is checked for a partially written prefix so counters remain
+truthful. If its size cannot be checked, `artifact_size_unknown` is true,
+`artifact_discarded_bytes` is `nil`, and the full reservation remains charged.
+Failed file removal preserves its record/reference and storage charge;
+successful explicit cleanup/TTL cleanup releases them. TTL cleanup may remove
+an expired completed capture while its finalized session still lingers for
+final polling: its output device is already closed. A live capture that is not
+finalized remains charged even if cancellation/timeout has classified its
+record as terminal. No repeated writes are attempted after failure or after
+the capture limit is reached.
+
 
 ## Memory
 
@@ -674,41 +912,168 @@ What it does:
 
 The onboarding flow opens the OpenAI auth URL directly and stores the returned OAuth credentials in Lemon secrets.
 
+On a headless machine, or when port 1455 is busy, use the device-code sign-in
+instead: `lemon model openai-codex --auth device` prints
+`https://auth.openai.com/codex/device` and a one-time code, waits for you to
+approve it on any device, and stores the same refreshable login (it also works
+with `--non-interactive`).
+
 To force a token explicitly, set:
 - `OPENAI_CODEX_API_KEY` (preferred)
 - `CHATGPT_TOKEN` (fallback)
 
 ## OpenAI-Compatible Endpoints
 
-For local or hosted services that expose an OpenAI-compatible API, configure the
-normal `openai` provider with a custom `base_url`:
+Lemon ships built-in presets for local inference servers and hosted open-model
+APIs that speak the OpenAI Chat Completions protocol. A preset provider accepts
+any model ID (`ollama:qwen3:32b`, `lm_studio:qwen2.5-coder-7b`, ...); model IDs
+may contain `:`. Model specs accept the underscore or dashed id (`lm-studio:...`);
+`[providers.<id>]` tables also accept omp spellings such as `llama.cpp` and
+`ollama-cloud`.
+
+### Local servers (no API key needed)
+
+| Provider | Default `base_url` | Base-URL env | Optional key env |
+| --- | --- | --- | --- |
+| `ollama` | `http://127.0.0.1:11434/v1` | `OLLAMA_BASE_URL`, `OLLAMA_HOST` | `OLLAMA_API_KEY` |
+| `lm_studio` | `http://127.0.0.1:1234/v1` | `LM_STUDIO_BASE_URL` | `LM_STUDIO_API_KEY` |
+| `llama_cpp` | `http://127.0.0.1:8080/v1` | `LLAMA_CPP_BASE_URL` | `LLAMA_CPP_API_KEY` |
+| `vllm` | `http://127.0.0.1:8000/v1` | — | `VLLM_API_KEY` |
+| `litellm` | `http://localhost:4000/v1` | `LITELLM_BASE_URL` | `LITELLM_API_KEY` |
+
+Requests go out without an `Authorization` header unless a key resolves (env
+variable, `api_key`/`api_key_secret`, or the default secret `llm_<id>_api_key`).
+`base_url` in config wins over the base-URL environment variables; environment
+values are normalized to a `/v1` root (`OLLAMA_HOST=gpu-box` becomes
+`http://gpu-box:11434/v1`). A `base_url` written in config must include the
+OpenAI-compatible root (usually `/v1`).
 
 ```toml
-[providers.openai]
-api_key_secret = "llm_local_openai_api_key"
-base_url = "http://127.0.0.1:11434/v1"
+[providers.ollama]
+base_url = "http://gpu-box:11434/v1"
 
 [defaults]
-provider = "openai"
-model = "openai:local-model-name"
+provider = "ollama"
+model = "ollama:qwen3:32b"
 ```
 
-Then store the endpoint key:
+### Hosted presets (API key required)
 
-```bash
-# Installed release / source checkout
-lemon secrets set llm_local_openai_api_key "local"
-./bin/lemon secrets set llm_local_openai_api_key "local"
+| Provider | `base_url` | Key env |
+| --- | --- | --- |
+| `ollama_cloud` | `https://ollama.com/v1` | `OLLAMA_CLOUD_API_KEY` |
+| `together` | `https://api.together.xyz/v1` | `TOGETHER_API_KEY` |
+| `deepinfra` | `https://api.deepinfra.com/v1/openai` | `DEEPINFRA_API_KEY` |
+| `nvidia` | `https://integrate.api.nvidia.com/v1` | `NVIDIA_API_KEY` |
+| `novita` | `https://api.novita.ai/openai/v1` | `NOVITA_API_KEY` |
+| `baseten` | `https://inference.baseten.co/v1` | `BASETEN_API_KEY` |
+| `venice` | `https://api.venice.ai/api/v1` | `VENICE_API_KEY` |
+| `synthetic` | `https://api.synthetic.new/openai/v1` | `SYNTHETIC_API_KEY` |
+| `nanogpt` | `https://nano-gpt.com/api/v1` | `NANO_GPT_API_KEY` |
+| `zenmux` | `https://zenmux.ai/api/v1` | `ZENMUX_API_KEY` |
+| `aimlapi` | `https://api.aimlapi.com/v1` | `AIMLAPI_API_KEY` |
+| `siliconflow` | `https://api.siliconflow.com/v1` | `SILICONFLOW_API_KEY` |
+| `siliconflow_cn` | `https://api.siliconflow.cn/v1` | `SILICONFLOW_CN_API_KEY` |
+| `gmi_cloud` | `https://api.gmi-serving.com/v1` | `GMI_API_KEY` |
+| `qianfan` | `https://qianfan.baidubce.com/v2` | `QIANFAN_API_KEY` |
+| `aiand` | `https://api.aiand.com/v1` | `AIAND_API_KEY` |
+| `wafer_serverless` | `https://pass.wafer.ai/v1` | `WAFER_SERVERLESS_API_KEY` |
+| `kilo` | `https://api.kilo.ai/api/gateway` | `KILO_API_KEY` |
 
-# Contributor-level Mix alternative
-mix lemon.secrets.set llm_local_openai_api_key "local"
+Store a key with `lemon secrets set llm_<provider>_api_key <key>` or reference
+one with `[providers.<provider>].api_key_secret`. Lemon never sends
+`OPENAI_API_KEY` to a non-OpenAI provider.
+
+### Model discovery
+
+Preset models carry conservative defaults (128k context, 16k output; Ollama
+8k output) until discovered. `lemon models --provider <preset> --discover`
+lists what an endpoint serves (`GET /models`; Ollama uses `/api/tags` and
+`/api/show` for context length), using `--base-url`, the base-URL environment
+variable, or the default, and the provider's key environment variable when set.
+This low-level CLI discovery does not read `[providers]` overrides or encrypted
+credentials; use the picker for config-aware discovery, or pass `--base-url`
+and the preset's environment key explicitly.
+The TUI `/model` picker (daemon `models.list`) includes discovered models for
+hosted presets with a credential and for local servers that are configured in
+`[providers.<id>]` or through their base-URL environment variable; listings are
+cached for five minutes and an unreachable server contributes no models.
+Discovery caches are scoped to the endpoint, wire API, credential, headers and
+model defaults; one account's listing is not reused for another account or
+endpoint. Cache identifiers hash auth material. Registry-only preset lookup
+uses the current default endpoint and environment credential, while the picker
+uses its effective provider config. Discovery refuses redirects and URLs with
+embedded credentials, queries or fragments; use `headers` for endpoint auth.
+
+Any other OpenAI-compatible endpoint can still use the `openai` provider with a
+custom `base_url`. Hosted provider ids with bundled catalogs (`opencode`,
+`openrouter`, `zai`, `minimax`, `kimi`, `xai`, `mistral`, `groq`, `deepseek`,
+`qwen`, ...) take the same `[providers.<id>]` table with `api_key_secret` and
+optional `base_url`.
+
+## Custom Providers and Models
+
+A `[providers.<id>]` table whose id is not a built-in provider defines a custom
+endpoint (the equivalent of omp's `models.yml` providers). Its models are
+selected as `<id>:<model>` or `<id>/<model>` in `default_model`, `/model`,
+`model_roles`, task/compaction selectors and `provider_routing.fallback_providers`,
+and they appear in the TUI `/model` picker once the provider has a credential.
+
+```toml
+[providers.my-gateway]
+api = "openai_completions"        # openai_completions | openai_responses |
+                                  # anthropic_messages | google_generative_ai
+                                  # (omp dashed spellings are accepted too)
+base_url = "https://llm.internal/v1"
+api_key_env = "MY_GATEWAY_KEY"     # or api_key_secret / api_key
+# auth = "none"                    # keyless endpoint: no Authorization header
+headers = { "X-Team" = "platform" }
+# discovery = "openai"             # list models from {base_url}/models ("ollama": /api/tags)
+
+[[providers.my-gateway.models]]
+id = "qwen3-coder"
+name = "Qwen3 Coder"               # default: id
+context_window = 131072            # default: 128000
+max_tokens = 16384                 # default: 16384
+reasoning = false                  # default: false
+input = ["text"]                   # "text" and/or "image"; default ["text"]
+# cost = { input = 0.5, output = 1.5, cache_read = 0, cache_write = 0 }  # USD per 1M tokens
+# headers = { "X-Model" = "qwen" } # override provider headers per model
 ```
 
-The same provider config shape also works for hosted OpenAI-compatible provider
-ids handled by Lemon, including `opencode`, `openrouter`, `zai`, `minimax`,
-`kimi`, `xai`, `mistral`, `groq`, `deepseek`, `qwen`, and related compatible
-providers. Each provider gets its own `[providers.<id>]` table with
-`api_key_secret` and optional `base_url`.
+- Credentials resolve from `api_key_env`, then `api_key`, then
+  `api_key_secret`; a custom provider never receives another provider's key
+  (no `OPENAI_API_KEY` fallback). With `auth = "none"` the provider is ready
+  without a key. OpenAI-, Anthropic- and Google-compatible requests omit their
+  generated credential header when no key resolves; configured headers still
+  apply. Google-compatible endpoints use their own provider's options, not
+  the built-in Google account's key or URL.
+- Header names are case-insensitive. Requests apply provider `headers` as
+  defaults, then per-model `headers`, then explicitly supplied caller stream
+  headers. For example, provider `X-Tenant = "A"` and model `x-tenant = "B"`
+  send one `x-tenant: B`; a caller's `X-TENANT = "C"` sends one `x-tenant: C`.
+  This precedence applies to all four supported compatible wire APIs.
+  Provider-required protocol rules still apply (for example, custom Anthropic
+  beta tokens extend rather than remove the required beta tokens).
+- `api` and `base_url` are required. A provider with `discovery` or without a
+  `models` list accepts any model id (unlisted ids use the defaults above);
+  `discovery` also lists the endpoint's models in the picker, cached by the
+  shared model cache. Use `discovery = { type = "openai", timeout_ms = 5000 }`
+  to bound the listing request. Discovery needs `api = "openai_completions"` or
+  `"openai_responses"`; with `discovery = "ollama"`, `base_url` may be the
+  server root (`http://127.0.0.1:11434`) and requests go to its `/v1` API.
+  Wire roots are protocol-specific: OpenAI APIs usually use `/v1`, Anthropic
+  uses an origin/prefix to which `/v1/messages` is appended, and Google uses
+  a root such as `/v1beta` to which `/models/<id>:streamGenerateContent` is appended.
+- On a built-in provider (`anthropic`, `openai`, ...), `headers` are sent with
+  every request and `[[providers.<id>.models]]` entries add catalog models or
+  replace the catalog entry with the same id, inheriting the provider's wire API
+  and base URL.
+- `lemon config validate` reports unknown `api`/`auth`/`discovery` values, a
+  missing `base_url` when `api` or `discovery` is set, models without `id`, and
+  invalid model limits, inputs and prices.
+- Not supported (omp-only): per-model `compat` overrides, `modelOverrides`,
+  `!command` secrets, and `proxy`/`litellm` discovery.
 
 ## Provider Onboarding (CLI)
 
@@ -764,6 +1129,15 @@ Provider onboarding flows:
 - Write the relevant `providers.<provider>` config keys
 - Support `--set-default`, `--model`, and `--config-path`
 
+API-key-only providers in the catalog are offered too: `google` (Gemini API),
+`groq`, `cerebras`, `deepseek`, `mistral`, `huggingface`, `qwen` (DashScope),
+`vercel_ai_gateway`, `opencode`, `opencode_go`, `minimax_cn`, `fireworks`,
+`zai`, `kimi` and `minimax`, plus every hosted OpenAI-compatible preset
+(`together`, `deepinfra`, `nvidia`, …). The pasted key is stored as
+`llm_<provider>_api_key` and referenced through
+`[providers.<provider>].api_key_secret`. For presets, `--set-default` lists the
+models the endpoint reports for that key, and `--model` accepts any model id.
+
 Provider readiness is visible through the source and packaged
 `lemon providers status` command. It uses the same
 `LemonAgent.ModelRuntime.Credentials` credential resolver as model execution, so env keys, encrypted
@@ -799,6 +1173,23 @@ references require the exact confirmation value shown by the preview:
 lemon providers fallback remove zai --dry-run --json
 lemon providers fallback remove zai --confirm zai
 ```
+
+To keep several logins for one provider, sign in again under another secret
+name and add that name to a pool; OAuth logins referenced from a pool refresh
+like the default login:
+
+```bash
+lemon model anthropic --auth oauth --secret-name llm_anthropic_work
+lemon providers pool credential add burst anthropic secret:llm_anthropic_work
+```
+
+The most recent onboarding selects its secret in the provider config; it does
+not delete other stored accounts. To inspect or delete a different stored
+account, use `lemon model anthropic --status --secret-name llm_anthropic_work`
+or `--logout --secret-name llm_anthropic_work`. Named logout leaves the active
+provider config unchanged unless that exact secret is the configured login.
+Pool references to a deleted secret remain in config but no longer resolve;
+remove them separately with `lemon providers pool credential remove`.
 
 
 Memory-provider readiness is included in support-bundle
@@ -873,6 +1264,33 @@ the active Gemini project from `providers.google_gemini_cli.project_id`,
 those values overriding the `projectId` stored inside the OAuth payload.
 
 The onboarding alias `gemini` maps to the runtime provider `google_gemini_cli`. This is distinct from the AI Studio provider `google`, which expects a separate API key such as `GOOGLE_GENERATIVE_AI_API_KEY`.
+
+Other subscription and browser sign-ins offered by `lemon model <provider>`:
+
+| Provider | Sign-in | Stored as |
+| --- | --- | --- |
+| `openrouter` | Browser PKCE sign-in (callback on `http://localhost:54549/callback`, or paste the redirect URL); a pasted `sk-or-` key is checked and accepted | A durable OpenRouter API key in `providers.openrouter.api_key_secret` |
+| `xai` | SuperGrok / X Premium+ device code (`--auth oauth`); API key remains the default | Refreshable login in `providers.xai.api_key_secret`, `auth_source = "oauth"` |
+| `kimi_coding` (`kimi-code`) | Kimi Code device code (default) | Refreshable login in `providers.kimi_coding.api_key_secret`, `auth_source = "oauth"` |
+| `zai` | GLM Coding Plan sign-in (`--auth oauth`): paste the full final `zcode://zai-auth/callback?...` redirect (or `code#state`, not a bare code); Lemon finds or creates an API key named `lemon` | A durable Z.AI API key in `providers.zai.api_key_secret` |
+
+Refreshable logins renew shortly before expiry and when a provider rejects the
+token. While `auth_source = "oauth"` is set, the provider's API-key environment
+variables (for example `XAI_API_KEY` or `KIMI_API_KEY`) do not override the
+stored login. `lemon model <provider> --status` reports the stored login or key
+without printing it; `--logout` deletes it and its config references but does
+not revoke it at the provider. `KIMI_CODE_OAUTH_HOST` overrides the Kimi auth
+host; the `ZAI_OAUTH_*` variables override the Z.AI endpoints for allowlist
+changes.
+
+Token-grant requests do not follow redirects. Device-code deadlines include
+time spent waiting for browser instructions and HTTP requests. Refresh and
+persistence are serialized per stored login; waiting callers reload the same
+secret before reusing or rotating it. A removed/replaced login is not recreated
+from a stale reader, and expired or explicitly rejected tokens are never
+returned as successful authentication after a failed refresh. Endpoint/HTTP
+overrides exposed by library APIs are trusted caller options intended for
+testing and controlled integrations, not untrusted remote input.
 
 Antigravity OAuth client credentials resolve from Lemon secrets first:
 - `google_antigravity_oauth_client_id`
@@ -1053,6 +1471,78 @@ cache_dir = ""
 max_tool_invoke_depth = 4
 ```
 
+## Tool Disclosure
+
+Every tool a session exposes sends its name, description and JSON schema with
+each model request. `[runtime.tools.disclosure]` can move tools behind two
+bridge tools: `tool_search` (look up a deferred tool and read its schema) and
+`tool_invoke` (call it by name). A bridged call runs the same policy, approval,
+checkpoint, cancellation and per-session mutation-lock path as a direct call,
+and `tool_invoke` never runs in parallel with other calls. Plan mode judges a
+bridged call by the tool it reaches.
+
+```toml
+[runtime.tools.disclosure]
+enabled = true           # false keeps every tool directly exposed
+budget_tokens = 40000    # legacy profile: defer only above this estimate
+catalog_tokens = 2000    # size of the deferred-tool list in tool_search's description
+max_results = 5          # default tool_search result count
+profile = "legacy"       # "legacy" (default) or "coding" (opt-in experiment)
+pinned = []              # tool names that always stay directly exposed
+```
+
+- **`legacy`** (default): built-in tools stay exposed. The MCP, extension and
+  WASM tools are deferred only when the estimated schema cost of the whole
+  catalog exceeds `budget_tokens`; below it the tool list is unchanged.
+- **`coding`**: an experiment for coding sessions. Only the coding core stays
+  directly exposed — `read`, `write`, `edit`, `patch`, `ls`, `find`, `grep`,
+  `ast_grep`, `lsp_diagnostics`, `checkpoint`, `bash`, `bash_output`,
+  `kill_process`, `websearch`, `webfetch`, `read_skill`, `recall`, `todo`,
+  `ask`, `task`, `wait`, `agent_message` and `parent_question` — plus `pinned`
+  names. Every other resolved tool, including browser, media, automation and
+  other optional built-ins, is deferred whenever there is one to defer;
+  `budget_tokens` is not consulted. Whether this improves cost, latency or task
+  success is not established, so it is not the default.
+
+Tools the session policy denies are never searchable or invokable. Tools passed
+as `extra_tools` always stay exposed, and sessions started with an explicit
+`tools` list skip disclosure. Names `tool_search` and `tool_invoke` are
+reserved; a real tool using either name is dropped while disclosure is active.
+
+WASM host aliases resolve from this same frozen, policy-authorized runtime
+catalog, not only the schemas currently shown to the model. A permitted optional
+built-in such as `browser_tabs` therefore remains a host capability under either
+profile. Host calls retain the catalog's wrapped implementation and the current
+plan-mode gate; reload replaces that inventory so removed authority is not kept
+alive by an old host lookup. Neither WASM tools nor the disclosure bridge tools
+can be host targets, preventing recursive calls through the deferred catalog.
+
+The tool list is computed at session start and on extension reload, never per
+turn. `extensions_status` reports the active profile, the exposed and deferred
+tool names, estimated schema tokens before and after disclosure, and a
+`catalog_digest`: a SHA-256 over the exposed schemas, the deferred tools, their
+sources and the session's tool policy. Matching digests identify matching
+schemas, source metadata and policy; they do not attest to external tool state
+or outcome. An authority change recomputes the catalog at the next run's session
+startup/resume boundary, or when explicitly supplied to a lifecycle reload, and
+changes its identity even if the visible schemas remain identical. Denied tools
+are removed from the rebuilt bridge, not merely hidden from its search results.
+The `[:coding_agent, :tool_disclosure, :applied]` telemetry event also carries the
+profile and safe catalog digest, with before/after schema estimates and tool
+counts as measurements, so isolated trial collectors need not log raw schemas.
+Diagnostic event version `1` adds `:search` events with a matched count and
+success/error status, and `:invoke_rejected` events with a bounded rejection
+reason (`unknown_tool`, `invalid_arguments` or `invalid_request`). These events
+contain no query, tool name, arguments or error text. Pre-aborted calls do not
+count as discovery or incorrect-call failures.
+
+For a controlled trial, scope the profile to the trial instead of the user's
+global config: put the section in the benchmark project's `.lemon/config.toml`
+(applies only to sessions in that project), set
+`LEMON_TOOL_DISCLOSURE_PROFILE=coding` on a separately launched runtime (it
+overrides file config for that process only), or start sessions
+programmatically with `CodingAgent.Session.start_link(tool_disclosure: [profile: :coding])`.
+
 ## Sections
 
 - `providers.<name>`: API keys and base URLs per provider.
@@ -1060,10 +1550,12 @@ max_tool_invoke_depth = 4
 - `runtime`: runtime behavior and tool settings.
 - `runtime.tools.web`: `websearch` / `webfetch` providers, guardrails, cache, and Firecrawl fallback.
 - `runtime.tools.wasm`: WASM sidecar runtime controls and discovery paths.
+- `runtime.tools.disclosure`: deferring tool schemas behind `tool_search` / `tool_invoke` (see [Tool Disclosure](#tool-disclosure)).
 - `profiles.<agent_id>`: assistant profiles (identity + defaults) used by gateway/control-plane.
 - `runtime.compaction`: context compaction settings.
 - `runtime.retry`: session retry of transient provider failures (backoff + retry-after).
 - `runtime.max_tool_turns`: optional per-prompt cap on tool-using turns (default unlimited).
+- `runtime.secret_obfuscation`: opt-in placeholder obfuscation of secrets in provider-visible text ([details](security/secret-obfuscation.md)).
 - `tui`: terminal UI settings.
 - `gateway`: Lemon gateway settings, including `queue`, `telegram`, `discord`, `sms`, `voice`, `xmtp`, `projects`, and `bindings`.
 - `logging`: optional file logging configuration.

@@ -88,6 +88,7 @@ references:
 | `required_environment_variables` | list of strings | Promoted from `requires.config` | Environment variables that must be set for the skill to be `ready`. Preferred over `requires.config` in v2 skills. |
 | `verification` | map | — | Verification specification. See [Verification](#verification) below. |
 | `references` | list | `[]` | Supplementary files or URLs. See [References](#references) below. |
+| `hide` | boolean | `false` | When `true`, the skill is not advertised to the model: it is omitted from the system-prompt skill listing and per-turn relevant-skill hints, but remains in registry/CLI/TUI listings and loadable explicitly (`read_skill`, `skill://`, `/skill:<name>`). `disable-model-invocation` (Agent Skills standard) is an alias normalized to `hide`. Only a literal boolean `true` hides; any other value keeps the skill visible. |
 
 All prompt- or status-facing list fields (`tags`, `keywords`, `platforms`,
 `requires.bins`, `requires.config`, `requires_tools`, `fallback_for_tools`, and

@@ -41,7 +41,7 @@ defmodule LemonAi.RateLimiter do
   # Types
   # ============================================================================
 
-  @type provider :: atom()
+  @type provider :: atom() | String.t()
   @type state :: %{
           provider: provider(),
           tokens: float(),
@@ -78,7 +78,7 @@ defmodule LemonAi.RateLimiter do
   Starts a limiter under `LemonAi.ProviderSupervisor` when available.
   """
   @spec ensure_started(provider(), keyword()) :: {:ok, pid()} | {:error, term()}
-  def ensure_started(provider, opts \\ []) when is_atom(provider) do
+  def ensure_started(provider, opts \\ []) when is_atom(provider) or is_binary(provider) do
     case GenServer.whereis(via_tuple(provider)) do
       nil ->
         opts =

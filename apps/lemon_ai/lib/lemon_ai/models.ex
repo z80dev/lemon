@@ -27,8 +27,16 @@ defmodule LemonAi.Models do
   map to one resource; Google Antigravity is assembled from tagged Google
   entries plus an extras file, and OpenAI Codex derives from OpenAI plus
   OAuth-only model IDs.
+
+  OpenAI-compatible provider presets (`LemonAi.Models.Presets`: Ollama,
+  LM Studio, llama.cpp, vLLM, LiteLLM and hosted open-model APIs) have no
+  static catalog. `get_model/2` answers any model ID for them, preferring
+  metadata from the latest `LemonAi.Models.Discovery` listing, and
+  `discover_preset/2` lists what an endpoint serves. `list_models/0` and
+  `find_by_id/1` cover the static catalogs only and never touch the network.
   """
 
+  alias LemonAi.Models.{Discovery, Presets}
   alias LemonAi.Types.Model
 
   @default_openai_base_url "https://api.openai.com/v1"
@@ -107,12 +115,18 @@ defmodule LemonAi.Models do
     :vercel_ai_gateway
   ]
 
+  @preset_providers Presets.ids()
+
   # ============================================================================
   # Public API
   # ============================================================================
 
   @doc """
   Get a specific model by provider and model ID.
+
+  Static catalog providers return `nil` for unknown IDs. Preset providers
+  (`LemonAi.Models.Presets`) return the latest discovered entry for the ID, or
+  a synthesized model with the preset's API, base URL and conservative limits.
 
   ## Examples
 
@@ -123,10 +137,33 @@ defmodule LemonAi.Models do
       iex> LemonAi.Models.get_model(:anthropic, "nonexistent")
       nil
 
+      iex> model = LemonAi.Models.get_model(:ollama, "qwen3:32b")
+      iex> {model.provider, model.api, model.base_url}
+      {:ollama, :openai_completions, "http://127.0.0.1:11434/v1"}
+
   """
   @spec get_model(atom(), String.t()) :: Model.t() | nil
   def get_model(provider, model_id) when is_atom(provider) and is_binary(model_id) do
     case Map.get(@models, provider) do
+      nil when provider in @preset_providers and model_id != "" ->
+        Presets.cached_model(provider, model_id) || Presets.model(provider, model_id)
+
+      nil ->
+        nil
+
+      provider_models ->
+        Map.get(provider_models, model_id)
+    end
+  end
+
+  @doc """
+  Like `get_model/2`, but returns only catalog or discovered models: preset
+  providers never synthesize an entry for an unknown ID.
+  """
+  @spec known_model(atom(), String.t()) :: Model.t() | nil
+  def known_model(provider, model_id) when is_atom(provider) and is_binary(model_id) do
+    case Map.get(@models, provider) do
+      nil when provider in @preset_providers -> Presets.cached_model(provider, model_id)
       nil -> nil
       provider_models -> Map.get(provider_models, model_id)
     end
@@ -134,6 +171,10 @@ defmodule LemonAi.Models do
 
   @doc """
   Get all models for a provider.
+
+  For preset providers this is the cached listing for the current default
+  endpoint and environment credential (no network access); use `discover_preset/2`
+  to refresh it. Explicitly configured endpoints remain scoped to their caller.
 
   ## Examples
 
@@ -148,28 +189,30 @@ defmodule LemonAi.Models do
   @spec get_models(atom()) :: [Model.t()]
   def get_models(provider) when is_atom(provider) do
     case Map.get(@models, provider) do
+      nil when provider in @preset_providers -> Presets.cached_models(provider)
       nil -> []
       provider_models -> Map.values(provider_models)
     end
   end
 
   @doc """
-  List all known providers.
+  List all known providers: static catalog providers, then presets.
 
   ## Examples
 
       iex> providers = LemonAi.Models.get_providers()
-      iex> :anthropic in providers
+      iex> :anthropic in providers and :ollama in providers
       true
 
   """
   @spec get_providers() :: [atom()]
   def get_providers do
-    @providers
+    @providers ++ @preset_providers
   end
 
   @doc """
-  List all known models across all providers.
+  List all static catalog models across all providers. Offline: preset
+  providers contribute nothing here.
 
   ## Examples
 
@@ -180,8 +223,58 @@ defmodule LemonAi.Models do
   """
   @spec list_models() :: [Model.t()]
   def list_models do
-    get_providers()
-    |> Enum.flat_map(&get_models/1)
+    Enum.flat_map(@providers, &(@models |> Map.fetch!(&1) |> Map.values()))
+  end
+
+  @type discover_preset_opt ::
+          {:base_url, String.t()}
+          | {:api_key, String.t()}
+          | {:headers, map()}
+          | {:timeout_ms, pos_integer()}
+          | {:ttl_ms, non_neg_integer()}
+          | {:force_refresh, boolean()}
+          | {:req_options, keyword()}
+
+  @doc """
+  Discover the models a preset endpoint serves via `LemonAi.Models.Discovery`.
+
+  The base URL defaults to `LemonAi.Models.Presets.base_url/1` (preset default
+  or its base-URL environment variable). Results carry the preset's API,
+  compatibility flags and limits. Never raises.
+  """
+  @spec discover_preset(atom(), [discover_preset_opt()]) ::
+          {:ok, [Model.t()]} | {:error, term()}
+  def discover_preset(provider, opts \\ []) when is_atom(provider) and is_list(opts) do
+    case Presets.get(provider) do
+      nil ->
+        {:error, {:unknown_preset, provider}}
+
+      preset ->
+        base_url =
+          case Keyword.get(opts, :base_url) do
+            url when is_binary(url) and url != "" -> url
+            _ -> Presets.base_url(provider)
+          end
+
+        discovery_opts =
+          opts
+          |> Keyword.take([
+            :api_key,
+            :headers,
+            :timeout_ms,
+            :ttl_ms,
+            :force_refresh,
+            :req_options
+          ])
+          |> Keyword.put_new(:api_key, Presets.env_api_key(provider))
+          |> Keyword.merge(
+            provider: provider,
+            api: preset.api,
+            model_defaults: Presets.model_defaults(provider)
+          )
+
+        Discovery.discover(preset.discovery, base_url, discovery_opts)
+    end
   end
 
   @type list_models_opt ::
@@ -471,7 +564,7 @@ defmodule LemonAi.Models do
   """
   @spec find_by_id(String.t()) :: Model.t() | nil
   def find_by_id(model_id) when is_binary(model_id) do
-    Enum.find_value(get_providers(), fn provider ->
+    Enum.find_value(@providers, fn provider ->
       get_model(provider, model_id)
     end)
   end
@@ -519,49 +612,23 @@ defmodule LemonAi.Models do
   @spec get_model_ids(atom()) :: [String.t()]
   def get_model_ids(provider) when is_atom(provider) do
     case Map.get(@models, provider) do
-      nil -> []
+      nil -> provider |> get_models() |> Enum.map(& &1.id)
       provider_models -> Map.keys(provider_models)
     end
   end
 
+  # Always fetched fresh for this account, independent of cached picker listings.
   defp discover_openai_model_ids(opts) do
     with {:ok, api_key} <- resolve_openai_api_key(opts),
-         {:ok, %Req.Response{status: status, body: body}} when status in 200..299 <-
-           Req.get(openai_models_url(opts),
-             headers: %{
-               "Authorization" => "Bearer #{api_key}",
-               "Accept" => "application/json"
-             },
-             connect_options: [timeout: openai_timeout_ms(opts)],
-             receive_timeout: openai_timeout_ms(opts),
-             retry: false
-           ),
-         %{"data" => data} when is_list(data) <- body do
-      ids =
-        data
-        |> Enum.flat_map(fn
-          %{"id" => id} when is_binary(id) and id != "" -> [id]
-          _ -> []
-        end)
-        |> MapSet.new()
-
-      if MapSet.size(ids) > 0 do
-        {:ok, ids}
-      else
-        {:error, :no_models_returned}
-      end
-    else
-      {:ok, _response} ->
-        {:error, :http_error}
-
-      {:error, _reason} = error ->
-        error
-
-      _ ->
-        {:error, :invalid_response}
+         {:ok, models} <-
+           Discovery.discover(:openai_models, openai_base_url(opts),
+             api_key: api_key,
+             timeout_ms: openai_timeout_ms(opts),
+             force_refresh: true
+           ) do
+      ids = MapSet.new(models, & &1.id)
+      if MapSet.size(ids) > 0, do: {:ok, ids}, else: {:error, :no_models_returned}
     end
-  rescue
-    _ -> {:error, :request_failed}
   end
 
   defp resolve_openai_api_key(opts) do
@@ -571,13 +638,13 @@ defmodule LemonAi.Models do
     end
   end
 
-  defp openai_models_url(opts) do
+  defp openai_base_url(opts) do
     base_url =
       Keyword.get(opts, :openai_base_url) ||
         System.get_env("OPENAI_BASE_URL") ||
         @default_openai_base_url
 
-    "#{normalize_openai_base_url(base_url)}/models"
+    normalize_openai_base_url(base_url)
   end
 
   defp normalize_openai_base_url(base_url) when is_binary(base_url) do

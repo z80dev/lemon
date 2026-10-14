@@ -3,6 +3,7 @@ defmodule LemonAgent.ModelRuntime.ProviderStatus do
   Redacted provider credential readiness diagnostics.
   """
 
+  alias LemonAgent.ModelRuntime.CustomProviders
   alias LemonAgent.ModelRuntime.ProviderNames
   alias LemonCore.Config
 
@@ -106,19 +107,27 @@ defmodule LemonAgent.ModelRuntime.ProviderStatus do
 
   defp provider_status(provider, %Config{} = config, cwd) do
     canonical = ProviderNames.canonical_name(provider)
-    config_name = ProviderNames.config_name(provider) || normalize_provider(provider)
-    provider_cfg = ProviderNames.provider_config(config.providers, provider) || %{}
+    custom = CustomProviders.custom_provider(config.providers, provider)
+
+    config_name =
+      ProviderNames.config_name(provider) || custom_id(custom) || normalize_provider(provider)
+
+    provider_cfg =
+      ProviderNames.provider_config(config.providers, provider) ||
+        CustomProviders.config_for(config.providers, provider) || %{}
+
     env_configured? = env_configured?(provider)
     routing = provider_routing(config)
 
     %{
-      "provider" => canonical || normalize_provider(provider),
+      "provider" => canonical || custom_id(custom) || normalize_provider(provider),
       "configName" => config_name,
       "known" => is_binary(canonical),
+      "custom" => not is_nil(custom),
       "configured" => map_size(provider_cfg) > 0,
       "credentialReady" =>
-        if(canonical,
-          do:
+        cond do
+          canonical ->
             credential_ready?(
               canonical,
               config.providers,
@@ -126,9 +135,19 @@ defmodule LemonAgent.ModelRuntime.ProviderStatus do
               env_configured?,
               cwd,
               routing
-            ),
-          else: false
-        ),
+            )
+
+          custom ->
+            LemonAgent.ModelRuntime.Credentials.provider_has_credentials?(
+              custom_id(custom),
+              config.providers,
+              cwd: cwd,
+              provider_routing: routing
+            )
+
+          true ->
+            false
+        end,
       "config" => %{
         "apiKeyConfigured" => present?(provider_config_value(provider_cfg, :api_key)),
         "apiKeySecretConfigured" =>
@@ -148,6 +167,7 @@ defmodule LemonAgent.ModelRuntime.ProviderStatus do
       "provider" => normalize_provider(provider),
       "configName" => normalize_provider(provider),
       "known" => false,
+      "custom" => false,
       "configured" => false,
       "credentialReady" => false,
       "config" => %{
@@ -160,6 +180,9 @@ defmodule LemonAgent.ModelRuntime.ProviderStatus do
       "ambient" => %{"envConfigured" => false}
     }
   end
+
+  defp custom_id({id, _cfg}), do: id
+  defp custom_id(nil), do: nil
 
   defp provider_config_value(map, key) when is_map(map) do
     Map.get(map, key) || Map.get(map, to_string(key))

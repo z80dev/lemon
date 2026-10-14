@@ -157,6 +157,7 @@ Source sections:
 - `extension_paths` - Explicitly trusted extension directories
 - `extensions.enabled` - Global switch for extension code execution
 - `extensions.auto_load_default_paths` - Trust default global/project extension directories
+- `secret_obfuscation.enabled` - Opt-in placeholder obfuscation of secrets in provider-visible text
 - `theme` - Agent theme
 
 Environment variables:
@@ -165,6 +166,7 @@ Environment variables:
 - `LEMON_EXTENSIONS_AUTO_LOAD_DEFAULT_PATHS`
 - `LEMON_COMPACTION_ENABLED`, `LEMON_COMPACTION_RESERVE_TOKENS`
 - `LEMON_RETRY_ENABLED`, `LEMON_MAX_RETRIES`
+- `LEMON_SECRET_OBFUSCATION_ENABLED`
 - `LEMON_EXTENSION_PATHS`, `LEMON_THEME`
 
 ### Config.Tools
