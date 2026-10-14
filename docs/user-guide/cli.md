@@ -11,6 +11,7 @@ This behavior is identical in source checkouts and packaged installs:
 - In an interactive terminal (stdin and stdout are TTYs), including a Tern pane, `lemon` opens the TUI, the same as `lemon tui`. Tern's native ACP chat is opened explicitly with `tern acp lemon` after [registration](tern.md).
 - Without a TTY, `lemon` fails immediately with status 2 and points to `lemon -p`, `lemon daemon`, and `lemon --help`. It does not compile, initialize HOME state, or start a daemon.
 - `lemon start` starts the runtime in the foreground; `lemon run` runs a prompt.
+- `lemon -c` (`--continue`) opens the TUI on the most recently updated TUI session, preferring this directory's; `lemon -r [key]` (`--resume [key]`) opens it on `key`, or on the session switcher without a key. `lemon tui --continue`/`--resume`/`--session KEY` are equivalent, and the three are mutually exclusive. Inside the TUI, `/retry` resends the last failed or aborted prompt after a history-only rewind. `lemon run --continue` is separate: it continues the latest *CLI* session for `--cwd`.
 
 Use `./bin/lemon` instead of `lemon` in the examples below when running from a
 source checkout.

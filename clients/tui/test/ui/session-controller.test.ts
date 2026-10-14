@@ -193,7 +193,7 @@ describe("SessionController.create", () => {
 		const key = await app.sessions.create(undefined, "first thing");
 
 		expect(app.sessionKey).toBe(key);
-		expect(key).toMatch(/^agent:default:tui:local:dm:[0-9a-f-]{36}$/);
+		expect(key).toMatch(/^agent:default:tui:local:dm:([0-9a-f]{16}-)?[0-9a-f-]{36}$/);
 		const send = server.requestsFor("chat.send").at(-1);
 		expect(send?.params).toMatchObject({ sessionKey: key, prompt: "first thing" });
 		// A minted session has no stored history worth a round-trip.

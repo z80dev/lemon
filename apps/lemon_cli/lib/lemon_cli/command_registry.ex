@@ -659,7 +659,8 @@ defmodule LemonCli.CommandRegistry do
       "Open the terminal UI, starting the runtime if needed",
       @both_launchers,
       [
-        "`lemon` with no command in an interactive terminal does the same. Before starting a runtime for the first time, unfinished setup runs interactively (`lemon setup --if-required`)."
+        "`lemon` with no command in an interactive terminal does the same. Before starting a runtime for the first time, unfinished setup runs interactively (`lemon setup --if-required`).",
+        "`lemon -c` / `lemon --continue` reopens the most recently updated TUI session (this directory's first); `lemon -r [KEY]` / `--resume [KEY]` attaches to KEY or, without one, opens the session switcher. `--session KEY` attaches to an exact session; the three are mutually exclusive."
       ]
     ),
     lifecycle(

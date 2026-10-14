@@ -88,6 +88,16 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   meter also use the measurement for resumed sessions before their first run.
   All surfaces read the new read-scoped `sessions.context` control-plane method;
   category splits are estimates scaled to the provider-reported total.
+- **Continue and resume sessions from the command line.** `lemon -c` /
+  `--continue` reopens the most recently updated TUI session (this directory's
+  first, else the newest), and `lemon -r [key]` / `--resume [key]` attaches to a
+  known session or, without a key, opens the session switcher; `lemon tui
+  --continue` works too. New TUI sessions carry a short directory tag in their
+  key so `--continue` can prefer the current project. `--continue`, `--session`
+  and `--resume` are mutually exclusive.
+- **`/retry` in the TUI.** After a failed or aborted turn, `/retry` rewinds
+  history (never files) to the last prompt, keeps the discarded turn in `/tree`,
+  and resends the prompt; `/retry --force` also retries a completed turn.
 
 ### Changed
 

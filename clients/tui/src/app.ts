@@ -55,6 +55,7 @@ import {
 	type QueueMode,
 } from "./protocol/types.ts";
 import { newSessionKey } from "./session-key.ts";
+import { resolveStartup, type StartupRequest, type StartupResolution } from "./startup-session.ts";
 import { AppStore, type SubmissionMode } from "./store/app-store.ts";
 import type { QueueItem } from "./store/queue-store.ts";
 import type { SessionStore } from "./store/session-store.ts";
@@ -103,6 +104,8 @@ export interface AppShellOptions {
 	operatorToken?: string;
 	/** Session to talk to. Defaults to a fresh canonical TUI channel-peer key. */
 	sessionKey?: string;
+	/** Startup session selection (`--continue`, `--resume`); ignored when `sessionKey` is set. */
+	startup?: StartupRequest;
 	version?: string;
 	/** Injection points for tests. */
 	client?: ControlPlaneClient;
@@ -180,6 +183,8 @@ export class AppShell {
 	#started = false;
 	#sessionReady = false;
 	#initialSessionLoad: Promise<void> | undefined;
+	/** `--continue` / `--resume` request, consumed by the first handshake. */
+	#startup: StartupRequest | undefined;
 	#queueMounted = false;
 	/** True while the queue panel, rather than the editor, owns the keyboard. */
 	#queueFocused = false;
@@ -201,7 +206,8 @@ export class AppShell {
 			options.client ?? new ControlPlaneClient({ url: options.url, token: options.operatorToken });
 		this.methods = new ControlPlaneMethods(this.client);
 		this.tui = options.tui ?? new TUI(options.terminal ?? new ProcessTerminal());
-		this.store = new AppStore(options.sessionKey ?? newSessionKey());
+		this.#startup = options.sessionKey === undefined ? options.startup : undefined;
+		this.store = new AppStore(options.sessionKey ?? newSessionKey(this.#cwd));
 		this.#terminalIntegration = new TerminalIntegration(
 			this.tui.terminal,
 			this.store,
@@ -429,6 +435,26 @@ export class AppShell {
 		return this.#host;
 	}
 
+	/**
+	 * Resolve `--continue` / `--resume` once connected and refocus before the first
+	 * hydration. The key minted at construction was never shown or sent, so it is
+	 * forgotten rather than left behind as an empty session.
+	 */
+	async #applyStartup(request: StartupRequest | undefined): Promise<StartupResolution | undefined> {
+		if (!request) return undefined;
+		const initialKey = this.store.focusedKey;
+		const resolution = await resolveStartup(request, {
+			methods: this.methods,
+			cwd: this.#cwd,
+			currentKey: initialKey,
+		});
+		if (resolution.sessionKey && resolution.sessionKey !== initialKey) {
+			this.store.setFocused(resolution.sessionKey);
+			this.store.forgetSession(initialKey);
+		}
+		return resolution;
+	}
+
 	/** Build the UI, start rendering, and connect. */
 	async start(): Promise<void> {
 		if (this.#started) return;
@@ -443,13 +469,22 @@ export class AppShell {
 			this.client.events.on("state", () => this.#renderConnection()),
 			this.client.events.on("hello-ok", () => {
 				// Every handshake, resumed or not: plan mode may have moved while away.
-				void this.refreshPlanMode();
+				// A pending startup request refreshes after it has picked the session.
+				if (!this.#startup) void this.refreshPlanMode();
 				if (this.#sessionReady || this.#initialSessionLoad) return;
-				this.#initialSessionLoad = this.sessions
-					.initialize()
-					.then(() => {
-						this.#sessionReady = true;
-					})
+				const startup = this.#startup;
+				this.#startup = undefined;
+				this.#initialSessionLoad = this.#applyStartup(startup)
+					.then((resolution) =>
+						this.sessions.initialize().then(() => {
+							this.#sessionReady = true;
+							if (startup) void this.refreshPlanMode();
+							if (resolution?.notice) {
+								this.events.notice(resolution.notice.text, resolution.notice.level);
+							}
+							if (resolution?.openSwitcher) void this.#switcher.open();
+						}),
+					)
 					.catch((error: unknown) =>
 						this.events.notice(`could not load session: ${describeError(error)}`, "error"),
 					)

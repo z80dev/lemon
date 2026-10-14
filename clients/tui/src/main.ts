@@ -9,6 +9,7 @@
 
 import { loadConfig } from "./config.ts";
 import { DEFAULT_WS_URL } from "./protocol/client.ts";
+import type { StartupRequest } from "./startup-session.ts";
 import { consumeForkHandoff } from "./terminal/fork.ts";
 
 /** Injected by `scripts/build-binary.ts` via Bun's `define`. */
@@ -20,6 +21,11 @@ const MIN_BUN_VERSION = "1.3.14";
 export interface CliOptions {
 	url: string;
 	sessionKey?: string;
+	/** `--continue`: attach to the most recently updated TUI session. */
+	continueSession: boolean;
+	/** `--resume [key]`: attach to `resumeKey`, or open the session switcher without one. */
+	resume: boolean;
+	resumeKey?: string;
 	/** Private one-shot handoff used only by Tern session forks. */
 	forkLaunchFile?: string;
 	help: boolean;
@@ -36,6 +42,9 @@ Options:
   --ws-url, --url, -u <url>   Control-plane WebSocket URL
                               (default: $LEMON_WS_URL, else ws://127.0.0.1:<port>/ws)
   --session, -s <key>         Session key to attach to (default: fresh local TUI session)
+  --continue, -c              Continue the most recently updated TUI session
+                              (this directory's first; a new session when none exists)
+  --resume, -r [key]          Attach to <key> if it exists, else open the session switcher
   --version, -V               Print the version and exit
   --help, -h                  Print this help and exit
 
@@ -63,7 +72,13 @@ export function operatorToken(env: NodeJS.ProcessEnv = process.env): string | un
 }
 
 export function parseArgs(argv: string[], env: NodeJS.ProcessEnv = process.env): CliOptions {
-	const options: CliOptions = { url: defaultUrl(env), help: false, version: false };
+	const options: CliOptions = {
+		url: defaultUrl(env),
+		help: false,
+		version: false,
+		continueSession: false,
+		resume: false,
+	};
 	for (let index = 0; index < argv.length; index++) {
 		const arg = argv[index];
 		const takeValue = (name: string): string | undefined => {
@@ -97,6 +112,20 @@ export function parseArgs(argv: string[], env: NodeJS.ProcessEnv = process.env):
 				if (value !== undefined) options.sessionKey = value;
 				break;
 			}
+			case "--continue":
+			case "-c":
+				options.continueSession = true;
+				break;
+			case "--resume":
+			case "-r": {
+				options.resume = true;
+				const next = argv[index + 1];
+				if (next !== undefined && !next.startsWith("-")) {
+					options.resumeKey = next;
+					index += 1;
+				}
+				break;
+			}
 			case "--internal-fork-launch": {
 				const value = takeValue(arg);
 				if (value !== undefined) options.forkLaunchFile = value;
@@ -107,13 +136,31 @@ export function parseArgs(argv: string[], env: NodeJS.ProcessEnv = process.env):
 					options.url = arg.slice(arg.indexOf("=") + 1);
 				} else if (arg.startsWith("--session=")) {
 					options.sessionKey = arg.slice("--session=".length);
+				} else if (arg.startsWith("--resume=")) {
+					options.resume = true;
+					options.resumeKey = arg.slice("--resume=".length) || undefined;
 				} else {
 					options.error = `unknown argument: ${arg}`;
 				}
 				break;
 		}
 	}
+	const startupFlags = [
+		options.continueSession && "--continue",
+		options.sessionKey !== undefined && "--session",
+		options.resume && "--resume",
+	].filter(Boolean);
+	if (startupFlags.length > 1 && !options.error) {
+		options.error = `${startupFlags.join(", ")} are mutually exclusive`;
+	}
 	return options;
+}
+
+/** The startup request the shell resolves after connecting, if any. */
+export function startupRequest(options: CliOptions): StartupRequest | undefined {
+	if (options.continueSession) return { mode: "continue" };
+	if (options.resume) return { mode: "resume", key: options.resumeKey };
+	return undefined;
 }
 
 /** Numeric semver comparison; returns true when `actual` >= `minimum`. */
@@ -223,6 +270,7 @@ export async function main(argv: string[] = Bun.argv.slice(2)): Promise<number> 
 			url: options.url,
 			operatorToken: operatorToken(),
 			sessionKey: options.sessionKey,
+			startup: startupRequest(options),
 			version,
 			themePreference: theme.preference,
 			onExit: (code) => resolve(code),

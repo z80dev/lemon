@@ -68,6 +68,10 @@ is the default. Ordinary rewind changes conversation history, **not your files**
 the explicit file-restoration option and session tree are described in the
 [TUI guide](https://github.com/z80dev/lemon/blob/main/clients/tui/README.md).
 
+If a turn fails or you stop it, `/retry` rewinds that turn (history only) and
+resends the prompt. To pick up where you left off next time, start the TUI with
+`lemon -c` (latest session) or `lemon -r` (session picker).
+
 ## 3. Choose your interface
 
 **Scripts and CI:** run from the same repository. JSON mode returns one result

@@ -87,6 +87,12 @@ export class SessionStore {
 	 * rather than being nonsense, and says so instead of failing silently.
 	 */
 	lastRunEndedAtMs = 0;
+	/**
+	 * How this client's most recent live run ended; undefined before any run, after
+	 * a transcript reset, and for runs only replayed from stored history. `/retry`
+	 * reads it: only an errored or aborted turn is retried without `--force`.
+	 */
+	lastRunOutcome: "done" | "error" | "aborted" | undefined;
 	/** Last engine reported by `agent started`, for the status line. */
 	engine: string | undefined;
 	/** Server-confirmed user label, separate from the durable routing key. */
@@ -261,6 +267,7 @@ export class SessionStore {
 		this.#answerOnly.clear();
 		this.activeRunId = undefined;
 		this.busy = false;
+		this.lastRunOutcome = undefined;
 		this.usage = undefined;
 		this.contextMeasurement = undefined;
 		this.unread = 0;
@@ -494,6 +501,11 @@ export class SessionStore {
 			this.activeRunId = undefined;
 			this.busy = false;
 			this.lastRunEndedAtMs = Date.now();
+			this.lastRunOutcome = options.interrupted
+				? "aborted"
+				: options.ok === false
+					? "error"
+					: "done";
 		}
 		// Thinking the run never closed (an abort, a dropped `thinking_end`) is
 		// over too: a live reasoning block would pin the commit seam forever.
