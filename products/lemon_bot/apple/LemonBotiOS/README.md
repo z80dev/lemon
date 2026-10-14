@@ -14,7 +14,7 @@ Only local networking is exempted in App Transport Security for loopback develop
 
 On the signed-in Mac choose **Connect iPhone**, then create a one-use QR. On iPhone choose **Scan or paste desktop pairing link**. Camera capture and its permission prompt start only after **Scan desktop QR**, using the actual QR metadata camera output; leaving the screen or foreground stops capture. If Camera is unavailable (including Simulator), paste the link into the secure field and choose **Preview**.
 
-Check the exact origin and cluster before **Request connection**. The server then confirms cluster name and expiry and gives the phone a verification code. Compare that exact code and device name on the Mac, approve once there, and explicitly choose **Check approval / finish connection** on the phone. This creates its own revocable device session, not a copy of the Mac credential; no manual password is required. Never put QR screenshots or raw links in logs, chat or push notifications.
+Check the exact origin, cluster name and expiry in the read-only preview before **Request connection**. Preview never claims or consumes the code; if it fails, use **Check cluster** to retry the read. The server then gives the phone a verification code. Compare that exact code and device name on the Mac, approve once there, and explicitly choose **Check approval / finish connection** on the phone. This creates its own revocable device session, not a copy of the Mac credential; no manual password is required. Never put QR screenshots or raw links in logs, chat or push notifications.
 
 The desktop's configured public URL must be reachable HTTPS. A recommended deployment is Tailscale Serve terminating HTTPS to the local Lemon Bot backend; configure the backend's public URL to that exact Serve origin, and connect both devices to the tailnet. A QR does not establish trust in an overlay or make an HTTP LAN origin secure. Loopback HTTP is accepted only for same-machine development/Simulator; `127.0.0.1` on a physical phone refers to the phone, not the Mac.
 
@@ -59,3 +59,4 @@ These hooks cross the package/app boundary without introducing an app dependency
 ## Changelog
 
 - Added explicit one-use desktop pairing, real QR scanning, secure paste/preview, saved pending reconciliation and saved-account startup with read-only foreground reconnect. Removed invitation-first onboarding and Team voice eligibility.
+- Pairing now fetches the exact cluster name and expiry through a non-consuming preview before enabling a claim, including resumed preview state.
