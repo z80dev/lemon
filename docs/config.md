@@ -61,6 +61,11 @@ enabled = true
 max_retries = 3
 base_delay_ms = 1000
 
+[runtime.secret_obfuscation]
+# Opt-in. Replaces secrets in provider-visible session text with placeholders
+# and restores them in tool arguments; see security/secret-obfuscation.md.
+enabled = false
+
 [runtime]
 # Explicitly trusted extension directories. Files here can be compiled and executed.
 extension_paths = []
@@ -397,6 +402,7 @@ browser-session exchange needed to authenticate that client safely. Never
 place the shared server token in `VITE_*` configuration.
 - `LEMON_PROVIDER_ROUTING_ENABLED`, `LEMON_PROVIDER_FALLBACK_PROVIDERS`, `LEMON_PROVIDER_ROUTING_REQUIRE_CREDENTIALS`
 - `LEMON_THEME`, `LEMON_DEBUG`
+- `LEMON_SECRET_OBFUSCATION_ENABLED` — overrides `[runtime.secret_obfuscation] enabled`
 - `<PROVIDER>_API_KEY`, `<PROVIDER>_BASE_URL` (e.g., `ANTHROPIC_API_KEY`, `OPENAI_BASE_URL`, `OPENCODE_API_KEY`, `ZAI_API_KEY`, `MINIMAX_API_KEY`)
 - `LEMON_CODEX_EXTRA_ARGS`, `LEMON_CODEX_AUTO_APPROVE`
 - `LEMON_CLAUDE_YOLO`
@@ -1064,6 +1070,7 @@ max_tool_invoke_depth = 4
 - `runtime.compaction`: context compaction settings.
 - `runtime.retry`: session retry of transient provider failures (backoff + retry-after).
 - `runtime.max_tool_turns`: optional per-prompt cap on tool-using turns (default unlimited).
+- `runtime.secret_obfuscation`: opt-in placeholder obfuscation of secrets in provider-visible text ([details](security/secret-obfuscation.md)).
 - `tui`: terminal UI settings.
 - `gateway`: Lemon gateway settings, including `queue`, `telegram`, `discord`, `sms`, `voice`, `xmtp`, `projects`, and `bindings`.
 - `logging`: optional file logging configuration.

@@ -18,6 +18,7 @@ defmodule CodingAgent.ExtensionLifecycle do
   alias CodingAgent.Config
   alias CodingAgent.Extensions
   alias CodingAgent.Extensions.ToolHooks
+  alias CodingAgent.Security.SecretObfuscator
   alias CodingAgent.ToolDisclosure
   alias CodingAgent.ToolExecutor
   alias CodingAgent.ToolRegistry
@@ -80,6 +81,9 @@ defmodule CodingAgent.ExtensionLifecycle do
       )
 
     emit_disclosure_telemetry(disclosure_report)
+
+    # Outermost wrapper: restore secret placeholders before hooks/approval/tool.
+    tools = SecretObfuscator.wrap_tools(tools, Keyword.get(opts, :secret_obfuscator))
 
     tool_conflict_report = ToolRegistry.tool_conflict_report(cwd, tool_opts)
 
@@ -167,6 +171,9 @@ defmodule CodingAgent.ExtensionLifecycle do
       )
 
     emit_disclosure_telemetry(disclosure_report)
+
+    # Outermost wrapper: restore secret placeholders before hooks/approval/tool.
+    tools = SecretObfuscator.wrap_tools(tools, Keyword.get(opts, :secret_obfuscator))
 
     tool_conflict_report = ToolRegistry.tool_conflict_report(cwd, tool_opts)
 

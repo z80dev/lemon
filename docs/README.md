@@ -28,8 +28,8 @@ with the workflow you need; source modules and tests define implementation APIs.
 - [Backups](user-guide/backups.md), [safe updates](user-guide/updates.md) and [Hermes migration](user-guide/migrate-from-hermes.md)
 - [A2A peers](user-guide/a2a-peers.md), [adaptive behavior](user-guide/adaptive.md) and [feature rollout](user-guide/rollout.md)
 - [Safety model](security/safety.md), [agent safety contract](security/agent-safety-contract.md),
-  [secrets/keychain](security/secrets-and-keychain.md), [secret migration](security/secrets-migration-guide.md)
-  and [threat model](security/threat-model.md)
+  [secrets/keychain](security/secrets-and-keychain.md), [secret migration](security/secrets-migration-guide.md),
+  [secret obfuscation](security/secret-obfuscation.md) and [threat model](security/threat-model.md)
 
 ## Tools and skills
 

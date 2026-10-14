@@ -39,6 +39,13 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   breakdowns by provider/model/session/day, and model pricing in
   `models.list`. `ProviderConfiguration` can set the default model and thinking
   level with the same preview/apply revision flow.
+- **Secret obfuscation (opt-in).** With `[runtime.secret_obfuscation]
+  enabled = true`, native sessions replace secret-shaped environment values,
+  `secrets.yml` entries (global and project; plain or regex, obfuscate or
+  replace) and GitHub/GitLab/OpenAI/Anthropic-style tokens in provider-visible
+  messages with keyed `$$…$$` placeholders, and restore them in tool arguments
+  before a tool runs. Session history keeps the original text. See
+  [Secret obfuscation](docs/security/secret-obfuscation.md).
 - **Delegate work to omp.** Lemon can run tasks in
   [omp](https://github.com/can1357/oh-my-pi) sessions: ask in chat ("run this
   in omp"), use the TUI's `/omp` panel, or `lemon omp start`. Lemon starts omp
