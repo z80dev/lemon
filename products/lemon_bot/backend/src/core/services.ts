@@ -104,6 +104,7 @@ export interface IntegrationServices {
   dispose?(): void;
   refreshPolicy?(principal: Principal, botIds?: string[], options?: { workspace?: boolean }): Promise<void>;
   canReadResource?(principal: Principal, collection: string, entity: unknown): boolean;
+  sharedProfilePolicy?(botId: string): Promise<P.EffectivePolicy>;
 }
 export interface BackendConfiguration {
   publicUrl: string; controlUrl: string; operatorToken: string; dataDir: string; host: string; port: number;

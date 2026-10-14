@@ -40,7 +40,7 @@ export function createRealtime(services:BackendServices,hooks:RealtimeHooks={}) 
   });
   const heartbeat=setInterval(()=>{
     const now=services.now();for(const socket of sockets){if(!socket.data.authenticated&&now-socket.data.openedAt>=5000){socket.close(4408,'Authentication timed out.');continue;}if(now-socket.data.lastActivity>=60000){socket.close(4408,'Connection expired.');continue;}
-      if(socket.data.principal){void services.auth.authenticate(new Request(services.config.publicUrl+'/v1/realtime',{headers:{Authorization:'Bearer '+socket.data.token}}),'member').catch(()=>socket.close(4401,'Session expired or revoked.'));if(socket.data.subscribed){const watermark=services.events.cursor();send(socket,{type:'watermark',cursor:watermark});socket.data.delivered=watermark;}}
+      if(socket.data.principal){void services.auth.authenticate(new Request(services.config.publicUrl+'/v1/realtime',{headers:{Authorization:'Bearer '+socket.data.token}}),'member').then(user=>{if(!user){socket.close(4401,'Session expired or revoked.');return;}socket.data.principal={...user,deviceId:socket.data.deviceId};}).catch(()=>socket.close(4401,'Session expired or revoked.'));if(socket.data.subscribed){const watermark=services.events.cursor();send(socket,{type:'watermark',cursor:watermark});socket.data.delivered=watermark;}}
       socket.ping();
     }
   },25000);
@@ -56,8 +56,9 @@ export function createRealtime(services:BackendServices,hooks:RealtimeHooks={}) 
       const watermark=services.events.cursor();socket.data.delivered=watermark;send(socket,{type:'ready',userId:user.userId,workspaceId:user.workspaceId,cursor:watermark,earliestCursor:services.events.earliestCursor(),heartbeatMs:25000});return;
     }
     if(frame.type==='auth'){socket.close(4400,'Authentication cannot be repeated.');return;}
-    const user=socket.data.principal!;
-    await services.auth.authenticate(new Request(services.config.publicUrl+'/v1/realtime',{headers:{Authorization:'Bearer '+socket.data.token}}),'member');
+    const refreshed=await services.auth.authenticate(new Request(services.config.publicUrl+'/v1/realtime',{headers:{Authorization:'Bearer '+socket.data.token}}),'member');
+    if(!refreshed)fail('unauthenticated','Session expired or revoked.');
+    const user={...refreshed,deviceId:socket.data.deviceId};socket.data.principal=user;
     if(frame.type==='subscribe'){
       const selection=[...new Set(frame.conversationIds??[])];for(const id of selection)services.auth.conversation(user,id);
       const watermark=services.events.cursor();const start=frame.cursor??watermark;
