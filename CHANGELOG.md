@@ -159,6 +159,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Provider sign-in status and logout distinguish missing credentials from
+  encrypted-store, journal and master-key failures. Failed reads refuse the
+  command without deleting logins or clearing the selected OAuth authority;
+  logout also reports deletion failures without changing provider settings.
 - JSONL storage rejects unreadable or corrupt journals rather than publishing
   empty state. Failed loads remain recoverable after repair; rejected writes
   return bounded errors before cache mutation without crashing the Store.

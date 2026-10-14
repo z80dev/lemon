@@ -229,6 +229,16 @@ only it and changes provider settings only when they select that exact secret.
 Missing/deleted pool secrets are skipped. Sign-in errors report safe error
 kinds rather than provider response bodies or credential payloads.
 
+Status and logout distinguish a confirmed missing secret from an unreadable
+login. If the encrypted store is unavailable, its journal is corrupt, or the
+master key cannot decrypt the login, both commands fail with exit `1` and a
+bounded error; they do not delete credentials or edit provider settings.
+The selected OAuth authority remains in effect instead of falling back to an
+ambient API key. Repair the store or restore its master key before retrying.
+A confirmed missing secret still allows logout to remove stale settings for
+that selected account; a missing named account never clears another account's
+settings.
+
 ## Non-interactive coding
 
 ```bash
