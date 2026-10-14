@@ -7,6 +7,14 @@ external-content tools:
   (default), Exa, Perplexity Sonar, keyless DuckDuckGo, and user-hosted SearXNG.
 - `webfetch`: extract readable content through registered providers. Guarded
   direct extraction is the default and optionally falls back to Firecrawl.
+  Direct extraction converts PDF responses to `=== Page N ===` text with the
+  same backends as `read` (pdftotext, mutool, or Python pypdf/PyMuPDF,
+  including a project `.lemon/read-formats-venv`); without a backend the error
+  names the install options. GitHub `blob/<ref>/<path>` URLs fetch the raw file
+  from `raw.githubusercontent.com`, and `issues/<n>` / `pull/<n>` URLs render
+  title, state, labels, body and the first 100 comments from the public REST
+  API (unauthenticated, subject to GitHub's anonymous rate limit). All of these
+  stay on the guarded, SSRF-checked path.
 - `browser_navigate`: navigate the supervised local browser session.
 - `browser_tabs`, `browser_tab_open`, `browser_tab_activate`,
   `browser_tab_close`: enumerate and manage tabs through stable Chrome target
