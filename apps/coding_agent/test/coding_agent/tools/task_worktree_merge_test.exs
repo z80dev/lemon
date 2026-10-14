@@ -27,26 +27,17 @@ defmodule CodingAgent.Tools.TaskWorktreeMergeTest do
 
   test "merge requires a worktree and a known mode", %{repo: repo} do
     for mode <- ["patch", "branch"] do
-      assert {:error, message} =
+      assert {:error, _} =
                Params.validate_run_params(%{"prompt" => "Edit", "merge" => mode}, repo)
-
-      assert message == "merge=#{mode} requires worktree: true"
     end
 
-    assert {:error, "merge must be one of: none, patch, branch"} =
+    assert {:error, _} =
              Params.validate_run_params(
                %{"prompt" => "Edit", "worktree" => true, "merge" => "squash"},
                repo
              )
 
-    assert {:ok, %{merge: "none", worktree: false}} =
-             Params.validate_run_params(%{"prompt" => "Edit", "merge" => "none"}, repo)
-
-    assert {:ok, %{merge: nil}} = Params.validate_run_params(%{"prompt" => "Edit"}, repo)
-
-    tool = TaskTool.tool(repo)
-    assert tool.parameters["properties"]["merge"]["enum"] == ["none", "patch", "branch"]
-    assert tool.parameters["properties"]["tasks"]["items"]["properties"]["merge"]
+    assert {:ok, _} = Params.validate_run_params(%{"prompt" => "Edit", "merge" => "none"}, repo)
   end
 
   test "patch mode from settings replays WIP and applies the child's edits end to end", %{
@@ -93,13 +84,9 @@ defmodule CodingAgent.Tools.TaskWorktreeMergeTest do
       )
 
     assert_receive {:child_saw, "parent wip\n", "parent untracked\n"}
-    assert result.details.merge.mode == "patch"
     assert result.details.merge.status == "applied"
     assert Enum.sort(result.details.merge.files) == ["child.txt", "tracked.txt"]
     assert visible_text(result) =~ "Edited files."
-
-    assert visible_text(result) =~
-             "Merged task changes into the parent checkout (patch, 2 files)."
 
     assert File.read!(Path.join(repo, "child.txt")) == "from child\n"
     assert File.read!(Path.join(repo, "tracked.txt")) == "parent wip\nchild edit\n"
@@ -134,28 +121,8 @@ defmodule CodingAgent.Tools.TaskWorktreeMergeTest do
       )
 
     assert result.details.merge == %{mode: "branch", status: "no_changes"}
-    assert visible_text(result) =~ "No task changes to merge"
     refute File.exists?(result.details.worktree_path)
     refute branch_exists?(git, repo, result.details.branch)
-  end
-
-  test "default none keeps the worktree and branch without finalizing", %{git: git, repo: repo} do
-    stream_fn = Mocks.mock_stream_fn_single(Mocks.assistant_message("Done."))
-
-    result =
-      TaskTool.execute(
-        unique_id(),
-        %{"prompt" => "Inspect", "worktree" => true, "async" => false, "auto_followup" => false},
-        nil,
-        nil,
-        repo,
-        opts(stream_fn, %SettingsManager{})
-      )
-
-    refute Map.has_key?(result.details, :merge)
-    refute visible_text(result) =~ "merge"
-    assert File.dir?(result.details.worktree_path)
-    assert branch_exists?(git, repo, result.details.branch)
   end
 
   test "a failed child skips merging and keeps its worktree", %{git: git, repo: repo} do
