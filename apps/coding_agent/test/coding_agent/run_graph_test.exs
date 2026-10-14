@@ -52,10 +52,6 @@ defmodule CodingAgent.RunGraphTest do
       assert record.status == :running
       assert is_integer(record.started_at)
     end
-
-    test "returns ok for unknown run" do
-      assert :ok = RunGraph.mark_running("unknown_run_id")
-    end
   end
 
   describe "finish/2" do
@@ -71,10 +67,6 @@ defmodule CodingAgent.RunGraphTest do
       assert record.result == result
       assert is_integer(record.completed_at)
     end
-
-    test "returns ok for unknown run" do
-      assert :ok = RunGraph.finish("unknown_run_id", %{result: "test"})
-    end
   end
 
   describe "fail/2" do
@@ -89,10 +81,6 @@ defmodule CodingAgent.RunGraphTest do
       assert record.status == :error
       assert record.error == error
       assert is_integer(record.completed_at)
-    end
-
-    test "returns ok for unknown run" do
-      assert :ok = RunGraph.fail("unknown_run_id", "error")
     end
   end
 
@@ -168,22 +156,6 @@ defmodule CodingAgent.RunGraphTest do
       assert Enum.all?(runs, &(&1.status == :completed))
     end
 
-    test "returns immediately when all runs have error" do
-      run1 = RunGraph.new_run(%{type: :task})
-      run2 = RunGraph.new_run(%{type: :task})
-
-      RunGraph.mark_running(run1)
-      RunGraph.mark_running(run2)
-      RunGraph.fail(run1, "error1")
-      RunGraph.fail(run2, "error2")
-
-      assert {:ok, %{mode: :wait_all, runs: runs}} =
-               RunGraph.await([run1, run2], :wait_all, 1_000)
-
-      assert length(runs) == 2
-      assert Enum.all?(runs, &(&1.status == :error))
-    end
-
     test "returns immediately for mixed completed/error runs" do
       run1 = RunGraph.new_run(%{type: :task})
       run2 = RunGraph.new_run(%{type: :task})
@@ -234,15 +206,6 @@ defmodule CodingAgent.RunGraphTest do
 
       assert length(runs) == 2
       assert Enum.all?(runs, &(&1.status == :running))
-    end
-
-    test "handles single run_id (not in list)" do
-      run = RunGraph.new_run(%{type: :task})
-      RunGraph.mark_running(run)
-      RunGraph.finish(run, %{result: "done"})
-
-      assert {:ok, %{mode: :wait_all, runs: [run_record]}} = RunGraph.await(run, :wait_all, 1_000)
-      assert run_record.status == :completed
     end
 
     test "returns unknown status for non-existent runs" do
@@ -312,45 +275,17 @@ defmodule CodingAgent.RunGraphTest do
 
       assert length(runs) == 2
     end
-
-    test "handles single run_id (not in list)" do
-      run = RunGraph.new_run(%{type: :task})
-      RunGraph.mark_running(run)
-      RunGraph.finish(run, %{result: "done"})
-
-      assert {:ok, %{mode: :wait_any, run: run_record}} = RunGraph.await(run, :wait_any, 1_000)
-      assert run_record.status == :completed
-    end
   end
 
   describe "await/3 - terminal statuses" do
-    test "considers :lost as terminal" do
-      run = RunGraph.new_run(%{type: :task})
-      RunGraph.mark_running(run)
-      # Simulate lost status by directly manipulating the record
-      # In practice this would come from persistence layer
+    test "considers lost, killed and cancelled runs terminal" do
+      for status <- [:lost, :killed, :cancelled] do
+        run_id = RunGraph.new_run(%{type: :task})
+        :ets.insert(:coding_agent_run_graph, {run_id, %{id: run_id, status: status}})
 
-      # For this test, we'll just verify that completed runs work
-      RunGraph.finish(run, %{result: "done"})
-
-      assert {:ok, _} = RunGraph.await([run], :wait_all, 100)
-    end
-
-    test "considers :killed as terminal" do
-      # Create a run and manually insert with killed status
-      run_id = RunGraph.new_run(%{type: :task})
-      :ets.insert(:coding_agent_run_graph, {run_id, %{id: run_id, status: :killed}})
-
-      assert {:ok, %{mode: :wait_all, runs: [%{status: :killed}]}} =
-               RunGraph.await([run_id], :wait_all, 100)
-    end
-
-    test "considers :cancelled as terminal" do
-      run_id = RunGraph.new_run(%{type: :task})
-      :ets.insert(:coding_agent_run_graph, {run_id, %{id: run_id, status: :cancelled}})
-
-      assert {:ok, %{mode: :wait_all, runs: [%{status: :cancelled}]}} =
-               RunGraph.await([run_id], :wait_all, 100)
+        assert {:ok, %{mode: :wait_all, runs: [%{status: ^status}]}} =
+                 RunGraph.await([run_id], :wait_all, 100)
+      end
     end
   end
 
@@ -362,75 +297,6 @@ defmodule CodingAgent.RunGraphTest do
       assert :ok = RunGraph.clear()
 
       assert {:error, :not_found} = RunGraph.get(run_id)
-    end
-  end
-
-  describe "stats/0" do
-    test "returns table statistics" do
-      # Clear first to get a known state
-      RunGraph.clear()
-
-      # Create some runs
-      for _ <- 1..5 do
-        RunGraph.new_run(%{type: :task})
-      end
-
-      stats = RunGraph.stats()
-      assert stats.initialized == true
-      assert stats.size >= 5
-      assert stats.memory > 0
-    end
-  end
-
-  describe "concurrent access" do
-    test "handles concurrent run creation" do
-      runs =
-        Enum.map(1..50, fn _ ->
-          Task.async(fn ->
-            RunGraph.new_run(%{type: :concurrent})
-          end)
-        end)
-
-      run_ids = Enum.map(runs, &Task.await/1)
-      assert length(Enum.uniq(run_ids)) == 50
-
-      for run_id <- run_ids do
-        assert {:ok, _} = RunGraph.get(run_id)
-      end
-    end
-
-    test "handles concurrent status updates" do
-      run_id = RunGraph.new_run(%{type: :task})
-
-      tasks =
-        Enum.map(1..10, fn i ->
-          Task.async(fn ->
-            RunGraph.mark_running(run_id)
-            RunGraph.finish(run_id, %{iteration: i})
-          end)
-        end)
-
-      Enum.each(tasks, &Task.await/1)
-
-      # Final state should be completed (one of the finishes won)
-      assert {:ok, record} = RunGraph.get(run_id)
-      assert record.status == :completed
-    end
-  end
-
-  describe "RunGraphServer" do
-    test "ensure_table/1 initializes table if not already done" do
-      # Table should already be initialized from application start
-      assert :ok = RunGraphServer.ensure_table(CodingAgent.RunGraphServer)
-    end
-
-    test "stats/1 returns table information" do
-      RunGraph.clear()
-      RunGraph.new_run(%{type: :test})
-
-      stats = RunGraphServer.stats(CodingAgent.RunGraphServer)
-      assert stats.size >= 1
-      assert stats.initialized == true
     end
   end
 

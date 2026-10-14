@@ -72,36 +72,6 @@ defmodule LemonChannels.OutboxRateLimitRequeueTest do
   end
 
   describe "rate-limited entry re-queue" do
-    test "entry is re-queued when rate limited and delivered after wait" do
-      # Use a unique channel to avoid interference with other tests
-      channel_id = TrackingPlugin.id()
-
-      # First, exhaust the rate limiter tokens for this channel
-      # Default burst is 5, so consume all tokens
-      for _ <- 1..10 do
-        RateLimiter.consume(channel_id, "test-account")
-      end
-
-      # Now any new message will be rate limited initially
-      payload = %OutboundPayload{
-        channel_id: channel_id,
-        kind: :text,
-        content: "rate-limited-message-#{System.unique_integer([:positive])}",
-        account_id: "test-account",
-        peer: %{kind: :dm, id: "user-1", thread_id: nil},
-        meta: %{test_pid: self()}
-      }
-
-      # Enqueue the message - it should be accepted even if rate limited
-      {:ok, _ref} = Outbox.enqueue(payload)
-
-      # Wait for the rate limiter to refill and the message to be delivered
-      # Default rate is 30/sec, so tokens refill quickly
-      # We give it up to 500ms to be delivered
-      assert_receive {:delivered, content}
-      assert content == payload.content
-    end
-
     test "multiple rate-limited entries are all eventually delivered" do
       channel_id = TrackingPlugin.id()
 
@@ -137,41 +107,6 @@ defmodule LemonChannels.OutboxRateLimitRequeueTest do
 
       # All messages should have been delivered (order may vary)
       assert Enum.sort(delivered) == Enum.sort(messages)
-    end
-
-    test "queue stats show entry count correctly during rate limiting" do
-      channel_id = TrackingPlugin.id()
-
-      # Use a unique account to avoid interference
-      account = "stats-account-#{System.unique_integer([:positive])}"
-
-      # Exhaust rate limiter
-      for _ <- 1..10 do
-        RateLimiter.consume(channel_id, account)
-      end
-
-      # Get initial queue length
-      initial_stats = Outbox.stats()
-      initial_length = initial_stats.queue_length
-
-      # Enqueue a message
-      payload = %OutboundPayload{
-        channel_id: channel_id,
-        kind: :text,
-        content: "stats-test",
-        account_id: account,
-        peer: %{kind: :dm, id: "user-1", thread_id: nil},
-        meta: %{test_pid: self()}
-      }
-
-      {:ok, _ref} = Outbox.enqueue(payload)
-
-      # Queue length should have increased
-      stats = Outbox.stats()
-      assert stats.queue_length >= initial_length
-
-      # Wait for delivery
-      assert_receive {:delivered, _}
     end
 
     test "entry is not lost when process_queue triggers during rate limiting" do

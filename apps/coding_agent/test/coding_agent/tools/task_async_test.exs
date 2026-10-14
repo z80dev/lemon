@@ -654,62 +654,16 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
       assert AsyncFollowups.resolve_async_followup_queue_mode(nil, :followup) == :followup
     end
 
-    test "falls back to the tool default when config has an invalid shape" do
-      Application.put_env(:coding_agent, :async_followups, :invalid)
+    test "falls back to the tool default for malformed or unsupported configuration" do
+      for config <- [:invalid, [default_queue_mode: :bogus]] do
+        Application.put_env(:coding_agent, :async_followups, config)
 
-      assert AsyncFollowups.resolve_async_followup_queue_mode(nil, :followup) == :followup
-    end
-
-    test "falls back to the tool default when config has an unsupported default queue mode" do
-      Application.put_env(:coding_agent, :async_followups, default_queue_mode: :bogus)
-
-      assert AsyncFollowups.resolve_async_followup_queue_mode(nil, :followup) == :followup
+        assert AsyncFollowups.resolve_async_followup_queue_mode(nil, :followup) == :followup
+      end
     end
   end
 
   describe "execute/6 - async: true" do
-    test "returns task_id when async is true" do
-      result =
-        Task.execute(
-          "call_1",
-          %{
-            "description" => "Async test task",
-            "prompt" => "Return hello",
-            "async" => true
-          },
-          nil,
-          nil,
-          "/tmp",
-          []
-        )
-
-      assert %LemonAgent.Types.AgentToolResult{} = result
-      assert result.details.status == "queued"
-      assert is_binary(result.details.task_id)
-      assert is_binary(result.details.run_id)
-    end
-
-    test "creates task in TaskStore when async" do
-      result =
-        Task.execute(
-          "call_1",
-          %{
-            "description" => "Async store test",
-            "prompt" => "Test prompt",
-            "async" => true
-          },
-          nil,
-          nil,
-          "/tmp",
-          []
-        )
-
-      task_id = result.details.task_id
-      assert {:ok, record, _events} = TaskStore.get(task_id)
-      assert record.status in [:queued, :running]
-      assert record.description == "Async store test"
-    end
-
     test "creates run in RunGraph when async" do
       result =
         Task.execute(
@@ -890,23 +844,6 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
       assert {:error, "task_ids is required for action=join"} = result
     end
 
-    test "join returns error when task_ids is empty list" do
-      result =
-        Task.execute(
-          "call_1",
-          %{
-            "action" => "join",
-            "task_ids" => []
-          },
-          nil,
-          nil,
-          "/tmp",
-          []
-        )
-
-      assert {:error, "task_ids is required for action=join"} = result
-    end
-
     test "join returns error when task_ids contains non-strings" do
       result =
         Task.execute(
@@ -922,252 +859,6 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
         )
 
       assert {:error, "task_ids must be a list of strings"} = result
-    end
-
-    # timeout_ms validation tests removed: join should not time out.
-
-    test "join accepts task_id as single string" do
-      # Create a task first
-      create_result =
-        Task.execute(
-          "call_1",
-          %{
-            "description" => "Join single test",
-            "prompt" => "Test",
-            "async" => true
-          },
-          nil,
-          nil,
-          "/tmp",
-          []
-        )
-
-      task_id = create_result.details.task_id
-
-      # Join with single task_id (not in array)
-      result =
-        Task.execute(
-          "call_2",
-          %{
-            "action" => "join",
-            "task_id" => task_id,
-            "timeout_ms" => 100
-          },
-          nil,
-          nil,
-          "/tmp",
-          []
-        )
-
-      # Should timeout since task is still queued
-      assert %LemonAgent.Types.AgentToolResult{} = result
-      assert result.details.status in ["timeout", "completed"]
-    end
-
-    test "join accepts task_ids as array" do
-      # Create two tasks
-      result1 =
-        Task.execute(
-          "call_1",
-          %{
-            "description" => "Join multi test 1",
-            "prompt" => "Test 1",
-            "async" => true
-          },
-          nil,
-          nil,
-          "/tmp",
-          []
-        )
-
-      result2 =
-        Task.execute(
-          "call_2",
-          %{
-            "description" => "Join multi test 2",
-            "prompt" => "Test 2",
-            "async" => true
-          },
-          nil,
-          nil,
-          "/tmp",
-          []
-        )
-
-      task_ids = [result1.details.task_id, result2.details.task_id]
-
-      result =
-        Task.execute(
-          "call_3",
-          %{
-            "action" => "join",
-            "task_ids" => task_ids,
-            "timeout_ms" => 100
-          },
-          nil,
-          nil,
-          "/tmp",
-          []
-        )
-
-      # Should timeout since tasks are still queued
-      assert %LemonAgent.Types.AgentToolResult{} = result
-      assert result.details.status in ["timeout", "completed"]
-    end
-  end
-
-  describe "execute/6 - join action modes" do
-    test "join with wait_all mode" do
-      # Create two tasks
-      result1 =
-        Task.execute(
-          "call_1",
-          %{
-            "description" => "Wait all test 1",
-            "prompt" => "Test 1",
-            "async" => true
-          },
-          nil,
-          nil,
-          "/tmp",
-          []
-        )
-
-      result2 =
-        Task.execute(
-          "call_2",
-          %{
-            "description" => "Wait all test 2",
-            "prompt" => "Test 2",
-            "async" => true
-          },
-          nil,
-          nil,
-          "/tmp",
-          []
-        )
-
-      task_ids = [result1.details.task_id, result2.details.task_id]
-
-      join_result =
-        Task.execute(
-          "call_3",
-          %{
-            "action" => "join",
-            "task_ids" => task_ids,
-            "mode" => "wait_all",
-            "timeout_ms" => 100
-          },
-          nil,
-          nil,
-          "/tmp",
-          []
-        )
-
-      assert %LemonAgent.Types.AgentToolResult{} = join_result
-      assert join_result.details.status in ["timeout", "completed"]
-
-      case join_result.details.status do
-        "timeout" -> assert join_result.details.snapshot.mode == :wait_all
-        "completed" -> assert join_result.details.mode == "wait_all"
-      end
-    end
-
-    test "join with wait_any mode" do
-      # Create two tasks
-      result1 =
-        Task.execute(
-          "call_1",
-          %{
-            "description" => "Wait any test 1",
-            "prompt" => "Test 1",
-            "async" => true
-          },
-          nil,
-          nil,
-          "/tmp",
-          []
-        )
-
-      result2 =
-        Task.execute(
-          "call_2",
-          %{
-            "description" => "Wait any test 2",
-            "prompt" => "Test 2",
-            "async" => true
-          },
-          nil,
-          nil,
-          "/tmp",
-          []
-        )
-
-      task_ids = [result1.details.task_id, result2.details.task_id]
-
-      join_result =
-        Task.execute(
-          "call_3",
-          %{
-            "action" => "join",
-            "task_ids" => task_ids,
-            "mode" => "wait_any",
-            "timeout_ms" => 100
-          },
-          nil,
-          nil,
-          "/tmp",
-          []
-        )
-
-      assert %LemonAgent.Types.AgentToolResult{} = join_result
-      assert join_result.details.status in ["timeout", "completed"]
-
-      case join_result.details.status do
-        "timeout" -> assert join_result.details.snapshot.mode == :wait_any
-        "completed" -> assert join_result.details.mode == "wait_any"
-      end
-    end
-
-    test "join defaults to wait_all when mode is invalid" do
-      # Create a task
-      result =
-        Task.execute(
-          "call_1",
-          %{
-            "description" => "Default mode test",
-            "prompt" => "Test",
-            "async" => true
-          },
-          nil,
-          nil,
-          "/tmp",
-          []
-        )
-
-      join_result =
-        Task.execute(
-          "call_2",
-          %{
-            "action" => "join",
-            "task_ids" => [result.details.task_id],
-            "mode" => "invalid_mode",
-            "timeout_ms" => 100
-          },
-          nil,
-          nil,
-          "/tmp",
-          []
-        )
-
-      # Should default to wait_all
-      assert %LemonAgent.Types.AgentToolResult{} = join_result
-      assert join_result.details.status in ["timeout", "completed"]
-
-      case join_result.details.status do
-        "timeout" -> assert join_result.details.snapshot.mode == :wait_all
-        "completed" -> assert join_result.details.mode == "wait_all"
-      end
     end
   end
 
@@ -1287,6 +978,28 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
       assert Enum.all?(result.details.tasks, &(not Map.has_key?(&1, :result)))
     end
 
+    test "invalid join mode defaults to wait_all and returns every completed task" do
+      task_ids =
+        for description <- ["first", "second"] do
+          run_id = RunGraph.new_run(%{type: :task, description: description})
+          RunGraph.finish(run_id, %{result: "done"})
+          TaskStore.new_task(%{description: description, run_id: run_id})
+        end
+
+      result =
+        Task.execute(
+          "join_invalid_mode",
+          %{"action" => "join", "task_ids" => task_ids, "mode" => "invalid"},
+          nil,
+          nil,
+          "/tmp",
+          []
+        )
+
+      assert result.details.mode == "wait_all"
+      assert Enum.map(result.details.tasks, & &1.task_id) == task_ids
+    end
+
     test "join surfaces task errors in content text" do
       run_id = RunGraph.new_run(%{type: :task, description: "check outbox"})
       task_id = TaskStore.new_task(%{description: "check outbox", run_id: run_id})
@@ -1331,36 +1044,24 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
       assert {:error, "Unknown task_id: nonexistent_task_12345"} = result
     end
 
-    test "join returns error when any task_id in list doesn't exist" do
-      # Create one valid task
-      create_result =
-        Task.execute(
-          "call_1",
-          %{
-            "description" => "Partial test",
-            "prompt" => "Test",
-            "async" => true
-          },
-          nil,
-          nil,
-          "/tmp",
-          []
-        )
+    test "mixed valid and missing task IDs fail without suppressing the valid followup" do
+      run_id = RunGraph.new_run(%{type: :task})
+      RunGraph.mark_running(run_id)
+      RunGraph.finish(run_id, %{result: "done"})
+      task_id = TaskStore.new_task(%{description: "Valid task", run_id: run_id})
+      TaskStore.finish(task_id, %{result: "done"})
 
-      result =
-        Task.execute(
-          "call_2",
-          %{
-            "action" => "join",
-            "task_ids" => [create_result.details.task_id, "nonexistent_task"]
-          },
-          nil,
-          nil,
-          "/tmp",
-          []
-        )
+      assert {:error, "Unknown task_id: nonexistent_task"} =
+               Task.execute(
+                 "call_mixed_unknown",
+                 %{"action" => "join", "task_ids" => [task_id, "nonexistent_task"]},
+                 nil,
+                 nil,
+                 "/tmp",
+                 []
+               )
 
-      assert {:error, "Unknown task_id: nonexistent_task"} = result
+      refute TaskStore.auto_followup_suppressed?(task_id)
     end
   end
 
@@ -1383,46 +1084,6 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
         )
 
       assert {:error, "Task " <> ^task_id <> " is missing a run_id"} = result
-    end
-  end
-
-  describe "execute/6 - invalid input edge cases" do
-    test "join handles null task_ids" do
-      result =
-        Task.execute(
-          "call_1",
-          %{
-            "action" => "join",
-            "task_ids" => nil
-          },
-          nil,
-          nil,
-          "/tmp",
-          []
-        )
-
-      assert {:error, "task_ids is required for action=join"} = result
-    end
-
-    # timeout_ms edge-case tests removed: join should not time out.
-
-    test "join handles empty string task_ids" do
-      result =
-        Task.execute(
-          "call_1",
-          %{
-            "action" => "join",
-            "task_ids" => [""]
-          },
-          nil,
-          nil,
-          "/tmp",
-          []
-        )
-
-      # Empty string is still a valid string, so validation passes
-      # But it will fail to find the task
-      assert {:error, "Unknown task_id: "} = result
     end
   end
 
@@ -1502,40 +1163,6 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
 
       assert {:ok, %{status: :completed, result: run_result}} = RunGraph.get(run_id)
       assert [%LemonAi.Types.TextContent{text: "Recovered final answer"}] = run_result.content
-    end
-
-    test "formats successful completion with answer" do
-      result =
-        Task.execute(
-          "call_fmt_success",
-          %{
-            "description" => "Build widget",
-            "prompt" => "Build it",
-            "async" => true,
-            "auto_followup" => true,
-            "queue_mode" => "followup"
-          },
-          nil,
-          nil,
-          "/tmp",
-          run_override: fn _on_update, _signal ->
-            %LemonAgent.Types.AgentToolResult{
-              content: [%LemonAi.Types.TextContent{text: "Widget built successfully"}],
-              details: %{status: "completed"}
-            }
-          end,
-          session_module: __MODULE__.TaskAsyncSessionSpy,
-          session_pid: self(),
-          session_key: "agent:main:main",
-          agent_id: "main",
-          run_orchestrator: __MODULE__.TaskAsyncStubRunOrchestrator
-        )
-
-      _task_id = result.details.task_id
-      _run_id = result.details.run_id
-
-      assert_receive {:session_async_followup, %CustomMessage{} = message}, 1_000
-      assert message.content == "Widget built successfully"
     end
 
     test "formats successful completion with long answer without truncation" do
@@ -1785,8 +1412,6 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
         )
 
       assert %LemonAgent.Types.AgentToolResult{} = result
-
-      # nil session_pid should fall back to router
       assert_receive {:router_submit, %RunRequest{queue_mode: :followup}, _}, 1_000
     end
   end

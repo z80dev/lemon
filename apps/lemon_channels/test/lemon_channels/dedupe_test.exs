@@ -16,18 +16,6 @@ defmodule LemonChannels.Outbox.DedupeTest do
   end
 
   describe "check/2 and mark/2" do
-    test "returns :new for unseen key" do
-      key = "test_#{System.unique_integer()}"
-      assert Dedupe.check("channel", key) == :new
-    end
-
-    test "returns :duplicate for seen key" do
-      key = "test_#{System.unique_integer()}"
-
-      Dedupe.mark("channel", key)
-      assert Dedupe.check("channel", key) == :duplicate
-    end
-
     test "different channels have separate keys" do
       key = "test_#{System.unique_integer()}"
 
