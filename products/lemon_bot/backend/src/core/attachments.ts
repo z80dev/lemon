@@ -165,6 +165,19 @@ export async function inspectAttachment(bytes: Uint8Array, filename: string, pur
   return { mime, preview, width, height, durationMs };
 }
 
+function ownedBot(services: BackendServices, user: Principal, botId: string) {
+  const bot = services.auth.bot(user, botId);
+  if (bot.ownerUserId !== user.userId) fail('forbidden', 'Only your own Bot may be used for attachments.');
+  return bot;
+}
+
+function ownedConversation(services: BackendServices, user: Principal, conversationId: string) {
+  const conversation = services.auth.conversation(user, conversationId);
+  if (conversation.ownerUserId !== user.userId) fail('forbidden', 'Attachments require your own conversation.');
+  for (const botId of conversation.botIds) ownedBot(services, user, botId);
+  return conversation;
+}
+
 export function createAttachmentService(services: BackendServices): StoredAttachmentService {
   const existing = instances.get(services);
   if (existing) return existing;
@@ -186,15 +199,18 @@ export function createAttachmentService(services: BackendServices): StoredAttach
   };
   const visible = (user: Principal, attachmentId: string) => {
     if (user.sessionId) {
-      const session = services.store.get<{ userId: string; expiresAtMs: number }>('authSessions', user.sessionId);
+      const session = services.store.get<P.AuthSession>('authSessions', user.sessionId);
       const secret = services.store.get<{ revoked: boolean }>('sessionSecrets', user.sessionId);
-      if (!session || !secret || secret.revoked || session.userId !== user.userId || session.expiresAtMs <= services.now()) fail('forbidden', 'Download session has been revoked.');
+      if (!session || !secret || secret.revoked || session.userId !== user.userId || (session.expiresAtMs !== null && session.expiresAtMs <= services.now())) fail('forbidden', 'Download session has been revoked.');
     }
     const member = services.auth.member(user.userId);
     const workspace = services.store.get<P.Workspace>('workspaces', user.workspaceId);
     if (!member.enabled || (workspace && !workspace.enabled)) fail('forbidden', 'Download access has been revoked.');
     services.integrations.authorizeExportAttachment?.(user, attachmentId);
     const attachment = services.auth.attachment(user, attachmentId);
+    if (attachment.ownerUserId !== user.userId) fail('forbidden', 'Attachment belongs to another owner.');
+    if (attachment.botId) ownedBot(services, user, attachment.botId);
+    if (attachment.conversationId) ownedConversation(services, user, attachment.conversationId);
     if (attachment.state !== 'ready') fail('not_found', 'Attachment has been deleted.');
     return attachment;
   };
@@ -208,10 +224,10 @@ export function createAttachmentService(services: BackendServices): StoredAttach
       attachment: { id: attachment.id, revision: attachment.revision, state: attachment.state, ownerUserId: attachment.ownerUserId, conversationId: attachment.conversationId, botId: attachment.botId },
       member: { id: member.id, userId: member.userId, enabled: member.enabled, role: member.role },
       workspace: workspace ? { id: workspace.id, enabled: workspace.enabled } : null,
-      conversation: conversation ? { id: conversation.id, kind: conversation.kind, ownerUserId: conversation.ownerUserId, humanUserIds: [...conversation.humanUserIds].sort(), botIds: [...conversation.botIds].sort() } : null,
+      conversation: conversation ? { id: conversation.id, kind: conversation.kind, ownerUserId: conversation.ownerUserId, botIds: [...conversation.botIds].sort() } : null,
       bots: botIds.map(botId => {
         const bot = services.store.get<P.Bot>('bots', botId);
-        return bot ? { id: bot.id, ownerUserId: bot.ownerUserId, managerUserIds: [...bot.managerUserIds].sort(), visibility: bot.visibility, published: bot.published, avatarAttached: bot.avatar.attachmentId === attachment.id, referenceAttached: bot.referenceAttachmentIds.includes(attachment.id) } : { id: botId, missing: true };
+        return bot ? { id: bot.id, ownerUserId: bot.ownerUserId, avatarAttached: bot.avatar.attachmentId === attachment.id, referenceAttached: bot.referenceAttachmentIds.includes(attachment.id) } : { id: botId, missing: true };
       }),
       aclRevision: services.store.metadata('aclRevision'),
     });
@@ -246,24 +262,25 @@ export function createAttachmentService(services: BackendServices): StoredAttach
     async create(user, inputBytes, metadata) {
       const input = parse(createInput, metadata);
       const filename = safeName(input.filename);
-      if (input.conversationId) services.auth.conversation(user, input.conversationId);
-      const bot = input.botId ? services.auth.bot(user, input.botId, input.purpose === 'avatar' || input.purpose === 'reference') : null;
-      if (input.conversationId && bot && !services.auth.conversation(user, input.conversationId).botIds.includes(bot.id)) fail('invalid_request', 'Bot is not part of the attachment conversation.');
+      if (input.conversationId) ownedConversation(services, user, input.conversationId);
+      const bot = input.botId ? ownedBot(services, user, input.botId) : null;
+      if (input.conversationId && bot && !ownedConversation(services, user, input.conversationId).botIds.includes(bot.id)) fail('invalid_request', 'Bot is not part of the attachment conversation.');
       const provenance: P.DeliverableProvenance = input.provenance ?? { botId: null, runId: null, machineId: null, sourceEntryId: null, generatedAtMs: null };
       if (provenance.botId) {
-        const sourceBot = services.auth.bot(user, provenance.botId);
+        const sourceBot = ownedBot(services, user, provenance.botId);
         if (provenance.machineId !== null && provenance.machineId !== sourceBot.machineId) fail('invalid_request', 'Artifact machine provenance does not match its Bot.');
         if (provenance.runId) {
           if (provenance.machineId !== sourceBot.machineId) fail('invalid_request', 'Run artifact requires the actual execution machine.');
           const run = services.store.require<P.Run>('runs', provenance.runId);
-          services.auth.conversation(user, run.conversationId);
+          if (run.initiatorUserId !== user.userId) fail('forbidden', 'Artifact run belongs to another actor.');
+          ownedConversation(services, user, run.conversationId);
           if (run.botId !== sourceBot.id || (input.conversationId && run.conversationId !== input.conversationId)) fail('invalid_request', 'Artifact run provenance does not match its scope.');
         }
       } else if (provenance.runId || (provenance.generatedAtMs !== null && input.source !== 'tts' && input.source !== 'generated')) fail('invalid_request', 'Run artifact requires Bot provenance; provider-only generation requires its trusted source.');
       else if (provenance.machineId) services.auth.machine(user, provenance.machineId);
       if (provenance.sourceEntryId) {
         const entry = services.store.require<P.TranscriptEntry>('entries', provenance.sourceEntryId);
-        services.auth.conversation(user, entry.conversationId);
+        ownedConversation(services, user, entry.conversationId);
         if (input.conversationId && entry.conversationId !== input.conversationId) fail('invalid_request', 'Artifact source entry belongs to another conversation.');
       }
       // Keep an owned snapshot across asynchronous sniffing and writes.
@@ -272,16 +289,20 @@ export function createAttachmentService(services: BackendServices): StoredAttach
       if (input.source === 'tts' && description.preview !== 'audio') fail('invalid_request', 'Synthesized speech must contain actual audio.');
       if (input.source === 'node' && provenance.machineId === null) fail('invalid_request', 'Node attachment requires its actual machine provenance.');
       await ready;
-      if (input.conversationId) services.auth.conversation(user, input.conversationId);
-      if (input.botId) services.auth.bot(user, input.botId, input.purpose === 'avatar' || input.purpose === 'reference');
+      if (input.conversationId) ownedConversation(services, user, input.conversationId);
+      if (input.botId) ownedBot(services, user, input.botId);
       const sha256 = digest(bytes);
       const basename = await publishBlob(bytes, sha256);
       const attachment: P.Attachment = services.resource('attachment', { ownerUserId: user.userId, conversationId: input.conversationId ?? null, botId: input.botId ?? null, filename, size: bytes.length, sha256, ...description, source: input.source ?? (provenance.runId ? 'generated' as const : provenance.machineId ? 'node' as const : 'upload' as const), state: 'ready' as const, provenance });
       services.store.transaction(() => {
+        if (input.conversationId) ownedConversation(services, user, input.conversationId);
+        if (input.botId) ownedBot(services, user, input.botId);
+        if (provenance.botId) ownedBot(services, user, provenance.botId);
+        else if (provenance.machineId) services.auth.machine(user, provenance.machineId);
         services.store.put('attachmentBlobs', { id: attachment.id, basename, sha256, size: bytes.length } satisfies BlobRecord);
         services.store.put('attachments', attachment);
         services.store.setMetadata(`attachmentPurpose:${attachment.id}`, input.purpose);
-        services.events.emit('attachment.upserted', attachment, attachment.conversationId ? { conversationId: attachment.conversationId } : { userIds: [attachment.ownerUserId] });
+        services.events.emit('attachment.upserted', attachment, { userIds: [attachment.ownerUserId], ...(attachment.conversationId ? { conversationId: attachment.conversationId } : {}) });
       });
       return attachment;
     },
@@ -289,8 +310,8 @@ export function createAttachmentService(services: BackendServices): StoredAttach
       const input = parse(upload, metadata);
       const source = visible(user, sourceAttachmentId);
       const authorizeTarget = () => {
-        const conversation = input.conversationId ? services.auth.conversation(user, input.conversationId) : null;
-        const bot = input.botId ? services.auth.bot(user, input.botId, input.purpose === 'avatar' || input.purpose === 'reference') : null;
+        const conversation = input.conversationId ? ownedConversation(services, user, input.conversationId) : null;
+        const bot = input.botId ? ownedBot(services, user, input.botId) : null;
         if (conversation && bot && !conversation.botIds.includes(bot.id)) fail('invalid_request', 'Bot is not part of the copied attachment conversation.');
       };
       authorizeTarget();
@@ -308,7 +329,7 @@ export function createAttachmentService(services: BackendServices): StoredAttach
         services.store.put('attachmentBlobs', { id: attachment.id, basename, sha256: attachment.sha256, size: attachment.size } satisfies BlobRecord);
         services.store.put('attachments', attachment);
         services.store.setMetadata(`attachmentPurpose:${attachment.id}`, input.purpose);
-        services.events.emit('attachment.upserted', attachment, attachment.conversationId ? { conversationId: attachment.conversationId } : { userIds: [attachment.ownerUserId] });
+        services.events.emit('attachment.upserted', attachment, { userIds: [attachment.ownerUserId], ...(attachment.conversationId ? { conversationId: attachment.conversationId } : {}) });
       });
       return attachment;
     },
@@ -398,7 +419,10 @@ export function createAttachmentRoutes(services: BackendServices): Route[] {
   const service = createAttachmentService(services);
   const own = (user: Principal, attachmentId: string) => {
     const attachment = services.auth.attachment(user, attachmentId);
-    if (attachment.ownerUserId !== user.userId || attachment.state !== 'ready') fail('forbidden', 'Only the attachment owner may delete it.');
+    if (attachment.ownerUserId !== user.userId) fail('forbidden', 'Attachment belongs to another owner.');
+    if (attachment.botId) ownedBot(services, user, attachment.botId);
+    if (attachment.conversationId) ownedConversation(services, user, attachment.conversationId);
+    if (attachment.state !== 'ready') fail('not_found', 'Attachment has been deleted.');
     return attachment;
   };
   const effects = (attachment: P.Attachment): P.ScopeEffect[] => [
@@ -439,12 +463,20 @@ export function createAttachmentRoutes(services: BackendServices): Route[] {
     } },
     { method: 'GET', path: '/v1/attachments', auth: 'member', body: 'none', status: 200, handler(context) {
       const query = parse(listQuery, queryObject(context.query)); const user = principal(context.user);
-      if (query.conversationId) services.auth.conversation(user, query.conversationId);
-      if (query.botId) services.auth.bot(user, query.botId);
-      const values = services.store.list<P.Attachment>('attachments', a => a.state === 'ready' && (!query.conversationId || a.conversationId === query.conversationId) && (!query.botId || a.botId === query.botId) && services.auth.canRead(user, 'attachments', a));
+      if (query.conversationId) ownedConversation(services, user, query.conversationId);
+      if (query.botId) ownedBot(services, user, query.botId);
+      const values = services.store.list<P.Attachment>('attachments', a => {
+        if (a.ownerUserId !== user.userId || a.state !== 'ready' || (query.conversationId && a.conversationId !== query.conversationId) || (query.botId && a.botId !== query.botId)) return false;
+        if (a.botId && services.store.get<P.Bot>('bots', a.botId)?.ownerUserId !== user.userId) return false;
+        if (a.conversationId) {
+          const conversation = services.store.get<P.Conversation>('conversations', a.conversationId);
+          if (!conversation || conversation.ownerUserId !== user.userId || conversation.botIds.some(botId => services.store.get<P.Bot>('bots', botId)?.ownerUserId !== user.userId)) return false;
+        }
+        return services.auth.canRead(user, 'attachments', a);
+      });
       return services.page(context, values, { binding: query });
     } },
-    { method: 'GET', path: '/v1/attachments/:id', auth: 'member', body: 'none', status: 200, handler: context => services.auth.attachment(principal(context.user), context.params.id!) },
+    { method: 'GET', path: '/v1/attachments/:id', auth: 'member', body: 'none', status: 200, handler: context => own(principal(context.user), context.params.id!) },
     { method: 'GET', path: '/v1/attachments/:id/download', auth: 'member', body: 'none', status: 200, handler: context => service.download(principal(context.user), context.params.id!) },
     { method: 'GET', path: '/v1/downloads/:ticket', auth: 'public', body: 'none', mutation: false, status: 200, handler: context => service.serve(context.params.ticket!, context.request) },
     { method: 'POST', path: '/v1/attachments/:id/preview', auth: 'member', status: 200, handler(context) {
@@ -456,7 +488,7 @@ export function createAttachmentRoutes(services: BackendServices): Route[] {
       services.store.transaction(() => {
         services.mutations.confirm(user, attachment, 'delete', body, effects(attachment));
         services.store.put('attachments', services.update(attachment, { state: 'deleted' }));
-        services.events.emit('attachment.deleted', { id: attachment.id, deleted: true }, attachment.conversationId ? { conversationId: attachment.conversationId } : { userIds: [attachment.ownerUserId] });
+        services.events.emit('attachment.deleted', { id: attachment.id, deleted: true }, { userIds: [attachment.ownerUserId], ...(attachment.conversationId ? { conversationId: attachment.conversationId } : {}) });
         services.audit(user, 'attachment.delete', attachment.id, 'succeeded');
       });
       await service.removeDeleted(attachment.id);

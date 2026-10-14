@@ -30,7 +30,8 @@ export function createVoiceService(services: BackendServices): VoiceService {
   const own = (user: Principal, sessionId: string): P.VoiceSession => {
     const session = store.require<P.VoiceSession>('voiceSessions', sessionId);
     if (user.kind !== 'user' || session.userId !== user.userId) fail('forbidden', 'Voice session belongs to another user.');
-    services.auth.conversation(user, session.conversationId);
+    const conversation = services.auth.conversation(user, session.conversationId);
+    if (conversation.ownerUserId !== user.userId || conversation.botIds.some(botId => services.auth.bot(user, botId).ownerUserId !== user.userId)) fail('forbidden', 'Voice requires your own Bots and conversation.');
     return session;
   };
   const finish = (session: P.VoiceSession, state: 'ended' | 'failed', user: Principal): P.VoiceSession => store.transaction(() => {
@@ -39,7 +40,7 @@ export function createVoiceService(services: BackendServices): VoiceService {
     const endedAtMs = services.now();
     const ended = services.update(current, { state, endedAtMs, durationMs: Math.max(0, endedAtMs - current.startedAtMs) });
     store.put('voiceSessions', ended);
-    const entry = services.entry(user, ended.conversationId, { kind: 'voice_call', voiceSession: ended });
+    const entry = services.entry(user, ended.conversationId, { kind: 'voice_call', voiceSession: ended, targetedUserId: ended.userId });
     store.setMetadata(`voiceSummary:${ended.id}`, entry.id);
     store.setMetadata(deadlineKey(ended.id), null);
     emit(ended);
@@ -52,7 +53,7 @@ export function createVoiceService(services: BackendServices): VoiceService {
     if (entry?.kind !== 'voice_call') return;
     const updated = services.update(entry, { voiceSession: session });
     store.put('entries', updated);
-    services.events.emit('entry.upserted', updated, { conversationId: session.conversationId });
+    services.events.emit('entry.upserted', updated, { userIds: [session.userId], conversationId: session.conversationId });
   };
   const service: VoiceService = {
     connect(userId, deviceId) {
@@ -154,9 +155,9 @@ export function createVoiceRoutes(services: BackendServices): Route[] {
       if (user.kind !== 'user') fail('forbidden', 'Only a user can start voice.');
       service.sweep();
       const conversation = services.auth.conversation(user, body.conversationId);
-      if (!['dm', 'task', 'team_dm'].includes(conversation.kind) || conversation.ownerUserId !== user.userId || conversation.botIds.length !== 1) fail('forbidden', 'Voice requires your own private conversation.');
+      if (!['dm', 'task'].includes(conversation.kind) || conversation.ownerUserId !== user.userId || conversation.botIds.length !== 1) fail('forbidden', 'Voice requires your own private conversation.');
       const bot = services.auth.bot(user, conversation.botIds[0]!);
-      if (bot.visibility === 'team' && bot.ownerUserId !== user.userId) fail('forbidden', 'Voice is unavailable for a teammate’s Team Bot.');
+      if (bot.ownerUserId !== user.userId) fail('forbidden', 'Voice is available only for your own Bot.');
       const device = services.store.require<P.Device>('devices', body.deviceId);
       if (device.userId !== user.userId || (user.deviceId !== null && user.deviceId !== device.id)) fail('forbidden', 'Use your own current device.');
       return services.store.transaction(() => {

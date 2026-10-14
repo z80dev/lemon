@@ -108,13 +108,27 @@ describe('immutable completed attachments', () => {
       f.store.put('users', f.services.update(user, { displayName: 'New display name', preferences: { ...user.preferences, appearance: 'dark' } }));
       const continued = await service.serve(ticket, new Request(download.url, { headers: { Range: 'bytes=4-6' } }));
       expect(continued.status).toBe(206); expect(await continued.text()).toBe('456');
-      f.store.put('conversations', f.services.update(conversation, { humanUserIds: [...conversation.humanUserIds, f.other.userId] }));
+      f.store.setMetadata('aclRevision', 1);
       await expect(service.serve(ticket, new Request(download.url))).rejects.toMatchObject({ code: 'forbidden' });
       const replacement = service.download(f.user, attachment.id); const replacementTicket = replacement.url.split('/').pop()!;
       f.store.put('sessionSecrets', { id: f.user.sessionId!, revoked: true });
       await expect(service.serve(replacementTicket, new Request(replacement.url))).rejects.toMatchObject({ code: 'forbidden' });
       f.store.put('sessionSecrets', { id: f.user.sessionId!, revoked: false }); f.advance(300000);
       await expect(service.serve(replacementTicket, new Request(replacement.url))).rejects.toMatchObject({ code: 'expired' });
+    } finally { service.close(); await f.close(); }
+  });
+  test('paired non-expiring sessions retain five-minute owner-only tickets until explicit session revocation', async () => {
+    const f = await mediaFixture(); const service = createAttachmentService(f.services);
+    try {
+      const session = f.store.require<P.AuthSession>('authSessions', f.user.sessionId!);
+      f.store.put('authSessions', { ...session, expiresAtMs: null });
+      const attachment = await service.create(f.user, strToU8('paired owner'), { clientNonce: nonce, purpose: 'message', filename: 'paired.txt' });
+      const download = service.download(f.user, attachment.id);
+      expect(download.expiresAtMs).toBe(f.services.now() + 300000);
+      const response = await service.serve(download.url.split('/').pop()!, new Request(download.url));
+      expect(await response.text()).toBe('paired owner');
+      f.store.put('sessionSecrets', { id: f.user.sessionId!, revoked: true });
+      await expect(service.serve(download.url.split('/').pop()!, new Request(download.url))).rejects.toMatchObject({ code: 'forbidden' });
     } finally { service.close(); await f.close(); }
   });
   test('export revocation hook runs at ticket issuance and again on actual byte fetch', async () => {
@@ -129,18 +143,37 @@ describe('immutable completed attachments', () => {
       expect(() => service.download(f.user, attachment.id)).toThrow(); expect(checks).toBe(3);
     } finally { service.close(); await f.close(); }
   });
-  test('shared-room authorization never grants staging ownership or deletion; removal revokes issued ticket', async () => {
+  test('own-Bot groups allow attachments while cross-owner references, avatars, copies and administrative reads are denied', async () => {
     const f = await mediaFixture(); const service = createAttachmentService(f.services); const routes = createAttachmentRoutes(f.services);
     try {
-      const sharedBot = f.services.update(f.bot, { visibility: 'team', published: true }); f.store.put('bots', sharedBot);
-      const group = f.services.update(f.conversation, { kind: 'group', humanUserIds: [f.user.userId, f.other.userId] }); f.store.put('conversations', group);
-      const attachment = await service.create(f.user, strToU8('shared'), { clientNonce: nonce, purpose: 'message', filename: 'shared.txt', conversationId: group.id });
+      const second = { ...f.bot, id: 'bot_second' }; f.store.put('bots', second);
+      const group = f.services.update(f.conversation, { kind: 'group', botIds: [f.bot.id, second.id] }); f.store.put('conversations', group);
+      const attachment = await service.create(f.user, strToU8('owned group input'), { clientNonce: nonce, purpose: 'message', filename: 'owned.txt', conversationId: group.id });
       const staged = await service.create(f.user, strToU8('own only'), { clientNonce: nonce, purpose: 'message', filename: 'staged.txt' });
-      expect(() => service.download(f.other, staged.id)).toThrow();
-      const download = service.download(f.other, attachment.id);
+      const foreignBot = { ...f.bot, id: 'bot_foreign', ownerUserId: f.other.userId }; f.store.put('bots', foreignBot);
+      const foreign = await service.create(f.other, strToU8('foreign reference'), { clientNonce: nonce, purpose: 'reference', filename: 'foreign.txt', botId: foreignBot.id });
+      const member = f.services.auth.member(f.other.userId); f.store.put('members', f.services.update(member, { role: 'admin' }));
+      const administrator = { ...f.other, role: 'admin' as const };
+      expect(() => service.download(administrator, attachment.id)).toThrow();
+      expect(() => service.download(administrator, staged.id)).toThrow();
+      const detail = routes.find(r => r.method === 'GET' && r.path === '/v1/attachments/:id')!;
       const preview = routes.find(r => r.path.endsWith('/:id/preview'))!;
-      expect(() => preview.handler(f.context(preview, { clientNonce: nonce, action: 'delete' }, f.other, { id: attachment.id }))).toThrow();
-      f.store.put('conversations', f.services.update(group, { humanUserIds: [f.user.userId] }));
+      expect(() => detail.handler(f.context(detail, undefined, administrator, { id: attachment.id }))).toThrow();
+      expect(() => preview.handler(f.context(preview, { clientNonce: nonce, action: 'delete' }, administrator, { id: attachment.id }))).toThrow();
+      for (const purpose of ['reference', 'avatar'] as const) {
+        await expect(service.create(f.user, strToU8('bytes'), { clientNonce: nonce, purpose, filename: 'file.txt', botId: foreignBot.id })).rejects.toThrow();
+        await expect(service.copy(f.user, staged.id, { clientNonce: nonce, purpose, botId: foreignBot.id })).rejects.toThrow();
+      }
+      await expect(service.copy(f.user, foreign.id, { clientNonce: nonce, purpose: 'reference', botId: f.bot.id })).rejects.toThrow();
+      f.store.put('conversations', f.services.update(group, { botIds: [f.bot.id, foreignBot.id] }));
+      await expect(service.create(f.user, strToU8('cross-owner group'), { clientNonce: nonce, purpose: 'message', filename: 'group.txt', conversationId: group.id })).rejects.toThrow();
+      const list = routes.find(r => r.method === 'GET' && r.path === '/v1/attachments')!;
+      const page = list.handler(f.context(list, undefined)) as P.Page<P.Attachment>;
+      expect(page.items.some(item => item.id === attachment.id || item.id === foreign.id)).toBe(false);
+      expect(page.items.some(item => item.id === staged.id)).toBe(true);
+      f.store.put('conversations', group);
+      const download = service.download(f.user, attachment.id);
+      f.store.put('bots', { ...f.bot, ownerUserId: f.other.userId });
       await expect(service.serve(download.url.split('/').pop()!, new Request(download.url))).rejects.toThrow();
     } finally { service.close(); await f.close(); }
   });
@@ -162,6 +195,9 @@ describe('immutable completed attachments', () => {
       const artifact = await service.create(f.user, strToU8('result'), { clientNonce: nonce, purpose: 'message', filename: 'result.txt', conversationId: f.conversation.id, provenance });
       expect(artifact.source).toBe('generated'); expect(artifact.provenance).toEqual(provenance);
       await expect(service.create(f.user, strToU8('result'), { clientNonce: nonce, purpose: 'message', filename: 'bad.txt', provenance: { ...provenance, machineId: 'other_machine' } })).rejects.toMatchObject({ code: 'invalid_request' });
+      f.store.put('runs', { ...run, initiatorUserId: f.other.userId });
+      await expect(service.create(f.user, strToU8('result'), { clientNonce: nonce, purpose: 'message', filename: 'foreign-actor.txt', provenance })).rejects.toMatchObject({ code: 'forbidden' });
+      f.store.put('runs', run);
       const download = service.download(f.user, artifact.id);
       f.store.put('attachments', f.services.update(artifact, { state: 'deleted' }));
       await expect(service.serve(download.url.split('/').pop()!, new Request(download.url))).rejects.toMatchObject({ code: 'not_found' });
@@ -174,7 +210,7 @@ describe('immutable completed attachments', () => {
       const provenance: P.DeliverableProvenance = { botId: f.bot.id, machineId: f.bot.machineId, runId: run.id, sourceEntryId: null, generatedAtMs: run.completedAtMs };
       const original = await service.create(f.user, strToU8('historical result'), { clientNonce: nonce, purpose: 'reference', filename: 'result.txt', botId: f.bot.id, provenance });
       f.store.put('bots', f.services.update(f.bot, { machineId: 'machine_new' })); f.store.remove('runs', run.id);
-      const target = { ...f.services.update(f.bot, { visibility: 'team', published: false }), id: 'bot_copy_target' }; f.store.put('bots', target);
+      const target = { ...f.bot, id: 'bot_copy_target' }; f.store.put('bots', target);
       const copy = await service.copy(f.user, original.id, { clientNonce: nonce, purpose: 'reference', botId: target.id });
       expect(copy.id).not.toBe(original.id); expect(copy.botId).toBe(target.id); expect(copy.ownerUserId).toBe(f.user.userId);
       expect(copy.provenance).toEqual(provenance); expect(copy.source).toBe(original.source); expect(copy.sha256).toBe(original.sha256);

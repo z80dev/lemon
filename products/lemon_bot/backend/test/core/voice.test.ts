@@ -5,7 +5,7 @@ import { mediaFixture } from './attachments.fixture';
 
 const nonce = 'voice_session_test_01';
 describe('private voice session lifecycle', () => {
-  test('one active call across devices, own registered device, and no group/teammate Team voice', async () => {
+  test('one active call across devices, own registered device and Bot, and no group or channel voice', async () => {
     const f = await mediaFixture(); const routes = createVoiceRoutes(f.services); const service = createVoiceService(f.services);
     const start = routes.find(r => r.method === 'POST' && r.path === '/v1/voice/sessions')!;
     try {
@@ -18,14 +18,17 @@ describe('private voice session lifecycle', () => {
       const end = routes.find(r => r.path.endsWith('/end'))!;
       end.handler(f.context(end, { clientNonce: nonce }, f.user, { id: session.id }));
       expect(() => start.handler(f.context(start, { clientNonce: nonce, conversationId: f.conversation.id, deviceId: f.other.deviceId }))).toThrow();
-      f.store.put('conversations', f.services.update(f.conversation, { kind: 'group' }));
+      const secondBot = { ...f.bot, id: 'bot_second' }; f.store.put('bots', secondBot);
+      f.store.put('conversations', f.services.update(f.conversation, { kind: 'group', botIds: [f.bot.id, secondBot.id] }));
       expect(() => start.handler(f.context(start, { clientNonce: nonce, conversationId: f.conversation.id, deviceId: f.user.deviceId }))).toThrow();
       f.store.put('conversations', f.services.update(f.conversation, { kind: 'channel' }));
       expect(() => start.handler(f.context(start, { clientNonce: nonce, conversationId: f.conversation.id, deviceId: f.user.deviceId }))).toThrow();
-      f.store.put('bots', f.services.update(f.bot, { ownerUserId: f.other.userId, visibility: 'team', published: true }));
-      f.store.put('conversations', f.services.update(f.conversation, { kind: 'team_dm' }));
+      f.store.put('bots', f.services.update(f.bot, { ownerUserId: f.other.userId }));
+      f.store.put('conversations', f.conversation);
       expect(() => start.handler(f.context(start, { clientNonce: nonce, conversationId: f.conversation.id, deviceId: f.user.deviceId }))).toThrow();
-      f.store.put('bots', f.services.update(f.bot, { visibility: 'team', published: true }));
+      const member = f.services.auth.member(f.user.userId); f.store.put('members', f.services.update(member, { role: 'admin' }));
+      expect(() => start.handler(f.context(start, { clientNonce: nonce, conversationId: f.conversation.id, deviceId: f.user.deviceId }, { ...f.user, role: 'admin' }))).toThrow();
+      f.store.put('bots', f.bot);
       expect((start.handler(f.context(start, { clientNonce: nonce, conversationId: f.conversation.id, deviceId: f.user.deviceId })) as P.VoiceSession).state).toBe('active');
       service.endUser(f.user);
       f.store.put('conversations', f.services.update(f.conversation, { kind: 'task' }));
@@ -57,6 +60,7 @@ describe('private voice session lifecycle', () => {
       expect(ended.durationMs).toBe(12345); expect(ended.endedAtMs).toBe(ended.startedAtMs + 12345); expect(ended.state).toBe('ended');
       expect(end.handler(f.context(end, { clientNonce: nonce }, f.user, { id: session.id }))).toEqual(ended);
       const summaries = f.store.list<P.TranscriptEntry>('entries', e => e.kind === 'voice_call'); expect(summaries).toHaveLength(1);
+      expect(summaries[0]!.targetedUserId).toBe(f.user.userId);
       expect(f.store.require<P.Run>('runs', run.id).status).toBe('running');
       expect(() => service.requireActive(f.user, session.id, f.conversation.id)).toThrow();
       expect(() => patch.handler(f.context(patch, { clientNonce: nonce, revision: ended.revision, muted: false }, f.user, { id: session.id }))).toThrow();
@@ -124,7 +128,7 @@ describe('private voice session lifecycle', () => {
       service.connect(f.user.userId, f.user.deviceId!);
       const session = start.handler(f.context(start, { clientNonce: nonce, conversationId: f.conversation.id, deviceId: f.user.deviceId })) as P.VoiceSession;
       const otherBot = { ...f.bot, id: 'bot_other', ownerUserId: f.other.userId }; f.store.put('bots', otherBot);
-      const otherRoom = { ...f.conversation, id: 'room_other', botIds: [otherBot.id], ownerUserId: f.other.userId, humanUserIds: [f.other.userId] }; f.store.put('conversations', otherRoom);
+      const otherRoom = { ...f.conversation, id: 'room_other', botIds: [otherBot.id], ownerUserId: f.other.userId }; f.store.put('conversations', otherRoom);
       service.connect(f.other.userId, f.other.deviceId!);
       const otherSession = start.handler(f.context(start, { clientNonce: 'voice_other_session_01', conversationId: otherRoom.id, deviceId: f.other.deviceId }, f.other)) as P.VoiceSession;
       const cancellations: P.VoiceSession[] = [];
