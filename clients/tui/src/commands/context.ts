@@ -7,6 +7,7 @@ import {
 } from "../protocol/errors.ts";
 import { METHOD } from "../protocol/methods.ts";
 import type { NoticeLevel } from "../store/transcript-model.ts";
+import { sessionUsageLine } from "./format.ts";
 import type { SlashCommand } from "./registry.ts";
 
 /**
@@ -41,6 +42,7 @@ export const contextCommand: SlashCommand = {
 			}
 			if (ctx.store.focusedKey !== session.key) return;
 			ctx.ui.openContextPanel!(usage);
+			if (usage.usage) ctx.ui.notice(sessionUsageLine(usage.usage));
 		} catch (error) {
 			const [text, level] = contextFailure(error);
 			ctx.ui.notice(text, level);

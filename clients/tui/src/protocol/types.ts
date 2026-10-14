@@ -670,6 +670,21 @@ export interface ContextAutoCompaction {
 }
 
 /**
+ * Session-wide usage: `tokens`/`costUsd` are the cumulative ledger across every
+ * branch; the input/output/cache counts sum assistant messages on the active branch.
+ */
+export interface ContextSessionUsage {
+	tokens: number;
+	/** Catalog-estimated cost in USD, not a bill. */
+	costUsd: number;
+	input: number;
+	output: number;
+	cacheRead: number;
+	cacheWrite: number;
+	assistantMessages: number;
+}
+
+/**
  * A validated `sessions.context` receipt. Unknown category ids are dropped;
  * whatever they held is reported as {@link otherTokens} so the rows shown
  * still sum to {@link usedTokens}.
@@ -692,6 +707,8 @@ export interface SessionsContextResult {
 	otherTokens: number;
 	top: ContextContributor[];
 	messageCount: number | undefined;
+	/** Cumulative session spend; undefined for daemons that do not report it. */
+	usage: ContextSessionUsage | undefined;
 	measuredAt: number | undefined;
 }
 
@@ -739,7 +756,7 @@ export interface SessionsMetadataPatchResult {
 	summary?: Record<string, unknown>;
 }
 
-export type SessionExportFormat = "json" | "markdown";
+export type SessionExportFormat = "json" | "jsonl" | "markdown" | "html";
 
 export interface SessionsExportResult {
 	sessionKey: string;
