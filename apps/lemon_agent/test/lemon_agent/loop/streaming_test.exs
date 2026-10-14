@@ -314,15 +314,14 @@ defmodule LemonAgent.Loop.StreamingTest do
            end)
   end
 
-  test "retries a partial provider failure without committing failed output or tool calls" do
+  test "retries a metadata-only failure without committing a transcript start" do
     parent = self()
     context = simple_context(messages: [user_message("run")])
 
     failed = %{
-      Mocks.assistant_message_with_tool_calls([
-        Mocks.tool_call("echo", %{"text" => "never execute"}, id: "failed_call")
-      ])
+      Mocks.assistant_message("")
       | stop_reason: :error,
+        content: [],
         error_message: "Service temporarily unavailable (HTTP 503)"
     }
 
@@ -336,7 +335,6 @@ defmodule LemonAgent.Loop.StreamingTest do
       LemonAi.EventStream.push(ai_stream, {:start, response})
 
       if response.stop_reason == :error do
-        LemonAi.EventStream.push(ai_stream, {:tool_call_start, 0, response})
         LemonAi.EventStream.error(ai_stream, response)
       else
         LemonAi.EventStream.complete(ai_stream, response)
@@ -358,6 +356,8 @@ defmodule LemonAgent.Loop.StreamingTest do
     EventStream.complete(stream, [])
     events = Enum.to_list(EventStream.events(stream))
     refute Enum.any?(events, &match?({:message_end, %{stop_reason: :error}}, &1))
+    assert Enum.count(events, &match?({:message_start, _}, &1)) == 1
+    assert Enum.count(events, &match?({:message_end, _}, &1)) == 1
 
     assert {:provider_retry, %{attempt: 1, delay_ms: 1}} =
              Enum.find(events, &match?({:provider_retry, _}, &1))
@@ -421,6 +421,7 @@ defmodule LemonAgent.Loop.StreamingTest do
     failed = %{
       Mocks.assistant_message("")
       | stop_reason: :error,
+        content: [],
         error_message: "Service temporarily unavailable (HTTP 503)",
         retry_after_ms: 20
     }
@@ -626,6 +627,104 @@ defmodule LemonAgent.Loop.StreamingTest do
 
       assert_receive :request_attempt
       refute_received :request_attempt
+      EventStream.complete(stream, [])
+      refute Enum.any?(EventStream.events(stream), &match?({:provider_retry, _}, &1))
+    end
+  end
+
+  test "all emitted output events commit an attempt even when later partials erase it" do
+    parent = self()
+    empty = %{Mocks.assistant_message("") | content: []}
+    failed = %{empty | stop_reason: :error, error_message: "overloaded_error"}
+
+    for event <- [
+          {:text_start, 0, empty},
+          {:text_delta, 0, " ", empty},
+          {:text_end, 0, "", empty},
+          {:thinking_start, 0, empty},
+          {:thinking_delta, 0, " ", empty},
+          {:thinking_end, 0, "", empty},
+          {:tool_call_start, 0, empty},
+          {:tool_call_delta, 0, "{}", empty},
+          {:tool_call_end, 0, Mocks.tool_call("echo", %{}), empty}
+        ],
+        terminal <- [:error, :done] do
+      stream_fn = fn _, _, _ ->
+        send(parent, :committed_attempt)
+        {:ok, ai_stream} = LemonAi.EventStream.start_link()
+        LemonAi.EventStream.push(ai_stream, {:start, empty})
+        LemonAi.EventStream.push(ai_stream, event)
+        LemonAi.EventStream.push(ai_stream, {:text_delta, 0, "", empty})
+        LemonAi.EventStream.push(ai_stream, {terminal, :error, failed})
+        LemonAi.EventStream.complete(ai_stream, failed)
+        {:ok, ai_stream}
+      end
+
+      {:ok, stream} = EventStream.start_link(timeout: :infinity)
+      context = simple_context(messages: [user_message("run")])
+
+      assert {:ok, message, updated_context} =
+               Streaming.stream_assistant_response(
+                 context, simple_config(stream_fn: stream_fn), nil, nil, stream
+               )
+
+      assert message.stop_reason == :error
+      assert message.error_message == failed.error_message
+      assert updated_context.messages == context.messages ++ [message]
+      assert_receive :committed_attempt
+      refute_received :committed_attempt
+      EventStream.complete(stream, [])
+      events = Enum.to_list(EventStream.events(stream))
+      refute Enum.any?(events, &match?({:provider_retry, _}, &1))
+      assert Enum.count(events, &match?({:message_start, _}, &1)) == 1
+      assert Enum.count(events, &match?({:message_end, _}, &1)) == 1
+    end
+  end
+
+  test "terminal text, whitespace, thinking and tools block replay without deltas" do
+    parent = self()
+
+    for content <- [
+          [%LemonAi.Types.TextContent{text: "answer"}],
+          [%LemonAi.Types.TextContent{text: " "}],
+          [%LemonAi.Types.ThinkingContent{thinking: "private reasoning"}],
+          [Mocks.tool_call("echo", %{}, id: "unexecuted")]
+        ],
+        shape <- [:stream, :direct] do
+      failed = %{
+        Mocks.assistant_message("")
+        | content: content,
+          stop_reason: :error,
+          error_message: "Service temporarily unavailable (HTTP 503)"
+      }
+
+      stream_fn = fn _, _, _ ->
+        send(parent, :terminal_attempt)
+
+        case shape do
+          :direct ->
+            {:error, failed}
+
+          :stream ->
+            {:ok, ai_stream} = LemonAi.EventStream.start_link()
+            LemonAi.EventStream.error(ai_stream, failed)
+            {:ok, ai_stream}
+        end
+      end
+
+      {:ok, stream} = EventStream.start_link(timeout: :infinity)
+
+      assert {:ok, message, updated_context} =
+               Streaming.stream_assistant_response(
+                 simple_context(messages: [user_message("run")]),
+                 simple_config(stream_fn: stream_fn), nil, nil, stream
+               )
+
+      assert message.stop_reason == :error
+      refute Enum.any?(message.content, &match?(%ToolCall{}, &1))
+      assert LemonAgent.Loop.TranscriptValidator.validate(updated_context.messages) == :ok
+      assert_receive :terminal_attempt
+      refute_received :terminal_attempt
       EventStream.complete(stream, [])
       refute Enum.any?(EventStream.events(stream), &match?({:provider_retry, _}, &1))
     end

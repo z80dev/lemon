@@ -139,7 +139,7 @@ defmodule LemonAgent.BudgetTest do
     parent = self()
 
     failure =
-      Mocks.assistant_message("partial",
+      Mocks.assistant_message("",
         usage: usage(3, 0.1),
         stop_reason: :error,
         error_message: "Service temporarily unavailable (HTTP 503)"
@@ -155,6 +155,28 @@ defmodule LemonAgent.BudgetTest do
     assert Enum.map(updates, & &1.run_usage.tokens) == [0, 3, 7]
     assert_in_delta List.last(updates).session_usage.cost_usd, 0.3, 0.000001
     assert {:agent_end, [_prompt, ^success]} = List.last(events)
+  end
+
+  test "committed output blocks replay while its reported usage stays spent" do
+    parent = self()
+
+    failure =
+      Mocks.assistant_message("partial",
+        usage: usage(3, 0.1),
+        stop_reason: :error,
+        error_message: "Service temporarily unavailable (HTTP 503)"
+      )
+
+    events = run(%{max_run_tokens: 100}, responses([failure], parent))
+
+    assert_received {:model_call, []}
+    refute_received {:model_call, _}
+    refute Enum.any?(events, &match?({:provider_retry, _}, &1))
+    updates = for {:usage_budget_updated, update} <- events, do: update
+    assert Enum.map(updates, & &1.run_usage.tokens) == [0, 3]
+    assert List.last(updates).session_usage == %{tokens: 3, cost_usd: 0.1}
+    assert {:error, {:assistant_error, _}, %{new_messages: [_prompt, ^failure]}} =
+             List.last(events)
   end
 
   test "reported error usage crossing the cap blocks retry and pairs requested tools" do
