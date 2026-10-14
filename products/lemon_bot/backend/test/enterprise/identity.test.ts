@@ -95,7 +95,7 @@ describe('OIDC identity security', () => {
     const f = identityFixture(); try {
       const p = registeredProvider(f.services); const routes = createIdentityRoutes(f.services);
       f.services.store.put('invites', f.services.resource('invite', { email: 'invited@example.com', role: 'member' as const, expiresAtMs: f.services.now() + 86400000, status: 'pending' as const }));
-      f.services.config.operatorExtras = { oidcGroupMappings: [{ providerId: p.id, externalId: 'approved', directoryGroupId: 'configured-group', name: 'Configured group' }] };
+      f.services.config.operator.oidcGroupMappings = [{ providerId: p.id, externalId: 'approved', directoryGroupId: 'configured-group', name: 'Configured group' }];
       let currentNonce = '';
       globalThis.fetch = (async (input: string | URL | Request) => {
         const url = String(input);

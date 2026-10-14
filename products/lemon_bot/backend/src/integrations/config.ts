@@ -50,7 +50,7 @@ const providerSchema = z.object({
   channelApplicationPrincipals: z.array(z.object({ providerId: ident, channelBindingId: ident, externalAppId: ident, userId: ident }).strict()).optional(),
   managedDirectoryOwnerOverride: z.boolean().optional(),
 }).strict();
-/** One startup schema for operator configuration; private extras are retained by the core loader. */
+/** One strict startup schema for canonical private OperatorConfiguration. */
 export function parseOperatorConfiguration(input: unknown): P.OperatorConfiguration {
   const defaults = { trustedFrontendOrigins: [], oauthRedirectUris: ['lemonbot://auth/complete'], serverSecrets: {}, channelProviders: [], emailProviders: [], eventProviders: [], hostDrivers: [], xProvider: null, exportAllowedOrigins: [], requiredRuntimeDestinations: [], breakGlassOwnerUserId: null };
   const parsed = providerSchema.safeParse(input !== null && typeof input === 'object' && !Array.isArray(input) ? { ...defaults, ...input } : input);
@@ -76,7 +76,7 @@ export function parseOperatorConfiguration(input: unknown): P.OperatorConfigurat
   return config;
 }
 export function integrationConfiguration(services: BackendServices): IntegrationConfiguration {
-  const result = extensions.safeParse({ ...services.config.operator, ...services.config.operatorExtras });
+  const result = extensions.safeParse(services.config.operator);
   if (!result.success) throw new ApiError('capability_unavailable', 'Operator integration configuration is invalid; review connector providers and setup manifests.');
   return result.data;
 }
@@ -90,6 +90,6 @@ export function approvedOrigins(services: BackendServices): string[] {
 }
 
 export function providerSpendSource(services: BackendServices, account: string): { providerAccount: string; apiBaseUrl: string; secretRef: string } | null {
-  const source = providerSchema.shape.providerSpendSources.parse(services.config.operatorExtras?.providerSpendSources);
+  const source = providerSchema.shape.providerSpendSources.parse(services.config.operator.providerSpendSources);
   return source?.find(item => item.providerAccount === account) ?? null;
 }

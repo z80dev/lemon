@@ -29,7 +29,7 @@ function fixture(path = ':memory:') {
   };
   const services = {
     store,
-    config: { operatorToken: 'known-operator-token', operator: { exportAllowedOrigins: ['https://collector.test'], serverSecrets: { collector: { kind: 'env', name: 'COLLECTOR_SECRET' } } }, operatorExtras: { exportPrivateOrigins: ['https://collector.test'] } },
+    config: { operatorToken: 'known-operator-token', operator: { exportAllowedOrigins: ['https://collector.test'], exportPrivateOrigins: ['https://collector.test'], serverSecrets: { collector: { kind: 'env', name: 'COLLECTOR_SECRET' } } } },
     now: () => now,
     id: (prefix = 'id') => resource(prefix, {}).id,
     resource,

@@ -111,8 +111,10 @@ async function fixture(visibility: P.Bot['visibility'] = 'personal') {
   const codec = createPrivateCodec(key);
   const operator: P.OperatorConfiguration = { version: 1, trustedFrontendOrigins: [], oauthRedirectUris: [], serverSecrets: {}, channelProviders: [], emailProviders: [], eventProviders: [], hostDrivers: [], xProvider: null, exportAllowedOrigins: [], requiredRuntimeDestinations: [], breakGlassOwnerUserId: null };
   const oauth: P.OAuthProviderConfig = { id: 'records-oauth', clientId: 'registered-client', clientSecretRef: 'records-client-secret', authorizeUrl: `${ORIGIN}/oauth/authorize`, tokenUrl: `${ORIGIN}/oauth/token`, scopes: ['records.read', 'records.write'], redirectUris: [`${PUBLIC_URL}/v1/connectors/oauth/callback`], allowedOrigins: [ORIGIN] };
+  operator.connectorProviders = [{ id: 'records', origins: [ORIGIN], oauth, sharedServiceAccount: false }];
+  operator.approvedPrivateMcpOrigins = [];
   // The actual factories fill the cyclic service graph, just as backend bootstrap does.
-  const services = { config: { publicUrl: PUBLIC_URL, controlUrl: 'ws://127.0.0.1:4040/ws', operatorToken: 'test-operator-not-a-provider-token', dataDir: '/unused-test-data', host: '127.0.0.1', port: 4080, trustedOverlay: false, operator, operatorExtras: { connectorProviders: [{ id: 'records', origins: [ORIGIN], oauth, sharedServiceAccount: false }], approvedPrivateMcpOrigins: [] } }, store, lemon: peer, ...codec } as BackendServices;
+  const services = { config: { publicUrl: PUBLIC_URL, controlUrl: 'ws://127.0.0.1:4040/ws', operatorToken: 'test-operator-not-a-provider-token', dataDir: '/unused-test-data', host: '127.0.0.1', port: 4080, trustedOverlay: false, operator }, store, lemon: peer, ...codec } as BackendServices;
   installHelpers(services);
   let serial = 0;
   let now = 1_800_000_000_000;
@@ -200,7 +202,7 @@ describe('destination connector configuration', () => {
 
   test('private origins require an operator exact allowlist and propagate that policy to the destination', async () => {
     const f = await fixture();
-    f.services.config.operatorExtras!.approvedPrivateMcpOrigins = ['https://127.0.0.1'];
+    f.services.config.operator!.approvedPrivateMcpOrigins = ['https://127.0.0.1'];
     const value = await f.create({ url: 'https://127.0.0.1/mcp' });
     expect(value.status).toBe(201);
     const server = serverSchema.parse(f.peer.calls.find(call => call.method === 'node.mcp.discover')!.params.server);
@@ -342,12 +344,12 @@ describe('principal-scoped Team connector consent', () => {
   test('shared credentials require a deliberately operator-declared service account, not a boolean alone', async () => {
     const f = await fixture('team');
     expect((await f.create({ shared: true })).status).toBe(403);
-    f.services.config.operatorExtras!.connectorProviders = [{ id: 'service-records', origins: [ORIGIN], oauth: null, sharedServiceAccount: true }];
+    f.services.config.operator!.connectorProviders = [{ id: 'service-records', origins: [ORIGIN], oauth: null, sharedServiceAccount: true }];
     const value = await f.create({ shared: true });
     const connector = (await f.enable(value.body.connector)).body;
     expect((await f.connectors.connectorProfileConfiguration(f.principal('bob'), f.bot.id))[0]?.enabledTools).toEqual(['read_items', 'write_item']);
     await expect(f.connectors.authorizeConnectorTool(f.principal('bob'), { connectorId: connector.id, botId: f.bot.id, conversationId: 'room-bob', toolName: 'read_items', operationId: 'service-account-operation' })).resolves.toBeUndefined();
-    f.services.config.operatorExtras!.connectorProviders = [];
+    f.services.config.operator!.connectorProviders = [];
     await expect(f.connectors.connectorProfileConfiguration(f.principal('bob'), f.bot.id)).rejects.toMatchObject({ code: 'policy_denied' });
   });
 });
@@ -406,7 +408,7 @@ describe('configured OAuth and destructive disconnect', () => {
     const created = await f.create({ authKind: 'oauth', secretBindings: [] });
     const auth = await f.request<P.ConnectorAuth>('POST', `/v1/connectors/${created.body.connector.id}/auth`, { clientNonce: f.services.id('nonce') });
     const state = new URL(auth.body.authorizationUrl).searchParams.get('state')!;
-    f.services.config.operatorExtras!.connectorProviders = [{ id: 'records', origins: [ORIGIN], oauth: { ...f.oauth, clientId: 'other-client' }, sharedServiceAccount: false }];
+    f.services.config.operator!.connectorProviders = [{ id: 'records', origins: [ORIGIN], oauth: { ...f.oauth, clientId: 'other-client' }, sharedServiceAccount: false }];
     const transport = spyOn(globalThis, 'fetch').mockImplementation(async () => { throw new Error('A changed client must not exchange this code.'); });
     cleanup.push(() => transport.mockRestore());
     const result = await f.request<P.ErrorEnvelope>('GET', `/v1/connectors/oauth/callback?state=${state}&code=wrong-client`, undefined, null);
@@ -438,7 +440,7 @@ describe('configured OAuth and destructive disconnect', () => {
     await expect(f.connectors.cleanupOAuthUser('alice')).rejects.toMatchObject({ code: 'capability_unavailable' });
     expect(revocations).toEqual([]);
     expect(await f.connectors.reconcileOAuthUser('alice')).toBe(false);
-    f.services.config.operatorExtras!.connectorProviders = [{ id: 'records', origins: [ORIGIN], oauth: { ...f.oauth, revocationUrl: `${ORIGIN}/oauth/revoke` }, sharedServiceAccount: false }];
+    f.services.config.operator!.connectorProviders = [{ id: 'records', origins: [ORIGIN], oauth: { ...f.oauth, revocationUrl: `${ORIGIN}/oauth/revoke` }, sharedServiceAccount: false }];
     await f.connectors.cleanupOAuthUser('alice');
     expect(revocations).toEqual(['late-issued-access', 'late-issued-refresh']);
     expect(await f.connectors.reconcileOAuthUser('alice')).toBe(true);

@@ -28,7 +28,7 @@ export function fixture(store = entityStore()) {
   const secrets: Record<string, string> = { signing: 'private-signing-key', account: 'account-token', oauth: 'oauth-secret', public: 'public-bot-token', email: 'mail-gateway-token' };
   const denied = () => { throw new Error('Unexpected test seam'); };
   const services: BackendServices = {
-    config: { publicUrl: 'https://product.example', controlUrl: 'wss://controller.example/ws', operatorToken: 'test-only', dataDir: '/test', host: '127.0.0.1', port: 4080, trustedOverlay: false, operator: { version: 1, trustedFrontendOrigins: [], oauthRedirectUris: ['https://product.example/return'], serverSecrets: {}, channelProviders: [], emailProviders: [], eventProviders: [], hostDrivers: [], xProvider: null, exportAllowedOrigins: [], requiredRuntimeDestinations: [], breakGlassOwnerUserId: null }, operatorExtras: { xPublicAccountSecretRef: 'public' } },
+    config: { publicUrl: 'https://product.example', controlUrl: 'wss://controller.example/ws', operatorToken: 'test-only', dataDir: '/test', host: '127.0.0.1', port: 4080, trustedOverlay: false, operator: { version: 1, trustedFrontendOrigins: [], oauthRedirectUris: ['https://product.example/return'], serverSecrets: {}, channelProviders: [], emailProviders: [], eventProviders: [], hostDrivers: [], xProvider: null, exportAllowedOrigins: [], requiredRuntimeDestinations: [], breakGlassOwnerUserId: null, xPublicAccountSecretRef: 'public' } },
     store,
     events: {
       emit(event, payload, audience) { emitted.push({ event, audience, payload }); return { type: 'event', seq: String(++sequence), event, payload, timestampMs: clock } as P.RealtimeEvent; },

@@ -30,7 +30,7 @@ function ownedMainBot(services: BackendServices, principal: Principal, botId: st
   return bot;
 }
 async function publicAccount(services: BackendServices): Promise<string> {
-  const ref = services.config.operatorExtras?.xPublicAccountSecretRef;
+  const ref = services.config.operator?.xPublicAccountSecretRef;
   if (typeof ref !== 'string' || !ref) throw new IntegrationError('capability_unavailable', 'Configure xPublicAccountSecretRef for the public confirmation Bot account, separate from user OAuth.');
   const provider = providerFor(services); const token = await services.secret(ref);
   const identity = parse(z.object({ data: z.object({ id, username: z.string().max(64) }) }), await providerRequest(services, provider.apiBaseUrl, '2/users/me', token));
@@ -87,7 +87,7 @@ const xInstances = new WeakMap<BackendServices, XServices>();
 export function createXServices(services: BackendServices): XServices {
   const existing = xInstances.get(services); if (existing) return existing;
   const integration: XServices = {
-    inventory: (): P.XProviderInfo | null => { const provider = services.config.operator.xProvider; return provider ? { id: provider.oauth.id, kind: 'x', label: 'X mentions', configured: typeof services.config.operatorExtras?.xPublicAccountSecretRef === 'string', prerequisites: typeof services.config.operatorExtras?.xPublicAccountSecretRef === 'string' ? [] : ['Configure public confirmation account credentials.'], capabilities: ['oauth_identity', 'explicit_own_mentions', 'private_main_bot', 'verified_media', 'provider_moderation'], publicHandle: provider.publicHandle, oauthScopes: provider.oauth.scopes, allowedMedia: provider.allowedMedia, deniedCountries: provider.deniedCountries } : null; },
+    inventory: (): P.XProviderInfo | null => { const provider = services.config.operator.xProvider; return provider ? { id: provider.oauth.id, kind: 'x', label: 'X mentions', configured: typeof services.config.operator?.xPublicAccountSecretRef === 'string', prerequisites: typeof services.config.operator?.xPublicAccountSecretRef === 'string' ? [] : ['Configure public confirmation account credentials.'], capabilities: ['oauth_identity', 'explicit_own_mentions', 'private_main_bot', 'verified_media', 'provider_moderation'], publicHandle: provider.publicHandle, oauthScopes: provider.oauth.scopes, allowedMedia: provider.allowedMedia, deniedCountries: provider.deniedCountries } : null; },
     retireOAuthCompletion: (completion: OAuthCompletion): Promise<void> => retireXCompletion(services, completion),
     reconcileUserCleanup: async (userId: string, completion?: OAuthCompletion): Promise<boolean> => {
       let complete = true; const provider = services.config.operator.xProvider;

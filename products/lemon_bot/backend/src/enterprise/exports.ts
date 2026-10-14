@@ -71,7 +71,7 @@ function content(entry: P.TranscriptEntry, p: Principal): P.JSONObject | null {
 function collector(s: BackendServices, url: string): { allowedOrigins: string[]; allowPrivate: boolean } {
   const allowedOrigins = s.config.operator.exportAllowedOrigins;
   const parsed = pinnedUrl(url, allowedOrigins);
-  const privateOrigins = s.config.operatorExtras?.exportPrivateOrigins;
+  const privateOrigins = s.config.operator?.exportPrivateOrigins;
   if (privateOrigins !== undefined && (!Array.isArray(privateOrigins) || privateOrigins.some(origin => typeof origin !== 'string' || !allowedOrigins.includes(origin)))) throw new ApiError('capability_unavailable', 'exportPrivateOrigins must be a subset of exportAllowedOrigins.');
   return { allowedOrigins, allowPrivate: Array.isArray(privateOrigins) && privateOrigins.includes(parsed.origin) };
 }
