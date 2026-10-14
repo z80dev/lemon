@@ -27,6 +27,11 @@ defmodule CodingAgent.ExecutionNode.Worker do
   @capabilities %{
     "coding_agent.run" => %{"version" => @protocol_version},
     "node.invoke.event" => %{"version" => @protocol_version, "maxBytes" => 65_536},
+    "memory.list" => %{"version" => @protocol_version},
+    "memory.search" => %{"version" => @protocol_version},
+    "memory.get" => %{"version" => @protocol_version},
+    "memory.add" => %{"version" => @protocol_version},
+    "memory.delete" => %{"version" => @protocol_version},
     "node.invoke.control" => %{
       "version" => @protocol_version,
       "operations" => ["steer", "redirect"],
@@ -461,14 +466,17 @@ defmodule CodingAgent.ExecutionNode.Worker do
         Map.has_key?(state.invocations, invoke_id) ->
           {:noreply, state}
 
-        method != "coding_agent.run" ->
-          {:noreply, send_invoke_error(state, invoke_id, {:unsupported_method, method})}
-
         not is_map(args) ->
           {:noreply, send_invoke_error(state, invoke_id, :invalid_arguments)}
 
         payload_error = validate_payload(args, state) ->
           {:noreply, send_invoke_error(state, invoke_id, payload_error)}
+
+        method in ["memory.list", "memory.search", "memory.get", "memory.add", "memory.delete"] ->
+          {:noreply, invoke_memory(state, invoke_id, method, args)}
+
+        method != "coding_agent.run" ->
+          {:noreply, send_invoke_error(state, invoke_id, {:unsupported_method, method})}
 
         true ->
           {:noreply, start_invocation(state, invoke_id, args)}
@@ -518,6 +526,29 @@ defmodule CodingAgent.ExecutionNode.Worker do
   end
 
   defp handle_node_event(_event, _payload, state), do: {:noreply, state}
+
+  defp invoke_memory(state, invoke_id, "memory." <> operation, args) do
+    result =
+      case LemonSkills.ProfileMemory.execute(operation, args["profileId"], args) do
+        {:ok, payload} -> %{"ok" => true, "payload" => payload}
+        {:error, reason} when is_atom(reason) -> %{"ok" => false, "error" => Atom.to_string(reason)}
+      end
+
+    params = %{"invokeId" => invoke_id, "result" => result}
+
+    case LemonCore.JSONPayload.validate(params, max_bytes: result_content_limit(state)) do
+      {:ok, _stats} ->
+        request(state, "node.invoke.result", params, {:invoke_result, invoke_id})
+        state
+
+      {:error, _reason} ->
+        send_invoke_error(state, invoke_id, :result_payload_limit_exceeded)
+    end
+  rescue
+    _ -> send_invoke_error(state, invoke_id, :memory_unavailable)
+  catch
+    _, _ -> send_invoke_error(state, invoke_id, :memory_unavailable)
+  end
 
   defp start_invocation(state, invoke_id, args) do
     with {:ok, request, run_opts} <- execution_request(args, state, invoke_id),

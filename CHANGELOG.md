@@ -21,6 +21,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   `profileId`, resolved at execution time for routines. `profiles.update` edits
   persona, model, node and per-profile Streamable HTTP MCP servers. MCP headers
   are write-only in management responses and excluded from run persistence.
+- Profile-scoped `memory.list`, `memory.search`, `memory.get`, `memory.add` and
+  exact-confirmation `memory.delete` control-plane methods. They reuse durable
+  memory lifecycle and assistant workspace preference services, enforce separate
+  read/admin scopes, and return bounded redacted previews. Named-node profiles
+  execute memory operations on their destination through authenticated node
+  invocations, without controller paths or credentials crossing the boundary.
 
 ### Fixed
 

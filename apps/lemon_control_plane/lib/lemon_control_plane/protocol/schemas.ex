@@ -120,6 +120,24 @@ defmodule LemonControlPlane.Protocol.Schemas do
       }
     },
 
+    # Profile-scoped memory (destination-local for named-node profiles)
+    "memory.list" => %{
+      required: %{"profileId" => :string},
+      optional: %{"query" => :string, "limit" => :integer, "cursor" => :string}
+    },
+    "memory.search" => %{
+      required: %{"profileId" => :string, "query" => :string},
+      optional: %{"limit" => :integer}
+    },
+    "memory.get" => %{required: %{"profileId" => :string, "id" => :string}},
+    "memory.add" => %{
+      required: %{"profileId" => :string, "text" => :string},
+      optional: %{"kind" => :string}
+    },
+    "memory.delete" => %{
+      required: %{"profileId" => :string, "id" => :string, "confirm" => :string}
+    },
+
     # Agent methods
     "agents.list" => %{optional: %{}},
     "agent" => %{

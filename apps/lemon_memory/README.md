@@ -42,6 +42,45 @@ exact fresh digest. `Store.delete_document_if_unchanged/3` performs the final
 constant-time revision comparison and removes both the SQLite row and FTS row
 inside one transaction.
 
+### Profile-scoped operator memory
+
+`Lifecycle.profile_list(context, query \\ "", opts \\ [])`,
+`profile_get(context, id, opts \\ [])`, `profile_preview_delete(context, id, opts \\ [])`,
+and `profile_delete(context, id, confirmation_digest, opts \\ [])` provide the
+profile-specific lifecycle. The context must have `session_scope: :main`,
+`agent_id`, `workspace_dir` (the assistant home), and `cwd`. Every record must
+match **both** the agent ID and the exact expanded assistant-home digest.
+Legacy unscoped records are excluded; project learnings from all repositories
+within that profile are included. `:server` selects an isolated Store instance.
+
+Browse/search reads at most 200 recent records for that agent, returning
+`{:ok, %{items: items, revision: revision}}`. Each item contains only string
+keys `id`, `kind`, `text`, `source`, `createdAtMs`, and `updatedAtMs`. Source is
+`"durable"`; kinds are `"run"`, `"learned_source"`, or `"project_learning"`.
+Text is operator-redacted, valid UTF-8, and at most 2048 bytes. Failed-run details
+are withheld. The browse revision is internal pagination state, not display
+data.
+
+IDs are opaque and bind the record revision, agent, and assistant home.
+`profile_get/3` returns `{:ok, item}`. A changed record returns `{:error, :stale}`;
+another profile's record returns `{:error, :not_found}`. Raw document IDs are
+not accepted by these APIs. Preview returns an internal `confirmation_digest`;
+confirmed deletion rechecks ownership and revision before Store atomically
+removes the record and its FTS row. Success is
+`{:ok, %{"deleted" => true, "id" => id}}`; forged confirmations fail with
+`:confirmation_mismatch`. Store failures return `:memory_unavailable`, never an
+empty successful browse.
+
+`LemonSkills.ProfileMemory.execute/4` composes these APIs with its owning
+`WorkspacePreferences` service for `USER.md`/`MEMORY.md`. It derives
+destination-local paths through `ProfileStore.paths/2` without requiring a
+destination configuration record, returns bounded snapshot-bound pages, and
+requires the exact revision-bound item ID as delete confirmation. Workspace
+adds and the existing `remember` tool share preference screening and capacity
+rules rather than writing a second memory store.
+Workspace queries match the bounded raw preference entries before redaction
+and preview truncation, so keywords beyond the displayed excerpt remain searchable.
+
 `mix lemon.memory` inspects and searches the store from the command line.
 
 ## Installation

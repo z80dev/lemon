@@ -14,7 +14,7 @@ defmodule LemonMemory.Lifecycle do
   the document and its FTS row, so stale or forged confirmations do not mutate.
   """
 
-  alias LemonMemory.{Document, Safety, Store}
+  alias LemonMemory.{Document, Project, Query, Safety, Store}
 
   @max_results 50
   @max_scan 200
@@ -29,6 +29,165 @@ defmodule LemonMemory.Lifecycle do
   @allowed_source_types ~w(file folder url git_diff session document notebook pdf office unknown)
 
   @type result :: {:ok, map()} | {:error, atom()}
+
+  @doc """
+  Browse at most 200 recent records for an exact agent AND assistant-home
+  identity. Includes repository learnings across that profile's repositories.
+  The revision is internal pagination state, not an operator projection.
+  """
+  def profile_list(context, query \\ "", opts \\ []) do
+    with {:ok, identity} <- Project.scope(context),
+         {:ok, query} <- normalize_query(query),
+         {:ok, docs} <-
+           store(opts).list_agent_recent(server(opts), identity.agent_id, limit: @max_scan) do
+      owned = Enum.filter(docs, &Project.profile_document?(&1, context))
+      terms = Query.terms(query)
+
+      selected =
+        if query == "",
+          do: owned,
+          else: Enum.filter(owned, &(Query.shared_term_count(terms,
+            (&1.prompt_summary || "") <> " " <> (&1.answer_summary || "")) > 0))
+
+      with {:ok, items} <- profile_summaries(selected) do
+        revision = sha256(Enum.map_join(owned, "\0", &Store.document_revision/1))
+        {:ok, %{items: items, revision: revision}}
+      end
+    else
+      {:error, reason} when reason in [:invalid_query, :unscoped, :subagent, :unsafe_record] ->
+        {:error, reason}
+      _ -> {:error, :memory_unavailable}
+    end
+  rescue
+    _ -> {:error, :memory_unavailable}
+  catch
+    _, _ -> {:error, :memory_unavailable}
+  end
+
+  @doc "Inspect one record only within its exact profile ownership boundary."
+  def profile_get(context, doc_id, opts \\ []) do
+    with {:ok, doc} <- profile_document(context, doc_id, opts),
+         {:ok, item} <- profile_summary(doc), do: {:ok, item}
+  rescue
+    _ -> {:error, :memory_unavailable}
+  catch
+    _, _ -> {:error, :memory_unavailable}
+  end
+
+  @doc "Preview a profile-owned deletion bound to ID, revision, and home identity."
+  def profile_preview_delete(context, doc_id, opts \\ []) do
+    with {:ok, doc} <- profile_document(context, doc_id, opts),
+         {:ok, identity} <- Project.scope(context) do
+      revision = store(opts).document_revision(doc)
+      {:ok, %{confirmation_digest: profile_confirmation(identity, doc_id, revision)}}
+    end
+  rescue
+    _ -> {:error, :memory_unavailable}
+  catch
+    _, _ -> {:error, :memory_unavailable}
+  end
+
+  @doc "Delete the exact profile-owned revision from a fresh owning-service preview."
+  def profile_delete(context, doc_id, confirmation_digest, opts \\ []) do
+    with :ok <- validate_digest(confirmation_digest),
+         {:ok, identity} <- Project.scope(context) do
+      :global.trans({{__MODULE__, server(opts), doc_id}, self()}, fn ->
+        with {:ok, doc} <- profile_document(context, doc_id, opts),
+             revision = store(opts).document_revision(doc),
+             true <- secure_equal?(confirmation_digest,
+               profile_confirmation(identity, doc_id, revision)),
+             {:ok, status} <-
+               store(opts).delete_document_if_unchanged(server(opts), doc.doc_id, revision) do
+          case status do
+            :deleted -> {:ok, %{"deleted" => true, "id" => doc_id}}
+            :stale -> {:error, :stale}
+            :not_found -> {:error, :not_found}
+          end
+        else
+          false -> {:error, :confirmation_mismatch}
+          {:error, reason} when is_atom(reason) -> {:error, reason}
+          _ -> {:error, :memory_unavailable}
+        end
+      end)
+    end
+  rescue
+    _ -> {:error, :memory_unavailable}
+  catch
+    _, _ -> {:error, :memory_unavailable}
+  end
+
+  defp profile_document(context, id, opts) do
+    with {:ok, doc_id} <- profile_document_id(id),
+         {:ok, _} <- Project.scope(context),
+         {:ok, doc} <- store(opts).get_document(server(opts), doc_id),
+         true <- Project.profile_document?(doc, context) do
+      if secure_equal?(id, profile_id(doc)),
+        do: {:ok, doc},
+        else: {:error, :stale}
+    else
+      false -> {:error, :not_found}
+      {:error, reason} when reason in [:invalid_document_id, :not_found, :unscoped, :subagent] ->
+        {:error, reason}
+      _ -> {:error, :memory_unavailable}
+    end
+  end
+
+  defp profile_document_id("durable_" <> encoded) when byte_size(encoded) <= 248 do
+    with [encoded_id, revision] <- String.split(encoded, ".", parts: 2),
+         :ok <- validate_digest(revision),
+         {:ok, doc_id} <- Base.url_decode64(encoded_id, padding: false),
+         :ok <- validate_doc_id(doc_id) do
+      {:ok, doc_id}
+    else
+      _ -> {:error, :invalid_document_id}
+    end
+  end
+
+  defp profile_document_id(_), do: {:error, :invalid_document_id}
+
+  defp profile_id(doc) do
+    home = doc.meta["home_digest"] || doc.meta[:home_digest]
+    revision = sha256(doc.agent_id <> "\0" <> home <> "\0" <> Store.document_revision(doc))
+    "durable_" <> Base.url_encode64(doc.doc_id, padding: false) <> "." <> revision
+  end
+
+  defp profile_summaries(docs) do
+    Enum.reduce_while(docs, {:ok, []}, fn doc, {:ok, items} ->
+      case profile_summary(doc) do
+        {:ok, item} -> {:cont, {:ok, [item | items]}}
+        error -> {:halt, error}
+      end
+    end)
+    |> case do
+      {:ok, items} -> {:ok, Enum.reverse(items)}
+      error -> error
+    end
+  end
+
+  defp profile_summary(%Document{} = doc) do
+    with :ok <- validate_doc_id(doc.doc_id) do
+      text =
+        cond do
+          doc.outcome == :failure -> "Preview withheld for a failed run."
+          doc.answer_summary in [nil, ""] -> doc.prompt_summary
+          true -> doc.answer_summary
+        end
+
+      # Safety appends a three-byte ellipsis after its cap.
+      {text, _} = Safety.redact_for_operator(text, max_bytes: 2_045)
+      {:ok, %{
+        "id" => profile_id(doc), "kind" => kind(doc), "text" => text, "source" => "durable",
+        "createdAtMs" => safe_timestamp(doc.started_at_ms),
+        "updatedAtMs" => safe_timestamp(doc.ingested_at_ms)
+      }}
+    end
+  end
+
+  defp safe_timestamp(value) when is_integer(value) and value >= 0, do: value
+  defp safe_timestamp(_), do: 0
+  defp profile_confirmation(identity, id, revision),
+    do: sha256("profile-memory-delete-v1\0" <> identity.agent_id <> "\0" <>
+      identity.home_digest <> "\0" <> id <> "\0" <> revision)
 
   @doc "List or full-text search a bounded recent window using safe filters."
   @spec list(map() | keyword(), keyword()) :: result()

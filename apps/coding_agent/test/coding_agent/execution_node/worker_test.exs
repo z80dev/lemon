@@ -754,6 +754,59 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
     assert_receive {:socket_request, ^socket, "node.invoke.result",
                     %{"error" => "event_backpressure_limit_exceeded"}, _, 30_000}
     Process.exit(context.runner_pid, :kill)
+  test "profile memory executes on the destination workspace without a local profile record", %{
+    tmp_dir: tmp_dir
+  } do
+    previous_paths = Application.get_env(:lemon_core, :paths)
+    state_dir = Path.join(tmp_dir, "worker-state")
+    Application.put_env(:lemon_core, :paths,
+      home_state_dir: state_dir, global_config: Path.join(state_dir, "config.toml"))
+    on_exit(fn ->
+      if previous_paths,
+        do: Application.put_env(:lemon_core, :paths, previous_paths),
+        else: Application.delete_env(:lemon_core, :paths)
+    end)
+    {:ok, paths} = LemonCore.ProfileStore.paths("remote-memory")
+    File.mkdir_p!(paths["workspace"])
+    assert {:error, :not_found} = LemonCore.ProfileStore.get("remote-memory")
+
+    {:ok, worker} = start_worker(tmp_dir, token: "node-token")
+    assert_receive {:socket_started, socket, _opts}
+    send(worker, {:execution_node_socket, socket,
+      {:connected, %{"auth" => %{"clientId" => "node-1"}}}})
+    assert_receive {:execution_node_worker, ^worker, {:status, :online, "node-1"}}
+
+    send(worker, {:execution_node_socket, socket,
+      {:event, "node.invoke.request", %{
+        "invokeId" => "memory-add", "nodeId" => "node-1", "method" => "memory.add",
+        "args" => %{"profileId" => "remote-memory", "text" => "Prefers peppermint tea"}
+      }}})
+    assert_receive {:socket_request, ^socket, "node.invoke.result",
+      %{"invokeId" => "memory-add", "result" => %{"ok" => true, "payload" => %{"item" => item}}},
+      {:invoke_result, "memory-add"}, 30_000}, 1_000
+    assert item["source"] == "workspace"
+    assert File.read!(Path.join(paths["workspace"], "MEMORY.md")) =~ "peppermint"
+    refute_receive {:executor_started, _, _, _, _, _}
+
+    send(worker, {:execution_node_socket, socket,
+      {:event, "node.invoke.request", %{
+        "invokeId" => "memory-get", "nodeId" => "node-1", "method" => "memory.get",
+        "args" => %{"profileId" => "remote-memory", "id" => item["id"]}
+      }}})
+    assert_receive {:socket_request, ^socket, "node.invoke.result",
+      %{"result" => %{"ok" => true, "payload" => %{"item" => fetched}}},
+      {:invoke_result, "memory-get"}, 30_000}, 1_000
+    assert fetched["id"] == item["id"]
+    assert {:ok, _} = LemonCore.JSONPayload.validate(fetched)
+
+    send(worker, {:execution_node_socket, socket,
+      {:event, "node.invoke.request", %{
+        "invokeId" => "memory-invalid", "nodeId" => "node-1", "method" => "memory.add",
+        "args" => %{"profileId" => "../outside", "text" => "must not write"}
+      }}})
+    assert_receive {:socket_request, ^socket, "node.invoke.result",
+      %{"result" => %{"ok" => false, "error" => "invalid_id"}},
+      {:invoke_result, "memory-invalid"}, 30_000}, 1_000
     GenServer.stop(worker)
   end
 
