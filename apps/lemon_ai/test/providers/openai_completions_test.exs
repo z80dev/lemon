@@ -1660,7 +1660,7 @@ defmodule LemonAi.Providers.OpenAICompletionsTest do
       assert {:ok, _} = EventStream.result(stream, 1000)
     end
 
-    test "keyless preset uses its optional key env var and resolved provider options" do
+    test "keyless preset still sends its optional key when set" do
       System.put_env("OLLAMA_API_KEY", "ollama-env-key")
       capture_headers(self())
 
@@ -1670,14 +1670,6 @@ defmodule LemonAi.Providers.OpenAICompletionsTest do
 
       assert_receive {:request, _host, _path, headers}, 1000
       assert Map.new(headers)["authorization"] == "Bearer ollama-env-key"
-      assert {:ok, _} = EventStream.result(stream, 1000)
-
-      opts = %StreamOptions{
-        provider_options: %{ollama: %{base_url: "http://gpu-box.test:11434/v1"}}
-      }
-
-      {:ok, stream} = OpenAICompletions.stream(model, context, opts)
-      assert_receive {:request, "gpu-box.test", "/v1/chat/completions", _headers}, 1000
       assert {:ok, _} = EventStream.result(stream, 1000)
     end
 

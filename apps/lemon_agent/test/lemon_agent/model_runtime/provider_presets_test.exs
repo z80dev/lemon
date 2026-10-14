@@ -1,7 +1,7 @@
-defmodule LemonAgent.ModelRuntime.ProviderNamesTest do
+defmodule LemonAgent.ModelRuntime.ProviderPresetsTest do
   use ExUnit.Case, async: false
 
-  alias LemonAgent.ModelRuntime.{Credentials, ModelCatalog, ProviderNames}
+  alias LemonAgent.ModelRuntime.{Credentials, ModelCatalog}
   alias LemonAi.ModelCache
 
   @env_keys ~w(
@@ -31,46 +31,20 @@ defmodule LemonAgent.ModelRuntime.ProviderNamesTest do
     :ok
   end
 
-  test "catalog providers carry omp env vars and default secrets" do
-    expected = %{
-      "groq" => ["GROQ_API_KEY"],
-      "xai" => ["XAI_API_KEY"],
-      "cerebras" => ["CEREBRAS_API_KEY"],
-      "deepseek" => ["DEEPSEEK_API_KEY"],
-      "mistral" => ["MISTRAL_API_KEY"],
-      "huggingface" => ["HUGGINGFACE_HUB_TOKEN", "HF_TOKEN"],
-      "qwen" => ["DASHSCOPE_API_KEY"],
-      "vercel_ai_gateway" => ["AI_GATEWAY_API_KEY"]
+  test "config tables for newly named providers resolve keys, including omp spellings" do
+    providers = %{
+      "xai" => %{api_key: "xai-key"},
+      "llama.cpp" => %{api_key: "llama-key"},
+      "ollama-cloud" => %{api_key: "cloud-key"}
     }
 
-    for {provider, vars} <- expected do
-      assert ProviderNames.env_vars(provider) == vars
-      assert ProviderNames.default_secret_name(provider) == "llm_#{provider}_api_key"
-      assert ProviderNames.provider_atom(provider) == String.to_existing_atom(provider)
-    end
+    get_api_key = Credentials.build_get_api_key(providers)
+    assert get_api_key.(:xai) == "xai-key"
+    assert get_api_key.(:llama_cpp) == "llama-key"
+    assert get_api_key.(:ollama_cloud) == "cloud-key"
 
-    assert ProviderNames.canonical_name("vercel-ai-gateway") == "vercel_ai_gateway"
-    assert ProviderNames.canonical_name("hf") == "huggingface"
-  end
-
-  test "presets are named, aliased and keyless per omp" do
-    assert ProviderNames.canonical_name("lm-studio") == "lm_studio"
-    assert ProviderNames.canonical_name("llama.cpp") == "llama_cpp"
-    assert ProviderNames.canonical_name("ollama-cloud") == "ollama_cloud"
-    assert ProviderNames.provider_atom("llama.cpp") == :llama_cpp
-    assert ProviderNames.env_vars(:ollama) == ["OLLAMA_API_KEY"]
-    assert ProviderNames.env_vars("ollama-cloud") == ["OLLAMA_CLOUD_API_KEY"]
-    assert ProviderNames.env_vars(:together) == ["TOGETHER_API_KEY"]
-    assert ProviderNames.default_secret_name("lm-studio") == "llm_lm_studio_api_key"
-
-    for provider <- ~w(ollama lm_studio llama_cpp vllm litellm),
-        do: assert(ProviderNames.keyless?(provider))
-
-    for provider <- ~w(ollama_cloud together anthropic),
-        do: refute(ProviderNames.keyless?(provider))
-
-    assert ProviderNames.provider_config(%{"llama.cpp" => %{base_url: "http://x/v1"}}, :llama_cpp) ==
-             %{base_url: "http://x/v1"}
+    System.put_env("HF_TOKEN", "hf-key")
+    assert Credentials.build_get_api_key(%{}).(:huggingface) == "hf-key"
   end
 
   test "keyless local presets are credential-ready; cloud presets need a key" do

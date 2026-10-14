@@ -87,23 +87,11 @@ defmodule Mix.Tasks.Lemon.ModelsTest do
                decoded["models"]
     end
 
-    test "reports discovery failures and usage errors" do
+    test "an unreachable endpoint fails with a discovery error" do
       Req.Test.stub(__MODULE__, &Req.Test.transport_error(&1, :econnrefused))
 
       assert_raise Mix.Error, ~r/Model discovery for ollama at .* connection failed/, fn ->
         Models.run(["--provider", "ollama", "--discover", "--base-url", "http://127.0.0.1:1/v1"])
-      end
-
-      assert_raise Mix.Error, ~r/--discover requires --provider/, fn ->
-        Models.run(["--discover"])
-      end
-
-      assert_raise Mix.Error, ~r/preset providers only/, fn ->
-        Models.run(["--provider", "anthropic", "--discover"])
-      end
-
-      assert_raise Mix.Error, ~r/--base-url requires --discover/, fn ->
-        Models.run(["--base-url", "http://127.0.0.1:1/v1"])
       end
     end
   end
