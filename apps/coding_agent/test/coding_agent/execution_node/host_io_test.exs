@@ -785,7 +785,8 @@ defmodule CodingAgent.ExecutionNode.HostIOTest do
                  {:error, :path_not_allowed},
                  {:error, :not_directory},
                  {:error, :not_found}
-               ]
+               ],
+             "unexpected race outcome: #{inspect(result)}"
     end
 
     Task.await(racer)
