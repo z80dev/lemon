@@ -1,4 +1,4 @@
-/** Lemon Bot wire protocol v1. No runtime dependencies. See api.md for validation and ACLs. */
+/** Lemon Bot wire protocol v1. No runtime dependencies. Every live Bot belongs solely to its ownerUserId; workspace roles never grant live Bot access. See api.md for validation and ACLs. */
 export type ID = string;
 export type Cursor = string;
 export type TimestampMs = number;
@@ -26,7 +26,8 @@ export interface User extends Resource { email: string; displayName: string; ava
 export interface Workspace extends Resource { name: string; ownerUserId: ID; enabled: boolean; timezone: string }
 export interface Member extends Resource { userId: ID; displayName: string; email: string; role: Role; enabled: boolean }
 export interface MemberInvite extends Resource { email: string; role: 'admin' | 'member'; expiresAtMs: TimestampMs; status: 'pending' | 'accepted' | 'revoked' | 'expired' }
-export interface AuthSession extends Resource { userId: ID; deviceId: ID | null; expiresAtMs: TimestampMs; lastSeenAtMs: TimestampMs; current: boolean }
+/** null expiry is reserved for a device-paired session until revocation; normal login sessions retain bounded expiry. */
+export interface AuthSession extends Resource { userId: ID; deviceId: ID | null; expiresAtMs: TimestampMs | null; lastSeenAtMs: TimestampMs; current: boolean }
 export interface AuthResult { token: string; session: AuthSession; user: User; workspace: Workspace; member: Member }
 export interface SetupStatus { setupRequired: boolean; version: string; apiVersion: 1 }
 export interface SetupRequest extends Mutation { setupCode: string; email: string; password: string; displayName: string; workspaceName: string }
@@ -49,6 +50,22 @@ export type PushRegistration = { kind: 'apns'; token: string; environment: 'sand
 export interface Device extends Resource { userId: ID; platform: 'web' | 'macos' | 'ios'; name: string; appVersion: string; pushEnabled: boolean; lastSeenAtMs: TimestampMs }
 export interface DeviceRegister extends Mutation { installationId: string; platform: Device['platform']; name: string; appVersion: string; push?: PushRegistration }
 export interface DeviceUpdate extends Update { name?: string; appVersion?: string; push?: PushRegistration | null; pushEnabled?: boolean }
+export type PairingStatus = 'waiting' | 'pending_approval' | 'approved' | 'denied' | 'expired' | 'consumed';
+export interface Pairing extends Resource { workspaceId: ID; ownerUserId: ID; clusterName: string; backendUrl: string; status: PairingStatus; expiresAtMs: TimestampMs; deviceName: string | null; verificationCode: string | null }
+export interface PairingStart extends Mutation {}
+/** pairUrl is a short-lived one-use secret, returned only directly to the authenticated issuing owner. */
+export interface PairingIssued { pairing: Pairing; pairUrl: string }
+export interface PairingLink { backendUrl: string; workspaceId: ID; pairCode: string }
+/** Read-only secret-bound preview; no clientNonce, code consumption, approval or credentials. */
+export interface PairingPreviewRequest { pairCode: string; workspaceId: ID }
+export interface PairingPreviewResult { clusterName: string; backendUrl: string; expiresAtMs: TimestampMs }
+export interface PairingClaim extends Mutation { pairCode: string; workspaceId: ID; installationId: string; deviceName: string; appVersion: string }
+export interface PairingClaimResult { pairingId: ID; claimToken: string; verificationCode: string; expiresAtMs: TimestampMs; clusterName: string; backendUrl: string }
+export interface PairingApprove extends Update { verificationCode: string }
+export interface PairingDeny extends Update {}
+export interface PairingComplete extends Mutation { claimToken: string }
+/** Fixed nonce progresses/replays the same device/session until original pairing expiresAtMs; never mints a second credential. */
+export type PairingCompletion = { status: 'pending' | 'denied' | 'expired'; pairingId: ID; expiresAtMs: TimestampMs } | { status: 'connected'; auth: AuthResult; device: Device };
 export interface Capabilities { controlConnected: boolean; methods: string[]; stt: boolean; tts: boolean; imageGeneration: boolean; apns: boolean; webPush: boolean; vapidPublicKey: string | null; attachmentMaxBytes: number; videoMaxBytes: number; maxAttachments: number; minClientVersions: { web: string; macos: string; ios: string } }
 export interface Machine extends Resource { nodeId: ID | null; nodeName: string; name: string; ownerUserId: ID; accessUserIds: ID[]; status: 'pending' | 'online' | 'offline' | 'revoked'; lastSeenAtMs: TimestampMs | null; labels: Record<string, string>; botIds: ID[] }
 export interface HostInfo { hostname: string; os: string; osVersion: string; arch: string; cpuCount: number; memTotalBytes: number; memFreeBytes: number; diskTotalBytes: number; diskFreeBytes: number; uptimeSec: number; lemonVersion: string; defaultCwd: string; user: string; measuredAtMs: TimestampMs }
@@ -76,12 +93,12 @@ export interface TerminalInput extends Mutation { dataBase64: string }
 export interface TerminalResize extends Mutation { cols: number; rows: number }
 export interface Avatar { kind: 'character' | 'image'; shape: string; color: string; attachmentId: ID | null }
 export interface SidebarState { pinned: boolean; hidden: boolean; sectionId: ID | null; rank: number; unread: boolean; notificationsEnabled: boolean }
-export interface Bot extends Resource { ownerUserId: ID; managerUserIds: ID[]; machineId: ID; profileId: string; name: string; title: string; job: string; instructions: string; avatar: Avatar; voice: VoiceSettings; language: string | null; visibility: 'personal' | 'team'; published: boolean; required: boolean; skillIds: ID[]; referenceAttachmentIds: ID[]; mainConversationId: ID; sidebar: SidebarState; activity: BotPresence['status']; activeRunIds: ID[] }
-export interface BotCreate extends Mutation { name: string; machineId: ID; title?: string; job?: string; instructions?: string; avatar?: Avatar; voice?: VoiceSettings; language?: string | null; visibility?: Bot['visibility']; skillIds?: ID[]; templateId?: ID }
-export interface BotUpdate extends Update { name?: string; title?: string; job?: string; instructions?: string; avatar?: Avatar; voice?: VoiceSettings; language?: string | null; managerUserIds?: ID[]; published?: boolean; required?: boolean; skillIds?: ID[]; referenceAttachmentIds?: ID[] }
+/** Live work/read invariant: actual actor.userId === bot.ownerUserId, including delegated, scheduled and external-channel work. */
+export interface Bot extends Resource { ownerUserId: ID; machineId: ID; profileId: string; name: string; title: string; job: string; instructions: string; avatar: Avatar; voice: VoiceSettings; language: string | null; skillIds: ID[]; referenceAttachmentIds: ID[]; mainConversationId: ID; sidebar: SidebarState; activity: BotPresence['status']; activeRunIds: ID[] }
+export interface BotCreate extends Mutation { name: string; machineId: ID; title?: string; job?: string; instructions?: string; avatar?: Avatar; voice?: VoiceSettings; language?: string | null; skillIds?: ID[]; templateId?: ID }
+export interface BotUpdate extends Update { name?: string; title?: string; job?: string; instructions?: string; avatar?: Avatar; voice?: VoiceSettings; language?: string | null; skillIds?: ID[]; referenceAttachmentIds?: ID[] }
 export interface BotDuplicate extends Mutation { name: string; machineId: ID; includeSkills: boolean; includeRoutines: boolean }
 export interface BotMove extends Confirm { machineId: ID }
-export interface BotTeamCopy extends Mutation { name: string; machineId: ID; memoryIds: ID[]; skillIds: ID[]; referenceAttachmentIds: ID[]; routineIds: ID[]; connectorIds: ID[] }
 export interface SidebarUpdate extends Update { pinned?: boolean; hidden?: boolean; sectionId?: ID | null; rank?: number; unread?: boolean; notificationsEnabled?: boolean }
 export interface AvatarGenerate extends Mutation { prompt: string }
 export interface Section extends Resource { userId: ID; name: string; rank: number; collapsed: boolean }
@@ -92,11 +109,11 @@ export interface BotTemplate extends Resource { ownerUserId: ID; audience: 'work
 export interface TemplateCreate extends Mutation { botId: ID; audience: BotTemplate['audience']; reviewed: true }
 export interface TemplateUpdate extends Update { audience?: BotTemplate['audience']; content?: TemplateContent; reviewed: true }
 export interface TemplateImport extends Mutation { name: string; machineId: ID; acceptedTerms: boolean }
-export type ConversationKind = 'dm' | 'task' | 'team_dm' | 'group' | 'channel';
-export interface Conversation extends Resource { kind: ConversationKind; name: string; botIds: ID[]; humanUserIds: ID[]; ownerUserId: ID; parentConversationId: ID | null; leadBotId: ID | null; channelBindingId: ID | null; lastEntryId: ID | null; unreadCount: number; lastReadSeq: number; activity: { botId: ID; phase: 'reading' | 'working' | 'typing' }[] }
-export interface ConversationCreate extends Mutation { kind: ConversationKind; name?: string; botIds: ID[]; humanUserIds?: ID[]; parentConversationId?: ID; leadBotId?: ID }
-export interface ConversationUpdate extends Update { name?: string; botIds?: ID[]; humanUserIds?: ID[]; leadBotId?: ID | null }
-export interface GroupLeave extends Mutation { newOwnerUserId?: ID }
+export type ConversationKind = 'dm' | 'task' | 'group' | 'channel';
+/** One human owner only. Groups contain 2–6 Bots all owned by ownerUserId, never other humans. */
+export interface Conversation extends Resource { kind: ConversationKind; name: string; botIds: ID[]; ownerUserId: ID; parentConversationId: ID | null; leadBotId: ID | null; channelBindingId: ID | null; lastEntryId: ID | null; unreadCount: number; lastReadSeq: number; activity: { botId: ID; phase: 'reading' | 'working' | 'typing' }[] }
+export interface ConversationCreate extends Mutation { kind: ConversationKind; name?: string; botIds: ID[]; parentConversationId?: ID; leadBotId?: ID }
+export interface ConversationUpdate extends Update { name?: string; botIds?: ID[]; leadBotId?: ID | null }
 export interface ReadRequest extends Mutation { throughSeq: number; unread?: boolean }
 export interface ComposerDraft { conversationId: ID; text: string; attachmentIds: ID[]; replyToEntryId: ID | null; updatedAtMs: TimestampMs; revision: number }
 export interface ComposerDraftUpdate extends Update { text: string; attachmentIds: ID[]; replyToEntryId?: ID | null }
@@ -124,8 +141,6 @@ export type TranscriptEvent =
   | { type: 'channel_connected' | 'channel_disconnected'; channelBindingId: ID }
   | { type: 'routine_changed'; routineId: ID; action: 'created' | 'updated' | 'paused' | 'resumed' | 'deleted' }
   | { type: 'task_changed'; conversationId: ID; status: Run['status'] }
-  | { type: 'team_shared' | 'team_bot_published' | 'team_bot_unpublished'; botId: ID }
-  | { type: 'person_added' | 'person_removed' | 'person_left'; userId: ID }
   | { type: 'bot_added' | 'bot_removed'; botId: ID }
   | { type: 'handoff'; sourceBotId: ID; targetBotId: ID; targetConversationId: ID; text: string }
   | { type: 'machine_moved'; botId: ID; sourceMachineId: ID; targetMachineId: ID };
@@ -166,9 +181,7 @@ export type Card =
   | { type: 'connectors'; connectors: Connector[] }
   | { type: 'listener_connect' | 'slack_connect'; channelBinding: ChannelBinding }
   | { type: 'scm_connect'; connectorId: ID; provider: string; reason: string }
-  | { type: 'team_access'; botId: ID; ownerUserId: ID; reason: string; state: 'unpublished' | 'published' | 'unavailable' }
   | { type: 'bot_template_share'; templateId: ID; name: string; shareUrl: string; state: 'available' | 'deleted' | 'policy_blocked' }
-  | { type: 'connector_grant'; consent: ConnectorConsent }
   | { type: 'voice_memo'; attachmentId: ID; transcript: string; durationMs: number; peaks: number[] }
   | { type: 'handoff'; targetBotId: ID; targetConversationId: ID; text: string; state: 'queued' | 'working' | 'completed' | 'failed' };
 export interface ReactionRequest extends Mutation { emoji: string }
@@ -177,8 +190,8 @@ export interface Attachment extends Resource { ownerUserId: ID; conversationId: 
 export interface AttachmentUpload extends Mutation { conversationId?: ID; botId?: ID; purpose: 'message' | 'avatar' | 'reference' | 'audio' }
 export interface Download { url: string; expiresAtMs: TimestampMs; filename: string; mime: string; size: number }
 export interface FileImport extends Mutation { path: string; conversationId?: ID; botId?: ID }
-export interface Skill extends Resource { ownerUserId: ID; scope: 'personal' | 'team'; botId: ID | null; name: string; description: string; markdown: string; enabled: boolean; machineIds: ID[]; provenance: { sourceUrl: string | null; publisher: string; trusted: boolean } }
-export interface SkillCreate extends Mutation { name: string; description: string; markdown: string; scope: Skill['scope']; botId?: ID; machineIds: ID[] }
+export interface Skill extends Resource { ownerUserId: ID; botId: ID | null; name: string; description: string; markdown: string; enabled: boolean; machineIds: ID[]; provenance: { sourceUrl: string | null; publisher: string; trusted: boolean } }
+export interface SkillCreate extends Mutation { name: string; description: string; markdown: string; botId?: ID; machineIds: ID[] }
 export interface SkillUpdate extends Update { name?: string; description?: string; markdown?: string; enabled?: boolean; machineIds?: ID[] }
 export type RoutineTrigger = { kind: 'schedule'; cron: string; timezone: string } | { kind: 'webhook' } | { kind: 'channel_event'; channelBindingId: ID; event: 'mention' | 'message' | 'reaction' | 'email_received'; channel?: string; phrase?: string; reaction?: string; senders?: string[]; noisyListenerConsent?: boolean } | { kind: 'external_event'; source: 'github' | 'linear' | 'sentry' | 'pagerduty'; eventNames: string[]; filters: JSONObject };
 export interface RoutineSpec { name: string; instruction: string; trigger: RoutineTrigger; enabled: boolean }
@@ -189,8 +202,9 @@ export interface RoutineRun extends Resource { routineId: ID; runId: ID | null; 
 export interface WebhookKey extends Resource { routineId: ID; key: string; url: string; header: string }
 export interface HookRequest { clientNonce: string; payload?: JSONValue }
 export interface HookReceipt { routineRun: RoutineRun; accepted: boolean; status: 'accepted' | 'outcome_unknown' }
-export interface Memory extends Resource { botId: ID; scope: 'personal' | 'team' | 'private_note'; userId: ID | null; text: string; kind: 'fact' | 'preference' | 'instruction' | 'summary'; sourceEntryId: ID | null }
-export interface MemoryCreate extends Mutation { text: string; kind: Memory['kind']; scope: Memory['scope']; sourceEntryId?: ID }
+/** Profile-owned Lemon memory only; no Team scope or other-user private-note store. */
+export interface Memory extends Resource { botId: ID; text: string; kind: 'fact' | 'preference' | 'instruction' | 'summary'; sourceEntryId: ID | null }
+export interface MemoryCreate extends Mutation { text: string; kind: Memory['kind']; sourceEntryId?: ID }
 export interface MemoryUpdate extends Update { text: string; kind?: Memory['kind'] }
 export interface MemoryImport extends Mutation { previewId: ID; confirmationToken: string; selectedCandidateIds: ID[]; revision: number }
 export interface MemoryExport { botId: ID; items: Memory[]; exportedAtMs: TimestampMs }
@@ -208,12 +222,10 @@ export interface PolicyRuleCreate extends Mutation { category: ActionCategory; b
 export interface PolicyRuleUpdate extends Update { mode?: PolicyRule['mode']; description?: string }
 export interface Policies { revision: number; publicTemplates: boolean; allowedMcpOrigins: string[] | null; localExecutionCeiling: 'ask' | 'allow' | 'deny'; actionRecording: boolean; auditRetentionDays: number; rules: PolicyRule[] }
 export interface PoliciesUpdate extends Update { publicTemplates?: boolean; allowedMcpOrigins?: string[] | null; localExecutionCeiling?: Policies['localExecutionCeiling']; actionRecording?: boolean; auditRetentionDays?: number }
-export interface Connector extends Resource { botId: ID; ownerUserId: ID; name: string; url: string; accountLabel: string; authKind: 'none' | 'secret_headers' | 'oauth'; state: 'added' | 'connected' | 'needs_auth' | 'disconnected' | 'blocked' | 'failed'; tools: { name: string; enabled: boolean }[]; secretHeaderNames: string[]; shared: boolean; lastError: string | null }
-export interface ConnectorCreate extends Mutation { name: string; url: string; accountLabel: string; authKind: Connector['authKind']; secretBindings?: { header: string; secretName: string }[]; shared: boolean }
+export interface Connector extends Resource { botId: ID; ownerUserId: ID; name: string; url: string; accountLabel: string; authKind: 'none' | 'secret_headers' | 'oauth'; state: 'added' | 'connected' | 'needs_auth' | 'disconnected' | 'blocked' | 'failed'; tools: { name: string; enabled: boolean }[]; secretHeaderNames: string[]; lastError: string | null }
+export interface ConnectorCreate extends Mutation { name: string; url: string; accountLabel: string; authKind: Connector['authKind']; secretBindings?: { header: string; secretName: string }[] }
 export interface ConnectorUpdate extends Update { name?: string; accountLabel?: string; tools?: { name: string; enabled: boolean }[]; secretBindings?: { header: string; secretName: string }[] }
 export interface ConnectorAuth extends Resource { connectorId: ID; authorizationUrl: string; expiresAtMs: TimestampMs; state: 'pending' | 'connected' | 'denied' | 'expired' | 'failed' }
-export interface ConnectorConsent extends Resource { gate: Gate; connectorId: ID; accountOwnerUserId: ID; botId: ID; conversationId: ID; entryId: ID; scope: 'once' | 'bot'; expiresAtMs: TimestampMs | null }
-export interface ConsentResolve extends Update { decision: 'allow_once' | 'allow_bot' | 'decline'; expiresAtMs?: TimestampMs }
 export interface ChannelBinding extends Resource { botId: ID; ownerUserId: ID; adapter: 'email' | 'slack' | 'telegram' | 'discord' | 'whatsapp'; accountId: string; target: string; enabled: boolean; state: 'configured' | 'connected' | 'disconnected' | 'blocked' | 'failed'; capabilities: { events: string[]; inbound: boolean; outbound: boolean }; lastError: string | null }
 export interface ChannelCreate extends Mutation { botId: ID; adapter: ChannelBinding['adapter']; accountId: string; target: string; enabled: boolean }
 export interface ChannelUpdate extends Update { target?: string; enabled?: boolean }
@@ -246,9 +258,9 @@ export interface PreferenceUndo extends Update { botRevision: number }
 export type BotResetScope = 'conversations' | 'memory' | 'job' | 'routines' | 'connectors' | 'attachments';
 export interface BotReset extends Confirm { resetScopes: BotResetScope[] }
 export interface BotResetResult { bot: Bot; removedIds: ID[]; retainedScopes: BotResetScope[]; status: 'completed' | 'outcome_unknown' }
-export interface MemoryImportPreviewRequest extends Mutation { scope: Memory['scope']; text?: string; attachmentId?: ID; format: 'facts_text' | 'lemon_memory_json' | 'chat_export_zip' }
+export interface MemoryImportPreviewRequest extends Mutation { text?: string; attachmentId?: ID; format: 'facts_text' | 'lemon_memory_json' | 'chat_export_zip' }
 export interface MemoryImportCandidate { id: ID; text: string; kind: Memory['kind']; source: { filename: string | null; locator: string; excerpt: string }; selectedByDefault: boolean }
-export interface MemoryImportPreview extends Resource { botId: ID; machineId: ID; userId: ID; scope: Memory['scope']; sourceSha256: string; candidates: MemoryImportCandidate[]; exclusions: { locator: string; reason: 'credential' | 'private_profile' | 'unsupported' | 'duplicate' | 'not_durable'; summary: string }[]; confirmationToken: string; expiresAtMs: TimestampMs }
+export interface MemoryImportPreview extends Resource { botId: ID; machineId: ID; userId: ID; sourceSha256: string; candidates: MemoryImportCandidate[]; exclusions: { locator: string; reason: 'credential' | 'private_profile' | 'unsupported' | 'duplicate' | 'not_durable'; summary: string }[]; confirmationToken: string; expiresAtMs: TimestampMs }
 export interface MemoryImportResult { previewId: ID; items: Memory[]; status: 'completed' | 'outcome_unknown'; failedCandidateIds: ID[] }
 export interface BotIdea { id: string; botId: ID; title: string; prompt: string; expectedOutput: string; requiredSkillIds: ID[]; requiredConnectorIds: ID[]; requiredCapabilityIds: string[]; ready: boolean; blockedReasons: string[] }
 export interface DeliverableProvenance { botId: ID | null; runId: ID | null; machineId: ID | null; sourceEntryId: ID | null; generatedAtMs: TimestampMs | null }
@@ -257,7 +269,7 @@ export type NotificationTarget = { kind: 'entry'; botId: ID; conversationId: ID;
 export interface Milestone extends Resource { botId: ID; userId: ID; kind: 'machine_attached' | 'first_routine_success' | 'first_approved_task_completed'; evidenceId: ID; earnedAtMs: TimestampMs; acknowledgedAtMs: TimestampMs | null }
 export interface VoicePreviewRequest extends Mutation { voice?: VoiceSettings }
 export interface ClientLocalSettings { summonShortcut: string | null; pushToTalkShortcut: string | null; micCuesEnabled: boolean; selectedBotId: ID | null; compactCompanionEnabled: boolean; reducedMotion: 'system' | 'on' | 'off' }
-export interface ConnectorSetupRequest extends Mutation { machineId: ID; name: string; url: string; accountLabel: string; shared: boolean; authKind: Connector['authKind']; secretBindings: { header: string; secretName: string }[]; requestedLevel: AccessLevel }
+export interface ConnectorSetupRequest extends Mutation { machineId: ID; name: string; url: string; accountLabel: string; authKind: Connector['authKind']; secretBindings: { header: string; secretName: string }[]; requestedLevel: AccessLevel }
 export interface ConnectorSetupResult { connector: Connector; machineId: ID; secretNames: string[]; grants: BotGrant[] }
 export interface Snapshot { cursor: Cursor; user: User; workspace: Workspace; member: Member; capabilities: Capabilities; bots: Bot[]; machines: Machine[]; conversations: Conversation[]; sections: Section[]; notifications: Notification[]; activeRuns: Run[]; hasMore: { bots: boolean; machines: boolean; conversations: boolean; notifications: boolean } }
 export type ResourceEventPayloads = {
@@ -265,11 +277,11 @@ export type ResourceEventPayloads = {
   'machine.upserted': Machine; 'machine.deleted': Deleted; 'machine_invite.upserted': MachineInvite;
   'bot.upserted': Bot; 'bot.deleted': Deleted; 'section.upserted': Section; 'section.deleted': Deleted; 'template.upserted': BotTemplate; 'template.deleted': Deleted;
   'conversation.upserted': Conversation; 'conversation.deleted': Deleted; 'conversation.read': { conversationId: ID; userId: ID; throughSeq: number; unread: boolean }; 'composer.updated': ComposerDraft;
-  'conversation.left': { conversationId: ID; userId: ID };
   'entry.upserted': TranscriptEntry; 'entry.deleted': { id: ID; conversationId: ID }; 'entry.delta': { conversationId: ID; entryId: ID; runId: ID; offset: number; text: string }; 'run.upserted': Run;
   'attachment.upserted': Attachment; 'attachment.deleted': Deleted; 'approval.upserted': Approval; 'question.upserted': Question; 'human_step.upserted': HumanStep; 'secret_request.upserted': SecretRequest; 'draft.upserted': Draft;
-  'skill.upserted': Skill; 'skill.deleted': Deleted; 'routine.upserted': Routine; 'routine.deleted': Deleted; 'routine_run.upserted': RoutineRun; 'memory.upserted': Memory; 'memory.deleted': { id: ID; botId: ID; scope: Memory['scope']; userId: ID | null };
-  'notification.upserted': Notification; 'notification.deleted': Deleted; 'policies.updated': Policies; 'connector.upserted': Connector; 'connector.deleted': Deleted; 'connector_auth.upserted': ConnectorAuth; 'consent.upserted': ConnectorConsent; 'channel.upserted': ChannelBinding; 'channel.deleted': Deleted; 'voice.upserted': VoiceSession;
+  'skill.upserted': Skill; 'skill.deleted': Deleted; 'routine.upserted': Routine; 'routine.deleted': Deleted; 'routine_run.upserted': RoutineRun; 'memory.upserted': Memory; 'memory.deleted': { id: ID; botId: ID };
+  'pairing.upserted': Pairing;
+  'notification.upserted': Notification; 'notification.deleted': Deleted; 'policies.updated': Policies; 'connector.upserted': Connector; 'connector.deleted': Deleted; 'connector_auth.upserted': ConnectorAuth; 'channel.upserted': ChannelBinding; 'channel.deleted': Deleted; 'voice.upserted': VoiceSession;
   'bot.presence': BotPresence; 'grant.upserted': BotGrant; 'activity.upserted': ActivityItem; 'reminder.upserted': Reminder; 'reminder.deleted': Deleted; 'preference_change.upserted': PreferenceChange; 'milestone.upserted': Milestone;
   'directory_group.upserted': DirectoryGroup; 'directory_group.deleted': Deleted; 'group_policy.upserted': GroupPolicy; 'governance.updated': Governance;
   'network_policy.upserted': NetworkPolicy; 'network_policy.deleted': Deleted; 'policy_application.upserted': PolicyApplication; 'egress.upserted': EgressRoute;
@@ -307,9 +319,7 @@ export type CardAction =
   | { action: 'draft_send'; draftId: ID; request: DraftSend }
   | { action: 'draft_discard'; draftId: ID; request: Update }
   | { action: 'connector_authorize'; connectorId: ID; request: Mutation }
-  | { action: 'connector_consent'; consentId: ID; request: ConsentResolve }
-  | { action: 'template_import'; templateId: ID; request: TemplateImport }
-  | { action: 'team_publish'; botId: ID; request: BotUpdate };
+  | { action: 'template_import'; templateId: ID; request: TemplateImport };
 export interface PushPayload { version: 1; notificationId: ID; workspaceId: ID; conversationId: ID | null; entryId: ID | null; title: string; body: string; target: NotificationTarget; deepLink: string }
 /** Bot token identifies bot; conversationId selects only a verified active invocation context. */
 export interface ToolContextInput extends Mutation { conversationId?: ID }
@@ -324,7 +334,7 @@ export interface VoiceMemoInput extends ToolContextInput { text: string; voice?:
 export interface ShareFileInput extends ToolContextInput { path: string; filename?: string; caption?: string }
 export interface PostGroupInput extends Mutation { groupConversationId: ID; text: string; attachmentIds?: ID[]; mentions?: ID[] }
 export interface BotListInput { query?: string; limit?: number; cursor?: Cursor }
-export interface RememberInput extends ToolContextInput { text: string; kind: Memory['kind']; scope: Memory['scope'] }
+export interface RememberInput extends ToolContextInput { text: string; kind: Memory['kind'] }
 export interface PreferenceToolInput extends ToolContextInput { revision: number; changes: JobPreferencePatch; reason: string; sourceEntryId: ID }
 export interface ReminderToolInput extends ToolContextInput { text: string; dueAtMs: TimestampMs; timezone: string }
 export interface ToolEntryResult { entry: TranscriptEntry }
@@ -351,8 +361,8 @@ export interface RedirectResponse { status: 302; location: string }
 export interface DirectoryGroup extends Resource { name: string; externalId: string | null; source: 'local' | 'oidc' | 'scim'; memberUserIds: ID[] }
 export interface DirectoryGroupCreate extends Mutation { name: string; memberUserIds: ID[] }
 export interface DirectoryGroupUpdate extends Update { name?: string; memberUserIds?: ID[] }
-export interface GroupPolicy extends Resource { directoryGroupId: ID; productAccess: boolean; defaultBotIds: ID[]; capabilityModes: Partial<Record<ActionCategory, 'ask_first' | 'auto_review' | 'allow'>>; requiredRuleIds: ID[]; localExecutionCeiling: 'deny' | 'ask' | 'allow'; allowEgress: boolean; allowSudo: boolean; networkPolicyId: ID | null; reviewExempt: boolean }
-export interface GroupPolicyUpdate extends Update { productAccess?: boolean; defaultBotIds?: ID[]; capabilityModes?: GroupPolicy['capabilityModes']; requiredRuleIds?: ID[]; localExecutionCeiling?: GroupPolicy['localExecutionCeiling']; allowEgress?: boolean; allowSudo?: boolean; networkPolicyId?: ID | null; reviewExempt?: boolean }
+export interface GroupPolicy extends Resource { directoryGroupId: ID; productAccess: boolean; capabilityModes: Partial<Record<ActionCategory, 'ask_first' | 'auto_review' | 'allow'>>; requiredRuleIds: ID[]; localExecutionCeiling: 'deny' | 'ask' | 'allow'; allowEgress: boolean; allowSudo: boolean; networkPolicyId: ID | null; reviewExempt: boolean }
+export interface GroupPolicyUpdate extends Update { productAccess?: boolean; capabilityModes?: GroupPolicy['capabilityModes']; requiredRuleIds?: ID[]; localExecutionCeiling?: GroupPolicy['localExecutionCeiling']; allowEgress?: boolean; allowSudo?: boolean; networkPolicyId?: ID | null; reviewExempt?: boolean }
 export interface Governance { revision: number; groupAccess: 'all' | 'selected'; allowedDirectoryGroupIds: ID[]; allowSudo: boolean; allowEgress: boolean; lockNetworkForGroups: boolean; requireReview: boolean; allowedChannelAdapters: ChannelBinding['adapter'][]; xMentionsEnabled: boolean; emailEnabled: boolean; contentExportEnabled: boolean; inactiveHostPolicy: { enabled: boolean; afterDays: number; action: 'suspend' | 'stop_worker' } }
 export interface GovernanceUpdate extends Update { groupAccess?: Governance['groupAccess']; allowedDirectoryGroupIds?: ID[]; allowSudo?: boolean; allowEgress?: boolean; lockNetworkForGroups?: boolean; requireReview?: boolean; allowedChannelAdapters?: ChannelBinding['adapter'][]; xMentionsEnabled?: boolean; emailEnabled?: boolean; contentExportEnabled?: boolean; inactiveHostPolicy?: Governance['inactiveHostPolicy'] }
 export interface NetworkRule { kind: 'domain' | 'ip_cidr'; value: string; ports: number[]; protocol: 'tcp' | 'udp' | 'both' }
@@ -427,6 +437,7 @@ export interface EventProviderConfig { id: string; source: ExternalSource['sourc
 /** Immutable destination argv/cwd; management and probes use direct native process RPC with bounded JSON stdin, never PTY/shell-string fallback. */
 export interface HostDriverCommand { argv: string[]; cwd: string; timeoutMs: number; probeArgv: string[] }
 export interface HostDriverConfig { machineId: ID; provider: HostManagement['provider']; environmentRoot: string | null; actions: Partial<Record<HostAction, HostDriverCommand>>; networkApply: HostDriverCommand | null; egressApply: HostDriverCommand | null; setupRun: HostDriverCommand | null; runtimeDestinations: NetworkRule[] }
+/** Operator-reviewed service-account custody only; never grants access across users or lends another user's OAuth identity. */
 export interface ConnectorProviderConfig { id: string; origins: string[]; oauth: OAuthProviderConfig | null; sharedServiceAccount: boolean }
 export interface ReviewedSetupManifest { name: string; directoryGroupId: ID | null; machineIds: ID[]; entries: SetupManifest['entries'] }
 export interface IntegrationProvider { id: string; kind: 'connector' | 'channel' | 'email' | 'x' | 'event' | 'identity' | 'export' | 'host'; label: string; configured: boolean; prerequisites: string[]; capabilities: string[] }
@@ -598,6 +609,14 @@ export interface RestEndpoints {
   'POST /devices': Endpoint<DeviceRegister, Device>;
   'PATCH /devices/:id': Endpoint<DeviceUpdate, Device>;
   'DELETE /devices/:id': Endpoint<Mutation, Deleted>;
+  'POST /pairings': Endpoint<PairingStart, PairingIssued>;
+  'GET /pairings': Endpoint<undefined, Pairing[]>;
+  'GET /pairings/:id': Endpoint<undefined, Pairing>;
+  'POST /pairings/preview': Endpoint<PairingPreviewRequest, PairingPreviewResult>;
+  'POST /pairings/claim': Endpoint<PairingClaim, PairingClaimResult>;
+  'POST /pairings/:id/approve': Endpoint<PairingApprove, Pairing>;
+  'POST /pairings/:id/deny': Endpoint<PairingDeny, Pairing>;
+  'POST /pairings/:id/complete': Endpoint<PairingComplete, PairingCompletion>;
   'GET /capabilities': Endpoint<undefined, Capabilities>;
   'GET /sync': Endpoint<undefined, Snapshot>;
   'GET /machines': Endpoint<undefined, Page<Machine>, PageQuery>;
@@ -627,12 +646,11 @@ export interface RestEndpoints {
   'POST /terminals/:id/input': Endpoint<TerminalInput, Empty>;
   'POST /terminals/:id/resize': Endpoint<TerminalResize, Terminal>;
   'DELETE /terminals/:id': Endpoint<Mutation, Terminal>;
-  'GET /bots': Endpoint<undefined, Page<Bot>, PageQuery & { visibility?: Bot['visibility']; query?: string; machineId?: ID; published?: boolean; hidden?: boolean }>;
+  'GET /bots': Endpoint<undefined, Page<Bot>, PageQuery & { query?: string; machineId?: ID; hidden?: boolean }>;
   'POST /bots': Endpoint<BotCreate, Bot>;
   'GET /bots/:id': Endpoint<undefined, Bot>;
   'PATCH /bots/:id': Endpoint<BotUpdate, Bot>;
   'POST /bots/:id/duplicate': Endpoint<BotDuplicate, Bot>;
-  'POST /bots/:id/team-copy': Endpoint<BotTeamCopy, Bot>;
   'POST /bots/:id/preview': Endpoint<PreviewRequest, Confirmation>;
   'DELETE /bots/:id': Endpoint<Confirm, Deleted>;
   'POST /bots/:id/move': Endpoint<BotMove, Bot>;
@@ -657,7 +675,6 @@ export interface RestEndpoints {
   'POST /conversations/:id/preview': Endpoint<PreviewRequest, Confirmation>;
   'DELETE /conversations/:id': Endpoint<Confirm, Deleted>;
   'POST /conversations/:id/read': Endpoint<ReadRequest, Conversation>;
-  'POST /conversations/:id/leave': Endpoint<GroupLeave, Empty>;
   'GET /conversations/:id/composer': Endpoint<undefined, ComposerDraft>;
   'PUT /conversations/:id/composer': Endpoint<ComposerDraftUpdate, ComposerDraft>;
   'GET /conversations/:id/entries': Endpoint<undefined, Page<TranscriptEntry>, PageQuery & { beforeSeq?: number; afterSeq?: number }>;
@@ -707,7 +724,7 @@ export interface RestEndpoints {
   'POST /routines/:id/webhook-key': Endpoint<Mutation, WebhookKey>;
   'DELETE /routines/:id/webhook-key': Endpoint<Mutation, Empty>;
   'POST /hooks/:routineId': Endpoint<HookRequest, HookReceipt>;
-  'GET /bots/:id/memory': Endpoint<undefined, Page<Memory>, PageQuery & { query?: string; scope?: Memory['scope'] }>;
+  'GET /bots/:id/memory': Endpoint<undefined, Page<Memory>, PageQuery & { query?: string }>;
   'POST /bots/:id/memory': Endpoint<MemoryCreate, Memory>;
   'GET /bots/:id/memory/export': Endpoint<undefined, MemoryExport>;
   'POST /bots/:id/memory/import': Endpoint<MemoryImport, MemoryImportResult>;
@@ -731,9 +748,6 @@ export interface RestEndpoints {
   'DELETE /connectors/:id': Endpoint<Confirm, Deleted>;
   'POST /connectors/:id/auth': Endpoint<Mutation, ConnectorAuth>;
   'GET /connector-auth/:id': Endpoint<undefined, ConnectorAuth>;
-  'GET /consents': Endpoint<undefined, Page<ConnectorConsent>, PageQuery>;
-  'POST /consents/:id/resolve': Endpoint<ConsentResolve, ConnectorConsent>;
-  'DELETE /consents/:id': Endpoint<Update, Deleted>;
   'GET /channels': Endpoint<undefined, Page<ChannelBinding>, PageQuery & { botId?: ID }>;
   'POST /channels': Endpoint<ChannelCreate, ChannelBinding>;
   'PATCH /channels/:id': Endpoint<ChannelUpdate, ChannelBinding>;

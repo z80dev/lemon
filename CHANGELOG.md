@@ -43,6 +43,13 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   Includes web/macOS/iOS screen contracts, all 101 Grok behavioral mappings
   and all 16 adopted Muse companion/control features, with explicit provider
   prerequisites and no virtual-desktop or demonstration-recording claims.
+- Lemon Bot owner-only live-resource cutover: removed Team publishing,
+  managers/default Bots, other-human groups and cross-human connector lending.
+  Chat, cron, channel, handoff and helper work retain the actual Bot owner.
+  Added named desktop-to-iPhone QR preview/claim/approval/completion contracts,
+  private fixed-nonce same-device/session receipt recovery and explicit null
+  paired-session expiry until revocation; ordinary sessions stay bounded.
+  Updated owner-first screens, card taxonomy and all 101+16 design mappings.
 - Lemon Bot secret-free integration/channel/email/X provider discovery,
   verified own-account channel linking initiation and exact event-filter
   schemas, with operator-reviewed connector/private-origin/setup inputs.
