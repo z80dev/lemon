@@ -116,6 +116,7 @@ export default {
           { text: "Firecrawl", link: "/tools/firecrawl" },
           { text: "Media", link: "/tools/media" },
           { text: "LSP", link: "/tools/lsp" },
+          { text: "Debugger", link: "/tools/debug" },
           { text: "omp delegate", link: "/tools/omp" },
           { text: "OpenAI-Compatible API", link: "/tools/openai-compatible-api" },
           { text: "ACP", link: "/tools/acp" },
