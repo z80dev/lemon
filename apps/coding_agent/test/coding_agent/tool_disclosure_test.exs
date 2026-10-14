@@ -158,15 +158,27 @@ defmodule CodingAgent.ToolDisclosureTest do
         capture_log(fn ->
           cfg =
             ToolDisclosure.config(%{
-              tools: %{disclosure: %{budget_tokens: 0, catalog_tokens: "nope", enabled: "yes"}}
+              tools: %{
+                disclosure: %{
+                  budget_tokens: 0,
+                  catalog_tokens: "nope",
+                  enabled: "yes",
+                  profile: "turbo",
+                  pinned: "browser_tabs"
+                }
+              }
             })
 
           assert cfg.budget_tokens == ToolDisclosure.defaults().budget_tokens
           assert cfg.catalog_tokens == ToolDisclosure.defaults().catalog_tokens
           assert cfg.enabled == ToolDisclosure.defaults().enabled
+          # An unknown profile must not silently opt a session into deferral.
+          assert cfg.profile == :legacy
+          assert cfg.pinned == []
         end)
 
       assert logs =~ "ignoring invalid budget_tokens"
+      assert logs =~ "ignoring invalid profile"
     end
   end
 
@@ -233,6 +245,39 @@ defmodule CodingAgent.ToolDisclosureTest do
                invoke.execute.("id", %{"name" => "tool_invoke", "args" => %{}}, nil, nil)
 
       assert message =~ "cannot be invoked through tool_invoke"
+    end
+
+    test "the coding profile keeps caller extras disclosed and still reserves bridge names" do
+      tuples = [
+        tuple("read", :builtin),
+        tuple("browser_navigate", :builtin),
+        tuple("tool_search", {:mcp, :srv})
+      ]
+
+      extras = [tool("caller_extra"), tool("tool_invoke")]
+      cfg = Map.put(huge_budget(), :profile, :coding)
+
+      {result, logs} = with_log(fn -> ToolDisclosure.apply(tuples, extras, cfg) end)
+
+      # Activated far under the budget: the profile, not the budget, decides.
+      assert result.report.active
+      assert names(result.tools) == ["read", "caller_extra", "tool_search", "tool_invoke"]
+      assert result.report.hidden_names == ["browser_navigate"]
+      assert result.report.shadowed_by_bridge == ["tool_invoke", "tool_search"]
+      assert logs =~ "collides with a bridge tool name"
+
+      invoke = find(result.tools, "tool_invoke")
+
+      assert {:error, message} =
+               invoke.execute.("id", %{"name" => "tool_invoke", "args" => %{}}, nil, nil)
+
+      assert message =~ "cannot be invoked through tool_invoke"
+
+      assert text(invoke.execute.("id", %{"name" => "caller_extra", "args" => %{}}, nil, nil)) ==
+               "ran caller_extra"
+
+      assert text(invoke.execute.("id", %{"name" => "browser_navigate", "args" => %{}}, nil, nil)) ==
+               "ran browser_navigate"
     end
   end
 

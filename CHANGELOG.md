@@ -8,8 +8,22 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
+### Added
+
+- Opt-in `runtime.tools.disclosure.profile = "coding"` keeps a coding core
+  directly exposed and defers optional registry-resolved built-ins behind
+  `tool_search` / `tool_invoke`. Explicit pins and per-session overrides support
+  isolated trials; defaults and caller-supplied toolsets remain unchanged.
+  Disclosure diagnostics include resolved inventories, estimated schema size
+  and a safe catalog/policy digest. Bridged calls retain approval, plan-mode,
+  checkpoint, cancellation and sequential execution constraints. No cost or
+  latency improvement is claimed; see [Tool Disclosure](docs/config.md#tool-disclosure).
+
 ### Fixed
 
+- WASM host aliases resolve permitted deferred built-ins from the same frozen,
+  wrapped disclosure catalog under both profiles, retaining plan-mode and reload
+  authority boundaries while refusing WASM and disclosure-bridge recursion.
 - Background process output now enforces finite retained-memory, artifact,
   owner and runtime storage byte quotas before capture growth. Oversized
   chunks/partial lines retain a bounded diagnostic tail; polling and artifact

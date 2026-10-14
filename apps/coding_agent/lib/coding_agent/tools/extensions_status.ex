@@ -370,7 +370,7 @@ defmodule CodingAgent.Tools.ExtensionsStatus do
   def format_tool_disclosure_section(disclosure, include_details \\ false) do
     active = Map.get(disclosure, :active, false)
 
-    header = "\n## Tool Disclosure\n"
+    header = "\n## Tool Disclosure\n" <> identity_lines(disclosure)
 
     if active do
       hidden_names = Map.get(disclosure, :hidden_names, [])
@@ -378,14 +378,15 @@ defmodule CodingAgent.Tools.ExtensionsStatus do
       base =
         "- **Active:** true\n" <>
           "- **Estimated schema tokens:** #{Map.get(disclosure, :estimated_tokens, 0)} " <>
-          "(budget #{Map.get(disclosure, :budget_tokens, 0)})\n" <>
-          "- **Disclosed tools:** #{Map.get(disclosure, :disclosed_count, 0)} · " <>
+          "(budget #{Map.get(disclosure, :budget_tokens, 0)})" <>
+          exposed_tokens(disclosure) <>
+          "\n- **Disclosed tools:** #{Map.get(disclosure, :disclosed_count, 0)} · " <>
           "**Hidden tools:** #{Map.get(disclosure, :hidden_count, 0)}\n" <>
           "- **Catalog tier:** #{Map.get(disclosure, :catalog_tier, :inactive)}\n"
 
       details =
         if include_details and hidden_names != [] do
-          "- **Hidden:** #{Enum.join(hidden_names, ", ")}\n"
+          disclosed_names(disclosure) <> "- **Hidden:** #{Enum.join(hidden_names, ", ")}\n"
         else
           ""
         end
@@ -404,6 +405,36 @@ defmodule CodingAgent.Tools.ExtensionsStatus do
         "- **Active:** false (#{reason})\n" <>
         "- **Estimated schema tokens:** #{Map.get(disclosure, :estimated_tokens, 0)} " <>
         "(budget #{Map.get(disclosure, :budget_tokens, 0)})\n"
+    end
+  end
+
+  defp identity_lines(disclosure) do
+    profile =
+      case Map.get(disclosure, :profile) do
+        nil -> ""
+        profile -> "- **Profile:** #{profile}\n"
+      end
+
+    digest =
+      case Map.get(disclosure, :catalog_digest) do
+        digest when is_binary(digest) -> "- **Catalog digest:** #{digest}\n"
+        _ -> ""
+      end
+
+    profile <> digest
+  end
+
+  defp exposed_tokens(disclosure) do
+    case Map.get(disclosure, :disclosed_tokens) do
+      tokens when is_integer(tokens) -> " · **Exposed after disclosure:** #{tokens}"
+      _ -> ""
+    end
+  end
+
+  defp disclosed_names(disclosure) do
+    case Map.get(disclosure, :disclosed_names, []) do
+      [] -> ""
+      names -> "- **Disclosed:** #{Enum.join(names, ", ")}\n"
     end
   end
 

@@ -87,13 +87,14 @@ Call-site migration to `LemonCore.Env.get/2` is out of scope for this pass and i
 
 ### Tool disclosure (progressive tool-schema disclosure)
 
-When a session's resolved tool catalog costs more than `LEMON_TOOL_DISCLOSURE_BUDGET_TOKENS` in estimated schema tokens, `CodingAgent.ToolDisclosure` replaces the MCP/extension/WASM long tail with two bridge tools — `tool_search` (find a deferred tool and read its schema) and `tool_invoke` (call it, with the same policy and approval pipeline a direct call would use). Built-in tools always stay fully disclosed, and a catalog under the budget is left byte-for-byte unchanged. Disclosure is computed once at session start and at extension reload, never per turn, so the tool array stays prompt-cache stable.
+When a session's resolved tool catalog costs more than `LEMON_TOOL_DISCLOSURE_BUDGET_TOKENS` in estimated schema tokens, `CodingAgent.ToolDisclosure` replaces the MCP/extension/WASM long tail with two bridge tools — `tool_search` (find a deferred tool and read its schema) and `tool_invoke` (call it, with the same policy and approval pipeline a direct call would use). In the default `legacy` profile built-in tools always stay fully disclosed, and a catalog under the budget is left byte-for-byte unchanged. The opt-in `coding` profile also defers optional built-ins outside the coding core; see [tool disclosure](config.md#tool-disclosure). Disclosure is computed once at session start and at extension reload, never per turn, so the tool array stays prompt-cache stable.
 
 | Env Var | Type | Default | Secret | Apps | Description |
 |---|---|---|---|---|---|
 | `LEMON_TOOL_DISCLOSURE_BUDGET_TOKENS` | integer | `40000` |  | `lemon_core` | Estimated tool-schema token total above which long-tail tools are hidden behind tool_search/tool_invoke. |
 | `LEMON_TOOL_DISCLOSURE_CATALOG_TOKENS` | integer | `2000` |  | `lemon_core` | Token budget for the hidden-tool catalog digest embedded in the tool_search description. |
-| `LEMON_TOOL_DISCLOSURE_ENABLED` | boolean | `true` |  | `lemon_core` | Whether tool-schema progressive disclosure may activate when the tool catalog exceeds the token budget. |
+| `LEMON_TOOL_DISCLOSURE_ENABLED` | boolean | `true` |  | `lemon_core` | Whether tool-schema progressive disclosure may activate under the selected profile. |
+| `LEMON_TOOL_DISCLOSURE_PROFILE` | string | `legacy` |  | `lemon_core` | Tool disclosure profile: legacy defers only the MCP/extension/WASM long tail over budget; coding also defers optional built-ins outside the coding core. |
 
 ### WASM tool runtime
 
