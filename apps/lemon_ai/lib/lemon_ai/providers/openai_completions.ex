@@ -141,6 +141,10 @@ defmodule LemonAi.Providers.OpenAICompletions do
     }
   end
 
+  # Provider-specific credentials only: OPENAI_API_KEY is never sent to a
+  # non-OpenAI endpoint. Models flagged `compat.allow_missing_api_key`
+  # (keyless local servers, `auth = "none"` custom providers) go out without an
+  # Authorization header when nothing resolves.
   defp get_api_key(model, opts, resolved_provider_opts) do
     cond do
       opts.api_key && opts.api_key != "" ->
@@ -152,58 +156,101 @@ defmodule LemonAi.Providers.OpenAICompletions do
       api_key = get_provider_env_key(model.provider) ->
         api_key
 
-      api_key = get_env_api_key() ->
+      api_key = openai_env_api_key(model.provider) ->
         api_key
 
+      allow_missing_api_key?(model) ->
+        nil
+
       true ->
-        raise "OpenAI API key is required. Set OPENAI_API_KEY environment variable or pass api_key option."
+        raise missing_api_key_message(model.provider)
+    end
+  end
+
+  defp openai_provider?(provider), do: provider in [:openai, "openai"]
+
+  defp openai_env_api_key(provider) do
+    if openai_provider?(provider), do: non_empty(get_env_api_key())
+  end
+
+  defp allow_missing_api_key?(%Model{compat: %{allow_missing_api_key: true}}), do: true
+  defp allow_missing_api_key?(_model), do: false
+
+  defp missing_api_key_message(provider) do
+    if openai_provider?(provider) do
+      "OpenAI API key is required. Set OPENAI_API_KEY environment variable or pass api_key option."
+    else
+      env_hint =
+        case provider_env_vars(provider) do
+          [] -> ""
+          vars -> " Set #{Enum.join(vars, " or ")} or"
+        end
+
+      "No API key provided for provider #{provider}.#{env_hint} configure an API key for it."
     end
   end
 
   defp resolve_provider_options(model, opts) do
-    provider_options(opts, normalize_provider_id(model.provider))
+    provider_options(opts, model.provider)
   end
 
-  defp normalize_provider_id(provider) when is_atom(provider), do: provider
+  @provider_env_vars %{
+    groq: ["GROQ_API_KEY"],
+    mistral: ["MISTRAL_API_KEY"],
+    xai: ["XAI_API_KEY"],
+    cerebras: ["CEREBRAS_API_KEY"],
+    deepseek: ["DEEPSEEK_API_KEY"],
+    openrouter: ["OPENROUTER_API_KEY"],
+    opencode: ["OPENCODE_API_KEY"],
+    zai: ["ZAI_API_KEY"],
+    minimax: ["MINIMAX_API_KEY"],
+    fireworks: ["FIREWORKS_API_KEY"]
+  }
 
-  defp normalize_provider_id(provider) when is_binary(provider) do
-    provider
-    |> String.replace("-", "_")
-    |> String.to_atom()
+  defp provider_env_vars(provider) when is_atom(provider) do
+    Map.get(@provider_env_vars, provider) || LemonAi.Models.Presets.env_vars(provider)
   end
+
+  defp provider_env_vars(provider) when is_binary(provider) do
+    Enum.find_value(@provider_env_vars, [], fn {atom, vars} ->
+      if Atom.to_string(atom) == provider, do: vars
+    end)
+  end
+
+  defp provider_env_vars(_provider), do: []
 
   defp get_provider_env_key(provider) do
-    env_var =
-      case provider do
-        :groq -> "GROQ_API_KEY"
-        :mistral -> "MISTRAL_API_KEY"
-        :xai -> "XAI_API_KEY"
-        :cerebras -> "CEREBRAS_API_KEY"
-        :openrouter -> "OPENROUTER_API_KEY"
-        :opencode -> "OPENCODE_API_KEY"
-        :zai -> "ZAI_API_KEY"
-        :minimax -> "MINIMAX_API_KEY"
-        :fireworks -> "FIREWORKS_API_KEY"
-        "groq" -> "GROQ_API_KEY"
-        "mistral" -> "MISTRAL_API_KEY"
-        "xai" -> "XAI_API_KEY"
-        "cerebras" -> "CEREBRAS_API_KEY"
-        "openrouter" -> "OPENROUTER_API_KEY"
-        "opencode" -> "OPENCODE_API_KEY"
-        "zai" -> "ZAI_API_KEY"
-        "minimax" -> "MINIMAX_API_KEY"
-        "fireworks" -> "FIREWORKS_API_KEY"
-        _ -> nil
-      end
-
-    if env_var, do: System.get_env(env_var), else: nil
+    provider
+    |> provider_env_vars()
+    |> Enum.find_value(&non_empty(System.get_env(&1)))
   end
 
-  defp provider_options(%StreamOptions{provider_options: options}, key) when is_map(options) do
+  defp non_empty(value) when is_binary(value) and value != "", do: value
+  defp non_empty(_value), do: nil
+
+  # Provider options are keyed by the provider atom (or its string form). A
+  # binary provider (custom providers) is looked up as-is: never converted to
+  # an atom.
+  defp provider_options(%StreamOptions{provider_options: options}, key)
+       when is_map(options) and is_atom(key) do
     Map.get(options, key) || Map.get(options, Atom.to_string(key)) || %{}
   end
 
+  defp provider_options(%StreamOptions{provider_options: options}, key)
+       when is_map(options) and is_binary(key) do
+    normalized = String.replace(key, "-", "_")
+
+    Map.get(options, key) || Map.get(options, normalized) ||
+      Map.get(options, existing_atom(normalized)) || %{}
+  end
+
   defp provider_options(_, _), do: %{}
+
+  defp existing_atom(name) do
+    String.to_existing_atom(name)
+  rescue
+    ArgumentError -> nil
+  end
 
   defp build_url(model, resolved_provider_opts) do
     base_url =
@@ -215,17 +262,14 @@ defmodule LemonAi.Providers.OpenAICompletions do
   end
 
   defp build_headers(model, context, api_key, opts) do
-    base_headers = %{
-      "authorization" => "Bearer #{api_key}",
-      "content-type" => "application/json",
-      "accept" => "text/event-stream"
-    }
-
-    # Add model-specific headers
-    model_headers =
-      (model.headers || %{})
-      |> Enum.map(fn {k, v} -> {String.downcase(to_string(k)), v} end)
-      |> Map.new()
+    base_headers =
+      %{
+        "content-type" => "application/json",
+        "accept" => "text/event-stream"
+      }
+      |> then(fn headers ->
+        if api_key, do: Map.put(headers, "authorization", "Bearer #{api_key}"), else: headers
+      end)
 
     # OpenCode Go requires a stable per-conversation session header
     session_headers = OpenCodeGoSession.headers(model, context, opts)
@@ -238,18 +282,12 @@ defmodule LemonAi.Providers.OpenAICompletions do
         %{}
       end
 
-    # Add user-provided headers last (highest priority)
-    opts_headers =
-      (opts.headers || %{})
-      |> Enum.map(fn {k, v} -> {String.downcase(to_string(k)), v} end)
-      |> Map.new()
-
     # Merge headers - later entries override earlier ones
     base_headers
-    |> Map.merge(session_headers)
-    |> Map.merge(model_headers)
-    |> Map.merge(copilot_headers)
-    |> Map.merge(opts_headers)
+    |> LemonAi.Providers.RequestHeaders.merge(session_headers)
+    |> LemonAi.Providers.RequestHeaders.merge(model.headers)
+    |> LemonAi.Providers.RequestHeaders.merge(copilot_headers)
+    |> LemonAi.Providers.RequestHeaders.merge(opts.headers)
     |> Map.to_list()
   end
 

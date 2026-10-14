@@ -65,10 +65,12 @@ defmodule LemonCli.Onboarding.Runner do
       fail!("--codex-auth-path requires --auth codex-cli.")
     end
 
+    # Device-code sign-in needs no input: it prints a code and polls.
     if cli_opts[:non_interactive] == true and
-         is_nil(normalize_optional_string(cli_opts[:token])) and explicit_auth != :codex_cli do
+         is_nil(normalize_optional_string(cli_opts[:token])) and
+         explicit_auth not in [:codex_cli, :device] do
       fail!(
-        "Non-interactive provider setup requires --token or explicit --auth codex-cli. For ChatGPT browser sign-in, run `lemon setup --provider openai-codex` interactively."
+        "Non-interactive provider setup requires --token, --auth device (ChatGPT) or explicit --auth codex-cli. For ChatGPT browser sign-in, run `lemon setup --provider openai-codex` interactively."
       )
     end
 
@@ -99,7 +101,8 @@ defmodule LemonCli.Onboarding.Runner do
 
     selected_model =
       if set_default? do
-        choose_default_model!(cli_opts[:model], spec, io)
+        discovery_key = if auth_mode == :api_key, do: secret_value
+        choose_default_model!(cli_opts[:model], spec, io, discovery_key)
       else
         nil
       end
@@ -173,7 +176,7 @@ defmodule LemonCli.Onboarding.Runner do
       if value = normalize_optional_string(opts[:auth]), do: parse_auth_mode!(value, spec)
 
     cond do
-      token && explicit_auth in [:oauth, :codex_cli] ->
+      token && explicit_auth in [:oauth, :device, :codex_cli] ->
         fail!("Cannot combine --token with --auth #{auth_mode_output_label(explicit_auth)}.")
 
       token ->
@@ -197,6 +200,9 @@ defmodule LemonCli.Onboarding.Runner do
     mode =
       case String.downcase(value) do
         "oauth" -> :oauth
+        "device" -> :device
+        "device-code" -> :device
+        "device_code" -> :device
         "api_key" -> :api_key
         "api-key" -> :api_key
         "codex-cli" -> :codex_cli
@@ -320,7 +326,7 @@ defmodule LemonCli.Onboarding.Runner do
          secret_provider_for_auth(spec, :oauth)}
 
       nil ->
-        oauth_payload = run_oauth_flow!(opts, spec, io)
+        oauth_payload = run_oauth_flow!(opts, spec, io, auth_mode)
         {oauth_payload, secret_provider_for_auth(spec, :oauth)}
     end
   end
@@ -331,7 +337,7 @@ defmodule LemonCli.Onboarding.Runner do
 
   defp secret_provider_for_auth(%Provider{} = spec, :api_key), do: spec.api_key_secret_provider
 
-  defp run_oauth_flow!(opts, %Provider{oauth_module: oauth_module} = spec, io) do
+  defp run_oauth_flow!(opts, %Provider{oauth_module: oauth_module} = spec, io, auth_mode) do
     unless oauth_module && Code.ensure_loaded?(oauth_module) do
       fail!(
         spec.oauth_missing_hint ||
@@ -385,6 +391,12 @@ defmodule LemonCli.Onboarding.Runner do
 
     result =
       cond do
+        auth_mode == :device and function_exported?(oauth_module, :login_device_code, 1) ->
+          apply(oauth_module, :login_device_code, [oauth_opts])
+
+        auth_mode == :device ->
+          fail!("#{inspect(oauth_module)} does not expose login_device_code/1.")
+
         function_exported?(oauth_module, :login_device_flow, 1) ->
           apply(oauth_module, :login_device_flow, [oauth_opts])
 
@@ -409,7 +421,7 @@ defmodule LemonCli.Onboarding.Runner do
 
   defp normalize_oauth_result!({:error, reason}, _oauth_module, spec) do
     label = spec.oauth_failure_label || "#{spec.display_name} OAuth login failed"
-    fail!("#{label}: #{inspect(reason)}")
+    fail!("#{label}: #{safe_error_kind(reason)}")
   end
 
   defp normalize_oauth_result!(payload, oauth_module, spec) do
@@ -437,8 +449,8 @@ defmodule LemonCli.Onboarding.Runner do
     String.trim(payload)
   end
 
-  defp encode_oauth_payload!(payload, _oauth_module) do
-    fail!("OAuth flow returned unsupported payload: #{inspect(payload)}")
+  defp encode_oauth_payload!(_payload, _oauth_module) do
+    fail!("OAuth flow returned an unsupported credential payload.")
   end
 
   defp store_secret!(secret_name, secret_value, secret_provider, spec) do
@@ -452,9 +464,20 @@ defmodule LemonCli.Onboarding.Runner do
         )
 
       {:error, reason} ->
-        fail!("Failed to store #{spec.display_name} credentials in secrets: #{inspect(reason)}")
+        fail!(
+          "Failed to store #{spec.display_name} credentials in secrets: #{safe_error_kind(reason)}"
+        )
     end
   end
+
+  # Auth failures can contain token responses or request structs. Only a stable
+  # leading atom is suitable for terminal output.
+  defp safe_error_kind(reason) when is_atom(reason), do: Atom.to_string(reason)
+
+  defp safe_error_kind(reason) when is_tuple(reason) and tuple_size(reason) > 0,
+    do: safe_error_kind(elem(reason, 0))
+
+  defp safe_error_kind(_reason), do: "unknown_error"
 
   defp resolve_set_default?(value, _spec, _io) when is_boolean(value), do: value
 
@@ -462,25 +485,32 @@ defmodule LemonCli.Onboarding.Runner do
     prompt_yes_no?("Set #{spec.display_name} as your default provider?", false, io)
   end
 
-  defp choose_default_model!(requested_model, %Provider{} = spec, _io)
+  # Preset providers (`LemonAi.Models.Presets`) serve an open model set: any
+  # requested id is accepted and the picker lists what the endpoint reports.
+  defp choose_default_model!(requested_model, %Provider{} = spec, _io, api_key)
        when is_binary(requested_model) and requested_model != "" do
     requested_model = String.trim(requested_model)
-    available = available_model_ids(spec)
 
-    if requested_model in available do
+    if preset_provider(spec) != nil do
       requested_model
     else
-      fail!(
-        "Unknown model #{inspect(requested_model)} for #{spec.id}. Available: #{Enum.join(available, ", ")}"
-      )
+      available = available_model_ids(spec, api_key)
+
+      if requested_model in available do
+        requested_model
+      else
+        fail!(
+          "Unknown model #{inspect(requested_model)} for #{spec.id}. Available: #{Enum.join(available, ", ")}"
+        )
+      end
     end
   end
 
-  defp choose_default_model!(_requested_model, %Provider{} = spec, io) do
-    available = available_model_ids(spec)
+  defp choose_default_model!(_requested_model, %Provider{} = spec, io, api_key) do
+    available = available_model_ids(spec, api_key)
 
     if available == [] do
-      fail!("No models found for #{spec.id} in LemonAi.Models registry.")
+      fail!("No models found for #{spec.id}. Pass --model MODEL to choose one by id.")
     end
 
     default_model =
@@ -545,7 +575,7 @@ defmodule LemonCli.Onboarding.Runner do
     end
   end
 
-  defp available_model_ids(%Provider{} = spec) do
+  defp available_model_ids(%Provider{} = spec, api_key) do
     models_module = Module.concat([:"Elixir.LemonAi", :Models])
 
     with true <- Code.ensure_loaded?(models_module),
@@ -555,6 +585,10 @@ defmodule LemonCli.Onboarding.Runner do
            provider_atom_for_models(models_module, spec.id) do
       models_module
       |> apply(:get_models, [provider])
+      |> case do
+        [] -> discovered_models(spec, api_key)
+        models -> models
+      end
       |> Enum.map(&%{provider: to_string(&1.provider), id: &1.id, name: &1.name})
       |> ModelCatalog.sort_for_picker()
       |> Enum.map(& &1.id)
@@ -563,6 +597,27 @@ defmodule LemonCli.Onboarding.Runner do
       _ ->
         []
     end
+  end
+
+  # Lists a preset endpoint's models with the key just entered (bounded; an
+  # unreachable endpoint lists nothing).
+  defp discovered_models(%Provider{} = spec, api_key) do
+    with preset when not is_nil(preset) <- preset_provider(spec),
+         {:ok, models} <-
+           LemonAi.Models.discover_preset(preset, api_key: api_key, timeout_ms: 5_000) do
+      models
+    else
+      _ -> []
+    end
+  end
+
+  defp preset_provider(%Provider{id: id}) do
+    normalized = normalize_provider_name(id)
+
+    Enum.find_value(LemonAi.Models.Presets.all(), fn preset ->
+      if preset.id |> Atom.to_string() |> normalize_provider_name() == normalized,
+        do: preset.id
+    end)
   end
 
   defp provider_atom_for_models(models_module, provider_id) do
@@ -814,11 +869,15 @@ defmodule LemonCli.Onboarding.Runner do
     spec.api_key_choice_label || "Paste API key"
   end
 
+  defp auth_mode_choice_label(%Provider{}, :device),
+    do: "Headless sign-in (device code, no local callback)"
+
   defp auth_mode_choice_label(%Provider{}, :codex_cli),
     do: "Import existing Codex CLI ChatGPT login (read-only copy)"
 
   defp auth_mode_output_label(:codex_cli), do: "codex-cli (OAuth copy)"
   defp auth_mode_output_label(:oauth), do: "oauth"
+  defp auth_mode_output_label(:device), do: "device"
   defp auth_mode_output_label(:api_key), do: "api_key"
 
   defp require_non_empty!(value, error_message) when is_binary(value) do

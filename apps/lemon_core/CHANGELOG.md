@@ -6,7 +6,25 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ## [Unreleased]
 
-_No unreleased changes._
+### Added
+
+- `LemonCore.Secrets.get_with_revision/2` and `set_if_revision/4` provide
+  incarnation-bound conditional credential saves. A revision is scoped to the
+  Store process, owner and name; usage reads preserve it, while replacement
+  (including identical plaintext), deletion/recreation and storage restart
+  invalidate it. Conditional saves share the existing secrets/key-rotation
+  mutation lease and use Store's atomic compare-and-swap.
+
+### Fixed
+
+- Secret reads distinguish backend failure from missing credentials, and set,
+  conditional save, deletion and expiry cleanup return persistence failures
+  instead of acknowledging an unsuccessful mutation. Reads never remove
+  expired records; list cleanup and deletion conditionally remove their exact
+  snapshot under the shared mutation lease so a newer replacement survives.
+- Conditional credential saves recheck the original record's expiry immediately
+  before each compare-and-swap, including after blocked key resolution, so a
+  refresh cannot revive a credential that expired while encryption was pending.
 
 ## [0.2.0] - 2026-10-13
 

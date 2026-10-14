@@ -101,12 +101,17 @@ defmodule LemonAi.Auth.GoogleAntigravityOAuthTest do
       )
     end)
 
+    revision = make_ref()
+
     assert {:ok, api_key_json} =
              GoogleAntigravityOAuth.resolve_api_key_from_secret(
                secret_name,
                original_payload,
-               persist_secret: fn name, value ->
+               reload_secret: fn _ -> {:ok, original_payload, revision} end,
+               persist_secret: fn name, value, expected ->
+                 assert expected == revision
                  send(test_pid, {:persisted_secret, name, value})
+                 :ok
                end
              )
 

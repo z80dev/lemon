@@ -66,7 +66,7 @@ defmodule LemonAi.Providers.Google do
 
   defp do_stream(stream, model, context, opts) do
     output = init_assistant_message(model, api_override: :google_generative_ai)
-    resolved_provider_opts = resolve_provider_options(opts)
+    resolved_provider_opts = resolve_provider_options(model, opts)
 
     try do
       api_key = resolve_api_key(model, opts, resolved_provider_opts)
@@ -100,24 +100,40 @@ defmodule LemonAi.Providers.Google do
       api_key = get_provider_env_key(model.provider) ->
         api_key
 
-      api_key = get_env_api_key() ->
+      api_key = ambient_env_api_key(model.provider) ->
         api_key
+
+      match?(%{allow_missing_api_key: true}, model.compat) ->
+        nil
 
       true ->
         raise "Google Generative AI API key is required. Set GOOGLE_GENERATIVE_AI_API_KEY or configure providers.google.api_key/api_key_secret."
     end
   end
 
-  defp resolve_provider_options(opts) do
-    provider_options(opts, :google)
+  defp resolve_provider_options(model, opts) do
+    provider_options(opts, model.provider)
   end
 
   defp get_provider_env_key(:opencode), do: System.get_env("OPENCODE_API_KEY")
   defp get_provider_env_key("opencode"), do: System.get_env("OPENCODE_API_KEY")
   defp get_provider_env_key(_), do: nil
 
-  defp provider_options(%StreamOptions{provider_options: options}, key) when is_map(options) do
+  # Binary providers other than "google" are user-configured custom endpoints:
+  # never send them the ambient Google key.
+  defp ambient_env_api_key(provider) when provider in [:google, "google"],
+    do: get_env_api_key()
+
+  defp ambient_env_api_key(_provider), do: nil
+
+  defp provider_options(%StreamOptions{provider_options: options}, key)
+       when is_map(options) and is_atom(key) do
     Map.get(options, key) || Map.get(options, Atom.to_string(key)) || %{}
+  end
+
+  defp provider_options(%StreamOptions{provider_options: options}, key)
+       when is_map(options) and is_binary(key) do
+    Map.get(options, key) || %{}
   end
 
   defp provider_options(_, _), do: %{}
@@ -139,15 +155,13 @@ defmodule LemonAi.Providers.Google do
   end
 
   defp build_headers(api_key, model, opts) do
-    base = [
-      {"Content-Type", "application/json"},
-      {"x-goog-api-key", api_key}
-    ]
+    base = %{"content-type" => "application/json"}
+    base = if api_key, do: Map.put(base, "x-goog-api-key", api_key), else: base
 
-    model_headers = Enum.map(model.headers || %{}, fn {k, v} -> {to_string(k), to_string(v)} end)
-    opts_headers = Enum.map(opts.headers || %{}, fn {k, v} -> {to_string(k), to_string(v)} end)
-
-    base ++ model_headers ++ opts_headers
+    base
+    |> LemonAi.Providers.RequestHeaders.merge(model.headers)
+    |> LemonAi.Providers.RequestHeaders.merge(opts.headers)
+    |> Map.to_list()
   end
 
   defp build_request_body(model, context, opts) do

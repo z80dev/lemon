@@ -12,6 +12,16 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
   `build_authorize_url/1`, `parse_authorization_input/1`,
   `exchange_code_for_secret/3`, `describe_secret/1` and a `login_device_flow/1`
   that uses a loopback listener or Anthropic's hosted code page.
+- `LemonAi.Auth.OAuthFlow`: shared RFC 8628 device-code polling (injectable
+  `:sleep`), token requests and single-flight refresh with `force_refresh`.
+- `XAIOAuth` and `KimiCodeOAuth` device-code logins with refreshable payloads,
+  registered in `OAuthSecretResolver`; Anthropic-protocol Kimi requests send a
+  Kimi OAuth token as a bearer with Kimi CLI fingerprint headers.
+- `OpenRouterOAuth` (PKCE, durable API key) and `ZaiOAuth` (GLM Coding Plan
+  sign-in that mints an API key) sign-ins.
+- `OpenAICodexOAuth.login_device_code/1` (headless ChatGPT device flow) and a
+  `:token_url` option on `exchange_code_for_secret/3`;
+  `GitHubCopilotOAuth.decode_secret/1` is public.
 
 ### Changed
 
@@ -36,6 +46,18 @@ what in-repo code has been using.
 
 ### Fixed
 
+- OAuth token requests refuse redirects and redact untrusted endpoint error
+  payloads. Device-code deadlines include HTTP and authorization callback time;
+  full OpenRouter/Z.AI callbacks bind the redirect endpoint, and Z.AI requires state.
+- Copilot, Antigravity and Gemini CLI secret resolution now serializes refresh
+  and persistence per stored login, reloads waiting callers, and rejects
+  deleted/replaced logins and expired tokens. Google revoked refresh grants
+  require reauthentication.
+- Model discovery caches are scoped to endpoint, API, credential, headers and
+  model defaults; cache identifiers contain a digest rather than auth values.
+  Redirects and credential/query-bearing discovery URLs are rejected.
+- Custom Google provider options no longer read the built-in Google account's
+  key or URL. Custom Anthropic and Google models honor explicit keyless auth.
 - The Anthropic, GitHub Copilot, Google Antigravity and Google Gemini CLI
   OAuth helpers no longer report success when a refreshed secret could not be
   stored: a `:persist_secret` callback returning `{:error, _}` (or raising)

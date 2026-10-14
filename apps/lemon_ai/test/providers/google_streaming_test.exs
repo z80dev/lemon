@@ -116,6 +116,54 @@ defmodule LemonAi.Providers.GoogleStreamingTest do
     assert {:ok, _} = EventStream.result(stream, 1000)
   end
 
+  test "custom endpoints use only their own options and support explicitly keyless requests" do
+    test_pid = self()
+
+    Req.Test.stub(__MODULE__, fn conn ->
+      send(test_pid, {:custom_request, conn.host, conn.req_headers})
+      Plug.Conn.send_resp(conn, 200, sse_body([%{"candidates" => [%{"finishReason" => "STOP"}]}]))
+    end)
+
+    model = %Model{
+      id: "custom-gemini",
+      api: :google_generative_ai,
+      provider: "custom-google",
+      base_url: "https://custom.example/v1beta"
+    }
+
+    context = Context.new(messages: [%UserMessage{content: "Hi"}])
+    decoy = %{api_key: "other-account-key", base_url: "https://other-account.example/v1beta"}
+
+    opts = %StreamOptions{
+      provider_options: %{
+        "custom-google" => %{api_key: "custom-key", base_url: "https://selected.example/v1beta"},
+        :google => decoy
+      }
+    }
+
+    {:ok, stream} = Google.stream(model, context, opts)
+    assert {:ok, _} = EventStream.result(stream, 1000)
+    assert_received {:custom_request, "selected.example", headers}
+    assert {"x-goog-api-key", "custom-key"} in headers
+    refute inspect(headers) =~ "other-account-key"
+    refute inspect(headers) =~ "google-test-key"
+
+    {:ok, stream} =
+      Google.stream(%{model | compat: %{allow_missing_api_key: true}}, context, %StreamOptions{
+        provider_options: %{google: decoy}
+      })
+
+    assert {:ok, _} = EventStream.result(stream, 1000)
+    assert_received {:custom_request, "custom.example", headers}
+    refute Enum.any?(headers, fn {name, _} -> name in ["authorization", "x-goog-api-key"] end)
+
+    {:ok, stream} =
+      Google.stream(model, context, %StreamOptions{provider_options: %{google: decoy}})
+
+    assert {:error, _} = EventStream.result(stream, 1000)
+    refute_received {:custom_request, _, _}
+  end
+
   test "request body snapshot includes tools, system, and thinking config" do
     test_pid = self()
 

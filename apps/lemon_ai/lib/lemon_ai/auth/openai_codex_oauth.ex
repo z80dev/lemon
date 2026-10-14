@@ -3,7 +3,8 @@ defmodule LemonAi.Auth.OpenAICodexOAuth do
   OpenAI Codex OAuth helpers.
 
   Supports PKCE authorization URL generation, automatic localhost callback capture
-  with manual code fallback, code/token exchange, refresh, and encrypted secret resolution.
+  with manual code fallback, headless device-code sign-in (`login_device_code/1`),
+  code/token exchange, refresh, and encrypted secret resolution.
   `import_codex_cli_login/1` explicitly copies a ChatGPT OAuth login from the selected
   Codex CLI auth file into a canonical secret payload. Import never contacts the
   network or modifies the source file; callers own encrypted storage and refresh
@@ -24,6 +25,12 @@ defmodule LemonAi.Auth.OpenAICodexOAuth do
   @legacy_secret_types ["onboarding_openai_codex_oauth"]
   @near_expiry_ms 10 * 60 * 1000
   @default_callback_timeout_ms 120_000
+  @device_usercode_url "https://auth.openai.com/api/accounts/deviceauth/usercode"
+  @device_token_url "https://auth.openai.com/api/accounts/deviceauth/token"
+  @device_verification_url "https://auth.openai.com/codex/device"
+  @device_redirect_uri "https://auth.openai.com/deviceauth/callback"
+  @device_poll_margin_ms 3_000
+  @device_max_polls 120
 
   @type oauth_secret :: %{required(String.t()) => String.t() | integer() | nil}
   @type login_opt ::
@@ -36,7 +43,8 @@ defmodule LemonAi.Auth.OpenAICodexOAuth do
           | {:callback_timeout_ms, pos_integer()}
           | {:listen_for_callback, boolean()}
           | {:local_callback_listener, module()}
-          | {:persist_secret, (String.t(), String.t() -> any())}
+          | {:persist_secret,
+             (String.t(), String.t(), term() -> :ok | {:ok, term()} | {:error, term()})}
 
   @doc false
   @spec oauth_client_id() :: String.t()
@@ -76,11 +84,142 @@ defmodule LemonAi.Auth.OpenAICodexOAuth do
              :ok <- ensure_state_matches(auth.state, state),
              :ok <- notify_progress(opts, "Exchanging authorization code for tokens..."),
              {:ok, secret} <-
-               exchange_code_for_secret(code, auth.code_verifier, redirect_uri: auth.redirect_uri) do
+               exchange_code_for_secret(
+                 code,
+                 auth.code_verifier,
+                 Keyword.put(opts, :redirect_uri, auth.redirect_uri)
+               ) do
           {:ok, secret}
         end
       after
         stop_local_callback_listener(listener)
+      end
+    end
+  end
+
+  @doc """
+  Sign in with ChatGPT's device-code flow, without a local callback server.
+
+  Useful on headless machines or when port 1455 is busy. Shows
+  `https://auth.openai.com/codex/device` and a user code through `:on_auth`,
+  polls until the user approves, then exchanges the returned authorization
+  code exactly like the browser flow, so the payload is the same refreshable
+  Codex login. Polls wait the server interval plus three seconds, at most
+  #{@device_max_polls} times and never beyond device-code expiry (15 minutes
+  when omitted by the server). Optional: `:on_progress`, `:sleep` (milliseconds),
+  `:now` (monotonic milliseconds), `:req_options`, and
+  `:device_usercode_url`/`:device_token_url`/`:token_url` overrides for local fakes.
+  """
+  @spec login_device_code(keyword()) :: {:ok, oauth_secret()} | {:error, term()}
+  def login_device_code(opts \\ []) when is_list(opts) do
+    notify_progress(opts, "Requesting ChatGPT device authorization...")
+
+    with {:ok, device} <- start_device_authorization(opts),
+         :ok <-
+           LemonAi.Auth.OAuthFlow.notify_auth(
+             opts,
+             Keyword.get(opts, :device_verification_url, @device_verification_url),
+             "Enter code: #{device.user_code}"
+           ),
+         :ok <- notify_progress(opts, "Waiting for device authorization..."),
+         {:ok, %{code: code, verifier: verifier}} <- poll_device_authorization(device, opts),
+         :ok <- notify_progress(opts, "Exchanging authorization code for tokens...") do
+      exchange_code_for_secret(
+        code,
+        verifier,
+        Keyword.put(opts, :redirect_uri, @device_redirect_uri)
+      )
+    end
+  end
+
+  defp start_device_authorization(opts) do
+    url = Keyword.get(opts, :device_usercode_url, @device_usercode_url)
+
+    case LemonAi.Auth.OAuthFlow.request(url, [json: %{"client_id" => oauth_client_id()}], opts) do
+      {:ok, %{status: status, body: %{} = body}} when status in 200..299 ->
+        device_auth_id = non_empty_binary(body["device_auth_id"])
+        user_code = non_empty_binary(body["user_code"])
+        expires_in = parse_integer(body["expires_in"])
+        lifetime_ms = (expires_in || 900) * 1000
+        now = Keyword.get(opts, :now, fn -> System.monotonic_time(:millisecond) end)
+
+        if device_auth_id && user_code &&
+             (is_nil(body["expires_in"]) or (is_integer(expires_in) and expires_in > 0)) do
+          interval_s = parse_integer(body["interval"]) || 5
+
+          {:ok,
+           %{
+             device_auth_id: device_auth_id,
+             user_code: user_code,
+             interval_ms: max(interval_s, 1) * 1000 + @device_poll_margin_ms,
+             lifetime_ms: lifetime_ms,
+             deadline_ms: now.() + lifetime_ms
+           }}
+        else
+          {:error, :invalid_device_authorization_response}
+        end
+
+      {:ok, %{status: status}} ->
+        {:error, {:device_authorization_failed, status}}
+
+      {:error, _} = error ->
+        error
+    end
+  end
+
+  defp poll_device_authorization(device, opts) do
+    now = Keyword.get(opts, :now, fn -> System.monotonic_time(:millisecond) end)
+    do_poll_device(device, opts, now, 1, device.lifetime_ms)
+  end
+
+  defp do_poll_device(_device, _opts, _now, poll, _remaining_ms)
+       when poll > @device_max_polls,
+       do: {:error, :device_flow_timed_out}
+
+  defp do_poll_device(device, opts, now, poll, remaining_ms) do
+    sleep = Keyword.get(opts, :sleep, &Process.sleep/1)
+    wait_ms = if poll == 1, do: min(device.interval_ms, 5_000), else: device.interval_ms
+    remaining_ms = min(remaining_ms, device.deadline_ms - now.())
+
+    if remaining_ms <= wait_ms do
+      {:error, :device_flow_timed_out}
+    else
+      sleep.(wait_ms)
+      started_at = now.()
+      remaining_ms = min(remaining_ms - wait_ms, device.deadline_ms - started_at)
+
+      if remaining_ms <= 0 do
+        {:error, :device_flow_timed_out}
+      else
+        url = Keyword.get(opts, :device_token_url, @device_token_url)
+        body = %{"device_auth_id" => device.device_auth_id, "user_code" => device.user_code}
+        result = LemonAi.Auth.OAuthFlow.request(url, [json: body], opts)
+
+        remaining_ms =
+          min(remaining_ms - max(now.() - started_at, 0), device.deadline_ms - now.())
+
+        case result do
+          {:ok, _} when remaining_ms <= 0 ->
+            {:error, :device_flow_timed_out}
+
+          # The endpoint answers 403/404 until the user approves.
+          {:ok, %{status: status}} when status in [403, 404] ->
+            do_poll_device(device, opts, now, poll + 1, remaining_ms)
+
+          {:ok, %{status: status, body: %{} = response}} when status in 200..299 ->
+            code = non_empty_binary(response["authorization_code"])
+            verifier = non_empty_binary(response["code_verifier"])
+
+            if code && verifier,
+              do: {:ok, %{code: code, verifier: verifier}},
+              else: {:error, :invalid_device_token_response}
+
+          {:ok, %{status: status}} ->
+            {:error, {:device_token_failed, status}}
+
+          {:error, _} = error ->
+            error
+        end
       end
     end
   end
@@ -274,7 +413,7 @@ defmodule LemonAi.Auth.OpenAICodexOAuth do
       "redirect_uri" => redirect_uri
     }
 
-    with {:ok, data} <- post_form(@token_url, body),
+    with {:ok, data} <- post_form(Keyword.get(opts, :token_url, @token_url), body, opts),
          {:ok, token_data} <- parse_token_response(data),
          account_id when is_binary(account_id) and account_id != "" <-
            extract_account_id(token_data.access_token) do
@@ -329,18 +468,26 @@ defmodule LemonAi.Auth.OpenAICodexOAuth do
   Resolve a usable Codex access token from an OAuth secret.
 
   Returns `:ignore` for non-Codex-OAuth payloads.
+
+  Codex refresh tokens rotate, so a refresh runs under a per-secret lock and
+  re-reads the stored secret through `:reload_secret` first: a caller queued
+  behind a refresh uses the rotated token instead of replaying the consumed
+  refresh token. `force_refresh: true` refreshes even an unexpired token (the
+  provider rejected it) unless the stored token already differs from the
+  rejected one, and never falls back to the rejected token.
   """
-  @spec resolve_api_key_from_secret(String.t(), String.t()) ::
+  @spec resolve_api_key_from_secret(String.t(), String.t(), keyword()) ::
           {:ok, String.t()} | :ignore | {:error, term()}
   def resolve_api_key_from_secret(secret_name, secret_value, opts \\ [])
 
   def resolve_api_key_from_secret(secret_name, secret_value, opts)
       when is_binary(secret_name) and is_binary(secret_value) do
+    force? = Keyword.get(opts, :force_refresh, false) == true
+
     with {:ok, secret} <- decode_secret(secret_value),
-         {:ok, refreshed_secret, changed?} <- ensure_fresh_secret(secret),
+         {:ok, fresh_secret} <- ensure_fresh(secret_name, secret, force?, opts),
          access_token when is_binary(access_token) and access_token != "" <-
-           non_empty_binary(refreshed_secret["access_token"]),
-         :ok <- if(changed?, do: persist_secret(secret_name, refreshed_secret, opts), else: :ok) do
+           non_empty_binary(fresh_secret["access_token"]) do
       {:ok, access_token}
     else
       :not_oauth -> :ignore
@@ -364,54 +511,113 @@ defmodule LemonAi.Auth.OpenAICodexOAuth do
       non_empty_binary(System.get_env("CHATGPT_TOKEN"))
   end
 
-  defp ensure_fresh_secret(secret) when is_map(secret) do
-    access_token = non_empty_binary(secret["access_token"])
-    refresh_token = non_empty_binary(secret["refresh_token"])
-    expires_at_ms = token_expiry_ms(access_token, parse_integer(secret["expires_at_ms"]))
+  defp ensure_fresh(secret_name, secret, force?, opts) do
+    if force? or refresh_due?(secret) do
+      :global.trans(
+        {{__MODULE__, :refresh, secret_name}, self()},
+        fn ->
+          with {:ok, latest, opts} <-
+                 LemonAi.Auth.OAuthSecretResolver.reload_secret(
+                   __MODULE__,
+                   secret_name,
+                   secret,
+                   opts
+                 ) do
+            cond do
+              force? and latest["access_token"] == secret["access_token"] ->
+                refresh_and_persist(secret_name, latest, true, opts)
 
-    should_refresh? =
-      cond do
-        is_nil(refresh_token) -> false
-        is_nil(access_token) -> true
-        is_nil(expires_at_ms) -> false
-        true -> near_expiry?(expires_at_ms)
-      end
+              not force? and refresh_due?(latest) ->
+                refresh_and_persist(secret_name, latest, false, opts)
 
-    if should_refresh? do
-      case refresh_access_token(refresh_token, refresh_token) do
-        {:ok, refreshed} ->
-          account_id = extract_account_id(refreshed.access_token)
-
-          updated =
-            secret
-            |> Map.put("access_token", refreshed.access_token)
-            |> Map.put("refresh_token", refreshed.refresh_token)
-            |> Map.put("expires_at_ms", refreshed.expires_at_ms)
-            |> maybe_put("account_id", account_id)
-            |> Map.put("updated_at_ms", System.system_time(:millisecond))
-
-          {:ok, updated, true}
-
-        {:error, reason} ->
-          if is_binary(access_token) and is_integer(expires_at_ms) and
-               expires_at_ms > System.system_time(:millisecond) do
-            Logger.debug("OpenAI Codex OAuth refresh failed; using unexpired existing token")
-
-            {:ok, secret, false}
-          else
-            {:error, reason}
+              true ->
+                usable(latest)
+            end
           end
-      end
+        end,
+        [node()]
+      )
     else
-      if is_integer(expires_at_ms) and expires_at_ms <= System.system_time(:millisecond) do
-        {:error, :expired_access_token}
-      else
-        {:ok, secret, false}
-      end
+      usable(secret)
     end
   end
 
-  defp refresh_access_token(refresh_token, fallback_refresh_token)
+  defp refresh_due?(secret) do
+    access_token = non_empty_binary(secret["access_token"])
+    expires_at_ms = token_expiry_ms(access_token, parse_integer(secret["expires_at_ms"]))
+
+    cond do
+      is_nil(non_empty_binary(secret["refresh_token"])) -> false
+      is_nil(access_token) -> true
+      is_nil(expires_at_ms) -> false
+      true -> near_expiry?(expires_at_ms)
+    end
+  end
+
+  defp usable(secret) do
+    access_token = non_empty_binary(secret["access_token"])
+    expires_at_ms = token_expiry_ms(access_token, parse_integer(secret["expires_at_ms"]))
+
+    if is_integer(expires_at_ms) and expires_at_ms <= System.system_time(:millisecond) do
+      {:error, :expired_access_token}
+    else
+      {:ok, secret}
+    end
+  end
+
+  defp refresh_and_persist(secret_name, secret, force?, opts) do
+    access_token = non_empty_binary(secret["access_token"])
+    expires_at_ms = token_expiry_ms(access_token, parse_integer(secret["expires_at_ms"]))
+
+    case non_empty_binary(secret["refresh_token"]) do
+      nil ->
+        {:error, :not_refreshable}
+
+      refresh_token ->
+        case refresh_access_token(refresh_token, refresh_token, opts) do
+          {:ok, refreshed} ->
+            account_id = extract_account_id(refreshed.access_token)
+
+            updated =
+              secret
+              |> Map.put("access_token", refreshed.access_token)
+              |> Map.put("refresh_token", refreshed.refresh_token)
+              |> Map.put("expires_at_ms", refreshed.expires_at_ms)
+              |> maybe_put("account_id", account_id)
+              |> Map.put("updated_at_ms", System.system_time(:millisecond))
+
+            with :ok <-
+                   LemonAi.Auth.OAuthSecretResolver.persist_secret(
+                     secret_name,
+                     encode_secret(updated),
+                     opts
+                   ),
+                 do: {:ok, updated}
+
+          {:error, :reauth_required} = error ->
+            error
+
+          {:error, reason} ->
+            if not force? and is_binary(access_token) and is_integer(expires_at_ms) and
+                 expires_at_ms > System.system_time(:millisecond) do
+              Logger.debug("OpenAI Codex OAuth refresh failed; reloading the unexpired token")
+
+              with {:ok, latest, _opts} <-
+                     LemonAi.Auth.OAuthSecretResolver.reload_secret(
+                       __MODULE__,
+                       secret_name,
+                       secret,
+                       opts
+                     ),
+                   do: usable(latest)
+            else
+              {:error, reason}
+            end
+        end
+    end
+  end
+
+  defp refresh_access_token(refresh_token, fallback_refresh_token, opts)
        when is_binary(refresh_token) and refresh_token != "" do
     body = %{
       "grant_type" => "refresh_token",
@@ -419,7 +625,7 @@ defmodule LemonAi.Auth.OpenAICodexOAuth do
       "client_id" => oauth_client_id()
     }
 
-    with {:ok, data} <- post_form(@token_url, body),
+    with {:ok, data} <- post_form(Keyword.get(opts, :token_url, @token_url), body, opts),
          {:ok, token_data} <- parse_token_response(data) do
       {:ok,
        %{
@@ -430,7 +636,7 @@ defmodule LemonAi.Auth.OpenAICodexOAuth do
     end
   end
 
-  defp refresh_access_token(_, _), do: {:error, :missing_refresh_token}
+  defp refresh_access_token(_, _, _), do: {:error, :missing_refresh_token}
 
   defp parse_token_response(data) when is_map(data) do
     access_token = non_empty_binary(data["access_token"])
@@ -439,10 +645,10 @@ defmodule LemonAi.Auth.OpenAICodexOAuth do
 
     cond do
       is_nil(access_token) ->
-        {:error, {:invalid_token_response, data}}
+        {:error, :invalid_token_response}
 
       is_nil(expires_in) or expires_in <= 0 ->
-        {:error, {:invalid_expiry, data}}
+        {:error, :invalid_expiry}
 
       true ->
         {:ok,
@@ -457,42 +663,26 @@ defmodule LemonAi.Auth.OpenAICodexOAuth do
   defp parse_token_response(data) when is_binary(data) do
     case Jason.decode(data) do
       {:ok, decoded} when is_map(decoded) -> parse_token_response(decoded)
-      _ -> {:error, {:invalid_token_response, data}}
+      _ -> {:error, :invalid_token_response}
     end
   end
 
-  defp parse_token_response(other), do: {:error, {:invalid_token_response, other}}
+  defp parse_token_response(_), do: {:error, :invalid_token_response}
 
-  defp persist_secret(secret_name, secret, opts) do
-    encoded = encode_secret(secret)
-
-    case Keyword.get(opts, :persist_secret) do
-      callback when is_function(callback, 2) ->
-        case callback.(secret_name, encoded) do
-          {:error, _} -> {:error, :oauth_secret_persistence_failed}
-          _ -> :ok
-        end
-
-      _ ->
-        :ok
-    end
-  rescue
-    _ ->
-      {:error, :oauth_secret_persistence_failed}
-  end
-
-  defp post_form(url, body) when is_map(body) do
-    headers = %{"content-type" => "application/x-www-form-urlencoded"}
-
-    case Req.post(url, headers: headers, body: URI.encode_query(body)) do
-      {:ok, %Req.Response{status: status, body: response_body}} when status in 200..299 ->
+  defp post_form(url, body, opts) when is_map(body) do
+    case LemonAi.Auth.OAuthFlow.request(url, [form: body], opts) do
+      {:ok, %{status: status, body: response_body}} when status in 200..299 ->
         {:ok, response_body}
 
-      {:ok, %Req.Response{status: status, body: response_body}} ->
-        {:error, {:http_error, status, response_body}}
+      {:ok, %{status: status, body: %{"error" => "invalid_grant"}}}
+      when status in [400, 401] ->
+        {:error, :reauth_required}
 
-      {:error, reason} ->
-        {:error, reason}
+      {:ok, %{status: status, body: response_body}} ->
+        {:error, LemonAi.Auth.OAuthFlow.http_error(status, response_body)}
+
+      {:error, _} = error ->
+        error
     end
   end
 

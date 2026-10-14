@@ -462,6 +462,18 @@ widget = MyApp.WidgetStore.get(id)
 Store calls are fail-soft: if the GenServer is overloaded/unavailable, write APIs return `{:error, :store_unavailable}` and ordinary read/list APIs return `nil`/`[]`. Correctness-sensitive callers use `fetch/3` and `fetch_all/2` to distinguish confirmed absence or an empty table from an unavailable backend.
 Store diagnostics hash keys for idempotency tables so caller replay secrets do not enter logs.
 
+The JSONL backend fails initialization if journal discovery or any selected table
+cannot be read or replayed. A malformed line or undecodable persisted term is
+corruption, not an ignorable record; no valid prefix becomes authoritative.
+Lazy access returns a bounded `{:jsonl_unavailable, classification}` backend
+error and leaves the failed table unloaded. Repair the file, then access it again
+to reload it; a startup failure requires starting the Store again after repair.
+Only a confirmed missing table reads as empty. Failed loads never append to or
+truncate the journal. Encoding and append failures return errors before memory
+or the read cache is updated, rather than crashing the Store. JSONL appends are
+still unsynced: use the existing `Store.sync/1` durability barrier when required.
+Diagnostics omit journal contents, raw paths and exception messages.
+
 Use the generic table API only inside wrapper modules, backend internals, or explicitly app-local legacy tables. Shared-domain runtime code should go through typed wrappers so table ownership stays localized. Wrappers are plain modules over the generic API; `LemonCore.Store` has no domain-specific chat-state, policy, or progress functions.
 
 ### Specialized APIs

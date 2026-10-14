@@ -6,8 +6,10 @@ defmodule LemonAgent.ModelRuntime.StreamOptions do
   specific runtime inputs before `LemonAi.stream/3` or `LemonAi.complete/3` is invoked.
   """
 
+  alias LemonAi.Providers.RequestHeaders
   alias LemonAi.Types.StreamOptions
   alias LemonAgent.ModelRuntime.Credentials
+  alias LemonAgent.ModelRuntime.CustomProviders
   alias LemonAgent.ModelRuntime.ProviderNames
   alias LemonAgent.ProviderConfigResolver
 
@@ -21,8 +23,52 @@ defmodule LemonAgent.ModelRuntime.StreamOptions do
   def build_stream_options(model, providers_map, existing_opts, cwd) do
     base_opts = normalize_stream_options(existing_opts, cwd)
 
+    case CustomProviders.custom_provider(providers_map, Map.get(model, :provider)) do
+      {provider_id, provider_cfg} ->
+        custom_provider_options(base_opts, provider_id, provider_cfg, providers_map)
+
+      nil ->
+        provider_stream_options(model, providers_map, base_opts)
+    end
+  end
+
+  # Custom models already carry provider defaults beneath model overrides.
+  # Only explicit caller headers belong in the final wire override layer.
+  defp custom_provider_options(base_opts, provider_id, provider_cfg, providers_map) do
+    api_key =
+      first_non_empty_binary([
+        base_opts.api_key,
+        Credentials.resolve_provider_api_key(provider_id, providers_map)
+      ])
+
+    base_opts
+    |> maybe_put_struct(:api_key, api_key)
+    |> put_provider_options(provider_id, %{
+      api_key: api_key,
+      base_url: CustomProviders.base_url(provider_cfg)
+    })
+  end
+
+  defp provider_stream_options(model, providers_map, base_opts) do
     provider_cfg =
-      ProviderNames.provider_config(providers_map, provider_config_lookup_key(model)) || %{}
+      ProviderNames.provider_config(providers_map, provider_config_lookup_key(model)) ||
+        CustomProviders.config_for(providers_map, Map.get(model, :provider)) || %{}
+
+    # Catalog-only built-in models may not carry configured provider headers.
+    # Keep model overrides above those defaults, then explicit caller headers.
+    base_opts =
+      case CustomProviders.headers(provider_cfg) do
+        defaults when map_size(defaults) == 0 ->
+          base_opts
+
+        defaults ->
+          headers =
+            defaults
+            |> RequestHeaders.merge(model.headers)
+            |> RequestHeaders.merge(base_opts.headers)
+
+          %{base_opts | headers: headers}
+      end
 
     case model do
       %{provider: :google_vertex} ->
@@ -107,7 +153,7 @@ defmodule LemonAgent.ModelRuntime.StreamOptions do
           )
 
         base_opts
-        |> put_provider_options(provider_options_key(provider_id), %{
+        |> put_provider_options(provider_id, %{
           api_key: resolved[:api_key],
           base_url: resolved[:base_url]
         })
@@ -275,16 +321,6 @@ defmodule LemonAgent.ModelRuntime.StreamOptions do
     do: ProviderNames.provider_atom(provider) || provider
 
   defp provider_config_lookup_key(_), do: nil
-
-  defp provider_options_key(provider_id) when is_atom(provider_id), do: provider_id
-
-  defp provider_options_key(provider_id) when is_binary(provider_id) do
-    provider_id
-    |> String.replace("-", "_")
-    |> String.to_atom()
-  end
-
-  defp provider_options_key(provider_id), do: provider_id
 
   defp provider_config_value(nil, _key), do: nil
 

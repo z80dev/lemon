@@ -22,7 +22,12 @@ defmodule LemonCore.Config.ProvidersTest do
         "OPENCODE_BASE_URL",
         "GITHUB_COPILOT_API_KEY",
         "MINIMAX_API_KEY",
-        "MINIMAX_BASE_URL"
+        "MINIMAX_BASE_URL",
+        "OLLAMA_BASE_URL",
+        "OLLAMA_HOST",
+        "LM_STUDIO_BASE_URL",
+        "LLAMA_CPP_BASE_URL",
+        "LITELLM_BASE_URL"
       ]
       |> Enum.each(&System.delete_env/1)
 
@@ -241,6 +246,60 @@ defmodule LemonCore.Config.ProvidersTest do
 
       assert not Map.has_key?(config.providers, "invalid")
       assert config.providers["valid"][:api_key] == "sk-valid"
+    end
+  end
+
+  describe "local server base-URL environment variables" do
+    setup do
+      ~w(OLLAMA_BASE_URL OLLAMA_HOST LM_STUDIO_BASE_URL LLAMA_CPP_BASE_URL LITELLM_BASE_URL)
+      |> Enum.each(&System.delete_env/1)
+
+      :ok
+    end
+
+    test "set a normalized base_url for unconfigured local providers" do
+      System.put_env("OLLAMA_HOST", "0.0.0.0")
+      System.put_env("LLAMA_CPP_BASE_URL", "http://llama.lan:8080/")
+      System.put_env("LITELLM_BASE_URL", "http://proxy.lan:4000/v1")
+
+      providers = Providers.resolve(%{}).providers
+
+      assert providers["ollama"] == %{base_url: "http://0.0.0.0:11434/v1"}
+      assert providers["llama_cpp"] == %{base_url: "http://llama.lan:8080/v1"}
+      assert providers["litellm"] == %{base_url: "http://proxy.lan:4000/v1"}
+      refute Map.has_key?(providers, "lm_studio")
+    end
+
+    test "OLLAMA_BASE_URL wins over OLLAMA_HOST" do
+      System.put_env("OLLAMA_BASE_URL", "http://ollama.lan:9999")
+      System.put_env("OLLAMA_HOST", "ignored:1")
+
+      assert Providers.resolve(%{}).providers["ollama"] == %{
+               base_url: "http://ollama.lan:9999/v1"
+             }
+    end
+
+    test "a configured base_url wins, under any alias spelling" do
+      System.put_env("LM_STUDIO_BASE_URL", "http://env.lan:1234/v1")
+      System.put_env("LLAMA_CPP_BASE_URL", "http://env.lan:8080")
+
+      providers =
+        Providers.resolve(%{
+          "providers" => %{
+            "lm-studio" => %{"base_url" => "http://config.lan:1234/v1"},
+            "llama.cpp" => %{"api_key_secret" => "llama_secret"}
+          }
+        }).providers
+
+      assert providers["lm-studio"].base_url == "http://config.lan:1234/v1"
+      refute Map.has_key?(providers, "lm_studio")
+
+      assert providers["llama.cpp"] == %{
+               api_key_secret: "llama_secret",
+               base_url: "http://env.lan:8080/v1"
+             }
+
+      refute Map.has_key?(providers, "llama_cpp")
     end
   end
 

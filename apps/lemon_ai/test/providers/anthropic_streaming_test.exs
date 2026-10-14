@@ -238,6 +238,43 @@ defmodule LemonAi.Providers.AnthropicStreamingTest do
     assert {"x-api-key", "anthropic-fallback-key"} in headers
   end
 
+  test "custom (binary) providers never receive the ambient ANTHROPIC_API_KEY" do
+    test_pid = self()
+
+    Req.Test.stub(__MODULE__, fn conn ->
+      send(test_pid, {:custom_req_headers, conn.req_headers})
+      Plug.Conn.send_resp(conn, 500, "unexpected request")
+    end)
+
+    with_env(%{"ANTHROPIC_API_KEY" => "anthropic-ambient-key"}, fn ->
+      context = Context.new(messages: [%UserMessage{content: "Hi"}])
+      model = %{kimi_model() | provider: "my-claude-proxy"}
+      {:ok, stream} = Anthropic.stream(model, context, %StreamOptions{})
+      assert {:error, _} = EventStream.result(stream, 1_000)
+    end)
+
+    refute_received {:custom_req_headers, _headers}
+  end
+
+  test "explicitly keyless custom Anthropic endpoints omit credential headers" do
+    test_pid = self()
+
+    Req.Test.stub(__MODULE__, fn conn ->
+      send(test_pid, {:keyless_headers, conn.req_headers})
+      Plug.Conn.send_resp(conn, 200, sse_event("message_stop", %{}))
+    end)
+
+    with_env(%{"ANTHROPIC_API_KEY" => "ambient-decoy"}, fn ->
+      model = %{model() | provider: "keyless-claude", compat: %{allow_missing_api_key: true}}
+      context = Context.new(messages: [%UserMessage{content: "Hi"}])
+      {:ok, stream} = Anthropic.stream(model, context, %StreamOptions{})
+      assert {:ok, _} = EventStream.result(stream, 1_000)
+      assert_received {:keyless_headers, headers}
+      refute Enum.any?(headers, fn {name, _} -> name in ["authorization", "x-api-key"] end)
+      refute inspect(headers) =~ "ambient-decoy"
+    end)
+  end
+
   test "opencode model can use OPENCODE_API_KEY" do
     body =
       sse_event("message_start", %{"message" => %{"usage" => %{}}}) <>
