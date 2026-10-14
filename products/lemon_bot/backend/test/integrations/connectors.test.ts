@@ -10,12 +10,12 @@ import { createAccessService } from '../../src/core/auth';
 import { createEventService } from '../../src/core/events';
 import { createMutationService } from '../../src/core/mutations';
 import { createGateService } from '../../src/core/gates';
-import { syncBotProfile, baseBotMcpConfig } from '../../src/core/bots';
+import { syncBotProfile, baseBotMcpTemplate } from '../../src/core/bots';
 import { revokeConnectorInvocations } from '../../src/runtime/runs';
 import { Router } from '../../src/core/router';
 import { ApiError } from '../../src/core/errors';
 import { createPolicyServices } from '../../src/enterprise/policy';
-import { createConnectorRoutes, createConnectorServices, connectorConfigurationFingerprint } from '../../src/integrations/connectors';
+import { createConnectorRoutes, createConnectorServices, connectorConfigurationFingerprint, type ConnectorProfileServer } from '../../src/integrations/connectors';
 import { privateMetadata, sha256 } from '../../src/integrations/common';
 import type { OAuthState } from '../../src/integrations/oauth';
 
@@ -125,7 +125,7 @@ async function fixture(visibility: P.Bot['visibility'] = 'personal') {
   services.events = createEventService(services);
   services.mutations = createMutationService(services, key);
   const connectors = createConnectorServices(services);
-  services.integrations = { ...createPolicyServices(services), connectorConfig: connectors.connectorProfileConfiguration, canReadResource: (actor, collection, entity) => connectors.canReadResource(actor, collection, entity) ?? false, emitProviderNotifications: async () => undefined } as BackendServices['integrations'];
+  services.integrations = { ...createPolicyServices(services), connectorConfig: connectors.connectorProfileConfiguration, connectorTemplates: connectors.connectorTemplates, canReadResource: (actor, collection, entity) => connectors.canReadResource(actor, collection, entity) ?? false, emitProviderNotifications: async () => undefined } as BackendServices['integrations'];
   services.syncBotProfile = (actor, botId) => syncBotProfile(services, actor, botId);
   services.runtime = { revokeConnectorInvocations: (actor, botId, connectorId) => revokeConnectorInvocations(services, actor, botId, connectorId) } as BackendServices['runtime'];
   const gates = createGateService(services);
@@ -149,7 +149,7 @@ async function fixture(visibility: P.Bot['visibility'] = 'personal') {
   peer.putSecret('BOT_MCP', 'private-product-bot-token');
   peer.putSecret('RECORDS_TOKEN', 'destination-only-account-secret');
   store.setMetadata(`botMcp:${bot.id}`, { secretName: 'BOT_MCP', encryptedToken: codec.encrypt('private-product-bot-token'), digest: 'fixture-digest' });
-  peer.profiles.set(bot.profileId, [baseBotMcpConfig(services, bot)]);
+  peer.profiles.set(bot.profileId, [baseBotMcpTemplate(services)]);
   const alice = await services.auth.session('alice');
   const bob = await services.auth.session('bob');
   const principal = (userId: string): Principal => ({ kind: 'user', id: userId, userId, workspaceId: 'workspace-1', role: userId === 'alice' ? 'owner' : 'member', sessionId: null, botId: null, deviceId: null });
@@ -192,10 +192,32 @@ describe('destination connector configuration', () => {
     expect(config[0]?.enabledTools).toEqual(['read_items', 'write_item']);
     expect(config[0]?.allowedOrigins).toEqual([ORIGIN]);
     expect(config[0]?.approvedPrivateOrigins).toEqual([]);
+    expect(config[0]?.headers).toEqual({});
+    expect(f.peer.profiles.get(f.bot.profileId)?.every(server => Object.keys(server.headers).length === 0)).toBe(true);
     const publicData = JSON.stringify([result.body, enabled.body, config, f.store.list('auditRecords'), f.store.db.query('SELECT payload FROM events').all(), [...f.peer.profiles.values()]]);
     expect(publicData).not.toContain('destination-only-account-secret');
     expect(publicData).not.toContain('private-product-bot-token');
     expect(publicData).not.toContain(f.services.config.operatorToken);
+  });
+
+  test('all configured account templates are credential-free without private metadata, owner authority or consent consumption', async () => {
+    const f = await fixture('team');
+    const value = await f.create();
+    const connector = (await f.enable(value.body.connector)).body;
+    const consent = await f.connectors.requestConnectorConsent(f.principal('alice'), { connectorId: connector.id, botId: f.bot.id, conversationId: 'room-alice', operationId: f.services.id('run') });
+    const before = f.peer.calls.length;
+    const decrypt = f.services.decrypt;
+    f.services.decrypt = () => { throw new Error('Public template getter attempted to inspect private metadata.'); };
+    let templates: ConnectorProfileServer[];
+    try { templates = await f.connectors.connectorTemplates(f.bot.id); }
+    finally { f.services.decrypt = decrypt; }
+    expect(templates).toEqual([{ name: `connector-${connector.id}`, url: `${ORIGIN}/mcp`, headers: {}, enabledTools: ['read_items', 'write_item'], allowedOrigins: [ORIGIN], approvedPrivateOrigins: [] }]);
+    expect(f.peer.calls).toHaveLength(before);
+    expect(f.store.require<P.ConnectorConsent>('consents', consent.id).gate.state).toBe('pending');
+    expect(JSON.stringify(templates)).not.toContain('RECORDS_TOKEN');
+    expect(JSON.stringify(f.store.metadata(`connectorTemplatePolicy:${connector.id}`))).not.toContain('RECORDS_TOKEN');
+    expect(f.peer.profiles.get(f.bot.profileId)).toEqual([baseBotMcpTemplate(f.services), ...templates]);
+    expect(f.connectors.details(connector.id).desiredFingerprint).toBe(connectorConfigurationFingerprint([baseBotMcpTemplate(f.services), ...templates]));
   });
 
   test('rejects raw credentials, malformed names, missing destination names, foreign machine and unsafe origins before connection', async () => {
@@ -248,7 +270,8 @@ describe('destination connector configuration', () => {
     const grant = f.store.list<P.BotGrant>('botGrants', value => value.capabilityId === `connector:${enabled.body.id}`)[0]!;
     f.store.put('botGrants', f.services.update(grant, { requestedLevel: 'off', effectiveLevel: 'off' }));
     await f.connectors.connectorProvisioning(f.principal('alice'), f.bot.id);
-    expect(await f.connectors.connectorProfileConfiguration(f.principal('alice'), f.bot.id)).toEqual([]);
+    expect((await f.connectors.connectorTemplates(f.bot.id))[0]?.enabledTools).toEqual([]);
+    expect(await f.connectors.connectorProfileConfiguration(f.principal('alice'), f.bot.id, 'room-alice', f.services.id('run'))).toEqual([]);
   });
 
   test('direct tool authorization cannot attach an unadmitted connector or reuse a revoked invocation epoch', async () => {
@@ -329,7 +352,8 @@ describe('principal-scoped Team connector consent', () => {
     const created = await f.create();
     const enabled = await f.enable(created.body.connector);
     const connector = enabled.body;
-    expect(await f.connectors.connectorProfileConfiguration(f.principal('alice'), f.bot.id)).toEqual([]);
+    expect((await f.connectors.connectorTemplates(f.bot.id))[0]?.headers).toEqual({});
+    expect(await f.connectors.connectorProfileConfiguration(f.principal('alice'), f.bot.id, 'room-alice', 'unconsented-operation')).toEqual([]);
     expect(await f.connectors.connectorProfileConfiguration(f.principal('bob'), f.bot.id, 'room-bob', 'different-operation')).toEqual([]);
     const operationId = f.services.id('run');
     const consent = await f.connectors.requestConnectorConsent(f.principal('alice'), { connectorId: connector.id, botId: f.bot.id, conversationId: 'room-alice', operationId });
