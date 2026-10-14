@@ -63,7 +63,7 @@ defmodule CodingAgent.NativeFollowupContextTest do
     root = Path.join(System.tmp_dir!(), prefix)
     File.mkdir_p!(root)
     keys = [{:lemon_core, :paths}, {:lemon_core, Secrets},
-      {:lemon_router, :native_followup_allowed_origins}, {:lemon_router, :session_coordinator_module},
+      {:lemon_router, :native_followup_allowed_origins}, {:lemon_router, :session_coordinator},
       {:lemon_router, :native_context_consumer_pid}]
     previous = Map.new(keys, fn {app, key} = pair -> {pair, Application.fetch_env(app, key)} end)
     previous_origin = System.get_env("LEMON_NATIVE_FOLLOWUP_ALLOWED_ORIGINS")
@@ -72,7 +72,7 @@ defmodule CodingAgent.NativeFollowupContextTest do
     System.delete_env("LEMON_NATIVE_FOLLOWUP_ALLOWED_ORIGINS")
     Application.put_env(:lemon_core, :paths, home_state_dir: root, global_config: Path.join(root, "config.toml"))
     Application.put_env(:lemon_core, Secrets, key_providers: [:env], env_var: secret_env)
-    Application.put_env(:lemon_router, :session_coordinator_module, Coordinator)
+    Application.put_env(:lemon_router, :session_coordinator, Coordinator)
     Application.put_env(:lemon_router, :native_context_consumer_pid, self())
     bandit = start_supervised!({Bandit, plug: {Issuer, %{pid: self()}}, ip: {127, 0, 0, 1}, port: 0, startup_log: false})
     assert {:ok, {{127, 0, 0, 1}, port}} = ThousandIsland.listener_info(bandit)
@@ -82,7 +82,8 @@ defmodule CodingAgent.NativeFollowupContextTest do
     profile_id = prefix <> "-profile"
     run_id = prefix <> "-root"
     assert {:ok, _} = ProfileStore.create(%{"id" => profile_id,
-      "mcpServers" => [%{"name" => "core", "url" => "https://bot.example/mcp", "headers" => %{}}]})
+      "mcpServers" => [%{"name" => "core", "url" => "https://bot.example/mcp", "headers" => %{},
+        "allowedOrigins" => ["https://bot.example"], "approvedPrivateOrigins" => []}]})
     assert {:ok, _} = NativeFollowupAdmission.configure(profile_id, origin <> "/admit", "issuer-private-bearer")
     assert {:ok, profile} = ProfileStore.get_for_execution(profile_id)
     policy = %{allow: ["read", "write", "task", "agent"], require_approval: ["write"]}
@@ -263,7 +264,8 @@ defmodule CodingAgent.NativeFollowupContextTest do
   end
 
   def servers(id), do: [%{"name" => "core", "url" => "https://bot.example/mcp",
-    "headers" => %{"X-Lemon-Bot-Invocation" => "${LEMON_SECRET:lemon_bot/invocations/#{id}}"}}]
+    "headers" => %{"X-Lemon-Bot-Invocation" => "${LEMON_SECRET:lemon_bot/invocations/#{id}}"},
+    "allowedOrigins" => ["https://bot.example"], "approvedPrivateOrigins" => []}]
   def proof(id), do: %{"runId" => id, "serverName" => "core", "serverUrl" => "https://bot.example/mcp",
     "headerName" => "X-Lemon-Bot-Invocation", "secretName" => "lemon_bot/invocations/" <> id}
 end
