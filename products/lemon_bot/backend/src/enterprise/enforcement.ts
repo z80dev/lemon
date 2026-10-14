@@ -2,8 +2,7 @@ import type * as P from '../../../contracts/protocol';
 import type { BackendServices, Principal } from '../core/services';
 import { ApiError } from '../core/errors';
 import { quiesceBotInvocations } from '../runtime/runs';
-import { syncBotPolicyFloor } from '../core/bots';
-import { userPrincipal } from '../integrations/common';
+import { syncBotPolicyFloor, syncBotProfile } from '../core/bots';
 
 /** A stored desired rule is not proof that a previously running native agent lost its authority. */
 export async function refreshEffectivePolicy(services: BackendServices, actor: Principal, botIds?: string[], options: { workspace?: boolean } = {}): Promise<void> {
@@ -20,8 +19,8 @@ export async function refreshEffectivePolicy(services: BackendServices, actor: P
     try {
       const quiesced = await quiesceBotInvocations(services, actor, bot.id);
       if (quiesced.status !== 'cancelled') throw new ApiError('outcome_unknown', 'Previous native policy invocations have not been confirmed stopped.', false, { resourceIds: [bot.id, ...quiesced.runIds] });
-      const owner = options.workspace ? userPrincipal(services, bot.ownerUserId) : actor;
-      await syncBotPolicyFloor(services, owner, bot.id);
+      if (options.workspace) await syncBotPolicyFloor(services, actor, bot.id);
+      else await syncBotProfile(services, actor, bot.id);
       const current = services.store.metadata<{ operationId?: string; state: string }>(fenceKey);
       if (current?.operationId !== operationId) throw new ApiError('outcome_unknown', 'A newer policy change superseded this synchronization.', false, { resourceIds: [bot.id] });
       services.store.setMetadata(fenceKey, { ...previous, operationId, state: 'acknowledged', revision: services.store.require<P.Bot>('bots', bot.id).revision, actorUserId: actor.userId, workspace: options.workspace === true, acknowledgedAtMs: services.now() });
