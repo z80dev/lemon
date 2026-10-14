@@ -37,7 +37,7 @@ compiled binaries (`mode=exec`).
 
 | Action | Parameters | Result |
 | --- | --- | --- |
-| `launch` | `program` (required), `args`, `adapter`, `cwd` | Starts the program under the debugger and waits for the first stop or exit |
+| `launch` | `program` (required), `args`, `adapter`, `cwd`; optional initial breakpoint `file` + `line` or `function` (+ `condition`, `hit_condition`) | Starts the program under the debugger and waits for the first stop or exit |
 | `attach` | `pid` or `port` (+ `host`), `adapter`, `cwd` | Attaches to a running process or debug server |
 | `set_breakpoint` | `file` + `line` (or `function`), `condition`, `hit_condition` | Sets a source (or function) breakpoint |
 | `remove_breakpoint` | `file` + `line` (or `function`) | Removes it |
