@@ -5,6 +5,17 @@ import { ApiError } from '../core/errors';
 
 const https = z.string().url().refine(value => { try { const url = new URL(value); return url.protocol === 'https:' && !url.username && !url.password && !url.hash; } catch { return false; } }, 'HTTPS without inline credentials or fragments is required');
 const origin = https.refine(value => URL.canParse(value) && new URL(value).origin === value, 'Expected an origin, not a URL path');
+const firstPartyLoopbackOrigin = z.string().url().refine(value => {
+  try { const url = new URL(value); return url.protocol === 'http:' && ['127.0.0.1', '[::1]'].includes(url.hostname) && url.origin === value; }
+  catch { return false; }
+}, 'Expected an exact literal-loopback HTTP origin');
+const privateMcpOrigin = z.union([origin, firstPartyLoopbackOrigin]);
+function verifyPrivateMcpOrigins(values: string[], firstPartyOrigin?: string): void {
+  for (const value of values) {
+    if (new URL(value).protocol !== 'http:') continue;
+    if (!firstPartyOrigin || value !== firstPartyOrigin || !firstPartyLoopbackOrigin.safeParse(firstPartyOrigin).success) throw new ApiError('invalid_request', 'Explicit loopback HTTP MCP approval must match the configured first-party backend origin.');
+  }
+}
 const oauth = z.object({ id: z.string().min(1), clientId: z.string().min(1), clientSecretRef: z.string().min(1), authorizeUrl: https, tokenUrl: https, revocationUrl: https.optional(), introspectionUrl: https.optional(), clientAuthentication: z.enum(['basic', 'body']).optional(), scopes: z.array(z.string().min(1)), redirectUris: z.array(z.string().min(1)), allowedOrigins: z.array(origin).min(1) }).strict();
 const entries = z.array(z.object({ id: z.string().regex(/^[A-Za-z0-9_.-]{1,128}$/), setupScript: z.string().min(1).max(262144), checkScript: z.string().min(1).max(262144).nullable(), secretNames: z.array(z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_.-]{0,255}$/)).max(100).refine(values => new Set(values).size === values.length), timeoutMs: z.number().int().min(1000).max(1800000) }).strict()).min(1).max(100);
 export interface ConnectorProvider { id: string; origins: string[]; oauth: P.OAuthProviderConfig | null; sharedServiceAccount: boolean }
@@ -12,7 +23,7 @@ export interface ReviewedSetupManifest { name: string; directoryGroupId: string 
 export interface IntegrationConfiguration { connectorProviders: ConnectorProvider[]; approvedPrivateMcpOrigins: string[]; reviewedSetupManifests: ReviewedSetupManifest[] }
 const extensions = z.object({
   connectorProviders: z.array(z.object({ id: z.string().min(1), origins: z.array(origin).min(1), oauth: oauth.nullable(), sharedServiceAccount: z.boolean() }).strict()).default([]),
-  approvedPrivateMcpOrigins: z.array(origin).default([]),
+  approvedPrivateMcpOrigins: z.array(privateMcpOrigin).default([]),
   reviewedSetupManifests: z.array(z.object({ name: z.string().min(1).max(120), directoryGroupId: z.string().min(1).nullable(), machineIds: z.array(z.string().min(1)).min(1).max(1000), entries }).strict()).default([]),
 });
 
@@ -51,11 +62,12 @@ const providerSchema = z.object({
   managedDirectoryOwnerOverride: z.boolean().optional(),
 }).strict();
 /** One strict startup schema for canonical private OperatorConfiguration. */
-export function parseOperatorConfiguration(input: unknown): P.OperatorConfiguration {
+export function parseOperatorConfiguration(input: unknown, options?: { firstPartyOrigin: string }): P.OperatorConfiguration {
   const defaults = { trustedFrontendOrigins: [], oauthRedirectUris: ['lemonbot://auth/complete'], serverSecrets: {}, channelProviders: [], emailProviders: [], eventProviders: [], hostDrivers: [], xProvider: null, exportAllowedOrigins: [], requiredRuntimeDestinations: [], breakGlassOwnerUserId: null };
   const parsed = providerSchema.safeParse(input !== null && typeof input === 'object' && !Array.isArray(input) ? { ...defaults, ...input } : input);
   if (!parsed.success) throw new ApiError('invalid_request', 'Operator configuration is invalid; inspect provider schemas in products/lemon_bot/providers.md.');
   const config = parsed.data;
+  verifyPrivateMcpOrigins(config.approvedPrivateMcpOrigins, options?.firstPartyOrigin);
   const references: string[] = [];
   if (config.xPublicAccountSecretRef) references.push(config.xPublicAccountSecretRef);
   for (const source of config.providerSpendSources ?? []) references.push(source.secretRef);
@@ -78,6 +90,7 @@ export function parseOperatorConfiguration(input: unknown): P.OperatorConfigurat
 export function integrationConfiguration(services: BackendServices): IntegrationConfiguration {
   const result = extensions.safeParse(services.config.operator);
   if (!result.success) throw new ApiError('capability_unavailable', 'Operator integration configuration is invalid; review connector providers and setup manifests.');
+  verifyPrivateMcpOrigins(result.data.approvedPrivateMcpOrigins, new URL(services.config.publicUrl).origin);
   return result.data;
 }
 export function approvedOrigins(services: BackendServices): string[] {
