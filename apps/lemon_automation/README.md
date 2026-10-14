@@ -35,6 +35,7 @@ CronManager (tick every 60s)
     +-- emits :cron_run_started event
     +-- spawns Task via TaskSupervisor
             |
+            +-- checks private CronAdmission callback when configured (fail closed)
             +-- RunSubmitter.submit/2
                     |
                     +-- forks session key into sub-session for isolation
@@ -480,6 +481,7 @@ immutable.
 |-------|---------|-------------|
 | `enabled` | `true` | Whether the job is active |
 | `timezone` | `"UTC"` | `"UTC"`, `"local"` (server wall-clock), or an available IANA name; DST gaps skip slots and folds use the first occurrence |
+| `admission` | `nil` | Private, operator-configured product admission for profile-backed agent jobs; denied/unavailable decisions never dispatch or retry. See [controller API](../lemon_control_plane/README.md#private-cron-admission). |
 | `deliver_to` | `nil` | Delivery target: `nil` (originating chat, else paired owner chat), `"none"`, `"telegram:<chat_id>[:<thread_id>]"`, or `"discord:<channel_id>[:<thread_id>]"` |
 | `once` | `false` | One-shot: disabled when its scheduled run is claimed, deleted after that run finishes |
 | `jitter_sec` | `0` | Random delay spread in seconds |

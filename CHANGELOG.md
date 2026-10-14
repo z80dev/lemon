@@ -45,6 +45,13 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   exclusively from the encrypted secret store on the execution host. Missing or
   failing secret reads fail closed before MCP clients start; controller requests
   keep references unchanged and never substitute environment values.
+- Profile-backed cron jobs can require private, authenticated product admission
+  before every dispatch. Decisions bind the actual owner/workspace/profile and
+  fixed run receipts; denial or unavailable admission never launches or retries
+  work. Trusted operators provision encrypted per-routine tokens through
+  `cron.admission.set`; callback credentials remain absent from public cron
+  projections. Origins are explicitly allowlisted, with HTTPS except literal
+  loopback HTTP for local development.
 
 ### Fixed
 

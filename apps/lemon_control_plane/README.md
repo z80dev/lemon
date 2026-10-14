@@ -167,6 +167,54 @@ Profile placement is rejected for shell jobs. Explicit routine `cwd` and model
 pins remain supported; an explicit remote cwd is interpreted on the worker.
 See [profiles](../../docs/user-guide/profiles.md) for configuration and boundaries.
 
+### Private cron admission
+
+Only trusted operators (`admin` scope) configure external admission:
+
+- `cron.admission.set {routineId, token}` stores/rotates a dedicated token in the
+  controller's encrypted secret store and returns `{secretName, set: true}`.
+  The token is never returned. IDs are nonempty and at most 256 bytes; tokens
+  are nonempty, at most 4096 bytes, and cannot contain CR/LF.
+- `cron.add` and `cron.update` accept an optional `admission` map with exactly
+  `{url, token_secret, routine_id, creator_id, workspace_id}` (snake-case keys).
+  `token_secret` is the returned secret name, not the token. This is supported
+  only for agent jobs with a `profileId`. Updating with `admission: null`
+  removes the hook; omitting the field preserves it. Public add/update/list
+  responses expose only `admissionConfigured`.
+
+Operators allow exact callback origins using
+`LEMON_CRON_ADMISSION_ALLOWED_ORIGINS` (comma-separated), or
+`:lemon_automation, :cron_admission_allowed_origins` in deployment config.
+The environment override takes precedence. An empty allowlist admits no
+callback. HTTPS is required except explicitly allowlisted HTTP origins at
+literal `127.0.0.1` or `[::1]`; `localhost` and all other HTTP hosts are denied.
+Callback URLs forbid userinfo, query and fragment. Redirects and HTTP retries
+are disabled; the encrypted token is never sent to an untrusted origin.
+
+Before any dispatch the controller POSTs JSON with Bearer authentication:
+
+```text
+{jobId, profileId, routineId, creatorId, workspaceId,
+ cronRunId, routerRunId, triggeredBy, scheduledForMs}
+```
+
+`cronRunId` and `routerRunId` are the scheduler's fixed receipt IDs.
+`triggeredBy` is `"schedule"`, `"manual"`, `"wake"`, or `"retry"`;
+`scheduledForMs` is the claimed scheduled slot or null for nonscheduled work.
+The endpoint returns HTTP 200 JSON
+`{allow: true | false, context: <exact echoed request object>}`. Only an exact
+context match and `allow: true` admits execution. A matching `allow: false`
+records `denied`; any other reply, unavailable credential, timeout/disconnect,
+or removed origin trust records `admission_unavailable`. Both are failed cron
+run outcomes (also `meta.admission_outcome`), with no router submission and no
+automatic retry. The next ordinary occurrence rechecks admission. The callback
+must only read policy; it must not grant credentials or launch work itself.
+
+Admission configuration is durable only in the private owning job record.
+Job events, management projections, audit records, run history, and router
+requests never include its token or secret reference.
+
+
 
 ## Durable session inspection
 

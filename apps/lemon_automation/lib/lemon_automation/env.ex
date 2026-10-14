@@ -10,6 +10,19 @@ defmodule LemonAutomation.Env do
 
   @declarations [
     %{
+      name: :lemon_cron_admission_allowed_origins,
+      env_var: "LEMON_CRON_ADMISSION_ALLOWED_ORIGINS",
+      aliases: [],
+      type: :string,
+      default: nil,
+      doc:
+        "Comma-separated exact origins allowed for private cron admission callbacks; HTTPS or literal-loopback HTTP only.",
+      secret?: false,
+      required?: false,
+      area: :automation,
+      apps: [:lemon_automation]
+    },
+    %{
       name: :lemon_goal_judge_model,
       env_var: "LEMON_GOAL_JUDGE_MODEL",
       aliases: [],

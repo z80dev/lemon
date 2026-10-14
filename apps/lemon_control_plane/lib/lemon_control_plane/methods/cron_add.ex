@@ -21,6 +21,7 @@ defmodule LemonControlPlane.Methods.CronAdd do
       schedule: params["schedule"],
       agent_id: params["agentId"],
       profile_id: params["profileId"],
+      admission: params["admission"],
       session_key: params["sessionKey"],
       prompt: params["prompt"],
       command: params["command"],
@@ -46,6 +47,7 @@ defmodule LemonControlPlane.Methods.CronAdd do
            "schedule" => job.schedule,
            "timezone" => job.timezone,
            "nextRunAtMs" => job.next_run_at_ms,
+           "admissionConfigured" => not is_nil(job.admission),
            "summary" => summary(job)
          }}
 

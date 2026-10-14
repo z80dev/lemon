@@ -47,7 +47,7 @@ defmodule LemonAutomation.CronStore do
   """
   @spec put_job(CronJob.t()) :: :ok
   def put_job(%CronJob{} = job) do
-    LemonCore.Store.put(@jobs_table, job.id, CronJob.to_map(job))
+    LemonCore.Store.put(@jobs_table, job.id, CronJob.to_storage_map(job))
   end
 
   @doc """
@@ -60,7 +60,7 @@ defmodule LemonAutomation.CronStore do
   """
   @spec claim_job(CronJob.t()) :: :ok | {:error, :exists} | {:error, term()}
   def claim_job(%CronJob{} = job) do
-    LemonCore.Store.put_new(@jobs_table, job.id, CronJob.to_map(job))
+    LemonCore.Store.put_new(@jobs_table, job.id, CronJob.to_storage_map(job))
   end
 
   @doc """
