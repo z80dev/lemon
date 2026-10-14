@@ -37,6 +37,10 @@ export interface ReauthResult { reauthToken: string; expiresAtMs: TimestampMs }
 export interface UserUpdate extends Update { displayName?: string; email?: string; avatarAttachmentId?: ID | null; preferences?: Preferences; notifications?: NotificationPreferences }
 export interface PasswordUpdate extends Mutation { currentPassword: string; newPassword: string }
 export interface AccountDelete extends Confirm { reauthToken: string }
+export type AccountCleanupState = 'pending' | 'running' | 'completed' | 'failed' | 'outcome_unknown' | 'not_required';
+export interface AccountCleanupResult { state: AccountCleanupState; updatedAtMs: TimestampMs; errorCode: ErrorCode | null }
+export interface ProviderCleanupResult extends AccountCleanupResult { providerId: string; kind: 'email' | 'oidc' | 'connector' | 'channel' | 'x'; receiptId: ID | null }
+export interface AccountTeardown extends Resource { operation: 'delete_account'; userId: ID; workspaceId: ID; state: 'pending' | 'running' | 'completed' | 'failed' | 'outcome_unknown'; productCleanup: AccountCleanupResult; providerCleanup: ProviderCleanupResult[]; requestId: string; startedAtMs: TimestampMs | null; completedAtMs: TimestampMs | null }
 export interface WorkspaceUpdate extends Update { name?: string; timezone?: string; enabled?: boolean; ownerUserId?: ID }
 export interface MemberUpdate extends Update { role?: Role; enabled?: boolean }
 export interface InviteCreate extends Mutation { email: string; role: 'admin' | 'member'; expiresInMs?: number }
@@ -416,7 +420,7 @@ export interface SCIMResourceType { schemas: string[]; id: string; name: string;
 export interface SCIMSchema { schemas: string[]; id: string; name: string; description: string; attributes: JSONObject[] }
 /** Private operator configuration; never returned through product REST or model tools. */
 export type ServerSecretSource = { kind: 'env'; name: string } | { kind: 'file'; path: string };
-export interface OAuthProviderConfig { id: string; clientId: string; clientSecretRef: string; authorizeUrl: string; tokenUrl: string; scopes: string[]; redirectUris: string[]; allowedOrigins: string[] }
+export interface OAuthProviderConfig { id: string; clientId: string; clientSecretRef: string; authorizeUrl: string; tokenUrl: string; scopes: string[]; redirectUris: string[]; allowedOrigins: string[]; revocationUrl?: string; introspectionUrl?: string; clientAuthentication?: 'basic' | 'body' }
 export interface ChannelProviderConfig { id: string; adapter: ChannelBinding['adapter']; oauth: OAuthProviderConfig | null; signingSecretRef: string | null; apiBaseUrl: string; accountSecretRef: string | null; capabilities: ChannelBinding['capabilities']; supportsBotAppInstall: boolean }
 export interface EmailProviderConfig { id: string; domain: string; provisioningBaseUrl: string; provisioningSecretRef: string; immutableAddresses: boolean; reservedNames: string[]; smtp: { host: string; port: number; tls: true; secretRef: string }; imap: { host: string; port: number; tls: true; secretRef: string }; signingSecretRef: string; supportsUnsubscribe: boolean }
 export interface EventProviderConfig { id: string; source: ExternalSource['source'] | 'slack' | 'email'; signingSecretRef: string; eventNames: string[]; routineIds: ID[]; principalUserId: ID; maxAgeMs: number; eventDefinitions?: EventDefinition[] }
@@ -433,6 +437,8 @@ export interface ExternalSourceDefinition { source: ExternalSource['source']; co
 export interface OperatorConfiguration { version: 1; trustedFrontendOrigins: string[]; oauthRedirectUris: string[]; serverSecrets: Record<string, ServerSecretSource>; channelProviders: ChannelProviderConfig[]; emailProviders: EmailProviderConfig[]; eventProviders: EventProviderConfig[]; hostDrivers: HostDriverConfig[]; xProvider: { oauth: OAuthProviderConfig; publicHandle: string; signingSecretRef: string; apiBaseUrl: string; deniedCountries: string[]; allowedMedia: ('photo' | 'video' | 'gif')[] } | null; exportAllowedOrigins: string[]; requiredRuntimeDestinations: NetworkRule[]; breakGlassOwnerUserId: ID | null; connectorProviders?: ConnectorProviderConfig[]; approvedPrivateMcpOrigins?: string[]; reviewedSetupManifests?: ReviewedSetupManifest[] }
 /** Canonical method+path keys. Undefined means no JSON body/query, never an empty JSON object. */
 export interface RestEndpoints {
+  'GET /account-teardowns': Endpoint<undefined, Page<AccountTeardown>, PageQuery & { userId?: ID; state?: AccountTeardown['state'] }>;
+  'GET /account-teardowns/:id': Endpoint<undefined, AccountTeardown>;
   'GET /integration-providers': Endpoint<undefined, IntegrationProvider[]>;
   'GET /channels/providers': Endpoint<undefined, ChannelProviderInfo[]>;
   'GET /email/providers': Endpoint<undefined, EmailProviderInfo[]>;
