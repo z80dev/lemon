@@ -199,6 +199,19 @@ defmodule LemonControlPlane.NamedNodeWireE2ETest do
   end
 
   setup do
+    # Gateway unit suites can leave a local fixture executor in application env.
+    # The controller side must use the real executor that routes :node metadata;
+    # only the destination worker is replaced with the probe executor.
+    previous_executor = Application.fetch_env(:lemon_gateway, :executor)
+    Application.put_env(:lemon_gateway, :executor, CodingAgent.Executor)
+
+    on_exit(fn ->
+      case previous_executor do
+        {:ok, executor} -> Application.put_env(:lemon_gateway, :executor, executor)
+        :error -> Application.delete_env(:lemon_gateway, :executor)
+      end
+    end)
+
     true = Process.register(self(), NamedNodeWireExecutor)
     :ok
   end
