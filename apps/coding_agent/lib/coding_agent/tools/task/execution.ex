@@ -228,7 +228,8 @@ defmodule CodingAgent.Tools.Task.Execution do
                   on_update_safe,
                   execution.role_id,
                   [task_id: execution.task_id] ++
-                    Keyword.take(opts, [:task_session_timeout_ms, :task_session_poll_ms])
+                    output_validator_opts(execution.validated) ++
+                    runner_timeout_opts(execution.effective_cwd, opts)
                 )
 
               case result do
@@ -257,23 +258,60 @@ defmodule CodingAgent.Tools.Task.Execution do
             end
         end
 
-      validate_output(result, execution.validated[:output_schema])
+      validate_output(result, execution.validated)
     end
   end
 
-  defp validate_output(%LemonAgent.Types.AgentToolResult{} = result, nil), do: result
+  defp runner_timeout_opts(cwd, opts) do
+    runner_opts = Keyword.take(opts, [:task_session_timeout_ms, :task_session_poll_ms])
 
-  defp validate_output(%LemonAgent.Types.AgentToolResult{} = result, schema) do
-    with {:ok, output} <-
-           CodingAgent.Tools.Task.StructuredOutput.decode(
-             CodingAgent.Tools.Task.Result.visible_output_text(result),
-             schema
-           ) do
-      %{result | details: Map.put(result.details || %{}, :structured_output, output)}
+    if Keyword.has_key?(runner_opts, :task_session_timeout_ms) do
+      runner_opts
+    else
+      case CodingAgent.Tools.Task.Params.task_settings(cwd, opts).max_runtime_ms do
+        ms when ms > 0 -> Keyword.put(runner_opts, :task_session_timeout_ms, ms)
+        _ -> runner_opts
+      end
     end
   end
 
-  defp validate_output(error, _schema), do: error
+  # Lets the runner re-prompt the same child session before it is stopped.
+  defp output_validator_opts(%{output_schema: schema}) when not is_nil(schema) do
+    [
+      validate_output: fn text ->
+        case CodingAgent.Tools.Task.StructuredOutput.decode(text, schema) do
+          {:ok, _value} -> :ok
+          {:error, _reason} = error -> error
+        end
+      end
+    ]
+  end
+
+  defp output_validator_opts(_validated), do: []
+
+  defp validate_output(%LemonAgent.Types.AgentToolResult{} = result, validated) do
+    case validated[:output_schema] do
+      nil ->
+        result
+
+      schema ->
+        text = CodingAgent.Tools.Task.Result.visible_output_text(result)
+        decoded = CodingAgent.Tools.Task.StructuredOutput.decode(text, schema)
+
+        case {decoded, validated[:schema_mode]} do
+          {{:ok, output}, _mode} ->
+            %{result | details: Map.put(result.details || %{}, :structured_output, output)}
+
+          {{:error, reason}, "permissive"} ->
+            %{result | details: Map.put(result.details || %{}, :structured_output_error, reason)}
+
+          {{:error, _reason} = error, _mode} ->
+            error
+        end
+    end
+  end
+
+  defp validate_output(error, _validated), do: error
 
   defp prepare_workspace(%{validated: %{worktree: true}} = execution) do
     Worktree.prepare(execution.effective_cwd, execution.task_id)

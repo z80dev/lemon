@@ -529,7 +529,8 @@ defmodule CodingAgent.Tools.Task.Result do
         :cwd,
         :worktree_path,
         :branch,
-        :structured_output
+        :structured_output,
+        :structured_output_error
       ])
       |> Enum.reject(fn {key, value} ->
         key != :structured_output and (is_nil(value) or value == "")
@@ -585,7 +586,7 @@ defmodule CodingAgent.Tools.Task.Result do
   end
 
   defp public_result_details(%AgentToolResult{details: details}) when is_map(details),
-    do: Map.take(details, [:structured_output, :session_id])
+    do: Map.take(details, [:structured_output, :structured_output_error, :session_id])
 
   defp public_result_details(_), do: %{}
 
