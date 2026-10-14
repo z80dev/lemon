@@ -65,6 +65,7 @@ await Bun.write("./output.txt", "Hello, World!");
 | `description` | Yes | Used for relevance matching |
 | `tags` | No | Up to 32 bounded safe strings |
 | `keywords` | No | Up to 32 bounded relevance terms |
+| `hide` | No | `true` omits the skill from the model-visible prompt listing and per-turn relevant-skill hints; it stays loadable by name (`read_skill`, `skill://`, `/skill:<name>`) and in `list`/CLI. Alias: `disable-model-invocation` (Agent Skills standard). Only boolean `true` hides. |
 
 Present names and descriptions must be non-empty, single-line, valid UTF-8 without control or bidirectional formatting characters. Names are limited to 128 bytes, descriptions to 1,024 bytes, and each tag/keyword or requirement item to 128 bytes; list fields accept at most 32 string entries. Prompt rendering applies an additional defensive flatten/clamp/XML-escape pass. All catalog metadata is treated as untrusted discovery data; source/trust provenance is disclosed when a skill is loaded.
 

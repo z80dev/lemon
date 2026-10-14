@@ -195,6 +195,17 @@ defmodule LemonSkills.Manifest do
     end
   end
 
+  @doc """
+  Whether the skill is withheld from model-visible prompt listings.
+
+  True for `hide: true` or `disable-model-invocation: true` (normalised to
+  `hide` by `validate/1`). The skill stays loadable explicitly.
+  """
+  @spec hidden_from_model?(manifest()) :: boolean()
+  def hidden_from_model?(manifest) when is_map(manifest) do
+    Map.get(manifest, "hide") == true
+  end
+
   # ---------------------------------------------------------------------------
   # Private
   # ---------------------------------------------------------------------------

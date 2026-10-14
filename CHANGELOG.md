@@ -10,6 +10,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- Skills with `hide: true` or `disable-model-invocation: true` frontmatter are
+  omitted from the model-visible skill listing and per-turn relevant-skill
+  hints, yet stay listed and loadable by name (`read_skill`, `skill://`,
+  `/skill:<name>`). See [skill manifest](docs/reference/skill-manifest-v2.md).
 - File slash commands from Claude Code (`.claude/commands`, nested `a:b`),
   Codex (`.codex/prompts`), Copilot (`.github/prompts/*.prompt.md`), Gemini
   (`.gemini/commands/*.toml`), omp and `.agents` roots, plus their user-global
