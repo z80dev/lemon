@@ -285,6 +285,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   process-group stop request instead of repeatedly signalling an already-stopped
   group. First-stop permission failures remain errors and owned descriptors
   still close; no fabricated cancellation receipt is returned.
+- JSONL-backed native process receipts can pass real macOS durability admission:
+  the owning Core barrier uses a packaged Python 3 descriptor helper for file
+  and directory fsync plus F_FULLFSYNC. Missing/refused barriers remain errors,
+  not a weaker global-sync success or a switch to another persistence backend.
 
 ---
 

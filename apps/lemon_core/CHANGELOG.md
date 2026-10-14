@@ -6,7 +6,13 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ## [Unreleased]
 
-_No unreleased changes._
+### Fixed
+
+- `LemonCore.Durable` performs real descriptor `fsync` plus Darwin `F_FULLFSYNC`
+  through its packaged Python 3 helper for files and directories. JSONL sync
+  and atomic file-key durability can therefore complete on supported macOS
+  filesystems instead of unconditionally refusing Darwin. Unsupported/refused
+  barriers remain errors; no plain/global-sync fallback or private-path output.
 
 ## [0.2.0] - 2026-10-13
 

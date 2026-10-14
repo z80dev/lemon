@@ -509,6 +509,17 @@ SQLite serializes keys and values with `:erlang.term_to_binary/1`. The JSONL
 backend uses a JSON codec that preserves atoms, tuples, structs, and nested map
 keys for portable append-only files.
 
+`LemonCore.Durable` owns stable-storage barriers. JSONL `sync/1` flushes every
+table file and then its directory; acknowledgement requires every actual
+barrier to succeed. On macOS, Python 3 is required for the packaged
+`priv/durable_sync.py` helper, which opens a no-follow descriptor, performs
+`fsync` and Darwin `F_FULLFSYNC` for both files and directories. Paths are
+literal argv, never shell commands; raw helper errors/paths are not returned.
+Missing prerequisites, wrong descriptor kinds or refused/unsupported filesystem
+barriers fail closed. There is no ordinary macOS `sync(8)` or weaker fallback.
+GNU coreutils synchronous per-directory syncing remains the supported
+non-Darwin Unix path.
+
 ## Event Bus
 
 ### Standard Topics

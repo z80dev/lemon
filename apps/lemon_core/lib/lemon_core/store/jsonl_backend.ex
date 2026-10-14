@@ -120,9 +120,9 @@ defmodule LemonCore.Store.JsonlBackend do
     {:ok, %{state | data: data}}
   end
 
-  # Appends are unsynced; fsync every table file, then the directory so newly
-  # created table files are durable too. Hosts without a synchronous directory
-  # flush (macOS) get an error rather than an unproven success.
+  # Appends are unsynced; flush every table file, then its directory so newly
+  # created table files are durable too. Durable owns the actual host barrier,
+  # including Darwin F_FULLFSYNC; unsupported/refused barriers fail closed.
   @impl true
   def sync(state) do
     state.path

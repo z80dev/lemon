@@ -303,6 +303,11 @@ Each execution signals its group at most once successfully; output draining and
 final cleanup do not repeatedly signal the stopped group's numeric identifier.
 A first group-stop permission failure remains an error, never a successful
 cancelled receipt, and still releases the helper's owned descriptors.
+For JSONL persistence on macOS, the worker's Python 3 prerequisite also supplies
+the packaged Core durability helper. It flushes the actual table file and parent
+directory descriptors with `fsync` plus `F_FULLFSYNC`. Admission is unavailable
+if the interpreter/helper is missing or the filesystem refuses the barrier;
+there is no ordinary/global-sync or persistence-backend fallback.
 
 If a response is lost, a controller times out, or an error says the mutation
 outcome may be unknown, **never automatically redispatch run**, even with a new
