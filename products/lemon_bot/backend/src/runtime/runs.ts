@@ -90,7 +90,7 @@ export async function buildInvocationContext(services: BackendServices, actor: P
   const connectorEpochs = services.store.list<P.Connector>('connectors', connector => connector.botId === bot.id).map(connector => ({ connectorId: connector.id, epoch: services.store.metadata<number>(`connectorEpoch:${connector.id}`) ?? 0 }));
   services.store.setMetadata(`runConnectorEpochs:${run.id}`, connectorEpochs);
   const memoryContextKey = buildMemoryContextKey(services, actor, conversation, bot);
-  const invocationContextKey = services.mutations.digest({ principal: { kind: actor.kind, id: actor.id, userId: actor.userId, workspaceId: actor.workspaceId, role: actor.role }, botId: bot.id, conversationId: conversation.id, memoryContextKey, invocationToolPolicy, invocationMcpServers, connectorEpochs, grantEpoch: services.store.metadata(`botPolicySync:${bot.id}`), placementEpoch: services.store.metadata<number>(`botPlacementEpoch:${bot.id}`) ?? 0 });
+  const invocationContextKey = services.mutations.digest({ principal: { kind: actor.kind, id: actor.id, userId: actor.userId, workspaceId: actor.workspaceId, role: actor.role }, botId: bot.id, conversationId: conversation.id, memoryContextKey, sharedMemoryGrant: false, invocationToolPolicy, invocationMcpServers, connectorEpochs, grantEpoch: services.store.metadata(`botPolicySync:${bot.id}`), placementEpoch: services.store.metadata<number>(`botPlacementEpoch:${bot.id}`) ?? 0 });
   const machine = services.store.require<P.Machine>('machines', bot.machineId);
   if (!machine.nodeId) fail('machine_offline', 'The assigned machine has no verified node identity.');
   const secretName = `lemon_bot/invocations/${fixedRunId}`;
