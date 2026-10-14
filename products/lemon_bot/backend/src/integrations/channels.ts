@@ -12,7 +12,7 @@ export async function providerRequest(services: BackendServices, baseUrl: string
   if (base.protocol !== 'https:' || url.origin !== base.origin || base.username || base.password) throw new IntegrationError('capability_unavailable', 'Provider requires a configured pinned HTTPS origin.');
   const configured = [...services.config.operator.channelProviders.map(provider => new URL(provider.apiBaseUrl).origin), ...services.config.operator.emailProviders.map(provider => new URL(provider.provisioningBaseUrl).origin), ...(services.config.operator.xProvider ? [new URL(services.config.operator.xProvider.apiBaseUrl).origin] : [])];
   if (!configured.includes(base.origin)) throw new IntegrationError('policy_denied', 'Provider origin is not configured for this deployment.');
-  return fetchJson(url.href, { method, headers: { authorization: `Bearer ${token}`, accept: 'application/json', ...(body === undefined ? {} : { 'content-type': 'application/json' }) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }, { allowedOrigins: [base.origin], timeoutMs: 20000, maxBytes: 40 * 1024 * 1024, mutation: method !== 'GET' });
+  return fetchJson(url.href, { method, headers: { authorization: `Bearer ${token}`, accept: 'application/json', ...(body === undefined ? {} : { 'content-type': 'application/json' }) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }, { allowedOrigins: [base.origin], timeoutMs: 20000, maxBytes: 40 * 1024 * 1024, mutation: method !== 'GET', fetch: services.http });
 }
 const slackResult = z.object({ ok: z.boolean(), error: z.string().optional() }).passthrough();
 interface ChannelAccount { id: string; providerId: string; teamId: string; botUserId: string; appId: string | null; token: string; installerUserId: string; productUserId: string; botId: string }
@@ -53,7 +53,7 @@ export async function slackCall(services: BackendServices, binding: P.ChannelBin
   const base = new URL(provider.apiBaseUrl);
   const endpoint = new URL(method, base.href.endsWith('/') ? base.href : base.href + '/');
   const reads: Record<string, true> = { 'auth.test': true, 'users.info': true, 'conversations.info': true, 'conversations.history': true, 'conversations.replies': true };
-  const result = providerResult(slackResult, await fetchJson(endpoint.href, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/x-www-form-urlencoded' }, body: form }, { allowedOrigins: [base.origin], mutation: !reads[method] }), !reads[method]);
+  const result = providerResult(slackResult, await fetchJson(endpoint.href, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/x-www-form-urlencoded' }, body: form }, { allowedOrigins: [base.origin], mutation: !reads[method], fetch: services.http }), !reads[method]);
   if (!result.ok) {
     if (result.error === 'admin_required' || result.error === 'restricted_action' || result.error === 'not_allowed_token_type') throw new IntegrationError('policy_denied', 'Slack workspace administrator approval is required.');
     if (result.error === 'fatal_error' || result.error === 'internal_error') throw new IntegrationError('outcome_unknown', 'Slack could not confirm the operation outcome.', false);
@@ -159,7 +159,7 @@ async function retireSlackGrant(services: BackendServices, provider: P.ChannelPr
       if (result.resourceId !== resourceId) throw new IntegrationError('outcome_unknown', 'Slack cleanup acknowledgment did not match the exact grant.', false);
     } else {
       const base = new URL(provider.apiBaseUrl); const endpoint = new URL('auth.revoke', base.href.endsWith('/') ? base.href : base.href + '/');
-      providerResult(z.object({ ok: z.literal(true), revoked: z.literal(true) }), await fetchJson(endpoint.href, { method: 'POST', headers: { authorization: `Bearer ${accessToken}`, 'content-type': 'application/x-www-form-urlencoded', 'x-lemon-operation-id': operationId }, body: new URLSearchParams() }, { allowedOrigins: [base.origin], mutation: true }), true);
+      providerResult(z.object({ ok: z.literal(true), revoked: z.literal(true) }), await fetchJson(endpoint.href, { method: 'POST', headers: { authorization: `Bearer ${accessToken}`, 'content-type': 'application/x-www-form-urlencoded', 'x-lemon-operation-id': operationId }, body: new URLSearchParams() }, { allowedOrigins: [base.origin], mutation: true, fetch: services.http }), true);
     }
     services.store.put('slackCleanups', { ...operation, state: 'revoked' });
   } catch (error) { services.store.put('slackCleanups', { ...operation, state: error instanceof IntegrationError && error.retrySafe ? 'failed' : 'outcome_unknown' }); throw error; }
@@ -234,7 +234,7 @@ export function createChannelServices(services: BackendServices): ChannelService
         let revoked = false;
         if (!operation.hasRefreshToken) {
           const base = new URL(provider.apiBaseUrl); const endpoint = new URL('auth.test', base.href.endsWith('/') ? base.href : base.href + '/');
-          const result = providerResult(slackResult, await fetchJson(endpoint.href, { headers: { authorization: `Bearer ${services.decrypt<string>(operation.encryptedToken)}` } }, { allowedOrigins: [base.origin], mutation: false }));
+          const result = providerResult(slackResult, await fetchJson(endpoint.href, { headers: { authorization: `Bearer ${services.decrypt<string>(operation.encryptedToken)}` } }, { allowedOrigins: [base.origin], mutation: false, fetch: services.http }));
           revoked = !result.ok && ['token_revoked', 'account_inactive'].includes(result.error ?? '');
         }
         if (!revoked && provider.accountSecretRef) {
@@ -356,7 +356,7 @@ export function createChannelServices(services: BackendServices): ChannelService
           const destination = new URL(upload.upload_url);
           if (destination.protocol !== 'https:' || destination.hostname !== 'files.slack.com') throw new IntegrationError('upstream_unavailable', 'Slack returned an unsupported file upload origin.');
           try {
-            const response = await pinnedRequest(destination.href, { method: 'POST', body: Buffer.from(await services.attachments.bytes(attachment.id)) }, { allowedOrigins: ['https://files.slack.com'], mutation: true });
+            const response = await pinnedRequest(destination.href, { method: 'POST', body: Buffer.from(await services.attachments.bytes(attachment.id)) }, { allowedOrigins: ['https://files.slack.com'], mutation: true, fetch: services.http });
             if (!response.ok) throw new Error('Upload failed');
           } catch { throw new IntegrationError('outcome_unknown', 'Slack file upload acknowledgment was lost.', false); }
           uploads.push({ id: upload.file_id, title: attachment.filename });

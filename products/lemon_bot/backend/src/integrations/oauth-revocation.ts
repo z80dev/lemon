@@ -27,7 +27,7 @@ export async function revokeOAuthCompletion(services: BackendServices, provider:
       if (!provider.revocationUrl) throw new ApiError('capability_unavailable', 'Configure this OAuth provider revocationUrl; no revocation endpoint is inferred.');
       const request = await authenticatedForm(services, provider, { token, token_type_hint: kind === 'access' ? 'access_token' : 'refresh_token' });
       services.store.put('oauthRevocationReceipts', { ...current, [kind]: { state: 'dispatching', errorCode: null }, updatedAtMs: services.now() }); dispatched = true;
-      const response = await providerRequest(provider.revocationUrl, { method: 'POST', ...request }, { allowedOrigins: provider.allowedOrigins, mutation: true });
+      const response = await providerRequest(provider.revocationUrl, { method: 'POST', ...request }, { allowedOrigins: provider.allowedOrigins, mutation: true, fetch: services.http });
       const bytes = await boundedBytes(response, 65536);
       if (response.status !== 200) throw new ApiError(response.status === 401 || response.status === 403 ? 'capability_unavailable' : 'upstream_unavailable', 'OAuth revocation was not acknowledged.', response.status < 500);
       if (bytes.length) { let value: unknown; try { value = JSON.parse(new TextDecoder().decode(bytes)); } catch { throw new ApiError('outcome_unknown', 'OAuth revocation acknowledgment is malformed.', false); } if (value && typeof value === 'object' && 'error' in value) throw new ApiError('outcome_unknown', 'OAuth provider returned an error instead of a revocation acknowledgment.', false); }
@@ -50,7 +50,7 @@ export async function reconcileOAuthRevocation(services: BackendServices, provid
     const token = kind === 'access' ? tokens.access_token : tokens.refresh_token; const entry = receipt[kind];
     if (!token || !entry || entry.state === 'revoked') continue;
     const request = await authenticatedForm(services, provider, { token, token_type_hint: kind === 'access' ? 'access_token' : 'refresh_token' });
-    const value = z.object({ active: z.boolean(), client_id: z.string().optional() }).passthrough().safeParse(await fetchJson(provider.introspectionUrl, { method: 'POST', ...request }, { allowedOrigins: provider.allowedOrigins }));
+    const value = z.object({ active: z.boolean(), client_id: z.string().optional() }).passthrough().safeParse(await fetchJson(provider.introspectionUrl, { method: 'POST', ...request }, { allowedOrigins: provider.allowedOrigins, fetch: services.http }));
     if (!value.success || value.data.active && value.data.client_id !== undefined && value.data.client_id !== provider.clientId) throw new ApiError('upstream_unavailable', 'OAuth introspection returned an invalid credential scope.');
     if (!value.data.active) { receipt = { ...receipt, [kind]: { state: 'revoked', errorCode: null }, updatedAtMs: services.now() }; services.store.put('oauthRevocationReceipts', receipt); }
   }

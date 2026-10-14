@@ -2,7 +2,7 @@ import { readFileSync, statSync } from 'node:fs';
 import { createPrivateKey, sign } from 'node:crypto';
 import { z } from 'zod';
 import type * as P from '../../../contracts/protocol';
-import type { BackendServices, Principal, Route } from '../core/services';
+import type { BackendServices, HttpClient, Principal, Route } from '../core/services';
 import { ApiError, fail } from '../core/errors';
 
 const MAX_BYTES = 25 * 1024 * 1024;
@@ -16,7 +16,7 @@ const transcriptionSchema = z.strictObject({ clientNonce: nonce, attachmentId: i
 const previewSchema = z.strictObject({ clientNonce: nonce, voice: voiceSchema.optional() });
 function parse<T>(schema: z.ZodType<T>, input: unknown): T { const result = schema.safeParse(input); if (!result.success) fail('invalid_request', 'Invalid audio request.'); return result.data; }
 function parseProvider<T>(schema: z.ZodType<T>, input: unknown): T { const result = schema.safeParse(input); if (!result.success) fail('upstream_unavailable', 'Audio provider returned an invalid response.', false); return result.data; }
-export interface AudioOptions { env?: Record<string, string | undefined>; fetch?: typeof fetch; timeoutMs?: number }
+export interface AudioOptions { env?: Record<string, string | undefined>; fetch?: HttpClient; timeoutMs?: number }
 export interface AudioInfo { mime: string; extension: string; durationMs: number }
 export interface AudioServices {
   speech(principal: Principal, input: unknown, provenance?: P.DeliverableProvenance): Promise<P.SpeechResult>;
@@ -160,7 +160,7 @@ function waveHasSignal(input: Uint8Array): boolean {
 
 export function createAudioServices(services: BackendServices, overrides?: AudioOptions): AudioServices {
   if (overrides === undefined) { const existing = audioInstances.get(services); if (existing) return existing; }
-  const options: AudioOptions = overrides ?? {}, env = options.env ?? process.env, request = options.fetch ?? fetch, timeout = options.timeoutMs ?? 120_000;
+  const options: AudioOptions = overrides ?? {}, env = options.env ?? process.env, request: HttpClient = options.fetch ?? services.http ?? fetch, timeout = options.timeoutMs ?? 120_000;
   const stt = env.LEMON_BOT_STT_PROVIDER, tts = env.LEMON_BOT_TTS_PROVIDER;
   let google: GoogleAccount | null = null;
   if (tts === 'google' && env.LEMON_BOT_GOOGLE_SERVICE_ACCOUNT_PATH) {

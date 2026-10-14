@@ -2,7 +2,7 @@ import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypt
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
 import type * as P from '../../../contracts/protocol';
-import type { BackendServices, Principal, RequestContext } from '../core/services';
+import type { BackendServices, HttpClient, Principal, RequestContext } from '../core/services';
 import { ApiError } from '../core/errors';
 
 export { ApiError as IntegrationError } from '../core/errors';
@@ -31,7 +31,7 @@ export function isPublicAddress(address: string): boolean {
   if (isIP(ip) === 6) { if (ip.startsWith('::ffff:')) return isPublicAddress(ip.slice(7)); return !(ip === '::' || ip === '::1' || ip.startsWith('fc') || ip.startsWith('fd') || /^fe[89ab]/.test(ip) || ip.startsWith('ff') || ip.startsWith('2001:db8:')); }
   return false;
 }
-export interface ProviderRequestOptions { allowedOrigins: string[]; allowPrivate?: boolean; timeoutMs?: number; maxBytes?: number; mutation?: boolean; fetch?: typeof globalThis.fetch; beforeDispatch?: () => void }
+export interface ProviderRequestOptions { allowedOrigins: string[]; allowPrivate?: boolean; timeoutMs?: number; maxBytes?: number; mutation?: boolean; fetch?: HttpClient; beforeDispatch?: () => void }
 export function pinnedUrl(input: string, origins: readonly string[]): URL {
   let url: URL; try { url = new URL(input); } catch { throw new ApiError('invalid_request', 'Provider URL is invalid.'); }
   if (url.protocol !== 'https:' || url.username || url.password || url.hash || !origins.includes(url.origin)) throw new ApiError('policy_denied', 'Provider destination is not operator-approved.');

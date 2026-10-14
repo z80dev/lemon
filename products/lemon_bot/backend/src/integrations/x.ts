@@ -55,7 +55,7 @@ async function revokeCredential(services: BackendServices, userId: string, resou
     const operation: XRevocation = { id: operationId, userId, providerId: provider.oauth.id, resourceId, completionId, tokenType, tokenClientDigest: credential.tokenClientDigest, state: 'reserved' }; services.store.put('xRevocations', operation);
     try {
       const clientSecret = await services.secret(provider.oauth.clientSecretRef);
-      providerResult(z.object({ revoked: z.literal(true) }), await fetchJson(url.href, { method: 'POST', headers: { authorization: `Basic ${Buffer.from(`${encodeURIComponent(provider.oauth.clientId)}:${encodeURIComponent(clientSecret)}`).toString('base64')}`, 'content-type': 'application/x-www-form-urlencoded', 'x-lemon-operation-id': operationId }, body: new URLSearchParams({ token, token_type_hint: tokenType, client_id: provider.oauth.clientId }) }, { allowedOrigins: [base.origin], mutation: true }), true);
+      providerResult(z.object({ revoked: z.literal(true) }), await fetchJson(url.href, { method: 'POST', headers: { authorization: `Basic ${Buffer.from(`${encodeURIComponent(provider.oauth.clientId)}:${encodeURIComponent(clientSecret)}`).toString('base64')}`, 'content-type': 'application/x-www-form-urlencoded', 'x-lemon-operation-id': operationId }, body: new URLSearchParams({ token, token_type_hint: tokenType, client_id: provider.oauth.clientId }) }, { allowedOrigins: [base.origin], mutation: true, fetch: services.http }), true);
       services.store.put('xRevocations', { ...operation, state: 'revoked' });
     } catch (error) { failure ??= error; services.store.put('xRevocations', { ...operation, state: error instanceof IntegrationError && error.retrySafe ? 'failed' : 'outcome_unknown' }); }
   }

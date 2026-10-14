@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { generateKeyPairSync, sign } from 'node:crypto';
 import type * as P from '../../../contracts/protocol';
@@ -56,7 +56,6 @@ export async function invokeRoute(routes: Route[], services: BackendServices, me
   const query = new URLSearchParams(options.query); const request = new Request(`https://product.example${path}${query.size ? `?${query}` : ''}`, { method, headers: options.headers });
   const context: RequestContext = { request, params: options.params ?? {}, query, body, user: options.principal ?? null, services, requestId: 'req_test', route, nonceResourceIds: [] }; return route.handler(context);
 }
-const originalFetch = globalThis.fetch; afterEach(() => { globalThis.fetch = originalFetch; });
 const keyPair = generateKeyPairSync('rsa', { modulusLength: 2048 }); const jwk = { ...keyPair.publicKey.export({ format: 'jwk' }), kid: 'test', use: 'sig', alg: 'RS256' };
 const discovery = { issuer: 'https://idp.example', authorization_endpoint: 'https://idp.example/authorize', token_endpoint: 'https://idp.example/token', jwks_uri: 'https://idp.example/jwks', code_challenge_methods_supported: ['S256'], id_token_signing_alg_values_supported: ['RS256'] };
 function jwt(claims: Record<string, unknown>): string { const header = Buffer.from(JSON.stringify({ alg: 'RS256', kid: 'test' })).toString('base64url'); const payload = Buffer.from(JSON.stringify(claims)).toString('base64url'); const bytes = `${header}.${payload}`; return `${bytes}.${sign('sha256', Buffer.from(bytes), keyPair.privateKey).toString('base64url')}`; }
@@ -65,20 +64,20 @@ function registeredProvider(services: BackendServices): P.OIDCProvider { const p
 describe('OIDC identity security', () => {
   test('signature, issuer, audience, nonce, expiration, nbf and verified email are enforced', async () => {
     const f = identityFixture(); try { const p = registeredProvider(f.services); const now = f.services.now(); const claims = { iss: p.issuer, sub: 'subject', aud: 'client', nonce: 'nonce', email: 'user@example.com', email_verified: true, exp: now / 1000 + 300, iat: now / 1000, nbf: now / 1000 };
-      globalThis.fetch = (async () => Response.json({ keys: [jwk] })) as typeof fetch;
-      expect((await verifyOIDCToken(jwt(claims), p, discovery, 'nonce', now, now, 'login')).subject).toBe('subject');
+      f.services.http = (async () => Response.json({ keys: [jwk] }));
+      expect((await verifyOIDCToken(jwt(claims), p, discovery, 'nonce', now, now, 'login', f.services)).subject).toBe('subject');
       for (const changes of [{ iss: 'https://evil.example' }, { aud: 'other' }, { nonce: 'wrong' }, { exp: now / 1000 }, { nbf: now / 1000 + 1 }, { email_verified: false }, { auth_time: now / 1000 - 600 }]) {
-        await expect(verifyOIDCToken(jwt({ ...claims, ...changes }), p, discovery, 'nonce', now, now, 'auth_time' in changes ? 'reauth' : 'login')).rejects.toBeInstanceOf(ApiError);
+        await expect(verifyOIDCToken(jwt({ ...claims, ...changes }), p, discovery, 'nonce', now, now, 'auth_time' in changes ? 'reauth' : 'login', f.services)).rejects.toBeInstanceOf(ApiError);
       }
-      const token = jwt(claims); await expect(verifyOIDCToken(`${token.slice(0, -8)}AAAAAAAA`, p, discovery, 'nonce', now, now, 'login')).rejects.toBeInstanceOf(ApiError);
+      const token = jwt(claims); await expect(verifyOIDCToken(`${token.slice(0, -8)}AAAAAAAA`, p, discovery, 'nonce', now, now, 'login', f.services)).rejects.toBeInstanceOf(ApiError);
     } finally { f.close(); }
   });
   test('browser and backend PKCE, callback state, subject linking and one-time completion', async () => {
     const f = identityFixture(); try { const p = registeredProvider(f.services); const routes = createIdentityRoutes(f.services); const verifier = secureToken(); let expectedNonce = ''; let backendChallenge = ''; let returnedToken = ''; let calls = 0;
-      globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      f.services.http = (async (input: string | URL | Request, init?: RequestInit) => {
         const url = String(input); if (url.endsWith('openid-configuration')) return Response.json(discovery); if (url.endsWith('/jwks')) return Response.json({ keys: [jwk] });
         calls++; const form = new URLSearchParams(String(init?.body)); expect(Buffer.from(tokenDigest(form.get('code_verifier')!), 'hex').toString('base64url')).toBe(backendChallenge); expect(form.get('redirect_uri')).toContain(encodeURIComponent(p.id)); expect(init?.headers).toBeDefined(); return Response.json({ id_token: returnedToken });
-      }) as typeof fetch;
+      });
       const flow = await invokeRoute(routes, f.services, 'POST', '/v1/auth/oidc/start', { clientNonce: secureToken(), providerId: p.id, redirectUri: 'https://product.example/auth/complete', codeChallenge: Buffer.from(tokenDigest(verifier), 'hex').toString('base64url'), purpose: 'login' }) as P.OIDCFlow;
       const authURL = new URL(flow.authorizationUrl); expectedNonce = authURL.searchParams.get('nonce')!; backendChallenge = authURL.searchParams.get('code_challenge')!; expect(backendChallenge).not.toBe(Buffer.from(tokenDigest(verifier), 'hex').toString('base64url'));
       returnedToken = jwt({ iss: p.issuer, sub: 'owner-subject', aud: p.clientId, nonce: expectedNonce, email: 'owner@example.com', email_verified: true, exp: f.services.now() / 1000 + 300, iat: f.services.now() / 1000 });
@@ -97,12 +96,12 @@ describe('OIDC identity security', () => {
       f.services.store.put('invites', f.services.resource('invite', { email: 'invited@example.com', role: 'member' as const, expiresAtMs: f.services.now() + 86400000, status: 'pending' as const }));
       f.services.config.operator.oidcGroupMappings = [{ providerId: p.id, externalId: 'approved', directoryGroupId: 'configured-group', name: 'Configured group' }];
       let currentNonce = '';
-      globalThis.fetch = (async (input: string | URL | Request) => {
+      f.services.http = (async (input: string | URL | Request) => {
         const url = String(input);
         if (url.endsWith('openid-configuration')) return Response.json(discovery);
         if (url.endsWith('/jwks')) return Response.json({ keys: [jwk] });
         return Response.json({ id_token: jwt({ iss: p.issuer, sub: 'invited-subject', aud: p.clientId, nonce: currentNonce, email: 'invited@example.com', email_verified: true, exp: f.services.now() / 1000 + 300, iat: f.services.now() / 1000, auth_time: f.services.now() / 1000, groups: ['approved', 'owner', 'admin'] }) });
-      }) as typeof fetch;
+      });
       let principal: Principal | null = null;
       for (const purpose of ['login', 'reauth'] as const) {
         const verifier = secureToken();
@@ -130,7 +129,7 @@ describe('OIDC identity security', () => {
   test('discovery and JWKS endpoints cannot escape the registered issuer origin', async () => {
     const f = identityFixture(); try {
       const p = registeredProvider(f.services); const routes = createIdentityRoutes(f.services);
-      globalThis.fetch = (async () => Response.json({ ...discovery, jwks_uri: 'https://evil.example/keys' })) as typeof fetch;
+      f.services.http = (async () => Response.json({ ...discovery, jwks_uri: 'https://evil.example/keys' }));
       await expect(invokeRoute(routes, f.services, 'POST', '/v1/auth/oidc/start', { clientNonce: secureToken(), providerId: p.id, redirectUri: 'https://product.example/auth', purpose: 'login', codeChallenge: secureToken() })).rejects.toBeInstanceOf(ApiError);
       expect(f.services.store.list('oidcFlows')).toHaveLength(0);
     } finally { f.close(); }
@@ -140,7 +139,7 @@ describe('OIDC identity security', () => {
       const p = registeredProvider(f.services); f.services.store.put('oidcProviders', { ...p, endSessionEndpoint: 'https://idp.example/logout' });
       const user = createProvisionedUser(f.services, 'departing@example.com', 'Departing'); const auth = await f.services.auth.session(user.id);
       f.services.store.put('oidcProviderSessions', { id: auth.session.id, userId: user.id, providerId: p.id, encryptedIDToken: f.services.encrypt('identity-token-hint') });
-      globalThis.fetch = (async () => { throw new Error('Provider timeout after possible logout.'); }) as typeof fetch;
+      f.services.http = (async () => { throw new Error('Provider timeout after possible logout.'); });
       await createIdentityServices(f.services).deprovisionUser(user.id);
       expect(f.services.auth.member(user.id).enabled).toBe(false); expect(f.revoked).toContain(user.id); expect(f.services.store.list('oidcProviderSessions')).toHaveLength(0);
       const record = f.services.store.list<P.AuditRecord>('audit').find(value => value.action === 'identity.provider_end_session');

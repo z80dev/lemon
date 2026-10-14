@@ -47,7 +47,7 @@ export function createSpendServices(services: BackendServices) {
       url.searchParams.set('fromAtMs', String(window.fromAtMs)); url.searchParams.set('toAtMs', String(toAtMs));
       url.searchParams.set('providerAccount', limit.providerAccount); url.searchParams.set('scope', limit.scope);
       if (limit.subjectId) url.searchParams.set('subjectId', limit.subjectId);
-      const response = await fetchJson(url.href, { headers: { Authorization: `Bearer ${await services.secret(source.secretRef)}`, Accept: 'application/json' } }, { allowedOrigins: [new URL(source.apiBaseUrl).origin] });
+      const response = await fetchJson(url.href, { headers: { Authorization: `Bearer ${await services.secret(source.secretRef)}`, Accept: 'application/json' } }, { allowedOrigins: [new URL(source.apiBaseUrl).origin], fetch: services.http });
       const parsed = z.object({ providerAccount: id, scope: z.enum(['workspace', 'user', 'bot', 'routine']), subjectId: id.nullable(), currency: z.literal('USD'), fromAtMs: z.number().int().nonnegative(), toAtMs: z.number().int().nonnegative(), costUsd: amount.nullable(), complete: z.boolean() }).strict().safeParse(response);
       if (!parsed.success || parsed.data.providerAccount !== limit.providerAccount || parsed.data.scope !== limit.scope || parsed.data.subjectId !== limit.subjectId || parsed.data.fromAtMs !== window.fromAtMs || parsed.data.toAtMs !== toAtMs) throw new ApiError('upstream_unavailable', 'Provider spend reconciliation returned a mismatched account, scope or measurement window.');
       return spendStatus(limit, { costUsd: parsed.data.costUsd, incomplete: !parsed.data.complete }, services.now());
