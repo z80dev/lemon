@@ -451,7 +451,6 @@ defmodule CodingAgent.ExecutionNode.Worker do
       case LemonSkills.ProfileMemory.execute(operation, args["profileId"], args) do
         {:ok, payload} -> %{"ok" => true, "payload" => payload}
         {:error, reason} when is_atom(reason) -> %{"ok" => false, "error" => Atom.to_string(reason)}
-        _ -> %{"ok" => false, "error" => "memory_unavailable"}
       end
 
     params = %{"invokeId" => invoke_id, "result" => result}

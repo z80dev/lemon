@@ -74,11 +74,13 @@ defmodule LemonMemory.ProfileLifecycleTest do
     :ok = Store.put_sync(ctx.store, doc)
     assert {:ok, %{items: [item]}} = Lifecycle.profile_list(ctx.context, "", ctx.opts)
     assert {:ok, preview} = Lifecycle.profile_preview_delete(ctx.context, item["id"], ctx.opts)
-    :ok = Store.put_sync(ctx.store, %{doc | agent_id: "lb-bob"})
+    # Store preserves agent_id on upsert; assistant-home metadata can change.
+    moved_home = digest(Path.expand(ctx.context.workspace_dir <> "-moved"))
+    :ok = Store.put_sync(ctx.store, %{doc | meta: Map.put(doc.meta, "home_digest", moved_home)})
     assert {:error, :not_found} =
              Lifecycle.profile_delete(ctx.context, item["id"], preview.confirmation_digest, ctx.opts)
     assert {:ok, current} = Store.get_document(ctx.store, doc.doc_id)
-    assert current.agent_id == "lb-bob"
+    assert current.meta["home_digest"] == moved_home
   end
 
   test "profile browse is bounded and store failure is not an empty list", ctx do
