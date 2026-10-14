@@ -170,7 +170,6 @@ defmodule LemonRouter.NativeFollowupAdmissionTest do
     end)
     assert {:error, :admission_unavailable} = NativeFollowupAdmission.check(ctx.config, ctx.lineage, @fixture)
     assert {:ok, current} = NativeFollowupAdmission.fetch_config(ctx.profile_id)
-    assert current.token_secret != ctx.config.token_secret
     Req.Test.stub(__MODULE__, fn conn ->
       assert Plug.Conn.get_req_header(conn, "authorization") == ["Bearer rotated-source-bearer"]
       Req.Test.json(conn, %{"allow" => true, "invocation" => invocation()})

@@ -68,6 +68,111 @@ defmodule CodingAgent.ExecutorTest do
     assert Application.get_env(:coding_agent, :executor_stream_options_hook) == nil
   end
 
+
+  @tag :tmp_dir
+  test "same-context transcript resume rebuilds approval gating for each native invocation", %{
+    tmp_dir: tmp_dir
+  } do
+    :ok = LemonCore.Bus.subscribe("exec_approvals")
+    path = Path.join(tmp_dir, "invocation-gated.txt")
+    parent = self()
+    session_key = "agent:approval-writer-#{System.unique_integer([:positive])}:main"
+    agent_id = LemonCore.SessionKey.agent_id(session_key)
+
+    first_stream =
+      mock_stream_fn([
+        assistant_message_with_tool_calls([
+          tool_call("write", %{"path" => path, "content" => "APPROVED"}, id: "first-write")
+        ]),
+        assistant_message("first invocation complete")
+      ])
+
+    first =
+      request(tmp_dir,
+        run_id: "approval-first-#{System.unique_integer([:positive])}",
+        prompt: "first invocation transcript marker",
+        stream_fn: first_stream,
+        meta: %{invocation_context_key: "native-client-A", agent_id: agent_id}
+      )
+
+    first = %{
+      first
+      | session_key: session_key,
+        tool_policy: CodingAgent.ToolPolicy.custom(require_approval: ["write"])
+    }
+
+    assert {:ok, first_ref, _ctx} =
+             Executor.start_run(first, %{stream_fn: first_stream}, self())
+
+    assert_receive %LemonCore.Event{
+                     type: :approval_requested,
+                     payload: %{pending: %{id: first_approval}}
+                   }, 5_000
+
+    first_pending = LemonCore.ExecApprovalStore.get_pending(first_approval)
+    assert first_pending.invocation_context_key == "native-client-A"
+    assert first_pending.agent_id == agent_id
+    assert first_pending.session_key == session_key
+    assert :ok = LemonCore.ExecApprovals.resolve(first_approval, :approve_once)
+
+    first_events = collect_until_completed(first_ref)
+    assert {:engine_event, ^first_ref, %{ok: true, resume: resume}} = List.last(first_events)
+    assert File.read!(path) == "APPROVED"
+
+    second_stream =
+      mock_stream_fn([
+        assistant_message_with_tool_calls([
+          tool_call(
+            "write",
+            %{
+              "path" => path,
+              "content" => "DENIED",
+              "invocation_context_key" => "tool-forged-client"
+            },
+            id: "second-write"
+          )
+        ]),
+        assistant_message("second invocation complete")
+      ])
+
+    observed_stream = fn model, context, opts ->
+      send(parent, {:resumed_context, context})
+      second_stream.(model, context, opts)
+    end
+
+    second =
+      request(tmp_dir,
+        run_id: "approval-second-#{System.unique_integer([:positive])}",
+        prompt: "second invocation",
+        stream_fn: observed_stream,
+        resume: resume,
+        meta: %{"invocation_context_key" => "native-client-A", "agent_id" => agent_id}
+      )
+
+    second = %{second | session_key: session_key, tool_policy: first.tool_policy}
+
+    assert {:ok, second_ref, _ctx} =
+             Executor.start_run(second, %{stream_fn: observed_stream}, self())
+
+    assert_receive {:resumed_context, context}, 5_000
+    assert inspect(context.messages) =~ "first invocation transcript marker"
+    assert_receive %LemonCore.Event{
+                     type: :approval_requested,
+                     payload: %{pending: %{id: second_approval}}
+                   }, 5_000
+
+    second_pending = LemonCore.ExecApprovalStore.get_pending(second_approval)
+    assert second_pending.invocation_context_key == "native-client-A"
+    assert second_pending.agent_id == agent_id
+    assert second_pending.session_key == session_key
+    assert second_pending.session_id == first_pending.session_id
+    assert :ok = LemonCore.ExecApprovals.resolve(second_approval, :deny)
+
+    second_events = collect_until_completed(second_ref)
+    assert {:engine_event, ^second_ref, %{ok: true, resume: ^resume}} = List.last(second_events)
+    assert File.read!(path) == "APPROVED"
+    refute inspect(first_events ++ second_events) =~ "native-client-"
+  end
   describe "start_run/3 direct session runner" do
     @tag :tmp_dir
     test "emits started, delta, tool action, and completed events", %{tmp_dir: tmp_dir} do

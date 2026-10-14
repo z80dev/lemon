@@ -8,6 +8,65 @@ defmodule CodingAgent.ToolExecutorFailureTest do
 
   @secret "approval-service-sensitive-payload"
 
+  test "trusted invocation and actual agent accompany approvals, never tool arguments" do
+    caller = self()
+
+    for {key, reply} <- [
+          {"client-A", {:ok, :approved, :once}},
+          {"client-B", {:ok, :denied}},
+          {nil, {:ok, :denied}}
+        ] do
+      tool = %AgentTool{
+        name: "write",
+        execute: fn _id, _params, _signal, _on_update ->
+          send(caller, :executed)
+          %AgentToolResult{}
+        end
+      }
+
+      wrapped =
+        ToolExecutor.wrap_with_approval(
+          tool,
+          ToolPolicy.custom(require_approval: ["write"]),
+          %{
+            run_id: "run-public",
+            session_id: "session-public",
+            session_key: "agent:writer:main",
+            agent_id: "writer",
+            invocation_context_key: key,
+            approval_request_fun: fn request ->
+              send(caller, {:approval_request, request})
+              reply
+            end
+          }
+        )
+
+      result =
+        wrapped.execute.(
+          "write-call",
+          %{"invocation_context_key" => "forged", "agent_id" => "forged"},
+          nil,
+          nil
+        )
+
+      assert_receive {:approval_request, request}
+      assert request.invocation_context_key == key
+      assert request.agent_id == "writer"
+      assert request.run_id == "run-public"
+      assert request.session_id == "session-public"
+      assert request.session_key == "agent:writer:main"
+      assert request.tool_call_id == "write-call"
+
+      if reply == {:ok, :approved, :once} do
+        refute result.is_error
+        assert_receive :executed
+      else
+        assert result.is_error
+        refute_received :executed
+      end
+    end
+  end
+
   test "exceptions, exits, and throws fail closed without exposing their payloads" do
     failures = [
       fn _request -> raise @secret end,

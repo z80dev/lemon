@@ -22,6 +22,32 @@ defmodule CodingAgent.ToolRegistryTest do
     :ok
   end
 
+  test "direct registry approval options retain private namespace and actual agent", %{tmp_dir: tmp_dir} do
+    owner = self()
+    path = Path.join(tmp_dir, "registry-denied.txt")
+
+    {:ok, tool} =
+      ToolRegistry.get_tool(tmp_dir, "write",
+        tool_policy: CodingAgent.ToolPolicy.custom(require_approval: ["write"]),
+        run_id: "registry-run",
+        session_key: "agent:registry-writer:main",
+        agent_id: "registry-writer",
+        invocation_context_key: "registry-client",
+        approval_request_fun: fn request ->
+          send(owner, {:registry_approval, request})
+          {:ok, :denied}
+        end
+      )
+
+    result = tool.execute.("registry-write", %{"path" => path, "content" => "DENIED"}, nil, nil)
+    assert result.is_error
+    assert_receive {:registry_approval, request}
+    assert request.invocation_context_key == "registry-client"
+    assert request.agent_id == "registry-writer"
+    assert request.session_key == "agent:registry-writer:main"
+    refute File.exists?(path)
+  end
+
   defp create_counter_extension(tmp_dir, module_name, tool_name, counter_path) do
     ext_dir = Path.join(tmp_dir, ".lemon/extensions")
     File.mkdir_p!(ext_dir)

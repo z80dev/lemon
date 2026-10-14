@@ -146,6 +146,9 @@ defmodule CodingAgent.Executor.ProfileExecutionTest do
       meta = %{
         model: "openai:gpt-4o",
         profile_id: profile_id,
+        invocation_context_key: "profile-client-#{transport}",
+        memory_context_key: "profile-memory-#{transport}",
+        memory_context_verified: true,
         system_prompt: "private-profile-system-prompt",
         profile_instructions: %{"SOUL.md" => "private-profile-soul", "README.md" => "private-profile-job"},
         mcp_servers: [%{name: "profile", url: url, headers: %{
@@ -191,6 +194,43 @@ defmodule CodingAgent.Executor.ProfileExecutionTest do
       assert_receive {:mcp_request, "tools/call", %{"authorization" => "Bearer runtime-secret"}}, 5_000
       assert_receive {:mcp_request, "initialize", %{"x-literal" => literal_header}}, 5_000
       assert literal_header == "${#{literal_name}}"
+
+      # Native task children use the same unresolved invocation definitions and
+      # trusted local connection, not machine-global MCP configuration.
+      child_opts =
+        CodingAgent.Tools.Task.Params.build_session_opts(
+          root,
+          [parent_session: runner_state.session, model: session_state.model],
+          %{
+            agent_id: "mcp-child-writer",
+            tool_policy:
+              CodingAgent.ToolPolicy.custom(allow: [tool.name], require_approval: [tool.name])
+          }
+        )
+        |> Keyword.put(:approval_context, %{
+          approval_request_fun: fn approval ->
+            send(parent, {:child_mcp_approval, approval})
+            {:ok, :approved, :once}
+          end
+        })
+
+      {:ok, child} = Session.start_link(child_opts)
+
+      try do
+        child_state = Session.get_state(child)
+        child_tool = Enum.find(child_state.base_tools, &(&1.name == tool.name))
+        assert {:ok, child_result} = child_tool.execute.("child-profile-tool", %{}, nil, nil)
+        assert Enum.map_join(child_result.content, "", & &1.text) == "profile-tool-result"
+        assert_receive {:child_mcp_approval, approval}
+        assert approval.invocation_context_key == "profile-client-#{transport}"
+        assert approval.agent_id == "mcp-child-writer"
+        assert_receive {:mcp_request, "tools/call", %{"authorization" => "Bearer runtime-secret"}}, 5_000
+        refute inspect(child_state.approval_context.invocation_mcp_servers) =~ "runtime-secret"
+        assert child_state.approval_context.memory_context_key == "profile-memory-#{transport}"
+        assert child_state.approval_context.memory_context_verified == true
+      after
+        GenServer.stop(child)
+      end
 
       # Rebuilding the registry preserves the owner-bound session connection.
       assert {:ok, _tool} = CodingAgent.ToolRegistry.get_tool(root, tool.name,

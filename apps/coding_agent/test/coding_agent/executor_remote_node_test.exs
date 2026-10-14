@@ -75,12 +75,12 @@ defmodule CodingAgent.ExecutorRemoteNodeTest do
   end
 
   test "a canonical profile request reaches the executor-selected named node" do
-    assert :ok = NodeRegistry.register("node-profile", "newphy", self())
+    assert :ok = NodeRegistry.register("node-profile", "newphy", self(), privacy_capabilities())
 
     profile = %{
       "id" => "research",
       "name" => "Research",
-      "node" => "newphy",
+      "node" => "node-profile",
       "model" => nil,
       "canonicalSessionKey" => "agent:research:main",
       "paths" => %{"workspace" => "/controller-only/profile/workspace"}
@@ -246,20 +246,32 @@ defmodule CodingAgent.ExecutorRemoteNodeTest do
 
   test "bridges remote approvals through the controller store and returns the decision to the owning node" do
     :ok = LemonCore.Bus.subscribe("exec_approvals")
-    assert :ok = NodeRegistry.register("node-approval", "approval-worker", self())
-    request = request(%{node: "approval-worker", agent_id: "oracle"})
+    assert :ok = NodeRegistry.register("node-approval", "approval-worker", self(), privacy_capabilities())
+    request =
+      request(%{
+        "invocation_context_key" => "source-owned-client",
+        node: "node-approval",
+        agent_id: "oracle"
+      })
     assert {:ok, run_ref, _ctx} = Executor.start_run(request, %{}, self())
     assert_receive {:node_event, "node.invoke.request", invocation}
     invoke_id = invocation["invokeId"]
     worker_id = "worker-approval-id"
     event = %{"type" => "approval_requested", "approvalId" => worker_id, "tool" => "bash",
-              "action" => %{"command_hash" => "safe-test"}, "expiresAtMs" => LemonCore.Clock.now_ms() + 10_000}
+              "action" => %{"command_hash" => "safe-test"},
+              "invocation_context_key" => "worker-forged-client",
+              "agent_id" => "worker-forged-agent",
+              "expiresAtMs" => LemonCore.Clock.now_ms() + 10_000}
     assert {:ok, :accepted} = NodeRegistry.event_session("node-approval", self(), 0, invoke_id, 1, event)
     assert_receive %LemonCore.Event{type: :approval_requested,
       payload: %{pending: %{id: controller_id, run_id: run_id, session_key: session_key}}}
     assert run_id == request.run_id
     assert session_key == request.session_key
-    assert LemonCore.ExecApprovalStore.get_pending(controller_id).tool == "bash"
+    pending = LemonCore.ExecApprovalStore.get_pending(controller_id)
+    assert pending.tool == "bash"
+    assert pending.agent_id == "oracle"
+    assert pending.invocation_context_key == "source-owned-client"
+    refute Jason.encode!(pending) =~ "source-owned-client"
     refute controller_id == worker_id
     assert {:ok, %{decision: :approve_once, outcome: :approved}} =
       LemonCore.ExecApprovals.resolve(controller_id, :approve_once,
@@ -302,6 +314,39 @@ defmodule CodingAgent.ExecutorRemoteNodeTest do
       %{"invokeId" => ^invoke_id, "approvalId" => "expired-approval", "decision" => "deny"}}
     :ok = Executor.cancel(ctx)
   end
+
+  test "scoped payload never reaches an old live worker, including negative private claims" do
+    assert :ok = NodeRegistry.register("old-worker", "old", self())
+    for private <- [%{invocation_context_key: "actor"}, %{memory_context_verified: false},
+                    %{"sharedMemoryGrant" => nil}, %{native_lineage_run_id: nil}] do
+      assert {:ok, ref, _} = Executor.start_run(request(Map.put(private, :node, "old")), %{}, self())
+      assert_receive {:engine_event, ^ref, %{__event__: :completed, ok: false}}, 1000
+      refute_receive {:node_event, "node.invoke.request", _}
+    end
+  end
+
+  test "protected durable identity cannot be shadowed even without a preset connection PID" do
+    wrong = spawn(fn -> receive do :stop -> :ok end end)
+    on_exit(fn -> send(wrong, :stop) end)
+    assert :ok = NodeRegistry.register_session("durable-target", "correct", self(), 7, privacy_capabilities())
+    assert :ok = NodeRegistry.register("other-node", "durable-target", wrong, privacy_capabilities())
+    req = request(%{node: "durable-target", invocation_context_key: "source-actor"})
+    assert {:ok, _ref, ctx} = Executor.start_run(req, %{}, self())
+    assert_receive {:node_event, "node.invoke.request", %{"nodeId" => "durable-target"}}, 1000
+    :ok = Executor.cancel(ctx)
+  end
+
+  test "a changed owner-bound connection generation rejects before dispatch" do
+    assert :ok = NodeRegistry.register_session("generation-target", "target", self(), 8, privacy_capabilities())
+    req = request(%{node: "generation-target", invocation_context_key: "source-actor",
+      native_destination_pid: self(), native_destination_generation: 7})
+    assert {:ok, ref, _} = Executor.start_run(req, %{}, self())
+    assert_receive {:engine_event, ^ref, %{__event__: :completed, ok: false}}, 1000
+    refute_receive {:node_event, "node.invoke.request", _}
+  end
+
+  defp privacy_capabilities,
+    do: %{capabilities: %{"coding_agent.run" => %{"version" => 1, "nativePrivacyContext" => %{"version" => 1}}}}
 
   defp request(meta) do
     %ExecutionRequest{

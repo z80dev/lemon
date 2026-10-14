@@ -12,6 +12,105 @@ defmodule CodingAgent.Tools.TaskTest do
     :ok
   end
 
+
+  @tag :tmp_dir
+  test "task children gate writes in inherited contexts, including coordinator parent pids", %{
+    tmp_dir: tmp_dir
+  } do
+    owner = self()
+    policy = ToolPolicy.custom(deny: ["bash"], require_approval: ["write"])
+    parent =
+      start_supervised!(
+        {CodingAgent.Session,
+         [
+           cwd: tmp_dir,
+           model: LemonAgent.Test.Mocks.mock_model(),
+           tools: [],
+           invocation_context_key: "parent-client",
+           invocation_mcp_servers: [],
+           tool_policy: policy
+         ]}
+      )
+
+    for {trusted_opts, expected_key} <- [
+          {[
+             approval_context: %{invocation_context_key: "tool-client"},
+             tool_policy: policy,
+             invocation_mcp_servers: []
+           ], "tool-client"},
+          {[
+             invocation_context_key: "direct-client",
+             tool_policy: policy,
+             invocation_mcp_servers: []
+           ], "direct-client"},
+          {[parent_session: parent], "parent-client"},
+          {[tool_policy: policy, invocation_mcp_servers: []], nil}
+        ] do
+      validated = %{
+        tool_policy: ToolPolicy.custom(approvals: %{"write" => :never}),
+        invocation_context_key: "forged-validated-client",
+        agent_id: "child-writer"
+      }
+
+      opts =
+        Params.build_session_opts(
+          tmp_dir,
+          Keyword.merge(
+            [model: LemonAgent.Test.Mocks.mock_model(), child_run_id: "child-run"],
+            trusted_opts
+          ),
+          validated
+        )
+        |> Keyword.put(:approval_context, %{
+          approval_request_fun: fn request ->
+            send(owner, {:child_approval, request})
+            {:ok, :denied}
+          end
+        })
+
+      {:ok, child} = CodingAgent.Session.start_link(opts)
+
+      try do
+        write = Enum.find(CodingAgent.Session.get_state(child).tools, &(&1.name == "write"))
+        refute Enum.any?(CodingAgent.Session.get_state(child).tools, &(&1.name == "bash"))
+        assert CodingAgent.Session.get_state(child).approval_context.invocation_mcp_servers == []
+        path = Path.join(tmp_dir, "denied-#{expected_key || "legacy"}.txt")
+
+        result =
+          write.execute.(
+            "child-write",
+            %{"path" => path, "content" => "MUST NOT WRITE", "invocation_context_key" => "forged"},
+            nil,
+            nil
+          )
+
+        assert result.is_error
+        assert_receive {:child_approval, request}
+        assert request.invocation_context_key == expected_key
+        assert request.agent_id == "child-writer"
+        refute File.exists?(path)
+      after
+        GenServer.stop(child)
+      end
+    end
+  end
+
+  @tag :tmp_dir
+  test "an empty parent allow list cannot be widened by a full-access child", %{tmp_dir: tmp_dir} do
+    opts =
+      Params.build_session_opts(
+        tmp_dir,
+        [
+          model: LemonAgent.Test.Mocks.mock_model(),
+          tool_policy: ToolPolicy.custom(allow: [])
+        ],
+        %{tool_policy: ToolPolicy.from_profile(:full_access)}
+      )
+
+    assert {:error, :not_found} = CodingAgent.ToolRegistry.get_tool(tmp_dir, "write", opts)
+    assert {:error, :not_found} = CodingAgent.ToolRegistry.get_tool(tmp_dir, "bash", opts)
+    assert {:error, :not_found} = CodingAgent.ToolRegistry.get_tool(tmp_dir, "read", opts)
+  end
   describe "validate_run_params/2" do
     test "builds a native execution context" do
       assert {:ok, validated} =

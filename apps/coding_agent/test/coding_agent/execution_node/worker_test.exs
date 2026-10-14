@@ -164,6 +164,7 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
     {:ok, worker} = start_worker(tmp_dir, token: "node-token")
     assert_receive {:socket_started, socket, socket_opts}
     assert get_in(socket_opts, [:connect_params, "auth", "token"]) == "node-token"
+    assert get_in(socket_opts, [:connect_params, "capabilities", "coding_agent.run", "nativePrivacyContext", "version"]) == 1
 
     send(worker, {
       :execution_node_socket,
@@ -777,6 +778,71 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
                     {:authenticated_node_id_mismatch,
                      %{expected: "expected-node", actual: "different-node"}}},
                    1_000
+  end
+
+  @tag :tmp_dir
+  test "authenticated wire proof is reconstructed only after exact run and header binding", %{tmp_dir: tmp_dir} do
+    state = %Worker{name: "newphy", default_cwd: tmp_dir}
+    id = "current-native-run"
+    proof = %{"run_id" => id, "server_name" => "core", "server_url" => "https://bot.example/mcp",
+      "header_name" => "X-Lemon-Bot-Invocation", "secret_name" => "lemon_bot/invocations/" <> id}
+    servers = [%{"name" => "core", "url" => "https://bot.example/mcp",
+      "headers" => %{"X-Lemon-Bot-Invocation" => "${LEMON_SECRET:lemon_bot/invocations/#{id}}"}}]
+    meta = %{"invocation_context_key" => "actor", "memory_context_key" => "audience",
+      "memory_context_verified" => true, "shared_memory_grant" => false,
+      "invocation_proof_verified" => true, "invocation_proof" => proof, "mcp_servers" => servers,
+      "native_lineage_handle" => String.duplicate("x", 43), "native_lineage_run_id" => id}
+    args = %{"version" => 1, "runId" => id, "prompt" => "work", "meta" => meta}
+    assert {:ok, request, _} = Worker.execution_request(args, state, "invoke")
+    assert request.meta.invocation_proof_verified == true
+    assert request.meta.invocation_proof == %{run_id: id, server_name: "core",
+      server_url: "https://bot.example/mcp", header_name: "X-Lemon-Bot-Invocation",
+      secret_name: "lemon_bot/invocations/" <> id}
+    assert request.meta.shared_memory_grant == false
+    for forged <- [Map.put(proof, "run_id", "previous-run"),
+                    Map.put(proof, "header_name", "Authorization"),
+                    Map.put(proof, "secret_name", "lemon_bot/invocations/previous-run"),
+                    Map.put(proof, "unknown", "must-not-ignore")] do
+      assert {:error, :invalid_invocation_proof} =
+        Worker.execution_request(put_in(args, ["meta", "invocation_proof"], forged), state, "invoke")
+    end
+    assert {:error, :invalid_invocation_proof} =
+      Worker.execution_request(put_in(args, ["meta", "memory_context_verified"], false), state, "invoke")
+  end
+
+  @tag :tmp_dir
+  test "canonical false proof and grant cannot be upgraded by JSON aliases", %{tmp_dir: tmp_dir} do
+    state = %Worker{name: "newphy", default_cwd: tmp_dir}
+    args = %{"version" => 1, "prompt" => "work", "meta" => %{
+      "memory_context_verified" => true, "shared_memory_grant" => true,
+      "invocation_proof_verified" => true,
+      invocation_context_key: "actor", memory_context_key: "audience",
+      memory_context_verified: false, shared_memory_grant: false,
+      invocation_proof_verified: false}}
+    assert {:ok, request, _} = Worker.execution_request(args, state, "invoke")
+    assert request.meta.memory_context_verified == false
+    assert request.meta.shared_memory_grant == false
+    assert request.meta.invocation_proof_verified == false
+  end
+
+  @tag :tmp_dir
+  test "native callbacks use source socket replies without calling the blocked Worker", %{tmp_dir: tmp_dir} do
+    {:ok, worker} = start_worker(tmp_dir, token: "node-token")
+    assert_receive {:socket_started, socket, _}
+    send(worker, {:execution_node_socket, socket, {:connected, %{"auth" => %{"clientId" => "node-1"}}}})
+    invoke(worker, socket, "invoke-native-source", "node-1",
+      %{"version" => 1, "prompt" => "work", "meta" => %{}})
+    assert_receive {:executor_started, _request, opts, ^worker, _ref, context}
+    source = %{run_id: "actual-source", lineage_handle: String.duplicate("x", 43)}
+    caller = Task.async(fn -> opts.native_source_floor_fun.(source, %{allow: ["read"]}) end)
+    assert_receive {:socket_request, ^socket, "node.native.lineage.floor",
+      %{"sourceRunId" => "actual-source", "lineageHandle" => _, "toolPolicy" => %{"allow" => ["read"]}},
+      {:native_reply, recipient, reply_ref}, 30_000}
+    assert recipient == caller.pid
+    send(recipient, {:native_controller_reply, reply_ref, {:ok, %{}}})
+    assert Task.await(caller) == :ok
+    :ok = GenServer.stop(worker)
+    Process.exit(context.runner_pid, :kill)
   end
 
   @tag :tmp_dir

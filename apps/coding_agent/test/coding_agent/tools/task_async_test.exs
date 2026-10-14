@@ -135,6 +135,14 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
             "prompt" => "Return completion",
             "async" => true,
             "auto_followup" => true,
+            "meta" => %{
+              "invocation_context_key" => "forged-client",
+              :invocation_context_key => "forged-atom-client",
+              "memory_context_key" => "forged-memory",
+              "memory_context_verified" => true,
+              "shared_memory_grant" => true,
+              :mcp_servers => [%{"name" => "forged-server"}]
+            },
             "queue_mode" => "steer"
           },
           nil,
@@ -150,6 +158,10 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
           session_pid: self(),
           session_key: "agent:main:main",
           agent_id: "main",
+          invocation_context_key: "task-followup-client",
+          tool_policy:
+            CodingAgent.ToolPolicy.custom(allow: ["read", "write", "task"], require_approval: ["write"]),
+          invocation_mcp_servers: [],
           run_orchestrator: __MODULE__.TaskAsyncStubRunOrchestrator
         )
 
@@ -159,6 +171,20 @@ defmodule CodingAgent.Tools.TaskAsyncTest do
       assert_receive {:router_submit, %RunRequest{queue_mode: :followup} = followup, 1}, 1_000
       assert followup.prompt =~ "idle steer output"
       refute followup.prompt =~ "Idle steer task"
+      assert followup.meta[:invocation_context_key] == "task-followup-client"
+      refute Map.has_key?(followup.meta, "invocation_context_key")
+      refute inspect(result) =~ "task-followup-client"
+      assert followup.meta[:mcp_servers] == []
+      refute Map.has_key?(followup.meta, "mcp_servers")
+      assert CodingAgent.ToolPolicy.allowed?(followup.tool_policy, "write")
+      refute CodingAgent.ToolPolicy.allowed?(followup.tool_policy, "bash")
+      assert CodingAgent.ToolPolicy.requires_approval?(followup.tool_policy, "write")
+      refute Map.has_key?(followup.meta, :memory_context_key)
+      refute Map.has_key?(followup.meta, :memory_context_verified)
+      refute Map.has_key?(followup.meta, :shared_memory_grant)
+      refute Map.has_key?(followup.meta, "memory_context_key")
+      refute Map.has_key?(followup.meta, "memory_context_verified")
+      refute inspect(result) =~ "task-followup-memory"
 
       assert followup.meta["async_followups"] == [
                %{

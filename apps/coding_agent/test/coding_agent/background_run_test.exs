@@ -25,6 +25,67 @@ defmodule CodingAgent.BackgroundRunTest do
     %{tmp_dir: tmp_dir}
   end
 
+
+  test "background writes retain parent approval namespace and remain gated", %{tmp_dir: tmp_dir} do
+    parent =
+      start_supervised!(
+        {Session,
+         [
+           cwd: tmp_dir,
+           model: Mocks.mock_model(),
+           tools: [],
+           agent_id: "background-writer",
+           tool_policy: CodingAgent.ToolPolicy.custom(deny: ["bash"], require_approval: ["write"]),
+           invocation_mcp_servers: [],
+           invocation_context_key: "background-parent-client"
+         ]}
+      )
+
+    owner = self()
+    path = Path.join(tmp_dir, "background-denied.txt")
+
+    runner = fn session_opts, _prompt, _signal, _timeout_ms ->
+      send(owner, {:background_mcp_refs, Keyword.get(session_opts, :invocation_mcp_servers)})
+      session_opts =
+        Keyword.put(session_opts, :approval_context, %{
+          approval_request_fun: fn request ->
+            send(owner, {:background_approval, request})
+            {:ok, :denied}
+          end
+        })
+
+      {:ok, child} = Session.start_link(session_opts)
+
+      try do
+        write = Enum.find(Session.get_state(child).tools, &(&1.name == "write"))
+        refute Enum.any?(Session.get_state(child).tools, &(&1.name == "bash"))
+        result = write.execute.("background-write", %{"path" => path, "content" => "DENIED"}, nil, nil)
+        send(owner, {:background_write_result, result})
+        {:ok, "denied as required"}
+      after
+        GenServer.stop(child)
+      end
+    end
+
+    assert {:ok, %{id: id}} =
+             BackgroundRun.start("write in background",
+               parent_session: parent,
+               invocation_context_key: "replacement-client",
+               invocation_mcp_servers: [%{"name" => "untrusted-widening"}],
+               tool_policy: CodingAgent.ToolPolicy.from_profile(:full_access),
+               runner: runner
+             )
+
+    assert_receive {:background_approval, request}, 2_000
+    assert_receive {:background_mcp_refs, []}
+    assert request.invocation_context_key == "background-parent-client"
+    assert request.agent_id == "background-writer"
+    assert request.run_id == id
+    assert request.session_key == "background:#{id}"
+    assert_receive {:background_write_result, %{is_error: true}}
+    refute File.exists?(path)
+    assert {:ok, "denied as required"} = await_result(id)
+  end
   test "background run uses a fresh full-tool session and leaves parent history untouched", %{
     tmp_dir: tmp_dir
   } do
@@ -280,6 +341,52 @@ defmodule CodingAgent.BackgroundRunTest do
     assert record.error == private_reason
     refute inspect(events) =~ "/Users/alice"
     refute inspect(events) =~ "sk-private-provider"
+  end
+
+  test "side-query freezes source audience proof but cannot inherit shared writes" do
+    owner = self()
+    source = %{
+      messages: transcript("authorized source", "authorized answer"),
+      system_prompt: "safe",
+      approval_context: %{invocation_context_key: "actor", memory_context_key: "audience",
+        memory_context_verified: true, shared_memory_grant: true}
+    }
+    runner = fn opts, _question, _signal, _timeout ->
+      send(owner, {:frozen_query_opts, opts})
+      {:ok, "answer"}
+    end
+    assert {:ok, "answer"} = SideQuery.ask(source, "question", runner: runner)
+    assert_receive {:frozen_query_opts, opts}
+    assert opts[:invocation_context_key] == "actor"
+    assert opts[:memory_context_key] == "audience"
+    assert opts[:memory_context_verified] == true
+    assert opts[:shared_memory_grant] == false
+    assert opts[:tools] == []
+    assert {:error, :session_unavailable} =
+      SideQuery.ask(source, "question", runner: runner, invocation_context_key: "other-actor",
+        memory_context_key: "audience", memory_context_verified: true)
+    refute_receive {:frozen_query_opts, _}
+  end
+
+  test "side-query canonical negative source proof wins a forged string alias" do
+    owner = self()
+    source = %{
+      messages: transcript("source", "answer"), system_prompt: "safe",
+      approval_context: %{"memory_context_verified" => true,
+        invocation_context_key: "actor", memory_context_key: "audience",
+        memory_context_verified: false}
+    }
+    runner = fn opts, _, _, _ ->
+      send(owner, {:negative_query_opts, opts})
+      {:ok, "answer"}
+    end
+    assert {:ok, "answer"} = SideQuery.ask(source, "question", runner: runner)
+    assert_receive {:negative_query_opts, opts}
+    assert opts[:memory_context_verified] == false
+    assert {:error, :session_unavailable} =
+      SideQuery.ask(source, "question", runner: runner, invocation_context_key: "actor",
+        memory_context_key: "audience", memory_context_verified: true)
+    refute_receive {:negative_query_opts, _}
   end
 
   test "side-query public errors classify provider details without returning them" do

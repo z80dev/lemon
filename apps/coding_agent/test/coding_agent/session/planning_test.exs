@@ -44,7 +44,10 @@ defmodule CodingAgent.Session.PlanningTest do
       {:ok, :approved, :once}
     end
 
-    opts = session_opts(root, stream, approvals, [reader(), writer(), bash()])
+    opts =
+      session_opts(root, stream, approvals, [reader(), writer(), bash()])
+      |> Keyword.put(:agent_id, "planner")
+      |> Keyword.put(:invocation_context_key, "planning-client")
     session = start_supervised!({Session, opts})
     Session.subscribe(session)
 
@@ -65,6 +68,8 @@ defmodule CodingAgent.Session.PlanningTest do
     assert_receive {:approval_request, request}
     assert request.tool == "propose_plan"
     assert request.tool_call_id == "propose"
+    assert request.agent_id == "planner"
+    assert request.invocation_context_key == "planning-client"
     assert request.action["title"] == "Result"
     assert request.action["plan"] == plan_text
     plan_file = request.action["path"]
@@ -92,6 +97,45 @@ defmodule CodingAgent.Session.PlanningTest do
     assert {:ok, %{"mode" => "code"}} = Session.plan(resumed, :exit)
   end
 
+  test "a direct key without policy or approval context still scopes plan approval", %{root: root} do
+    parent = self()
+    :ok = LemonCore.Bus.subscribe("exec_approvals")
+
+    stream =
+      scripted_stream(parent, fn call, context ->
+        plan_file = Path.join(plan_dir(context.system_prompt), "key-only-plan.md")
+
+        case call do
+          1 -> tool_use("write-plan", "write", %{"path" => plan_file, "content" => "# Key only"})
+          2 -> tool_use("propose", "propose_plan", %{"path" => plan_file, "title" => "Key only"})
+          _ -> stop("Not approved")
+        end
+      end)
+
+    opts =
+      session_opts(root, stream, nil, [reader(), writer()])
+      |> Keyword.delete(:approval_context)
+      |> Keyword.put(:agent_id, "key-only-planner")
+      |> Keyword.put(:invocation_context_key, "key-only-planning-client")
+
+    session = start_supervised!({Session, opts})
+    Session.subscribe(session)
+    assert {:ok, _} = Session.plan(session, :enter)
+    assert :ok = Session.prompt(session, "Propose a plan.")
+
+    assert_receive %LemonCore.Event{
+                     type: :approval_requested,
+                     payload: %{pending: %{id: approval_id}}
+                   }, 5_000
+
+    pending = LemonCore.ExecApprovalStore.get_pending(approval_id)
+    assert pending.invocation_context_key == "key-only-planning-client"
+    assert pending.agent_id == "key-only-planner"
+    assert :ok = LemonCore.ExecApprovals.resolve(approval_id, :deny)
+    assert_receive {:session_event, _, {:agent_end, _}}, 5_000
+    assert {:ok, %{"mode" => "plan"}} = Session.plan(session)
+  end
+
   test "refinement keeps plan mode and remembers the proposed plan file", %{root: root} do
     parent = self()
 
@@ -106,15 +150,25 @@ defmodule CodingAgent.Session.PlanningTest do
         end
       end)
 
-    session =
-      start_supervised!(
-        {Session, session_opts(root, stream, fn _ -> {:ok, :denied} end, [reader(), writer()])}
-      )
+    approvals = fn request ->
+      send(parent, {:refinement_approval, request})
+      {:ok, :denied}
+    end
+
+    opts =
+      session_opts(root, stream, approvals, [reader(), writer()])
+      |> Keyword.put(:agent_id, "refiner")
+      |> Keyword.put(:invocation_context_key, "refinement-client")
+
+    session = start_supervised!({Session, opts})
 
     Session.subscribe(session)
     assert {:ok, _} = Session.plan(session, :enter)
     assert :ok = Session.prompt(session, "Plan it.")
     assert_receive {:session_event, _, {:agent_end, _}}, 5_000
+    assert_receive {:refinement_approval, request}
+    assert request.agent_id == "refiner"
+    assert request.invocation_context_key == "refinement-client"
 
     assert {:ok, %{"mode" => "plan", "path" => plan_file, "content" => "# Draft"}} =
              Session.plan(session)
