@@ -339,24 +339,26 @@ defmodule LemonMCP.Client.HTTP do
           end
 
         {:ok, {{_version, 401, reason}, headers, response_body}} ->
-          with {:ok, discovered_metadata} <- auth_metadata(headers, state) do
-            metadata =
-              discovered_metadata ||
-                state.oauth_metadata ||
-                %{
-                  "status" => 401,
-                  "reason" => to_string(reason),
-                  "body" => to_string(response_body)
-                }
+          case auth_metadata(headers, state) do
+            {:ok, discovered_metadata} ->
+              metadata =
+                discovered_metadata ||
+                  state.oauth_metadata ||
+                  %{
+                    "status" => 401,
+                    "reason" => to_string(reason),
+                    "body" => to_string(response_body)
+                  }
 
-            case allow_oauth_retry? and maybe_authorize(metadata, state) do
-              {:ok, state} -> post_raw(message, state, false)
-              {:error, reason} -> {:error, reason, state}
-              :error -> {:error, auth_required_reason(state, metadata), state}
-              false -> {:error, auth_required_reason(state, metadata), state}
-            end
-          else
-            {:error, reason} -> {:error, reason, state}
+              case allow_oauth_retry? and maybe_authorize(metadata, state) do
+                {:ok, state} -> post_raw(message, state, false)
+                {:error, reason} -> {:error, reason, state}
+                :error -> {:error, auth_required_reason(state, metadata), state}
+                false -> {:error, auth_required_reason(state, metadata), state}
+              end
+
+            {:error, reason} ->
+              {:error, reason, state}
           end
 
         {:ok, {{_version, status, reason}, _headers, response_body}} ->

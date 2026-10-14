@@ -126,7 +126,10 @@ defmodule LemonMemory.Project do
                  query,
                  identity.agent_id,
                  identity.home_digest,
-                 owner, limit: limit, workspace_root: root) do
+                 owner,
+                 limit: limit,
+                 workspace_root: root
+               ) do
           {:ok, Enum.filter(docs, &history_matches?(&1, identity, owner, requested_scope))}
         end
       else
@@ -370,18 +373,24 @@ defmodule LemonMemory.Project do
   defp optional_fact(fact), do: normalize_fact(fact)
 
   defp normalize_fact(fact) when is_binary(fact) do
-    with :ok <- Safety.validate_note(fact, max_bytes: @max_bytes) do
-      fact = fact |> String.split() |> Enum.join(" ")
+    case Safety.validate_note(fact, max_bytes: @max_bytes) do
+      :ok ->
+        fact = fact |> String.split() |> Enum.join(" ")
 
-      cond do
-        fact == "" -> {:error, :empty_fact}
-        byte_size(fact) > @max_fact_bytes -> {:error, :fact_too_long}
-        true -> {:ok, fact}
-      end
-    else
-      {:error, :unsafe_text} -> {:error, :unsafe_fact}
-      {:error, :empty_text} -> {:error, :empty_fact}
-      _ -> {:error, :invalid_fact}
+        cond do
+          fact == "" -> {:error, :empty_fact}
+          byte_size(fact) > @max_fact_bytes -> {:error, :fact_too_long}
+          true -> {:ok, fact}
+        end
+
+      {:error, :unsafe_text} ->
+        {:error, :unsafe_fact}
+
+      {:error, :empty_text} ->
+        {:error, :empty_fact}
+
+      _ ->
+        {:error, :invalid_fact}
     end
   end
 

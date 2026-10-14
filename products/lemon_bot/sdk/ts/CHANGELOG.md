@@ -10,6 +10,7 @@
 ## 1.0.0
 
 - Canonical typed product REST calls derive path parameters, body, query and responses directly from RestEndpoints; SCIM media/If-Match, hook prefixes, OIDC redirects and binary responses retain their transport exceptions.
+- Root backend URLs normalize directly to `/v1` without a duplicate slash; HTTP and realtime transports share the same canonical base.
 - Explicit nonce/revision intents and structured errors retain request IDs, current resources/revisions and uncertain reserved IDs. Network mutation loss and unknown receipts require GET reconciliation; there is no mutation retry or offline queue.
 - Attachments upload actual multipart file bytes; signed backend-only downloads omit credentials, refuse redirects and support byte ranges. Voice transcription uploads real audio before STT and never sends chat implicitly.
 - Realtime authenticates before correlated subscriptions, resets from atomic snapshots, serializes async event/frame application and persistence before acknowledgment, resumes bigint cursors and terminal output only, and exposes heartbeat/auth/revocation lifecycle states.

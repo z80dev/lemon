@@ -157,35 +157,38 @@ defmodule LemonSkills.Tools.Remember do
   defp validate_session_scope(_), do: {:error, "remember requires a main session"}
 
   defp remember_preferences(context, target, action, params) do
-    with {:ok, result} <-
-           Preferences.remember(
-             context,
-             target,
-             Map.get(params, "text"),
-             Map.get(params, "replaces"),
-             context.store_opts
-           ) do
-      visibility = if ContextScope.shared_grant?(context), do: "Shared", else: "Private"
+    case Preferences.remember(
+           context,
+           target,
+           Map.get(params, "text"),
+           Map.get(params, "replaces"),
+           context.store_opts
+         ) do
+      {:ok, result} ->
+        visibility = if ContextScope.shared_grant?(context), do: "Shared", else: "Private"
 
-      %AgentToolResult{
-        content: [
-          %TextContent{
-            text:
-              "#{visibility} preferences #{if result.changed, do: "updated", else: "unchanged"}.\n\n" <>
-                Enum.map_join(result.facts, "\n", &("- " <> &1))
+        %AgentToolResult{
+          content: [
+            %TextContent{
+              text:
+                "#{visibility} preferences #{if result.changed, do: "updated", else: "unchanged"}.\n\n" <>
+                  Enum.map_join(result.facts, "\n", &("- " <> &1))
+            }
+          ],
+          details: %{
+            target: target,
+            action: action,
+            changed: result.changed,
+            facts: result.facts,
+            memory_scope: String.downcase(visibility)
           }
-        ],
-        details: %{
-          target: target,
-          action: action,
-          changed: result.changed,
-          facts: result.facts,
-          memory_scope: String.downcase(visibility)
         }
-      }
-    else
-      {:error, reason} when is_atom(reason) -> {:error, "Scoped preferences refused: #{reason}"}
-      error -> error
+
+      {:error, reason} when is_atom(reason) ->
+        {:error, "Scoped preferences refused: #{reason}"}
+
+      error ->
+        error
     end
   end
 

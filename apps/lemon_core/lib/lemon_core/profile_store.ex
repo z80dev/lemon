@@ -1213,20 +1213,22 @@ defmodule LemonCore.ProfileStore do
   end
 
   defp read_profiles_strict(opts) do
-    with {:ok, content} <- read_config(config_path(opts)) do
-      case Toml.decode(content) do
-        {:ok, decoded} ->
-          case decoded["profiles"] do
-            nil -> {:ok, %{}}
-            profiles when is_map(profiles) -> {:ok, profiles}
-            _ -> {:error, :invalid_profile_config}
-          end
+    case read_config(config_path(opts)) do
+      {:ok, content} ->
+        case Toml.decode(content) do
+          {:ok, decoded} ->
+            case decoded["profiles"] do
+              nil -> {:ok, %{}}
+              profiles when is_map(profiles) -> {:ok, profiles}
+              _ -> {:error, :invalid_profile_config}
+            end
 
-        {:error, _} ->
-          {:error, :invalid_profile_config}
-      end
-    else
-      {:error, _} -> {:error, :profile_store_unavailable}
+          {:error, _} ->
+            {:error, :invalid_profile_config}
+        end
+
+      {:error, _} ->
+        {:error, :profile_store_unavailable}
     end
   end
 

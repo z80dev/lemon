@@ -174,20 +174,22 @@ defmodule LemonSkills.McpDiscovery do
   def discover(server_or_cwd, cwd_or_opts \\ [])
 
   def discover(server, cwd) when is_map(server) or not is_list(cwd) do
-    with {:ok, [server]} <- ProfileStore.normalize_mcp_servers([server]) do
-      id = "mcp-discovery-" <> Base.url_encode64(:crypto.strong_rand_bytes(24), padding: false)
+    case ProfileStore.normalize_mcp_servers([server]) do
+      {:ok, [server]} ->
+        id = "mcp-discovery-" <> Base.url_encode64(:crypto.strong_rand_bytes(24), padding: false)
 
-      try do
-        # Discovery reads the raw inventory but never installs executable tools.
-        with :ok <- McpSession.open_http(id, cwd, [Map.put(server, "enabledTools", [])], self()),
-             {:ok, tools} <- McpSession.remote_tools(id) do
-          {:ok, project(server, tools)}
+        try do
+          # Discovery reads the raw inventory but never installs executable tools.
+          with :ok <- McpSession.open_http(id, cwd, [Map.put(server, "enabledTools", [])], self()),
+               {:ok, tools} <- McpSession.remote_tools(id) do
+            {:ok, project(server, tools)}
+          end
+        after
+          McpSession.close(id)
         end
-      after
-        McpSession.close(id)
-      end
-    else
-      _ -> {:error, :invalid_config}
+
+      _ ->
+        {:error, :invalid_config}
     end
   rescue
     _ -> {:error, :discovery_failed}

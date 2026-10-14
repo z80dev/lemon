@@ -1,4 +1,7 @@
 #!/bin/sh
+# verify_boot and verify_bot_runtime are ( ) subshell functions so their
+# throwaway HOME/Store/release exports never leak into the installer.
+# shellcheck disable=SC2030,SC2031
 # Lemon installer.
 #
 #   curl -fsSL https://raw.githubusercontent.com/z80dev/lemon/main/install.sh | sh

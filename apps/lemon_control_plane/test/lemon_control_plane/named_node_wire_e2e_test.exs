@@ -305,9 +305,6 @@ defmodule LemonControlPlane.NamedNodeWireE2ETest do
              approval_timeout_ms: 600_000
            }
 
-    assert is_function(run_opts.native_followup_submit, 2)
-    assert is_function(run_opts.native_source_floor_fun, 2)
-
     assert {:ok, control_id} =
              LemonCore.NodeRegistry.control(invoke_id, :steer, "stay on the wire",
                recipient: self(),

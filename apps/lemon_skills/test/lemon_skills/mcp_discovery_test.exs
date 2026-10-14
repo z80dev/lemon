@@ -37,7 +37,7 @@ defmodule LemonSkills.McpDiscoveryTest.HTTPFixture do
           Jason.encode!(%{
             "jsonrpc" => "2.0",
             "id" => request["id"],
-            "error" => %{"code" => -32603, "message" => message}
+            "error" => %{"code" => -32_603, "message" => message}
           })
         )
 

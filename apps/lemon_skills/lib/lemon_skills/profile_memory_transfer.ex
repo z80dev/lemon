@@ -408,36 +408,38 @@ defmodule LemonSkills.ProfileMemoryTransfer do
 
   defp export_documents(docs, context) do
     Enum.reduce_while(docs, {:ok, []}, fn doc, {:ok, records} ->
-      with {:ok, metadata} <- normalize_metadata(portable_metadata(doc)) do
-        record = %{
-          "id" => doc.doc_id,
-          "agentId" => doc.agent_id,
-          "homeDigest" => context.home,
-          "workspace" => workspace(doc.workspace_key, context),
-          "scope" => to_string(doc.scope),
-          "runId" => doc.run_id,
-          "sessionKey" => doc.session_key,
-          "startedAtMs" => doc.started_at_ms,
-          "ingestedAtMs" => doc.ingested_at_ms,
-          "promptSummary" => doc.prompt_summary,
-          "answerSummary" => doc.answer_summary,
-          "toolsUsed" => doc.tools_used,
-          "provider" => doc.provider,
-          "model" => doc.model,
-          "outcome" => to_string(doc.outcome),
-          "metadata" => metadata,
-          "revision" => Store.document_revision(doc)
-        }
+      case normalize_metadata(portable_metadata(doc)) do
+        {:ok, metadata} ->
+          record = %{
+            "id" => doc.doc_id,
+            "agentId" => doc.agent_id,
+            "homeDigest" => context.home,
+            "workspace" => workspace(doc.workspace_key, context),
+            "scope" => to_string(doc.scope),
+            "runId" => doc.run_id,
+            "sessionKey" => doc.session_key,
+            "startedAtMs" => doc.started_at_ms,
+            "ingestedAtMs" => doc.ingested_at_ms,
+            "promptSummary" => doc.prompt_summary,
+            "answerSummary" => doc.answer_summary,
+            "toolsUsed" => doc.tools_used,
+            "provider" => doc.provider,
+            "model" => doc.model,
+            "outcome" => to_string(doc.outcome),
+            "metadata" => metadata,
+            "revision" => Store.document_revision(doc)
+          }
 
-        with true <- not secret_term?(doc.meta),
-             :ok <- validate_record(record, context.profile, context.home) do
-          {:cont, {:ok, [record | records]}}
-        else
-          false -> {:halt, {:error, :unsafe_snapshot}}
-          error -> {:halt, error}
-        end
-      else
-        error -> {:halt, error}
+          with true <- not secret_term?(doc.meta),
+               :ok <- validate_record(record, context.profile, context.home) do
+            {:cont, {:ok, [record | records]}}
+          else
+            false -> {:halt, {:error, :unsafe_snapshot}}
+            error -> {:halt, error}
+          end
+
+        error ->
+          {:halt, error}
       end
     end)
     |> case do

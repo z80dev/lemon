@@ -37,22 +37,24 @@ defmodule LemonSkills.WorkspacePreferences do
       Enum.reduce_while(["USER.md", "MEMORY.md"], {:ok, %{}}, fn name, {:ok, files} ->
         path = Path.join(workspace_dir, name)
 
-        with :ok <- safe_file(path) do
-          case File.read(path) do
-            {:ok, text} ->
-              case if(Keyword.get(opts, :screen, true), do: transfer_text(text), else: :ok) do
-                :ok -> {:cont, {:ok, Map.put(files, name, text)}}
-                error -> {:halt, error}
-              end
+        case safe_file(path) do
+          :ok ->
+            case File.read(path) do
+              {:ok, text} ->
+                case if(Keyword.get(opts, :screen, true), do: transfer_text(text), else: :ok) do
+                  :ok -> {:cont, {:ok, Map.put(files, name, text)}}
+                  error -> {:halt, error}
+                end
 
-            {:error, :enoent} ->
-              {:cont, {:ok, Map.put(files, name, nil)}}
+              {:error, :enoent} ->
+                {:cont, {:ok, Map.put(files, name, nil)}}
 
-            _ ->
-              {:halt, {:error, :memory_unavailable}}
-          end
-        else
-          error -> {:halt, error}
+              _ ->
+                {:halt, {:error, :memory_unavailable}}
+            end
+
+          error ->
+            {:halt, error}
         end
       end)
     end
@@ -286,7 +288,10 @@ defmodule LemonSkills.WorkspacePreferences do
       entries =
         Regex.scan(
           ~r/^[-*] [^\n]*(?:\n(?![-*] |\#)[^\n]*)*|^(?!\s*$|\#|[-*] )[^\n]+(?:\n(?!\s*$|\#|[-*] )[^\n]+)*/m,
-          body, return: :index, capture: :first)
+          body,
+          return: :index,
+          capture: :first
+        )
         |> Enum.take(200)
         |> Enum.map(fn [{start, length}] ->
           raw = binary_part(body, start, length)

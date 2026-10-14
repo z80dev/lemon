@@ -174,14 +174,16 @@ defmodule LemonRouter.NativeLineage do
   creating any continuing authority. Repeated receipts may only restrict floors.
   """
   def register_source_floor(captured, actual_policy, transport) do
-    with {:ok, floor} <- LemonCore.ToolPolicy.normalize(actual_policy) do
-      if proofless_capture?(captured) do
-        persist_proofless_floor(captured.run_id, floor, transport, 3)
-      else
-        persist_source_floor(captured, floor, transport, 3)
-      end
-    else
-      _ -> {:error, :invalid_native_policy}
+    case LemonCore.ToolPolicy.normalize(actual_policy) do
+      {:ok, floor} ->
+        if proofless_capture?(captured) do
+          persist_proofless_floor(captured.run_id, floor, transport, 3)
+        else
+          persist_source_floor(captured, floor, transport, 3)
+        end
+
+      _ ->
+        {:error, :invalid_native_policy}
     end
   rescue
     _ -> {:error, :outcome_unknown}

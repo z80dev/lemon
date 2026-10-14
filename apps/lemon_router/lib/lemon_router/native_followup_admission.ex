@@ -104,9 +104,8 @@ defmodule LemonRouter.NativeFollowupAdmission do
 
   @doc "Fail closed unless the current target transport templates still match the captured version."
   def ensure_current_target(profile_id, version) when is_binary(version) do
-    with {:ok, _profile, ^version} <- capture_target(profile_id) do
-      :ok
-    else
+    case capture_target(profile_id) do
+      {:ok, _profile, ^version} -> :ok
       _ -> {:error, :admission_unavailable}
     end
   end
