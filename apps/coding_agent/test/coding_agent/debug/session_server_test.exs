@@ -74,9 +74,12 @@ defmodule CodingAgent.Debug.SessionServerTest do
     end
   end
 
+  # A killed debuggee reparented to init stays a zombie until reaped.
   defp os_alive?(pid) when is_integer(pid) do
-    {_, status} = System.cmd("kill", ["-0", Integer.to_string(pid)], stderr_to_stdout: true)
-    status == 0
+    case System.cmd("ps", ["-o", "stat=", "-p", Integer.to_string(pid)], stderr_to_stdout: true) do
+      {stat, 0} -> not String.starts_with?(String.trim(stat), "Z")
+      _ -> false
+    end
   end
 
   defp eventually(fun, attempts \\ 50) do
