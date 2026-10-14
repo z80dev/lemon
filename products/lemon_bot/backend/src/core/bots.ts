@@ -50,7 +50,7 @@ interface DesiredProfile {
   machineId: string; botRevision: number; bot: P.Bot; beforeBot: P.Bot; actorUserId: string; lifecycleId: string | null; profileIntentId: string;
 }
 interface ProfileSyncReceipt { profileId: string; nodeId: string; mutationId: string; profileIntentId?: string; acknowledged?: boolean; revisionDigest?: string | null; completedAtMs?: number }
-const productBotTools: readonly (keyof P.MCPToolInputs)[] = ['message_bot', 'handoff', 'create_draft', 'ask_user', 'request_approval', 'request_human_step', 'request_secret', 'send_voice_memo', 'share_file', 'create_routine', 'update_routine', 'save_skill', 'list_bots', 'post_to_group', 'remember', 'create_bot', 'update_preferences', 'create_reminder'];
+export const productBotTools: readonly (keyof P.MCPToolInputs)[] = ['message_bot', 'handoff', 'create_draft', 'ask_user', 'request_approval', 'request_human_step', 'request_secret', 'send_voice_memo', 'share_file', 'create_routine', 'update_routine', 'save_skill', 'list_bots', 'post_to_group', 'remember', 'create_bot', 'update_preferences', 'create_reminder'];
 
 /** Persona text is declarative; runtime authority always comes from the verified invocation. */
 export function botSystemPrompt(bot: Pick<P.Bot, 'name' | 'title' | 'job' | 'instructions'> & Partial<Pick<P.Bot, 'language'>>): string {
