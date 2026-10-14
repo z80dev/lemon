@@ -8,7 +8,21 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
-No unreleased changes yet.
+### Added
+
+- Repeated paired disclosure trials in the production coding benchmark, with
+  seeded counterbalanced ordering, fresh per-attempt runtimes and fixtures,
+  exact experiment/approval digests, bounded deadlines, and an explicit
+  operator-approved spend plan backed by a hard external provider/account cap.
+  Plan-only mode makes no model calls. Sanitized reports retain failed/timed-out
+  attempts, incomplete cost data, and exploratory task-cluster uncertainty,
+  separately from schema-size diagnostics. Negated paired authorization cannot
+  fall through to the paid legacy lane; deadline-owned process groups are cleaned
+  up even after their leaders exit. Missing, unmatched, or nested usage
+  observations cannot certify parent-only cost as complete spend. Defaults remain
+  unchanged and the coding profile remains opt-in; rollout awaits authorized live
+  evidence.
+  See [the paired workflow](docs/benchmarks/paired-disclosure.md).
 
 ---
 

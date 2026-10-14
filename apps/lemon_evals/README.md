@@ -20,8 +20,9 @@ cd apps/lemon_evals && mix test --cover
 
 ## Live agentic coding benchmark
 
-This separate, paid-model lane measures actual coding outcomes through the
-production `lemon -p --output json` client. It is never part of the fast lane:
+The nonpaired lane measures actual coding outcomes through the production
+`lemon -p --output json` client and can make paid model calls immediately. It is
+never part of the fast lane:
 
 ```bash
 LEMON_CONTROL_PLANE_PORT=4210 mix lemon.eval.coding \
@@ -51,12 +52,50 @@ pass/fail, completed assistant turns, tokens, wall time, and failed tool calls.
 Missing runtime counters are `null`/`n/a`, never estimated from tool-call count.
 All tasks run even when one fails; any failure makes the command exit nonzero.
 The report contains no raw prompts, model output, credentials, or workspace paths.
-It measures one trial per task, not statistically significant model rankings.
+Without `--paired`, it measures one trial per task, not statistically significant
+model rankings.
 
 For local failure diagnosis only, `--failure-dir /tmp/lemon-bench-failures`
 retains private failure bundles with the task repo, verifier, and CLI/test
 stdout/stderr. These may contain sensitive model output; do not commit or upload
 them. Without that explicit flag, every temporary repository is removed.
+
+### Repeated paired disclosure trials
+
+`--paired` extends the same fixtures, production client, and external verifiers
+to compare `baseline` (the legacy disclosure profile) with opt-in `coding`.
+It does not compare omp. Attempts run sequentially in seeded, counterbalanced
+order, with a fresh production runtime, configuration, store, and fixture per
+attempt.
+
+```bash
+# Operator-selected paths/settings; no --live means no model calls.
+mix lemon.eval.coding --paired \
+  --model PROVIDER:MODEL \
+  --repetitions 3 --seed 107 \
+  --config /OPERATOR/PATH/benchmark-base.toml \
+  --profile-python /OPERATOR/PATH/profile-venv/bin/python \
+  --timeout 660 --run-timeout 3600 \
+  --output /OPERATOR/PATH/paired-plan-template.json
+```
+
+The base TOML must omit `runtime.tools.disclosure`; live profiling requires
+`tiktoken` in the selected Python environment.
+
+This is plan-only: it writes a sanitized **unsigned plan template**, not outcome
+evidence. Live attempts additionally require `--live --plan PLAN.json
+--approve-plan-digest SHA256`, with an explicitly approved exact experiment and
+positive bounded spend/attempt limits backed by a hard account/provider budget.
+Do not use ordinary daemon credentials or assume local timeouts enforce billing
+limits. Optional `--schema-budgets N,N` adds explicitly selected
+`coding_budget_N` variants only when useful after the baseline/coding comparison.
+
+The [canonical paired workflow](../../docs/benchmarks/paired-disclosure.md)
+defines approval, configuration isolation, report metadata, all-attempt cost
+accounting, exploratory task-cluster uncertainty, redaction, and rollback.
+No authorized live paired evidence is recorded here: keep current defaults and
+keep the coding profile opt-in; any promotion remains pending an approved bounded
+run and sanitized report. Schema-size diagnostics alone do not justify promotion.
 
 ### Comparing omp on identical tasks
 
@@ -151,8 +190,9 @@ Only upload the `--output` file when sharing summary results.
 `--iterations` controls existing statistical checks. It does **not** repeat
 every live-model check as an independent trial. The report records contract
 results, not benchmark task-success rates, dollar costs, or a Hermes comparison.
-The separate live coding lane above records single-trial production-path outcomes;
-statistically useful repeated paired trials remain separate work.
+The separate coding lane above records single-trial production-path outcomes by
+default; `--paired` is the explicitly opted-in repeated disclosure experiment.
+Neither lane changes what the contract harness's `--iterations` means.
 
 The manually dispatched Live Eval workflow retains this allowlisted report for
 14 days with `if: always()`, including when checks fail. It warns when startup
