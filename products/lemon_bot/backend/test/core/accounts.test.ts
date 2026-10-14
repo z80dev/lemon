@@ -103,8 +103,30 @@ describe('account lifecycle', () => {
     await f.call('POST', '/v1/auth/logout', { clientNonce: opaqueToken() }, { ...f.alice, sessionId: first.session.id }); expect(f.store.require<P.Device>('devices', device.id).pushEnabled).toBe(true);
     await f.call('POST', '/v1/auth/logout', { clientNonce: opaqueToken() }, { ...f.alice, sessionId: second.session.id }); expect(f.store.require<P.Device>('devices', device.id).pushEnabled).toBe(false);
   });
-  test('member disable revokes live authority without granting admin private transcript access', async () => {
+  test('persistent device sessions stay listed past thirty days and device deletion revokes every credential', async () => {
+    const revoked: string[] = []; const f = accounts({ onRevokeSession: sessionId => { revoked.push(sessionId); } });
+    const device = await f.call<P.Device>('POST', '/v1/devices', { clientNonce: opaqueToken(), installationId: 'phone-persistent', platform: 'ios', name: 'Phone', appVersion: '1.0.0' });
+    const first = await f.services.auth.session('alice', device.id, { persistent: true }); const second = await f.services.auth.session('alice', device.id, { persistent: true });
+    expect(first.session.expiresAtMs).toBeNull(); expect(second.session.expiresAtMs).toBeNull();
+    f.advance(31 * 86400000);
+    expect((await f.services.auth.authenticate(authenticated(first.token)))?.deviceId).toBe(device.id);
+    const sessions = await f.call<P.Page<P.AuthSession>>('GET', '/v1/auth/sessions');
+    expect(sessions.items.map(value => value.id).sort()).toEqual([first.session.id, second.session.id].sort());
+    await f.call('DELETE', '/v1/devices/:id', { clientNonce: opaqueToken() }, f.alice, { id: device.id });
+    expect(revoked.sort()).toEqual([first.session.id, second.session.id].sort());
+    expect(f.store.get('devices', device.id)).toBeNull();
+    expect(f.store.get('authSessions', first.session.id)).toBeNull();
+    expect(f.store.get('sessionSecrets', first.session.id)).toMatchObject({ revoked: true });
+    await expect(f.services.auth.authenticate(authenticated(first.token))).rejects.toMatchObject({ code: 'unauthenticated' });
+    await expect(f.services.auth.authenticate(authenticated(second.token))).rejects.toMatchObject({ code: 'unauthenticated' });
+  });
+  test('membership administration cannot acquire another member live bot even with legacy team labels', async () => {
     const f = accounts(); const bot = f.addBot('alice'); const conversation = f.addConversation(bot, 'alice'); const auth = await f.services.auth.session('alice'); const member = f.services.auth.member('alice');
+    const legacy: P.Bot & { visibility: 'team'; published: true; managerUserIds: string[] } = { ...bot, visibility: 'team', published: true, managerUserIds: ['admin', 'owner'] };
+    f.store.put('bots', legacy);
+    await f.call('GET', '/v1/members', undefined, f.owner);
+    expect(() => f.services.auth.bot(f.owner, bot.id)).toThrow(ApiError);
+    expect(() => f.services.auth.bot(f.admin, bot.id, true)).toThrow(ApiError);
     await f.call('PATCH', '/v1/members/:id', { clientNonce: opaqueToken(), revision: member.revision, enabled: false }, f.owner, { id: member.id });
     await expect(f.services.auth.authenticate(authenticated(auth.token))).rejects.toMatchObject({ code: 'unauthenticated' }); expect(f.cancelled).toEqual(['alice']);
     expect(f.store.get('conversations', conversation.id)).not.toBeNull(); expect(f.services.auth.canRead(f.owner, 'conversations', conversation)).toBe(false);
@@ -184,5 +206,24 @@ describe('account lifecycle', () => {
     await expect(f.call('GET', '/v1/account-teardowns/:id', undefined, f.admin, { id: ledger.id })).rejects.toMatchObject({ code: 'forbidden' });
     await createAccountService(f.services).reconcile(); expect(dispatches).toBe(1);
     await expect(f.services.auth.authenticate(authenticated(auth.token))).rejects.toMatchObject({ code: 'unauthenticated' });
+  });
+  test('ordinary login input cannot request persistent session authority', async () => {
+    const f = accounts();
+    await expect(f.call('POST', '/v1/auth/login', { clientNonce: opaqueToken(), email: 'alice@example.com', password: testPassword, persistent: true }, null)).rejects.toMatchObject({ code: 'invalid_request' });
+    expect(f.store.list('authSessions')).toHaveLength(0);
+  });
+  test('workspace disable permanently revokes paired credentials while bounded Owner authority can repair', async () => {
+    const revoked: string[] = []; const f = accounts({ onRevokeSession: sessionId => { revoked.push(sessionId); } });
+    const device = await f.call<P.Device>('POST', '/v1/devices', { clientNonce: opaqueToken(), installationId: 'revoked-phone', platform: 'ios', name: 'Phone', appVersion: '1.0.0' });
+    const paired = await f.services.auth.session('alice', device.id, { persistent: true });
+    const desktop = await f.services.auth.session('owner');
+    const owner: Principal = { ...f.owner, sessionId: desktop.session.id };
+    const disabled = await f.call<P.Workspace>('PATCH', '/v1/workspace', { clientNonce: opaqueToken(), revision: f.workspace.revision, enabled: false }, owner);
+    expect(revoked).toEqual([paired.session.id]);
+    expect(f.store.get('authSessions', paired.session.id)).toBeNull();
+    expect(f.store.get('sessionSecrets', paired.session.id)).toMatchObject({ revoked: true });
+    expect((await f.services.auth.authenticate(authenticated(desktop.token), 'owner'))?.userId).toBe('owner');
+    await f.call('PATCH', '/v1/workspace', { clientNonce: opaqueToken(), revision: disabled.revision, enabled: true }, owner);
+    await expect(f.services.auth.authenticate(authenticated(paired.token))).rejects.toMatchObject({ code: 'unauthenticated' });
   });
 });

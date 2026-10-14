@@ -41,12 +41,14 @@ export function authFixture(hooks: RevocationHooks = {}) {
     const principal: Principal = { kind: 'user', id: userId, userId, workspaceId: workspace.id, role, sessionId: null, deviceId: null, botId: null };
     return principal;
   }
-  function addBot(ownerUserId: string, visibility: P.Bot['visibility'] = 'personal', published = false): P.Bot {
-    const bot: P.Bot = services.resource('bot', { ownerUserId, managerUserIds: [], machineId: 'machine', profileId: `lb-${opaqueToken()}`, name: 'Bot', title: '', job: '', instructions: '', avatar: { kind: 'character', shape: 'circle', color: '#112233', attachmentId: null }, voice: { voiceId: 'default', speed: 1, language: null }, language: null, visibility, published, required: false, skillIds: [], referenceAttachmentIds: [], mainConversationId: 'main', sidebar: { pinned: false, hidden: false, sectionId: null, rank: 0, unread: false, notificationsEnabled: true }, activity: 'idle', activeRunIds: [] });
+  function addBot(ownerUserId: string): P.Bot {
+    const bot: P.Bot = services.resource('bot', { ownerUserId, machineId: 'machine', profileId: `lb-${opaqueToken()}`, name: 'Bot', title: '', job: '', instructions: '', avatar: { kind: 'character', shape: 'circle', color: '#112233', attachmentId: null }, voice: { voiceId: 'default', speed: 1, language: null }, language: null, skillIds: [], referenceAttachmentIds: [], mainConversationId: 'main', sidebar: { pinned: false, hidden: false, sectionId: null, rank: 0, unread: false, notificationsEnabled: true }, activity: 'idle', activeRunIds: [] });
     return store.put('bots', bot);
   }
   function addConversation(bot: P.Bot, ownerUserId: string, kind: P.ConversationKind = 'dm'): P.Conversation {
-    return store.put('conversations', services.resource('conversation', { kind, name: 'Private', botIds: [bot.id], humanUserIds: [ownerUserId], ownerUserId, parentConversationId: null, leadBotId: null, channelBindingId: null, lastEntryId: null, unreadCount: 99, lastReadSeq: 99, activity: [] }));
+    const room = store.put('conversations', services.resource('conversation', { kind, name: 'Private', botIds: [bot.id], ownerUserId, parentConversationId: null, leadBotId: null, channelBindingId: null, lastEntryId: null, unreadCount: 99, lastReadSeq: 99, activity: [] }));
+    if (kind === 'dm' && bot.ownerUserId === ownerUserId) store.put('bots', services.update(store.require<P.Bot>('bots', bot.id), { mainConversationId: room.id }));
+    return room;
   }
   const owner = addUser('owner', 'owner'); const alice = addUser('alice'); const admin = addUser('admin', 'admin');
   return { services, store, owner, alice, admin, workspace, cancelled, addUser, addBot, addConversation, advance: (amount: number) => { now += amount; } };
@@ -61,11 +63,17 @@ describe('access authority boundaries', () => {
     const f = authFixture(); const auth = await f.services.auth.session(f.alice.userId);
     expect(auth.token).toMatch(/^[A-Za-z0-9_-]{43}$/);
     expect(f.store.get('sessionSecrets', auth.session.id)).toEqual({ id: auth.session.id, tokenDigest: f.services.mutations.digest(auth.token), revoked: false });
-    expect(auth.session.expiresAtMs - f.services.now()).toBe(30 * 86400000);
+    expect(auth.session.expiresAtMs).toBe(f.services.now() + 30 * 86400000);
     expect((await f.services.auth.authenticate(bearer(auth.token), 'member'))?.kind).toBe('user');
     for (const policy of ['bot', 'hook', 'integration'] as const) await expect(f.services.auth.authenticate(bearer(auth.token), policy)).rejects.toMatchObject({ code: 'unauthenticated' });
     const bot = f.addBot('alice'); const botToken = opaqueToken(); f.store.put('botTokens', { id: bot.id, botId: bot.id, tokenDigest: f.services.mutations.digest(botToken), revoked: false });
-    expect((await f.services.auth.authenticate(bearer(botToken), 'bot'))?.botId).toBe(bot.id);
+    const botPrincipal = await f.services.auth.authenticate(bearer(botToken), 'bot');
+    if (!botPrincipal) throw new Error('Expected authenticated bot.');
+    expect(botPrincipal.userId).toBe('alice'); expect(botPrincipal.botId).toBe(bot.id);
+    expect(f.services.auth.bot(botPrincipal, bot.id).id).toBe(bot.id);
+    expect(() => f.services.auth.bot({ ...botPrincipal, userId: 'admin' }, bot.id)).toThrow(ApiError);
+    expect(() => f.services.auth.bot(botPrincipal, bot.id, true)).toThrow(ApiError);
+    expect(() => f.services.auth.conversation(botPrincipal, f.addConversation(bot, 'alice').id)).toThrow(ApiError);
     await expect(f.services.auth.authenticate(bearer(botToken), 'member')).rejects.toMatchObject({ code: 'unauthenticated' });
     f.advance(30 * 86400000);
     await expect(f.services.auth.authenticate(bearer(auth.token), 'member')).rejects.toMatchObject({ code: 'unauthenticated' });
@@ -80,6 +88,8 @@ describe('access authority boundaries', () => {
     f.store.put('integrationCredentials', { id: integration.id, digest: tokenSha256(token), workspaceId: f.workspace.id, issuerUserId: 'owner' });
     expect((await f.services.auth.authenticate(bearer(token), 'integration'))?.scopes).toEqual(['scim.users']);
     await expect(f.services.auth.authenticate(bearer(token), 'member')).rejects.toMatchObject({ code: 'unauthenticated' });
+    f.store.put('routines', { ...routine, ownerUserId: 'admin' });
+    await expect(f.services.auth.authenticate(bearer(key), 'hook')).rejects.toMatchObject({ code: 'unauthenticated' });
     f.store.setMetadata(`routineKey:${routine.id}`, null);
     await expect(f.services.auth.authenticate(bearer(key), 'hook')).rejects.toMatchObject({ code: 'unauthenticated' });
   });
@@ -91,33 +101,37 @@ describe('access authority boundaries', () => {
     f.store.put('members', f.services.update(member, { enabled: false }));
     await expect(f.services.auth.authenticate(bearer(auth.token), 'member')).rejects.toMatchObject({ code: 'unauthenticated' });
   });
-  test('owner and admin do not acquire private bot, Team DM, note or entry content', () => {
-    const f = authFixture(); const personal = f.addBot('alice'); const team = f.addBot('alice', 'team', true); const privateRoom = f.addConversation(team, 'alice', 'team_dm');
+  test('legacy publication, managers and workspace roles never grant live bot or transcript access', () => {
+    const f = authFixture(); const personal = f.addBot('alice');
+    const legacy: P.Bot & { visibility: 'team'; published: true; required: true; managerUserIds: string[] } = { ...f.addBot('alice'), visibility: 'team', published: true, required: true, managerUserIds: ['admin', 'owner'] };
+    f.store.put('bots', legacy); const privateRoom = f.addConversation(legacy, 'alice');
     for (const viewer of [f.owner, f.admin]) {
-      expect(() => f.services.auth.bot(viewer, personal.id)).toThrow(ApiError);
+      for (const candidate of [personal, legacy]) {
+        expect(() => f.services.auth.bot(viewer, candidate.id)).toThrow(ApiError);
+        expect(() => f.services.auth.bot(viewer, candidate.id, true)).toThrow(ApiError);
+      }
       expect(() => f.services.auth.conversation(viewer, privateRoom.id)).toThrow(ApiError);
-      expect(f.services.auth.canRead(viewer, 'memories', { id: 'note', botId: team.id, scope: 'private_note', userId: 'alice' })).toBe(false);
+      expect(f.services.auth.canRead(viewer, 'memories', { id: 'note', botId: legacy.id, scope: 'private_note', userId: 'alice' })).toBe(false);
+      expect(f.services.auth.canRead(viewer, 'memories', { id: 'memory', botId: legacy.id, scope: 'team', userId: null })).toBe(false);
       expect(f.services.auth.canRead(viewer, 'entries', { id: 'entry', conversationId: privateRoom.id, targetedUserId: null })).toBe(false);
-      expect(f.services.auth.bot(viewer, team.id).id).toBe(team.id);
     }
-    expect(f.services.auth.canRead(f.alice, 'memories', { id: 'note', botId: team.id, scope: 'private_note', userId: 'alice' })).toBe(true);
-    f.store.put('bots', f.services.update(team, { published: false, managerUserIds: ['admin'] }));
-    expect(() => f.services.auth.bot(f.owner, team.id)).toThrow(ApiError);
-    expect(f.services.auth.bot(f.admin, team.id, true).id).toBe(team.id);
-    expect(() => f.services.auth.conversation(f.admin, privateRoom.id)).toThrow(ApiError);
+    expect(f.services.auth.bot(f.alice, legacy.id, true).id).toBe(legacy.id);
+    expect(f.services.auth.canRead(f.alice, 'memories', { id: 'note', botId: legacy.id, scope: 'private_note', userId: 'alice' })).toBe(true);
   });
-  test('sidebar and read projections are viewer-private and replay filters agree', () => {
-    const f = authFixture(); const team = f.addBot('alice', 'team', true); const group = f.addConversation(team, 'alice', 'group'); f.store.put('conversations', { ...group, humanUserIds: ['alice', 'admin'] });
-    f.store.setMetadata(`botSidebar:alice:${team.id}`, { ...team.sidebar, hidden: true });
-    f.store.setMetadata(`conversationRead:alice:${group.id}`, { throughSeq: 12, unread: true });
-    expect(f.services.auth.bot(f.alice, team.id).sidebar.hidden).toBe(true); expect(f.services.auth.bot(f.admin, team.id).sidebar.hidden).toBe(false);
-    expect(f.services.auth.conversation(f.alice, group.id).lastReadSeq).toBe(12); expect(f.services.auth.conversation(f.admin, group.id).lastReadSeq).toBe(0);
-    const note: P.Memory = f.services.resource('memory', { botId: team.id, scope: 'private_note', userId: 'alice', text: 'private', kind: 'fact', sourceEntryId: null });
-    f.store.put('memories', note); f.services.events.emit('memory.upserted', note, { botId: team.id, userIds: ['alice'] });
-    expect(f.services.events.replay(f.alice, '0').filter(event => event.event === 'memory.upserted')).toHaveLength(1); expect(f.services.events.replay(f.admin, '0').filter(event => event.event === 'memory.upserted')).toHaveLength(0);
-    const aliceDM = f.services.auth.bot(f.alice, team.id).mainConversationId;
-    const adminDM = f.services.auth.bot(f.admin, team.id).mainConversationId;
-    expect(adminDM).not.toBe(aliceDM); expect(() => f.services.auth.conversation(f.admin, aliceDM)).toThrow(ApiError);
+  test('owner sidebar and read projections agree with replay without creating viewer rooms', () => {
+    const f = authFixture(); const bot = f.addBot('alice'); const room = f.addConversation(bot, 'alice');
+    f.store.setMetadata(`botSidebar:alice:${bot.id}`, { ...bot.sidebar, hidden: true });
+    f.store.setMetadata(`conversationRead:alice:${room.id}`, { throughSeq: 12, unread: true });
+    expect(f.services.auth.bot(f.alice, bot.id).sidebar.hidden).toBe(true);
+    expect(f.services.auth.bot(f.alice, bot.id).mainConversationId).toBe(room.id);
+    expect(f.services.auth.conversation(f.alice, room.id).lastReadSeq).toBe(12);
+    expect(() => f.services.auth.bot(f.admin, bot.id)).toThrow(ApiError);
+    expect(() => f.services.auth.conversation(f.admin, room.id)).toThrow(ApiError);
+    expect(f.store.list<P.Conversation>('conversations').map(value => value.id)).toEqual([room.id]);
+    const note: P.Memory = f.services.resource('memory', { botId: bot.id, text: 'private', kind: 'fact', sourceEntryId: null });
+    f.store.put('memories', note); f.services.events.emit('memory.upserted', note, { botId: bot.id, userIds: ['alice'] });
+    expect(f.services.events.replay(f.alice, '0').filter(event => event.event === 'memory.upserted')).toHaveLength(1);
+    expect(f.services.events.replay(f.admin, '0').filter(event => event.event === 'memory.upserted')).toHaveLength(0);
   });
   test('machine read does not imply management and admin authority must be configured', () => {
     const f = authFixture(); const machine: P.Machine = f.services.resource('machine', { nodeId: 'node', nodeName: 'node', name: 'Host', ownerUserId: 'alice', accessUserIds: ['admin'], status: 'online', lastSeenAtMs: f.services.now(), labels: {}, botIds: [] }); f.store.put('machines', machine);
@@ -164,21 +178,66 @@ describe('access authority boundaries', () => {
     expect(() => f.services.auth.requireRole(f.owner, 'owner')).not.toThrow();
     expect(() => f.services.auth.bot(f.owner, ownerBot.id)).toThrow(ApiError);
   });
-  test('trusted hook snapshots inherit own ACL but never acquire Owner administrative or host shortcuts', () => {
-    const f = authFixture(); const bot = f.addBot('owner');
-    const hook: Principal = { ...f.owner, kind: 'hook', id: 'verified-key', botId: bot.id };
-    expect(f.services.auth.bot(hook, bot.id).id).toBe(bot.id);
-    expect(() => f.services.auth.requireRole(hook, 'owner')).toThrow(ApiError);
+  test('trusted hook and integration snapshots need the same real bot owner without admin shortcuts', () => {
+    const f = authFixture(); const bot = f.addBot('owner'); const foreignBot = f.addBot('alice');
+    const room = f.addConversation(bot, 'owner'); const foreignRoom = f.addConversation(foreignBot, 'alice');
     const machine: P.Machine = f.services.resource('machine', { nodeId: 'node', nodeName: 'node', name: 'Host', ownerUserId: 'alice', accessUserIds: [], status: 'online', lastSeenAtMs: f.services.now(), labels: {}, botIds: [] }); f.store.put('machines', machine);
-    expect(() => f.services.auth.machine(hook, machine.id)).toThrow(ApiError);
+    for (const kind of ['hook', 'integration'] as const) {
+      const actor: Principal = { ...f.owner, kind, id: 'verified-authority', botId: bot.id };
+      expect(f.services.auth.bot(actor, bot.id).id).toBe(bot.id);
+      expect(f.services.auth.conversation(actor, room.id).id).toBe(room.id);
+      expect(() => f.services.auth.bot(actor, foreignBot.id)).toThrow(ApiError);
+      expect(() => f.services.auth.conversation(actor, foreignRoom.id)).toThrow(ApiError);
+      expect(() => f.services.auth.requireRole(actor, 'owner')).toThrow(ApiError);
+      expect(() => f.services.auth.machine(actor, machine.id)).toThrow(ApiError);
+    }
   });
-  test('explicit attachment room shares require current participation and do not grant private bot access', () => {
-    const f = authFixture(); const team = f.addBot('alice', 'team', true); const room = f.addConversation(team, 'alice', 'group'); f.store.put('conversations', { ...room, humanUserIds: ['alice', 'admin'] });
+  test('attachment shares and a legacy group roster cannot grant nonowner bot work', () => {
+    const f = authFixture(); const bot = f.addBot('alice'); const room = f.addConversation(bot, 'alice', 'group');
+    const legacyRoom: P.Conversation & { humanUserIds: string[] } = { ...room, humanUserIds: ['alice', 'admin'] }; f.store.put('conversations', legacyRoom);
     const attachment: P.Attachment = f.services.resource('attachment', { ownerUserId: 'alice', conversationId: null, botId: null, filename: 'shared.txt', mime: 'text/plain', size: 1, sha256: 'a'.repeat(64), width: null, height: null, durationMs: null, source: 'upload', state: 'ready', preview: 'text', provenance: { botId: null, runId: null, machineId: null, sourceEntryId: null, generatedAtMs: null } }); f.store.put('attachments', attachment);
     expect(f.services.auth.canRead(f.admin, 'attachments', attachment)).toBe(false);
     f.store.put('attachmentShares', f.services.resource('share', { attachmentId: attachment.id, conversationId: room.id, userId: 'alice' }));
-    expect(f.services.auth.canRead(f.admin, 'attachments', attachment)).toBe(true);
-    f.store.put('conversations', { ...room, humanUserIds: ['alice'] });
     expect(f.services.auth.canRead(f.admin, 'attachments', attachment)).toBe(false);
+    expect(() => f.services.auth.conversation(f.admin, room.id)).toThrow(ApiError);
+    expect(f.services.auth.canRead(f.alice, 'attachments', attachment)).toBe(true);
+  });
+  test('an own record or shared flag never bypasses ownership of its associated bot', () => {
+    const f = authFixture(); const bot = f.addBot('alice');
+    for (const collection of ['skills', 'attachments', 'connectors', 'channelBindings']) {
+      expect(f.services.auth.canRead(f.admin, collection, { id: 'legacy', botId: bot.id, ownerUserId: 'admin', scope: 'team', shared: true })).toBe(false);
+    }
+    expect(f.services.auth.canRead(f.admin, 'skills', { id: 'library', botId: null, ownerUserId: 'admin', scope: 'personal' })).toBe(true);
+    expect(f.services.auth.canRead(f.admin, 'attachments', { id: 'upload', botId: null, conversationId: null, ownerUserId: 'admin' })).toBe(true);
+    const connector: P.Connector & { shared: true } = f.services.resource('connector', { botId: bot.id, ownerUserId: 'admin', name: 'Old delegated account', url: 'https://provider.example', accountLabel: 'Account', authKind: 'oauth', state: 'connected', tools: [], secretHeaderNames: [], shared: true, lastError: null });
+    f.store.put('connectors', connector);
+    expect(f.services.auth.canRead(f.admin, 'connectorAuths', { id: 'auth', connectorId: connector.id })).toBe(false);
+    const target = f.addConversation(bot, 'admin', 'group');
+    expect(() => f.services.auth.conversation(f.admin, target.id)).toThrow(ApiError);
+    expect(() => f.services.auth.conversation(f.alice, target.id)).toThrow(ApiError);
+  });
+  test('persistent session issuance requires an active owned device and never bypasses workspace policy', async () => {
+    const f = authFixture();
+    expect(() => f.services.auth.session('alice', null, { persistent: true })).toThrow(ApiError);
+    const device: P.Device = f.services.resource('device', { userId: 'alice', platform: 'ios', name: 'Phone', appVersion: '1.0.0', pushEnabled: false, lastSeenAtMs: f.services.now() }); f.store.put('devices', device);
+    expect(() => f.services.auth.session('owner', device.id, { persistent: true })).toThrow(ApiError);
+    const paired = await f.services.auth.session('alice', device.id, { persistent: true });
+    expect(paired.session.expiresAtMs).toBeNull();
+    f.store.remove('devices', device.id);
+    await expect(f.services.auth.authenticate(bearer(paired.token))).rejects.toMatchObject({ code: 'unauthenticated' });
+    const ownerDevice: P.Device = { ...device, id: 'owner-phone', userId: 'owner' }; f.store.put('devices', ownerDevice);
+    f.store.put('workspaces', { ...f.workspace, enabled: false });
+    expect(() => f.services.auth.session('owner', ownerDevice.id, { persistent: true })).toThrow(ApiError);
+    expect(f.store.list('authSessions')).toHaveLength(1);
+  });
+  test('pairing resource receipts require the actual current owner, not the workspace Owner role', () => {
+    const f = authFixture();
+    const pairing: P.Pairing = f.services.resource('pairing', { workspaceId: f.workspace.id, ownerUserId: 'alice', clusterName: 'Workspace', backendUrl: 'https://lemon.example', status: 'waiting', expiresAtMs: f.services.now() + 300000, deviceName: null, verificationCode: null }); f.store.put('pairings', pairing);
+    expect(f.services.auth.canRead(f.alice, 'pairings', pairing)).toBe(true);
+    expect(f.services.auth.canRead(f.owner, 'pairings', pairing)).toBe(false);
+    expect(f.services.auth.canRead({ ...f.alice, kind: 'hook' }, 'pairings', pairing)).toBe(false);
+    expect(f.services.auth.canRead(f.alice, 'pairings', { ...pairing, workspaceId: 'other' })).toBe(false);
+    f.store.put('workspaces', { ...f.workspace, enabled: false });
+    expect(f.services.auth.canRead(f.alice, 'pairings', pairing)).toBe(false);
   });
 });

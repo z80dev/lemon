@@ -4,7 +4,8 @@ import { ApiError, fail } from './errors';
 import { z, parse, principal, id, mutation, update, confirm, voice, queryObject } from './validation';
 import { opaqueToken, type AccountDeletionFence, type Credential, type SessionSecret, type RevocationHooks } from './auth';
 import { validatePushRegistration } from '../integrations/push';
-import { removeUserMembership } from './conversations';
+import { clearUserConversationState } from './conversations';
+import { deleteUserPairings, revokeWorkspacePairings } from './pairing';
 import { hasProductAccess } from '../enterprise/policy';
 import { prepareProviderTeardown } from '../enterprise/teardown';
 
@@ -105,7 +106,8 @@ export function createAccountRoutes(services: BackendServices, hooks: Revocation
     if (actor.kind !== 'user') fail('forbidden', 'A primary user session is required.');
     if (actor.sessionId !== null) {
       const session = store.get<P.AuthSession>('authSessions', actor.sessionId);
-      if (!session || session.expiresAtMs <= services.now() || store.get<SessionSecret>('sessionSecrets', actor.sessionId)?.revoked !== false) fail('unauthenticated', 'Session expired or revoked.');
+      if (!session || session.expiresAtMs !== null && session.expiresAtMs <= services.now() || store.get<SessionSecret>('sessionSecrets', actor.sessionId)?.revoked !== false) fail('unauthenticated', 'Session expired or revoked.');
+      if (session.deviceId !== null && store.get<P.Device>('devices', session.deviceId)?.userId !== actor.userId || session.expiresAtMs === null && (session.deviceId === null || !services.auth.workspace().enabled)) fail('unauthenticated', 'Device connection was revoked.');
     }
     if (!services.auth.canRead(actor, 'users', services.auth.user(actor.userId))) fail('unauthenticated', 'Account authority was revoked.');
     return actor;
@@ -176,7 +178,7 @@ export function createAccountRoutes(services: BackendServices, hooks: Revocation
       if (authority) store.put('sessionSecrets', { ...authority, revoked: true });
       store.remove('authSessions', sessionId);
       if (session.deviceId !== null) {
-        const another = store.list<P.AuthSession>('authSessions', value => value.userId === actor.userId && value.deviceId === session.deviceId && value.expiresAtMs > services.now() && store.get<SessionSecret>('sessionSecrets', value.id)?.revoked === false);
+        const another = store.list<P.AuthSession>('authSessions', value => value.userId === actor.userId && value.deviceId === session.deviceId && (value.expiresAtMs === null || value.expiresAtMs > services.now()) && store.get<SessionSecret>('sessionSecrets', value.id)?.revoked === false);
         if (!another.length) {
           const device = store.get<P.Device>('devices', session.deviceId);
           if (device) {
@@ -223,9 +225,10 @@ export function createAccountRoutes(services: BackendServices, hooks: Revocation
   }
   function cleanupFingerprint(userId: string): string {
     const snapshot: { collection: string; id: string; revision: number | null }[] = [];
-    for (const collection of ['bots', 'conversations', 'routines', 'reminders', 'attachments', 'memories', 'connectors', 'skills', 'templates', 'sections', 'devices', 'notifications', 'authSessions', 'memoryImportPreviews', 'preferenceChanges']) {
+    const ownedBotIds = new Set(store.list<P.Bot>('bots', bot => bot.ownerUserId === userId).map(bot => bot.id));
+    for (const collection of ['bots', 'conversations', 'routines', 'reminders', 'attachments', 'memories', 'connectors', 'skills', 'templates', 'sections', 'devices', 'notifications', 'authSessions', 'memoryImportPreviews', 'preferenceChanges', 'pairings']) {
       // Session last-seen activity changes no revocation scope; new session IDs still invalidate the preview.
-      for (const value of store.list<P.Resource & { ownerUserId?: string; userId?: string; humanUserIds?: string[] }>(collection, row => row.ownerUserId === userId || row.userId === userId || collection === 'conversations' && row.humanUserIds?.includes(userId) === true)) snapshot.push({ collection, id: value.id, revision: collection === 'authSessions' ? null : value.revision });
+      for (const value of store.list<P.Resource & { ownerUserId?: string; userId?: string; botId?: string | null }>(collection, row => row.ownerUserId === userId || row.userId === userId || typeof row.botId === 'string' && ownedBotIds.has(row.botId))) snapshot.push({ collection, id: value.id, revision: collection === 'authSessions' ? null : value.revision });
     }
     snapshot.sort((a, b) => a.collection.localeCompare(b.collection) || a.id.localeCompare(b.id));
     const previews = new Set(store.list<P.MemoryImportPreview>('memoryImportPreviews', preview => preview.userId === userId).map(preview => preview.id));
@@ -253,9 +256,8 @@ export function createAccountRoutes(services: BackendServices, hooks: Revocation
     for (const collection of ['sections', 'devices', 'notifications', 'authSessions', 'memoryImportPreviews', 'preferenceChanges']) {
       for (const value of store.list<P.Resource & { userId: string }>(collection, row => row.userId === actor.userId)) affected.push({ resourceType: collection, id: value.id, machineId: null, operation: collection === 'authSessions' ? 'revoke' : 'delete', explanation: 'Remove account-owned product data and installation authority.' });
     }
-    for (const value of store.list<P.Bot>('bots', row => row.ownerUserId === actor.userId && row.visibility === 'team')) affected.push({ resourceType: 'bot', id: value.id, machineId: value.machineId, operation: 'delete', explanation: 'Owned Team Bot is explicitly removed; transfer ownership before deletion to keep it.' });
+    for (const pairing of store.list<P.Pairing>('pairings', row => row.ownerUserId === actor.userId)) affected.push({ resourceType: 'pairing', id: pairing.id, machineId: null, operation: 'delete', explanation: 'Remove this account pairing requests, private claim proofs and staged session credential custody.' });
     for (const value of store.list<P.Machine>('machines', row => row.ownerUserId === actor.userId || row.accessUserIds.includes(actor.userId))) affected.push({ resourceType: 'machine', id: value.id, machineId: value.id, operation: 'retain', explanation: 'Host files, browser sessions, provider logins and OS credentials remain; revoke them independently with the operator.' });
-    for (const room of store.list<P.Conversation>('conversations', value => value.ownerUserId !== actor.userId && value.humanUserIds.includes(actor.userId))) affected.push({ resourceType: 'conversation', id: room.id, machineId: null, operation: 'retain', explanation: 'Shared history and existing contributions remain for the other participants; remove only this user membership, private draft and read state.' });
     const provider = providerPreview(actor.userId);
     affected.push(...provider.affected);
     return { items, affected, fingerprint: cleanupFingerprint(actor.userId), providerBinding: provider.binding, metadataKeys: accountMetadataKeys(actor.userId) };
@@ -317,7 +319,7 @@ export function createAccountRoutes(services: BackendServices, hooks: Revocation
     } },
     { method: 'GET', path: '/v1/auth/sessions', auth: 'member', status: 200, handler: context => {
       listQuery(context); const actor = current(context);
-      return services.page(context, store.list<P.AuthSession>('authSessions', value => value.userId === actor.userId && value.expiresAtMs > services.now() && store.get<SessionSecret>('sessionSecrets', value.id)?.revoked === false).map(value => ({ ...value, current: value.id === actor.sessionId })));
+      return services.page(context, store.list<P.AuthSession>('authSessions', value => value.userId === actor.userId && (value.expiresAtMs === null || value.expiresAtMs > services.now()) && store.get<SessionSecret>('sessionSecrets', value.id)?.revoked === false).map(value => ({ ...value, current: value.id === actor.sessionId })));
     } },
     { method: 'DELETE', path: '/v1/auth/sessions/:id', auth: 'member', status: 200, handler: async context => { parse(mutation, context.body); const sessionId = parse(id, context.params.id); await revokeSession(current(context), sessionId); return { id: sessionId, deleted: true } satisfies P.Deleted; } },
     { method: 'POST', path: '/v1/auth/logout', auth: 'member', status: 200, handler: async context => { parse(mutation, context.body); const actor = current(context); if (!actor.sessionId) fail('unauthenticated', 'User session required.'); await revokeSession(actor, actor.sessionId); await hooks.onLogoutUser?.(actor.userId); return { ok: true }; } },
@@ -401,7 +403,8 @@ export function createAccountRoutes(services: BackendServices, hooks: Revocation
         fence = { ...fence, phase: 'finalizing', providerAcknowledged: providerError === null, updatedAtMs: services.now() }; store.setMetadata(fenceKey, fence);
         try { await services.auth.revokeUser(actor.userId); } catch (error) { productErrors.push(error instanceof ApiError ? error.code : 'internal_error'); }
         store.transaction(() => {
-          removeUserMembership(services, actor.userId);
+          clearUserConversationState(services, actor.userId);
+          deleteUserPairings(services, actor.userId);
           for (const key of plan.metadataKeys) store.setMetadata(key, null);
           const previews = new Set(store.list<P.MemoryImportPreview>('memoryImportPreviews', preview => preview.userId === actor.userId).map(preview => preview.id));
           for (const attempt of store.list<{ id: string; previewId: string }>('memoryImportAttempts', value => previews.has(value.previewId))) store.remove('memoryImportAttempts', attempt.id);
@@ -431,9 +434,10 @@ export function createAccountRoutes(services: BackendServices, hooks: Revocation
       }
     } },
     { method: 'GET', path: '/v1/workspace', auth: 'member', status: 200, handler: () => workspace() },
-    { method: 'PATCH', path: '/v1/workspace', auth: 'owner', status: 200, handler: context => {
+    { method: 'PATCH', path: '/v1/workspace', auth: 'owner', status: 200, handler: async context => {
       const { revision, clientNonce, ownerUserId, ...changes } = parse(workspaceSchema, context.body); const actor = current(context); services.auth.requireRole(actor, 'owner');
-      return store.transaction(() => {
+      const revokedSessionIds: string[] = [];
+      const result = store.transaction(() => {
         const target = workspace(); services.mutations.checkRevision(target, revision);
         if (ownerUserId !== undefined && ownerUserId !== target.ownerUserId) {
           const next = services.auth.member(ownerUserId); if (!next.enabled || store.metadata(`accountDeletion:${ownerUserId}`)) fail('invalid_request', 'New owner must be an enabled member not undergoing deletion.');
@@ -441,8 +445,27 @@ export function createAccountRoutes(services: BackendServices, hooks: Revocation
           const promoted = services.update(next, { role: 'owner' }); const demoted = services.update(previous, { role: 'admin' });
           store.put('members', promoted); store.put('members', demoted); services.events.emit('member.upserted', promoted, { public: true }); services.events.emit('member.upserted', demoted, { public: true });
         }
-        const updated = services.update(target, { ...changes, ...(ownerUserId === undefined ? {} : { ownerUserId }) }); store.put('workspaces', updated); services.events.emit('workspace.updated', updated, { public: true }); return updated;
+        const updated = services.update(target, { ...changes, ...(ownerUserId === undefined ? {} : { ownerUserId }) }); store.put('workspaces', updated);
+        if (!updated.enabled) {
+          revokeWorkspacePairings(services, updated.id);
+          const paired = store.list<P.AuthSession>('authSessions', session => session.expiresAtMs === null);
+          for (const session of paired) {
+            const secret = store.get<SessionSecret>('sessionSecrets', session.id);
+            if (secret) store.put('sessionSecrets', { ...secret, revoked: true });
+            store.remove('authSessions', session.id); revokedSessionIds.push(session.id);
+          }
+          for (const deviceId of new Set(paired.map(session => session.deviceId))) {
+            if (deviceId === null || store.list<P.AuthSession>('authSessions', session => session.deviceId === deviceId && (session.expiresAtMs === null || session.expiresAtMs > services.now()) && store.get<SessionSecret>('sessionSecrets', session.id)?.revoked === false).length) continue;
+            const device = store.get<P.Device>('devices', deviceId);
+            if (device) { const disabled = services.update(device, { pushEnabled: false }); store.put('devices', disabled); services.events.emit('device.upserted', disabled, { userIds: [device.userId] }); }
+          }
+        }
+        services.events.emit('workspace.updated', updated, { public: true }); return updated;
       });
+      const revoked = await Promise.allSettled(revokedSessionIds.map(sessionId => hooks.onRevokeSession?.(sessionId)));
+      const failure = revoked.find(value => value.status === 'rejected');
+      if (failure?.status === 'rejected') throw failure.reason;
+      return result;
     } },
     { method: 'GET', path: '/v1/members', auth: 'member', status: 200, handler: context => { listQuery(context); return services.page(context, store.list<P.Member>('members')); } },
     { method: 'PATCH', path: '/v1/members/:id', auth: 'admin', status: 200, handler: async context => {
@@ -494,9 +517,13 @@ export function createAccountRoutes(services: BackendServices, hooks: Revocation
         const updated = services.update(device, { ...changes, ...(push === null ? { pushEnabled: false } : {}), lastSeenAtMs: services.now() }); store.put('devices', updated); services.events.emit('device.upserted', updated, { userIds: [actor.userId] }); return updated;
       });
     } },
-    { method: 'DELETE', path: '/v1/devices/:id', auth: 'member', status: 200, handler: context => {
+    { method: 'DELETE', path: '/v1/devices/:id', auth: 'member', status: 200, handler: async context => {
       parse(mutation, context.body); const actor = current(context); const device = ownedDevice(actor, parse(id, context.params.id));
-      store.transaction(() => { store.remove('devices', device.id); store.setMetadata(`devicePush:${device.id}`, null); store.setMetadata(`devicePushRegisteredAt:${device.id}`, null); store.setMetadata(`deviceInstallation:${device.id}`, null); for (const session of store.list<P.AuthSession>('authSessions', value => value.deviceId === device.id)) store.put('authSessions', services.update(session, { deviceId: null })); services.events.emit('device.deleted', { id: device.id, deleted: true }, { userIds: [actor.userId] }); }); return { id: device.id, deleted: true };
+      const revoked = await Promise.allSettled(store.list<P.AuthSession>('authSessions', value => value.deviceId === device.id && value.userId === actor.userId).map(session => revokeSession(actor, session.id)));
+      store.transaction(() => { store.remove('devices', device.id); store.setMetadata(`devicePush:${device.id}`, null); store.setMetadata(`devicePushRegisteredAt:${device.id}`, null); store.setMetadata(`deviceInstallation:${device.id}`, null); services.events.emit('device.deleted', { id: device.id, deleted: true }, { userIds: [actor.userId] }); });
+      const failure = revoked.find(result => result.status === 'rejected');
+      if (failure?.status === 'rejected') throw failure.reason;
+      return { id: device.id, deleted: true };
     } },
     { method: 'GET', path: '/v1/account-teardowns', auth: 'owner', status: 200, handler: async context => {
       const actor = current(context); services.auth.requireRole(actor, 'owner');

@@ -1,10 +1,10 @@
 import { createHash, randomBytes } from 'node:crypto';
 import type * as P from '../../../contracts/protocol';
-import type { AccessService, Authentication, BackendServices, Principal } from './services';
+import type { AccessService, AuthSessionOptions, Authentication, BackendServices, Principal } from './services';
 import { ApiError, fail } from './errors';
 import { authenticateIntegration } from '../enterprise/tokens';
-import { ensureTeamDM } from './conversations';
 import { hasProductAccess } from '../enterprise/policy';
+import { revokeUserPairings } from './pairing';
 export interface SessionSecret { id: string; tokenDigest: string; revoked: boolean }
 export interface Credential { id: string; passwordHash: string }
 export interface RevocationHooks {
@@ -37,7 +37,7 @@ const productCollections: Record<string, true> = {
   bots: true, conversations: true, machines: true, machineInvites: true, terminals: true,
   entries: true, runs: true, routineRuns: true, webhookKeys: true, drafts: true, memories: true,
   reminders: true, routines: true, skills: true, attachments: true, approvals: true, questions: true,
-  humanSteps: true, secretRequests: true, consents: true, notifications: true, sections: true,
+  humanSteps: true, secretRequests: true, notifications: true, sections: true, pairings: true,
   composerDrafts: true, voiceSessions: true, milestones: true, feedbacks: true, connectors: true,
   connectorAuths: true, channelBindings: true, channelPrincipalLinks: true, channelLinkFlows: true,
   emailAccounts: true, emailMessages: true, xConnections: true, botGrants: true, activity: true,
@@ -77,34 +77,44 @@ export function createAccessService(services: BackendServices, hooks: Revocation
   }
   function readableBot(principal: Principal, bot: P.Bot, manage = false): boolean {
     if (accountBlocked(principal, bot.ownerUserId)) return false;
-    if (principal.kind === 'bot') return principal.botId === bot.id && !manage;
+    if (principal.kind === 'bot') {
+      return !manage && principal.id === bot.id && principal.botId === bot.id && principal.userId === bot.ownerUserId
+        && principal.workspaceId === store.metadata<string>('workspaceId') && workspace().enabled && member(bot.ownerUserId).enabled && hasProductAccess(services, bot.ownerUserId);
+    }
     enabled(principal);
-    if (bot.visibility === 'personal') return bot.ownerUserId === principal.userId;
-    const maintainer = bot.ownerUserId === principal.userId || bot.managerUserIds.includes(principal.userId);
-    return maintainer || (!manage && bot.published);
+    return bot.ownerUserId === principal.userId;
   }
   function bot(principal: Principal, botId: string, manage = false): P.Bot {
     const result = store.get<P.Bot>('bots', botId);
     if (!result || !readableBot(principal, result, manage)) fail('not_found', 'Bot not found.');
     const sidebar = store.metadata<P.SidebarState>(`botSidebar:${principal.userId}:${botId}`);
-    const mainConversationId = result.visibility === 'team' && principal.kind !== 'bot' ? ensureTeamDM(services, result, principal.userId).id : result.mainConversationId;
-    const base = result.ownerUserId === principal.userId && result.mainConversationId !== mainConversationId ? store.require<P.Bot>('bots', botId) : result;
-    const activeRunIds = principal.kind === 'bot' ? base.activeRunIds : base.activeRunIds.filter(runId => {
+    const activeRunIds = principal.kind === 'bot' ? result.activeRunIds : result.activeRunIds.filter(runId => {
       const run = store.get<P.Run>('runs', runId);
       return run !== null && canRead(principal, 'runs', run);
     });
-    return { ...base, mainConversationId, activeRunIds, sidebar: sidebar ?? { pinned: false, hidden: false, sectionId: null, rank: 0, unread: false, notificationsEnabled: true } };
+    return {
+      id: result.id, revision: result.revision, createdAtMs: result.createdAtMs, updatedAtMs: result.updatedAtMs,
+      ownerUserId: result.ownerUserId, machineId: result.machineId, profileId: result.profileId,
+      name: result.name, title: result.title, job: result.job, instructions: result.instructions,
+      avatar: result.avatar, voice: result.voice, language: result.language,
+      skillIds: result.skillIds, referenceAttachmentIds: result.referenceAttachmentIds, mainConversationId: result.mainConversationId,
+      activity: result.activity, activeRunIds, sidebar: sidebar ?? { pinned: false, hidden: false, sectionId: null, rank: 0, unread: false, notificationsEnabled: true },
+    };
   }
   function conversation(principal: Principal, conversationId: string): P.Conversation {
     enabled(principal);
     const result = store.get<P.Conversation>('conversations', conversationId);
-    if (!result || !result.botIds.every(id => { const value = store.get<P.Bot>('bots', id); return value !== null && readableBot(principal, value); })) fail('not_found', 'Conversation not found.');
-    const privateRoom = result.kind === 'dm' || result.kind === 'team_dm' || result.kind === 'task';
-    if (privateRoom ? result.ownerUserId !== principal.userId : result.ownerUserId !== principal.userId && !result.humanUserIds.includes(principal.userId)) fail('not_found', 'Conversation not found.');
+    if (!result || (result.kind !== 'dm' && result.kind !== 'task' && result.kind !== 'group' && result.kind !== 'channel') || !result.botIds.every(id => { const value = store.get<P.Bot>('bots', id); return value !== null && readableBot(principal, value); })) fail('not_found', 'Conversation not found.');
+    if (result.ownerUserId !== principal.userId) fail('not_found', 'Conversation not found.');
     const read = store.metadata<{ throughSeq: number; unread: boolean }>(`conversationRead:${principal.userId}:${conversationId}`);
     const throughSeq = read?.throughSeq ?? 0;
     const unreadCount = store.list<P.TranscriptEntry>('entries', entry => entry.conversationId === result.id && entry.seq > throughSeq && (entry.targetedUserId === null || entry.targetedUserId === principal.userId)).length;
-    return { ...result, lastReadSeq: throughSeq, unreadCount: Math.max(unreadCount, read?.unread ? 1 : 0) };
+    return {
+      id: result.id, revision: result.revision, createdAtMs: result.createdAtMs, updatedAtMs: result.updatedAtMs,
+      kind: result.kind, name: result.name, botIds: result.botIds, ownerUserId: result.ownerUserId,
+      parentConversationId: result.parentConversationId, leadBotId: result.leadBotId, channelBindingId: result.channelBindingId,
+      lastEntryId: result.lastEntryId, activity: result.activity, lastReadSeq: throughSeq, unreadCount: Math.max(unreadCount, read?.unread ? 1 : 0),
+    };
   }
   function machine(principal: Principal, machineId: string, manage = false): P.Machine {
     const current = enabled(principal);
@@ -125,6 +135,10 @@ export function createAccessService(services: BackendServices, hooks: Revocation
     if (!value) return false;
     try {
       enabled(principal, productCollections[collection] !== true);
+      if (typeof value.botId === 'string') {
+        const associatedBot = store.get<P.Bot>('bots', value.botId);
+        if (!associatedBot || !readableBot(principal, associatedBot)) return false;
+      }
       const own = (field: string) => value[field] === principal.userId;
       const room = () => {
         if (typeof value.conversationId === 'string') return Boolean(conversation(principal, value.conversationId));
@@ -138,6 +152,7 @@ export function createAccessService(services: BackendServices, hooks: Revocation
         case 'invites': case 'auditRecords': requireRole(principal, 'admin'); return true;
         case 'integrationTokens': requireRole(principal, 'owner'); return true;
         case 'accountTeardowns': requireRole(principal, 'owner'); return value.workspaceId === principal.workspaceId;
+        case 'pairings': return principal.kind === 'user' && own('ownerUserId') && value.workspaceId === principal.workspaceId;
         case 'authSessions': case 'devices': case 'notifications': case 'sections': case 'composerDrafts': case 'milestones': case 'feedbacks': case 'identityLinks': case 'emailAccounts': case 'xConnections': case 'channelPrincipalLinks': case 'channelLinkFlows': return own('userId');
         case 'voiceSessions': return own('userId') && room();
         case 'emailMessages': return typeof value.accountId === 'string' && store.get<P.EmailAccount>('emailAccounts', value.accountId)?.userId === principal.userId;
@@ -147,7 +162,7 @@ export function createAccessService(services: BackendServices, hooks: Revocation
         case 'machineInvites': return typeof value.machineId === 'string' && Boolean(machine(principal, value.machineId, true));
         case 'terminals': return own('userId') && principal.deviceId !== null && value.deviceId === principal.deviceId;
         case 'entries': return (value.targetedUserId === null || value.targetedUserId === principal.userId) && room();
-        case 'approvals': case 'questions': case 'humanSteps': case 'secretRequests': case 'consents': {
+        case 'approvals': case 'questions': case 'humanSteps': case 'secretRequests': {
           const gate = record(value.gate);
           return gate?.targetUserId === principal.userId && room();
         }
@@ -162,13 +177,13 @@ export function createAccessService(services: BackendServices, hooks: Revocation
         }
         case 'webhookKeys': {
           const routine = typeof value.routineId === 'string' ? store.get<P.Routine>('routines', value.routineId) : null;
-          return routine !== null && routine.ownerUserId === principal.userId && store.metadata<{ id: string }>(`routineKey:${routine.id}`)?.id === value.id;
+          return routine !== null && routine.ownerUserId === principal.userId && Boolean(bot(principal, routine.botId)) && store.metadata<{ id: string }>(`routineKey:${routine.id}`)?.id === value.id;
         }
         case 'drafts': return own('ownerUserId') && room();
-        case 'memories': return value.scope === 'private_note' ? own('userId') && visibleBot() : value.scope === 'personal' ? visibleBot() && (own('userId') || typeof value.botId === 'string' && store.get<P.Bot>('bots', value.botId)?.ownerUserId === principal.userId) : value.scope === 'team' && visibleBot();
+        case 'memories': return visibleBot();
         case 'routines': return own('ownerUserId') && visibleBot();
         case 'reminders': return own('userId') && visibleBot() && room();
-        case 'skills': return own('ownerUserId') || (value.scope === 'team' && typeof value.botId === 'string' && visibleBot());
+        case 'skills': return own('ownerUserId') && (value.botId === null || visibleBot());
         case 'attachments': {
           if (own('ownerUserId')) return true;
           const linkedBot = typeof value.botId === 'string' ? store.get<P.Bot>('bots', value.botId) : null;
@@ -178,9 +193,13 @@ export function createAccessService(services: BackendServices, hooks: Revocation
           }
           return room();
         }
-        case 'connectors': return own('ownerUserId') || (value.shared === true && visibleBot());
-        case 'connectorAuths': return typeof value.connectorId === 'string' && store.get<P.Connector>('connectors', value.connectorId)?.ownerUserId === principal.userId;
-        case 'channelBindings': return own('ownerUserId') || visibleBot();
+        case 'connectors': return own('ownerUserId') && visibleBot();
+        case 'connectorAuths': {
+          const connector = typeof value.connectorId === 'string' ? store.get<P.Connector>('connectors', value.connectorId) : null;
+          const associatedBot = connector ? store.get<P.Bot>('bots', connector.botId) : null;
+          return connector !== null && connector.ownerUserId === principal.userId && associatedBot !== null && readableBot(principal, associatedBot);
+        }
+        case 'channelBindings': return own('ownerUserId') && visibleBot();
         case 'botGrants': return visibleBot();
         case 'preferenceChanges': case 'memoryImportPreviews': return own('userId') && visibleBot();
         case 'activity': return visibleBot() && (value.conversationId === null || room());
@@ -206,7 +225,7 @@ export function createAccessService(services: BackendServices, hooks: Revocation
     if (policy === 'bot') {
       const authority = store.list<{ id: string; botId: string; tokenDigest: string; revoked: boolean }>('botTokens', row => row.tokenDigest === digest && !row.revoked)[0];
       const value = authority && store.get<P.Bot>('bots', authority.botId);
-      if (!value || !member(value.ownerUserId).enabled || !workspace().enabled || store.metadata(`accountDeletion:${value.ownerUserId}`)) fail('unauthenticated', 'Invalid credential.');
+      if (!value || !member(value.ownerUserId).enabled || !workspace().enabled || !hasProductAccess(services, value.ownerUserId) || store.metadata(`accountDeletion:${value.ownerUserId}`)) fail('unauthenticated', 'Invalid credential.');
       return { kind: 'bot', id: value.id, userId: value.ownerUserId, workspaceId, role: member(value.ownerUserId).role, sessionId: null, botId: value.id, deviceId: null };
     }
     if (policy === 'integration') {
@@ -226,14 +245,17 @@ export function createAccessService(services: BackendServices, hooks: Revocation
         const key = store.metadata<{ id: string; digest: string }>(`routineKey:${routine.id}`);
         if (key?.digest !== tokenSha256(match[1])) continue;
         const current = member(routine.ownerUserId);
-        if (!current.enabled || !workspace().enabled || store.metadata(`accountDeletion:${routine.ownerUserId}`) || !store.get<P.Bot>('bots', routine.botId)) fail('unauthenticated', 'Invalid credential.');
+        const bot = store.get<P.Bot>('bots', routine.botId);
+        if (!current.enabled || !workspace().enabled || !hasProductAccess(services, routine.ownerUserId) || store.metadata(`accountDeletion:${routine.ownerUserId}`) || !bot || bot.ownerUserId !== routine.ownerUserId) fail('unauthenticated', 'Invalid credential.');
         return { kind: 'hook', id: key.id, userId: routine.ownerUserId, workspaceId, role: current.role, sessionId: null, botId: routine.botId, deviceId: null };
       }
       fail('unauthenticated', 'Invalid credential.');
     }
     const authority = store.list<SessionSecret>('sessionSecrets', row => row.tokenDigest === digest && !row.revoked)[0];
     const session = authority && store.get<P.AuthSession>('authSessions', authority.id);
-    if (!session || session.expiresAtMs <= services.now()) fail('unauthenticated', 'Session expired or revoked.');
+    if (!session || session.expiresAtMs !== null && session.expiresAtMs <= services.now()) fail('unauthenticated', 'Session expired or revoked.');
+    if (session.deviceId !== null && store.get<P.Device>('devices', session.deviceId)?.userId !== session.userId) fail('unauthenticated', 'Device authority was revoked.');
+    if (session.expiresAtMs === null && (session.deviceId === null || !workspace().enabled)) fail('unauthenticated', 'Paired connection was revoked.');
     const current = member(session.userId);
     const result: Principal = { kind: 'user', id: session.userId, userId: session.userId, workspaceId, role: current.role, sessionId: session.id, botId: null, deviceId: session.deviceId };
     enabled(result, true);
@@ -242,22 +264,25 @@ export function createAccessService(services: BackendServices, hooks: Revocation
     if (session.lastSeenAtMs !== seenAtMs) store.put('authSessions', services.update(session, { lastSeenAtMs: seenAtMs }));
     return result;
   }
-  function session(userId: string, deviceId: string | null = null): Promise<P.AuthResult> {
-    const current = member(userId);
-    if (!current.enabled) fail('unauthenticated', 'Account is not an enabled workspace member.');
-    if (!hasProductAccess(services, userId) && current.role === 'member') fail('policy_denied', 'Workspace or directory policy denies product access.');
-    if (store.metadata(`accountDeletion:${userId}`)) fail('unauthenticated', 'Account deletion has revoked account access.');
-    if (deviceId !== null && store.get<P.Device>('devices', deviceId)?.userId !== userId) fail('not_found', 'Device not found.');
-    const token = opaqueToken();
-    const result = services.resource('session', { userId, deviceId, expiresAtMs: services.now() + lifetime, lastSeenAtMs: services.now(), current: false });
-    store.transaction(() => {
+  function session(userId: string, deviceId: string | null = null, options: AuthSessionOptions = {}): Promise<P.AuthResult> {
+    return Promise.resolve(store.transaction(() => {
+      const current = member(userId);
+      if (!current.enabled) fail('unauthenticated', 'Account is not an enabled workspace member.');
+      if (!hasProductAccess(services, userId) && (options.persistent || current.role === 'member')) fail('policy_denied', 'Workspace or directory policy denies product access.');
+      if (store.metadata(`accountDeletion:${userId}`)) fail('unauthenticated', 'Account deletion has revoked account access.');
+      if (options.persistent && deviceId === null) fail('invalid_request', 'A paired session requires its own device.');
+      if (deviceId !== null && store.get<P.Device>('devices', deviceId)?.userId !== userId) fail('not_found', 'Device not found.');
+      const account = user(userId); const currentWorkspace = workspace();
+      const token = opaqueToken();
+      const result = services.resource('session', { userId, deviceId, expiresAtMs: options.persistent ? null : services.now() + lifetime, lastSeenAtMs: services.now(), current: false });
       store.put('authSessions', result);
       store.put<SessionSecret>('sessionSecrets', { id: result.id, tokenDigest: services.mutations.digest(token), revoked: false });
-    });
-    return Promise.resolve({ token, session: { ...result, current: true }, user: user(userId), workspace: workspace(), member: current });
+      return { token, session: { ...result, current: true }, user: account, workspace: currentWorkspace, member: current };
+    }));
   }
   async function revokeUser(userId: string) {
     store.transaction(() => {
+      revokeUserPairings(services, userId);
       for (const value of store.list<P.AuthSession>('authSessions', row => row.userId === userId)) {
         const authority = store.get<SessionSecret>('sessionSecrets', value.id);
         if (authority) store.put('sessionSecrets', { ...authority, revoked: true });
