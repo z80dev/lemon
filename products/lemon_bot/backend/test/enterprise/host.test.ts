@@ -3,6 +3,7 @@ import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { z } from 'zod';
 import type * as P from '../../../contracts/protocol';
 import type { BackendServices, LemonService, Principal, RequestContext, Route } from '../../src/core/services';
 import { Store } from '../../src/core/store';
@@ -22,7 +23,7 @@ import { join } from 'node:path';
 const [directory, mode, behavior] = process.argv.slice(2);
 const operation = JSON.parse(await Bun.stdin.text());
 const path = join(directory, operation.operationId + '.json');
-appendFileSync(join(directory, 'driver.log'), JSON.stringify({id:operation.operationId, mode, kind:operation.kind, phase:operation.phase, input:operation}) + '\\n');
+appendFileSync(join(directory, 'driver.log'), JSON.stringify({id:operation.operationId, mode, kind:operation.kind, phase:operation.phase, argv:process.argv.slice(2), input:operation}) + '\\n');
 let answer;
 if (operation.kind === 'inspect') {
   const inspection = existsSync(join(directory,'inspection.json')) ? JSON.parse(readFileSync(join(directory,'inspection.json'),'utf8')) : {hostState:'awake',inactiveSinceMs:0};
@@ -67,12 +68,17 @@ if (operation.kind === 'inspect') {
   writeFileSync(path,JSON.stringify(answer));
 }
 if (mode === 'apply' && behavior === 'lose') process.exit(0);
-const receipt = {type:'lemon_bot_host_result',version:1,operationId:behavior==='wrong'&&mode==='apply'?'wrong_operation':operation.operationId,machineId:operation.machineId,configDigest:operation.configDigest,inputDigest:operation.inputDigest,...answer};
+const receipt = {type:'lemon_bot_host_result',version:1,operationId:behavior==='wrong'&&mode==='apply'?'wrong_operation':operation.operationId,machineId:operation.machineId,configDigest:behavior==='wrong_config'&&mode==='apply'?'wrong_config':operation.configDigest,inputDigest:behavior==='wrong_input'&&mode==='apply'?'wrong_input':operation.inputDigest,...answer};
 process.stdout.write('\\n' + JSON.stringify(receipt) + '\\n');
 `;
 
+const ptyFrame = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('ready') }),
+  z.object({ type: z.literal('output'), dataBase64: z.string() }),
+  z.object({ type: z.literal('exit'), code: z.number().int() }),
+]);
 interface Shell {
-  process: Bun.Subprocess<'pipe', 'pipe', 'pipe'>;
+  process: Bun.Subprocess<'pipe', 'pipe', 'ignore'>;
   input: Bun.FileSink;
   seq: number;
   streamed: Promise<void>;
@@ -88,36 +94,74 @@ class ActualPTY implements LemonService {
   onConnected(listener: () => void) { this.connections.add(listener); return () => { this.connections.delete(listener); }; }
   start() { this.connected = true; for (const listener of this.connections) listener(); }
   close() { this.connected = false; for (const shell of this.shells.values()) shell.process.kill(); }
+  private async packet(shell: Shell, value: unknown) {
+    const data = Buffer.from(JSON.stringify(value)), header = Buffer.alloc(4);
+    header.writeUInt32BE(data.length);
+    shell.input.write(header); shell.input.write(data); await shell.input.flush();
+    data.fill(0);
+  }
   async call<T = unknown>(method: string, params: Record<string, unknown> = {}): Promise<T> {
     this.calls.push({ method, params });
     let response: unknown;
     if (method === 'node.shell.open') {
       const shellId = `shell_${this.calls.length}`;
-      const argv = process.platform === 'darwin'
-        ? ['/usr/bin/script', '-q', '/dev/null', '/bin/bash', '--noprofile', '--norc']
-        : ['/usr/bin/script', '-q', '-f', '-c', '/bin/bash --noprofile --norc', '/dev/null'];
-      const processHandle = Bun.spawn(argv, { cwd: String(params.cwd), stdin: 'pipe', stdout: 'pipe', stderr: 'pipe', env: { ...process.env, PS1: '', PROMPT_COMMAND: '' } });
+      const python = Bun.which('python3'); if (!python) throw new Error('Native node PTY requires python3.');
+      // Use the worker's actual pty.fork helper, not script(1), whose macOS
+      // terminal setup expects its own stdin to be a terminal rather than a pipe.
+      const helper = join(import.meta.dir, '../../../../../apps/coding_agent/priv/node_pty.py');
+      const processHandle = Bun.spawn([python, helper, String(params.cwd), '/bin/bash', String(params.cols ?? 80), String(params.rows ?? 24)], {
+        stdin: 'pipe', stdout: 'pipe', stderr: 'ignore', env: { PATH: process.env.PATH, HOME: String(params.cwd), PS1: '', PS2: '', PROMPT_COMMAND: '' },
+      });
       const shell: Shell = { process: processHandle, input: processHandle.stdin, seq: 0, streamed: Promise.resolve() };
+      let resolveReady!: () => void, rejectReady!: (error: Error) => void;
+      const ready = new Promise<void>((resolve, reject) => { resolveReady = resolve; rejectReady = reject; });
       this.shells.set(shellId, shell);
       shell.streamed = (async () => {
         const reader = processHandle.stdout.getReader();
+        let incoming: Buffer = Buffer.alloc(0), exited = false;
         try {
           while (true) {
             const chunk = await reader.read(); if (chunk.done) break;
-            const payload = { shellId, dataBase64: Buffer.from(chunk.value).toString('base64'), seq: ++shell.seq };
-            for (const listener of this.listeners) listener('node.shell.output', payload);
+            incoming = Buffer.concat([incoming, chunk.value]);
+            while (incoming.length >= 4) {
+              const length = incoming.readUInt32BE(0);
+              if (length > 2 * 1024 * 1024) throw new Error('Native PTY frame exceeds its bound.');
+              if (incoming.length < length + 4) break;
+              const frame = ptyFrame.parse(JSON.parse(incoming.subarray(4, length + 4).toString('utf8')));
+              incoming = incoming.subarray(length + 4);
+              if (frame.type === 'ready') resolveReady();
+              else if (frame.type === 'output') {
+                const payload = { shellId, dataBase64: frame.dataBase64, seq: ++shell.seq };
+                for (const listener of this.listeners) listener('node.shell.output', payload);
+                await this.packet(shell, { type: 'ack' });
+              } else {
+                exited = true;
+                for (const listener of this.listeners) listener('node.shell.exit', { shellId, code: frame.code });
+              }
+            }
           }
-        } finally { reader.releaseLock(); }
-        const code = await processHandle.exited;
-        for (const listener of this.listeners) listener('node.shell.exit', { shellId, code });
-        this.shells.delete(shellId);
+          const code = await processHandle.exited;
+          if (!exited) for (const listener of this.listeners) listener('node.shell.exit', { shellId, code: code === 0 ? 124 : code });
+        } catch (error) {
+          rejectReady(error instanceof Error ? error : new Error('Native PTY transport failed.'));
+          processHandle.kill();
+          for (const listener of this.listeners) listener('node.shell.exit', { shellId, code: 124 });
+        } finally {
+          reader.releaseLock(); rejectReady(new Error('Native PTY exited before readiness.'));
+          this.shells.delete(shellId);
+        }
       })();
-      response = { shellId };
+      // The worker-owned policy packet precedes all terminal input and pins cwd
+      // under this fixture's sole admitted root.
+      await this.packet(shell, { cwd: String(params.cwd), roots: [String(params.cwd)] });
+      await ready; response = { shellId };
     } else if (method === 'node.shell.input') {
       const shell = this.shells.get(String(params.shellId)); if (!shell) throw new Error('Shell absent.');
-      shell.input.write(Buffer.from(String(params.dataBase64), 'base64')); await shell.input.flush(); response = { shellId: params.shellId, accepted: true };
+      await this.packet(shell, { type: 'input', dataBase64: String(params.dataBase64) }); response = { shellId: params.shellId, accepted: true };
     } else if (method === 'node.shell.close') {
-      this.shells.get(String(params.shellId))?.process.kill(); response = { shellId: params.shellId, accepted: true };
+      const shell = this.shells.get(String(params.shellId));
+      if (shell) await this.packet(shell, { type: 'close' });
+      response = { shellId: params.shellId, accepted: true };
     } else throw new Error('Unexpected upstream method.');
     // This generic test transport represents the real JSON RPC decoding boundary.
     return response as T;
@@ -128,7 +172,7 @@ interface Fixture {
   owner: Principal; outsider: Principal; admin: Principal; directory: string; lemon: ActualPTY;
   request<T>(method: string, path: string, body?: unknown, actor?: Principal): Promise<T>;
   setBehavior(behavior: string): void;
-  log(): Promise<{ id: string; mode: string; kind: string; phase?: string; input: Record<string, unknown> }[]>;
+  log(): Promise<{ id: string; mode: string; kind: string; phase?: string; argv: string[]; input: Record<string, unknown> }[]>;
   close(): Promise<void>;
 }
 const fixtures: Fixture[] = [];
@@ -158,6 +202,7 @@ async function fixture(reviewedSetups: ReviewedSetup[] = []): Promise<Fixture> {
     get gates(): BackendServices['gates'] { return unexpected('gates'); },
     integrations: {
       effectivePolicy: (actor, botId) => policy.effectivePolicy(actor, botId),
+      canReadResource: (actor, collection, entity) => createHostServices(services).canReadResource(actor, collection, entity) ?? false,
       admission: () => unexpected('integration admission'),
       connectorConfig: () => unexpected('connector configuration'),
       sendApprovedDraft: () => unexpected('approved draft delivery'),
@@ -294,6 +339,64 @@ describe('trusted owned-host driver over actual node PTY', () => {
     const body = { clientNonce: intent('idem_start'), revision: preview.revision, confirmationToken: preview.confirmationToken, confirmName: preview.confirmName, machineIds: ['machine_a'], action: 'restart_worker' };
     const first = await h.request<P.HostOperation>('POST', '/v1/host-operations', body); await h.host.work(`operation:${first.id}`, async () => {});
     const repeat = await h.request<P.HostOperation>('POST', '/v1/host-operations', body); expect(repeat).toEqual(first); expect((await h.log()).filter(l => l.mode === 'apply')).toHaveLength(1);
+    expect(h.services.auth.canRead(h.owner, 'hostOperations', h.store.require('hostOperations', first.id))).toBe(true);
+    const membership = h.services.auth.member(h.owner.userId);
+    h.store.put('members', h.services.update(membership, { role: 'admin' }));
+    const machine = h.store.require<P.Machine>('machines', 'machine_a');
+    h.store.put('machines', h.services.update(machine, { ownerUserId: h.outsider.userId }));
+    await expect(h.request('POST', '/v1/host-operations', body)).rejects.toMatchObject({ code: 'not_found' });
+    expect((await h.log()).filter(l => l.mode === 'apply')).toHaveLength(1);
+    h.store.put('machines', h.services.update(h.store.require<P.Machine>('machines', machine.id), { ownerUserId: h.owner.userId }));
+    expect(await h.request('POST', '/v1/host-operations', body)).toEqual(first);
+    h.store.put('members', h.services.update(h.services.auth.member(h.owner.userId), { enabled: false }));
+    await expect(h.request('POST', '/v1/host-operations', body)).rejects.toMatchObject({ code: 'not_found' });
+    expect((await h.log()).filter(l => l.mode === 'apply')).toHaveLength(1);
+  });
+  test('host resource visibility requires current management authority over every exact target', async () => {
+    const h = await fixture(), operation = await startOperation(h, 'update', ['machine_a', 'machine_b']);
+    await h.host.work(`operation:${operation.id}`, async () => {});
+    const first = h.store.require<P.Machine>('machines', 'machine_a'), second = h.store.require<P.Machine>('machines', 'machine_b');
+    h.store.put('machines', h.services.update(first, { ownerUserId: h.admin.userId }));
+    expect(h.host.canReadResource(h.admin, 'hostOperations', operation)).toBe(false);
+    h.store.put('machines', h.services.update(second, { ownerUserId: h.admin.userId }));
+    expect(h.host.canReadResource(h.admin, 'hostOperations', operation)).toBe(true);
+    expect(h.host.canReadResource(h.admin, 'setupManifests', { machineIds: ['machine_a', 'machine_b'] })).toBe(true);
+    expect(h.host.canReadResource(h.admin, 'policyApplications', { value: { machineId: 'machine_a' } })).toBe(true);
+    expect(h.host.canReadResource(h.admin, 'policyApplications', { machineId: 'machine_a' })).toBe(true);
+    expect(h.host.canReadResource(h.admin, 'egressRoutes', { ownerUserId: h.admin.userId, machineId: 'machine_a', throughMachineId: 'machine_b' })).toBe(true);
+    h.store.put('machines', h.services.update(h.store.require<P.Machine>('machines', second.id), { ownerUserId: h.owner.userId, accessUserIds: [h.admin.userId] }));
+    expect(h.host.canReadResource(h.admin, 'hostOperations', operation)).toBe(false);
+    expect(h.host.canReadResource(h.admin, 'setupManifests', { machineIds: ['machine_a', 'machine_b'] })).toBe(false);
+    expect(h.host.canReadResource(h.admin, 'setupRuns', { machineId: 'machine_b' })).toBe(false);
+    expect(h.host.canReadResource(h.admin, 'egressRoutes', { ownerUserId: h.admin.userId, machineId: 'machine_a', throughMachineId: 'machine_b' })).toBe(false);
+    expect(h.host.canReadResource(h.admin, 'hostOperations', { results: [] })).toBe(false);
+    expect(h.host.canReadResource(h.admin, 'unownedCollection', operation)).toBeUndefined();
+    h.store.put('members', h.services.update(h.services.auth.member(h.admin.userId), { role: 'member' }));
+    expect(h.host.canReadResource(h.admin, 'hostOperations', { results: [{ machineId: 'machine_a' }] })).toBe(false);
+    expect(h.host.canReadResource(h.admin, 'networkPolicies', { scope: 'workspace', directoryGroupId: null })).toBe(false);
+    expect(h.host.canReadResource(h.owner, 'networkPolicies', { scope: 'workspace', directoryGroupId: null })).toBe(true);
+    expect(h.host.canReadResource(h.owner, 'networkPolicies', { scope: 'directory_group', directoryGroupId: 'absent' })).toBe(false);
+  });
+  test('long Unicode and shell metacharacters remain exact immutable argv words', async () => {
+    const h = await fixture(), argument = `${"漢字'".repeat(3000)}; touch argv-injected`;
+    h.services.config.operator.hostDrivers[0]!.actions.update!.argv.push(argument);
+    const operation = await startOperation(h); await h.host.work(`operation:${operation.id}`, async () => {});
+    expect(h.store.require<P.HostOperation>('hostOperations', operation.id).state).toBe('completed');
+    expect((await h.log()).find(l => l.mode === 'apply')?.argv.at(-1)).toBe(argument);
+    await expect(readFile(join(h.directory, 'argv-injected'))).rejects.toMatchObject({ code: 'ENOENT' });
+    const inputs = h.lemon.calls.filter(c => c.method === 'node.shell.input').map(c => Buffer.from(String(c.params.dataBase64), 'base64'));
+    const lines = Buffer.concat(inputs).toString('utf8').split('\n');
+    expect(lines.every(line => Buffer.byteLength(line, 'utf8') < 1024)).toBe(true);
+  });
+  test.each(['wrong_config', 'wrong_input'])('rejects %s receipt and probes the original effect without redispatch', async behavior => {
+    const h = await fixture(); h.setBehavior(behavior);
+    const operation = await startOperation(h); await h.host.work(`operation:${operation.id}`, async () => {});
+    expect(h.store.require<P.HostOperation>('hostOperations', operation.id).state).toBe('outcome_unknown');
+    await h.host.reconcile();
+    expect(h.store.require<P.HostOperation>('hostOperations', operation.id).state).toBe('completed');
+    const log = await h.log();
+    expect(log.filter(l => l.mode === 'apply')).toHaveLength(1);
+    expect(log.filter(l => l.mode === 'probe').map(l => l.id)).toEqual([log[0]!.id]);
   });
   test('verified existing no-op is skipped with a concrete reason, never reported as success', async () => {
     const h = await fixture(); h.setBehavior('skip'); expect(createHostServices(h.services)).toBe(h.host);

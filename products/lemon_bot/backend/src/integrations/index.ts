@@ -133,11 +133,9 @@ export function createIntegrationServices(s: BackendServices): Services {
     refreshPolicy: (actor, botIds, options) => refreshEffectivePolicy(s, actor, botIds, options),
     providerCapabilities: () => ({ ...audio.providerCapabilities(), ...push.providerCapabilities(), inventory: [...channels.inventory(), ...email.inventory(), ...(x.inventory() ? [x.inventory()] : []), ...audio.inventory(), ...push.inventory()] }),
     canReadResource(actor, collection, entity) {
-      for (const domain of [connectors, channels, email, x, exports]) { const decision = domain.canReadResource(actor, collection, entity); if (decision !== undefined) return decision; }
-      if (['directoryGroups', 'groupPolicies', 'networkPolicies', 'policyApplications', 'setupManifests', 'setupRuns', 'hostOperations', 'egressRoutes', 'oidcProviders'].includes(collection)) {
-        if (actor.role !== 'admin' && actor.role !== 'owner' || !entity || typeof entity !== 'object') return false;
-        const target = entity as { machineId?: string; machineIds?: string[]; throughMachineId?: string };
-        return [...(target.machineId ? [target.machineId] : []), ...(target.machineIds ?? []), ...(target.throughMachineId ? [target.throughMachineId] : [])].every(id => s.auth.canRead(actor, 'machines', s.store.get('machines', id)));
+      for (const domain of [connectors, channels, email, x, host, exports]) { const decision = domain.canReadResource(actor, collection, entity); if (decision !== undefined) return decision; }
+      if (['directoryGroups', 'groupPolicies', 'oidcProviders'].includes(collection)) {
+        return (actor.role === 'admin' || actor.role === 'owner') && !!entity && typeof entity === 'object';
       }
       if (collection === 'spendLimits') return spend.canRead(actor, entity as P.SpendLimit);
       if (collection === 'identityLinks') return !!entity && typeof entity === 'object' && 'userId' in entity && entity.userId === actor.userId;

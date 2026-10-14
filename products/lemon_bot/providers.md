@@ -107,6 +107,8 @@ Native X CRC and `x-twitter-webhooks-signature` are supported; normalized bridge
 
 Drivers execute over the destination's real node PTY. A stable operation ID and configuration/input digests accompany JSON input. The driver must return a bounded JSON-line receipt:
 
+Command and JSON framing is bounded by escaped **UTF-8 bytes**, including quoted Unicode argv, not JavaScript character count. Verified host resources and replay receipts remain readable only under current authority over every affected destination, including all bulk targets and both egress endpoints.
+
 ```json
 {"type":"lemon_bot_host_result","version":1,"operationId":"persisted_operation_id","machineId":"machine_id","configDigest":"expected_digest","inputDigest":"expected_digest","state":"succeeded","exitCode":0}
 ```
@@ -136,6 +138,8 @@ The adapter issues authenticated `GET <apiBaseUrl>/spend` with `providerAccount`
 Export destinations use operator-approved `exportAllowedOrigins`, HTTPS, no redirects, optional backend server `secretRef`, and `ndjson_webhook` or `otlp_http`. Private HTTPS collector exceptions additionally appear in private `exportPrivateOrigins`, a subset of `exportAllowedOrigins`. Audit/action/usage are separate streams, never arbitrary shell logs. Content is off by default and requires global enablement, requesting actor's actual conversation access and every current human participant's own consent. Admin status cannot expose another user's private DM.
 
 Outbox delivery persists a stable idempotency key and cursor; enabling a stream starts at the current watermark, never automatic old-history backfill. Explicit historical exports use selected ranges/conversations, persist actual bytes as an ACL-bound attachment only after success, and recheck consent at dispatch and download. Revoking consent invalidates undelivered content and previously issued product download access; acknowledged external copies cannot be erased by a product toggle. Known credentials and secret-shaped keys are scrubbed, but operators must review residual personal-data risk.
+
+Historical ranges are lower-inclusive and upper-exclusive (`fromAtMs <= timestamp < toAtMs`), matching audit and usage queries. Take the snapshot boundary after the records to include them. Usage exports project only canonical report fields, preserve measured numeric input/output token counts, and still remove credential-shaped values or unrelated extra fields.
 
 ## Voice and push
 

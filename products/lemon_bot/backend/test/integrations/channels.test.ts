@@ -57,10 +57,10 @@ describe('Slack app installation and verified channel identities', () => {
       const body = { type: 'event_callback', team_id: 'T1', api_app_id: 'A1', event_id: 'E_link', event: { type: 'message', user: 'U_own', channel: 'D1', channel_type: 'im', ts: '1800000000.1', text: flow.linkCode } };
       const verified = await ingress.handler(context(services, ingress, null, undefined, {}, '', signedSlack(services, body))) as P.IntegrationIngressReceipt; expect(verified.accepted).toBe(false); expect(submissions).toHaveLength(0);
       const proof = await poll.handler(context(services, poll, principal, undefined, { id: flow.id })) as P.ChannelLinkFlow; expect(proof.state).toBe('verified'); expect(proof.externalUserId).toBe('U_own'); expect(proof.verificationCode).toBeTruthy();
-      await expect(link.handler(context(services, link, principal, { clientNonce: 'abcdefghijklmnop', channelBindingId: binding.id, externalUserId: 'U_foreign', verificationCode: proof.verificationCode }))).rejects.toMatchObject({ code: 'unauthenticated' });
+      await expect(Promise.resolve().then(() => link.handler(context(services, link, principal, { clientNonce: 'abcdefghijklmnop', channelBindingId: binding.id, externalUserId: 'U_foreign', verificationCode: proof.verificationCode })))).rejects.toMatchObject({ code: 'unauthenticated' });
       const linked = await link.handler(context(services, link, principal, { clientNonce: 'abcdefghijklmnop', channelBindingId: binding.id, externalUserId: 'U_own', verificationCode: proof.verificationCode })) as P.ChannelPrincipalLink;
       expect(linked.userId).toBe(principal.userId); expect(linked.verified).toBe(true);
-      await expect(link.handler(context(services, link, principal, { clientNonce: 'different_nonce_16', channelBindingId: binding.id, externalUserId: 'U_own', verificationCode: proof.verificationCode }))).rejects.toMatchObject({ code: 'unauthenticated' });
+      await expect(Promise.resolve().then(() => link.handler(context(services, link, principal, { clientNonce: 'different_nonce_16', channelBindingId: binding.id, externalUserId: 'U_own', verificationCode: proof.verificationCode })))).rejects.toMatchObject({ code: 'unauthenticated' });
     } finally { mocked.restore(); closeFixture(services); }
   });
   test('unlinked actor never spends owner; mapped DMs share private context; mentions/own thread replies dedupe', async () => {
