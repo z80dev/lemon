@@ -15,6 +15,13 @@ defmodule LemonCore.NodeRegistryDurableIDTest do
     assert :ok = NodeRegistry.register(victim, "victim-name-#{victim}", self())
     assert :ok = NodeRegistry.register(attacker, victim, attacker_pid)
     assert {:ok, %{id: ^victim}} = NodeRegistry.resolve_id(victim)
+    assert {:ok, %{id: ^victim}} = NodeRegistry.resolve(victim)
+    assert NodeRegistry.online?(victim)
+    assert {:ok, legacy} = NodeRegistry.invoke(victim, "work.run", %{})
+    assert_receive {:node_event, "node.invoke.request", %{"invokeId" => ^legacy, "nodeId" => ^victim}}
+    assert :ok = NodeRegistry.complete_session(victim, self(), 0, legacy, %{})
+    assert_receive {:lemon_node_result, ^legacy, {:ok, %{}}}
+    refute_receive {:attacker_received, _}
     assert {:ok, invoke_id} = NodeRegistry.invoke_node(victim, "node.secrets.set", %{"name" => "token", "value" => "private"})
     assert_receive {:node_event, "node.invoke.request", %{"invokeId" => ^invoke_id, "nodeId" => ^victim}}
     refute_receive {:attacker_received, _}
@@ -23,9 +30,31 @@ defmodule LemonCore.NodeRegistryDurableIDTest do
 
     assert :ok = NodeRegistry.unregister(victim, self())
     assert {:error, :not_found} = NodeRegistry.resolve_id(victim)
+    assert {:error, :not_found} = NodeRegistry.resolve(victim)
+    refute NodeRegistry.online?(victim)
+    assert {:error, {:node_offline, ^victim}} = NodeRegistry.invoke(victim, "work.run", %{})
+    assert {:ok, %{id: ^attacker}} = NodeRegistry.resolve(attacker)
     assert {:error, {:node_offline, ^victim}} = NodeRegistry.invoke_node(victim, "node.fs.read", %{"path" => "private"})
     assert {:error, {:node_offline, ^victim}} = NodeRegistry.invoke_node(victim, "node.shell.open", %{"cwd" => "."})
     refute_receive {:attacker_received, _}
+  end
+
+  test "unique live names resolve exact durable identity and privacy descriptor is one predicate" do
+    id = "human-id-#{System.unique_integer([:positive])}"
+    name = "human-name-" <> id
+    owner = self()
+    capable = %{capabilities: %{"coding_agent.run" => %{"version" => 1, "nativePrivacyContext" => %{"version" => 1}}}}
+    on_exit(fn -> NodeRegistry.unregister(id, owner) end)
+    assert :ok = NodeRegistry.register_session(id, name, owner, 3, capable)
+    assert {:ok, %{id: ^id, pid: ^owner, generation: 3, metadata: metadata}} = NodeRegistry.resolve(name)
+    assert {:ok, %{id: ^id}} = NodeRegistry.resolve(id)
+    assert NodeRegistry.native_privacy_context_supported?(metadata)
+    assert NodeRegistry.native_privacy_context_supported?(%{"capabilities" => %{"coding_agent.run" => %{"version" => 1, "nativePrivacyContext" => %{"version" => 1}}}})
+    refute NodeRegistry.native_privacy_context_supported?(%{capabilities: %{"coding_agent.run" => %{"nativePrivacyContext" => %{"version" => 1}}}})
+    refute NodeRegistry.native_privacy_context_supported?(%{capabilities: %{"coding_agent.run" => %{"version" => 1}}})
+    refute NodeRegistry.native_privacy_context_supported?(%{})
+    refute NodeRegistry.native_privacy_context_supported?(nil)
+    assert {:error, :not_found} = NodeRegistry.resolve("missing-" <> name)
   end
 
   test "native execution grants use their bounded item policy without widening unrelated methods or caller byte limits" do

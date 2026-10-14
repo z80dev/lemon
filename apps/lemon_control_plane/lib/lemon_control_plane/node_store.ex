@@ -145,7 +145,11 @@ defmodule LemonControlPlane.NodeStore do
   def fetch_nodes, do: Store.fetch_all(@registry_table)
 
 
-  @doc "Reserves a trimmed durable node name for one node ID."
+  @doc """
+  Reserves a trimmed durable node name for one node ID. A name never equals
+  another durable node's ID, so exact-ID-first selectors cannot be shadowed
+  after restart.
+  """
   @spec reserve_node_name(binary(), binary()) ::
           :ok | {:error, :invalid_name | {:name_taken, binary()} | term()}
   def reserve_node_name(name, node_id) when is_binary(name) and is_binary(node_id) do
@@ -212,7 +216,7 @@ defmodule LemonControlPlane.NodeStore do
 
   defp durable_name_taken?(name, node_id) do
     Enum.any?(list_nodes(), fn {existing_id, node} ->
-      existing_id != node_id and node_name(node) == name
+      existing_id != node_id and (existing_id == name or node_name(node) == name)
     end)
   end
 

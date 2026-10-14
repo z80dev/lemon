@@ -769,6 +769,12 @@ steer/redirect are invocation-bound and require destination acknowledgement.
 Plaintext off loopback requires explicit `--allow-insecure-controller` and a
 verified encrypted overlay; otherwise use TLS.
 
+Durable node names are unique and never equal another durable node ID.
+Name-or-ID selectors (profile `node`, `agent` node targets) resolve an exact
+live durable ID first, and an authorized durable ID never falls back to another
+node's name while offline; private execution then pins that ID, connection and
+generation.
+
 ### Live named-node runs
 
 `coding_agent.run` workers stream live deltas, tool actions and checkpoints through

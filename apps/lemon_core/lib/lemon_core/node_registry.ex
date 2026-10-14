@@ -3,8 +3,10 @@ defmodule LemonCore.NodeRegistry do
   Live registry and targeted invocation broker for named Lemon execution nodes.
 
   Nodes are registered by the control-plane WebSocket connection after node
-  authentication. Runtime code can then address a node by its human-readable
-  name without depending on the control-plane application.
+  authentication. Runtime code addresses a node by exact durable ID or unique
+  live name without depending on the control plane; exact IDs resolve first and
+  an authorized durable ID never resolves through another node's name, even
+  offline.
 
   The registry deliberately tracks live connections only. Pairing credentials
   and durable node metadata remain owned by the control plane; a node is
@@ -70,6 +72,11 @@ defmodule LemonCore.NodeRegistry do
   @spec list() :: [node_info()]
   def list, do: GenServer.call(__MODULE__, :list)
 
+  @doc """
+  Resolves a name-or-ID selector. An exact live durable ID wins; an authorized
+  durable ID never resolves through another node's name, even while offline;
+  otherwise a unique live name resolves.
+  """
   @spec resolve(String.t()) :: {:ok, node_info()} | {:error, :not_found}
   def resolve(name_or_id) when is_binary(name_or_id) do
     GenServer.call(__MODULE__, {:resolve, String.trim(name_or_id)})
@@ -83,6 +90,20 @@ defmodule LemonCore.NodeRegistry do
   @spec online?(String.t()) :: boolean()
   def online?(name_or_id) when is_binary(name_or_id) do
     match?({:ok, _node}, resolve(name_or_id))
+  end
+
+  @doc """
+  Whether live node metadata carries the native run privacy descriptor:
+  `coding_agent.run` version 1 with `nativePrivacyContext` version 1. Admission
+  and pinned private dispatch share this predicate.
+  """
+  @spec native_privacy_context_supported?(term()) :: boolean()
+  def native_privacy_context_supported?(metadata) do
+    case metadata do
+      %{capabilities: %{"coding_agent.run" => %{"version" => 1, "nativePrivacyContext" => %{"version" => 1}}}} -> true
+      %{"capabilities" => %{"coding_agent.run" => %{"version" => 1, "nativePrivacyContext" => %{"version" => 1}}}} -> true
+      _ -> false
+    end
   end
 
   @doc """
@@ -742,12 +763,22 @@ defmodule LemonCore.NodeRegistry do
     end
   end
 
-  defp resolve_node(state, name_or_id) do
-    node_id = Map.get(state.names, name_or_id, name_or_id)
+  # Exact durable IDs win. An ID this registry has authorized (live or retained
+  # by its session floor) never falls back to another node's name while offline;
+  # only otherwise does a unique live name resolve.
+  defp resolve_node(state, selector) do
+    case Map.fetch(state.nodes, selector) do
+      {:ok, node} ->
+        {:ok, node}
 
-    case Map.get(state.nodes, node_id) do
-      nil -> {:error, :not_found}
-      node -> {:ok, node}
+      :error ->
+        with false <- Map.has_key?(state.generation_floors, selector),
+             {:ok, node_id} <- Map.fetch(state.names, selector),
+             {:ok, node} <- Map.fetch(state.nodes, node_id) do
+          {:ok, node}
+        else
+          _ -> {:error, :not_found}
+        end
     end
   end
 
@@ -766,13 +797,6 @@ defmodule LemonCore.NodeRegistry do
     end
   end
 
-  defp native_privacy_context_supported?(metadata) do
-    case metadata do
-      %{capabilities: %{"coding_agent.run" => %{"version" => 1, "nativePrivacyContext" => %{"version" => 1}}}} -> true
-      %{"capabilities" => %{"coding_agent.run" => %{"version" => 1, "nativePrivacyContext" => %{"version" => 1}}}} -> true
-      _ -> false
-    end
-  end
   defp process_execution_supported?(metadata) do
     capabilities = case metadata do
       %{capabilities: capabilities} -> capabilities

@@ -17,6 +17,11 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
 
 ### Fixed
 
+- `LemonCore.NodeRegistry` name-or-ID selectors resolve an exact live durable
+  ID before a unique live name; an authorized durable ID never falls back to
+  another node's name while offline. `native_privacy_context_supported?/1` is
+  the single native privacy-descriptor predicate shared by admission and
+  pinned dispatch.
 - `LemonCore.Durable` performs real descriptor `fsync` plus Darwin `F_FULLFSYNC`
   through its packaged Python 3 helper for files and directories. JSONL sync
   and atomic file-key durability can therefore complete on supported macOS

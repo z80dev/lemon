@@ -296,6 +296,28 @@ defmodule LemonControlPlane.NamedNodeIntegrationTest do
              NodePairApprove.handle(%{"pairingId" => pairing_id}, @operator_ctx)
   end
 
+  test "durable names never equal another durable node ID" do
+    existing_id = unique("existing-id")
+    put_node(existing_id, "Existing #{System.unique_integer([:positive])}")
+
+    assert {:error, {:name_taken, ^existing_id}} =
+             NodeStore.reserve_node_name(existing_id, unique("other"))
+
+    pairing_id = unique("pairing")
+
+    :ok =
+      NodeStore.put_pairing(pairing_id, %{
+        status: :pending,
+        node_name: existing_id,
+        node_type: "worker",
+        capabilities: %{},
+        expires_at_ms: System.system_time(:millisecond) + 60_000
+      })
+
+    assert {:error, {:conflict, "Node name is already in use"}} =
+             NodePairApprove.handle(%{"pairingId" => pairing_id}, @operator_ctx)
+  end
+
   test "approved pairing reissues a challenge for the same node after response loss" do
     pairing_id = unique("recover-pairing")
     node_name = "Recover Node #{System.unique_integer([:positive])}"
