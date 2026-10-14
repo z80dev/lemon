@@ -1003,6 +1003,13 @@ input = ["text"]                   # "text" and/or "image"; default ["text"]
   Wire roots are protocol-specific: OpenAI APIs usually use `/v1`, Anthropic
   uses an origin/prefix to which `/v1/messages` is appended, and Google uses
   a root such as `/v1beta` to which `/models/<id>:streamGenerateContent` is appended.
+  Picker discovery and subsequent model resolution use the same first healthy
+  credential from the selected routing pool as native requests, followed by
+  the configured default credential candidate. An unresolved pool reference
+  does not authorize another pool or a built-in provider's ambient key.
+  Cache listings and model metadata are isolated by the actual resolved
+  credential (hashed, never stored in cache metadata), endpoint, wire API
+  and headers.
 - On a built-in provider (`anthropic`, `openai`, ...), `headers` are sent with
   every request and `[[providers.<id>.models]]` entries add catalog models or
   replace the catalog entry with the same id, inheriting the provider's wire API
