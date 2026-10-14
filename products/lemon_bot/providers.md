@@ -48,6 +48,8 @@ Managed-directory local edits are denied by default. Private `managedDirectoryOw
 
 Governance defaults: group access `all`, no sudo/egress, network hard lock on, review required, no channel/email/X/content-export enablement, and inactive host management off (30-day default). Eligible groups widen ordinary grants; personal restrictions and required ask-first rules tighten them. Workspace execution ceiling and network locks remain ceilings. Group network replacements intersect when unlocked. Published default Team Bots do not confer management or another member's private-chat authority.
 
+Local, signed OIDC and SCIM directory changes reconcile native authority before acknowledging the mutation, including desired changes committed before a later authentication/provider error. Membership changes fence only added/removed users; a group-policy revision fences every affected member, not unrelated users or label-only edits. Global governance changes install the shared floor; caller-specific restrictions never overwrite a Team Bot with its owner's personal policy. Unknown terminal/profile acknowledgments retain admission fences rather than resume stale authority.
+
 ## MCP connector providers
 
 `connectorProviders` is optional canonical private configuration:
