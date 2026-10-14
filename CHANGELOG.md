@@ -47,6 +47,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Session context queries fall back to saved accounting when the live owner
+  retires during the read, instead of exiting on a stale registry PID. Timeouts
+  and unexpected owner crashes still surface.
 - Background process launches no longer bypass admission after queue failures.
   Fixed, owner-bound launch identities reconcile lost acknowledgements and
   reject conflicting retries instead of risking duplicate external effects.
