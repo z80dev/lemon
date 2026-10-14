@@ -497,18 +497,20 @@ defmodule LemonAgent.ModelRuntime.Credentials do
 
   defp map_value(_, _), do: nil
 
+  # `auth_source = "oauth"` means the stored sign-in (api_key_secret) is the
+  # credential: an ambient API-key env var or plain api_key must not shadow it.
   defp resolve_generic_api_key(provider, provider_cfg) do
+    oauth? = normalize_auth_source(provider_cfg) == :oauth
+
     env_key =
-      provider
-      |> ProviderNames.env_vars()
-      |> env_first()
+      if oauth?, do: nil, else: provider |> ProviderNames.env_vars() |> env_first()
 
     cond do
       present_value?(env_key) ->
         env_key
 
-      present_value?(plain_api_key = provider_config_value(provider_cfg, :api_key)) ->
-        plain_api_key
+      not oauth? and present_value?(provider_config_value(provider_cfg, :api_key)) ->
+        provider_config_value(provider_cfg, :api_key)
 
       present_value?(api_key_secret = provider_config_value(provider_cfg, :api_key_secret)) ->
         resolve_secret_api_key(api_key_secret)

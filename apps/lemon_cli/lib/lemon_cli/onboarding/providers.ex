@@ -50,13 +50,14 @@ defmodule LemonCli.Onboarding.Providers do
     %Provider{
       id: "openai-codex",
       display_name: "OpenAI Codex",
-      description: "ChatGPT browser OAuth, explicit Codex CLI login import, or token",
+      description:
+        "ChatGPT browser or device-code OAuth, explicit Codex CLI login import, or token",
       provider_table: "providers.openai-codex",
       default_secret_name: "llm_openai_codex_api_key",
       api_key_secret_provider: "onboarding_openai_codex",
       oauth_secret_provider: "onboarding_openai_codex_oauth",
       oauth_module: Module.concat([:"Elixir.LemonAi", :Auth, :OpenAICodexOAuth]),
-      auth_modes: [:oauth, :api_key, :codex_cli],
+      auth_modes: [:oauth, :device, :api_key, :codex_cli],
       default_auth_mode: :oauth,
       preferred_models: ["gpt-6.1-sol", "gpt-6-sol", "gpt-5.6-sol"],
       aliases: ["chatgpt", "codex", "openai_codex"],
@@ -66,10 +67,16 @@ defmodule LemonCli.Onboarding.Providers do
       oauth_failure_label: "OpenAI Codex OAuth login failed",
       token_resolution_hint:
         "OpenAI Codex OAuth flow did not return credentials. Retry and paste the callback URL/code, or pass --token.",
-      auth_source_by_mode: %{api_key: "api_key", oauth: "oauth", codex_cli: "oauth"},
+      auth_source_by_mode: %{
+        api_key: "api_key",
+        oauth: "oauth",
+        device: "oauth",
+        codex_cli: "oauth"
+      },
       secret_config_key_by_mode: %{
         api_key: "api_key_secret",
         oauth: "oauth_secret",
+        device: "oauth_secret",
         codex_cli: "oauth_secret"
       }
     },
@@ -115,17 +122,23 @@ defmodule LemonCli.Onboarding.Providers do
     %Provider{
       id: "zai",
       display_name: "Z.AI (GLM)",
-      description: "Z.AI API key for GLM models",
+      description: "Z.AI GLM Coding Plan sign-in or API key",
       provider_table: "providers.zai",
       default_secret_name: "llm_zai_api_key",
       api_key_secret_provider: "onboarding_zai",
-      auth_modes: [:api_key],
+      oauth_secret_provider: "onboarding_zai_oauth",
+      oauth_module: Module.concat([:"Elixir.LemonAi", :Auth, :ZaiOAuth]),
+      oauth_result: :api_key,
+      auth_modes: [:api_key, :oauth],
       default_auth_mode: :api_key,
       preferred_models: ["glm-5.3", "glm-5.2", "glm-5"],
       aliases: ["glm", "zhipu", "z-ai", "z.ai"],
       api_key_prompt: "Enter your Z.AI API key: ",
       api_key_choice_label: "Paste API key",
-      auth_source_by_mode: %{api_key: "api_key"}
+      oauth_choice_label: "Sign in with Z.AI (creates an API key named lemon)",
+      oauth_failure_label: "Z.AI sign-in failed",
+      auth_source_by_mode: %{api_key: "api_key", oauth: "api_key"},
+      secret_config_key_by_mode: %{api_key: "api_key_secret", oauth: "api_key_secret"}
     },
     %Provider{
       id: "kimi",
@@ -226,6 +239,67 @@ defmodule LemonCli.Onboarding.Providers do
       api_key_choice_label: "Paste existing credential",
       oauth_choice_label: "Browser sign-in (Gemini OAuth)",
       oauth_failure_label: "Google Gemini CLI OAuth login failed",
+      auth_source_by_mode: %{api_key: "api_key", oauth: "oauth"},
+      secret_config_key_by_mode: %{api_key: "api_key_secret", oauth: "api_key_secret"}
+    },
+    %Provider{
+      id: "openrouter",
+      display_name: "OpenRouter",
+      description: "OpenRouter browser sign-in (creates an API key) or API key",
+      provider_table: "providers.openrouter",
+      default_secret_name: "llm_openrouter_api_key",
+      api_key_secret_provider: "onboarding_openrouter",
+      oauth_secret_provider: "onboarding_openrouter_oauth",
+      oauth_module: Module.concat([:"Elixir.LemonAi", :Auth, :OpenRouterOAuth]),
+      oauth_result: :api_key,
+      auth_modes: [:oauth, :api_key],
+      default_auth_mode: :oauth,
+      preferred_models: ["anthropic/claude-sonnet-5.5", "openai/gpt-6.1-sol"],
+      aliases: ["open-router"],
+      api_key_prompt: "Enter your OpenRouter API key: ",
+      api_key_choice_label: "Paste API key",
+      oauth_choice_label: "Sign in with OpenRouter (browser)",
+      oauth_failure_label: "OpenRouter sign-in failed",
+      auth_source_by_mode: %{api_key: "api_key", oauth: "api_key"},
+      secret_config_key_by_mode: %{api_key: "api_key_secret", oauth: "api_key_secret"}
+    },
+    %Provider{
+      id: "xai",
+      display_name: "xAI (Grok)",
+      description: "SuperGrok / X Premium+ device sign-in or xAI API key",
+      provider_table: "providers.xai",
+      default_secret_name: "llm_xai_api_key",
+      api_key_secret_provider: "onboarding_xai",
+      oauth_secret_provider: "onboarding_xai_oauth",
+      oauth_module: Module.concat([:"Elixir.LemonAi", :Auth, :XAIOAuth]),
+      auth_modes: [:api_key, :oauth],
+      default_auth_mode: :api_key,
+      preferred_models: ["grok-4.7", "grok-4.6", "grok-code-fast-1"],
+      aliases: ["grok", "x-ai"],
+      api_key_prompt: "Enter your xAI API key: ",
+      api_key_choice_label: "Paste API key",
+      oauth_choice_label: "Sign in with SuperGrok or X Premium+ (device code)",
+      oauth_failure_label: "xAI sign-in failed",
+      auth_source_by_mode: %{api_key: "api_key", oauth: "oauth"},
+      secret_config_key_by_mode: %{api_key: "api_key_secret", oauth: "api_key_secret"}
+    },
+    %Provider{
+      id: "kimi_coding",
+      display_name: "Kimi Code",
+      description: "Kimi Code subscription device sign-in or API key",
+      provider_table: "providers.kimi_coding",
+      default_secret_name: "llm_kimi_coding_api_key",
+      api_key_secret_provider: "onboarding_kimi_coding",
+      oauth_secret_provider: "onboarding_kimi_coding_oauth",
+      oauth_module: Module.concat([:"Elixir.LemonAi", :Auth, :KimiCodeOAuth]),
+      auth_modes: [:oauth, :api_key],
+      default_auth_mode: :oauth,
+      preferred_models: ["k3", "kimi-for-coding", "kimi-k2.5-coding"],
+      aliases: ["kimi-code", "kimi-for-coding"],
+      api_key_prompt: "Enter your Kimi Code API key: ",
+      api_key_choice_label: "Paste API key",
+      oauth_choice_label: "Sign in with Kimi Code (device code)",
+      oauth_failure_label: "Kimi Code sign-in failed",
       auth_source_by_mode: %{api_key: "api_key", oauth: "oauth"},
       secret_config_key_by_mode: %{api_key: "api_key_secret", oauth: "api_key_secret"}
     }
@@ -358,6 +432,7 @@ defmodule LemonCli.Onboarding.Providers do
   end
 
   defp auth_mode_label(:oauth), do: "OAuth"
+  defp auth_mode_label(:device), do: "device code"
   defp auth_mode_label(:codex_cli), do: "Codex CLI login import"
   defp auth_mode_label(:api_key), do: "API key"
 end

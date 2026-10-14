@@ -65,10 +65,12 @@ defmodule LemonCli.Onboarding.Runner do
       fail!("--codex-auth-path requires --auth codex-cli.")
     end
 
+    # Device-code sign-in needs no input: it prints a code and polls.
     if cli_opts[:non_interactive] == true and
-         is_nil(normalize_optional_string(cli_opts[:token])) and explicit_auth != :codex_cli do
+         is_nil(normalize_optional_string(cli_opts[:token])) and
+         explicit_auth not in [:codex_cli, :device] do
       fail!(
-        "Non-interactive provider setup requires --token or explicit --auth codex-cli. For ChatGPT browser sign-in, run `lemon setup --provider openai-codex` interactively."
+        "Non-interactive provider setup requires --token, --auth device (ChatGPT) or explicit --auth codex-cli. For ChatGPT browser sign-in, run `lemon setup --provider openai-codex` interactively."
       )
     end
 
@@ -173,7 +175,7 @@ defmodule LemonCli.Onboarding.Runner do
       if value = normalize_optional_string(opts[:auth]), do: parse_auth_mode!(value, spec)
 
     cond do
-      token && explicit_auth in [:oauth, :codex_cli] ->
+      token && explicit_auth in [:oauth, :device, :codex_cli] ->
         fail!("Cannot combine --token with --auth #{auth_mode_output_label(explicit_auth)}.")
 
       token ->
@@ -197,6 +199,9 @@ defmodule LemonCli.Onboarding.Runner do
     mode =
       case String.downcase(value) do
         "oauth" -> :oauth
+        "device" -> :device
+        "device-code" -> :device
+        "device_code" -> :device
         "api_key" -> :api_key
         "api-key" -> :api_key
         "codex-cli" -> :codex_cli
@@ -320,7 +325,7 @@ defmodule LemonCli.Onboarding.Runner do
          secret_provider_for_auth(spec, :oauth)}
 
       nil ->
-        oauth_payload = run_oauth_flow!(opts, spec, io)
+        oauth_payload = run_oauth_flow!(opts, spec, io, auth_mode)
         {oauth_payload, secret_provider_for_auth(spec, :oauth)}
     end
   end
@@ -331,7 +336,7 @@ defmodule LemonCli.Onboarding.Runner do
 
   defp secret_provider_for_auth(%Provider{} = spec, :api_key), do: spec.api_key_secret_provider
 
-  defp run_oauth_flow!(opts, %Provider{oauth_module: oauth_module} = spec, io) do
+  defp run_oauth_flow!(opts, %Provider{oauth_module: oauth_module} = spec, io, auth_mode) do
     unless oauth_module && Code.ensure_loaded?(oauth_module) do
       fail!(
         spec.oauth_missing_hint ||
@@ -385,6 +390,12 @@ defmodule LemonCli.Onboarding.Runner do
 
     result =
       cond do
+        auth_mode == :device and function_exported?(oauth_module, :login_device_code, 1) ->
+          apply(oauth_module, :login_device_code, [oauth_opts])
+
+        auth_mode == :device ->
+          fail!("#{inspect(oauth_module)} does not expose login_device_code/1.")
+
         function_exported?(oauth_module, :login_device_flow, 1) ->
           apply(oauth_module, :login_device_flow, [oauth_opts])
 
@@ -814,11 +825,15 @@ defmodule LemonCli.Onboarding.Runner do
     spec.api_key_choice_label || "Paste API key"
   end
 
+  defp auth_mode_choice_label(%Provider{}, :device),
+    do: "Headless sign-in (device code, no local callback)"
+
   defp auth_mode_choice_label(%Provider{}, :codex_cli),
     do: "Import existing Codex CLI ChatGPT login (read-only copy)"
 
   defp auth_mode_output_label(:codex_cli), do: "codex-cli (OAuth copy)"
   defp auth_mode_output_label(:oauth), do: "oauth"
+  defp auth_mode_output_label(:device), do: "device"
   defp auth_mode_output_label(:api_key), do: "api_key"
 
   defp require_non_empty!(value, error_message) when is_binary(value) do
