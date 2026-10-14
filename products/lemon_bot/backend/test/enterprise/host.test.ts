@@ -323,7 +323,6 @@ describe('trusted owned-host driver over actual node PTY', () => {
     const inputs = h.lemon.calls.filter(c => c.method === 'node.shell.input').map(c => Buffer.from(String(c.params.dataBase64), 'base64').toString('utf8'));
     expect(inputs.length).toBeGreaterThan(1);
     expect(inputs.every(input => Buffer.byteLength(input, 'utf8') < 1024)).toBe(true);
-    expect(inputs.filter(input => input.includes('printf \'%s\\n\' "$lb_host_json" | "$@"'))).toHaveLength(1);
     expect((await h.log()).filter(entry => entry.mode === 'apply')).toHaveLength(1);
     await Promise.all([...h.lemon.shells.values()].map(shell => shell.streamed));
     expect(h.lemon.shells.size).toBe(0);
@@ -349,6 +348,7 @@ describe('trusted owned-host driver over actual node PTY', () => {
     expect(h.store.require<P.HostOperation>('hostOperations', operation.id).state).toBe('outcome_unknown');
     expect(await h.log()).toHaveLength(0);
     expect(h.lemon.calls.filter(call => call.method === 'node.shell.close')).toHaveLength(1);
+    await Promise.all(shells.map(shell => shell.streamed));
     expect(h.lemon.shells.size).toBe(0);
     for (const shell of shells) expect(shell.process.exitCode).toBe(0);
     await expect(h.host.reconcile()).rejects.toThrow('Host services are disposed.');

@@ -107,7 +107,7 @@ Native X CRC and `x-twitter-webhooks-signature` are supported; normalized bridge
 
 Drivers execute over the destination's real node PTY. A stable operation ID and configuration/input digests accompany JSON input. The driver must return a bounded JSON-line receipt:
 
-Command and JSON framing is bounded by escaped **UTF-8 bytes**, including quoted Unicode argv, not JavaScript character count. Verified host resources and replay receipts remain readable only under current authority over every affected destination, including all bulk targets and both egress endpoints.
+Command and JSON framing is bounded by escaped **UTF-8 bytes**, including quoted Unicode argv, not JavaScript character count. Each literal argv/JSON assembly command waits for an exact randomized shell-consumption marker before sending the next packet: native input acceptance alone does not prove the terminal consumed it. The final JSON-to-driver invocation is sent once; missing consumption acknowledgment yields an unknown outcome, never a replay. Verified host resources and replay receipts remain readable only under current authority over every affected destination, including all bulk targets and both egress endpoints.
 
 Backend and fixture shutdown await integration disposal before closing runtime/controller/database resources. Host disposal stops active PTYs and drains operation/reconciliation promises so final unknown-outcome receipts are settled while persistent storage is still available; closing SQLite or extending a test timeout is not transport recovery.
 
