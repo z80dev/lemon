@@ -291,6 +291,7 @@ defmodule CodingAgent.Session.CompactionManager do
     |> Keyword.put(:model, model)
     |> Keyword.put(:stream_options, stream_options)
     |> Keyword.put(:api_key, api_key)
+    |> Keyword.put(:secret_obfuscator, Map.get(state, :secret_obfuscator))
   end
 
   # ============================================================================

@@ -129,6 +129,12 @@ enabled = true
 max_retries = 3
 base_delay_ms = 1000
 
+# Opt-in: replace secret-shaped env vars, secrets.yml entries and common API
+# token shapes in provider-visible text with reversible placeholders.
+# See docs/security/secret-obfuscation.md.
+[runtime.secret_obfuscation]
+enabled = false
+
 # `lemon context preview|resolve` budgets are explicit per invocation rather
 # than persisted here. This prevents shared config from silently raising a
 # caller's file/URL/archive/page/item/time limits. See
