@@ -101,11 +101,10 @@ function fixture() {
     onEvent: () => () => {}, onConnected: () => () => {}, start() {}, close() {},
   };
   const unavailable = (): never => { throw new Error('This test did not supply the requested external operation.'); };
-  f.services.runtime = { submit: unavailable, send: unavailable, cancel: unavailable, reconcile: unavailable, revokeConnectorInvocations: unavailable, sessionKey: (room, bot) => room.kind === 'team_dm' ? `agent:${bot.profileId}:dm-${room.ownerUserId}` : `agent:${bot.profileId}:main` };
+  f.services.runtime = { submit: unavailable, send: unavailable, cancel: unavailable, reconcile: unavailable, revokeConnectorInvocations: unavailable, sessionKey: (_room, bot) => `agent:${bot.profileId}:main` };
   f.services.integrations.connectorConfig = async () => [];
   f.services.integrations.connectorTemplates = async () => [];
   f.services.integrations.effectivePolicy = async (actor, botId) => ({ userId: actor.userId, botId: botId ?? null, directoryGroupIds: [], productAccess: true, localExecutionCeiling: 'ask', allowSudo: false, allowEgress: false, rules: [], networkPolicies: [], explanations: [] });
-  f.services.integrations.sharedProfilePolicy = botId => f.services.integrations.effectivePolicy(f.alice, botId);
   f.services.integrations.emitProviderNotifications = async () => {};
   f.services.syncBotProfile = (actor, botId) => syncBotProfile(f.services, actor, botId);
   const routes: Route[] = [...createBotRoutes(f.services), ...createConversationRoutes(f.services), ...createResourceRoutes(f.services)];
@@ -137,9 +136,9 @@ function fixture() {
     return f.store.put('machines', row);
   }
   machine('machine', 'node-source'); machine('destination', 'node-destination', true);
-  function bot(visibility: P.Bot['visibility'] = 'personal', published = false): P.Bot {
-    const bot = f.addBot('alice', visibility, published);
-    const room = f.addConversation(bot, 'alice', visibility === 'team' ? 'team_dm' : 'dm');
+  function bot(): P.Bot {
+    const bot = f.addBot('alice');
+    const room = f.addConversation(bot, 'alice', 'dm');
     const saved = { ...bot, profileId: `lb-${f.services.mutations.digest(bot.id).slice(0, 40)}`, mainConversationId: room.id }; f.store.put('bots', saved);
     const source = f.store.require<P.Machine>('machines', 'machine'); f.store.put('machines', { ...source, botIds: [...source.botIds, bot.id] });
     f.store.setMetadata(`botMcp:${bot.id}`, { secretName: 'test_bot_ref', encryptedToken: f.services.encrypt('unit-test-bot-token'), digest: f.services.mutations.digest('unit-test-bot-token') });
@@ -164,27 +163,34 @@ describe('bot authority and viewer state', () => {
     const own = await f.request<P.Bot>('GET', `/v1/bots/${bot.id}`, undefined);
     expect(own.mainConversationId).toBe(bot.mainConversationId); expect(f.calls).toHaveLength(0);
   });
-  test('managers cannot publish, assign managers or change required status', async () => {
-    const f = fixture(), source = f.bot('team'); const bot = { ...source, managerUserIds: ['admin'] }; f.store.put('bots', bot);
-    await expect(f.request('PATCH', `/v1/bots/${bot.id}`, { clientNonce: nonce('manager_publish'), revision: bot.revision, published: true }, f.admin)).rejects.toMatchObject({ code: 'forbidden' });
-    await expect(f.request('PATCH', `/v1/bots/${bot.id}`, { clientNonce: nonce('manager_assign'), revision: bot.revision, managerUserIds: [] }, f.admin)).rejects.toMatchObject({ code: 'forbidden' });
-    await expect(f.request('PATCH', `/v1/bots/${bot.id}`, { clientNonce: nonce('member_required'), revision: bot.revision, required: true })).rejects.toMatchObject({ code: 'forbidden' });
+  test('legacy publication and manager labels grant no live Bot access to members or workspace roles', async () => {
+    const f = fixture(), source = f.bot(), bot = { ...source, visibility: 'team', published: true, managerUserIds: ['admin', 'owner'], required: true };
+    f.store.put('bots', bot);
+    for (const actor of [f.admin, f.owner]) {
+      await expect(f.request('GET', `/v1/bots/${bot.id}`, undefined, actor)).rejects.toMatchObject({ code: 'not_found' });
+      await expect(f.request('PATCH', `/v1/bots/${bot.id}`, { clientNonce: nonce(`foreign_${actor.userId}`), revision: bot.revision, job: 'Not authorized' }, actor)).rejects.toMatchObject({ code: 'not_found' });
+      expect((await f.request<P.Page<P.Bot>>('GET', '/v1/bots', undefined, actor)).items).toEqual([]);
+    }
+    const own = await f.request<P.Bot>('GET', `/v1/bots/${bot.id}`, undefined);
+    for (const key of ['visibility', 'published', 'managerUserIds', 'required']) expect(Object.hasOwn(own, key)).toBe(false);
     expect(f.calls).toHaveLength(0);
   });
-  test('publishing requires deliberate intended shared host, not owner ambient credentials', async () => {
-    const f = fixture(), bot = f.bot('team');
-    await expect(f.request('PATCH', `/v1/bots/${bot.id}`, { clientNonce: nonce('unreviewed_host'), revision: bot.revision, published: true })).rejects.toMatchObject({ code: 'policy_denied' });
-    f.machine('machine', 'node-source', true); f.bot('personal');
-    await expect(f.request('PATCH', `/v1/bots/${bot.id}`, { clientNonce: nonce('private_colocated'), revision: bot.revision, published: true })).rejects.toMatchObject({ code: 'policy_denied' });
+  test('removed live sharing inputs are rejected even when empty or false, before any runtime effects', async () => {
+    const f = fixture(), bot = f.bot();
+    for (const [key, value] of [['published', false], ['required', false], ['managerUserIds', []]] as const) {
+      await expect(f.request('PATCH', `/v1/bots/${bot.id}`, { clientNonce: nonce(`removed_${key}`), revision: bot.revision, [key]: value })).rejects.toMatchObject({ code: 'invalid_request' });
+    }
+    await expect(f.request('POST', '/v1/bots', { clientNonce: nonce('removed_visibility'), name: 'Not shared', machineId: 'machine', visibility: 'team' })).rejects.toMatchObject({ code: 'invalid_request' });
+    for (const query of ['visibility=team', 'published=true']) await expect(f.request('GET', `/v1/bots?${query}`, undefined)).rejects.toMatchObject({ code: 'invalid_request' });
     expect(f.calls).toHaveLength(0);
   });
-  test('Team sidebar is per viewer, revisions conflict and required defaults cannot hide', async () => {
-    const f = fixture(), bot = f.bot('team', true);
-    const changed = await f.request<P.Bot>('PATCH', `/v1/bots/${bot.id}/sidebar`, { clientNonce: nonce('viewer_hide'), revision: bot.revision, hidden: true }, f.admin);
-    expect(changed.sidebar.hidden).toBe(true); expect((await f.request<P.Bot>('GET', `/v1/bots/${bot.id}`, undefined)).sidebar.hidden).toBe(false);
+  test('owner sidebar revisions remain private and reject concurrent stale updates', async () => {
+    const f = fixture(), bot = f.bot();
+    const changed = await f.request<P.Bot>('PATCH', `/v1/bots/${bot.id}/sidebar`, { clientNonce: nonce('owner_hide'), revision: bot.revision, hidden: true });
+    expect(changed.sidebar.hidden).toBe(true);
+    await expect(f.request('PATCH', `/v1/bots/${bot.id}/sidebar`, { clientNonce: nonce('foreign_sidebar'), revision: changed.revision, hidden: false }, f.admin)).rejects.toMatchObject({ code: 'not_found' });
     await expect(f.request('PATCH', `/v1/bots/${bot.id}/sidebar`, { clientNonce: nonce('stale_sidebar'), revision: bot.revision, pinned: true })).rejects.toMatchObject({ code: 'revision_conflict' });
-    f.services.integrations.defaultBotIds = async () => [bot.id];
-    await expect(f.request('PATCH', `/v1/bots/${bot.id}/sidebar`, { clientNonce: nonce('required_sidebar'), revision: changed.revision, hidden: true }, f.admin)).rejects.toMatchObject({ code: 'policy_denied' });
+    expect((await f.request<P.Bot>('GET', `/v1/bots/${bot.id}`, undefined)).sidebar.hidden).toBe(true);
   });
   test('stale updates and unknown fields fail before runtime effects', async () => {
     const f = fixture(), bot = f.bot();
@@ -255,8 +261,8 @@ describe('acknowledged bot provisioning and placement', () => {
 describe('reviewed declarative copies and exact deletion scope', () => {
   test('exports omit private memory/history/reference avatars and connector credentials', async () => {
     const f = fixture(), bot = f.bot();
-    f.store.put('memories', f.services.resource('memory', { botId: bot.id, scope: 'personal', userId: 'alice', text: 'PRIVATE_LEARNED_DATA', kind: 'fact', sourceEntryId: null }));
-    f.store.put('connectors', f.services.resource('connector', { botId: bot.id, ownerUserId: 'alice', name: 'Mail', url: 'https://private.example', accountLabel: 'private account', authKind: 'oauth', state: 'connected', tools: [], secretHeaderNames: ['Authorization'], shared: false, lastError: null }));
+    f.store.put('memories', f.services.resource('memory', { botId: bot.id, text: 'PRIVATE_LEARNED_DATA', kind: 'fact', sourceEntryId: null }));
+    f.store.put('connectors', f.services.resource('connector', { botId: bot.id, ownerUserId: 'alice', name: 'Mail', url: 'https://private.example', accountLabel: 'private account', authKind: 'oauth', state: 'connected', tools: [], secretHeaderNames: ['Authorization'], lastError: null }));
     const value = await f.request<P.TemplateContent>('GET', `/v1/bots/${bot.id}/export`, undefined);
     expect(value.connectorNames).toEqual(['Mail']); expect(value.avatar.attachmentId).toBeNull();
     for (const secret of ['PRIVATE_LEARNED_DATA', 'private.example', 'private account', 'Authorization']) expect(JSON.stringify(value)).not.toContain(secret);
@@ -272,33 +278,30 @@ describe('reviewed declarative copies and exact deletion scope', () => {
     await expect(f.request('POST', `/v1/templates/${template.id}/import`, { clientNonce: nonce('declined_terms'), name: 'Copy', machineId: 'destination', acceptedTerms: false })).rejects.toMatchObject({ code: 'policy_denied' });
     expect(f.calls).toHaveLength(0);
   });
-  test('Team-copy refuses private notes before creating any resource', async () => {
-    const f = fixture(), bot = f.bot();
-    const note: P.Memory = f.services.resource('memory', { botId: bot.id, scope: 'private_note', userId: 'alice', text: 'Private note', kind: 'fact', sourceEntryId: null }); f.store.put('memories', note);
-    await expect(f.request('POST', `/v1/bots/${bot.id}/team-copy`, { clientNonce: nonce('private_copy'), name: 'Team copy', machineId: 'destination', memoryIds: [note.id], skillIds: [], referenceAttachmentIds: [], routineIds: [], connectorIds: [] })).rejects.toMatchObject({ code: 'forbidden' });
-    expect(f.store.list<P.Bot>('bots')).toHaveLength(1); expect(f.calls).toHaveLength(0);
-  });
   test('duplicate creates a separate identity with no learned memory, conversations or tokens copied', async () => {
     const f = fixture(), original = f.bot();
-    f.store.put('memories', f.services.resource('memory', { botId: original.id, scope: 'personal', userId: 'alice', text: 'Do not copy learned history', kind: 'fact', sourceEntryId: null }));
+    f.store.put('memories', f.services.resource('memory', { botId: original.id, text: 'Do not copy learned history', kind: 'fact', sourceEntryId: null }));
     const copy = await f.request<P.Bot>('POST', `/v1/bots/${original.id}/duplicate`, { clientNonce: nonce('duplicate'), name: 'Separate', machineId: 'destination', includeSkills: false, includeRoutines: false });
     expect(copy.id).not.toBe(original.id); expect(copy.profileId).not.toBe(original.profileId); expect(copy.mainConversationId).not.toBe(original.mainConversationId);
     expect(copy.referenceAttachmentIds).toEqual([]); expect(f.store.list<P.Memory>('memories', memory => memory.botId === copy.id)).toEqual([]);
     expect(f.store.metadata<{ digest: string }>(`botMcp:${copy.id}`)?.digest).not.toBe(f.store.metadata<{ digest: string }>(`botMcp:${original.id}`)?.digest);
   });
-  test('Team deletion preview discloses exact private resource IDs but never content', async () => {
-    const f = fixture(), bot = f.bot('team', false), other = f.addUser('teammate');
-    const room = f.addConversation(bot, other.userId, 'team_dm'); f.store.put('entries', f.services.resource('entry', { conversationId: room.id, seq: 1, timestampMs: f.services.now(), actor: { kind: 'user', id: other.userId, displayName: 'Teammate' }, clientNonce: null, batchId: null, replyToEntryId: null, runId: null, targetedUserId: null, reactions: [], kind: 'message', role: 'user', text: 'PRIVATE_TRANSCRIPT', streaming: false, attachmentIds: [] }));
-    const preview = await f.request<P.Confirmation>('POST', `/v1/bots/${bot.id}/preview`, { clientNonce: nonce('admin_delete_preview'), action: 'delete' }, f.admin);
-    expect(preview.affected.some(effect => effect.id === room.id && effect.operation === 'delete')).toBe(true); expect(JSON.stringify(preview)).not.toContain('PRIVATE_TRANSCRIPT');
-    expect(preview.affected.some(effect => effect.id === 'machine' && effect.operation === 'retain')).toBe(true);
+  test('workspace administrators cannot preview another owner’s private lifecycle or metadata', async () => {
+    const f = fixture(), bot = f.bot();
+    f.store.put('entries', f.services.resource('entry', { conversationId: bot.mainConversationId, seq: 1, timestampMs: f.services.now(), actor: { kind: 'user', id: 'alice', displayName: 'Alice' }, clientNonce: null, batchId: null, replyToEntryId: null, runId: null, targetedUserId: null, reactions: [], kind: 'message', role: 'user', text: 'PRIVATE_TRANSCRIPT', streaming: false, attachmentIds: [] }));
+    await expect(f.request('POST', `/v1/bots/${bot.id}/preview`, { clientNonce: nonce('foreign_delete_preview'), action: 'delete' }, f.admin)).rejects.toMatchObject({ code: 'not_found' });
+    expect(f.calls).toHaveLength(0);
+    expect(f.store.list<P.TranscriptEntry>('entries', entry => entry.conversationId === bot.mainConversationId)[0]!.kind).toBe('message');
+    const preview = await f.request<P.Confirmation>('POST', `/v1/bots/${bot.id}/preview`, { clientNonce: nonce('owner_delete_preview'), action: 'delete' });
+    expect(preview.affected.some(effect => effect.id === bot.mainConversationId && effect.operation === 'delete')).toBe(true);
+    expect(JSON.stringify(preview)).not.toContain('PRIVATE_TRANSCRIPT');
   });
   test('selected Job reset preserves identity, host and unselected data', async () => {
     const f = fixture(), original = f.bot(), bot = { ...original, job: 'Old job', instructions: 'Old instructions' }; f.store.put('bots', bot);
-    const note: P.Memory = f.services.resource('memory', { botId: bot.id, scope: 'private_note', userId: 'alice', text: 'Keep note', kind: 'fact', sourceEntryId: null }); f.store.put('memories', note);
+    const note: P.Memory = f.services.resource('memory', { botId: bot.id, text: 'Keep owned profile fact', kind: 'fact', sourceEntryId: null }); f.store.put('memories', note);
     const preview = await f.request<P.Confirmation>('POST', `/v1/bots/${bot.id}/preview`, { clientNonce: nonce('job_reset_preview'), action: 'reset', resetScopes: ['job'] });
     const result = await f.request<P.BotResetResult>('POST', `/v1/bots/${bot.id}/reset`, confirmed(preview, { resetScopes: ['job'] }));
-    expect(result.bot).toMatchObject({ id: bot.id, machineId: bot.machineId, name: bot.name, job: '', instructions: '' }); expect(result.retainedScopes).toContain('memory'); expect(f.store.require<P.Memory>('memories', note.id).text).toBe('Keep note');
+    expect(result.bot).toMatchObject({ id: bot.id, machineId: bot.machineId, name: bot.name, job: '', instructions: '' }); expect(result.retainedScopes).toContain('memory'); expect(f.store.require<P.Memory>('memories', note.id).text).toBe('Keep owned profile fact');
     expect(f.calls.some(call => call.method === 'memory.delete' || call.method === 'node.fs.delete')).toBe(false);
   });
 });
@@ -312,8 +315,8 @@ describe('section rank and provider prerequisites', () => {
     const rest = await f.request<P.Page<P.Section>>('GET', `/v1/sections?limit=2&cursor=${first.nextCursor}`, undefined);
     expect(rest.items.map(section => section.rank)).toEqual([2, 10]);
   });
-  test('section removal moves only the viewer sidebar state and preserves another viewer section', async () => {
-    const f = fixture(), bot = f.bot('team', true);
+  test('section removal only mutates its owner’s Bot and preserves foreign legacy sidebar state', async () => {
+    const f = fixture(), bot = f.bot();
     const section = await f.request<P.Section>('POST', '/v1/sections', { clientNonce: nonce('section_create'), name: 'Mine' });
     await f.request('PATCH', `/v1/bots/${bot.id}/sidebar`, { clientNonce: nonce('section_set'), revision: bot.revision, sectionId: section.id });
     f.store.setMetadata(`botSidebar:admin:${bot.id}`, { ...bot.sidebar, sectionId: 'another-section' });
@@ -331,7 +334,7 @@ describe('section rank and provider prerequisites', () => {
   });
   test('selected skills and webhook routines copy as new identities without source keys', async () => {
     const f = fixture(), bot = f.bot();
-    const skill: P.Skill = f.services.resource('skill', { ownerUserId: 'alice', scope: 'personal', botId: bot.id, name: 'Checklist', description: 'Plan work', markdown: '# Checklist\n- Review the plan', enabled: true, machineIds: ['machine'], provenance: { sourceUrl: null, publisher: 'alice', trusted: false } });
+    const skill: P.Skill = f.services.resource('skill', { ownerUserId: 'alice', botId: bot.id, name: 'Checklist', description: 'Plan work', markdown: '# Checklist\n- Review the plan', enabled: true, machineIds: ['machine'], provenance: { sourceUrl: null, publisher: 'alice', trusted: false } });
     f.store.put('skills', skill); f.store.put('bots', { ...bot, skillIds: [skill.id] });
     const routine: P.Routine = f.services.resource('routine', { botId: bot.id, ownerUserId: 'alice', name: 'On request', instruction: 'Make a plan', trigger: { kind: 'webhook' }, enabled: true, nextRunAtMs: null, scheduleDescription: 'Webhook', lastRunId: null, webhookUrl: `${fixturePublicUrl}/hooks/source`, cronJobId: null }); f.store.put('routines', routine); f.store.setMetadata(`routineKey:${routine.id}`, { id: 'source-key', digest: 'source-only-digest' });
     const copy = await f.request<P.Bot>('POST', `/v1/bots/${bot.id}/duplicate`, { clientNonce: nonce('selected_duplicate'), name: 'Separate', machineId: 'destination', includeSkills: true, includeRoutines: true });
@@ -356,23 +359,30 @@ describe('acknowledged recovery and shared floor ownership', () => {
     expect(f.store.require<P.Bot>('bots', bot.id).job).toBe('Approved new job');
     expect(f.store.metadata(`botLifecycle:${bot.id}`)).toBeNull();
   });
-  test('trusted administrator-only hardening changes native floor, never persona or connector credentials', async () => {
+  test('member owner policy refresh installs actual durable policy, never an administrator’s or stale shared floor', async () => {
     const f = fixture(), bot = f.bot();
     const capabilities: P.MachineCapabilities = { machineId: 'machine', os: 'linux', measuredAtMs: f.services.now(), stale: false, items: [] };
     f.store.put('machineCapabilities', { ...capabilities, id: 'machine' });
-    await syncBotPolicyFloor(f.services, f.owner, bot.id);
+    const effective = f.services.integrations.effectivePolicy.bind(f.services.integrations);
+    f.services.integrations.effectivePolicy = async (actor, botId) => {
+      expect(actor.userId).toBe('alice'); expect(botId).toBe(bot.id);
+      return { ...await effective(actor, botId), localExecutionCeiling: 'deny', directoryGroupIds: ['owner-policy-group'] };
+    };
+    await syncBotProfile(f.services, f.alice, bot.id);
     const changed = f.calls.find(call => call.method === 'profiles.update')!;
-    expect(Object.keys(changed.params).sort()).toEqual(['id', 'mcpServers', 'toolPolicy']);
+    expect(Object.keys(changed.params).sort()).toEqual(['description', 'id', 'mcpServers', 'name', 'systemPrompt', 'toolPolicy']);
     expect(changed.params.mcpServers).toEqual([{ ...baseBotMcpConfig(f.services, bot), headers: {} }]);
     const floor = changed.params.toolPolicy as P.JSONObject;
     expect(floor.allow).not.toBe('all');
     expect(floor.allow).toEqual(expect.arrayContaining(['task', 'read_skill', ...projectedProductTools.map(tool => tool.executionName)]));
-    expect(floor.deny).toEqual(expect.arrayContaining(['native_prior_denied', 'agent', 'cron', 'remember', 'recall']));
-    expect(floor.blocked_tools).toEqual(expect.arrayContaining(['native_prior_blocked', 'agent', 'cron', 'remember', 'recall']));
-    expect(floor.require_approval).toEqual(expect.arrayContaining(['prior_requires_approval']));
+    expect(floor.deny).toEqual(expect.arrayContaining(['agent', 'cron', 'remember', 'recall']));
+    expect(floor.blocked_tools).toEqual(expect.arrayContaining(['agent', 'cron', 'remember', 'recall']));
+    expect(floor.deny).not.toContain('native_prior_denied');
     expect(f.store.require<P.Bot>('bots', bot.id)).toEqual(bot);
-    expect(f.store.metadata(`botPolicyFloor:${bot.id}`)).toMatchObject({ state: 'acknowledged' });
-    await expect(syncBotPolicyFloor(f.services, f.alice, bot.id)).rejects.toMatchObject({ code: 'forbidden' });
+    expect(f.store.metadata(`botProfileSync:${bot.id}`)).toMatchObject({ acknowledged: true });
+    const count = f.calls.length;
+    await expect(syncBotProfile(f.services, f.owner, bot.id)).rejects.toMatchObject({ code: 'not_found' });
+    expect(f.calls).toHaveLength(count);
   });
 });
 
@@ -434,7 +444,7 @@ describe('fresh native follow-up readiness fence', () => {
 
 describe('credential-free public native MCP ceiling', () => {
   test('profile rebuild consumes every declared template without querying owner/account credential configuration', async () => {
-    const f = fixture(), bot = f.bot('team', true);
+    const f = fixture(), bot = f.bot();
     f.services.integrations.connectorConfig = async () => { throw new Error('Owner credential configuration must not be queried by public profile rebuild.'); };
     const templates = [
       { name: 'connector-account-a', url: 'https://a.example/mcp', headers: {}, enabledTools: ['lookup'], allowedOrigins: ['https://a.example'], approvedPrivateOrigins: [] },
@@ -478,5 +488,74 @@ describe('strict owning capability and execution-name lifecycle boundaries', () 
     await expect(f.request('POST', '/v1/bots', { clientNonce: nonce('ambiguous_projection'), name: 'Ambiguous', machineId: 'machine' })).rejects.toMatchObject({ code: 'upstream_unavailable' });
     expect(f.calls.some(call => call.method === 'profiles.create' || call.method === 'profile.followup.admission.set')).toBe(false);
     expect(f.store.list<P.Bot>('bots')[0]!.activity).toBe('offline');
+  });
+});
+
+describe('same-owner live lifecycle boundaries', () => {
+  test('explicit machine delegation and shared-host labels never substitute for raw ownership', async () => {
+    const f = fixture(), bot = f.bot(), destination = f.store.require<P.Machine>('machines', 'destination');
+    f.store.put('machines', { ...destination, ownerUserId: 'admin', accessUserIds: ['alice'], labels: { 'lemon_bot.shared_context': 'true' } });
+    await expect(f.request('POST', '/v1/bots', { clientNonce: nonce('foreign_host_create'), name: 'Denied', machineId: 'destination' })).rejects.toMatchObject({ code: 'not_found' });
+    await expect(f.request('POST', `/v1/bots/${bot.id}/preview`, { clientNonce: nonce('foreign_host_preview'), action: 'move', targetMachineId: 'destination' })).rejects.toMatchObject({ code: 'not_found' });
+    expect(f.calls).toHaveLength(0); expect(f.store.list<P.Bot>('bots')).toHaveLength(1);
+    expect(f.store.require<P.Bot>('bots', bot.id).machineId).toBe('machine');
+  });
+  test('foreign owner cannot duplicate, export, reset, delete or generate a helper avatar', async () => {
+    const f = fixture(), bot = f.bot();
+    for (const actor of [f.admin, f.owner]) {
+      await expect(f.request('GET', `/v1/bots/${bot.id}/export`, undefined, actor)).rejects.toMatchObject({ code: 'not_found' });
+      await expect(f.request('POST', `/v1/bots/${bot.id}/duplicate`, { clientNonce: nonce(`foreign_duplicate_${actor.userId}`), name: 'Denied', machineId: 'destination', includeSkills: true, includeRoutines: true }, actor)).rejects.toMatchObject({ code: 'not_found' });
+      await expect(f.request('POST', `/v1/bots/${bot.id}/preview`, { clientNonce: nonce(`foreign_reset_${actor.userId}`), action: 'reset', resetScopes: ['job'] }, actor)).rejects.toMatchObject({ code: 'not_found' });
+      await expect(f.request('POST', `/v1/bots/${bot.id}/avatar/generate`, { clientNonce: nonce(`foreign_avatar_${actor.userId}`), prompt: 'Denied' }, actor)).rejects.toMatchObject({ code: 'not_found' });
+      const preview = await f.request<P.Confirmation>('POST', `/v1/bots/${bot.id}/preview`, { clientNonce: nonce(`owner_delete_${actor.userId}`), action: 'delete' });
+      const before = f.calls.filter(call => call.mutation).length;
+      await expect(f.request('DELETE', `/v1/bots/${bot.id}`, { ...confirmed(preview), clientNonce: nonce(`foreign_delete_${actor.userId}`) }, actor)).rejects.toMatchObject({ code: 'not_found' });
+      expect(f.calls.filter(call => call.mutation)).toHaveLength(before);
+    }
+    expect(f.store.list<P.Bot>('bots')).toHaveLength(1);
+  });
+  test('legacy placement onto a foreign machine cannot run profile mutation under either owner’s credentials', async () => {
+    const f = fixture(), bot = f.bot(), machine = f.store.require<P.Machine>('machines', bot.machineId);
+    f.store.put('machines', { ...machine, ownerUserId: 'admin', accessUserIds: ['alice'] });
+    await expect(f.request('PATCH', `/v1/bots/${bot.id}`, { clientNonce: nonce('foreign_source_profile'), revision: bot.revision, job: 'Denied' })).rejects.toMatchObject({ code: 'not_found' });
+    expect(f.calls).toHaveLength(0); expect(f.store.require<P.Bot>('bots', bot.id).job).toBe(bot.job);
+  });
+  test('another user’s formerly shared skill cannot enter an owner profile', async () => {
+    const f = fixture();
+    const foreign = f.services.resource('skill', { ownerUserId: 'admin', botId: null, name: 'Foreign skill', description: 'Not owned', markdown: 'Private instructions', enabled: true, machineIds: ['machine'], provenance: { sourceUrl: null, publisher: 'admin', trusted: false } });
+    f.store.put('skills', foreign);
+    await expect(f.request('POST', '/v1/bots', { clientNonce: nonce('foreign_skill'), name: 'Denied', machineId: 'machine', skillIds: [foreign.id] })).rejects.toMatchObject({ code: 'forbidden' });
+    expect(f.calls).toHaveLength(0); expect(f.store.list<P.Bot>('bots')).toHaveLength(0);
+  });
+});
+
+describe('trusted restriction-only management without live Bot authority', () => {
+  test('workspace restriction narrows an acknowledged owner floor without private issuer or owner policy lookup', async () => {
+    const f = fixture(), bot = f.bot();
+    await syncBotProfile(f.services, f.alice, bot.id);
+    const acknowledged = f.store.metadata<P.JSONObject>(`botControllerFloor:${bot.id}`)!;
+    const allow = acknowledged.allow as string[];
+    f.store.setMetadata(`botControllerFloor:${bot.id}`, { ...acknowledged, deny: [...(acknowledged.deny as string[]), 'previous_denial'], blocked_tools: [...(acknowledged.blocked_tools as string[]), 'previous_sealed_block'], require_approval: ['previous_approval'] });
+    f.store.setMetadata(`nativeFollowupIssuerConfig:${bot.id}`, { state: 'outcome_unknown', encryptedToken: 'must-not-be-read-by-management' });
+    f.services.integrations.workspaceRestrictions = target => {
+      expect(target).toEqual({ botId: bot.id, machineId: bot.machineId });
+      return { localExecutionCeiling: 'deny', rules: [], allowedMcpOrigins: [fixturePublicUrl], requireReview: true };
+    };
+    f.services.integrations.effectivePolicy = async () => { throw new Error('Management cannot query owner or administrator effective-user policy.'); };
+    f.services.integrations.connectorTemplates = async () => { throw new Error('Management cannot rebuild private owner connector configuration.'); };
+    f.services.decrypt = () => { throw new Error('Management cannot decrypt owner credentials.'); };
+    const start = f.calls.length;
+    await syncBotPolicyFloor(f.services, f.admin, bot.id);
+    const calls = f.calls.slice(start), update = calls.find(call => call.method === 'profiles.update')!;
+    expect(Object.keys(update.params).sort()).toEqual(['id', 'toolPolicy']);
+    const narrowed = update.params.toolPolicy as P.JSONObject;
+    expect((narrowed.allow as string[]).every(tool => allow.includes(tool))).toBe(true);
+    expect(narrowed.deny).toContain('previous_denial');
+    expect(narrowed.blocked_tools).toContain('previous_sealed_block');
+    expect(narrowed.require_approval).toContain('previous_approval');
+    expect(calls.some(call => call.method === 'node.secrets.set' || call.method === 'profile.followup.admission.set' || call.method === 'profiles.get')).toBe(false);
+    expect(f.store.metadata(`botPolicyFloor:${bot.id}`)).toMatchObject({ state: 'acknowledged', actorUserId: 'admin' });
+    await expect(f.request('GET', `/v1/bots/${bot.id}`, undefined, f.admin)).rejects.toMatchObject({ code: 'not_found' });
+    expect(f.store.require<P.Bot>('bots', bot.id)).toEqual(bot);
   });
 });
