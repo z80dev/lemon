@@ -183,6 +183,44 @@ defmodule CodingAgent.Tools.Task.WorktreeTest do
     refute branch_exists?(git, repo, "lemon/task-unborn-task")
   end
 
+  test "cancelled tasks retain their worktree without mutating either checkout", %{
+    git: git,
+    repo: repo
+  } do
+    for mode <- ["patch", "branch"] do
+      id = "cancelled-#{mode}"
+      assert {:ok, prepared} = Worktree.prepare(repo, id, mode)
+      File.write!(Path.join(prepared.cwd, "tracked.txt"), "child changes\n")
+      child_head = git!(git, prepared.cwd, ["rev-parse", "HEAD"])
+      signal = LemonAgent.AbortSignal.new()
+      LemonAgent.AbortSignal.abort(signal)
+
+      assert %{status: "skipped"} = Worktree.finalize(prepared, repo, id, "Cancelled", signal)
+      assert File.read!(Path.join(repo, "tracked.txt")) == "committed\n"
+      assert File.read!(Path.join(prepared.cwd, "tracked.txt")) == "child changes\n"
+      assert git!(git, prepared.cwd, ["rev-parse", "HEAD"]) == child_head
+      assert branch_exists?(git, repo, prepared.branch)
+    end
+  end
+
+  test "branch finalization retains commits made after detaching from the task branch", %{
+    git: git,
+    repo: repo
+  } do
+    assert {:ok, prepared} = Worktree.prepare(repo, "detached-task", "branch")
+    git!(git, prepared.cwd, ["checkout", "--detach", "-q"])
+    File.write!(Path.join(prepared.cwd, "detached.txt"), "keep this work\n")
+    git!(git, prepared.cwd, ["add", "detached.txt"])
+    git!(git, prepared.cwd, ["-c", "core.hooksPath=/dev/null", "commit", "-qm", "Detached work"])
+    head = git!(git, prepared.cwd, ["rev-parse", "HEAD"])
+
+    assert %{status: "error"} = Worktree.finalize(prepared, repo, "detached-task", "Detached")
+    assert git!(git, prepared.cwd, ["rev-parse", "HEAD"]) == head
+    assert File.read!(Path.join(prepared.cwd, "detached.txt")) == "keep this work\n"
+    assert branch_exists?(git, repo, prepared.branch)
+    refute File.exists?(Path.join(repo, "detached.txt"))
+  end
+
   describe "patch merge mode" do
     test "replays the parent's tracked and untracked work into a baseline commit", context do
       %{git: git, repo: repo, tmp_dir: tmp_dir} = context

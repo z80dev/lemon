@@ -267,7 +267,7 @@ defmodule CodingAgent.Tools.Task.Execution do
         {:workspace, result, workspace} ->
           result
           |> validate_output(execution.validated)
-          |> finalize_workspace(workspace, execution)
+          |> finalize_workspace(workspace, execution, signal)
 
         result ->
           validate_output(result, execution.validated)
@@ -339,7 +339,7 @@ defmodule CodingAgent.Tools.Task.Execution do
 
   # Merge a successful child's worktree back per its mode; failures keep the
   # worktree untouched and record that the merge was skipped.
-  defp finalize_workspace(result, %{merge: %{mode: mode}} = workspace, execution) do
+  defp finalize_workspace(result, %{merge: %{mode: mode}} = workspace, execution, signal) do
     merge =
       case result do
         %LemonAgent.Types.AgentToolResult{is_error: true} ->
@@ -350,7 +350,8 @@ defmodule CodingAgent.Tools.Task.Execution do
             workspace,
             execution.effective_cwd,
             execution.task_id,
-            execution.description
+            execution.description,
+            signal
           )
 
         _error ->
@@ -377,7 +378,7 @@ defmodule CodingAgent.Tools.Task.Execution do
     end
   end
 
-  defp finalize_workspace(result, _workspace, _execution), do: result
+  defp finalize_workspace(result, _workspace, _execution, _signal), do: result
 
   defp skipped_merge(mode),
     do: %{

@@ -26,6 +26,8 @@ defmodule CodingAgent.Tools.Task.Worktree do
   Existing paths and branches are never reused or removed.
   """
 
+  alias LemonAgent.AbortSignal
+
   @type mode :: String.t()
   @type prepared :: %{
           required(:cwd) => String.t(),
@@ -89,23 +91,32 @@ defmodule CodingAgent.Tools.Task.Worktree do
   @doc """
   Merges a successful child's worktree changes according to the prepared merge
   mode. `source_cwd` is the parent task's cwd; its repository root receives
-  patch-mode changes. Always returns a bounded, public merge summary map.
+  patch-mode changes. The optional captured abort signal is rechecked before
+  mutation and after acquiring the patch merge lock. Finalization refuses a
+  replaced checkout or changed child branch. Returns a public merge summary map.
   """
-  @spec finalize(prepared(), String.t(), String.t(), String.t() | nil) :: map()
-  def finalize(%{merge: %{mode: "patch"}} = prepared, source_cwd, task_id, _description) do
-    with {:ok, git} <- git_executable(),
+  @spec finalize(prepared(), String.t(), String.t(), String.t() | nil, term()) :: map()
+  def finalize(prepared, source_cwd, task_id, description, signal \\ nil)
+
+  def finalize(%{merge: %{mode: "patch"}} = prepared, source_cwd, task_id, _description, signal) do
+    with :ok <- check_abort(signal),
+         {:ok, git} <- git_executable(),
          {:ok, root} <- repository_root(git, source_cwd),
+         :ok <- validate_child_checkout(git, prepared),
          {:ok, files} <- stage_changes(git, prepared, prepared.baseline_commit) do
-      finalize_patch(git, root, prepared, task_id, files)
+      finalize_patch(git, root, prepared, task_id, files, signal)
     else
       {:error, reason} -> merge_error("patch", prepared, reason)
     end
   end
 
-  def finalize(%{merge: %{mode: "branch"}} = prepared, source_cwd, task_id, description) do
-    with {:ok, git} <- git_executable(),
+  def finalize(%{merge: %{mode: "branch"}} = prepared, source_cwd, task_id, description, signal) do
+    with :ok <- check_abort(signal),
+         {:ok, git} <- git_executable(),
          {:ok, root} <- repository_root(git, source_cwd),
+         :ok <- validate_child_checkout(git, prepared),
          {:ok, files} <- stage_changes(git, prepared, "HEAD"),
+         :ok <- check_abort(signal),
          {:ok, _} <- commit_staged(git, prepared, files, task_id, description),
          {:ok, count} <-
            run_git(git, prepared.worktree_path, [
@@ -119,11 +130,27 @@ defmodule CodingAgent.Tools.Task.Worktree do
     end
   end
 
-  def finalize(%{merge: %{mode: mode}}, _source_cwd, _task_id, _description),
+  def finalize(%{merge: %{mode: mode}}, _source_cwd, _task_id, _description, _signal),
     do: %{mode: mode, status: "retained"}
 
-  def finalize(_prepared, _source_cwd, _task_id, _description),
+  def finalize(_prepared, _source_cwd, _task_id, _description, _signal),
     do: %{mode: "none", status: "retained"}
+
+  defp check_abort(signal) do
+    if AbortSignal.aborted?(signal), do: {:error, "Task aborted"}, else: :ok
+  end
+
+  # Never stage a replaced checkout or delete detached/switched-branch commits.
+  defp validate_child_checkout(git, prepared) do
+    with {:ok, root} <- repository_root(git, prepared.worktree_path),
+         true <- root == prepared.worktree_path,
+         {:ok, branch} <- run_git(git, root, ["symbolic-ref", "--quiet", "--short", "HEAD"]),
+         true <- branch == prepared.branch do
+      :ok
+    else
+      _ -> {:error, "Task worktree is no longer on its original checkout and branch"}
+    end
+  end
 
   @doc "One short visible line describing a merge summary, or nil."
   @spec summary(map()) :: String.t() | nil
@@ -426,16 +453,24 @@ defmodule CodingAgent.Tools.Task.Worktree do
     end
   end
 
-  defp finalize_patch(git, root, prepared, _task_id, []) do
-    no_changes(git, root, prepared, "patch")
+  defp finalize_patch(git, root, prepared, _task_id, [], signal) do
+    case check_abort(signal) do
+      :ok -> no_changes(git, root, prepared, "patch")
+      {:error, reason} -> merge_error("patch", prepared, reason)
+    end
   end
 
-  defp finalize_patch(git, root, prepared, task_id, files) do
+  defp finalize_patch(git, root, prepared, task_id, files, signal) do
     patch = Path.join(Path.dirname(prepared.worktree_path), task_id <> ".patch")
 
     with :ok <- reserve_file(patch),
          :ok <- write_patch(git, prepared, patch) do
-      case serialized(root, fn -> apply_patch(git, root, patch) end) do
+      outcome =
+        serialized(root, fn ->
+          with :ok <- check_abort(signal), do: apply_patch(git, root, patch, signal)
+        end)
+
+      case outcome do
         :ok ->
           File.rm(patch)
 
@@ -481,15 +516,17 @@ defmodule CodingAgent.Tools.Task.Worktree do
     end
   end
 
-  defp apply_patch(git, root, patch) do
+  defp apply_patch(git, root, patch, signal) do
     apply = ["apply", "--binary", "--whitespace=nowarn"]
 
     case git_cmd(git, root, apply ++ ["--check", "--", patch]) do
       {:ok, {_output, 0}} ->
-        case git_cmd(git, root, apply ++ ["--", patch]) do
-          {:ok, {_output, 0}} -> :ok
-          {:ok, {output, _}} -> {:conflict, conflicting_files(output)}
-          {:error, reason} -> {:error, reason}
+        with :ok <- check_abort(signal) do
+          case git_cmd(git, root, apply ++ ["--", patch]) do
+            {:ok, {_output, 0}} -> :ok
+            {:ok, {output, _}} -> {:conflict, conflicting_files(output)}
+            {:error, reason} -> {:error, reason}
+          end
         end
 
       {:ok, {output, _status}} ->
@@ -579,7 +616,7 @@ defmodule CodingAgent.Tools.Task.Worktree do
   defp merge_error(mode, prepared, reason) do
     %{
       mode: mode,
-      status: "error",
+      status: if(reason == "Task aborted", do: "skipped", else: "error"),
       reason: reason,
       worktree_path: prepared.worktree_path,
       branch: prepared.branch

@@ -103,7 +103,8 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   and, when the child succeeds, applies its changes to the parent checkout,
   failing closed on conflicts with the patch kept for review. `branch` commits
   the child's work on its kept `lemon/task-<id>` branch without merging it.
-  Results report `details.merge`.
+  Merge-back rechecks cancellation before mutation and retains detached or
+  switched-branch worktrees for manual review. Results report `details.merge`.
 - **Task runtime parity with omp.** `task` accepts a top-level `context`
   shared by every child of a run, batch, or swarm. Persona thinking levels and
   output schemas become child defaults. Invalid structured output is
