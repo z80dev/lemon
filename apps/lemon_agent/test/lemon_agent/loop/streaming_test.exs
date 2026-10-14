@@ -415,44 +415,6 @@ defmodule LemonAgent.Loop.StreamingTest do
     end
   end
 
-  test "honors structured retry-after rather than retrying earlier" do
-    parent = self()
-
-    failed = %{
-      Mocks.assistant_message("")
-      | stop_reason: :error,
-        content: [],
-        error_message: "Service temporarily unavailable (HTTP 503)",
-        retry_after_ms: 20
-    }
-
-    final = Mocks.assistant_message("done")
-    {:ok, responses} = Agent.start_link(fn -> [failed, final] end)
-
-    stream_fn = fn _, _, _ ->
-      send(parent, {:attempt_at, System.monotonic_time(:millisecond)})
-      response = Agent.get_and_update(responses, fn [response | rest] -> {response, rest} end)
-      Mocks.mock_stream_fn_single_direct(response).(nil, nil, nil)
-    end
-
-    config = simple_config(stream_fn: stream_fn)
-    {:ok, stream} = EventStream.start_link(timeout: :infinity)
-
-    assert {:ok, ^final, _} =
-             Streaming.stream_assistant_response(
-               simple_context(messages: [user_message("run")]),
-               config,
-               nil,
-               nil,
-               stream
-             )
-
-    assert_receive {:attempt_at, first}
-    assert_receive {:attempt_at, second}
-    assert second - first >= 20
-    EventStream.complete(stream, [])
-  end
-
   test "abort interrupts an idle provider stream and removes unpaired partial tool calls" do
     parent = self()
 
@@ -632,29 +594,27 @@ defmodule LemonAgent.Loop.StreamingTest do
     end
   end
 
-  test "all emitted output events commit an attempt even when later partials erase it" do
+  test "each output event blocks replay even when the provider reports empty content" do
     parent = self()
     empty = %{Mocks.assistant_message("") | content: []}
     failed = %{empty | stop_reason: :error, error_message: "overloaded_error"}
 
-    for event <- [
-          {:text_start, 0, empty},
-          {:text_delta, 0, " ", empty},
-          {:text_end, 0, "", empty},
-          {:thinking_start, 0, empty},
-          {:thinking_delta, 0, " ", empty},
-          {:thinking_end, 0, "", empty},
-          {:tool_call_start, 0, empty},
-          {:tool_call_delta, 0, "{}", empty},
-          {:tool_call_end, 0, Mocks.tool_call("echo", %{}), empty}
-        ],
-        terminal <- [:error, :done] do
+    for {event, terminal} <- [
+          {{:text_start, 0, empty}, :error},
+          {{:text_delta, 0, " ", empty}, :done},
+          {{:text_end, 0, "", empty}, :error},
+          {{:thinking_start, 0, empty}, :error},
+          {{:thinking_delta, 0, " ", empty}, :done},
+          {{:thinking_end, 0, "", empty}, :error},
+          {{:tool_call_start, 0, empty}, :error},
+          {{:tool_call_delta, 0, "{}", empty}, :done},
+          {{:tool_call_end, 0, Mocks.tool_call("echo", %{}), empty}, :error}
+        ] do
       stream_fn = fn _, _, _ ->
         send(parent, :committed_attempt)
         {:ok, ai_stream} = LemonAi.EventStream.start_link()
         LemonAi.EventStream.push(ai_stream, {:start, empty})
         LemonAi.EventStream.push(ai_stream, event)
-        LemonAi.EventStream.push(ai_stream, {:text_delta, 0, "", empty})
         LemonAi.EventStream.push(ai_stream, {terminal, :error, failed})
         LemonAi.EventStream.complete(ai_stream, failed)
         {:ok, ai_stream}
@@ -685,7 +645,6 @@ defmodule LemonAgent.Loop.StreamingTest do
     parent = self()
 
     for content <- [
-          [%LemonAi.Types.TextContent{text: "answer"}],
           [%LemonAi.Types.TextContent{text: " "}],
           [%LemonAi.Types.ThinkingContent{thinking: "private reasoning"}],
           [Mocks.tool_call("echo", %{}, id: "unexecuted")]

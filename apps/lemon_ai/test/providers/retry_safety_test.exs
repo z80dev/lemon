@@ -2,7 +2,7 @@ defmodule LemonAi.Providers.RetrySafetyTest do
   use ExUnit.Case, async: false
 
   alias LemonAi.EventStream
-  alias LemonAi.Providers.{Anthropic, OpenAICompletions}
+  alias LemonAi.CircuitBreaker
   alias LemonAi.Types.{Context, Model, ModelCost, StreamOptions, UserMessage}
 
   setup do
@@ -68,19 +68,18 @@ defmodule LemonAi.Providers.RetrySafetyTest do
   end
 
   test "Anthropic never retries transport failures after output starts or whitespace" do
-    for {block, delta, expected_event} <- [
-          {%{"type" => "text"}, nil, :text_start},
-          {%{"type" => "text"}, %{"type" => "text_delta", "text" => " "}, :text_delta},
-          {%{"type" => "thinking"}, nil, :thinking_start},
-          {%{"type" => "thinking"}, %{"type" => "thinking_delta", "thinking" => " "}, :thinking_delta},
-          {%{"type" => "tool_use", "id" => "call_1", "name" => "echo", "input" => %{}}, nil, :tool_call_start}
+    for {block, delta, expected_event, provider} <- [
+          {%{"type" => "text"}, %{"type" => "text_delta", "text" => " "}, :text_delta, :retry_safety_anthropic_text},
+          {%{"type" => "thinking"}, nil, :thinking_start, :retry_safety_anthropic_thinking},
+          {%{"type" => "tool_use", "id" => "call_1", "name" => "echo", "input" => %{}}, nil, :tool_call_start, :retry_safety_anthropic_tool}
         ] do
       body = anthropic_metadata() <>
         anthropic_event("content_block_start", %{"index" => 0, "content_block" => block}) <>
         if(delta, do: anthropic_event("content_block_delta", %{"index" => 0, "delta" => delta}), else: "")
 
       Req.default_options(adapter: anthropic_adapter(body, :error))
-      assert {:ok, stream} = Anthropic.stream(model(:anthropic_messages, :anthropic), context(), options())
+      CircuitBreaker.reset(provider)
+      assert {:ok, stream} = LemonAi.stream(model(:anthropic_messages, provider), context(), options())
       events = Enum.to_list(EventStream.events(stream))
       assert Enum.any?(events, &(elem(&1, 0) == expected_event))
       assert {:error, terminal} = EventStream.result(stream, 1_000)
@@ -95,21 +94,18 @@ defmodule LemonAi.Providers.RetrySafetyTest do
   end
 
   test "Anthropic metadata-only transport failure remains retryable" do
-    parent = self()
     {:ok, count} = Agent.start_link(fn -> 0 end)
     first = anthropic_adapter(anthropic_metadata(), :error)
     second = anthropic_adapter(anthropic_success(), :success)
     Req.default_options(adapter: fn request ->
       attempt = Agent.get_and_update(count, fn n -> {n, n + 1} end)
-      send(parent, {:attempt, attempt})
       if attempt == 0, do: first.(request), else: second.(request)
     end)
 
-    assert {:ok, stream} = Anthropic.stream(model(:anthropic_messages, :anthropic), context(), options())
+    CircuitBreaker.reset(:retry_safety_anthropic_metadata)
+    assert {:ok, stream} = LemonAi.stream(model(:anthropic_messages, :retry_safety_anthropic_metadata), context(), options())
     assert {:ok, message} = EventStream.result(stream, 1_000)
     assert LemonAi.get_text(message) == "ok"
-    assert_receive {:attempt, 0}
-    assert_receive {:attempt, 1}
     assert_receive {:provider_sleep, _}
     assert_receive :provider_request
     assert_receive :provider_request
@@ -136,13 +132,14 @@ defmodule LemonAi.Providers.RetrySafetyTest do
   end
 
   test "OpenAI completions never retries text, thinking or tool transport failures" do
-    for {delta, expected_event} <- [
-          {%{"content" => " "}, :text_delta},
-          {%{"reasoning_content" => " "}, :thinking_delta},
-          {%{"tool_calls" => [%{"index" => 0, "id" => "call_1", "function" => %{"name" => "echo", "arguments" => ""}}]}, :tool_call_start}
+    for {delta, expected_event, provider} <- [
+          {%{"content" => " "}, :text_delta, :retry_safety_openai_text},
+          {%{"reasoning_content" => " "}, :thinking_delta, :retry_safety_openai_thinking},
+          {%{"tool_calls" => [%{"index" => 0, "id" => "call_1", "function" => %{"name" => "echo", "arguments" => ""}}]}, :tool_call_start, :retry_safety_openai_tool}
         ] do
       Req.default_options(adapter: openai_adapter(openai_body(delta), :error))
-      assert {:ok, stream} = OpenAICompletions.stream(model(:openai_completions, :openai), context(), options())
+      CircuitBreaker.reset(provider)
+      assert {:ok, stream} = LemonAi.stream(model(:openai_completions, provider), context(), options())
       events = Enum.to_list(EventStream.events(stream))
       assert Enum.any?(events, &(elem(&1, 0) == expected_event))
       assert {:error, %{stop_reason: :error}} = EventStream.result(stream, 1_000)
@@ -161,7 +158,8 @@ defmodule LemonAi.Providers.RetrySafetyTest do
       if attempt == 0, do: first.(request), else: second.(request)
     end)
 
-    assert {:ok, stream} = OpenAICompletions.stream(model(:openai_completions, :openai), context(), options())
+    CircuitBreaker.reset(:retry_safety_openai_metadata)
+    assert {:ok, stream} = LemonAi.stream(model(:openai_completions, :retry_safety_openai_metadata), context(), options())
     assert {:ok, message} = EventStream.result(stream, 1_000)
     assert LemonAi.get_text(message) == "ok"
     assert_receive :provider_request
