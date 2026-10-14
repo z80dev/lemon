@@ -297,6 +297,34 @@ provider stream options are resolved for that selected model together, including
 background compaction, without changing the main session's model. Explicit
 summary credential/stream-option overrides are retained.
 
+### Native Task Subagents (`[runtime.task]`)
+
+`[runtime.task]` tunes the native `task` tool. Like other sections it layers
+global → project; every key is optional:
+
+```toml
+[runtime.task]
+max_depth = 2              # -1 unlimited; 0 = the main session cannot delegate
+max_runtime_ms = 0         # per-child wall-clock limit; 0 disables it
+worktree_merge = "none"    # default merge for worktree: true tasks: none | patch | branch
+disabled_agents = ["sonic"]
+
+[runtime.task.agent_models]
+reviewer = "@slow"         # model or @role per persona ID
+```
+
+- `max_depth`: nesting limit. The main session is depth 0 and each child is one
+  deeper; a session may delegate only while its depth is below `max_depth`, and
+  children created at the cap never receive the `task` tool.
+- `max_runtime_ms`: wall-clock limit for each child session; the child fails
+  with a timeout error when it is exceeded.
+- `worktree_merge`: what a successful `worktree: true` child does when the call
+  omits `merge`: `none` keeps the worktree, `patch` applies the child's changes
+  to the parent checkout, `branch` commits them to a kept review branch.
+- `disabled_agents`: persona IDs hidden from the tool's agent list and refused
+  at launch.
+- `agent_models`: per-persona model or `@role` that replaces the persona's own
+  `model`/`role`; an explicit task `model` still wins.
 
 ### Named Execution Nodes
 
@@ -374,8 +402,8 @@ Remove these legacy keys and tables from global and project configuration:
 | `[runtime.cli.<vendor>]` | Remove the entire table. Vendor CLI task runners were removed; delegated tasks run as native in-process subagents. Config validation rejects `[runtime.cli]`. |
 
 There is no TOML replacement for selecting a top-level external or custom
-engine, and no TOML knob for delegated subagents beyond the native `task` tool's
-own parameters.
+engine. Delegated subagents always run natively; `[runtime.task]` (above) only
+tunes depth, runtime, merge-back and persona availability/models.
 
 ## External MCP Configuration
 
