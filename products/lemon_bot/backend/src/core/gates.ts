@@ -70,7 +70,7 @@ function context(services: BackendServices, actor: Principal, input: z.infer<typ
     services.store.put('conversations', privateRoom);
     services.events.emit('conversation.upserted', privateRoom, { userIds: [userId], conversationId: privateRoom.id });
   }
-  services.entry(actor, room.id, { kind: 'notice', severity: 'info', text: 'Private input requested. The target member can continue in their private bot conversation.', requestId: null, botId: bot.id });
+  services.entry(actor, room.id, { kind: 'notice', severity: 'info', text: 'Private input requested. The target member can continue in their private bot conversation.', requestId: null, actor: { kind: 'bot', id: bot.id, displayName: bot.name } });
   return { bot, conversation: privateRoom, target };
 }
 function conversationOf(services: BackendServices, resource: GateResource): string {
