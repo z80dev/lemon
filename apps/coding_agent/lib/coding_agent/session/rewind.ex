@@ -49,7 +49,7 @@ defmodule CodingAgent.Session.Rewind do
           "isActive" => on_branch,
           "isLeaf" => not MapSet.member?(parents, entry.id),
           "rewindable" => on_branch and role in [:user, "user"],
-          "label" => Map.get(labels, entry.id)
+          "label" => labels |> Map.get(entry.id) |> project_label()
         }
       end)
 
@@ -491,6 +491,11 @@ defmodule CodingAgent.Session.Rewind do
   end
 
   defp preview(_), do: ""
+
+  @doc "A stored label as projected to clients: strictly redacted, like tree text."
+  @spec project_label(String.t() | nil) :: String.t() | nil
+  def project_label(nil), do: nil
+  def project_label(label), do: LemonCore.Redact.text(label, strict: true)
 
   defp message_text(message) do
     case field(message, :content) do

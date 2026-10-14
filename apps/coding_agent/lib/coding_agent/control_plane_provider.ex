@@ -114,16 +114,20 @@ defmodule CodingAgent.ControlPlaneProvider do
         end
 
       pid ->
-        summarize = Keyword.get(opts, :summarize, false)
         manager = CodingAgent.Session.get_state(pid).session_manager
 
+        # Navigation is only accepted while idle, so this snapshot decides summary
+        # admission exactly as the session's own summarizer does.
         with {:ok, target} <- CodingAgent.Session.Rewind.navigation_target(manager, entry_id),
+             summarizing =
+               Keyword.get(opts, :summarize, false) and
+                 CodingAgent.Session.BackgroundTasks.summarizes_switch?(manager, target.leaf),
              :ok <-
                CodingAgent.Session.navigate_tree(pid, target.leaf || :root,
-                 summarize_abandoned: summarize
+                 summarize_abandoned: summarizing
                ) do
           manager = CodingAgent.Session.get_state(pid).session_manager
-          {:ok, navigation_receipt(manager, entry_id, target, summarize)}
+          {:ok, navigation_receipt(manager, entry_id, target, summarizing)}
         end
     end
   end
@@ -172,7 +176,11 @@ defmodule CodingAgent.ControlPlaneProvider do
     %{
       "sessionId" => session.header.id,
       "entryId" => entry_id,
-      "label" => Map.get(CodingAgent.SessionManager.labels(session), entry_id)
+      "label" =>
+        session
+        |> CodingAgent.SessionManager.labels()
+        |> Map.get(entry_id)
+        |> CodingAgent.Session.Rewind.project_label()
     }
   end
 

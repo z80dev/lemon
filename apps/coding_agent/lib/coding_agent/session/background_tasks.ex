@@ -25,12 +25,7 @@ defmodule CodingAgent.Session.BackgroundTasks do
   def maybe_summarize_abandoned_branch(state, _branch_entries, nil, _session_pid), do: state
 
   def maybe_summarize_abandoned_branch(state, branch_entries, from_id, session_pid) do
-    message_entries =
-      Enum.filter(branch_entries, fn entry ->
-        entry.type == :message and entry.message != nil
-      end)
-
-    if length(message_entries) >= 2 do
+    if summarizable?(branch_entries) do
       model = state.model
       opts = CompactionManager.summary_options([], state)
 
@@ -48,6 +43,24 @@ defmodule CodingAgent.Session.BackgroundTasks do
 
     state
   end
+
+  @doc """
+  Whether moving the active leaf to `target_id` abandons a branch that
+  `maybe_summarize_abandoned_branch/4` summarizes: a real branch switch away
+  from at least two messages.
+  """
+  @spec summarizes_switch?(SessionManager.Session.t(), String.t() | nil) :: boolean()
+  def summarizes_switch?(session_manager, target_id) do
+    current_branch = SessionManager.get_branch(session_manager)
+    new_branch = SessionManager.get_branch(session_manager, target_id)
+    current_leaf_id = SessionManager.get_leaf_id(session_manager)
+
+    branch_switch?(current_branch, new_branch, current_leaf_id, target_id) and
+      summarizable?(current_branch)
+  end
+
+  defp summarizable?(branch_entries),
+    do: Enum.count(branch_entries, &(&1.type == :message and &1.message != nil)) >= 2
 
   @spec branch_switch?([SessionEntry.t()], [SessionEntry.t()], String.t() | nil, String.t() | nil) ::
           boolean()

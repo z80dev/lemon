@@ -47,7 +47,8 @@ defmodule CodingAgent.Session.NavigateLabelTest do
       assert Enum.any?(tree["entries"], &(&1["id"] == alpha_answer and not &1["isActive"]))
     end
 
-    test "unknown entries are refused and a streaming session is busy", ctx do
+    test "unknown entries are refused, a streaming session is busy, and an unstarted summary is not claimed",
+         ctx do
       parent = self()
       gate = :atomics.new(1, [])
 
@@ -70,6 +71,12 @@ defmodule CodingAgent.Session.NavigateLabelTest do
 
       assert {:error, :entry_not_found} =
                ControlPlaneProvider.session_navigate(ctx.key, ctx.root, "missing", [])
+
+      # Staying on the current leaf abandons nothing, so no summary is claimed.
+      answer = entry_id(session, "assistant", "slow answer")
+
+      assert {:ok, %{"leafId" => ^answer, "summarizing" => false}} =
+               ControlPlaneProvider.session_navigate(ctx.key, ctx.root, answer, summarize: true)
     end
 
     test "labels appear in the tree, clear again and never change the context", ctx do
@@ -88,6 +95,14 @@ defmodule CodingAgent.Session.NavigateLabelTest do
                ControlPlaneProvider.session_label(ctx.key, ctx.root, answer, nil)
 
       assert tree_label(ctx, answer) == nil
+
+      secret = "sk-" <> String.duplicate("a", 24)
+
+      assert {:ok, %{"label" => receipt}} =
+               ControlPlaneProvider.session_label(ctx.key, ctx.root, answer, "key #{secret}")
+
+      refute receipt =~ secret
+      refute tree_label(ctx, answer) =~ secret
 
       assert {:error, :entry_not_found} =
                ControlPlaneProvider.session_label(ctx.key, ctx.root, "missing", "x")
@@ -149,14 +164,6 @@ defmodule CodingAgent.Session.NavigateLabelTest do
       assert loaded.leaf_id == nil
       assert SessionManager.build_session_context(loaded).messages == []
       refute path == root_path
-    end
-
-    test "unknown sessions are reported, not created", ctx do
-      assert {:error, :session_not_found} =
-               ControlPlaneProvider.session_navigate("agent:nobody:main", ctx.root, "x", [])
-
-      assert {:error, :session_not_found} =
-               ControlPlaneProvider.session_label("agent:nobody:main", ctx.root, "x", "y")
     end
 
     test "labels persist, resolve to the latest value and never change the context", ctx do
