@@ -9,7 +9,7 @@ defmodule CodingAgent.Executor.RemoteRequestCodecTest do
           %{remote_cwd_explicit: false, remote_cwd: "/controller/unused"},
           %{"remote_cwd_explicit" => false, "remote_cwd" => "/controller/unused"}
         ] do
-      request = %ExecutionRequest{run_id: "placement", prompt: "hello", cwd: "/controller/only", meta: meta}
+      request = %ExecutionRequest{run_id: "placement", session_key: "agent:placement:main", prompt: "hello", cwd: "/controller/only", meta: meta}
       assert {:ok, payload} = RemoteRequestCodec.encode(request)
       assert payload["cwd"] == nil
       refute Map.has_key?(payload["meta"], "remote_cwd")
@@ -21,6 +21,7 @@ defmodule CodingAgent.Executor.RemoteRequestCodecTest do
   test "explicit destination paths survive JSON placement metadata" do
     request = %ExecutionRequest{
       run_id: "placement",
+      session_key: "agent:placement:main",
       prompt: "hello",
       cwd: "/controller/only",
       meta: %{"remote_cwd_explicit" => true, "remote_cwd" => "projects/lemon"}
@@ -63,7 +64,7 @@ defmodule CodingAgent.Executor.RemoteRequestCodecTest do
   end
 
   test "callbacks cannot cross the execution boundary" do
-    request = %ExecutionRequest{run_id: "placement", prompt: "hello", meta: %{stream_fn: fn -> :private end}}
+    request = %ExecutionRequest{run_id: "placement", session_key: "agent:placement:main", prompt: "hello", meta: %{stream_fn: fn -> :private end}}
     assert {:error, {:invalid_request_payload, _}} = RemoteRequestCodec.encode(request)
   end
 end
