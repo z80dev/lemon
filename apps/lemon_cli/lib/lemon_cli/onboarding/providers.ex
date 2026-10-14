@@ -306,6 +306,21 @@ defmodule LemonCli.Onboarding.Providers do
     }
   ]
 
+  # Hosted OpenAI-compatible presets sign in with an API key; local servers
+  # (Ollama, LM Studio, ...) need no sign-in.
+  @providers @providers ++
+               for(
+                 preset <- LemonAi.Models.Presets.all(),
+                 not preset.local,
+                 do:
+                   Provider.api_key(
+                     Atom.to_string(preset.id),
+                     preset.name,
+                     "#{preset.name} API key",
+                     aliases: preset.aliases
+                   )
+               )
+
   @spec list() :: [Provider.t()]
   def list, do: @providers
 

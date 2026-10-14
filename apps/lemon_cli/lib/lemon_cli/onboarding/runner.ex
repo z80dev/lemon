@@ -101,7 +101,8 @@ defmodule LemonCli.Onboarding.Runner do
 
     selected_model =
       if set_default? do
-        choose_default_model!(cli_opts[:model], spec, io)
+        discovery_key = if auth_mode == :api_key, do: secret_value
+        choose_default_model!(cli_opts[:model], spec, io, discovery_key)
       else
         nil
       end
@@ -473,25 +474,32 @@ defmodule LemonCli.Onboarding.Runner do
     prompt_yes_no?("Set #{spec.display_name} as your default provider?", false, io)
   end
 
-  defp choose_default_model!(requested_model, %Provider{} = spec, _io)
+  # Preset providers (`LemonAi.Models.Presets`) serve an open model set: any
+  # requested id is accepted and the picker lists what the endpoint reports.
+  defp choose_default_model!(requested_model, %Provider{} = spec, _io, api_key)
        when is_binary(requested_model) and requested_model != "" do
     requested_model = String.trim(requested_model)
-    available = available_model_ids(spec)
 
-    if requested_model in available do
+    if preset_provider(spec) != nil do
       requested_model
     else
-      fail!(
-        "Unknown model #{inspect(requested_model)} for #{spec.id}. Available: #{Enum.join(available, ", ")}"
-      )
+      available = available_model_ids(spec, api_key)
+
+      if requested_model in available do
+        requested_model
+      else
+        fail!(
+          "Unknown model #{inspect(requested_model)} for #{spec.id}. Available: #{Enum.join(available, ", ")}"
+        )
+      end
     end
   end
 
-  defp choose_default_model!(_requested_model, %Provider{} = spec, io) do
-    available = available_model_ids(spec)
+  defp choose_default_model!(_requested_model, %Provider{} = spec, io, api_key) do
+    available = available_model_ids(spec, api_key)
 
     if available == [] do
-      fail!("No models found for #{spec.id} in LemonAi.Models registry.")
+      fail!("No models found for #{spec.id}. Pass --model MODEL to choose one by id.")
     end
 
     default_model =
@@ -556,7 +564,7 @@ defmodule LemonCli.Onboarding.Runner do
     end
   end
 
-  defp available_model_ids(%Provider{} = spec) do
+  defp available_model_ids(%Provider{} = spec, api_key) do
     models_module = Module.concat([:"Elixir.LemonAi", :Models])
 
     with true <- Code.ensure_loaded?(models_module),
@@ -566,6 +574,10 @@ defmodule LemonCli.Onboarding.Runner do
            provider_atom_for_models(models_module, spec.id) do
       models_module
       |> apply(:get_models, [provider])
+      |> case do
+        [] -> discovered_models(spec, api_key)
+        models -> models
+      end
       |> Enum.map(&%{provider: to_string(&1.provider), id: &1.id, name: &1.name})
       |> ModelCatalog.sort_for_picker()
       |> Enum.map(& &1.id)
@@ -574,6 +586,27 @@ defmodule LemonCli.Onboarding.Runner do
       _ ->
         []
     end
+  end
+
+  # Lists a preset endpoint's models with the key just entered (bounded; an
+  # unreachable endpoint lists nothing).
+  defp discovered_models(%Provider{} = spec, api_key) do
+    with preset when not is_nil(preset) <- preset_provider(spec),
+         {:ok, models} <-
+           LemonAi.Models.discover_preset(preset, api_key: api_key, timeout_ms: 5_000) do
+      models
+    else
+      _ -> []
+    end
+  end
+
+  defp preset_provider(%Provider{id: id}) do
+    normalized = normalize_provider_name(id)
+
+    Enum.find_value(LemonAi.Models.Presets.all(), fn preset ->
+      if preset.id |> Atom.to_string() |> normalize_provider_name() == normalized,
+        do: preset.id
+    end)
   end
 
   defp provider_atom_for_models(models_module, provider_id) do

@@ -231,6 +231,49 @@ defmodule LemonCli.Onboarding.RunnerTest do
     end
   end
 
+  test "hosted presets list models with the pasted key and accept any requested id", %{
+    tmp_dir: tmp_dir
+  } do
+    previous_defaults = Req.default_options()
+    Req.default_options(plug: {Req.Test, __MODULE__})
+    Req.Test.set_req_test_to_shared(%{})
+    test_pid = self()
+
+    on_exit(fn ->
+      Req.default_options(previous_defaults)
+      Req.Test.set_req_test_to_private(%{})
+    end)
+
+    Req.Test.stub(__MODULE__, fn conn ->
+      send(
+        test_pid,
+        {:models_request, conn.request_path, Plug.Conn.get_req_header(conn, "authorization")}
+      )
+
+      Req.Test.json(conn, %{"data" => [%{"id" => "meta-llama/Llama-3.3-70B"}]})
+    end)
+
+    spec = LemonCli.Onboarding.Providers.fetch!("together")
+    config_path = Path.join(tmp_dir, "together.toml")
+    args = ["--config-path", config_path, "--non-interactive", "--token", "tg-key"]
+
+    Runner.run(args ++ ["--set-default"], spec, io: build_io(self(), [], []))
+
+    assert_received {:models_request, "/v1/models", ["Bearer tg-key"]}
+    {:ok, config_map} = Toml.decode_file(config_path)
+    assert get_in(config_map, ["defaults", "model"]) == "together:meta-llama/Llama-3.3-70B"
+
+    assert get_in(config_map, ["providers", "together", "api_key_secret"]) ==
+             "llm_together_api_key"
+
+    Runner.run(args ++ ["--set-default", "--model", "not-listed/model"], spec,
+      io: build_io(self(), [], [])
+    )
+
+    {:ok, config_map} = Toml.decode_file(config_path)
+    assert get_in(config_map, ["defaults", "model"]) == "together:not-listed/model"
+  end
+
   defp build_io(test_pid, prompts, secrets) do
     prompt_agent = start_agent(prompts)
     secret_agent = start_agent(secrets)

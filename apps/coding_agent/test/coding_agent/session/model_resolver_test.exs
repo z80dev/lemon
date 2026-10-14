@@ -263,6 +263,9 @@ defmodule CodingAgent.Session.ModelResolverTest do
 
       model = ModelResolver.resolve_session_model("lm-studio:qwen2.5-coder", settings)
       assert {model.provider, model.base_url} == {:lm_studio, "http://gpu-box:1234/v1"}
+
+      model = ModelResolver.resolve_session_model("llama.cpp:qwen3", settings)
+      assert {model.provider, model.id} == {:llama_cpp, "qwen3"}
     end
 
     test "a configured preset does not capture bare catalog model ids" do

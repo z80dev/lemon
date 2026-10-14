@@ -617,11 +617,12 @@ defmodule CodingAgent.Session.ModelResolver do
 
   defp canonical_registry_provider(provider), do: provider
 
+  # Accepts omp's dotted spellings too (`llama.cpp` names `llama_cpp`).
   defp normalize_registry_provider_name(provider) do
     provider
     |> String.trim()
     |> String.downcase()
-    |> String.replace("_", "-")
+    |> String.replace(["_", "."], "-")
   end
 
   defp non_empty_string(value) when is_binary(value) do
