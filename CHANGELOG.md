@@ -104,6 +104,17 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   failing closed on conflicts with the patch kept for review. `branch` commits
   the child's work on its kept `lemon/task-<id>` branch without merging it.
   Results report `details.merge`.
+- **Task runtime parity with omp.** `task` accepts a top-level `context`
+  shared by every child of a run, batch, or swarm. Persona thinking levels and
+  output schemas become child defaults. Invalid structured output is
+  re-prompted in the same child up to twice; `schema_mode: "permissive"`
+  returns the text with `structured_output_error` instead of failing.
+  `read agent://<id-or-name>` returns an owned child's status and output (even
+  after it finishes), and `agent://<id>/<key>/…` extracts a `structured_output`
+  field. New `[runtime.task]` settings: `max_depth` (default 2) caps nesting
+  and persona `spawns` grants allowlisted delegation below it,
+  `max_runtime_ms` limits each child, `disabled_agents` hides personas, and
+  `agent_models` overrides persona models.
 
 ### Changed
 
