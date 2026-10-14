@@ -10,6 +10,14 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- **`lsp` coding tool.** Agents can ask a real language server for diagnostics,
+  definitions, type definitions, implementations, references, hover, document
+  and workspace symbols, renames (previewed unless `apply: true`), code actions
+  (listed, or one applied including server commands) and raw requests. Servers
+  are chosen by file extension, reused per session and workspace root, and stop
+  with the session; applied edits are locked, checkpointed and written
+  atomically. `status` shows which servers are installed or running. See
+  [LSP tools](docs/tools/lsp.md).
 - **Lemon Web, rebuilt.** The browser UI is now a full workspace on the same
   control-plane methods and events as the TUI. Chat streams Markdown with
   highlighted code, thinking blocks and rich tool cards (shell output and exit

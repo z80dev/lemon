@@ -786,8 +786,8 @@ defmodule CodingAgent.Tools.Lsp do
   defp maybe_apply(_ctx, _conn, []), do: {:ok, "", %{}}
 
   defp maybe_apply(ctx, conn, ops) do
-    with {:ok, text, details} <- apply_ops(ctx, conn, ops, "code_action", "  Workspace edit") do
-      {:ok, text <> "\n", details}
+    with {:ok, text, details} <- apply_ops(ctx, conn, ops, "code_action", "Workspace edit") do
+      {:ok, (text |> String.split("\n") |> Enum.map_join("\n", &("  " <> &1))) <> "\n", details}
     end
   end
 
