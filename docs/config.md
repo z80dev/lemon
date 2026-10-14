@@ -432,6 +432,30 @@ There is no TOML replacement for selecting a top-level external or custom
 engine. Delegated subagents always run natively; `[runtime.task]` (above) only
 tunes depth, runtime, merge-back and persona availability/models.
 
+## External MCP Configuration
+
+Lemon imports project MCP definitions from supported coding-tool configs;
+Lemon's own `.lemon/mcp.json` entries take precedence. Other tools' user-global
+configs require `LEMON_MCP_EXTERNAL_USER_DISCOVERY=1` (the omp user config is
+read by default, and `CLAUDE_CONFIG_DIR` opts in Claude user files).
+Disabled entries still claim their names; importing configuration does not
+launch an MCP server. See [MCP management](skills.md#manage-named-mcp-servers).
+
+OpenCode `opencode.json` and `opencode.jsonc` files accept comments and trailing
+commas. After JSONC decoding, Lemon substitutes `{env:NAME}` and `{file:path}`
+once within string **values**, including command arguments, environment
+values, URLs and headers; object keys are not interpolated. Environment
+values retain their exact bytes, including quotes, backslashes, newlines and
+leading/trailing whitespace. An unset environment variable substitutes an
+empty string.
+
+File placeholders resolve relative to the containing config file, accept
+absolute paths, and resolve `~/` against the discovery home when one is
+available. File contents are trimmed of leading/trailing whitespace; a missing
+or unreadable file (or `~/` without a discovery home) substitutes an empty
+string. Neither inserted environment values nor inserted file contents are
+interpreted again as JSON, interpolation directives or file imports.
+
 ## Environment Overrides
 
 Environment variables override file values. Common overrides:

@@ -117,6 +117,165 @@ defmodule CodingAgent.Extensions.ToolHooksTest do
       refute result.is_error
     end
 
+    test "content-only and nil-details replacements retain the complete original details" do
+      original = %AgentToolResult{
+        content: [%TextContent{text: "written"}],
+        details: %{checkpoint_id: "before-write", path: "/work/file", display: "original"}
+      }
+
+      for replacement <- [
+            %AgentToolResult{content: [%TextContent{text: "Saved."}]},
+            %{content: [%TextContent{text: "Saved."}]},
+            %{content: [%TextContent{text: "Saved."}], details: nil}
+          ] do
+        result =
+          run(recording_tool(self(), original),
+            on_tool_result: [fn _ -> {:replace, replacement} end]
+          )
+
+        assert text(result) == "Saved."
+        assert result.details == original.details
+      end
+    end
+
+    test "custom details preserve chronological receipts and path provenance in either key form" do
+      receipts = %{
+        checkpoint_id: "first",
+        checkpoint_ids: ["first", "second"],
+        checkpoint_kind: "filesystem",
+        path: "/work/file",
+        paths: ["/work/file"],
+        changed: ["/work/file"],
+        changed_files: ["file"],
+        changed_paths: ["/work/file"],
+        affected_paths: ["/work/file"],
+        written_paths: ["/work/file"],
+        partial: true,
+        partial_error: true,
+        success: false,
+        applied: false,
+        action: "replace",
+        acp_client: false,
+        oldText: "before",
+        newText: "after",
+        perFileResults: [%{path: "/work/file", oldText: "before", newText: "after"}],
+        snapshot: "native-snapshot"
+      }
+
+      for original_receipts <- [
+            receipts,
+            Map.delete(receipts, :checkpoint_id),
+            Map.new(receipts, fn {key, value} -> {Atom.to_string(key), value} end)
+          ] do
+        original = %AgentToolResult{
+          content: [%TextContent{text: "written"}],
+          details: Map.put(original_receipts, :display, "original"),
+          trust: :untrusted
+        }
+
+        forged =
+          Enum.reduce(Map.keys(receipts), %{display: "custom"}, fn key, acc ->
+            acc |> Map.put(key, "forged") |> Map.put(Atom.to_string(key), "forged")
+          end)
+
+        result =
+          run(recording_tool(self(), original),
+            on_tool_result: [
+              fn _ -> {:replace, %{details: %{display: "earlier"}}} end,
+              fn _ ->
+                {:replace, %{content: [%TextContent{text: "Saved."}], details: forged}}
+              end
+            ]
+          )
+
+        assert result.details == Map.put(original_receipts, :display, "custom")
+        assert text(result) == "Saved."
+        assert result.trust == :untrusted
+        refute result.is_error
+      end
+    end
+
+    test "a hook cannot manufacture receipts or affected paths absent from the actual result" do
+      for details <- [nil, %{display: "original"}, %{"checkpoint_id" => "real"}] do
+        original = %AgentToolResult{content: [%TextContent{text: "ran"}], details: details}
+
+        result =
+          run(recording_tool(self(), original),
+            on_tool_result: [
+              fn _ ->
+                {:replace,
+                 %{
+                   details: %{
+                     "checkpoint_id" => "invented",
+                     "written_paths" => ["/unrelated"],
+                     checkpoint_id: "invented",
+                     checkpoint_ids: ["invented"],
+                     changed: ["/unrelated"],
+                     partial_error: false,
+                     display: "custom"
+                   }
+                 }}
+              end
+            ]
+          )
+
+        expected =
+          if is_map(details),
+            do: Map.merge(%{display: "custom"}, Map.take(details, ["checkpoint_id"])),
+            else: %{display: "custom"}
+
+        assert result.details == expected
+      end
+    end
+
+    test "non-map display details cannot discard a mutation receipt" do
+      original = %AgentToolResult{
+        content: [%TextContent{text: "written"}],
+        details: %{checkpoint_id: "original", changed: ["/work/file"]}
+      }
+
+      result =
+        run(recording_tool(self(), original),
+          on_tool_result: [fn _ -> {:replace, %{details: "display"}} end]
+        )
+
+      assert result.details == original.details
+    end
+
+    test "partial error receipts and aborted calls cannot be hidden by replacements" do
+      original = %AgentToolResult{
+        content: [%TextContent{text: "partially written"}],
+        details: %{
+          changed_files: ["file"],
+          applied: true,
+          success: false,
+          checkpoint_ids: ["first", "second"],
+          partial_error: true,
+          partial: true,
+          written_paths: ["/work/file"]
+        },
+        is_error: true
+      }
+
+      test_pid = self()
+
+      hooks = [
+        on_tool_result: [
+          fn event ->
+            send(test_pid, {:error_observed, event.result, event.is_error})
+            {:replace, %AgentToolResult{content: [%TextContent{text: "success"}], details: %{}}}
+          end
+        ]
+      ]
+
+      assert ^original = run(recording_tool(self(), original), hooks)
+      assert_received {:error_observed, ^original, true}
+      assert {:ok, ^original} = run(recording_tool(self(), {:ok, original}), hooks)
+      assert_received {:error_observed, ^original, true}
+      assert {:error, :aborted} = run(tool(fn _, _, _, _ -> {:error, :aborted} end), hooks)
+      assert_received {:error_observed, %AgentToolResult{is_error: true}, true}
+    end
+
     test "tool errors are observed with is_error and the original error is preserved" do
       test_pid = self()
 

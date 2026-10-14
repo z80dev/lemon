@@ -44,6 +44,8 @@ defmodule LemonSkills.McpDiscovery do
   `${VAR}` and `${VAR:-default}` are expanded in the JSON-based provider files
   (not Codex or OpenCode); unresolved placeholders stay literal. OpenCode files
   use OpenCode's own `{env:VAR}` / `{file:path}` substitution and accept JSONC.
+  Substitution runs once on decoded string values: environment bytes stay exact,
+  file contents are trimmed, and inserted text is never expanded again.
   Codex `env_vars`, `env_http_headers` and `bearer_token_env_var` read the
   current environment. Imported entries carry command, arguments, environment,
   working directory, URL, headers, timeouts and tool filters; tool-specific
@@ -518,37 +520,29 @@ defmodule LemonSkills.McpDiscovery do
 
   defp read_opencode(path, home) do
     with {:ok, bytes} <- File.read(path),
-         text = substitute_opencode(bytes, Path.dirname(path), home),
-         {:ok, %{} = document} <- text |> strip_jsonc() |> Jason.decode() do
-      document
+         {:ok, %{} = document} <- bytes |> strip_jsonc() |> Jason.decode() do
+      substitute_opencode(document, Path.dirname(path), home)
     else
       _ -> nil
     end
   end
 
-  defp substitute_opencode(text, config_dir, home) do
-    text = Regex.replace(~r/\{env:([^}]+)\}/, text, fn _, name -> System.get_env(name) || "" end)
-
-    Regex.split(~r/\{file:[^}]+\}/, text, include_captures: true)
-    |> Enum.reduce({[], ""}, fn part, {acc, preceding} ->
-      if String.starts_with?(part, "{file:") and String.ends_with?(part, "}") and
-           not comment_line?(preceding) do
-        {[acc, opencode_file(String.slice(part, 6..-2//1), config_dir, home)], preceding <> part}
-      else
-        {[acc, part], preceding <> part}
-      end
+  # Match both directives in one pass so inserted values cannot become imports
+  # or interpolation directives, regardless of which source supplied them.
+  defp substitute_opencode(value, config_dir, home) when is_binary(value) do
+    Regex.replace(~r/\{(env|file):([^}]+)\}/, value, fn
+      _, "env", name -> System.get_env(name) || ""
+      _, "file", path -> opencode_file(path, config_dir, home)
     end)
-    |> elem(0)
-    |> IO.iodata_to_binary()
   end
 
-  defp comment_line?(preceding) do
-    preceding
-    |> String.split("\n")
-    |> List.last()
-    |> String.trim_leading()
-    |> String.starts_with?("//")
-  end
+  defp substitute_opencode(value, config_dir, home) when is_list(value),
+    do: Enum.map(value, &substitute_opencode(&1, config_dir, home))
+
+  defp substitute_opencode(value, config_dir, home) when is_map(value),
+    do: Map.new(value, fn {key, item} -> {key, substitute_opencode(item, config_dir, home)} end)
+
+  defp substitute_opencode(value, _config_dir, _home), do: value
 
   defp opencode_file(path, config_dir, home) do
     path =
@@ -564,7 +558,7 @@ defmodule LemonSkills.McpDiscovery do
       end
 
     case path && File.read(path) do
-      {:ok, content} -> content |> String.trim() |> Jason.encode!() |> String.slice(1..-2//1)
+      {:ok, content} -> String.trim(content)
       _ -> ""
     end
   end

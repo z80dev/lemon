@@ -214,6 +214,14 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Extension result presentation hooks preserve authoritative checkpoint receipts
+  and affected paths. Content-only or custom display details cannot erase real
+  mutation provenance or fabricate receipts; omitted details retain the original.
+- OpenCode MCP discovery substitutes environment and file placeholders once in
+  decoded JSONC string values. Quotes, backslashes and multiline environment
+  values no longer invalidate the config and silently drop servers; inserted
+  text cannot trigger another interpolation or file import. File path resolution,
+  trimming and missing-value behavior are preserved.
 - JSONL storage rejects unreadable or corrupt journals rather than publishing
   empty state. Failed loads remain recoverable after repair; rejected writes
   return bounded errors before cache mutation without crashing the Store.
