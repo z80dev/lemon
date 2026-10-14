@@ -356,6 +356,39 @@ defmodule CodingAgent.Tools.Task.WorktreeTest do
       assert File.read!(Path.join(repo, "tracked.txt")) == "child version\n"
     end
 
+    test "retains submodule pin changes instead of deleting them as no changes", %{
+      git: git,
+      repo: repo
+    } do
+      vendor = Path.join(repo, "vendor")
+      File.mkdir_p!(vendor)
+      git!(git, vendor, ["init", "-q", "-b", "main"])
+      git!(git, vendor, ["config", "user.name", "Worktree Test"])
+      git!(git, vendor, ["config", "user.email", "worktree@example.invalid"])
+      File.write!(Path.join(vendor, "version.txt"), "original\n")
+      git!(git, vendor, ["add", "."])
+      git!(git, vendor, ["-c", "core.hooksPath=/dev/null", "commit", "-qm", "Original vendor"])
+      git!(git, repo, ["add", "vendor"])
+      git!(git, repo, ["-c", "core.hooksPath=/dev/null", "commit", "-qm", "Pin vendor"])
+      parent_head = git!(git, repo, ["rev-parse", "HEAD"])
+      assert {:ok, prepared} = Worktree.prepare(repo, "submodule-task", "patch")
+      child_vendor = Path.join(prepared.cwd, "vendor")
+      git!(git, prepared.cwd, ["clone", "--no-hardlinks", vendor, child_vendor])
+      git!(git, child_vendor, ["config", "user.name", "Worktree Test"])
+      git!(git, child_vendor, ["config", "user.email", "worktree@example.invalid"])
+      File.write!(Path.join(child_vendor, "version.txt"), "updated\n")
+      git!(git, child_vendor, ["add", "."])
+
+      git!(git, child_vendor, ["-c", "core.hooksPath=/dev/null", "commit", "-qm", "Update vendor"])
+
+      assert %{status: "error"} = Worktree.finalize(prepared, repo, "submodule-task", "Vendor")
+      assert branch_exists?(git, repo, prepared.branch)
+      assert File.read!(Path.join(child_vendor, "version.txt")) == "updated\n"
+      assert File.read!(Path.join(vendor, "version.txt")) == "original\n"
+      assert git!(git, repo, ["rev-parse", "HEAD"]) == parent_head
+      assert git!(git, repo, ["status", "--porcelain"]) == ""
+    end
+
     test "removes the worktree and branch when the child changed nothing", context do
       %{git: git, repo: repo} = context
       File.write!(Path.join(repo, "tracked.txt"), "parent wip\n")

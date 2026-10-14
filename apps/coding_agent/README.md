@@ -448,6 +448,8 @@ With nothing to merge, both merge modes report `no_changes` and remove the workt
 
 Merge-back rechecks cancellation after waiting for the parent checkout's merge lock and immediately before applying a patch. Cancellation cannot undo an apply or commit already in progress. If the child replaces its checkout, switches branches, or detaches HEAD, automatic finalization refuses and retains its work for manual review instead of deleting commits that are not on the task branch.
 
+Patch mode refuses submodule (gitlink) changes and retains the task worktree and branch for manual review; it never treats excluded submodule pins as an empty result eligible for deletion.
+
 Parents can use `action: "message"` (or `"steer"`) with `task_id` and `message` to deliver peer input at the next child steering boundary, or `action: "cancel"` to cancel a queued/running child. Cancellation and result reads remain bound to the owning parent session/agent; messaging additionally permits the immediate family described below. Cancelling or terminating a parent cancels its children and descendants, including queued children. Unresponsive workers are stopped after a short cancellation grace period. Children always use subagent bootstrap scope and leaf-worker tool policy by default, preserving profile/workspace isolation.
 
 Give a task an optional `name`, separate from its persona `agent`, to address it as `agent://<name>`. Names are case-sensitive, 1–64 ASCII letters/digits/underscores/hyphens, start with a letter, and cannot be `parent`, `self`, or `all`. Batch names must be unique; ambiguous names among existing live tasks fail rather than choosing a recipient. Task IDs remain stable addresses and take precedence over aliases.

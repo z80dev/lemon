@@ -443,6 +443,7 @@ defmodule CodingAgent.Tools.Task.Worktree do
     path = prepared.worktree_path
 
     with {:ok, _} <- run_git(git, path, ["add", "-A"]),
+         :ok <- check_patch_gitlinks(git, prepared, against),
          {:ok, output} <-
            run_git(git, path, [
              "diff",
@@ -456,6 +457,35 @@ defmodule CodingAgent.Tools.Task.Worktree do
       {:ok, String.split(output, <<0>>, trim: true)}
     end
   end
+
+  # Patch application cannot safely propagate Git index-only submodule pins.
+  # Do not classify ignored gitlink changes as an empty task and delete its branch.
+  defp check_patch_gitlinks(git, %{merge: %{mode: "patch"}} = prepared, against) do
+    with {:ok, raw} <-
+           run_git(git, prepared.worktree_path, [
+             "diff",
+             "--cached",
+             "--raw",
+             "-z",
+             "--no-renames",
+             "--ignore-submodules=none",
+             against
+           ]) do
+      changed? =
+        raw
+        |> String.split(<<0>>, trim: true)
+        |> Enum.chunk_every(2)
+        |> Enum.any?(fn [header, _path] ->
+          Regex.match?(~r/\A:(?:160000 [0-7]{6}|[0-7]{6} 160000) /, header)
+        end)
+
+      if changed?,
+        do: {:error, "Submodule changes require manual review; task worktree retained"},
+        else: :ok
+    end
+  end
+
+  defp check_patch_gitlinks(_git, _prepared, _against), do: :ok
 
   defp finalize_patch(git, root, prepared, _task_id, [], signal) do
     case check_abort(signal) do
