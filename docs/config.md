@@ -397,7 +397,7 @@ browser-session exchange needed to authenticate that client safely. Never
 place the shared server token in `VITE_*` configuration.
 - `LEMON_PROVIDER_ROUTING_ENABLED`, `LEMON_PROVIDER_FALLBACK_PROVIDERS`, `LEMON_PROVIDER_ROUTING_REQUIRE_CREDENTIALS`
 - `LEMON_THEME`, `LEMON_DEBUG`
-- `<PROVIDER>_API_KEY`, `<PROVIDER>_BASE_URL` (e.g., `ANTHROPIC_API_KEY`, `OPENAI_BASE_URL`, `OPENCODE_API_KEY`, `ZAI_API_KEY`, `MINIMAX_API_KEY`)
+- `<PROVIDER>_API_KEY`, `<PROVIDER>_BASE_URL` (e.g., `ANTHROPIC_API_KEY`, `OPENAI_BASE_URL`, `OPENCODE_API_KEY`, `ZAI_API_KEY`, `MINIMAX_API_KEY`); local servers use `OLLAMA_BASE_URL`/`OLLAMA_HOST`, `LM_STUDIO_BASE_URL`, `LLAMA_CPP_BASE_URL` and `LITELLM_BASE_URL` only when config sets no `base_url` (see [OpenAI-Compatible Endpoints](#openai-compatible-endpoints))
 - `LEMON_CODEX_EXTRA_ARGS`, `LEMON_CODEX_AUTO_APPROVE`
 - `LEMON_CLAUDE_YOLO`
 - `LEMON_WASM_ENABLED`, `LEMON_WASM_RUNTIME_PATH`, `LEMON_WASM_TOOL_PATHS`, `LEMON_WASM_AUTO_BUILD`
@@ -680,35 +680,83 @@ To force a token explicitly, set:
 
 ## OpenAI-Compatible Endpoints
 
-For local or hosted services that expose an OpenAI-compatible API, configure the
-normal `openai` provider with a custom `base_url`:
+Lemon ships built-in presets for local inference servers and hosted open-model
+APIs that speak the OpenAI Chat Completions protocol. A preset provider accepts
+any model ID (`ollama:qwen3:32b`, `lm_studio:qwen2.5-coder-7b`, ...); model IDs
+may contain `:`. Model specs accept the underscore or dashed id (`lm-studio:...`);
+`[providers.<id>]` tables also accept omp spellings such as `llama.cpp` and
+`ollama-cloud`.
+
+### Local servers (no API key needed)
+
+| Provider | Default `base_url` | Base-URL env | Optional key env |
+| --- | --- | --- | --- |
+| `ollama` | `http://127.0.0.1:11434/v1` | `OLLAMA_BASE_URL`, `OLLAMA_HOST` | `OLLAMA_API_KEY` |
+| `lm_studio` | `http://127.0.0.1:1234/v1` | `LM_STUDIO_BASE_URL` | `LM_STUDIO_API_KEY` |
+| `llama_cpp` | `http://127.0.0.1:8080/v1` | `LLAMA_CPP_BASE_URL` | `LLAMA_CPP_API_KEY` |
+| `vllm` | `http://127.0.0.1:8000/v1` | — | `VLLM_API_KEY` |
+| `litellm` | `http://localhost:4000/v1` | `LITELLM_BASE_URL` | `LITELLM_API_KEY` |
+
+Requests go out without an `Authorization` header unless a key resolves (env
+variable, `api_key`/`api_key_secret`, or the default secret `llm_<id>_api_key`).
+`base_url` in config wins over the base-URL environment variables; environment
+values are normalized to a `/v1` root (`OLLAMA_HOST=gpu-box` becomes
+`http://gpu-box:11434/v1`). A `base_url` written in config must include the
+OpenAI-compatible root (usually `/v1`).
 
 ```toml
-[providers.openai]
-api_key_secret = "llm_local_openai_api_key"
-base_url = "http://127.0.0.1:11434/v1"
+[providers.ollama]
+base_url = "http://gpu-box:11434/v1"
 
 [defaults]
-provider = "openai"
-model = "openai:local-model-name"
+provider = "ollama"
+model = "ollama:qwen3:32b"
 ```
 
-Then store the endpoint key:
+### Hosted presets (API key required)
 
-```bash
-# Installed release / source checkout
-lemon secrets set llm_local_openai_api_key "local"
-./bin/lemon secrets set llm_local_openai_api_key "local"
+| Provider | `base_url` | Key env |
+| --- | --- | --- |
+| `ollama_cloud` | `https://ollama.com/v1` | `OLLAMA_CLOUD_API_KEY` |
+| `together` | `https://api.together.xyz/v1` | `TOGETHER_API_KEY` |
+| `deepinfra` | `https://api.deepinfra.com/v1/openai` | `DEEPINFRA_API_KEY` |
+| `nvidia` | `https://integrate.api.nvidia.com/v1` | `NVIDIA_API_KEY` |
+| `novita` | `https://api.novita.ai/openai/v1` | `NOVITA_API_KEY` |
+| `baseten` | `https://inference.baseten.co/v1` | `BASETEN_API_KEY` |
+| `venice` | `https://api.venice.ai/api/v1` | `VENICE_API_KEY` |
+| `synthetic` | `https://api.synthetic.new/openai/v1` | `SYNTHETIC_API_KEY` |
+| `nanogpt` | `https://nano-gpt.com/api/v1` | `NANO_GPT_API_KEY` |
+| `zenmux` | `https://zenmux.ai/api/v1` | `ZENMUX_API_KEY` |
+| `aimlapi` | `https://api.aimlapi.com/v1` | `AIMLAPI_API_KEY` |
+| `siliconflow` | `https://api.siliconflow.com/v1` | `SILICONFLOW_API_KEY` |
+| `siliconflow_cn` | `https://api.siliconflow.cn/v1` | `SILICONFLOW_CN_API_KEY` |
+| `gmi_cloud` | `https://api.gmi-serving.com/v1` | `GMI_API_KEY` |
+| `qianfan` | `https://qianfan.baidubce.com/v2` | `QIANFAN_API_KEY` |
+| `aiand` | `https://api.aiand.com/v1` | `AIAND_API_KEY` |
+| `wafer_serverless` | `https://pass.wafer.ai/v1` | `WAFER_SERVERLESS_API_KEY` |
+| `kilo` | `https://api.kilo.ai/api/gateway` | `KILO_API_KEY` |
 
-# Contributor-level Mix alternative
-mix lemon.secrets.set llm_local_openai_api_key "local"
-```
+Store a key with `lemon secrets set llm_<provider>_api_key <key>` or reference
+one with `[providers.<provider>].api_key_secret`. Lemon never sends
+`OPENAI_API_KEY` to a non-OpenAI provider.
 
-The same provider config shape also works for hosted OpenAI-compatible provider
-ids handled by Lemon, including `opencode`, `openrouter`, `zai`, `minimax`,
-`kimi`, `xai`, `mistral`, `groq`, `deepseek`, `qwen`, and related compatible
-providers. Each provider gets its own `[providers.<id>]` table with
-`api_key_secret` and optional `base_url`.
+### Model discovery
+
+Preset models carry conservative defaults (128k context, 16k output; Ollama
+8k output) until discovered. `lemon models --provider <preset> --discover`
+lists what an endpoint serves (`GET /models`; Ollama uses `/api/tags` and
+`/api/show` for context length), using `--base-url`, the base-URL environment
+variable, or the default, and the provider's key environment variable when set.
+The TUI `/model` picker (daemon `models.list`) includes discovered models for
+hosted presets with a credential and for local servers that are configured in
+`[providers.<id>]` or through their base-URL environment variable; listings are
+cached for five minutes and an unreachable server contributes no models.
+
+Any other OpenAI-compatible endpoint can still use the `openai` provider with a
+custom `base_url`. Hosted provider ids with bundled catalogs (`opencode`,
+`openrouter`, `zai`, `minimax`, `kimi`, `xai`, `mistral`, `groq`, `deepseek`,
+`qwen`, ...) take the same `[providers.<id>]` table with `api_key_secret` and
+optional `base_url`.
 
 ## Provider Onboarding (CLI)
 

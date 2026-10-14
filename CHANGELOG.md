@@ -94,6 +94,14 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   stored encrypted and referenced as `api_key_secret`.
 - OAuth logins can be force-refreshed after the provider rejects an unexpired
   token (`Credentials.refresh_provider_api_key/4`, used by 401 recovery).
+- **Local and open-model provider presets.** Ollama, LM Studio, llama.cpp,
+  vLLM and LiteLLM work without an API key (`ollama:qwen3:32b`), with omp's
+  default endpoints and `OLLAMA_HOST`/`*_BASE_URL` overrides; hosted presets
+  cover Ollama Cloud, Together, DeepInfra, NVIDIA, Novita, Baseten, Venice,
+  Synthetic, NanoGPT, ZenMux, AIML API, SiliconFlow, GMI Cloud, Qianfan, ai&,
+  Wafer and Kilo. `lemon models --provider <id> --discover` lists an endpoint's
+  models, and the `/model` picker includes discovered models for configured
+  presets. See [OpenAI-Compatible Endpoints](docs/config.md#openai-compatible-endpoints).
 
 ### Changed
 
@@ -133,6 +141,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 - Concurrent ChatGPT (Codex) token refreshes no longer replay a rotated refresh
   token: refresh is single-flight per stored login and re-reads the secret.
+- OpenAI-compatible providers no longer fall back to `OPENAI_API_KEY`: a
+  DeepSeek, Together or other non-OpenAI request without its own key fails
+  instead of sending the OpenAI key to that endpoint. Groq, xAI, Cerebras,
+  DeepSeek, Mistral, Hugging Face, Qwen and Vercel AI Gateway now resolve their
+  key environment variables and default `llm_<id>_api_key` secrets.
 - `sessions.patch` tool policies (web picker, TUI `/toolpolicy`) now reach runs;
   the router previously merged the whole policy row instead of its tool policy.
 - Usage is recorded: `usage.status`/`usage.cost` were always zero because

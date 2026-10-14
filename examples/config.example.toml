@@ -89,6 +89,11 @@ base_url = "https://api.z.ai/api/coding/paas/v4"
 api_key_secret = "google_api_key"
 # api_key = "..."  # plaintext fallback — discouraged
 
+# Local OpenAI-compatible servers need no key: ollama, lm_studio, llama_cpp,
+# vllm, litellm. Set base_url only for a non-default host (include /v1).
+# [providers.ollama]
+# base_url = "http://gpu-box:11434/v1"
+
 [defaults]
 provider = "anthropic"
 model = "claude-sonnet-5"
