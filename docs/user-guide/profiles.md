@@ -65,9 +65,12 @@ exits.
 
 Use `--node <name>` at creation time to route canonical chat through an
 authenticated named execution node. The roster reports `local`, `online`, or
-`offline`. For named execution, provider credentials and the effective working
-directory stay destination-local; `profile_id` lets the destination derive its
-own profile workspace rather than trusting a controller filesystem path.
+`offline`. Named runs omit controller working directories and use the worker's
+destination-local default cwd. Provider credentials remain destination-local.
+The execution request carries the profile system prompt and known bootstrap
+instructions (`AGENTS.md`, `IDENTITY.md`, `README.md`, `SOUL.md`, `USER.md`) as
+JSON-safe text. These instructions overlay that run's destination-local
+assistant workspace; no profile files need to be pre-installed on the worker.
 
 All lifecycle reads support `--json`. Chat also accepts `--model` and
 `--queue-mode collect|followup|steer|interrupt` overrides. Its working boundary
@@ -122,8 +125,8 @@ secrets. Review any export before sharing it.
 Clients can use the equivalent JSON-RPC methods:
 
 - `profiles.list`, `profiles.get`, and `profiles.roster` (`read` scope);
-- `profiles.create`, `profiles.clone`, `profiles.rename`, `profiles.export`, and
-  `profiles.delete` (`admin` scope);
+- `profiles.create`, `profiles.update`, `profiles.clone`, `profiles.rename`,
+  `profiles.export`, and `profiles.delete` (`admin` scope);
 - `profile.chat` (`write` scope).
 
 `profile.chat` returns the run ID and stable session key without echoing the
@@ -131,12 +134,58 @@ prompt. It does not accept a caller-supplied working directory or node: both
 come from the validated profile record. Lifecycle and export summaries are
 credential-free by construction.
 
+### Placement-aware sessions and routines
+
+`chat.send` accepts `profileId` alongside `sessionKey` and `prompt`. This uses
+the profile's persona, model, workspace and node for a non-canonical session,
+such as `agent:research:task-123`, `agent:research:dm-alice`, or
+`agent:research:group-team`. The profile owns placement; the session key owns
+conversation history. Omit `profileId` to retain ordinary chat routing.
+
+`cron.add` accepts `profileId` for agent jobs. `cron.list` includes the stored
+`profileId`; each run fetches the current profile, so moving or editing a bot
+changes its future scheduled runs without recreating its routines. Shell jobs
+remain scheduler-local and do not accept profile placement.
+
+### Update and attach MCP tools
+
+`profiles.update` accepts `id` and any of `name`, `description`, `avatar`,
+`model`, `systemPrompt`, `node`, or `mcpServers`. Omitted fields stay unchanged;
+an empty optional text field clears it. Use `node: "local"` to return a profile
+to the controller, and `mcpServers: []` to remove its session connectors.
+
+```json
+{
+  "id": "research",
+  "node": "worker-1",
+  "systemPrompt": "Research carefully and cite your sources.",
+  "mcpServers": [{
+    "name": "lemon-bot",
+    "url": "https://bot.example/mcp",
+    "headers": {"Authorization": "Bearer <per-bot-token>"}
+  }]
+}
+```
+
+The same `mcpServers` field is accepted by `profiles.create` and cloned with the
+profile. Servers use Streamable HTTP; names must be unique, URLs HTTP(S), and
+headers a JSON object of string name/value pairs. Definitions are bounded to
+32 servers and 64 KiB total. Connections are owner-bound and released when the
+run ends. Connection failures fail the run rather than silently dropping tools.
+
+MCP headers are secrets: all management reads and lifecycle responses omit the
+`headers` field entirely. Authenticated operators set or replace headers with
+the full server definition; returned rows are not a credential backup. Headers
+are stored in the private profile configuration and travel to a named worker
+only in that profile's execution request, not in run history or public events.
+Do not share private config files. Credential-safe exports omit these headers.
+
+
 ## Current boundaries
 
-This first-class vertical covers durable local records, isolated assistant
-workspaces, lifecycle, canonical one-to-one chat, node routing, and a roster.
-Group rooms, profile-scoped cron management, import/restore, free-form prompt
-editing in browser/TUI surfaces, browser export, and merged multi-controller
-rosters remain separate product work. The TUI and Web lifecycle journeys are
-complete for their documented bounded surfaces; they intentionally do not
-invent APIs for those remaining capabilities.
+This vertical covers durable profiles, isolated assistant workspaces, lifecycle,
+canonical and placement-aware extra sessions, profile-bound cron agent runs,
+per-profile MCP tools, node routing, and a roster. Group-room orchestration,
+import/restore, free-form prompt editing in browser/TUI surfaces, browser export,
+and merged multi-controller rosters remain separate product work. The TUI and
+Web lifecycle journeys remain unchanged.

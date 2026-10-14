@@ -14,6 +14,23 @@ defmodule CodingAgent.Executor.RemoteRequestCodec do
 
   @version 1
 
+  @execution_meta_keys ~w(model thinking_level system_prompt profile_id profile_instructions
+                          mcp_servers agent_id async_followups resume_source acp_session_id
+                          acp_mcp_session_id acp_client_terminal acp_client_elicitation_form
+                          acp_client_fs_read_text_file acp_client_fs_write_text_file)a
+
+  @doc false
+  def normalize_meta(meta) when is_map(meta) do
+    Enum.reduce(@execution_meta_keys, meta, fn key, acc ->
+      case Map.fetch(acc, Atom.to_string(key)) do
+        {:ok, value} -> acc |> Map.delete(Atom.to_string(key)) |> Map.put(key, value)
+        :error -> acc
+      end
+    end)
+  end
+
+  def normalize_meta(_), do: %{}
+
   @spec encode(ExecutionRequest.t(), keyword()) :: {:ok, map()} | {:error, term()}
   def encode(request, opts \\ [])
 
@@ -28,7 +45,15 @@ defmodule CodingAgent.Executor.RemoteRequestCodec do
       "resume" => encode_resume(request.resume),
       "lane" => encode_atom(request.lane),
       "toolPolicy" => request.tool_policy,
-      "meta" => request.meta || %{}
+      # Cwd routing hints are consumed above, not execution metadata. In particular
+      # an unused controller path must not survive through a false explicit flag.
+      "meta" =>
+        Map.drop(request.meta || %{}, [
+          :remote_cwd,
+          "remote_cwd",
+          :remote_cwd_explicit,
+          "remote_cwd_explicit"
+        ])
     }
 
     json_round_trip(payload, opts)
@@ -94,7 +119,10 @@ defmodule CodingAgent.Executor.RemoteRequestCodec do
   defp normalize_answer(value), do: inspect(value)
 
   defp field(map, key) when is_map(map) do
-    Map.get(map, key) || existing_atom_value(map, key)
+    case Map.fetch(map, key) do
+      {:ok, value} -> value
+      :error -> existing_atom_value(map, key)
+    end
   end
 
   defp existing_atom_value(map, key) do

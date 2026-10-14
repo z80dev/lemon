@@ -10,13 +10,19 @@ defmodule LemonAutomation.RunSubmitter do
   @spec submit(CronJob.t(), CronRun.t(), keyword()) ::
           {:ok, binary()} | {:error, term()} | :timeout
   def submit(%CronJob{} = job, %CronRun{} = run, opts \\ []) do
+
+    run_id = Keyword.get(opts, :run_id) || run.run_id || LemonCore.Id.run_id()
+    case build_params(job, run, run_id, opts) do
+      {:error, _} = error -> error
+      params -> submit_params(job, run, run_id, params, opts)
+    end
+  end
+
+  defp submit_params(job, run, run_id, params, opts) do
     timeout_ms = job.timeout_ms || @default_timeout_ms
     router_mod = Keyword.get(opts, :router_mod, LemonRouter)
     waiter_mod = Keyword.get(opts, :waiter_mod, RunCompletionWaiter)
     wait_opts = Keyword.get(opts, :wait_opts, [])
-
-    run_id = Keyword.get(opts, :run_id) || run.run_id || LemonCore.Id.run_id()
-    params = build_params(job, run, run_id, opts)
     memory_mod = Keyword.get(opts, :memory_mod, CronMemory)
 
     result =
@@ -67,7 +73,8 @@ defmodule LemonAutomation.RunSubmitter do
   defp normalize_submit_result({:error, reason}), do: {:error, inspect(reason)}
 
   @doc false
-  @spec build_params(CronJob.t(), CronRun.t(), binary() | nil, keyword()) :: map()
+  @spec build_params(CronJob.t(), CronRun.t(), binary() | nil, keyword()) ::
+          map() | {:error, term()}
   def build_params(%CronJob{} = job, %CronRun{} = run, run_id \\ nil, opts \\ []) do
     memory_mod = Keyword.get(opts, :memory_mod, CronMemory)
     context_mod = Keyword.get(opts, :context_mod, CronContext)
@@ -95,13 +102,38 @@ defmodule LemonAutomation.RunSubmitter do
       }
     }
 
-    params = maybe_pin_model(params, job)
+    case apply_profile(params, job, run_id) do
+      {:error, _} = error ->
+        error
 
-    # Include run_id if provided so router uses it instead of generating new one
-    if run_id do
-      Map.put(params, :run_id, run_id)
-    else
-      params
+      params ->
+        params = maybe_pin_model(params, job)
+        if run_id, do: Map.put(params, :run_id, run_id), else: params
+    end
+  end
+
+  defp apply_profile(params, %CronJob{profile_id: nil}, _run_id), do: params
+
+  defp apply_profile(params, %CronJob{profile_id: profile_id, cwd: cwd}, run_id) do
+    case LemonCore.ProfileStore.get_for_execution(profile_id) do
+      {:ok, profile} ->
+        case LemonCore.ProfileStore.chat_request(profile, params.prompt,
+               session_key: params.session_key,
+               run_id: run_id,
+               cwd: cwd,
+               origin: :cron,
+               tool_policy: params.tool_policy,
+               meta: params.meta
+             ) do
+          {:ok, request} -> Map.from_struct(request)
+          {:error, _} -> {:error, :invalid_profile_request}
+        end
+
+      {:error, :not_found} ->
+        {:error, :unknown_profile}
+
+      {:error, _} ->
+        {:error, :profile_unavailable}
     end
   end
 

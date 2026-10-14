@@ -118,6 +118,55 @@ defmodule LemonControlPlane.Methods.CronMethodsTest do
     _ = CronManager.remove(id)
   end
 
+  @tag :tmp_dir
+  test "cron.add persists profileId and cron.list returns only its identity", %{tmp_dir: root} do
+    config = Path.join(root, "profiles.toml")
+    File.write!(config, "")
+    previous_paths = Application.get_env(:lemon_core, :paths)
+    Application.put_env(:lemon_core, :paths,
+      (previous_paths || [])
+      |> Keyword.put(:global_config, config)
+      |> Keyword.put(:home_state_dir, root))
+
+    on_exit(fn ->
+      if is_nil(previous_paths) do
+        Application.delete_env(:lemon_core, :paths)
+      else
+        Application.put_env(:lemon_core, :paths, previous_paths)
+      end
+    end)
+
+    assert {:ok, _} =
+             LemonCore.ProfileStore.create(%{
+               id: "routine-profile", node: "worker-one", systemPrompt: "Routine persona",
+               mcpServers: [%{"name" => "bot", "url" => "https://example.com/mcp",
+                 "headers" => %{"Authorization" => "Bearer routine-private-token"}}]
+             })
+
+    assert {:ok, %{"id" => id, "profileId" => "routine-profile"} = added} =
+             CronAdd.handle(%{
+               "name" => "placed routine", "schedule" => "0 0 1 1 *", "enabled" => false,
+               "agentId" => "routine-profile", "sessionKey" => "agent:routine-profile:main",
+               "profileId" => "routine-profile", "prompt" => "run routine"
+             }, %{})
+    on_exit(fn -> CronManager.remove(id) end)
+
+    assert CronStore.get_job(id).profile_id == "routine-profile"
+    assert {:ok, %{"jobs" => jobs}} = CronList.handle(%{}, %{})
+    listed = Enum.find(jobs, &(&1["id"] == id))
+    assert listed["profileId"] == "routine-profile"
+    refute inspect(added) =~ "routine-private-token"
+    refute inspect(listed) =~ "routine-private-token"
+    refute inspect(listed) =~ "Routine persona"
+
+    assert {:error, {:invalid_request, "Unknown profile", nil}} =
+             CronAdd.handle(%{
+               "name" => "unknown routine", "schedule" => "hourly", "enabled" => false,
+               "agentId" => "routine-profile", "sessionKey" => "agent:routine-profile:main",
+               "profileId" => "missing-profile", "prompt" => "run routine"
+             }, %{})
+  end
+
   test "cron.list redacts target text by default and exposes byte summaries", %{job: job} do
     assert {:ok, %{"jobs" => jobs, "summary" => summary}} = CronList.handle(%{}, %{})
 

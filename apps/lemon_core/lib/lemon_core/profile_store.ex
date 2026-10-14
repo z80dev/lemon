@@ -31,7 +31,7 @@ defmodule LemonCore.ProfileStore do
   @version 1
   @id_regex ~r/^[a-z0-9][a-z0-9_-]{0,63}$/
   @node_regex ~r/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/
-  @managed_keys ~w(name description avatar model system_prompt node status profile_version created_at updated_at)
+  @managed_keys ~w(name description avatar model system_prompt node mcp_servers_json status profile_version created_at updated_at)
   @max_description_bytes 4_096
   @max_prompt_bytes 65_536
   @max_export_files 256
@@ -79,7 +79,7 @@ defmodule LemonCore.ProfileStore do
     |> read_profiles()
     |> Enum.flat_map(fn {id, raw} ->
       case build_profile(id, raw, opts) do
-        {:ok, profile} -> [profile]
+        {:ok, profile} -> [project_read(profile, opts)]
         {:error, _} -> []
       end
     end)
@@ -92,11 +92,19 @@ defmodule LemonCore.ProfileStore do
     with :ok <- validate_id(id),
          raw when is_map(raw) <- Map.get(read_profiles(opts), id),
          {:ok, profile} <- build_profile(id, raw, opts) do
-      {:ok, profile}
+      {:ok, project_read(profile, opts)}
     else
       nil -> {:error, :not_found}
       {:error, _} = error -> error
     end
+  end
+
+  @doc "Fetch a private profile for execution, including MCP authentication headers."
+  @spec get_for_execution(String.t(), keyword()) :: {:ok, profile()} | {:error, term()}
+  def get_for_execution(id, opts \\ []), do: get(id, Keyword.put(opts, :execution, true))
+
+  defp project_read(profile, opts) do
+    if Keyword.get(opts, :execution, false), do: profile, else: projection(profile)
   end
 
   @doc "Create a profile plus its isolated home boundaries."
@@ -115,17 +123,61 @@ defmodule LemonCore.ProfileStore do
   @doc "Clone a profile record and its regular home files into a new id."
   @spec clone(String.t(), map() | keyword(), keyword()) :: {:ok, profile()} | {:error, term()}
   def clone(source_id, attrs, opts \\ []) do
-    with {:ok, source} <- get(source_id, opts) do
+    with {:ok, source} <- get_for_execution(source_id, opts) do
       attrs = normalize_attrs(attrs)
 
       clone_attrs =
         source
-        |> Map.take(~w(name description avatar model systemPrompt node))
+        |> Map.take(~w(name description avatar model systemPrompt node mcpServers))
         |> Map.merge(stringify_keys(attrs))
         |> Map.put("id", value(attrs, "id") || slug(value(attrs, "name")))
 
       create(clone_attrs, Keyword.put(opts, :clone_home, source["paths"]["home"]))
     end
+  end
+
+  @doc "Update managed fields atomically, preserving omitted fields and unrelated config."
+  @spec update(String.t(), map() | keyword(), keyword()) :: {:ok, profile()} | {:error, term()}
+  def update(id, attrs, opts \\ []) do
+    with :ok <- validate_id(id) do
+      locked(opts, fn ->
+        with {:ok, current} <- get_for_execution(id, opts),
+             patch <- stringify_keys(normalize_attrs(attrs)),
+             patch <- canonical_patch(patch),
+             attrs <- Map.merge(current, patch),
+             {:ok, normalized} <- normalize_profile_attrs(id, attrs),
+             {:ok, content} <- read_config(config_path(opts)) do
+          updated =
+            content
+            |> put_profile(normalized, now_ms())
+            |> TomlPatch.upsert_raw_line(
+              profile_table(id),
+              "created_at",
+              "created_at = #{current["createdAt"] || now_ms()}"
+            )
+
+          with :ok <- write_config(config_path(opts), updated, opts),
+               {:ok, profile} <- get(id, opts),
+               :ok <- write_manifest(profile) do
+            {:ok, profile}
+          else
+            {:error, reason} ->
+              case write_config(config_path(opts), content, Keyword.delete(opts, :atomic_write_fun)) do
+                :ok -> {:error, reason}
+                {:error, rollback} -> {:error, {:rollback_failed, reason, rollback}}
+              end
+          end
+        end
+      end)
+    end
+  end
+
+  @doc "Management projection of a profile. MCP authentication headers are write-only."
+  @spec projection(profile()) :: profile()
+  def projection(profile) do
+    Map.update(profile, "mcpServers", [], fn servers ->
+      Enum.map(servers, &Map.delete(&1, "headers"))
+    end)
   end
 
   @doc "Rename a profile without changing its stable id or canonical chat."
@@ -173,15 +225,22 @@ defmodule LemonCore.ProfileStore do
     with id when is_binary(id) <- profile["id"],
          :ok <- validate_id(id),
          {:ok, prompt} <- chat_prompt(prompt, Keyword.get(opts, :images, [])),
-         {:ok, node} <- normalize_node(profile["node"]) do
+         {:ok, node} <- normalize_node(profile["node"]),
+         {:ok, instructions} <- profile_instructions(profile) do
       meta =
         opts
         |> Keyword.get(:meta, %{})
-        |> Map.delete("profile_id")
-        |> Map.delete("node")
+        |> Map.drop([
+          "profile_id", :profile_id, "node", :node, "system_prompt", :system_prompt,
+          "profile_instructions", :profile_instructions, "mcp_servers", :mcp_servers,
+          "remote_cwd_explicit", :remote_cwd_explicit, "remote_cwd", :remote_cwd,
+          "cwd", :cwd
+        ])
         |> Map.put(:profile_id, id)
         |> Map.put(:node, node)
-
+        |> Map.put(:system_prompt, profile["systemPrompt"])
+        |> Map.put(:profile_instructions, instructions)
+        |> Map.put(:mcp_servers, profile["mcpServers"] || [])
       cwd =
         case Keyword.fetch(opts, :cwd) do
           {:ok, cwd} when is_binary(cwd) and cwd != "" -> cwd
@@ -190,21 +249,59 @@ defmodule LemonCore.ProfileStore do
           _ -> nil
         end
 
+      meta =
+        meta
+        |> Map.put(:remote_cwd_explicit, node != "local" and is_binary(cwd))
+        |> Map.put(:remote_cwd, if(node != "local", do: cwd))
+
       {:ok,
        RunRequest.new(%{
          origin: Keyword.get(opts, :origin, :control_plane),
-         session_key: profile["canonicalSessionKey"] || SessionKey.main(id),
+         session_key: Keyword.get(opts, :session_key) || profile["canonicalSessionKey"] || SessionKey.main(id),
          agent_id: id,
          prompt: prompt,
          images: Keyword.get(opts, :images, []),
          queue_mode: Keyword.get(opts, :queue_mode, :collect),
          model: Keyword.get(opts, :model) || profile["model"],
          cwd: cwd,
+         run_id: Keyword.get(opts, :run_id),
+         resume: Keyword.get(opts, :resume),
+         tool_policy: Keyword.get(opts, :tool_policy),
          meta: meta
        })}
     else
       nil -> {:error, :invalid_profile}
       {:error, _} = error -> error
+    end
+  end
+
+  defp profile_instructions(profile) do
+    workspace = get_in(profile, ["paths", "workspace"])
+
+    if is_binary(workspace) do
+      Enum.reduce_while(@export_workspace_files, {:ok, %{}}, fn name, {:ok, files} ->
+        path = Path.join(workspace, name)
+
+        case File.lstat(path) do
+          {:error, :enoent} ->
+            {:cont, {:ok, files}}
+
+          {:ok, %File.Stat{type: :regular, size: size}} when size <= @max_prompt_bytes ->
+            case File.read(path) do
+              {:ok, text} when byte_size(text) <= @max_prompt_bytes ->
+                if String.valid?(text),
+                  do: {:cont, {:ok, Map.put(files, name, text)}},
+                  else: {:halt, {:error, :invalid_profile_instructions}}
+
+              _ -> {:halt, {:error, :invalid_profile_instructions}}
+            end
+
+          _ ->
+            {:halt, {:error, :invalid_profile_instructions}}
+        end
+      end)
+    else
+      {:ok, %{}}
     end
   end
 
@@ -358,6 +455,7 @@ defmodule LemonCore.ProfileStore do
     |> put_optional_string(table, "model", attrs["model"])
     |> put_optional_string(table, "system_prompt", attrs["systemPrompt"])
     |> TomlPatch.upsert_string(table, "node", attrs["node"])
+    |> TomlPatch.upsert_string(table, "mcp_servers_json", Jason.encode!(attrs["mcpServers"]))
     |> TomlPatch.upsert_string(table, "status", "active")
     |> TomlPatch.upsert_raw_line(table, "profile_version", "profile_version = #{@version}")
     |> TomlPatch.upsert_raw_line(table, "created_at", "created_at = #{now}")
@@ -578,7 +676,7 @@ defmodule LemonCore.ProfileStore do
   end
 
   defp portable_profile(profile) do
-    profile = Map.drop(profile, ["paths", "managedKeys"])
+    profile = profile |> projection() |> Map.drop(["paths", "managedKeys"])
 
     Enum.reduce(["name", "description", "systemPrompt"], {profile, 0}, fn key, {acc, count} ->
       case acc[key] do
@@ -642,6 +740,7 @@ defmodule LemonCore.ProfileStore do
          "model" => optional_string(raw["model"]),
          "systemPrompt" => optional_string(raw["system_prompt"]),
          "node" => string_value(raw["node"], "local"),
+         "mcpServers" => decode_mcp_servers(raw["mcp_servers_json"]),
          "status" => string_value(raw["status"], "active"),
          "createdAt" => integer_value(raw["created_at"], nil),
          "updatedAt" => integer_value(raw["updated_at"], nil),
@@ -664,7 +763,9 @@ defmodule LemonCore.ProfileStore do
              :system_prompt,
              @max_prompt_bytes
            ),
-         {:ok, node} <- normalize_node(value(attrs, "node")) do
+         {:ok, node} <- normalize_node(value(attrs, "node")),
+         {:ok, mcp_servers} <-
+           normalize_mcp_servers(value(attrs, "mcpServers") || value(attrs, "mcp_servers") || []) do
       {:ok,
        %{
          "id" => id,
@@ -673,10 +774,67 @@ defmodule LemonCore.ProfileStore do
          "avatar" => avatar,
          "model" => model,
          "systemPrompt" => system_prompt,
-         "node" => node
+         "node" => node,
+         "mcpServers" => mcp_servers
        }}
     end
   end
+
+  defp decode_mcp_servers(nil), do: []
+
+  defp decode_mcp_servers(json) when is_binary(json) do
+    with {:ok, servers} <- Jason.decode(json),
+         {:ok, normalized} <- normalize_mcp_servers(servers) do
+      normalized
+    else
+      _ -> []
+    end
+  end
+
+  defp decode_mcp_servers(_), do: []
+
+  defp normalize_mcp_servers(servers) when is_list(servers) and length(servers) <= 32 do
+    Enum.reduce_while(servers, {:ok, [], MapSet.new()}, fn server, {:ok, acc, names} ->
+      with true <- is_map(server),
+           {:ok, name} <- bounded_string(value(server, "name"), :mcp_servers, 128),
+           false <- MapSet.member?(names, name),
+           {:ok, url} <- bounded_string(value(server, "url"), :mcp_servers, 2_048),
+           %URI{scheme: scheme, host: host, userinfo: nil, fragment: nil} <- URI.parse(url),
+           true <- scheme in ["http", "https"] and is_binary(host) and host != "",
+           {:ok, headers} <- normalize_mcp_headers(value(server, "headers") || %{}) do
+        normalized = %{"name" => name, "url" => url, "headers" => headers}
+        {:cont, {:ok, [normalized | acc], MapSet.put(names, name)}}
+      else
+        _ -> {:halt, {:error, {:invalid_field, :mcp_servers}}}
+      end
+    end)
+    |> case do
+      {:ok, normalized, _names} ->
+        normalized = Enum.reverse(normalized)
+
+        if byte_size(Jason.encode!(normalized)) <= @max_prompt_bytes,
+          do: {:ok, normalized},
+          else: {:error, {:field_too_large, :mcp_servers, @max_prompt_bytes}}
+
+      error -> error
+    end
+  end
+
+  defp normalize_mcp_servers(_), do: {:error, {:invalid_field, :mcp_servers}}
+
+  defp normalize_mcp_headers(headers) when is_map(headers) and map_size(headers) <= 64 do
+    valid? =
+      Enum.all?(headers, fn {name, value} ->
+        is_binary(name) and byte_size(name) in 1..128 and
+          Regex.match?(~r/^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/, name) and
+          is_binary(value) and String.valid?(value) and byte_size(value) <= 8_192 and
+          not String.contains?(value, ["\r", "\n", <<0>>])
+      end)
+
+    if valid?, do: {:ok, headers}, else: {:error, {:invalid_field, :mcp_servers}}
+  end
+
+  defp normalize_mcp_headers(_), do: {:error, {:invalid_field, :mcp_servers}}
 
   defp normalize_node(nil), do: {:ok, "local"}
 
@@ -780,13 +938,14 @@ defmodule LemonCore.ProfileStore do
 
   defp existing_mode(path) do
     case File.stat(path) do
-      {:ok, %File.Stat{mode: mode}} -> Bitwise.band(mode, 0o777)
+      {:ok, %File.Stat{mode: mode}} -> Bitwise.band(mode, 0o600)
       _ -> 0o600
     end
   end
 
   defp write_manifest(profile) do
     profile
+    |> projection()
     |> Jason.encode_to_iodata!(pretty: true)
     |> then(&atomic_write(profile["paths"]["manifest"], [&1, "\n"]))
   end
@@ -822,6 +981,16 @@ defmodule LemonCore.ProfileStore do
   end
 
   defp relative_to(path, root), do: Path.relative_to(path, root) |> String.replace("\\", "/")
+
+  defp canonical_patch(patch) do
+    Enum.reduce([{"system_prompt", "systemPrompt"}, {"mcp_servers", "mcpServers"}], patch, fn
+      {source, destination}, acc ->
+        case Map.fetch(acc, source) do
+          {:ok, value} -> acc |> Map.delete(source) |> Map.put(destination, value)
+          :error -> acc
+        end
+    end)
+  end
 
   defp normalize_attrs(attrs) when is_list(attrs), do: Map.new(attrs)
   defp normalize_attrs(attrs) when is_map(attrs), do: attrs

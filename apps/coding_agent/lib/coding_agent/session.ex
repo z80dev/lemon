@@ -97,6 +97,9 @@ defmodule CodingAgent.Session do
     :explicit_system_prompt,
     :prompt_template,
     :workspace_dir,
+    :profile_instructions,
+    :mcp_session_id,
+    :acp_mcp_session_id,
     :extra_tools,
     :tool_disclosure,
     :session_scope,
@@ -154,6 +157,9 @@ defmodule CodingAgent.Session do
           explicit_system_prompt: String.t() | nil,
           prompt_template: String.t() | nil,
           workspace_dir: String.t(),
+          profile_instructions: %{String.t() => String.t()} | nil,
+          mcp_session_id: String.t() | nil,
+          acp_mcp_session_id: String.t() | nil,
           extra_tools: [AgentTool.t()],
           tool_disclosure: keyword() | map() | nil,
           session_scope: :main | :subagent,
@@ -210,6 +216,9 @@ defmodule CodingAgent.Session do
       uses `default_model` from SettingsManager.
     * `:system_prompt` - Explicit system prompt text. Takes highest precedence
       in the composed prompt.
+    * `:profile_instructions` - JSON-safe bootstrap filename/text snapshot. Overrides
+      matching assistant-home instruction files for this session without writing
+      destination files; local memory and credentials are not transferred.
     * `:prompt_template` - Name of a prompt template to load via ResourceLoader.
       Templates are searched in `.lemon/prompts/`, `.claude/prompts/`, and
       `~/.lemon/agent/prompts/`.
@@ -1679,6 +1688,7 @@ defmodule CodingAgent.Session do
              agent_id: state.agent_id,
              contributed_sections: system_sections,
              tool_names: Enum.map(state.tools || [], & &1.name),
+             profile_instructions: state.profile_instructions,
              environment: state.prompt_environment
            }
          ) do

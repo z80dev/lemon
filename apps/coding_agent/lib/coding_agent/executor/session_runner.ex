@@ -4,6 +4,7 @@ defmodule CodingAgent.Executor.SessionRunner do
   use GenServer
 
   alias CodingAgent.Session.Presentation
+  alias CodingAgent.Executor.RemoteRequestCodec
   alias CodingAgent.Session.RunTranslator
   alias LemonCore.ResumeToken
   alias LemonGateway.ExecutionRequest
@@ -25,6 +26,7 @@ defmodule CodingAgent.Executor.SessionRunner do
     :run_id,
     :session_key,
     :agent_id,
+    :mcp_session_id,
     :translator
   ]
 
@@ -138,6 +140,7 @@ defmodule CodingAgent.Executor.SessionRunner do
 
   defp init_session(opts) do
     request = Keyword.fetch!(opts, :request)
+    request = %{request | meta: RemoteRequestCodec.normalize_meta(request.meta)}
     run_opts = Keyword.get(opts, :opts, %{})
     sink_pid = Keyword.fetch!(opts, :sink_pid)
     run_ref = Keyword.fetch!(opts, :run_ref)
@@ -191,6 +194,7 @@ defmodule CodingAgent.Executor.SessionRunner do
         model: get_in(meta, [:model]),
         thinking_level: get_in(meta, [:thinking_level]),
         system_prompt: get_in(meta, [:system_prompt]),
+        profile_instructions: get_in(meta, [:profile_instructions]),
         stream_fn: stream_fn,
         tool_policy: request.tool_policy,
         approval_timeout_ms: get_opt(run_opts, :approval_timeout_ms),
@@ -213,7 +217,7 @@ defmodule CodingAgent.Executor.SessionRunner do
       ]
       |> Presentation.build_session_opts(cwd, run_id, session_key, agent_id)
 
-    case Presentation.start_or_resume_session(resume, session_opts, state) do
+    case start_session(resume, session_opts, state, meta) do
       {:ok, session, session_id, state} ->
         {:ok, _stream} = CodingAgent.Session.subscribe(session, mode: :stream, max_queue: 10_000)
         _unsub = CodingAgent.Session.subscribe(session)
@@ -324,12 +328,46 @@ defmodule CodingAgent.Executor.SessionRunner do
 
   @impl true
   def terminate(_reason, state) do
+    if state.mcp_session_id, do: LemonSkills.McpSession.close(state.mcp_session_id)
+
     if is_pid(state.session) and Process.alive?(state.session) do
       CodingAgent.Session.abort(state.session)
       Presentation.finalize_session(state)
     end
 
     :ok
+  end
+
+  defp start_session(resume, session_opts, state, meta) do
+    with :ok <- CodingAgent.Workspace.validate_profile_instructions(meta[:profile_instructions]),
+         {:ok, mcp_session_id} <- open_profile_mcp(meta, state.cwd) do
+      state = %{state | mcp_session_id: mcp_session_id}
+      session_opts = Keyword.put(session_opts, :mcp_session_id, mcp_session_id)
+
+      case Presentation.start_or_resume_session(resume, session_opts, state) do
+        {:ok, _session, _session_id, _state} = result ->
+          result
+
+        {:error, _reason} = error ->
+          if mcp_session_id, do: LemonSkills.McpSession.close(mcp_session_id)
+          error
+      end
+    end
+  end
+
+  defp open_profile_mcp(meta, cwd) do
+    case Map.get(meta, :mcp_servers) do
+      servers when servers in [nil, []] ->
+        {:ok, nil}
+
+      servers ->
+        id = "profile-mcp-#{System.unique_integer([:positive, :monotonic])}"
+
+        case LemonSkills.McpSession.open_http(id, cwd, servers, self()) do
+          :ok -> {:ok, id}
+          {:error, reason} -> {:error, {:profile_mcp, reason}}
+        end
+    end
   end
 
   defp normalize_resume(%ResumeToken{engine: @engine} = token), do: token

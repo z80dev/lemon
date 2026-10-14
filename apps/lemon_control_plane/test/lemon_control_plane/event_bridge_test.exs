@@ -90,6 +90,31 @@ defmodule LemonControlPlane.EventBridgeTest do
     end
   end
 
+  test "general node invocation events omit execution arguments and MCP secrets" do
+    conn_id = "conn_private_invoke_#{System.unique_integer([:positive])}"
+    assert :ok = Presence.register(conn_id, %{role: :operator, client_id: "test", pid: self()})
+    flush_events()
+
+    event = LemonCore.Event.new(:node_invoke_request, %{
+      invoke_id: "inv-private", node_id: "worker", method: "coding_agent.run", timeout_ms: 30_000,
+      args: %{"request" => %{"prompt" => "private prompt", "meta" => %{
+        "mcp_servers" => [%{"headers" => %{"Authorization" => "Bearer private-header"}}],
+        "system_prompt" => "private persona",
+        "profile_instructions" => %{"SOUL.md" => "private soul"}
+      }}}
+    }, %{})
+    LemonCore.Bus.broadcast("nodes", event)
+
+    assert_receive {:event, "node.invoke.request", payload, _}, 1_000
+    assert payload["invokeId"] == "inv-private"
+    assert payload["cleanup"] == %{"includesArgs" => false}
+    refute Map.has_key?(payload, "args")
+    refute inspect(payload) =~ "private-header"
+    refute inspect(payload) =~ "private prompt"
+    refute inspect(payload) =~ "private persona"
+    refute inspect(payload) =~ "private soul"
+  end
+
   describe "subscribe_run/1" do
     test "subscribes to run topic" do
       run_id = "run_#{System.unique_integer()}"

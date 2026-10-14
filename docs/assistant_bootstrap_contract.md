@@ -48,6 +48,29 @@ Canonical files:
 
 Daily memory files are expected under `memory/YYYY-MM-DD.md` and are read/written via tools.
 
+### Placed profile sessions
+
+Profile execution supplies a JSON-safe `profile_instructions` snapshot mapping
+`AGENTS.md`, `IDENTITY.md`, `README.md`, `SOUL.md` and `USER.md` to text, alongside
+the profile's explicit `system_prompt`. Native sessions overlay this snapshot
+in the existing bootstrap composition; they do not need controller-local profile
+files and do not write the snapshot into destination files. Omitted snapshot
+files do not inherit a stale destination persona. The overlay remains stable
+through prompt refresh and follows the same truncation and subagent filtering
+as disk bootstrap files.
+
+The profile ID derives the assistant workspace on the execution host. Project
+cwd, session journal paths, provider credentials, `TOOLS.md`, `MEMORY.md` and
+daily memory remain destination-local. An omitted remote cwd selects the worker's
+default, never the controller's router cwd.
+
+Profile `mcp_servers` execution definitions contain streamable-HTTP `name`, `url`
+and `headers`. The native run owner opens them through `LemonSkills.McpSession`;
+the tool registry combines these owner-bound tools with configured and ACP tools.
+Connections close when execution ends, initialization fails or the owner dies.
+Headers are volatile execution credentials, not session management metadata.
+
+
 ## Memory Scopes
 
 Lemon uses four frozen memory scopes. New stores must be placed in one of these scopes; no additional scopes may be introduced without updating this document.

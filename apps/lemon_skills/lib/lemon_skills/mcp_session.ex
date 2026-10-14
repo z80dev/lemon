@@ -34,6 +34,34 @@ defmodule LemonSkills.McpSession do
     end
   end
 
+  @doc """
+  Attach profile streamable-HTTP definitions (`name`, `url`, `headers`).
+
+  The execution request may use atom or JSON keys. Only connection fields are
+  accepted; profile definitions cannot select stdio, OAuth persistence or paths.
+  Credentials remain volatile and errors never include a definition.
+  """
+  @spec open_http(term(), String.t(), [map()], pid()) :: :ok | {:error, atom()}
+  def open_http(id, cwd, configs, owner_pid) when is_list(configs) do
+    configs =
+      Enum.map(configs, fn
+        raw when is_map(raw) ->
+          %{
+            "type" => "http",
+            "name" => Map.get(raw, "name", Map.get(raw, :name)),
+            "url" => Map.get(raw, "url", Map.get(raw, :url)),
+            "headers" => Map.get(raw, "headers", Map.get(raw, :headers, %{}))
+          }
+
+        _ ->
+          nil
+      end)
+
+    open(id, cwd, configs, owner_pid)
+  end
+
+  def open_http(_id, _cwd, _configs, _owner_pid), do: {:error, :invalid_config}
+
   @spec tools(term()) :: [LemonAgent.Types.AgentTool.t()]
   def tools(id), do: request({:lookup, id, :tools}, [])
 

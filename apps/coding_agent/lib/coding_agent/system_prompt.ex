@@ -17,6 +17,7 @@ defmodule CodingAgent.SystemPrompt do
 
   @type opts :: %{
           optional(:workspace_dir) => String.t(),
+          optional(:profile_instructions) => %{String.t() => String.t()} | nil,
           optional(:bootstrap_max_chars) => pos_integer(),
           optional(:session_scope) => :main | :subagent | String.t(),
           optional(:skill_context) => String.t(),
@@ -86,6 +87,7 @@ defmodule CodingAgent.SystemPrompt do
       Workspace.load_bootstrap_files(
         workspace_dir: workspace_dir,
         max_chars: max_chars,
+        profile_instructions: Map.get(opts, :profile_instructions),
         session_scope: session_scope
       )
       |> Enum.reject(&(&1.missing or empty?(&1.content)))

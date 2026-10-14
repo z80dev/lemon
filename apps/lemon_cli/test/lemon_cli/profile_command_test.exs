@@ -100,6 +100,19 @@ defmodule LemonCli.ProfileCommandTest do
     {:ok, root: root, state: state, config: config}
   end
 
+  test "profile CLI execution gets MCP headers but management JSON never exposes them" do
+    servers = [%{"name" => "bot", "url" => "https://bot.example/mcp",
+                 "headers" => %{"Authorization" => "Bearer cli-private-token"}}]
+    assert {:ok, _} = LemonCore.ProfileStore.create(%{id: "mcp-cli", mcpServers: servers})
+
+    shown = capture_io(fn -> assert CLI.run(["profile", "show", "mcp-cli", "--json"]) == 0 end)
+    refute shown =~ "cli-private-token"
+    output = capture_io(fn -> assert CLI.run(["profile", "chat", "mcp-cli", "hello", "--json"]) == 0 end)
+    refute output =~ "cli-private-token"
+    assert_receive {:profile_request, request}
+    assert request.meta.mcp_servers == servers
+  end
+
   test "packaged profile lifecycle preserves a stable canonical chat", %{root: root} do
     create =
       capture_io(fn ->

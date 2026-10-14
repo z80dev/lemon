@@ -31,6 +31,21 @@ defmodule CodingAgent.Workspace do
 
   @memory_file "MEMORY.md"
   @subagent_bootstrap_allowlist MapSet.new(["AGENTS.md", "TOOLS.md"])
+  @profile_instruction_files ~w(AGENTS.md IDENTITY.md README.md SOUL.md USER.md)
+
+  @doc "Validate a JSON-safe, content-only profile bootstrap snapshot."
+  def validate_profile_instructions(nil), do: :ok
+
+  def validate_profile_instructions(files) when is_map(files) do
+    if Enum.all?(files, fn {name, text} ->
+         name in @profile_instruction_files and is_binary(text) and String.valid?(text) and
+           not String.contains?(text, <<0>>)
+       end),
+      do: :ok,
+      else: {:error, :invalid_profile_instructions}
+  end
+
+  def validate_profile_instructions(_), do: {:error, :invalid_profile_instructions}
 
   @type session_scope :: :main | :subagent
 
@@ -98,6 +113,7 @@ defmodule CodingAgent.Workspace do
     - :workspace_dir (override default workspace)
     - :max_chars (truncate long files; default #{@default_max_chars})
     - :session_scope (:main or :subagent; default inferred from :parent_session)
+    - :profile_instructions (content-only controller snapshot; never written to disk)
     - :parent_session (when present, inferred as :subagent)
   """
   @spec load_bootstrap_files(keyword()) :: [bootstrap_file()]
@@ -105,9 +121,14 @@ defmodule CodingAgent.Workspace do
     dir = Keyword.get(opts, :workspace_dir, workspace_dir())
     max_chars = Keyword.get(opts, :max_chars, @default_max_chars)
     session_scope = resolve_session_scope(opts)
+    profile_instructions = Keyword.get(opts, :profile_instructions)
+
+    if validate_profile_instructions(profile_instructions) != :ok,
+      do: raise(ArgumentError, "invalid profile instruction snapshot")
 
     required =
       @required_files
+      |> Enum.reject(&(is_map(profile_instructions) and &1 in @profile_instruction_files))
       |> Enum.map(&load_required_file(dir, &1, max_chars))
 
     memory =
@@ -122,7 +143,7 @@ defmodule CodingAgent.Workspace do
           end
       end
 
-    (required ++ memory)
+    (overlay_profile_instructions(required, profile_instructions, dir, max_chars) ++ memory)
     |> filter_bootstrap_files_for_session(session_scope)
   end
 
@@ -151,6 +172,34 @@ defmodule CodingAgent.Workspace do
   # ============================================================================
   # Internal helpers
   # ============================================================================
+
+  # Known persona files form a complete snapshot: omitted files must not pick up
+  # a stale destination persona. TOOLS.md, MEMORY.md and other local files stay local.
+  defp overlay_profile_instructions(files, nil, _dir, _max_chars), do: files
+
+  defp overlay_profile_instructions(files, snapshot, dir, max_chars) do
+    local_files = Enum.reject(files, &(&1.name in @profile_instruction_files))
+
+    persona_files =
+      Enum.flat_map(@profile_instruction_files, fn name ->
+        case Map.fetch(snapshot, name) do
+          {:ok, text} ->
+            [
+              %{
+                name: name,
+                path: Path.join(dir, name),
+                content: trim_content(text, name, max_chars),
+                missing: false
+              }
+            ]
+
+          :error ->
+            []
+        end
+      end)
+
+    persona_files ++ local_files
+  end
 
   defp load_required_file(dir, name, max_chars) do
     path = Path.join(dir, name)

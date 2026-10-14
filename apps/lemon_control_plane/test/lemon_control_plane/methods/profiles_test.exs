@@ -31,7 +31,8 @@ defmodule LemonControlPlane.Methods.ProfilesTest do
     ProfilesGet,
     ProfilesList,
     ProfilesRename,
-    ProfilesRoster
+    ProfilesRoster,
+    ProfilesUpdate
   }
 
   setup do
@@ -72,6 +73,40 @@ defmodule LemonControlPlane.Methods.ProfilesTest do
     end)
 
     {:ok, root: root}
+  end
+
+  test "profiles update reloads placement while every management result redacts MCP headers" do
+    server = %{"name" => "lemon-bot", "url" => "https://bot.example/mcp",
+               "headers" => %{"Authorization" => "Bearer execution-secret"}}
+
+    assert :ok = Schemas.validate("profiles.create", %{"id" => "placed", "mcpServers" => [server]})
+    assert {:ok, created} = ProfilesCreate.handle(%{"id" => "placed", "mcpServers" => [server]}, %{})
+    refute inspect(created) =~ "execution-secret"
+    assert :ok = Schemas.validate("profiles.update", %{"id" => "placed", "node" => "worker"})
+    assert {:ok, updated} = ProfilesUpdate.handle(%{
+      "id" => "placed", "node" => "worker", "systemPrompt" => "Be precise",
+      "model" => "openai:gpt-5", "name" => "Placed Bot"
+    }, %{})
+    assert updated["profile"]["node"] == "worker"
+    assert updated["profile"]["name"] == "Placed Bot"
+    assert updated["profile"]["mcpServers"] == [Map.delete(server, "headers")]
+
+    assert {:ok, fetched} = ProfilesGet.handle(%{"id" => "placed"}, %{})
+    assert {:ok, listed} = ProfilesList.handle(%{}, %{})
+    refute inspect(fetched) =~ "execution-secret"
+    refute inspect(listed) =~ "execution-secret"
+    assert {:ok, receipt} = ProfileChat.handle(%{"id" => "placed", "prompt" => "Investigate"}, %{})
+    assert receipt["node"] == "worker"
+    assert_receive {:profile_request, request}
+    assert request.cwd == nil
+    assert request.meta.remote_cwd_explicit == false
+    assert request.meta.system_prompt == "Be precise"
+    assert request.meta.mcp_servers == [server]
+    assert request.model == "openai:gpt-5"
+    if Process.whereis(LemonRouter.AgentProfiles) do
+      assert LemonRouter.AgentProfiles.get("placed").system_prompt == "Be precise"
+    end
+    assert {:error, {:not_found, _}} = ProfilesUpdate.handle(%{"id" => "missing", "name" => "x"}, %{})
   end
 
   test "profile chat returns a bounded reconciliation receipt for outcome-unknown submission" do

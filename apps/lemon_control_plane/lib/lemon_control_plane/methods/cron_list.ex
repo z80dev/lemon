@@ -46,6 +46,7 @@ defmodule LemonControlPlane.Methods.CronList do
       "schedule" => job.schedule,
       "enabled" => job.enabled,
       "agentId" => job.agent_id,
+      "profileId" => job.profile_id,
       "sessionKey" => job.session_key,
       "prompt" => if(include_target_text?, do: job.prompt, else: nil),
       "command" => if(include_target_text?, do: job.command, else: nil),

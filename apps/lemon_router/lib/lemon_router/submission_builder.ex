@@ -165,7 +165,7 @@ defmodule LemonRouter.SubmissionBuilder do
          run_process_module: MapHelpers.get_key(opts, :run_process_module),
          run_process_opts: MapHelpers.get_key(opts, :run_process_opts),
          pending_compaction_marker: pending_compaction_marker,
-         meta: enriched_meta
+         meta: Map.drop(enriched_meta, [:mcp_servers, "mcp_servers"])
        })}
     end
   end
@@ -188,7 +188,7 @@ defmodule LemonRouter.SubmissionBuilder do
         _ -> {:ok, %{}}
       end
     else
-      {:error, {:unknown_agent_id, agent_id}}
+      get_managed_profile(agent_id)
     end
   catch
     :exit, _ ->
@@ -200,6 +200,16 @@ defmodule LemonRouter.SubmissionBuilder do
   end
 
   defp get_agent_profile(_), do: {:error, {:unknown_agent_id, nil}}
+
+  defp get_managed_profile(agent_id) do
+    case LemonCore.ProfileStore.get(agent_id) do
+      {:ok, profile} ->
+        {:ok, %{id: agent_id, model: profile["model"], system_prompt: profile["systemPrompt"]}}
+
+      {:error, _} ->
+        {:error, {:unknown_agent_id, agent_id}}
+    end
+  end
 
   defp agent_profile_exists?(agent_id) when is_binary(agent_id) and agent_id != "" do
     AgentProfiles.exists?(agent_id) == true
@@ -227,8 +237,13 @@ defmodule LemonRouter.SubmissionBuilder do
   end
 
   defp resolve_effective_cwd(cwd_override, meta, origin) do
-    normalize_cwd(cwd_override) || normalize_cwd(MapHelpers.get_key(meta, :cwd)) ||
-      default_cwd_for(origin)
+    if MapHelpers.get_key(meta, :node) not in [nil, "", "local", :local] and
+         Map.get(meta, :remote_cwd_explicit, Map.get(meta, "remote_cwd_explicit")) == false do
+      nil
+    else
+      normalize_cwd(cwd_override) || normalize_cwd(MapHelpers.get_key(meta, :cwd)) ||
+        default_cwd_for(origin)
+    end
   end
 
   # Remote chat runs default to the assistant home, never the user's $HOME.

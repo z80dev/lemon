@@ -73,7 +73,20 @@ defmodule LemonControlPlane.Protocol.Schemas do
         "avatar" => :string,
         "model" => :string,
         "systemPrompt" => :string,
-        "node" => :string
+        "node" => :string,
+        "mcpServers" => :list
+      }
+    },
+    "profiles.update" => %{
+      required: %{"id" => :string},
+      optional: %{
+        "name" => :string,
+        "description" => :string,
+        "avatar" => :string,
+        "model" => :string,
+        "systemPrompt" => :string,
+        "node" => :string,
+        "mcpServers" => :list
       }
     },
     "profiles.clone" => %{
@@ -84,7 +97,8 @@ defmodule LemonControlPlane.Protocol.Schemas do
         "avatar" => :string,
         "model" => :string,
         "systemPrompt" => :string,
-        "node" => :string
+        "node" => :string,
+        "mcpServers" => :list
       }
     },
     "profiles.rename" => %{required: %{"id" => :string, "name" => :string}, optional: %{}},
@@ -440,6 +454,7 @@ defmodule LemonControlPlane.Protocol.Schemas do
       },
       optional: %{
         "agentId" => :string,
+        "profileId" => :string,
         "sessionKey" => :string,
         "prompt" => :string,
         "command" => :string,
@@ -541,6 +556,7 @@ defmodule LemonControlPlane.Protocol.Schemas do
       },
       optional: %{
         "agentId" => :string,
+        "profileId" => :string,
         "cwd" => :string,
         "images" => :list,
         "queueMode" => :string

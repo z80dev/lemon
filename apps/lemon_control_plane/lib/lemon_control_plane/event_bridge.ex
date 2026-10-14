@@ -706,8 +706,8 @@ defmodule LemonControlPlane.EventBridge do
        "invokeId" => payload[:invoke_id],
        "nodeId" => payload[:node_id],
        "method" => payload[:method],
-       "args" => payload[:args],
-       "timeoutMs" => payload[:timeout_ms]
+       "timeoutMs" => payload[:timeout_ms],
+       "cleanup" => %{"includesArgs" => false}
      }}
   end
 
