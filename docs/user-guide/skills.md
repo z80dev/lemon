@@ -55,8 +55,9 @@ Project skills override user skills with the same key. Within the project:
 
 1. `<cwd>/.lemon/skill` wins.
 2. Walk from cwd to the nearest repository root (including it). At each level,
-   read `.agents/skills`, then `.omp/skills`, then `.claude/skills`. The nearest
-   level wins over more distant ancestors, regardless of provider.
+   read `.agents/skills`, then `.omp/skills`, `.claude/skills`, `.codex/skills`
+   and `.github/skills`. The nearest level wins over more distant ancestors,
+   regardless of provider.
 
 A `.git` directory or worktree `.git` file stops the walk. Outside a repository,
 the walk reaches the filesystem root. Ancestor `.lemon/skill` directories are
@@ -69,18 +70,20 @@ User roots, highest precedence first:
 2. `~/.agents/skills`
 3. `~/.omp/agent/skills`
 4. `~/.claude/skills`
+5. `~/.codex/skills`
 
 `LEMON_AGENT_DIR` overrides the Lemon agent directory, followed by the
 `:lemon_skills` and `:coding_agent` `:agent_dir` application settings.
 `LEMON_HARNESS_SKILLS_DIR` (or `:lemon_skills, :harness_global_skills_dir`)
 overrides the harness root. When any of these isolation overrides is present,
-the additional OMP and Claude **user defaults are omitted**; existing Lemon
+the additional OMP, Claude and Codex **user defaults are omitted**; existing Lemon
 and harness resolution is unchanged.
 
-To explicitly include alternative user roots, set `LEMON_OMP_SKILLS_DIR` and/or
-`LEMON_CLAUDE_SKILLS_DIR`. Their application-setting equivalents are
-`:lemon_skills, :omp_global_skills_dir` and
-`:lemon_skills, :claude_global_skills_dir`; environment variables win.
+To explicitly include alternative user roots, set `LEMON_OMP_SKILLS_DIR`,
+`LEMON_CLAUDE_SKILLS_DIR` and/or `LEMON_CODEX_SKILLS_DIR`. Their
+application-setting equivalents are `:lemon_skills, :omp_global_skills_dir`,
+`:lemon_skills, :claude_global_skills_dir` and
+`:lemon_skills, :codex_global_skills_dir`; environment variables win.
 These explicit paths still apply in isolated runtimes.
 
 Discovery does not grant trust or execute a bundle. External and project skills

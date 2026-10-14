@@ -52,6 +52,7 @@ export default {
           { text: "Learn from sources", link: "/user-guide/learn-from-sources" },
           { text: "Backup and Restore", link: "/user-guide/backups" },
           { text: "Skills", link: "/user-guide/skills" },
+          { text: "File slash commands", link: "/user-guide/slash-commands" },
           { text: "Memory", link: "/user-guide/memory" },
           { text: "Honcho Memory", link: "/user-guide/honcho" },
           { text: "Delegating to omp", link: "/user-guide/omp" },

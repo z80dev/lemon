@@ -44,7 +44,9 @@ defmodule CodingAgent.Commands do
 
       Commit the current changes. Message: $ARGUMENTS
 
-  Files without frontmatter use the whole file as the template.
+  Files without frontmatter use the whole file as the template. `model` and
+  `subtask` are parsed into the command map; expansion does not apply them.
+  User guide: `docs/user-guide/slash-commands.md`.
 
   ## Gemini TOML command format
 

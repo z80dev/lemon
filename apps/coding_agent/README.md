@@ -536,7 +536,7 @@ details.
 | Module | Description |
 |--------|-------------|
 | `CodingAgent.Subagents` | Named Markdown personas from `.lemon/agents/*.md`, `~/.lemon/agents/*.md`, and built-in `scout`, `reviewer`, `task-executor` |
-| `CodingAgent.Commands` | Slash command discovery from `.lemon/command/*.md` and `~/.lemon/agent/command/*.md` with YAML frontmatter |
+| `CodingAgent.Commands` | File slash commands from Lemon, omp, `.agents`, Claude, Codex, Copilot and Gemini roots; the executor expands user-typed `/name args` (see [file slash commands](../../docs/user-guide/slash-commands.md)) |
 
 Create `.lemon/agents/architect.md` for a project persona (or use `~/.lemon/agents/architect.md` globally):
 

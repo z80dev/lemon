@@ -20,7 +20,8 @@ with the workflow you need; source modules and tests define implementation APIs.
 - [CLI and sessions](user-guide/cli.md), [TUI](../clients/tui/README.md) and [browser](user-guide/web.md)
 - [Profiles](user-guide/profiles.md), [memory](user-guide/memory.md) and [Honcho](user-guide/honcho.md)
 - [Delegating to omp](user-guide/omp.md): run, watch, steer and resume omp sessions
-- [Skills](user-guide/skills.md), [reviewed source learning](user-guide/learn-from-sources.md)
+- [Skills](user-guide/skills.md), [file slash commands](user-guide/slash-commands.md),
+  [reviewed source learning](user-guide/learn-from-sources.md)
   and [bounded context references](user-guide/context-references.md)
 - [Reminders, heartbeats and daily brief](user-guide/reminders-and-heartbeats.md)
 - [Backups](user-guide/backups.md), [safe updates](user-guide/updates.md) and [Hermes migration](user-guide/migrate-from-hermes.md)

@@ -10,6 +10,13 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- File slash commands from Claude Code (`.claude/commands`, nested `a:b`),
+  Codex (`.codex/prompts`), Copilot (`.github/prompts/*.prompt.md`), Gemini
+  (`.gemini/commands/*.toml`), omp and `.agents` roots, plus their user-global
+  dirs: `/name args` expands server-side for TUI, ACP and channel prompts, and
+  the TUI palette, `/help` and ACP command list show them. Skills also load from
+  `.codex/skills`, `.github/skills` and `~/.codex/skills`. See
+  [File slash commands](docs/user-guide/slash-commands.md).
 - **Lemon Web, rebuilt.** The browser UI is now a full workspace on the same
   control-plane methods and events as the TUI. Chat streams Markdown with
   highlighted code, thinking blocks and rich tool cards (shell output and exit
