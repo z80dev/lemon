@@ -29,6 +29,7 @@ export interface EventService {
   visible(principal: Principal, event: P.RealtimeEvent, audience: EventAudience): boolean;
   subscribe(listener: (event: P.RealtimeEvent, audience: EventAudience) => void): () => void;
 }
+export interface AuthSessionOptions { persistent?: boolean }
 export interface AccessService {
   authenticate(request: Request, policy?: Authentication): Promise<Principal | null>;
   user(userId: string): P.User;
@@ -40,7 +41,7 @@ export interface AccessService {
   attachment(principal: Principal, attachmentId: string): P.Attachment;
   canRead(principal: Principal, collection: string, entity: unknown): boolean;
   revokeUser(userId: string): Promise<void>;
-  session(userId: string, deviceId?: string | null): Promise<P.AuthResult>;
+  session(userId: string, deviceId?: string | null, options?: AuthSessionOptions): Promise<P.AuthResult>;
   issueReauth(userId: string): { reauthToken: string; expiresAtMs: number };
   consumeReauth(userId: string, token: string): void;
 }
@@ -94,7 +95,6 @@ export interface IntegrationServices {
   deprovisionUser?(userId: string): Promise<void>;
   requireSSO?(userId: string): Promise<boolean> | boolean;
   reconcile?(): Promise<void>;
-  defaultBotIds?(principal: Principal): Promise<string[]>;
   authorizeConnector?(principal: Principal, input: { connectorId: string; botId: string; conversationId: string; toolName: string; operationId: string }): Promise<void>;
   connectorProvisioning?(principal: Principal, botId: string): Promise<unknown>;
   authorizeExportAttachment?(principal: Principal, attachmentId: string): void;
@@ -109,7 +109,6 @@ export interface IntegrationServices {
   dispose?(): void | Promise<void>;
   refreshPolicy?(principal: Principal, botIds?: string[], options?: { workspace?: boolean }): Promise<void>;
   canReadResource?(principal: Principal, collection: string, entity: unknown): boolean;
-  sharedProfilePolicy?(botId: string): Promise<P.EffectivePolicy>;
   observeAccountTeardown?(operationId: string): Promise<P.ProviderCleanupResult[]>;
 }
 export interface BackendConfiguration {
