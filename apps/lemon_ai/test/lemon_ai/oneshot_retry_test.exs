@@ -30,6 +30,21 @@ defmodule LemonAi.OneshotRetryTest do
     Keyword.merge([base_delay_ms: 2, sleep_fun: fn ms -> send(parent, {:sleep, ms}); :ok end], extra)
   end
 
+  test "invalid numeric policy never starts an unbounded request loop" do
+    parent = self()
+
+    for key <- [:max_attempts, :base_delay_ms, :max_delay_ms],
+        value <- [:infinity, "3", nil, 1.5] do
+      assert_raise ArgumentError, "#{key} must be an integer", fn ->
+        OneshotRetry.run(fn _ -> send(parent, :unexpected_attempt); {:error, :timeout} end,
+          [{key, value}]
+        )
+      end
+    end
+
+    refute_received :unexpected_attempt
+  end
+
   test "429 response hints determine the wait before retrying a resolved error" do
     failed = failure({:http_error, 429, "Rate limited", [{"retry-after-ms", "1234"}]})
     success = %AssistantMessage{stop_reason: :stop, content: [%TextContent{text: "ok"}]}

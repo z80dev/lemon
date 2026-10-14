@@ -34,12 +34,19 @@ defmodule LemonAi.OneshotRetry do
     options = Map.new(options)
 
     policy = %{
-      max_attempts: max(1, Map.get(options, :max_attempts, 3)),
-      base_delay_ms: max(1, Map.get(options, :base_delay_ms, 500)),
-      max_delay_ms: max(0, Map.get(options, :max_delay_ms, 30_000))
+      max_attempts: integer_option(options, :max_attempts, 3, 1),
+      base_delay_ms: integer_option(options, :base_delay_ms, 500, 1),
+      max_delay_ms: integer_option(options, :max_delay_ms, 30_000, 0)
     }
 
     attempt(complete, options, policy, 1)
+  end
+
+  defp integer_option(options, key, default, minimum) do
+    case Map.get(options, key, default) do
+      value when is_integer(value) -> max(minimum, value)
+      _ -> raise ArgumentError, "#{key} must be an integer"
+    end
   end
 
   defp attempt(complete, options, policy, number) do
