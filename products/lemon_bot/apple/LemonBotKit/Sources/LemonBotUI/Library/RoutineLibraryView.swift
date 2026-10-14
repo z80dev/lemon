@@ -94,7 +94,7 @@ struct RoutineEditorView: View {
                     Button("Test as real work") { testPresented = true }.disabled(action.busy || action.uncertain || store.connectionState != "online")
                     Button("Preview permanent deletion", role: .destructive) { Task { await action.perform { preview = try await store.mutate("POST", "/routines/\(hubID(saved.id))/preview", body: ["action": .string("delete")]) } } }.disabled(action.busy || action.uncertain || store.connectionState != "online")
                 }
-                if let preview { HubConfirmationForm(preview: preview, action: action) { name in await action.perform {
+                if let preview { HubConfirmationForm(store: store, preview: preview, action: action) { name in await action.perform {
                     let _: HubDeleted = try await store.mutate("DELETE", "/routines/\(hubID(saved.id))", body: preview.body(name: name)); dismiss()
                 } } }
                 if saved.webhookUrl != nil {

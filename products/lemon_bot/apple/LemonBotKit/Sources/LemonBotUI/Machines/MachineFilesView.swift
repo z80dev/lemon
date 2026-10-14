@@ -76,7 +76,7 @@ public struct MachineFilesView: View {
                         let _: FileInfo = try await store.mutate("POST", "/machines/\(hubID(machineID))/files/move", body: ["path": .string(file.path), "destination": .string(destination), "expectedModifiedAtMs": .number(file.modifiedAtMs)]); selected = nil; try await refresh()
                     } } }.disabled(destination == file.path || action.busy || action.uncertain || store.connectionState != "online")
                     Button("Preview delete exact path", role: .destructive) { Task { await action.perform { preview = try await store.mutate("POST", "/machines/\(hubID(machineID))/files/preview", body: ["path": .string(file.path), "action": .string("delete")]) } } }.disabled(action.busy || action.uncertain || store.connectionState != "online")
-                    if let preview { HubConfirmationForm(preview: preview, action: action) { name in await action.perform {
+                    if let preview { HubConfirmationForm(store: store, preview: preview, action: action) { name in await action.perform {
                         let _: HubDeleted = try await store.mutate("DELETE", "/machines/\(hubID(machineID))/files", body: ["path": .string(file.path), "confirmationToken": .string(preview.confirmationToken), "confirmName": .string(name)]); self.preview = nil; selected = nil; try await refresh()
                     } } }
                 }
@@ -135,8 +135,15 @@ public struct MachineFilesView: View {
     private func upload(_ url: URL) async throws {
         let scoped = url.startAccessingSecurityScopedResource(); defer { if scoped { url.stopAccessingSecurityScopedResource() } }
         let handle = try FileHandle(forReadingFrom: url); defer { try? handle.close() }
-        let target = overwrite ? selected!.path : join(url.lastPathComponent)
-        var expected = overwrite ? selected?.modifiedAtMs : nil
+        let target: String
+        var expected: Double?
+        if overwrite {
+            guard let selected, selected.kind == "file" else { throw CocoaError(.fileWriteInvalidFileName) }
+            target = selected.path
+            expected = selected.modifiedAtMs
+        } else {
+            target = join(url.lastPathComponent)
+        }
         var offset = 0
         repeat {
             try Task.checkCancellation()

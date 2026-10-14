@@ -74,6 +74,7 @@ func hubMerged<T>(_ existing: [T], _ incoming: [T], append: Bool, id: KeyPath<T,
     return result
 }
 struct HubConfirmationForm: View {
+    let store: LemonBotStore
     let preview: HubConfirmation
     let action: HubAction
     let commit: (String) async -> Void
@@ -90,8 +91,11 @@ struct HubConfirmationForm: View {
             }
             Text("Expires \(hubDate(preview.expiresAtMs))")
             TextField("Type exactly: \(preview.confirmName)", text: $typedName)
-            Button("Confirm reviewed action", role: .destructive) { Task { await commit(typedName) } }
-                .disabled(typedName != preview.confirmName || Date().timeIntervalSince1970 * 1000 >= preview.expiresAtMs || action.busy || action.uncertain)
+            Button("Confirm reviewed action", role: .destructive) {
+                guard store.connectionState == "online" else { action.error = "Reconnect before confirming. This destructive action was not queued."; return }
+                Task { await commit(typedName) }
+            }
+                .disabled(store.connectionState != "online" || typedName != preview.confirmName || Date().timeIntervalSince1970 * 1000 >= preview.expiresAtMs || action.busy || action.uncertain)
         }
     }
 }

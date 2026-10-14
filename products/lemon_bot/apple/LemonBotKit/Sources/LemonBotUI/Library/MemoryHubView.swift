@@ -51,7 +51,7 @@ public struct MemoryHubView: View {
                 }
                 if cursor != nil { Button("More memory") { Task { await load(more: true) } } }
             }
-            if let confirmation, let forgetting { HubConfirmationForm(preview: confirmation, action: action) { name in await action.perform {
+            if let confirmation, let forgetting { HubConfirmationForm(store: store, preview: confirmation, action: action) { name in await action.perform {
                 let _: HubDeleted = try await store.mutate("DELETE", "/memory/\(hubID(forgetting.id))", body: confirmation.body(name: name)); self.confirmation = nil; self.forgetting = nil; try await refresh()
             } } }
             Section(editing == nil ? "Add explicit memory" : "Correct selected memory") {

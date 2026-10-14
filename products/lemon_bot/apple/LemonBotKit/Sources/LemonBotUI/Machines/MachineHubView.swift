@@ -189,7 +189,7 @@ public struct MachineDetailView: View {
                 MachineEnrollmentView(store: store, machineID: machineID, initialInvite: nil)
                 Button("Preview detach", role: .destructive) { Task { await action.perform { preview = try await store.mutate("POST", "/machines/\(hubID(machineID))/preview", body: ["action": .string("detach")]) } } }
                     .disabled(action.busy || action.uncertain || store.connectionState != "online")
-                if let preview { HubConfirmationForm(preview: preview, action: action) { name in await action.perform {
+                if let preview { HubConfirmationForm(store: store, preview: preview, action: action) { name in await action.perform {
                     let _: HubDeleted = try await store.mutate("DELETE", "/machines/\(hubID(machineID))", body: preview.body(name: name)); self.preview = nil; try await load()
                 } } }
             }
@@ -227,7 +227,7 @@ struct HostOperationsView: View {
                     preview = try await store.mutate("POST", "/host-operations/preview", body: ["machineIds": .array(selected.sorted().map(JSONValue.string)), "action": .string(hostAction)])
                 } } }.disabled(selected.isEmpty || action.busy || action.uncertain || store.connectionState != "online")
             }
-            if let preview { HubConfirmationForm(preview: preview, action: action) { name in await action.perform {
+            if let preview { HubConfirmationForm(store: store, preview: preview, action: action) { name in await action.perform {
                 var body = preview.body(name: name); body["machineIds"] = .array(selected.sorted().map(JSONValue.string)); body["action"] = .string(hostAction)
                 let operation: HostOperation = try await store.mutate("POST", "/host-operations", body: body); operations.insert(operation, at: 0); self.preview = nil
                 if operation.state == "outcome_unknown" { action.uncertain = true; action.error = "Host operation outcome_unknown; reconcile operation \(operation.id), do not start another operation." }
