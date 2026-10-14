@@ -19,6 +19,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   modes, and expand on local steering/redirect without expanding internal or
   named-destination prompts. Inline-code imports respect matching backtick runs
   across lines.
+- Secret placeholders now protect friendly labels against every contextual
+  regex value in the current input and previously matched session values,
+  including overlap constituents, cached labels and forged token-shaped
+  prefixes. Regexes retain context across protected tokens, and self-overlapping
+  literal secrets redact their complete union without leaving a credential
+  suffix visible.
 
 - Skills with `hide: true` or `disable-model-invocation: true` frontmatter are
   omitted from the model-visible skill listing and per-turn relevant-skill
