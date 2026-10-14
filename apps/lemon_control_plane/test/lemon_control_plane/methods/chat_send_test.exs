@@ -8,21 +8,40 @@ defmodule LemonControlPlane.Methods.ChatSendTest do
   @png_data "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII="
 
   defmodule RouterStub do
-    def submit(params) do
+    def submit_with_receipt(params) do
       send(self(), {:submitted, params})
-      {:ok, "run_chat_cwd"}
+      {:ok, %{run_id: params.run_id, session_key: params.session_key, state: :accepted,
+              effective_mode: :queued, target_run_id: params.run_id}}
     end
   end
 
   defmodule RejectingRouterStub do
-    def submit(params), do: {:error, {:rejected, params}}
+    def submit_with_receipt(params), do: {:error, {:rejected, params}}
   end
 
   defmodule UnknownRouterStub do
-    def submit(params) do
+    def submit_with_receipt(params) do
       send(self(), {:submitted, params})
       {:error, :outcome_unknown}
     end
+  end
+
+  defmodule SteeringRouterStub do
+    def submit_with_receipt(params) do
+      {:ok, %{run_id: params.run_id, session_key: params.session_key, state: :accepted,
+              effective_mode: :steer, target_run_id: "actual-active-run"}}
+    end
+  end
+
+  defmodule WrongIdRouterStub do
+    def submit_with_receipt(params) do
+      {:ok, %{run_id: "unrelated-run", session_key: params.session_key, state: :accepted,
+              effective_mode: :new_run, target_run_id: "unrelated-run"}}
+    end
+  end
+
+  defmodule ConflictRouterStub do
+    def submit_with_receipt(_params), do: {:error, :run_id_conflict}
   end
 
   setup do
@@ -59,10 +78,11 @@ defmodule LemonControlPlane.Methods.ChatSendTest do
   end
 
   test "valid absolute cwd reaches the router request unchanged", %{root: root, ctx: ctx} do
-    assert {:ok, %{"runId" => "run_chat_cwd"}} =
+    assert {:ok, %{"runId" => run_id}} =
              ChatSend.handle(params(%{"cwd" => root}), ctx)
 
     assert_received {:submitted, request}
+    assert run_id == request.run_id
     assert request.cwd == root
     assert request.session_key == "agent:chat-workspace:main"
     assert request.prompt == "hello"
@@ -182,6 +202,58 @@ defmodule LemonControlPlane.Methods.ChatSendTest do
     assert details["runId"] == id
     assert details["retrySafe"] == false
     refute inspect(details) =~ @png_data
+  end
+
+  test "caller fixed ID survives ambiguous admission without another send" do
+    assert {:error, {:unavailable, _, details}} =
+             ChatSend.handle(params(%{"runId" => "run_fixed"}), %{router_mod: UnknownRouterStub})
+    assert details["runId"] == "run_fixed"
+    assert details["retrySafe"] == false
+    assert_receive {:submitted, %{run_id: "run_fixed"}}
+    refute_receive {:submitted, _}
+  end
+
+  test "invalid fixed IDs fail before admission", %{ctx: ctx} do
+    for id <- [nil, "", " whitespace", "line\nbreak", "../escape", String.duplicate("x", 129), 42] do
+      assert {:error, {:invalid_request, _, nil}} =
+               ChatSend.handle(params(%{"runId" => id}), ctx)
+    end
+    refute_receive {:submitted, _}
+  end
+
+  test "profile binding passes the caller ID and actual queue disposition", %{ctx: ctx} do
+    assert {:ok, receipt} =
+             ChatSend.handle(params(%{"runId" => "profile-fixed", "profileId" => "workspace",
+                                      "queueMode" => "steer"}), ctx)
+    assert_receive {:submitted, %{run_id: "profile-fixed"}}
+    assert receipt["runId"] == "profile-fixed"
+    assert receipt["effectiveMode"] == "queued"
+    assert receipt["targetRunId"] == "profile-fixed"
+  end
+
+  test "actual steering target comes from admission rather than the request" do
+    assert {:ok, receipt} =
+             ChatSend.handle(params(%{"runId" => "instruction", "queueMode" => "steer"}),
+               %{router_mod: SteeringRouterStub})
+    assert receipt["runId"] == "instruction"
+    assert receipt["effectiveMode"] == "steer"
+    assert receipt["targetRunId"] == "actual-active-run"
+  end
+
+  test "a mismatched acknowledgement retains the original uncertain ID" do
+    assert {:error, {:unavailable, _, details}} =
+             ChatSend.handle(params(%{"runId" => "original-run"}), %{router_mod: WrongIdRouterStub})
+    assert details["runId"] == "original-run"
+    assert details["retrySafe"] == false
+    refute inspect(details) =~ "unrelated-run"
+  end
+
+  test "conflicting fixed intent is an explicit nonretryable conflict" do
+    assert {:error, {:conflict, _, details}} =
+             ChatSend.handle(params(%{"runId" => "conflicting-run"}), %{router_mod: ConflictRouterStub})
+    assert details["code"] == "RUN_ID_CONFLICT"
+    assert details["runId"] == "conflicting-run"
+    assert details["retrySafe"] == false
   end
 
   test "profileId inherits placement and persona for a noncanonical session", %{ctx: ctx} do

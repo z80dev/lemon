@@ -112,6 +112,20 @@ defmodule LemonControlPlane.Methods.ControlPlaneMethodsTest do
       refute inspect(result["summary"]) =~ "private prompt body"
     end
 
+    test "completed cancellation proof is projected independently of error text" do
+      for {proof, expected} <- [{true, true}, {false, false}, {nil, false}] do
+        run_id = "run_wait_cancelled_#{System.unique_integer([:positive, :monotonic])}"
+        LemonCore.RunStore.finalize(run_id, %{
+          completed: %{run_id: run_id, ok: false, error: :interrupted,
+                       meta: %{cancelled: proof}},
+          session_key: "agent:wait:cancelled"
+        })
+        assert {:ok, result} =
+                 AgentWait.handle(%{"runId" => run_id, "timeoutMs" => 1}, %{})
+        assert result["cancelled"] == expected
+      end
+    end
+
     test "budget failure results retain machine-readable caps and actual usage for print JSON" do
       run_id = "run_wait_budget_#{System.unique_integer([:positive, :monotonic])}"
       session_key = "agent:wait:budget:#{System.unique_integer([:positive])}"

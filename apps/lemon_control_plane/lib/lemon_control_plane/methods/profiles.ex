@@ -103,15 +103,10 @@ defmodule LemonControlPlane.Methods.ProfilesSupport do
     {:error, Errors.internal_error("Profile operation failed")}
   end
 
-  def submission_outcome_unknown(request, profile) do
+  def submission_outcome_unknown(details, profile) do
     {:error,
-     Errors.error(:unavailable, "Profile chat submission outcome is unknown", %{
-       "code" => "SUBMISSION_OUTCOME_UNKNOWN",
-       "runId" => request.run_id,
-       "profileId" => profile["id"],
-       "sessionKey" => request.session_key,
-       "retrySafe" => false
-     })}
+     Errors.error(:unavailable, "Profile chat submission outcome is unknown",
+       Map.put(details, "profileId", profile["id"]))}
   end
 
   def queue_mode(nil), do: :collect
@@ -369,7 +364,7 @@ end
 defmodule LemonControlPlane.Methods.ProfileChat do
   @moduledoc false
   @behaviour LemonControlPlane.Method
-  alias LemonControlPlane.ImageInputs
+  alias LemonControlPlane.{ChatSubmission, ImageInputs}
   alias LemonControlPlane.Methods.ProfilesSupport
 
   @impl true
@@ -382,23 +377,24 @@ defmodule LemonControlPlane.Methods.ProfileChat do
   def handle(params, _ctx) do
     id = params["id"]
 
-    with {:ok, images} <- ImageInputs.validate(Map.get(params, "images", [])),
+    with {:ok, run_id} <- ChatSubmission.run_id(params),
+         {:ok, images} <- ImageInputs.validate(Map.get(params, "images", [])),
          {:ok, profile} <- LemonCore.ProfileStore.get_for_execution(id),
          :ok <- ProfilesSupport.refresh(id),
          {:ok, base_request} <-
            LemonCore.ProfileStore.chat_request(profile, params["prompt"],
              model: params["model"],
+             run_id: run_id,
              images: images,
              queue_mode: ProfilesSupport.queue_mode(params["queueMode"]),
              meta: %{control_plane: true}
            ) do
-      request = %{base_request | images: images, run_id: LemonCore.Id.run_id()}
+      request = base_request
 
-      case LemonCore.RouterBridge.submit_run(request) do
-        {:ok, run_id} ->
+      case ChatSubmission.submit(request, &LemonCore.RouterBridge.submit_run_with_receipt/1) do
+        {:ok, receipt} ->
           {:ok,
-           %{
-             "runId" => run_id,
+           Map.merge(receipt, %{
              "profileId" => id,
              "sessionKey" => request.session_key,
              "node" => profile["node"],
@@ -416,13 +412,16 @@ defmodule LemonControlPlane.Methods.ProfileChat do
                  "includesSecretValues" => false
                }
              }
-           }}
+           })}
 
-        {:error, :outcome_unknown} ->
-          ProfilesSupport.submission_outcome_unknown(request, profile)
+        {:error, {:unavailable, _message, details}} ->
+          ProfilesSupport.submission_outcome_unknown(details, profile)
 
-        {:error, reason} ->
-          ProfilesSupport.error(reason)
+        {:error, {:internal_error, _message, _details}} ->
+          ProfilesSupport.error(:submission_failed)
+
+        {:error, _} = error ->
+          error
       end
     else
       {:error, {:invalid_request, _message, nil}} = error -> error

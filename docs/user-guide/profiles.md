@@ -134,6 +134,50 @@ prompt. It does not accept a caller-supplied working directory or node: both
 come from the validated profile record. Lifecycle and export summaries are
 credential-free by construction.
 
+### Fixed admission IDs and reconciliation
+
+`chat.send` (including its `profileId` path) and `profile.chat` accept optional
+`runId`. Generate and persist this ID **before** sending: 1–128 ASCII letters,
+digits, underscores, dots, colons or hyphens, beginning with a letter or digit.
+If omitted, the runtime generates it. A fixed ID durably binds the complete
+normalized execution intent. An identical submission returns its receipt without
+dispatching again; changed content, placement, images or queue mode conflicts
+with `CONFLICT` and details `code: "RUN_ID_CONFLICT"`. Profile edits can change
+the resolved intent, so do not use a resubmission as a substitute for receipt reads.
+
+Success includes `runId`, `sessionKey`, `state: "accepted"`, `effectiveMode`,
+`targetRunId`, and `retrySafe: false`. Requested `queueMode` in the redacted
+summary is not evidence of the effective action:
+
+| Effective mode | Meaning and target |
+| --- | --- |
+| `new_run` | A new run was started; target is this run ID. |
+| `queued` | Admitted behind other work; target is this run ID. |
+| `merged` | A debounced followup joined another queued intent; target is the surviving run ID (the newest followup). Earlier receipts track subsequent merges. |
+| `steer_pending`, `steer_backlog_pending`, `redirect_pending` | Dispatch to the actual active target was accepted by the router, not yet by its executor. |
+| `steer`, `steer_backlog`, `redirect` | The actual target acknowledged the instruction. |
+| `interrupt` | The replacement was queued and cancellation dispatched to the recorded active target; this is not proof that cancellation completed. |
+
+Idle steering/redirect and idle interrupt start a `new_run`; image-bearing
+steering falls back to its own queued/new run because steering is text-only.
+Rejected steering updates the receipt to its actual queued/new/merged fallback.
+An admission receipt is not a run completion result.
+
+After a lost response, read `runs.receipt.get` (`read` scope) with `{"runId": ID}`.
+It returns `{"receipt": {...}}` with the same receipt fields. An ambiguous
+admission fence returns `state: "outcome_unknown"` with nullable `sessionKey`,
+`effectiveMode` and `targetRunId`. Missing IDs return `NOT_FOUND`; query failures
+remain `UNAVAILABLE`, not missing or idle. Use `agent.wait` for final answer,
+success/error and explicit `cancelled` proof, following `targetRunId` for merged
+or steered work. `SUBMISSION_OUTCOME_UNKNOWN` errors retain the original `runId`
+and `sessionKey` with `retrySafe: false`; reconcile that ID, never fabricate
+another send. Receipts retain only IDs, private semantic hashes and dispositions,
+never prompt content; semantic hashes do not cross the wire.
+
+For `interrupt`, await completion under the submitted `runId`, not the old
+cancellation target. Re-read pending steering receipts before choosing a
+completion target: a rejected instruction can become its own queued run.
+
 ### Placement-aware sessions and routines
 
 `chat.send` accepts `profileId` alongside `sessionKey` and `prompt`. This uses

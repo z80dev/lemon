@@ -22,19 +22,26 @@ defmodule LemonRouter.SessionState do
           active: active_run() | nil,
           queue: [queued_submission()],
           last_followup_at_ms: integer() | nil,
-          pending_steers: %{optional(binary()) => [pending_steer_entry()]}
+          pending_steers: %{optional(binary()) => [pending_steer_entry()]},
+          merged_run_ids: %{optional(binary()) => [binary()]},
+          receipt_store: LemonCore.Store.server(),
+          unpersisted_receipts: %{optional(binary()) => map()}
         }
 
   defstruct conversation_key: nil,
             active: nil,
             queue: [],
             last_followup_at_ms: nil,
-            pending_steers: %{}
+            pending_steers: %{},
+            merged_run_ids: %{},
+            receipt_store: LemonCore.Store,
+            unpersisted_receipts: %{}
 
   @spec new(keyword()) :: t()
   def new(opts) do
     %__MODULE__{
-      conversation_key: Keyword.fetch!(opts, :conversation_key)
+      conversation_key: Keyword.fetch!(opts, :conversation_key),
+      receipt_store: Keyword.get(opts, :receipt_store, LemonCore.Store)
     }
   end
 

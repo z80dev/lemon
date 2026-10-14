@@ -10,7 +10,7 @@ defmodule LemonControlPlane.Methods.ChatSend do
 
   @behaviour LemonControlPlane.Method
 
-  alias LemonControlPlane.{ImageInputs, Protocol.Errors}
+  alias LemonControlPlane.{ChatSubmission, ImageInputs}
 
   @impl true
   def name, do: "chat.send"
@@ -20,12 +20,13 @@ defmodule LemonControlPlane.Methods.ChatSend do
 
   @impl true
   def handle(params, ctx) do
-    with {:ok, images} <- ImageInputs.validate(Map.get(params, "images", [])) do
-      submit(params, ctx, images)
+    with {:ok, run_id} <- ChatSubmission.run_id(params),
+         {:ok, images} <- ImageInputs.validate(Map.get(params, "images", [])) do
+      submit(params, ctx, images, run_id)
     end
   end
 
-  defp submit(params, ctx, images) do
+  defp submit(params, ctx, images, run_id) do
     session_key = params["sessionKey"]
     prompt = params["prompt"] || params["message"]
     profile_id = params["profileId"]
@@ -53,8 +54,6 @@ defmodule LemonControlPlane.Methods.ChatSend do
         {:error, {:invalid_request, "cwd cannot override a canonical profile session", nil}}
 
       true ->
-        run_id = LemonCore.Id.run_id()
-
         with {:ok, submit_params} <-
                build_request(params, profile_id, session_key, prompt, run_id, images, queue_mode) do
           submit_params =
@@ -104,26 +103,10 @@ defmodule LemonControlPlane.Methods.ChatSend do
 
   defp dispatch(router_mod, submit_params, prompt, queue_mode) do
     %{run_id: run_id, session_key: session_key, agent_id: agent_id} = submit_params
-    case router_mod.submit(submit_params) do
-      {:ok, run_id} ->
-        {:ok,
-         %{
-           "runId" => run_id,
-           "sessionKey" => session_key,
-           "summary" => summary(run_id, session_key, agent_id, prompt, queue_mode)
-         }}
 
-      {:error, :outcome_unknown} ->
-        {:error,
-         Errors.error(:unavailable, "Chat submission outcome is unknown", %{
-           "code" => "SUBMISSION_OUTCOME_UNKNOWN",
-           "runId" => run_id,
-           "sessionKey" => session_key,
-           "retrySafe" => false
-         })}
-
-      {:error, _reason} ->
-        {:error, {:internal_error, "Chat submission failed", nil}}
+    with {:ok, receipt} <-
+           ChatSubmission.submit(submit_params, &router_mod.submit_with_receipt/1) do
+      {:ok, Map.put(receipt, "summary", summary(run_id, session_key, agent_id, prompt, queue_mode))}
     end
   end
 

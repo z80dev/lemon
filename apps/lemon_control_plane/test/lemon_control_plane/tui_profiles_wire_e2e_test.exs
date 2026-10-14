@@ -7,6 +7,12 @@ defmodule LemonControlPlane.TuiProfilesWireRouter do
 
     {:ok, "run-tui-profile-wire"}
   end
+
+  def submit_with_receipt(request) do
+    {:ok, _} = submit(request)
+    {:ok, %{run_id: request.run_id, session_key: request.session_key,
+            state: :accepted, effective_mode: :new_run, target_run_id: request.run_id}}
+  end
 end
 
 defmodule LemonControlPlane.TuiProfilesWireE2ETest do

@@ -21,6 +21,14 @@ defmodule LemonCore.RouterBridge.RunOrchestrator do
   """
   @callback submit(RunRequest.t()) :: {:ok, run_id :: binary()} | {:error, term()}
 
+  @doc "Submit once and acknowledge the owning queue's actual disposition."
+  @callback submit_with_receipt(RunRequest.t()) :: {:ok, map()} | {:error, term()}
+
+  @doc "Read a fixed-ID receipt without dispatch."
+  @callback run_receipt(binary()) :: {:ok, map()} | {:error, term()}
+
+  @optional_callbacks submit_with_receipt: 1, run_receipt: 1
+
   defmacro __using__(_opts) do
     quote do
       @behaviour LemonCore.RouterBridge.RunOrchestrator

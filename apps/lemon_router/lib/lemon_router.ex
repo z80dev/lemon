@@ -45,6 +45,12 @@ defmodule LemonRouter do
     |> LemonRouter.RunOrchestrator.submit()
   end
 
+  @doc "Submit a fixed intent and return its durable queue/runtime disposition."
+  defdelegate submit_with_receipt(request), to: LemonRouter.RunOrchestrator
+
+  @doc "Reconcile a fixed admission ID without replaying dispatch."
+  defdelegate run_receipt(run_id), to: LemonRouter.RunOrchestrator
+
   @doc """
   Abort a session's active run.
   """
