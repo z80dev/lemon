@@ -266,6 +266,8 @@ When a session's resolved tool catalog costs more than `LEMON_TOOL_DISCLOSURE_BU
 | `LEMON_AGENT_ID` | string | `default` |  | `lemon_skills` | Default agent id used by `mix lemon.skill` CLI operations. |
 | `LEMON_HARNESS_SKILLS_DIR` | string | _(none)_ |  | `lemon_skills` | Override directory for harness/eval skill fixtures. |
 | `LEMON_MCP_DISABLED` | boolean | `false` |  | `lemon_skills` | Kill switch to disable all MCP tool sources. |
+| `LEMON_MCP_EXTERNAL_DISCOVERY` | boolean | `true` |  | `lemon_skills` | Set to 0/false/no to stop importing MCP servers from other tools' config files. |
+| `LEMON_MCP_EXTERNAL_USER_DISCOVERY` | boolean | `false` |  | `lemon_skills` | Set to 1/true/yes to also import MCP servers from other tools' user-level (~/) configs. |
 | `LEMON_MCP_SERVERS` | string | _(none)_ |  | `lemon_skills` | JSON-encoded list of MCP server configs, overriding the TOML/app config. |
 
 ### Browser tool

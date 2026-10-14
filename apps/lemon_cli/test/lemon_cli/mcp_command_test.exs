@@ -94,6 +94,77 @@ defmodule LemonCli.McpCommandTest do
     end
   end
 
+  test "enable, disable and list --all cover servers imported from other tools", %{
+    tmp_dir: root
+  } do
+    saved = Application.fetch_env(:lemon_skills, :mcp_external_discovery)
+    saved_home = Application.fetch_env(:lemon_skills, :mcp_discovery_home)
+    saved_servers = System.get_env("LEMON_MCP_SERVERS")
+
+    on_exit(fn ->
+      restore_app(:mcp_external_discovery, saved)
+      restore_app(:mcp_discovery_home, saved_home)
+
+      if saved_servers,
+        do: System.put_env("LEMON_MCP_SERVERS", saved_servers),
+        else: System.delete_env("LEMON_MCP_SERVERS")
+    end)
+
+    Application.put_env(:lemon_skills, :mcp_external_discovery, true)
+    Application.put_env(:lemon_skills, :mcp_discovery_home, Path.join(root, "home"))
+    System.put_env("LEMON_MCP_SERVERS", "[]")
+    secret = "sensitive-credential"
+    File.mkdir_p!(Path.join(root, ".cursor"))
+
+    File.write!(
+      Path.join(root, ".cursor/mcp.json"),
+      Jason.encode!(%{
+        "mcpServers" => %{
+          "imported" => %{"command" => "server", "args" => [secret]},
+          "dormant" => %{"command" => "server", "enabled" => false}
+        }
+      })
+    )
+
+    list = fn ->
+      capture_io(fn -> assert CLI.run(["mcp", "list", "--all", "--cwd", root, "--json"]) == 0 end)
+      |> Jason.decode!()
+      |> Map.fetch!("effective")
+      |> Map.new(&{&1["name"], {&1["provider"], &1["scope"], &1["enabled"]}})
+    end
+
+    assert list.() == %{
+             "dormant" => {"cursor", "project", false},
+             "imported" => {"cursor", "project", true}
+           }
+
+    output =
+      capture_io(fn ->
+        assert CLI.run(["mcp", "disable", "imported", "--cwd", root]) == 0
+        assert CLI.run(["mcp", "enable", "dormant", "--cwd", root]) == 0
+      end)
+
+    assert output =~ "MCP server disabled in this scope."
+
+    assert list.() == %{
+             "dormant" => {"cursor", "project", true},
+             "imported" => {"cursor", "project", false}
+           }
+
+    text = capture_io(fn -> assert CLI.run(["mcp", "list", "--all", "--cwd", root]) == 0 end)
+    assert text =~ "imported\tstdio\tsource=cursor:project\tdisabled (override)"
+    refute text =~ secret
+
+    for args <- [
+          ["enable"],
+          ["disable", "a", "b"],
+          ["enable", "x", "--all"],
+          ["add", "x", "--all"]
+        ] do
+      capture_io(:stderr, fn -> assert CLI.run(["mcp" | args]) == 2 end)
+    end
+  end
+
   @tag timeout: 30_000
   test "test connects to a real stdio server without calling its tools", %{tmp_dir: root} do
     script = Path.join(root, "server.exs")
@@ -144,4 +215,7 @@ defmodule LemonCli.McpCommandTest do
     assert Jason.decode!(output) == %{"status" => "connected", "tool_count" => 1}
     refute File.exists?(marker)
   end
+
+  defp restore_app(key, :error), do: Application.delete_env(:lemon_skills, key)
+  defp restore_app(key, {:ok, value}), do: Application.put_env(:lemon_skills, key, value)
 end

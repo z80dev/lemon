@@ -94,6 +94,31 @@ defmodule LemonSkills.Env do
       apps: [:lemon_skills]
     },
     %{
+      name: :lemon_mcp_external_discovery,
+      env_var: "LEMON_MCP_EXTERNAL_DISCOVERY",
+      aliases: [],
+      type: :boolean,
+      default: true,
+      doc: "Set to 0/false/no to stop importing MCP servers from other tools' config files.",
+      secret?: false,
+      required?: false,
+      area: :skills,
+      apps: [:lemon_skills]
+    },
+    %{
+      name: :lemon_mcp_external_user_discovery,
+      env_var: "LEMON_MCP_EXTERNAL_USER_DISCOVERY",
+      aliases: [],
+      type: :boolean,
+      default: false,
+      doc:
+        "Set to 1/true/yes to also import MCP servers from other tools' user-level (~/) configs.",
+      secret?: false,
+      required?: false,
+      area: :skills,
+      apps: [:lemon_skills]
+    },
+    %{
       name: :lemon_mcp_servers,
       env_var: "LEMON_MCP_SERVERS",
       aliases: [],
