@@ -19,6 +19,12 @@ public struct OwnerPairingView: View {
                     Text("Use a reachable HTTPS desktop backend, such as Tailscale Serve. On iPhone choose Scan, check the exact origin, then request connection. Compare both verification codes before approving.")
                     Button("Create one-use QR code") { perform { try await store.createPairing() } }
                         .disabled(busy || store.pendingIntents.contains { $0.path == "/pairings" })
+                    if store.pendingIntents.contains(where: { $0.path == "/pairings" }) {
+                        Button("Reconcile original QR request") {
+                            perform { try await store.reconcilePairingIssuance() }
+                        }.disabled(busy)
+                        Text("Recover the original one-use link with its fixed request nonce. This does not create another QR or extend its five-minute expiry. If expired, create a new QR explicitly.").font(.caption)
+                    }
                     if let link = store.pairingURL, let image = qrImage(link) {
                         Image(nsImage: image).interpolation(.none).resizable().scaledToFit().frame(width: 256, height: 256)
                             .accessibilityLabel("One-use pairing QR code. Scan with Lemon Bot on your iPhone.")
