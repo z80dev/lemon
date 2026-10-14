@@ -96,7 +96,8 @@ export function observeInvocation(services: BackendServices, proofValue: string)
   if (machine.nodeId !== bound.nodeId || bot.profileId !== bound.profileId) fail('forbidden', 'The invocation placement has changed.');
   const cronId = run.routineRunId ? services.store.require<P.RoutineRun>('routineRuns', run.routineRunId).cronRunId : null;
   const admittedCron = cronId ? services.store.metadata<{ allow: boolean }>(`cronAdmissionReceipt:${cronId}`)?.allow === true : false;
-  if (!bound.dispatched && !admittedCron) fail('forbidden', 'The invocation has not been dispatched or admitted.');
+  const admittedFollowup = services.store.metadata<{ allow: boolean }>(`nativeFollowupAdmissionReceipt:${bound.upstreamRunId}`)?.allow === true;
+  if (!bound.dispatched && !admittedCron && !admittedFollowup) fail('forbidden', 'The invocation has not been dispatched or admitted.');
   const policy = services.store.metadata<{ state: string }>(`botPolicySync:${bot.id}`);
   const epochs = services.store.metadata<{ connectorId: string; epoch: number }[]>(`runConnectorEpochs:${run.id}`) ?? [];
   if (services.store.metadata(`botLifecycle:${bot.id}`) || services.store.metadata(`connectorRevocation:${bot.id}`) || services.store.metadata(`runtimePolicyFence:${bot.id}:${actor.userId}`) || services.store.metadata(`machineRuntimeFence:${machine.id}`) || services.store.metadata(`runCancelAcknowledged:${run.id}`) || (policy && policy.state !== 'acknowledged') || epochs.some(item => (services.store.metadata<number>(`connectorEpoch:${item.connectorId}`) ?? 0) !== item.epoch)) fail('policy_denied', 'This invocation authority is fenced or revoked.');
@@ -115,8 +116,40 @@ export function buildMemoryContextKey(services: BackendServices, actor: Principa
   return services.mutations.digest({ workspaceId: actor.workspaceId, botId: bot.id, userId: actor.userId, kind: 'shared_room_v1', conversationId: conversation.id, audienceUserIds: [...conversation.humanUserIds].sort(), audienceBotIds: [...conversation.botIds].sort() });
 }
 
+const nativeFloorSchema = z.object({
+  profile: z.enum(['full_access', 'orchestrator', 'leaf_worker', 'minimal_core', 'read_only', 'safe_mode', 'subagent_restricted', 'no_external', 'custom']).optional(),
+  allow: z.union([z.literal('all'), z.array(z.string().min(1).max(256)).max(16384)]),
+  deny: z.array(z.string().min(1).max(256)).max(16384).optional(),
+  blocked_tools: z.array(z.string().min(1).max(256)).max(16384).optional(),
+  require_approval: z.array(z.string().min(1).max(256)).max(16384).optional(),
+  approvals: z.record(z.string(), z.enum(['always', 'never'])).optional(),
+  no_reply: z.boolean().optional(),
+}).strict();
+
+/** Already-expanded trusted native floors; native ToolPolicy remains the final canonical enforcer. */
+function restrictNativePolicy(current: P.JSONObject, floors: readonly P.JSONObject[]): P.JSONObject {
+  if (!floors.length) return current;
+  const base = upstream(nativeFloorSchema, current);
+  let allow = base.allow;
+  const deny = new Set(base.deny), blocked = new Set(base.blocked_tools), approval = new Set(base.require_approval);
+  const approvals = new Map(Object.entries(base.approvals ?? {})); let noReply = base.no_reply === true;
+  for (const floor of floors) {
+    const parsed = upstream(nativeFloorSchema, floor);
+    if (parsed.allow !== 'all') { const permitted = new Set(parsed.allow); allow = allow === 'all' ? parsed.allow : allow.filter(tool => permitted.has(tool)); }
+    for (const tool of parsed.deny ?? []) deny.add(tool);
+    for (const tool of parsed.blocked_tools ?? []) blocked.add(tool);
+    for (const tool of parsed.require_approval ?? []) approval.add(tool);
+    for (const [tool, mode] of Object.entries(parsed.approvals ?? {})) approvals.set(tool, approvals.get(tool) === 'always' || mode === 'always' ? 'always' : 'never');
+    noReply ||= parsed.no_reply === true;
+  }
+  const result: P.JSONObject = { profile: 'custom', allow, deny: [...deny].sort(), blocked_tools: [...blocked], require_approval: [...approval].sort() };
+  if (approvals.size) result.approvals = Object.fromEntries(approvals);
+  if (noReply) result.no_reply = true;
+  return result;
+}
+
 /** Fixed run reservation precedes one-time connector consent consumption for both chat and cron. */
-export async function buildInvocationContext(services: BackendServices, actor: Principal, conversation: P.Conversation, bot: P.Bot, fixedRunId: string): Promise<InvocationContext> {
+export async function buildInvocationContext(services: BackendServices, actor: Principal, conversation: P.Conversation, bot: P.Bot, fixedRunId: string, nativeFloors: readonly P.JSONObject[] = []): Promise<InvocationContext> {
   conversation = services.auth.conversation(actor, conversation.id); bot = services.auth.bot(actor, bot.id);
   await ensureMachineRuntimeReady(services, services.store.require<P.Machine>('machines', bot.machineId), true);
   const productId = services.store.metadata<string>(`nativeRunProduct:${fixedRunId}`);
@@ -126,7 +159,7 @@ export async function buildInvocationContext(services: BackendServices, actor: P
   if (!retained || retained.kind !== actor.kind || retained.id !== actor.id || retained.userId !== actor.userId || run.botId !== bot.id || run.conversationId !== conversation.id || terminalStatuses.includes(run.status)) fail('forbidden', 'Invocation clients do not belong to this reserved initiating context.');
   const existing = services.store.metadata<InvocationContext>(`runtimeInvocation:${fixedRunId}`);
   if (existing) return existing;
-  const invocationToolPolicy = await invocationBotToolPolicy(services, actor, bot);
+  const invocationToolPolicy = restrictNativePolicy(await invocationBotToolPolicy(services, actor, bot), nativeFloors);
   const audience = effectiveInvocationAudience(services, actor, conversation, run.id);
   const connectors = await services.integrations.connectorConfig(actor, bot.id, audience.id, fixedRunId);
   const invocationMcpServers: InvocationMcpServer[] = [baseBotMcpConfig(services, bot), ...connectors];
@@ -508,7 +541,7 @@ export function createRuntimeService(services: BackendServices): ManagedRuntimeS
           const bound = mapping(run.id); if (!bound) continue;
           try { actor(run.id); } catch { services.store.setMetadata(`runtimeReconciliation:${run.id}`, { pending: true, code: 'forbidden', measuredAtMs: services.now() }); continue; }
           if (run.status === 'reserved') emitRun(services.update(run, { status: 'outcome_unknown', error: errorEnvelope(new ApiError('outcome_unknown', 'A reserved submission needs reconciliation after interruption.', false, { resourceIds: [run.id], runId: run.id }), services.id('req')).error }));
-          if (bound.dispatched) {
+          if (bound.dispatched || services.store.metadata<{ allow: boolean }>(`nativeFollowupAdmissionReceipt:${bound.upstreamRunId}`)?.allow === true) {
             try {
               const response = upstream(z.object({ receipt: z.object({ runId: id, sessionKey: z.string(), state: z.enum(['accepted', 'outcome_unknown']), effectiveMode: receiptSchema.shape.effectiveMode.nullable(), targetRunId: id.nullable() }).passthrough() }).passthrough(), await services.lemon.call('runs.receipt.get', { runId: bound.upstreamRunId }));
               const receipt = response.receipt;
