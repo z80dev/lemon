@@ -161,8 +161,8 @@ export function clearUserConversationState(services: BackendServices, userId: st
   });
 }
 
-type ConversationGate = P.Approval | P.Question | P.HumanStep | P.SecretRequest | P.ConnectorConsent;
-const gateCollections = ['approvals', 'questions', 'humanSteps', 'secretRequests', 'consents'] as const;
+type ConversationGate = P.Approval | P.Question | P.HumanStep | P.SecretRequest;
+const gateCollections = ['approvals', 'questions', 'humanSteps', 'secretRequests'] as const;
 function assertDeletionReady(services: BackendServices, roomId: string): void {
   if (services.store.list<P.Run>('runs', run => active[run.status] === true && (run.conversationId === roomId || services.store.metadata<string>(`runReturnConversation:${run.id}`) === roomId)).length) fail('conflict', 'Stop and reconcile active and delegated work before deleting this conversation.');
   if (services.store.list<P.Draft>('drafts', draft => draft.conversationId === roomId && (draft.state === 'sending' || draft.state === 'outcome_unknown')).length) fail('conflict', 'Reconcile draft delivery before deleting this conversation.');

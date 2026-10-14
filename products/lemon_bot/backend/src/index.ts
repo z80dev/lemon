@@ -27,6 +27,7 @@ import { createResourceRoutes } from './core/resources';
 import { createAttachmentRoutes, createAttachmentService } from './core/attachments';
 import { createVoiceRoutes, createVoiceService, type VoiceService } from './core/voice';
 import { createExperienceRoutes, createExperienceService } from './core/experiences';
+import { createPairingRoutes, createPairingService } from './core/pairing';
 import { createIntegrationRoutes, createIntegrationServices } from './integrations/index';
 import { ApiError, errorEnvelope, statusFor } from './core/errors';
 
@@ -75,12 +76,13 @@ export async function createBackend(config:BackendConfiguration,key:Uint8Array):
   const experiences=createExperienceService(services);
   const bots=createBotService(services);
   const accounts=createAccountService(services);
+  const pairings=createPairingService(services);
   router.register([
     ...createAccountRoutes(services,hooks),...createSyncRoutes(services),...createMachineRoutes(services),
     ...createBotRoutes(services),...createConversationRoutes(services),...createMcpRoutes(services),
     ...createGateRoutes(services),...createResourceRoutes(services),...createAttachmentRoutes(services),
     ...createVoiceRoutes(services),...createExperienceRoutes(services),...createIntegrationRoutes(services),
-    ...createRuntimeAdmissionRoutes(services)
+    ...createRuntimeAdmissionRoutes(services),...createPairingRoutes(services)
   ]);
   if(!store.metadata<string>('workspaceId')){
     let code:string;const encrypted=store.metadata<string>('setupCode');
@@ -92,7 +94,7 @@ export async function createBackend(config:BackendConfiguration,key:Uint8Array):
   const reconcile=async()=>{
     if(reconciling)return;reconciling=true;
     try{
-      const tasks=[async()=>{if(lemon.connected){await refreshMachines(services);await runtime.reconcile();await bots.reconcile();}},async()=>{await accounts.reconcile();},async()=>{await services.integrations.reconcile?.();}];
+      const tasks=[async()=>{if(lemon.connected){await refreshMachines(services);await runtime.reconcile();await bots.reconcile();}},async()=>{await accounts.reconcile();},async()=>{await pairings.sweep();},async()=>{await services.integrations.reconcile?.();}];
       const results=await Promise.allSettled(tasks.map(task=>task()));
       for(const result of results)if(result.status==='rejected')services.audit(null,'runtime.reconcile','controller','failed');
       experiences.reconcile();
@@ -126,7 +128,7 @@ export async function createBackend(config:BackendConfiguration,key:Uint8Array):
         },websocket:realtime.websocket});
       lemon.start();return server;
     },
-    async stop(){if(stopped)return;stopped=true;clearInterval(reconcileTimer);clearInterval(retentionTimer);removeConnected();experiences.close();realtime.close();voice.close();gates.close();attachments.close();await services.integrations.dispose?.();runtime.close();terminals.dispose();lemon.close();if(server)await server.stop(true);store.close();}
+    async stop(){if(stopped)return;stopped=true;clearInterval(reconcileTimer);clearInterval(retentionTimer);removeConnected();pairings.close();experiences.close();realtime.close();voice.close();gates.close();attachments.close();await services.integrations.dispose?.();runtime.close();terminals.dispose();lemon.close();if(server)await server.stop(true);store.close();}
   };
 }
 

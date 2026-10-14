@@ -1,7 +1,7 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { z } from 'zod';
 import type { BackendServices, MutationService, Principal, RequestContext } from './services';
-import type { Confirmation, ScopeEffect } from '../../../contracts/protocol';
+import type { AuthSession, Confirmation, Device, ScopeEffect, Workspace } from '../../../contracts/protocol';
 import { ApiError, fail } from './errors';
 import { nonce, parse } from './validation';
 function canonical(value:unknown):string {
@@ -25,10 +25,12 @@ export function createMutationService(services:BackendServices,key:Uint8Array):M
       const object=z.record(z.string(),z.unknown()).parse(item);
       if(typeof object.token==='string'&&object.session&&object.user){
         const session=z.object({id:z.string(),userId:z.string()}).passthrough().parse(object.session);
-        const current=services.store.get<{userId:string;expiresAtMs:number}>('authSessions',session.id);
+        const current=services.store.get<AuthSession>('authSessions',session.id);
         const secret=services.store.get<{revoked:boolean}>('sessionSecrets',session.id);
         const member=services.store.list<{userId:string;enabled:boolean}>('members',entry=>entry.userId===session.userId)[0];
-        if(!current||!secret||secret.revoked||current.expiresAtMs<=services.now()||!member?.enabled)fail('unauthenticated','The original authentication session is no longer valid.');
+        const workspaceId=services.store.metadata<string>('workspaceId');const workspace=workspaceId?services.store.get<Workspace>('workspaces',workspaceId):null;
+        const device=current?.deviceId?services.store.get<Device>('devices',current.deviceId):null;
+        if(!current||current.userId!==session.userId||!secret||secret.revoked||(current.expiresAtMs!==null&&current.expiresAtMs<=services.now())||!member?.enabled||!workspace?.enabled||services.store.metadata(`accountDeletion:${session.userId}`)||(current.deviceId!==null&&(!device||device.userId!==session.userId))||(current.expiresAtMs===null&&current.deviceId===null))fail('unauthenticated','The original authentication session is no longer valid.');
       }
       if(typeof object.id==='string'&&typeof object.revision==='number'&&typeof object.createdAtMs==='number'&&typeof object.updatedAtMs==='number'&&context.user&&!checked.has(object.id)){
         checked.add(object.id);
