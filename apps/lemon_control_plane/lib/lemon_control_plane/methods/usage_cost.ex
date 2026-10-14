@@ -434,16 +434,6 @@ defmodule LemonControlPlane.Methods.UsageCost do
     ArgumentError -> Map.get(map, key)
   end
 
-  defp get_in_field(map, [key | rest]) do
-    value = get_field(map, key)
-
-    if rest == [] do
-      value
-    else
-      if is_map(value), do: get_in_field(value, rest), else: nil
-    end
-  end
-
   defp format_date(ms) when is_integer(ms) do
     DateTime.from_unix!(ms, :millisecond)
     |> DateTime.to_date()
