@@ -55,6 +55,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Private cron admission accepts valid allowlisted callback URLs without
+  depending on URI's deprecated authority field; malformed empty ports remain
+  rejected without weakening callback origin or receipt checks.
+
 - Cron jobs now evaluate IANA timezone names with real UTC offsets and
   daylight-saving rules. Missing spring-forward slots are skipped; repeated
   fall-back slots use only their first occurrence. Invalid/unavailable zones

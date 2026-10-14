@@ -265,7 +265,9 @@ defmodule LemonAutomation.CronAdmission do
          true <- uri.scheme == "https" or (uri.scheme == "http" and host in ["127.0.0.1", "::1"]),
          true <- is_integer(port) and port in 1..65_535,
          true <- is_nil(uri.userinfo) and is_nil(uri.fragment) and is_nil(uri.query),
-         false <- String.ends_with?(uri.authority, ":") do
+         # URI.new/1 leaves the deprecated authority field nil. Check the
+         # original authority syntax instead, preserving rejection of empty ports.
+         false <- Regex.match?(~r/\Ahttps?:\/\/[^\/?#]*:(?:[\/?#]|\z)/i, url) do
       {:ok, uri}
     else
       _ -> {:error, "invalid_admission_url"}
