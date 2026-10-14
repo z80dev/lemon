@@ -269,13 +269,22 @@ defmodule LemonAi.Auth.GitHubCopilotOAuth do
         {:ok, updated, true}
 
       {:error, reason} ->
-        if not force? and is_binary(access_token) and access_token != "" do
+        if not force? and is_binary(access_token) and access_token != "" and
+             unexpired?(secret["expires_at_ms"]) do
           Logger.debug("GitHub Copilot refresh failed; using existing token: #{inspect(reason)}")
 
           {:ok, secret, false}
         else
           {:error, reason}
         end
+    end
+  end
+
+  # A token without a recorded expiry is treated as still usable.
+  defp unexpired?(expires_at_ms) do
+    case parse_integer(expires_at_ms) do
+      ms when is_integer(ms) -> ms > System.system_time(:millisecond)
+      _ -> true
     end
   end
 
