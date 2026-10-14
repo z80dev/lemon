@@ -162,7 +162,6 @@ defmodule CodingAgent.ExecutionNode.HostIO do
       {:error, reason} -> {:error, file_error(reason)}
     end
   end
-  defp file_error(:enoent), do: :not_found
   defp file_error(reason) when reason in [:eacces, :eperm], do: :permission_denied
   defp file_error(:enotdir), do: :not_directory
   defp file_error(_), do: :filesystem_failed

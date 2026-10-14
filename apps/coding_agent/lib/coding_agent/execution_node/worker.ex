@@ -1404,13 +1404,6 @@ defmodule CodingAgent.ExecutionNode.Worker do
 
   defp notify(_state, _message), do: :ok
 
-  @impl true
-  def terminate(_reason, state) do
-    cancel_all_invocations(state)
-    :ok
-  end
-
-
   defp cancel_all_invocations(state) do
     Enum.reduce(state.invocations, state, fn {invoke_id, invocation}, current ->
       _ = cancel_invocation_execution(state, invocation)

@@ -97,7 +97,6 @@ defmodule LemonControlPlane.Methods.ProfilesSync do
       {:ok, ack} -> {:ok, ack}
       {:error, {_code, _message, %{"reason" => "mutation_conflict"}}} -> {:error, :mutation_conflict}
       {:error, _} -> {:error, :destination_unavailable}
-      _ -> {:error, :invalid_ack}
     end
   end
 
