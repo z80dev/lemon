@@ -219,6 +219,7 @@ defmodule LemonControlPlane.ACP do
 
       put_session(session_id, session)
       if Keyword.get(opts, :replay, false), do: replay_history(session_id, session, opts)
+      project_todos(session_id, session, opts)
       bootstrap(session_id, session, opts)
       {:ok, session_response(session)}
     else
@@ -775,10 +776,43 @@ defmodule LemonControlPlane.ACP do
 
   defp expand_skill_command(prompt, _session), do: {:ok, prompt}
 
+  defp project_todos(session_id, session, opts) do
+    case AgentRuntime.call(
+           :session_todos,
+           [session.session_key, session.cwd],
+           {:error, :unavailable}
+         ) do
+      {:ok, todos, _revision} when is_list(todos) ->
+        state = LemonControlPlane.ACP.SessionUpdates.new(session_id, cwd: session.cwd)
+        replay_event(state, {:todos_changed, todos}, opts)
+
+      {:error, :session_not_found} ->
+        emit(session_id, %{"sessionUpdate" => "plan", "entries" => []}, opts)
+
+      _ ->
+        # A failed read cannot retain a plan from a previously selected branch.
+        emit(session_id, %{"sessionUpdate" => "plan", "entries" => []}, opts)
+
+        emit(
+          session_id,
+          %{
+            "sessionUpdate" => "notice",
+            "severity" => "warning",
+            "title" => "The session todo plan is unavailable."
+          },
+          opts
+        )
+    end
+  end
+
   defp replay_history(session_id, session, opts) do
     case native_history(session) do
       {:ok, entries} ->
-        state = LemonControlPlane.ACP.SessionUpdates.new(session_id, cwd: session.cwd)
+        state =
+          LemonControlPlane.ACP.SessionUpdates.new(session_id,
+            cwd: session.cwd,
+            plan_from_tools: false
+          )
 
         entries
         |> LemonControlPlane.ACP.History.reconcile_answers(
@@ -1000,6 +1034,7 @@ defmodule LemonControlPlane.ACP do
 
         put_session(id, session)
         remember_native_resume(id)
+        project_todos(id, session, opts)
         bootstrap(id, session, opts)
         {:ok, Map.put(session_response(session), "sessionId", id)}
       else

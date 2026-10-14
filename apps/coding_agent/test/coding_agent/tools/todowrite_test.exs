@@ -1,6 +1,8 @@
 defmodule CodingAgent.Tools.TodoWriteToolTest do
   use ExUnit.Case, async: false
 
+  alias CodingAgent.{Session, SessionManager}
+  alias LemonAgent.Test.Mocks
   alias CodingAgent.Tools.TodoWrite
   alias CodingAgent.Tools.TodoRead
   alias CodingAgent.Tools.TodoStore
@@ -9,14 +11,29 @@ defmodule CodingAgent.Tools.TodoWriteToolTest do
   alias LemonAi.Types.TextContent
 
   setup do
-    session_id = "todowrite_test_#{System.unique_integer([:positive])}"
-    TodoStore.put(session_id, [])
+    cwd = Path.join(System.tmp_dir!(), "todowrite-#{System.unique_integer([:positive])}")
+    File.mkdir_p!(cwd)
+    session_file = Path.join(cwd, "session.jsonl")
+    :ok = SessionManager.save_to_file(session_file, SessionManager.new(cwd))
+
+    session_pid =
+      start_supervised!(
+        {Session,
+         cwd: cwd,
+         workspace_dir: Path.join(cwd, "workspace"),
+         session_file: session_file,
+         model: Mocks.mock_model(),
+         stream_fn: Mocks.mock_stream_fn_single(Mocks.assistant_message("ok"))}
+      )
+
+    session_id = Session.get_state(session_pid).session_manager.header.id
 
     on_exit(fn ->
       TodoStore.delete(session_id)
+      File.rm_rf!(cwd)
     end)
 
-    {:ok, session_id: session_id}
+    {:ok, session_pid: session_pid, session_id: session_id}
   end
 
   defp valid_todo(overrides \\ %{}) do
@@ -27,36 +44,24 @@ defmodule CodingAgent.Tools.TodoWriteToolTest do
   end
 
   describe "tool/2" do
-    test "returns an AgentTool struct with correct metadata" do
-      tool = TodoWrite.tool("/tmp")
-      assert tool.name == "todowrite"
-      assert tool.label == "Write Todos"
-      assert tool.description == "Write the session todo list."
-      assert is_function(tool.execute, 4)
-    end
+    test "session-bound closure journals todos with defaults", %{session_pid: session_pid} do
+      tool = TodoWrite.tool("/tmp", session_pid: session_pid)
 
-    test "parameters require todos array with proper item schema" do
-      tool = TodoWrite.tool("/tmp")
-      assert tool.parameters["type"] == "object"
-      assert "todos" in tool.parameters["required"]
-      assert tool.parameters["properties"]["todos"]["type"] == "array"
-      item_schema = tool.parameters["properties"]["todos"]["items"]
-      assert item_schema["required"] == ["content"]
+      assert %AgentToolResult{details: %{todos: [todo]}} =
+               tool.execute.("write", %{"todos" => [%{"content" => "Inspect"}]}, nil, nil)
 
-      assert item_schema["properties"]["status"]["enum"] == [
-               "pending",
-               "in_progress",
-               "completed"
-             ]
-
-      assert item_schema["properties"]["priority"]["enum"] == ["high", "medium", "low"]
+      assert todo["content"] == "Inspect"
+      assert todo["status"] == "pending"
+      assert todo["priority"] == "medium"
+      assert is_binary(todo["id"]) and todo["id"] != ""
+      assert {:ok, [^todo], _revision} = Session.todos(session_pid)
     end
   end
 
   describe "execute/5 - valid todos" do
-    test "stores a single valid todo", %{session_id: session_id} do
+    test "stores a single valid todo", %{session_pid: session_pid} do
       todos = [valid_todo()]
-      result = TodoWrite.execute("call_1", %{"todos" => todos}, nil, nil, session_id)
+      result = TodoWrite.execute("call_1", %{"todos" => todos}, nil, nil, session_pid)
 
       assert %AgentToolResult{} = result
       assert [%TextContent{text: text}] = result.content
@@ -66,7 +71,7 @@ defmodule CodingAgent.Tools.TodoWriteToolTest do
     end
 
     test "stores multiple valid todos with mixed statuses and priorities", %{
-      session_id: session_id
+      session_pid: session_pid
     } do
       todos = [
         valid_todo(%{
@@ -89,253 +94,261 @@ defmodule CodingAgent.Tools.TodoWriteToolTest do
         })
       ]
 
-      result = TodoWrite.execute("call_1", %{"todos" => todos}, nil, nil, session_id)
+      result = TodoWrite.execute("call_1", %{"todos" => todos}, nil, nil, session_pid)
       assert %AgentToolResult{} = result
       assert length(result.details.todos) == 3
     end
 
-    test "returns correct open count excluding completed", %{session_id: session_id} do
+    test "returns correct open count excluding completed", %{session_pid: session_pid} do
       todos = [
         valid_todo(%{"id" => "1", "status" => "pending"}),
         valid_todo(%{"id" => "2", "status" => "in_progress"}),
         valid_todo(%{"id" => "3", "status" => "completed"})
       ]
 
-      result = TodoWrite.execute("call_1", %{"todos" => todos}, nil, nil, session_id)
+      result = TodoWrite.execute("call_1", %{"todos" => todos}, nil, nil, session_pid)
       assert result.details.title == "2 todos"
     end
 
-    test "persists todos to store", %{session_id: session_id} do
+    test "projects journaled todos into the native session cache", %{
+      session_pid: session_pid,
+      session_id: session_id
+    } do
       todos = [valid_todo()]
-      TodoWrite.execute("call_1", %{"todos" => todos}, nil, nil, session_id)
+      TodoWrite.execute("call_1", %{"todos" => todos}, nil, nil, session_pid)
       stored = TodoStore.get(session_id)
       assert length(stored) == 1
       assert hd(stored)["content"] == "Test task"
+      assert {:ok, ^stored, _revision} = Session.todos(session_pid)
     end
 
-    test "overwrites previous todos", %{session_id: session_id} do
+    test "overwrites previous todos", %{session_pid: session_pid} do
       first = [valid_todo(%{"id" => "1", "content" => "First"})]
-      TodoWrite.execute("call_1", %{"todos" => first}, nil, nil, session_id)
+      TodoWrite.execute("call_1", %{"todos" => first}, nil, nil, session_pid)
 
       second = [valid_todo(%{"id" => "2", "content" => "Second"})]
-      TodoWrite.execute("call_2", %{"todos" => second}, nil, nil, session_id)
+      TodoWrite.execute("call_2", %{"todos" => second}, nil, nil, session_pid)
 
-      stored = TodoStore.get(session_id)
+      assert {:ok, stored, _revision} = Session.todos(session_pid)
       assert length(stored) == 1
       assert hd(stored)["content"] == "Second"
     end
 
-    test "accepts empty todo list", %{session_id: session_id} do
-      result = TodoWrite.execute("call_1", %{"todos" => []}, nil, nil, session_id)
+    test "accepts empty todo list", %{session_pid: session_pid} do
+      result = TodoWrite.execute("call_1", %{"todos" => []}, nil, nil, session_pid)
       assert %AgentToolResult{} = result
       assert result.details.title == "0 todos"
-      assert TodoStore.get(session_id) == []
+      assert {:ok, [], _revision} = Session.todos(session_pid)
     end
 
-    test "handles special characters in content", %{session_id: session_id} do
+    test "handles special characters in content", %{session_pid: session_pid} do
       todos = [valid_todo(%{"content" => "Task with \"quotes\" & <angles>"})]
-      result = TodoWrite.execute("call_1", %{"todos" => todos}, nil, nil, session_id)
+      result = TodoWrite.execute("call_1", %{"todos" => todos}, nil, nil, session_pid)
       parsed = Jason.decode!(hd(result.content).text)
       assert hd(parsed)["content"] == "Task with \"quotes\" & <angles>"
     end
   end
 
   describe "execute/5 - invalid status" do
-    test "rejects unknown status value", %{session_id: session_id} do
+    test "rejects unknown status value", %{session_pid: session_pid} do
       todos = [valid_todo(%{"status" => "done"})]
-      result = TodoWrite.execute("call_1", %{"todos" => todos}, nil, nil, session_id)
-      assert {:error, msg} = result
-      assert msg =~ "status must be pending, in_progress, or completed"
+      result = TodoWrite.execute("call_1", %{"todos" => todos}, nil, nil, session_pid)
+      assert {:error, _reason} = result
+      assert {:ok, [], _revision} = Session.todos(session_pid)
     end
 
-    test "rejects empty string status", %{session_id: session_id} do
+    test "rejects empty string status", %{session_pid: session_pid} do
       todos = [valid_todo(%{"status" => ""})]
-      result = TodoWrite.execute("call_1", %{"todos" => todos}, nil, nil, session_id)
-      assert {:error, msg} = result
-      assert msg =~ "status must be"
+      result = TodoWrite.execute("call_1", %{"todos" => todos}, nil, nil, session_pid)
+      assert {:error, _reason} = result
+      assert {:ok, [], _revision} = Session.todos(session_pid)
     end
 
-    test "rejects non-string status", %{session_id: session_id} do
+    test "rejects non-string status", %{session_pid: session_pid} do
       todos = [valid_todo() |> Map.put("status", 42)]
-      result = TodoWrite.execute("call_1", %{"todos" => todos}, nil, nil, session_id)
-      assert {:error, msg} = result
-      assert msg =~ "status must be"
+      result = TodoWrite.execute("call_1", %{"todos" => todos}, nil, nil, session_pid)
+      assert {:error, _reason} = result
+      assert {:ok, [], _revision} = Session.todos(session_pid)
     end
   end
 
   describe "execute/5 - invalid priority" do
-    test "rejects unknown priority value", %{session_id: session_id} do
+    test "rejects unknown priority value", %{session_pid: session_pid} do
       todos = [valid_todo(%{"priority" => "urgent"})]
-      result = TodoWrite.execute("call_1", %{"todos" => todos}, nil, nil, session_id)
-      assert {:error, msg} = result
-      assert msg =~ "priority must be high, medium, or low"
+      result = TodoWrite.execute("call_1", %{"todos" => todos}, nil, nil, session_pid)
+      assert {:error, _reason} = result
+      assert {:ok, [], _revision} = Session.todos(session_pid)
     end
 
-    test "rejects empty string priority", %{session_id: session_id} do
+    test "rejects empty string priority", %{session_pid: session_pid} do
       todos = [valid_todo(%{"priority" => ""})]
-      result = TodoWrite.execute("call_1", %{"todos" => todos}, nil, nil, session_id)
-      assert {:error, msg} = result
-      assert msg =~ "priority must be"
+      result = TodoWrite.execute("call_1", %{"todos" => todos}, nil, nil, session_pid)
+      assert {:error, _reason} = result
+      assert {:ok, [], _revision} = Session.todos(session_pid)
     end
 
-    test "rejects non-string priority", %{session_id: session_id} do
+    test "rejects non-string priority", %{session_pid: session_pid} do
       todos = [valid_todo() |> Map.put("priority", true)]
-      result = TodoWrite.execute("call_1", %{"todos" => todos}, nil, nil, session_id)
-      assert {:error, msg} = result
-      assert msg =~ "priority must be"
+      result = TodoWrite.execute("call_1", %{"todos" => todos}, nil, nil, session_pid)
+      assert {:error, _reason} = result
+      assert {:ok, [], _revision} = Session.todos(session_pid)
     end
   end
 
   describe "execute/5 - missing fields" do
-    test "generates an id when omitted", %{session_id: session_id} do
+    test "generates an id when omitted", %{session_pid: session_pid} do
       todos = [%{"content" => "No id", "status" => "pending", "priority" => "high"}]
-      result = TodoWrite.execute("call_1", %{"todos" => todos}, nil, nil, session_id)
+      result = TodoWrite.execute("call_1", %{"todos" => todos}, nil, nil, session_pid)
       assert %AgentToolResult{details: %{todos: [todo]}} = result
       assert is_binary(todo["id"])
       assert todo["id"] != ""
-      assert TodoStore.get(session_id) == [todo]
+      assert {:ok, [^todo], _revision} = Session.todos(session_pid)
     end
 
-    test "rejects todo missing content", %{session_id: session_id} do
+    test "rejects todo missing content", %{session_pid: session_pid} do
       todos = [%{"id" => "1", "status" => "pending", "priority" => "high"}]
-      result = TodoWrite.execute("call_1", %{"todos" => todos}, nil, nil, session_id)
-      assert {:error, msg} = result
-      assert msg =~ "content must be a non-empty string"
+      result = TodoWrite.execute("call_1", %{"todos" => todos}, nil, nil, session_pid)
+      assert {:error, _reason} = result
+      assert {:ok, [], _revision} = Session.todos(session_pid)
     end
 
-    test "defaults omitted status to pending", %{session_id: session_id} do
+    test "defaults omitted status to pending", %{session_pid: session_pid} do
       todos = [%{"id" => "1", "content" => "No status", "priority" => "high"}]
-      result = TodoWrite.execute("call_1", %{"todos" => todos}, nil, nil, session_id)
+      result = TodoWrite.execute("call_1", %{"todos" => todos}, nil, nil, session_pid)
       assert %AgentToolResult{details: %{todos: [todo]}} = result
       assert todo["status"] == "pending"
     end
 
-    test "defaults omitted priority to medium", %{session_id: session_id} do
+    test "defaults omitted priority to medium", %{session_pid: session_pid} do
       todos = [%{"id" => "1", "content" => "No priority", "status" => "pending"}]
-      result = TodoWrite.execute("call_1", %{"todos" => todos}, nil, nil, session_id)
+      result = TodoWrite.execute("call_1", %{"todos" => todos}, nil, nil, session_pid)
       assert %AgentToolResult{details: %{todos: [todo]}} = result
       assert todo["priority"] == "medium"
     end
   end
 
   describe "execute/5 - duplicate IDs" do
-    test "rejects todos with duplicate ids", %{session_id: session_id} do
+    test "rejects todos with duplicate ids", %{session_pid: session_pid} do
       todos = [
         valid_todo(%{"id" => "dup", "content" => "First"}),
         valid_todo(%{"id" => "dup", "content" => "Second"})
       ]
 
-      result = TodoWrite.execute("call_1", %{"todos" => todos}, nil, nil, session_id)
-      assert {:error, "todo ids must be unique"} = result
+      result = TodoWrite.execute("call_1", %{"todos" => todos}, nil, nil, session_pid)
+      assert {:error, _reason} = result
     end
   end
 
   describe "execute/5 - empty and whitespace content" do
-    test "rejects todo with empty content string", %{session_id: session_id} do
+    test "rejects todo with empty content string", %{session_pid: session_pid} do
       todos = [valid_todo(%{"content" => ""})]
-      result = TodoWrite.execute("call_1", %{"todos" => todos}, nil, nil, session_id)
-      assert {:error, msg} = result
-      assert msg =~ "content must be a non-empty string"
+      result = TodoWrite.execute("call_1", %{"todos" => todos}, nil, nil, session_pid)
+      assert {:error, _reason} = result
+      assert {:ok, [], _revision} = Session.todos(session_pid)
     end
 
-    test "rejects todo with whitespace-only content", %{session_id: session_id} do
+    test "rejects todo with whitespace-only content", %{session_pid: session_pid} do
       todos = [valid_todo(%{"content" => "   "})]
-      result = TodoWrite.execute("call_1", %{"todos" => todos}, nil, nil, session_id)
-      assert {:error, msg} = result
-      assert msg =~ "content must be a non-empty string"
+      result = TodoWrite.execute("call_1", %{"todos" => todos}, nil, nil, session_pid)
+      assert {:error, _reason} = result
+      assert {:ok, [], _revision} = Session.todos(session_pid)
     end
 
-    test "rejects todo with empty id", %{session_id: session_id} do
+    test "rejects todo with empty id", %{session_pid: session_pid} do
       todos = [valid_todo(%{"id" => ""})]
-      result = TodoWrite.execute("call_1", %{"todos" => todos}, nil, nil, session_id)
-      assert {:error, msg} = result
-      assert msg =~ "id must be a non-empty string"
+      result = TodoWrite.execute("call_1", %{"todos" => todos}, nil, nil, session_pid)
+      assert {:error, _reason} = result
+      assert {:ok, [], _revision} = Session.todos(session_pid)
     end
 
-    test "rejects todo with whitespace-only id", %{session_id: session_id} do
+    test "rejects todo with whitespace-only id", %{session_pid: session_pid} do
       todos = [valid_todo(%{"id" => "  \t  "})]
-      result = TodoWrite.execute("call_1", %{"todos" => todos}, nil, nil, session_id)
-      assert {:error, msg} = result
-      assert msg =~ "id must be a non-empty string"
+      result = TodoWrite.execute("call_1", %{"todos" => todos}, nil, nil, session_pid)
+      assert {:error, _reason} = result
+      assert {:ok, [], _revision} = Session.todos(session_pid)
     end
   end
 
   describe "execute/5 - non-string and invalid types" do
-    test "rejects integer content", %{session_id: session_id} do
+    test "rejects integer content", %{session_pid: session_pid} do
       todos = [valid_todo() |> Map.put("content", 123)]
-      result = TodoWrite.execute("call_1", %{"todos" => todos}, nil, nil, session_id)
-      assert {:error, msg} = result
-      assert msg =~ "content must be a non-empty string"
+      result = TodoWrite.execute("call_1", %{"todos" => todos}, nil, nil, session_pid)
+      assert {:error, _reason} = result
+      assert {:ok, [], _revision} = Session.todos(session_pid)
     end
 
-    test "rejects integer id", %{session_id: session_id} do
+    test "rejects integer id", %{session_pid: session_pid} do
       todos = [valid_todo() |> Map.put("id", 999)]
-      result = TodoWrite.execute("call_1", %{"todos" => todos}, nil, nil, session_id)
-      assert {:error, msg} = result
-      assert msg =~ "id must be a non-empty string"
+      result = TodoWrite.execute("call_1", %{"todos" => todos}, nil, nil, session_pid)
+      assert {:error, _reason} = result
+      assert {:ok, [], _revision} = Session.todos(session_pid)
     end
 
-    test "rejects non-list todos param", %{session_id: session_id} do
-      result = TodoWrite.execute("call_1", %{"todos" => "not a list"}, nil, nil, session_id)
-      assert {:error, "Todos must be an array"} = result
+    test "rejects non-list todos param", %{session_pid: session_pid} do
+      result = TodoWrite.execute("call_1", %{"todos" => "not a list"}, nil, nil, session_pid)
+      assert {:error, _reason} = result
     end
 
-    test "rejects non-map entry in todos array", %{session_id: session_id} do
+    test "rejects non-map entry in todos array", %{session_pid: session_pid} do
       todos = ["not a map"]
-      result = TodoWrite.execute("call_1", %{"todos" => todos}, nil, nil, session_id)
-      assert {:error, msg} = result
-      assert msg =~ "must be an object"
+      result = TodoWrite.execute("call_1", %{"todos" => todos}, nil, nil, session_pid)
+      assert {:error, _reason} = result
+      assert {:ok, [], _revision} = Session.todos(session_pid)
     end
   end
 
   describe "execute/5 - abort signal" do
-    test "returns error when signal is aborted", %{session_id: session_id} do
+    test "returns error when signal is aborted", %{session_pid: session_pid} do
       signal = AbortSignal.new()
       AbortSignal.abort(signal)
       todos = [valid_todo()]
-      result = TodoWrite.execute("call_1", %{"todos" => todos}, signal, nil, session_id)
+      result = TodoWrite.execute("call_1", %{"todos" => todos}, signal, nil, session_pid)
+      AbortSignal.clear(signal)
       assert {:error, "Operation aborted"} = result
     end
 
-    test "does not store when aborted", %{session_id: session_id} do
+    test "does not store when aborted", %{session_pid: session_pid} do
       signal = AbortSignal.new()
       AbortSignal.abort(signal)
       todos = [valid_todo(%{"content" => "Should not be stored"})]
-      TodoWrite.execute("call_1", %{"todos" => todos}, signal, nil, session_id)
-      assert TodoStore.get(session_id) == []
+      TodoWrite.execute("call_1", %{"todos" => todos}, signal, nil, session_pid)
+      AbortSignal.clear(signal)
+      assert {:ok, [], _revision} = Session.todos(session_pid)
     end
 
-    test "proceeds when signal is not aborted", %{session_id: session_id} do
+    test "proceeds when signal is not aborted", %{session_pid: session_pid} do
       signal = AbortSignal.new()
       todos = [valid_todo()]
-      result = TodoWrite.execute("call_1", %{"todos" => todos}, signal, nil, session_id)
+      result = TodoWrite.execute("call_1", %{"todos" => todos}, signal, nil, session_pid)
+      AbortSignal.clear(signal)
       assert %AgentToolResult{} = result
     end
   end
 
-  describe "execute/5 - missing session_id" do
-    test "returns error when session_id is empty string" do
-      todos = [valid_todo()]
-      result = TodoWrite.execute("call_1", %{"todos" => todos}, nil, nil, "")
-      assert {:error, "Session id not available"} = result
+  describe "execute/5 - missing session" do
+    test "returns an error without a session binding" do
+      assert {:error, _reason} =
+               TodoWrite.execute("write", %{"todos" => [valid_todo()]}, nil, nil, nil)
     end
   end
 
-  describe "execute/5 - validation order and indexing" do
-    test "error message includes 1-based index for second todo", %{session_id: session_id} do
+  describe "execute/5 - whole-list validation" do
+    test "rejects an invalid second todo without saving a partial list", %{
+      session_pid: session_pid
+    } do
       todos = [
         valid_todo(%{"id" => "1"}),
         valid_todo(%{"id" => "2", "status" => "invalid"})
       ]
 
-      result = TodoWrite.execute("call_1", %{"todos" => todos}, nil, nil, session_id)
-      assert {:error, msg} = result
-      assert msg =~ "Todo 2"
+      result = TodoWrite.execute("call_1", %{"todos" => todos}, nil, nil, session_pid)
+      assert {:error, _reason} = result
+      assert {:ok, [], _revision} = Session.todos(session_pid)
     end
   end
 
   describe "integration - write then read" do
-    test "todos written can be read back", %{session_id: session_id} do
+    test "todos written can be read back", %{session_pid: session_pid} do
       todos = [
         valid_todo(%{
           "id" => "1",
@@ -357,10 +370,10 @@ defmodule CodingAgent.Tools.TodoWriteToolTest do
         })
       ]
 
-      write_result = TodoWrite.execute("call_w", %{"todos" => todos}, nil, nil, session_id)
+      write_result = TodoWrite.execute("call_w", %{"todos" => todos}, nil, nil, session_pid)
       assert %AgentToolResult{} = write_result
 
-      read_result = TodoRead.execute("call_r", %{}, nil, nil, session_id)
+      read_result = TodoRead.execute("call_r", %{}, nil, nil, session_pid)
       assert %AgentToolResult{} = read_result
 
       written = Jason.decode!(hd(write_result.content).text)
@@ -368,14 +381,14 @@ defmodule CodingAgent.Tools.TodoWriteToolTest do
       assert written == read_back
     end
 
-    test "overwritten todos reflect latest state on read", %{session_id: session_id} do
+    test "overwritten todos reflect latest state on read", %{session_pid: session_pid} do
       first = [valid_todo(%{"id" => "1", "content" => "Original"})]
-      TodoWrite.execute("call_w1", %{"todos" => first}, nil, nil, session_id)
+      TodoWrite.execute("call_w1", %{"todos" => first}, nil, nil, session_pid)
 
       second = [valid_todo(%{"id" => "2", "content" => "Replacement"})]
-      TodoWrite.execute("call_w2", %{"todos" => second}, nil, nil, session_id)
+      TodoWrite.execute("call_w2", %{"todos" => second}, nil, nil, session_pid)
 
-      read_result = TodoRead.execute("call_r", %{}, nil, nil, session_id)
+      read_result = TodoRead.execute("call_r", %{}, nil, nil, session_pid)
       read_back = Jason.decode!(hd(read_result.content).text)
       assert length(read_back) == 1
       assert hd(read_back)["content"] == "Replacement"

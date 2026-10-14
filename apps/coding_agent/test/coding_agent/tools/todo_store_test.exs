@@ -1010,10 +1010,6 @@ defmodule CodingAgent.Tools.TodoStoreTest do
   # Enhanced Todo Features (M2 of Long-Running Agent Harnesses)
   # ============================================================================
 
-  defp now do
-    DateTime.utc_now() |> DateTime.to_iso8601()
-  end
-
   describe "get_actionable/1" do
     test "returns todos with no dependencies", %{session_id: session_id} do
       todos = [
@@ -1141,121 +1137,6 @@ defmodule CodingAgent.Tools.TodoStoreTest do
 
       assert progress.total == 0
       assert progress.percentage == 0
-    end
-  end
-
-  describe "update_status/3" do
-    test "updates status and timestamps", %{session_id: session_id} do
-      todos = [
-        %{
-          id: "1",
-          content: "Task",
-          status: :pending,
-          dependencies: [],
-          priority: :high,
-          created_at: now(),
-          updated_at: nil,
-          completed_at: nil,
-          metadata: %{}
-        }
-      ]
-
-      TodoStore.put(session_id, todos)
-      :ok = TodoStore.update_status(session_id, "1", :in_progress)
-
-      updated = TodoStore.get(session_id)
-      todo = hd(updated)
-
-      assert todo.status == :in_progress
-      assert todo.updated_at != nil
-    end
-
-    test "sets completed_at when status is completed", %{session_id: session_id} do
-      todos = [
-        %{
-          id: "1",
-          content: "Task",
-          status: :in_progress,
-          dependencies: [],
-          priority: :high,
-          created_at: now(),
-          updated_at: nil,
-          completed_at: nil,
-          metadata: %{}
-        }
-      ]
-
-      TodoStore.put(session_id, todos)
-      :ok = TodoStore.update_status(session_id, "1", :completed)
-
-      updated = TodoStore.get(session_id)
-      todo = hd(updated)
-
-      assert todo.status == :completed
-      assert todo.completed_at != nil
-    end
-
-    test "preserves other todos", %{session_id: session_id} do
-      todos = [
-        %{
-          id: "1",
-          content: "Task 1",
-          status: :pending,
-          dependencies: [],
-          priority: :high,
-          created_at: now(),
-          updated_at: nil,
-          completed_at: nil,
-          metadata: %{}
-        },
-        %{
-          id: "2",
-          content: "Task 2",
-          status: :pending,
-          dependencies: [],
-          priority: :medium,
-          created_at: now(),
-          updated_at: nil,
-          completed_at: nil,
-          metadata: %{}
-        }
-      ]
-
-      TodoStore.put(session_id, todos)
-      :ok = TodoStore.update_status(session_id, "1", :completed)
-
-      updated = TodoStore.get(session_id)
-      assert length(updated) == 2
-
-      todo2 = Enum.find(updated, &(&1.id == "2"))
-      assert todo2.status == :pending
-    end
-  end
-
-  describe "complete/2" do
-    test "marks todo as completed", %{session_id: session_id} do
-      todos = [
-        %{
-          id: "1",
-          content: "Task",
-          status: :in_progress,
-          dependencies: [],
-          priority: :high,
-          created_at: now(),
-          updated_at: nil,
-          completed_at: nil,
-          metadata: %{}
-        }
-      ]
-
-      TodoStore.put(session_id, todos)
-      :ok = TodoStore.complete(session_id, "1")
-
-      updated = TodoStore.get(session_id)
-      todo = hd(updated)
-
-      assert todo.status == :completed
-      assert todo.completed_at != nil
     end
   end
 

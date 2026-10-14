@@ -45,6 +45,7 @@ defmodule CodingAgent.Session do
   # its end-of-run checks (avoids a race in very fast mock runs).
   @prompt_defer_ms 10
   @reset_abort_wait_ms 5_000
+  @todo_call_timeout_ms 30_000
 
   alias LemonAgent.ContextRegistry
   alias LemonAgent.Types.AgentTool
@@ -52,6 +53,7 @@ defmodule CodingAgent.Session do
   alias CodingAgent.AsyncFollowups
   alias CodingAgent.Extensions
   alias CodingAgent.Session.BackgroundTasks
+  alias CodingAgent.Session.BranchState
   alias CodingAgent.Session.CompactionLifecycle
   alias CodingAgent.Session.CompactionManager
   alias CodingAgent.Session.EventHandler
@@ -62,6 +64,7 @@ defmodule CodingAgent.Session do
   alias CodingAgent.Session.Persistence
   alias CodingAgent.Session.PromptComposer
   alias CodingAgent.Session.State
+  alias CodingAgent.Session.Todos
   alias CodingAgent.Session.WasmBridge
   alias CodingAgent.Wasm.SidecarSupervisor
   alias CodingAgent.SessionManager
@@ -124,6 +127,7 @@ defmodule CodingAgent.Session do
     :wasm_tool_names,
     :wasm_status,
     :plan_gate,
+    branch_generation: 0,
     auto_compaction: %CompactionLifecycle.State{},
     overflow_recovery: %OverflowRecovery.State{}
   ]
@@ -181,6 +185,7 @@ defmodule CodingAgent.Session do
           wasm_tool_names: [String.t()],
           wasm_status: map() | nil,
           plan_gate: :atomics.atomics_ref() | nil,
+          branch_generation: non_neg_integer(),
           auto_compaction: CompactionLifecycle.State.t(),
           overflow_recovery: OverflowRecovery.State.t()
         }
@@ -533,6 +538,24 @@ defmodule CodingAgent.Session do
     GenServer.call(session, {:plan, action, opts}, :infinity)
   end
 
+  @doc """
+  The selected branch's todo list and the revision a write must be prepared
+  against. See `CodingAgent.Session.Todos`.
+  """
+  @spec todos(GenServer.server()) :: CodingAgent.Session.Todos.read_result()
+  def todos(session), do: GenServer.call(session, :todos, @todo_call_timeout_ms)
+
+  @doc """
+  Journal `todos` as the complete list of the selected branch. Succeeds only
+  once the journal entry is recorded; a `revision` from an earlier branch
+  selection or list is rejected with `{:error, :stale_revision}`.
+  """
+  @spec write_todos(GenServer.server(), [map()], CodingAgent.Session.Todos.revision()) ::
+          {:ok, [map()], CodingAgent.Session.Todos.revision()}
+          | {:error, :stale_revision | :journal_write_failed}
+  def write_todos(session, todos, revision) when is_list(todos),
+    do: GenServer.call(session, {:write_todos, todos, revision}, @todo_call_timeout_ms)
+
   @doc "Current context usage and the configured automatic-compaction budget."
   def context_budget(session), do: GenServer.call(session, :context_budget)
 
@@ -622,6 +645,8 @@ defmodule CodingAgent.Session do
   def init(opts) do
     Process.flag(:trap_exit, true)
     {:ok, state, extension_status_report} = Lifecycle.initialize(opts, self())
+    # A resumed or forked file starts on its selected branch like any other.
+    state = BranchState.restore(state)
 
     maybe_register_session(
       state.session_manager,
@@ -692,6 +717,16 @@ defmodule CodingAgent.Session do
       when decision in [:approve, :refine] do
     case CodingAgent.Session.Planning.resolve_proposal(state, decision, proposal) do
       {:ok, state} -> {:reply, :ok, state}
+      {:error, _} = error -> {:reply, error, state}
+    end
+  end
+
+  # Called from the todo tools; this process is the only journal writer.
+  def handle_call(:todos, _from, state), do: {:reply, Todos.read(state), state}
+
+  def handle_call({:write_todos, todos, revision}, _from, state) do
+    case Todos.write(state, todos, revision) do
+      {:ok, todos, revision, state} -> {:reply, {:ok, todos, revision}, state}
       {:error, _} = error -> {:reply, error, state}
     end
   end
@@ -2036,6 +2071,6 @@ defmodule CodingAgent.Session do
         model: model,
         thinking_level: context.thinking_level
     }
-    |> CodingAgent.Session.Planning.refresh()
+    |> BranchState.restore()
   end
 end

@@ -1,6 +1,6 @@
 defmodule CodingAgent.Tools.TodoWrite do
   @moduledoc """
-  Replaces the current session's complete todo list through `TodoStore`.
+  Replaces the current session's complete todo list.
 
   Entries require only `content`. Omitted `status` and `priority` default to
   `"pending"` and `"medium"`; explicitly supplied values must be valid.
@@ -8,6 +8,11 @@ defmodule CodingAgent.Tools.TodoWrite do
   same-content entry, or gets a deterministic content-based ID. Repeated content
   receives distinct IDs in list order. Supply the returned ID when renaming a task
   to preserve its identity. Duplicate explicit IDs reject the entire write.
+
+  The list is journaled on the selected branch by the owning session (see
+  `CodingAgent.Session.Todos`). A write succeeds only once its journal entry is
+  recorded, and is rejected if the session switched branches or the list
+  changed after this write read it.
 
   Successful results contain the normalized full state in `details.todos` and
   the complete ACP/TUI plan in `details.plan.entries`, including completed tasks.
@@ -17,14 +22,14 @@ defmodule CodingAgent.Tools.TodoWrite do
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAgent.AbortSignal
   alias LemonAi.Types.TextContent
-  alias CodingAgent.Tools.TodoStore
+  alias CodingAgent.Tools.{TodoRead, TodoStore}
 
   @doc """
-  Returns the TodoWrite tool definition.
+  Returns the TodoWrite tool definition bound to the `:session_pid` option.
   """
   @spec tool(cwd :: String.t(), opts :: keyword()) :: AgentTool.t()
   def tool(_cwd, opts \\ []) do
-    session_id = Keyword.get(opts, :session_id, "")
+    session = Keyword.get(opts, :session_pid)
 
     %AgentTool{
       name: "todowrite",
@@ -37,7 +42,7 @@ defmodule CodingAgent.Tools.TodoWrite do
         },
         "required" => ["todos"]
       },
-      execute: &execute(&1, &2, &3, &4, session_id)
+      execute: &execute(&1, &2, &3, &4, session)
     }
   end
 
@@ -76,16 +81,17 @@ defmodule CodingAgent.Tools.TodoWrite do
   end
 
   @doc """
-  Execute the TodoWrite tool, validating and storing the todo list.
+  Execute the TodoWrite tool: validate, assign IDs against the selected
+  branch's list and journal the result through `session`.
   """
   @spec execute(
           tool_call_id :: String.t(),
           params :: map(),
           signal :: reference() | nil,
           on_update :: (AgentToolResult.t() -> :ok) | nil,
-          session_id :: String.t()
+          session :: GenServer.server() | nil
         ) :: AgentToolResult.t() | {:error, term()}
-  def execute(_tool_call_id, params, signal, _on_update, session_id) do
+  def execute(_tool_call_id, params, signal, _on_update, session) do
     if AbortSignal.aborted?(signal) do
       {:error, "Operation aborted"}
     else
@@ -95,8 +101,8 @@ defmodule CodingAgent.Tools.TodoWrite do
         not is_list(todos) ->
           {:error, "Todos must be an array"}
 
-        session_id == "" ->
-          {:error, "Session id not available"}
+        is_nil(session) ->
+          {:error, "Session not available"}
 
         true ->
           todos =
@@ -109,10 +115,9 @@ defmodule CodingAgent.Tools.TodoWrite do
                 todo
             end)
 
-          with :ok <- validate_todos(todos) do
-            todos = assign_ids(todos, TodoStore.get(session_id))
-            :ok = TodoStore.put(session_id, todos)
-
+          with :ok <- validate_todos(todos),
+               {:ok, prior, revision} <- previous(session),
+               {:ok, todos} <- journal(session, assign_ids(todos, prior), revision) do
             output = Jason.encode!(todos, pretty: true)
             open_count = Enum.count(todos, fn todo -> Map.get(todo, "status") != "completed" end)
 
@@ -123,6 +128,36 @@ defmodule CodingAgent.Tools.TodoWrite do
           end
       end
     end
+  end
+
+  # An unreadable (unsupported) entry is replaced, not merged: IDs start fresh.
+  defp previous(session) do
+    case TodoRead.current(session) do
+      {:ok, todos, revision} -> {:ok, todos, revision}
+      {:unsupported, _version, revision} -> {:ok, [], revision}
+      {:error, _} = error -> error
+    end
+  end
+
+  defp journal(session, todos, revision) do
+    case CodingAgent.Session.write_todos(session, todos, revision) do
+      {:ok, todos, _revision} ->
+        {:ok, todos}
+
+      {:error, :stale_revision} ->
+        {:error,
+         "The todo list changed (the session switched branches or another update was saved) " <>
+           "before this write was recorded, so nothing was written. Read the current list " <>
+           "and write the complete list again if it still applies."}
+
+      {:error, :journal_write_failed} ->
+        {:error,
+         "The todo update could not be saved to the session journal; the list is unchanged."}
+    end
+  catch
+    :exit, _ ->
+      {:error,
+       "The session did not confirm the todo update. Read the list before writing it again."}
   end
 
   defp validate_todos(todos) when is_list(todos) do

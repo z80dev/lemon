@@ -14,7 +14,8 @@ defmodule CodingAgent.Tools.Todo do
   summary or actionable subset. Plan entries are ordered maps with `content`,
   `status` (pending/in_progress/completed) and `priority` (high/medium/low), all
   string values. Actionable results additionally expose `details.actionable`.
-  State uses `TodoStore`'s session scoping and existing checkpoint persistence.
+  State is the owning session's selected-branch journal (`CodingAgent.Session.Todos`),
+  so every view agrees with rewind, branch navigation, resume and forks.
   """
 
   alias LemonAgent.Types.AgentTool
@@ -26,11 +27,11 @@ defmodule CodingAgent.Tools.Todo do
   @valid_actions ["read", "write", "progress", "actionable"]
 
   @doc """
-  Returns the unified todo tool definition.
+  Returns the unified todo tool definition bound to the `:session_pid` option.
   """
   @spec tool(cwd :: String.t(), opts :: keyword()) :: AgentTool.t()
   def tool(_cwd, opts \\ []) do
-    session_id = Keyword.get(opts, :session_id, "")
+    session = Keyword.get(opts, :session_pid)
 
     %AgentTool{
       name: "todo",
@@ -53,7 +54,7 @@ defmodule CodingAgent.Tools.Todo do
         },
         "required" => ["action"]
       },
-      execute: &execute(&1, &2, &3, &4, session_id)
+      execute: &execute(&1, &2, &3, &4, session)
     }
   end
 
@@ -62,33 +63,33 @@ defmodule CodingAgent.Tools.Todo do
           params :: map(),
           signal :: reference() | nil,
           on_update :: (LemonAgent.Types.AgentToolResult.t() -> :ok) | nil,
-          session_id :: String.t()
+          session :: GenServer.server() | nil
         ) :: LemonAgent.Types.AgentToolResult.t() | {:error, term()}
   def execute(
         _tool_call_id,
         %{"action" => action, "todos" => todos},
         _signal,
         _on_update,
-        _session_id
+        _session
       )
       when action in ["read", "progress", "actionable"] and not is_nil(todos) do
     {:error,
      "action='#{action}' is read-only and cannot update todos. Use action='write' with the complete updated list to change statuses; no plan state was changed."}
   end
 
-  def execute(tool_call_id, params, signal, on_update, session_id) do
+  def execute(tool_call_id, params, signal, on_update, session) do
     case Map.get(params, "action") do
       "read" ->
-        TodoRead.execute(tool_call_id, %{}, signal, on_update, session_id)
+        TodoRead.execute(tool_call_id, %{}, signal, on_update, session)
 
       "write" ->
-        TodoWrite.execute(tool_call_id, params, signal, on_update, session_id)
+        TodoWrite.execute(tool_call_id, params, signal, on_update, session)
 
       "progress" ->
-        execute_progress(signal, session_id)
+        execute_progress(signal, session)
 
       "actionable" ->
-        execute_actionable(signal, session_id)
+        execute_actionable(signal, session)
 
       nil ->
         {:error, "action is required and must be one of: read, write, progress, actionable"}
@@ -98,15 +99,12 @@ defmodule CodingAgent.Tools.Todo do
     end
   end
 
-  defp execute_progress(signal, session_id) do
+  defp execute_progress(signal, session) do
     if LemonAgent.AbortSignal.aborted?(signal) do
       {:error, "Operation aborted"}
     else
-      if session_id == "" do
-        {:error, "Session id not available"}
-      else
-        todos = TodoStore.get(session_id)
-        progress = TodoStore.get_progress(session_id)
+      with {:ok, todos} <- TodoRead.readable(session) do
+        progress = TodoStore.progress(todos)
         output = Jason.encode!(progress, pretty: true)
 
         %AgentToolResult{
@@ -121,15 +119,12 @@ defmodule CodingAgent.Tools.Todo do
     end
   end
 
-  defp execute_actionable(signal, session_id) do
+  defp execute_actionable(signal, session) do
     if LemonAgent.AbortSignal.aborted?(signal) do
       {:error, "Operation aborted"}
     else
-      if session_id == "" do
-        {:error, "Session id not available"}
-      else
-        todos = TodoStore.get(session_id)
-        actionable = TodoStore.get_actionable(session_id)
+      with {:ok, todos} <- TodoRead.readable(session) do
+        actionable = TodoStore.actionable(todos)
         output = Jason.encode!(actionable, pretty: true)
 
         %AgentToolResult{
