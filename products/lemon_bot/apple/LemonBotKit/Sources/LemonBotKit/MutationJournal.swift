@@ -62,12 +62,12 @@ extension LemonBotStore {
         if let v = value as? SecretRequest, v.gate.state == "outcome_unknown" { return ([v.id], nil) }
         return nil
     }
-    func journaledMutate<T: Decodable>(_ method: String, _ path: String, body: JSONObject, as: T.Type) async throws -> T {
+    func journaledMutate<T: Decodable>(_ method: String, _ path: String, body: JSONObject, as responseType: T.Type) async throws -> T {
         let client = try activeTransport()
         var payload = body
         let handle = try beginIntent(method, path, payload: &payload)
         do {
-            let value: T = try await client.mutate(method, path, body: payload, as: as)
+            let value: T = try await client.mutate(method, path, body: payload, as: responseType)
             finishIntent(handle, unknown: unknownResources(value))
             return value
         } catch {

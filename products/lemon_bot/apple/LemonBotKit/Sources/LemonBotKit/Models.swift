@@ -12,6 +12,19 @@ extension KeyedDecodingContainer {
     }
 }
 
+private enum FeedbackReasonValue: String {
+    case notRequested = "not_requested"
+    case inaccurate, lowQuality = "low_quality", slow
+}
+
+private enum ExportStreamValue: String {
+    case audit, action, usage, conversationContent = "conversation_content"
+}
+
+private enum XMediaValue: String {
+    case photo, video, gif
+}
+
 public struct Resource: Codable, Hashable, Identifiable {
     public var `id`: ID
     public var `revision`: Int
@@ -3826,9 +3839,9 @@ public struct Feedback: Codable, Hashable, Identifiable {
     public var `entryId`: ID
     public var `userId`: ID
     public var `sentiment`: String
-    public var `reasons`: [('not_requested' | 'inaccurate' | 'low_quality' | 'slow')]
+    public var `reasons`: [String]
     public var `comment`: String
-    public init(id: ID, revision: Int, createdAtMs: TimestampMs, updatedAtMs: TimestampMs, entryId: ID, userId: ID, sentiment: String, reasons: [('not_requested' | 'inaccurate' | 'low_quality' | 'slow')], comment: String) {
+    public init(id: ID, revision: Int, createdAtMs: TimestampMs, updatedAtMs: TimestampMs, entryId: ID, userId: ID, sentiment: String, reasons: [String], comment: String) {
         self.`id` = id
         self.`revision` = revision
         self.`createdAtMs` = createdAtMs
@@ -3850,10 +3863,12 @@ public struct Feedback: Codable, Hashable, Identifiable {
         self.`userId` = try c.decode(ID.self, forKey: .`userId`)
         self.`sentiment` = try c.decode(String.self, forKey: .`sentiment`)
         guard ["good", "bad"].contains(`sentiment`) else { throw DecodingError.dataCorruptedError(forKey: .`sentiment`, in: c, debugDescription: "Invalid Feedback.sentiment") }
-        self.`reasons` = try c.decode([('not_requested' | 'inaccurate' | 'low_quality' | 'slow')].self, forKey: .`reasons`)
+        self.`reasons` = try c.decode([String].self, forKey: .`reasons`)
+        guard reasons.allSatisfy({ FeedbackReasonValue(rawValue: $0) != nil }) else { throw DecodingError.dataCorruptedError(forKey: .`reasons`, in: c, debugDescription: "Invalid Feedback.reasons") }
         self.`comment` = try c.decode(String.self, forKey: .`comment`)
     }
     public func encode(to encoder: Encoder) throws {
+        guard reasons.allSatisfy({ FeedbackReasonValue(rawValue: $0) != nil }) else { throw EncodingError.invalidValue(reasons, .init(codingPath: encoder.codingPath + [CodingKeys.reasons], debugDescription: "Invalid Feedback.reasons")) }
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(`id`, forKey: .`id`)
         try c.encode(`revision`, forKey: .`revision`)
@@ -3870,9 +3885,9 @@ public struct Feedback: Codable, Hashable, Identifiable {
 public struct FeedbackCreate: Codable, Hashable {
     public var `clientNonce`: String
     public var `sentiment`: String
-    public var `reasons`: [('not_requested' | 'inaccurate' | 'low_quality' | 'slow')]?
+    public var `reasons`: [String]?
     public var `comment`: String?
-    public init(clientNonce: String, sentiment: String, reasons: [('not_requested' | 'inaccurate' | 'low_quality' | 'slow')]? = nil, comment: String? = nil) {
+    public init(clientNonce: String, sentiment: String, reasons: [String]? = nil, comment: String? = nil) {
         self.`clientNonce` = clientNonce
         self.`sentiment` = sentiment
         self.`reasons` = reasons
@@ -3883,10 +3898,13 @@ public struct FeedbackCreate: Codable, Hashable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.`clientNonce` = try c.decode(String.self, forKey: .`clientNonce`)
         self.`sentiment` = try c.decode(String.self, forKey: .`sentiment`)
-        self.`reasons` = try c.decodeOptional([('not_requested' | 'inaccurate' | 'low_quality' | 'slow')].self, forKey: .`reasons`)
+        guard ["good", "bad"].contains(`sentiment`) else { throw DecodingError.dataCorruptedError(forKey: .`sentiment`, in: c, debugDescription: "Invalid FeedbackCreate.sentiment") }
+        self.`reasons` = try c.decodeOptional([String].self, forKey: .`reasons`)
+        if let reasons, !reasons.allSatisfy({ FeedbackReasonValue(rawValue: $0) != nil }) { throw DecodingError.dataCorruptedError(forKey: .`reasons`, in: c, debugDescription: "Invalid FeedbackCreate.reasons") }
         self.`comment` = try c.decodeOptional(String.self, forKey: .`comment`)
     }
     public func encode(to encoder: Encoder) throws {
+        if let reasons, !reasons.allSatisfy({ FeedbackReasonValue(rawValue: $0) != nil }) { throw EncodingError.invalidValue(reasons, .init(codingPath: encoder.codingPath + [CodingKeys.reasons], debugDescription: "Invalid FeedbackCreate.reasons")) }
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(`clientNonce`, forKey: .`clientNonce`)
         try c.encode(`sentiment`, forKey: .`sentiment`)
@@ -8783,11 +8801,11 @@ public struct NetworkRule: Codable, Hashable {
     public var `value`: String
     public var `ports`: [Int]
     public var `protocol`: String
-    public init(kind: String, value: String, ports: [Int], protocol: String) {
+    public init(kind: String, value: String, ports: [Int], protocol transportProtocol: String) {
         self.`kind` = kind
         self.`value` = value
         self.`ports` = ports
-        self.`protocol` = protocol
+        self.`protocol` = transportProtocol
     }
     enum CodingKeys: String, CodingKey { case `kind`, `value`, `ports`, `protocol` }
     public init(from decoder: Decoder) throws {
@@ -9604,16 +9622,16 @@ public struct ExportDestination: Codable, Hashable, Identifiable {
     public var `url`: String
     public var `protocol`: String
     public var `secretRef`: String?
-    public var `streams`: [('audit' | 'action' | 'usage' | 'conversation_content')]
+    public var `streams`: [String]
     public var `enabled`: Bool
-    public init(id: ID, revision: Int, createdAtMs: TimestampMs, updatedAtMs: TimestampMs, name: String, url: String, protocol: String, secretRef: String? = nil, streams: [('audit' | 'action' | 'usage' | 'conversation_content')], enabled: Bool) {
+    public init(id: ID, revision: Int, createdAtMs: TimestampMs, updatedAtMs: TimestampMs, name: String, url: String, protocol transportProtocol: String, secretRef: String? = nil, streams: [String], enabled: Bool) {
         self.`id` = id
         self.`revision` = revision
         self.`createdAtMs` = createdAtMs
         self.`updatedAtMs` = updatedAtMs
         self.`name` = name
         self.`url` = url
-        self.`protocol` = protocol
+        self.`protocol` = transportProtocol
         self.`secretRef` = secretRef
         self.`streams` = streams
         self.`enabled` = enabled
@@ -9630,10 +9648,12 @@ public struct ExportDestination: Codable, Hashable, Identifiable {
         self.`protocol` = try c.decode(String.self, forKey: .`protocol`)
         guard ["otlp_http", "ndjson_webhook"].contains(`protocol`) else { throw DecodingError.dataCorruptedError(forKey: .`protocol`, in: c, debugDescription: "Invalid ExportDestination.protocol") }
         self.`secretRef` = try c.decode(String?.self, forKey: .`secretRef`)
-        self.`streams` = try c.decode([('audit' | 'action' | 'usage' | 'conversation_content')].self, forKey: .`streams`)
+        self.`streams` = try c.decode([String].self, forKey: .`streams`)
+        guard streams.allSatisfy({ ExportStreamValue(rawValue: $0) != nil }) else { throw DecodingError.dataCorruptedError(forKey: .`streams`, in: c, debugDescription: "Invalid ExportDestination.streams") }
         self.`enabled` = try c.decode(Bool.self, forKey: .`enabled`)
     }
     public func encode(to encoder: Encoder) throws {
+        guard streams.allSatisfy({ ExportStreamValue(rawValue: $0) != nil }) else { throw EncodingError.invalidValue(streams, .init(codingPath: encoder.codingPath + [CodingKeys.streams], debugDescription: "Invalid ExportDestination.streams")) }
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(`id`, forKey: .`id`)
         try c.encode(`revision`, forKey: .`revision`)
@@ -9654,13 +9674,13 @@ public struct ExportDestinationCreate: Codable, Hashable {
     public var `url`: String
     public var `protocol`: String
     public var `secretRef`: String?
-    public var `streams`: [('audit' | 'action' | 'usage' | 'conversation_content')]
+    public var `streams`: [String]
     public var `enabled`: Bool
-    public init(clientNonce: String, name: String, url: String, protocol: String, secretRef: String? = nil, streams: [('audit' | 'action' | 'usage' | 'conversation_content')], enabled: Bool) {
+    public init(clientNonce: String, name: String, url: String, protocol transportProtocol: String, secretRef: String? = nil, streams: [String], enabled: Bool) {
         self.`clientNonce` = clientNonce
         self.`name` = name
         self.`url` = url
-        self.`protocol` = protocol
+        self.`protocol` = transportProtocol
         self.`secretRef` = secretRef
         self.`streams` = streams
         self.`enabled` = enabled
@@ -9673,10 +9693,13 @@ public struct ExportDestinationCreate: Codable, Hashable {
         self.`url` = try c.decode(String.self, forKey: .`url`)
         self.`protocol` = try c.decode(String.self, forKey: .`protocol`)
         self.`secretRef` = try c.decodeOptional(String.self, forKey: .`secretRef`)
-        self.`streams` = try c.decode([('audit' | 'action' | 'usage' | 'conversation_content')].self, forKey: .`streams`)
+        guard ["otlp_http", "ndjson_webhook"].contains(`protocol`) else { throw DecodingError.dataCorruptedError(forKey: .`protocol`, in: c, debugDescription: "Invalid ExportDestinationCreate.protocol") }
+        self.`streams` = try c.decode([String].self, forKey: .`streams`)
+        guard streams.allSatisfy({ ExportStreamValue(rawValue: $0) != nil }) else { throw DecodingError.dataCorruptedError(forKey: .`streams`, in: c, debugDescription: "Invalid ExportDestinationCreate.streams") }
         self.`enabled` = try c.decode(Bool.self, forKey: .`enabled`)
     }
     public func encode(to encoder: Encoder) throws {
+        guard streams.allSatisfy({ ExportStreamValue(rawValue: $0) != nil }) else { throw EncodingError.invalidValue(streams, .init(codingPath: encoder.codingPath + [CodingKeys.streams], debugDescription: "Invalid ExportDestinationCreate.streams")) }
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(`clientNonce`, forKey: .`clientNonce`)
         try c.encode(`name`, forKey: .`name`)
@@ -9692,8 +9715,8 @@ public struct ExportDestinationUpdate: Codable, Hashable {
     public var `clientNonce`: String
     public var `revision`: Int
     public var `enabled`: Bool?
-    public var `streams`: [('audit' | 'action' | 'usage' | 'conversation_content')]?
-    public init(clientNonce: String, revision: Int, enabled: Bool? = nil, streams: [('audit' | 'action' | 'usage' | 'conversation_content')]? = nil) {
+    public var `streams`: [String]?
+    public init(clientNonce: String, revision: Int, enabled: Bool? = nil, streams: [String]? = nil) {
         self.`clientNonce` = clientNonce
         self.`revision` = revision
         self.`enabled` = enabled
@@ -9705,9 +9728,11 @@ public struct ExportDestinationUpdate: Codable, Hashable {
         self.`clientNonce` = try c.decode(String.self, forKey: .`clientNonce`)
         self.`revision` = try c.decode(Int.self, forKey: .`revision`)
         self.`enabled` = try c.decodeOptional(Bool.self, forKey: .`enabled`)
-        self.`streams` = try c.decodeOptional([('audit' | 'action' | 'usage' | 'conversation_content')].self, forKey: .`streams`)
+        self.`streams` = try c.decodeOptional([String].self, forKey: .`streams`)
+        if let streams, !streams.allSatisfy({ ExportStreamValue(rawValue: $0) != nil }) { throw DecodingError.dataCorruptedError(forKey: .`streams`, in: c, debugDescription: "Invalid ExportDestinationUpdate.streams") }
     }
     public func encode(to encoder: Encoder) throws {
+        if let streams, !streams.allSatisfy({ ExportStreamValue(rawValue: $0) != nil }) { throw EncodingError.invalidValue(streams, .init(codingPath: encoder.codingPath + [CodingKeys.streams], debugDescription: "Invalid ExportDestinationUpdate.streams")) }
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(`clientNonce`, forKey: .`clientNonce`)
         try c.encode(`revision`, forKey: .`revision`)
@@ -11304,9 +11329,9 @@ public struct Reference: Codable, Hashable, Identifiable {
 
 public struct Actor: Codable, Hashable, Identifiable {
     public var `kind`: String
-    public var `id`: ID?
+    public var `id`: String?
     public var `displayName`: String
-    public init(kind: String, id: ID? = nil, displayName: String) {
+    public init(kind: String, id: String? = nil, displayName: String) {
         self.`kind` = kind
         self.`id` = id
         self.`displayName` = displayName
@@ -11316,7 +11341,7 @@ public struct Actor: Codable, Hashable, Identifiable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.`kind` = try c.decode(String.self, forKey: .`kind`)
         guard ["user", "bot", "system"].contains(`kind`) else { throw DecodingError.dataCorruptedError(forKey: .`kind`, in: c, debugDescription: "Invalid Actor.kind") }
-        self.`id` = try c.decode(ID?.self, forKey: .`id`)
+        self.`id` = try c.decode(String?.self, forKey: .`id`)
         self.`displayName` = try c.decode(String.self, forKey: .`displayName`)
     }
     public func encode(to encoder: Encoder) throws {
@@ -15729,8 +15754,8 @@ public struct OperatorConfigurationXProvider: Codable, Hashable {
     public var `signingSecretRef`: String
     public var `apiBaseUrl`: String
     public var `deniedCountries`: [String]
-    public var `allowedMedia`: [('photo' | 'video' | 'gif')]
-    public init(oauth: OAuthProviderConfig, publicHandle: String, signingSecretRef: String, apiBaseUrl: String, deniedCountries: [String], allowedMedia: [('photo' | 'video' | 'gif')]) {
+    public var `allowedMedia`: [String]
+    public init(oauth: OAuthProviderConfig, publicHandle: String, signingSecretRef: String, apiBaseUrl: String, deniedCountries: [String], allowedMedia: [String]) {
         self.`oauth` = oauth
         self.`publicHandle` = publicHandle
         self.`signingSecretRef` = signingSecretRef
@@ -15746,9 +15771,11 @@ public struct OperatorConfigurationXProvider: Codable, Hashable {
         self.`signingSecretRef` = try c.decode(String.self, forKey: .`signingSecretRef`)
         self.`apiBaseUrl` = try c.decode(String.self, forKey: .`apiBaseUrl`)
         self.`deniedCountries` = try c.decode([String].self, forKey: .`deniedCountries`)
-        self.`allowedMedia` = try c.decode([('photo' | 'video' | 'gif')].self, forKey: .`allowedMedia`)
+        self.`allowedMedia` = try c.decode([String].self, forKey: .`allowedMedia`)
+        guard allowedMedia.allSatisfy({ XMediaValue(rawValue: $0) != nil }) else { throw DecodingError.dataCorruptedError(forKey: .`allowedMedia`, in: c, debugDescription: "Invalid OperatorConfigurationXProvider.allowedMedia") }
     }
     public func encode(to encoder: Encoder) throws {
+        guard allowedMedia.allSatisfy({ XMediaValue(rawValue: $0) != nil }) else { throw EncodingError.invalidValue(allowedMedia, .init(codingPath: encoder.codingPath + [CodingKeys.allowedMedia], debugDescription: "Invalid OperatorConfigurationXProvider.allowedMedia")) }
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(`oauth`, forKey: .`oauth`)
         try c.encode(`publicHandle`, forKey: .`publicHandle`)
@@ -17253,9 +17280,9 @@ public struct XProviderInfo: Codable, Hashable, Identifiable {
     public var `capabilities`: [String]
     public var `publicHandle`: String
     public var `oauthScopes`: [String]
-    public var `allowedMedia`: [('photo' | 'video' | 'gif')]
+    public var `allowedMedia`: [String]
     public var `deniedCountries`: [String]
-    public init(id: String, kind: String, label: String, configured: Bool, prerequisites: [String], capabilities: [String], publicHandle: String, oauthScopes: [String], allowedMedia: [('photo' | 'video' | 'gif')], deniedCountries: [String]) {
+    public init(id: String, kind: String, label: String, configured: Bool, prerequisites: [String], capabilities: [String], publicHandle: String, oauthScopes: [String], allowedMedia: [String], deniedCountries: [String]) {
         self.`id` = id
         self.`kind` = kind
         self.`label` = label
@@ -17279,10 +17306,12 @@ public struct XProviderInfo: Codable, Hashable, Identifiable {
         self.`capabilities` = try c.decode([String].self, forKey: .`capabilities`)
         self.`publicHandle` = try c.decode(String.self, forKey: .`publicHandle`)
         self.`oauthScopes` = try c.decode([String].self, forKey: .`oauthScopes`)
-        self.`allowedMedia` = try c.decode([('photo' | 'video' | 'gif')].self, forKey: .`allowedMedia`)
+        self.`allowedMedia` = try c.decode([String].self, forKey: .`allowedMedia`)
+        guard allowedMedia.allSatisfy({ XMediaValue(rawValue: $0) != nil }) else { throw DecodingError.dataCorruptedError(forKey: .`allowedMedia`, in: c, debugDescription: "Invalid XProviderInfo.allowedMedia") }
         self.`deniedCountries` = try c.decode([String].self, forKey: .`deniedCountries`)
     }
     public func encode(to encoder: Encoder) throws {
+        guard allowedMedia.allSatisfy({ XMediaValue(rawValue: $0) != nil }) else { throw EncodingError.invalidValue(allowedMedia, .init(codingPath: encoder.codingPath + [CodingKeys.allowedMedia], debugDescription: "Invalid XProviderInfo.allowedMedia")) }
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(`id`, forKey: .`id`)
         try c.encode(`kind`, forKey: .`kind`)

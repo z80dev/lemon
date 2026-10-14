@@ -55,16 +55,16 @@ import Observation
         return transport
     }
     func assertGeneration(_ value: UUID) throws { guard value == generation else { throw ClientError.accountChanged } }
-    public func read<T: Decodable>(_ path: String, query: [String: String] = [:], as: T.Type = T.self) async throws -> T {
+    public func read<T: Decodable>(_ path: String, query: [String: String] = [:], as responseType: T.Type = T.self) async throws -> T {
         let current = generation
-        let value: T = try await activeTransport().read(path, query: query, as: as)
+        let value: T = try await activeTransport().read(path, query: query, as: responseType)
         try assertGeneration(current)
         return value
     }
-    public func mutate<T: Decodable>(_ method: String, _ path: String, body: JSONObject, as: T.Type = T.self) async throws -> T {
+    public func mutate<T: Decodable>(_ method: String, _ path: String, body: JSONObject, as responseType: T.Type = T.self) async throws -> T {
         if (method == "DELETE" || body["confirmationToken"] != nil || path.hasSuffix("/resolve") || path.hasSuffix("/send") || path.hasSuffix("/discard") || path.hasSuffix("/reset") || path.hasSuffix("/leave") || path == "/host-operations"), connectionState != "online" { throw ClientError.offline }
         let current = generation
-        let value: T = try await journaledMutate(method, path, body: body, as: as)
+        let value: T = try await journaledMutate(method, path, body: body, as: responseType)
         try assertGeneration(current)
         // Authoritative HTTP resources reach the same reducer as websocket upserts; no optimistic successful gates.
         if let value = value as? Bot { upsert(&bots, value, id: { $0.id }, revision: { $0.revision }) }
