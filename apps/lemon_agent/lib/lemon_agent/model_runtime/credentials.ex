@@ -122,12 +122,15 @@ defmodule LemonAgent.ModelRuntime.Credentials do
 
       canonical when is_binary(canonical) ->
         # Generic resolution prefers environment and inline keys, which cannot
-        # be refreshed; otherwise it reads the configured or default secret.
+        # be refreshed, unless `auth_source = "oauth"` makes the stored sign-in
+        # authoritative; otherwise it reads the configured or default secret.
+        oauth? = normalize_auth_source(provider_cfg) == :oauth
+
         cond do
-          present_value?(env_first(ProviderNames.env_vars(canonical))) ->
+          not oauth? and present_value?(env_first(ProviderNames.env_vars(canonical))) ->
             {:error, :not_refreshable}
 
-          present_value?(provider_config_value(provider_cfg, :api_key)) ->
+          not oauth? and present_value?(provider_config_value(provider_cfg, :api_key)) ->
             {:error, :not_refreshable}
 
           true ->

@@ -57,7 +57,8 @@ defmodule LemonCli.Onboarding.Providers do
       api_key_secret_provider: "onboarding_openai_codex",
       oauth_secret_provider: "onboarding_openai_codex_oauth",
       oauth_module: Module.concat([:"Elixir.LemonAi", :Auth, :OpenAICodexOAuth]),
-      auth_modes: [:oauth, :device, :api_key, :codex_cli],
+      # New modes go last so existing menu numbers keep their meaning.
+      auth_modes: [:oauth, :api_key, :codex_cli, :device],
       default_auth_mode: :oauth,
       preferred_models: ["gpt-6.1-sol", "gpt-6-sol", "gpt-5.6-sol"],
       aliases: ["chatgpt", "codex", "openai_codex"],
