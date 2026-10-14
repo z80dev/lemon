@@ -1,4 +1,9 @@
 defmodule LemonControlPlane.TuiProfilesWireRouter do
+  def submit(request) do
+    {:ok, receipt} = submit_with_receipt(request)
+    {:ok, receipt.run_id}
+  end
+
   def submit_with_receipt(request) do
     send(
       Application.fetch_env!(:lemon_control_plane, :tui_profiles_wire_test_pid),
