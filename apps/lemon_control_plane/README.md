@@ -750,6 +750,10 @@ These measurements are not per-bot grants or an OS sandbox.
 Terminals use a real worker PTY (`python3` required), with the destination login
 shell and worker default cwd unless specified. Cwd is opened through the same
 descriptor-root resolver and applied with `fchdir`, not a raced path-based chdir.
+The helper reads exactly one length-prefixed worker policy packet before forking;
+later input packets remain in the terminal protocol. Its shared filesystem
+resolver is import-safe: the filesystem packet server runs only when that helper
+is executed directly, never while the PTY imports its descriptor policy.
 Dimensions are 1–500 columns/rows.
 `node.shell.output {shellId,dataBase64,seq}` (one-based per-shell sequence) and
 `node.shell.exit {shellId,code}` are delivered **only to the opening connection**;

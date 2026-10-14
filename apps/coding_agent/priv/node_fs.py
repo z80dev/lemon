@@ -509,34 +509,41 @@ def read_exact(count):
     return chunks
 
 
-while True:
-    header = read_exact(4)
-    if header is None:
-        break
-    size = struct.unpack(">I", header)[0]
-    if size > 2000000:
-        break
-    body = read_exact(size)
-    if body is None:
-        break
-    try:
-        request = json.loads(body)
-        config = request["policy"]
-        key = json.dumps(config, sort_keys=True)
-        if key not in policies:
-            roots = config.get("roots")
-            if not isinstance(roots, list) or not 1 <= len(roots) <= 64:
-                fail("invalid_allowed_roots")
-            if len(policies) >= MAX_POLICIES or sum(len(policy.roots) for policy in policies.values()) + len(roots) > MAX_ROOT_DESCRIPTORS:
-                fail("filesystem_busy")
-            policies[key] = Policy(config)
-        result = {"ok": operation(request["method"], request["args"], policies[key], key)}
-    except Failure as exc:
-        result = {"error": str(exc)}
-    except OSError as exc:
-        result = {"error": error_name(exc)}
-    except Exception:
-        result = {"error": "filesystem_failed"}
-    payload = json.dumps(result, separators=(",", ":")).encode()
-    sys.stdout.buffer.write(struct.pack(">I", len(payload)) + payload)
-    sys.stdout.buffer.flush()
+def main():
+    # PTY imports Policy for descriptor-rooted cwd admission. Importing this
+    # module must never read that caller's protocol or emit filesystem frames.
+    while True:
+        header = read_exact(4)
+        if header is None:
+            break
+        size = struct.unpack(">I", header)[0]
+        if size > 2000000:
+            break
+        body = read_exact(size)
+        if body is None:
+            break
+        try:
+            request = json.loads(body)
+            config = request["policy"]
+            key = json.dumps(config, sort_keys=True)
+            if key not in policies:
+                roots = config.get("roots")
+                if not isinstance(roots, list) or not 1 <= len(roots) <= 64:
+                    fail("invalid_allowed_roots")
+                if len(policies) >= MAX_POLICIES or sum(len(policy.roots) for policy in policies.values()) + len(roots) > MAX_ROOT_DESCRIPTORS:
+                    fail("filesystem_busy")
+                policies[key] = Policy(config)
+            result = {"ok": operation(request["method"], request["args"], policies[key], key)}
+        except Failure as exc:
+            result = {"error": str(exc)}
+        except OSError as exc:
+            result = {"error": error_name(exc)}
+        except Exception:
+            result = {"error": "filesystem_failed"}
+        payload = json.dumps(result, separators=(",", ":")).encode()
+        sys.stdout.buffer.write(struct.pack(">I", len(payload)) + payload)
+        sys.stdout.buffer.flush()
+
+
+if __name__ == "__main__":
+    main()

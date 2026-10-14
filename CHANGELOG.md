@@ -183,6 +183,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   even while offline, preventing a node with that ID as its name from receiving
   another machine's private persona. Legacy names resolve only without an ID
   record; explicit target IDs remain ID-only.
+- PTY descriptor-policy startup no longer imports a running filesystem packet
+  server that consumes the terminal's policy frame. The filesystem helper has an
+  import-safe direct-execution entrypoint; real binary terminal startup and queued
+  input retain their own framing and descriptor-rooted cwd admission.
 
 ---
 
