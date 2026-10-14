@@ -296,6 +296,15 @@ inspected session before any value is sent. A reconnect or same-PID credential
 generation change fails before dispatch. These are server-side admission checks,
 not client boolean flags. Other secret names keep the ordinary behavior above.
 
+A vault success is rechecked after the awaited reply before a private-proof
+success is returned. The same original PID/generation and current native privacy
+capability must remain valid, and pending ownership/configuration/policy must
+still match. A changed check returns `private_proof_acknowledgement_changed`
+with `retrySafe:false` and `mutationMayHaveApplied:true`, not a positive binding
+acknowledgement: do not replay the set. A disappeared follow-up owner never
+falls back to fresh-root provisioning. Initial-root proof installation alone
+does not authorize model execution; actual root admission performs those checks.
+
 
 Do not log requests, values, or file transfer bodies in client/backend tracing.
 The destination facade emits a bounded content-free audit/telemetry event

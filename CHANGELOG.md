@@ -51,6 +51,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   Only strict absence permits a fresh root; stale/mismatched/finished lineage
   never falls back. Trim-normalized reserved names require their exact fixed
   operation ID, and missing privacy support rejects before any proof value is sent.
+  Successful vault replies are revalidated against the same pre-provision session
+  and current owning pending target before acknowledgement; lost ownership or
+  configuration/policy changes report a non-retry-safe potentially applied mutation,
+  never a positive private proof authority acknowledgement.
 
 ---
 

@@ -383,6 +383,17 @@ so decorated names cannot bypass this guard. No caller-supplied flag grants this
 authority; raw `node.invoke` remains forbidden for secret methods. Ordinary
 secret operations and read-only reconciliation retain their original behavior.
 
+After a successful awaited vault reply, the wrapper rechecks the owning lineage
+and the **same pre-provision PID/generation** plus current privacy capability
+before acknowledging success. Current pending target configuration/policy changes
+or ownership loss cannot become a positive proof acknowledgement. Pending lookup
+disappearance never becomes a fresh-root fallback; an initial root must remain
+strictly absent from admission. Failure returns `UNAVAILABLE` with
+`reason:private_proof_acknowledgement_changed`, `preDispatch:false`,
+`retrySafe:false`, and `mutationMayHaveApplied:true`: the value may already be
+durable, so do not replay. This acknowledgement is not model authority; actual
+root admission still validates placement, configuration and policy.
+
 Capability items contain `{id,name,category,supported,configuredLevel,osGrant,
 tools,reason,measuredAtMs,stale}`. Categories are `files|shell|browser|connector|os_app`,
 levels `off|read_only|read_interact`, and OS grant states
