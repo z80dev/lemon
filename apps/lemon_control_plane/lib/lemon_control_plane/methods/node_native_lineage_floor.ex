@@ -47,7 +47,7 @@ defmodule LemonControlPlane.Methods.NodeNativeLineageFloor do
          true <- current_generation?(node_id, generation),
          {:ok, %{id: ^node_id, pid: ^pid, generation: ^generation}} <- NodeRegistry.resolve_id(node_id),
          :ok <- RunRequest.validate_invocation_context_key(run_id),
-         true <- is_binary(run_id) and run_id != "",
+         true <- run_id != "",
          true <- valid_handle?(params, handle, require_handle) do
       source = if is_nil(handle), do: %{run_id: run_id}, else: %{run_id: run_id, lineage_handle: handle}
       {:ok, source, %{node_id: node_id, connection_pid: pid, generation: generation}}
