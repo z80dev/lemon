@@ -18,6 +18,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   Includes web/macOS/iOS screen contracts, all 101 Grok behavioral mappings
   and all 16 adopted Muse companion/control features, with explicit provider
   prerequisites and no virtual-desktop or demonstration-recording claims.
+- Lemon Bot secret-free integration/channel/email/X provider discovery,
+  verified own-account channel linking initiation and exact event-filter
+  schemas, with operator-reviewed connector/private-origin/setup inputs.
 - Named execution-node runs now stream live chat deltas, tool activity and
   checkpoints through the controller's normal run/session events. Invocation-bound,
   sequenced `node.invoke.event` frames reject foreign/stale node sessions, ignore
@@ -60,8 +63,6 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - Subagent coordinators remain responsive to active-session queries and cancellation
   while child sessions are starting, rather than blocking those requests behind
   synchronous session initialization.
-
-### Fixed
 
 - Execution-node workers no longer crash when cancellation, disconnect or event
   delivery failure occurs after a native runner has finished but its live events

@@ -379,6 +379,8 @@ export interface ChannelSetup extends Mutation { botId: ID; adapter: ChannelBind
 export interface ChannelSetupFlow extends Resource { botId: ID; adapter: ChannelBinding['adapter']; authorizationUrl: string | null; state: 'pending' | 'awaiting_admin' | 'connected' | 'denied' | 'failed'; channelBindingId: ID | null; error: string | null }
 export interface ChannelPrincipalLink extends Resource { channelBindingId: ID; externalUserId: string; userId: ID; verified: boolean }
 export interface ChannelLinkCreate extends Mutation { channelBindingId: ID; externalUserId: string; verificationCode: string }
+export interface ChannelLinkStart extends Mutation { channelBindingId: ID }
+export interface ChannelLinkFlow extends Resource { userId: ID; channelBindingId: ID; state: 'issued' | 'awaiting_external' | 'verified' | 'completed' | 'expired' | 'cancelled'; linkCode: string | null; instructions: string; externalUserId: string | null; externalDisplayName: string | null; verificationCode: string | null; expiresAtMs: TimestampMs }
 export interface EmailAccount extends Resource { userId: ID; provider: string; address: string; immutableAddress: boolean; state: 'pending' | 'active' | 'disabled' | 'retired'; channelBindingId: ID | null }
 export interface EmailAddressCheck extends Mutation { providerId: string; localPart: string }
 export interface EmailAddressAvailability { providerId: string; address: string; available: boolean; reason: string | null; immutable: boolean }
@@ -414,12 +416,27 @@ export type ServerSecretSource = { kind: 'env'; name: string } | { kind: 'file';
 export interface OAuthProviderConfig { id: string; clientId: string; clientSecretRef: string; authorizeUrl: string; tokenUrl: string; scopes: string[]; redirectUris: string[]; allowedOrigins: string[] }
 export interface ChannelProviderConfig { id: string; adapter: ChannelBinding['adapter']; oauth: OAuthProviderConfig | null; signingSecretRef: string | null; apiBaseUrl: string; accountSecretRef: string | null; capabilities: ChannelBinding['capabilities']; supportsBotAppInstall: boolean }
 export interface EmailProviderConfig { id: string; domain: string; provisioningBaseUrl: string; provisioningSecretRef: string; immutableAddresses: boolean; reservedNames: string[]; smtp: { host: string; port: number; tls: true; secretRef: string }; imap: { host: string; port: number; tls: true; secretRef: string }; signingSecretRef: string; supportsUnsubscribe: boolean }
-export interface EventProviderConfig { id: string; source: ExternalSource['source'] | 'slack' | 'email'; signingSecretRef: string; eventNames: string[]; routineIds: ID[]; principalUserId: ID; maxAgeMs: number }
+export interface EventProviderConfig { id: string; source: ExternalSource['source'] | 'slack' | 'email'; signingSecretRef: string; eventNames: string[]; routineIds: ID[]; principalUserId: ID; maxAgeMs: number; eventDefinitions?: EventDefinition[] }
 export interface HostDriverCommand { argv: string[]; cwd: string; timeoutMs: number; probeArgv: string[] }
 export interface HostDriverConfig { machineId: ID; provider: HostManagement['provider']; environmentRoot: string | null; actions: Partial<Record<HostAction, HostDriverCommand>>; networkApply: HostDriverCommand | null; egressApply: HostDriverCommand | null; setupRun: HostDriverCommand | null; runtimeDestinations: NetworkRule[] }
-export interface OperatorConfiguration { version: 1; trustedFrontendOrigins: string[]; oauthRedirectUris: string[]; serverSecrets: Record<string, ServerSecretSource>; channelProviders: ChannelProviderConfig[]; emailProviders: EmailProviderConfig[]; eventProviders: EventProviderConfig[]; hostDrivers: HostDriverConfig[]; xProvider: { oauth: OAuthProviderConfig; publicHandle: string; signingSecretRef: string; apiBaseUrl: string; deniedCountries: string[]; allowedMedia: ('photo' | 'video' | 'gif')[] } | null; exportAllowedOrigins: string[]; requiredRuntimeDestinations: NetworkRule[]; breakGlassOwnerUserId: ID | null }
+export interface ConnectorProviderConfig { id: string; origins: string[]; oauth: OAuthProviderConfig | null; sharedServiceAccount: boolean }
+export interface ReviewedSetupManifest { name: string; directoryGroupId: ID | null; machineIds: ID[]; entries: SetupManifest['entries'] }
+export interface IntegrationProvider { id: string; kind: 'connector' | 'channel' | 'email' | 'x' | 'event' | 'identity' | 'export' | 'host'; label: string; configured: boolean; prerequisites: string[]; capabilities: string[] }
+export interface ChannelProviderInfo extends IntegrationProvider { kind: 'channel'; adapter: ChannelBinding['adapter']; supportsBotAppInstall: boolean }
+export interface EmailProviderInfo extends IntegrationProvider { kind: 'email'; domain: string; immutableAddresses: boolean; supportsProvisioning: boolean; supportsUnsubscribe: boolean }
+export interface XProviderInfo extends IntegrationProvider { kind: 'x'; publicHandle: string; oauthScopes: string[]; allowedMedia: ('photo' | 'video' | 'gif')[]; deniedCountries: string[] }
+export interface EventDefinition { name: string; label: string; description: string; filterSchema: JSONObject }
+export interface ExternalSourceDefinition { source: ExternalSource['source']; configured: boolean; events: EventDefinition[] }
+export interface OperatorConfiguration { version: 1; trustedFrontendOrigins: string[]; oauthRedirectUris: string[]; serverSecrets: Record<string, ServerSecretSource>; channelProviders: ChannelProviderConfig[]; emailProviders: EmailProviderConfig[]; eventProviders: EventProviderConfig[]; hostDrivers: HostDriverConfig[]; xProvider: { oauth: OAuthProviderConfig; publicHandle: string; signingSecretRef: string; apiBaseUrl: string; deniedCountries: string[]; allowedMedia: ('photo' | 'video' | 'gif')[] } | null; exportAllowedOrigins: string[]; requiredRuntimeDestinations: NetworkRule[]; breakGlassOwnerUserId: ID | null; connectorProviders?: ConnectorProviderConfig[]; approvedPrivateMcpOrigins?: string[]; reviewedSetupManifests?: ReviewedSetupManifest[] }
 /** Canonical method+path keys. Undefined means no JSON body/query, never an empty JSON object. */
 export interface RestEndpoints {
+  'GET /integration-providers': Endpoint<undefined, IntegrationProvider[]>;
+  'GET /channels/providers': Endpoint<undefined, ChannelProviderInfo[]>;
+  'GET /email/providers': Endpoint<undefined, EmailProviderInfo[]>;
+  'GET /x/provider': Endpoint<undefined, XProviderInfo | null>;
+  'POST /channels/principal-links/start': Endpoint<ChannelLinkStart, ChannelLinkFlow>;
+  'GET /channels/principal-links/flows/:id': Endpoint<undefined, ChannelLinkFlow>;
+  'GET /event-sources/:source': Endpoint<undefined, ExternalSourceDefinition>;
   'GET /auth/identities': Endpoint<undefined, Page<IdentityLink>, PageQuery>;
   'POST /auth/oidc/link': Endpoint<OIDCLinkRequest, IdentityLink>;
   'DELETE /auth/identities/:id': Endpoint<IdentityUnlink, Deleted>;
