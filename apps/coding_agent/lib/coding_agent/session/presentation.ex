@@ -414,6 +414,7 @@ defmodule CodingAgent.Session.Presentation do
       "bash" -> :command
       "bash_output" -> :command
       "kill_process" -> :command
+      "debug" -> :command
       "read" -> :tool
       "write" -> :file_change
       "edit" -> :file_change
@@ -445,6 +446,11 @@ defmodule CodingAgent.Session.Presentation do
 
       "kill_process" ->
         "kill: #{a["process_id"] || ""}"
+
+      "debug" ->
+        target = a["program"] || a["expression"] || a["function"] || a["command"]
+        target = target || if(a["file"], do: "#{path_label(a["file"])}:#{a["line"]}")
+        String.trim("debug: #{a["action"] || ""} #{String.slice(target || "", 0, 60)}")
 
       "read" ->
         path = a["path"] || a["file_path"] || ""

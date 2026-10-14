@@ -5,7 +5,7 @@ defmodule CodingAgent.RestrictedToolPolicyTest do
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
 
   @restricted_profiles [:read_only, :safe_mode, :subagent_restricted]
-  @restricted_tools ~w(write edit patch remember task agent kill_process goal kanban cron)
+  @restricted_tools ~w(write edit patch remember task agent kill_process debug goal kanban cron)
 
   test "restricted profiles deny every built-in editor, memory writer, and delegation tool" do
     for profile <- @restricted_profiles, name <- @restricted_tools do

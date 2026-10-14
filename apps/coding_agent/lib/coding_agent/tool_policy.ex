@@ -140,6 +140,8 @@ defmodule CodingAgent.ToolPolicy do
     "skill_manage",
     "remember",
     "bash",
+    # Launches and controls programs under a debugger (code execution).
+    "debug",
     # Runs project compilers/checkers (`mix compile`, `cargo check`, `go test`),
     # which execute project code.
     "lsp_diagnostics",
