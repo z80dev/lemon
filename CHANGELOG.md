@@ -10,6 +10,18 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- **Custom providers and models.** A `[providers.<id>]` table with `api`,
+  `base_url`, `api_key_env`/`api_key`/`api_key_secret`, optional
+  `auth = "none"`, `headers`, `discovery = "openai" | "ollama"` and
+  `[[providers.<id>.models]]` defines an OpenAI-, Anthropic- or
+  Google-compatible endpoint (omp `models.yml` parity). Its models resolve as
+  `<id>:<model>` / `<id>/<model>` for the default model, `/model`, model roles,
+  task/compaction selectors and fallback providers, appear in the `/model`
+  picker and `lemon providers status`, and are checked by
+  `lemon config validate`. On built-in providers, `headers` are sent with every
+  request and `models` entries add or replace catalog models. See
+  [Custom Providers and Models](docs/config.md#custom-providers-and-models).
+
 - **Lemon Web, rebuilt.** The browser UI is now a full workspace on the same
   control-plane methods and events as the TUI. Chat streams Markdown with
   highlighted code, thinking blocks and rich tool cards (shell output and exit
@@ -131,6 +143,8 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Unknown provider ids in `default_model`/`default_provider` and custom
+  provider option keys no longer create atoms from config input.
 - Concurrent ChatGPT (Codex) token refreshes no longer replay a rotated refresh
   token: refresh is single-flight per stored login and re-reads the secret.
 - `sessions.patch` tool policies (web picker, TUI `/toolpolicy`) now reach runs;

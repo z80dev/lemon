@@ -748,7 +748,9 @@ input = ["text"]                   # "text" and/or "image"; default ["text"]
   `models` list accepts any model id (unlisted ids use the defaults above);
   `discovery` also lists the endpoint's models in the picker, cached by the
   shared model cache. Use `discovery = { type = "openai", timeout_ms = 5000 }`
-  to bound the listing request.
+  to bound the listing request. Discovery needs `api = "openai_completions"` or
+  `"openai_responses"`; with `discovery = "ollama"`, `base_url` may be the
+  server root (`http://127.0.0.1:11434`) and requests go to its `/v1` API.
 - On a built-in provider (`anthropic`, `openai`, ...), `headers` are sent with
   every request and `[[providers.<id>.models]]` entries add catalog models or
   replace the catalog entry with the same id, inheriting the provider's wire API
