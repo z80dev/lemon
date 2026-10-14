@@ -1134,6 +1134,7 @@ defmodule LemonControlPlane.ACPTest do
 
   defp plan_status(session),
     do: PlanRuntime.session_plan(session.session_key, session.cwd, :status, [])
+
   defmodule ContextRuntime do
     def session_context_usage(key, cwd) do
       send(:persistent_term.get({__MODULE__, :observer}), {:context_request, key, cwd})
@@ -1263,6 +1264,69 @@ defmodule LemonControlPlane.ACPTest do
   after
     :persistent_term.erase({ContextRuntime, :observer})
     :persistent_term.erase({ContextRuntime, :result})
+  end
+
+  defmodule CommandsRuntime do
+    def slash_commands(cwd) do
+      send(:persistent_term.get({__MODULE__, :observer}), {:commands_cwd, cwd})
+
+      [
+        %{name: "git:review", description: "Review a change", argument_hint: "[path]"},
+        %{name: "compact-notes", description: "", argument_hint: nil},
+        %{name: "plan", description: "Shadowed by the built-in", argument_hint: nil},
+        %{name: "skill:fake", description: "Shadowed by skills", argument_hint: nil}
+      ]
+    end
+  end
+
+  test "file commands are advertised after built-ins and submitted verbatim" do
+    :persistent_term.put({CommandsRuntime, :observer}, self())
+    :ok = LemonCore.AgentRuntime.register(CommandsRuntime)
+    parent = self()
+
+    Application.put_env(:lemon_control_plane, :acp_submitter, fn request ->
+      send(parent, {:submitted, request})
+      {:ok, "file-command-run"}
+    end)
+
+    {:ok, %{"result" => %{"sessionId" => id}}} =
+      ACP.handle_jsonrpc(
+        %{
+          "jsonrpc" => "2.0",
+          "id" => "new",
+          "method" => "session/new",
+          "params" => %{"cwd" => "/home/z80/dev/lemon", "mcpServers" => []}
+        },
+        session_update_callback: &send(parent, {:bootstrap, &1})
+      )
+
+    assert_receive {:commands_cwd, "/home/z80/dev/lemon"}
+    assert_receive {:bootstrap, %{"params" => %{"update" => %{"availableCommands" => commands}}}}
+
+    assert Enum.map(commands, & &1["name"]) |> Enum.take(5) ==
+             ["plan", "compact", "context", "git:review", "compact-notes"]
+
+    assert Enum.count(commands, &(&1["name"] == "plan")) == 1
+    refute Enum.any?(commands, &(&1["name"] == "skill:fake"))
+
+    assert %{"description" => "Review a change", "input" => %{"hint" => "[path]"}} =
+             Enum.find(commands, &(&1["name"] == "git:review"))
+
+    assert %{"description" => "Run the /compact-notes command"} =
+             Enum.find(commands, &(&1["name"] == "compact-notes"))
+
+    for text <- ["/git:review lib/app.ex", "/compact-notes keep tests"] do
+      assert {:ok, _} =
+               ACP.prompt(%{
+                 "sessionId" => id,
+                 "prompt" => [%{"type" => "text", "text" => text}],
+                 "_meta" => %{"lemon" => %{"wait" => false}}
+               })
+
+      assert_receive {:submitted, %{prompt: ^text, origin: :control_plane}}
+    end
+  after
+    :persistent_term.erase({CommandsRuntime, :observer})
   end
 
   defp start_plan_runtime do

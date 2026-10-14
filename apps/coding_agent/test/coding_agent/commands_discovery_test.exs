@@ -193,6 +193,20 @@ defmodule CodingAgent.CommandsDiscoveryTest do
     end
   end
 
+  test "the control-plane projection omits templates and paths", %{cwd: cwd} do
+    write(cwd, ".claude/commands/review.md", """
+    ---
+    description: Review
+    argument-hint: <path>
+    ---
+    Secret template body
+    """)
+
+    assert CodingAgent.ControlPlaneProvider.slash_commands(cwd) == [
+             %{name: "review", description: "Review", argument_hint: "<path>"}
+           ]
+  end
+
   describe "expand/2" do
     test "appends arguments when the template has no placeholder" do
       assert Commands.expand(%{template: "Review the diff."}, "carefully please") ==

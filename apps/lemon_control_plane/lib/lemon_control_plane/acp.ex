@@ -31,7 +31,9 @@ defmodule LemonControlPlane.ACP do
   `/compact <focus>` forwards the requested summary focus while native
   approved-plan context remains durable.
   `/context` renders the shared `sessions.context` breakdown and emits a
-  matching `usage_update`.
+  matching `usage_update`. File-defined slash commands discovered for the
+  session cwd (`CodingAgent.Commands`) are advertised after the built-ins;
+  `/name args` is submitted verbatim and expanded by the native executor.
   """
 
   alias LemonCore.AgentRuntime
@@ -45,6 +47,7 @@ defmodule LemonControlPlane.ACP do
   @default_agent_id "default"
   @default_wait_timeout_ms 600_000
   @session_store_table :acp_sessions
+  @max_file_commands 200
 
   def capabilities do
     %{
@@ -310,36 +313,36 @@ defmodule LemonControlPlane.ACP do
 
   def prompt(_params, _opts), do: {:error, -32_602, "params must be an object"}
 
-  defp execute_prompt(session_id, session, _params, "/compact" <> rest, _run_id, opts) do
-    if rest == "" or String.starts_with?(rest, " ") do
-      compact_opts = [cwd: session.cwd, custom_instructions: String.trim(rest)]
+  # Built-ins match only a whole command word, so `/compact-notes` or
+  # `/context7` stay ordinary prompts that may name a file command.
+  defp execute_prompt(session_id, session, _params, "/compact" <> rest, _run_id, opts)
+       when rest == "" or binary_part(rest, 0, 1) in [" ", "\n", "\t"] do
+    compact_opts = [cwd: session.cwd, custom_instructions: String.trim(rest)]
 
-      case AgentRuntime.call(
-             :compact_session,
-             [session.session_key, compact_opts],
-             {:error, :unavailable}
-           ) do
-        :ok ->
-          emit(
-            session_id,
-            %{
-              "sessionUpdate" => "agent_message_chunk",
-              "content" => %{"type" => "text", "text" => "Session context compacted."}
-            },
-            opts
-          )
+    case AgentRuntime.call(
+           :compact_session,
+           [session.session_key, compact_opts],
+           {:error, :unavailable}
+         ) do
+      :ok ->
+        emit(
+          session_id,
+          %{
+            "sessionUpdate" => "agent_message_chunk",
+            "content" => %{"type" => "text", "text" => "Session context compacted."}
+          },
+          opts
+        )
 
-          {:ok, %{"stopReason" => "end_turn"}}
+        {:ok, %{"stopReason" => "end_turn"}}
 
-        _ ->
-          {:error, -32_000, "session context could not be compacted"}
-      end
-    else
-      {:error, -32_602, "unknown slash command"}
+      _ ->
+        {:error, -32_000, "session context could not be compacted"}
     end
   end
 
-  defp execute_prompt(session_id, session, _params, "/context" <> rest, _run_id, opts) do
+  defp execute_prompt(session_id, session, _params, "/context" <> rest, _run_id, opts)
+       when rest == "" or binary_part(rest, 0, 1) in [" ", "\n", "\t"] do
     if String.trim(rest) == "" do
       text =
         case SessionsContext.fetch(session.session_key, session.cwd) do
@@ -752,7 +755,7 @@ defmodule LemonControlPlane.ACP do
         "name" => "context",
         "description" => "Show context-window usage by category"
       }
-      | commands
+      | file_commands(session.cwd) ++ commands
     ]
 
     emit(
@@ -760,6 +763,35 @@ defmodule LemonControlPlane.ACP do
       %{"sessionUpdate" => "available_commands_update", "availableCommands" => commands},
       opts
     )
+  end
+
+  # File-defined slash commands are listed but expanded server-side by the
+  # native executor, so `/name args` is submitted verbatim like any prompt.
+  defp file_commands(cwd) do
+    case AgentRuntime.call(:slash_commands, [cwd], []) do
+      commands when is_list(commands) ->
+        commands
+        |> Enum.reject(
+          &(&1.name in ~w(plan compact context) or String.starts_with?(&1.name, "skill:"))
+        )
+        |> Enum.take(@max_file_commands)
+        |> Enum.map(fn command ->
+          description =
+            case command.description do
+              "" -> "Run the /#{command.name} command"
+              text -> String.slice(text, 0, 200)
+            end
+
+          %{
+            "name" => command.name,
+            "description" => description,
+            "input" => %{"hint" => command.argument_hint || "Optional arguments"}
+          }
+        end)
+
+      _ ->
+        []
+    end
   end
 
   defp expand_skill_command("/skill:" <> rest, session) do
