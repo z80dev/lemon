@@ -53,6 +53,8 @@ targets:
         Debug:
           CODE_SIGN_STYLE: Manual
           CODE_SIGN_IDENTITY: "-"
+          CODE_SIGN_ENTITLEMENTS: LemonBotMac/LemonBotMacDebug.entitlements
+          APS_ENVIRONMENT: ""
   LemonBotiOS:
     type: application
     platform: iOS

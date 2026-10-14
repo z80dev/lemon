@@ -193,8 +193,11 @@ struct PreferencesSettingsView: View {
                         #if os(iOS)
                         NotificationCenter.default.post(name: .init("LemonBot.platformNotificationsRequest"), object: nil)
                         #else
-                        _ = try await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .badge, .sound])
-                        NSApplication.shared.registerForRemoteNotifications()
+                        let allowed = try await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .badge, .sound])
+                        let environment = Bundle.main.object(forInfoDictionaryKey: "LemonBotAPNSEnvironment") as? String
+                        if allowed, environment == "development" || environment == "production" {
+                            NSApplication.shared.registerForRemoteNotifications()
+                        }
                         #endif
                         await loadPermission()
                     } }

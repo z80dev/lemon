@@ -110,7 +110,7 @@ final class MacPlatformController: NSObject {
                 guard generation == accountGeneration else { return }
                 let permission = await UNUserNotificationCenter.current().notificationSettings()
                 guard generation == accountGeneration else { return }
-                if permission.authorizationStatus == .authorized { NSApp.registerForRemoteNotifications() }
+                if permission.authorizationStatus == .authorized, pushEnvironment != nil { NSApp.registerForRemoteNotifications() }
                 updateCompanion()
                 notificationsChanged()
             }
@@ -458,19 +458,26 @@ final class MacPlatformController: NSObject {
         catch { errorMessage = error.localizedDescription }
     }
 
+    private var pushEnvironment: String? {
+        switch Bundle.main.object(forInfoDictionaryKey: "LemonBotAPNSEnvironment") as? String {
+        case "development": return "sandbox"
+        case "production": return "production"
+        default: return nil // Local Debug builds have no APNs entitlement.
+        }
+    }
+
     func requestNotifications() async {
         do {
             let allowed = try await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge])
-            if allowed { NSApp.registerForRemoteNotifications() }
-            else { errorMessage = "Notifications are disabled in macOS. Enable Lemon Bot in System Settings → Notifications." }
+            if allowed {
+                if pushEnvironment != nil { NSApp.registerForRemoteNotifications() }
+            } else { errorMessage = "Notifications are disabled in macOS. Enable Lemon Bot in System Settings → Notifications." }
         } catch { errorMessage = error.localizedDescription }
     }
 
     func registerPush(_ data: Data) async {
-        guard store.account != nil else { return }
+        guard store.account != nil, let environment = pushEnvironment else { return }
         let token = data.map { String(format: "%02x", $0) }.joined()
-        let configuredEnvironment = Bundle.main.object(forInfoDictionaryKey: "LemonBotAPNSEnvironment") as? String
-        let environment = configuredEnvironment == "production" ? "production" : "sandbox"
         do {
             try await store.registerDevice(platform: "macos", name: Host.current().localizedName ?? "Mac", push: ["kind": .string("apns"), "token": .string(token), "environment": .string(environment), "topic": .string(Bundle.main.bundleIdentifier ?? "org.lemonbot.mac")])
         } catch { errorMessage = error.localizedDescription }
