@@ -35,6 +35,7 @@ targets:
         excludes:
           - "*.plist"
           - "*.entitlements"
+      - path: Assets.xcassets
     dependencies:
       - package: LemonBotKit
         product: LemonBotKit
@@ -46,6 +47,7 @@ targets:
         INFOPLIST_FILE: LemonBotMac/Info.plist
         CODE_SIGN_ENTITLEMENTS: LemonBotMac/LemonBotMac.entitlements
         PRODUCT_NAME: Lemon Bot
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         COMBINE_HIDPI_IMAGES: YES
   LemonBotiOS:
     type: application
@@ -56,6 +58,7 @@ targets:
           - ShareExtension
           - "*.plist"
           - "*.entitlements"
+      - path: Assets.xcassets
     dependencies:
       - package: LemonBotKit
         product: LemonBotKit
@@ -69,6 +72,7 @@ targets:
         INFOPLIST_FILE: LemonBotiOS/Info.plist
         CODE_SIGN_ENTITLEMENTS: LemonBotiOS/LemonBotiOS.entitlements
         PRODUCT_NAME: Lemon Bot
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         TARGETED_DEVICE_FAMILY: "1,2"
         SUPPORTS_MACCATALYST: NO
   LemonBotShare:
