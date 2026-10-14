@@ -267,12 +267,15 @@ defmodule CodingAgent.SettingsManager do
 
   defp parse_model_spec(_provider, _model), do: nil
 
-  # Normalize provider string to atom (lowercase, replace dashes with underscores)
+  # Built-in provider names normalize to atoms (lowercase, dashes to
+  # underscores). Custom `[providers.<id>]` ids stay binaries so config input
+  # never creates atoms.
   defp normalize_provider(p) when is_binary(p) do
-    p
-    |> String.downcase()
-    |> String.replace("-", "_")
-    |> String.to_atom()
+    normalized = p |> String.downcase() |> String.replace("-", "_")
+
+    if LemonAgent.ModelRuntime.CustomProviders.builtin?(normalized),
+      do: String.to_atom(normalized),
+      else: String.trim(p)
   end
 
   defp normalize_provider(p) when is_atom(p), do: p
