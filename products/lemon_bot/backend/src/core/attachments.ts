@@ -22,7 +22,7 @@ const previewInput = mutation.extend({ action: z.literal('delete') });
 const listQuery = z.object({ conversationId: id.optional(), botId: id.optional(), cursor: z.string().max(512).optional(), limit: z.coerce.number().int().min(1).max(200).optional() }).strict();
 interface BlobRecord { id: string; basename: string; sha256: string; size: number }
 interface Ticket { id: string; principal: Principal; attachmentId: string; aclDigest: string; expiresAtMs: number }
-interface FileDescription { mime: string; preview: P.Attachment['preview']; width: number | null; height: number | null; durationMs: number | null }
+export interface AttachmentInspection { mime: string; preview: P.Attachment['preview']; width: number | null; height: number | null; durationMs: number | null }
 export interface StoredAttachmentService extends AttachmentService { collect(): Promise<void>; removeDeleted(attachmentId: string): Promise<void>; serve(ticket: string, request: Request): Promise<Response>; close(): void }
 const instances = new WeakMap<BackendServices, StoredAttachmentService>();
 const digest = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex');
@@ -87,7 +87,7 @@ function validateVideo(bytes: Uint8Array, mime: string) {
   } else bad();
 }
 
-async function describe(bytes: Uint8Array, filename: string, purpose: P.AttachmentUpload['purpose']): Promise<FileDescription> {
+export async function inspectAttachment(bytes: Uint8Array, filename: string, purpose: P.AttachmentUpload['purpose']): Promise<AttachmentInspection> {
   if (!bytes.length) fail('unsupported_media', 'Empty files cannot be uploaded.');
   if (bytes.length > MAX_VIDEO) fail('too_large', 'File exceeds the video size limit.');
   let detected: FileTypeResult | undefined;
@@ -243,7 +243,7 @@ export function createAttachmentService(services: BackendServices): StoredAttach
       }
       // Keep an owned snapshot across asynchronous sniffing and writes.
       const bytes = Uint8Array.from(inputBytes);
-      const description = await describe(bytes, filename, input.purpose);
+      const description = await inspectAttachment(bytes, filename, input.purpose);
       await ready;
       if (input.conversationId) services.auth.conversation(user, input.conversationId);
       if (input.botId) services.auth.bot(user, input.botId, input.purpose === 'avatar' || input.purpose === 'reference');
