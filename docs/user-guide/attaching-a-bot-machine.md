@@ -89,6 +89,35 @@ Use [node files and secrets](node-files-and-secrets.md) for the destination
 capability and credential-proof contracts. Capability readiness does not claim
 that model-provider credentials are configured.
 
+For an integrated source checkout, the actual launcher can inspect itself without
+starting a worker or connecting to a controller:
+
+```bash
+/absolute/path/to/lemon/bin/lemon node capabilities --json --require-bot
+```
+
+The JSON has `{protocol,lemonVersion,methods,features,botReady,missingFeatures}`.
+Protocol is `1`; `features` has ten booleans: `hostIO`, `filesystemCAS`,
+`deletePreviews`, `encryptedSecrets`, `ptyShell`, `mcpDiscovery`, `profileSync`,
+`liveStreaming`, `repairInvites`, and `nativeExecutionPolicy`. Required Python
+primitives/helper assets and the large native tool-policy JSON envelope are
+checked, not assumed. Profile readiness includes owning `node.profile.paths`.
+`missingFeatures` is sorted; any false flag makes `botReady:false`, and
+`--require-bot` returns failure before enrollment. You can additionally use
+`--expected-version EXACT_CALVER`; the version pin alone is never readiness.
+
+After exact durable enrollment reconciliation, query the authenticated worker:
+
+```json
+{"type":"req","id":"runtime-1","method":"node.runtime.features","params":{"nodeId":"NODE_ID"}}
+```
+
+Its result adds the target `nodeId` to the same software inventory. A product
+must require this live destination's `botReady:true` before marking it ready.
+Do not substitute controller capabilities, an online socket or a version string.
+This check does not assert model-provider login or OS grants; inspect those
+separately with the actual provider service and `node.capabilities.get`.
+
 ## Issue an invitation
 
 On the already-authenticated operator WebSocket, request:
@@ -245,7 +274,9 @@ Only that opening connection receives `node.shell.output` payloads
 cannot operate the shell.
 
 The worker requires `python3` to allocate a real PTY, not a pipe-backed shell.
-It runs the destination user's shell with worker-local cwd. Output streams in
+It runs the destination user's shell with worker-local cwd, opened through the
+same descriptor-root resolver and applied with `fchdir` before forking. Substituted
+symlinks cannot redirect that opening cwd. Output streams in
 16 KiB chunks with acknowledgement backpressure. Terminals cap output at 32 MiB
 and lifetime at one hour; disconnects, node replacement, slow consumers, explicit
 close and timeouts clean up the PTY and its process group. There are at most

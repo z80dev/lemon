@@ -264,6 +264,7 @@ or general events; audit lines contain only operation and outcome classification
 | `node.pair.invite` | pairing | `{nodeName,nodeId?,purpose?,labels?,expiresInMs?}` | `{inviteId,inviteCode,joinCommand,expiresAtMs,summary}` |
 | `node.pair.invite.revoke` | pairing | `{inviteId}` | `{inviteId,revoked:true}` |
 | `node.capabilities.get` | read | `{nodeId}` | `{nodeId,os,measuredAtMs,stale,items}` |
+| `node.runtime.features` | read | `{nodeId}` | `{nodeId,protocol,lemonVersion,methods,features,botReady,missingFeatures}` |
 | `node.host.info` | read | `{nodeId}` | `{hostname,os,osVersion,arch,cpuCount,memTotalBytes,memFreeBytes,diskTotalBytes,diskFreeBytes,uptimeSec,lemonVersion,defaultCwd,user}` |
 | `node.fs.list` | admin | `{nodeId,path,showHidden?}` | `{path,entries,limit,truncated}` |
 | `node.fs.stat` | admin | `{nodeId,path}` | `{path,type,size,mtimeMs,mode,mime,readable,writable}` |
@@ -273,9 +274,10 @@ or general events; audit lines contain only operation and outcome classification
 | `node.fs.move` | admin | `{nodeId,path,destination,expectedModifiedAtMs,overwrite?}` | `{path,destination,moved:true}` |
 | `node.fs.delete.preview` | admin | `{nodeId,path,recursive?}` | `{path,stat,childCount,childrenDigest,candidateCount,confirmationToken,expiresAtMs}` |
 | `node.fs.delete` | admin | `{nodeId,path,confirm,confirmationToken}` | `{path,deleted:true}` |
-| `node.secrets.set` | admin | `{nodeId,name,value}` | `{name,set:true}` |
+| `node.secrets.set` | admin | `{nodeId,name,value,operationId?}` | `{name,set:true}`; with an operation ID also `{operationId,status:"applied",currentBindingMatches}` |
 | `node.secrets.list` | admin | `{nodeId}` | `{names,limit,truncated}` |
 | `node.secrets.delete` | admin | `{nodeId,name}` | `{name,deleted:true}` |
+| `node.secrets.receipt` | admin | `{nodeId,operationId}` | `{nodeId,operationId,status,name,currentBindingMatches}` |
 | `node.shell.open` | admin | `{nodeId,cwd?,cols?,rows?}` | `{shellId}` |
 | `node.shell.input` | admin | `{shellId,dataBase64}` | `{shellId,accepted:true}` |
 | `node.shell.resize` | admin | `{shellId,cols,rows}` | `{shellId,accepted:true}` |
@@ -283,9 +285,12 @@ or general events; audit lines contain only operation and outcome classification
 
 Invites default to purpose `lemon_bot`, labels `{}`, expiry 15 minutes (bounded
 to 1 ms–24 hours). Labels are a record with at most 32 nonempty keys (64 UTF-8
-bytes) and string values (256 UTF-8 bytes). The command installs Lemon if missing,
-then enrolls with the one-time, exact-name-bound credential; no operator token is
-embedded. Optional `nodeId` creates a repair invitation bound to that durable
+bytes) and string values (256 UTF-8 bytes). The command uses a provisioned
+destination source checkout or installs an explicitly pinned operator-supported
+build through the existing installer, then verifies actual worker compatibility
+before enrollment. It never defaults to the currently published release or PATH.
+The exact-name-bound credential embeds no operator token. Optional `nodeId`
+creates a repair invitation bound to that durable
 identity, recovery hash and current generation; it never creates a replacement
 identity. Revocation invalidates only a pending unused invite.
 Set `LEMON_CONTROL_PLANE_PUBLIC_WS_URL` to the reachable `wss://.../ws` endpoint.
@@ -293,6 +298,25 @@ Set `LEMON_CONTROL_PLANE_PUBLIC_WS_URL` to the reachable `wss://.../ws` endpoint
 `purpose`, label records and `enrollmentInviteId` (null for legacy nodes), and
 `summary.truncated` distinguishes capped inventory. Invite connections have
 enrollment-only authority and receive no general events.
+
+Runtime selection uses `LEMON_NODE_SOURCE_CHECKOUT` (absolute destination path),
+or **both** `LEMON_NODE_INSTALL_VERSION` and `LEMON_NODE_INSTALL_BASE_URL`
+(HTTPS operator-supported artifacts). Equivalent Elixir settings are
+`:node_source_checkout`, `:node_install_version`, and `:node_install_base_url`.
+Loopback development can use the controller's actual compiled source checkout.
+Configured version pins must match `lemon version` exactly. Generated commands
+run `lemon node capabilities --json --require-bot` before consuming any invite;
+direct invite joins perform the same fail-closed check.
+
+`node.runtime.features` reports protocol 1, declared methods and ten boolean
+feature flags: `hostIO`, `filesystemCAS`, `deletePreviews`, `encryptedSecrets`,
+`ptyShell`, `mcpDiscovery`, `profileSync`, `liveStreaming`, `repairInvites`,
+`nativeExecutionPolicy`. `missingFeatures` is sorted; `botReady` is true only when
+all are present, including required Python/assets and the large native tool-policy
+JSON envelope. This is installed software compatibility, **not** provider login,
+per-bot policy or an OS permission grant. Reconcile the live enrolled exact node
+and require its `botReady:true` before declaring a machine ready; an online socket
+or a matching version string alone is insufficient.
 
 Paths resolve on the worker, under the node user's home by default. Repeat
 destination CLI `--allowed-root PATH` to allow additional existing directories.
@@ -316,6 +340,22 @@ uptime and version data. Failed or unsupported measurement returns `UNAVAILABLE`
 not nulls or invented zeroes. Secret values enter only the destination encrypted
 store; missing master keys fail closed.
 
+For durable install reconciliation, fix a unique `operationId` (1–128 ASCII
+letters/digits/`_:-`) before `node.secrets.set`. The destination atomically stores
+encrypted value and a private intent/current-revision receipt in one vault row.
+An identical still-current operation returns its original proof without another
+set; conflicting or superseded intent fails with `CONFLICT`. Query
+`node.secrets.receipt` after a lost response rather than replaying the mutation.
+Status is `"applied"` or `"not_found"`; `name` is null for not found, and
+`currentBindingMatches` is false when not found or when replacement, deletion,
+expiry or key rotation invalidated the original encrypted binding. The query
+does not decrypt, change secret usage, set a value or replay an operation.
+Historical proof survives ordinary mutations and never exposes values, private
+fingerprints or digests. History is bounded to 128 operations per owner/name;
+capacity fails closed without evicting proof. `secret_store_failed`, timeouts and
+transport loss can be ambiguous and must be reconciled. Vault/lease diagnostics
+are content-free, including failure logs.
+
 Capability items contain `{id,name,category,supported,configuredLevel,osGrant,
 tools,reason,measuredAtMs,stale}`. Categories are `files|shell|browser|connector|os_app`,
 levels `off|read_only|read_interact`, and OS grant states
@@ -328,7 +368,9 @@ Connector authorization is session-scoped, not invented from method names.
 These measurements are not per-bot grants or an OS sandbox.
 
 Terminals use a real worker PTY (`python3` required), with the destination login
-shell and worker default cwd unless specified. Dimensions are 1–500 columns/rows.
+shell and worker default cwd unless specified. Cwd is opened through the same
+descriptor-root resolver and applied with `fchdir`, not a raced path-based chdir.
+Dimensions are 1–500 columns/rows.
 `node.shell.output {shellId,dataBase64,seq}` (one-based per-shell sequence) and
 `node.shell.exit {shellId,code}` are delivered **only to the opening connection**;
 foreign connections cannot operate a shell. The node-only `node.shell.event

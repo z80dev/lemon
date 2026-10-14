@@ -23,6 +23,18 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   fences; label records and enrollment proofs support reliable reconciliation.
   Machine inspection reports measured host resources and explicit capability/
   OS-grant states without fabricated metrics or permissions.
+- Worker compatibility is measured by `lemon node capabilities --json --require-bot`
+  and authenticated `node.runtime.features`, not inferred from a release number.
+  Invite commands select the actual integrated source checkout or an explicitly
+  pinned operator-supported artifact, verify the installed version/features, and
+  fail before enrollment when required APIs are absent. No published build is
+  silently treated as supporting new bot APIs.
+- Fixed secret operation IDs persist an atomic private receipt with the encrypted
+  destination vault row. Admin-only `node.secrets.receipt` reconciles lost replies
+  without replay, plaintext or digest exposure; replacement, deletion, expiry
+  and rotation safely invalidate current binding while retaining historical proof.
+  Vault/lease error diagnostics are redacted. PTY opening cwd uses the filesystem
+  descriptor resolver, and browser availability inspection never launches a browser.
 
 ---
 
