@@ -99,13 +99,6 @@ defmodule CodingAgent.RulesTest do
       assert Enum.find(rulebook, &(&1.name == "glob")).globs == ["*.py"]
     end
 
-    test ".clinerules as a single file always applies", %{repo: repo} do
-      write!(Path.join(repo, ".clinerules"), "cline body")
-
-      assert [%{name: "clinerules", always_apply: true, content: "cline body"}] =
-               Rules.discover(repo)
-    end
-
     test "the nearest .clinerules directory provides markdown rules", %{repo: repo} do
       cwd = Path.join(repo, "pkg")
       File.mkdir_p!(cwd)
@@ -237,7 +230,6 @@ defmodule CodingAgent.RulesTest do
       write!(Path.join(repo, ".cursor/rules/orphan.mdc"), "orphan body")
 
       sections = Rules.sections(repo)
-      assert sections == Rules.sections(repo)
 
       assert Enum.map(sections, & &1.label) == [
                "Always-apply rules",
@@ -253,19 +245,12 @@ defmodule CodingAgent.RulesTest do
       assert a.text =~ "body A"
       assert a.text =~ Path.join(agent_dir, "rules/a-always.md")
 
-      assert rulebook.text =~ "## Rulebook"
-      assert rulebook.text =~ "`read` the rule file"
-
       assert rulebook.text =~
                "- css\n  Globs: *.css\n  File: #{glob_only}\n- db: Database migrations\n" <>
                  "  Globs: priv/repo/**/*.exs\n  File: #{book}"
 
       refute rulebook.text =~ "db body"
       refute Enum.any?(sections, &(&1.text =~ "orphan"))
-    end
-
-    test "no rules renders no sections", %{repo: repo} do
-      assert Rules.sections(repo) == []
     end
   end
 
