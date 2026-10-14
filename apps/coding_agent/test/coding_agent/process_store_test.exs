@@ -1,6 +1,7 @@
 defmodule CodingAgent.ProcessStoreTest do
   use ExUnit.Case, async: false
 
+  alias CodingAgent.ProcessManager
   alias CodingAgent.ProcessSession
   alias CodingAgent.ProcessStore
   alias CodingAgent.ProcessStoreServer
@@ -434,6 +435,126 @@ defmodule CodingAgent.ProcessStoreTest do
       {_id, 50} = start_owned_session("legacy-owner", max_owner_artifact_bytes: 60)
       refute File.exists?(path)
       assert {:ok, %{output: %{artifact_reclaimed: true}}, _} = ProcessStore.get(legacy)
+    end
+
+    test "cursor mutations serialize with reservation and reclamation" do
+      {older, path} = stopped_artifact("serialized-owner", System.system_time(:second) - 100)
+      next = ProcessStore.new_process(%{owner: "serialized-owner"})
+      parent = self()
+      token = make_ref()
+
+      reserver =
+        Task.async(fn ->
+          ProcessStoreServer.transaction(ProcessStoreServer, fn ->
+            send(parent, {token, :locked, self()})
+
+            receive do
+              {^token, :continue} -> :ok
+            after
+              5_000 -> flunk("reservation barrier was not released")
+            end
+          end)
+
+          ProcessStore.reserve_artifact(next, 50, 60, 100)
+        end)
+
+      assert_receive {^token, :locked, server}
+      updater = Task.async(fn -> ProcessStore.put_read_cursor(older, 7) end)
+
+      assert_eventually(fn ->
+        {:messages, messages} = Process.info(server, :messages)
+
+        Enum.any?(messages, fn
+          {:"$gen_call", _from, {:transaction, _fun}} -> true
+          _ -> false
+        end)
+      end)
+
+      send(server, {token, :continue})
+      assert {:ok, 50} = Task.await(reserver)
+      assert :ok = Task.await(updater)
+      refute File.exists?(path)
+
+      assert {:ok,
+              %{
+                read_cursor: 7,
+                full_output_path: nil,
+                output: %{artifact_capacity: 0, artifact_reclaimed: true}
+              }, _} = ProcessStore.get(older)
+
+      assert {:ok, %{output: %{artifact_capacity: 50}}, _} = ProcessStore.get(next)
+    end
+
+    test "unmeasurable legacy artifacts fail closed instead of counting as zero" do
+      {legacy, path} = stopped_artifact("unknown-owner", System.system_time(:second) - 100)
+      {:ok, record, logs} = ProcessStore.get(legacy)
+      ProcessStore.insert_record(legacy, Map.delete(record, :output), logs)
+      File.rm!(path)
+      File.ln_s!(path, path)
+      next = ProcessStore.new_process(%{owner: "unknown-owner"})
+
+      assert {:error, :artifact_accounting_unavailable} =
+               ProcessStore.reserve_artifact(next, 50, 60, 100)
+
+      assert {:ok, %{full_output_path: ^path}, _} = ProcessStore.get(legacy)
+      assert {:ok, %{output: %{artifact_capacity: 0}}, _} = ProcessStore.get(next)
+
+      marker =
+        Path.join(System.tmp_dir!(), "quota-no-start-#{System.unique_integer([:positive])}")
+
+      on_exit(fn -> File.rm(marker) end)
+      quoted_marker = "'" <> String.replace(marker, "'", "'\"'\"'") <> "'"
+
+      # Exercise the production supervisor boundary: a rejected linked child
+      # must return its startup error without terminating the requesting caller.
+      assert {:error, :process_start_failed} =
+               ProcessManager.exec(
+                 command: "printf started > #{quoted_marker}",
+                 owner: "unknown-owner",
+                 use_lane_queue: false
+               )
+
+      refute File.exists?(marker)
+
+      assert ProcessStore.list()
+             |> Enum.filter(fn {_id, record} -> record.owner == "unknown-owner" end)
+             |> Enum.map(&elem(&1, 0))
+             |> Enum.sort() == Enum.sort([legacy, next])
+    end
+
+    test "closed accounting storage refuses a reservation" do
+      next = ProcessStore.new_process(%{owner: "unavailable-dets"})
+      %{state: %{dets_path: path}} = ProcessStoreServer.dets_status()
+
+      assert :ok =
+               ProcessStoreServer.transaction(ProcessStoreServer, fn ->
+                 :dets.close(:coding_agent_processes_dets)
+               end)
+
+      try do
+        assert {:error, :artifact_accounting_unavailable} =
+                 ProcessStore.reserve_artifact(next, 50, 60, 100)
+      after
+        assert {:ok, :coding_agent_processes_dets} =
+                 ProcessStoreServer.transaction(ProcessStoreServer, fn ->
+                   :dets.open_file(:coding_agent_processes_dets,
+                     file: String.to_charlist(path),
+                     type: :set
+                   )
+                 end)
+      end
+    end
+
+    test "store-only reload preserves a live capture and its reservation" do
+      {first, 50} = start_owned_session("reload-owner", max_owner_artifact_bytes: 60)
+      :ets.delete_all_objects(:coding_agent_processes)
+      assert :ok = ProcessStoreServer.ensure_table()
+
+      assert {:ok, %{status: :running, output: %{artifact_capacity: 50, finalized: false}}, _} =
+               ProcessStore.get(first)
+
+      assert ProcessSession.alive?(first)
+      {_second, 10} = start_owned_session("reload-owner", max_owner_artifact_bytes: 60)
     end
   end
 

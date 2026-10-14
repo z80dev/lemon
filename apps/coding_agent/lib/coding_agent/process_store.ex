@@ -125,26 +125,25 @@ defmodule CodingAgent.ProcessStore do
 
   def append_logs(process_id, lines, opts)
       when is_binary(process_id) and is_list(lines) and is_list(opts) do
-    ensure_table()
+    transaction(fn ->
+      case :ets.lookup(@table, process_id) do
+        [{^process_id, record, logs}] ->
+          logs = Enum.reverse(lines, logs) |> Enum.take(Keyword.get(opts, :keep, @max_log_lines))
+          total = Map.get(record, :total_lines, 0) + length(lines)
 
-    case :ets.lookup(@table, process_id) do
-      [{^process_id, record, logs}] ->
-        logs = Enum.reverse(lines, logs) |> Enum.take(Keyword.get(opts, :keep, @max_log_lines))
-        total = Map.get(record, :total_lines, 0) + length(lines)
+          record =
+            record
+            |> Map.put(:updated_at, System.system_time(:second))
+            |> Map.put(:log_line_count, length(logs))
+            |> Map.put(:total_lines, Keyword.get(opts, :total_lines, total))
+            |> Map.put(:output, Keyword.get(opts, :output, Map.get(record, :output)))
 
-        record =
-          record
-          |> Map.put(:updated_at, System.system_time(:second))
-          |> Map.put(:log_line_count, length(logs))
-          |> Map.put(:total_lines, Keyword.get(opts, :total_lines, total))
-          |> Map.put(:output, Keyword.get(opts, :output, Map.get(record, :output)))
+          insert_record(process_id, record, logs)
 
-        insert_record(process_id, record, logs)
-        :ok
-
-      _ ->
-        :ok
-    end
+        _ ->
+          :ok
+      end
+    end)
   end
 
   @doc """
@@ -166,10 +165,12 @@ defmodule CodingAgent.ProcessStore do
   Records remain readable with `output.artifact_reclaimed: true` and no path
   after successful reclamation. A live session's artifact is never deleted.
   Processes without an owner share the nil-owner budget. Reservations are
-  serialized by `ProcessStoreServer`.
+  serialized with all record mutations/deletion by `ProcessStoreServer`.
+  Returns `:artifact_accounting_unavailable` if legacy usage cannot be measured
+  or the reservation cannot be durably recorded; no writer may launch then.
   """
   @spec reserve_artifact(process_id(), pos_integer(), pos_integer(), pos_integer()) ::
-          {:ok, non_neg_integer()} | {:error, :not_found}
+          {:ok, non_neg_integer()} | {:error, :not_found | :artifact_accounting_unavailable}
   def reserve_artifact(process_id, requested, owner_budget, runtime_budget)
       when is_binary(process_id) and is_integer(requested) and requested > 0 and
              is_integer(owner_budget) and owner_budget > 0 and
@@ -287,22 +288,24 @@ defmodule CodingAgent.ProcessStore do
   """
   @spec delete(process_id()) :: :ok | {:error, atom()}
   def delete(process_id) when is_binary(process_id) do
-    case :ets.lookup(@table, process_id) do
-      [{^process_id, record, _logs}] ->
-        if CodingAgent.ProcessSession.alive?(process_id) and
-             get_in(record, [:output, :finalized]) != true do
-          {:error, :process_alive}
-        else
-          with :ok <- remove_output(record) do
-            :ets.delete(@table, process_id)
-            if dets_open?(), do: :dets.delete(@dets_table, process_id)
-            :ok
+    transaction(fn ->
+      case :ets.lookup(@table, process_id) do
+        [{^process_id, record, _logs}] ->
+          if CodingAgent.ProcessSession.alive?(process_id) and
+               get_in(record, [:output, :finalized]) != true do
+            {:error, :process_alive}
+          else
+            with :ok <- remove_output(record) do
+              :ets.delete(@table, process_id)
+              if dets_open?(), do: :dets.delete(@dets_table, process_id)
+              :ok
+            end
           end
-        end
 
-      _ ->
-        :ok
-    end
+        _ ->
+          :ok
+      end
+    end)
   end
 
   @doc """
@@ -334,13 +337,15 @@ defmodule CodingAgent.ProcessStore do
   """
   @spec insert_record(process_id(), map(), [String.t()]) :: :ok
   def insert_record(process_id, record, logs) do
-    :ets.insert(@table, {process_id, record, logs})
+    transaction(fn ->
+      :ets.insert(@table, {process_id, record, logs})
 
-    if dets_open?() do
-      :dets.insert(@dets_table, {process_id, record, logs})
-    end
+      if dets_open?() do
+        :dets.insert(@dets_table, {process_id, record, logs})
+      end
 
-    :ok
+      :ok
+    end)
   end
 
   @doc """
@@ -376,26 +381,36 @@ defmodule CodingAgent.ProcessStore do
 
   # Private Functions
 
+  # Keep record/log read-modify-writes in the reservation/cleanup owner's
+  # mailbox. Otherwise a cursor or status write can restore a reclaimed path
+  # or overwrite a concurrently granted capacity with its stale snapshot.
+  defp transaction(fun) do
+    if :ets.info(@table, :owner) == self() do
+      fun.()
+    else
+      ProcessStoreServer.transaction(CodingAgent.ProcessStoreServer, fun)
+    end
+  end
+
   defp ensure_table do
     ProcessStoreServer.ensure_table(CodingAgent.ProcessStoreServer)
   end
 
   defp update_record(process_id, fun) do
-    ensure_table()
+    transaction(fn ->
+      case :ets.lookup(@table, process_id) do
+        [{^process_id, record, logs}] ->
+          updated =
+            record
+            |> fun.()
+            |> Map.put(:updated_at, System.system_time(:second))
 
-    case :ets.lookup(@table, process_id) do
-      [{^process_id, record, logs}] ->
-        updated =
-          record
-          |> fun.()
-          |> Map.put(:updated_at, System.system_time(:second))
+          insert_record(process_id, updated, logs)
 
-        insert_record(process_id, updated, logs)
-        :ok
-
-      _ ->
-        :ok
-    end
+        _ ->
+          :ok
+      end
+    end)
   end
 
   defp generate_id do

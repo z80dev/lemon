@@ -17,6 +17,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   without changing execution status, and failed cleanup keeps its storage
   charge instead of allowing quota bypass. TTL cleanup removes expired closed
   captures even while their completed sessions linger for final polling.
+  Capture accounting now serializes record mutations with reclamation, preserves
+  live capture state across store-only restart, and rejects unpersisted
+  reservations or unknown legacy artifact usage before process launch.
 
 ---
 

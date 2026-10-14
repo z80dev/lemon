@@ -72,6 +72,11 @@ defmodule CodingAgent.ProcessStoreServer do
     )
   end
 
+  @doc false
+  def transaction(server, fun) when is_function(fun, 0) do
+    GenServer.call(server, {:transaction, fun}, 30_000)
+  end
+
   # Server Callbacks
 
   @impl true
@@ -103,6 +108,11 @@ defmodule CodingAgent.ProcessStoreServer do
   def handle_call(:ensure_table, _from, state) do
     state = ensure_tables(state)
     {:reply, :ok, state}
+  end
+
+  def handle_call({:transaction, fun}, _from, state) do
+    state = ensure_tables(state)
+    {:reply, fun.(), state}
   end
 
   def handle_call({:cleanup, ttl_seconds}, _from, state) do
@@ -235,8 +245,9 @@ defmodule CodingAgent.ProcessStoreServer do
       :dets.foldl(
         fn {process_id, record, logs}, :ok ->
           record =
-            if Map.get(record, :status) == :running do
-              # Mark running processes as :lost since we can't reconnect to OS PIDs
+            if Map.get(record, :status) == :running and
+                 not CodingAgent.ProcessSession.alive?(process_id) do
+              # A store-only restart must not reclassify a surviving session.
               record
               |> Map.put(:status, :lost)
               |> Map.put(:error, :lost_on_restart)
@@ -329,61 +340,82 @@ defmodule CodingAgent.ProcessStoreServer do
         # every process's retained output into the store server's heap.
         records = :ets.select(@table, [{{:"$1", :"$2", :_}, [], [{{:"$1", :"$2"}}]}])
 
-        {owner_usage, runtime_usage, reclaimable} =
-          Enum.reduce(records, {0, 0, []}, fn {id, other}, {owned, total, candidates} = acc ->
-            if id == process_id do
-              acc
-            else
-              charge = artifact_charge(other)
-              owned = owned + if(Map.get(other, :owner) == owner, do: charge, else: 0)
+        with true <- dets_open?(),
+             {:ok, {owner_usage, runtime_usage, reclaimable}} <-
+               artifact_usage(records, process_id, owner) do
+          candidates = Enum.sort_by(reclaimable, fn {id, other} -> {finished_at(other), id} end)
+          owned = Enum.filter(candidates, fn {_id, other} -> Map.get(other, :owner) == owner end)
 
-              candidates =
-                if charge > 0 and reclaimable?(id),
-                  do: [{id, other} | candidates],
-                  else: candidates
+          {owner_usage, runtime_usage} =
+            reclaim_artifacts(
+              owned,
+              owner_usage,
+              runtime_usage,
+              requested,
+              owner_budget,
+              :owner,
+              owner
+            )
 
-              {owned, total + charge, candidates}
-            end
-          end)
+          {owner_usage, runtime_usage} =
+            reclaim_artifacts(
+              candidates,
+              owner_usage,
+              runtime_usage,
+              requested,
+              runtime_budget,
+              :runtime,
+              owner
+            )
 
-        candidates = Enum.sort_by(reclaimable, fn {id, other} -> {finished_at(other), id} end)
-        owned = Enum.filter(candidates, fn {_id, other} -> Map.get(other, :owner) == owner end)
+          granted =
+            requested
+            |> min(owner_budget - owner_usage)
+            |> min(runtime_budget - runtime_usage)
+            |> max(0)
 
-        {owner_usage, runtime_usage} =
-          reclaim_artifacts(
-            owned,
-            owner_usage,
-            runtime_usage,
-            requested,
-            owner_budget,
-            :owner,
-            owner
-          )
+          output = Map.put(Map.get(record, :output) || %{}, :artifact_capacity, granted)
+          entry = {process_id, Map.put(record, :output, output), logs}
+          :ets.insert(@table, entry)
 
-        {owner_usage, runtime_usage} =
-          reclaim_artifacts(
-            candidates,
-            owner_usage,
-            runtime_usage,
-            requested,
-            runtime_budget,
-            :runtime,
-            owner
-          )
-
-        granted =
-          requested
-          |> min(owner_budget - owner_usage)
-          |> min(runtime_budget - runtime_usage)
-          |> max(0)
-
-        output = Map.put(Map.get(record, :output) || %{}, :artifact_capacity, granted)
-        CodingAgent.ProcessStore.insert_record(process_id, Map.put(record, :output, output), logs)
-        {:ok, granted}
+          # Do not launch a writer with a reservation that restart cannot recover.
+          # On failure the ETS charge stays conservative until startup cleanup.
+          with :ok <- :dets.insert(@dets_table, entry),
+               :ok <- :dets.sync(@dets_table) do
+            {:ok, granted}
+          else
+            _ -> {:error, :artifact_accounting_unavailable}
+          end
+        else
+          _ -> {:error, :artifact_accounting_unavailable}
+        end
 
       _ ->
         {:error, :not_found}
     end
+  end
+
+  defp artifact_usage(records, process_id, owner) do
+    Enum.reduce_while(records, {:ok, {0, 0, []}}, fn
+      {id, _other}, acc when id == process_id ->
+        {:cont, acc}
+
+      {id, other}, {:ok, {owned, total, candidates}} ->
+        case artifact_charge(other) do
+          :unknown ->
+            {:halt, {:error, :artifact_accounting_unavailable}}
+
+          charge ->
+            owned = owned + if(Map.get(other, :owner) == owner, do: charge, else: 0)
+
+            candidates =
+              if charge > 0 and reclaimable?(id),
+                do: [{id, other} | candidates],
+                else: candidates
+
+            {:cont, {:ok, {owned, total + charge, candidates}}}
+        end
+    end)
   end
 
   # Deletes the oldest artifacts of stopped sessions until the reservation
@@ -405,7 +437,7 @@ defmodule CodingAgent.ProcessStoreServer do
           [{^id, record, logs}] ->
             charge = artifact_charge(record)
 
-            if charge > 0 and reclaimable?(id) and
+            if is_integer(charge) and charge > 0 and reclaimable?(id) and
                  CodingAgent.ProcessStore.remove_output(record) == :ok do
               output =
                 (Map.get(record, :output) || %{})
@@ -440,7 +472,8 @@ defmodule CodingAgent.ProcessStoreServer do
           path when is_binary(path) ->
             case File.stat(path) do
               {:ok, %{type: :regular, size: size}} -> size
-              _ -> 0
+              {:error, :enoent} -> 0
+              _ -> :unknown
             end
 
           _ ->

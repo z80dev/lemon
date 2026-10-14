@@ -427,6 +427,43 @@ defmodule CodingAgent.ProcessSessionTest do
       refute File.exists?(path)
     end
 
+    test "uncheckable failed capture keeps its reservation and unknown discarded count",
+         %{process_id: process_id} do
+      {pid, port, path} = start_capture(process_id, max_artifact_bytes: 50)
+      {:ok, %{output_file: file}} = ProcessSession.get_state(process_id)
+      :ok = File.close(file)
+      File.rm!(path)
+      File.ln_s!(path, path)
+
+      send(pid, {port, {:data, "diagnostic\n"}})
+      assert {:ok, %{output: stats}} = ProcessSession.poll(process_id)
+      assert stats.received_bytes == 11
+      assert stats.artifact_bytes == 0
+      assert stats.artifact_size_unknown
+      assert stats.artifact_discarded_bytes == nil
+      assert stats.artifact_truncated
+      assert stats.artifact_error == :terminated
+
+      send(pid, {port, {:data, "tail\n"}})
+
+      assert {:ok, %{output: %{received_bytes: 16, artifact_discarded_bytes: nil}}} =
+               ProcessSession.poll(process_id)
+
+      :ok = ProcessSession.write_stdin(process_id, "\n")
+      await_finished(process_id)
+
+      assert {:ok, result} = ProcessSession.read_output(process_id)
+      assert result.status == :completed
+      assert result.exit_code == 0
+      assert result.lines == ["diagnostic", "tail"]
+      assert result.output.finalized
+      assert result.output.artifact_capacity == 50
+      assert result.output.artifact_discarded_bytes == nil
+
+      assert {:ok, %{output: %{artifact_capacity: 50, artifact_size_unknown: true}}, _} =
+               ProcessStore.get(process_id)
+    end
+
     test "partial-only updates evict the store mirror and preserve exact byte accounting",
          %{process_id: process_id} do
       {pid, port, path} = start_capture(process_id, max_retained_bytes: 8, max_artifact_bytes: 5)

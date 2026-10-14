@@ -178,32 +178,38 @@ defmodule CodingAgent.ProcessSession do
     on_exit = Keyword.get(opts, :on_exit)
     owner = Keyword.get(opts, :owner)
 
-    # Create the process entry in the store
-    ProcessStore.new_process(%{
-      id: process_id,
-      command: command,
-      cwd: cwd,
-      env: env,
-      backend: backend,
-      terminal_capabilities: terminal_capabilities,
-      max_log_lines: max_log_lines,
-      full_output_path: output_path,
-      timeout_ms: timeout_ms,
-      restarted_from: Keyword.get(opts, :restarted_from),
-      restart_generation: Keyword.get(opts, :restart_generation, 0),
-      owner: owner,
-      status: :queued
-    })
-
     artifact_capacity =
-      case ProcessStore.reserve_artifact(
-             process_id,
-             limits.max_artifact_bytes,
-             limits.max_owner_artifact_bytes,
-             limits.max_runtime_artifact_bytes
-           ) do
-        {:ok, capacity} -> capacity
-        {:error, :not_found} -> 0
+      try do
+        # Capture accounting must succeed before any external process starts.
+        ProcessStore.new_process(%{
+          id: process_id,
+          command: command,
+          cwd: cwd,
+          env: env,
+          backend: backend,
+          terminal_capabilities: terminal_capabilities,
+          max_log_lines: max_log_lines,
+          full_output_path: output_path,
+          timeout_ms: timeout_ms,
+          restarted_from: Keyword.get(opts, :restarted_from),
+          restart_generation: Keyword.get(opts, :restart_generation, 0),
+          owner: owner,
+          status: :queued
+        })
+
+        case ProcessStore.reserve_artifact(
+               process_id,
+               limits.max_artifact_bytes,
+               limits.max_owner_artifact_bytes,
+               limits.max_runtime_artifact_bytes
+             ) do
+          {:ok, capacity} -> capacity
+          {:error, _reason} -> throw(:process_start_failed)
+        end
+      rescue
+        _exception -> failed_start(process_id, output_path, output_file)
+      catch
+        _kind, _reason -> failed_start(process_id, output_path, output_file)
       end
 
     # Start the OS process via Port
@@ -637,18 +643,24 @@ defmodule CodingAgent.ProcessSession do
     File.close(output_file)
     # Retain an accounting record if removal fails, so a later reservation
     # cannot forget an artifact still occupying disk.
-    case File.rm(output_path) do
-      result when result in [:ok, {:error, :enoent}] ->
-        ProcessStore.put_output(process_id, %{
-          artifact_capacity: 0,
-          artifact_bytes: 0,
-          finalized: true
-        })
+    try do
+      case File.rm(output_path) do
+        result when result in [:ok, {:error, :enoent}] ->
+          ProcessStore.put_output(process_id, %{
+            artifact_capacity: 0,
+            artifact_bytes: 0,
+            finalized: true
+          })
 
-        ProcessStore.delete(process_id)
+          ProcessStore.delete(process_id)
 
-      _ ->
-        ProcessStore.mark_error(process_id, :process_start_failed)
+        _ ->
+          ProcessStore.mark_error(process_id, :process_start_failed)
+      end
+    catch
+      # The accounting owner may be unavailable. The pre-Port file was still
+      # closed/removed first; any persisted reservation remains conservative.
+      :exit, _reason -> :ok
     end
 
     throw(:process_start_failed)

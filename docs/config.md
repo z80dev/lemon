@@ -481,6 +481,14 @@ budget. Reclamation preserves log/status records, clears the file reference
 and sets `artifact_reclaimed`; old artifact handles stop resolving. Owner
 authorization is unchanged. Pre-quota persisted artifacts also count.
 
+All record mutations and deletion share the reservation owner's serialization,
+so concurrent cursor/status updates cannot restore a reclaimed path or erase a
+reservation. A store-only restart preserves surviving registered captures.
+New capture reservations must be persisted and synced before launch; unavailable
+accounting storage or an unmeasurable legacy artifact fails admission instead of
+treating unknown disk usage as zero. Existing captures keep their charged
+reservation if later persistence fails.
+
 A write failure closes the output device once, preserves the bounded tail
 and real execution status, and exposes only a fixed error classification.
 The closed file is checked for a partially written prefix so counters remain
