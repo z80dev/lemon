@@ -183,6 +183,36 @@ defmodule CodingAgent.Tools.Task.WorktreeTest do
     refute branch_exists?(git, repo, "lemon/task-unborn-task")
   end
 
+  test "merge-back targets the linked parent checkout, not the common repository checkout", %{
+    git: git,
+    repo: repo,
+    tmp_dir: tmp_dir
+  } do
+    File.write!(Path.join(repo, "tracked.txt"), "main checkout work\n")
+    git!(git, repo, ["add", "tracked.txt"])
+    main_head = git!(git, repo, ["rev-parse", "HEAD"])
+    main_index = git!(git, repo, ["diff", "--cached"])
+
+    for mode <- ["patch", "branch"] do
+      source = Path.join(tmp_dir, "source-#{mode}")
+      git!(git, repo, ["worktree", "add", "-b", "source-#{mode}", source])
+      File.write!(Path.join(source, "tracked.txt"), "linked parent work\n")
+      id = "linked-#{mode}"
+      assert {:ok, prepared} = Worktree.prepare(source, id, mode)
+      File.write!(Path.join(prepared.cwd, "tracked.txt"), "child work\n")
+
+      merge = Worktree.finalize(prepared, source, id, "Linked child")
+      assert merge.status == if(mode == "patch", do: "applied", else: "committed")
+      expected = if mode == "patch", do: "child work\n", else: "linked parent work\n"
+      assert File.read!(Path.join(source, "tracked.txt")) == expected
+      assert git!(git, source, ["rev-parse", "HEAD"]) == main_head
+      assert git!(git, source, ["diff", "--cached"]) == ""
+      assert File.read!(Path.join(repo, "tracked.txt")) == "main checkout work\n"
+      assert git!(git, repo, ["rev-parse", "HEAD"]) == main_head
+      assert git!(git, repo, ["diff", "--cached"]) == main_index
+    end
+  end
+
   test "cancelled tasks retain their worktree without mutating either checkout", %{
     git: git,
     repo: repo
