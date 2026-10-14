@@ -21,6 +21,9 @@ defmodule CodingAgent.ExecutionNode.Worker do
     "node.fs.write", "node.fs.mkdir", "node.fs.move", "node.fs.delete.preview", "node.fs.delete",
     "node.secrets.set", "node.secrets.list", "node.secrets.delete", "node.secrets.receipt"]
   @shell_methods ["node.shell.open", "node.shell.input", "node.shell.resize", "node.shell.close"]
+  @process_methods ["node.process.run", "node.process.get", "node.process.cancel"]
+  @process_capability %{"version" => 1, "maxStdinBytes" => 1_048_576,
+    "maxOutputBytes" => 1_048_576, "maxTimeoutMs" => 1_800_000, "maxArgvBytes" => 131_072}
   @capabilities %{
     "coding_agent.run" => %{"version" => @protocol_version},
     "node.enrollment" => %{"version" => 1, "inviteCodes" => true, "repairInvites" => true},
@@ -34,8 +37,10 @@ defmodule CodingAgent.ExecutionNode.Worker do
 
   @doc "Declared protocol capabilities, shared by pairing and installed-runtime inspection."
   def capabilities do
-    Map.merge(@capabilities, Map.new(@host_io_methods ++ @shell_methods ++
+    @capabilities
+    |> Map.merge(Map.new(@host_io_methods ++ @shell_methods ++
       ["node.capabilities.get", "node.runtime.features"], &{&1, true}))
+    |> Map.merge(Map.new(@process_methods, &{&1, @process_capability}))
   end
 
   @doc "Failclosed software compatibility; it does not attest provider login or OS grants."
@@ -65,6 +70,7 @@ defmodule CodingAgent.ExecutionNode.Worker do
     :pairing_id,
     :max_payload_bytes,
     shells: %{},
+    process_tasks: %{},
     invocations: %{},
     run_refs: %{}
   ]
@@ -253,6 +259,16 @@ defmodule CodingAgent.ExecutionNode.Worker do
     end
   end
 
+  def handle_info({:process_service_result, invoke_id, pid, result}, state) do
+    case state.process_tasks[invoke_id] do
+      %{pid: ^pid, monitor_ref: ref} ->
+        Process.demonitor(ref, [:flush])
+        state = %{state | process_tasks: Map.delete(state.process_tasks, invoke_id)}
+        {:noreply, send_host_io_result(state, invoke_id, result)}
+      _ -> {:noreply, state}
+    end
+  end
+
   def handle_info({:engine_delta, run_ref, text}, state) when is_binary(text) do
     case Map.get(state.run_refs, run_ref) do
       nil ->
@@ -299,15 +315,20 @@ defmodule CodingAgent.ExecutionNode.Worker do
   def handle_info({:engine_event, _run_ref, _event}, state), do: {:noreply, state}
 
   def handle_info({:DOWN, monitor_ref, :process, _pid, reason}, state) do
-    case Enum.find(state.invocations, fn {_id, invocation} ->
-           invocation.monitor_ref == monitor_ref
-         end) do
-      {invoke_id, _invocation} ->
-        state = send_invoke_error(state, invoke_id, {:runner_down, reason})
-        {:noreply, remove_invocation(state, invoke_id)}
-
+    case Enum.find(state.process_tasks, fn {_, task} -> task.monitor_ref == monitor_ref end) do
+      {invoke_id, _} ->
+        _ = CodingAgent.ExecutionNode.ProcessService.cancel_invocation(self(), invoke_id)
+        state = %{state | process_tasks: Map.delete(state.process_tasks, invoke_id)}
+        {:noreply, send_invoke_error(state, invoke_id, :process_outcome_unknown)}
       nil ->
-        {:noreply, state}
+        case Enum.find(state.invocations, fn {_id, invocation} ->
+               invocation.monitor_ref == monitor_ref
+             end) do
+          {invoke_id, _invocation} ->
+            state = send_invoke_error(state, invoke_id, {:runner_down, reason})
+            {:noreply, remove_invocation(state, invoke_id)}
+          nil -> {:noreply, state}
+        end
     end
   end
 
@@ -457,7 +478,8 @@ defmodule CodingAgent.ExecutionNode.Worker do
         not is_binary(invoke_id) or invoke_id == "" ->
           {:noreply, state}
 
-        Map.has_key?(state.invocations, invoke_id) or Map.has_key?(state.shells, invoke_id) ->
+        Map.has_key?(state.invocations, invoke_id) or Map.has_key?(state.shells, invoke_id) or
+            Map.has_key?(state.process_tasks, invoke_id) ->
           {:noreply, state}
 
         not is_map(args) ->
@@ -468,6 +490,13 @@ defmodule CodingAgent.ExecutionNode.Worker do
 
         method == "coding_agent.run" ->
           {:noreply, start_invocation(state, invoke_id, args)}
+
+        method in @process_methods and
+            (not is_binary(state.node_id) or payload["nodeId"] != state.node_id) ->
+          {:noreply, send_invoke_error(state, invoke_id, :node_mismatch)}
+
+        method in @process_methods ->
+          {:noreply, start_process_task(state, invoke_id, method, args, payload["nodeGeneration"])}
 
         method == "node.runtime.features" ->
           {:noreply, send_host_io_result(state, invoke_id, {:ok, runtime_features()})}
@@ -495,6 +524,8 @@ defmodule CodingAgent.ExecutionNode.Worker do
     invoke_id = payload["invokeId"]
 
     if targeted?(payload, state) do
+      state = if is_binary(state.node_id) and payload["nodeId"] == state.node_id,
+        do: cancel_process_task(state, invoke_id, payload["nodeGeneration"]), else: state
       case state.shells[invoke_id] do
         %{pid: pid} ->
           GenServer.stop(pid, :normal)
@@ -523,6 +554,48 @@ defmodule CodingAgent.ExecutionNode.Worker do
   defp handle_node_event(_event, _payload, state), do: {:noreply, state}
 
   defp host_io_opts(state), do: [default_cwd: state.default_cwd, allowed_roots: state.allowed_roots, node_id: state.node_id]
+
+  defp start_process_task(state, invoke_id, method, args, generation) do
+    cond do
+      not is_integer(generation) or generation < 0 ->
+        send_invoke_error(state, invoke_id, :invalid_node_generation)
+      Map.has_key?(args, "nodeId") and args["nodeId"] != state.node_id ->
+        send_invoke_error(state, invoke_id, :node_mismatch)
+      map_size(state.process_tasks) >= 64 ->
+        send_invoke_error(state, invoke_id, :process_busy)
+      true ->
+        owner = self()
+        opts = host_io_opts(state) ++ [session_generation: generation, invoke_id: invoke_id, owner: owner]
+        args = Map.put(args, "nodeId", state.node_id)
+        {pid, ref} = spawn_monitor(fn ->
+          result = CodingAgent.ExecutionNode.ProcessService.handle(method, args, opts)
+          send(owner, {:process_service_result, invoke_id, self(), result})
+        end)
+        task = %{pid: pid, monitor_ref: ref, generation: generation, method: method,
+          process_id: args["processId"], node_id: state.node_id}
+        %{state | process_tasks: Map.put(state.process_tasks, invoke_id, task)}
+    end
+  end
+
+  defp cancel_process_task(state, invoke_id, generation) do
+    case state.process_tasks[invoke_id] do
+      nil -> state
+      %{generation: ^generation} = task when is_integer(generation) and generation >= 0 ->
+        _ = cancel_process_receipt(task, invoke_id)
+        _ = CodingAgent.ExecutionNode.ProcessService.cancel_invocation(self(), invoke_id)
+        Process.exit(task.pid, :kill)
+        Process.demonitor(task.monitor_ref, [:flush])
+        %{state | process_tasks: Map.delete(state.process_tasks, invoke_id)}
+      _ -> state
+    end
+  end
+
+  defp cancel_process_receipt(%{method: "node.process.run"} = task, invoke_id) do
+    CodingAgent.ExecutionNode.ProcessService.handle("node.process.cancel",
+      %{"nodeId" => task.node_id, "processId" => task.process_id},
+      [node_id: task.node_id, session_generation: task.generation, invoke_id: invoke_id, owner: self()])
+  end
+  defp cancel_process_receipt(_, _), do: :ok
 
   defp send_host_io_result(state, invoke_id, {:ok, result}) do
     request(state, "node.invoke.result", %{"invokeId" => invoke_id, "result" => result}, {:invoke_result, invoke_id})
@@ -1122,6 +1195,12 @@ defmodule CodingAgent.ExecutionNode.Worker do
   defp notify(_state, _message), do: :ok
 
   defp cancel_all_invocations(state) do
+    _ = CodingAgent.ExecutionNode.ProcessService.cancel_owner(self())
+    Enum.each(state.process_tasks, fn {invoke_id, task} ->
+      _ = cancel_process_receipt(task, invoke_id)
+      Process.exit(task.pid, :kill)
+      Process.demonitor(task.monitor_ref, [:flush])
+    end)
     Enum.each(state.invocations, fn {_invoke_id, invocation} ->
       _ = state.executor_module.cancel(invocation.context)
 
@@ -1133,7 +1212,18 @@ defmodule CodingAgent.ExecutionNode.Worker do
       if Process.alive?(shell.pid), do: GenServer.stop(shell.pid, :normal)
     end)
 
-    %{state | invocations: %{}, run_refs: %{}, shells: %{}}
+    %{state | invocations: %{}, run_refs: %{}, shells: %{}, process_tasks: %{}}
+  end
+
+  @impl true
+  def format_status(status) do
+    status |> Map.put(:state, :private_execution_node) |> Map.put(:message, :redacted) |> Map.put(:log, [])
+  end
+
+  @impl true
+  def terminate(_, state) do
+    _ = cancel_all_invocations(state)
+    :ok
   end
 
   defp safe_reason(reason) do

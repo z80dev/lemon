@@ -587,6 +587,19 @@ defmodule LemonControlPlane.Protocol.Schemas do
     "node.secrets.list" => %{required: %{"nodeId" => :string}},
     "node.secrets.delete" => %{required: %{"nodeId" => :string, "name" => :string}},
     "node.secrets.receipt" => %{required: %{"nodeId" => :string, "operationId" => :string}},
+    "node.process.run" => %{
+      required: %{
+        "nodeId" => :string,
+        "processId" => :string,
+        "cwd" => :string,
+        "argv" => :list,
+        "stdinBase64" => :string,
+        "timeoutMs" => :integer,
+        "maxOutputBytes" => :integer
+      }
+    },
+    "node.process.get" => %{required: %{"nodeId" => :string, "processId" => :string}},
+    "node.process.cancel" => %{required: %{"nodeId" => :string, "processId" => :string}},
     "node.shell.open" => %{required: %{"nodeId" => :string}, optional: %{"cwd" => :string, "cols" => :integer, "rows" => :integer}},
     "node.shell.input" => %{required: %{"shellId" => :string, "dataBase64" => :string}},
     "node.shell.resize" => %{required: %{"shellId" => :string, "cols" => :integer, "rows" => :integer}},

@@ -58,6 +58,15 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   and current owning pending target before acknowledgement; lost ownership or
   configuration/policy changes report a non-retry-safe potentially applied mutation,
   never a positive private proof authority acknowledgement.
+- Automated host-driver actions and read-only probes can use admin-only
+  `node.process.run|get|cancel`: literal executable argv, descriptor-admitted
+  destination cwd, bounded raw stdin with EOF, independent non-TTY stdout/stderr,
+  and observed exit receipts. Fixed IDs persist immutable private admission and
+  spent/cancel fences; uncertain work is queried, never redispatched. Cancellation
+  before admission durably prevents a later run, and active cancellation/timeout/
+  overflow cleans the real process group. Outputs stay private to the RPC caller,
+  missing output is null rather than invented empty data, and interactive PTYs
+  remain exclusively explicit user terminals—no automated PTY/shell/SSH fallback.
 
 ---
 

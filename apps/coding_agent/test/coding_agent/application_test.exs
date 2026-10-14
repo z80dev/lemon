@@ -14,6 +14,7 @@ defmodule CodingAgent.ApplicationTest do
     CodingAgent.RunGraphServer,
     CodingAgent.ProcessStoreServer,
     CodingAgent.ProcessManager,
+    CodingAgent.ExecutionNode.ProcessService,
     CodingAgent.LaneQueue
   ]
 

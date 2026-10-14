@@ -140,6 +140,47 @@ defmodule LemonCore.NodeRegistryDurableIDTest do
     refute_receive {:node_event, "node.invoke.request", _}
   end
 
+  test "noninteractive process protocol is admitted atomically and broker generation is authoritative" do
+    id = "process-admission-#{System.unique_integer([:positive])}"
+    owner = self()
+    on_exit(fn -> NodeRegistry.unregister(id, owner) end)
+    assert :ok = NodeRegistry.register_session(id, id, owner, 7, %{})
+    assert {:error, {:process_execution_unsupported, ^id}} =
+      NodeRegistry.invoke_node(id, "node.process.run", %{}, required_process_execution: 1)
+    refute_receive {:node_event, "node.invoke.request", _}
+    assert {:error, :invalid_process_execution_requirement} =
+      NodeRegistry.invoke_node(id, "node.shell.open", %{}, required_process_execution: 1)
+    assert {:error, :invalid_process_execution_requirement} =
+      NodeRegistry.invoke_node(id, "node.process.run", %{}, required_process_execution: 2)
+
+    capabilities = Map.new(~w(node.process.run node.process.get node.process.cancel),
+      &{&1, %{"version" => 1}})
+    assert :ok = NodeRegistry.register_session(id, id, owner, 7, %{capabilities: capabilities})
+    args = %{"processId" => "fixed-id", "nodeGeneration" => 999}
+    assert {:ok, invocation} = NodeRegistry.invoke_node(id, "node.process.run", args,
+      expected_pid: owner, expected_generation: 7, required_process_execution: 1)
+    assert_receive {:node_event, "node.invoke.request",
+      %{"invokeId" => ^invocation, "nodeId" => ^id, "nodeGeneration" => 7, "args" => ^args}}
+    assert :ok = NodeRegistry.complete_session(id, owner, 7, invocation, %{})
+    assert_receive {:lemon_node_result, ^invocation, {:ok, %{}}}
+    assert {:ok, cancelled} = NodeRegistry.invoke_node(id, "node.process.run", args,
+      expected_pid: owner, expected_generation: 7, required_process_execution: 1)
+    assert_receive {:node_event, "node.invoke.request", %{"invokeId" => ^cancelled}}
+    assert :ok = NodeRegistry.cancel(cancelled, :test_cancel)
+    assert_receive {:node_event, "node.invoke.cancel",
+      %{"invokeId" => ^cancelled, "nodeId" => ^id, "nodeGeneration" => 7}}
+    assert_receive {:lemon_node_result, ^cancelled, {:error, :test_cancel}}
+    assert :ok = NodeRegistry.register_session(id, id, owner, 8, %{capabilities: capabilities})
+    assert {:error, {:node_connection_changed, ^id}} =
+      NodeRegistry.invoke_node(id, "node.process.get", %{}, expected_pid: owner,
+        expected_generation: 7, required_process_execution: 1)
+    assert :ok = NodeRegistry.register_session(id, id, owner, 9,
+      %{capabilities: Map.delete(capabilities, "node.process.cancel")})
+    assert {:error, {:process_execution_unsupported, ^id}} =
+      NodeRegistry.invoke_node(id, "node.process.run", %{}, required_process_execution: 1)
+    refute_receive {:node_event, "node.invoke.request", _}
+  end
+
   defp relay(owner) do
     receive do
       event -> send(owner, {:attacker_received, event}); relay(owner)

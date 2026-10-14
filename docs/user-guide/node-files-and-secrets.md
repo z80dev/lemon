@@ -1,4 +1,4 @@
-# Execution-node files and secrets
+# Execution-node files, secrets and native processes
 
 These control-plane `/ws` methods operate on the **destination execution node**,
 not on the controller's filesystem. Use the enrolled machine's durable `nodeId`.
@@ -6,8 +6,9 @@ The destination must be online. Requests use the normal authenticated `req` /
 `res` protocol; a successful response's `payload` contains the shapes below.
 Handlers dispatch asynchronously so other socket traffic can continue.
 
-`node.host.info` requires operator `read`. **Every `node.fs.*` and
-`node.secrets.*` method requires operator `admin`, including reads and lists.**
+`node.host.info` requires operator `read`. **Every `node.fs.*`,
+`node.secrets.*` and `node.process.*` method requires operator `admin`,
+including reads, lists and read-only process receipt lookup.**
 Keep the operator token in a trusted backend; do not distribute it to product
 users. Secret and file bytes necessarily cross the authenticated node transport:
 use `wss://` or an explicitly trusted encrypted overlay.
@@ -215,6 +216,138 @@ it did not happen; inspect destination state before issuing another mutation.
 Never automatically retry an uncertain mutation. The service also bounds pinned
 policy/root descriptors (128 each); exhaustion returns `filesystem_busy`, not an
 unbounded descriptor cache.
+
+## Native processes
+
+Use `node.process.run` for automated destination-native commands and probes,
+not an interactive terminal. It launches a literal executable/argv with separate
+stdout/stderr pipes and exact decoded stdin bytes followed by EOF. No stream is
+a TTY. There is **no shell interpolation, PTY, SSH, or named-node fallback**.
+Interactive user terminals continue to use `node.shell.*` unchanged.
+Python 3 is required on the destination. Native processes run with the worker
+OS account's permissions and destination-local credentials: root admission of
+cwd is not an OS sandbox.
+
+All three methods are admin-scoped and asynchronous. `run` awaits the bounded
+final receipt; get is strictly read-only, and cancel is a mutation.
+
+| Method | Exact request fields | Result |
+| --- | --- | --- |
+| `node.process.run` | `nodeId, processId, cwd, argv, stdinBase64, timeoutMs, maxOutputBytes` (all required) | Seven-field process receipt below |
+| `node.process.get` | `nodeId, processId` | Same receipt, or successful strict absence `state:"not_found"` |
+| `node.process.cancel` | `nodeId, processId` | Same receipt; missing ID is durably tombstoned before acknowledgment |
+
+Choose and retain a fixed `processId` **before the first intent**. For example:
+
+```json
+{"type":"req","id":"native-run-1","method":"node.process.run","params":{"nodeId":"node-id","processId":"probe:fixed-1","cwd":".","argv":["python3","-c","import sys; data=sys.stdin.buffer.read(); sys.stdout.buffer.write(data); sys.stderr.write('diagnostic\\n')"],"stdinBase64":"SGVsbG8K","timeoutMs":30000,"maxOutputBytes":1048576}}
+```
+
+If this execution really observes exit 0 and captures those bytes, its success
+payload is exactly:
+
+```json
+{"processId":"probe:fixed-1","nodeId":"node-id","state":"completed","exitCode":0,"stdoutBase64":"SGVsbG8K","stderrBase64":"ZGlhZ25vc3RpYwo=","outputTruncated":false}
+```
+
+There is no `env`, shell command string, TTY flag, or client-supplied admission
+option. The control plane validates before dispatch and the worker independently
+validates again:
+
+- `processId`: 1–128 ASCII letters, digits, `_`, `:`, or `-`.
+- `argv`: 1–128 UTF-8 strings, no NUL; each and their combined total are at most
+  131,072 bytes. `argv[0]` is a nonempty literal executable (PATH name or
+  absolute path). Later empty arguments, Unicode, spaces and quotes are preserved,
+  never split or expanded. Missing executable, permission failure and OS `E2BIG`
+  are errors, not fabricated process exit receipts.
+- `cwd`: nonempty UTF-8, at most 4096 bytes, no NUL or `..` components. The
+  destination pins the admitted directory descriptor under home and explicitly
+  configured `--allowed-root` roots, rejecting traversal and symlink escapes.
+- `stdinBase64`: valid standard base64, decoded at most 1,048,576 bytes. Empty
+  string is valid and closes stdin without sending bytes.
+- `timeoutMs`: integer 1000–1,800,000, inclusive (30 minutes). The broker deadline
+  is this value plus 5000 ms, and the control-plane await allows 1000 ms more.
+  Get and cancel use the normal 30-second broker deadline.
+- `maxOutputBytes`: integer 1–1,048,576, inclusive, bounding **combined** captured
+  stdout and stderr bytes, not a separate allowance per stream. Also respect the
+  connection's negotiated JSON payload cap and base64/protocol overhead.
+
+The current actual authenticated node must advertise version 1 for
+`node.process.run`, `.get` and `.cancel`. The control plane resolves the exact
+durable ID and pins its live connection PID/generation; registry admission
+checks the actual descriptors before delivery. Caller fields cannot override
+those internal options, and raw `node.invoke` rejects `node.process.*`.
+The broker supplies `nodeGeneration` from its authenticated registry record,
+not from request arguments.
+
+### Receipt meaning and reconciliation
+
+Every successful result has exactly
+`{processId,nodeId,state,exitCode,stdoutBase64,stderrBase64,outputTruncated}`.
+States are `running`, `completed`, `cancelled`, or `outcome_unknown`; get alone
+also permits `not_found`. `exitCode` is an integer only when an OS exit was
+actually observed, otherwise null. Output base64 strings are actual captured
+bytes: `""` means known zero bytes. Unavailable outputs are **null**, never
+invented empty strings, and set `outputTruncated:true`.
+A `completed` receipt must have an actually observed integer `exitCode`,
+including after restart when captured outputs are no longer available.
+
+A running, unknown, or not-found receipt has null exit and both outputs null.
+Cancellation before execution likewise returns `cancelled`, null exit/outputs
+and `outputTruncated:true`. Timeout or output overflow cancels and cleans up the
+process group/descendants where supported; any returned exit code must still
+come from an actual observed termination. Worker restart preserves known receipt
+state and exit metadata, not raw output: output becomes null/truncated. An
+interrupted active receipt becomes `outcome_unknown` and never relaunches.
+
+If a response is lost, a controller times out, or an error says the mutation
+outcome may be unknown, **never automatically redispatch run**, even with a new
+ID. Retain the original node/ID and query it:
+
+```json
+{"type":"req","id":"native-get-1","method":"node.process.get","params":{"nodeId":"node-id","processId":"probe:fixed-1"}}
+```
+
+Get cannot launch or replay work and can read a predecessor generation's receipt.
+Only an actual successful strict destination Store read finding no receipt may
+return `not_found`. Offline, transport, Store and lookup failures remain errors:
+they are neither absence nor proof that execution stopped. A broker failure
+does not synthesize an `outcome_unknown` success receipt; only the owning
+destination receipt can attest its state. Keep uncertainty until reconciled.
+
+The destination service permits 16 active runs and 1,000 retained fixed IDs,
+including automatic inspections/probes and cancellation tombstones. Spent IDs
+never expire or become runnable again. At capacity, `process_receipt_limit`
+rejects new admission without execution; operators need a destination with
+available capacity, not a spent-ID deletion/reuse workaround. Output is a
+separate volatile cache of at most 16 completed receipts for 24 hours: losing
+those bytes does not erase known status/exit or permit replay.
+
+### Cancellation races
+
+```json
+{"type":"req","id":"native-cancel-1","method":"node.process.cancel","params":{"nodeId":"node-id","processId":"probe:fixed-1"}}
+```
+
+For an absent ID, cancel atomically writes a durable node-scoped cancelled
+tombstone **before replying**. A racing later run using that ID cannot start;
+there is no cancellation-as-best-effort existence check. Active cancellation
+requires the original owning authenticated node/session generation/invocation,
+so a replacement worker cannot cancel its predecessor's run. A terminal race
+returns the actual owning receipt, not an invented successful kill. If cancel's
+reply is uncertain, reconcile the same fixed ID with get rather than replaying
+execution.
+
+### Credential privacy
+
+Only the authenticated requester's awaited response receives output; there are
+no process-output events. Argv, stdin, stdout/stderr and credentials must never
+enter general Bus events, model messages, logs or durable process receipt content.
+Persistent receipts retain only bounded admission/terminal metadata and a private
+intent binding; they do not store raw argv, stdin or output and never expose the
+private binding. Keep credential-bearing input/output in the trusted backend and
+use `wss://` or an explicitly trusted encrypted overlay. Do not embed credentials
+in executable arguments or copy raw command results into product diagnostics.
 
 ## Write-only encrypted secrets
 

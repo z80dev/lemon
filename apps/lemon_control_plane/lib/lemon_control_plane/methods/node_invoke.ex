@@ -32,7 +32,7 @@ defmodule LemonControlPlane.Methods.NodeInvoke do
       not is_binary(method) or String.trim(method) == "" ->
         {:error, Errors.invalid_request("method must be a non-empty string")}
 
-      String.starts_with?(method, ["node.fs.", "node.secrets.", "node.shell."]) ->
+      String.starts_with?(method, ["node.fs.", "node.secrets.", "node.shell.", "node.process."]) ->
         {:error, Errors.forbidden("Use the admin-scoped machine methods")}
 
       not is_map(args) ->
