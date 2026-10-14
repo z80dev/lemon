@@ -24,8 +24,9 @@ defmodule CodingAgent.Tools.Task.Worktree do
       is kept for review. The branch is never merged into the user's branch.
 
   Both merge-back modes retain the checkout and branch for manual review when
-  the task changes a submodule (gitlink). Patch application cannot propagate
-  index-only pins, and automatic cleanup must not discard their staged state.
+  the task changes a submodule (gitlink), whether committed, staged or only in
+  an initialized submodule checkout. Patch application cannot propagate
+  gitlinks, and automatic cleanup must not discard their pins or checkouts.
 
   Existing paths and branches are never reused or removed.
   """
@@ -465,30 +466,33 @@ defmodule CodingAgent.Tools.Task.Worktree do
   end
 
   # Check before staging too: git add can overwrite an index-only submodule pin.
+  # The unstaged pass catches initialized submodules whose HEAD or content
+  # changed but that git add does not stage (for example `ignore = all`).
   # Both merge modes retain unsupported gitlinks rather than deleting their checkout.
   defp check_gitlinks(git, prepared, against) do
-    with {:ok, raw} <-
-           run_git(git, prepared.worktree_path, [
-             "diff",
-             "--cached",
-             "--raw",
-             "-z",
-             "--no-renames",
-             "--ignore-submodules=none",
-             against
-           ]) do
-      changed? =
-        raw
-        |> String.split(<<0>>, trim: true)
-        |> Enum.chunk_every(2)
-        |> Enum.any?(fn [header, _path] ->
-          Regex.match?(~r/\A:(?:160000 [0-7]{6}|[0-7]{6} 160000) /, header)
-        end)
-
-      if changed?,
+    with {:ok, staged} <- gitlink_diff(git, prepared, ["--cached", against]),
+         {:ok, unstaged} <- gitlink_diff(git, prepared, []) do
+      if gitlink_changed?(staged) or gitlink_changed?(unstaged),
         do: {:error, "Submodule changes require manual review; task worktree retained"},
         else: :ok
     end
+  end
+
+  defp gitlink_diff(git, prepared, args) do
+    run_git(
+      git,
+      prepared.worktree_path,
+      ["diff", "--raw", "-z", "--no-renames", "--ignore-submodules=none"] ++ args
+    )
+  end
+
+  defp gitlink_changed?(raw) do
+    raw
+    |> String.split(<<0>>, trim: true)
+    |> Enum.chunk_every(2)
+    |> Enum.any?(fn [header, _path] ->
+      Regex.match?(~r/\A:(?:160000 [0-7]{6}|[0-7]{6} 160000) /, header)
+    end)
   end
 
   defp finalize_patch(git, root, prepared, _task_id, [], signal) do

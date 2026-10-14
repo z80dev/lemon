@@ -271,6 +271,89 @@ defmodule CodingAgent.Tools.TaskWorktreeMergeTest do
     end
   end
 
+  for mode <- ["patch", "branch"] do
+    test "public task retains an initialized submodule checkout git add skips in #{mode} mode",
+         %{git: git, repo: repo} do
+      mode = unquote(mode)
+      pin = local_submodule(git, repo)
+      # Committed `.gitmodules` filters make git add skip the moved checkout.
+      git!(git, repo, ["config", "--file", ".gitmodules", "submodule.vendor.ignore", "all"])
+      git!(git, repo, ["add", ".gitmodules"])
+      git!(git, repo, ["-c", "core.hooksPath=/dev/null", "commit", "-qm", "Ignore vendor"])
+      old_pin = git!(git, repo, ["rev-parse", "HEAD:vendor"])
+      File.write!(Path.join(repo, "tracked.txt"), "parent staged\n")
+      git!(git, repo, ["add", "tracked.txt"])
+      File.write!(Path.join(repo, "tracked.txt"), "parent unstaged\n")
+      File.write!(Path.join(repo, "notes.txt"), "parent untracked\n")
+      parent_head = git!(git, repo, ["rev-parse", "HEAD"])
+      parent_index = git!(git, repo, ["write-tree"])
+      status = ["status", "--porcelain=v1", "-z", "--ignore-submodules=none"]
+      parent_status = git!(git, repo, status)
+
+      # The child really initializes its submodule and moves its HEAD, beside an
+      # ordinary edit that would otherwise be applied or committed on its own.
+      command =
+        "git -c protocol.file.allow=always submodule update --init -q -- vendor" <>
+          " && git -C vendor checkout -q --detach #{pin}" <>
+          " && printf 'from child\\n' > child.txt"
+
+      stream_fn = fn model, context, options ->
+        response =
+          if Enum.any?(context.messages, &(Map.get(&1, :role) == :tool_result)) do
+            Mocks.assistant_message("Finished updating the local dependency.")
+          else
+            Mocks.assistant_message_with_tool_calls([
+              Mocks.tool_call("bash", %{"command" => command})
+            ])
+          end
+
+        Mocks.mock_stream_fn_single(response).(model, context, options)
+      end
+
+      result =
+        TaskTool.execute(
+          unique_id(),
+          %{
+            "prompt" => "Update the local dependency",
+            "worktree" => true,
+            "merge" => mode,
+            "tool_policy" => %{"allow" => "all"},
+            "async" => false,
+            "auto_followup" => false
+          },
+          nil,
+          nil,
+          repo,
+          opts(stream_fn, settings("none"))
+        )
+
+      assert result.details.merge.status == "error"
+      assert result.details.merge.mode == mode
+      worktree = result.details.worktree_path
+      branch = result.details.branch
+      assert File.dir?(worktree)
+      assert branch_exists?(git, repo, branch)
+      assert git!(git, worktree, ["symbolic-ref", "--short", "HEAD"]) == branch
+      assert git!(git, repo, ["rev-parse", branch]) == git!(git, worktree, ["rev-parse", "HEAD"])
+      assert git!(git, repo, ["rev-parse", "#{branch}:vendor"]) == old_pin
+      assert git!(git, repo, ["ls-tree", "--name-only", branch, "--", "child.txt"]) == ""
+      assert git!(git, worktree, ["rev-parse", ":vendor"]) == old_pin
+      assert git!(git, Path.join(worktree, "vendor"), ["rev-parse", "HEAD"]) == pin
+      assert File.read!(Path.join(worktree, "child.txt")) == "from child\n"
+      assert git!(git, worktree, status) == " M vendor\0?? child.txt\0"
+      assert git!(git, repo, ["rev-parse", "HEAD"]) == parent_head
+      assert git!(git, repo, ["write-tree"]) == parent_index
+      assert git!(git, repo, status) == parent_status
+
+      refute File.exists?(Path.join(repo, "child.txt"))
+      assert File.read!(Path.join(repo, "tracked.txt")) == "parent unstaged\n"
+      assert File.read!(Path.join(repo, "notes.txt")) == "parent untracked\n"
+      assert git!(git, Path.join(repo, "vendor"), ["rev-parse", "HEAD"]) == old_pin
+      assert {:ok, record, _events} = TaskStore.get(result.details.task_id)
+      assert record.workspace.merge == result.details.merge
+    end
+  end
+
   defp local_submodule(git, repo) do
     source = Path.join(Path.dirname(repo), "vendor-source")
     File.mkdir_p!(source)

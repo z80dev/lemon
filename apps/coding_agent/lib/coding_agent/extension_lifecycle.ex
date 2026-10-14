@@ -23,6 +23,7 @@ defmodule CodingAgent.ExtensionLifecycle do
           extensions: [module()],
           hooks: keyword([function()]),
           tools: [AgentTool.t()],
+          tool_catalog: ToolDisclosure.catalog(),
           extension_status_report: Extensions.extension_status_report(),
           extension_paths: [String.t()],
           provider_registration: Extensions.provider_registration_report(),
@@ -42,8 +43,10 @@ defmodule CodingAgent.ExtensionLifecycle do
     extra_tools = Keyword.get(opts, :extra_tools, [])
     wasm_tools = Keyword.get(opts, :wasm_tools, [])
     wasm_status = Keyword.get(opts, :wasm_status)
-    tool_policy = Keyword.get(opts, :tool_policy)
-    approval_context = Keyword.get(opts, :approval_context)
+    tool_policy = Keyword.get(opts, :tool_policy, Keyword.get(tool_opts, :tool_policy))
+
+    approval_context =
+      Keyword.get(opts, :approval_context, Keyword.get(tool_opts, :approval_context))
 
     extension_paths = extension_paths(cwd, settings_manager)
     {extensions, load_errors} = load_extensions(extension_paths)
@@ -59,11 +62,13 @@ defmodule CodingAgent.ExtensionLifecycle do
       |> Keyword.put(:extension_paths, extension_paths)
       |> Keyword.put(:wasm_tools, wasm_tools)
       |> Keyword.put(:wasm_status, wasm_status)
+      |> Keyword.put(:tool_policy, tool_policy)
+      |> Keyword.put(:approval_context, approval_context)
 
     disclosure_cfg =
       ToolDisclosure.config(settings_manager, Keyword.get(tool_opts, :tool_disclosure))
 
-    {tools, disclosure_report} =
+    {tools, tool_catalog, disclosure_report} =
       build_tools(
         cwd,
         tool_opts,
@@ -92,6 +97,7 @@ defmodule CodingAgent.ExtensionLifecycle do
       extensions: extensions,
       hooks: hooks,
       tools: tools,
+      tool_catalog: tool_catalog,
       extension_status_report: extension_status_report,
       extension_paths: extension_paths,
       provider_registration: provider_registration,
@@ -111,8 +117,11 @@ defmodule CodingAgent.ExtensionLifecycle do
     extra_tools = Keyword.get(opts, :extra_tools, [])
     wasm_tools = Keyword.get(opts, :wasm_tools, [])
     wasm_status = Keyword.get(opts, :wasm_status)
-    tool_policy = Keyword.get(opts, :tool_policy)
-    approval_context = Keyword.get(opts, :approval_context)
+    tool_policy = Keyword.get(opts, :tool_policy, Keyword.get(tool_opts, :tool_policy))
+
+    approval_context =
+      Keyword.get(opts, :approval_context, Keyword.get(tool_opts, :approval_context))
+
     previous_status_report = Keyword.get(opts, :previous_status_report)
 
     old_provider_registration =
@@ -140,22 +149,19 @@ defmodule CodingAgent.ExtensionLifecycle do
       |> Keyword.put(:wasm_status, wasm_status)
 
     tool_opts =
-      if tool_policy && approval_context do
-        tool_opts
-        |> Keyword.put(:tool_policy, tool_policy)
-        |> Keyword.put(:approval_context, approval_context)
-      else
-        tool_opts
-      end
+      tool_opts
+      |> Keyword.put(:tool_policy, tool_policy)
+      |> Keyword.put(:approval_context, approval_context)
 
     disclosure_cfg =
       ToolDisclosure.config(settings_manager, Keyword.get(tool_opts, :tool_disclosure))
 
-    %{tools: tools, report: disclosure_report} =
+    %{tools: tools, catalog: tool_catalog, report: disclosure_report} =
       ToolDisclosure.apply(
         ToolRegistry.get_tool_tuples(cwd, tool_opts),
         extra_tools,
-        disclosure_cfg
+        disclosure_cfg,
+        authority: Keyword.get(tool_opts, :tool_policy)
       )
 
     emit_disclosure_telemetry(disclosure_report)
@@ -175,6 +181,7 @@ defmodule CodingAgent.ExtensionLifecycle do
       extensions: extensions,
       hooks: hooks,
       tools: tools,
+      tool_catalog: tool_catalog,
       extension_status_report: extension_status_report,
       extension_paths: extension_paths,
       provider_registration: provider_registration,
@@ -227,7 +234,7 @@ defmodule CodingAgent.ExtensionLifecycle do
           term(),
           term(),
           ToolDisclosure.config()
-        ) :: {[AgentTool.t()], ToolDisclosure.report()}
+        ) :: {[AgentTool.t()], ToolDisclosure.catalog(), ToolDisclosure.report()}
   defp build_tools(
          cwd,
          tool_opts,
@@ -240,14 +247,15 @@ defmodule CodingAgent.ExtensionLifecycle do
        ) do
     case custom_tools do
       nil ->
-        %{tools: tools, report: report} =
+        %{tools: tools, catalog: catalog, report: report} =
           ToolDisclosure.apply(
             ToolRegistry.get_tool_tuples(cwd, tool_opts),
             extra_tools,
-            disclosure_cfg
+            disclosure_cfg,
+            authority: Keyword.get(tool_opts, :tool_policy)
           )
 
-        {tools, report}
+        {tools, catalog, report}
 
       custom ->
         extension_tools = Extensions.get_tools(extensions, cwd)
@@ -267,7 +275,8 @@ defmodule CodingAgent.ExtensionLifecycle do
         # A hand-assembled toolset is the caller's business: they chose exactly
         # these tools, so there is no long tail to defer and no registry source
         # tags to partition by.
-        {tools, ToolDisclosure.skipped_report(:custom_tools)}
+        {tools, ToolDisclosure.catalog_for_tools(tools),
+         ToolDisclosure.skipped_report(:custom_tools, disclosure_cfg)}
     end
   end
 
@@ -277,12 +286,16 @@ defmodule CodingAgent.ExtensionLifecycle do
       %{
         hidden_count: report.hidden_count,
         disclosed_count: report.disclosed_count,
-        estimated_tokens: report.estimated_tokens
+        estimated_tokens: report.estimated_tokens,
+        disclosed_tokens: report.disclosed_tokens
       },
       %{
         active: report.active,
         catalog_tier: report.catalog_tier,
-        reason: report.reason
+        reason: report.reason,
+        profile: report.profile,
+        catalog_digest: report.catalog_digest,
+        diagnostic_events_version: 1
       }
     )
   end

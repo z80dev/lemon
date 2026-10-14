@@ -553,6 +553,75 @@ defmodule CodingAgent.Tools.Task.WorktreeTest do
       assert checkout_snapshot(git, repo) == parent
       assert File.read!(Path.join(repo, "vendor/version.txt")) == "original\n"
     end
+
+    for change <- ["moved", "dirty"] do
+      test "#{mode} retains an initialized submodule's unstaged #{change} checkout", context do
+        %{git: git, repo: repo, tmp_dir: tmp_dir} = context
+        mode = unquote(mode)
+        change = unquote(change)
+        %{old_pin: old_pin, new_pin: new_pin} = local_submodule(git, repo, tmp_dir)
+        ignore_all_in_gitmodules(git, repo)
+        parent = checkout_snapshot(git, repo)
+        parent_vendor = checkout_snapshot(git, Path.join(repo, "vendor"))
+        id = "#{mode}-initialized-#{change}"
+        assert {:ok, prepared} = Worktree.prepare(repo, id, mode)
+        base = git!(git, prepared.cwd, ["rev-parse", "HEAD"])
+        child_vendor = init_child_submodule(git, prepared.cwd)
+        assert git!(git, child_vendor, ["rev-parse", "HEAD"]) == old_pin
+
+        # Real checkout work the parent index never records: `ignore = all` makes
+        # git add skip a moved HEAD, and it never stages a submodule's own files.
+        child_vendor_head =
+          case change do
+            "moved" ->
+              git!(git, child_vendor, ["checkout", "-q", "--detach", new_pin])
+              new_pin
+
+            "dirty" ->
+              File.write!(Path.join(child_vendor, "local.txt"), "child submodule work\n")
+              old_pin
+          end
+
+        child_index = git!(git, prepared.cwd, ["ls-files", "--stage", "-z"])
+
+        assert %{mode: ^mode, status: "error"} =
+                 Worktree.finalize(prepared, repo, id, "Keep submodule checkout")
+
+        assert File.dir?(prepared.worktree_path)
+        assert branch_exists?(git, repo, prepared.branch)
+        assert git!(git, prepared.cwd, ["symbolic-ref", "--short", "HEAD"]) == prepared.branch
+        assert git!(git, repo, ["rev-parse", prepared.branch]) == base
+        assert git!(git, prepared.cwd, ["ls-files", "--stage", "-z"]) == child_index
+        assert git!(git, prepared.cwd, ["rev-parse", ":vendor"]) == old_pin
+        assert git!(git, child_vendor, ["rev-parse", "HEAD"]) == child_vendor_head
+
+        if change == "dirty" do
+          assert File.read!(Path.join(child_vendor, "local.txt")) == "child submodule work\n"
+        end
+
+        assert checkout_snapshot(git, repo) == parent
+        assert checkout_snapshot(git, Path.join(repo, "vendor")) == parent_vendor
+        assert File.read!(Path.join(repo, "vendor/version.txt")) == "original\n"
+      end
+    end
+
+    test "#{mode} still cleans an initialized but unchanged submodule checkout",
+         %{git: git, repo: repo, tmp_dir: tmp_dir} do
+      mode = unquote(mode)
+      local_submodule(git, repo, tmp_dir)
+      ignore_all_in_gitmodules(git, repo)
+      parent = checkout_snapshot(git, repo)
+      id = "#{mode}-initialized-idle"
+      assert {:ok, prepared} = Worktree.prepare(repo, id, mode)
+      init_child_submodule(git, prepared.cwd)
+
+      assert %{mode: ^mode, status: "no_changes"} =
+               Worktree.finalize(prepared, repo, id, "Idle")
+
+      refute File.exists?(prepared.worktree_path)
+      refute branch_exists?(git, repo, prepared.branch)
+      assert checkout_snapshot(git, repo) == parent
+    end
   end
 
   test "branch retains a committed pin and its staged reversal to the original baseline",
@@ -610,6 +679,28 @@ defmodule CodingAgent.Tools.Task.WorktreeTest do
     git!(git, source, ["add", "."])
     git!(git, source, ["-c", "core.hooksPath=/dev/null", "commit", "-qm", "Update vendor"])
     %{source: source, old_pin: old_pin, new_pin: git!(git, source, ["rev-parse", "HEAD"])}
+  end
+
+  # Committed `.gitmodules` filters are what `git add` honours for gitlinks.
+  defp ignore_all_in_gitmodules(git, repo) do
+    git!(git, repo, ["config", "--file", ".gitmodules", "submodule.vendor.ignore", "all"])
+    git!(git, repo, ["add", ".gitmodules"])
+    git!(git, repo, ["-c", "core.hooksPath=/dev/null", "commit", "-qm", "Ignore vendor checkout"])
+  end
+
+  defp init_child_submodule(git, cwd) do
+    git!(git, cwd, [
+      "-c",
+      "protocol.file.allow=always",
+      "submodule",
+      "update",
+      "--init",
+      "-q",
+      "--",
+      "vendor"
+    ])
+
+    Path.join(cwd, "vendor")
   end
 
   defp change_gitlink(git, cwd, "pin", pin),

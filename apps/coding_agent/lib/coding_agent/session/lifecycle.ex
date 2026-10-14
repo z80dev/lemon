@@ -319,6 +319,7 @@ defmodule CodingAgent.Session.Lifecycle do
       # override the session started with -- `reload_extensions/1` rebuilds
       # `tool_opts` from state rather than from the original opts.
       tool_disclosure: Keyword.get(opts, :tool_disclosure),
+      tool_catalog: lifecycle.tool_catalog,
       session_scope: session_scope,
       task_child: task_child,
       task_depth: Keyword.get(opts, :task_depth),
@@ -420,6 +421,7 @@ defmodule CodingAgent.Session.Lifecycle do
         hooks: lifecycle.hooks,
         tools: tools,
         base_tools: lifecycle.tools,
+        tool_catalog: lifecycle.tool_catalog,
         extension_status_report: lifecycle.extension_status_report,
         wasm_sidecar_pid: wasm_reload.sidecar_pid,
         wasm_tool_names: wasm_reload.wasm_tool_names,

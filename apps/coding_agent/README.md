@@ -448,9 +448,9 @@ With nothing to merge, both merge modes report `no_changes` and remove the workt
 
 Merge-back rechecks cancellation after waiting for the parent checkout's merge lock and immediately before applying a patch. Cancellation cannot undo an apply or commit already in progress. If the child replaces its checkout, switches branches, or detaches HEAD, automatic finalization refuses and retains its work for manual review instead of deleting commits that are not on the task branch.
 
-Both `patch` and `branch` modes refuse task submodule (gitlink) changes with `status: "error"` and retain the task checkout, index and branch for manual review. This includes committed changes, staged pointer-only changes in uninitialized submodules, additions, deletions and replacements; excluded pins are never treated as an empty result eligible for deletion. The guard runs before staging so an initialized submodule's checkout cannot overwrite a staged pin. The parent's HEAD, index and submodule checkout remain untouched. Review the retained task worktree and commit or transfer its changes manually.
+Both `patch` and `branch` modes refuse task submodule (gitlink) changes with `status: "error"` and retain the task checkout, index and branch for manual review. This includes committed changes, staged pointer-only changes in uninitialized submodules, initialized checkouts whose HEAD moved or whose contents are dirty even under `ignore = all`, additions, deletions and replacements; excluded pins are never treated as an empty result eligible for deletion. The guard checks both staged and working-tree gitlink differences before staging, preserving the original index and initialized checkout. The parent's HEAD, index and submodule checkout remain untouched. An initialized but unchanged checkout still qualifies for empty-task cleanup. Review the retained task worktree and commit or transfer its changes manually.
 
-The local, no-network consumer smoke is `mix run --no-start scripts/task_worktrees_smoke.exs` from the umbrella root. It uses real child bash tools and local submodule repositories to exercise staged/committed pin retention, empty-task cleanup and ordinary-file merging through the public `task` tool without ExUnit.
+The local, no-network consumer smoke is `mix run --no-start scripts/task_worktrees_smoke.exs` from the umbrella root. It uses real child bash tools and local submodule repositories to exercise staged/committed pin retention, initialized HEAD-change retention under `ignore = all`, empty-task cleanup and ordinary-file merging through the public `task` tool without ExUnit.
 
 Parents can use `action: "message"` (or `"steer"`) with `task_id` and `message` to deliver peer input at the next child steering boundary, or `action: "cancel"` to cancel a queued/running child. Cancellation and result reads remain bound to the owning parent session/agent; messaging additionally permits the immediate family described below. Cancelling or terminating a parent cancels its children and descendants, including queued children. Unresponsive workers are stopped after a short cancellation grace period. Children always use subagent bootstrap scope and leaf-worker tool policy by default, preserving profile/workspace isolation.
 
@@ -1021,3 +1021,11 @@ mix test --include integration apps/coding_agent
 ```
 
 The test suite covers 90+ test files including unit tests for all tools, session management, budget tracking, extensions, WASM integration, and coordinator orchestration. Tests use temporary directories and direct `start_link` (not supervised).
+
+Project-memory capture workers intentionally outlive their submitting sessions
+and share eight VM-wide admission slots. The capacity scenarios wait for earlier
+suite captures to drain before leasing all eight slots; `async: false` alone
+does not isolate background workers. The fixture uses process monitors with a
+31-second total deadline and reports the held slot, process and registry keys
+on failure. It neither kills captures nor changes production capacity or
+admission timeouts.

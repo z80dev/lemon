@@ -437,7 +437,9 @@ boot_one_profile() {
 
   if [ "$profile" = "sim_broadcast_platform" ]; then
     wait_for_health "http://127.0.0.1:$sim_port/readyz" "$profile sim-ui"
-    curl -fsS "http://127.0.0.1:$sim_port/" | grep -q '/assets/app-'
+    # grep without -q reads all input: -q exits on the first match, and the
+    # resulting EPIPE makes curl fail (exit 23) under pipefail.
+    curl -fsS "http://127.0.0.1:$sim_port/" | grep '/assets/app-' >/dev/null
 
     # Unauthenticated operator surfaces: the browser route bounces to the
     # admin login form (RequireAccessToken on_failure: redirect), while the
@@ -463,7 +465,7 @@ boot_one_profile() {
 
     run_release rpc \
       'state = LemonSim.Examples.Werewolf.initial_state(sim_id: "artifact_werewolf", player_count: 5, seed: 7); state = LemonSim.Kernel.State.put_world(state, %{phase: "game_over", status: "game_over", winner: "villagers"}); LemonSim.Kernel.Store.put_state(state)'
-    curl -fsS "http://127.0.0.1:$sim_port/watch/artifact_werewolf" | grep -q 'VILLAGERS WIN'
+    curl -fsS "http://127.0.0.1:$sim_port/watch/artifact_werewolf" | grep 'VILLAGERS WIN' >/dev/null
 
     run_release stop
     # `stop` returns as soon as the shutdown rpc is accepted, but the node
@@ -481,7 +483,7 @@ boot_one_profile() {
     fi
     run_release daemon
     wait_for_health "http://127.0.0.1:$sim_port/readyz" "$profile restarted sim-ui"
-    curl -fsS "http://127.0.0.1:$sim_port/watch/artifact_werewolf" | grep -q 'VILLAGERS WIN'
+    curl -fsS "http://127.0.0.1:$sim_port/watch/artifact_werewolf" | grep 'VILLAGERS WIN' >/dev/null
     run_release stop
 
     echo "ok $profile booted, enforced auth, served assets, and preserved spectator state"

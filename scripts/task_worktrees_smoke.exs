@@ -29,7 +29,8 @@ defmodule LemonScripts.TaskWorktreesSmoke do
     try do
       git = System.find_executable("git") || raise "Git is required"
 
-      for mode <- ["patch", "branch"], scenario <- ["staged", "committed", "empty", "files"] do
+      for mode <- ["patch", "branch"],
+          scenario <- ["staged", "committed", "initialized", "empty", "files"] do
         run_case(git, root, mode, scenario)
         IO.puts("PASS TaskWorktrees #{mode}/#{scenario}")
       end
@@ -68,6 +69,12 @@ defmodule LemonScripts.TaskWorktreesSmoke do
     git!(git, repo, ["config", "diff.ignoreSubmodules", "all"])
     git!(git, repo, ["config", "submodule.vendor.ignore", "all"])
 
+    # Committed `.gitmodules` filters make git add skip a moved submodule HEAD.
+    if scenario == "initialized" do
+      git!(git, repo, ["config", "--file", ".gitmodules", "submodule.vendor.ignore", "all"])
+      commit_all(git, repo, "Ignore local dependency checkout")
+    end
+
     File.write!(Path.join(repo, "tracked.txt"), "parent staged\n")
     git!(git, repo, ["add", "tracked.txt"])
     File.write!(Path.join(repo, "tracked.txt"), "parent unstaged\n")
@@ -83,6 +90,11 @@ defmodule LemonScripts.TaskWorktreesSmoke do
         "committed" ->
           "git update-index --cacheinfo 160000,#{pin},vendor" <>
             " && git -c core.hooksPath=/dev/null commit -qm 'Child gitlink pin'"
+
+        "initialized" ->
+          "git -c protocol.file.allow=always submodule update --init -q -- vendor" <>
+            " && git -C vendor checkout -q --detach #{pin}" <>
+            " && printf 'ordinary child file\\n' > child.txt"
 
         "empty" ->
           nil
@@ -164,6 +176,36 @@ defmodule LemonScripts.TaskWorktreesSmoke do
             "Staged pointer-only change is not recoverable"
           )
         end
+
+      "initialized" ->
+        check!(merge.status == "error", "Submodule checkout was classified #{merge.status}")
+        check!(File.dir?(worktree), "Recoverable task checkout was removed")
+        check!(branch_exists?(git, repo, branch), "Recoverable task branch was removed")
+
+        check!(
+          git!(git, worktree, ["symbolic-ref", "--short", "HEAD"]) == branch,
+          "Task branch checkout changed"
+        )
+
+        check!(
+          git!(git, Path.join(worktree, "vendor"), ["rev-parse", "HEAD"]) == pin,
+          "Task submodule checkout was lost"
+        )
+
+        check!(git!(git, worktree, ["rev-parse", ":vendor"]) == old_pin, "Task index changed")
+
+        check!(
+          git!(git, repo, ["rev-parse", "#{branch}:vendor"]) == old_pin and
+            git!(git, repo, ["ls-tree", "--name-only", branch, "--", "child.txt"]) == "",
+          "Finalization committed part of the task"
+        )
+
+        check!(
+          File.read!(Path.join(worktree, "child.txt")) == "ordinary child file\n",
+          "Task file was lost"
+        )
+
+        check!(!File.exists?(Path.join(repo, "child.txt")), "Partial task reached the parent")
 
       "empty" ->
         check!(merge.status == "no_changes", "Genuinely empty task was not recognized")
