@@ -478,7 +478,7 @@ export class SessionController {
 	}
 
 	#mintKey(): string {
-		return newSessionKey();
+		return newSessionKey(this.#cwd);
 	}
 
 	#notice(text: string, level: NoticeLevel = "info"): void {
