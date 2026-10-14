@@ -23,6 +23,10 @@ defmodule CodingAgent.Tools.Task.Worktree do
       are committed on the task branch, the worktree is removed and the branch
       is kept for review. The branch is never merged into the user's branch.
 
+  Both merge-back modes retain the checkout and branch for manual review when
+  the task changes a submodule (gitlink). Patch application cannot propagate
+  index-only pins, and automatic cleanup must not discard their staged state.
+
   Existing paths and branches are never reused or removed.
   """
 
@@ -115,6 +119,7 @@ defmodule CodingAgent.Tools.Task.Worktree do
          {:ok, git} <- git_executable(),
          {:ok, root} <- repository_root(git, source_cwd),
          :ok <- validate_child_checkout(git, prepared),
+         :ok <- check_gitlinks(git, prepared, prepared.base_commit),
          {:ok, files} <- stage_changes(git, prepared, "HEAD"),
          :ok <- check_abort(signal),
          {:ok, _} <- commit_staged(git, prepared, files, task_id, description),
@@ -442,8 +447,9 @@ defmodule CodingAgent.Tools.Task.Worktree do
   defp stage_changes(git, prepared, against) do
     path = prepared.worktree_path
 
-    with {:ok, _} <- run_git(git, path, ["add", "-A"]),
-         :ok <- check_patch_gitlinks(git, prepared, against),
+    with :ok <- check_gitlinks(git, prepared, against),
+         {:ok, _} <- run_git(git, path, ["add", "-A"]),
+         :ok <- check_gitlinks(git, prepared, against),
          {:ok, output} <-
            run_git(git, path, [
              "diff",
@@ -458,9 +464,9 @@ defmodule CodingAgent.Tools.Task.Worktree do
     end
   end
 
-  # Patch application cannot safely propagate Git index-only submodule pins.
-  # Do not classify ignored gitlink changes as an empty task and delete its branch.
-  defp check_patch_gitlinks(git, %{merge: %{mode: "patch"}} = prepared, against) do
+  # Check before staging too: git add can overwrite an index-only submodule pin.
+  # Both merge modes retain unsupported gitlinks rather than deleting their checkout.
+  defp check_gitlinks(git, prepared, against) do
     with {:ok, raw} <-
            run_git(git, prepared.worktree_path, [
              "diff",
@@ -484,8 +490,6 @@ defmodule CodingAgent.Tools.Task.Worktree do
         else: :ok
     end
   end
-
-  defp check_patch_gitlinks(_git, _prepared, _against), do: :ok
 
   defp finalize_patch(git, root, prepared, _task_id, [], signal) do
     case check_abort(signal) do

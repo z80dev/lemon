@@ -105,8 +105,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   failing closed on conflicts with the patch kept for review. `branch` commits
   the child's work on its kept `lemon/task-<id>` branch without merging it.
   Merge-back rechecks cancellation before mutation and retains detached or
-  switched-branch worktrees for manual review. Patch mode also retains submodule
-  pin changes rather than silently discarding them. Results report `details.merge`.
+  switched-branch worktrees for manual review. Both patch and branch modes retain
+  committed or staged submodule changes, including index-only pins, without
+  overwriting the staged pin or deleting recoverable work. Results report `details.merge`.
 - **Task runtime parity with omp.** `task` accepts a top-level `context`
   shared by every child of a run, batch, or swarm. Persona thinking levels and
   output schemas become child defaults. Invalid structured output is
