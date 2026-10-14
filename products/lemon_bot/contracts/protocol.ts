@@ -98,7 +98,7 @@ export interface ComposerDraftUpdate extends Update { text: string; attachmentId
 export type Reference = { kind: 'bot' | 'routine' | 'skill' | 'connector' | 'group'; id: ID };
 export interface MessageSend extends Mutation { text: string; attachmentIds?: ID[]; replyToEntryId?: ID; mentions?: ID[]; everyone?: boolean; references?: Reference[]; mode?: 'followup' | 'steer' | 'interrupt'; voiceSessionId?: ID }
 export interface Run extends Resource { conversationId: ID; botId: ID; initiatorUserId: ID; clientNonce: string; status: 'reserved' | 'queued' | 'running' | 'awaiting_input' | 'succeeded' | 'failed' | 'cancelled' | 'outcome_unknown'; error: ErrorEnvelope['error'] | null; startedAtMs: TimestampMs | null; completedAtMs: TimestampMs | null; routineRunId: ID | null }
-export interface MessageReceipt { entries: TranscriptEntry[]; runs: Run[]; clientNonce: string; status: 'accepted' | 'queued' | 'outcome_unknown'; delivery: { botId: ID; requestedMode: 'followup' | 'steer' | 'interrupt'; effectiveMode: 'queued' | 'steering' | 'interrupting' | 'started' | 'outcome_unknown'; targetRunId: ID | null; runId: ID }[] }
+export interface MessageReceipt { entries: TranscriptEntry[]; runs: Run[]; clientNonce: string; status: 'accepted' | 'queued' | 'outcome_unknown'; delivery: { botId: ID; requestedMode: 'followup' | 'steer' | 'interrupt'; effectiveMode: 'queued' | 'steering' | 'interrupting' | 'started' | 'rejected' | 'outcome_unknown'; targetRunId: ID | null; runId: ID }[] }
 export interface RunCancel extends Mutation { reason?: string }
 export type Actor = { kind: 'user' | 'bot' | 'system'; id: ID | null; displayName: string };
 export interface Reaction { emoji: string; userIds: ID[] }
