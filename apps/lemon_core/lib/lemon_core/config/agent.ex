@@ -39,6 +39,11 @@ defmodule LemonCore.Config.Agent do
       max_retries = 3
       base_delay_ms = 1000
 
+      [runtime.provider_routing]
+      # Ordered model alternatives, expanded through [model_roles], precede
+      # the existing provider fallback plan. Same-provider models are retained.
+      fallback_models = ["openai:gpt-4o", "@smol"]
+
       [runtime.shell]
       path = "/bin/zsh"
       command_prefix = ""
@@ -225,6 +230,7 @@ defmodule LemonCore.Config.Agent do
         Env.get(:lemon_provider_fallback_providers,
           default: normalize_string_list(routing["fallback_providers"])
         ),
+      fallback_models: normalize_fallback_models(routing["fallback_models"]),
       default_pool:
         Env.get(:lemon_provider_routing_default_pool,
           default: normalize_optional_string(routing["default_pool"])
@@ -329,6 +335,34 @@ defmodule LemonCore.Config.Agent do
   end
 
   defp normalize_string_list(_), do: []
+
+  # Keep the ordered chain bounded, and reject malformed selectors at config
+  # resolution rather than silently changing the operator's fallback order.
+  defp normalize_fallback_models(nil), do: []
+
+  defp normalize_fallback_models(values) when is_list(values) and length(values) <= 64 do
+    Enum.map(values, fn
+      value when is_binary(value) and byte_size(value) <= 512 ->
+        selector = String.trim(value)
+
+        if Regex.match?(~r/^@[^@\s]+$/u, selector) or
+             Regex.match?(~r/^[A-Za-z0-9_-]+:[^\s]+$/u, selector) do
+          selector
+        else
+          raise ArgumentError,
+                "runtime.provider_routing.fallback_models contains an invalid selector"
+        end
+
+      _ ->
+        raise ArgumentError,
+              "runtime.provider_routing.fallback_models must contain model selectors"
+    end)
+  end
+
+  defp normalize_fallback_models(_) do
+    raise ArgumentError,
+          "runtime.provider_routing.fallback_models must be an array of at most 64 selectors"
+  end
 
   # Credential pools carry a provider list plus optional per-provider
   # credential refs:

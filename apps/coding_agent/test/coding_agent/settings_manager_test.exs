@@ -867,7 +867,7 @@ defmodule CodingAgent.SettingsManagerTest do
     end
 
     test "handles all thinking level values" do
-      levels = [:off, :minimal, :low, :medium, :high, :xhigh]
+      levels = [:off, :minimal, :low, :medium, :high, :xhigh, :auto]
 
       for level <- levels do
         config = %LemonConfig{
@@ -890,8 +890,8 @@ defmodule CodingAgent.SettingsManagerTest do
       # Note: LemonCore.Config parser converts string thinking levels to atoms
       # When passing strings directly to from_config, they may remain as strings
       # depending on the actual LemonCore.Config parsing behavior
-      levels = ["off", "minimal", "low", "medium", "high", "xhigh"]
-      expected = [:off, :minimal, :low, :medium, :high, :xhigh]
+      levels = ["off", "minimal", "low", "medium", "high", "xhigh", "auto"]
+      expected = [:off, :minimal, :low, :medium, :high, :xhigh, :auto]
 
       for {level, expected_atom} <- Enum.zip(levels, expected) do
         config = %LemonConfig{

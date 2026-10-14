@@ -158,6 +158,25 @@ defmodule CodingAgent.Session.ModelResolver do
     |> check_role_availability!(settings, selector)
   end
 
+  @doc "Resolves an explicitly configured tiny or smol model for auto effort classification."
+  @spec resolve_auto_thinking_model(SettingsManager.t()) :: LemonAi.Types.Model.t() | nil
+  def resolve_auto_thinking_model(%SettingsManager{} = settings) do
+    Enum.find_value(["tiny", "smol"], fn role ->
+      if Map.has_key?(settings.model_roles, role) do
+        resolve_auto_role(role, settings)
+      end
+    end)
+  end
+
+  defp resolve_auto_role(role, settings) do
+    case ModelRoles.resolve("@" <> role, settings.model_roles, nil) do
+      {:ok, concrete} -> resolve_role_model(concrete, settings)
+      {:error, _} -> nil
+    end
+  rescue
+    ArgumentError -> nil
+  end
+
   defp expand_role!(selector, settings, fallback) do
     case ModelRoles.resolve(selector, settings.model_roles, fallback) do
       {:ok, concrete} -> concrete
@@ -317,15 +336,26 @@ defmodule CodingAgent.Session.ModelResolver do
         []
 
       true ->
-        routing
-        |> routing_candidate_providers(model.id, session_scope)
-        |> lead_with_pinned_provider(session_scope)
-        |> Enum.map(&fallback_model(&1, model.id, settings, routing))
-        |> Enum.reject(&is_nil/1)
-        |> Enum.reject(
-          &(normalize_provider_id(&1.provider) == normalize_provider_id(model.provider))
-        )
-        |> Enum.uniq_by(&normalize_provider_id(&1.provider))
+        configured_models =
+          routing
+          |> Map.get(:fallback_models, [])
+          |> Enum.map(fn selector ->
+            selector
+            |> expand_role!(settings, model)
+            |> resolve_role_model(settings)
+          end)
+          |> Enum.filter(&provider_credentials_ready?(&1.provider, settings, routing))
+
+        provider_models =
+          routing
+          |> routing_candidate_providers(model.id, session_scope)
+          |> Enum.map(&fallback_model(&1, model.id, settings, routing))
+          |> Enum.reject(&is_nil/1)
+
+        (configured_models ++ provider_models)
+        |> Enum.reject(&(model_identity(&1) == model_identity(model)))
+        |> Enum.uniq_by(&model_identity/1)
+        |> lead_with_pinned_model(session_scope)
     end
   end
 
@@ -558,23 +588,19 @@ defmodule CodingAgent.Session.ModelResolver do
     |> Enum.uniq()
   end
 
-  # A committed fallback pin (see LemonAgent.ModelRuntime.SessionPins) leads
-  # the candidate order on later resolutions for the same session. Best-effort:
-  # no pin (or no session identity) leaves the plan order untouched.
-  defp lead_with_pinned_provider(providers, session_scope) do
-    case LemonAgent.ModelRuntime.SessionPins.get(session_scope) do
-      %{provider: pinned} when is_binary(pinned) ->
-        pinned_id = normalize_provider_id(pinned)
+  defp lead_with_pinned_model(models, session_scope) do
+    pin = LemonAgent.ModelRuntime.SessionPins.get(session_scope)
 
-        case Enum.split_with(providers, &(normalize_provider_id(&1) == pinned_id)) do
-          {[], _} -> providers
-          {pinned_matches, others} -> pinned_matches ++ others
-        end
+    {matches, others} =
+      Enum.split_with(
+        models,
+        &LemonAgent.ModelRuntime.SessionPins.matches?(pin, &1.provider, &1.id)
+      )
 
-      _ ->
-        providers
-    end
+    matches ++ others
   end
+
+  defp model_identity(model), do: {normalize_provider_id(model.provider), model.id}
 
   defp has_api_key_config?(cfg) do
     Map.has_key?(cfg, :api_key) or Map.has_key?(cfg, :api_key_secret) or

@@ -1251,6 +1251,26 @@ defmodule LemonAi.ErrorTest do
                {:http_error, 400, %{error: %{code: :context_length_exceeded}}}
              )
     end
+
+    test "detects structured assistant and stream errors without display text" do
+      message = %LemonAi.Types.AssistantMessage{
+        stop_reason: :error,
+        error_message: "Provider rejected input",
+        error_details: %{category: :context_length, status: 400}
+      }
+
+      assert Error.context_length_error?(message)
+      assert Error.context_length_error?({:error, :error, message})
+      assert Error.context_length_error?(%{"category" => "context_length"})
+
+      assert Error.context_length_error?(
+               {:http_error, 400, %{"error" => %{"code" => "context_length_exceeded"}}, []}
+             )
+
+      refute Error.context_length_error?(%{category: :client, message: "Invalid messages"})
+      refute Error.context_length_error?({:http_error, 400, "Bad Request"})
+      refute Error.context_length_error?({:http_error, 413, "Request entity too large"})
+    end
   end
 
   describe "format_rate_limit_info/1 - edge cases" do

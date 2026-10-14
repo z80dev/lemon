@@ -40,7 +40,7 @@ defmodule LemonChannels.Adapters.ModelPolicyShared do
   alias LemonChannels.ModelPolicy
   alias LemonChannels.ModelPolicy.Route
 
-  @thinking_levels ~w(off minimal low medium high xhigh)
+  @thinking_levels ~w(off minimal low medium high xhigh auto)
   @placeholder_model_id "_thinking_only"
 
   @callback channel_name() :: String.t()
@@ -411,6 +411,7 @@ defmodule LemonChannels.Adapters.ModelPolicyShared do
       "medium" -> :medium
       "high" -> :high
       "xhigh" -> :xhigh
+      "auto" -> :auto
     end
   end
 

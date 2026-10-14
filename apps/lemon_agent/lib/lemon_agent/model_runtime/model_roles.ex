@@ -5,8 +5,8 @@ defmodule LemonAgent.ModelRuntime.ModelRoles do
   Role names and mappings remain strings; no atoms or catalog IDs are created.
   Concrete strings and model maps/structs pass through unchanged. Configured
   aliases expand recursively and errors are actionable strings. Unconfigured
-  `@default`, `@smol` and `@slow` use the caller's default/current-model fallback;
-  unknown custom roles and cycles never silently choose a different model.
+  `@default`, `@smol`, `@slow`, `@plan` and `@commit` use the caller's
+  default/current-model fallback; unknown custom roles and cycles never silently choose a different model.
   Catalog lookup and credentials belong to the consuming model resolver.
   """
 
@@ -14,7 +14,7 @@ defmodule LemonAgent.ModelRuntime.ModelRoles do
   @type roles :: %{optional(String.t()) => String.t()}
   @type reason :: String.t()
 
-  @builtins ~w(default smol slow)
+  @builtins ~w(default smol slow plan commit)
 
   @doc "Expands a selector into a concrete spec/model, or returns an actionable error."
   @spec resolve(selector(), roles(), selector() | nil) ::

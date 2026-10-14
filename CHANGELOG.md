@@ -82,9 +82,21 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   replaces a successful result's content/details. New `on_session_start` and
   `on_session_shutdown` hooks observe session lifecycle. See
   [Extensions: Intercepting tool calls](docs/extensions.md#intercepting-tool-calls).
+- Provider resilience now supports ordered model fallback chains (including
+  same-provider alternatives), one OAuth refresh on HTTP 401 before credential
+  rotation, retry-after-aware credential cooldowns, and model-aware session
+  pinning. Fatal requests and context overflow do not walk fallback chains;
+  no automatic recovery replays committed text, thinking, or tool-call output.
+- Opt-in `thinking_level = "auto"` classifies each user prompt with an explicitly
+  configured tiny/smol model and maps its effort to the active provider's
+  supported levels. `@plan` and `@commit` join the built-in model role selectors.
 
 ### Fixed
 
+- Generic OAuth provider selection now keeps the same stored account through
+  initial resolution and 401 refresh, honoring `oauth_secret` without falling
+  back to ambient or inline keys when that login is missing. Codex refresh
+  failures no longer log raw provider error bodies.
 - Context parity hardening: overlapping secret sources are redacted without
   exposing credential fragments; malformed secret YAML does not echo values
   into logs. Private plan tools restore placeholders and enforce interception

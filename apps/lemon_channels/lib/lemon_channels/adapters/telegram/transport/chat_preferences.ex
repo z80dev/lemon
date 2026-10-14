@@ -13,7 +13,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ChatPreferences do
   alias LemonCore.ChatScope
   alias LemonCore.ProjectBindingStore
 
-  @thinking_levels ~w(off minimal low medium high xhigh)
+  @thinking_levels ~w(off minimal low medium high xhigh auto)
 
   @type callbacks :: %{
           extract_chat_ids: (map() -> {integer() | nil, integer() | nil}),
@@ -563,7 +563,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ChatPreferences do
 
   defp thinking_scope_label(_), do: "this chat"
 
-  defp thinking_usage, do: "Usage: /thinking [off|minimal|low|medium|high|xhigh|clear]"
+  defp thinking_usage, do: "Usage: /thinking [off|minimal|low|medium|high|xhigh|auto|clear]"
 
   defp render_cwd_status(%ChatScope{} = scope) do
     cwd = BindingResolver.resolve_cwd(scope)

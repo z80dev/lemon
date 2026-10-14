@@ -38,8 +38,23 @@ defmodule LemonAgent.Loop.Streaming do
       end
 
     case result do
-      {:failed, message, failed_context, added} ->
-        case budget_retry_delay(message, config, retries_done) do
+      {:failed, message, failed_context, added, committed} ->
+        committed = committed or committed_content?(message)
+        details = message.error_details || LemonAi.Error.to_error_details(error_text(message))
+        message = %{message | error_details: Map.put(details, :output_committed, committed)}
+
+        decision =
+          case Loop.budget_check(config) do
+            nil ->
+              if committed,
+                do: :stop,
+                else: retry_delay(message, config, retries_done)
+
+            details ->
+              {:budget_stop, details}
+          end
+
+        case decision do
           {:ok, delay_ms} ->
             retry_attempt(
               context,
@@ -164,25 +179,8 @@ defmodule LemonAgent.Loop.Streaming do
   defp error_text(%AssistantMessage{error_message: message}), do: message
   defp error_text(error), do: error
 
-  defp retry_after_ms(%{error_details: %{rate_limit_info: %{retry_after: delay}}})
-       when is_integer(delay), do: delay
-
-  defp retry_after_ms(%{retry_after_ms: delay}) when is_integer(delay), do: delay
-  defp retry_after_ms(%{rate_limit_info: %{retry_after: delay}}) when is_integer(delay), do: delay
-
-  defp retry_after_ms({:http_error, _status, _body, headers}),
-    do: LemonAi.Providers.RetryHelper.retry_after_ms(headers)
-
-  defp retry_after_ms({:http_error, status, body}),
-    do: LemonAi.Error.parse_http_error(status, body) |> retry_after_ms()
-
-  defp retry_after_ms(%{error_message: message}) when is_binary(message),
-    do: retry_after_ms(message)
-
-  defp retry_after_ms(message) when is_binary(message),
-    do: LemonAi.Providers.RetryHelper.extract_retry_delay_ms(message)
-
-  defp retry_after_ms(_error), do: nil
+  defp retry_after_ms(error),
+    do: LemonAi.Providers.RetryHelper.error_retry_after_ms(error)
 
   defp wait_for_retry(signal, deadline) do
     cond do
@@ -219,6 +217,8 @@ defmodule LemonAgent.Loop.Streaming do
       {abort_message, context} = finalize_message(abort_message, context, false, stream)
       {:ok, abort_message, context}
     else
+      config = Loop.refresh_model(config)
+
       # NOTE: the redirect flag is deliberately NOT cleared here. The loop
       # clears it immediately BEFORE each steering drain (see
       # LemonAgent.Loop / LemonAgent.Loop.ToolCalls): a redirect cast that
@@ -277,8 +277,9 @@ defmodule LemonAgent.Loop.Streaming do
             Loop.record_budget_usage(config, reason, stream)
 
             case reason do
-              %AssistantMessage{} = message when not is_nil(config.budget) ->
-                {:failed, %{message | stop_reason: :error}, context, false}
+              %AssistantMessage{} = message ->
+                {:failed, %{message | stop_reason: :error}, context, false,
+                 committed_content?(message)}
 
               _ ->
                 {:error, reason}
@@ -326,8 +327,8 @@ defmodule LemonAgent.Loop.Streaming do
     result =
       Enum.reduce_while(
         ai_events(response_stream, signal),
-        {nil, context, false},
-        fn event, {partial, ctx, added} ->
+        {nil, context, false, false},
+        fn event, {partial, ctx, added, committed} ->
           cond do
             aborted?(signal) ->
               LemonAi.EventStream.cancel(response_stream, :aborted)
@@ -353,13 +354,14 @@ defmodule LemonAgent.Loop.Streaming do
             true ->
               case process_stream_event(event, partial, ctx, added, stream, config) do
                 {:continue, new_partial, new_ctx, new_added} ->
-                  {:cont, {new_partial, new_ctx, new_added}}
+                  committed = committed or output_event?(event)
+                  {:cont, {new_partial, new_ctx, new_added, committed}}
 
                 {:done, final_message, final_ctx} ->
                   {:halt, {:done, final_message, final_ctx}}
 
                 {:failed, message, failed_context, failed_added} ->
-                  {:halt, {:failed, message, failed_context, failed_added}}
+                  {:halt, {:failed, message, failed_context, failed_added, committed}}
               end
           end
         end
@@ -377,18 +379,18 @@ defmodule LemonAgent.Loop.Streaming do
 
         {:ok, final_message, ctx}
 
-      {:failed, message, ctx, added} ->
+      {:failed, message, ctx, added, committed} ->
         _ = LemonAi.PromptDiagnostics.record_llm_call(config.model, llm_context, options, message)
-        {:failed, message, ctx, added}
+        {:failed, message, ctx, added, committed}
 
-      {partial, ctx, added} when partial != nil ->
+      {partial, ctx, added, committed} when partial != nil ->
         # Stream ended without done/error event - finalize with partial
         partial = normalize_terminal_message(partial)
         Loop.record_budget_usage(config, partial, stream)
 
         result =
           if partial.stop_reason == :error do
-            {:failed, partial, ctx, added}
+            {:failed, partial, ctx, added, committed}
           else
             {final_message, final_ctx} = finalize_message(partial, ctx, added, stream)
             {:ok, final_message, final_ctx}
@@ -409,11 +411,10 @@ defmodule LemonAgent.Loop.Streaming do
     end
   end
 
-  defp process_stream_event({:start, partial}, _partial, context, _added, stream, _config) do
-    # Add partial to context
-    context = %{context | messages: context.messages ++ [partial]}
-    EventStream.push(stream, {:message_start, copy_message(partial)})
-    {:continue, partial, context, true}
+  defp process_stream_event({:start, partial}, _partial, context, added, _stream, _config) do
+    # Metadata alone is not output. Defer the transcript start until an update
+    # or final message so a discarded pre-output attempt leaves no dangling start.
+    {:continue, partial, context, added}
   end
 
   defp process_stream_event(event, partial, context, added, stream, _config)
@@ -428,15 +429,19 @@ defmodule LemonAgent.Loop.Streaming do
               :tool_call_delta,
               :tool_call_end
             ] do
-    if partial != nil do
-      # Get the updated partial from the event
-      updated_partial = get_partial_from_event(event)
+    updated_partial = get_partial_from_event(event) || partial
 
-      # Update context with new partial
-      context = update_last_message(context, updated_partial)
+    if updated_partial != nil do
+      context =
+        if added do
+          update_last_message(context, updated_partial)
+        else
+          EventStream.push(stream, {:message_start, copy_message(updated_partial)})
+          %{context | messages: context.messages ++ [updated_partial]}
+        end
 
       EventStream.push(stream, {:message_update, copy_message(updated_partial), event})
-      {:continue, updated_partial, context, added}
+      {:continue, updated_partial, context, true}
     else
       {:continue, partial, context, added}
     end
@@ -486,6 +491,32 @@ defmodule LemonAgent.Loop.Streaming do
   defp process_stream_event(_event, partial, context, added, _stream, _config) do
     {:continue, partial, context, added}
   end
+
+  # Once an update is emitted, later empty partials/terminals cannot uncommit it.
+  defp output_event?(event) do
+    elem(event, 0) in [
+      :text_start,
+      :text_delta,
+      :text_end,
+      :thinking_start,
+      :thinking_delta,
+      :thinking_end,
+      :tool_call_start,
+      :tool_call_delta,
+      :tool_call_end
+    ]
+  end
+
+  defp committed_content?(%AssistantMessage{content: content}) when is_list(content) do
+    Enum.any?(content, fn
+      %{type: :text, text: text} -> is_binary(text) and text != ""
+      %{type: :thinking, thinking: thinking} -> is_binary(thinking) and thinking != ""
+      %{type: :tool_call} -> true
+      _ -> false
+    end)
+  end
+
+  defp committed_content?(_), do: false
 
   # Extract the partial message from stream events
   defp get_partial_from_event({_type, _idx, partial}) when is_struct(partial, AssistantMessage),

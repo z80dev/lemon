@@ -55,7 +55,7 @@ keep_recent_tokens = 20000
 
 [runtime.retry]
 # Session-level retry of transient provider failures (429, 5xx, overloaded,
-# network) that happen before any output. Exponential backoff with jitter from
+# network) that happen before any output. Exponential backoff from
 # base_delay_ms; a retry-after hint from the provider replaces the backoff.
 enabled = true
 max_retries = 3
@@ -270,25 +270,32 @@ model = "@default"
 default = "openai:gpt-4o"
 smol = "openai:gpt-4o-mini"
 slow = "@review"
+plan = "@slow"
+commit = "@smol"
 review = "anthropic:claude-sonnet-4-20250514"
 task = "@smol"          # Optional: omitted task.model otherwise inherits its parent
 compaction = "@smol"    # Optional: takes precedence over configured smol
 ```
 
 Native session model overrides and explicit `task.model` accept `@default`,
-`@smol`, `@slow`, and any configured custom role. Aliases expand recursively.
+`@smol`, `@slow`, `@plan`, `@commit`, and any configured custom role. Aliases expand recursively.
 Concrete model specs retain their existing behavior; bare `smol` is still a model
 ID, not the `@smol` role. Role names remain strings and are never converted into
 atoms. Empty/non-string mappings, unknown custom aliases, and alias cycles
 produce configuration/model-resolution errors rather than silently ignoring an
 override. A configured role still needs to resolve to a valid concrete model.
 
-Without a mapping, the three built-ins use the configured default for a native
+Without a mapping, these built-ins use the configured default for a native
 session and the current parent model for a task. They do not select a new provider
 or a hard-coded small/slow model. A default of `@default` requires a role mapping
 that ultimately reaches a concrete model; it cannot fall back to itself.
 Omitting `task.model` preserves parent inheritance unless `model_roles.task` is
 configured; an explicit task model takes precedence.
+
+Entering plan mode automatically selects `model_roles.plan` only when configured.
+Exiting or approving a plan restores the execution model recorded on entry,
+including after durable session resume. `@commit` is available to explicit model
+selectors and delegated tasks; it does not automatically invoke a commit tool.
 
 Compaction and abandoned-branch summaries choose `model_roles.compaction` first,
 then `model_roles.smol` **only if configured**, otherwise the active session model.
@@ -296,6 +303,25 @@ An explicit compaction `:model` option takes precedence. Summary credentials and
 provider stream options are resolved for that selected model together, including
 background compaction, without changing the main session's model. Explicit
 summary credential/stream-option overrides are retained.
+
+### Automatic Thinking
+
+Set `[defaults] thinking_level = "auto"` to classify each user prompt before its
+model turn. Configure `model_roles.tiny` or `model_roles.smol` explicitly for the
+classifier; `tiny` takes precedence. The classifier receives bounded latest-user
+text with no tools, and selects `low`, `medium`, `high`, or `xhigh`. Its effort is
+mapped to the active model's declared supported levels, so `auto` is never sent
+to a provider. Models without reasoning support receive no reasoning option.
+
+Classification runs in the supervised agent task, not the session server, with a
+five-second deadline. A missing classifier, failure, timeout, or invalid answer
+uses supported `medium` effort and continues the turn. An explicit `ultrathink`
+request selects the active model's highest supported effort without a classifier
+call. The configured `auto` selector persists across turns and session resumes;
+the internal classifier response is not appended to the conversation.
+Classifier calls are separate maintenance usage, not part of the main agent-turn
+budget ledger. An already-exhausted main-response budget prevents classification.
+
 
 
 ### Named Execution Nodes
@@ -972,6 +998,7 @@ Provider route previews are controlled by `runtime.provider_routing`:
 [runtime.provider_routing]
 enabled = true
 fallback_providers = ["zai", "anthropic"]
+fallback_models = ["openai:gpt-4o-mini", "@slow"]
 default_pool = "burst"
 default_profile = "ops"
 require_credentials = true
@@ -1003,14 +1030,43 @@ pool's starting provider through `LemonAgent.ModelRuntime.ProviderPoolRotator`,
 a supervised BEAM process. Explicit user model specs are never rewritten at
 resolution time.
 
-The supervised coding-agent loop also wraps streams — default-model and
-explicit-model sessions alike — with the same fallback ordering (for an
-explicit model, candidates are other credential-ready providers hosting the
-same model id; the wrapper is a no-op when there are none). If a provider returns a terminal stream error before useful
-assistant content or tool calls are emitted, Lemon retries the same turn against
-the next credential-ready fallback provider with the same model id. Once visible
-content or a tool call has started, the error is surfaced instead of replayed so
-the transcript cannot duplicate partial output.
+The supervised coding-agent loop also wraps streams for default-model and
+explicit-model sessions. `fallback_models` selects an ordered chain of concrete
+`provider:model` selectors or `@role` aliases; alternatives on the same provider
+are allowed. Existing `fallback_providers` routes remain useful when providers
+host the same model id. Each candidate resolves its own provider options and
+credentials; credentials from one provider are never reused for another.
+
+Before output is committed, provider failures can move to the next model and
+rate/usage limits can rotate through configured credential-pool entries.
+Authentication failures refresh the same OAuth credential once on HTTP 401, then
+rotate if refresh fails or the refreshed token is rejected. Static keys and
+environment references cannot refresh. Provider retry hints are retained for
+credential cooldowns. The model/credential that commits is pinned for subsequent
+turns in that session, preserving provider caches.
+
+For generic OAuth providers, `auth_source = "oauth"` makes the selected stored
+login authoritative for both initial resolution and 401 refresh:
+`oauth_secret`, then `api_key_secret`, then the provider's default secret name.
+A missing selected login fails closed rather than using an ambient environment
+key, inline key, or another account's default login. Other auth modes keep their
+existing environment-first API-key precedence.
+
+Malformed requests (for example HTTP 400) are terminal, including failures before
+a stream starts. Context overflow reaches the existing once-per-turn compaction
+recovery instead of replaying an unchanged prompt on another provider.
+
+No automatic retry, credential rotation, or model fallback occurs after text,
+thinking, or a tool-call event is committed, including whitespace text and
+content carried only by a terminal message. The failure is surfaced with its
+partial output, without executing unfinished tool calls. Caller cancellation
+stays cancellation. This rule also applies to `[runtime.retry]` transient retries.
+
+For a manual source-checkout smoke run without live credentials, run
+`MIX_ENV=test mix run --no-start scripts/provider_fallback_smoke.exs`. It starts
+an isolated native session and loopback fixture endpoint, rejects the primary
+model with HTTP 503, and verifies the configured alternate model answers and
+the session is persisted. The smoke script is not part of the CI test lane.
 
 Google Gemini CLI onboarding (`lemon model --provider gemini`, or
 `./bin/lemon model --provider gemini` from a checkout) resolves OAuth

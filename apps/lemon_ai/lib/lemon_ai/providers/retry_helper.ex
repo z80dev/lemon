@@ -48,6 +48,21 @@ defmodule LemonAi.Providers.RetryHelper do
     }
   end
 
+  @doc """
+  The provider policy with per-request overrides from `StreamOptions`.
+  Completion retries set `max_attempts: 1` here so HTTP and completion loops
+  share one bounded attempt budget instead of multiplying each other.
+  """
+  @spec policy(LemonAi.Types.StreamOptions.t()) :: policy()
+  def policy(%{provider_retry: overrides}) when is_map(overrides) do
+    Enum.reduce(policy(), %{}, fn {key, default}, acc ->
+      value = Map.get(overrides, key, default)
+      Map.put(acc, key, if(is_integer(value) and value > 0, do: value, else: default))
+    end)
+  end
+
+  def policy(_options), do: policy()
+
   defp positive(config, key, default) do
     case Keyword.get(config, key, default) do
       value when is_integer(value) and value > 0 -> value
@@ -119,6 +134,44 @@ defmodule LemonAi.Providers.RetryHelper do
       parse_seconds_delay(Map.get(headers, "x-ratelimit-reset-after")) ||
       anthropic_rate_limit_reset_ms(headers, now)
   end
+
+  @doc """
+  Retry timing from a failed completion or transport result.
+
+  Structured error details take precedence over the message's explicit
+  `retry_after_ms`, then top-level rate-limit metadata, response headers and
+  finally error text. Invalid or missing values fall through. Header priority
+  remains the same as `retry_after_ms/2`; timing never changes retry eligibility.
+  """
+  @spec error_retry_after_ms(term()) :: non_neg_integer() | nil
+  def error_retry_after_ms({:error, reason}), do: error_retry_after_ms(reason)
+
+  def error_retry_after_ms({:http_error, status, body, headers}) do
+    retry_after_ms(headers) ||
+      error_retry_after_ms(LemonAi.Error.parse_http_error(status, body, headers))
+  end
+
+  def error_retry_after_ms({:http_error, status, body}),
+    do: error_retry_after_ms(LemonAi.Error.parse_http_error(status, body))
+
+  def error_retry_after_ms(error) when is_map(error) do
+    error_retry_after_ms(field(error, :error_details)) ||
+      valid_delay(field(error, :retry_after_ms)) ||
+      rate_limit_delay(field(error, :rate_limit_info)) ||
+      retry_after_ms(field(error, :headers)) ||
+      error_retry_after_ms(field(error, :error_message)) ||
+      error_retry_after_ms(field(error, :provider_message)) ||
+      error_retry_after_ms(field(error, :message))
+  end
+
+  def error_retry_after_ms(error) when is_binary(error), do: extract_retry_delay_ms(error)
+  def error_retry_after_ms(_error), do: nil
+
+  defp field(map, key), do: Map.get(map, key, Map.get(map, Atom.to_string(key)))
+  defp valid_delay(delay) when is_integer(delay) and delay >= 0, do: delay
+  defp valid_delay(_), do: nil
+  defp rate_limit_delay(info) when is_map(info), do: valid_delay(field(info, :retry_after))
+  defp rate_limit_delay(_), do: nil
 
   defp parse_retry_after(value, now) when is_binary(value) do
     parse_seconds_delay(value) || parse_http_date_delay(value, now)

@@ -96,8 +96,14 @@ defmodule LemonAi do
   @doc """
   Get a complete response from an LLM (non-streaming).
 
-  This is a convenience wrapper around `stream/3` that collects
-  all events and returns the final message.
+  Collects `stream/3` privately and retries classified transient failures with
+  `LemonAi.OneshotRetry`. The default is three total attempts, not three sets
+  of provider HTTP retries. `stream/3` itself never gains completion retries.
+
+  Pass `:retry` as a keyword list or map alongside stream options to override
+  `:max_attempts`, `:base_delay_ms`, `:max_delay_ms`, `:sleep_fun` or `:cancelled?`.
+  Set `retry: [max_attempts: 1]` to surface the first failure. Server hints
+  longer than the allowed wait surface unchanged instead of retrying early.
 
   ## Examples
 
@@ -107,14 +113,38 @@ defmodule LemonAi do
   @spec complete(Model.t(), Context.t(), StreamOptions.t() | map()) ::
           {:ok, AssistantMessage.t()} | {:error, term()}
   def complete(%Model{} = model, %Context{} = context, opts \\ %{}) do
-    with {:ok, stream} <- stream(model, context, opts) do
-      case EventStream.result(stream) do
-        {:ok, %AssistantMessage{} = msg} = ok ->
-          _ = LemonAi.PromptDiagnostics.record_complete_call(model, context, opts, msg)
-          ok
+    retry_options =
+      case opts do
+        %StreamOptions{} -> []
+        options when is_list(options) -> Keyword.get(options, :retry, [])
+        options when is_map(options) -> Map.get(options, :retry, [])
+      end
 
-        other ->
-          other
+    options = normalize_options(opts)
+    provider_retry = Map.put(options.provider_retry || %{}, :max_attempts, 1)
+    options = %{options | provider_retry: provider_retry}
+
+    LemonAi.OneshotRetry.run(
+      fn _attempt -> complete_once(model, context, options) end,
+      retry_options
+    )
+  end
+
+  defp complete_once(model, context, opts) do
+    with {:ok, stream} <- stream(model, context, opts) do
+      try do
+        case EventStream.result(stream) do
+          {:ok, %AssistantMessage{} = msg} = ok ->
+            _ = LemonAi.PromptDiagnostics.record_complete_call(model, context, opts, msg)
+            ok
+
+          other ->
+            other
+        end
+      after
+        # No consumer sees this private handle. Release its bounded queue and
+        # attached worker before a retry, even when the caller is long-lived.
+        EventStream.cancel(stream, :completion_collected)
       end
     end
   end

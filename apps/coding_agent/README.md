@@ -14,7 +14,7 @@ CodingAgent is an umbrella app within the Lemon AI assistant platform. It turns 
 - **Subagent orchestration** -- Concurrent subagent sessions via a Coordinator with timeout management
 - **Named execution nodes** -- Native delegated sessions can run on an authenticated destination selected by name, with destination-local credentials and working-directory defaults
 - **Workspace and prompt composition** -- Layered system prompt from bootstrap files, skills, commands, and project-local CLAUDE.md/AGENTS.md
-- **Provider routing** -- Default model selection can fall back through configured fallback providers, routing profiles, and credential pools before starting the supervised agent loop, and default-model streams retry another ready provider when the first provider fails before useful output starts; explicit model specs stay fixed.
+- **Provider routing** -- Default model resolution can select a ready configured fallback before starting the agent loop; explicit model specs are not rewritten at resolution. Both default and explicit sessions can then walk configured provider/model and credential candidates before output commits, including a single refresh of the selected OAuth account on 401. Committed terminal text, thinking, or tool content prevents replay even when returned as a direct provider error.
 
 ## Architecture
 

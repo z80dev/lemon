@@ -621,7 +621,7 @@ defmodule LemonControlPlane.ACP do
         "thought_level",
         Map.get(session, :thinking, "off"),
         Enum.map(
-          ~w(off minimal low medium high xhigh),
+          ~w(off minimal low medium high xhigh auto),
           &%{"value" => &1, "name" => String.capitalize(&1)}
         )
       ),
@@ -685,7 +685,7 @@ defmodule LemonControlPlane.ACP do
     end
   end
 
-  defp config_value("thinking", value) when value in ~w(off minimal low medium high xhigh),
+  defp config_value("thinking", value) when value in ~w(off minimal low medium high xhigh auto),
     do: {:ok, :thinking, value}
 
   defp config_value("approval", value) when value in ["ask", "never", "auto"],
