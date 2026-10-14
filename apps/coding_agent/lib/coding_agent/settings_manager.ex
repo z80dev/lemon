@@ -17,6 +17,15 @@ defmodule CodingAgent.SettingsManager do
           base_url: String.t() | nil
         }
 
+  @typedoc "Native task subagent settings from `[runtime.task]`."
+  @type task_settings :: %{
+          max_depth: integer(),
+          max_runtime_ms: non_neg_integer(),
+          worktree_merge: String.t(),
+          disabled_agents: [String.t()],
+          agent_models: %{optional(String.t()) => String.t()}
+        }
+
   @type t :: %__MODULE__{
           # Model settings
           default_model: model_config() | String.t() | nil,
@@ -61,6 +70,9 @@ defmodule CodingAgent.SettingsManager do
           # Tool settings
           auto_resize_images: boolean(),
           tools: map(),
+
+          # Native task subagent settings ([runtime.task])
+          task: task_settings(),
 
           # Extension settings
           extension_paths: [String.t()],
@@ -115,7 +127,16 @@ defmodule CodingAgent.SettingsManager do
     secret_obfuscation_enabled: false,
 
     # Display settings
-    theme: "default"
+    theme: "default",
+
+    # Native task subagent settings
+    task: %{
+      max_depth: 2,
+      max_runtime_ms: 0,
+      worktree_merge: "none",
+      disabled_agents: [],
+      agent_models: %{}
+    }
   ]
 
   @doc """
@@ -179,9 +200,52 @@ defmodule CodingAgent.SettingsManager do
       extension_auto_load_default_paths: Map.get(extensions, :auto_load_default_paths, false),
       secret_obfuscation_enabled:
         Map.get(Map.get(agent, :secret_obfuscation) || %{}, :enabled, false) == true,
-      theme: Map.get(agent, :theme, "default")
+      theme: Map.get(agent, :theme, "default"),
+      task: task_settings(Map.get(agent, :task))
     }
   end
+
+  # Invalid values are reported by `LemonCore.Config.Validator`; runtime
+  # consumers keep the documented defaults instead of crashing.
+  defp task_settings(task) when is_map(task) do
+    defaults = %__MODULE__{}.task
+
+    %{
+      max_depth:
+        case Map.get(task, :max_depth) do
+          depth when is_integer(depth) and depth >= -1 -> depth
+          _ -> defaults.max_depth
+        end,
+      max_runtime_ms:
+        case Map.get(task, :max_runtime_ms) do
+          ms when is_integer(ms) and ms >= 0 -> ms
+          _ -> defaults.max_runtime_ms
+        end,
+      worktree_merge:
+        case Map.get(task, :worktree_merge) do
+          mode when mode in ["none", "patch", "branch"] -> mode
+          _ -> defaults.worktree_merge
+        end,
+      disabled_agents:
+        case Map.get(task, :disabled_agents) do
+          ids when is_list(ids) -> Enum.filter(ids, &is_binary/1)
+          _ -> defaults.disabled_agents
+        end,
+      agent_models:
+        case Map.get(task, :agent_models) do
+          models when is_map(models) ->
+            for {id, model} <- models,
+                is_binary(id) and is_binary(model) and String.trim(model) != "",
+                into: %{},
+                do: {id, String.trim(model)}
+
+          _ ->
+            defaults.agent_models
+        end
+    }
+  end
+
+  defp task_settings(_task), do: %__MODULE__{}.task
 
   @doc """
   Get compaction settings as a map.

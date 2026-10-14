@@ -55,6 +55,14 @@ defmodule LemonCore.Config.Agent do
       # reversible placeholders (see docs/security/secret-obfuscation.md).
       enabled = false
 
+      # Native `task` subagents. Unset keys keep these defaults.
+      [runtime.task]
+      max_depth = 2                 # -1 unlimited; 0 forbids the main session from spawning
+      max_runtime_ms = 0            # 0 disables the per-child wall-clock limit
+      worktree_merge = "none"       # none | patch | branch, used by worktree = true tasks
+      disabled_agents = []          # persona IDs hidden from the task tool
+      agent_models = {}             # persona ID => model or @role override
+
   Environment variables override file configuration:
   - `LEMON_DEFAULT_PROVIDER`
   - `LEMON_DEFAULT_MODEL`
@@ -81,7 +89,8 @@ defmodule LemonCore.Config.Agent do
     :theme,
     :budget_defaults,
     :provider_routing,
-    :secret_obfuscation
+    :secret_obfuscation,
+    :task
   ]
 
   @type t :: %__MODULE__{
@@ -113,7 +122,14 @@ defmodule LemonCore.Config.Agent do
           theme: String.t(),
           budget_defaults: %{max_children: integer()},
           provider_routing: map(),
-          secret_obfuscation: %{enabled: boolean()}
+          secret_obfuscation: %{enabled: boolean()},
+          task: %{
+            max_depth: integer(),
+            max_runtime_ms: non_neg_integer(),
+            worktree_merge: String.t(),
+            disabled_agents: [String.t()],
+            agent_models: %{optional(String.t()) => String.t()}
+          }
         }
 
   @doc """
@@ -138,7 +154,8 @@ defmodule LemonCore.Config.Agent do
       theme: resolve_theme(agent_settings),
       budget_defaults: resolve_budget_defaults(agent_settings),
       provider_routing: resolve_provider_routing(agent_settings),
-      secret_obfuscation: resolve_secret_obfuscation(agent_settings)
+      secret_obfuscation: resolve_secret_obfuscation(agent_settings),
+      task: resolve_task(agent_settings)
     }
   end
 
@@ -323,6 +340,20 @@ defmodule LemonCore.Config.Agent do
 
     %{
       max_children: Env.get(:lemon_budget_max_children, default: budget["max_children"] || 5)
+    }
+  end
+
+  # Values are passed through for `LemonCore.Config.Validator` to report;
+  # `CodingAgent.SettingsManager` falls back to defaults for invalid types.
+  defp resolve_task(settings) do
+    task = ensure_map(settings["task"])
+
+    %{
+      max_depth: Map.get(task, "max_depth", 2),
+      max_runtime_ms: Map.get(task, "max_runtime_ms", 0),
+      worktree_merge: Map.get(task, "worktree_merge", "none"),
+      disabled_agents: Map.get(task, "disabled_agents", []),
+      agent_models: Map.get(task, "agent_models", %{})
     }
   end
 

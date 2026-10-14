@@ -274,6 +274,7 @@ defmodule LemonCore.Config.Validator do
       Map.get(agent, :default_thinking_level),
       "agent.default_thinking_level"
     )
+    |> validate_task_config(Map.get(agent, :task))
     |> validate_compaction_thresholds(Map.get(agent, :compaction))
   end
 
@@ -293,6 +294,37 @@ defmodule LemonCore.Config.Validator do
   end
 
   defp validate_compaction_thresholds(errors, _compaction), do: errors
+
+  defp validate_task_config(errors, nil), do: errors
+
+  defp validate_task_config(errors, task) when is_map(task) do
+    max_depth = Map.get(task, :max_depth)
+    max_runtime_ms = Map.get(task, :max_runtime_ms)
+    merge = Map.get(task, :worktree_merge)
+    disabled = Map.get(task, :disabled_agents)
+    models = Map.get(task, :agent_models)
+
+    [
+      {is_integer(max_depth) and max_depth >= -1,
+       "runtime.task.max_depth: must be an integer >= -1"},
+      {is_integer(max_runtime_ms) and max_runtime_ms >= 0,
+       "runtime.task.max_runtime_ms: must be a nonnegative integer"},
+      {merge in ["none", "patch", "branch"],
+       "runtime.task.worktree_merge: must be one of none, patch, branch"},
+      {is_list(disabled) and Enum.all?(disabled, &(is_binary(&1) and &1 != "")),
+       "runtime.task.disabled_agents: must be a list of persona IDs"},
+      {is_map(models) and
+         Enum.all?(models, fn {id, model} ->
+           is_binary(id) and is_binary(model) and String.trim(model) != ""
+         end), "runtime.task.agent_models: must map persona IDs to model strings"}
+    ]
+    |> Enum.reduce(errors, fn
+      {true, _message}, acc -> acc
+      {false, message}, acc -> [message | acc]
+    end)
+  end
+
+  defp validate_task_config(errors, _task), do: ["runtime.task: must be a table" | errors]
 
   @doc """
   Validates gateway configuration.

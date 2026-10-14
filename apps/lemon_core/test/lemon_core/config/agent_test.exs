@@ -102,6 +102,31 @@ defmodule LemonCore.Config.AgentTest do
     end
   end
 
+  describe "task configuration" do
+    test "reads [runtime.task]" do
+      config =
+        Agent.resolve(%{
+          "runtime" => %{
+            "task" => %{
+              "max_depth" => 1,
+              "max_runtime_ms" => 60_000,
+              "worktree_merge" => "patch",
+              "disabled_agents" => ["reviewer"],
+              "agent_models" => %{"scout" => "@smol"}
+            }
+          }
+        })
+
+      assert config.task == %{
+               max_depth: 1,
+               max_runtime_ms: 60_000,
+               worktree_merge: "patch",
+               disabled_agents: ["reviewer"],
+               agent_models: %{"scout" => "@smol"}
+             }
+    end
+  end
+
   describe "provider routing configuration" do
     test "uses provider routing defaults" do
       config = Agent.resolve(%{})
