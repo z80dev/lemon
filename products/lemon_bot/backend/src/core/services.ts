@@ -61,6 +61,7 @@ export interface RuntimeService {
   submit(principal: Principal, conversation: P.Conversation, bot: P.Bot, message: P.MessageSend, context?: RequestContext): Promise<{ run: P.Run; delivery: P.MessageReceipt['delivery'][number] }>;
   send(principal: Principal, conversationId: string, message: P.MessageSend, context?: RequestContext): Promise<P.MessageReceipt>;
   cancel(principal: Principal, runId: string, reason?: string): Promise<P.Run>;
+  revokeConnectorInvocations(actor: Principal, botId: string, connectorId: string): Promise<{ runIds: string[]; status: 'cancelled' | 'outcome_unknown' }>;
   reconcile(): Promise<void>;
   sessionKey(conversation: P.Conversation, bot: P.Bot): string;
 }
@@ -78,7 +79,7 @@ export interface GateService {
 export interface IntegrationServices {
   admission(principal: Principal, botId: string, routineId?: string): Promise<void>;
   effectivePolicy(principal: Principal, botId?: string): Promise<P.EffectivePolicy>;
-  connectorConfig(principal: Principal, botId: string, conversationId?: string, operationId?: string): Promise<{ name: string; url: string; headers: Record<string, string>; enabledTools?: string[] }[]>;
+  connectorConfig(principal: Principal, botId: string, conversationId?: string, operationId?: string): Promise<{ name: string; url: string; headers: Record<string, string>; enabledTools?: string[]; allowedOrigins?: string[]; approvedPrivateOrigins?: string[] }[]>;
   sendApprovedDraft(principal: Principal, draft: P.Draft): Promise<{ providerMessageId: string | null; runId: string | null }>;
   emitProviderNotifications(notification: P.Notification): Promise<void>;
   channelIngress(input: { principal: Principal; botId: string; channelBindingId: string; externalThreadId: string; text: string; attachmentIds?: string[]; clientNonce: string }): Promise<P.MessageReceipt>;
@@ -93,6 +94,12 @@ export interface IntegrationServices {
   authorizeExportAttachment?(principal: Principal, attachmentId: string): void;
   assertChannelHandoff?(principal: Principal, source: P.Conversation, target: P.Bot, returnConversationId: string): void;
   returnChannelHandoff?(principal: Principal, conversationId: string, text: string): Promise<void>;
+  requestConnectorConsent?(principal: Principal, input: { connectorId: string; botId: string; conversationId: string; operationId: string }): Promise<P.ConnectorConsent>;
+  deleteBotConnectors?(principal: Principal, botId: string, confirmedBotRevision: number, connectorIds?: string[]): Promise<void>;
+  previewDeprovisionUser?(userId: string): { affected: P.ScopeEffect[]; binding: P.JSONObject };
+  endProviderSessions?(userId: string): Promise<void>;
+  captureUsage?(principal: Principal, report: P.UsageReport, atMs?: number): void;
+  captureAction?(principal: Principal, metadata: P.JSONObject, sourceId?: string): void;
 }
 export interface BackendConfiguration {
   publicUrl: string; controlUrl: string; operatorToken: string; dataDir: string; host: string; port: number;
