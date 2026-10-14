@@ -1,45 +1,58 @@
-import { describe, expect, test } from 'bun:test';
+import { afterEach, describe, expect, test } from 'bun:test';
 import { generateKeyPairSync, verify } from 'node:crypto';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type * as P from '../../../contracts/protocol';
-import type { BackendServices, Principal, RequestContext } from '../../src/core/services';
-import { ApiError } from '../../src/core/errors';
+import type { BackendServices, HttpClient, Principal, RequestContext } from '../../src/core/services';
 import { changePcmSpeed, createAudioRoutes, createAudioServices, googleAssertion, inspectAudio, pcmWave } from '../../src/integrations/audio';
+import { closeFixture, fixture as channelFixture } from './channels-fixture';
 
 const now = 1_791_940_000_000;
 const principal: Principal = { kind: 'user', id: 'user', userId: 'user', workspaceId: 'workspace', role: 'member', sessionId: 'auth', botId: null, deviceId: 'device' };
 const resource = { revision: 1, createdAtMs: now, updatedAtMs: now };
 const nonce = '0123456789abcdef';
 const voice: P.VoiceSettings = { voiceId: 'default', speed: 1, language: 'en-US' };
+const fixtures: BackendServices[] = [];
+afterEach(() => { for (const services of fixtures.splice(0)) closeFixture(services); });
 function fixture() {
   const pcm = Buffer.alloc(48000); for (let i = 0; i < pcm.length; i += 2) pcm.writeInt16LE(i % 100 < 50 ? 3000 : -3000, i);
   const wave = pcmWave(pcm);
   let captured: Uint8Array | null = null;
   const attachment: P.Attachment = { ...resource, id: 'attachment', ownerUserId: 'user', conversationId: 'conversation', botId: null, filename: 'capture.wav', mime: 'audio/wav', size: wave.length, sha256: 'sha', width: null, height: null, durationMs: 1000, source: 'upload', state: 'ready', preview: 'audio', provenance: { botId: null, runId: null, machineId: null, sourceEntryId: null, generatedAtMs: null } };
-  const session: P.VoiceSession = { ...resource, id: 'voice', userId: 'user', deviceId: 'device', conversationId: 'conversation', settings: voice, state: 'active', startedAtMs: now, endedAtMs: null, durationMs: 0, transcriptEntryIds: [], muted: false, feedback: null };
-  const rows = new Map<string, unknown>([['voiceSessions:voice', session], ['attachments:attachment', attachment]]);
-  const events: string[] = []; let conversations = 0, productAccess = true;
-  const services = {
-    integrations: { effectivePolicy: async () => ({ productAccess }) },
-    now: () => now,
-    store: { get: (collection: string, id: string) => rows.get(`${collection}:${id}`) ?? null, put: (collection: string, value: { id: string }) => { rows.set(`${collection}:${value.id}`, value); return value; } },
-    auth: {
-      attachment: (p: Principal, id: string) => { if (p.userId !== attachment.ownerUserId || id !== attachment.id) throw new ApiError('not_found', 'Not found.'); return attachment; },
-      conversation: (_p: Principal, id: string) => { conversations++; if (id !== 'conversation') throw new ApiError('not_found', 'Not found.'); return { id }; },
-      bot: (_p: Principal, id: string) => { if (id !== 'bot') throw new ApiError('not_found', 'Not found.'); return { id, voice, machineId: 'machine' }; },
-    },
-    attachments: {
-      bytes: async () => wave,
-      create: async (_p: Principal, bytes: Uint8Array, metadata: P.AttachmentUpload & { filename: string; mime?: string; source?: P.Attachment['source']; provenance?: P.DeliverableProvenance }) => { captured = bytes; return { ...attachment, id: 'speech', source: metadata.source ?? 'upload', provenance: metadata.provenance ?? attachment.provenance, durationMs: inspectAudio(bytes).durationMs, conversationId: metadata.conversationId ?? null, botId: metadata.botId ?? null, filename: metadata.filename, mime: metadata.mime ?? 'audio/wav', size: bytes.length }; },
-      download: (_p: Principal, id: string) => ({ url: `https://product.test/v1/downloads/${id}`, expiresAtMs: now + 60_000, filename: 'speech.wav', mime: 'audio/wav', size: wave.length }),
-    },
-    events: { emit: (event: string) => { events.push(event); } },
-  } as unknown as BackendServices;
-  return { services, attachment, session, rows, wave, events, captured: () => captured, conversations: () => conversations, setProductAccess: (enabled: boolean) => { productAccess = enabled; } };
+  const base = channelFixture(undefined, principal);
+  const { services } = base; base.setClock(now); fixtures.push(services);
+  const session: P.VoiceSession = new Proxy({ ...resource, id: 'voice', userId: 'user', deviceId: 'device', conversationId: 'conversation', settings: voice, state: 'active', startedAtMs: now, endedAtMs: null, durationMs: 0, transcriptEntryIds: [], muted: false, feedback: null } satisfies P.VoiceSession, {
+    set(target, property, value) { const changed = Reflect.set(target, property, value); services.store.put('voiceSessions', target); return changed; },
+  });
+  services.store.put('voiceSessions', session); services.store.put('attachments', attachment);
+  services.store.setMetadata(`bytes:${attachment.id}`, Buffer.from(wave).toString('base64'));
+  const bot: P.Bot = { ...base.bot, id: 'bot', voice, machineId: 'machine', mainConversationId: 'conversation' };
+  const conversation: P.Conversation = { ...services.store.require<P.Conversation>('conversations', base.bot.mainConversationId), id: 'conversation', botIds: [bot.id], leadBotId: bot.id };
+  services.store.put('bots', bot); services.store.put('conversations', conversation);
+  let conversations = 0, productAccess = true;
+  const authorizeConversation = services.auth.conversation;
+  services.auth.conversation = (who, id) => { conversations++; return authorizeConversation(who, id); };
+  const effectivePolicy = services.integrations.effectivePolicy;
+  services.integrations.effectivePolicy = async (who, botId) => ({ ...await effectivePolicy(who, botId), productAccess });
+  services.attachments.create = async (who, bytes, metadata) => {
+    if (metadata.conversationId) services.auth.conversation(who, metadata.conversationId);
+    if (metadata.botId) services.auth.bot(who, metadata.botId);
+    const created: P.Attachment = { ...attachment, id: 'speech', ownerUserId: who.userId, source: metadata.source ?? 'upload', provenance: metadata.provenance ?? attachment.provenance, durationMs: inspectAudio(bytes).durationMs, conversationId: metadata.conversationId ?? null, botId: metadata.botId ?? null, filename: metadata.filename, mime: metadata.mime ?? 'audio/wav', size: bytes.length };
+    services.store.put('attachments', created); services.store.setMetadata(`bytes:${created.id}`, Buffer.from(bytes).toString('base64'));
+    captured = bytes;
+    return created;
+  };
+  services.attachments.download = (who, id) => {
+    const value = services.auth.attachment(who, id);
+    return { url: `https://product.test/v1/downloads/${id}`, expiresAtMs: now + 60_000, filename: value.filename, mime: value.mime, size: value.size };
+  };
+  const events: string[] = [];
+  const emit = services.events.emit;
+  services.events.emit = (event, payload, audience) => { events.push(event); return emit(event, payload, audience); };
+  return { services, attachment, session, wave, events, captured: () => captured, conversations: () => conversations, setProductAccess: (enabled: boolean) => { productAccess = enabled; } };
 }
-const fakeFetch = (fn: (url: string, init: RequestInit) => Response | Promise<Response>) => (async (url: string | URL | Request, init?: RequestInit) => fn(String(url), init ?? {})) as typeof fetch;
+const fakeFetch = (fn: (url: string, init: RequestInit) => Response | Promise<Response>): HttpClient => async (input, init) => fn(input instanceof Request ? input.url : String(input), init ?? {});
 
 describe('bounded genuine audio containers', () => {
   test('sniffs bytes and measures PCM WAV, MP3, MP4, live WebM and Opus', () => {
@@ -144,7 +157,9 @@ describe('authorized provider audio', () => {
   });
   test('preview uses fixed non-sensitive sample without conversation or run creation', async () => {
     const f=fixture(); const routes=createAudioRoutes(f.services,{env:{LEMON_BOT_TTS_PROVIDER:'openai',LEMON_BOT_OPENAI_API_KEY:'fixture'},fetch:fakeFetch((_url,init)=>{expect(JSON.parse(String(init.body)).input).toBe('Hello, I’m your Lemon Bot teammate. Ready when you are.');return new Response(Buffer.from(f.wave));})});
-    const route=routes.find(r=>r.path==='/v1/bots/:id/voice/preview')!; const result=await route.handler({user:principal,params:{id:'bot'},body:{clientNonce:nonce},services:f.services} as RequestContext) as P.SpeechResult; expect(result.attachment.conversationId).toBeNull(); expect(result.attachment.botId).toBe('bot'); expect(f.conversations()).toBe(0);
+    const route=routes.find(r=>r.path==='/v1/bots/:id/voice/preview')!;
+    const context: RequestContext = { request: new Request('https://product.example/v1/bots/bot/voice/preview', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ clientNonce: nonce }) }), user: principal, params: { id: 'bot' }, query: new URLSearchParams(), body: { clientNonce: nonce }, services: f.services, requestId: 'audio_preview', route, nonceResourceIds: [] };
+    const result=await route.handler(context) as P.SpeechResult; expect(result.attachment.conversationId).toBeNull(); expect(result.attachment.botId).toBe('bot'); expect(f.conversations()).toBe(0);
   });
 });
 

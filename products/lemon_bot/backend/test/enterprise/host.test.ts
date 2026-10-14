@@ -142,10 +142,48 @@ async function fixture(reviewedSetups: ReviewedSetup[] = []): Promise<Fixture> {
   const operator: P.OperatorConfiguration = { version: 1, trustedFrontendOrigins: [], oauthRedirectUris: [], serverSecrets: {}, channelProviders: [], emailProviders: [], eventProviders: [], hostDrivers: [], xProvider: null, exportAllowedOrigins: [], requiredRuntimeDestinations: [{ kind: 'domain', value: 'runtime.example', ports: [443], protocol: 'tcp' }], breakGlassOwnerUserId: null };
   operator.reviewedSetupManifests = reviewedSetups;
   operator.machineManagementUserIds = [];
-  const services = { store, lemon, config: { publicUrl: 'https://product.example', controlUrl: 'wss://controller.example/ws', operatorToken: 'never-disclosed', dataDir: directory, host: '127.0.0.1', port: 4080, trustedOverlay: false, operator } } as BackendServices;
+  const key = randomBytes(32);
+  const unexpected = (boundary: string): never => { throw new Error(`Unexpected host fixture boundary: ${boundary}.`); };
+  let auth: BackendServices['auth'] | undefined;
+  let events: BackendServices['events'] | undefined;
+  let mutations: BackendServices['mutations'] | undefined;
+  const services: BackendServices = {
+    store, lemon,
+    config: { publicUrl: 'https://product.example', controlUrl: 'wss://controller.example/ws', operatorToken: 'never-disclosed', dataDir: directory, host: '127.0.0.1', port: 4080, trustedOverlay: false, operator },
+    get auth() { return auth ??= createAccessService(services); },
+    get events() { return events ??= createEventService(services); },
+    get mutations() { return mutations ??= createMutationService(services, key); },
+    get runtime(): BackendServices['runtime'] { return unexpected('runtime'); },
+    get attachments(): BackendServices['attachments'] { return unexpected('attachments'); },
+    get gates(): BackendServices['gates'] { return unexpected('gates'); },
+    integrations: {
+      effectivePolicy: (actor, botId) => policy.effectivePolicy(actor, botId),
+      admission: () => unexpected('integration admission'),
+      connectorConfig: () => unexpected('connector configuration'),
+      sendApprovedDraft: () => unexpected('approved draft delivery'),
+      emitProviderNotifications: () => unexpected('provider notifications'),
+      channelIngress: () => unexpected('channel ingress'),
+      providerCapabilities: () => unexpected('provider capabilities'),
+    },
+    // installHelpers installs the production implementations before this graph
+    // is exposed; access during construction fails rather than inventing a result.
+    id: () => unexpected('id before helpers'),
+    now: () => unexpected('clock before helpers'),
+    resource: () => unexpected('resource before helpers'),
+    update: () => unexpected('update before helpers'),
+    page: () => unexpected('page before helpers'),
+    pageAfter: () => unexpected('page cursor before helpers'),
+    audit: () => unexpected('audit before helpers'),
+    entry: () => unexpected('entry before helpers'),
+    notify: () => unexpected('notification before helpers'),
+    secret: () => unexpected('backend secret'),
+    encrypt: () => unexpected('encryption before codec'),
+    decrypt: () => unexpected('decryption before codec'),
+    invoke: () => unexpected('internal invocation'),
+    syncBotProfile: () => unexpected('profile synchronization'),
+  };
   installHelpers(services);
   services.now = () => 1800000000000;
-  const key = randomBytes(32);
   services.encrypt = value => {
     const iv = randomBytes(12), cipher = createCipheriv('aes-256-gcm', key, iv);
     const bytes = Buffer.concat([cipher.update(JSON.stringify(value)), cipher.final()]);
@@ -157,7 +195,6 @@ async function fixture(reviewedSetups: ReviewedSetup[] = []): Promise<Fixture> {
     // Tests decode values written by the production owning service and AES-GCM.
     return decoded as T;
   };
-  services.auth = createAccessService(services); services.events = createEventService(services); services.mutations = createMutationService(services, key);
   const workspace = services.resource('workspace', { name: 'Hosts', ownerUserId: 'owner', enabled: true, timezone: 'UTC' }); store.put('workspaces', workspace); store.setMetadata('workspaceId', workspace.id);
   const voice: P.VoiceSettings = { voiceId: 'default', speed: 1, language: null };
   const preferences: P.Preferences = { appearance: 'system', language: null, timezone: 'UTC', botColors: true, threadsBesideChat: false, voice, celebrationsEnabled: false };
@@ -178,7 +215,6 @@ async function fixture(reviewedSetups: ReviewedSetup[] = []): Promise<Fixture> {
   };
   setBehavior(behavior);
   const policy = createPolicyServices(services);
-  services.integrations = { effectivePolicy: policy.effectivePolicy } as BackendServices['integrations'];
   const governance: P.Governance = { revision: 1, groupAccess: 'all', allowedDirectoryGroupIds: [], allowSudo: false, allowEgress: true, lockNetworkForGroups: true, requireReview: true, allowedChannelAdapters: [], xMentionsEnabled: false, emailEnabled: false, contentExportEnabled: false, inactiveHostPolicy: { enabled: false, afterDays: 30, action: 'suspend' } };
   store.setMetadata('governance', governance);
   const host = createHostServices(services), routes = createHostRoutes(services, host);
