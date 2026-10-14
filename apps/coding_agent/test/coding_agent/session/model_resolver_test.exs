@@ -249,4 +249,48 @@ defmodule CodingAgent.Session.ModelResolverTest do
     assert model.provider == :openai
     assert model.id == "gpt-4"
   end
+
+  test "ordered model fallbacks expand roles, retain same-provider models and dedup pairs" do
+    settings = %SettingsManager{
+      model_roles: %{"smol" => "openai:gpt-4o"},
+      providers: %{"openai" => %{api_key: "fake"}, "azure_openai_responses" => %{api_key: "fake"}},
+      provider_routing: %{
+        enabled: true, require_credentials: true,
+        fallback_models: ["openai:gpt-4", "@smol", "azure_openai_responses:gpt-4o", "openai:gpt-4o"],
+        fallback_providers: ["azure_openai_responses"]
+      }
+    }
+    primary = LemonAi.Models.get_model(:openai, "gpt-4")
+
+    assert Enum.map(ModelResolver.runtime_fallback_models(primary, settings), &{&1.provider, &1.id}) ==
+             [{:openai, "gpt-4o"}, {:azure_openai_responses, "gpt-4o"},
+              {:azure_openai_responses, "gpt-4"}]
+  end
+
+  test "auto thinking prefers configured tiny and applies the destination base URL" do
+    settings = %SettingsManager{
+      model_roles: %{"tiny" => "@classifier", "classifier" => "openai:gpt-4o", "smol" => "openai:gpt-4"},
+      providers: %{"openai" => %{base_url: "https://fake.invalid/v1"}}
+    }
+    assert %{provider: :openai, id: "gpt-4o", base_url: "https://fake.invalid/v1"} =
+             ModelResolver.resolve_auto_thinking_model(settings)
+  end
+
+  test "auto thinking tries configured smol when tiny cannot resolve" do
+    settings = %SettingsManager{
+      model_roles: %{"tiny" => "missing-provider:missing", "smol" => "openai:gpt-4o"}
+    }
+    assert %{id: "gpt-4o"} = ModelResolver.resolve_auto_thinking_model(settings)
+  end
+
+  test "auto thinking never falls back to the active or default model" do
+    for roles <- [%{}, %{"tiny" => "@default"}, %{"tiny" => "@smol"},
+                  %{"tiny" => "missing-provider:missing"}] do
+      settings = %SettingsManager{
+        default_model: %{provider: :openai, model_id: "gpt-4", base_url: nil},
+        model_roles: roles
+      }
+      assert ModelResolver.resolve_auto_thinking_model(settings) == nil
+    end
+  end
 end
