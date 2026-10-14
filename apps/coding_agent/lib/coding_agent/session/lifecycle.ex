@@ -55,6 +55,11 @@ defmodule CodingAgent.Session.Lifecycle do
         session_manager.header.parent_session
       )
 
+    # Header parentage also describes user forks; it is not proof that this
+    # invocation is a delegated worker. Keep bootstrap isolation unchanged.
+    task_child =
+      Keyword.get(opts, :task_child, Keyword.get(opts, :session_scope) in [:subagent, "subagent"])
+
     settings_manager = Keyword.get(opts, :settings_manager) || SettingsManager.load(cwd)
     budget_limits = Keyword.get(opts, :budget_limits, settings_manager.budgets)
     {session_manager, budget_usage} = CodingAgent.Session.BudgetLedger.initialize(session_manager)
@@ -121,6 +126,7 @@ defmodule CodingAgent.Session.Lifecycle do
       |> Keyword.put(:settings_manager, settings_manager)
       |> Keyword.put(:workspace_dir, workspace_dir)
       |> Keyword.put(:session_scope, session_scope)
+      |> Keyword.put(:task_child, task_child)
       |> Keyword.put(:tool_policy, tool_policy)
       |> Keyword.put(:approval_context, approval_context)
       |> Keyword.put(:wasm_tools, wasm_boot.wasm_tools)
@@ -315,6 +321,9 @@ defmodule CodingAgent.Session.Lifecycle do
       tool_disclosure: Keyword.get(opts, :tool_disclosure),
       tool_catalog: lifecycle.tool_catalog,
       session_scope: session_scope,
+      task_child: task_child,
+      task_depth: Keyword.get(opts, :task_depth),
+      task_allowed_agents: Keyword.get(opts, :task_allowed_agents),
       context_frozen: not is_nil(context_snapshot),
       is_streaming: false,
       pending_prompt_timer_ref: nil,
@@ -373,6 +382,9 @@ defmodule CodingAgent.Session.Lifecycle do
       settings_manager: state.settings_manager,
       workspace_dir: state.workspace_dir,
       session_scope: state.session_scope,
+      task_child: state.task_child,
+      task_depth: state.task_depth,
+      task_allowed_agents: state.task_allowed_agents,
       tool_policy: state.tool_policy,
       approval_context: state.approval_context,
       wasm_tools: wasm_reload.wasm_tools,

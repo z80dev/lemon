@@ -28,8 +28,10 @@ defmodule CodingAgent.Tools.Task.Swarm.Graph do
   @graph_keys ~w(action tasks concurrency depends_on name)
   @terminal_statuses ~w(completed error failed cancelled blocked lost)
 
-  @spec prepare(map(), String.t()) :: {:ok, map()} | {:error, String.t()}
-  def prepare(params, cwd) when is_map(params) do
+  @spec prepare(map(), String.t(), keyword()) :: {:ok, map()} | {:error, String.t()}
+  def prepare(params, cwd, opts \\ [])
+
+  def prepare(params, cwd, opts) when is_map(params) do
     tasks = Map.get(params, "tasks")
     concurrency = Map.get(params, "concurrency", 8)
 
@@ -43,7 +45,7 @@ defmodule CodingAgent.Tools.Task.Swarm.Graph do
       true ->
         defaults = Map.drop(params, @graph_keys)
 
-        with {:ok, nodes} <- prepare_nodes(tasks, defaults, cwd),
+        with {:ok, nodes} <- prepare_nodes(tasks, defaults, cwd, opts),
              :ok <- validate_edges(nodes),
              :ok <- validate_acyclic(nodes) do
           {:ok, %{nodes: nodes, concurrency: concurrency}}
@@ -51,7 +53,7 @@ defmodule CodingAgent.Tools.Task.Swarm.Graph do
     end
   end
 
-  def prepare(_params, _cwd), do: {:error, "swarm parameters must be an object"}
+  def prepare(_params, _cwd, _opts), do: {:error, "swarm parameters must be an object"}
 
   @spec with_dependencies(map(), map()) :: map()
   def with_dependencies(node, completed_by_name) do
@@ -122,11 +124,11 @@ defmodule CodingAgent.Tools.Task.Swarm.Graph do
     }
   end
 
-  defp prepare_nodes(tasks, defaults, cwd) do
+  defp prepare_nodes(tasks, defaults, cwd, opts) do
     tasks
     |> Enum.with_index(1)
     |> Enum.reduce_while({:ok, [], MapSet.new()}, fn {task, index}, {:ok, nodes, names} ->
-      with {:ok, node} <- prepare_node(task, defaults, cwd),
+      with {:ok, node} <- prepare_node(task, defaults, cwd, opts),
            false <- MapSet.member?(names, node.name) do
         {:cont, {:ok, [node | nodes], MapSet.put(names, node.name)}}
       else
@@ -143,7 +145,7 @@ defmodule CodingAgent.Tools.Task.Swarm.Graph do
     end
   end
 
-  defp prepare_node(task, defaults, cwd) when is_map(task) do
+  defp prepare_node(task, defaults, cwd, opts) when is_map(task) do
     name = Params.normalize_optional_string(Map.get(task, "name"))
     dependencies = Map.get(task, "depends_on", [])
 
@@ -154,13 +156,16 @@ defmodule CodingAgent.Tools.Task.Swarm.Graph do
       not is_list(dependencies) or not Enum.all?(dependencies, &is_binary/1) ->
         {:error, "depends_on must be an array of task name strings"}
 
+      Map.has_key?(task, "context") ->
+        {:error, "context is only supported at the top level, not per task"}
+
       true ->
         params =
           defaults
           |> Map.merge(Map.drop(task, @graph_keys))
           |> Map.put("name", name)
 
-        with {:ok, validated} <- Params.validate_run_params(params, cwd) do
+        with {:ok, validated} <- Params.validate_run_params(params, cwd, opts) do
           {:ok,
            %{
              name: validated.name,
@@ -171,7 +176,7 @@ defmodule CodingAgent.Tools.Task.Swarm.Graph do
     end
   end
 
-  defp prepare_node(_task, _defaults, _cwd), do: {:error, "each task must be an object"}
+  defp prepare_node(_task, _defaults, _cwd, _opts), do: {:error, "each task must be an object"}
 
   defp validate_edges(nodes) do
     names = MapSet.new(nodes, & &1.name)

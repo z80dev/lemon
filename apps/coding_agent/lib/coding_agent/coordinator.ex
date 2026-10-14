@@ -360,7 +360,7 @@ defmodule CodingAgent.Coordinator do
 
     params = %{"prompt" => prompt, "agent" => subagent_id, "description" => description}
 
-    case Params.validate_run_params(params, state.cwd) do
+    case Params.validate_run_params(params, state.cwd, settings_manager: state.settings_manager) do
       {:error, reason} ->
         {:error, reason}
 

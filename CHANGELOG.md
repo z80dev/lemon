@@ -8,7 +8,42 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
-No unreleased changes yet.
+### Added
+
+- **omp and Claude Code subagent definitions.** Task personas are also
+  discovered from project `.omp/agents/` and `.claude/agents/` (cwd up to the
+  Git root) and from `~/.omp/agent/agents/` and `~/.claude/agents/`, below the
+  `.lemon` directories. Those files are read tolerantly (ID from `name`,
+  unknown fields ignored, invalid files skipped). All definitions accept
+  comma-separated `tools`/`model`, omp/Claude tool names, thinking-level
+  aliases, `spawns`, and an `output` schema in JSON Schema or JTD form (JSON
+  Schema constraints are preserved even without an explicit `type`). New
+  shipped personas: read-only `security-reviewer` and the `@smol` mechanical
+  worker `sonic`.
+- **Task worktrees can merge back.** `task` gains `merge` (`none`, `patch`,
+  `branch`; default `[runtime.task].worktree_merge`) for `worktree: true`
+  children. `patch` replays the parent's uncommitted work into the worktree
+  and, when the child succeeds, applies its changes to the parent checkout,
+  failing closed on conflicts with the patch kept for review. `branch` commits
+  the child's work on its kept `lemon/task-<id>` branch without merging it.
+  Merge-back rechecks cancellation before mutation and retains detached or
+  switched-branch worktrees for manual review. Both patch and branch modes retain
+  committed or staged submodule changes, including index-only pins, and initialized
+  HEAD/content changes even under `ignore = all`, without overwriting the original
+  index or deleting recoverable work. Results report `details.merge`.
+- **Task runtime parity with omp.** `task` accepts a top-level `context`
+  shared by every child of a run, batch, or swarm. Persona thinking levels and
+  output schemas become child defaults. Invalid structured output is
+  re-prompted in the same child up to twice; `schema_mode: "permissive"`
+  returns the text with `structured_output_error` instead of failing.
+  `read agent://<id-or-name>` returns an owned child's status and output (even
+  after it finishes), and `agent://<id>/<key>/…` extracts a `structured_output`
+  field. New `[runtime.task]` settings: `max_depth` (default 2) caps nesting
+  and persona `spawns` grants allowlisted delegation below it,
+  `max_runtime_ms` limits each child, `disabled_agents` hides personas, and
+  `agent_models` overrides persona models.
+  Child depth/allowlists survive extension reloads, resumed user forks can
+  still delegate, and live `agent://` names override completed namesakes.
 
 ---
 
