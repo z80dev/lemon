@@ -191,9 +191,18 @@ defmodule CodingAgent.NativeFollowupContextTest do
   end
 
   test "actual authenticated Worker socket publishes floor and submits F only to controller", ctx do
+    remote_worker_conduit(ctx, :durable_id)
+  end
+
+  test "human-named profile placement reaches the actual Worker by its durable ID", ctx do
+    remote_worker_conduit(ctx, :human_name)
+  end
+
+  defp remote_worker_conduit(ctx, placement) do
     suffix = Integer.to_string(System.unique_integer([:positive]))
     node_id = "native-conduit-" <> suffix
-    node_name = "Native Conduit " <> suffix
+    node_name = "native-conduit-name-" <> suffix
+    selector = if placement == :human_name, do: node_name, else: node_id
     token = "native-conduit-token-" <> suffix
     assert :ok = LemonControlPlane.NodeStore.put_node(node_id,
       %{id: node_id, name: node_name, type: "coding_agent", capabilities: %{}, status: :offline})
@@ -211,7 +220,11 @@ defmodule CodingAgent.NativeFollowupContextTest do
     assert {:ok, destination} = LemonCore.NodeRegistry.resolve_id(node_id)
     assert destination.generation == credential.identity["sessionGeneration"]
     refute destination.pid == worker
-    assert {:ok, _} = ProfileStore.update(ctx.profile, %{"node" => node_id})
+    if placement == :human_name do
+      # The controller registered the worker's durable name; it maps to the durable ID.
+      assert {:ok, %{id: ^node_id}} = LemonCore.NodeRegistry.resolve(node_name)
+    end
+    assert {:ok, _} = ProfileStore.update(ctx.profile, %{"node" => selector})
     assert {:ok, profile} = ProfileStore.get_for_execution(ctx.profile)
     id = "remote-root-" <> suffix
     assert {:ok, root} = ProfileStore.chat_request(profile, "actual remote source", run_id: id,
@@ -222,6 +235,10 @@ defmodule CodingAgent.NativeFollowupContextTest do
       invocation_proof: proof_record, invocation_proof_verified: true, mcp_servers: servers(id)})}
     assert {:ok, ^id} = RunOrchestrator.submit(root)
     assert_receive {:native_dispatch, sealed}
+    assert sealed.execution_request.meta.node == node_id
+    assert sealed.execution_request.meta.native_destination_pid == destination.pid
+    assert sealed.execution_request.meta.native_destination_generation == destination.generation
+    assert {:ok, %{"node" => ^selector}} = ProfileStore.get(ctx.profile)
     source = %{run_id: id, lineage_handle: sealed.execution_request.meta.native_lineage_handle}
     assert {:error, :invalid_native_lineage} = NativeLineage.register_source_floor(source, %{allow: ["read"]},
       %{node_id: node_id, connection_pid: destination.pid, generation: destination.generation + 1})
@@ -230,6 +247,8 @@ defmodule CodingAgent.NativeFollowupContextTest do
     assert_receive {:native_issuer, fresh_id, %{"runId" => fresh_id}, {:ok, lineage}}, 3000
     assert lineage["sourceRootRunId"] == id
     assert_receive {:native_dispatch, admitted}
+    assert lineage["targetNodeId"] == node_id
+    assert admitted.execution_request.meta.node == node_id
     assert admitted.execution_request.meta.invocation_proof.run_id == fresh_id
     assert admitted.execution_request.meta.invocation_context_key == "renewed-actor"
     assert_receive {:remote_native_conduit, received_root, ^fresh_id}, 3000
