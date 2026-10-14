@@ -156,7 +156,16 @@ defmodule CodingAgent.ToolRegistry do
     |> maybe_wrap_approval(
       Keyword.get(opts, :tool_policy),
       Keyword.get(opts, :approval_context) ||
-        Map.new(Keyword.take(opts, [:run_id, :session_id, :session_key, :approval_request_fun]))
+        Map.new(
+          Keyword.take(opts, [
+            :run_id,
+            :session_id,
+            :session_key,
+            :agent_id,
+            :invocation_context_key,
+            :approval_request_fun
+          ])
+        )
     )
   end
 

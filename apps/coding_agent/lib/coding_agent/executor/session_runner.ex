@@ -188,6 +188,7 @@ defmodule CodingAgent.Executor.SessionRunner do
 
     meta = request.meta || %{}
     workspace_dir = profile_workspace(meta)
+    tool_policy = execution_tool_policy(request, cwd, run_opts)
 
     session_opts =
       [
@@ -196,7 +197,23 @@ defmodule CodingAgent.Executor.SessionRunner do
         system_prompt: get_in(meta, [:system_prompt]),
         profile_instructions: get_in(meta, [:profile_instructions]),
         stream_fn: stream_fn,
-        tool_policy: execution_tool_policy(request, cwd, run_opts),
+        tool_policy: tool_policy,
+        invocation_context_key: LemonCore.MapHelpers.get_key(meta, :invocation_context_key),
+        memory_context_key: LemonCore.MapHelpers.get_key(meta, :memory_context_key),
+        memory_context_verified:
+          Map.get(meta, :memory_context_verified, Map.get(meta, "memory_context_verified")) == true,
+        shared_memory_grant:
+          Map.get(meta, :shared_memory_grant, Map.get(meta, "shared_memory_grant")) == true,
+        invocation_mcp_servers: Map.get(meta, :mcp_servers),
+        native_managed_context: CodingAgent.Tools.Task.Params.managed_metadata?(meta),
+        native_lineage_handle: Map.get(meta, :native_lineage_handle),
+        native_lineage_run_id: Map.get(meta, :native_lineage_run_id),
+        native_source_profile_id: Map.get(meta, :profile_id),
+        native_source_session_key: request.session_key,
+        native_followup_submit: get_opt(run_opts, :native_followup_submit),
+        native_source_floor_fun: get_opt(run_opts, :native_source_floor_fun),
+        invocation_proof: Map.get(meta, :invocation_proof),
+        invocation_proof_verified: Map.get(meta, :invocation_proof_verified) == true,
         approval_timeout_ms: get_opt(run_opts, :approval_timeout_ms),
         acp_session_id: get_in(meta, [:acp_session_id]),
         acp_client_terminal: get_in(meta, [:acp_client_terminal]),
@@ -339,7 +356,8 @@ defmodule CodingAgent.Executor.SessionRunner do
   end
 
   defp start_session(resume, session_opts, state, meta) do
-    with :ok <- CodingAgent.Workspace.validate_profile_instructions(meta[:profile_instructions]),
+    with :ok <- register_native_source_floor(session_opts, state.run_id),
+         :ok <- CodingAgent.Workspace.validate_profile_instructions(meta[:profile_instructions]),
          {:ok, mcp_session_id} <- open_profile_mcp(meta, state.cwd) do
       state = %{state | mcp_session_id: mcp_session_id}
       session_opts = Keyword.put(session_opts, :mcp_session_id, mcp_session_id)
@@ -353,6 +371,31 @@ defmodule CodingAgent.Executor.SessionRunner do
           error
       end
     end
+  end
+
+  defp register_native_source_floor(opts, actual_run_id) do
+    source = %{
+      run_id: Keyword.get(opts, :native_lineage_run_id),
+      lineage_handle: Keyword.get(opts, :native_lineage_handle)
+    }
+
+    receipt =
+      Keyword.get(opts, :native_source_floor_fun) ||
+        (&LemonCore.RouterBridge.register_native_source_floor/2)
+
+    if is_nil(source.run_id) and is_nil(source.lineage_handle) do
+      if Keyword.get(opts, :native_managed_context) == true,
+        do: receipt.(%{run_id: actual_run_id}, Keyword.get(opts, :tool_policy)),
+        else: :ok
+    else
+      if source.run_id == actual_run_id and is_binary(source.lineage_handle) do
+        receipt.(source, Keyword.get(opts, :tool_policy))
+      else
+        {:error, :invalid_native_source}
+      end
+    end
+  catch
+    _, _ -> {:error, :native_source_floor_unavailable}
   end
 
   defp open_profile_mcp(meta, cwd) do

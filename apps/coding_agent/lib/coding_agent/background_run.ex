@@ -200,6 +200,15 @@ defmodule CodingAgent.BackgroundRun do
     model = Keyword.get(opts, :model) || source[:model]
     thinking_level = Keyword.get(opts, :thinking_level) || source[:thinking_level]
     system_prompt = Keyword.get(opts, :system_prompt) || source[:explicit_system_prompt]
+    inherited_context = CodingAgent.Tools.Task.Params.inherited_execution_context(opts)
+    parent_policy = Map.get(source, :tool_policy, inherited_context.tool_policy)
+
+    tool_policy =
+      case {parent_policy, Keyword.get(opts, :tool_policy)} do
+        {nil, requested} -> requested
+        {parent, nil} -> parent
+        {parent, requested} -> LemonCore.ToolPolicy.intersect(parent, requested)
+      end
 
     [
       cwd: cwd,
@@ -208,7 +217,19 @@ defmodule CodingAgent.BackgroundRun do
       system_prompt: system_prompt,
       settings_manager: source[:settings_manager],
       workspace_dir: source[:workspace_dir],
-      tool_policy: Keyword.get(opts, :tool_policy) || source[:tool_policy],
+      tool_policy: tool_policy,
+      invocation_context_key:
+        source[:invocation_context_key] ||
+          inherited_context.invocation_context_key,
+      memory_context_key: Map.get(source, :memory_context_key, inherited_context.memory_context_key),
+      memory_context_verified:
+        Map.get(source, :memory_context_verified, inherited_context.memory_context_verified) == true,
+      shared_memory_grant:
+        Map.get(source, :shared_memory_grant, inherited_context.shared_memory_grant) == true,
+      invocation_mcp_servers:
+        Map.get(source, :invocation_mcp_servers, inherited_context.invocation_mcp_servers),
+      mcp_session_id: source[:mcp_session_id],
+      acp_mcp_session_id: source[:acp_mcp_session_id],
       stream_fn: Keyword.get(opts, :stream_fn),
       get_api_key: Keyword.get(opts, :get_api_key),
       session_id: session_id,
@@ -218,6 +239,10 @@ defmodule CodingAgent.BackgroundRun do
       session_scope: :main,
       register: true
     ]
+    |> Keyword.merge(Map.to_list(Map.merge(
+      Map.take(inherited_context, CodingAgent.Tools.Task.Params.private_native_fields()),
+      Map.take(source, CodingAgent.Tools.Task.Params.private_native_fields())
+    )))
     |> Enum.reject(fn {_key, value} -> is_nil(value) end)
   end
 
@@ -244,8 +269,17 @@ defmodule CodingAgent.BackgroundRun do
       settings_manager: state.settings_manager,
       workspace_dir: state.workspace_dir,
       tool_policy: state.tool_policy,
-      agent_id: state.agent_id
+      agent_id: state.agent_id,
+      invocation_context_key:
+        LemonCore.MapHelpers.get_key(state.approval_context, :invocation_context_key),
+      invocation_mcp_servers: (state.approval_context || %{})[:invocation_mcp_servers],
+      memory_context_key: (state.approval_context || %{})[:memory_context_key],
+      memory_context_verified: (state.approval_context || %{})[:memory_context_verified] == true,
+      shared_memory_grant: (state.approval_context || %{})[:shared_memory_grant] == true,
+      mcp_session_id: state.mcp_session_id,
+      acp_mcp_session_id: state.acp_mcp_session_id
     }
+    |> Map.merge(Map.take(state.approval_context || %{}, CodingAgent.Tools.Task.Params.private_native_fields()))
   rescue
     _ -> %{}
   catch

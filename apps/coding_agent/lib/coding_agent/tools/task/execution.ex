@@ -6,7 +6,7 @@ defmodule CodingAgent.Tools.Task.Execution do
   alias CodingAgent.Session
   alias CodingAgent.TaskProgressBindingStore
   alias CodingAgent.TaskStore
-  alias CodingAgent.Tools.Task.{Async, Control, Followup, Runner, Worktree}
+  alias CodingAgent.Tools.Task.{Async, Control, Followup, Params, Runner, Worktree}
 
   @spec run(
           String.t() | nil,
@@ -18,6 +18,8 @@ defmodule CodingAgent.Tools.Task.Execution do
         ) ::
           term()
   def run(tool_call_id, validated, signal, on_update, cwd, opts) do
+    opts = Keyword.merge(opts, Map.to_list(Params.inherited_execution_context(opts)))
+
     case build_execution_context(tool_call_id, validated, cwd, opts) do
       {:error, message} ->
         {:error, message}
@@ -122,12 +124,19 @@ defmodule CodingAgent.Tools.Task.Execution do
       parent_agent_id: parent_agent_id,
       queue_mode: validated.resolved_queue_mode,
       meta: validated.meta,
+      invocation_context_key: Keyword.get(opts, :invocation_context_key),
+      memory_context_key: Keyword.get(opts, :memory_context_key),
+      memory_context_verified: Keyword.get(opts, :memory_context_verified) == true,
+      shared_memory_grant: Keyword.get(opts, :shared_memory_grant) == true,
+      tool_policy: Keyword.get(opts, :tool_policy),
+      invocation_mcp_servers: Keyword.get(opts, :invocation_mcp_servers),
       role: role_id,
       model: validated.model,
       session_pid: Keyword.get(opts, :session_pid),
       session_module: Keyword.get(opts, :session_module, Session),
       run_orchestrator: Keyword.get(opts, :run_orchestrator, Followup.default_run_orchestrator())
     }
+    |> Map.merge(Map.new(Keyword.take(opts, Params.private_native_fields())))
 
     execution = %{
       description: description,

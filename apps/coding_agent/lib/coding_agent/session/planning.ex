@@ -185,6 +185,7 @@ defmodule CodingAgent.Session.Planning do
       run_id: state.run_id,
       session_key: state.session_key,
       agent_id: state.agent_id,
+      invocation_context_key: (state.approval_context || %{})[:invocation_context_key],
       approval_request_fun: (state.approval_context || %{})[:approval_request_fun]
     }
   end
@@ -438,6 +439,7 @@ defmodule CodingAgent.Session.Planning do
       session_id: context.session_id,
       session_key: context.session_key || context.session_id,
       agent_id: context.agent_id,
+      invocation_context_key: context[:invocation_context_key],
       tool_call_id: id,
       tool: @propose_tool,
       action: %{

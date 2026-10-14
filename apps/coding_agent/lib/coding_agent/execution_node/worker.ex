@@ -34,7 +34,10 @@ defmodule CodingAgent.ExecutionNode.Worker do
   @process_capability %{"version" => 1, "maxStdinBytes" => 1_048_576,
     "maxOutputBytes" => 1_048_576, "maxTimeoutMs" => 1_800_000, "maxArgvBytes" => 131_072}
   @capabilities %{
-    "coding_agent.run" => %{"version" => @protocol_version},
+    "coding_agent.run" => %{
+      "version" => @protocol_version,
+      "nativePrivacyContext" => %{"version" => 1}
+    },
     "node.invoke.event" => %{"version" => @protocol_version, "maxBytes" => 65_536},
     "node.enrollment" => %{"version" => 1, "inviteCodes" => true, "repairInvites" => true},
     "node.mcp.discover" => %{"version" => @protocol_version},
@@ -69,8 +72,13 @@ defmodule CodingAgent.ExecutionNode.Worker do
     |> Map.merge(Map.new(@process_methods, &{&1, @process_capability}))
   end
 
-  @doc "Failclosed software compatibility; it does not attest provider login or OS grants."
-  def runtime_features, do: CodingAgent.ExecutionNode.Features.snapshot(capabilities())
+  @doc "Live runtime compatibility, without asserting provider login or OS grants."
+  def runtime_features do
+    capabilities = capabilities()
+    CodingAgent.ExecutionNode.Features.snapshot(capabilities)
+    |> Map.put("capabilities", capabilities)
+    |> Map.put("nativePrivacyContext", get_in(capabilities, ["coding_agent.run", "nativePrivacyContext"]))
+  end
 
   defstruct [
     :name,
@@ -182,7 +190,8 @@ defmodule CodingAgent.ExecutionNode.Worker do
   defp connect_authenticated(state, token, expected_node_id) do
     connect_params = %{
       "auth" => %{"token" => token},
-      "client" => %{"id" => "lemon-execution-node:#{state.name}"}
+      "client" => %{"id" => "lemon-execution-node:#{state.name}"},
+      "capabilities" => capabilities()
     }
 
     with {:ok, state} <- start_socket(state, :node, connect_params) do
@@ -602,12 +611,14 @@ defmodule CodingAgent.ExecutionNode.Worker do
         not is_map(args) ->
           {:noreply, send_invoke_error(state, invoke_id, :invalid_arguments)}
 
-        payload_error = validate_payload(args, state) ->
+        payload_error = validate_invocation_payload(method, args, state) ->
           {:noreply, send_invoke_error(state, invoke_id, payload_error)}
 
         method in CodingAgent.ExecutionNode.MemoryTransfer.methods() ->
           {:noreply, invoke_memory_transfer(state, invoke_id, method, args)}
 
+        method == "node.runtime.features" ->
+          {:noreply, send_host_io_result(state, invoke_id, {:ok, runtime_features()})}
         method in ["memory.list", "memory.search", "memory.get", "memory.add", "memory.delete"] ->
           {:noreply, invoke_memory(state, invoke_id, method, args)}
 
@@ -664,6 +675,15 @@ defmodule CodingAgent.ExecutionNode.Worker do
       {:noreply, state}
     end
   end
+
+  defp validate_invocation_payload("coding_agent.run", args, _state) do
+    case LemonCore.JSONPayload.validate(args, LemonCore.ToolPolicy.execution_json_opts()) do
+      {:ok, _} -> nil
+      {:error, reason} -> reason
+    end
+  end
+
+  defp validate_invocation_payload(_method, args, state), do: validate_payload(args, state)
 
   defp handle_node_event("node.invoke.cancel", payload, state) do
     invoke_id = payload["invokeId"]
@@ -950,6 +970,42 @@ defmodule CodingAgent.ExecutionNode.Worker do
   end
 
   defp start_local_run(state, request, run_opts) do
+    socket = state.socket
+    socket_module = state.socket_module
+
+    run_opts =
+      run_opts
+      |> Map.put(:native_followup_submit, fn source, request ->
+        params = %{
+          "sourceRunId" => source.run_id,
+          "lineageHandle" => source.lineage_handle,
+          "request" => %{
+            "runId" => request.run_id, "agentId" => request.agent_id,
+            "sessionKey" => request.session_key, "prompt" => request.prompt,
+            "images" => request.images || [], "model" => request.model,
+            "cwd" => request.cwd, "toolPolicy" => request.tool_policy,
+            "meta" => LemonCore.RunStore.execution_projection(request.meta || %{})
+          }
+        }
+
+        case native_controller_request(socket_module, socket, "node.native.followup", params) do
+          {:ok, %{"runId" => id}} when is_binary(id) and id != "" -> {:ok, id}
+          {:error, :outcome_unknown} -> {:error, :outcome_unknown}
+          _ -> {:error, :native_followup_unavailable}
+        end
+      end)
+      |> Map.put(:native_source_floor_fun, fn source, policy ->
+        params = %{"sourceRunId" => source.run_id, "toolPolicy" => policy}
+        params =
+          if Map.has_key?(source, :lineage_handle),
+            do: Map.put(params, "lineageHandle", source.lineage_handle),
+            else: params
+        case native_controller_request(socket_module, socket, "node.native.lineage.floor", params) do
+          {:ok, _} -> :ok
+          _ -> {:error, :native_source_floor_unavailable}
+        end
+      end)
+
     topic = Bus.run_topic(request.run_id)
     :ok = Bus.subscribe(topic)
     case state.executor_module.start_run(
@@ -961,6 +1017,26 @@ defmodule CodingAgent.ExecutionNode.Worker do
     end
   end
 
+  defp native_controller_request(socket_module, socket, method, params) do
+    with {:ok, params} <- LemonCore.JSONPayload.round_trip(params, LemonCore.ToolPolicy.execution_json_opts()) do
+      ref = make_ref()
+      socket_module.request(socket, method, params, {:native_reply, self(), ref}, 30_000)
+
+      receive do
+        {:native_controller_reply, ^ref, {:ok, payload}} -> {:ok, payload}
+        {:native_controller_reply, ^ref, {:error, reason}} when reason in [:timeout, :disconnected] ->
+          {:error, :outcome_unknown}
+        {:native_controller_reply, ^ref, {:error, _}} -> {:error, :native_admission_unavailable}
+      after
+        31_000 -> {:error, :outcome_unknown}
+      end
+    else
+      _ -> {:error, :invalid_native_request}
+    end
+  catch
+    _, _ -> {:error, :native_admission_unavailable}
+  end
+
   @doc false
   @spec execution_request(map(), struct(), String.t()) ::
           {:ok, ExecutionRequest.t(), map()} | {:error, term()}
@@ -968,15 +1044,15 @@ defmodule CodingAgent.ExecutionNode.Worker do
     version = value(args, "version")
     prompt = value(args, "prompt")
     requested_cwd = value(args, "cwd")
+    run_id = optional_string(value(args, "runId")) || "node:#{invoke_id}"
+    session_key = optional_string(value(args, "sessionKey")) || "node:#{state.name}:#{run_id}"
 
     with :ok <- validate_version(version),
          {:ok, images} <-
            LemonAi.ImageInputs.validate(Map.get(args, "images", Map.get(args, :images, []))),
          {:ok, prompt} <- invocation_prompt(prompt, images),
-         {:ok, cwd} <- invocation_cwd(requested_cwd, state.default_cwd) do
-      run_id = optional_string(value(args, "runId")) || "node:#{invoke_id}"
-      session_key = optional_string(value(args, "sessionKey")) || "node:#{state.name}:#{run_id}"
-      meta = args |> value("meta") |> normalize_meta()
+         {:ok, cwd} <- invocation_cwd(requested_cwd, state.default_cwd),
+         {:ok, meta} <- args |> value("meta") |> normalize_meta() |> normalize_invocation_proof(run_id) do
 
       request = %ExecutionRequest{
         run_id: run_id,
@@ -1458,13 +1534,58 @@ defmodule CodingAgent.ExecutionNode.Worker do
       :acp_client_terminal,
       :acp_client_fs_read_text_file,
       :acp_client_fs_write_text_file,
-      :async_followups
+      :async_followups,
+      :invocation_context_key,
+      :memory_context_key,
+      :memory_context_verified,
+      :shared_memory_grant,
+      :invocation_proof,
+      :invocation_proof_verified,
+      :native_lineage_handle,
+      :native_lineage_run_id,
+      :profile_id,
+      :profile_instructions,
+      :mcp_servers
     ])
     |> normalize_thinking_level()
     |> normalize_resume_source()
   end
 
   defp normalize_meta(_), do: %{}
+
+  defp normalize_invocation_proof(meta, run_id) do
+    if Map.get(meta, :invocation_proof_verified) == true do
+      fields = [
+        run_id: "runId", server_name: "serverName", server_url: "serverUrl",
+        header_name: "headerName", secret_name: "secretName"
+      ]
+
+      proof = Map.get(meta, :invocation_proof)
+
+      descriptor =
+        if is_map(proof) and map_size(proof) == 5 and
+             Enum.all?(fields, fn {key, _} ->
+               Map.has_key?(proof, key) != Map.has_key?(proof, Atom.to_string(key))
+             end) do
+          Map.new(fields, fn {key, wire} ->
+            {wire, Map.get(proof, key, Map.get(proof, Atom.to_string(key)))}
+          end)
+        end
+
+      with true <- Map.get(meta, :memory_context_verified) == true,
+           key when is_binary(key) and key != "" <- Map.get(meta, :invocation_context_key),
+           :ok <- LemonCore.RunRequest.validate_invocation_context_key(key),
+           memory_key when is_binary(memory_key) and memory_key != "" <- Map.get(meta, :memory_context_key),
+           :ok <- LemonCore.RunRequest.validate_invocation_context_key(memory_key),
+           {:ok, record} <- LemonCore.InvocationProof.validate(descriptor, run_id, meta[:mcp_servers]) do
+        {:ok, meta |> Map.put(:invocation_proof, record) |> Map.put(:invocation_proof_verified, true)}
+      else
+        _ -> {:error, :invalid_invocation_proof}
+      end
+    else
+      {:ok, meta}
+    end
+  end
 
   defp normalize_thinking_level(meta) do
     allowed = %{
@@ -1507,13 +1628,12 @@ defmodule CodingAgent.ExecutionNode.Worker do
     Enum.reduce(keys, map, fn key, acc ->
       string_key = Atom.to_string(key)
 
-      case Map.fetch(acc, key) do
-        {:ok, _canonical} -> Map.delete(acc, string_key)
-        :error ->
-          case Map.pop(acc, string_key) do
-            {nil, acc} -> acc
-            {value, acc} -> Map.put(acc, key, value)
-          end
+      cond do
+        Map.has_key?(acc, key) -> Map.delete(acc, string_key)
+        Map.has_key?(acc, string_key) ->
+          {value, acc} = Map.pop(acc, string_key)
+          Map.put(acc, key, value)
+        true -> acc
       end
     end)
   end
