@@ -48,6 +48,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Cron jobs now evaluate IANA timezone names with real UTC offsets and
+  daylight-saving rules. Missing spring-forward slots are skipped; repeated
+  fall-back slots use only their first occurrence. Invalid/unavailable zones
+  are rejected on creation/update instead of silently scheduling in UTC, and
+  timezone-only updates recompute the next run.
+
 - Named-node profile chat no longer inherits the controller's default working
   directory. Profile persona instructions and MCP connections accompany the
   execution request, while provider credentials remain destination-local.

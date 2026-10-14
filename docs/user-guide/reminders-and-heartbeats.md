@@ -96,13 +96,33 @@ uses its `cron` tool, which supports:
 
 - `once: true` — a one-shot job that runs at its next scheduled time and is then
   removed.
-- `timezone: "local"` — interpret the schedule in the server's local time. The
-  default is `"UTC"`; any other zone name is also evaluated as UTC.
+- `timezone` — `"UTC"` by default, `"local"` for the server's local time, or an
+  IANA timezone name such as `"America/New_York"` or `"Europe/Paris"`. Named
+  zones use Lemon's bundled timezone database, including daylight-saving rules.
+  Unknown names or an unavailable database are rejected, not treated as UTC.
 - `deliverTo` — override the destination (`"none"`, `"telegram:<chat_id>"`,
   `"discord:<channel_id>"`, or `"auto"` to restore the default).
 
 Jobs created from the TUI or browser are delivered to your paired owner chat.
 Ask the agent to list, pause, or remove its scheduled jobs the same way.
+
+### Timezones and daylight-saving changes
+
+The schedule's fields match the chosen zone's calendar and wall clock. For
+example, `0 9 * * *` in `America/New_York` runs at 09:00 New York time:
+13:00 UTC in summer and 14:00 UTC in winter. Next-run timestamps represent
+the actual UTC instant, not a wall clock mislabeled as UTC. Changing only a
+job's timezone also recomputes its next run.
+
+When clocks jump forward, a missing scheduled time is skipped for that day;
+a 02:30 job does not run at 03:30 instead. When clocks fall back, a repeated
+scheduled time runs only at its first occurrence. The second occurrence is
+never scheduled, even if the first has already passed or Lemon starts between
+the two. These rules also apply to server-local schedules. Lemon does not
+change the server's timezone or `TZ` environment variable to evaluate jobs.
+
+Telegram `/remind`, heartbeats, and the daily brief keep using server-local
+time unless their underlying job is explicitly changed.
 
 ## Coding goals and scheduled coding jobs
 
