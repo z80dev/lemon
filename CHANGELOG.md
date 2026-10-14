@@ -281,6 +281,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   overflow cleans the real process group. Outputs stay private to the RPC caller,
   missing output is null rather than invented empty data, and interactive PTYs
   remain exclusively explicit user terminals—no automated PTY/shell/SSH fallback.
+- Native process overflow, drain and final cleanup share one successful
+  process-group stop request instead of repeatedly signalling an already-stopped
+  group. First-stop permission failures remain errors and owned descriptors
+  still close; no fabricated cancellation receipt is returned.
 
 ---
 

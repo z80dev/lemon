@@ -102,6 +102,19 @@ def execute(request):
     parent = cwd_fd = None
     process = None
     selector = selectors.DefaultSelector()
+    group_stop_requested = False
+
+    def stop_group():
+        nonlocal group_stop_requested
+        if process is not None and not group_stop_requested:
+            # A successful stop request belongs to this execution, not each
+            # output chunk or cleanup phase. Never signal its numeric group
+            # again while draining or after reaping the stopped leader.
+            # Darwin can refuse repeated signals to an already-dead group.
+            # A first permission failure remains a real execution error.
+            kill_group(process)
+            group_stop_requested = True
+
     try:
         parent, leaf, _ = policy.parent(args["cwd"])
         cwd_fd = os.open(leaf, DIR_FLAGS, dir_fd=parent)
@@ -142,7 +155,7 @@ def execute(request):
             cancelled = True
             if cleanup_deadline is None:
                 cleanup_deadline = time.monotonic() + 1
-            kill_group(process)
+            stop_group()
             if not process.stdin.closed:
                 try:
                     selector.unregister(process.stdin)
@@ -158,7 +171,7 @@ def execute(request):
             if observed is not None and exit_code is None:
                 exit_code = observed
                 # A successful parent must not leave inherited pipes/descendants alive.
-                kill_group(process)
+                stop_group()
                 cleanup_deadline = cleanup_deadline or now + 1
             output_open = any(key.data in ("stdout", "stderr") for key in selector.get_map().values())
             if exit_code is not None and not output_open:
@@ -170,6 +183,10 @@ def execute(request):
             for key, _ in selector.select(min(0.05, max(0, until - now))):
                 stream, name = key.fileobj, key.data
                 if name == "stdin":
+                    # An earlier ready stdout/control event in this same batch
+                    # may have cancelled and closed input ownership already.
+                    if stream.closed:
+                        continue
                     try:
                         written = os.write(stream.fileno(), memoryview(stdin)[offset:offset + 65536])
                         offset += written
@@ -216,7 +233,7 @@ def execute(request):
                         truncated = True
                         cancel()
         if process.poll() is None:
-            kill_group(process)
+            stop_group()
             try:
                 exit_code = process.wait(timeout=0.25)
             except subprocess.TimeoutExpired:
@@ -229,18 +246,22 @@ def execute(request):
                 "stderrBase64": base64.b64encode(outputs["stderr"]).decode("ascii"),
                 "outputTruncated": truncated}
     finally:
-        if process is not None:
-            kill_group(process)
-            for stream in (process.stdin, process.stdout, process.stderr):
-                if stream is not None and not stream.closed:
-                    stream.close()
-        selector.close()
-        if cwd_fd is not None:
-            os.close(cwd_fd)
-        if parent is not None:
-            os.close(parent)
-        for _, _, fd in policy.roots:
-            os.close(fd)
+        try:
+            stop_group()
+        finally:
+            # A refused first group stop must still release all owned pipes,
+            # policy descriptors and the selector; it is never a success.
+            if process is not None:
+                for stream in (process.stdin, process.stdout, process.stderr):
+                    if stream is not None and not stream.closed:
+                        stream.close()
+            selector.close()
+            if cwd_fd is not None:
+                os.close(cwd_fd)
+            if parent is not None:
+                os.close(parent)
+            for _, _, fd in policy.roots:
+                os.close(fd)
 
 
 def main():

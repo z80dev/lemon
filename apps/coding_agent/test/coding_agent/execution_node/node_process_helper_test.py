@@ -120,12 +120,17 @@ class NodeProcessHelperTest(unittest.TestCase):
         self.assertIsInstance(receipt["exitCode"], int)
         time.sleep(2.1)
         self.assertFalse(os.path.exists(marker))
-        response = self.receive(self.launch(["overflow"], maxOutputBytes=257))
-        self.assertIn("ok", response, "valid admitted overflow must return its actual bounded receipt: " + repr(response))
-        receipt = response["ok"]
-        self.assertEqual(receipt["state"], "cancelled")
-        self.assertTrue(receipt["outputTruncated"])
-        self.assertEqual(sum(len(base64.b64decode(receipt[key])) for key in ("stdoutBase64", "stderrBase64")), 257)
+        for raw_stdin in (b"", b"i" * 1048576):
+            with self.subTest(stdin_bytes=len(raw_stdin)):
+                response = self.receive(self.launch(
+                    ["overflow"], maxOutputBytes=257,
+                    stdinBase64=base64.b64encode(raw_stdin).decode()))
+                self.assertIn("ok", response, "valid admitted overflow must return its actual bounded receipt: " + repr(response))
+                receipt = response["ok"]
+                self.assertEqual(receipt["state"], "cancelled")
+                self.assertIsInstance(receipt["exitCode"], int)
+                self.assertTrue(receipt["outputTruncated"])
+                self.assertEqual(sum(len(base64.b64decode(receipt[key])) for key in ("stdoutBase64", "stderrBase64")), 257)
 
     def test_symlink_escape_and_traversal_do_not_execute(self):
         outside = os.path.dirname(self.root)

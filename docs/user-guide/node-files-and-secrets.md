@@ -299,6 +299,10 @@ process group/descendants where supported; any returned exit code must still
 come from an actual observed termination. Worker restart preserves known receipt
 state and exit metadata, not raw output: output becomes null/truncated. An
 interrupted active receipt becomes `outcome_unknown` and never relaunches.
+Each execution signals its group at most once successfully; output draining and
+final cleanup do not repeatedly signal the stopped group's numeric identifier.
+A first group-stop permission failure remains an error, never a successful
+cancelled receipt, and still releases the helper's owned descriptors.
 
 If a response is lost, a controller times out, or an error says the mutation
 outcome may be unknown, **never automatically redispatch run**, even with a new
