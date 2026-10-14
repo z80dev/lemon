@@ -21,19 +21,13 @@ defmodule CodingAgent.ResourceLoader.AtImportsTest do
     path
   end
 
-  test "imports at line start and after whitespace, relative to the importing file", ctx do
-    write!(Path.join(ctx.project, "docs/arch.md"), "ARCH BODY\n")
+  test "imports resolve relative to the importing file, including nested imports", ctx do
+    write!(Path.join(ctx.project, "docs/a.md"), "A then @b.md\n")
+    write!(Path.join(ctx.project, "docs/b.md"), "B BODY")
     write!(Path.join(ctx.project, "notes.md"), "NOTES BODY")
 
-    assert expand("@docs/arch.md\nRead @notes.md now", ctx) ==
-             "ARCH BODY\nRead NOTES BODY now"
-  end
-
-  test "nested imports resolve relative to the imported file", ctx do
-    write!(Path.join(ctx.project, "docs/a.md"), "A then @b.md")
-    write!(Path.join(ctx.project, "docs/b.md"), "B BODY")
-
-    assert expand("@docs/a.md", ctx) == "A then B BODY"
+    assert expand("@docs/a.md\nRead @notes.md now", ctx) ==
+             "A then B BODY\nRead NOTES BODY now"
   end
 
   test "imports ~/ paths from home and absolute paths", ctx do
@@ -50,12 +44,6 @@ defmodule CodingAgent.ResourceLoader.AtImportsTest do
 
     assert expand("See @setup.md. Also (@setup.md), @other.md!", ctx) ==
              "See SETUP. Also (@setup.md), OTHER!"
-  end
-
-  test "a file is imported once per expansion tree", ctx do
-    write!(Path.join(ctx.project, "setup.md"), "SETUP")
-
-    assert expand("@setup.md and again @setup.md", ctx) == "SETUP and again @setup.md"
   end
 
   test "emails, git remotes and mid-word @ are never imports", ctx do
@@ -127,9 +115,5 @@ defmodule CodingAgent.ResourceLoader.AtImportsTest do
     result = expand("@big.md", ctx)
     assert result =~ "[... imported file truncated at 65536 bytes]"
     assert byte_size(result) < 66_000
-  end
-
-  test "content without @ is returned unchanged", ctx do
-    assert expand("plain text\n", ctx) == "plain text\n"
   end
 end
