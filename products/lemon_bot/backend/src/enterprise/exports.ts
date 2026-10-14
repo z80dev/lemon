@@ -306,7 +306,7 @@ function buildServices(s: BackendServices) {
       if (record.kind === 'conversation_content') authorizeContent(s, p, job.conversationIds);
       record = setRecord(record, { state: 'running', error: null }, job.userId);
       const rows: P.JSONObject[] = [];
-      const inRange = (time: number) => time >= record.fromAtMs && time <= record.toAtMs;
+      const inRange = (time: number) => time >= record.fromAtMs && time < record.toAtMs;
       if (record.kind === 'audit') for (const audit of s.store.list<P.AuditRecord>('auditRecords', row => inRange(row.createdAtMs))) rows.push(projection(audit));
       if (record.kind === 'action') for (const row of s.store.list<JournalRow>(journal, row => row.kind === 'action' && inRange(row.timestampMs))) rows.push(row.payload);
       if (record.kind === 'usage') {
