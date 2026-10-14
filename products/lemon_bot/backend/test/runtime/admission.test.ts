@@ -10,8 +10,8 @@ async function setup() {
   f.services.lemon.methods.push('profile.followup.admission.set', 'runs.followup.lineage.get');
   const original = f.rpc; let token = ''; let lineage: NativeFollowupLineage | null = null;
   f.rpc = async (method, params) => {
-    if (method === 'profile.followup.admission.set') { token = String(params.token); expect(params.url).toBe('https://product.example' + nativeFollowupAdmissionPath); return { profileId: params.profileId, configured: true }; }
-    if (method === 'runs.followup.lineage.get') { if (!lineage || params.runId !== lineage.runId) throw new ApiError('not_found', 'No actual native reservation.'); return lineage; }
+    if (method === 'profile.followup.admission.set') { expect(Object.keys(params).sort()).toEqual(['profileId', 'token', 'url']); expect(params.profileId).toBe(f.bot.profileId); token = String(params.token); expect(params.url).toBe('https://product.example' + nativeFollowupAdmissionPath); return { profileId: params.profileId, configured: true }; }
+    if (method === 'runs.followup.lineage.get') { expect(Object.keys(params)).toEqual(['runId']); if (!lineage || params.runId !== lineage.runId) throw new ApiError('not_found', 'No actual native reservation.'); return lineage; }
     return original(method, params);
   };
   await configureNativeFollowupAdmission(f.services, f.bot);
@@ -41,10 +41,12 @@ describe('authenticated fresh native follow-up admission', () => {
       expect(response).toMatchObject({ allow: true, invocation: { sharedMemoryGrant: false, invocationProof: { runId: s.lineage.runId, secretName: 'lemon_bot/invocations/' + s.lineage.runId } } });
       const replay = await s.route.handler(s.context()); expect(replay).toEqual(response);
       expect(s.f.calls.filter(call => call.method === 'node.secrets.set' && call.params.operationId === s.lineage.runId)).toHaveLength(1);
+      expect(s.f.calls.filter(call => call.method === 'mcp.execution_names').every(call => !call.mutation && Object.keys(call.params).sort().join(',') === 'server,toolNames')).toBe(true);
       expect(s.f.calls.filter(call => call.method === 'chat.send')).toHaveLength(1);
       const proof = String(s.f.calls.find(call => call.method === 'node.secrets.set' && call.params.operationId === s.lineage.runId)!.params.value);
       expect(observeInvocation(s.f.services, proof)).toMatchObject({ id: s.lineage.runId, status: 'running' });
       s.f.store.setMetadata(`runtimePolicyFence:${s.f.bot.id}:${s.f.alice.userId}`, { state: 'outcome_unknown' });
+      expect(() => observeInvocation(s.f.services, proof)).toThrow(ApiError);
       expect(await s.route.handler(s.context())).toEqual({ allow: false });
     } finally { s.dispose(); }
   });

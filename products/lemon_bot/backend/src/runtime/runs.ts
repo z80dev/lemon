@@ -37,6 +37,11 @@ interface RuntimeCompletion { runId?: string | null; ok: boolean; answer: string
 function upstream<T>(schema: z.ZodType<T>, value: unknown): T {
   const result = schema.safeParse(value); if (!result.success) fail('upstream_unavailable', 'The runtime returned an invalid receipt.'); return result.data;
 }
+function completion(raw: unknown, executionRunId: string): RuntimeCompletion {
+  const result = upstream(finalSchema, raw);
+  if (result.runId != null && result.runId !== executionRunId) fail('upstream_unavailable', 'The completion receipt belongs to another native execution.');
+  return result;
+}
 
 function sessionBaseKey(services: BackendServices, conversation: P.Conversation, bot: P.Bot) {
   if (conversation.id === bot.mainConversationId && conversation.kind === 'dm' && bot.visibility === 'personal') {
@@ -277,7 +282,7 @@ export function createRuntimeService(services: BackendServices): ManagedRuntimeS
     try {
       const principal = actor(run.id); services.auth.bot(principal, run.botId); services.auth.conversation(principal, run.conversationId);
       const response = await services.lemon.call('agent.wait', { runId: bound.executionRunId, timeoutMs: 1 }, { timeoutMs: 5_000 });
-      await finalize(run.id, upstream(finalSchema, response));
+      await finalize(run.id, completion(response, bound.executionRunId));
     } catch (error) {
       // A timeout/read outage is neither completion nor evidence that a mutation was rejected.
       if (!(error instanceof ApiError)) throw error;
@@ -686,7 +691,7 @@ async function stopInvocationResources(services: BackendServices, runs: P.Run[],
     try {
       const receipt = upstream(z.object({ aborted: z.boolean() }).passthrough(), await services.lemon.call('chat.abort', { runId: bound.executionRunId, sessionKey: bound.sessionKey }, { mutation: true, resourceIds: [run.id, ...resourceIds] }));
       if (!receipt.aborted) { uncertain = true; continue; }
-      const result = upstream(finalSchema, await services.lemon.call('agent.wait', { runId: bound.executionRunId, timeoutMs: 1_000, includeAnswer: false }, { timeoutMs: 5_000 }));
+      const result = completion(await services.lemon.call('agent.wait', { runId: bound.executionRunId, timeoutMs: 1_000, includeAnswer: false }, { timeoutMs: 5_000 }), bound.executionRunId);
       // Stop authority sees status only. Normal initiating-context reconciliation owns full answer projection.
       services.store.setMetadata(`runtimeTerminalProjectionPending:${run.id}`, true);
       const status: P.Run['status'] = result.cancelled ? 'cancelled' : result.ok ? 'succeeded' : 'failed';

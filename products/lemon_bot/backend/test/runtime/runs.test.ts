@@ -2,9 +2,77 @@ import { describe, expect, test } from 'bun:test';
 import type * as P from '../../../contracts/protocol';
 import { ApiError } from '../../src/core/errors';
 import { buildMemoryContextKey, buildPrivateBotMemoryContextKey, createRuntimeService, observeInvocation, quiesceBotInvocations, reserveCronAdmission, revokeConnectorInvocations, type InvocationContext, type InvocationProofBinding, type RuntimeMapping } from '../../src/runtime/runs';
-import { fixture } from './fixture';
+import { fixture, productExecutionProjection } from './fixture';
 
 describe('owned placed runtime', () => {
+  test('incomplete, duplicate or unowned MCP projection never provisions credentials or dispatches chat', async () => {
+    const reply = productExecutionProjection();
+    const invalid = [
+      { ...reply, count: 0 },
+      { ...reply, tools: reply.tools.slice(1) },
+      { ...reply, tools: [reply.tools[0]!, ...reply.tools.slice(0, -1)] },
+      { ...reply, tools: reply.tools.map((tool, index) => index === 0 ? { ...tool, name: 'not_a_product_tool' } : tool) },
+    ];
+    for (const projection of invalid) {
+      const f = fixture(); const runtime = createRuntimeService(f.services); f.services.runtime = runtime; const original = f.rpc;
+      f.rpc = async (method, params) => method === 'mcp.execution_names' ? projection : original(method, params);
+      try {
+        await expect(runtime.submit(f.alice, f.conversation, f.bot, { clientNonce: 'invalid_projection_nonce1', text: 'work' })).rejects.toMatchObject({ code: 'upstream_unavailable' });
+        expect(f.calls.filter(call => call.method === 'mcp.execution_names')).toHaveLength(1);
+        expect(f.calls.filter(call => ['node.secrets.set', 'chat.send'].includes(call.method))).toHaveLength(0);
+        const failed = f.store.list<P.Run>('runs')[0]!;
+        expect(failed.status).toBe('failed');
+        expect(f.store.metadata(`invocationProofState:${failed.id}`)).toBeNull();
+      } finally { runtime.close(); f.store.close(); }
+    }
+  });
+
+  test('missing pure execution-name support fails closed before provisioning or chat dispatch', async () => {
+    const f = fixture(); const runtime = createRuntimeService(f.services); f.services.runtime = runtime;
+    f.services.lemon.methods = f.services.lemon.methods.filter(method => method !== 'mcp.execution_names');
+    try {
+      await expect(runtime.submit(f.alice, f.conversation, f.bot, { clientNonce: 'missing_projection_nonce01', text: 'work' })).rejects.toMatchObject({ code: 'capability_unavailable', retrySafe: true });
+      expect(f.calls.filter(call => ['mcp.execution_names', 'node.secrets.set', 'chat.send'].includes(call.method))).toHaveLength(0);
+      expect(f.store.list<P.Run>('runs')).toMatchObject([{ status: 'failed' }]);
+    } finally { runtime.close(); f.store.close(); }
+  });
+
+  test('measured implementation support does not grant files or shell to an unconfigured Bot', async () => {
+    const f = fixture(); const runtime = createRuntimeService(f.services); f.services.runtime = runtime;
+    try {
+      const started = await runtime.submit(f.alice, f.conversation, f.bot, { clientNonce: 'measured_not_granted_001', text: 'work' });
+      const context = f.store.metadata<InvocationContext>(`runtimeInvocation:${started.run.id}`)!;
+      expect(context.invocationToolPolicy).toMatchObject({ profile: 'custom', deny: expect.arrayContaining(['read', 'write', 'bash', 'lsp_diagnostics', 'remember', 'recall']) });
+      expect(context.invocationToolPolicy.allow).not.toEqual(expect.arrayContaining(['read', 'write', 'bash']));
+      expect(f.store.list<P.BotGrant>('botGrants').every(grant => grant.requestedLevel === 'off')).toBe(true);
+      const projection = f.calls.find(call => call.method === 'mcp.execution_names')!;
+      expect(projection.mutation).toBe(false);
+      expect(Object.keys(projection.params).sort()).toEqual(['server', 'toolNames']);
+      expect(projection.params.server).toEqual({ name: 'lemon-bot', url: 'https://product.example/mcp' });
+    } finally { runtime.close(); f.store.close(); }
+  });
+
+  test('another native execution cannot supply completion or terminal cancellation proof', async () => {
+    const f = fixture(); const runtime = createRuntimeService(f.services); f.services.runtime = runtime;
+    try {
+      const started = await runtime.submit(f.alice, f.conversation, f.bot, { clientNonce: 'foreign_completion_nonce1', text: 'work' });
+      const sessionKey = f.store.metadata<RuntimeMapping>(`runtimeRun:${started.run.id}`)!.sessionKey;
+      const original = f.rpc;
+      f.rpc = async (method, params) => {
+        if (method === 'chat.abort') { expect(params).toEqual({ runId: started.run.id, sessionKey }); return { aborted: true }; }
+        if (method === 'agent.wait') { expect(params.runId).toBe(started.run.id); return { runId: 'foreign_native_run', ok: false, cancelled: true, answer: null }; }
+        return original(method, params);
+      };
+      await runtime.project('agent', { type: 'completed', runId: started.run.id, sessionKey, ok: false, cancelled: true });
+      expect(f.store.require<P.Run>('runs', started.run.id).status).toBe('running');
+      expect(f.store.metadata(`runtimeReconciliation:${started.run.id}`)).toMatchObject({ pending: true, code: 'upstream_unavailable' });
+      expect(await quiesceBotInvocations(f.services, f.alice, f.bot.id, { principalOnly: true })).toMatchObject({ status: 'outcome_unknown', runIds: [started.run.id] });
+      expect(f.store.require<P.Run>('runs', started.run.id).status).toBe('running');
+      expect(f.store.metadata(`runtimeTerminalProjectionPending:${started.run.id}`)).toBeNull();
+      expect(f.calls.filter(call => call.method === 'chat.send')).toHaveLength(1);
+    } finally { runtime.close(); f.store.close(); }
+  });
+
   test('revocation reads only terminal status; the actual initiating context separately owns full completion projection', async () => {
     const f = fixture(); const runtime = createRuntimeService(f.services); f.services.runtime = runtime;
     try {
@@ -167,7 +235,7 @@ describe('owned placed runtime', () => {
       expect(deltaEvents.map(event => event.event === 'entry.delta' ? event.payload.offset : -1)).toEqual([0, 2]);
       expect(f.services.events.replay(f.bob, '0').some(event => event.event === 'entry.delta')).toBe(false);
       expect(f.services.events.replay(f.bob, '0').filter(event => event.event === 'bot.upserted').every(event => event.event !== 'bot.upserted' || event.payload.activeRunIds.length === 0)).toBe(true);
-      f.rpc = async method => { if (method === 'agent.wait') return { ok: true, answer: 'authoritative complete answer, not the truncated event preview', cancelled: false }; throw new Error(`Unexpected ${method}`); };
+      f.rpc = async (method, params) => { if (method === 'agent.wait') return { runId: params.runId, ok: true, answer: 'authoritative complete answer, not the truncated event preview', cancelled: false }; throw new Error(`Unexpected ${method}`); };
       await runtime.project('agent', { type: 'completed', runId: result.run.id, sessionKey, ok: true, answer: 'truncated' });
       expect(f.store.require<P.Run>('runs', result.run.id).status).toBe('succeeded');
       expect(f.store.list<P.TranscriptEntry>('entries').filter(entry => entry.kind === 'message')).toMatchObject([{ text: 'authoritative complete answer, not the truncated event preview', streaming: false }]);
@@ -207,9 +275,20 @@ describe('owned placed runtime', () => {
     const f = fixture(); const runtime = createRuntimeService(f.services); f.services.runtime = runtime;
     try {
       const result = await runtime.submit(f.alice, f.conversation, f.bot, { clientNonce: 'cancellation_nonce_001', text: 'work' });
-      f.rpc = async method => { if (method === 'chat.abort') return { aborted: true, summary: { dispatchStatus: 'sent' } }; if (method === 'agent.wait') throw new ApiError('upstream_unavailable', 'Not terminal yet.'); throw new Error(`Unexpected ${method}`); };
+      const sessionKey = f.store.metadata<RuntimeMapping>(`runtimeRun:${result.run.id}`)!.sessionKey;
+      const proof = String(f.calls.find(call => call.method === 'node.secrets.set')!.params.value);
+      f.rpc = async (method, params) => {
+        if (method === 'chat.abort') { expect(params).toEqual({ runId: result.run.id, sessionKey }); return { aborted: true, summary: { dispatchStatus: 'sent' } }; }
+        if (method === 'agent.wait') { expect(params).toEqual({ runId: result.run.id, timeoutMs: 1 }); throw new ApiError('upstream_unavailable', 'Not terminal yet.'); }
+        throw new Error(`Unexpected ${method}`);
+      };
       expect((await runtime.cancel(f.alice, result.run.id)).status).toBe('running');
-      f.rpc = async method => method === 'chat.abort' ? { aborted: true, summary: { dispatchStatus: 'sent' } } : { ok: false, answer: null, cancelled: true };
+      expect(() => observeInvocation(f.services, proof)).toThrow(ApiError);
+      f.rpc = async (method, params) => {
+        if (method === 'chat.abort') { expect(params).toEqual({ runId: result.run.id, sessionKey }); return { aborted: true, summary: { dispatchStatus: 'sent' } }; }
+        if (method === 'agent.wait') { expect(params).toEqual({ runId: result.run.id, timeoutMs: 1 }); return { runId: result.run.id, ok: false, answer: null, cancelled: true }; }
+        throw new Error(`Unexpected ${method}`);
+      };
       expect((await runtime.cancel(f.alice, result.run.id)).status).toBe('cancelled');
     } finally { runtime.close(); f.store.close(); }
   });
@@ -223,7 +302,11 @@ describe('owned placed runtime', () => {
       const reserved = f.store.list<P.Run>('runs')[0]!;
       expect(f.store.metadata(`runCron:${reserved.id}`)).toBe(context.cronRunId);
       const bobRun: P.Run = f.services.resource('run', { conversationId: f.conversation.id, botId: f.bot.id, initiatorUserId: 'bob', clientNonce: 'bob_run_nonce_0000000', status: 'running', error: null, startedAtMs: f.services.now(), completedAtMs: null, routineRunId: null }); f.store.put('runs', bobRun);
-      f.rpc = async method => method === 'chat.abort' ? { aborted: true } : { ok: false, answer: null, cancelled: true };
+      f.rpc = async (method, params) => {
+        if (method === 'chat.abort') { expect(params.runId).toBe(context.routerRunId); return { aborted: true }; }
+        if (method === 'agent.wait') { expect(params).toEqual({ runId: context.routerRunId, timeoutMs: 1_000, includeAnswer: false }); return { runId: context.routerRunId, ok: false, answer: null, cancelled: true }; }
+        throw new Error(`Unexpected ${method}`);
+      };
       const stopped = await quiesceBotInvocations(f.services, f.alice, f.bot.id, { principalOnly: true });
       expect(stopped.status).toBe('cancelled'); expect(stopped.runIds).not.toContain(bobRun.id); expect(f.store.require<P.Run>('runs', bobRun.id).status).toBe('running');
     } finally { runtime.close(); f.store.close(); }
