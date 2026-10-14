@@ -274,7 +274,8 @@ describe('native grant enforcement boundaries', () => {
       const invocation = await invocationBotToolPolicy(f.services, user, f.bot, measured);
       expect(shared.deny).not.toContain('read'); expect(invocation.deny).toContain('read');
       for (const policy of [shared, invocation]) {
-        expect(policy.deny).toContain('agent'); expect(policy.blocked_tools).toEqual(['agent']);
+        for (const tool of ['agent', 'remember', 'recall']) expect(policy.deny).toContain(tool);
+        expect(policy.blocked_tools).toEqual(['agent', 'remember', 'recall']);
         expect(policy.allow).toBe('all'); expect(policy.deny).not.toContain('task'); expect(policy.blocked_tools).not.toContain('task');
       }
     } finally { f.close(); }

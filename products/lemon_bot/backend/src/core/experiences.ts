@@ -165,8 +165,11 @@ export async function invocationBotToolPolicy(s: BackendServices, user: Principa
 async function projectNativeToolPolicy(s: BackendServices, user: Principal, bot: P.Bot, measured: P.MachineCapabilities, policy: P.EffectivePolicy, provisioning: boolean): Promise<P.JSONObject> {
   const grants = await effectiveBotGrants(s, user, bot, measured, provisioning, policy);
   const denied = new Set<string>(), approvalTools = new Set<string>();
-  // Cross-profile delegation must use ACL-checked product MCP; in-process task children retain the parent floor.
+  // Delegation and explicit memory changes/search use authenticated product MCP. Task children retain this floor;
+  // automatic recall/run-memory isolation remains owned by the verified runtime memory context.
   denied.add('agent');
+  denied.add('remember');
+  denied.add('recall');
   for (const [category, defaults] of Object.entries(nativeToolFamilies)) {
     const capability = measured.items.find(value => value.category === category);
     const grant = capability && grants.find(value => value.capabilityId === capability.id);
@@ -197,7 +200,7 @@ async function projectNativeToolPolicy(s: BackendServices, user: Principal, bot:
     }
   }
   if (denied.size > 16384 || approvalTools.size > 16384) fail('capability_unavailable', 'The native policy schema cannot represent this complete tool permission set.');
-  return { profile: 'custom', allow: 'all', deny: [...denied].sort(), blocked_tools: ['agent'], require_approval: [...approvalTools].sort() };
+  return { profile: 'custom', allow: 'all', deny: [...denied].sort(), blocked_tools: ['agent', 'remember', 'recall'], require_approval: [...approvalTools].sort() };
 }
 
 export function botPresence(s: BackendServices, user: Principal, bot: P.Bot): P.BotPresence {
