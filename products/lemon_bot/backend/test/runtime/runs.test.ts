@@ -1,10 +1,57 @@
 import { describe, expect, test } from 'bun:test';
 import type * as P from '../../../contracts/protocol';
 import { ApiError } from '../../src/core/errors';
-import { buildMemoryContextKey, createRuntimeService, quiesceBotInvocations, reserveCronAdmission, type InvocationContext, type InvocationProofBinding, type RuntimeMapping } from '../../src/runtime/runs';
+import { buildMemoryContextKey, buildPrivateBotMemoryContextKey, createRuntimeService, observeInvocation, quiesceBotInvocations, reserveCronAdmission, type InvocationContext, type InvocationProofBinding, type RuntimeMapping } from '../../src/runtime/runs';
 import { fixture } from './fixture';
 
 describe('owned placed runtime', () => {
+  test('private native memory identity does not require a surviving main conversation', () => {
+    const f = fixture();
+    try {
+      const key = buildMemoryContextKey(f.services, f.alice, f.conversation, f.bot);
+      f.store.remove('conversations', f.conversation.id);
+      expect(buildPrivateBotMemoryContextKey(f.services, f.alice, f.bot)).toBe(key);
+    } finally { f.store.close(); }
+  });
+
+  test('shared-return specialist execution cannot inherit private notes or a private memory realm', async () => {
+    const f = fixture(); const runtime = createRuntimeService(f.services); f.services.runtime = runtime;
+    const task: P.Conversation = { ...f.conversation, id: 'specialist_private_task', kind: 'task' }; f.store.put('conversations', task);
+    const group: P.Conversation = { ...f.conversation, kind: 'group', humanUserIds: [f.alice.userId, f.bob.userId] }; f.store.put('conversations', group);
+    f.store.put('memories', f.services.resource('memory', { botId: f.bot.id, scope: 'private_note', userId: f.alice.userId, text: 'private target fact', kind: 'fact', sourceEntryId: null }));
+    const nonce = 'shared_return_nonce_0001';
+    f.store.setMetadata(`submissionContext:${f.alice.kind}:${f.alice.id}:${task.id}:${nonce}`, { returnConversationId: group.id });
+    const audiences: unknown[] = []; f.services.integrations.connectorConfig = async (_actor, _botId, conversationId) => { audiences.push(conversationId); return []; };
+    try {
+      const result = await runtime.submit(f.alice, task, f.bot, { clientNonce: nonce, text: 'specialist work' });
+      expect(audiences).toEqual([group.id]);
+      const context = f.store.metadata<InvocationContext>(`runtimeInvocation:${result.run.id}`)!;
+      expect(context.memoryContextKey).toBe(buildMemoryContextKey(f.services, f.alice, group, f.bot));
+      expect(context.memoryContextKey).not.toBe(buildPrivateBotMemoryContextKey(f.services, f.alice, f.bot));
+      expect(String(f.calls.find(call => call.method === 'chat.send')!.params.prompt)).not.toContain('private target fact');
+    } finally { runtime.close(); f.store.close(); }
+  });
+
+  test('real bound MCP tool observation admits gates before the chat acknowledgment without trusting a body run ID', async () => {
+    const f = fixture(); const runtime = createRuntimeService(f.services); f.services.runtime = runtime; const original = f.rpc;
+    f.rpc = async (method, params) => {
+      if (method === 'chat.send') {
+        const proof = String(f.calls.find(call => call.method === 'node.secrets.set')!.params.value);
+        expect(f.store.require<P.Run>('runs', String(params.runId)).status).toBe('reserved');
+        expect(observeInvocation(f.services, proof)).toMatchObject({ id: params.runId, status: 'running' });
+        expect(() => observeInvocation(f.services, 'model_supplied_body_run_id')).toThrow();
+      }
+      return original(method, params);
+    };
+    try {
+      const result = await runtime.submit(f.alice, f.conversation, f.bot, { clientNonce: 'early_proof_nonce_0001', text: 'work' });
+      expect(result.run.status).toBe('running');
+      f.store.setMetadata(`connectorRevocation:${f.bot.id}`, { status: 'pending' });
+      const proof = String(f.calls.find(call => call.method === 'node.secrets.set')!.params.value);
+      expect(() => observeInvocation(f.services, proof)).toThrow();
+    } finally { runtime.close(); f.store.close(); }
+  });
+
   test('uncertain credential provisioning cannot replay or dispatch native execution', async () => {
     const f = fixture(); const runtime = createRuntimeService(f.services); f.services.runtime = runtime; const original = f.rpc;
     f.rpc = async (method, params) => {
