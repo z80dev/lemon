@@ -226,6 +226,29 @@ defmodule LemonCli.Onboarding.SignInProvidersTest do
     assert Toml.decode_file!(config_path)["providers"]["kimi_coding"] == %{}
   end
 
+  test "github_copilot --status reads the stored device login", %{config_path: config_path} do
+    {:ok, _} =
+      Secrets.set(
+        "llm_github_copilot_api_key",
+        Jason.encode!(%{
+          "type" => "github_copilot_oauth",
+          "access_token" => "copilot-at",
+          "refresh_token" => "gh-token",
+          "expires_at_ms" => System.system_time(:millisecond) + 3_600_000
+        })
+      )
+
+    File.write!(config_path, """
+    [providers.github_copilot]
+    api_key_secret = "llm_github_copilot_api_key"
+    """)
+
+    assert :ok = SetupProvider.run(["copilot", "--status", "--config-path", config_path], io())
+    status = output()
+    assert status =~ "Stored login: llm_github_copilot_api_key (refreshable login)"
+    refute status =~ "copilot-at"
+  end
+
   defp io(prompts \\ []) do
     pid = self()
     {:ok, agent} = Agent.start_link(fn -> prompts end)
