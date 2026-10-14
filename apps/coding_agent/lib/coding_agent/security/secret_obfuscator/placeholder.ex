@@ -122,7 +122,9 @@ defmodule CodingAgent.Security.SecretObfuscator.Placeholder do
   end
 
   defp read_key(path) do
-    with {:ok, raw} <- File.read(path),
+    with {:ok, %{type: :regular}} <- File.lstat(path),
+         :ok <- File.chmod(path, 0o600),
+         {:ok, raw} <- File.read(path),
          key = String.trim(raw),
          true <- Regex.match?(@key_re, key) do
       {:ok, key}

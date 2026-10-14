@@ -157,6 +157,8 @@ defmodule CodingAgent.Session.Lifecycle do
             run_id: run_id,
             session_key: session_key,
             agent_id: agent_id,
+            hooks: lifecycle.hooks,
+            secret_obfuscator: secret_obfuscator,
             approval_context: approval_context
           },
           session_pid

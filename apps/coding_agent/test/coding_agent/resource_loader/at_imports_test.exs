@@ -81,6 +81,10 @@ defmodule CodingAgent.ResourceLoader.AtImportsTest do
            ~~~~
            Run `npm i @types/node` then REAL
            """
+
+    code = "``outer ` @real.md\nstill @real.md ``"
+    assert expand(code, ctx) == code
+    assert expand(code <> "\n@real.md", ctx) == code <> "\nREAL"
   end
 
   test "a missing or directory target keeps the original token", ctx do

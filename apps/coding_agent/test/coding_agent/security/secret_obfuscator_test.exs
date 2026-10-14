@@ -63,10 +63,8 @@ defmodule CodingAgent.Security.SecretObfuscatorTest do
         "tiny short authorvaluelong not-a-secret-but-long"
 
     {obfuscator, log} = with_log(fn -> build(ctx, env) end)
-    # Invalid entries are skipped individually with a warning.
-    assert log =~ ~s(type must be "plain" or "regex")
-    assert log =~ "invalid regex pattern"
-    assert log =~ "can never be redacted"
+    refute log =~ "shared-secret-value"
+    refute log =~ "global-only-secret"
 
     out = SecretObfuscator.obfuscate(obfuscator, text)
 
@@ -84,6 +82,15 @@ defmodule CodingAgent.Security.SecretObfuscatorTest do
     # Obfuscate mode is reversible; replace mode is one way.
     assert SecretObfuscator.deobfuscate(obfuscator, out) ==
              String.replace(text, "global-only-secret", "[global]")
+
+    File.write!(
+      Path.join([ctx.cwd, ".lemon", "secrets.yml"]),
+      "- content: \"malformed-secret-value\n"
+    )
+
+    {parsed, parse_log} = with_log(fn -> build(ctx, env) end)
+    refute parse_log =~ "malformed-secret-value"
+    refute SecretObfuscator.obfuscate(parsed, "env-token-value-1") =~ "env-token-value-1"
   end
 
   test "placeholders are keyed per install, deterministic and case-hinted", ctx do
@@ -99,7 +106,9 @@ defmodule CodingAgent.Security.SecretObfuscatorTest do
     assert SecretObfuscator.deobfuscate(obfuscator, out) == "token=#{token}"
 
     # Stable across restarts with the same key; unrelated under another key.
+    File.chmod!(key_path, 0o644)
     assert SecretObfuscator.obfuscate(build(ctx, %{}), "token=#{token}") == out
+    assert File.stat!(key_path).mode |> Bitwise.band(0o777) == 0o600
 
     other_key = Path.join(ctx.agent_dir, "other.key")
 
@@ -145,6 +154,40 @@ defmodule CodingAgent.Security.SecretObfuscatorTest do
     # ...but not when the label itself is secret-shaped, or the token is unknown.
     assert restored["forged"] == args["forged"]
     assert restored["unknown"] == args["unknown"]
+  end
+
+  test "overlapping literal and regex secrets are redacted without exposing fragments", ctx do
+    token = "ghp_" <> String.duplicate("abc123def4", 4)
+    fragment = "abc123def4"
+    obfuscator = build(ctx, %{"TOKEN" => fragment})
+    output = SecretObfuscator.obfuscate(obfuscator, token)
+    assert Regex.match?(@placeholder, output)
+    refute output =~ "ghp_"
+    assert SecretObfuscator.deobfuscate(obfuscator, output) == token
+
+    # Neither source contains the other's whole span: their union must be hidden.
+    File.write!(Path.join(ctx.agent_dir, "secrets.yml"), """
+    - type: regex
+      content: "12345678tail"
+    """)
+
+    overlapping = build(ctx, %{"PASSWORD" => "head12345678"})
+    output = SecretObfuscator.obfuscate(overlapping, "head12345678tail")
+    assert Regex.match?(@placeholder, output)
+    assert SecretObfuscator.deobfuscate(overlapping, output) == "head12345678tail"
+
+    File.write!(Path.join(ctx.agent_dir, "secrets.yml"), """
+    - type: regex
+      content: "12345678tail"
+      mode: replace
+      replacement: "[removed]"
+    """)
+
+    one_way = build(ctx, %{"PASSWORD" => "head12345678"})
+    output = SecretObfuscator.obfuscate(one_way, "head12345678tail")
+    refute output =~ "head"
+    refute output =~ "tail"
+    assert SecretObfuscator.deobfuscate(one_way, output) == output
   end
 
   test "default replace-mode regex redaction keeps length and is a fixed point", ctx do

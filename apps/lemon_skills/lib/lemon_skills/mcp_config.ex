@@ -101,7 +101,7 @@ defmodule LemonSkills.McpConfig do
           {:ok,
            document
            |> put_name_list(add, [name | added])
-           |> put_name_list(drop, List.delete(dropped, name))}
+           |> put_name_list(drop, Enum.reject(dropped, &(&1 == name)))}
         end
       end)
     else

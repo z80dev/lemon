@@ -103,7 +103,7 @@ export interface CommandHost {
 	/** Focus the pending-queue panel (`/queue`, Ctrl+Q). */
 	focusQueue?(): boolean;
 	/** Deliver a command-supplied prompt through the normal submission state machine. */
-	deliverPrompt?(text: string, mode: SubmissionMode): void | Promise<void>;
+	deliverPrompt?(text: string, mode?: SubmissionMode): void | Promise<void>;
 	/** The client-side queue for the focused session, for `/queue` to describe. */
 	queuedPrompts?(): readonly string[];
 	/**

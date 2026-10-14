@@ -65,7 +65,7 @@ await Bun.write("./output.txt", "Hello, World!");
 | `description` | Yes | Used for relevance matching |
 | `tags` | No | Up to 32 bounded safe strings |
 | `keywords` | No | Up to 32 bounded relevance terms |
-| `hide` | No | `true` omits the skill from the model-visible prompt listing and per-turn relevant-skill hints; it stays loadable by name (`read_skill`, `skill://`, `/skill:<name>`) and in `list`/CLI. Alias: `disable-model-invocation` (Agent Skills standard). Only boolean `true` hides. |
+| `hide` | No | `true` omits the skill from the model-visible prompt listing, per-turn relevant-skill hints and missing-skill suggestions; it stays loadable by name (`read_skill`, `skill://`, `/skill:<name>`) and in `list`/CLI. Alias: `disable-model-invocation` (Agent Skills standard). Only boolean `true` hides. |
 
 Present names and descriptions must be non-empty, single-line, valid UTF-8 without control or bidirectional formatting characters. Names are limited to 128 bytes, descriptions to 1,024 bytes, and each tag/keyword or requirement item to 128 bytes; list fields accept at most 32 string entries. Prompt rendering applies an additional defensive flatten/clamp/XML-escape pass. All catalog metadata is treated as untrusted discovery data; source/trust provenance is disclosed when a skill is loaded.
 
@@ -597,6 +597,8 @@ Claude Code's user files from that directory. User-level files are read from
 the home directory, or from `config :lemon_skills, :mcp_discovery_home`; when
 `LEMON_AGENT_DIR` or another agent/harness directory override isolates the
 runtime and no discovery home is configured, no user-level files are read.
+Launching from home or inside a foreign user-config directory does not turn
+those files into project sources: the user-source opt-in still applies.
 
 ### Configuration
 

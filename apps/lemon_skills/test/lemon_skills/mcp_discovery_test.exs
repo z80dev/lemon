@@ -247,18 +247,30 @@ defmodule LemonSkills.McpDiscoveryTest do
     json(h, ".omp/agent/.mcp.json", %{"mcpServers" => %{"omp-u" => %{"command" => "o"}}})
     json(h, ".cursor/mcp.json", %{"mcpServers" => %{"cur-u" => %{"command" => "c"}}})
     json(h, ".claude.json", %{"mcpServers" => %{"claude-home" => %{"command" => "c"}}})
+    json(h, ".claude/mcp.json", %{"mcpServers" => %{"claude-mcp" => %{"command" => "c"}}})
+    json(h, ".gemini/settings.json", %{"mcpServers" => %{"gem-u" => %{"command" => "g"}}})
+    write(h, ".codex/config.toml", "[mcp_servers.codex-u]\ncommand = \"c\"\n")
+
+    json(h, ".config/opencode/opencode.json", %{
+      "mcp" => %{"oc-u" => %{"type" => "local", "command" => ["node", "server.js"]}}
+    })
+
     claude_dir = Path.join(root, "claude-config")
     json(claude_dir, ".claude.json", %{"mcpServers" => %{"claude-env" => %{"command" => "c"}}})
 
     assert names(McpDiscovery.discover(p)) == ["omp-u"]
     assert names(McpDiscovery.discover(nil)) == ["omp-u"]
+    assert names(McpDiscovery.discover(h)) == ["omp-u"]
+    assert names(McpDiscovery.discover(Path.join(h, ".config/opencode"))) == ["omp-u"]
 
     System.put_env("CLAUDE_CONFIG_DIR", claude_dir)
     assert names(McpDiscovery.discover(p)) == ["omp-u", "claude-env"]
 
     System.delete_env("CLAUDE_CONFIG_DIR")
     System.put_env("LEMON_MCP_EXTERNAL_USER_DISCOVERY", "yes")
-    assert names(McpDiscovery.discover(p)) == ["omp-u", "claude-home", "cur-u"]
+
+    assert names(McpDiscovery.discover(p)) ==
+             ["omp-u", "claude-home", "codex-u", "gem-u", "oc-u", "cur-u"]
 
     # Isolated runtimes without an explicit discovery home read no user files.
     Application.delete_env(:lemon_skills, :mcp_discovery_home)
@@ -352,6 +364,14 @@ defmodule LemonSkills.McpDiscoveryTest do
 
     entry = Enum.find(Config.mcp_server_entries(p), &(&1.name == "off"))
     assert %{override: :disabled, enabled: false, source_enabled: false} = entry
+
+    File.write!(
+      Config.project_mcp_config_file(p),
+      Jason.encode!(Map.put(document, "disabled_servers", ["off", "off"]))
+    )
+
+    assert :ok = McpConfig.set_enabled("off", true, cwd: p)
+    assert enabled_names(p) == ["off", "on"]
 
     assert {:error, :invalid_entry} = McpConfig.set_enabled("bad\nname", true, cwd: p)
     File.write!(Config.project_mcp_config_file(p), ~s({"disabled_servers": "off"}))

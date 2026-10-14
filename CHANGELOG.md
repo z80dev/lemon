@@ -9,6 +9,16 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 ## [Unreleased]
 
 ### Added
+- Context parity hardening: overlapping secret sources are redacted without
+  exposing credential fragments; malformed secret YAML does not echo values
+  into logs. Private plan tools restore placeholders and enforce interception
+  hooks without bypassing their directory boundary. Foreign-global MCP configs
+  still require opt-in when launched from home, enabling a server clears every
+  matching denylist entry, and hidden skills stay out of missing-key suggestions.
+  File commands preserve empty positional arguments, consume one-shot submission
+  modes, and expand on local steering/redirect without expanding internal or
+  named-destination prompts. Inline-code imports respect matching backtick runs
+  across lines.
 
 - Skills with `hide: true` or `disable-model-invocation: true` frontmatter are
   omitted from the model-visible skill listing and per-turn relevant-skill

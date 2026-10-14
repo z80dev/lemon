@@ -55,6 +55,11 @@ defmodule LemonSkills.HiddenSkillTest do
 
     assert Enum.sort(prompt_keys) == Enum.sort(visible)
 
+    missing = ReadSkill.execute("missing", %{"key" => "not-a-skill"}, nil, nil, cwd)
+    suggestions = Enum.map_join(missing.content, "\n", &Map.get(&1, :text, ""))
+    for key <- hidden, do: refute(suggestions =~ key)
+    for key <- visible, do: assert(suggestions =~ key)
+
     # Listing and explicit loads are unaffected.
     listed = LemonSkills.list(cwd: cwd) |> Enum.map(& &1.key)
     for key <- hidden, do: assert(key in listed)

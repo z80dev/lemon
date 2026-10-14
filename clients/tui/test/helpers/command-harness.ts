@@ -98,7 +98,7 @@ export class RecordingHost implements CommandHost {
 		this.modelPickerOpens += 1;
 	}
 
-	deliverPrompt(text: string, mode: SubmissionMode): void {
+	deliverPrompt(text: string, mode: SubmissionMode = "queue"): void {
 		this.deliveries.push({ text, mode });
 	}
 

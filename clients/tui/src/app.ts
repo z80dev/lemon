@@ -1384,7 +1384,7 @@ export class AppShell {
 			},
 			reloadSession: (sessionKey: string) => this.sessions.reload(sessionKey),
 			focusQueue: () => this.focusQueue(),
-			deliverPrompt: (text: string, mode: SubmissionMode) => this.sendPrompt(text, { mode }),
+			deliverPrompt: (text: string, mode?: SubmissionMode) => this.sendPrompt(text, { mode }),
 			queuedPrompts: () => this.store.queue.items(this.store.focusedKey).map((item) => item.text),
 			resolveApproval: (approvalId: string, decision: string) =>
 				this.approvals.resolve(approvalId, decision),

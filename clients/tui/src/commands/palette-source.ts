@@ -287,7 +287,7 @@ export function fileSlashCommand(command: FileCommand): SlashCommand {
 				return;
 			}
 			const text = ctx.rest ? `/${command.name} ${ctx.rest}` : `/${command.name}`;
-			await ctx.ui.deliverPrompt(text, ctx.store.submissionMode);
+			await ctx.ui.deliverPrompt(text);
 		},
 	};
 }

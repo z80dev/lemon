@@ -81,7 +81,8 @@ Personal aliases live in @~/.notes/aliases.md.
 - Relative paths resolve from the importing file's directory, not the working
   directory. `~` and `~/...` resolve from the home directory; absolute paths are
   used as-is.
-- Tokens inside fenced code blocks and inline code spans stay literal.
+- Tokens inside fenced code blocks and inline code spans stay literal. Inline
+  spans close only on the opening backtick-run length, including across lines.
 - Trailing `. , ; : ! ? ) ] } " '` is not part of the path, so
   `@docs/setup.md.` imports `docs/setup.md`.
 - Imports recurse up to five hops. A file already imported into the same

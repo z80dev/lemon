@@ -227,7 +227,7 @@ defmodule CodingAgent.Executor.SessionRunner do
               })
 
           _ ->
-            prompt = expand_file_command(request, prompt, cwd)
+            prompt = CodingAgent.Commands.prepare_prompt(cwd, prompt, request.meta || %{})
             :ok = CodingAgent.Session.prompt(session, prompt, images: request.images)
         end
 
@@ -418,28 +418,6 @@ defmodule CodingAgent.Executor.SessionRunner do
     meta = request.meta || %{}
     meta[:async_followups] || meta["async_followups"]
   end
-
-  # A user-typed `/name args` naming a discovered file command becomes the
-  # command's expanded template. Only user-facing origins expand; delegated,
-  # scheduled and automation prompts are system- or model-authored.
-  defp expand_file_command(request, prompt, cwd) when is_binary(prompt) do
-    meta = request.meta || %{}
-
-    with origin when origin in [:channel, :control_plane, "channel", "control_plane"] <-
-           meta[:origin] || meta["origin"],
-         {:ok, expanded, _command} <- CodingAgent.Commands.expand_input(cwd, prompt) do
-      expanded
-    else
-      {:error, :too_large} ->
-        Logger.warning("Lemon SessionRunner: file command expansion too large; sent as typed")
-        prompt
-
-      _ ->
-        prompt
-    end
-  end
-
-  defp expand_file_command(_request, prompt, _cwd), do: prompt
 
   @doc false
   @spec profile_workspace(map()) :: String.t()

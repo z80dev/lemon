@@ -54,7 +54,8 @@ text are shown as written.
 The 12-character base is an HMAC of the exact secret under a private
 per-install key in `<agent_dir>/secret-placeholder.key` (by default
 `~/.lemon/agent/secret-placeholder.key`), created with mode `0600` when first
-needed. The key is never sent to a provider, and its own bytes are redacted if
+needed; existing regular key files are tightened to `0600` before loading.
+The key is never sent to a provider, and its own bytes are redacted if
 a tool reads the file. Because the key persists, a secret gets the same
 placeholder in every session, which keeps provider prompt caches stable. If the
 key cannot be written, Lemon logs a warning and uses a key that lasts only for
@@ -150,14 +151,18 @@ Patterns use PCRE syntax, which accepts common JavaScript-style patterns.
 
 ## Order of matching
 
-Each text is processed in this order: one-way replacements (including the
-placeholder key), then literal `obfuscate` values, longest first, then regex
-entries in file order with the built-in token pattern last. Placeholders
-produced earlier in the pass are not rewritten by later steps.
+Every source is matched against the original text, before any replacement.
+Overlapping matches are redacted as one span, so a smaller literal cannot
+split a larger credential pattern and expose its remaining bytes. A covering
+one-way replacement takes precedence; an overlap involving a one-way match
+without a covering replacement redacts the whole span irreversibly. Otherwise
+the complete span gets a reversible placeholder. Minted placeholders are left
+unchanged on subsequent passes.
 
 ## Implementation
 
 `CodingAgent.Security.SecretObfuscator` builds the session obfuscator, runs as
 a stage of the pre-LLM transform chain after the untrusted tool-output boundary,
 and wraps session tools as the outermost wrapper (before extension hooks and
-approval) to restore placeholders in tool arguments.
+approval) to restore placeholders in tool arguments. Private plan-mode file
+tools and plan proposals use the same restore/interception order.

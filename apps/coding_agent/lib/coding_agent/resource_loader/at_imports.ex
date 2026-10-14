@@ -55,11 +55,11 @@ defmodule CodingAgent.ResourceLoader.AtImports do
 
   defp expand_content(content, base_dir, depth, state) do
     if String.contains?(content, "@") do
-      {lines, {state, _fence}} =
+      {lines, {state, _code_state}} =
         content
         |> String.split("\n")
-        |> Enum.map_reduce({state, nil}, fn line, {state, fence} ->
-          expand_markdown_line(line, fence, base_dir, depth, state)
+        |> Enum.map_reduce({state, {nil, nil}}, fn line, {state, code_state} ->
+          expand_markdown_line(line, code_state, base_dir, depth, state)
         end)
 
       {Enum.join(lines, "\n"), state}
@@ -70,21 +70,22 @@ defmodule CodingAgent.ResourceLoader.AtImports do
 
   # Fenced code blocks are kept verbatim. A closing fence uses the opening
   # fence's character with at least as many marks.
-  defp expand_markdown_line(line, nil, base_dir, depth, state) do
+  defp expand_markdown_line(line, {nil, inline}, base_dir, depth, state) do
     case match_fence(line) do
       nil ->
-        {line, state} = expand_line(line, base_dir, depth, state)
-        {line, {state, nil}}
+        next_inline = inline_state(line, byte_size(line), inline)
+        {line, state} = expand_line(line, inline, base_dir, depth, state)
+        {line, {state, {nil, next_inline}}}
 
       fence ->
-        {line, {state, fence}}
+        {line, {state, {fence, nil}}}
     end
   end
 
-  defp expand_markdown_line(line, {char, len} = fence, _base_dir, _depth, state) do
+  defp expand_markdown_line(line, {{char, len} = fence, inline}, _base_dir, _depth, state) do
     case match_fence(line) do
-      {^char, close_len} when close_len >= len -> {line, {state, nil}}
-      _ -> {line, {state, fence}}
+      {^char, close_len} when close_len >= len -> {line, {state, {nil, nil}}}
+      _ -> {line, {state, {fence, inline}}}
     end
   end
 
@@ -95,7 +96,7 @@ defmodule CodingAgent.ResourceLoader.AtImports do
     end
   end
 
-  defp expand_line(line, base_dir, depth, state) do
+  defp expand_line(line, inline, base_dir, depth, state) do
     if String.contains?(line, "@") do
       matches =
         @import_regex
@@ -106,7 +107,7 @@ defmodule CodingAgent.ResourceLoader.AtImports do
           trimmed = Regex.replace(@trailing_punct, token, "")
 
           cond do
-            inside_inline_code?(line, at_pos) -> []
+            inline_state(line, at_pos, inline) != nil -> []
             trimmed == "" -> []
             true -> [{at_pos, at_pos + 1 + byte_size(trimmed), trimmed}]
           end
@@ -135,14 +136,21 @@ defmodule CodingAgent.ResourceLoader.AtImports do
     splice(line, rest, stop, base_dir, depth, state, [replacement, before | acc])
   end
 
-  # Backtick-run parity scan: an odd number of runs before the `@` means the
-  # token sits inside an inline code span.
-  defp inside_inline_code?(line, position) do
+  # Only a backtick run of the opening delimiter's length closes a code span.
+  # Carry the opening length across lines so multiline examples stay literal.
+  defp inline_state(line, position, initial) do
     line
     |> binary_part(0, position)
     |> then(&Regex.scan(~r/`+/, &1))
-    |> length()
-    |> rem(2) == 1
+    |> Enum.reduce(initial, fn [marks], opening ->
+      len = byte_size(marks)
+
+      cond do
+        opening == nil -> len
+        opening == len -> nil
+        true -> opening
+      end
+    end)
   end
 
   defp resolve_and_expand(import_path, base_dir, depth, state) do

@@ -136,8 +136,8 @@ defmodule CodingAgent.Security.SecretObfuscator.Loader do
       {:ok, _other} ->
         warn(path, "must be a YAML array")
 
-      {:error, reason} ->
-        warn(path, "could not be parsed: #{Exception.message(reason)}")
+      {:error, _reason} ->
+        warn(path, "could not be parsed")
     end
   end
 

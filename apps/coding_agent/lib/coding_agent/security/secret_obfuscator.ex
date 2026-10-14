@@ -112,10 +112,7 @@ defmodule CodingAgent.Security.SecretObfuscator do
   @doc "Replace secrets in `text` with placeholders (obfuscate) or replacements (replace)."
   @spec obfuscate(t() | nil, term()) :: term()
   def obfuscate(%__MODULE__{} = obfuscator, text) when is_binary(text) do
-    text
-    |> apply_literals(obfuscator, replace_pairs(obfuscator))
-    |> apply_literals(obfuscator, obfuscator.obfuscate)
-    |> apply_regexes(obfuscator)
+    map_raw(text, obfuscator, &redact_segment(&1, obfuscator))
   end
 
   def obfuscate(_obfuscator, text), do: text
@@ -242,47 +239,85 @@ defmodule CodingAgent.Security.SecretObfuscator do
 
   # ── Obfuscation passes ────────────────────────────────────────────────────
 
-  defp apply_literals(text, obfuscator, pairs) do
-    Enum.reduce(pairs, text, fn {secret, output}, acc ->
-      if :binary.match(acc, secret) == :nomatch do
-        acc
-      else
-        map_raw(acc, obfuscator, &:binary.replace(&1, secret, output, [:global]))
-      end
-    end)
-  end
+  # Match every source against the original bytes. Rewriting one source before
+  # scanning another can split a larger credential and expose its remaining
+  # bytes (for example an env value inside a built-in token match).
+  defp redact_segment(text, obfuscator) do
+    literal_matches =
+      Enum.flat_map(replace_pairs(obfuscator), &literal_matches(text, &1, :replace)) ++
+        Enum.flat_map(obfuscator.obfuscate, &literal_matches(text, &1, :obfuscate))
 
-  defp apply_regexes(text, obfuscator) do
-    Enum.reduce(obfuscator.regexes, text, fn entry, acc ->
-      if Regex.match?(entry.regex, acc) do
-        map_raw(acc, obfuscator, &apply_regex(obfuscator, entry, &1))
-      else
-        acc
-      end
-    end)
-  end
-
-  defp apply_regex(obfuscator, entry, segment) do
-    {parts, last} =
-      entry.regex
-      |> Regex.scan(segment, return: :index)
-      |> Enum.map(&hd/1)
-      |> Enum.reject(fn {_start, len} -> len == 0 end)
-      |> Enum.reduce({[], 0}, fn {start, len}, {acc, pos} ->
-        value = binary_part(segment, start, len)
-        output = regex_output(obfuscator, entry, value, segment, start)
-        {[acc, binary_part(segment, pos, start - pos), output], start + len}
+    regex_matches =
+      Enum.flat_map(obfuscator.regexes, fn entry ->
+        entry.regex
+        |> Regex.scan(text, return: :index)
+        |> Enum.map(&hd/1)
+        |> Enum.filter(fn {start, len} ->
+          len > 0 and
+            (entry.mode == :replace or
+               text_length(binary_part(text, start, len)) >= @min_obfuscate_len)
+        end)
+        |> Enum.map(fn {start, len} -> {start, start + len, {:regex, entry}} end)
       end)
 
-    IO.iodata_to_binary([parts, binary_part(segment, last, byte_size(segment) - last)])
+    groups =
+      (literal_matches ++ regex_matches)
+      |> Enum.with_index()
+      |> Enum.sort_by(fn {{start, stop, _}, order} -> {start, -stop, order} end)
+      |> Enum.reduce([], fn {{start, stop, source}, order}, groups ->
+        match = {start, stop, source, order}
+
+        case groups do
+          [{group_start, group_stop, matches} | rest] when start < group_stop ->
+            [{group_start, max(group_stop, stop), [match | matches]} | rest]
+
+          _ ->
+            [{start, stop, [match]} | groups]
+        end
+      end)
+      |> Enum.reverse()
+
+    {parts, last} =
+      Enum.reduce(groups, {[], 0}, fn {start, stop, matches}, {acc, pos} ->
+        output = redact_group(text, start, stop, matches, obfuscator)
+        {[acc, binary_part(text, pos, start - pos), output], stop}
+      end)
+
+    IO.iodata_to_binary([parts, binary_part(text, last, byte_size(text) - last)])
   end
 
-  defp regex_output(obfuscator, %{mode: :obfuscate} = entry, value, _segment, _start) do
-    # Short matches are left alone to avoid redacting ordinary small words.
-    if text_length(value) < @min_obfuscate_len,
-      do: value,
-      else: mint(obfuscator, value, entry.friendly_name)
+  defp literal_matches(text, {secret, output}, mode) do
+    text
+    |> :binary.matches(secret)
+    |> Enum.map(fn {start, len} -> {start, start + len, {:literal, mode, output}} end)
   end
+
+  defp redact_group(text, start, stop, matches, obfuscator) do
+    value = binary_part(text, start, stop - start)
+
+    replacements =
+      Enum.filter(matches, fn {_, _, source, _} -> match_mode(source) == :replace end)
+
+    candidates = if replacements == [], do: matches, else: replacements
+
+    covering =
+      candidates
+      |> Enum.filter(fn {ms, me, _, _} -> ms == start and me == stop end)
+      |> Enum.min_by(fn {_, _, _, order} -> order end, &<=/2, fn -> nil end)
+
+    case covering do
+      {_, _, {:literal, _, output}, _} -> output
+      {_, _, {:regex, entry}, _} -> regex_output(obfuscator, entry, value, text, start)
+      nil when replacements == [] -> mint(obfuscator, value, nil)
+      nil -> default_replacement(value)
+    end
+  end
+
+  defp match_mode({:literal, mode, _}), do: mode
+  defp match_mode({:regex, entry}), do: entry.mode
+
+  defp regex_output(obfuscator, %{mode: :obfuscate} = entry, value, _segment, _start),
+    do: mint(obfuscator, value, entry.friendly_name)
 
   defp regex_output(_obfuscator, %{replacement: replacement}, _value, _segment, _start)
        when is_binary(replacement),

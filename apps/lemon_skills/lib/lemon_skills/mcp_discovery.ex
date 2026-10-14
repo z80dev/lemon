@@ -60,6 +60,16 @@ defmodule LemonSkills.McpDiscovery do
   @falsy ["0", "false", "FALSE", "False", "no", "NO", "No"]
   @truthy ["1", "true", "TRUE", "True", "yes", "YES", "Yes"]
   @env_placeholder ~r/\$\{([^}:]+)(:-([^}]*))?\}/
+  @foreign_user_configs [
+    ".claude/mcp.json",
+    ".claude/.mcp.json",
+    ".codex/config.toml",
+    ".gemini/settings.json",
+    ".cursor/mcp.json",
+    ".config/opencode/opencode.json",
+    ".config/opencode/opencode.jsonc",
+    ".codeium/windsurf/mcp_config.json"
+  ]
 
   @doc "Whether external MCP config discovery is enabled (default: true)."
   @spec enabled?() :: boolean()
@@ -86,10 +96,20 @@ defmodule LemonSkills.McpDiscovery do
   """
   @spec discover(String.t() | nil, keyword()) :: [server()]
   def discover(cwd, opts \\ []) do
+    home = Keyword.get_lazy(opts, :home, &Config.mcp_discovery_home/0)
+    user_sources = Keyword.get_lazy(opts, :user_sources, &user_sources_enabled?/0)
+    boundary_home = home || System.user_home()
+
+    user_config_paths =
+      if not user_sources and boundary_home,
+        do: MapSet.new(@foreign_user_configs, &Path.expand(&1, boundary_home)),
+        else: MapSet.new()
+
     ctx = %{
       cwd: if(is_binary(cwd), do: Path.expand(cwd)),
-      home: Keyword.get_lazy(opts, :home, &Config.mcp_discovery_home/0),
-      user_sources: Keyword.get_lazy(opts, :user_sources, &user_sources_enabled?/0),
+      home: home,
+      user_sources: user_sources,
+      user_config_paths: user_config_paths,
       claude_config_dir:
         Keyword.get_lazy(opts, :claude_config_dir, fn -> System.get_env("CLAUDE_CONFIG_DIR") end)
     }
@@ -234,7 +254,25 @@ defmodule LemonSkills.McpDiscovery do
   # ── paths ────────────────────────────────────────────────────────────────────
 
   defp project_path(%{cwd: nil}, _segments), do: []
-  defp project_path(%{cwd: cwd}, segments), do: [Path.join([cwd | segments])]
+
+  defp project_path(ctx, segments) do
+    path = Path.join([ctx.cwd | segments])
+
+    if not ctx.user_sources and foreign_user_config?(path, ctx),
+      do: [],
+      else: [path]
+  end
+
+  # A cwd at home (or inside a foreign config directory) must not reclassify a
+  # user-level server as a project server and bypass the user-source opt-in.
+  defp foreign_user_config?(path, ctx) do
+    explicit_claude =
+      is_binary(ctx.claude_config_dir) and String.trim(ctx.claude_config_dir) != "" and
+        Path.dirname(path) == Path.expand(ctx.claude_config_dir) and
+        Path.basename(path) in ["mcp.json", ".mcp.json"]
+
+    MapSet.member?(ctx.user_config_paths, Path.expand(path)) and not explicit_claude
+  end
 
   defp foreign_user_path(%{home: home, user_sources: true}, segments) when is_binary(home),
     do: [Path.join([home | segments])]

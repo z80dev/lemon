@@ -35,13 +35,23 @@ async function bootApp(sessionKey = "tui-test", cwd = process.cwd()) {
 	// Local discovery (file commands, palette) must never read the real home.
 	const home = mkdtempSync(join(tmpdir(), "lemon-tui-home-"));
 	teardown.push(() => rmSync(home, { recursive: true, force: true }));
-	const server = await FakeControlPlane.start();
+	// Match the advertised protocol to this fixture's implemented services.
+	// Unrelated activity/routing/approval hydration must not participate in boot.
+	const server = await FakeControlPlane.start({
+		methods: [
+			"chat.send", "chat.abort", "chat.history", "sessions.patch", "sessions.reset",
+			"models.list", "usage.status", "status", "health", "background.start", "background.result",
+		],
+	});
 	teardown.push(() => server.stop());
 	server.onMethod("chat.send", (params: { sessionKey: string }) => ({
 		runId: "run-1",
 		sessionKey: params.sessionKey,
 	}));
 	server.respondWith("chat.abort", { aborted: true, runId: "run-1" });
+	server.respondWith("chat.history", { messages: [] });
+	server.respondWith("health", { status: "ok" });
+	server.respondWith("sessions.reset", { success: true });
 	server.respondWith("sessions.patch", { success: true });
 	server.respondWith("models.list", {
 		models: [
@@ -182,6 +192,17 @@ describe("file-defined slash commands", () => {
 		await app.submit("/help");
 		expect(chatText(app)).toContain("/review <path>");
 		expect(server.requestsFor("chat.send")).toHaveLength(1);
+
+		app.editor.handleInput("\x1b\r");
+		await app.submit("/review lib/second.ex");
+		expect(server.requestsFor("chat.send")[1].params).toMatchObject({
+			prompt: "/review lib/second.ex",
+			queueMode: "steer",
+		});
+		expect(app.effectiveMode).toBe("queue");
+		await app.submit("ordinary followup");
+		expect(server.requestsFor("chat.send")).toHaveLength(2);
+		expect(app.store.queue.length("tui-test")).toBe(1);
 	});
 });
 
@@ -359,6 +380,17 @@ describe("global keys", () => {
 });
 
 describe("shell escapes", () => {
+	let previousShell: string | undefined;
+	beforeEach(() => {
+		previousShell = process.env.LEMON_TUI_SHELL;
+		// Exercise the real subprocess path without user-shell startup files.
+		process.env.LEMON_TUI_SHELL = "/bin/sh";
+	});
+	afterEach(() => {
+		if (previousShell === undefined) delete process.env.LEMON_TUI_SHELL;
+		else process.env.LEMON_TUI_SHELL = previousShell;
+	});
+
 	test("!cmd is recorded in the transcript and nothing is sent", async () => {
 		const { app, server } = await bootApp();
 		// The command owns the real terminal, so its output is not ours to

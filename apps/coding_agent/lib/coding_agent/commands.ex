@@ -67,6 +67,7 @@ defmodule CodingAgent.Commands do
   a blank line.
   """
 
+  require Logger
   alias CodingAgent.Config
 
   @max_file_bytes 64 * 1024
@@ -182,6 +183,39 @@ defmodule CodingAgent.Commands do
   end
 
   @doc """
+  Prepare a user-origin prompt for a local native run or live steer/redirect.
+  Internal followups and named-node requests stay literal: remote discovery
+  must happen on the destination, with that submission's origin preserved.
+  """
+  @spec prepare_prompt(String.t() | nil, term(), map()) :: term()
+  def prepare_prompt(cwd, prompt, meta)
+      when is_binary(cwd) and is_binary(prompt) and is_map(meta) do
+    origin = meta[:origin] || meta["origin"]
+    node = meta[:node] || meta["node"]
+    local? = is_nil(node) or (is_binary(node) and String.trim(node) in ["", "local"])
+    followups = meta[:async_followups] || meta["async_followups"]
+
+    if local? and origin in [:channel, :control_plane, "channel", "control_plane"] and
+         followups in [nil, []] do
+      case expand_input(cwd, prompt) do
+        {:ok, expanded, _command} ->
+          expanded
+
+        {:error, :too_large} ->
+          Logger.warning("File command expansion too large; sent as typed")
+          prompt
+
+        :nomatch ->
+          prompt
+      end
+    else
+      prompt
+    end
+  end
+
+  def prepare_prompt(_cwd, prompt, _meta), do: prompt
+
+  @doc """
   Parse user input that starts with `/` into `{name, args}`, or `nil`.
 
   Arguments are split on whitespace; single or double quotes group words.
@@ -209,27 +243,36 @@ defmodule CodingAgent.Commands do
   def parse_args(text) when is_binary(text) do
     text
     |> String.graphemes()
-    |> Enum.reduce({[], "", nil}, fn
-      char, {args, current, quote} when char == quote -> {args, current, nil}
-      char, {args, current, nil} when char in ["\"", "'"] -> {args, current, char}
-      char, {args, current, nil} -> split_char(char, args, current)
-      char, {args, current, quote} -> {args, current <> char, quote}
+    |> Enum.reduce({[], "", nil, false}, fn
+      char, {args, current, quote, _started} when char == quote ->
+        {args, current, nil, true}
+
+      char, {args, current, nil, _started} when char in ["\"", "'"] ->
+        {args, current, char, true}
+
+      char, {args, current, nil, started} ->
+        split_char(char, args, current, started)
+
+      char, {args, current, quote, _started} ->
+        {args, current <> char, quote, true}
     end)
-    |> then(fn {args, current, _quote} -> Enum.reverse(push_arg(args, current)) end)
+    |> then(fn {args, current, _quote, started} ->
+      Enum.reverse(push_arg(args, current, started))
+    end)
   end
 
   # ============================================================================
   # Expansion
   # ============================================================================
 
-  defp split_char(char, args, current) do
+  defp split_char(char, args, current, started) do
     if String.match?(char, ~r/\A\s+\z/),
-      do: {push_arg(args, current), "", nil},
-      else: {args, current <> char, nil}
+      do: {push_arg(args, current, started), "", nil, false},
+      else: {args, current <> char, nil, true}
   end
 
-  defp push_arg(args, ""), do: args
-  defp push_arg(args, current), do: [current | args]
+  defp push_arg(args, _current, false), do: args
+  defp push_arg(args, current, true), do: [current | args]
 
   defp split_invocation(text) do
     case String.trim(text) do

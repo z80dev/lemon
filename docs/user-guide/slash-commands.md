@@ -66,6 +66,7 @@ left as literal text.
 ## Arguments
 
 Arguments are split on whitespace; single or double quotes group words.
+Explicitly empty quoted arguments (`""` or `''`) keep their positional slot.
 
 | Placeholder | Value |
 | --- | --- |
@@ -79,9 +80,14 @@ appended after a blank line. An expansion larger than 256 KiB is sent as typed.
 ## How expansion works
 
 Expansion happens on the daemon, against the session's working directory,
-when a channel or control-plane run starts (`CodingAgent.Commands`). The model
-sees, and session history stores, the expanded text. Subagent, delegated
-`agent`, scheduled and automation prompts are never expanded.
+when a local channel or control-plane run starts, or when a local run receives
+steering or redirect text (`CodingAgent.Commands`). The model sees, and session
+history stores, the expanded text. Subagent, delegated `agent`, scheduled,
+automation and async completion prompts are never expanded.
+
+Named-node steering/redirect currently carries text without the incoming
+submission's origin. Such text stays literal; Lemon never reads the
+controller's command files to expand a prompt destined for another machine.
 
 The TUI discovers the same roots locally so `/name` autocompletes, appears in
 the palette and `/help`, and is sent verbatim; new command files are picked up
@@ -89,6 +95,8 @@ the next time an unknown name is typed or the palette opens. Namespaced names
 such as `/git:commit` are sent as prompt text and expanded by the daemon. When
 the TUI is attached to a daemon with a different working directory, the
 daemon's files decide what expands.
+File commands use the normal submission mode, including the one-shot Alt+Enter
+override; submitting one consumes that override just like ordinary prompt text.
 
 ACP clients receive the discovered commands in `available_commands_update`
 after the built-ins, with `argument-hint` as the input hint.

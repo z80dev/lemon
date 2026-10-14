@@ -186,6 +186,11 @@ defmodule CodingAgent.CommandsDiscoveryTest do
 
       assert Commands.expand(%{template: template}, ~s(one "two words")) ==
                ~s(first=one second=two words all=one "two words" gemini=one "two words" spaced=one "two words")
+
+      assert Commands.expand(%{template: "first=[$1] second=[$2]"}, ~s("" destination)) ==
+               "first=[] second=[destination]"
+
+      assert Commands.parse_args(~s('' "" third)) == ["", "", "third"]
     end
 
     test "substitution is single pass" do
