@@ -234,7 +234,8 @@ remain unchanged.
 `profiles.sync` provisions the four controller-owned persona instruction files
 and a credential-free revision record on the target, verifying persisted files
 before acknowledging. Explicit `nodeId` supports provisioning before a move;
-otherwise the current named placement must resolve uniquely. Local profiles
+otherwise current placement selects an exact stored durable ID first, even if
+offline, and resolves a unique configured name only when no ID record exists. Local profiles
 require an explicit target. Sync never switches controller placement and never
 copies MCP headers, provider credentials, USER.md, skills or memory. Mutation
 correlation is optional (`null` when absent); a non-null mutation/digest binding
@@ -246,8 +247,9 @@ the exact binding and stored files verify, `"pending"` for a matching reserved
 but unfinished write, or `"unknown"` (null digest) for absent/superseded/mismatched
 bindings. Transport, corrupt storage and bad acknowledgements are RPC errors,
 not unknown. Status never writes, repairs or resends. Explicit `nodeId` targets
-use durable ID-only dispatch, never name fallback even offline; ordinary
-profile placement remains name-first. Placement changes only in a separate
+use durable ID-only dispatch, never name fallback even offline. Implicit sync
+also preserves stored ID ownership against same-named nodes; legacy actual
+names remain supported when there is no exact ID record. Placement changes only in a separate
 `profiles.update` after acknowledgment.
 
 `node.profile.paths` is a trusted operator read on an explicit durable node ID.

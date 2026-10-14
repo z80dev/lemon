@@ -55,6 +55,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - Remote image-only requests encode validated native image blocks as the
   established wire format, preserving five-image/10 MiB aggregate admission,
   strict MIME/Base64 validation, configured transport bounds and vision checks.
+- Implicit profile synchronization now prefers an exact stored durable node ID
+  even while offline, preventing a node with that ID as its name from receiving
+  another machine's private persona. Legacy names resolve only without an ID
+  record; explicit target IDs remain ID-only.
 
 ---
 
