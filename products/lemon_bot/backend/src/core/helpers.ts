@@ -19,8 +19,7 @@ export function installHelpers(services:BackendServices):void {
   services.now=()=>Date.now();
   services.resource=(prefix,fields)=>{const time=services.now();return {...fields,id:services.id(prefix),revision:1,createdAtMs:time,updatedAtMs:time};};
   services.update=(resource,changes)=>({...resource,...changes,revision:resource.revision+1,updatedAtMs:services.now()});
-  services.page=<T>(context:RequestContext,values:T[],options?:{ascending?:boolean;key?:(value:T)=>string;binding?:unknown}):P.Page<T>=>{
-    const limit=z.coerce.number().int().min(1).max(200).parse(context.query.get('limit')??50);
+  const pageState=(context:RequestContext,options?:{ascending?:boolean;binding?:unknown})=>{
     const filters=[...context.query.entries()].filter(([key])=>key!=='cursor').sort(([a],[b])=>a.localeCompare(b));
     const binding=services.mutations.digest({path:context.route.path,params:context.params,filters,ascending:options?.ascending??false,extra:options?.binding??null});
     const userId=context.user?.userId??'public';const encoded=context.query.get('cursor');let after:string|null=null;
@@ -37,6 +36,12 @@ export function installHelpers(services:BackendServices):void {
         if(cursor.expiresAtMs<=services.now())fail('expired','Page cursor expired.');after=cursor.after;
       }catch(error){if(error instanceof Error&&error.name==='ApiError')throw error;fail('invalid_request','Page cursor is invalid.');}
     }
+    return {userId,binding,after};
+  };
+  services.pageAfter=(context,options)=>pageState(context,options).after;
+  services.page=<T>(context:RequestContext,values:T[],options?:{ascending?:boolean;key?:(value:T)=>string;binding?:unknown}):P.Page<T>=>{
+    const limit=z.coerce.number().int().min(1).max(200).parse(context.query.get('limit')??50);
+    const {userId,binding,after}=pageState(context,options);
     const key=options?.key??((value:T)=>{const shape=z.object({id:z.string(),createdAtMs:z.number().optional()}).passthrough().parse(value);return `${String(shape.createdAtMs??0).padStart(16,'0')}:${shape.id}`;});
     const ascending=options?.ascending??false;
     const sorted=[...values].sort((a,b)=>ascending?key(a).localeCompare(key(b)):key(b).localeCompare(key(a)));

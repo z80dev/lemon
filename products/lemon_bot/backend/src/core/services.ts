@@ -85,7 +85,7 @@ export interface IntegrationServices {
   emitProviderNotifications(notification: P.Notification): Promise<void>;
   channelIngress(input: { principal: Principal; botId: string; channelBindingId: string; externalThreadId: string; text: string; attachmentIds?: string[]; clientNonce: string }): Promise<P.MessageReceipt>;
   providerCapabilities(): Partial<P.Capabilities> & { inventory?: unknown[] };
-  speech?(principal: Principal, request: P.SpeechRequest): Promise<P.SpeechResult>;
+  speech?(principal: Principal, request: P.SpeechRequest, provenance?: P.DeliverableProvenance): Promise<P.SpeechResult>;
   deprovisionUser?(userId: string): Promise<void>;
   requireSSO?(userId: string): Promise<boolean> | boolean;
   reconcile?(): Promise<void>;
@@ -102,6 +102,8 @@ export interface IntegrationServices {
   captureUsage?(principal: Principal, report: P.UsageReport, atMs?: number): void;
   captureAction?(principal: Principal, metadata: P.JSONObject, sourceId?: string): void;
   dispose?(): void;
+  refreshPolicy?(principal: Principal, botIds?: string[], options?: { workspace?: boolean }): Promise<void>;
+  canReadResource?(principal: Principal, collection: string, entity: unknown): boolean;
 }
 export interface BackendConfiguration {
   publicUrl: string; controlUrl: string; operatorToken: string; dataDir: string; host: string; port: number;
@@ -116,6 +118,7 @@ export interface BackendServices {
   resource<T extends object>(prefix: string, fields: T): T & P.Resource;
   update<T extends { revision: number; updatedAtMs: number }>(resource: T, changes: Partial<T>): T;
   page<T>(context: RequestContext, values: T[], options?: { ascending?: boolean; key?: (value: T) => string; binding?: unknown }): P.Page<T>;
+  pageAfter(context: RequestContext, options?: { ascending?: boolean; binding?: unknown }): string | null;
   secret(ref: string): Promise<string>;
   encrypt(value: unknown): string;
   decrypt<T = unknown>(value: string): T;
