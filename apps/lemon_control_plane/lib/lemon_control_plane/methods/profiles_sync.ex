@@ -66,25 +66,23 @@ defmodule LemonControlPlane.Methods.ProfilesSync do
     do: {:error, :target_required}
 
   defp target_node(_params, profile) do
-    nodes = NodeStore.list_nodes()
+    case NodeStore.get_node(profile["node"]) do
+      nil ->
+        matching =
+          Enum.filter(NodeStore.list_nodes(), fn {_id, node} ->
+            (Map.get(node, :name) || Map.get(node, "name")) == profile["node"]
+          end)
 
-    matching =
-      Enum.filter(nodes, fn {_id, node} ->
-        (Map.get(node, :name) || Map.get(node, "name")) == profile["node"]
-      end)
-
-    case matching do
-      [{id, _}] ->
-        {:ok, id}
-
-      [] ->
-        case Enum.find(nodes, fn {id, _node} -> id == profile["node"] end) do
-          {id, _} -> {:ok, id}
-          nil -> {:error, :target_unavailable}
+        case matching do
+          [{id, _}] -> {:ok, id}
+          [] -> {:error, :target_unavailable}
+          _ -> {:error, :ambiguous_target}
         end
 
-      _ ->
-        {:error, :ambiguous_target}
+      _stored_node ->
+        # Stored identity is authoritative even while offline. A same-named
+        # connection must never receive another node's private persona.
+        {:ok, profile["node"]}
     end
   end
 

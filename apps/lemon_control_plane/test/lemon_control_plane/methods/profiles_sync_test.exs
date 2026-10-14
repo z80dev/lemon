@@ -72,7 +72,7 @@ defmodule LemonControlPlane.Methods.ProfilesSyncTest do
     assert {:ok, %{"node" => "local"}} = ProfileStore.get("persona")
   end
 
-  test "default named UUID placement and explicit durable UUID target select different nodes", context do
+  test "implicit and explicit durable targets reject an online UUID-shaped name collision", context do
     create(context.node_id)
     other_id = "sync-name-collision-#{System.unique_integer([:positive])}"
     owner = self()
@@ -84,38 +84,48 @@ defmodule LemonControlPlane.Methods.ProfilesSyncTest do
       Process.exit(other_destination, :kill)
       LemonCore.Store.delete(:nodes_registry, other_id)
     end)
-    task = Task.async(fn -> ProfilesSync.handle(%{"id" => "persona"}, context.ctx) end)
-    assert_receive {:sync_request, ^other_destination, request}
-    assert request["nodeId"] == other_id
-    send(other_destination, {:reply, acknowledgement(request["args"])})
-    assert {:ok, %{"nodeId" => ^other_id}} = Task.await(task)
-    task = Task.async(fn -> ProfilesSync.handle(%{"id" => "persona", "nodeId" => context.node_id, "mutationId" => "explicit-shadow"}, context.ctx) end)
-    assert_receive {:sync_request, destination, request}
-    assert destination == context.destination
-    assert request["nodeId"] == context.node_id
-    send(destination, {:reply, acknowledgement(request["args"])})
-    assert {:ok, %{"nodeId" => node_id}} = Task.await(task)
-    assert node_id == context.node_id
+    for params <- [
+          %{"id" => "persona", "mutationId" => "implicit-shadow"},
+          %{"id" => "persona", "nodeId" => context.node_id, "mutationId" => "explicit-shadow"}
+        ] do
+      task = Task.async(fn -> ProfilesSync.handle(params, context.ctx) end)
+      assert_receive {:sync_request, destination, request}
+      assert destination == context.destination
+      assert request["nodeId"] == context.node_id
+      refute_receive {:sync_request, ^other_destination, _}, 50
+      send(destination, {:reply, acknowledgement(request["args"])})
+      assert {:ok, %{"nodeId" => node_id}} = Task.await(task)
+      assert node_id == context.node_id
+    end
+    node_id = context.node_id
     assert {:ok, %{"node" => ^node_id}} = ProfileStore.get("persona")
-    task = Task.async(fn -> ProfilesSyncStatus.handle(%{"id" => "persona", "nodeId" => context.node_id, "mutationId" => "explicit-shadow"}, context.ctx) end)
-    assert_receive {:sync_request, ^destination, lookup}
-    assert lookup["nodeId"] == context.node_id
-    assert lookup["method"] == "node.profile.sync.status"
-    send(destination, {:reply, Map.merge(lookup["args"], %{"status" => "acknowledged", "acknowledged" => true})})
-    assert {:ok, %{"nodeId" => ^node_id, "status" => "acknowledged"}} = Task.await(task)
   end
 
-  test "configured offline name shadow never falls back to an online durable ID", context do
+  test "offline durable placement never sends persona to its online name shadow", context do
     create(context.node_id)
-    other_id = "sync-offline-shadow-#{System.unique_integer([:positive])}"
+    other_id = "sync-offline-target-shadow-#{System.unique_integer([:positive])}"
+    owner = self()
+    other_destination = spawn(fn -> destination(owner) end)
+    :ok = NodeStore.put_node(other_id, %{"id" => other_id, "name" => context.node_id})
+    :ok = NodeRegistry.register(other_id, context.node_id, other_destination, %{})
+    on_exit(fn ->
+      NodeRegistry.unregister(other_id, other_destination)
+      Process.exit(other_destination, :kill)
+      LemonCore.Store.delete(:nodes_registry, other_id)
+    end)
+    NodeRegistry.unregister(context.node_id, context.destination)
+    assert NodeStore.get_node(context.node_id) != nil
+    assert {:error, {:unavailable, _, _}} = ProfilesSync.handle(%{"id" => "persona"}, context.ctx)
+    refute_receive {:sync_request, _, _}, 50
+    node_id = context.node_id
+    assert {:ok, %{"node" => ^node_id}} = ProfileStore.get("persona")
+  end
+
+  test "online durable placement ignores an offline UUID-shaped name shadow", context do
+    create(context.node_id)
+    other_id = "sync-offline-name-shadow-#{System.unique_integer([:positive])}"
     :ok = NodeStore.put_node(other_id, %{"id" => other_id, "name" => context.node_id})
     on_exit(fn -> LemonCore.Store.delete(:nodes_registry, other_id) end)
-    assert {:error, {:unavailable, _, _}} = ProfilesSync.handle(%{"id" => "persona"}, context.ctx)
-    refute_receive {:sync_request, _, _}
-  end
-
-  test "current placement falls back to its durable ID only when no configured name matches", context do
-    create(context.node_id)
     task = Task.async(fn -> ProfilesSync.handle(%{"id" => "persona"}, context.ctx) end)
     assert_receive {:sync_request, destination, request}
     assert destination == context.destination

@@ -344,7 +344,9 @@ matches a reserved unfinished write, and `"unknown"` has a null digest for
 absent, superseded or source-revision-mismatched bindings. Unavailable
 transport/corrupt storage is an RPC error, not unknown. Explicit `nodeId`
 uses durable ID-only dispatch even offline, never a same-named node.
-Ordinary configured profile placement remains name-first.
+Implicit sync first selects an exact stored durable ID, including an offline
+record, so another node named that ID cannot receive its private persona.
+Only when no ID record exists does it resolve the configured legacy name.
 
 Coordinate destination memory/skill transfer through their owning services,
 then switch `profiles.update.node` only after the required acknowledgements.
