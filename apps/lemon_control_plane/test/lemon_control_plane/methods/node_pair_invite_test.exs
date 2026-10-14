@@ -14,6 +14,7 @@ defmodule LemonControlPlane.Methods.NodePairInviteTest do
     "LEMON_NODE_INSTALL_VERSION",
     "LEMON_NODE_INSTALL_BASE_URL",
     "LEMON_VERSION",
+    "RELEASE_VSN",
     "LEMON_INSTALL_BASE_URL"
   ]
 
@@ -345,30 +346,40 @@ defmodule LemonControlPlane.Methods.NodePairInviteTest do
       NodePairInvite.handle(%{"nodeName" => name}, @ctx)
   end
 
-  test "packaged dispatch pins the running release and never uses a configured checkout",
-       %{name: name, tmp_dir: tmp_dir} do
-    module = LemonControlPlane.Methods.PackagedNodePairInviteTestFixture
-    source = File.read!(Path.expand("../../../lib/lemon_control_plane/methods/node_pair_invite.ex", __DIR__))
-      |> String.replace("defmodule LemonControlPlane.Methods.NodePairInvite do",
-        "defmodule #{inspect(module)} do")
-      |> String.replace(~s|@checkout_root Path.expand("../../../../..", __DIR__)|,
-        "@checkout_root #{inspect(tmp_dir)}")
-    Code.compile_string(source)
-    old_version = System.get_env("RELEASE_VSN")
+  test "packaged release mode pins the running version and ignores the compiled checkout",
+       %{name: name} do
+    # This module is compiled inside a source checkout, so its compile-time checkout
+    # path is non-nil -- exactly what a CI-built release BEAM carries. The runtime
+    # release signal must win, even for a configured checkout and a loopback controller.
     System.put_env("RELEASE_VSN", "2099.01.7-private")
-    on_exit(fn ->
-      if old_version, do: System.put_env("RELEASE_VSN", old_version),
-        else: System.delete_env("RELEASE_VSN")
-      :code.purge(module)
-      :code.delete(module)
-    end)
+    for controller <- ["wss://controller.example/ws", "ws://127.0.0.1:4040/ws"] do
+      Application.put_env(:lemon_control_plane, :public_ws_url, controller)
+      assert {:ok, issued} = NodePairInvite.handle(%{"nodeName" => name}, @ctx)
+      assert issued["joinCommand"] =~
+        "https://github.com/z80dev/lemon/releases/download/v2099.01.7-private/join-node.sh"
+      assert issued["joinCommand"] =~ "'--version' '2099.01.7-private'"
+      assert issued["joinCommand"] =~ "'--base-url' 'https://github.com/z80dev/lemon'"
+      refute issued["joinCommand"] =~ "--source"
+      refute issued["joinCommand"] =~ Path.expand("../../../../..", __DIR__)
+      refute issued["joinCommand"] =~ "/main/"
+      assert enrollment_auth(issued).role == :enrollment
+    end
 
-    assert {:ok, issued} = module.handle(%{"nodeName" => name}, @ctx)
-    assert issued["joinCommand"] =~
-      "https://github.com/z80dev/lemon/releases/download/v2099.01.7-private/join-node.sh"
-    assert issued["joinCommand"] =~ "'--version' '2099.01.7-private'"
-    refute issued["joinCommand"] =~ "--source"
-    refute issued["joinCommand"] =~ "/main/"
+    # An operator override remains authoritative for a packaged controller.
+    Application.put_env(:lemon_control_plane, :node_install_version, "2099.01.8-private")
+    Application.put_env(:lemon_control_plane, :node_install_base_url, "https://releases.example/lemon")
+    assert {:ok, issued} = NodePairInvite.handle(%{"nodeName" => name}, @ctx)
+    assert issued["joinCommand"] =~ "https://releases.example/lemon/releases/download/v2099.01.8-private/join-node.sh"
+  end
+
+  test "source mode keeps the explicit checkout and never emits a release download", %{name: name} do
+    assert System.get_env("RELEASE_VSN") == nil
+    issued = invite(name)
+    assert issued["joinCommand"] =~ "bash '"
+    assert issued["joinCommand"] =~ "destination source"
+    assert issued["joinCommand"] =~ "'--source'"
+    refute issued["joinCommand"] =~ "curl"
+    refute issued["joinCommand"] =~ "github.com"
   end
 
   test "validates invitation bounds", %{name: name} do

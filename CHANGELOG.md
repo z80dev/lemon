@@ -25,8 +25,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   exchanges stop instead of replaying the invite. Packaged commands fetch
   `join-node.sh` and canonical `install.sh` from the same exact release tag,
   never mutable `main`; installation requires a bot-capable full/min runtime
-  via `--require-bot`, not the standalone backend artifact. Source commands
-  invoke the provisioned checkout's join script directly.
+  via `--require-bot`, not the standalone backend artifact. `--require-bot`
+  installs no TUI and promotes a runtime only after its own exact-version
+  `node capabilities` gate passes; an exact pin accepts its manifest's channel
+  (preview/nightly) unless `LEMON_CHANNEL` is explicit. Invitations issued by a
+  packaged release always pin that release instead of its build machine's
+  checkout. Source commands invoke the provisioned checkout's join script directly.
 
 - Standalone Lemon Bot release bundles contain the native backend and complete
   external web assets for Linux x86_64/arm64 and macOS arm64. Schema-2 release

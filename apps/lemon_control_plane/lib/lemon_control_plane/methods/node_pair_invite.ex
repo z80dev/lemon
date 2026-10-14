@@ -119,26 +119,27 @@ defmodule LemonControlPlane.Methods.NodePairInvite do
   end
 
   defp runtime_source(controller) do
+    source_root = source_root()
     source = configured(:node_source_checkout, ["LEMON_NODE_SOURCE_CHECKOUT"])
     version = configured(:node_install_version, ["LEMON_NODE_INSTALL_VERSION", "LEMON_VERSION"]) ||
-      if(is_nil(@source_root), do: LemonCore.Update.Version.current())
+      if(is_nil(source_root), do: LemonCore.Update.Version.current())
     base_url =
       configured(:node_install_base_url, ["LEMON_NODE_INSTALL_BASE_URL", "LEMON_INSTALL_BASE_URL"]) ||
-        if(is_nil(@source_root), do: @release_base_url)
+        if(is_nil(source_root), do: @release_base_url)
 
     cond do
       not is_nil(version) and not valid_version?(version) ->
         {:error, Errors.invalid_request("Configure an exact node install version")}
 
-      not is_nil(source) and not is_nil(@source_root) ->
+      not is_nil(source) and not is_nil(source_root) ->
         if valid_text?(source, 4096) and Path.type(source) == :absolute do
           {:ok, {:source, source, version}}
         else
           {:error, Errors.invalid_request("Configure an absolute destination node source checkout")}
         end
 
-      source_checkout_available?() and URI.parse(controller).host in ["localhost", "127.0.0.1", "::1"] ->
-        {:ok, {:source, @source_root, version}}
+      source_checkout_available?(source_root) and URI.parse(controller).host in ["localhost", "127.0.0.1", "::1"] ->
+        {:ok, {:source, source_root, version}}
 
       not is_nil(version) and valid_install_base_url?(base_url) ->
         {:ok, {:release, version, String.trim_trailing(base_url, "/")}}
@@ -151,9 +152,20 @@ defmodule LemonControlPlane.Methods.NodePairInvite do
     end
   end
 
-  defp source_checkout_available? do
-    not is_nil(@source_root) and File.regular?(Path.join(@source_root, "bin/lemon")) and
-      File.regular?(Path.join(@source_root, "mix.exs"))
+  # A packaged release carries the checkout path of whichever machine compiled it,
+  # so the compiled path is only meaningful while actually running from source.
+  defp source_root do
+    case System.get_env("RELEASE_VSN") do
+      vsn when is_binary(vsn) and vsn != "" -> nil
+      _ -> @source_root
+    end
+  end
+
+  defp source_checkout_available?(nil), do: false
+
+  defp source_checkout_available?(source_root) do
+    File.regular?(Path.join(source_root, "bin/lemon")) and
+      File.regular?(Path.join(source_root, "mix.exs"))
   end
 
   defp configured(key, env_names) do

@@ -36,10 +36,15 @@ VERIFY=0
 MODIFY_PATH=1
 SKIP_SETUP=0
 RESOLVE_VERSION=0
+REQUIRE_BOT=0
 
 
 BASE_URL="${LEMON_INSTALL_BASE_URL:-$DEFAULT_BASE_URL}"
 CHANNEL="${LEMON_CHANNEL:-stable}"
+CHANNEL_EXPLICIT=0
+if [ -n "${LEMON_CHANNEL:-}" ]; then
+  CHANNEL_EXPLICIT=1
+fi
 PIN="${LEMON_VERSION:-}"
 PROFILE_INPUT="${LEMON_PROFILE:-lemon_runtime_full}"
 
@@ -49,7 +54,7 @@ Lemon installer
 
 Usage:
   curl -fsSL https://raw.githubusercontent.com/z80dev/lemon/main/install.sh | sh
-  sh install.sh [--profile NAME] [--force] [--verify] [--no-modify-path] [--skip-setup]
+  sh install.sh [--profile NAME] [--force] [--verify] [--no-modify-path] [--skip-setup] [--require-bot]
   sh install.sh --resolve-version
 
 Options:
@@ -65,6 +70,10 @@ Options:
   --skip-setup    Do not start the interactive provider setup wizard after
                   installing. Run \$HOME/.lemon/bin/lemon setup later to
                   configure Lemon.
+  --require-bot   Install only a bot-capable native runtime (full or min; never the
+                  lemon_bot backend, sim, or the TUI). The staged runtime must pass
+                  \`lemon node capabilities --json --require-bot\` and report the
+                  manifest version before anything is promoted.
   --resolve-version
                   Print the version this run would install, then exit without
                   installing anything.
@@ -77,8 +86,11 @@ Prerequisites:
 
 Environment:
   LEMON_VERSION               Pin an exact version, e.g. 2026.08.0. Required for
-                              any channel other than stable.
-  LEMON_CHANNEL               Release channel (default: stable).
+                              any channel other than stable. A pin without an
+                              explicit LEMON_CHANNEL accepts the channel the
+                              pinned release manifest publishes.
+  LEMON_CHANNEL               Release channel. Default: stable for unpinned
+                              installs. An explicit value must match the manifest.
   LEMON_PROFILE               full | min | sim | lemon_bot, or a full profile name
                               (lemon_runtime_full, lemon_runtime_min,
                               sim_broadcast_platform). Default: lemon_runtime_full.
@@ -123,6 +135,7 @@ while [ "$#" -gt 0 ]; do
     --modify-path) MODIFY_PATH=1 ;;
     --no-modify-path) MODIFY_PATH=0 ;;
     --skip-setup) SKIP_SETUP=1 ;;
+    --require-bot) REQUIRE_BOT=1 ;;
     --profile)
       [ "$#" -ge 2 ] || die "--profile needs a profile name"
       PROFILE_INPUT="$2"
@@ -236,6 +249,10 @@ if [ "$PROFILE" = "sim_broadcast_platform" ] && [ "$PLATFORM_OS" != "linux" ]; t
   die "the sim_broadcast_platform profile is built for Linux only; $PLATFORM has no such artifact."
 fi
 
+if [ "$REQUIRE_BOT" = "1" ] && [ "$PROFILE" != "lemon_runtime_full" ] && [ "$PROFILE" != "lemon_runtime_min" ]; then
+  die "--require-bot needs a bot-capable native runtime (full or min); the $PROFILE profile cannot host a Lemon Bot worker."
+fi
+
 # --------------------------------------------------------------- manifest ----
 
 BASE_URL="${BASE_URL%/}"
@@ -261,6 +278,15 @@ else
   LEMON_VERSION=2026.08.0 LEMON_CHANNEL=$CHANNEL sh install.sh"
 fi
 
+# An exact pin identifies the release; its manifest is the authority for that
+# release's channel. Only an explicit LEMON_CHANNEL is enforced against it.
+EXPECT_CHANNEL="$CHANNEL"
+CHANNEL_LABEL="channel $CHANNEL"
+if [ -n "$PIN" ] && [ "$CHANNEL_EXPLICIT" != "1" ]; then
+  EXPECT_CHANNEL=""
+  CHANNEL_LABEL="pinned $PIN"
+fi
+
 fetch() {
   # fetch <url> <destination>
   # --resolve-version fetches only the manifest: errors, but no progress meter.
@@ -284,7 +310,7 @@ select_artifact() {
   # manifest that publishes no such artifact prints nothing and succeeds, so
   # optional artifacts (the TUI) can be looked up in the same manifest.
   MANIFEST_PATH="$1" WANT_PROFILE="$2" ALLOW_MISSING="${3:-0}" \
-    WANT_PLATFORM="$PLATFORM" WANT_CHANNEL="$CHANNEL" WANT_VERSION="$PIN" python3 - <<'PY'
+    WANT_PLATFORM="$PLATFORM" WANT_CHANNEL="$EXPECT_CHANNEL" WANT_VERSION="$PIN" python3 - <<'PY'
 import json
 import os
 import re
@@ -742,6 +768,32 @@ verify_boot() (
 
   info "ok runtime booted and answered /healthz"
 )
+
+# verify_bot_runtime <release-dir>
+#
+# --require-bot asks the staged runtime itself, never the manifest, whether it
+# can host a Lemon Bot worker: it must report the manifest's exact version and
+# every required worker API. It runs in a throwaway HOME so a candidate that is
+# not promoted yet cannot touch the operator's ~/.lemon state.
+verify_bot_runtime() (
+  [ -x "$1/bin/lemon" ] || return 1
+  check_home="$(mktemp -d "$TMP_DIR/botcheck.XXXXXX")" || return 1
+  check_errors="$check_home/errors"
+  trap 'rm -rf "$check_home"' EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  unset RELEASE_ROOT RELEASE_VSN RELEASE_NAME RELEASE_PROG RELEASE_COMMAND RELEASE_MODE
+  export HOME="$check_home" LEMON_STORE_PATH="$check_home/.lemon/store"
+  export LEMON_AGENT_DIR="$check_home/.lemon/agent" LEMON_DOTENV_DIR="$check_home"
+  export RELEASE_TMP="$check_home/runtime"
+  cd "$check_home"
+  if "$1/bin/lemon" node capabilities --json --require-bot --expected-version "$VERSION" \
+    >/dev/null 2>"$check_errors"; then
+    return 0
+  fi
+  cat "$check_errors" >&2
+  return 1
+)
 setup_handoff() {
   if [ "$PROFILE" = "lemon_bot" ]; then
     info "Start lemon-bot with LEMON_BOT_CONTROL_URL and LEMON_BOT_OPERATOR_TOKEN configured."
@@ -766,7 +818,7 @@ setup_handoff() {
 # ----------------------------------------------------------------- install ---
 
 if [ "$RESOLVE_VERSION" != "1" ]; then
-  info "Installing Lemon ($PROFILE, $PLATFORM, channel $CHANNEL)"
+  info "Installing Lemon ($PROFILE, $PLATFORM, $CHANNEL_LABEL)"
 fi
 
 manifest_file="$TMP_DIR/manifest.json"
@@ -790,9 +842,10 @@ fi
 
 # The TUI is a second, optional artifact in the same manifest: a separate
 # per-platform tarball that unpacks into tui/ next to the runtime's bin/.
-# The sim profile has no terminal UI, and LEMON_NO_TUI=1 opts out.
+# The sim profile has no terminal UI, LEMON_NO_TUI=1 opts out, and a bot worker
+# host (--require-bot) is headless.
 WANT_TUI=1
-if [ "$PROFILE" = "lemon_bot" ] || [ "$PROFILE" = "sim_broadcast_platform" ] || [ "${LEMON_NO_TUI:-0}" = "1" ]; then
+if [ "$PROFILE" = "lemon_bot" ] || [ "$PROFILE" = "sim_broadcast_platform" ] || [ "${LEMON_NO_TUI:-0}" = "1" ] || [ "$REQUIRE_BOT" = "1" ]; then
   WANT_TUI=0
 fi
 
@@ -831,6 +884,10 @@ if [ "$PROFILE" = "lemon_bot" ]; then
 fi
 
 if [ -d "$TARGET_DIR" ] && [ "$FORCE" != "1" ]; then
+  if [ "$REQUIRE_BOT" = "1" ] && ! verify_bot_runtime "$TARGET_DIR"; then
+    die "the installed Lemon $VERSION at $TARGET_DIR does not report the required bot worker APIs.
+  Re-run with --force to reinstall it from the release."
+  fi
   if [ "$PROFILE" = "lemon_bot" ]; then
     verify_bot "$TARGET_DIR"
   fi
@@ -945,6 +1002,12 @@ if [ -n "$TUI_FILE" ] && [ ! -x "$partial_dir/tui/bin/lemon-tui" ]; then
   rm -rf "$partial_dir"
   die "the TUI tarball has no executable tui/bin/lemon-tui; refusing to install it.
   Set LEMON_NO_TUI=1 to install the runtime only."
+fi
+
+if [ "$REQUIRE_BOT" = "1" ] && ! verify_bot_runtime "$partial_dir"; then
+  rm -rf "$partial_dir"
+  die "Lemon $VERSION does not report the required bot worker APIs; refusing to install it.
+  The previously installed runtime, if any, was left untouched."
 fi
 
 # A directory swap is two renames, and POSIX offers no way to make that one

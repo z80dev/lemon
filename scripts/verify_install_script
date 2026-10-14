@@ -29,6 +29,12 @@ Checks:
   - an update round-trip flips versions/current and retains the old version
   - a profile with no published artifact, a non-stable channel without a pin,
     and an unsupported platform are all refused
+  - an exact pin accepts the channel its manifest publishes unless LEMON_CHANNEL
+    is set explicitly, in which case a contradiction is refused
+  - --require-bot installs only the full or min runtime (never backend, sim, or
+    TUI), refuses other profiles before any download, and refuses a staged or
+    already-installed runtime whose capability gate or exact version fails,
+    leaving the live install and no residue
   - bin/lemon doctor forwards the complete argv to the runtime CLI entrypoint
     as arguments: the eval expression stays a fixed constant, option order is
     preserved, and a --bundle path containing literal Elixir interpolation
@@ -138,6 +144,7 @@ TUI_PROFILE="lemon_tui"
 build_fixture_tarball() {
   local version="$1"
   local profile="${2:-$PROFILE}"
+  local bot_ready="${3:-1}"
   local build_dir="$work_dir/build/$version-$profile"
 
   mkdir -p "$build_dir/bin"
@@ -148,6 +155,7 @@ set -eu
 
 VERSION="$version"
 PROFILE="$profile"
+BOT_READY="$bot_ready"
 EOF
 
   cat >> "$build_dir/bin/lemon" <<'EOF'
@@ -197,6 +205,23 @@ fixture_credential="$home_dir/fixture-provider-token"
 case "${1:-}" in
   version)
     echo "lemon $VERSION"
+    ;;
+  node)
+    # The shipped `lemon node capabilities` contract: an exact version pin,
+    # then bot-worker readiness. Anything else is not a supported fixture call.
+    [ "${2:-}" = capabilities ] || exit 2
+    expected="$VERSION"
+    shift 2
+    while [ "$#" -gt 0 ]; do
+      if [ "$1" = --expected-version ]; then
+        expected="${2:-}"
+        shift
+      fi
+      shift
+    done
+    [ "$expected" = "$VERSION" ] || exit 2
+    [ "$BOT_READY" = 1 ] || exit 2
+    printf '{"lemonVersion":"%s","botReady":true}\n' "$VERSION"
     ;;
   daemon|start)
     health_dir="$run_dir/health"
@@ -320,6 +345,7 @@ publish() {
   local tui_tarball="${5:-}"
   local tui_sha_override="${6:-}"
   local profile="${7:-$PROFILE}"
+  local channel="${8:-stable}"
 
   mkdir -p "$dest_dir"
   cp "$tarball" "$dest_dir/"
@@ -357,6 +383,7 @@ publish() {
   MANIFEST_TUI_FILE="$tui_file" \
   MANIFEST_TUI_SHA="$tui_sha" \
   MANIFEST_TUI_SIZE="$tui_size" \
+  MANIFEST_CHANNEL="$channel" \
     python3 - <<'PY'
 import json
 import os
@@ -401,7 +428,7 @@ if os.environ["MANIFEST_TUI_FILE"]:
 manifest = {
     "schema": 2,
     "version": os.environ["MANIFEST_VERSION"],
-    "channel": "stable",
+    "channel": os.environ["MANIFEST_CHANNEL"],
     "commit": "0123456789abcdef0123456789abcdef01234567",
     "built_at": "2026-08-16T00:00:00Z",
     "otp": "28.5",
@@ -888,6 +915,141 @@ else
     fail "non-stable channel refusal did not mention LEMON_VERSION"
     cat "$work_dir/install-8.log" >&2
   fi
+fi
+
+# 8a. A pinned release is identified by its exact version and its manifest's
+#     channel; --require-bot installs only a bot-capable native runtime and
+#     proves its worker APIs before anything is promoted.
+tarball_v6="$(build_fixture_tarball 9999.6.0)"
+tui_v6="$(build_fixture_tui_tarball 9999.6.0)"
+tarball_v7="$(build_fixture_tarball 9999.7.0 "$PROFILE" 0)"
+tarball_v75="$(build_fixture_tarball 9999.7.5)"
+publish "$serve_root/releases/download/v9999.6.0" 9999.6.0 "$tarball_v6" "" "$tui_v6" "" "$PROFILE" preview
+publish "$serve_root/releases/download/v9999.7.0" 9999.7.0 "$tarball_v7" "" "" "" "$PROFILE" preview
+# A manifest whose version differs from what the published runtime reports.
+publish "$serve_root/releases/download/v9999.8.0" 9999.8.0 "$tarball_v75" "" "" "" "$PROFILE" preview
+
+join_flags=(--profile full --require-bot --force --skip-setup --no-modify-path)
+http_requests() { wc -l < "$work_dir/http.log" | tr -d ' '; }
+
+channel_home="$work_dir/home-channel"
+mkdir -p "$channel_home"
+tui_requests_before="$(grep -c lemon_tui "$work_dir/http.log" || true)"
+if run_install "$work_dir/install-bot-1.log" "$channel_home" "$base_url" \
+  LEMON_VERSION=9999.6.0 LEMON_PROFILE=lemon_bot -- "${join_flags[@]}"; then
+  if [ -x "$channel_home/.lemon/versions/9999.6.0/bin/lemon" ] &&
+    [ "$(readlink "$channel_home/.lemon/versions/current")" = "9999.6.0" ] &&
+    [ ! -e "$channel_home/.lemon/versions/9999.6.0/tui" ] &&
+    [ ! -e "$channel_home/.local/bin/lemon-bot" ] &&
+    [ "$(grep -c lemon_tui "$work_dir/http.log" || true)" = "$tui_requests_before" ] &&
+    grep -q "Installed Lemon 9999.6.0 (preview, lemon_runtime_full)" "$work_dir/install-bot-1.log"; then
+    ok "pinned preview release installs the bot-capable runtime without TUI or backend, ignoring ambient lemon_bot"
+  else
+    fail "pinned --require-bot install selected the wrong artifacts"
+    cat "$work_dir/install-bot-1.log" >&2
+  fi
+else
+  fail "pinned preview --require-bot install failed without an explicit channel"
+  cat "$work_dir/install-bot-1.log" >&2
+fi
+
+mismatch_home="$work_dir/home-channel-mismatch"
+mkdir -p "$mismatch_home"
+if run_install "$work_dir/install-bot-2.log" "$mismatch_home" "$base_url" \
+  LEMON_VERSION=9999.6.0 LEMON_CHANNEL=stable -- --require-bot; then
+  fail "an explicit stable channel installed a preview release"
+else
+  if grep -q "requested channel stable but the manifest publishes preview" "$work_dir/install-bot-2.log" &&
+    [ ! -d "$mismatch_home/.lemon/versions/9999.6.0" ]; then
+    ok "an explicit channel that contradicts the pinned manifest is refused"
+  else
+    fail "explicit channel mismatch was not refused cleanly"
+    cat "$work_dir/install-bot-2.log" >&2
+  fi
+fi
+
+explicit_home="$work_dir/home-channel-explicit"
+mkdir -p "$explicit_home"
+if run_install "$work_dir/install-bot-3.log" "$explicit_home" "$base_url" \
+  LEMON_VERSION=9999.6.0 LEMON_CHANNEL=preview -- --require-bot &&
+  [ -x "$explicit_home/.lemon/versions/9999.6.0/bin/lemon" ]; then
+  ok "an explicit channel matching the pinned manifest installs"
+else
+  fail "explicit matching preview channel did not install"
+  cat "$work_dir/install-bot-3.log" >&2
+fi
+
+profile_home="$work_dir/home-require-profile"
+mkdir -p "$profile_home"
+requests_before="$(http_requests)"
+profile_ok=1
+for profile_case in env-bot flag-bot flag-sim; do
+  case "$profile_case" in
+    env-bot) profile_envs=(LEMON_PROFILE=lemon_bot); profile_args=(--require-bot) ;;
+    flag-bot) profile_envs=(LEMON_PROFILE=full); profile_args=(--profile lemon_bot --require-bot) ;;
+    flag-sim) profile_envs=(LEMON_PROFILE=full); profile_args=(--profile sim --require-bot) ;;
+  esac
+  if run_install "$work_dir/install-bot-profile-$profile_case.log" "$profile_home" "$base_url" \
+    LEMON_VERSION=9999.6.0 "${profile_envs[@]}" -- "${profile_args[@]}" ||
+    ! grep -q -- "--require-bot needs a bot-capable native runtime" "$work_dir/install-bot-profile-$profile_case.log"; then
+    profile_ok=0
+    cat "$work_dir/install-bot-profile-$profile_case.log" >&2
+  fi
+done
+if [ "$profile_ok" = 1 ] && [ ! -e "$profile_home/.lemon" ] && [ "$(http_requests)" = "$requests_before" ]; then
+  ok "--require-bot refuses backend and sim profiles before any download or state change"
+else
+  fail "--require-bot accepted or partially acted on a non-worker profile"
+fi
+
+gate_home="$work_dir/home-require-gate"
+mkdir -p "$gate_home"
+if run_install "$work_dir/install-bot-4.log" "$gate_home" "$base_url" LEMON_VERSION=9999.6.0 -- --require-bot; then
+  touch "$gate_home/.lemon/versions/9999.6.0/SENTINEL"
+else
+  fail "baseline --require-bot install failed"
+  cat "$work_dir/install-bot-4.log" >&2
+fi
+if run_install "$work_dir/install-bot-5.log" "$gate_home" "$base_url" LEMON_VERSION=9999.7.0 -- --require-bot; then
+  fail "--require-bot promoted a runtime that lacks the bot worker APIs"
+else
+  if grep -q "does not report the required bot worker APIs" "$work_dir/install-bot-5.log" &&
+    [ "$(readlink "$gate_home/.lemon/versions/current")" = "9999.6.0" ] &&
+    [ -f "$gate_home/.lemon/versions/9999.6.0/SENTINEL" ] &&
+    [ ! -e "$gate_home/.lemon/versions/9999.7.0" ] &&
+    [ -z "$(find "$gate_home/.lemon/versions" -maxdepth 1 -name '*.partial' 2>/dev/null)" ] &&
+    [ -z "$(find "$gate_home/.lemon/tmp" -mindepth 1 2>/dev/null)" ]; then
+    ok "a runtime failing the capability gate is refused before promotion, leaving the live install and no residue"
+  else
+    fail "capability gate refusal left the install inconsistent"
+    cat "$work_dir/install-bot-5.log" >&2
+  fi
+fi
+
+if run_install "$work_dir/install-bot-6.log" "$gate_home" "$base_url" LEMON_VERSION=9999.7.0; then
+  touch "$gate_home/.lemon/versions/9999.7.0/SENTINEL"
+  if run_install "$work_dir/install-bot-7.log" "$gate_home" "$base_url" LEMON_VERSION=9999.7.0 -- --require-bot; then
+    fail "--require-bot reused an already-installed runtime without the worker APIs"
+  elif grep -q -- "Re-run with --force" "$work_dir/install-bot-7.log" &&
+    [ -f "$gate_home/.lemon/versions/9999.7.0/SENTINEL" ]; then
+    ok "--require-bot gates the already-installed fast path instead of trusting the version"
+  else
+    fail "already-installed capability refusal was not explicit"
+    cat "$work_dir/install-bot-7.log" >&2
+  fi
+else
+  fail "ordinary install of the fixture non-bot runtime failed"
+  cat "$work_dir/install-bot-6.log" >&2
+fi
+
+version_home="$work_dir/home-require-version"
+mkdir -p "$version_home"
+if run_install "$work_dir/install-bot-8.log" "$version_home" "$base_url" LEMON_VERSION=9999.8.0 -- --require-bot; then
+  fail "--require-bot installed a runtime that reports a different version than its manifest"
+elif [ ! -e "$version_home/.lemon/versions/9999.8.0" ] && [ ! -e "$version_home/.lemon/versions/current" ]; then
+  ok "--require-bot refuses a runtime whose reported version differs from the manifest"
+else
+  fail "version mismatch refusal left an install behind"
 fi
 
 # 8b. --resolve-version prints only the version an install would pick, unpinned

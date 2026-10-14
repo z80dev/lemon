@@ -91,8 +91,10 @@ else
     installer=$(mktemp) || fail 'Cannot prepare pinned installation'
     curl -fsSL --proto '=https' --proto-redir '=https' \
       "${base_url%/}/releases/download/v$version/install.sh" -o "$installer" >/dev/null 2>&1 || fail 'Cannot download the pinned Lemon installer'
+    # An explicit full runtime profile outranks any ambient LEMON_PROFILE, so the
+    # standalone backend can never be selected for a worker host.
     LEMON_VERSION="$version" LEMON_INSTALL_BASE_URL="$base_url" \
-      sh "$installer" --require-bot --force --skip-setup --no-modify-path >/dev/null 2>&1 || fail 'The pinned Lemon installation failed'
+      sh "$installer" --profile full --require-bot --force --skip-setup --no-modify-path >/dev/null 2>&1 || fail 'The pinned Lemon installation failed'
     rm -f "$installer"
     installer=
     compatible "$lemon_bin" || fail 'The installed Lemon runtime is incompatible with the configured build'

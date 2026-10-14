@@ -206,9 +206,13 @@ Source mode uses only the provisioned checkout's `bin/lemon` and requires its
 version and passes `node capabilities --json --require-bot`. Otherwise it fetches
 the canonical `install.sh` from the same base URL and exact release tag,
 and installs that exact `LEMON_VERSION` and `LEMON_INSTALL_BASE_URL` with
-`--require-bot --force --skip-setup --no-modify-path`, then repeats the
-version/capability gate. This selects a bot-capable canonical full/min Lemon
-runtime, never the standalone `lemon_bot` backend artifact.
+`--profile full --require-bot --force --skip-setup --no-modify-path`. The pin
+selects the release whatever channel its manifest publishes; installation
+installs no TUI and stages the runtime, runs `node capabilities --json
+--require-bot --expected-version <version>` on it in a throwaway home, and only
+then promotes it, leaving any live install untouched on failure. The join script
+repeats the version/capability gate. This selects a bot-capable canonical
+full/min Lemon runtime, never the standalone `lemon_bot` backend artifact.
 It never uses the mutable `versions/current` symlink to enroll.
 
 Review remote scripts according to your policy. The installer requires `curl`,
