@@ -2,7 +2,7 @@ defmodule LemonAutomation.RunSubmitter do
   @moduledoc false
 
   alias LemonAutomation.{CronAdmission, CronContext, CronJob, CronMemory, CronRun, RunCompletionWaiter}
-  alias LemonCore.{SessionKey, ToolPolicy}
+  alias LemonCore.{InvocationProof, SessionKey, ToolPolicy}
 
   @default_timeout_ms 300_000
   @cron_blocked_tools ["cron"]
@@ -76,7 +76,7 @@ defmodule LemonAutomation.RunSubmitter do
   @spec build_params(CronJob.t(), CronRun.t(), binary() | nil, keyword()) ::
           map() | {:error, term()}
   def build_params(%CronJob{} = job, %CronRun{} = run, run_id \\ nil, opts \\ []) do
-    with {:ok, invocation} <- admission_invocation(job, opts) do
+    with {:ok, invocation} <- admission_invocation(job, run_id, opts) do
       do_build_params(job, run, run_id, opts, invocation)
     end
   end
@@ -108,34 +108,41 @@ defmodule LemonAutomation.RunSubmitter do
       }
     }
 
-    params = apply_invocation(params, invocation)
+    params = apply_invocation_policy(params, invocation)
 
     case apply_profile(params, job, run_id, invocation) do
       {:error, _} = error ->
         error
 
       params ->
-        params = maybe_pin_model(params, job)
-        if run_id, do: Map.put(params, :run_id, run_id), else: params
+        case attach_invocation(params, invocation, run_id) do
+          {:error, _} = error -> error
+          params ->
+            params = maybe_pin_model(params, job)
+            if run_id, do: Map.put(params, :run_id, run_id), else: params
+        end
     end
   end
 
-  defp admission_invocation(job, opts) do
+  defp admission_invocation(job, run_id, opts) do
     case Keyword.fetch(opts, :admission_invocation) do
       :error ->
         {:ok, nil}
 
-      {:ok, %{context_key: key, mcp_servers: servers, tool_policy: policy} = projection}
-      when map_size(projection) == 3 ->
+      {:ok, %{
+        context_key: _,
+        memory_key: _,
+        mcp_servers: _,
+        tool_policy: _,
+        proof: _,
+        shared_memory_grant: false
+      } = projection} when map_size(projection) == 6 ->
         with false <- is_nil(job.admission),
              true <- is_binary(job.profile_id),
              :agent <- CronJob.execution_mode(job),
+             true <- is_binary(run_id) and run_id != "",
              {:ok, ^projection} <-
-               CronAdmission.validate_invocation(%{
-                 "invocationContextKey" => key,
-                 "invocationMcpServers" => servers,
-                 "invocationToolPolicy" => policy
-               }) do
+               CronAdmission.validate_invocation(invocation_wire(projection), run_id) do
           {:ok, projection}
         else
           _ -> {:error, :admission_unavailable}
@@ -150,12 +157,38 @@ defmodule LemonAutomation.RunSubmitter do
     _, _ -> {:error, :admission_unavailable}
   end
 
-  defp apply_invocation(params, nil), do: params
+  defp apply_invocation_policy(params, nil), do: params
 
-  defp apply_invocation(params, invocation) do
-    params
-    |> Map.put(:tool_policy, ToolPolicy.intersect(params.tool_policy, invocation.tool_policy))
-    |> Map.update!(:meta, &Map.put(&1, :invocation_context_key, invocation.context_key))
+  defp apply_invocation_policy(params, invocation) do
+    Map.put(params, :tool_policy, ToolPolicy.intersect(params.tool_policy, invocation.tool_policy))
+  end
+
+  defp invocation_wire(invocation) do
+    %{
+      "invocationContextKey" => invocation.context_key,
+      "memoryContextKey" => invocation.memory_key,
+      "invocationMcpServers" => invocation.mcp_servers,
+      "invocationToolPolicy" => invocation.tool_policy,
+      "invocationProof" => invocation.proof,
+      "sharedMemoryGrant" => invocation.shared_memory_grant
+    }
+  end
+
+  defp attach_invocation(params, nil, _run_id), do: params
+
+  defp attach_invocation(params, invocation, run_id) do
+    # Only the configured, authenticated admission callback's private projection
+    # reaches this factory; proof validation alone does not authorize a caller.
+    wire = Map.put(invocation_wire(invocation), "runId", run_id)
+
+    case InvocationProof.attach_execution_context(params, wire) do
+      {:ok, request} -> request
+      _ -> {:error, :admission_unavailable}
+    end
+  rescue
+    _ -> {:error, :admission_unavailable}
+  catch
+    _, _ -> {:error, :admission_unavailable}
   end
 
   defp apply_profile(params, %CronJob{profile_id: nil}, _run_id, _invocation), do: params
