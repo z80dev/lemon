@@ -409,6 +409,16 @@ Private execution and proof provisioning bind the inspected durable node ID,
 current connection PID and session generation atomically; unsupported, stale or
 unavailable destinations fail before enqueueing the private payload.
 
+A profile `node` remains the operator-facing selector: `local`, a durable node
+ID, or a unique live node name. Before sealing an initial or follow-up
+execution, the router resolves it once through the node registry — exact
+durable ID first, then the unique live name — and binds the actual durable ID,
+connection PID, session generation and privacy descriptor. Execution metadata,
+root/follow-up lineage, proof provisioning and activation use that durable ID;
+`profiles.get` still returns the configured selector. Unknown, offline,
+privacy-unsupported, reconnected or reassigned selectors fail closed and never
+fall back to the controller or another node.
+
 ### Complete profile-idle proof
 
 `runs.active.list` accepts `profileId`, `agentId`, `sessionKey` and display

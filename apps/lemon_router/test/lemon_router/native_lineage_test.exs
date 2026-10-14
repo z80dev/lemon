@@ -782,7 +782,7 @@ defmodule LemonRouter.NativeLineageTest do
     {_source, root} = admit_root(ctx)
     node = ctx.prefix <> "-reconnect-node"
     assert :ok = NodeRegistry.register_session(node, node, self(), 7,
-      %{capabilities: %{"coding_agent.run" => %{"nativePrivacyContext" => %{"version" => 1}}}})
+      %{capabilities: %{"coding_agent.run" => %{"version" => 1, "nativePrivacyContext" => %{"version" => 1}}}})
     assert {:ok, _} = ProfileStore.update(ctx.profile_id, %{"node" => node})
     fresh = fresh_request(ctx, "reconnect")
     task = Task.async(fn -> RunOrchestrator.submit_native_followup(ctx.server, captured(root), fresh) end)
@@ -793,7 +793,7 @@ defmodule LemonRouter.NativeLineageTest do
       send(replacement, :stop)
     end)
     assert :ok = NodeRegistry.register_session(node, node, replacement, 8,
-      %{capabilities: %{"coding_agent.run" => %{"nativePrivacyContext" => %{"version" => 1}}}})
+      %{capabilities: %{"coding_agent.run" => %{"version" => 1, "nativePrivacyContext" => %{"version" => 1}}}})
     assert {:error, :destination_mismatch} = NativeLineage.pending_destination(id, node)
     send(issuer, {:issuer_reply, id, 200, approved(id)})
     assert Task.await(task) == {:error, :admission_unavailable}
@@ -816,7 +816,7 @@ defmodule LemonRouter.NativeLineageTest do
   test "exact destination and source node generation fail closed", ctx do
     node = ctx.prefix <> "-node"
     assert :ok = NodeRegistry.register_session(node, ctx.prefix <> "-name", self(), 7,
-      %{capabilities: %{"coding_agent.run" => %{"nativePrivacyContext" => %{"version" => 1}}}})
+      %{capabilities: %{"coding_agent.run" => %{"version" => 1, "nativePrivacyContext" => %{"version" => 1}}}})
     node_pid = self()
     on_exit(fn -> NodeRegistry.unregister(node, node_pid) end)
     assert {:ok, _} = ProfileStore.update(ctx.profile_id, %{"node" => node})
@@ -861,13 +861,130 @@ defmodule LemonRouter.NativeLineageTest do
         %{node_id: node, connection_pid: self(), generation: 8})
   end
 
+  test "human-named profile placement seals the actual durable node once", ctx do
+    node = ctx.prefix <> "-durable"
+    name = ctx.prefix <> "-human"
+    assert :ok = NodeRegistry.register_session(node, name, self(), 7, capable())
+    node_pid = self()
+    on_exit(fn -> NodeRegistry.unregister(node, node_pid) end)
+    assert {:ok, _} = ProfileStore.update(ctx.profile_id, %{"node" => name})
+    {source, root} = admit_root(ctx)
+    assert root.execution_request.meta.node == node
+    assert root.execution_request.meta.native_destination_pid == self()
+    assert root.execution_request.meta.native_destination_generation == 7
+    assert source.node_id == node
+    assert source.node_generation == 7
+    assert {:error, :invalid_native_lineage} =
+      NativeLineage.authenticate(captured(root), %{node_id: name, connection_pid: self(), generation: 7})
+    assert {:ok, %{"node" => ^name}} = ProfileStore.get(ctx.profile_id)
+    assert {:ok, prepared, destination} = NativeLineage.prepare_request(source, fresh_request(ctx, "named-prepared"))
+    assert destination.node_id == node
+    assert prepared.meta.node == node
+    fresh = fresh_request(ctx, "named-renewed")
+    session = %{node_id: node, connection_pid: self(), generation: 7}
+    task = Task.async(fn ->
+      RunOrchestrator.submit_native_followup_from_node(ctx.server, captured(root), fresh, session)
+    end)
+    assert_receive {:issuer_pending, issuer, id, _, _, {:ok, lineage}, _, _}, 2000
+    assert lineage["targetNodeId"] == node
+    assert {:ok, %{node_id: ^node, generation: 7}} = NativeLineage.pending_destination(id, node)
+    assert {:error, :destination_mismatch} = NativeLineage.pending_destination(id, name)
+    send(issuer, {:issuer_reply, id, 200, approved(id)})
+    assert Task.await(task) == {:ok, id}
+    assert_receive {:native_dispatch, admitted}
+    assert admitted.execution_request.meta.node == node
+    id2 = ctx.prefix <> "-named-proofless"
+    assert RunOrchestrator.submit(ctx.server, memory_request(ctx, id2)) == {:ok, id2}
+    assert_receive {:native_dispatch, proofless}
+    assert proofless.execution_request.meta.node == node
+    assert :ok = RunOrchestrator.register_native_source_floor_from_node(%{run_id: id2}, %{allow: ["read"]},
+      %{node_id: node, connection_pid: self(), generation: 7})
+  end
+
+  test "a human name moved to another durable node fences sealed work and binds only the new node", ctx do
+    name = ctx.prefix <> "-human"
+    a = ctx.prefix <> "-a"
+    b = ctx.prefix <> "-b"
+    a_pid = self()
+    assert :ok = NodeRegistry.register_session(a, name, a_pid, 7, capable())
+    on_exit(fn -> NodeRegistry.unregister(a, a_pid) end)
+    assert {:ok, _} = ProfileStore.update(ctx.profile_id, %{"node" => name})
+    {_source, root} = admit_root(ctx)
+    NodeRegistry.unregister(a, a_pid)
+    b_pid = spawn(fn -> receive do :stop -> :ok end end)
+    assert :ok = NodeRegistry.register_session(b, name, b_pid, 7, capable())
+    on_exit(fn ->
+      NodeRegistry.unregister(b, b_pid)
+      send(b_pid, :stop)
+    end)
+    assert NativeLineage.validate_activation(root.execution_request) == {:error, :admission_unavailable}
+    assert {:ok, %{terminal: true, native_failure: :admission_unavailable}} =
+      Store.fetch(RunOrchestrator.admission_table(), ctx.run_id)
+    id = ctx.prefix <> "-moved"
+    assert RunOrchestrator.submit(ctx.server, root_request(ctx, id, servers(id))) == {:ok, id}
+    assert_receive {:native_dispatch, moved}
+    assert moved.execution_request.meta.node == b
+    assert moved.execution_request.meta.native_destination_pid == b_pid
+  end
+
+  test "unknown, unsupported and offline ID-shadowed placements fail closed without local fallback", ctx do
+    fenced = fn id ->
+      assert {:ok, row} = Store.fetch(RunOrchestrator.admission_table(), id)
+      refute Map.has_key?(row, :native_source)
+      refute Map.has_key?(row, :native_root_binding)
+    end
+    assert {:ok, _} = ProfileStore.update(ctx.profile_id, %{"node" => ctx.prefix <> "-missing"})
+    id = ctx.prefix <> "-missing-proof"
+    assert RunOrchestrator.submit(ctx.server, root_request(ctx, id, servers(id))) == {:error, :admission_unavailable}
+    fenced.(id)
+    id = ctx.prefix <> "-missing-proofless"
+    assert RunOrchestrator.submit(ctx.server, memory_request(ctx, id)) == {:error, :admission_unavailable}
+    fenced.(id)
+
+    c = ctx.prefix <> "-legacy"
+    c_name = ctx.prefix <> "-legacy-name"
+    c_pid = self()
+    assert :ok = NodeRegistry.register_session(c, c_name, c_pid, 7,
+      %{capabilities: %{"coding_agent.run" => %{"version" => 1}}})
+    on_exit(fn -> NodeRegistry.unregister(c, c_pid) end)
+    assert {:ok, _} = ProfileStore.update(ctx.profile_id, %{"node" => c_name})
+    id = ctx.prefix <> "-legacy-proof"
+    assert RunOrchestrator.submit(ctx.server, root_request(ctx, id, servers(id))) == {:error, :admission_unavailable}
+    fenced.(id)
+
+    x = ctx.prefix <> "-x"
+    y = ctx.prefix <> "-y"
+    x_pid = self()
+    shadow = spawn(fn -> receive do :stop -> :ok end end)
+    assert :ok = NodeRegistry.register_session(x, ctx.prefix <> "-x-name", x_pid, 7, capable())
+    assert :ok = NodeRegistry.register_session(y, x, shadow, 7, capable())
+    on_exit(fn ->
+      NodeRegistry.unregister(x, x_pid)
+      NodeRegistry.unregister(y, shadow)
+      send(shadow, :stop)
+    end)
+    assert {:ok, _} = ProfileStore.update(ctx.profile_id, %{"node" => x})
+    id = ctx.prefix <> "-shadow-live"
+    assert RunOrchestrator.submit(ctx.server, root_request(ctx, id, servers(id))) == {:ok, id}
+    assert_receive {:native_dispatch, sealed}
+    assert sealed.execution_request.meta.node == x
+    assert sealed.execution_request.meta.native_destination_pid == self()
+    NodeRegistry.unregister(x, x_pid)
+    id = ctx.prefix <> "-shadow-offline"
+    assert RunOrchestrator.submit(ctx.server, root_request(ctx, id, servers(id))) == {:error, :admission_unavailable}
+    refute_receive {:native_dispatch, _}, 50
+  end
+
+  defp capable, do: %{capabilities: %{"coding_agent.run" => %{"version" => 1, "nativePrivacyContext" => %{"version" => 1}}}}
+
   defp admit_root(ctx, opts \\ []) do
     request = root_request(ctx, ctx.run_id, servers(ctx.run_id))
-    assert {:ok, profile} = ProfileStore.get_for_execution(ctx.profile_id)
     assert RunOrchestrator.submit(ctx.server, request) == {:ok, ctx.run_id}
     assert_receive {:native_dispatch, submission}
-    transport = if profile["node"] == "local", do: :local,
-      else: %{node_id: profile["node"], connection_pid: self(), generation: 7}
+    transport = case submission.execution_request.meta[:node] do
+      node when node in [nil, "local"] -> :local
+      node -> %{node_id: node, connection_pid: self(), generation: 7}
+    end
     if Keyword.get(opts, :register_floor, true) do
       assert :ok = NativeLineage.register_source_floor(captured(submission),
         submission.execution_request.tool_policy, transport)

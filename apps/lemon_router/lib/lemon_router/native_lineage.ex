@@ -7,6 +7,12 @@ defmodule LemonRouter.NativeLineage do
   never a handle or MCP authentication headers.
   Fresh reservations are fixed-ID, content-free and synced before issuer I/O.
   An interrupted reservation is not retryable.
+
+  Profile `node` placement is a durable-ID or unique-live-name selector. Admission
+  resolves it once via `LemonCore.NodeRegistry` (exact ID first) and seals the actual
+  durable ID, connection PID and session generation; execution metadata carries the
+  durable ID. Later checks re-resolve the same selector and fail closed on any
+  change, never falling back to local.
   """
 
   alias LemonCore.{InvocationProof, MapHelpers, NodeRegistry, ProfileStore, RunRequest, Store}
@@ -31,8 +37,8 @@ defmodule LemonRouter.NativeLineage do
            {:ok, _} <- validate_command_invocation(command, profile),
            :ok <- validate_current_target_policy(command),
            true <- profile["id"] == meta[:agent_id],
-           {:ok, destination} <- destination(profile["node"]),
-           true <- matches_destination?(meta[:node], destination.node_id),
+           {:ok, destination} <- profile_destination(profile),
+           true <- selected_destination?(meta[:node], profile, destination),
            true <- destination.pid == nil or meta[:native_destination_pid] in [nil, destination.pid],
            true <- destination.generation == nil or meta[:native_destination_generation] in [nil, destination.generation],
            {:ok, %{} = admission} <- Store.fetch(@table, command.run_id),
@@ -71,6 +77,7 @@ defmodule LemonRouter.NativeLineage do
             |> Map.put(:native_lineage_run_id, command.run_id)
             |> Map.put(:native_destination_pid, destination.pid)
             |> Map.put(:native_destination_generation, destination.generation)
+            |> put_destination_node(destination)
           {:ok, %{submission | execution_request: %{command | meta: private_meta},
             meta: LemonCore.RunStore.execution_projection(private_meta)}}
         else
@@ -83,8 +90,10 @@ defmodule LemonRouter.NativeLineage do
     else
       # Body/model metadata is not continuing authority. Only this factory
       # stamps these fields after sealing actual execution provenance.
-      with :ok <- capture_unattested_managed(command) do
-        clean_meta = Map.reject(meta, fn {key, _} -> to_string(key) in @owner_fields end)
+      with {:ok, destination} <- capture_unattested_managed(command) do
+        clean_meta = meta
+          |> Map.reject(fn {key, _} -> to_string(key) in @owner_fields end)
+          |> put_destination_node(destination)
         {:ok, %{submission | execution_request: %{command | meta: clean_meta},
           meta: LemonCore.RunStore.execution_projection(clean_meta)}}
       end
@@ -216,7 +225,7 @@ defmodule LemonRouter.NativeLineage do
   defp source_transport(%{node_id: id, node_generation: generation},
          %{node_id: id, connection_pid: pid, generation: generation}) do
     with {:ok, %{id: ^id, pid: ^pid, generation: ^generation, metadata: metadata}} <- NodeRegistry.resolve_id(id),
-         true <- privacy_capable?(metadata) do
+         true <- NodeRegistry.native_privacy_context_supported?(metadata) do
       :ok
     else
       _ -> {:error, :stale_source_node}
@@ -233,7 +242,7 @@ defmodule LemonRouter.NativeLineage do
          {:ok, requested_policy} <- LemonCore.ToolPolicy.normalize(request.tool_policy || %{}),
          {:ok, profile} <- ProfileStore.get(target_id),
          true <- profile["id"] == target_id,
-         {:ok, destination} <- destination(profile["node"]),
+         {:ok, destination} <- profile_destination(profile),
          {:ok, prepared} <- ProfileStore.chat_request(profile, request.prompt,
            run_id: request.run_id, session_key: request.session_key || source.session_key,
            origin: :node, images: request.images || [], queue_mode: :collect,
@@ -258,13 +267,33 @@ defmodule LemonRouter.NativeLineage do
   end
   def destination(id) when is_binary(id) do
     with {:ok, %{id: ^id, pid: pid, generation: generation, metadata: metadata}} <- NodeRegistry.resolve_id(id),
-         true <- privacy_capable?(metadata) do
+         true <- NodeRegistry.native_privacy_context_supported?(metadata) do
       {:ok, %{node_id: id, pid: pid, generation: generation}}
     else
       _ -> {:error, :admission_unavailable}
     end
   end
   def destination(_), do: {:error, :admission_unavailable}
+
+  @doc false
+  # Profile placement is the public `local`/durable-ID/unique-live-name selector.
+  # Resolve it through the registry owner (exact ID first) and bind the actual
+  # durable ID, connection PID and session generation of a privacy-capable node.
+  def profile_destination(profile) when is_map(profile) do
+    case profile["node"] do
+      selector when selector in [nil, "local"] -> destination(selector)
+      selector when is_binary(selector) ->
+        with {:ok, %{id: id, pid: pid, generation: generation, metadata: metadata}} <-
+               NodeRegistry.resolve(selector),
+             true <- NodeRegistry.native_privacy_context_supported?(metadata) do
+          {:ok, %{node_id: id, pid: pid, generation: generation}}
+        else
+          _ -> {:error, :admission_unavailable}
+        end
+      _ -> {:error, :admission_unavailable}
+    end
+  end
+  def profile_destination(_), do: {:error, :admission_unavailable}
 
   @doc false
   def current_destination(%{node_id: id} = expected) do
@@ -278,7 +307,7 @@ defmodule LemonRouter.NativeLineage do
   def current_target(request, destination) do
     with {:ok, profile} <- ProfileStore.get(request.meta[:profile_id]),
          true <- profile["id"] == request.agent_id,
-         {:ok, current} <- destination(profile["node"]),
+         {:ok, current} <- profile_destination(profile),
          true <- current == destination,
          :ok <- current_destination(destination) do
       :ok
@@ -378,7 +407,7 @@ defmodule LemonRouter.NativeLineage do
   defp validate_reserved_destination(lineage, node_id) do
     with true <- lineage.target_node_id == node_id,
          {:ok, profile} <- ProfileStore.get(lineage.target_profile_id),
-         {:ok, destination} <- destination(profile["node"]),
+         {:ok, destination} <- profile_destination(profile),
          true <- destination.node_id == node_id,
          true <- digest(destination) == lineage.destination_binding_hash,
          {:ok, _config} <- current_target_binding(lineage) do
@@ -488,18 +517,18 @@ defmodule LemonRouter.NativeLineage do
            {:ok, profile, binding} <- capture_target_binding(command),
            :ok <- validate_current_target_policy(command),
            true <- profile["id"] == command.meta[:agent_id],
-           {:ok, destination} <- destination(profile["node"]),
-           true <- matches_destination?(command.meta[:node], destination.node_id),
+           {:ok, destination} <- profile_destination(profile),
+           true <- selected_destination?(command.meta[:node], profile, destination),
            {:ok, %{} = entry} <- Store.fetch(@table, command.run_id),
            replacement = maybe_bind_root(entry, command, destination, binding, false),
            :ok <- Store.compare_and_swap(@table, command.run_id, entry, replacement),
            :ok <- Store.sync() do
-        :ok
+        {:ok, destination}
       else
         _ -> {:error, :admission_unavailable}
       end
     else
-      :ok
+      {:ok, nil}
     end
   end
 
@@ -518,6 +547,14 @@ defmodule LemonRouter.NativeLineage do
 
   defp matches_destination?(node, "local"), do: node in [nil, "local", :local]
   defp matches_destination?(node, target), do: node == target
+
+  # The command carries the profile's own selector (or, for a prepared
+  # follow-up, the durable ID already resolved from it), never another node.
+  defp selected_destination?(node, _profile, %{node_id: "local"}), do: node in [nil, "local", :local]
+  defp selected_destination?(node, profile, %{node_id: id}), do: node in [profile["node"], id]
+
+  defp put_destination_node(meta, %{node_id: id}) when id != "local", do: Map.put(meta, :node, id)
+  defp put_destination_node(meta, _destination), do: meta
 
 
   defp verify_startup_binding(entry, run_id) do
@@ -652,13 +689,6 @@ defmodule LemonRouter.NativeLineage do
   @doc false
   def semantic_meta(meta, source_run_id) do
     meta |> strip_private() |> Map.put(:parent_run_id, source_run_id)
-  end
-
-  defp privacy_capable?(metadata) do
-    case MapHelpers.get_key(metadata, :capabilities) do
-      %{"coding_agent.run" => %{"nativePrivacyContext" => %{"version" => 1}}} -> true
-      _ -> false
-    end
   end
 
   defp strip_private(meta), do: Map.reject(meta, fn {key, _} -> to_string(key) in @private_fields end)
