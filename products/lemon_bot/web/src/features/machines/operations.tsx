@@ -9,7 +9,7 @@ const actionLabels: Record<HostAction, string> = { update: 'Update Lemon worker'
 
 export function HostOperations() {
   const { snapshot } = useApp();
-  if (snapshot.member.role === 'member') return <main className="page"><PageHeader title="Host operations" /><p className="error-notice">Workspace owner/admin role plus explicit authority over every affected host is required. Host access alone is not bulk management permission.</p></main>;
+  if (snapshot.workspace.ownerUserId !== snapshot.user.id) return <main className="page"><PageHeader title="Host operations" /><p className="error-notice">The workspace owner must have explicit authority over every affected owned host.</p></main>;
   return <OperationsPanel />;
 }
 

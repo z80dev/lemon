@@ -68,13 +68,13 @@ export function QueryState({ query, children }: { query: { loading: boolean; err
   return <><ErrorNotice error={query.error} />{query.loading && <Loading />}{!!query.error && query.reload && <button type="button" disabled={query.loading} onClick={() => void query.reload?.()}>Refresh authoritative read</button>}{query.data !== undefined && <div hidden={!!query.error} aria-busy={query.loading}>{children}</div>}</>;
 }
 
-export function canManage(bot: Bot, userId: string) { return bot.ownerUserId === userId || bot.managerUserIds.includes(userId); }
+export function canManage(bot: Bot, userId: string) { return bot.ownerUserId === userId; }
 
-export function BotSelect({ value, onChange, owned = false, managed = false, team = false, label = 'Bot' }: { value: string; onChange: (id: string) => void; owned?: boolean; managed?: boolean; team?: boolean; label?: string }) {
+export function BotSelect({ value, onChange, label = 'Bot' }: { value: string; onChange: (id: string) => void; label?: string }) {
   const { client, snapshot } = useApp();
   const inventory = useInventory('work-bot-picker', query => client.call('GET /bots', { query }));
   const machines = useInventory('work-machine-labels', query => client.call('GET /machines', { query }));
-  const bots = (inventory.data ?? snapshot.bots).filter(bot => (!owned || bot.ownerUserId === snapshot.user.id) && (!managed || canManage(bot, snapshot.user.id)) && (!team || bot.visibility === 'team'));
+  const bots = (inventory.data ?? snapshot.bots).filter(bot => bot.ownerUserId === snapshot.user.id);
   return <Field label={label}>
     <select required disabled={inventory.loading || !!inventory.error} value={value} onChange={event => onChange(event.target.value)}>
       <option value="">Choose a Bot</option>{bots.map(bot => <option key={bot.id} value={bot.id}>{bot.name} · {(machines.data ?? snapshot.machines).find(machine => machine.id === bot.machineId)?.name ?? `Machine ${bot.machineId}`}</option>)}

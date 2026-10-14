@@ -44,7 +44,7 @@ export function ChannelsScreen({ route }: { route: Route }) {
   }, [flow?.id, flow?.state]);
   return <div className="page stack">
     <PageHeader title="Channels" eyebrow="Real provider installations and verified principals" />
-    <p className="muted">Slack per-Bot apps require a published Team Bot, registered OAuth/signing/app-install provider, workspace admin approval and actual provider permissions. Other adapters require configured Lemon accounts. Channel installation is separate from MCP posting and routine listeners.</p>
+    <p className="muted">Slack per-Bot apps require an owned Bot, registered OAuth/signing/app-install provider, provider workspace administrator approval and actual provider permissions. Other adapters require configured Lemon accounts. Channel installation is separate from MCP posting and routine listeners.</p>
     <ActionNotice action={action} reconcile={async () => { await client.call('GET /channels'); if (flow) setFlow(await client.call('GET /channels/setup/:id', { params: { id: flow.id } })); await bindings.reload(); }} />
     <BotSelect value={botId} onChange={setBotId} />
     <QueryState query={selectedBot}>{selectedBot.data && <p>Selected Bot: {selectedBot.data.name}</p>}</QueryState>
@@ -63,10 +63,10 @@ export function ChannelsScreen({ route }: { route: Route }) {
       <form className="stack" onSubmit={event => { event.preventDefault(); if (!provider) return; void action.run(async () => setFlow(await client.call('POST /channels/setup', { body: { botId, adapter: provider.adapter, providerId: provider.id, accountLabel, redirectUri: window.location.origin, clientNonce: nonce() } }))); }}>
         <fieldset className="stack" disabled={!managed || !online || action.blocked || !provider?.configured}>
           <Field label="Account label"><input required value={accountLabel} onChange={event => setAccountLabel(event.target.value)} /></Field>
-          <button className="primary" disabled={provider?.adapter === 'slack' && (!bot?.published || bot.visibility !== 'team' || !provider.supportsBotAppInstall)}>Authorize / install actual provider app</button>
+          <button className="primary" disabled={provider?.adapter === 'slack' && !provider.supportsBotAppInstall}>Authorize / install actual provider app</button>
         </fieldset>
       </form>
-      {!managed && <p className="muted">Select a Bot you own or maintain to change channel setup.</p>}
+      {!managed && <p className="muted">Select a Bot you own to change channel setup.</p>}
       {flow && <div className="card stack">
         <Badge tone={flow.state === 'connected' ? 'good' : 'warning'}>{flow.state.replaceAll('_', ' ')}</Badge>
         {flow.state === 'awaiting_admin' && <p>Provider workspace administrator approval is still pending. Installation is not complete.</p>}
@@ -164,8 +164,8 @@ function PrincipalLinkRow({ link, reload }: { link: ChannelPrincipalLink; reload
       if (binding) return { binding, bot: await client.call('GET /bots/:id', { params: { id: binding.botId } }) };
       cursor = page.nextCursor ?? undefined;
     } while (cursor);
-    throw new Error('This linked channel is unavailable; only your own principal link can be removed without maintained channel context.');
+    throw new Error('This linked channel is unavailable. Only your own verified principal link can be removed.');
   });
-  const permitted = link.userId === snapshot.user.id || (!!context.data && !context.error && canManage(context.data.bot, snapshot.user.id));
+  const permitted = link.userId === snapshot.user.id;
   return <article className="card stack"><><p>{link.externalUserId} → {link.userId === snapshot.user.id ? 'You' : link.userId} · {link.verified ? 'Verified' : 'Not verified'} · binding {link.channelBindingId}</p><QueryState query={context}>{context.data && <p>Channel: {context.data.binding.adapter} · {context.data.binding.accountId} · {context.data.binding.target} · Bot: {context.data.bot.name}</p>}</QueryState></><ActionNotice action={action} reconcile={async () => { await client.call('GET /channels/principal-links'); await reload(); }} />{remove ? <><p>Unlink this external identity? Future messages cannot use its product principal.</p><button className="danger" disabled={!permitted || !online || action.blocked} onClick={() => void action.run(async () => { await client.call('DELETE /channels/principal-links/:id', { params: { id: link.id }, body: { revision: link.revision, clientNonce: nonce() } }); await reload(); })}>Confirm unlink</button><button onClick={() => setRemove(false)}>Keep link</button></> : <button disabled={!permitted} onClick={() => setRemove(true)}>Unlink…</button>}</article>;
 }
