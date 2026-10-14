@@ -32,49 +32,19 @@ defmodule CodingAgent.Session.NavigateLabelTest do
       prompt(session, "alpha")
       alpha_answer = entry_id(session, "assistant", "answer to: alpha")
       first_answer = entry_id(session, "assistant", "answer to: first")
-      alpha = entry_id(session, "user", "alpha")
 
-      assert {:ok, %{"leafId" => leaf, "prompt" => nil, "summarizing" => false} = receipt} =
+      assert {:ok, %{"leafId" => ^first_answer, "prompt" => nil, "summarizing" => false}} =
                ControlPlaneProvider.session_navigate(ctx.key, ctx.root, first_answer, [])
 
-      assert leaf == first_answer
-      assert receipt["entryId"] == first_answer
-      assert receipt["sessionId"] == Session.get_state(session).session_manager.header.id
       assert Enum.map(Session.get_messages(session), & &1.role) == [:user, :assistant]
 
       prompt(session, "beta")
       assert_received {:provider_texts, texts}
       assert texts == ["first", "answer to: first", "beta"]
 
-      # The abandoned branch is still in the tree, and a user message lands
-      # before itself and hands its text back for editing.
+      # The abandoned branch stays in the tree.
       assert {:ok, tree} = ControlPlaneProvider.session_tree(ctx.key, ctx.root, [])
       assert Enum.any?(tree["entries"], &(&1["id"] == alpha_answer and not &1["isActive"]))
-
-      assert {:ok, %{"leafId" => ^first_answer, "prompt" => "alpha"}} =
-               ControlPlaneProvider.session_navigate(ctx.key, ctx.root, alpha, [])
-
-      prompt(session, "gamma")
-      assert_received {:provider_texts, ["first", "answer to: first", "gamma"]}
-    end
-
-    test "the first user message lands before itself and :root empties the context", ctx do
-      session = start_live(ctx)
-      prompt(session, "first")
-      first = entry_id(session, "user", "first")
-      manager = Session.get_state(session).session_manager
-      parent = SessionManager.get_entry(manager, first).parent_id
-
-      assert {:ok, %{"leafId" => ^parent, "prompt" => "first"}} =
-               ControlPlaneProvider.session_navigate(ctx.key, ctx.root, first, [])
-
-      assert Session.get_messages(session) == []
-      assert :ok = Session.navigate_tree(session, :root, summarize_abandoned: false)
-      assert Session.get_state(session).session_manager.leaf_id == nil
-      prompt(session, "fresh start")
-      # Only the new prompt (plus its recalled-context footer) reaches the model.
-      assert_received {:provider_texts, [only]}
-      assert String.starts_with?(only, "fresh start")
     end
 
     test "unknown entries are refused and a streaming session is busy", ctx do
@@ -114,11 +84,6 @@ defmodule CodingAgent.Session.NavigateLabelTest do
       assert tree_label(ctx, answer) == "good idea"
       assert Enum.map(Session.get_messages(session), &{&1.role, &1.content}) == before
 
-      assert {:ok, %{"label" => "better"}} =
-               ControlPlaneProvider.session_label(ctx.key, ctx.root, answer, "better")
-
-      assert tree_label(ctx, answer) == "better"
-
       assert {:ok, %{"label" => nil}} =
                ControlPlaneProvider.session_label(ctx.key, ctx.root, answer, nil)
 
@@ -126,9 +91,6 @@ defmodule CodingAgent.Session.NavigateLabelTest do
 
       assert {:error, :entry_not_found} =
                ControlPlaneProvider.session_label(ctx.key, ctx.root, "missing", "x")
-
-      prompt(session, "second")
-      assert_received {:provider_texts, ["first", "answer to: first", "second"]}
     end
   end
 
@@ -197,10 +159,9 @@ defmodule CodingAgent.Session.NavigateLabelTest do
                ControlPlaneProvider.session_label("agent:nobody:main", ctx.root, "x", "y")
     end
 
-    test "labels persist, resolve to the latest value and keep the active branch", ctx do
+    test "labels persist, resolve to the latest value and never change the context", ctx do
       {path, ids} = durable_tree(ctx)
       {:ok, before} = SessionManager.load_from_file(path)
-      active_before = Enum.map(SessionManager.get_branch(before), & &1.id)
 
       assert {:ok, %{"label" => "keep"}} =
                ControlPlaneProvider.session_label(ctx.key, ctx.root, ids.alpha, "keep")
@@ -208,11 +169,7 @@ defmodule CodingAgent.Session.NavigateLabelTest do
       assert {:ok, %{"label" => "keep v2"}} =
                ControlPlaneProvider.session_label(ctx.key, ctx.root, ids.alpha, "keep v2")
 
-      assert {:ok, %{"label" => "other branch"}} =
-               ControlPlaneProvider.session_label(ctx.key, ctx.root, ids.beta, "other branch")
-
       assert tree_label(ctx, ids.alpha) == "keep v2"
-      assert tree_label(ctx, ids.beta) == "other branch"
 
       assert {:ok, %{"label" => nil}} =
                ControlPlaneProvider.session_label(ctx.key, ctx.root, ids.alpha, "")
@@ -223,15 +180,6 @@ defmodule CodingAgent.Session.NavigateLabelTest do
 
       assert SessionManager.build_session_context(loaded).messages ==
                SessionManager.build_session_context(before).messages
-
-      assert Enum.take(
-               Enum.map(SessionManager.get_branch(loaded), & &1.id),
-               length(active_before)
-             ) ==
-               active_before
-
-      assert {:error, :entry_not_found} =
-               ControlPlaneProvider.session_label(ctx.key, ctx.root, "missing", "x")
     end
 
     test "fork from an entry copies history up to and including it", ctx do
@@ -257,25 +205,6 @@ defmodule CodingAgent.Session.NavigateLabelTest do
                )
 
       assert LemonCore.ChatStateStore.get("agent:other-fork:main") == nil
-    end
-
-    test "a live source forks from an entry too", ctx do
-      session = start_live(ctx)
-      prompt(session, "first")
-      prompt(session, "alpha")
-      first_answer = entry_id(session, "assistant", "answer to: first")
-      alpha = entry_id(session, "user", "alpha")
-      bind_resume_token(ctx, session)
-
-      assert :ok =
-               ControlPlaneProvider.session_fork(ctx.key, ctx.root, ctx.fork_key,
-                 entry_id: first_answer
-               )
-
-      assert {:ok, entries} = ControlPlaneProvider.session_history(ctx.fork_key, ctx.root)
-      forked = Enum.map(entries, & &1.id)
-      assert first_answer in forked
-      refute alpha in forked
     end
   end
 

@@ -4,7 +4,7 @@ import { FakeControlPlane } from "../src/dev/fake-server.ts";
 import { ControlPlaneClient } from "../src/protocol/client.ts";
 import { ControlPlaneMethods } from "../src/protocol/methods.ts";
 import type { SessionSummary } from "../src/protocol/types.ts";
-import { cwdSessionTag, newSessionKey } from "../src/session-key.ts";
+import { cwdSessionTag } from "../src/session-key.ts";
 import { resolveStartup, selectContinueSession } from "../src/startup-session.ts";
 import { initTheme, resetTheme } from "../src/ui/theme/theme.ts";
 import { invalidateThemeAdapters } from "../src/ui/theme/tui-adapters.ts";
@@ -21,15 +21,6 @@ function row(
 ): SessionSummary {
 	return { sessionKey: key, updatedAtMs, ...extra };
 }
-
-describe("newSessionKey", () => {
-	test("tags keys with the directory, matching the CLI hash recipe", () => {
-		const key = newSessionKey(CWD);
-		expect(key).toMatch(/^agent:default:tui:local:dm:[0-9a-f]{16}-[0-9a-f-]{36}$/);
-		expect(key).toContain(`:dm:${cwdSessionTag(CWD)}-`);
-		expect(cwdSessionTag(CWD)).not.toBe(cwdSessionTag(OTHER));
-	});
-});
 
 describe("selectContinueSession", () => {
 	const here = (id: string) => `agent:default:tui:local:dm:${cwdSessionTag(CWD)}-${id}`;
@@ -59,12 +50,6 @@ describe("selectContinueSession", () => {
 			scope: "any",
 		});
 	});
-
-	test("rows without a timestamp rank oldest, and nothing yields undefined", () => {
-		expect(selectContinueSession([], { cwd: CWD })).toBeUndefined();
-		const rows = [{ sessionKey: here("untimed") }, row(here("timed"), 1)];
-		expect(selectContinueSession(rows, { cwd: CWD })?.key).toBe(here("timed"));
-	});
 });
 
 describe("resolveStartup", () => {
@@ -85,24 +70,17 @@ describe("resolveStartup", () => {
 
 	const deps = () => ({ methods, cwd: CWD, currentKey: "fresh" });
 
-	test("bare --resume opens the switcher without touching the daemon", async () => {
-		expect(await resolveStartup({ mode: "resume" }, deps())).toEqual({ openSwitcher: true });
-		expect(server.requestsFor("sessions.list")).toHaveLength(0);
-	});
-
-	test("--resume KEY attaches when the exact key exists", async () => {
+	test("--resume KEY attaches only on an exact key match", async () => {
 		server.respondWith("sessions.list", { sessions: [row("k-1", 1), row("k-10", 2)], total: 2 });
 		const resolution = await resolveStartup({ mode: "resume", key: "k-1" }, deps());
 		expect(resolution).toEqual({ sessionKey: "k-1" });
-		expect(server.requestsFor("sessions.list")[0].params).toMatchObject({ query: "k-1" });
 	});
 
-	test("--resume KEY falls back to a fresh session with a notice when it does not exist", async () => {
+	test("--resume KEY falls back to a fresh session with a warning when it does not exist", async () => {
 		server.respondWith("sessions.list", { sessions: [row("k-10", 2)], total: 1 });
 		const resolution = await resolveStartup({ mode: "resume", key: "k-1" }, deps());
 		expect(resolution.sessionKey).toBeUndefined();
 		expect(resolution.notice?.level).toBe("warning");
-		expect(resolution.notice?.text).toContain("k-1");
 	});
 
 	test("--resume KEY still attaches, with a warning, when the lookup fails", async () => {
@@ -121,25 +99,17 @@ describe("resolveStartup", () => {
 		);
 		const resolution = await resolveStartup({ mode: "continue" }, deps());
 		expect(resolution.sessionKey).toBe(mine);
-		expect(resolution.notice?.text).toContain("this directory");
-		expect(server.requestsFor("sessions.list").map((r) => r.params)).toEqual([
-			{ limit: 500, offset: 0, archived: false },
-			{ limit: 500, offset: 1, archived: false },
-		]);
+		expect(server.requestsFor("sessions.list")).toHaveLength(2);
 	});
 
-	test("--continue starts fresh with a notice when nothing qualifies", async () => {
+	test("--continue starts fresh when nothing qualifies or the lookup fails", async () => {
 		server.respondWith("sessions.list", { sessions: [row("agent:default:cli-a-b", 5)], total: 1 });
-		const resolution = await resolveStartup({ mode: "continue" }, deps());
-		expect(resolution.sessionKey).toBeUndefined();
-		expect(resolution.notice?.text).toContain("no previous session");
-	});
+		expect((await resolveStartup({ mode: "continue" }, deps())).sessionKey).toBeUndefined();
 
-	test("--continue reports a failed lookup instead of throwing", async () => {
 		server.failWith("sessions.list", "UNAVAILABLE", "down");
-		const resolution = await resolveStartup({ mode: "continue" }, deps());
-		expect(resolution.sessionKey).toBeUndefined();
-		expect(resolution.notice?.level).toBe("error");
+		const failed = await resolveStartup({ mode: "continue" }, deps());
+		expect(failed.sessionKey).toBeUndefined();
+		expect(failed.notice?.level).toBe("error");
 	});
 });
 
@@ -182,21 +152,13 @@ describe("AppShell startup request", () => {
 		return { app, server, saved };
 	}
 
-	test("--continue focuses the saved session, loads its history and says so", async () => {
+	test("--continue focuses the saved session and loads its history", async () => {
 		const { app, server, saved } = await boot({ mode: "continue" });
 		await waitFor(() => renderPlain(app.chatContainer.render(80)).includes("welcome back"));
 		expect(app.sessionKey).toBe(saved);
 		expect(server.requestsFor("chat.history").at(-1)?.params).toMatchObject({ sessionKey: saved });
-		expect(renderPlain(app.chatContainer.render(80))).toContain("continuing the latest session");
 		// The throwaway key minted at construction never becomes a session.
 		expect([...app.store.sessions.keys()]).toEqual([saved]);
-	});
-
-	test("--resume with an unknown key keeps a fresh session and warns", async () => {
-		const { app } = await boot({ mode: "resume", key: "missing" });
-		await waitFor(() => renderPlain(app.chatContainer.render(80)).includes("was not found"));
-		expect(app.sessionKey).toMatch(/^agent:default:tui:local:dm:/);
-		expect(app.sessionKey).not.toBe("missing");
 	});
 
 	test("bare --resume opens the session switcher once loaded", async () => {

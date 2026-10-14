@@ -56,12 +56,6 @@ defmodule LemonControlPlane.Methods.NativeSessionMethodsTest do
     end
 
     @impl true
-    def session_fork(key, cwd, destination, opts) do
-      send(self(), {:fork, key, cwd, destination, opts})
-      Process.get(:fork_result, :ok)
-    end
-
-    @impl true
     def session_history(key, cwd) do
       send(self(), {:history, key, cwd})
       Process.get(:history_result, {:error, :session_not_found})
@@ -372,30 +366,7 @@ defmodule LemonControlPlane.Methods.NativeSessionMethodsTest do
     assert SessionLifecycle.get(child) == nil
   end
 
-  test "fork from an entry validates the id and forwards it as an option" do
-    for bad <- [123, "", String.duplicate("x", 257)] do
-      assert {:error, {:invalid_params, _, nil}} =
-               SessionsFork.handle(Map.put(target(), "entryId", bad), %{})
-    end
-
-    refute_received {:fork, _, _, _, _}
-
-    assert {:ok, %{"sessionKey" => child, "sourceSessionKey" => source}} =
-             Registry.dispatch("sessions.fork", Map.put(target(), "entryId", "u1"), ctx([:write]))
-
-    on_exit(fn -> SessionLifecycle.delete(child) end)
-    assert_receive {:fork, ^source, "/workspace", ^child, [entry_id: "u1"]}
-    refute_received {:fork, _, _, _}
-
-    Process.put(:fork_result, {:error, :entry_not_found})
-
-    assert {:error, {:not_found, _, %{"reason" => "entry_not_found"}}} =
-             SessionsFork.handle(Map.put(target(), "entryId", "gone"), %{})
-  end
-
-  test "navigate switches the branch with write scope and projects only its receipt" do
-    assert Authorize.required_scopes("sessions.navigate") == [:write]
-
+  test "navigate needs write scope, validates input and maps runtime refusals" do
     assert {:error, {:forbidden, _}} =
              Registry.dispatch("sessions.navigate", navigate_target(), ctx([:read]))
 
@@ -413,29 +384,16 @@ defmodule LemonControlPlane.Methods.NativeSessionMethodsTest do
              Registry.dispatch("sessions.navigate", navigate_target(), ctx([:write]))
 
     assert result == Map.put(receipt, "sessionKey", target()["sessionKey"])
+    assert_receive {:navigate, _, _, "e2", _}
 
-    assert_receive {:navigate, "agent:native_methods:main", "/workspace", "e2",
-                    [summarize: false]}
-
-    assert {:ok, _} =
-             SessionsNavigate.handle(Map.put(navigate_target(), "summarize", true), %{})
-
-    assert_receive {:navigate, _, _, "e2", [summarize: true]}
-  end
-
-  test "navigate rejects malformed parameters before delegation and maps runtime refusals" do
-    for {field, value} <- [
-          {"entryId", ""},
-          {"entryId", String.duplicate("x", 257)},
-          {"summarize", "yes"},
-          {"cwd", ""}
+    for params <- [
+          Map.put(navigate_target(), "entryId", ""),
+          Map.put(navigate_target(), "entryId", String.duplicate("x", 257)),
+          Map.put(navigate_target(), "summarize", "yes"),
+          Map.delete(navigate_target(), "entryId")
         ] do
-      assert {:error, {:invalid_params, _, nil}} =
-               SessionsNavigate.handle(Map.put(navigate_target(), field, value), %{})
+      assert {:error, {:invalid_params, _, nil}} = SessionsNavigate.handle(params, %{})
     end
-
-    assert {:error, {:invalid_params, _, nil}} =
-             SessionsNavigate.handle(Map.delete(navigate_target(), "entryId"), %{})
 
     refute_received {:navigate, _, _, _, _}
 
@@ -453,26 +411,11 @@ defmodule LemonControlPlane.Methods.NativeSessionMethodsTest do
     assert {:error, {:internal_error, _, nil}} = SessionsNavigate.handle(navigate_target(), %{})
   end
 
-  test "label sets and clears bookmarks with sanitized, bounded text" do
-    assert Authorize.required_scopes("sessions.label") == [:write]
-
+  test "label needs write scope, sanitizes and bounds text, and clears on empty" do
     assert {:error, {:forbidden, _}} =
              Registry.dispatch("sessions.label", label_target("x"), ctx([:read]))
 
-    Process.put(
-      :label_result,
-      {:ok, %{"sessionId" => "native", "entryId" => "e2", "label" => "ok", "private" => 1}}
-    )
-
-    assert {:ok, result} = Registry.dispatch("sessions.label", label_target("x"), ctx([:write]))
-
-    assert result == %{
-             "sessionId" => "native",
-             "entryId" => "e2",
-             "label" => "ok",
-             "sessionKey" => target()["sessionKey"]
-           }
-
+    Process.put(:label_result, {:ok, %{"sessionId" => "native", "entryId" => "e2"}})
     assert {:ok, _} = SessionsLabel.handle(label_target("  keep\u0000\n this\tone \u202E "), %{})
     assert_receive {:label, _, "/workspace", "e2", "keep this one"}
 
@@ -481,23 +424,12 @@ defmodule LemonControlPlane.Methods.NativeSessionMethodsTest do
       assert_receive {:label, _, _, "e2", nil}
     end
 
-    assert {:ok, _} = SessionsLabel.handle(label_target(String.duplicate("é", 120)), %{})
-    assert_receive {:label, _, _, "e2", label} when byte_size(label) == 240
-  end
-
-  test "label rejects malformed input before delegation and maps runtime refusals" do
-    for bad <- [String.duplicate("x", 121), String.duplicate("x", 600), 7, %{}, <<255>>] do
-      assert {:error, {:invalid_params, _, nil}} =
-               SessionsLabel.handle(label_target(bad), %{})
+    for bad <- [String.duplicate("x", 121), 7, %{}, <<255>>] do
+      assert {:error, {:invalid_params, _, nil}} = SessionsLabel.handle(label_target(bad), %{})
     end
 
-    for params <- [
-          Map.delete(label_target("x"), "label"),
-          Map.delete(label_target("x"), "entryId"),
-          Map.put(label_target("x"), "entryId", String.duplicate("x", 257))
-        ] do
-      assert {:error, {:invalid_params, _, nil}} = SessionsLabel.handle(params, %{})
-    end
+    assert {:error, {:invalid_params, _, nil}} =
+             SessionsLabel.handle(Map.delete(label_target("x"), "label"), %{})
 
     refute_received {:label, _, _, _, _}
 

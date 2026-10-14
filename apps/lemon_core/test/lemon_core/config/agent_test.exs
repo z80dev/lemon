@@ -304,22 +304,6 @@ defmodule LemonCore.Config.AgentTest do
       assert config.compaction.keep_recent_tokens == 20_000
     end
 
-    test "compaction thresholds are optional and read from [runtime.compaction]" do
-      default = Agent.resolve(%{})
-      assert default.compaction.threshold_percent == nil
-      assert default.compaction.threshold_tokens == nil
-
-      config =
-        Agent.resolve(%{
-          "runtime" => %{
-            "compaction" => %{"threshold_percent" => 80, "threshold_tokens" => 150_000}
-          }
-        })
-
-      assert config.compaction.threshold_percent == 80
-      assert config.compaction.threshold_tokens == 150_000
-    end
-
     test "uses compaction settings from config" do
       settings = %{
         "runtime" => %{

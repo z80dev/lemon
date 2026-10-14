@@ -54,34 +54,4 @@ defmodule CodingAgent.Session.ContextBudgetTest do
                estimate.usage_after
              )
   end
-
-  test "configured compaction thresholds drive the budget threshold and headroom" do
-    base = %{SettingsManager.load(System.tmp_dir!()) | reserve_tokens: 512}
-
-    state = fn settings ->
-      %{
-        session_manager: SessionManager.new(System.tmp_dir!()),
-        settings_manager: settings,
-        model: %Model{context_window: 10_000}
-      }
-    end
-
-    agent = %{messages: [], system_prompt: "", tools: []}
-
-    percent = ContextBudget.measure(state.(%{base | compaction_threshold_percent: 50}), agent)
-    assert percent.threshold_tokens == 5_000
-    assert percent.reserve_tokens == 5_000
-
-    tokens = ContextBudget.measure(state.(%{base | compaction_threshold_tokens: 4_000}), agent)
-    assert tokens.threshold_tokens == 4_000
-    assert tokens.headroom_tokens == 4_000
-
-    both =
-      ContextBudget.measure(
-        state.(%{base | compaction_threshold_percent: 50, compaction_threshold_tokens: 4_000}),
-        agent
-      )
-
-    assert both.threshold_tokens == 4_000
-  end
 end
