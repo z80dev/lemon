@@ -333,16 +333,14 @@ describe('destination connector configuration', () => {
     expect(publicData).not.toContain(f.services.config.operatorToken);
   });
 
-  test('owner effective templates remain credential-free and do not consume pending consent', async () => {
+  test('owner effective templates remain credential-free without provider dispatch', async () => {
     const f = await fixture();
     const value = await f.create();
     const connector = (await f.enable(value.body.connector)).body;
-    const consent = await f.connectors.requestConnectorConsent(f.principal('alice'), { connectorId: connector.id, botId: f.bot.id, conversationId: 'room-alice', operationId: f.services.id('run') });
     const before = f.peer.calls.length;
     const templates = await f.connectors.connectorTemplates(f.bot.id);
     expect(templates).toEqual([{ name: `connector-${connector.id}`, url: `${ORIGIN}/mcp`, headers: {}, enabledTools: ['read_items', 'write_item'], allowedOrigins: [ORIGIN], approvedPrivateOrigins: [] }]);
     expect(f.peer.calls).toHaveLength(before);
-    expect(f.store.require<P.ConnectorConsent>('consents', consent.id).gate.state).toBe('pending');
     expect(JSON.stringify(templates)).not.toContain('RECORDS_TOKEN');
     expect(JSON.stringify(f.store.metadata(`connectorTemplatePolicy:${connector.id}`))).not.toContain('RECORDS_TOKEN');
     expect(f.peer.profiles.get(f.bot.profileId)).toEqual([baseBotMcpTemplate(f.services), ...templates]);
@@ -505,43 +503,19 @@ describe('destination connector configuration', () => {
 
 });
 
-describe('owner-scoped connector consent', () => {
-  test('owner consent resolution is private and nonce-bound, not borrowed invocation authority', async () => {
-    const f = await fixture();
-    const created = await f.create();
-    const enabled = await f.enable(created.body.connector);
-    const connector = enabled.body;
-    expect((await f.connectors.connectorTemplates(f.bot.id))[0]?.headers).toEqual({});
-    await expect(f.connectors.connectorProfileConfiguration(f.principal('bob'), f.bot.id, 'room-bob', 'different-operation')).rejects.toMatchObject({ code: 'not_found' });
-    const operationId = f.services.id('run');
-    const consent = await f.connectors.requestConnectorConsent(f.principal('alice'), { connectorId: connector.id, botId: f.bot.id, conversationId: 'room-alice', operationId });
-    const foreign = await f.request<P.ErrorEnvelope>('POST', `/v1/consents/${consent.id}/resolve`, { clientNonce: f.services.id('nonce'), revision: consent.revision, decision: 'allow_once' }, 'bob');
-    expect(foreign.status).toBe(404);
-    const allowed = await f.request<P.ConnectorConsent>('POST', `/v1/consents/${consent.id}/resolve`, { clientNonce: f.services.id('nonce'), revision: consent.revision, decision: 'allow_once' });
-    expect(allowed.body.gate.state).toBe('approved');
-    const replayed = await f.connectors.requestConnectorConsent(f.principal('alice'), { connectorId: connector.id, botId: f.bot.id, conversationId: 'room-alice', operationId });
-    expect(replayed.id).toBe(consent.id);
-    expect((await f.connectors.connectorProfileConfiguration(f.principal('alice'), f.bot.id, 'room-alice', operationId))[0]?.headers.Authorization).toBe('Bearer ${LEMON_SECRET:RECORDS_TOKEN}');
-    const foreignList = await f.request<P.Page<P.ConnectorConsent>>('GET', '/v1/consents', undefined, 'bob');
-    expect(foreignList.body.items).toEqual([]);
-    const entry = f.store.require<P.TranscriptEntry>('entries', consent.entryId);
-    expect(entry.targetedUserId).toBe('alice');
-    expect(f.services.auth.canRead(f.principal('bob'), 'entries', entry)).toBe(false);
-  });
-
-  test('revoking owner consent fences previously admitted native authority without lending access', async () => {
+describe('owner-scoped native connector admission', () => {
+  test('disabling an owner tool revokes previously admitted native authority', async () => {
     const f = await fixture();
     const connector = (await f.enable((await f.create()).body.connector)).body;
     const operationId = 'revoked-owner-operation';
-    const consent = await f.connectors.requestConnectorConsent(f.principal('alice'), { connectorId: connector.id, botId: f.bot.id, conversationId: 'room-alice', operationId });
-    const allowed = await f.request<P.ConnectorConsent>('POST', `/v1/consents/${consent.id}/resolve`, { clientNonce: f.services.id('nonce'), revision: consent.revision, decision: 'allow_bot' });
-    await f.admit('alice', operationId);
+    const run = await f.admit('alice', operationId);
+    f.store.setMetadata(`runtimeRun:${run.id}`, { upstreamRunId: operationId, executionRunId: operationId, sessionKey: 'agent:lb-fixture:main', dispatched: true });
     const input = { connectorId: connector.id, botId: f.bot.id, conversationId: 'room-alice', toolName: 'read_items', operationId };
     await expect(f.connectors.authorizeConnectorTool(f.principal('alice'), input)).resolves.toBeUndefined();
-    const deleted = await f.request<P.Deleted>('DELETE', `/v1/consents/${consent.id}`, { clientNonce: f.services.id('nonce'), revision: allowed.body.revision });
-    expect(deleted.body).toEqual({ id: consent.id, deleted: true });
+    const updated = await f.request<P.Connector>('PATCH', `/v1/connectors/${connector.id}`, { clientNonce: f.services.id('nonce'), revision: connector.revision, tools: connector.tools.map(tool => ({ ...tool, enabled: false })) });
+    expect(updated.status).toBe(200);
     await expect(f.connectors.authorizeConnectorTool(f.principal('alice'), input)).rejects.toMatchObject({ code: 'policy_denied' });
-    expect((await f.connectors.connectorProfileConfiguration(f.principal('alice'), f.bot.id, 'room-alice', 'new-owner-operation'))).toHaveLength(1);
+    expect(await f.connectors.connectorProfileConfiguration(f.principal('alice'), f.bot.id, 'room-alice', 'new-owner-operation')).toEqual([]);
   });
 
   test('operator service-account custody cannot authorize a foreign Bot or reuse native admission', async () => {
@@ -672,20 +646,17 @@ describe('configured OAuth and destructive disconnect', () => {
   });
 
 
-  test('disconnect requires exact preview, removes profile tools and remembered consents, retains manual secrets and history', async () => {
-    const f = await fixture('team');
+  test('owner disconnect requires exact preview, removes profile tools, retains manual secrets and conversation', async () => {
+    const f = await fixture();
     const created = await f.create();
     const connector = (await f.enable(created.body.connector)).body;
-    const consent = await f.connectors.requestConnectorConsent(f.principal('alice'), { connectorId: connector.id, botId: f.bot.id, conversationId: 'room-alice', operationId: f.services.id('run') });
-    await f.request('POST', `/v1/consents/${consent.id}/resolve`, { clientNonce: f.services.id('nonce'), revision: consent.revision, decision: 'allow_bot' });
     expect((await f.request<P.ErrorEnvelope>('DELETE', `/v1/connectors/${connector.id}`, { clientNonce: f.services.id('nonce'), revision: connector.revision, confirmationToken: 'not-an-issued-preview', confirmName: connector.name })).body.error.code).toBe('confirmation_required');
     const preview = await f.request<P.Confirmation>('POST', `/v1/connectors/${connector.id}/preview`, { clientNonce: f.services.id('nonce'), action: 'disconnect' });
     expect(preview.body.effects.some(effect => effect.includes('Retain conversation history'))).toBe(true);
     const body = { clientNonce: f.services.id('nonce'), revision: preview.body.revision, confirmationToken: preview.body.confirmationToken, confirmName: preview.body.confirmName };
     expect((await f.request<P.Deleted>('DELETE', `/v1/connectors/${connector.id}`, body)).body).toEqual({ id: connector.id, deleted: true });
     expect(f.store.get('connectors', connector.id)).toBeNull();
-    expect(f.store.require<P.ConnectorConsent>('consents', consent.id).gate.state).toBe('cancelled');
-    expect(f.store.get('entries', consent.entryId)).not.toBeNull();
+    expect(f.store.get('conversations', 'room-alice')).not.toBeNull();
     expect(f.peer.readSecret('RECORDS_TOKEN')).toBe('destination-only-account-secret');
     expect(f.peer.profiles.get(f.bot.profileId)?.map(server => server.name)).toEqual(['lemon-bot']);
     const effects = f.peer.calls.length;
