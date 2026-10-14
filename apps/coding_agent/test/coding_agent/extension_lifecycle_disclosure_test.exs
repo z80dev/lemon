@@ -55,6 +55,9 @@ defmodule CodingAgent.ExtensionLifecycleDisclosureTest do
 
   defp find(tools, name), do: Enum.find(tools, &(&1.name == name))
 
+  defp all_text(%AgentToolResult{content: content}),
+    do: Enum.map_join(content, &Map.get(&1, :text, ""))
+
   describe "initialize/1 with disclosure" do
     test "hides the MCP long tail and exposes working bridge tools", %{tmp_dir: tmp_dir} do
       parent = self()
@@ -108,6 +111,92 @@ defmodule CodingAgent.ExtensionLifecycleDisclosureTest do
                )
 
       assert_received {:beta_ran, "call-9", %{}}
+    end
+
+    test "exposed and deferred catalog targets restore secrets before hooks across reload", %{
+      tmp_dir: tmp_dir
+    } do
+      parent = self()
+      test_pid = inspect(:erlang.pid_to_list(parent))
+
+      module =
+        create_extension_file(tmp_dir, "DisclosureSecretExt#{System.unique_integer([:positive])}",
+          hooks: """
+          [on_tool_call: fn
+            %{tool_name: "mcp_secret_writer", args: args} ->
+              send(:erlang.list_to_pid(#{test_pid}), {:target_hook, args["content"]})
+              {:replace_args, Map.update!(args, "content", &(&1 <> " /hook"))}
+            _ -> :ok
+          end]
+          """
+        )
+
+      on_exit(fn -> cleanup_module(module) end)
+      secret = "fixture-disclosure-secret"
+
+      obfuscator =
+        CodingAgent.Security.SecretObfuscator.build(
+          cwd: tmp_dir,
+          agent_dir: tmp_dir,
+          env: %{"API_KEY" => secret}
+        )
+
+      placeholder = CodingAgent.Security.SecretObfuscator.obfuscate(obfuscator, secret)
+      path = Path.join(tmp_dir, "restored.txt")
+
+      inventory = [
+        mcp_tool("mcp_secret_writer",
+          execute: fn _, args, _, _ ->
+            File.write!(path, args["content"])
+            %AgentToolResult{content: [%TextContent{text: "saved"}]}
+          end
+        )
+      ]
+
+      for disclosure <- [[enabled: false], [profile: :coding]] do
+        opts = [
+          cwd: tmp_dir,
+          settings_manager: settings(),
+          secret_obfuscator: obfuscator,
+          tool_opts: [mcp_tools: inventory, tool_disclosure: disclosure]
+        ]
+
+        initial = ExtensionLifecycle.initialize(opts)
+
+        reloaded =
+          ExtensionLifecycle.reload(
+            Keyword.put(opts, :previous_status_report, initial.extension_status_report)
+          )
+
+        for lifecycle <- [initial, reloaded] do
+          args = %{"content" => placeholder}
+          target = lifecycle.tool_catalog["mcp_secret_writer"].tool
+          assert %AgentToolResult{is_error: false} = target.execute.("host", args, nil, nil)
+          assert_receive {:target_hook, ^secret}
+          refute_received {:target_hook, _}
+          assert File.read!(path) == secret <> " /hook"
+
+          if lifecycle.tool_disclosure.active do
+            refute find(lifecycle.tools, "mcp_secret_writer")
+            invoke = find(lifecycle.tools, "tool_invoke")
+
+            assert %AgentToolResult{is_error: false} =
+                     invoke.execute.(
+                       "bridge",
+                       %{"name" => "mcp_secret_writer", "args" => args},
+                       nil,
+                       nil
+                     )
+          else
+            exposed = find(lifecycle.tools, "mcp_secret_writer")
+            assert %AgentToolResult{is_error: false} = exposed.execute.("direct", args, nil, nil)
+          end
+
+          assert_receive {:target_hook, ^secret}
+          refute_received {:target_hook, _}
+          assert File.read!(path) == secret <> " /hook"
+        end
+      end
     end
 
     test "extension tools are hidden while builtins stay disclosed", %{tmp_dir: tmp_dir} do
@@ -168,10 +257,78 @@ defmodule CodingAgent.ExtensionLifecycleDisclosureTest do
       assert wire(result.tools) == wire(disabled.tools)
       assert disabled.tool_disclosure.reason == :disabled
 
+      # The kill switch also beats the opt-in profile: a disabled session is the
+      # legacy inventory whatever profile is configured.
+      disabled_coding =
+        ExtensionLifecycle.initialize(
+          cwd: tmp_dir,
+          settings_manager: settings(),
+          tool_opts: Keyword.put(tool_opts, :tool_disclosure, enabled: false, profile: :coding)
+        )
+
+      assert wire(disabled_coding.tools) == wire(golden)
+
       refute "tool_search" in names(result.tools)
       refute "tool_invoke" in names(result.tools)
       assert result.tool_disclosure.active == false
       assert result.tool_disclosure.reason == :under_budget
+      assert result.tool_disclosure.profile == :legacy
+    end
+
+    test "the coding profile defers optional built-ins and keeps the coding core directly usable",
+         %{tmp_dir: tmp_dir} do
+      File.write!(Path.join(tmp_dir, "hello.txt"), "hello from the core")
+
+      extra = %AgentTool{
+        name: "caller_extra",
+        description: "Caller-supplied tool",
+        parameters: %{"type" => "object", "properties" => %{}},
+        label: "caller_extra",
+        execute: fn _, _, _, _ -> %AgentToolResult{content: [%TextContent{text: "extra"}]} end
+      }
+
+      build = fn disclosure ->
+        ExtensionLifecycle.initialize(
+          cwd: tmp_dir,
+          settings_manager: settings(),
+          extra_tools: [extra],
+          tool_opts: [mcp_tools: [mcp_tool("mcp_fixture_alpha")], tool_disclosure: disclosure]
+        )
+      end
+
+      legacy = build.(nil)
+      coding = build.(profile: :coding, pinned: ["browser_tabs"])
+
+      # Non-vacuous: the registry resolved optional built-ins and the legacy
+      # profile exposes them all.
+      assert "browser_navigate" in names(legacy.tools)
+      assert "media_status" in names(legacy.tools)
+      refute legacy.tool_disclosure.active
+
+      kept = MapSet.new(ToolDisclosure.coding_core() ++ ["browser_tabs", "caller_extra"])
+      {exposed, deferred} = Enum.split_with(legacy.tools, &MapSet.member?(kept, &1.name))
+
+      # The kept tools are exactly the legacy ones, same order, same schemas;
+      # everything else the registry resolved is deferred, built-in or not.
+      assert Enum.drop(wire(coding.tools), -2) == wire(exposed)
+      assert Enum.take(names(coding.tools), -2) == ["tool_search", "tool_invoke"]
+      assert coding.tool_disclosure.hidden_names == deferred |> names() |> Enum.sort()
+      assert "browser_navigate" in coding.tool_disclosure.hidden_names
+      assert "mcp_fixture_alpha" in coding.tool_disclosure.hidden_names
+      assert "browser_tabs" in names(coding.tools)
+
+      for core <- ~w(read write edit bash grep find ls todo task) do
+        assert core in names(coding.tools), "#{core} must stay directly exposed"
+      end
+
+      assert coding.tool_disclosure.profile == :coding
+      assert coding.tool_disclosure.disclosed_tokens < coding.tool_disclosure.estimated_tokens
+
+      # A core tool runs directly, without a bridge round-trip.
+      read = find(coding.tools, "read")
+
+      assert all_text(read.execute.("id", %{"path" => Path.join(tmp_dir, "hello.txt")}, nil, nil)) =~
+               "hello from the core"
     end
 
     test "a per-session override beats settings that would activate", %{tmp_dir: tmp_dir} do
@@ -213,17 +370,20 @@ defmodule CodingAgent.ExtensionLifecycleDisclosureTest do
         execute: fn _, _, _, _ -> %AgentToolResult{content: []} end
       }
 
-      result =
-        ExtensionLifecycle.initialize(
-          cwd: tmp_dir,
-          settings_manager: settings(),
-          tool_opts: [tool_disclosure: [budget_tokens: 1]],
-          custom_tools: [custom]
-        )
+      for profile <- [:legacy, :coding] do
+        result =
+          ExtensionLifecycle.initialize(
+            cwd: tmp_dir,
+            settings_manager: settings(),
+            tool_opts: [tool_disclosure: [budget_tokens: 1, profile: profile]],
+            custom_tools: [custom]
+          )
 
-      assert result.tool_disclosure.reason == :custom_tools
-      assert result.tool_disclosure.active == false
-      assert names(result.tools) == ["custom_only_tool"]
+        assert result.tool_disclosure.reason == :custom_tools
+        refute result.tool_disclosure.active
+        assert result.tool_disclosure.profile == profile
+        assert result.tools == [custom]
+      end
     end
 
     test "telemetry is emitted once per initialize", %{tmp_dir: tmp_dir} do
@@ -241,19 +401,26 @@ defmodule CodingAgent.ExtensionLifecycleDisclosureTest do
 
       on_exit(fn -> :telemetry.detach(handler_id) end)
 
-      ExtensionLifecycle.initialize(
-        cwd: tmp_dir,
-        settings_manager: settings(),
-        tool_opts: [
-          mcp_tools: [mcp_tool("mcp_fixture_alpha")],
-          tool_disclosure: [budget_tokens: 1]
-        ]
-      )
+      result =
+        ExtensionLifecycle.initialize(
+          cwd: tmp_dir,
+          settings_manager: settings(),
+          tool_opts: [
+            mcp_tools: [mcp_tool("mcp_fixture_alpha")],
+            tool_disclosure: [budget_tokens: 1]
+          ]
+        )
 
       assert_received {:disclosure_telemetry, measurements, metadata}
       assert measurements.hidden_count == 1
       assert metadata.active == true
       assert metadata.reason == nil
+      assert metadata.catalog_digest == result.tool_disclosure.catalog_digest
+      assert metadata.diagnostic_events_version == 1
+      assert metadata.catalog_digest =~ ~r/\A[0-9a-f]{64}\z/
+      assert measurements.estimated_tokens == result.tool_disclosure.estimated_tokens
+      assert measurements.disclosed_tokens == result.tool_disclosure.disclosed_tokens
+      refute_received {:disclosure_telemetry, _, _}
     end
   end
 
@@ -457,6 +624,7 @@ defmodule CodingAgent.ExtensionLifecycleDisclosureTest do
 
   defp create_extension_file(tmp_dir, module_name, opts) do
     tools = Keyword.get(opts, :tools, "[]")
+    hooks = Keyword.get(opts, :hooks, "[]")
 
     extension_code = """
     defmodule #{module_name} do
@@ -470,6 +638,9 @@ defmodule CodingAgent.ExtensionLifecycleDisclosureTest do
 
       @impl true
       def tools(_cwd), do: #{tools}
+
+      @impl true
+      def hooks, do: #{hooks}
     end
     """
 

@@ -242,8 +242,8 @@ defmodule LemonCli.CommandRegistry do
       name: "mcp",
       summary: "Manage and test named MCP servers",
       usage:
-        "lemon mcp add NAME (--stdio COMMAND [-- ARG...] | --http URL) [options]\n       lemon mcp list|remove NAME|test NAME [options]",
-      subcommands: subcommands(~w(add list remove test)),
+        "lemon mcp add NAME (--stdio COMMAND [-- ARG...] | --http URL) [options]\n       lemon mcp list [--all]|remove NAME|test NAME|enable NAME|disable NAME [options]",
+      subcommands: subcommands(~w(add list remove test enable disable)),
       options: [
         option(
           "--global",
@@ -251,6 +251,11 @@ defmodule LemonCli.CommandRegistry do
           "Use the global agent MCP file instead of project config"
         ),
         option("--cwd PATH", ["--cwd"], "Project root (default: current directory)"),
+        option(
+          "--all",
+          ["--all"],
+          "list: effective servers incl. other tools' configs, with source and state"
+        ),
         option("--stdio COMMAND", ["--stdio"], "Executable; pass its arguments after --"),
         option("--http URL", ["--http"], "Streamable HTTP MCP endpoint"),
         option("--env KEY=VALUE", ["--env"], "Stdio environment entry (repeatable)"),

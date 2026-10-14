@@ -148,6 +148,10 @@ remains a legacy client-side alias; it does not configure the daemon.
   `$LEMON_AGENT_DIR/prompts` (default `~/.lemon/agent/prompts`), with project names
   taking precedence. Local skills insert an explicit `read_skill` request; the
   palette does not claim that a remote daemon or selected profile installed them.
+  File slash commands (`.claude/commands`, `.codex/prompts`, `.gemini/commands`
+  and the other roots in [file slash commands](../../docs/user-guide/slash-commands.md))
+  register as commands after the built-ins, which win name collisions; `/name
+  args` is sent verbatim and the daemon expands it.
 - `/skills` live official Hermes catalog browser: category drill-down, fuzzy
   filtering, descriptions, installed markers, and Space-toggle multi-select
   import through Lemon's normal audit/approval flow. A blocked bundle opens a

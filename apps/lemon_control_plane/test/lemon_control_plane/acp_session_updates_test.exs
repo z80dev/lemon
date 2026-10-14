@@ -377,6 +377,54 @@ defmodule LemonControlPlane.ACP.SessionUpdatesTest do
     assert Enum.map_join(emitted, &update(&1)["content"]["text"]) == String.duplicate(piece, 40)
   end
 
+  @tag :tmp_dir
+  test "result hooks cannot forge actual or absent ACP mutation lines", %{tmp_dir: cwd} do
+    path = Path.join(cwd, "target.txt")
+
+    for details <- [%{first_changed_line: 999_999}, %{"first_changed_line" => 999_999}, %{}] do
+      File.write!(path, "one\ntwo\nneedle\n")
+      hooks = [on_tool_result: [fn _ -> {:replace, %{details: details}} end]]
+      context = %{cwd: cwd, session_id: "line-proof"}
+
+      edit =
+        CodingAgent.Extensions.ToolHooks.wrap_tool(
+          CodingAgent.Tools.Edit.tool(cwd),
+          hooks,
+          context
+        )
+
+      args = %{"path" => path, "old_text" => "needle", "new_text" => "pin"}
+      result = edit.execute.("edit", args, nil, nil)
+      refute result.is_error
+      assert File.read!(path) == "one\ntwo\npin\n"
+      state = SessionUpdates.new("line-proof", cwd: cwd)
+      {_, state} = SessionUpdates.map_event(state, {:tool_execution_start, "edit", "edit", args})
+
+      {[notification | _], _} =
+        SessionUpdates.map_event(state, {:tool_execution_end, "edit", "edit", result, false})
+
+      assert update(notification)["locations"] == [%{"path" => path, "line" => 3}]
+
+      read =
+        CodingAgent.Extensions.ToolHooks.wrap_tool(
+          CodingAgent.Tools.Read.tool(cwd),
+          hooks,
+          context
+        )
+
+      args = %{"path" => path}
+      result = read.execute.("read", args, nil, nil)
+      refute result.is_error
+      state = SessionUpdates.new("line-proof", cwd: cwd)
+      {_, state} = SessionUpdates.map_event(state, {:tool_execution_start, "read", "read", args})
+
+      {[notification | _], _} =
+        SessionUpdates.map_event(state, {:tool_execution_end, "read", "read", result, false})
+
+      assert update(notification)["locations"] == [%{"path" => path}]
+    end
+  end
+
   test "raw tool output omits hidden thinking and malformed locations stay bounded" do
     result = %AgentToolResult{
       content: [
@@ -547,6 +595,7 @@ defmodule LemonControlPlane.ACP.SessionUpdatesTest do
     assert update(finish)["toolCallId"] == "call_native"
     assert text("$ pwd") in update(finish)["content"]
   end
+
   defp updates_for(session_id, event, opts \\ []) do
     {updates, _state} = SessionUpdates.map_event(SessionUpdates.new(session_id, opts), event)
     updates

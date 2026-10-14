@@ -50,6 +50,7 @@ defmodule LemonSkills.Manifest.Validator do
       |> normalize_hermes_requires_text()
       |> normalize_hermes_prerequisites()
       |> normalize_environment_declarations()
+      |> normalize_hide_aliases()
 
     with :ok <- validate_legacy_fields(manifest),
          :ok <- validate_v2_fields(manifest) do
@@ -278,6 +279,21 @@ defmodule LemonSkills.Manifest.Validator do
       legacy_env_vars(manifest)
     )
     |> Map.put_new("references", [])
+  end
+
+  # Agent Skills spells model-invisibility `disable-model-invocation`; omp also
+  # accepts `hide`. Only a literal boolean `true` hides a skill; any other value
+  # keeps it visible. The canonical key is `hide`.
+  defp normalize_hide_aliases(manifest) do
+    if Map.has_key?(manifest, "hide") or Map.has_key?(manifest, "disable-model-invocation") do
+      hidden = manifest["hide"] == true or manifest["disable-model-invocation"] == true
+
+      manifest
+      |> Map.delete("disable-model-invocation")
+      |> Map.put("hide", hidden)
+    else
+      manifest
+    end
   end
 
   defp normalize_platform_aliases(%{"platforms" => platforms} = manifest)

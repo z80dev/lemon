@@ -394,7 +394,12 @@ defmodule LemonSkills.Tools.ReadSkill do
   defp maybe_truncate(content, _), do: content
 
   defp build_not_found_result(key, opts) do
-    available = Registry.list(opts)
+    available =
+      opts
+      |> Registry.list()
+      |> Enum.filter(fn entry ->
+        entry |> LemonSkills.SkillView.from_entry(opts) |> LemonSkills.SkillView.prompt_visible?()
+      end)
 
     suggestions =
       if available == [] do

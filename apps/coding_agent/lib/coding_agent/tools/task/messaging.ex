@@ -4,10 +4,14 @@ defmodule CodingAgent.Tools.Task.Messaging do
 
   Messages are queued as peer input at a recipient's steering boundary. The
   sender identity comes from captured session options, never model arguments.
-  This module also backs the `agent://` read/write surface.
+  This module also backs the `agent://` read/write surface: `agent://` lists the
+  live family, `agent://<id-or-name>` adds status and visible output for tasks the
+  caller owns (finished ones included), and `agent://<id>/<key>/<index>` extracts
+  a field from an owned task's `structured_output`. Foreign tasks stay unknown.
   """
 
-  alias CodingAgent.Tools.Task.Control
+  alias CodingAgent.TaskStore
+  alias CodingAgent.Tools.Task.{Control, Result}
   alias LemonAgent.AbortSignal
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAi.Types.TextContent
@@ -75,7 +79,26 @@ defmodule CodingAgent.Tools.Task.Messaging do
 
   def roster(opts), do: read("agent://", opts)
 
-  def read("agent://" <> target, opts) do
+  def read("agent://" <> address, opts) do
+    {target, path} = parse_address(address)
+
+    cond do
+      target in ["", "all", "parent"] and path == [] ->
+        read_roster(target, opts)
+
+      true ->
+        case owned_task_id(target, opts) do
+          {:ok, task_id} -> read_task(task_id, path, opts)
+          {:error, _} = error -> error
+          :error when path == [] -> read_roster(target, opts)
+          :error -> {:error, "Unknown task: #{target}"}
+        end
+    end
+  end
+
+  def read(_, _opts), do: {:error, "Expected an agent:// address"}
+
+  defp read_roster(target, opts) do
     with {:ok, agents} <- Control.roster(opts),
          {:ok, selected} <- select_agent(agents, target) do
       %AgentToolResult{
@@ -85,7 +108,141 @@ defmodule CodingAgent.Tools.Task.Messaging do
     end
   end
 
-  def read(_, _opts), do: {:error, "Expected an agent:// address"}
+  defp parse_address(address) do
+    [target | path] = String.split(address, "/")
+    {target, Enum.reject(path, &(&1 == ""))}
+  end
+
+  # Resolves an ID or name to a task the caller owns; :error means "not an owned
+  # task", so plain reads can fall back to the live roster identity.
+  defp owned_task_id(target, opts) do
+    if Control.authorize(target, opts) == :ok do
+      {:ok, target}
+    else
+      owner = Control.owner(opts)
+
+      matches =
+        case owner do
+          {session, _agent} when not is_nil(session) ->
+            for {id, record} <- TaskStore.list(),
+                record[:name] == target,
+                record[:owner] == owner,
+                do: {id, record}
+
+          _ ->
+            []
+        end
+
+      # A completed task must not shadow a reused name's unique live child.
+      live = Enum.filter(matches, fn {_id, record} -> record[:status] in [:queued, :running] end)
+      candidates = if live == [], do: matches, else: live
+
+      case candidates do
+        [] -> :error
+        [{id, _record}] -> {:ok, id}
+        _ -> {:error, "Ambiguous agent name: #{target}; use its task ID"}
+      end
+    end
+  end
+
+  defp read_task(task_id, [], opts) do
+    case Result.do_get(%{"task_id" => task_id}) do
+      %AgentToolResult{content: content, details: details} ->
+        identity = task_identity(task_id, opts)
+        header = "agent://#{task_id}#{name_suffix(identity)} status: #{details.status}"
+        body = Result.visible_output_text(%AgentToolResult{content: content})
+
+        %AgentToolResult{
+          content: [%TextContent{text: header <> "\n\n" <> body}],
+          details: Map.put(details, :agents, [identity])
+        }
+
+      error ->
+        error
+    end
+  end
+
+  defp read_task(task_id, path, _opts) do
+    with {:ok, record} <- TaskStore.get_record(task_id),
+         {:ok, output} <- structured_output(task_id, record),
+         {:ok, value} <- extract(output, path, task_id) do
+      text = if is_binary(value), do: value, else: Jason.encode!(value)
+
+      %AgentToolResult{
+        content: [%TextContent{text: text}],
+        details: %{task_id: task_id, path: path, value: value}
+      }
+    else
+      {:error, :not_found} -> {:error, "Unknown task: #{task_id}"}
+      {:error, _} = error -> error
+    end
+  end
+
+  defp structured_output(task_id, %{
+         status: :completed,
+         result: %AgentToolResult{details: details}
+       })
+       when is_map(details) do
+    if Map.has_key?(details, :structured_output),
+      do: {:ok, details.structured_output},
+      else: {:error, "Task #{task_id} has no structured_output"}
+  end
+
+  defp structured_output(task_id, %{status: :completed}),
+    do: {:error, "Task #{task_id} has no structured_output"}
+
+  defp structured_output(task_id, record),
+    do: {:error, "Task #{task_id} has no structured_output yet (status: #{record[:status]})"}
+
+  defp extract(value, [], _task_id), do: {:ok, value}
+
+  defp extract(value, [segment | rest], task_id) when is_map(value) do
+    case Map.fetch(value, segment) do
+      {:ok, child} -> extract(child, rest, task_id)
+      :error -> missing_path(segment, task_id)
+    end
+  end
+
+  defp extract(value, [segment | rest], task_id) when is_list(value) do
+    with {index, ""} when index >= 0 <- Integer.parse(segment),
+         {:ok, child} <- Enum.fetch(value, index) do
+      extract(child, rest, task_id)
+    else
+      _ -> missing_path(segment, task_id)
+    end
+  end
+
+  defp extract(_value, [segment | _rest], task_id), do: missing_path(segment, task_id)
+
+  defp missing_path(segment, task_id),
+    do: {:error, "Path segment '#{segment}' not found in structured_output of task #{task_id}"}
+
+  # Prefer the live roster projection; finished tasks fall back to stored identity.
+  defp task_identity(task_id, opts) do
+    live =
+      case Control.roster(opts) do
+        {:ok, agents} -> Enum.find(agents, &(&1[:task_id] == task_id))
+        _ -> nil
+      end
+
+    live || stored_identity(task_id)
+  end
+
+  defp stored_identity(task_id) do
+    record =
+      case TaskStore.get_record(task_id) do
+        {:ok, record} -> record
+        _ -> %{}
+      end
+
+    record
+    |> Map.take([:name, :run_id, :parent_run_id])
+    |> Map.filter(fn {_key, value} -> is_binary(value) and String.valid?(value) end)
+    |> Map.merge(%{task_id: task_id, relation: :child, status: record[:status], messaging: false})
+  end
+
+  defp name_suffix(%{name: name}) when is_binary(name), do: " (#{name})"
+  defp name_suffix(_identity), do: ""
 
   defp select_agent(agents, target) when target in ["", "all"], do: {:ok, agents}
 

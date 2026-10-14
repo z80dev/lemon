@@ -141,8 +141,88 @@ end
 | `on_message_end` | `message` | Called when message processing ends |
 | `on_tool_execution_start` | `id, name, args` | Called when tool starts |
 | `on_tool_execution_end` | `id, name, result, is_error` | Called when tool ends |
+| `on_session_start` | `%{session_id, cwd, session_scope}` | Called once when a new or resumed session finishes starting |
+| `on_session_shutdown` | `%{session_id, cwd, reason}` | Called when the session terminates |
 
 Hook errors are caught and logged but don't stop other hooks or the agent.
+Session start/shutdown handlers run in a separate process with a 2-second
+budget for the whole event; a handler still running at the deadline is killed.
+
+### Intercepting Tool Calls
+
+Two hooks can change what a tool does. They wrap every session tool —
+built-in, extension, MCP, WASM and custom tools, in main and subagent
+sessions, including tools reached through `tool_invoke` — outside approval
+checks, so a blocked call never asks for approval. Sessions with no
+`on_tool_call`/`on_tool_result` hook leave tools unwrapped.
+Private plan-mode `write`/`edit` tools and `propose_plan` are intercepted too.
+Secret placeholders are restored before interception; the private file tools
+check the plan-directory boundary after any hook argument replacement.
+Reloading extensions while plan mode is active immediately replaces the hooks
+used by private writes, edits and proposals; newly loaded blockers do not wait
+for another plan transition or prompt.
+
+```elixir
+@impl true
+def hooks do
+  [
+    on_tool_call: fn
+      %{tool_name: "bash", args: %{"command" => cmd}} ->
+        if cmd =~ "rm -rf /", do: {:block, "destructive command"}, else: :ok
+
+      %{tool_name: "read", args: args} ->
+        {:replace_args, Map.put(args, "limit", 200)}
+
+      _event ->
+        :ok
+    end,
+    on_tool_result: fn
+      %{tool_name: "bash", is_error: false, args: %{"command" => "env" <> _}} ->
+        {:replace, %{content: [%LemonAi.Types.TextContent{type: :text, text: "[env output hidden]"}]}}
+
+      _event ->
+        :ok
+    end
+  ]
+end
+```
+
+`on_tool_call` receives `%{tool_call_id, tool_name, args, cwd, session_id}`:
+
+- `{:block, reason}` stops the call; the model receives an error tool result
+  naming the reason (bounded to 500 characters). The first block wins and
+  later handlers do not run.
+- `{:replace_args, map}` runs the tool with `map`. Arguments are not
+  re-validated. If several handlers replace arguments, the last one wins; every
+  handler sees the model's original arguments.
+- Any other return value has no effect.
+- A handler that raises, throws or exits blocks the call (fail closed). The log
+  records the tool name and failure class, not the arguments.
+
+`on_tool_result` receives `%{tool_call_id, tool_name, args, result, is_error,
+cwd, session_id}`, where `args` are the arguments the tool ran with:
+
+- On success, `{:replace, %AgentToolResult{}}` or `{:replace, %{content:
+  ..., details: ...}}` overrides presentation content and/or details (the last
+  replacement wins). Omitted or nil details retain the original details.
+  A details map can customize display metadata, but cannot add, remove or
+  replace runtime mutation receipts: checkpoint IDs (including chronological
+  `checkpoint_ids`), checkpoint kind, affected/changed/written paths, mutation
+  action/outcome (`applied`, `success`, partial/error flags), ACP provenance,
+  and original file snapshots/per-file results. Diff aliases `oldText`,
+  `newText`, `old_text`, `new_text`, `resolvedPath` and `first_changed_line`
+  are reserved too. Both atom and string keys are protected, including when
+  the runtime omitted a snapshot or location line: hooks cannot fabricate an
+  ACP diff or location.
+  Non-map details cannot discard an existing receipt. Trust level and error
+  status are not changeable.
+- When the tool returns an error result or `{:error, reason}`, or raises,
+  handlers observe it with `is_error: true`; the original error is kept and
+  any exception is re-raised.
+- A failing handler is logged and the original result is kept.
+
+The `on_tool_execution_start`/`on_tool_execution_end` hooks still observe the
+call as the model issued it and the final result.
 
 ## Declaring Capabilities
 

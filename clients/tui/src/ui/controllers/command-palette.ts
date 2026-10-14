@@ -9,7 +9,7 @@ import {
 	type PaletteSourceOptions,
 	rankPaletteEntries,
 } from "../../commands/palette-source.ts";
-import type { CommandContext } from "../../commands/registry.ts";
+import { type CommandContext, parseCommandLine } from "../../commands/registry.ts";
 import type { NoticeLevel } from "../../store/transcript-model.ts";
 import { confirmAction, PickerOverlay, type PickerSheet } from "../components/pickers.ts";
 import { LEMON_KEYBINDINGS, type LemonKeybinding } from "./input-controller.ts";
@@ -178,12 +178,15 @@ export class CommandPalette {
 		});
 		this.#close = this.#host.present(this.#overlay);
 		try {
-			const resources = await discoverPaletteResources({
-				...this.#host.resources,
-				cwd: ctx.cwd ?? process.cwd(),
-			});
+			const [resources, fileCommandIssues] = await Promise.all([
+				discoverPaletteResources({
+					...this.#host.resources,
+					cwd: ctx.cwd ?? process.cwd(),
+				}),
+				ctx.registry.refreshFileCommands(),
+			]);
 			if (generation !== this.#generation) return;
-			this.#resources = resources;
+			this.#resources = { ...resources, issues: [...resources.issues, ...fileCommandIssues] };
 		} catch {
 			if (generation !== this.#generation) return;
 			this.#resources = {
@@ -232,7 +235,13 @@ export class CommandPalette {
 		const ctx = this.#host.context();
 		if (!this.#checkDraft(ctx)) return;
 		const query = this.#overlay?.filter ?? "";
-		const direct = submitTyped && entry.command && ctx.registry.get(query) === entry.command;
+		// Namespaced file commands (`/git:commit`) are not dispatchable lines; they
+		// are inserted and sent as prompt text for the daemon to expand.
+		const direct =
+			submitTyped &&
+			entry.command &&
+			ctx.registry.get(query) === entry.command &&
+			parseCommandLine(`/${query}`) !== null;
 		const name = direct ? query.toLowerCase() : entry.name;
 		const availability = entry.command
 			? ctx.registry.availability(entry.command, { ...ctx, name, rest: "" })

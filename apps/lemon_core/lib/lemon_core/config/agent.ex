@@ -43,6 +43,19 @@ defmodule LemonCore.Config.Agent do
       path = "/bin/zsh"
       command_prefix = ""
 
+      [runtime.secret_obfuscation]
+      # Opt-in: replace secrets in provider-visible session text with
+      # reversible placeholders (see docs/security/secret-obfuscation.md).
+      enabled = false
+
+      # Native `task` subagents. Unset keys keep these defaults.
+      [runtime.task]
+      max_depth = 2                 # -1 unlimited; 0 forbids the main session from spawning
+      max_runtime_ms = 0            # 0 disables the per-child wall-clock limit
+      worktree_merge = "none"       # none | patch | branch, used by worktree = true tasks
+      disabled_agents = []          # persona IDs hidden from the task tool
+      agent_models = {}             # persona ID => model or @role override
+
   Environment variables override file configuration:
   - `LEMON_DEFAULT_PROVIDER`
   - `LEMON_DEFAULT_MODEL`
@@ -50,6 +63,7 @@ defmodule LemonCore.Config.Agent do
   - `LEMON_EXTENSION_PATHS` (comma-separated)
   - `LEMON_EXTENSIONS_ENABLED`
   - `LEMON_EXTENSIONS_AUTO_LOAD_DEFAULT_PATHS`
+  - `LEMON_SECRET_OBFUSCATION_ENABLED`
   - `LEMON_THEME`
   """
 
@@ -67,7 +81,9 @@ defmodule LemonCore.Config.Agent do
     :extension_paths,
     :theme,
     :budget_defaults,
-    :provider_routing
+    :provider_routing,
+    :secret_obfuscation,
+    :task
   ]
 
   @type t :: %__MODULE__{
@@ -96,7 +112,15 @@ defmodule LemonCore.Config.Agent do
           extension_paths: [String.t()],
           theme: String.t(),
           budget_defaults: %{max_children: integer()},
-          provider_routing: map()
+          provider_routing: map(),
+          secret_obfuscation: %{enabled: boolean()},
+          task: %{
+            max_depth: integer(),
+            max_runtime_ms: non_neg_integer(),
+            worktree_merge: String.t(),
+            disabled_agents: [String.t()],
+            agent_models: %{optional(String.t()) => String.t()}
+          }
         }
 
   @doc """
@@ -120,7 +144,9 @@ defmodule LemonCore.Config.Agent do
       extension_paths: resolve_extension_paths(agent_settings),
       theme: resolve_theme(agent_settings),
       budget_defaults: resolve_budget_defaults(agent_settings),
-      provider_routing: resolve_provider_routing(agent_settings)
+      provider_routing: resolve_provider_routing(agent_settings),
+      secret_obfuscation: resolve_secret_obfuscation(agent_settings),
+      task: resolve_task(agent_settings)
     }
   end
 
@@ -265,6 +291,17 @@ defmodule LemonCore.Config.Agent do
     }
   end
 
+  defp resolve_secret_obfuscation(settings) do
+    secret_obfuscation = ensure_map(settings["secret_obfuscation"])
+
+    %{
+      enabled:
+        Env.get(:lemon_secret_obfuscation_enabled,
+          default: secret_obfuscation["enabled"] == true
+        )
+    }
+  end
+
   defp resolve_extension_paths(settings) do
     # Note: intentionally not `Env.get/2` -- LEMON_EXTENSION_PATHS falls back
     # to settings only when the *parsed* list is empty (e.g. a whitespace- or
@@ -289,6 +326,20 @@ defmodule LemonCore.Config.Agent do
 
     %{
       max_children: Env.get(:lemon_budget_max_children, default: budget["max_children"] || 5)
+    }
+  end
+
+  # Values are passed through for `LemonCore.Config.Validator` to report;
+  # `CodingAgent.SettingsManager` falls back to defaults for invalid types.
+  defp resolve_task(settings) do
+    task = ensure_map(settings["task"])
+
+    %{
+      max_depth: Map.get(task, "max_depth", 2),
+      max_runtime_ms: Map.get(task, "max_runtime_ms", 0),
+      worktree_merge: Map.get(task, "worktree_merge", "none"),
+      disabled_agents: Map.get(task, "disabled_agents", []),
+      agent_models: Map.get(task, "agent_models", %{})
     }
   end
 
@@ -486,6 +537,9 @@ defmodule LemonCore.Config.Agent do
       "extensions" => %{
         "enabled" => true,
         "auto_load_default_paths" => false
+      },
+      "secret_obfuscation" => %{
+        "enabled" => false
       },
       "extension_paths" => [],
       "theme" => "lemon"

@@ -48,6 +48,7 @@ Call-site migration to `LemonCore.Env.get/2` is out of scope for this pass and i
 | `LEMON_PROVIDER_ROUTING_ENABLED` | boolean | `true` |  | `lemon_core` | Whether multi-provider routing/fallback is enabled. |
 | `LEMON_PROVIDER_ROUTING_REQUIRE_CREDENTIALS` | boolean | `true` |  | `lemon_core` | Whether provider routing requires resolvable credentials before selecting a provider. |
 | `LEMON_RETRY_ENABLED` | boolean | `true` |  | `lemon_core` | Whether transient LLM call failures are retried. |
+| `LEMON_SECRET_OBFUSCATION_ENABLED` | boolean | `false` |  | `lemon_core` | Whether secrets are replaced with placeholders in provider-visible session text. |
 | `LEMON_SHELL_COMMAND_PREFIX` | string | _(none)_ |  | `lemon_core` | Command prefix prepended to every shell tool invocation. |
 | `LEMON_SHELL_PATH` | string | _(none)_ |  | `lemon_core` | Shell executable path used by the bash/shell tool. |
 | `LEMON_THEME` | string | `lemon` |  | `lemon_core` | Agent-level theme name (distinct from the TUI theme). |
@@ -87,13 +88,14 @@ Call-site migration to `LemonCore.Env.get/2` is out of scope for this pass and i
 
 ### Tool disclosure (progressive tool-schema disclosure)
 
-When a session's resolved tool catalog costs more than `LEMON_TOOL_DISCLOSURE_BUDGET_TOKENS` in estimated schema tokens, `CodingAgent.ToolDisclosure` replaces the MCP/extension/WASM long tail with two bridge tools — `tool_search` (find a deferred tool and read its schema) and `tool_invoke` (call it, with the same policy and approval pipeline a direct call would use). Built-in tools always stay fully disclosed, and a catalog under the budget is left byte-for-byte unchanged. Disclosure is computed once at session start and at extension reload, never per turn, so the tool array stays prompt-cache stable.
+When a session's resolved tool catalog costs more than `LEMON_TOOL_DISCLOSURE_BUDGET_TOKENS` in estimated schema tokens, `CodingAgent.ToolDisclosure` replaces the MCP/extension/WASM long tail with two bridge tools — `tool_search` (find a deferred tool and read its schema) and `tool_invoke` (call it, with the same policy and approval pipeline a direct call would use). In the default `legacy` profile built-in tools always stay fully disclosed, and a catalog under the budget is left byte-for-byte unchanged. The opt-in `coding` profile also defers optional built-ins outside the coding core; see [tool disclosure](config.md#tool-disclosure). Disclosure is computed once at session start and at extension reload, never per turn, so the tool array stays prompt-cache stable.
 
 | Env Var | Type | Default | Secret | Apps | Description |
 |---|---|---|---|---|---|
 | `LEMON_TOOL_DISCLOSURE_BUDGET_TOKENS` | integer | `40000` |  | `lemon_core` | Estimated tool-schema token total above which long-tail tools are hidden behind tool_search/tool_invoke. |
 | `LEMON_TOOL_DISCLOSURE_CATALOG_TOKENS` | integer | `2000` |  | `lemon_core` | Token budget for the hidden-tool catalog digest embedded in the tool_search description. |
-| `LEMON_TOOL_DISCLOSURE_ENABLED` | boolean | `true` |  | `lemon_core` | Whether tool-schema progressive disclosure may activate when the tool catalog exceeds the token budget. |
+| `LEMON_TOOL_DISCLOSURE_ENABLED` | boolean | `true` |  | `lemon_core` | Whether tool-schema progressive disclosure may activate under the selected profile. |
+| `LEMON_TOOL_DISCLOSURE_PROFILE` | string | `legacy` |  | `lemon_core` | Tool disclosure profile: legacy defers only the MCP/extension/WASM long tail over budget; coding also defers optional built-ins outside the coding core. |
 
 ### WASM tool runtime
 
@@ -266,6 +268,8 @@ When a session's resolved tool catalog costs more than `LEMON_TOOL_DISCLOSURE_BU
 | `LEMON_AGENT_ID` | string | `default` |  | `lemon_skills` | Default agent id used by `mix lemon.skill` CLI operations. |
 | `LEMON_HARNESS_SKILLS_DIR` | string | _(none)_ |  | `lemon_skills` | Override directory for harness/eval skill fixtures. |
 | `LEMON_MCP_DISABLED` | boolean | `false` |  | `lemon_skills` | Kill switch to disable all MCP tool sources. |
+| `LEMON_MCP_EXTERNAL_DISCOVERY` | boolean | `true` |  | `lemon_skills` | Set to 0/false/no to stop importing MCP servers from other tools' config files. |
+| `LEMON_MCP_EXTERNAL_USER_DISCOVERY` | boolean | `false` |  | `lemon_skills` | Set to 1/true/yes to also import MCP servers from other tools' user-level (~/) configs. |
 | `LEMON_MCP_SERVERS` | string | _(none)_ |  | `lemon_skills` | JSON-encoded list of MCP server configs, overriding the TOML/app config. |
 
 ### Browser tool

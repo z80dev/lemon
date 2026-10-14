@@ -327,7 +327,14 @@ defmodule CodingAgent.Tools.Task.Async do
     result_details =
       case result do
         {:ok, %AgentToolResult{details: details}} when is_map(details) ->
-          Map.take(details, [:session_id, :cwd, :worktree_path, :branch, :structured_output])
+          Map.take(details, [
+            :session_id,
+            :cwd,
+            :worktree_path,
+            :branch,
+            :merge,
+            :structured_output
+          ])
 
         _ ->
           %{}

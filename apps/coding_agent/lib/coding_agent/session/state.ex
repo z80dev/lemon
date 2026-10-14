@@ -6,7 +6,7 @@ defmodule CodingAgent.Session.State do
   alias CodingAgent.Config
   alias CodingAgent.ContextGuardrails
   alias CodingAgent.Messages.CustomMessage
-  alias CodingAgent.Security.UntrustedToolBoundary
+  alias CodingAgent.Security.{SecretObfuscator, UntrustedToolBoundary}
   alias CodingAgent.Session.{CompactionLifecycle, OverflowRecovery}
 
   @spec normalize_extra_tools(term()) :: [AgentTool.t()]
@@ -16,9 +16,15 @@ defmodule CodingAgent.Session.State do
 
   def normalize_extra_tools(_), do: []
 
-  @spec build_transform_context(nil | (list(), reference() | nil -> term()), map()) ::
+  @spec build_transform_context(
+          nil | (list(), reference() | nil -> term()),
+          map(),
+          SecretObfuscator.t() | nil
+        ) ::
           (list(), reference() | nil -> {:ok, list()} | {:error, term()})
-  def build_transform_context(nil, context_guardrail_opts) do
+  def build_transform_context(transform_fn, context_guardrail_opts, secret_obfuscator \\ nil)
+
+  def build_transform_context(nil, context_guardrail_opts, secret_obfuscator) do
     fn messages, signal ->
       with {:ok, guarded} <-
              normalize_transform_result(
@@ -28,12 +34,12 @@ defmodule CodingAgent.Session.State do
              normalize_transform_result(
                UntrustedToolBoundary.transform(guarded, signal, context_guardrail_opts)
              ) do
-        {:ok, wrapped}
+        SecretObfuscator.transform(wrapped, secret_obfuscator)
       end
     end
   end
 
-  def build_transform_context(transform_fn, context_guardrail_opts)
+  def build_transform_context(transform_fn, context_guardrail_opts, secret_obfuscator)
       when is_function(transform_fn, 2) do
     fn messages, signal ->
       with {:ok, guarded} <-
@@ -44,7 +50,9 @@ defmodule CodingAgent.Session.State do
              normalize_transform_result(
                UntrustedToolBoundary.transform(guarded, signal, context_guardrail_opts)
              ),
-           {:ok, transformed} <- normalize_transform_result(transform_fn.(wrapped, signal)) do
+           {:ok, obfuscated} <- SecretObfuscator.transform(wrapped, secret_obfuscator),
+           {:ok, transformed} <-
+             normalize_transform_result(transform_fn.(obfuscated, signal)) do
         {:ok, transformed}
       end
     end

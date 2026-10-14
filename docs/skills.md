@@ -65,6 +65,7 @@ await Bun.write("./output.txt", "Hello, World!");
 | `description` | Yes | Used for relevance matching |
 | `tags` | No | Up to 32 bounded safe strings |
 | `keywords` | No | Up to 32 bounded relevance terms |
+| `hide` | No | `true` omits the skill from the model-visible prompt listing, per-turn relevant-skill hints and missing-skill suggestions; it stays loadable by name (`read_skill`, `skill://`, `/skill:<name>`) and in `list`/CLI. Alias: `disable-model-invocation` (Agent Skills standard). Only boolean `true` hides. |
 
 Present names and descriptions must be non-empty, single-line, valid UTF-8 without control or bidirectional formatting characters. Names are limited to 128 bytes, descriptions to 1,024 bytes, and each tag/keyword or requirement item to 128 bytes; list fields accept at most 32 string entries. Prompt rendering applies an additional defensive flatten/clamp/XML-escape pass. All catalog metadata is treated as untrusted discovery data; source/trust provenance is disclosed when a skill is loaded.
 
@@ -448,6 +449,9 @@ lemon mcp add remote --http https://example.com/mcp \
 lemon mcp add local --stdio server --env API_KEY=value -- --server-option
 lemon mcp list --json
 lemon mcp list --global
+lemon mcp list --all
+lemon mcp disable github
+lemon mcp enable github --global
 lemon mcp test filesystem
 lemon mcp remove filesystem
 lemon mcp add git --stdio uvx --replace -- mcp-server-git --repository .
@@ -460,6 +464,19 @@ starting with a letter or digit. `add` refuses an existing name unless
 `list` shows only that file, including unnamed legacy entries. It omits commands,
 arguments, URLs, credential values, and arbitrary extension fields; environment,
 header, and per-tool-policy entries are reported as counts.
+
+`list --all` instead shows the effective merged set for the project (or the
+global scope with `--global`), including servers imported from other tools,
+with each server's source (`provider:scope`) and whether it is enabled; its
+`--json` form uses an `effective` key and the same redaction.
+
+`enable NAME` / `disable NAME` maintain the `enabled_servers` allowlist and
+`disabled_servers` denylist of the selected Lemon file (project by default,
+`--global` for the agent file). They accept any discovered name, including
+imported ones, and apply to every source. The project file's state for a name
+overrides the global file's; within one file the denylist wins. `enable` also
+overrides a source entry's own `"enabled": false` / `"disabled": true`. Lemon
+never edits other tools' files.
 
 Repeat `--env KEY=VALUE`, `--header KEY=VALUE`, and
 `--tool-approval TOOL=always|never` as needed. Environment options are stdio-only,
@@ -509,7 +526,9 @@ replacing a configured server retires its shared connection at the next discover
 for that project. Calls using its previous tool name then fail rather than
 silently routing to the replacement. ACP-owned connections are independent.
 For matching names, project entries override global entries, which override
-application/environment entries; unnamed entries remain additive.
+application/environment entries, which override servers imported from other
+tools; unnamed entries remain additive. The first entry for a name claims it
+even when that entry is disabled.
 
 ACP-provided MCP servers are session-owned and default to approval `always`.
 Their credentials remain in memory, never in global configuration or
@@ -527,6 +546,59 @@ It does **not** invoke remote tools. It can launch the configured program or
 contact its endpoint, so run it only for servers you trust. All commands support
 `--json`; success exits `0`, operation failures exit `1`, and invalid arguments
 exit `2`. Errors never print raw configuration or transport error terms.
+
+### Servers from other tools
+
+Lemon also imports MCP servers declared for other coding tools, in omp's
+provider order. Within a provider, the project entry precedes the user entry:
+
+| Provider | Project (requesting directory) | User (`~/`, opt-in except omp) |
+|---|---|---|
+| omp | `.omp/mcp.json`, `.omp/.mcp.json` | `~/.omp/agent/mcp.json`, `~/.omp/agent/.mcp.json` |
+| Claude Code | `.claude/.mcp.json`, else `.claude/mcp.json` | `~/.claude.json` (`projects[<cwd>]` first, then top-level `mcpServers`, else `~/.claude/mcp.json`) |
+| Codex | `.codex/config.toml` | `~/.codex/config.toml` |
+| Gemini CLI | `.gemini/settings.json` | `~/.gemini/settings.json` |
+| OpenCode | `opencode.json[c]`, `.opencode/opencode.json[c]` | `~/.config/opencode/opencode.json[c]` |
+| Cursor | `.cursor/mcp.json` | `~/.cursor/mcp.json` |
+| Windsurf | `.windsurf/mcp_config.json` | `~/.codeium/windsurf/mcp_config.json` |
+| VS Code | `.vscode/mcp.json` (`servers` or `mcp.servers`) | — |
+| Root files | `mcp.json`, `.mcp.json` | — |
+
+Imported entries carry the command, arguments, environment, working directory,
+URL, headers, timeouts, and tool filters (Codex `enabled_tools`/`disabled_tools`,
+Gemini `includeTools`/`excludeTools`). Tool-specific OAuth/auth blocks are not
+imported; configure those servers in Lemon's own file. A missing `type` means
+stdio with a `command` or Streamable HTTP with a `url`; Gemini `httpUrl` is
+Streamable HTTP and its bare `url` is SSE; OpenCode `local`/`remote` map to
+stdio/HTTP; Windsurf `serverUrl` is the URL. Entries with both a command and a
+URL, or with invalid names, are skipped and do not claim a name. `${VAR}` and
+`${VAR:-default}` expand in the JSON providers (unresolved placeholders stay
+literal); VS Code `${workspaceFolder}` is the project directory; OpenCode files
+use OpenCode's `{env:VAR}` / `{file:path}` substitution and JSONC; Codex
+`env_vars`, `env_http_headers`, and `bearer_token_env_var` read the current
+environment, and relative Codex `cwd`/`./command` values resolve against the
+config file's directory. Imported servers keep Lemon's namespacing, validation,
+and approval behavior; without an `approval` field they default to `never`, like
+hand-written Lemon entries.
+
+**Trust:** a project-level file from any of these tools starts its stdio servers
+the same way `.lemon/mcp.json` does when a session opens in that directory.
+Review a repository's MCP files before running Lemon in it, disable unwanted
+servers by name, or turn discovery off:
+
+```bash
+export LEMON_MCP_EXTERNAL_DISCOVERY=0      # or config :lemon_skills, :mcp_external_discovery, false
+export LEMON_MCP_EXTERNAL_USER_DISCOVERY=1 # or config :lemon_skills, :mcp_external_user_discovery, true
+```
+
+Project files and the omp user file are read by default. Other tools'
+user-level files are opt-in, matching omp; setting `CLAUDE_CONFIG_DIR` opts in
+Claude Code's user files from that directory. User-level files are read from
+the home directory, or from `config :lemon_skills, :mcp_discovery_home`; when
+`LEMON_AGENT_DIR` or another agent/harness directory override isolates the
+runtime and no discovery home is configured, no user-level files are read.
+Launching from home or inside a foreign user-config directory does not turn
+those files into project sources: the user-source opt-in still applies.
 
 ### Configuration
 
@@ -614,7 +686,10 @@ Create MCP configuration files:
 }
 ```
 
-Project configuration takes precedence over global configuration.
+Project configuration takes precedence over global configuration. Either file
+may also list `disabled_servers` / `enabled_servers` names (see
+`lemon mcp enable|disable` above), and an entry with `"enabled": false` is
+skipped while still claiming its name.
 
 ### MCP Server Configuration Schema
 
@@ -724,6 +799,9 @@ Or via environment variable:
 ```bash
 export LEMON_MCP_DISABLED=1
 ```
+
+The external-tool import alone is controlled by `LEMON_MCP_EXTERNAL_DISCOVERY` /
+`:mcp_external_discovery` (see [Servers from other tools](#servers-from-other-tools)).
 
 ### Tool Precedence
 

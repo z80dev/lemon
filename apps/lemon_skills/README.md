@@ -132,6 +132,7 @@ The OTP application (`LemonSkills.Application`) performs two actions on start:
 | `LemonSkills.SkillView` | `lib/lemon_skills/skill_view.ex` | Display projection of an entry: active state and what is missing |
 | `LemonSkills.PromptView` | `lib/lemon_skills/prompt_view.ex` | Renders bounded skill metadata into an agent's system prompt |
 | `LemonSkills.McpSource` | `lib/lemon_skills/mcp_source.ex` | MCP servers as a runtime tool source (stdio, HTTP, SSE) |
+| `LemonSkills.McpDiscovery` | `lib/lemon_skills/mcp_discovery.ex` | Imports MCP servers from other tools' configs (omp, Claude Code, Codex, Gemini, OpenCode, Cursor, Windsurf, VS Code, `mcp.json`) |
 | `LemonSkills.Source` | `lib/lemon_skills/source.ex` | Behaviour every skill source implements; `Sources.*` are its implementations |
 | `LemonSkills.SourceRouter` | `lib/lemon_skills/source_router.ex` | Resolves a URL or path to the source module that handles it |
 | `LemonSkills.Sources.Hermes` | `lib/lemon_skills/sources/hermes.ex` | Live official Nous Hermes catalog and sparse skill import source |
@@ -540,6 +541,9 @@ mix lemon.skill info <key>                    # Show skill details
 | `:http_client` | module | `LemonSkills.HttpClient.Httpc` | HTTP client module for discovery |
 | `:mcp_servers` | list | `[]` | MCP servers to expose as tools (see `LemonSkills.McpSource`) |
 | `:mcp_disabled` | boolean | `false` | Turn the MCP tool source off entirely |
+| `:mcp_external_discovery` | boolean | `true` | Import MCP servers from other tools' config files |
+| `:mcp_external_user_discovery` | boolean | `false` | Also import other tools' user-level (`~/`) MCP files |
+| `:mcp_discovery_home` | string | home, unless isolated | Home directory for user-level MCP discovery |
 | `:audit_llm` | keyword | `[enabled: false]` | Optional model-backed audit review (`:enabled`, `:model`) |
 
 ### Environment Variables
@@ -550,6 +554,8 @@ mix lemon.skill info <key>                    # Show skill details
 | `GITHUB_TOKEN` | GitHub personal access token for higher discovery rate limits |
 | `LEMON_MCP_SERVERS` | JSON array of MCP servers to connect as a tool source |
 | `LEMON_MCP_DISABLED` | Set to `1`/`true`/`yes` to turn the MCP tool source off |
+| `LEMON_MCP_EXTERNAL_DISCOVERY` | Set to `0`/`false`/`no` to stop importing other tools' MCP configs |
+| `LEMON_MCP_EXTERNAL_USER_DISCOVERY` | Set to `1`/`true`/`yes` to import other tools' user-level MCP configs |
 | `LEMON_HARNESS_SKILLS_DIR` | Override the harness-compatible global skills directory |
 
 ### Configuration Files

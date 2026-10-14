@@ -4,6 +4,9 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { visibleWidth } from "@oh-my-pi/pi-tui/utils";
 import { AppShell } from "../../src/app.ts";
 import { FakeControlPlane } from "../../src/dev/fake-server.ts";
@@ -28,14 +31,36 @@ afterEach(() => {
 	invalidateThemeAdapters();
 });
 
-async function bootApp(sessionKey = "tui-test") {
-	const server = await FakeControlPlane.start();
+async function bootApp(sessionKey = "tui-test", cwd = process.cwd()) {
+	// Local discovery (file commands, palette) must never read the real home.
+	const home = mkdtempSync(join(tmpdir(), "lemon-tui-home-"));
+	teardown.push(() => rmSync(home, { recursive: true, force: true }));
+	// Match the advertised protocol to this fixture's implemented services.
+	// Unrelated activity/routing/approval hydration must not participate in boot.
+	const server = await FakeControlPlane.start({
+		methods: [
+			"chat.send",
+			"chat.abort",
+			"chat.history",
+			"sessions.patch",
+			"sessions.reset",
+			"models.list",
+			"usage.status",
+			"status",
+			"health",
+			"background.start",
+			"background.result",
+		],
+	});
 	teardown.push(() => server.stop());
 	server.onMethod("chat.send", (params: { sessionKey: string }) => ({
 		runId: "run-1",
 		sessionKey: params.sessionKey,
 	}));
 	server.respondWith("chat.abort", { aborted: true, runId: "run-1" });
+	server.respondWith("chat.history", { messages: [] });
+	server.respondWith("health", { status: "ok" });
+	server.respondWith("sessions.reset", { success: true });
 	server.respondWith("sessions.patch", { success: true });
 	server.respondWith("models.list", {
 		models: [
@@ -62,7 +87,8 @@ async function bootApp(sessionKey = "tui-test") {
 		version: "test",
 		client,
 		terminal,
-		cwd: process.cwd(),
+		cwd,
+		resources: { home, env: {} },
 		onExit: (code) => exits.push(code),
 		// Deterministic branch: the real poll would depend on the checkout.
 		readBranch: async () => "main",
@@ -140,6 +166,52 @@ describe("slash commands in the app", () => {
 		});
 		expect(chatText(app)).toContain(id);
 		expect(chatText(app)).toContain("Background work finished.");
+	});
+});
+
+describe("file-defined slash commands", () => {
+	test("are registered locally and delivered verbatim for the daemon to expand", async () => {
+		const project = mkdtempSync(join(tmpdir(), "lemon-tui-project-"));
+		teardown.push(() => rmSync(project, { recursive: true, force: true }));
+		mkdirSync(join(project, ".claude/commands/git"), { recursive: true });
+		writeFileSync(
+			join(project, ".claude/commands/review.md"),
+			"---\ndescription: Review a path\nargument-hint: <path>\n---\nReview $1",
+		);
+		writeFileSync(join(project, ".claude/commands/git/commit.md"), "Commit $ARGUMENTS");
+		writeFileSync(join(project, ".claude/commands/help.md"), "shadowed by /help");
+		const { app, server } = await bootApp("tui-test", project);
+
+		await app.submit("/review lib/app.ex");
+		await waitFor(() => server.requestsFor("chat.send").length > 0, { what: "chat.send" });
+		expect(server.requestsFor("chat.send")[0].params).toMatchObject({
+			prompt: "/review lib/app.ex",
+		});
+
+		// Namespaced names are plain prompt text to the client; the daemon expands them.
+		const nested = await bootApp("tui-nested", project);
+		await nested.app.submit("/git:commit fix it");
+		await waitFor(() => nested.server.requestsFor("chat.send").length > 0, { what: "chat.send" });
+		expect(nested.server.requestsFor("chat.send")[0].params).toMatchObject({
+			prompt: "/git:commit fix it",
+		});
+		expect(chatText(app)).not.toContain("unknown command");
+
+		// A command file named help.md must not shadow the built-in /help.
+		await app.submit("/help");
+		expect(chatText(app)).toContain("/review <path>");
+		expect(server.requestsFor("chat.send")).toHaveLength(1);
+
+		app.editor.handleInput("\x1b\r");
+		await app.submit("/review lib/second.ex");
+		expect(server.requestsFor("chat.send")[1].params).toMatchObject({
+			prompt: "/review lib/second.ex",
+			queueMode: "steer",
+		});
+		expect(app.effectiveMode).toBe("queue");
+		await app.submit("ordinary followup");
+		expect(server.requestsFor("chat.send")).toHaveLength(2);
+		expect(app.store.queue.length("tui-test")).toBe(1);
 	});
 });
 
@@ -317,6 +389,17 @@ describe("global keys", () => {
 });
 
 describe("shell escapes", () => {
+	let previousShell: string | undefined;
+	beforeEach(() => {
+		previousShell = process.env.LEMON_TUI_SHELL;
+		// Exercise the real subprocess path without user-shell startup files.
+		process.env.LEMON_TUI_SHELL = "/bin/sh";
+	});
+	afterEach(() => {
+		if (previousShell === undefined) delete process.env.LEMON_TUI_SHELL;
+		else process.env.LEMON_TUI_SHELL = previousShell;
+	});
+
 	test("!cmd is recorded in the transcript and nothing is sent", async () => {
 		const { app, server } = await bootApp();
 		// The command owns the real terminal, so its output is not ours to

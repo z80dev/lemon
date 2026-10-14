@@ -20,6 +20,8 @@ defmodule CodingAgent.Compaction do
   Summary calls accept `:model`, `:stream_options` and an optional `:api_key` override.
   The model override applies to ordinary and branch summaries, not the active session
   model; callers must resolve that model's provider options and credential together.
+  An optional `:secret_obfuscator` rewrites the summary request the same way the
+  session's pre-LLM transform does.
 
   ## Valid Cut Points
 
@@ -32,6 +34,7 @@ defmodule CodingAgent.Compaction do
 
   alias CodingAgent.Messages
   alias CodingAgent.Messages.ToolCall
+  alias CodingAgent.Security.SecretObfuscator
   alias CodingAgent.SessionManager
   alias CodingAgent.SessionManager.SessionEntry
 
@@ -688,6 +691,8 @@ defmodule CodingAgent.Compaction do
     </conversation>
     """
 
+    user_prompt = SecretObfuscator.obfuscate(Keyword.get(opts, :secret_obfuscator), user_prompt)
+
     # Create context for summarization
     context =
       LemonAi.Types.Context.new(system_prompt: system_prompt)
@@ -964,6 +969,8 @@ defmodule CodingAgent.Compaction do
 
     #{messages_text}
     """
+
+    user_prompt = SecretObfuscator.obfuscate(Keyword.get(opts, :secret_obfuscator), user_prompt)
 
     context =
       LemonAi.Types.Context.new(system_prompt: system_prompt)
