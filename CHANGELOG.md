@@ -223,6 +223,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Provider sign-in status and logout distinguish missing credentials from
+  encrypted-store, journal and master-key failures. Failed reads refuse the
+  command without deleting logins or clearing the selected OAuth authority;
+  logout also reports deletion failures without changing provider settings.
 - Extension result presentation hooks preserve authoritative checkpoint receipts
   and affected paths. Content-only or custom display details cannot erase real
   mutation provenance or fabricate receipts; omitted details retain the original.
