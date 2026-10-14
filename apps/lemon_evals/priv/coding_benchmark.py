@@ -5,12 +5,14 @@ import json
 import os
 from pathlib import Path
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor
 from coding_benchmark_tasks import additional_tasks
+from coding_benchmark_paired import number, run_paired
 
 
 def task(name, prompt, files, verify):
@@ -55,7 +57,36 @@ def tasks():
 
 
 def command(argv, cwd, **kwargs):
-    return subprocess.run(argv, cwd=cwd, stdin=subprocess.DEVNULL, text=True, capture_output=True, **kwargs)
+    deadline = kwargs.pop('deadline', None)
+    if deadline is not None:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise subprocess.TimeoutExpired(argv, 0)
+        kwargs['timeout'] = min(kwargs.get('timeout', remaining), remaining)
+    timeout, check = kwargs.pop('timeout', None), kwargs.pop('check', False)
+    with subprocess.Popen(argv, cwd=cwd, stdin=subprocess.DEVNULL, text=True,
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                          start_new_session=True, **kwargs) as process:
+        try:
+            stdout, stderr = process.communicate(timeout=timeout)
+        except BaseException:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            process.wait()
+            raise
+        finally:
+            # Deadline-owned fixture/client commands must not leave background children.
+            if deadline is not None:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+        result = subprocess.CompletedProcess(argv, process.returncode, stdout, stderr)
+        if check:
+            result.check_returncode()
+        return result
 
 
 def parse_omp(output):
@@ -77,13 +108,13 @@ def parse_omp(output):
 def run_case(case, agent, executable, model, args):
     with tempfile.TemporaryDirectory(prefix='lemon-coding-bench-' + agent + '-') as tmp:
         root = Path(tmp)
+        deadline = getattr(args, 'attempt_deadline', None)
+        environment = getattr(args, 'environment', None)
         (root / '.gitignore').write_text('__pycache__/\n*.py[cod]\n')
         for name, content in case['files'].items():
             path = root / name
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(content)
-        for argv in [['git','init','-q'], ['git','add','.'], ['git','-c','user.name=Lemon Benchmark','-c','user.email=benchmark@example.invalid','commit','-qm','fixture']]:
-            command(argv, root, check=True)
         started = time.monotonic()
         result, failure = {}, None
         invocation = verifier = tests = None
@@ -94,35 +125,41 @@ def run_case(case, agent, executable, model, args):
             argv = [executable, '-p', prompt, '--mode', 'json', '--model', model, '--cwd', str(root), '--no-session', '--no-title', '--auto-approve', '--max-time', str(args.timeout)]
         verifier_passed = tests_passed = None
         try:
-            invocation = command(argv, root, timeout=args.timeout + 15)
+            for fixture_argv in [['git','init','-q'], ['git','add','.'], ['git','-c','user.name=Lemon Benchmark','-c','user.email=benchmark@example.invalid','commit','-qm','fixture']]:
+                command(fixture_argv, root, check=True, env=environment, deadline=deadline)
+            invocation = command(argv, root, timeout=args.timeout if deadline else args.timeout + 15,
+                                 env=environment, deadline=deadline)
             try:
                 result = json.loads(invocation.stdout) if agent == 'lemon' else parse_omp(invocation.stdout)
             except (ValueError, TypeError):
                 failure = 'invalid_cli_json'
+            if not isinstance(result, dict):
+                result = {}
+                failure = 'invalid_cli_json'
             if not failure and (invocation.returncode != 0 or result.get('ok') is not True):
                 failure = 'agent_failed'
-            env = dict(os.environ, BENCHMARK_ANSWER=result.get('answer') or '')
-            verifier = command([sys.executable, '-c', case['verify']], root, env=env, timeout=30)
+            env = dict(environment if environment is not None else os.environ, BENCHMARK_ANSWER=result.get('answer') or '')
+            verifier = command([sys.executable, '-c', case['verify']], root, env=env, timeout=30, deadline=deadline)
             verifier_passed = verifier.returncode == 0
             if not verifier_passed and not failure: failure = 'verifier_failed'
-            if case['name'] == 'read_and_answer' and command(['git','status','--porcelain'], root).stdout:
+            if case['name'] == 'read_and_answer' and command(['git','status','--porcelain'], root, env=environment, deadline=deadline).stdout:
                 failure = 'unexpected_mutation'
             requires_tests = case['name'] in {'multi_file_refactor','feature_and_test','repo_search'} or any(Path(name).name.startswith('test') and name.endswith('.py') for name in case['files'])
             if requires_tests:
-                tests = command([sys.executable,'-m','unittest','discover','-v'], root, timeout=30)
+                tests = command([sys.executable,'-m','unittest','discover','-v'], root, env=env, timeout=30, deadline=deadline)
                 tests_passed = tests.returncode == 0 and 'Ran 0 tests' not in tests.stderr
                 if not tests_passed and not failure: failure = 'tests_failed'
         except subprocess.TimeoutExpired:
             failure = 'timeout'
-        except OSError:
+        except (OSError, subprocess.CalledProcessError):
             failure = 'invocation_failed'
-        usage = result.get('usage') or {}
-        metrics = result.get('metrics') or {}
-        tool_errors = metrics.get('tool_errors', usage.get('tool_errors'))
+        usage = result.get('usage') if isinstance(result.get('usage'), dict) else {}
+        metrics = result.get('metrics') if isinstance(result.get('metrics'), dict) else {}
+        tool_errors = number(metrics.get('tool_errors', usage.get('tool_errors')))
         if case['name'] == 'tool_failure_recovery' and not failure:
             if not isinstance(tool_errors, int) or tool_errors < 1: failure = 'recovery_not_observed'
         if failure and args.failure_dir:
-            bundle = Path(args.failure_dir) / agent / case['name']
+            bundle = Path(args.failure_dir) / agent / getattr(args, 'trial_id', case['name']).replace(':', '-')
             bundle.mkdir(parents=True, mode=0o700, exist_ok=False)
             shutil.copytree(root, bundle / 'repo')
             (bundle / 'verify.py').write_text(case['verify'])
@@ -132,14 +169,19 @@ def run_case(case, agent, executable, model, args):
                     (bundle / (label + '.stderr')).write_text(completed.stderr)
         return {'task': case['name'], 'agent': agent, 'passed': failure is None, 'failure': failure,
                 'verifier_passed': verifier_passed, 'tests_passed': tests_passed,
-                'turns': metrics.get('turns', usage.get('turns')), 'tokens': usage.get('totalTokens'),
-                'uncached_input_tokens': usage.get('inputTokens'), 'cached_input_tokens': usage.get('cacheReadTokens'),
-                'output_tokens': usage.get('outputTokens'), 'wall_seconds': round(time.monotonic()-started, 2),
+                'turns': number(metrics.get('turns', usage.get('turns'))), 'tokens': number(usage.get('totalTokens')),
+                'uncached_input_tokens': number(usage.get('inputTokens')), 'cached_input_tokens': number(usage.get('cacheReadTokens')),
+                'cache_write_tokens': number(usage.get('cacheWriteTokens')),
+                'output_tokens': number(usage.get('outputTokens')), 'wall_seconds': round(time.monotonic()-started, 2),
+                'cost_usd': number(usage.get('costUsd')),
+                'discovery_failures': number(metrics.get('discovery_failures')),
+                'incorrect_tool_calls': number(metrics.get('incorrect_tool_calls')),
+                'tool_error_recoveries': number(metrics.get('tool_error_recoveries')),
                 'tool_errors': tool_errors, 'run_id': result.get('run_id')}
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     parser.add_argument('--lemon', required=True)
     parser.add_argument('--model', default='openai-codex:gpt-6.1-sol')
     parser.add_argument('--output', required=True)
@@ -149,6 +191,15 @@ def main():
     parser.add_argument('--omp', default='omp')
     parser.add_argument('--omp-model')
     parser.add_argument('--tasks', help='Comma-separated task names; omitted runs all twelve')
+    parser.add_argument('--paired', action='store_true', help='Repeated controlled disclosure trials; plan-only unless --live')
+    parser.add_argument('--repetitions', type=int, default=4)
+    parser.add_argument('--seed', type=int, default=107)
+    parser.add_argument('--config', help='Dedicated base TOML, without disclosure overrides')
+    parser.add_argument('--run-timeout', type=int, default=7200)
+    parser.add_argument('--plan', help='Operator-approved bounded JSON plan')
+    parser.add_argument('--approve-plan-digest', help='Explicit SHA256 approval of exact canonical plan')
+    parser.add_argument('--live', action='store_true', help='Authorize live calls only with exact approved plan')
+    parser.add_argument('--profile-python', default=sys.executable, help='Python 3.11+ environment with tiktoken installed')
     args = parser.parse_args()
     lemon = str(Path(args.lemon).resolve())
     agents = [('lemon', lemon, args.model)]
@@ -161,6 +212,15 @@ def main():
         names = set(args.tasks.split(','))
         if not names <= {case['name'] for case in cases}: parser.error('unknown task selection')
         cases = [case for case in cases if case['name'] in names]
+    if args.paired:
+        try:
+            return run_paired(args, cases, run_case)
+        except (ValueError, OSError, subprocess.SubprocessError):
+            parser.error('Paired configuration/authorization failed; review the dedicated config and exact bounded plan')
+    paired_flags = {'--live', '--plan', '--approve-plan-digest',
+                    '--repetitions', '--seed', '--config', '--run-timeout', '--profile-python'}
+    if any(argument.split('=', 1)[0] in paired_flags for argument in sys.argv[1:]):
+        parser.error('paired authorization/options require --paired')
     rows = []
     with ThreadPoolExecutor(max_workers=len(agents)) as pool:
         for case in cases:

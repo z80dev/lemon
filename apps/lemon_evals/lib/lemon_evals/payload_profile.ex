@@ -13,7 +13,108 @@ defmodule LemonEvals.PayloadProfile do
     python = Keyword.get(opts, :python, System.find_executable("python3"))
     {:ok, pid} = GenServer.start_link(__MODULE__, {Path.expand(path), python}, name: __MODULE__)
     CodingAgent.Executor.configure_stream_options(&attach_callbacks/2)
+
+    if Keyword.get(opts, :paired, false) do
+      :ok =
+        :telemetry.attach_many(
+          {__MODULE__, pid},
+          [
+            [:coding_agent, :tool_disclosure, :invoke],
+            [:coding_agent, :tool_disclosure, :applied],
+            [:coding_agent, :tool_disclosure, :search],
+            [:coding_agent, :tool_disclosure, :invoke_rejected]
+          ],
+          &__MODULE__.handle_disclosure_event/4,
+          pid
+        )
+    end
+
     pid
+  end
+
+  @doc "Wait for already queued profiling records to reach the owner-only file."
+  def flush!(timeout \\ 10_000), do: GenServer.call(__MODULE__, :flush, timeout)
+
+  @doc false
+  def handle_disclosure_event(
+        [:coding_agent, :tool_disclosure, :invoke],
+        measurements,
+        metadata,
+        pid
+      ) do
+    name = Map.get(metadata, :tool_name)
+    status = Map.get(metadata, :status)
+
+    if is_binary(name) and status in [:ok, :error] do
+      data = %{
+        resolved_tool_digest: Base.encode16(:crypto.hash(:sha256, name), case: :lower),
+        status: Atom.to_string(status),
+        duration_us: Map.get(measurements, :duration_us)
+      }
+
+      GenServer.cast(pid, {:record, :disclosure_invoke, data, %{}})
+    end
+  end
+
+  def handle_disclosure_event(
+        [:coding_agent, :tool_disclosure, :applied],
+        measurements,
+        metadata,
+        pid
+      ) do
+    profile = Map.get(metadata, :profile)
+
+    if profile in [:coding, :legacy] do
+      data =
+        Map.take(measurements, [
+          :estimated_tokens,
+          :disclosed_tokens,
+          :hidden_count,
+          :disclosed_count
+        ])
+        |> Map.merge(%{
+          profile: Atom.to_string(profile),
+          active: metadata[:active],
+          catalog_digest: metadata[:catalog_digest],
+          diagnostic_events_version: metadata[:diagnostic_events_version]
+        })
+
+      GenServer.cast(
+        pid,
+        {:record, :disclosure_applied, data, %{}}
+      )
+    end
+  end
+
+  def handle_disclosure_event(
+        [:coding_agent, :tool_disclosure, :search],
+        measurements,
+        metadata,
+        pid
+      ) do
+    status = metadata[:status]
+    count = measurements[:matched_count]
+
+    if status in [:ok, :error] and is_integer(count) and count >= 0 do
+      GenServer.cast(
+        pid,
+        {:record, :disclosure_search, %{status: Atom.to_string(status), matched_count: count},
+         %{}}
+      )
+    end
+  end
+
+  def handle_disclosure_event(
+        [:coding_agent, :tool_disclosure, :invoke_rejected],
+        _measurements,
+        metadata,
+        pid
+      ) do
+    reason = metadata[:reason]
+
+    if reason in [:unknown_tool, :invalid_arguments, :invalid_request] do
+      GenServer.cast(pid, {:record, :disclosure_rejected, %{reason: Atom.to_string(reason)}, %{}})
+    end
   end
 
   def record(event, run_id, data, metadata) do
@@ -37,7 +138,7 @@ defmodule LemonEvals.PayloadProfile do
     receive do
       {^port, {:data, {:eol, line}}} ->
         case Jason.decode(line) do
-          {:ok, %{"event" => "ready"}} -> {:ok, %{port: port}}
+          {:ok, %{"event" => "ready"}} -> {:ok, %{port: port, pending: 0, waiters: []}}
           _ -> {:stop, :profiling_worker_unavailable}
         end
 
@@ -58,14 +159,30 @@ defmodule LemonEvals.PayloadProfile do
         Jason.encode!(%{event: event, data: data, metadata: metadata}) <> "\n"
       )
 
-    {:noreply, state}
+    {:noreply, %{state | pending: state.pending + 1}}
   end
+
+  @impl true
+  def handle_call(:flush, _from, %{pending: 0} = state), do: {:reply, :ok, state}
+
+  def handle_call(:flush, from, state),
+    do: {:noreply, %{state | waiters: [from | state.waiters]}}
 
   @impl true
   def handle_info({port, {:data, {:eol, line}}}, %{port: port} = state) do
     case Jason.decode(line) do
-      {:ok, %{"event" => "recorded"}} -> {:noreply, state}
-      _ -> {:stop, :profiling_worker_failed, state}
+      {:ok, %{"event" => "recorded"}} ->
+        pending = state.pending - 1
+
+        if pending == 0 do
+          Enum.each(state.waiters, &GenServer.reply(&1, :ok))
+          {:noreply, %{state | pending: 0, waiters: []}}
+        else
+          {:noreply, %{state | pending: pending}}
+        end
+
+      _ ->
+        {:stop, :profiling_worker_failed, state}
     end
   end
 
