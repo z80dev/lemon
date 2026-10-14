@@ -5,9 +5,10 @@ extension LemonBotStore {
     func stopSocket() {
         socketTask?.cancel(); socketTask = nil
         socket?.cancel(with: .goingAway, reason: nil); socket = nil
-        connectionState = "disconnected"
+        if connectionState != "reconnect_required" { connectionState = "disconnected" }
     }
     func startSocket() {
+        guard connectionState != "reconnect_required" else { return }
         stopSocket()
         guard account != nil else { return }
         let current = generation
@@ -42,6 +43,7 @@ extension LemonBotStore {
                             guard ready.userId == account.userID, ready.workspaceId == account.workspaceID else { throw ClientError.accountChanged }
                             _ = try WorkspaceCursor.normalized(ready.cursor)
                             self.connectionState = "syncing"
+                            if self.snapshot == nil { try await self.synchronize() }
                             try await self.sendSocket(.subscribe(RealtimeClientFrameSubscribe(requestId: UUID().uuidString, cursor: self.cursor, conversationIds: [])), on: task)
                             heartbeat?.cancel()
                             heartbeat = Task { [weak self] in
@@ -70,7 +72,7 @@ extension LemonBotStore {
                     guard !Task.isCancelled, self.generation == current else { return }
                     self.connectionState = "disconnected"; self.errorMessage = error.localizedDescription
                     let close = self.socket?.closeCode.rawValue
-                    if close == 4401 || close == 4403 || (error as? BackendError)?.failure.code == "unauthenticated" || (error as? BackendError)?.failure.code == "forbidden" { return }
+                    if close == 4401 || close == 4403 || (error as? BackendError)?.failure.code == "unauthenticated" || (error as? BackendError)?.failure.code == "forbidden" { self.markReconnectRequired(); return }
                     attempt += 1
                     let seconds = min(30.0, pow(2.0, Double(min(attempt, 5)))) + Double.random(in: 0...0.5)
                     do { try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000)) } catch { return }
@@ -201,6 +203,10 @@ extension LemonBotStore {
         case .userUpdated(let value): if value.id == user?.id, value.revision >= (user?.revision ?? 0) { user = value }
         case .workspaceUpdated(let value): if value.id == workspace?.id, value.revision >= (workspace?.revision ?? 0) { workspace = value }
         case .memberUpserted(let value): if value.userId == user?.id, value.revision >= (member?.revision ?? 0) { member = value }
+        case .pairingUpserted(let value):
+            guard value.ownerUserId == account?.userID, value.workspaceId == account?.workspaceID else { throw ClientError.invalidFrame }
+            upsert(&pairings, value, id: { $0.id }, revision: { $0.revision })
+            if value.id == pairingQRID, value.status != "waiting" { pairingURL = nil }
         case .machineUpserted(let value): upsert(&machines, value, id: { $0.id }, revision: { $0.revision })
         case .machineDeleted(let value): machines.removeAll { $0.id == value.id }
         case .botUpserted(let value): upsert(&bots, value, id: { $0.id }, revision: { $0.revision })
@@ -210,22 +216,6 @@ extension LemonBotStore {
         case .conversationUpserted(let value): upsert(&conversations, value, id: { $0.id }, revision: { $0.revision })
         case .conversationDeleted(let value):
             clearConversationAccess(value.id)
-        case .conversationLeft(let value):
-            if value.userId == (user?.id ?? account?.userID) {
-                clearConversationAccess(value.conversationId)
-                if let account {
-                    let path = "/conversations/\(try HTTPTransport.pathID(value.conversationId))/leave"
-                    for intent in pendingIntents.filter({ $0.method == "POST" && $0.path == path }) {
-                        finishIntent((account.id, intent.clientNonce))
-                    }
-                }
-            }
-            else if conversations.contains(where: { $0.id == value.conversationId }) {
-                do {
-                    let updated: Conversation = try await read("/conversations/\(HTTPTransport.pathID(value.conversationId))")
-                    upsert(&conversations, updated, id: { $0.id }, revision: { $0.revision })
-                } catch let error as BackendError where error.status == 404 { clearConversationAccess(value.conversationId) }
-            }
         case .conversationRead(let value):
             if value.userId == user?.id, let index = conversations.firstIndex(where: { $0.id == value.conversationId }) {
                 conversations[index].lastReadSeq = value.throughSeq

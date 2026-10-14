@@ -6,6 +6,7 @@ private final class TestAccountCredentialStore: AccountCredentialStore {
     private var accounts: [StoredAccount]
     var loadError: Error?
     var removeError: Error?
+    var pendingPairing: PendingDevicePairing?
 
     init(accounts: [StoredAccount] = []) { self.accounts = accounts }
 
@@ -23,6 +24,9 @@ private final class TestAccountCredentialStore: AccountCredentialStore {
         if let removeError { throw removeError }
         accounts.removeAll { $0.id == id }
     }
+    func loadPendingPairing() throws -> PendingDevicePairing? { pendingPairing }
+    func savePendingPairing(_ pairing: PendingDevicePairing) throws { pendingPairing = pairing }
+    func removePendingPairing() throws { pendingPairing = nil }
 }
 
 @MainActor final class StoreTests: XCTestCase {
@@ -328,7 +332,7 @@ private final class TestAccountCredentialStore: AccountCredentialStore {
         XCTAssertTrue(store.typingUsers(in: "chat").isEmpty)
         XCTAssertEqual(store.cursor, "0")
     }
-    func testOwnGroupLeaveRemovesOnlyOwnCachedRoomAndOtherMemberRefreshes() async throws {
+    func testOwnGroupDeletionRemovesOnlyOwnCachedRoomAndStaging() async throws {
         let persistence = persistence(), store = try store(persistence)
         XCTAssertTrue(store.setLocalDraft(conversationID: "chat", text: "Unsent group draft", attachmentIDs: []))
         let source = try XCTUnwrap(roots.last).appendingPathComponent("selected-original.bin")
@@ -336,25 +340,18 @@ private final class TestAccountCredentialStore: AccountCredentialStore {
         let staged = try store.stageDraftFile(source, conversationID: "chat")
         try persistence.saveDraft(LocalComposerDraft(text: "Other account"), conversationID: "chat", accountID: "other")
         var payload = try JSONDecoder().decode([JSONObject].self, from: WireFixtures.events).first { $0["event"]?.stringValue == "conversation.upserted" }!["payload"]!.objectValue!
-        payload["id"] = .string("chat"); payload["kind"] = .string("group"); payload["humanUserIds"] = .array([.string("resource"), .string("other")])
+        payload["id"] = .string("chat"); payload["kind"] = .string("group"); payload["botIds"] = .array([.string("owned_bot"), .string("second_owned_bot")])
         let room = try JSONDecoder().decode(Conversation.self, from: JSONEncoder().encode(payload))
         store.conversations = [room]; store.entries["chat"] = [try message("Previously authorized")]; store.selectedConversationID = "chat"
-        TestHTTPProtocol.handler = { request in
-            XCTAssertEqual(request.httpMethod, "GET")
-            var updated = room; updated.humanUserIds = ["resource"]; updated.revision += 1
-            return (200, [:], try JSONEncoder().encode(updated))
-        }
-        try await store.apply(RealtimeEvent(seq: "1", payload: .conversationLeft(RealtimeConversationLeft(conversationId: "chat", userId: "other")), timestampMs: 1))
-        XCTAssertEqual(store.conversations.first?.humanUserIds, ["resource"])
         XCTAssertNotNil(store.entries["chat"])
         XCTAssertEqual(try persistence.loadDraft(conversationID: "chat", accountID: "account")?.text, "Unsent group draft")
-        try await store.apply(RealtimeEvent(seq: "2", payload: .conversationLeft(RealtimeConversationLeft(conversationId: "chat", userId: "resource")), timestampMs: 1))
+        try await store.apply(RealtimeEvent(seq: "1", payload: .conversationDeleted(Deleted(id: "chat")), timestampMs: 1))
         XCTAssertTrue(store.conversations.isEmpty); XCTAssertNil(store.entries["chat"]); XCTAssertNil(store.selectedConversationID)
         XCTAssertNil(try persistence.loadDraft(conversationID: "chat", accountID: "account"))
         XCTAssertFalse(FileManager.default.fileExists(atPath: staged.path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: source.path))
         XCTAssertEqual(try persistence.loadDraft(conversationID: "chat", accountID: "other")?.text, "Other account")
-        XCTAssertEqual(TestHTTPProtocol.requests.count, 1)
+        XCTAssertTrue(TestHTTPProtocol.requests.isEmpty)
     }
     func testDirtyLocalComposerDoesNotAdoptRemoteRevisionSilently() async throws {
         let store = try store()

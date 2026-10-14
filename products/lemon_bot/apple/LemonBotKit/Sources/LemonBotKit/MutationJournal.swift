@@ -122,16 +122,6 @@ extension LemonBotStore {
                     upsertEntry(entry)
                 }
             }
-        } else if parts.first == "conversations", parts.last == "leave", parts.count == 3 {
-            let id = parts[1].removingPercentEncoding ?? parts[1]
-            do {
-                let value: Conversation = try await read("/conversations/\(HTTPTransport.pathID(id))")
-                resolved = !value.humanUserIds.contains(account.userID)
-            } catch let error as BackendError where error.status == 404 {
-                // Private-resource 404 also means invisible; it is not a leave receipt.
-                resolved = false
-            }
-            if resolved { clearConversationAccess(id) }
         } else if parts.count >= 2 {
             let base = "/" + parts[0] + "/" + (try HTTPTransport.pathID(parts[1].removingPercentEncoding ?? parts[1]))
             switch parts[0] {
@@ -142,7 +132,10 @@ extension LemonBotStore {
             case "questions": let value: Question = try await read(base); resolved = settledGate(value.gate)
             case "human-steps": let value: HumanStep = try await read(base); resolved = settledGate(value.gate)
             case "secret-requests": let value: SecretRequest = try await read(base); resolved = settledGate(value.gate)
-            case "consents": let value: ConnectorConsent = try await read(base); resolved = settledGate(value.gate)
+            case "pairings":
+                let value: Pairing = try await read(base)
+                if parts.last == "approve" { resolved = ["approved", "consumed", "expired"].contains(value.status) }
+                else if parts.last == "deny" { resolved = ["denied", "expired"].contains(value.status) }
             case "runs":
                 let value: Run = try await read(base)
                 if parts.last == "cancel" { resolved = ["succeeded", "failed", "cancelled"].contains(value.status) }

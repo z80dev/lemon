@@ -10,6 +10,8 @@ public struct OwnerPairingView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var busy = false
     @State private var error: String?
+    @State private var renderedQR: NSImage?
+    private static let qrContext = CIContext()
     public init(store: LemonBotStore) { self.store = store }
 
     public var body: some View {
@@ -25,7 +27,7 @@ public struct OwnerPairingView: View {
                         }.disabled(busy)
                         Text("Recover the original one-use link with its fixed request nonce. This does not create another QR or extend its five-minute expiry. If expired, create a new QR explicitly.").font(.caption)
                     }
-                    if let link = store.pairingURL, let image = qrImage(link) {
+                    if store.pairingURL != nil, let image = renderedQR {
                         Image(nsImage: image).interpolation(.none).resizable().scaledToFit().frame(width: 256, height: 256)
                             .accessibilityLabel("One-use pairing QR code. Scan with Lemon Bot on your iPhone.")
                             .padding(24).background(.white)
@@ -67,7 +69,8 @@ public struct OwnerPairingView: View {
                 if busy { ProgressView() }
             }.formStyle(.grouped).navigationTitle("Connect iPhone")
                 .toolbar { Button("Done") { dismiss() } }
-                .task { perform { try await store.refreshPairings() } }
+                .task { renderedQR = store.pairingURL.flatMap(makeQRImage); perform { try await store.refreshPairings() } }
+                .onChange(of: store.pairingURL) { _, link in renderedQR = link.flatMap(makeQRImage) }
         }.frame(minWidth: 480, minHeight: 580)
     }
     private func fenced(_ id: ID) -> Bool {
@@ -78,12 +81,12 @@ public struct OwnerPairingView: View {
         busy = true; error = nil
         Task { defer { busy = false }; do { try await operation() } catch { self.error = error.localizedDescription } }
     }
-    private func qrImage(_ link: String) -> NSImage? {
+    private func makeQRImage(_ link: String) -> NSImage? {
         let filter = CIFilter.qrCodeGenerator()
         filter.message = Data(link.utf8)
         filter.correctionLevel = "M"
         guard let output = filter.outputImage,
-              let image = CIContext().createCGImage(output, from: output.extent) else { return nil }
+              let image = Self.qrContext.createCGImage(output, from: output.extent) else { return nil }
         return NSImage(cgImage: image, size: NSSize(width: image.width, height: image.height))
     }
 }

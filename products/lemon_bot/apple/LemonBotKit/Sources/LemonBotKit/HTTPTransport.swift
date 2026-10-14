@@ -64,6 +64,15 @@ public struct HTTPTransport {
         try validate(data, response)
         return try JSONDecoder().decode(T.self, from: data)
     }
+    /// Secret-bound read-only preview. It does not claim the QR and has no mutation nonce.
+    public func previewPairing(_ input: PairingPreviewRequest) async throws -> PairingPreviewResult {
+        var request = try request("POST", "/pairings/preview")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(input)
+        let (data, response) = try await session.data(for: request)
+        try validate(data, response)
+        return try JSONDecoder().decode(PairingPreviewResult.self, from: data)
+    }
     /// One attempt only. Caller retains the nonce and reconciles an uncertain outcome instead of resubmitting.
     public func mutate<T: Decodable>(_ method: String, _ path: String, body: JSONObject, as: T.Type = T.self) async throws -> T {
         guard ["POST", "PATCH", "PUT", "DELETE"].contains(method) else { throw ClientError.invalidPath }

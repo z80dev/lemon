@@ -30,6 +30,7 @@ public struct PhonePairingView: View {
                     Text(preview.clusterName).font(.headline)
                     Text(preview.origin).textSelection(.enabled)
                     Text("Cluster: \(preview.workspaceID)").font(.caption).textSelection(.enabled)
+                    if let deviceName = preview.deviceName { Text("This device: \(deviceName)").textSelection(.enabled) }
                     if let expiry = preview.expiresAtMs {
                         Text("Expires \(Date(timeIntervalSince1970: expiry / 1000).formatted(date: .abbreviated, time: .standard))")
                     }

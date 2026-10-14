@@ -18,7 +18,13 @@ import Observation
     public var capabilities: Capabilities?
     public var connectionState = "disconnected"
     public var errorMessage: String?
-    public var selectedConversationID: ID?
+    public var selectedConversationID: ID? {
+        didSet {
+            guard !restoringSelection, let account else { return }
+            do { try persistence.saveSelection(SavedClientSelection(conversationID: selectedConversationID, botID: conversations.first(where: { $0.id == selectedConversationID })?.botIds.first), accountID: account.id) }
+            catch { errorMessage = error.localizedDescription }
+        }
+    }
     public var deviceID: ID?
     public var terminalFrames: [ID: [TerminalOutput]] = [:]
     public var terminalGaps: [ID: TerminalGap] = [:]
@@ -32,8 +38,14 @@ import Observation
     public internal(set) var latestResources: [String: RealtimePayload] = [:]
     public internal(set) var pendingIntents: [MutationIntent] = []
     public internal(set) var typingByConversation: [ID: [ID: RealtimeTyping]] = [:]
+    public internal(set) var pairingLink: PairingLink?
+    public internal(set) var pendingPairing: PendingPairingPreview?
+    public internal(set) var pairingState = "idle"
+    public internal(set) var pairingError: String?
+    public internal(set) var pairings: [Pairing] = []
+    public internal(set) var pairingURL: String?
 
-    @ObservationIgnored private let keychain: any AccountCredentialStore
+    @ObservationIgnored let keychain: any AccountCredentialStore
     @ObservationIgnored let persistence: ClientPersistence
     @ObservationIgnored var transport: HTTPTransport?
     @ObservationIgnored var socket: URLSessionWebSocketTask?
@@ -45,26 +57,43 @@ import Observation
     @ObservationIgnored var foreground = true
     @ObservationIgnored var visibleConversationID: ID?
     @ObservationIgnored var lastServerActivity: UInt64 = 0
+    @ObservationIgnored var pairingRecord: PendingDevicePairing?
+    @ObservationIgnored var pairingQRID: ID?
+    @ObservationIgnored var httpSession: URLSession?
+    @ObservationIgnored var restoringSelection = false
 
     public init(keychain: any AccountCredentialStore = AccountKeychain(), persistence: ClientPersistence = ClientPersistence()) {
         self.keychain = keychain; self.persistence = persistence
-        do { accounts = try keychain.load() } catch { errorMessage = error.localizedDescription }
+        do {
+            accounts = try keychain.load()
+            if let pending = try keychain.loadPendingPairing() { installPendingPairing(pending) }
+        } catch { errorMessage = error.localizedDescription }
     }
     func activeTransport() throws -> HTTPTransport {
-        guard account != nil, let transport else { throw ClientError.signedOut }
+        guard account != nil, connectionState != "reconnect_required", let transport else { throw ClientError.signedOut }
         return transport
     }
     func assertGeneration(_ value: UUID) throws { guard value == generation else { throw ClientError.accountChanged } }
     public func read<T: Decodable>(_ path: String, query: [String: String] = [:], as responseType: T.Type = T.self) async throws -> T {
         let current = generation
-        let value: T = try await activeTransport().read(path, query: query, as: responseType)
+        let value: T
+        do { value = try await activeTransport().read(path, query: query, as: responseType) }
+        catch {
+            if generation == current, let backend = error as? BackendError, backend.status == 401 { markReconnectRequired() }
+            throw error
+        }
         try assertGeneration(current)
         return value
     }
     public func mutate<T: Decodable>(_ method: String, _ path: String, body: JSONObject, as responseType: T.Type = T.self) async throws -> T {
-        if (method == "DELETE" || body["confirmationToken"] != nil || path.hasSuffix("/resolve") || path.hasSuffix("/send") || path.hasSuffix("/discard") || path.hasSuffix("/reset") || path.hasSuffix("/leave") || path == "/host-operations"), connectionState != "online" { throw ClientError.offline }
+        if (method == "DELETE" || body["confirmationToken"] != nil || path.hasSuffix("/resolve") || path.hasSuffix("/send") || path.hasSuffix("/discard") || path.hasSuffix("/reset") || path == "/host-operations" || path.hasPrefix("/pairings")), connectionState != "online" { throw ClientError.offline }
         let current = generation
-        let value: T = try await journaledMutate(method, path, body: body, as: responseType)
+        let value: T
+        do { value = try await journaledMutate(method, path, body: body, as: responseType) }
+        catch {
+            if generation == current, let backend = error as? BackendError, backend.status == 401 { markReconnectRequired() }
+            throw error
+        }
         try assertGeneration(current)
         // Authoritative HTTP resources reach the same reducer as websocket upserts; no optimistic successful gates.
         if let value = value as? Bot { upsert(&bots, value, id: { $0.id }, revision: { $0.revision }) }
@@ -94,21 +123,38 @@ import Observation
         return value
     }
     public func authenticate(baseURL: URL, path: String, body: JSONObject) async throws {
-        guard ["/setup", "/auth/login", "/auth/invites/accept", "/auth/oidc/complete"].contains(path) else { throw ClientError.invalidPath }
+        guard ["/setup", "/auth/login", "/auth/oidc/complete"].contains(path) else { throw ClientError.invalidPath }
         let client = try HTTPTransport(baseURL: baseURL)
         let auth: AuthResult = try await client.mutate("POST", path, body: body)
-        let id = ClientPersistence.digest(client.baseURL.absoluteString + "|" + auth.user.id + "|" + auth.workspace.id)
-        let saved = StoredAccount(id: id, baseURL: client.baseURL, email: auth.user.email, displayName: auth.user.displayName, token: auth.token, userID: auth.user.id, workspaceID: auth.workspace.id)
+        let saved = try saveAuthenticatedAccount(auth, baseURL: client.baseURL, deviceID: auth.session.deviceId, installationID: nil)
+        try await restoreAccount(saved)
+    }
+    func saveAuthenticatedAccount(_ auth: AuthResult, baseURL: URL, deviceID: ID?, installationID: String?) throws -> StoredAccount {
+        let normalized = try HTTPTransport.normalizeBaseURL(baseURL)
+        let id = ClientPersistence.digest(normalized.absoluteString + "|" + auth.user.id + "|" + auth.workspace.id)
+        let saved = StoredAccount(id: id, baseURL: normalized, email: auth.user.email, displayName: auth.user.displayName, token: auth.token, userID: auth.user.id, workspaceID: auth.workspace.id, deviceID: deviceID, sessionID: auth.session.id, sessionExpiresAtMs: auth.session.expiresAtMs, installationID: installationID)
         try keychain.save(saved)
         accounts = try keychain.load()
+        try persistence.saveLastAccountID(saved.id)
+        return saved
+    }
+    public func restoreSavedAccount() async throws {
+        guard account == nil else { return }
+        let preferred = try persistence.loadLastAccountID()
+        guard let saved = accounts.first(where: { $0.id == preferred }) ?? accounts.first else { return }
         try await restoreAccount(saved)
     }
     public func restoreAccount(_ saved: StoredAccount) async throws {
+        restoringSelection = true
+        defer { restoringSelection = false }
         stopSocket()
         generation = UUID()
         clearLiveState()
         account = saved
-        transport = try HTTPTransport(baseURL: saved.baseURL, token: saved.token)
+        transport = try HTTPTransport(baseURL: saved.baseURL, token: saved.token, session: httpSession)
+        deviceID = saved.deviceID
+        if let installation = saved.installationID { UserDefaults.standard.set(installation, forKey: "LemonBot.installationID") }
+        try persistence.saveLastAccountID(saved.id)
         pendingIntents = try persistence.loadMutationIntents(accountID: saved.id).map {
             var value = $0
             if value.state == "in_flight" { value.state = "outcome_unknown" }
@@ -116,10 +162,22 @@ import Observation
         }
         if let cache = try persistence.loadCache(saved.id) {
             guard cache.snapshot.user.id == saved.userID, cache.snapshot.workspace.id == saved.workspaceID else { throw ClientError.accountChanged }
-            install(cache.snapshot); entries = cache.entries; cursor = cache.cursor
+            install(cache.snapshot)
+            let authorizedRooms = Set(conversations.map(\.id))
+            entries = cache.entries.filter { authorizedRooms.contains($0.key) }; cursor = cache.cursor
         }
         localSettings = try persistence.loadSettings(accountID: saved.id) ?? ClientLocalSettings(summonShortcut: nil, pushToTalkShortcut: nil, micCuesEnabled: true, selectedBotId: nil, compactCompanionEnabled: false, reducedMotion: "system")
-        try await refresh()
+        let selection = try persistence.loadSelection(accountID: saved.id)
+        if let id = selection?.conversationID, conversations.contains(where: { $0.id == id }) { selectedConversationID = id }
+        else { selectedConversationID = bots.first(where: { $0.id == (selection?.botID ?? localSettings?.selectedBotId) })?.mainConversationId }
+        do {
+            try await refresh()
+            if let id = selectedConversationID, conversations.contains(where: { $0.id == id }) { try await openConversation(id) }
+            else if let bot = bots.first(where: { $0.id == (selection?.botID ?? localSettings?.selectedBotId) }) { try await openConversation(bot.mainConversationId) }
+        } catch {
+            if let backend = error as? BackendError, backend.status == 401 || backend.status == 403 { markReconnectRequired() }
+            throw error
+        }
     }
     public func signOut() async throws {
         guard let signedOut = account else { return }
@@ -133,17 +191,19 @@ import Observation
         do { try keychain.remove(signedOut.id) } catch { failure = failure ?? error }
         do { try persistence.clear(accountID: signedOut.id) } catch { failure = failure ?? error }
         do { accounts = try keychain.load() } catch { failure = failure ?? error }
+        do { if try persistence.loadLastAccountID() == signedOut.id { try persistence.saveLastAccountID(nil) } } catch { failure = failure ?? error }
         if let failure { throw failure }
     }
     public func registerDevice(platform: String, name: String, push: JSONObject? = nil) async throws {
-        let defaults = UserDefaults.standard
-        let key = "LemonBot.installationID"
-        let installation = defaults.string(forKey: key) ?? UUID().uuidString
-        defaults.set(installation, forKey: key)
+        let installation = Self.installationID()
         var body: JSONObject = ["installationId": .string(installation), "platform": .string(platform), "name": .string(name), "appVersion": .string(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0")]
         if let push { body["push"] = .object(push) }
         let device: Device = try await mutate("POST", "/devices", body: body)
         deviceID = device.id
+        if var saved = account {
+            saved.deviceID = device.id; saved.installationID = installation
+            try keychain.save(saved); accounts = try keychain.load(); account = saved
+        }
         startSocket()
     }
     public func saveLocalSettings(_ settings: ClientLocalSettings) throws {
@@ -152,9 +212,20 @@ import Observation
         localSettings = settings
     }
     public func refresh() async throws {
+        guard connectionState != "reconnect_required" else { throw ClientError.signedOut }
         stopSocket(); connectionState = "syncing"
         do { try await synchronize(); startSocket() }
-        catch { connectionState = "disconnected"; errorMessage = error.localizedDescription; throw error }
+        catch {
+            if connectionState != "reconnect_required" { connectionState = "disconnected" }
+            errorMessage = connectionState == "reconnect_required" ? "This device connection was revoked or is no longer authorized. Reconnect explicitly with your desktop." : error.localizedDescription
+            if connectionState != "reconnect_required", error is URLError { startSocket() }
+            throw error
+        }
+    }
+    func markReconnectRequired() {
+        stopSocket(); generation = UUID(); transport = nil
+        connectionState = "reconnect_required"
+        errorMessage = "This device connection was revoked or is no longer authorized. Reconnect explicitly with your desktop."
     }
     func synchronize() async throws {
         let current = generation
@@ -197,14 +268,23 @@ import Observation
     }
     private func install(_ value: Snapshot) {
         snapshot = value; user = value.user; workspace = value.workspace; member = value.member; capabilities = value.capabilities
-        bots = value.bots; machines = value.machines; conversations = value.conversations; sections = value.sections; notifications = value.notifications; runs = value.activeRuns
+        // Legacy caches may contain previously visible live Team resources. They confer
+        // no current owner authority and must not reappear when restoring offline.
+        let foreignBots = Set(value.bots.lazy.filter { $0.ownerUserId != value.user.id }.map(\.id))
+        bots = value.bots.filter { $0.ownerUserId == value.user.id }; machines = value.machines
+        conversations = value.conversations.filter { $0.ownerUserId == value.user.id && !$0.botIds.contains(where: { foreignBots.contains($0) }) }
+        sections = value.sections
+        notifications = value.notifications.filter { $0.userId == value.user.id && !($0.botId.map { foreignBots.contains($0) } ?? false) }
+        runs = value.activeRuns.filter { $0.initiatorUserId == value.user.id && !foreignBots.contains($0.botId) }
     }
     private func clearLiveState() {
+        connectionState = "disconnected"
         user = nil; workspace = nil; member = nil; capabilities = nil; bots = []; machines = []; conversations = []; sections = []; notifications = []; runs = []
         entries = [:]; drafts = [:]; terminalFrames = [:]; terminalGaps = [:]; terminalExits = [:]; terminalExitFrames = [:]; terminalSequences = [:]; terminalSubscriptions = []
         voiceSession = nil; navigationTarget = nil; localSettings = nil; selectedConversationID = nil; deviceID = nil; snapshot = nil; cursor = "0"; latestResources = [:]; errorMessage = nil
         visibleConversationID = nil
         pendingIntents = []
+        pairings = []; pairingURL = nil; pairingQRID = nil
         typingByConversation = [:]
     }
     func persistCache() throws {

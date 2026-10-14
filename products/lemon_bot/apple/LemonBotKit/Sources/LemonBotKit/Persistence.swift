@@ -10,8 +10,13 @@ public struct StoredAccount: Codable, Hashable, Identifiable {
     public var token: String
     public var userID: String
     public var workspaceID: String
-    public init(id: String, baseURL: URL, email: String, displayName: String, token: String, userID: String, workspaceID: String) {
+    public var deviceID: ID?
+    public var sessionID: ID?
+    public var sessionExpiresAtMs: TimestampMs?
+    public var installationID: String?
+    public init(id: String, baseURL: URL, email: String, displayName: String, token: String, userID: String, workspaceID: String, deviceID: ID? = nil, sessionID: ID? = nil, sessionExpiresAtMs: TimestampMs? = nil, installationID: String? = nil) {
         self.id = id; self.baseURL = baseURL; self.email = email; self.displayName = displayName; self.token = token; self.userID = userID; self.workspaceID = workspaceID
+        self.deviceID = deviceID; self.sessionID = sessionID; self.sessionExpiresAtMs = sessionExpiresAtMs; self.installationID = installationID
     }
 }
 
@@ -21,6 +26,9 @@ public protocol AccountCredentialStore: AnyObject {
     func load() throws -> [StoredAccount]
     func save(_ account: StoredAccount) throws
     func remove(_ id: String) throws
+    func loadPendingPairing() throws -> PendingDevicePairing?
+    func savePendingPairing(_ pairing: PendingDevicePairing) throws
+    func removePendingPairing() throws
 }
 
 public final class AccountKeychain: AccountCredentialStore {
@@ -54,6 +62,30 @@ public final class AccountKeychain: AccountCredentialStore {
     }
     public func remove(_ id: String) throws {
         let status = SecItemDelete(query(id) as CFDictionary)
+        guard status == errSecSuccess || status == errSecItemNotFound else { throw ClientError.keychain(status) }
+    }
+    private var pairingQuery: [String: Any] {
+        [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service + ".pending-pairing", kSecAttrAccount as String: "current"]
+    }
+    public func loadPendingPairing() throws -> PendingDevicePairing? {
+        var q = pairingQuery; q[kSecReturnData as String] = true; q[kSecMatchLimit as String] = kSecMatchLimitOne
+        var result: CFTypeRef?
+        let status = SecItemCopyMatching(q as CFDictionary, &result)
+        if status == errSecItemNotFound { return nil }
+        guard status == errSecSuccess, let data = result as? Data else { throw ClientError.keychain(status == errSecSuccess ? errSecDecode : status) }
+        return try JSONDecoder().decode(PendingDevicePairing.self, from: data)
+    }
+    public func savePendingPairing(_ pairing: PendingDevicePairing) throws {
+        let data = try JSONEncoder().encode(pairing)
+        let status = SecItemUpdate(pairingQuery as CFDictionary, [kSecValueData as String: data] as CFDictionary)
+        if status == errSecItemNotFound {
+            var q = pairingQuery; q[kSecValueData as String] = data; q[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+            let inserted = SecItemAdd(q as CFDictionary, nil)
+            guard inserted == errSecSuccess else { throw ClientError.keychain(inserted) }
+        } else if status != errSecSuccess { throw ClientError.keychain(status) }
+    }
+    public func removePendingPairing() throws {
+        let status = SecItemDelete(pairingQuery as CFDictionary)
         guard status == errSecSuccess || status == errSecItemNotFound else { throw ClientError.keychain(status) }
     }
 }
@@ -93,6 +125,10 @@ struct AccountCache: Codable {
     var cursor: Cursor
 }
 
+struct SavedClientSelection: Codable {
+    var conversationID: ID?
+    var botID: ID?
+}
 /// Cache files never contain sessions, secret gate input, confirmation tokens, or queued mutations.
 public final class ClientPersistence {
     private let root: URL
@@ -143,6 +179,18 @@ public final class ClientPersistence {
         let url = path(accountID, "settings.json")
         guard FileManager.default.fileExists(atPath: url.path) else { return nil }
         return try JSONDecoder().decode(ClientLocalSettings.self, from: Data(contentsOf: url))
+    }
+    func saveSelection(_ selection: SavedClientSelection, accountID: String) throws { try save(selection, at: path(accountID, "selection.json")) }
+    func loadSelection(accountID: String) throws -> SavedClientSelection? {
+        let url = path(accountID, "selection.json")
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        return try JSONDecoder().decode(SavedClientSelection.self, from: Data(contentsOf: url))
+    }
+    func saveLastAccountID(_ id: String?) throws { try save(id, at: root.appendingPathComponent("last-account.json")) }
+    func loadLastAccountID() throws -> String? {
+        let url = root.appendingPathComponent("last-account.json")
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        return try JSONDecoder().decode(String?.self, from: Data(contentsOf: url))
     }
     public func saveMutationIntents(_ intents: [MutationIntent], accountID: String) throws { try save(intents, at: path(accountID, "mutation-intents.json")) }
     public func loadMutationIntents(accountID: String) throws -> [MutationIntent] {
