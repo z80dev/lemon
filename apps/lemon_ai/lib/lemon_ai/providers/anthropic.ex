@@ -81,7 +81,7 @@ defmodule LemonAi.Providers.Anthropic do
     try do
       api_key = resolve_api_key(model, opts, resolved_provider_opts)
 
-      if api_key == "" do
+      if api_key == "" and not match?(%{allow_missing_api_key: true}, model.compat) do
         raise missing_api_key_error(model.provider)
       end
 
@@ -239,24 +239,13 @@ defmodule LemonAi.Providers.Anthropic do
       api_key = get_provider_env_api_key(model.provider) ->
         api_key
 
-      api_key = get_env_api_key() ->
-        api_key
-
       true ->
         ""
     end
   end
 
   defp resolve_provider_options(model, opts) do
-    provider_options(opts, normalize_provider_id(model.provider))
-  end
-
-  defp normalize_provider_id(provider) when is_atom(provider), do: provider
-
-  defp normalize_provider_id(provider) when is_binary(provider) do
-    provider
-    |> String.replace("-", "_")
-    |> String.to_atom()
+    provider_options(opts, model.provider)
   end
 
   defp get_provider_env_api_key(provider) do
@@ -278,7 +267,11 @@ defmodule LemonAi.Providers.Anthropic do
   defp provider_env_vars("minimax_cn"),
     do: ["MINIMAX_CN_API_KEY", "MINIMAX_API_KEY", "ANTHROPIC_API_KEY"]
 
-  defp provider_env_vars(_), do: ["ANTHROPIC_API_KEY"]
+  defp provider_env_vars("anthropic"), do: ["ANTHROPIC_API_KEY"]
+  defp provider_env_vars(provider) when is_atom(provider), do: ["ANTHROPIC_API_KEY"]
+  # Other binary providers are user-configured custom endpoints: they only get
+  # their own credential, never the ambient Anthropic key.
+  defp provider_env_vars(_provider), do: []
 
   defp env_value(name) when is_binary(name) do
     case System.get_env(name) do
@@ -287,11 +280,28 @@ defmodule LemonAi.Providers.Anthropic do
     end
   end
 
-  defp provider_options(%StreamOptions{provider_options: options}, key) when is_map(options) do
+  defp provider_options(%StreamOptions{provider_options: options}, key)
+       when is_map(options) and is_atom(key) do
     Map.get(options, key) || Map.get(options, Atom.to_string(key)) || %{}
   end
 
+  # Binary providers are looked up as-is (custom providers) or by their
+  # underscored name; never converted to a new atom.
+  defp provider_options(%StreamOptions{provider_options: options}, key)
+       when is_map(options) and is_binary(key) do
+    normalized = String.replace(key, "-", "_")
+
+    Map.get(options, key) || Map.get(options, normalized) ||
+      Map.get(options, existing_atom(normalized)) || %{}
+  end
+
   defp provider_options(_, _), do: %{}
+
+  defp existing_atom(name) do
+    String.to_existing_atom(name)
+  rescue
+    ArgumentError -> nil
+  end
 
   defp missing_api_key_error(:kimi),
     do:
@@ -938,6 +948,7 @@ defmodule LemonAi.Providers.Anthropic do
   # ============================================================================
 
   @copilot_providers [:github_copilot, :"github-copilot"]
+  @kimi_providers [:kimi, :kimi_coding, "kimi", "kimi_coding"]
   @common_beta_features [
     "interleaved-thinking-2025-05-14",
     "fine-grained-tool-streaming-2025-05-14"
@@ -960,11 +971,20 @@ defmodule LemonAi.Providers.Anthropic do
     is_anthropic_oauth =
       anthropic_oauth_provider?(provider) and LemonAi.Auth.AnthropicOAuth.oauth_token?(api_key)
 
-    auth_header =
-      if is_copilot or is_anthropic_oauth do
-        {"authorization", "Bearer #{api_key}"}
-      else
-        {"x-api-key", api_key}
+    # Kimi Code OAuth tokens authenticate as a bearer with the Kimi CLI fingerprint.
+    is_kimi_oauth =
+      provider in @kimi_providers and LemonAi.Auth.KimiCodeOAuth.oauth_token?(api_key)
+
+    auth_headers =
+      cond do
+        api_key == "" ->
+          []
+
+        is_copilot or is_anthropic_oauth or is_kimi_oauth ->
+          [{"authorization", "Bearer #{api_key}"}]
+
+        true ->
+          [{"x-api-key", api_key}]
       end
 
     beta_features =
@@ -991,7 +1011,6 @@ defmodule LemonAi.Providers.Anthropic do
     base_headers = [
       {"content-type", "application/json"},
       {"accept", "text/event-stream"},
-      auth_header,
       {"anthropic-version", @api_version},
       {"anthropic-beta", Enum.join(beta_features, ",")}
     ]
@@ -1008,11 +1027,11 @@ defmodule LemonAi.Providers.Anthropic do
         []
       end
 
-    anthropic_oauth_headers =
-      if is_anthropic_oauth do
-        LemonAi.Auth.AnthropicOAuth.oauth_headers()
-      else
-        []
+    oauth_headers =
+      cond do
+        is_anthropic_oauth -> LemonAi.Auth.AnthropicOAuth.oauth_headers()
+        is_kimi_oauth -> LemonAi.Auth.KimiCodeOAuth.request_headers()
+        true -> []
       end
 
     # Merge beta tokens rather than letting an extra header remove required betas.
@@ -1024,14 +1043,10 @@ defmodule LemonAi.Providers.Anthropic do
           opts.headers || %{}
         ],
         %{},
-        fn headers, acc ->
-          Enum.reduce(headers, acc, fn {k, v}, acc ->
-            Map.put(acc, String.downcase(to_string(k)), to_string(v))
-          end)
-        end
+        fn headers, acc -> LemonAi.Providers.RequestHeaders.merge(acc, headers) end
       )
 
-    headers = Map.new(base_headers ++ copilot_headers ++ anthropic_oauth_headers)
+    headers = Map.new(base_headers ++ auth_headers ++ copilot_headers ++ oauth_headers)
 
     Map.merge(headers, extra_headers, fn
       "anthropic-beta", required, extra ->

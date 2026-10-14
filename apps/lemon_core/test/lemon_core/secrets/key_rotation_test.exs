@@ -133,6 +133,9 @@ defmodule LemonCore.Secrets.KeyRotationTest do
       assert {:ok, _} = Secrets.set(name, value, [owner: owner] ++ ctx.opts)
     end
 
+    assert {:ok, "alpha-value", credential_revision} =
+             Secrets.get_with_revision("ALPHA", ctx.opts)
+
     assert {:ok, preview} = KeyRotation.preview(ctx.opts)
     assert %{source: :file, count: 3, expired: 0, resumed: 0} = preview
     assert preview.key_file == ctx.key_file
@@ -156,6 +159,17 @@ defmodule LemonCore.Secrets.KeyRotationTest do
       assert {:ok, _} = Crypto.decrypt(entry, new_key)
       assert {:error, _} = Crypto.decrypt(entry, old_key)
     end
+
+    assert {:ok, "alpha-value", ^credential_revision} =
+             Secrets.get_with_revision("ALPHA", ctx.opts)
+
+    assert {:ok, _} =
+             Secrets.set_if_revision("ALPHA", "refreshed-alpha", credential_revision, ctx.opts)
+
+    assert {:ok, "refreshed-alpha"} = Secrets.get("ALPHA", ctx.opts)
+    assert {:ok, refreshed_entry} = Store.fetch(Secrets.table(), {"default", "ALPHA"})
+    assert {:ok, "refreshed-alpha"} = Crypto.decrypt(refreshed_entry, new_key)
+    assert {:error, _} = Crypto.decrypt(refreshed_entry, old_key)
   end
 
   test "expired secrets are deleted rather than re-encrypted", ctx do
@@ -312,6 +326,7 @@ defmodule LemonCore.Secrets.KeyRotationTest do
        ctx do
     old_encoded = File.read!(ctx.key_file)
     old_key = read_key(ctx.key_file)
+
     {:ok, _agent} =
       Agent.start_link(fn -> %{key: old_encoded, failures: 0, failures_after_put: 1_000} end,
         name: FlakyKeychain
@@ -409,7 +424,10 @@ defmodule LemonCore.Secrets.KeyRotationTest do
     assert {:error, :runtime_running} = KeyRotation.rotate(token, running)
     assert KeyRotation.describe_error(:runtime_running) =~ "lemon stop"
     assert File.read!(ctx.key_file) == key_before
-    refute Enum.any?(Store.list(Secrets.table()), fn {_ref, entry} -> Map.has_key?(entry, :staged) end)
+
+    refute Enum.any?(Store.list(Secrets.table()), fn {_ref, entry} ->
+             Map.has_key?(entry, :staged)
+           end)
   end
 
   test "a key file is not rotated where its replacement cannot be made durable", ctx do
@@ -452,7 +470,12 @@ defmodule LemonCore.Secrets.KeyRotationTest do
     with {:ok, socket} <- :gen_tcp.accept(listen) do
       _ = :gen_tcp.recv(socket, 0, 1_000)
       body = ~s({"ok":true})
-      :gen_tcp.send(socket, "HTTP/1.0 200 OK\r\ncontent-length: #{byte_size(body)}\r\n\r\n" <> body)
+
+      :gen_tcp.send(
+        socket,
+        "HTTP/1.0 200 OK\r\ncontent-length: #{byte_size(body)}\r\n\r\n" <> body
+      )
+
       :gen_tcp.close(socket)
       serve_health(listen)
     end

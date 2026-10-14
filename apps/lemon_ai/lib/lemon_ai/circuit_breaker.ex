@@ -45,7 +45,7 @@ defmodule LemonAi.CircuitBreaker do
   # Types
   # ============================================================================
 
-  @type provider :: atom()
+  @type provider :: atom() | String.t()
   @type circuit_state :: :closed | :open | :half_open
   @type state :: %{
           provider: provider(),
@@ -91,7 +91,7 @@ defmodule LemonAi.CircuitBreaker do
   Starts a breaker under `LemonAi.ProviderSupervisor` when available.
   """
   @spec ensure_started(provider(), keyword()) :: {:ok, pid()} | {:error, term()}
-  def ensure_started(provider, opts \\ []) when is_atom(provider) do
+  def ensure_started(provider, opts \\ []) when is_atom(provider) or is_binary(provider) do
     case GenServer.whereis(via_tuple(provider)) do
       nil ->
         opts =

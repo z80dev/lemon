@@ -12,6 +12,10 @@ releases follow [Semantic Versioning](https://semver.org/) from `0.1.0` onward.
   refresh or persist now yields no credential instead of falling back to
   ambient Claude Code tokens. OAuth secret resolution passes `:reload_secret`
   so refresh helpers can re-read the secret under their refresh lock.
+- OAuth refresh persistence is conditional on the exact encrypted-store login
+  revision. A login replacement or logout during a token request wins; the
+  obsolete response cannot overwrite it or become selected authentication.
+  Storage failures stop refresh resolution without replaying the request.
 
 ## [0.2.0] - 2026-10-13
 

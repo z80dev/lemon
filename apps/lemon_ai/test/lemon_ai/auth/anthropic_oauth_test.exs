@@ -303,10 +303,16 @@ defmodule LemonAi.Auth.AnthropicOAuthTest do
       end)
 
       secret = encoded_secret(expires_in_ms: 4 * 60_000, account_email: "user@example.com")
+      revision = make_ref()
 
       assert {:ok, "sk-ant-oat01-new"} =
                AnthropicOAuth.resolve_api_key_from_secret("llm_anthropic_api_key", secret,
-                 persist_secret: fn name, value -> send(test_pid, {:persist, name, value}) end
+                 reload_secret: fn _ -> {:ok, secret, revision} end,
+                 persist_secret: fn name, value, expected ->
+                   assert expected == revision
+                   send(test_pid, {:persist, name, value})
+                   :ok
+                 end
                )
 
       assert_received {:refresh, "/v1/oauth/token", body}
@@ -330,12 +336,19 @@ defmodule LemonAi.Auth.AnthropicOAuthTest do
       end)
 
       test_pid = self()
+      secret = encoded_secret(expires_in_ms: -1)
+      revision = make_ref()
 
       assert {:ok, "sk-ant-oat01-new"} =
                AnthropicOAuth.resolve_api_key_from_secret(
                  "s",
-                 encoded_secret(expires_in_ms: -1),
-                 persist_secret: fn _, value -> send(test_pid, {:persist, value}) end
+                 secret,
+                 reload_secret: fn _ -> {:ok, secret, revision} end,
+                 persist_secret: fn _, value, expected ->
+                   assert expected == revision
+                   send(test_pid, {:persist, value})
+                   :ok
+                 end
                )
 
       assert_received {:persist, stored}
@@ -349,11 +362,14 @@ defmodule LemonAi.Auth.AnthropicOAuthTest do
         |> Plug.Conn.send_resp(400, ~s({"error":"invalid_grant"}))
       end)
 
+      secret = encoded_secret(expires_in_ms: 60_000)
+
       assert {:error, :reauth_required} =
                AnthropicOAuth.resolve_api_key_from_secret(
                  "s",
-                 encoded_secret(expires_in_ms: 60_000),
-                 persist_secret: fn _, _ -> flunk("nothing to persist") end
+                 secret,
+                 reload_secret: fn _ -> {:ok, secret, :test_revision} end,
+                 persist_secret: fn _, _, _ -> flunk("nothing to persist") end
                )
     end
 
@@ -384,11 +400,21 @@ defmodule LemonAi.Auth.AnthropicOAuthTest do
 
     test "concurrent resolvers share one refresh and reuse the stored rotation" do
       test_pid = self()
-      {:ok, store} = Agent.start_link(fn -> encoded_secret(expires_in_ms: 60_000) end)
+
+      store =
+        start_supervised!(
+          {Agent,
+           fn -> %{secret: encoded_secret(expires_in_ms: 60_000), revision: make_ref()} end}
+        )
 
       Req.Test.stub(__MODULE__, fn conn ->
-        send(test_pid, :refresh_request)
-        Process.sleep(150)
+        send(test_pid, {:refresh_request, self()})
+
+        receive do
+          :continue_refresh -> :ok
+        after
+          5_000 -> flunk("refresh barrier timed out")
+        end
 
         Req.Test.json(conn, %{
           "access_token" => "sk-ant-oat01-new",
@@ -398,23 +424,30 @@ defmodule LemonAi.Auth.AnthropicOAuthTest do
       end)
 
       opts = [
-        persist_secret: fn _name, value -> Agent.update(store, fn _ -> value end) end,
-        reload_secret: fn _name -> {:ok, Agent.get(store, & &1)} end
+        persist_secret: fn _name, value, expected ->
+          Agent.get_and_update(store, fn current ->
+            if current.revision == expected,
+              do: {:ok, %{secret: value, revision: make_ref()}},
+              else: {{:error, :stale_revision}, current}
+          end)
+        end,
+        reload_secret: fn _name -> Agent.get(store, &{:ok, &1.secret, &1.revision}) end
       ]
 
-      stale = Agent.get(store, & &1)
+      stale = Agent.get(store, & &1.secret)
 
-      results =
-        1..8
-        |> Enum.map(fn _ ->
+      tasks =
+        Enum.map(1..8, fn _ ->
           Task.async(fn -> AnthropicOAuth.resolve_api_key_from_secret("shared", stale, opts) end)
         end)
-        |> Task.await_many(5_000)
+
+      assert_receive {:refresh_request, refresher}, 5_000
+      send(refresher, :continue_refresh)
+      results = Task.await_many(tasks, 5_000)
 
       assert Enum.uniq(results) == [{:ok, "sk-ant-oat01-new"}]
-      assert_received :refresh_request
-      refute_received :refresh_request
-      assert Jason.decode!(Agent.get(store, & &1))["refresh_token"] == "sk-ant-ort01-new"
+      refute_received {:refresh_request, _}
+      assert Jason.decode!(Agent.get(store, & &1.secret))["refresh_token"] == "sk-ant-ort01-new"
     end
 
     test "a waiter fails closed when the login was deleted meanwhile" do

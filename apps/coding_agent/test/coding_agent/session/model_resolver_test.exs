@@ -249,4 +249,32 @@ defmodule CodingAgent.Session.ModelResolverTest do
     assert model.provider == :openai
     assert model.id == "gpt-4"
   end
+
+  describe "OpenAI-compatible presets" do
+    test "provider:model specs keep colons in the model id and apply the configured base url" do
+      settings = %SettingsManager{
+        providers: %{"lm_studio" => %{base_url: "http://gpu-box:1234/v1"}}
+      }
+
+      model = ModelResolver.resolve_session_model("ollama:qwen3:32b", settings)
+      assert {model.provider, model.id, model.api} == {:ollama, "qwen3:32b", :openai_completions}
+      assert model.base_url == "http://127.0.0.1:11434/v1"
+      assert model.compat.allow_missing_api_key
+
+      model = ModelResolver.resolve_session_model("lm-studio:qwen2.5-coder", settings)
+      assert {model.provider, model.base_url} == {:lm_studio, "http://gpu-box:1234/v1"}
+
+      model = ModelResolver.resolve_session_model("llama.cpp:qwen3", settings)
+      assert {model.provider, model.id} == {:llama_cpp, "qwen3"}
+    end
+
+    test "a configured preset does not capture bare catalog model ids" do
+      settings = %SettingsManager{
+        providers: %{"together" => %{api_key: "together-key"}}
+      }
+
+      model = ModelResolver.resolve_session_model("claude-sonnet-5", settings)
+      assert model.provider == :anthropic
+    end
+  end
 end

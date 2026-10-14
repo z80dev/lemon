@@ -92,8 +92,20 @@ stderr. Invalid arguments remain human-readable usage errors.
 ## ChatGPT authentication and Codex CLI login import
 
 `lemon model --provider openai-codex` offers browser OAuth (the default),
-an existing token, or an explicit **Import existing Codex CLI ChatGPT login**
-choice. Lemon never discovers or imports CLI credentials automatically.
+a headless device-code sign-in, an existing token, or an explicit **Import
+existing Codex CLI ChatGPT login** choice. Lemon never discovers or imports CLI
+credentials automatically.
+
+`--auth device` needs no local callback port: it prints
+`https://auth.openai.com/codex/device` and a one-time code, polls until you
+approve it from any browser, and stores the same login as browser OAuth. It
+also runs with `--non-interactive`, for example over SSH:
+
+```bash
+lemon model openai-codex --auth device --non-interactive --set-default --model gpt-6.1-sol
+```
+
+To copy an existing Codex CLI login instead:
 
 ```bash
 lemon model --provider openai-codex --auth codex-cli --non-interactive \
@@ -110,8 +122,8 @@ when set, otherwise `$HOME/.codex/auth.json`. It requires a ChatGPT OAuth login
 with an access-token JWT expiry, account ID, and non-empty refresh token;
 API-key-only and incomplete logins are rejected. `codex_cli` is also accepted
 as an auth label. `--codex-auth-path` is valid only with this import choice.
-`--token` cannot be combined with browser OAuth or CLI import. Other
-non-interactive provider setup still requires `--token`.
+`--token` cannot be combined with browser OAuth, device sign-in or CLI import.
+Other non-interactive provider setup still requires `--token`.
 
 The copied credentials are encrypted in Lemon's secret store under
 `llm_openai_codex_api_key` by default (`model --secret-name` overrides the name).
@@ -176,6 +188,46 @@ claude.ai does not list individual OAuth grants. `--logout` deletes Lemon's
 only copy of the tokens, and Anthropic ends the grant about 30 days after
 sign-in. To revoke every session immediately, use **Settings → Account → Log
 out of all devices** on claude.ai; this also signs out Claude Code and browsers.
+
+## Other provider sign-ins
+
+`lemon model <provider>` also offers sign-in for these providers; `--status`
+and `--logout` work the same way as for Anthropic and never print credentials.
+
+```bash
+lemon model openrouter                 # browser sign-in (default) or paste a key
+lemon model xai --auth oauth           # SuperGrok / X Premium+ device code
+lemon model kimi-code                  # Kimi Code device code (default)
+lemon model zai --auth oauth           # GLM Coding Plan sign-in
+lemon model kimi-code --status
+```
+
+- **OpenRouter** opens `openrouter.ai/auth` and captures the redirect on
+  `http://localhost:54549/callback`; otherwise paste the redirect URL. OpenRouter
+  issues a durable API key, stored like a pasted key (`api_key_secret`). Pasting
+  an existing `sk-or-` key at the same prompt checks it and stores it.
+- **xAI** and **Kimi Code** show a verification URL and code. The refreshable
+  login is stored under `llm_xai_api_key` / `llm_kimi_coding_api_key` and
+  referenced by `api_key_secret` with `auth_source = "oauth"`; while that is set,
+  `XAI_API_KEY`, `KIMI_API_KEY` and `MOONSHOT_API_KEY` do not override it. Lemon
+  refreshes the token five minutes before expiry and when the provider rejects
+  it. Kimi requests made with the login carry Kimi CLI identification headers.
+- **Z.AI** opens `chat.z.ai`. The browser then tries to open ZCode
+  (`zcode://zai-auth/callback?...`); copy the full address, including its `state`
+  (or paste `code#state`), into the prompt. A bare code is rejected. Lemon
+  exchanges it, then finds or creates an API key named `lemon` in your default
+  Z.AI project and stores that key.
+
+`--logout` deletes the stored login or minted key and its config references. It
+does not revoke anything at the provider; delete minted OpenRouter or Z.AI keys
+in their dashboards.
+
+Multiple accounts can be stored under separate `--secret-name` values and
+referenced by credential pools. `--status --secret-name NAME` inspects that
+account rather than the current default; `--logout --secret-name NAME` deletes
+only it and changes provider settings only when they select that exact secret.
+Missing/deleted pool secrets are skipped. Sign-in errors report safe error
+kinds rather than provider response bodies or credential payloads.
 
 ## Non-interactive coding
 

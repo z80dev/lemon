@@ -440,4 +440,70 @@ defmodule LemonAi.Providers.OpenAIResponsesTest do
     assert Map.new(headers)["authorization"] == "Bearer opencode-env-key"
     assert {:ok, _} = EventStream.result(stream, 1000)
   end
+
+  describe "credential scoping" do
+    setup do
+      prev_openai = System.get_env("OPENAI_API_KEY")
+      System.put_env("OPENAI_API_KEY", "openai-env-key")
+
+      on_exit(fn ->
+        if prev_openai,
+          do: System.put_env("OPENAI_API_KEY", prev_openai),
+          else: System.delete_env("OPENAI_API_KEY")
+      end)
+
+      :ok
+    end
+
+    test "does not send OPENAI_API_KEY to a non-OpenAI provider" do
+      test_pid = self()
+
+      Req.Test.stub(__MODULE__, fn conn ->
+        send(test_pid, {:request_called, true})
+        Plug.Conn.send_resp(conn, 200, sse_body([:done]))
+      end)
+
+      model = %Model{
+        id: "some-model",
+        name: "Some Model",
+        api: :openai_responses,
+        provider: :together,
+        base_url: "https://api.together.test/v1"
+      }
+
+      context = Context.new(messages: [%UserMessage{content: "Hi"}])
+      {:ok, stream} = OpenAIResponses.stream(model, context, %StreamOptions{})
+
+      assert {:error, %LemonAi.Types.AssistantMessage{error_message: message}} =
+               EventStream.result(stream, 1000)
+
+      assert message =~ "No API key provided for provider together"
+      refute_received {:request_called, _}
+    end
+
+    test "sends no Authorization header for keyless models" do
+      test_pid = self()
+
+      Req.Test.stub(__MODULE__, fn conn ->
+        send(test_pid, {:request_headers, conn.req_headers})
+        Plug.Conn.send_resp(conn, 200, sse_body([:done]))
+      end)
+
+      model = %Model{
+        id: "local-model",
+        name: "Local",
+        api: :openai_responses,
+        provider: :llama_cpp,
+        base_url: "http://127.0.0.1:8080/v1",
+        compat: %{allow_missing_api_key: true}
+      }
+
+      context = Context.new(messages: [%UserMessage{content: "Hi"}])
+      {:ok, stream} = OpenAIResponses.stream(model, context, %StreamOptions{})
+
+      assert_receive {:request_headers, headers}, 1000
+      refute Map.has_key?(Map.new(headers), "authorization")
+      assert {:ok, _} = EventStream.result(stream, 1000)
+    end
+  end
 end

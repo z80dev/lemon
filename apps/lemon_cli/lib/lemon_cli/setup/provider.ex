@@ -93,11 +93,23 @@ defmodule LemonCli.Setup.Provider do
 
       {provider_name, rest} ->
         provider = fetch_provider!(provider_name)
-        config_path = extract_config_path(rest)
+
+        {opts, positional, invalid} =
+          OptionParser.parse(rest, strict: [config_path: :string, secret_name: :string])
+
+        if positional != [] or invalid != [] do
+          Runner.fail!("#{flag} accepts only --config-path and --secret-name.")
+        end
+
+        if Keyword.has_key?(opts, :secret_name) and String.trim(opts[:secret_name]) == "" do
+          Runner.fail!("--secret-name must not be empty.")
+        end
+
+        config_path = opts[:config_path] || extract_config_path([])
 
         case flag do
-          "--status" -> ProviderAuth.status(provider, config_path, io)
-          "--logout" -> ProviderAuth.logout(provider, config_path, io)
+          "--status" -> ProviderAuth.status(provider, config_path, io, opts)
+          "--logout" -> ProviderAuth.logout(provider, config_path, io, opts)
         end
     end
   end

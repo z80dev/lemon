@@ -823,7 +823,8 @@ defmodule CodingAgent.SettingsManagerTest do
 
       settings = SettingsManager.from_config(config)
 
-      assert settings.default_model.provider == :provider
+      # Unknown (custom) provider ids stay binaries: config never creates atoms.
+      assert settings.default_model.provider == "provider"
       assert settings.default_model.model_id == "model-name"
     end
 
@@ -873,7 +874,7 @@ defmodule CodingAgent.SettingsManagerTest do
       settings = SettingsManager.from_config(config)
 
       # Should split on first colon only
-      assert settings.default_model.provider == :azure
+      assert settings.default_model.provider == "azure"
       assert settings.default_model.model_id == "gpt-4:vision"
     end
 
