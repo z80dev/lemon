@@ -31,16 +31,18 @@ defmodule CodingAgent.Coordinator do
 
   ## Architecture
 
-  The Coordinator uses `CodingAgent.SessionSupervisor` to start sessions,
-  ensuring proper supervision. Each subagent is monitored for crashes,
-  and all active subagents are tracked by ID in the state.
+  The Coordinator uses `CodingAgent.SessionSupervisor` to start sessions.
+  Supervised lifecycle workers own each session's event subscription and monitor,
+  leaving the coordinator responsive during admission, prompt startup and cleanup.
+  Results retain specification order, and cancelled admissions clean up any session
+  that finishes starting after cancellation. Active IDs remain tracked until their
+  workers and sessions have exited.
 
-  Timeouts are enforced at the coordinator level. When a timeout occurs,
-  all remaining subagents are aborted and stopped.
+  Execution deadlines include startup. Remaining subagents are aborted and stopped
+  on timeout or cancellation.
   """
 
   use GenServer
-  require Logger
 
   alias CodingAgent.Session
   alias CodingAgent.Tools.Task.Params
@@ -70,15 +72,19 @@ defmodule CodingAgent.Coordinator do
           settings_manager: CodingAgent.SettingsManager.t() | nil,
           parent_session: String.t() | nil,
           active_subagents: %{String.t() => subagent_state()},
-          default_timeout: pos_integer()
+          default_timeout: pos_integer(),
+          batches: map(),
+          session_starter: (keyword() -> {:ok, pid()} | {:error, term()})
         }
 
   @typep subagent_state :: %{
-           pid: pid(),
-           session_id: String.t(),
+           pid: pid() | nil,
+           session_id: String.t() | nil,
            monitor_ref: reference(),
-           caller: {pid(), reference()} | nil,
-           status: :running | :completed | :error | :stopping
+           session_monitor_ref: reference() | nil,
+           worker_pid: pid() | nil,
+           batch: reference(),
+           status: :starting | :running | :stopping
          }
 
   @cleanup_wait_timeout 5_000
@@ -91,7 +97,9 @@ defmodule CodingAgent.Coordinator do
     :settings_manager,
     :parent_session,
     active_subagents: %{},
-    default_timeout: 300_000
+    default_timeout: 300_000,
+    batches: %{},
+    session_starter: &CodingAgent.start_session/1
   ]
 
   # ============================================================================
@@ -234,180 +242,244 @@ defmodule CodingAgent.Coordinator do
   end
 
   @impl true
-  def handle_call({:run_subagents, specs, opts}, _from, state) do
+  def handle_call({:run_subagents, specs, opts}, from, state) do
     timeout = Keyword.get(opts, :timeout, state.default_timeout)
+    specs_with_ids = Enum.map(specs, &{generate_subagent_id(), &1})
 
-    # Generate IDs for each spec
-    specs_with_ids =
-      Enum.map(specs, fn spec ->
-        id = generate_subagent_id()
-        {id, spec}
-      end)
+    cond do
+      specs == [] ->
+        {:reply, [], state}
 
-    if timeout <= 0 do
-      # A zero deadline cannot accept useful work. Return a bounded result
-      # without starting a child whose synchronous prompt handshake could
-      # outlive the caller's selected deadline and take down this coordinator.
-      results =
-        Enum.map(specs_with_ids, fn {id, _spec} ->
-          %{
-            id: id,
-            status: :timeout,
-            result: nil,
-            error: :timeout,
-            session_id: nil
-          }
-        end)
+      timeout <= 0 ->
+        results = Enum.map(specs_with_ids, fn {id, _} -> terminal_result(id, nil, :timeout) end)
+        {:reply, results, state}
 
-      {:reply, results, state}
-    else
-      # Start all subagents
-      {started, state} =
-        Enum.reduce(specs_with_ids, {[], state}, fn {id, spec}, {acc, st} ->
-          case start_subagent(id, spec, st) do
-            {:ok, subagent_state, new_state} ->
-              {[{id, spec, {:ok, subagent_state}} | acc], new_state}
+      true ->
+        batch_ref = make_ref()
+        timer = Process.send_after(self(), {:batch_timeout, batch_ref}, timeout)
 
-            {:error, reason} ->
-              {[{id, spec, {:error, reason}} | acc], st}
-          end
-        end)
+        batch = %{
+          from: from,
+          ids: Enum.map(specs_with_ids, &elem(&1, 0)),
+          results: %{},
+          timer: timer,
+          stopping: false
+        }
 
-      started = Enum.reverse(started)
+        state = %{state | batches: Map.put(state.batches, batch_ref, batch)}
+        coordinator = self()
+        worker_state = %{state | active_subagents: %{}, batches: %{}}
 
-      # Collect results with timeout
-      {results, final_state} = collect_results(started, timeout, state)
+        state =
+          Enum.reduce(specs_with_ids, state, fn {id, spec}, acc ->
+            case start_background_task(fn ->
+                   run_subagent_worker(coordinator, id, spec, worker_state)
+                 end) do
+              {:ok, worker} ->
+                subagent = %{
+                  pid: nil,
+                  session_id: nil,
+                  monitor_ref: Process.monitor(worker),
+                  session_monitor_ref: nil,
+                  worker_pid: worker,
+                  batch: batch_ref,
+                  status: :starting
+                }
 
-      # Map results back to the original spec order
-      results_map = Map.new(results, fn result -> {result.id, result} end)
+                %{acc | active_subagents: Map.put(acc.active_subagents, id, subagent)}
 
-      ordered_results =
-        Enum.map(specs_with_ids, fn {id, _spec} ->
-          Map.get(results_map, id, %{
-            id: id,
-            status: :error,
-            result: nil,
-            error: :not_found,
-            session_id: nil
-          })
-        end)
+              {:error, reason} ->
+                put_result(acc, batch_ref, build_error_result(id, nil, reason))
+            end
+          end)
 
-      {:reply, ordered_results, final_state}
+        {:noreply, maybe_reply_batch(state, batch_ref)}
     end
   end
 
   def handle_call(:list_active, _from, state) do
-    ids = Map.keys(state.active_subagents)
-    {:reply, ids, state}
+    {:reply, Map.keys(state.active_subagents), state}
   end
 
   def handle_call(:abort_all, _from, state) do
-    new_state = abort_all_subagents(state)
-    {:reply, :ok, new_state}
+    {:reply, :ok, cancel_all(state)}
   end
 
   @impl true
-  def handle_info({:DOWN, ref, :process, _pid, reason}, state) do
-    # Find the subagent that crashed
-    case find_subagent_by_monitor(state, ref) do
-      {id, subagent_state} ->
-        if subagent_state.status == :stopping do
-          {:noreply, remove_subagent(id, state)}
-        else
-          Logger.warning(
-            "Subagent #{id} (#{subagent_state.session_id}) crashed: #{inspect(reason)}"
-          )
-
-          {:noreply, remove_subagent(id, state)}
-        end
-
+  def handle_info({:subagent_session, id, pid}, state) do
+    case Map.get(state.active_subagents, id) do
       nil ->
-        # Unknown process, ignore
         {:noreply, state}
+
+      subagent ->
+        subagent = %{subagent | pid: pid, session_monitor_ref: Process.monitor(pid)}
+        {:noreply, %{state | active_subagents: Map.put(state.active_subagents, id, subagent)}}
     end
   end
 
-  def handle_info({:session_event, session_id, event}, state) do
-    # Find the subagent by session_id
-    case find_subagent_by_session(state, session_id) do
-      {id, _subagent_state} ->
-        handle_session_event(id, event, state)
-
+  def handle_info({:subagent_ready, id, session_id}, state) do
+    case Map.get(state.active_subagents, id) do
       nil ->
         {:noreply, state}
+
+      subagent ->
+        status = if subagent.status == :stopping, do: :stopping, else: :running
+        subagent = %{subagent | session_id: session_id, status: status}
+        {:noreply, %{state | active_subagents: Map.put(state.active_subagents, id, subagent)}}
     end
+  end
+
+  def handle_info({:subagent_result, id, result}, state) do
+    case Map.get(state.active_subagents, id) do
+      nil -> {:noreply, state}
+      subagent -> {:noreply, put_result(state, subagent.batch, result)}
+    end
+  end
+
+  def handle_info({:DOWN, ref, :process, _pid, reason}, state) do
+    case Enum.find(state.active_subagents, fn {_id, subagent} ->
+           ref in [subagent.monitor_ref, subagent.session_monitor_ref]
+         end) do
+      nil ->
+        {:noreply, state}
+
+      {id, %{monitor_ref: ^ref} = subagent} ->
+        result = build_crashed_result(id, subagent.session_id, reason)
+        state = put_result(state, subagent.batch, result)
+
+        if subagent.pid && Process.alive?(subagent.pid) do
+          # A worker crash must not orphan the session it already admitted.
+          start_background_task(fn -> cleanup_session(subagent.pid) end)
+          subagent = %{subagent | worker_pid: nil, status: :stopping}
+          {:noreply, %{state | active_subagents: Map.put(state.active_subagents, id, subagent)}}
+        else
+          {:noreply, finish_subagent(state, id, subagent)}
+        end
+
+      {id, subagent} ->
+        if subagent.worker_pid do
+          subagent = %{subagent | pid: nil, session_monitor_ref: nil}
+          {:noreply, %{state | active_subagents: Map.put(state.active_subagents, id, subagent)}}
+        else
+          {:noreply, finish_subagent(state, id, subagent)}
+        end
+    end
+  end
+
+  def handle_info({:batch_timeout, batch_ref}, state) do
+    {:noreply, cancel_batch(state, batch_ref, :timeout)}
+  end
+
+  def handle_info({:cleanup_timeout, batch_ref}, state) do
+    {:noreply, reply_batch(state, batch_ref)}
   end
 
   def handle_info(:abort_all, state) do
-    new_state = abort_all_subagents(state)
-    {:noreply, new_state}
+    {:noreply, cancel_all(state)}
   end
 
-  def handle_info(_msg, state) do
-    {:noreply, state}
-  end
+  def handle_info(_msg, state), do: {:noreply, state}
 
-  # ============================================================================
-  # Private Functions
-  # ============================================================================
+  defp run_subagent_worker(coordinator, id, spec, state) do
+    owner_ref = Process.monitor(coordinator)
 
-  @spec start_subagent(String.t(), subagent_spec(), t()) ::
-          {:ok, subagent_state(), t()} | {:error, term()}
-  defp start_subagent(id, spec, state) do
-    prompt = spec.prompt
-    subagent_id = spec[:subagent]
-    description = spec[:description] || "Subagent #{id}"
+    result =
+      try do
+        params = %{
+          "prompt" => spec.prompt,
+          "agent" => spec[:subagent],
+          "description" => spec[:description] || "Subagent #{id}"
+        }
 
-    params = %{"prompt" => prompt, "agent" => subagent_id, "description" => description}
+        with {:ok, validated} <- Params.validate_run_params(params, state.cwd),
+             :ok <- check_cancelled(owner_ref),
+             {:ok, pid} <- state.session_starter.(build_session_opts(state, validated)) do
+          # Do not kill a blocked starter on cancellation: admission may still
+          # succeed. Its worker retains ownership and cleans up the late child.
+          send(coordinator, {:subagent_session, id, pid})
+          session_ref = Process.monitor(pid)
+          # Standalone admission may link the session to this worker. Lifecycle
+          # ownership is monitor-based, so intentional shutdown must not kill it.
+          Process.unlink(pid)
 
-    case Params.validate_run_params(params, state.cwd) do
-      {:error, reason} ->
-        {:error, reason}
-
-      {:ok, validated} ->
-        session_opts = build_session_opts(state, validated)
-
-        case CodingAgent.start_session(session_opts) do
-          {:ok, pid} ->
-            session_id = Session.get_stats(pid).session_id
-
-            # Subscribe to session events
-            _unsub = Session.subscribe(pid)
-
-            # Monitor the session process
-            monitor_ref = Process.monitor(pid)
-
-            subagent_state = %{
-              pid: pid,
-              session_id: session_id,
-              monitor_ref: monitor_ref,
-              caller: nil,
-              status: :running
-            }
-
-            new_state = %{
-              state
-              | active_subagents: Map.put(state.active_subagents, id, subagent_state)
-            }
-
-            # Start the prompt
-            case Session.prompt(pid, validated.prompt) do
-              :ok ->
-                {:ok, subagent_state, new_state}
-
-              {:error, reason} ->
-                # Clean up on prompt failure
-                cleanup_subagent(id, new_state)
-                {:error, reason}
+          try do
+            with :ok <- check_cancelled(owner_ref) do
+              session_id = Session.get_stats(pid).session_id
+              send(coordinator, {:subagent_ready, id, session_id})
+              run_session(pid, session_ref, session_id, owner_ref, id, validated.prompt)
+            else
+              {:cancelled, status} -> terminal_result(id, nil, status)
             end
-
-          {:error, reason} ->
-            {:error, reason}
+          after
+            cleanup_session(pid)
+            await_session_down(pid, session_ref)
+          end
+        else
+          {:cancelled, status} -> terminal_result(id, nil, status)
+          {:error, reason} -> build_error_result(id, nil, reason)
         end
+      rescue
+        error in [ArgumentError, LemonCore.Config.ValidationError] ->
+          build_error_result(id, nil, Exception.message(error))
+      catch
+        :exit, reason -> build_crashed_result(id, nil, reason)
+      end
+
+    send(coordinator, {:subagent_result, id, result})
+    Process.demonitor(owner_ref, [:flush])
+  end
+
+  defp run_session(pid, session_ref, session_id, owner_ref, id, prompt) do
+    with :ok <- check_cancelled(owner_ref) do
+      unsubscribe = Session.subscribe(pid)
+
+      try do
+        with :ok <- check_cancelled(owner_ref),
+             :ok <- Session.prompt(pid, prompt) do
+          await_session_result(id, session_id, session_ref, owner_ref)
+        else
+          {:cancelled, status} -> terminal_result(id, session_id, status)
+          {:error, reason} -> build_error_result(id, session_id, reason)
+        end
+      after
+        unsubscribe.()
+      end
+    else
+      {:cancelled, status} -> terminal_result(id, session_id, status)
     end
-  rescue
-    error in [ArgumentError, LemonCore.Config.ValidationError] ->
-      {:error, Exception.message(error)}
+  catch
+    :exit, reason -> build_crashed_result(id, session_id, reason)
+  end
+
+  defp check_cancelled(owner_ref) do
+    receive do
+      {:cancel, status} -> {:cancelled, status}
+      {:DOWN, ^owner_ref, :process, _pid, _reason} -> {:cancelled, :aborted}
+    after
+      0 -> :ok
+    end
+  end
+
+  defp await_session_result(id, session_id, session_ref, owner_ref) do
+    receive do
+      {:session_event, ^session_id, {:agent_end, messages}} ->
+        build_completed_result(id, session_id, messages)
+
+      {:session_event, ^session_id, {:error, reason, _partial}} ->
+        build_error_result(id, session_id, reason)
+
+      {:DOWN, ^session_ref, :process, _pid, reason} ->
+        build_crashed_result(id, session_id, reason)
+
+      {:DOWN, ^owner_ref, :process, _pid, _reason} ->
+        terminal_result(id, session_id, :aborted)
+
+      {:cancel, status} ->
+        terminal_result(id, session_id, status)
+
+      _event ->
+        await_session_result(id, session_id, session_ref, owner_ref)
+    end
   end
 
   defp build_session_opts(state, validated) do
@@ -423,202 +495,103 @@ defmodule CodingAgent.Coordinator do
     )
   end
 
-  @spec collect_results(
-          [{String.t(), subagent_spec(), {:ok, subagent_state()} | {:error, term()}}],
-          pos_integer(),
-          t()
-        ) ::
-          {[subagent_result()], t()}
-  defp collect_results(started, timeout, state) do
-    # Separate successful starts from failures
-    {successes, failures} =
-      Enum.split_with(started, fn {_id, _spec, result} ->
-        match?({:ok, _}, result)
+  defp put_result(state, batch_ref, result) do
+    case Map.get(state.batches, batch_ref) do
+      nil ->
+        state
+
+      batch ->
+        batch = %{batch | results: Map.put_new(batch.results, result.id, result)}
+        %{state | batches: Map.put(state.batches, batch_ref, batch)}
+    end
+  end
+
+  defp finish_subagent(state, id, subagent) do
+    if subagent.session_monitor_ref, do: Process.demonitor(subagent.session_monitor_ref, [:flush])
+    state = %{state | active_subagents: Map.delete(state.active_subagents, id)}
+    maybe_reply_batch(state, subagent.batch)
+  end
+
+  defp maybe_reply_batch(state, batch_ref) do
+    case Map.get(state.batches, batch_ref) do
+      nil ->
+        state
+
+      batch ->
+        if Enum.all?(batch.ids, fn id ->
+             Map.has_key?(batch.results, id) && not Map.has_key?(state.active_subagents, id)
+           end) do
+          reply_batch(state, batch_ref)
+        else
+          state
+        end
+    end
+  end
+
+  defp reply_batch(state, batch_ref) do
+    case Map.pop(state.batches, batch_ref) do
+      {nil, _} ->
+        state
+
+      {batch, batches} ->
+        Process.cancel_timer(batch.timer)
+        GenServer.reply(batch.from, Enum.map(batch.ids, &Map.fetch!(batch.results, &1)))
+        %{state | batches: batches}
+    end
+  end
+
+  defp cancel_all(state) do
+    state =
+      Enum.reduce(Map.keys(state.batches), state, fn batch_ref, acc ->
+        cancel_batch(acc, batch_ref, :aborted)
       end)
 
-    # Create immediate results for failures
-    failure_results =
-      Enum.map(failures, fn {id, _spec, {:error, reason}} ->
-        %{
-          id: id,
-          status: :error,
-          result: nil,
-          error: reason,
-          session_id: nil
-        }
-      end)
-
-    # Wait for successful ones
-    success_ids = Enum.map(successes, fn {id, _spec, _} -> id end)
-    deadline = System.monotonic_time(:millisecond) + timeout
-
-    {success_results, final_state} = await_subagents(success_ids, deadline, %{}, state)
-
-    {failure_results ++ Map.values(success_results), final_state}
-  end
-
-  @spec await_subagents([String.t()], integer(), %{String.t() => subagent_result()}, t()) ::
-          {%{String.t() => subagent_result()}, t()}
-  defp await_subagents([], _deadline, results, state) do
-    await_cleanup_completion(results, state)
-  end
-
-  defp await_subagents(pending_ids, deadline, results, state) do
-    remaining = deadline - System.monotonic_time(:millisecond)
-
-    if remaining <= 0 do
-      handle_await_timeout(pending_ids, results, state)
-    else
-      receive do
-        msg ->
-          case handle_await_message(msg, pending_ids, results, state) do
-            {:continue, new_pending, new_results, new_state} ->
-              await_subagents(new_pending, deadline, new_results, new_state)
-
-            {:done, final_results, final_state} ->
-              {final_results, final_state}
-
-            :exit ->
-              exit(:terminate)
-          end
-      after
-        min(remaining, 1000) ->
-          await_subagents(pending_ids, deadline, results, state)
-      end
-    end
-  end
-
-  # Handle timeout case
-  defp handle_await_timeout(pending_ids, results, state) do
-    timeout_results = build_timeout_results(pending_ids, results, state)
-    new_state = Enum.reduce(pending_ids, state, &cleanup_subagent/2)
-    await_cleanup_completion(timeout_results, new_state)
-  end
-
-  defp build_timeout_results(pending_ids, results, state) do
-    Enum.reduce(pending_ids, results, fn id, acc ->
-      subagent = Map.get(state.active_subagents, id)
-      session_id = if subagent, do: subagent.session_id, else: nil
-
-      Map.put(acc, id, %{
-        id: id,
-        status: :timeout,
-        result: nil,
-        error: :timeout,
-        session_id: session_id
-      })
+    # Already-terminal batches may still have admissions or cleanup in flight.
+    Enum.each(state.active_subagents, fn {_id, subagent} ->
+      if subagent.worker_pid, do: send(subagent.worker_pid, {:cancel, :aborted})
     end)
+
+    state
   end
 
-  # Handle different message types during await
-  defp handle_await_message({:"$gen_call", from, :list_active}, pending_ids, results, state) do
-    GenServer.reply(from, Map.keys(state.active_subagents))
-    {:continue, pending_ids, results, state}
-  end
+  defp cancel_batch(state, batch_ref, status) do
+    case Map.get(state.batches, batch_ref) do
+      nil ->
+        state
 
-  defp handle_await_message({:"$gen_call", from, :abort_all}, pending_ids, results, state) do
-    GenServer.reply(from, :ok)
-    aborted_results = build_aborted_results(pending_ids, results, state)
-    new_state = abort_all_subagents(state)
-    {:done, aborted_results, new_state}
-  end
+      %{stopping: true} ->
+        state
 
-  defp handle_await_message(:abort_all, pending_ids, results, state) do
-    aborted_results = build_aborted_results(pending_ids, results, state)
-    new_state = abort_all_subagents(state)
-    {:done, aborted_results, new_state}
-  end
+      batch ->
+        Process.cancel_timer(batch.timer)
 
-  defp handle_await_message(
-         {:system, from, {:terminate, _reason}},
-         _pending_ids,
-         _results,
-         _state
-       ) do
-    GenServer.reply(from, :ok)
-    :exit
-  end
+        state =
+          Enum.reduce(batch.ids, state, fn id, acc ->
+            case Map.get(acc.active_subagents, id) do
+              nil ->
+                acc
 
-  defp handle_await_message(
-         {:session_event, session_id, {:agent_end, messages}},
-         pending_ids,
-         results,
-         state
-       ) do
-    case find_subagent_by_session(state, session_id) do
-      {id, _subagent_state} ->
-        if id in pending_ids do
-          result = build_completed_result(id, session_id, messages)
-          new_state = cleanup_subagent(id, state)
-          {:continue, List.delete(pending_ids, id), Map.put(results, id, result), new_state}
-        else
-          {:continue, pending_ids, results, state}
-        end
+              subagent ->
+                if subagent.worker_pid, do: send(subagent.worker_pid, {:cancel, status})
+                if subagent.pid && subagent.status != :stopping do
+                  start_background_task(fn -> cleanup_session(subagent.pid) end)
+                end
+                result = terminal_result(id, subagent.session_id, status)
+                subagent = %{subagent | status: :stopping}
+                acc = put_result(acc, batch_ref, result)
+                %{acc | active_subagents: Map.put(acc.active_subagents, id, subagent)}
+            end
+          end)
 
-      _ ->
-        {:continue, pending_ids, results, state}
+        timer = Process.send_after(self(), {:cleanup_timeout, batch_ref}, @cleanup_wait_timeout)
+        batch = %{Map.fetch!(state.batches, batch_ref) | timer: timer, stopping: true}
+        state = %{state | batches: Map.put(state.batches, batch_ref, batch)}
+        maybe_reply_batch(state, batch_ref)
     end
   end
 
-  defp handle_await_message(
-         {:session_event, session_id, {:error, reason, _partial}},
-         pending_ids,
-         results,
-         state
-       ) do
-    case find_subagent_by_session(state, session_id) do
-      {id, _subagent_state} ->
-        if id in pending_ids do
-          result = build_error_result(id, session_id, reason)
-          new_state = cleanup_subagent(id, state)
-          {:continue, List.delete(pending_ids, id), Map.put(results, id, result), new_state}
-        else
-          {:continue, pending_ids, results, state}
-        end
-
-      _ ->
-        {:continue, pending_ids, results, state}
-    end
-  end
-
-  defp handle_await_message({:DOWN, ref, :process, _pid, reason}, pending_ids, results, state) do
-    case find_subagent_by_monitor(state, ref) do
-      {id, %{status: :stopping}} ->
-        new_state = remove_subagent(id, state)
-        {:continue, List.delete(pending_ids, id), results, new_state}
-
-      {id, subagent_state} ->
-        if id in pending_ids do
-          result = build_crashed_result(id, subagent_state.session_id, reason)
-          new_state = remove_subagent(id, state)
-          {:continue, List.delete(pending_ids, id), Map.put(results, id, result), new_state}
-        else
-          {:continue, pending_ids, results, state}
-        end
-
-      _ ->
-        {:continue, pending_ids, results, state}
-    end
-  end
-
-  defp handle_await_message(_other, pending_ids, results, state) do
-    {:continue, pending_ids, results, state}
-  end
-
-  # Result builders
-  defp build_aborted_results(pending_ids, results, state) do
-    Enum.reduce(pending_ids, results, fn id, acc ->
-      subagent = Map.get(state.active_subagents, id)
-      session_id = if subagent, do: subagent.session_id, else: nil
-
-      Map.put(acc, id, %{
-        id: id,
-        status: :aborted,
-        result: nil,
-        error: :aborted,
-        session_id: session_id
-      })
-    end)
+  defp terminal_result(id, session_id, status) do
+    %{id: id, status: status, result: nil, error: status, session_id: session_id}
   end
 
   defp build_completed_result(id, session_id, messages) do
@@ -632,119 +605,13 @@ defmodule CodingAgent.Coordinator do
   end
 
   defp build_error_result(id, session_id, reason) do
-    %{
-      id: id,
-      status: :error,
-      result: nil,
-      error: reason,
-      session_id: session_id
-    }
+    %{id: id, status: :error, result: nil, error: reason, session_id: session_id}
   end
 
   defp build_crashed_result(id, session_id, reason) do
-    %{
-      id: id,
-      status: :error,
-      result: nil,
-      error: {:crashed, reason},
-      session_id: session_id
-    }
+    build_error_result(id, session_id, {:crashed, reason})
   end
 
-  @spec await_cleanup_completion(%{String.t() => subagent_result()}, t()) ::
-          {%{String.t() => subagent_result()}, t()}
-  defp await_cleanup_completion(results, state) do
-    deadline = System.monotonic_time(:millisecond) + @cleanup_wait_timeout
-    do_await_cleanup_completion(results, state, deadline)
-  end
-
-  @spec do_await_cleanup_completion(%{String.t() => subagent_result()}, t(), integer()) ::
-          {%{String.t() => subagent_result()}, t()}
-  defp do_await_cleanup_completion(results, state, deadline) do
-    cond do
-      not cleanup_pending?(state) ->
-        {results, state}
-
-      deadline_exceeded?(deadline) ->
-        {results, state}
-
-      true ->
-        receive do
-          msg ->
-            case handle_cleanup_message(msg, state) do
-              {:continue, new_state} ->
-                do_await_cleanup_completion(results, new_state, deadline)
-
-              :exit ->
-                exit(:terminate)
-            end
-        after
-          cleanup_poll_interval(deadline) ->
-            do_await_cleanup_completion(results, state, deadline)
-        end
-    end
-  end
-
-  defp deadline_exceeded?(deadline) do
-    deadline - System.monotonic_time(:millisecond) <= 0
-  end
-
-  defp cleanup_poll_interval(deadline) do
-    remaining = deadline - System.monotonic_time(:millisecond)
-    min(max(remaining, 0), 1000)
-  end
-
-  defp handle_cleanup_message({:"$gen_call", from, :list_active}, state) do
-    GenServer.reply(from, Map.keys(state.active_subagents))
-    {:continue, state}
-  end
-
-  defp handle_cleanup_message({:"$gen_call", from, :abort_all}, state) do
-    GenServer.reply(from, :ok)
-    {:continue, abort_all_subagents(state)}
-  end
-
-  defp handle_cleanup_message(:abort_all, state) do
-    {:continue, abort_all_subagents(state)}
-  end
-
-  defp handle_cleanup_message({:system, from, {:terminate, _reason}}, _state) do
-    GenServer.reply(from, :ok)
-    :exit
-  end
-
-  defp handle_cleanup_message({:DOWN, ref, :process, _pid, reason}, state) do
-    new_state =
-      case find_subagent_by_monitor(state, ref) do
-        {id, %{status: :stopping}} ->
-          remove_subagent(id, state)
-
-        {id, subagent_state} ->
-          Logger.warning(
-            "Subagent #{id} (#{subagent_state.session_id}) crashed: #{inspect(reason)}"
-          )
-
-          remove_subagent(id, state)
-
-        nil ->
-          state
-      end
-
-    {:continue, new_state}
-  end
-
-  defp handle_cleanup_message(_other, state) do
-    {:continue, state}
-  end
-
-  @spec cleanup_pending?(t()) :: boolean()
-  defp cleanup_pending?(state) do
-    Enum.any?(state.active_subagents, fn {_id, subagent_state} ->
-      subagent_state.status == :stopping
-    end)
-  end
-
-  @spec extract_final_text([map()]) :: String.t()
   defp extract_final_text(messages) do
     messages
     |> Enum.filter(&match?(%LemonAi.Types.AssistantMessage{}, &1))
@@ -755,119 +622,37 @@ defmodule CodingAgent.Coordinator do
     end
   end
 
-  @spec find_subagent_by_session(t(), String.t()) :: {String.t(), subagent_state()} | nil
-  defp find_subagent_by_session(state, session_id) do
-    Enum.find(state.active_subagents, fn {_id, sa} ->
-      sa.session_id == session_id
-    end)
+  defp cleanup_session(pid) do
+    Session.abort(pid)
+
+    # These sessions are temporary supervisor children. Stopping the process
+    # directly avoids waiting behind another session's supervisor admission.
+    GenServer.stop(pid, :shutdown, @cleanup_wait_timeout)
+  catch
+    :exit, _ ->
+      # Match the supervisor's bounded shutdown even if a session is stuck in
+      # its synchronous startup/termination callback.
+      Process.exit(pid, :kill)
   end
 
-  @spec find_subagent_by_monitor(t(), reference()) :: {String.t(), subagent_state()} | nil
-  defp find_subagent_by_monitor(state, ref) do
-    Enum.find(state.active_subagents, fn {_id, sa} ->
-      sa.monitor_ref == ref
-    end)
-  end
-
-  @spec cleanup_subagent(String.t(), t()) :: t()
-  defp cleanup_subagent(id, state) do
-    case Map.get(state.active_subagents, id) do
-      nil ->
-        state
-
-      %{status: :stopping} ->
-        state
-
-      subagent_state ->
-        if subagent_state.pid && Process.alive?(subagent_state.pid) do
-          pid = subagent_state.pid
-
-          # Stop asynchronously, but keep bookkeeping until the :DOWN confirms
-          # the process is actually gone.
-          _ =
-            start_background_task(fn ->
-              try do
-                Session.abort(pid)
-              rescue
-                _ -> :ok
-              end
-
-              try do
-                stop_session(pid)
-              rescue
-                _ -> :ok
-              end
-            end)
-
-          new_subagents =
-            Map.put(state.active_subagents, id, %{subagent_state | status: :stopping})
-
-          %{state | active_subagents: new_subagents}
-        else
-          if subagent_state.monitor_ref do
-            Process.demonitor(subagent_state.monitor_ref, [:flush])
-          end
-
-          remove_subagent(id, state)
-        end
-    end
-  end
-
-  @spec remove_subagent(String.t(), t()) :: t()
-  defp remove_subagent(id, state) do
-    %{state | active_subagents: Map.delete(state.active_subagents, id)}
-  end
-
-  @spec abort_all_subagents(t()) :: t()
-  defp abort_all_subagents(state) do
-    Enum.reduce(Map.keys(state.active_subagents), state, fn id, st ->
-      cleanup_subagent(id, st)
-    end)
-  end
-
-  @spec stop_session(pid()) :: :ok
-  defp stop_session(session) when is_pid(session) do
-    try do
-      if Process.whereis(CodingAgent.SessionSupervisor) do
-        _ = CodingAgent.SessionSupervisor.stop_session(session)
-      else
-        GenServer.stop(session, :normal, 5_000)
+  defp await_session_down(pid, ref) do
+    # await_session_result may already have consumed this monitor's DOWN.
+    if Process.alive?(pid) do
+      receive do
+        {:DOWN, ^ref, :process, ^pid, _reason} -> :ok
       end
-    rescue
-      _ -> :ok
+    else
+      Process.demonitor(ref, [:flush])
     end
-
-    :ok
   end
 
-  @spec handle_session_event(String.t(), term(), t()) :: {:noreply, t()}
-  defp handle_session_event(_id, _event, state) do
-    # Events are handled in await_subagents, this is just for completeness
-    {:noreply, state}
-  end
-
-  @spec generate_subagent_id() :: String.t()
   defp generate_subagent_id do
     :crypto.strong_rand_bytes(8) |> Base.encode16(case: :lower)
   end
 
-  defp start_background_task(fun) when is_function(fun, 0) do
-    case Task.Supervisor.start_child(@task_supervisor, fun) do
-      {:ok, pid} ->
-        {:ok, pid}
-
-      {:error, {:noproc, _}} ->
-        Task.start(fun)
-
-      {:error, :noproc} ->
-        Task.start(fun)
-
-      {:error, reason} ->
-        Logger.warning(
-          "Failed to start supervised coordinator task: #{inspect(reason)}; falling back to Task.start/1"
-        )
-
-        Task.start(fun)
-    end
+  defp start_background_task(fun) do
+    Task.Supervisor.start_child(@task_supervisor, fun)
+  catch
+    :exit, {:noproc, _} -> Task.start(fun)
   end
 end

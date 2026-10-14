@@ -355,6 +355,7 @@ defmodule LemonAgent.LoopAbortTest do
 
     test "external stream cancel propagates abort signal to in-flight tool work" do
       parent = self()
+      tool_supervisor = start_supervised!({Task.Supervisor, []})
 
       signaling_tool = %AgentTool{
         name: "signaling_tool",
@@ -362,17 +363,16 @@ defmodule LemonAgent.LoopAbortTest do
         parameters: %{"type" => "object", "properties" => %{}},
         label: "Signal",
         execute: fn _id, _params, signal, _on_update ->
-          send(parent, {:tool_signal, signal})
+          send(parent, {:tool_ready, self()})
 
-          Enum.reduce_while(1..200, nil, fn _, _acc ->
-            if AbortSignal.aborted?(signal) do
-              send(parent, :tool_observed_abort)
-              {:halt, :aborted}
-            else
-              Process.sleep(10)
-              {:cont, nil}
-            end
-          end)
+          receive do
+            :report_signal -> send(parent, {:tool_signal, signal})
+          end
+
+          receive do
+            :check_abort ->
+              if AbortSignal.aborted?(signal), do: send(parent, :tool_observed_abort)
+          end
 
           %AgentToolResult{
             content: [%TextContent{type: :text, text: "done"}],
@@ -384,25 +384,68 @@ defmodule LemonAgent.LoopAbortTest do
       context = simple_context(tools: [signaling_tool])
       tool_call = Mocks.tool_call("signaling_tool", %{}, id: "call_signal")
       tool_response = Mocks.assistant_message_with_tool_calls([tool_call])
-      final_response = Mocks.assistant_message("Done")
-      config = simple_config(stream_fn: Mocks.mock_stream_fn([tool_response, final_response]))
+      config =
+        simple_config(
+          stream_fn: fn _model, llm_context, _options ->
+            if Enum.any?(llm_context.messages, &(Map.get(&1, :role) == :tool_result)) do
+              send(parent, :unexpected_model_call_after_cancel)
+              {:error, :unexpected_model_call_after_cancel}
+            else
+              {:ok, response_stream} = LemonAi.EventStream.start_link(timeout: :infinity)
+              :ok = LemonAi.EventStream.push(response_stream, {:start, tool_response})
+
+              :ok =
+                LemonAi.EventStream.push(
+                  response_stream,
+                  {:done, tool_response.stop_reason, tool_response}
+                )
+
+              :ok = LemonAi.EventStream.complete(response_stream, tool_response)
+              {:ok, response_stream}
+            end
+          end
+        )
+
+      config = %{config | tool_task_supervisor: tool_supervisor}
       signal = AbortSignal.new()
+      on_exit(fn -> AbortSignal.clear(signal) end)
 
       stream = Loop.agent_loop([user_message("Run")], context, config, signal, nil)
+      on_exit(fn -> EventStream.cancel(stream, :test_cleanup) end)
       events_task = Task.async(fn -> EventStream.events(stream) |> Enum.to_list() end)
 
-      assert_receive {:tool_signal, ^signal}, 1000
-      EventStream.cancel(stream, :user_abort)
+      # Startup is not the cancellation deadline. Keep the tool blocked until
+      # both the test and the loop have reached the in-flight tool phase.
+      assert_receive {:tool_ready, tool_pid}, 5000
+      tool_ref = Process.monitor(tool_pid)
 
-      # Generous window: this asserts an async abort signal reaches in-flight tool
-      # work, which can lag under full-suite scheduler load (flaked at 1000ms).
-      assert_receive :tool_observed_abort, 5000
+      try do
+        send(tool_pid, :report_signal)
+        assert_receive {:tool_signal, ^signal}, 1000
+        EventStream.cancel(stream, :user_abort)
+        # A result call from the same sender is a barrier for the cancel cast.
+        result = EventStream.result(stream, 5000)
+        assert result in [{:error, {:canceled, :user_abort}}, {:error, :stream_not_found}]
+        assert AbortSignal.aborted?(signal)
 
-      result = EventStream.result(stream)
-      assert result in [{:error, {:canceled, :user_abort}}, {:error, :stream_not_found}]
+        # Check from inside the still-running tool, without polling or a timer
+        # that could let it finish before the cancellation arrives.
+        send(tool_pid, :check_abort)
+        assert_receive :tool_observed_abort, 5000
+        assert_receive {:DOWN, ^tool_ref, :process, ^tool_pid, :normal}, 5000
 
-      events = Task.await(events_task, 5000)
-      refute Enum.any?(events, &match?({:agent_end, _}, &1))
+        events = Task.await(events_task, 5000)
+        refute Enum.any?(events, &match?({:agent_end, _}, &1))
+        refute_received :unexpected_model_call_after_cancel
+      after
+        if Process.alive?(tool_pid) do
+          Task.Supervisor.terminate_child(tool_supervisor, tool_pid)
+        end
+
+        Process.demonitor(tool_ref, [:flush])
+        Task.shutdown(events_task, :brutal_kill)
+        AbortSignal.clear(signal)
+      end
     end
 
     test "tool_execution_end event contains aborted result for terminated tools" do

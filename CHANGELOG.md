@@ -51,6 +51,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - Named-node profile chat no longer inherits the controller's default working
   directory. Profile persona instructions and MCP connections accompany the
   execution request, while provider credentials remain destination-local.
+- Subagent coordinators remain responsive to active-session queries and cancellation
+  while child sessions are starting, rather than blocking those requests behind
+  synchronous session initialization.
 
 ---
 
