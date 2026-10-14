@@ -49,4 +49,11 @@ describe('persisted realtime authorization and transaction boundary',()=>{
       expect(services.events.replay(alice,first.seq).map(event=>event.seq)).toEqual([second.seq]);store.close();
     }
   });
+  test('desktop-only events exclude phones and recheck current device ownership on replay',()=>{
+    const {store,services,notification}=fixture();store.put('devices',{id:'desktop',userId:'alice',platform:'macos'});store.put('devices',{id:'browser',userId:'alice',platform:'web'});store.put('devices',{id:'phone',userId:'alice',platform:'ios'});
+    const event=services.events.emit('notification.upserted',notification('alice'),{userIds:['alice'],desktopOnly:true});
+    expect(services.events.replay({...alice,deviceId:'desktop'},'0').map(value=>value.seq)).toEqual([event.seq]);expect(services.events.replay({...alice,deviceId:'browser'},'0').map(value=>value.seq)).toEqual([event.seq]);
+    expect(services.events.replay({...alice,deviceId:'phone'},'0')).toEqual([]);expect(services.events.replay(alice,'0')).toEqual([]);expect(services.events.replay({...bob,deviceId:'desktop'},'0')).toEqual([]);
+    store.put('devices',{id:'desktop',userId:'bob',platform:'macos'});expect(services.events.replay({...alice,deviceId:'desktop'},'0')).toEqual([]);store.remove('devices','browser');expect(services.events.replay({...alice,deviceId:'browser'},'0')).toEqual([]);store.close();
+  });
 });

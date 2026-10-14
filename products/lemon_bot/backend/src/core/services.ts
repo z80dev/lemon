@@ -20,7 +20,7 @@ export interface EntityStore {
   metadata<T>(key: string): T | null;
   setMetadata(key: string, value: unknown): void;
 }
-export interface EventAudience { userIds?: string[]; conversationId?: string; botId?: string; machineId?: string; admin?: boolean; public?: boolean }
+export interface EventAudience { userIds?: string[]; conversationId?: string; botId?: string; machineId?: string; admin?: boolean; public?: boolean; desktopOnly?: boolean }
 export interface EventService {
   emit<K extends keyof P.ResourceEventPayloads>(event: K, payload: P.ResourceEventPayloads[K], audience?: EventAudience): P.RealtimeEvent;
   cursor(): string;
@@ -76,7 +76,7 @@ export interface AttachmentService {
   download(principal: Principal, attachmentId: string): P.Download;
 }
 export interface GateService {
-  create<T = unknown>(principal: Principal, kind: 'approval' | 'question' | 'human_step' | 'secret_request' | 'consent', input: unknown): Promise<T>;
+  create<T = unknown>(principal: Principal, kind: 'approval' | 'question' | 'human_step' | 'secret_request', input: unknown): Promise<T>;
   resolve<T = unknown>(principal: Principal, collection: string, id: string, body: unknown): Promise<T>;
   wait<T = unknown>(collection: string, id: string): Promise<T>;
   cancelUser(userId: string): void;
@@ -100,7 +100,6 @@ export interface IntegrationServices {
   authorizeExportAttachment?(principal: Principal, attachmentId: string): void;
   assertChannelHandoff?(principal: Principal, source: P.Conversation, target: P.Bot, returnConversationId: string): void;
   returnChannelHandoff?(principal: Principal, conversationId: string, text: string, sourceRunId?: string): Promise<void>;
-  requestConnectorConsent?(principal: Principal, input: { connectorId: string; botId: string; conversationId: string; operationId: string }): Promise<P.ConnectorConsent>;
   deleteBotConnectors?(principal: Principal, botId: string, confirmedBotRevision: number, connectorIds?: string[]): Promise<void>;
   previewDeprovisionUser?(userId: string): { affected: P.ScopeEffect[]; binding: P.JSONObject };
   endProviderSessions?(userId: string): Promise<void>;

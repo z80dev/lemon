@@ -3,7 +3,7 @@ import type { BackendServices, EventAudience, EventService, Principal } from './
 import type { RealtimeEvent, ResourceEventPayloads } from '../../../contracts/protocol';
 import { fail } from './errors';
 import { Store } from './store';
-const audienceSchema=z.object({userIds:z.array(z.string()).optional(),conversationId:z.string().optional(),botId:z.string().optional(),machineId:z.string().optional(),admin:z.boolean().optional(),public:z.boolean().optional()}).strict();
+const audienceSchema=z.object({userIds:z.array(z.string()).optional(),conversationId:z.string().optional(),botId:z.string().optional(),machineId:z.string().optional(),admin:z.boolean().optional(),public:z.boolean().optional(),desktopOnly:z.boolean().optional()}).strict();
 const collections:Record<string,string>={user:'users',workspace:'workspaces',member:'members',invite:'invites',device:'devices',machine:'machines',machine_invite:'machineInvites',bot:'bots',section:'sections',template:'templates',conversation:'conversations',composer:'composerDrafts',entry:'entries',run:'runs',attachment:'attachments',approval:'approvals',question:'questions',human_step:'humanSteps',secret_request:'secretRequests',draft:'drafts',skill:'skills',routine:'routines',routine_run:'routineRuns',memory:'memories',notification:'notifications',connector:'connectors',connector_auth:'connectorAuths',consent:'consents',channel:'channelBindings',voice:'voiceSessions',grant:'botGrants',activity:'activity',reminder:'reminders',preference_change:'preferenceChanges',milestone:'milestones',directory_group:'directoryGroups',group_policy:'groupPolicies',network_policy:'networkPolicies',policy_application:'policyApplications',egress:'egressRoutes',setup_manifest:'setupManifests',setup_run:'setupRuns',host_operation:'hostOperations',spend_limit:'spendLimits',export:'exports',channel_setup:'channelSetups',email_account:'emailAccounts',x_connection:'xConnections'};
 export function createEventService(services:BackendServices):EventService {
   const listeners=new Set<(event:RealtimeEvent,audience:EventAudience)=>void>();
@@ -14,6 +14,10 @@ export function createEventService(services:BackendServices):EventService {
     const member=services.store.list<{userId:string;enabled:boolean;role?:string}>('members',item=>item.userId===principal.userId)[0];
     if(!member?.enabled) return false;
     if(audience.userIds && !audience.userIds.includes(principal.userId)) return false;
+    if(audience.desktopOnly){
+      const device=principal.deviceId?services.store.get<{userId:string;platform:string}>('devices',principal.deviceId):null;
+      if(!device||device.userId!==principal.userId||!['web','macos'].includes(device.platform))return false;
+    }
     if(audience.admin && member.role!=='owner'&&member.role!=='admin') return false;
     const [kind,action]=event.event.split('.');
     if(action==='deleted') return !!(audience.userIds?.includes(principal.userId)||audience.admin||audience.public);
