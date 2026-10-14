@@ -15,6 +15,7 @@
  */
 
 import type { CommandHost, CommandRegistry } from "../../commands/index.ts";
+import type { SubmissionDisposition } from "../../composer/drafts.ts";
 import type { ControlPlaneClient } from "../../protocol/client.ts";
 import type { ControlPlaneMethods } from "../../protocol/methods.ts";
 import {
@@ -32,6 +33,8 @@ export interface DeliverOptions {
 	mode?: SubmissionMode;
 	/** True when the text came out of `{!cmd}` interpolation. */
 	interpolated?: boolean;
+	/** Command recovery sends must remain drafts rather than park an offline RPC. */
+	queueIfOffline?: boolean;
 }
 
 /**
@@ -39,7 +42,7 @@ export interface DeliverOptions {
  * it with the queue.
  */
 export interface PromptSink {
-	deliver(text: string, options: DeliverOptions): Promise<void>;
+	deliver(text: string, options: DeliverOptions): Promise<SubmissionDisposition>;
 }
 
 export interface TerminalSuspender {
@@ -69,26 +72,27 @@ export class CommandController {
 	}
 
 	/** The editor's `onSubmit`. Never throws: failures become notices. */
-	async handleSubmit(text: string): Promise<void> {
+	async handleSubmit(text: string): Promise<SubmissionDisposition> {
 		const trimmed = text.trim();
-		if (trimmed.length === 0) return;
+		if (trimmed.length === 0) return "rejected";
 		try {
-			if (await this.#options.registry.dispatch(trimmed, this.#context())) return;
+			if (await this.#options.registry.dispatch(trimmed, this.#context())) return "accepted";
 			if (isShellLine(trimmed)) {
 				await this.runShellLine(shellLineCommand(trimmed));
-				return;
+				return "accepted";
 			}
 			const prompt = await this.#interpolate(text);
 			if (prompt.trim().length === 0) {
 				this.#options.host.notice("nothing left to send after interpolation", "warning");
-				return;
+				return "rejected";
 			}
-			await this.#options.sink.deliver(prompt, { interpolated: prompt !== text });
+			return await this.#options.sink.deliver(prompt, { interpolated: prompt !== text });
 		} catch (error) {
 			this.#options.host.notice(
 				`submit failed: ${error instanceof Error ? error.message : String(error)}`,
 				"error",
 			);
+			return "rejected";
 		}
 	}
 

@@ -102,7 +102,8 @@ defmodule CodingAgent.Executor do
     resume_source = get_resume_source(request)
 
     session_opts = [
-      resume_source: resume_source
+      resume_source: resume_source,
+      session_key: request.session_key
     ]
 
     with :ok <- Presentation.validate_resume_for_start(resume, session_opts, cwd),

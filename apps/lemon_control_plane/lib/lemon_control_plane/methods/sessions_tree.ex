@@ -5,7 +5,7 @@ defmodule LemonControlPlane.Methods.SessionsTree do
   alias LemonCore.AgentRuntime
   alias LemonControlPlane.Methods.NativeSessions
 
-  @entry_fields ~w(id parentId type role text timestamp isActive isLeaf rewindable)
+  @entry_fields ~w(id parentId type role text timestamp isActive isLeaf rewindable label)
 
   @impl true
   def name, do: "sessions.tree"

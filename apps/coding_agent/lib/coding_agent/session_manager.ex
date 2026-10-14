@@ -561,6 +561,34 @@ defmodule CodingAgent.SessionManager do
     append_entry(session, entry)
   end
 
+  @doc """
+  Append a label entry bookmarking `target_id`. A nil or empty label clears it.
+  The entry follows the current leaf like any other entry; labels never change
+  the model-visible context.
+  """
+  @spec append_label(Session.t(), String.t(), String.t() | nil) :: Session.t()
+  def append_label(%Session{} = session, target_id, label) do
+    label = if label in [nil, ""], do: nil, else: label
+    append_entry(session, SessionEntry.label(target_id, label))
+  end
+
+  @doc """
+  Current label of every labelled entry, resolved across the whole tree: the
+  latest label entry for an id wins and a cleared label removes it.
+  """
+  @spec labels(Session.t()) :: %{String.t() => String.t()}
+  def labels(%Session{} = session) do
+    session
+    |> entries()
+    |> Enum.reduce(%{}, fn
+      %{type: :label, target_id: id, label: label}, acc when is_binary(id) ->
+        if label in [nil, ""], do: Map.delete(acc, id), else: Map.put(acc, id, label)
+
+      _entry, acc ->
+        acc
+    end)
+  end
+
   # ============================================================================
   # Tree Operations
   # ============================================================================

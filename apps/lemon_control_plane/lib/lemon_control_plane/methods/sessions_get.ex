@@ -2,7 +2,7 @@ defmodule LemonControlPlane.Methods.SessionsGet do
   @moduledoc "Read one real durable lifecycle row; unlike session.detail, never fabricate a new session."
   @behaviour LemonControlPlane.Method
 
-  alias LemonControlPlane.Methods.NativeSessions
+  alias LemonControlPlane.Methods.{NativeSessions, SessionsList}
   alias LemonCore.SessionLifecycle
 
   @impl true
@@ -16,7 +16,7 @@ defmodule LemonControlPlane.Methods.SessionsGet do
     with {:ok, key} <- NativeSessions.string(params || %{}, "sessionKey", 1024) do
       case SessionLifecycle.get(key) do
         nil -> {:error, {:not_found, "Session not found", nil}}
-        session -> {:ok, %{"session" => session}}
+        session -> {:ok, %{"session" => SessionsList.format_session(session)}}
       end
     end
   rescue

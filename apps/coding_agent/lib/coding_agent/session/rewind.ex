@@ -22,6 +22,7 @@ defmodule CodingAgent.Session.Rewind do
     entries = SessionManager.entries(session)
     active = MapSet.new(SessionManager.get_branch(session), & &1.id)
     parents = MapSet.new(entries, & &1.parent_id)
+    labels = SessionManager.labels(session)
     offset = Keyword.get(opts, :offset, 0)
     limit = Keyword.get(opts, :limit, 100)
 
@@ -47,7 +48,8 @@ defmodule CodingAgent.Session.Rewind do
           "timestamp" => entry.timestamp,
           "isActive" => on_branch,
           "isLeaf" => not MapSet.member?(parents, entry.id),
-          "rewindable" => on_branch and role in [:user, "user"]
+          "rewindable" => on_branch and role in [:user, "user"],
+          "label" => labels |> Map.get(entry.id) |> project_label()
         }
       end)
 
@@ -59,6 +61,49 @@ defmodule CodingAgent.Session.Rewind do
       "totalEntries" => length(entries),
       "offset" => offset,
       "hasMore" => offset + length(nodes) < length(entries)
+    }
+  end
+
+  @doc """
+  Resolve where an active-branch switch to `entry_id` lands. A user message
+  lands before itself and returns its text so a client can offer it for
+  editing (the same convention as rewind); any other entry becomes the leaf.
+  `leaf: nil` means the empty root.
+  """
+  @spec navigation_target(SessionManager.Session.t(), String.t()) ::
+          {:ok, %{leaf: String.t() | nil, prompt: String.t() | nil}} | {:error, :entry_not_found}
+  def navigation_target(session, entry_id) do
+    case SessionManager.get_entry(session, entry_id) do
+      nil ->
+        {:error, :entry_not_found}
+
+      %{type: :message, message: message} = entry ->
+        if field(message, :role) in [:user, "user"],
+          do: {:ok, %{leaf: entry.parent_id, prompt: message_text(message)}},
+          else: {:ok, %{leaf: entry.id, prompt: nil}}
+
+      entry ->
+        {:ok, %{leaf: entry.id, prompt: nil}}
+    end
+  end
+
+  @doc false
+  def navigation_receipt(session, entry_id, target, summarizing) do
+    %{
+      "sessionId" => session.header.id,
+      "entryId" => entry_id,
+      "leafId" => session.leaf_id,
+      "prompt" => target.prompt,
+      "summarizing" => summarizing
+    }
+  end
+
+  @doc false
+  def label_receipt(session, entry_id) do
+    %{
+      "sessionId" => session.header.id,
+      "entryId" => entry_id,
+      "label" => session |> SessionManager.labels() |> Map.get(entry_id) |> project_label()
     }
   end
 
@@ -466,6 +511,11 @@ defmodule CodingAgent.Session.Rewind do
   end
 
   defp preview(_), do: ""
+
+  @doc "A stored label as projected to clients: strictly redacted, like tree text."
+  @spec project_label(String.t() | nil) :: String.t() | nil
+  def project_label(nil), do: nil
+  def project_label(label), do: LemonCore.Redact.text(label, strict: true)
 
   defp message_text(message) do
     case field(message, :content) do

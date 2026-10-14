@@ -536,6 +536,68 @@ defmodule CodingAgent.ExecutorTest do
     end
 
     @tag :tmp_dir
+    test "auto resume in another directory refuses to replace a mapped native history", %{
+      tmp_dir: tmp_dir
+    } do
+      source = Path.join(tmp_dir, "source")
+      destination = Path.join(tmp_dir, "destination")
+      File.mkdir_p!(source)
+      File.mkdir_p!(destination)
+
+      manager =
+        source
+        |> CodingAgent.SessionManager.new()
+        |> CodingAgent.SessionManager.append_message(%{"role" => "user", "content" => "keep"})
+
+      path = CodingAgent.Session.Presentation.session_file_path(manager.header.id, source)
+      :ok = CodingAgent.SessionManager.save_to_file(path, manager)
+      original = File.read!(path)
+
+      req =
+        request(destination,
+          prompt: "continue",
+          run_id: "cross-directory-resume",
+          resume: ResumeToken.new("lemon", manager.header.id),
+          meta: %{"resume_source" => :auto},
+          stream_fn: fn _, _, _ -> flunk("missing mapped history must not invoke a provider") end
+        )
+
+      chat_state = %LemonCore.ChatState{
+        last_engine: "lemon",
+        last_resume_token: manager.header.id,
+        updated_at: System.system_time(:millisecond)
+      }
+
+      :ok = LemonCore.ChatStateStore.put(req.session_key, chat_state)
+
+      on_exit(fn ->
+        LemonCore.ChatStateStore.delete(req.session_key)
+        File.rm_rf!(CodingAgent.SessionManager.get_session_dir(source))
+        File.rm_rf!(CodingAgent.SessionManager.get_session_dir(destination))
+      end)
+
+      id = manager.header.id
+
+      assert {:error, {:resume_session_missing, ^id}} =
+               Executor.start_run(req, %{stream_fn: req.meta[:stream_fn]}, self())
+
+      # The preflight and actual start both fail closed, including a file disappearing
+      # between validation and startup.
+      assert {:error, {:resume_session_missing, ^id}} =
+               CodingAgent.Session.Presentation.start_or_resume_session(
+                 req.resume,
+                 [resume_source: :auto, session_key: req.session_key],
+                 %{cwd: destination}
+               )
+
+      assert %{last_engine: "lemon", last_resume_token: ^id} =
+               LemonCore.ChatStateStore.get(req.session_key)
+
+      assert File.read!(path) == original
+      refute File.exists?(CodingAgent.Session.Presentation.session_file_path(id, destination))
+    end
+
+    @tag :tmp_dir
     test "returns an error to non-trapping callers when explicit resume is missing", %{
       tmp_dir: tmp_dir
     } do

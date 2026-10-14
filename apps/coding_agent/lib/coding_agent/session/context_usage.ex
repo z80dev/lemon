@@ -75,6 +75,8 @@ defmodule CodingAgent.Session.ContextUsage do
       message_count: length(messages),
       budget: budget,
       model: state.model,
+      session_manager: state.session_manager,
+      budget_usage: Map.get(state, :budget_usage),
       settings_manager: state.settings_manager
     })
   end
@@ -106,6 +108,8 @@ defmodule CodingAgent.Session.ContextUsage do
          message_count: length(messages),
          budget: budget,
          model: state.model,
+         session_manager: state.session_manager,
+         budget_usage: Map.get(state, :budget_usage),
          settings_manager: state.settings_manager
        })}
     end
@@ -322,9 +326,79 @@ defmodule CodingAgent.Session.ContextUsage do
         end),
       top: top(raw_items, scale),
       message_count: input.message_count,
+      usage: session_usage(input.session_manager, input.budget_usage),
       measured_at: System.system_time(:millisecond)
     }
   end
+
+  @doc """
+  Cumulative session spend plus token breakdown. `tokens`/`cost_usd` come from
+  the persisted `BudgetLedger` (every branch, interrupted requests included);
+  input/output/cache counts sum the provider usage of assistant messages on the
+  active branch. All values are numeric.
+  """
+  @spec session_usage(term(), map() | nil) :: map()
+  def session_usage(session_manager, ledger \\ nil) do
+    branch = branch_entries(session_manager)
+
+    totals =
+      Enum.reduce(branch, empty_usage(), fn
+        %{type: :message, message: message}, acc when is_map(message) ->
+          if field(message, :role) in [:assistant, "assistant"],
+            do: add_message_usage(acc, field(message, :usage)),
+            else: acc
+
+        _entry, acc ->
+          acc
+      end)
+
+    ledger = if is_map(ledger), do: ledger, else: ledger_usage(session_manager)
+
+    Map.merge(totals, %{
+      tokens: count(Map.get(ledger, :tokens)),
+      cost_usd: amount(Map.get(ledger, :cost_usd))
+    })
+  end
+
+  defp empty_usage,
+    do: %{
+      tokens: 0,
+      cost_usd: 0.0,
+      input: 0,
+      output: 0,
+      cache_read: 0,
+      cache_write: 0,
+      assistant_messages: 0
+    }
+
+  defp add_message_usage(acc, usage) do
+    usage = if is_map(usage), do: usage, else: %{}
+
+    %{
+      acc
+      | input: acc.input + count(field(usage, :input)),
+        output: acc.output + count(field(usage, :output)),
+        cache_read: acc.cache_read + count(field(usage, :cache_read)),
+        cache_write: acc.cache_write + count(field(usage, :cache_write)),
+        assistant_messages: acc.assistant_messages + 1
+    }
+  end
+
+  defp branch_entries(%CodingAgent.SessionManager.Session{} = session),
+    do: CodingAgent.SessionManager.get_branch(session)
+
+  defp branch_entries(_), do: []
+
+  defp ledger_usage(%CodingAgent.SessionManager.Session{} = session),
+    do: CodingAgent.Session.BudgetLedger.restore(session)
+
+  defp ledger_usage(_), do: %{}
+
+  defp field(map, key), do: Map.get(map, key, Map.get(map, Atom.to_string(key)))
+  defp count(value) when is_integer(value) and value >= 0, do: value
+  defp count(_), do: 0
+  defp amount(value) when is_number(value) and value >= 0, do: value / 1
+  defp amount(_), do: 0.0
 
   defp sum_by_category(items) do
     Enum.reduce(items, %{}, fn %{category: category, tokens: tokens}, acc ->

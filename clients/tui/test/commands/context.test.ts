@@ -24,7 +24,7 @@ test("/context fetches the focused session with the TUI cwd and opens the panel"
 	});
 	expect(h.host.contextPanels).toHaveLength(1);
 	expect(h.host.contextPanels[0]?.usedTokens).toBe(45_210);
-	expect(h.host.notices).toHaveLength(0);
+	expect(h.host.notices).toHaveLength(1);
 });
 
 test("a successful measurement feeds the status-bar gauge", async () => {

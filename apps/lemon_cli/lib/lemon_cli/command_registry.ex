@@ -429,7 +429,7 @@ defmodule LemonCli.CommandRegistry do
         option("--agent-id ID", ["--agent-id"], "Filter by agent id"),
         option("--pinned | --unpinned", ["--pinned", "--unpinned"], "Filter pin state"),
         option("--archived | --active", ["--archived", "--active"], "Filter archive state"),
-        option("--format json|markdown", ["--format"], "Redacted export format"),
+        option("--format json|jsonl|markdown|html", ["--format"], "Redacted export format"),
         option("--cwd DIR", ["--cwd"], "Project directory for context (default: current)"),
         option("--clear", ["--clear"], "Clear a session title"),
         option("--output PATH", ["--output"], "Write export content to a private file"),
@@ -671,7 +671,8 @@ defmodule LemonCli.CommandRegistry do
       "Open the terminal UI, starting the runtime if needed",
       @both_launchers,
       [
-        "`lemon` with no command in an interactive terminal does the same. Before starting a runtime for the first time, unfinished setup runs interactively (`lemon setup --if-required`)."
+        "`lemon` with no command in an interactive terminal does the same. Before starting a runtime for the first time, unfinished setup runs interactively (`lemon setup --if-required`).",
+        "`lemon -c` / `lemon --continue` reopens the most recently updated TUI session started from this directory; `lemon -r [KEY]` / `--resume [KEY]` attaches to KEY or, without one, opens the session switcher. `--session KEY` attaches to an exact session; the three are mutually exclusive."
       ]
     ),
     lifecycle(

@@ -32,6 +32,10 @@ import {
 	parseOmpStatus,
 } from "./omp.ts";
 import type {
+	SessionLabelParams,
+	SessionLabelResult,
+	SessionNavigateParams,
+	SessionNavigateResult,
 	SessionRewindPreview,
 	SessionRewindResult,
 	SessionRewindTarget,
@@ -102,6 +106,7 @@ export const METHOD = {
 	profilesRoster: "profiles.roster",
 	profileChat: "profile.chat",
 	sessionsList: "sessions.list",
+	sessionsGet: "sessions.get",
 	sessionsCreate: "sessions.create",
 	sessionsFork: "sessions.fork",
 	sessionsPreview: "sessions.preview",
@@ -118,6 +123,8 @@ export const METHOD = {
 	sessionsContext: "sessions.context",
 	sessionsTree: "sessions.tree",
 	sessionsRewind: "sessions.rewind",
+	sessionsNavigate: "sessions.navigate",
+	sessionsLabel: "sessions.label",
 	sessionDetail: "session.detail",
 	commandsCatalog: "commands.catalog",
 	agentsList: "agents.list",
@@ -287,6 +294,14 @@ export class ControlPlaneMethods {
 		return this.#call<SessionsListResult>(METHOD.sessionsList, params, options);
 	}
 
+	/** Exact durable lifecycle lookup; never a substring/history search. */
+	sessionsGet(
+		params: { sessionKey: string },
+		options?: RequestOptions,
+	): Promise<{ session: SessionSummary }> {
+		return this.#call(METHOD.sessionsGet, params, { ...options, queueIfOffline: false });
+	}
+
 	sessionsFork(params: SessionsForkParams, options?: RequestOptions): Promise<SessionsForkResult> {
 		return this.#call<SessionsForkResult>(METHOD.sessionsFork, params, {
 			...options,
@@ -352,6 +367,23 @@ export class ControlPlaneMethods {
 				queueIfOffline: false,
 			},
 		);
+	}
+
+	sessionsNavigate(
+		params: SessionNavigateParams,
+		options?: RequestOptions,
+	): Promise<SessionNavigateResult> {
+		return this.#call<SessionNavigateResult>(METHOD.sessionsNavigate, params, {
+			...options,
+			queueIfOffline: false,
+		});
+	}
+
+	sessionsLabel(params: SessionLabelParams, options?: RequestOptions): Promise<SessionLabelResult> {
+		return this.#call<SessionLabelResult>(METHOD.sessionsLabel, params, {
+			...options,
+			queueIfOffline: false,
+		});
 	}
 
 	sessionsCreate(

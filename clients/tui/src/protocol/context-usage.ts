@@ -15,6 +15,7 @@ import type {
 	ContextCategoryId,
 	ContextCategoryUsage,
 	ContextContributor,
+	ContextSessionUsage,
 	SessionsContextResult,
 } from "./types.ts";
 
@@ -131,6 +132,7 @@ export function parseSessionsContext(raw: unknown): SessionsContextResult {
 		otherTokens: Math.max(0, usedTokens - known),
 		top: top.slice(0, TOP_LIMIT),
 		messageCount: count(pickNumber(record, "messageCount")),
+		usage: sessionUsage(record.usage),
 		measuredAt: positive(pickNumber(record, "measuredAt")),
 	};
 }
@@ -144,6 +146,25 @@ function autoCompaction(raw: unknown): ContextAutoCompaction | null {
 		thresholdTokens,
 		reserveTokens: count(pickNumber(raw, "reserveTokens")),
 		headroomTokens: count(pickNumber(raw, "headroomTokens")),
+	};
+}
+
+/** Optional per-session spend block; absent from older daemons and malformed values. */
+function sessionUsage(raw: unknown): ContextSessionUsage | undefined {
+	if (!asRecord(raw)) return undefined;
+	const tokens = count(pickNumber(raw, "tokens"));
+	const input = count(pickNumber(raw, "input"));
+	const output = count(pickNumber(raw, "output"));
+	if (tokens === undefined || input === undefined || output === undefined) return undefined;
+	const costUsd = pickNumber(raw, "costUsd");
+	return {
+		tokens,
+		costUsd: costUsd !== undefined && costUsd >= 0 ? costUsd : 0,
+		input,
+		output,
+		cacheRead: count(pickNumber(raw, "cacheRead")) ?? 0,
+		cacheWrite: count(pickNumber(raw, "cacheWrite")) ?? 0,
+		assistantMessages: count(pickNumber(raw, "assistantMessages")) ?? 0,
 	};
 }
 

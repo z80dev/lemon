@@ -115,7 +115,17 @@ remains a legacy client-side alias; it does not configure the daemon.
   inspect, resume, title, pin, archive, preview, privately export, prune, and
   delete through the authenticated server-owned lifecycle. Prune and delete
   are preview-confirm workflows, and offline mutations never claim success.
-- `/tree` inspects active and preserved branches; `/rewind` picks an earlier
+- `/tree` inspects active and preserved branches and is the entry point for
+  branching: selecting an entry opens its actions — inspect it, switch the
+  active branch to it (optionally summarizing the abandoned branch), set or clear
+  a bookmark label, or fork a new session from it. A switch is non-destructive
+  (the old branch stays in `/tree`), is refused while a run is active, reloads the
+  session, and recalls a selected user prompt into the editor without sending it
+  (the prompt is shown instead when the editor already has a draft). Labels show
+  as `[label]` in `/tree`; `/tree label <entryId> <text>` and
+  `/tree unlabel <entryId>` set them directly. The abandoned-branch summary is
+  generated in the background by a loaded session only; a stopped session just
+  switches. `/rewind` picks an earlier
   active user prompt, previews the change, then requires confirmation bound to
   that exact preview. History-only rewind leaves files untouched and does not
   list files as restoration targets. `--files` requests checkpoint restoration;
@@ -327,8 +337,9 @@ and control plane authoritative:
 | `/session preview\|export …` | Read a bounded redacted preview or write a digest-verified JSON/Markdown export through a private atomic file operation. Use `/session help` for exact syntax. |
 | `/session prune --older-than <cutoff> …` | Preview the complete exact candidate set and receive its confirmation token; repeat with `--confirm <token>` to prune only an unchanged set. Archived, unpinned sessions are the safe default. |
 | `/session delete [key] …` | Preview one exact durable session, then repeat its key with `--confirm`; optionally use `--export json\|markdown` to verify a redacted export before verified deletion. |
-| `/tree` | Browse the paginated native session tree, including preserved branches and bounded redacted user/assistant previews. |
+| `/tree [label <entryId> <text>\|unlabel <entryId>]` | Browse the paginated native session tree, including preserved branches, labels and bounded redacted user/assistant previews. Selecting an entry offers: inspect, switch the active branch here (optionally summarizing the abandoned branch), set/clear its label, or fork a new session from it. Switching is refused while a run is active. |
 | `/rewind [--files]` | Select an active user prompt, preview history-only or checkpointed-file rewind, then explicitly confirm the exact preview. Refused or stale confirmation preserves the local draft and transcript. |
+| `/retry [--force]` | After a failed or aborted turn, rewind history (never files) to the last user prompt and resend it, like omp's `/retry`. Refused while a run is in flight or when the last turn completed; `--force` retries a completed turn too. The discarded turn stays in `/tree`. The recovery draft clears only after an acknowledged run. Rejection retains it; an unknown outcome retains the request/run identity in Ctrl+Q for inspection and explicit review, never automatic resend. |
 | `/name <title…>\|--clear` | Set or clear the current session's durable title through `sessions.metadata.patch`. |
 | `/blueprints [bundle-id filter]` | Browse bounded catalog IDs/counts, then inspect the selected entry through the shared authenticated service. |
 | `/blueprint [help\|list\|inspect\|validate\|preview\|activate] …` | Inspect and validate content-free metadata, preview one profile without mutation, or activate only after a fresh exact digest match. Refused/stale plans preserve the profile draft and never queue offline. |
@@ -339,9 +350,33 @@ without resetting daemon-side session history. Use `/reset` when history should
 also be forgotten.
 
 Fresh startup and `/session new` sessions use canonical local channel-peer keys:
-`agent:default:tui:local:dm:<UUID>`. Separate launches get distinct keys, so
-automation goals and session views can validate and route them consistently.
-Explicit `--session` keys and resumed legacy `tui-…` sessions remain unchanged.
+`agent:default:tui:local:dm:<dir-tag>-<UUID>`, where `<dir-tag>` is the first 16
+hex characters of the SHA-256 of the working directory (the same recipe `lemon run
+--continue` uses). Separate launches get distinct keys, so automation goals and
+session views can validate and route them consistently. Local TUI keys from
+another directory, and older untagged local TUI keys whose journal directory
+cannot be established, are refused rather than rebound to fresh native history.
+Other explicit keys and resumed legacy `tui-…` keys remain unchanged; a missing
+durable native history mapping is a refusal, not permission to start over.
+
+### Startup session flags
+
+| Flag | Behavior |
+| --- | --- |
+| `--session`, `-s <key>` | Attach to exactly this key (a fresh session when it has no history). |
+| `--continue`, `-c` | Attach to the most recently updated, non-archived local TUI session started from the current directory (matched by the key's directory tag; sessions from other directories and older untagged keys are not continued). Starts a fresh session with a notice when none exists. |
+| `--resume`, `-r <key>` | Check the exact durable lifecycle key, independently of paginated substring/history search. Attach only after successful lookup; missing/unverifiable keys start a fresh session with a warning. Local TUI keys must belong to the launch directory. |
+| `--resume`, `-r` | Open the `/sessions` switcher during startup; startup completes after its rows have loaded and the picker is mounted. |
+
+`--continue`, `--session` and `--resume` are mutually exclusive. The launcher
+accepts them directly: `lemon -c`, `lemon --continue`, `lemon -r [key]`, and
+`lemon tui --continue` all reach the TUI. (`lemon run --continue` is the separate
+CLI-session equivalent.)
+
+Explicit resume and switcher navigation use the same directory guard as
+continuation. To reopen a local TUI session, launch from its original directory;
+the client never silently changes its logical key's native history mapping to
+match the caller's cwd. Canonical profile chats keep their daemon-owned workspace.
 
 ### Plan mode
 
@@ -395,7 +430,8 @@ offline.
 
 `/fork` asks the authenticated daemon's `sessions.fork` method to create an
 independent durable branch of the current native session; the original remains
-unchanged. The command is unavailable on daemons that do not advertise it and
+unchanged. The `/tree` action “Fork a new session from here” does the same with
+history ending at the selected entry (inclusive) instead of the current leaf. The command is unavailable on daemons that do not advertise it and
 is never queued while offline.
 
 Inside Tern, the child opens in a right-hand split beside the originating pane,

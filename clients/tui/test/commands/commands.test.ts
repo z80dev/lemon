@@ -4,6 +4,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { reportedContextFixture } from "../../src/dev/fixtures/context-fixtures.ts";
 import { initTheme, resetTheme } from "../../src/ui/theme/theme.ts";
 import { invalidateThemeAdapters } from "../../src/ui/theme/tui-adapters.ts";
 import { createHarness, type Harness } from "../helpers/command-harness.ts";
@@ -747,6 +748,27 @@ describe("sessions and history", () => {
 		expect(harness.host.text).toContain("native runtime: lemon");
 		expect(harness.host.text).not.toContain("engine:");
 		expect(harness.server.requestsFor("session.detail")).toHaveLength(0);
+	});
+
+	test("/session info appends cumulative usage and survives a failing or usage-less sessions.context", async () => {
+		harness.server.serveSessionContext({
+			"tui-session": reportedContextFixture("tui-session"),
+		});
+		await harness.run("/session info");
+		expect(harness.host.text).toContain("cost $0.42");
+
+		harness.host.notices.length = 0;
+		harness.store.focused.engine = "lemon";
+		harness.server.failWith("sessions.context", "INTERNAL_ERROR", "/secret/path exploded");
+		await harness.run("/session info");
+		expect(harness.host.text).toContain("native runtime: lemon");
+		expect(harness.host.text).not.toContain("/secret");
+
+		harness.host.notices.length = 0;
+		const { usage: _usage, ...withoutUsage } = reportedContextFixture("tui-session");
+		harness.server.respondWith("sessions.context", withoutUsage);
+		await harness.run("/session info");
+		expect(harness.host.text).not.toContain("cost $");
 	});
 });
 

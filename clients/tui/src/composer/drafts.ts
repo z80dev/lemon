@@ -1,7 +1,7 @@
 import type { ImageContent } from "../protocol/types.ts";
 import { MAX_IMAGE_BYTES, MAX_IMAGES, type PendingImage } from "./images.ts";
 
-export type SubmissionDisposition = "accepted" | "queued" | "rejected";
+export type SubmissionDisposition = "accepted" | "queued" | "rejected" | "uncertain";
 
 export interface ComposerSubmission {
 	readonly sessionKey: string;
