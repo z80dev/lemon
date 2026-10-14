@@ -308,7 +308,7 @@ describe('native grant enforcement boundaries', () => {
   test('closed inventory preserves exact product aliases before Bot creation and excludes unsupported native tools', async () => {
     const f = fixture();
     try {
-      f.store.delete('bots', f.bot.id);
+      f.store.remove('bots', f.bot.id);
       const measured: P.MachineCapabilities = { machineId: 'machine', os: 'linux', measuredAtMs: f.services.now(), stale: false, items: [{ id: 'files', name: 'Files', category: 'files', supported: true, configuredLevel: 'read_interact', osGrant: 'not_required', tools: ['read', 'operator_extension'], reason: 'Measured', measuredAtMs: f.services.now(), stale: false }] };
       f.store.put('botGrants', { ...f.base, id: 'file-grant', botId: 'bot', machineId: 'machine', capabilityId: 'files', requestedLevel: 'read_interact', effectiveLevel: 'read_interact', reasons: [] } satisfies P.BotGrant);
       const policy = await nativeBotToolPolicy(f.services, user, f.bot, measured);
@@ -334,7 +334,7 @@ describe('native grant enforcement boundaries', () => {
         { ...reply, server: { name: 'lemon-bot', headers: { Authorization: 'must-not-accept-secret-fields' } } },
       ]) {
         f.services.lemon.call = async <T>(): Promise<T> => invalid as T;
-        await expect(nativeBotToolPolicy(f.services, user, f.bot, measured)).rejects.toMatchObject({ code: 'upstream_error' });
+        await expect(nativeBotToolPolicy(f.services, user, f.bot, measured)).rejects.toMatchObject({ code: 'upstream_unavailable' });
       }
     } finally { f.close(); }
   });

@@ -154,7 +154,7 @@ async function productExecutionNames(s: BackendServices): Promise<string[]> {
   const server = { name: 'lemon-bot', url: new URL('/mcp', s.config.publicUrl).href };
   const raw = await s.lemon.call('mcp.execution_names', { server, toolNames: [...productBotTools] }, { mutation: false });
   const result = z.object({ server: z.object({ name: z.literal('lemon-bot') }).strict(), tools: z.array(z.object({ name: z.string(), executionName: z.string().min(1).max(64).regex(/^mcp_[a-z0-9_]+$/) }).strict()).length(productBotTools.length), count: z.literal(productBotTools.length) }).strict().safeParse(raw);
-  if (!result.success || new Set(result.data.tools.map(tool => tool.name)).size !== productBotTools.length || new Set(result.data.tools.map(tool => tool.executionName)).size !== productBotTools.length || result.data.tools.some(tool => !productBotTools.some(name => name === tool.name))) fail('upstream_error', 'The controller returned an incomplete or ambiguous product execution-name projection.');
+  if (!result.success || new Set(result.data.tools.map(tool => tool.name)).size !== productBotTools.length || new Set(result.data.tools.map(tool => tool.executionName)).size !== productBotTools.length || result.data.tools.some(tool => !productBotTools.some(name => name === tool.name))) fail('upstream_unavailable', 'The controller returned an incomplete or ambiguous product execution-name projection.');
   return result.data.tools.map(tool => tool.executionName);
 }
 const productExcludedNativeTools: Record<string, true> = {
