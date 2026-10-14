@@ -110,6 +110,26 @@ that exercise different branches. Stream and loop coverage must retain terminal
 ordering, cancellation, monitoring, and tool-result accounting—not just a
 successful return or a nonempty event list.
 
+For pruning measurements, distinguish literal source test definitions from
+executed tests: parameterized cases, properties, doctests, tags, and moved cases
+make those counts differ. Record the baseline revision, exact lane command,
+failures, and whether slowest-test reporting serialized the run. Compare timings
+only under the same options; a smaller source diff alone does not establish
+faster or green CI.
+
+Do not replace an elapsed-time regression with an assertion on its configured
+timeout: that no longer exercises waiting past the failure boundary. Likewise,
+an immediate mailbox check is not a barrier for work sent by another process.
+Keep unique stress, restart, queue-race, and UTF-8 boundary scenarios even when
+they are slow; shorten them only when the same observable invariant is retained.
+
+Channel chunking tests assert the payloads delivered to the adapter: content and
+ordering, continuation metadata, and first-chunk-only reply, idempotency and
+notification identity. A successful enqueue or a live outbox process alone does
+not prove these contracts. Keep formatting boundary coverage (UTF-16 entities,
+table cells, Unicode splits and resume lines) and cold-start/restart regressions
+when trimming slower channel suites.
+
 ## Tags
 
 - `:integration` is excluded by default. It is for tests that need a real
