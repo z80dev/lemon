@@ -8,9 +8,8 @@ defmodule LemonControlPlane.Methods.NodePairInviteTest do
 
   @ctx %{auth: %{role: :operator, scopes: [:pairing, :read]}, conn_id: "invite-operator"}
   @moduletag :tmp_dir
-  @runtime_keys [:node_source_checkout, :node_install_version, :node_install_base_url, :node_join_script_url]
+  @runtime_keys [:node_source_checkout, :node_install_version, :node_install_base_url]
   @runtime_env [
-    "LEMON_NODE_JOIN_SCRIPT_URL",
     "LEMON_NODE_SOURCE_CHECKOUT",
     "LEMON_NODE_INSTALL_VERSION",
     "LEMON_NODE_INSTALL_BASE_URL",
@@ -285,22 +284,13 @@ defmodule LemonControlPlane.Methods.NodePairInviteTest do
     issued = invite(name)
     refute issued["joinCommand"] =~ issued["inviteCode"]
     refute issued["joinCommand"] =~ "invite-test-operator"
+    assert issued["joinCommand"] =~ "scripts/join-node.sh"
+    assert issued["joinCommand"] =~ "--source"
+    refute issued["joinCommand"] =~ "curl"
     assert {:ok, stored} = NodeStore.fetch_invite(issued["inviteCode"])
     refute inspect(stored) =~ issued["inviteCode"]
   end
 
-  test "join script override rejects credential-bearing or non-HTTPS downloads before issuance", %{name: name} do
-    for url <- ["http://host/join.sh", "https://user:secret@host/join.sh",
-                "https://host/join.sh?secret=value", "https://host/join.sh#fragment", "not a URL"] do
-      Application.put_env(:lemon_control_plane, :node_join_script_url, url)
-      assert {:error, {:invalid_request, _}} = NodePairInvite.handle(%{"nodeName" => name}, @ctx)
-    end
-    refute Enum.any?(LemonCore.Store.list(:node_pair_invites), fn {_id, row} ->
-      NodeStore.invite_field(row, :node_name) == name
-    end)
-    Application.put_env(:lemon_control_plane, :node_join_script_url, "https://host:57513/join.sh")
-    assert enrollment_auth(invite(name)).role == :enrollment
-  end
 
   test "loopback source defaults can issue restricted invitations", %{name: name} do
     Application.delete_env(:lemon_control_plane, :node_source_checkout)
@@ -345,9 +335,40 @@ defmodule LemonControlPlane.Methods.NodePairInviteTest do
     issued = invite(name)
     assert enrollment_auth(issued).role == :enrollment
     refute issued["joinCommand"] =~ issued["inviteCode"]
+    assert issued["joinCommand"] =~ "https://releases.example/lemon/releases/download/v2099.01.7-private/join-node.sh"
+    assert issued["joinCommand"] =~ "'--version' '2099.01.7-private'"
+    assert issued["joinCommand"] =~ "'--base-url' 'https://releases.example/lemon'"
+    refute issued["joinCommand"] =~ "/main/"
+    refute issued["joinCommand"] =~ "--source"
     Application.put_env(:lemon_control_plane, :node_install_version, "latest")
     assert {:error, {:invalid_request, "Configure an exact node install version"}} =
       NodePairInvite.handle(%{"nodeName" => name}, @ctx)
+  end
+
+  test "packaged dispatch pins the running release and never uses a configured checkout",
+       %{name: name, tmp_dir: tmp_dir} do
+    module = LemonControlPlane.Methods.PackagedNodePairInviteTestFixture
+    source = File.read!(Path.expand("../../../lib/lemon_control_plane/methods/node_pair_invite.ex", __DIR__))
+      |> String.replace("defmodule LemonControlPlane.Methods.NodePairInvite do",
+        "defmodule #{inspect(module)} do")
+      |> String.replace(~s|@checkout_root Path.expand("../../../../..", __DIR__)|,
+        "@checkout_root #{inspect(tmp_dir)}")
+    Code.compile_string(source)
+    old_version = System.get_env("RELEASE_VSN")
+    System.put_env("RELEASE_VSN", "2099.01.7-private")
+    on_exit(fn ->
+      if old_version, do: System.put_env("RELEASE_VSN", old_version),
+        else: System.delete_env("RELEASE_VSN")
+      :code.purge(module)
+      :code.delete(module)
+    end)
+
+    assert {:ok, issued} = module.handle(%{"nodeName" => name}, @ctx)
+    assert issued["joinCommand"] =~
+      "https://github.com/z80dev/lemon/releases/download/v2099.01.7-private/join-node.sh"
+    assert issued["joinCommand"] =~ "'--version' '2099.01.7-private'"
+    refute issued["joinCommand"] =~ "--source"
+    refute issued["joinCommand"] =~ "/main/"
   end
 
   test "validates invitation bounds", %{name: name} do

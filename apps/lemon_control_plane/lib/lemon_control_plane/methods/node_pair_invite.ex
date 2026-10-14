@@ -12,7 +12,7 @@ defmodule LemonControlPlane.Methods.NodePairInvite do
                     File.regular?(Path.join(@checkout_root, "mix.exs")),
                  do: @checkout_root,
                  else: nil
-  @join_script_url "https://raw.githubusercontent.com/z80dev/lemon/main/scripts/join-node.sh"
+  @release_base_url "https://github.com/z80dev/lemon"
 
   @impl true
   def name, do: "node.pair.invite"
@@ -34,7 +34,7 @@ defmodule LemonControlPlane.Methods.NodePairInvite do
          true <- is_integer(ttl) and ttl in 1..86_400_000,
          {:ok, controller} <- controller_url(),
          {:ok, runtime} <- runtime_source(controller),
-         {:ok, script_url} <- join_script_url(),
+         {:ok, script_url} <- join_script_url(runtime),
          {:ok, binding, node} <- binding(params["nodeId"], String.trim(node_name)),
          purpose = metadata(params, "purpose", node, :purpose, String.trim(purpose)),
          labels = metadata(params, "labels", node, :labels, labels),
@@ -120,15 +120,17 @@ defmodule LemonControlPlane.Methods.NodePairInvite do
 
   defp runtime_source(controller) do
     source = configured(:node_source_checkout, ["LEMON_NODE_SOURCE_CHECKOUT"])
-    version = configured(:node_install_version, ["LEMON_NODE_INSTALL_VERSION", "LEMON_VERSION"])
+    version = configured(:node_install_version, ["LEMON_NODE_INSTALL_VERSION", "LEMON_VERSION"]) ||
+      if(is_nil(@source_root), do: LemonCore.Update.Version.current())
     base_url =
-      configured(:node_install_base_url, ["LEMON_NODE_INSTALL_BASE_URL", "LEMON_INSTALL_BASE_URL"])
+      configured(:node_install_base_url, ["LEMON_NODE_INSTALL_BASE_URL", "LEMON_INSTALL_BASE_URL"]) ||
+        if(is_nil(@source_root), do: @release_base_url)
 
     cond do
       not is_nil(version) and not valid_version?(version) ->
         {:error, Errors.invalid_request("Configure an exact node install version")}
 
-      not is_nil(source) ->
+      not is_nil(source) and not is_nil(@source_root) ->
         if valid_text?(source, 4096) and Path.type(source) == :absolute do
           {:ok, {:source, source, version}}
         else
@@ -176,18 +178,23 @@ defmodule LemonControlPlane.Methods.NodePairInvite do
     ArgumentError -> false
   end
 
-  defp join_script_url do
-    url = configured(:node_join_script_url, ["LEMON_NODE_JOIN_SCRIPT_URL"]) || @join_script_url
-    if valid_install_base_url?(url),
-      do: {:ok, url},
-      else: {:error, Errors.invalid_request("Configure an HTTPS node join script URL without credentials, query or fragment")}
-  end
+  defp join_script_url({:source, source, _version}),
+    do: {:ok, {:local, Path.join(source, "scripts/join-node.sh")}}
+
+  defp join_script_url({:release, version, base_url}),
+    do: {:ok, {:download, base_url <> "/releases/download/v" <> version <> "/join-node.sh"}}
 
   defp join_command(script_url, runtime, controller, node_name) do
     args = ["--name", node_name, "--controller", controller] ++ runtime_args(runtime)
-    "curl -fsSL --proto '=https' --proto-redir '=https' " <>
-      quote_arg(script_url) <> " | bash -s -- " <>
-      Enum.map_join(args, " ", &quote_arg/1)
+    prefix =
+      case script_url do
+        {:local, path} -> "bash " <> quote_arg(path) <> " "
+        {:download, url} ->
+          "curl -fsSL --proto '=https' --proto-redir '=https' " <>
+            quote_arg(url) <> " | bash -s -- "
+      end
+
+    prefix <> Enum.map_join(args, " ", &quote_arg/1)
   end
 
   defp runtime_args({:source, source, nil}), do: ["--source", source]

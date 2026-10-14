@@ -158,12 +158,14 @@ sys.exit(status)
         tools.mkdir()
         installer = self.root / 'installer'
         installer.write_text('''#!/bin/sh
+printf '%s\\n' "$LEMON_VERSION" "$LEMON_INSTALL_BASE_URL" "$@" > "$TEST_INSTALL_ARGS"
 [ "${TEST_INSTALL_FAIL:-0}" = 0 ] || exit 1
 mkdir -p "$HOME/.lemon/versions/$LEMON_VERSION/bin"
 cp "$TEST_RUNTIME" "$HOME/.lemon/versions/$LEMON_VERSION/bin/lemon"
 ''')
         curl = tools / 'curl'
         curl.write_text('''#!/bin/sh
+printf '%s\\n' "$@" > "$TEST_CURL_ARGS"
 while [ "$#" -gt 0 ]; do
   if [ "$1" = -o ]; then cp "$TEST_INSTALLER" "$2"; exit; fi
   shift
@@ -172,12 +174,19 @@ exit 1
 ''')
         curl.chmod(0o700)
         self.env.update(PATH=str(tools) + ':' + self.env['PATH'], TEST_INSTALLER=str(installer),
-                        TEST_RUNTIME=str(self.fixture))
+                        TEST_RUNTIME=str(self.fixture), TEST_INSTALL_ARGS=str(self.root / 'install-args'),
+                        TEST_CURL_ARGS=str(self.root / 'curl-args'), LEMON_PROFILE='lemon_bot')
         return self.args[:4] + ['--version', VERSION, '--base-url', 'https://releases.example/lemon']
 
     def test_missing_release_installs_then_checks_compatibility(self):
         args = self.release()
         self.assertEqual(self.launch(args)[0], 0)
+        self.assertEqual((self.root / 'install-args').read_text().splitlines(),
+                         [VERSION, 'https://releases.example/lemon', '--require-bot',
+                          '--force', '--skip-setup', '--no-modify-path'])
+        self.assertIn('https://releases.example/lemon/releases/download/v' + VERSION + '/install.sh',
+                      (self.root / 'curl-args').read_text().splitlines())
+        self.assertNotIn('/main/', (self.root / 'curl-args').read_text())
         self.assertEqual(len([row for row in self.calls() if row['args'][:2] == ['node', 'join']]), 1)
         self.env['TEST_INSTALL_FAIL'] = '1'
         self.assertEqual(self.launch(args)[0], 0)  # Existing compatible pin is reused.

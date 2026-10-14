@@ -16,8 +16,16 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   and reuses compatible pinned Lemon installs before invoking the existing
   installer. Source selection, exact version and capability gates remain
   fail-closed; the argv enrollment-code flag is removed. Unknown enrollment
-  exchanges stop instead of replaying the invite. The repository script must be
-  published on `main` before its generated curl URL can be used.
+  exchanges stop instead of replaying the invite. Packaged commands fetch
+  `join-node.sh` and canonical `install.sh` from the same exact release tag,
+  never mutable `main`; installation requires a bot-capable full/min runtime
+  via `--require-bot`, not the standalone backend artifact. Source commands
+  invoke the provisioned checkout's join script directly.
+
+- Standalone Lemon Bot release bundles contain the native backend and complete
+  external web assets for Linux x86_64/arm64 and macOS arm64. Schema-2 release
+  metadata records their checksums and sizes; the canonical installer verifies
+  the selected bundle and keeps backend installation isolated from Lemon runtimes.
 - Correct destination-local MCP URL parsing so normal HTTPS authorities and
   Unicode hostnames reach the existing exact-origin and DNS-pinning checks;
   credentials, malformed ports and unsafe authorities remain rejected.

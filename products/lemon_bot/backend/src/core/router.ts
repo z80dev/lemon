@@ -4,11 +4,12 @@ import { z } from 'zod';
 import type { BackendServices, InternalInvocationOptions, Principal, RequestContext, Route } from './services';
 import { ApiError, errorEnvelope, fail, statusFor } from './errors';
 import { Store } from './store';
+import { defaultWebRoot } from './layout';
 interface Registered {route:Route;pattern:RegExp;names:string[]}
 export class Router {
   private registered:Registered[]=[];
   private contexts=new AsyncLocalStorage<RequestContext>();
-  constructor(private services:BackendServices,private webRoot=resolve(import.meta.dir,'../../../web/dist')) {
+  constructor(private services:BackendServices,private webRoot=services.config.webRoot??defaultWebRoot()) {
     if(services.store instanceof Store)services.store.onWrite((collection,id,value)=>{
       const context=this.contexts.getStore();
       if(!context||collection==='auditRecords'||!value||typeof value!=='object'||!('revision' in value)||!('createdAtMs' in value)||!('updatedAtMs' in value))return;

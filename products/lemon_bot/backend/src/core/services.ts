@@ -115,6 +115,8 @@ export interface IntegrationServices {
 }
 export interface BackendConfiguration {
   publicUrl: string; controlUrl: string; operatorToken: string; dataDir: string; host: string; port: number;
+  /** Absolute external web assets directory; omitted callers use the runtime layout. */
+  webRoot?: string;
   trustedOverlay: boolean; operator: P.OperatorConfiguration;
 }
 export interface BackendServices {

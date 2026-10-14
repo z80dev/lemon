@@ -3,7 +3,7 @@ import { mkdir, open, lstat, readFile, readdir, unlink, link } from 'node:fs/pro
 import { join } from 'node:path';
 import { fileTypeFromBuffer, type FileTypeResult } from 'file-type';
 import { unzipSync } from 'fflate';
-import sharp from 'sharp';
+import sharp from './image';
 import { PDFDocument } from 'pdf-lib';
 import { XMLValidator } from 'fast-xml-parser';
 import { inspectAudio } from '../integrations/audio';

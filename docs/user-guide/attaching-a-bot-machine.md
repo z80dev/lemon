@@ -38,16 +38,20 @@ The generated command never trusts an arbitrary `lemon` on the destination's
   are present there. This uses that checkout's `bin/lemon`, not an older installed
   release. Start the controller from the integrated checkout that implements the
   required bot runtime features.
-- **Remote or explicitly selected source:** provision a compatible checkout on
-  the destination yourself, then set `LEMON_NODE_SOURCE_CHECKOUT` to its absolute
+- **Remote or explicitly selected source (source controllers only):** provision a
+  compatible checkout on the destination yourself, then set
+  `LEMON_NODE_SOURCE_CHECKOUT` to its absolute
   **destination-local** path. The Elixir setting is
   `:lemon_control_plane, :node_source_checkout`. The path need not exist on the
   controller, but `mix.exs` and executable `bin/lemon` must exist at that path on
   the destination. This explicit source setting takes priority over all other
   selection. The command does not clone a branch, build a VM, or provision that
   checkout.
-- **Published or private packaged build:** select an exact operator-supported
-  version **and** an HTTPS release repository base URL. Set
+- **Published or private packaged build:** packaged controllers default to their
+  running release version and the canonical GitHub release base URL. Source
+  controllers selecting a release must provide an exact version and HTTPS base
+  URL; packaged controllers can override these defaults with the same settings.
+  Set
   `LEMON_NODE_INSTALL_VERSION` and `LEMON_NODE_INSTALL_BASE_URL`, or the Elixir
   settings `:node_install_version` and `:node_install_base_url` under
   `:lemon_control_plane`. The base URL is the repository prefix used by
@@ -65,10 +69,10 @@ For example, to use an already-provisioned remote checkout:
 export LEMON_NODE_SOURCE_CHECKOUT='/srv/lemon'
 ```
 
-There is no assumed supported published version: a version string, including a
-version equal to the controller's, does not prove that a build supports the bot
-APIs. When a version pin is configured, the selected binary's actual `lemon
-version` must match it, **and** its feature gate must pass. Remote invitations
+A version string, including one equal to the controller's, does not prove that a
+build supports the bot APIs. When a version pin is configured, the selected
+binary's actual `lemon version` must match it, **and** its feature gate must pass.
+Remote invitations from source controllers
 without a destination source checkout or both packaged-build settings return
 `INVALID_REQUEST`:
 `Configure a destination source checkout or an explicit node install version and HTTPS base URL`.
@@ -165,9 +169,11 @@ connection that was already open.
 
 ## Run the command on the destination
 
-Copy the returned `joinCommand` to a terminal on the destination. It downloads the
-repository-owned [join script](https://github.com/z80dev/lemon/blob/main/scripts/join-node.sh)
-over HTTPS and invokes Bash. Enter the separately returned one-use code at the
+Copy the returned `joinCommand` to a terminal on the destination. Packaged
+controllers download `join-node.sh` over HTTPS from the exact release tag:
+`<baseURL>/releases/download/v<VERSION>/join-node.sh`, then invoke Bash.
+Source controllers invoke the destination checkout's `scripts/join-node.sh`.
+Enter the separately returned one-use code at the
 **hidden terminal prompt**. The prompt reads `/dev/tty`, not the piped script stdin.
 The script disables tracing, restores terminal echo on exit/interruption, validates
 the bounded code without normalizing special characters, and passes it once to
@@ -175,17 +181,13 @@ the bounded code without normalizing special characters, and passes it once to
 environment variables. A controlling terminal is required; EOF or invalid input
 stops before downloads, runtime inspection, or enrollment.
 
-**Publication prerequisite:** generated commands use
-`https://raw.githubusercontent.com/z80dev/lemon/main/scripts/join-node.sh`.
-That URL is usable only after this script is published on the repository's `main`
-branch.
-
-An operator can explicitly configure `:node_join_script_url` on the control plane
-or set `LEMON_NODE_JOIN_SCRIPT_URL` to an HTTPS endpoint serving this exact
-repository script, for example an owner-controlled encrypted-overlay endpoint
-before publication. URLs with userinfo, query credentials, fragments or plaintext
-HTTP fail before invitation issuance. Only configure an endpoint you trust to
-execute code on the destination; the default remains the repository-owned URL.
+**Publication prerequisite:** the matching release must publish `join-node.sh`
+and the canonical `install.sh` as version-scoped assets. Neither script is fetched
+from mutable `main`. Packaged controllers default to their running release version
+and `https://github.com/z80dev/lemon`; `LEMON_NODE_INSTALL_VERSION` and
+`LEMON_NODE_INSTALL_BASE_URL` can select an exact published version and trusted
+HTTPS release base URL. Packaged controllers never generate source-checkout joins.
+There is no independent join-script URL override.
 
 A local checkout can run the same script before publication:
 
@@ -202,9 +204,11 @@ Source mode uses only the provisioned checkout's `bin/lemon` and requires its
 `mix.exs`; it never falls back to a PATH executable. Release mode first reuses
 `$HOME/.lemon/versions/<configured-version>/bin/lemon` if it reports the exact
 version and passes `node capabilities --json --require-bot`. Otherwise it fetches
-the existing [HTTPS installer](https://raw.githubusercontent.com/z80dev/lemon/main/install.sh)
+the canonical `install.sh` from the same base URL and exact release tag,
 and installs that exact `LEMON_VERSION` and `LEMON_INSTALL_BASE_URL` with
-`--force --skip-setup --no-modify-path`, then repeats the version/capability gate.
+`--require-bot --force --skip-setup --no-modify-path`, then repeats the
+version/capability gate. This selects a bot-capable canonical full/min Lemon
+runtime, never the standalone `lemon_bot` backend artifact.
 It never uses the mutable `versions/current` symlink to enroll.
 
 Review remote scripts according to your policy. The installer requires `curl`,

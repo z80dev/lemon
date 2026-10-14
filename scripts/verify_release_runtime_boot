@@ -22,6 +22,8 @@ Verifies Lemon release artifacts beyond checksums:
   - checks lemon_runtime_full asset-digest artifacts and daemon log
   - stops the daemon (`lemon stop` for non-sim profiles)
   - generates a release-runtime support bundle with release eval (non-sim profiles)
+  - boots standalone lemon_bot with a clean HOME/private token, validates its
+    executable and setup version, and fetches the complete packaged web build
 
 Manifest mode boots every artifact for the target platform (default:
 detected from `uname`); --single mode boots exactly one given tarball
@@ -74,9 +76,9 @@ done
 
 if [ "$MODE" = "single" ]; then
   case "$SINGLE_PROFILE" in
-    lemon_runtime_min|lemon_runtime_full|sim_broadcast_platform) ;;
+    lemon_runtime_min|lemon_runtime_full|sim_broadcast_platform|lemon_bot) ;;
     *)
-      echo "error: --single requires --profile <lemon_runtime_min|lemon_runtime_full|sim_broadcast_platform>" >&2
+      echo "error: --single requires --profile <lemon_runtime_min|lemon_runtime_full|sim_broadcast_platform|lemon_bot>" >&2
       exit 2
       ;;
   esac
@@ -122,14 +124,12 @@ detect_platform() {
   esac
 }
 
-# Platform -> expected BEAM profile count, duplicated (with this cross-reference)
-# from the EXPECTED table in scripts/verify_release_artifacts: min+full on
-# every platform, sim_broadcast_platform is Linux-only. The Bun-compiled
-# lemon_tui pseudo-profile is deliberately excluded from boot verification.
+# Profile counts mirror scripts/verify_release_artifacts, excluding only the
+# terminal client. The standalone backend uses its own real HTTP boot path.
 expected_profile_count() {
   case "$1" in
-    linux-x86_64|linux-arm64) echo 3 ;;
-    darwin-arm64) echo 2 ;;
+    linux-x86_64|linux-arm64) echo 4 ;;
+    darwin-arm64) echo 3 ;;
     *) echo 0 ;;
   esac
 }
@@ -166,7 +166,7 @@ for artifact in manifest["artifacts"]:
     filename = artifact["file"]
     match = re.search(
         r"-(linux-x86_64|linux-arm64|darwin-arm64)-"
-        r"(lemon_runtime_min|lemon_runtime_full|sim_broadcast_platform)\.tar\.gz$",
+        r"(lemon_runtime_min|lemon_runtime_full|sim_broadcast_platform|lemon_bot)\.tar\.gz$",
         filename,
     )
     if not match:
@@ -317,6 +317,107 @@ cleanup_work_dir() {
   rm -rf "$work_dir"
 }
 
+
+boot_bot_profile() {
+  python3 - "$1" "$2" <<'PY'
+import json
+import os
+from pathlib import Path
+import re
+import secrets
+import socket
+import subprocess
+import sys
+import tarfile
+import time
+from urllib.parse import quote
+from urllib.request import urlopen
+
+tarball, work_dir = sys.argv[1:]
+match = re.fullmatch(r"lemon-(\d{4}\.\d{1,2}\.\d+)-[A-Za-z0-9._-]+-(linux-x86_64|linux-arm64|darwin-arm64)-lemon_bot\.tar\.gz", Path(tarball).name)
+if not match:
+    raise SystemExit("lemon_bot: invalid versioned artifact filename")
+version = match[1]
+root = Path(work_dir) / "lemon_bot"
+root.mkdir(mode=0o700)
+extract = root / "extract"
+extract.mkdir()
+with tarfile.open(tarball) as archive:
+    archive.extractall(extract, filter="data")
+binary = extract / "bot/bin/lemon-bot"
+web = extract / "bot/web"
+if not binary.is_file() or not os.access(binary, os.X_OK) or not (web / "index.html").is_file():
+    raise SystemExit("lemon_bot: missing executable or complete web build")
+home = root / "home"
+home.mkdir(mode=0o700)
+def port():
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
+http_port, control_port = port(), port()
+base = f"http://127.0.0.1:{http_port}"
+token = secrets.token_urlsafe(48)
+environment = {
+    "PATH": "/usr/bin:/bin",
+    "HOME": str(home),
+    "TMPDIR": str(root),
+    "LEMON_BOT_HOST": "127.0.0.1",
+    "LEMON_BOT_PORT": str(http_port),
+    "LEMON_BOT_CONTROL_URL": f"ws://127.0.0.1:{control_port}/ws",
+    "LEMON_BOT_OPERATOR_TOKEN": token,
+    "LEMON_BOT_PUBLIC_URL": base,
+    "LEMON_BOT_DATA_DIR": str(home / ".lemon/lemon_bot"),
+}
+reported = subprocess.check_output([str(binary), "--version"], env=environment, cwd=home, text=True, timeout=30).strip()
+if reported != f"lemon-bot {version}":
+    raise SystemExit(f"lemon_bot: executable version mismatch: {reported!r}")
+def get(path):
+    with urlopen(base + path, timeout=2) as response:
+        return response.read(), response.headers.get_content_type()
+# First boot logs contain the genuine one-use setup code: never emit them.
+log_path = root / "boot.log"
+with log_path.open("xb") as log:
+    log_path.chmod(0o600)
+    process = subprocess.Popen([str(binary)], env=environment, cwd=home, stdout=log, stderr=log)
+    try:
+        for attempt in range(60):
+            if process.poll() is not None:
+                raise SystemExit("lemon_bot: backend exited before HTTP readiness (private logs removed on exit)")
+            try:
+                body, content_type = get("/v1/setup")
+                break
+            except OSError:
+                time.sleep(1)
+        else:
+            raise SystemExit("lemon_bot: /v1/setup never became ready")
+        setup = json.loads(body)
+        # API responses carry the standard data envelope.
+        setup = setup.get("data", setup)
+        if setup.get("setupRequired") is not True or setup.get("version") != version:
+            raise SystemExit("lemon_bot: setup/version response does not match a clean release boot")
+        if token.encode() in body or b"setupCode" in body:
+            raise SystemExit("lemon_bot: public setup response exposed private bootstrap material")
+        for route in ("/", "/setup"):
+            body, content_type = get(route)
+            if content_type != "text/html" or body != (web / "index.html").read_bytes():
+                raise SystemExit(f"lemon_bot: {route} did not serve the packaged web application")
+        assets = [path for path in web.rglob("*") if path.is_file() and path.name != "index.html"]
+        if not any(path.suffix == ".js" for path in assets):
+            raise SystemExit("lemon_bot: packaged web build has no JavaScript assets")
+        for path in assets:
+            body, _ = get("/" + quote(path.relative_to(web).as_posix()))
+            if body != path.read_bytes():
+                raise SystemExit("lemon_bot: web asset missing or replaced by SPA fallback")
+    finally:
+        process.terminate()
+        try:
+            process.wait(timeout=15)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+print(f"ok lemon_bot {version}: native executable, clean setup, web and all packaged assets")
+PY
+}
 # Boots one release tarball end to end. `expected_commit` may be empty
 # (single mode has no manifest to compare an embedded commit against).
 boot_one_profile() {
@@ -324,6 +425,11 @@ boot_one_profile() {
   local tarball_path="$2"
   local work_dir="$3"
   local expected_commit="$4"
+
+  if [ "$profile" = "lemon_bot" ]; then
+    boot_bot_profile "$tarball_path" "$work_dir"
+    return
+  fi
 
   local profile_dir="$work_dir/$profile"
   local extract_dir="$profile_dir/extract"

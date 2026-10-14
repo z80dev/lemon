@@ -4,6 +4,7 @@ import { join, resolve } from 'node:path';
 import { z } from 'zod';
 import type { BackendConfiguration } from './services';
 import { parseOperatorConfiguration } from '../integrations/config';
+import { defaultWebRoot } from './layout';
 export function isLoopback(host:string):boolean { return host==='localhost'||host==='127.0.0.1'||host==='[::1]'||host==='::1'; }
 export async function loadConfiguration(environment:Record<string,string|undefined>=process.env):Promise<{config:BackendConfiguration;key:Uint8Array}> {
   const required=z.string().min(1);
@@ -33,7 +34,8 @@ export async function loadConfiguration(environment:Record<string,string|undefin
   const operator=parseOperatorConfiguration(raw,{firstPartyOrigin:publicUrl.origin});
   const port=z.coerce.number().int().min(1).max(65535).parse(environment.LEMON_BOT_PORT??4080);
   const host=environment.LEMON_BOT_HOST??'127.0.0.1';
-  return {config:{publicUrl:publicUrl.origin,controlUrl:controlUrl.href,operatorToken,dataDir,host,port,trustedOverlay,operator},key};
+  const webRoot=resolve(environment.LEMON_BOT_WEB_ROOT??defaultWebRoot());
+  return {config:{publicUrl:publicUrl.origin,controlUrl:controlUrl.href,operatorToken,dataDir,host,port,trustedOverlay,operator,webRoot},key};
 }
 export function createPrivateCodec(key:Uint8Array):{encrypt(value:unknown):string;decrypt<T=unknown>(value:string):T} {
   return {

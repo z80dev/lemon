@@ -17,6 +17,11 @@
 # staging directory, so the single rename + symlink flip installs them
 # together or not at all.
 #
+# Backend only: sh install.sh --profile lemon_bot
+# Installs bot/ into ~/.lemon/lemon_bot/versions/<version>-<channel>-<platform>,
+# flips ~/.lemon/lemon_bot/current, and links ~/.local/bin/lemon-bot.
+# Runtime state remains in ~/.lemon/lemon_bot, outside the versioned tree.
+#
 # POSIX sh: no bashisms, no arrays, no [[ ]], no local.
 set -eu
 
@@ -44,17 +49,19 @@ Lemon installer
 
 Usage:
   curl -fsSL https://raw.githubusercontent.com/z80dev/lemon/main/install.sh | sh
-  sh install.sh [--force] [--verify] [--no-modify-path] [--skip-setup] [--help]
+  sh install.sh [--profile NAME] [--force] [--verify] [--no-modify-path] [--skip-setup]
   sh install.sh --resolve-version
 
 Options:
+  --profile NAME  Select full, min, sim, or lemon_bot (backend only, no BEAM/TUI).
   --force         Reinstall even if the target version is already present.
-  --verify        Boot the installed runtime on ephemeral ports, poll /healthz,
-                  then stop it. Fails the install if the smoke check fails.
+  --verify        Boot on ephemeral ports, then stop. Native: poll /healthz.
+                  Backend: check /v1/setup and web before promotion.
+                  Fails the install if the smoke check fails.
   --no-modify-path
-                  Do not add ~/.lemon/bin to PATH in your shell rc file; only
-                  print the line for you to add. (--modify-path, the default,
-                  is still accepted.)
+                  Do not add the launcher directory (~/.lemon/bin for native,
+                  ~/.local/bin for lemon_bot) to your shell rc file; print
+                  the PATH line instead. --modify-path is the default.
   --skip-setup    Do not start the interactive provider setup wizard after
                   installing. Run \$HOME/.lemon/bin/lemon setup later to
                   configure Lemon.
@@ -72,7 +79,7 @@ Environment:
   LEMON_VERSION               Pin an exact version, e.g. 2026.08.0. Required for
                               any channel other than stable.
   LEMON_CHANNEL               Release channel (default: stable).
-  LEMON_PROFILE               full | min | sim, or a full profile name
+  LEMON_PROFILE               full | min | sim | lemon_bot, or a full profile name
                               (lemon_runtime_full, lemon_runtime_min,
                               sim_broadcast_platform). Default: lemon_runtime_full.
   LEMON_NO_TUI                Set to 1 to install the runtime only, skipping the
@@ -81,7 +88,12 @@ Environment:
   LEMON_INSTALL_IGNORE_GLIBC  Set to 1 to silence the Linux glibc baseline check.
   LEMON_INSTALL_BASE_URL      Override the GitHub release base URL (test seam).
 
-Installs into \$HOME/.lemon. Docs: $DOCS_URL
+Native installs into \$HOME/.lemon/versions. Backend installs into
+\$HOME/.lemon/lemon_bot/versions with an independent current pointer and
+\$HOME/.local/bin/lemon-bot launcher. Backend state is \$HOME/.lemon/lemon_bot,
+outside the versioned tree; LEMON_BOT_DATA_DIR can override it at runtime.
+Backend version verification needs no Bun, Node, or source checkout.
+Docs: $DOCS_URL
 EOF
 }
 
@@ -111,6 +123,11 @@ while [ "$#" -gt 0 ]; do
     --modify-path) MODIFY_PATH=1 ;;
     --no-modify-path) MODIFY_PATH=0 ;;
     --skip-setup) SKIP_SETUP=1 ;;
+    --profile)
+      [ "$#" -ge 2 ] || die "--profile needs a profile name"
+      PROFILE_INPUT="$2"
+      shift
+      ;;
     --resolve-version) RESOLVE_VERSION=1 ;;
     -h|--help)
       usage
@@ -208,9 +225,10 @@ case "$PROFILE_INPUT" in
   full|lemon_runtime_full) PROFILE="lemon_runtime_full" ;;
   min|lemon_runtime_min) PROFILE="lemon_runtime_min" ;;
   sim|sim_broadcast_platform) PROFILE="sim_broadcast_platform" ;;
+  lemon_bot) PROFILE="lemon_bot" ;;
   *)
     die "unknown LEMON_PROFILE '$PROFILE_INPUT'.
-  Use full, min, sim, or a profile name (lemon_runtime_full, lemon_runtime_min, sim_broadcast_platform)."
+  Use full, min, sim, lemon_bot, or a full runtime profile name."
     ;;
 esac
 
@@ -269,6 +287,7 @@ select_artifact() {
     WANT_PLATFORM="$PLATFORM" WANT_CHANNEL="$CHANNEL" WANT_VERSION="$PIN" python3 - <<'PY'
 import json
 import os
+import re
 import sys
 
 path = os.environ["MANIFEST_PATH"]
@@ -302,10 +321,10 @@ if schema != 2:
 
 version = manifest.get("version")
 channel = manifest.get("channel")
-if not isinstance(version, str) or not version:
-    fail("release manifest has no version")
-if not isinstance(channel, str) or not channel:
-    fail("release manifest has no channel")
+if not isinstance(version, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", version):
+    fail("release manifest has no safe version")
+if not isinstance(channel, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", channel):
+    fail("release manifest has no safe channel")
 
 if want_version and want_version != version:
     fail(f"requested version {want_version} but the manifest publishes {version}")
@@ -351,12 +370,19 @@ filename = artifact.get("file")
 sha256 = artifact.get("sha256")
 size = artifact.get("size")
 
-if not isinstance(filename, str) or not filename or "/" in filename:
-    fail(f"artifact file must be a bare filename: {filename!r}")
-if not isinstance(sha256, str) or len(sha256) != 64:
-    fail(f"artifact {filename} has no 64-character sha256")
-if not isinstance(size, int) or size <= 0:
+if not isinstance(filename, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", filename):
+    fail(f"artifact file must be a safe bare filename: {filename!r}")
+if not isinstance(sha256, str) or not re.fullmatch(r"[0-9a-fA-F]{64}", sha256):
+    fail(f"artifact {filename} has no hexadecimal sha256")
+if type(size) is not int or size <= 0:
     fail(f"artifact {filename} has no positive size")
+if want_profile == "lemon_bot":
+    expected = f"lemon-{version}-{channel}-{want_platform}-lemon_bot.tar.gz"
+    if filename != expected:
+        fail(f"backend artifact must be named {expected}")
+    os_name, arch = want_platform.split("-", 1)
+    if artifact.get("os") != os_name or artifact.get("arch") != arch:
+        fail("backend artifact OS/architecture does not match platform")
 
 print("\t".join([filename, sha256.lower(), str(size), version, channel]))
 PY
@@ -395,14 +421,152 @@ os.symlink(target, staging)
 os.replace(staging, link)' "$1" "$2"
 }
 
+validate_bot_archive() {
+  python3 - "$1" <<'PY'
+import posixpath
+import sys
+import tarfile
+
+try:
+    with tarfile.open(sys.argv[1], "r:gz") as archive:
+        members = archive.getmembers()
+        seen = set()
+        links = set()
+        for member in members:
+            name = member.name
+            while name.startswith("./"):
+                name = name[2:]
+            name = name.rstrip("/")
+            if name in ("", ".") and member.isdir():
+                continue
+            parts = name.split("/")
+            if name.startswith("/") or any(p in ("", ".", "..") for p in parts):
+                raise ValueError(f"unsafe archive path: {member.name}")
+            if parts[0] != "bot" or name in seen:
+                raise ValueError(f"unexpected or duplicate archive path: {name}")
+            seen.add(name)
+            if not (member.isfile() or member.isdir() or member.issym()):
+                raise ValueError(f"unsupported archive member: {name}")
+            if member.issym():
+                target = posixpath.normpath(posixpath.join(posixpath.dirname(name), member.linkname))
+                if member.linkname.startswith("/") or not target.startswith("bot/"):
+                    raise ValueError(f"escaping archive symlink: {name}")
+                links.add(name)
+        for name in seen:
+            parts = name.split("/")
+            if any("/".join(parts[:i]) in links for i in range(1, len(parts))):
+                raise ValueError(f"archive member traverses a symlink: {name}")
+        if "bot/bin/lemon-bot" in links:
+            raise ValueError("backend binary must be a regular file")
+except (OSError, tarfile.TarError, ValueError) as error:
+    print(f"error: unsafe backend archive: {error}", file=sys.stderr)
+    raise SystemExit(1)
+PY
+}
+
+verify_bot() {
+  python3 - "$1" "$VERSION" "$VERIFY" <<'PY'
+import os
+from pathlib import Path
+import secrets
+import socket
+import subprocess
+import sys
+import tempfile
+import time
+import urllib.request
+
+root = Path(sys.argv[1]).resolve()
+binary = root / "bot/bin/lemon-bot"
+try:
+    if binary.is_symlink() or not binary.is_file() or not os.access(binary, os.X_OK):
+        raise ValueError("backend has no regular executable bot/bin/lemon-bot")
+    if not (root / "bot/web").is_dir() or not any((root / "bot/web").rglob("*")):
+        raise ValueError("backend has no web assets")
+    if not (root / "bot/node_modules/sharp/package.json").is_file():
+        raise ValueError("backend has no sharp runtime dependency")
+    if not any((root / "bot/node_modules").rglob("*.node")):
+        raise ValueError("backend has no native runtime module")
+    with tempfile.TemporaryDirectory() as home, tempfile.TemporaryFile() as output:
+        result = subprocess.run(
+            [str(binary), "--version"], cwd=home,
+            env={"HOME": home, "PATH": "/usr/bin:/bin"},
+            stdout=output, stderr=subprocess.DEVNULL, timeout=15,
+        )
+        output.seek(0)
+        reported = output.read(256)
+    if result.returncode or reported != f"lemon-bot {sys.argv[2]}\n".encode():
+        raise ValueError("backend --version did not report the manifest version")
+    if sys.argv[3] == "1":
+        def free_port():
+            with socket.socket() as sock:
+                sock.bind(("127.0.0.1", 0))
+                return sock.getsockname()[1]
+        port, control_port = free_port(), free_port()
+        with tempfile.TemporaryDirectory() as home:
+            environment = {
+                "HOME": home, "PATH": "/usr/bin:/bin",
+                "LEMON_BOT_HOST": "127.0.0.1", "LEMON_BOT_PORT": str(port),
+                "LEMON_BOT_DATA_DIR": f"{home}/.lemon/lemon_bot",
+                "LEMON_BOT_CONTROL_URL": f"ws://127.0.0.1:{control_port}/ws",
+                "LEMON_BOT_OPERATOR_TOKEN": secrets.token_hex(32),
+                "LEMON_BOT_PUBLIC_URL": f"http://127.0.0.1:{port}",
+            }
+            process = subprocess.Popen([str(binary)], cwd=home, env=environment,
+                                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            try:
+                deadline = time.monotonic() + 30
+                ready = False
+                while time.monotonic() < deadline and process.poll() is None:
+                    try:
+                        for route in ("/v1/setup", "/"):
+                            with urllib.request.urlopen(
+                                f"http://127.0.0.1:{port}{route}", timeout=1
+                            ) as response:
+                                if response.status != 200 or not response.read(1):
+                                    raise ValueError(f"backend {route} is not ready")
+                        ready = True
+                        break
+                    except (OSError, ValueError):
+                        time.sleep(0.2)
+                if not ready:
+                    raise ValueError("backend did not serve /v1/setup and web assets")
+            finally:
+                process.terminate()
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait()
+except (OSError, ValueError, subprocess.TimeoutExpired) as error:
+    print(f"error: {error}; refusing to promote backend", file=sys.stderr)
+    raise SystemExit(1)
+PY
+}
+
 # ------------------------------------------------------------------ layout ---
 
 LEMON_ROOT="$HOME/.lemon"
 VERSIONS_DIR="$LEMON_ROOT/versions"
 BIN_DIR="$LEMON_ROOT/bin"
 TMP_DIR="$LEMON_ROOT/tmp"
+CURRENT_LINK="$VERSIONS_DIR/current"
+LAUNCHER="lemon"
+LAUNCHER_TARGET="../versions/current/bin/lemon"
+if [ "$PROFILE" = "lemon_bot" ]; then
+  LEMON_ROOT="$HOME/.lemon/lemon_bot"
+  VERSIONS_DIR="$LEMON_ROOT/versions"
+  BIN_DIR="$HOME/.local/bin"
+  TMP_DIR="$LEMON_ROOT/tmp"
+  CURRENT_LINK="$LEMON_ROOT/current"
+  LAUNCHER="lemon-bot"
+  LAUNCHER_TARGET="$CURRENT_LINK/bot/bin/lemon-bot"
+fi
 
-mkdir -p "$VERSIONS_DIR" "$BIN_DIR" "$TMP_DIR" "$LEMON_ROOT/run" "$LEMON_ROOT/store"
+mkdir -p "$VERSIONS_DIR" "$BIN_DIR" "$TMP_DIR"
+if [ "$PROFILE" != "lemon_bot" ]; then
+  mkdir -p "$LEMON_ROOT/run" "$LEMON_ROOT/store"
+fi
 
 # ----------------------------------------------------------------- cleanup ---
 #
@@ -454,10 +618,10 @@ trap 'cleanup; exit 143' TERM
 
 ensure_links() {
   # ensure_links <version>
-  atomic_symlink "$1" "$VERSIONS_DIR/current"
+  atomic_symlink "$1" "$CURRENT_LINK"
 
-  if [ ! -L "$BIN_DIR/lemon" ] || [ "$(readlink "$BIN_DIR/lemon")" != "../versions/current/bin/lemon" ]; then
-    atomic_symlink "../versions/current/bin/lemon" "$BIN_DIR/lemon"
+  if [ ! -L "$BIN_DIR/$LAUNCHER" ] || [ "$(readlink "$BIN_DIR/$LAUNCHER")" != "$LAUNCHER_TARGET" ]; then
+    atomic_symlink "$LAUNCHER_TARGET" "$BIN_DIR/$LAUNCHER"
   fi
 }
 
@@ -487,7 +651,7 @@ path_hint() {
   esac
 
   if [ "$MODIFY_PATH" = "1" ] && [ -n "$rc_file" ]; then
-    if [ -f "$rc_file" ] && grep -q '# added by the lemon installer' "$rc_file"; then
+    if [ -f "$rc_file" ] && grep -Fqx "$path_line" "$rc_file"; then
       info "PATH entry already present in $rc_file"
     else
       mkdir -p "$(dirname "$rc_file")"
@@ -523,6 +687,9 @@ sock.close()'
 }
 
 verify_boot() (
+  if [ "$PROFILE" = "lemon_bot" ]; then
+    return
+  fi
   control_port="$(free_port)"
   web_port="$(free_port)"
   sim_port="$(free_port)"
@@ -573,7 +740,10 @@ verify_boot() (
   info "ok runtime booted and answered /healthz"
 )
 setup_handoff() {
-  if [ "$PROFILE" = "sim_broadcast_platform" ]; then
+  if [ "$PROFILE" = "lemon_bot" ]; then
+    info "Start lemon-bot with LEMON_BOT_CONTROL_URL and LEMON_BOT_OPERATOR_TOKEN configured."
+    info "Backend state: $HOME/.lemon/lemon_bot (override with LEMON_BOT_DATA_DIR)."
+  elif [ "$PROFILE" = "sim_broadcast_platform" ]; then
     info "Setup is not available for the sim profile."
   elif [ "$SKIP_SETUP" = "1" ]; then
     info "Setup skipped. Run this when you are ready to configure Lemon:"
@@ -619,7 +789,7 @@ fi
 # per-platform tarball that unpacks into tui/ next to the runtime's bin/.
 # The sim profile has no terminal UI, and LEMON_NO_TUI=1 opts out.
 WANT_TUI=1
-if [ "$PROFILE" = "sim_broadcast_platform" ] || [ "${LEMON_NO_TUI:-0}" = "1" ]; then
+if [ "$PROFILE" = "lemon_bot" ] || [ "$PROFILE" = "sim_broadcast_platform" ] || [ "${LEMON_NO_TUI:-0}" = "1" ]; then
   WANT_TUI=0
 fi
 
@@ -651,9 +821,21 @@ elif [ "$WANT_TUI" = "1" ]; then
 fi
 
 TARGET_DIR="$VERSIONS_DIR/$VERSION"
+INSTALL_KEY="$VERSION"
+if [ "$PROFILE" = "lemon_bot" ]; then
+  INSTALL_KEY="$VERSION-$RESOLVED_CHANNEL-$PLATFORM"
+  TARGET_DIR="$VERSIONS_DIR/$INSTALL_KEY"
+fi
 
 if [ -d "$TARGET_DIR" ] && [ "$FORCE" != "1" ]; then
-  ensure_links "$VERSION"
+  if [ "$PROFILE" = "lemon_bot" ]; then
+    verify_bot "$TARGET_DIR"
+  fi
+  if [ "$PROFILE" = "lemon_bot" ]; then
+    ensure_links "versions/$INSTALL_KEY"
+  else
+    ensure_links "$INSTALL_KEY"
+  fi
   info "Lemon $VERSION ($RESOLVED_CHANNEL) is already installed at $TARGET_DIR."
   if [ -n "$TUI_FILE" ] && [ ! -x "$TARGET_DIR/tui/bin/lemon-tui" ]; then
     info "This install has no terminal UI, but $VERSION publishes one."
@@ -679,6 +861,10 @@ if ! fetch "$DOWNLOAD_BASE/$ARTIFACT_FILE" "$tarball"; then
   die "could not download $DOWNLOAD_BASE/$ARTIFACT_FILE"
 fi
 
+actual_size="$(python3 -c 'import os,sys; print(os.path.getsize(sys.argv[1]))' "$tarball")"
+if [ "$actual_size" != "$ARTIFACT_SIZE" ]; then
+  die "size mismatch for $ARTIFACT_FILE: expected $ARTIFACT_SIZE, actual $actual_size"
+fi
 actual_sha="$(sha256_of "$tarball")"
 if [ "$actual_sha" != "$ARTIFACT_SHA" ]; then
   rm -f "$tarball"
@@ -720,6 +906,9 @@ CLEANUP_PARTIAL="$partial_dir"
 rm -rf "$partial_dir"
 mkdir -p "$partial_dir"
 
+if [ "$PROFILE" = "lemon_bot" ]; then
+  validate_bot_archive "$tarball"
+fi
 if ! tar -xzf "$tarball" -C "$partial_dir"; then
   rm -rf "$partial_dir"
   rm -f "$tarball"
@@ -742,7 +931,9 @@ if [ -n "$tui_tarball" ]; then
   rm -f "$tui_tarball"
 fi
 
-if [ ! -x "$partial_dir/bin/lemon" ]; then
+if [ "$PROFILE" = "lemon_bot" ]; then
+  verify_bot "$partial_dir"
+elif [ ! -x "$partial_dir/bin/lemon" ]; then
   rm -rf "$partial_dir"
   die "the release tarball has no executable bin/lemon launcher; refusing to install it."
 fi
@@ -784,7 +975,11 @@ if [ "$PLATFORM_OS" = "darwin" ] && command -v xattr >/dev/null 2>&1; then
   xattr -dr com.apple.quarantine "$TARGET_DIR" >/dev/null 2>&1 || true
 fi
 
-ensure_links "$VERSION"
+if [ "$PROFILE" = "lemon_bot" ]; then
+  ensure_links "versions/$INSTALL_KEY"
+else
+  ensure_links "$INSTALL_KEY"
+fi
 
 # Past this point the install is live: versions/current resolves to the new
 # tree, so the leftovers below are garbage rather than a rollback path.
@@ -797,13 +992,13 @@ fi
 
 info ""
 info "Installed Lemon $VERSION ($RESOLVED_CHANNEL, $PROFILE) to $TARGET_DIR"
-info "  launcher: $BIN_DIR/lemon -> ../versions/current/bin/lemon"
+info "  launcher: $BIN_DIR/$LAUNCHER -> $LAUNCHER_TARGET"
 if [ -n "$TUI_FILE" ]; then
   info "  tui:      $TARGET_DIR/tui/bin/lemon-tui"
 fi
-info "  state:    $LEMON_ROOT/store"
-
-if ! "$BIN_DIR/lemon" version; then
+if [ "$PROFILE" = "lemon_bot" ]; then
+  info "  state:    $HOME/.lemon/lemon_bot"
+elif ! "$BIN_DIR/lemon" version; then
   warn "'$BIN_DIR/lemon version' did not succeed. Run it directly to see why."
 fi
 
@@ -817,6 +1012,11 @@ setup_handoff
 
 info ""
 info "Next steps:"
+if [ "$PROFILE" = "lemon_bot" ]; then
+  info "    lemon-bot          # start the standalone backend"
+  info "Docs: $DOCS_URL"
+  exit 0
+fi
 if [ -n "$TUI_FILE" ]; then
   info "    lemon              # launch the terminal UI (starts the daemon for you)"
 fi

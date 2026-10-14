@@ -10,7 +10,7 @@ Verifies a manifest.json (schema 2) and the release tarballs it describes:
   - per-artifact fields (file, profile, platform, os, arch, sha256, size, glibc_min)
   - filename matches lemon-<version>-<channel>-<platform>-<profile>.tar.gz
   - file exists on disk with the recorded size and SHA-256
-  - the full 11-artifact profile x platform matrix is present (or, with
+  - the 14-artifact profile x platform matrix is present (or, with
     --platform, only that platform's profiles)
   - lemon_tui is required on every platform but is not a BEAM release
 
@@ -65,16 +65,17 @@ import json
 import os
 import re
 import sys
+import tarfile
+from pathlib import PurePosixPath
 
 artifact_dir = os.environ["ARTIFACT_DIR"]
 platform_filter = os.environ["PLATFORM_FILTER"] or None
 manifest_path = os.path.join(artifact_dir, "manifest.json")
 
-# The full release matrix: min+full+lemon_tui on all 3 platforms,
-# sim_broadcast_platform is Linux-only. The BEAM-only subset is duplicated
-# (with a cross-reference comment) in scripts/verify_release_runtime_boot,
-# which deliberately excludes lemon_tui from boot verification.
-PROFILES = ("lemon_runtime_min", "lemon_runtime_full", "sim_broadcast_platform", "lemon_tui")
+# The original min/full/TUI matrix plus the standalone backend on all three
+# platforms; sim_broadcast_platform remains Linux-only. Runtime boot counts
+# are mirrored in scripts/verify_release_runtime_boot (excluding only the TUI).
+PROFILES = ("lemon_runtime_min", "lemon_runtime_full", "sim_broadcast_platform", "lemon_tui", "lemon_bot")
 PLATFORMS = ("linux-x86_64", "linux-arm64", "darwin-arm64")
 PLATFORM_OS_ARCH = {
     "linux-x86_64": ("linux", "x86_64", "2.39"),
@@ -163,7 +164,7 @@ for artifact in artifacts:
     filename_match = re.fullmatch(
         rf"lemon-{re.escape(version or '')}-{re.escape(channel or '')}-"
         rf"(linux-x86_64|linux-arm64|darwin-arm64)-"
-        rf"(lemon_runtime_min|lemon_runtime_full|sim_broadcast_platform|lemon_tui)\.tar\.gz",
+        rf"(lemon_runtime_min|lemon_runtime_full|sim_broadcast_platform|lemon_tui|lemon_bot)\.tar\.gz",
         filename,
     )
     if not filename_match:
@@ -210,12 +211,12 @@ for artifact in artifacts:
         # downloaded/available locally when checking a single platform.
         continue
 
-    if not isinstance(expected_sha, str) or len(expected_sha) != 64:
+    if not isinstance(expected_sha, str) or not re.fullmatch(r"[0-9a-fA-F]{64}", expected_sha):
         errors.append(f"{filename}: sha256 must be a 64-character hex string")
         continue
 
-    if not isinstance(expected_size, int) or expected_size < 0:
-        errors.append(f"{filename}: size must be a non-negative integer")
+    if type(expected_size) is not int or expected_size <= 0:
+        errors.append(f"{filename}: size must be a positive integer")
         continue
 
     artifact_path = os.path.join(artifact_dir, filename)
@@ -237,9 +238,92 @@ for artifact in artifacts:
     if actual_sha != expected_sha.lower():
         errors.append(f"{filename}: sha256 mismatch expected {expected_sha} got {actual_sha}")
 
+    if profile == "lemon_bot":
+        try:
+            with tarfile.open(artifact_path) as archive:
+                members = archive.getmembers()
+                names = {member.name.removeprefix("./"): member for member in members}
+                binary = names.get("bot/bin/lemon-bot")
+                if binary is None or not binary.isfile() or not binary.mode & 0o111:
+                    errors.append(f"{filename}: missing executable bot/bin/lemon-bot")
+                if "bot/web/index.html" not in names or not any(
+                    name.startswith("bot/web/") and name.endswith(".js") for name in names
+                ):
+                    errors.append(f"{filename}: missing complete built web assets")
+                sharp_target = {
+                    "linux-x86_64": "linux-x64",
+                    "linux-arm64": "linux-arm64",
+                    "darwin-arm64": "darwin-arm64",
+                }[platform]
+                required_native = (
+                    "bot/node_modules/sharp/package.json",
+                    f"bot/node_modules/@img/sharp-{sharp_target}/package.json",
+                    f"bot/node_modules/@img/sharp-libvips-{sharp_target}/package.json",
+                )
+                if any(name not in names for name in required_native) or not any(
+                    name.startswith(f"bot/node_modules/@img/sharp-{sharp_target}/") and name.endswith(".node")
+                    for name in names
+                ):
+                    errors.append(f"{filename}: missing host-native Sharp/libvips dependencies")
+                for member in members:
+                    path = PurePosixPath(member.name)
+                    parts = path.parts
+                    if path.is_absolute() or ".." in parts or (parts and parts[0] != "bot"):
+                        errors.append(f"{filename}: unconfined archive entry")
+                        break
+                    if member.isdev() or member.isfifo() or member.islnk():
+                        errors.append(f"{filename}: unsupported special archive entry")
+                        break
+                    if any(part in {".git", ".env", ".lemon"} or part.startswith(".env.") for part in parts):
+                        errors.append(f"{filename}: archive contains checkout or private state")
+                        break
+                    if member.issym():
+                        target = PurePosixPath(member.linkname)
+                        normalized = os.path.normpath(str(path.parent / target))
+                        if target.is_absolute() or not normalized.startswith("bot/"):
+                            errors.append(f"{filename}: unconfined archive symlink")
+                            break
+        except (OSError, tarfile.TarError) as error:
+            errors.append(f"{filename}: unreadable backend archive: {error}")
+
     if actual_size == expected_size and actual_sha == expected_sha.lower():
         print(f"ok {filename} sha256={actual_sha} size={actual_size}")
 
+
+scripts = manifest.get("scripts")
+expected_scripts = {"node_join": "join-node.sh", "installer": "install.sh"}
+if not isinstance(scripts, list):
+    errors.append("manifest.scripts must be a list")
+    scripts = []
+seen_scripts = set()
+for script in scripts:
+    if not isinstance(script, dict):
+        errors.append("invalid script metadata")
+        continue
+    kind = script.get("kind")
+    filename = script.get("filename")
+    if kind not in expected_scripts or filename != expected_scripts[kind] or kind in seen_scripts:
+        errors.append(f"unexpected or duplicate script metadata: {script!r}")
+        continue
+    seen_scripts.add(kind)
+    sha = script.get("sha256")
+    size = script.get("size_bytes")
+    if not isinstance(sha, str) or not re.fullmatch(r"[0-9a-fA-F]{64}", sha):
+        errors.append(f"{filename}: invalid script sha256")
+        continue
+    if type(size) is not int or size <= 0:
+        errors.append(f"{filename}: invalid script size_bytes")
+        continue
+    path = os.path.join(artifact_dir, filename)
+    if not os.path.isfile(path):
+        errors.append(f"{filename}: script asset missing")
+        continue
+    with open(path, "rb") as handle:
+        content = handle.read()
+    if len(content) != size or hashlib.sha256(content).hexdigest() != sha.lower():
+        errors.append(f"{filename}: script size or checksum mismatch")
+if seen_scripts != set(expected_scripts):
+    errors.append("manifest.scripts must include node_join and installer")
 missing = required - seen
 if missing:
     missing_desc = ", ".join(f"{profile}/{platform}" for profile, platform in sorted(missing))

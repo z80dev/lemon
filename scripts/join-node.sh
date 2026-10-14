@@ -90,9 +90,9 @@ else
   elif ! compatible "$lemon_bin"; then
     installer=$(mktemp) || fail 'Cannot prepare pinned installation'
     curl -fsSL --proto '=https' --proto-redir '=https' \
-      https://raw.githubusercontent.com/z80dev/lemon/main/install.sh -o "$installer" >/dev/null 2>&1 || fail 'Cannot download the Lemon installer'
+      "${base_url%/}/releases/download/v$version/install.sh" -o "$installer" >/dev/null 2>&1 || fail 'Cannot download the pinned Lemon installer'
     LEMON_VERSION="$version" LEMON_INSTALL_BASE_URL="$base_url" \
-      sh "$installer" --force --skip-setup --no-modify-path >/dev/null 2>&1 || fail 'The pinned Lemon installation failed'
+      sh "$installer" --require-bot --force --skip-setup --no-modify-path >/dev/null 2>&1 || fail 'The pinned Lemon installation failed'
     rm -f "$installer"
     installer=
     compatible "$lemon_bin" || fail 'The installed Lemon runtime is incompatible with the configured build'

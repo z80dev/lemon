@@ -38,6 +38,9 @@ Checks:
     invoke it; unavailable terminals print the exact absolute setup command
   - the fixture TUI gates an incomplete installation through setup once, then
     does not repeat setup once its config and credential source are ready
+  - lemon_bot installs independently of the native runtime, validates archive
+    layout and manifest identity/size/digest, and rejects failed or incorrect
+    binary version probes before changing the live backend pointer
 EOF
   exit 2
 }
@@ -1237,6 +1240,214 @@ arg:--verbose"
     fail "doctor argv did not cross the exec boundary verbatim"
     printf 'expected:\n%s\n\ngot:\n%s\n' "$expected_doctor_out" "$doctor_out" >&2
   fi
+fi
+
+# Backend cases exercise the installer as a subprocess against real tar files.
+# Fixture binaries model the version command; compiled runtime behavior is
+# covered by the backend artifact verifier, not by these installer fixtures.
+if python3 - "$INSTALL_SH" "$work_dir" "$base_url" "$PLATFORM" "$home_dir" <<'PY'
+import hashlib
+import io
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tarfile
+
+installer, work, base, platform, home = sys.argv[1:]
+work = Path(work)
+home = Path(home)
+serve = work / "serve"
+root = home / ".lemon/lemon_bot"
+native_current = os.readlink(home / ".lemon/versions/current")
+version = "9999.8.0"
+filename = f"lemon-{version}-stable-{platform}-lemon_bot.tar.gz"
+os_name, arch = platform.split("-", 1)
+checks = 0
+
+def publish_case(case, mutation=None, extra=None, binary=None):
+    dest = serve / case / "releases/latest/download"
+    dest.mkdir(parents=True)
+    archive_path = dest / filename
+    payloads = {
+        "bot/bin/lemon-bot": binary or (
+            f'#!/bin/sh\n[ "$#" = 1 ] && [ "$1" = --version ] || exit 2\n'
+            f'[ -z "${{LEMON_BOT_OPERATOR_TOKEN:-}}" ] || exit 3\n'
+            f'printf "lemon-bot {version}\\n"\n'
+        ).encode(),
+        "bot/web/index.html": b"<html>backend fixture</html>",
+        "bot/node_modules/sharp/package.json": b'{"name":"sharp"}',
+        "bot/node_modules/@img/sharp-fixture/sharp.node": b"native fixture",
+    }
+    with tarfile.open(archive_path, "w:gz") as archive:
+        for name, data in payloads.items():
+            entry = tarfile.TarInfo(name)
+            entry.size = len(data)
+            entry.mode = 0o755 if name.endswith("lemon-bot") else 0o644
+            archive.addfile(entry, io.BytesIO(data))
+        if extra:
+            entry, data = extra
+            archive.addfile(entry, io.BytesIO(data) if data else None)
+    data = archive_path.read_bytes()
+    manifest = {
+        "schema": 2, "version": version, "channel": "stable",
+        "artifacts": [{
+            "file": filename, "profile": "lemon_bot", "platform": platform,
+            "os": os_name, "arch": arch, "size": len(data),
+            "sha256": hashlib.sha256(data).hexdigest(),
+        }],
+    }
+    if mutation:
+        mutation(manifest)
+    (dest / "manifest.json").write_text(json.dumps(manifest))
+    return f"{base}/{case}"
+
+def install(url, *args, profile_env=False):
+    env = {
+        "HOME": str(home), "PATH": os.environ["PATH"], "SHELL": "/bin/sh",
+        "LEMON_INSTALL_BASE_URL": url, "LEMON_INSTALL_IGNORE_GLIBC": "1",
+    }
+    command = ["sh", installer, "--no-modify-path", "--skip-setup"]
+    if profile_env:
+        env["LEMON_PROFILE"] = "lemon_bot"
+    else:
+        command += ["--profile", "lemon_bot"]
+    result = subprocess.run(
+        command + list(args), env=env, stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT, timeout=45,
+    )
+    return result
+
+def require(condition, message):
+    global checks
+    if not condition:
+        raise AssertionError(message)
+    checks += 1
+    print(f"ok {message}")
+
+try:
+    valid = publish_case("bot-valid")
+    result = install(valid)
+    require(result.returncode == 0, f"backend-only install succeeds: {result.stdout.decode()}")
+    key = f"{version}-stable-{platform}"
+    live = f"versions/{key}"
+    require(os.readlink(root / "current") == live, "backend current pointer uses isolated versions")
+    launcher = home / ".local/bin/lemon-bot"
+    require(os.readlink(launcher) == str(root / "current/bot/bin/lemon-bot"),
+            "backend launcher resolves through isolated current")
+    require(os.readlink(home / ".lemon/versions/current") == native_current,
+            "backend install leaves native current unchanged")
+    require(not (root / live / "bin/lemon").exists() and
+            not (root / live / "tui").exists(), "backend install needs neither BEAM nor TUI")
+    state = root / "operator-state"
+    state.write_text("retain me")
+    sentinel = root / live / "sentinel"
+    sentinel.write_text("no re-extraction")
+    require(install(valid, profile_env=True).returncode == 0 and sentinel.exists(),
+            "backend environment profile is idempotent")
+    require(install(valid, "--force").returncode == 0 and not sentinel.exists()
+            and state.read_text() == "retain me", "forced backend reinstall preserves external state")
+
+    mutations = {
+        "schema": lambda m: m.update(schema=1),
+        "platform": lambda m: m["artifacts"][0].update(platform="unknown"),
+        "profile": lambda m: m["artifacts"][0].update(profile="lemon_runtime_full"),
+        "channel": lambda m: m.update(channel="preview"),
+        "version-path": lambda m: m.update(version="../escape"),
+        "arch": lambda m: m["artifacts"][0].update(arch="unknown"),
+        "size": lambda m: m["artifacts"][0].update(size=m["artifacts"][0]["size"] + 1),
+        "digest": lambda m: m["artifacts"][0].update(sha256="0" * 64),
+        "duplicate": lambda m: m["artifacts"].append(dict(m["artifacts"][0])),
+    }
+    for case, mutation in mutations.items():
+        result = install(publish_case(f"bot-{case}", mutation), "--force")
+        require(result.returncode != 0 and os.readlink(root / "current") == live
+                and state.read_text() == "retain me", f"backend rejects {case} without promotion")
+
+    traversal = tarfile.TarInfo("../escaped")
+    traversal.size = 6
+    absolute = tarfile.TarInfo(str(work / "escaped-absolute"))
+    absolute.size = 6
+    symlink = tarfile.TarInfo("bot/web/escape")
+    symlink.type = tarfile.SYMTYPE
+    symlink.linkname = "../../../escaped-link"
+    hardlink = tarfile.TarInfo("bot/web/hardlink")
+    hardlink.type = tarfile.LNKTYPE
+    hardlink.linkname = "bot/bin/lemon-bot"
+    fifo = tarfile.TarInfo("bot/web/fifo")
+    fifo.type = tarfile.FIFOTYPE
+    for case, entry, data in [
+        ("traversal", traversal, b"escape"),
+        ("absolute", absolute, b"escape"),
+        ("symlink", symlink, b""),
+        ("hardlink", hardlink, b""),
+        ("fifo", fifo, b""),
+    ]:
+        result = install(publish_case(f"bot-{case}", extra=(entry, data)), "--force")
+        require(result.returncode != 0 and os.readlink(root / "current") == live,
+                f"backend rejects unsafe {case} archive without promotion")
+    require(not (root / "versions/escaped").exists() and not (work / "escaped-absolute").exists(),
+            "unsafe backend archives write no escaped files")
+    for case, binary in [
+        ("wrong-version", b'#!/bin/sh\nprintf "lemon-bot wrong\\n"\n'),
+        ("failed-version", b'#!/bin/sh\nexit 1\n'),
+        ("noisy-version", f'#!/bin/sh\nprintf "banner\\nlemon-bot {version}\\n"\n'.encode()),
+    ]:
+        result = install(publish_case(f"bot-{case}", binary=binary), "--force")
+        require(result.returncode != 0 and os.readlink(root / "current") == live,
+                f"backend rejects {case} before promotion")
+    smoke_binary = f"""#!/bin/sh
+if [ "${{1:-}}" = --version ]; then
+  printf 'lemon-bot {version}\\n'
+  exit 0
+fi
+exec python3 - <<'SERVER'
+import http.server
+import os
+from pathlib import Path
+state = Path(os.environ["LEMON_BOT_DATA_DIR"])
+state.mkdir(parents=True)
+(state / "smoke").write_text("isolated")
+class Handler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path not in ("/", "/v1/setup"):
+            self.send_error(404)
+            return
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"fixture ready")
+http.server.HTTPServer((os.environ["LEMON_BOT_HOST"], int(os.environ["LEMON_BOT_PORT"])), Handler).serve_forever()
+SERVER
+""".encode()
+    require(install(publish_case("bot-smoke", binary=smoke_binary), "--force", "--verify").returncode == 0
+            and not (root / "smoke").exists(),
+            "backend --verify boots HTTP in isolated external state before promotion")
+    require(install(publish_case("bot-slow", binary=b"#!/bin/sh\nsleep 20\n"), "--force").returncode != 0
+            and os.readlink(root / "current") == live,
+            "backend version probe has a bounded deadline without promotion")
+    require(not list((root / "tmp").iterdir()) and
+            not list((root / "versions").glob("*.partial")) and
+            not list((root / "versions").glob("*.previous.*")),
+            "backend failures leave no download or staging residue")
+    require(os.readlink(home / ".lemon/versions/current") == native_current,
+            "backend security refusals preserve native runtime")
+    version = "9999.9.0"
+    filename = f"lemon-{version}-stable-{platform}-lemon_bot.tar.gz"
+    require(install(publish_case("bot-update")).returncode == 0 and
+            os.readlink(root / "current") == f"versions/{version}-stable-{platform}" and
+            (root / live).is_dir() and state.read_text() == "retain me" and
+            os.readlink(home / ".lemon/versions/current") == native_current,
+            "backend update retains previous version, state, and independent native current")
+except (AssertionError, OSError, subprocess.TimeoutExpired) as error:
+    print(f"error backend installer: {error}", file=sys.stderr)
+    raise SystemExit(1)
+print(f"verified backend installer across {checks} behavioral checks")
+PY
+then
+  ok "backend installer behavioral and security cases"
+else
+  fail "backend installer behavioral or security cases"
 fi
 
 echo

@@ -132,9 +132,11 @@ export async function createBackend(config:BackendConfiguration,key:Uint8Array):
   };
 }
 
-if(import.meta.main){
+export async function runBackend():Promise<void> {
   const {config,key}=await loadConfiguration();const backend=await createBackend(config,key);const server=backend.start();
   process.stdout.write(`Lemon Bot listening at ${config.publicUrl} (${server.hostname}:${server.port}).\n`);
   const shutdown=()=>{void backend.stop().then(()=>process.exit(0)).catch(()=>process.exit(1));};
   process.once('SIGINT',shutdown);process.once('SIGTERM',shutdown);
 }
+
+if(import.meta.main)await runBackend();

@@ -12,11 +12,9 @@ name: Release
 # second tag-push workflow. Release runs are serialized so two automatic cuts
 # cannot derive the same version.
 #
-# The build publishes 11 native artifacts: lemon_runtime_min and
-# lemon_runtime_full on linux-x86_64/linux-arm64/darwin-arm64,
-# sim_broadcast_platform on both Linux platforms, and the compiled Bun
-# lemon_tui client on all three. Every artifact is verified before the GitHub
-# Release is created; mutable container channel tags move only afterward.
+# The original 11 native runtime/TUI artifacts remain unchanged. Three
+# standalone lemon_bot backend artifacts add a compiled Bun server and complete
+# web assets, built and boot-verified on each host-native platform.
 #
 # See docs/release/versioning_and_channels.md for the versioning model.
 
@@ -437,6 +435,53 @@ jobs:
           path: ${{ steps.package.outputs.artifact_name }}
           retention-days: 30
 
+  build-bot:
+    name: Build lemon_bot (${{ matrix.platform }})
+    runs-on: ${{ matrix.os }}
+    needs: [validate, preflight-beam, preflight-clients]
+    if: ${{ !cancelled() && needs.validate.result == 'success' && (inputs.skip_preflight || (needs.preflight-beam.result == 'success' && needs.preflight-clients.result == 'success')) }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            platform: linux-x86_64
+          - os: ubuntu-24.04-arm
+            platform: linux-arm64
+          - os: macos-15
+            platform: darwin-arm64
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate.outputs.tag }}
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: clients/tui/.bun-version
+      - name: Build standalone backend and web
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+          CHANNEL: ${{ needs.validate.outputs.channel }}
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          products/lemon_bot/scripts/build_release "$VERSION" "$CHANNEL" "$PLATFORM" "$GITHUB_WORKSPACE/bot-artifacts"
+      - name: Boot standalone backend on native runner
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+          CHANNEL: ${{ needs.validate.outputs.channel }}
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          scripts/verify_release_runtime_boot --single \
+            "bot-artifacts/lemon-${VERSION}-${CHANNEL}-${PLATFORM}-lemon_bot.tar.gz" --profile lemon_bot
+      - name: Upload standalone backend
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-lemon_bot-${{ matrix.platform }}
+          path: bot-artifacts/*.tar.gz
+          if-no-files-found: error
+          retention-days: 30
+
   # ── Build the lemon_tui terminal client ──────────────────────────────────────
   # All three platforms cross-compile from one x86_64 Linux runner: `bun build
   # --compile` fetches the Bun runtime for the requested target itself, and the
@@ -800,8 +845,8 @@ jobs:
   publish:
     name: Publish release
     runs-on: ubuntu-latest
-    needs: [validate, build, build-tui, verify-tui, docker-merge]
-    if: ${{ !cancelled() && needs.build.result == 'success' && needs.build-tui.result == 'success' && needs.verify-tui.result == 'success' && needs.docker-merge.result == 'success' }}
+    needs: [validate, build, build-tui, verify-tui, build-bot, docker-merge]
+    if: ${{ !cancelled() && needs.build.result == 'success' && needs.build-tui.result == 'success' && needs.verify-tui.result == 'success' && needs.build-bot.result == 'success' && needs.docker-merge.result == 'success' }}
     permissions:
       contents: write
 
@@ -817,6 +862,11 @@ jobs:
           path: release-artifacts
           pattern: release-*
           merge-multiple: true
+
+      - name: Stage version-scoped installation scripts
+        run: |
+          cp install.sh release-artifacts/install.sh
+          cp scripts/join-node.sh release-artifacts/join-node.sh
 
       - name: Generate manifest.json
         run: |
@@ -842,7 +892,7 @@ jobs:
           name_re = re.compile(
             r'^lemon-' + re.escape(version) + r'-' + re.escape(channel) + r'-'
             r'(linux-x86_64|linux-arm64|darwin-arm64)-'
-            r'(lemon_runtime_min|lemon_runtime_full|sim_broadcast_platform|lemon_tui)\.tar\.gz$'
+            r'(lemon_runtime_min|lemon_runtime_full|sim_broadcast_platform|lemon_tui|lemon_bot)\.tar\.gz$'
           )
 
           artifacts = []
@@ -871,6 +921,14 @@ jobs:
               entry['glibc_min'] = glibc_min
             artifacts.append(entry)
 
+          scripts = []
+          for kind, filename in [('node_join', 'join-node.sh'), ('installer', 'install.sh')]:
+            with open(filename, 'rb') as handle:
+              content = handle.read()
+            scripts.append({
+              'kind': kind, 'filename': filename,
+              'sha256': hashlib.sha256(content).hexdigest(), 'size_bytes': len(content),
+            })
           manifest = {
             'schema': 2,
             'version': version,
@@ -879,6 +937,7 @@ jobs:
             'built_at': timestamp,
             'otp': otp,
             'elixir': elixir,
+            'scripts': scripts,
             'artifacts': sorted(artifacts, key=lambda a: a['file']),
           }
           with open('manifest.json', 'w') as f:
@@ -925,14 +984,9 @@ jobs:
         id: files
         run: |
           FILES="release-artifacts/*.tar.gz
-          release-artifacts/manifest.json"
-
-          # install.sh lands in Phase B; guard so this workflow keeps working
-          # against tags cut before it exists.
-          if [ -f install.sh ]; then
-            FILES="$FILES
-          install.sh"
-          fi
+          release-artifacts/manifest.json
+          release-artifacts/install.sh
+          release-artifacts/join-node.sh"
 
           {
             echo "list<<FILES_EOF"

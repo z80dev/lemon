@@ -3,6 +3,27 @@
 A separate Bun HTTP/WebSocket owner-assistant service attached to an existing Lemon controller. Each named Bot runs for the person who owns it, on that person's execution host. Groups coordinate 2–6 of that owner's Bots; workspace roles never grant another person's live Bot access. There are no Team Bots, managers, publication grants or cross-user connector lending. The product is not Lemon Web, the TUI, a second swarm, or a second agent scheduler. Wire resources and authorization are defined in [the canonical API](../contracts/api.md), [protocol](../contracts/protocol.ts), and [cards](../contracts/cards.md).
 
 ## Run
+### Verified standalone installation
+
+The canonical release installer supports `--profile lemon_bot` on Linux x86_64,
+Linux arm64 and macOS arm64. Follow the [versioned release installation
+guide](../../../docs/release/versioning_and_channels.md). The bundle contains
+`bot/bin/lemon-bot`, the complete external `bot/web` app, and its native image
+dependencies; running it requires no installed Bun, Node, Elixir or source checkout.
+Configure the same private environment below, then run `lemon-bot` rather than
+`bun run start`. `lemon-bot --version` reports the exact release CalVer and
+`lemon-bot --help` describes startup; neither initializes private product state.
+
+Keep `LEMON_BOT_DATA_DIR`, private operator configuration and server credential
+sources outside the versioned installation. Installing the backend does not
+install or replace the controller/worker: those use canonical full/min runtime
+profiles, and newly invited workers install the matching published Lemon release.
+An empty backend prints its real one-use local setup code; open its web origin
+and consume that code to create the owner. Never put the controller operator
+credential in a browser, generated join command, archive or public log.
+
+### Source development
+
 
 Use Bun 1.4 or newer. Start the existing authenticated Lemon controller and configure provider credentials on each execution host. From this directory:
 
@@ -15,7 +36,7 @@ export LEMON_BOT_DATA_DIR="$HOME/.lemon/lemon_bot"
 bun run start
 ```
 
-`bun run dev` enables Bun watch mode. The backend loads `../web/dist` at runtime; build the web product separately with `bun --cwd ../web run build`. Missing web assets produce an explicit installation response without disabling the API. The empty deployment prints a one-use setup code to the operator terminal. It is never part of `/setup`, static assets, ordinary request logs, or clients' configuration. An unused code is encrypted in the private database and remains usable across restart; successful setup consumes it atomically.
+`bun run dev` enables Bun watch mode. Source execution loads `../web/dist`; build the web product separately with `bun --cwd ../web run build`. Packaged execution loads `bot/web` beside its executable independently of the working directory. `LEMON_BOT_WEB_ROOT` explicitly overrides either layout. Missing web assets produce an explicit installation response without disabling the API. The empty deployment prints a one-use setup code to the operator terminal. It is never part of `/setup`, static assets, ordinary request logs, or clients' configuration. An unused code is encrypted in the private database and remains usable across restart; successful setup consumes it atomically.
 
 The public origin must be reachable from execution hosts for the bot MCP endpoint. Use reachable HTTPS, normally Tailscale Serve, for managed Bot provisioning and phone connections. A loopback public URL supports same-machine API/Simulator development but is not evidence that an enrolled worker shares the backend's network namespace. Supply the configured public origin through the proxy; arbitrary browser origins are rejected. Authenticated product clients connect to `/v1` and `/v1/realtime`, never directly to the controller.
 
@@ -31,6 +52,7 @@ Operator `approvedPrivateMcpOrigins` binds private first-party origins explicitl
 | `LEMON_BOT_ENCRYPTION_KEY` | Optional base64 32-byte durable key; otherwise generated private `master.key`. |
 | `LEMON_BOT_CONFIG_FILE` | Optional operator JSON file; otherwise DATA_DIR/config.json. Missing file uses the validated empty provider configuration. |
 | `LEMON_BOT_TRUSTED_OVERLAY` | Default false. Set exactly `true` only when off-loopback HTTP/WS is protected by an operator-trusted encrypted overlay. Not a general TLS bypass. |
+| `LEMON_BOT_WEB_ROOT` | Optional explicit web assets directory; otherwise source `web/dist` or packaged `bot/web`. |
 
 Provider, identity, push, image, network/egress and host-management configuration belongs to the integration team's [provider guide](../providers.md) and the canonical operator configuration. Missing credentials affect only dependent operations and report a precise prerequisite. Bot tokens and product sessions are different principals; neither exposes the Lemon operator token. Configured backend secret references resolve only explicit private environment/file sources. Destination MCP header `${LEMON_SECRET:NAME}` values resolve only on the execution machine.
 
