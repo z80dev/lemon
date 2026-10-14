@@ -1,10 +1,21 @@
 import { describe, expect, test } from 'bun:test';
 import type * as P from '../../../contracts/protocol';
 import { ApiError } from '../../src/core/errors';
-import { buildMemoryContextKey, buildPrivateBotMemoryContextKey, createRuntimeService, observeInvocation, quiesceBotInvocations, reserveCronAdmission, type InvocationContext, type InvocationProofBinding, type RuntimeMapping } from '../../src/runtime/runs';
+import { buildMemoryContextKey, buildPrivateBotMemoryContextKey, createRuntimeService, observeInvocation, quiesceBotInvocations, reserveCronAdmission, revokeConnectorInvocations, type InvocationContext, type InvocationProofBinding, type RuntimeMapping } from '../../src/runtime/runs';
 import { fixture } from './fixture';
 
 describe('owned placed runtime', () => {
+  test('a shared credential owner can revoke after losing Bot management, while another member cannot', async () => {
+    const f = fixture();
+    const connector: P.Connector = f.services.resource('connector', { botId: f.bot.id, ownerUserId: f.alice.userId, name: 'Shared account', url: 'https://connector.example/mcp', accountLabel: 'Owner account', authKind: 'oauth' as const, state: 'connected' as const, tools: [], secretHeaderNames: [], shared: true, lastError: null });
+    f.store.put('connectors', connector); f.services.auth.bot = () => { throw new ApiError('forbidden', 'Management removed.'); };
+    try {
+      expect(await revokeConnectorInvocations(f.services, f.alice, f.bot.id, connector.id)).toEqual({ runIds: [], status: 'cancelled' });
+      await expect(revokeConnectorInvocations(f.services, f.bob, f.bot.id, connector.id)).rejects.toMatchObject({ code: 'forbidden' });
+      expect(f.calls).toHaveLength(0);
+    } finally { f.store.close(); }
+  });
+
   test('private native memory identity does not require a surviving main conversation', () => {
     const f = fixture();
     try {
@@ -21,7 +32,7 @@ describe('owned placed runtime', () => {
     f.store.put('memories', f.services.resource('memory', { botId: f.bot.id, scope: 'private_note', userId: f.alice.userId, text: 'private target fact', kind: 'fact', sourceEntryId: null }));
     const nonce = 'shared_return_nonce_0001';
     f.store.setMetadata(`submissionContext:${f.alice.kind}:${f.alice.id}:${task.id}:${nonce}`, { returnConversationId: group.id });
-    const audiences: unknown[] = []; f.services.integrations.connectorConfig = async (_actor, _botId, conversationId) => { audiences.push(conversationId); return []; };
+    const audiences: unknown[] = []; f.services.integrations.connectorConfig = async (_actor, _botId, conversationId, operationId) => { audiences.push(conversationId); if (operationId) f.store.setMetadata(`invocationConnectors:${operationId}`, []); return []; };
     try {
       const result = await runtime.submit(f.alice, task, f.bot, { clientNonce: nonce, text: 'specialist work' });
       expect(audiences).toEqual([group.id]);
@@ -142,7 +153,7 @@ describe('owned placed runtime', () => {
     f.store.put('memories', f.services.resource('memory', { botId: f.bot.id, scope: 'private_note', userId: 'alice', text: 'owner private fact', kind: 'fact', sourceEntryId: null }));
     f.store.put('memories', f.services.resource('memory', { botId: f.bot.id, scope: 'private_note', userId: 'bob', text: 'collaborator private fact', kind: 'fact', sourceEntryId: null }));
     const configs: unknown[] = [];
-    f.services.integrations.connectorConfig = async (actor, botId, conversationId, operationId) => { configs.push({ actor, botId, conversationId, operationId }); return []; };
+    f.services.integrations.connectorConfig = async (actor, botId, conversationId, operationId) => { configs.push({ actor, botId, conversationId, operationId }); if (operationId) f.store.setMetadata(`invocationConnectors:${operationId}`, []); return []; };
     try {
       const result = await runtime.submit(f.bob, bobConversation, f.bot, { clientNonce: 'collaborator_nonce_0001', text: 'work' });
       expect(configs).toEqual([{ actor: f.bob, botId: f.bot.id, conversationId: bobConversation.id, operationId: result.run.id }]);

@@ -133,7 +133,13 @@ export async function buildInvocationContext(services: BackendServices, actor: P
   for (const server of invocationMcpServers) for (const [name, value] of Object.entries(server.headers)) {
     if (/authorization|cookie|token|password|secret|api.?key/i.test(name) && !/^(?:Bearer\s+)?\$\{LEMON_SECRET:[^}\r\n]+\}$/.test(value)) fail('policy_denied', 'Invocation credentials must be destination-local named secret references.');
   }
-  const connectorEpochs = services.store.list<P.Connector>('connectors', connector => connector.botId === bot.id).map(connector => ({ connectorId: connector.id, epoch: services.store.metadata<number>(`connectorEpoch:${connector.id}`) ?? 0 }));
+  const configuredConnectors = services.store.metadata<string[]>(`invocationConnectors:${fixedRunId}`);
+  if (!configuredConnectors) fail('capability_unavailable', 'The integration service must retain actual invocation connector provenance before dispatch.');
+  const connectorEpochs = configuredConnectors.sort().map(connectorId => {
+    const connector = services.store.require<P.Connector>('connectors', connectorId);
+    if (connector.botId !== bot.id) fail('forbidden', 'An invocation connector belongs to another Bot.');
+    return { connectorId, epoch: services.store.metadata<number>(`connectorEpoch:${connectorId}`) ?? 0 };
+  });
   services.store.setMetadata(`runConnectorEpochs:${run.id}`, connectorEpochs);
   const memoryContextKey = buildMemoryContextKey(services, actor, audience, bot);
   const invocationContextKey = services.mutations.digest({ principal: { kind: actor.kind, id: actor.id, userId: actor.userId, workspaceId: actor.workspaceId, role: actor.role }, botId: bot.id, conversationId: conversation.id, memoryContextKey, sharedMemoryGrant: false, invocationToolPolicy, invocationMcpServers, connectorEpochs, grantEpoch: services.store.metadata(`botPolicySync:${bot.id}`), placementEpoch: services.store.metadata<number>(`botPlacementEpoch:${bot.id}`) ?? 0 });
@@ -584,14 +590,25 @@ export async function revokeConnectorInvocations(services: BackendServices, acto
   const bot = services.store.require<P.Bot>('bots', botId);
   const lifecycle = services.store.metadata<{ action: string }>(`botLifecycle:${botId}`);
   const administrativeDelete = bot.visibility === 'team' && lifecycle?.action === 'delete' && ['admin', 'owner'].includes(actor.role);
+  const accountOwner = actor.kind === 'user' && connector.ownerUserId === actor.userId;
+  if (!services.auth.member(actor.userId).enabled) fail('forbidden', 'Connector revocation requires an enabled member.');
   if (administrativeDelete) services.auth.requireRole(actor, 'admin');
-  else if (!connector.shared && connector.ownerUserId !== actor.userId) fail('forbidden', 'Only the private connector account owner may revoke its invocations.');
-  else services.auth.bot(actor, botId, connector.shared);
-  const runs = services.store.list<P.Run>('runs', run => run.botId === botId && !terminalStatuses.includes(run.status) && (connector.shared || administrativeDelete || run.initiatorUserId === actor.userId));
+  else if (!accountOwner) {
+    if (!connector.shared) fail('forbidden', 'Only the private connector account owner may revoke its invocations.');
+    services.auth.bot(actor, botId, true);
+  }
+  let unprovenScope = false;
+  const runs = services.store.list<P.Run>('runs', run => run.botId === botId && !terminalStatuses.includes(run.status) && (connector.shared || administrativeDelete || run.initiatorUserId === actor.userId)).filter(run => {
+    const bound = services.store.metadata<RuntimeMapping>(`runtimeRun:${run.id}`);
+    const configured = bound ? services.store.metadata<string[]>(`invocationConnectors:${bound.upstreamRunId}`) : null;
+    if (!configured) { unprovenScope = true; return false; }
+    return configured.includes(connectorId);
+  });
   if (runs.length > 200) fail('too_large', 'Too many active invocations to revoke atomically.');
   const runIds = runs.map(run => run.id);
   services.store.setMetadata(`connectorRevocation:${botId}`, { connectorId, runIds, status: 'pending' } satisfies ConnectorFence);
-  const status = await stopInvocationResources(services, runs, [connectorId]);
+  const stopped = await stopInvocationResources(services, runs, [connectorId]);
+  const status = unprovenScope || stopped === 'outcome_unknown' ? 'outcome_unknown' : 'cancelled';
   services.audit(actor, 'connector.invocations.revoke', connectorId, status === 'cancelled' ? 'succeeded' : 'outcome_unknown');
   services.store.setMetadata(`connectorRevocation:${botId}`, { connectorId, runIds, status: status === 'outcome_unknown' ? 'outcome_unknown' : 'pending' } satisfies ConnectorFence);
   return { runIds, status };
