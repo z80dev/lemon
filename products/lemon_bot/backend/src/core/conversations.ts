@@ -2,7 +2,7 @@ import type * as P from '../../../contracts/protocol';
 import type { BackendServices, Principal, RequestContext, Route } from './services';
 import { ApiError, fail } from './errors';
 import { z, parse, principal, id, mutation, update, confirm, boundedText, queryObject } from './validation';
-import { cancelConversationGates, cancelGate } from './gates';
+import { cancelConversationGates } from './gates';
 
 export interface EntryAuthority { kind: 'human' | 'external' | 'bot'; userId: string; conversationId: string }
 interface StoredComposer extends P.ComposerDraft { id: string; userId: string; createdAtMs: number }
@@ -18,15 +18,31 @@ const pageFields = { limit: z.coerce.number().int().min(1).max(200).optional(), 
 const sequence = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 const active: Partial<Record<P.Run['status'], true>> = { reserved: true, queued: true, running: true, awaiting_input: true, outcome_unknown: true };
 
+/** Metadata publication or management membership never lends another person's live bot authority. */
+export function authorizedBot(services: BackendServices, actor: Principal, botId: string, manage = false): P.Bot {
+  const bot = services.store.require<P.Bot>('bots', botId);
+  if (bot.ownerUserId !== actor.userId) fail('forbidden', 'Only the bot owner may use this bot.');
+  return services.auth.bot(actor, botId, manage);
+}
+export function authorizedConversation(services: BackendServices, actor: Principal, conversationId: string): P.Conversation {
+  const room = services.store.require<P.Conversation>('conversations', conversationId);
+  if (room.ownerUserId !== actor.userId || room.humanUserIds.some(userId => userId !== actor.userId) || room.botIds.some(botId => services.store.require<P.Bot>('bots', botId).ownerUserId !== actor.userId)) fail('forbidden', 'Live conversations contain only the owner and that owner’s bots.');
+  return services.auth.conversation(actor, conversationId);
+}
+function canUseConversation(services: BackendServices, actor: Principal, conversationId: string): boolean {
+  try { authorizedConversation(services, actor, conversationId); return true; }
+  catch (error) { if (!(error instanceof ApiError)) throw error; return false; }
+}
+
 /** Every transcript projection checks both room membership and targeted-entry visibility. */
 export function authorizedEntry(services: BackendServices, actor: Principal, entryId: string, conversationId?: string): P.TranscriptEntry {
   const entry = services.store.require<P.TranscriptEntry>('entries', entryId);
-  services.auth.conversation(actor, entry.conversationId);
+  authorizedConversation(services, actor, entry.conversationId);
   if ((conversationId && entry.conversationId !== conversationId) || (entry.targetedUserId && entry.targetedUserId !== actor.userId)) fail('not_found', 'Entry is not accessible.');
   return entry;
 }
 export function visibleEntries(services: BackendServices, actor: Principal, conversationId: string): P.TranscriptEntry[] {
-  services.auth.conversation(actor, conversationId);
+  authorizedConversation(services, actor, conversationId);
   return services.store.list<P.TranscriptEntry>('entries', entry => entry.conversationId === conversationId && (!entry.targetedUserId || entry.targetedUserId === actor.userId)).sort((a, b) => a.seq - b.seq);
 }
 function owner(actor: Principal, room: P.Conversation): void {
@@ -34,27 +50,17 @@ function owner(actor: Principal, room: P.Conversation): void {
 }
 function members(services: BackendServices, actor: Principal, input: P.ConversationCreate): P.Bot[] {
   if (input.kind === 'channel') fail('forbidden', 'Channels are created by authorized channel ingress.');
-  const bots = input.botIds.map(botId => services.auth.bot(actor, botId));
+  const bots = input.botIds.map(botId => authorizedBot(services, actor, botId));
   if (new Set(input.botIds).size !== input.botIds.length) fail('invalid_request', 'Conversation bots must be distinct.');
   if (input.kind === 'group' ? bots.length < 2 || bots.length > 6 : bots.length !== 1) fail('invalid_request', 'A group requires two to six bots; other conversations require one.');
   if (input.kind === 'dm' && (bots[0]!.visibility !== 'personal' || bots[0]!.ownerUserId !== actor.userId)) fail('forbidden', 'Personal DMs belong to the bot owner.');
   if (input.kind === 'team_dm' && bots[0]!.visibility !== 'team') fail('invalid_request', 'Team DMs require a team bot.');
-  if (input.kind !== 'group' && input.humanUserIds?.some(userId => userId !== actor.userId)) fail('forbidden', 'Private conversations cannot invite other people.');
-  for (const userId of input.humanUserIds ?? []) {
-    const member = services.auth.member(userId);
-    if (!member.enabled) fail('forbidden', 'Conversation members must be enabled.');
-    if (input.kind === 'group') {
-      const target: Principal = { kind: 'user', id: userId, userId, workspaceId: actor.workspaceId, role: member.role, sessionId: null, botId: null, deviceId: null };
-      for (const bot of bots) {
-        try { services.auth.bot(target, bot.id); }
-        catch (error) { if (!(error instanceof ApiError)) throw error; fail('forbidden', 'Every invited human must be authorized for each bot. Publish a reviewed Team bot or use a Team copy before sharing.'); }
-      }
-    }
-  }
+  if (input.humanUserIds?.some(userId => userId !== actor.userId)) fail('forbidden', 'A conversation coordinates one person’s bots, not other people.');
+  if (!services.auth.member(actor.userId).enabled) fail('forbidden', 'The owner must be enabled.');
   if (input.leadBotId && !input.botIds.includes(input.leadBotId)) fail('invalid_request', 'The lead must belong to the conversation.');
   if (input.kind === 'task') {
     if (!input.parentConversationId) fail('invalid_request', 'Tasks require a parent conversation.');
-    const parent = services.auth.conversation(actor, input.parentConversationId);
+    const parent = authorizedConversation(services, actor, input.parentConversationId);
     if (!parent.botIds.includes(bots[0]!.id)) fail('forbidden', 'The task bot must belong to its parent.');
   } else if (input.parentConversationId) fail('invalid_request', 'Only tasks have a parent conversation.');
   return bots;
@@ -77,9 +83,10 @@ function bindCanonical(services: BackendServices, actor: Principal, room: P.Conv
   services.events.emit('bot.upserted', changed, { botId: bot.id });
 }
 
-/** Called only after the auth service has authorized this raw Team Bot for the viewer. */
+/** The sole stable Team DM is the actual bot owner's private conversation. */
 export function ensureTeamDM(services: BackendServices, bot: P.Bot, userId: string): P.Conversation {
-  if (bot.visibility !== 'team' || !services.auth.member(userId).enabled) fail('forbidden', 'A private Team DM requires an enabled member and an authorized Team Bot.');
+  const actual = services.store.require<P.Bot>('bots', bot.id);
+  if (actual.ownerUserId !== userId || bot.ownerUserId !== userId || bot.visibility !== 'team' || !services.auth.member(userId).enabled) fail('forbidden', 'A private Team DM belongs only to its bot owner.');
   return services.store.transaction(() => {
     const existing = services.store.list<P.Conversation>('conversations', room => room.kind === 'team_dm' && room.ownerUserId === userId && room.botIds[0] === bot.id)[0];
     const room: P.Conversation = existing ?? services.resource('conversation', { kind: 'team_dm', name: bot.name, botIds: [bot.id], humanUserIds: [userId], ownerUserId: userId, parentConversationId: null, leadBotId: bot.id, channelBindingId: null, lastEntryId: null, unreadCount: 0, lastReadSeq: 0, activity: [] });
@@ -98,7 +105,7 @@ export function createConversation(services: BackendServices, actor: Principal, 
   return services.store.transaction(() => {
     if (input.kind === 'dm' || input.kind === 'team_dm') {
       const existing = services.store.list<P.Conversation>('conversations', room => room.kind === input.kind && room.ownerUserId === actor.userId && room.botIds[0] === bots[0]!.id)[0];
-      if (existing) { bindCanonical(services, actor, existing, context); return services.auth.conversation(actor, existing.id); }
+      if (existing) { bindCanonical(services, actor, existing, context); return authorizedConversation(services, actor, existing.id); }
     }
     const room: P.Conversation = services.resource('conversation', { kind: input.kind, name: input.name ?? bots[0]!.name, botIds: input.botIds, humanUserIds: [...new Set([actor.userId, ...(input.humanUserIds ?? [])])], ownerUserId: actor.userId, parentConversationId: input.parentConversationId ?? null, leadBotId: input.leadBotId ?? bots[0]!.id, channelBindingId: null, lastEntryId: null, unreadCount: 0, lastReadSeq: 0, activity: [] });
     services.store.put('conversations', room);
@@ -114,21 +121,22 @@ export function validateAttachments(services: BackendServices, actor: Principal,
   if (attachmentIds.length > 6 || new Set(attachmentIds).size !== attachmentIds.length) fail('invalid_request', 'At most six distinct files may be attached.');
   for (const attachmentId of attachmentIds) {
     const attachment = services.auth.attachment(actor, attachmentId);
+    if (attachment.conversationId !== null) authorizedConversation(services, actor, attachment.conversationId);
     if (attachment.state !== 'ready') fail('invalid_request', 'Attachments must be fully uploaded and ready.');
     const alreadyShared = services.store.list<AttachmentShare>('attachmentShares', value => value.attachmentId === attachmentId && value.conversationId === room.id).length > 0;
     if (attachment.conversationId === room.id || alreadyShared) continue;
     if (attachment.conversationId === null && attachment.ownerUserId === actor.userId) continue;
     if (!allowSourceRooms) fail('forbidden', 'Use owned staging files or authorized files already shared into this conversation.');
-    if (attachment.conversationId !== null && services.auth.canRead(actor, 'conversations', services.store.require<P.Conversation>('conversations', attachment.conversationId))) continue;
-    const sourceShare = services.store.list<AttachmentShare>('attachmentShares', value => value.attachmentId === attachmentId).some(value => services.auth.canRead(actor, 'conversations', services.store.get<P.Conversation>('conversations', value.conversationId)));
+    if (attachment.conversationId !== null && canUseConversation(services, actor, attachment.conversationId)) continue;
+    const sourceShare = services.store.list<AttachmentShare>('attachmentShares', value => value.attachmentId === attachmentId).some(value => canUseConversation(services, actor, value.conversationId));
     if (!sourceShare) fail('forbidden', 'The source attachment room is not authorized.');
   }
 }
 function validateReferences(services: BackendServices, actor: Principal, references: P.Reference[]): void {
   for (const ref of references) {
-    if (ref.kind === 'bot') services.auth.bot(actor, ref.id);
+    if (ref.kind === 'bot') authorizedBot(services, actor, ref.id);
     else if (ref.kind === 'group') {
-      if (services.auth.conversation(actor, ref.id).kind !== 'group') fail('invalid_request', 'Group references require a group.');
+      if (authorizedConversation(services, actor, ref.id).kind !== 'group') fail('invalid_request', 'Group references require a group.');
     } else {
       const collection = { routine: 'routines', skill: 'skills', connector: 'connectors' }[ref.kind];
       const resource = services.store.require(collection, ref.id);
@@ -186,14 +194,14 @@ function assertDeletionReady(services: BackendServices, roomId: string): void {
   const entryIds = new Set(services.store.list<P.TranscriptEntry>('entries', entry => entry.conversationId === roomId).map(entry => entry.id));
   for (const collection of gateCollections) if (services.store.list<ConversationGate>(collection, resource => entryIds.has(resource.entryId) && (resource.gate.state === 'submitted' || resource.gate.state === 'outcome_unknown')).length) fail('conflict', 'Reconcile submitted or uncertain gates before deleting this conversation.');
 }
-/** Internal bot deletion may erase private rows, but never project their contents to a maintainer. */
+/** Owner-authorized bot lifecycle cleanup may erase legacy private rows without projecting their contents. */
 export function deleteConversationResources(services: BackendServices, actor: Principal, room: P.Conversation, botLifecycle = false, context?: RequestContext): P.Deleted {
   if (botLifecycle) {
     for (const botId of room.botIds) {
       const bot = services.store.require<P.Bot>('bots', botId);
-      if (bot.ownerUserId !== actor.userId && !(bot.visibility === 'team' && (actor.role === 'admin' || actor.role === 'owner'))) fail('forbidden', 'This bot lifecycle is not authorized.');
+      if (bot.ownerUserId !== actor.userId) fail('forbidden', 'Only the actual bot owner may perform this lifecycle cleanup.');
     }
-  } else { services.auth.conversation(actor, room.id); owner(actor, room); }
+  } else { authorizedConversation(services, actor, room.id); owner(actor, room); }
   assertDeletionReady(services, room.id);
   return services.store.transaction(() => {
     cancelConversationGates(services, room.id);
@@ -212,7 +220,7 @@ export function deleteConversationResources(services: BackendServices, actor: Pr
     const deleted: P.Deleted = { id: room.id, deleted: true };
     services.events.emit('conversation.deleted', deleted, { userIds: room.humanUserIds });
     if (!botLifecycle && (room.kind === 'dm' || room.kind === 'team_dm')) {
-      const bot = services.auth.bot(actor, room.botIds[0]!);
+      const bot = authorizedBot(services, actor, room.botIds[0]!);
       privateConversation(services, actor, bot, services.id('replacement'), context);
     }
     return deleted;
@@ -221,7 +229,14 @@ export function deleteConversationResources(services: BackendServices, actor: Pr
 
 /** The route and runtime.send share this function. It only calls runtime.submit, never runtime.send. */
 export async function sendMessage(services: BackendServices, actor: Principal, conversationId: string, message: P.MessageSend, context?: RequestContext, options?: { bot: P.Bot; run: P.Run; returnConversationId?: string; noHandoff?: boolean }, submission?: Partial<SubmissionContext> & { actor?: P.Actor; allowSourceAttachments?: boolean }): Promise<P.MessageReceipt> {
-  const room = services.auth.conversation(actor, conversationId);
+  const room = authorizedConversation(services, actor, conversationId);
+  if (options) {
+    authorizedBot(services, actor, options.bot.id);
+    const run = services.store.require<P.Run>('runs', options.run.id);
+    const retained = services.store.metadata<Principal>(`runPrincipal:${run.id}`);
+    if (run.botId !== options.bot.id || run.initiatorUserId !== actor.userId || !retained || retained.userId !== actor.userId || retained.id !== actor.id || retained.kind !== actor.kind) fail('forbidden', 'Bot output must retain its actual owning initiator.');
+    authorizedConversation(services, actor, run.conversationId);
+  }
   const receiptKey = `messageReceipt:${actor.kind}:${actor.id}:${room.id}:${message.clientNonce}`;
   const hash = services.mutations.digest({ message, sourceBotId: options?.bot.id ?? submission?.actor?.id ?? null });
   const prior = services.store.metadata<{ hash: string; receipt: P.MessageReceipt }>(receiptKey);
@@ -239,7 +254,7 @@ export async function sendMessage(services: BackendServices, actor: Principal, c
   const reply = message.replyToEntryId ? authorizedEntry(services, actor, message.replyToEntryId, room.id) : null;
   if (options && !room.botIds.includes(options.bot.id)) fail('forbidden', 'Posting bot must belong to this room.');
   const targets = messageTargets(room, message, reply, !!options);
-  const bots = targets.map(botId => services.auth.bot(actor, botId));
+  const bots = targets.map(botId => authorizedBot(services, actor, botId));
   if (message.voiceSessionId) {
     const voice = services.store.require<P.VoiceSession>('voiceSessions', message.voiceSessionId);
     if (voice.userId !== actor.userId || voice.conversationId !== room.id || voice.state !== 'active') fail('forbidden', 'Voice session is not active in this conversation.');
@@ -327,12 +342,12 @@ export async function sendMessage(services: BackendServices, actor: Principal, c
 export function createConversationRoutes(services: BackendServices): Route[] {
   const route = (method: string, path: string, handler: Route['handler'], status = 200, isMutation?: boolean): Route => ({
     method, path: `/v1${path}`, auth: 'member', handler, status, ...(isMutation === undefined ? {} : { mutation: isMutation }),
-    ...(path.startsWith('/conversations/:id') && method !== 'DELETE' && !path.endsWith('/leave') ? { authorizeReplay: (context: RequestContext) => { services.auth.conversation(principal(context.user), context.params.id!); } } : {}),
+    ...(path.startsWith('/conversations/:id') && method !== 'DELETE' && !path.endsWith('/leave') ? { authorizeReplay: (context: RequestContext) => { authorizedConversation(services, principal(context.user), context.params.id!); } } : {}),
   });
-  const room = (context: RequestContext) => services.auth.conversation(principal(context.user), context.params.id!);
+  const room = (context: RequestContext) => authorizedConversation(services, principal(context.user), context.params.id!);
   const owned = (context: RequestContext) => { const value = room(context); const actor = principal(context.user); owner(actor, value); for (const botId of value.botIds) lifecycleWrite(services, actor, botId, context); return value; };
   const composer = (actor: Principal, roomId: string): P.ComposerDraft => {
-    services.auth.conversation(actor, roomId);
+    authorizedConversation(services, actor, roomId);
     const key = `composer_${services.mutations.digest({ userId: actor.userId, conversationId: roomId })}`;
     let value = services.store.get<StoredComposer>('composerDrafts', key);
     if (!value) {
@@ -343,12 +358,12 @@ export function createConversationRoutes(services: BackendServices): Route[] {
     const { id: _id, userId: _userId, createdAtMs: _created, ...draft } = value;
     return draft;
   };
-  const run = (actor: Principal, runId: string) => { const value = services.store.require<P.Run>('runs', runId); services.auth.conversation(actor, value.conversationId); return value; };
+  const run = (actor: Principal, runId: string) => { const value = services.store.require<P.Run>('runs', runId); authorizedConversation(services, actor, value.conversationId); authorizedBot(services, actor, value.botId); return value; };
   const routes: Route[] = [
     route('GET', '/conversations', context => {
       const query = parse(z.object({ ...pageFields, botId: id.optional(), kind: kind.optional() }).strict(), queryObject(context.query));
       const actor = principal(context.user);
-      return services.page(context, services.store.list<P.Conversation>('conversations', value => services.auth.canRead(actor, 'conversations', value) && (!query.botId || value.botIds.includes(query.botId)) && (!query.kind || value.kind === query.kind)).map(value => project(services, actor, value)));
+      return services.page(context, services.store.list<P.Conversation>('conversations', value => canUseConversation(services, actor, value.id) && (!query.botId || value.botIds.includes(query.botId)) && (!query.kind || value.kind === query.kind)).map(value => project(services, actor, value)));
     }),
     route('POST', '/conversations', context => createConversation(services, principal(context.user), parse(createSchema, context.body), context), 201),
     route('GET', '/conversations/:id', context => project(services, principal(context.user), room(context))),
@@ -371,55 +386,18 @@ export function createConversationRoutes(services: BackendServices): Route[] {
       assertDeletionReady(services, current.id);
       services.mutations.confirm(actor, current, 'delete', input);
       for (const botId of current.botIds) {
-        const bot = services.auth.bot(actor, botId);
+        const bot = authorizedBot(services, actor, botId);
         const sessionKey = services.runtime.sessionKey(current, bot);
         const result = await services.lemon.call<{ deleted: boolean; sessionKey: string; summary?: { verified: boolean } }>('sessions.delete', { sessionKey }, { mutation: true, resourceIds: [current.id] });
         if (!result.deleted || result.sessionKey !== sessionKey || !result.summary?.verified) fail('outcome_unknown', 'The runtime did not verify conversation deletion.', false, { resourceIds: [current.id] });
       }
       return deleteConversationResources(services, actor, current, false, context);
     }),
-    route('POST', '/conversations/:id/leave', async context => {
+    route('POST', '/conversations/:id/leave', context => {
       const input = parse(mutation.extend({ newOwnerUserId: id.optional() }), context.body), actor = principal(context.user), current = room(context);
-      if (actor.kind !== 'user' || current.kind !== 'group' || !current.humanUserIds.includes(actor.userId)) fail('forbidden', 'Only a current human group participant may leave themselves.');
-      const validateSuccessor = (value: P.Conversation): string => {
-        const remaining = value.humanUserIds.filter(userId => userId !== actor.userId);
-        if (!remaining.length) fail('conflict', 'The final human must preview and delete the group instead of leaving.');
-        if (value.ownerUserId !== actor.userId) {
-          if (input.newOwnerUserId) fail('invalid_request', 'Only the current creator may select a successor.');
-          return value.ownerUserId;
-        }
-        if (!input.newOwnerUserId || !remaining.includes(input.newOwnerUserId) || !services.auth.member(input.newOwnerUserId).enabled) fail('conflict', 'The creator must select an existing enabled remaining human successor.');
-        return input.newOwnerUserId;
-      };
-      validateSuccessor(current);
-      const ownRuns = services.store.list<P.Run>('runs', run => run.initiatorUserId === actor.userId && active[run.status] === true && (run.conversationId === current.id || services.store.metadata<string>(`runReturnConversation:${run.id}`) === current.id));
-      for (const run of ownRuns) {
-        try { await services.runtime.cancel(actor, run.id, 'Leaving this group.'); }
-        catch (error) { if (!(error instanceof ApiError)) throw error; fail('conflict', 'Owned group work has not been proven terminal; membership is unchanged.', false, { runIds: ownRuns.map(value => value.id) }); }
-      }
-      const remainingRuns = services.store.list<P.Run>('runs', run => run.initiatorUserId === actor.userId && active[run.status] === true && (run.conversationId === current.id || services.store.metadata<string>(`runReturnConversation:${run.id}`) === current.id));
-      if (remainingRuns.length) fail('conflict', 'Wait for owned group work to reach a terminal state before leaving.', true, { runIds: remainingRuns.map(value => value.id) });
-      for (const collection of gateCollections) for (const resource of services.store.list<ConversationGate>(collection, value => value.gate.targetUserId === actor.userId)) {
-        const entry = services.store.get<P.TranscriptEntry>('entries', resource.entryId);
-        const run = entry?.runId ? services.store.get<P.Run>('runs', entry.runId) : null;
-        if (entry?.conversationId !== current.id && run?.conversationId !== current.id && (!run || services.store.metadata<string>(`runReturnConversation:${run.id}`) !== current.id)) continue;
-        if (resource.gate.state === 'submitted' || resource.gate.state === 'outcome_unknown') fail('conflict', 'Resolve uncertain owned group input before leaving; membership is unchanged.', false, { runIds: run ? [run.id] : [] });
-        if (resource.gate.state === 'pending') cancelGate(services, collection, resource.id);
-      }
-      return services.store.transaction(() => {
-        const latest = services.auth.conversation(actor, current.id);
-        const newOwner = validateSuccessor(latest);
-        if (!latest.humanUserIds.includes(actor.userId)) fail('conflict', 'Membership already changed.');
-        services.entry(actor, current.id, { kind: 'event', clientNonce: input.clientNonce, event: { type: 'person_left', userId: actor.userId } });
-        const stored = services.store.require<P.Conversation>('conversations', current.id);
-        const changed = services.update(stored, { ownerUserId: newOwner, humanUserIds: stored.humanUserIds.filter(userId => userId !== actor.userId) });
-        services.store.put('conversations', changed);
-        for (const draft of services.store.list<StoredComposer>('composerDrafts', value => value.userId === actor.userId && value.conversationId === current.id)) services.store.remove('composerDrafts', draft.id);
-        services.store.setMetadata(`conversationRead:${actor.userId}:${current.id}`, null);
-        services.events.emit('conversation.upserted', changed, { conversationId: current.id });
-        services.events.emit('conversation.left', { conversationId: current.id, userId: actor.userId }, { userIds: latest.humanUserIds, conversationId: current.id });
-        return { ok: true } satisfies P.Empty;
-      });
+      if (actor.kind !== 'user' || current.kind !== 'group') fail('forbidden', 'Only the group owner may manage this group.');
+      if (input.newOwnerUserId && input.newOwnerUserId !== actor.userId) fail('forbidden', 'A group cannot transfer the owner’s bot authority to another person.');
+      fail('conflict', 'The sole owner must preview and delete the group instead of leaving.');
     }),
     route('POST', '/conversations/:id/read', context => {
       const input = parse(mutation.extend({ throughSeq: sequence, unread: z.boolean().optional() }), context.body), actor = principal(context.user), current = room(context);

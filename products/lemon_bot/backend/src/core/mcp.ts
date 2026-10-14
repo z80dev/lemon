@@ -2,7 +2,7 @@ import type * as P from '../../../contracts/protocol';
 import type { BackendServices, Principal, RequestContext, Route } from './services';
 import { ApiError, errorEnvelope, fail } from './errors';
 import { z, parse, principal, id, mutation, update, voice, boundedText } from './validation';
-import { authorizedEntry, createConversation, fenceContext, privateConversation, recentRoomContext, sendMessage, validateAttachments, type EntryAuthority } from './conversations';
+import { authorizedBot, authorizedConversation, authorizedEntry, createConversation, fenceContext, privateConversation, recentRoomContext, sendMessage, validateAttachments, type EntryAuthority } from './conversations';
 import { cancelGate, createDraft } from './gates';
 import { importMachineFile } from '../runtime/machines';
 import { observeInvocation, type InvocationProofBinding, type InvocationContext, type RuntimeMapping } from '../runtime/runs';
@@ -68,8 +68,10 @@ export function resolveToolInvocation(services: BackendServices, token: Principa
   const member = services.auth.member(snapshot.userId);
   if (!member.enabled) fail('forbidden', 'The initiating member is disabled.');
   const actor = { ...snapshot, role: member.role };
-  const room = services.auth.conversation(actor, run.conversationId);
-  const bot = services.auth.bot(actor, token.botId);
+  const room = authorizedConversation(services, actor, run.conversationId);
+  const bot = authorizedBot(services, actor, token.botId);
+  const returnConversationId = services.store.metadata<string>(`runReturnConversation:${run.id}`);
+  if (returnConversationId) authorizedConversation(services, actor, returnConversationId);
   const machine = services.store.require<P.Machine>('machines', bot.machineId);
   if (!room.botIds.includes(token.botId) || machine.nodeId !== binding.nodeId || mapping.profileId !== bot.profileId) fail('forbidden', 'The original bot membership or native placement is no longer authorized.');
   return { principal: actor, bot, run: allowTerminal ? run : observeInvocation(services, proofValue), conversation: room };
@@ -100,9 +102,10 @@ async function boundedOperation<T>(operation: Promise<T>): Promise<T> {
 async function specialist(services: BackendServices, input: P.MessageBotInput | P.HandoffInput, invocation: ToolInvocation, context: RequestContext): Promise<P.MessageBotResult> {
   const { principal: actor, bot: source, run, conversation: origin } = invocation;
   if (services.store.metadata<boolean>(`runNoHandoff:${run.id}`) || source.id === input.targetBotId) fail('policy_denied', 'This invocation does not permit further handoffs.');
-  const target = services.auth.bot(actor, input.targetBotId);
+  const target = authorizedBot(services, actor, input.targetBotId);
   const originalReturn = services.store.metadata<string>(`runReturnConversation:${run.id}`) ?? origin.id;
-  const returnRoom = services.auth.conversation(actor, input.replyConversationId ?? originalReturn);
+  if (input.replyConversationId && input.replyConversationId !== originalReturn) fail('forbidden', 'A handoff cannot select a different output audience.');
+  const returnRoom = authorizedConversation(services, actor, originalReturn);
   if (!returnRoom.botIds.includes(source.id)) fail('forbidden', 'The source bot must belong to the authorized return room.');
   if (origin.kind === 'channel' || returnRoom.kind === 'channel') {
     if (!services.integrations.assertChannelHandoff) fail('capability_unavailable', 'The channel has no configured handoff authority policy.');
@@ -123,7 +126,7 @@ async function specialist(services: BackendServices, input: P.MessageBotInput | 
     job = { hash: jobHash, conversationId: task.id }; services.store.setMetadata(jobKey, job);
     services.entry(actor, origin.id, { kind: 'event', actor: { kind: 'bot', id: source.id, displayName: source.name }, runId: run.id, clientNonce: input.clientNonce, event: { type: 'handoff', sourceBotId: source.id, targetBotId: target.id, targetConversationId: task.id, text: input.text } });
   }
-  const task = services.auth.conversation(actor, job.conversationId);
+  const task = authorizedConversation(services, actor, job.conversationId);
   const historyRoom = returnRoom.kind === 'group' || returnRoom.kind === 'channel' ? returnRoom : origin;
   const fenced = `Specialist job from ${source.name}; do not delegate again. Return only to the verified original conversation.\n${fenceContext(('task' in input ? input.task + '\n' : '') + input.text)}\nAuthorized destination transcript:\n${recentRoomContext(services, actor, historyRoom.id)}`;
   const receipt = await sendMessage(services, actor, task.id, { clientNonce: input.clientNonce, text: fenced, attachmentIds: input.attachmentIds }, context, undefined, { returnConversationId: returnRoom.id, sourceEntryId, noHandoff: true, parentRunId: run.id, sourceBotId: source.id, allowSourceAttachments: true, actor: { kind: 'bot', id: source.id, displayName: source.name } });
@@ -199,7 +202,7 @@ function toolHandlers(services: BackendServices): ToolHandlers {
       return services.invoke<P.Routine>(invocation.principal, 'PATCH', `/v1/routines/${encodeURIComponent(routineId)}`, body);
     },
     save_skill: async (input, invocation) => {
-      services.auth.bot(invocation.principal, invocation.bot.id, true);
+      authorizedBot(services, invocation.principal, invocation.bot.id, true);
       const grant = (await effectiveBotGrants(services, invocation.principal, invocation.bot)).find(value => value.capabilityId === 'files');
       if (!grant || grant.effectiveLevel !== 'read_interact') fail('policy_denied', 'Saving a skill requires current read/interact file authorization.');
       return services.invoke<P.Skill>(invocation.principal, 'POST', '/v1/skills', { ...input, botId: invocation.bot.id, machineIds: [invocation.bot.machineId] });
@@ -210,7 +213,7 @@ function toolHandlers(services: BackendServices): ToolHandlers {
       return services.invoke<P.Page<P.Bot>>(invocation.principal, 'GET', `/v1/bots${query.size ? '?' + query : ''}`);
     },
     post_to_group: async (input, invocation, context) => {
-      const room = services.auth.conversation(invocation.principal, input.groupConversationId);
+      const room = authorizedConversation(services, invocation.principal, input.groupConversationId);
       if (room.kind !== 'group' || !room.botIds.includes(invocation.bot.id)) fail('forbidden', 'The bot must belong to this group.');
       if (input.mentions?.length && services.store.metadata<boolean>(`runNoHandoff:${invocation.run.id}`)) fail('policy_denied', 'This invocation does not permit waking more bots.');
       return sendMessage(services, invocation.principal, room.id, { clientNonce: input.clientNonce, text: input.text, attachmentIds: input.attachmentIds, mentions: input.mentions }, context, { bot: invocation.bot, run: invocation.run, noHandoff: true });
@@ -218,12 +221,12 @@ function toolHandlers(services: BackendServices): ToolHandlers {
     remember: async (input, invocation, context) => {
       const { conversationId, ...body } = input;
       if (body.scope === 'team') {
-        services.auth.bot(invocation.principal, invocation.bot.id, true);
+        authorizedBot(services, invocation.principal, invocation.bot.id, true);
         const approval = await services.gates.create<P.Approval>(invocation.principal, 'approval', { clientNonce: input.clientNonce, botId: invocation.bot.id, runId: invocation.run.id, conversationId: invocation.conversation.id, targetUserId: invocation.principal.userId, category: 'permissions', title: 'Share a memory with the team', description: 'Store this exact proposed fact in team-shared memory.', target: invocation.bot.id, inputs: { text: body.text, kind: body.kind, scope: body.scope }, source: 'product', forceHuman: true });
         recordGateWait(services, context, 'approvals', approval.id);
         const result = await services.gates.wait<P.Approval>('approvals', approval.id);
         if (result.gate.state !== 'approved' || result.gate.resolvedByUserId !== invocation.principal.userId) fail('policy_denied', 'Team memory sharing was not explicitly approved.');
-        services.auth.bot(invocation.principal, invocation.bot.id, true);
+        authorizedBot(services, invocation.principal, invocation.bot.id, true);
       }
       return services.invoke<P.Memory>(invocation.principal, 'POST', `/v1/bots/${encodeURIComponent(invocation.bot.id)}/memory`, body);
     },
@@ -268,16 +271,7 @@ export function createMcpRoutes(services: BackendServices): Route[] {
     if (token.kind !== 'bot' || !token.botId) fail('unauthenticated', 'Bot tools require a bot bearer token.');
     if (name === 'list_bots') {
       const listInput = input as P.BotListInput;
-      const live = services.store.list<P.Run>('runs', run => run.botId === token.botId && run.status !== 'succeeded' && run.status !== 'failed' && run.status !== 'cancelled');
-      let actor: Principal;
-      if (context.request.headers.has('X-Lemon-Bot-Invocation')) actor = resolveToolInvocation(services, token, context.request).principal;
-      else if (live.length) fail('forbidden', 'An active bot must use its own invocation proof; there is no owner fallback.');
-      else {
-        const bot = services.store.require<P.Bot>('bots', token.botId);
-        const member = services.auth.member(bot.ownerUserId);
-        if (!member.enabled || token.userId !== bot.ownerUserId) fail('forbidden', 'The bot owner is unavailable.');
-        actor = { kind: 'user', id: member.userId, userId: member.userId, workspaceId: token.workspaceId, role: member.role, sessionId: null, botId: null, deviceId: null };
-      }
+      const actor = resolveToolInvocation(services, token, context.request).principal;
       const query = new URLSearchParams();
       if (listInput.query !== undefined) query.set('query', listInput.query); if (listInput.limit !== undefined) query.set('limit', String(listInput.limit)); if (listInput.cursor !== undefined) query.set('cursor', listInput.cursor);
       const result = await services.invoke<P.Page<P.Bot>>(actor, 'GET', `/v1/bots${query.size ? '?' + query : ''}`);
