@@ -300,6 +300,17 @@ defmodule LemonAgent.ModelRuntime.ProviderConfigurationTest do
              )
 
     assert File.read!(ctx.config_path) =~ ~s(thinking_level = "high")
+
+    auto = Map.put(thinking, "thinkingLevel", "auto")
+    assert {:ok, preview} = ProviderConfiguration.configure(auto)
+    assert {:ok, _} =
+             ProviderConfiguration.configure(
+               Map.merge(auto, %{
+                 "apply" => true,
+                 "expectedRevision" => preview["configRevision"]
+               })
+             )
+    assert LemonCore.Config.load(ctx.project).agent.default_thinking_level == :auto
   end
 
   test "rejects unknown providers, malformed models and unsupported thinking levels", ctx do

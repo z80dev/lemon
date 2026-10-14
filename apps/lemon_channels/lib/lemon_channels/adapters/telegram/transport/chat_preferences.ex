@@ -13,7 +13,7 @@ defmodule LemonChannels.Adapters.Telegram.Transport.ChatPreferences do
   alias LemonCore.ChatScope
   alias LemonCore.ProjectBindingStore
 
-  @thinking_levels ~w(off minimal low medium high xhigh)
+  @thinking_levels ~w(off minimal low medium high xhigh auto)
 
   @type callbacks :: %{
           extract_chat_ids: (map() -> {integer() | nil, integer() | nil}),

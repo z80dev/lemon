@@ -48,7 +48,7 @@ defmodule LemonAgent.Loop do
 
   require Logger
 
-  alias LemonAgent.{AbortSignal, Budget, EventStream}
+  alias LemonAgent.{AbortSignal, AutoThinking, Budget, EventStream}
   alias LemonAgent.Loop.{StateMachine, Streaming, ToolCalls}
   alias LemonAgent.Types.{AgentContext, AgentLoopConfig, AgentToolResult, ToolSchemaSnapshot}
 
@@ -321,6 +321,7 @@ defmodule LemonAgent.Loop do
       | messages: context.messages ++ prompts
     }
 
+    config = AutoThinking.reset_for_user_prompts(config, prompts)
     {current_context, config, snapshot} = snapshot_tool_schema(current_context, config)
 
     # Emit initial events
@@ -523,16 +524,35 @@ defmodule LemonAgent.Loop do
     )
 
     # Process pending messages (inject before next assistant response)
+    config = AutoThinking.reset_for_user_prompts(config, pending_messages)
     {context, new_messages, _cleared_pending} =
       process_pending_messages(context, new_messages, pending_messages, stream)
 
     transition_loop_state(stream, :await_model, %{first_turn: first_turn})
 
-    # Check before each response; Streaming also checks before every retry.
-    response =
+    config = refresh_model(config)
+
+    # Classification runs in the model-loop task and is cached per user prompt,
+    # not repeated by tool turns or provider retries.
+    {response, config} =
       case budget_check(config) do
-        nil -> Streaming.stream_assistant_response(context, config, signal, stream_fn, stream)
-        details -> {:error, {:budget_exceeded, details}}
+        nil ->
+          case AutoThinking.prepare_turn(config, context.messages, signal) do
+            {:ok, prepared_config} ->
+              {Streaming.stream_assistant_response(
+                 context,
+                 prepared_config,
+                 signal,
+                 stream_fn,
+                 stream
+               ), prepared_config}
+
+            {:error, :aborted} = error ->
+              {error, config}
+          end
+
+        details ->
+          {{:error, {:budget_exceeded, details}}, config}
       end
 
     case response do
@@ -682,11 +702,49 @@ defmodule LemonAgent.Loop do
       {:error, {:budget_exceeded, details}} ->
         stop_usage_budget(context, new_messages, nil, details, stream)
 
+      {:error, :aborted} ->
+        transition_loop_state(stream, :aborted, %{reason: :assistant_aborted})
+        EventStream.cancel(stream, :assistant_aborted)
+        {context, new_messages, [], false}
+
       {:error, reason} ->
         transition_loop_state(stream, :recovering_provider_error, %{reason: reason})
         EventStream.error(stream, reason, new_messages)
         transition_loop_state(stream, :finalizing, %{reason: :stream_error})
         {context, new_messages, [], false}
+    end
+  end
+
+  @doc false
+  @spec refresh_model(AgentLoopConfig.t()) :: AgentLoopConfig.t()
+  def refresh_model(%AgentLoopConfig{get_model: nil} = config), do: config
+
+  def refresh_model(config) do
+    model = config.get_model.()
+
+    if model == config.model do
+      config
+    else
+      effort =
+        if config.resolve_thinking,
+          do: config.resolved_thinking || AutoThinking.default_effort(model),
+          else: config.stream_options.reasoning
+
+      options =
+        cond do
+          config.resolve_stream_options ->
+            config.resolve_stream_options.(model, config.model, config.stream_options)
+
+          model.provider != config.model.provider ->
+            LemonAgent.ModelRuntime.StreamOptions.sanitize_for_provider_switch(config.stream_options)
+
+          true ->
+            config.stream_options
+        end
+
+      options = %{options | reasoning: AutoThinking.clamp_effort(model, effort)}
+
+      %{config | model: model, stream_options: options}
     end
   end
 

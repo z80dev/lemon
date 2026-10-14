@@ -26,13 +26,14 @@ defmodule LemonAgent.Types do
   Thinking/reasoning level for models that support extended reasoning.
 
   - `:off` - No extended thinking
+  - `:auto` - Classify each user prompt with an explicitly configured small model
   - `:minimal` - Minimal reasoning output
   - `:low` - Low reasoning effort
   - `:medium` - Medium reasoning effort
   - `:high` - High reasoning effort
   - `:xhigh` - Extra high reasoning (only supported by certain OpenAI models)
   """
-  @type thinking_level :: :off | :minimal | :low | :medium | :high | :xhigh
+  @type thinking_level :: :off | :auto | :minimal | :low | :medium | :high | :xhigh
 
   # ============================================================================
   # Agent Message
@@ -362,6 +363,12 @@ defmodule LemonAgent.Types do
       (useful for context window management, injecting external context)
     - `get_api_key` - Resolves API key dynamically for each LLM call
       (useful for short-lived OAuth tokens)
+    - `get_model` - Reads the active model before each response, including tool-driven switches
+    - `resolve_stream_options` - Rebuilds destination options after a live model/provider switch
+    - `resolve_thinking` - Resolves auto to concrete effort in the loop task, once per user prompt
+    - `thinking_prompt` - Last classified user-prompt marker, retained across continuation
+    - `resolved_thinking` - Concrete auto selection, reclamped without reclassifying on model switches
+    - `on_thinking_resolved` - Internal cache callback; does not publish classifier events
     - `get_steering_messages` - Returns messages to inject mid-run for steering
     - `has_steering_messages` - Non-consuming queue peek used between tool calls
     - `get_follow_up_messages` - Returns follow-up messages after agent would stop
@@ -388,6 +395,15 @@ defmodule LemonAgent.Types do
                | {:ok, [LemonAgent.Types.agent_message()]}
                | {:error, term()})
     @type get_api_key_fn :: (provider :: String.t() -> String.t() | nil)
+    @type get_model_fn :: (-> LemonAi.Types.Model.t())
+    @type resolve_stream_options_fn ::
+            (LemonAi.Types.Model.t(), LemonAi.Types.Model.t(), LemonAi.Types.StreamOptions.t() ->
+               LemonAi.Types.StreamOptions.t())
+    @type resolve_thinking_fn ::
+            (LemonAi.Types.Model.t(), LemonAgent.Types.agent_message(), reference() | nil ->
+               {:ok, LemonAi.Types.StreamOptions.thinking_level() | nil} | {:error, :aborted})
+    @type on_thinking_resolved_fn ::
+            (term(), LemonAi.Types.StreamOptions.thinking_level() | nil -> term())
     @type get_steering_messages_fn :: (-> [LemonAgent.Types.agent_message()])
     @type has_steering_messages_fn :: (-> boolean())
     @type get_follow_up_messages_fn :: (-> [LemonAgent.Types.agent_message()])
@@ -402,6 +418,12 @@ defmodule LemonAgent.Types do
             convert_to_llm: convert_to_llm_fn(),
             transform_context: transform_context_fn() | nil,
             get_api_key: get_api_key_fn() | nil,
+            get_model: get_model_fn() | nil,
+            resolve_stream_options: resolve_stream_options_fn() | nil,
+            resolve_thinking: resolve_thinking_fn() | nil,
+            thinking_prompt: term() | nil,
+            resolved_thinking: LemonAi.Types.StreamOptions.thinking_level() | nil,
+            on_thinking_resolved: on_thinking_resolved_fn() | nil,
             get_steering_messages: get_steering_messages_fn() | nil,
             has_steering_messages: has_steering_messages_fn() | nil,
             get_follow_up_messages: get_follow_up_messages_fn() | nil,
@@ -423,6 +445,12 @@ defmodule LemonAgent.Types do
               convert_to_llm: nil,
               transform_context: nil,
               get_api_key: nil,
+              get_model: nil,
+              resolve_stream_options: nil,
+              resolve_thinking: nil,
+              thinking_prompt: nil,
+              resolved_thinking: nil,
+              on_thinking_resolved: nil,
               get_steering_messages: nil,
               has_steering_messages: nil,
               get_follow_up_messages: nil,

@@ -682,7 +682,7 @@ defmodule LemonControlPlane.ACP do
     end
   end
 
-  defp config_value("thinking", value) when value in ~w(off minimal low medium high xhigh),
+  defp config_value("thinking", value) when value in ~w(off minimal low medium high xhigh auto),
     do: {:ok, :thinking, value}
 
   defp config_value("approval", value) when value in ["ask", "never", "auto"],
