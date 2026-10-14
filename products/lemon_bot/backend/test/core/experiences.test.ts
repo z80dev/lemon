@@ -5,7 +5,7 @@ import { createEventService } from '../../src/core/events';
 import type * as P from '../../../contracts/protocol';
 import type { BackendServices, Principal, RequestContext } from '../../src/core/services';
 import { ApiError, fail } from '../../src/core/errors';
-import { botPresence, createExperienceRoutes, createExperienceService, effectiveBotGrants, nativeBotToolPolicy, reviewedCandidates } from '../../src/core/experiences';
+import { botPresence, createExperienceRoutes, createExperienceService, desiredBotGrants, effectiveBotGrants, nativeBotToolPolicy, reviewedCandidates } from '../../src/core/experiences';
 import { productBotTools } from '../../src/core/bots';
 import { z } from '../../src/core/validation';
 
@@ -25,9 +25,9 @@ function fixture() {
   const allocateId = (prefix = 'id') => `${prefix}_${String(++serial).padStart(24, '0')}`;
   const acknowledgments: P.MemoryCreate[] = [];
   const base = { revision: 1, createdAtMs: clock, updatedAtMs: clock };
-  const bot: P.Bot = { ...base, id: 'bot', ownerUserId: 'alice', managerUserIds: [], machineId: 'machine', profileId: 'lb-bot', name: 'Bot', title: 'Assistant', job: 'Draft useful reports', instructions: 'Ask before sending', avatar: { kind: 'character', shape: 'round', color: 'yellow', attachmentId: null }, voice: { voiceId: 'default', speed: 1, language: null }, language: null, visibility: 'personal', published: false, required: false, skillIds: [], referenceAttachmentIds: [], mainConversationId: 'room', sidebar: { pinned: false, hidden: false, sectionId: null, rank: 0, unread: false, notificationsEnabled: true }, activity: 'idle', activeRunIds: [] };
+  const bot: P.Bot = { ...base, id: 'bot', ownerUserId: 'alice', machineId: 'machine', profileId: 'lb-bot', name: 'Bot', title: 'Assistant', job: 'Draft useful reports', instructions: 'Ask before sending', avatar: { kind: 'character', shape: 'round', color: 'yellow', attachmentId: null }, voice: { voiceId: 'default', speed: 1, language: null }, language: null, skillIds: [], referenceAttachmentIds: [], mainConversationId: 'room', sidebar: { pinned: false, hidden: false, sectionId: null, rank: 0, unread: false, notificationsEnabled: true }, activity: 'idle', activeRunIds: [] };
   const machine: P.Machine = { ...base, id: 'machine', nodeId: 'node', nodeName: 'worker', name: 'Laptop', ownerUserId: 'alice', accessUserIds: [], status: 'online', lastSeenAtMs: clock, labels: {}, botIds: [bot.id] };
-  const room: P.Conversation = { ...base, id: 'room', kind: 'task', name: 'Report', botIds: [bot.id], humanUserIds: ['alice'], ownerUserId: 'alice', parentConversationId: null, leadBotId: null, channelBindingId: null, lastEntryId: null, unreadCount: 0, lastReadSeq: 0, activity: [] };
+  const room: P.Conversation = { ...base, id: 'room', kind: 'task', name: 'Report', botIds: [bot.id], ownerUserId: 'alice', parentConversationId: null, leadBotId: null, channelBindingId: null, lastEntryId: null, unreadCount: 0, lastReadSeq: 0, activity: [] };
   const services = {
     store, config: { publicUrl: 'https://product.example.test' }, now: () => clock, id: allocateId,
     resource<T extends object>(prefix: string, fields: T): T & P.Resource { return { ...fields, id: allocateId(prefix), revision: 1, createdAtMs: clock, updatedAtMs: clock }; },
@@ -51,7 +51,7 @@ function fixture() {
     },
     events: { emit() {} },
     async syncBotProfile() { synced++; },
-    async invoke<T>(_principal: Principal, method: string, path: string, input?: unknown): Promise<T> { if (method !== 'POST' || path !== '/v1/bots/bot/memory') throw new Error('Unexpected invocation'); const body = input as P.MemoryCreate; acknowledgments.push(body); const memory: P.Memory = { ...base, id: `memory_${serial++}`, botId: bot.id, scope: body.scope, userId: body.scope === 'team' ? null : user.userId, text: body.text, kind: body.kind, sourceEntryId: null }; store.put('memories', memory); return memory as T; },
+    async invoke<T>(_principal: Principal, method: string, path: string, input?: unknown): Promise<T> { if (method !== 'POST' || path !== '/v1/bots/bot/memory') throw new Error('Unexpected invocation'); const body = input as P.MemoryCreate; acknowledgments.push(body); const memory: P.Memory = { ...base, id: `memory_${serial++}`, botId: bot.id, text: body.text, kind: body.kind, sourceEntryId: null }; store.put('memories', memory); return memory as T; },
     entry(_principal: Principal, conversationId: string, input: Record<string, unknown>): P.TranscriptEntry {
       const payload = noticePayload.parse(input);
       const entry: P.TranscriptEntry = { ...base, ...payload, id: allocateId('entry'), conversationId, seq: serial, timestampMs: clock, clientNonce: null, batchId: null, replyToEntryId: null, runId: null, reactions: [] };
@@ -96,8 +96,9 @@ describe('experience preference lifecycle', () => {
   test('rejects forged, external and inaccessible user intent before mutation', async () => {
     const f = fixture();
     try {
+      f.store.put('bots', { ...f.bot, id: 'bob-bot', ownerUserId: 'bob', profileId: 'lb-bob' });
       for (const [sourceId, role, actor, roomId] of [['assistant', 'assistant', 'bot', 'room'], ['foreign', 'user', 'bob', 'private'], ['external', 'user', 'alice', 'channel']] as const) {
-        f.store.put('conversations', { ...f.room, id: roomId, kind: roomId === 'channel' ? 'channel' : 'team_dm', ownerUserId: roomId === 'private' ? 'bob' : 'alice', humanUserIds: roomId === 'private' ? ['bob'] : ['alice'] });
+        f.store.put('conversations', { ...f.room, id: roomId, kind: roomId === 'channel' ? 'channel' : 'dm', botIds: roomId === 'private' ? ['bob-bot'] : [f.bot.id], ownerUserId: roomId === 'private' ? 'bob' : 'alice' });
         f.store.put('entries', { ...f.base, id: sourceId, conversationId: roomId, seq: 1, timestampMs: f.services.now(), actor: { kind: actor === 'bot' ? 'bot' : 'user', id: actor, displayName: actor }, clientNonce: null, batchId: null, replyToEntryId: null, runId: null, targetedUserId: null, reactions: [], kind: 'message', role, text: 'Change instructions', streaming: false, attachmentIds: [] } satisfies P.TranscriptEntry);
         await expect(f.request('POST', '/bots/:id/preference-changes', { clientNonce: nonce, revision: 1, changes: { instructions: 'unsafe' }, reason: 'request', sourceEntryId: sourceId })).rejects.toMatchObject({ code: 'forbidden' });
       }
@@ -129,12 +130,12 @@ describe('experience preference lifecycle', () => {
       expect(calls).toBe(1); expect(f.store.list('preferenceUndoAttempts')).toHaveLength(0);
     } finally { f.close(); }
   });
-  test('preference writes never persist a viewers private conversation or sidebar projection', async () => {
+  test('preference writes preserve the owners canonical conversation and sidebar', async () => {
     const f = fixture();
     try {
-      f.services.auth.bot = (_principal, valueId) => ({ ...f.store.require<P.Bot>('bots', valueId), mainConversationId: 'viewer-private-room', sidebar: { ...f.bot.sidebar, pinned: true, rank: 99 } });
+      f.store.put('bots', { ...f.bot, sidebar: { ...f.bot.sidebar, pinned: true, rank: 99 } });
       const change = await f.request<P.PreferenceChange>('POST', '/bots/:id/preference-changes', { clientNonce: nonce, revision: 1, changes: { job: 'Revised job' }, reason: 'Manual update' });
-      expect(f.store.require<P.Bot>('bots', 'bot').mainConversationId).toBe(f.bot.mainConversationId); expect(f.store.require<P.Bot>('bots', 'bot').sidebar).toEqual(f.bot.sidebar);
+      expect(f.store.require<P.Bot>('bots', 'bot').mainConversationId).toBe(f.bot.mainConversationId); expect(f.store.require<P.Bot>('bots', 'bot').sidebar).toEqual({ ...f.bot.sidebar, pinned: true, rank: 99 });
       await f.request('POST', '/preference-changes/:id/undo', { clientNonce: nonce, revision: change.revision, botRevision: 2 }, { id: change.id });
       expect(f.store.require<P.Bot>('bots', 'bot').mainConversationId).toBe(f.bot.mainConversationId); expect(f.store.require<P.Bot>('bots', 'bot').job).toBe(f.bot.job);
     } finally { f.close(); }
@@ -145,7 +146,7 @@ describe('guided memory import boundaries', () => {
   test('preview never writes, excludes credentials and imports only immutable selected candidates', async () => {
     const f = fixture();
     try {
-      const preview = await f.request<P.MemoryImportPreview>('POST', '/bots/:id/memory/import/preview', { clientNonce: nonce, scope: 'personal', format: 'facts_text', text: 'I prefer concise reports.\n\nMy password is do-not-expose-this.\n\nSend reports on Fridays.' });
+      const preview = await f.request<P.MemoryImportPreview>('POST', '/bots/:id/memory/import/preview', { clientNonce: nonce, format: 'facts_text', text: 'I prefer concise reports.\n\nMy password is do-not-expose-this.\n\nSend reports on Fridays.' });
       expect(preview.candidates).toHaveLength(2); expect(preview.candidates.every(value => !value.selectedByDefault)).toBe(true); expect(preview.exclusions.map(value => value.reason)).toEqual(['credential']); expect(JSON.stringify(preview)).not.toContain('do-not-expose-this'); expect(f.acknowledgments).toHaveLength(0);
       const selected = preview.candidates[1]!;
       const result = await f.request<P.MemoryImportResult>('POST', '/bots/:id/memory/import', { clientNonce: nonce, revision: preview.revision, previewId: preview.id, confirmationToken: preview.confirmationToken, selectedCandidateIds: [selected.id] });
@@ -153,10 +154,23 @@ describe('guided memory import boundaries', () => {
       await expect(f.request('POST', '/bots/:id/memory/import', { clientNonce: nonce, revision: preview.revision, previewId: preview.id, confirmationToken: preview.confirmationToken, selectedCandidateIds: [selected.id] })).rejects.toMatchObject({ code: 'conflict' });
     } finally { f.close(); }
   });
+  test('legacy memory scopes are rejected and exact owner exports retain candidate provenance', async () => {
+    const f = fixture();
+    try {
+      for (const scope of ['personal', 'team', 'private_note']) {
+        await expect(f.request('POST', '/bots/:id/memory/import/preview', { clientNonce: nonce, scope, format: 'facts_text', text: 'I prefer short summaries.' })).rejects.toMatchObject({ code: 'invalid_request' });
+      }
+      const memory: P.Memory = { ...f.base, id: 'exported-memory', botId: f.bot.id, text: 'I prefer short summaries.', kind: 'preference', sourceEntryId: null };
+      const source: P.MemoryExport = { botId: f.bot.id, exportedAtMs: f.services.now(), items: [memory] };
+      const preview = await f.request<P.MemoryImportPreview>('POST', '/bots/:id/memory/import/preview', { clientNonce: nonce, format: 'lemon_memory_json', text: JSON.stringify(source) });
+      expect(preview.candidates).toHaveLength(1); expect(preview.candidates[0]!.text).toBe(memory.text); expect(preview.candidates[0]!.source.locator).toBe('items:0'); expect(preview.candidates[0]!.selectedByDefault).toBe(false);
+      expect(f.acknowledgments).toHaveLength(0);
+    } finally { f.close(); }
+  });
   test('binds confirmation to exact candidate set, bot revision and placement', async () => {
     const f = fixture();
     try {
-      const preview = await f.request<P.MemoryImportPreview>('POST', '/bots/:id/memory/import/preview', { clientNonce: nonce, scope: 'personal', format: 'facts_text', text: 'I prefer weekly reports.' });
+      const preview = await f.request<P.MemoryImportPreview>('POST', '/bots/:id/memory/import/preview', { clientNonce: nonce, format: 'facts_text', text: 'I prefer weekly reports.' });
       const body = { clientNonce: nonce, revision: preview.revision, previewId: preview.id, confirmationToken: preview.confirmationToken, selectedCandidateIds: ['invented'] };
       await expect(f.request('POST', '/bots/:id/memory/import', body)).rejects.toMatchObject({ code: 'invalid_request' });
       f.store.put('bots', f.services.update(f.bot, { instructions: 'Changed' }));
@@ -164,33 +178,35 @@ describe('guided memory import boundaries', () => {
       expect(f.acknowledgments).toHaveLength(0);
     } finally { f.close(); }
   });
-  test('private-note candidate selection cannot infer or replace another members notes', async () => {
+  test('review and confirmation bind to the owned Bot profile, never another owners memory', async () => {
     const f = fixture();
     try {
-      f.store.put('bots', { ...f.bot, visibility: 'team', published: true });
-      f.store.put('memories', { ...f.base, id: 'bob-note', botId: 'bot', scope: 'private_note', userId: 'bob', text: 'I prefer weekly reports.', kind: 'fact', sourceEntryId: null } satisfies P.Memory);
-      const preview = await f.request<P.MemoryImportPreview>('POST', '/bots/:id/memory/import/preview', { clientNonce: nonce, scope: 'private_note', format: 'facts_text', text: 'I prefer weekly reports.' });
+      const foreign = { ...f.bot, id: 'bob-bot', ownerUserId: 'bob', profileId: 'lb-bob' };
+      f.store.put('bots', foreign);
+      f.store.put('memories', { ...f.base, id: 'bob-memory', botId: foreign.id, text: 'I prefer weekly reports.', kind: 'fact', sourceEntryId: null } satisfies P.Memory);
+      const preview = await f.request<P.MemoryImportPreview>('POST', '/bots/:id/memory/import/preview', { clientNonce: nonce, format: 'facts_text', text: 'I prefer weekly reports.' });
       expect(preview.candidates).toHaveLength(1); expect(preview.exclusions).toHaveLength(0);
+      await expect(f.request('POST', '/bots/:id/memory/import/preview', { clientNonce: nonce, format: 'facts_text', text: 'A foreign profile fact.' }, { id: foreign.id })).rejects.toMatchObject({ code: 'forbidden' });
       const result = await f.request<P.MemoryImportResult>('POST', '/bots/:id/memory/import', { clientNonce: nonce, revision: 1, previewId: preview.id, confirmationToken: preview.confirmationToken, selectedCandidateIds: [preview.candidates[0]!.id] });
-      expect(result.items[0]!.scope).toBe('private_note'); expect(result.items[0]!.userId).toBe('alice'); expect(f.store.require<P.Memory>('memories', 'bob-note').userId).toBe('bob');
+      expect(result.items[0]!.botId).toBe(f.bot.id); expect(f.store.require<P.Memory>('memories', 'bob-memory').botId).toBe(foreign.id);
     } finally { f.close(); }
   });
   test('fences partial uncertain runtime-memory outcomes without replaying later candidates', async () => {
     const f = fixture();
     try {
-      const preview = await f.request<P.MemoryImportPreview>('POST', '/bots/:id/memory/import/preview', { clientNonce: nonce, scope: 'personal', format: 'facts_text', text: 'I prefer concise replies.\n\nI work on Tuesdays.' });
+      const preview = await f.request<P.MemoryImportPreview>('POST', '/bots/:id/memory/import/preview', { clientNonce: nonce, format: 'facts_text', text: 'I prefer concise replies.\n\nI work on Tuesdays.' });
       let calls = 0;
       f.services.invoke = async () => { calls++; throw new ApiError('outcome_unknown', 'Uncertain add', false); };
       const result = await f.request<P.MemoryImportResult>('POST', '/bots/:id/memory/import', { clientNonce: nonce, revision: 1, previewId: preview.id, confirmationToken: preview.confirmationToken, selectedCandidateIds: preview.candidates.map(value => value.id) });
       expect(result.status).toBe('outcome_unknown'); expect(result.items).toHaveLength(0); expect(result.failedCandidateIds).toEqual(preview.candidates.map(value => value.id)); expect(calls).toBe(1);
     } finally { f.close(); }
   });
-  test('strict export rejects unknown fields and private profile memory', () => {
+  test('strict export rejects obsolete other-user memory fields and credentials', () => {
     const f = fixture();
     try {
-      const memory: P.Memory = { ...f.base, id: 'memory', botId: 'oldbot', scope: 'private_note', userId: 'bob', text: 'Bob is a private user.', kind: 'fact', sourceEntryId: null };
-      const result = reviewedCandidates(f.services, new TextEncoder().encode(JSON.stringify({ botId: 'oldbot', exportedAtMs: f.services.now(), items: [memory, { ...memory, scope: 'personal', secret: 'not-public' }] })), 'lemon_memory_json', []);
-      expect(result.candidates).toHaveLength(0); expect(result.exclusions.map(value => value.reason)).toEqual(['private_profile', 'credential']); expect(JSON.stringify(result)).not.toContain('not-public');
+      const memory = { ...f.base, id: 'memory', botId: 'oldbot', scope: 'private_note', userId: 'bob', text: 'Bob is a private user.', kind: 'fact', sourceEntryId: null };
+      const result = reviewedCandidates(f.services, new TextEncoder().encode(JSON.stringify({ botId: 'oldbot', exportedAtMs: f.services.now(), items: [memory, { ...memory, secret: 'not-public' }] })), 'lemon_memory_json', []);
+      expect(result.candidates).toHaveLength(0); expect(result.exclusions.map(value => value.reason)).toEqual(['unsupported', 'credential']); expect(JSON.stringify(result)).not.toContain('not-public'); expect(JSON.stringify(result)).not.toContain('Bob is a private user');
     } finally { f.close(); }
   });
 });
@@ -201,7 +217,7 @@ describe('guided memory import boundaries', () => {
       const attachment: P.Attachment = { ...f.base, id: 'attachment', ownerUserId: 'alice', conversationId: null, botId: null, filename: 'facts.txt', mime: 'text/plain', size: content.length, sha256: 'digest', width: null, height: null, durationMs: null, source: 'upload', state: 'ready', preview: 'text', provenance: { botId: null, runId: null, machineId: null, sourceEntryId: null, generatedAtMs: null } };
       f.store.put('attachments', attachment);
       f.services.attachments = { async bytes() { return content; }, async create() { throw new Error('Unexpected create'); }, async copy() { throw new Error('Unexpected copy'); }, download() { throw new Error('Unexpected download'); } };
-      const preview = await f.request<P.MemoryImportPreview>('POST', '/bots/:id/memory/import/preview', { clientNonce: nonce, scope: 'personal', format: 'facts_text', attachmentId: attachment.id });
+      const preview = await f.request<P.MemoryImportPreview>('POST', '/bots/:id/memory/import/preview', { clientNonce: nonce, format: 'facts_text', attachmentId: attachment.id });
       expect(preview.expiresAtMs - f.services.now()).toBe(600000);
       const confirmation = { clientNonce: nonce, revision: 1, previewId: preview.id, confirmationToken: preview.confirmationToken, selectedCandidateIds: [preview.candidates[0]!.id] };
       content = new TextEncoder().encode('I prefer something else.');
@@ -235,13 +251,15 @@ describe('truthful presence and private activity', () => {
       expect(botPresence(f.services, user, f.bot).status).toBe('needs_input');
     } finally { f.close(); }
   });
-  test('administrators cannot see other private DM provenance', async () => {
+  test('workspace administrators see no other owners Bot or conversation provenance', async () => {
     const f = fixture();
     try {
-      f.store.put('conversations', { ...f.room, id: 'private', kind: 'team_dm', ownerUserId: 'bob', humanUserIds: ['bob'] });
-      f.store.put('runs', { ...f.base, id: 'private-run', conversationId: 'private', botId: 'bot', initiatorUserId: 'bob', clientNonce: nonce, status: 'running', error: null, startedAtMs: f.services.now(), completedAtMs: null, routineRunId: null } satisfies P.Run);
-      const activity = await f.request<P.Page<P.ActivityItem>>('GET', '/bots/:id/activity'); expect(activity.items).toHaveLength(0);
-      const presence = botPresence(f.services, user, f.bot); expect(presence.status).toBe('working'); expect(presence.currentRunId).toBeNull(); expect(presence.taskConversationId).toBeNull();
+      const foreign = { ...f.bot, id: 'bob-bot', ownerUserId: 'bob', profileId: 'lb-bob' };
+      f.store.put('bots', foreign);
+      f.store.put('conversations', { ...f.room, id: 'private', kind: 'dm', ownerUserId: 'bob', botIds: [foreign.id] });
+      f.store.put('runs', { ...f.base, id: 'private-run', conversationId: 'private', botId: foreign.id, initiatorUserId: 'bob', clientNonce: nonce, status: 'running', error: null, startedAtMs: f.services.now(), completedAtMs: null, routineRunId: null } satisfies P.Run);
+      const activity = await f.request<P.Page<P.ActivityItem>>('GET', '/activity', undefined, {}); expect(activity.items).toHaveLength(0);
+      const presence = botPresence(f.services, user, f.bot); expect(presence.status).toBe('idle'); expect(presence.currentRunId).toBeNull(); expect(presence.taskConversationId).toBeNull();
       await expect(f.request('GET', '/bots/:id/activity', undefined, { id: 'bot' }, 'botId=other')).rejects.toMatchObject({ code: 'invalid_request' });
     } finally { f.close(); }
   });
@@ -265,6 +283,7 @@ describe('native grant enforcement boundaries', () => {
       f.services.integrations.effectivePolicy = async () => { policyCalls++; throw new Error('Foreign policy must not be evaluated'); };
       await expect(nativeBotToolPolicy(f.services, foreign, f.bot, measured)).rejects.toMatchObject({ code: 'forbidden' });
       await expect(effectiveBotGrants(f.services, foreign, f.bot, measured)).rejects.toMatchObject({ code: 'forbidden' });
+      await expect(desiredBotGrants(f.services, foreign, f.bot, measured)).rejects.toMatchObject({ code: 'forbidden' });
       expect(() => botPresence(f.services, foreign, f.bot)).toThrow(ApiError);
       f.services.auth.bot = (_actor, valueId) => f.store.require<P.Bot>('bots', valueId);
       for (const path of ['/bots/:id/presence', '/bots/:id/overview', '/bots/:id/grants', '/bots/:id/activity', '/bots/:id/upcoming', '/bots/:id/preference-changes', '/bots/:id/ideas', '/bots/:id/milestones']) {
@@ -277,13 +296,14 @@ describe('native grant enforcement boundaries', () => {
     const f = fixture();
     try {
       const measured: P.MachineCapabilities = { machineId: 'machine', os: 'linux', measuredAtMs: f.services.now(), stale: false, items: [] };
-      const connector: P.Connector = { ...f.base, id: 'foreign-connector', botId: 'bot', ownerUserId: 'bob', name: 'Private account', url: 'https://private.example.test/mcp', accountLabel: 'Foreign account', authKind: 'none', state: 'connected', tools: [{ name: 'private_tool', enabled: true }], secretHeaderNames: [], shared: false, lastError: null };
+      const connector: P.Connector = { ...f.base, id: 'foreign-connector', botId: 'bot', ownerUserId: 'bob', name: 'Private account', url: 'https://private.example.test/mcp', accountLabel: 'Foreign account', authKind: 'none', state: 'connected', tools: [{ name: 'private_tool', enabled: true }], secretHeaderNames: [], lastError: null };
       f.store.put('connectors', connector);
       f.store.put('botGrants', { ...f.base, id: 'foreign-grant', botId: 'bot', machineId: 'machine', capabilityId: `connector:${connector.id}`, requestedLevel: 'read_interact', effectiveLevel: 'read_interact', reasons: [] } satisfies P.BotGrant);
       f.store.setMetadata(`connector:${connector.id}`, 'foreign-private-metadata');
       let decrypted = 0;
       f.services.decrypt = <T>(): T => { decrypted++; throw new Error('Foreign credentials must not be resolved'); };
       expect(await effectiveBotGrants(f.services, user, f.bot, measured)).toEqual([]);
+      expect(await desiredBotGrants(f.services, user, f.bot, measured)).toEqual([]);
       const policy = await nativeBotToolPolicy(f.services, user, f.bot, measured);
       expect(policy.allow).toEqual(projectedProductTools.map(tool => tool.executionName).concat(['read_skill', 'webfetch', 'websearch', 'task', 'agent_message', 'wait', 'parent_question']).sort());
       expect(decrypted).toBe(0);
@@ -312,8 +332,11 @@ describe('native grant enforcement boundaries', () => {
       f.store.put('runs', { ...f.base, id: 'active', conversationId: 'room', botId: 'bot', initiatorUserId: 'alice', clientNonce: nonce, status: 'running', error: null, startedAtMs: f.services.now(), completedAtMs: null, routineRunId: null } satisfies P.Run);
       await expect(f.request('PATCH', '/bots/:id/grants/:grantId', { clientNonce: nonce, revision: changed.revision, requestedLevel: 'read_interact' }, { id: 'bot', grantId: grant.id })).rejects.toMatchObject({ code: 'conflict' });
       expect(f.store.require<P.BotGrant>('botGrants', grant.id).requestedLevel).toBe('read_only');
-      f.store.setMetadata('botPolicySync:bot', { state: 'outcome_unknown' });
-      expect((await effectiveBotGrants(f.services, user, f.bot, measured))[0]!.effectiveLevel).toBe('off');
+      for (const state of ['pending', 'outcome_unknown']) {
+        f.store.setMetadata('botPolicySync:bot', { state });
+        expect((await effectiveBotGrants(f.services, user, f.bot, measured))[0]!.effectiveLevel).toBe('off');
+        expect((await desiredBotGrants(f.services, user, f.bot, measured))[0]!.effectiveLevel).toBe('read_only');
+      }
     } finally { f.close(); }
   });
   test('one native policy uses and refreshes the actual owners execution ceiling', async () => {
@@ -397,7 +420,7 @@ describe('native grant enforcement boundaries', () => {
     const f = fixture();
     try {
       const measured: P.MachineCapabilities = { machineId: 'machine', os: 'linux', measuredAtMs: f.services.now(), stale: false, items: [] };
-      const connector: P.Connector = { ...f.base, id: 'connector', botId: 'bot', ownerUserId: 'alice', name: 'Reports', url: 'https://example.test/mcp', accountLabel: 'Own account', authKind: 'none', state: 'connected', tools: [{ name: 'declared_read', enabled: true }, { name: 'write_report', enabled: true }], secretHeaderNames: [], shared: false, lastError: null };
+      const connector: P.Connector = { ...f.base, id: 'connector', botId: 'bot', ownerUserId: 'alice', name: 'Reports', url: 'https://example.test/mcp', accountLabel: 'Own account', authKind: 'none', state: 'connected', tools: [{ name: 'declared_read', enabled: true }, { name: 'write_report', enabled: true }], secretHeaderNames: [], lastError: null };
       f.store.put('connectors', connector);
       f.store.put('botGrants', { ...f.base, id: 'connector-grant', botId: 'bot', machineId: 'machine', capabilityId: 'connector:connector', requestedLevel: 'read_interact', effectiveLevel: 'read_interact', reasons: [] } satisfies P.BotGrant);
       f.store.setMetadata('connector:connector', JSON.stringify({ machineId: 'machine', configuredLevel: 'read_interact', discoveredAtMs: f.services.now(), readOnlyTools: ['declared_read'], executionNames: { declared_read: 'actual_read_alias', write_report: 'actual_write_alias' } }));
@@ -438,24 +461,25 @@ describe('reminder and milestone once-only lifecycle', () => {
   });
 });
 
-test('durable presence fanout redacts other members private run IDs', () => {
+test('durable experience fanout reaches only the actual Bot owner, not a workspace owner', () => {
   const f = fixture();
   const lifecycle = createExperienceService(f.services);
   try {
-    f.store.put('bots', { ...f.bot, visibility: 'team', published: true });
-    f.store.put('members', { ...f.base, id: 'member-bob', userId: 'bob', displayName: 'Bob', email: 'bob@example.test', role: 'member', enabled: true } satisfies P.Member);
-    f.store.put('conversations', { ...f.room, id: 'bob-dm', kind: 'team_dm', ownerUserId: 'bob', humanUserIds: ['bob'] });
-    const run: P.Run = { ...f.base, id: 'private-run', conversationId: 'bob-dm', botId: 'bot', initiatorUserId: 'bob', clientNonce: nonce, status: 'running', error: null, startedAtMs: f.services.now(), completedAtMs: null, routineRunId: null };
+    f.store.put('members', { ...f.base, id: 'member-bob', userId: 'bob', displayName: 'Bob', email: 'bob@example.test', role: 'owner', enabled: true } satisfies P.Member);
+    const run: P.Run = { ...f.base, id: 'owner-run', conversationId: f.room.id, botId: f.bot.id, initiatorUserId: user.userId, clientNonce: nonce, status: 'running', error: null, startedAtMs: f.services.now(), completedAtMs: null, routineRunId: null };
     f.store.put('runs', run);
     f.services.events = createEventService(f.services);
     lifecycle.start();
-    f.services.events.emit('run.upserted', run, { userIds: ['bob'] });
+    f.services.events.emit('run.upserted', run, { userIds: [user.userId] });
     const aliceEvents = f.services.events.replay(user, '0');
     const presenceEvents = aliceEvents.filter(event => event.event === 'bot.presence');
     expect(presenceEvents).toHaveLength(1);
-    if (presenceEvents[0]?.event === 'bot.presence') expect(presenceEvents[0].payload.currentRunId).toBeNull();
-    expect(JSON.stringify(aliceEvents)).not.toContain('private-run');
-    expect(aliceEvents.some(event => event.event === 'activity.upserted')).toBe(false);
+    if (presenceEvents[0]?.event === 'bot.presence') expect(presenceEvents[0].payload.currentRunId).toBe(run.id);
+    expect(aliceEvents.some(event => event.event === 'activity.upserted')).toBe(true);
+    const foreign: Principal = { ...user, id: 'bob', userId: 'bob', role: 'owner' };
+    const foreignEvents = f.services.events.replay(foreign, '0');
+    expect(foreignEvents.some(event => ['bot.presence', 'activity.upserted', 'milestone.upserted'].includes(event.event))).toBe(false);
+    expect(JSON.stringify(foreignEvents)).not.toContain(run.id);
   } finally { lifecycle.close(); f.close(); }
 });
 

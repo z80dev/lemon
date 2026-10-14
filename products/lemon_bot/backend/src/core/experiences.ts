@@ -13,7 +13,7 @@ const patch = z.object({ job: z.string().max(32768).optional(), instructions: z.
 });
 const preferenceCreate = update.extend({ changes: patch, reason: z.string().trim().min(1).max(2048), sourceEntryId: id.optional() });
 const preferenceUndo = update.extend({ botRevision: revision });
-const previewRequest = mutation.extend({ scope: z.enum(['personal', 'team', 'private_note']), text: z.string().max(1048576).optional(), attachmentId: id.optional(), format: z.enum(['facts_text', 'lemon_memory_json', 'chat_export_zip']) }).refine(value => (value.text !== undefined) !== (value.attachmentId !== undefined));
+const previewRequest = mutation.extend({ text: z.string().max(1048576).optional(), attachmentId: id.optional(), format: z.enum(['facts_text', 'lemon_memory_json', 'chat_export_zip']) }).refine(value => (value.text !== undefined) !== (value.attachmentId !== undefined));
 const importRequest = update.extend({ previewId: id, confirmationToken: z.string().min(16).max(512), selectedCandidateIds: z.array(id).min(1).max(200).refine(ids => new Set(ids).size === ids.length) });
 const reminderRequest = mutation.extend({ botId: id, conversationId: id, text: z.string().trim().min(1).max(4096), dueAtMs: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER), timezone: z.string().min(1).max(100).refine(value => { try { new Intl.DateTimeFormat('en', { timeZone: value }); return true; } catch { return false; } }) });
 const filters = z.object({ cursor: z.string().max(512).optional(), limit: z.coerce.number().int().min(1).max(200).optional(), botId: id.optional(), machineId: id.optional(), fromAtMs: z.coerce.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(), toAtMs: z.coerce.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional() }).strict();
@@ -34,8 +34,8 @@ function ownedBot(s: BackendServices, requester: Principal, botId: string): P.Bo
 }
 function conversation(s: BackendServices, user: Principal, conversationId: string): P.Conversation | null {
   const value = s.store.get<P.Conversation>('conversations', conversationId);
-  // Private DMs never become visible solely through an administrative role.
-  if (!value || (value.kind !== 'channel' && !value.humanUserIds.includes(user.userId) && value.ownerUserId !== user.userId)) return null;
+  // Workspace roles never grant access to another owner's conversation, including channels.
+  if (!value || value.ownerUserId !== user.userId) return null;
   return readable(s, user, 'conversations', value) ? value : null;
 }
 function entryVisible(s: BackendServices, user: Principal, entry: P.TranscriptEntry): boolean {
@@ -47,13 +47,6 @@ function sourceEntry(s: BackendServices, user: Principal, bot: P.Bot, sourceEntr
   const room = conversation(s, user, entry.conversationId);
   if (!room || !room.botIds.includes(bot.id) || !entryVisible(s, user, entry) || entry.kind !== 'message' || entry.role !== 'user' || entry.actor.kind !== 'user' || entry.actor.id !== user.userId || room.kind === 'channel') fail('forbidden', 'Preference changes require an authorized user message in this bot conversation.');
   return entry;
-}
-function importAccess(s: BackendServices, user: Principal, botId: string, scope: P.Memory['scope']): P.Bot {
-  const bot = s.auth.bot(user, botId, scope === 'team');
-  if (scope === 'team' && bot.visibility !== 'team') fail('invalid_request', 'Team memory requires a team bot.');
-  if (scope === 'private_note' && bot.visibility !== 'team') fail('invalid_request', 'Private notes require a team bot.');
-  if (scope === 'personal' && (bot.visibility !== 'personal' || bot.ownerUserId !== user.userId)) fail('forbidden', 'Personal memory belongs to the bot owner.');
-  return bot;
 }
 function preferenceVisible(s: BackendServices, user: Principal, change: P.PreferenceChange): boolean {
   const bot = s.store.get<P.Bot>('bots', change.botId);
@@ -120,6 +113,12 @@ export async function effectiveBotGrants(s: BackendServices, user: Principal, bo
   assertBotOwner(user, bot);
   const measured = capabilities ?? await machineCapabilities(s, user, bot.machineId, bot);
   return projectEffectiveBotGrants(s, user, bot, measured, await s.integrations.effectivePolicy(user, bot.id), false);
+}
+/** Owner-authorized desired configuration only; callers must not use it to admit work before cutover ACK. */
+export async function desiredBotGrants(s: BackendServices, user: Principal, bot: P.Bot, capabilities?: P.MachineCapabilities): Promise<P.BotGrant[]> {
+  assertBotOwner(user, bot);
+  const measured = capabilities ?? await machineCapabilities(s, user, bot.machineId, bot);
+  return projectEffectiveBotGrants(s, user, bot, measured, await s.integrations.effectivePolicy(user, bot.id), true);
 }
 function projectEffectiveBotGrants(s: BackendServices, user: Principal, bot: P.Bot, measured: P.MachineCapabilities, policy: P.EffectivePolicy, desired: boolean): P.BotGrant[] {
   const synchronization = s.store.metadata<{ state: string }>(`botPolicySync:${bot.id}`);
@@ -285,9 +284,9 @@ function activityValues(s: BackendServices, user: Principal): P.ActivityItem[] {
     const status: P.ActivityItem['status'] = sync?.revision === change.resultingBotRevision && sync.state !== 'acknowledged' ? sync.state === 'pending' ? 'pending' : 'outcome_unknown' : 'succeeded';
     add(change, change.botId, source && entryVisible(s, user, source) ? source.conversationId : null, { kind: 'preference', status, title: 'Preference change', summary: status === 'succeeded' ? `${change.scope} preference ${change.state}.` : 'Destination preference synchronization is unconfirmed.', runId: null, entryId: source && entryVisible(s, user, source) ? source.id : null, approvalId: null }, change.updatedAtMs, change.machineId);
   }
-  for (const memory of s.store.list<P.Memory>('memories')) if (readable(s, user, 'memories', memory) && (memory.scope !== 'private_note' || memory.userId === user.userId)) {
+  for (const memory of s.store.list<P.Memory>('memories')) if (readable(s, user, 'memories', memory)) {
     const operation = s.store.metadata<{ state: 'pending' | 'outcome_unknown' }>(`resourceOperation:${memory.id}`);
-    add(memory, memory.botId, null, { kind: 'memory', status: operation?.state ?? 'succeeded', title: 'Scoped memory', summary: operation ? 'Destination memory mutation is unconfirmed.' : `${memory.kind} saved in ${memory.scope.replaceAll('_', ' ')} scope.`, runId: null, entryId: null, approvalId: null });
+    add(memory, memory.botId, null, { kind: 'memory', status: operation?.state ?? 'succeeded', title: 'Bot memory', summary: operation ? 'Destination memory mutation is unconfirmed.' : `${memory.kind} saved to the owned Bot profile.`, runId: null, entryId: null, approvalId: null });
   }
   for (const attachment of s.store.list<P.Attachment>('attachments')) {
     const p = attachment.provenance;
@@ -333,7 +332,7 @@ function upcomingPage(context: RequestContext): P.Page<P.UpcomingItem> {
 interface ImportBinding { botRevision: number; machineId: string; attachmentId: string | null; attachmentRevision: number | null; sourceSha256: string; sourceText: string | null; format: P.MemoryImportPreviewRequest['format']; consumed: boolean }
 interface ImportAttempt { id: string; previewId: string; candidateId: string; nonce: string; state: 'pending' | 'completed' | 'outcome_unknown'; memoryId: string | null }
 const memoryKind = z.enum(['fact', 'preference', 'instruction', 'summary']);
-const memoryRow = z.object({ id, revision, createdAtMs: z.number().int().nonnegative(), updatedAtMs: z.number().int().nonnegative(), botId: id, scope: z.enum(['personal', 'team', 'private_note']), userId: id.nullable(), text: z.string().min(1).max(4096), kind: memoryKind, sourceEntryId: id.nullable() }).strict();
+const memoryRow = z.object({ id, revision, createdAtMs: z.number().int().nonnegative(), updatedAtMs: z.number().int().nonnegative(), botId: id, text: z.string().min(1).max(4096), kind: memoryKind, sourceEntryId: id.nullable() }).strict();
 const memoryExport = z.object({ botId: id, items: z.array(z.unknown()).max(10000), exportedAtMs: z.number().int().nonnegative() }).strict();
 const decoder = new TextDecoder('utf-8', { fatal: true });
 function decode(bytes: Uint8Array): string { try { return decoder.decode(bytes); } catch { return fail('unsupported_media', 'Import requires valid UTF-8 documents.'); } }
@@ -407,7 +406,6 @@ export function reviewedCandidates(s: BackendServices, bytes: Uint8Array, format
     value.data.items.forEach((item, index) => {
       const row = memoryRow.safeParse(item), locator = `items:${index}`;
       if (!row.success) return exclude(locator, secrets.test(JSON.stringify(item)) ? 'credential' : 'unsupported');
-      if (row.data.scope === 'private_note') return exclude(locator, 'private_profile');
       candidate(row.data.text, row.data.kind, filename, locator);
     });
   };
@@ -436,15 +434,15 @@ export function reviewedCandidates(s: BackendServices, bytes: Uint8Array, format
 }
 
 async function previewMemory(context: RequestContext): Promise<P.MemoryImportPreview> {
-  const s = context.services, user = principal(context.user), body = parse(previewRequest, context.body), bot = importAccess(s, user, context.params.id!, body.scope);
+  const s = context.services, user = principal(context.user), body = parse(previewRequest, context.body), bot = ownedBot(s, user, context.params.id!);
   let attachment: P.Attachment | null = null;
   if (body.attachmentId) { attachment = s.auth.attachment(user, body.attachmentId); if (attachment.ownerUserId !== user.userId || attachment.state !== 'ready') fail('forbidden', 'Import requires your own ready attachment.'); }
   const bytes = attachment ? await s.attachments.bytes(attachment.id) : new TextEncoder().encode(body.text!);
   if (body.format !== 'chat_export_zip' && bytes.length > 1048576) fail('too_large', 'Facts documents are limited to one MiB.');
-  const existing = s.store.list<P.Memory>('memories', value => value.botId === bot.id && value.scope === body.scope && (body.scope !== 'private_note' || value.userId === user.userId)).map(value => value.text);
+  const existing = s.store.list<P.Memory>('memories', value => value.botId === bot.id).map(value => value.text);
   const reviewed = reviewedCandidates(s, bytes, body.format, existing), digest = new Bun.CryptoHasher('sha256').update(bytes).digest('hex');
-  const base = s.resource('import', { botId: bot.id, machineId: bot.machineId, userId: user.userId, scope: body.scope, sourceSha256: digest, ...reviewed });
-  const confirmation = s.mutations.preview(user, base, 'memory_import', bot.name, ['Only explicitly selected reviewed candidates will be saved.'], [{ resourceType: 'bot', id: bot.id, machineId: bot.machineId, operation: 'retain', explanation: 'History and unselected facts remain unchanged.' }], { botRevision: bot.revision, machineId: bot.machineId, scope: body.scope, sourceSha256: digest, candidateIds: reviewed.candidates.map(value => value.id) }, 600000);
+  const base = s.resource('import', { botId: bot.id, machineId: bot.machineId, userId: user.userId, sourceSha256: digest, ...reviewed });
+  const confirmation = s.mutations.preview(user, base, 'memory_import', bot.name, ['Only explicitly selected reviewed candidates will be saved.'], [{ resourceType: 'bot', id: bot.id, machineId: bot.machineId, operation: 'retain', explanation: 'History and unselected facts remain unchanged.' }], { botRevision: bot.revision, machineId: bot.machineId, sourceSha256: digest, candidateIds: reviewed.candidates.map(value => value.id) }, 600000);
   const result: P.MemoryImportPreview = { ...base, confirmationToken: confirmation.confirmationToken, expiresAtMs: confirmation.expiresAtMs };
   s.store.put('memoryImportPreviews', result);
   context.nonceResourceIds.push(result.id);
@@ -453,8 +451,8 @@ async function previewMemory(context: RequestContext): Promise<P.MemoryImportPre
 }
 async function confirmMemory(context: RequestContext): Promise<P.MemoryImportResult> {
   const s = context.services, user = principal(context.user), body = parse(importRequest, context.body), preview = s.store.require<P.MemoryImportPreview>('memoryImportPreviews', body.previewId);
-  if (preview.userId !== user.userId || preview.botId !== context.params.id) fail('forbidden', 'Import preview belongs to another scope.');
-  const bot = importAccess(s, user, preview.botId, preview.scope), binding = s.store.metadata<ImportBinding>(`memoryImport:${preview.id}`);
+  if (preview.userId !== user.userId || preview.botId !== context.params.id) fail('forbidden', 'Import preview belongs to another owner or Bot.');
+  const bot = ownedBot(s, user, preview.botId), binding = s.store.metadata<ImportBinding>(`memoryImport:${preview.id}`);
   if (!binding || binding.consumed) fail('conflict', 'This preview has already been confirmed.');
   if (preview.expiresAtMs <= s.now()) fail('expired', 'Import preview has expired.');
   s.mutations.checkRevision(preview, body.revision);
@@ -464,9 +462,9 @@ async function confirmMemory(context: RequestContext): Promise<P.MemoryImportRes
   if (binding.attachmentId) { const attachment = s.auth.attachment(user, binding.attachmentId); if (attachment.state !== 'ready' || attachment.ownerUserId !== user.userId || attachment.revision !== binding.attachmentRevision) fail('revision_conflict', 'Import attachment changed.'); bytes = await s.attachments.bytes(attachment.id); }
   else bytes = new TextEncoder().encode(s.decrypt<string>(binding.sourceText!));
   if (new Bun.CryptoHasher('sha256').update(bytes).digest('hex') !== preview.sourceSha256) fail('revision_conflict', 'Import source changed.');
-  const current = importAccess(s, user, bot.id, preview.scope);
+  const current = ownedBot(s, user, bot.id);
   if (current.revision !== binding.botRevision || current.machineId !== binding.machineId) fail('revision_conflict', 'Bot placement changed during source verification.');
-  s.mutations.confirm(user, preview, 'memory_import', { ...body, confirmName: bot.name }, { botRevision: bot.revision, machineId: bot.machineId, scope: preview.scope, sourceSha256: preview.sourceSha256, candidateIds: preview.candidates.map(value => value.id) });
+  s.mutations.confirm(user, preview, 'memory_import', { ...body, confirmName: bot.name }, { botRevision: bot.revision, machineId: bot.machineId, sourceSha256: preview.sourceSha256, candidateIds: preview.candidates.map(value => value.id) });
   s.store.setMetadata(`memoryImport:${preview.id}`, { ...binding, consumed: true });
   context.nonceResourceIds.push(preview.id, bot.id);
   const items: P.Memory[] = [], failedCandidateIds: string[] = [];
@@ -475,7 +473,7 @@ async function confirmMemory(context: RequestContext): Promise<P.MemoryImportRes
     const attempt: ImportAttempt = { id: `${preview.id}:${candidate.id}`, previewId: preview.id, candidateId: candidate.id, nonce: s.id('memoryimport'), state: 'pending', memoryId: null };
     s.store.put('memoryImportAttempts', attempt);
     try {
-      const memory = await s.invoke<P.Memory>(user, 'POST', `/v1/bots/${encodeURIComponent(bot.id)}/memory`, { clientNonce: attempt.nonce, text: candidate.text, kind: candidate.kind, scope: preview.scope });
+      const memory = await s.invoke<P.Memory>(user, 'POST', `/v1/bots/${encodeURIComponent(bot.id)}/memory`, { clientNonce: attempt.nonce, text: candidate.text, kind: candidate.kind });
       items.push(memory); s.store.put('memoryImportAttempts', { ...attempt, state: 'completed', memoryId: memory.id });
     } catch (error) {
       failedCandidateIds.push(candidate.id);
@@ -603,14 +601,14 @@ export function createExperienceRoutes(s: BackendServices): Route[] {
         }
         case '/bots/:id/memory/import/preview': {
           const body = parse(previewRequest, context.body);
-          importAccess(s, user, context.params.id!, body.scope);
+          ownedBot(s, user, context.params.id!);
           if (body.attachmentId) s.auth.attachment(user, body.attachmentId);
           return;
         }
         case '/bots/:id/memory/import': {
           const body = parse(importRequest, context.body), preview = s.store.require<P.MemoryImportPreview>('memoryImportPreviews', body.previewId);
           if (preview.userId !== user.userId || preview.botId !== context.params.id) fail('not_found', 'Import preview is not accessible.');
-          importAccess(s, user, preview.botId, preview.scope); return;
+          ownedBot(s, user, preview.botId); return;
         }
         case '/reminders': {
           const body = parse(reminderRequest, context.body), bot = ownedBot(s, user, body.botId), room = conversation(s, user, body.conversationId);
