@@ -13,6 +13,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - Background process launches no longer bypass admission after queue failures.
   Fixed, owner-bound launch identities reconcile lost acknowledgements and
   reject conflicting retries instead of risking duplicate external effects.
+- Background execution now holds a validated live-process capacity limit until
+  confirmed termination, bounds pending admission and waiting, prevents canceled
+  or expired queued commands from starting, and retains unknown capacity through
+  restart. Yielded launches remain owner-scoped and inspectable; cancellation
+  receipts no longer claim termination before it is confirmed.
 
 ---
 

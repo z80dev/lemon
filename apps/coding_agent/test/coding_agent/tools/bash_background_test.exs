@@ -79,8 +79,10 @@ defmodule CodingAgent.Tools.BashBackgroundTest do
       opts = [session_id: session_id]
       process_id = start_background("sleep 30", tmp_dir, opts)
 
-      assert %AgentToolResult{details: %{status: :killed, process_id: ^process_id}} =
+      assert %AgentToolResult{details: %{status: status, process_id: ^process_id}} =
                KillProcess.execute("k1", %{"process_id" => process_id}, nil, nil, tmp_dir, opts)
+
+      assert status in [:killing, :killed]
 
       output = await_output(process_id, opts, &(&1 =~ "Status: killed"))
       assert output =~ "killed"

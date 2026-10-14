@@ -430,6 +430,59 @@ commands, environment values, and exception details. Clearing completed output
 retains a small redacted identity tombstone so clearing logs cannot authorize a
 duplicate launch.
 
+### Background process admission
+
+Background process admission limits are umbrella application configuration,
+not TOML or agent-controlled tool inputs:
+
+```elixir
+config :coding_agent,
+  background_process_limit: 8,
+  background_pending_limit: 32,
+  background_admission_timeout_ms: 5_000,
+  background_admission_wait_ms: 1_000
+```
+
+The process limit holds capacity for the managed command's live lifetime, not
+just the launch callback. `lane_caps.background_exec` remains a separate launch
+concurrency cap; main/subagent lanes retain their existing callback semantics.
+The pending limit bounds waiting admissions per LaneQueue; the acceptance ledger
+also bounds in-flight registrations. Process/pending limits are integers up to
+1,000,000 (process minimum 1, pending minimum 0). Admission deadline/wait values
+must be integers from 1 to 86,400,000 milliseconds. Invalid settings fail
+explicitly at startup, without echoing the invalid value.
+
+The caller wait budget yields `{:queued, identity}` independently of execution
+lifetime. Queued cancellation, deadline expiry, or abandonment prevents later
+start. An explicitly supplied `owner_pid` keeps a deliberately yielded queued
+launch owned after the submitting tool task returns; losing that owner cancels
+pending work. Accepted work outlives its transient submitting caller, but is
+signaled when its supplied owner exits. Without `owner_pid`, accepted work
+deliberately continues until completion, explicit cancellation, or its separately
+requested execution timeout. Use foreground commands with background execution,
+not shell daemonization, for an inspectable managed lifetime.
+
+Cancellation is a request: `:killing` does not free capacity. Confirmed Port
+termination releases the slot once. A lost process owner, SSH disconnect, or
+forced Docker/SSH wrapper termination can leave external liveness unknown;
+such work conservatively holds capacity and is never automatically relaunched.
+Queue/store restart reconciles surviving registered processes before admission.
+The internal operator API `ProcessManager.confirm_external_termination(id, owner)`
+may release unknown capacity only after independently verifying external
+termination; it is an assertion, not a liveness probe or agent tool, and refuses
+a launch still starting. The original uncertain receipt remains uncertain.
+
+`ProcessManager.admission_counts/0` exposes bounded active, queued, rejected,
+expired, canceled, unknown, and occupied counts, with no commands or secrets.
+Unknown historical outcomes are distinct from currently occupied capacity.
+Receipt/count lookup failures report unavailability, never an empty/idle state.
+Synchronous completion-wait expiry retains the fixed identity as
+`{:error, {:outcome_unknown, identity}}`; reconcile instead of rerunning.
+Direct `ProcessSession.start_link` is an internal/test primitive, not an agent
+admission bypass. This contract prevents duplicate managed starts for an identity;
+it does not claim exactly-once external side effects.
+
+
 The Bun TUI uses the runtime's model and thinking defaults from `[defaults]`.
 The `[tui]` section controls terminal presentation settings loaded at startup.
 

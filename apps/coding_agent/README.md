@@ -792,9 +792,12 @@ result.
 
 | Key | Default | Description |
 |-----|---------|-------------|
-| `:lane_caps` | `%{main: 4, subagent: 8, background_exec: 2}` | Per-lane concurrency caps for `LaneQueue` |
+| `:lane_caps` | `%{main: 4, subagent: 8, background_exec: 2}` | Per-lane callback concurrency; `background_exec` bounds launches, not live process lifetimes |
 | `:task_max_concurrency` | `8` | Max concurrently executing native `task` children; excess children queue on the monitored semaphore |
 | `:primary_session` | `nil` | Keyword list of opts to auto-start a session on boot |
+
+Live background capacity, bounded pending admission, deadlines, and recovery are
+documented in the [configuration reference](../../docs/config.md#background-process-admission).
 
 ### Workspace Bootstrap Files
 

@@ -124,14 +124,17 @@ defmodule CodingAgent.ProcessSession do
         init_process(process_id, opts)
 
       fingerprint ->
-        case ProcessStore.claim_launch(process_id, Keyword.get(opts, :owner), fingerprint) do
-          :ok -> init_process(process_id, opts)
+        with :ok <- ensure_pending_owner(process_id, opts),
+             :ok <- ProcessStore.claim_launch(process_id, Keyword.get(opts, :owner), fingerprint) do
+          init_process(process_id, opts)
+        else
           {:error, reason} -> {:stop, reason}
         end
     end
   rescue
     _ -> {:stop, :launch_failed}
   catch
+    :throw, :confirmed_startup_failure -> {:stop, :startup_failed}
     _, _ -> {:stop, :launch_failed}
   end
 
@@ -152,8 +155,7 @@ defmodule CodingAgent.ProcessSession do
         "lemon-process-#{:crypto.strong_rand_bytes(16) |> Base.encode16(case: :lower)}.log"
       )
 
-    {:ok, output_file} = File.open(output_path, [:write, :binary, :exclusive])
-    File.chmod!(output_path, 0o600)
+    output_file = prepare_output(process_id, output_path)
 
     # Create the process entry in the store
     ProcessStore.new_process(%{
@@ -171,11 +173,24 @@ defmodule CodingAgent.ProcessSession do
       owner: owner,
       status: :starting,
       launch_fingerprint: Keyword.get(opts, :launch_fingerprint),
-      launch_classification: :outcome_unknown
+      launch_classification: :outcome_unknown,
+      capacity_held: is_binary(Keyword.get(opts, :launch_fingerprint)),
+      termination_confirmed: false
     })
 
     # Start the OS process via Port
-    port = start_port(command, cwd, env, backend)
+    port =
+      protected_start_port(
+        process_id,
+        command,
+        cwd,
+        env,
+        backend,
+        Keyword.get(opts, :before_start),
+        output_file,
+        output_path
+      )
+
     os_pid = get_os_pid(port)
 
     # Mark as running in the store
@@ -216,6 +231,7 @@ defmodule CodingAgent.ProcessSession do
       owner: owner,
       owner_monitor: owner_monitor,
       timeout_ref: timeout_ref,
+      termination_reason: nil,
       on_exit: on_exit,
       started_at: System.system_time(:second),
       completed_at: nil,
@@ -298,10 +314,10 @@ defmodule CodingAgent.ProcessSession do
   end
 
   def handle_call({:kill, signal}, _from, state) do
-    if state.status == :running and state.os_pid do
+    if state.status in [:running, :killing] and state.os_pid do
       do_kill(state.os_pid, signal)
-      state = %{state | status: :killed, completed_at: System.system_time(:second)}
-      ProcessStore.mark_killed(state.process_id)
+      # Requesting a signal is not confirmation that the process has exited.
+      state = %{state | status: :killing, termination_reason: :canceled}
       {:reply, :ok, state}
     else
       {:reply, {:error, :process_not_running}, state}
@@ -326,7 +342,8 @@ defmodule CodingAgent.ProcessSession do
     {:noreply, state |> append_lines(lines) |> Map.put(:partial_line, partial)}
   end
 
-  def handle_info({port, {:exit_status, exit_code}}, %{port: port} = state) do
+  def handle_info({port, {:exit_status, exit_code}}, %{port: port, status: live_status} = state)
+      when live_status in [:running, :killing] do
     state = flush_partial_line(state)
 
     # Cancel timeout if still pending
@@ -336,18 +353,22 @@ defmodule CodingAgent.ProcessSession do
 
     # Update status based on exit code
     {status, exit_code} =
-      if state.status == :killed do
-        {:killed, nil}
-      else
-        if exit_code == 0 do
-          {:completed, exit_code}
-        else
-          {:error, exit_code}
-        end
+      cond do
+        external_liveness_unknown?(state, exit_code) -> {:lost, nil}
+        state.termination_reason == :canceled -> {:killed, nil}
+        state.termination_reason == :timeout -> {:error, nil}
+        exit_code == 0 -> {:completed, exit_code}
+        true -> {:error, exit_code}
       end
 
     # Update store. Killed processes should remain `:killed` (not overwritten to `:error`).
     cond do
+      status == :lost ->
+        ProcessStore.mark_unknown(state.process_id)
+
+      state.termination_reason == :timeout ->
+        ProcessStore.mark_error(state.process_id, :timeout)
+
       status == :completed ->
         ProcessStore.mark_completed(state.process_id, exit_code)
 
@@ -357,6 +378,8 @@ defmodule CodingAgent.ProcessSession do
       true ->
         ProcessStore.mark_error(state.process_id, %{exit_code: exit_code, status: status})
     end
+
+    if status != :lost, do: ProcessStore.confirm_termination(state.process_id)
 
     # Call exit callback if provided
     if state.on_exit do
@@ -383,12 +406,16 @@ defmodule CodingAgent.ProcessSession do
   end
 
   def handle_info(:timeout, state) do
-    if state.status == :running do
+    if state.status in [:running, :killing] do
       do_kill(state.os_pid, :sigkill)
-      ProcessStore.mark_error(state.process_id, :timeout)
 
       {:noreply,
-       %{state | status: :error, timeout_ref: nil, completed_at: System.system_time(:second)}}
+       %{
+         state
+         | status: :killing,
+           termination_reason: state.termination_reason || :timeout,
+           timeout_ref: nil
+       }}
     else
       {:noreply, state}
     end
@@ -397,12 +424,9 @@ defmodule CodingAgent.ProcessSession do
   def handle_info({:DOWN, ref, :process, _pid, _reason}, %{owner_monitor: ref} = state)
       when is_reference(ref) do
     # The owning session is gone; nothing can read or stop this process any more.
-    if state.status == :running do
+    if state.status in [:running, :killing] do
       do_kill(state.os_pid, :sigkill)
-      ProcessStore.mark_killed(state.process_id)
-
-      {:noreply,
-       %{state | status: :killed, owner_monitor: nil, completed_at: System.system_time(:second)}}
+      {:noreply, %{state | status: :killing, termination_reason: :canceled, owner_monitor: nil}}
     else
       {:noreply, %{state | owner_monitor: nil}}
     end
@@ -414,6 +438,33 @@ defmodule CodingAgent.ProcessSession do
 
   def handle_info(_msg, state) do
     {:noreply, state}
+  end
+
+  @impl true
+  def format_status(status) do
+    Map.new(status, fn
+      {:state, state} when is_map(state) ->
+        {:state, Map.take(state, [:process_id, :status, :backend])}
+
+      {:state, _} ->
+        {:state, :unavailable}
+
+      {:message, _} ->
+        {:message, :process_event}
+
+      {:log, _} ->
+        {:log, []}
+
+      {:reason, reason}
+      when reason in [:normal, :shutdown, :killed, :startup_failed, :launch_failed] ->
+        {:reason, reason}
+
+      {:reason, _} ->
+        {:reason, :process_session_failed}
+
+      pair ->
+        pair
+    end)
   end
 
   @impl true
@@ -435,6 +486,71 @@ defmodule CodingAgent.ProcessSession do
 
   defp via_tuple(process_id) do
     {:via, Registry, {CodingAgent.ProcessRegistry, process_id}}
+  end
+
+  defp ensure_pending_owner(process_id, opts) do
+    abandoned? =
+      Enum.any?(pending_owner_keys(opts), fn key ->
+        case Keyword.get(opts, key) do
+          pid when is_pid(pid) -> not Process.alive?(pid)
+          _ -> false
+        end
+      end)
+
+    if abandoned? do
+      ProcessStore.cancel_launch(process_id, Keyword.get(opts, :owner))
+      {:error, :launch_canceled}
+    else
+      :ok
+    end
+  end
+
+  defp pending_owner_keys(opts) do
+    if is_pid(Keyword.get(opts, :owner_pid)),
+      do: [:owner_pid],
+      else: [:admission_caller_pid]
+  end
+
+  defp prepare_output(process_id, path) do
+    case File.open(path, [:write, :binary, :exclusive]) do
+      {:ok, file} ->
+        case File.chmod(path, 0o600) do
+          :ok ->
+            file
+
+          _ ->
+            File.close(file)
+            File.rm(path)
+            ProcessStore.confirm_termination(process_id, :startup_failed)
+            throw(:confirmed_startup_failure)
+        end
+
+      _ ->
+        ProcessStore.confirm_termination(process_id, :startup_failed)
+        throw(:confirmed_startup_failure)
+    end
+  end
+
+  defp protected_start_port(process_id, command, cwd, env, backend, before_start, file, path) do
+    if before_start, do: before_start.()
+    start_port(command, cwd, env, backend)
+  rescue
+    _ -> confirmed_start_failure(process_id, file, path)
+  catch
+    :exit, _ -> confirmed_start_failure(process_id, file, path)
+  end
+
+  defp confirmed_start_failure(process_id, file, path) do
+    File.close(file)
+    File.rm(path)
+    ProcessStore.confirm_termination(process_id, :startup_failed)
+    throw(:confirmed_startup_failure)
+  end
+
+  defp external_liveness_unknown?(state, exit_code) do
+    (state.backend == :ssh and (state.status == :killing or exit_code == 255)) or
+      (state.backend == :docker and
+         (state.status == :killing or exit_code in [125, 126, 127]))
   end
 
   defp start_port(command, cwd, env, backend) do
