@@ -93,7 +93,14 @@ class ActualPTY implements LemonService {
   onEvent(listener: (event: string, payload: unknown) => void) { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; }
   onConnected(listener: () => void) { this.connections.add(listener); return () => { this.connections.delete(listener); }; }
   start() { this.connected = true; for (const listener of this.connections) listener(); }
-  close() { this.connected = false; for (const shell of this.shells.values()) shell.process.kill(); }
+  async close() {
+    this.connected = false;
+    const shells = [...this.shells.values()];
+    // Closing the worker-owned pipe is the native owner-disconnect path; the
+    // helper closes the PTY and reaps its child before emitting its exit frame.
+    for (const shell of shells) shell.input.end();
+    await Promise.all(shells.map(shell => shell.streamed));
+  }
   private async packet(shell: Shell, value: unknown) {
     const data = Buffer.from(JSON.stringify(value)), header = Buffer.alloc(4);
     header.writeUInt32BE(data.length);
@@ -146,8 +153,10 @@ class ActualPTY implements LemonService {
           rejectReady(error instanceof Error ? error : new Error('Native PTY transport failed.'));
           processHandle.kill();
           for (const listener of this.listeners) listener('node.shell.exit', { shellId, code: 124 });
+          throw error;
         } finally {
           reader.releaseLock(); rejectReady(new Error('Native PTY exited before readiness.'));
+          await processHandle.exited;
           this.shells.delete(shellId);
         }
       })();
@@ -160,7 +169,7 @@ class ActualPTY implements LemonService {
       await this.packet(shell, { type: 'input', dataBase64: String(params.dataBase64) }); response = { shellId: params.shellId, accepted: true };
     } else if (method === 'node.shell.close') {
       const shell = this.shells.get(String(params.shellId));
-      if (shell) await this.packet(shell, { type: 'close' });
+      if (shell) { await this.packet(shell, { type: 'close' }); await shell.streamed; }
       response = { shellId: params.shellId, accepted: true };
     } else throw new Error('Unexpected upstream method.');
     // This generic test transport represents the real JSON RPC decoding boundary.
@@ -202,7 +211,7 @@ async function fixture(reviewedSetups: ReviewedSetup[] = []): Promise<Fixture> {
     get gates(): BackendServices['gates'] { return unexpected('gates'); },
     integrations: {
       effectivePolicy: (actor, botId) => policy.effectivePolicy(actor, botId),
-      canReadResource: (actor, collection, entity) => createHostServices(services).canReadResource(actor, collection, entity) ?? false,
+      canReadResource: (actor, collection, entity) => host.canReadResource(actor, collection, entity) ?? false,
       admission: () => unexpected('integration admission'),
       connectorConfig: () => unexpected('connector configuration'),
       sendApprovedDraft: () => unexpected('approved draft delivery'),
@@ -263,6 +272,7 @@ async function fixture(reviewedSetups: ReviewedSetup[] = []): Promise<Fixture> {
   const governance: P.Governance = { revision: 1, groupAccess: 'all', allowedDirectoryGroupIds: [], allowSudo: false, allowEgress: true, lockNetworkForGroups: true, requireReview: true, allowedChannelAdapters: [], xMentionsEnabled: false, emailEnabled: false, contentExportEnabled: false, inactiveHostPolicy: { enabled: false, afterDays: 30, action: 'suspend' } };
   store.setMetadata('governance', governance);
   const host = createHostServices(services), routes = createHostRoutes(services, host);
+  const requests = new Set<Promise<unknown>>();
   const result: Fixture = {
     services, store, host, routes, owner, outsider, admin, directory, lemon, setBehavior,
     async request<T>(method: string, path: string, body?: unknown, actor = owner): Promise<T> {
@@ -275,12 +285,22 @@ async function fixture(reviewedSetups: ReviewedSetup[] = []): Promise<Fixture> {
       });
       if (!route) throw new Error(`Missing route ${method} ${path}`);
       const context: RequestContext = { request: new Request(`https://product.example${path}`, { method }), params, query: new URL(`https://product.example${path}`).searchParams, body, user: actor, services, requestId: 'host_test', route, nonceResourceIds: [] };
-      const value = method === 'GET' || route.mutation === false ? await route.handler(context) : await services.mutations.execute(context, () => route.handler(context));
+      const request = (method === 'GET' || route.mutation === false ? Promise.resolve(route.handler(context)) : services.mutations.execute(context, () => route.handler(context)));
+      requests.add(request);
+      let value: unknown;
+      try { value = await request; } finally { requests.delete(request); }
       // Routes declare their exact protocol resource output; individual tests inspect it.
       return value as T;
     },
     async log() { try { return (await readFile(join(directory, 'driver.log'), 'utf8')).trim().split('\n').filter(Boolean).map(line => JSON.parse(line)); } catch { return []; } },
-    async close() { host.dispose(); lemon.close(); await Promise.all([...lemon.shells.values()].map(shell => shell.streamed.catch(() => undefined))); store.close(); key.fill(0); await rm(directory, { recursive: true, force: true }); },
+    async close() {
+      await host.dispose();
+      // Mutation receipts settle outside the host worker. Keep the store/key
+      // alive until those callers have persisted their own durable receipts.
+      while (requests.size) await Promise.allSettled([...requests]);
+      await lemon.close();
+      store.close(); key.fill(0); await rm(directory, { recursive: true, force: true });
+    },
   };
   fixtures.push(result); return result;
 }
@@ -300,7 +320,38 @@ describe('trusted owned-host driver over actual node PTY', () => {
     expect(effect.action).toBe('update'); expect(effect.retainSSH).toBe(true); expect(effect.requireSafePoint).toBe(true);
     expect(effect).not.toHaveProperty('operatorToken');
     expect(h.lemon.calls.every(c => c.method.startsWith('node.shell.'))).toBe(true);
+    const inputs = h.lemon.calls.filter(c => c.method === 'node.shell.input').map(c => Buffer.from(String(c.params.dataBase64), 'base64').toString('utf8'));
+    expect(inputs.length).toBeGreaterThan(1);
+    expect(inputs.every(input => Buffer.byteLength(input, 'utf8') < 1024)).toBe(true);
+    expect(inputs.filter(input => input.includes('printf \'%s\\n\' "$lb_host_json" | "$@"'))).toHaveLength(1);
+    expect((await h.log()).filter(entry => entry.mode === 'apply')).toHaveLength(1);
+    await Promise.all([...h.lemon.shells.values()].map(shell => shell.streamed));
+    expect(h.lemon.shells.size).toBe(0);
     const page = await h.request<P.Page<P.HostOperation>>('GET', '/v1/host-operations'); expect(page.items.map(o => o.id)).toContain(operation.id);
+  });
+  test('dispose stops native shell staging and drains operation settlement before store teardown', async () => {
+    const h = await fixture();
+    let resolveConsumed!: () => void, output = '';
+    const consumed = new Promise<void>(resolve => { resolveConsumed = resolve; });
+    const unsubscribe = h.lemon.onEvent((event, payload) => {
+      if (event !== 'node.shell.output') return;
+      const parsed = z.object({ dataBase64: z.string() }).parse(payload);
+      output += Buffer.from(parsed.dataBase64, 'base64').toString('utf8');
+      if (output.includes('\x1e') && output.includes('\x1f')) resolveConsumed();
+    });
+    const operation = await startOperation(h);
+    await consumed; unsubscribe();
+    const shells = [...h.lemon.shells.values()];
+    expect(shells).toHaveLength(1);
+    const disposal = h.host.dispose();
+    expect(h.host.dispose()).toBe(disposal);
+    await disposal;
+    expect(h.store.require<P.HostOperation>('hostOperations', operation.id).state).toBe('outcome_unknown');
+    expect(await h.log()).toHaveLength(0);
+    expect(h.lemon.calls.filter(call => call.method === 'node.shell.close')).toHaveLength(1);
+    expect(h.lemon.shells.size).toBe(0);
+    for (const shell of shells) expect(shell.process.exitCode).toBe(0);
+    await expect(h.host.reconcile()).rejects.toThrow('Host services are disposed.');
   });
   test('lost acknowledgment retains operation ID across restart and probes without redispatch/reset storm', async () => {
     const h = await fixture(); h.setBehavior('lose');
@@ -308,8 +359,8 @@ describe('trusted owned-host driver over actual node PTY', () => {
     expect(h.store.require<P.HostOperation>('hostOperations', operation.id).state).toBe('outcome_unknown');
     const logBefore = await h.log(); expect(logBefore.filter(l => l.mode === 'apply')).toHaveLength(1);
     await expect(startOperation(h, 'update')).rejects.toMatchObject({ code: 'conflict' });
-    h.host.dispose(); const restarted = createHostServices(h.services);
-    try { await restarted.reconcile(); } finally { restarted.dispose(); }
+    await h.host.dispose(); const restarted = createHostServices(h.services);
+    try { await restarted.reconcile(); } finally { await restarted.dispose(); }
     expect(h.store.require<P.HostOperation>('hostOperations', operation.id).state).toBe('completed');
     const logs = await h.log(); expect(logs.filter(l => l.mode === 'apply')).toHaveLength(1); expect(logs.filter(l => l.mode === 'probe').map(l => l.id)).toContain(logBefore[0]!.id);
   });

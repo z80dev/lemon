@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { isIP } from 'node:net';
 import { posix } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
@@ -12,8 +13,9 @@ import { integrationConfiguration } from '../integrations/config';
  * Stdin is one JSON operation; stdout must contain a JSON line with type
  * lemon_bot_host_result, matching operationId/machineId/configDigest/inputDigest.
  * A successful exit without that exact verified receipt is outcome_unknown.
- * PTY command lines are bounded by escaped UTF-8 bytes, not JS code units;
- * argv words are assembled literally and JSON is streamed by fixed printf.
+ * PTY commands are bounded by escaped UTF-8 bytes and acknowledged by the
+ * shell before the next command: native input acceptance is not consumption.
+ * argv/JSON are assembled literally, then JSON is piped by fixed printf.
  * Probes use the SAME ID/input and never execute the action again. No raw output
  * is persisted, audited, or returned. Destination drivers own secret resolution,
  * child environment wiping, firewall installation, encrypted tunnels and safe
@@ -66,7 +68,8 @@ export interface HostServices {
   governanceChanged(previous: P.Governance, next: P.Governance): Promise<void>;
   reconcile(): Promise<void>;
   processInactiveHosts(): Promise<void>;
-  dispose(): void;
+  /** Stop dispatch, close active shells, and drain all settlement before Store.close. */
+  dispose(): Promise<void>;
   driver(machineId: string): P.HostDriverConfig | null;
   management(p: Principal, machineId: string): Promise<P.HostManagement>;
   machine(p: Principal, machineId: string, manage?: boolean): P.Machine;
@@ -143,6 +146,14 @@ export function createHostServices(s: BackendServices, options: HostOptions = {}
   if (existing) return existing;
   const inFlight = new Map<string, Promise<DriverJob>>();
   const workers = new Map<string, Promise<void>>();
+  const pending = new Set<Promise<unknown>>();
+  const stopShells = new Set<() => void>();
+  let disposal: Promise<void> | null = null;
+  const track = <T>(fn: () => Promise<T>): Promise<T> => {
+    if (disposed) return Promise.reject(new Error('Host services are disposed.'));
+    const promise = fn().finally(() => pending.delete(promise));
+    pending.add(promise); return promise;
+  };
   let disposed = false;
   const putJob = (j: DriverJob) => s.store.put('hostDriverJobs', j);
   const driver = (machineId: string): P.HostDriverConfig | null => s.config.operator.hostDrivers.find(d => d.machineId === machineId) ?? null;
@@ -215,9 +226,13 @@ export function createHostServices(s: BackendServices, options: HostOptions = {}
     let shellId: string | null = null, output = '', bytes = 0, seq = 0, receipt: Receipt | null = null, exited = false;
     const decoder = new StringDecoder('utf8');
     const early: { event: string; payload: unknown }[] = [];
-    let settled = false;
+    let settled = false, marker: string | null = null, acknowledge: ((accepted: boolean) => void) | null = null;
     let settle!: (result: Receipt | null) => void;
-    const done = new Promise<Receipt | null>(resolve => { settle = result => { if (!settled) { settled = true; resolve(result); } }; });
+    const done = new Promise<Receipt | null>(resolve => { settle = result => {
+      if (!settled) { settled = true; acknowledge?.(false); acknowledge = null; resolve(result); }
+    }; });
+    const stop = () => settle(null);
+    stopShells.add(stop);
     const accept = (event: string, payload: unknown) => {
       if (!shellId) { if (early.length < 128) early.push({ event, payload }); return; }
       if (!payload || typeof payload !== 'object' || !('shellId' in payload) || payload.shellId !== shellId) return;
@@ -232,6 +247,7 @@ export function createHostServices(s: BackendServices, options: HostOptions = {}
         let newline: number;
         while ((newline = output.indexOf('\n')) >= 0) {
           const line = output.slice(0, newline).trim(); output = output.slice(newline + 1);
+          if (marker && line === marker) { acknowledge?.(true); acknowledge = null; marker = null; continue; }
           if (!line.startsWith('{')) continue;
           try {
             const parsed = receiptSchema.safeParse(JSON.parse(line));
@@ -251,21 +267,37 @@ export function createHostServices(s: BackendServices, options: HostOptions = {}
       const opened = parse(z.object({ shellId: z.string().min(1) }), await s.lemon.call('node.shell.open', { nodeId: m.nodeId, cwd: j.command.cwd, cols: 80, rows: 24 }, { mutation: true, resourceIds: [j.id], timeoutMs: Math.min(j.command.timeoutMs, 30000) }));
       shellId = opened.shellId;
       for (const event of early) accept(event.event, event.payload);
+      if (disposed) settle(null);
       const argv = probe ? j.command.probeArgv : j.command.argv;
-      // Canonical PTY limits count bytes AFTER shell escaping. Assemble each
-      // immutable argv word on bounded lines too; no input is evaluated as code.
-      const argumentsText = argv.map(value => `lb_host_arg=''\n${shellPieces(value).map(piece => `lb_host_arg="$lb_host_arg"${quote(piece)}`).join('\n')}\nset -- "$@" "$lb_host_arg"`).join('\n');
-      const text = `PS1= PS2=; unset PROMPT_COMMAND; stty -echo\nset --\n${argumentsText}\nunset lb_host_arg\n{\n${shellPieces(json).map(value => `printf '%s' ${quote(value)}`).join('\n')}\nprintf '\\n'\n} | "$@"; exit\n`;
-      const buffer = Buffer.from(text);
-      try {
-        for (let offset = 0; offset < buffer.length; offset += 16384) {
-          if (settled) break;
-          await s.lemon.call('node.shell.input', { shellId, dataBase64: buffer.subarray(offset, offset + 16384).toString('base64') }, { mutation: true, resourceIds: [j.id], timeoutMs: 30000 });
-        }
-      } finally { buffer.fill(0); }
+      // Bounding individual lines does not bound the terminal's aggregate input
+      // queue. In particular, ready is emitted before the forked shell reads.
+      // Wait for execution of each literal assembly command, never replaying a
+      // command on missing acknowledgment. Echo cannot forge the control frame.
+      const token = randomBytes(16).toString('hex');
+      let step = 0;
+      const send = async (command: string, confirmed = true): Promise<boolean> => {
+        if (settled) return false;
+        marker = confirmed ? `\x1e${token}:${++step}\x1f` : null;
+        const consumed = confirmed ? new Promise<boolean>(resolve => { acknowledge = resolve; }) : Promise.resolve(true);
+        const buffer = Buffer.from(confirmed ? `${command}; printf '\\n\\036%s\\037\\n' ${quote(`${token}:${step}`)}\n` : `${command}\n`);
+        try {
+          await s.lemon.call('node.shell.input', { shellId, dataBase64: buffer.toString('base64') }, { mutation: true, resourceIds: [j.id], timeoutMs: 30000 });
+        } finally { buffer.fill(0); }
+        return consumed;
+      };
+      if (!await send('PS1= PS2=; unset PROMPT_COMMAND; stty -echo; set --')) return await done;
+      for (const value of argv) {
+        if (!await send("lb_host_arg=''")) return await done;
+        for (const piece of shellPieces(value)) if (!await send(`lb_host_arg="$lb_host_arg"${quote(piece)}`)) return await done;
+        if (!await send('set -- "$@" "$lb_host_arg"')) return await done;
+      }
+      if (!await send("unset lb_host_arg; lb_host_json=''")) return await done;
+      for (const piece of shellPieces(json)) if (!await send(`lb_host_json="$lb_host_json"${quote(piece)}`)) return await done;
+      await send(`printf '%s\\n' "$lb_host_json" | "$@"; lb_host_code=$?; unset lb_host_json; exit "$lb_host_code"`, false);
       return await done;
     } catch { return null; }
     finally {
+      stopShells.delete(stop);
       clearTimeout(timer); unsubscribe(); output = ''; early.length = 0;
       if (shellId && !exited) await s.lemon.call('node.shell.close', { shellId }, { mutation: true, resourceIds: [j.id] }).catch(() => undefined);
     }
@@ -273,6 +305,7 @@ export function createHostServices(s: BackendServices, options: HostOptions = {}
   const runJob = (job: DriverJob): Promise<DriverJob> => {
     const current = s.store.require<DriverJob>('hostDriverJobs', job.id);
     if (['succeeded', 'skipped', 'failed'].includes(current.state)) return Promise.resolve(current);
+    if (disposed) return Promise.resolve(current);
     const running = inFlight.get(job.id); if (running) return running;
     const work = (async () => {
       const m = s.store.require<P.Machine>('machines', current.machineId);
@@ -647,13 +680,39 @@ export function createHostServices(s: BackendServices, options: HostOptions = {}
   };
   // Long setup/recovery work must not hold the next firewall/central-stop sweep.
   // Per-operation workers and driver IDs deduplicate overlapping maintenance.
-  const connected = s.lemon.onConnected(() => { void reconcile().catch(() => { s.audit(null, 'host.reconcile', 'hosts', 'failed'); }); });
-  const timer = setInterval(() => { void reconcile().catch(() => { s.audit(null, 'host.reconcile', 'hosts', 'failed'); }); }, 45000); timer.unref?.();
+  const maintain = () => { if (!disposed) void track(() => reconcile().catch(() => { s.audit(null, 'host.reconcile', 'hosts', 'failed'); })); };
+  const connected = s.lemon.onConnected(maintain);
+  const timer = setInterval(maintain, 45000); timer.unref?.();
   const service: HostServices = {
-    admission: appliedPolicyAdmission, canReadResource, appliedPolicyAdmission, governanceChanged, reconcile, processInactiveHosts,
-    dispose() { disposed = true; clearInterval(timer); connected(); if (hostServices.get(s) === service) hostServices.delete(s); },
-    driver, management, machine, online, reserve, runJob, applyNetwork, deleteNetwork, authorizeEgress, changeEgress, authorizeManifest, reviewSetups,
-    snapshot, operationTarget, saveOperation, launchOperation, saveRun, setupStep, work, saveEgress,
+    admission: (...args) => track(() => appliedPolicyAdmission(...args)), canReadResource,
+    appliedPolicyAdmission: (...args) => track(() => appliedPolicyAdmission(...args)),
+    governanceChanged: (...args) => track(() => governanceChanged(...args)),
+    reconcile: () => track(reconcile), processInactiveHosts: () => track(processInactiveHosts),
+    dispose() {
+      if (disposal) return disposal;
+      disposed = true; clearInterval(timer); connected();
+      for (const stop of stopShells) stop();
+      disposal = (async () => {
+        const errors: unknown[] = [];
+        while (pending.size || workers.size || inFlight.size) {
+          const results = await Promise.allSettled([...pending, ...workers.values(), ...inFlight.values()]);
+          for (const result of results) if (result.status === 'rejected') errors.push(result.reason);
+        }
+        if (hostServices.get(s) === service) hostServices.delete(s);
+        if (errors.length) throw new AggregateError(errors, 'Host work failed during disposal.');
+      })();
+      return disposal;
+    },
+    driver, machine, online, reserve, snapshot, operationTarget, saveOperation, saveRun, saveEgress, authorizeManifest, reviewSetups,
+    management: (...args) => track(() => management(...args)),
+    runJob: (...args) => track(() => runJob(...args)),
+    applyNetwork: (...args) => track(() => applyNetwork(...args)),
+    deleteNetwork: (...args) => track(() => deleteNetwork(...args)),
+    authorizeEgress: (...args) => track(() => authorizeEgress(...args)),
+    changeEgress: (...args) => track(() => changeEgress(...args)),
+    launchOperation: (...args) => track(() => launchOperation(...args)),
+    setupStep: (...args) => track(() => setupStep(...args)),
+    work: (...args) => track(() => work(...args)),
   };
   hostServices.set(s, service);
   return service;
