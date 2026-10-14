@@ -5,7 +5,7 @@ import { Badge, EmptyState, ErrorNotice, Field, Loading, PageHeader, formatTime,
 import { allPages, useIntent, IntentNotice } from './features/settings/shared';
 
 export const settingsDestinations = [
-  ['settings.account', 'Account'], ['settings.pairing', 'Connect iPhone'], ['settings.workspace', 'Cluster'], ['settings.notifications', 'Notifications'], ['settings.voice', 'Voice'], ['settings.policies', 'Policies'], ['settings.usage', 'Usage'], ['settings.usage.limit', 'Spend limits'], ['settings.identity', 'Sign-in providers'], ['settings.network', 'Network'], ['settings.setup', 'Host setup'], ['settings.about', 'About'], ['settings.account-cleanup', 'Account cleanup'],
+  ['settings.account', 'Account'], ['device.pairing', 'Connect iPhone'], ['settings.workspace', 'Cluster'], ['settings.notifications', 'Notifications'], ['settings.voice', 'Voice'], ['settings.policies', 'Policies'], ['settings.usage', 'Usage'], ['settings.usage.limit', 'Spend limits'], ['settings.identity', 'Sign-in providers'], ['settings.network', 'Network'], ['settings.setup', 'Host setup'], ['settings.about', 'About'], ['settings.account-cleanup', 'Account cleanup'],
 ] as const;
 const commandDestinations = [ ['bot.create', 'Create a Bot'], ['group.create', 'Group your Bots'], ['machines', 'Your hosts & files'], ['machine.attach', 'Attach a host'], ['templates', 'Bot templates'], ['skills', 'Skills library'], ['routines', 'Routines'], ['inbox', 'Inbox & decisions'], ['activity', 'Recent activity'], ['upcoming', 'Upcoming work'], ['integrations.channels', 'Connect channels'], ['integrations.email', 'Email'], ['integrations.x', 'X mentions'], ...settingsDestinations ] as const;
 function hitLabel(hit: SearchHit) {

@@ -26,7 +26,7 @@ There is no Team Bot publishing, manager assignment, live other-user Bot access,
 
 ## Connect iPhone from a desktop browser
 
-Open **Connect iPhone** in the roster or Settings. Explicitly create a five-minute, one-use pairing QR. The QR encodes the backend's actual `pairUrl`, not your browser session or an operator credential. It is rendered locally with `qrcode.react`; no QR image service receives the link.
+Open **Connect iPhone** in the roster or Settings (canonical screen `device.pairing`). Explicitly create a five-minute, one-use pairing QR. The QR encodes the backend's actual `pairUrl`, not your browser session or an operator credential. It is rendered locally with `qrcode.react`; no QR image service receives the link.
 
 The backend must advertise its reachable HTTPS public URL. Tailscale Serve is the recommended deployment when desktop and iPhone already have Tailscale reachability. This screen does not provision Tailscale, discover an overlay, or prove phone reachability. A localhost QR works only for same-machine development/Simulator; it cannot connect a physical iPhone to the desktop's localhost.
 

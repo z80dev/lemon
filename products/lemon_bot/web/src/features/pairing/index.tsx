@@ -129,9 +129,9 @@ export function PairingScreen() {
   }
 
   async function decide(pairing: Pairing, decision: 'approve' | 'deny') {
-    if (pairing.expiresAtMs <= Date.now()) return;
+    if (pairing.expiresAtMs <= Date.now() || pairing.status !== 'pending_approval') return;
     if (decision === 'approve') {
-      if (pairing.status !== 'pending_approval' || !pairing.verificationCode) return;
+      if (!pairing.verificationCode) return;
       const body: PairingApprove = { clientNonce: nonce(), revision: pairing.revision, verificationCode: pairing.verificationCode };
       await dispatch({ kind: decision, clientNonce: body.clientNonce, resourceId: pairing.id, dispatchedAtMs: Date.now() }, async () => {
         const result = await client.call('POST /pairings/:id/approve', { params: { id: pairing.id }, body });
@@ -185,5 +185,19 @@ function PairingRequest({ pairing, now, disabled, decide }: { pairing: Pairing; 
   useEffect(() => { setConfirmation(''); }, [pairing.verificationCode, pairing.revision]);
   const expired = pairing.expiresAtMs <= now;
   const pending = pairing.status === 'pending_approval' && !expired;
-  return <article className="panel stack"><div className="row spread"><h3>{pairing.deviceName || 'Waiting for an iPhone to scan'}</h3><Badge tone={pending ? 'warning' : pairing.status === 'consumed' ? 'good' : 'muted'}>{expired && ['waiting', 'pending_approval'].includes(pairing.status) ? 'Expiry reached · refresh to confirm' : pairing.status.replaceAll('_', ' ')}</Badge></div><p>{pairing.clusterName} · <code>{pairing.backendUrl}</code></p><p>Expires: {formatTime(pairing.expiresAtMs)}</p>{pending && <><p>Compare this code with the iPhone that you requested to connect. Approve only your own device.</p><strong className="pairing-verification" aria-label={`Verification code ${pairing.verificationCode}`}>{pairing.verificationCode}</strong><Field label="Enter the matching code shown on your iPhone"><input value={confirmation} inputMode="numeric" pattern="[0-9]{6}" maxLength={6} autoComplete="off" onChange={event => setConfirmation(event.target.value.replace(/\D/g, ''))}/></Field><button className="primary" disabled={disabled || !pairing.verificationCode || confirmation !== pairing.verificationCode} onClick={() => void decide(pairing, 'approve')}>Approve this iPhone</button></>}{!expired && ['waiting', 'pending_approval'].includes(pairing.status) && <button className="danger" disabled={disabled} onClick={() => void decide(pairing, 'deny')}>{pending ? 'Deny this device' : 'Cancel this unused QR'}</button>}{pairing.status === 'approved' && <p>The device is approved. The phone must complete before this request expires; approval is not proof that the phone received its credential.</p>}{pairing.status === 'consumed' && <p>The phone completed this pairing. Its device-bound session remains valid until revoked.</p>}{pairing.status === 'denied' && <p>This request was denied and cannot connect.</p>}</article>;
+  return <article className="panel stack">
+    <div className="row spread"><h3>{pairing.deviceName || 'Waiting for an iPhone to scan'}</h3><Badge tone={pending ? 'warning' : pairing.status === 'consumed' ? 'good' : 'muted'}>{expired && ['waiting', 'pending_approval'].includes(pairing.status) ? 'Expiry reached · refresh to confirm' : pairing.status.replaceAll('_', ' ')}</Badge></div>
+    <p>{pairing.clusterName} · <code>{pairing.backendUrl}</code></p><p>Expires: {formatTime(pairing.expiresAtMs)}</p>
+    {pending && <>
+      <p>Compare this code with the iPhone that you requested to connect. Approve only your own device.</p>
+      <strong className="pairing-verification" aria-label={`Verification code ${pairing.verificationCode}`}>{pairing.verificationCode}</strong>
+      <Field label="Enter the matching code shown on your iPhone"><input value={confirmation} inputMode="numeric" pattern="[0-9]{6}" maxLength={6} autoComplete="off" onChange={event => setConfirmation(event.target.value.replace(/\D/g, ''))}/></Field>
+      <button className="primary" disabled={disabled || !pairing.verificationCode || confirmation !== pairing.verificationCode} onClick={() => void decide(pairing, 'approve')}>Approve this iPhone</button>
+      <button className="danger" disabled={disabled} onClick={() => void decide(pairing, 'deny')}>Deny this device</button>
+    </>}
+    {pairing.status === 'waiting' && !expired && <p>The unused QR expires automatically. Once your iPhone requests connection, you can approve or deny that device.</p>}
+    {pairing.status === 'approved' && <p>The device is approved. The phone must complete before this request expires; approval is not proof that the phone received its credential.</p>}
+    {pairing.status === 'consumed' && <p>The phone completed this pairing. Its device-bound session remains valid until revoked.</p>}
+    {pairing.status === 'denied' && <p>This request was denied and cannot connect.</p>}
+  </article>;
 }

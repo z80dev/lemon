@@ -22,7 +22,7 @@ confirmation; exact device, session and rule revocations remain explicit real AP
 Paired device sessions display **Until revoked** when `AuthSession.expiresAtMs` is
 null; ordinary sessions show their bounded expiry. Removing a device revokes its
 authority, not its local files. Phone pairing itself lives in the shell-owned
-`features/pairing` screen (`settings.pairing`), not a second settings auth plane.
+`features/pairing` screen (`device.pairing`), not a second settings auth plane.
 
 ## Browser integrations
 

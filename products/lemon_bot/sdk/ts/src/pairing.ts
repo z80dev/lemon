@@ -11,14 +11,27 @@ export function parsePairUrl(value: string): PairingLink {
   try { url = new URL(value); }
   catch { throw localError('invalid_request', 'Invalid Lemon Bot pairing link.'); }
   if (url.protocol !== 'lemonbot:' || url.hostname !== 'pair' || url.port || url.username || url.password
-    || (url.pathname !== '' && url.pathname !== '/') || url.hash
-    || [...url.searchParams.keys()].length !== 3
-    || ['backend', 'cluster', 'code'].some(key => url.searchParams.getAll(key).length !== 1)) {
+    || (url.pathname !== '' && url.pathname !== '/') || url.hash) {
+    throw localError('invalid_request', 'Invalid pairing link authority or path.');
+  }
+  const fields: Partial<Record<'backend' | 'cluster' | 'code', string>> = {};
+  for (const parameter of url.search.slice(1).split('&')) {
+    const separator = parameter.indexOf('=');
+    if (separator < 0) throw localError('invalid_request', 'Pairing links require exactly one backend, cluster and code.');
+    let key: string, decoded: string;
+    try {
+      key = decodeURIComponent(parameter.slice(0, separator).replace(/\+/g, ' '));
+      decoded = decodeURIComponent(parameter.slice(separator + 1).replace(/\+/g, ' '));
+    } catch { throw localError('invalid_request', 'Pairing link has invalid percent encoding.'); }
+    if ((key !== 'backend' && key !== 'cluster' && key !== 'code') || fields[key] !== undefined) {
+      throw localError('invalid_request', 'Pairing links require exactly one backend, cluster and code.');
+    }
+    fields[key] = decoded;
+  }
+  const { backend: backendUrl, cluster: workspaceId, code: pairCode } = fields;
+  if (backendUrl === undefined || workspaceId === undefined || pairCode === undefined) {
     throw localError('invalid_request', 'Pairing links require exactly one backend, cluster and code.');
   }
-  const backendUrl = url.searchParams.get('backend')!;
-  const workspaceId = url.searchParams.get('cluster')!;
-  const pairCode = url.searchParams.get('code')!;
   if (!workspaceId || workspaceId.length > 128 || /[\u0000-\u001f\u007f]/.test(workspaceId)
     || !/^[A-Za-z0-9_-]{43}$/.test(pairCode)) {
     throw localError('invalid_request', 'Pairing cluster or one-use code is invalid.');

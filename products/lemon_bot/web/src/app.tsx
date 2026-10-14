@@ -188,9 +188,9 @@ function Destination({ route, activeBot }: { route: Route; activeBot?: Bot }) {
   if (['activity', 'upcoming'].includes(route.screen)) return <ActivityScreen route={route}/>;
   if (route.screen.startsWith('machine') || route.screen === 'machines') return <MachinesScreen route={route}/>;
   if (['skills', 'routines', 'connect.apps', 'connector.setup', 'integrations.channels', 'integrations.email', 'integrations.x'].includes(route.screen)) return <WorkScreen route={{ ...route, screen: route.screen === 'connector.setup' ? 'connect.apps' : route.screen }}/>;
-  if (route.screen.startsWith('settings.')) {
+  if (route.screen.startsWith('settings.') || route.screen === 'device.pairing') {
     const controls = ['settings.identity', 'settings.network', 'settings.setup', 'settings.usage.limit'].includes(route.screen);
-    return <><nav className="settings-nav" aria-label="Settings sections">{settingsDestinations.map(([screen, label]) => <button key={screen} className={route.screen === screen ? 'selected' : ''} onClick={() => navigate({ screen })}>{label}</button>)}</nav>{route.screen === 'settings.pairing' ? <PairingScreen/> : controls ? <OwnerControlsScreen route={route}/> : <SettingsScreen route={route}/>}</>;
+    return <><nav className="settings-nav" aria-label="Settings sections">{settingsDestinations.map(([screen, label]) => <button key={screen} className={route.screen === screen ? 'selected' : ''} onClick={() => navigate({ screen })}>{label}</button>)}</nav>{route.screen === 'device.pairing' ? <PairingScreen/> : controls ? <OwnerControlsScreen route={route}/> : <SettingsScreen route={route}/>}</>;
   }
   if (route.screen === 'inbox') return <SettingsScreen route={route}/>;
   if (route.screen.startsWith('bot.') || ['templates', 'memory', 'memory.import', 'preference.changes', 'group.create', 'group.edit', 'voice.preview'].includes(route.screen)) return <BotsScreen route={{ ...route, id: route.id || activeBot?.id, botId: route.botId || activeBot?.id }}/>;
@@ -248,7 +248,7 @@ function Roster({ route, close }: { route: Route; close: () => void }) {
     </div>
     <div className="roster-footer">
       <div className="roster-quick"><button onClick={() => navigate({ screen: 'machines' })}>Hosts & files</button><button onClick={() => navigate({ screen: 'skills' })}>Skills</button><button onClick={() => navigate({ screen: 'routines' })}>Routines</button></div>
-      <button className="roster-nav" onClick={() => navigate({ screen: 'settings.pairing' })}>Connect iPhone</button>
+      <button className="roster-nav" onClick={() => navigate({ screen: 'device.pairing' })}>Connect iPhone</button>
       <details><summary className="account-summary"><span className="user-initial">{snapshot.user.displayName.slice(0, 1)}</span><span><strong>{snapshot.user.displayName}</strong><small>{snapshot.workspace.name}</small></span><span>⌄</span></summary><div className="menu account-menu stack"><button onClick={() => navigate({ screen: 'settings.account' })}>Settings & account</button><button onClick={() => navigate({ screen: 'settings.workspace' })}>Cluster settings</button><button onClick={() => void logout()}>Sign out / switch account</button></div></details>
     </div>
   </aside></>;

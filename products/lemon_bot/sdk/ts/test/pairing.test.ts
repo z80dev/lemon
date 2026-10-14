@@ -30,6 +30,8 @@ describe('owner pairing boundary', () => {
       pairUrl.replace(encodeURIComponent(origin), encodeURIComponent('http://desktop.example.ts.net')),
       pairUrl.replace(code, 'a'.repeat(42)), pairUrl.replace(code, 'a'.repeat(44)),
       pairUrl.replace('workspace_1', 'x'.repeat(129)), pairUrl + 'x'.repeat(4096),
+      pairUrl.replace('workspace_1', '%GG'), pairUrl.replace('workspace_1', '%FF'),
+      pairUrl.replace('workspace_1', '%00'), pairUrl.replace('workspace_1', '%C0%AF'),
     ]) {
       expect(() => parsePairUrl(value)).toThrow();
     }
