@@ -91,6 +91,45 @@ defmodule LemonRouter.RunOrchestrator do
     submit(server, normalized)
   end
 
+  @doc "Submit once and return the owning queue's durable disposition."
+  def submit_with_receipt(request), do: submit_with_receipt(__MODULE__, request)
+
+  def submit_with_receipt(server, %RunRequest{} = request) do
+    GenServer.call(server, {:submit_with_receipt, request}, @serialized_mutation_timeout_ms)
+  end
+
+  def submit_with_receipt(server, request) when is_map(request) or is_list(request) do
+    submit_with_receipt(server, RunRequest.new(request))
+  end
+
+  @doc "Read a fixed-ID admission receipt without dispatching work."
+  def run_receipt(run_id) when is_binary(run_id) and run_id != "" do
+    case LemonRouter.RunReceiptStore.fetch(run_id) do
+      {:ok, %{} = receipt} ->
+        {:ok, receipt}
+
+      {:ok, nil} ->
+        case Store.fetch(@run_admission_table, run_id) do
+          {:ok, %{}} ->
+            {:ok, %{
+              run_id: run_id,
+              session_key: nil,
+              state: :outcome_unknown,
+              effective_mode: nil,
+              target_run_id: nil
+            }}
+
+          {:ok, nil} -> {:error, :not_found}
+          _ -> {:error, :unavailable}
+        end
+
+      _ ->
+        {:error, :unavailable}
+    end
+  catch
+    :exit, _ -> {:error, :unavailable}
+  end
+
   @doc false
   @spec register_abort(binary(), term()) :: :ok
   def register_abort(run_id, reason) when is_binary(run_id) do
@@ -191,21 +230,28 @@ defmodule LemonRouter.RunOrchestrator do
   end
 
   @impl true
+  def handle_call({:submit_with_receipt, %RunRequest{} = params}, from, state) do
+    {:reply, result, next_state} = handle_call({:submit, params}, from, state)
+
+    receipt_result =
+      case result do
+        {:ok, run_id} ->
+          case run_receipt(run_id) do
+            {:ok, %{state: :accepted} = receipt} -> {:ok, receipt}
+            _ -> {:error, :outcome_unknown}
+          end
+
+        error ->
+          error
+      end
+
+    {:reply, receipt_result, next_state}
+  end
   def handle_call({:submit, %RunRequest{} = params}, _from, state) do
     state = maybe_cleanup_durable_receipts(state)
     params = ensure_run_id(params)
 
-    {result, state} =
-      case fetch_abort_tombstone(params.run_id, state) do
-        {:active, %{reason: reason}, state} ->
-          {reject_tombstoned_submission(params, reason), state}
-
-        {:none, state} ->
-          submit_idempotently(params, state)
-
-        {:error, state} ->
-          {{:error, :outcome_unknown}, state}
-      end
+    {result, state} = submit_idempotently(params, state)
 
     {:reply, result, state}
   end
@@ -443,7 +489,7 @@ defmodule LemonRouter.RunOrchestrator do
   defp continue_pending_admission(params, identity, admission, ownership, state) do
     admission_state = MapHelpers.get_key(admission, :state)
 
-    case terminal_run_status(params, identity) do
+    case admission_status(params, identity) do
       :matching_terminal ->
         accept_terminal_replay(params.run_id, identity, admission, state)
 
@@ -466,7 +512,48 @@ defmodule LemonRouter.RunOrchestrator do
     end
   end
 
+  defp admission_status(params, identity) do
+    case LemonRouter.RunReceiptStore.fetch(params.run_id) do
+      {:ok, %{session_key: session_key, state: :accepted, request_identity: ^identity}}
+      when session_key == params.session_key ->
+        :matching_terminal
+
+      {:ok, %{request_identity: ^identity, state: :outcome_unknown}} ->
+        :terminal_outcome_unknown
+
+      {:ok, %{request_identity: receipt_identity}} when is_binary(receipt_identity) and receipt_identity != identity ->
+        :conflicting_terminal
+
+      {:ok, %{} } ->
+        case terminal_run_status(params, identity) do
+          :not_terminal -> :terminal_outcome_unknown
+          status -> status
+        end
+
+      {:ok, nil} ->
+        terminal_run_status(params, identity)
+
+      _ ->
+        :terminal_outcome_unknown
+    end
+  catch
+    :exit, _ -> :terminal_outcome_unknown
+  end
+
   defp submit_new_admission(params, identity, admission, state) do
+    case fetch_abort_tombstone(params.run_id, state) do
+      {:active, %{reason: reason}, state} ->
+        {reject_tombstoned_submission(params, reason), state}
+
+      {:none, state} ->
+        dispatch_new_admission(params, identity, admission, state)
+
+      {:error, state} ->
+        {{:error, :outcome_unknown}, state}
+    end
+  end
+
+  defp dispatch_new_admission(params, identity, admission, state) do
     # Once the external-enqueue boundary becomes ambiguous, retain only the
     # permanent idempotency fence. Delivery/session metadata and diagnostic
     # timestamps are not needed to reject a replay and must not live forever.

@@ -115,6 +115,7 @@ defmodule LemonControlPlane.Protocol.Schemas do
       required: %{"id" => :string, "prompt" => :string},
       optional: %{
         "images" => :list,
+        "runId" => :string,
         "model" => :string,
         "queueMode" => :string
       }
@@ -573,12 +574,17 @@ defmodule LemonControlPlane.Protocol.Schemas do
         "prompt" => :string
       },
       optional: %{
+        "runId" => :string,
         "agentId" => :string,
         "profileId" => :string,
         "cwd" => :string,
         "images" => :list,
         "queueMode" => :string
       }
+    },
+    "runs.receipt.get" => %{
+      required: %{"runId" => :string},
+      optional: %{}
     },
     "chat.abort" => %{
       optional: %{

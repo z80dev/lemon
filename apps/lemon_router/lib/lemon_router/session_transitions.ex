@@ -259,7 +259,7 @@ defmodule LemonRouter.SessionTransitions do
 
     case maybe_merge_followup(state.queue, submission, state.last_followup_at_ms, now_ms) do
       {:merged, queue} ->
-        {%SessionState{state | queue: queue, last_followup_at_ms: now_ms}, []}
+        {%SessionState{record_merge(state, queue) | last_followup_at_ms: now_ms}, []}
 
       :no_merge ->
         {%SessionState{state | queue: state.queue ++ [submission], last_followup_at_ms: now_ms},
@@ -453,6 +453,21 @@ defmodule LemonRouter.SessionTransitions do
 
   defp async_followup_submission?(_submission), do: false
 
+  # The newest follow-up remains the execution owner. Keep follower identities
+  # separate from prompt metadata so all durable receipts can follow that owner.
+  defp record_merge(state, queue) do
+    previous = List.last(state.queue)
+    survivor = List.last(queue)
+    followers = [previous.run_id | Map.get(state.merged_run_ids, previous.run_id, [])]
+
+    merged_run_ids =
+      state.merged_run_ids
+      |> Map.delete(previous.run_id)
+      |> Map.put(survivor.run_id, followers)
+
+    %SessionState{state | queue: queue, merged_run_ids: merged_run_ids}
+  end
+
   defp merge_followup_submission(previous, current) do
     merged_prompt =
       merge_prompt(previous.execution_request.prompt, current.execution_request.prompt)
@@ -554,7 +569,7 @@ defmodule LemonRouter.SessionTransitions do
            now_ms
          ) do
       {:merged, queue} ->
-        %SessionState{state | queue: queue, last_followup_at_ms: now_ms}
+        %SessionState{record_merge(state, queue) | last_followup_at_ms: now_ms}
 
       :no_merge ->
         %SessionState{

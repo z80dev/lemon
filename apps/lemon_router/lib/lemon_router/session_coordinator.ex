@@ -27,6 +27,7 @@ defmodule LemonRouter.SessionCoordinator do
     PhasePublisher,
     QueueEffect,
     RunStarter,
+    RunReceiptStore,
     SessionState,
     SessionTransitions,
     Submission
@@ -43,14 +44,49 @@ defmodule LemonRouter.SessionCoordinator do
   @spec submit(term(), Submission.t() | map() | keyword(), keyword()) :: :ok | {:error, term()}
   def submit(conversation_key, submission, opts \\ [])
 
-  def submit(conversation_key, %Submission{} = submission, opts) do
-    with {:ok, pid} <- ensure_coordinator(conversation_key, opts) do
-      GenServer.call(pid, {:submit, submission}, 15_000)
+  def submit(conversation_key, submission, opts) do
+    case submit_with_receipt(conversation_key, submission, opts) do
+      {:ok, _receipt} -> :ok
+      {:error, _reason} = error -> error
     end
   end
 
-  def submit(conversation_key, submission, opts) when is_map(submission) or is_list(submission) do
-    submit(conversation_key, Submission.new!(submission), opts)
+  @doc """
+  Admit a fixed run ID and return its durable, content-free queue disposition.
+
+  The receipt is written after transition effects and before acknowledgement.
+  Steering casts return a pending mode until the invocation accepts them.
+  Replaying an existing receipt is a read: it never dispatches work again,
+  including for merged follower IDs. A write failure after mutation returns
+  `{:error, :outcome_unknown}`; retain the run ID and reconcile, do not resubmit
+  it under a fresh ID. `:receipt_store` optionally selects a Store instance.
+  """
+  @spec submit_with_receipt(term(), Submission.t() | map() | keyword(), keyword()) ::
+          {:ok, RunReceiptStore.receipt()} | {:error, term()}
+  def submit_with_receipt(conversation_key, submission, opts \\ [])
+
+  def submit_with_receipt(conversation_key, %Submission{} = submission, opts) do
+    store = Keyword.get(opts, :receipt_store, LemonCore.Store)
+
+    case RunReceiptStore.fetch(store, submission.run_id) do
+      {:ok, %{} = receipt} ->
+        replay_receipt(submission, receipt)
+
+      {:ok, nil} ->
+        with {:ok, pid} <- ensure_coordinator(conversation_key, opts) do
+          GenServer.call(pid, {:submit_with_receipt, submission}, 15_000)
+        end
+
+      {:error, _reason} = error ->
+        error
+    end
+  catch
+    :exit, _reason -> {:error, :outcome_unknown}
+  end
+
+  def submit_with_receipt(conversation_key, submission, opts)
+      when is_map(submission) or is_list(submission) do
+    submit_with_receipt(conversation_key, Submission.new!(submission), opts)
   end
 
   @spec cancel(binary() | term(), term()) :: :ok | {:error, :unavailable}
@@ -254,7 +290,24 @@ defmodule LemonRouter.SessionCoordinator do
     {:reply, length(state.queue) + pending_steers, state}
   end
 
-  def handle_call({:submit, submission}, _from, state) do
+  def handle_call({:submit_with_receipt, submission}, _from, state) do
+    case RunReceiptStore.fetch(state.receipt_store, submission.run_id) do
+      {:ok, %{} = receipt} ->
+        {:reply, replay_receipt(submission, receipt), state}
+
+      {:ok, nil} ->
+        if Map.has_key?(state.unpersisted_receipts, submission.run_id) do
+          {:reply, {:error, :outcome_unknown}, state}
+        else
+          admit_submission(state, submission)
+        end
+
+      {:error, _reason} = error ->
+        {:reply, error, state}
+    end
+  end
+
+  defp admit_submission(state, submission) do
     case recover_surviving_session_run(state, submission.session_key) do
       {:ok, recovered_state} ->
         {:reply, reply, next_state} =
@@ -268,7 +321,44 @@ defmodule LemonRouter.SessionCoordinator do
             reply?: true
           )
 
-        {:reply, reply, maybe_emit_submit_phases(recovered_state, submission, next_state)}
+        next_state = maybe_emit_submit_phases(recovered_state, submission, next_state)
+
+        case disposition(recovered_state, submission, next_state) do
+          nil ->
+            {:reply, reply, next_state}
+
+          changes ->
+            receipt =
+              changes
+              |> Map.merge(%{
+                run_id: submission.run_id,
+                session_key: submission.session_key,
+                state: :accepted
+              })
+              |> put_request_identity(submission)
+
+            receipt =
+              if reply == :ok do
+                receipt
+              else
+                %{receipt | state: :outcome_unknown, effective_mode: nil, target_run_id: nil}
+              end
+
+            case RunReceiptStore.put(next_state.receipt_store, receipt) do
+              :ok ->
+                ack = if reply == :ok, do: {:ok, receipt}, else: {:error, :outcome_unknown}
+                {:reply, ack, next_state}
+
+              {:error, _reason} ->
+                next_state = %SessionState{
+                  next_state
+                  | unpersisted_receipts:
+                      Map.put(next_state.unpersisted_receipts, submission.run_id, receipt)
+                }
+
+                {:reply, {:error, :outcome_unknown}, next_state}
+            end
+        end
 
       {:error, reason} ->
         {:reply, {:error, reason}, state}
@@ -328,7 +418,7 @@ defmodule LemonRouter.SessionCoordinator do
       when is_binary(submission_run_id) do
     {:noreply, next_state} =
       apply_transition(SessionTransitions.steer_accepted(state, submission_run_id), state,
-        steered_into: active_submission_run_id(state)
+        steered_into: pending_target_run_id(state, submission_run_id)
       )
 
     {:noreply, next_state}
@@ -338,7 +428,7 @@ defmodule LemonRouter.SessionCoordinator do
       when is_binary(submission_run_id) do
     {:noreply, next_state} =
       apply_transition(SessionTransitions.steer_accepted(state, submission_run_id), state,
-        steered_into: active_submission_run_id(state)
+        steered_into: pending_target_run_id(state, submission_run_id)
       )
 
     {:noreply, next_state}
@@ -378,7 +468,7 @@ defmodule LemonRouter.SessionCoordinator do
       when is_binary(submission_run_id) do
     {:noreply, next_state} =
       apply_transition(SessionTransitions.steer_accepted(state, submission_run_id), state,
-        steered_into: active_submission_run_id(state)
+        steered_into: pending_target_run_id(state, submission_run_id)
       )
 
     {:noreply, next_state}
@@ -433,17 +523,173 @@ defmodule LemonRouter.SessionCoordinator do
     :ok
   end
 
+  defp submission_identity(submission) do
+    MapHelpers.get_key(submission.meta || %{}, :router_request_identity) ||
+      MapHelpers.get_key(submission.execution_request.meta || %{}, :router_request_identity)
+  end
+
+  defp put_request_identity(receipt, submission) do
+    identity = submission_identity(submission)
+    if is_nil(identity), do: receipt, else: Map.put(receipt, :request_identity, identity)
+  end
+
+  defp replay_receipt(_submission, %{state: :outcome_unknown}),
+    do: {:error, :outcome_unknown}
+
+  defp replay_receipt(submission, receipt) do
+    case {submission_identity(submission), Map.get(receipt, :request_identity)} do
+      {nil, _stored} -> {:ok, receipt}
+      {identity, identity} -> {:ok, receipt}
+      {_identity, nil} -> {:error, :outcome_unknown}
+      {_identity, _different} -> {:error, :run_id_conflict}
+    end
+  end
+
+  defp disposition(original_state, submission, state) do
+    run_id = submission.run_id
+
+    case pending_entry(state, run_id) do
+      {target, pending} ->
+        mode =
+          case pending.queue_mode do
+            :steer -> :steer_pending
+            :steer_backlog -> :steer_backlog_pending
+            :redirect -> :redirect_pending
+          end
+
+        %{effective_mode: mode, target_run_id: target}
+
+      nil ->
+        queued = Enum.find(state.queue, &(&1.run_id == run_id))
+
+        merged_target =
+          Enum.find_value(state.merged_run_ids, fn {target, followers} ->
+            if target == run_id or run_id in followers, do: target
+          end)
+
+        cond do
+          queued && queued.queue_mode == :interrupt && original_state.active != nil ->
+            %{effective_mode: :interrupt, target_run_id: original_state.active.run_id}
+
+          merged_target != nil ->
+            %{effective_mode: :merged, target_run_id: merged_target}
+
+          active_submission_run_id(state) == run_id ->
+            %{effective_mode: :new_run, target_run_id: run_id}
+
+          queued != nil ->
+            %{effective_mode: :queued, target_run_id: run_id}
+
+          true ->
+            nil
+        end
+    end
+  end
+
+  defp pending_entry(state, run_id) do
+    Enum.find_value(state.pending_steers, fn {target, entries} ->
+      case Enum.find(entries, fn {submission, _mode} -> submission.run_id == run_id end) do
+        {submission, _mode} -> {target, submission}
+        nil -> nil
+      end
+    end)
+  end
+
+  defp pending_target_run_id(state, run_id) do
+    case pending_entry(state, run_id) do
+      {target, _submission} -> target
+      nil -> nil
+    end
+  end
+
+  defp persist_receipt_updates(original_state, state, opts) do
+    changes =
+      Enum.reduce(original_state.pending_steers, %{}, fn {target, entries}, acc ->
+        Enum.reduce(entries, acc, fn {submission, _fallback}, acc ->
+          if pending_entry(state, submission.run_id) == nil do
+            disposition =
+              if is_binary(opts[:steered_into]) do
+                %{effective_mode: submission.queue_mode, target_run_id: target}
+              else
+                disposition(original_state, submission, state)
+              end
+
+            if disposition, do: Map.put(acc, submission.run_id, disposition), else: acc
+          else
+            acc
+          end
+        end)
+      end)
+
+    changes =
+      Enum.reduce(state.merged_run_ids, changes, fn {target, followers}, acc ->
+        if Map.get(original_state.merged_run_ids, target) == followers do
+          acc
+        else
+          Enum.reduce([target | followers], acc, fn run_id, acc ->
+            Map.put(acc, run_id, %{effective_mode: :merged, target_run_id: target})
+          end)
+        end
+      end)
+
+    Enum.reduce(changes, :ok, fn {run_id, changes}, result ->
+      case RunReceiptStore.update(state.receipt_store, run_id, changes) do
+        :ok ->
+          result
+
+        {:error, _reason} ->
+          Logger.warning("SessionCoordinator receipt persistence failed")
+          {:error, :outcome_unknown}
+      end
+    end)
+  end
+
+  defp fence_merge_receipts(original_state, state) do
+    Enum.reduce_while(state.merged_run_ids, :ok, fn {target, followers}, :ok ->
+      if Map.get(original_state.merged_run_ids, target) == followers do
+        {:cont, :ok}
+      else
+        result =
+          Enum.reduce_while([target | followers], :ok, fn run_id, :ok ->
+            case RunReceiptStore.mark_unknown(state.receipt_store, run_id) do
+              :ok -> {:cont, :ok}
+              {:error, _reason} = error -> {:halt, error}
+            end
+          end)
+
+        if result == :ok, do: {:cont, :ok}, else: {:halt, result}
+      end
+    end)
+  end
+
   defp apply_transition(transition, original_state, opts \\ [])
 
   defp apply_transition({:ok, transitioned_state, effects}, original_state, opts) do
-    complete_dropped_submissions(original_state, transitioned_state, opts)
-    {next_state, reply} = apply_effects(transitioned_state, effects, opts)
-    maybe_cleanup_event_bridge_runs(original_state, next_state)
+    case fence_merge_receipts(original_state, transitioned_state) do
+      :ok ->
+        complete_dropped_submissions(original_state, transitioned_state, opts)
+        {next_state, reply} = apply_effects(transitioned_state, effects, opts)
+        maybe_cleanup_event_bridge_runs(original_state, next_state)
+        persistence = persist_receipt_updates(original_state, next_state, opts)
+        retained = retained_run_ids(next_state)
 
-    if opts[:reply?] do
-      {:reply, reply, next_state}
-    else
-      {:noreply, next_state}
+        next_state = %SessionState{
+          next_state
+          | merged_run_ids:
+              Map.filter(next_state.merged_run_ids, fn {run_id, _followers} ->
+                MapSet.member?(retained, run_id)
+              end)
+        }
+
+        reply = if persistence == :ok, do: reply, else: {:error, :outcome_unknown}
+        if opts[:reply?], do: {:reply, reply, next_state}, else: {:noreply, next_state}
+
+      {:error, _reason} ->
+        if opts[:reply?] do
+          {:reply, {:error, :outcome_unknown}, original_state}
+        else
+          raise "SessionCoordinator merge receipt fence unavailable"
+        end
     end
   end
 
@@ -501,8 +747,14 @@ defmodule LemonRouter.SessionCoordinator do
             System.monotonic_time(:millisecond)
           )
 
-        apply_effects(next_state, extra_effects, opts)
-        |> then(fn {resolved_state, _} -> {resolved_state, reply_acc} end)
+        case fence_merge_receipts(state, next_state) do
+          :ok ->
+            {resolved_state, result} = apply_effects(next_state, extra_effects, opts)
+            {resolved_state, merge_reply(reply_acc, result)}
+
+          {:error, _reason} ->
+            {state, {:error, :outcome_unknown}}
+        end
     end
   end
 

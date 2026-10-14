@@ -266,6 +266,61 @@ defmodule LemonRouter.RunOrchestratorTest do
       refute_receive {:captured_run_opts, %{run_id: ^run_id}}, 100
     end
 
+    test "receipt replay serializes concurrent sends and survives the admission owner restart" do
+      run_supervisor = start_supervised!({DynamicSupervisor, strategy: :one_for_one})
+      run_id = "run_receipt_#{System.unique_integer([:positive])}"
+      session_key = "agent:receipt:test:#{System.unique_integer([:positive])}"
+      on_exit(fn ->
+        LemonCore.Store.delete(RunOrchestrator.admission_table(), run_id)
+        LemonCore.Store.delete(:run_receipts, run_id)
+      end)
+
+      opts = [run_supervisor: run_supervisor, run_process_module: PersistentCapturingRunProcess,
+              run_process_opts: %{notify_pid: self()}]
+      {:ok, orchestrator} = GenServer.start_link(RunOrchestrator, opts)
+      intent = request(%{run_id: run_id, origin: :control_plane, session_key: session_key,
+                         agent_id: "test", prompt: "same intent", queue_mode: :collect})
+
+      receipts =
+        1..8
+        |> Task.async_stream(fn _ -> RunOrchestrator.submit_with_receipt(orchestrator, intent) end,
+          ordered: false, max_concurrency: 8)
+        |> Enum.map(fn {:ok, {:ok, receipt}} -> receipt end)
+
+      assert [receipt] = Enum.uniq(receipts)
+      assert receipt.run_id == run_id
+      assert receipt.target_run_id == run_id
+      assert receipt.effective_mode == :new_run
+      assert_receive {:captured_run_opts, %{run_id: ^run_id}}
+      refute_receive {:captured_run_opts, %{run_id: ^run_id}}, 100
+      :ok = GenServer.stop(orchestrator)
+      {:ok, replacement} = GenServer.start_link(RunOrchestrator, opts)
+      assert {:ok, ^receipt} = RunOrchestrator.submit_with_receipt(replacement, intent)
+      assert {:ok, ^receipt} = RunOrchestrator.run_receipt(run_id)
+      assert {:error, :run_id_conflict} =
+               RunOrchestrator.submit_with_receipt(replacement, %{intent | prompt: "another intent"})
+      refute_receive {:captured_run_opts, %{run_id: ^run_id}}, 100
+    end
+
+    test "an accepted receipt remains replayable after cancellation fences its execution" do
+      run_supervisor = start_supervised!({DynamicSupervisor, strategy: :one_for_one})
+      run_id = "run_receipt_cancelled_#{System.unique_integer([:positive])}"
+      on_exit(fn ->
+        LemonCore.Store.delete(RunOrchestrator.admission_table(), run_id)
+        LemonCore.Store.delete(RunOrchestrator.abort_tombstone_table(), run_id)
+        LemonCore.Store.delete(:run_receipts, run_id)
+      end)
+      orchestrator = start_supervised!({RunOrchestrator,
+        [name: nil, run_supervisor: run_supervisor, run_process_module: BlockingRunProcess]})
+      intent = request(%{run_id: run_id, session_key: "agent:receipt:cancelled:#{run_id}",
+                         agent_id: "test", prompt: "one intent"})
+      assert {:ok, receipt} = RunOrchestrator.submit_with_receipt(orchestrator, intent)
+      assert :ok = RunOrchestrator.register_abort(orchestrator, run_id, :hard_stop)
+      assert {:ok, ^receipt} = RunOrchestrator.submit_with_receipt(orchestrator, intent)
+      assert {:error, :run_id_conflict} =
+               RunOrchestrator.submit_with_receipt(orchestrator, %{intent | prompt: "different"})
+    end
+
     test "an accepted receipt survives completion and rejects conflicting run-id reuse" do
       run_supervisor = start_supervised!({DynamicSupervisor, strategy: :one_for_one})
       run_id = "run_completed_replay_#{System.unique_integer([:positive])}"
@@ -569,6 +624,7 @@ defmodule LemonRouter.RunOrchestratorTest do
       assert_receive {:captured_run_opts, %{run_id: ^run_id}}
 
       entry = LemonCore.Store.get(RunOrchestrator.admission_table(), run_id)
+      assert :ok = LemonCore.Store.delete(:run_receipts, run_id)
 
       assert :ok =
                LemonCore.Store.put(RunOrchestrator.admission_table(), run_id, %{
@@ -800,6 +856,7 @@ defmodule LemonRouter.RunOrchestratorTest do
       assert_receive {:captured_job, _command}
 
       entry = LemonCore.Store.get(RunOrchestrator.admission_table(), pending_run_id)
+      assert :ok = LemonCore.Store.delete(:run_receipts, pending_run_id)
 
       assert :ok =
                LemonCore.Store.put(RunOrchestrator.admission_table(), pending_run_id, %{

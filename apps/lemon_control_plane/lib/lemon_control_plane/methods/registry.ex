@@ -134,6 +134,7 @@ defmodule LemonControlPlane.Methods.Registry do
     LemonControlPlane.Methods.ExecApprovalResolve,
     # Chat
     LemonControlPlane.Methods.ChatSend,
+    LemonControlPlane.Methods.RunsReceiptGet,
     LemonControlPlane.Methods.ChatAbort,
     LemonControlPlane.Methods.ChatHistory,
     # Execution node pairing and invocation

@@ -1,0 +1,157 @@
+defmodule LemonRouter.RunReceiptStore do
+  @moduledoc """
+  Content-free admission receipts, owned by the router and keyed by fixed run ID.
+
+  `fetch/1` distinguishes absence from storage failure. `put/1` writes the initial
+  disposition once; `update/2` uses compare-and-swap and never creates a missing
+  receipt. Only mode and target can change after admission. An optional private
+  `:request_identity` digest binds orchestrator replay to its admission identity;
+  it is not a wire projection field. Before retargeting a merge, the coordinator
+  fences existing receipts as `:outcome_unknown` until the applied disposition
+  is durable. Prompts, execution metadata and error terms are never retained here.
+
+  The optional first argument selects a `LemonCore.Store` instance. Durability
+  follows that store's configured backend, just like other router domain tables.
+  """
+
+  alias LemonCore.Store
+
+  @table :run_receipts
+  @keys [:run_id, :session_key, :state, :effective_mode, :target_run_id, :request_identity]
+  @modes [
+    :new_run,
+    :queued,
+    :merged,
+    :steer_pending,
+    :steer,
+    :steer_backlog_pending,
+    :steer_backlog,
+    :redirect_pending,
+    :redirect,
+    :interrupt
+  ]
+
+  @type receipt :: %{
+          required(:run_id) => binary(),
+          required(:session_key) => binary(),
+          required(:state) => :accepted | :outcome_unknown,
+          required(:effective_mode) => atom() | nil,
+          required(:target_run_id) => binary() | nil,
+          optional(:request_identity) => binary()
+        }
+
+  @spec fetch(Store.server(), binary()) :: {:ok, receipt() | nil} | {:error, term()}
+  def fetch(server \\ Store, run_id) do
+    case Store.fetch(server, @table, run_id) do
+      {:ok, nil} -> {:ok, nil}
+      {:ok, receipt} -> normalize(receipt, run_id)
+      {:error, _reason} = error -> error
+    end
+  end
+
+  @spec put(Store.server(), receipt()) :: :ok | {:error, term()}
+  def put(server \\ Store, receipt)
+
+  def put(server, receipt) when is_map(receipt) do
+    with {:ok, receipt} <- normalize(receipt, Map.get(receipt, :run_id)) do
+      case Store.put_new(server, @table, receipt.run_id, receipt) do
+        :ok -> :ok
+        {:error, :exists} -> existing_receipt(server, receipt)
+        {:error, _reason} = error -> error
+      end
+    end
+  end
+
+  def put(_server, _receipt), do: {:error, :invalid_receipt}
+
+  @doc "Updates only an existing receipt's effective mode and invocation target."
+  @spec update(Store.server(), binary(), map()) :: :ok | {:error, term()}
+  def update(server \\ Store, run_id, changes) when is_map(changes) do
+    case fetch(server, run_id) do
+      {:ok, nil} ->
+        :ok
+
+      {:ok, current} ->
+        replacement =
+          current
+          |> Map.merge(Map.take(changes, [:effective_mode, :target_run_id]))
+          |> Map.put(:state, :accepted)
+
+        with {:ok, replacement} <- normalize(replacement, run_id) do
+          if replacement == current do
+            :ok
+          else
+            case Store.compare_and_swap(server, @table, run_id, current, replacement) do
+              :ok -> :ok
+              {:error, :mismatch} -> update(server, run_id, changes)
+              {:error, _reason} = error -> error
+            end
+          end
+        end
+
+      {:error, _reason} = error ->
+        error
+    end
+  end
+
+  @doc "Durably fences an existing receipt before its merge target can change."
+  @spec mark_unknown(Store.server(), binary()) :: :ok | {:error, term()}
+  def mark_unknown(server \\ Store, run_id) do
+    case fetch(server, run_id) do
+      {:ok, nil} ->
+        :ok
+
+      {:ok, %{state: :outcome_unknown}} ->
+        :ok
+
+      {:ok, current} ->
+        replacement = %{current | state: :outcome_unknown, effective_mode: nil, target_run_id: nil}
+
+        case Store.compare_and_swap(server, @table, run_id, current, replacement) do
+          :ok -> :ok
+          {:error, :mismatch} -> mark_unknown(server, run_id)
+          {:error, _reason} = error -> error
+        end
+
+      {:error, _reason} = error ->
+        error
+    end
+  end
+
+  defp existing_receipt(server, receipt) do
+    case fetch(server, receipt.run_id) do
+      {:ok, ^receipt} -> :ok
+      {:ok, _other} -> {:error, :receipt_conflict}
+      {:error, _reason} = error -> error
+    end
+  end
+
+  defp normalize(
+         %{run_id: run_id, session_key: session_key, state: :accepted,
+           effective_mode: mode, target_run_id: target} = receipt,
+         run_id
+       )
+       when is_binary(run_id) and run_id != "" and is_binary(session_key) and
+              session_key != "" and mode in @modes and is_binary(target) and target != "" do
+    normalize_identity(receipt)
+  end
+
+  defp normalize(
+         %{run_id: run_id, session_key: session_key, state: :outcome_unknown,
+           effective_mode: nil, target_run_id: nil} = receipt,
+         run_id
+       )
+       when is_binary(run_id) and run_id != "" and is_binary(session_key) and session_key != "" do
+    normalize_identity(receipt)
+  end
+
+  defp normalize(_receipt, _run_id), do: {:error, :invalid_receipt}
+
+  defp normalize_identity(receipt) do
+    case Map.get(receipt, :request_identity) do
+      nil -> {:ok, receipt |> Map.take(@keys) |> Map.delete(:request_identity)}
+      identity when is_binary(identity) and identity != "" -> {:ok, Map.take(receipt, @keys)}
+      _invalid -> {:error, :invalid_receipt}
+    end
+  end
+end

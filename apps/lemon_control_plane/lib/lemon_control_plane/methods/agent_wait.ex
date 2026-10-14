@@ -113,6 +113,7 @@ defmodule LemonControlPlane.Methods.AgentWait do
     meta = completed_value(completed, :meta, "meta") || %{}
 
     result
+    |> Map.put("cancelled", completed_value(meta, :cancelled, "cancelled") == true)
     |> maybe_put(
       "usage",
       completed

@@ -10,6 +10,14 @@ defmodule LemonControlPlane.ProfilesTestRouter do
       result -> result
     end
   end
+
+  def submit_with_receipt(request) do
+    case submit(request) do
+      {:ok, _} -> {:ok, %{run_id: request.run_id, session_key: request.session_key,
+                         state: :accepted, effective_mode: :new_run, target_run_id: request.run_id}}
+      error -> error
+    end
+  end
 end
 
 defmodule LemonControlPlane.Methods.ProfilesTest do
@@ -128,6 +136,7 @@ defmodule LemonControlPlane.Methods.ProfilesTest do
                  ProfileChat.handle(
                    %{
                      "id" => "uncertain",
+                     "runId" => "profile-uncertain-fixed",
                      "prompt" => "do not echo #{secret}",
                      "images" => [image()]
                    },
@@ -142,7 +151,7 @@ defmodule LemonControlPlane.Methods.ProfilesTest do
                  "retrySafe" => false
                }
 
-        assert is_binary(details["runId"])
+        assert details["runId"] == "profile-uncertain-fixed"
         assert_receive {:profile_request, request}
         assert request.run_id == details["runId"]
         assert request.images == [%ImageContent{data: @png_data, mime_type: "image/png"}]
@@ -213,9 +222,12 @@ defmodule LemonControlPlane.Methods.ProfilesTest do
     assert Enum.any?(roster, &match?(%{"id" => "operator", "availability" => "local"}, &1))
 
     assert {:ok, chat} =
-             ProfileChat.handle(%{"id" => "operator", "prompt" => "work the queue"}, %{})
+             ProfileChat.handle(%{"id" => "operator", "prompt" => "work the queue",
+                                  "runId" => "profile-fixed"}, %{})
 
-    assert chat["runId"] == "run-profile-control-plane"
+    assert chat["runId"] == "profile-fixed"
+    assert chat["effectiveMode"] == "new_run"
+    assert chat["targetRunId"] == "profile-fixed"
     assert chat["sessionKey"] == "agent:operator:main"
     refute inspect(chat) =~ "work the queue"
 
