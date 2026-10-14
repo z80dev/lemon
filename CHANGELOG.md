@@ -129,6 +129,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Lemon Bot clients normalize trailing-slash backend origins without duplicate
+  API path separators. Web form labels and body text remain legible in dark
+  appearance, including onboarding before sign-in.
 - Pending execution-approval events redact nested credentials and rationale
   secrets before reaching clients, while preserving visible review targets.
 - Private cron admission accepts valid allowlisted callback URLs without

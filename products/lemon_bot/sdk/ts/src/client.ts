@@ -54,8 +54,8 @@ function normalizeBase(value: string): string {
   if (url.protocol !== 'https:' && !loopback) {
     throw localError('invalid_request', 'Non-loopback product URLs require HTTPS.');
   }
-  url.pathname = url.pathname.replace(/\/+$/, '');
-  if (!url.pathname.endsWith('/v1')) url.pathname += '/v1';
+  const pathname = url.pathname.replace(/\/+$/, '');
+  url.pathname = pathname.endsWith('/v1') ? pathname : `${pathname}/v1`;
   return url.href.replace(/\/$/, '');
 }
 

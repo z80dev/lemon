@@ -20,6 +20,8 @@ const updated = await client.call('PATCH /bots/:id', {
 
 `call` only accepts canonical `RestKey` keys. Required path names, body, required query fields and the exact response are derived from `RestEndpoints`. Optional list queries may be omitted; a required query such as `GET /search` cannot. Undefined body means no body, not `{}`. IDs are percent-encoded and cannot contain `/`. Array query filters use commas; booleans and numbers retain their canonical wire encoding. `signal` accepts an AbortSignal. Non-loopback URLs require HTTPS. A fresh client can represent another backend/account; this client never writes tokens into URLs, logs, cookies or persistent storage.
 
+Origin and `/v1` base URLs, with or without trailing slashes, normalize to a single `/v1` path before endpoint paths are appended.
+
 Every explicit mutation carries the request type's nonce and, for updates, the current resource revision. The SDK does not silently invent these for the caller. Password/secret/auth requests are never replayed. Hooks use the sole `/hooks/:routineId` prefix exception outside `/v1`; use a separate client whose token is the current routine key, never the user or operator credential. SCIM uses a separate scoped integration token, `application/scim+json`, and required `ifMatch` options on existing Users/Groups PUT/PATCH/DELETE. Obtain its strong version from the fetched resource's `meta.version`. OIDC callback redirects return `{status:302,location}` without following the redirect or sending credentials to its target.
 
 ### Errors, unknown outcomes and revisions

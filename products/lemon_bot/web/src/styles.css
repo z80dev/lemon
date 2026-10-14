@@ -1,4 +1,4 @@
-:root { font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; color: #30372f; background: #f8f8f4; font-synthesis: none; font-size: 14px; --bg: #f8f8f4; --surface: #fff; --sidebar: #f0f1e9; --ink: #30372f; --muted: #7a8277; --line: #e3e6dc; --accent: #3c6248; --accent-soft: #e6edde; --yellow: #e9d474; --danger: #9f4542; --warning: #906721; --shadow: 0 20px 70px #283b2422; }
+:root { font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; color: var(--ink); background: var(--bg); font-synthesis: none; font-size: 14px; --bg: #f8f8f4; --surface: #fff; --sidebar: #f0f1e9; --ink: #30372f; --muted: #7a8277; --line: #e3e6dc; --accent: #3c6248; --accent-soft: #e6edde; --yellow: #e9d474; --danger: #9f4542; --warning: #906721; --shadow: 0 20px 70px #283b2422; }
 * { box-sizing: border-box; }
 body { margin: 0; }
 button, input, textarea, select { font: inherit; }

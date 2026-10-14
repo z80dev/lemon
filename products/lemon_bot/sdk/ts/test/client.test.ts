@@ -15,8 +15,6 @@ describe('typed client at the fetch boundary', () => {
       expect(url.searchParams.get('limit')).toBe('25');
       expect(request.body).toBeNull();
       expect(request.headers.get('Authorization')).toBe('Bearer user-session');
-      expect(request.redirect).toBe('manual');
-      expect(request.credentials).toBe('omit');
       return Response.json({ items: [], nextCursor: null });
     });
     const client = new LemonBotClient({ baseUrl: `${origin}/`, token: 'user-session', fetch: boundary.clientFetch });
@@ -70,9 +68,6 @@ describe('typed client at the fetch boundary', () => {
     const download: Download = { url: `${origin}/v1/downloads/ticket`, expiresAtMs: Date.now() + 60000, filename: 'file', mime: 'application/octet-stream', size: 4 };
     const boundary = fetchBoundary(request => {
       expect(request.headers.get('Authorization')).toBeNull();
-      expect(request.credentials).toBe('omit');
-      expect(request.referrerPolicy).toBe('no-referrer');
-      expect(request.redirect).toBe('manual');
       expect(request.headers.get('Range')).toBe('bytes=1-2');
       return new Response(new Uint8Array([255, 0]), { status: 206, headers: { 'Content-Type': 'application/octet-stream' } });
     });

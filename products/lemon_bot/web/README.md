@@ -8,7 +8,7 @@ From the repository root, after starting the separately configured real backend:
 
 ```sh
 bun --cwd products/lemon_bot/web install
-bun --cwd products/lemon_bot/web run dev
+bun run --cwd products/lemon_bot/web dev
 ```
 
 Development listens on `http://127.0.0.1:4081`. Vite proxies `/v1` (including the product realtime socket), `/hooks` and `/mcp` to `http://127.0.0.1:4080`. Override the development target with `LEMON_BOT_DEV_BACKEND`. A saved account may select a different trusted HTTPS product backend; that deployment must explicitly allow this frontend origin for REST and WebSocket connections. Never enter the Lemon control-plane URL or operator token.
@@ -16,10 +16,10 @@ Development listens on `http://127.0.0.1:4081`. Vite proxies `/v1` (including th
 ```sh
 # Central integration checks; implementation workers do not run these gates.
 bun --cwd products/lemon_bot/sdk/ts install
-bun --cwd products/lemon_bot/sdk/ts run check
-bun --cwd products/lemon_bot/sdk/ts run test
-bun --cwd products/lemon_bot/web run check
-bun --cwd products/lemon_bot/web run build
+bun run --cwd products/lemon_bot/sdk/ts check
+bun run --cwd products/lemon_bot/sdk/ts test
+bun run --cwd products/lemon_bot/web check
+bun run --cwd products/lemon_bot/web build
 ```
 
 Production assets are emitted to `web/dist`; the backend serves those files outside `/v1`. Serve the app and service worker over HTTPS (loopback development is the only HTTP exception). For OIDC, register the frontend's exact same-origin redirect URLs, including `/`, `/?screen=settings.account` and `/?screen=settings.identity`, with the backend operator. Provider callbacks convey one-time completion codes; PKCE verifiers remain transient in the current browser tab. Swarm credentials stay server-side.
@@ -47,6 +47,8 @@ The canonical [API](../contracts/api.md), [cards](../contracts/cards.md), and [c
 ## Keyboard and accessibility
 
 Cmd/Ctrl K opens commands and visible-workspace search. Cmd/Ctrl Shift F searches Bots; Cmd/Ctrl N creates a teammate; Cmd/Ctrl B opens the compact roster; Cmd/Ctrl comma opens settings; Cmd/Ctrl Shift comma opens Bot settings; Cmd/Ctrl 1–9 selects visible roster Bots. Composer Enter sends and Shift Enter adds a line; explicit on-screen controls provide equivalents. Input fields and native browser-reserved shortcuts are not hijacked. Phone web uses a compact roster drawer, the same API editors/actions under ACL, and responsive preview/terminal layouts. Light/dark/system appearance, labelled controls, visible focus, semantic status/error notices, skip navigation and reduced-motion styling are built in.
+
+Appearance also applies to pre-login forms: body text and field labels use the active light/dark foreground rather than a fixed light-theme color.
 
 ## Credential, voice, cache and unknown-outcome boundaries
 
