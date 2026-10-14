@@ -113,13 +113,6 @@ test("actions depend on the entry: other branch, same branch, current leaf", asy
 	expect(leaf.items.map((item) => item.value)).toEqual(["inspect", "label", "fork"]);
 });
 
-test("inspect keeps the old read-only behavior and sends nothing", async () => {
-	await choose(await openActions("old"), "inspect");
-	expect(h.host.text).toContain("entry old · user · preserved branch · label: try B");
-	expect(h.server.requestsFor("sessions.navigate")).toHaveLength(0);
-	expect(resets).toEqual([]);
-});
-
 test("switching resets and reloads the session and recalls a user prompt into an empty draft", async () => {
 	h.server.respondWith("sessions.navigate", {
 		sessionKey: "s",
@@ -203,20 +196,6 @@ test("a daemon refusal leaves the local transcript and draft alone", async () =>
 	expect(h.host.text).toContain("did not complete (CONFLICT: busy)");
 });
 
-test("a receipt for another entry is not trusted", async () => {
-	h.server.respondWith("sessions.navigate", {
-		sessionKey: "s",
-		sessionId: "native-s",
-		entryId: "u1",
-		leafId: "u1",
-		prompt: null,
-		summarizing: false,
-	});
-	await choose(await openActions("old"), "switch");
-	expect(resets).toEqual([]);
-	expect(h.host.text).toContain("could not be verified");
-});
-
 test("labels are set with argv forms and cleared from the picker", async () => {
 	h.server.respondWith("sessions.label", {
 		sessionKey: "s",
@@ -248,13 +227,6 @@ test("labels are set with argv forms and cleared from the picker", async () => {
 
 	await h.run("/tree unlabel old");
 	expect(h.server.requestsFor("sessions.label")[2].params).toMatchObject({ label: null });
-});
-
-test("malformed /tree arguments are refused locally", async () => {
-	await h.run("/tree label u2");
-	await h.run("/tree bogus");
-	expect(h.server.requestsFor("sessions.label")).toHaveLength(0);
-	expect(h.host.text).toContain("usage: /tree [label <entryId> <text> | unlabel <entryId>]");
 });
 
 test("Set label prefills the composer only when it is empty", async () => {

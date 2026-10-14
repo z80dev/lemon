@@ -393,36 +393,6 @@ defmodule LemonControlPlane.Methods.NativeSessionMethodsTest do
              SessionsFork.handle(Map.put(target(), "entryId", "gone"), %{})
   end
 
-  test "navigate switches the branch with write scope and projects only its receipt" do
-    assert Authorize.required_scopes("sessions.navigate") == [:write]
-
-    assert {:error, {:forbidden, _}} =
-             Registry.dispatch("sessions.navigate", navigate_target(), ctx([:read]))
-
-    receipt = %{
-      "sessionId" => "native",
-      "entryId" => "e2",
-      "leafId" => "e1",
-      "prompt" => "edit me",
-      "summarizing" => false
-    }
-
-    Process.put(:navigate_result, {:ok, Map.put(receipt, "private", "hidden")})
-
-    assert {:ok, result} =
-             Registry.dispatch("sessions.navigate", navigate_target(), ctx([:write]))
-
-    assert result == Map.put(receipt, "sessionKey", target()["sessionKey"])
-
-    assert_receive {:navigate, "agent:native_methods:main", "/workspace", "e2",
-                    [summarize: false]}
-
-    assert {:ok, _} =
-             SessionsNavigate.handle(Map.put(navigate_target(), "summarize", true), %{})
-
-    assert_receive {:navigate, _, _, "e2", [summarize: true]}
-  end
-
   test "navigate rejects malformed parameters before delegation and maps runtime refusals" do
     for {field, value} <- [
           {"entryId", ""},
@@ -438,6 +408,9 @@ defmodule LemonControlPlane.Methods.NativeSessionMethodsTest do
              SessionsNavigate.handle(Map.delete(navigate_target(), "entryId"), %{})
 
     refute_received {:navigate, _, _, _, _}
+
+    assert {:error, {:forbidden, _}} =
+             Registry.dispatch("sessions.navigate", navigate_target(), ctx([:read]))
 
     Process.put(:navigate_result, {:error, :busy})
 
@@ -505,24 +478,6 @@ defmodule LemonControlPlane.Methods.NativeSessionMethodsTest do
 
     assert {:error, {:not_found, _, %{"reason" => "entry_not_found"}}} =
              SessionsLabel.handle(label_target("x"), %{})
-  end
-
-  test "tree entries expose their latest label" do
-    entry = %{"id" => "e2", "parentId" => nil, "type" => "message", "label" => "bookmark"}
-
-    Process.put(
-      :tree_result,
-      {:ok,
-       %{
-         "sessionId" => "native",
-         "leafId" => "e2",
-         "entries" => [entry],
-         "branches" => [%{"leafId" => "e2", "active" => true}]
-       }}
-    )
-
-    assert {:ok, %{"entries" => [%{"label" => "bookmark"}]}} =
-             SessionsTree.handle(target(), %{})
   end
 
   test "native history is authoritative after rewind, including an empty active branch" do

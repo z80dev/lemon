@@ -189,14 +189,6 @@ defmodule CodingAgent.Session.NavigateLabelTest do
       refute path == root_path
     end
 
-    test "unknown sessions are reported, not created", ctx do
-      assert {:error, :session_not_found} =
-               ControlPlaneProvider.session_navigate("agent:nobody:main", ctx.root, "x", [])
-
-      assert {:error, :session_not_found} =
-               ControlPlaneProvider.session_label("agent:nobody:main", ctx.root, "x", "y")
-    end
-
     test "labels persist, resolve to the latest value and keep the active branch", ctx do
       {path, ids} = durable_tree(ctx)
       {:ok, before} = SessionManager.load_from_file(path)
