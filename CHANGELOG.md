@@ -27,6 +27,8 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   size, with actual chunk length measured from decoded bytes for progress.
 - Lemon Bot mailbox accounts expose optional measured provider indexing
   status/time instead of fabricated eventual-indexing warning labels.
+- Lemon Bot group receipts distinguish proven per-target rejection from
+  admitted work and genuinely uncertain dispatch without automatic replay.
 
 ---
 
