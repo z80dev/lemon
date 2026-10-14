@@ -195,6 +195,14 @@ struct MacSettingsView: View {
                 }.disabled(controller.store.account == nil)
             }
             Section("Voice and notifications") {
+                Picker("Microphone input", selection: $controller.speech.preferredInputUID) {
+                    Text("System default").tag(String?.none)
+                    ForEach(controller.speech.inputDevices) { input in
+                        Text(input.name).tag(Optional(input.id))
+                    }
+                }
+                .disabled(controller.speech.state != .idle)
+                Button("Refresh microphone inputs") { controller.speech.refreshInputDevices() }
                 Button("Play real backend Bot voice sample") { if let id = value.selectedBotId { Task { await controller.previewVoice(botID: id) } } }
                     .disabled(value.selectedBotId == nil || !controller.online || controller.busy)
                 Text("The fixed sample does not create a chat or run. Backend provider failures display their actual prerequisites; persisted voice memos are played from their authorized audio attachments in chat.").font(.caption)
@@ -207,7 +215,7 @@ struct MacSettingsView: View {
             }
             if let error = controller.errorMessage { Text(error).foregroundStyle(.red).textSelection(.enabled) }
         }.formStyle(.grouped).frame(width: 590, height: 680)
-            .onAppear { load() }
+            .onAppear { load(); controller.speech.refreshInputDevices() }
             .onChange(of: controller.settings) { _, _ in load() }
     }
     private func load() { value = controller.settings; summon = value.summonShortcut ?? ""; ptt = value.pushToTalkShortcut ?? "" }

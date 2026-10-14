@@ -10,6 +10,13 @@ final class MacSpeechCapture {
     private(set) var state: State = .idle
     var transcript = ""
     var errorMessage: String?
+    var inputDevices: [MacAudioInput] = []
+    var preferredInputUID: String? = UserDefaults.standard.string(forKey: "LemonBot.microphoneUID") {
+        didSet {
+            if let preferredInputUID { UserDefaults.standard.set(preferredInputUID, forKey: "LemonBot.microphoneUID") }
+            else { UserDefaults.standard.removeObject(forKey: "LemonBot.microphoneUID") }
+        }
+    }
     private(set) var recordingURL: URL?
     private(set) var needsBackendTranscription = false
     private var engine: AVAudioEngine?
@@ -19,6 +26,11 @@ final class MacSpeechCapture {
     private var generation = UUID()
     private var holding = false
     private var cues = true
+
+    func refreshInputDevices() {
+        do { inputDevices = try MacAudioInputs.available() }
+        catch { errorMessage = error.localizedDescription }
+    }
 
     func prepare(cues: Bool) -> UUID? {
         guard state == .idle else { return nil }
@@ -47,6 +59,7 @@ final class MacSpeechCapture {
         do {
             let engine = AVAudioEngine()
             let input = engine.inputNode
+            try MacAudioInputs.select(preferredInputUID, on: input.audioUnit)
             let format = input.outputFormat(forBus: 0)
             guard format.channelCount > 0, format.sampleRate > 0 else {
                 throw CaptureError.message("No microphone input is available. Select an input device in System Settings → Sound.")
