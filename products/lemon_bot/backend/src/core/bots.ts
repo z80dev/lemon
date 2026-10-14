@@ -867,14 +867,14 @@ function botAncillaryResources(s: BackendServices, botId: string): { collection:
   ];
 }
 
-/** A trusted global enforcement callback may narrow an existing floor, never silently widen it. */
+/** Global enforcement intersects allowlists and unions deny, sealed blocked_tools and approval floors; no inherited restriction is dropped. */
 function hardenNativePolicy(previous: P.JSONObject, requested: P.JSONObject): P.JSONObject {
-  const schema = z.object({ profile: z.literal('custom'), allow: z.union([z.literal('all'), z.array(z.string())]), deny: z.array(z.string()), require_approval: z.array(z.string()) }).strict();
+  const schema = z.object({ profile: z.literal('custom'), allow: z.union([z.literal('all'), z.array(z.string())]), deny: z.array(z.string()), blocked_tools: z.array(z.string()).default([]), require_approval: z.array(z.string()) }).strict();
   const before = schema.safeParse(previous), after = schema.safeParse(requested);
   if (!before.success || !after.success) fail('capability_unavailable', 'The current native floor cannot be safely narrowed without its normalized policy.');
   const first = before.data.allow, second = after.data.allow;
   const allow = first === 'all' ? second : second === 'all' ? first : first.filter(tool => second.includes(tool));
-  return { profile: 'custom', allow, deny: [...new Set([...before.data.deny, ...after.data.deny])].sort(), require_approval: [...new Set([...before.data.require_approval, ...after.data.require_approval])].sort() };
+  return { profile: 'custom', allow, deny: [...new Set([...before.data.deny, ...after.data.deny])].sort(), blocked_tools: [...new Set([...before.data.blocked_tools, ...after.data.blocked_tools])].sort(), require_approval: [...new Set([...before.data.require_approval, ...after.data.require_approval])].sort() };
 }
 
 /** Trusted credential-owner revocation removes only its existing native server; no manager impersonation or persona disclosure. */
