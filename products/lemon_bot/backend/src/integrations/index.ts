@@ -2,7 +2,8 @@ import type * as P from '../../../contracts/protocol';
 import type { BackendServices, IntegrationServices, Route } from '../core/services';
 import { ApiError } from '../core/errors';
 import { assertActiveAccount, userPrincipal } from './common';
-import { createConnectorRoutes, createConnectorServices, type ConnectorProfileServer } from './connectors';
+import { createConnectorRoutes, createConnectorServices } from './connectors';
+import type { InvocationMcpServer } from '../runtime/runs';
 import { createChannelRoutes, createChannelServices } from './channels';
 import { createEmailRoutes, createEmailServices } from './email';
 import { createEventRoutes } from './events';
@@ -24,7 +25,7 @@ import { previewProviderDeprovision } from '../enterprise/account-effects';
 import { createProviderTeardownServices, type CleanupKind, type ProviderTeardownReceipt } from '../enterprise/teardown';
 import type { OIDCExchangeOperation } from '../enterprise/identity';
 
-type Services = IntegrationServices & { observeAccountTeardown(operationId: string): Promise<P.ProviderCleanupResult[]>; connectorTemplates(botId: string): Promise<ConnectorProfileServer[]> };
+type Services = IntegrationServices & { observeAccountTeardown(operationId: string): Promise<P.ProviderCleanupResult[]>; connectorTemplates(botId: string): Promise<InvocationMcpServer[]> };
 const instances = new WeakMap<BackendServices, Services>();
 interface CleanupBinding {
   account?: P.EmailAccount; claim?: { id: string; providerId: string; accountId?: string; address?: string };

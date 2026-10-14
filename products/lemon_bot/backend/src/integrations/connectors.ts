@@ -12,7 +12,7 @@ import { effectiveBotGrants } from '../core/experiences';
 import { cancelConnectorConsents, cancelGate } from '../core/gates';
 import { baseBotMcpTemplate, syncBotConnectorRevocation } from '../core/bots';
 import { revokeOAuthCompletion, reconcileOAuthRevocation, type OAuthRevocationReceipt } from './oauth-revocation';
-import { effectiveInvocationAudience } from '../runtime/runs';
+import { effectiveInvocationAudience, type InvocationMcpServer } from '../runtime/runs';
 
 const nonce = z.string().regex(/^[A-Za-z0-9_-]{16,128}$/);
 const revision = z.number().int().positive().max(Number.MAX_SAFE_INTEGER);
@@ -36,7 +36,6 @@ type SecretBinding = z.infer<typeof binding>;
 interface ConnectorPrivate { machineId: string; bindings: SecretBinding[]; readOnlyTools: string[]; executionNames: Record<string, string>; providerId: string | null; oauthSecretNames: string[]; oauthExpiresAtMs: number | null; discoveredAtMs: number | null; configuredLevel: 'off' | 'read_interact'; provisionState: 'pending' | 'acknowledged' | 'outcome_unknown'; desiredState: P.Connector['state'] | null; desiredFingerprint: string | null; provisionActorUserId: string | null; }
 interface ConsentPrivate { userId: string; conversationId: string; operationId: string | null; consumedBy: string | null; }
 interface ConnectorTemplatePolicy { machineId: string; readOnlyTools: string[]; configuredLevel: 'off' | 'read_interact' }
-export interface ConnectorProfileServer { name: string; url: string; headers: Record<string, string>; enabledTools: string[]; allowedOrigins: string[]; approvedPrivateOrigins: string[] }
 export interface ConnectorToolAuthorization { connectorId: string; botId: string; conversationId: string; toolName: string; operationId: string }
 
 function parse<T>(schema: z.ZodType<T>, input: unknown): T {
@@ -52,12 +51,12 @@ function parseResponse<T>(schema: z.ZodType<T>, input: unknown, mutation = false
 }
 
 /** Matches the platform digest for a public ceiling or exact invocation MCP configuration. */
-export function connectorConfigurationFingerprint(servers: { name: string; url: string; headers: Record<string, string>; enabledTools?: string[]; allowedOrigins?: string[]; approvedPrivateOrigins?: string[] }[]): string {
+export function connectorConfigurationFingerprint(servers: InvocationMcpServer[]): string {
   return createHash('sha256').update(JSON.stringify(servers.map(server => [server.name, server.url, Object.entries(server.headers).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0), server.enabledTools ?? null, server.allowedOrigins ?? null, server.approvedPrivateOrigins ?? null]))).digest('hex');
 }
 
 /** Public profile ceiling only; credential authority is installed separately for a fixed invocation. */
-export function connectorTemplates(services: BackendServices, bot: P.Bot): Promise<ConnectorProfileServer[]> {
+export function connectorTemplates(services: BackendServices, bot: P.Bot): Promise<InvocationMcpServer[]> {
   return createConnectorServices(services).connectorTemplates(bot.id);
 }
 
@@ -155,13 +154,13 @@ export function createConnectorServices(services: BackendServices) {
     if (!grant || level === 'off' || config.configuredLevel === 'off') return [];
     return connector.tools.filter(tool => tool.enabled && (level === 'read_interact' || config.readOnlyTools.includes(tool.name))).map(tool => tool.name);
   }
-  function serverConfiguration(connector: P.Connector, effectiveLevel?: P.AccessLevel): ConnectorProfileServer {
+  function serverConfiguration(connector: P.Connector, effectiveLevel?: P.AccessLevel): InvocationMcpServer {
     const origin = assertOrigin(connector.url).origin;
     return { name: `connector-${connector.id}`, url: connector.url, headers: headers(details(connector.id)), enabledTools: enabled(connector, effectiveLevel), allowedOrigins: [origin], approvedPrivateOrigins: integrationConfiguration(services).approvedPrivateMcpOrigins.includes(origin) ? [origin] : [] };
   }
-  async function connectorTemplates(botId: string): Promise<ConnectorProfileServer[]> {
+  async function connectorTemplates(botId: string): Promise<InvocationMcpServer[]> {
     const bot = services.store.require<P.Bot>('bots', botId);
-    const result: ConnectorProfileServer[] = [];
+    const result: InvocationMcpServer[] = [];
     for (const connector of services.store.list<P.Connector>('connectors', value => value.botId === botId && value.state !== 'disconnected' && value.state !== 'blocked')) {
       const policy = services.store.metadata<ConnectorTemplatePolicy>(`connectorTemplatePolicy:${connector.id}`);
       if (!policy) fail('capability_unavailable', 'Connector public template policy has not been provisioned.', true, { resourceIds: [connector.id] });
@@ -275,7 +274,7 @@ export function createConnectorServices(services: BackendServices) {
       throw error;
     }
   }
-  async function connectorProfileConfiguration(actor: Principal, botId: string, conversationId?: string, operationId?: string): Promise<ConnectorProfileServer[]> {
+  async function connectorProfileConfiguration(actor: Principal, botId: string, conversationId?: string, operationId?: string): Promise<InvocationMcpServer[]> {
     const bot = services.auth.bot(actor, botId);
     if (conversationId === undefined) return connectorTemplates(botId);
     const conversation = services.auth.conversation(actor, conversationId);
@@ -284,7 +283,7 @@ export function createConnectorServices(services: BackendServices) {
     if (!conversation.botIds.includes(botId) || actor.kind === 'bot' && actor.botId !== botId) fail('forbidden', 'Connector invocation does not match this Bot and conversation.');
     reconcilePlacement(bot);
     const grants = await connectorGrants(actor, bot);
-    const result: ConnectorProfileServer[] = [];
+    const result: InvocationMcpServer[] = [];
     const configuredIds: string[] = [];
     for (const connector of services.store.list<P.Connector>('connectors', value => value.botId === botId && value.state === 'connected')) {
       if (details(connector.id).provisionState !== 'acknowledged') continue;
@@ -358,7 +357,7 @@ export function createConnectorServices(services: BackendServices) {
       if (bot.visibility === 'team' && !authorizedConsent(actor, connector, conversation.id, input.operationId, true)) fail('policy_denied', 'Explicit account-owner connector consent is required.');
     }
   }
-  async function connectorInvocationConfiguration(actor: Principal, botId: string, conversationId: string, operationId: string): Promise<ConnectorProfileServer[]> {
+  async function connectorInvocationConfiguration(actor: Principal, botId: string, conversationId: string, operationId: string): Promise<InvocationMcpServer[]> {
     return connectorProfileConfiguration(actor, botId, conversationId, operationId);
   }
   async function requestConnectorConsent(actor: Principal, input: Omit<ConnectorToolAuthorization, 'toolName'>): Promise<P.ConnectorConsent> {
