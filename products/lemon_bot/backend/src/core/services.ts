@@ -1,6 +1,8 @@
 import type { Database } from 'bun:sqlite';
 import type * as P from '../../../contracts/protocol';
+import type { InvocationMcpServer } from '../runtime/runs';
 
+export interface HttpClient { (input: RequestInfo | URL, init?: RequestInit): Promise<Response> }
 export type Entity = P.Resource & Record<string, unknown>;
 export interface Principal { kind: 'user' | 'bot' | 'hook' | 'integration'; id: string; userId: string; workspaceId: string; role: P.Role; sessionId: string | null; botId: string | null; deviceId: string | null; scopes?: string[] }
 export type Authentication = 'public' | 'member' | 'admin' | 'owner' | 'bot' | 'hook' | 'integration' | 'optional';
@@ -81,7 +83,8 @@ export interface GateService {
 export interface IntegrationServices {
   admission(principal: Principal, botId: string, routineId?: string): Promise<void>;
   effectivePolicy(principal: Principal, botId?: string): Promise<P.EffectivePolicy>;
-  connectorConfig(principal: Principal, botId: string, conversationId?: string, operationId?: string): Promise<{ name: string; url: string; headers: Record<string, string>; enabledTools?: string[]; allowedOrigins?: string[]; approvedPrivateOrigins?: string[] }[]>;
+  connectorConfig(principal: Principal, botId: string, conversationId?: string, operationId?: string): Promise<InvocationMcpServer[]>;
+  connectorTemplates?(botId: string): Promise<InvocationMcpServer[]>;
   sendApprovedDraft(principal: Principal, draft: P.Draft): Promise<{ providerMessageId: string | null; runId: string | null }>;
   emitProviderNotifications(notification: P.Notification): Promise<void>;
   channelIngress(input: { principal: Principal; botId: string; channelBindingId: string; externalThreadId: string; text: string; attachmentIds?: string[]; clientNonce: string }): Promise<P.MessageReceipt>;

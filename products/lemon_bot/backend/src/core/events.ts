@@ -8,7 +8,8 @@ const collections:Record<string,string>={user:'users',workspace:'workspaces',mem
 export function createEventService(services:BackendServices):EventService {
   const listeners=new Set<(event:RealtimeEvent,audience:EventAudience)=>void>();
   const db=services.store.db;
-  const watermark=()=>{const row=db.query('SELECT seq FROM sqlite_sequence WHERE name=\'events\'').safeIntegers(true).get() as {seq:bigint}|null; return String(row?.seq??0n);};
+  // SQLite converts the 64-bit sequence directly to decimal text, before JS number coercion.
+  const watermark=()=>{const row=db.query('SELECT CAST(seq AS TEXT) AS seq FROM sqlite_sequence WHERE name=\'events\'').get() as {seq:string}|null; return row?.seq??'0';};
   const visible=(principal:Principal,event:RealtimeEvent,audience:EventAudience):boolean=>{
     const member=services.store.list<{userId:string;enabled:boolean;role?:string}>('members',item=>item.userId===principal.userId)[0];
     if(!member?.enabled) return false;
@@ -44,27 +45,28 @@ export function createEventService(services:BackendServices):EventService {
     emit<K extends keyof ResourceEventPayloads>(event:K,payload:ResourceEventPayloads[K],audience:EventAudience={}):RealtimeEvent {
       audienceSchema.parse(audience);
       const timestampMs=services.now();
-      const receipt=db.query('INSERT INTO events(event,payload,audience,timestamp_ms) VALUES(?,?,?,?)').safeIntegers(true).run(event,JSON.stringify(payload),JSON.stringify(audience),timestampMs);
+      const receipt=db.query('INSERT INTO events(event,payload,audience,timestamp_ms) VALUES(?,?,?,?) RETURNING CAST(seq AS TEXT) AS seq').get(event,JSON.stringify(payload),JSON.stringify(audience),timestampMs) as {seq:string}|null;
+      if(!receipt)fail('internal_error','The event transaction did not return its persisted sequence.',false);
       // The generic event key and its indexed payload originate from the same typed call.
-      const envelope={type:'event',seq:String(receipt.lastInsertRowid),event,payload,timestampMs} as RealtimeEvent;
+      const envelope={type:'event',seq:receipt.seq,event,payload,timestampMs} as RealtimeEvent;
       const publish=()=>{for(const listener of listeners){try{listener(envelope,audience);}catch{services.audit(null,'realtime.publish',envelope.seq,'failed',{event:envelope.event});}}};
       if(services.store instanceof Store) services.store.afterCommit(publish);else publish();
       return envelope;
     },
     cursor:watermark,
-    earliestCursor() {const row=db.query('SELECT MIN(seq) AS seq FROM events').safeIntegers(true).get() as {seq:bigint|null};return String(row.seq??BigInt(watermark())+1n);},
+    earliestCursor() {const row=db.query('SELECT CAST(MIN(seq) AS TEXT) AS seq FROM events').get() as {seq:string|null};return row.seq??String(BigInt(watermark())+1n);},
     visible,
     replay(principal,cursor,conversationIds=[]) {
       if(!/^\d+$/.test(cursor))fail('invalid_request','Realtime cursor is invalid.');
-      const start=BigInt(cursor);const max=BigInt(watermark());const firstRow=db.query('SELECT MIN(seq) AS seq FROM events').safeIntegers(true).get() as {seq:bigint|null};const earliest=firstRow.seq===null?max+1n:firstRow.seq;
+      const start=BigInt(cursor);const max=BigInt(watermark());const firstRow=db.query('SELECT CAST(MIN(seq) AS TEXT) AS seq FROM events').get() as {seq:string|null};const earliest=firstRow.seq===null?max+1n:BigInt(firstRow.seq);
       if(start<earliest-1n)fail('cursor_expired','Realtime history expired; fetch a new snapshot.');
       if(start>max)fail('invalid_request','Realtime cursor is ahead of this workspace.');
-      const rows=db.query('SELECT seq,event,payload,audience,timestamp_ms FROM events WHERE seq>? AND seq<=? ORDER BY seq').safeIntegers(true).all(start,max) as {seq:bigint;event:RealtimeEvent['event'];payload:string;audience:string;timestamp_ms:bigint}[];
+      const rows=db.query('SELECT CAST(seq AS TEXT) AS seq,event,payload,audience,timestamp_ms FROM events WHERE seq>? AND seq<=? ORDER BY seq').all(start,max) as {seq:string;event:RealtimeEvent['event'];payload:string;audience:string;timestamp_ms:number}[];
       const result:RealtimeEvent[]=[];
       for(const row of rows) {
         const audience=audienceSchema.parse(JSON.parse(row.audience));
         // Persisted events are written only through the typed emit boundary above.
-        const event={type:'event',seq:String(row.seq),event:row.event,payload:JSON.parse(row.payload),timestampMs:Number(row.timestamp_ms)} as RealtimeEvent;
+        const event={type:'event',seq:row.seq,event:row.event,payload:JSON.parse(row.payload),timestampMs:row.timestamp_ms} as RealtimeEvent;
         if(!visible(principal,event,audience))continue;
         if(conversationIds.length&&audience.conversationId&&!conversationIds.includes(audience.conversationId))continue;
         if(conversationIds.length&&event.event.startsWith('entry.')&&typeof event.payload==='object'&&event.payload!==null&&'conversationId' in event.payload&&typeof event.payload.conversationId==='string'&&!conversationIds.includes(event.payload.conversationId))continue;
