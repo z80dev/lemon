@@ -39,6 +39,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   node PID and require the native privacy-context protocol before sending private
   arguments. Reconnect or missing protocol support is a definite admission failure,
   never a request sent to an old worker and rejected only after its response.
+  Bot readiness requires the actual native privacy descriptor as well as the
+  large-policy JSON helper, preventing a nominally compatible old protocol from
+  being reported ready for private bot execution.
 
 ---
 

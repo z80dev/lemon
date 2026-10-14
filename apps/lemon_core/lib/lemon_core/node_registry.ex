@@ -667,8 +667,8 @@ defmodule LemonCore.NodeRegistry do
 
   defp native_privacy_context_supported?(metadata) do
     case metadata do
-      %{capabilities: %{"coding_agent.run" => %{"nativePrivacyContext" => %{"version" => 1}}}} -> true
-      %{"capabilities" => %{"coding_agent.run" => %{"nativePrivacyContext" => %{"version" => 1}}}} -> true
+      %{capabilities: %{"coding_agent.run" => %{"version" => 1, "nativePrivacyContext" => %{"version" => 1}}}} -> true
+      %{"capabilities" => %{"coding_agent.run" => %{"version" => 1, "nativePrivacyContext" => %{"version" => 1}}}} -> true
       _ -> false
     end
   end

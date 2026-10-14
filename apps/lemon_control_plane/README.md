@@ -323,8 +323,10 @@ direct invite joins perform the same fail-closed check.
 feature flags: `hostIO`, `filesystemCAS`, `deletePreviews`, `encryptedSecrets`,
 `ptyShell`, `mcpDiscovery`, `profileSync`, `liveStreaming`, `repairInvites`,
 `nativeExecutionPolicy`. `missingFeatures` is sorted; `botReady` is true only when
-all are present, including required Python/assets and the large native tool-policy
-JSON envelope. This is installed software compatibility, **not** provider login,
+all are present, including required Python/assets, the large native tool-policy
+JSON envelope and native privacy-context protocol version 1. Native policy readiness
+requires the actual worker's nested `coding_agent.run.nativePrivacyContext` descriptor,
+not just a shared JSON helper. This is installed software compatibility, **not** provider login,
 per-bot policy or an OS permission grant. Reconcile the live enrolled exact node
 and require its `botReady:true` before declaring a machine ready; an online socket
 or a matching version string alone is insufficient.

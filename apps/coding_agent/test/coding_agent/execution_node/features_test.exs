@@ -9,7 +9,7 @@ defmodule CodingAgent.ExecutionNode.FeaturesTest do
 
   defp capabilities do
     Map.new(@methods, &{&1, %{"version" => 1}})
-    |> Map.put("coding_agent.run", %{"version" => 1})
+    |> Map.put("coding_agent.run", %{"version" => 1, "nativePrivacyContext" => %{"version" => 1}})
     |> Map.put("node.invoke.event", %{"version" => 1, "maxBytes" => 65_536})
     |> Map.put("node.enrollment", %{"version" => 1, "repairInvites" => true})
   end
@@ -40,6 +40,11 @@ defmodule CodingAgent.ExecutionNode.FeaturesTest do
     for bound <- [nil, 0, -1, 65_537, "65536"] do
       caps = Map.put(capabilities(), "node.invoke.event", %{"version" => 1, "maxBytes" => bound})
       assert Features.snapshot(caps, @opts)["features"]["liveStreaming"] == false
+    end
+    for marker <- [nil, true, %{"version" => 0}, %{"version" => 2}] do
+      caps = Map.put(capabilities(), "coding_agent.run", %{"version" => 1, "nativePrivacyContext" => marker})
+      assert Features.snapshot(caps, @opts)["features"]["nativeExecutionPolicy"] == false
+      refute Features.snapshot(caps, @opts)["botReady"]
     end
     snapshot = Features.snapshot(%{"coding_agent.run" => %{"version" => 1}}, @opts)
     refute snapshot["botReady"]

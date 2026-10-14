@@ -34,7 +34,8 @@ defmodule CodingAgent.ExecutionNode.Features do
         version(capabilities["node.invoke.event"]) == 1 and valid_stream_bound?(capabilities["node.invoke.event"]),
       "repairInvites" => version(capabilities["node.enrollment"]) == 1 and
         capabilities["node.enrollment"]["repairInvites"] == true,
-      "nativeExecutionPolicy" => native_policy
+      "nativeExecutionPolicy" => native_policy and match?(%{"version" => 1,
+        "nativePrivacyContext" => %{"version" => 1}}, capabilities["coding_agent.run"])
     }
     missing = features |> Enum.filter(fn {_, supported} -> not supported end) |> Enum.map(&elem(&1, 0)) |> Enum.sort()
     %{"protocol" => 1, "lemonVersion" => LemonCore.Update.Version.current(),

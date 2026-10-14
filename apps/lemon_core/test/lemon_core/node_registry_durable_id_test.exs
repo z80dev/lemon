@@ -69,6 +69,15 @@ defmodule LemonCore.NodeRegistryDurableIDTest do
       NodeRegistry.invoke_node(id, "coding_agent.run", args, required_native_privacy_context: 1)
     refute_receive {:attacker_received, {:node_event, "node.invoke.request", _}}
     refute_receive {:node_event, "node.invoke.request", _}
+    for version <- [nil, 0, 2] do
+      unknown = %{capabilities: %{"coding_agent.run" => %{"version" => version,
+        "nativePrivacyContext" => %{"version" => 1}}}}
+      assert :ok = NodeRegistry.register(id, id, replacement, unknown)
+      assert {:error, {:native_privacy_context_unsupported, ^id}} =
+        NodeRegistry.invoke_node(id, "coding_agent.run", args,
+          expected_pid: replacement, required_native_privacy_context: 1)
+      refute_receive {:attacker_received, {:node_event, "node.invoke.request", _}}
+    end
 
     assert :ok = NodeRegistry.register(id, id, owner, capable)
     assert {:ok, invocation} = NodeRegistry.invoke_node(id, "coding_agent.run", args,

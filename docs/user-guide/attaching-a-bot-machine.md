@@ -100,8 +100,10 @@ The JSON has `{protocol,lemonVersion,methods,features,botReady,missingFeatures}`
 Protocol is `1`; `features` has ten booleans: `hostIO`, `filesystemCAS`,
 `deletePreviews`, `encryptedSecrets`, `ptyShell`, `mcpDiscovery`, `profileSync`,
 `liveStreaming`, `repairInvites`, and `nativeExecutionPolicy`. Required Python
-primitives/helper assets and the large native tool-policy JSON envelope are
-checked, not assumed. Profile readiness includes owning `node.profile.paths`.
+primitives/helper assets, the large native tool-policy JSON envelope and native
+privacy-context protocol version 1 are checked, not assumed. Profile readiness
+includes owning `node.profile.paths`; native policy readiness also requires the
+actual worker's nested `coding_agent.run.nativePrivacyContext` version-1 descriptor.
 `missingFeatures` is sorted; any false flag makes `botReady:false`, and
 `--require-bot` returns failure before enrollment. You can additionally use
 `--expected-version EXACT_CALVER`; the version pin alone is never readiness.
