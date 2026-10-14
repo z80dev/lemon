@@ -326,12 +326,14 @@ from pathlib import Path
 import re
 import secrets
 import socket
+import struct
 import subprocess
 import sys
 import tarfile
 import time
+import zlib
 from urllib.parse import quote
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 
 tarball, work_dir = sys.argv[1:]
 match = re.fullmatch(r"lemon-(\d{4}\.\d{1,2}\.\d+)-[A-Za-z0-9._-]+-(linux-x86_64|linux-arm64|darwin-arm64)-lemon_bot\.tar\.gz", Path(tarball).name)
@@ -408,6 +410,45 @@ with log_path.open("xb") as log:
             body, _ = get("/" + quote(path.relative_to(web).as_posix()))
             if body != path.read_bytes():
                 raise SystemExit("lemon_bot: web asset missing or replaced by SPA fallback")
+        # Consume the real private setup code, then exercise the actual native
+        # image decoder. Version/help intentionally do not load image libraries.
+        code = re.search(r"Lemon Bot one-use setup code: (\S+)", log_path.read_text())
+        if code is None:
+            raise SystemExit("lemon_bot: private first-run setup code was not emitted")
+        bootstrap = json.dumps({
+            "clientNonce": secrets.token_hex(24), "setupCode": code[1],
+            "email": "release-smoke@example.com", "password": secrets.token_urlsafe(32),
+            "displayName": "Release smoke", "workspaceName": "Release smoke",
+        }).encode()
+        with urlopen(Request(base + "/v1/setup", data=bootstrap,
+                             headers={"Content-Type": "application/json"}), timeout=30) as response:
+            account = json.load(response)
+        account = account.get("data", account)
+        session = account.get("token")
+        if not isinstance(session, str) or not session:
+            raise SystemExit("lemon_bot: real setup did not return an owner session")
+        def png_chunk(kind, content):
+            return struct.pack(">I", len(content)) + kind + content + struct.pack(">I", zlib.crc32(kind + content) & 0xffffffff)
+        png = (b"\x89PNG\r\n\x1a\n"
+               + png_chunk(b"IHDR", struct.pack(">IIBBBBB", 1, 1, 8, 2, 0, 0, 0))
+               + png_chunk(b"IDAT", zlib.compress(b"\x00\x20\x80\xe0"))
+               + png_chunk(b"IEND", b""))
+        boundary = secrets.token_hex(24)
+        metadata = json.dumps({"clientNonce": secrets.token_hex(24), "purpose": "avatar"})
+        multipart = (
+            f"--{boundary}\r\nContent-Disposition: form-data; name=\"metadata\"\r\n\r\n{metadata}\r\n"
+            f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"native-smoke.png\"\r\n"
+            "Content-Type: image/png\r\n\r\n"
+        ).encode() + png + f"\r\n--{boundary}--\r\n".encode()
+        with urlopen(Request(base + "/v1/attachments", data=multipart, headers={
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+            "Authorization": f"Bearer {session}",
+        }), timeout=30) as response:
+            attachment = json.load(response)
+        attachment = attachment.get("data", attachment)
+        if (attachment.get("state") != "ready" or attachment.get("mime") != "image/png"
+                or attachment.get("width") != 1 or attachment.get("height") != 1):
+            raise SystemExit("lemon_bot: packaged native image pipeline did not decode the uploaded PNG")
     finally:
         process.terminate()
         try:
@@ -415,7 +456,7 @@ with log_path.open("xb") as log:
         except subprocess.TimeoutExpired:
             process.kill()
             process.wait()
-print(f"ok lemon_bot {version}: native executable, clean setup, web and all packaged assets")
+print(f"ok lemon_bot {version}: native executable, clean setup, web assets and authenticated native image decode")
 PY
 }
 # Boots one release tarball end to end. `expected_commit` may be empty
