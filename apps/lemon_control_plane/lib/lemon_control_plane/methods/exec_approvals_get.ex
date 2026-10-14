@@ -70,7 +70,7 @@ defmodule LemonControlPlane.Methods.ExecApprovalsGet do
       "agentId" => get_value(pending, :agent_id),
       "tool" => get_value(pending, :tool),
       "action" => redact_action(get_value(pending, :action) || %{}),
-      "rationale" => get_value(pending, :rationale),
+      "rationale" => LemonCore.Redact.text(get_value(pending, :rationale)),
       "requestedAtMs" => get_value(pending, :requested_at_ms),
       "expiresAtMs" => get_value(pending, :expires_at_ms)
     }

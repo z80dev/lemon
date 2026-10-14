@@ -113,6 +113,11 @@ request is idempotent only with both exact expected identities and retained owne
 state; it returns `replayed:true`, the original timestamp, and no repeated grants
 or events. Without both identities, an already-completed request is rejected.
 
+Pending-approval snapshots and `exec.approval.requested` events redact nested
+credentials and credential-bearing rationale text before delivery. Review targets
+remain visible; authorization still binds to the owning service's original action
+and exact run/session, not the redacted wire copy.
+
 Failures use normal error frames with `details:{approvalId,reason}`:
 
 | Code | `reason` |

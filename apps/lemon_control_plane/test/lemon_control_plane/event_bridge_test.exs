@@ -842,59 +842,27 @@ defmodule LemonControlPlane.EventBridgeTest do
       end
     end
 
-    test "broadcasts approval requested events with structured action metadata" do
+    test "approval events redact nested credentials while preserving review targets" do
       conn_id = "conn_#{System.unique_integer()}"
-
       assert :ok = Presence.register(conn_id, %{role: :operator, client_id: "test", pid: self()})
+      on_exit(fn -> Presence.unregister(conn_id) end)
       flush_events()
 
-      event =
-        LemonCore.Event.new(
-          :approval_requested,
-          %{
-            "pending" => %{
-              "id" => "approval-oauth-1",
-              "run_id" => "run-oauth-1",
-              "session_key" => "session:oauth",
-              "agent_id" => "default",
-              "tool" => "mcp_mcp_oauth",
-              "action" => %{
-                type: "mcp_oauth_authorization",
-                authorization_url: "http://127.0.0.1:9000/authorize",
-                state: %{hash: "state123"},
-                enabled: false
-              },
-              "rationale" => "Open the MCP authorization URL.",
-              "requested_at_ms" => 1_700_000_000_000
-            }
-          },
-          %{}
-        )
-
+      event = LemonCore.Event.new(:approval_requested, %{pending: %{
+        id: "approval-redaction", run_id: "run-redaction", session_key: "agent:test:main",
+        agent_id: "test", tool: "bash",
+        action: %{path: "/tmp/review-target", headers: %{"Authorization" => "Bearer credential-value"},
+                  password: "password-value"},
+        rationale: "Review Authorization: Bearer rationale-secret"
+      }}, %{})
       LemonCore.Bus.broadcast("exec_approvals", event)
 
       assert_receive {:event, "exec.approval.requested", payload, _state_version}, 1_000
-
-      assert payload == %{
-               "approvalId" => "approval-oauth-1",
-               "runId" => "run-oauth-1",
-               "sessionKey" => "session:oauth",
-               "agentId" => "default",
-               "tool" => "mcp_mcp_oauth",
-               "action" => %{
-                 "type" => "mcp_oauth_authorization",
-                 "authorization_url" => "http://127.0.0.1:9000/authorize",
-                 "state" => %{"hash" => "state123"},
-                 "enabled" => false
-               },
-               "rationale" => "Open the MCP authorization URL.",
-               "requestedAtMs" => 1_700_000_000_000,
-               "expiresAtMs" => nil
-             }
-
+      assert payload["action"]["path"] == "/tmp/review-target"
+      for secret <- ["credential-value", "password-value", "rationale-secret"] do
+        refute inspect(payload) =~ secret
+      end
       assert :ok = Schemas.validate_event("exec.approval.requested", payload)
-
-      Presence.unregister(conn_id)
     end
 
     test "broadcasts approval resolved events with pending metadata" do

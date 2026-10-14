@@ -67,6 +67,8 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Pending execution-approval events redact nested credentials and rationale
+  secrets before reaching clients, while preserving visible review targets.
 - Cron jobs now evaluate IANA timezone names with real UTC offsets and
   daylight-saving rules. Missing spring-forward slots are skipped; repeated
   fall-back slots use only their first occurrence. Invalid/unavailable zones
