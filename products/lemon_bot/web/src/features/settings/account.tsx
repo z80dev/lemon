@@ -1,13 +1,14 @@
 import { useState } from 'react';
-import { nonce, type User, type Preferences, type Confirmation, type Device, type AuthSession, type ReauthResult } from '@lemon-bot/sdk';
+import { LemonBotError, nonce, type User, type Preferences, type Confirmation, type Device, type AuthSession, type ReauthResult } from '@lemon-bot/sdk';
 import { useApp } from '../../app';
 import { useQuery, Field, ErrorNotice, Loading, ConfirmDialog, formatTime } from '../../ui';
 import { allPages, useIntent, IntentNotice, Toggle, NarrowConfirm } from './shared';
 import { AccountReauthentication } from './reauth';
 import { AccountAvatar } from './avatar';
+import { persistCleanupHandoff, type CleanupHandoff } from '../../cleanup-handoff';
 
 export function AccountSettings() {
-  const { client, refresh, logout } = useApp();
+  const { client, refresh, logout, snapshot } = useApp();
   const me = useQuery('settings:me', () => client.call('GET /me'));
   const sessions = useQuery('settings:sessions', () => allPages(cursor => client.call('GET /auth/sessions', { query: { cursor, limit: 200 } })));
   const devices = useQuery('settings:devices', () => allPages(cursor => client.call('GET /devices', { query: { cursor, limit: 200 } })));
@@ -39,12 +40,26 @@ export function AccountSettings() {
   })()}><p>Revoke exactly {revoke.value.id}? Access or notification delivery from this registration will stop.</p></NarrowConfirm>}
   </section>
   <section className="panel stack"><h2>Account access</h2><p>Switching accounts signs out this session and returns to the device-local saved account chooser.</p><div className="row"><button disabled={intent.disabled} onClick={() => void intent.run(logout)}>Switch account</button><button disabled={intent.disabled} onClick={() => void intent.run(logout)}>Sign out</button></div></section>
+  <section className="panel stack"><h3>Cleanup observation after access revocation</h3><p>Sessions revoke immediately. External cleanup may remain unresolved after product removal. An enabled workspace Owner—not the deleted account—can inspect the original cleanup ledger. Safe operation/user/request IDs are retained locally for handoff, never credentials or a read capability.</p><p className="small">Owner lookup user ID: <code>{snapshot.user.id}</code></p></section>
   <section className="panel stack"><h2>Delete account</h2><p>Account-wide removal revokes sessions and removes the product-owned personal resources listed in the preview. Transfer final workspace ownership first. Host files, browser logins, provider subscriptions, external sessions and operator backups are separate; deployment retention applies. Mailbox retirement may require provider reconciliation.</p><Field label="Current password for single-use reauthentication"><input type="password" autoComplete="current-password" value={reauthPassword} onChange={e => setReauthPassword(e.target.value)} /></Field><AccountReauthentication onReauthenticated={setOidcReauth} />{oidcReauth && <p role="status">Identity reauthenticated until {formatTime(oidcReauth.expiresAtMs)}. Token retained only in memory.</p>}<button className="danger" disabled={intent.disabled || (!reauthPassword && (!oidcReauth || Date.now() >= oidcReauth.expiresAtMs))} onClick={() => void (async () => { const preview = await intent.run(() => client.call('POST /me/preview', { body: { action: 'delete', clientNonce: nonce() } })); if (preview) setDeletion(preview); })()}>Review account deletion</button></section>
-  {deletion && <ConfirmDialog title="Delete account everywhere" confirmation={deletion} onCancel={() => { setDeletion(undefined); setReauthPassword(''); }} onConfirm={async confirm => {
+  {deletion && <ConfirmDialog title="Delete account everywhere" confirmation={deletion} disabled={intent.disabled} onCancel={() => { setDeletion(undefined); setReauthPassword(''); }} onConfirm={async confirm => {
     const result = await intent.run(async () => {
       const reauth = oidcReauth && oidcReauth.expiresAtMs > Date.now() ? oidcReauth : await client.call('POST /auth/reauth', { body: { password: reauthPassword } });
       setReauthPassword(''); setOidcReauth(undefined);
-      return client.call('DELETE /me', { body: { ...confirm, reauthToken: reauth.reauthToken, clientNonce: nonce() } });
+      const clientNonce = nonce();
+      const handoff: CleanupHandoff = { backendUrl: client.baseUrl, workspaceId: snapshot.workspace.id, userId: snapshot.user.id, clientNonce, requestedAtMs: Date.now(), status: 'prepared' };
+      persistCleanupHandoff(handoff);
+      try {
+        const deleted = await client.call('DELETE /me', { body: { ...confirm, reauthToken: reauth.reauthToken, clientNonce } });
+        persistCleanupHandoff({ ...handoff, status: 'product_delete_acknowledged' });
+        return deleted;
+      } catch (failure) {
+        const teardownId = failure instanceof LemonBotError ? failure.details?.teardownId : undefined;
+        persistCleanupHandoff({ ...handoff, status: failure instanceof LemonBotError && !failure.outcomeUnknown && failure.retrySafe ? 'refused' : 'outcome_unknown',
+          ...(typeof teardownId === 'string' ? { teardownId } : {}),
+          ...(failure instanceof LemonBotError ? { requestId: failure.requestId, errorCode: failure.code } : {}) });
+        throw failure;
+      }
     });
     if (result) { setDeletion(undefined); await logout(); }
   }} />}

@@ -11,7 +11,7 @@ import { EnterpriseScreen } from './features/enterprise';
 import { ActivityScreen, Palette, SearchScreen, settingsDestinations } from './navigation';
 
 export interface Route { screen: string; id?: string; botId?: string; tab?: string; entryId?: string; conversationId?: string; taskConversationId?: string }
-export interface AppContextValue { client: LemonBotClient; realtime: RealtimeConnection | null; snapshot: Snapshot; device: Device | null; online: boolean; navigate: (route: Route) => void; refresh: () => Promise<void>; reportError: (error: unknown) => void; draftPrompt: (conversationId: string, text: string) => void; logout: () => Promise<void> }
+export interface AppContextValue { client: LemonBotClient; realtime: RealtimeConnection | null; snapshot: Snapshot; device: Device | null; online: boolean; navigate: (route: Route) => void; refresh: () => Promise<void>; reportError: (error: unknown) => void; draftPrompt: (conversationId: string, text: string) => void; logout: () => Promise<void>; forgetConversation: (conversationId: string) => void }
 const AppContext = createContext<AppContextValue | null>(null);
 export function useApp() { const value = useContext(AppContext); if (!value) throw new Error('Lemon Bot workspace context is not mounted.'); return value; }
 
@@ -64,6 +64,7 @@ function applySnapshotEvent(snapshot: Snapshot, event: RealtimeEvent): Snapshot 
     case 'machine.deleted': return { ...snapshot, machines: snapshot.machines.filter(machine => machine.id !== event.payload.id) };
     case 'conversation.upserted': return { ...snapshot, conversations: upsert(snapshot.conversations, event.payload) };
     case 'conversation.deleted': return { ...snapshot, conversations: snapshot.conversations.filter(room => room.id !== event.payload.id) };
+    case 'conversation.left': return event.payload.userId === snapshot.user.id ? { ...snapshot, conversations: snapshot.conversations.filter(room => room.id !== event.payload.conversationId) } : snapshot;
     case 'section.upserted': return { ...snapshot, sections: upsert(snapshot.sections, event.payload) };
     case 'section.deleted': return { ...snapshot, sections: snapshot.sections.filter(section => section.id !== event.payload.id) };
     case 'notification.upserted': return { ...snapshot, notifications: upsert(snapshot.notifications, event.payload) };
@@ -96,9 +97,20 @@ function Workspace({ session, onLogout }: { session: WebSession; onLogout: () =>
   const [device, setDevice] = useState<Device | null>(null); const [realtime, setRealtime] = useState<RealtimeConnection | null>(null);
   const [error, setError] = useState<unknown>(); const [connection, setConnection] = useState('connecting'); const [browserOnline, setBrowserOnline] = useState(navigator.onLine);
   const [route, setRoute] = useState<Route>(initialRoute); const [palette, setPalette] = useState(false); const [sidebar, setSidebar] = useState(false);
+  const routeRef = useRef(route); routeRef.current = route;
   const reportError = (failure: unknown) => setError(failure);
   const navigate = (next: Route) => { const query = new URLSearchParams(); for (const [key, value] of Object.entries(next)) if (value) query.set(key, value); location.hash = query.toString(); setRoute(next); setSidebar(false); };
   const update = (value: Snapshot) => { snapshotRef.current = value; setSnapshot(value); };
+  const forgetConversation = (conversationId: string) => {
+    const current = snapshotRef.current;
+    if (current) {
+      if (current.conversations.some(room => room.id === conversationId)) update({ ...current, conversations: current.conversations.filter(room => room.id !== conversationId) });
+      sessionStorage.removeItem(`lemonbot.composer:${current.workspace.id}:${current.user.id}:${conversationId}`);
+      sessionStorage.removeItem(`lemonbot.prompt:${current.workspace.id}:${current.user.id}:${conversationId}`);
+      sessionStorage.removeItem(`lemonbot.leave:${current.workspace.id}:${current.user.id}:${conversationId}`);
+    }
+    if (routeRef.current.screen === 'conversation' && routeRef.current.id === conversationId) navigate({ screen: 'home' });
+  };
   const sync = async () => {
     const value = await client.call('GET /sync');
     // Snapshot bounds are explicit. Page each flagged collection, keeping newer revisions.
@@ -122,6 +134,8 @@ function Workspace({ session, onLogout }: { session: WebSession; onLogout: () =>
         } catch (failure) { if (!disposed) reportError(failure); }
         socket = client.realtime({ deviceId: registration?.id, cursor: value.cursor, onEvent: async event => {
           if (disposed) return; if (snapshotRef.current) update(applySnapshotEvent(snapshotRef.current, event));
+          if (event.event === 'conversation.left' && event.payload.userId === snapshotRef.current?.user.id) forgetConversation(event.payload.conversationId);
+          if (event.event === 'conversation.deleted') forgetConversation(event.payload.id);
           window.dispatchEvent(new CustomEvent('lemon:event', { detail: event }));
         }, onState: (state, failure) => { if (disposed) return; setConnection(state); if (failure) reportError(failure); if (state === 'unauthenticated' || state === 'forbidden') { sessionStorage.removeItem('lemonbot.session'); onLogout(); } }, onReset: async () => { const fresh = await sync(); window.dispatchEvent(new Event('lemon:refresh')); return fresh; }, saveCursor: cursor => sessionStorage.setItem(`lemonbot.cursor:${session.baseUrl}:${session.workspaceId}`, cursor) });
         setRealtime(socket); socket.start();
@@ -160,7 +174,7 @@ function Workspace({ session, onLogout }: { session: WebSession; onLogout: () =>
   if (updateRequired) return <main className="boot stack"><div className="brand"><span className="brand-mark">◒</span>Lemon Bot</div><h1>A client update is required</h1><p>This web client is 1.0.0; your backend requires {requiredVersion}. Ask the operator to build and deploy the matching web assets, then reload. Updating the client does not recreate your machines or remove work.</p><button className="primary" onClick={() => location.reload()}>Reload installed assets</button><button onClick={() => void logout()}>Sign out</button></main>;
   const activeBot = snapshot.bots.find(bot => bot.id === (route.botId || (route.screen.startsWith('bot.') || route.screen === 'memory' ? route.id : undefined))) || (route.screen === 'conversation' ? snapshot.bots.find(bot => bot.mainConversationId === route.id || snapshot.conversations.find(room => room.id === route.id)?.botIds.includes(bot.id)) : undefined);
   const appearance = snapshot.user.preferences.appearance;
-  const context: AppContextValue = { client, realtime, snapshot, device, online: browserOnline && connection === 'live', navigate, refresh, reportError, logout, draftPrompt: (conversationId, text) => {
+  const context: AppContextValue = { client, realtime, snapshot, device, online: browserOnline && connection === 'live', navigate, refresh, reportError, logout, forgetConversation, draftPrompt: (conversationId, text) => {
     sessionStorage.setItem(`lemonbot.prompt:${snapshot.workspace.id}:${snapshot.user.id}:${conversationId}`, text);
     window.dispatchEvent(new CustomEvent('lemonbot:draft-prompt', { detail: { conversationId, text } })); navigate({ screen: 'conversation', id: conversationId, botId: snapshot.conversations.find(room => room.id === conversationId)?.botIds[0] });
   } };
@@ -178,7 +192,7 @@ function Destination({ route, activeBot }: { route: Route; activeBot?: Bot }) {
   if (['skills', 'routines', 'connect.apps', 'connector.setup', 'integrations.channels', 'integrations.email', 'integrations.x'].includes(route.screen)) return <WorkScreen route={{ ...route, screen: route.screen === 'connector.setup' ? 'connect.apps' : route.screen }}/>;
   if (route.screen.startsWith('settings.')) {
     const enterprise = ['settings.identity', 'settings.directory', 'settings.network', 'settings.setup', 'settings.exports', 'settings.usage.limit'].includes(route.screen);
-    return <><nav className="settings-nav" aria-label="Settings sections">{settingsDestinations.filter(([screen]) => snapshot.member.role !== 'member' || !['settings.identity', 'settings.directory', 'settings.setup', 'settings.exports'].includes(screen)).map(([screen, label]) => <button key={screen} className={route.screen === screen ? 'selected' : ''} onClick={() => navigate({ screen })}>{label}</button>)}</nav>{enterprise ? <EnterpriseScreen route={route}/> : <SettingsScreen route={route}/>}</>;
+    return <><nav className="settings-nav" aria-label="Settings sections">{settingsDestinations.filter(([screen]) => (screen !== 'settings.account-cleanup' || snapshot.member.role === 'owner') && (snapshot.member.role !== 'member' || !['settings.directory', 'settings.setup', 'settings.exports'].includes(screen))).map(([screen, label]) => <button key={screen} className={route.screen === screen ? 'selected' : ''} onClick={() => navigate({ screen })}>{label}</button>)}</nav>{enterprise ? <EnterpriseScreen route={route}/> : <SettingsScreen route={route}/>}</>;
   }
   if (route.screen === 'inbox') return <SettingsScreen route={route}/>;
   if (route.screen.startsWith('bot.') || ['templates', 'memory', 'memory.import', 'preference.changes', 'group.create', 'group.edit', 'voice.preview'].includes(route.screen)) return <BotsScreen route={{ ...route, id: route.id || activeBot?.id, botId: route.botId || activeBot?.id }}/>;

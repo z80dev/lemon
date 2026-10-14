@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { LemonBotClient, nonce, type AuthResult } from '@lemon-bot/sdk';
 import { ErrorNotice, Field, Loading, safeExternal, useAction, useQuery } from './ui';
+import { CleanupHandoffCard } from './cleanup-handoff';
 
 export interface SavedAccount { baseUrl: string; email: string; workspaceId?: string; workspaceName?: string }
 export interface WebSession { baseUrl: string; token: string; email: string; workspaceId: string }
@@ -62,6 +63,7 @@ export function AuthScreen({ onAuth, initialBackend }: { onAuth: (session: WebSe
       })}>Continue with {provider.name}{provider.requireSSO ? ' · SSO required' : ''}</button>)}</>}
       </>}
       {savedAccounts().length > 0 && <details><summary>Saved backend accounts</summary><div className="stack">{savedAccounts().map(account => <button key={`${account.baseUrl}:${account.email}`} onClick={() => { setBaseUrl(account.baseUrl); setBackendInput(account.baseUrl); setEmail(account.email); setMode('login'); }}>{account.workspaceName || account.baseUrl}<br/><small>{account.email}</small></button>)}</div></details>}
+      <CleanupHandoffCard/>
       <p className="small muted">Sessions stay in this browser’s session storage, not URLs. Provider integrations and attached hosts require the operator’s configured credentials; the browser never receives swarm authority.</p>
     </div></section></main>;
 }

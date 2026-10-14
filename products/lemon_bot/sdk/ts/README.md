@@ -125,3 +125,7 @@ bun run test
 ```
 
 Consumer tests exercise encoded REST requests, revisions/nonces/errors, actual multipart and binary/range responses, signed-origin credential isolation, voice upload/STT, uncertain outcomes and GET reconciliation, ordered async socket application/persistence/ack, cursor reset/reconnect/auth revocation, heartbeat and terminal reattachment without mutation replay. No source-text/wiring assertions. These commands were not run in the parallel implementation slice; the integrating lead owns verification.
+
+Group departure uses `POST /conversations/:id/leave` with the caller's fixed nonce and an explicit existing human successor only when the caller is creator. Conflict run IDs remain available in `LemonBotError.resourceIds` for GET inspection; terminal evidence never triggers an automatic Leave replay. Consumers handle `conversation.left` by its exact user ID, not as global conversation deletion.
+
+Owner account-cleanup observation uses only canonical `GET /account-teardowns` and `GET /account-teardowns/:id`. Recorded provider `outcome_unknown` remains typed read data, distinct from completed product cleanup; the SDK never interprets the ledger as authorization to repeat account deletion or provider revocation.

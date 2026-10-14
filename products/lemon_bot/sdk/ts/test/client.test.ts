@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { LemonBotClient, LemonBotError, nonce } from '../src/index.ts';
-import type { Download, MessageReceipt, Run } from '../src/index.ts';
+import type { AccountTeardown, Download, MessageReceipt, Run } from '../src/index.ts';
 import { attachment, entry, fetchBoundary, snapshot } from './fixtures.ts';
 
 const origin = 'https://bot.example';
@@ -231,5 +231,70 @@ describe('typed client at the fetch boundary', () => {
     });
     await client.reconcileRuns(clientNonce);
     expect(boundary.requests.map(request => request.method)).toEqual(['POST', 'GET']);
+  });
+
+  test('explicit group departure sends the chosen successor and receives raw Empty', async () => {
+    const body = { clientNonce: nonce(), newOwnerUserId: 'remaining_human' };
+    const boundary = fetchBoundary(async request => {
+      expect(request.method).toBe('POST');
+      expect(new URL(request.url).pathname).toBe('/v1/conversations/group%20id/leave');
+      expect(await request.json()).toEqual(body);
+      return Response.json({ ok: true });
+    });
+    const client = new LemonBotClient({ baseUrl: origin, token: 'own-session', fetch: boundary.clientFetch });
+    expect(await client.call('POST /conversations/:id/leave', { params: { id: 'group id' }, body })).toEqual({ ok: true });
+    expect(boundary.requests).toHaveLength(1);
+  });
+
+  test('group leave conflict keeps fixed run IDs for reads and does not replay after terminal evidence', async () => {
+    const body = { clientNonce: nonce() };
+    const stopped: Run = { id: 'owned_run', revision: 2, createdAtMs: 1, updatedAtMs: 3, conversationId: 'group_1',
+      botId: 'bot_1', initiatorUserId: 'user_1', clientNonce: 'original_work_nonce', status: 'cancelled',
+      error: null, startedAtMs: 1, completedAtMs: 3, routineRunId: null };
+    const boundary = fetchBoundary(request => {
+      if (request.method === 'POST') return Response.json({ error: {
+        code: 'conflict', message: 'Owned work is not yet terminal; membership retained.',
+        requestId: 'leave_1', retrySafe: false, details: { runIds: ['owned_run'] },
+      } }, { status: 409 });
+      expect(new URL(request.url).pathname).toBe('/v1/runs/owned_run');
+      return Response.json(stopped);
+    });
+    const client = new LemonBotClient({ baseUrl: origin, fetch: boundary.clientFetch });
+    await expect(client.call('POST /conversations/:id/leave', { params: { id: 'group_1' }, body })).rejects.toMatchObject({
+      code: 'conflict', outcomeUnknown: false, requestId: 'leave_1', clientNonce: body.clientNonce,
+      resourceIds: ['owned_run', 'group_1'],
+    });
+    expect((await client.call('GET /runs/:id', { params: { id: 'owned_run' } })).status).toBe('cancelled');
+    expect(boundary.requests.map(request => request.method)).toEqual(['POST', 'GET']);
+  });
+
+  test('Owner cleanup observation is read-only and preserves distinct product/provider uncertainty', async () => {
+    const record: AccountTeardown = {
+      id: 'teardown_1', revision: 3, createdAtMs: 1, updatedAtMs: 3, operation: 'delete_account',
+      userId: 'deleted_user', workspaceId: 'workspace_1', state: 'outcome_unknown', requestId: 'delete_request',
+      startedAtMs: 1, completedAtMs: null,
+      productCleanup: { state: 'completed', updatedAtMs: 2, errorCode: null },
+      providerCleanup: [{ providerId: 'registered_mail_provider', kind: 'email', receiptId: 'receipt_1',
+        state: 'outcome_unknown', updatedAtMs: 3, errorCode: 'upstream_unavailable' }],
+    };
+    const boundary = fetchBoundary(request => {
+      expect(request.method).toBe('GET');
+      expect(request.headers.get('Authorization')).toBe('Bearer owner-session');
+      expect(request.body).toBeNull();
+      const url = new URL(request.url);
+      if (url.pathname === '/v1/account-teardowns') {
+        expect(url.searchParams.get('userId')).toBe(record.userId);
+        expect(url.searchParams.get('state')).toBe('outcome_unknown');
+        return Response.json({ items: [record], nextCursor: null });
+      }
+      expect(url.pathname).toBe('/v1/account-teardowns/teardown_1');
+      return Response.json(record);
+    });
+    const client = new LemonBotClient({ baseUrl: origin, token: 'owner-session', fetch: boundary.clientFetch });
+    const page = await client.call('GET /account-teardowns', { query: { userId: record.userId, state: 'outcome_unknown' } });
+    expect(page.items[0]?.productCleanup.state).toBe('completed');
+    expect(page.items[0]?.providerCleanup[0]?.state).toBe('outcome_unknown');
+    expect(await client.call('GET /account-teardowns/:id', { params: { id: record.id } })).toEqual(record);
+    expect(boundary.requests.map(request => request.method)).toEqual(['GET', 'GET']);
   });
 });
