@@ -290,6 +290,10 @@ destination execution and returns a failed terminal result rather than dropping
 events. The terminal result waits for all live-frame acknowledgements. Disconnect,
 node replacement, invocation timeout or cancellation ends the invocation; reconnect
 does not resume/replay cancelled work, and old-session frames cannot revive it.
+Completed native runners may already have stopped while their final events await
+acknowledgement. Cancelling this transport-only state releases its invocation and
+pending approvals without calling the stopped runner or disrupting other runs.
+Cancellation also tolerates a live runner exiting concurrently.
 
 Remote tool approvals enter the controller's existing approval store and emit
 `exec.approval.requested/resolved`; resolve the **controller** approval ID with

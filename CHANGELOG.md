@@ -18,6 +18,13 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   disconnects and timeouts fail closed. Terminal results, cancellation and
   steer/redirect retain their existing semantics.
 
+### Fixed
+
+- Execution-node workers no longer crash when cancellation, disconnect or event
+  delivery failure occurs after a native runner has finished but its live events
+  are still draining. Finished runners are not cancelled again, concurrent runner
+  exits are tolerated, and invocation/approval cleanup still completes.
+
 ---
 
 ## [2026.10.3]
