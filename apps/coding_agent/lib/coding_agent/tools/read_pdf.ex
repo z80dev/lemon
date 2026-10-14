@@ -50,14 +50,7 @@ defmodule CodingAgent.Tools.ReadPdf do
          {:ok, backend} <- discover_backend(cwd, opts, signal),
          {:ok, document} <- extract(backend, path, params, signal),
          {:ok, pages} <- validate_pages(document, params) do
-      content =
-        Enum.map_join(pages, "\n\n", fn %{page: page, text: text} ->
-          "=== Page #{page} ===\n" <>
-            if(String.trim(text) == "",
-              do: "[No extractable text on this page; scanned/image-only pages require OCR.]",
-              else: String.trim_trailing(text)
-            )
-        end)
+      content = render_pages(pages)
 
       last = pages |> List.last() |> Map.fetch!(:page)
       total = Map.get(document, :total_pages)
@@ -73,6 +66,37 @@ defmodule CodingAgent.Tools.ReadPdf do
         next_page: next_page
       })
     end
+  end
+
+  @doc """
+  Extracts all page text from `path` with the same backends as `read/5`,
+  returning `=== Page N ===` sections for callers that render their own output.
+  """
+  @spec extract_text(String.t(), String.t(), keyword(), reference() | nil) ::
+          {:ok, %{text: String.t(), backend: atom(), total_pages: pos_integer() | nil}}
+          | {:error, String.t()}
+  def extract_text(path, cwd, opts, signal) do
+    with :ok <- ReadFormats.check_input(path, opts),
+         {:ok, backend} <- discover_backend(cwd, opts, signal),
+         {:ok, document} <- extract(backend, path, %{}, signal),
+         {:ok, pages} <- validate_pages(document, %{}) do
+      {:ok,
+       %{
+         text: render_pages(pages),
+         backend: backend.name,
+         total_pages: Map.get(document, :total_pages)
+       }}
+    end
+  end
+
+  defp render_pages(pages) do
+    Enum.map_join(pages, "\n\n", fn %{page: page, text: text} ->
+      "=== Page #{page} ===\n" <>
+        if(String.trim(text) == "",
+          do: "[No extractable text on this page; scanned/image-only pages require OCR.]",
+          else: String.trim_trailing(text)
+        )
+    end)
   end
 
   defp discover_backend(cwd, opts, signal) do

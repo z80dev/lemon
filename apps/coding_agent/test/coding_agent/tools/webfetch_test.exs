@@ -453,6 +453,166 @@ defmodule CodingAgent.Tools.WebFetchTest do
              tool.execute.("id", %{"url" => "https://example.com"}, signal, nil)
   end
 
+  describe "GitHub URLs" do
+    test "blob URLs fetch raw file contents" do
+      parent = self()
+
+      http_get = fn url, opts ->
+        send(parent, {:get, url, opts[:headers]})
+
+        {:ok,
+         %Req.Response{
+           status: 200,
+           headers: [{"content-type", "text/plain; charset=utf-8"}],
+           body: "defmodule Raw do\nend\n"
+         }}
+      end
+
+      tool = build_tool(http_get: http_get, resolve_host: fn _ -> {:ok, ["140.82.112.3"]} end)
+      url = "https://github.com/acme/lemon/blob/main/lib/raw.ex"
+      payload = tool.execute.("id", %{"url" => url}, nil, nil) |> decode_payload()
+
+      assert_received {:get, request_url, headers}
+      assert URI.parse(request_url).path == "/acme/lemon/main/lib/raw.ex"
+      assert {"host", "raw.githubusercontent.com"} in headers
+      assert payload["url"] == url
+      assert payload["extractor"] == "raw"
+      assert payload["text"] =~ "defmodule Raw do"
+    end
+
+    test "issues and pull requests render from the REST API" do
+      parent = self()
+
+      http_get = fn url, opts ->
+        path = URI.parse(url).path
+        send(parent, {:get, path, opts[:headers]})
+
+        body =
+          case path do
+            "/repos/acme/lemon/issues/7" ->
+              %{
+                "number" => 7,
+                "title" => "Crash on boot",
+                "state" => "closed",
+                "user" => %{"login" => "octo"},
+                "labels" => [%{"name" => "bug"}],
+                "body" => "Steps to reproduce",
+                "comments" => 1,
+                "html_url" => "https://github.com/acme/lemon/pull/7",
+                "pull_request" => %{"merged_at" => "2026-01-01T00:00:00Z"}
+              }
+
+            "/repos/acme/lemon/issues/7/comments" ->
+              [%{"user" => %{"login" => "rev"}, "created_at" => "t1", "body" => "LGTM"}]
+          end
+
+        {:ok,
+         %Req.Response{
+           status: 200,
+           headers: [{"content-type", "application/json"}],
+           body: Jason.encode!(body)
+         }}
+      end
+
+      tool = build_tool(http_get: http_get, resolve_host: fn _ -> {:ok, ["140.82.112.5"]} end)
+      url = "https://github.com/acme/lemon/pull/7/files"
+      payload = tool.execute.("id", %{"url" => url}, nil, nil) |> decode_payload()
+
+      assert_received {:get, "/repos/acme/lemon/issues/7", headers}
+      assert {"host", "api.github.com"} in headers
+      assert_received {:get, "/repos/acme/lemon/issues/7/comments", _}
+      assert payload["extractor"] == "github_api"
+      assert payload["finalUrl"] == "https://github.com/acme/lemon/pull/7"
+      assert payload["text"] =~ "Crash on boot (#7)"
+      assert payload["text"] =~ "Pull request · merged"
+      assert payload["text"] =~ "Labels: bug"
+      assert payload["text"] =~ "Steps to reproduce"
+      assert payload["text"] =~ "### @rev · t1"
+      assert payload["text"] =~ "LGTM"
+    end
+
+    test "route/1 leaves other GitHub pages alone" do
+      alias CodingAgent.Tools.WebFetchGitHub
+      assert WebFetchGitHub.route("https://github.com/acme/lemon") == :none
+      assert WebFetchGitHub.route("https://github.com/acme/lemon/issues/abc") == :none
+      assert WebFetchGitHub.route("https://gitlab.com/acme/lemon/blob/main/x") == :none
+
+      assert {:issue, "acme", "lemon", 3} =
+               WebFetchGitHub.route("https://github.com/acme/lemon/issues/3")
+    end
+  end
+
+  @tag :tmp_dir
+  test "PDF responses become page text or an actionable backend error", %{tmp_dir: tmp_dir} do
+    http_get = fn _url, _opts ->
+      {:ok,
+       %Req.Response{
+         status: 200,
+         headers: [{"content-type", "application/pdf"}],
+         body: pdf(["Alpha page", "Beta page"])
+       }}
+    end
+
+    tool = WebFetch.tool(tmp_dir, http_get: http_get, cache_opts: [persistent: false])
+
+    case CodingAgent.Tools.ReadFormats.pdf_backend(tmp_dir) do
+      {:ok, %{name: backend}} ->
+        payload =
+          tool.execute.("id", %{"url" => "https://8.8.8.8/doc.pdf"}, nil, nil)
+          |> decode_payload()
+
+        assert payload["extractor"] == "pdf:#{backend}"
+        assert payload["text"] =~ "=== Page 1 ==="
+        assert payload["text"] =~ "Alpha page"
+        assert payload["text"] =~ "Beta page"
+
+      {:error, _} ->
+        assert {:error, message} =
+                 tool.execute.("id", %{"url" => "https://8.8.8.8/doc.pdf"}, nil, nil)
+
+        assert message =~ "pypdf"
+        refute message =~ "Unsupported binary response"
+    end
+  end
+
+  defp pdf(page_texts) do
+    page_count = length(page_texts)
+    kids = Enum.map_join(0..(page_count - 1), " ", &"#{4 + &1 * 2} 0 R")
+
+    objects =
+      [
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [#{kids}] /Count #{page_count} >>",
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"
+      ] ++
+        Enum.flat_map(Enum.with_index(page_texts), fn {text, index} ->
+          stream = "BT /F1 12 Tf 72 720 Td (#{text}) Tj ET"
+
+          page =
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents #{5 + index * 2} 0 R >>"
+
+          [page, "<< /Length #{byte_size(stream)} >>\nstream\n#{stream}\nendstream"]
+        end)
+
+    {body, offsets} =
+      Enum.reduce(Enum.with_index(objects, 1), {"%PDF-1.4\n", []}, fn {object, index},
+                                                                      {body, offsets} ->
+        {body <> "#{index} 0 obj\n#{object}\nendobj\n", offsets ++ [byte_size(body)]}
+      end)
+
+    xref =
+      Enum.map_join(
+        offsets,
+        "",
+        &(String.pad_leading(Integer.to_string(&1), 10, "0") <> " 00000 n \n")
+      )
+
+    body <>
+      "xref\n0 #{length(objects) + 1}\n0000000000 65535 f \n" <>
+      xref <>
+      "trailer\n<< /Size #{length(objects) + 1} /Root 1 0 R >>\nstartxref\n#{byte_size(body)}\n%%EOF\n"
+  end
+
   defp decode_payload(result) do
     [content] = result.content
     Jason.decode!(content.text)
