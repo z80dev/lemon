@@ -254,6 +254,7 @@ defmodule CodingAgent.Session.ModelResolver do
     model_id = Map.get(config, :model_id)
     base_url = Map.get(config, :base_url)
     provider = canonical_registry_provider(provider)
+    {provider, model_id} = default_model_identity(provider, model_id, settings)
     provider = route_default_provider(provider, model_id, settings)
 
     model =
@@ -312,6 +313,45 @@ defmodule CodingAgent.Session.ModelResolver do
         apply_provider_base_url(model, settings)
     end
   end
+
+  # A qualified selector can arrive wrapped in the configuration's fallback
+  # provider. Normalize it before routing, while retaining ids actually served
+  # by that provider (including namespaced ids and native colon syntax).
+  defp default_model_identity(provider, model_id, settings) when is_binary(model_id) do
+    parts =
+      case String.split(model_id, ":", parts: 2) do
+        [_id] -> String.split(model_id, "/", parts: 2)
+        qualified -> qualified
+      end
+
+    case parts do
+      [prefix, id] when prefix != "" and id != "" ->
+        qualified_provider =
+          provider_to_atom(prefix) ||
+            case LemonAgent.ModelRuntime.CustomProviders.custom_provider(
+                   settings.providers,
+                   prefix
+                 ) do
+              {config_id, _config} -> config_id
+              nil -> nil
+            end
+
+        native_model =
+          if qualified_provider do
+            LemonAgent.ModelRuntime.CustomProviders.lookup(settings.providers, provider, model_id) ||
+              if(is_atom(provider), do: LemonAi.Models.known_model(provider, model_id))
+          end
+
+        if qualified_provider && is_nil(native_model),
+          do: {qualified_provider, id},
+          else: {provider, model_id}
+
+      _ ->
+        {provider, model_id}
+    end
+  end
+
+  defp default_model_identity(provider, model_id, _settings), do: {provider, model_id}
 
   @spec runtime_fallback_models(
           LemonAi.Types.Model.t(),

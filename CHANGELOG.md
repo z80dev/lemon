@@ -237,6 +237,13 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   OpenAI Completions/Responses, Anthropic and Google compatible endpoints merge
   header names case-insensitively: provider defaults, then model overrides,
   then explicit caller overrides, without duplicate mixed-case headers.
+- Stopped native plan transitions now journal the configured `@plan` model and
+  preserve the prior execution model, just like live transitions. Restart uses
+  that journal, and exit or approval restores the prior model. Invalid planning
+  models leave existing history and first-run session bindings unchanged.
+- Qualified default model selectors now resolve their configured provider before
+  fallback routing instead of becoming a synthetic model on the default provider.
+  Native colon IDs and the selected provider's declared model IDs remain intact.
 - Subagent definition parsing stays independent of the application controller
   while preserving duplicate frontmatter checks and nested JSON Schema/JTD
   output constraints.

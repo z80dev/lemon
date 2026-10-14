@@ -63,58 +63,41 @@ defmodule CodingAgent.Session.Planning do
 
   def transition(session, :status, _opts), do: {:ok, status(session), session}
 
-  def transition(session, :enter, _opts) do
-    case stored(session) do
-      %{"mode" => "plan"} -> {:ok, status(session), session}
-      plan -> append(session, %{plan | "mode" => "plan"})
-    end
-  end
+  def transition(session, action, _opts) when action in [:enter, :exit] do
+    plan = stored(session)
 
-  def transition(session, :exit, _opts) do
-    case stored(session) do
-      %{"mode" => "plan"} = plan -> append(session, %{plan | "mode" => "code"})
-      _ -> {:ok, status(session), session}
+    if changes_mode?(action, plan) do
+      settings = CodingAgent.SettingsManager.load(session.header.cwd)
+      context = SessionManager.build_session_context(session)
+
+      with {:ok, model} <- current_model(context.model, settings),
+           {:ok, _model, manager} <- transition_model(session, action, settings, model) do
+        {:ok, status(manager), manager}
+      end
+    else
+      {:ok, status(session), session}
     end
+  rescue
+    ArgumentError -> {:error, :invalid_plan_model}
   end
 
   def transition(_session, _action, _opts), do: {:error, :invalid_plan_action}
 
   @doc """
-  Transitions a live session and applies its configured planning role.
+  Transitions a live session using the same model-role journal as stopped sessions.
 
-  The execution model is stored in the plan journal before selecting `@plan`,
-  so leaving or approving a resumed plan restores the model that entered it.
+  Resolve all models before mutation. The journal stores the previous execution
+  model and the selected model, so restart needs no runtime-only plan state.
   """
   def transition_session(state, action, _opts) when action in [:enter, :exit] do
-    plan = stored(state.session_manager)
+    with {:ok, model, manager} <-
+           transition_model(state.session_manager, action, state.settings_manager, state.model) do
+      state =
+        if manager == state.session_manager,
+          do: state,
+          else: change_model(%{state | session_manager: manager}, model) |> refresh()
 
-    case {action, plan["mode"]} do
-      {:enter, "code"} ->
-        with {:ok, model} <- planning_model(state) do
-          plan =
-            plan
-            |> Map.put("mode", "plan")
-            |> Map.put(
-              "execution_model",
-              if(model.provider != state.model.provider or model.id != state.model.id,
-                do: model_descriptor(state.model)
-              )
-            )
-
-          {:ok, _status, manager} = append(state.session_manager, plan)
-          state = change_model(%{state | session_manager: manager}, model) |> refresh()
-          {:ok, status(state.session_manager), state}
-        end
-
-      {:exit, "plan"} ->
-        with {:ok, model} <- execution_model(state, plan) do
-          {:ok, _status, manager} = append(state.session_manager, %{plan | "mode" => "code"})
-          state = change_model(%{state | session_manager: manager}, model) |> refresh()
-          {:ok, status(state.session_manager), state}
-        end
-
-      _ ->
-        {:ok, status(state.session_manager), state}
+      {:ok, status(manager), state}
     end
   end
 
@@ -125,16 +108,52 @@ defmodule CodingAgent.Session.Planning do
     end
   end
 
-  defp planning_model(state) do
-    if Map.has_key?(state.settings_manager.model_roles, "plan"),
-      do: resolve_model("@plan", state.settings_manager),
-      else: {:ok, state.model}
+  defp changes_mode?(:enter, plan), do: plan["mode"] == "code"
+  defp changes_mode?(:exit, plan), do: plan["mode"] == "plan"
+
+  defp transition_model(session, action, settings, current) do
+    plan = stored(session)
+
+    case {action, plan["mode"]} do
+      {:enter, "code"} ->
+        with {:ok, model} <- planning_model(current, settings) do
+          next = %{
+            plan
+            | "mode" => "plan",
+              "execution_model" =>
+                if(different_model?(current, model), do: model_descriptor(current))
+          }
+
+          {:ok, model, append_model_transition(session, next, current, model)}
+        end
+
+      {:exit, "plan"} ->
+        with {:ok, model} <- execution_model(current, settings, plan) do
+          {:ok, model,
+           append_model_transition(session, %{plan | "mode" => "code"}, current, model)}
+        end
+
+      _ ->
+        {:ok, current, session}
+    end
   end
 
-  defp execution_model(state, %{"execution_model" => %{} = spec}),
-    do: resolve_model(spec, state.settings_manager)
+  defp current_model(nil, %{default_model: nil, model_roles: roles})
+       when not is_map_key(roles, "plan"),
+       do: {:ok, nil}
 
-  defp execution_model(state, _plan), do: {:ok, state.model}
+  defp current_model(selector, settings), do: resolve_model(selector, settings)
+
+  defp planning_model(current, settings) do
+    if Map.has_key?(settings.model_roles, "plan"),
+      do: resolve_model("@plan", settings),
+      else: {:ok, current}
+  end
+
+  defp execution_model(_current, settings, %{"execution_model" => %{} = spec}),
+    do: resolve_model(spec, settings)
+
+  defp execution_model(current, _settings, _plan), do: {:ok, current}
 
   defp resolve_model(selector, settings) do
     {:ok, ModelResolver.resolve_session_model(selector, settings)}
@@ -145,20 +164,32 @@ defmodule CodingAgent.Session.Planning do
   defp model_descriptor(model),
     do: %{"provider" => to_string(model.provider), "model" => model.id}
 
-  defp change_model(state, model) do
-    if {state.model.provider, state.model.id} == {model.provider, model.id} do
-      state
+  defp different_model?(nil, nil), do: false
+  defp different_model?(nil, _model), do: true
+
+  defp different_model?(current, model),
+    do: {current.provider, current.id} != {model.provider, model.id}
+
+  defp append_model_transition(session, plan, current, model) do
+    {:ok, _status, session} = append(session, plan)
+
+    if different_model?(current, model) do
+      session =
+        SessionManager.append_entry(session, SessionEntry.model_change(model.provider, model.id))
+
+      LemonAgent.ModelRuntime.SessionPins.clear(session.header.id)
+      session
     else
+      session
+    end
+  end
+
+  defp change_model(state, model) do
+    if different_model?(state.model, model) do
       :ok = LemonAgent.Agent.set_model(state.agent, model)
-      LemonAgent.ModelRuntime.SessionPins.clear(state.session_manager.header.id)
-
-      manager =
-        SessionManager.append_entry(
-          state.session_manager,
-          SessionEntry.model_change(model.provider, model.id)
-        )
-
-      %{state | model: model, session_manager: manager}
+      %{state | model: model}
+    else
+      state
     end
   end
 
@@ -327,14 +358,16 @@ defmodule CodingAgent.Session.Planning do
         end
 
       result =
-        if decision == :approve, do: execution_model(state, plan), else: {:ok, state.model}
+        if decision == :approve,
+          do: execution_model(state.model, state.settings_manager, plan),
+          else: {:ok, state.model}
 
       with {:ok, model} <- result do
         state =
           if next == plan do
             state
           else
-            {:ok, _status, manager} = append(state.session_manager, next)
+            manager = append_model_transition(state.session_manager, next, state.model, model)
             change_model(%{state | session_manager: manager}, model) |> refresh()
           end
 
