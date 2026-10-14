@@ -88,6 +88,15 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   meter also use the measurement for resumed sessions before their first run.
   All surfaces read the new read-scoped `sessions.context` control-plane method;
   category splits are estimates scaled to the provider-reported total.
+- **omp and Claude Code subagent definitions.** Task personas are also
+  discovered from project `.omp/agents/` and `.claude/agents/` (cwd up to the
+  Git root) and from `~/.omp/agent/agents/` and `~/.claude/agents/`, below the
+  `.lemon` directories. Those files are read tolerantly (ID from `name`,
+  unknown fields ignored, invalid files skipped). All definitions accept
+  comma-separated `tools`/`model`, omp/Claude tool names, thinking-level
+  aliases, `spawns`, and an `output` schema in JSON Schema or JTD form. New
+  shipped personas: read-only `security-reviewer` and the `@smol` mechanical
+  worker `sonic`.
 
 ### Changed
 
