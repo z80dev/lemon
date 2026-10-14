@@ -99,7 +99,7 @@ defmodule LemonControlPlane.Methods.ExecApprovalResolveTest do
     assert Task.await(task) == {:ok, :denied}
 
     assert {:error, error} = ExecApprovalResolve.handle(params(pending, "approve_once"), %{})
-    assert %{code: "CONFLICT", details: %{"approvalId" => ^id, "reason" => "cancelled"}} =
+    assert %{"code" => "CONFLICT", "details" => %{"approvalId" => ^id, "reason" => "cancelled"}} =
              Errors.to_payload(error)
   end
 
@@ -111,7 +111,7 @@ defmodule LemonControlPlane.Methods.ExecApprovalResolveTest do
 
     assert {:error, error} =
              ExecApprovalResolve.handle(%{"approvalId" => "missing_#{id}", "decision" => "deny"}, %{})
-    assert %{code: "NOT_FOUND", details: %{"reason" => "not_found"}} = Errors.to_payload(error)
+    assert %{"code" => "NOT_FOUND", "details" => %{"reason" => "not_found"}} = Errors.to_payload(error)
   end
 
   test "malformed bindings and IDs cannot consume a live approval", %{id: id} do
