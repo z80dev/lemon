@@ -43,5 +43,4 @@ defmodule CodingAgent.Executor.Usage do
   defp plain(%{__struct__: _} = value), do: Map.from_struct(value)
   defp plain(value), do: value
   defp field(map, key) when is_map(map), do: Map.get(map, key, Map.get(map, Atom.to_string(key)))
-  defp field(_, _), do: nil
 end
