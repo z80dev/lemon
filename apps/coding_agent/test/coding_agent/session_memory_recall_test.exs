@@ -12,7 +12,8 @@ defmodule CodingAgent.SessionMemoryRecallTest do
   alias LemonAi.Types.UserMessage
 
   setup do
-    assert is_pid(Process.whereis(LemonMemory.Store)), "durable memory store must be running"
+    memory_store = Process.whereis(LemonMemory.Store)
+    assert is_pid(memory_store), "durable memory store must be running"
 
     agent_id = "recall_e2e_#{System.unique_integer([:positive])}"
     cwd = tmp_cwd()
@@ -28,9 +29,19 @@ defmodule CodingAgent.SessionMemoryRecallTest do
         session_scope: :main
       })
 
+    # Ingest resolves features independently of the session's project config.
+    # Give this fixture its own worker with the same explicit project opt-in.
+    ingest =
+      start_supervised!(
+        {LemonMemory.Ingest,
+         name: __MODULE__.Ingest,
+         memory_store: memory_store,
+         config_loader: fn -> LemonCore.Config.Modular.load(project_dir: cwd) end}
+      )
+
     # Run N: finished in another session and ingested like any finalized run.
     :ok =
-      LemonMemory.Ingest.handle_finalize_run(%{
+      LemonMemory.Ingest.handle_finalize_run(ingest, %{
         run_id: "run-#{agent_id}",
         record: %{events: [], started_at: System.system_time(:millisecond)},
         summary: %{
@@ -43,10 +54,10 @@ defmodule CodingAgent.SessionMemoryRecallTest do
         }
       })
 
-    assert eventually(fn ->
-             LemonMemory.Store.search("priya", scope: :agent, scope_key: agent_id) != []
-           end),
-           "run N was never ingested"
+    # The cast precedes this system call from the same sender. Once ingest has
+    # drained, the store query observes its queued write without polling.
+    _ = :sys.get_state(ingest)
+    assert [_ | _] = LemonMemory.Store.search("priya", scope: :agent, scope_key: agent_id)
 
     %{agent_id: agent_id}
   end
@@ -61,15 +72,16 @@ defmodule CodingAgent.SessionMemoryRecallTest do
     end
 
     session =
-      start_supervised!(
-        {Session,
-         cwd: cwd,
-         workspace_dir: Process.get(:recall_workspace),
-         agent_id: agent_id,
-         session_key: "agent:#{agent_id}:tui:2",
-         model: Mocks.mock_model(),
-         stream_fn: stream_fn}
-      )
+      start_supervised!({
+        Session,
+        # Recall needs the project identity, not a capture session key.
+        cwd: cwd,
+        workspace_dir: Process.get(:recall_workspace),
+        agent_id: agent_id,
+        session_key: nil,
+        model: Mocks.mock_model(),
+        stream_fn: stream_fn
+      })
 
     session
   end
@@ -77,6 +89,13 @@ defmodule CodingAgent.SessionMemoryRecallTest do
   defp tmp_cwd do
     cwd = Path.join(System.tmp_dir!(), "memory_recall_e2e_#{System.unique_integer([:positive])}")
     File.mkdir_p!(cwd)
+    File.mkdir_p!(Path.join(cwd, ".lemon"))
+
+    File.write!(
+      Path.join(cwd, ".lemon/config.toml"),
+      "[features]\nsession_search = \"default-on\"\n"
+    )
+
     on_exit(fn -> File.rm_rf(cwd) end)
     cwd
   end
@@ -110,7 +129,11 @@ defmodule CodingAgent.SessionMemoryRecallTest do
   test "[memory] auto_recall = false attaches nothing", %{agent_id: agent_id} do
     cwd = Process.get(:recall_cwd)
     File.mkdir_p!(Path.join(cwd, ".lemon"))
-    File.write!(Path.join([cwd, ".lemon", "config.toml"]), "[memory]\nauto_recall = false\n")
+
+    File.write!(
+      Path.join([cwd, ".lemon", "config.toml"]),
+      "[memory]\nauto_recall = false\n[features]\nsession_search = \"default-on\"\n"
+    )
 
     session = start_session(agent_id, cwd)
 
@@ -142,17 +165,5 @@ defmodule CodingAgent.SessionMemoryRecallTest do
 
     assert text =~ fact
     assert text =~ "March 14th"
-  end
-
-  defp eventually(fun, attempts \\ 500)
-  defp eventually(_fun, 0), do: false
-
-  defp eventually(fun, attempts) do
-    if fun.() do
-      true
-    else
-      Process.sleep(20)
-      eventually(fun, attempts - 1)
-    end
   end
 end

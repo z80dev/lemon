@@ -3,11 +3,12 @@ defmodule CodingAgent.Session.ProjectMemory do
   Best-effort durable project facts from successful turns and compactions.
 
   Capture uses the session's compaction model/credentials, never the recall path.
-  Eight project workers at most share the existing task supervisor and registry.
+  Eight live project workers at most share the existing task supervisor and registry.
   Each runs one extraction and retains only the latest pending snapshot; commits
   are serialized per project, including across sessions. Workers outlive sessions.
   A worker admits at most 32 distinct snapshots before draining, retaining their
   digests so duplicate callbacks cannot requeue older facts behind newer ones.
+  Exited workers release capacity even while registry entries await pruning.
   Input excludes tools/thinking and is redacted before truncation. Only validated
   extracted facts reach `LemonMemory.Project.capture/3`, never a transcript.
   """

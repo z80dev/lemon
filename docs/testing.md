@@ -85,6 +85,15 @@ Every app's `test_helper.exs` starts ExUnit with `capture_log: true`: log
 output is printed only for failing tests. Assert on logs with
 `ExUnit.CaptureLog.capture_log/2`.
 
+The `coding_agent` helper disables `[features] session_search` in its isolated
+home: mocking a session's stream does not mock background project-fact extraction.
+Memory fixtures opt in with project config and control extraction explicitly.
+Recall-only fixtures omit the capture session key; capacity fixtures monitor their
+admitted workers through exit before asserting reuse of stale registry entries.
+Recall ingest fixtures also give their supervised ingest worker an explicit
+project-config loader and use a server barrier before querying persisted facts,
+rather than polling for global ingest to pick up changed feature flags.
+
 Shared Elixir helpers live in `LemonCore.Testing.HermeticEnv`:
 
 - `credential_env_vars/0` returns the canonical scrub list.

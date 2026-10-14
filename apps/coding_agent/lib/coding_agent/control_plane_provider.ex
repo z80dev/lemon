@@ -20,12 +20,14 @@ defmodule CodingAgent.ControlPlaneProvider do
   def get_task(task_id), do: CodingAgent.TaskStore.get(task_id)
 
   def todo_progress(session_key) do
-    with {:ok, todos, _revision} <- session_todos(session_key, nil) do
-      todos
-      |> CodingAgent.Tools.TodoStore.progress()
-      |> Map.put(:actionable_count, length(CodingAgent.Tools.TodoStore.actionable(todos)))
-    else
-      {:error, _} -> nil
+    case session_todos(session_key, nil) do
+      {:ok, todos, _revision} ->
+        todos
+        |> CodingAgent.Tools.TodoStore.progress()
+        |> Map.put(:actionable_count, length(CodingAgent.Tools.TodoStore.actionable(todos)))
+
+      {:error, _} ->
+        nil
     end
   end
 
