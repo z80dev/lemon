@@ -13,9 +13,15 @@ defmodule LemonAutomation.CronAdmission do
   Origins compare exact scheme, host and effective port; an explicit default
   port is equivalent to an omitted one. Origin entries have no path (including
   trailing `/`), query, userinfo or fragment; callback URLs also forbid queries.
+
+  A bound approving receipt may additionally contain a private `invocation`
+  object with exactly `invocationContextKey`, `invocationMcpServers`, and
+  `invocationToolPolicy`. Its canonical projection is returned to the caller,
+  never persisted here. MCP headers contain destination-local encrypted secret
+  references only; this module does not resolve invocation credentials.
   """
 
-  alias LemonCore.{Env, Secrets}
+  alias LemonCore.{Env, ProfileStore, RunRequest, Secrets, ToolPolicy}
 
   @fields [:url, :token_secret, :routine_id, :creator_id, :workspace_id]
   @string_fields Enum.map(@fields, &Atom.to_string/1)
@@ -24,6 +30,9 @@ defmodule LemonAutomation.CronAdmission do
   @max_token_bytes 4096
   @max_response_bytes 16_384
   @request_timeout_ms 5000
+  @invocation_fields ~w(invocationContextKey invocationMcpServers invocationToolPolicy)
+  @mcp_fields ~w(name url headers enabledTools allowedOrigins approvedPrivateOrigins)
+  @transport_headers ~w(host content-length connection transfer-encoding upgrade proxy-authorization mcp-session-id)
 
   @type admission :: %{
           url: String.t(),
@@ -32,7 +41,12 @@ defmodule LemonAutomation.CronAdmission do
           creator_id: String.t(),
           workspace_id: String.t()
         }
-  @type outcome :: :ok | {:error, :denied | :admission_unavailable}
+  @type invocation :: %{
+          context_key: String.t(),
+          mcp_servers: [map()],
+          tool_policy: map()
+        }
+  @type outcome :: :ok | {:ok, invocation()} | {:error, :denied | :admission_unavailable}
 
   @doc """
   Canonicalizes an atom- or string-keyed admission map, rejecting unknown fields,
@@ -63,6 +77,105 @@ defmodule LemonAutomation.CronAdmission do
   def validate(_, _), do: {:error, "invalid_admission"}
 
   @doc """
+  Validates the exact string-keyed invocation object from an approving receipt.
+  Uses the shared context-key, MCP and sparse tool-policy normalizers. Unknown
+  invocation/server fields, credential-bearing URLs, and literal header values
+  fail closed. Header values must be `${LEMON_SECRET:NAME}` (optionally prefixed
+  with `Bearer ` for Authorization); resolution belongs solely to the executing
+  host. HTTPS is required except for literal-loopback HTTP whose exact origin is
+  in both `allowedOrigins` and `approvedPrivateOrigins`. `[]` is an explicit
+  complete MCP replacement, not profile inheritance.
+  """
+  @spec validate_invocation(term()) ::
+          {:ok, invocation()} | {:error, :admission_unavailable}
+  def validate_invocation(projection) when is_map(projection) do
+    with true <- map_size(projection) == length(@invocation_fields),
+         true <- Enum.all?(Map.keys(projection), &(&1 in @invocation_fields)),
+         key = projection["invocationContextKey"],
+         :ok <- RunRequest.validate_invocation_context_key(key),
+         servers = projection["invocationMcpServers"],
+         true <- valid_invocation_servers?(servers),
+         {:ok, servers} <- ProfileStore.normalize_mcp_servers(servers),
+         true <- Enum.all?(servers, &valid_invocation_transport?/1),
+         {:ok, policy} <- ToolPolicy.normalize(projection["invocationToolPolicy"]) do
+      {:ok, %{context_key: key, mcp_servers: servers, tool_policy: policy}}
+    else
+      _ -> {:error, :admission_unavailable}
+    end
+  rescue
+    _ -> {:error, :admission_unavailable}
+  catch
+    _, _ -> {:error, :admission_unavailable}
+  end
+
+  def validate_invocation(_), do: {:error, :admission_unavailable}
+
+  defp valid_invocation_servers?(servers) when is_list(servers) and length(servers) <= 32 do
+    Enum.all?(servers, fn server ->
+      is_map(server) and
+        Enum.all?(Map.keys(server), &(&1 in @mcp_fields)) and
+        valid_invocation_url?(server["url"]) and
+        valid_invocation_headers?(Map.get(server, "headers", %{}))
+    end)
+  end
+
+  defp valid_invocation_servers?(_), do: false
+
+  defp valid_invocation_url?(url) do
+    with true <- valid_string?(url, @max_url_bytes),
+         false <- Regex.match?(~r/[\s\\\x00-\x1F\x7F]|%(?![0-9a-fA-F]{2})|\$\{/, url),
+         {:ok, uri} <- URI.new(url),
+         true <- uri.scheme in ["http", "https"] and valid_host?(uri.host),
+         true <- is_integer(uri.port) and uri.port in 1..65_535,
+         true <- is_nil(uri.userinfo) and is_nil(uri.fragment) and is_nil(uri.query),
+         false <- Regex.match?(~r/\Ahttps?:\/\/[^\/?#]*:(?:[\/?#]|\z)/i, url) do
+      true
+    else
+      _ -> false
+    end
+  end
+
+  defp valid_invocation_transport?(server) do
+    uri = URI.new!(server["url"])
+    origin = URI.to_string(%URI{scheme: uri.scheme, host: uri.host, port: uri.port})
+
+    uri.scheme == "https" or
+      (uri.scheme == "http" and uri.host in ["127.0.0.1", "::1"] and
+         origin in Map.get(server, "allowedOrigins", []) and
+         origin in Map.get(server, "approvedPrivateOrigins", []))
+  end
+
+  defp valid_invocation_headers?(headers) when is_map(headers) and map_size(headers) <= 64 do
+    names = Map.keys(headers)
+
+    Enum.all?(headers, fn {name, value} ->
+      if is_binary(name) and is_binary(value) do
+        name = String.downcase(name)
+        value = if name == "authorization", do: String.replace_prefix(value, "Bearer ", ""), else: value
+        name not in @transport_headers and secret_reference?(value)
+      else
+        false
+      end
+    end) and
+      MapSet.size(MapSet.new(names, &String.downcase/1)) == length(names)
+  end
+
+  defp valid_invocation_headers?(_), do: false
+
+  defp secret_reference?(value) when is_binary(value) do
+    case Regex.run(~r/\A\$\{LEMON_SECRET:([^{}]+)\}\z/, value) do
+      [_, name] ->
+        valid_string?(name, 512) and name == String.trim(name) and
+          not String.contains?(name, ["\r", "\n", <<0>>])
+
+      _ ->
+        false
+    end
+  end
+
+  defp secret_reference?(_), do: false
+
+  @doc """
   Provisions a routine's private bearer token in the encrypted default-owner
   secret store. The returned deterministic name, not the token, belongs in the
   admission map. Tokens must be nonempty, at most 4096 bytes, and contain no CR/LF.
@@ -86,7 +199,11 @@ defmodule LemonAutomation.CronAdmission do
     _, _ -> {:error, :secret_unavailable}
   end
 
-  @doc "Checks the exact invocation context against the external admission service."
+  @doc """
+  Checks the exact invocation context against the external admission service.
+  Returns `:ok` for a legacy approval, `{:ok, projection}` for a bound private
+  invocation approval, or a bounded denial/unavailability classification.
+  """
   @spec check(map(), map()) :: outcome()
   def check(job, run), do: check(job, run, [])
 
@@ -183,8 +300,14 @@ defmodule LemonAutomation.CronAdmission do
     with false <- Map.get(private, :admission_body_invalid, false),
          body = private |> Map.get(:admission_body_chunks, []) |> Enum.reverse() |> IO.iodata_to_binary(),
          {:ok, %{"allow" => allow, "context" => echoed} = decoded} <- Jason.decode(body),
-         true <- map_size(decoded) == 2 and is_boolean(allow) and echoed === context do
-      if allow, do: :ok, else: {:error, :denied}
+         true <- is_boolean(allow) and echoed === context,
+         true <- Enum.all?(Map.keys(decoded), &(&1 in ["allow", "context", "invocation"])) do
+      case {allow, Map.fetch(decoded, "invocation")} do
+        {true, :error} -> :ok
+        {false, :error} -> {:error, :denied}
+        {true, {:ok, projection}} -> validate_invocation(projection)
+        {false, {:ok, _}} -> {:error, :admission_unavailable}
+      end
     else
       _ -> {:error, :admission_unavailable}
     end
