@@ -116,11 +116,16 @@ final class NativeVoiceSession: NSObject, AVSpeechSynthesizerDelegate, AVAudioPl
         defer { busy = false }
         do {
             let receipt = try await store.send(conversationID: session.conversationId, text: text, attachmentIDs: [], voiceSessionID: session.id)
+            guard self.session?.id == session.id, store.user?.id == session.userId else { return }
             if receipt.status == "outcome_unknown" {
                 ambiguousSend = true
                 error = "Voice message outcome is unknown. The text is retained. Inspect this conversation before another send; this utterance will not be replayed."
+            } else if receipt.delivery.contains(where: { $0.effectiveMode == "rejected" }) {
+                capture.cancel()
+                error = "Message saved; the Bot did not admit this work.\n" + receipt.runs.compactMap { $0.status == "failed" ? $0.error?.message : nil }.joined(separator: "\n")
             } else { capture.cancel() }
         } catch {
+            guard self.session?.id == session.id, store.user?.id == session.userId else { return }
             // A transport error can occur after acceptance. Do not manufacture a retry intent.
             ambiguousSend = true
             self.error = error.localizedDescription + "\nThe reviewed utterance is retained; it will not be automatically resent. Inspect the conversation before continuing."

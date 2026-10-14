@@ -282,6 +282,10 @@ final class MacPlatformController: NSObject {
             if receipt.status == "outcome_unknown" {
                 uncertainVoiceSend = true
                 errorMessage = "Voice message outcome unknown. Inspect this conversation’s entries and runs before another send; this message will not be replayed."
+            } else if receipt.delivery.contains(where: { $0.effectiveMode == "rejected" }) {
+                speech.cancel()
+                speechStatus = "Message saved; the Bot did not admit this work."
+                errorMessage = receipt.runs.compactMap { $0.status == "failed" ? $0.error?.message : nil }.joined(separator: "\n")
             } else {
                 speech.cancel()
                 speechStatus = receipt.status == "queued" ? "Queued; waiting for the Bot’s next turn." : "Sent; waiting for the Bot’s reply."

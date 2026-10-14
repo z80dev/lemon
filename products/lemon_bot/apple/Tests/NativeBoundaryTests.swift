@@ -64,4 +64,15 @@ final class NativeBoundaryTests: XCTestCase {
         XCTAssertNil(account.indexingDelayed ?? nil)
         XCTAssertNil(account.indexingMeasuredAtMs ?? nil)
     }
+
+    func testRejectedDeliveryPreservesFailedRunReasonWithoutInventingStart() throws {
+        let data = Data(#"{"entries":[],"runs":[{"id":"run_refused","revision":1,"createdAtMs":1000,"updatedAtMs":1000,"conversationId":"chat_owned","botId":"bot_remote","initiatorUserId":"user_owner","clientNonce":"receipt_fixed_nonce","status":"failed","error":{"code":"policy_denied","message":"Spend limit exhausted.","requestId":"request_admission","retrySafe":true},"startedAtMs":null,"completedAtMs":1000,"routineRunId":null}],"clientNonce":"receipt_fixed_nonce","status":"accepted","delivery":[{"botId":"bot_remote","requestedMode":"followup","effectiveMode":"rejected","targetRunId":null,"runId":"run_refused"}]}"#.utf8)
+        let receipt = try JSONDecoder().decode(MessageReceipt.self, from: data)
+        XCTAssertEqual(receipt.delivery.first?.effectiveMode, "rejected")
+        XCTAssertEqual(receipt.runs.first?.status, "failed")
+        XCTAssertEqual(receipt.runs.first?.error?.code, "policy_denied")
+        XCTAssertNil(receipt.runs.first?.startedAtMs)
+        XCTAssertNil(receipt.delivery.first?.targetRunId)
+        XCTAssertEqual(receipt.clientNonce, "receipt_fixed_nonce")
+    }
 }
