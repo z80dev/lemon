@@ -71,6 +71,7 @@ defmodule CodingAgent.ProcessStoreServer do
       30_000
     )
   end
+
   @doc false
   def transaction(server, fun) when is_function(fun, 0) do
     GenServer.call(server, {:transaction, fun}, 30_000)
@@ -377,7 +378,7 @@ defmodule CodingAgent.ProcessStoreServer do
           terminal = Map.get(record, :launch_classification) in [:rejected, :expired, :canceled]
 
           if Map.get(record, :termination_confirmed, false) or
-               (cause == :startup_failed and terminal) do
+               ((cause == :startup_failed or match?({:startup_failed, _}, cause)) and terminal) do
             state
           else
             held = capacity_held?(record)
@@ -411,6 +412,7 @@ defmodule CodingAgent.ProcessStoreServer do
 
     {:reply, reply, state}
   end
+
   def handle_call({:cleanup, ttl_seconds}, _from, state) do
     state = ensure_tables(state)
     deleted_count = do_cleanup(ttl_seconds)
@@ -445,8 +447,7 @@ defmodule CodingAgent.ProcessStoreServer do
     state = Enum.reduce(Map.keys(state.live_identity_index), state, &forget_live(&2, &1))
     reply = if failed?, do: {:error, :output_cleanup_failed}, else: :ok
 
-    {:reply, reply,
-     %{state | loaded_from_dets: false, occupied: capacity_counts().occupied}}
+    {:reply, reply, %{state | loaded_from_dets: false, occupied: capacity_counts().occupied}}
   end
 
   def handle_call(:dets_status, _from, state) do
@@ -673,11 +674,13 @@ defmodule CodingAgent.ProcessStoreServer do
     record = Map.merge(record, %{capacity_held: false, termination_confirmed: true})
 
     cond do
-      cause == :startup_failed ->
+      cause == :startup_failed or match?({:startup_failed, _}, cause) ->
+        reason = if cause == :startup_failed, do: cause, else: elem(cause, 1)
+
         Map.merge(record, %{
           status: :error,
           launch_classification: :rejected,
-          launch_reason: :startup_failed,
+          launch_reason: reason,
           completed_at: System.system_time(:second)
         })
 

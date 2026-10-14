@@ -186,7 +186,7 @@ defmodule CodingAgent.ProcessSession do
       {:error, reason} ->
         # A claimed launch never started; release its capacity before stopping.
         if Keyword.get(opts, :launch_fingerprint),
-          do: ProcessStore.confirm_termination(process_id, :startup_failed)
+          do: ProcessStore.confirm_termination(process_id, {:startup_failed, reason})
 
         {:stop, reason}
     end

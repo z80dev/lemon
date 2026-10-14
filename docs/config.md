@@ -560,6 +560,20 @@ Direct `ProcessSession.start_link` is an internal/test primitive, not an agent
 admission bypass. This contract prevents duplicate managed starts for an identity;
 it does not claim exactly-once external side effects.
 
+Unknown Bash launch receipts are tool errors with retained `process_id`,
+`status: "unknown"` and `classification: "outcome_unknown"`, not failed-start
+receipts. Startup rejections preserve their actual pre-execution failure reason.
+Every durable load, including late permission recovery or reopening, restores
+capacity and live owner monitors before permitting a new admission.
+
+Cleared identity tombstones and historical unknown receipts do not expire.
+The default finished-process TTL (86,400 seconds) and cleanup interval
+(300 seconds) do not bound ledger rows; recovery, count and artifact scans grow
+with that history. Observable retained local workloads reconcile after 100 ms
+plus scan cost using a system-wide `ps` snapshot. Ownership-lost and nonlocal
+unknown workloads do not schedule this polling. These are local containment
+contracts, not proof of remote workload termination.
+
 
 The Bun TUI uses the runtime's model and thinking defaults from `[defaults]`.
 The `[tui]` section controls terminal presentation settings loaded at startup.

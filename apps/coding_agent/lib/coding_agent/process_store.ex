@@ -259,6 +259,7 @@ defmodule CodingAgent.ProcessStore do
             |> Map.put(:output, Keyword.get(opts, :output, Map.get(record, :output)))
 
           insert_record(process_id, record, logs)
+
         _ ->
           :ok
       end

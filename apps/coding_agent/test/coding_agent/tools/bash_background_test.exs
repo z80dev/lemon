@@ -46,6 +46,99 @@ defmodule CodingAgent.Tools.BashBackgroundTest do
   end
 
   describe "run_in_background with bash_output and kill_process" do
+    test "launch owner loss reaches the loop as an error with the retained unknown receipt", %{
+      tmp_dir: tmp_dir,
+      session_id: session_id
+    } do
+      store = CodingAgent.ProcessStoreServer
+      test = self()
+
+      # Kill the real ProcessSession at its admission call, before it can start
+      # an OS command. Do not substitute ProcessManager or manufacture a result.
+      interrupt = fn
+        state, {:in, {:"$gen_call", {caller, _}, {:claim_launch, id, ^session_id, _}}}, _server ->
+          ref = Process.monitor(caller)
+          Process.exit(caller, :kill)
+          receive do: ({:DOWN, ^ref, :process, ^caller, :killed} -> :ok)
+          send(test, {:launch_owner_lost, id})
+          state
+
+        state, _event, _server ->
+          state
+      end
+
+      :ok = :sys.install(store, {interrupt, nil})
+
+      on_exit(fn ->
+        :sys.remove(store, interrupt)
+
+        for {id, %{owner: ^session_id}} <- ProcessManager.list() do
+          # The admission barrier above proves this command never started.
+          :ok = ProcessManager.confirm_external_termination(id, session_id)
+          :ok = ProcessManager.clear(id)
+        end
+      end)
+
+      {:ok, tool} =
+        CodingAgent.ToolRegistry.get_tool(tmp_dir, "bash",
+          session_id: session_id,
+          session_pid: self(),
+          include_extensions: false,
+          include_mcp: false
+        )
+
+      args = %{"command" => "printf started > should-not-start", "run_in_background" => true}
+      call = %LemonAi.Types.ToolCall{id: "unknown-background", name: "bash", arguments: args}
+      context = LemonAgent.Types.AgentContext.new(tools: [tool])
+      {:ok, stream} = LemonAgent.EventStream.start_link(timeout: :infinity)
+
+      {[message], [], updated_context, [message]} =
+        LemonAgent.Loop.ToolCalls.execute_and_collect_tools(
+          context,
+          [],
+          [call],
+          %LemonAgent.Types.AgentLoopConfig{},
+          nil,
+          stream
+        )
+
+      assert_receive {:launch_owner_lost, process_id}
+      assert message.is_error
+      assert message.tool_call_id == call.id
+
+      assert %{
+               process_id: ^process_id,
+               status: :unknown,
+               classification: :outcome_unknown,
+               background: true,
+               exit_code: nil
+             } = message.details
+
+      assert List.last(updated_context.messages) == message
+      text = Enum.map_join(message.content, "\n", & &1.text)
+      assert text =~ "Launch outcome unknown for #{process_id}"
+      assert text =~ "do not automatically rerun"
+      refute text =~ "Started background"
+      refute File.exists?(Path.join(tmp_dir, "should-not-start"))
+
+      assert {:ok, %{identity: ^process_id, classification: :outcome_unknown}} =
+               ProcessManager.receipt(process_id, session_id)
+
+      assert {:error, :not_found} = ProcessManager.receipt(process_id, session_id <> "-foreign")
+      assert {:ok, %{capacity_held: true}, _} = ProcessStore.get(process_id)
+
+      LemonAgent.EventStream.complete(stream, [])
+      events = Enum.to_list(LemonAgent.EventStream.events(stream))
+
+      assert Enum.any?(events, fn
+               {:tool_execution_end, "unknown-background", "bash", result, true} ->
+                 result.is_error and result.details == message.details
+
+               _ ->
+                 false
+             end)
+    end
+
     test "bash_output returns only new output, then the exit status", %{
       tmp_dir: tmp_dir,
       session_id: session_id

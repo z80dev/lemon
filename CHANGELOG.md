@@ -28,6 +28,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   an empty host wrapper group cannot release SSH, container or PTY capacity.
   TUI tool cards and compact shelves also preserve queued and outcome-unknown
   receipts instead of presenting them as started or failed.
+- Unknown Bash launch outcomes now preserve their structured process identity
+  through the actual agent event and TUI render path. Late or reopened durable
+  storage restores retained capacity and owner monitors before new admission.
+  Pre-execution startup rejections retain the real failure reason.
 
 ---
 

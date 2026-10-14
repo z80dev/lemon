@@ -495,6 +495,13 @@ Eligible native child sessions receive `ask_parent`. Its request is delivered th
 
 `LaneQueue` monitors callers while jobs wait, removes abandoned queued jobs, and turns a missing or failing task supervisor into a per-job `task_start_failed` result while continuing to drain. Background launch failures never trigger direct fallback: the runtime reconciles the fixed owner-bound identity instead. Launch callback limits are distinct from lifetime capacity; on local Unix, a root shell exit does not release the slot while its owned group has surviving descendants. Unknown workload liveness remains charged until verified termination.
 
+Unknown Bash admissions are structured error receipts carrying their original
+process identity; the tool card and compact shelf say `background outcome
+unknown`, never successful start or failed start. Late/reopened durable storage
+restores occupied capacity before admission. Cleared identity tombstones and
+historical unknown receipts have no TTL; local retained groups incur a
+system-wide `ps` reconciliation scan after 100 ms plus scan cost.
+
 Hermes-compatible background commands use the same native runtime. Call
 `CodingAgent.BackgroundRun.start/2` to receive a durable id immediately, then
 use `list/1`, `status/1`, `result/1`, or `cancel/2`. Each run owns a fresh

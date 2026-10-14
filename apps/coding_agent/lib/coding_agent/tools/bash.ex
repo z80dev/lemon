@@ -229,9 +229,23 @@ defmodule CodingAgent.Tools.Bash do
         }
 
       {:error, {:outcome_unknown, process_id}} ->
-        {:error,
-         "Launch outcome unknown for #{process_id}. Reconcile with bash_output; " <>
-           "do not automatically rerun the command."}
+        %AgentToolResult{
+          content: [
+            %TextContent{
+              text:
+                "Launch outcome unknown for #{process_id}. Reconcile with bash_output; " <>
+                  "do not automatically rerun the command."
+            }
+          ],
+          details: %{
+            process_id: process_id,
+            status: :unknown,
+            classification: :outcome_unknown,
+            exit_code: nil,
+            background: true
+          },
+          is_error: true
+        }
 
       {:error, reason} ->
         {:error, "Failed to start background process: #{inspect(reason)}"}
