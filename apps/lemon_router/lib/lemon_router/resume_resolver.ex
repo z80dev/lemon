@@ -231,7 +231,6 @@ defmodule LemonRouter.ResumeResolver do
     fetch(meta, :disable_auto_resume) == true
   end
 
-  defp disable_auto_resume?(_), do: false
 
   defp fetch(map, key) when is_map(map) and is_atom(key) do
     Map.get(map, key) || Map.get(map, Atom.to_string(key))

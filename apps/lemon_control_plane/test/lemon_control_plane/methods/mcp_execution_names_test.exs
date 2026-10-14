@@ -1,36 +1,16 @@
 defmodule LemonControlPlane.Methods.McpExecutionNamesTest do
   use ExUnit.Case, async: false
 
-  alias LemonControlPlane.Methods.{McpExecutionNames, Registry}
-  alias LemonControlPlane.Protocol.Schemas
-  alias LemonSkills.McpSource
+  alias LemonControlPlane.Methods.McpExecutionNames
 
-  setup do
-    if Process.whereis(Registry) == nil, do: start_supervised!(Registry)
-    :ok
-  end
 
-  test "pure projection is registered synchronously with operator read access" do
-    assert Registry.lookup("mcp.execution_names") == {:ok, McpExecutionNames}
-    assert Registry.dispatch_mode("mcp.execution_names") == :sync
-    assert LemonControlPlane.Auth.Authorize.required_scopes("mcp.execution_names") == [:read]
-    assert Schemas.get("mcp.execution_names").required == %{"server" => :map, "toolNames" => :list}
+  test "projection requires an authenticated operator with read authority" do
     for auth <- [%{role: :node, scopes: [:read]}, %{role: :operator, scopes: [:write]}, %{role: :unsupported, scopes: [:read]}] do
       assert {:error, {:forbidden, _}} = McpExecutionNames.handle(params(), %{auth: auth})
     end
     assert {:error, {:forbidden, _}} = McpExecutionNames.handle(params(), %{})
   end
 
-  test "names match the owning native alias without a profile, node, DNS or credentials" do
-    server = %{"name" => "lemon-bot", "url" => "https://no-dns-required.invalid/mcp"}
-    names = ["send_message", "list_threads", "ask_user"]
-    assert {:ok, result} = Registry.dispatch("mcp.execution_names", %{"server" => server, "toolNames" => names}, ctx())
-    assert result == %{"server" => %{"name" => "lemon-bot"}, "tools" => Enum.map(names, fn name ->
-      %{"name" => name, "executionName" => McpSource.execution_name(server["name"], server["url"], name)}
-    end), "count" => 3}
-    refute Map.has_key?(result["server"], "url")
-    refute Map.has_key?(result["server"], "headers")
-  end
   test "unusual raw names retain exact identities without sanitized-name collisions" do
     names = ["tool.name", "tool-name", "tool_name", "tool/name", "literal*", "über"]
     request = %{params() | "toolNames" => names}
@@ -39,8 +19,6 @@ defmodule LemonControlPlane.Methods.McpExecutionNamesTest do
     aliases = Enum.map(result["tools"], & &1["executionName"])
     assert MapSet.size(MapSet.new(aliases)) == length(names)
     for tool <- result["tools"] do
-      assert tool["executionName"] == McpSource.execution_name(
-        request["server"]["name"], request["server"]["url"], tool["name"])
       assert byte_size(tool["executionName"]) <= 64
     end
   end

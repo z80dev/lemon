@@ -628,8 +628,6 @@ defmodule LemonControlPlane.Protocol.Schemas do
         "invocationToolPolicy" => :map,
         "agentId" => :string,
         "profileId" => :string,
-        "invocationMcpServers" => :list,
-        "invocationToolPolicy" => :map,
         "cwd" => :string,
         "images" => :list,
         "queueMode" => :string
