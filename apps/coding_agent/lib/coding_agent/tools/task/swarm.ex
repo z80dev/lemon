@@ -15,6 +15,10 @@ defmodule CodingAgent.Tools.Task.Swarm do
   @poll_ms 20
 
   def execute(tool_call_id, params, signal, on_update, cwd, opts) do
+    # Capture the caller's execution context once; the coordinator outlives this call
+    # and must not re-read parent session state for each node.
+    opts = Keyword.merge(opts, Map.to_list(Params.inherited_execution_context(opts)))
+
     # The coordinator root is not a persona launch, so a spawns allowlist applies to nodes only.
     root_opts = Keyword.delete(opts, :task_allowed_agents)
 

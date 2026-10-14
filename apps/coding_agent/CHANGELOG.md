@@ -10,6 +10,10 @@
 
 ### Fixed
 
+- Swarm nodes inherit the execution context captured when the swarm launched
+  instead of re-reading parent session state per node, and persona `spawns`
+  keeps its `task` grant under preset tool-policy floors while other
+  leaf-worker denials remain.
 - `BashExecutor` keeps output that races an abort or timeout: a chunk that
   arrives after the abort flag is set, or is already in the mailbox when the
   process tree is killed, is now part of the partial result instead of being

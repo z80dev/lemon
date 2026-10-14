@@ -960,9 +960,10 @@ defmodule CodingAgent.Tools.Task.Params do
   defp default_task_tool_policy(nil), do: ToolPolicy.from_profile(:leaf_worker)
 
   # Persona `spawns` lifts only the leaf worker's task denial; other delegation stays denied.
+  # A custom profile keeps the leaf preset floor from re-adding the lifted denial.
   defp default_task_tool_policy(_spawns) do
     policy = ToolPolicy.from_profile(:leaf_worker)
-    %{policy | deny: List.delete(policy.deny, "task")}
+    %{policy | deny: List.delete(policy.deny, "task"), profile: :custom}
   end
 
   defp infer_tool_only_policy(prompt) when is_binary(prompt) do
