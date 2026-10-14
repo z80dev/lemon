@@ -167,10 +167,10 @@ defmodule CodingAgent.CommandsTest do
       assert result == "Fix bug in login.ex"
     end
 
-    test "handles missing positional args" do
+    test "missing positional args become empty" do
       cmd = %{template: "Value: $1, Other: $2"}
       result = Commands.expand(cmd, ["only-one"])
-      assert result == "Value: only-one, Other: $2"
+      assert result == "Value: only-one, Other: "
     end
 
     test "handles empty args" do
@@ -799,10 +799,9 @@ defmodule CodingAgent.CommandsTest do
       assert Commands.parse_input("/cmd   \t   ") == {"cmd", []}
     end
 
-    test "preserves internal spaces in quoted-like content" do
-      # Note: parse_input does simple split, doesn't handle quotes
-      result = Commands.parse_input("/cmd \"hello world\"")
-      assert result == {"cmd", ["\"hello", "world\""]}
+    test "groups quoted arguments" do
+      assert Commands.parse_input("/cmd \"hello world\" 'it is' x") ==
+               {"cmd", ["hello world", "it is", "x"]}
     end
 
     test "unicode whitespace (non-breaking space) is NOT treated as separator" do
@@ -870,10 +869,10 @@ defmodule CodingAgent.CommandsTest do
   end
 
   describe "edge cases" do
-    test "handles empty template" do
+    test "empty template becomes the argument text" do
       cmd = %{template: ""}
-      result = Commands.expand(cmd, ["arg1", "arg2"])
-      assert result == ""
+      assert Commands.expand(cmd, ["arg1", "arg2"]) == "arg1 arg2"
+      assert Commands.expand(cmd, []) == ""
     end
 
     test "handles template with only placeholders" do

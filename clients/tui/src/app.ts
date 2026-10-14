@@ -34,6 +34,11 @@ import * as postmortem from "@oh-my-pi/pi-utils/postmortem";
 import { indentBlock, pickNumber, pickString } from "./commands/format.ts";
 import { type CommandHost, type CommandRegistry, createCommandRegistry } from "./commands/index.ts";
 import { contextWindowFromCache } from "./commands/model.ts";
+import {
+	discoverFileCommands,
+	fileSlashCommand,
+	type PaletteSourceOptions,
+} from "./commands/palette-source.ts";
 import { parsePlanReceipt } from "./commands/plan.ts";
 import { SUBMISSION_MODES } from "./commands/registry.ts";
 import {
@@ -121,6 +126,8 @@ export interface AppShellOptions {
 	 * terminal's OSC 11 reports for as long as the client runs.
 	 */
 	themePreference?: ThemePreference;
+	/** Local roots for skills, prompts and file commands; tests inject a fixture home. */
+	resources?: Omit<PaletteSourceOptions, "cwd">;
 }
 
 export class AppShell {
@@ -354,6 +361,9 @@ export class AppShell {
 		this.#host = this.#buildHost();
 		this.commands = createCommandRegistry({
 			openExternalEditor: () => this.openExternalEditor(),
+		}).setFileCommandSource(async () => {
+			const found = await discoverFileCommands({ ...options.resources, cwd: this.#cwd });
+			return { commands: found.commands.map(fileSlashCommand), issues: found.issues };
 		});
 		this.#palette = new CommandPalette({
 			context: () => ({
@@ -372,6 +382,7 @@ export class AppShell {
 			present: (overlay) => this.selectors.open(overlay),
 			repaint: () => this.selectors.repaint(),
 			notice: (text, level) => this.events.notice(text, level),
+			resources: options.resources,
 		});
 		this.commandController = new CommandController({
 			registry: this.commands,

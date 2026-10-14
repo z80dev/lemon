@@ -82,6 +82,12 @@ defmodule LemonCore.AgentRuntime.Provider do
   """
   @callback resolve_subagent(Path.t(), String.t()) :: {:ok, map()} | {:error, atom()}
 
+  @doc """
+  File-defined slash commands available in a working directory, as
+  `%{name, description, argument_hint}` display maps. Templates stay private.
+  """
+  @callback slash_commands(Path.t()) :: [map()]
+
   @doc "Starts an isolated durable background agent session."
   @callback background_start(String.t(), keyword()) :: {:ok, map()} | {:error, term()}
 
@@ -152,6 +158,7 @@ defmodule LemonCore.AgentRuntime.Provider do
                       session_context_usage: 2,
                       tool_policy: 1,
                       resolve_subagent: 2,
+                      slash_commands: 1,
                       background_start: 2,
                       background_list: 1,
                       background_status: 1,
