@@ -22,7 +22,6 @@ defmodule LemonRouter.RunReceiptStoreTest do
     receipt = Map.put(receipt("run"), :request_identity, identity)
     assert :ok = RunReceiptStore.put(store, Map.merge(receipt, %{prompt: "private", error: {:secret, "raw"}}))
     assert {:ok, ^receipt} = RunReceiptStore.fetch(store, "run")
-    assert :ok = Store.sync(store)
 
     stop_supervised!(Store)
     start_supervised!({Store, opts})
@@ -67,13 +66,17 @@ defmodule LemonRouter.RunReceiptStoreTest do
     receipt = Map.put(receipt("follower"), :request_identity, identity)
     assert :ok = RunReceiptStore.put(store, receipt)
     assert :ok = RunReceiptStore.mark_unknown(store, "follower")
-    assert :ok = Store.sync(store)
     stop_supervised!(Store)
     start_supervised!({Store, opts})
 
     assert {:ok, %{state: :outcome_unknown, effective_mode: nil, target_run_id: nil,
                    request_identity: ^identity}} = RunReceiptStore.fetch(store, "follower")
     assert :ok = RunReceiptStore.update(store, "follower", %{effective_mode: :merged, target_run_id: "survivor"})
+    assert {:ok, %{state: :accepted, effective_mode: :merged, target_run_id: "survivor",
+                   request_identity: ^identity}} = RunReceiptStore.fetch(store, "follower")
+
+    stop_supervised!(Store)
+    start_supervised!({Store, opts})
     assert {:ok, %{state: :accepted, effective_mode: :merged, target_run_id: "survivor",
                    request_identity: ^identity}} = RunReceiptStore.fetch(store, "follower")
   end

@@ -475,11 +475,15 @@ defmodule LemonRouter.RunOrchestrator do
   end
 
   defp continue_accepted_admission(params, identity, admission, state) do
-    _ = admission
-    cache_until_ms = System.system_time(:millisecond) + state.run_admission_retention_ms
+    case sync_accepted_admission(admission, state.run_admission_retention_ms) do
+      {:ok, _expires_at_ms} ->
+        cache_until_ms = System.system_time(:millisecond) + state.run_admission_retention_ms
+        {{:ok, params.run_id},
+         cache_accepted_admission(state, params.run_id, identity, cache_until_ms)}
 
-    {{:ok, params.run_id},
-     cache_accepted_admission(state, params.run_id, identity, cache_until_ms)}
+      {:error, _reason} ->
+        {{:error, :outcome_unknown}, state}
+    end
   end
 
   # A durable terminal run is evidence that an earlier owner crossed the
@@ -559,8 +563,8 @@ defmodule LemonRouter.RunOrchestrator do
     # timestamps are not needed to reject a replay and must not live forever.
     submitting = compact_admission("submitting", identity)
 
-    case Store.compare_and_swap(@run_admission_table, params.run_id, admission, submitting) do
-      :ok ->
+    with :ok <- Store.compare_and_swap(@run_admission_table, params.run_id, admission, submitting),
+         :ok <- Store.sync() do
         case do_submit(attach_request_identity(params, identity), state) do
           {:ok, run_id} ->
             case persist_accepted_admission(
@@ -590,11 +594,16 @@ defmodule LemonRouter.RunOrchestrator do
                    submitting,
                    admission
                  ) do
-              :ok -> {error, state}
+              :ok ->
+                case Store.sync() do
+                  :ok -> {error, state}
+                  _ -> {{:error, :outcome_unknown}, state}
+                end
               _failure -> {{:error, :outcome_unknown}, state}
             end
         end
 
+    else
       _failure ->
         {{:error, :outcome_unknown}, state}
     end
@@ -678,13 +687,16 @@ defmodule LemonRouter.RunOrchestrator do
 
     case Store.compare_and_swap(@run_admission_table, run_id, expected, replacement) do
       :ok ->
-        {:ok, expires_at_ms}
+        case Store.sync() do
+          :ok -> {:ok, expires_at_ms}
+          _ -> {:error, :admission_store_unavailable}
+        end
 
       {:error, :mismatch} when attempts_left > 0 ->
         case existing_admission(run_id, identity) do
           {:ok, current, :existing} ->
             if MapHelpers.get_key(current, :state) == "accepted",
-              do: {:ok, admission_expires_at_ms(current, retention_ms)},
+              do: sync_accepted_admission(current, retention_ms),
               else:
                 persist_accepted_admission(
                   run_id,
@@ -706,6 +718,13 @@ defmodule LemonRouter.RunOrchestrator do
     end
   catch
     :exit, _ -> {:error, :admission_store_unavailable}
+  end
+
+  defp sync_accepted_admission(admission, retention_ms) do
+    case Store.sync() do
+      :ok -> {:ok, admission_expires_at_ms(admission, retention_ms)}
+      _ -> {:error, :admission_store_unavailable}
+    end
   end
 
   defp cache_accepted_admission(state, run_id, identity, expires_at_ms) do

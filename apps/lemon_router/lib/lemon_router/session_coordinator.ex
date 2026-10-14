@@ -56,10 +56,11 @@ defmodule LemonRouter.SessionCoordinator do
 
   The receipt is written after transition effects and before acknowledgement.
   Steering casts return a pending mode until the invocation accepts them.
-  Replaying an existing receipt is a read: it never dispatches work again,
-  including for merged follower IDs. A write failure after mutation returns
-  `{:error, :outcome_unknown}`; retain the run ID and reconcile, do not resubmit
-  it under a fresh ID. `:receipt_store` optionally selects a Store instance.
+  Replaying an existing receipt never dispatches work again, including for
+  merged follower IDs, but requires a successful storage durability barrier.
+  A write or replay barrier failure returns `{:error, :outcome_unknown}`; retain
+  the run ID and reconcile, do not resubmit it under a fresh ID.
+  `:receipt_store` optionally selects a Store instance.
   """
   @spec submit_with_receipt(term(), Submission.t() | map() | keyword(), keyword()) ::
           {:ok, RunReceiptStore.receipt()} | {:error, term()}
@@ -76,6 +77,9 @@ defmodule LemonRouter.SessionCoordinator do
         with {:ok, pid} <- ensure_coordinator(conversation_key, opts) do
           GenServer.call(pid, {:submit_with_receipt, submission}, 15_000)
         end
+
+      {:error, {:sync_failed, _reason}} ->
+        {:error, :outcome_unknown}
 
       {:error, _reason} = error ->
         error
@@ -302,6 +306,9 @@ defmodule LemonRouter.SessionCoordinator do
           admit_submission(state, submission)
         end
 
+      {:error, {:sync_failed, _reason}} ->
+        {:reply, {:error, :outcome_unknown}, state}
+
       {:error, _reason} = error ->
         {:reply, error, state}
     end
@@ -350,6 +357,7 @@ defmodule LemonRouter.SessionCoordinator do
                 {:reply, ack, next_state}
 
               {:error, _reason} ->
+                %SessionState{} = next_state
                 next_state = %SessionState{
                   next_state
                   | unpersisted_receipts:

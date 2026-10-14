@@ -145,6 +145,13 @@ dispatching again; changed content, placement, images or queue mode conflicts
 with `CONFLICT` and details `code: "RUN_ID_CONFLICT"`. Profile edits can change
 the resolved intent, so do not use a resubmission as a substitute for receipt reads.
 
+The configured Store must support a successful durability barrier. The router
+flushes its submitting fence before dispatch, uncertainty fences before merge
+effects, and receipts before acknowledging them. A failed barrier preserves the
+fixed ID as `outcome_unknown`; work never dispatches across an unproven fence.
+Receipt replay/readback also requires a successful barrier, so an earlier failed
+flush cannot turn a merely visible row into a durable acceptance.
+
 Success includes `runId`, `sessionKey`, `state: "accepted"`, `effectiveMode`,
 `targetRunId`, and `retrySafe: false`. Requested `queueMode` in the redacted
 summary is not evidence of the effective action:

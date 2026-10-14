@@ -165,6 +165,26 @@ defmodule LemonRouter.RunOrchestratorTest do
     def fetch(_run_id), do: {:error, :store_unavailable}
   end
 
+  defmodule AdmissionBarrierBackend do
+    @behaviour LemonCore.Store.Backend
+
+    def init(opts), do: {:ok, %{data: %{}, refuse_sync: opts[:refuse_sync]}}
+    def put(state, table, key, value),
+      do: {:ok, %{state | data: Map.put(state.data, {table, key}, value)}}
+    def put_new(state, table, key, value) do
+      if Map.has_key?(state.data, {table, key}),
+        do: {:exists, state},
+        else: put(state, table, key, value)
+    end
+    def get(state, table, key), do: {:ok, Map.get(state.data, {table, key}), state}
+    def delete(state, table, key),
+      do: {:ok, %{state | data: Map.delete(state.data, {table, key})}}
+    def list(state, table),
+      do: {:ok, for({{^table, key}, value} <- state.data, do: {key, value}), state}
+    def sync(%{refuse_sync: true}), do: {:error, :barrier_refused}
+    def sync(state), do: {:ok, state}
+  end
+
   setup do
     ensure_pubsub()
 
@@ -319,6 +339,45 @@ defmodule LemonRouter.RunOrchestratorTest do
       assert {:ok, ^receipt} = RunOrchestrator.submit_with_receipt(orchestrator, intent)
       assert {:error, :run_id_conflict} =
                RunOrchestrator.submit_with_receipt(orchestrator, %{intent | prompt: "different"})
+    end
+
+    @tag capture_log: true
+    test "a failed submitting durability barrier keeps the fixed intent unknown without dispatch" do
+      original_store_state = :sys.get_state(LemonCore.Store)
+      :sys.replace_state(LemonCore.Store, fn state ->
+        {:ok, backend_state} = AdmissionBarrierBackend.init(refuse_sync: true)
+        %{state | backend: AdmissionBarrierBackend, backend_state: backend_state}
+      end)
+      on_exit(fn -> :sys.replace_state(LemonCore.Store, fn _ -> original_store_state end) end)
+      run_supervisor = start_supervised!({DynamicSupervisor, strategy: :one_for_one})
+      run_id = "run_barrier_fixed_#{System.unique_integer([:positive])}"
+      opts = [name: nil, run_supervisor: run_supervisor,
+              run_process_module: PersistentCapturingRunProcess,
+              run_process_opts: %{notify_pid: self()}]
+      orchestrator = start_supervised!({RunOrchestrator, opts}, id: :first_barrier_owner)
+      intent = request(%{run_id: run_id, origin: :control_plane,
+                         session_key: "agent:barrier:test:#{run_id}",
+                         agent_id: "test", prompt: "never dispatch without stable fence"})
+
+      assert {:error, :outcome_unknown} =
+               RunOrchestrator.submit_with_receipt(orchestrator, intent)
+      refute_receive {:bridge_subscribed, ^run_id}, 50
+      refute_receive {:captured_run_opts, %{run_id: ^run_id}}, 50
+      assert {:ok, %{run_id: ^run_id, state: :outcome_unknown,
+                     effective_mode: nil, target_run_id: nil}} =
+               RunOrchestrator.run_receipt(run_id)
+
+      :sys.replace_state(LemonCore.Store, fn state ->
+        %{state | backend_state: %{state.backend_state | refuse_sync: false}}
+      end)
+      stop_supervised!(:first_barrier_owner)
+      replacement = start_supervised!({RunOrchestrator, opts}, id: :replacement_barrier_owner)
+      assert {:error, :outcome_unknown} =
+               RunOrchestrator.submit_with_receipt(replacement, intent)
+      assert {:ok, %{run_id: ^run_id, state: :outcome_unknown}} =
+               RunOrchestrator.run_receipt(run_id)
+      refute_receive {:bridge_subscribed, ^run_id}, 50
+      refute_receive {:captured_run_opts, %{run_id: ^run_id}}, 50
     end
 
     test "an accepted receipt survives completion and rejects conflicting run-id reuse" do
