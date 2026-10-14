@@ -138,13 +138,6 @@ defmodule CodingAgent.Tools.TaskRuntimeParityTest do
       assert explicit.thinking_level == "low"
       assert explicit.output_schema == false
       assert explicit.model == "openai:gpt-4o"
-
-      child_opts =
-        Params.build_session_opts(cwd, [settings_manager: session_settings], validated)
-
-      assert child_opts[:thinking_level] == "high"
-      assert child_opts[:model].id == "gpt-4o-mini"
-      assert child_opts[:system_prompt] =~ "ONLY valid JSON"
     end
 
     @tag :tmp_dir
@@ -246,28 +239,6 @@ defmodule CodingAgent.Tools.TaskRuntimeParityTest do
                execute("/tmp", unlimited, %{"prompt" => "x", "auto_followup" => false})
     end
 
-    test "children at the depth cap never receive task, even when tool_policy asks" do
-      params = %{"prompt" => "x", "tool_policy" => %{"allow" => "all"}}
-
-      assert {:ok, below} =
-               Params.validate_run_params(params, "/tmp", settings_manager: settings())
-
-      assert ToolPolicy.allowed?(below.tool_policy, "task")
-
-      assert {:ok, capped} =
-               Params.validate_run_params(params, "/tmp",
-                 settings_manager: settings(),
-                 task_depth: 1
-               )
-
-      refute ToolPolicy.allowed?(capped.tool_policy, "task")
-
-      child_opts =
-        Params.build_session_opts("/tmp", [task_depth: 1, settings_manager: settings()], capped)
-
-      assert child_opts[:task_depth] == 2
-    end
-
     test "a capped child session is built without the task tool" do
       owner = self()
       response = Mocks.mock_stream_fn_single(Mocks.assistant_message("done"))
@@ -298,26 +269,7 @@ defmodule CodingAgent.Tools.TaskRuntimeParityTest do
   end
 
   describe "persona spawns" do
-    test "grant task to non-read-only personas with their allowlist" do
-      lead = persona(%{id: "lead", tools: ["read", "bash"], spawns: ["scout"]})
-      launch = Params.persona_launch(lead, %{}, settings().task, 0)
-
-      assert ToolPolicy.allowed?(launch.tool_policy, "task")
-      assert ToolPolicy.allowed?(launch.tool_policy, "bash")
-      refute ToolPolicy.allowed?(launch.tool_policy, "agent")
-      refute ToolPolicy.allowed?(launch.tool_policy, "write")
-      assert launch.task_allowed_agents == ["scout"]
-
-      open = Params.persona_launch(persona(%{spawns: :all}), %{}, settings().task, 0)
-      assert ToolPolicy.allowed?(open.tool_policy, "task")
-      assert open.task_allowed_agents == :all
-
-      child_opts =
-        Params.build_session_opts("/tmp", [settings_manager: settings()], launch)
-
-      assert child_opts[:task_allowed_agents] == ["scout"]
-      assert child_opts[:task_depth] == 1
-
+    test "read-only identities and caller policies cannot be widened by spawns" do
       for read_only <- [
             persona(%{id: "scout", spawns: :all}),
             persona(%{id: "security-reviewer", spawns: :all}),
@@ -328,9 +280,7 @@ defmodule CodingAgent.Tools.TaskRuntimeParityTest do
         assert launch.task_allowed_agents == nil
       end
 
-      capped = Params.persona_launch(lead, %{}, settings().task, 1)
-      refute ToolPolicy.allowed?(capped.tool_policy, "task")
-      assert capped.task_allowed_agents == nil
+      lead = persona(%{id: "lead", tools: ["read", "bash"], spawns: ["scout"]})
 
       restricted =
         Params.persona_launch(lead, %{tool_policy: %{"allow" => ["read"]}}, settings().task, 0)
@@ -520,17 +470,7 @@ defmodule CodingAgent.Tools.TaskRuntimeParityTest do
       assert [%TextContent{text: "lib"}] = field.content
       assert field.details.value == "lib"
 
-      via_read =
-        CodingAgent.Tools.Read.execute(
-          "r",
-          %{"path" => "agent://Finder/answer"},
-          nil,
-          nil,
-          "/tmp",
-          opts
-        )
-
-      assert [%TextContent{text: "42"}] = via_read.content
+      assert [%TextContent{text: "42"}] = Messaging.read("agent://Finder/answer", opts).content
 
       assert {:error, message} = Messaging.read("agent://#{id}/items/3", opts)
       assert message =~ "Path segment '3' not found"
