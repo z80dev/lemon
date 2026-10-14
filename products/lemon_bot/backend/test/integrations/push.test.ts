@@ -1,11 +1,13 @@
-import { describe, expect, test } from 'bun:test';
-import { createCipheriv, createDecipheriv, createECDH, createPrivateKey, hkdfSync, verify } from 'node:crypto';
+import { afterEach, describe, expect, test } from 'bun:test';
+import { createDecipheriv, createECDH, createPrivateKey, hkdfSync, verify } from 'node:crypto';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type * as P from '../../../contracts/protocol';
 import type { BackendServices, Principal } from '../../src/core/services';
 import { apnsToken, createPushServices, encryptWebPush, isPublicPushAddress, validatePushRegistration, vapidToken } from '../../src/integrations/push';
+import { createPrivateCodec } from '../../src/core/config';
+import { closeFixture, entityStore, fixture as channelFixture } from './channels-fixture';
 
 const now = 1_791_940_000_000;
 const scalar = (n: number) => { const b=Buffer.alloc(32);b[31]=n;return b; };
@@ -21,29 +23,70 @@ function decrypt(body: Uint8Array, privateKey=scalar(2), auth=Buffer.alloc(16,7)
   const key=Buffer.from(hkdfSync('sha256',ikm,salt,Buffer.from('Content-Encoding: aes128gcm\0'),16)),nonce=Buffer.from(hkdfSync('sha256',ikm,salt,Buffer.from('Content-Encoding: nonce\0'),12));
   const decoder=createDecipheriv('aes-128-gcm',key,nonce);decoder.setAuthTag(b.subarray(-16));const plain=Buffer.concat([decoder.update(b.subarray(21+length,-16)),decoder.final()]);expect(plain[plain.length-1]).toBe(2);return plain.subarray(0,-1);
 }
-interface SessionSecretFixture { revoked: boolean }
-interface PushFixture { services: BackendServices; rows: Map<string,unknown>; metadata: Map<string,unknown>; events: string[]; audits: unknown[]; notification: P.Notification; advance(ms:number): void }
+interface SessionSecretFixture { id: string; revoked: boolean }
+interface FixtureMetadata { get(key: string): unknown; set(key: string, value: unknown): void }
+interface PushFixture { services: BackendServices; metadata: FixtureMetadata; events: string[]; audits: unknown[]; notification: P.Notification; advance(ms:number): void; change<T extends { id: string }>(collection: string, id: string, mutate: (value: T) => void): void }
+const openFixtures: BackendServices[] = [];
+afterEach(() => { for (const services of openFixtures.splice(0)) closeFixture(services); });
 function fixture(): PushFixture {
-  let clock=now,ivCounter=0;const rows=new Map<string,unknown>(),metadata=new Map<string,unknown>();const events:string[]=[],audits:unknown[]=[];
-  const r={revision:1,createdAtMs:now,updatedAtMs:now};
-  rows.set('users:user',{...r,id:'user',notifications:{enabled:true,sound:true,previews:true,completed:true,needsInput:true}});
-  rows.set('members:member',{...r,id:'member',userId:'user',enabled:true,role:'member'});rows.set('workspaces:workspace',{...r,id:'workspace',enabled:true});
-  rows.set('entries:entry',{...r,id:'entry',conversationId:'conversation'});
-  for(const d of ['device','otherDevice']) {rows.set(`devices:${d}`,{...r,id:d,userId:'user',pushEnabled:true});rows.set(`authSessions:${d}`,{...r,id:d,userId:'user',deviceId:d,expiresAtMs:now+30*86400000});rows.set(`sessionSecrets:${d}`,{id:d,revoked:false});}
-  const services={
-    now:()=>clock,
-    store:{ get:(c:string,id:string)=>rows.get(`${c}:${id}`)??null,list:(c:string,predicate?:(value:unknown)=>boolean)=>[...rows.entries()].filter(([key,value])=>key.startsWith(`${c}:`)&&(!predicate||predicate(value))).map(([,value])=>value),put:(c:string,value:{id:string})=>{rows.set(`${c}:${value.id}`,value);return value;},metadata:(key:string)=>metadata.get(key)??null,setMetadata:(key:string,value:unknown)=>{metadata.set(key,value);},transaction:<T>(operation:()=>T):T=>operation() },
-    encrypt:(value:unknown)=>{const iv=Buffer.alloc(12);iv.writeUInt32BE(++ivCounter,8);const cipher=createCipheriv('aes-256-gcm',Buffer.alloc(32,9),iv);const bytes=Buffer.concat([cipher.update(JSON.stringify(value)),cipher.final()]);return JSON.stringify({iv:iv.toString('base64'),data:bytes.toString('base64'),tag:cipher.getAuthTag().toString('base64')});},
-    decrypt:(encrypted:string)=>{const value=JSON.parse(encrypted) as {iv:string;data:string;tag:string};const decipher=createDecipheriv('aes-256-gcm',Buffer.alloc(32,9),Buffer.from(value.iv,'base64'));decipher.setAuthTag(Buffer.from(value.tag,'base64'));return JSON.parse(Buffer.concat([decipher.update(Buffer.from(value.data,'base64')),decipher.final()]).toString());},
-    auth:{conversation:(_p:unknown,id:string)=>{if(id!=='conversation')throw new Error('invisible');return{id};},bot:(_p:unknown,id:string)=>{if(id!=='bot')throw new Error('invisible');return{id,sidebar:metadata.get('sidebar')??{hidden:false,notificationsEnabled:true}};},canRead:()=>metadata.get('deny')!==true,machine:(p:Principal)=>{if(p.role==='member')throw new Error('host authority revoked');return{};}},
-    integrations:{effectivePolicy:async()=>({productAccess:metadata.get('denyAccess')!==true})},
-    update:<T extends {revision:number;updatedAtMs:number}>(value:T,changes:Partial<T>):T=>({...value,...changes,revision:value.revision+1,updatedAtMs:clock}),
-    events:{emit:(event:string)=>{events.push(event);}},audit:(...args:unknown[])=>{audits.push(args);},
-  } as unknown as BackendServices;
-  metadata.set('devicePush:device',services.encrypt(subscription));
-  metadata.set('devicePushRegisteredAt:device',now);
-  const notification:P.Notification={...r,id:'notification',userId:'user',conversationId:'conversation',botId:'bot',entryId:'entry',kind:'question',title:'secret fixture-key',body:'private terminal output and password',requestId:null,readAtMs:null,dismissedAtMs:null,target:{kind:'entry',botId:'bot',conversationId:'conversation',taskConversationId:null,entryId:'entry'},deepLink:'lemonbot://unsafe?token=credential'};
-  return {services,rows,metadata,events,audits,notification,advance:(ms:number)=>{clock+=ms;}};
+  const principal: Principal = { kind: 'user', id: 'user', userId: 'user', workspaceId: 'workspace', role: 'member', sessionId: 'device', botId: null, deviceId: 'device' };
+  const state = channelFixture(entityStore(), principal), services = state.services;
+  openFixtures.push(services); state.setClock(now);
+  let clock = now; const events: string[] = [], audits: unknown[] = [];
+  const metadata: FixtureMetadata = { get: key => services.store.metadata(key), set: (key, value) => services.store.setMetadata(key, value) };
+  const codec = createPrivateCodec(new Uint8Array(32).fill(9));
+  services.encrypt = codec.encrypt; services.decrypt = codec.decrypt;
+  const user = services.store.require<P.User>('users', 'user');
+  services.store.put('users', { ...user, notifications: { enabled: true, sound: true, previews: true, completed: true, needsInput: true } });
+  const member = services.store.require<P.Member>('members', 'user');
+  services.store.remove('members', member.id); services.store.put('members', { ...member, id: 'member' });
+  services.store.remove('bots', state.bot.id);
+  services.store.put('bots', { ...state.bot, id: 'bot', mainConversationId: 'conversation' });
+  const conversation = services.store.require<P.Conversation>('conversations', state.bot.mainConversationId);
+  services.store.remove('conversations', conversation.id);
+  services.store.put('conversations', { ...conversation, id: 'conversation', botIds: ['bot'], leadBotId: 'bot' });
+  const entry: P.TranscriptEntry = { ...services.resource('entry', {}), id: 'entry', conversationId: 'conversation', seq: 1, timestampMs: now, actor: { kind: 'system', id: null, displayName: 'System' }, clientNonce: null, batchId: null, replyToEntryId: null, runId: null, targetedUserId: null, reactions: [], kind: 'message', role: 'user', text: 'Private notification fixture', streaming: false, attachmentIds: [] };
+  services.store.put('entries', entry);
+  for (const id of ['device', 'otherDevice']) {
+    const device: P.Device = { ...services.resource('device', {}), id, userId: 'user', platform: 'web', name: id, appVersion: 'test', pushEnabled: true, lastSeenAtMs: now };
+    const session: P.AuthSession = { ...services.resource('session', {}), id, userId: 'user', deviceId: id, expiresAtMs: now + 30 * 86400000, lastSeenAtMs: now, current: true };
+    services.store.put('devices', device); services.store.put('authSessions', session); services.store.put<SessionSecretFixture>('sessionSecrets', { id, revoked: false });
+  }
+  const access = services.auth;
+  services.auth = {
+    ...access,
+    member(userId) { const member = services.store.list<P.Member>('members', value => value.userId === userId)[0]; if (!member) throw new Error('Member not found.'); return member; },
+    conversation(actor, id) { if (id !== 'conversation') throw new Error('invisible'); return access.conversation(actor, id); },
+    bot(actor, id, manage) {
+      if (id !== 'bot') throw new Error('invisible');
+      const bot = access.bot(actor, id, manage), sidebar = services.store.metadata<Pick<P.Bot['sidebar'], 'hidden' | 'notificationsEnabled'>>('sidebar');
+      return sidebar ? { ...bot, sidebar: { ...bot.sidebar, ...sidebar } } : bot;
+    },
+    canRead(actor, collection, entity) {
+      if (metadata.get('deny') === true) return false;
+      if (collection === 'entries' && entity && typeof entity === 'object' && 'conversationId' in entity && typeof entity.conversationId === 'string') {
+        try { access.conversation(actor, entity.conversationId); return true; } catch { return false; }
+      }
+      return access.canRead(actor, collection, entity);
+    },
+    machine(actor, id, manage) { if (actor.role === 'member') throw new Error('host authority revoked'); return access.machine(actor, id, manage); },
+  };
+  const policy = services.integrations.effectivePolicy;
+  services.integrations.effectivePolicy = async (actor, botId) => { const result = await policy(actor, botId); return { ...result, productAccess: result.productAccess && metadata.get('denyAccess') !== true }; };
+  const eventService = services.events;
+  services.events = { ...eventService, emit(event, payload, audience) { events.push(event); return eventService.emit(event, payload, audience); } };
+  services.audit = (actor, action, targetId, outcome, details, requestId) => {
+    audits.push([actor, action, targetId, outcome, details, requestId]);
+    const record: P.AuditRecord = services.resource('audit', { actor: { kind: actor?.kind === 'user' ? 'user' : actor?.kind === 'bot' ? 'bot' : 'system', id: actor?.id ?? null, displayName: 'Push fixture actor' }, action, resourceType: 'push', resourceId: targetId, outcome, metadata: details ?? {}, requestId: requestId ?? 'push-request' });
+    return services.store.put('auditRecords', record);
+  };
+  metadata.set('devicePush:device', services.encrypt(subscription)); metadata.set('devicePushRegisteredAt:device', now);
+  const notification: P.Notification = { ...services.resource('notification', {}), id: 'notification', userId: 'user', conversationId: 'conversation', botId: 'bot', entryId: 'entry', kind: 'question', title: 'secret fixture-key', body: 'private terminal output and password', requestId: null, readAtMs: null, dismissedAtMs: null, target: { kind: 'entry', botId: 'bot', conversationId: 'conversation', taskConversationId: null, entryId: 'entry' }, deepLink: 'lemonbot://unsafe?token=credential' };
+  return {
+    services, metadata, events, audits, notification,
+    advance(ms) { clock += ms; state.setClock(clock); },
+    change<T extends { id: string }>(collection: string, id: string, mutate: (value: T) => void) { const value = services.store.require<T>(collection, id); mutate(value); services.store.put(collection, value); },
+  };
 }
 
 describe('RFC 8291 and ES256 fixtures',()=>{
@@ -84,18 +127,18 @@ describe('push registration SSRF and delivery authorization',()=>{
   });
   test('revoked/expired sessions, disabled member/device/preferences/sidebar and invisible entries deny delivery',async()=>{
     for(const change of [
-      (f:PushFixture)=>{f.services.store.get<SessionSecretFixture>('sessionSecrets','device')!.revoked=true;},
-      (f:PushFixture)=>{f.services.store.get<P.AuthSession>('authSessions','device')!.expiresAtMs=now;},
-      (f:PushFixture)=>{f.services.store.get<P.Member>('members','member')!.enabled=false;},
-      (f:PushFixture)=>{f.services.store.get<P.Device>('devices','device')!.pushEnabled=false;},
-      (f:PushFixture)=>{f.services.store.get<P.User>('users','user')!.notifications.enabled=false;},
+      (f:PushFixture)=>{f.change<SessionSecretFixture>('sessionSecrets', 'device', value => { value.revoked = true; });},
+      (f:PushFixture)=>{f.change<P.AuthSession>('authSessions', 'device', value => { value.expiresAtMs = now; });},
+      (f:PushFixture)=>{f.change<P.Member>('members', 'member', value => { value.enabled = false; });},
+      (f:PushFixture)=>{f.change<P.Device>('devices', 'device', value => { value.pushEnabled = false; });},
+      (f:PushFixture)=>{f.change<P.User>('users', 'user', value => { value.notifications.enabled = false; });},
       (f:PushFixture)=>{f.metadata.set('sidebar',{hidden:true,notificationsEnabled:true});},
       (f:PushFixture)=>{f.metadata.set('deny',true);},
       (f:PushFixture)=>{f.metadata.set('denyAccess',true);},
     ]) {const f=fixture();change(f);let sends=0;const push=createPushServices(f.services,{env:vapidEnv,resolve:publicDNS,sendWebPush:async()=>{sends++;return{status:201};}});await push.emitProviderNotifications(f.notification);expect(sends).toBe(0);}
   });
   test('revocation during DNS resolution prevents dispatch, and replacement registration survives old invalidation',async()=>{
-    const f=fixture();let sends=0;const push=createPushServices(f.services,{env:vapidEnv,resolve:async()=>{f.services.store.get<SessionSecretFixture>('sessionSecrets','device')!.revoked=true;return publicDNS();},sendWebPush:async()=>{sends++;return{status:201};}});await push.emitProviderNotifications(f.notification);expect(sends).toBe(0);
+    const f=fixture();let sends=0;const push=createPushServices(f.services,{env:vapidEnv,resolve:async()=>{f.change<SessionSecretFixture>('sessionSecrets', 'device', value => { value.revoked = true; });return publicDNS();},sendWebPush:async()=>{sends++;return{status:201};}});await push.emitProviderNotifications(f.notification);expect(sends).toBe(0);
     const fresh=fixture();const deliver=createPushServices(fresh.services,{env:vapidEnv,resolve:publicDNS,sendWebPush:async()=>{fresh.metadata.set('devicePush:device',fresh.services.encrypt(subscription));return{status:410};}});await deliver.emitProviderNotifications(fresh.notification);expect(fresh.metadata.get('devicePush:device')).not.toBeNull();expect(fresh.services.store.get<P.Device>('devices','device')!.pushEnabled).toBe(true);
   });
   test('token invalidation atomically preserves device edits made while the provider request was in flight',async()=>{
@@ -107,9 +150,9 @@ describe('push registration SSRF and delivery authorization',()=>{
     const options={env:{}};expect(createPushServices(other.services,options)).not.toBe(createPushServices(other.services,options));
   });
   test('privacy preferences and current host-management role are rechecked after DNS awaits',async()=>{
-    const f=fixture();let sends=0;const push=createPushServices(f.services,{env:vapidEnv,resolve:async()=>{f.services.store.get<P.User>('users','user')!.notifications.previews=false;return publicDNS();},sendWebPush:async(_url,_address,_headers,body)=>{sends++;expect(JSON.parse(decrypt(body).toString()).title).toBe('Lemon Bot');return{status:201};}});await push.emitProviderNotifications(f.notification);expect(sends).toBe(1);
-    const host=fixture();host.services.store.get<P.Member>('members','member')!.role='owner';Object.assign(host.notification,{kind:'machine',botId:null,conversationId:null,entryId:null,target:{kind:'machine',machineId:'machine',botId:null}});
-    const denied=createPushServices(host.services,{env:vapidEnv,resolve:async()=>{host.services.store.get<P.Member>('members','member')!.role='member';return publicDNS();},sendWebPush:async()=>{sends++;return{status:201};}});await denied.emitProviderNotifications(host.notification);expect(sends).toBe(1);
+    const f=fixture();let sends=0;const push=createPushServices(f.services,{env:vapidEnv,resolve:async()=>{f.change<P.User>('users', 'user', value => { value.notifications.previews = false; });return publicDNS();},sendWebPush:async(_url,_address,_headers,body)=>{sends++;expect(JSON.parse(decrypt(body).toString()).title).toBe('Lemon Bot');return{status:201};}});await push.emitProviderNotifications(f.notification);expect(sends).toBe(1);
+    const host=fixture();host.change<P.Member>('members', 'member', value => { value.role = 'owner'; });Object.assign(host.notification,{kind:'machine',botId:null,conversationId:null,entryId:null,target:{kind:'machine',machineId:'machine',botId:null}});
+    const denied=createPushServices(host.services,{env:vapidEnv,resolve:async()=>{host.change<P.Member>('members', 'member', value => { value.role = 'member'; });return publicDNS();},sendWebPush:async()=>{sends++;return{status:201};}});await denied.emitProviderNotifications(host.notification);expect(sends).toBe(1);
   });
   test('provider redirects/transient errors never clear subscriptions or leak provider response',async()=>{
     for(const status of [302,401,403,429,500,503]){const f=fixture();const push=createPushServices(f.services,{env:vapidEnv,resolve:publicDNS,sendWebPush:async()=>({status,reason:'secret fixture-token'})});await push.emitProviderNotifications(f.notification);expect(f.metadata.get('devicePush:device')).not.toBeNull();expect(JSON.stringify(f.audits)).not.toContain('fixture-token');}
