@@ -17,15 +17,17 @@ defmodule LemonSkills.Tools.Recall do
     * **Project facts** — exact facts stored by `remember(target: "project")`,
       searched only for project scope, bound to repository, profile, and agent.
 
-  `USER.md` and `MEMORY.md` are not searched: main sessions already have both in
-  the system prompt. Its write-side counterpart is `LemonSkills.Tools.Remember`;
-  a few relevant past conversations are also put into each turn automatically
-  (`LemonSkills.MemoryRecall`), so this tool is for looking further.
+  Verified context-owned sessions search exact proven private history and
+  preferences plus explicitly shared canonical facts. They never fall back to
+  another actor, unproven legacy history, or raw workspace note files. Native
+  ownership fields come from trusted runtime options, never tool parameters.
+  Legacy non-context sessions retain file-note search and workspace bootstrap.
+  The write-side counterpart is `LemonSkills.Tools.Remember`.
   """
 
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAi.Types.TextContent
-  alias LemonMemory.{Project, Query, SessionSearch}
+  alias LemonMemory.{ContextScope, Preferences, Project, Query, SessionSearch}
 
   @default_limit 5
   @max_limit 10
@@ -44,8 +46,11 @@ defmodule LemonSkills.Tools.Recall do
   - `:session_key` - current session key
   - `:workspace_dir` - assistant home whose `memory/` notes are searched
   - `:session_scope` - must be `:main`; missing scope and subagents fail closed
-  - `:store` - named store for project memory
-  - `:search_fn` - test override for `LemonMemory.SessionSearch.search/2`
+  - `:store` - existing owner for scoped preferences/project/history
+  - Flat admitted invocation/memory keys and memory proof fix private visibility;
+    missing/partial proof never widens to raw legacy notes
+  - `:search_fn` - legacy-only test override for SessionSearch.search/2; private
+    reads always use the owning Store's scoped index before candidate limits
   """
   @spec tool(String.t(), keyword()) :: AgentTool.t()
   def tool(cwd, opts \\ []) do
@@ -55,6 +60,10 @@ defmodule LemonSkills.Tools.Recall do
       workspace_dir: present(Keyword.get(opts, :workspace_dir)),
       session_key: present(Keyword.get(opts, :session_key)),
       session_scope: Keyword.get(opts, :session_scope),
+      invocation_context_key: Keyword.get(opts, :invocation_context_key),
+      memory_context_key: Keyword.get(opts, :memory_context_key),
+      memory_context_verified: Keyword.get(opts, :memory_context_verified),
+      shared_memory_grant: Keyword.get(opts, :shared_memory_grant, false),
       search_fn: Keyword.get(opts, :search_fn, &SessionSearch.search/2),
       store_opts: Keyword.take(opts, [:store])
     }
@@ -122,16 +131,10 @@ defmodule LemonSkills.Tools.Recall do
     with :ok <- validate_query(query),
          {:ok, scope} <- parse_scope(Map.get(params, "scope", "agent")),
          :ok <- validate_context(context),
-         {:ok, search_opts} <- search_opts(scope, context, limit) do
-      docs =
-        context.search_fn.(query, search_opts)
-        |> Enum.filter(&Project.history_document?(&1, context, history_scope(scope)))
-        |> Enum.take(limit)
-
-      notes =
-        if scope == "agent",
-          do: search_notes(context.workspace_dir, Query.terms(query), limit),
-          else: []
+         {:ok, memory_scope} <- ContextScope.scope(context),
+         {:ok, search_opts} <- search_opts(scope, context, limit),
+         {:ok, notes} <- memory_notes(memory_scope, scope, context, query, limit),
+         {:ok, docs} <- memory_history(memory_scope, scope, context, query, limit, search_opts) do
 
       facts =
         if scope == "project",
@@ -148,8 +151,46 @@ defmodule LemonSkills.Tools.Recall do
           project_facts: length(facts)
         }
       }
+    else
+      {:error, :unproven_context} -> {:error, "recall requires a verified private memory context"}
+      {:error, reason} when is_atom(reason) -> {:error, "Scoped memory is unavailable"}
+      error -> error
     end
   end
+
+  defp memory_history(:legacy, scope, context, query, limit, search_opts) do
+    docs =
+      context.search_fn.(query, Keyword.put(search_opts, :memory_scope, :legacy))
+      |> Enum.filter(&Project.history_document?(&1, context, history_scope(scope)))
+      |> Enum.take(limit)
+    {:ok, docs}
+  end
+  defp memory_history({:private, _key}, scope, context, query, limit, _search_opts) do
+    Project.search_history(context, query, history_scope(scope),
+      Keyword.put(context.store_opts, :limit, limit))
+  end
+
+  defp memory_notes(:legacy, "agent", context, query, limit),
+    do: {:ok, search_notes(context.workspace_dir, Query.terms(query), limit)}
+  defp memory_notes(:legacy, _scope, _context, _query, _limit), do: {:ok, []}
+  defp memory_notes({:private, _key}, "agent", context, query, limit) do
+    with {:ok, facts} <- Preferences.read(context, context.store_opts) do
+      terms = Query.terms(query)
+      notes =
+        facts
+        |> Enum.with_index(1)
+        |> Enum.flat_map(fn {fact, index} ->
+          case Query.shared_term_count(terms, fact) do
+            0 -> []
+            score -> [{score, "Scoped preferences", index, clip(fact)}]
+          end
+        end)
+        |> Enum.sort_by(fn {score, _source, index, _text} -> {-score, index} end)
+        |> Enum.take(limit)
+      {:ok, notes}
+    end
+  end
+  defp memory_notes({:private, _key}, _scope, _context, _query, _limit), do: {:ok, []}
 
   defp validate_query(""), do: {:error, "query must be a non-empty string"}
   defp validate_query(_query), do: :ok

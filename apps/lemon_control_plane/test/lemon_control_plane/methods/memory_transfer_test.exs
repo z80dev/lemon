@@ -24,8 +24,10 @@ defmodule LemonControlPlane.Methods.MemoryTransferTest do
     target = "memory-target-#{suffix}"
     source_name = "source-worker-#{suffix}"
     target_name = "target-worker-#{suffix}"
-    :ok = NodeRegistry.register(source, source_name, self())
-    :ok = NodeRegistry.register(target, target_name, self())
+    capabilities = Map.new(~w(prepare snapshot validate preview apply status inspect),
+      &{"memory.transfer." <> &1, %{"version" => 1, "contextVersion" => 1}})
+    :ok = NodeRegistry.register(source, source_name, self(), %{capabilities: capabilities})
+    :ok = NodeRegistry.register(target, target_name, self(), %{capabilities: capabilities})
     {:ok, _} = ProfileStore.create(%{"id" => "transfer-profile", "node" => source_name})
     params = %{"profileId" => "transfer-profile", "nodeId" => target,
       "mutationId" => "move-#{suffix}"}
@@ -265,6 +267,27 @@ defmodule LemonControlPlane.Methods.MemoryTransferTest do
       %{auth: %{role: :operator, scopes: [:read, :write]}})
     assert {:error, {:unavailable, _}} =
       MemoryTransfer.handle(Map.put(ctx.params, "nodeId", ctx.target_name), %{})
+    refute_receive {:node_event, "node.invoke.request", _}
+  end
+
+  test "old source workers cannot snapshot newer private ownership into a legacy transfer", ctx do
+    :ok = NodeRegistry.register(ctx.source, ctx.source_name, self(),
+      %{capabilities: %{"memory.transfer.prepare" => %{"version" => 1}}})
+    assert {:error, {:unavailable, _}} = MemoryTransfer.handle(ctx.params, %{})
+    refute_receive {:node_event, "node.invoke.request", _}
+  end
+
+  test "old destinations cannot apply scoped snapshots or attest a scoped transfer receipt", ctx do
+    :ok = NodeRegistry.register(ctx.target, ctx.target_name, self(),
+      %{capabilities: %{"memory.transfer.apply" => %{"version" => 1},
+        "memory.transfer.inspect" => %{"version" => 1}}})
+    task = Task.async(fn -> MemoryTransfer.handle(ctx.params, %{}) end)
+    reply(request(ctx.source, "prepare"), ctx.envelope)
+    reply(request(ctx.source, "validate"), %{"valid" => true})
+    assert {:error, {:unavailable, _}} = Task.await(task)
+    refute_receive {:node_event, "node.invoke.request", _}
+    assert {:error, {:unavailable, _, %{"code" => "MEMORY_TRANSFER_STATUS_UNAVAILABLE"}}} =
+      MemoryTransferStatus.handle(ctx.params, %{})
     refute_receive {:node_event, "node.invoke.request", _}
   end
 

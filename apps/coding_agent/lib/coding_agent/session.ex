@@ -1030,7 +1030,9 @@ defmodule CodingAgent.Session do
       workspace_dir: state.workspace_dir,
       source_session_id: state.session_manager.header.id,
       source_session_key: state.session_key,
-      source_agent_id: state.agent_id
+      source_agent_id: state.agent_id,
+      approval_context: Map.take(state.approval_context || %{},
+        [:invocation_context_key, :memory_context_key, :memory_context_verified])
     }
 
     {:reply, snapshot, state}
@@ -1642,7 +1644,7 @@ defmodule CodingAgent.Session do
   # failure here may become a turn that does not start.
   @spec collect_contributed_sections(t(), String.t()) :: [ContextRegistry.section()]
   defp collect_contributed_sections(state, skill_context) do
-    ContextRegistry.collect(%{
+    %{
       cwd: state.cwd,
       workspace_dir: state.workspace_dir,
       session_scope: state.session_scope,
@@ -1651,15 +1653,22 @@ defmodule CodingAgent.Session do
       agent_id: state.agent_id,
       run_id: state.run_id,
       query: if(is_binary(skill_context), do: skill_context, else: "")
-    })
+    }
+    |> Map.merge(trusted_memory_context(state))
+    |> ContextRegistry.collect()
   rescue
-    error ->
-      Logger.debug("Contributed context unavailable: #{Exception.message(error)}")
+    _error ->
+      Logger.debug("Contributed context unavailable")
       []
   catch
-    kind, reason ->
-      Logger.debug("Contributed context unavailable: #{inspect({kind, reason})}")
+    kind, _reason ->
+      Logger.debug("Contributed context unavailable kind=#{kind}")
       []
+  end
+
+  defp trusted_memory_context(state) do
+    Map.take(state.approval_context || %{},
+      [:invocation_context_key, :memory_context_key, :memory_context_verified, :shared_memory_grant])
   end
 
   @spec refresh_system_prompt(t(), String.t(), [ContextRegistry.section()]) :: t()
@@ -1680,7 +1689,7 @@ defmodule CodingAgent.Session do
              contributed_sections: system_sections,
              tool_names: Enum.map(state.tools || [], & &1.name),
              environment: state.prompt_environment
-           }
+           } |> Map.merge(trusted_memory_context(state))
          ) do
       :unchanged ->
         CodingAgent.Session.Planning.refresh(state)

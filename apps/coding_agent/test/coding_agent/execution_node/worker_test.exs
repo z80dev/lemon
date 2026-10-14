@@ -341,6 +341,11 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
 
     assert pair_params["nodeName"] == "newphy"
     assert pair_params["capabilities"]["coding_agent.run"]["version"] == 1
+    for method <- ~w(memory.list memory.search memory.get memory.add memory.delete
+      memory.transfer.prepare memory.transfer.snapshot memory.transfer.validate
+      memory.transfer.preview memory.transfer.apply memory.transfer.status memory.transfer.inspect) do
+      assert pair_params["capabilities"][method] == %{"version" => 1, "contextVersion" => 1}
+    end
 
     send(worker, {
       :execution_node_socket,
@@ -798,6 +803,94 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
     assert_receive {:socket_request, ^socket, "node.invoke.result",
       %{"result" => %{"ok" => false, "error" => "snapshot_too_large"}},
       {:invoke_result, "source-overflow"}, 30_000}, 1_000
+    GenServer.stop(worker)
+  end
+
+  @tag :tmp_dir
+  test "completed remote runs index only original admitted ownership in the destination store", %{tmp_dir: tmp_dir} do
+    store = :"worker_private_store_#{System.unique_integer([:positive])}"
+    ingest = :"worker_private_ingest_#{System.unique_integer([:positive])}"
+    start_supervised!({LemonMemory.Store, name: store, path: Path.join(tmp_dir, "memory")})
+    start_supervised!({LemonMemory.Ingest, name: ingest, memory_store: store,
+      config_loader: fn ->
+        %{features: %LemonCore.Config.Features{session_search: :"default-on", routing_feedback: :off}}
+      end})
+    {:ok, worker} = start_worker(tmp_dir, token: "node-token", memory_ingest_server: ingest)
+    assert_receive {:socket_started, socket, _}
+    send(worker, {:execution_node_socket, socket,
+      {:connected, %{"auth" => %{"clientId" => "node-1"}}}})
+    assert_receive {:execution_node_worker, ^worker, {:status, :online, "node-1"}}
+    args = %{"version" => 1, "runId" => "private-indexed", "sessionKey" => "agent:worker-private:main",
+      "prompt" => "Remember rainforest deployment decisions.", "cwd" => tmp_dir,
+      "meta" => %{"agent_id" => "worker-private", "profile_id" => "worker-private",
+        "invocation_context_key" => "invocation-epoch-1", "memory_context_key" => "actor-a",
+        "memory_context_verified" => true,
+        "mcp_servers" => %{"private" => %{"env" => %{"API_KEY" => "must-not-index"}}}}}
+    invoke(worker, socket, "private-index", "node-1", args)
+    assert_receive {:executor_started, request, _, ^worker, run_ref, context}
+    assert request.meta[:memory_context_verified] == true
+    assert request.meta[:memory_context_key] == "actor-a"
+    assert LemonMemory.Store.get_by_session(store, args["sessionKey"], limit: 10) == []
+    send(worker, {:engine_event, run_ref, %{__event__: :completed, ok: true,
+      answer: "Rainforest releases require cypress approval.", error: nil, usage: nil, resume: nil,
+      meta: %{memory_context_key: "actor-b", memory_context_verified: true, profile_id: "other-profile"}}})
+    assert_receive {:socket_request, ^socket, "node.invoke.result", _, {:invoke_result, "private-index"}, 30_000}
+    :sys.get_state(Process.whereis(ingest))
+    assert [doc] = LemonMemory.Store.get_by_session(store, args["sessionKey"], limit: 10)
+    assert doc.agent_id == "worker-private"
+    assert doc.meta["memory_context_key"] == "actor-a"
+    assert doc.meta["memory_context_verified"] == true
+    refute Map.has_key?(doc.meta, "mcp_servers")
+    refute Map.has_key?(doc.meta, :mcp_servers)
+    assert Map.get(doc.meta, :profile_id, Map.get(doc.meta, "profile_id")) == "worker-private"
+    {:ok, paths} = LemonCore.ProfileStore.paths("worker-private")
+    {:ok, identity} = LemonMemory.Project.scope(%{session_scope: :main, agent_id: "worker-private",
+      workspace_dir: paths["workspace"], cwd: tmp_dir})
+    assert doc.meta["home_digest"] == identity.home_digest
+    assert {:ok, [^doc]} = LemonMemory.Store.search_owned(store, "rainforest", "worker-private",
+      identity.home_digest, {:private, "actor-a"})
+    assert {:ok, []} = LemonMemory.Store.search_owned(store, "rainforest", "worker-private",
+      identity.home_digest, {:private, "actor-b"})
+    invoke(worker, socket, "private-aborted", "node-1", Map.put(args, "runId", "private-aborted"))
+    assert_receive {:executor_started, _, _, ^worker, aborted_ref, aborted_context}
+    send(worker, {:engine_event, aborted_ref, %{__event__: :completed, ok: false,
+      answer: "", error: "watchdog_cancelled password=hunter2", usage: nil, resume: nil, meta: %{}}})
+    assert_receive {:socket_request, ^socket, "node.invoke.result", _, {:invoke_result, "private-aborted"}, 30_000}
+    :sys.get_state(Process.whereis(ingest))
+    aborted = LemonMemory.Store.get_by_session(store, args["sessionKey"], limit: 10)
+      |> Enum.find(&(&1.run_id == "private-aborted"))
+    assert aborted.outcome == :aborted
+    refute inspect(aborted) =~ "hunter2"
+    Process.exit(aborted_context.runner_pid, :kill)
+    Process.exit(context.runner_pid, :kill)
+    GenServer.stop(worker)
+  end
+
+  @tag :tmp_dir
+  test "canonical false and nil request proof cannot be upgraded by string aliases", %{tmp_dir: tmp_dir} do
+    {:ok, worker} = start_worker(tmp_dir, token: "node-token")
+    assert_receive {:socket_started, socket, _}
+    send(worker, {:execution_node_socket, socket,
+      {:connected, %{"auth" => %{"clientId" => "node-1"}}}})
+    assert_receive {:execution_node_worker, ^worker, {:status, :online, "node-1"}}
+    for {canonical, suffix} <- [{false, "false"}, {nil, "nil"}] do
+      invoke_id = "proof-#{suffix}"
+      meta = %{"agent_id" => "worker-private", "invocation_context_key" => "invocation-1",
+        "memory_context_key" => "actor-a", "memory_context_verified" => true,
+        "shared_memory_grant" => true, memory_context_verified: canonical, shared_memory_grant: canonical}
+      invoke(worker, socket, invoke_id, "node-1", %{"version" => 1, "prompt" => "bounded",
+        "cwd" => tmp_dir, "meta" => meta})
+      assert_receive {:executor_started, request, _, ^worker, run_ref, context}
+      assert request.meta[:memory_context_verified] == canonical
+      assert request.meta[:shared_memory_grant] == canonical
+      refute Map.has_key?(request.meta, "memory_context_verified")
+      refute Map.has_key?(request.meta, "shared_memory_grant")
+      assert {:error, :unproven_context} = LemonMemory.ContextScope.scope(request.meta)
+      send(worker, {:engine_event, run_ref, %{__event__: :completed, ok: true,
+        answer: "done", error: nil, usage: nil, meta: %{}, resume: nil}})
+      assert_receive {:socket_request, ^socket, "node.invoke.result", _, {:invoke_result, ^invoke_id}, 30_000}
+      Process.exit(context.runner_pid, :kill)
+    end
     GenServer.stop(worker)
   end
 

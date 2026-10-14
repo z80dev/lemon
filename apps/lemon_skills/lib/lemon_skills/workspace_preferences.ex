@@ -26,32 +26,6 @@ defmodule LemonSkills.WorkspacePreferences do
     }
   }
 
-  @prompt_injection_patterns [
-    ~r/ignore (all )?(previous|prior|above) instructions/i,
-    ~r/disregard (all )?(previous|prior|above) instructions/i,
-    ~r/reveal (the )?(system|developer) prompt/i,
-    ~r/system prompt/i,
-    ~r/developer message/i,
-    ~r{<\|/?(?:system|developer|assistant|user)\|>}i
-  ]
-
-  @invisible_chars [
-    "\u202A",
-    "\u202B",
-    "\u202C",
-    "\u202D",
-    "\u202E",
-    "\u2066",
-    "\u2067",
-    "\u2068",
-    "\u2069",
-    "\u200B",
-    "\u200C",
-    "\u200D",
-    "\u200E",
-    "\u200F",
-    "\uFEFF"
-  ]
   @max_text_bytes 4_096
 
   @doc "Hold the same owning lock used by remember throughout a transfer boundary."
@@ -427,24 +401,18 @@ defmodule LemonSkills.WorkspacePreferences do
   end
 
   defp screen_text(text) do
-    cond do
-      Safety.contains_secret?(text) ->
+    case Safety.note_refusal_reason(text) do
+      :secret ->
         {:error, "Refusing to store secret-looking content in prompt-injected memory"}
-
-      contains_invisible_char?(text) ->
+      :invisible ->
         {:error, "Refusing to store invisible or bidirectional control characters"}
-
-      Enum.any?(@prompt_injection_patterns, &Regex.match?(&1, text)) ->
+      :prompt_injection ->
         {:error, "Refusing to store prompt-injection-like content in prompt-injected memory"}
-
-      true ->
+      nil ->
         :ok
     end
   end
 
-  defp contains_invisible_char?(text) do
-    Enum.any?(@invisible_chars, &String.contains?(text, &1))
-  end
 
   defp add_note(path, target, spec, content, text) do
     if String.contains?(content, text) do

@@ -37,7 +37,7 @@ defmodule LemonSkills.ProfileMemoryTransferTest do
     assert envelope["snapshotDigest"] == sha(canonical(envelope["snapshot"]))
     assert [record] = envelope["snapshot"]["documents"]
     assert record["answerSummary"] == own.answer_summary
-    assert record["metadata"] == %{"home_digest" => sha(Path.expand(ctx.source_home))}
+    assert record["metadata"] == %{"home_digest" => sha(Path.expand(ctx.source_home)), "memory_scope" => "legacy"}
     refute Jason.encode!(envelope) =~ ctx.root
     assert :ok = Transfer.validate(envelope, ctx.source_opts)
     assert {:ok, receipt} = Transfer.apply_transfer(envelope, ctx.target_opts)
@@ -88,7 +88,7 @@ defmodule LemonSkills.ProfileMemoryTransferTest do
     File.write!(Path.join(ctx.target_home, "USER.md"), "Old user preference.\n")
     selected = doc(ctx.target_home, "selected", "Old selected fact.")
     other = %{selected | doc_id: "mem_other", agent_id: "lb-bob"}
-    other_home = %{selected | doc_id: "mem_other-home", meta: %{"home_digest" => sha("another")}}
+    other_home = Document.with_index(%{selected | doc_id: "mem_other-home", meta: %{"home_digest" => sha("another")}})
     for record <- [selected, other, other_home], do: :ok = Store.put_sync(ctx.target, record)
     assert {:ok, envelope} = prepare(ctx)
     assert {:ok, preview} = Transfer.preview(envelope, ctx.target_opts)
@@ -470,6 +470,98 @@ defmodule LemonSkills.ProfileMemoryTransferTest do
     assert {:ok, ^cross} = Store.transfer_get(ctx.target, cross_key)
   end
 
+  test "private actor keys and canonical shared preferences survive transfer without promoting legacy files", ctx do
+    a = %{agent_id: @profile, cwd: ctx.source_home, workspace_dir: ctx.source_home,
+      session_scope: :main, session_key: "agent:lb-alice:main", invocation_context_key: "epoch-1",
+      memory_context_key: "actor-a", memory_context_verified: true}
+    b = %{a | memory_context_key: "actor-b"}
+    shared = Map.put(a, :shared_memory_grant, true)
+    assert {:ok, _} = LemonMemory.Preferences.remember(a, "user", "Private amber preference.", nil, store: ctx.source)
+    assert {:ok, _} = LemonMemory.Preferences.remember(b, "user", "Private cobalt preference.", nil, store: ctx.source)
+    assert {:ok, _} = LemonMemory.Preferences.remember(shared, "user", "Shared citrus preference.", nil, store: ctx.source)
+    assert {:ok, _} = Project.remember(a, "Private amber build command.", nil, store: ctx.source)
+    assert {:ok, _} = Project.remember(b, "Private cobalt build command.", nil, store: ctx.source)
+    assert {:ok, _} = Project.remember(shared, "Shared citrus build command.", nil, store: ctx.source)
+    File.write!(Path.join(ctx.source_home, "USER.md"), "Unknown legacy lilac preference.\n")
+    assert {:ok, envelope} = prepare(ctx)
+    assert length(envelope["snapshot"]["documents"]) == 6
+    assert {:ok, _receipt} = Transfer.apply_transfer(envelope, ctx.target_opts)
+    destination_a = %{a | cwd: ctx.target_home, workspace_dir: ctx.target_home, invocation_context_key: "epoch-2"}
+    destination_b = %{b | cwd: ctx.target_home, workspace_dir: ctx.target_home, invocation_context_key: "epoch-2"}
+    assert {:ok, a_notes} = LemonMemory.Preferences.read(destination_a, store: ctx.target)
+    assert Enum.sort(a_notes) == ["Private amber preference.", "Shared citrus preference."]
+    assert {:ok, b_notes} = LemonMemory.Preferences.read(destination_b, store: ctx.target)
+    assert Enum.sort(b_notes) == ["Private cobalt preference.", "Shared citrus preference."]
+    assert {:ok, a_project} = Project.read(destination_a, store: ctx.target)
+    assert Enum.sort(a_project) == ["Private amber build command.", "Shared citrus build command."]
+    assert {:ok, b_project} = Project.read(destination_b, store: ctx.target)
+    assert Enum.sort(b_project) == ["Private cobalt build command.", "Shared citrus build command."]
+    assert {:ok, files} = LemonMemory.Preferences.shared_bootstrap(destination_a, store: ctx.target)
+    assert files["USER.md"] =~ "Shared citrus preference."
+    refute files["USER.md"] =~ "lilac"
+    refute files["USER.md"] =~ "amber"
+    assert File.read!(Path.join(ctx.target_home, "USER.md")) == "Unknown legacy lilac preference.\n"
+    assert {:ok, %{changed: true}} = LemonMemory.Preferences.remember(destination_a, "user",
+      "Private amber corrected preference.", "Private amber preference.", store: ctx.target)
+    assert {:ok, ^b_notes} = LemonMemory.Preferences.read(destination_b, store: ctx.target)
+  end
+
+  test "moving pre-index proof claims preserves bytes but cannot create new private or shared authority", ctx do
+    metadata = %{"home_digest" => sha(Path.expand(ctx.source_home)), "kind" => "user",
+      "memory_scope" => "shared", "memory_shared_verified" => true,
+      "preference_facts" => ["Retained unproven orchid preference."]}
+    retained = %{doc(ctx.source_home, "claimed-shared", "Retained unproven orchid preference.") | meta: metadata}
+    source = legacy_store(ctx.root, retained)
+    source_opts = Keyword.put(ctx.source_opts, :store, source)
+    assert {:ok, stored} = Store.get_document(source, retained.doc_id)
+    assert Store.document_ownership(stored) == :unproven
+    assert {:ok, envelope} = Transfer.prepare(@profile, "mutation-1", "local", "node-target", source_opts)
+    assert [record] = envelope["snapshot"]["documents"]
+    assert record["metadata"]["memory_scope"] == "unproven"
+    refute Map.has_key?(record["metadata"], "memory_shared_verified")
+    assert record["metadata"]["preference_facts"] == metadata["preference_facts"]
+    assert {:ok, _} = Transfer.apply_transfer(envelope, ctx.target_opts)
+    assert {:ok, [imported]} = Store.list_agent_recent(ctx.target, @profile, limit: 500)
+    assert Store.document_ownership(imported) == :unproven
+    assert imported.answer_summary == retained.answer_summary
+    target = %{agent_id: @profile, cwd: ctx.target_home, workspace_dir: ctx.target_home,
+      session_scope: :main, invocation_context_key: "epoch-2", memory_context_key: "actor-a",
+      memory_context_verified: true}
+    assert {:ok, []} = LemonMemory.Preferences.read(target, store: ctx.target)
+    assert {:ok, %{"items" => []}} = LemonSkills.ProfileMemory.execute("list", @profile,
+      %{"memoryScope" => "shared"}, ctx.target_opts)
+    assert {:ok, ^stored} = Store.get_document(source, retained.doc_id)
+  end
+
+  defp legacy_store(root, doc) do
+    alias Exqlite.Sqlite3
+    path = Path.join(root, "legacy-source-store")
+    File.mkdir_p!(path)
+    {:ok, conn} = Sqlite3.open(Path.join(path, "memory.sqlite3"))
+    :ok = Sqlite3.execute(conn, """
+    CREATE TABLE memory_documents (
+      doc_id TEXT PRIMARY KEY, run_id TEXT NOT NULL, session_key TEXT NOT NULL,
+      agent_id TEXT NOT NULL, workspace_key TEXT, scope TEXT NOT NULL,
+      started_at_ms INTEGER NOT NULL, ingested_at_ms INTEGER NOT NULL,
+      prompt_summary TEXT NOT NULL, answer_summary TEXT NOT NULL,
+      tools_used_blob BLOB NOT NULL, provider TEXT, model TEXT, outcome TEXT NOT NULL,
+      meta_blob BLOB NOT NULL
+    )
+    """)
+    {:ok, statement} = Sqlite3.prepare(conn,
+      "INSERT INTO memory_documents VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)")
+    :ok = Sqlite3.bind(statement, [doc.doc_id, doc.run_id, doc.session_key, doc.agent_id,
+      doc.workspace_key, Atom.to_string(doc.scope), doc.started_at_ms, doc.ingested_at_ms,
+      doc.prompt_summary, doc.answer_summary, {:blob, :erlang.term_to_binary(doc.tools_used)},
+      doc.provider, doc.model, Atom.to_string(doc.outcome), {:blob, :erlang.term_to_binary(doc.meta)}])
+    assert :done = Sqlite3.step(conn, statement)
+    :ok = Sqlite3.release(conn, statement)
+    :ok = Sqlite3.close(conn)
+    name = :"legacy_transfer_#{System.unique_integer([:positive])}"
+    start_supervised!(Supervisor.child_spec({Store, name: name, path: path}, id: name))
+    name
+  end
+
   defp start_store(root, role) do
     name = :"memory_transfer_#{role}_#{System.unique_integer([:positive])}"
     start_supervised!(Supervisor.child_spec({Store, name: name, path: Path.join(root, role <> "-store")}, id: name))
@@ -486,6 +578,7 @@ defmodule LemonSkills.ProfileMemoryTransferTest do
     session_key: "agent:lb-alice:main", agent_id: @profile, workspace_key: home,
     prompt_summary: "Saved memory summary", answer_summary: answer, started_at_ms: 1,
     ingested_at_ms: System.system_time(:millisecond), meta: %{"home_digest" => sha(Path.expand(home)), "local_path" => home}}
+    |> Document.with_index()
   defp canonical(value) when is_map(value), do: "{" <> (value |> Enum.sort_by(&elem(&1, 0)) |> Enum.map_join(",", fn {k, v} -> Jason.encode!(k) <> ":" <> canonical(v) end)) <> "}"
   defp canonical(value) when is_list(value), do: "[" <> Enum.map_join(value, ",", &canonical/1) <> "]"
   defp canonical(value), do: Jason.encode!(value)

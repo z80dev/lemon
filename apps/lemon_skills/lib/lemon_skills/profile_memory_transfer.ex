@@ -18,13 +18,14 @@ defmodule LemonSkills.ProfileMemoryTransfer do
   revision, including excluded metadata, before the controller's first apply.
   """
   alias LemonCore.{JSONPayload, ProfileStore}
-  alias LemonMemory.{Document, Project, Safety, Store}
+  alias LemonMemory.{ContextScope, Document, Project, Safety, Store}
   alias LemonSkills.WorkspacePreferences, as: Preferences
 
   @envelope ~w(profileId mutationId sourceNodeId nodeId snapshotDigest snapshot)
   @snapshot ~w(version profileId mutationId sourceNodeId nodeId homeDigest documents preferences)
   @record ~w(id agentId homeDigest workspace scope runId sessionKey startedAtMs ingestedAtMs promptSummary answerSummary toolsUsed provider model outcome metadata revision)
-  @metadata ~w(kind home_digest source_digest source_count source_provenance source_text_redacted)
+  @ownership ~w(memory_scope memory_context_key memory_context_verified memory_shared_verified)
+  @metadata ~w(kind home_digest source_digest source_count source_provenance source_text_redacted preference_facts) ++ @ownership
   @scopes ~w(session workspace agent global)
   @outcomes ~w(unknown success partial failure aborted)
   @max_bytes 2 * 1024 * 1024
@@ -298,7 +299,7 @@ defmodule LemonSkills.ProfileMemoryTransfer do
 
   defp export_documents(docs, context) do
     Enum.reduce_while(docs, {:ok, []}, fn doc, {:ok, records} ->
-      with {:ok, metadata} <- normalize_metadata(doc.meta) do
+      with {:ok, metadata} <- normalize_metadata(portable_metadata(doc)) do
         record = %{"id" => doc.doc_id, "agentId" => doc.agent_id, "homeDigest" => context.home,
           "workspace" => workspace(doc.workspace_key, context), "scope" => to_string(doc.scope),
           "runId" => doc.run_id, "sessionKey" => doc.session_key, "startedAtMs" => doc.started_at_ms,
@@ -321,6 +322,23 @@ defmodule LemonSkills.ProfileMemoryTransfer do
       {:ok, records} -> {:ok, Enum.sort_by(records, & &1["id"])}
       error -> error
     end
+  end
+
+  defp portable_metadata(doc) do
+    metadata =
+      doc.meta
+      |> Enum.reject(fn {key, _value} -> memory_key(key) in @ownership end)
+      |> Map.new()
+
+    owner =
+      case Store.document_ownership(doc) do
+        :legacy -> ContextScope.metadata(:legacy)
+        :shared -> ContextScope.metadata(:shared)
+        {:private, key} -> ContextScope.metadata({:private, key})
+        :unproven -> %{"memory_scope" => "unproven"}
+      end
+
+    Map.merge(metadata, owner)
   end
 
   defp normalize_metadata(meta) do
@@ -401,19 +419,25 @@ defmodule LemonSkills.ProfileMemoryTransfer do
       else
         record["workspace"]
       end
-      id = if metadata["kind"] == "project_learning" and record["workspace"] == "home" do
-        identity = context.identity
-        "mem_project_" <> identity.key
-      else
-        # Rehome content identities, so an unrelated scope cannot be overwritten.
-        "mem_transfer_" <> sha(context.profile <> "\0" <> context.home <> "\0" <> record["id"])
-      end
+      fallback_id = "mem_transfer_" <> sha(context.profile <> "\0" <> context.home <> "\0" <> record["id"])
+      id =
+        if metadata["kind"] == "project_learning" and record["workspace"] == "home" do
+          destination = %{session_scope: :main, agent_id: context.profile,
+            workspace_dir: context.workspace, cwd: context.workspace}
+          case Project.transfer_document_id(destination, metadata) do
+            {:ok, id} -> id
+            _ -> fallback_id
+          end
+        else
+          fallback_id
+        end
       %Document{doc_id: id, agent_id: context.profile, workspace_key: workspace,
         run_id: record["runId"], session_key: record["sessionKey"],
         scope: String.to_existing_atom(record["scope"]), started_at_ms: record["startedAtMs"],
         ingested_at_ms: record["ingestedAtMs"], prompt_summary: record["promptSummary"],
         answer_summary: record["answerSummary"], tools_used: record["toolsUsed"],
         provider: record["provider"], model: record["model"], outcome: String.to_existing_atom(record["outcome"]), meta: metadata}
+      |> Document.with_index()
     end)
     if length(Enum.uniq_by(docs, & &1.doc_id)) == length(docs), do: {:ok, docs}, else: {:error, :invalid_snapshot}
   end
@@ -500,17 +524,38 @@ defmodule LemonSkills.ProfileMemoryTransfer do
 
   defp safe_metadata?(meta) do
     Enum.all?(meta, fn
-      {"kind", kind} -> kind in ["run", "learned_source", "project_learning"]
+      {"kind", kind} -> kind in ["run", "learned_source", "project_learning", "user", "memory"]
       {key, value} when key in ["home_digest", "source_digest"] -> valid_digest?(value)
       {"source_count", value} -> is_integer(value) and value >= 0
       {"source_text_redacted", value} -> is_boolean(value)
+      {"memory_scope", value} -> value in ["legacy", "unproven", "private", "shared"]
+      {"memory_context_key", value} -> ContextScope.valid_key?(value)
+      {key, value} when key in ["memory_context_verified", "memory_shared_verified"] -> value == true
+      {"preference_facts", facts} when is_list(facts) ->
+        length(facts) in 1..50 and Enum.all?(facts, fn fact ->
+          is_binary(fact) and byte_size(fact) <= 4096 and Safety.validate_note(fact) == :ok
+        end)
       {"source_provenance", list} when is_list(list) -> Enum.all?(list, fn item ->
         is_map(item) and Enum.sort(Map.keys(item)) == Enum.sort(~w(type referenceDigest contentDigest selectedItems selectedBytes redactionCount)) and
           identifier?(item["type"], 64) and valid_digest?(item["referenceDigest"]) and valid_digest?(item["contentDigest"]) and
           Enum.all?(~w(selectedItems selectedBytes redactionCount), &(is_integer(item[&1]) and item[&1] >= 0))
       end)
       _ -> false
-    end)
+    end) and valid_ownership_metadata?(meta)
+  end
+
+  defp valid_ownership_metadata?(meta) do
+    ownership = Map.take(meta, @ownership)
+    case meta["memory_scope"] do
+      nil -> ownership == %{}
+      "legacy" -> ownership == ContextScope.metadata(:legacy)
+      "unproven" -> ownership == %{"memory_scope" => "unproven"}
+      "shared" -> ownership == ContextScope.metadata(:shared)
+      "private" ->
+        ContextScope.valid_key?(meta["memory_context_key"]) and
+          ownership == ContextScope.metadata({:private, meta["memory_context_key"]})
+      _ -> false
+    end
   end
 
   defp context(profile, mutation, source, target, opts) do
@@ -522,7 +567,7 @@ defmodule LemonSkills.ProfileMemoryTransfer do
            workspace_dir: paths["workspace"], cwd: paths["workspace"]}) do
       {:ok, %{profile: profile, mutation: mutation, source: source, destination: target,
         workspace: paths["workspace"], home: identity.home_digest, root: identity.root,
-        identity: identity, store: Keyword.get(opts, :store, Store)}}
+        store: Keyword.get(opts, :store, Store)}}
     else
       false -> {:error, :invalid_id}
       error -> error

@@ -112,6 +112,7 @@ defmodule LemonMemory.StoreTest do
       outcome: :unknown,
       meta: %{}
     }
+    |> Document.with_index()
   end
 
   test "put and get_by_session round-trip", %{store_pid: pid} do

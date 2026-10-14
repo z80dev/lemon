@@ -417,6 +417,6 @@ defmodule LemonMemory.SessionSearchTest do
       meta: %{}
     }
 
-    struct!(defaults, attrs)
+    defaults |> struct!(attrs) |> Document.with_index()
   end
 end

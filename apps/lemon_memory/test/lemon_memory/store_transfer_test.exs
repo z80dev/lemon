@@ -111,9 +111,22 @@ defmodule LemonMemory.StoreTransferTest do
     refute_received :published
   end
 
-  defp doc(id, agent, home), do: %Document{doc_id: "mem_" <> id, run_id: "run-" <> id,
-    session_key: "agent:" <> agent <> ":main", agent_id: agent, prompt_summary: "Saved summary",
-    answer_summary: "Saved " <> id <> " fact.", ingested_at_ms: System.system_time(:millisecond),
-    meta: %{"home_digest" => home}}
+  test "index kinds are SQLite strings while source atom metadata remains unchanged", ctx do
+    record = doc("atom-kind", "alice", ctx.home)
+    record = %{record | meta: Map.put(record.meta, :kind, :learned_source)}
+      |> Document.with_index()
+    assert :ok = Store.put_sync(ctx.server, record)
+    assert {:ok, ^record} = Store.get_document(ctx.server, record.doc_id)
+    assert record.index == {"legacy", nil, ctx.home, "learned_source", nil}
+    assert {:ok, [^record]} = Store.transfer_snapshot(ctx.server, "alice", ctx.home, &{:ok, &1})
+  end
+
+  defp doc(id, agent, home) do
+    %Document{doc_id: "mem_" <> id, run_id: "run-" <> id,
+      session_key: "agent:" <> agent <> ":main", agent_id: agent, prompt_summary: "Saved summary",
+      answer_summary: "Saved " <> id <> " fact.", ingested_at_ms: System.system_time(:millisecond),
+      meta: %{"home_digest" => home}}
+    |> Document.with_index()
+  end
   defp sha(value), do: :crypto.hash(:sha256, value) |> Base.encode16(case: :lower)
 end

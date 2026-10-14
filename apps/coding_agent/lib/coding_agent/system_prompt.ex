@@ -25,6 +25,11 @@ defmodule CodingAgent.SystemPrompt do
           optional(:session_key) => String.t(),
           optional(:session_id) => String.t(),
           optional(:agent_id) => String.t(),
+          optional(:invocation_context_key) => String.t(),
+          optional(:memory_context_key) => String.t(),
+          optional(:memory_context_verified) => boolean(),
+          optional(:shared_memory_grant) => boolean(),
+          optional(:memory_store) => GenServer.server(),
           optional(:contributed_sections) => [ContextRegistry.section()],
           optional(:tool_names) => [String.t()]
         }
@@ -86,7 +91,15 @@ defmodule CodingAgent.SystemPrompt do
       Workspace.load_bootstrap_files(
         workspace_dir: workspace_dir,
         max_chars: max_chars,
-        session_scope: session_scope
+        session_scope: session_scope,
+        cwd: cwd,
+        agent_id: Map.get(opts, :agent_id),
+        session_key: Map.get(opts, :session_key),
+        invocation_context_key: Map.get(opts, :invocation_context_key),
+        memory_context_key: Map.get(opts, :memory_context_key),
+        memory_context_verified: Map.get(opts, :memory_context_verified),
+        shared_memory_grant: Map.get(opts, :shared_memory_grant, false),
+        memory_store: Map.get(opts, :memory_store, LemonMemory.Store)
       )
       |> Enum.reject(&(&1.missing or empty?(&1.content)))
 
@@ -211,17 +224,16 @@ defmodule CodingAgent.SystemPrompt do
        "and genuine remaining limitations. Do not fabricate outputs or substitute reassurance for evidence."}
   ]
 
-  # Memory is two operations, one tool each. USER.md and MEMORY.md are loaded
-  # into every main session as workspace files, and a few relevant past
-  # conversations are attached to the user's message automatically
-  # (`LemonSkills.MemoryRecall`), so the tools are for saving and for looking
-  # further. A rule is left out when the session lacks its tool.
+  # Context-owned bootstrap includes only provenance-proven shared preference
+  # projections. Private facts/history ride in the verified volatile contributor;
+  # legacy non-context sessions retain workspace-file bootstrap. Tool guidance
+  # never authorizes a model to select or widen that owner scope.
   @memory_rules [
     {"remember",
      "Remember: when the user tells you a lasting fact or preference, or a decision worth keeping is settled, " <>
        "use `remember` to save it as one short sentence (target `user` for who they are and how they like to work, " <>
        "`project` for this repository's build/test commands, conventions, gotchas and confirmed decisions, " <>
-       "`memory` for other lasting facts). Project learnings are recalled only in this repository and profile. " <>
+       "`memory` for other lasting facts). The runtime fixes memory ownership; never select, forge, or widen its private/shared scope. " <>
        "Never save secrets, temporary TODOs or raw transcripts; automatic capture is best-effort, not an explicit-save guarantee."},
     {"recall",
      "Recall: before answering anything that depends on earlier conversations, prior work, or something the user told you before, " <>
@@ -266,7 +278,7 @@ defmodule CodingAgent.SystemPrompt do
   defp build_memory_workflow_section(:subagent, _tool_names) do
     """
     ## Memory
-    This is a subagent session. Leave USER.md and MEMORY.md unchanged unless the parent task explicitly asks you to update them.
+    This is a subagent session. Do not read or change personal USER.md/MEMORY.md context. Return candidate facts to the parent for its scoped remember operation.
     """
     |> String.trim()
   end
@@ -422,11 +434,8 @@ defmodule CodingAgent.SystemPrompt do
   defp collect_contributed_sections(request) do
     ContextRegistry.collect(request)
   rescue
-    error ->
-      Logger.debug(
-        "[CodingAgent.SystemPrompt] contributed context unavailable: " <>
-          Exception.message(error)
-      )
+    _error ->
+      Logger.debug("[CodingAgent.SystemPrompt] contributed context unavailable")
 
       []
   end
@@ -437,11 +446,16 @@ defmodule CodingAgent.SystemPrompt do
   defp context_request(cwd, session_scope, skill_context, opts) do
     %{
       cwd: cwd,
+      workspace_dir: Map.get(opts, :workspace_dir, Workspace.workspace_dir()),
       session_scope: session_scope,
       session_key: Map.get(opts, :session_key),
       session_id: Map.get(opts, :session_id),
       agent_id: Map.get(opts, :agent_id),
       run_id: Map.get(opts, :run_id),
+      invocation_context_key: Map.get(opts, :invocation_context_key),
+      memory_context_key: Map.get(opts, :memory_context_key),
+      memory_context_verified: Map.get(opts, :memory_context_verified),
+      shared_memory_grant: Map.get(opts, :shared_memory_grant, false),
       query: if(is_binary(skill_context), do: skill_context, else: "")
     }
   end
@@ -452,8 +466,8 @@ defmodule CodingAgent.SystemPrompt do
     |> Enum.reject(fn {_key, value} -> is_nil(value) end)
   end
 
-  # USER.md and MEMORY.md are what `remember` writes, so they count as memory;
-  # the other assistant-home files are context files.
+  # Raw legacy files and verified shared preference projections both belong to
+  # the memory bucket; other assistant-home bootstrap files are context files.
   @memory_files ~w(user.md memory.md)
 
   defp workspace_context_sections([]), do: []

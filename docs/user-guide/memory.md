@@ -2,27 +2,29 @@
 
 Lemon has two memory concepts:
 
-- **Remember** compact personal facts in assistant-home `USER.md` or `MEMORY.md`,
-  or repository-specific coding learnings with `remember` target `project`.
+- **Remember** compact personal preferences and repository-specific learnings with
+  `remember`. Context-owned Bot sessions keep these in the existing durable store.
 - **Recall** relevant past conversations and longer notes using `recall`. Lemon can also add a
   bounded **Relevant memory** block to each user message automatically.
 
-These surfaces complement each other: `USER.md` and `MEMORY.md` are bootstrap context,
-while project learnings and relevant conversation summaries are bounded volatile context.
-`recall` also searches longer notes under the workspace's `memory/` folder.
+In legacy unscoped operator/CLI sessions, `USER.md` and `MEMORY.md` remain bootstrap
+files and `recall` can search `memory/`. Context-owned Bot sessions instead use
+verified private actor partitions plus explicitly authorized shared facts. They
+never infer sharing authority from old files or unproven run metadata.
 
 ---
 
 ## Remember compact facts
 
-The `remember` tool never writes into the active project. Personal targets update assistant-home
-files; project learnings use the existing durable memory database:
+Personal targets never write into the active project. Legacy unscoped sessions
+update assistant-home files; verified context-owned sessions use canonical facts
+in the existing durable memory database, without modifying those files:
 
-| Target | File | Limit | Purpose |
+| Target | Owning location | Limit | Purpose |
 |---|---|---:|---|
-| `user` | `~/.lemon/agent/workspace/USER.md` | 1,375 chars | Stable facts and preferences about the human |
-| `memory` (default) | `~/.lemon/agent/workspace/MEMORY.md` | 2,200 chars | Curated quick facts and links |
-| `project` | Local memory database, isolated by repository + assistant home + agent | 24 facts / 2,000 bytes total; 512 bytes per fact | Build/test commands, conventions, gotchas, confirmed project decisions |
+| `user` | Canonical scoped preferences; legacy `USER.md` only when unscoped | 1,375 chars | Stable human preferences |
+| `memory` (default) | Canonical scoped preferences; legacy `MEMORY.md` only when unscoped | 2,200 chars | Curated quick facts and links |
+| `project` | Existing local memory database, repository + assistant home + agent + verified actor partition | 24 facts / 2,000 bytes total; 512 bytes per fact | Build/test commands, conventions and confirmed decisions |
 
 The tool accepts `text`, `target` (`user`, `memory`, or `project`; default `memory`), and `replaces`.
 Providing `text` adds a bullet; an existing duplicate is not added again. Providing both `text`
@@ -37,9 +39,13 @@ Before correcting or deleting a project fact, use `recall` with `scope: "project
 and relevant query keywords, then copy the exact saved fact into `replaces`.
 A missing replacement target leaves memory unchanged; it never falls back to adding.
 
-These files are included in the main-session workspace bootstrap context. `USER.md` is for
-stable human profile facts; `MEMORY.md` is for concise curated context. Save reusable procedures
-as skills instead of memory facts.
+Only provenance-proven canonical **shared** preferences enter context-owned static
+bootstrap as virtual `USER.md`/`MEMORY.md`. Private preferences and authorized
+conversation/project facts are selected for bounded volatile recall instead.
+Raw legacy files stay unchanged and require explicit owner review/import to become
+shared; appending one shared fact never promotes the rest of a file. Legacy
+unscoped sessions keep their previous file bootstrap behavior.
+Save reusable procedures as skills rather than memory facts.
 
 ### Repository learnings
 
@@ -53,6 +59,14 @@ runtime kill by itself, or guarantee that every useful fact is retained. Use exp
 when saving a fact matters. Automatic capture deduplicates and retains the newest facts within
 the same hard storage limit. It omits secrets, raw transcripts and transient TODOs.
 
+Context-owned capture always stays in the actor's private partition, even when
+the current maintainer has explicitly authorized a separate shared save. Only
+an admitted trusted runtime grant can authorize `remember` to write shared facts;
+model/tool arguments such as `sharedMemoryGrant` cannot grant that authority.
+Changing invocation/policy epochs does not change the durable actor identity.
+Private Bot+user preferences may span owned DMs/tasks/routines, while a shared
+room uses a distinct actor+conversation+audience partition.
+
 Sessions in subdirectories of the same repository share the nearest `.git` root. Outside a
 repository, only the same working directory shares project facts. Different assistant profiles
 or agent identities remain isolated even when they work in the same repository. Subagents
@@ -64,16 +78,17 @@ cannot read or write personal or project memory through these tools.
 
 The read-only `recall` tool searches these sources:
 
-1. Past conversation summaries belonging to the same agent and assistant profile.
-2. With `scope: "project"`, compact project learnings and that repository's conversation history.
-3. With `scope: "agent"`, Markdown notes under `<workspace_dir>/memory/` (except `TEMPLATE.md`).
+1. Conversation summaries with the exact profile/home and verified actor key.
+2. With `scope: "project"`, authorized compact project learnings and that repository's history.
+3. With `scope: "agent"`, canonical private and proven shared preferences.
 
-`USER.md` and `MEMORY.md` are not searched because they are already in the system prompt. Call
-`recall` with a non-empty `query`; `scope` is `agent` by default or `project`, and `limit` ranges
-from 1 to 10 (default 5). Agent scope searches that agent/profile's conversation history;
-project scope searches the current repository only. For questions about prior work, for example “What did I
-use to deploy that app last week?”, use `recall` when the answer is not already in the supplied
-context.
+Context-owned recall excludes other actors' valid IDs, unproven/legacy summaries,
+and raw `USER.md`, `MEMORY.md`, or `memory/` files. A legacy unscoped session retains
+its previous note-folder search, with personal bootstrap files already in its
+system prompt. Call `recall` with a non-empty `query`; `scope` defaults to `agent`
+or can be `project`, and `limit` is 1–10 (default 5). Project scope searches only
+the current repository. For prior work, for example “What did I use to deploy
+that app last week?”, use `recall` when the answer is not already in context.
 
 Conversation search uses OR/BM25 lexical matching: results may match any query term, and are
 ranked for relevance. Paraphrases that share a keyword can therefore match even when they do not
@@ -89,8 +104,9 @@ Automatic recall is enabled by default. Before a meaningful turn, Lemon searches
 conversation history scoped to the session's agent/profile and attaches a **Relevant memory**
 block to the user message after the cache breakpoint, never inside the static system prefix.
 It prioritizes compact project learnings, followed by the top three matching conversations
-(up to five for embedders) and a bounded USER.md excerpt. Project learnings do not require the
-opening question to repeat their keywords: a build command can help with a new feature request.
+(up to five for embedders) and authorized preference facts. In context-owned
+sessions these are canonical private/shared facts, never an unproven raw-file
+excerpt. Project learnings need not repeat the opening query's keywords.
 The combined block, including its title, is at most 2,048 bytes. Short queries, subagents, and
 sessions without a complete agent/assistant-home scope are skipped. Missing profile files never
 fall back to another profile's workspace. Historical documents without a verified assistant-home
@@ -147,28 +163,37 @@ reads and changes memory on that destination; an offline machine never falls
 back to the controller's memory.
 
 Reads require `operator.read`, while add/delete require `operator.admin`.
-Lists and searches combine the profile's bounded durable memory window with its
-assistant `USER.md`/`MEMORY.md` preferences. Both agent identity and assistant-home
-identity must match for durable documents, so unrelated profiles and unscoped
-legacy history are excluded. Results expose only item id, kind, redacted text
-preview (at most 2 KiB), source label, and creation/update timestamps.
+Product backends must always select `{memoryScope: "private", memoryContextKey}`
+using their verified stable Bot+actor key, or `{memoryScope: "shared"}` for proven
+shared facts. Every scoped success echoes the exact selector (shared key is null);
+the backend checks that echo and strips internal keys before returning UI/model
+results. Exact IDs and confirmations do not bypass private ownership checks.
+Only trusted non-product operator requests may omit both selectors to inspect
+legacy retained files and all profile-owned records. Partial selectors fail.
+Results expose only id, kind, redacted text preview (at most 2 KiB), source and
+creation/update timestamps, plus the internal top-level scope echo.
 
 For example, after connecting an operator client:
 
 ```json
-{"type":"req","id":"remember-1","method":"memory.add","params":{"profileId":"researcher","text":"Prefers concise summaries","kind":"user"}}
-{"type":"req","id":"memory-1","method":"memory.list","params":{"profileId":"researcher","limit":25}}
+{"type":"req","id":"remember-1","method":"memory.add","params":{"profileId":"researcher","memoryScope":"private","memoryContextKey":"private_bot_v1.actor","text":"Prefers concise summaries","kind":"user"}}
+{"type":"req","id":"memory-1","method":"memory.list","params":{"profileId":"researcher","memoryScope":"private","memoryContextKey":"private_bot_v1.actor","limit":25}}
 ```
 
-Adding uses the same compact-file safety rules as `remember` and defaults to
-`kind: "memory"`; `kind: "user"` saves a human preference. To remove a returned
-item, call `memory.delete` with `{profileId, id, confirm: id}` after reviewing it.
+Adding uses the same owning safety/compactness rules as `remember`; scoped writes
+create canonical facts, not shared files. The default is `kind: "memory"`; `"user"`
+is a human preference. To delete, send `{profileId, id, confirm: id}` **with the same
+scope selectors** after reviewing the returned item.
 Confirmation must repeat the exact id, not `true`. Changed or foreign items do
 not authorize deletion. A remote mutation whose acknowledgement is lost returns
 `retrySafe: false`; inspect current memory before retrying.
 
 List pagination is bounded and snapshot-bound: use `nextCursor` as `cursor` in
-`memory.list` with the same profile/query, and restart listing if memory changed.
+`memory.list` with the same profile/query/scope, and restart if memory changed.
+Managed queries accept at most 512 Unicode codepoints / 2,048 UTF-8 bytes.
+Scoped querying uses the owning index and full accepted preference facts, not
+only the newest summaries or clipped previews. A legitimate match may not contain
+the query in its redacted preview; clients must preserve that native match.
 See the [control-plane method contract](../../apps/lemon_control_plane/README.md#profile-memory)
 for exact parameters, result shapes, limits, and node invocation behavior.
 
@@ -187,12 +212,18 @@ replaced and collect explicit approval. Apply the same mutation with its exact
 `snapshotDigest`, `destinationDigest`, and `confirmationToken`; changed source
 or destination memory invalidates that plan.
 
-This transfers profile-owned summary/project records and assistant `USER.md`/
-`MEMORY.md`, not session transcripts, secrets, cookies, daily notes, or arbitrary
-files. It does not rely on truncated/redacted UI previews. Oversized or unsafe
-source data is rejected rather than partially copied. Other source repository
+This transfers profile-owned run/project records, canonical private/shared preference
+facts with actor ownership intact, and retained `USER.md`/`MEMORY.md` bytes.
+Unknown legacy files or pre-index proof claims remain unproven after copying:
+transfer does not authorize sharing. No transcripts, secrets, cookies, daily notes
+or arbitrary files are copied, and no truncated UI preview is used.
+Oversized or unsafe source data is rejected rather than partially copied. Other source repository
 groups keep opaque identities: their facts remain available as profile memory,
 but a new destination repository cannot be inferred from the old filesystem.
+
+All transfer worker operations require fresh provenance-aware capability
+advertisements and exact checked connection binding. An old/downgraded worker
+is unavailable rather than silently turning private ownership into legacy data.
 
 Wait for the destination's durable `copied: true` receipt before changing the
 profile's machine. Preserve the mutation ID if the outcome is unknown and query
@@ -205,9 +236,11 @@ for exact preview/confirmation fields and bounds.
 
 ### Retention and pruning
 
-Memory documents older than the retention window are pruned automatically. Default retention is
-**30 days**, with at most **500 documents per scope** (configurable through the
-`LemonMemory.Store` application environment).
+Indexed run/conversation history is pruned using the configured retention window
+(default **30 days**) and history scope cap (default **500**). Canonical user/memory
+preferences and project facts are protected from ordinary history age/per-session
+pruning; explicit scoped lifecycle deletion still applies. Existing data is not
+rewritten or purged merely by migrating ownership columns.
 
 ```elixir
 config :lemon_memory, LemonMemory.Store,
@@ -237,6 +270,16 @@ mix lemon.memory erase --scope <session|agent|workspace> --key <value>
 Before a run is stored as a memory document, `LemonMemory.Safety` scans summaries for credential
 key-value pairs, API key patterns, AWS access keys, PEM private-key headers, and JWT-like tokens.
 The policy is **drop, not redact**: if a pattern matches, the entire run is not recorded.
+New summary indexes also omit runtime MCP/server/header/token configurations and
+ephemeral invocation-proof artifacts. Run admission and dedicated credential
+services remain authoritative; memory is a bounded summary projection, not a
+second credential store.
+
+Automatic native skill synthesis never turns private/unproven memory into
+profile-wide or global draft files, even if a run could explicitly save a shared
+preference. Legacy non-product synthesis and provenance-proven shared sources
+retain their previous eligibility. Product-private Experiences use their existing
+owning approval/persistence path rather than a new private skill store.
 
 Support bundles include `memory_diagnostics.json`. It reports provider count,
 enabled provider count, provider ids, sources, scopes, timeout shape, and module

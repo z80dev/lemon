@@ -46,7 +46,7 @@ defmodule LemonMemory.SessionSearch do
       String.trim(query) == "" ->
         []
 
-      not session_search_enabled?() ->
+      not enabled?() ->
         []
 
       true ->
@@ -78,9 +78,8 @@ defmodule LemonMemory.SessionSearch do
     |> Enum.join("\n\n")
   end
 
-  # ── Private ────────────────────────────────────────────────────────────────────
-
-  defp session_search_enabled? do
+  @doc "Whether local history search is enabled by the owning feature policy."
+  def enabled? do
     config = LemonCore.Config.Modular.load()
     LemonCore.Config.Features.enabled?(config.features, :session_search)
   rescue

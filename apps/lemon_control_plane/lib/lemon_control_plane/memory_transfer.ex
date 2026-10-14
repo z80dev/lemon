@@ -299,9 +299,11 @@ defmodule LemonControlPlane.MemoryTransfer do
     do: node_call(operation["sourceNodeId"], method, args)
 
   defp node_call(node_id, operation, args) do
-    with {:ok, _node} <- destination_node(node_id),
+    with {:ok, node} <- destination_node(node_id),
+         :ok <- memory_context_capability(node, "memory.transfer." <> operation),
          {:ok, invoke_id} <- NodeRegistry.invoke_node(node_id, "memory.transfer." <> operation, args,
-           recipient: self(), timeout_ms: @timeout_ms, max_payload_bytes: @max_payload_bytes) do
+           expected_pid: node.pid, recipient: self(), timeout_ms: @timeout_ms,
+           max_payload_bytes: @max_payload_bytes) do
       receive do
         {:lemon_node_result, ^invoke_id, {:ok, %{"ok" => true, "payload" => payload}}} ->
           {:ok, payload}
@@ -319,6 +321,13 @@ defmodule LemonControlPlane.MemoryTransfer do
     end
   catch
     _, _ -> {:uncertain, nil}
+  end
+
+  defp memory_context_capability(node, method) do
+    capabilities = Map.get(node.metadata, :capabilities, Map.get(node.metadata, "capabilities"))
+    descriptor = if is_map(capabilities), do: Map.get(capabilities, method)
+    if match?(%{"version" => 1, "contextVersion" => 1}, descriptor),
+      do: :ok, else: {:error, :unsupported_memory_scope}
   end
 
   defp source_node(profile) do

@@ -109,19 +109,26 @@ defmodule LemonControlPlane.Protocol.Schemas do
     # Profile-scoped memory (destination-local for named-node profiles)
     "memory.list" => %{
       required: %{"profileId" => :string},
-      optional: %{"query" => :string, "limit" => :integer, "cursor" => :string}
+      optional: %{
+        "query" => :string, "limit" => :integer, "cursor" => :string,
+        "memoryScope" => :string, "memoryContextKey" => :string
+      }
     },
     "memory.search" => %{
       required: %{"profileId" => :string, "query" => :string},
-      optional: %{"limit" => :integer}
+      optional: %{"limit" => :integer, "memoryScope" => :string, "memoryContextKey" => :string}
     },
-    "memory.get" => %{required: %{"profileId" => :string, "id" => :string}},
+    "memory.get" => %{
+      required: %{"profileId" => :string, "id" => :string},
+      optional: %{"memoryScope" => :string, "memoryContextKey" => :string}
+    },
     "memory.add" => %{
       required: %{"profileId" => :string, "text" => :string},
-      optional: %{"kind" => :string}
+      optional: %{"kind" => :string, "memoryScope" => :string, "memoryContextKey" => :string}
     },
     "memory.delete" => %{
-      required: %{"profileId" => :string, "id" => :string, "confirm" => :string}
+      required: %{"profileId" => :string, "id" => :string, "confirm" => :string},
+      optional: %{"memoryScope" => :string, "memoryContextKey" => :string}
     },
     "memory.transfer.status" => %{
       required: %{"profileId" => :string, "nodeId" => :string, "mutationId" => :string}

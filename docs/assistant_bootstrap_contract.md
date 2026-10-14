@@ -48,6 +48,15 @@ Canonical files:
 
 Daily memory files are expected under `memory/YYYY-MM-DD.md` and are read/written via tools.
 
+For context-owned Bot sessions, `USER.md` and `MEMORY.md` are virtual projections
+of provenance-proven canonical **shared** preference facts from the existing
+`LemonMemory.Preferences`/`LemonMemory.Store` owner. Unknown raw files and daily
+notes remain retained but are not injected or searched by context-owned recall.
+Private preferences enter bounded volatile recall instead of the static prefix.
+Owner review/import must explicitly authorize exact facts before sharing; one
+shared append never promotes unrelated legacy bytes. An unavailable shared store
+or missing native proof never permits raw-file fallback.
+
 ## Memory Scopes
 
 Lemon uses four frozen memory scopes. New stores must be placed in one of these scopes; no additional scopes may be introduced without updating this document.
@@ -59,13 +68,29 @@ Lemon uses four frozen memory scopes. New stores must be placed in one of these 
 | `agent` | `lemon_core` (agent memory store) | Agent lifetime | Cross-run memory for a specific agent identity. Shared across workspaces for the same agent. |
 | `global` | `lemon_core` (global store) | Installation lifetime | Installation-wide configuration and state. Shared across all agents and workspaces. |
 
-Architecture placement rule: all scope-owning stores live in `lemon_core`. No other app may own a scope-level store. `coding_agent` and `lemon_router` may read from stores but must not define new scope boundaries.
+Scope identities and run/session stores remain owned by `lemon_core`; existing
+durable document indexing, project facts and canonical preferences are owned by
+`lemon_memory`. Consumers in `coding_agent`/`lemon_router` reuse those services
+rather than creating parallel stores. Privacy is an ownership partition inside
+the existing scope/store, not a fifth scope or a second product memory store.
+
+Context-owned runs require a paired admitted `invocationContextKey` and stable
+`memoryContextKey` with private native proof. Both keys are 1–128 ASCII characters
+matching `[A-Za-z0-9][A-Za-z0-9_.:-]*`; only trusted runtime atom fields attest
+admission, never model/tool/provider metadata. Stable Bot+user preference keys do
+not include grant epochs; shared-room keys additionally bind actor, conversation
+and authorized audience, never reuse a private DM key. Owning SQL filters this
+partition before candidate limits and rechecks it on get/delete. Historical rows
+without persisted proof are not backfilled or rewritten into private/shared
+authority; retained claims alone cannot create proof, including through transfer.
 
 ## Session Scoping
 
 Bootstrap injection is session-scoped:
 
-- Main sessions: full bootstrap context, including `MEMORY.md`.
+- Legacy unscoped main sessions: existing full file bootstrap.
+- Context-owned main sessions: allowed identity files plus canonical shared
+  preference projections, never raw legacy/personal files.
 - Subagent sessions: restricted bootstrap context (`AGENTS.md`, `TOOLS.md` only).
 
 Subagent scope is inferred from `:parent_session` when present, or can be set explicitly via `:session_scope`.
@@ -74,9 +99,23 @@ Subagent scope is inferred from `:parent_session` when present, or can be set ex
 
 Main-session prompt policy requires the assistant to:
 
-- Use `remember` to add, replace, or remove compact facts in `USER.md` and `MEMORY.md`.
-- Use `recall` to search past conversations and longer notes under `memory/`.
-- Automatic recall may attach a bounded **Relevant memory** block to the user message.
-- Persist user-requested memories to durable files, not ephemeral reasoning.
+- Use `remember` for compact user/memory/project facts. Context-owned saves stay
+  private in the existing owner unless an authenticated trusted maintainer grant
+  explicitly authorizes the exact new shared fact; tool booleans cannot authorize it.
+- Use `recall` for exact owned summaries, canonical preferences and project facts.
+  Context-owned reads exclude legacy/unproven rows and raw file bytes.
+- Automatic recall attaches bounded **Relevant memory** after the cache breakpoint.
+  Both contributor collection and initial/refreshed bootstrap receive the admitted
+  ownership fields; proof failure skips rather than broadening the search.
+- Automatic project capture always stays private, even with a shared-write grant.
+- Automatic native skill synthesis excludes private/unproven indexed sources from
+  profile/global draft files. Proven shared and legitimate legacy non-product
+  sources retain eligibility; private Experiences use their existing owning flow.
+- Local finalized-run ingest stamps original admitted root metadata; the destination
+  execution worker also indexes its completed runs locally from a bounded original
+  request snapshot, never provider/completion metadata or MCP credentials.
+- Legacy unscoped CLI/operator file behavior is retained; product backends must
+  always send explicit private/shared memory management selectors.
 
-Subagent prompt policy forbids reading/updating `MEMORY.md` unless explicitly requested by the parent task.
+Subagents receive no personal bootstrap or memory tool authority. Inherited
+context cannot broaden the parent scope, and a shared-write grant is not inherited.
