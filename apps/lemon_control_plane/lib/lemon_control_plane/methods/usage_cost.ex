@@ -64,40 +64,41 @@ defmodule LemonControlPlane.Methods.UsageCost do
     # Parse dates or use defaults
     {start_ms, end_ms} = parse_date_range(start_date, end_date)
 
-    with {:ok, records} <- fetch_records(start_ms, end_ms) do
-      costs = calculate_costs(records, group_by)
-      details = details(records)
+    case fetch_records(start_ms, end_ms) do
+      {:ok, records} ->
+        costs = calculate_costs(records, group_by)
+        details = details(records)
 
-      result = %{
-        "startDate" => format_date(start_ms),
-        "endDate" => format_date(end_ms),
-        "totalCost" => costs.total,
-        "knownCostSubtotal" => costs.total,
-        "incomplete" =>
-          Enum.any?(records, fn record ->
-            not Map.has_key?(record, :unknown_cost_records) or
-              Map.get(record, :unknown_cost_records, 0) > 0
-          end),
-        "breakdown" => costs.breakdown,
-        "totalRequests" => costs.total_requests,
-        "totalTokens" => costs.total_tokens,
-        "providers" => details.providers,
-        "models" => details.models,
-        "sessions" => details.sessions,
-        "sessionsOmitted" => details.sessions_omitted,
-        "dailyUsage" => details.daily
-      }
+        result = %{
+          "startDate" => format_date(start_ms),
+          "endDate" => format_date(end_ms),
+          "totalCost" => costs.total,
+          "knownCostSubtotal" => costs.total,
+          "incomplete" =>
+            Enum.any?(records, fn record ->
+              not Map.has_key?(record, :unknown_cost_records) or
+                Map.get(record, :unknown_cost_records, 0) > 0
+            end),
+          "breakdown" => costs.breakdown,
+          "totalRequests" => costs.total_requests,
+          "totalTokens" => costs.total_tokens,
+          "providers" => details.providers,
+          "models" => details.models,
+          "sessions" => details.sessions,
+          "sessionsOmitted" => details.sessions_omitted,
+          "dailyUsage" => details.daily
+        }
 
-      # Add daily breakdown if grouped by day
-      result =
-        if group_by == "day" and map_size(costs.daily) > 0 do
-          Map.put(result, "daily", costs.daily)
-        else
-          result
-        end
+        # Add daily breakdown if grouped by day
+        result =
+          if group_by == "day" and map_size(costs.daily) > 0 do
+            Map.put(result, "daily", costs.daily)
+          else
+            result
+          end
 
-      {:ok, Map.put(result, "summary", summary(result, group_by))}
-    else
+        {:ok, Map.put(result, "summary", summary(result, group_by))}
+
       {:error, _} ->
         {:error,
          LemonControlPlane.Protocol.Errors.error(:unavailable, "Usage ledger unavailable")}

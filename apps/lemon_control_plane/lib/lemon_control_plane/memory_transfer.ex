@@ -24,15 +24,16 @@ defmodule LemonControlPlane.MemoryTransfer do
 
   @spec execute(map(), map()) :: {:ok, map()} | {:error, term()}
   def execute(params, ctx) do
-    with :ok <- validate_params(params) do
-      :global.trans({{__MODULE__, journal(ctx), params["mutationId"]}, self()}, fn ->
-        case Store.get(journal(ctx), @table, params["mutationId"]) do
-          nil -> create(params, ctx)
-          operation when is_map(operation) -> resume(operation, params, ctx)
-          _ -> error(:memory_unavailable)
-        end
-      end)
-    else
+    case validate_params(params) do
+      :ok ->
+        :global.trans({{__MODULE__, journal(ctx), params["mutationId"]}, self()}, fn ->
+          case Store.get(journal(ctx), @table, params["mutationId"]) do
+            nil -> create(params, ctx)
+            operation when is_map(operation) -> resume(operation, params, ctx)
+            _ -> error(:memory_unavailable)
+          end
+        end)
+
       {:error, reason} -> error(reason)
     end
   rescue
@@ -176,27 +177,28 @@ defmodule LemonControlPlane.MemoryTransfer do
   end
 
   defp prepare(operation, params, ctx) do
-    with {:ok, preparing} <- persist(operation, %{"state" => "preparing"}, ctx) do
-      case source_call(preparing, "prepare", identity(preparing), ctx) do
-        {:ok, envelope} ->
-          accept_snapshot(preparing, envelope, params, ctx)
+    case persist(operation, %{"state" => "preparing"}, ctx) do
+      {:ok, preparing} ->
+        case source_call(preparing, "prepare", identity(preparing), ctx) do
+          {:ok, envelope} ->
+            accept_snapshot(preparing, envelope, params, ctx)
 
-        {:service_error, reason} when reason in ["transfer_pending", "outcome_unknown"] ->
-          _ = persist(preparing, %{"state" => "source_unknown"}, ctx)
-          uncertain(preparing)
+          {:service_error, reason} when reason in ["transfer_pending", "outcome_unknown"] ->
+            _ = persist(preparing, %{"state" => "source_unknown"}, ctx)
+            uncertain(preparing)
 
-        {:service_error, reason} ->
-          fail(preparing, reason, ctx)
+          {:service_error, reason} ->
+            fail(preparing, reason, ctx)
 
-        {:not_dispatched, _reason} ->
-          _ = persist(preparing, %{"state" => "unprepared"}, ctx)
-          error(:node_unavailable)
+          {:not_dispatched, _reason} ->
+            _ = persist(preparing, %{"state" => "unprepared"}, ctx)
+            error(:node_unavailable)
 
-        {:uncertain, _invoke_id} ->
-          _ = persist(preparing, %{"state" => "source_unknown"}, ctx)
-          uncertain(preparing)
-      end
-    else
+          {:uncertain, _invoke_id} ->
+            _ = persist(preparing, %{"state" => "source_unknown"}, ctx)
+            uncertain(preparing)
+        end
+
       {:error, _} -> error(:memory_unavailable)
     end
   end
@@ -254,28 +256,29 @@ defmodule LemonControlPlane.MemoryTransfer do
   defp apply_snapshot(operation, envelope, params, ctx) do
     envelope = Map.merge(envelope, Map.take(params, ~w(confirmationToken destinationDigest)))
 
-    with {:ok, applying} <- persist(operation, %{"state" => "applying"}, ctx) do
-      case node_call(applying["nodeId"], "apply", envelope) do
-        {:ok, receipt} ->
-          complete(applying, receipt, ctx)
+    case persist(operation, %{"state" => "applying"}, ctx) do
+      {:ok, applying} ->
+        case node_call(applying["nodeId"], "apply", envelope) do
+          {:ok, receipt} ->
+            complete(applying, receipt, ctx)
 
-        {:service_error, reason} when reason in ["transfer_pending", "outcome_unknown"] ->
-          _ = persist(applying, %{"state" => "outcome_unknown"}, ctx)
-          uncertain(applying)
+          {:service_error, reason} when reason in ["transfer_pending", "outcome_unknown"] ->
+            _ = persist(applying, %{"state" => "outcome_unknown"}, ctx)
+            uncertain(applying)
 
-        {:service_error, reason} ->
-          _ = persist(applying, %{"state" => "prepared"}, ctx)
-          error(reason)
+          {:service_error, reason} ->
+            _ = persist(applying, %{"state" => "prepared"}, ctx)
+            error(reason)
 
-        {:not_dispatched, _reason} ->
-          _ = persist(applying, %{"state" => "prepared"}, ctx)
-          error(:node_unavailable)
+          {:not_dispatched, _reason} ->
+            _ = persist(applying, %{"state" => "prepared"}, ctx)
+            error(:node_unavailable)
 
-        {:uncertain, _invoke_id} ->
-          _ = persist(applying, %{"state" => "outcome_unknown"}, ctx)
-          uncertain(applying)
-      end
-    else
+          {:uncertain, _invoke_id} ->
+            _ = persist(applying, %{"state" => "outcome_unknown"}, ctx)
+            uncertain(applying)
+        end
+
       {:error, _} -> error(:memory_unavailable)
     end
   end

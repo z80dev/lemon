@@ -221,6 +221,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Node-only control-plane methods (invocation results/events/control results,
+  native follow-up and lineage floor) now require the authenticated node role
+  before any scope check, so operator credentials carrying node scopes are
+  refused.
+
 - Lemon Bot clients normalize trailing-slash backend origins without duplicate
   API path separators. Web form labels and body text remain legible in dark
   appearance, including onboarding before sign-in.

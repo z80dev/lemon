@@ -190,28 +190,29 @@ defmodule LemonControlPlane.Methods.NodePairApprove do
           status: :offline
         }
 
-        with :ok <- NodeStore.put_node(node_id, node) do
-          event =
-            LemonCore.Event.new(:node_pair_resolved, %{
-              pairing_id: pairing_id,
-              node_id: node_id,
-              approved: true
-            })
+        case NodeStore.put_node(node_id, node) do
+          :ok ->
+            event =
+              LemonCore.Event.new(:node_pair_resolved, %{
+                pairing_id: pairing_id,
+                node_id: node_id,
+                approved: true
+              })
 
-          LemonCore.Bus.broadcast("nodes", event)
+            LemonCore.Bus.broadcast("nodes", event)
 
-          issue_challenge(
-            pairing_id,
-            request,
-            node_id,
-            node_name,
-            node_type,
-            capabilities,
-            node_token,
-            now,
-            false
-          )
-        else
+            issue_challenge(
+              pairing_id,
+              request,
+              node_id,
+              node_name,
+              node_type,
+              capabilities,
+              node_token,
+              now,
+              false
+            )
+
           {:error, _} ->
             {:error, Errors.unavailable("Node pairing store is unavailable")}
         end

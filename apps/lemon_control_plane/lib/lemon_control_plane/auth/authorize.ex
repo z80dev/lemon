@@ -280,11 +280,11 @@ defmodule LemonControlPlane.Auth.Authorize do
     has_scope = Enum.any?(required_scopes, fn scope -> scope in ctx_scopes end)
 
     cond do
+      node_only_method?(method) and Map.get(ctx, :role) != :node ->
+        {:error, {:forbidden, "Method #{method} requires node role"}}
+
       has_scope ->
         :ok
-
-      node_only_method?(method) and ctx.role != :node ->
-        {:error, {:forbidden, "Method #{method} requires node role"}}
 
       true ->
         {:error, {:forbidden, "Insufficient permissions for #{method}"}}
