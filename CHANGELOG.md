@@ -59,6 +59,11 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   even while offline, preventing a node with that ID as its name from receiving
   another machine's private persona. Legacy names resolve only without an ID
   record; explicit target IDs remain ID-only.
+- Remote execution metadata now canonicalizes atom-key proof/grant/context
+  presence before JSON encoding, so forged string/camel aliases cannot replace
+  explicit false/null values. Untrusted meaningful scope/proof claims fail
+  closed instead of downgrading to legacy context; unresolved references remain
+  execution-host owned.
 
 ---
 

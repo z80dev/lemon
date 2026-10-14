@@ -15,16 +15,45 @@ defmodule CodingAgent.Executor.RemoteRequestCodec do
   @version 1
 
   @execution_meta_keys ~w(model thinking_level system_prompt profile_id profile_instructions
-                          mcp_servers agent_id async_followups resume_source acp_session_id
+                          mcp_servers invocation_mcp_servers invocation_context_key
+                          native_lineage_handle native_lineage_run_id
+                          agent_id async_followups resume_source acp_session_id
                           acp_mcp_session_id acp_client_terminal acp_client_elicitation_form
                           acp_client_fs_read_text_file acp_client_fs_write_text_file)a
+
+  @private_meta_aliases [
+    {:invocation_context_key, ["invocation_context_key", "invocationContextKey", :invocationContextKey]},
+    {:memory_context_key, ["memory_context_key", "memoryContextKey", :memoryContextKey]},
+    {:memory_context_verified, ["memory_context_verified", "memoryContextVerified", :memoryContextVerified]},
+    {:shared_memory_grant, ["shared_memory_grant", "sharedMemoryGrant", :sharedMemoryGrant]},
+    {:invocation_proof_verified, ["invocation_proof_verified", "invocationProofVerified", :invocationProofVerified]},
+    {:invocation_proof, ["invocation_proof", "invocationProof", :invocationProof]},
+    {:native_lineage_handle, ["native_lineage_handle", "nativeLineageHandle", :nativeLineageHandle]},
+    {:native_lineage_run_id, ["native_lineage_run_id", "nativeLineageRunId", :nativeLineageRunId]}
+  ]
+
+  @proof_meta_aliases [
+    {:run_id, ["run_id", "runId", :runId]},
+    {:server_name, ["server_name", "serverName", :serverName]},
+    {:server_url, ["server_url", "serverUrl", :serverUrl]},
+    {:header_name, ["header_name", "headerName", :headerName]},
+    {:secret_name, ["secret_name", "secretName", :secretName]}
+  ]
 
   @doc false
   def normalize_meta(meta) when is_map(meta) do
     Enum.reduce(@execution_meta_keys, meta, fn key, acc ->
-      case Map.fetch(acc, Atom.to_string(key)) do
-        {:ok, value} -> acc |> Map.delete(Atom.to_string(key)) |> Map.put(key, value)
-        :error -> acc
+      string_key = Atom.to_string(key)
+
+      case Map.fetch(acc, key) do
+        {:ok, _value} ->
+          Map.delete(acc, string_key)
+
+        :error ->
+          case Map.fetch(acc, string_key) do
+            {:ok, value} -> acc |> Map.delete(string_key) |> Map.put(key, value)
+            :error -> acc
+          end
       end
     end)
   end
@@ -37,7 +66,8 @@ defmodule CodingAgent.Executor.RemoteRequestCodec do
   def encode(%ExecutionRequest{} = request, opts) do
     native_images = if is_nil(request.images), do: [], else: request.images
 
-    with {:ok, images} <- LemonAi.ImageInputs.encode(native_images) do
+    with {:ok, source_meta} <- normalize_source_meta(request.meta),
+         {:ok, images} <- LemonAi.ImageInputs.encode(native_images) do
       payload = %{
         "version" => @version,
         "runId" => request.run_id,
@@ -51,7 +81,13 @@ defmodule CodingAgent.Executor.RemoteRequestCodec do
         # Cwd routing hints are consumed above, not execution metadata. In particular
         # an unused controller path must not survive through a false explicit flag.
         "meta" =>
-          Map.drop(request.meta || %{}, [
+          source_meta
+          |> normalize_meta()
+          |> Map.drop([
+            :native_destination_pid,
+            "native_destination_pid",
+            "nativeDestinationPid",
+            :nativeDestinationPid,
             :remote_cwd,
             "remote_cwd",
             :remote_cwd_explicit,
@@ -64,6 +100,64 @@ defmodule CodingAgent.Executor.RemoteRequestCodec do
   end
 
   def encode(_, _opts), do: {:error, :invalid_execution_request}
+
+  defp normalize_source_meta(nil), do: {:ok, %{}}
+
+  defp normalize_source_meta(meta) when is_map(meta) do
+    with {:ok, meta} <- normalize_private_keys(meta, @private_meta_aliases),
+         {:ok, meta} <- normalize_source_proof(meta) do
+      {:ok, meta}
+    end
+  end
+
+  defp normalize_source_meta(_),
+    do: {:error, {:invalid_request_payload, :invalid_execution_meta}}
+
+  defp normalize_source_proof(%{invocation_proof: proof} = meta)
+       when is_map(proof) and not is_struct(proof) do
+    with {:ok, proof} <- normalize_private_keys(proof, @proof_meta_aliases) do
+      {:ok, Map.put(meta, :invocation_proof, proof)}
+    end
+  end
+
+  defp normalize_source_proof(meta), do: {:ok, meta}
+
+  defp normalize_private_keys(meta, fields) do
+    Enum.reduce_while(fields, {:ok, meta}, fn {key, aliases}, {:ok, acc} ->
+      case Map.fetch(acc, key) do
+        {:ok, _trusted_value} ->
+          # Presence, not truthiness: false/nil must defeat forged JSON aliases.
+          {:cont, {:ok, Map.drop(acc, aliases)}}
+
+        :error ->
+          case alias_claim(acc, aliases) do
+            :absent ->
+              {:cont, {:ok, acc}}
+
+            :untrusted ->
+              # Reject rather than dropping scoped claims into legacy defaults.
+              {:halt, {:error, {:invalid_request_payload, :untrusted_execution_context}}}
+
+            negative ->
+              # Preserve existing false/nil presence without minting proof.
+              value = if negative == :false, do: false, else: nil
+              remaining = acc |> Map.drop(aliases) |> Map.put(Atom.to_string(key), value)
+              {:cont, {:ok, remaining}}
+          end
+      end
+    end)
+  end
+
+  defp alias_claim(meta, aliases) do
+    Enum.reduce_while(aliases, :absent, fn alias_key, previous ->
+      case Map.fetch(meta, alias_key) do
+        :error -> {:cont, previous}
+        {:ok, false} -> {:cont, :false}
+        {:ok, nil} -> {:cont, if(previous == :false, do: :false, else: :nil)}
+        {:ok, _meaningful_claim} -> {:halt, :untrusted}
+      end
+    end)
+  end
 
   @spec decode_result(term()) :: {:ok, map()} | {:error, term()}
   def decode_result(result) when is_map(result) do

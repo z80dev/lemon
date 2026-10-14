@@ -86,6 +86,15 @@ Origin-policy clients validate destination DNS and pin their real transport
 before decrypting headers, preserve Host/TLS identity and reject redirects.
 Per-invocation connector replacements never merge another principal's headers.
 
+Before remote JSON encoding, private invocation/memory proof metadata keeps
+canonical atom-key presence authoritative, including explicit `false` and
+`nil`; snake/camel aliases cannot override it through duplicate JSON keys.
+String-only meaningful proof, grant, context or proof-descriptor claims are
+rejected rather than removed into legacy defaults. Existing negative presence
+remains negative, and trusted positive canonical fields travel only as data
+for the authenticated execution boundary's owning validation. This is not
+generic model-map authority promotion. MCP/secret references remain unresolved.
+
 Profile MCP aliases are stable public-identity hashes, exposed by discovery as
 `executionName`. Credential rotation and DNS pinning do not change policy names.
 Profile clients use native `ToolPolicy` as the execution/approval authority:
