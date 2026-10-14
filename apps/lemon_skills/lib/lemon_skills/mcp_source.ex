@@ -103,11 +103,54 @@ defmodule LemonSkills.McpSource do
   def discover_ready(server), do: GenServer.call(server, :discover_ready, :infinity)
 
   @doc """
+  Stable profile-native execution alias for a public server name, HTTP endpoint,
+  and raw remote tool name. The public endpoint includes path/query; host/scheme
+  case and default ports are canonicalized. Credentials, allowlists and DNS pins
+  never enter the identity. Aliases are at most 64 ASCII bytes.
+  """
+  @spec execution_name(String.t(), String.t(), String.t()) :: String.t()
+  def execution_name(name, url, raw_name) do
+    profile_alias(name, url, {:tool, raw_name}, "mcp_#{server_slug(name)}_#{tool_slug(raw_name)}")
+  end
+
+  @doc false
+  def valid_remote_name?(name),
+    do: is_binary(name) and String.valid?(name) and byte_size(name) in 1..128 and
+      not Regex.match?(~r/[\x00-\x20\x7f]/, name)
+
+  defp profile_alias(name, url, selector, prefix) do
+    uri = URI.parse(url)
+    scheme = String.downcase(uri.scheme)
+    host = String.downcase(uri.host)
+    default_port = if scheme == "https", do: 443, else: 80
+    port = if uri.port == default_port, do: nil, else: uri.port
+    endpoint = URI.to_string(%{uri | scheme: scheme, host: host, port: port, path: uri.path || "/"})
+    digest = :crypto.hash(:sha256, :erlang.term_to_binary({name, endpoint, selector}))
+      |> binary_part(0, 16)
+      |> Base.encode16(case: :lower)
+
+    String.slice(prefix, 0, 31) <> "_" <> digest
+  end
+
+  @doc """
+  Read the connected clients' raw-name tool inventory, independent of executable
+  allowlists. Credentials are scrubbed before leaving the source; schemas that
+  would require redaction are omitted rather than silently changed.
+  """
+  def remote_tools(server) do
+    GenServer.call(server, :remote_tools, :infinity)
+  catch
+    :exit, _ -> {:error, :discovery_failed}
+  end
+
+  @doc """
   Return locally configured approval modes keyed by published tool name.
 
   `:tool_approvals` selectors are raw remote tool names, or MCP method names
   `resources/list`, `resources/read`, `prompts/list`, and `prompts/get` for the
   host-provided utility tools. Remote metadata never supplies approval policy.
+  Profile-owned HTTP sessions report `:never` here only to defer to the native
+  ToolPolicy/approval floor; this metadata is not an authorization grant.
   """
   def approval_policy(server \\ __MODULE__), do: GenServer.call(server, :approval_policy)
 
@@ -330,6 +373,34 @@ defmodule LemonSkills.McpSource do
     {:reply, result, state}
   end
 
+  def handle_call(:remote_tools, _from, %{disabled: true} = state) do
+    {:reply, {:error, :mcp_disabled}, state}
+  end
+
+  def handle_call(:remote_tools, _from, state) do
+    result =
+      Enum.reduce_while(state.servers, {:ok, []}, fn
+        {_name, %{connected: true, client: client, client_module: mod, config: config,
+                  capabilities: capabilities}}, {:ok, acc} ->
+          values = config_redact_values(config)
+          public_name = Keyword.get(config_options(config), :name)
+
+          # The configured label is also returned by discovery. Fail closed if
+          # it would echo a known credential; never emit a secret-bearing DTO.
+          with true <- scrub_inventory(public_name, values) == public_name,
+               {:ok, tools} when is_list(tools) <- list_advertised_tools(mod, client, capabilities) do
+            {:cont, {:ok, acc ++ Enum.map(tools, &scrub_remote_tool(&1, values))}}
+          else
+            _ -> {:halt, {:error, :discovery_failed}}
+          end
+
+        _, _ ->
+          {:halt, {:error, :discovery_failed}}
+      end)
+
+    {:reply, result, state}
+  end
+
   def handle_call(:approval_policy, _from, state) do
     policies =
       Map.new(state.tool_cache, fn {name, entry} ->
@@ -346,6 +417,7 @@ defmodule LemonSkills.McpSource do
         selector = approval_selector(entry.original_name)
         mode = Map.get(Keyword.get(opts, :tool_approvals, %{}), selector, default)
 
+        mode = if Keyword.get(opts, :profile_owned, false), do: :never, else: mode
         {name, if(mode in [:never, "never"], do: :never, else: :always)}
       end)
 
@@ -405,22 +477,26 @@ defmodule LemonSkills.McpSource do
         case Map.get(state.servers, server_name) do
           %{client: client, client_module: client_mod, connected: true, config: config}
           when is_pid(client) ->
-            timeout = request_timeout(opts, config)
+            if executable_call_allowed?(config, original_name) do
+              timeout = request_timeout(opts, config)
 
-            Task.start(fn ->
-              reply =
-                try do
-                  call_mcp_entry(client_mod, client, original_name, params, timeout_ms: timeout)
-                rescue
-                  _ -> {:error, :invalid_tool_result}
-                catch
-                  :exit, _ -> {:error, :not_connected}
-                end
+              Task.start(fn ->
+                reply =
+                  try do
+                    call_mcp_entry(client_mod, client, original_name, params, timeout_ms: timeout)
+                  rescue
+                    _ -> {:error, :invalid_tool_result}
+                  catch
+                    :exit, _ -> {:error, :not_connected}
+                  end
 
-              GenServer.reply(from, reply)
-            end)
+                GenServer.reply(from, reply)
+              end)
 
-            {:noreply, state}
+              {:noreply, state}
+            else
+              {:reply, {:error, :not_found}, state}
+            end
 
           _ ->
             {:reply, {:error, :not_connected}, state}
@@ -640,6 +716,11 @@ defmodule LemonSkills.McpSource do
     |> Enum.sort_by(& &1.name)
   end
 
+  defp legacy_execution_name(prefix, server_name, original_name) do
+    digest = short_hash(:erlang.term_to_binary({server_name, original_name}))
+    String.slice(prefix, 0, 47) <> "_" <> digest
+  end
+
   defp refresh_tools(state) do
     source = self()
 
@@ -649,8 +730,26 @@ defmodule LemonSkills.McpSource do
 
         tools =
           Enum.map(tools, fn {tool, original_name} ->
-            digest = short_hash(:erlang.term_to_binary({server_name, original_name}))
-            name = String.slice(tool.name, 0, 47) <> "_" <> digest
+            name =
+              case server.config do
+                {:http, url, opts} ->
+                  if Keyword.get(opts, :profile_owned, false) do
+                    profile_name = Keyword.fetch!(opts, :name)
+
+                    case original_name do
+                      {:tool, raw_name} ->
+                        execution_name(profile_name, url, raw_name)
+
+                      {:utility, _, _} ->
+                        profile_alias(profile_name, url, {:utility, approval_selector(original_name)}, tool.name)
+                    end
+                  else
+                    legacy_execution_name(tool.name, server_name, original_name)
+                  end
+
+                _ ->
+                  legacy_execution_name(tool.name, server_name, original_name)
+              end
 
             tool = %{
               tool
@@ -993,7 +1092,7 @@ defmodule LemonSkills.McpSource do
         oauth: oauth,
         timeout: client_start_timeout(oauth, opts),
         timeout_ms: Keyword.get(opts, :timeout_ms, @client_request_timeout_ms)
-      ] ++ oauth_token_cache_opts(url, opts)
+      ] ++ Keyword.take(opts, [:origin_policy, :destination_pin]) ++ oauth_token_cache_opts(url, opts)
 
     with {:ok, client_mod} <- http_client_module(),
          {:ok, client} <- apply(client_mod, :start_link, [client_opts]),
@@ -1480,6 +1579,10 @@ defmodule LemonSkills.McpSource do
   defp list_advertised_tools(client_mod, client, _capabilities),
     do: client_call(client_mod, :list_tools, [client, @client_request_timeout_ms])
 
+  defp resource_utility_tools(_command, _client_mod, _client, %{enabled_tools: names}, _caps)
+       when is_list(names),
+       do: {[], []}
+
   defp resource_utility_tools(_command, _client_mod, _client, _filters, %{resources: false}),
     do: {[], []}
 
@@ -1518,6 +1621,10 @@ defmodule LemonSkills.McpSource do
         {[], []}
     end
   end
+
+  defp prompt_utility_tools(_command, _client_mod, _client, %{enabled_tools: names}, _caps)
+       when is_list(names),
+       do: {[], []}
 
   defp prompt_utility_tools(_command, _client_mod, _client, _filters, %{prompts: false}),
     do: {[], []}
@@ -1631,6 +1738,8 @@ defmodule LemonSkills.McpSource do
 
   defp filter_config(opts) do
     %{
+      profile_owned: Keyword.get(opts, :profile_owned, false),
+      enabled_tools: Keyword.get(opts, :enabled_tools),
       allow_tools: Keyword.get(opts, :allow_tools, []),
       block_tools: Keyword.get(opts, :block_tools, []),
       allow_resources: Keyword.get(opts, :allow_resources, []),
@@ -1750,8 +1859,72 @@ defmodule LemonSkills.McpSource do
     names = names_for(tool, ["name"])
 
     Enum.any?(names, &(String.valid?(&1) and &1 != "")) and
+      (not filters.profile_owned or Enum.any?(names, &valid_remote_name?/1)) and
+      (is_nil(filters.enabled_tools) or Enum.any?(names, &(&1 in filters.enabled_tools))) and
       allowed?(names, filters.allow_tools, filters.block_tools)
   end
+
+  defp executable_call_allowed?(config, {:tool, name}),
+    do: tool_allowed?(%{"name" => name}, filter_config(config_options(config)))
+
+  defp executable_call_allowed?(config, {:utility, _, _}),
+    do: not Keyword.has_key?(config_options(config), :enabled_tools)
+
+  defp config_options({:stdio, _, _, opts}), do: opts
+  defp config_options({transport, _, opts}) when transport in [:http, :sse], do: opts
+  defp config_options(_), do: []
+
+  defp config_redact_values(config) do
+    opts = config_options(config)
+
+    (Keyword.get(opts, :redact_values, []) ++
+       Enum.map(Keyword.get(opts, :headers, []), &elem(&1, 1)))
+    |> Enum.filter(&(is_binary(&1) and &1 != ""))
+    |> Enum.uniq()
+    |> Enum.sort_by(&byte_size/1, :desc)
+  end
+
+  defp scrub_remote_tool(tool, values) do
+    name = map_value(tool, "name") || map_value(tool, :name)
+    schema = map_value(tool, "inputSchema") || map_value(tool, :inputSchema)
+    annotations = map_value(tool, "annotations") || map_value(tool, :annotations) || %{}
+
+    %{
+      "name" => if(scrub_inventory(name, values) == name, do: name, else: nil),
+      "description" =>
+        scrub_inventory(map_value(tool, "description") || map_value(tool, :description) || "", values),
+      "inputSchema" =>
+        if(safe_inventory_schema?(schema, values), do: schema, else: nil),
+      "annotations" => %{
+        "readOnlyHint" =>
+          (map_value(annotations, "readOnlyHint") || map_value(annotations, :readOnlyHint)) === true
+      }
+    }
+  end
+
+  defp safe_inventory_schema?(schema, values) when is_map(schema) do
+    case Jason.encode(schema) do
+      {:ok, json} when byte_size(json) <= 32_768 -> scrub_inventory(schema, values) == schema
+      _ -> false
+    end
+  rescue
+    _ -> false
+  end
+
+  defp safe_inventory_schema?(_, _), do: false
+
+  defp scrub_inventory(value, values) when is_binary(value) do
+    value = Enum.reduce(values, value, &String.replace(&2, &1, "[REDACTED]"))
+    LemonCore.Redact.text(value, drop_keys: true)
+  end
+
+  defp scrub_inventory(value, values) when is_map(value),
+    do: Map.new(value, fn {key, nested} -> {scrub_inventory(key, values), scrub_inventory(nested, values)} end)
+
+  defp scrub_inventory(value, values) when is_list(value),
+    do: Enum.map(value, &scrub_inventory(&1, values))
+
+  defp scrub_inventory(value, _values), do: value
 
   defp resource_allowed?(resource, filters) do
     resource
@@ -1821,6 +1994,7 @@ defmodule LemonSkills.McpSource do
 
   defp validate_filter_opts(opts) do
     allowed_keys = [
+      :enabled_tools,
       :allow_tools,
       :block_tools,
       :allow_resources,

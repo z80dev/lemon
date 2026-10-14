@@ -274,7 +274,9 @@ defmodule LemonAutomation.RunSubmitterTest do
 
     assert {:ok, _} =
              LemonCore.ProfileStore.update("cron-profile", %{
-               node: "worker-current", model: "current-model", systemPrompt: "Current persona"
+               node: "worker-current", model: "current-model", systemPrompt: "Current persona",
+               toolPolicy: %{"allow" => "all", "deny" => ["bash"],
+                 "require_approval" => ["write"], "approvals" => %{"write" => "always"}}
              })
     File.write!(Path.join(profile["paths"]["workspace"], "SOUL.md"), "Current instructions")
 
@@ -299,6 +301,9 @@ defmodule LemonAutomation.RunSubmitterTest do
     assert params.meta.remote_cwd_explicit == false
     assert params.cwd == nil
     assert params.tool_policy.blocked_tools == ["cron"]
+    assert params.tool_policy.deny == ["bash"]
+    assert params.tool_policy.require_approval == ["write"]
+    assert params.tool_policy.approvals["write"] == "always"
     assert SessionKey.valid?(params.session_key)
     assert params.session_key != job.session_key
     assert job.deliver_to == "none"

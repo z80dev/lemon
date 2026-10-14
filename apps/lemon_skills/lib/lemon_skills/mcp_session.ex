@@ -35,10 +35,15 @@ defmodule LemonSkills.McpSession do
   end
 
   @doc """
-  Attach profile streamable-HTTP definitions (`name`, `url`, `headers`).
+  Attach profile streamable-HTTP definitions (`name`, `url`, `headers`, `enabledTools`).
 
-  The execution request may use atom or JSON keys. Only connection fields are
-  accepted; profile definitions cannot select stdio, OAuth persistence or paths.
+  `enabledTools` is an exact allowlist of raw remote names: omitted allows all,
+  `[]` allows none. An explicit list also disables resource/prompt utilities.
+  The execution request may use atom or JSON keys. Profile definitions cannot
+  select stdio, OAuth persistence or paths.
+  Profile tools use stable public-endpoint aliases and defer approval requirements
+  to the native tool-policy floor. Generic `open/4`/ACP sessions keep their local
+  approval metadata and legacy aliases.
   `${LEMON_SECRET:NAME}` header references resolve only through the encrypted
   secret store on this executing host, immediately before client attachment.
   Missing or failing reads fail closed; no environment expansion is performed.
@@ -49,12 +54,23 @@ defmodule LemonSkills.McpSession do
     configs =
       Enum.map(configs, fn
         raw when is_map(raw) ->
-          %{
+          config = %{
             "type" => "http",
             "name" => Map.get(raw, "name", Map.get(raw, :name)),
             "url" => Map.get(raw, "url", Map.get(raw, :url)),
             "headers" => Map.get(raw, "headers", Map.get(raw, :headers, %{}))
           }
+
+          Enum.reduce(
+            [{"enabledTools", :enabledTools}, {"allowedOrigins", :allowedOrigins},
+             {"approvedPrivateOrigins", :approvedPrivateOrigins}],
+            config,
+            fn {key, atom}, config ->
+              if Map.has_key?(raw, key) or Map.has_key?(raw, atom),
+                do: Map.put(config, key, Map.get(raw, key, Map.get(raw, atom))),
+                else: config
+            end
+          )
 
         _ ->
           nil
@@ -62,18 +78,54 @@ defmodule LemonSkills.McpSession do
 
     with :ok <- validate_identity(id, cwd, owner_pid),
          {:ok, configs} <- normalize_configs(configs),
+         {:ok, configs} <- pin_http_destinations(configs),
          {:ok, configs} <- resolve_http_secrets(configs) do
+      configs = Enum.map(configs, fn {:http, url, opts} ->
+        {:http, url, Keyword.put(opts, :profile_owned, true)}
+      end)
       request({:open, id, Path.expand(cwd), configs, owner_pid}, {:error, :runtime_unavailable})
     end
   end
 
   def open_http(_id, _cwd, _configs, _owner_pid), do: {:error, :invalid_config}
 
+  defp pin_http_destinations(configs) do
+    Enum.reduce_while(configs, {:ok, []}, fn {:http, url, opts} = config, {:ok, acc} ->
+      case Keyword.fetch(opts, :origin_policy) do
+        :error ->
+          {:cont, {:ok, [config | acc]}}
+
+        {:ok, policy} ->
+          module = Module.concat(["Lemon" <> "MCP", "HTTP", "OriginPolicy"])
+
+          case apply(module, :pin, [url, policy]) do
+            {:ok, pin} ->
+              {:cont, {:ok, [{:http, url, Keyword.put(opts, :destination_pin, pin)} | acc]}}
+
+            {:error, reason} when is_atom(reason) ->
+              {:halt, {:error, reason}}
+
+            _ ->
+              {:halt, {:error, :destination_not_allowed}}
+          end
+      end
+    end)
+    |> case do
+      {:ok, configs} -> {:ok, Enum.reverse(configs)}
+      error -> error
+    end
+  rescue
+    _ -> {:error, :destination_not_allowed}
+  catch
+    _, _ -> {:error, :destination_not_allowed}
+  end
+
   defp resolve_http_secrets(configs) do
     Enum.reduce_while(configs, {:ok, []}, fn {:http, url, opts}, {:ok, acc} ->
       case resolve_http_headers(Keyword.get(opts, :headers, [])) do
-        {:ok, headers} ->
-          {:cont, {:ok, [{:http, url, Keyword.put(opts, :headers, headers)} | acc]}}
+        {:ok, headers, values} ->
+          opts = opts |> Keyword.put(:headers, headers) |> Keyword.put(:redact_values, values)
+          {:cont, {:ok, [{:http, url, opts} | acc]}}
 
         {:error, _} = error ->
           {:halt, error}
@@ -86,24 +138,25 @@ defmodule LemonSkills.McpSession do
   end
 
   defp resolve_http_headers(headers) do
-    Enum.reduce_while(headers, {:ok, []}, fn {name, value}, {:ok, acc} ->
+    Enum.reduce_while(headers, {:ok, [], []}, fn {name, value}, {:ok, acc, values} ->
       case resolve_header(value) do
-        {:ok, resolved} -> {:cont, {:ok, [{name, resolved} | acc]}}
+        {:ok, resolved, secrets} ->
+          {:cont, {:ok, [{name, resolved} | acc], [value, resolved | secrets] ++ values}}
         {:error, _} = error -> {:halt, error}
       end
     end)
     |> case do
-      {:ok, headers} -> {:ok, Enum.reverse(headers)}
+      {:ok, headers, values} -> {:ok, Enum.reverse(headers), Enum.uniq(values)}
       error -> error
     end
   end
 
   defp resolve_header(value) do
-    with {:ok, parts} <- resolve_header_segments(value, []),
+    with {:ok, parts, secrets} <- resolve_header_segments(value, [], []),
          resolved <- parts |> Enum.reverse() |> IO.iodata_to_binary(),
          true <- byte_size(resolved) <= 8_192 and String.valid?(resolved) and
                    not String.contains?(resolved, ["\r", "\n", <<0>>]) do
-      {:ok, resolved}
+      {:ok, resolved, secrets}
     else
       _ -> {:error, :secret_resolution_failed}
     end
@@ -113,10 +166,10 @@ defmodule LemonSkills.McpSession do
     _, _ -> {:error, :secret_resolution_failed}
   end
 
-  defp resolve_header_segments(value, parts) do
+  defp resolve_header_segments(value, parts, secrets) do
     case :binary.match(value, "${LEMON_SECRET:") do
       :nomatch ->
-        {:ok, [value | parts]}
+        {:ok, [value | parts], secrets}
 
       {offset, size} ->
         prefix = binary_part(value, 0, offset)
@@ -130,7 +183,7 @@ defmodule LemonSkills.McpSession do
             with true <- name == String.trim(name) and byte_size(name) <= 512 and
                            not String.contains?(name, ["{", "\r", "\n", <<0>>]),
                  {:ok, secret} when is_binary(secret) <- LemonCore.Secrets.get(name) do
-              resolve_header_segments(tail, [secret, prefix | parts])
+              resolve_header_segments(tail, [secret, prefix | parts], [secret, name | secrets])
             else
               _ -> {:error, :secret_resolution_failed}
             end
@@ -146,6 +199,10 @@ defmodule LemonSkills.McpSession do
 
   @spec approvals(term()) :: %{String.t() => :always | :never}
   def approvals(id), do: request({:lookup, id, :approvals}, %{})
+
+  @doc "Return credential-scrubbed raw remote tool descriptors through the owning source."
+  @spec remote_tools(term()) :: {:ok, [map()]} | {:error, atom()}
+  def remote_tools(id), do: request({:remote_tools, id}, {:error, :runtime_unavailable})
 
   @spec close(term()) :: :ok
   def close(id), do: request({:close, id}, :ok)
@@ -216,6 +273,20 @@ defmodule LemonSkills.McpSession do
         else
           {:reply, default, remove_session(state, id)}
         end
+    end
+  end
+
+  def handle_call({:remote_tools, id}, _from, state) do
+    case Map.get(state, id) do
+      %{source: source, owner: owner} ->
+        if Process.alive?(owner) and Process.alive?(source) do
+          {:reply, McpSource.remote_tools(source), state}
+        else
+          {:reply, {:error, :owner_unavailable}, remove_session(state, id)}
+        end
+
+      nil ->
+        {:reply, {:error, :discovery_failed}, state}
     end
   end
 
@@ -316,7 +387,9 @@ defmodule LemonSkills.McpSession do
          true <- valid_transport?(raw, type),
          true <- valid_connection_options?(raw),
          {:ok, env} <- pairs(Map.get(raw, "env", %{})),
-         {:ok, headers} <- pairs(Map.get(raw, "headers", %{})) do
+         {:ok, headers} <- pairs(Map.get(raw, "headers", %{})),
+         :ok <- validate_enabled_tools(raw),
+         :ok <- validate_origin_policy(raw) do
       normalized =
         raw
         |> Map.put("type", type)
@@ -336,6 +409,26 @@ defmodule LemonSkills.McpSession do
   end
 
   defp normalize_config(_), do: {:error, :invalid_config}
+
+  defp validate_enabled_tools(raw) do
+    if not Map.has_key?(raw, "enabledTools") or
+         (is_list(raw["enabledTools"]) and length(raw["enabledTools"]) <= 256 and
+            Enum.all?(raw["enabledTools"], &McpSource.valid_remote_name?/1) and
+            MapSet.size(MapSet.new(raw["enabledTools"])) == length(raw["enabledTools"])) do
+      :ok
+    else
+      {:error, :invalid_config}
+    end
+  end
+
+  defp validate_origin_policy(raw) do
+    if Enum.all?(["allowedOrigins", "approvedPrivateOrigins"], fn key ->
+         not Map.has_key?(raw, key) or
+           (is_list(raw[key]) and length(raw[key]) <= 32 and Enum.all?(raw[key], &valid_string?/1))
+       end),
+      do: :ok,
+      else: {:error, :invalid_config}
+  end
 
   defp valid_connection_options?(raw) do
     cwd_valid? =

@@ -299,6 +299,67 @@ defmodule CodingAgent.Executor.ProfileExecutionTest do
     refute_receive {:mcp_request, _, _}, 50
   end
 
+  @tag :tmp_dir
+  test "profile sessions never inherit machine-global MCP credentials, including after reload", %{tmp_dir: root} do
+    url = fixture_url(self())
+    previous_servers = Application.get_env(:lemon_skills, :mcp_servers)
+    previous_env = System.get_env("LEMON_MCP_SERVERS")
+    previous_agent_dir = System.get_env("LEMON_AGENT_DIR")
+    previous_source_disabled = :sys.get_state(McpSource).disabled
+    System.put_env("LEMON_AGENT_DIR", Path.join(root, "isolated-agent"))
+    :sys.replace_state(McpSource, &%{&1 | disabled: false})
+    System.delete_env("LEMON_MCP_SERVERS")
+    Application.put_env(:lemon_skills, :mcp_servers,
+      [{:http, url, [name: "ambient-owner", headers: [{"Authorization", "Bearer ambient-owner-token"}]]}])
+    Application.put_env(:lemon_core, :paths, home_state_dir: Path.join(root, "destination-state"))
+
+    on_exit(fn ->
+      restore_env(:lemon_skills, :mcp_servers, previous_servers)
+      if previous_env,
+        do: System.put_env("LEMON_MCP_SERVERS", previous_env),
+        else: System.delete_env("LEMON_MCP_SERVERS")
+      if previous_agent_dir,
+        do: System.put_env("LEMON_AGENT_DIR", previous_agent_dir),
+        else: System.delete_env("LEMON_AGENT_DIR")
+      :sys.replace_state(McpSource, fn state ->
+        %{state | scopes: Map.delete(state.scopes, Path.expand(root)), disabled: false}
+      end)
+      McpSource.refresh()
+      :sys.replace_state(McpSource, &%{&1 | disabled: previous_source_disabled})
+    end)
+
+    McpSource.refresh()
+    [ambient] = McpSource.discover_tools(cwd: root)
+    assert_receive {:mcp_request, "initialize", %{"authorization" => "Bearer ambient-owner-token"}}, 5_000
+    assert {:ok, _} = CodingAgent.ToolRegistry.get_tool(root, ambient.name, include_extensions: false)
+
+    {:ok, %{"workspace" => workspace}} = LemonCore.ProfileStore.paths("principal")
+    no_connectors = start_supervised!({Session,
+      cwd: root, workspace_dir: workspace, agent_id: "principal", model: "openai:gpt-4o",
+      tool_disclosure: [enabled: false]}, id: :profile_without_connectors)
+    refute Enum.any?(Session.get_state(no_connectors).tools, &(&1.name == ambient.name))
+    assert {:ok, _} = Session.reload_extensions(no_connectors)
+    refute Enum.any?(Session.get_state(no_connectors).tools, &(&1.name == ambient.name))
+    assert {:error, :not_found} = CodingAgent.ToolRegistry.get_tool(root, ambient.name,
+      include_extensions: false, workspace_dir: workspace, agent_id: "principal")
+
+    id = "principal-mcp-#{System.unique_integer([:positive])}"
+    on_exit(fn -> McpSession.close(id) end)
+    assert :ok = McpSession.open_http(id, root,
+      [%{name: "principal", url: url, headers: %{"Authorization" => "Bearer caller-only-token"}}], self())
+    [caller] = McpSession.tools(id)
+    replacement = start_supervised!({Session,
+      cwd: root, workspace_dir: workspace, agent_id: "principal", model: "openai:gpt-4o",
+      mcp_session_id: id, tool_disclosure: [enabled: false]}, id: :profile_with_caller_connectors)
+    names = Enum.map(Session.get_state(replacement).tools, & &1.name)
+    assert caller.name in names
+    refute ambient.name in names
+    assert {:ok, _} = Session.reload_extensions(replacement)
+    names = Enum.map(Session.get_state(replacement).tools, & &1.name)
+    assert caller.name in names
+    refute ambient.name in names
+  end
+
   defp prepare_secret_store do
     previous_config = Application.get_env(:lemon_core, LemonCore.Secrets)
     previous_key = System.get_env("LEMON_SECRETS_MASTER_KEY")

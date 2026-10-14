@@ -94,7 +94,7 @@ defmodule LemonRouter.SubmissionBuilderTest do
     assert submission.execution_request.meta[:resume_source] == :explicit
   end
 
-  test "profile tool_policy is merged before operator override" do
+  test "profile approval and denial floors cannot be weakened by caller overrides" do
     session_key = unique_session_key("tool-policy")
 
     assert {:ok, submission} =
@@ -111,7 +111,7 @@ defmodule LemonRouter.SubmissionBuilderTest do
 
     tool_policy = submission.execution_request.tool_policy
 
-    assert get_in(tool_policy, [:approvals, "bash"]) == :never
+    assert get_in(tool_policy, [:approvals, "bash"]) == :always
     assert "bash" in (tool_policy[:blocked_tools] || [])
     assert "rm" in (tool_policy[:blocked_tools] || [])
   end
@@ -201,7 +201,8 @@ defmodule LemonRouter.SubmissionBuilderTest do
     assert {:ok, profile} =
              LemonCore.ProfileStore.create(%{
                id: "new-managed-profile", node: "worker-new",
-               systemPrompt: "New managed persona", model: "new-profile-model"
+               systemPrompt: "New managed persona", model: "new-profile-model",
+               toolPolicy: %{"deny" => ["bash"], "approvals" => %{"write" => "always"}}
              })
     assert {:ok, request} =
              LemonCore.ProfileStore.chat_request(profile, "hello",
@@ -214,6 +215,18 @@ defmodule LemonRouter.SubmissionBuilderTest do
     assert submission.execution_request.meta.system_prompt == "New managed persona"
     assert submission.execution_request.meta.model == "new-profile-model"
     assert submission.execution_request.cwd == nil
+    assert submission.execution_request.tool_policy.deny == ["bash"]
+    assert {:ok, _} = LemonCore.ProfileStore.update("new-managed-profile",
+      %{toolPolicy: %{"allow" => ["read"], "deny" => ["write"]}})
+    :sys.replace_state(LemonRouter.AgentProfiles, fn state ->
+      %{state | profiles: Map.put(state.profiles, "new-managed-profile", %{tool_policy: %{allow: :all}})}
+    end)
+    LemonCore.PolicyStore.put_session(request.session_key, %{tool_policy: %{"allow" => "all", "deny" => []}})
+    on_exit(fn -> LemonCore.PolicyStore.delete_session(request.session_key) end)
+    request = %{request | tool_policy: %{allow: :all}, meta: Map.put(request.meta, :tool_policy, %{allow: :all})}
+    assert {:ok, narrowed} = SubmissionBuilder.build(request, orchestrator_state())
+    assert narrowed.execution_request.tool_policy.allow == ["read"]
+    assert narrowed.execution_request.tool_policy.deny == ["write"]
   end
 
   defp request(session_key, attrs) do

@@ -235,4 +235,85 @@ defmodule CodingAgent.SystemPromptTest do
     assert String.contains?(subagent_prompt, "## Runtime")
     assert String.contains?(subagent_prompt, "Session scope: subagent")
   end
+
+  @tag :tmp_dir
+  test "JSON persona snapshots retain destination USER additions and deletions across bootstraps", %{
+    tmp_dir: tmp_dir
+  } do
+    workspace_dir = Path.join(tmp_dir, "destination-workspace")
+    File.mkdir_p!(workspace_dir)
+    File.write!(Path.join(workspace_dir, "TOOLS.md"), "destination-local-tool-instructions")
+
+    snapshot =
+      %{
+        "AGENTS.md" => "controller-agent-instructions",
+        "IDENTITY.md" => "controller-identity",
+        "README.md" => "controller-profile-job",
+        "SOUL.md" => "controller-persona"
+      }
+      |> Jason.encode!()
+      |> Jason.decode!()
+
+    opts = %{
+      workspace_dir: workspace_dir,
+      profile_instructions: snapshot,
+      session_scope: :main
+    }
+
+    user_path = Path.join(workspace_dir, "USER.md")
+    initial_prompt = SystemPrompt.build(tmp_dir, opts)
+    assert initial_prompt =~ "controller-persona"
+    refute File.exists?(user_path)
+
+    remember =
+      LemonSkills.Tools.Remember.tool(tmp_dir,
+        workspace_dir: workspace_dir,
+        session_scope: :main
+      )
+
+    retained_fact = "Prefers concise weekly updates."
+    removed_fact = "Prefers handmade wooden birthday gifts."
+
+    for {fact, call_id} <- [{retained_fact, "remember-retained"}, {removed_fact, "remember-removed"}] do
+      assert %{details: %{target: "user", action: "add", changed: true}} =
+               remember.execute.(call_id, %{"target" => "user", "text" => fact}, nil, nil)
+    end
+
+    assert File.read!(user_path) =~ retained_fact
+    assert File.read!(user_path) =~ removed_fact
+    next_prompt = SystemPrompt.build(tmp_dir, opts)
+    assert next_prompt =~ retained_fact
+    assert next_prompt =~ removed_fact
+    assert next_prompt =~ "controller-persona"
+    assert next_prompt =~ "destination-local-tool-instructions"
+
+    for scope <- [:subagent, "subagent"] do
+      child_prompt = SystemPrompt.build(tmp_dir, %{opts | session_scope: scope})
+      assert child_prompt =~ "controller-agent-instructions"
+      assert child_prompt =~ "destination-local-tool-instructions"
+      refute child_prompt =~ retained_fact
+      refute child_prompt =~ removed_fact
+      refute child_prompt =~ "controller-persona"
+      refute child_prompt =~ "controller-identity"
+      refute child_prompt =~ "controller-profile-job"
+    end
+
+    assert {:ok, entries} = LemonSkills.WorkspacePreferences.list(workspace_dir)
+    entry = Enum.find(entries, &(&1["kind"] == "user" and &1["text"] == removed_fact))
+    assert entry
+    id = entry["id"]
+
+    assert {:ok, %{id: ^id, revision: revision}} =
+             LemonSkills.WorkspacePreferences.preview_delete(workspace_dir, id)
+
+    assert {:ok, %{"deleted" => true, "id" => ^id}} =
+             LemonSkills.WorkspacePreferences.delete(workspace_dir, id, revision)
+
+    refute File.read!(user_path) =~ removed_fact
+    after_delete_prompt = SystemPrompt.build(tmp_dir, opts)
+    refute after_delete_prompt =~ removed_fact
+    assert after_delete_prompt =~ retained_fact
+    assert after_delete_prompt =~ "controller-persona"
+    assert {:error, :not_found} = LemonSkills.WorkspacePreferences.get(workspace_dir, id)
+  end
 end

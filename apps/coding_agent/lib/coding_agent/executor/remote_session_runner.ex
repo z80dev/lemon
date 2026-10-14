@@ -201,7 +201,7 @@ defmodule CodingAgent.Executor.RemoteSessionRunner do
   defp protocol_max_payload do
     case Application.get_env(:lemon_control_plane, :max_payload) do
       value when is_integer(value) and value > 0 -> value
-      _ -> LemonCore.JSONPayload.default_max_bytes()
+      _ -> LemonCore.ToolPolicy.execution_max_bytes()
     end
   end
 

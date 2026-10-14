@@ -196,7 +196,7 @@ defmodule CodingAgent.Executor.SessionRunner do
         system_prompt: get_in(meta, [:system_prompt]),
         profile_instructions: get_in(meta, [:profile_instructions]),
         stream_fn: stream_fn,
-        tool_policy: request.tool_policy,
+        tool_policy: execution_tool_policy(request, cwd, run_opts),
         approval_timeout_ms: get_opt(run_opts, :approval_timeout_ms),
         acp_session_id: get_in(meta, [:acp_session_id]),
         acp_client_terminal: get_in(meta, [:acp_client_terminal]),
@@ -454,6 +454,33 @@ defmodule CodingAgent.Executor.SessionRunner do
   defp async_followups(request) do
     meta = request.meta || %{}
     meta[:async_followups] || meta["async_followups"]
+  end
+
+  @doc false
+  def execution_tool_policy(request, cwd, run_opts \\ %{}) do
+    meta = request.meta || %{}
+    id = request_agent_id(request)
+    profile_id = meta[:profile_id] || meta["profile_id"]
+    config = LemonCore.Config.load_base_from_disk(cwd)
+    ids = Enum.uniq([id, profile_id, LemonCore.SessionKey.agent_id(request.session_key || "")]) -- [nil]
+    destination_policy =
+      Enum.reduce(ids, %{}, fn profile, policy ->
+        LemonCore.ToolPolicy.intersect(policy, get_in(config.agents, [profile, :tool_policy]))
+      end)
+
+    floor =
+      Enum.reduce(ids, destination_policy, fn profile, policy ->
+        case LemonCore.ProfileStore.get(profile) do
+          {:ok, stored} -> LemonCore.ToolPolicy.intersect(policy, stored["toolPolicy"])
+          {:error, :not_found} -> policy
+          {:error, _} -> LemonCore.ToolPolicy.intersect(policy, %{allow: []})
+        end
+      end)
+
+    floor
+    |> LemonCore.ToolPolicy.intersect(request.tool_policy)
+    |> LemonCore.ToolPolicy.intersect(meta[:tool_policy] || meta["tool_policy"] || meta["toolPolicy"])
+    |> LemonCore.ToolPolicy.intersect(get_opt(run_opts, :tool_policy))
   end
 
   @doc false

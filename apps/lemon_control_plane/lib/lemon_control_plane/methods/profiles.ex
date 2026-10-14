@@ -15,7 +15,8 @@ defmodule LemonControlPlane.Methods.ProfilesSupport do
       "model" => params["model"],
       "systemPrompt" => params["systemPrompt"],
       "node" => params["node"],
-      "mcpServers" => params["mcpServers"]
+      "mcpServers" => params["mcpServers"],
+      "toolPolicy" => params["toolPolicy"]
     }
     |> Enum.reject(fn {_key, value} -> is_nil(value) end)
     |> Map.new()
@@ -51,7 +52,7 @@ defmodule LemonControlPlane.Methods.ProfilesSupport do
         end
 
       profile
-      |> Map.take(~w(id name description avatar model node canonicalSessionKey))
+      |> Map.take(~w(id name description avatar model node canonicalSessionKey toolPolicy))
       |> Map.merge(%{
         "availability" => availability,
         "workspace" => profile["paths"]["workspace"]
@@ -67,6 +68,7 @@ defmodule LemonControlPlane.Methods.ProfilesSupport do
       "profileId" => profile["id"],
       "sessionKey" => profile["canonicalSessionKey"],
       "node" => profile["node"],
+      "mcpConfigFingerprint" => ProfileStore.projection(profile)["mcpConfigFingerprint"],
       "cleanup" => %{
         "includesPromptText" => false,
         "includesMessageBodies" => false,
@@ -209,7 +211,7 @@ defmodule LemonControlPlane.Methods.ProfilesUpdate do
 
   @impl true
   def handle(params, _ctx) do
-    attrs = Map.take(params, ~w(name description avatar model systemPrompt node mcpServers))
+    attrs = Map.take(params, ~w(name description avatar model systemPrompt node mcpServers toolPolicy))
 
     with {:ok, profile} <- LemonCore.ProfileStore.update(params["id"], attrs),
          :ok <- ProfilesSupport.refresh(profile["id"]) do

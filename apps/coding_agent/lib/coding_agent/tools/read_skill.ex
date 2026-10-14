@@ -15,7 +15,7 @@ defmodule CodingAgent.Tools.ReadSkill do
   @spec tool(String.t(), keyword()) :: LemonAgent.Types.AgentTool.t()
   def tool(cwd, opts \\ []) do
     opts
-    |> Keyword.put(:cwd, cwd)
+    |> Keyword.put(:cwd, CodingAgent.Workspace.skill_cwd(cwd, opts))
     |> LemonSkills.Tools.ReadSkill.tool()
   end
 end

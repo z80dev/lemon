@@ -129,15 +129,23 @@ the router profile registry after mutations:
 | --- | --- | --- | --- |
 | `profiles.list` | read | `{}` | `{profiles,count}` |
 | `profiles.get` | read | `{id}` | `{profile,summary}` |
-| `profiles.create` | admin | `{id,[name,description,avatar,model,systemPrompt,node,mcpServers]}` | `{profile,summary}` |
-| `profiles.update` | admin | `{id,[name,description,avatar,model,systemPrompt,node,mcpServers]}` | `{profile,summary}` |
-| `profiles.clone` | admin | `{sourceId,id,[name,description,avatar,model,systemPrompt,node,mcpServers]}` | `{profile,summary}` |
+| `profiles.create` | admin | `{id,[name,description,avatar,model,systemPrompt,node,mcpServers,toolPolicy]}` | `{profile,summary}` |
+| `profiles.update` | admin | `{id,[name,description,avatar,model,systemPrompt,node,mcpServers,toolPolicy]}` | `{profile,summary}` |
+| `profiles.clone` | admin | `{sourceId,id,[name,description,avatar,model,systemPrompt,node,mcpServers,toolPolicy]}` | `{profile,summary}` |
 | `profile.chat` | write | `{id,prompt,[model,queueMode,images]}` | `{runId,profileId,sessionKey,node,summary}` |
+| `profiles.sync` | admin | `{id,[nodeId,mutationId]}` | `{profileId,nodeId,mutationId,acknowledged,revisionDigest}` |
+| `profiles.sync.status` | read | `{id,nodeId,mutationId}` | `{profileId,nodeId,mutationId,status,acknowledged,revisionDigest}` |
+| `node.mcp.discover` | admin | `{nodeId,server}` | `{connected,server:{name,status},tools:[{name,executionName,description,inputSchema,readOnly}],count,truncated}` |
+| `node.profile.paths` | read | `{nodeId,profileId}` | `{profileId,nodeId,workspacePath,skillsPath}` |
 
 `profiles.update` preserves omitted fields, clears optional text with `""`, and
 uses `"local"` to clear node placement. `mcpServers` is a list of
-`{name,url,headers}` Streamable HTTP server definitions, with string-to-string
-header objects. Names must be unique; limits are 32 servers and 64 KiB total.
+`{name,url,headers,[enabledTools,allowedOrigins,approvedPrivateOrigins]}` Streamable
+HTTP server definitions, with string-to-string header objects. Names must be
+unique; limits are 32 servers and 64 KiB total. `enabledTools` is an exact
+raw-tool-name allowlist (no glob expansion): omitted permits all, `[]` none,
+and a provided list exposes only those executable tools. Resource/prompt utility
+tools are not implicitly granted by an explicit native-tool allowlist.
 Create/update/clone/get/list profile projections omit MCP `headers` completely.
 Headers are execution-only secrets: not logged, emitted in management events,
 or stored in run history. A full replacement list replaces previous headers;
@@ -152,12 +160,104 @@ General `node.invoke.request` events contain only
 `{invokeId,nodeId,method,timeoutMs,cleanup:{includesArgs:false}}`. Invocation
 arguments are sent only on the targeted destination node connection.
 
-`chat.send {sessionKey,prompt,[profileId,agentId,cwd,images,queueMode]}` can use a
+Names accept at most 120 Unicode scalar values (defensive 512-byte UTF-8 cap).
+`systemPrompt` preserves exact UTF-8, including whitespace, through 131,072
+bytes; chat prompts and each persona file remain separately bounded to 65,536
+bytes. Invalid UTF-8/NUL or oversized values are rejected, never truncated.
+Profile projections include credential-free `mcpConfigFingerprint`: lowercase
+SHA-256 of compact JSON server arrays
+`[name,url,sortedHeaderPairs,enabledTools|null,allowedOrigins|null,approvedPrivateOrigins|null]`,
+in server order. It binds private configuration for lost-response reconciliation
+without exposing headers; omission of optional fields differs from an empty list.
+
+`toolPolicy` is the existing native policy object, not a second permission
+store: optional `profile`, `allow` (`"all"` or exact registry-name array), `deny`,
+`blocked_tools`, `require_approval`, `approvals` (name to `"always"`/`"never"`),
+and boolean `no_reply`. Lists/maps accept at most 16,384 entries, names at most
+256 UTF-8 bytes. `allow: []` denies all; `{}` clears the stored profile floor,
+while omission preserves it. Every canonical/arbitrary profile chat and cron
+run inherits the current durable floor. Allow sets intersect, deny/blocked and
+required-approval sets union, `"always"` dominates `"never"`, and `no_reply` ORs
+with session, invocation and destination ceilings. Corrupt/unreadable profile
+storage fails closed. Active sessions retain startup policy; callers must fence
+new admission and cancel/settle active runs before acknowledging a restrictive
+grant change. Rich execution frames allow 131,072 JSON items within the
+configured byte limit (default 16 MiB); unrelated traversal stays at 10,000,
+and explicit smaller transport limits remain authoritative.
+
+`chat.send {sessionKey,prompt,[profileId,agentId,cwd,images,queueMode,invocationMcpServers,invocationToolPolicy]}` can use a
 profile's persona, model and node on arbitrary task/DM/group session keys.
 Named profile requests carry JSON-safe system prompt/bootstrap instructions
 and MCP servers to the worker and omit controller-default cwd. Provider
 credentials and assistant workspace paths are resolved destination-locally.
 MCP tools attach through the existing owner-bound session client lifecycle.
+With `profileId`, `invocationMcpServers` uses the same server shape and replaces
+the complete default connector list for this run. Omission inherits the profile;
+`[]` attaches none. Supplied definitions never merge owner headers or connectors.
+Only operator-authorized requests reach this seam.
+`invocationToolPolicy` also requires `profileId` and uses the same validated
+native shape. Omission or `{}` adds no restriction; `allow: []` denies all.
+It intersects rather than replaces persistent/session/node floors, so caller
+grants cannot widen denied or required-approval tools. Profile executions never
+inherit ambient machine-global MCP connections, including explicit `[]`.
+Profile-owned skills load metadata from the destination profile's
+`workspace/.lemon/skill/<key>/SKILL.md`, independently of execution cwd;
+`read_skill` lazily loads the full body through the owning skill registry.
+Image-only remote runs retain the shared five-image/10 MiB decoded admission
+limit and native model-vision checks. Only known native image blocks encode to
+wire JSON; empty text without valid images and arbitrary structs are rejected.
+
+Product connector definitions must include `allowedOrigins` containing the
+exact canonical HTTP(S) endpoint origin. `approvedPrivateOrigins` is a subset
+explicitly permitting private destinations. The executing host validates
+all DNS answers and pins the real transport to an approved address before
+decrypting headers. Host/TLS certificate identity remains the original origin;
+redirects are rejected. No-policy operator configurations retain intentional
+legacy behavior; product clients must not omit policy.
+
+`node.mcp.discover` is an asynchronous operator-admin method targeting an
+execution node, never a controller-local or unauthenticated URL fetch.
+Discovery uses a temporary owner-bound MCP session with no executable tools,
+then closes it. It returns raw tool names and complete input schemas, bounded
+to 256 tools, 128-byte names, 4 KiB descriptions, 32 KiB per schema and 1 MiB
+total. Oversized/credential-bearing schemas are omitted, not rewritten;
+`truncated` marks omitted metadata. `readOnly` defaults false unless the server
+advertises boolean `readOnlyHint: true`; it is advisory, not authorization.
+`executionName` is the actual native registry alias used in `toolPolicy`. For
+profile HTTP clients it hashes public server name, canonical URL and validated
+raw tool name, and stays stable across secret rotation and DNS pinning. Never
+guess aliases from display names. These clients defer to native deny/approval
+policy rather than adding an unconditional MCP approval gate. Server hints
+cannot bypass native restrictions; legacy global/ACP aliases and approval rules
+remain unchanged.
+
+`profiles.sync` provisions the four controller-owned persona instruction files
+and a credential-free revision record on the target, verifying persisted files
+before acknowledging. Explicit `nodeId` supports provisioning before a move;
+otherwise the current named placement must resolve uniquely. Local profiles
+require an explicit target. Sync never switches controller placement and never
+copies MCP headers, provider credentials, USER.md, skills or memory. Mutation
+correlation is optional (`null` when absent); a non-null mutation/digest binding
+is durably reserved before persona writes. The worker retains one latest
+binding, rejecting reuse with different content, not an unbounded ledger.
+`profiles.sync.status` sends only the requested identity and current source
+digest, never persona content. It returns `status: "acknowledged"` only when
+the exact binding and stored files verify, `"pending"` for a matching reserved
+but unfinished write, or `"unknown"` (null digest) for absent/superseded/mismatched
+bindings. Transport, corrupt storage and bad acknowledgements are RPC errors,
+not unknown. Status never writes, repairs or resends. Explicit `nodeId` targets
+use durable ID-only dispatch, never name fallback even offline; ordinary
+profile placement remains name-first. Placement changes only in a separate
+`profiles.update` after acknowledgment.
+
+`node.profile.paths` is a trusted operator read on an explicit durable node ID.
+The worker derives its actual `ProfileStore` workspace/skill paths, including
+custom state roots, without creating files or changing placement. Selected
+skill provisioning must use the returned `skillsPath`, then the owning node
+filesystem stat/CAS APIs, not infer a path from controller state or host cwd.
+Lookup grants no filesystem authority: native OS-home/explicit `--allowed-root`
+ceilings still apply. Custom state outside admitted roots requires the machine
+operator to admit its existing parent root.
 
 `cron.add {name,schedule,[profileId,agentId,sessionKey,prompt,...]}` persists
 `profileId` for agent jobs; `cron.list` job rows expose `profileId` (null when

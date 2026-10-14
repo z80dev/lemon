@@ -65,6 +65,8 @@ defmodule LemonControlPlane.Methods.Registry do
     LemonControlPlane.Methods.ProfilesDelete,
     LemonControlPlane.Methods.ProfilesRoster,
     LemonControlPlane.Methods.ProfileChat,
+    LemonControlPlane.Methods.ProfilesSync,
+    LemonControlPlane.Methods.ProfilesSyncStatus,
     # Agents
     LemonControlPlane.Methods.AgentsList,
     # Skills
@@ -134,6 +136,8 @@ defmodule LemonControlPlane.Methods.Registry do
     LemonControlPlane.Methods.NodePairRequest,
     LemonControlPlane.Methods.NodePairApprove,
     LemonControlPlane.Methods.NodeInvoke,
+    LemonControlPlane.Methods.NodeMcpDiscover,
+    LemonControlPlane.Methods.NodeProfilePaths,
     LemonControlPlane.Methods.NodeInvokeResult,
     LemonControlPlane.Methods.NodeInvokeControlResult,
     LemonControlPlane.Methods.NodesList,
