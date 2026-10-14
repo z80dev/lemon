@@ -70,6 +70,7 @@ defmodule LemonControlPlane.ACP.SessionUpdates do
       "delete" -> "delete"
       "move" -> "move"
       n when n in ["bash", "bash_output", "kill_process", "shell", "exec", "eval"] -> "execute"
+      "debug" -> "execute"
       n when n in ["grep", "glob", "find", "ast_grep"] -> "search"
       n when n in ["web_search", "websearch", "webfetch", "fetch"] -> "fetch"
       "todo" -> "think"

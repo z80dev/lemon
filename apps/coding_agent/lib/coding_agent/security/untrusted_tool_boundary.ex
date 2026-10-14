@@ -19,6 +19,7 @@ defmodule CodingAgent.Security.UntrustedToolBoundary do
     "bash" => :shell,
     "bash_output" => :shell,
     "eval" => :shell,
+    "debug" => :shell,
     "find" => :local_search,
     "grep" => :local_search,
     "read" => :local_file,

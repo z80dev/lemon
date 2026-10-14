@@ -22,6 +22,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   with the session; applied edits are locked, checkpointed and written
   atomically. `status` shows which servers are installed or running. See
   [LSP tools](docs/tools/lsp.md).
+- `debug` coding tool: a Debug Adapter Protocol client for `lldb-dap`, `gdb`,
+  `debugpy` and `dlv` with breakpoints (source, conditional, function), launch
+  and attach, stepping, stack/scope/variable inspection, expression
+  evaluation, captured program output and raw `custom_request`. Debug sessions
+  are owned by the coding session and killed with it. See
+  [Debugger](docs/tools/debug.md).
 - **Lemon Web, rebuilt.** The browser UI is now a full workspace on the same
   control-plane methods and events as the TUI. Chat streams Markdown with
   highlighted code, thinking blocks and rich tool cards (shell output and exit
