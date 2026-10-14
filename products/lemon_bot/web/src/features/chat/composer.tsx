@@ -69,7 +69,7 @@ export function Composer({ conversation, replyId, clearReply, accepted }: { conv
     if (!dirty || !online || !local.revision || conflict || saveIntent.busy || saveIntent.error || sendIntent.busy || journal.current) return;
     const timer = window.setTimeout(() => void save(), 700); return () => clearTimeout(timer);
   }, [local.text, local.attachmentIds, local.replyToEntryId, local.revision, dirty, online, conflict, saveIntent.busy, saveIntent.error, sendIntent.busy]);
-  function change(text: string) { setLocal(current => ({ ...current, text })); setDirty(true); if (realtime && Date.now() - typingAt.current > 1000) { typingAt.current = Date.now(); realtime.send({ type: 'typing', conversationId: conversation.id, active: !!text }); } }
+  function change(text: string) { setLocal(current => ({ ...current, text })); setDirty(true); if (realtime?.state === 'live' && Date.now() - typingAt.current > 1000) { typingAt.current = Date.now(); try { realtime.send({ type: 'typing', conversationId: conversation.id, active: !!text }); } catch (failure) { setError(failure); } } }
   async function upload(files: File[]) {
     if (!online || sendIntent.busy || uploadIntent.busy) return;
     if (localRef.current.attachmentIds.length + files.length > 6) { setError(new Error('At most six files per message.')); return; }
@@ -98,7 +98,7 @@ export function Composer({ conversation, replyId, clearReply, accepted }: { conv
       if (sendIntent.lastError.current !== undefined && !unknownOutcome(sendIntent.lastError.current)) { journal.current = undefined; setLocal(value => ({ ...value, unknownNonce: undefined })); }
       return;
     }
-    journal.current = undefined; clearReply(); realtime?.send({ type: 'typing', conversationId: conversation.id, active: false });
+    journal.current = undefined; clearReply(); if (realtime?.state === 'live') { try { realtime.send({ type: 'typing', conversationId: conversation.id, active: false }); } catch (failure) { setError(failure); } }
     setLocal(value => ({ ...value, text: '', attachmentIds: [], replyToEntryId: null, references: [], mentions: [], everyone: false, unknownNonce: undefined })); setDirty(true);
   }
   async function reconcileMessage() {
