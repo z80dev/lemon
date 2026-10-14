@@ -164,7 +164,8 @@ describe('export privacy and durable delivery', () => {
     await f.consent('shared'); f.message('shared-entry', 'shared', 'selected content'); f.message('private-entry', 'private', 'foreign private content');
     await expect(f.call('POST', '/v1/exports', { fromAtMs: 0, toAtMs: 100000, kind: 'conversation_content', conversationIds: ['shared'] })).rejects.toMatchObject({ code: 'policy_denied' });
     await f.consent('shared', bob);
-    const row = await f.call<P.ExportRecord>('POST', '/v1/exports', { fromAtMs: 0, toAtMs: 100000, kind: 'conversation_content', conversationIds: ['shared'] });
+    f.advance(1); // Snapshot after the existing records; the upper bound is exclusive.
+    const row = await f.call<P.ExportRecord>('POST', '/v1/exports', { fromAtMs: 0, toAtMs: f.services.now(), kind: 'conversation_content', conversationIds: ['shared'] });
     expect(row.state).toBe('queued'); expect(row.attachmentId).toBeNull(); await f.api.reconcile();
     const completed = await f.call<P.ExportRecord>('GET', '/v1/exports/:id', undefined, owner, row.id);
     expect(completed.state).toBe('completed'); const bytes = await f.services.attachments.bytes(completed.attachmentId!);
@@ -244,9 +245,10 @@ describe('export privacy and durable delivery', () => {
   test('usage captures actual report once per stable measurement without leaking into the action stream', async () => {
     const f = fixture(); await f.destination(['usage']);
     const report: P.UsageReport = { fromAtMs: 0, toAtMs: 100000, totals: { key: 'total', inputTokens: 7, outputTokens: 11, requests: 1, costUsd: null }, buckets: [], incomplete: true, pricingSource: null };
+    Object.assign(report.totals, { accessToken: 'not-a-usage-field', password: 123456 });
     f.api.captureUsage(owner, report); f.api.captureUsage(owner, report); f.api.captureAction(owner, { action: 'tool.completed' }, 'unselected-action');
     const requests = collector(f.services); await f.api.reconcile();
-    expect(requests).toHaveLength(1); expect(requests[0]!.body).toContain('"stream":"usage"'); expect(requests[0]!.body).toContain('"inputTokens":7'); expect(requests[0]!.body).not.toContain('tool.completed');
+    expect(requests).toHaveLength(1); expect(requests[0]!.body).toContain('"stream":"usage"'); expect(requests[0]!.body).toContain('"inputTokens":7'); expect(requests[0]!.body).toContain('"outputTokens":11'); expect(requests[0]!.body).not.toContain('tool.completed'); expect(requests[0]!.body).not.toContain('not-a-usage-field'); expect(requests[0]!.body).not.toContain('"password"');
   });
   test('restart retries exact durable payload/key and acknowledges once; cursor survives restart', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'lemon-export-')); cleanups.push(() => rmSync(directory, { recursive: true, force: true }));
@@ -260,11 +262,13 @@ describe('export privacy and durable delivery', () => {
   test('known credential names/values/shapes are redacted while commands and shell output never enter metadata', async () => {
     const f = fixture(); f.conversation('room', ['alice']); f.store.setMetadata('governance', { contentExportEnabled: true }); await f.consent('room');
     f.message('entry', 'room', 'known-collector-token known-operator-token collector sk-abcdefghijklmnop ghp_abcdefghijklmnopqrst eyJhbGciOiJIUzI1NiJ9.abc.def password=unsafe');
-    const content = await f.call<P.ExportRecord>('POST', '/v1/exports', { fromAtMs: 0, toAtMs: 100000, kind: 'conversation_content', conversationIds: ['room'] }); await f.api.reconcile();
+    f.advance(1);
+    const content = await f.call<P.ExportRecord>('POST', '/v1/exports', { fromAtMs: 0, toAtMs: f.services.now(), kind: 'conversation_content', conversationIds: ['room'] }); await f.api.reconcile();
     const body = new TextDecoder().decode(await f.services.attachments.bytes(f.store.require<P.ExportRecord>('exports', content.id).attachmentId!));
     for (const value of ['known-collector-token', 'known-operator-token', 'sk-abcdefghijklmnop', 'ghp_abcdefghijklmnopqrst', 'password=unsafe', 'eyJhbGci']) expect(body).not.toContain(value);
     f.services.audit(owner, 'tool.completed', 'tool', 'succeeded', { command: 'rm -rf dangerous', stdout: 'raw secret output', botId: 'bot', durationMs: 123, password: 'unsafe' });
-    const metadata = await f.call<P.ExportRecord>('POST', '/v1/exports', { fromAtMs: 0, toAtMs: 100000, kind: 'audit' }); await f.api.reconcile();
+    f.advance(1);
+    const metadata = await f.call<P.ExportRecord>('POST', '/v1/exports', { fromAtMs: 0, toAtMs: f.services.now(), kind: 'audit' }); await f.api.reconcile();
     const audit = new TextDecoder().decode(await f.services.attachments.bytes(f.store.require<P.ExportRecord>('exports', metadata.id).attachmentId!));
     expect(audit).not.toContain('rm -rf'); expect(audit).not.toContain('raw secret output'); expect(audit).toContain('durationMs');
   });
@@ -278,13 +282,25 @@ describe('export privacy and durable delivery', () => {
   });
   test('historical audit, action, and usage remain distinct; incomplete actual usage is not invented zero', async () => {
     const f = fixture(); f.services.audit(owner, 'member.updated', 'member', 'succeeded'); f.api.captureAction(owner, { action: 'tool.completed', outcome: 'succeeded' }, 'action');
+    f.advance(1);
     for (const kind of ['audit', 'action', 'usage'] as const) {
-      const record = await f.call<P.ExportRecord>('POST', '/v1/exports', { fromAtMs: 0, toAtMs: 100000, kind }); await f.api.reconcile();
+      const record = await f.call<P.ExportRecord>('POST', '/v1/exports', { fromAtMs: 0, toAtMs: f.services.now(), kind }); await f.api.reconcile();
       const body = new TextDecoder().decode(await f.services.attachments.bytes(f.store.require<P.ExportRecord>('exports', record.id).attachmentId!));
       if (kind === 'audit') { expect(body).toContain('member.updated'); expect(body).not.toContain('tool.completed'); }
       if (kind === 'action') { expect(body).toContain('tool.completed'); expect(body).not.toContain('member.updated'); }
       if (kind === 'usage') { expect(body).toContain('"inputTokens":17'); expect(body).toContain('"costUsd":null'); expect(body).toContain('"incomplete":true'); }
     }
+  });
+  test('historical snapshots include the lower timestamp and exclude the exact upper timestamp', async () => {
+    const f = fixture(); f.conversation('room', ['alice']); f.store.setMetadata('governance', { contentExportEnabled: true }); await f.consent('room');
+    f.advance(499 - f.services.now()); f.message('before', 'room', 'before-lower');
+    f.advance(1); f.message('lower', 'room', 'at-lower');
+    f.advance(499); f.message('inside', 'room', 'before-upper');
+    f.advance(1); f.message('upper', 'room', 'at-upper');
+    const record = await f.call<P.ExportRecord>('POST', '/v1/exports', { fromAtMs: 500, toAtMs: 1000, kind: 'conversation_content', conversationIds: ['room'] }); await f.api.reconcile();
+    const completed = f.store.require<P.ExportRecord>('exports', record.id); expect(completed.state).toBe('completed');
+    const bytes = new TextDecoder().decode(await f.services.attachments.bytes(completed.attachmentId!));
+    expect(bytes).toContain('at-lower'); expect(bytes).toContain('before-upper'); expect(bytes).not.toContain('before-lower'); expect(bytes).not.toContain('at-upper');
   });
   test('same nonce returns one durable export receipt; changed intent conflicts before new record', async () => {
     const f = fixture(); const body = { clientNonce: 'stable_nonce_1234567890', fromAtMs: 0, toAtMs: 100000, kind: 'audit' };

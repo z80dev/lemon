@@ -76,6 +76,11 @@ function collector(s: BackendServices, url: string): { allowedOrigins: string[];
   return { allowedOrigins, allowPrivate: Array.isArray(privateOrigins) && privateOrigins.includes(parsed.origin) };
 }
 
+function usageProjection(report: P.UsageReport): P.JSONObject {
+  const bucket = (value: P.UsageBucket): P.JSONObject => ({ key: value.key, inputTokens: value.inputTokens, outputTokens: value.outputTokens, requests: value.requests, costUsd: value.costUsd });
+  return { fromAtMs: report.fromAtMs, toAtMs: report.toAtMs, totals: bucket(report.totals), buckets: report.buckets.map(bucket), incomplete: report.incomplete, pricingSource: report.pricingSource };
+}
+
 async function redactor(s: BackendServices): Promise<(value: unknown) => P.JSONValue> {
   const values = [s.config.operatorToken];
   const names = Object.keys(s.config.operator.serverSecrets);
@@ -95,7 +100,8 @@ async function redactor(s: BackendServices): Promise<(value: unknown) => P.JSONV
     if (value && typeof value === 'object') {
       const result: P.JSONObject = {};
       for (const [key, item] of Object.entries(value)) {
-        if (/password|secret|token|authorization|cookie|credential|private.?key|api.?key|command|argv|stdout|stderr|shell.?output|setupScript|checkScript/i.test(key)) result[key] = '[redacted]';
+        const usageCount = (key === 'inputTokens' || key === 'outputTokens') && typeof item === 'number' && Number.isSafeInteger(item) && item >= 0;
+        if (!usageCount && /password|secret|token|authorization|cookie|credential|private.?key|api.?key|command|argv|stdout|stderr|shell.?output|setupScript|checkScript/i.test(key)) result[key] = '[redacted]';
         else result[key] = visit(item);
       }
       return result;
@@ -136,7 +142,7 @@ function buildServices(s: BackendServices) {
     append(`action:${sourceId ?? s.id('action')}`, 'action', allowed, s.now());
   }
   function captureUsage(p: Principal, report: P.UsageReport, atMs = s.now()): void {
-    append(`usage:${p.userId}:${s.mutations.digest(report)}`, 'usage', { actorId: p.userId, report: report as unknown as P.JSONObject }, atMs);
+    append(`usage:${p.userId}:${s.mutations.digest(report)}`, 'usage', { actorId: p.userId, report: usageProjection(report) }, atMs);
   }
   function scan(): void {
     for (const row of s.store.list<P.AuditRecord>('auditRecords')) {
@@ -340,7 +346,7 @@ function buildServices(s: BackendServices) {
       if (record.kind === 'action') for (const row of s.store.list<JournalRow>(journal, row => row.kind === 'action' && inRange(row.timestampMs))) rows.push(row.payload);
       if (record.kind === 'usage') {
         const report = await s.invoke<P.UsageReport>(p, 'GET', `/v1/usage?fromAtMs=${record.fromAtMs}&toAtMs=${record.toAtMs}&groupBy=bot`);
-        rows.push({ report: report as unknown as P.JSONObject });
+        rows.push({ report: usageProjection(report) });
       }
       if (record.kind === 'conversation_content') {
         for (const entry of s.store.list<P.TranscriptEntry>('entries', row => job.conversationIds.includes(row.conversationId) && inRange(row.timestampMs)).sort((a, b) => a.timestampMs - b.timestampMs || a.seq - b.seq || a.id.localeCompare(b.id))) {
