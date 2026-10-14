@@ -77,7 +77,7 @@ function SchemaValue({ schema, root, label, value, onChange, depth }: { schema: 
   const [variantIndex, setVariantIndex] = useState(-1);
   if (depth > 20) return <p role="alert">Provider filter nesting exceeds the safe editor depth.</p>;
   schema = resolveSchema(schema, root);
-  const variants = schema.oneOf ?? schema.anyOf ?? (Array.isArray(schema.type) ? schema.type.map(type => ({ ...schema, type })) : undefined);
+  const variants: JSONValue | undefined = schema.oneOf ?? schema.anyOf ?? (Array.isArray(schema.type) ? schema.type.map(type => ({ ...schema, type })) : undefined);
   if (Array.isArray(variants)) {
     const options = variants.filter((item): item is JSONObject => !!item && typeof item === 'object' && !Array.isArray(item));
     const selected = variantIndex >= 0 && variantIndex < options.length ? variantIndex : options.findIndex(item => value !== undefined && !filterErrors(item, value, root).length);
