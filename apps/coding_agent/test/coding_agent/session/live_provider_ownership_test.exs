@@ -101,9 +101,9 @@ defmodule CodingAgent.Session.LiveProviderOwnershipTest do
     root: root
   } do
     report = run(root, :same_provider_headers)
-    assert report.a_requests == 2
     assert report.answered
     assert report.same_provider_header_preserved
+    assert report.derived_headers_rebound_correctly
     assert report.passed
   end
 

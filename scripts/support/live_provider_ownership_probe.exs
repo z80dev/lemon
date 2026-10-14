@@ -90,7 +90,43 @@ defmodule LemonScripts.LiveProviderOwnershipProbe do
       foreign_on_a = Enum.any?(a, &String.contains?(&1.headers, "fixture-owner-b"))
       pool_on_a = Enum.all?(a, &String.contains?(&1.headers, "Bearer fixture-owner-a-pool\r\n"))
       b_header = Enum.all?(b, &String.contains?(&1.headers, "Bearer fixture-owner-b-header\r\n"))
-      same_header = Enum.all?(a, &String.contains?(&1.headers, "x-explicit-owner: retained\r\n"))
+
+      same_header =
+        case a do
+          [bare_a, bare_b, caller_a, caller_b] ->
+            Enum.all?([bare_a, bare_b], &(not String.contains?(&1.headers, "x-explicit-owner:"))) and
+              Enum.all?(
+                [caller_a, caller_b],
+                &String.contains?(&1.headers, "x-explicit-owner: retained\r\n")
+              )
+
+          _ ->
+            false
+        end
+
+      derived_headers_correct =
+        case a do
+          [bare_a, bare_b, caller_a, caller_b] ->
+            Enum.all?(
+              Enum.zip(
+                [bare_a, bare_b, caller_a, caller_b],
+                [
+                  {"tenant-a", "model-a"},
+                  {"tenant-b", "model-b"},
+                  {"tenant-a", "genuine-caller"},
+                  {"tenant-b", "genuine-caller"}
+                ]
+              ),
+              fn {request, {tenant, overlay}} ->
+                String.contains?(request.headers, "x-tenant: #{tenant}\r\n") and
+                  String.contains?(request.headers, "x-caller-overlay: #{overlay}\r\n") and
+                  String.contains?(request.headers, "x-client: provider-default\r\n")
+              end
+            )
+
+          _ ->
+            false
+        end
 
       keyless =
         Enum.all?(
@@ -114,8 +150,8 @@ defmodule LemonScripts.LiveProviderOwnershipProbe do
               b_header and journal_ok
 
           :same_provider_headers ->
-            length(a) == 2 and completed and answered and not refused and same_header and
-              journal_ok
+            length(a) == 4 and completed and answered and not refused and same_header and
+              derived_headers_correct and journal_ok
         end
 
       %{
@@ -134,6 +170,7 @@ defmodule LemonScripts.LiveProviderOwnershipProbe do
         a_pool_selected: pool_on_a,
         b_explicit_header_preserved: b_header,
         same_provider_header_preserved: same_header,
+        derived_headers_rebound_correctly: derived_headers_correct,
         keyless_without_authorization: keyless,
         journal_matches_selection: journal_ok,
         private_values_in_logs_or_events: leaked
@@ -313,27 +350,55 @@ defmodule LemonScripts.LiveProviderOwnershipProbe do
   end
 
   defp same_provider_headers(cwd, url) do
-    a = model(:groq, "gemma2-9b-it", :openai_completions, url)
-    providers = %{"groq" => %{api_key: "fixture-owner-a-default", base_url: url}}
+    a = %{
+      model(:groq, "gemma2-9b-it", :openai_completions, url)
+      | headers: %{"x-tenant" => "tenant-a", "x-caller-overlay" => "model-a"}
+    }
 
-    with_session(
-      cwd,
-      a,
-      settings(providers, %{enabled: true}),
-      [],
-      fn session ->
-        :ok = Session.prompt(session, "First completed prompt.")
-        first = await(:session, [])
-        idle!(:session, session)
-        initial_answer!(first)
-        :ok = Session.switch_model(session, %{a | name: "Same provider new binding"})
-        :ok = Session.prompt(session, "Second completed prompt.")
-        events = await(:session, [])
-        idle!(:session, session)
-        {events, selection_recorded?(session, a)}
-      end,
-      stream_options: %{headers: %{"x-explicit-owner" => "retained"}}
-    )
+    providers = %{
+      "groq" => %{
+        api_key: "fixture-owner-a-default",
+        base_url: url,
+        headers: %{"x-client" => "provider-default"}
+      }
+    }
+
+    {events, journals} =
+      for caller_options <- [
+            nil,
+            %{
+              headers: %{"x-explicit-owner" => "retained", "x-caller-overlay" => "genuine-caller"}
+            }
+          ] do
+        with_session(
+          cwd,
+          a,
+          settings(providers, %{enabled: true}),
+          [],
+          fn session ->
+            :ok = Session.prompt(session, "First completed prompt.")
+            first = await(:session, [])
+            idle!(:session, session)
+            initial_answer!(first)
+
+            :ok =
+              Session.switch_model(session, %{
+                a
+                | name: "Same provider new binding",
+                  headers: %{"x-tenant" => "tenant-b", "x-caller-overlay" => "model-b"}
+              })
+
+            :ok = Session.prompt(session, "Second completed prompt.")
+            events = await(:session, [])
+            idle!(:session, session)
+            {events, selection_recorded?(session, a)}
+          end,
+          stream_options: caller_options
+        )
+      end
+      |> Enum.unzip()
+
+    {List.flatten(events), Enum.all?(journals)}
   end
 
   defp with_session(cwd, model, settings, tools, fun, extra \\ []) do

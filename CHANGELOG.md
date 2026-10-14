@@ -227,6 +227,8 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   classification or completion. Selected-login refusal and keyless transitions
   retain their intended authority; fallback credentials and headers use the
   current invocation rather than the session's startup provider.
+  Same-provider rebinding replaces source-model header defaults while preserving
+  genuine caller overrides; generated headers are not promoted to caller authority.
 
 - Failed selected OAuth logins cannot borrow static or environment credentials
   or transmit encoded OAuth records. Successful access-token authority and

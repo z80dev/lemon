@@ -57,6 +57,7 @@ defmodule LemonAgent.ModelRuntime.StreamOptions do
         project: nil,
         location: nil,
         headers: %{},
+        caller_headers: %{},
         provider_options: %{},
         thinking_budgets: thinking_budgets
     }
@@ -336,13 +337,16 @@ defmodule LemonAgent.ModelRuntime.StreamOptions do
     end
   end
 
-  defp normalize_stream_options(nil, cwd), do: %StreamOptions{cwd: cwd}
+  defp normalize_stream_options(nil, cwd), do: %StreamOptions{cwd: cwd, caller_headers: %{}}
 
   defp normalize_stream_options(%StreamOptions{} = opts, cwd) do
+    caller_headers = opts.caller_headers || opts.headers || %{}
+
     %{
       opts
       | cwd: opts.cwd || cwd,
-        headers: opts.headers || %{},
+        headers: caller_headers,
+        caller_headers: caller_headers,
         thinking_budgets: opts.thinking_budgets || %{},
         provider_options: opts.provider_options || %{}
     }
@@ -358,7 +362,7 @@ defmodule LemonAgent.ModelRuntime.StreamOptions do
     |> normalize_stream_options(cwd)
   end
 
-  defp normalize_stream_options(_opts, cwd), do: %StreamOptions{cwd: cwd}
+  defp normalize_stream_options(_opts, cwd), do: %StreamOptions{cwd: cwd, caller_headers: %{}}
 
   defp stream_options_to_map(%StreamOptions{} = opts), do: Map.from_struct(opts)
 
