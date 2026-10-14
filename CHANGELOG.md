@@ -35,6 +35,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   and rotation safely invalidate current binding while retaining historical proof.
   Vault/lease error diagnostics are redacted. PTY opening cwd uses the filesystem
   descriptor resolver, and browser availability inspection never launches a browser.
+- Registry dispatch can atomically pin a preceding inspection to an exact live
+  node PID and require the native privacy-context protocol before sending private
+  arguments. Reconnect or missing protocol support is a definite admission failure,
+  never a request sent to an old worker and rejected only after its response.
 
 ---
 
