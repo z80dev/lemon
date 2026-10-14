@@ -4,6 +4,9 @@ defmodule CodingAgent.Tools.Grep do
 
   Searches for patterns in files using ripgrep (rg) if available,
   falling back to Elixir's built-in file/regex operations.
+  Both paths skip hidden files and `.gitignore`/`.ignore`d files by default
+  (`hidden: true` / `no_ignore: true` include them); `skip` pages past
+  `max_results`.
   Binary and invalid UTF-8 files are skipped by the Elixir fallback, including
   explicitly targeted files. Truncated lines can be recovered with `read`.
   """
@@ -11,7 +14,7 @@ defmodule CodingAgent.Tools.Grep do
   alias LemonAgent.Types.{AgentTool, AgentToolResult}
   alias LemonAgent.Security.ToolResultTrust
   alias LemonAi.Types.TextContent
-  alias CodingAgent.Tools.FileValidation
+  alias CodingAgent.Tools.{FileValidation, IgnoreFilter}
   alias CodingAgent.Tools.PathHelpers
 
   import CodingAgent.Tools.AbortHelpers, only: [aborted?: 1, check_abort: 1]
@@ -64,6 +67,21 @@ defmodule CodingAgent.Tools.Grep do
           "max_results" => %{
             "type" => "integer",
             "description" => "Maximum number of matches to return (default: 100)"
+          },
+          "skip" => %{
+            "type" => "integer",
+            "minimum" => 0,
+            "description" =>
+              "Number of matches to skip before returning results, for paging past max_results (default: 0)"
+          },
+          "hidden" => %{
+            "type" => "boolean",
+            "description" => "Search hidden files and directories (default: false)"
+          },
+          "no_ignore" => %{
+            "type" => "boolean",
+            "description" =>
+              "Include files ignored by .gitignore/.ignore (default: false; ignored files are skipped)"
           }
         },
         "required" => ["pattern"]
@@ -100,6 +118,7 @@ defmodule CodingAgent.Tools.Grep do
     case_sensitive = Map.get(params, "case_sensitive", true)
     literal = Map.get(params, "literal", false)
     context_lines = Map.get(params, "context_lines", @default_context_lines)
+    skip = Map.get(params, "skip", 0)
 
     max_results =
       Map.get(params, "max_results", Keyword.get(opts, :max_results, @default_max_results))
@@ -107,6 +126,7 @@ defmodule CodingAgent.Tools.Grep do
     with :ok <- validate_pattern(pattern, literal),
          :ok <- validate_context_lines(context_lines),
          :ok <- validate_max_results(max_results),
+         :ok <- validate_skip(skip),
          {:ok, resolved_path} <- resolve_path(path, cwd, opts),
          :ok <- check_path_access(resolved_path),
          :ok <- check_abort(signal) do
@@ -118,6 +138,9 @@ defmodule CodingAgent.Tools.Grep do
         literal: literal,
         context_lines: context_lines,
         max_results: max_results,
+        skip: skip,
+        hidden: Map.get(params, "hidden", false) == true,
+        no_ignore: Map.get(params, "no_ignore", false) == true,
         max_bytes: Keyword.get(opts, :max_bytes, @default_max_bytes),
         signal: signal,
         timeout_ms: Keyword.get(opts, :ripgrep_timeout_ms, @ripgrep_timeout_ms),
@@ -177,6 +200,12 @@ defmodule CodingAgent.Tools.Grep do
 
   defp validate_max_results(max_results) do
     {:error, "max_results must be a positive integer, got: #{inspect(max_results)}"}
+  end
+
+  defp validate_skip(skip) when is_integer(skip) and skip >= 0, do: :ok
+
+  defp validate_skip(skip) do
+    {:error, "skip must be a non-negative integer, got: #{inspect(skip)}"}
   end
 
   defp suggest_regex_fix(pattern) do
@@ -287,6 +316,8 @@ defmodule CodingAgent.Tools.Grep do
     args = ["--json", "--line-number", "--color", "never"]
     args = if opts.case_sensitive, do: args, else: args ++ ["--ignore-case"]
     args = if opts.literal, do: args ++ ["--fixed-strings"], else: args
+    args = if opts.hidden, do: args ++ ["--hidden"], else: args
+    args = if opts.no_ignore, do: args ++ ["--no-ignore"], else: args
 
     args =
       if opts.glob do
@@ -324,19 +355,14 @@ defmodule CodingAgent.Tools.Grep do
       end)
       |> Enum.reverse()
 
-    build_result_from_match_refs(
-      matches,
-      opts,
-      length(matches),
-      length(matches) > opts.max_results
-    )
+    build_result_from_match_refs(matches, opts)
   end
 
   defp search_with_elixir(opts) do
     with {:ok, matcher} <- compile_matcher(opts.pattern, opts.case_sensitive, opts.literal) do
       match_refs =
         opts.path
-        |> find_files(opts.glob)
+        |> find_files(opts)
         |> Stream.flat_map(fn file ->
           if aborted?(opts.signal) do
             []
@@ -349,14 +375,7 @@ defmodule CodingAgent.Tools.Grep do
       if aborted?(opts.signal) do
         {:error, "Operation aborted"}
       else
-        total_match_count = length(match_refs)
-
-        build_result_from_match_refs(
-          match_refs,
-          opts,
-          total_match_count,
-          total_match_count > opts.max_results
-        )
+        build_result_from_match_refs(match_refs, opts)
       end
     end
   end
@@ -375,23 +394,26 @@ defmodule CodingAgent.Tools.Grep do
     end
   end
 
-  defp find_files(path, glob) do
+  defp find_files(path, opts) do
     case File.stat(path) do
       {:ok, %File.Stat{type: :regular}} ->
         [path]
 
       {:ok, %File.Stat{type: :directory}} ->
         pattern =
-          if glob do
-            Path.join([path, "**", glob])
+          if opts.glob do
+            Path.join([path, "**", opts.glob])
           else
             Path.join(path, "**/*")
           end
 
-        pattern
-        |> Path.wildcard()
-        |> Enum.filter(&regular_file?/1)
-        |> Enum.filter(&text_file?/1)
+        files =
+          pattern
+          |> Path.wildcard(match_dot: opts.hidden)
+          |> Enum.filter(&regular_file?/1)
+          |> Enum.filter(&text_file?/1)
+
+        if opts.no_ignore, do: files, else: IgnoreFilter.reject_ignored(files, path)
 
       _ ->
         []
@@ -457,12 +479,13 @@ defmodule CodingAgent.Tools.Grep do
     String.contains?(String.downcase(line), pattern)
   end
 
-  defp build_result_from_match_refs([], _opts, _total_match_count, _match_limit_reached?) do
-    no_matches_result()
-  end
+  defp build_result_from_match_refs([], _opts), do: no_matches_result()
 
-  defp build_result_from_match_refs(match_refs, opts, total_match_count, match_limit_reached?) do
-    shown_refs = Enum.take(match_refs, opts.max_results)
+  defp build_result_from_match_refs(match_refs, opts) do
+    total_match_count = length(match_refs)
+    shown_refs = match_refs |> Enum.drop(opts.skip) |> Enum.take(opts.max_results)
+    shown_count = length(shown_refs)
+    match_limit_reached? = total_match_count > opts.skip + opts.max_results
 
     {formatted_lines, lines_truncated?} = format_match_refs(shown_refs, opts)
     raw_output = Enum.join(formatted_lines, "\n")
@@ -471,8 +494,12 @@ defmodule CodingAgent.Tools.Grep do
     notices =
       []
       |> maybe_add_notice(
+        shown_count == 0,
+        "skip=#{opts.skip} is past the last match"
+      )
+      |> maybe_add_notice(
         match_limit_reached?,
-        "#{opts.max_results} matches limit reached. Use max_results=#{opts.max_results * 2} for more, or refine pattern"
+        "#{opts.max_results} matches limit reached: showing matches #{opts.skip + 1}-#{opts.skip + shown_count} of #{total_match_count}. Use skip=#{opts.skip + opts.max_results} for the next page, or refine pattern"
       )
       |> maybe_add_notice(
         truncation.truncated,
@@ -512,6 +539,8 @@ defmodule CodingAgent.Tools.Grep do
         match_count: total_match_count,
         truncated: match_limit_reached? or truncation.truncated,
         match_limit_reached: if(match_limit_reached?, do: opts.max_results),
+        skip: if(opts.skip > 0, do: opts.skip),
+        next_skip: if(match_limit_reached?, do: opts.skip + opts.max_results),
         truncation: if(truncation.truncated, do: truncation),
         lines_truncated: if(lines_truncated?, do: true)
       }

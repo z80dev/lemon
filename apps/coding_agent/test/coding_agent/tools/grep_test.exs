@@ -723,4 +723,59 @@ defmodule CodingAgent.Tools.GrepTest do
       assert %AgentToolResult{details: %{match_count: 1}} = arrow
     end
   end
+
+  describe "paging, hidden and ignored files" do
+    setup %{tmp_dir: tmp_dir} do
+      {_, 0} = System.cmd("git", ["init", "-q", tmp_dir])
+      File.write!(Path.join(tmp_dir, ".gitignore"), "ignored/\n")
+      File.mkdir_p!(Path.join(tmp_dir, "ignored"))
+      File.write!(Path.join(tmp_dir, "ignored/skip.txt"), "needle ignored\n")
+      File.write!(Path.join(tmp_dir, ".hidden.txt"), "needle hidden\n")
+      File.write!(Path.join(tmp_dir, "visible.txt"), Enum.map_join(1..5, "\n", &"needle #{&1}"))
+      :ok
+    end
+
+    for rg? <- [true, false], rg? == false or System.find_executable("rg") != nil do
+      @rg rg?
+      test "skips ignored and hidden files by default (ripgrep: #{rg?})", %{tmp_dir: tmp_dir} do
+        result = grep(tmp_dir, %{"pattern" => "needle"}, @rg)
+        assert %AgentToolResult{content: [%TextContent{text: text}], details: details} = result
+        assert details.match_count == 5
+        refute text =~ "ignored"
+        refute text =~ "hidden"
+      end
+
+      test "hidden and no_ignore include those files (ripgrep: #{rg?})", %{tmp_dir: tmp_dir} do
+        params = %{"pattern" => "needle", "hidden" => true, "no_ignore" => true}
+        assert %AgentToolResult{content: [%TextContent{text: text}]} = grep(tmp_dir, params, @rg)
+        assert text =~ "needle ignored"
+        assert text =~ "needle hidden"
+      end
+
+      test "skip pages past max_results (ripgrep: #{rg?})", %{tmp_dir: tmp_dir} do
+        first = grep(tmp_dir, %{"pattern" => "needle", "max_results" => 2}, @rg)
+        assert %AgentToolResult{content: [%TextContent{text: text}], details: details} = first
+        assert details.next_skip == 2
+        assert text =~ "showing matches 1-2 of 5. Use skip=2"
+        assert text =~ "visible.txt:1: needle 1"
+
+        params = %{"pattern" => "needle", "max_results" => 2, "skip" => 4}
+        last = grep(tmp_dir, params, @rg)
+        assert %AgentToolResult{content: [%TextContent{text: text}], details: details} = last
+        assert text =~ "visible.txt:5: needle 5"
+        refute text =~ "needle 4"
+        refute Map.has_key?(details, :next_skip)
+        assert details.skip == 4
+      end
+    end
+
+    test "rejects a negative skip", %{tmp_dir: tmp_dir} do
+      assert {:error, "skip must be a non-negative integer" <> _} =
+               grep(tmp_dir, %{"pattern" => "needle", "skip" => -1}, false)
+    end
+
+    defp grep(tmp_dir, params, rg?) do
+      Grep.execute("call", params, nil, nil, tmp_dir, ripgrep_available?: rg?)
+    end
+  end
 end
