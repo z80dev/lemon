@@ -207,7 +207,7 @@ export function cancelBotResources(services: BackendServices, botId: string, exp
 /** Durable lifecycle: shutdown cancels pending input, fences in-flight writes, and never grants permission. */
 export function createGateService(services: BackendServices): GateService & { sweep(): void; close(): void } {
   const waiters = new Map<string, Set<(resource: GateResource) => void>>();
-  let timer: ReturnType<typeof setTimeout> | undefined;
+  let timer: NodeJS.Timeout | undefined;
   let closed = false;
   function wake(name: Collection, resource: GateResource): void {
     if (resource.gate.state === 'pending' || resource.gate.state === 'submitted') return;

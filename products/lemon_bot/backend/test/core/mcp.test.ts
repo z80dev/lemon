@@ -84,7 +84,8 @@ describe('MCP run authority and durable receipts', () => {
       expect(initialize.result?.protocolVersion).toBe('2025-03-26');
       const catalog = await rpc(fixture, 'tools/list', {});
       const tools = catalog.result?.tools ?? [];
-      expect(tools.map(tool => tool.name).sort()).toEqual(['message_bot', 'handoff', 'create_draft', 'ask_user', 'request_approval', 'request_human_step', 'request_secret', 'send_voice_memo', 'share_file', 'create_routine', 'update_routine', 'save_skill', 'list_bots', 'post_to_group', 'remember', 'create_bot', 'update_preferences', 'create_reminder'].sort());
+      const expectedTools: (keyof P.MCPToolInputs)[] = ['message_bot', 'handoff', 'create_draft', 'ask_user', 'request_approval', 'request_human_step', 'request_secret', 'send_voice_memo', 'share_file', 'create_routine', 'update_routine', 'save_skill', 'list_bots', 'post_to_group', 'remember', 'create_bot', 'update_preferences', 'create_reminder'];
+      expect(tools.map(tool => tool.name).sort()).toEqual(expectedTools.sort());
       for (const tool of tools) { expect(tool.inputSchema.$ref).toBe(`#/$defs/${tool.name}`); expect(tool.inputSchema.$defs).toBeDefined(); }
       expect((await rpc(fixture, 'initialize', { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'test', version: '1' }, authority: 'owner' })).error?.code).toBe(-32602);
       expect((await rpc(fixture, 'arbitrary_management', {})).error?.code).toBe(-32601);

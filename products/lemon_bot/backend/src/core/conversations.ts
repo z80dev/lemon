@@ -181,7 +181,7 @@ export function removeUserMembership(services: BackendServices, userId: string):
 type ConversationGate = P.Approval | P.Question | P.HumanStep | P.SecretRequest | P.ConnectorConsent;
 const gateCollections = ['approvals', 'questions', 'humanSteps', 'secretRequests', 'consents'] as const;
 function assertDeletionReady(services: BackendServices, roomId: string): void {
-  if (services.store.list<P.Run>('runs', run => active[run.status] && (run.conversationId === roomId || services.store.metadata<string>(`runReturnConversation:${run.id}`) === roomId)).length) fail('conflict', 'Stop and reconcile active and delegated work before deleting this conversation.');
+  if (services.store.list<P.Run>('runs', run => active[run.status] === true && (run.conversationId === roomId || services.store.metadata<string>(`runReturnConversation:${run.id}`) === roomId)).length) fail('conflict', 'Stop and reconcile active and delegated work before deleting this conversation.');
   if (services.store.list<P.Draft>('drafts', draft => draft.conversationId === roomId && (draft.state === 'sending' || draft.state === 'outcome_unknown')).length) fail('conflict', 'Reconcile draft delivery before deleting this conversation.');
   const entryIds = new Set(services.store.list<P.TranscriptEntry>('entries', entry => entry.conversationId === roomId).map(entry => entry.id));
   for (const collection of gateCollections) if (services.store.list<ConversationGate>(collection, resource => entryIds.has(resource.entryId) && (resource.gate.state === 'submitted' || resource.gate.state === 'outcome_unknown')).length) fail('conflict', 'Reconcile submitted or uncertain gates before deleting this conversation.');
@@ -392,12 +392,12 @@ export function createConversationRoutes(services: BackendServices): Route[] {
         return input.newOwnerUserId;
       };
       validateSuccessor(current);
-      const ownRuns = services.store.list<P.Run>('runs', run => run.initiatorUserId === actor.userId && active[run.status] && (run.conversationId === current.id || services.store.metadata<string>(`runReturnConversation:${run.id}`) === current.id));
+      const ownRuns = services.store.list<P.Run>('runs', run => run.initiatorUserId === actor.userId && active[run.status] === true && (run.conversationId === current.id || services.store.metadata<string>(`runReturnConversation:${run.id}`) === current.id));
       for (const run of ownRuns) {
         try { await services.runtime.cancel(actor, run.id, 'Leaving this group.'); }
         catch (error) { if (!(error instanceof ApiError)) throw error; fail('conflict', 'Owned group work has not been proven terminal; membership is unchanged.', false, { runIds: ownRuns.map(value => value.id) }); }
       }
-      const remainingRuns = services.store.list<P.Run>('runs', run => run.initiatorUserId === actor.userId && active[run.status] && (run.conversationId === current.id || services.store.metadata<string>(`runReturnConversation:${run.id}`) === current.id));
+      const remainingRuns = services.store.list<P.Run>('runs', run => run.initiatorUserId === actor.userId && active[run.status] === true && (run.conversationId === current.id || services.store.metadata<string>(`runReturnConversation:${run.id}`) === current.id));
       if (remainingRuns.length) fail('conflict', 'Wait for owned group work to reach a terminal state before leaving.', true, { runIds: remainingRuns.map(value => value.id) });
       for (const collection of gateCollections) for (const resource of services.store.list<ConversationGate>(collection, value => value.gate.targetUserId === actor.userId)) {
         const entry = services.store.get<P.TranscriptEntry>('entries', resource.entryId);

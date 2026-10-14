@@ -71,7 +71,7 @@ export interface RuntimeService {
 export interface AttachmentService {
   create(principal: Principal, bytes: Uint8Array, metadata: P.AttachmentUpload & { filename: string; mime?: string; source?: P.Attachment['source']; provenance?: P.Attachment['provenance'] }): Promise<P.Attachment>;
   copy(principal: Principal, sourceAttachmentId: string, metadata: P.AttachmentUpload): Promise<P.Attachment>;
-  bytes(attachmentId: string): Promise<Uint8Array>;
+  bytes(attachmentId: string): Promise<Uint8Array<ArrayBuffer>>;
   download(principal: Principal, attachmentId: string): P.Download;
 }
 export interface GateService {
@@ -118,6 +118,7 @@ export interface BackendConfiguration {
 export interface BackendServices {
   config: BackendConfiguration; store: EntityStore; events: EventService; auth: AccessService; mutations: MutationService;
   lemon: LemonService; runtime: RuntimeService; attachments: AttachmentService; gates: GateService; integrations: IntegrationServices;
+  http?: HttpClient;
   id(prefix?: string): string;
   now(): number;
   resource<T extends object>(prefix: string, fields: T): T & P.Resource;

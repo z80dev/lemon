@@ -45,7 +45,7 @@ export async function createBackend(config:BackendConfiguration,key:Uint8Array):
   if(sentinel){if(codec.decrypt(sentinel)!=='lemon_bot_private_key_v1'){store.close();throw new Error('Product encryption key does not match existing private state.');}}
   else store.setMetadata('encryptionKeyCheck',codec.encrypt('lemon_bot_private_key_v1'));
   // Factories receive one shared object; all required services are installed before any listener accepts requests.
-  const services={config,store,...codec} as BackendServices;
+  const services={config,store,...codec} as unknown as BackendServices;
   installHelpers(services);installSecretResolver(services);
   services.mutations=createMutationService(services,key);
   const lemon=createLemonService(config);services.lemon=lemon;

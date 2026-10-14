@@ -54,7 +54,7 @@ describe('immutable completed attachments', () => {
       await expect(service.create(f.user, Buffer.from('%PDF-1.7\ntruncated'), { clientNonce: nonce, purpose: 'message', filename: 'report.pdf' })).rejects.toMatchObject({ code: 'unsupported_media' });
       const docx = zipSync({ '[Content_Types].xml': strToU8('<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>'), 'word/document.xml': strToU8('<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p/></w:body></w:document>') });
       expect((await service.create(f.user, docx, { clientNonce: nonce, purpose: 'message', filename: 'report.docx' })).preview).toBe('docx');
-      for (const [filename, text, preview] of [['a.csv', 'a,b\n1,2', 'table'], ['a.md', '# Heading', 'markdown'], ['a.json', '{"a":1}', 'json'], ['a.html', '<!doctype html><html><script>alert(1)</script></html>', 'html']]) {
+      for (const [filename, text, preview] of [['a.csv', 'a,b\n1,2', 'table'], ['a.md', '# Heading', 'markdown'], ['a.json', '{"a":1}', 'json'], ['a.html', '<!doctype html><html><script>alert(1)</script></html>', 'html']] as const) {
         expect((await service.create(f.user, strToU8(text!), { clientNonce: nonce, purpose: 'message', filename: filename! })).preview).toBe(preview!);
       }
       const archive = await service.create(f.user, zipSync({ 'a.txt': strToU8('data') }), { clientNonce: nonce, purpose: 'message', filename: 'archive.zip' });

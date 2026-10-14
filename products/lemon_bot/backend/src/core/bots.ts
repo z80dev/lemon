@@ -320,7 +320,7 @@ async function runtimeMemoryCandidates(s: BackendServices, bot: P.Bot): Promise<
   const seen = new Set<string>();
   const cursors = new Set<string>();
   do {
-    const result = await s.lemon.call<P.Page<RuntimeMemoryCandidate>>('memory.list', { profileId: bot.profileId, limit: 50, ...(cursor ? { cursor } : {}) });
+    const result: P.Page<RuntimeMemoryCandidate> = await s.lemon.call<P.Page<RuntimeMemoryCandidate>>('memory.list', { profileId: bot.profileId, limit: 50, ...(cursor ? { cursor } : {}) });
     for (const item of result.items) {
       if (!item.id || !Number.isSafeInteger(item.updatedAtMs) || seen.has(item.id)) fail('upstream_unavailable', 'Scoped memory listing is inconsistent.');
       seen.add(item.id);

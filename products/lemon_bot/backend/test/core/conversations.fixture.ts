@@ -23,7 +23,7 @@ export function chatFixture(): ChatFixture {
   const admissions: { principal: Principal; botId: string }[] = [];
   const unreachable = (): never => { throw new Error('Unexpected dependency call in isolated boundary test.'); };
   // The fixture supplies only tested boundaries; all unrelated services fail loudly.
-  const services = { store, config: { publicUrl: 'http://localhost:4080' }, encrypt: (value: unknown) => Buffer.from(JSON.stringify(value)).toString('base64url'), decrypt: <T>(value: string): T => JSON.parse(Buffer.from(value, 'base64url').toString()) as T } as BackendServices;
+  const services = { store, config: { publicUrl: 'http://localhost:4080' }, encrypt: (value: unknown) => Buffer.from(JSON.stringify(value)).toString('base64url'), decrypt: <T>(value: string): T => JSON.parse(Buffer.from(value, 'base64url').toString()) as T } as unknown as BackendServices;
   installHelpers(services);
   services.mutations = createMutationService(services, new Uint8Array(32).fill(7));
   services.events = createEventService(services);
