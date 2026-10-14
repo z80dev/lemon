@@ -669,15 +669,8 @@ defmodule CodingAgent.Session do
     if action != :status and (state.is_streaming or state.auto_compaction.in_progress) do
       {:reply, {:error, :busy}, state}
     else
-      case CodingAgent.Session.Planning.transition(state.session_manager, action, opts) do
-        {:ok, plan, manager} ->
-          state =
-            if action == :status do
-              state
-            else
-              %{state | session_manager: manager}
-              |> CodingAgent.Session.Planning.refresh()
-            end
+      case CodingAgent.Session.Planning.transition_session(state, action, opts) do
+        {:ok, plan, state} ->
 
           {:reply, {:ok, plan}, state}
 

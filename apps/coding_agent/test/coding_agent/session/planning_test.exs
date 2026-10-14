@@ -247,6 +247,105 @@ defmodule CodingAgent.Session.PlanningTest do
     assert {:ok, %{"mode" => "plan"}, _} = Planning.transition(approved, :enter, [])
   end
 
+  test "configured plan role restores the execution model after durable resume", %{root: root} do
+    settings = role_settings()
+    stream = fn model, _context, _opts -> {:ok, events(%{stop("done") | model: model.id})} end
+
+    opts =
+      session_opts(root, stream, fn _ -> {:ok, :denied} end, [])
+      |> Keyword.put(:model, "openai:gpt-4")
+      |> Keyword.put(:settings_manager, settings)
+      |> Keyword.put(:workspace_dir, Path.join(root, "workspace"))
+
+    session = start_supervised!({Session, opts})
+    assert {:ok, %{"mode" => "plan"}} = Session.plan(session, :enter)
+    assert Session.get_state(session).model.id == "gpt-4o-mini"
+    assert {:ok, %{"mode" => "plan"}} = Session.plan(session, :enter)
+    assert :ok = Session.save(session)
+    path = Session.get_state(session).session_file
+    stop_supervised!(Session)
+
+    resumed =
+      start_supervised!(
+        {Session, opts |> Keyword.delete(:model) |> Keyword.put(:session_file, path)}
+      )
+
+    assert Session.get_state(resumed).model.id == "gpt-4o-mini"
+    assert {:ok, %{"mode" => "code"}} = Session.plan(resumed, :exit)
+    assert Session.get_state(resumed).model.id == "gpt-4"
+    assert LemonAgent.Agent.get_state(Session.get_state(resumed).agent).model.id == "gpt-4"
+    assert :ok = Session.save(resumed)
+    assert {:ok, manager} = SessionManager.load_from_file(path)
+    assert SessionManager.build_session_context(manager).model == %{provider: "openai", model_id: "gpt-4"}
+  end
+
+  test "approval restores the execution model before the next response in the same run", %{
+    root: root
+  } do
+    parent = self()
+    calls = :counters.new(1, [:atomics])
+
+    stream = fn model, context, _opts ->
+      :counters.add(calls, 1, 1)
+      call = :counters.get(calls, 1)
+      send(parent, {:planning_model, call, model.id})
+      path = Path.join(plan_dir(context.system_prompt), "role-plan.md")
+
+      response =
+        case call do
+          1 -> tool_use("write-plan", "write", %{"path" => path, "content" => "# Role plan"})
+          2 -> tool_use("propose", "propose_plan", %{"path" => path, "title" => "Role"})
+          _ -> stop("Executing with the original model")
+        end
+
+      {:ok, events(%{response | model: model.id, provider: model.provider, api: model.api})}
+    end
+
+    opts =
+      session_opts(root, stream, fn _ -> {:ok, :approved, :once} end, [reader(), writer()])
+      |> Keyword.put(:model, "openai:gpt-4")
+      |> Keyword.put(:settings_manager, role_settings())
+      |> Keyword.put(:workspace_dir, Path.join(root, "workspace"))
+
+    session = start_supervised!({Session, opts})
+    Session.subscribe(session)
+    assert {:ok, %{"mode" => "plan"}} = Session.plan(session, :enter)
+    assert :ok = Session.prompt(session, "Plan and execute.")
+    assert_receive {:session_event, _, {:agent_end, _}}, 5_000
+    assert_receive {:planning_model, 1, "gpt-4o-mini"}
+    assert_receive {:planning_model, 2, "gpt-4o-mini"}
+    assert_receive {:planning_model, 3, "gpt-4"}
+    assert Session.get_state(session).model.id == "gpt-4"
+  end
+
+  test "invalid configured plan model leaves mode and execution model unchanged", %{root: root} do
+    settings = %{role_settings() | model_roles: %{"plan" => "openai:not-a-model"}}
+
+    opts =
+      session_opts(root, fn _, _, _ -> {:ok, events(stop("done"))} end, fn _ ->
+        {:ok, :denied}
+      end, [])
+      |> Keyword.put(:model, "openai:gpt-4")
+      |> Keyword.put(:settings_manager, settings)
+      |> Keyword.put(:workspace_dir, Path.join(root, "workspace"))
+
+    session = start_supervised!({Session, opts})
+    assert {:error, :invalid_plan_model} = Session.plan(session, :enter)
+    assert {:ok, %{"mode" => "code"}} = Session.plan(session)
+    assert Session.get_state(session).model.id == "gpt-4"
+  end
+
+  defp role_settings do
+    %SettingsManager{
+      default_model: %{provider: :openai, model_id: "gpt-4", base_url: nil},
+      model_roles: %{"plan" => "openai:gpt-4o-mini"},
+      providers: %{"openai" => %{api_key: "fixture-only"}},
+      provider_routing: %{enabled: false},
+      compaction_enabled: false,
+      retry_enabled: false
+    }
+  end
+
   test "entering before the first run creates one durable native planning session", %{root: root} do
     key = "agent:plan-test-#{System.unique_integer([:positive])}:main"
     on_exit(fn -> LemonCore.SessionLifecycle.delete(key) end)
