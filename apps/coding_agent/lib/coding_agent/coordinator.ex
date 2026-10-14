@@ -475,6 +475,7 @@ defmodule CodingAgent.Coordinator do
       receive do
         {:admission_guardian, guardian} -> guardian
         {:admission_guardian_error, reason} -> exit(reason)
+        {:DOWN, ^owner_ref, :process, ^coordinator, _reason} -> exit(:normal)
       end
 
     result =
