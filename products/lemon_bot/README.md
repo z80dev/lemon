@@ -106,6 +106,8 @@ Channel/email/X setup screens also consume typed `/v1/channels/providers`, `/v1/
 
 OIDC additionally requires operator-only `oidcAllowedOrigins` and exact `oidcClientApprovals` `{origin,clientId,clientSecretRef}` bindings to existing `serverSecrets`. Both default empty; no credential is sent to an IdP merely because an Owner added its provider row. Public DNS is required unless the exact HTTPS origin also appears in `oidcApprovedPrivateOrigins` (subset of allowed origins). All endpoints, DNS/TLS and credential bindings are checked before discovery/exchange/logout/probes. Local bootstrap/password accounts remain usable; managed required SSO does not silently downgrade when these prerequisites are missing.
 
+The strict private schema also types management-user grants, private export origins, reviewed OIDC group/subject mappings, separate public X credentials, provider-account spend sources, fixed channel application principals and managed-directory Owner override. These are operator-reviewed deployment inputs, not Owner-editable credential settings or an `operatorExtras` bag; see the [provider reference](providers.md) and API private-configuration sections for exact fields and real provider prerequisites.
+
 ## Attach and manage a machine
 
 1. Sign in as workspace owner/admin; open **Machines → Attach a machine**. Enter friendly name, durable unique nodeName, purpose/labels. Review that a trusted worker runs with its OS user's privileges and co-resident bots share files/logins.
