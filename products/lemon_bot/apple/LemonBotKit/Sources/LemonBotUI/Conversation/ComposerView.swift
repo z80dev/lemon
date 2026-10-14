@@ -199,7 +199,7 @@ public struct ComposerView: View {
             ForEach(Array(receipt.delivery.enumerated()), id: \.offset) { _, delivery in
                 Text("\(store.bots.first(where: { $0.id == delivery.botId })?.name ?? delivery.botId): \(delivery.effectiveMode.replacingOccurrences(of: "_", with: " ").capitalized) · run \(delivery.runId)").font(.caption).textSelection(.enabled)
                 if let run = receipt.runs.first(where: { $0.id == delivery.runId }), let error = run.error {
-                    ActionErrorView(message: BackendError(status: 0, failure: error).localizedDescription)
+                    ActionErrorView(message: BackendError(status: 0, failure: ErrorEnvelopeError(code: error.code, message: error.message, requestId: error.requestId, retrySafe: error.retrySafe, details: error.details)).localizedDescription)
                 }
             }
             if receipt.status == "outcome_unknown" { Text("Outcome not confirmed. Do not resend; inspect the retained run and provider before another action.").foregroundStyle(.orange).font(.caption) }
@@ -210,7 +210,7 @@ public struct ComposerView: View {
         }
         ForEach(reconciledRuns) { run in
             Text("Authoritative run \(run.id): \(run.status)").font(.caption).textSelection(.enabled)
-            if let error = run.error { ActionErrorView(message: BackendError(status: 0, failure: error).localizedDescription) }
+            if let error = run.error { ActionErrorView(message: BackendError(status: 0, failure: ErrorEnvelopeError(code: error.code, message: error.message, requestId: error.requestId, retrySafe: error.retrySafe, details: error.details)).localizedDescription) }
         }
         ActionErrorView(message: action.error)
         if action.uncertain && !messageUncertain { Text("An upload outcome is unconfirmed. No upload is retried automatically; inspect authorized files before another attempt.").font(.caption).foregroundStyle(.orange) }

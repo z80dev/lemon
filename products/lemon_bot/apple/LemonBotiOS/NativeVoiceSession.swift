@@ -75,7 +75,7 @@ final class NativeVoiceSession: NSObject, AVSpeechSynthesizerDelegate, AVAudioPl
             conversation = try await store.read("/conversations/\(pathID(conversationID))")
             try await resetSpeechBaseline(conversationID: conversationID)
         }
-        catch { error = error.localizedDescription; return }
+        catch { self.error = error.localizedDescription; return }
         guard conversation.ownerUserId == user.id, ["dm", "task", "team_dm"].contains(conversation.kind) else {
             error = "Voice is available only in your own direct chat, task or owned Team direct chat, not groups, channels or another teammate's Team Bot."
             return
@@ -144,7 +144,7 @@ final class NativeVoiceSession: NSObject, AVSpeechSynthesizerDelegate, AVAudioPl
                 releasePlaybackSession()
             }
         }
-        catch { error = error.localizedDescription }
+        catch { self.error = error.localizedDescription }
     }
 
     func update(_ changes: JSONObject) async {
@@ -160,7 +160,7 @@ final class NativeVoiceSession: NSObject, AVSpeechSynthesizerDelegate, AVAudioPl
             self.session = try await store.mutate("PATCH", "/voice/sessions/\(pathID(session.id))", body: body)
             if self.session?.muted == true { capture.cancel(clearText: false); speaker.stopSpeaking(at: .immediate) }
             if self.session?.muted == true { audioPlayer?.stop() }
-        } catch { error = error.localizedDescription }
+        } catch { self.error = error.localizedDescription }
     }
 
     func end() async {
@@ -174,7 +174,7 @@ final class NativeVoiceSession: NSObject, AVSpeechSynthesizerDelegate, AVAudioPl
         do {
             self.session = try await store.mutate("POST", "/voice/sessions/\(pathID(session.id))/end", body: ["clientNonce": .string(UUID().uuidString)])
             if let key = persistenceKey { UserDefaults.standard.removeObject(forKey: key) }
-        } catch { error = error.localizedDescription }
+        } catch { self.error = error.localizedDescription }
     }
 
     func background() {
@@ -329,7 +329,7 @@ struct NativeVoiceView: View {
                                 Button("Record a turn") { Task { await voice.recordTurn() } }.disabled(session.muted || voice.ambiguousSend || voice.busy || session.deviceId != store.deviceID)
                             }
                             if !voice.capture.processing.isEmpty { Text(voice.capture.processing).font(.caption) }
-                            TextEditor(text: $voice.capture.text).frame(minHeight: 100)
+                            TextEditor(text: Binding(get: { voice.capture.text }, set: { voice.capture.text = $0 })).frame(minHeight: 100)
                             Button("Send reviewed utterance") { Task { await voice.sendReviewedUtterance() } }
                                 .disabled(voice.capture.recording || voice.capture.preparing || voice.capture.text.isEmpty || session.muted || voice.busy || voice.ambiguousSend || store.connectionState != "online" || session.deviceId != store.deviceID)
                             Button("Discard reviewed utterance") { voice.capture.cancel(); voice.ambiguousSend = false }

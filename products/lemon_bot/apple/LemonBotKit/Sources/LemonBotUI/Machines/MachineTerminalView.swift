@@ -168,7 +168,11 @@ struct NativeTerminalSurface: UIViewRepresentable {
     let gap: TerminalGap?
     func makeCoordinator() -> NativeTerminalCoordinator { NativeTerminalCoordinator(session: session) }
     func makeUIView(context: Context) -> SwiftTerm.TerminalView {
-        let view = SwiftTerm.TerminalView(frame: .zero); view.terminalDelegate = context.coordinator; view.configureNativeColors(); return view
+        let view = SwiftTerm.TerminalView(frame: .zero)
+        view.terminalDelegate = context.coordinator
+        view.nativeForegroundColor = .label
+        view.nativeBackgroundColor = .systemBackground
+        return view
     }
     func updateUIView(_ view: SwiftTerm.TerminalView, context: Context) { context.coordinator.update(view, frames: frames, gap: gap) }
 }

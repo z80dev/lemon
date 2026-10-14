@@ -18,13 +18,13 @@ final class MacGlobalHotkeys {
         installationStatus = InstallEventHandler(GetApplicationEventTarget(), { _, event, context in
             guard let event, let context else { return OSStatus(eventNotHandledErr) }
             var key = EventHotKeyID()
-            let status = GetEventParameter(event, EventParamName(kEventParamDirectObject), EventParamType(typeEventHotKeyID), nil, ByteCount(MemoryLayout<EventHotKeyID>.size), nil, &key)
+            let status = GetEventParameter(event, EventParamName(kEventParamDirectObject), EventParamType(typeEventHotKeyID), nil, MemoryLayout<EventHotKeyID>.size, nil, &key)
             guard status == noErr else { return status }
             let pressed = GetEventKind(event) == UInt32(kEventHotKeyPressed)
             let owner = Unmanaged<MacGlobalHotkeys>.fromOpaque(context).takeUnretainedValue()
             MainActor.assumeIsolated { owner.action?(key.id, pressed) }
             return noErr
-        }, ItemCount(types.count), &types, context, &handler)
+        }, types.count, &types, context, &handler)
     }
 
     func configure(summon: String?, pushToTalk: String?) throws {

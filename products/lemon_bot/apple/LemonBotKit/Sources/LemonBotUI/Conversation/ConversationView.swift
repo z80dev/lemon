@@ -266,7 +266,6 @@ struct TranscriptEventView: View {
             case .botRemoved(let value): Text("Bot removed · \(value.botId)")
             case .handoff(let value): NavigationLink("\(value.sourceBotId) → \(value.targetBotId): \(value.text)") { ConversationView(store: store, conversationID: value.targetConversationId) }
             case .machineMoved(let value): Text("Bot \(value.botId) moved: \(value.sourceMachineId) → \(value.targetMachineId). Files and credentials were not copied.")
-            default: Text("Unsupported event · update client")
             }
         }.font(.caption).foregroundStyle(.secondary)
     }

@@ -51,7 +51,6 @@ final class MacPlatformController: NSObject {
                 } else { self.speech.release() }
             }
         }
-        NSApp.servicesProvider = self
     }
 
     var selectedBot: Bot? { store.bots.first { $0.id == settings.selectedBotId } }
@@ -69,6 +68,7 @@ final class MacPlatformController: NSObject {
 
     func start() {
         guard lifecycleTask == nil else { return }
+        NSApp.servicesProvider = self
         lifecycleTask = Task { [weak self] in
             guard let self else { return }
             if self.store.account == nil, let account = self.store.accounts.first {

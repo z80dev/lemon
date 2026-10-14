@@ -1,0 +1,8 @@
+.build/
+.swiftpm/
+DerivedData/
+.derivedData/
+build/
+LemonBot.xcodeproj/
+*.xcworkspace/
+xcuserdata/

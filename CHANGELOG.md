@@ -157,6 +157,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - Lemon Bot clients normalize trailing-slash backend origins without duplicate
   API path separators. Web form labels and body text remain legible in dark
   appearance, including onboarding before sign-in.
+- Lemon Bot native startup defers macOS Services registration until AppKit is
+  initialized. UIKit terminal colors, Carbon sizes and nested voice bindings use
+  their actual platform APIs without replacing capture owners or masking errors.
 - Pending execution-approval events redact nested credentials and rationale
   secrets before reaching clients, while preserving visible review targets.
 - Private cron admission accepts valid allowlisted callback URLs without

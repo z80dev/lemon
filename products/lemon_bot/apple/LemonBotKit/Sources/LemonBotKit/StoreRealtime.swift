@@ -127,7 +127,13 @@ extension LemonBotStore {
             if value.error.code == "cursor_expired" {
                 try await recoverExpiredCursor()
                 try await sendSocket(.subscribe(RealtimeClientFrameSubscribe(requestId: UUID().uuidString, cursor: cursor, conversationIds: [])), on: socket)
-            } else { throw BackendError(status: value.error.code == "unauthenticated" ? 401 : 400, failure: value.error) }
+            } else {
+                let failure = ErrorEnvelopeError(
+                    code: value.error.code, message: value.error.message,
+                    requestId: value.error.requestId, retrySafe: value.error.retrySafe,
+                    details: value.error.details)
+                throw BackendError(status: value.error.code == "unauthenticated" ? 401 : 400, failure: failure)
+            }
         case .terminalOutput(let output):
             guard terminalSubscriptions.contains(output.terminalId), Data(base64Encoded: output.dataBase64) != nil else { throw ClientError.invalidFrame }
             let last = terminalSequences[output.terminalId] ?? 0

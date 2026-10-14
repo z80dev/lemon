@@ -195,7 +195,7 @@ struct MacSettingsView: View {
                 }.disabled(controller.store.account == nil)
             }
             Section("Voice and notifications") {
-                Picker("Microphone input", selection: $controller.speech.preferredInputUID) {
+                Picker("Microphone input", selection: Binding(get: { controller.speech.preferredInputUID }, set: { controller.speech.preferredInputUID = $0 })) {
                     Text("System default").tag(String?.none)
                     ForEach(controller.speech.inputDevices) { input in
                         Text(input.name).tag(Optional(input.id))

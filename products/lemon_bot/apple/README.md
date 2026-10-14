@@ -4,10 +4,12 @@ Native SwiftUI clients for the independent Lemon Bot product backend. macOS and 
 
 ## Generate, build and launch
 
-Requirements: Xcode 26.3, XcodeGen 2.46+, the iOS simulator runtime, and access to the SwiftTerm package dependency. Run these commands from this `apple` directory:
+Requirements: Xcode 26.3, XcodeGen 2.46+, the iOS simulator runtime, the Xcode Metal Toolchain used by SwiftTerm, and access to the SwiftTerm package dependency. Run these commands from this `apple` directory:
 
 ```sh
 export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
+# Once per Xcode installation, if the Metal component is missing:
+# xcodebuild -downloadComponent MetalToolchain
 xcodegen generate --spec project.yml
 open LemonBot.xcodeproj
 
@@ -28,6 +30,8 @@ xcrun simctl launch booted org.lemonbot.ios
 ```
 
 Select **LemonBotMac** or **LemonBotiOS** in Xcode for interactive Run. `LemonBotShare` is a separate embedded iOS extension, not a second account client. Choose a concrete simulator in Xcode or boot an available simulator before `simctl install`; the generic build destination does not boot one.
+
+Unsigned builds validate compilation but do not grant App Group access. To exercise the real app/share container on a simulator, choose its concrete destination and build with `CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual`, then install that signed bundle. Physical devices still require your registered identifiers, entitlements and signing team.
 
 The checked-in specification uses `org.lemonbot.mac`, `org.lemonbot.ios`, `org.lemonbot.ios.share` and App Group `group.org.lemonbot.shared`. For physical devices/distribution, register your own identifiers and matching App Group, update the project settings and entitlements together, enable Push Notifications on the iOS app identifier, and set your signing team in Xcode or pass `DEVELOPMENT_TEAM=<team>`. APNs also requires the backend's configured key, team, topic and environment; an unsigned simulator build is not evidence of APNs delivery. Device OS permission and backend capability are separate.
 
@@ -94,3 +98,5 @@ Native conversation input handles Return key events with their modifiers, retain
 Store lifecycle tests inject an isolated credential store within the test target; production still defaults to Keychain and reports credential-access/deletion failures without an insecure fallback. Cursor-expiry fixtures serve complete authorized resource pagination and opened transcripts, checking read-only recovery, access eviction and local-draft retention without requiring a private request order.
 
 The macOS app keeps separate workspace, settings and menu-bar scenes, with typed layout, toolbar, commands and event sections. This preserves summon/active-call actions, user-selected input requests, account-bound voice cleanup, deep links, companion updates and foreground/viewed-room presence without type-erased scene or view wrappers.
+
+macOS registers its selected-text Services provider from the started workspace lifecycle, after AppKit has initialized—not from the SwiftUI app's controller constructor. iOS terminal colors use SwiftTerm's actual UIKit foreground/background APIs; native voice bindings mutate the existing capture object without replacing its owner.
