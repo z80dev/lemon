@@ -265,6 +265,7 @@ describe('owner phone pairing', () => {
       const path = resource === 'session' ? `/v1/auth/sessions/${connected.auth.session.id}` : `/v1/devices/${connected.device.id}`;
       await success(f.fetch('DELETE', path, { clientNonce: opaqueToken() }));
       f.restart();
+      expect((await success<P.Pairing>(f.fetch('GET', `/v1/pairings/${prepared.pending.id}`))).status).toBe('consumed');
       await failure(f.fetch('POST', `/v1/pairings/${prepared.pending.id}/complete`, prepared.completeBody, null), 'unauthenticated');
       await failure(f.fetch('POST', '/v1/pairings/claim', prepared.claimBody, null), 'unauthenticated');
       await failure(f.fetch('POST', `/v1/pairings/${prepared.pending.id}/approve`, prepared.approveBody), 'unauthenticated');
@@ -281,6 +282,7 @@ describe('owner phone pairing', () => {
     await failure(f.fetch('POST', `/v1/pairings/${pending.pending.id}/complete`, pending.completeBody, null), 'unauthenticated');
     await success(f.fetch('PATCH', '/v1/workspace', { clientNonce: opaqueToken(), revision: disabled.revision, enabled: true }));
     f.restart();
+    expect((await success<P.Pairing>(f.fetch('GET', `/v1/pairings/${pending.pending.id}`))).status).toBe('expired');
     await failure(f.fetch('POST', '/v1/pairings/claim', pending.claimBody, null), 'unauthenticated');
     await failure(f.fetch('POST', `/v1/pairings/${connected.pending.id}/complete`, connected.completeBody, null), 'unauthenticated');
     expect(f.store.get<SessionSecret>('sessionSecrets', auth.auth.session.id)?.revoked).toBe(true);
@@ -377,6 +379,9 @@ describe('owner phone pairing', () => {
     for (const invalid of [{ installationId: '' }, { installationId: 'x'.repeat(129) }, { deviceName: '' }, { deviceName: 'x'.repeat(121) }, { appVersion: 'x'.repeat(65) }, { deviceName: 'hidden\nname' }, { backendUrl: 'https://forged.example' }]) await failure(f.fetch('POST', '/v1/pairings/claim', { ...body, ...invalid }, null), 'invalid_request');
     const accepted = await success<P.PairingClaimResult>(f.fetch('POST', '/v1/pairings/claim', { ...body, installationId: 'x' }, null));
     expect(accepted.pairingId).toBe(started.issued.pairing.id); expect(f.persistentCalls).toBe(0);
+    const opaque = await prepare(f, '  opaque installation  ');
+    const connected = await connect(f, opaque);
+    expect(f.store.metadata(`deviceInstallation:${connected.device.id}`)).toBe('  opaque installation  ');
   });
 
   test('HTTPS is required off loopback even with trustedOverlay; origin credentials, path/query/fragment and inferred Host are refused', async () => {

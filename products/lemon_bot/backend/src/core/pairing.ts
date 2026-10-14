@@ -8,7 +8,7 @@ import { z, parse, principal, id, mutation, update } from './validation';
 
 const lifetimeMs = 5 * 60 * 1000;
 const secret = z.string().regex(/^[A-Za-z0-9_-]{43}$/);
-const installation = z.string().min(1).max(128).regex(/^[^\u0000-\u0020\u007f]+$/);
+const installation = z.string().min(1).max(128).regex(/^[^\u0000-\u001f\u007f]+$/);
 const deviceName = z.string().min(1).max(120).regex(/^[^\u0000-\u001f\u007f]+$/);
 const appVersion = z.string().min(1).max(64).regex(/^[^\u0000-\u001f\u007f]+$/);
 const previewSchema = z.object({ pairCode: secret, workspaceId: id }).strict();
@@ -211,7 +211,6 @@ export function createPairingService(s: BackendServices): PairingService {
 function ownedPairing(s: BackendServices, actor: Principal, pairingId: string): P.Pairing {
   const pairing = s.store.get<P.Pairing>('pairings', pairingId);
   if (!pairing || pairing.ownerUserId !== actor.userId || pairing.workspaceId !== actor.workspaceId) fail('not_found', 'Pairing not found.');
-  pairingAuthority(s, pairing);
   return expire(s, pairing);
 }
 
@@ -327,6 +326,7 @@ export function createPairingRoutes(s: BackendServices): Route[] {
       const actor = currentOwner(s, context); noQuery(context);
       const pairingId = parse(id, context.params.id);
       const pairing = ownedPairing(s, actor, pairingId);
+      pairingAuthority(s, pairing);
       const body: P.PairingApprove = parse(approveSchema, context.body);
       const initial = privateRow(pairingId);
       requireUnexpired(s, pairing);
@@ -343,6 +343,7 @@ export function createPairingRoutes(s: BackendServices): Route[] {
         const prepared = store.transaction(() => {
           currentOwner(s, context);
           const current = ownedPairing(s, actor, pairingId);
+          pairingAuthority(s, current);
           const row = privateRow(pairingId);
           requireUnexpired(s, current); s.mutations.checkRevision(current, body.revision);
           if (current.status !== 'pending_approval' || !row.claim || row.approval) fail('conflict', 'Pairing is not awaiting approval.');
