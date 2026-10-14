@@ -267,6 +267,8 @@ defmodule LemonControlPlane.Protocol.Frames do
       "node.pair.resolved",
       "node.invoke.request",
       "node.invoke.completed",
+      "node.shell.output",
+      "node.shell.exit",
       # Approval events
       "exec.approval.requested",
       "exec.approval.resolved",

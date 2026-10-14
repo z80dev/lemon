@@ -168,7 +168,7 @@ defmodule CodingAgent.ExecutionNode.WorkerTest do
     send(worker, {
       :execution_node_socket,
       socket,
-      {:event, "node.invoke.cancel", %{"invokeId" => "invoke-cancel"}}
+      {:event, "node.invoke.cancel", %{"invokeId" => "invoke-cancel", "nodeId" => "node-1"}}
     })
 
     assert_receive {:executor_cancelled, ^context}

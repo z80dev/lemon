@@ -8,10 +8,12 @@ defmodule CodingAgent.ExecutionNode.CLI do
     controller: :string,
     pair: :boolean,
     operator_token: :string,
+    invite_code: :string,
     token: :string,
     node_id: :string,
     repair: :boolean,
     allow_insecure_controller: :boolean,
+    allowed_root: [:string, :keep],
     cwd: :string,
     help: :boolean
   ]
@@ -43,9 +45,11 @@ defmodule CodingAgent.ExecutionNode.CLI do
              controller: opts[:controller],
              pair: opts[:pair] == true,
              operator_token: opts[:operator_token] || System.get_env("LEMON_NODE_OPERATOR_TOKEN"),
+             invite_code: opts[:invite_code],
              token: opts[:token] || System.get_env("LEMON_NODE_TOKEN"),
              node_id: opts[:node_id],
              repair: opts[:repair] == true,
+             allowed_roots: allowed_roots(opts),
              allow_insecure_controller: allow_insecure_controller?(opts),
              cwd: default_cwd(opts),
              notify_pid: self(),
@@ -74,8 +78,8 @@ defmodule CodingAgent.ExecutionNode.CLI do
   def parse(argv) do
     case OptionParser.parse(argv, strict: @switches, aliases: @aliases) do
       {opts, [], []} -> validate(opts)
-      {_opts, positional, []} -> {:error, "unexpected arguments: #{Enum.join(positional, " ")}"}
-      {_opts, _positional, invalid} -> {:error, "invalid options: #{inspect(invalid)}"}
+      {_opts, _positional, []} -> {:error, "unexpected arguments"}
+      {_opts, _positional, _invalid} -> {:error, "invalid options"}
     end
   end
 
@@ -84,6 +88,12 @@ defmodule CodingAgent.ExecutionNode.CLI do
       opts[:help] == true -> {:ok, opts}
       blank?(opts[:name]) -> {:error, "--name is required"}
       blank?(opts[:controller]) -> {:error, "--controller is required"}
+      Keyword.has_key?(opts, :invite_code) and blank?(opts[:invite_code]) ->
+        {:error, "--invite-code requires a nonempty enrollment credential"}
+      opts[:invite_code] && Enum.any?([:node_id, :repair, :operator_token, :token],
+                              &Keyword.has_key?(opts, &1)) ->
+        {:error, "--invite-code cannot be combined with recovery or token flags"}
+      opts[:invite_code] -> {:ok, Keyword.put(opts, :pair, true)}
       true -> {:ok, opts}
     end
   end
@@ -122,6 +132,11 @@ defmodule CodingAgent.ExecutionNode.CLI do
       ) do
     opts[:cwd] || launch_cwd || process_cwd
   end
+  @doc false
+  def allowed_roots(opts) do
+    Enum.uniq([System.user_home!() | Keyword.get_values(opts, :allowed_root)])
+  end
+
 
   @doc false
   def allow_insecure_controller?(opts) do
@@ -137,22 +152,28 @@ defmodule CodingAgent.ExecutionNode.CLI do
     Options:
       --pair                    Pair and store a controller-issued node token
       --operator-token TOKEN    Operator token used only during pairing
+      --invite-code CODE        Single-use enrollment invite (implies --pair; no operator token needed)
       --token TOKEN             Existing node session token (overrides stored token)
       --node-id ID              Load or repair a credential by durable controller node ID
       --repair                  Operator-authorized repair for a legacy record without a recovery token
       --allow-insecure-controller
                                 Allow non-loopback ws:// only on development or a verified encrypted overlay
       --cwd PATH                Default local working directory (default: current directory)
+      --allowed-root PATH       Allowed host file/shell root (repeatable; default: home directory)
       --help, -h                Show this help
 
     LEMON_NODE_OPERATOR_TOKEN must match the controller's
     LEMON_CONTROL_PLANE_OPERATOR_TOKEN when operator authentication is enabled.
     Prefer LEMON_NODE_OPERATOR_TOKEN and LEMON_NODE_TOKEN over command-line token
-    flags so credentials do not enter shell history. Stored node tokens live only
+    flags so credentials do not enter shell history. Invite commands contain only
+    a short-lived enrollment credential, never the controller operator token.
+    Treat the command as secret until used or expired. Stored node tokens live only
     on this machine in a mode-0600 file keyed by durable node ID. Non-loopback
     controllers require wss:// by default. The insecure override is acceptable
     only when another verified transport layer, such as Tailscale, encrypts and
     authenticates the complete path.
+    File RPC paths and shell working directories use --allowed-root (home by default).
+    Explicit roots extend the home default; repeat the flag to permit multiple roots.
     """
   end
 

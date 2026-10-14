@@ -60,4 +60,36 @@ defmodule CodingAgent.ExecutionNode.CLITest do
     assert CLI.allow_insecure_controller?([])
     assert CLI.allow_insecure_controller?(allow_insecure_controller: true)
   end
+  test "invite enrollment implies pairing without operator credentials" do
+    assert {:ok, opts} =
+             CLI.parse(["--name", "bot", "--controller", "wss://controller.example/ws",
+               "--invite-code", "single-use-enrollment"])
+    assert opts[:pair]
+    assert opts[:invite_code] == "single-use-enrollment"
+    refute opts[:operator_token]
+    assert CLI.help() =~ "--invite-code"
+  end
+
+  test "rejects invite recovery combinations and never echoes enrollment secrets" do
+    base = ["--name", "bot", "--controller", "wss://controller.example/ws",
+      "--invite-code", "sensitive-enrollment"]
+    for flags <- [["--repair"], ["--node-id", "other"], ["--token", "session"],
+                  ["--operator-token", "operator"]] do
+      assert {:error, message} = CLI.parse(base ++ flags)
+      refute message =~ "sensitive-enrollment"
+    end
+    assert {:error, _} = CLI.parse(["--name", "bot", "--controller", "wss://controller.example/ws",
+      "--invite-code", ""])
+    assert {:error, message} = CLI.parse(base ++ ["--bad-option=sensitive-enrollment"])
+    refute message =~ "sensitive-enrollment"
+  end
+
+  test "repeatable allowed roots are destination-local and extend the home default" do
+    assert CLI.allowed_roots([]) == [System.user_home!()]
+    assert {:ok, opts} = CLI.parse(["--name", "bot", "--controller", "wss://controller.example/ws",
+      "--allowed-root", "/srv/bots", "--allowed-root", "/mnt/data"])
+    assert CLI.allowed_roots(opts) == [System.user_home!(), "/srv/bots", "/mnt/data"]
+    assert CLI.help() =~ "--allowed-root"
+  end
+
 end

@@ -250,6 +250,68 @@ steer/redirect are invocation-bound and require destination acknowledgement.
 Plaintext off loopback requires explicit `--allow-insecure-controller` and a
 verified encrypted overlay; otherwise use TLS.
 
+### Attached-machine methods
+
+Machine operations target the **durable `nodeId`**, not a node name or connection
+ID. They execute through the authenticated invocation channel on the destination.
+Slow calls dispatch asynchronously, preserving event traffic. Raw file content,
+terminal input/output and secret values are never written to invocation records
+or general events; audit lines contain only operation and outcome classifications.
+`node.invoke` cannot bypass the admin-scoped file, secret or terminal methods.
+
+| Method | Scope | Request | Success payload |
+| --- | --- | --- | --- |
+| `node.pair.invite` | pairing | `{nodeName,purpose?,labels?,expiresInMs?}` | `{inviteId,inviteCode,joinCommand,expiresAtMs,summary}` |
+| `node.host.info` | read | `{nodeId}` | `{hostname,os,osVersion,arch,cpuCount,memTotalBytes,memFreeBytes,diskTotalBytes,diskFreeBytes,uptimeSec,lemonVersion,defaultCwd,user}` |
+| `node.fs.list` | admin | `{nodeId,path,showHidden?}` | `{path,entries,limit,truncated}` |
+| `node.fs.stat` | admin | `{nodeId,path}` | `{path,type,size,mtimeMs,mode,mime}` |
+| `node.fs.read` | admin | `{nodeId,path,offset?,length?}` | `{path,dataBase64,offset,length,size,mime,eof}` |
+| `node.fs.write` | admin | `{nodeId,path,dataBase64,offset?,truncate?,mkdirs?}` | `{path,offset,bytesWritten,size}` |
+| `node.fs.mkdir` | admin | `{nodeId,path}` | `{path,created:true}` |
+| `node.fs.move` | admin | `{nodeId,path,destination}` | `{path,destination,moved:true}` |
+| `node.fs.delete` | admin | `{nodeId,path,confirm}` | `{path,deleted:true}` |
+| `node.secrets.set` | admin | `{nodeId,name,value}` | `{name,set:true}` |
+| `node.secrets.list` | admin | `{nodeId}` | `{names,limit,truncated}` |
+| `node.secrets.delete` | admin | `{nodeId,name}` | `{name,deleted:true}` |
+| `node.shell.open` | admin | `{nodeId,cwd?,cols?,rows?}` | `{shellId}` |
+| `node.shell.input` | admin | `{shellId,dataBase64}` | `{shellId,accepted:true}` |
+| `node.shell.resize` | admin | `{shellId,cols,rows}` | `{shellId,accepted:true}` |
+| `node.shell.close` | admin | `{shellId}` | `{shellId,accepted:true}` |
+
+Invites default to purpose `lemon_bot`, labels `[]`, expiry 15 minutes (bounded
+to 1 ms–24 hours). The command installs Lemon if missing, then enrolls with the
+one-time, exact-name-bound invite credential. No operator token is embedded.
+Set `LEMON_CONTROL_PLANE_PUBLIC_WS_URL` to the reachable `wss://.../ws` endpoint
+before creating remote invitations. `nodes.list` includes `purpose` and `labels`.
+Invite connections have enrollment-only authority and receive no general events.
+
+Paths resolve on the worker, under the node user's home by default. Repeat
+destination CLI `--allowed-root PATH` to allow additional existing directories.
+Traversal and symlink escapes are rejected; delete requires `confirm` equal to
+the exact supplied `path`, and never recursively deletes a nonempty directory.
+Read/write/input chunks decode to at most 1 MiB; read defaults to that limit.
+Offsets are bytes; writes default to offset zero and truncation at the end of the
+written chunk. Use `truncate:false` while uploading intermediate chunks.
+Directory and secret listings cap at 500 entries and report truncation.
+Unavailable host metrics are `null`, not invented zeroes. Secret values enter
+only the destination encrypted store; missing master keys fail closed.
+See [files and secrets](../../docs/user-guide/node-files-and-secrets.md).
+
+Terminals use a real worker PTY (`python3` required), with the destination login
+shell and worker default cwd unless specified. Dimensions are 1–500 columns/rows.
+`node.shell.output {shellId,dataBase64,seq}` (one-based per-shell sequence) and
+`node.shell.exit {shellId,code}` are delivered **only to the opening connection**;
+foreign connections cannot operate a shell. The node-only `node.shell.event
+{invokeId,payload}` transport validates the receiving connection, credential
+generation and active opening invocation. No terminal data reaches the Bus.
+PTY output has 16 KiB chunks, acknowledgement backpressure, a 32 MiB total cap
+and one-hour lifetime. Disconnect, close, timeout, node replacement and slow
+consumers terminate the terminal and clean up its process group. Limits are
+64 terminals globally and eight per opening connection.
+
+See [attaching a bot machine](../../docs/user-guide/attaching-a-bot-machine.md).
+
+
 ## Other HTTP surfaces
 
 - `/healthz`: local service health; it does not prove a provider-backed turn.

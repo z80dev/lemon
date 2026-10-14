@@ -8,7 +8,14 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
-No unreleased changes yet.
+### Added
+
+- Attached-machine control-plane APIs: destination-local host information,
+  policy-rooted chunked file transfer, connection-owned real PTY terminals and
+  write-only encrypted node secrets. Single-use, expiring, name-bound node
+  invitations install and enroll a bot machine without sharing the operator
+  credential; node listings include purpose and labels. See
+  [attaching a bot machine](docs/user-guide/attaching-a-bot-machine.md).
 
 ---
 

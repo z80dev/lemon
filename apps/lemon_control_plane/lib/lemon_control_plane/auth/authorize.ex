@@ -8,6 +8,8 @@ defmodule LemonControlPlane.Auth.Authorize do
     token; the WebSocket boundary may explicitly opt direct loopback peers into
     a legacy tokenless compatibility path
   - `node` - Role for paired nodes (browser extensions, etc.)
+  - `enrollment` - Short-lived invite credential; only its pairing request and
+    invite-bound challenge exchange, never operator or node invocation authority
 
   Each role has associated scopes that control method access.
 
@@ -40,7 +42,7 @@ defmodule LemonControlPlane.Auth.Authorize do
 
   alias LemonControlPlane.Auth.TokenStore
 
-  @type role :: :operator | :node
+  @type role :: :operator | :node | :enrollment
   @type scope ::
           :admin
           | :read
@@ -49,6 +51,7 @@ defmodule LemonControlPlane.Auth.Authorize do
           | :pairing
           | :invoke
           | :event
+          | :enroll
 
   @type auth_context :: %{
           role: role(),
@@ -79,6 +82,9 @@ defmodule LemonControlPlane.Auth.Authorize do
       requested_role == :unsupported ->
         {:error, {:unauthorized, "Unsupported role"}}
 
+
+      requested_role == :enrollment or not is_nil(get_in(params, ["auth", "inviteCode"])) ->
+        authenticate_invite(params)
       requested_role == :operator and
           secure_token_match?(token, configured_operator_token) ->
         operator_context(params)
@@ -125,6 +131,25 @@ defmodule LemonControlPlane.Auth.Authorize do
 
       {:error, :invalid_token} ->
         {:error, {:unauthorized, "Invalid token"}}
+    end
+  end
+
+  defp authenticate_invite(params) do
+    case LemonControlPlane.NodeStore.fetch_invite(get_in(params, ["auth", "inviteCode"])) do
+      {:ok, invite} ->
+        {:ok, %{
+          role: :enrollment,
+          scopes: [:enroll],
+          token: nil,
+          client_id: LemonControlPlane.NodeStore.invite_field(invite, :id),
+          identity: %{
+            "type" => "enrollment",
+            "inviteId" => LemonControlPlane.NodeStore.invite_field(invite, :id)
+          }
+        }}
+
+      {:error, _} ->
+        {:error, {:unauthorized, "Enrollment invite is invalid or expired"}}
     end
   end
 
@@ -238,6 +263,12 @@ defmodule LemonControlPlane.Auth.Authorize do
   Returns `:ok` if authorized, `{:error, reason}` otherwise.
   """
   @spec authorize(auth_context(), String.t(), [scope()]) :: :ok | {:error, term()}
+  def authorize(%{role: :enrollment}, method, _scopes)
+      when method in ["node.pair.request", "connect.challenge"], do: :ok
+
+  def authorize(%{role: :enrollment}, _method, _scopes),
+    do: {:error, {:forbidden, "Enrollment credentials only permit pairing"}}
+
   def authorize(_ctx, _method, []) do
     # Public method, no scopes required
     :ok
@@ -258,6 +289,9 @@ defmodule LemonControlPlane.Auth.Authorize do
         {:error, {:forbidden, "Insufficient permissions for #{method}"}}
     end
   end
+
+  def authorize(_ctx, _method, _scopes),
+    do: {:error, {:unauthorized, "Authentication is required"}}
 
   @doc """
   Checks if a method requires specific role.
@@ -369,6 +403,7 @@ defmodule LemonControlPlane.Auth.Authorize do
   end
 
   defp parse_role("node"), do: :node
+  defp parse_role("enrollment"), do: :enrollment
   defp parse_role("operator"), do: :operator
   defp parse_role(nil), do: :operator
   defp parse_role(_), do: :unsupported
