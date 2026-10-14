@@ -617,8 +617,6 @@ defmodule CodingAgent.ExecutionNode.Worker do
         method in CodingAgent.ExecutionNode.MemoryTransfer.methods() ->
           {:noreply, invoke_memory_transfer(state, invoke_id, method, args)}
 
-        method == "node.runtime.features" ->
-          {:noreply, send_host_io_result(state, invoke_id, {:ok, runtime_features()})}
         method in ["memory.list", "memory.search", "memory.get", "memory.add", "memory.delete"] ->
           {:noreply, invoke_memory(state, invoke_id, method, args)}
 
@@ -675,16 +673,6 @@ defmodule CodingAgent.ExecutionNode.Worker do
       {:noreply, state}
     end
   end
-
-  defp validate_invocation_payload("coding_agent.run", args, _state) do
-    case LemonCore.JSONPayload.validate(args, LemonCore.ToolPolicy.execution_json_opts()) do
-      {:ok, _} -> nil
-      {:error, reason} -> reason
-    end
-  end
-
-  defp validate_invocation_payload(_method, args, state), do: validate_payload(args, state)
-
   defp handle_node_event("node.invoke.cancel", payload, state) do
     invoke_id = payload["invokeId"]
 
@@ -742,6 +730,16 @@ defmodule CodingAgent.ExecutionNode.Worker do
   end
 
   defp handle_node_event(_event, _payload, state), do: {:noreply, state}
+
+  defp validate_invocation_payload("coding_agent.run", args, _state) do
+    case LemonCore.JSONPayload.validate(args, LemonCore.ToolPolicy.execution_json_opts()) do
+      {:ok, _} -> nil
+      {:error, reason} -> reason
+    end
+  end
+
+  defp validate_invocation_payload(_method, args, state), do: validate_payload(args, state)
+
 
   defp invoke_memory_transfer(state, invoke_id, method, args) do
     result = CodingAgent.ExecutionNode.MemoryTransfer.execute(method, args, state.node_id)
