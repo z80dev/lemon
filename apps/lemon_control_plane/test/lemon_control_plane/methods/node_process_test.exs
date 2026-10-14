@@ -142,10 +142,12 @@ defmodule LemonControlPlane.Methods.NodeProcessTest do
 
   test "offline durable ID cannot fall back to another node whose name matches it", ctx do
     attacker_id = LemonCore.Id.uuid()
+    assert :ok = NodeRegistry.unregister(ctx.node_id, ctx.owner)
+    assert {:error, :not_found} = NodeRegistry.resolve_id(ctx.node_id)
     attacker = spawn(fn -> receive do message -> send(ctx.owner, {:attacker, message}) end end)
     assert :ok = NodeRegistry.register_session(attacker_id, ctx.node_id, attacker, 7, ctx.metadata)
     on_exit(fn -> NodeRegistry.unregister(attacker_id, attacker); Process.exit(attacker, :kill) end)
-    assert :ok = NodeRegistry.unregister(ctx.node_id, ctx.owner)
+    assert {:error, :not_found} = NodeRegistry.resolve_id(ctx.node_id)
     for method <- ~w(node.process.run node.process.get node.process.cancel) do
       params = if method == "node.process.run", do: run(ctx), else: identity(ctx)
       assert {:error, {:unavailable, _, %{"preDispatch" => true}}} = Registry.dispatch(method, params, ctx.rpc)
