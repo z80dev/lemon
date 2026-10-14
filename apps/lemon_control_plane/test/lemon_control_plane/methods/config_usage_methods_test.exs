@@ -150,7 +150,7 @@ defmodule LemonControlPlane.Methods.ConfigUsageMethodsTest do
 
     test "reports usage recorded through usage.cost" do
       :ok =
-        UsageCost.record_usage(%{
+        record_usage(%{
           provider: "usage_status_test",
           cost: 0.02,
           input_tokens: 12,
@@ -241,6 +241,22 @@ defmodule LemonControlPlane.Methods.ConfigUsageMethodsTest do
       assert UsageStatus.name() == "usage.status"
       assert UsageStatus.scopes() == [:read]
     end
+  end
+
+  defp record_usage(usage) do
+    run_id = "usage-test-#{LemonCore.Id.uuid()}"
+    provider = usage[:provider] || usage["provider"]
+
+    entry =
+      LemonCore.UsageLedger.entry(run_id, "agent:test:usage", %{
+        completed: %{usage: usage},
+        completed_at_ms: System.system_time(:millisecond),
+        meta: %{provider: provider, model: "test"}
+      })
+
+    record = LemonCore.UsageLedger.occurrence_record(entry)
+    on_exit(fn -> LemonCore.Store.delete(:usage_occurrences, record.id) end)
+    LemonCore.UsageLedger.record(entry)
   end
 
   describe "UsageCost" do

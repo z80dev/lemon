@@ -58,11 +58,24 @@ defmodule LemonControlPlane.MaxPayloadTest do
 
   test "larger byte allowance retains shared depth and item safety" do
     deeply_nested = Enum.reduce(1..40, true, fn index, value -> %{"level-#{index}" => value} end)
+    max_depth = LemonCore.JSONPayload.default_max_depth()
+    default_items = LemonCore.JSONPayload.default_max_items()
+    execution_items = LemonCore.ToolPolicy.execution_max_items()
 
-    assert {:error, {:max_depth, 32}} = Frames.parse(Jason.encode!(request(deeply_nested)))
+    assert {:error, {:max_depth, ^max_depth}} =
+             Frames.parse(Jason.encode!(request(deeply_nested)))
 
-    assert {:error, {:max_items, 10_000}} =
-             Frames.parse(Jason.encode!(request(%{"items" => List.duplicate(nil, 10_001)})))
+    assert {:error, {:max_items, ^default_items}} =
+             Frames.parse(
+               Jason.encode!(
+                 request(%{"items" => List.duplicate(nil, default_items + 1)}, "sessions.list")
+               )
+             )
+
+    assert {:error, {:max_items, ^execution_items}} =
+             Frames.parse(
+               Jason.encode!(request(%{"items" => List.duplicate(nil, execution_items + 1)}))
+             )
 
     assert {:error, {:max_bytes, 16_777_216}} =
              Frames.parse(
@@ -70,8 +83,8 @@ defmodule LemonControlPlane.MaxPayloadTest do
              )
   end
 
-  defp request(params),
-    do: %{"type" => "req", "id" => "image-request", "method" => "chat.send", "params" => params}
+  defp request(params, method \\ "chat.send"),
+    do: %{"type" => "req", "id" => "image-request", "method" => method, "params" => params}
 
   defp advertised_limit do
     Frames.encode_hello_ok([]) |> Jason.decode!() |> get_in(["policy", "maxPayload"])

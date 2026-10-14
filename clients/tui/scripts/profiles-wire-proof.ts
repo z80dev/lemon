@@ -56,7 +56,7 @@ try {
 		prompt: "prove the authenticated TUI profile route",
 		queueMode: "steer",
 	});
-	assert(chat.runId === "run-tui-profile-wire", "router run id");
+	assert(typeof chat.runId === "string" && chat.runId.length > 0, "router run id");
 	assert(chat.sessionKey === "agent:tui-wire:main", "chat canonical key");
 	assert(chat.node === "wire-node", "chat named-node route");
 
@@ -90,6 +90,7 @@ try {
 				"credential_safe_export",
 			],
 			sessionKey: chat.sessionKey,
+			runId: chat.runId,
 			node: chat.node,
 		}),
 	);

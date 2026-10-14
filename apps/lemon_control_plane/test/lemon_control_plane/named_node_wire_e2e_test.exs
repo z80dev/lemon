@@ -298,7 +298,15 @@ defmodule LemonControlPlane.NamedNodeWireE2ETest do
     assert_receive {:fake_executor_started, request, run_opts, ^worker, run_ref, context}, 3_000
     assert request.prompt == "cross the wire"
     assert request.cwd == tmp_dir
-    assert run_opts == %{cwd: tmp_dir, run_id: "wire-run-#{suffix}", approval_timeout_ms: 600_000}
+
+    assert Map.drop(run_opts, [:native_followup_submit, :native_source_floor_fun]) == %{
+             cwd: tmp_dir,
+             run_id: "wire-run-#{suffix}",
+             approval_timeout_ms: 600_000
+           }
+
+    assert is_function(run_opts.native_followup_submit, 2)
+    assert is_function(run_opts.native_source_floor_fun, 2)
 
     assert {:ok, control_id} =
              LemonCore.NodeRegistry.control(invoke_id, :steer, "stay on the wire",

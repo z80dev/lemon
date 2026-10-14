@@ -164,8 +164,9 @@ defmodule LemonControlPlane.Methods.ControlPlaneMethodsTest do
       assert {:ok, original_result} =
                AgentWait.handle(%{"runId" => run_id, "timeoutMs" => 1}, %{})
 
-      assert original_result["answer"] == private_answer
-      assert original_result["usage"]["total_tokens"] == 731
+      json = original_result |> Jason.encode!() |> Jason.decode!()
+      assert json["answer"] == private_answer
+      assert json["usage"]["total_tokens"] == 731
     end
 
     test "status projection rejects nonboolean includeAnswer rather than returning answer" do

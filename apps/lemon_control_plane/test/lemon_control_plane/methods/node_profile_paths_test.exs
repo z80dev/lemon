@@ -37,7 +37,13 @@ defmodule LemonControlPlane.Methods.NodeProfilePathsTest do
 
   test "lookup binds durable target and returns only acknowledged destination paths" do
     owner = self()
-    {id, target} = register_node(owner, :target)
+    {id, target} =
+      register_node(
+        owner,
+        :target,
+        "profile-paths-target-name-#{System.unique_integer([:positive])}"
+      )
+
     {_shadow_id, _shadow} = register_node(owner, :shadow, id)
     params = %{"nodeId" => id, "profileId" => "selected"}
     request = Task.async(fn -> NodeProfilePaths.handle(params, ctx(owner)) end)

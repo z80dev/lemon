@@ -1,15 +1,9 @@
 defmodule LemonControlPlane.TuiProfilesWireRouter do
-  def submit(request) do
+  def submit_with_receipt(request) do
     send(
       Application.fetch_env!(:lemon_control_plane, :tui_profiles_wire_test_pid),
       {:tui_profile_wire_request, request}
     )
-
-    {:ok, "run-tui-profile-wire"}
-  end
-
-  def submit_with_receipt(request) do
-    {:ok, _} = submit(request)
 
     {:ok,
      %{
@@ -120,6 +114,8 @@ defmodule LemonControlPlane.TuiProfilesWireE2ETest do
     assert File.regular?(export_path)
 
     assert_receive {:tui_profile_wire_request, request}, 3_000
+    assert is_binary(request.run_id) and request.run_id != ""
+    assert proof["runId"] == request.run_id
     assert request.session_key == "agent:tui-wire:main"
     assert request.agent_id == "tui-wire"
     assert request.queue_mode == :steer

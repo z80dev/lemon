@@ -74,7 +74,12 @@ defmodule LemonControlPlane.RemoteImageExecutionTest do
           [%{"type" => "image", "mime_type" => "image/png", "data" => png()}],
           false
         ] do
-      request = %ExecutionRequest{prompt: "hello", images: bad}
+      request = %ExecutionRequest{
+        run_id: "image-invalid",
+        session_key: "agent:vision:main",
+        prompt: "hello",
+        images: bad
+      }
       assert {:error, _} = RemoteRequestCodec.encode(request)
     end
   end

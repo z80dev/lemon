@@ -135,7 +135,7 @@ defmodule LemonControlPlane.Methods.NodeMcpDiscoverTest do
 
     LemonCore.NodeRegistry.unregister(target_id, target)
 
-    assert {:error, {:unavailable, _}} =
+    assert {:error, {:unavailable, _, %{"preDispatch" => true, "retrySafe" => false}}} =
              NodeMcpDiscover.handle(%{"nodeId" => target_id, "server" => server()}, ctx(parent))
 
     refute_receive {:shadow, {:node_event, "node.invoke.request", _}}, 50
@@ -155,7 +155,11 @@ defmodule LemonControlPlane.Methods.NodeMcpDiscoverTest do
     invoke_id = payload["invokeId"]
     Process.exit(owner, :kill)
     assert_receive {:target, {:node_event, "node.invoke.cancel", %{"invokeId" => ^invoke_id}}}
-    assert {:error, {:unavailable, _}} = Task.await(request)
+
+    assert {:error,
+            {:unavailable, _,
+             %{"preDispatch" => false, "retrySafe" => false, "mutationMayHaveApplied" => true}}} =
+             Task.await(request)
   end
 
   test "handler cancellation removes invocation and cancels destination work" do
