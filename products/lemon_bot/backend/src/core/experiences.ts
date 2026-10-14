@@ -4,6 +4,7 @@ import type { BackendServices, Principal, RequestContext, Route } from './servic
 import { ApiError, fail } from './errors';
 import { z, parse, principal, id, mutation, update, voice, queryObject } from './validation';
 import { productBotTools } from './bots';
+import { buildPrivateBotMemoryContextKey } from '../runtime/runs';
 
 const level = z.enum(['off', 'read_only', 'read_interact']);
 const revision = z.number().int().positive();
@@ -265,7 +266,7 @@ function activityValues(s: BackendServices, user: Principal): P.ActivityItem[] {
     if (roomId && !room) return;
     const machine = s.store.get<P.Machine>('machines', machineId ?? bot.machineId);
     if (!machine) return;
-    results.push({ ...resource, id: `activity_${s.mutations.digest({ kind: fields.kind, resourceId: resource.id, botId }).slice(0, 48)}`, botId, machineId: machine.id, machineLabel: machine.name, conversationId: room?.id ?? null, taskConversationId: room?.kind === 'task' ? room.id : null, ...fields, occurredAtMs: at });
+    results.push({ id: `activity_${s.mutations.digest({ kind: fields.kind, resourceId: resource.id, botId }).slice(0, 48)}`, revision: resource.revision, createdAtMs: resource.createdAtMs, updatedAtMs: resource.updatedAtMs, botId, machineId: machine.id, machineLabel: machine.name, conversationId: room?.id ?? null, taskConversationId: room?.kind === 'task' ? room.id : null, ...fields, occurredAtMs: at });
   };
   for (const run of s.store.list<P.Run>('runs')) add(run, run.botId, run.conversationId, { kind: 'run', status: run.status === 'running' ? 'working' : run.status === 'awaiting_input' || run.status === 'queued' || run.status === 'reserved' ? 'pending' : run.status, title: 'Bot run', summary: `Execution ${run.status.replaceAll('_', ' ')}.`, runId: run.id, entryId: null, approvalId: null });
   for (const entry of s.store.list<P.TranscriptEntry>('entries')) {
@@ -284,7 +285,9 @@ function activityValues(s: BackendServices, user: Principal): P.ActivityItem[] {
     const status: P.ActivityItem['status'] = sync?.revision === change.resultingBotRevision && sync.state !== 'acknowledged' ? sync.state === 'pending' ? 'pending' : 'outcome_unknown' : 'succeeded';
     add(change, change.botId, source && entryVisible(s, user, source) ? source.conversationId : null, { kind: 'preference', status, title: 'Preference change', summary: status === 'succeeded' ? `${change.scope} preference ${change.state}.` : 'Destination preference synchronization is unconfirmed.', runId: null, entryId: source && entryVisible(s, user, source) ? source.id : null, approvalId: null }, change.updatedAtMs, change.machineId);
   }
-  for (const memory of s.store.list<P.Memory>('memories')) if (readable(s, user, 'memories', memory)) {
+  for (const memory of s.store.list<P.Memory & { runtimeMemoryId?: string | null; memoryContextKey?: string }>('memories')) {
+    const bot = s.store.get<P.Bot>('bots', memory.botId);
+    if (!bot || bot.ownerUserId !== user.userId || !memory.runtimeMemoryId || memory.memoryContextKey !== buildPrivateBotMemoryContextKey(s, user, bot) || !readable(s, user, 'memories', memory)) continue;
     const operation = s.store.metadata<{ state: 'pending' | 'outcome_unknown' }>(`resourceOperation:${memory.id}`);
     add(memory, memory.botId, null, { kind: 'memory', status: operation?.state ?? 'succeeded', title: 'Bot memory', summary: operation ? 'Destination memory mutation is unconfirmed.' : `${memory.kind} saved to the owned Bot profile.`, runId: null, entryId: null, approvalId: null });
   }
@@ -439,7 +442,8 @@ async function previewMemory(context: RequestContext): Promise<P.MemoryImportPre
   if (body.attachmentId) { attachment = s.auth.attachment(user, body.attachmentId); if (attachment.ownerUserId !== user.userId || attachment.state !== 'ready') fail('forbidden', 'Import requires your own ready attachment.'); }
   const bytes = attachment ? await s.attachments.bytes(attachment.id) : new TextEncoder().encode(body.text!);
   if (body.format !== 'chat_export_zip' && bytes.length > 1048576) fail('too_large', 'Facts documents are limited to one MiB.');
-  const existing = s.store.list<P.Memory>('memories', value => value.botId === bot.id).map(value => value.text);
+  const snapshot = await s.invoke<P.MemoryExport>(user, 'GET', `/v1/bots/${encodeURIComponent(bot.id)}/memory/export`);
+  const existing = snapshot.items.map(value => value.text);
   const reviewed = reviewedCandidates(s, bytes, body.format, existing), digest = new Bun.CryptoHasher('sha256').update(bytes).digest('hex');
   const base = s.resource('import', { botId: bot.id, machineId: bot.machineId, userId: user.userId, sourceSha256: digest, ...reviewed });
   const confirmation = s.mutations.preview(user, base, 'memory_import', bot.name, ['Only explicitly selected reviewed candidates will be saved.'], [{ resourceType: 'bot', id: bot.id, machineId: bot.machineId, operation: 'retain', explanation: 'History and unselected facts remain unchanged.' }], { botRevision: bot.revision, machineId: bot.machineId, sourceSha256: digest, candidateIds: reviewed.candidates.map(value => value.id) }, 600000);

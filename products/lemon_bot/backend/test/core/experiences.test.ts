@@ -8,6 +8,7 @@ import { ApiError, fail } from '../../src/core/errors';
 import { botPresence, createExperienceRoutes, createExperienceService, desiredBotGrants, effectiveBotGrants, nativeBotToolPolicy, reviewedCandidates } from '../../src/core/experiences';
 import { productBotTools } from '../../src/core/bots';
 import { z } from '../../src/core/validation';
+import { buildPrivateBotMemoryContextKey } from '../../src/runtime/runs';
 
 const noticePayload = z.object({
   kind: z.literal('notice'), severity: z.enum(['info', 'warning', 'error']), text: z.string(), requestId: z.string().nullable(), targetedUserId: z.string(),
@@ -24,6 +25,7 @@ function fixture() {
   let clock = 1700000000000, serial = 0, synced = 0, notificationCount = 0;
   const allocateId = (prefix = 'id') => `${prefix}_${String(++serial).padStart(24, '0')}`;
   const acknowledgments: P.MemoryCreate[] = [];
+  const nativeMemories: P.Memory[] = [];
   const base = { revision: 1, createdAtMs: clock, updatedAtMs: clock };
   const bot: P.Bot = { ...base, id: 'bot', ownerUserId: 'alice', machineId: 'machine', profileId: 'lb-bot', name: 'Bot', title: 'Assistant', job: 'Draft useful reports', instructions: 'Ask before sending', avatar: { kind: 'character', shape: 'round', color: 'yellow', attachmentId: null }, voice: { voiceId: 'default', speed: 1, language: null }, language: null, skillIds: [], referenceAttachmentIds: [], mainConversationId: 'room', sidebar: { pinned: false, hidden: false, sectionId: null, rank: 0, unread: false, notificationsEnabled: true }, activity: 'idle', activeRunIds: [] };
   const machine: P.Machine = { ...base, id: 'machine', nodeId: 'node', nodeName: 'worker', name: 'Laptop', ownerUserId: 'alice', accessUserIds: [], status: 'online', lastSeenAtMs: clock, labels: {}, botIds: [bot.id] };
@@ -51,7 +53,20 @@ function fixture() {
     },
     events: { emit() {} },
     async syncBotProfile() { synced++; },
-    async invoke<T>(_principal: Principal, method: string, path: string, input?: unknown): Promise<T> { if (method !== 'POST' || path !== '/v1/bots/bot/memory') throw new Error('Unexpected invocation'); const body = input as P.MemoryCreate; acknowledgments.push(body); const memory: P.Memory = { ...base, id: `memory_${serial++}`, botId: bot.id, text: body.text, kind: body.kind, sourceEntryId: null }; store.put('memories', memory); return memory as T; },
+    async invoke<T>(actor: Principal, method: string, path: string, input?: unknown): Promise<T> {
+      if (actor.userId !== bot.ownerUserId) fail('forbidden', 'Not the native memory owner');
+      if (method === 'GET' && path === '/v1/bots/bot/memory/export') {
+        const snapshot: P.MemoryExport = { botId: bot.id, items: [...nativeMemories], exportedAtMs: clock };
+        return snapshot as T;
+      }
+      if (method !== 'POST' || path !== '/v1/bots/bot/memory') throw new Error('Unexpected invocation');
+      const body = z.object({ clientNonce: z.string(), text: z.string(), kind: z.enum(['fact', 'preference', 'instruction', 'summary']), sourceEntryId: z.string().optional() }).strict().parse(input);
+      acknowledgments.push(body);
+      const memory: P.Memory = { ...base, id: `memory_${serial++}`, botId: bot.id, text: body.text, kind: body.kind, sourceEntryId: body.sourceEntryId ?? null };
+      nativeMemories.push(memory);
+      store.put('memories', { ...memory, runtimeMemoryId: `native-${memory.id}`, memoryContextKey: buildPrivateBotMemoryContextKey(services, actor, bot) });
+      return memory as T;
+    },
     entry(_principal: Principal, conversationId: string, input: Record<string, unknown>): P.TranscriptEntry {
       const payload = noticePayload.parse(input);
       const entry: P.TranscriptEntry = { ...base, ...payload, id: allocateId('entry'), conversationId, seq: serial, timestampMs: clock, clientNonce: null, batchId: null, replyToEntryId: null, runId: null, reactions: [] };
@@ -74,7 +89,7 @@ function fixture() {
     const context: RequestContext = { request: new Request('https://example.test/v1'), params, query: new URLSearchParams(query), body, user: actor, services, requestId: 'request', route, nonceResourceIds: [] };
     return await route.handler(context) as T;
   }
-  return { services, store, bot, machine, room, request, base, acknowledgments, advance(ms: number) { clock += ms; }, get synced() { return synced; }, get notificationCount() { return notificationCount; }, close() { store.close(); } };
+  return { services, store, bot, machine, room, request, base, acknowledgments, nativeMemories, advance(ms: number) { clock += ms; }, get synced() { return synced; }, get notificationCount() { return notificationCount; }, close() { store.close(); } };
 }
 
 describe('experience preference lifecycle', () => {
@@ -176,6 +191,25 @@ describe('guided memory import boundaries', () => {
       f.store.put('bots', f.services.update(f.bot, { instructions: 'Changed' }));
       await expect(f.request('POST', '/bots/:id/memory/import', { ...body, selectedCandidateIds: [preview.candidates[0]!.id] })).rejects.toMatchObject({ code: 'revision_conflict' });
       expect(f.acknowledgments).toHaveLength(0);
+    } finally { f.close(); }
+  });
+  test('duplicate review uses authoritative owned native memory, not obsolete local note rows', async () => {
+    const f = fixture();
+    try {
+      const stale: P.Memory = { ...f.base, id: 'obsolete-local-note', botId: f.bot.id, text: 'I prefer private local drafts.', kind: 'preference', sourceEntryId: null };
+      f.store.put('memories', { ...stale, runtimeMemoryId: null, scope: 'private_note', userId: 'bob' });
+      f.nativeMemories.push({ ...stale, id: 'native-memory', text: 'I prefer acknowledged native facts.' });
+      const preview = await f.request<P.MemoryImportPreview>('POST', '/bots/:id/memory/import/preview', { clientNonce: nonce, format: 'facts_text', text: `${stale.text}\n\n${f.nativeMemories[0]!.text}` });
+      expect(preview.candidates.map(value => value.text)).toEqual([stale.text]); expect(preview.exclusions.map(value => value.reason)).toEqual(['duplicate']);
+      expect(f.acknowledgments).toHaveLength(0);
+    } finally { f.close(); }
+  });
+  test('unavailable authoritative memory never falls back to local rows or creates a review', async () => {
+    const f = fixture();
+    try {
+      f.services.invoke = async () => { throw new ApiError('machine_offline', 'Native memory is unavailable'); };
+      await expect(f.request('POST', '/bots/:id/memory/import/preview', { clientNonce: nonce, format: 'facts_text', text: 'I prefer exact native scope.' })).rejects.toMatchObject({ code: 'machine_offline' });
+      expect(f.store.list('memoryImportPreviews')).toHaveLength(0);
     } finally { f.close(); }
   });
   test('review and confirmation bind to the owned Bot profile, never another owners memory', async () => {
@@ -526,4 +560,25 @@ describe('bounded chat archive review', () => {
       expect(unsupported.candidates).toHaveLength(0); expect(unsupported.exclusions[0]!.reason).toBe('unsupported'); expect(JSON.stringify(unsupported)).not.toContain('private-secret-filename');
     } finally { f.close(); }
   });
+});
+
+test('activity projects wire fields only and excludes unproven or foreign-key memory mappings', async () => {
+  const f = fixture();
+  try {
+    const memory: P.Memory = { ...f.base, id: 'verified-memory', botId: f.bot.id, text: 'private-memory-content', kind: 'fact', sourceEntryId: null };
+    const memoryContextKey = buildPrivateBotMemoryContextKey(f.services, user, f.bot);
+    f.store.put('memories', { ...memory, runtimeMemoryId: 'native-verified-id', memoryContextKey });
+    f.store.put('memories', { ...memory, id: 'unproven-memory', runtimeMemoryId: null });
+    f.store.put('memories', { ...memory, id: 'foreign-key-memory', runtimeMemoryId: 'other-native-id', memoryContextKey: 'foreign-owner-context' });
+    f.store.setMetadata(`resourceOperation:${memory.id}`, { state: 'outcome_unknown' });
+    const run: P.Run = { ...f.base, id: 'run', conversationId: f.room.id, botId: f.bot.id, initiatorUserId: user.userId, clientNonce: nonce, status: 'succeeded', error: null, startedAtMs: f.services.now(), completedAtMs: f.services.now(), routineRunId: null };
+    f.store.put('runs', run);
+    const tool: P.TranscriptEntry = { ...f.base, id: 'tool-entry', conversationId: f.room.id, seq: 1, timestampMs: f.services.now(), actor: { kind: 'bot', id: f.bot.id, displayName: 'Bot' }, clientNonce: null, batchId: null, replyToEntryId: null, runId: run.id, targetedUserId: null, reactions: [], kind: 'tool_call', tool: 'private-raw-tool-name', title: 'private-raw-title', status: 'completed', detail: 'private-tool-detail' };
+    f.store.put('entries', tool);
+    const result = await f.request<P.Page<P.ActivityItem>>('GET', '/activity', undefined, {});
+    expect(result.items).toHaveLength(3);
+    expect(result.items.filter(value => value.kind === 'memory').map(value => value.status)).toEqual(['outcome_unknown']);
+    const wire = JSON.stringify(result);
+    for (const forbidden of [memory.text, tool.tool, tool.title, tool.detail!, nonce, memoryContextKey, 'runtimeMemoryId', 'memoryContextKey', 'foreign-key-memory', 'unproven-memory']) expect(wire).not.toContain(forbidden);
+  } finally { f.close(); }
 });
