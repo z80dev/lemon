@@ -8,25 +8,25 @@ export interface EntryAuthority { kind: 'human' | 'external' | 'bot'; userId: st
 interface StoredComposer extends P.ComposerDraft { id: string; userId: string; createdAtMs: number }
 export interface AttachmentShare extends P.Resource { attachmentId: string; conversationId: string; userId: string }
 
-const kind = z.enum(['dm', 'team_dm', 'task', 'group', 'channel']);
+const kind = z.enum(['dm', 'task', 'group', 'channel']);
 const ids = z.array(id);
 const reference = z.object({ kind: z.enum(['bot', 'routine', 'skill', 'connector', 'group']), id }).strict();
 export const messageSchema = mutation.extend({ text: boundedText(65536), attachmentIds: ids.max(6).optional(), replyToEntryId: id.optional(), mentions: ids.max(64).optional(), everyone: z.boolean().optional(), references: z.array(reference).max(32).optional(), mode: z.enum(['followup', 'steer', 'interrupt']).optional(), voiceSessionId: id.optional() });
-const createSchema = mutation.extend({ kind, name: boundedText(120, 1).optional(), botIds: ids.min(1).max(6), humanUserIds: ids.max(200).optional(), parentConversationId: id.optional(), leadBotId: id.optional() });
-const changeSchema = update.extend({ name: boundedText(120, 1).optional(), botIds: ids.min(1).max(6).optional(), humanUserIds: ids.max(200).optional(), leadBotId: id.nullable().optional() });
+const createSchema = mutation.extend({ kind, name: boundedText(120, 1).optional(), botIds: ids.min(1).max(6), parentConversationId: id.optional(), leadBotId: id.optional() });
+const changeSchema = update.extend({ name: boundedText(120, 1).optional(), botIds: ids.min(1).max(6).optional(), leadBotId: id.nullable().optional() });
 const pageFields = { limit: z.coerce.number().int().min(1).max(200).optional(), cursor: boundedText(4096, 1).optional() };
 const sequence = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 const active: Partial<Record<P.Run['status'], true>> = { reserved: true, queued: true, running: true, awaiting_input: true, outcome_unknown: true };
 
-/** Metadata publication or management membership never lends another person's live bot authority. */
-export function authorizedBot(services: BackendServices, actor: Principal, botId: string, manage = false): P.Bot {
+/** Administrative roles never substitute for the actual live bot owner. */
+export function authorizedBot(services: BackendServices, actor: Principal, botId: string): P.Bot {
   const bot = services.store.require<P.Bot>('bots', botId);
   if (bot.ownerUserId !== actor.userId) fail('forbidden', 'Only the bot owner may use this bot.');
-  return services.auth.bot(actor, botId, manage);
+  return services.auth.bot(actor, botId);
 }
 export function authorizedConversation(services: BackendServices, actor: Principal, conversationId: string): P.Conversation {
   const room = services.store.require<P.Conversation>('conversations', conversationId);
-  if (room.ownerUserId !== actor.userId || room.humanUserIds.some(userId => userId !== actor.userId) || room.botIds.some(botId => services.store.require<P.Bot>('bots', botId).ownerUserId !== actor.userId)) fail('forbidden', 'Live conversations contain only the owner and that owner’s bots.');
+  if (room.ownerUserId !== actor.userId || room.botIds.some(botId => services.store.require<P.Bot>('bots', botId).ownerUserId !== actor.userId)) fail('forbidden', 'Live conversations contain only the owner and that owner’s bots.');
   return services.auth.conversation(actor, conversationId);
 }
 function canUseConversation(services: BackendServices, actor: Principal, conversationId: string): boolean {
@@ -53,9 +53,6 @@ function members(services: BackendServices, actor: Principal, input: P.Conversat
   const bots = input.botIds.map(botId => authorizedBot(services, actor, botId));
   if (new Set(input.botIds).size !== input.botIds.length) fail('invalid_request', 'Conversation bots must be distinct.');
   if (input.kind === 'group' ? bots.length < 2 || bots.length > 6 : bots.length !== 1) fail('invalid_request', 'A group requires two to six bots; other conversations require one.');
-  if (input.kind === 'dm' && (bots[0]!.visibility !== 'personal' || bots[0]!.ownerUserId !== actor.userId)) fail('forbidden', 'Personal DMs belong to the bot owner.');
-  if (input.kind === 'team_dm' && bots[0]!.visibility !== 'team') fail('invalid_request', 'Team DMs require a team bot.');
-  if (input.humanUserIds?.some(userId => userId !== actor.userId)) fail('forbidden', 'A conversation coordinates one person’s bots, not other people.');
   if (!services.auth.member(actor.userId).enabled) fail('forbidden', 'The owner must be enabled.');
   if (input.leadBotId && !input.botIds.includes(input.leadBotId)) fail('invalid_request', 'The lead must belong to the conversation.');
   if (input.kind === 'task') {
@@ -74,7 +71,7 @@ function lifecycleWrite(services: BackendServices, actor: Principal, botId: stri
   fail(fence.status === 'outcome_unknown' ? 'outcome_unknown' : 'conflict', 'The bot lifecycle is not ready for conversation changes.', fence.status !== 'outcome_unknown', { resourceIds: [botId] });
 }
 function bindCanonical(services: BackendServices, actor: Principal, room: P.Conversation, context?: RequestContext): void {
-  if (room.kind !== 'dm' && room.kind !== 'team_dm') return;
+  if (room.kind !== 'dm') return;
   const bot = services.store.require<P.Bot>('bots', room.botIds[0]!);
   if (bot.ownerUserId !== actor.userId || services.store.get<P.Conversation>('conversations', bot.mainConversationId)) return;
   lifecycleWrite(services, actor, bot.id, context);
@@ -83,31 +80,14 @@ function bindCanonical(services: BackendServices, actor: Principal, room: P.Conv
   services.events.emit('bot.upserted', changed, { botId: bot.id });
 }
 
-/** The sole stable Team DM is the actual bot owner's private conversation. */
-export function ensureTeamDM(services: BackendServices, bot: P.Bot, userId: string): P.Conversation {
-  const actual = services.store.require<P.Bot>('bots', bot.id);
-  if (actual.ownerUserId !== userId || bot.ownerUserId !== userId || bot.visibility !== 'team' || !services.auth.member(userId).enabled) fail('forbidden', 'A private Team DM belongs only to its bot owner.');
-  return services.store.transaction(() => {
-    const existing = services.store.list<P.Conversation>('conversations', room => room.kind === 'team_dm' && room.ownerUserId === userId && room.botIds[0] === bot.id)[0];
-    const room: P.Conversation = existing ?? services.resource('conversation', { kind: 'team_dm', name: bot.name, botIds: [bot.id], humanUserIds: [userId], ownerUserId: userId, parentConversationId: null, leadBotId: bot.id, channelBindingId: null, lastEntryId: null, unreadCount: 0, lastReadSeq: 0, activity: [] });
-    if (!existing) services.store.put('conversations', room);
-    if (!services.store.metadata(`botLifecycle:${bot.id}`) && bot.ownerUserId === userId && !services.store.get<P.Conversation>('conversations', bot.mainConversationId)) {
-      const updatedBot = services.update(services.store.require<P.Bot>('bots', bot.id), { mainConversationId: room.id });
-      services.store.put('bots', updatedBot);
-      services.events.emit('bot.upserted', updatedBot, { botId: bot.id });
-    }
-    if (!existing) services.events.emit('conversation.upserted', room, { userIds: [userId], conversationId: room.id });
-    return room;
-  });
-}
 export function createConversation(services: BackendServices, actor: Principal, input: P.ConversationCreate, context?: RequestContext): P.Conversation {
   const bots = members(services, actor, input);
   return services.store.transaction(() => {
-    if (input.kind === 'dm' || input.kind === 'team_dm') {
+    if (input.kind === 'dm') {
       const existing = services.store.list<P.Conversation>('conversations', room => room.kind === input.kind && room.ownerUserId === actor.userId && room.botIds[0] === bots[0]!.id)[0];
       if (existing) { bindCanonical(services, actor, existing, context); return authorizedConversation(services, actor, existing.id); }
     }
-    const room: P.Conversation = services.resource('conversation', { kind: input.kind, name: input.name ?? bots[0]!.name, botIds: input.botIds, humanUserIds: [...new Set([actor.userId, ...(input.humanUserIds ?? [])])], ownerUserId: actor.userId, parentConversationId: input.parentConversationId ?? null, leadBotId: input.leadBotId ?? bots[0]!.id, channelBindingId: null, lastEntryId: null, unreadCount: 0, lastReadSeq: 0, activity: [] });
+    const room: P.Conversation = services.resource('conversation', { kind: input.kind, name: input.name ?? bots[0]!.name, botIds: input.botIds, ownerUserId: actor.userId, parentConversationId: input.parentConversationId ?? null, leadBotId: input.leadBotId ?? bots[0]!.id, channelBindingId: null, lastEntryId: null, unreadCount: 0, lastReadSeq: 0, activity: [] });
     services.store.put('conversations', room);
     bindCanonical(services, actor, room, context);
     services.events.emit('conversation.upserted', room, { conversationId: room.id });
@@ -115,7 +95,7 @@ export function createConversation(services: BackendServices, actor: Principal, 
   });
 }
 export function privateConversation(services: BackendServices, actor: Principal, bot: P.Bot, clientNonce: string, context?: RequestContext): P.Conversation {
-  return createConversation(services, actor, { clientNonce, kind: bot.visibility === 'team' ? 'team_dm' : 'dm', botIds: [bot.id] }, context);
+  return createConversation(services, actor, { clientNonce, kind: 'dm', botIds: [bot.id] }, context);
 }
 export function validateAttachments(services: BackendServices, actor: Principal, room: P.Conversation, attachmentIds: string[], allowSourceRooms = false): void {
   if (attachmentIds.length > 6 || new Set(attachmentIds).size !== attachmentIds.length) fail('invalid_request', 'At most six distinct files may be attached.');
@@ -171,17 +151,12 @@ function project(services: BackendServices, actor: Principal, room: P.Conversati
 export interface SubmissionContext { returnConversationId?: string; sourceEntryId: string; noHandoff: boolean; parentRunId?: string; sourceBotId?: string }
 export function submissionKey(actor: Principal, roomId: string, nonce: string): string { return `submissionContext:${actor.kind}:${actor.id}:${roomId}:${nonce}`; }
 
-/** Account revocation removes membership metadata without exposing retained group transcripts. */
-export function removeUserMembership(services: BackendServices, userId: string): void {
+/** Account revocation clears private composer/read state without exposing retained transcripts. */
+export function clearUserConversationState(services: BackendServices, userId: string): void {
   services.store.transaction(() => {
     for (const room of services.store.list<P.Conversation>('conversations')) {
       for (const draft of services.store.list<StoredComposer>('composerDrafts', value => value.userId === userId && value.conversationId === room.id)) services.store.remove('composerDrafts', draft.id);
       services.store.setMetadata(`conversationRead:${userId}:${room.id}`, null);
-      if ((room.kind === 'group' || room.kind === 'channel') && room.ownerUserId !== userId && room.humanUserIds.includes(userId)) {
-        const changed = services.update(room, { humanUserIds: room.humanUserIds.filter(memberId => memberId !== userId) });
-        services.store.put('conversations', changed);
-        services.events.emit('conversation.upserted', changed, { conversationId: changed.id, userIds: changed.humanUserIds });
-      }
     }
   });
 }
@@ -213,13 +188,11 @@ export function deleteConversationResources(services: BackendServices, actor: Pr
     for (const run of services.store.list<P.Run>('runs', value => value.conversationId === room.id)) services.store.remove('runs', run.id);
     for (const draft of services.store.list<StoredComposer>('composerDrafts', value => value.conversationId === room.id)) services.store.remove('composerDrafts', draft.id);
     for (const share of services.store.list<AttachmentShare>('attachmentShares', value => value.conversationId === room.id)) services.store.remove('attachmentShares', share.id);
-    for (const userId of room.humanUserIds) {
-      services.store.setMetadata(`conversationRead:${userId}:${room.id}`, null);
-    }
+    services.store.setMetadata(`conversationRead:${room.ownerUserId}:${room.id}`, null);
     services.store.remove('conversations', room.id);
     const deleted: P.Deleted = { id: room.id, deleted: true };
-    services.events.emit('conversation.deleted', deleted, { userIds: room.humanUserIds });
-    if (!botLifecycle && (room.kind === 'dm' || room.kind === 'team_dm')) {
+    services.events.emit('conversation.deleted', deleted, { userIds: [room.ownerUserId] });
+    if (!botLifecycle && room.kind === 'dm') {
       const bot = authorizedBot(services, actor, room.botIds[0]!);
       privateConversation(services, actor, bot, services.id('replacement'), context);
     }
@@ -342,7 +315,7 @@ export async function sendMessage(services: BackendServices, actor: Principal, c
 export function createConversationRoutes(services: BackendServices): Route[] {
   const route = (method: string, path: string, handler: Route['handler'], status = 200, isMutation?: boolean): Route => ({
     method, path: `/v1${path}`, auth: 'member', handler, status, ...(isMutation === undefined ? {} : { mutation: isMutation }),
-    ...(path.startsWith('/conversations/:id') && method !== 'DELETE' && !path.endsWith('/leave') ? { authorizeReplay: (context: RequestContext) => { authorizedConversation(services, principal(context.user), context.params.id!); } } : {}),
+    ...(path.startsWith('/conversations/:id') && method !== 'DELETE' ? { authorizeReplay: (context: RequestContext) => { authorizedConversation(services, principal(context.user), context.params.id!); } } : {}),
   });
   const room = (context: RequestContext) => authorizedConversation(services, principal(context.user), context.params.id!);
   const owned = (context: RequestContext) => { const value = room(context); const actor = principal(context.user); owner(actor, value); for (const botId of value.botIds) lifecycleWrite(services, actor, botId, context); return value; };
@@ -370,9 +343,9 @@ export function createConversationRoutes(services: BackendServices): Route[] {
     route('PATCH', '/conversations/:id', context => {
       const input = parse(changeSchema, context.body), actor = principal(context.user), current = owned(context);
       services.mutations.checkRevision(current, input.revision);
-      if (current.kind !== 'group' && (input.botIds || input.humanUserIds || input.leadBotId !== undefined)) fail('invalid_request', 'Private conversation membership is immutable.');
-      const next = { ...current, name: input.name ?? current.name, botIds: input.botIds ?? current.botIds, humanUserIds: [...new Set([current.ownerUserId, ...(input.humanUserIds ?? current.humanUserIds)])], leadBotId: input.leadBotId === undefined ? current.leadBotId : input.leadBotId };
-      if (next.kind === 'group') members(services, actor, { clientNonce: input.clientNonce, kind: 'group', botIds: next.botIds, humanUserIds: next.humanUserIds, leadBotId: next.leadBotId ?? next.botIds[0] });
+      if (current.kind !== 'group' && (input.botIds || input.leadBotId !== undefined)) fail('invalid_request', 'Private conversation membership is immutable.');
+      const next = { ...current, name: input.name ?? current.name, botIds: input.botIds ?? current.botIds, leadBotId: input.leadBotId === undefined ? current.leadBotId : input.leadBotId };
+      if (next.kind === 'group') members(services, actor, { clientNonce: input.clientNonce, kind: 'group', botIds: next.botIds, leadBotId: next.leadBotId ?? next.botIds[0] });
       if (!next.leadBotId || !next.botIds.includes(next.leadBotId)) next.leadBotId = next.botIds[0]!;
       const changed = services.update(current, next); services.store.put('conversations', changed); services.events.emit('conversation.upserted', changed, { conversationId: changed.id }); return project(services, actor, changed);
     }),
@@ -392,12 +365,6 @@ export function createConversationRoutes(services: BackendServices): Route[] {
         if (!result.deleted || result.sessionKey !== sessionKey || !result.summary?.verified) fail('outcome_unknown', 'The runtime did not verify conversation deletion.', false, { resourceIds: [current.id] });
       }
       return deleteConversationResources(services, actor, current, false, context);
-    }),
-    route('POST', '/conversations/:id/leave', context => {
-      const input = parse(mutation.extend({ newOwnerUserId: id.optional() }), context.body), actor = principal(context.user), current = room(context);
-      if (actor.kind !== 'user' || current.kind !== 'group') fail('forbidden', 'Only the group owner may manage this group.');
-      if (input.newOwnerUserId && input.newOwnerUserId !== actor.userId) fail('forbidden', 'A group cannot transfer the owner’s bot authority to another person.');
-      fail('conflict', 'The sole owner must preview and delete the group instead of leaving.');
     }),
     route('POST', '/conversations/:id/read', context => {
       const input = parse(mutation.extend({ throughSeq: sequence, unread: z.boolean().optional() }), context.body), actor = principal(context.user), current = room(context);

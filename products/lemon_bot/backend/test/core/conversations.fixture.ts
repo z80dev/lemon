@@ -14,7 +14,7 @@ export interface ChatFixture {
   store: Store;
   submissions: { principal: Principal; conversation: P.Conversation; bot: P.Bot; message: P.MessageSend; metadata: unknown }[];
   admissions: { principal: Principal; botId: string }[];
-  addBot(botId: string, visibility?: P.Bot['visibility'], ownerUserId?: string): P.Bot;
+  addBot(botId: string, ownerUserId?: string): P.Bot;
   requestContext(method: string, path: string, body: unknown, actor?: Principal, params?: Record<string, string>): RequestContext;
 }
 export function chatFixture(): ChatFixture {
@@ -33,15 +33,14 @@ export function chatFixture(): ChatFixture {
     user: userId => store.require<P.User>('users', userId),
     member: userId => store.require<P.Member>('members', userId),
     requireRole: (actor, role) => { if (actor.role !== 'owner' && (role === 'owner' || actor.role !== 'admin')) fail('forbidden', 'Role denied.'); },
-    bot: (actor, botId, manage = false) => {
+    bot: (actor, botId) => {
       const bot = store.require<P.Bot>('bots', botId);
-      if (bot.ownerUserId !== actor.userId && (bot.visibility !== 'team' || !bot.published || manage && !bot.managerUserIds.includes(actor.userId))) fail('forbidden', 'Bot denied.');
+      if (bot.ownerUserId !== actor.userId) fail('forbidden', 'Bot denied.');
       return bot;
     },
     conversation: (actor, roomId) => {
       const room = store.require<P.Conversation>('conversations', roomId);
-      if (room.kind === 'group' || room.kind === 'channel') { if (!room.humanUserIds.includes(actor.userId)) fail('forbidden', 'Room denied.'); }
-      else if (room.ownerUserId !== actor.userId) fail('forbidden', 'Private room denied.');
+      if (room.ownerUserId !== actor.userId || room.botIds.some(botId => store.require<P.Bot>('bots', botId).ownerUserId !== actor.userId)) fail('forbidden', 'Private room denied.');
       return room;
     },
     machine: (actor, machineId) => { const machine = store.require<P.Machine>('machines', machineId); if (machine.ownerUserId !== actor.userId && !machine.accessUserIds.includes(actor.userId)) fail('forbidden', 'Machine denied.'); return machine; },
@@ -71,7 +70,7 @@ export function chatFixture(): ChatFixture {
       return { run, delivery: { botId: bot.id, requestedMode: message.mode ?? 'followup', effectiveMode: 'started', targetRunId: null, runId: run.id } };
     },
     send: (actor, roomId, message, context) => sendMessage(services, actor, roomId, message, context),
-    cancel: async () => unreachable(), reconcile: async () => unreachable(), sessionKey: (room, bot) => `agent:${bot.profileId}:${room.kind === 'team_dm' ? 'dm-' + room.ownerUserId : room.kind === 'dm' ? 'main' : room.kind + '-' + room.id}`,
+    cancel: async () => unreachable(), reconcile: async () => unreachable(), sessionKey: (room, bot) => `agent:${bot.profileId}:${room.kind === 'dm' ? 'main' : room.kind + '-' + room.id}`,
     revokeConnectorInvocations: async () => unreachable(),
   };
   const eventListeners = new Set<(event: string, payload: unknown) => void>();
@@ -84,8 +83,8 @@ export function chatFixture(): ChatFixture {
     store.put('users', user);
     store.put('members', { ...services.resource('member', { userId: actor.userId, displayName: actor.userId, email: `${actor.userId}@example.test`, role: 'member' as const, enabled: true }), id: actor.userId });
   }
-  function addBot(botId: string, visibility: P.Bot['visibility'] = 'personal', ownerUserId = alice.userId): P.Bot {
-    const bot: P.Bot = { ...services.resource('bot', { ownerUserId, managerUserIds: [], machineId: 'machine', profileId: 'lb-' + botId, name: botId, title: '', job: '', instructions: '', avatar: { kind: 'character' as const, shape: 'round', color: 'yellow', attachmentId: null }, voice: { voiceId: 'default', speed: 1, language: null }, language: null, visibility, published: visibility === 'team', required: false, skillIds: [], referenceAttachmentIds: [], mainConversationId: '', sidebar: { pinned: false, hidden: false, sectionId: null, rank: 0, unread: false, notificationsEnabled: true }, activity: 'idle' as const, activeRunIds: [] }), id: botId };
+  function addBot(botId: string, ownerUserId = alice.userId): P.Bot {
+    const bot: P.Bot = { ...services.resource('bot', { ownerUserId, machineId: 'machine', profileId: 'lb-' + botId, name: botId, title: '', job: '', instructions: '', avatar: { kind: 'character' as const, shape: 'round', color: 'yellow', attachmentId: null }, voice: { voiceId: 'default', speed: 1, language: null }, language: null, skillIds: [], referenceAttachmentIds: [], mainConversationId: '', sidebar: { pinned: false, hidden: false, sectionId: null, rank: 0, unread: false, notificationsEnabled: true }, activity: 'idle' as const, activeRunIds: [] }), id: botId };
     store.put('bots', bot); return bot;
   }
   function requestContext(method: string, path: string, body: unknown, actor: Principal = alice, params: Record<string, string> = {}): RequestContext {
