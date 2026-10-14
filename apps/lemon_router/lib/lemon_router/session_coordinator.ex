@@ -246,6 +246,22 @@ defmodule LemonRouter.SessionCoordinator do
     end)
   end
 
+  @doc false
+  def presence_entries do
+    children = DynamicSupervisor.which_children(LemonRouter.SessionCoordinatorSupervisor)
+
+    entries =
+      Enum.flat_map(children, fn {_id, pid, _type, _modules} ->
+        GenServer.call(pid, :presence_entries)
+      end)
+
+    {:ok, entries}
+  rescue
+    ArgumentError -> {:error, :unavailable}
+  catch
+    :exit, _ -> {:error, :unavailable}
+  end
+
   def start_link(opts) do
     key = Keyword.fetch!(opts, :conversation_key)
     name = {:via, Registry, {LemonRouter.ConversationRegistry, key}}
@@ -294,6 +310,22 @@ defmodule LemonRouter.SessionCoordinator do
     {:reply, length(state.queue) + pending_steers, state}
   end
 
+  def handle_call(:presence_entries, _from, state) do
+    active = if state.active, do: [presence_entry(state.active, :active)], else: []
+    queued = Enum.map(state.queue, &presence_entry(&1, :queued))
+    pending =
+      Enum.flat_map(state.pending_steers, fn {_target, entries} ->
+        Enum.map(entries, fn {submission, _mode} -> presence_entry(submission, :queued) end)
+      end)
+    unresolved =
+      Enum.map(state.unpersisted_receipts, fn {run_id, receipt} ->
+        Map.merge(receipt, %{run_id: run_id, status: :unknown})
+      end)
+
+    {:reply, active ++ queued ++ pending ++ unresolved, state}
+  end
+
+
   def handle_call({:submit_with_receipt, submission}, _from, state) do
     case RunReceiptStore.fetch(state.receipt_store, submission.run_id) do
       {:ok, %{} = receipt} ->
@@ -335,11 +367,14 @@ defmodule LemonRouter.SessionCoordinator do
             {:reply, reply, next_state}
 
           changes ->
+            scope = presence_entry(submission, :unknown)
             receipt =
               changes
               |> Map.merge(%{
                 run_id: submission.run_id,
                 session_key: submission.session_key,
+                agent_id: scope.agent_id,
+                profile_id: scope.profile_id,
                 state: :accepted
               })
               |> put_request_identity(submission)
@@ -529,6 +564,22 @@ defmodule LemonRouter.SessionCoordinator do
     end
 
     :ok
+  end
+
+  defp presence_entry(%{submission: %Submission{} = submission}, status),
+    do: presence_entry(submission, status)
+
+  defp presence_entry(submission, status) do
+    request = Map.get(submission, :execution_request) || %{}
+    meta = Map.get(request, :meta) || %{}
+    agent_id = MapHelpers.get_key(meta, :agent_id)
+    %{
+      run_id: submission.run_id,
+      session_key: submission.session_key,
+      agent_id: agent_id,
+      profile_id: MapHelpers.get_key(meta, :profile_id),
+      status: status
+    }
   end
 
   defp submission_identity(submission) do
@@ -860,7 +911,13 @@ defmodule LemonRouter.SessionCoordinator do
   defp maybe_start_next(%SessionState{active: nil, queue: [next | rest]} = state, opts) do
     next = refresh_queued_resume(next)
 
-    case RunStarter.start(next, self(), state.conversation_key) do
+    start_result =
+      with :ok <- LemonRouter.NativeLineage.validate_activation(next.execution_request),
+           :ok <- LemonRouter.ResumeResolver.bind_run(next.execution_request) do
+        RunStarter.start(next, self(), state.conversation_key)
+      end
+
+    case start_result do
       {:ok, pid} when is_pid(pid) ->
         next_state = activate_submission(state, next, rest, pid, opts)
 
@@ -900,22 +957,30 @@ defmodule LemonRouter.SessionCoordinator do
     request = submission.execution_request
     source = MapHelpers.get_key(request.meta || %{}, :resume_source)
 
-    if source == :explicit or (is_nil(source) and not is_nil(request.resume)) do
-      submission
-    else
-      case LemonRouter.ResumeResolver.resolve(nil, submission.session_key, request.meta || %{}) do
-        {:ok, resume, resume_source} ->
-          request = %{
-            request
-            | resume: resume,
-              meta: Map.put(request.meta || %{}, :resume_source, resume_source)
-          }
+    explicit =
+      if source == :explicit or (is_nil(source) and not is_nil(request.resume)),
+        do: request.resume,
+        else: nil
 
-          %{submission | execution_request: request}
+    case LemonRouter.ResumeResolver.resolve(
+           explicit,
+           submission.session_key,
+           request.meta || %{},
+           request.tool_policy,
+           LemonCore.Store,
+           request.run_id
+         ) do
+      {:ok, resume, resume_source} ->
+        request = %{
+          request
+          | resume: resume,
+            meta: Map.put(request.meta || %{}, :resume_source, resume_source)
+        }
 
-        {:error, _reason} ->
-          submission
-      end
+        %{submission | execution_request: request}
+
+      {:error, _reason} ->
+        submission
     end
   end
 

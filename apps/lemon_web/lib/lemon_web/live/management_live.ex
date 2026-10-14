@@ -1621,12 +1621,7 @@ defmodule LemonWeb.ManagementLive do
           fun.()
 
         _ ->
-          if LemonRouter.available?() do
-            runs = LemonRouter.active_runs()
-            if LemonRouter.available?(), do: {:ok, runs}, else: {:error, :unavailable}
-          else
-            {:error, :unavailable}
-          end
+          LemonRouter.active_runs()
       end
 
     case result do
@@ -1662,9 +1657,17 @@ defmodule LemonWeb.ManagementLive do
 
   # Only an available lookup without the key means idle; failures are unknown.
   defp idle_state(key) do
-    case fetch_active_runs() do
-      {:ok, runs} -> if Enum.any?(runs, &(&1.session_key == key)), do: :running, else: :idle
-      :error -> :unknown
+    if is_function(Application.get_env(:lemon_web, :active_runs_fun), 0) do
+      case fetch_active_runs() do
+        {:ok, runs} -> if Enum.any?(runs, &(&1.session_key == key)), do: :running, else: :idle
+        :error -> :unknown
+      end
+    else
+      case LemonRouter.run_presence(%{session_key: key}) do
+        {:ok, %{presence: %{idle: true}}} -> :idle
+        {:ok, %{presence: %{unknown: 0}}} -> :running
+        _ -> :unknown
+      end
     end
   end
 

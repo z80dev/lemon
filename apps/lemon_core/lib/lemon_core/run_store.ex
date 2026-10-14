@@ -87,7 +87,11 @@ defmodule LemonCore.RunStore do
     value
     |> Map.drop([
       :mcp_servers, "mcp_servers", :mcpServers, "mcpServers",
-      :mcp_servers_json, "mcp_servers_json"
+      :mcp_servers_json, "mcp_servers_json",
+      :native_lineage_handle, "native_lineage_handle", :nativeLineageHandle, "nativeLineageHandle",
+      :native_destination_pid, "native_destination_pid", :nativeDestinationPid, "nativeDestinationPid",
+      :native_destination_generation, "native_destination_generation",
+      :nativeDestinationGeneration, "nativeDestinationGeneration"
     ])
     |> Map.new(fn {key, entry} -> {key, execution_projection(entry)} end)
   end

@@ -17,20 +17,26 @@ defmodule LemonControlPlane.Methods.AgentWait do
   def handle(params, _ctx) do
     run_id = params["runId"]
     timeout_ms = params["timeoutMs"] || 60_000
+    include_answer = Map.get(params, "includeAnswer", true)
 
-    if is_nil(run_id) do
-      {:error, {:invalid_request, "runId is required", nil}}
-    else
-      case wait_for_run(run_id, timeout_ms) do
-        {:ok, result} ->
-          {:ok, result}
+    cond do
+      is_nil(run_id) ->
+        {:error, {:invalid_request, "runId is required", nil}}
 
-        {:error, :timeout} ->
-          {:error, {:timeout, "Run did not complete within timeout", run_id}}
+      not is_boolean(include_answer) ->
+        {:error, {:invalid_request, "includeAnswer must be a boolean", nil}}
 
-        {:error, reason} ->
-          {:error, {:internal_error, "Failed to wait for run", reason}}
-      end
+      true ->
+        case wait_for_run(run_id, timeout_ms) do
+          {:ok, completed} ->
+            {:ok, format_result(completed, include_answer)}
+
+          {:error, :timeout} ->
+            {:error, {:timeout, "Run did not complete within timeout", run_id}}
+
+          {:error, reason} ->
+            {:error, {:internal_error, "Failed to wait for run", reason}}
+        end
     end
   end
 
@@ -56,7 +62,7 @@ defmodule LemonControlPlane.Methods.AgentWait do
   defp check_run_completed(run_id) do
     case LemonCore.RunStore.get(run_id) do
       %{summary: %{completed: completed}} when not is_nil(completed) ->
-        {:ok, format_result(completed)}
+        {:ok, completed}
 
       _ ->
         :running
@@ -99,29 +105,36 @@ defmodule LemonControlPlane.Methods.AgentWait do
           other
       end
 
-    {:ok, format_result(completed)}
+    {:ok, completed}
   end
 
-  defp format_result(completed) when is_map(completed) do
+  defp format_result(completed, include_answer) when is_map(completed) do
     result = %{
       "runId" => completed_value(completed, :run_id, "runId"),
       "ok" => completed_value(completed, :ok, "ok"),
-      "answer" => format_answer(completed_value(completed, :answer, "answer")),
+      "answer" => if(include_answer, do: format_answer(completed_value(completed, :answer, "answer"))),
       "error" => format_error(completed_value(completed, :error, "error"))
     }
 
     meta = completed_value(completed, :meta, "meta") || %{}
 
-    result
-    |> Map.put("cancelled", completed_value(meta, :cancelled, "cancelled") == true)
-    |> maybe_put(
-      "usage",
-      completed
-      |> completed_value(:usage, "usage")
-      |> LemonControlPlane.EventProjection.action_detail()
-    )
-    |> maybe_put("budget", completed_value(meta, :budget, "budget"))
-    |> Map.put("summary", summary(result))
+    result = Map.put(result, "cancelled", completed_value(meta, :cancelled, "cancelled") == true)
+
+    result =
+      if include_answer do
+        result
+        |> maybe_put(
+          "usage",
+          completed
+          |> completed_value(:usage, "usage")
+          |> LemonControlPlane.EventProjection.action_detail()
+        )
+        |> maybe_put("budget", completed_value(meta, :budget, "budget"))
+      else
+        result
+      end
+
+    Map.put(result, "summary", summary(result))
   end
 
   defp maybe_put(result, _key, nil), do: result

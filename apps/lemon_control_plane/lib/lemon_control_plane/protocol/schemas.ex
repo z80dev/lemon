@@ -131,6 +131,10 @@ defmodule LemonControlPlane.Protocol.Schemas do
         "queueMode" => :string
       }
     },
+    "profile.followup.admission.set" => %{
+      required: %{"profileId" => :string, "url" => :string, "token" => :string},
+      optional: %{}
+    },
 
     # Profile-scoped memory (destination-local for named-node profiles)
     "memory.list" => %{
@@ -185,7 +189,8 @@ defmodule LemonControlPlane.Protocol.Schemas do
     "agent.wait" => %{
       optional: %{
         "runId" => :string,
-        "timeoutMs" => :integer
+        "timeoutMs" => :integer,
+        "includeAnswer" => :boolean
       }
     },
     "agent.directory.list" => %{
@@ -457,6 +462,7 @@ defmodule LemonControlPlane.Protocol.Schemas do
     # Monitoring methods
     "runs.active.list" => %{
       optional: %{
+        "profileId" => :string,
         "agentId" => :string,
         "sessionKey" => :string,
         "limit" => :integer
@@ -614,6 +620,12 @@ defmodule LemonControlPlane.Protocol.Schemas do
       },
       optional: %{
         "runId" => :string,
+        "invocationContextKey" => :string,
+        "memoryContextKey" => :string,
+        "sharedMemoryGrant" => :boolean,
+        "invocationProof" => :map,
+        "invocationMcpServers" => :list,
+        "invocationToolPolicy" => :map,
         "agentId" => :string,
         "profileId" => :string,
         "invocationMcpServers" => :list,
@@ -626,6 +638,18 @@ defmodule LemonControlPlane.Protocol.Schemas do
     "runs.receipt.get" => %{
       required: %{"runId" => :string},
       optional: %{}
+    },
+    "runs.followup.lineage.get" => %{
+      required: %{"runId" => :string},
+      optional: %{}
+    },
+    "node.native.followup" => %{
+      required: %{"sourceRunId" => :string, "lineageHandle" => :string, "request" => :map},
+      optional: %{}
+    },
+    "node.native.lineage.floor" => %{
+      required: %{"sourceRunId" => :string, "toolPolicy" => :map},
+      optional: %{"lineageHandle" => :string}
     },
     "chat.abort" => %{
       optional: %{

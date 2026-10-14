@@ -23,12 +23,13 @@ defmodule LemonControlPlane.Methods.ChatSend do
   @impl true
   def handle(params, ctx) do
     with {:ok, run_id} <- ChatSubmission.run_id(params),
+         {:ok, context_key} <- ChatSubmission.invocation_context_key(params),
          {:ok, images} <- ImageInputs.validate(Map.get(params, "images", [])) do
-      submit(params, ctx, images, run_id)
+      submit(params, ctx, images, run_id, context_key)
     end
   end
 
-  defp submit(params, ctx, images, run_id) do
+  defp submit(params, ctx, images, run_id, context_key) do
     session_key = params["sessionKey"]
     prompt = params["prompt"] || params["message"]
     profile_id = params["profileId"]
@@ -52,6 +53,9 @@ defmodule LemonControlPlane.Methods.ChatSend do
       Map.has_key?(params, "invocationToolPolicy") and is_nil(profile_id) ->
         {:error, {:invalid_request, "invocationToolPolicy requires profileId", nil}}
 
+      not is_nil(context_key) and not is_nil(profile_id) and
+          not Map.has_key?(params, "invocationMcpServers") ->
+        {:error, {:invalid_request, "Managed invocation requires explicit invocationMcpServers", nil}}
       Map.has_key?(params, "cwd") and not is_nil(profile_id) ->
         {:error, {:invalid_request, "cwd cannot override a profile workspace", nil}}
 
@@ -69,7 +73,9 @@ defmodule LemonControlPlane.Methods.ChatSend do
             |> Map.merge(%{origin: :control_plane, images: images, queue_mode: queue_mode})
             |> Map.update(:meta, %{control_plane: true}, &Map.put(&1, :control_plane, true))
 
-          dispatch(router_mod, submit_params, prompt, queue_mode)
+          with {:ok, submit_params} <- ChatSubmission.attach_execution_context(submit_params, params, ctx) do
+            dispatch(router_mod, submit_params, prompt, queue_mode)
+          end
         end
     end
   end
@@ -134,6 +140,7 @@ defmodule LemonControlPlane.Methods.ChatSend do
       {:ok, Map.put(receipt, "summary", summary(run_id, session_key, agent_id, prompt, queue_mode))}
     end
   end
+
 
   defp valid_cwd?(cwd) when is_binary(cwd) and cwd != "" do
     Path.type(cwd) == :absolute and File.dir?(cwd)

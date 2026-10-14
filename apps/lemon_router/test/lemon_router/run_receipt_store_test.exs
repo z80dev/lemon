@@ -81,6 +81,26 @@ defmodule LemonRouter.RunReceiptStoreTest do
                    request_identity: ^identity}} = RunReceiptStore.fetch(store, "follower")
   end
 
+  test "terminal scope evidence survives run-history pruning and storage restart", %{store: store, opts: opts} do
+    id = "completed"
+    scope = %{profile_id: "executed-profile", agent_id: "actual-agent", session_key: "arbitrary"}
+    :ok = Store.put(store, LemonRouter.RunOrchestrator.admission_table(), id,
+                    %{state: "accepted", identity: "fixed", scope: scope})
+    :ok = Store.put(store, :runs, id, %{summary: %{completed: %{ok: true}}})
+    :ok = RunReceiptStore.put(store, Map.merge(receipt(id), scope))
+    assert {:ok, %{terminal: true, profile_id: "executed-profile"}} = RunReceiptStore.fetch(store, id)
+    assert {:ok, %{terminal: true, scope: ^scope}} =
+             Store.fetch(store, LemonRouter.RunOrchestrator.admission_table(), id)
+
+    :ok = Store.delete(store, :runs, id)
+    stop_supervised!(Store)
+    start_supervised!({Store, opts})
+    assert {:ok, nil} = Store.fetch(store, :runs, id)
+    assert {:ok, %{terminal: true, agent_id: "actual-agent"}} = RunReceiptStore.fetch(store, id)
+    assert {:ok, %{terminal: true, scope: ^scope}} =
+             Store.fetch(store, LemonRouter.RunOrchestrator.admission_table(), id)
+  end
+
   test "failed reads are unavailable, never successful absence", %{store: store} do
     pid = Process.whereis(store)
     stop_supervised!(Store)

@@ -141,6 +141,24 @@ defmodule LemonCore.RouterBridge do
     |> expect_run_id()
   end
 
+  @doc """
+  Admit a fixed-ID fresh native run using immutable, private source provenance.
+  The source contains only the owning run ID and its continuing-lineage handle;
+  it is not caller-selected parent metadata or a reusable MCP invocation proof.
+  """
+  def submit_native_followup(source, %RunRequest{} = request) do
+    :run_orchestrator
+    |> call(:submit_native_followup, [source, request], :mutation)
+    |> expect_run_id()
+  end
+
+  @doc "Seal actual immutable native startup policy before model or tool execution."
+  def register_native_source_floor(source, effective_policy) do
+    :run_orchestrator
+    |> call(:register_native_source_floor, [source, effective_policy], :mutation)
+    |> expect_ok()
+  end
+
   @doc "Submit with a fixed ID and return the queue-owned admission receipt."
   def submit_run_with_receipt(%RunRequest{} = request) do
     case call(:run_orchestrator, :submit_with_receipt, [request], :mutation) do

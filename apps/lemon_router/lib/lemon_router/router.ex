@@ -6,19 +6,18 @@ defmodule LemonRouter.Router do
   - Normalizing inbound messages from different channels
   - Routing to the appropriate session
   - Handling abort requests
-  - Preparing pending compaction for channel submissions and consuming markers
-    only after submission succeeds
+  - Delegating policy-bound submission preparation to the orchestrator
   """
 
   alias LemonCore.RunRequest
   alias LemonCore.SessionKey
-  alias LemonRouter.{PendingCompaction, RunOrchestrator}
+  alias LemonRouter.RunOrchestrator
 
   @doc """
   Handle an inbound message from a channel.
 
-  Normalizes the message and submits it to the orchestrator.
-  Before submission, applies any pending compaction marker for the session.
+  Normalizes the message and submits it to the orchestrator. Pending compaction
+  is prepared by the submission builder after resolving execution capabilities.
   """
   @spec handle_inbound(LemonCore.InboundMessage.t()) :: :ok | {:error, term()}
   def handle_inbound(%LemonCore.InboundMessage{} = msg) do
@@ -31,14 +30,11 @@ defmodule LemonRouter.Router do
     agent_id =
       meta[:agent_id] || meta["agent_id"] || SessionKey.agent_id(session_key) || "default"
 
-    {msg, meta} = maybe_apply_pending_compaction(msg, meta, session_key)
-
     request = build_inbound_run_request(msg, meta, session_key, agent_id)
 
     # Submit to orchestrator
     case run_orchestrator().submit(request) do
       {:ok, run_id} when is_binary(run_id) and run_id != "" ->
-        PendingCompaction.consume(session_key, PendingCompaction.prepared_marker(meta))
         :ok
 
       {:error, _reason} = error ->
@@ -246,22 +242,4 @@ defmodule LemonRouter.Router do
   defp session_coordinator do
     Application.get_env(:lemon_router, :session_coordinator, LemonRouter.SessionCoordinator)
   end
-
-  # ---------------------------------------------------------------------------
-  # Generic pending-compaction preparation
-  # ---------------------------------------------------------------------------
-
-  @doc false
-  def maybe_apply_pending_compaction(msg, meta, session_key) do
-    {text, marker} = PendingCompaction.prepare(msg.message.text, session_key, :channel)
-    meta = PendingCompaction.put_prepared_marker(meta, marker)
-    {%{msg | message: Map.put(msg.message, :text, text)}, meta}
-  end
-
-  @doc false
-  def build_pending_compaction_prompt(transcript, user_text)
-      when is_binary(transcript) and is_binary(user_text),
-      do: PendingCompaction.build_prompt(transcript, user_text)
-
-  def build_pending_compaction_prompt(_transcript, user_text), do: user_text
 end

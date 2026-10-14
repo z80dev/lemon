@@ -11,7 +11,7 @@ defmodule LemonRouter.RunProcess.CompactionTrigger do
 
   alias LemonAi.Tokens
   alias LemonCore.{ExecutionCommand, ResumeToken}
-  alias LemonRouter.ChannelContext
+  alias LemonRouter.{ChannelContext, ResumeResolver}
 
   @default_compaction_reserve_tokens 16_384
   @default_preemptive_compaction_trigger_ratio 0.9
@@ -199,7 +199,9 @@ defmodule LemonRouter.RunProcess.CompactionTrigger do
     with %ResumeToken{} = resume <- normalize_resume_token(extract_completed_resume(event)),
          {_ok, error} <- extract_completed_ok_and_error(event),
          false <- context_length_exceeded_error?(error),
-         key when is_binary(key) <- state.session_key do
+         key when is_binary(key) <- state.session_key,
+         %ExecutionCommand{} = request <- state.execution_request,
+         :ok <- ResumeResolver.bind(resume, request) do
       LemonCore.ChatStateStore.put(key, %LemonCore.ChatState{
         last_engine: resume.engine,
         last_resume_token: resume.value,

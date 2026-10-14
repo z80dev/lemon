@@ -169,6 +169,64 @@ defmodule LemonControlPlane.NamedNodeIntegrationTest do
              )
   end
 
+  test "public native invocation cannot attest memory authority with raw booleans or aliases" do
+    parent = self()
+    node = unique("native-authority")
+    connection = spawn_node(parent, :native_authority)
+    put_node(node, "Native Authority")
+    :ok = LemonCore.NodeRegistry.register(node, "Native Authority", connection)
+    ctx = %{@operator_ctx | conn_pid: self()}
+
+    aliases = [
+      :memory_context_verified, "memory_context_verified",
+      :memoryContextVerified, "memoryContextVerified",
+      :shared_memory_grant, "shared_memory_grant",
+      :sharedMemoryGrant, "sharedMemoryGrant",
+      :invocation_proof, "invocation_proof",
+      :invocationProof, "invocationProof",
+      :invocation_proof_verified, "invocation_proof_verified",
+      :invocationProofVerified, "invocationProofVerified",
+      :native_lineage_handle, "native_lineage_handle",
+      :nativeLineageHandle, "nativeLineageHandle",
+      :native_lineage_run_id, "native_lineage_run_id",
+      :nativeLineageRunId, "nativeLineageRunId",
+      :native_destination_pid, "native_destination_pid",
+      :nativeDestinationPid, "nativeDestinationPid",
+      :native_destination_generation, "native_destination_generation",
+      :nativeDestinationGeneration, "nativeDestinationGeneration",
+      :native_source_profile_id, "native_source_profile_id",
+      :nativeSourceProfileId, "nativeSourceProfileId",
+      :native_source_session_key, "native_source_session_key",
+      :nativeSourceSessionKey, "nativeSourceSessionKey",
+      :native_followup_submit, "native_followup_submit",
+      :nativeFollowupSubmit, "nativeFollowupSubmit",
+      :native_source_floor_fun, "native_source_floor_fun",
+      :nativeSourceFloorFun, "nativeSourceFloorFun",
+      :native_managed_context, "native_managed_context",
+      :nativeManagedContext, "nativeManagedContext",
+      :native_root_binding, "native_root_binding",
+      :nativeRootBinding, "nativeRootBinding"
+    ]
+
+    for field <- aliases, proof <- [false, true] do
+      assert {:error, {:forbidden, _}} =
+               NodeInvoke.handle(%{"nodeId" => node, "method" => "coding_agent.run",
+                                    "args" => %{"meta" => %{field => proof}}}, ctx)
+    end
+
+    mixed = %{"memory_context_verified" => true, "sharedMemoryGrant" => true,
+              memory_context_verified: false, shared_memory_grant: false}
+    assert {:error, {:forbidden, _}} =
+             NodeInvoke.handle(%{"nodeId" => node, "method" => "coding_agent.run",
+                                  "args" => %{meta: mixed}}, ctx)
+    shadowed_meta = %{"meta" => %{"nativeLineageHandle" => "caller-handle"}, meta: %{}}
+    assert {:error, {:forbidden, _}} =
+             NodeInvoke.handle(%{"nodeId" => node, "method" => "coding_agent.run",
+                                  "args" => shadowed_meta}, ctx)
+    refute_receive {:native_authority, {:node_event, "node.invoke.request", _}}, 50
+    refute_receive {:node_event, "node.invoke.request", _}, 50
+  end
+
   test "authenticated node websocket owns live registration and targeted frames" do
     node_id = unique("ws-node")
     node_name = "WS Node #{System.unique_integer([:positive])}"

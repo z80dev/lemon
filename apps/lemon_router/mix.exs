@@ -28,6 +28,7 @@ defmodule LemonRouter.MixProject do
     [
       {:lemon_ai, in_umbrella: true},
       {:lemon_core, in_umbrella: true},
+      {:lemon_mcp, in_umbrella: true, runtime: false},
       {:lemon_memory, in_umbrella: true},
       {:lemon_media, in_umbrella: true},
       {:lemon_channels, in_umbrella: true},
@@ -35,6 +36,7 @@ defmodule LemonRouter.MixProject do
       {:bandit, "~> 1.5"},
       {:plug, "~> 1.16"},
       {:jason, "~> 1.4"},
+      {:req, "~> 0.5"},
       # RoutingFeedbackStore talks to SQLite directly; lemon_core only carries
       # :exqlite as an optional dep.
       {:exqlite, "~> 0.34.0"},

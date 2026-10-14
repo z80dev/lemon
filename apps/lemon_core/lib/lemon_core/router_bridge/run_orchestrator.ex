@@ -27,7 +27,14 @@ defmodule LemonCore.RouterBridge.RunOrchestrator do
   @doc "Read a fixed-ID receipt without dispatch."
   @callback run_receipt(binary()) :: {:ok, map()} | {:error, term()}
 
-  @optional_callbacks submit_with_receipt: 1, run_receipt: 1
+  @doc "Admit a fresh fixed-ID native execution from private owner provenance."
+  @callback submit_native_followup(map(), RunRequest.t()) :: {:ok, binary()} | {:error, term()}
+
+  @doc "Seal actual executing-host native startup policy from private owner provenance."
+  @callback register_native_source_floor(map(), map()) :: :ok | {:error, term()}
+
+  @optional_callbacks submit_with_receipt: 1, run_receipt: 1, submit_native_followup: 2,
+                      register_native_source_floor: 2
 
   defmacro __using__(_opts) do
     quote do

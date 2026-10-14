@@ -219,6 +219,7 @@ defmodule LemonRouter.RunProcess do
       agent_id:
         LemonCore.MapHelpers.get_key(state.execution_request.meta || %{}, :agent_id) ||
           LemonCore.SessionKey.agent_id(state.session_key),
+      profile_id: LemonCore.MapHelpers.get_key(state.execution_request.meta || %{}, :profile_id),
       engine: "lemon",
       started_at_ms: state.run_started_at_ms || state.start_ts_ms
     }
@@ -232,25 +233,33 @@ defmodule LemonRouter.RunProcess do
       state.gateway_submitted? or state.aborted or state.completed ->
         {:noreply, state}
 
-      runtime_available?(state.engine_runtime) ->
-        case submit_runtime_execution(state.engine_runtime, state) do
+      true ->
+        case LemonRouter.NativeLineage.validate_activation(state.execution_request) do
           :ok ->
-            Logger.debug(
-              "RunProcess submitted to gateway run_id=#{inspect(state.run_id)} " <>
-                "session_key=#{inspect(state.session_key)}"
-            )
+            if runtime_available?(state.engine_runtime) do
+              case submit_runtime_execution(state.engine_runtime, state) do
+                :ok ->
+                  Logger.debug(
+                    "RunProcess submitted to gateway run_id=#{inspect(state.run_id)} " <>
+                      "session_key=#{inspect(state.session_key)}"
+                  )
 
-            {:noreply,
-             state
-             |> cancel_gateway_submit_deadline()
-             |> Map.merge(%{gateway_submitted?: true, gateway_submit_attempt: 0})}
+                  {:noreply,
+                   state
+                   |> cancel_gateway_submit_deadline()
+                   |> Map.merge(%{gateway_submitted?: true, gateway_submit_attempt: 0})}
+
+                {:error, reason} ->
+                  retry_runtime_submission(state, reason, "Engine runtime rejected submit")
+              end
+            else
+              retry_runtime_submission(state, :runtime_unavailable, "Engine runtime unavailable")
+            end
 
           {:error, reason} ->
-            retry_runtime_submission(state, reason, "Engine runtime rejected submit")
+            # A failed pre-send fence cannot authorize a retry or a new F.
+            {:noreply, terminalize_gateway_submission(%{state | gateway_submit_last_error: reason})}
         end
-
-      true ->
-        retry_runtime_submission(state, :runtime_unavailable, "Engine runtime unavailable")
     end
   end
 
@@ -292,6 +301,7 @@ defmodule LemonRouter.RunProcess do
   end
 
   def handle_info(%LemonCore.Event{type: :run_completed} = event, state) do
+    :ok = LemonRouter.RunReceiptStore.retain_terminal_evidence(state.run_id)
     {ok?, err} = CompactionTrigger.extract_completed_ok_and_error(event)
     usage = CompactionTrigger.extract_completed_usage(event)
 

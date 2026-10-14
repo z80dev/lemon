@@ -90,4 +90,16 @@ defmodule LemonCore.RunRequestTest do
                nil
     end
   end
+
+  test "trusted invocation contexts accept bounded opaque digests and reject ambiguous keys" do
+    for key <- [String.duplicate("a", 64), "hmac_v2:Abc-123.def", String.duplicate("x", 128)] do
+      assert :ok = RunRequest.validate_invocation_context_key(key)
+    end
+
+    for key <- [nil, "", false, 42, %{}, " private", "line\nbreak", "é", "_prefix",
+                String.duplicate("x", 129)] do
+      assert {:error, :invalid_invocation_context_key} =
+               RunRequest.validate_invocation_context_key(key)
+    end
+  end
 end

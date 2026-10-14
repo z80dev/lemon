@@ -489,7 +489,9 @@ defmodule LemonRouter.RunOrchestratorTest do
           queue_mode: :collect,
           cwd: "/tmp/semantic-a",
           tool_policy: %{allow: ["read"]},
-          meta: %{execution_node: "local", semantic_option: "a"}
+          meta: %{execution_node: "local", semantic_option: "a", invocation_context_key: "principal-a",
+                  memory_context_key: "private-audience-a", memory_context_verified: true,
+                  shared_memory_grant: false}
         })
 
       assert {:ok, ^run_id} = RunOrchestrator.submit(orchestrator, original)
@@ -501,7 +503,12 @@ defmodule LemonRouter.RunOrchestratorTest do
             %{original | cwd: "/tmp/semantic-b"},
             %{original | tool_policy: %{allow: ["write"]}},
             %{original | agent_id: "other-agent"},
-            %{original | meta: %{execution_node: "remote", semantic_option: "a"}}
+            %{original | meta: %{execution_node: "remote", semantic_option: "a"}},
+            %{original | meta: Map.put(original.meta, :invocation_context_key, "principal-b")},
+            %{original | meta: Map.delete(original.meta, :invocation_context_key)},
+            %{original | meta: Map.put(original.meta, :memory_context_key, "shared-room-a")},
+            %{original | meta: Map.put(original.meta, :memory_context_verified, false)},
+            %{original | meta: Map.put(original.meta, :shared_memory_grant, true)}
           ] do
         assert {:error, :run_id_conflict} = RunOrchestrator.submit(orchestrator, conflicting)
       end
@@ -631,7 +638,9 @@ defmodule LemonRouter.RunOrchestratorTest do
 
         assert %{state: "submitting", identity: identity} = submitting_receipt
         assert is_binary(identity)
-        assert Map.keys(submitting_receipt) |> Enum.sort() == [:identity, :state]
+        assert submitting_receipt.scope == %{
+                 session_key: replay.session_key, agent_id: "test", profile_id: nil
+               }
 
         secret = "legacy-submitting-secret-#{label}"
 
@@ -759,6 +768,7 @@ defmodule LemonRouter.RunOrchestratorTest do
       on_exit(fn ->
         LemonCore.Store.delete(RunOrchestrator.admission_table(), run_id)
         LemonCore.Store.delete(:runs, run_id)
+        LemonCore.Store.delete(:native_resume_contexts, {:run, run_id})
       end)
 
       opts = [
@@ -877,7 +887,7 @@ defmodule LemonRouter.RunOrchestratorTest do
 
       assert %{state: "accepted", identity: identity} = accepted_receipt
       assert is_binary(identity)
-      assert Map.keys(accepted_receipt) |> Enum.sort() == [:identity, :state]
+      assert accepted_receipt.scope.session_key == accepted.session_key
 
       secret = "legacy-accepted-session-secret"
 
