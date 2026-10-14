@@ -127,7 +127,10 @@ extension LemonBotStore {
             do {
                 let value: Conversation = try await read("/conversations/\(HTTPTransport.pathID(id))")
                 resolved = !value.humanUserIds.contains(account.userID)
-            } catch let error as BackendError where error.status == 404 { resolved = true }
+            } catch let error as BackendError where error.status == 404 {
+                // Private-resource 404 also means invisible; it is not a leave receipt.
+                resolved = false
+            }
             if resolved { clearConversationAccess(id) }
         } else if parts.count >= 2 {
             let base = "/" + parts[0] + "/" + (try HTTPTransport.pathID(parts[1].removingPercentEncoding ?? parts[1]))
@@ -142,20 +145,18 @@ extension LemonBotStore {
             case "consents": let value: ConnectorConsent = try await read(base); resolved = settledGate(value.gate)
             case "runs":
                 let value: Run = try await read(base)
-                resolved = value.status != "outcome_unknown" && value.status != "reserved"
+                if parts.last == "cancel" { resolved = ["succeeded", "failed", "cancelled"].contains(value.status) }
+                else { resolved = value.status != "outcome_unknown" && value.status != "reserved" }
             default:
                 if intent.method == "DELETE" {
                     do { let _: JSONObject = try await read(base) }
-                    catch let error as BackendError where error.status == 404 { resolved = true }
-                } else if let revision = intent.expectedRevision, parts.count == 2 {
-                    let value: JSONObject = try await read(base)
-                    resolved = (value["revision"]?.intValue ?? 0) > revision && value["state"]?.stringValue != "outcome_unknown" && value["status"]?.stringValue != "outcome_unknown"
+                    catch let error as BackendError where error.status == 404 {
+                        // ACL invisibility is indistinguishable from deletion. Keep the
+                        // original intent fenced without an authoritative operation receipt.
+                        resolved = false
+                    }
                 }
             }
-        }
-        if !resolved, parts.count == 1, let revision = intent.expectedRevision {
-            let value: JSONObject = try await read(intent.path)
-            resolved = (value["revision"]?.intValue ?? 0) > revision
         }
         if !resolved, parts.count == 1, !intent.resourceIDs.isEmpty, let family = parts.first,
            ["bots", "machines", "conversations", "sections", "attachments", "skills", "routines", "host-operations"].contains(family) {

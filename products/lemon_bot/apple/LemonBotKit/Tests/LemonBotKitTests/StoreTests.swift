@@ -225,7 +225,12 @@ import Foundation
         XCTAssertEqual(store.cursor, "0")
     }
     func testOwnGroupLeaveRemovesOnlyOwnCachedRoomAndOtherMemberRefreshes() async throws {
-        let store = try store()
+        let persistence = persistence(), store = try store(persistence)
+        XCTAssertTrue(store.setLocalDraft(conversationID: "chat", text: "Unsent group draft", attachmentIDs: []))
+        let source = try XCTUnwrap(roots.last).appendingPathComponent("selected-original.bin")
+        try Data([1, 2, 3]).write(to: source)
+        let staged = try store.stageDraftFile(source, conversationID: "chat")
+        try persistence.saveDraft(LocalComposerDraft(text: "Other account"), conversationID: "chat", accountID: "other")
         var payload = try JSONDecoder().decode([JSONObject].self, from: WireFixtures.events).first { $0["event"]?.stringValue == "conversation.upserted" }!["payload"]!.objectValue!
         payload["id"] = .string("chat"); payload["kind"] = .string("group"); payload["humanUserIds"] = .array([.string("resource"), .string("other")])
         let room = try JSONDecoder().decode(Conversation.self, from: JSONEncoder().encode(payload))
@@ -238,8 +243,13 @@ import Foundation
         try await store.apply(RealtimeEvent(seq: "1", payload: .conversationLeft(RealtimeConversationLeft(conversationId: "chat", userId: "other")), timestampMs: 1))
         XCTAssertEqual(store.conversations.first?.humanUserIds, ["resource"])
         XCTAssertNotNil(store.entries["chat"])
+        XCTAssertEqual(try persistence.loadDraft(conversationID: "chat", accountID: "account")?.text, "Unsent group draft")
         try await store.apply(RealtimeEvent(seq: "2", payload: .conversationLeft(RealtimeConversationLeft(conversationId: "chat", userId: "resource")), timestampMs: 1))
         XCTAssertTrue(store.conversations.isEmpty); XCTAssertNil(store.entries["chat"]); XCTAssertNil(store.selectedConversationID)
+        XCTAssertNil(try persistence.loadDraft(conversationID: "chat", accountID: "account"))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: staged.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: source.path))
+        XCTAssertEqual(try persistence.loadDraft(conversationID: "chat", accountID: "other")?.text, "Other account")
         XCTAssertEqual(TestHTTPProtocol.requests.count, 1)
     }
     func testDirtyLocalComposerDoesNotAdoptRemoteRevisionSilently() async throws {
@@ -283,5 +293,90 @@ import Foundation
         XCTAssertEqual(store.entries["chat"]?.first?.id, "authored")
         XCTAssertEqual(store.runs.first?.status, "failed")
         XCTAssertEqual(TestHTTPProtocol.requests.map(\.httpMethod), ["POST", "GET", "GET"])
+    }
+    func testTaskNotificationWithExactTaskConversationFetchesAndSelectsItsEntry() async throws {
+        let store = try store()
+        let snapshot = try JSONDecoder().decode(Snapshot.self, from: WireFixtures.snapshot)
+        let events = try JSONDecoder().decode([RealtimeEvent].self, from: WireFixtures.events)
+        guard let botEvent = events.first(where: { $0.event == "bot.upserted" }),
+              case .botUpserted(let bot) = botEvent.payload,
+              let roomEvent = events.first(where: { $0.event == "conversation.upserted" }),
+              case .conversationUpserted(var task) = roomEvent.payload else { return XCTFail("Required resource fixtures missing") }
+        task.id = "task_exact"; task.kind = "task"; task.parentConversationId = "main_parent"; task.botIds = [bot.id]
+        var entry = try message("Reviewed task result")
+        if case .message(var value) = entry { value.conversationId = task.id; value.streaming = false; entry = .message(value) }
+        let room = task, targetEntry = entry
+        TestHTTPProtocol.handler = { request in
+            XCTAssertEqual(request.httpMethod, "GET")
+            switch request.url?.path {
+            case "/v1/workspace": return (200, [:], try JSONEncoder().encode(snapshot.workspace))
+            case "/v1/bots/resource": return (200, [:], try JSONEncoder().encode(bot))
+            case "/v1/conversations/task_exact": return (200, [:], try JSONEncoder().encode(room))
+            case "/v1/entries/resource": return (200, [:], try JSONEncoder().encode(targetEntry))
+            case "/v1/conversations/task_exact/entries": return (200, [:], try JSONEncoder().encode(Page(items: [targetEntry], nextCursor: nil)))
+            case "/v1/conversations/task_exact/composer": return (200, [:], try JSONEncoder().encode(ComposerDraft(conversationId: room.id, text: "", attachmentIds: [], replyToEntryId: nil, updatedAtMs: 1, revision: 1)))
+            default: throw URLError(.unsupportedURL)
+            }
+        }
+        let url = try XCTUnwrap(URL(string: "lemonbot://workspace/resource/bot/resource?conversationId=task_exact&taskConversationId=task_exact&entryId=resource"))
+        try await store.navigate(url)
+        XCTAssertEqual(store.selectedConversationID, "task_exact")
+        XCTAssertEqual(store.navigationTarget?.entryID, "resource")
+        XCTAssertEqual(store.entries["task_exact"]?.first?.text, "Reviewed task result")
+        XCTAssertTrue(TestHTTPProtocol.requests.allSatisfy { $0.httpMethod == "GET" })
+    }
+}
+
+extension StoreTests {
+    func testInvisibleResourceDoesNotProveUnknownDeletionCompleted() async throws {
+        let store = try store()
+        let intent = MutationIntent(clientNonce: "delete_fenced_123456", method: "DELETE", path: "/bots/private_bot", expectedRevision: 2, state: "outcome_unknown")
+        store.pendingIntents = [intent]
+        TestHTTPProtocol.handler = { request in
+            XCTAssertEqual(request.httpMethod, "GET")
+            return (404, [:], Data(#"{"error":{"code":"not_found","message":"Not found or invisible.","requestId":"req_acl","retrySafe":true}}"#.utf8))
+        }
+        let resolved = try await store.reconcileMutation(intent.clientNonce)
+        XCTAssertFalse(resolved)
+        XCTAssertEqual(store.pendingIntents, [intent])
+    }
+
+    func testUnrelatedRevisionDoesNotReleaseOriginalMutationFence() async throws {
+        let store = try store()
+        let intent = MutationIntent(clientNonce: "edit_fenced_123456", method: "PATCH", path: "/bots/resource", expectedRevision: 2, state: "outcome_unknown")
+        store.pendingIntents = [intent]
+        TestHTTPProtocol.handler = { request in
+            XCTAssertEqual(request.httpMethod, "GET")
+            return (200, [:], Data(#"{"id":"resource","revision":99}"#.utf8))
+        }
+        let resolved = try await store.reconcileMutation(intent.clientNonce)
+        XCTAssertFalse(resolved)
+        XCTAssertEqual(store.pendingIntents, [intent])
+    }
+
+    func testUnknownStopRequiresObservedTerminalRunBeforeReleasingFence() async throws {
+        let store = try store()
+        let intent = MutationIntent(clientNonce: "stop_fenced_123456", method: "POST", path: "/runs/resource/cancel", state: "outcome_unknown")
+        store.pendingIntents = [intent]
+        let events = try JSONDecoder().decode([RealtimeEvent].self, from: WireFixtures.events)
+        guard let event = events.first(where: { $0.event == "run.upserted" }), case .runUpserted(var run) = event.payload else { return XCTFail("Run fixture missing") }
+        run.status = "running"
+        let active = run
+        TestHTTPProtocol.handler = { request in
+            XCTAssertEqual(request.httpMethod, "GET")
+            return (200, [:], try JSONEncoder().encode(active))
+        }
+        let stillUnknown = try await store.reconcileMutation(intent.clientNonce)
+        XCTAssertFalse(stillUnknown)
+        XCTAssertEqual(store.pendingIntents, [intent])
+        run.status = "cancelled"
+        let cancelled = run
+        TestHTTPProtocol.handler = { request in
+            XCTAssertEqual(request.httpMethod, "GET")
+            return (200, [:], try JSONEncoder().encode(cancelled))
+        }
+        let verifiedTerminal = try await store.reconcileMutation(intent.clientNonce)
+        XCTAssertTrue(verifiedTerminal)
+        XCTAssertTrue(store.pendingIntents.isEmpty)
     }
 }

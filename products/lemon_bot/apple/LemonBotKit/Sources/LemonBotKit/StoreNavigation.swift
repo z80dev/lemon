@@ -24,8 +24,11 @@ extension LemonBotStore {
         }
         var selectedID = conversation?.id
         if let id = target.taskConversationID {
-            let task: Conversation = try await read("/conversations/\(HTTPTransport.pathID(id))")
-            guard task.kind == "task", task.parentConversationId == conversation?.id, let bot, task.botIds.contains(bot.id) else { throw ClientError.invalidDeepLink }
+            let task: Conversation
+            if let conversation, conversation.id == id { task = conversation }
+            else { task = try await read("/conversations/\(HTTPTransport.pathID(id))") }
+            guard task.kind == "task", let bot, task.botIds.contains(bot.id),
+                  task.id == conversation?.id || task.parentConversationId == conversation?.id else { throw ClientError.invalidDeepLink }
             selectedID = task.id
         }
         var targetEntry: TranscriptEntry?

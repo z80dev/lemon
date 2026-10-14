@@ -124,6 +124,12 @@ public final class ClientPersistence {
         guard url.isFileURL, url.standardizedFileURL.resolvingSymlinksInPath().deletingLastPathComponent() == expected else { return }
         if FileManager.default.fileExists(atPath: url.path) { try FileManager.default.removeItem(at: url) }
     }
+    public func clearDraft(conversationID: ID, accountID: String) throws {
+        for url in [path(accountID, "drafts/" + Self.digest(conversationID) + ".json"),
+                    path(accountID, "draft-files/" + Self.digest(conversationID))] {
+            if FileManager.default.fileExists(atPath: url.path) { try FileManager.default.removeItem(at: url) }
+        }
+    }
     public func saveSettings(_ settings: ClientLocalSettings, accountID: String) throws { try save(settings, at: path(accountID, "settings.json")) }
     public func loadSettings(accountID: String) throws -> ClientLocalSettings? {
         let url = path(accountID, "settings.json")

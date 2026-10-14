@@ -7,21 +7,13 @@ import SwiftUI
 import UniformTypeIdentifiers
 import UserNotifications
 
-struct MacLocalSettings: Codable, Equatable {
-    var summonShortcut: String?
-    var pushToTalkShortcut: String?
-    var micCuesEnabled = true
-    var selectedBotId: String?
-    var compactCompanionEnabled = false
-    var reducedMotion = "system"
-}
 
 @MainActor
 @Observable
 final class MacPlatformController: NSObject {
     let store: LemonBotStore
     let speech = MacSpeechCapture()
-    var settings = MacLocalSettings()
+    var settings = ClientLocalSettings(micCuesEnabled: true, compactCompanionEnabled: false, reducedMotion: "system")
     var errorMessage: String?
     var speechStatus: String?
     var busy = false
@@ -111,9 +103,7 @@ final class MacPlatformController: NSObject {
         notificationBaseline = false
         spokenEntryIDs.removeAll()
         do {
-            if let local = store.localSettings {
-                settings = try JSONDecoder().decode(MacLocalSettings.self, from: JSONEncoder().encode(local))
-            } else { settings = MacLocalSettings() }
+            settings = store.localSettings ?? ClientLocalSettings(micCuesEnabled: true, compactCompanionEnabled: false, reducedMotion: "system")
             try hotkeys.configure(summon: store.account == nil ? nil : settings.summonShortcut, pushToTalk: store.account == nil ? nil : settings.pushToTalkShortcut)
             if store.account != nil {
                 try await store.registerDevice(platform: "macos", name: Host.current().localizedName ?? "Mac")
@@ -127,11 +117,10 @@ final class MacPlatformController: NSObject {
         } catch { errorMessage = error.localizedDescription }
     }
 
-    func saveSettings(_ value: MacLocalSettings) {
+    func saveSettings(_ value: ClientLocalSettings) {
         do {
             try hotkeys.configure(summon: value.summonShortcut, pushToTalk: value.pushToTalkShortcut)
-            let wire = try JSONDecoder().decode(ClientLocalSettings.self, from: JSONEncoder().encode(value))
-            try store.saveLocalSettings(wire)
+            try store.saveLocalSettings(value)
             settings = value
             updateCompanion()
         } catch {

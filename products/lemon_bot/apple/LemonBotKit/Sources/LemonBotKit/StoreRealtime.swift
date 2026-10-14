@@ -165,6 +165,10 @@ extension LemonBotStore {
         runs.removeAll { $0.conversationId == id }; typingByConversation[id] = nil
         if selectedConversationID == id { selectedConversationID = nil }
         if visibleConversationID == id { visibleConversationID = nil }
+        if let account {
+            do { try persistence.clearDraft(conversationID: id, accountID: account.id) }
+            catch { errorMessage = error.localizedDescription }
+        }
     }
     func advanceCursor(_ value: Cursor, on socket: URLSessionWebSocketTask) async throws {
         try commitCursor(value)
@@ -201,7 +205,15 @@ extension LemonBotStore {
         case .conversationDeleted(let value):
             clearConversationAccess(value.id)
         case .conversationLeft(let value):
-            if value.userId == (user?.id ?? account?.userID) { clearConversationAccess(value.conversationId) }
+            if value.userId == (user?.id ?? account?.userID) {
+                clearConversationAccess(value.conversationId)
+                if let account {
+                    let path = "/conversations/\(try HTTPTransport.pathID(value.conversationId))/leave"
+                    for intent in pendingIntents.filter({ $0.method == "POST" && $0.path == path }) {
+                        finishIntent((account.id, intent.clientNonce))
+                    }
+                }
+            }
             else if conversations.contains(where: { $0.id == value.conversationId }) {
                 do {
                     let updated: Conversation = try await read("/conversations/\(HTTPTransport.pathID(value.conversationId))")

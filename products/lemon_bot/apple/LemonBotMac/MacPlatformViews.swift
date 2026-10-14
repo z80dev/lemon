@@ -168,7 +168,7 @@ struct MacVoiceView: View {
 
 struct MacSettingsView: View {
     @Bindable var controller: MacPlatformController
-    @State private var value = MacLocalSettings()
+    @State private var value = ClientLocalSettings(micCuesEnabled: true, compactCompanionEnabled: false, reducedMotion: "system")
     @State private var summon = ""
     @State private var ptt = ""
     var body: some View {

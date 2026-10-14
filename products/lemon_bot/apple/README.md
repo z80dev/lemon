@@ -35,9 +35,13 @@ Enter the product origin (for local development `http://127.0.0.1:4080`, not Lem
 
 Accounts are stored in Keychain, keyed by backend/account. Account switching keeps workspace state separate. Sign-out revokes the session and removes its local account cache. There is no refresh token or mutation retry queue: uncertain work remains identifiable for reconciliation, not silently resubmitted.
 
+An opaque creation timeout without returned IDs stays fenced when the server exposes no authoritative nonce-read receipt. Likewise a private-resource 404 or unrelated newer revision does not prove the original deletion/edit completed. The inspector reports unresolved rather than inventing success or retrying; unknown Stop waits for an observed terminal run, and a persisted own `conversation.left` event authoritatively confirms membership loss.
+
 ## Native workspace
 
 The primary navigation is a named Bot roster, with pinned Bots, synced sections, groups, hidden Bots and unread/activity indicators. macOS uses roster, conversation and inspector; iOS adapts split navigation to the available width. Bot identity, Job and scoped Memory remain distinct. The selected Bot shows its actual execution machine, current work and reviewed artifacts, with Activity + Upcoming, Ideas that draft rather than execute, preference inspection/Undo, grants, templates and milestone evidence.
+
+Group Leave is distinct from deleting the conversation. A departing creator explicitly chooses an existing human successor; the last human uses a deletion preview. Caller-owned active/unknown work must reach verified terminal state before departure. Authoritative membership loss clears this account's local room draft and copied staging files, not the user's selected originals, other accounts or the remaining group's history.
 
 The transcript renders the declared entry/card families with attributable actors and durable states. Questions are ordinary non-secret fields; secrets use a masked write-only destination flow. Approvals show the exact target, Bot, host, review scope and consequences. Only the targeted user can explicitly act before expiry; approval is not proof an external action completed. Email/Slack/channel drafts expose edited recipients, target/thread, body and files before Send. Unknown delivery is not Sent. Replies, reactions and feedback never resolve gates. Stop reports the server's actual run state; queued, steering and interrupting labels come from the receipt.
 
