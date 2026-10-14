@@ -87,7 +87,7 @@ function fixture() {
     resource<T extends object>(prefix:string,fields:T):T & P.Resource {return {...fields,id:`${prefix}_${++serial}`,revision:1,createdAtMs:now,updatedAtMs:now};},
     update<T extends {revision:number;updatedAtMs:number}>(row:T,changes:Partial<T>):T {return {...row,...changes,revision:row.revision+1,updatedAtMs:now};},
     page<T>(_context:RequestContext,items:T[]):P.Page<T>{return {items,nextCursor:null};},
-    audit(){return {};},async syncBotProfile(botId:string){calls.push({method:'syncBotProfile',params:{botId}});},
+    audit(){return {};},async syncBotProfile(actor:Principal,botId:string){calls.push({method:'syncBotProfile',params:{userId:actor.userId,botId}});},
     encrypt(value:unknown){return JSON.stringify(value);},
     decrypt<T>(value:string):T{return JSON.parse(value) as T;},
   };
@@ -238,7 +238,7 @@ describe('resource authority and lifecycle boundaries',()=>{
   });
   test('scheduled admission rejects invalid identity and disabled creators before native dispatch',async()=>{
     const f=fixture();try{
-      f.store.put('bots',{...f.bot,visibility:'team',published:true});
+      f.store.put('bots',{...f.bot,ownerUserId:other.userId,visibility:'team',published:true});
       const routine=await f.request<P.Routine>('POST','/v1/routines',routineInput(f.bot.id),{},other);
       const token=String(f.calls.find(item=>item.method==='cron.admission.set')?.params.token);
       const context={jobId:routine.cronJobId!,profileId:f.bot.profileId,routineId:routine.id,creatorId:other.userId,workspaceId:owner.workspaceId,cronRunId:'cron_run',routerRunId:'native_run',triggeredBy:'schedule',scheduledForMs:f.services.now()+300000};
@@ -324,6 +324,48 @@ describe('resource authority and lifecycle boundaries',()=>{
       const context={jobId:routine.cronJobId!,profileId:f.bot.profileId,routineId:routine.id,creatorId:owner.userId,workspaceId:owner.workspaceId,cronRunId:'too_soon',routerRunId:'too_soon_native',triggeredBy:'schedule',scheduledForMs};
       const result=await f.request<{allow:boolean}>('POST','/internal/cron/admission',context,{},null,'',{authorization:`Bearer ${token}`});
       expect(result.allow).toBe(false);expect(f.store.list('routineRuns')).toHaveLength(0);expect(f.store.metadata('nativeRunProduct:too_soon_native')).toBeNull();
+    }finally{f.close();}
+  });
+  test('foreign Bot routine creation and trusted import are rejected before allocating resources or native work',async()=>{
+    const f=fixture();try{
+      f.store.put('bots',{...f.bot,visibility:'team',published:true,managerUserIds:[other.userId]});
+      for(const actor of [other,admin])await expect(f.request('POST','/v1/routines',routineInput(f.bot.id),{},actor)).rejects.toMatchObject({code:'forbidden'});
+      f.store.setMetadata(`botLifecycle:${f.bot.id}`,{action:'import',status:'pending',userId:other.userId});
+      await expect(f.request('POST','/v1/routines',routineInput(f.bot.id),{},other,'',{}, {botId:f.bot.id,userId:other.userId,action:'import'})).rejects.toMatchObject({code:'forbidden'});
+      expect(f.calls).toHaveLength(0);expect(f.store.list('routines')).toHaveLength(0);expect(f.store.list('conversations')).toHaveLength(0);
+    }finally{f.close();}
+  });
+  test('legacy collaborator routines cannot edit, test, accept hooks/events, or appear in personal history/search',async()=>{
+    const f=fixture();try{
+      f.store.put('bots',{...f.bot,visibility:'team',published:true,managerUserIds:[other.userId]});
+      const routine=await f.request<P.Routine>('POST','/v1/routines',routineInput(f.bot.id,{kind:'webhook'}));
+      const key=await f.request<P.WebhookKey>('POST','/v1/routines/:id/webhook-key',{clientNonce:nonce},{id:routine.id});
+      const legacy=f.store.require<P.Routine & {conversationId:string}>('routines',routine.id);
+      f.store.put('routines',{...legacy,ownerUserId:other.userId});
+      await expect(f.request('PATCH','/v1/routines/:id',{clientNonce:nonce+'edit',revision:routine.revision,enabled:false},{id:routine.id},other)).rejects.toMatchObject({code:'forbidden'});
+      await expect(f.request('POST','/v1/routines/:id/test',{clientNonce:nonce+'test'},{id:routine.id},other)).rejects.toMatchObject({code:'forbidden'});
+      await expect(f.request('GET','/v1/routines/:id/runs',undefined,{id:routine.id},other)).rejects.toMatchObject({code:'forbidden'});
+      await expect(f.request('POST','/hooks/:routineId',{clientNonce:nonce+'hook',payload:{}},{routineId:routine.id},null,'',{authorization:`Bearer ${key.key}`})).rejects.toMatchObject({code:'forbidden'});
+      const listed=await f.request<P.Page<P.Routine>>('GET','/v1/routines',undefined,{},other);expect(listed.items).toHaveLength(0);
+      const searched=await f.request<P.Page<P.SearchHit>>('GET','/v1/search',undefined,{},other,'q=report&kinds=routine');expect(searched.items).toHaveLength(0);
+      f.store.put('routines',{...legacy,ownerUserId:other.userId,trigger:{kind:'external_event',source:'github',eventNames:['issues'],filters:{}}});
+      const source:Principal={...other,kind:'integration',id:'provider_ingress',sessionId:null};
+      await expect(submitEventRoutine(f.services,source,routine.id,{},nonce+'event')).rejects.toMatchObject({code:'forbidden'});
+      expect(f.calls.filter(item=>item.method==='submit')).toHaveLength(0);expect(f.store.list('routineRuns')).toHaveLength(0);
+    }finally{f.close();}
+  });
+  test('cron never grants a legacy creator the Bot owner identity, including replay of prior admission',async()=>{
+    const f=fixture();try{
+      f.store.put('bots',{...f.bot,visibility:'team',published:true});
+      const routine=await f.request<P.Routine>('POST','/v1/routines',routineInput(f.bot.id));
+      const legacy=f.store.require<P.Routine & {conversationId:string}>('routines',routine.id);
+      f.store.put('routines',{...legacy,ownerUserId:other.userId});
+      const token=String(f.calls.find(item=>item.method==='cron.admission.set')?.params.token);
+      const context={jobId:routine.cronJobId!,profileId:f.bot.profileId,routineId:routine.id,creatorId:other.userId,workspaceId:owner.workspaceId,cronRunId:'legacy_creator',routerRunId:'legacy_native',triggeredBy:'schedule',scheduledForMs:f.services.now()+300000};
+      const denied=await f.request<{allow:boolean}>('POST','/internal/cron/admission',context,{},null,'',{authorization:`Bearer ${token}`});expect(denied.allow).toBe(false);
+      f.store.setMetadata(`cronAdmissionReceipt:${context.cronRunId}`,{hash:f.services.mutations.digest(context),state:'complete',receipt:f.services.encrypt({allow:true,context})});
+      const replay=await f.request<{allow:boolean}>('POST','/internal/cron/admission',context,{},null,'',{authorization:`Bearer ${token}`});expect(replay.allow).toBe(false);
+      expect(f.store.list('routineRuns')).toHaveLength(0);expect(f.store.metadata('nativeRunProduct:legacy_native')).toBeNull();expect(f.calls.filter(item=>item.method==='connectorConfig')).toHaveLength(0);
     }finally{f.close();}
   });
 });

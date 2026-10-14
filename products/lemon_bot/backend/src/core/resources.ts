@@ -62,6 +62,16 @@ const querySchemas:Record<string,z.ZodType> = {
 };
 
 function requireOwn(user: Principal, owner: string): void { if (owner !== user.userId) fail('not_found', 'Resource not found.'); }
+/** Routine identity is the current Bot owner; legacy collaborator declarations never inherit owner authority. */
+function routineBot(services:BackendServices,actor:Principal,botId:string):P.Bot {
+  const bot=services.auth.bot(actor,botId);
+  if(bot.ownerUserId!==actor.userId)fail('forbidden','Routines require the current Bot owner.');
+  return bot;
+}
+function canReadRoutine(services:BackendServices,actor:Principal,row:RoutineRow):boolean {
+  const bot=services.store.get<P.Bot>('bots',row.botId);
+  return row.ownerUserId===actor.userId&&bot?.ownerUserId===actor.userId&&services.auth.canRead(actor,'bots',bot);
+}
 function isMaintainer(user: Principal, bot: P.Bot): boolean { return bot.ownerUserId === user.userId || bot.managerUserIds.includes(user.userId); }
 function digest(token: string): string { return createHash('sha256').update(token).digest('hex'); }
 function publicMemory(row:MemoryRow):P.Memory {
@@ -292,7 +302,7 @@ async function dispatchRoutine(services:BackendServices,c:RequestContext,row:Rou
   if(!row.enabled&&kind!=='test')fail('conflict','Routine is paused.');
   if(services.store.metadata<Operation>(`resourceOperation:${row.id}`))fail('outcome_unknown','Routine requires reconciliation.',false);
   const actor=principal(c.user);requireOwn(actor,row.ownerUserId);
-  const bot=services.auth.bot(actor,row.botId);botWritable(services,bot.id);
+  const bot=routineBot(services,actor,row.botId);botWritable(services,bot.id);
   const reserved:P.RoutineRun=services.resource('routineRun',{routineId:row.id,runId:null,conversationId:row.conversationId,trigger:kind,status:'reserved',startedAtMs:null,completedAtMs:null,error:null,costUsd:null});
   services.store.put('routineRuns',reserved);c.nonceResourceIds.push(reserved.id);
   services.store.setMetadata(`pendingRoutineRun:${actor.kind}:${actor.id}:${row.conversationId}:${clientNonce}`,reserved.id);
@@ -332,8 +342,9 @@ export async function submitEventRoutine(services:BackendServices,source:Princip
   const member=services.auth.member(source.userId);if(!member.enabled)fail('forbidden','Routine creator is disabled.');
   const actor:Principal={kind:'user',id:source.userId,userId:source.userId,workspaceId:source.workspaceId,role:member.role,sessionId:null,botId:null,deviceId:null};
   if(actor.workspaceId!==services.store.metadata<string>('workspaceId'))fail('forbidden','Event principal belongs to another workspace.');
+  routineBot(services,actor,row.botId);
   const dispatch=()=>dispatchRoutine(services,context,services.store.require<RoutineRow>('routines',row.id),'event',input.clientNonce,data);
-  const route:Route={method:'POST',path:'/internal/routines/:id/event',auth:'integration',mutation:false,status:202,handler:dispatch,authorizeReplay:()=>{const current=services.store.require<RoutineRow>('routines',row.id);requireOwn(actor,current.ownerUserId);services.auth.bot(actor,current.botId);}};
+  const route:Route={method:'POST',path:'/internal/routines/:id/event',auth:'integration',mutation:false,status:202,handler:dispatch,authorizeReplay:()=>{const current=services.store.require<RoutineRow>('routines',row.id);requireOwn(actor,current.ownerUserId);routineBot(services,actor,current.botId);}};
   const context:RequestContext={request:new Request(new URL(`/internal/routines/${encodeURIComponent(row.id)}/event`,services.config.publicUrl),{method:'POST'}),params:{id:row.id},query:new URLSearchParams(),body:{clientNonce:input.clientNonce,payload:data,providerPrincipal:{kind:source.kind,id:source.id}},user:actor,services,requestId:services.id('req'),route,nonceResourceIds:[]};
   return services.mutations.execute(context,dispatch);
 }
@@ -353,11 +364,13 @@ export function createResourceRoutes(services: BackendServices): Route[] {
       if(path==='/hooks/:routineId') {
         const actor=user(context);const current=services.store.metadata<{id:string}>(`routineKey:${context.params.routineId}`);
         if(actor.kind!=='hook'||current?.id!==actor.id)fail('unauthenticated','Routine webhook credential was revoked.');
+        ownRoutine(context,context.params.routineId!);
       } else if(path==='/v1/routines/:id/webhook-key') {
         const row=ownRoutine(context);const input=parse(mutation,context.body);
         const issued=services.store.metadata<string>(`routineKeyNonce:${row.id}:${input.clientNonce}`);
         if(!issued||services.store.metadata<{id:string}>(`routineKey:${row.id}`)?.id!==issued)fail('expired','This issued webhook key was rotated or revoked.');
       } else if(path.startsWith('/v1/routines/:id'))ownRoutine(context);
+      else if(path==='/v1/routines'){const input=parse(routineCreate,context.body);routineBot(services,user(context),input.botId);}
       else if(path.startsWith('/v1/routine-runs/:id'))ownRoutineRun(context);
       else if(path==='/v1/skills/:id')ownSkill(context,true);
       else if(path.startsWith('/v1/memory/:id')){const row=ownMemory(context);memoryAuthority(user(context),services.auth.bot(user(context),row.botId),row.scope,true);}
@@ -372,7 +385,7 @@ export function createResourceRoutes(services: BackendServices): Route[] {
   function user(c:RequestContext):Principal { return principal(c.user); }
   function ownRoutine(c:RequestContext, routineId=c.params.id!):RoutineRow {
     const row = services.store.require<RoutineRow>('routines',routineId);
-    requireOwn(user(c),row.ownerUserId); services.auth.bot(user(c),row.botId); return row;
+    requireOwn(user(c),row.ownerUserId);routineBot(services,user(c),row.botId);return row;
   }
   function ownSkill(c:RequestContext, manage=false):P.Skill {
     const row = services.store.require<P.Skill>('skills',c.params.id!);
@@ -507,9 +520,9 @@ export function createResourceRoutes(services: BackendServices): Route[] {
         if(prior.hash!==hash)fail('nonce_conflict','Cron invocation identity is bound to a different context.');
         if(!prior.receipt)fail('upstream_unavailable','Previous cron admission is unresolved.',false);
         const member=services.auth.member(row.ownerUserId);
-        if(!member.enabled||!row.enabled||row.trigger.kind!=='schedule'||services.store.metadata(`resourceOperation:${row.id}`)||services.store.metadata(`runtimePolicyFence:${row.botId}:${row.ownerUserId}`))return {allow:false,context:input};
+        if(!member.enabled||!row.enabled||row.trigger.kind!=='schedule'||row.ownerUserId!==bot.ownerUserId||services.store.metadata(`resourceOperation:${row.id}`)||services.store.metadata(`runtimePolicyFence:${row.botId}:${row.ownerUserId}`))return {allow:false,context:input};
         const actor:Principal={kind:'user',id:row.ownerUserId,userId:row.ownerUserId,workspaceId:input.workspaceId,role:member.role,sessionId:null,botId:null,deviceId:null};
-        services.auth.bot(actor,row.botId);botWritable(services,row.botId);
+        routineBot(services,actor,row.botId);botWritable(services,row.botId);
         return services.decrypt<{allow:boolean;context:z.infer<typeof admissionContext>;invocation?:InvocationContext}>(prior.receipt);
       }
       services.store.setMetadata(key,{hash,state:'pending'});
@@ -519,7 +532,7 @@ export function createResourceRoutes(services: BackendServices): Route[] {
         const member=services.auth.member(row.ownerUserId);
         if(!member.enabled||!row.enabled||row.trigger.kind!=='schedule')fail('policy_denied','Routine creator or schedule is disabled.');
         const actor:Principal={kind:'user',id:row.ownerUserId,userId:row.ownerUserId,workspaceId:input.workspaceId,role:member.role,sessionId:null,botId:null,deviceId:null};
-        services.auth.bot(actor,row.botId);
+        routineBot(services,actor,row.botId);
         botWritable(services,row.botId);
         if(services.store.metadata(`resourceOperation:${row.id}`))fail('outcome_unknown','Routine requires reconciliation.',false);
         if(services.store.metadata(`runtimePolicyFence:${row.botId}:${row.ownerUserId}`))fail('outcome_unknown','Creator policy cutover requires reconciliation.',false);
@@ -583,11 +596,11 @@ export function createResourceRoutes(services: BackendServices): Route[] {
       services.events.emit('skill.deleted',result,{userIds:audience});return result;
     });
   }));
-  route('GET','/v1/routines',c=>services.page(c,services.store.list<RoutineRow>('routines',item=>item.ownerUserId===user(c).userId).filter(item=>(!c.query.get('botId')||item.botId===c.query.get('botId'))&&(!c.query.has('enabled')||String(item.enabled)===c.query.get('enabled'))).map(publicRoutine)));
+  route('GET','/v1/routines',c=>services.page(c,services.store.list<RoutineRow>('routines',item=>canReadRoutine(services,user(c),item)).filter(item=>(!c.query.get('botId')||item.botId===c.query.get('botId'))&&(!c.query.has('enabled')||String(item.enabled)===c.query.get('enabled'))).map(publicRoutine)));
   route('GET','/v1/routines/:id',c=>publicRoutine(ownRoutine(c)));
   route('POST','/v1/routines',c=>{
     const input=parse(routineCreate,c.body);return locked(`routineBot:${input.botId}`,async()=>{
-      const u=user(c);const bot=services.auth.bot(u,input.botId);botWritable(services,bot.id,c);await validateTrigger(u,bot,input.trigger);
+      const u=user(c);const bot=routineBot(services,u,input.botId);botWritable(services,bot.id,c);await validateTrigger(u,bot,input.trigger);
       if(services.store.list<P.Routine>('routines',item=>item.botId===bot.id).length>=50)fail('conflict','A bot may have at most 50 routines.');
       const conversation:P.Conversation=services.resource('conversation',{kind:'task',name:input.name,botIds:[bot.id],humanUserIds:[u.userId],ownerUserId:u.userId,parentConversationId:null,leadBotId:null,channelBindingId:null,lastEntryId:null,unreadCount:0,lastReadSeq:0,activity:[]});
       const row:RoutineRow=services.resource('routine',{botId:bot.id,ownerUserId:u.userId,name:input.name,instruction:input.instruction,trigger:input.trigger,enabled:input.enabled,nextRunAtMs:null,scheduleDescription:input.trigger.kind==='schedule'?`${input.trigger.cron} (${input.trigger.timezone})`:input.trigger.kind,lastRunId:null,webhookUrl:null,cronJobId:null,conversationId:conversation.id});
@@ -654,6 +667,7 @@ export function createResourceRoutes(services: BackendServices): Route[] {
     const row=services.store.require<RoutineRow>('routines',c.params.routineId!);if(row.trigger.kind!=='webhook')fail('invalid_request','Routine is not a webhook.');if(!row.enabled)fail('conflict','Routine is paused.');
     const member=services.auth.member(row.ownerUserId);if(!member.enabled)fail('forbidden','Routine creator is disabled.');
     const hookUser:Principal={kind:'hook',id:current.id,userId:row.ownerUserId,workspaceId:services.store.metadata<string>('workspaceId')!,role:member.role,sessionId:null,botId:row.botId,deviceId:null};
+    routineBot(services,hookUser,row.botId);
     const context={...c,user:hookUser,body:input};
     const receipt = await services.mutations.execute(context,()=>locked(`routine:${row.id}`,async()=>{
       if (services.store.metadata<{id:string}>(`routineKey:${row.id}`)?.id!==current.id) fail('unauthenticated','Routine webhook key was revoked.');
@@ -715,7 +729,7 @@ export function createResourceRoutes(services: BackendServices): Route[] {
     if(kinds.includes('group'))for(const conversation of services.store.list<P.Conversation>('conversations',item=>item.kind==='group'&&services.auth.canRead(u,'conversations',item)&&(!conversationId||item.id===conversationId)&&(!botId||item.botIds.includes(botId))))add({kind:'group',conversation},conversation,conversation.name);
     if(kinds.includes('message'))for(const entry of services.store.list<P.TranscriptEntry>('entries',item=>services.auth.canRead(u,'entries',item)&&(!conversationId||item.conversationId===conversationId))){const conversation=services.store.get<P.Conversation>('conversations',entry.conversationId);if(!conversation||botId&&!conversation.botIds.includes(botId))continue;const body='text' in entry && typeof entry.text==='string'?entry.text:'';const index=body.toLowerCase().indexOf(normalized);if(index>=0)add({kind:'message',entry,snippet:body.slice(Math.max(0,index-80),index+normalized.length+160)},entry,body);}
     if(kinds.includes('file'))for(const attachment of services.store.list<P.Attachment>('attachments',item=>services.auth.canRead(u,'attachments',item)&&(!conversationId||item.conversationId===conversationId)&&(!botId||item.botId===botId)))add({kind:'file',attachment},attachment,attachment.filename);
-    if(kinds.includes('routine')&&!conversationId)for(const routine of services.store.list<RoutineRow>('routines',item=>item.ownerUserId===u.userId&&services.auth.canRead(u,'bots',services.store.get('bots',item.botId))&&(!botId||item.botId===botId)))add({kind:'routine',routine:publicRoutine(routine)},routine,`${routine.name} ${routine.instruction}`);
+    if(kinds.includes('routine')&&!conversationId)for(const routine of services.store.list<RoutineRow>('routines',item=>canReadRoutine(services,u,item)&&(!botId||item.botId===botId)))add({kind:'routine',routine:publicRoutine(routine)},routine,`${routine.name} ${routine.instruction}`);
     if(kinds.includes('skill')&&!conversationId)for(const skill of services.store.list<P.Skill>('skills',item=>services.auth.canRead(u,'skills',item)&&(!botId||item.botId===botId)))add({kind:'skill',skill},skill,`${skill.name} ${skill.description} ${skill.markdown}`);
     if(kinds.includes('memory')&&!conversationId)for(const bot of services.store.list<P.Bot>('bots',item=>services.auth.canRead(u,'bots',item)&&(!botId||item.id===botId)))for(const memory of await memories(u,bot,undefined,q))add({kind:'memory',memory},memory,memory.text,memory.scope!=='private_note');
     const ranking=new Map(results.map(row=>[row.hit,`${row.score}:${String(row.at).padStart(16,'0')}:${row.id}`]));
