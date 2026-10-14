@@ -9,6 +9,7 @@ defmodule LemonAi.Providers.StreamingHelper do
   """
 
   alias LemonAi.EventStream
+  alias LemonAi.Types.AssistantMessage
 
   @default_stream_timeout 300_000
   @default_max_queue 10_000
@@ -32,7 +33,20 @@ defmodule LemonAi.Providers.StreamingHelper do
 
     {:ok, task_pid} =
       Task.Supervisor.start_child(LemonAi.StreamTaskSupervisor, fn ->
-        do_stream_fn.(stream, model, context, opts)
+        if opts.api_key_authoritative and opts.api_key in [nil, ""] do
+          message = "A resolved credential is required for provider #{model.provider}."
+
+          EventStream.error(stream, %AssistantMessage{
+            api: model.api,
+            provider: model.provider,
+            model: model.id,
+            stop_reason: :error,
+            error_message: message,
+            error_details: LemonAi.Error.to_error_details(%{category: :auth, message: message})
+          })
+        else
+          do_stream_fn.(stream, model, context, opts)
+        end
       end)
 
     EventStream.attach_task(stream, task_pid)

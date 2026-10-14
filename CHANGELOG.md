@@ -237,6 +237,13 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   selected credential. Default/environment cached metadata no longer bleeds into
   configured native sessions; qualified defaults, provider-native colon IDs and
   existing credential fallback semantics remain supported.
+- Failed selected OAuth logins cannot borrow static or environment credentials
+  or transmit encoded OAuth records. Successful access-token authority and
+  explicit credential-pool/default fallback remain supported.
+  Public selected-credential callbacks also preserve `nil` refusal rather than
+  reviving a cached token.
+- Anthropic-compatible providers no longer implicitly send another provider's
+  `ANTHROPIC_API_KEY`; exact-target API-key and keyless behavior remain supported.
 
 - Provider sign-in status and logout distinguish missing credentials from
   encrypted-store, journal and master-key failures. Failed reads refuse the

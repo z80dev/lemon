@@ -7,7 +7,13 @@ defmodule LemonAgent.ProviderConfigResolver do
 
   Each provider function returns a map of resolved settings that can be
   merged into StreamOptions or used directly by the provider.
+
+  API-key secret fields use credential-aware OAuth resolution, never raw secret
+  bytes. A caller-resolved selected login carries `api_key_authoritative: true`;
+  this preserves its refusal without a second credential lookup or fallback.
   """
+
+  alias LemonAgent.ModelRuntime.Credentials
 
   @doc """
   Resolve stream options for a given provider from canonical config.
@@ -77,12 +83,8 @@ defmodule LemonAgent.ProviderConfigResolver do
     config = get_provider_config("google", opts)
 
     %{
-      api_key:
-        first_non_empty_binary([
-          Map.get(opts, :api_key),
-          config[:api_key],
-          resolve_secret(config[:api_key_secret])
-        ]),
+      api_key: resolve_api_key(:google, opts, config),
+      api_key_authoritative: authority_option(opts, config),
       base_url:
         first_non_empty_binary([
           Map.get(opts, :base_url),
@@ -96,11 +98,7 @@ defmodule LemonAgent.ProviderConfigResolver do
     config = get_provider_config("azure_openai_responses", opts)
     azure_opts = Map.get(opts, :thinking_budgets, %{})
 
-    api_key =
-      Map.get(opts, :api_key) ||
-        resolve_secret(config[:api_key_secret]) ||
-        config[:api_key] ||
-        fetch_secret_value("AZURE_OPENAI_API_KEY")
+    api_key = resolve_api_key(:azure_openai_responses, opts, config)
 
     base_url =
       first_non_empty_binary([
@@ -132,6 +130,7 @@ defmodule LemonAgent.ProviderConfigResolver do
 
     %{
       api_key: api_key,
+      api_key_authoritative: authority_option(opts, config),
       base_url: base_url,
       resource_name: resource_name,
       api_version: api_version,
@@ -185,12 +184,8 @@ defmodule LemonAgent.ProviderConfigResolver do
         config = get_provider_config(provider_name, opts)
 
         %{
-          api_key:
-            first_non_empty_binary([
-              Map.get(opts, :api_key),
-              config[:api_key],
-              resolve_secret(config[:api_key_secret])
-            ]),
+          api_key: resolve_api_key(provider_name, opts, config),
+          api_key_authoritative: authority_option(opts, config),
           base_url:
             first_non_empty_binary([
               Map.get(opts, :base_url),
@@ -201,6 +196,34 @@ defmodule LemonAgent.ProviderConfigResolver do
     end
   end
 
+  defp resolve_api_key(provider, opts, config) do
+    cond do
+      Map.get(opts, :api_key_authoritative, false) ->
+        Map.get(opts, :api_key)
+
+      Credentials.oauth_selected?(config) ->
+        Credentials.resolve_provider_api_key(provider, config, provider_cfg: true)
+
+      provider == :azure_openai_responses ->
+        Map.get(opts, :api_key) ||
+          Credentials.resolve_secret_api_key(config[:api_key_secret]) ||
+          config[:api_key] ||
+          fetch_secret_value("AZURE_OPENAI_API_KEY")
+
+      true ->
+        first_non_empty_binary([
+          Map.get(opts, :api_key),
+          config[:api_key],
+          Credentials.resolve_secret_api_key(config[:api_key_secret])
+        ])
+    end
+  end
+
+  defp authority_option(opts, config) do
+    if Map.get(opts, :api_key_authoritative, false) or Credentials.oauth_selected?(config),
+      do: true
+  end
+
   # ============================================================================
   # Internal helpers
   # ============================================================================
@@ -208,6 +231,7 @@ defmodule LemonAgent.ProviderConfigResolver do
   @provider_config_key_aliases %{
     "access_key_id_secret" => :access_key_id_secret,
     "api_key" => :api_key,
+    "auth_source" => :auth_source,
     "api_key_secret" => :api_key_secret,
     "api_version" => :api_version,
     "base_url" => :base_url,
@@ -215,6 +239,7 @@ defmodule LemonAgent.ProviderConfigResolver do
     "location" => :location,
     "location_secret" => :location_secret,
     "project" => :project,
+    "oauth_secret" => :oauth_secret,
     "project_id" => :project_id,
     "projectId" => :projectId,
     "project_secret" => :project_secret,
