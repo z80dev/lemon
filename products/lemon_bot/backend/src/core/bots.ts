@@ -8,6 +8,7 @@ import { recordPreferenceChange, nativeBotToolPolicy, finalizePreferenceUndos } 
 import { deleteConversationResources } from './conversations';
 import { createAttachmentService } from './attachments';
 import { botSessionKeys } from '../runtime/runs';
+import { configureNativeFollowupAdmission } from '../runtime/admission';
 import { previewBotResources, cancelBotResources } from './gates';
 import { cancelConversationVoice } from './voice';
 
@@ -152,6 +153,7 @@ async function syncSnapshot(s: BackendServices, bot: P.Bot, machine: P.Machine):
   const ack = await s.lemon.call<{ profileId: string; nodeId: string; mutationId: string; acknowledged: boolean; revisionDigest: string }>('profiles.sync', { id: bot.profileId, nodeId: machine.nodeId, mutationId }, { mutation: true, resourceIds: [bot.id] });
   if (!ack.acknowledged || ack.profileId !== bot.profileId || ack.nodeId !== machine.nodeId || ack.mutationId !== mutationId || !/^[a-f0-9]{64}$/.test(ack.revisionDigest)) fail('outcome_unknown', 'Destination persona provisioning was not acknowledged.', false, { resourceIds: [bot.id] });
   s.store.setMetadata(`botProfileSync:${bot.id}`, { ...ack, profileIntentId, completedAtMs: s.now() });
+  await configureNativeFollowupAdmission(s, bot);
 }
 async function issueMcp(s: BackendServices, bot: P.Bot, machine: P.Machine): Promise<void> {
   requireMethods(s, ['node.secrets.set', 'node.secrets.receipt']);
@@ -183,7 +185,7 @@ async function fenced<T>(s: BackendServices, c: RequestContext, botId: string, a
 }
 async function createBot(s: BackendServices, c: RequestContext, input: P.BotCreate): Promise<P.Bot> {
   const p = user(c), machine = online(s, p, input.machineId);
-  requireMethods(s, ['profiles.create', 'profiles.sync', 'node.secrets.set', 'node.secrets.receipt']);
+  requireMethods(s, ['profiles.create', 'profiles.sync', 'node.secrets.set', 'node.secrets.receipt', 'profile.followup.admission.set', 'runs.followup.lineage.get']);
   botEndpoint(s);
   if (input.templateId) { const template = readTemplate(s, p, input.templateId); if (template.provenance.thirdParty) fail('policy_denied', 'Import third-party templates with explicit terms acceptance.'); return importContent(s, c, input, template.content); }
   checkSkills(s, p, input.skillIds ?? []); checkAvatar(s, p, input.avatar ?? defaultAvatar);
@@ -438,6 +440,9 @@ async function resetBot(s: BackendServices, c: RequestContext, bot: P.Bot, input
       }
       s.store.setMetadata(`botMcpPending:${bot.id}`, null);
       s.store.setMetadata(`botMcpBindings:${bot.id}`, null);
+      const issuer = s.store.metadata<{ digest: string }>(`nativeFollowupIssuerConfig:${bot.id}`);
+      if (issuer) s.store.setMetadata(`nativeFollowupIssuer:${issuer.digest}`, null);
+      s.store.setMetadata(`nativeFollowupIssuerConfig:${bot.id}`, null);
       for (const key of ['botDesiredProfile', 'botProfileSync', 'botControllerFloor', 'botPolicyFloor', 'botPolicySync', 'preferenceSync', 'profileCanonicalSession', 'botPlacementEpoch', 'botPlacementChanged', 'botReconciliation', 'botMoveRoutines', 'botMcpReceipt', 'connectorProfileSync']) s.store.setMetadata(`${key}:${bot.id}`, null);
       for (const member of s.store.list<P.Member>('members')) {
         s.store.setMetadata(`botSidebar:${member.userId}:${bot.id}`, null);
@@ -751,7 +756,7 @@ export function createBotService(s: BackendServices): { reconcile(): Promise<voi
                 s.store.setMetadata(`botProfileSync:${bot.id}`, sync);
               }
             }
-            const acknowledged = matches && sync?.profileIntentId === desired?.profileIntentId && sync?.acknowledged === true && sync.nodeId === machine.nodeId && sync.profileId === bot.profileId && !s.store.metadata(`botMcpPending:${bot.id}`);
+            const acknowledged = matches && sync?.profileIntentId === desired?.profileIntentId && sync?.acknowledged === true && sync.nodeId === machine.nodeId && sync.profileId === bot.profileId && !s.store.metadata(`botMcpPending:${bot.id}`) && s.store.metadata<{ state: string }>(`nativeFollowupIssuerConfig:${bot.id}`)?.state === 'configured';
             if (acknowledged && desired) {
               if (preference && preference.state !== 'acknowledged' && preference.revision === desired.botRevision) s.store.setMetadata(`preferenceSync:${bot.id}`, { ...preference, state: 'acknowledged' });
               if (policy && policy.state !== 'acknowledged') s.store.setMetadata(`botPolicySync:${bot.id}`, { ...policy, state: 'acknowledged' });

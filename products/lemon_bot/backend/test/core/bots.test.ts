@@ -16,7 +16,7 @@ function fixture() {
   const profileRows = new Map<string, Record<string, unknown>>();
   let reject: ((method: string, params: Record<string, unknown>) => void) | null = null;
   let nativePresence: { active: number; queued: number; unknown: number; idle: boolean; complete: boolean } | null = { active: 0, queued: 0, unknown: 0, idle: true, complete: true };
-  const methods = ['profiles.create', 'profiles.update', 'profiles.get', 'profiles.sync', 'profiles.sync.status', 'profiles.delete', 'runs.active.list', 'memory.transfer', 'memory.transfer.status', 'memory.list', 'memory.delete', 'memory.add', 'nodes.list', 'node.capabilities.get', 'node.secrets.set', 'node.secrets.receipt', 'node.secrets.delete', 'node.host.info', 'node.profile.paths', 'node.fs.write', 'node.fs.delete', 'cron.pause', 'cron.resume', 'cron.add', 'cron.remove', 'sessions.delete'];
+  const methods = ['profiles.create', 'profiles.update', 'profiles.get', 'profiles.sync', 'profiles.sync.status', 'profiles.delete', 'profile.followup.admission.set', 'runs.followup.lineage.get', 'runs.active.list', 'memory.transfer', 'memory.transfer.status', 'memory.list', 'memory.delete', 'memory.add', 'nodes.list', 'node.capabilities.get', 'node.secrets.set', 'node.secrets.receipt', 'node.secrets.delete', 'node.host.info', 'node.profile.paths', 'node.fs.write', 'node.fs.delete', 'cron.pause', 'cron.resume', 'cron.add', 'cron.remove', 'sessions.delete'];
   f.services.lemon = {
     connected: true, methods,
     async call<T>(method: string, params: Record<string, unknown> = {}): Promise<T> {
@@ -38,6 +38,7 @@ function fixture() {
       }
       else if (method === 'profiles.sync') value = { profileId: params.id, nodeId: params.nodeId, mutationId: params.mutationId, acknowledged: true, revisionDigest: 'a'.repeat(64) };
       else if (method === 'profiles.sync.status') value = { profileId: params.id, nodeId: params.nodeId, mutationId: params.mutationId, status: 'acknowledged', acknowledged: true, revisionDigest: 'a'.repeat(64) };
+      else if (method === 'profile.followup.admission.set') value = { profileId: params.profileId, configured: true };
       else if (method === 'node.secrets.set') value = { name: params.name, set: true, operationId: params.operationId, status: 'applied', currentBindingMatches: true };
       else if (method === 'node.secrets.delete') value = { name: params.name, deleted: true };
       else if (method === 'runs.active.list') value = { runs: [], filters: { profileId: params.profileId, limit: params.limit }, ...(nativePresence ? { presence: nativePresence } : {}) };
@@ -107,6 +108,10 @@ function fixture() {
     profileRows.set(saved.profileId, { id: saved.profileId, node: 'node-source', canonicalSessionKey: `agent:${saved.profileId}:main` });
     f.store.setMetadata(`profileCanonicalSession:${saved.id}`, `agent:${saved.profileId}:main`);
     f.store.setMetadata(`botControllerFloor:${saved.id}`, { profile: 'custom', allow: 'all', deny: [], require_approval: [] });
+    const issuerToken = 'existing-private-native-issuer-token';
+    const digest = f.services.mutations.digest(issuerToken);
+    f.store.setMetadata(`nativeFollowupIssuerConfig:${saved.id}`, { botId: saved.id, profileId: saved.profileId, url: 'https://lemon.example/internal/runtime/followup/admission', digest, encryptedToken: f.services.encrypt(issuerToken), state: 'configured' });
+    f.store.setMetadata(`nativeFollowupIssuer:${digest}`, saved.id);
     return saved;
   }
   return { ...f, calls, request, machine, bot, fail: (value: typeof reject) => { reject = value; }, presence: (value: typeof nativePresence) => { nativePresence = value; } };
@@ -348,6 +353,35 @@ describe('authoritative native idle lifecycle boundary', () => {
     await expect(f.request('POST', `/v1/bots/${bot.id}/move`, confirmed(preview, { machineId: 'destination' }))).rejects.toMatchObject({ code: 'upstream_unavailable' });
     expect(f.calls.some(call => call.method === 'memory.transfer' && call.params.action === 'apply')).toBe(false);
     expect(f.store.require<P.Bot>('bots', bot.id).machineId).toBe('machine');
+    expect(f.store.metadata(`botLifecycle:${bot.id}`)).not.toBeNull();
+  });
+});
+
+describe('fresh native follow-up readiness fence', () => {
+  test('issuer setup follows persona receipt and uses separate encrypted custody before bot readiness', async () => {
+    const f = fixture();
+    const bot = await f.request<P.Bot>('POST', '/v1/bots', { clientNonce: nonce('native_issuer'), name: 'Issuer', machineId: 'machine' });
+    const index = f.calls.findIndex(call => call.method === 'profile.followup.admission.set');
+    expect(index).toBeGreaterThan(f.calls.findIndex(call => call.method === 'profiles.sync'));
+    const call = f.calls[index]!;
+    expect(call.params.profileId).toBe(bot.profileId);
+    expect(call.params.url).toBe('https://lemon.example/internal/runtime/followup/admission');
+    const token = String(call.params.token);
+    const issuer = f.store.metadata<{ state: string; digest: string; encryptedToken: string }>(`nativeFollowupIssuerConfig:${bot.id}`)!;
+    expect(issuer.state).toBe('configured'); expect(issuer.digest).toBe(f.services.mutations.digest(token));
+    expect(issuer.encryptedToken).not.toContain(token);
+    expect(JSON.stringify(bot)).not.toContain(token);
+    expect(bot.activity).toBe('idle');
+  });
+  test('lost issuer receipt cannot be replayed or mistaken for persona-only readiness', async () => {
+    const f = fixture();
+    f.fail(method => { if (method === 'profile.followup.admission.set') throw new ApiError('outcome_unknown', 'Issuer receipt lost.', false); });
+    await expect(f.request('POST', '/v1/bots', { clientNonce: nonce('lost_issuer'), name: 'Pending issuer', machineId: 'machine' })).rejects.toMatchObject({ code: 'outcome_unknown' });
+    const bot = f.store.list<P.Bot>('bots')[0]!;
+    expect(bot.activity).toBe('offline');
+    expect(f.store.metadata(`nativeFollowupIssuerConfig:${bot.id}`)).toMatchObject({ state: 'outcome_unknown' });
+    f.fail(null); await createBotService(f.services).reconcile();
+    expect(f.calls.filter(call => call.method === 'profile.followup.admission.set')).toHaveLength(1);
     expect(f.store.metadata(`botLifecycle:${bot.id}`)).not.toBeNull();
   });
 });
