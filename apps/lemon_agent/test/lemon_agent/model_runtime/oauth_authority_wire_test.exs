@@ -165,6 +165,49 @@ defmodule LemonAgent.ModelRuntime.OAuthAuthorityWireTest do
     refute inspect(events) =~ "fixture-stale-selected-token"
   end
 
+  test "a public nil-returning selected callback cannot revive its cached token", %{root: root} do
+    {:ok, listener} = :gen_tcp.listen(0, [:binary, active: false, ip: {127, 0, 0, 1}])
+    on_exit(fn -> :gen_tcp.close(listener) end)
+    {:ok, {{127, 0, 0, 1}, port}} = :inet.sockname(listener)
+
+    model = %Model{
+      id: "nil-callback-fixture",
+      provider: :xai,
+      api: :openai_completions,
+      base_url: "http://127.0.0.1:#{port}/v1"
+    }
+
+    options = %LemonAi.Types.StreamOptions{
+      api_key_authoritative: true,
+      api_key: "fixture-stale-selected-token",
+      cwd: root
+    }
+
+    config = %LemonAgent.Types.AgentLoopConfig{
+      model: model,
+      convert_to_llm: &Function.identity/1,
+      get_api_key: fn _ -> nil end,
+      stream_options: options,
+      max_retries: 0
+    }
+
+    events =
+      LemonAgent.agent_loop(
+        [%UserMessage{content: "Fixture request."}],
+        %LemonAgent.Types.AgentContext{},
+        config
+      )
+      |> Enum.to_list()
+
+    assert Enum.any?(
+             events,
+             &match?({:message_end, %{role: :assistant, stop_reason: :error}}, &1)
+           )
+
+    assert {:error, :timeout} = :gen_tcp.accept(listener, 50)
+    refute inspect(events) =~ "fixture-stale-selected-token"
+  end
+
   test "credential-aware resolver output cannot send a failed encoded login as Bearer JSON", %{
     root: root
   } do
