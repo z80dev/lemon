@@ -20,7 +20,7 @@ The canonical defaults are no providers, no host drivers, no public export desti
 
 Files must exist and be private to the service user; environment variables must be available in the backend service environment. Provider operations return the exact missing reference/permission prerequisite, without returning secret values or raw provider exceptions. Do not commit config with sensitive URLs, scripts or identifiers.
 
-Bot MCP header credentials are different: destination node encrypted secrets only. The backend stores header-to-secret **names**, preserving `${LEMON_SECRET:NAME}` references in profile/invocation MCP configuration. OAuth exchanges write the obtained credential into that bot's assigned destination node's encrypted store. No model-visible plaintext, no automatic migration of credentials on moving or copying a bot, and no host isolation claim for personas sharing an OS user.
+Bot MCP header credentials are different: destination node encrypted secrets only. The backend stores header-to-secret **names**, preserving `${LEMON_SECRET:NAME}` references only in authenticated caller-bound invocation MCP configuration. Static profile MCP ceilings contain credential-free templates with `headers:{}`; they are projected from public connector/tool/grant metadata, never the owner's credentials, consent or private policy. OAuth exchanges write the obtained credential into that bot's assigned destination node's encrypted store. No model-visible plaintext, no automatic migration of credentials on moving or copying a bot, and no host isolation claim for personas sharing an OS user.
 
 ## OIDC, SCIM and directory governance
 
