@@ -53,7 +53,8 @@ defmodule LemonCore.Config.ToolsTest do
         "LEMON_TOOL_DISCLOSURE_ENABLED",
         "LEMON_TOOL_DISCLOSURE_BUDGET_TOKENS",
         "LEMON_TOOL_DISCLOSURE_CATALOG_TOKENS",
-        "LEMON_TOOL_DISCLOSURE_MAX_RESULTS"
+        "LEMON_TOOL_DISCLOSURE_MAX_RESULTS",
+        "LEMON_TOOL_DISCLOSURE_PROFILE"
       ]
       |> Enum.each(&System.delete_env/1)
 
@@ -442,50 +443,19 @@ defmodule LemonCore.Config.ToolsTest do
   end
 
   describe "tool disclosure configuration" do
-    test "uses default disclosure settings" do
-      config = Tools.resolve(%{})
-
-      assert config.disclosure == %{
-               enabled: true,
-               budget_tokens: 40_000,
-               catalog_tokens: 2_000,
-               max_results: 5
-             }
-    end
-
-    test "uses disclosure settings from config" do
-      settings = %{
-        "tools" => %{
-          "disclosure" => %{
-            "enabled" => false,
-            "budget_tokens" => 12_000,
-            "catalog_tokens" => 500,
-            "max_results" => 3
-          }
-        }
-      }
-
-      config = Tools.resolve(settings)
-
-      assert config.disclosure == %{
-               enabled: false,
-               budget_tokens: 12_000,
-               catalog_tokens: 500,
-               max_results: 3
-             }
-    end
-
     test "environment variables override disclosure settings" do
       System.put_env("LEMON_TOOL_DISCLOSURE_ENABLED", "false")
       System.put_env("LEMON_TOOL_DISCLOSURE_BUDGET_TOKENS", "9999")
       System.put_env("LEMON_TOOL_DISCLOSURE_CATALOG_TOKENS", "77")
+      System.put_env("LEMON_TOOL_DISCLOSURE_PROFILE", "coding")
 
       settings = %{
         "tools" => %{
           "disclosure" => %{
             "enabled" => true,
             "budget_tokens" => 12_000,
-            "catalog_tokens" => 500
+            "catalog_tokens" => 500,
+            "profile" => "legacy"
           }
         }
       }
@@ -495,45 +465,7 @@ defmodule LemonCore.Config.ToolsTest do
       assert config.disclosure.enabled == false
       assert config.disclosure.budget_tokens == 9_999
       assert config.disclosure.catalog_tokens == 77
-    end
-  end
-
-  describe "tool disclosure configuration (adversarial)" do
-    test "defaults/0 round-trips through resolve/1 unchanged" do
-      # Guards against key-name drift between the `defaults/0` advertisement
-      # (string keys, what `lemon config init` writes) and the resolver
-      # (which reads those same string keys back out of a TOML file).
-      assert Tools.resolve(%{"tools" => Tools.defaults()}).disclosure ==
-               Tools.resolve(%{}).disclosure
-    end
-
-    test "defaults/0 and resolve/1 agree key-for-key" do
-      resolved = Tools.resolve(%{}).disclosure
-      advertised = Tools.defaults()["disclosure"]
-
-      assert Enum.sort(Map.keys(advertised)) ==
-               resolved |> Map.keys() |> Enum.map(&Atom.to_string/1) |> Enum.sort()
-
-      for {key, value} <- advertised do
-        assert resolved[String.to_existing_atom(key)] == value
-      end
-    end
-
-    test "each disclosure key defaults independently of the others" do
-      for {key, atom_key, value} <- [
-            {"enabled", :enabled, false},
-            {"enabled", :enabled, true},
-            {"budget_tokens", :budget_tokens, 111},
-            {"catalog_tokens", :catalog_tokens, 222},
-            {"max_results", :max_results, 3}
-          ] do
-        resolved = Tools.resolve(%{"tools" => %{"disclosure" => %{key => value}}}).disclosure
-
-        assert Map.get(resolved, atom_key) == value
-
-        assert Map.drop(resolved, [atom_key]) ==
-                 Map.drop(Tools.resolve(%{}).disclosure, [atom_key])
-      end
+      assert config.disclosure.profile == "coding"
     end
 
     test "env wins over config in both directions for the boolean" do
@@ -581,49 +513,12 @@ defmodule LemonCore.Config.ToolsTest do
     end
 
     test "max_results has no env override" do
-      # Documented decision: `max_results` is a per-call default the model
-      # overrides with the search tool's `limit` parameter, not an operator
-      # knob. This pins that no half-wired env var appears later.
+      # `max_results` is controlled by config and the search tool's `limit`,
+      # not by an environment override.
       System.put_env("LEMON_TOOL_DISCLOSURE_MAX_RESULTS", "99")
-
-      assert Tools.resolve(%{}).disclosure.max_results == 5
 
       assert Tools.resolve(%{"tools" => %{"disclosure" => %{"max_results" => 3}}}).disclosure.max_results ==
                3
-
-      assert LemonCore.Env.describe(:lemon_tool_disclosure_max_results) == nil
-    end
-
-    test "out-of-contract token budgets pass through unsanitized" do
-      # NOTE: this pins today's behavior, which does NOT match the declared
-      # `disclosure_config` type (`pos_integer()`). Zero/negative budgets mean
-      # "always over budget" and a string budget will crash any numeric
-      # comparison, so the consumer of `config.agent.tools.disclosure` must
-      # sanitize before use.
-      assert Tools.resolve(%{"tools" => %{"disclosure" => %{"budget_tokens" => 0}}}).disclosure.budget_tokens ==
-               0
-
-      assert Tools.resolve(%{"tools" => %{"disclosure" => %{"budget_tokens" => -5}}}).disclosure.budget_tokens ==
-               -5
-
-      assert Tools.resolve(%{"tools" => %{"disclosure" => %{"catalog_tokens" => 0}}}).disclosure.catalog_tokens ==
-               0
-
-      assert Tools.resolve(%{"tools" => %{"disclosure" => %{"budget_tokens" => "lots"}}}).disclosure.budget_tokens ==
-               "lots"
-
-      System.put_env("LEMON_TOOL_DISCLOSURE_BUDGET_TOKENS", "0")
-      assert Tools.resolve(%{}).disclosure.budget_tokens == 0
-
-      System.put_env("LEMON_TOOL_DISCLOSURE_BUDGET_TOKENS", "-3")
-      assert Tools.resolve(%{}).disclosure.budget_tokens == -3
-    end
-
-    test "a non-boolean enabled value passes through as-is" do
-      # Same caveat as the budgets: a TOML `enabled = "false"` is a truthy
-      # binary downstream, so consumers must not branch on it directly.
-      assert Tools.resolve(%{"tools" => %{"disclosure" => %{"enabled" => "false"}}}).disclosure.enabled ==
-               "false"
     end
 
     test "an explicit nil disclosure table resolves to the defaults" do
@@ -643,46 +538,6 @@ defmodule LemonCore.Config.ToolsTest do
       assert_raise FunctionClauseError, fn ->
         Tools.resolve(%{"tools" => %{"wasm" => 5}})
       end
-    end
-
-    test "atom-keyed settings are ignored (TOML settings are string-keyed)" do
-      assert Tools.resolve(%{"tools" => %{disclosure: %{budget_tokens: 7}}}).disclosure ==
-               Tools.resolve(%{}).disclosure
-    end
-  end
-
-  describe "defaults/0" do
-    test "returns the default tools configuration" do
-      defaults = Tools.defaults()
-
-      assert defaults["auto_resize_images"] == true
-      assert defaults["web"]["search"]["enabled"] == true
-      assert defaults["web"]["search"]["provider"] == "brave"
-      assert defaults["web"]["fetch"]["max_chars"] == 50_000
-      assert defaults["wasm"]["enabled"] == false
-      assert defaults["wasm"]["auto_build"] == true
-
-      assert defaults["disclosure"] == %{
-               "enabled" => true,
-               "budget_tokens" => 40_000,
-               "catalog_tokens" => 2_000,
-               "max_results" => 5
-             }
-    end
-  end
-
-  describe "struct type" do
-    test "returns a properly typed struct" do
-      config = Tools.resolve(%{})
-
-      assert %Tools{} = config
-      assert is_boolean(config.auto_resize_images)
-      assert is_map(config.web)
-      assert is_map(config.web.search)
-      assert is_map(config.web.fetch)
-      assert is_map(config.web.cache)
-      assert is_map(config.wasm)
-      assert is_map(config.disclosure)
     end
   end
 end

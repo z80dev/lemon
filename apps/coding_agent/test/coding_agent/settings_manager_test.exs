@@ -488,7 +488,9 @@ defmodule CodingAgent.SettingsManagerTest do
                enabled: true,
                budget_tokens: 40_000,
                catalog_tokens: 2_000,
-               max_results: 5
+               max_results: 5,
+               profile: "legacy",
+               pinned: []
              }
     end
 

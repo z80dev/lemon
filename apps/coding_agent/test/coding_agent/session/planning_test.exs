@@ -121,6 +121,144 @@ defmodule CodingAgent.Session.PlanningTest do
     assert {:ok, %{"mode" => "code"}} = Session.plan(resumed, :exit)
   end
 
+  test "repeated refresh and reload restore private host and native bridge writes", %{root: root} do
+    secret = "fixture-native-plan-secret"
+    File.write!(Path.join(root, ".lemon/secrets.yml"), "- type: plain\n  content: #{secret}\n")
+    ext_dir = Path.join(root, ".lemon/extensions")
+    File.mkdir_p!(ext_dir)
+    module_name = "NativePlanRefresh#{System.unique_integer([:positive])}"
+    module = Module.concat([module_name])
+    parent = inspect(:erlang.pid_to_list(self()))
+
+    File.write!(Path.join(ext_dir, "hooks.ex"), """
+    defmodule #{module_name} do
+      @behaviour CodingAgent.Extensions.Extension
+      @impl true
+      def name, do: "native-plan-refresh"
+      @impl true
+      def version, do: "1.0.0"
+      @impl true
+      def hooks do
+        [on_tool_call: fn
+          %{tool_name: "write", args: args} ->
+            send(:erlang.list_to_pid(#{parent}), {:native_plan_hook, args["content"]})
+            :ok
+          _ -> :ok
+        end]
+      end
+    end
+    """)
+
+    on_exit(fn ->
+      :code.purge(module)
+      :code.delete(module)
+    end)
+
+    calls = :counters.new(1, [:atomics])
+
+    stream = fn _, context, _ ->
+      :counters.add(calls, 1, 1)
+      call = :counters.get(calls, 1)
+
+      message =
+        if rem(call, 2) == 1 do
+          content = context.messages |> List.last() |> Map.fetch!(:content)
+
+          placeholder =
+            case content do
+              text when is_binary(text) -> text
+              blocks when is_list(blocks) -> Enum.map_join(blocks, "", &Map.fetch!(&1, :text))
+            end
+
+          tool_use("bounded-#{call}", "tool_invoke", %{
+            "name" => "write",
+            "args" => %{
+              "path" => Path.join(plan_dir(context.system_prompt), "bounded-plan.md"),
+              "content" => placeholder <> "/bridge-#{div(call + 1, 2)}"
+            }
+          })
+        else
+          stop("Draft saved")
+        end
+
+      {:ok, events(message)}
+    end
+
+    settings = %{
+      settings(root)
+      | secret_obfuscation_enabled: true,
+        extension_paths: [ext_dir],
+        extension_auto_load_default_paths: false
+    }
+
+    session =
+      start_supervised!(
+        {Session,
+         [
+           cwd: root,
+           workspace_dir: Path.join(root, "workspace"),
+           model: model(),
+           stream_fn: stream,
+           settings_manager: settings,
+           mcp_tools: [],
+           tool_policy:
+             CodingAgent.ToolPolicy.custom(allow: ["read", "write", "edit", "browser_tabs"]),
+           tool_disclosure: [profile: :coding],
+           system_prompt: "Update the private plan draft."
+         ]}
+      )
+
+    Session.subscribe(session)
+    assert {:ok, %{"mode" => "plan"}} = Session.plan(session, :enter)
+    state = Session.get_state(session)
+
+    placeholder =
+      CodingAgent.Security.SecretObfuscator.obfuscate(state.secret_obfuscator, secret)
+
+    refute placeholder == secret
+    plan_file = Path.join(Planning.plan_dir(state.session_manager), "bounded-plan.md")
+    native_id = state.session_manager.header.id
+
+    for revision <- 1..6 do
+      if revision > 1 do
+        assert {:ok, _} = Session.reload_extensions(session)
+      end
+
+      host_content = secret <> "/host-#{revision}"
+
+      assert {:ok, _} =
+               CodingAgent.Session.WasmBridge.invoke_host_tool(
+                 session,
+                 "write",
+                 Jason.encode!(%{
+                   "path" => plan_file,
+                   "content" => placeholder <> "/host-#{revision}"
+                 }),
+                 5_000
+               )
+
+      assert_receive {:native_plan_hook, ^host_content}
+      refute_received {:native_plan_hook, _}
+      assert File.read!(plan_file) == host_content
+
+      assert :ok = Session.prompt(session, placeholder)
+      assert_receive {:session_event, ^native_id, {:agent_end, _}}, 5_000
+      bridge_content = secret <> "/bridge-#{revision}"
+      assert_receive {:native_plan_hook, ^bridge_content}
+      refute_received {:native_plan_hook, _}
+      assert File.read!(plan_file) == bridge_content
+      call_id = "bounded-#{revision * 2 - 1}"
+
+      assert %{is_error: false} =
+               Enum.find(Session.get_messages(session), fn
+                 %{role: :tool_result, tool_call_id: ^call_id} -> true
+                 _ -> false
+               end)
+
+      assert {:ok, %{"mode" => "plan"}} = Session.plan(session)
+    end
+  end
+
   test "refinement keeps plan mode and remembers the proposed plan file", %{root: root} do
     parent = self()
 
@@ -282,8 +420,14 @@ defmodule CodingAgent.Session.PlanningTest do
 
     plan_file = Path.join(Planning.plan_dir(manager), "hook-plan.md")
 
+    bridge = %{
+      writer()
+      | name: "tool_invoke",
+        execute: fn _, _, _, _ -> flunk("private plan write escaped through the bridge") end
+    }
+
     for base <- [[reader()], [reader(), writer()]] do
-      tools = Map.new(Planning.tools(base, manager, context), &{&1.name, &1})
+      tools = Map.new(Planning.tools([bridge | base], manager, context), &{&1.name, &1})
       assert %AgentToolResult{is_error: false} = run(tools["write"], plan_file, placeholder)
       assert_receive {:plan_tool_call, "write", %{"content" => ^secret}}
       assert File.read!(plan_file) == secret
@@ -292,6 +436,39 @@ defmodule CodingAgent.Session.PlanningTest do
       assert_receive {:plan_tool_call, "write", %{"content" => "redirect"}}
       refute File.exists?(outside)
       assert File.read!(plan_file) == secret
+
+      state =
+        Map.merge(context, %{
+          plan_gate: context.gate,
+          session_manager: manager,
+          tools: Map.values(tools),
+          approval_context: %{}
+        })
+
+      host =
+        Planning.host_tool(writer(), manager, Planning.runtime_context(state, self()))
+
+      bridged_write = fn content ->
+        tools["tool_invoke"].execute.(
+          "bridge-plan",
+          %{"name" => "write", "args" => %{"path" => plan_file, "content" => content}},
+          nil,
+          nil
+        )
+      end
+
+      for execute <- [&run(host, plan_file, &1), bridged_write] do
+        assert %AgentToolResult{is_error: false} = execute.(placeholder)
+        assert_receive {:plan_tool_call, "write", %{"content" => ^secret}}
+        refute_received {:plan_tool_call, "write", _}
+        assert File.read!(plan_file) == secret
+
+        assert %AgentToolResult{is_error: true} = execute.("redirect")
+        assert_receive {:plan_tool_call, "write", %{"content" => "redirect"}}
+        refute_received {:plan_tool_call, "write", _}
+        refute File.exists?(outside)
+        assert File.read!(plan_file) == secret
+      end
 
       assert %AgentToolResult{is_error: true} =
                tools["propose_plan"].execute.(

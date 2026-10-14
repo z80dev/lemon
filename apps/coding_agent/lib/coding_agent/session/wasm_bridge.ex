@@ -449,11 +449,30 @@ defmodule CodingAgent.Session.WasmBridge do
 
   def maybe_handle_reserved_host_target(_tool_name, _params_json), do: :not_reserved
 
+  @doc """
+  Resolve only from the session's frozen, policy-authorized runtime catalog.
+
+  Schema deferral must not remove host capabilities. The stored closure retains
+  registry approvals, checkpoints and owner scope; apply the current planning
+  wrapper before returning it. Host calls cannot recurse into WASM, including
+  indirectly through the disclosure bridge.
+  """
   @spec find_host_tool(map(), String.t()) :: LemonAgent.Types.AgentTool.t() | nil
   def find_host_tool(state, tool_name) when is_binary(tool_name) do
-    Enum.find(state.tools, fn tool ->
-      tool.name == tool_name and tool.name not in state.wasm_tool_names
-    end)
+    catalog = Map.get(state, :tool_catalog) || %{}
+
+    with false <- tool_name in CodingAgent.ToolDisclosure.bridge_names(),
+         false <- tool_name in state.wasm_tool_names,
+         %{tool: tool, source: source} <- Map.get(catalog, tool_name),
+         false <- match?({:wasm, _}, source) do
+      CodingAgent.Session.Planning.host_tool(
+        tool,
+        state.session_manager,
+        CodingAgent.Session.Planning.runtime_context(state, self())
+      )
+    else
+      _ -> nil
+    end
   end
 
   def find_host_tool(_state, _tool_name), do: nil

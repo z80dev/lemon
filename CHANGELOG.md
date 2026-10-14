@@ -168,6 +168,14 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   `agent_models` overrides persona models.
   Child depth/allowlists survive extension reloads, resumed user forks can
   still delegate, and live `agent://` names override completed namesakes.
+- Opt-in `runtime.tools.disclosure.profile = "coding"` keeps a coding core
+  directly exposed and defers optional registry-resolved built-ins behind
+  `tool_search` / `tool_invoke`. Explicit pins and per-session overrides support
+  isolated trials; defaults and caller-supplied toolsets remain unchanged.
+  Disclosure diagnostics include resolved inventories, estimated schema size
+  and a safe catalog/policy digest. Bridged calls retain approval, plan-mode,
+  checkpoint, cancellation and sequential execution constraints. No cost or
+  latency improvement is claimed; see [Tool Disclosure](docs/config.md#tool-disclosure).
 
 ### Fixed
 
@@ -235,6 +243,14 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   workers, avoiding a todo journal self-call. Host requests retain invocation
   ownership, abort signals and deadlines; cancellation/disposal kills pending
   work, rejects queued late writes and preserves policy/approval failures as errors.
+- WASM host aliases resolve permitted deferred built-ins from the same frozen,
+  wrapped disclosure catalog under both profiles, retaining plan-mode and reload
+  authority boundaries while refusing WASM and disclosure-bridge recursion.
+- Shared disclosure targets restore secret arguments before hooks for exposed,
+  bridged and WASM-host execution, including after reload. Plan-mode bridge and
+  host writes retain the restricted wrapped plan-file boundary.
+- Repeated plan prompts rebuild bounded execution guards without retaining earlier
+  wrapper generations, avoiding runaway state copying during native tool handoff.
 
 ---
 

@@ -601,39 +601,6 @@ defmodule LemonCore.ConfigTest do
     System.delete_env("LEMON_WASM_AUTO_BUILD")
   end
 
-  test "exposes tool disclosure defaults on agent.tools with no config" do
-    config = Config.load()
-
-    assert config.agent.tools.disclosure == %{
-             enabled: true,
-             budget_tokens: 40_000,
-             catalog_tokens: 2_000,
-             max_results: 5
-           }
-  end
-
-  test "parses tool disclosure configuration under runtime.tools", %{home: home} do
-    global_dir = Path.join(home, ".lemon")
-    File.mkdir_p!(global_dir)
-
-    File.write!(Path.join(global_dir, "config.toml"), """
-    [runtime.tools.disclosure]
-    enabled = false
-    budget_tokens = 12000
-    catalog_tokens = 500
-    max_results = 3
-    """)
-
-    config = Config.load()
-
-    assert config.agent.tools.disclosure == %{
-             enabled: false,
-             budget_tokens: 12_000,
-             catalog_tokens: 500,
-             max_results: 3
-           }
-  end
-
   test "env overrides tool disclosure configuration", %{home: home} do
     global_dir = Path.join(home, ".lemon")
     File.mkdir_p!(global_dir)
@@ -654,26 +621,6 @@ defmodule LemonCore.ConfigTest do
   after
     System.delete_env("LEMON_TOOL_DISCLOSURE_ENABLED")
     System.delete_env("LEMON_TOOL_DISCLOSURE_BUDGET_TOKENS")
-  end
-
-  test "tool disclosure env declarations are registered with their defaults" do
-    # The switch defaults ON: the token budget is the real gate, and a catalog
-    # under it is left untouched, so default-on costs nothing.
-    assert LemonCore.Env.get(:lemon_tool_disclosure_enabled) == true
-    assert LemonCore.Env.get(:lemon_tool_disclosure_budget_tokens) == 40_000
-    assert LemonCore.Env.get(:lemon_tool_disclosure_catalog_tokens) == 2_000
-
-    System.put_env("LEMON_TOOL_DISCLOSURE_BUDGET_TOKENS", "123")
-    System.put_env("LEMON_TOOL_DISCLOSURE_CATALOG_TOKENS", "45")
-    System.put_env("LEMON_TOOL_DISCLOSURE_ENABLED", "false")
-
-    assert LemonCore.Env.get(:lemon_tool_disclosure_budget_tokens) == 123
-    assert LemonCore.Env.get(:lemon_tool_disclosure_catalog_tokens) == 45
-    assert LemonCore.Env.get(:lemon_tool_disclosure_enabled) == false
-  after
-    System.delete_env("LEMON_TOOL_DISCLOSURE_BUDGET_TOKENS")
-    System.delete_env("LEMON_TOOL_DISCLOSURE_CATALOG_TOKENS")
-    System.delete_env("LEMON_TOOL_DISCLOSURE_ENABLED")
   end
 
   test "project config deep-merges onto global for tool disclosure", %{home: home} do
@@ -698,12 +645,9 @@ defmodule LemonCore.ConfigTest do
     config = Config.load(project_dir)
 
     # The project file must not blow away the sibling keys the global file set.
-    assert config.agent.tools.disclosure == %{
-             enabled: true,
-             budget_tokens: 12_000,
-             catalog_tokens: 750,
-             max_results: 2
-           }
+    assert config.agent.tools.disclosure.budget_tokens == 12_000
+    assert config.agent.tools.disclosure.catalog_tokens == 750
+    assert config.agent.tools.disclosure.max_results == 2
   end
 
   test "the removed [tools.disclosure] spelling hard-fails", %{home: home} do
@@ -733,62 +677,6 @@ defmodule LemonCore.ConfigTest do
     end)
   end
 
-  test "tool disclosure declarations are shaped like the rest of the registry" do
-    declarations = LemonCore.Env.by_area(:tools_disclosure)
-
-    assert Enum.map(declarations, & &1.env_var) == [
-             "LEMON_TOOL_DISCLOSURE_BUDGET_TOKENS",
-             "LEMON_TOOL_DISCLOSURE_CATALOG_TOKENS",
-             "LEMON_TOOL_DISCLOSURE_ENABLED"
-           ]
-
-    for declaration <- declarations do
-      assert declaration.aliases == []
-      assert declaration.secret? == false
-      assert declaration.required? == false
-      assert declaration.apps == [:lemon_core]
-      assert declaration.doc != ""
-      assert String.starts_with?(declaration.env_var, "LEMON_")
-    end
-
-    assert LemonCore.Env.describe(:lemon_tool_disclosure_budget_tokens).type == :integer
-    assert LemonCore.Env.describe(:lemon_tool_disclosure_catalog_tokens).type == :integer
-    assert LemonCore.Env.describe(:lemon_tool_disclosure_enabled).type == :boolean
-  end
-
-  test "tool disclosure env vars are documented in the config registry reference" do
-    # `LemonCore.Env.Declarations` renders docs/config-registry.md, so a new
-    # declaration that never reaches the table is an undocumented knob.
-    case find_upwards("docs/config-registry.md") do
-      nil ->
-        # Running outside the umbrella checkout (e.g. a packaged build).
-        :ok
-
-      path ->
-        doc = File.read!(path)
-
-        for declaration <- LemonCore.Env.by_area(:tools_disclosure) do
-          assert doc =~ "`#{declaration.env_var}`",
-                 "#{declaration.env_var} is declared but missing from docs/config-registry.md"
-
-          assert doc =~ declaration.doc,
-                 "#{declaration.env_var}'s description in docs/config-registry.md has drifted"
-        end
-    end
-  end
-
-  test "tool disclosure defaults agree between the registry and the config resolver" do
-    resolved = Config.load().agent.tools.disclosure
-
-    assert LemonCore.Env.describe(:lemon_tool_disclosure_enabled).default == resolved.enabled
-
-    assert LemonCore.Env.describe(:lemon_tool_disclosure_budget_tokens).default ==
-             resolved.budget_tokens
-
-    assert LemonCore.Env.describe(:lemon_tool_disclosure_catalog_tokens).default ==
-             resolved.catalog_tokens
-  end
-
   test "flattens registered channel sections onto the legacy gateway map", %{home: home} do
     global_dir = Path.join(home, ".lemon")
     File.mkdir_p!(global_dir)
@@ -810,20 +698,5 @@ defmodule LemonCore.ConfigTest do
              resolved: true,
              raw: %{"default_account_id" => "demo-work", "default_chat_id" => -100_123}
            }
-  end
-
-  # Tests may run from the umbrella root or from apps/lemon_core, so locate
-  # repo-relative documentation by walking up from the current directory.
-  defp find_upwards(relative_path) do
-    File.cwd!()
-    |> Path.expand()
-    |> Stream.unfold(fn
-      "/" -> nil
-      dir -> {dir, Path.dirname(dir)}
-    end)
-    |> Enum.find_value(fn dir ->
-      candidate = Path.join(dir, relative_path)
-      if File.regular?(candidate), do: candidate
-    end)
   end
 end

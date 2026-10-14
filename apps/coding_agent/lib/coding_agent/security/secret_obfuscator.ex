@@ -157,6 +157,17 @@ defmodule CodingAgent.Security.SecretObfuscator do
   def wrap_tools(tools, %__MODULE__{} = obfuscator),
     do: Enum.map(tools, &wrap_tool(&1, obfuscator))
 
+  @doc "Restore arguments on registry tuples before disclosure builds its shared catalog."
+  @spec wrap_tuples([{String.t(), AgentTool.t(), term()}], t() | nil) ::
+          [{String.t(), AgentTool.t(), term()}]
+  def wrap_tuples(tuples, nil), do: tuples
+
+  def wrap_tuples(tuples, %__MODULE__{} = obfuscator) do
+    Enum.map(tuples, fn {name, tool, source} ->
+      {name, wrap_tool(tool, obfuscator), source}
+    end)
+  end
+
   defp wrap_tool(%AgentTool{execute: execute} = tool, obfuscator) when is_function(execute, 4) do
     %{
       tool
