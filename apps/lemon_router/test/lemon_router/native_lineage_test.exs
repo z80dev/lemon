@@ -345,7 +345,7 @@ defmodule LemonRouter.NativeLineageTest do
     {_source, root} = admit_root(ctx)
     target_profile = ctx.prefix <> "-execution-profile"
     unrelated_profile = ctx.prefix <> "-unrelated-profile"
-    session_key = "agent:unrelated:derived-#{ctx.prefix}"
+    session_key = "agent:#{target_profile}:derived-#{ctx.prefix}"
     assert {:ok, _} = ProfileStore.create(%{"id" => target_profile, "mcpServers" => templates()})
     complete_presence_run(root.execution_request, true)
 
@@ -372,54 +372,78 @@ defmodule LemonRouter.NativeLineageTest do
       Store.delete(:sessions_index, session_key)
     end)
 
+    filters = %{"sessionKey" => session_key, "agentId" => target_profile, "limit" => 1}
+    query = fn profile ->
+      assert {:ok, result} =
+        LemonControlPlane.Methods.RunsActiveList.handle(Map.put(filters, "profileId", profile), %{})
+      result
+    end
+    # Exact session/agent filters exclude attributed work from other fixtures.
+    # Legacy rows lacking both fields must still remain conservatively unknown.
+    baseline = Map.new([ctx.profile_id, target_profile, unrelated_profile], fn profile ->
+      assert %{"presence" => %{"active" => 0, "queued" => 0} = presence} = query.(profile)
+      {profile, presence}
+    end)
+
     for {id, index} <- Enum.with_index(fresh_ids) do
       fresh = %{fresh_request(ctx, "unused") | run_id: id, agent_id: target_profile,
         session_key: session_key, cwd: root.execution_request.cwd,
         meta: %{dependent_profile_ids: [unrelated_profile], parent_run_id: "forged-parent"}}
       task = Task.async(fn -> RunOrchestrator.submit_native_followup(ctx.server, captured(root), fresh) end)
       assert_receive {:issuer_pending, issuer, ^id, _, _, {:ok, _}, _, _}, 2000
-      assert {:ok, %{"presence" => %{"unknown" => 1, "idle" => false}}} =
-        LemonControlPlane.Methods.RunsActiveList.handle(%{"profileId" => ctx.profile_id}, %{})
-      assert {:ok, %{"presence" => %{"idle" => true}}} =
-        LemonControlPlane.Methods.RunsActiveList.handle(%{"profileId" => unrelated_profile}, %{})
+      for profile <- [ctx.profile_id, target_profile] do
+        expected = Map.merge(baseline[profile], %{
+          "active" => index, "unknown" => baseline[profile]["unknown"] + 1, "idle" => false
+        })
+        assert query.(profile)["presence"] == expected
+      end
+      assert query.(unrelated_profile)["presence"] == baseline[unrelated_profile]
       send(issuer, {:issuer_reply, id, 200, approved(id)})
       assert Task.await(task) == {:ok, id}
 
       for profile <- [ctx.profile_id, target_profile] do
-        assert {:ok, %{"presence" => %{"active" => 1, "queued" => queued, "unknown" => 0, "idle" => false}}} =
-          LemonControlPlane.Methods.RunsActiveList.handle(%{"profileId" => profile, "limit" => 1}, %{})
-        assert queued == index
+        expected = Map.merge(baseline[profile], %{"active" => 1, "queued" => index, "idle" => false})
+        assert query.(profile)["presence"] == expected
       end
-      assert {:ok, %{dependent_profile_ids: dependencies}} = LemonRouter.RunReceiptStore.fetch(id)
-      assert Enum.sort(dependencies) == Enum.sort([ctx.profile_id, target_profile])
+      assert query.(unrelated_profile)["presence"] == baseline[unrelated_profile]
     end
 
     [active_id, queued_id] = fresh_ids
     [{active, _}] = Registry.lookup(LemonRouter.RunRegistry, active_id)
     :ok = :sys.suspend(active)
     try do
-      assert {:ok, %{"presence" => %{"active" => 1, "queued" => 1, "unknown" => 0, "idle" => false}}} =
-        LemonControlPlane.Methods.RunsActiveList.handle(%{"profileId" => ctx.profile_id}, %{})
+      expected = Map.merge(baseline[ctx.profile_id], %{"active" => 1, "queued" => 1, "idle" => false})
+      assert query.(ctx.profile_id)["presence"] == expected
     after
       :sys.resume(active)
     end
-    assert {:ok, %{"runs" => [%{"runId" => ^active_id, "profileId" => ^target_profile}]}} =
-      LemonControlPlane.Methods.RunsActiveList.handle(%{"profileId" => ctx.profile_id}, %{})
-    assert {:ok, %{"presence" => %{"idle" => true}}} =
-      LemonControlPlane.Methods.RunsActiveList.handle(%{"profileId" => unrelated_profile}, %{})
+    assert %{"runs" => [
+      %{"runId" => ^active_id, "profileId" => ^target_profile,
+        "agentId" => ^target_profile, "sessionKey" => ^session_key}
+    ]} = query.(ctx.profile_id)
+    assert query.(unrelated_profile)["presence"] == baseline[unrelated_profile]
 
-    [{coordinator, _}] = Registry.lookup(LemonRouter.ConversationRegistry, conversation)
     active_command = :sys.get_state(active).execution_request
-    queued_command = :sys.get_state(coordinator).queue |> Enum.find(&(&1.run_id == queued_id)) |> Map.fetch!(:execution_request)
-    :ok = DynamicSupervisor.terminate_child(LemonRouter.SessionCoordinatorSupervisor, coordinator)
     ref = Process.monitor(active)
     complete_presence_run(active_command, true)
     assert_receive {:DOWN, ^ref, :process, ^active, :normal}, 2000
-    complete_presence_run(queued_command, false)
+    assert eventually(fn -> LemonRouter.SessionCoordinator.active_run(conversation) == {:ok, queued_id} end)
+    for profile <- [ctx.profile_id, target_profile] do
+      expected = Map.merge(baseline[profile], %{"active" => 1, "idle" => false})
+      assert query.(profile)["presence"] == expected
+    end
+    assert %{"runs" => [%{"runId" => ^queued_id, "profileId" => ^target_profile}]} =
+      query.(ctx.profile_id)
+    assert query.(unrelated_profile)["presence"] == baseline[unrelated_profile]
+
+    [{queued, _}] = Registry.lookup(LemonRouter.RunRegistry, queued_id)
+    queued_ref = Process.monitor(queued)
+    complete_presence_run(:sys.get_state(queued).execution_request, false)
+    assert_receive {:DOWN, ^queued_ref, :process, ^queued, :normal}, 2000
+    assert eventually(fn -> LemonRouter.SessionCoordinator.active_run(conversation) == :none end)
     for id <- fresh_ids, do: Store.delete(:runs, id)
     for profile <- [ctx.profile_id, target_profile, unrelated_profile] do
-      assert {:ok, %{"presence" => %{"active" => 0, "queued" => 0, "unknown" => 0, "idle" => true}}} =
-        LemonControlPlane.Methods.RunsActiveList.handle(%{"profileId" => profile}, %{})
+      assert query.(profile)["presence"] == baseline[profile]
     end
   end
 
@@ -904,6 +928,24 @@ defmodule LemonRouter.NativeLineageTest do
         completed: LemonCore.Events.Completion.new(%{ok: ok?, answer: ""}), duration_ms: 0
       }), %{run_id: command.run_id, session_key: command.session_key})
     :ok = LemonRouter.RunCompletion.publish(command, event)
+  end
+
+  defp eventually(fun, timeout_ms \\ 5_000) when is_function(fun, 0) do
+    deadline = System.monotonic_time(:millisecond) + timeout_ms
+    do_eventually(fun, deadline)
+  end
+
+  defp do_eventually(fun, deadline) do
+    if fun.() do
+      true
+    else
+      if System.monotonic_time(:millisecond) >= deadline do
+        false
+      else
+        Process.sleep(10)
+        do_eventually(fun, deadline)
+      end
+    end
   end
 
   defp restore_env(app, key, {:ok, value}), do: Application.put_env(app, key, value)

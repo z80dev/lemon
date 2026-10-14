@@ -126,10 +126,12 @@ defmodule LemonRouter.SubmissionBuilderTest do
              )
   end
 
-  test "named profile placement with no explicit cwd never uses controller cwd" do
+  @tag :tmp_dir
+  test "named profile placement with no explicit cwd never uses controller cwd", %{tmp_dir: root} do
+    profile = managed_profile(root, "worker-one")
     meta = %{
-      node: "worker-one",
-      profile_id: "test",
+      node: profile["node"],
+      profile_id: profile["id"],
       remote_cwd_explicit: false,
       cwd: "/controller/workspace",
       mcp_servers: [
@@ -140,8 +142,8 @@ defmodule LemonRouter.SubmissionBuilderTest do
 
     assert {:ok, submission} =
              SubmissionBuilder.build(
-               request(unique_session_key("remote"), %{
-                 agent_id: "test",
+               request(profile["canonicalSessionKey"], %{
+                 agent_id: profile["id"],
                  cwd: "/controller/override",
                  meta: meta
                }),
@@ -304,10 +306,13 @@ defmodule LemonRouter.SubmissionBuilderTest do
     assert LemonCore.ChatStateStore.get(session_key).last_resume_token == token.value
   end
 
-  test "builder binds proof comparison to the actual fixed ID for resume and compaction" do
-    session_key = unique_session_key("proof-history")
-    initial = %{request(session_key, %{agent_id: "test"}) | origin: :channel, prompt: "prior work"}
-    initial = %{initial | meta: proof_meta(initial.run_id)}
+  @tag :tmp_dir
+  test "builder binds proof comparison to the actual fixed ID for resume and compaction", %{tmp_dir: root} do
+    profile = managed_profile(root, "local")
+    session_key = profile["canonicalSessionKey"]
+    identity = %{profile_id: profile["id"], node: profile["node"]}
+    initial = %{request(session_key, %{agent_id: profile["id"]}) | origin: :channel, prompt: "prior work"}
+    initial = %{initial | meta: Map.merge(proof_meta(initial.run_id), identity)}
     assert {:ok, owner} = SubmissionBuilder.build(initial, orchestrator_state())
     token = %ResumeToken{engine: "lemon", value: session_key}
     assert :ok = ResumeResolver.bind_run(owner.execution_request)
@@ -325,8 +330,8 @@ defmodule LemonRouter.SubmissionBuilderTest do
       PendingCompactionStore.delete(session_key)
     end)
 
-    next = %{request(session_key, %{agent_id: "test"}) | origin: :channel, prompt: "next work"}
-    next = %{next | meta: proof_meta(next.run_id)}
+    next = %{request(session_key, %{agent_id: profile["id"]}) | origin: :channel, prompt: "next work"}
+    next = %{next | meta: Map.merge(proof_meta(next.run_id), identity)}
     assert {:ok, resumed} = SubmissionBuilder.build(next, orchestrator_state())
     assert resumed.execution_request.resume == token
     assert resumed.execution_request.prompt =~ "prior work"
@@ -339,6 +344,30 @@ defmodule LemonRouter.SubmissionBuilderTest do
     assert fresh.execution_request.prompt == "next work"
     assert fresh.pending_compaction_marker == nil
     assert PendingCompactionStore.get(session_key) == marker
+  end
+
+  defp managed_profile(root, node) do
+    config = Path.join(root, "profiles.toml")
+    File.write!(config, "")
+    previous_paths = Application.get_env(:lemon_core, :paths)
+
+    Application.put_env(:lemon_core, :paths,
+      (previous_paths || [])
+      |> Keyword.put(:global_config, config)
+      |> Keyword.put(:home_state_dir, root))
+
+    on_exit(fn ->
+      if is_nil(previous_paths) do
+        Application.delete_env(:lemon_core, :paths)
+      else
+        Application.put_env(:lemon_core, :paths, previous_paths)
+      end
+    end)
+
+    assert {:ok, profile} =
+             LemonCore.ProfileStore.create(%{id: "submission-builder-managed", node: node})
+
+    profile
   end
 
   defp proof_meta(run_id) do

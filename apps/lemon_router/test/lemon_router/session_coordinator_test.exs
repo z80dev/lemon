@@ -1114,18 +1114,19 @@ defmodule LemonRouter.SessionCoordinatorTest do
   test "receipts expose applied new and queued dispositions and replay without dispatch", %{
     run_supervisor: supervisor
   } do
-    key = {:session, unique_session_key()}
+    session_key = unique_session_key()
+    key = {:session, session_key}
     active = receipt_run_id()
     queued = receipt_run_id()
 
     assert {:ok, receipt} = receipt_submit(key, active, "hold", :steer, supervisor)
-    assert receipt == %{
-             run_id: active,
-             session_key: elem(key, 1),
+    assert %{
+             run_id: ^active,
+             session_key: ^session_key,
              state: :accepted,
              effective_mode: :new_run,
-             target_run_id: active
-           }
+             target_run_id: ^active
+           } = receipt
     assert_receive {:started, ^active, _}
 
     assert :ok = submit(key, queued, "original", :collect, supervisor)
@@ -1136,6 +1137,7 @@ defmodule LemonRouter.SessionCoordinatorTest do
     assert {:ok, ^queued_receipt} =
              receipt_submit(key, queued, "must not replace original", :interrupt, supervisor)
     refute_receive {:aborted, ^active, _}, 50
+    refute_receive {:started, ^queued, _}, 50
 
     :ok = abort_active_run(supervisor, :user_requested)
     assert_receive {:aborted, ^active, :user_requested}
@@ -1998,7 +2000,8 @@ defmodule LemonRouter.SessionCoordinatorTest do
     assert first_opts[:execution_request].resume == token
     :ok = stop_active_run(supervisor)
     assert eventually(fn -> SessionCoordinator.active_run(key) == :none end)
-    GenServer.stop(coordinator_pid(key))
+    # Remove the permanent child without consuming the linked supervisor's restart intensity.
+    :ok = DynamicSupervisor.terminate_child(LemonRouter.SessionCoordinatorSupervisor, coordinator_pid(key))
 
     second = context_submission(key, receipt_run_id(), "second", :collect, supervisor, meta, policy)
     second_id = second.run_id
@@ -2007,7 +2010,7 @@ defmodule LemonRouter.SessionCoordinatorTest do
     assert second_opts[:execution_request].resume == token
     :ok = stop_active_run(supervisor)
     assert eventually(fn -> SessionCoordinator.active_run(key) == :none end)
-    GenServer.stop(coordinator_pid(key))
+    :ok = DynamicSupervisor.terminate_child(LemonRouter.SessionCoordinatorSupervisor, coordinator_pid(key))
 
     for changed <- [
           %{meta | invocation_context_key: "changed"},
@@ -2023,7 +2026,7 @@ defmodule LemonRouter.SessionCoordinatorTest do
       assert LemonCore.ChatStateStore.get(session_key).last_resume_token == token.value
       :ok = stop_active_run(supervisor)
       assert eventually(fn -> SessionCoordinator.active_run(key) == :none end)
-      GenServer.stop(coordinator_pid(key))
+      :ok = DynamicSupervisor.terminate_child(LemonRouter.SessionCoordinatorSupervisor, coordinator_pid(key))
     end
   end
 

@@ -275,6 +275,9 @@ revocation manager need not fetch another principal's answer to inspect terminal
 status. Malformed nonboolean flags are rejected rather than returning an answer.
 `SUBMISSION_OUTCOME_UNKNOWN` errors retain the original `runId` and `sessionKey`
 with `retrySafe: false`; reconcile that ID, never fabricate another send.
+A known start rejection remains a known error when matching terminal evidence
+has already been durably recorded. That fixed-ID fence is retained; replaying
+the same intent cannot start a second run.
 Receipt management views contain only IDs, status and dispositions. Owner rows
 also retain private content-free scope/fingerprint and terminal evidence, never
 prompt content or plaintext lineage handles.

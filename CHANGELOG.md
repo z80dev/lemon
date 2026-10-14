@@ -13,6 +13,8 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - Keep native root target/policy/destination bindings through durable admission
   compaction, including proofless startup receipts and queued activation fences.
   Native agent/task follow-ups allocate their fixed ID before proof admission.
+  Synchronous start failures retain their known error and terminal replay fence
+  when terminal persistence races admission acknowledgement.
 
 - Machine invitations now return a short, credential-free repository join-script
   command and a separate one-use code. The script reads hidden terminal input,

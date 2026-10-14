@@ -735,10 +735,9 @@ defmodule LemonRouter.RunOrchestrator do
             {{:error, :outcome_unknown}, state}
 
           {:error, _reason} = error ->
-            # No enqueue acknowledgement was returned, so this is the one
-            # safe point at which the durable claim can be made retryable.
-            # If that rollback cannot itself be durably recorded, the caller
-            # must treat the mutation as ambiguous.
+            # A synchronous start rejection may already have persisted terminal
+            # evidence. Never erase that evidence or reopen its fixed-ID fence.
+            # Otherwise, only an unchanged pre-enqueue claim can roll back.
             case Store.compare_and_swap(
                    @run_admission_table,
                    params.run_id,
@@ -749,6 +748,16 @@ defmodule LemonRouter.RunOrchestrator do
                 case Store.sync() do
                   :ok -> {error, state}
                   _ -> {{:error, :outcome_unknown}, state}
+                end
+              {:error, :mismatch} ->
+                case terminal_run_status(params, identity) do
+                  :matching_terminal ->
+                    case Store.sync() do
+                      :ok -> {error, state}
+                      _ -> {{:error, :outcome_unknown}, state}
+                    end
+                  _ ->
+                    {{:error, :outcome_unknown}, state}
                 end
               _failure -> {{:error, :outcome_unknown}, state}
             end

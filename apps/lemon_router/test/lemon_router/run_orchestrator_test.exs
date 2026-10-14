@@ -1478,6 +1478,13 @@ defmodule LemonRouter.RunOrchestratorTest do
       assert_receive {:bridge_subscribed, run_id}
       assert_receive {:bridge_unsubscribed, ^run_id}
       refute_receive {:bridge_unsubscribed, ^run_id}, 100
+
+      assert {:ok, %{summary: %{completed: %{ok: false,
+        error: %{type: :run_start_failed, reason: :run_failed_to_start}}}}} =
+          LemonCore.RunStore.fetch(run_id)
+      assert {:ok, ^run_id} =
+               RunOrchestrator.submit(orchestrator_pid, request(Map.put(params, :run_id, run_id)))
+      refute_receive {:bridge_subscribed, ^run_id}, 100
     end
 
     test "failed channel submission preserves its pending compaction marker" do
