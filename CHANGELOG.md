@@ -8,7 +8,91 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ## [Unreleased]
 
-No unreleased changes yet.
+### Added
+
+- **Custom providers and models.** A `[providers.<id>]` table with `api`,
+  `base_url`, `api_key_env`/`api_key`/`api_key_secret`, optional
+  `auth = "none"`, `headers`, `discovery = "openai" | "ollama"` and
+  `[[providers.<id>.models]]` defines an OpenAI-, Anthropic- or
+  Google-compatible endpoint (omp `models.yml` parity). Its models resolve as
+  `<id>:<model>` / `<id>/<model>` for the default model, `/model`, model roles,
+  task/compaction selectors and fallback providers, appear in the `/model`
+  picker and `lemon providers status`, and are checked by
+  `lemon config validate`. On built-in providers, `headers` are sent with every
+  request and `models` entries add or replace catalog models. See
+  [Custom Providers and Models](docs/config.md#custom-providers-and-models).
+- **More provider sign-ins in `lemon model`.** `lemon model openai-codex
+  --auth device` signs in to ChatGPT with a device code (headless, also
+  `--non-interactive`). `openrouter` adds browser sign-in that mints an API key,
+  `xai` adds SuperGrok / X Premium+ device sign-in, `kimi_coding` (`kimi-code`)
+  adds Kimi Code device sign-in, and `zai` adds GLM Coding Plan sign-in that
+  provisions an API key. xAI and Kimi logins refresh automatically;
+  `--status`/`--logout` cover all of them. See
+  [CLI](docs/user-guide/cli.md#other-provider-sign-ins).
+- **API-key sign-in for every catalog provider.** `lemon model` now offers
+  Google Gemini API, Groq, Cerebras, DeepSeek, Mistral, Hugging Face, Qwen
+  (DashScope), Vercel AI Gateway, OpenCode Zen/Go, MiniMax China and every
+  hosted OpenAI-compatible preset (model choice lists the endpoint's models);
+  the key is stored encrypted and referenced as `api_key_secret`.
+- OAuth logins can be force-refreshed after the provider rejects an unexpired
+  token (`Credentials.refresh_provider_api_key/4`, used by 401 recovery).
+- **Local and open-model provider presets.** Ollama, LM Studio, llama.cpp,
+  vLLM and LiteLLM work without an API key (`ollama:qwen3:32b`), with omp's
+  default endpoints and `OLLAMA_HOST`/`*_BASE_URL` overrides; hosted presets
+  cover Ollama Cloud, Together, DeepInfra, NVIDIA, Novita, Baseten, Venice,
+  Synthetic, NanoGPT, ZenMux, AIML API, SiliconFlow, GMI Cloud, Qianfan, ai&,
+  Wafer and Kilo. `lemon models --provider <id> --discover` lists an endpoint's
+  models, and the `/model` picker includes discovered models for configured
+  presets. See [OpenAI-Compatible Endpoints](docs/config.md#openai-compatible-endpoints).
+
+### Fixed
+
+- JSONL storage rejects unreadable or corrupt journals rather than publishing
+  empty state. Failed loads remain recoverable after repair; rejected writes
+  return bounded errors before cache mutation without crashing the Store.
+- Stored OAuth refreshes bind persistence to the selected login's opaque
+  revision. Atomic saves cannot overwrite a concurrent login, logout, or
+  delete/recreate; stale or failed saves cannot return the rotated credential.
+  Persistence callbacks take `(name, encoded, expected_revision)` and require
+  revision-bearing reloads and explicit success acknowledgements. Transient
+  fallback reselects authoritative storage; non-persisting refresh stays ephemeral.
+- Copilot token-endpoint HTTP 401/403 requires a fresh sign-in rather than
+  returning a cached token, including near-expiry refreshes.
+- Provider header defaults no longer override per-model headers on the wire.
+  OpenAI Completions/Responses, Anthropic and Google compatible endpoints merge
+  header names case-insensitively: provider defaults, then model overrides,
+  then explicit caller overrides, without duplicate mixed-case headers.
+- Provider CI checks use the existing OAuth decode branching convention without
+  changing refresh locking, and Codex CLI import regressions check rejection
+  and non-mutation rather than incidental error wording.
+- OAuth callback parsing and xAI endpoint validation reject malformed URL
+  authorities and ports before extracting codes or exchanging credentials.
+- Provider sign-in failures no longer print credential payloads or arbitrary
+  token-endpoint response strings. Token grants and model discovery do not
+  follow redirects; Z.AI callbacks require the returned state, and device-code
+  deadlines include callback and HTTP time.
+- Copilot, Gemini CLI and Antigravity refreshes serialize by stored login,
+  reload after waiting, and fail closed on deleted/replaced logins or expired
+  access tokens. Google `invalid_grant` requires a fresh sign-in.
+- Named `lemon model --status`/`--logout --secret-name NAME` targets that account
+  without deleting another login or clearing its selected provider settings.
+- Discovery cache metadata is isolated by endpoint, protocol, credential and
+  headers, rather than the last listing for a provider id. Custom Google
+  endpoints no longer inherit Google account options; explicitly keyless
+  custom Anthropic and Google endpoints omit generated credential headers.
+- Unknown provider ids in `default_model`/`default_provider` and custom
+  provider option keys no longer create atoms from config input.
+- `lemon model github_copilot --status`/`--logout` no longer crash once a
+  Copilot login is stored.
+- With `auth_source = "oauth"`, a provider's API-key env var (for example
+  `GOOGLE_GEMINI_CLI_API_KEY`) no longer overrides the stored sign-in.
+- Concurrent ChatGPT (Codex) token refreshes no longer replay a rotated refresh
+  token: refresh is single-flight per stored login and re-reads the secret.
+- OpenAI-compatible providers no longer fall back to `OPENAI_API_KEY`: a
+  DeepSeek, Together or other non-OpenAI request without its own key fails
+  instead of sending the OpenAI key to that endpoint. Groq, xAI, Cerebras,
+  DeepSeek, Mistral, Hugging Face, Qwen and Vercel AI Gateway now resolve their
+  key environment variables and default `llm_<id>_api_key` secrets.
 
 ---
 
@@ -165,25 +249,6 @@ No unreleased changes yet.
 
 ### Added
 
-- **Custom providers and models.** A `[providers.<id>]` table with `api`,
-  `base_url`, `api_key_env`/`api_key`/`api_key_secret`, optional
-  `auth = "none"`, `headers`, `discovery = "openai" | "ollama"` and
-  `[[providers.<id>.models]]` defines an OpenAI-, Anthropic- or
-  Google-compatible endpoint (omp `models.yml` parity). Its models resolve as
-  `<id>:<model>` / `<id>/<model>` for the default model, `/model`, model roles,
-  task/compaction selectors and fallback providers, appear in the `/model`
-  picker and `lemon providers status`, and are checked by
-  `lemon config validate`. On built-in providers, `headers` are sent with every
-  request and `models` entries add or replace catalog models. See
-  [Custom Providers and Models](docs/config.md#custom-providers-and-models).
-- **More provider sign-ins in `lemon model`.** `lemon model openai-codex
-  --auth device` signs in to ChatGPT with a device code (headless, also
-  `--non-interactive`). `openrouter` adds browser sign-in that mints an API key,
-  `xai` adds SuperGrok / X Premium+ device sign-in, `kimi_coding` (`kimi-code`)
-  adds Kimi Code device sign-in, and `zai` adds GLM Coding Plan sign-in that
-  provisions an API key. xAI and Kimi logins refresh automatically;
-  `--status`/`--logout` cover all of them. See
-  [CLI](docs/user-guide/cli.md#other-provider-sign-ins).
 - **Lemon Web, rebuilt.** The browser UI is now a full workspace on the same
   control-plane methods and events as the TUI. Chat streams Markdown with
   highlighted code, thinking blocks and rich tool cards (shell output and exit
@@ -262,21 +327,6 @@ No unreleased changes yet.
   meter also use the measurement for resumed sessions before their first run.
   All surfaces read the new read-scoped `sessions.context` control-plane method;
   category splits are estimates scaled to the provider-reported total.
-- **API-key sign-in for every catalog provider.** `lemon model` now offers
-  Google Gemini API, Groq, Cerebras, DeepSeek, Mistral, Hugging Face, Qwen
-  (DashScope), Vercel AI Gateway, OpenCode Zen/Go, MiniMax China and every
-  hosted OpenAI-compatible preset (model choice lists the endpoint's models);
-  the key is stored encrypted and referenced as `api_key_secret`.
-- OAuth logins can be force-refreshed after the provider rejects an unexpired
-  token (`Credentials.refresh_provider_api_key/4`, used by 401 recovery).
-- **Local and open-model provider presets.** Ollama, LM Studio, llama.cpp,
-  vLLM and LiteLLM work without an API key (`ollama:qwen3:32b`), with omp's
-  default endpoints and `OLLAMA_HOST`/`*_BASE_URL` overrides; hosted presets
-  cover Ollama Cloud, Together, DeepInfra, NVIDIA, Novita, Baseten, Venice,
-  Synthetic, NanoGPT, ZenMux, AIML API, SiliconFlow, GMI Cloud, Qianfan, ai&,
-  Wafer and Kilo. `lemon models --provider <id> --discover` lists an endpoint's
-  models, and the `/model` picker includes discovered models for configured
-  presets. See [OpenAI-Compatible Endpoints](docs/config.md#openai-compatible-endpoints).
 
 ### Changed
 
@@ -314,52 +364,6 @@ No unreleased changes yet.
 
 ### Fixed
 
-- JSONL storage rejects unreadable or corrupt journals rather than publishing
-  empty state. Failed loads remain recoverable after repair; rejected writes
-  return bounded errors before cache mutation without crashing the Store.
-- Stored OAuth refreshes bind persistence to the selected login's opaque
-  revision. Atomic saves cannot overwrite a concurrent login, logout, or
-  delete/recreate; stale or failed saves cannot return the rotated credential.
-  Persistence callbacks take `(name, encoded, expected_revision)` and require
-  revision-bearing reloads and explicit success acknowledgements. Transient
-  fallback reselects authoritative storage; non-persisting refresh stays ephemeral.
-- Copilot token-endpoint HTTP 401/403 requires a fresh sign-in rather than
-  returning a cached token, including near-expiry refreshes.
-- Provider header defaults no longer override per-model headers on the wire.
-  OpenAI Completions/Responses, Anthropic and Google compatible endpoints merge
-  header names case-insensitively: provider defaults, then model overrides,
-  then explicit caller overrides, without duplicate mixed-case headers.
-- Provider CI checks use the existing OAuth decode branching convention without
-  changing refresh locking, and Codex CLI import regressions check rejection
-  and non-mutation rather than incidental error wording.
-- OAuth callback parsing and xAI endpoint validation reject malformed URL
-  authorities and ports before extracting codes or exchanging credentials.
-- Provider sign-in failures no longer print credential payloads or arbitrary
-  token-endpoint response strings. Token grants and model discovery do not
-  follow redirects; Z.AI callbacks require the returned state, and device-code
-  deadlines include callback and HTTP time.
-- Copilot, Gemini CLI and Antigravity refreshes serialize by stored login,
-  reload after waiting, and fail closed on deleted/replaced logins or expired
-  access tokens. Google `invalid_grant` requires a fresh sign-in.
-- Named `lemon model --status`/`--logout --secret-name NAME` targets that account
-  without deleting another login or clearing its selected provider settings.
-- Discovery cache metadata is isolated by endpoint, protocol, credential and
-  headers, rather than the last listing for a provider id. Custom Google
-  endpoints no longer inherit Google account options; explicitly keyless
-  custom Anthropic and Google endpoints omit generated credential headers.
-- Unknown provider ids in `default_model`/`default_provider` and custom
-  provider option keys no longer create atoms from config input.
-- `lemon model github_copilot --status`/`--logout` no longer crash once a
-  Copilot login is stored.
-- With `auth_source = "oauth"`, a provider's API-key env var (for example
-  `GOOGLE_GEMINI_CLI_API_KEY`) no longer overrides the stored sign-in.
-- Concurrent ChatGPT (Codex) token refreshes no longer replay a rotated refresh
-  token: refresh is single-flight per stored login and re-reads the secret.
-- OpenAI-compatible providers no longer fall back to `OPENAI_API_KEY`: a
-  DeepSeek, Together or other non-OpenAI request without its own key fails
-  instead of sending the OpenAI key to that endpoint. Groq, xAI, Cerebras,
-  DeepSeek, Mistral, Hugging Face, Qwen and Vercel AI Gateway now resolve their
-  key environment variables and default `llm_<id>_api_key` secrets.
 - `sessions.patch` tool policies (web picker, TUI `/toolpolicy`) now reach runs;
   the router previously merged the whole policy row instead of its tool policy.
 - Usage is recorded: `usage.status`/`usage.cost` were always zero because
