@@ -141,9 +141,9 @@ struct ConnectorDetailSettingsView: View {
                 }
                 Text("Authorizing a server does not approve a risky tool action or another Bot's use of your account. Product policy and provider-admin denial remain distinct backend errors.")
             }
-            AdminPreviewDelete(store: store, path: "/connectors/\(adminPath(value.id))", action: "disconnect") {
+            AdminPreviewDelete(store: store, path: "/connectors/\(adminPath(value.id))", action: "disconnect", completed: {
                 control.notice = "Disconnected. Retained history/artifacts and actual provider revocation outcome are disclosed by the preview; externally retained authorization may need provider cleanup."
-            }
+            })
             Button("Refresh server state and discovered tools") { Task { await control.perform { try await refreshConnector() } } }
         }.navigationTitle(connector.name).task {
             name = connector.name; label = connector.accountLabel; tools = connector.tools.map { ConnectorToolDraft(name: $0.name, enabled: $0.enabled) }

@@ -104,7 +104,7 @@ struct MemberSettingsView: View {
                 if value.role != "owner" { body["role"] = .string(role) }
                 current = try await store.mutate("PATCH", "/members/\(adminPath(member.id))", body: body, as: Member.self)
             }.disabled(store.member?.role != "owner" && store.member?.role != "admin")
-            AdminPreviewDelete(store: store, path: "/members/\(adminPath(member.id))") { try await store.refresh() }
+            AdminPreviewDelete(store: store, path: "/members/\(adminPath(member.id))", completed: { try await store.refresh() })
         }.navigationTitle(member.displayName).onAppear { role = member.role; enabled = member.enabled }
     }
 }

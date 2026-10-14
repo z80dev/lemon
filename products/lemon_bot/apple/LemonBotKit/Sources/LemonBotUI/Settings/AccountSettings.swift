@@ -80,9 +80,9 @@ struct AccountSettingsView: View {
                         retainCleanupDiagnostics(nonce: nonce)
                     }, failed: { nonce, error in
                         retainCleanupDiagnostics(nonce: nonce, error: error)
-                    }) {
+                    }, completed: {
                         reauthToken = ""; try await store.signOut()
-                    }
+                    })
                 }
             }
             if !cleanupDiagnostics.isEmpty {

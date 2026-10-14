@@ -107,7 +107,7 @@ public struct MachineTerminalView: View {
 }
 private enum NativeTerminalError: LocalizedError { case deviceRequired; var errorDescription: String? { "Register this installation as an owned device before opening a PTY." } }
 
-@MainActor final class NativeTerminalCoordinator: NSObject, TerminalViewDelegate {
+@MainActor final class NativeTerminalCoordinator: NSObject, @MainActor TerminalViewDelegate {
     let session: NativePTYSession
     private var fedSequence = 0
     init(session: NativePTYSession) { self.session = session }

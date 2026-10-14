@@ -56,103 +56,8 @@ public struct ComposerView: View {
     }
     private var messageUncertain: Bool { pendingMessageNonce != nil || (action.uncertain && unconfirmedDraft != nil) }
     public var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            if let reply = draft.replyToEntryID {
-                HStack {
-                    Label("Reply to \(store.entries[conversationID]?.first(where: { $0.id == reply })?.actor.displayName ?? reply)", systemImage: "arrowshape.turn.up.left")
-                    Spacer()
-                    Button("Cancel reply") { store.setLocalDraft(conversationID: conversationID, text: draft.text, attachmentIDs: draft.attachmentIDs, replyTo: nil) }
-                }.font(.caption)
-            }
-            ForEach(draft.attachmentIDs, id: \.self) { id in
-                HStack {
-                    AttachmentView(store: store, attachmentID: id)
-                    Button("Remove", role: .destructive) { store.setLocalDraft(conversationID: conversationID, text: draft.text, attachmentIDs: draft.attachmentIDs.filter { $0 != id }, replyTo: draft.replyToEntryID) }
-                }
-            }
-            ForEach(draft.fileURLs, id: \.self) { url in
-                HStack {
-                    Label(url.lastPathComponent + " · local, not uploaded", systemImage: "doc.badge.clock")
-                    Button("Remove local file") { Task { await action.perform { try store.removeDraftFile(url, conversationID: conversationID) } } }.disabled(action.inFlight)
-                }.font(.caption)
-            }
-            if !draft.fileURLs.isEmpty {
-                Button("Upload selected files to this conversation") { Task { await uploadSelectedFiles() } }.disabled(!online || action.busy)
-                Text("Reconnecting never uploads or sends these files automatically.").font(.caption)
-            }
-            if !stagedFilenames.isEmpty {
-                VStack(alignment: .leading) {
-                    Text("Selected files awaiting review: \(stagedFilenames.joined(separator: ", "))").font(.caption)
-                    Button("Review selected files") { platform("shares") }
-                    Text("These files are local and not uploaded or sent.").font(.caption).foregroundStyle(.secondary)
-                }
-            }
-            TextField("Message your teammate…", text: text, axis: .vertical)
-                .lineLimit(compact ? 1...4 : 2...8).textFieldStyle(.roundedBorder)
-                .accessibilityLabel("Unsent message draft")
-                .focused($focused)
-                .submitLabel(.send)
-                .onSubmit { Task { await send() } }
-                .onKeyPress(keys: [.return], phases: .down) { press in
-                    if press.modifiers.contains(.shift) { return .ignored }
-                    guard online, !action.busy, pendingMessageNonce == nil, draft.fileURLs.isEmpty,
-                          !draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !draft.attachmentIDs.isEmpty else { return .handled }
-                    Task { await send() }
-                    return .handled
-                }
-            if !mentions.isEmpty || everyone || !references.isEmpty {
-                Text(((everyone ? ["@everyone"] : []) + mentions.map { id in "@\(store.bots.first(where: { $0.id == id })?.name ?? id)" } + references.map { "\($0.kind):\($0.id)" }).joined(separator: " · "))
-                    .font(.caption)
-                Button("Clear mentions and references") { mentions = []; everyone = false; references = [] }.font(.caption)
-            }
-            HStack {
-                Menu {
-                    Button("Choose files") { files = true }
-                    Button("Paste selected files") { readPastedFiles() }
-                    #if os(iOS)
-                    Button("Camera") { platform("camera") }
-                    Button("Photo library") { platform("photos") }
-                    #endif
-                } label: { Label("Attach", systemImage: "paperclip") }.disabled(action.inFlight || draft.attachmentIDs.count + draft.fileURLs.count >= 6)
-                referenceMenu
-                Button { platform("dictation") } label: { Label("Dictate", systemImage: "mic") }.keyboardShortcut("d", modifiers: .command).disabled(action.inFlight)
-                if draft.text.isEmpty && draft.attachmentIDs.isEmpty && draft.fileURLs.isEmpty && stagedFilenames.isEmpty {
-                    Button { platform("voice") } label: { Label("Voice", systemImage: "phone") }.disabled(!online || !voiceAllowed).help("Live voice requires your own private Bot conversation, not a group, channel or teammate's Team Bot.")
-                }
-                Spacer()
-                if !compact {
-                    Picker("Delivery", selection: $mode) { Text("Follow-up").tag("followup"); Text("Steer").tag("steer"); Text("Interrupt").tag("interrupt") }.frame(maxWidth: 150)
-                }
-                Button("Send", systemImage: "arrow.up") { Task { await send() } }
-                    .keyboardShortcut(.return, modifiers: .command)
-                    .disabled(!online || action.busy || pendingMessageNonce != nil || !draft.fileURLs.isEmpty || (draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && draft.attachmentIDs.isEmpty))
-            }.buttonStyle(.borderless)
-            if mode != "followup" { Text("\(mode == "steer" ? "Update active work if the worker acknowledges it; otherwise queue a follow-up." : "Request cancellation and a new priority turn.") Completed external effects are not rolled back.").font(.caption).foregroundStyle(.secondary) }
-            if !online { Text("Offline · your draft stays here. Sending, upload and approvals are never queued automatically.").font(.caption).foregroundStyle(.orange) }
-            if let receipt {
-                ForEach(Array(receipt.delivery.enumerated()), id: \.offset) { _, delivery in
-                    Text("\(store.bots.first(where: { $0.id == delivery.botId })?.name ?? delivery.botId): \(delivery.effectiveMode.replacingOccurrences(of: "_", with: " ").capitalized) · run \(delivery.runId)").font(.caption).textSelection(.enabled)
-                    if let run = receipt.runs.first(where: { $0.id == delivery.runId }), let error = run.error {
-                        ActionErrorView(message: BackendError(status: 0, failure: error).localizedDescription)
-                    }
-                }
-                if receipt.status == "outcome_unknown" { Text("Outcome not confirmed. Do not resend; inspect the retained run and provider before another action.").foregroundStyle(.orange).font(.caption) }
-            }
-            if messageUncertain {
-                Text("This intent is fenced until its exact nonce/run is reconciled. No new Send is allowed for a possibly accepted message.").font(.caption).foregroundStyle(.orange)
-                Button("Check exact submission · never resend") { Task { await reconcile() } }.disabled(!online || action.inFlight)
-            }
-            ForEach(reconciledRuns) { run in
-                Text("Authoritative run \(run.id): \(run.status)").font(.caption).textSelection(.enabled)
-                if let error = run.error { ActionErrorView(message: BackendError(status: 0, failure: error).localizedDescription) }
-            }
-            ActionErrorView(message: action.error)
-            if action.uncertain && !messageUncertain { Text("An upload outcome is unconfirmed. No upload is retried automatically; inspect authorized files before another attempt.").font(.caption).foregroundStyle(.orange) }
-            if let receipt = action.receipt { Text(receipt).font(.caption) }
-        }.padding(12)
-            .fileImporter(isPresented: $files, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
-                switch result { case .success(let urls): Task { await attach(urls) }; case .failure(let error): action.error = error.localizedDescription }
-            }
+        composerContent
+            .fileImporter(isPresented: $files, allowedContentTypes: [.item], allowsMultipleSelection: true, onCompletion: handleSelectedFiles)
             .confirmationDialog("Attach pasted files to this conversation?", isPresented: Binding(get: { !pastedFiles.isEmpty }, set: { if !$0 { pastedFiles = [] } })) {
                 Button("Attach \(pastedFiles.count) selected files") { let urls = pastedFiles; pastedFiles = []; Task { await attach(urls) } }
                 Button("Cancel", role: .cancel) { pastedFiles = [] }
@@ -166,15 +71,167 @@ public struct ComposerView: View {
             .onReceive(NotificationCenter.default.publisher(for: Notification.Name("LemonBot.focusComposer"))) { notice in
                 if notice.userInfo?["conversationID"] as? String == conversationID { focused = true }
             }
-            .onDisappear {
-                let captured = draft
-                guard online else { return }
-                Task {
-                    guard online else { return }
-                    do { try await store.saveDraft(conversationID: conversationID, text: captured.text, attachmentIDs: captured.attachmentIDs, replyTo: captured.replyToEntryID) }
-                    catch { if store.account?.id == owningAccountID { store.errorMessage = error.localizedDescription } }
+            .onDisappear(perform: retainDepartingDraft)
+    }
+
+    private var composerContent: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            replyContext
+            attachmentInputs
+            messageInput
+            routingContext
+            composerControls
+            deliveryStatus
+        }.padding(12)
+    }
+
+    @ViewBuilder private var replyContext: some View {
+        if let reply = draft.replyToEntryID {
+            HStack {
+                Label("Reply to \(store.entries[conversationID]?.first(where: { $0.id == reply })?.actor.displayName ?? reply)", systemImage: "arrowshape.turn.up.left")
+                Spacer()
+                Button("Cancel reply") { store.setLocalDraft(conversationID: conversationID, text: draft.text, attachmentIDs: draft.attachmentIDs, replyTo: nil) }
+            }.font(.caption)
+        }
+    }
+
+    @ViewBuilder private var attachmentInputs: some View {
+        ForEach(draft.attachmentIDs, id: \.self) { id in
+            HStack {
+                AttachmentView(store: store, attachmentID: id)
+                Button("Remove", role: .destructive) { store.setLocalDraft(conversationID: conversationID, text: draft.text, attachmentIDs: draft.attachmentIDs.filter { $0 != id }, replyTo: draft.replyToEntryID) }
+            }
+        }
+        ForEach(draft.fileURLs, id: \.self) { url in
+            HStack {
+                Label(url.lastPathComponent + " · local, not uploaded", systemImage: "doc.badge.clock")
+                Button("Remove local file") { Task { await action.perform { try store.removeDraftFile(url, conversationID: conversationID) } } }.disabled(action.inFlight)
+            }.font(.caption)
+        }
+        if !draft.fileURLs.isEmpty {
+            Button("Upload selected files to this conversation") { Task { await uploadSelectedFiles() } }.disabled(!online || action.busy)
+            Text("Reconnecting never uploads or sends these files automatically.").font(.caption)
+        }
+        if !stagedFilenames.isEmpty {
+            VStack(alignment: .leading) {
+                Text("Selected files awaiting review: \(stagedFilenames.joined(separator: ", "))").font(.caption)
+                Button("Review selected files") { platform("shares") }
+                Text("These files are local and not uploaded or sent.").font(.caption).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var messageInput: some View {
+        TextField("Message your teammate…", text: text, axis: .vertical)
+            .lineLimit(compact ? 1...4 : 2...8)
+            .textFieldStyle(.roundedBorder)
+            .accessibilityLabel("Unsent message draft")
+            .focused($focused)
+            .submitLabel(.send)
+            .onSubmit { Task { await send() } }
+            .onKeyPress(keys: [.return], phases: .down, action: handleComposerKeyPress)
+    }
+
+    private func handleComposerKeyPress(_ press: KeyPress) -> KeyPress.Result {
+        if press.modifiers.contains(.shift) { return .ignored }
+        guard online, !action.busy, pendingMessageNonce == nil, draft.fileURLs.isEmpty,
+              !draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !draft.attachmentIDs.isEmpty else { return .handled }
+        Task { await send() }
+        return .handled
+    }
+
+    @ViewBuilder private var routingContext: some View {
+        if !mentions.isEmpty || everyone || !references.isEmpty {
+            Text(routingSummary).font(.caption)
+            Button("Clear mentions and references") { mentions = []; everyone = false; references = [] }.font(.caption)
+        }
+    }
+
+    private var routingSummary: String {
+        var labels: [String] = []
+        if everyone { labels.append("@everyone") }
+        for id in mentions { labels.append("@\(store.bots.first(where: { $0.id == id })?.name ?? id)") }
+        for reference in references { labels.append("\(reference.kind):\(reference.id)") }
+        return labels.joined(separator: " · ")
+    }
+
+    private var composerControls: some View {
+        HStack {
+            attachMenu
+            referenceMenu
+            Button { platform("dictation") } label: { Label("Dictate", systemImage: "mic") }
+                .keyboardShortcut("d", modifiers: .command).disabled(action.inFlight)
+            if draft.text.isEmpty && draft.attachmentIDs.isEmpty && draft.fileURLs.isEmpty && stagedFilenames.isEmpty {
+                Button { platform("voice") } label: { Label("Voice", systemImage: "phone") }
+                    .disabled(!online || !voiceAllowed)
+                    .help("Live voice requires your own private Bot conversation, not a group, channel or teammate's Team Bot.")
+            }
+            Spacer()
+            if !compact {
+                Picker("Delivery", selection: $mode) {
+                    Text("Follow-up").tag("followup")
+                    Text("Steer").tag("steer")
+                    Text("Interrupt").tag("interrupt")
+                }.frame(maxWidth: 150)
+            }
+            Button("Send", systemImage: "arrow.up") { Task { await send() } }
+                .keyboardShortcut(.return, modifiers: .command)
+                .disabled(!online || action.busy || pendingMessageNonce != nil || !draft.fileURLs.isEmpty || (draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && draft.attachmentIDs.isEmpty))
+        }.buttonStyle(.borderless)
+    }
+
+    private var attachMenu: some View {
+        Menu {
+            Button("Choose files") { files = true }
+            Button("Paste selected files") { readPastedFiles() }
+            #if os(iOS)
+            Button("Camera") { platform("camera") }
+            Button("Photo library") { platform("photos") }
+            #endif
+        } label: { Label("Attach", systemImage: "paperclip") }
+            .disabled(action.inFlight || draft.attachmentIDs.count + draft.fileURLs.count >= 6)
+    }
+
+    @ViewBuilder private var deliveryStatus: some View {
+        if mode != "followup" { Text("\(mode == "steer" ? "Update active work if the worker acknowledges it; otherwise queue a follow-up." : "Request cancellation and a new priority turn.") Completed external effects are not rolled back.").font(.caption).foregroundStyle(.secondary) }
+        if !online { Text("Offline · your draft stays here. Sending, upload and approvals are never queued automatically.").font(.caption).foregroundStyle(.orange) }
+        if let receipt {
+            ForEach(Array(receipt.delivery.enumerated()), id: \.offset) { _, delivery in
+                Text("\(store.bots.first(where: { $0.id == delivery.botId })?.name ?? delivery.botId): \(delivery.effectiveMode.replacingOccurrences(of: "_", with: " ").capitalized) · run \(delivery.runId)").font(.caption).textSelection(.enabled)
+                if let run = receipt.runs.first(where: { $0.id == delivery.runId }), let error = run.error {
+                    ActionErrorView(message: BackendError(status: 0, failure: error).localizedDescription)
                 }
             }
+            if receipt.status == "outcome_unknown" { Text("Outcome not confirmed. Do not resend; inspect the retained run and provider before another action.").foregroundStyle(.orange).font(.caption) }
+        }
+        if messageUncertain {
+            Text("This intent is fenced until its exact nonce/run is reconciled. No new Send is allowed for a possibly accepted message.").font(.caption).foregroundStyle(.orange)
+            Button("Check exact submission · never resend") { Task { await reconcile() } }.disabled(!online || action.inFlight)
+        }
+        ForEach(reconciledRuns) { run in
+            Text("Authoritative run \(run.id): \(run.status)").font(.caption).textSelection(.enabled)
+            if let error = run.error { ActionErrorView(message: BackendError(status: 0, failure: error).localizedDescription) }
+        }
+        ActionErrorView(message: action.error)
+        if action.uncertain && !messageUncertain { Text("An upload outcome is unconfirmed. No upload is retried automatically; inspect authorized files before another attempt.").font(.caption).foregroundStyle(.orange) }
+        if let receipt = action.receipt { Text(receipt).font(.caption) }
+    }
+
+    private func handleSelectedFiles(_ result: Result<[URL], Error>) {
+        switch result {
+        case .success(let urls): Task { await attach(urls) }
+        case .failure(let error): action.error = error.localizedDescription
+        }
+    }
+
+    private func retainDepartingDraft() {
+        let captured = draft
+        guard online else { return }
+        Task {
+            guard online else { return }
+            do { try await store.saveDraft(conversationID: conversationID, text: captured.text, attachmentIDs: captured.attachmentIDs, replyTo: captured.replyToEntryID) }
+            catch { if store.account?.id == owningAccountID { store.errorMessage = error.localizedDescription } }
+        }
     }
     private var referenceMenu: some View {
         Menu {

@@ -66,26 +66,30 @@ struct RoutineEditorView: View {
     @State private var revokePresented = false
     @State private var action = HubAction()
     var body: some View {
-        Form {
-            HubError(action: action)
-            if let providerError { Text(providerError).foregroundStyle(.red).textSelection(.enabled) }
-            if saved == nil { HubBotPicker(store: store, selection: $botID) } else { Text("Bot: \(botID)") }
-            TextField("Routine name", text: $name)
-            TextEditor(text: $instruction).frame(minHeight: 160)
-            Toggle("Enabled (future triggers only)", isOn: $enabled)
-            Text("Creation does not execute work. Pausing blocks future triggers, not active runs. Schedules use the destination Lemon scheduler; next run is the server-returned instant. Tests are real work and consume usage.")
-            Picker("Trigger", selection: $triggerKind) { Text("Schedule").tag("schedule"); Text("Channel / email event").tag("channel_event"); Text("External event").tag("external_event"); Text("Webhook").tag("webhook") }
-            triggerFields
-            Button("Save routine") { Task { await action.perform {
-                var body: JSONObject = ["name": .string(name), "instruction": .string(instruction), "enabled": .bool(enabled)]
-                if !pausingExistingBroadScope { body["trigger"] = .object(try triggerBody()) }
-                if let saved { body["revision"] = .number(Double(saved.revision)); self.saved = try await store.mutate("PATCH", "/routines/\(hubID(saved.id))", body: body) }
-                else { body["botId"] = .string(botID); self.saved = try await store.mutate("POST", "/routines", body: body) }
-            } } }.disabled(botID.isEmpty || name.isEmpty || instruction.isEmpty || action.busy || action.uncertain || store.connectionState != "online")
-            savedRoutineFields
-        }.navigationTitle(saved?.name ?? "New routine").toolbar { Button("Close") { dismiss() }; Button("Refresh history") { Task { await action.perform(readOnly: true) { try await loadRuns() } } } }
+        observedEditorForm
+            .confirmationDialog("A test performs real work on the assigned host and consumes usage. Continue?", isPresented: $testPresented) {
+                Button("Run real test") { Task { await testSavedRoutine() } }
+                    .disabled(action.busy || action.uncertain || store.connectionState != "online")
+            }
+            .confirmationDialog("Rotate the key? The prior key immediately stops working.", isPresented: $rotatePresented) {
+                Button("Issue / rotate") { Task { await rotateWebhookKey() } }
+                    .disabled(action.busy || action.uncertain || store.connectionState != "online")
+            }
+            .confirmationDialog("Revoke webhook key and future ingress? Existing runs remain.", isPresented: $revokePresented) {
+                Button("Revoke key", role: .destructive) { Task { await revokeWebhookKey() } }
+                    .disabled(action.busy || action.uncertain || store.connectionState != "online")
+            }
+    }
+
+    private var observedEditorForm: some View {
+        editorForm
+            .navigationTitle(saved?.name ?? "New routine")
+            .toolbar {
+                Button("Close") { dismiss() }
+                Button("Refresh history") { Task { await action.perform(readOnly: true) { try await loadRuns() } } }
+            }
             .task { apply(initial); await loadProviders() }
-            .task(id: saved?.id) { guard saved != nil else { return }; while !Task.isCancelled { await action.perform(readOnly: true) { try await loadRuns() }; do { try await Task.sleep(for: .seconds(5)) } catch { break } } }
+            .task(id: saved?.id) { await observeRunHistory() }
             .onChange(of: source) { Task { await loadDefinition() } }
             .onChange(of: botID) { noisyConsent = false }
             .onChange(of: channelID) { noisyConsent = false }
@@ -94,8 +98,40 @@ struct RoutineEditorView: View {
             .onChange(of: phrase) { noisyConsent = false }
             .onChange(of: enabled) { noisyConsent = false }
             .onChange(of: triggerKind) { noisyConsent = false }
-            .sheet(isPresented: $keyPresented, onDismiss: { webhookKey = nil }) {
-                if let key = webhookKey { NavigationStack { Form {
+            .sheet(isPresented: $keyPresented, onDismiss: { webhookKey = nil }) { webhookKeyReview }
+    }
+
+    private var editorForm: some View {
+        Form {
+            HubError(action: action)
+            if let providerError { Text(providerError).foregroundStyle(.red).textSelection(.enabled) }
+            routineIdentityFields
+            triggerFields
+            Button("Save routine") { Task { await saveRoutine() } }
+                .disabled(botID.isEmpty || name.isEmpty || instruction.isEmpty || action.busy || action.uncertain || store.connectionState != "online")
+            savedRoutineFields
+        }
+    }
+
+    @ViewBuilder private var routineIdentityFields: some View {
+        if saved == nil { HubBotPicker(store: store, selection: $botID) }
+        else { Text("Bot: \(botID)") }
+        TextField("Routine name", text: $name)
+        TextEditor(text: $instruction).frame(minHeight: 160)
+        Toggle("Enabled (future triggers only)", isOn: $enabled)
+        Text("Creation does not execute work. Pausing blocks future triggers, not active runs. Schedules use the destination Lemon scheduler; next run is the server-returned instant. Tests are real work and consume usage.")
+        Picker("Trigger", selection: $triggerKind) {
+            Text("Schedule").tag("schedule")
+            Text("Channel / email event").tag("channel_event")
+            Text("External event").tag("external_event")
+            Text("Webhook").tag("webhook")
+        }
+    }
+
+    @ViewBuilder private var webhookKeyReview: some View {
+        if let key = webhookKey {
+            NavigationStack {
+                Form {
                     Text("Shown once. Keep this key out of chat, logs and URLs.")
                     Text(key.url).textSelection(.enabled)
                     SecureField("One-time key", text: .constant(key.key))
@@ -103,17 +139,61 @@ struct RoutineEditorView: View {
                     Button("Copy key") { hubCopy(key.key) }
                     Button("Copy exact header") { hubCopy(key.header) }
                     Button("Copy POST URL") { hubCopy(key.url) }
-                }.navigationTitle("Webhook key").toolbar { Button("Done / erase local buffer") { webhookKey = nil; keyPresented = false } } } }
+                }
+                .navigationTitle("Webhook key")
+                .toolbar { Button("Done / erase local buffer") { webhookKey = nil; keyPresented = false } }
             }
-            .confirmationDialog("A test performs real work on the assigned host and consumes usage. Continue?", isPresented: $testPresented) {
-                Button("Run real test") { guard let saved else { return }; Task { await action.perform { let run: RoutineRun = try await store.mutate("POST", "/routines/\(hubID(saved.id))/test", body: [:]); runs.insert(run, at: 0); if run.status == "outcome_unknown" { action.uncertain = true; action.error = "Test outcome_unknown; reconcile routine run \(run.id) before another intent." } } } }.disabled(action.busy || action.uncertain || store.connectionState != "online")
+        }
+    }
+
+    private func observeRunHistory() async {
+        guard saved != nil else { return }
+        while !Task.isCancelled {
+            await action.perform(readOnly: true) { try await loadRuns() }
+            do { try await Task.sleep(for: .seconds(5)) } catch { break }
+        }
+    }
+
+    private func saveRoutine() async {
+        await action.perform {
+            var body: JSONObject = ["name": .string(name), "instruction": .string(instruction), "enabled": .bool(enabled)]
+            if !pausingExistingBroadScope { body["trigger"] = .object(try triggerBody()) }
+            if let saved {
+                body["revision"] = .number(Double(saved.revision))
+                self.saved = try await store.mutate("PATCH", "/routines/\(hubID(saved.id))", body: body)
+            } else {
+                body["botId"] = .string(botID)
+                self.saved = try await store.mutate("POST", "/routines", body: body)
             }
-            .confirmationDialog("Rotate the key? The prior key immediately stops working.", isPresented: $rotatePresented) {
-                Button("Issue / rotate") { guard let saved else { return }; Task { await action.perform { webhookKey = try await store.mutate("POST", "/routines/\(hubID(saved.id))/webhook-key", body: [:]); keyPresented = true } } }.disabled(action.busy || action.uncertain || store.connectionState != "online")
+        }
+    }
+
+    private func testSavedRoutine() async {
+        guard let saved else { return }
+        await action.perform {
+            let run: RoutineRun = try await store.mutate("POST", "/routines/\(hubID(saved.id))/test", body: [:])
+            runs.insert(run, at: 0)
+            if run.status == "outcome_unknown" {
+                action.uncertain = true
+                action.error = "Test outcome_unknown; reconcile routine run \(run.id) before another intent."
             }
-            .confirmationDialog("Revoke webhook key and future ingress? Existing runs remain.", isPresented: $revokePresented) {
-                Button("Revoke key", role: .destructive) { guard let saved else { return }; Task { await action.perform { let _: HubOK = try await store.mutate("DELETE", "/routines/\(hubID(saved.id))/webhook-key", body: [:]); webhookKey = nil } } }.disabled(action.busy || action.uncertain || store.connectionState != "online")
-            }
+        }
+    }
+
+    private func rotateWebhookKey() async {
+        guard let saved else { return }
+        await action.perform {
+            webhookKey = try await store.mutate("POST", "/routines/\(hubID(saved.id))/webhook-key", body: [:])
+            keyPresented = true
+        }
+    }
+
+    private func revokeWebhookKey() async {
+        guard let saved else { return }
+        await action.perform {
+            let _: HubOK = try await store.mutate("DELETE", "/routines/\(hubID(saved.id))/webhook-key", body: [:])
+            webhookKey = nil
+        }
     }
     @ViewBuilder private var savedRoutineFields: some View {
         if let saved {
