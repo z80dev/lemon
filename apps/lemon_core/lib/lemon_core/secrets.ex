@@ -209,13 +209,17 @@ defmodule LemonCore.Secrets do
   end
 
   defp fetch_revision_entry(server, owner, name, revision) do
-    with {:ok, entry} <- fetch_active_entry(server, owner, name) do
-      if is_binary(revision) and entry_revision(server, owner, name, entry) == revision,
-        do: {:ok, entry},
-        else: {:error, :stale_revision}
-    else
-      {:error, reason} when reason in [:not_found, :expired] -> {:error, :stale_revision}
-      {:error, _reason} = error -> error
+    case fetch_active_entry(server, owner, name) do
+      {:ok, entry} ->
+        if is_binary(revision) and entry_revision(server, owner, name, entry) == revision,
+          do: {:ok, entry},
+          else: {:error, :stale_revision}
+
+      {:error, reason} when reason in [:not_found, :expired] ->
+        {:error, :stale_revision}
+
+      {:error, _reason} = error ->
+        error
     end
   end
 

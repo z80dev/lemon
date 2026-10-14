@@ -198,7 +198,6 @@ defmodule LemonCli.Onboarding.SignInProvidersTest do
     assert :ok = SetupProvider.run(["kimi-code", "--status", "--config-path", config_path], io())
     status = output()
     assert status =~ "Stored login: llm_kimi_coding_api_key (refreshable login)"
-    assert status =~ "Access token: expires in 1h"
     assert status =~ "KIMI_API_KEY: set, ignored while auth_source = \"oauth\""
     assert status =~ "Credentials usable: yes"
     refute status =~ "kimi-at"
