@@ -172,6 +172,12 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - Pure operator-read `mcp.execution_names` projects exact native profile HTTP
   tool aliases before profile creation, without HTTP/DNS initialization, secret
   configuration or JavaScript guesses at the native identity encoding.
+- Authenticated cron admission receipts can project a Team routine creator's
+  current execution/private-memory scopes, destination-only connector references,
+  restrictive native policy, and fresh fixed-run core proof. The shared native
+  factory checks the actual profile-built request before launch; stale proofs
+  and shared-memory grants fail closed, without storing the private projection
+  in cron job metadata, runs, events, or audits.
 
 ### Fixed
 

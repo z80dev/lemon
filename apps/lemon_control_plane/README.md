@@ -382,7 +382,66 @@ records `denied`; any other reply, unavailable credential, timeout/disconnect,
 or removed origin trust records `admission_unavailable`. Both are failed cron
 run outcomes (also `meta.admission_outcome`), with no router submission and no
 automatic retry. The next ordinary occurrence rechecks admission. The callback
-must only read policy; it must not grant credentials or launch work itself.
+must only read policy and project already-authorized invocation configuration;
+it must not provision credentials or launch work itself.
+
+For shared/Team profiles, an approved response can additionally contain exactly
+one `invocation` object:
+
+```text
+{allow: true, context: <exact echoed request object>,
+ invocation: {invocationContextKey, memoryContextKey, invocationMcpServers,
+              invocationToolPolicy, invocationProof, sharedMemoryGrant: false}}
+```
+
+All six invocation fields are required. Unknown top-level, invocation, server,
+or policy fields fail closed. Both context keys are 1–128 ASCII characters
+matching `[A-Za-z0-9][A-Za-z0-9_.:-]*`; they bind the creator's current execution
+and private memory scope. Scheduled callbacks cannot grant shared memory.
+The server list uses canonical `chat.send` MCP definitions (`name`, `url`,
+`headers`, optional `enabledTools`, `allowedOrigins`, `approvedPrivateOrigins`).
+It replaces the whole profile connector list, never merging the profile owner's
+default credentials. An empty replacement never falls back to that list, but
+a projected invocation must include its required core proof server or admission
+fails closed. Header values must be exact `${LEMON_SECRET:NAME}` references, or
+`Bearer ${LEMON_SECRET:NAME}` for Authorization. No literal tokens or
+controller-side secret resolution occur.
+URLs forbid userinfo, queries, fragments, and interpolation; HTTPS is required
+except literal-loopback HTTP with the exact origin present in both
+`allowedOrigins` and `approvedPrivateOrigins`.
+
+`invocationToolPolicy` is the canonical native policy map (`profile`, `allow`,
+`deny`, `blocked_tools`, `require_approval`, `approvals`, `no_reply`). It is
+restrictively intersected with the cron tool block and the current profile
+floor: allowlists intersect, denials/approval gates union, and an `always`
+approval cannot be replaced with `never`. Unsupported policy shapes do not
+become permissive defaults.
+
+`invocationProof` uses the shared native factory's exact descriptor:
+
+```text
+{runId: <routerRunId>, serverName, serverUrl,
+ headerName: "X-Lemon-Bot-Invocation",
+ secretName: "lemon_bot/invocations/<routerRunId>"}
+```
+
+Exactly one replacement server must match the descriptor's name/URL and carry
+that exact header with value
+`${LEMON_SECRET:lemon_bot/invocations/<routerRunId>}`. The callback must use the
+actual creator's current native invocation builder for this fixed run, not copy
+a previous descriptor or proof secret. Before launch, the shared Core factory
+validates the proof again against the actual profile-built request, then stamps
+canonical private memory/proof attestations. Authentication remains at the
+owning boundary: the configured authenticated cron allow receipt, or actual
+operator authorization for direct chat. No synthetic operator context is used.
+
+The projection is consumed only after an authenticated allow receipt with an
+exact context echo. It remains a private worker argument, not job metadata,
+cron run history, an audit field, or a grant from prompt/client text. The
+destination request receives the context key and secret-reference-bearing
+connector definitions through the normal owning profile/node path.
+The two-field response remains valid for existing single-principal jobs.
+
 
 Admission configuration is durable only in the private owning job record.
 Job events, management projections, audit records, run history, and router

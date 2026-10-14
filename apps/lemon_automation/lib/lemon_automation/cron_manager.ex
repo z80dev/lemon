@@ -1024,6 +1024,9 @@ defmodule LemonAutomation.CronManager do
         :ok ->
           submit_preflighted_run(job, run, manager)
 
+        {:ok, invocation} ->
+          submit_preflighted_run(job, run, manager, admission_invocation: invocation)
+
         {:error, outcome} ->
           CronStore.record_audit(:admission_failed, %{
             job_id: job.id,
@@ -1064,6 +1067,7 @@ defmodule LemonAutomation.CronManager do
 
     case admission.check(job, run) do
       :ok -> :ok
+      {:ok, invocation} when is_map(invocation) -> {:ok, invocation}
       {:error, :denied} -> {:error, :denied}
       _ -> {:error, :admission_unavailable}
     end
@@ -1073,7 +1077,7 @@ defmodule LemonAutomation.CronManager do
     _, _ -> {:error, :admission_unavailable}
   end
 
-  defp submit_preflighted_run(job, run, manager) do
+  defp submit_preflighted_run(job, run, manager, invocation_opts \\ []) do
     case preflight_mod().check(job) do
       :ok ->
         case CronJob.execution_mode(job) do
@@ -1081,17 +1085,20 @@ defmodule LemonAutomation.CronManager do
             command_runner().submit(job, run, run_id: run.run_id)
 
           :agent ->
-            run_submitter().submit(job, run,
-              run_id: run.run_id,
-              append_memory: false,
-              on_submitting: fn router_id, session_key ->
-                GenServer.call(
-                  manager,
-                  {:claim_submission, run.id, router_id, session_key},
-                  @call_timeout_ms
-                )
-              end
-            )
+            opts =
+              Keyword.merge(invocation_opts,
+                run_id: run.run_id,
+                append_memory: false,
+                on_submitting: fn router_id, session_key ->
+                  GenServer.call(
+                    manager,
+                    {:claim_submission, run.id, router_id, session_key},
+                    @call_timeout_ms
+                  )
+                end
+              )
+
+            run_submitter().submit(job, run, opts)
         end
 
       {:skip, failure} ->
@@ -1316,6 +1323,9 @@ defmodule LemonAutomation.CronManager do
     |> CronRun.fail(Atom.to_string(outcome))
     |> then(&%{&1 | meta: Map.put(&1.meta || %{}, :admission_outcome, outcome)})
   end
+
+  defp terminal_result(run, {:error, :admission_unavailable}),
+    do: terminal_result(run, {:admission_failed, :admission_unavailable})
 
   defp terminal_result(run, {:error, error}), do: CronRun.fail(run, to_error(error))
 
