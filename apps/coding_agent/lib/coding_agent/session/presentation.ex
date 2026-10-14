@@ -414,6 +414,7 @@ defmodule CodingAgent.Session.Presentation do
       "bash" -> :command
       "bash_output" -> :command
       "kill_process" -> :command
+      "eval" -> :command
       "read" -> :tool
       "write" -> :file_change
       "edit" -> :file_change
@@ -445,6 +446,10 @@ defmodule CodingAgent.Session.Presentation do
 
       "kill_process" ->
         "kill: #{a["process_id"] || ""}"
+
+      "eval" ->
+        label = a["title"] || (a["code"] || "") |> String.split("\n") |> hd()
+        "eval #{a["language"] || ""}: `#{String.slice(label, 0, 60)}`"
 
       "read" ->
         path = a["path"] || a["file_path"] || ""

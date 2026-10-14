@@ -178,6 +178,9 @@ defmodule CodingAgent.SystemPrompt do
     {~w(bash bash_output kill_process),
      "For long-running commands, use an appropriate timeout or `run_in_background: true`; " <>
        "retrieve output with `bash_output`, and stop processes you started with `kill_process` when finished."},
+    {~w(eval),
+     "Use `eval` for incremental computation or data inspection in a persistent Python/JS kernel; " <>
+       "reuse earlier definitions instead of re-running setup. Use `bash` for project commands."},
     {[],
      "For read-only or explanation requests, inspect and reason without editing files " <>
        "or running commands that mutate project state."},
