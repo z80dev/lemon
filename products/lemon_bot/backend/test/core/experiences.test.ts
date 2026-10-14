@@ -5,7 +5,7 @@ import { createEventService } from '../../src/core/events';
 import type * as P from '../../../contracts/protocol';
 import type { BackendServices, Principal, RequestContext } from '../../src/core/services';
 import { ApiError, fail } from '../../src/core/errors';
-import { botPresence, createExperienceRoutes, createExperienceService, effectiveBotGrants, invocationBotToolPolicy, nativeBotToolPolicy, reviewedCandidates } from '../../src/core/experiences';
+import { botPresence, createExperienceRoutes, createExperienceService, effectiveBotGrants, nativeBotToolPolicy, reviewedCandidates } from '../../src/core/experiences';
 import { productBotTools } from '../../src/core/bots';
 import { z } from '../../src/core/validation';
 
@@ -34,7 +34,7 @@ function fixture() {
     update<T extends { revision: number; updatedAtMs: number }>(resource: T, changes: Partial<T>): T { return { ...resource, ...changes, revision: resource.revision + 1, updatedAtMs: clock }; },
     page<T>(context: RequestContext, values: T[], options?: { ascending?: boolean; key?: (value: T) => string }): P.Page<T> { const key = options?.key ?? ((value: T) => (value as P.Resource).id); const sorted = [...values].sort((a, b) => key(a).localeCompare(key(b)) * (options?.ascending ? 1 : -1)); return { items: sorted.slice(0, Number(context.query.get('limit') ?? 100)), nextCursor: null }; },
     auth: {
-      bot(_principal: Principal, valueId: string, manage?: boolean) { const value = store.require<P.Bot>('bots', valueId); if (manage && value.ownerUserId !== user.userId && !value.managerUserIds.includes(user.userId)) fail('forbidden', 'Not a manager'); return value; },
+      bot(actor: Principal, valueId: string) { const value = store.require<P.Bot>('bots', valueId); if (value.ownerUserId !== actor.userId) fail('forbidden', 'Not the owner'); return value; },
       machine(_principal: Principal, valueId: string) { return store.require<P.Machine>('machines', valueId); },
       conversation(_principal: Principal, valueId: string) { return store.require<P.Conversation>('conversations', valueId); },
       attachment(_principal: Principal, valueId: string) { return store.require<P.Attachment>('attachments', valueId); },
@@ -48,7 +48,6 @@ function fixture() {
     runtime: { async reconcile() {} },
     integrations: {
       async effectivePolicy(): Promise<P.EffectivePolicy> { return { userId: user.userId, botId: bot.id, directoryGroupIds: [], productAccess: true, localExecutionCeiling: 'allow', allowSudo: false, allowEgress: false, rules: [], networkPolicies: [], explanations: [] }; },
-      async sharedProfilePolicy(): Promise<P.EffectivePolicy> { return { userId: bot.ownerUserId, botId: bot.id, directoryGroupIds: [], productAccess: true, localExecutionCeiling: 'allow', allowSudo: false, allowEgress: false, rules: [], networkPolicies: [], explanations: [] }; },
     },
     events: { emit() {} },
     async syncBotProfile() { synced++; },
@@ -69,10 +68,10 @@ function fixture() {
   store.setMetadata('workspaceId', 'workspace');
   store.setMetadata('botProfileSync:bot', { profileId: bot.profileId, nodeId: machine.nodeId, mutationId: 'sync', acknowledged: true, revisionDigest: 'a'.repeat(64), completedAtMs: clock });
   const routes = createExperienceRoutes(services);
-  async function request<T>(method: string, path: string, body?: unknown, params: Record<string, string> = { id: bot.id }, query = ''): Promise<T> {
+  async function request<T>(method: string, path: string, body?: unknown, params: Record<string, string> = { id: bot.id }, query = '', actor: Principal = user): Promise<T> {
     const route = routes.find(value => value.method === method && value.path === `/v1${path}`)!;
     if (!route) throw new Error('Missing route');
-    const context: RequestContext = { request: new Request('https://example.test/v1'), params, query: new URLSearchParams(query), body, user, services, requestId: 'request', route, nonceResourceIds: [] };
+    const context: RequestContext = { request: new Request('https://example.test/v1'), params, query: new URLSearchParams(query), body, user: actor, services, requestId: 'request', route, nonceResourceIds: [] };
     return await route.handler(context) as T;
   }
   return { services, store, bot, machine, room, request, base, acknowledgments, advance(ms: number) { clock += ms; }, get synced() { return synced; }, get notificationCount() { return notificationCount; }, close() { store.close(); } };
@@ -257,6 +256,39 @@ describe('truthful presence and private activity', () => {
 });
 
 describe('native grant enforcement boundaries', () => {
+  test('a workspace owner cannot read or project another users Bot policy or experiences', async () => {
+    const f = fixture();
+    try {
+      const foreign: Principal = { ...user, id: 'bob', userId: 'bob', role: 'owner' };
+      const measured: P.MachineCapabilities = { machineId: 'machine', os: 'linux', measuredAtMs: f.services.now(), stale: false, items: [] };
+      let policyCalls = 0;
+      f.services.integrations.effectivePolicy = async () => { policyCalls++; throw new Error('Foreign policy must not be evaluated'); };
+      await expect(nativeBotToolPolicy(f.services, foreign, f.bot, measured)).rejects.toMatchObject({ code: 'forbidden' });
+      await expect(effectiveBotGrants(f.services, foreign, f.bot, measured)).rejects.toMatchObject({ code: 'forbidden' });
+      expect(() => botPresence(f.services, foreign, f.bot)).toThrow(ApiError);
+      f.services.auth.bot = (_actor, valueId) => f.store.require<P.Bot>('bots', valueId);
+      for (const path of ['/bots/:id/presence', '/bots/:id/overview', '/bots/:id/grants', '/bots/:id/activity', '/bots/:id/upcoming', '/bots/:id/preference-changes', '/bots/:id/ideas', '/bots/:id/milestones']) {
+        await expect(f.request('GET', path, undefined, { id: f.bot.id }, '', foreign)).rejects.toMatchObject({ code: 'forbidden' });
+      }
+      expect(policyCalls).toBe(0);
+    } finally { f.close(); }
+  });
+  test('owner provisioning never decrypts or admits another owners connector metadata', async () => {
+    const f = fixture();
+    try {
+      const measured: P.MachineCapabilities = { machineId: 'machine', os: 'linux', measuredAtMs: f.services.now(), stale: false, items: [] };
+      const connector: P.Connector = { ...f.base, id: 'foreign-connector', botId: 'bot', ownerUserId: 'bob', name: 'Private account', url: 'https://private.example.test/mcp', accountLabel: 'Foreign account', authKind: 'none', state: 'connected', tools: [{ name: 'private_tool', enabled: true }], secretHeaderNames: [], shared: false, lastError: null };
+      f.store.put('connectors', connector);
+      f.store.put('botGrants', { ...f.base, id: 'foreign-grant', botId: 'bot', machineId: 'machine', capabilityId: `connector:${connector.id}`, requestedLevel: 'read_interact', effectiveLevel: 'read_interact', reasons: [] } satisfies P.BotGrant);
+      f.store.setMetadata(`connector:${connector.id}`, 'foreign-private-metadata');
+      let decrypted = 0;
+      f.services.decrypt = <T>(): T => { decrypted++; throw new Error('Foreign credentials must not be resolved'); };
+      expect(await effectiveBotGrants(f.services, user, f.bot, measured)).toEqual([]);
+      const policy = await nativeBotToolPolicy(f.services, user, f.bot, measured);
+      expect(policy.allow).toEqual(projectedProductTools.map(tool => tool.executionName).concat(['read_skill', 'webfetch', 'websearch', 'task', 'agent_message', 'wait', 'parent_question']).sort());
+      expect(decrypted).toBe(0);
+    } finally { f.close(); }
+  });
   test('read-only file grants produce actual deny policy and active work blocks cutover', async () => {
     const f = fixture();
     try {
@@ -284,17 +316,17 @@ describe('native grant enforcement boundaries', () => {
       expect((await effectiveBotGrants(f.services, user, f.bot, measured))[0]!.effectiveLevel).toBe('off');
     } finally { f.close(); }
   });
-  test('shared profile floor never uses the initiating members private execution ceiling', async () => {
+  test('one native policy uses and refreshes the actual owners execution ceiling', async () => {
     const f = fixture();
     try {
       const measured: P.MachineCapabilities = { machineId: 'machine', os: 'linux', measuredAtMs: f.services.now(), stale: false, items: [{ id: 'files', name: 'Files', category: 'files', supported: true, configuredLevel: 'read_interact', osGrant: 'not_required', tools: ['read', 'write'], reason: 'Measured', measuredAtMs: f.services.now(), stale: false }] };
       f.store.put('botGrants', { ...f.base, id: 'file-grant', botId: 'bot', machineId: 'machine', capabilityId: 'files', requestedLevel: 'read_only', effectiveLevel: 'read_only', reasons: [] } satisfies P.BotGrant);
-      const floor = await f.services.integrations.sharedProfilePolicy!('bot');
-      f.services.integrations.effectivePolicy = async () => ({ ...floor, localExecutionCeiling: 'deny' });
-      const shared = await nativeBotToolPolicy(f.services, user, f.bot, measured);
-      const invocation = await invocationBotToolPolicy(f.services, user, f.bot, measured);
-      expect(shared.deny).not.toContain('read'); expect(invocation.deny).toContain('read');
-      for (const policy of [shared, invocation]) {
+      const floor = await f.services.integrations.effectivePolicy(user, f.bot.id);
+      const permitted = await nativeBotToolPolicy(f.services, user, f.bot, measured);
+      f.services.integrations.effectivePolicy = async (actor, botId) => { expect(actor.userId).toBe(f.bot.ownerUserId); expect(botId).toBe(f.bot.id); return { ...floor, localExecutionCeiling: 'deny' }; };
+      const restricted = await nativeBotToolPolicy(f.services, user, f.bot, measured);
+      expect(permitted.deny).not.toContain('read'); expect(restricted.deny).toContain('read');
+      for (const policy of [permitted, restricted]) {
         const excluded = ['agent', 'remember', 'recall', 'cron', 'goal', 'kanban', 'todo', 'peer', 'skill_manage', 'tool_auth', 'extensions_status'];
         for (const tool of excluded) expect(policy.deny).toContain(tool);
         expect(policy.blocked_tools).toEqual(excluded);
@@ -354,7 +386,7 @@ describe('native grant enforcement boundaries', () => {
       }
       const floor = await f.services.integrations.effectivePolicy(user, f.bot.id);
       f.services.integrations.effectivePolicy = async () => ({ ...floor, localExecutionCeiling: 'ask' });
-      expect((await invocationBotToolPolicy(f.services, user, f.bot, measured)).require_approval).toContain('lsp_diagnostics');
+      expect((await nativeBotToolPolicy(f.services, user, f.bot, measured)).require_approval).toContain('lsp_diagnostics');
       measured.items[1]!.tools = ['bash'];
       expect((await nativeBotToolPolicy(f.services, user, f.bot, measured)).allow).not.toContain('lsp_diagnostics');
       measured.items[1]!.tools = ['bash', 'lsp_diagnostics']; measured.items[0]!.osGrant = 'unknown';
@@ -371,12 +403,12 @@ describe('native grant enforcement boundaries', () => {
       f.store.setMetadata('connector:connector', JSON.stringify({ machineId: 'machine', configuredLevel: 'read_interact', discoveredAtMs: f.services.now(), readOnlyTools: ['declared_read'], executionNames: { declared_read: 'actual_read_alias', write_report: 'actual_write_alias' } }));
       const shared = await nativeBotToolPolicy(f.services, user, f.bot, measured);
       expect(shared.require_approval).toEqual(['actual_write_alias']);
-      const floor = await f.services.integrations.sharedProfilePolicy!('bot');
+      const floor = await f.services.integrations.effectivePolicy(user, f.bot.id);
       f.services.integrations.effectivePolicy = async () => ({ ...floor, localExecutionCeiling: 'ask' });
-      const invocation = await invocationBotToolPolicy(f.services, user, f.bot, measured);
+      const invocation = await nativeBotToolPolicy(f.services, user, f.bot, measured);
       expect(invocation.require_approval).toEqual(['actual_read_alias', 'actual_write_alias']);
       f.store.put('botGrants', { ...f.store.require<P.BotGrant>('botGrants', 'connector-grant'), requestedLevel: 'off' });
-      const off = await invocationBotToolPolicy(f.services, user, f.bot, measured);
+      const off = await nativeBotToolPolicy(f.services, user, f.bot, measured);
       expect(off.deny).toContain('actual_read_alias'); expect(off.deny).toContain('actual_write_alias');
     } finally { f.close(); }
   });

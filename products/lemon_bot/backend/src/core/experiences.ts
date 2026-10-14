@@ -24,6 +24,14 @@ const rank: Record<P.AccessLevel, number> = { off: 0, read_only: 1, read_interac
 const levels: P.AccessLevel[] = ['off', 'read_only', 'read_interact'];
 const key = (at: number, valueId: string) => `${String(at).padStart(16, '0')}:${valueId}`;
 const readable = (s: BackendServices, user: Principal, collection: string, entity: unknown) => s.auth.canRead(user, collection, entity);
+function assertBotOwner(user: Principal, bot: P.Bot): void {
+  if (user.kind !== 'user' || bot.ownerUserId !== user.userId) fail('forbidden', 'Only the bot owner can access its experiences and native policy.');
+}
+function ownedBot(s: BackendServices, requester: Principal, botId: string): P.Bot {
+  const bot = s.auth.bot(requester, botId);
+  assertBotOwner(requester, bot);
+  return bot;
+}
 function conversation(s: BackendServices, user: Principal, conversationId: string): P.Conversation | null {
   const value = s.store.get<P.Conversation>('conversations', conversationId);
   // Private DMs never become visible solely through an administrative role.
@@ -48,15 +56,13 @@ function importAccess(s: BackendServices, user: Principal, botId: string, scope:
   return bot;
 }
 function preferenceVisible(s: BackendServices, user: Principal, change: P.PreferenceChange): boolean {
-  if (change.userId === user.userId) return true;
-  if (!readable(s, user, 'preferenceChanges', change)) return false;
-  if (!change.sourceEntryId) return true;
-  const source = s.store.get<P.TranscriptEntry>('entries', change.sourceEntryId);
-  return !!source && entryVisible(s, user, source);
+  const bot = s.store.get<P.Bot>('bots', change.botId);
+  return change.userId === user.userId && bot?.ownerUserId === user.userId && readable(s, user, 'preferenceChanges', change);
 }
 
 /** Keeps manual and natural-language preference changes in the same inspectable ledger. */
 export function recordPreferenceChange(s: BackendServices, user: Principal, before: P.Bot, after: P.Bot, changes: P.JobPreferencePatch, reason: string, sourceEntryId: string | null = null): P.PreferenceChange {
+  assertBotOwner(user, before); assertBotOwner(user, after);
   finalizePreferenceUndos(s, before.id);
   const previous: P.JobPreferencePatch = {};
   for (const field of scopes) if (Object.hasOwn(changes, field)) Object.assign(previous, { [field]: before[field] });
@@ -88,7 +94,7 @@ const nodeReply = z.object({ nodes: z.array(z.object({ id: z.string(), status: z
 const measuredCapabilities = z.object({ nodeId: z.string(), os: z.string(), measuredAtMs: z.number().int().nonnegative(), stale: z.boolean(), items: z.array(z.object({ id: z.string().min(1).max(128), name: z.string().max(256), category: z.enum(['files', 'shell', 'browser', 'connector', 'os_app']), supported: z.boolean(), configuredLevel: level, osGrant: z.enum(['granted', 'denied', 'not_required', 'unknown']), tools: z.array(z.string().max(128)).max(512), reason: z.string().max(2048), measuredAtMs: z.number().int().nonnegative(), stale: z.boolean() }).strict()).max(100) }).strict();
 /** RPC advertisements prove implementation support, not OS or native-tool authorization. */
 export async function machineCapabilities(s: BackendServices, user: Principal, machineId: string, bot?: P.Bot): Promise<P.MachineCapabilities> {
-  if (bot && s.auth.bot(user, bot.id).machineId !== machineId) fail('invalid_request', 'Capability measurement must use the bot assigned machine.');
+  if (bot && ownedBot(s, user, bot.id).machineId !== machineId) fail('invalid_request', 'Capability measurement must use the bot assigned machine.');
   const machine = bot ? s.store.require<P.Machine>('machines', machineId) : s.auth.machine(user, machineId);
   const cached = s.store.get<P.MachineCapabilities & { id: string }>('machineCapabilities', machineId);
   if (!s.lemon.connected || machine.status !== 'online' || !machine.nodeId) {
@@ -110,19 +116,22 @@ export async function machineCapabilities(s: BackendServices, user: Principal, m
   s.store.put('machineCapabilities', { ...result, id: machineId });
   return result;
 }
-export async function effectiveBotGrants(s: BackendServices, user: Principal, bot: P.Bot, capabilities?: P.MachineCapabilities, provisioning = false, policyOverride?: P.EffectivePolicy): Promise<P.BotGrant[]> {
+export async function effectiveBotGrants(s: BackendServices, user: Principal, bot: P.Bot, capabilities?: P.MachineCapabilities): Promise<P.BotGrant[]> {
+  assertBotOwner(user, bot);
   const measured = capabilities ?? await machineCapabilities(s, user, bot.machineId, bot);
-  const policy = policyOverride ?? await s.integrations.effectivePolicy(user, bot.id);
+  return projectEffectiveBotGrants(s, user, bot, measured, await s.integrations.effectivePolicy(user, bot.id), false);
+}
+function projectEffectiveBotGrants(s: BackendServices, user: Principal, bot: P.Bot, measured: P.MachineCapabilities, policy: P.EffectivePolicy, desired: boolean): P.BotGrant[] {
   const synchronization = s.store.metadata<{ state: string }>(`botPolicySync:${bot.id}`);
-  const unresolved = !provisioning && synchronization !== null && synchronization.state !== 'acknowledged';
+  const unresolved = !desired && synchronization !== null && synchronization.state !== 'acknowledged';
   const persisted = s.store.list<P.BotGrant>('botGrants', value => {
     if (value.botId !== bot.id || value.machineId !== bot.machineId) return false;
-    if (provisioning || !value.capabilityId.startsWith('connector:')) return true;
+    if (!value.capabilityId.startsWith('connector:')) return true;
     const connector = s.store.get<P.Connector>('connectors', value.capabilityId.slice('connector:'.length));
-    return !!connector && readable(s, user, 'connectors', connector);
+    return !!connector && connector.ownerUserId === user.userId && readable(s, user, 'connectors', connector);
   });
   const inventory = [...measured.items];
-  for (const connector of s.store.list<P.Connector>('connectors', value => value.botId === bot.id && (provisioning || readable(s, user, 'connectors', value)))) {
+  for (const connector of s.store.list<P.Connector>('connectors', value => value.botId === bot.id && value.ownerUserId === user.userId && readable(s, user, 'connectors', value))) {
     const encrypted = s.store.metadata<string>(`connector:${connector.id}`);
     if (!encrypted) continue;
     const details = z.object({ machineId: z.string(), configuredLevel: level, discoveredAtMs: z.number().nullable() }).passthrough().safeParse(s.decrypt(encrypted));
@@ -162,23 +171,12 @@ const productExcludedNativeTools: Record<string, true> = {
   cron: true, goal: true, kanban: true, todo: true, peer: true,
   skill_manage: true, tool_auth: true, extensions_status: true,
 };
-/** Native tool-name authorization, not a filesystem/network/OS sandbox. */
+/** Desired and per-run native policy use the actual Bot owner; runtime admission fences pending cutovers. */
 export async function nativeBotToolPolicy(s: BackendServices, user: Principal, bot: P.Bot, capabilities?: P.MachineCapabilities): Promise<P.JSONObject> {
-  const measured = capabilities ?? await machineCapabilities(s, user, bot.machineId, bot);
-  if (!s.integrations.sharedProfilePolicy) fail('capability_unavailable', 'The shared workspace profile-policy floor is not configured.');
-  const policy = await s.integrations.sharedProfilePolicy(bot.id);
-  return projectNativeToolPolicy(s, user, bot, measured, policy, true);
-}
-
-/** Each placed run uses the actual initiating member, never the bot owner as authority. */
-export async function invocationBotToolPolicy(s: BackendServices, user: Principal, bot: P.Bot, capabilities?: P.MachineCapabilities): Promise<P.JSONObject> {
+  assertBotOwner(user, bot);
   const measured = capabilities ?? await machineCapabilities(s, user, bot.machineId, bot);
   const policy = await s.integrations.effectivePolicy(user, bot.id);
-  return projectNativeToolPolicy(s, user, bot, measured, policy, false);
-}
-
-async function projectNativeToolPolicy(s: BackendServices, user: Principal, bot: P.Bot, measured: P.MachineCapabilities, policy: P.EffectivePolicy, provisioning: boolean): Promise<P.JSONObject> {
-  const grants = await effectiveBotGrants(s, user, bot, measured, provisioning, policy);
+  const grants = projectEffectiveBotGrants(s, user, bot, measured, policy, true);
   const allowed = new Set([...nativeBaselineTools, ...await productExecutionNames(s)]), denied = new Set<string>(), approvalTools = new Set<string>();
   // Product resources require their authenticated MCP lifecycle rather than daemon-wide native managers.
   // Recall is temporarily excluded until the complete verified audience conduit is proven.
@@ -204,7 +202,7 @@ async function projectNativeToolPolicy(s: BackendServices, user: Principal, bot:
     allowed.add('lsp_diagnostics');
     if (policy.localExecutionCeiling === 'ask' || policy.rules.some(rule => ['files', 'shell', 'permissions'].includes(rule.category) && rule.mode !== 'allow')) approvalTools.add('lsp_diagnostics');
   }
-  for (const connector of s.store.list<P.Connector>('connectors', value => value.botId === bot.id)) {
+  for (const connector of s.store.list<P.Connector>('connectors', value => value.botId === bot.id && value.ownerUserId === user.userId && readable(s, user, 'connectors', value))) {
     const encrypted = s.store.metadata<string>(`connector:${connector.id}`);
     if (!encrypted) continue;
     const details = z.object({ readOnlyTools: z.array(z.string()), executionNames: z.record(z.string(), z.string().min(1).max(64)) }).passthrough().safeParse(s.decrypt(encrypted));
@@ -233,6 +231,7 @@ async function projectNativeToolPolicy(s: BackendServices, user: Principal, bot:
 }
 
 export function botPresence(s: BackendServices, user: Principal, bot: P.Bot): P.BotPresence {
+  assertBotOwner(user, bot);
   const machine = s.store.require<P.Machine>('machines', bot.machineId);
   const online = s.lemon.connected && machine.status === 'online';
   const allActive = s.store.list<P.Run>('runs', run => run.botId === bot.id && ['running', 'awaiting_input', 'queued', 'reserved', 'outcome_unknown'].includes(run.status));
@@ -262,7 +261,7 @@ function activityValues(s: BackendServices, user: Principal): P.ActivityItem[] {
   const results: P.ActivityItem[] = [];
   const add = (resource: P.Resource, botId: string, roomId: string | null, fields: Pick<P.ActivityItem, 'kind' | 'status' | 'title' | 'summary' | 'runId' | 'entryId' | 'approvalId'>, at = resource.updatedAtMs, machineId?: string) => {
     const bot = s.store.get<P.Bot>('bots', botId);
-    if (!bot || !readable(s, user, 'bots', bot)) return;
+    if (!bot || bot.ownerUserId !== user.userId || !readable(s, user, 'bots', bot)) return;
     const room = roomId ? conversation(s, user, roomId) : null;
     if (roomId && !room) return;
     const machine = s.store.get<P.Machine>('machines', machineId ?? bot.machineId);
@@ -298,7 +297,7 @@ function activityValues(s: BackendServices, user: Principal): P.ActivityItem[] {
     add(attachment, p.botId, attachment.conversationId, { kind: 'artifact', status: 'succeeded', title: 'Output available', summary: 'Verified attachment from the assigned machine.', runId: sourceRun && conversation(s, user, sourceRun.conversationId) ? sourceRun.id : null, entryId: source && entryVisible(s, user, source) ? source.id : null, approvalId: null }, p.generatedAtMs ?? attachment.createdAtMs, p.machineId);
   }
   for (const invite of s.store.list<P.MachineInvite>('machineInvites', value => value.status === 'joined' && value.enrollment === 'online')) {
-    for (const bot of s.store.list<P.Bot>('bots', value => value.machineId === invite.machineId && readable(s, user, 'bots', value))) add(invite, bot.id, null, { kind: 'enrollment', status: 'succeeded', title: 'Machine attached', summary: 'Destination enrollment was verified online.', runId: null, entryId: null, approvalId: null }, invite.updatedAtMs, invite.machineId);
+    for (const bot of s.store.list<P.Bot>('bots', value => value.ownerUserId === user.userId && value.machineId === invite.machineId && readable(s, user, 'bots', value))) add(invite, bot.id, null, { kind: 'enrollment', status: 'succeeded', title: 'Machine attached', summary: 'Destination enrollment was verified online.', runId: null, entryId: null, approvalId: null }, invite.updatedAtMs, invite.machineId);
   }
   return results;
 }
@@ -312,17 +311,17 @@ function queryRange(context: RequestContext, upcoming: boolean) {
 }
 function activityPage(context: RequestContext): P.Page<P.ActivityItem> {
   const s = context.services, user = principal(context.user), query = queryRange(context, false);
-  if (query.botId) s.auth.bot(user, query.botId);
-  if (query.machineId && !s.store.list<P.Bot>('bots', value => value.machineId === query.machineId && readable(s, user, 'bots', value)).length) s.auth.machine(user, query.machineId);
+  if (query.botId) ownedBot(s, user, query.botId);
+  if (query.machineId && !s.store.list<P.Bot>('bots', value => value.ownerUserId === user.userId && value.machineId === query.machineId && readable(s, user, 'bots', value)).length) s.auth.machine(user, query.machineId);
   return s.page(context, activityValues(s, user).filter(value => (!query.botId || value.botId === query.botId) && (!query.machineId || value.machineId === query.machineId) && value.occurredAtMs >= query.from && value.occurredAtMs <= query.to), { key: value => key(value.occurredAtMs, value.id), binding: { botId: query.botId ?? null } });
 }
 function upcomingPage(context: RequestContext): P.Page<P.UpcomingItem> {
   const s = context.services, user = principal(context.user), query = queryRange(context, true), items: P.UpcomingItem[] = [];
-  if (query.botId) s.auth.bot(user, query.botId);
-  if (query.machineId && !s.store.list<P.Bot>('bots', value => value.machineId === query.machineId && readable(s, user, 'bots', value)).length) s.auth.machine(user, query.machineId);
+  if (query.botId) ownedBot(s, user, query.botId);
+  if (query.machineId && !s.store.list<P.Bot>('bots', value => value.ownerUserId === user.userId && value.machineId === query.machineId && readable(s, user, 'bots', value)).length) s.auth.machine(user, query.machineId);
   const add = (valueId: string, botId: string, title: string, dueAtMs: number, timezone: string, routineId: string | null, reminderId: string | null, lastRunId: string | null) => {
     const bot = s.store.get<P.Bot>('bots', botId), machine = bot && s.store.get<P.Machine>('machines', bot.machineId);
-    if (!bot || !machine || !readable(s, user, 'bots', bot) || (query.botId && query.botId !== botId) || (query.machineId && query.machineId !== machine.id) || dueAtMs < query.from || dueAtMs > query.to) return;
+    if (!bot || bot.ownerUserId !== user.userId || !machine || !readable(s, user, 'bots', bot) || (query.botId && query.botId !== botId) || (query.machineId && query.machineId !== machine.id) || dueAtMs < query.from || dueAtMs > query.to) return;
     const last = lastRunId ? s.store.get<P.RoutineRun>('routineRuns', lastRunId) : null;
     items.push({ id: valueId, kind: routineId ? 'routine' : 'reminder', botId, machineId: machine.id, machineLabel: machine.name, machineStatus: machine.status, title, dueAtMs, timezone, routineId, reminderId, lastRunId, lastRunStatus: last?.status ?? null, blockedReason: routineId && (!s.lemon.connected || machine.status !== 'online') ? 'Assigned machine is unavailable.' : null });
   };
@@ -490,6 +489,7 @@ async function confirmMemory(context: RequestContext): Promise<P.MemoryImportRes
 }
 
 function visibleMilestones(s: BackendServices, user: Principal, bot: P.Bot): P.Milestone[] {
+  assertBotOwner(user, bot);
   const evidence: { kind: P.Milestone['kind']; id: string; at: number }[] = [];
   const machine = s.store.require<P.Machine>('machines', bot.machineId);
   const placement = s.store.metadata<{ profileId: string; nodeId: string; acknowledged?: boolean; completedAtMs?: number }>(`botProfileSync:${bot.id}`);
@@ -537,7 +537,7 @@ export function createExperienceService(s: BackendServices): ExperienceService {
       const user: Principal = { kind: 'user', id: member.userId, userId: member.userId, workspaceId, role: member.role, sessionId: null, botId: null, deviceId: null };
       for (const botId of botIds) {
         const bot = s.store.get<P.Bot>('bots', botId), machine = bot && s.store.get<P.Machine>('machines', bot.machineId);
-        if (!bot || !machine || !readable(s, user, 'bots', bot)) continue;
+        if (!bot || bot.ownerUserId !== user.userId || !machine || !readable(s, user, 'bots', bot)) continue;
         const presence = botPresence(s, user, bot), { measuredAtMs: _measuredAtMs, ...facts } = presence;
         const fingerprint = s.mutations.digest(facts), presenceKey = `presenceDigest:${bot.id}:${user.userId}`;
         if (s.store.metadata<string>(presenceKey) !== fingerprint) { s.store.setMetadata(presenceKey, fingerprint); s.events.emit('bot.presence', presence, { userIds: [user.userId] }); }
@@ -560,7 +560,7 @@ export function createExperienceService(s: BackendServices): ExperienceService {
         if (!member?.enabled || !workspaceId) return;
         const user: Principal = { kind: 'user', id: member.userId, userId: member.userId, workspaceId, role: member.role, sessionId: null, botId: null, deviceId: null };
         const bot = s.store.get<P.Bot>('bots', reminder.botId), room = conversation(s, user, reminder.conversationId);
-        if (!bot || !room || !readable(s, user, 'bots', bot)) { s.store.put('reminders', s.update(reminder, { state: 'cancelled' })); return; }
+        if (!bot || bot.ownerUserId !== user.userId || !room || !readable(s, user, 'bots', bot)) { s.store.put('reminders', s.update(reminder, { state: 'cancelled' })); return; }
         const notificationKey = `reminderNotification:${reminder.id}`;
         if (!s.store.metadata<string>(notificationKey)) {
           const entry = s.entry(user, room.id, { kind: 'notice', severity: 'info', text: reminder.text, requestId: null, targetedUserId: user.userId, actor: { kind: 'system', id: null, displayName: 'Reminder' } });
@@ -590,14 +590,14 @@ export function createExperienceRoutes(s: BackendServices): Route[] {
     authorizeReplay: method === 'GET' ? undefined : context => {
       const user = principal(context.user);
       switch (path) {
-        case '/bots/:id/grants/:grantId': s.auth.bot(user, context.params.id!, true); return;
+        case '/bots/:id/grants/:grantId': ownedBot(s, user, context.params.id!); return;
         case '/bots/:id/preference-changes': {
-          const body = parse(preferenceCreate, context.body), bot = s.auth.bot(user, context.params.id!, true);
+          const body = parse(preferenceCreate, context.body), bot = ownedBot(s, user, context.params.id!);
           sourceEntry(s, user, bot, body.sourceEntryId); return;
         }
         case '/preference-changes/:id/undo': {
           const change = s.store.require<P.PreferenceChange>('preferenceChanges', context.params.id!);
-          s.auth.bot(user, change.botId, true);
+          ownedBot(s, user, change.botId);
           if (!preferenceVisible(s, user, change)) fail('not_found', 'Preference change is not accessible.');
           return;
         }
@@ -613,19 +613,19 @@ export function createExperienceRoutes(s: BackendServices): Route[] {
           importAccess(s, user, preview.botId, preview.scope); return;
         }
         case '/reminders': {
-          const body = parse(reminderRequest, context.body), bot = s.auth.bot(user, body.botId), room = conversation(s, user, body.conversationId);
+          const body = parse(reminderRequest, context.body), bot = ownedBot(s, user, body.botId), room = conversation(s, user, body.conversationId);
           if (!room || !room.botIds.includes(bot.id)) fail('not_found', 'Reminder conversation is not accessible.');
           return;
         }
         case '/reminders/:id': {
           const reminder = s.store.require<P.Reminder>('reminders', context.params.id!);
           if (reminder.userId !== user.userId || !conversation(s, user, reminder.conversationId)) fail('not_found', 'Reminder is not accessible.');
-          s.auth.bot(user, reminder.botId); return;
+          ownedBot(s, user, reminder.botId); return;
         }
         case '/milestones/:id/ack': {
           const milestone = s.store.require<P.Milestone>('milestones', context.params.id!);
           if (milestone.userId !== user.userId) fail('not_found', 'Milestone is not accessible.');
-          s.auth.bot(user, milestone.botId); return;
+          ownedBot(s, user, milestone.botId); return;
         }
         default: fail('internal_error', 'Experience mutation has no replay authorization.', false);
       }
@@ -633,13 +633,13 @@ export function createExperienceRoutes(s: BackendServices): Route[] {
   });
   const activityRead = async (context: RequestContext) => {
     const user = principal(context.user);
-    if (context.params.id) s.auth.bot(user, context.params.id);
+    if (context.params.id) ownedBot(s, user, context.params.id);
     await s.runtime.reconcile();
     return activityPage(context);
   };
   const preference = async (context: RequestContext) => {
     const user = principal(context.user), body = parse(preferenceCreate, context.body);
-    s.auth.bot(user, context.params.id!, true);
+    ownedBot(s, user, context.params.id!);
     const bot = s.store.require<P.Bot>('bots', context.params.id!);
     s.mutations.checkRevision(bot, body.revision); sourceEntry(s, user, bot, body.sourceEntryId);
     finalizePreferenceUndos(s, bot.id);
@@ -664,10 +664,10 @@ export function createExperienceRoutes(s: BackendServices): Route[] {
   };
   return [
     route('GET', '/machines/:id/capabilities', context => { parse(z.object({}).strict(), queryObject(context.query)); return machineCapabilities(s, principal(context.user), context.params.id!); }),
-    route('GET', '/bots/:id/presence', async context => { parse(z.object({}).strict(), queryObject(context.query)); const user = principal(context.user); s.auth.bot(user, context.params.id!); await s.runtime.reconcile(); return botPresence(s, user, s.auth.bot(user, context.params.id!)); }),
-    route('GET', '/bots/:id/grants', async context => { parse(pageQuery, queryObject(context.query)); const user = principal(context.user); return s.page(context, await effectiveBotGrants(s, user, s.auth.bot(user, context.params.id!))); }),
+    route('GET', '/bots/:id/presence', async context => { parse(z.object({}).strict(), queryObject(context.query)); const user = principal(context.user); ownedBot(s, user, context.params.id!); await s.runtime.reconcile(); return botPresence(s, user, ownedBot(s, user, context.params.id!)); }),
+    route('GET', '/bots/:id/grants', async context => { parse(pageQuery, queryObject(context.query)); const user = principal(context.user); return s.page(context, await effectiveBotGrants(s, user, ownedBot(s, user, context.params.id!))); }),
     route('PATCH', '/bots/:id/grants/:grantId', async context => {
-      const user = principal(context.user), body = parse(update.extend({ requestedLevel: level }), context.body), bot = s.auth.bot(user, context.params.id!, true);
+      const user = principal(context.user), body = parse(update.extend({ requestedLevel: level }), context.body), bot = ownedBot(s, user, context.params.id!);
       const measured = await machineCapabilities(s, user, bot.machineId, bot);
       const grant = (await effectiveBotGrants(s, user, bot, measured)).find(value => value.id === context.params.grantId) ?? fail('not_found', 'Grant does not exist.');
       s.mutations.checkRevision(grant, body.revision);
@@ -682,7 +682,7 @@ export function createExperienceRoutes(s: BackendServices): Route[] {
       const next = s.update(grant, { requestedLevel: body.requestedLevel });
       context.nonceResourceIds.push(bot.id, next.id);
       s.store.transaction(() => { const current = s.store.get<P.BotGrant>('botGrants', grant.id); if (current) s.mutations.checkRevision(current, body.revision); s.store.put('botGrants', next); s.store.setMetadata(`botPolicySync:${bot.id}`, { state: 'pending', grantId: next.id, revision: next.revision }); });
-      const effective = (await effectiveBotGrants(s, user, bot, measured, true)).find(value => value.id === next.id)!;
+      const effective = projectEffectiveBotGrants(s, user, bot, measured, await s.integrations.effectivePolicy(user, bot.id), true).find(value => value.id === next.id)!;
       s.store.put('botGrants', effective);
       try {
         if (connector) await s.integrations.connectorProvisioning!(user, bot.id);
@@ -698,18 +698,18 @@ export function createExperienceRoutes(s: BackendServices): Route[] {
     route('GET', '/activity', activityRead), route('GET', '/bots/:id/activity', activityRead),
     route('GET', '/upcoming', upcomingPage), route('GET', '/bots/:id/upcoming', upcomingPage),
     route('GET', '/bots/:id/overview', async context => {
-      parse(z.object({}).strict(), queryObject(context.query)); const user = principal(context.user); s.auth.bot(user, context.params.id!); await s.runtime.reconcile(); const bot = s.auth.bot(user, context.params.id!), presence = botPresence(s, user, bot);
+      parse(z.object({}).strict(), queryObject(context.query)); const user = principal(context.user); ownedBot(s, user, context.params.id!); await s.runtime.reconcile(); const bot = ownedBot(s, user, context.params.id!), presence = botPresence(s, user, bot);
       const paged = { ...context, query: new URLSearchParams({ limit: '20' }) };
       return { bot: { ...bot, activity: presence.status }, presence, machine: s.store.require<P.Machine>('machines', bot.machineId), grants: await effectiveBotGrants(s, user, bot), activity: activityPage({ ...paged, route: { ...context.route, path: '/v1/bots/:id/activity' } }), upcoming: upcomingPage({ ...paged, route: { ...context.route, path: '/v1/bots/:id/upcoming' } }) } satisfies P.BotOverview;
     }),
-    route('GET', '/reminders', context => { const user = principal(context.user), query = parse(pageQuery.extend({ botId: id.optional() }), queryObject(context.query)); if (query.botId) s.auth.bot(user, query.botId); return s.page(context, s.store.list<P.Reminder>('reminders', value => value.userId === user.userId && (!query.botId || value.botId === query.botId) && !!conversation(s, user, value.conversationId))); }),
-    route('POST', '/reminders', context => { const user = principal(context.user), body = parse(reminderRequest, context.body), bot = s.auth.bot(user, body.botId), room = s.auth.conversation(user, body.conversationId); if (!room.botIds.includes(bot.id) || !conversation(s, user, room.id)) fail('forbidden', 'Reminder conversation must belong to this bot and user.'); if (body.dueAtMs <= s.now()) fail('expired', 'Reminder due time must be in the future.'); const value: P.Reminder = s.resource('reminder', { botId: bot.id, userId: user.userId, conversationId: room.id, text: body.text, dueAtMs: body.dueAtMs, timezone: body.timezone, state: 'scheduled' }); s.store.put('reminders', value); s.events.emit('reminder.upserted', value, { userIds: [user.userId] }); return value; }, 201),
-    route('DELETE', '/reminders/:id', context => { const user = principal(context.user), body = parse(update, context.body); return s.store.transaction(() => { const value = s.store.require<P.Reminder>('reminders', context.params.id!); if (value.userId !== user.userId) fail('forbidden', 'Reminder belongs to another user.'); s.mutations.checkRevision(value, body.revision); if (value.state === 'delivered') fail('conflict', 'Reminder already delivered.'); const cancelled = value.state === 'cancelled' ? value : s.update(value, { state: 'cancelled' }); s.store.put('reminders', cancelled); s.events.emit('reminder.upserted', cancelled, { userIds: [user.userId] }); return cancelled; }); }),
-    route('GET', '/bots/:id/preference-changes', context => { const user = principal(context.user); parse(pageQuery, queryObject(context.query)); const bot = s.auth.bot(user, context.params.id!, true); return s.page(context, s.store.list<P.PreferenceChange>('preferenceChanges', value => value.botId === bot.id && preferenceVisible(s, user, value))); }),
+    route('GET', '/reminders', context => { const user = principal(context.user), query = parse(pageQuery.extend({ botId: id.optional() }), queryObject(context.query)); if (query.botId) ownedBot(s, user, query.botId); return s.page(context, s.store.list<P.Reminder>('reminders', value => value.userId === user.userId && s.store.get<P.Bot>('bots', value.botId)?.ownerUserId === user.userId && (!query.botId || value.botId === query.botId) && !!conversation(s, user, value.conversationId))); }),
+    route('POST', '/reminders', context => { const user = principal(context.user), body = parse(reminderRequest, context.body), bot = ownedBot(s, user, body.botId), room = s.auth.conversation(user, body.conversationId); if (!room.botIds.includes(bot.id) || !conversation(s, user, room.id)) fail('forbidden', 'Reminder conversation must belong to this bot and user.'); if (body.dueAtMs <= s.now()) fail('expired', 'Reminder due time must be in the future.'); const value: P.Reminder = s.resource('reminder', { botId: bot.id, userId: user.userId, conversationId: room.id, text: body.text, dueAtMs: body.dueAtMs, timezone: body.timezone, state: 'scheduled' }); s.store.put('reminders', value); s.events.emit('reminder.upserted', value, { userIds: [user.userId] }); return value; }, 201),
+    route('DELETE', '/reminders/:id', context => { const user = principal(context.user), body = parse(update, context.body); return s.store.transaction(() => { const value = s.store.require<P.Reminder>('reminders', context.params.id!); if (value.userId !== user.userId) fail('forbidden', 'Reminder belongs to another user.'); ownedBot(s, user, value.botId); s.mutations.checkRevision(value, body.revision); if (value.state === 'delivered') fail('conflict', 'Reminder already delivered.'); const cancelled = value.state === 'cancelled' ? value : s.update(value, { state: 'cancelled' }); s.store.put('reminders', cancelled); s.events.emit('reminder.upserted', cancelled, { userIds: [user.userId] }); return cancelled; }); }),
+    route('GET', '/bots/:id/preference-changes', context => { const user = principal(context.user); parse(pageQuery, queryObject(context.query)); const bot = ownedBot(s, user, context.params.id!); return s.page(context, s.store.list<P.PreferenceChange>('preferenceChanges', value => value.botId === bot.id && preferenceVisible(s, user, value))); }),
     route('POST', '/bots/:id/preference-changes', preference, 201),
     route('POST', '/preference-changes/:id/undo', async context => {
       const user = principal(context.user), body = parse(preferenceUndo, context.body), target = s.store.require<P.PreferenceChange>('preferenceChanges', context.params.id!);
-      s.auth.bot(user, target.botId, true); finalizePreferenceUndos(s, target.botId);
+      ownedBot(s, user, target.botId); finalizePreferenceUndos(s, target.botId);
       const change = s.store.require<P.PreferenceChange>('preferenceChanges', target.id), bot = s.store.require<P.Bot>('bots', target.botId);
       if (!preferenceVisible(s, user, change)) fail('not_found', 'Preference change is not accessible.');
       s.mutations.checkRevision(change, body.revision); s.mutations.checkRevision(bot, body.botRevision);
@@ -736,7 +736,7 @@ export function createExperienceRoutes(s: BackendServices): Route[] {
     }),
     route('POST', '/bots/:id/memory/import/preview', previewMemory), route('POST', '/bots/:id/memory/import', confirmMemory),
     route('GET', '/bots/:id/ideas', async context => {
-      parse(z.object({}).strict(), queryObject(context.query)); const user = principal(context.user), bot = s.auth.bot(user, context.params.id!), machine = s.store.require<P.Machine>('machines', bot.machineId);
+      parse(z.object({}).strict(), queryObject(context.query)); const user = principal(context.user), bot = ownedBot(s, user, context.params.id!), machine = s.store.require<P.Machine>('machines', bot.machineId);
       const ready = s.lemon.connected && machine.status === 'online';
       const grants = ready ? await effectiveBotGrants(s, user, bot) : s.store.list<P.BotGrant>('botGrants', value => value.botId === bot.id && value.machineId === bot.machineId).map(value => ({ ...value, effectiveLevel: 'off' as const }));
       const policy = await s.integrations.effectivePolicy(user, bot.id);
@@ -749,7 +749,7 @@ export function createExperienceRoutes(s: BackendServices): Route[] {
       const ideas = [make('plan', 'Plan a useful next step', 'Using your Job and boundaries, propose three concrete next steps. Do not take action yet.', 'A short prioritized plan with dependencies.'), make('review', 'Review a draft', 'Review the draft I provide for clarity and correctness. Return suggested edits without publishing.', 'A reviewed draft and concise explanation.')];
       if (bot.job.trim()) ideas.push(make('job', 'Turn your Job into a checklist', 'Turn your current Job into a reusable checklist, noting what requires my input. Do not execute it.', 'A checklist aligned with your Job.'));
       for (const skillId of bot.skillIds) { const skill = s.store.get<P.Skill>('skills', skillId); if (skill?.enabled && skill.machineIds.includes(bot.machineId) && readable(s, user, 'skills', skill)) ideas.push(make(`skill:${skill.id}`, `Use ${skill.name}`, `Help me use the installed skill ${skill.name}. First ask for missing inputs, then draft the result for review.`, 'A skill-specific draft for review.', [skill.id])); if (ideas.length === 6) break; }
-      for (const connector of s.store.list<P.Connector>('connectors', value => value.botId === bot.id && readable(s, user, 'connectors', value))) {
+      for (const connector of s.store.list<P.Connector>('connectors', value => value.botId === bot.id && value.ownerUserId === user.userId && readable(s, user, 'connectors', value))) {
         if (ideas.length >= 6) break;
         const idea = make(`connector:${connector.id}`, `Prepare a ${connector.name} draft`, `Use the ${connector.name} connector to prepare a draft from inputs I provide. Ask for missing details; do not send or publish.`, 'A connector-backed draft awaiting explicit review.', [], [connector.id], [`connector:${connector.id}`]);
         if (connector.state !== 'connected') { idea.ready = false; idea.blockedReasons.push('Connector is not connected.'); }
@@ -758,7 +758,7 @@ export function createExperienceRoutes(s: BackendServices): Route[] {
       if (ideas.length < 6) ideas.push(make('files', 'Organize selected files', 'Inspect only the files I explicitly select and propose an organization plan. Do not move or delete anything.', 'A file inventory and proposed organization.', [], [], ['files']));
       return ideas.slice(0, 6);
     }),
-    route('GET', '/bots/:id/milestones', async context => { parse(pageQuery, queryObject(context.query)); const user = principal(context.user); s.auth.bot(user, context.params.id!); await s.runtime.reconcile(); const bot = s.auth.bot(user, context.params.id!); return s.page(context, visibleMilestones(s, user, bot)); }),
-    route('POST', '/milestones/:id/ack', context => { const user = principal(context.user); parse(mutation, context.body); return s.store.transaction(() => { const value = s.store.require<P.Milestone>('milestones', context.params.id!); if (value.userId !== user.userId) fail('forbidden', 'Milestone belongs to another user.'); s.auth.bot(user, value.botId); if (value.acknowledgedAtMs !== null) fail('conflict', 'Milestone already acknowledged.'); const acknowledged = s.update(value, { acknowledgedAtMs: s.now() }); s.store.put('milestones', acknowledged); s.events.emit('milestone.upserted', acknowledged, { userIds: [user.userId] }); return acknowledged; }); }),
+    route('GET', '/bots/:id/milestones', async context => { parse(pageQuery, queryObject(context.query)); const user = principal(context.user); ownedBot(s, user, context.params.id!); await s.runtime.reconcile(); const bot = ownedBot(s, user, context.params.id!); return s.page(context, visibleMilestones(s, user, bot)); }),
+    route('POST', '/milestones/:id/ack', context => { const user = principal(context.user); parse(mutation, context.body); return s.store.transaction(() => { const value = s.store.require<P.Milestone>('milestones', context.params.id!); if (value.userId !== user.userId) fail('forbidden', 'Milestone belongs to another user.'); ownedBot(s, user, value.botId); if (value.acknowledgedAtMs !== null) fail('conflict', 'Milestone already acknowledged.'); const acknowledged = s.update(value, { acknowledgedAtMs: s.now() }); s.store.put('milestones', acknowledged); s.events.emit('milestone.upserted', acknowledged, { userIds: [user.userId] }); return acknowledged; }); }),
   ];
 }
