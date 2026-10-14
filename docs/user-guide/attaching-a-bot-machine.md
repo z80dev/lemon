@@ -278,7 +278,9 @@ cannot operate the shell.
 The worker requires `python3` to allocate a real PTY, not a pipe-backed shell.
 It runs the destination user's shell with worker-local cwd, opened through the
 same descriptor-root resolver and applied with `fchdir` before forking. Substituted
-symlinks cannot redirect that opening cwd. Output streams in
+symlinks cannot redirect that opening cwd. Startup reads one bounded binary policy
+frame without consuming subsequent terminal input; importing the shared resolver
+does not start a second packet server. Output streams in
 16 KiB chunks with acknowledgement backpressure. Terminals cap output at 32 MiB
 and lifetime at one hour; disconnects, node replacement, slow consumers, explicit
 close and timeouts clean up the PTY and its process group. There are at most

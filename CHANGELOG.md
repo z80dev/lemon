@@ -42,6 +42,10 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   Bot readiness requires the actual native privacy descriptor as well as the
   large-policy JSON helper, preventing a nominally compatible old protocol from
   being reported ready for private bot execution.
+- PTY descriptor-policy startup no longer imports a running filesystem packet
+  server that consumes the terminal's policy frame. The filesystem helper has an
+  import-safe direct-execution entrypoint; real binary terminal startup and queued
+  input retain their own framing and descriptor-rooted cwd admission.
 
 ---
 
