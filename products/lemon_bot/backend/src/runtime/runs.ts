@@ -2,7 +2,7 @@ import type * as P from '../../../contracts/protocol';
 import type { BackendServices, Principal, RuntimeService } from '../core/services';
 import { sendMessage } from '../core/conversations';
 import { acknowledgeExecutionApproval } from '../core/gates';
-import { baseBotMcpConfig } from '../core/bots';
+import { assertWorkspaceRestrictionManagement, baseBotMcpConfig } from '../core/bots';
 import type { ConnectedLemonService } from './lemon';
 import { ApiError, errorEnvelope, fail } from '../core/errors';
 import { z, id } from '../core/validation';
@@ -653,9 +653,9 @@ export async function quiesceBotInvocations(services: BackendServices, actor: Pr
   const principalOnly = options.principalOnly === true;
   if (principalOnly) {
     if (actor.kind !== 'user' || actor.id !== actor.userId) fail('forbidden', 'A real user identity is required for principal-scoped policy revocation.');
-    services.auth.user(actor.userId); services.auth.member(actor.userId);
+    services.auth.user(actor.userId); services.auth.member(actor.userId); services.auth.bot(actor, bot.id, true);
   }
-  else if (['admin', 'owner'].includes(actor.role)) services.auth.requireRole(actor, 'admin');
+  else if (actor.kind === 'integration' || ['admin', 'owner'].includes(actor.role)) assertWorkspaceRestrictionManagement(services, actor);
   else services.auth.bot(actor, bot.id, true);
   const runs = services.store.list<P.Run>('runs', run => run.botId === botId && !terminalStatuses.includes(run.status) && (!principalOnly || run.initiatorUserId === actor.userId));
   const runIds = runs.map(run => run.id);
