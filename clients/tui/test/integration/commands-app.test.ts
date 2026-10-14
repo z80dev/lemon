@@ -39,8 +39,17 @@ async function bootApp(sessionKey = "tui-test", cwd = process.cwd()) {
 	// Unrelated activity/routing/approval hydration must not participate in boot.
 	const server = await FakeControlPlane.start({
 		methods: [
-			"chat.send", "chat.abort", "chat.history", "sessions.patch", "sessions.reset",
-			"models.list", "usage.status", "status", "health", "background.start", "background.result",
+			"chat.send",
+			"chat.abort",
+			"chat.history",
+			"sessions.patch",
+			"sessions.reset",
+			"models.list",
+			"usage.status",
+			"status",
+			"health",
+			"background.start",
+			"background.result",
 		],
 	});
 	teardown.push(() => server.stop());
