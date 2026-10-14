@@ -172,6 +172,22 @@ image previews (maximum dimension 1568 by default) with original/preview
 dimensions and an animation first-frame notice; original bytes remain untouched.
 Input, extraction, preview, and displayed-output limits bound memory use.
 
+**Path line selectors.** `read` also accepts a trailing selector in `path`:
+`file:50-80` (inclusive), `file:50+20` (20 lines from 50), `file:50` or
+`file:50-` (from line 50), `file:-30` (last 30 lines), and `:raw` alone or
+combined (`file:50-80:raw`) for unnumbered text without a snapshot header.
+Selectors work on archive members and internal references
+(`bundle.zip:src/a.ex:10-20`, `artifact://<id>:100+50`). They apply only when
+the literal path does not exist, so names containing colons keep their meaning,
+and they cannot be combined with `offset`/`limit`.
+
+**Search paging and ignores.** `grep` and `find` skip `.gitignore`/`.ignore`d
+and hidden files by default, with ripgrep/fd or the Elixir fallback alike
+(`git check-ignore` inside a work tree). Pass `no_ignore: true` or
+`hidden: true` to include them. `grep` reports the total match count; when
+`max_results` is exceeded, pass the advertised `skip` (also `details.next_skip`)
+to fetch the next page.
+
 **Structural search and replacement.** Install the genuine ast-grep CLI (for
 example `brew install ast-grep`) to enable `ast_grep`. It matches syntax trees,
 supports `$NAME` and `$$$ARGS` captures, and never substitutes text search.
