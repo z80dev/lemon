@@ -17,6 +17,29 @@ export function createMutationService(services:BackendServices,key:Uint8Array):M
   const pending=new Map<string,Promise<unknown>>();
   const digest=(value:unknown)=>createHmac('sha256',key).update(canonical(value)).digest('hex');
   const db=services.store.db;
+  const replayVisible=(context:RequestContext,value:unknown):void=>{
+    const checked=new Set<string>();
+    const inspect=(item:unknown):void=>{
+      if(Array.isArray(item)){for(const child of item)inspect(child);return;}
+      if(!item||typeof item!=='object')return;
+      const object=z.record(z.string(),z.unknown()).parse(item);
+      if(typeof object.token==='string'&&object.session&&object.user){
+        const session=z.object({id:z.string(),userId:z.string()}).passthrough().parse(object.session);
+        const current=services.store.get<{userId:string;expiresAtMs:number}>('authSessions',session.id);
+        const secret=services.store.get<{revoked:boolean}>('sessionSecrets',session.id);
+        const member=services.store.list<{userId:string;enabled:boolean}>('members',entry=>entry.userId===session.userId)[0];
+        if(!current||!secret||secret.revoked||current.expiresAtMs<=services.now()||!member?.enabled)fail('unauthenticated','The original authentication session is no longer valid.');
+      }
+      if(typeof object.id==='string'&&typeof object.revision==='number'&&typeof object.createdAtMs==='number'&&typeof object.updatedAtMs==='number'&&context.user&&!checked.has(object.id)){
+        checked.add(object.id);
+        const rows=db.query('SELECT collection FROM entities WHERE id=?').all(object.id) as {collection:string}[];
+        const readable=rows.some(row=>{const current=services.store.get(row.collection,object.id as string);return current!==null&&services.auth.canRead(context.user!,row.collection,current);});
+        if(!readable)fail('not_found','The original mutation resource is no longer accessible.');
+      }
+      for(const child of Object.values(object))inspect(child);
+    };
+    inspect(value);
+  };
   return {
     digest,
     checkRevision(resource,revision) { if(!Number.isSafeInteger(revision)||resource.revision!==revision) fail('revision_conflict','Resource changed; reload before editing.',true,{currentRevision:resource.revision}); },
@@ -36,10 +59,12 @@ export function createMutationService(services:BackendServices,key:Uint8Array):M
       const existing=db.query('SELECT hash,state,receipt,resource_ids FROM nonces WHERE scope=? AND nonce=?').get(scope,clientNonce) as Reservation|null;
       if(existing) {
         if(existing.hash!==hash) fail('nonce_conflict','This client nonce was already used for a different request.');
-        const running=pending.get(identity); if(running) return await running as T;
+        await context.route.authorizeReplay?.(context);
+        const running=pending.get(identity); if(running){const value=await running as T;replayVisible(context,value);return value;}
         if(existing.receipt) {
           const receipt=services.decrypt<{ok:boolean;value?:T;error?:{code:ApiError['code'];message:string;retrySafe:boolean;details?:ApiError['details']}}>(existing.receipt);
           if(!receipt.ok && receipt.error) throw new ApiError(receipt.error.code,receipt.error.message,receipt.error.retrySafe,receipt.error.details);
+          replayVisible(context,receipt.value);
           return receipt.value as T;
         }
         fail('outcome_unknown','The original mutation may have taken effect; reconcile its resources before taking another action.',false,{resourceIds:z.array(z.string()).parse(JSON.parse(existing.resource_ids))});

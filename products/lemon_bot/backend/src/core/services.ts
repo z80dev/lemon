@@ -4,8 +4,9 @@ import type * as P from '../../../contracts/protocol';
 export type Entity = P.Resource & Record<string, unknown>;
 export interface Principal { kind: 'user' | 'bot' | 'hook' | 'integration'; id: string; userId: string; workspaceId: string; role: P.Role; sessionId: string | null; botId: string | null; deviceId: string | null; scopes?: string[] }
 export type Authentication = 'public' | 'member' | 'admin' | 'owner' | 'bot' | 'hook' | 'integration' | 'optional';
-export interface Route { method: string; path: string; auth: Authentication; mutation?: boolean; body?: 'json' | 'multipart' | 'none'; status?: number; handler(context: RequestContext): Promise<unknown> | unknown }
-export interface RequestContext { request: Request; params: Record<string, string>; query: URLSearchParams; body: unknown; user: Principal | null; services: BackendServices; requestId: string; route: Route; nonceResourceIds: string[] }
+export interface Route { method: string; path: string; auth: Authentication; mutation?: boolean; body?: 'json' | 'multipart' | 'none'; status?: number; authorizeReplay?(context: RequestContext): Promise<void> | void; handler(context: RequestContext): Promise<unknown> | unknown }
+export interface InternalInvocationOptions { botLifecycle?: { botId: string; userId: string; action: string } }
+export interface RequestContext { request: Request; params: Record<string, string>; query: URLSearchParams; body: unknown; user: Principal | null; services: BackendServices; requestId: string; route: Route; nonceResourceIds: string[]; internalBotLifecycle?: InternalInvocationOptions['botLifecycle'] }
 export interface EntityStore {
   db: Database;
   get<T = Entity>(collection: string, id: string): T | null;
@@ -66,7 +67,7 @@ export interface RuntimeService {
   sessionKey(conversation: P.Conversation, bot: P.Bot): string;
 }
 export interface AttachmentService {
-  create(principal: Principal, bytes: Uint8Array, metadata: P.AttachmentUpload & { filename: string; mime?: string; provenance?: P.Attachment['provenance'] }): Promise<P.Attachment>;
+  create(principal: Principal, bytes: Uint8Array, metadata: P.AttachmentUpload & { filename: string; mime?: string; source?: P.Attachment['source']; provenance?: P.Attachment['provenance'] }): Promise<P.Attachment>;
   bytes(attachmentId: string): Promise<Uint8Array>;
   download(principal: Principal, attachmentId: string): P.Download;
 }
@@ -100,6 +101,7 @@ export interface IntegrationServices {
   endProviderSessions?(userId: string): Promise<void>;
   captureUsage?(principal: Principal, report: P.UsageReport, atMs?: number): void;
   captureAction?(principal: Principal, metadata: P.JSONObject, sourceId?: string): void;
+  dispose?(): void;
 }
 export interface BackendConfiguration {
   publicUrl: string; controlUrl: string; operatorToken: string; dataDir: string; host: string; port: number;
@@ -120,6 +122,6 @@ export interface BackendServices {
   audit(principal: Principal | null, action: string, targetId: string, outcome: P.AuditRecord['outcome'], details?: P.JSONObject, requestId?: string): P.AuditRecord;
   entry(principal: Principal, conversationId: string, payload: Record<string, unknown>): P.TranscriptEntry;
   notify(principal: Principal, input: Record<string, unknown>): P.Notification;
-  invoke<T = unknown>(principal: Principal, method: string, path: string, body?: unknown): Promise<T>;
+  invoke<T = unknown>(principal: Principal, method: string, path: string, body?: unknown, options?: InternalInvocationOptions): Promise<T>;
   syncBotProfile(principal: Principal, botId: string): Promise<void>;
 }

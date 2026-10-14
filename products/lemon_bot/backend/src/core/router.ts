@@ -1,19 +1,19 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { resolve, sep } from 'node:path';
 import { z } from 'zod';
-import type { BackendServices, Principal, RequestContext, Route } from './services';
+import type { BackendServices, InternalInvocationOptions, Principal, RequestContext, Route } from './services';
 import { ApiError, errorEnvelope, fail, statusFor } from './errors';
 interface Registered {route:Route;pattern:RegExp;names:string[]}
 export class Router {
   private registered:Registered[]=[];
   private contexts=new AsyncLocalStorage<RequestContext>();
   constructor(private services:BackendServices,private webRoot=resolve(import.meta.dir,'../../../web/dist')) {
-    services.invoke=async<T>(principal:Principal,method:string,path:string,body?:unknown):Promise<T>=>{
+    services.invoke=async<T>(principal:Principal,method:string,path:string,body?:unknown,options?:InternalInvocationOptions):Promise<T>=>{
       const request=new Request(new URL(path,services.config.publicUrl),{method,headers:{'Content-Type':'application/json'},...(body===undefined?{}:{body:JSON.stringify(body)})});
       const match=this.match(method,new URL(request.url).pathname);if(!match)fail('not_found','Product endpoint was not found.');
       this.authorizeInternal(principal,match.route);
       const parent=this.contexts.getStore();
-      const context:RequestContext={request,params:match.params,query:new URL(request.url).searchParams,body,user:principal,services,requestId:parent?.requestId??services.id('req'),route:match.route,nonceResourceIds:parent?.nonceResourceIds??[]};
+      const context:RequestContext={request,params:match.params,query:new URL(request.url).searchParams,body,user:principal,services,requestId:parent?.requestId??services.id('req'),route:match.route,nonceResourceIds:parent?.nonceResourceIds??[],internalBotLifecycle:options?.botLifecycle??parent?.internalBotLifecycle};
       // Internal resource calls share the enclosing durable nonce and authority, never dispatch a second reservation.
       const value=await this.contexts.run(context,()=>match.route.handler(context));return value as T;
     };

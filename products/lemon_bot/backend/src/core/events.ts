@@ -8,12 +8,12 @@ const collections:Record<string,string>={user:'users',workspace:'workspaces',mem
 export function createEventService(services:BackendServices):EventService {
   const listeners=new Set<(event:RealtimeEvent,audience:EventAudience)=>void>();
   const db=services.store.db;
-  const watermark=()=>{const row=db.query('SELECT seq FROM sqlite_sequence WHERE name=\'events\'').get() as {seq:number}|null; return String(row?.seq??0);};
+  const watermark=()=>{const row=db.query('SELECT seq FROM sqlite_sequence WHERE name=\'events\'').safeIntegers(true).get() as {seq:bigint}|null; return String(row?.seq??0n);};
   const visible=(principal:Principal,event:RealtimeEvent,audience:EventAudience):boolean=>{
-    const member=services.store.list<{userId:string;enabled:boolean}>('members',item=>item.userId===principal.userId)[0];
+    const member=services.store.list<{userId:string;enabled:boolean;role?:string}>('members',item=>item.userId===principal.userId)[0];
     if(!member?.enabled) return false;
     if(audience.userIds && !audience.userIds.includes(principal.userId)) return false;
-    if(audience.admin && principal.role==='member') return false;
+    if(audience.admin && member.role!=='owner'&&member.role!=='admin') return false;
     const [kind,action]=event.event.split('.');
     if(action==='deleted') return !!(audience.userIds?.includes(principal.userId)||audience.admin||audience.public);
     try {
@@ -21,7 +21,7 @@ export function createEventService(services:BackendServices):EventService {
       if(audience.botId) services.auth.bot(principal,audience.botId);
       if(audience.machineId) services.auth.machine(principal,audience.machineId);
     } catch { return false; }
-    if(kind==='policies'||kind==='governance') return principal.role!=='member'||audience.userIds?.includes(principal.userId)===true;
+    if(kind==='policies'||kind==='governance') return member.role==='owner'||member.role==='admin'||audience.userIds?.includes(principal.userId)===true;
     if(kind==='workspace') return true;
     if(event.event==='entry.delta'||event.event==='conversation.read'||event.event==='composer.updated') {
       const payload=z.object({conversationId:z.string(),userId:z.string().optional()}).passthrough().safeParse(event.payload);
