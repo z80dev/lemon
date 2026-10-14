@@ -29,14 +29,22 @@ defmodule CodingAgent.Artifacts do
     end
   end
 
-  @doc "Adds a retrievable handle to a tool result carrying a full-output file."
+  @doc """
+  Adds a retrievable handle to a tool result carrying an output file. A result
+  whose `details.artifact_truncated` is true is labelled as partial output.
+  """
   @spec attach(term(), String.t(), options()) :: term()
-  def attach(%AgentToolResult{details: %{full_output_path: path}} = result, cwd, opts)
+  def attach(%AgentToolResult{details: %{full_output_path: path} = details} = result, cwd, opts)
       when is_binary(path) do
     case register(path, cwd, opts) do
       {:ok, uri} ->
+        label =
+          if Map.get(details, :artifact_truncated) == true,
+            do: "Partial output (saving stopped early; later output was not saved)",
+            else: "Full output"
+
         reference = %TextContent{
-          text: "[Full output: #{uri} — read this handle with offset and limit for more lines]"
+          text: "[#{label}: #{uri} — read this handle with offset and limit for more lines]"
         }
 
         %{
