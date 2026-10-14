@@ -3,7 +3,6 @@ defmodule LemonControlPlane.Methods.SessionsSnapshotTest do
 
   alias LemonControlPlane.Auth.Authorize
   alias LemonControlPlane.Methods.{Registry, SessionsSnapshot}
-  alias LemonControlPlane.Protocol.Schemas
   alias LemonCore.{AgentRuntime, ExecApprovalStore, RunStore, Store}
 
   # Fault injection lives at the existing runtime seam. Real run/approval owners
@@ -99,11 +98,41 @@ defmodule LemonControlPlane.Methods.SessionsSnapshotTest do
     %{key: key, id: id, native: native, state: state}
   end
 
-  test "registry advertises the shared asynchronous read authority and reauthorizes", c do
-    assert {:ok, SessionsSnapshot} = Registry.lookup("sessions.snapshot")
-    assert Schemas.get("sessions.snapshot").required == %{"sessionKey" => :string}
-    assert Registry.dispatch_mode("sessions.snapshot") == :async
+  test "fresh native owners recover before a finalized lifecycle index without borrowing another owner",
+       c do
+    :ok = RunStore.delete_session_index(c.key)
+    dir = Path.join(System.tmp_dir!(), "snapshot-fresh-#{System.unique_integer([:positive])}")
+    File.mkdir_p!(dir)
+    on_exit(fn -> File.rm_rf!(dir) end)
+    :ok = AgentRuntime.register(CodingAgent.ControlPlaneProvider)
 
+    pid =
+      start_supervised!(
+        {CodingAgent.Session,
+         CodingAgent.Session.Presentation.build_session_opts(
+           [],
+           dir,
+           c.id,
+           c.key,
+           LemonCore.SessionKey.agent_id(c.key)
+         )}
+      )
+
+    assert {:ok, nil} = LemonCore.SessionLifecycle.fetch(c.key)
+    assert {:ok, result} = SessionsSnapshot.handle(params(c), ctx())
+    assert result["status"] == "ok"
+    assert result["identity"]["sessionKey"] == c.key
+
+    assert result["identity"]["sessionId"] ==
+             CodingAgent.Session.get_state(pid).session_manager.header.id
+
+    foreign = "agent:snapshot_foreign_#{System.unique_integer([:positive])}:main"
+
+    assert {:error, {:not_found, _, _}} =
+             SessionsSnapshot.handle(%{"sessionKey" => foreign, "cwd" => dir}, ctx())
+  end
+
+  test "only read-authorized operators can collect native owner recovery", c do
     assert {:error, _} =
              Registry.dispatch("sessions.snapshot", params(c), %{
                auth: Authorize.node_context("foreign")
@@ -183,6 +212,116 @@ defmodule LemonControlPlane.Methods.SessionsSnapshotTest do
              )
 
     refute Map.has_key?(stale, "snapshot")
+  end
+
+  test "terminal continuation proves full journal ancestry across leaf/revision and retained attempt changes",
+       c do
+    ancestor = %{type: :custom, id: "old-leaf", custom_type: "smoke", data: %{}}
+    live = %{c.native | branch_id: ancestor.id, entries: c.native.entries ++ [ancestor]}
+    live = Map.put(live, :attempt, "opaque-live-attempt")
+    Agent.update(c.state, &Map.put(&1, :native_result, {:ok, live}))
+    assert {:ok, before} = SessionsSnapshot.handle(params(c), ctx())
+
+    request =
+      params(c)
+      |> Map.put("limit", 1)
+      |> Map.put("continuationFrom", %{"identity" => before["identity"], "runId" => c.id})
+
+    assert {:ok, %{"continuation" => false}} = SessionsSnapshot.handle(request, ctx())
+    finalize(c, %{ok: true, answer: "Canonical continuation"})
+
+    terminal =
+      live
+      |> Map.delete(:attempt)
+      |> Map.merge(%{
+        streaming: false,
+        live: false,
+        run_id: nil,
+        branch_id: "terminal-leaf",
+        revision: "terminal-revision",
+        entries:
+          live.entries ++
+            [
+              %{
+                type: :message,
+                id: "terminal-leaf",
+                message: %{
+                  role: :assistant,
+                  content: [%{type: :text, text: "Canonical continuation"}]
+                }
+              }
+            ]
+      })
+
+    Agent.update(c.state, &Map.put(&1, :native_result, {:ok, terminal}))
+
+    assert {:ok, result} = SessionsSnapshot.handle(request, ctx())
+    assert result["continuation"]
+    assert result["identity"]["attempt"] == c.id
+    assert result["identity"]["branchId"] != before["identity"]["branchId"]
+    assert result["identity"]["revision"] != before["identity"]["revision"]
+    refute Enum.any?(result["snapshot"]["messages"], &(&1["id"] == ancestor.id))
+    assert {:ok, ^result} = SessionsSnapshot.handle(request, ctx())
+
+    # A new acknowledged run can follow an older accepted snapshot without a
+    # running snapshot of its own. Its fixed ID, owner and ancestry still bind it.
+    previous = put_in(before, ["identity", "runId"], "previous-run")
+    newer = put_in(request, ["continuationFrom", "identity"], previous["identity"])
+    assert {:ok, %{"continuation" => true}} = SessionsSnapshot.handle(newer, ctx())
+
+    # expectedIdentity keeps its original retry semantics even with a proof request.
+    assert {:ok, %{"status" => "retry", "reason" => "identity_changed"}} =
+             SessionsSnapshot.handle(
+               Map.put(request, "expectedIdentity", before["identity"]),
+               ctx()
+             )
+  end
+
+  test "continuation refuses other owners, runs, live attempts and non-descendant branches", c do
+    live = %{c.native | branch_id: "assistant"} |> Map.put(:attempt, "live-attempt")
+    Agent.update(c.state, &Map.put(&1, :native_result, {:ok, live}))
+    assert {:ok, before} = SessionsSnapshot.handle(params(c), ctx())
+    finalize(c, %{ok: true, answer: "Terminal"})
+    Agent.update(c.state, &Map.put(&1, :native_result, {:ok, %{live | streaming: false}}))
+    proof = %{"identity" => before["identity"], "runId" => c.id}
+
+    assert {:ok, %{"continuation" => true}} =
+             SessionsSnapshot.handle(Map.put(params(c), "continuationFrom", proof), ctx())
+
+    invalid = [
+      put_in(proof, ["identity", "sessionKey"], "foreign-key"),
+      put_in(proof, ["identity", "sessionId"], "replacement-owner"),
+      put_in(proof, ["identity", "branchId"], "abandoned-leaf"),
+      put_in(proof, ["identity", "attempt"], "other-live-attempt"),
+      put_in(proof, ["identity", "attempt"], nil),
+      Map.put(proof, "runId", "unacknowledged-run")
+    ]
+
+    for candidate <- invalid do
+      assert {:ok, %{"continuation" => false}} =
+               SessionsSnapshot.handle(Map.put(params(c), "continuationFrom", candidate), ctx())
+    end
+
+    for candidate <- [%{}, %{"identity" => nil, "runId" => c.id}, Map.put(proof, "extra", true)] do
+      assert {:error, {:invalid_params, _, _}} =
+               SessionsSnapshot.handle(Map.put(params(c), "continuationFrom", candidate), ctx())
+    end
+
+    unknown = %{live | streaming: false} |> Map.delete(:attempt)
+    Agent.update(c.state, &Map.put(&1, :native_result, {:ok, unknown}))
+
+    assert {:ok, %{"continuation" => false}} =
+             SessionsSnapshot.handle(Map.put(params(c), "continuationFrom", proof), ctx())
+
+    retained = %{unknown | live: false}
+    Agent.update(c.state, &Map.put(&1, :native_result, {:ok, retained}))
+    missing_attempt = put_in(proof, ["identity", "attempt"], nil)
+
+    assert {:ok, %{"continuation" => false}} =
+             SessionsSnapshot.handle(
+               Map.put(params(c), "continuationFrom", missing_attempt),
+               ctx()
+             )
   end
 
   test "approval decided between owner reads yields retry then never reappears", c do
@@ -525,6 +664,103 @@ defmodule LemonControlPlane.Methods.SessionsSnapshotTest do
 
     assert identity["runId"] == first["identity"]["runId"]
     assert identity["attempt"] != first["identity"]["attempt"]
+  end
+
+  @tag :tmp_dir
+  test "owner-written user bindings recover repeated prompts across rewind despite late start receipts",
+       %{tmp_dir: cwd} = c do
+    alias CodingAgent.Session.Persistence
+    alias CodingAgent.SessionManager
+    second_id = "run_#{System.unique_integer([:positive])}"
+    invalid_id = "run_#{System.unique_integer([:positive])}"
+    manager = SessionManager.new(cwd)
+    state = %{session_manager: manager, run_id: c.id, session_key: c.key}
+
+    first =
+      Persistence.persist_message(state, %LemonAi.Types.UserMessage{
+        role: :user,
+        content: "Run tool",
+        timestamp: 1_700_000_000_000
+      })
+
+    first =
+      SessionManager.append_message(first.session_manager, %{
+        role: :assistant,
+        content: [%{type: :text, text: "FIRST OWNED ANSWER"}]
+      })
+
+    first_leaf = first.leaf_id
+    finalize(c, %{ok: true, answer: "FIRST OWNED ANSWER"})
+
+    second =
+      Persistence.persist_message(
+        %{state | session_manager: first, run_id: second_id},
+        %LemonAi.Types.UserMessage{role: :user, content: "Run tool", timestamp: 1_700_000_000_100}
+      )
+
+    second =
+      SessionManager.append_message(second.session_manager, %{
+        role: :assistant,
+        content: [%{type: :text, text: "SECOND OWNED ANSWER"}]
+      })
+
+    :ok =
+      RunStore.finalize(second_id, %{
+        session_key: c.key,
+        prompt: "Run tool",
+        completed: %{ok: true, answer: "SECOND OWNED ANSWER"}
+      })
+
+    path = SessionManager.session_file_path(cwd, manager.header.id)
+    :ok = SessionManager.save_to_file(path, second)
+
+    :ok =
+      LemonCore.ChatStateStore.put(c.key, %LemonCore.ChatState{
+        last_engine: "lemon",
+        last_resume_token: manager.header.id
+      })
+
+    :ok = AgentRuntime.register(CodingAgent.ControlPlaneProvider)
+
+    on_exit(fn ->
+      LemonCore.ChatStateStore.delete(c.key)
+      Store.delete(:runs, second_id)
+      Store.delete(:runs, invalid_id)
+      File.rm_rf!(CodingAgent.Config.sessions_dir(cwd))
+    end)
+
+    target = Map.put(params(c), "cwd", cwd)
+    assert {:ok, latest} = SessionsSnapshot.handle(target, ctx())
+    assert latest["identity"]["runId"] == second_id
+    assert latest["snapshot"]["phase"] == "completed"
+    assert latest["snapshot"]["answer"]["text"] == "SECOND OWNED ANSWER"
+    rewound = SessionManager.set_leaf_id(%{second | file_path: path}, first_leaf)
+    assert {:ok, selected} = SessionsSnapshot.handle(target, ctx())
+    assert selected["identity"]["runId"] == c.id
+    assert selected["snapshot"]["answer"]["text"] == "FIRST OWNED ANSWER"
+    # A declared malformed binding cannot fall back to old timing/prompt matches.
+    :ok =
+      RunStore.finalize(invalid_id, %{
+        session_key: c.key,
+        prompt: "Legacy match",
+        completed: %{ok: true, answer: "MUST NOT RECYCLE"}
+      })
+
+    {:ok, invalid_run} = RunStore.fetch(invalid_id)
+
+    malformed =
+      SessionManager.append_message(rewound, %{
+        "role" => "user",
+        "content" => "Legacy match",
+        "timestamp" => invalid_run.started_at,
+        "lemonRun" => nil
+      })
+
+    :ok = SessionManager.save_to_file(path, malformed)
+    assert {:ok, unknown} = SessionsSnapshot.handle(target, ctx())
+    assert unknown["identity"]["runId"] == nil
+    assert unknown["snapshot"]["phase"] == "unknown"
+    refute unknown["snapshot"]["answer"]["canonical"]
   end
 
   @tag :tmp_dir

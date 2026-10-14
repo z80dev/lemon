@@ -31,7 +31,7 @@ import { CLOSE_ACTION, pickerAction } from "@oh-my-pi/pi-tui/native/picker";
 import { ProcessTerminal, type Terminal } from "@oh-my-pi/pi-tui/terminal";
 import { Container, TUI } from "@oh-my-pi/pi-tui/tui";
 import * as postmortem from "@oh-my-pi/pi-utils/postmortem";
-import { indentBlock, pickNumber, pickString } from "./commands/format.ts";
+import { indentBlock, pick, pickNumber, pickString } from "./commands/format.ts";
 import { type CommandHost, type CommandRegistry, createCommandRegistry } from "./commands/index.ts";
 import { contextWindowFromCache } from "./commands/model.ts";
 import { parsePlanReceipt } from "./commands/plan.ts";
@@ -333,9 +333,12 @@ export class AppShell {
 			sendPrompt: (text) => this.sendPrompt(text),
 			refreshStatus: () => this.#renderStatus(),
 			confirm: (spec) => this.#confirm(spec),
-			onSnapshot: (result, branchChanged) => {
+			onSnapshot: (result, branchChanged, terminalAdvance) => {
 				if (branchChanged) this.#taskTree.store.clear(result.sessionKey);
 				this.#taskTree.reconcile(result.sessionKey, result.snapshot.children);
+				// Events for recovered runs only request owner reconciliation. Advance
+				// known-unsent work on its verified terminal transition, never a preview.
+				if (terminalAdvance && this.client.online) void this.drainQueue(result.sessionKey);
 			},
 		});
 		this.#switcher = new SessionSwitcher({
@@ -475,7 +478,17 @@ export class AppShell {
 			// also the moment the session's backlog is allowed to move.
 			this.client.events.on("agent", (event: AgentEvent) => {
 				const session = this.store.session(event.sessionKey ?? this.store.focusedKey);
-				if (session.snapshotIdentity) return;
+				if (session.snapshotIdentity) {
+					// Background recovered runs still own their local queue. Their
+					// completion preview requests owner truth; it never drains directly.
+					if (
+						event.type === "completed" &&
+						session !== this.store.focused &&
+						this.store.queue.items(session.key)[0]?.state === "queued-local"
+					)
+						void this.sessions.resync(session.key);
+					return;
+				}
 				this.#taskTree.ingest(event);
 				this.#toolInspector.refresh();
 				if (event?.type !== "completed") return;
@@ -490,11 +503,18 @@ export class AppShell {
 			// sessions are live, what landed while the socket was down, and which
 			// approvals are still waiting all have to be re-read.
 			this.client.events.on("resync-needed", ({ sessionKey }) => {
-				if (!sessionKey || sessionKey === this.store.focusedKey) {
-					// Loss/reconnect is itself a race with an in-flight owner read,
-					// even when none of the missed data packets reached this client.
-					this.store.focused.recoveryEventVersion += 1;
-					void this.sessions.resync();
+				for (const session of this.store.sessions.values()) {
+					if (sessionKey && session.key !== sessionKey) continue;
+					if (
+						session !== this.store.focused &&
+						(!session.snapshotIdentity ||
+							!session.busy ||
+							this.store.queue.items(session.key)[0]?.state !== "queued-local")
+					)
+						continue;
+					// Loss/reconnect also races an owner read when no data packet landed.
+					session.recoveryEventVersion += 1;
+					void this.sessions.resync(session.key);
 				}
 			}),
 			this.store.events.on("mode-changed", () => this.#renderStatus()),
@@ -1157,9 +1177,29 @@ export class AppShell {
 			this.events.addUserBlock(prompt, session, { delivery: mode });
 			if (result?.runId) this.events.noteRunStarted(result.runId, session);
 		} catch (error) {
-			this.store.queue.push(session.key, prompt);
+			// Only an explicit refusal is known-unsent. Disconnects, timeouts and
+			// uncertain submission receipts may already have changed the daemon.
+			const refused =
+				error instanceof ControlPlaneError &&
+				pick(error.details, "retrySafe") !== false &&
+				[
+					"UNSUPPORTED",
+					"NOT_IMPLEMENTED",
+					"METHOD_NOT_FOUND",
+					"INVALID_PARAMS",
+					"FORBIDDEN",
+					"UNAUTHORIZED",
+					"PERMISSION_DENIED",
+					"NOT_FOUND",
+					"CONFLICT",
+					"BUSY",
+					"RATE_LIMITED",
+				].includes(error.code);
+			this.store.queue.push(session.key, prompt, refused ? "queued-local" : "needs-review");
 			this.events.notice(
-				`${mode} refused (${describeError(error)}) — queued instead, ctrl+q to edit`,
+				refused
+					? `${mode} refused (${describeError(error)}) — queued instead, ctrl+q to edit`
+					: `${mode} outcome unknown (${describeError(error)}) — ctrl+q to review before retrying`,
 				"warning",
 				session,
 			);

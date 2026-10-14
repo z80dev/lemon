@@ -120,6 +120,13 @@ remains a legacy client-side alias; it does not configure the daemon.
   Queued images remain editable; an uncertain failed send requires explicit review
   rather than automatic replay. Non-image dropped files become quoted `@` references,
   and `@` completion navigates files without reading their contents into the prompt.
+  After recovery, a verified canonical terminal snapshot advances one known-unsent
+  local followup on the same run and native branch, even while another session is
+  focused. Completion and loss/reconnect recovery target the owning session;
+  background replacement never rebuilds the focused transcript or changes its draft.
+  Repeated terminal snapshots never advance the next prompt; unknown owners, stale
+  selections, unproven branch/attempt continuity and uncertain send receipts do not
+  authorize replay.
 - Multi-session: Ctrl+X switcher (live + recent, debounced server-side search
   across stored sessions, new-with-prompt, close), per-session drafts, unread
   badges, history hydration. Search results are not restricted to the initially
@@ -445,6 +452,22 @@ bun run check             # tsc --noEmit
 bun run lint              # biome
 bun run gallery           # headless render of every component/state
 ```
+
+The opt-in `bun run scripts/recovery-queue-smoke.ts` uses the public AppShell
+in a real terminal and an isolated production router/gateway/native runtime.
+It requires already-prepared dev BEAM artifacts and installed TUI dependencies;
+it runs no build or ExUnit. A loopback-only scripted SSE endpoint gates two real
+router-admitted runs, checking reconnect recovery, one queue-head submission,
+real run receipts, repeated snapshots, the remaining queue and visible answer.
+Pass `--background` to complete the recovered run while another draft session is
+focused; the same real queue admission must preserve that session's selection
+and draft. Existing project-fact capture also uses the loopback fixture and is
+counted separately from the two native execution requests.
+Its private temporary root retains `runtime.json` (mode 0400), the separate
+operator credential file (0400), request-count/state evidence and terminal
+capture; the script stops only its own runtime. No external provider executes.
+This is a prepared smoke entrypoint, not a claim that it has been executed.
+
 
 The fake control plane (`src/dev/fake-server.ts`) powers the tests and the
 gallery; no daemon or credentials are needed for either. Profile and session

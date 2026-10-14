@@ -36,6 +36,18 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - Web branch recovery discards pending coalesced text instead of flushing obsolete
   rows into the replacement stream. TUI recovery also fences replacement session
   instances when a branch or revision identifier is reused.
+- Recovered TUI runs now release one known-unsent local followup after a verified
+  canonical terminal snapshot. Owner-proven native branch/attempt continuity and
+  current client projection fences prevent old snapshots, focus races or repeated
+  completion previews from advancing newer work or replaying uncertain sends.
+  Background recovered sessions retain this behavior without switching focus or
+  replacing another session's transcript; per-session owner reads survive unrelated
+  focus changes while stale selection/deletion responses remain fenced.
+- Fresh router-admitted native runs register their live recovery owner before
+  their first durable lifecycle index. Owner-written invocation provenance in
+  existing native user entries preserves exact terminal/branch association when
+  start-event receipt follows prompt creation, including repeated prompts and
+  rewind; malformed declared bindings never fall back to timing guesses.
 
 ---
 

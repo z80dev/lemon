@@ -34,6 +34,8 @@ export interface SessionsSnapshotParams {
 	cwd?: string;
 	limit?: number;
 	expectedIdentity?: SessionSnapshotIdentity;
+	/** Read-only proof that the acknowledged run continues this selected native branch. */
+	continuationFrom?: { identity: SessionSnapshotIdentity; runId: string };
 }
 
 export type SessionsSnapshotResult =
@@ -48,6 +50,8 @@ export type SessionsSnapshotResult =
 			status: "ok";
 			sessionKey: string;
 			identity: SessionSnapshotIdentity;
+			/** Owner-verified terminal continuity for this request's continuationFrom. */
+			continuation?: boolean;
 			consistency: {
 				boundary: "stable_owner_reads";
 				atomic: false;

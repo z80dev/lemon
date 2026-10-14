@@ -273,7 +273,7 @@ export class EventController {
 			this.#recoveryScheduled = false;
 			const hello = this.#client.helloOk;
 			if (hello && session === this.#store.focused)
-				this.#client.events.emit("resync-needed", { hello });
+				this.#client.events.emit("resync-needed", { hello, sessionKey: session.key });
 		});
 	}
 

@@ -45,7 +45,7 @@ defmodule CodingAgent.Session.Presentation do
         nil
       end
 
-    [cwd: cwd]
+    [cwd: cwd, register: true]
     |> maybe_add_opt(:model, Keyword.get(opts, :model))
     |> maybe_add_opt(:thinking_level, Keyword.get(opts, :thinking_level))
     |> maybe_add_opt(:system_prompt, Keyword.get(opts, :system_prompt))

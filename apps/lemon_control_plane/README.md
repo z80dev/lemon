@@ -124,7 +124,19 @@ errors are bounded and redacted, not raw run/store dumps.
 
 `sessions.snapshot` is the read-scoped recovery authority used by TUI and
 browser chat. It composes existing owners; it does not persist deltas, schedule
-work, or create another session store. Requests accept:
+work, or create another session store.
+
+Fresh managed native runs register their existing live owner before execution,
+so recovery does not require a lifecycle index created by the first finalized
+run. Managed user entries carry owner-written `lemonRun` provenance in the
+existing native journal: logical run ID, logical session key and native UUID.
+Terminal association follows the selected user entry's exact owned binding,
+not the order in which start events reach storage. Declared malformed or
+foreign bindings remain unknown; legacy untagged journals retain conservative
+prompt/time matching. This metadata does not enter provider input or create
+another ownership store.
+
+Requests accept:
 
 ```json
 {"type":"req","id":"recover-1","method":"sessions.snapshot","params":{"sessionKey":"agent:default:main","cwd":"/srv/project","limit":50}}
@@ -179,6 +191,25 @@ returns `status: "retry", reason: "snapshot_raced"` with no snapshot. Optional
 `expectedIdentity` must contain the complete prior identity; mismatch returns
 `identity_changed`, also without a snapshot. There is no atomic cross-owner
 transaction or global durable cursor.
+
+Queue consumers may additionally request
+`continuationFrom: {identity: <complete prior accepted identity>, runId: <acknowledged active run>}`.
+The successful response's boolean `continuation` is true only for a canonical
+terminal of that fixed run on the same native session, with the prior leaf
+present in the full selected journal. A same-run live execution token must match;
+known retained-owner handoff may use the fixed run ID instead. Unknown attempt
+provenance, another owner/run or a non-descendant branch returns false. The proof
+uses the existing full owner read, not bounded message previews, and adds no
+history export or replay cursor. Normal completion may change leaf and revision.
+`expectedIdentity` retains its retry semantics independently of this optional
+request; absent a continuation request the response reports false.
+
+The TUI also fences the pre-read projection and active run, not only delivered
+events and selection. It uses a newly verified terminal transition to advance at
+most one `queued-local` head through its existing drain guard. Repeated terminal
+reads, a newer acknowledged send and uncertain/in-flight queue entries cannot
+authorize another submission. This is not retry permission for any prior send.
+
 
 Clients bind reads to their selected session/request generation, discard late
 responses, and retry when relevant events or overflow/reconnect indications arrive

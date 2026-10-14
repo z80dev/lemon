@@ -260,7 +260,12 @@ defmodule LemonControlPlane.Protocol.Schemas do
     },
     "sessions.snapshot" => %{
       required: %{"sessionKey" => :string},
-      optional: %{"cwd" => :string, "limit" => :integer, "expectedIdentity" => :map}
+      optional: %{
+        "cwd" => :string,
+        "limit" => :integer,
+        "expectedIdentity" => :map,
+        "continuationFrom" => :map
+      }
     },
     "sessions.create" => %{
       required: %{"sessionKey" => :string, "cwd" => :string},

@@ -15,10 +15,23 @@ defmodule CodingAgent.Session.Persistence do
     new_session_manager =
       case message do
         %LemonAi.Types.UserMessage{} ->
-          SessionManager.append_message(
-            state.session_manager,
-            MessageSerialization.serialize_message(message)
-          )
+          serialized = MessageSerialization.serialize_message(message)
+
+          serialized =
+            case {Map.get(state, :run_id), Map.get(state, :session_key)} do
+              {run_id, key}
+              when is_binary(run_id) and run_id != "" and is_binary(key) and key != "" ->
+                Map.put(serialized, "lemonRun", %{
+                  "id" => run_id,
+                  "sessionKey" => key,
+                  "sessionId" => state.session_manager.header.id
+                })
+
+              _ ->
+                serialized
+            end
+
+          SessionManager.append_message(state.session_manager, serialized)
 
         %LemonAi.Types.AssistantMessage{} ->
           SessionManager.append_message(

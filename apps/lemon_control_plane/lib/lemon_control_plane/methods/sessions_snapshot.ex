@@ -15,6 +15,14 @@ defmodule LemonControlPlane.Methods.SessionsSnapshot do
   ID (or nil when no attempt can be authoritatively associated). Unavailable
   domain reads remain unavailable, not an invented empty/idle state. Collections
   report truncation; complete tool receipts take precedence over started rows.
+
+  `continuationFrom` optionally binds an acknowledged run ID and a previously
+  accepted identity. `continuation` is true only for that run's canonical terminal
+  on the same native session with the old leaf in its full selected journal.
+  Live execution tokens must match for the same run; retained-owner handoff may
+  replace the token with that run's fixed ID. Revisions and leaves may advance.
+  This proves branch continuity, not client selection: clients still fence their
+  pre-read projection, events and selection before advancing known-unsent work.
   """
   @behaviour LemonControlPlane.Method
 
@@ -55,9 +63,10 @@ defmodule LemonControlPlane.Methods.SessionsSnapshot do
          {:ok, limit} <- NativeSessions.integer(params, "limit", 50, 1, 100),
          {:ok, cwd} <- cwd(params),
          :ok <- expected(params["expectedIdentity"]),
+         {:ok, continuation} <- continuation(params["continuationFrom"]),
          :ok <- authorize(ctx, key),
-         {:ok, first} <- collect(key, cwd, limit, ctx),
-         {:ok, second} <- collect(key, cwd, limit, ctx),
+         {:ok, first} <- collect(key, cwd, limit, ctx, continuation),
+         {:ok, second} <- collect(key, cwd, limit, ctx, continuation),
          :ok <- authorize(ctx, key) do
       cond do
         first != second ->
@@ -90,21 +99,41 @@ defmodule LemonControlPlane.Methods.SessionsSnapshot do
 
   defp expected(_), do: NativeSessions.invalid("expectedIdentity must be a snapshot identity")
 
+  defp continuation(nil), do: {:ok, nil}
+
+  defp continuation(%{"identity" => identity, "runId" => run_id} = value) do
+    with true <- map_size(value) == 2 and is_map(identity),
+         :ok <- expected(identity),
+         {:ok, ^run_id} <- NativeSessions.string(value, "runId", 1024) do
+      {:ok, value}
+    else
+      _ -> NativeSessions.invalid("continuationFrom must contain a snapshot identity and runId")
+    end
+  end
+
+  defp continuation(_),
+    do: NativeSessions.invalid("continuationFrom must contain a snapshot identity and runId")
+
   defp authorize(%{auth: %{role: :operator} = auth}, _key) do
     Authorize.authorize(auth, name(), scopes())
   end
 
   defp authorize(_, _), do: {:error, {:forbidden, "Operator read authorization required", nil}}
 
-  defp collect(key, cwd, limit, ctx) do
+  defp collect(key, cwd, limit, ctx, continuation) do
     case SessionLifecycle.fetch(key) do
-      {:ok, nil} ->
-        {:error, {:not_found, "Session not found", nil}}
-
-      {:ok, _session} ->
+      {:ok, session} when is_nil(session) or is_map(session) ->
+        # Fresh admitted runs have a native owner before their first finalized
+        # run creates the durable lifecycle index. That index is not live authority.
         case AgentRuntime.call(:session_recovery_snapshot, [key, cwd], {:error, :unavailable}) do
-          {:ok, native} when is_map(native) -> compose(key, native, limit, ctx)
-          _ -> unavailable()
+          {:ok, native} when is_map(native) ->
+            compose(key, native, limit, ctx, continuation)
+
+          {:error, :session_not_found} when is_nil(session) ->
+            {:error, {:not_found, "Session not found", nil}}
+
+          _ ->
+            unavailable()
         end
 
       _ ->
@@ -112,7 +141,7 @@ defmodule LemonControlPlane.Methods.SessionsSnapshot do
     end
   end
 
-  defp compose(key, native, limit, ctx) do
+  defp compose(key, native, limit, ctx, continuation) do
     entries = native.entries
     {run_id, run, run_status} = current_run(key, native)
     completed = committed_completion(run)
@@ -165,6 +194,7 @@ defmodule LemonControlPlane.Methods.SessionsSnapshot do
       "status" => "ok",
       "sessionKey" => key,
       "identity" => identity,
+      "continuation" => continues_run?(continuation, native, identity, terminal),
       "consistency" => %{
         "boundary" => "stable_owner_reads",
         "atomic" => false,
@@ -191,6 +221,29 @@ defmodule LemonControlPlane.Methods.SessionsSnapshot do
     if byte_size(Jason.encode!(result)) <= @max_bytes, do: {:ok, result}, else: unavailable()
   end
 
+  defp continues_run?(%{"identity" => previous, "runId" => run_id}, native, identity, true) do
+    live_attempt = Map.get(native, :attempt)
+    retained = Map.get(native, :live) == false and not Map.has_key?(native, :attempt)
+
+    is_binary(previous["sessionId"]) and previous["sessionId"] != "" and
+      previous["sessionKey"] == identity["sessionKey"] and
+      previous["sessionId"] == identity["sessionId"] and
+      is_binary(previous["revision"]) and previous["revision"] != "" and
+      run_id == identity["runId"] and
+      is_binary(identity["branchId"]) and identity["branchId"] != "" and
+      is_binary(identity["attempt"]) and identity["attempt"] != "" and
+      ((Map.get(native, :live) == true and is_binary(live_attempt) and live_attempt != "") or
+         retained) and
+      is_binary(previous["branchId"]) and
+      Enum.any?(native.entries, &(field(&1, :id) == previous["branchId"])) and
+      (previous["runId"] != run_id or
+         (is_binary(previous["attempt"]) and previous["attempt"] != "" and
+            (previous["attempt"] == identity["attempt"] or
+               (retained and identity["attempt"] == run_id))))
+  end
+
+  defp continues_run?(_, _, _, _), do: false
+
   defp current_run(key, %{run_id: id} = native) when is_binary(id) do
     case RunStore.fetch(id) do
       {:ok, run} when is_map(run) ->
@@ -199,12 +252,19 @@ defmodule LemonControlPlane.Methods.SessionsSnapshot do
             (field(run, :session_key) || field(field(run, :summary), :session_key)) == key
 
         cond do
-          not owned -> {nil, nil, "unavailable"}
-          native.streaming -> {id, run, "ok"}
-          elem(match_branch_run(native.entries, [{id, run}]), 0) == id -> {id, run, "ok"}
+          not owned ->
+            {nil, nil, "unavailable"}
+
+          native.streaming ->
+            {id, run, "ok"}
+
+          elem(match_branch_run(native.entries, [{id, run}], native.session_id, key), 0) == id ->
+            {id, run, "ok"}
+
           # An idle live session retains its invocation run_id after rewind.
           # That ID cannot select an answer from the abandoned branch.
-          true -> current_run(key, Map.delete(native, :run_id))
+          true ->
+            current_run(key, Map.delete(native, :run_id))
         end
 
       {:ok, nil} ->
@@ -219,15 +279,46 @@ defmodule LemonControlPlane.Methods.SessionsSnapshot do
 
   defp current_run(key, native) do
     case RunHistoryStore.fetch(key, limit: 200) do
-      {:ok, runs} -> match_branch_run(native.entries, runs)
+      {:ok, runs} -> match_branch_run(native.entries, runs, native.session_id, key)
       _ -> {nil, nil, "unavailable"}
+    end
+  end
+
+  # Managed user entries bind the logical invocation before execution; event
+  # receipt timestamps can legitimately follow the user's creation timestamp.
+  defp match_branch_run(entries, runs, native_id, key) do
+    user =
+      Enum.reduce(entries, nil, fn entry, latest ->
+        if field(field(entry, :message), :role) in [:user, "user"], do: entry, else: latest
+      end)
+
+    message = field(user, :message)
+
+    case field(message, :lemonRun) do
+      %{"id" => id, "sessionKey" => ^key, "sessionId" => ^native_id}
+      when is_binary(id) and id != "" ->
+        case Enum.filter(runs, fn {run_id, run} ->
+               run_id == id and field(field(run, :summary), :session_key) == key
+             end) do
+          [{^id, run}] -> {id, run, "ok"}
+          _ -> {nil, nil, "unknown"}
+        end
+
+      nil ->
+        if is_map(message) and
+             (Map.has_key?(message, "lemonRun") or Map.has_key?(message, :lemonRun)),
+           do: {nil, nil, "unknown"},
+           else: match_legacy_branch_run(entries, runs)
+
+      _ ->
+        {nil, nil, "unknown"}
     end
   end
 
   # The selected branch, not the latest session run, determines offline identity.
   # Match the exact prompt and start interval just as ACP history reconciliation
   # does; ambiguity is unknown, never an abandoned branch's answer.
-  defp match_branch_run(entries, runs) do
+  defp match_legacy_branch_run(entries, runs) do
     users = Enum.filter(entries, &(field(field(&1, :message), :role) in [:user, "user"]))
 
     case Enum.take(users, -2) do

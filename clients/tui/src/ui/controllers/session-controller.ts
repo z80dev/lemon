@@ -8,11 +8,12 @@
  *     through owner snapshots, rebuild the transcript, and restore the draft.
  *   - **hydration** — stored history for daemons without snapshot support.
  *     Historical actions remain terminal or outcome-unknown, never live.
- *   - **resync** — replace the focused projection from bounded owner reads
- *     after reconnect, overflow, or selection. Replacement clears native
- *     scrollback: old-branch rows must not survive below the recovered branch.
- *     Session-instance changes fence cached plan/process state even when a
- *     replacement owner uses the same branch and revision identifiers.
+ *   - **resync** — replace session projections from bounded owner reads after
+ *     reconnect, overflow, selection, or a background queued run's completion.
+ *     Focused replacement clears native scrollback: old-branch rows must not
+ *     survive below the recovered branch. Background replacement never rebuilds
+ *     the focused transcript. Session-instance changes fence cached plan/process
+ *     state even when a replacement owner reuses branch/revision identifiers.
  *
  * The controller writes stores and asks {@link EventController} to mirror them;
  * it never builds a component itself. That keeps the "one writer of the
@@ -64,9 +65,11 @@ export interface SessionControllerOptions {
 	refreshStatus?: () => void;
 	/** Presents a yes/no overlay. Without one, closing needs `confirmed: true`. */
 	confirm?: (spec: ConfirmSpec) => void;
+	/** Called synchronously after a session/request-fenced owner projection is installed. */
 	onSnapshot?: (
 		result: Extract<SessionsSnapshotResult, { status: "ok" }>,
 		branchChanged: boolean,
+		terminalAdvance: boolean,
 	) => void;
 }
 
@@ -91,7 +94,16 @@ export class SessionController {
 	readonly #onSnapshot: SessionControllerOptions["onSnapshot"];
 	#selectionGeneration = 0;
 	#recoveryGeneration = 0;
-	#recoveryInFlight: { key: string; selection: number; promise: Promise<void> } | undefined;
+	/** Coalesce owner reads per session; background recovery must not cancel focus recovery. */
+	readonly #recoveryInFlight = new Map<
+		string,
+		{
+			session: SessionStore;
+			selection: number | undefined;
+			generation: number;
+			promise: Promise<void>;
+		}
+	>();
 
 	/** Sessions whose stored history has been pulled (or never needed pulling). */
 	readonly #hydrated = new Set<string>();
@@ -166,6 +178,13 @@ export class SessionController {
 		this.#store.setDraft(previousKey, this.#editor.getExpandedText());
 		const session = this.#store.setFocused(target);
 		const selection = ++this.#selectionGeneration;
+		const previous = this.#store.sessions.get(previousKey);
+		if (
+			previous?.snapshotIdentity &&
+			previous.busy &&
+			this.#store.queue.items(previousKey)[0]?.state === "queued-local"
+		)
+			void this.resync(previousKey);
 		if (this.#methods.supports(METHOD.sessionsSnapshot)) {
 			await this.resync();
 		} else {
@@ -259,6 +278,7 @@ export class SessionController {
 	resetLocal(key: string = this.#store.focusedKey): void {
 		const session = this.#store.sessions.get(key);
 		if (!session) return;
+		this.#recoveryInFlight.delete(key);
 		session.resetTranscript();
 		// The transcript is gone, so the stored history may legitimately be
 		// re-pulled on a later switch.
@@ -397,24 +417,51 @@ export class SessionController {
 	 * Compose only owner truth. Failed reads never mean idle or empty approvals.
 	 * There is no snapshot text cursor: recovered runs refresh instead of
 	 * appending deltas whose relationship to answer-so-far is unknowable.
+	 * Reads coalesce per session. Focused reads retain selection fencing; a
+	 * background read is superseded if that session is selected or removed.
 	 */
-	resync(): Promise<void> {
-		const session = this.#store.focused;
-		const selection = this.#selectionGeneration;
-		const current = this.#recoveryInFlight;
-		if (current?.key === session.key && current.selection === selection) return current.promise;
-		const promise = this.#recover(session, selection).finally(() => {
-			if (this.#recoveryInFlight?.promise === promise) this.#recoveryInFlight = undefined;
+	resync(key: string = this.#store.focusedKey): Promise<void> {
+		const session = this.#store.sessions.get(key);
+		if (!session) return Promise.resolve();
+		const selection = key === this.#store.focusedKey ? this.#selectionGeneration : undefined;
+		const current = this.#recoveryInFlight.get(key);
+		if (current?.session === session && current.selection === selection) return current.promise;
+		const generation = ++this.#recoveryGeneration;
+		const promise = this.#recover(session, selection, generation).finally(() => {
+			if (this.#recoveryInFlight.get(key)?.generation === generation) {
+				this.#recoveryInFlight.delete(key);
+			}
 		});
-		this.#recoveryInFlight = { key: session.key, selection, promise };
+		this.#recoveryInFlight.set(key, { session, selection, generation, promise });
 		return promise;
 	}
 
-	async #recover(session: SessionStore, selection: number): Promise<void> {
+	#isCurrentRecovery(
+		session: SessionStore,
+		selection: number | undefined,
+		generation: number,
+	): boolean {
+		return (
+			this.#recoveryInFlight.get(session.key)?.generation === generation &&
+			this.#store.sessions.get(session.key) === session &&
+			(selection === undefined
+				? this.#store.focusedKey !== session.key
+				: selection === this.#selectionGeneration && this.#store.focusedKey === session.key)
+		);
+	}
+
+	async #recover(
+		session: SessionStore,
+		selection: number | undefined,
+		generation: number,
+	): Promise<void> {
 		if (!this.#methods.supports(METHOD.sessionsSnapshot)) return;
-		const generation = ++this.#recoveryGeneration;
 		for (let attempt = 0; attempt < SNAPSHOT_RETRY_LIMIT; attempt++) {
 			const eventVersion = session.recoveryEventVersion;
+			const previousIdentity = session.snapshotIdentity;
+			const previousRunId = session.activeRunId;
+			const previousBusy = session.busy;
+			const previousUnread = session.unread;
 			let result: SessionsSnapshotResult;
 			try {
 				result = await this.#methods.sessionsSnapshot({
@@ -424,28 +471,40 @@ export class SessionController {
 					...(attempt === 0 && session.snapshotIdentity
 						? { expectedIdentity: session.snapshotIdentity }
 						: {}),
+					...(previousIdentity && previousRunId
+						? { continuationFrom: { identity: previousIdentity, runId: previousRunId } }
+						: {}),
 				});
 			} catch (error) {
-				if (generation !== this.#recoveryGeneration || selection !== this.#selectionGeneration)
-					return;
+				if (!this.#isCurrentRecovery(session, selection, generation)) return;
 				if (
 					error instanceof ControlPlaneError &&
 					["FORBIDDEN", "UNAUTHORIZED"].includes(error.code)
 				) {
 					this.#replaceApprovals(session.key, []);
 				}
-				this.#notice(`could not recover ${session.key}: ${describeError(error)}`, "warning");
+				this.#notice(
+					`could not recover ${session.key}: ${describeError(error)}`,
+					"warning",
+					session,
+				);
 				return;
 			}
 			if (
-				generation !== this.#recoveryGeneration ||
-				selection !== this.#selectionGeneration ||
-				this.#store.focusedKey !== session.key ||
+				!this.#isCurrentRecovery(session, selection, generation) ||
 				result.sessionKey !== session.key ||
 				result.identity.sessionKey !== session.key
 			)
 				return;
 			if (result.status === "retry" || eventVersion !== session.recoveryEventVersion) continue;
+			// A send receipt can move the active run without a protocol event.
+			// Fence that local projection just as strictly as events and selection.
+			if (
+				session.snapshotIdentity !== previousIdentity ||
+				session.activeRunId !== previousRunId ||
+				session.busy !== previousBusy
+			)
+				continue;
 			const snapshot = result.snapshot;
 			if (
 				result.identity.runId &&
@@ -457,8 +516,29 @@ export class SessionController {
 				!snapshot.terminal
 			)
 				continue;
-			const previousBusy = session.busy;
-			const previousRunId = session.activeRunId;
+			// Re-reading the previous terminal must not replace a newer acknowledged
+			// run while its submission is still reaching the owner projection.
+			if (
+				result.identity.runId &&
+				previousRunId &&
+				previousRunId !== result.identity.runId &&
+				previousIdentity?.sessionId === result.identity.sessionId &&
+				session.isRunTerminal(result.identity.runId)
+			)
+				continue;
+			// Only the owner can prove full journal ancestry and live/retained
+			// attempt provenance; bounded rendered rows cannot establish either.
+			const terminalAdvance = Boolean(
+				snapshot.terminal &&
+					snapshot.answer.canonical &&
+					["completed", "failed", "cancelled"].includes(snapshot.phase) &&
+					previousBusy &&
+					previousRunId &&
+					previousRunId === result.identity.runId &&
+					result.continuation === true &&
+					previousIdentity?.sessionId === result.identity.sessionId &&
+					!session.isRunTerminal(previousRunId),
+			);
 			const branchChanged =
 				session.snapshotIdentity?.sessionId !== result.identity.sessionId ||
 				session.snapshotIdentity?.revision !== result.identity.revision ||
@@ -580,21 +660,35 @@ export class SessionController {
 				this.#replaceApprovals(session.key, []);
 			}
 			this.#hydrated.add(session.key);
-			this.#onSnapshot?.(result, branchChanged);
-			this.#events.rebuildFocused();
-			this.#tui.requestRender(true, { clearScrollback: true });
+			// Replacing historical rows is not new background activity.
+			if (selection === undefined) session.unread = previousUnread + (terminalAdvance ? 1 : 0);
+			this.#onSnapshot?.(result, branchChanged, terminalAdvance);
+			if (session === this.#store.focused) {
+				this.#events.rebuildFocused();
+				this.#tui.requestRender(true, { clearScrollback: true });
+			}
 			this.#refreshStatus?.();
 			void this.seedContext(session);
 			return;
 		}
-		this.#notice(`recovery for ${session.key} raced with live state; refresh again`, "warning");
+		if (this.#isCurrentRecovery(session, selection, generation)) {
+			this.#notice(
+				`recovery for ${session.key} raced with live state; refresh again`,
+				"warning",
+				session,
+			);
+		}
 	}
 
 	#replaceApprovals(key: string, items: readonly ExecPendingApproval[], complete = true): void {
 		// Validate the whole identity set before revoking anything. An unsupported
 		// method shape is unavailable state, not confirmation that nothing is pending.
 		if (!Array.isArray(items)) {
-			this.#notice("approvals state unavailable: invalid snapshot identity", "warning");
+			this.#notice(
+				"approvals state unavailable: invalid snapshot identity",
+				"warning",
+				this.#store.sessions.get(key),
+			);
 			return;
 		}
 		const normalized: ApprovalRequestedEvent[] = [];
@@ -609,7 +703,11 @@ export class SessionController {
 				(this.#store.approvals.has(item.id) &&
 					this.#store.approvals.get(item.id)?.event.sessionKey !== key)
 			) {
-				this.#notice("approvals state unavailable: invalid snapshot identity", "warning");
+				this.#notice(
+					"approvals state unavailable: invalid snapshot identity",
+					"warning",
+					this.#store.sessions.get(key),
+				);
 				return;
 			}
 			const { id, ...fields } = item;
@@ -643,8 +741,8 @@ export class SessionController {
 		return newSessionKey();
 	}
 
-	#notice(text: string, level: NoticeLevel = "info"): void {
-		this.#events.notice(text, level);
+	#notice(text: string, level: NoticeLevel = "info", session?: SessionStore): void {
+		this.#events.notice(text, level, session);
 	}
 }
 
