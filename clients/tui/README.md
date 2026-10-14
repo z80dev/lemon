@@ -325,6 +325,7 @@ and control plane authoritative:
 | `/session delete [key] …` | Preview one exact durable session, then repeat its key with `--confirm`; optionally use `--export json\|markdown` to verify a redacted export before verified deletion. |
 | `/tree` | Browse the paginated native session tree, including preserved branches and bounded redacted user/assistant previews. |
 | `/rewind [--files]` | Select an active user prompt, preview history-only or checkpointed-file rewind, then explicitly confirm the exact preview. Refused or stale confirmation preserves the local draft and transcript. |
+| `/retry [--force]` | After a failed or aborted turn, rewind history (never files) to the last user prompt and resend it, like omp's `/retry`. Refused while a run is in flight or when the last turn completed; `--force` retries a completed turn too. The discarded turn stays in `/tree`. Any failure before the resend leaves the prompt in the composer and sends nothing. |
 | `/name <title…>\|--clear` | Set or clear the current session's durable title through `sessions.metadata.patch`. |
 | `/blueprints [bundle-id filter]` | Browse bounded catalog IDs/counts, then inspect the selected entry through the shared authenticated service. |
 | `/blueprint [help\|list\|inspect\|validate\|preview\|activate] …` | Inspect and validate content-free metadata, preview one profile without mutation, or activate only after a fresh exact digest match. Refused/stale plans preserve the profile draft and never queue offline. |
@@ -335,9 +336,26 @@ without resetting daemon-side session history. Use `/reset` when history should
 also be forgotten.
 
 Fresh startup and `/session new` sessions use canonical local channel-peer keys:
-`agent:default:tui:local:dm:<UUID>`. Separate launches get distinct keys, so
-automation goals and session views can validate and route them consistently.
-Explicit `--session` keys and resumed legacy `tui-…` sessions remain unchanged.
+`agent:default:tui:local:dm:<dir-tag>-<UUID>`, where `<dir-tag>` is the first 16
+hex characters of the SHA-256 of the working directory (the same recipe `lemon run
+--continue` uses). Separate launches get distinct keys, so automation goals and
+session views can validate and route them consistently. Older
+`agent:default:tui:local:dm:<UUID>` keys keep working. Explicit `--session` keys
+and resumed legacy `tui-…` sessions remain unchanged.
+
+### Startup session flags
+
+| Flag | Behavior |
+| --- | --- |
+| `--session`, `-s <key>` | Attach to exactly this key (a fresh session when it has no history). |
+| `--continue`, `-c` | Attach to the most recently updated, non-archived local TUI session, preferring one started from the current directory and otherwise the newest overall. Starts a fresh session with a notice when none exists. |
+| `--resume`, `-r <key>` | Like `--session`, but first checks the daemon knows the key; when it does not, a warning notice is shown and a fresh session starts. |
+| `--resume`, `-r` | Open the `/sessions` switcher right after startup. |
+
+`--continue`, `--session` and `--resume` are mutually exclusive. The launcher
+accepts them directly: `lemon -c`, `lemon --continue`, `lemon -r [key]`, and
+`lemon tui --continue` all reach the TUI. (`lemon run --continue` is the separate
+CLI-session equivalent.)
 
 ### Plan mode
 
