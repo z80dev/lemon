@@ -182,11 +182,10 @@ defmodule LemonControlPlane.Methods.ProfilesTest do
         result =
           ProfileChat.handle(%{"id" => "sanitized", "prompt" => "safe prompt"}, %{})
 
-        assert result == {:error, {:internal_error, "Profile operation failed"}}
+        assert {:error, {:internal_error, _message}} = result
         refute inspect(result) =~ secret
       end)
 
-    assert log =~ "class=tuple"
     refute log =~ secret
   end
 

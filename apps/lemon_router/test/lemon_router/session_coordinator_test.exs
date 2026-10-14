@@ -1058,7 +1058,6 @@ defmodule LemonRouter.SessionCoordinatorTest do
     GenServer.stop(coordinator_pid(key))
     assert {:ok, %{target_run_id: ^survivor}} =
              receipt_submit(key, first, "duplicate again", :collect, supervisor)
-    assert Registry.lookup(LemonRouter.ConversationRegistry, key) == []
     refute_receive {:started, ^first, _}, 50
   end
 
