@@ -40,4 +40,13 @@ describe('persisted realtime authorization and transaction boundary',()=>{
     expect(first.seq).toBe((base+1n).toString());expect(second.seq).toBe((base+2n).toString());expect(services.events.cursor()).toBe(second.seq);
     expect(services.events.replay(alice,base.toString()).map(event=>event.seq)).toEqual([first.seq,second.seq]);expect(services.events.replay(alice,first.seq).map(event=>event.seq)).toEqual([second.seq]);store.close();
   });
+  test('replays in integer order across decimal-width boundaries, including beyond safe integers',()=>{
+    for(const base of [8n,98n,9999999999999998n]){
+      const {store,services,notification}=fixture();services.events.emit('notification.upserted',notification('alice'),{userIds:['alice']});
+      store.db.query('UPDATE sqlite_sequence SET seq=? WHERE name=\'events\'').run(base);
+      const first=services.events.emit('notification.upserted',notification('alice'),{userIds:['alice']});const second=services.events.emit('notification.upserted',notification('alice'),{userIds:['alice']});
+      expect(services.events.replay(alice,base.toString()).map(event=>event.seq)).toEqual([(base+1n).toString(),(base+2n).toString()]);
+      expect(services.events.replay(alice,first.seq).map(event=>event.seq)).toEqual([second.seq]);store.close();
+    }
+  });
 });

@@ -61,7 +61,8 @@ export function createEventService(services:BackendServices):EventService {
       const start=BigInt(cursor);const max=BigInt(watermark());const firstRow=db.query('SELECT CAST(MIN(seq) AS TEXT) AS seq FROM events').get() as {seq:string|null};const earliest=firstRow.seq===null?max+1n:BigInt(firstRow.seq);
       if(start<earliest-1n)fail('cursor_expired','Realtime history expired; fetch a new snapshot.');
       if(start>max)fail('invalid_request','Realtime cursor is ahead of this workspace.');
-      const rows=db.query('SELECT CAST(seq AS TEXT) AS seq,event,payload,audience,timestamp_ms FROM events WHERE seq>? AND seq<=? ORDER BY seq').all(start,max) as {seq:string;event:RealtimeEvent['event'];payload:string;audience:string;timestamp_ms:number}[];
+      // Qualify the integer source column: ORDER BY the projected TEXT alias would reorder 10 before 9.
+      const rows=db.query('SELECT CAST(events.seq AS TEXT) AS seq,event,payload,audience,timestamp_ms FROM events WHERE events.seq>? AND events.seq<=? ORDER BY events.seq').all(start,max) as {seq:string;event:RealtimeEvent['event'];payload:string;audience:string;timestamp_ms:number}[];
       const result:RealtimeEvent[]=[];
       for(const row of rows) {
         const audience=audienceSchema.parse(JSON.parse(row.audience));
