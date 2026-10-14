@@ -9,6 +9,8 @@ export interface SessionTreeEntry {
 	isActive: boolean;
 	isLeaf: boolean;
 	rewindable: boolean;
+	/** Bookmark set with `sessions.label`; absent from older daemons. */
+	label?: string | null;
 }
 
 export interface SessionTreeParams {
@@ -16,6 +18,40 @@ export interface SessionTreeParams {
 	cwd: string;
 	limit?: number;
 	offset?: number;
+}
+
+export interface SessionNavigateParams {
+	sessionKey: string;
+	cwd: string;
+	entryId: string;
+	/** Ask a live session to summarize the abandoned branch in the background. */
+	summarize?: boolean;
+}
+
+export interface SessionNavigateResult {
+	sessionKey: string;
+	sessionId: string;
+	entryId: string;
+	leafId: string | null;
+	/** Text of the selected user message, for the composer; null for other entries. */
+	prompt: string | null;
+	/** True only when a live session accepted the summary request. */
+	summarizing: boolean;
+}
+
+export interface SessionLabelParams {
+	sessionKey: string;
+	cwd: string;
+	entryId: string;
+	/** `null` clears the label. */
+	label: string | null;
+}
+
+export interface SessionLabelResult {
+	sessionKey: string;
+	sessionId: string;
+	entryId: string;
+	label: string | null;
 }
 
 export interface SessionTreeResult {

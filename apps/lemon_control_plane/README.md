@@ -147,8 +147,27 @@ so clients can reject stale or mismatched targets before applying their results.
 100); `offset` is 0–1,000,000 (default 0). The result contains `sessionId`,
 `leafId`, `entries`, `branches`, `totalEntries`, `offset`, and `hasMore`.
 Each entry contains `id`, `parentId`, `type`, `role`, `text`, `timestamp`,
-`isActive`, `isLeaf`, and `rewindable`. Text is a redacted native preview, not
-thoughts or tool-result bodies. Branch summaries contain `leafId` and `active`.
+`isActive`, `isLeaf`, `rewindable`, and `label` (the entry's current bookmark
+label, `null` when none). Text is a redacted native preview, not thoughts or
+tool-result bodies. Branch summaries contain `leafId` and `active`.
+
+`sessions.navigate` requires `operator.write`. It switches the active branch to
+`entryId` (at most 256 bytes) and returns `sessionId`, `entryId`, `leafId`,
+`prompt`, and `summarizing`. The abandoned branch stays in the tree, so no
+preview or confirmation is required; a streaming session is refused with a
+`busy` conflict. Selecting a user message lands the leaf *before* it and returns
+its text as `prompt` (the same convention as rewind; `null` for other entries).
+Optional `summarize` (default `false`) asks a *live* session to summarize the
+abandoned branch in the background; a stopped session has no model runtime, so it
+only moves the leaf and reports `summarizing: false`. The next prompt, live or
+after resume, sees the new branch's history, model and thinking state.
+
+`sessions.label` requires `operator.write`. It appends a label entry bookmarking
+`entryId` with `label`: a string of at most 120 characters (control characters
+and whitespace runs become one space) or `null`/empty to clear it. Labels never
+change the model-visible context and are resolved across the whole tree, so any
+entry — including one on a preserved branch — can be bookmarked. The result is
+`sessionId`, `entryId`, and the resulting `label`.
 
 `sessions.rewind` requires `operator.write`, including previews. Supply an
 `entryId` of at most 256 bytes identifying a rewindable user message.
@@ -184,8 +203,9 @@ rewrites require checkpoints even after interruption or failure; AST search and
 dry-run previews remain read-only. Other shell effects are never undone or
 represented as restored.
 
-`sessions.fork` requires `operator.write` and accepts only the source
-`sessionKey` and `cwd`. The server generates an independent canonical child key,
+`sessions.fork` requires `operator.write` and accepts the source `sessionKey`
+and `cwd`, plus an optional `entryId` (at most 256 bytes) that ends the child's
+history at that entry (inclusive) instead of the source's current leaf. The server generates an independent canonical child key,
 copies native resume state through the runtime, and registers the child in the
 durable session index with independent lifecycle metadata. The result is
 `{sessionKey: "<child>", sourceSessionKey: "<source>"}`. It is discoverable in

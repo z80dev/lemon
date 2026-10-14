@@ -595,6 +595,8 @@ export interface SessionsListResult {
 export interface SessionsForkParams {
 	sessionKey: string;
 	cwd: string;
+	/** Fork the history ending at this entry (inclusive) instead of the current leaf. */
+	entryId?: string;
 }
 
 export interface SessionsForkResult {
