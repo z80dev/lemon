@@ -2,6 +2,87 @@
 
 Native SwiftUI clients for the independent Lemon Bot product backend. macOS and iOS share the `LemonBotKit` Swift package, Codable resources, product-session transport, observable live state and native `LemonBotUI` screens. They never connect to Lemon's operator WebSocket or receive its credential. The [canonical API](../contracts/api.md), [wire types](../contracts/protocol.ts) and [card lifecycle](../contracts/cards.md) define server behavior; this README describes packaging and platform use, not a second protocol.
 
+## End-user release packaging
+
+End users open the notarized DMG, drag **Lemon Bot** to **Applications**, and launch
+it normally. They do not need Xcode, Metal, XcodeGen, Bun, Node or a source checkout.
+The arm64 Mac package requires macOS 14+. iPhone distribution is through App Store
+Connect/TestFlight, not a simulator bundle renamed to an IPA.
+
+The release builder requires macOS, Python 3, Xcode 26.3 selected through
+`DEVELOPER_DIR`, XcodeGen 2.46+, the Xcode Metal Toolchain, and access to Swift
+package dependencies. Install/accept those prerequisites on CI before packaging.
+Run from this directory; output must be outside this source directory:
+
+```sh
+python3 release.py macos --version 2026.10.14 --build 1 \
+  --channel preview --output /tmp/lemon-bot-apple-release
+python3 release.py ios --version 2026.10.14 --build 1 \
+  --channel preview --output /tmp/lemon-bot-apple-release
+# Explicitly authorizes the actual App Store Connect upload:
+python3 release.py ios-upload --version 2026.10.14 --build 1 \
+  --channel preview --output /tmp/lemon-bot-apple-release
+```
+
+Pass the parent release's exact CalVer/channel and a monotonically increasing
+Apple build number. Apple's three-component marketing version is the numeric
+year.month.day; the exact CalVer (including optional revision) is retained in
+`LemonBotReleaseVersion`, with `LemonBotReleaseChannel` in every app/extension
+Info.plist. Device registration reads the real marketing version. Backend/API
+compatibility versions remain the backend's declared contract, not this build number.
+
+Signed Mac inputs: `APPLE_TEAM_ID`, `APPLE_DEVELOPER_ID_APPLICATION` (full
+`Developer ID Application: …` identity with its private key installed in the
+builder keychain), and `APPLE_NOTARY_KEYCHAIN_PROFILE` (created externally with
+`xcrun notarytool store-credentials`). The builder authenticates before compiling,
+uses hardened runtime and the existing sandbox-only Mac entitlement set, verifies
+the signature, requires notarization **Accepted**, staples/validates the app and
+DMG, and assesses the app with Gatekeeper. This normal Developer ID distribution
+has local notifications, not APNs; it deliberately omits the unused Mac App Group
+and provisioned APNs entitlement. Direct Xcode Release remains the separate
+provisioned APNs configuration requiring a matching profile. No security setting,
+Keychain loader, iOS entitlement, bundle identifier or QR behavior is changed.
+
+iOS inputs: `APPLE_TEAM_ID`, `APPLE_IOS_EXPORT_OPTIONS` (external export plist
+with `method=app-store-connect`, `destination=export`, matching `teamID`, signing
+style and appropriate app/share provisioning profile mappings if manual),
+`APPLE_ASC_KEY_ID`, `APPLE_ASC_ISSUER_ID`, and `APPLE_ASC_KEY_PATH` (readable `.p8`).
+The team must own the registered app/share identifiers, App Group and push
+capability, valid Apple Distribution signing private key/certificate and App
+Store provisioning profiles; automatic provisioning requires API-key permission.
+The API key must also have App Store Connect upload permission and the app record
+must already exist. The builder archives generic **device iOS**, exports a real
+IPA with Xcode, and `ios-upload` submits it through Apple's `altool` API-key path.
+Upload acceptance is not processing success, TestFlight availability, beta review
+approval or App Store publication. Check those external receipts in App Store Connect.
+
+Missing credentials fail closed; the currently reported zero signing identities
+and only `HEX_API_KEY` repository secret cannot produce normal Apple distribution.
+No release mode silently falls back to unsigned/ad-hoc output. For the integration
+owner's packaging smoke only, explicitly run:
+
+```sh
+python3 release.py macos-preview --version 2026.10.14 --build 1 \
+  --channel preview --output /tmp/lemon-bot-apple-local-preview
+```
+
+This separately named `local-preview` Debug ad-hoc DMG/ZIP is **not notarized**
+and not a normal end-user release. It preserves the local Debug Keychain identity
+constraints documented below. Never publish it as a signed installer.
+
+The builder emits artifacts and a JSON receipt only after all requested steps
+succeed; it does not publish a release or create another workflow. Receipt fields:
+`schemaVersion: 1`, `product: lemon_bot`, exact `version`, `channel`,
+`appleMarketingVersion`, `appleBuildNumber`, `distribution` (`local-preview`,
+`developer-id-notarized`, or `app-store`), `uploadAccepted` (transport only), and
+`artifacts[]` with `filename`, `format` (`dmg`, `zip`, `ipa`), `platform`
+(`darwin-arm64`, `ios`), lowercase `sha256`, integer `sizeBytes`.
+Mac names are `lemon-bot-<CalVer>-<channel>-darwin-arm64-notarized.{dmg,zip}`;
+preview replaces `notarized` with `local-preview`. iOS is
+`lemon-bot-<CalVer>-<channel>-ios-app-store.ipa`. Canonical release integration
+owns mapping these additional installer records into schema-2 manifests and
+publication; local-preview records must not become normal installer entries.
+
 ## Generate, build and launch
 
 Requirements: Xcode 26.3, XcodeGen 2.46+, the iOS simulator runtime, the Xcode Metal Toolchain used by SwiftTerm, and access to the SwiftTerm package dependency. Run these commands from this `apple` directory:
@@ -128,3 +209,8 @@ Store lifecycle tests inject an isolated credential store within the test target
 The macOS app keeps separate workspace, settings and menu-bar scenes, with typed layout, toolbar, commands and event sections. This preserves summon/active-call actions, user-selected input requests, account-bound voice cleanup, deep links, companion updates and foreground/viewed-room presence without type-erased scene or view wrappers.
 
 macOS registers its selected-text Services provider from the started workspace lifecycle, after AppKit has initialized—not from the SwiftUI app's controller constructor. iOS terminal colors use SwiftTerm's actual UIKit foreground/background APIs; native voice bindings mutate the existing capture object without replacing its owner.
+
+Release packaging now provides explicit Developer ID notarized Mac DMG/ZIP and
+device iOS App Store archive/export/upload paths, fails closed on missing signing
+inputs, and keeps local ad-hoc packaging separate. Generated release bundles use
+parent CalVer/build metadata rather than a hard-coded Mac app version.
