@@ -18,69 +18,113 @@ struct LemonBotMacApp: App {
     }
 
     var body: some Scene {
+        workspaceScene
+        settingsScene
+        menuBarScene
+    }
+
+    private var workspaceScene: some Scene {
         Window("Lemon Bot", id: "workspace") {
-            LemonBotRootView(store: store)
-                .frame(minWidth: 920, minHeight: 620)
-                .background(MacWindowIdentity())
-                .background(MacAudioSettingsRequestHandler())
-                .toolbar {
-                    ToolbarItemGroup {
-                        if let conversationID = store.selectedConversationID {
-                            Button { platform.beginDictation(conversationID: conversationID) } label: { Label("Dictate", systemImage: "mic") }
-                            Button { Task { await platform.startCall(conversationID: conversationID) } } label: { Label("Voice chat", systemImage: "waveform") }
-                                .disabled(!platform.online)
-                        }
-                        Button { platform.summon() } label: { Label("Mini composer", systemImage: "square.and.pencil") }
-                    }
-                }
-                .safeAreaInset(edge: .bottom) {
-                    if let error = platform.errorMessage {
-                        HStack {
-                            Text(error).font(.caption).foregroundStyle(.red).textSelection(.enabled)
-                            Spacer()
-                            Button("Dismiss") { platform.errorMessage = nil }
-                        }.padding(8).background(.regularMaterial)
-                    }
-                }
-                .task { delegate.platform = platform; platform.start() }
-                .onChange(of: store.account?.id) { _, _ in Task { await platform.accountChanged() } }
-                .onChange(of: store.selectedConversationID) { _, _ in Task { await platform.publishPresence() } }
-                .onChange(of: store.notifications) { _, _ in platform.notificationsChanged() }
-                .onChange(of: store.entries) { _, _ in platform.entriesChanged() }
-                .onChange(of: store.voiceSession) { _, session in
-                    if session?.state != "active" || session?.muted == true { platform.cancelCapture(); platform.stopPlayback() }
-                    platform.voiceSettings = session?.settings
-                }
-                .onOpenURL { url in Task { await platform.route(url) } }
-                .onReceive(NotificationCenter.default.publisher(for: .init("LemonBot.platformComposerRequest"))) { notification in
-                    guard let id = notification.userInfo?["conversationID"] as? String,
-                          let action = notification.userInfo?["action"] as? String else { return }
-                    switch action {
-                    case "dictation": platform.beginDictation(conversationID: id)
-                    case "voice": Task { await platform.startCall(conversationID: id) }
-                    case "files": platform.chooseFiles(conversationID: id)
-                    default: break
-                    }
-                }
-                .onReceive(NotificationCenter.default.publisher(for: .init("LemonBot.visibleConversationChanged"))) { notification in
-                    platform.mainViewedConversationID = notification.userInfo?["conversationID"] as? String
-                    Task { await platform.publishPresence() }
-                }
-                .onChange(of: store.bots) { _, _ in platform.updateCompanion() }
-                .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in Task { await platform.publishPresence() } }
-                .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in Task { await platform.publishPresence() } }
-                .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { _ in Task { await platform.publishPresence() } }
-                .onReceive(NotificationCenter.default.publisher(for: NSWindow.didResignKeyNotification)) { _ in Task { await platform.publishPresence() } }
-        }.commands {
-            CommandGroup(after: .newItem) {
-                Button("Summon mini composer") { platform.summon() }
-                Button("Return to active voice chat") { platform.showVoicePanel() }.disabled(store.voiceSession?.state != "active")
-            }
-        }
+            workspaceContent
+        }.commands { workspaceCommands }
+    }
+
+    private var settingsScene: some Scene {
         Settings { MacSettingsView(controller: platform) }
+    }
+
+    private var menuBarScene: some Scene {
         MenuBarExtra("Lemon Bot", systemImage: "leaf") {
             MacMenuBarView(controller: platform)
         }
+    }
+
+    private var workspaceCommands: some Commands {
+        CommandGroup(after: .newItem) {
+            Button("Summon mini composer") { platform.summon() }
+            Button("Return to active voice chat") { platform.showVoicePanel() }
+                .disabled(store.voiceSession?.state != "active")
+        }
+    }
+
+    private var workspaceContent: some View {
+        workspaceComposerEvents
+            .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in Task { await platform.publishPresence() } }
+            .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in Task { await platform.publishPresence() } }
+            .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { _ in Task { await platform.publishPresence() } }
+            .onReceive(NotificationCenter.default.publisher(for: NSWindow.didResignKeyNotification)) { _ in Task { await platform.publishPresence() } }
+    }
+
+    private var workspaceComposerEvents: some View {
+        workspaceAccountEvents
+            .onReceive(NotificationCenter.default.publisher(for: Notification.Name("LemonBot.platformComposerRequest")), perform: handleComposerRequest)
+            .onReceive(NotificationCenter.default.publisher(for: Notification.Name("LemonBot.visibleConversationChanged")), perform: handleVisibleConversationChanged)
+            .onChange(of: store.bots) { _, _ in platform.updateCompanion() }
+    }
+
+    private var workspaceAccountEvents: some View {
+        workspaceLayout
+            .task { delegate.platform = platform; platform.start() }
+            .onChange(of: store.account?.id) { _, _ in Task { await platform.accountChanged() } }
+            .onChange(of: store.selectedConversationID) { _, _ in Task { await platform.publishPresence() } }
+            .onChange(of: store.notifications) { _, _ in platform.notificationsChanged() }
+            .onChange(of: store.entries) { _, _ in platform.entriesChanged() }
+            .onChange(of: store.voiceSession) { _, session in updateVoiceCapture(session) }
+            .onOpenURL { url in Task { await platform.route(url) } }
+    }
+
+    private var workspaceLayout: some View {
+        LemonBotRootView(store: store)
+            .frame(minWidth: 920, minHeight: 620)
+            .background(MacWindowIdentity())
+            .background(MacAudioSettingsRequestHandler())
+            .toolbar { workspaceToolbar }
+            .safeAreaInset(edge: .bottom) { workspaceError }
+    }
+
+    @ToolbarContentBuilder private var workspaceToolbar: some ToolbarContent {
+        ToolbarItemGroup {
+            if let conversationID = store.selectedConversationID {
+                Button { platform.beginDictation(conversationID: conversationID) } label: { Label("Dictate", systemImage: "mic") }
+                Button { Task { await platform.startCall(conversationID: conversationID) } } label: { Label("Voice chat", systemImage: "waveform") }
+                    .disabled(!platform.online)
+            }
+            Button { platform.summon() } label: { Label("Mini composer", systemImage: "square.and.pencil") }
+        }
+    }
+
+    @ViewBuilder private var workspaceError: some View {
+        if let error = platform.errorMessage {
+            HStack {
+                Text(error).font(.caption).foregroundStyle(.red).textSelection(.enabled)
+                Spacer()
+                Button("Dismiss") { platform.errorMessage = nil }
+            }.padding(8).background(.regularMaterial)
+        }
+    }
+
+    private func updateVoiceCapture(_ session: VoiceSession?) {
+        if session?.state != "active" || session?.muted == true {
+            platform.cancelCapture()
+            platform.stopPlayback()
+        }
+        platform.voiceSettings = session?.settings
+    }
+
+    private func handleComposerRequest(_ notification: Foundation.Notification) {
+        guard let id = notification.userInfo?["conversationID"] as? String,
+              let action = notification.userInfo?["action"] as? String else { return }
+        switch action {
+        case "dictation": platform.beginDictation(conversationID: id)
+        case "voice": Task { await platform.startCall(conversationID: id) }
+        case "files": platform.chooseFiles(conversationID: id)
+        default: break
+        }
+    }
+
+    private func handleVisibleConversationChanged(_ notification: Foundation.Notification) {
+        platform.mainViewedConversationID = notification.userInfo?["conversationID"] as? String
+        Task { await platform.publishPresence() }
     }
 }
 
