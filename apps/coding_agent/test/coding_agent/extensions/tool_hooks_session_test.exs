@@ -190,7 +190,9 @@ defmodule CodingAgent.Extensions.ToolHooksSessionTest do
                 "content" => "changed",
                 "format" => false,
                 "diagnostics" => false
-              }, id: "w1")
+              },
+              id: "w1"
+            )
           ],
           stop_reason: :tool_use
         )
