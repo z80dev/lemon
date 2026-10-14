@@ -245,12 +245,12 @@ case "$PROFILE_INPUT" in
     ;;
 esac
 
-if [ "$PROFILE" = "sim_broadcast_platform" ] && [ "$PLATFORM_OS" != "linux" ]; then
-  die "the sim_broadcast_platform profile is built for Linux only; $PLATFORM has no such artifact."
-fi
-
 if [ "$REQUIRE_BOT" = "1" ] && [ "$PROFILE" != "lemon_runtime_full" ] && [ "$PROFILE" != "lemon_runtime_min" ]; then
   die "--require-bot needs a bot-capable native runtime (full or min); the $PROFILE profile cannot host a Lemon Bot worker."
+fi
+
+if [ "$PROFILE" = "sim_broadcast_platform" ] && [ "$PLATFORM_OS" != "linux" ]; then
+  die "the sim_broadcast_platform profile is built for Linux only; $PLATFORM has no such artifact."
 fi
 
 # --------------------------------------------------------------- manifest ----

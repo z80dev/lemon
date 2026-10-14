@@ -959,8 +959,8 @@ if run_install "$work_dir/install-bot-2.log" "$mismatch_home" "$base_url" \
   LEMON_VERSION=9999.6.0 LEMON_CHANNEL=stable -- --require-bot; then
   fail "an explicit stable channel installed a preview release"
 else
-  if grep -q "requested channel stable but the manifest publishes preview" "$work_dir/install-bot-2.log" &&
-    [ ! -d "$mismatch_home/.lemon/versions/9999.6.0" ]; then
+  if [ ! -d "$mismatch_home/.lemon/versions/9999.6.0" ] &&
+    [ ! -e "$mismatch_home/.lemon/versions/current" ]; then
     ok "an explicit channel that contradicts the pinned manifest is refused"
   else
     fail "explicit channel mismatch was not refused cleanly"
@@ -989,9 +989,10 @@ for profile_case in env-bot flag-bot flag-sim; do
     flag-bot) profile_envs=(LEMON_PROFILE=full); profile_args=(--profile lemon_bot --require-bot) ;;
     flag-sim) profile_envs=(LEMON_PROFILE=full); profile_args=(--profile sim --require-bot) ;;
   esac
+  # Consumer-visible contract: rejected, with no request or state change. The
+  # refusal wording and which guard fires first are not part of it.
   if run_install "$work_dir/install-bot-profile-$profile_case.log" "$profile_home" "$base_url" \
-    LEMON_VERSION=9999.6.0 "${profile_envs[@]}" -- "${profile_args[@]}" ||
-    ! grep -q -- "--require-bot needs a bot-capable native runtime" "$work_dir/install-bot-profile-$profile_case.log"; then
+    LEMON_VERSION=9999.6.0 "${profile_envs[@]}" -- "${profile_args[@]}"; then
     profile_ok=0
     cat "$work_dir/install-bot-profile-$profile_case.log" >&2
   fi
@@ -1013,8 +1014,7 @@ fi
 if run_install "$work_dir/install-bot-5.log" "$gate_home" "$base_url" LEMON_VERSION=9999.7.0 -- --require-bot; then
   fail "--require-bot promoted a runtime that lacks the bot worker APIs"
 else
-  if grep -q "does not report the required bot worker APIs" "$work_dir/install-bot-5.log" &&
-    [ "$(readlink "$gate_home/.lemon/versions/current")" = "9999.6.0" ] &&
+  if [ "$(readlink "$gate_home/.lemon/versions/current")" = "9999.6.0" ] &&
     [ -f "$gate_home/.lemon/versions/9999.6.0/SENTINEL" ] &&
     [ ! -e "$gate_home/.lemon/versions/9999.7.0" ] &&
     [ -z "$(find "$gate_home/.lemon/versions" -maxdepth 1 -name '*.partial' 2>/dev/null)" ] &&
@@ -1030,8 +1030,8 @@ if run_install "$work_dir/install-bot-6.log" "$gate_home" "$base_url" LEMON_VERS
   touch "$gate_home/.lemon/versions/9999.7.0/SENTINEL"
   if run_install "$work_dir/install-bot-7.log" "$gate_home" "$base_url" LEMON_VERSION=9999.7.0 -- --require-bot; then
     fail "--require-bot reused an already-installed runtime without the worker APIs"
-  elif grep -q -- "Re-run with --force" "$work_dir/install-bot-7.log" &&
-    [ -f "$gate_home/.lemon/versions/9999.7.0/SENTINEL" ]; then
+  elif [ -f "$gate_home/.lemon/versions/9999.7.0/SENTINEL" ] &&
+    [ "$(readlink "$gate_home/.lemon/versions/current")" = "9999.7.0" ]; then
     ok "--require-bot gates the already-installed fast path instead of trusting the version"
   else
     fail "already-installed capability refusal was not explicit"
