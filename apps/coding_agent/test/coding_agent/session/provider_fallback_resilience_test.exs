@@ -282,6 +282,7 @@ defmodule CodingAgent.Session.ProviderFallbackResilienceTest do
     wrapped = wrap(stream_fn, primary, settings, session_id: "cross-model-pin")
     options = %StreamOptions{api_key: "caller-primary-secret", access_token: "caller-token",
       service_account_json: "caller-service-account", headers: %{"authorization" => "caller-secret"},
+      thinking_budgets: %{high: 16_000, azure_base_url: "https://old-provider.invalid", azure_api_version: "old"},
       provider_options: %{openai: %{api_key: "caller-secret"}}, max_tokens: 123, stream_timeout: 456}
     {:ok, stream} = wrapped.(primary, %Context{}, options)
     assert {:ok, %{provider: :azure_openai_responses, model: "gpt-4o"}} = LemonAi.EventStream.result(stream, 1_000)
@@ -295,6 +296,9 @@ defmodule CodingAgent.Session.ProviderFallbackResilienceTest do
     refute Map.has_key?(destination.provider_options, :openai)
     assert destination.max_tokens == 123
     assert destination.stream_timeout == 456
+    assert destination.thinking_budgets.high == 16_000
+    refute Map.get(destination.thinking_budgets, :azure_base_url) == "https://old-provider.invalid"
+    refute Map.get(destination.thinking_budgets, :azure_api_version) == "old"
     assert SessionPins.get("cross-model-pin").model_id == "gpt-4o"
   end
 

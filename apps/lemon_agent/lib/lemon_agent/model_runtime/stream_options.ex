@@ -11,6 +11,46 @@ defmodule LemonAgent.ModelRuntime.StreamOptions do
   alias LemonAgent.ModelRuntime.ProviderNames
   alias LemonAgent.ProviderConfigResolver
 
+  @effort_budget_keys [:minimal, :low, :medium, :high, :xhigh,
+                       "minimal", "low", "medium", "high", "xhigh"]
+
+  @doc """
+  Removes provider-bound credentials and routing inputs before a provider switch.
+
+  Request settings, observers, session identity and timeouts are retained.
+  Only numeric effort entries survive in `thinking_budgets`; provider-specific
+  URL/version/deployment overrides must be rebuilt from the destination config.
+  """
+  @spec sanitize_for_provider_switch(StreamOptions.t() | map() | nil) ::
+          StreamOptions.t() | nil
+  def sanitize_for_provider_switch(%StreamOptions{} = options) do
+    thinking_budgets =
+      Enum.reduce(options.thinking_budgets || %{}, %{}, fn {effort, budget}, acc ->
+        if effort in @effort_budget_keys and is_number(budget),
+          do: Map.put(acc, effort, budget),
+          else: acc
+      end)
+
+    %{options |
+      api_key: nil,
+      access_token: nil,
+      service_account_json: nil,
+      project: nil,
+      location: nil,
+      headers: %{},
+      provider_options: %{},
+      thinking_budgets: thinking_budgets
+    }
+  end
+
+  def sanitize_for_provider_switch(options) when is_map(options) do
+    options
+    |> normalize_stream_options(nil)
+    |> sanitize_for_provider_switch()
+  end
+
+  def sanitize_for_provider_switch(nil), do: nil
+
   @spec build_stream_options(
           LemonAi.Types.Model.t(),
           map() | nil,
