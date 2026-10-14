@@ -159,6 +159,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Provider CI checks use the existing OAuth decode branching convention without
+  changing refresh locking, and Codex CLI import regressions check rejection
+  and non-mutation rather than incidental error wording.
 - OAuth callback parsing and xAI endpoint validation reject malformed URL
   authorities and ports before extracting codes or exchanging credentials.
 - Provider sign-in failures no longer print credential payloads or arbitrary

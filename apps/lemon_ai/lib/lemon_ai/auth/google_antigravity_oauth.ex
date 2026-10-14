@@ -254,30 +254,35 @@ defmodule LemonAi.Auth.GoogleAntigravityOAuth do
 
   def resolve_api_key_from_secret(secret_name, secret_value, opts)
       when is_binary(secret_name) and is_binary(secret_value) do
-    with {:ok, secret} <- decode_secret(secret_value) do
-      LemonAi.Auth.OAuthSecretResolver.with_refresh_lock(
-        __MODULE__,
-        secret_name,
-        secret,
-        opts,
-        fn latest, opts ->
-          with {:ok, refreshed_secret, changed?} <-
-                 ensure_fresh_secret(latest, Keyword.get(opts, :force_refresh, false) == true),
-               access_token when is_binary(access_token) and access_token != "" <-
-                 non_empty_binary(refreshed_secret["access_token"]),
-               project_id when is_binary(project_id) and project_id != "" <-
-                 project_id_from_secret(refreshed_secret),
-               :ok <-
-                 if(changed?, do: persist_secret(secret_name, refreshed_secret, opts), else: :ok) do
-            {:ok, Jason.encode!(%{"token" => access_token, "projectId" => project_id})}
-          else
-            nil -> {:error, :invalid_antigravity_secret}
-            {:error, reason} -> {:error, reason}
+    case decode_secret(secret_value) do
+      {:ok, secret} ->
+        LemonAi.Auth.OAuthSecretResolver.with_refresh_lock(
+          __MODULE__,
+          secret_name,
+          secret,
+          opts,
+          fn latest, opts ->
+            with {:ok, refreshed_secret, changed?} <-
+                   ensure_fresh_secret(latest, Keyword.get(opts, :force_refresh, false) == true),
+                 access_token when is_binary(access_token) and access_token != "" <-
+                   non_empty_binary(refreshed_secret["access_token"]),
+                 project_id when is_binary(project_id) and project_id != "" <-
+                   project_id_from_secret(refreshed_secret),
+                 :ok <-
+                   if(changed?,
+                     do: persist_secret(secret_name, refreshed_secret, opts),
+                     else: :ok
+                   ) do
+              {:ok, Jason.encode!(%{"token" => access_token, "projectId" => project_id})}
+            else
+              nil -> {:error, :invalid_antigravity_secret}
+              {:error, reason} -> {:error, reason}
+            end
           end
-        end
-      )
-    else
-      :not_oauth -> :ignore
+        )
+
+      :not_oauth ->
+        :ignore
     end
   end
 
