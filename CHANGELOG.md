@@ -37,6 +37,8 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   and no deleted-account restoration or mutation replay.
 - Pending Lemon Bot X OAuth connections keep unverified identities null
   rather than exposing fabricated or empty account IDs/usernames.
+- Lemon Bot OIDC uses explicit operator-approved HTTPS origins, private-IdP
+  DNS exceptions and exact client/secret-reference destination bindings.
 
 ---
 
