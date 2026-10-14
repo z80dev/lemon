@@ -10,6 +10,14 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Added
 
+- Provider resilience now supports ordered model fallback chains (including
+  same-provider alternatives), one OAuth refresh on HTTP 401 before credential
+  rotation, retry-after-aware credential cooldowns, and model-aware session
+  pinning. Fatal requests and context overflow do not walk fallback chains;
+  no automatic recovery replays committed text, thinking, or tool-call output.
+- Opt-in `thinking_level = "auto"` classifies each user prompt with an explicitly
+  configured tiny/smol model and maps its effort to the active provider's
+  supported levels. `@plan` and `@commit` join the built-in model role selectors.
 - **Lemon Web, rebuilt.** The browser UI is now a full workspace on the same
   control-plane methods and events as the TUI. Chat streams Markdown with
   highlighted code, thinking blocks and rich tool cards (shell output and exit

@@ -93,6 +93,12 @@ api_key_secret = "google_api_key"
 provider = "anthropic"
 model = "claude-sonnet-5"
 thinking_level = "medium"
+# Use "auto" for per-prompt effort selection; configure a classifier role below.
+#
+# [model_roles]
+# smol = "openai:gpt-4o-mini"  # auto-thinking classifier (tiny takes precedence)
+# plan = "anthropic:claude-sonnet-5"
+# commit = "@smol"
 
 [runtime]
 theme = "default"
@@ -109,6 +115,7 @@ extension_paths = []
 # [runtime.provider_routing]
 # enabled = true
 # fallback_providers = ["zai"]
+# fallback_models = ["openai:gpt-4o-mini", "@plan"] # ordered provider:model or @role selectors
 # default_pool = "burst"
 # require_credentials = true
 #

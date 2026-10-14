@@ -16,8 +16,23 @@ defmodule LemonAgent.ModelRuntime.ModelRolesTest do
     assert ModelRoles.resolve("@review", roles, nil) == {:ok, "openai:gpt-4"}
   end
 
+  test "plan and commit roles honor configured model and role mappings" do
+    roles = %{
+      "plan" => "@slow",
+      "slow" => "anthropic:planner",
+      "commit" => "@smol",
+      "smol" => "openai:committer"
+    }
+
+    assert ModelRoles.resolve("@plan", roles, "openai:active") ==
+             {:ok, "anthropic:planner"}
+
+    assert ModelRoles.resolve("@commit", roles, "openai:active") ==
+             {:ok, "openai:committer"}
+  end
+
   test "unconfigured built-ins use only the caller's concrete fallback" do
-    for role <- ~w(default smol slow) do
+    for role <- ~w(default smol slow plan commit) do
       assert ModelRoles.resolve("@" <> role, %{}, "anthropic:active") ==
                {:ok, "anthropic:active"}
     end
