@@ -8,13 +8,16 @@ defmodule CodingAgent.ExtensionLifecycle do
   - extension path resolution
   - extension load/reload
   - provider registration cleanup + registration
-  - tool rebuild
+  - tool rebuild, including the `CodingAgent.Extensions.ToolHooks` interception
+    wrapper (applied after approval wrapping and before tool disclosure, so
+    hidden tools reached through `tool_invoke` are intercepted too)
   - extension status report construction
   """
 
   alias LemonAgent.Types.AgentTool
   alias CodingAgent.Config
   alias CodingAgent.Extensions
+  alias CodingAgent.Extensions.ToolHooks
   alias CodingAgent.ToolDisclosure
   alias CodingAgent.ToolExecutor
   alias CodingAgent.ToolRegistry
@@ -72,7 +75,8 @@ defmodule CodingAgent.ExtensionLifecycle do
         extra_tools,
         tool_policy,
         approval_context,
-        disclosure_cfg
+        disclosure_cfg,
+        hooks
       )
 
     emit_disclosure_telemetry(disclosure_report)
@@ -151,10 +155,14 @@ defmodule CodingAgent.ExtensionLifecycle do
     disclosure_cfg =
       ToolDisclosure.config(settings_manager, Keyword.get(tool_opts, :tool_disclosure))
 
+    hook_context = tool_hook_context(cwd, tool_opts)
+
     %{tools: tools, report: disclosure_report} =
       ToolDisclosure.apply(
-        ToolRegistry.get_tool_tuples(cwd, tool_opts),
-        extra_tools,
+        cwd
+        |> ToolRegistry.get_tool_tuples(tool_opts)
+        |> ToolHooks.wrap_tuples(hooks, hook_context),
+        ToolHooks.wrap_tools(extra_tools, hooks, hook_context),
         disclosure_cfg
       )
 
@@ -226,7 +234,8 @@ defmodule CodingAgent.ExtensionLifecycle do
           [AgentTool.t()],
           term(),
           term(),
-          ToolDisclosure.config()
+          ToolDisclosure.config(),
+          keyword([function()])
         ) :: {[AgentTool.t()], ToolDisclosure.report()}
   defp build_tools(
          cwd,
@@ -236,14 +245,19 @@ defmodule CodingAgent.ExtensionLifecycle do
          extra_tools,
          tool_policy,
          approval_context,
-         disclosure_cfg
+         disclosure_cfg,
+         hooks
        ) do
+    hook_context = tool_hook_context(cwd, tool_opts)
+
     case custom_tools do
       nil ->
         %{tools: tools, report: report} =
           ToolDisclosure.apply(
-            ToolRegistry.get_tool_tuples(cwd, tool_opts),
-            extra_tools,
+            cwd
+            |> ToolRegistry.get_tool_tuples(tool_opts)
+            |> ToolHooks.wrap_tuples(hooks, hook_context),
+            ToolHooks.wrap_tools(extra_tools, hooks, hook_context),
             disclosure_cfg
           )
 
@@ -267,8 +281,13 @@ defmodule CodingAgent.ExtensionLifecycle do
         # A hand-assembled toolset is the caller's business: they chose exactly
         # these tools, so there is no long tail to defer and no registry source
         # tags to partition by.
-        {tools, ToolDisclosure.skipped_report(:custom_tools)}
+        {ToolHooks.wrap_tools(tools, hooks, hook_context),
+         ToolDisclosure.skipped_report(:custom_tools)}
     end
+  end
+
+  defp tool_hook_context(cwd, tool_opts) do
+    %{cwd: cwd, session_id: Keyword.get(tool_opts, :session_id)}
   end
 
   defp emit_disclosure_telemetry(report) do

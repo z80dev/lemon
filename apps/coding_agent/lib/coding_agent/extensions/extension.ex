@@ -63,6 +63,21 @@ defmodule CodingAgent.Extensions.Extension do
   - `:on_message_end` - `fn message -> :ok` - Called when message processing ends
   - `:on_tool_execution_start` - `fn id, name, args -> :ok` - Called when tool starts
   - `:on_tool_execution_end` - `fn id, name, result, is_error -> :ok` - Called when tool ends
+  - `:on_session_start` - `fn %{session_id, cwd, session_scope} -> any` - Called once
+    when a new or resumed session finishes starting
+  - `:on_session_shutdown` - `fn %{session_id, cwd, reason} -> any` - Called when the
+    session terminates
+
+  The hooks above observe only; their return values are ignored. Two hooks can
+  intercept tool execution (see `CodingAgent.Extensions.ToolHooks`):
+
+  - `:on_tool_call` - `fn %{tool_call_id, tool_name, args, cwd, session_id} -> ...` -
+    runs before the tool; return `{:block, reason}` to stop it or
+    `{:replace_args, map}` to change its arguments. A raising handler blocks the call.
+  - `:on_tool_result` - `fn %{tool_call_id, tool_name, args, result, is_error, cwd,
+    session_id} -> ...` - runs after the tool; on success return
+    `{:replace, %AgentToolResult{}}` or `{:replace, %{content: ..., details: ...}}`
+    to override the result content/details.
   """
 
   @doc """

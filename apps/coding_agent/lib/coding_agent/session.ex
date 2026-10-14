@@ -650,6 +650,7 @@ defmodule CodingAgent.Session do
     # Schedule the extension status report event to be published after init completes.
     # This allows subscribers to receive the event after they subscribe.
     send(self(), {:publish_extension_status_report, extension_status_report})
+    send(self(), :run_session_start_hooks)
 
     maybe_subscribe_exec_approvals(state)
 
@@ -1246,6 +1247,16 @@ defmodule CodingAgent.Session do
     {:noreply, state}
   end
 
+  def handle_info(:run_session_start_hooks, state) do
+    CodingAgent.Extensions.SessionHooks.session_start(state.hooks, %{
+      session_id: state.session_manager.header.id,
+      cwd: state.cwd,
+      session_scope: state.session_scope
+    })
+
+    {:noreply, state}
+  end
+
   def handle_info({:auto_compaction_result, signature, result}, state) do
     {:noreply, CompactionLifecycle.handle_result(state, signature, result, session_callbacks())}
   end
@@ -1346,8 +1357,14 @@ defmodule CodingAgent.Session do
 
   @spec terminate(term(), t()) :: :ok
   @impl true
-  def terminate(_reason, state) do
+  def terminate(reason, state) do
     _ = CompactionManager.cancel_compaction_tasks(state, :session_terminated)
+
+    CodingAgent.Extensions.SessionHooks.session_shutdown(state.hooks, %{
+      session_id: state.session_manager && state.session_manager.header.id,
+      cwd: state.cwd,
+      reason: reason
+    })
 
     # Emit introspection event for session end
     Introspection.record(
