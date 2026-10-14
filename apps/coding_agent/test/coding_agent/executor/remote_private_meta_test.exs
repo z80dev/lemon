@@ -107,6 +107,26 @@ defmodule CodingAgent.Executor.RemotePrivateMetaTest do
     refute Map.has_key?(payload["meta"], "nativeDestinationPid")
   end
 
+  test "factory option-only identities, generation and callbacks cannot become wire selectors" do
+    callback = fn _ -> raise "factory callback must never run during encoding" end
+    for {keys, value} <- [
+          {[:native_destination_pid, "native_destination_pid", :nativeDestinationPid, "nativeDestinationPid"], self()},
+          {[:native_destination_generation, "native_destination_generation", :nativeDestinationGeneration, "nativeDestinationGeneration"], 7},
+          {[:native_source_profile_id, "native_source_profile_id", :nativeSourceProfileId, "nativeSourceProfileId"], "source-profile"},
+          {[:native_source_session_key, "native_source_session_key", :nativeSourceSessionKey, "nativeSourceSessionKey"], "agent:source:main"},
+          {[:native_followup_submit, "native_followup_submit", :nativeFollowupSubmit, "nativeFollowupSubmit"], callback},
+          {[:native_source_floor_fun, "native_source_floor_fun", :nativeSourceFloorFun, "nativeSourceFloorFun"], callback}
+        ] do
+      meta = Map.new(keys, &{&1, value})
+        |> Map.put(:native_lineage_handle, String.duplicate("h", 43))
+        |> Map.put(:native_lineage_run_id, "native-parent")
+      assert {:ok, payload} = encode(meta)
+      for key <- keys, do: refute(Map.has_key?(payload["meta"], to_string(key)))
+      assert payload["meta"]["native_lineage_handle"] == String.duplicate("h", 43)
+      assert payload["meta"]["native_lineage_run_id"] == "native-parent"
+    end
+  end
+
   test "proof callbacks and structs remain non-serializable execution data" do
     assert {:error, {:invalid_request_payload, _}} = encode(%{invocation_proof: %{run_id: fn -> :private end}})
     assert {:error, {:invalid_request_payload, _}} = encode(%{invocation_proof: %LemonCore.ResumeToken{engine: "lemon", value: "private"}})
