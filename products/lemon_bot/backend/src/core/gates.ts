@@ -7,7 +7,7 @@ const MAX_WAIT = 600_000;
 const categories = z.enum(['shell', 'files', 'external_message', 'calendar', 'publish', 'purchase', 'permissions', 'connector', 'handoff']);
 const states = z.enum(['pending', 'submitted', 'approved', 'denied', 'declined', 'expired', 'cancelled', 'completed', 'failed', 'outcome_unknown']);
 const json: z.ZodType<P.JSONValue> = z.lazy(() => z.union([z.null(), z.boolean(), z.number().finite(), boundedText(65_536), z.array(json), z.record(z.string(), json)]));
-const common = z.object({ botId: id, conversationId: id, targetUserId: id.optional(), runId: id.nullable().optional(), clientNonce: nonce.optional(), expiresInMs: z.number().int().min(1).max(MAX_WAIT).optional() }).strict();
+const common = z.object({ botId: id, conversationId: id, targetUserId: id.optional(), runId: id.nullable().optional(), clientNonce: nonce.optional(), expiresInMs: z.number().int().min(1000).max(MAX_WAIT).optional() }).strict();
 const option = z.object({ value: boundedText(1024, 1), label: boundedText(1024, 1) }).strict();
 const field = z.object({ id: boundedText(128, 1), label: boundedText(1024, 1), kind: z.enum(['text', 'multiline', 'number', 'boolean', 'single_select', 'multi_select']), required: z.boolean(), options: z.array(option).min(1).max(100).optional(), min: z.number().finite().optional(), max: z.number().finite().optional() }).strict();
 const upstreamSchema = z.object({ approvalId: id, sessionKey: boundedText(1024, 1), runId: id, nodeId: id.nullable().optional(), invokeId: id.nullable().optional() }).strict();

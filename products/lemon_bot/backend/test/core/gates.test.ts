@@ -104,11 +104,11 @@ describe('durable targeted gates', () => {
   });
   test('persisted deadline expires at boundary after restart and wakes with no permission', async () => {
     const f = fixture();
-    const question = await f.gates.create<P.Question>(actor, 'question', { ...questionInput, expiresInMs: 5 });
+    const question = await f.gates.create<P.Question>(actor, 'question', { ...questionInput, expiresInMs: 1000 });
     const old = f.gates;
     const restarted = f.restart();
     const waiting = restarted.wait<P.Question>('questions', question.id);
-    f.advance(5);
+    f.advance(1000);
     restarted.sweep();
     expect((await waiting).gate.state).toBe('expired');
     await expect(restarted.resolve(actor, 'questions', question.id, { clientNonce: nonce, revision: 2, decision: 'decline' })).rejects.toMatchObject({ code: 'expired' });
@@ -116,9 +116,9 @@ describe('durable targeted gates', () => {
   });
   test('background timer expires without HTTP traffic', async () => {
     const f = fixture();
-    const question = await f.gates.create<P.Question>(actor, 'question', { ...questionInput, expiresInMs: 5 });
+    const question = await f.gates.create<P.Question>(actor, 'question', { ...questionInput, expiresInMs: 1000 });
     const waiting = f.gates.wait<P.Question>('questions', question.id);
-    f.advance(5);
+    f.advance(1000);
     expect((await waiting).gate.state).toBe('expired');
   });
   test('cancelUser and conversation removal wake terminal cancelled requests', async () => {
@@ -245,6 +245,7 @@ describe('gate admission and transactional failures', () => {
   test('expiry maximum, unique field IDs and strict properties reject before persistence', async () => {
     const f = fixture();
     await expect(f.gates.create(actor, 'question', { ...questionInput, expiresInMs: 600_001 })).rejects.toMatchObject({ code: 'invalid_request' });
+    await expect(f.gates.create(actor, 'question', { ...questionInput, expiresInMs: 999 })).rejects.toMatchObject({ code: 'invalid_request' });
     await expect(f.gates.create(actor, 'question', { ...questionInput, fields: [questionInput.fields[0], questionInput.fields[0]] })).rejects.toMatchObject({ code: 'invalid_request' });
     await expect(f.gates.create(actor, 'question', { ...questionInput, extra: 'unsupported' })).rejects.toMatchObject({ code: 'invalid_request' });
     expect(f.store.list('questions')).toHaveLength(0);
