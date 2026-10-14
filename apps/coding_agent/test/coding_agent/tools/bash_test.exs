@@ -660,6 +660,83 @@ defmodule CodingAgent.Tools.BashTest do
     end
   end
 
+  describe "cwd and env parameters" do
+    test "cwd runs the command in a resolved subdirectory; a missing one is an error", %{
+      tmp_dir: tmp_dir
+    } do
+      File.mkdir_p!(Path.join(tmp_dir, "sub/dir"))
+
+      for pty <- [false, true] do
+        result =
+          Bash.execute(
+            "c1",
+            %{"command" => "pwd", "cwd" => "sub/dir", "pty" => pty},
+            nil,
+            nil,
+            tmp_dir,
+            []
+          )
+
+        assert %AgentToolResult{is_error: false, content: [%TextContent{text: text}]} = result
+        assert String.trim(text) == Path.join(tmp_dir, "sub/dir")
+      end
+
+      marker = Path.join(tmp_dir, "ran")
+
+      assert {:error, message} =
+               Bash.execute(
+                 "c2",
+                 %{"command" => "touch #{marker}", "cwd" => "missing"},
+                 nil,
+                 nil,
+                 tmp_dir,
+                 []
+               )
+
+      assert message =~ "missing"
+      refute File.exists?(marker)
+    end
+
+    test "env reaches the command; invalid names or values are rejected before running", %{
+      tmp_dir: tmp_dir
+    } do
+      value = "two words 'quoted' \"double\"\nnext line"
+
+      result =
+        Bash.execute(
+          "c1",
+          %{
+            "command" => "printf '%s|%s' \"$LEMON_A\" \"$_b2\"",
+            "env" => %{"LEMON_A" => value, "_b2" => "x"}
+          },
+          nil,
+          nil,
+          tmp_dir,
+          []
+        )
+
+      assert %AgentToolResult{is_error: false, content: [%TextContent{text: text}]} = result
+      assert text == value <> "|x"
+
+      marker = Path.join(tmp_dir, "ran")
+
+      for env <- [%{"1BAD" => "x"}, %{"A-B" => "x"}, %{"OK" => 1}, %{"OK" => "a\0b"}, ["A"]] do
+        assert {:error, message} =
+                 Bash.execute(
+                   "c2",
+                   %{"command" => "touch #{marker}", "env" => env},
+                   nil,
+                   nil,
+                   tmp_dir,
+                   []
+                 )
+
+        assert message =~ "env"
+        refute File.exists?(marker)
+      end
+    end
+  end
+
   # ============================================================================
   # Tool Integration Tests
   # ============================================================================

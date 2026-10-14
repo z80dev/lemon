@@ -184,6 +184,29 @@ defmodule CodingAgent.ToolExecutorTest do
       assert String.contains?(text, "approval failed")
       refute_received :executed
     end
+
+    test "bash approval requests expose env names but never env values" do
+      parent = self()
+      secret = "s3cret-value-#{System.unique_integer([:positive])}"
+
+      context = %{
+        approval_request_fun: fn request ->
+          send(parent, {:approval_request, request})
+          {:ok, :approved, :once}
+        end
+      }
+
+      args = %{"command" => "deploy", "cwd" => "app", "env" => %{"TOKEN" => secret, "A" => "1"}}
+
+      assert :ran =
+               ToolExecutor.execute_with_approval("bash", args, fn -> :ran end, context)
+
+      assert_received {:approval_request, request}
+      assert request.action["env_keys"] == ["A", "TOKEN"]
+      assert request.action["command"] == "deploy"
+      assert request.action["cwd"] == "app"
+      refute inspect(request) =~ secret
+    end
   end
 
   describe "policy integration" do
