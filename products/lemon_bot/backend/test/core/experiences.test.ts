@@ -273,6 +273,10 @@ describe('native grant enforcement boundaries', () => {
       const shared = await nativeBotToolPolicy(f.services, user, f.bot, measured);
       const invocation = await invocationBotToolPolicy(f.services, user, f.bot, measured);
       expect(shared.deny).not.toContain('read'); expect(invocation.deny).toContain('read');
+      for (const policy of [shared, invocation]) {
+        expect(policy.deny).toContain('agent'); expect(policy.blocked_tools).toEqual(['agent']);
+        expect(policy.allow).toBe('all'); expect(policy.deny).not.toContain('task'); expect(policy.blocked_tools).not.toContain('task');
+      }
     } finally { f.close(); }
   });
   test('uses discovered connector aliases and read-only hints cannot waive mandatory approval', async () => {
