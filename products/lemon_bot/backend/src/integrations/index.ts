@@ -15,7 +15,7 @@ import type { OAuthRevocationReceipt } from './oauth-revocation';
 import { createIdentityRoutes, createIdentityServices } from '../enterprise/identity';
 import { createSCIMRoutes } from '../enterprise/scim';
 import { createTokenRoutes } from '../enterprise/tokens';
-import { createPolicyRoutes, createPolicyServices } from '../enterprise/policy';
+import { createPolicyRoutes, createPolicyServices, directoryAffectedUsers } from '../enterprise/policy';
 import { createHostRoutes, createHostServices } from '../enterprise/host';
 import { createSpendRoutes, createSpendServices } from '../enterprise/spend';
 import { createExportRoutes, createExportServices } from '../enterprise/exports';
@@ -154,20 +154,28 @@ export function createIntegrationServices(s: BackendServices): Services {
 
 function synchronizeDirectoryRoutes(s: BackendServices, routes: Route[]): Route[] {
   return routes.map(route => {
-    const directory = route.path.startsWith('/v1/directory/groups') || route.path.startsWith('/v1/scim/v2/Groups');
+    const directory = route.path.startsWith('/v1/directory/groups') || route.path.startsWith('/v1/scim/v2/Groups') || ['/v1/auth/oidc/complete', '/v1/auth/oidc/link'].includes(route.path);
     const governance = route.path === '/v1/governance';
     if ((!directory && !governance) || route.method === 'GET') return route;
     return { ...route, handler: async context => {
       const before = s.store.list<P.DirectoryGroup>('directoryGroups');
-      const result = await route.handler(context);
-      if (result instanceof Response && !result.ok) return result;
-      if (!context.user) throw new ApiError('unauthenticated', 'Policy synchronization requires its authenticated mutation principal.');
-      if (governance) await refreshEffectivePolicy(s, context.user, undefined, { workspace: true });
-      else {
-        const after = s.store.list<P.DirectoryGroup>('directoryGroups');
-        const changed = new Set([...before, ...after].filter(group => { const old = before.find(value => value.id === group.id), next = after.find(value => value.id === group.id); return !old || !next || old.revision !== next.revision || context.params.id === group.id || context.params.groupId === group.id; }).flatMap(group => group.memberUserIds));
-        for (const userId of changed) { const member = s.store.list<P.Member>('members', value => value.userId === userId)[0]; if (member?.enabled) await refreshEffectivePolicy(s, userPrincipal(s, userId)); }
+      const previousPolicies = s.store.list<P.GroupPolicy>('groupPolicies');
+      const previousGovernanceRevision = s.store.metadata<P.Governance>('governance')?.revision ?? 1;
+      let result: unknown, handlerError: unknown, failed = false;
+      try { result = await route.handler(context); } catch (error) { failed = true; handlerError = error; }
+      // A later auth/provider error does not undo committed desired authority. Fence it
+      // before returning even a failed response; a read/error alone must never cancel work.
+      if (governance && previousGovernanceRevision !== (s.store.metadata<P.Governance>('governance')?.revision ?? 1)) {
+        if (!context.user) throw new ApiError('unauthenticated', 'Governance synchronization requires its authenticated mutation principal.');
+        await refreshEffectivePolicy(s, context.user, undefined, { workspace: true });
+      } else if (directory) {
+        const changed = directoryAffectedUsers(before, s.store.list<P.DirectoryGroup>('directoryGroups'), previousPolicies, s.store.list<P.GroupPolicy>('groupPolicies'));
+        for (const userId of changed) {
+          const member = s.store.list<P.Member>('members', value => value.userId === userId)[0];
+          if (member?.enabled) await refreshEffectivePolicy(s, userPrincipal(s, userId));
+        }
       }
+      if (failed) throw handlerError;
       return result;
     } };
   });

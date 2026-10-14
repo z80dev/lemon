@@ -116,3 +116,17 @@ export function createPolicyRoutes(services: BackendServices, hooks: { governanc
     { method: 'GET', path: '/v1/policies/effective', auth: 'member', handler: context => { let who = principal(context); const target = context.query.get('userId'); if (target && target !== who.userId) { services.auth.requireRole(who, 'admin'); who = userPrincipal(services, target); } const botId = context.query.get('botId') ?? undefined; return policyServices.effectivePolicy(who, botId); } },
   ];
 }
+
+/** Membership changes fence only changed users; policy changes fence every affected group member. */
+export function directoryAffectedUsers(before: readonly P.DirectoryGroup[], after: readonly P.DirectoryGroup[], previousPolicies: readonly P.GroupPolicy[], nextPolicies: readonly P.GroupPolicy[]): string[] {
+  const oldGroups = new Map(before.map(group => [group.id, group])), newGroups = new Map(after.map(group => [group.id, group]));
+  const oldPolicies = new Map(previousPolicies.map(policy => [policy.directoryGroupId, policy.revision])), newPolicies = new Map(nextPolicies.map(policy => [policy.directoryGroupId, policy.revision]));
+  const changed = new Set<string>();
+  for (const groupId of new Set([...oldGroups.keys(), ...newGroups.keys()])) {
+    const oldMembers = new Set(oldGroups.get(groupId)?.memberUserIds ?? []), newMembers = new Set(newGroups.get(groupId)?.memberUserIds ?? []);
+    const policyChanged = oldPolicies.get(groupId) !== newPolicies.get(groupId);
+    for (const userId of oldMembers) if (policyChanged || !newMembers.has(userId)) changed.add(userId);
+    for (const userId of newMembers) if (policyChanged || !oldMembers.has(userId)) changed.add(userId);
+  }
+  return [...changed].sort();
+}
