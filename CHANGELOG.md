@@ -223,6 +223,15 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- Secret placeholders now protect friendly labels against every contextual
+  regex value in the current input and previously matched session values,
+  including overlap constituents, cached labels and forged token-shaped
+  prefixes. Regexes retain context across protected tokens, and self-overlapping
+  literal secrets redact their complete union without leaving a credential
+  suffix visible. Provider batches collect regex values and reserve original raw
+  tokens before emitting any message, block or nested argument, preventing
+  cross-field label leaks and accidental restoration of original token-shaped
+  text while retaining the existing system/image/metadata exclusions.
 - Provider sign-in status and logout distinguish missing credentials from
   encrypted-store, journal and master-key failures. Failed reads refuse the
   command without deleting logins or clearing the selected OAuth authority;

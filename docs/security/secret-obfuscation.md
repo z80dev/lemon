@@ -132,7 +132,11 @@ so short words are not redacted. `replace` mode works on values of any length.
 
 `friendlyName` is reduced to uppercase letters and digits and capped at 32
 characters. It is dropped from a placeholder when it would reveal the secret it
-labels or another configured secret, or when it matches a configured pattern.
+labels, another configured secret, or a regex value matched anywhere in the
+current input or previously encountered in this session, including constituent
+values redacted inside overlapping spans. This also protects values whose
+patterns require surrounding context, such as a lookahead. Cached
+placeholders lose an unsafe label on reuse but retain their restore authority.
 On a regex entry the label applies to every match, so keep it general.
 
 Patterns use PCRE syntax, which accepts common JavaScript-style patterns.
@@ -152,12 +156,27 @@ Patterns use PCRE syntax, which accepts common JavaScript-style patterns.
 ## Order of matching
 
 Every source is matched against the original text, before any replacement.
-Overlapping matches are redacted as one span, so a smaller literal cannot
-split a larger credential pattern and expose its remaining bytes. A covering
-one-way replacement takes precedence; an overlap involving a one-way match
-without a covering replacement redacts the whole span irreversibly. Otherwise
-the complete span gets a reversible placeholder. Minted placeholders are left
-unchanged on subsequent passes.
+Regex context is evaluated across existing placeholder boundaries; protected
+tokens stay atomic, while any matching raw bytes around them are redacted.
+Overlapping matches, including self-overlapping literal occurrences, are
+redacted as one span, so a smaller literal cannot split a larger credential
+pattern and expose its remaining bytes. A covering one-way replacement takes
+precedence; an overlap involving a one-way match without a covering replacement
+redacts the whole raw span irreversibly. Otherwise the complete raw span gets a
+reversible placeholder. Minted placeholders are not re-redacted on subsequent
+passes, although an unsafe friendly label is removed when another secret value
+is discovered. Unknown token-shaped text with a secret-bearing friendly prefix
+is obfuscated as raw content, not accepted as an alias.
+Token-shaped raw values and their bare forms are reserved before minting, so a
+new placeholder cannot turn unrelated original bytes into a live restore alias.
+
+Before emitting a provider-message batch, Lemon collects regex values and
+reserves original raw tokens across every eligible text leaf. A later message,
+content block or nested tool argument therefore protects earlier labels and
+mints. Patterns still match each original text leaf independently; separate
+fields are not concatenated into regex input. Collection and rewriting use the
+same traversal: system messages, images, metadata, argument keys and opaque
+argument structs remain excluded.
 
 ## Implementation
 

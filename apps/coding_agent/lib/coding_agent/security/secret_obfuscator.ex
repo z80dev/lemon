@@ -112,7 +112,17 @@ defmodule CodingAgent.Security.SecretObfuscator do
   @doc "Replace secrets in `text` with placeholders (obfuscate) or replacements (replace)."
   @spec obfuscate(t() | nil, term()) :: term()
   def obfuscate(%__MODULE__{} = obfuscator, text) when is_binary(text) do
-    map_raw(text, obfuscator, &redact_segment(&1, obfuscator))
+    regex_matches = regex_matches(text, obfuscator)
+    obfuscator = protect_labels(obfuscator, text, regex_matches)
+
+    {tokens, unsafe_matches, raw_tokens} = token_snapshot(text, obfuscator)
+
+    obfuscator = %{
+      obfuscator
+      | configured_values: MapSet.union(obfuscator.configured_values, raw_tokens)
+    }
+
+    redact_prepared(text, obfuscator, {regex_matches, tokens, unsafe_matches})
   end
 
   def obfuscate(_obfuscator, text), do: text
@@ -121,7 +131,8 @@ defmodule CodingAgent.Security.SecretObfuscator do
   @spec deobfuscate(t() | nil, term()) :: term()
   def deobfuscate(%__MODULE__{} = obfuscator, text) when is_binary(text) do
     if String.contains?(text, "$$") do
-      map_tokens(text, &lookup(obfuscator, &1), & &1)
+      obfuscator = protect_labels(obfuscator)
+      map_tokens(text, &lookup(obfuscator, &1), fn raw, _start -> raw end)
     else
       text
     end
@@ -137,15 +148,55 @@ defmodule CodingAgent.Security.SecretObfuscator do
     do: walk(args, &deobfuscate(obfuscator, &1))
 
   @doc """
-  Pre-LLM transform stage: obfuscate provider-visible text in user, assistant
+  Pre-LLM transform stage: collect secret values and raw token reservations
+  across the complete provider-visible batch before obfuscating user, assistant
   (text, thinking, tool-call arguments), tool-result, bash, custom and summary
   messages. Image data and message metadata pass through.
   """
   @spec transform([term()], t() | nil) :: {:ok, [term()]}
   def transform(messages, nil), do: {:ok, messages}
 
-  def transform(messages, %__MODULE__{} = obfuscator) when is_list(messages),
-    do: {:ok, Enum.map(messages, &obfuscate_message(obfuscator, &1))}
+  def transform(messages, %__MODULE__{} = obfuscator) when is_list(messages) do
+    # Traverse exactly the emitted leaves, without minting anything. A later
+    # block or argument must protect an earlier label and original raw token.
+    {_messages, matches_by_text} =
+      map_messages(
+        messages,
+        %{},
+        fn text, matches ->
+          {text, Map.put_new_lazy(matches, text, fn -> regex_matches(text, obfuscator) end)}
+        end,
+        false
+      )
+
+    Enum.each(matches_by_text, fn {text, matches} ->
+      remember_regex_values(obfuscator, text, matches)
+    end)
+
+    obfuscator = protect_labels(obfuscator)
+
+    {prepared, reserved} =
+      Enum.reduce(matches_by_text, {%{}, obfuscator.configured_values}, fn {text, matches},
+                                                                           {prepared, reserved} ->
+        {tokens, unsafe_matches, raw_tokens} = token_snapshot(text, obfuscator)
+        snapshot = {matches, tokens, unsafe_matches}
+        {Map.put(prepared, text, snapshot), MapSet.union(reserved, raw_tokens)}
+      end)
+
+    obfuscator = %{obfuscator | configured_values: reserved}
+
+    {messages, _state} =
+      map_messages(
+        messages,
+        nil,
+        fn text, state ->
+          {redact_prepared(text, obfuscator, Map.fetch!(prepared, text)), state}
+        end,
+        true
+      )
+
+    {:ok, messages}
+  end
 
   @doc """
   Wrap each tool so placeholders in its arguments are restored before it runs.
@@ -181,98 +232,183 @@ defmodule CodingAgent.Security.SecretObfuscator do
 
   # ── Messages ──────────────────────────────────────────────────────────────
 
-  defp obfuscate_message(obfuscator, %{role: role, content: content} = message)
+  # Collection and emission use the same traversal. Collection threads only
+  # state and returns the original containers, without rebuilding message trees.
+  defp map_messages(messages, state, fun, rewrite?),
+    do: map_list(messages, state, &map_message(&1, &2, fun, rewrite?), rewrite?)
+
+  defp map_message(%{role: role, content: content} = message, state, fun, rewrite?)
        when role in [:user, :custom, :tool_result] do
-    %{message | content: obfuscate_content(obfuscator, content)}
+    update_field(message, :content, map_content(content, state, fun, rewrite?), rewrite?)
   end
 
-  defp obfuscate_message(obfuscator, %{role: :assistant, content: blocks} = message)
+  defp map_message(%{role: :assistant, content: blocks} = message, state, fun, rewrite?)
        when is_list(blocks) do
-    %{message | content: Enum.map(blocks, &obfuscate_assistant_block(obfuscator, &1))}
+    result = map_list(blocks, state, &map_assistant_block(&1, &2, fun, rewrite?), rewrite?)
+    update_field(message, :content, result, rewrite?)
   end
 
-  defp obfuscate_message(
-         obfuscator,
-         %{role: :bash_execution, command: command, output: output} = message
+  defp map_message(
+         %{role: :bash_execution, command: command, output: output} = message,
+         state,
+         fun,
+         rewrite?
        ) do
-    %{message | command: obfuscate(obfuscator, command), output: obfuscate(obfuscator, output)}
+    {command, state} = map_text(command, state, fun)
+    {output, state} = map_text(output, state, fun)
+    message = if rewrite?, do: %{message | command: command, output: output}, else: message
+    {message, state}
   end
 
-  defp obfuscate_message(obfuscator, %{role: role, summary: summary} = message)
+  defp map_message(%{role: role, summary: summary} = message, state, fun, rewrite?)
        when role in [:branch_summary, :compaction_summary] do
-    %{message | summary: obfuscate(obfuscator, summary)}
+    update_field(message, :summary, map_text(summary, state, fun), rewrite?)
   end
 
-  defp obfuscate_message(_obfuscator, message), do: message
+  defp map_message(message, state, _fun, _rewrite?), do: {message, state}
 
-  defp obfuscate_content(obfuscator, content) when is_binary(content),
-    do: obfuscate(obfuscator, content)
+  defp map_content(content, state, fun, _rewrite?) when is_binary(content),
+    do: fun.(content, state)
 
-  defp obfuscate_content(obfuscator, blocks) when is_list(blocks),
-    do: Enum.map(blocks, &obfuscate_text_block(obfuscator, &1))
+  defp map_content(blocks, state, fun, rewrite?) when is_list(blocks),
+    do: map_list(blocks, state, &map_text_block(&1, &2, fun, rewrite?), rewrite?)
 
-  defp obfuscate_content(_obfuscator, content), do: content
+  defp map_content(content, state, _fun, _rewrite?), do: {content, state}
 
-  defp obfuscate_text_block(obfuscator, %{type: :text, text: text} = block) when is_binary(text),
-    do: %{block | text: obfuscate(obfuscator, text)}
-
-  defp obfuscate_text_block(obfuscator, %{"type" => "text", "text" => text} = block)
+  defp map_text_block(%{type: :text, text: text} = block, state, fun, rewrite?)
        when is_binary(text),
-       do: Map.put(block, "text", obfuscate(obfuscator, text))
+       do: update_field(block, :text, fun.(text, state), rewrite?)
 
-  defp obfuscate_text_block(_obfuscator, block), do: block
+  defp map_text_block(%{"type" => "text", "text" => text} = block, state, fun, rewrite?)
+       when is_binary(text),
+       do: update_field(block, "text", fun.(text, state), rewrite?)
+
+  defp map_text_block(block, state, _fun, _rewrite?), do: {block, state}
 
   # A rewritten thinking block can no longer carry its byte-bound replay signature.
-  defp obfuscate_assistant_block(obfuscator, %{type: :thinking, thinking: thinking} = block)
+  defp map_assistant_block(%{type: :thinking, thinking: thinking} = block, state, fun, rewrite?)
        when is_binary(thinking) do
-    case obfuscate(obfuscator, thinking) do
-      ^thinking ->
+    {mapped, state} = fun.(thinking, state)
+
+    block =
+      if rewrite? and mapped != thinking do
+        block = %{block | thinking: mapped}
+
+        if is_map_key(block, :thinking_signature),
+          do: %{block | thinking_signature: nil},
+          else: block
+      else
         block
+      end
 
-      obfuscated when is_map_key(block, :thinking_signature) ->
-        %{block | thinking: obfuscated, thinking_signature: nil}
-
-      obfuscated ->
-        %{block | thinking: obfuscated}
-    end
+    {block, state}
   end
 
-  defp obfuscate_assistant_block(obfuscator, %{type: :tool_call, arguments: args} = block),
-    do: %{block | arguments: walk(args, &obfuscate(obfuscator, &1))}
+  defp map_assistant_block(%{type: :tool_call, arguments: args} = block, state, fun, rewrite?),
+    do: update_field(block, :arguments, walk_values(args, state, fun, rewrite?), rewrite?)
 
-  defp obfuscate_assistant_block(obfuscator, block), do: obfuscate_text_block(obfuscator, block)
+  defp map_assistant_block(block, state, fun, rewrite?),
+    do: map_text_block(block, state, fun, rewrite?)
 
-  defp walk(text, fun) when is_binary(text), do: fun.(text)
-  defp walk(list, fun) when is_list(list), do: Enum.map(list, &walk(&1, fun))
-  defp walk(%_{} = struct, _fun), do: struct
-  defp walk(map, fun) when is_map(map), do: Map.new(map, fn {k, v} -> {k, walk(v, fun)} end)
-  defp walk(other, _fun), do: other
+  defp update_field(value, key, {mapped, state}, true),
+    do: {Map.replace!(value, key, mapped), state}
+
+  defp update_field(value, _key, {_mapped, state}, false), do: {value, state}
+
+  defp map_list(list, state, fun, true), do: Enum.map_reduce(list, state, fun)
+
+  defp map_list(list, state, fun, false) do
+    state = Enum.reduce(list, state, fn value, state -> elem(fun.(value, state), 1) end)
+    {list, state}
+  end
+
+  defp map_text(text, state, fun) when is_binary(text), do: fun.(text, state)
+  defp map_text(other, state, _fun), do: {other, state}
+
+  defp walk(value, fun),
+    do: elem(walk_values(value, nil, fn text, state -> {fun.(text), state} end, true), 0)
+
+  defp walk_values(text, state, fun, _rewrite?) when is_binary(text), do: fun.(text, state)
+
+  defp walk_values(list, state, fun, rewrite?) when is_list(list),
+    do: map_list(list, state, &walk_values(&1, &2, fun, rewrite?), rewrite?)
+
+  defp walk_values(%_{} = struct, state, _fun, _rewrite?), do: {struct, state}
+
+  defp walk_values(map, state, fun, true) when is_map(map) do
+    {pairs, state} =
+      Enum.map_reduce(map, state, fn {key, value}, state ->
+        {value, state} = walk_values(value, state, fun, true)
+        {{key, value}, state}
+      end)
+
+    {Map.new(pairs), state}
+  end
+
+  defp walk_values(map, state, fun, false) when is_map(map) do
+    state =
+      Enum.reduce(map, state, fn {_key, value}, state ->
+        elem(walk_values(value, state, fun, false), 1)
+      end)
+
+    {map, state}
+  end
+
+  defp walk_values(other, state, _fun, _rewrite?), do: {other, state}
 
   # ── Obfuscation passes ────────────────────────────────────────────────────
 
   # Match every source against the original bytes. Rewriting one source before
   # scanning another can split a larger credential and expose its remaining
   # bytes (for example an env value inside a built-in token match).
-  defp redact_segment(text, obfuscator) do
-    literal_matches =
+  defp redact_prepared(text, obfuscator, {regex_matches, tokens, unsafe_matches}) do
+    matches =
       Enum.flat_map(replace_pairs(obfuscator), &literal_matches(text, &1, :replace)) ++
-        Enum.flat_map(obfuscator.obfuscate, &literal_matches(text, &1, :obfuscate))
+        Enum.flat_map(obfuscator.obfuscate, &literal_matches(text, &1, :obfuscate)) ++
+        regex_matches ++ unsafe_matches
 
-    regex_matches =
-      Enum.flat_map(obfuscator.regexes, fn entry ->
-        entry.regex
-        |> Regex.scan(text, return: :index)
-        |> Enum.map(&hd/1)
-        |> Enum.filter(fn {start, len} ->
-          len > 0 and
-            (entry.mode == :replace or
-               text_length(binary_part(text, start, len)) >= @min_obfuscate_len)
-        end)
-        |> Enum.map(fn {start, len} -> {start, start + len, {:regex, entry}} end)
+    map_raw(text, tokens, &redact_segment(&1, &2, matches, obfuscator, text))
+  end
+
+  defp token_snapshot(text, obfuscator) do
+    if String.contains?(text, "$$"),
+      do: token_matches(text, obfuscator, 0, [], %{}, MapSet.new()),
+      else: {%{}, [], MapSet.new()}
+  end
+
+  defp regex_matches(text, obfuscator) do
+    Enum.flat_map(obfuscator.regexes, fn entry ->
+      entry.regex
+      |> Regex.scan(text, return: :index)
+      |> Enum.map(&hd/1)
+      |> Enum.filter(fn {start, len} ->
+        len > 0 and
+          (entry.mode == :replace or
+             text_length(binary_part(text, start, len)) >= @min_obfuscate_len)
+      end)
+      |> Enum.map(fn {start, len} -> {start, start + len, {:regex, entry}} end)
+    end)
+  end
+
+  defp redact_segment(text, offset, matches, obfuscator, original) do
+    limit = offset + byte_size(text)
+
+    matches =
+      Enum.flat_map(matches, fn {start, stop, source} ->
+        if start < limit and stop > offset do
+          # A contextual match may cross a protected token. Only its raw bytes
+          # are rewritten, and a clipped literal must restore those exact bytes.
+          clipped =
+            if start < offset or stop > limit, do: {:partial, source}, else: source
+
+          [{max(start, offset) - offset, min(stop, limit) - offset, clipped}]
+        else
+          []
+        end
       end)
 
     groups =
-      (literal_matches ++ regex_matches)
+      matches
       |> Enum.with_index()
       |> Enum.sort_by(fn {{start, stop, _}, order} -> {start, -stop, order} end)
       |> Enum.reduce([], fn {{start, stop, source}, order}, groups ->
@@ -290,7 +426,7 @@ defmodule CodingAgent.Security.SecretObfuscator do
 
     {parts, last} =
       Enum.reduce(groups, {[], 0}, fn {start, stop, matches}, {acc, pos} ->
-        output = redact_group(text, start, stop, matches, obfuscator)
+        output = redact_group(text, start, stop, matches, obfuscator, original, offset)
         {[acc, binary_part(text, pos, start - pos), output], stop}
       end)
 
@@ -298,12 +434,25 @@ defmodule CodingAgent.Security.SecretObfuscator do
   end
 
   defp literal_matches(text, {secret, output}, mode) do
-    text
-    |> :binary.matches(secret)
-    |> Enum.map(fn {start, len} -> {start, start + len, {:literal, mode, output}} end)
+    pattern = :binary.compile_pattern(secret)
+    literal_matches(text, pattern, byte_size(secret), {:literal, mode, output}, 0, [])
   end
 
-  defp redact_group(text, start, stop, matches, obfuscator) do
+  defp literal_matches(text, pattern, len, source, offset, acc) do
+    case :binary.match(text, pattern, scope: {offset, byte_size(text) - offset}) do
+      {start, _len} ->
+        # Resume one byte after the start, not the end: self-overlapping literal
+        # occurrences must contribute their complete union without copying tails.
+        literal_matches(text, pattern, len, source, start + 1, [
+          {start, start + len, source} | acc
+        ])
+
+      :nomatch ->
+        Enum.reverse(acc)
+    end
+  end
+
+  defp redact_group(text, start, stop, matches, obfuscator, original, offset) do
     value = binary_part(text, start, stop - start)
 
     replacements =
@@ -313,19 +462,49 @@ defmodule CodingAgent.Security.SecretObfuscator do
 
     covering =
       candidates
-      |> Enum.filter(fn {ms, me, _, _} -> ms == start and me == stop end)
+      |> Enum.filter(fn
+        {_, _, {:partial, _}, _} -> false
+        {ms, me, _, _} -> ms == start and me == stop
+      end)
       |> Enum.min_by(fn {_, _, _, order} -> order end, &<=/2, fn -> nil end)
 
     case covering do
-      {_, _, {:literal, _, output}, _} -> output
-      {_, _, {:regex, entry}, _} -> regex_output(obfuscator, entry, value, text, start)
-      nil when replacements == [] -> mint(obfuscator, value, nil)
-      nil -> default_replacement(value)
+      {_, _, {:literal, :obfuscate, output}, _} ->
+        safe_token(obfuscator, output)
+
+      {_, _, {:literal, :replace, output}, _} ->
+        output
+
+      {_, _, {:regex, entry}, _} ->
+        regex_output(obfuscator, entry, value, original, offset + start)
+
+      nil when replacements == [] ->
+        mint(obfuscator, value, nil)
+
+      nil ->
+        replace_group(value, replacements, obfuscator, original, offset + start)
     end
   end
 
   defp match_mode({:literal, mode, _}), do: mode
   defp match_mode({:regex, entry}), do: entry.mode
+  defp match_mode({:partial, source}), do: match_mode(source)
+
+  defp replace_group(value, matches, obfuscator, original, start) do
+    entry =
+      Enum.find_value(matches, fn {_, _, source, _} ->
+        case source do
+          {:partial, {:regex, %{replacement: nil} = entry}} -> entry
+          _ -> nil
+        end
+      end)
+
+    if entry do
+      regex_output(obfuscator, entry, value, original, start)
+    else
+      default_replacement(value)
+    end
+  end
 
   defp regex_output(obfuscator, %{mode: :obfuscate} = entry, value, _segment, _start),
     do: mint(obfuscator, value, entry.friendly_name)
@@ -337,13 +516,52 @@ defmodule CodingAgent.Security.SecretObfuscator do
   defp regex_output(obfuscator, entry, value, segment, start),
     do: Replacement.for_regex_match(value, entry.regex, segment, start, fn -> key(obfuscator) end)
 
-  # Apply `fun` to the text between placeholders this obfuscator generated, so
-  # an earlier pass's placeholder is never re-redacted by a later pass.
-  defp map_raw(text, obfuscator, fun) do
-    if String.contains?(text, "$$") do
-      map_tokens(text, &if(lookup(obfuscator, &1), do: &1), fun)
+  defp token_matches(text, obfuscator, offset, acc, known, raw_tokens) do
+    case Regex.run(Placeholder.regex(), text, offset: offset, return: :index) do
+      [{start, len}] ->
+        token = binary_part(text, start, len)
+
+        if lookup(obfuscator, token) do
+          known = Map.put(known, token, safe_token(obfuscator, token))
+          token_matches(text, obfuscator, start + len, acc, known, raw_tokens)
+        else
+          acc =
+            if unsafe_token_prefix?(obfuscator, token) do
+              [{start, start + len, {:partial, {:literal, :obfuscate, nil}}} | acc]
+            else
+              acc
+            end
+
+          raw_tokens = MapSet.put(raw_tokens, token)
+
+          raw_tokens =
+            case Placeholder.split_friendly(token) do
+              {_prefix, bare} -> MapSet.put(raw_tokens, bare)
+              nil -> raw_tokens
+            end
+
+          token_matches(
+            text,
+            obfuscator,
+            start + len - 2,
+            acc,
+            known,
+            raw_tokens
+          )
+        end
+
+      nil ->
+        {known, Enum.reverse(acc), raw_tokens}
+    end
+  end
+
+  # Keep known tokens atomic, but scan the whole input before splitting raw
+  # spans: regex context and unsafe labels can live across those boundaries.
+  defp map_raw(text, tokens, fun) do
+    if map_size(tokens) > 0 do
+      map_tokens(text, &Map.get(tokens, &1), fun)
     else
-      fun.(text)
+      fun.(text, 0)
     end
   end
 
@@ -361,12 +579,12 @@ defmodule CodingAgent.Security.SecretObfuscator do
             map_tokens(text, start + len - 2, raw_start, acc, on_token, on_raw)
 
           output ->
-            raw = on_raw.(binary_part(text, raw_start, start - raw_start))
+            raw = on_raw.(binary_part(text, raw_start, start - raw_start), raw_start)
             map_tokens(text, start + len, start + len, [acc, raw, output], on_token, on_raw)
         end
 
       nil ->
-        tail = on_raw.(binary_part(text, raw_start, byte_size(text) - raw_start))
+        tail = on_raw.(binary_part(text, raw_start, byte_size(text) - raw_start), raw_start)
         IO.iodata_to_binary([acc, tail])
     end
   end
@@ -394,7 +612,7 @@ defmodule CodingAgent.Security.SecretObfuscator do
   defp mint(%__MODULE__{table: table} = obfuscator, secret, friendly_name) do
     case :ets.lookup(table, {:mint, secret, friendly_name}) do
       [{_, token}] ->
-        token
+        safe_token(obfuscator, token)
 
       [] ->
         hint = Placeholder.case_hint(secret)
@@ -457,6 +675,53 @@ defmodule CodingAgent.Security.SecretObfuscator do
   defp own_base?(table, base, owner) do
     :ets.insert_new(table, {{:base, base}, owner}) or
       :ets.lookup(table, {:base, base}) == [{{:base, base}, owner}]
+  end
+
+  # Retain normalized actual regex values in the same session ETS authority.
+  # An overlap may mint only its union, but the constituent values must still
+  # protect future labels and bare-alias lookups without their regex context.
+  defp protect_labels(obfuscator, text \\ "", matches \\ []) do
+    remember_regex_values(obfuscator, text, matches)
+
+    previous =
+      obfuscator.table
+      |> :ets.select([{{{:mint, :"$1", :_}, :_}, [], [:"$1"]}])
+      |> Enum.map(&Placeholder.sanitize_for_collision/1)
+
+    regex_values =
+      :ets.select(obfuscator.table, [{{{:regex_value, :"$1"}, :_}, [], [:"$1"]}])
+
+    %{
+      obfuscator
+      | sanitized_values: Enum.uniq(obfuscator.sanitized_values ++ previous ++ regex_values)
+    }
+  end
+
+  defp remember_regex_values(obfuscator, text, matches) do
+    current =
+      Enum.map(matches, fn {start, stop, _} ->
+        value = binary_part(text, start, stop - start)
+        {{:regex_value, Placeholder.sanitize_for_collision(value)}, true}
+      end)
+
+    :ets.insert(obfuscator.table, current)
+  end
+
+  defp unsafe_token_prefix?(obfuscator, token) do
+    case Placeholder.split_friendly(token) do
+      {prefix, _bare} -> prefix_secret_shaped?(obfuscator, prefix)
+      nil -> false
+    end
+  end
+
+  defp safe_token(obfuscator, token) do
+    case Placeholder.split_friendly(token) do
+      {prefix, bare} ->
+        if prefix_secret_shaped?(obfuscator, prefix), do: bare, else: token
+
+      nil ->
+        token
+    end
   end
 
   # A label that embeds a configured secret or matches a configured regex would
