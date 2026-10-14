@@ -24,6 +24,8 @@ defmodule CodingAgent.Application do
       {Registry, keys: :unique, name: CodingAgent.SessionRegistry},
       {Registry, keys: :unique, name: CodingAgent.BackgroundRun.Registry},
       {Registry, keys: :unique, name: CodingAgent.ProcessRegistry},
+      {Registry, keys: :unique, name: CodingAgent.Eval.Registry},
+      CodingAgent.Eval.KernelSupervisor,
       {Task.Supervisor, name: CodingAgent.Search.TaskSupervisor},
       CodingAgent.Search.SingleFlight,
       CodingAgent.Tools.TodoStoreOwner,
