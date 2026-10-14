@@ -10,7 +10,7 @@ import { integrationConfiguration, type ConnectorProvider } from './config';
 import { startOAuth, takeOAuthState, exchangeOAuth, markOAuthInstalled, oauthTokenClientDigest, type OAuthCompletion, type OAuthExchangeOperation } from './oauth';
 import { effectiveBotGrants } from '../core/experiences';
 import { cancelConnectorConsents, cancelGate } from '../core/gates';
-import { baseBotMcpTemplate, syncBotConnectorRevocation } from '../core/bots';
+import { baseBotMcpTemplate } from '../core/bots';
 import { revokeOAuthCompletion, reconcileOAuthRevocation, type OAuthRevocationReceipt } from './oauth-revocation';
 import { effectiveInvocationAudience, type InvocationMcpServer } from '../runtime/runs';
 
@@ -22,7 +22,7 @@ const binding = z.object({ header: z.string().regex(/^[!#$%&'*+.^_`|~0-9A-Za-z-]
 const bindings = z.array(binding).max(32).refine(values => new Set(values.map(value => value.header.toLowerCase())).size === values.length);
 const toolName = z.string().min(1).max(128).refine(value => Buffer.byteLength(value, 'utf8') <= 128 && !/[\u0000-\u001f\u007f]/.test(value));
 const tools = z.array(z.object({ name: toolName, enabled: z.boolean() }).strict()).max(256).refine(values => new Set(values.map(value => value.name)).size === values.length);
-const createSchema = z.object({ clientNonce: nonce, name: label, url: z.string().url().max(2048), accountLabel: label, authKind: z.enum(['none', 'secret_headers', 'oauth']), secretBindings: bindings.optional(), shared: z.boolean() }).strict();
+const createSchema = z.object({ clientNonce: nonce, name: label, url: z.string().url().max(2048), accountLabel: label, authKind: z.enum(['none', 'secret_headers', 'oauth']), secretBindings: bindings.optional() }).strict();
 const setupSchema = createSchema.extend({ machineId: z.string().min(1).max(128), secretBindings: bindings, requestedLevel: z.enum(['off', 'read_only', 'read_interact']) }).strict();
 const updateSchema = z.object({ clientNonce: nonce, revision, name: label.optional(), accountLabel: label.optional(), tools: tools.optional(), secretBindings: bindings.optional() }).strict();
 const mutationSchema = z.object({ clientNonce: nonce }).strict();
@@ -76,11 +76,21 @@ export function createConnectorServices(services: BackendServices) {
     if (matches.length > 1) fail('policy_denied', 'Connector origin has ambiguous operator provider configuration.');
     return matches[0] ?? null;
   };
+  function ownerBot(actor: Principal, botId: string, manage = false): P.Bot {
+    const bot = services.store.require<P.Bot>('bots', botId);
+    if (actor.userId !== bot.ownerUserId) fail('not_found', 'Bot was not found.');
+    return services.auth.bot(actor, botId, manage);
+  }
+  function assertAccountOwner(connector: P.Connector): P.Bot {
+    const bot = services.store.require<P.Bot>('bots', connector.botId);
+    if (connector.ownerUserId !== bot.ownerUserId) fail('policy_denied', 'Connector account must belong to the Bot owner.');
+    return bot;
+  }
   function assertConnectorPolicy(connector: P.Connector): URL {
     try {
+      assertAccountOwner(connector);
       assertActiveAccount(services, connector.ownerUserId);
       if (!services.auth.member(connector.ownerUserId).enabled) fail('policy_denied', 'Connector account owner is disabled.');
-      if (connector.shared && !provider(connector)?.sharedServiceAccount) fail('policy_denied', 'Shared service account provider is no longer approved.');
       return assertOrigin(connector.url);
     } catch (error) {
       const current = services.store.get<P.Connector>('connectors', connector.id);
@@ -93,17 +103,10 @@ export function createConnectorServices(services: BackendServices) {
   }
   function access(actor: Principal, id: string, manage = false): P.Connector {
     const connector = services.store.require<P.Connector>('connectors', id);
-    if (connector.ownerUserId === actor.userId) {
-      if (!services.auth.member(actor.userId).enabled) fail('forbidden', 'Connector account ownership requires enabled membership.');
-      return connector;
-    }
-    if (!connector.shared) fail('not_found', 'Connector account was not found.');
-    services.auth.bot(actor, connector.botId, manage);
+    ownerBot(actor, connector.botId, manage);
+    if (connector.ownerUserId !== actor.userId) fail('not_found', 'Connector account was not found.');
+    if (!services.auth.member(actor.userId).enabled) fail('forbidden', 'Connector account ownership requires enabled membership.');
     return connector;
-  }
-  function canManageBot(actor: Principal, botId: string): boolean {
-    try { services.auth.bot(actor, botId, true); return true; }
-    catch (error) { if (error instanceof ApiError && ['forbidden', 'not_found'].includes(error.code)) return false; throw error; }
   }
   function assertReady(connector: P.Connector, externalEffect = false): P.Machine & { nodeId: string } {
     const lifecycle = services.store.metadata<{ status: string }>(`botLifecycle:${connector.botId}`);
@@ -112,6 +115,7 @@ export function createConnectorServices(services: BackendServices) {
   }
   function destination(connector: P.Connector): P.Machine & { nodeId: string } {
     const bot = services.store.require<P.Bot>('bots', connector.botId);
+    assertAccountOwner(connector);
     const config = details(connector.id);
     if (bot.machineId !== config.machineId) fail('conflict', 'Connector belongs to the previous destination; set up credentials on the assigned machine.');
     const machine = services.store.require<P.Machine>('machines', bot.machineId);
@@ -160,25 +164,24 @@ export function createConnectorServices(services: BackendServices) {
   }
   async function connectorTemplates(botId: string): Promise<InvocationMcpServer[]> {
     const bot = services.store.require<P.Bot>('bots', botId);
+    const grants = await connectorGrants(userPrincipal(services, bot.ownerUserId), bot);
     const result: InvocationMcpServer[] = [];
     for (const connector of services.store.list<P.Connector>('connectors', value => value.botId === botId && value.state !== 'disconnected' && value.state !== 'blocked')) {
+      assertAccountOwner(connector);
       const policy = services.store.metadata<ConnectorTemplatePolicy>(`connectorTemplatePolicy:${connector.id}`);
       if (!policy) fail('capability_unavailable', 'Connector public template policy has not been provisioned.', true, { resourceIds: [connector.id] });
       if (policy.machineId !== bot.machineId) continue;
       const origin = assertOrigin(connector.url).origin;
-      if (connector.shared && !provider(connector)?.sharedServiceAccount) fail('policy_denied', 'Shared service account provider is no longer approved.');
-      const grant = services.store.list<P.BotGrant>('botGrants', value => value.botId === botId && value.capabilityId === `connector:${connector.id}` && value.machineId === policy.machineId)[0];
-      const level = grant?.requestedLevel ?? 'off';
+      const level = grants.find(value => value.capabilityId === `connector:${connector.id}`)?.effectiveLevel ?? 'off';
       const enabledTools = policy.configuredLevel === 'off' || level === 'off' ? [] : connector.tools.filter(tool => tool.enabled && (level === 'read_interact' || policy.readOnlyTools.includes(tool.name))).map(tool => tool.name);
       result.push({ name: `connector-${connector.id}`, url: connector.url, headers: {}, enabledTools, allowedOrigins: [origin], approvedPrivateOrigins: integrationConfiguration(services).approvedPrivateMcpOrigins.includes(origin) ? [origin] : [] });
     }
     return result;
   }
-  async function connectorGrants(actor: Principal, bot: P.Bot, provisioning = false): Promise<P.BotGrant[]> {
+  async function connectorGrants(actor: Principal, bot: P.Bot): Promise<P.BotGrant[]> {
+    ownerBot(actor, bot.id);
     const capabilities = services.store.get<P.MachineCapabilities>('machineCapabilities', bot.machineId) ?? undefined;
-    if (provisioning && !services.integrations.sharedProfilePolicy) fail('capability_unavailable', 'Workspace-required profile policy composition must be configured.');
-    const floor = provisioning ? await services.integrations.sharedProfilePolicy!(bot.id) : undefined;
-    return (await effectiveBotGrants(services, actor, bot, capabilities, provisioning, floor)).filter(grant => grant.capabilityId.startsWith('connector:'));
+    return (await effectiveBotGrants(services, actor, bot, capabilities)).filter(grant => grant.capabilityId.startsWith('connector:'));
   }
   async function discover(connector: P.Connector): Promise<P.Connector> {
     const origin = assertConnectorPolicy(connector).origin;
@@ -200,24 +203,19 @@ export function createConnectorServices(services: BackendServices) {
   }
   function publish(connector: P.Connector): P.Connector {
     services.store.put('connectors', connector);
-    services.events.emit('connector.upserted', connector, connector.shared ? { botId: connector.botId } : { userIds: [connector.ownerUserId] });
+    services.events.emit('connector.upserted', connector, { userIds: [connector.ownerUserId] });
     return connector;
   }
   function revokeConsents(connectorId: string): void {
     cancelConnectorConsents(services, connectorId);
   }
-  function updateConsentEntry(consent: P.ConnectorConsent): void {
-    const entry = services.store.get<P.TranscriptEntry>('entries', consent.entryId);
-    if (entry?.kind === 'card' && entry.card.type === 'connector_grant') {
-      const updated = services.update(entry, { card: { type: 'connector_grant', consent } });
-      services.store.put('entries', updated);
-      services.events.emit('entry.upserted', updated, { conversationId: updated.conversationId, userIds: [consent.accountOwnerUserId] });
-    }
-  }
   async function synchronize(actor: Principal, botId: string): Promise<void> {
+    ownerBot(actor, botId, true);
     await services.syncBotProfile(actor, botId);
   }
   async function prepareProvision(actor: Principal, connector: P.Connector): Promise<string> {
+    ownerBot(actor, connector.botId, true);
+    assertAccountOwner(connector);
     if (connector.state !== 'disconnected' && connector.state !== 'blocked' && connector.state !== 'failed') assertActiveAccount(services, connector.ownerUserId);
     publish(connector);
     const bot = services.store.require<P.Bot>('bots', connector.botId);
@@ -245,16 +243,15 @@ export function createConnectorServices(services: BackendServices) {
     }
   }
   async function create(actor: Principal, botId: string, input: P.ConnectorCreate, level: P.AccessLevel = 'read_interact', resourceIds?: string[]): Promise<P.Connector> {
-    const bot = services.auth.bot(actor, botId, true);
+    const bot = ownerBot(actor, botId, true);
     if (services.store.metadata(`botLifecycle:${botId}`)) fail('conflict', 'Finish the Bot lifecycle operation before connector setup.');
     const machine = services.auth.machine(actor, bot.machineId, true);
     assertOrigin(input.url);
     const values = input.secretBindings ?? [];
     if (input.authKind === 'none' && values.length || input.authKind === 'oauth' && values.length) fail('invalid_request', 'Secret bindings do not match the selected connector authentication kind.');
     await validateBindings(actor, machine, values);
-    const connector: P.Connector = services.resource('connector', { botId, ownerUserId: actor.userId, name: input.name, url: assertOrigin(input.url).href, accountLabel: input.accountLabel, authKind: input.authKind, shared: input.shared, state: input.authKind === 'oauth' || input.authKind === 'secret_headers' && !values.length ? 'needs_auth' : 'added', tools: [], secretHeaderNames: values.map(value => value.header), lastError: null });
+    const connector: P.Connector = services.resource('connector', { botId, ownerUserId: actor.userId, name: input.name, url: assertOrigin(input.url).href, accountLabel: input.accountLabel, authKind: input.authKind, state: input.authKind === 'oauth' || input.authKind === 'secret_headers' && !values.length ? 'needs_auth' : 'added', tools: [], secretHeaderNames: values.map(value => value.header), lastError: null });
     const configured = provider(connector);
-    if (input.shared && !configured?.sharedServiceAccount) fail('policy_denied', 'Shared connector requires an operator-declared service account provider.');
     if (configured?.id.toLowerCase() === 'gmail' && services.store.list<P.Connector>('connectors', value => value.botId === botId && value.ownerUserId === actor.userId && provider(value)?.id === configured.id).length) fail('conflict', 'Only one Gmail mailbox may be configured for this account and Bot.');
     services.store.transaction(() => {
       saveDetails(connector.id, { machineId: bot.machineId, bindings: values, readOnlyTools: [], executionNames: {}, providerId: configured?.id ?? null, oauthSecretNames: [], oauthExpiresAtMs: null, discoveredAtMs: null, configuredLevel: 'off', provisionState: 'pending', desiredState: null, desiredFingerprint: null, provisionActorUserId: actor.userId });
@@ -275,9 +272,10 @@ export function createConnectorServices(services: BackendServices) {
     }
   }
   async function connectorProfileConfiguration(actor: Principal, botId: string, conversationId?: string, operationId?: string): Promise<InvocationMcpServer[]> {
-    const bot = services.auth.bot(actor, botId);
+    const bot = ownerBot(actor, botId);
     if (conversationId === undefined) return connectorTemplates(botId);
     const conversation = services.auth.conversation(actor, conversationId);
+    if (conversation.ownerUserId !== actor.userId) fail('forbidden', 'Connector context must belong only to the Bot owner.');
     if (!operationId || operationId.length > 128) fail('invalid_request', 'Invocation connector configuration requires its reserved operation identity.');
     if (services.store.metadata<{ dispatched: boolean }>(`runtimeRun:${operationId}`)?.dispatched) fail('outcome_unknown', 'An executing invocation cannot re-provision connector authority or replay a consumed grant.', false, { resourceIds: [operationId] });
     if (!conversation.botIds.includes(botId) || actor.kind === 'bot' && actor.botId !== botId) fail('forbidden', 'Connector invocation does not match this Bot and conversation.');
@@ -286,8 +284,8 @@ export function createConnectorServices(services: BackendServices) {
     const result: InvocationMcpServer[] = [];
     const configuredIds: string[] = [];
     for (const connector of services.store.list<P.Connector>('connectors', value => value.botId === botId && value.state === 'connected')) {
+      assertAccountOwner(connector);
       if (details(connector.id).provisionState !== 'acknowledged') continue;
-      if (!connector.shared && (connector.ownerUserId !== actor.userId || conversation.kind === 'group' || conversation.kind === 'channel')) continue;
       assertConnectorPolicy(connector);
       const expiresAtMs = details(connector.id).oauthExpiresAtMs;
       if (expiresAtMs !== null && expiresAtMs <= services.now()) {
@@ -298,42 +296,20 @@ export function createConnectorServices(services: BackendServices) {
       destination(connector);
       const level = grants.find(grant => grant.capabilityId === `connector:${connector.id}`)?.effectiveLevel ?? 'off';
       if (!enabled(connector, level).length) continue;
-      if (!connector.shared && bot.visibility === 'team' && !authorizedConsent(actor, connector, conversation.id, operationId, true)) continue;
       result.push(serverConfiguration(connector, level));
       configuredIds.push(connector.id);
     }
     services.store.setMetadata(`invocationConnectors:${operationId}`, configuredIds);
     return result;
   }
-  function expireConsent(consent: P.ConnectorConsent): P.ConnectorConsent {
-    if (consent.gate.state === 'approved' && consent.expiresAtMs !== null && consent.expiresAtMs <= services.now()) {
-      const next = services.update(consent, { gate: { ...consent.gate, state: 'expired', revision: consent.revision + 1, resolvedAtMs: services.now() } });
-      services.store.put('consents', next);
-      services.events.emit('consent.upserted', next, { userIds: [next.accountOwnerUserId] });
-      updateConsentEntry(next);
-      return next;
-    }
-    return consent;
-  }
-  function authorizedConsent(actor: Principal, connector: P.Connector, conversationId: string, operationId: string, consume: boolean): boolean {
-    return services.store.transaction(() => {
-      for (const stored of services.store.list<P.ConnectorConsent>('consents', value => value.connectorId === connector.id && value.botId === connector.botId && value.accountOwnerUserId === connector.ownerUserId)) {
-        const consent = expireConsent(stored);
-        const data = privateMetadata<ConsentPrivate>(services, `consent:${consent.id}`);
-        if (!data || data.userId !== actor.userId || consent.gate.targetUserId !== connector.ownerUserId || consent.gate.state !== 'approved') continue;
-        if (consent.scope === 'once' && (data.conversationId !== conversationId || data.operationId !== operationId || data.consumedBy !== null)) continue;
-        if (consume && consent.scope === 'once') savePrivateMetadata(services, `consent:${consent.id}`, { ...data, consumedBy: operationId });
-        return true;
-      }
-      return false;
-    });
-  }
   async function authorizeConnectorTool(actor: Principal, input: ConnectorToolAuthorization): Promise<void> {
     if (!input.operationId || input.operationId.length > 128) fail('invalid_request', 'Connector operation identity is required.');
-    const bot = services.auth.bot(actor, input.botId);
+    const bot = ownerBot(actor, input.botId);
     const conversation = services.auth.conversation(actor, input.conversationId);
+    if (conversation.ownerUserId !== actor.userId) fail('forbidden', 'Connector context must belong only to the Bot owner.');
     if (!conversation.botIds.includes(bot.id) || actor.kind === 'bot' && actor.botId !== bot.id) fail('forbidden', 'Connector invocation does not match the authorized Bot and conversation.');
     const connector = services.store.require<P.Connector>('connectors', input.connectorId);
+    assertAccountOwner(connector);
     if (connector.botId !== bot.id || connector.state !== 'connected' || details(connector.id).provisionState !== 'acknowledged') fail('policy_denied', 'Connector is not provisioned and connected for this Bot.');
     const productRunId = services.store.metadata<string>(`nativeRunProduct:${input.operationId}`);
     const admitted = services.store.metadata<string[]>(`invocationConnectors:${input.operationId}`);
@@ -349,22 +325,16 @@ export function createConnectorServices(services: BackendServices) {
     destination(connector);
     const level = grants.find(grant => grant.capabilityId === `connector:${connector.id}`)?.effectiveLevel ?? 'off';
     if (!enabled(connector, level).includes(input.toolName)) fail('policy_denied', 'Connector tool is disabled by its explicit tool or capability grant.');
-    if (connector.shared) {
-      if (!provider(connector)?.sharedServiceAccount) fail('policy_denied', 'Shared service account provider is not approved.');
-    } else {
-      if (conversation.kind === 'group' || conversation.kind === 'channel') fail('policy_denied', 'Personal connector accounts require a private Bot conversation; shared contexts require an intentional service account.');
-      if (connector.ownerUserId !== actor.userId) fail('policy_denied', 'Personal connector account cannot be lent to another member.');
-      if (bot.visibility === 'team' && !authorizedConsent(actor, connector, conversation.id, input.operationId, true)) fail('policy_denied', 'Explicit account-owner connector consent is required.');
-    }
   }
   async function connectorInvocationConfiguration(actor: Principal, botId: string, conversationId: string, operationId: string): Promise<InvocationMcpServer[]> {
     return connectorProfileConfiguration(actor, botId, conversationId, operationId);
   }
   async function requestConnectorConsent(actor: Principal, input: Omit<ConnectorToolAuthorization, 'toolName'>): Promise<P.ConnectorConsent> {
     const connector = access(actor, input.connectorId);
-    if (connector.botId !== input.botId || connector.shared) fail('invalid_request', 'Personal connector consent must target its exact Bot and account.');
-    const bot = services.auth.bot(actor, input.botId);
+    if (connector.botId !== input.botId) fail('invalid_request', 'Connector consent must target its exact Bot and account.');
+    const bot = ownerBot(actor, input.botId);
     const conversation = services.auth.conversation(actor, input.conversationId);
+    if (conversation.ownerUserId !== actor.userId) fail('forbidden', 'Connector consent context must belong only to the Bot owner.');
     if (!conversation.botIds.includes(bot.id)) fail('forbidden', 'Connector consent conversation does not contain this Bot.');
     if (conversation.kind === 'group' || conversation.kind === 'channel') fail('policy_denied', 'Open your own private Bot conversation to authorize a personal connector account.');
     const consent = await services.gates.create<P.ConnectorConsent>(actor, 'consent', { connectorId: connector.id, accountOwnerUserId: connector.ownerUserId, botId: bot.id, conversationId: conversation.id, targetUserId: connector.ownerUserId, clientNonce: input.operationId });
@@ -384,6 +354,7 @@ export function createConnectorServices(services: BackendServices) {
   }
   async function revokeConsent(actor: Principal, id: string, body: P.Update): Promise<P.Deleted> {
     const consent = services.store.require<P.ConnectorConsent>('consents', id);
+    access(actor, consent.connectorId);
     if (consent.accountOwnerUserId !== actor.userId || consent.gate.targetUserId !== actor.userId) fail('not_found', 'Account-owner consent was not found.');
     services.mutations.checkRevision(consent, body.revision);
     cancelGate(services, 'consents', id);
@@ -397,6 +368,7 @@ export function createConnectorServices(services: BackendServices) {
     if (fence?.connectorId === connectorId && fence.status !== 'outcome_unknown') services.store.setMetadata(`connectorRevocation:${botId}`, null);
   }
   async function fenceConnectorInvocations(actor: Principal, connectorId: string): Promise<void> {
+    access(actor, connectorId, true);
     const connector = services.store.require<P.Connector>('connectors', connectorId);
     const epochKey = `connectorEpoch:${connectorId}`;
     services.store.setMetadata(epochKey, (services.store.metadata<number>(epochKey) ?? 0) + 1);
@@ -407,10 +379,10 @@ export function createConnectorServices(services: BackendServices) {
     }
   }
   async function connectorProvisioning(actor: Principal, botId: string): Promise<void> {
-    services.auth.bot(actor, botId, true);
-    const bot = services.store.require<P.Bot>('bots', botId);
+    const bot = ownerBot(actor, botId, true);
     reconcilePlacement(bot);
-    for (const connector of services.store.list<P.Connector>('connectors', value => value.botId === botId && (value.shared || value.ownerUserId === actor.userId))) {
+    for (const connector of services.store.list<P.Connector>('connectors', value => value.botId === botId)) {
+      assertAccountOwner(connector);
       if (details(connector.id).machineId !== bot.machineId) continue;
       if (!enabled(connector).length) {
         revokeConsents(connector.id);
@@ -424,14 +396,14 @@ export function createConnectorServices(services: BackendServices) {
     for (const connector of services.store.list<P.Connector>('connectors', value => value.botId === botId)) releaseRevocationFence(botId, connector.id);
   }
   async function disconnectConnector(actor: Principal, connector: P.Connector, deletingBot = false): Promise<P.Deleted> {
+    access(actor, connector.id, true);
     const config = details(connector.id);
     const machine = services.store.require<P.Machine>('machines', config.machineId);
     if (machine.status !== 'online' || !machine.nodeId) fail('machine_offline', 'The credential destination must be online to acknowledge connector removal.');
     revokeConsents(connector.id);
     const disconnected = services.update(connector, { state: 'disconnected', tools: connector.tools.map(tool => ({ ...tool, enabled: false })) });
     saveDetails(connector.id, { ...config, configuredLevel: 'off', discoveredAtMs: null });
-    const scopedOwnerRevocation = !deletingBot && connector.ownerUserId === actor.userId && !canManageBot(actor, connector.botId);
-    if (deletingBot || scopedOwnerRevocation) {
+    if (deletingBot) {
       publish(disconnected);
       saveDetails(connector.id, { ...details(connector.id), desiredState: 'disconnected', desiredFingerprint: null, provisionState: 'pending', provisionActorUserId: actor.userId });
     } else await prepareProvision(actor, disconnected);
@@ -442,18 +414,7 @@ export function createConnectorServices(services: BackendServices) {
       services.events.emit('connector_auth.upserted', next, { userIds: [connector.ownerUserId] });
     }
     try {
-      if (scopedOwnerRevocation) {
-        const marker = `connectorProfileSync:${connector.botId}`;
-        services.store.setMetadata(marker, { connectorId: connector.id, actorUserId: actor.userId, connectorRevision: disconnected.revision });
-        try {
-          await syncBotConnectorRevocation(services, actor, connector.botId, connector.id, disconnected.revision);
-          const snapshot = services.store.metadata<{ mcpServers: Parameters<typeof connectorConfigurationFingerprint>[0] }>(`botDesiredProfile:${connector.botId}`);
-          if (!snapshot) fail('outcome_unknown', 'Scoped connector removal has no acknowledged configuration snapshot.', false);
-          saveDetails(connector.id, { ...details(connector.id), desiredFingerprint: connectorConfigurationFingerprint(snapshot.mcpServers) });
-        }
-        finally { services.store.setMetadata(marker, null); }
-        saveDetails(connector.id, { ...details(connector.id), provisionState: 'acknowledged' });
-      } else if (!deletingBot) await provision(actor, disconnected);
+      if (!deletingBot) await provision(actor, disconnected);
       for (const name of config.oauthSecretNames) parseResponse(z.object({ name: z.literal(name), deleted: z.literal(true) }).strict(), await services.lemon.call('node.secrets.delete', { nodeId: machine.nodeId, name }, { mutation: true, resourceIds: [connector.id] }), true);
     } catch {
       saveDetails(connector.id, { ...details(connector.id), provisionState: 'outcome_unknown' });
@@ -465,17 +426,16 @@ export function createConnectorServices(services: BackendServices) {
       for (const grant of services.store.list<P.BotGrant>('botGrants', value => value.capabilityId === `connector:${connector.id}` && value.botId === connector.botId)) services.store.remove('botGrants', grant.id);
       services.store.setMetadata(`connector:${connector.id}`, null);
       services.store.setMetadata(`connectorTemplatePolicy:${connector.id}`, null);
-      services.events.emit('connector.deleted', { id: connector.id, deleted: true }, connector.shared ? { botId: connector.botId } : { userIds: [connector.ownerUserId] });
+      services.events.emit('connector.deleted', { id: connector.id, deleted: true }, { userIds: [connector.ownerUserId] });
       services.audit(actor, 'connector.disconnect', connector.id, 'succeeded');
     });
     return { id: connector.id, deleted: true };
   }
   async function deleteBotConnectors(actor: Principal, botId: string, confirmedBotRevision: number, selectedIds?: string[]): Promise<void> {
-    const bot = services.store.require<P.Bot>('bots', botId);
+    const bot = ownerBot(actor, botId, true);
     services.mutations.checkRevision(bot, confirmedBotRevision);
-    if (bot.ownerUserId !== actor.userId && !(bot.visibility === 'team' && (actor.role === 'admin' || actor.role === 'owner'))) services.auth.bot(actor, botId, true);
     const candidates = services.store.list<P.Connector>('connectors', value => value.botId === botId && (selectedIds === undefined || selectedIds.includes(value.id)));
-    if (selectedIds && (new Set(selectedIds).size !== selectedIds.length || candidates.length !== selectedIds.length || candidates.some(value => !value.shared && value.ownerUserId !== actor.userId))) fail('forbidden', 'Reset connector candidates must be exact owned accounts or managed service accounts.');
+    if (selectedIds && (new Set(selectedIds).size !== selectedIds.length || candidates.length !== selectedIds.length)) fail('forbidden', 'Reset connector candidates must be exact owned accounts.');
     for (const connector of candidates) await disconnectConnector(actor, connector, selectedIds === undefined);
   }
   function disconnectPlan(connector: P.Connector): { binding: P.JSONObject; affected: P.ScopeEffect[] } {
@@ -495,6 +455,7 @@ export function createConnectorServices(services: BackendServices) {
   }
   function reconcilePlacement(bot: P.Bot): void {
     for (const connector of services.store.list<P.Connector>('connectors', value => value.botId === bot.id && value.state !== 'disconnected')) {
+      assertAccountOwner(connector);
       const config = details(connector.id);
       if (config.machineId === bot.machineId) continue;
       revokeConsents(connector.id);
@@ -523,7 +484,7 @@ export function createConnectorServices(services: BackendServices) {
         for (const grant of services.store.list<P.BotGrant>('botGrants', value => value.botId === connector.botId && value.capabilityId === `connector:${id}`)) services.store.remove('botGrants', grant.id);
         services.store.setMetadata(`connector:${id}`, null);
         services.store.setMetadata(`connectorTemplatePolicy:${id}`, null);
-        services.events.emit('connector.deleted', { id, deleted: true }, connector.shared ? { botId: connector.botId } : { userIds: [connector.ownerUserId] });
+        services.events.emit('connector.deleted', { id, deleted: true }, { userIds: [connector.ownerUserId] });
       });
       if (fence?.connectorId === id) services.store.setMetadata(`connectorRevocation:${connector.botId}`, null);
       return { id, deleted: true };
@@ -553,8 +514,8 @@ export function createConnectorServices(services: BackendServices) {
     try {
       if (collection === 'connectors') {
         const connector = services.store.get<P.Connector>(collection, identity.data.id);
-        if (!connector || !connector.shared && connector.ownerUserId !== actor.userId) return false;
-        if (connector.ownerUserId !== actor.userId) services.auth.bot(actor, connector.botId);
+        if (!connector) return false;
+        access(actor, connector.id);
         return true;
       }
       if (collection === 'connectorAuths') {
@@ -566,7 +527,8 @@ export function createConnectorServices(services: BackendServices) {
       const consent = services.store.get<P.ConnectorConsent>('consents', identity.data.id);
       if (!consent || consent.accountOwnerUserId !== actor.userId || consent.gate.targetUserId !== actor.userId) return false;
       const connector = services.store.get<P.Connector>('connectors', consent.connectorId);
-      if (connector && (connector.ownerUserId !== consent.accountOwnerUserId || connector.botId !== consent.botId)) return false;
+      if (!connector || connector.ownerUserId !== consent.accountOwnerUserId || connector.botId !== consent.botId) return false;
+      access(actor, connector.id);
       if (!services.auth.member(actor.userId).enabled) return false;
       return true;
     } catch { return false; }
@@ -603,7 +565,7 @@ export function createConnectorServices(services: BackendServices) {
     for (const completion of services.store.list<OAuthCompletion>('oauthCompletions', value => value.userId === userId && value.callbackPath === '/v1/connectors/oauth/callback')) await reconcileOAuthRevocation(services, completionProvider(completion), completion);
     return !services.store.list<OAuthCompletion>('oauthCompletions', value => value.userId === userId && value.callbackPath === '/v1/connectors/oauth/callback').length && !services.store.list<OAuthExchangeOperation>('oauthExchangeOperations', value => value.userId === userId && value.callbackPath === '/v1/connectors/oauth/callback' && ['pending', 'dispatching', 'outcome_unknown'].includes(value.state)).length;
   }
-  return { access, details, saveDetails, provider, destination, assertOrigin, assertConnectorPolicy, headers, validateBindings, discover, publish, provision, create, enabled, grantFor, revokeConsents, synchronize, connectorProfileConfiguration, connectorInvocationConfiguration, connectorTemplates, authorizeConnectorTool, requestConnectorConsent, resolveConsent, revokeConsent, connectorProvisioning, disconnectConnector, deleteBotConnectors, connectorGrants, fenceConnectorInvocations, reconcileConnector, reconcile, reconcilePlacement, canReadResource, prepareProvision, cleanupOAuthUser, reconcileOAuthUser, retireOAuthCompletion, disconnectPlan, assertReady, canManageBot };
+  return { access, details, saveDetails, provider, destination, assertOrigin, assertConnectorPolicy, headers, validateBindings, discover, publish, provision, create, enabled, grantFor, revokeConsents, synchronize, connectorProfileConfiguration, connectorInvocationConfiguration, connectorTemplates, authorizeConnectorTool, requestConnectorConsent, resolveConsent, revokeConsent, connectorProvisioning, disconnectConnector, deleteBotConnectors, connectorGrants, fenceConnectorInvocations, reconcileConnector, reconcile, reconcilePlacement, canReadResource, prepareProvision, cleanupOAuthUser, reconcileOAuthUser, retireOAuthCompletion, disconnectPlan, assertReady };
 }
 
 /** Full /v1 routes; the core mutation service owns nonce reservation and exact replay. */
@@ -622,7 +584,6 @@ export function createConnectorRoutes(services: BackendServices): Route[] {
     if (connectors.details(connector.id).provisionState === 'outcome_unknown') fail('outcome_unknown', 'Connector provisioning must be reconciled before another authorization.', false, { resourceIds: [connector.id] });
     connectors.assertReady(connector);
     connectors.assertConnectorPolicy(connector);
-    if (connector.shared && !connectors.canManageBot(actor, connector.botId)) fail('forbidden', 'A Bot maintainer must authorize reconnecting shared credentials.');
     const auth = services.resource('connector_auth', { connectorId: connector.id, authorizationUrl: '', expiresAtMs: services.now() + 600000, state: 'pending' as P.ConnectorAuth['state'] });
     context.nonceResourceIds.push(auth.id, connector.id);
     if (connector.authKind !== 'oauth') {
@@ -656,7 +617,7 @@ export function createConnectorRoutes(services: BackendServices): Route[] {
     if (!configured?.oauth) fail('capability_unavailable', 'The registered connector OAuth provider is no longer configured.');
     if (auth.state !== 'pending' || !binding || binding.connectorRevision !== connector.revision || binding.machineId !== connectors.destination(connector).id || binding.providerId !== configured.id || binding.providerDigest !== services.mutations.digest(configured.oauth) || configured.oauth.id !== flow.providerId || connector.ownerUserId !== flow.userId) fail('conflict', 'OAuth callback no longer matches this account, registered client, provider or destination.');
     const actor = userPrincipal(services, flow.userId);
-    services.auth.bot(actor, connector.botId);
+    connectors.access(actor, connector.id, true);
     connectors.assertConnectorPolicy(connector);
     if (query.error) {
       connectors.publish(services.update(connector, { state: 'needs_auth', lastError: 'Provider authorization was denied.' }));
@@ -750,12 +711,13 @@ export function createConnectorRoutes(services: BackendServices): Route[] {
     { method: 'GET', path: '/v1/bots/:id/connectors', auth: 'member', handler: context => {
       const actor = principal(context);
       const bot = services.auth.bot(actor, context.params.id!);
+      if (bot.ownerUserId !== actor.userId) fail('not_found', 'Bot was not found.');
       connectors.reconcilePlacement(bot);
-      for (const connector of services.store.list<P.Connector>('connectors', value => value.botId === bot.id && (value.ownerUserId === actor.userId || value.shared))) {
+      for (const connector of services.store.list<P.Connector>('connectors', value => value.botId === bot.id && value.ownerUserId === actor.userId)) {
         try { connectors.assertConnectorPolicy(connector); }
         catch (error) { if (!(error instanceof ApiError) || error.code !== 'policy_denied') throw error; }
       }
-      return services.page(context, services.store.list<P.Connector>('connectors', value => value.botId === bot.id && (value.ownerUserId === actor.userId || value.shared)));
+      return services.page(context, services.store.list<P.Connector>('connectors', value => value.botId === bot.id && value.ownerUserId === actor.userId));
     } },
     { method: 'POST', path: '/v1/bots/:id/connectors', auth: 'member', status: 201, handler: async context => {
       return connectors.create(principal(context), context.params.id!, parse(createSchema, context.body), 'read_interact', context.nonceResourceIds);

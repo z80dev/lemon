@@ -11,7 +11,6 @@ import { createEventService } from '../../src/core/events';
 import { createMutationService } from '../../src/core/mutations';
 import { createGateService } from '../../src/core/gates';
 import { syncBotProfile, baseBotMcpTemplate, botSystemPrompt } from '../../src/core/bots';
-import { createConversation } from '../../src/core/conversations';
 import { buildInvocationContext, revokeConnectorInvocations } from '../../src/runtime/runs';
 import { Router } from '../../src/core/router';
 import { ApiError } from '../../src/core/errors';
@@ -184,7 +183,7 @@ function unexpectedBoundary(boundary: string): () => never {
   return () => { throw new Error(`Unexpected connector fixture boundary: ${boundary}`); };
 }
 
-async function fixture(visibility: P.Bot['visibility'] = 'personal') {
+async function fixture() {
   const store = new Store(':memory:');
   const peer = new DestinationPeer();
   const key = new Uint8Array(32).fill(7);
@@ -269,11 +268,14 @@ async function fixture(visibility: P.Bot['visibility'] = 'personal') {
     store.put('members', { ...services.resource('member', { userId, email: user.email, displayName: userId, role: userId === 'alice' ? 'owner' as const : 'member' as const, enabled: true }), id: `member-${userId}` });
   }
   store.put('workspaces', { ...services.resource('workspace', { name: 'Fixture', ownerUserId: 'alice', enabled: true, timezone: 'UTC' }), id: 'workspace-1' });
-  const machine: P.Machine = { ...services.resource('machine', { nodeId: 'node-1', nodeName: 'fixture-node', name: 'Destination', ownerUserId: 'alice', accessUserIds: [], status: 'online' as const, lastSeenAtMs: now, labels: { 'lemon_bot.shared_context': 'true' }, botIds: ['bot-1'] }), id: 'machine-1' };
+  const machine: P.Machine = { ...services.resource('machine', { nodeId: 'node-1', nodeName: 'fixture-node', name: 'Destination', ownerUserId: 'alice', accessUserIds: [], status: 'online' as const, lastSeenAtMs: now, labels: {}, botIds: ['bot-1'] }), id: 'machine-1' };
   store.put('machines', machine);
-  const bot: P.Bot = { ...services.resource('bot', { ownerUserId: 'alice', managerUserIds: [], machineId: machine.id, profileId: 'lb-fixture', name: 'Records', title: '', job: '', instructions: '', avatar: { kind: 'character' as const, shape: 'round', color: 'yellow', attachmentId: null }, voice: preferences.voice, language: null, visibility, published: visibility === 'team', required: false, skillIds: [], referenceAttachmentIds: [], mainConversationId: 'room-alice', sidebar: { pinned: false, hidden: false, sectionId: null, rank: 0, unread: false, notificationsEnabled: false }, activity: 'idle' as const, activeRunIds: [] }), id: 'bot-1' };
+  const bot: P.Bot = { ...services.resource('bot', { ownerUserId: 'alice', machineId: machine.id, profileId: 'lb-fixture', name: 'Records', title: '', job: '', instructions: '', avatar: { kind: 'character' as const, shape: 'round', color: 'yellow', attachmentId: null }, voice: preferences.voice, language: null, skillIds: [], referenceAttachmentIds: [], mainConversationId: 'room-alice', sidebar: { pinned: false, hidden: false, sectionId: null, rank: 0, unread: false, notificationsEnabled: false }, activity: 'idle' as const, activeRunIds: [] }), id: 'bot-1' };
   store.put('bots', bot);
-  for (const userId of ['alice', 'bob']) store.put('conversations', { ...services.resource('conversation', { kind: visibility === 'team' ? 'team_dm' as const : 'dm' as const, name: 'Private', botIds: [bot.id], humanUserIds: [userId], ownerUserId: userId, parentConversationId: null, leadBotId: null, channelBindingId: null, lastEntryId: null, unreadCount: 0, lastReadSeq: 0, activity: [] }), id: `room-${userId}` });
+  const bobBot: P.Bot = { ...bot, id: 'bot-bob', ownerUserId: 'bob', profileId: 'lb-bob', machineId: 'machine-bob', mainConversationId: 'room-bob' };
+  store.put('bots', bobBot);
+  store.put('machines', { ...machine, id: 'machine-bob', ownerUserId: 'bob', botIds: [bobBot.id] });
+  for (const ownedBot of [bot, bobBot]) store.put('conversations', { ...services.resource('conversation', { kind: 'dm' as const, name: 'Private', botIds: [ownedBot.id], ownerUserId: ownedBot.ownerUserId, parentConversationId: null, leadBotId: null, channelBindingId: null, lastEntryId: null, unreadCount: 0, lastReadSeq: 0, activity: [] }), id: ownedBot.mainConversationId });
   peer.putSecret('BOT_MCP', 'private-product-bot-token');
   peer.putSecret('RECORDS_TOKEN', 'destination-only-account-secret');
   store.setMetadata(`botMcp:${bot.id}`, { secretName: 'BOT_MCP', encryptedToken: codec.encrypt('private-product-bot-token'), digest: 'fixture-digest' });
@@ -285,7 +287,7 @@ async function fixture(visibility: P.Bot['visibility'] = 'personal') {
     const response = await router.fetch(new Request(`${PUBLIC_URL}${path}`, { method, headers: { 'Content-Type': 'application/json', ...(userId === null ? {} : { Authorization: `Bearer ${userId === 'alice' ? alice.token : bob.token}` }) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }));
     return { status: response.status, body: await response.json() as T, response };
   };
-  const create = async (changes: Partial<P.ConnectorSetupRequest> = {}) => request<P.ConnectorSetupResult>('POST', `/v1/bots/${bot.id}/connectors/setup`, { clientNonce: services.id('nonce'), machineId: machine.id, name: 'Records', url: `${ORIGIN}/mcp`, accountLabel: 'Alice records', shared: false, authKind: 'secret_headers', secretBindings: [{ header: 'Authorization', secretName: 'RECORDS_TOKEN' }], requestedLevel: 'read_interact', ...changes });
+  const create = async (changes: Partial<P.ConnectorSetupRequest> = {}) => request<P.ConnectorSetupResult>('POST', `/v1/bots/${bot.id}/connectors/setup`, { clientNonce: services.id('nonce'), machineId: machine.id, name: 'Records', url: `${ORIGIN}/mcp`, accountLabel: 'Alice records', authKind: 'secret_headers', secretBindings: [{ header: 'Authorization', secretName: 'RECORDS_TOKEN' }], requestedLevel: 'read_interact', ...changes });
   const enable = async (connector: P.Connector) => request<P.Connector>('PATCH', `/v1/connectors/${connector.id}`, { clientNonce: services.id('nonce'), revision: connector.revision, tools: connector.tools.map(tool => ({ ...tool, enabled: true })) });
   const admit = async (userId: string, operationId: string, conversationId = `room-${userId}`): Promise<P.Run> => {
     const actor = principal(userId);
@@ -297,7 +299,7 @@ async function fixture(visibility: P.Bot['visibility'] = 'personal') {
     return run;
   };
   cleanup.push(() => { gateService.close(); peer.close(); store.close(); });
-  return { services, store, peer, bot, machine, oauth, connectors: connectorServices, request, create, enable, admit, principal, advance: (ms: number) => { now += ms; } };
+  return { services, store, peer, bot, bobBot, machine, oauth, connectors: connectorServices, request, create, enable, admit, principal, advance: (ms: number) => { now += ms; } };
 }
 
 describe('destination connector configuration', () => {
@@ -331,17 +333,13 @@ describe('destination connector configuration', () => {
     expect(publicData).not.toContain(f.services.config.operatorToken);
   });
 
-  test('all configured account templates are credential-free without private metadata, owner authority or consent consumption', async () => {
-    const f = await fixture('team');
+  test('owner effective templates remain credential-free and do not consume pending consent', async () => {
+    const f = await fixture();
     const value = await f.create();
     const connector = (await f.enable(value.body.connector)).body;
     const consent = await f.connectors.requestConnectorConsent(f.principal('alice'), { connectorId: connector.id, botId: f.bot.id, conversationId: 'room-alice', operationId: f.services.id('run') });
     const before = f.peer.calls.length;
-    const decrypt = f.services.decrypt;
-    f.services.decrypt = () => { throw new Error('Public template getter attempted to inspect private metadata.'); };
-    let templates: InvocationMcpServer[];
-    try { templates = await f.connectors.connectorTemplates(f.bot.id); }
-    finally { f.services.decrypt = decrypt; }
+    const templates = await f.connectors.connectorTemplates(f.bot.id);
     expect(templates).toEqual([{ name: `connector-${connector.id}`, url: `${ORIGIN}/mcp`, headers: {}, enabledTools: ['read_items', 'write_item'], allowedOrigins: [ORIGIN], approvedPrivateOrigins: [] }]);
     expect(f.peer.calls).toHaveLength(before);
     expect(f.store.require<P.ConnectorConsent>('consents', consent.id).gate.state).toBe('pending');
@@ -351,9 +349,39 @@ describe('destination connector configuration', () => {
     expect(f.connectors.details(connector.id).desiredFingerprint).toBe(connectorConfigurationFingerprint([baseBotMcpTemplate(f.services), ...templates]));
   });
 
+  test('owner capability grant constrains both native templates and invocation configuration', async () => {
+    const f = await fixture();
+    const created = await f.create();
+    const connector = (await f.enable(created.body.connector)).body;
+    const grant = f.connectors.grantFor(connector)!;
+    f.store.put('botGrants', f.services.update(grant, { requestedLevel: 'read_only' as const }));
+    expect((await f.connectors.connectorTemplates(f.bot.id))[0]?.enabledTools).toEqual(['read_items']);
+    expect((await f.connectors.connectorProfileConfiguration(f.principal('alice'), f.bot.id, 'room-alice', 'read-operation'))[0]?.enabledTools).toEqual(['read_items']);
+    f.store.put('botGrants', f.services.update(f.store.require<P.BotGrant>('botGrants', grant.id), { requestedLevel: 'off' as const }));
+    expect((await f.connectors.connectorTemplates(f.bot.id))[0]?.enabledTools).toEqual([]);
+    expect(await f.connectors.connectorProfileConfiguration(f.principal('alice'), f.bot.id, 'room-alice', 'off-operation')).toEqual([]);
+  });
+
+  test('foreign CRUD, provisioning and mismatched account ownership dispatch nothing', async () => {
+    const f = await fixture();
+    const connector = (await f.create()).body.connector;
+    const before = f.peer.calls.length;
+    for (const [method, path, body] of [
+      ['GET', `/v1/bots/${f.bot.id}/connectors`, undefined],
+      ['PATCH', `/v1/connectors/${connector.id}`, { clientNonce: f.services.id('nonce'), revision: connector.revision, name: 'Foreign edit' }],
+      ['POST', `/v1/connectors/${connector.id}/auth`, { clientNonce: f.services.id('nonce') }],
+      ['POST', `/v1/connectors/${connector.id}/preview`, { clientNonce: f.services.id('nonce'), action: 'disconnect' }],
+    ] as const) expect((await f.request(method, path, body, 'bob')).status).toBe(404);
+    await expect(f.connectors.connectorProvisioning(f.principal('bob'), f.bot.id)).rejects.toMatchObject({ code: 'not_found' });
+    f.store.put('connectors', { ...connector, ownerUserId: 'bob' });
+    await expect(f.connectors.connectorTemplates(f.bot.id)).rejects.toMatchObject({ code: 'policy_denied' });
+    await expect(f.connectors.connectorProfileConfiguration(f.principal('alice'), f.bot.id, 'room-alice', 'mismatched-account')).rejects.toMatchObject({ code: 'policy_denied' });
+    expect(f.peer.calls).toHaveLength(before);
+  });
+
   test('rejects raw credentials, malformed names, missing destination names, foreign machine and unsafe origins before connection', async () => {
     const f = await fixture();
-    const raw = await f.request<P.ErrorEnvelope>('POST', `/v1/bots/${f.bot.id}/connectors`, { clientNonce: f.services.id('nonce'), name: 'Unsafe', url: `${ORIGIN}/mcp`, accountLabel: 'Alice', authKind: 'secret_headers', shared: false, headers: { Authorization: 'plaintext' } });
+    const raw = await f.request<P.ErrorEnvelope>('POST', `/v1/bots/${f.bot.id}/connectors`, { clientNonce: f.services.id('nonce'), name: 'Unsafe', url: `${ORIGIN}/mcp`, accountLabel: 'Alice', authKind: 'secret_headers', headers: { Authorization: 'plaintext' } });
     expect(raw.body.error.code).toBe('invalid_request');
     expect((await f.create({ secretBindings: [{ header: 'Authorization', secretName: '${ENV_TOKEN}' }] })).status).toBe(400);
     expect((await f.create({ secretBindings: [{ header: 'Authorization', secretName: 'MISSING' }] })).status).toBe(400);
@@ -377,7 +405,7 @@ describe('destination connector configuration', () => {
   test('discovery failure never reports Connected and same nonce does not redispatch', async () => {
     const f = await fixture();
     f.peer.failure = 'discovery';
-    const input = { clientNonce: f.services.id('nonce'), name: 'Records', url: `${ORIGIN}/mcp`, accountLabel: 'Alice', shared: false, authKind: 'none' };
+    const input = { clientNonce: f.services.id('nonce'), name: 'Records', url: `${ORIGIN}/mcp`, accountLabel: 'Alice', authKind: 'none' };
     const first = await f.request<P.ErrorEnvelope>('POST', `/v1/bots/${f.bot.id}/connectors`, input);
     expect(first.body.error.code).toBe('upstream_unavailable');
     expect(f.store.list<P.Connector>('connectors')[0]?.state).toBe('failed');
@@ -422,7 +450,7 @@ describe('destination connector configuration', () => {
   test('ambiguous profile synchronization is fenced and an exact nonce never repeats the mutation', async () => {
     const f = await fixture();
     f.peer.failure = 'sync_after_apply';
-    const input = { clientNonce: f.services.id('nonce'), name: 'Records', url: `${ORIGIN}/mcp`, accountLabel: 'Alice', shared: false, authKind: 'none' };
+    const input = { clientNonce: f.services.id('nonce'), name: 'Records', url: `${ORIGIN}/mcp`, accountLabel: 'Alice', authKind: 'none' };
     const first = await f.request<P.ErrorEnvelope>('POST', `/v1/bots/${f.bot.id}/connectors`, input);
     expect(first.body.error.code).toBe('outcome_unknown');
     expect(first.body.error.retrySafe).toBe(false);
@@ -477,27 +505,23 @@ describe('destination connector configuration', () => {
 
 });
 
-describe('principal-scoped Team connector consent', () => {
-  test('static Team config never borrows owner credentials; once grant is exact principal, conversation and operation', async () => {
-    const f = await fixture('team');
+describe('owner-scoped connector consent', () => {
+  test('owner consent resolution is private and nonce-bound, not borrowed invocation authority', async () => {
+    const f = await fixture();
     const created = await f.create();
     const enabled = await f.enable(created.body.connector);
     const connector = enabled.body;
     expect((await f.connectors.connectorTemplates(f.bot.id))[0]?.headers).toEqual({});
-    expect(await f.connectors.connectorProfileConfiguration(f.principal('alice'), f.bot.id, 'room-alice', 'unconsented-operation')).toEqual([]);
-    expect(await f.connectors.connectorProfileConfiguration(f.principal('bob'), f.bot.id, 'room-bob', 'different-operation')).toEqual([]);
+    await expect(f.connectors.connectorProfileConfiguration(f.principal('bob'), f.bot.id, 'room-bob', 'different-operation')).rejects.toMatchObject({ code: 'not_found' });
     const operationId = f.services.id('run');
     const consent = await f.connectors.requestConnectorConsent(f.principal('alice'), { connectorId: connector.id, botId: f.bot.id, conversationId: 'room-alice', operationId });
     const foreign = await f.request<P.ErrorEnvelope>('POST', `/v1/consents/${consent.id}/resolve`, { clientNonce: f.services.id('nonce'), revision: consent.revision, decision: 'allow_once' }, 'bob');
     expect(foreign.status).toBe(404);
     const allowed = await f.request<P.ConnectorConsent>('POST', `/v1/consents/${consent.id}/resolve`, { clientNonce: f.services.id('nonce'), revision: consent.revision, decision: 'allow_once' });
     expect(allowed.body.gate.state).toBe('approved');
-    expect(await f.connectors.connectorProfileConfiguration(f.principal('alice'), f.bot.id, 'room-alice', 'other-operation')).toEqual([]);
-    const admitted = await f.connectors.connectorProfileConfiguration(f.principal('alice'), f.bot.id, 'room-alice', operationId);
-    expect(admitted[0]?.headers.Authorization).toBe('Bearer ${LEMON_SECRET:RECORDS_TOKEN}');
     const replayed = await f.connectors.requestConnectorConsent(f.principal('alice'), { connectorId: connector.id, botId: f.bot.id, conversationId: 'room-alice', operationId });
     expect(replayed.id).toBe(consent.id);
-    expect(await f.connectors.connectorProfileConfiguration(f.principal('alice'), f.bot.id, 'room-alice', operationId)).toEqual([]);
+    expect((await f.connectors.connectorProfileConfiguration(f.principal('alice'), f.bot.id, 'room-alice', operationId))[0]?.headers.Authorization).toBe('Bearer ${LEMON_SECRET:RECORDS_TOKEN}');
     const foreignList = await f.request<P.Page<P.ConnectorConsent>>('GET', '/v1/consents', undefined, 'bob');
     expect(foreignList.body.items).toEqual([]);
     const entry = f.store.require<P.TranscriptEntry>('entries', consent.entryId);
@@ -505,64 +529,50 @@ describe('principal-scoped Team connector consent', () => {
     expect(f.services.auth.canRead(f.principal('bob'), 'entries', entry)).toBe(false);
   });
 
-  test('remembered grants expire and revoke without reviving a past operation', async () => {
-    const f = await fixture('team');
-    const created = await f.create();
-    const connector = (await f.enable(created.body.connector)).body;
-    const consent = await f.connectors.requestConnectorConsent(f.principal('alice'), { connectorId: connector.id, botId: f.bot.id, conversationId: 'room-alice', operationId: f.services.id('run') });
-    const allowed = await f.request<P.ConnectorConsent>('POST', `/v1/consents/${consent.id}/resolve`, { clientNonce: f.services.id('nonce'), revision: consent.revision, decision: 'allow_bot', expiresAtMs: f.services.now() + 1000 });
-    expect((await f.connectors.connectorProfileConfiguration(f.principal('alice'), f.bot.id, 'room-alice', 'run-2'))).toHaveLength(1);
-    f.advance(1000);
-    expect(await f.connectors.connectorProfileConfiguration(f.principal('alice'), f.bot.id, 'room-alice', 'run-3')).toEqual([]);
-    expect(f.store.require<P.ConnectorConsent>('consents', consent.id).gate.state).toBe('expired');
-    const next = await f.connectors.requestConnectorConsent(f.principal('alice'), { connectorId: connector.id, botId: f.bot.id, conversationId: 'room-alice', operationId: f.services.id('run') });
-    const remembered = await f.request<P.ConnectorConsent>('POST', `/v1/consents/${next.id}/resolve`, { clientNonce: f.services.id('nonce'), revision: next.revision, decision: 'allow_bot' });
-    const deleted = await f.request<P.Deleted>('DELETE', `/v1/consents/${next.id}`, { clientNonce: f.services.id('nonce'), revision: remembered.body.revision });
-    expect(deleted.body).toEqual({ id: next.id, deleted: true });
-    expect(await f.connectors.connectorProfileConfiguration(f.principal('alice'), f.bot.id, 'room-alice', 'run-4')).toEqual([]);
-    expect(allowed.body.expiresAtMs).not.toBeNull();
-  });
-
-  test('shared credentials require a deliberately operator-declared service account, not a boolean alone', async () => {
-    const f = await fixture('team');
-    expect((await f.create({ shared: true })).status).toBe(403);
-    f.services.config.operator!.connectorProviders = [{ id: 'service-records', origins: [ORIGIN], oauth: null, sharedServiceAccount: true }];
-    const value = await f.create({ shared: true });
-    const connector = (await f.enable(value.body.connector)).body;
-    expect((await f.connectors.connectorProfileConfiguration(f.principal('bob'), f.bot.id))[0]?.enabledTools).toEqual(['read_items', 'write_item']);
-    const run = await f.admit('bob', 'service-account-operation');
-    await expect(f.connectors.authorizeConnectorTool(f.principal('bob'), { connectorId: connector.id, botId: f.bot.id, conversationId: 'room-bob', toolName: 'read_items', operationId: 'service-account-operation' })).resolves.toBeUndefined();
-    f.store.put('runs', f.services.update(run, { status: 'succeeded' as const, completedAtMs: f.services.now() }));
-    f.services.config.operator!.connectorProviders = [];
-    await expect(f.connectors.connectorProfileConfiguration(f.principal('bob'), f.bot.id)).rejects.toMatchObject({ code: 'policy_denied' });
-  });
-
-  test('a visible collaborative Bot does not let another participant reuse the initiating actor admission', async () => {
-    const f = await fixture('team');
-    f.services.config.operator!.connectorProviders = [{ id: 'service-records', origins: [ORIGIN], oauth: null, sharedServiceAccount: true }];
-    const created = await f.create({ shared: true });
-    expect(created.status).toBe(201);
-    const enabled = await f.enable(created.body.connector);
-    expect(enabled.status).toBe(200);
-    const connector = enabled.body;
-    const collaborator: P.Bot = { ...f.bot, id: 'bot-collaborator', profileId: 'lb-collaborator', name: 'Collaborator', mainConversationId: 'room-collaborator' };
-    f.store.put('bots', collaborator);
-    const conversation = createConversation(f.services, f.principal('alice'), { clientNonce: f.services.id('nonce'), kind: 'group', name: 'Shared records', botIds: [f.bot.id, collaborator.id], humanUserIds: ['alice', 'bob'] });
-    expect(f.services.auth.bot(f.principal('bob'), f.bot.id).id).toBe(f.bot.id);
-    expect(f.services.auth.conversation(f.principal('bob'), conversation.id).id).toBe(conversation.id);
-    const input = { connectorId: connector.id, botId: f.bot.id, conversationId: conversation.id, toolName: 'read_items', operationId: 'shared-native-operation' };
-    await expect(f.connectors.authorizeConnectorTool(f.principal('alice'), input)).rejects.toMatchObject({ code: 'policy_denied' });
-    const run = await f.admit('alice', input.operationId, conversation.id);
-    expect(run.conversationId).toBe(conversation.id);
-    const invocation = f.store.metadata<InvocationContext>(`runtimeInvocation:${input.operationId}`);
-    expect(invocation?.invocationProof.runId).toBe(input.operationId);
-    expect(f.peer.readSecret(invocation!.invocationProof.secretName)).toStartWith(`${input.operationId}.`);
+  test('revoking owner consent fences previously admitted native authority without lending access', async () => {
+    const f = await fixture();
+    const connector = (await f.enable((await f.create()).body.connector)).body;
+    const operationId = 'revoked-owner-operation';
+    const consent = await f.connectors.requestConnectorConsent(f.principal('alice'), { connectorId: connector.id, botId: f.bot.id, conversationId: 'room-alice', operationId });
+    const allowed = await f.request<P.ConnectorConsent>('POST', `/v1/consents/${consent.id}/resolve`, { clientNonce: f.services.id('nonce'), revision: consent.revision, decision: 'allow_bot' });
+    await f.admit('alice', operationId);
+    const input = { connectorId: connector.id, botId: f.bot.id, conversationId: 'room-alice', toolName: 'read_items', operationId };
     await expect(f.connectors.authorizeConnectorTool(f.principal('alice'), input)).resolves.toBeUndefined();
-    // Both the Bot and execution audience are visible; only the retained initiating actor differs.
-    await expect(f.connectors.authorizeConnectorTool(f.principal('bob'), input)).rejects.toMatchObject({ code: 'forbidden' });
+    const deleted = await f.request<P.Deleted>('DELETE', `/v1/consents/${consent.id}`, { clientNonce: f.services.id('nonce'), revision: allowed.body.revision });
+    expect(deleted.body).toEqual({ id: consent.id, deleted: true });
+    await expect(f.connectors.authorizeConnectorTool(f.principal('alice'), input)).rejects.toMatchObject({ code: 'policy_denied' });
+    expect((await f.connectors.connectorProfileConfiguration(f.principal('alice'), f.bot.id, 'room-alice', 'new-owner-operation'))).toHaveLength(1);
+  });
+
+  test('operator service-account custody cannot authorize a foreign Bot or reuse native admission', async () => {
+    const f = await fixture();
+    f.services.config.operator!.connectorProviders = [{ id: 'service-records', origins: [ORIGIN], oauth: null, sharedServiceAccount: true }];
+    const created = await f.create();
+    expect(created.status).toBe(201);
+    const connector = (await f.enable(created.body.connector)).body;
+    expect(f.services.auth.bot(f.principal('bob'), f.bobBot.id).id).toBe(f.bobBot.id);
+    expect(f.services.auth.conversation(f.principal('bob'), 'room-bob').botIds).toEqual([f.bobBot.id]);
+    const input = { connectorId: connector.id, botId: f.bot.id, conversationId: 'room-alice', toolName: 'read_items', operationId: 'owner-native-operation' };
+    await expect(f.connectors.authorizeConnectorTool(f.principal('alice'), input)).rejects.toMatchObject({ code: 'policy_denied' });
+    const run = await f.admit('alice', input.operationId);
+    const invocation = f.store.metadata<InvocationContext>(`runtimeInvocation:${input.operationId}`)!;
+    expect(invocation.invocationProof.runId).toBe(input.operationId);
+    expect(f.peer.readSecret(invocation.invocationProof.secretName)).toStartWith(`${input.operationId}.`);
+    await expect(f.connectors.authorizeConnectorTool(f.principal('alice'), input)).resolves.toBeUndefined();
+    const before = f.peer.calls.length;
+    await expect(f.connectors.connectorProfileConfiguration(f.principal('bob'), f.bot.id, 'room-bob', 'foreign-operation')).rejects.toMatchObject({ code: 'not_found' });
+    await expect(f.admit('bob', 'foreign-native-operation')).rejects.toMatchObject({ code: 'not_found' });
+    await expect(f.connectors.authorizeConnectorTool(f.principal('bob'), input)).rejects.toMatchObject({ code: 'not_found' });
+    await expect(f.connectors.connectorProfileConfiguration(f.principal('alice'), f.bobBot.id, 'room-bob', 'admin-operation')).rejects.toMatchObject({ code: 'not_found' });
+    expect(f.peer.calls).toHaveLength(before);
+    expect(f.store.metadata(`runtimeInvocation:foreign-native-operation`)).toBeNull();
+    expect(f.store.metadata(`invocationConnectors:foreign-operation`)).toBeNull();
+    await expect(f.connectors.authorizeConnectorTool(f.principal('alice'), { ...input, operationId: 'different-operation' })).rejects.toMatchObject({ code: 'policy_denied' });
+    f.store.setMetadata(`runPrincipal:${run.id}`, f.principal('bob'));
+    await expect(f.connectors.authorizeConnectorTool(f.principal('alice'), input)).rejects.toMatchObject({ code: 'forbidden' });
+    f.store.setMetadata(`runPrincipal:${run.id}`, f.principal('alice'));
     await expect(f.connectors.authorizeConnectorTool(f.principal('alice'), input)).resolves.toBeUndefined();
     expect(f.store.metadata<string[]>(`invocationConnectors:${input.operationId}`)).toEqual([connector.id]);
-    f.store.put('runs', f.services.update(run, { status: 'succeeded' as const, completedAtMs: f.services.now() }));
   });
 });
 
