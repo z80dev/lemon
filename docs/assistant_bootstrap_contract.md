@@ -94,9 +94,9 @@ rejected rather than removed into legacy defaults. Existing negative presence
 remains negative, and trusted positive canonical fields travel only as data
 for the authenticated execution boundary's owning validation. This is not
 generic model-map authority promotion. MCP/secret references remain unresolved.
-Factory-only source profile/session identities, controller connection PID and
-generation, and native follow-up/floor callbacks are excluded from execution
-JSON in all atom/snake/camel forms. The destination derives actual source
+Factory-only source profile/session identities, managed-context sentinels,
+controller connection PID and generation, and native follow-up/floor callbacks
+are excluded from execution JSON in all atom/snake/camel forms. The destination derives actual source
 identities from its immutable native session options; body metadata cannot
 select or attest a source profile/session.
 

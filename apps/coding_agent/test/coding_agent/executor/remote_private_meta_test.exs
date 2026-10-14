@@ -127,6 +127,14 @@ defmodule CodingAgent.Executor.RemotePrivateMetaTest do
     end
   end
 
+  test "factory managed-context sentinel never travels as an authority marker" do
+    keys = [:native_managed_context, "native_managed_context", :nativeManagedContext, "nativeManagedContext"]
+    for value <- [false, nil, true] do
+      assert {:ok, payload} = encode(Map.new(keys, &{&1, value}))
+      assert payload["meta"] == %{}
+    end
+  end
+
   test "proof callbacks and structs remain non-serializable execution data" do
     assert {:error, {:invalid_request_payload, _}} = encode(%{invocation_proof: %{run_id: fn -> :private end}})
     assert {:error, {:invalid_request_payload, _}} = encode(%{invocation_proof: %LemonCore.ResumeToken{engine: "lemon", value: "private"}})

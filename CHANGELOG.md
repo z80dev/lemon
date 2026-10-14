@@ -67,9 +67,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
   explicit false/null values. Untrusted meaningful scope/proof claims fail
   closed instead of downgrading to legacy context; unresolved references remain
   execution-host owned.
-- Factory-only native source profile/session identifiers, connection generations
-  and follow-up/floor callbacks no longer survive remote execution metadata
-  encoding under atom or string/camel aliases.
+- Factory-only native source profile/session identifiers, managed-context
+  sentinels, connection generations and follow-up/floor callbacks no longer
+  survive remote execution metadata encoding under atom or string/camel aliases.
 
 ---
 
