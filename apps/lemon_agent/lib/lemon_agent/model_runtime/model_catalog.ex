@@ -86,6 +86,7 @@ defmodule LemonAgent.ModelRuntime.ModelCatalog do
       codex_force_refresh: Keyword.get(opts, :force_refresh, false),
       codex_req_options: Keyword.get(opts, :codex_req_options, [])
     )
+    |> Enum.reject(&LemonAi.Models.Presets.preset?(&1.provider))
     |> Kernel.++(preset_models(cfg, enabled, opts))
     |> Enum.filter(&MapSet.member?(enabled, normalize_provider_name(&1.provider)))
     |> merge_configured_models(configured_models(cfg, enabled, routing, opts))
@@ -132,8 +133,13 @@ defmodule LemonAgent.ModelRuntime.ModelCatalog do
       |> Enum.filter(&MapSet.member?(enabled, normalize_provider_name(&1.id)))
       |> Enum.flat_map(fn preset ->
         case ProviderNames.provider_config(providers, preset.id) do
-          nil when preset.local -> []
-          provider_cfg -> [{preset.id, provider_cfg || %{}}]
+          nil when preset.local ->
+            if Enum.any?(preset.base_url_env, &(System.get_env(&1) not in [nil, ""])),
+              do: [{preset.id, %{}}],
+              else: []
+
+          provider_cfg ->
+            [{preset.id, provider_cfg || %{}}]
         end
       end)
 
@@ -145,6 +151,7 @@ defmodule LemonAgent.ModelRuntime.ModelCatalog do
         LemonAi.Models.discover_preset(preset,
           base_url: config_value(provider_cfg, :base_url),
           api_key: get_api_key.(preset),
+          headers: CustomProviders.headers(provider_cfg),
           timeout_ms: timeout,
           force_refresh: Keyword.get(opts, :force_refresh, false),
           req_options: Keyword.get(opts, :preset_req_options, [])

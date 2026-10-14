@@ -146,7 +146,7 @@ defmodule LemonAi.Models do
   def get_model(provider, model_id) when is_atom(provider) and is_binary(model_id) do
     case Map.get(@models, provider) do
       nil when provider in @preset_providers and model_id != "" ->
-        Discovery.cached_model(provider, model_id) || Presets.model(provider, model_id)
+        Presets.cached_model(provider, model_id) || Presets.model(provider, model_id)
 
       nil ->
         nil
@@ -163,7 +163,7 @@ defmodule LemonAi.Models do
   @spec known_model(atom(), String.t()) :: Model.t() | nil
   def known_model(provider, model_id) when is_atom(provider) and is_binary(model_id) do
     case Map.get(@models, provider) do
-      nil when provider in @preset_providers -> Discovery.cached_model(provider, model_id)
+      nil when provider in @preset_providers -> Presets.cached_model(provider, model_id)
       nil -> nil
       provider_models -> Map.get(provider_models, model_id)
     end
@@ -172,8 +172,9 @@ defmodule LemonAi.Models do
   @doc """
   Get all models for a provider.
 
-  For preset providers this is the latest cached discovery listing (no network
-  access); use `discover_preset/2` to refresh it.
+  For preset providers this is the cached listing for the current default
+  endpoint and environment credential (no network access); use `discover_preset/2`
+  to refresh it. Explicitly configured endpoints remain scoped to their caller.
 
   ## Examples
 
@@ -188,7 +189,7 @@ defmodule LemonAi.Models do
   @spec get_models(atom()) :: [Model.t()]
   def get_models(provider) when is_atom(provider) do
     case Map.get(@models, provider) do
-      nil when provider in @preset_providers -> Discovery.cached_models(provider)
+      nil when provider in @preset_providers -> Presets.cached_models(provider)
       nil -> []
       provider_models -> Map.values(provider_models)
     end
@@ -265,6 +266,7 @@ defmodule LemonAi.Models do
             :force_refresh,
             :req_options
           ])
+          |> Keyword.put_new(:api_key, Presets.env_api_key(provider))
           |> Keyword.merge(
             provider: provider,
             api: preset.api,
@@ -615,8 +617,7 @@ defmodule LemonAi.Models do
     end
   end
 
-  # Account-scoped: always fetched fresh rather than served from the shared
-  # discovery cache, which is keyed by endpoint and not by credential.
+  # Always fetched fresh for this account, independent of cached picker listings.
   defp discover_openai_model_ids(opts) do
     with {:ok, api_key} <- resolve_openai_api_key(opts),
          {:ok, models} <-

@@ -753,10 +753,19 @@ Preset models carry conservative defaults (128k context, 16k output; Ollama
 lists what an endpoint serves (`GET /models`; Ollama uses `/api/tags` and
 `/api/show` for context length), using `--base-url`, the base-URL environment
 variable, or the default, and the provider's key environment variable when set.
+This low-level CLI discovery does not read `[providers]` overrides or encrypted
+credentials; use the picker for config-aware discovery, or pass `--base-url`
+and the preset's environment key explicitly.
 The TUI `/model` picker (daemon `models.list`) includes discovered models for
 hosted presets with a credential and for local servers that are configured in
 `[providers.<id>]` or through their base-URL environment variable; listings are
 cached for five minutes and an unreachable server contributes no models.
+Discovery caches are scoped to the endpoint, wire API, credential, headers and
+model defaults; one account's listing is not reused for another account or
+endpoint. Cache identifiers hash auth material. Registry-only preset lookup
+uses the current default endpoint and environment credential, while the picker
+uses its effective provider config. Discovery refuses redirects and URLs with
+embedded credentials, queries or fragments; use `headers` for endpoint auth.
 
 Any other OpenAI-compatible endpoint can still use the `openai` provider with a
 custom `base_url`. Hosted provider ids with bundled catalogs (`opencode`,
@@ -797,7 +806,10 @@ input = ["text"]                   # "text" and/or "image"; default ["text"]
 - Credentials resolve from `api_key_env`, then `api_key`, then
   `api_key_secret`; a custom provider never receives another provider's key
   (no `OPENAI_API_KEY` fallback). With `auth = "none"` the provider is ready
-  without a key.
+  without a key. OpenAI-, Anthropic- and Google-compatible requests omit their
+  generated credential header when no key resolves; configured headers still
+  apply. Google-compatible endpoints use their own provider's options, not
+  the built-in Google account's key or URL.
 - `api` and `base_url` are required. A provider with `discovery` or without a
   `models` list accepts any model id (unlisted ids use the defaults above);
   `discovery` also lists the endpoint's models in the picker, cached by the
@@ -805,6 +817,9 @@ input = ["text"]                   # "text" and/or "image"; default ["text"]
   to bound the listing request. Discovery needs `api = "openai_completions"` or
   `"openai_responses"`; with `discovery = "ollama"`, `base_url` may be the
   server root (`http://127.0.0.1:11434`) and requests go to its `/v1` API.
+  Wire roots are protocol-specific: OpenAI APIs usually use `/v1`, Anthropic
+  uses an origin/prefix to which `/v1/messages` is appended, and Google uses
+  a root such as `/v1beta` to which `/models/<id>:streamGenerateContent` is appended.
 - On a built-in provider (`anthropic`, `openai`, ...), `headers` are sent with
   every request and `[[providers.<id>.models]]` entries add catalog models or
   replace the catalog entry with the same id, inheriting the provider's wire API
@@ -923,6 +938,14 @@ lemon model anthropic --auth oauth --secret-name llm_anthropic_work
 lemon providers pool credential add burst anthropic secret:llm_anthropic_work
 ```
 
+The most recent onboarding selects its secret in the provider config; it does
+not delete other stored accounts. To inspect or delete a different stored
+account, use `lemon model anthropic --status --secret-name llm_anthropic_work`
+or `--logout --secret-name llm_anthropic_work`. Named logout leaves the active
+provider config unchanged unless that exact secret is the configured login.
+Pool references to a deleted secret remain in config but no longer resolve;
+remove them separately with `lemon providers pool credential remove`.
+
 
 Memory-provider readiness is included in support-bundle
 `memory_diagnostics.json`. These surfaces expose provider ids, enabled state,
@@ -1004,7 +1027,7 @@ Other subscription and browser sign-ins offered by `lemon model <provider>`:
 | `openrouter` | Browser PKCE sign-in (callback on `http://localhost:54549/callback`, or paste the redirect URL); a pasted `sk-or-` key is checked and accepted | A durable OpenRouter API key in `providers.openrouter.api_key_secret` |
 | `xai` | SuperGrok / X Premium+ device code (`--auth oauth`); API key remains the default | Refreshable login in `providers.xai.api_key_secret`, `auth_source = "oauth"` |
 | `kimi_coding` (`kimi-code`) | Kimi Code device code (default) | Refreshable login in `providers.kimi_coding.api_key_secret`, `auth_source = "oauth"` |
-| `zai` | GLM Coding Plan sign-in (`--auth oauth`): paste the final `zcode://` redirect; Lemon finds or creates an API key named `lemon` | A durable Z.AI API key in `providers.zai.api_key_secret` |
+| `zai` | GLM Coding Plan sign-in (`--auth oauth`): paste the full final `zcode://zai-auth/callback?...` redirect (or `code#state`, not a bare code); Lemon finds or creates an API key named `lemon` | A durable Z.AI API key in `providers.zai.api_key_secret` |
 
 Refreshable logins renew shortly before expiry and when a provider rejects the
 token. While `auth_source = "oauth"` is set, the provider's API-key environment
@@ -1014,6 +1037,15 @@ without printing it; `--logout` deletes it and its config references but does
 not revoke it at the provider. `KIMI_CODE_OAUTH_HOST` overrides the Kimi auth
 host; the `ZAI_OAUTH_*` variables override the Z.AI endpoints for allowlist
 changes.
+
+Token-grant requests do not follow redirects. Device-code deadlines include
+time spent waiting for browser instructions and HTTP requests. Refresh and
+persistence are serialized per stored login; waiting callers reload the same
+secret before reusing or rotating it. A removed/replaced login is not recreated
+from a stale reader, and expired or explicitly rejected tokens are never
+returned as successful authentication after a failed refresh. Endpoint/HTTP
+overrides exposed by library APIs are trusted caller options intended for
+testing and controlled integrations, not untrusted remote input.
 
 Antigravity OAuth client credentials resolve from Lemon secrets first:
 - `google_antigravity_oauth_client_id`

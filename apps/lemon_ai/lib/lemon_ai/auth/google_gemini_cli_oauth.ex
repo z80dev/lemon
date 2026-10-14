@@ -256,19 +256,30 @@ defmodule LemonAi.Auth.GoogleGeminiCliOAuth do
 
   def resolve_api_key_from_secret(secret_name, secret_value, opts)
       when is_binary(secret_name) and is_binary(secret_value) do
-    with {:ok, secret} <- decode_secret(secret_value),
-         {:ok, refreshed_secret, changed?} <-
-           ensure_fresh_secret(secret, Keyword.get(opts, :force_refresh, false) == true),
-         access_token when is_binary(access_token) and access_token != "" <-
-           non_empty_binary(refreshed_secret["access_token"]),
-         project_id when is_binary(project_id) and project_id != "" <-
-           project_id_from_secret(refreshed_secret),
-         :ok <- if(changed?, do: persist_secret(secret_name, refreshed_secret, opts), else: :ok) do
-      {:ok, Jason.encode!(%{"token" => access_token, "projectId" => project_id})}
+    with {:ok, secret} <- decode_secret(secret_value) do
+      LemonAi.Auth.OAuthSecretResolver.with_refresh_lock(
+        __MODULE__,
+        secret_name,
+        secret,
+        opts,
+        fn latest, opts ->
+          with {:ok, refreshed_secret, changed?} <-
+                 ensure_fresh_secret(latest, Keyword.get(opts, :force_refresh, false) == true),
+               access_token when is_binary(access_token) and access_token != "" <-
+                 non_empty_binary(refreshed_secret["access_token"]),
+               project_id when is_binary(project_id) and project_id != "" <-
+                 project_id_from_secret(refreshed_secret),
+               :ok <-
+                 if(changed?, do: persist_secret(secret_name, refreshed_secret, opts), else: :ok) do
+            {:ok, Jason.encode!(%{"token" => access_token, "projectId" => project_id})}
+          else
+            nil -> {:error, :missing_gemini_project}
+            {:error, reason} -> {:error, reason}
+          end
+        end
+      )
     else
       :not_oauth -> :ignore
-      nil -> {:error, :missing_gemini_project}
-      {:error, reason} -> {:error, reason}
     end
   end
 
@@ -303,8 +314,11 @@ defmodule LemonAi.Auth.GoogleGeminiCliOAuth do
     end
   end
 
-  defp maybe_refresh_secret(secret, false, _refresh_token, _access_token, _force?),
-    do: {:ok, secret, false}
+  defp maybe_refresh_secret(secret, false, _refresh_token, _access_token, _force?) do
+    if unexpired?(secret["expires_at_ms"]),
+      do: {:ok, secret, false},
+      else: {:error, :expired_access_token}
+  end
 
   defp maybe_refresh_secret(secret, true, refresh_token, access_token, force?) do
     case refresh_access_token(secret, refresh_token) do
@@ -318,16 +332,25 @@ defmodule LemonAi.Auth.GoogleGeminiCliOAuth do
 
         {:ok, updated, true}
 
+      {:error, :reauth_required} = error ->
+        error
+
       {:error, reason} ->
-        if not force? and is_binary(access_token) and access_token != "" do
-          Logger.debug(
-            "Google Gemini CLI OAuth refresh failed; using existing token: #{inspect(reason)}"
-          )
+        if not force? and is_binary(access_token) and access_token != "" and
+             unexpired?(secret["expires_at_ms"]) do
+          Logger.debug("Google Gemini CLI OAuth refresh failed; using the unexpired token")
 
           {:ok, secret, false}
         else
           {:error, reason}
         end
+    end
+  end
+
+  defp unexpired?(expires_at_ms) do
+    case parse_integer(expires_at_ms) do
+      ms when is_integer(ms) -> ms > System.system_time(:millisecond)
+      _ -> true
     end
   end
 
@@ -620,17 +643,18 @@ defmodule LemonAi.Auth.GoogleGeminiCliOAuth do
   end
 
   defp post_form(url, body) when is_map(body) do
-    headers = %{"content-type" => "application/x-www-form-urlencoded"}
-
-    case Req.post(url, headers: headers, body: URI.encode_query(body)) do
-      {:ok, %Req.Response{status: status, body: response_body}} when status in 200..299 ->
+    case LemonAi.Auth.OAuthFlow.request(url, form: body) do
+      {:ok, %{status: status, body: response_body}} when status in 200..299 ->
         {:ok, response_body}
 
-      {:ok, %Req.Response{status: status, body: response_body}} ->
-        {:error, {:http_error, status, response_body}}
+      {:ok, %{status: status, body: %{"error" => "invalid_grant"}}} when status in [400, 401] ->
+        {:error, :reauth_required}
 
-      {:error, reason} ->
-        {:error, reason}
+      {:ok, %{status: status, body: response_body}} ->
+        {:error, LemonAi.Auth.OAuthFlow.http_error(status, response_body)}
+
+      {:error, _} = error ->
+        error
     end
   end
 

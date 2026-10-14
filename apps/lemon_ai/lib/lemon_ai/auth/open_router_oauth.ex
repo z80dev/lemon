@@ -72,30 +72,34 @@ defmodule LemonAi.Auth.OpenRouterOAuth do
 
   @doc """
   Parse a pasted redirect URL, `code=` query string, or bare code.
+  Malformed full URLs return a credential-free `:invalid_authorization_input` error.
   """
   @spec parse_authorization_input(String.t()) :: {:ok, String.t()} | {:error, term()}
   def parse_authorization_input(input) when is_binary(input) do
     value = String.trim(input)
 
-    code =
+    result =
       cond do
         String.contains?(value, "://") ->
-          case URI.parse(value) do
-            %URI{query: query} when is_binary(query) -> URI.decode_query(query)["code"]
-            _ -> nil
+          with {:ok, uri} <- OAuthFlow.parse_authorization_uri(value) do
+            {:ok, if(is_binary(uri.query), do: URI.decode_query(uri.query)["code"])}
           end
 
         String.contains?(value, "code=") ->
-          URI.decode_query(value)["code"]
+          {:ok, URI.decode_query(value)["code"]}
 
         true ->
-          value
+          {:ok, value}
       end
 
-    case OAuthFlow.non_empty_binary(code) do
-      nil -> {:error, :missing_authorization_code}
-      code -> {:ok, code}
+    with {:ok, code} <- result do
+      case OAuthFlow.non_empty_binary(code) do
+        nil -> {:error, :missing_authorization_code}
+        code -> {:ok, code}
+      end
     end
+  rescue
+    _ -> {:error, :invalid_authorization_input}
   end
 
   @doc "Exchange an authorization code and its PKCE verifier for an API key."
@@ -146,7 +150,8 @@ defmodule LemonAi.Auth.OpenRouterOAuth do
     if String.starts_with?(input, @key_prefix) and not String.contains?(input, ["://", "="]) do
       with :ok <- validate_api_key(input, opts), do: {:ok, input}
     else
-      with {:ok, code} <- parse_authorization_input(input) do
+      with :ok <- OAuthFlow.validate_redirect_input(input, auth.redirect_uri),
+           {:ok, code} <- parse_authorization_input(input) do
         OAuthFlow.notify_progress(opts, "Exchanging the authorization code for an API key...")
         exchange_code(code, auth.code_verifier, opts)
       end

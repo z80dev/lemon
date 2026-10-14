@@ -612,7 +612,7 @@ defmodule LemonAgent.ModelRuntime.Credentials do
 
           {:error, reason} ->
             Logger.warning(
-              "Failed to resolve OpenAI Codex OAuth secret #{secret_name}: #{inspect(reason)}"
+              "Failed to resolve OpenAI Codex OAuth secret #{secret_name}: #{inspect(safe_reason(reason))}"
             )
 
             nil
@@ -1017,6 +1017,10 @@ defmodule LemonAgent.ModelRuntime.Credentials do
   # Error terms from OAuth helpers can carry provider response bodies; log only
   # their leading tag.
   defp safe_reason(reason) when is_atom(reason), do: reason
-  defp safe_reason(reason) when is_tuple(reason) and is_atom(elem(reason, 0)), do: elem(reason, 0)
+
+  defp safe_reason(reason)
+       when is_tuple(reason) and tuple_size(reason) > 0 and is_atom(elem(reason, 0)),
+       do: elem(reason, 0)
+
   defp safe_reason(_reason), do: :unknown
 end

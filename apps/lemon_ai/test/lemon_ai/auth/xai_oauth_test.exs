@@ -207,7 +207,7 @@ defmodule LemonAi.Auth.XAIOAuthTest do
 
       stub(fn conn, "/oauth2/token", _ -> json(conn, 503, %{"error" => "unavailable"}) end)
 
-      assert {:error, {:http_error, 503, "unavailable"}} =
+      assert {:error, {:http_error, 503}} =
                XAIOAuth.resolve_api_key_from_secret(
                  "llm_xai_api_key",
                  secret,
@@ -277,6 +277,24 @@ defmodule LemonAi.Auth.XAIOAuthTest do
 
       assert_received {:request, "GET", "/.well-known/openid-configuration", _}
     end
+
+    test "a trusted refresh endpoint cannot redirect the refresh token off-domain", %{opts: opts} do
+      stub(fn conn, "/oauth2/token", params ->
+        assert conn.host == "auth.x.ai"
+        assert params["refresh_token"] == "old-refresh"
+
+        conn
+        |> Plug.Conn.put_resp_header("location", "https://attacker.test/token")
+        |> Plug.Conn.send_resp(307, "")
+      end)
+
+      assert {:error, {:http_error, 307}} =
+               XAIOAuth.resolve_api_key_from_secret(
+                 "custom-xai-login",
+                 payload(expires_in_ms: -1_000),
+                 opts
+               )
+    end
   end
 
   test "validate_endpoint pins HTTPS x.ai hosts" do
@@ -285,6 +303,33 @@ defmodule LemonAi.Auth.XAIOAuthTest do
     assert {:error, _} = XAIOAuth.validate_endpoint("http://auth.x.ai/token")
     assert {:error, _} = XAIOAuth.validate_endpoint("https://auth.x.ai.evil.test/token")
     assert {:error, _} = XAIOAuth.validate_endpoint(nil)
+    assert {:error, _} = XAIOAuth.validate_endpoint("https://user:secret@auth.x.ai/token")
+    assert {:error, _} = XAIOAuth.validate_endpoint("https://auth.x.ai:8443/token")
+    assert {:error, _} = XAIOAuth.validate_endpoint("https://auth.x.ai/token#secret")
+    assert {:error, _} = XAIOAuth.validate_endpoint("https://auth.x.ai:bad/token")
+    assert {:error, _} = XAIOAuth.validate_endpoint("https://attacker.test%2F.x.ai/token")
+    assert {:error, _} = XAIOAuth.validate_endpoint("https://attacker.test\\foo.x.ai/token")
+    assert {:error, _} = XAIOAuth.validate_endpoint("https://bad..x.ai/token")
+  end
+
+  test "validate_endpoint accepts explicit HTTPS ports and preserves valid endpoints" do
+    for url <- [
+          "https://x.ai:443/token",
+          "https://AUTH.X.AI:443/oauth2/token",
+          "https://auth.x.ai:0443/token",
+          "https://login.auth.x.ai/token?audience=https%3A%2F%2Fapi.x.ai"
+        ] do
+      assert {:ok, ^url} = XAIOAuth.validate_endpoint(url)
+    end
+  end
+
+  test "validate_endpoint rejects malformed and non-HTTPS authority ports" do
+    for port <- ["", "bad", "443junk", "443:443", "+443", "-443", "443 ", "444", "65536"] do
+      url = "https://auth.x.ai:#{port}/token"
+
+      assert {:error, :invalid_xai_endpoint} = XAIOAuth.validate_endpoint(url),
+             "accepted invalid endpoint: #{inspect(url)}"
+    end
   end
 
   defp payload(expires_in_ms: expires_in_ms) do

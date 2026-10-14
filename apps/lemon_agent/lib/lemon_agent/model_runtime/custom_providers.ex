@@ -130,8 +130,9 @@ defmodule LemonAgent.ModelRuntime.CustomProviders do
   Options:
 
     * `:discover` - list discovery providers' endpoints (default `false`).
-    * `:discovery_opts` - extra options for `LemonAi.Models.Discovery.discover/3`
-      (for example `:req_options` or `:force_refresh`).
+    * `:discovery_opts` - request/cache tuning (`:req_options`, `:timeout_ms`,
+      `:ttl_ms`, `:force_refresh`). Model identity, wire API and defaults come
+      from the provider config, not discovery option overrides.
   """
   @spec models(map() | nil, keyword()) :: [Model.t()]
   def models(providers_or_cfg, opts \\ []) do
@@ -171,7 +172,7 @@ defmodule LemonAgent.ModelRuntime.CustomProviders do
         nil ->
           if open_model_set?(cfg),
             do:
-              cached_discovered_model(id, cfg, model_id) ||
+              cached_discovered_model(providers_or_cfg, id, cfg, model_id) ||
                 build_custom_model(id, cfg, %{id: model_id})
 
         entry ->
@@ -230,18 +231,12 @@ defmodule LemonAgent.ModelRuntime.CustomProviders do
 
     if kind && api && base_url do
       opts =
-        [
-          api_key: Credentials.resolve_provider_api_key(id, providers_or_cfg),
-          provider: id,
-          api: api,
-          headers: headers(cfg),
-          model_defaults: discovered_model_defaults(cfg)
-        ]
-        |> maybe_keyword(:timeout_ms, positive_integer(value(cfg, :discovery_timeout_ms)))
-        |> Keyword.merge(discovery_opts)
+        discovery_opts
+        |> Keyword.take([:req_options, :force_refresh, :ttl_ms, :timeout_ms])
+        |> Keyword.merge(discovery_options(providers_or_cfg, id, cfg))
 
       case LemonAi.Models.Discovery.discover(kind, base_url, opts) do
-        {:ok, models} -> Enum.map(models, &apply_custom_identity(&1, id, cfg))
+        {:ok, models} -> models
         {:error, _reason} -> []
       end
     else
@@ -258,31 +253,26 @@ defmodule LemonAgent.ModelRuntime.CustomProviders do
     }
   end
 
-  # Discovered rows keep the endpoint's metadata and wire base URL (Ollama
-  # models use `{root}/v1`) but always carry the config identity, headers and
-  # keyless flag.
-  defp apply_custom_identity(%Model{} = model, id, cfg) do
-    compat =
-      case compat(cfg) do
-        nil -> model.compat
-        keyless -> Map.merge(model.compat || %{}, keyless)
-      end
-
-    %{
-      model
-      | provider: id,
-        headers: Map.merge(headers(cfg), model.headers),
-        compat: compat
-    }
+  defp discovery_options(providers_or_cfg, id, cfg) do
+    [
+      api_key: Credentials.resolve_provider_api_key(id, providers_or_cfg),
+      provider: id,
+      api: api_atom(value(cfg, :api)),
+      headers: headers(cfg),
+      model_defaults: discovered_model_defaults(cfg)
+    ]
+    |> maybe_keyword(:timeout_ms, positive_integer(value(cfg, :discovery_timeout_ms)))
   end
 
-  # Metadata from the last successful listing (cache only, no network access).
-  defp cached_discovered_model(id, cfg, model_id) do
-    if discovery_kind(cfg) do
-      case LemonAi.Models.Discovery.cached_model(id, model_id) do
-        %Model{} = model -> apply_custom_identity(model, id, cfg)
-        nil -> nil
-      end
+  # Reuse metadata only for the current credential, endpoint and wire config.
+  defp cached_discovered_model(providers_or_cfg, id, cfg, model_id) do
+    if kind = discovery_kind(cfg) do
+      LemonAi.Models.Discovery.cached_model(
+        kind,
+        non_empty(value(cfg, :base_url)),
+        model_id,
+        discovery_options(providers_or_cfg, id, cfg)
+      )
     end
   end
 
@@ -321,7 +311,13 @@ defmodule LemonAgent.ModelRuntime.CustomProviders do
 
   defp build_builtin_model(registry, cfg, entry) do
     id = non_empty(value(entry, :id))
-    base = id && (LemonAi.Models.get_model(registry, id) || template_model(registry))
+
+    base =
+      if id do
+        if LemonAi.Models.Presets.preset?(registry),
+          do: LemonAi.Models.Presets.model(registry, id),
+          else: LemonAi.Models.get_model(registry, id) || template_model(registry)
+      end
 
     if base do
       %{

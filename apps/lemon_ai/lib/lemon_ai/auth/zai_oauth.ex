@@ -6,8 +6,8 @@ defmodule LemonAi.Auth.ZaiOAuth do
   `chat.z.ai`, then a JSON token exchange on `zcode.z.ai` that returns a
   short-lived OAuth access token. Z.AI only accepts ZCode's
   `zcode://zai-auth/callback` redirect for this client, which Lemon cannot
-  receive, so `login_device_flow/1` asks for the final redirect URL (or code)
-  through `:on_prompt`.
+  receive, so `login_device_flow/1` asks for the final redirect URL (or
+  `code#state`) through `:on_prompt`. The returned state is required.
 
   The OAuth token is then exchanged at the business-login endpoint, and the
   business APIs find or create an API key named `lemon` in the account's
@@ -64,10 +64,11 @@ defmodule LemonAi.Auth.ZaiOAuth do
 
     instructions =
       "Sign in to Z.AI in your browser. The browser then tries to open ZCode " <>
-        "(zcode://...); copy that final address or the code from the address bar."
+        "(zcode://...); copy that final address including its state."
 
     with :ok <- OAuthFlow.notify_auth(opts, auth.authorize_url, instructions),
          {:ok, input} <- prompt(opts),
+         :ok <- OAuthFlow.validate_redirect_input(input, auth.redirect_uri),
          {:ok, %{code: code, state: state}} <- parse_authorization_input(input),
          :ok <- ensure_state(auth.state, state),
          :ok <- OAuthFlow.notify_progress(opts, "Exchanging the authorization code..."),
@@ -80,40 +81,41 @@ defmodule LemonAi.Auth.ZaiOAuth do
 
   @doc """
   Parse a pasted redirect URL, `code=` query string, `code#state`, or bare code.
+  Malformed full URLs return a credential-free `:invalid_authorization_input` error.
   """
   @spec parse_authorization_input(String.t()) ::
           {:ok, %{code: String.t(), state: String.t() | nil}} | {:error, term()}
   def parse_authorization_input(input) when is_binary(input) do
     value = String.trim(input)
 
-    {code, state} =
+    result =
       cond do
         String.contains?(value, "://") ->
-          case URI.parse(value) do
-            %URI{query: query} when is_binary(query) ->
-              params = URI.decode_query(query)
-              {params["code"], params["state"]}
-
-            _ ->
-              {nil, nil}
+          with {:ok, uri} <- OAuthFlow.parse_authorization_uri(value) do
+            params = if is_binary(uri.query), do: URI.decode_query(uri.query), else: %{}
+            {:ok, {params["code"], params["state"]}}
           end
 
         String.contains?(value, "code=") ->
           params = URI.decode_query(value)
-          {params["code"], params["state"]}
+          {:ok, {params["code"], params["state"]}}
 
         String.contains?(value, "#") ->
           [code, state] = String.split(value, "#", parts: 2)
-          {code, state}
+          {:ok, {code, state}}
 
         true ->
-          {value, nil}
+          {:ok, {value, nil}}
       end
 
-    case OAuthFlow.non_empty_binary(code) do
-      nil -> {:error, :missing_authorization_code}
-      code -> {:ok, %{code: code, state: OAuthFlow.non_empty_binary(state)}}
+    with {:ok, {code, state}} <- result do
+      case OAuthFlow.non_empty_binary(code) do
+        nil -> {:error, :missing_authorization_code}
+        code -> {:ok, %{code: code, state: OAuthFlow.non_empty_binary(state)}}
+      end
     end
+  rescue
+    _ -> {:error, :invalid_authorization_input}
   end
 
   @doc "Exchange an authorization code for the short-lived Z.AI OAuth access token."
@@ -130,8 +132,14 @@ defmodule LemonAi.Auth.ZaiOAuth do
     url = setting(opts, :token_url, "ZAI_OAUTH_TOKEN_URL", @token_url)
 
     with {:ok, response} <- OAuthFlow.request(url, [json: body], opts),
-         {:ok, %{} = body} <- unwrap(response, :token_exchange) do
-      case OAuthFlow.non_empty_binary(get_in(body, ["data", "zai", "access_token"])) do
+         {:ok, body} <- unwrap(response, :token_exchange) do
+      token =
+        case body do
+          %{"data" => %{"zai" => %{"access_token" => value}}} -> value
+          _ -> nil
+        end
+
+      case OAuthFlow.non_empty_binary(token) do
         nil -> {:error, :missing_access_token}
         token -> {:ok, token}
       end
@@ -156,7 +164,7 @@ defmodule LemonAi.Auth.ZaiOAuth do
            get(base <> "/api/biz/customer/getCustomerInfo", auth, opts, :customer),
          {:ok, org_id, project_id} <- default_project(customer),
          keys_url =
-           "#{base}/api/biz/v1/organization/#{URI.encode(org_id)}/projects/#{URI.encode(project_id)}/api_keys",
+           "#{base}/api/biz/v1/organization/#{URI.encode(org_id, &URI.char_unreserved?/1)}/projects/#{URI.encode(project_id, &URI.char_unreserved?/1)}/api_keys",
          {:ok, keys} <- get(keys_url, auth, opts, :api_key_list),
          {:ok, record} <- find_or_create_key(keys, keys_url, auth, opts),
          {:ok, api_key} <- string_field(record, "apiKey", :missing_api_key),
@@ -174,7 +182,7 @@ defmodule LemonAi.Auth.ZaiOAuth do
 
   # ── Business API helpers ───────────────────────────────────────────────────
 
-  defp biz_token(login) do
+  defp biz_token(login) when is_map(login) do
     case OAuthFlow.non_empty_binary(login["access_token"]) ||
            OAuthFlow.non_empty_binary(login["accessToken"]) do
       nil -> {:error, :missing_business_token}
@@ -182,7 +190,9 @@ defmodule LemonAi.Auth.ZaiOAuth do
     end
   end
 
-  defp default_project(customer) do
+  defp biz_token(_), do: {:error, :missing_business_token}
+
+  defp default_project(customer) when is_map(customer) do
     orgs = list(customer["organizations"])
     org = Enum.find(orgs, & &1["isDefault"]) || List.first(orgs) || %{}
     projects = list(org["projects"])
@@ -196,6 +206,8 @@ defmodule LemonAi.Auth.ZaiOAuth do
         {:error, :no_zai_project}
     end
   end
+
+  defp default_project(_), do: {:error, :no_zai_project}
 
   defp find_or_create_key(keys, keys_url, auth, opts) do
     case Enum.find(key_list(keys), &(&1["name"] == @key_name)) do
@@ -244,7 +256,7 @@ defmodule LemonAi.Auth.ZaiOAuth do
         {:error, {:zai_request_failed, operation, :invalid_response}}
 
       is_map(body) and (body["success"] == false or not success_code?(body["code"])) ->
-        {:error, {:zai_request_failed, operation, body["code"]}}
+        {:error, {:zai_request_failed, operation, error_code(body["code"])}}
 
       true ->
         {:ok, body}
@@ -257,6 +269,9 @@ defmodule LemonAi.Auth.ZaiOAuth do
   defp success_code?(nil), do: true
   defp success_code?(code) when code in [0, 200, "0", "200"], do: true
   defp success_code?(_), do: false
+
+  defp error_code(code) when is_integer(code), do: code
+  defp error_code(_), do: :provider_error
 
   defp string_field(map, key, error) when is_map(map) do
     case OAuthFlow.non_empty_binary(map[key]) do
@@ -279,7 +294,7 @@ defmodule LemonAi.Auth.ZaiOAuth do
   defp prompt(opts) do
     case Keyword.get(opts, :on_prompt) do
       prompt when is_function(prompt, 1) ->
-        message = "Paste the final redirect URL (zcode://zai-auth/callback?code=...) or the code:"
+        message = "Paste the final redirect URL including state, or code#state:"
 
         case prompt.(%{message: message, placeholder: "zcode://zai-auth/callback?code=..."})
              |> OAuthFlow.normalize_prompt_input() do
@@ -292,7 +307,7 @@ defmodule LemonAi.Auth.ZaiOAuth do
     end
   end
 
-  defp ensure_state(_expected, nil), do: :ok
+  defp ensure_state(_expected, nil), do: {:error, :oauth_state_mismatch}
   defp ensure_state(expected, expected), do: :ok
   defp ensure_state(_expected, _provided), do: {:error, :oauth_state_mismatch}
 

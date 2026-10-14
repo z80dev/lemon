@@ -93,6 +93,7 @@ defmodule LemonAi.Auth.KimiCodeOAuth do
       end,
       interval_s: device.interval,
       expires_in_s: device.expires_in,
+      deadline_ms: device.expires_at_ms,
       sleep: Keyword.get(opts, :sleep, &Process.sleep/1)
     )
   end

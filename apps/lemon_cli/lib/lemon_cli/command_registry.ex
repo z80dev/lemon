@@ -180,7 +180,7 @@ defmodule LemonCli.CommandRegistry do
           ["--non-interactive"],
           "Require --token, --auth device or --auth codex-cli"
         ),
-        option("--secret-name NAME", ["--secret-name"], "Encrypted secret name"),
+        option("--secret-name NAME", ["--secret-name"], "Secret to store, inspect, or log out"),
         option("--model MODEL", ["--model"], "Default model with --set-default"),
         option("--set-default", ["--set-default"], "Set the provider and model as defaults"),
         option("--config-path PATH", ["--config-path"], "Config file to update"),

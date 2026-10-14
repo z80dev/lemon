@@ -102,16 +102,28 @@ defmodule LemonAi.Auth.GitHubCopilotOAuth do
 
   def resolve_api_key_from_secret(secret_name, secret_value, opts)
       when is_binary(secret_name) and is_binary(secret_value) do
-    with {:ok, secret} <- decode_secret(secret_value),
-         {:ok, refreshed_secret, changed?} <- ensure_fresh_secret(secret, force_refresh?(opts)),
-         access_token when is_binary(access_token) and access_token != "" <-
-           non_empty_binary(refreshed_secret["access_token"]),
-         :ok <- if(changed?, do: persist_secret(secret_name, refreshed_secret, opts), else: :ok) do
-      {:ok, access_token}
+    with {:ok, secret} <- decode_secret(secret_value) do
+      LemonAi.Auth.OAuthSecretResolver.with_refresh_lock(
+        __MODULE__,
+        secret_name,
+        secret,
+        opts,
+        fn latest, opts ->
+          with {:ok, refreshed_secret, changed?} <-
+                 ensure_fresh_secret(latest, force_refresh?(opts)),
+               access_token when is_binary(access_token) and access_token != "" <-
+                 non_empty_binary(refreshed_secret["access_token"]),
+               :ok <-
+                 if(changed?, do: persist_secret(secret_name, refreshed_secret, opts), else: :ok) do
+            {:ok, access_token}
+          else
+            nil -> {:error, :missing_access_token}
+            {:error, reason} -> {:error, reason}
+          end
+        end
+      )
     else
       :not_oauth -> :ignore
-      nil -> {:error, :missing_access_token}
-      {:error, reason} -> {:error, reason}
     end
   end
 
@@ -255,6 +267,9 @@ defmodule LemonAi.Auth.GitHubCopilotOAuth do
       should_refresh? ->
         refresh_copilot_secret(secret, refresh_token, access_token, force?)
 
+      not unexpired?(expires_at_ms) ->
+        {:error, :expired_access_token}
+
       true ->
         {:ok, secret, false}
     end
@@ -275,7 +290,7 @@ defmodule LemonAi.Auth.GitHubCopilotOAuth do
       {:error, reason} ->
         if not force? and is_binary(access_token) and access_token != "" and
              unexpired?(secret["expires_at_ms"]) do
-          Logger.debug("GitHub Copilot refresh failed; using existing token: #{inspect(reason)}")
+          Logger.debug("GitHub Copilot refresh failed; using the unexpired token")
 
           {:ok, secret, false}
         else
@@ -327,27 +342,27 @@ defmodule LemonAi.Auth.GitHubCopilotOAuth do
         normalize_headers(@copilot_headers)
       )
 
-    case Req.get(urls.copilot_token_url, headers: headers) do
-      {:ok, %Req.Response{status: status, body: body}} when status in 200..299 ->
+    case LemonAi.Auth.OAuthFlow.request(urls.copilot_token_url, method: :get, headers: headers) do
+      {:ok, %{status: status, body: body}} when status in 200..299 ->
         token = body_value(body, "token")
         expires_at = body_value(body, "expires_at") |> parse_integer()
 
         cond do
           !is_binary(token) or token == "" ->
-            {:error, {:invalid_copilot_token_response, body}}
+            {:error, :invalid_copilot_token_response}
 
           !is_integer(expires_at) ->
-            {:error, {:invalid_copilot_expiry, body}}
+            {:error, :invalid_copilot_expiry}
 
           true ->
             {:ok, %{token: token, expires_at_ms: expires_at * 1000 - @near_expiry_ms}}
         end
 
-      {:ok, %Req.Response{status: status, body: body}} ->
-        {:error, {:copilot_token_http_error, status, body}}
+      {:ok, %{status: status, body: body}} ->
+        {:error, {:copilot_token_http_error, LemonAi.Auth.OAuthFlow.http_error(status, body)}}
 
-      {:error, reason} ->
-        {:error, reason}
+      {:error, _} = error ->
+        error
     end
   end
 
@@ -398,7 +413,12 @@ defmodule LemonAi.Auth.GitHubCopilotOAuth do
         normalize_headers(@copilot_headers)
       )
 
-    case Req.post(url, headers: headers, json: %{"state" => "enabled"}) do
+    case Req.post(url,
+           headers: headers,
+           json: %{"state" => "enabled"},
+           redirect: false,
+           retry: false
+         ) do
       {:ok, %Req.Response{status: status}} when status in 200..299 -> true
       _ -> false
     end
@@ -510,15 +530,15 @@ defmodule LemonAi.Auth.GitHubCopilotOAuth do
   defp parse_device_code_response(other), do: {:error, {:invalid_device_code_response, other}}
 
   defp post_json(url, body, headers) do
-    case Req.post(url, json: body, headers: headers) do
-      {:ok, %Req.Response{status: status, body: response_body}} when status in 200..299 ->
+    case LemonAi.Auth.OAuthFlow.request(url, json: body, headers: headers) do
+      {:ok, %{status: status, body: response_body}} when status in 200..299 ->
         {:ok, response_body}
 
-      {:ok, %Req.Response{status: status, body: response_body}} ->
-        {:error, {:http_error, status, response_body}}
+      {:ok, %{status: status, body: response_body}} ->
+        {:error, LemonAi.Auth.OAuthFlow.http_error(status, response_body)}
 
-      {:error, reason} ->
-        {:error, reason}
+      {:error, _} = error ->
+        error
     end
   end
 

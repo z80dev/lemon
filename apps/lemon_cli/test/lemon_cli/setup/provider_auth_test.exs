@@ -56,7 +56,10 @@ defmodule LemonCli.Setup.ProviderAuthTest do
 
     output = collected_output()
     assert output =~ "Auth source: oauth (subscription login)"
-    assert output =~ "Stored login: llm_anthropic_api_key (refreshable login, user@example.com, Personal)"
+
+    assert output =~
+             "Stored login: llm_anthropic_api_key (refreshable login, user@example.com, Personal)"
+
     assert output =~ "Access token: expires in 7h"
     assert output =~ "Sign in again by: "
     assert output =~ "ANTHROPIC_API_KEY: set, ignored while auth_source = \"oauth\""
@@ -71,7 +74,11 @@ defmodule LemonCli.Setup.ProviderAuthTest do
   } do
     store_login()
 
-    assert :ok = Provider.run(["--provider", "anthropic", "--logout", "--config-path", config_path], io())
+    assert :ok =
+             Provider.run(
+               ["--provider", "anthropic", "--logout", "--config-path", config_path],
+               io()
+             )
 
     assert {:error, _} = Secrets.get("llm_anthropic_api_key")
     content = File.read!(config_path)
@@ -95,6 +102,34 @@ defmodule LemonCli.Setup.ProviderAuthTest do
 
     assert {:ok, "sk-ant-api03-raw"} = Secrets.get("llm_anthropic_api_key")
     assert collected_output() =~ "does not hold an OAuth login"
+  end
+
+  test "named status and logout target only that account, not the configured login", %{
+    config_path: config_path
+  } do
+    store_login()
+    {:ok, active} = Secrets.get("llm_anthropic_api_key")
+    alternate = Jason.decode!(active) |> Map.put("account_email", "work@example.com")
+    {:ok, _} = Secrets.set("anthropic_work", Jason.encode!(alternate))
+    original_config = File.read!(config_path)
+    args = ["anthropic", "--config-path", config_path, "--secret-name", "anthropic_work"]
+
+    assert :ok = Provider.run(args ++ ["--status"], io())
+    output = collected_output()
+    assert output =~ "work@example.com"
+    refute output =~ "user@example.com"
+    assert output =~ "Credentials usable: yes"
+    refute output =~ "sk-ant-oat01"
+
+    assert :ok = Provider.run(args ++ ["--logout"], io())
+    assert {:error, _} = Secrets.get("anthropic_work")
+    assert {:ok, ^active} = Secrets.get("llm_anthropic_api_key")
+    assert File.read!(config_path) == original_config
+
+    assert :ok = Provider.run(args ++ ["--status"], io())
+    output = collected_output()
+    assert output =~ "Credentials usable: no"
+    refute output =~ "user@example.com"
   end
 
   test "status and logout require a provider" do

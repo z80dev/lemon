@@ -46,6 +46,18 @@ what in-repo code has been using.
 
 ### Fixed
 
+- OAuth token requests refuse redirects and redact untrusted endpoint error
+  payloads. Device-code deadlines include HTTP and authorization callback time;
+  full OpenRouter/Z.AI callbacks bind the redirect endpoint, and Z.AI requires state.
+- Copilot, Antigravity and Gemini CLI secret resolution now serializes refresh
+  and persistence per stored login, reloads waiting callers, and rejects
+  deleted/replaced logins and expired tokens. Google revoked refresh grants
+  require reauthentication.
+- Model discovery caches are scoped to endpoint, API, credential, headers and
+  model defaults; cache identifiers contain a digest rather than auth values.
+  Redirects and credential/query-bearing discovery URLs are rejected.
+- Custom Google provider options no longer read the built-in Google account's
+  key or URL. Custom Anthropic and Google models honor explicit keyless auth.
 - The Anthropic, GitHub Copilot, Google Antigravity and Google Gemini CLI
   OAuth helpers no longer report success when a refreshed secret could not be
   stored: a `:persist_secret` callback returning `{:error, _}` (or raising)

@@ -2,8 +2,8 @@ defmodule LemonAi.Auth.OAuthFlow do
   @moduledoc """
   Shared machinery for OAuth helpers that store a refreshable secret payload.
 
-  - `request/3` performs one token-endpoint style HTTP call with retries
-    disabled, a bounded timeout and caller `:req_options` merged in.
+  - `request/3` performs one token-endpoint style HTTP call with retries and
+    redirects disabled, a bounded timeout and caller `:req_options` merged in.
   - `poll_device_token/2` runs RFC 8628 device-code polling: it honors the
     provider interval, adds five seconds per `slow_down`, and stops at the
     device-code expiry. `:sleep` (default `Process.sleep/1`) is injectable.
@@ -24,6 +24,9 @@ defmodule LemonAi.Auth.OAuthFlow do
   @default_expires_in_s 900
   @slow_down_increment_ms 5_000
   @request_timeout_ms 30_000
+  @oauth_error_codes ~w(invalid_request invalid_client invalid_grant unauthorized_client
+                        unsupported_grant_type invalid_scope access_denied server_error
+                        temporarily_unavailable authorization_pending slow_down expired_token)
 
   @type response :: %{status: non_neg_integer(), body: map() | String.t()}
   @type poll_result :: {:ok, map()} | :pending | :slow_down | {:error, term()}
@@ -40,7 +43,7 @@ defmodule LemonAi.Auth.OAuthFlow do
 
   @doc """
   Perform one HTTP request. `opts` takes `:method` (default `:post`), `:form`,
-  `:json`, `:headers` and `:req_options`. JSON bodies are decoded to maps.
+  `:json`, `:headers` and `:req_options`. Redirects are disabled. JSON bodies are decoded to maps.
   Transport failures return `{:error, {:transport_error, reason}}` without
   request details.
   """
@@ -54,6 +57,7 @@ defmodule LemonAi.Auth.OAuthFlow do
         url: url,
         headers: Keyword.get(request_opts, :headers, []),
         retry: false,
+        redirect: false,
         receive_timeout: @request_timeout_ms
       ]
       |> put_body(request_opts)
@@ -132,7 +136,7 @@ defmodule LemonAi.Auth.OAuthFlow do
   @doc """
   Map a refresh-grant response: `invalid_grant` means the login is gone
   (`{:error, :reauth_required}`); other failures keep their status and
-  OAuth error code only.
+  allowlisted OAuth error code only.
   """
   @spec refresh_response(response(), String.t() | nil) ::
           {:ok, map()} | {:error, term()}
@@ -147,9 +151,9 @@ defmodule LemonAi.Auth.OAuthFlow do
 
   def refresh_response(%{status: status, body: body}, _), do: {:error, http_error(status, body)}
 
-  @doc "Credential-free error term for a failed HTTP response."
+  @doc "Credential-free error term; only standard OAuth error codes are retained."
   @spec http_error(non_neg_integer(), term()) :: tuple()
-  def http_error(status, %{"error" => code}) when is_binary(code),
+  def http_error(status, %{"error" => code}) when code in @oauth_error_codes,
     do: {:http_error, status, code}
 
   def http_error(status, _body), do: {:http_error, status}
@@ -160,12 +164,15 @@ defmodule LemonAi.Auth.OAuthFlow do
   Parse a standard device authorization response.
   """
   @spec parse_device_response(response()) :: {:ok, map()} | {:error, term()}
-  def parse_device_response(%{status: status, body: body}) when status in 200..299 do
+  def parse_device_response(%{status: status, body: body})
+      when status in 200..299 and is_map(body) do
     device_code = non_empty_binary(body["device_code"])
     user_code = non_empty_binary(body["user_code"])
     verification_uri = non_empty_binary(body["verification_uri"])
+    expires_in = parse_integer(body["expires_in"])
 
-    if device_code && user_code && verification_uri do
+    if device_code && user_code && verification_uri &&
+         (is_nil(body["expires_in"]) or (is_integer(expires_in) and expires_in > 0)) do
       {:ok,
        %{
          device_code: device_code,
@@ -173,12 +180,18 @@ defmodule LemonAi.Auth.OAuthFlow do
          verification_uri: verification_uri,
          verification_uri_complete: non_empty_binary(body["verification_uri_complete"]),
          interval: parse_integer(body["interval"]),
-         expires_in: parse_integer(body["expires_in"])
+         expires_in: expires_in,
+         expires_at_ms:
+           System.monotonic_time(:millisecond) +
+             (expires_in || @default_expires_in_s) * 1000
        }}
     else
       {:error, :invalid_device_authorization_response}
     end
   end
+
+  def parse_device_response(%{status: status}) when status in 200..299,
+    do: {:error, :invalid_device_authorization_response}
 
   def parse_device_response(%{status: status, body: body}),
     do: {:error, {:device_authorization_failed, http_error(status, body)}}
@@ -206,39 +219,69 @@ defmodule LemonAi.Auth.OAuthFlow do
   Poll `poll_fun` until it completes, fails, or the device code expires.
 
   Options: `:interval_s` and `:expires_in_s` from the device response, and
-  `:sleep` (a 1-arity function receiving milliseconds). Expiry counts the time
-  spent waiting between polls; a code that expires during a request is
-  reported by the server as `expired_token`.
+  `:sleep` (a 1-arity function receiving milliseconds), and optionally an absolute
+  monotonic `:deadline_ms` captured at device authorization. Expiry includes
+  request and callback time. `:now` is an injectable monotonic millisecond clock.
   """
   @spec poll_device_token((-> poll_result()), keyword()) :: {:ok, map()} | {:error, term()}
   def poll_device_token(poll_fun, opts) when is_function(poll_fun, 0) do
     interval_s = positive(Keyword.get(opts, :interval_s)) || @default_interval_s
-    expires_in_s = positive(Keyword.get(opts, :expires_in_s)) || @default_expires_in_s
+    expires_in_s = parse_integer(Keyword.get(opts, :expires_in_s)) || @default_expires_in_s
     sleep = Keyword.get(opts, :sleep, &Process.sleep/1)
+    now = Keyword.get(opts, :now, fn -> System.monotonic_time(:millisecond) end)
+    lifetime_ms = expires_in_s * 1000
+    deadline_ms = Keyword.get(opts, :deadline_ms) || now.() + lifetime_ms
 
-    do_poll(poll_fun, max(@min_interval_ms, interval_s * 1000), expires_in_s * 1000, sleep, false)
+    do_poll(
+      poll_fun,
+      max(@min_interval_ms, interval_s * 1000),
+      lifetime_ms,
+      sleep,
+      now,
+      deadline_ms,
+      false
+    )
   end
 
-  defp do_poll(poll_fun, interval_ms, remaining_ms, sleep, slowed?) do
-    case poll_fun.() do
-      {:ok, _body} = done ->
-        done
+  defp do_poll(poll_fun, interval_ms, remaining_ms, sleep, now, deadline_ms, slowed?) do
+    started_at = now.()
+    remaining_ms = min(remaining_ms, deadline_ms - started_at)
 
-      {:error, _reason} = error ->
-        error
+    if remaining_ms <= 0 do
+      {:error, timeout_reason(slowed?)}
+    else
+      result = poll_fun.()
+      remaining_ms = min(remaining_ms - max(now.() - started_at, 0), deadline_ms - now.())
 
-      result when result in [:pending, :slow_down] ->
-        {interval_ms, slowed?} =
-          if result == :slow_down,
-            do: {interval_ms + @slow_down_increment_ms, true},
-            else: {interval_ms, slowed?}
+      case result do
+        {:ok, _body} = done ->
+          if remaining_ms > 0, do: done, else: {:error, timeout_reason(slowed?)}
 
-        if remaining_ms <= interval_ms do
-          {:error, timeout_reason(slowed?)}
-        else
-          sleep.(interval_ms)
-          do_poll(poll_fun, interval_ms, remaining_ms - interval_ms, sleep, slowed?)
-        end
+        {:error, _reason} = error ->
+          error
+
+        result when result in [:pending, :slow_down] ->
+          {interval_ms, slowed?} =
+            if result == :slow_down,
+              do: {interval_ms + @slow_down_increment_ms, true},
+              else: {interval_ms, slowed?}
+
+          if remaining_ms <= interval_ms do
+            {:error, timeout_reason(slowed?)}
+          else
+            sleep.(interval_ms)
+
+            do_poll(
+              poll_fun,
+              interval_ms,
+              remaining_ms - interval_ms,
+              sleep,
+              now,
+              deadline_ms,
+              slowed?
+            )
+          end
+      end
     end
   end
 
@@ -370,6 +413,57 @@ defmodule LemonAi.Auth.OAuthFlow do
   end
 
   # ── Callbacks and helpers ──────────────────────────────────────────────────
+  @doc """
+  Parse a full authorization URI without discarding malformed authority suffixes.
+
+  The authority must contain a host and, when specified, a nonempty numeric
+  port in range. Parsing failures expose only a credential-free error atom.
+  Callback endpoint, userinfo and fragment checks remain in `validate_redirect_input/2`.
+  """
+  @spec parse_authorization_uri(String.t()) ::
+          {:ok, URI.t()} | {:error, :invalid_authorization_input}
+  def parse_authorization_uri(input) do
+    with %URI{scheme: scheme, host: host, authority: authority, port: port} = uri <-
+           URI.parse(input),
+         true <- is_binary(scheme) and is_binary(host) and host != "",
+         true <- is_binary(authority) and valid_authority?(authority),
+         true <- is_nil(port) or port in 0..65_535,
+         {:ok, validated} <- URI.new(URI.to_string(uri)) do
+      {:ok, validated}
+    else
+      _ -> {:error, :invalid_authorization_input}
+    end
+  rescue
+    _ -> {:error, :invalid_authorization_input}
+  end
+
+  # URI.parse/1 retains the raw authority even when it drops a malformed port.
+  # Validate it before serializing, then validate the normalized URI. Normalizing
+  # valid decimal ports avoids URI.new/1's five-digit limit on unnormalized input.
+  defp valid_authority?(authority) do
+    Regex.match?(~r/\A(?:[^@]*@)?(?:\[[^\[\]]+\]|[^:@\[\]]+)(?::[0-9]+)?\z/, authority)
+  end
+
+  @doc "Reject a full callback URL unless it matches the configured redirect endpoint."
+  @spec validate_redirect_input(String.t(), String.t()) :: :ok | {:error, atom()}
+  def validate_redirect_input(input, redirect_uri) do
+    if String.contains?(input, "://") do
+      with {:ok, actual} <- parse_authorization_uri(input),
+           {:ok, expected} <- parse_authorization_uri(redirect_uri) do
+        if actual.scheme == expected.scheme and actual.host == expected.host and
+             actual.port == expected.port and actual.path == expected.path and
+             is_nil(actual.userinfo) and is_nil(actual.fragment) do
+          :ok
+        else
+          {:error, :oauth_redirect_mismatch}
+        end
+      end
+    else
+      :ok
+    end
+  rescue
+    _ -> {:error, :invalid_authorization_input}
+  end
 
   @doc "Invoke `:on_auth` with the URL and instructions; required for interactive flows."
   @spec notify_auth(keyword(), String.t(), String.t()) :: :ok | {:error, :auth_callback_required}

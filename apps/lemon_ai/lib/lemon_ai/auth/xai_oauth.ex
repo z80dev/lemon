@@ -9,8 +9,8 @@ defmodule LemonAi.Auth.XAIOAuth do
   is stored for the existing `xai` provider.
 
   The discovered token endpoint receives every future refresh token, so it must
-  be HTTPS on `x.ai` or a subdomain. It is stored in the payload and validated
-  again before each refresh.
+  be HTTPS on `x.ai` or a subdomain, on port 443 without URL credentials or a
+  fragment. It is stored in the payload and validated again before each refresh.
 
   `resolve_api_key_from_secret/3` refreshes five minutes before expiry or on
   `force_refresh: true`; see `LemonAi.Auth.OAuthFlow` for locking and
@@ -101,6 +101,7 @@ defmodule LemonAi.Auth.XAIOAuth do
       end,
       interval_s: device.interval,
       expires_in_s: device.expires_in,
+      deadline_ms: device.expires_at_ms,
       sleep: Keyword.get(opts, :sleep, &Process.sleep/1)
     )
   end
@@ -169,21 +170,37 @@ defmodule LemonAi.Auth.XAIOAuth do
   def resolve_api_key_from_secret(_, _, _), do: {:error, :invalid_secret_value}
 
   @doc """
-  Validate that an OAuth endpoint is HTTPS on `x.ai` or a subdomain.
+  Validate an HTTPS x.ai endpoint on port 443 without URL credentials or a fragment.
+
+  The complete authority must contain only a DNS hostname and an optional numeric
+  port; `URI.parse/1` alone can discard malformed port suffixes.
   """
   @spec validate_endpoint(term()) :: {:ok, String.t()} | {:error, :invalid_xai_endpoint}
   def validate_endpoint(url) when is_binary(url) do
     case URI.parse(url) do
-      %URI{scheme: "https", host: host} when is_binary(host) ->
-        host = String.downcase(host)
+      %URI{
+        scheme: "https",
+        host: host,
+        authority: authority,
+        port: 443,
+        userinfo: nil,
+        fragment: nil
+      }
+      when is_binary(host) and is_binary(authority) ->
+        authority = String.downcase(authority)
 
-        if host == "x.ai" or String.ends_with?(host, ".x.ai"),
-          do: {:ok, url},
-          else: {:error, :invalid_xai_endpoint}
+        if Regex.match?(
+             ~r/\A(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)*x\.ai(?::[0-9]+)?\z/,
+             authority
+           ),
+           do: {:ok, url},
+           else: {:error, :invalid_xai_endpoint}
 
       _ ->
         {:error, :invalid_xai_endpoint}
     end
+  rescue
+    _ -> {:error, :invalid_xai_endpoint}
   end
 
   def validate_endpoint(_), do: {:error, :invalid_xai_endpoint}

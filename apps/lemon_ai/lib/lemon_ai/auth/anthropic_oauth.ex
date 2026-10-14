@@ -633,6 +633,7 @@ defmodule LemonAi.Auth.AnthropicOAuth do
            json: body,
            headers: [{"accept", "application/json"}],
            retry: false,
+           redirect: false,
            receive_timeout: @token_timeout_ms
          ) do
       {:ok, %Req.Response{status: status, body: response}} when status in 200..299 ->

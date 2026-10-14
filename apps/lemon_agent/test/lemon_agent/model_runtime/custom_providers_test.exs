@@ -305,6 +305,96 @@ defmodule LemonAgent.ModelRuntime.CustomProvidersTest do
       refute_received {:discovery, _, _, _}
     end
 
+    test "the same custom id cannot reuse another endpoint, account, protocol or headers" do
+      System.put_env("MY_GATEWAY_KEY", "first-account-key")
+      test_pid = self()
+
+      Req.Test.stub(__MODULE__, fn conn ->
+        send(test_pid, {:request, conn.host, conn.req_headers})
+        Req.Test.json(conn, %{"data" => [%{"id" => "discovered", "context_length" => 32_768}]})
+      end)
+
+      original = gateway(%{models: [], discovery: "openai"})
+      original_providers = %{"gw" => original}
+
+      assert [first] =
+               CustomProviders.models(original_providers,
+                 discover: true,
+                 discovery_opts: discovery_opts()
+               )
+
+      assert_receive {:request, "llm.internal", _}
+      assert CustomProviders.lookup(original_providers, "gw", "discovered") == first
+
+      for changed <- [
+            %{original | base_url: "https://other.internal/v1"},
+            Map.merge(original, %{api_key_env: nil, api_key: "second-account-key"}),
+            %{original | api: "openai_responses"},
+            %{original | headers: %{"X-Team" => "other-team", "Authorization" => "Bearer own"}}
+          ] do
+        providers = %{"gw" => changed}
+        uncached = CustomProviders.lookup(providers, "gw", "discovered")
+        assert uncached.context_window == 128_000
+        assert uncached.base_url == changed.base_url
+        assert uncached.headers == changed.headers
+        assert uncached.api == CustomProviders.api_atom(changed.api)
+
+        assert [current] =
+                 CustomProviders.models(providers,
+                   discover: true,
+                   discovery_opts: discovery_opts()
+                 )
+
+        assert_receive {:request, host, headers}
+        assert host == URI.parse(changed.base_url).host
+        assert current.context_window == 32_768
+        assert current.base_url == changed.base_url
+        assert current.headers == changed.headers
+        assert current.api == CustomProviders.api_atom(changed.api)
+        assert CustomProviders.lookup(providers, "gw", "discovered") == current
+
+        expected_auth =
+          Map.get(changed.headers, "Authorization") ||
+            "Bearer " <> (Map.get(changed, :api_key) || "first-account-key")
+
+        assert {"authorization", expected_auth} in headers
+      end
+
+      assert CustomProviders.lookup(original_providers, "gw", "discovered") == first
+      refute_received {:request, _, _}
+    end
+
+    test "discovery options cannot replace configured credentials or model identity" do
+      System.put_env("MY_GATEWAY_KEY", "configured-key")
+
+      Req.Test.stub(__MODULE__, fn conn ->
+        assert Plug.Conn.get_req_header(conn, "authorization") == ["Bearer configured-key"]
+        assert Plug.Conn.get_req_header(conn, "x-team") == ["platform"]
+        Req.Test.json(conn, %{"data" => [%{"id" => "discovered"}]})
+      end)
+
+      providers = %{"gw" => gateway(%{models: [], discovery: "openai"})}
+
+      assert [model] =
+               CustomProviders.models(providers,
+                 discover: true,
+                 discovery_opts:
+                   discovery_opts() ++
+                     [
+                       provider: "different",
+                       api: :openai_responses,
+                       api_key: "wrong-key",
+                       headers: %{"X-Team" => "wrong"},
+                       model_defaults: %{headers: %{"Authorization" => "Bearer wrong"}}
+                     ]
+               )
+
+      assert model.provider == "gw"
+      assert model.api == :openai_completions
+      assert model.headers == %{"X-Team" => "platform"}
+      assert CustomProviders.lookup(providers, "gw", "discovered") == model
+    end
+
     test "ollama discovery providers use the /v1 wire base URL and stay keyless" do
       Req.Test.stub(__MODULE__, fn conn ->
         case conn.request_path do

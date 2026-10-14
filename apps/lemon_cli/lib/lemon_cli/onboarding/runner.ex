@@ -421,7 +421,7 @@ defmodule LemonCli.Onboarding.Runner do
 
   defp normalize_oauth_result!({:error, reason}, _oauth_module, spec) do
     label = spec.oauth_failure_label || "#{spec.display_name} OAuth login failed"
-    fail!("#{label}: #{inspect(reason)}")
+    fail!("#{label}: #{safe_error_kind(reason)}")
   end
 
   defp normalize_oauth_result!(payload, oauth_module, spec) do
@@ -449,8 +449,8 @@ defmodule LemonCli.Onboarding.Runner do
     String.trim(payload)
   end
 
-  defp encode_oauth_payload!(payload, _oauth_module) do
-    fail!("OAuth flow returned unsupported payload: #{inspect(payload)}")
+  defp encode_oauth_payload!(_payload, _oauth_module) do
+    fail!("OAuth flow returned an unsupported credential payload.")
   end
 
   defp store_secret!(secret_name, secret_value, secret_provider, spec) do
@@ -464,9 +464,20 @@ defmodule LemonCli.Onboarding.Runner do
         )
 
       {:error, reason} ->
-        fail!("Failed to store #{spec.display_name} credentials in secrets: #{inspect(reason)}")
+        fail!(
+          "Failed to store #{spec.display_name} credentials in secrets: #{safe_error_kind(reason)}"
+        )
     end
   end
+
+  # Auth failures can contain token responses or request structs. Only a stable
+  # leading atom is suitable for terminal output.
+  defp safe_error_kind(reason) when is_atom(reason), do: Atom.to_string(reason)
+
+  defp safe_error_kind(reason) when is_tuple(reason) and tuple_size(reason) > 0,
+    do: safe_error_kind(elem(reason, 0))
+
+  defp safe_error_kind(_reason), do: "unknown_error"
 
   defp resolve_set_default?(value, _spec, _io) when is_boolean(value), do: value
 

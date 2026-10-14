@@ -83,7 +83,11 @@ defmodule LemonAi.Auth.OpenAICodexOAuth do
              :ok <- ensure_state_matches(auth.state, state),
              :ok <- notify_progress(opts, "Exchanging authorization code for tokens..."),
              {:ok, secret} <-
-               exchange_code_for_secret(code, auth.code_verifier, redirect_uri: auth.redirect_uri) do
+               exchange_code_for_secret(
+                 code,
+                 auth.code_verifier,
+                 Keyword.put(opts, :redirect_uri, auth.redirect_uri)
+               ) do
           {:ok, secret}
         end
       after
@@ -100,9 +104,10 @@ defmodule LemonAi.Auth.OpenAICodexOAuth do
   polls until the user approves, then exchanges the returned authorization
   code exactly like the browser flow, so the payload is the same refreshable
   Codex login. Polls wait the server interval plus three seconds, at most
-  #{@device_max_polls} times. Optional: `:on_progress`, `:sleep` (milliseconds),
-  `:req_options`, and `:device_usercode_url`/`:device_token_url`/`:token_url`
-  overrides for local fakes.
+  #{@device_max_polls} times and never beyond device-code expiry (15 minutes
+  when omitted by the server). Optional: `:on_progress`, `:sleep` (milliseconds),
+  `:now` (monotonic milliseconds), `:req_options`, and
+  `:device_usercode_url`/`:device_token_url`/`:token_url` overrides for local fakes.
   """
   @spec login_device_code(keyword()) :: {:ok, oauth_secret()} | {:error, term()}
   def login_device_code(opts \\ []) when is_list(opts) do
@@ -118,9 +123,10 @@ defmodule LemonAi.Auth.OpenAICodexOAuth do
          :ok <- notify_progress(opts, "Waiting for device authorization..."),
          {:ok, %{code: code, verifier: verifier}} <- poll_device_authorization(device, opts),
          :ok <- notify_progress(opts, "Exchanging authorization code for tokens...") do
-      exchange_code_for_secret(code, verifier,
-        redirect_uri: @device_redirect_uri,
-        token_url: Keyword.get(opts, :token_url, @token_url)
+      exchange_code_for_secret(
+        code,
+        verifier,
+        Keyword.put(opts, :redirect_uri, @device_redirect_uri)
       )
     end
   end
@@ -132,15 +138,21 @@ defmodule LemonAi.Auth.OpenAICodexOAuth do
       {:ok, %{status: status, body: %{} = body}} when status in 200..299 ->
         device_auth_id = non_empty_binary(body["device_auth_id"])
         user_code = non_empty_binary(body["user_code"])
+        expires_in = parse_integer(body["expires_in"])
+        lifetime_ms = (expires_in || 900) * 1000
+        now = Keyword.get(opts, :now, fn -> System.monotonic_time(:millisecond) end)
 
-        if device_auth_id && user_code do
+        if device_auth_id && user_code &&
+             (is_nil(body["expires_in"]) or (is_integer(expires_in) and expires_in > 0)) do
           interval_s = parse_integer(body["interval"]) || 5
 
           {:ok,
            %{
              device_auth_id: device_auth_id,
              user_code: user_code,
-             interval_ms: max(interval_s, 1) * 1000 + @device_poll_margin_ms
+             interval_ms: max(interval_s, 1) * 1000 + @device_poll_margin_ms,
+             lifetime_ms: lifetime_ms,
+             deadline_ms: now.() + lifetime_ms
            }}
         else
           {:error, :invalid_device_authorization_response}
@@ -155,33 +167,60 @@ defmodule LemonAi.Auth.OpenAICodexOAuth do
   end
 
   defp poll_device_authorization(device, opts) do
+    now = Keyword.get(opts, :now, fn -> System.monotonic_time(:millisecond) end)
+    do_poll_device(device, opts, now, 1, device.lifetime_ms)
+  end
+
+  defp do_poll_device(_device, _opts, _now, poll, _remaining_ms)
+       when poll > @device_max_polls,
+       do: {:error, :device_flow_timed_out}
+
+  defp do_poll_device(device, opts, now, poll, remaining_ms) do
     sleep = Keyword.get(opts, :sleep, &Process.sleep/1)
-    url = Keyword.get(opts, :device_token_url, @device_token_url)
-    body = %{"device_auth_id" => device.device_auth_id, "user_code" => device.user_code}
+    wait_ms = if poll == 1, do: min(device.interval_ms, 5_000), else: device.interval_ms
+    remaining_ms = min(remaining_ms, device.deadline_ms - now.())
 
-    Enum.reduce_while(1..@device_max_polls, {:error, :device_flow_timed_out}, fn poll, acc ->
-      sleep.(if poll == 1, do: min(device.interval_ms, 5_000), else: device.interval_ms)
+    if remaining_ms <= wait_ms do
+      {:error, :device_flow_timed_out}
+    else
+      sleep.(wait_ms)
+      started_at = now.()
+      remaining_ms = min(remaining_ms - wait_ms, device.deadline_ms - started_at)
 
-      case LemonAi.Auth.OAuthFlow.request(url, [json: body], opts) do
-        # The endpoint answers 403/404 until the user approves.
-        {:ok, %{status: status}} when status in [403, 404] ->
-          {:cont, acc}
+      if remaining_ms <= 0 do
+        {:error, :device_flow_timed_out}
+      else
+        url = Keyword.get(opts, :device_token_url, @device_token_url)
+        body = %{"device_auth_id" => device.device_auth_id, "user_code" => device.user_code}
+        result = LemonAi.Auth.OAuthFlow.request(url, [json: body], opts)
 
-        {:ok, %{status: status, body: %{} = response}} when status in 200..299 ->
-          code = non_empty_binary(response["authorization_code"])
-          verifier = non_empty_binary(response["code_verifier"])
+        remaining_ms =
+          min(remaining_ms - max(now.() - started_at, 0), device.deadline_ms - now.())
 
-          if code && verifier,
-            do: {:halt, {:ok, %{code: code, verifier: verifier}}},
-            else: {:halt, {:error, :invalid_device_token_response}}
+        case result do
+          {:ok, _} when remaining_ms <= 0 ->
+            {:error, :device_flow_timed_out}
 
-        {:ok, %{status: status}} ->
-          {:halt, {:error, {:device_token_failed, status}}}
+          # The endpoint answers 403/404 until the user approves.
+          {:ok, %{status: status}} when status in [403, 404] ->
+            do_poll_device(device, opts, now, poll + 1, remaining_ms)
 
-        {:error, _} = error ->
-          {:halt, error}
+          {:ok, %{status: status, body: %{} = response}} when status in 200..299 ->
+            code = non_empty_binary(response["authorization_code"])
+            verifier = non_empty_binary(response["code_verifier"])
+
+            if code && verifier,
+              do: {:ok, %{code: code, verifier: verifier}},
+              else: {:error, :invalid_device_token_response}
+
+          {:ok, %{status: status}} ->
+            {:error, {:device_token_failed, status}}
+
+          {:error, _} = error ->
+            error
+        end
       end
-    end)
+    end
   end
 
   @doc """
@@ -373,7 +412,7 @@ defmodule LemonAi.Auth.OpenAICodexOAuth do
       "redirect_uri" => redirect_uri
     }
 
-    with {:ok, data} <- post_form(Keyword.get(opts, :token_url, @token_url), body),
+    with {:ok, data} <- post_form(Keyword.get(opts, :token_url, @token_url), body, opts),
          {:ok, token_data} <- parse_token_response(data),
          account_id when is_binary(account_id) and account_id != "" <-
            extract_account_id(token_data.access_token) do
@@ -476,17 +515,17 @@ defmodule LemonAi.Auth.OpenAICodexOAuth do
       :global.trans(
         {{__MODULE__, :refresh, secret_name}, self()},
         fn ->
-          latest = reload_latest_secret(secret_name, secret, opts)
+          with {:ok, latest} <- reload_latest_secret(secret_name, secret, opts) do
+            cond do
+              force? and latest["access_token"] == secret["access_token"] ->
+                refresh_and_persist(secret_name, latest, true, opts)
 
-          cond do
-            force? and latest["access_token"] == secret["access_token"] ->
-              refresh_and_persist(secret_name, latest, true, opts)
+              not force? and refresh_due?(latest) ->
+                refresh_and_persist(secret_name, latest, false, opts)
 
-            not force? and refresh_due?(latest) ->
-              refresh_and_persist(secret_name, latest, false, opts)
-
-            true ->
-              usable(latest)
+              true ->
+                usable(latest)
+            end
           end
         end,
         [node()]
@@ -521,12 +560,18 @@ defmodule LemonAi.Auth.OpenAICodexOAuth do
 
   # Without a reload callback the caller's copy is the latest one available.
   defp reload_latest_secret(secret_name, stale, opts) do
-    with reload when is_function(reload, 1) <- Keyword.get(opts, :reload_secret),
-         {:ok, value} when is_binary(value) <- reload.(secret_name),
-         {:ok, latest} <- decode_secret(value) do
-      latest
-    else
-      _ -> stale
+    case Keyword.get(opts, :reload_secret) do
+      reload when is_function(reload, 1) ->
+        with {:ok, value} when is_binary(value) <- reload.(secret_name),
+             {:ok, latest} <- decode_secret(value) do
+          {:ok, latest}
+        else
+          :not_oauth -> {:error, :oauth_secret_replaced}
+          _ -> {:error, :oauth_secret_missing}
+        end
+
+      _ ->
+        {:ok, stale}
     end
   end
 
@@ -539,7 +584,7 @@ defmodule LemonAi.Auth.OpenAICodexOAuth do
         {:error, :not_refreshable}
 
       refresh_token ->
-        case refresh_access_token(refresh_token, refresh_token) do
+        case refresh_access_token(refresh_token, refresh_token, opts) do
           {:ok, refreshed} ->
             account_id = extract_account_id(refreshed.access_token)
 
@@ -552,6 +597,9 @@ defmodule LemonAi.Auth.OpenAICodexOAuth do
               |> Map.put("updated_at_ms", System.system_time(:millisecond))
 
             with :ok <- persist_secret(secret_name, updated, opts), do: {:ok, updated}
+
+          {:error, :reauth_required} = error ->
+            error
 
           {:error, reason} ->
             if not force? and is_binary(access_token) and is_integer(expires_at_ms) and
@@ -566,7 +614,7 @@ defmodule LemonAi.Auth.OpenAICodexOAuth do
     end
   end
 
-  defp refresh_access_token(refresh_token, fallback_refresh_token)
+  defp refresh_access_token(refresh_token, fallback_refresh_token, opts)
        when is_binary(refresh_token) and refresh_token != "" do
     body = %{
       "grant_type" => "refresh_token",
@@ -574,7 +622,7 @@ defmodule LemonAi.Auth.OpenAICodexOAuth do
       "client_id" => oauth_client_id()
     }
 
-    with {:ok, data} <- post_form(@token_url, body),
+    with {:ok, data} <- post_form(Keyword.get(opts, :token_url, @token_url), body, opts),
          {:ok, token_data} <- parse_token_response(data) do
       {:ok,
        %{
@@ -585,7 +633,7 @@ defmodule LemonAi.Auth.OpenAICodexOAuth do
     end
   end
 
-  defp refresh_access_token(_, _), do: {:error, :missing_refresh_token}
+  defp refresh_access_token(_, _, _), do: {:error, :missing_refresh_token}
 
   defp parse_token_response(data) when is_map(data) do
     access_token = non_empty_binary(data["access_token"])
@@ -594,10 +642,10 @@ defmodule LemonAi.Auth.OpenAICodexOAuth do
 
     cond do
       is_nil(access_token) ->
-        {:error, {:invalid_token_response, data}}
+        {:error, :invalid_token_response}
 
       is_nil(expires_in) or expires_in <= 0 ->
-        {:error, {:invalid_expiry, data}}
+        {:error, :invalid_expiry}
 
       true ->
         {:ok,
@@ -612,11 +660,11 @@ defmodule LemonAi.Auth.OpenAICodexOAuth do
   defp parse_token_response(data) when is_binary(data) do
     case Jason.decode(data) do
       {:ok, decoded} when is_map(decoded) -> parse_token_response(decoded)
-      _ -> {:error, {:invalid_token_response, data}}
+      _ -> {:error, :invalid_token_response}
     end
   end
 
-  defp parse_token_response(other), do: {:error, {:invalid_token_response, other}}
+  defp parse_token_response(_), do: {:error, :invalid_token_response}
 
   defp persist_secret(secret_name, secret, opts) do
     encoded = encode_secret(secret)
@@ -636,18 +684,20 @@ defmodule LemonAi.Auth.OpenAICodexOAuth do
       {:error, :oauth_secret_persistence_failed}
   end
 
-  defp post_form(url, body) when is_map(body) do
-    headers = %{"content-type" => "application/x-www-form-urlencoded"}
-
-    case Req.post(url, headers: headers, body: URI.encode_query(body)) do
-      {:ok, %Req.Response{status: status, body: response_body}} when status in 200..299 ->
+  defp post_form(url, body, opts) when is_map(body) do
+    case LemonAi.Auth.OAuthFlow.request(url, [form: body], opts) do
+      {:ok, %{status: status, body: response_body}} when status in 200..299 ->
         {:ok, response_body}
 
-      {:ok, %Req.Response{status: status, body: response_body}} ->
-        {:error, {:http_error, status, response_body}}
+      {:ok, %{status: status, body: %{"error" => "invalid_grant"}}}
+      when status in [400, 401] ->
+        {:error, :reauth_required}
 
-      {:error, reason} ->
-        {:error, reason}
+      {:ok, %{status: status, body: response_body}} ->
+        {:error, LemonAi.Auth.OAuthFlow.http_error(status, response_body)}
+
+      {:error, _} = error ->
+        error
     end
   end
 

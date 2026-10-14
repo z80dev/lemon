@@ -159,6 +159,21 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 
 ### Fixed
 
+- OAuth callback parsing and xAI endpoint validation reject malformed URL
+  authorities and ports before extracting codes or exchanging credentials.
+- Provider sign-in failures no longer print credential payloads or arbitrary
+  token-endpoint response strings. Token grants and model discovery do not
+  follow redirects; Z.AI callbacks require the returned state, and device-code
+  deadlines include callback and HTTP time.
+- Copilot, Gemini CLI and Antigravity refreshes serialize by stored login,
+  reload after waiting, and fail closed on deleted/replaced logins or expired
+  access tokens. Google `invalid_grant` requires a fresh sign-in.
+- Named `lemon model --status`/`--logout --secret-name NAME` targets that account
+  without deleting another login or clearing its selected provider settings.
+- Discovery cache metadata is isolated by endpoint, protocol, credential and
+  headers, rather than the last listing for a provider id. Custom Google
+  endpoints no longer inherit Google account options; explicitly keyless
+  custom Anthropic and Google endpoints omit generated credential headers.
 - Unknown provider ids in `default_model`/`default_provider` and custom
   provider option keys no longer create atoms from config input.
 - `lemon model github_copilot --status`/`--logout` no longer crash once a

@@ -81,7 +81,7 @@ defmodule LemonAi.Providers.Anthropic do
     try do
       api_key = resolve_api_key(model, opts, resolved_provider_opts)
 
-      if api_key == "" do
+      if api_key == "" and not match?(%{allow_missing_api_key: true}, model.compat) do
         raise missing_api_key_error(model.provider)
       end
 
@@ -975,11 +975,16 @@ defmodule LemonAi.Providers.Anthropic do
     is_kimi_oauth =
       provider in @kimi_providers and LemonAi.Auth.KimiCodeOAuth.oauth_token?(api_key)
 
-    auth_header =
-      if is_copilot or is_anthropic_oauth or is_kimi_oauth do
-        {"authorization", "Bearer #{api_key}"}
-      else
-        {"x-api-key", api_key}
+    auth_headers =
+      cond do
+        api_key == "" ->
+          []
+
+        is_copilot or is_anthropic_oauth or is_kimi_oauth ->
+          [{"authorization", "Bearer #{api_key}"}]
+
+        true ->
+          [{"x-api-key", api_key}]
       end
 
     beta_features =
@@ -1006,7 +1011,6 @@ defmodule LemonAi.Providers.Anthropic do
     base_headers = [
       {"content-type", "application/json"},
       {"accept", "text/event-stream"},
-      auth_header,
       {"anthropic-version", @api_version},
       {"anthropic-beta", Enum.join(beta_features, ",")}
     ]
@@ -1046,7 +1050,7 @@ defmodule LemonAi.Providers.Anthropic do
         end
       )
 
-    headers = Map.new(base_headers ++ copilot_headers ++ oauth_headers)
+    headers = Map.new(base_headers ++ auth_headers ++ copilot_headers ++ oauth_headers)
 
     Map.merge(headers, extra_headers, fn
       "anthropic-beta", required, extra ->

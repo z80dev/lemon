@@ -213,13 +213,21 @@ lemon model kimi-code --status
   refreshes the token five minutes before expiry and when the provider rejects
   it. Kimi requests made with the login carry Kimi CLI identification headers.
 - **Z.AI** opens `chat.z.ai`. The browser then tries to open ZCode
-  (`zcode://zai-auth/callback?...`); copy that address (or the code) into the
-  prompt. Lemon exchanges it, then finds or creates an API key named `lemon` in
-  your default Z.AI project and stores that key.
+  (`zcode://zai-auth/callback?...`); copy the full address, including its `state`
+  (or paste `code#state`), into the prompt. A bare code is rejected. Lemon
+  exchanges it, then finds or creates an API key named `lemon` in your default
+  Z.AI project and stores that key.
 
 `--logout` deletes the stored login or minted key and its config references. It
 does not revoke anything at the provider; delete minted OpenRouter or Z.AI keys
 in their dashboards.
+
+Multiple accounts can be stored under separate `--secret-name` values and
+referenced by credential pools. `--status --secret-name NAME` inspects that
+account rather than the current default; `--logout --secret-name NAME` deletes
+only it and changes provider settings only when they select that exact secret.
+Missing/deleted pool secrets are skipped. Sign-in errors report safe error
+kinds rather than provider response bodies or credential payloads.
 
 ## Non-interactive coding
 

@@ -135,30 +135,144 @@ defmodule LemonAi.Auth.OAuthForceRefreshTest do
     refute_received :token_request
   end
 
-  test "a failed Copilot refresh never returns an already-expired token" do
-    Req.Test.stub(__MODULE__, fn conn ->
-      conn
-      |> Plug.Conn.put_status(401)
-      |> Req.Test.json(%{"message" => "Bad credentials"})
-    end)
+  for {module, type} <- [
+        {GitHubCopilotOAuth, "github_copilot_oauth"},
+        {GoogleAntigravityOAuth, "google_antigravity_oauth"},
+        {GoogleGeminiCliOAuth, "google_gemini_cli_oauth"}
+      ] do
+    test "#{inspect(module)} never reuses an expired token after a refresh failure" do
+      Req.Test.stub(__MODULE__, fn conn ->
+        conn
+        |> Plug.Conn.put_status(503)
+        |> Req.Test.json(%{"error" => "unavailable", "private" => "provider-private-body"})
+      end)
 
-    now = System.system_time(:millisecond)
+      now = System.system_time(:millisecond)
+      secret = unexpired_secret(unquote(type)) |> Jason.decode!()
+      expired = Map.put(secret, "expires_at_ms", now - 1_000)
 
-    secret = fn expires_at_ms ->
-      Jason.encode!(%{
-        "type" => "github_copilot_oauth",
-        "refresh_token" => "github-token",
-        "access_token" => "copilot-token",
-        "expires_at_ms" => expires_at_ms
-      })
+      for payload <- [expired, Map.delete(expired, "refresh_token")] do
+        assert {:error, _} =
+                 unquote(module).resolve_api_key_from_secret("llm_secret", Jason.encode!(payload))
+      end
+
+      # Near expiry but still valid: transient refresh failures may reuse it.
+      near_expiry = Map.put(secret, "expires_at_ms", now + 60_000)
+
+      assert {:ok, key} =
+               unquote(module).resolve_api_key_from_secret(
+                 "llm_secret",
+                 Jason.encode!(near_expiry)
+               )
+
+      assert key =~ "rejected-token"
     end
 
-    assert {:error, _} =
-             GitHubCopilotOAuth.resolve_api_key_from_secret("llm_secret", secret.(now - 1_000))
+    test "#{inspect(module)} reloads the owning login before refreshing and fails closed on removal" do
+      stale = unexpired_secret(unquote(type))
 
-    # Near expiry but unexpired: the existing token is still usable.
-    assert {:ok, "copilot-token"} =
-             GitHubCopilotOAuth.resolve_api_key_from_secret("llm_secret", secret.(now + 60_000))
+      rotated =
+        Jason.decode!(stale)
+        |> Map.put("access_token", "another-session-token")
+        |> Jason.encode!()
+
+      assert {:ok, key} =
+               unquote(module).resolve_api_key_from_secret("selected_login", stale,
+                 force_refresh: true,
+                 reload_secret: fn "selected_login" -> {:ok, rotated} end,
+                 persist_secret: fn _, _ ->
+                   flunk("a rotated login must not be refreshed again")
+                 end
+               )
+
+      assert key =~ "another-session-token"
+
+      for reload_result <- [:error, {:ok, "replacement-api-key"}] do
+        assert {:error, _} =
+                 unquote(module).resolve_api_key_from_secret("selected_login", stale,
+                   force_refresh: true,
+                   reload_secret: fn "selected_login" -> reload_result end
+                 )
+      end
+
+      refute_received :token_request
+    end
+
+    test "#{inspect(module)} serializes refreshes for two stale readers of the same login" do
+      stale = unexpired_secret(unquote(type))
+      storage = start_supervised!({Agent, fn -> %{secret: stale, requests: 0} end})
+      test_pid = self()
+
+      Req.Test.stub(__MODULE__, fn conn ->
+        count =
+          Agent.get_and_update(storage, fn state ->
+            {state.requests, %{state | requests: state.requests + 1}}
+          end)
+
+        send(test_pid, {:refresh_request, self()})
+
+        if count == 0 do
+          receive do
+            :continue_refresh -> :ok
+          after
+            5_000 -> flunk("refresh barrier timed out")
+          end
+        end
+
+        Req.Test.json(conn, %{
+          "access_token" => "serialized-token",
+          "refresh_token" => "rotated-refresh-token",
+          "expires_in" => 3600,
+          "token" => "serialized-token",
+          "expires_at" => div(System.system_time(:millisecond), 1000) + 3600
+        })
+      end)
+
+      opts = [
+        force_refresh: true,
+        reload_secret: fn "selected_login" -> {:ok, Agent.get(storage, & &1.secret)} end,
+        persist_secret: fn "selected_login", encoded ->
+          Agent.update(storage, &%{&1 | secret: encoded})
+        end
+      ]
+
+      resolve = fn ->
+        unquote(module).resolve_api_key_from_secret("selected_login", stale, opts)
+      end
+
+      first = Task.async(resolve)
+      assert_receive {:refresh_request, refresher}, 5_000
+      second = Task.async(resolve)
+      send(refresher, :continue_refresh)
+
+      for task <- [first, second] do
+        assert {:ok, key} = Task.await(task)
+        assert key =~ "serialized-token"
+      end
+
+      assert Agent.get(storage, & &1.requests) == 1
+      refute_received {:refresh_request, _}
+    end
+  end
+
+  for {module, type} <- [
+        {GoogleAntigravityOAuth, "google_antigravity_oauth"},
+        {GoogleGeminiCliOAuth, "google_gemini_cli_oauth"}
+      ] do
+    test "#{inspect(module)} does not fall back after the refresh grant is revoked" do
+      Req.Test.stub(__MODULE__, fn conn ->
+        conn |> Plug.Conn.put_status(400) |> Req.Test.json(%{"error" => "invalid_grant"})
+      end)
+
+      secret =
+        unexpired_secret(unquote(type))
+        |> Jason.decode!()
+        |> Map.put("expires_at_ms", System.system_time(:millisecond) + 60_000)
+        |> Jason.encode!()
+
+      assert {:error, :reauth_required} =
+               unquote(module).resolve_api_key_from_secret("selected_login", secret)
+    end
   end
 
   defp unexpired_secret(type) do

@@ -390,6 +390,40 @@ defmodule LemonAgent.ModelRuntime.CredentialsTest do
       assert %{"access_token" => "sk-ant-oat01-forced"} = Jason.decode!(stored)
     end
 
+    test "refreshing a selected pool login updates only its owning secret" do
+      assert {:ok, _} = Secrets.set("personal_login", anthropic_login(3_600_000))
+      assert {:ok, _} = Secrets.set("work_login", anthropic_login(3_600_000))
+      assert {:ok, original} = Secrets.get("personal_login")
+
+      config = %{
+        providers: %{"anthropic" => %{auth_source: "oauth", oauth_secret: "personal_login"}},
+        provider_routing: %{
+          default_pool: "work",
+          credential_pools: %{
+            "work" => %{credentials: %{"anthropic" => ["secret:work_login"]}}
+          }
+        }
+      }
+
+      assert [%{ref: selected_ref, api_key: rejected}, %{ref: "default"}] =
+               Credentials.list_provider_api_keys(config, :anthropic)
+
+      assert selected_ref == "secret:work_login"
+
+      assert {:ok, "sk-ant-oat01-forced"} =
+               Credentials.refresh_provider_api_key(config, :anthropic, selected_ref, rejected)
+
+      assert {:ok, ^original} = Secrets.get("personal_login")
+      assert {:ok, work} = Secrets.get("work_login")
+      assert Jason.decode!(work)["access_token"] == "sk-ant-oat01-forced"
+
+      assert [
+               %{ref: ^selected_ref, api_key: "sk-ant-oat01-forced"},
+               %{ref: "default", api_key: "sk-ant-oat01-stored"}
+             ] =
+               Credentials.list_provider_api_keys(config, :anthropic)
+    end
+
     test "environment, inline and plain API-key credentials are not refreshable" do
       assert {:error, :not_refreshable} =
                Credentials.refresh_provider_api_key(%{}, :openai, "env:OPENAI_API_KEY", "k")

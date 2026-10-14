@@ -125,5 +125,76 @@ defmodule LemonAgent.ModelRuntime.ProviderPresetsTest do
 
       refute Enum.any?(models, &(&1.provider == :lm_studio))
     end
+
+    test "configured preset discovery excludes default cached rows and keeps static overrides" do
+      Req.Test.stub(__MODULE__, fn conn ->
+        case conn.host do
+          "127.0.0.1" ->
+            Req.Test.json(conn, %{
+              "data" => [
+                %{"id" => "old-only", "context_length" => 32_768},
+                %{"id" => "shared", "context_length" => 32_768}
+              ]
+            })
+
+          "configured.test" ->
+            assert Plug.Conn.get_req_header(conn, "authorization") == ["Bearer configured-key"]
+            assert Plug.Conn.get_req_header(conn, "x-team") == ["configured"]
+            Req.Test.json(conn, %{"data" => [%{"id" => "new-only"}, %{"id" => "shared"}]})
+        end
+      end)
+
+      req = [plug: {Req.Test, __MODULE__}]
+      assert {:ok, _} = LemonAi.Models.discover_preset(:lm_studio, req_options: req)
+
+      cfg =
+        catalog_config(%{
+          "lm-studio" => %{
+            base_url: "http://configured.test:1234/v1",
+            api_key: "configured-key",
+            headers: %{"X-Team" => "configured"},
+            models: [%{id: "shared", name: "Static Shared", max_tokens: 1024}]
+          }
+        })
+
+      models =
+        ModelCatalog.available_models(config: cfg, preset_req_options: req)
+        |> Enum.filter(&(&1.provider == :lm_studio))
+
+      assert Enum.sort(Enum.map(models, & &1.id)) == ["new-only", "shared"]
+      shared = Enum.find(models, &(&1.id == "shared"))
+      assert shared.name == "Static Shared"
+      assert shared.context_window == 128_000
+      assert shared.max_tokens == 1024
+      assert shared.headers == %{"X-Team" => "configured"}
+      assert Enum.all?(models, &(&1.base_url == "http://configured.test:1234/v1"))
+
+      Req.Test.stub(__MODULE__, &Req.Test.transport_error(&1, :econnrefused))
+      unreachable = catalog_config(%{"lm-studio" => %{base_url: "http://unreachable.test/v1"}})
+
+      refute Enum.any?(
+               ModelCatalog.available_models(config: unreachable, preset_req_options: req),
+               &(&1.provider == :lm_studio)
+             )
+    end
+
+    test "a base URL environment variable activates local preset discovery" do
+      System.put_env("LM_STUDIO_BASE_URL", "http://env-configured.test:1234")
+
+      Req.Test.stub(__MODULE__, fn conn ->
+        assert conn.host == "env-configured.test"
+        assert conn.request_path == "/v1/models"
+        Req.Test.json(conn, %{"data" => [%{"id" => "env-model"}]})
+      end)
+
+      models =
+        ModelCatalog.available_models(
+          config: catalog_config(%{}),
+          preset_req_options: [plug: {Req.Test, __MODULE__}]
+        )
+
+      assert %{id: "env-model", base_url: "http://env-configured.test:1234/v1"} =
+               Enum.find(models, &(&1.provider == :lm_studio))
+    end
   end
 end

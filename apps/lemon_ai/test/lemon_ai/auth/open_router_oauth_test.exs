@@ -107,4 +107,70 @@ defmodule LemonAi.Auth.OpenRouterOAuthTest do
                "sk-or-v1-minted"
              )
   end
+
+  test "rejects callbacks for a different endpoint before exchanging a code", %{opts: opts} do
+    Req.Test.stub(__MODULE__, fn _ -> flunk("must not exchange unbound callback") end)
+
+    for callback <- [
+          "http://attacker.test:54549/callback?code=secret",
+          "http://localhost:54550/callback?code=secret",
+          "http://localhost:54549/other?code=secret",
+          "http://user:pass@localhost:54549/callback?code=secret",
+          "http://localhost:54549/callback?code=secret#fragment"
+        ] do
+      assert {:error, :oauth_redirect_mismatch} =
+               OpenRouterOAuth.login_device_flow(
+                 Keyword.merge(opts, on_auth: fn _, _ -> :ok end, on_prompt: fn _ -> callback end)
+               )
+    end
+  end
+
+  test "binds callback validation to the configured redirect URI", %{opts: opts} do
+    stub_keys(self())
+
+    assert {:ok, "sk-or-v1-minted"} =
+             OpenRouterOAuth.login_device_flow(
+               Keyword.merge(opts,
+                 redirect_uri: "http://localhost:54321/custom",
+                 on_auth: fn _, _ -> :ok end,
+                 on_prompt: fn _ -> "http://localhost:54321/custom?code=custom-code" end
+               )
+             )
+  end
+
+  test "malformed pasted URLs fail without echoing input" do
+    assert {:error, :invalid_authorization_input} =
+             OpenRouterOAuth.parse_authorization_input(
+               "http://localhost:secret/callback?code=secret"
+             )
+  end
+
+  test "rejects malformed callback authorities before exchanging a code", %{opts: opts} do
+    Req.Test.stub(__MODULE__, fn _ -> flunk("must not exchange malformed callback") end)
+
+    for authority <- ["localhost:secret", "localhost:54549junk", "localhost:", "localhost:65536"] do
+      input = "http://#{authority}/callback?code=secret"
+
+      assert {:error, :invalid_authorization_input} =
+               OpenRouterOAuth.parse_authorization_input(input)
+
+      assert {:error, :invalid_authorization_input} =
+               OpenRouterOAuth.login_device_flow(
+                 Keyword.merge(opts, on_auth: fn _, _ -> :ok end, on_prompt: fn _ -> input end)
+               )
+    end
+  end
+
+  test "valid URI authorities and non-URL code inputs remain supported" do
+    for input <- [
+          "http://localhost/callback?code=the-code",
+          "http://localhost:54549/callback?code=the-code",
+          "http://localhost:054549/callback?code=the-code",
+          "http://[::1]:54549/callback?code=the-code",
+          "code=the-code",
+          "the-code"
+        ] do
+      assert {:ok, "the-code"} = OpenRouterOAuth.parse_authorization_input(input)
+    end
+  end
 end

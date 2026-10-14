@@ -16,12 +16,12 @@ defmodule LemonAi.Models.Discovery do
       listing fails, falls back to `GET {root}/v1/models`. Models use the
       OpenAI-compatible `{root}/v1` base URL.
 
-  Results are cached in `LemonAi.ModelCache` keyed by
-  `{kind, provider, base_url}` (default TTL five minutes). The most recent
-  successful listing per provider is also indexed so `LemonAi.Models.get_model/2`
-  can return discovered metadata without network access. Requests are bounded
-  by `:timeout_ms` and never retried; failures are returned, never raised, and
-  are not cached.
+  Results are cached in `LemonAi.ModelCache` by discovery kind, provider, base
+  URL, wire API and a digest of the credentials, request headers and model
+  defaults (default TTL five minutes). Cache-only lookups require the same
+  scope; no provider-wide latest listing is exposed. Requests are bounded by
+  `:timeout_ms`, never retried or redirected; failures are returned, never
+  raised, and are not cached.
 
   ## Options
 
@@ -58,8 +58,7 @@ defmodule LemonAi.Models.Discovery do
       when kind in @kinds and is_binary(base_url) and is_list(opts) do
     with {:ok, base_url} <- normalize_base_url(base_url),
          {:ok, api} <- api_option(opts) do
-      provider = Keyword.get(opts, :provider)
-      key = {kind, provider, base_url}
+      key = cache_key(kind, base_url, api, opts)
 
       case cached(key, opts) do
         {:ok, models} ->
@@ -67,13 +66,13 @@ defmodule LemonAi.Models.Discovery do
 
         :miss ->
           with {:ok, models} <- fetch(kind, base_url, Keyword.put(opts, :api, api)) do
-            cache_write(key, provider, models)
+            cache_write(key, models)
             {:ok, models}
           end
       end
     end
   rescue
-    error -> {:error, {:discovery_failed, Exception.message(error)}}
+    _error -> {:error, :discovery_failed}
   catch
     :exit, _ -> {:error, :discovery_failed}
   end
@@ -83,24 +82,25 @@ defmodule LemonAi.Models.Discovery do
 
   def discover(_kind, _base_url, _opts), do: {:error, :invalid_base_url}
 
-  @doc """
-  The most recently discovered model `model_id` for `provider`, from cache only
-  (stale entries included). Never performs network access.
-  """
-  @spec cached_model(atom() | String.t(), String.t()) :: Model.t() | nil
-  def cached_model(provider, model_id) when is_binary(model_id) do
-    Enum.find(cached_models(provider), &(&1.id == model_id))
+  @doc "A discovered model from the same endpoint/config scope, from cache only."
+  @spec cached_model(kind(), String.t(), String.t(), keyword()) :: Model.t() | nil
+  def cached_model(kind, base_url, model_id, opts \\ []) when is_binary(model_id) do
+    Enum.find(cached_models(kind, base_url, opts), &(&1.id == model_id))
   end
 
-  @doc "The most recent discovered model list for `provider`, from cache only."
-  @spec cached_models(atom() | String.t()) :: [Model.t()]
-  def cached_models(provider) do
-    case ModelCache.read({:discovered, provider}) do
-      {:ok, %{models: models}} when is_list(models) -> models
+  @doc "The scoped discovered model list, from cache only (stale entries included)."
+  @spec cached_models(kind(), String.t(), keyword()) :: [Model.t()]
+  def cached_models(kind, base_url, opts \\ []) do
+    with true <- kind in @kinds,
+         {:ok, base_url} <- normalize_base_url(base_url),
+         {:ok, api} <- api_option(opts),
+         {:ok, %{models: models}} <- ModelCache.read(cache_key(kind, base_url, api, opts)) do
+      models
+    else
       _ -> []
     end
   rescue
-    ArgumentError -> []
+    _ -> []
   end
 
   # ---------------------------------------------------------------------------
@@ -147,7 +147,8 @@ defmodule LemonAi.Models.Discovery do
         headers: request_headers(opts),
         connect_options: [timeout: timeout],
         receive_timeout: timeout,
-        retry: false
+        retry: false,
+        redirect: false
       )
       |> then(fn req_opts -> if body, do: Keyword.put(req_opts, :json, body), else: req_opts end)
 
@@ -189,7 +190,10 @@ defmodule LemonAi.Models.Discovery do
       |> Keyword.get(:headers, %{})
       |> Enum.map(fn {name, value} -> {String.downcase(to_string(name)), to_string(value)} end)
 
-    [{"accept", "application/json"} | auth] ++ extra
+    [{"accept", "application/json"} | auth]
+    |> Map.new()
+    |> Map.merge(Map.new(extra))
+    |> Enum.sort()
   end
 
   # ---------------------------------------------------------------------------
@@ -374,9 +378,22 @@ defmodule LemonAi.Models.Discovery do
     ArgumentError -> :miss
   end
 
-  defp cache_write(key, provider, models) do
+  defp cache_key(kind, base_url, api, opts) do
+    request_scope =
+      opts
+      |> Keyword.get(:req_options, [])
+      |> Keyword.take([:auth, :params, :aws_sigv4, :unix_socket])
+      |> Enum.sort()
+
+    scope =
+      {Keyword.get(opts, :api_key), request_headers(opts), model_defaults(opts), request_scope}
+
+    digest = :crypto.hash(:sha256, :erlang.term_to_binary(scope))
+    {kind, Keyword.get(opts, :provider), base_url, api, digest}
+  end
+
+  defp cache_write(key, models) do
     ModelCache.write(key, models, authoritative: true)
-    if provider, do: ModelCache.write({:discovered, provider}, models, authoritative: true)
     :ok
   rescue
     ArgumentError -> :ok
@@ -386,7 +403,7 @@ defmodule LemonAi.Models.Discovery do
     trimmed = base_url |> String.trim() |> String.trim_trailing("/")
 
     case URI.parse(trimmed) do
-      %URI{scheme: scheme, host: host}
+      %URI{scheme: scheme, host: host, userinfo: nil, query: nil, fragment: nil}
       when scheme in ["http", "https"] and is_binary(host) and host != "" ->
         {:ok, trimmed}
 

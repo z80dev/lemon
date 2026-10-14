@@ -416,7 +416,7 @@ defmodule LemonAi.Models.Presets do
           name: model_id,
           api: preset.api,
           provider: preset.id,
-          base_url: preset.base_url,
+          base_url: base_url(provider),
           reasoning: false,
           input: [:text],
           cost: %ModelCost{},
@@ -441,6 +441,28 @@ defmodule LemonAi.Models.Presets do
       model -> model |> Map.from_struct() |> Map.drop([:id, :name])
     end
   end
+
+  @doc "Discovered models for the preset's current default endpoint and environment credential."
+  @spec cached_models(atom()) :: [Model.t()]
+  def cached_models(provider) do
+    case get(provider) do
+      nil ->
+        []
+
+      preset ->
+        LemonAi.Models.Discovery.cached_models(preset.discovery, base_url(provider),
+          provider: provider,
+          api: preset.api,
+          api_key: env_api_key(provider),
+          model_defaults: model_defaults(provider)
+        )
+    end
+  end
+
+  @doc "A model in the current default preset discovery scope, from cache only."
+  @spec cached_model(atom(), String.t()) :: Model.t() | nil
+  def cached_model(provider, model_id),
+    do: Enum.find(cached_models(provider), &(&1.id == model_id))
 
   defp clamp_max_tokens(%Model{context_window: context, max_tokens: max} = model)
        when is_integer(context) and context > 0 and is_integer(max) and max > context,

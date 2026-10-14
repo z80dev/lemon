@@ -27,6 +27,15 @@ defmodule LemonCli.Onboarding.RunnerTest do
     def encode_secret(secret), do: Jason.encode!(secret)
   end
 
+  defmodule FailingOAuth do
+    def login_device_flow(_opts),
+      do: {:error, {:token_exchange_failed, %{"access_token" => "private-login-token"}}}
+  end
+
+  defmodule InvalidOAuth do
+    def login_device_flow(_opts), do: {:unexpected, "private-login-token"}
+  end
+
   setup do
     tmp_dir =
       Path.join(
@@ -272,6 +281,33 @@ defmodule LemonCli.Onboarding.RunnerTest do
 
     {:ok, config_map} = Toml.decode_file(config_path)
     assert get_in(config_map, ["defaults", "model"]) == "together:not-listed/model"
+  end
+
+  test "login failures never interpolate credential payloads", %{tmp_dir: tmp_dir} do
+    config_path = Path.join(tmp_dir, "redaction.toml")
+
+    for module <- [FailingOAuth, InvalidOAuth] do
+      spec = %Provider{
+        id: "fake",
+        display_name: "Fake",
+        provider_table: "providers.fake",
+        default_secret_name: "fake-login",
+        api_key_secret_provider: "fake",
+        oauth_module: module,
+        auth_modes: [:oauth],
+        default_auth_mode: :oauth
+      }
+
+      error =
+        assert_raise Mix.Error, fn ->
+          Runner.run(["--config-path", config_path], spec, io: build_io(self(), [], []))
+        end
+
+      refute Exception.message(error) =~ "private-login-token"
+      refute Exception.message(error) =~ "access_token"
+      refute File.exists?(config_path)
+      assert LemonCore.Store.list(Secrets.table()) == []
+    end
   end
 
   defp build_io(test_pid, prompts, secrets) do

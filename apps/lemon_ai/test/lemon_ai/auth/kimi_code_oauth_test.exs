@@ -130,6 +130,35 @@ defmodule LemonAi.Auth.KimiCodeOAuthTest do
     assert Jason.decode!(stored)["refresh_token"] == "kimi-rt-2"
   end
 
+  test "forced refresh fails without returning the rejected token or provider payload",
+       %{opts: opts} do
+    stub(fn conn, "/api/oauth/token", _ ->
+      json(conn, 503, %{"error" => "secret-access-token", "error_description" => "secret-code"})
+    end)
+
+    assert {:error, {:http_error, 503}} =
+             KimiCodeOAuth.resolve_api_key_from_secret(
+               "custom-kimi-login",
+               payload(3_600_000),
+               Keyword.put(opts, :force_refresh, true)
+             )
+  end
+
+  test "forced refresh reuses a login already rotated under the same storage name", %{opts: opts} do
+    stub(fn _, _, _ -> flunk("must reuse the stored rotated token") end)
+    stored = payload(3_600_000) |> Jason.decode!() |> Map.put("access_token", "already-rotated")
+
+    assert {:ok, "already-rotated"} =
+             KimiCodeOAuth.resolve_api_key_from_secret(
+               "custom-kimi-login",
+               payload(3_600_000),
+               Keyword.merge(opts,
+                 force_refresh: true,
+                 reload_secret: fn "custom-kimi-login" -> {:ok, Jason.encode!(stored)} end
+               )
+             )
+  end
+
   describe "kimi_coding requests" do
     setup do
       previous_defaults = Req.default_options()
