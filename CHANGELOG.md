@@ -32,6 +32,9 @@ Versions follow [CalVer](https://calver.org/) — `YYYY.MM.PATCH`.
 - Lemon Bot groups have explicit own-member leave and successor selection,
   preserving other members' history and truthful membership-loss events,
   with owned active room work terminalized before membership revocation.
+- Lemon Bot Owners can observe bounded account-teardown receipts after
+  session revocation, with explicit OAuth revocation/introspection settings
+  and no deleted-account restoration or mutation replay.
 
 ---
 
